@@ -29,7 +29,11 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 			task.LastResult += "；所需附件与介绍已完成交付"
 		case "failed", "partial_failed":
 			task.State = "failed"
-			task.LastResult += "；交付中断，请查看失败项，已接受内容不重复发送"
+			if delivery.Expected > 0 && delivery.Accepted == delivery.Expected {
+				task.LastResult += "；附件已全部接受，后续文字说明未完成；不会重复发送附件"
+			} else {
+				task.LastResult += "；交付中断，请查看失败项，已接受内容不重复发送"
+			}
 		case "needs_review":
 			task.State = "needs_review"
 			task.LastResult += "；存在未确认回执，请核对原发送任务"

@@ -57,21 +57,24 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 	defer client.CloseIdleConnections()
 	response, e := client.Do(req)
 	if e != nil {
-		return nil, "", errors.New("本地YuE桥接无法连接；请检查本机服务")
+		return nil, "", yueError("yue_bridge_unavailable")
 	}
 	defer response.Body.Close()
 	data, e := io.ReadAll(io.LimitReader(response.Body, (64<<20)+1))
 	if e != nil || len(data) > 64<<20 {
-		return nil, "", errors.New("YuE响应超过限制")
+		return nil, "", yueError("yue_response_limit")
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		if response.StatusCode == 401 || response.StatusCode == 403 {
-			return nil, "", errors.New("YuE桥接鉴权失败，请检查桥接令牌")
+			return nil, "", yueError("yue_bridge_auth_failed")
 		}
 		if response.StatusCode == 503 {
-			return nil, "", errors.New("YuE桥接在线，但ComfyUI生成后端不可用；未提交生成任务")
+			return nil, "", yueError("yue_backend_unavailable")
 		}
-		return nil, "", errors.New("YuE拒绝请求或任务未完成")
+		if response.StatusCode == 404 {
+			return nil, "", yueError("yue_job_not_found")
+		}
+		return nil, "", yueError("yue_request_rejected")
 	}
 	return data, response.Header.Get("Content-Type"), nil
 }
@@ -94,6 +97,12 @@ func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 	defer cancel()
 	b, _, err := p.yueRequest(ctx, "GET", "/health", nil, "")
 	if err != nil {
+		if _, code := safeToolFailure(err); code == "yue_bridge_auth_failed" {
+			return yueHealth{State: "bridge_auth_failed", Message: err.Error()}
+		}
+		if _, code := safeToolFailure(err); code == "yue_backend_unavailable" {
+			return yueHealth{State: "backend_unavailable", Message: err.Error()}
+		}
 		return yueHealth{State: "bridge_unavailable", Message: err.Error()}
 	}
 	var reply struct {
@@ -184,7 +193,13 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		// Probe without side effects before claiming a create operation. An offline
 		// bridge must not become a fictitious successful/uncertain generation job.
 		if health := p.probeYuE(ctx); !health.Ready {
-			return "", errors.New(health.Message)
+			if health.State == "backend_unavailable" {
+				return "", yueError("yue_backend_unavailable")
+			}
+			if health.State == "bridge_auth_failed" {
+				return "", yueError("yue_bridge_auth_failed")
+			}
+			return "", yueError("yue_bridge_unavailable")
 		}
 		result, callErr := p.privilegedCall(ctx, name, raw, func() (any, error) {
 			data, _, e := p.yueRequest(ctx, "POST", "/jobs", body, p.operationID(name, raw))
@@ -207,7 +222,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		}
 		id, _ := job["job_id"].(string)
 		if !validID(id) {
-			return "", errors.New("YuE生成任务未取得有效任务编号；提交结果未确认，请核对任务记录，不重复提交")
+			return "", yueError("yue_submission_unknown")
 		}
 		taskID := agentID(p.trace.Account, p.trace.Thread, "yue", id)
 		found := false
@@ -261,7 +276,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 	}
 	p.manager.agent.mu.Unlock()
 	if !authorized {
-		return "", errors.New("该生成任务不属于当前会话")
+		return "", yueError("yue_job_scope_denied")
 	}
 	data, _, e := p.yueRequest(ctx, "GET", "/jobs/"+in.ID, nil, "")
 	if e != nil {
@@ -313,6 +328,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 // Requested song completion is a reply continuation, not an unsolicited greeting.
 // Poll read-only state before invoking the model; never resubmit generation.
 func (m *Manager) claimMusicTask(task agentTask, now time.Time) (*companion.Input, error) {
+	previousResult := task.LastResult
 	p := &permittedTools{manager: m}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
@@ -329,7 +345,15 @@ func (m *Manager) claimMusicTask(task agentTask, now time.Time) (*companion.Inpu
 		task.Next = now.Add(20 * time.Second)
 		task.LastResult = "本地模型正在排队或生成，完成后交付原会话，不重新生成"
 		if err != nil {
-			task.LastResult = "暂时无法读取本地生成状态，稍后继续核对同一任务，不重新生成"
+			description, code := safeToolFailure(err)
+			if description == "" {
+				description = "本地歌曲状态读取失败，稍后核对同一任务，不重新生成"
+				code = "yue_status_unavailable"
+			}
+			task.LastResult = description
+			if task.LastResult != previousResult {
+				m.record(bot.Record{Event: "music_status_unavailable", Category: "error", ThreadID: task.Thread, MessageID: task.OriginTrace, Tool: "music_local_status", ToolCode: code, Content: description, Status: "waiting", Origin: "agent"})
+			}
 		}
 		return nil, m.agent.task(task)
 	}

@@ -282,7 +282,11 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			p.manager.record(record)
 		}
 		if callErr != nil && !strings.HasPrefix(name, "web_") {
-			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_failed", Category: "error", Content: name, Reason: mcptools.FailureDescription(callErr), Status: "failed", Origin: "tool"})
+			reason, code := safeToolFailure(callErr)
+			if reason == "" {
+				reason = mcptools.FailureDescription(callErr)
+			}
+			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_failed", Category: "error", Tool: name, ToolCode: code, Content: name, Reason: reason, Status: "failed", Origin: "tool"})
 		}
 		if callErr == nil && !strings.HasPrefix(name, "web_") {
 			origin := "tool"

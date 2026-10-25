@@ -23,9 +23,13 @@ if(-not(Get-NetTCPConnection -State Listen -LocalPort 6188 -ErrorAction Silently
  }
 }
 if(-not $WithoutWatchdog){
+ $scheduled=Get-ScheduledTask -TaskName 'WechatAgent-YuE-*' -ErrorAction SilentlyContinue | Where-Object { $_.Actions.Arguments -like ('*'+(Join-Path $PSScriptRoot 'Watch-Local-YuE.ps1')+'*') }
+ if($scheduled){$scheduled | Start-ScheduledTask}
+ else {
  $watch=Join-Path $PSScriptRoot 'Watch-Local-YuE.ps1'
  if(-not(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(pwsh|powershell)\.exe$' -and $_.CommandLine -like ('*'+$watch+'*') })){
   Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList @('-NoProfile','-File',('"'+$watch+'"'),'-Project',('"'+$Project+'"')) -WindowStyle Hidden | Out-Null
+ }
  }
 }
 Write-Output ('本地YuE桥接启动中： http://'+$bind+':6188；原有服务不会重复启动。')

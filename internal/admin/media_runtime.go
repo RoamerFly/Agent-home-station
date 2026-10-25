@@ -14,6 +14,49 @@ import (
 )
 
 func (m *Manager) draining() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.drainTicket != "" }
+
+// Only an updater actively polling its ticket may keep the worker drained.
+// A dead/disconnected updater must never leave incoming messages paused.
+func (m *Manager) renewDrainLocked() {
+	m.drainExpires = time.Now().Add(30 * time.Second)
+	if m.drainTimer != nil {
+		m.drainTimer.Stop()
+	}
+	ticket := m.drainTicket
+	m.drainTimer = time.AfterFunc(30*time.Second, func() { m.expireDrain(ticket, time.Now()) })
+}
+func (m *Manager) expireDrain(ticket string, now time.Time) {
+	m.op.Lock()
+	defer m.op.Unlock()
+	m.mu.Lock()
+	if ticket == "" || m.drainTicket != ticket || now.Before(m.drainExpires) {
+		m.mu.Unlock()
+		return
+	}
+	m.drainTicket = ""
+	done := m.done
+	c := cloneConfig(m.config)
+	m.mu.Unlock()
+	m.resumeDrainedWorker(done, c)
+	m.log("update_drain_expired_resumed")
+}
+func (m *Manager) resumeDrainedWorker(done chan struct{}, c Config) {
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+		if c.Enabled {
+			m.start(c)
+		}
+	case <-time.After(3 * time.Second):
+		m.mu.Lock()
+		if m.done == done && m.drainTicket == "" && m.status.State == "draining" {
+			m.status.State = "running"
+		}
+		m.mu.Unlock()
+	}
+}
 func (m *Manager) takeMediaSeeds() []bot.MediaSeed {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -35,6 +78,8 @@ func (s *Server) mediaRuntimeRoutes(mux *http.ServeMux) {
 			m.drainTicket = randomToken()
 		}
 		ticket := m.drainTicket
+		m.renewDrainLocked()
+		m.status.State = "draining"
 		m.mu.Unlock()
 		respond(w, 200, map[string]any{"ticket": ticket, "status": "draining"})
 	}))
@@ -42,11 +87,13 @@ func (s *Server) mediaRuntimeRoutes(mux *http.ServeMux) {
 		m := s.manager
 		m.mu.Lock()
 		ticket, done := m.drainTicket, m.done
-		m.mu.Unlock()
 		if ticket == "" || r.URL.Query().Get("ticket") != ticket {
+			m.mu.Unlock()
 			fail(w, 409, "更新等待已失效，请重新准备")
 			return
 		}
+		m.renewDrainLocked()
+		m.mu.Unlock()
 		ready := done == nil
 		if done != nil {
 			select {
@@ -74,20 +121,15 @@ func (s *Server) mediaRuntimeRoutes(mux *http.ServeMux) {
 			return
 		}
 		m.drainTicket = ""
+		if m.drainTimer != nil {
+			m.drainTimer.Stop()
+		}
 		done := m.done
 		c := cloneConfig(m.config)
 		m.mu.Unlock()
 		// The worker may be between observing drain and returning. Wait briefly
 		// for its state transition before choosing whether a restart is needed.
-		if done != nil {
-			select {
-			case <-done:
-				if c.Enabled {
-					m.start(c)
-				}
-			case <-time.After(3 * time.Second):
-			}
-		}
+		m.resumeDrainedWorker(done, c)
 		respond(w, 200, map[string]bool{"resumed": true})
 	}))
 	mux.HandleFunc("POST /api/media/recover", s.protected(s.recoverMedia))

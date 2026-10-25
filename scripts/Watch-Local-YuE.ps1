@@ -19,7 +19,7 @@ try{
   if($missing.Count){
    $attempts++
    try { & (Join-Path $PSScriptRoot 'Start-Local-YuE.ps1') -Project $Project -WithoutWatchdog | Out-Null; $result='starting' }
-   catch { $result='start_failed' }
+   catch { $result='start_failed';[IO.File]::WriteAllText((Join-Path $workspace 'temp\yue-watchdog-error.log'),$_.Exception.Message,[Text.UTF8Encoding]::new($false)) }
   }
   $json=@{time=(Get-Date).ToUniversalTime().ToString('o');pid=$PID;state=$result;restart_checks=$attempts;missing_ports=$missing} | ConvertTo-Json -Compress
   [IO.File]::WriteAllText($status,$json,[Text.UTF8Encoding]::new($false))

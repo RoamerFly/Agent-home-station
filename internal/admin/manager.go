@@ -76,31 +76,33 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
-	speech      bailian.Config
-	agent       *agentControl
-	surfHistory *surfHistoryStore
-	billing     *billingStore
-	assetMu     sync.Mutex
-	drainTicket string
-	mediaSeeds  []bot.MediaSeed
-	surf        surfState
-	dir         string
-	stateDir    string
-	native      Native
-	op          sync.Mutex
-	mu          sync.Mutex
-	config      Config
-	status      BotStatus
-	logs        []LogEntry
-	journal     []LogEntry
-	logSequence uint64
-	cancel      context.CancelFunc
-	done        chan struct{}
-	memory      *companion.Store
-	tools       *toolStore
-	actions     *actionLedger
-	mcp         mcpSettings
-	plugins     *pluginLedger
+	speech       bailian.Config
+	agent        *agentControl
+	surfHistory  *surfHistoryStore
+	billing      *billingStore
+	assetMu      sync.Mutex
+	drainTicket  string
+	drainExpires time.Time
+	drainTimer   *time.Timer
+	mediaSeeds   []bot.MediaSeed
+	surf         surfState
+	dir          string
+	stateDir     string
+	native       Native
+	op           sync.Mutex
+	mu           sync.Mutex
+	config       Config
+	status       BotStatus
+	logs         []LogEntry
+	journal      []LogEntry
+	logSequence  uint64
+	cancel       context.CancelFunc
+	done         chan struct{}
+	memory       *companion.Store
+	tools        *toolStore
+	actions      *actionLedger
+	mcp          mcpSettings
+	plugins      *pluginLedger
 }
 
 func NewManager(dir, stateDir string, native Native) (*Manager, error) {
@@ -303,6 +305,9 @@ func (m *Manager) stop() error {
 	m.mu.Lock()
 	cancel, done := m.cancel, m.done
 	m.drainTicket = ""
+	if m.drainTimer != nil {
+		m.drainTimer.Stop()
+	}
 	if cancel != nil {
 		m.status.State = "stopping"
 		cancel()

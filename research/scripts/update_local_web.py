@@ -59,14 +59,16 @@ else:
             pass  # Restarted services invalidate the old session/ticket.
     atexit.register(release_drain)
     from urllib.parse import quote
-    for attempt in range(1800):
+    # A busy voice can legitimately need minutes. Do not pause all new chats
+    # for that duration merely to update the UI; release and try another time.
+    for attempt in range(15):
         if request("/api/runtime/drain?ticket=" + quote(ticket))["ready"]:
             break
         if attempt % 30 == 0:
             print("Waiting for current work to finish before updating (no cancellation).", flush=True)
         time.sleep(1)
     else:
-        raise RuntimeError("Drain deadline reached; no executable replaced or service restarted")
+        raise RuntimeError("Busy worker: update deferred after 15 seconds; incoming processing resumed, no executable replaced")
 assert hashlib.sha256(config.read_bytes()).hexdigest() == before, "Configuration changed while preparing update; aborted"
 old = hashlib.sha256(binary.read_bytes()).hexdigest()
 backup = root / "bin" / ("wechat-admin.previous-" + old[:12])

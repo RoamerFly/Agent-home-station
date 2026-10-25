@@ -1,0 +1,34 @@
+package admin
+
+import "errors"
+
+type yueCallError struct{ code string }
+
+func (e *yueCallError) Error() string {
+	switch e.code {
+	case "yue_bridge_unavailable":
+		return "本地YuE桥接连接失败；请检查6188服务，原任务与音频会保留，不重新生成"
+	case "yue_bridge_auth_failed":
+		return "YuE桥接鉴权失败，请检查桥接令牌"
+	case "yue_backend_unavailable":
+		return "YuE桥接在线，ComfyUI生成后端不可用；本次未提交新任务"
+	case "yue_submission_unknown":
+		return "YuE未取得有效任务编号；提交结果未确认，请核对原记录，不重复提交"
+	case "yue_job_scope_denied":
+		return "该歌曲任务不属于当前会话；请先通过agent_tasks查询本会话任务编号，不使用素材ID或其他群任务ID"
+	case "yue_job_not_found":
+		return "YuE桥接没有这个任务编号；请查询本会话原任务，不把素材编号当生成任务编号"
+	case "yue_response_limit":
+		return "YuE响应不完整或超过大小限制；尚未准备附件"
+	default:
+		return "YuE拒绝请求或任务结果尚未可用，请核对原任务状态"
+	}
+}
+func yueError(code string) error { return &yueCallError{code: code} }
+func safeToolFailure(err error) (string, string) {
+	var yue *yueCallError
+	if errors.As(err, &yue) {
+		return yue.Error(), yue.code
+	}
+	return "", ""
+}
