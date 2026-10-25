@@ -66,7 +66,7 @@ func TestSurfTopicCooldownBookmarkAndActualAcceptedSharePersist(t *testing.T) {
 	s.data.Items = []surfSeen{{Item: x, Seen: time.Now(), Shared: map[string]time.Time{}}}
 	s.data.Sessions = []surfSession{{ID: in.TraceID, Thread: in.Thread, Candidates: []mcptools.DiscoveryItem{x}, Visited: []string{x.URL}}}
 	d, err := p.ReviewSurf(context.Background(), companion.Decision{Action: "silent", SurfAction: "bookmark", SurfItemID: "one"})
-	if err != nil || d.Action != "silent" || !s.data.Items[0].Bookmarked {
+	if err != nil || d.Action != "silent" || d.Reason != "surf_bookmarked" || !s.data.Items[0].Bookmarked || s.data.Sessions[0].Selected != x.ID || s.data.Sessions[0].Reason != d.Reason {
 		t.Fatal(d, err)
 	}
 	d, err = p.ReviewSurf(context.Background(), companion.Decision{Action: "reply", SurfItemID: "one", Messages: []string{"这个新发现分享给你"}})
@@ -86,7 +86,7 @@ func TestSurfTopicCooldownBookmarkAndActualAcceptedSharePersist(t *testing.T) {
 	in.TraceID = "surf-b"
 	p.SetTrace(in)
 	d, err = p.ReviewSurf(context.Background(), companion.Decision{Action: "reply", SurfItemID: "two", Messages: []string{"另一家报道"}})
-	if err != nil || d.Reason != "surf_duplicate_topic" {
+	if err != nil || d.Reason != "surf_duplicate_topic" || s.data.Sessions[1].Reason != d.Reason || s.data.Sessions[1].State != "not_shared" {
 		t.Fatal("cross-url repeated topic accepted", d, err)
 	}
 	// Unrelated nature content is not blocked simply because it is also science.
@@ -164,5 +164,72 @@ func TestSurfNoCandidatesExplainsNetworkFailureAndSearchFallbackCanJoinSession(t
 	extra, err := p.rememberSearchCandidates("Search provider: Test\n\n1. 公开猫咪视频\nhttps://www.bilibili.com/video/BV1425hzpEtn/\n真实简介\n")
 	if err != nil || len(s.data.Sessions[0].Candidates) != 1 || extra == "" {
 		t.Fatal("successful fallback search not retained", extra, err)
+	}
+}
+
+func TestSurfOutcomePersistsAndDoesNotConfuseFailuresWithDisinterest(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason, want, state string
+		read, failed              bool
+	}{
+		{"candidates_only", "silent", "surf_candidates_only", "not_shared", false, false},
+		{"read_only", "silent", "surf_browse_only", "not_shared", true, false},
+		{"disinterest", "surf_not_interested", "surf_not_interested", "not_shared", false, false},
+		{"unsuitable", "surf_not_suitable", "surf_not_suitable", "not_shared", true, false},
+		{"failed_tool", "surf_tool_failed", "surf_tool_failed", "failed", true, true},
+		{"invented_failure", "surf_tool_failed", "surf_browse_only", "not_shared", true, false},
+		{"duplicate", "surf_duplicate_source", "surf_duplicate_source", "not_shared", true, false},
+		{"budget", "tool_budget_exhausted", "tool_budget_exhausted", "not_shared", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setup(t)
+			p, _, _ := f.manager.toolAccess()
+			in := companion.Input{Thread: "filehelper", TraceID: "surf-outcome", Surf: true}
+			p.SetTrace(in)
+			x := mcptools.DiscoveryItem{ID: "cat", Title: "猫咪", URL: "https://example.org/cat"}
+			s := f.manager.surfHistory
+			s.data.Sessions = []surfSession{{ID: in.TraceID, Thread: in.Thread, Candidates: []mcptools.DiscoveryItem{x}}}
+			if tc.read {
+				s.data.Sessions[0].Visited = []string{x.URL}
+			}
+			if tc.failed {
+				f.manager.record(bot.Record{Event: "tool_call_failed", Status: "failed", MessageID: in.TraceID, ThreadID: in.Thread, Tool: "music_local_start", Reason: "backend unavailable"})
+			}
+			d, err := p.ReviewSurf(context.Background(), companion.Decision{Action: "silent", Reason: tc.reason, SurfItemID: x.ID})
+			if err != nil || d.Reason != tc.want {
+				t.Fatal(d, err)
+			}
+			// This is the worker event that used to erase the detailed outcome.
+			f.manager.record(bot.Record{Event: "character_decision", Status: "silent", MessageID: in.TraceID, ThreadID: in.Thread, Reason: d.Reason})
+			reloaded, err := newSurfHistory(f.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := reloaded.snapshot().Sessions[0]
+			if got.State != tc.state || got.Reason != tc.want || got.Selected != x.ID || (len(got.ToolFailures) > 0) != tc.failed {
+				t.Fatal(got)
+			}
+		})
+	}
+}
+
+func TestSurfVerificationRejectionIsRecordedWithoutClaimingDelivery(t *testing.T) {
+	for _, selected := range []string{"", "cat"} {
+		f := setup(t)
+		p, _, _ := f.manager.toolAccess()
+		in := companion.Input{Thread: "filehelper", TraceID: "surf-unverified", Surf: true}
+		p.SetTrace(in)
+		x := mcptools.DiscoveryItem{ID: "cat", Title: "猫咪", URL: "https://example.org/cat"}
+		s := f.manager.surfHistory
+		s.data.Sessions = []surfSession{{ID: in.TraceID, Thread: in.Thread, Candidates: []mcptools.DiscoveryItem{x}}}
+		d, err := p.ReviewSurf(context.Background(), companion.Decision{Action: "reply", SurfItemID: selected, Messages: []string{"看完了分享给你"}})
+		want := "surf_candidate_not_selected"
+		if selected != "" {
+			want = "surf_candidate_not_verified"
+		}
+		got := s.snapshot().Sessions[0]
+		if err != nil || d.Action != "silent" || d.Reason != want || got.State != "not_shared" || got.Reason != want {
+			t.Fatal(d, got, err)
+		}
 	}
 }

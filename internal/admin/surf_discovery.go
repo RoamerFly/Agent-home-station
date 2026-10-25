@@ -75,16 +75,18 @@ type surfSeen struct {
 	Shared     map[string]time.Time   `json:"shared,omitempty"`
 }
 type surfSession struct {
-	ID         string                   `json:"id"`
-	Thread     string                   `json:"thread"`
-	Mode       string                   `json:"mode"`
-	At         time.Time                `json:"at"`
-	Depth      int                      `json:"depth"`
-	Candidates []mcptools.DiscoveryItem `json:"candidates"`
-	Visited    []string                 `json:"visited"`
-	Failures   []string                 `json:"failures"`
-	Selected   string                   `json:"selected,omitempty"`
-	State      string                   `json:"state"`
+	ID           string                   `json:"id"`
+	Thread       string                   `json:"thread"`
+	Mode         string                   `json:"mode"`
+	At           time.Time                `json:"at"`
+	Depth        int                      `json:"depth"`
+	Candidates   []mcptools.DiscoveryItem `json:"candidates"`
+	Visited      []string                 `json:"visited"`
+	Failures     []string                 `json:"failures"`
+	ToolFailures []string                 `json:"tool_failures,omitempty"`
+	Selected     string                   `json:"selected,omitempty"`
+	State        string                   `json:"state"`
+	Reason       string                   `json:"reason,omitempty"`
 }
 type surfHistory struct {
 	Version  int           `json:"version"`
@@ -499,7 +501,7 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 	if mode == "search" {
 		mode = "search_verification"
 	}
-	out := map[string]any{"session_id": session.ID, "entry_mode": mode, "depth": depth, "max_depth": settings.MaxDepth, "candidates": selected, "filtered_duplicates": filtered, "source_failures": session.Failures, "instruction": "这是实际读取公开列表/订阅/目录得到的候选，不代表看过视频或听过音频。选值得继续的具体内容，用web_fetch读正文；视频/音乐/图片可用media_url（若有）或BV页执行web_media_download。不要把标题摘要当完整文章；没有兴趣可silent，喜欢但不分享可在silent对象加surf_action=bookmark和surf_item_id。分享时给reply加surf_item_id，比较近期主题，不能用同主题换网址凑新鲜。可用web_discover(related_url=候选BV页)继续关联探索，搜索仅用于核实具体疑问；不要退回搜索宽泛兴趣句子或首页。失败源已记录，其他源候选仍可用。"}
+	out := map[string]any{"session_id": session.ID, "entry_mode": mode, "depth": depth, "max_depth": settings.MaxDepth, "candidates": selected, "filtered_duplicates": filtered, "source_failures": session.Failures, "instruction": "这是实际读取公开列表/订阅/目录得到的候选，不代表看过视频或听过音频。选值得继续的具体内容，用web_fetch读正文；视频/音乐/图片可用media_url（若有）或BV页执行web_media_download。不要把标题摘要当完整文章；发现适合当前群的新内容就是分享理由，无需等待群友提问；优先读取感兴趣的具体候选或准备媒体。确实没有兴趣或不适合可silent并用reason=surf_not_interested或surf_not_suitable；喜欢但只想收藏可在silent对象加surf_action=bookmark和surf_item_id。分享时给reply加surf_item_id，比较近期主题，不能用同主题换网址凑新鲜。可用web_discover(related_url=候选BV页)继续关联探索，搜索仅用于核实具体疑问；不要退回搜索宽泛兴趣句子或首页。失败源已记录，其他源候选仍可用。"}
 	b, _ := json.Marshal(out)
 	return string(b), nil
 }
@@ -531,25 +533,45 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 			break
 		}
 	}
+	finishSilent := func(reason, state string) (companion.Decision, error) {
+		session.State, session.Reason = state, reason
+		if chosen != nil {
+			session.Selected = chosen.ID
+		}
+		return companion.Decision{Action: "silent", Reason: reason, SurfAction: d.SurfAction, SurfItemID: session.Selected}, s.saveLocked()
+	}
 	if d.Action == "silent" {
-		session.State = "not_shared"
+		reason, state := d.Reason, "not_shared"
+		switch reason {
+		case "surf_not_interested", "surf_not_suitable", "surf_browse_only", "surf_no_verified_source", "surf_duplicate_source", "tool_unavailable_or_budget_exhausted", "tool_budget_exhausted", "invalid_model_decision", "invalid_tool_arguments":
+		case "surf_tool_failed":
+			if len(session.ToolFailures) > 0 {
+				state = "failed"
+			} else {
+				reason = "surf_browse_only"
+			}
+		default:
+			reason = "surf_browse_only"
+		}
+		if reason == "surf_browse_only" && len(session.Visited) == 0 {
+			reason = "surf_candidates_only"
+		}
 		if len(session.Candidates) == 0 {
 			if len(session.Failures) > 0 {
-				d.Reason = "surf_sources_unavailable"
-				session.State = "failed"
+				reason, state = "surf_sources_unavailable", "failed"
 			} else {
-				d.Reason = "surf_no_novel_candidates"
+				reason = "surf_no_novel_candidates"
 			}
 		}
 		if d.SurfAction == "bookmark" && chosen != nil {
-			session.State = "bookmarked"
+			reason, state = "surf_bookmarked", "bookmarked"
 			for i := range s.data.Items {
 				if s.data.Items[i].Item.ID == chosen.ID {
 					s.data.Items[i].Bookmarked = true
 				}
 			}
 		}
-		return d, s.saveLocked()
+		return finishSilent(reason, state)
 	}
 	if chosen == nil {
 		// Some models omit the optional candidate field while selecting a real
@@ -572,7 +594,7 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 		}
 		p.mediaMu.Unlock()
 		if chosen == nil {
-			return companion.Decision{Action: "silent", Reason: "surf_candidate_not_selected"}, nil
+			return finishSilent("surf_candidate_not_selected", "not_shared")
 		}
 		d.SurfItemID = chosen.ID
 	}
@@ -591,7 +613,7 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 		}
 	}
 	if !verified {
-		return companion.Decision{Action: "silent", Reason: "surf_candidate_not_verified"}, nil
+		return finishSilent("surf_candidate_not_verified", "not_shared")
 	}
 	text := chosen.Title + " " + strings.Join(d.Messages, " ")
 	p.manager.mu.Lock()
@@ -602,17 +624,18 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 	p.manager.mu.Unlock()
 	for _, old := range s.data.Items {
 		if t := old.Shared[p.trace.Thread]; !t.IsZero() && time.Since(t) < time.Duration(days)*24*time.Hour && (old.Item.ID == chosen.ID || sameSurfTopic(chosen.Title, old.Item.Title) || sameSurfTopic(text, old.Item.Summary)) {
-			return companion.Decision{Action: "silent", Reason: "surf_duplicate_topic"}, nil
+			return finishSilent("surf_duplicate_topic", "not_shared")
 		}
 	}
 	// Existing conversation history also catches pre-migration repeated topics.
 	for _, old := range p.manager.memory.Context(p.trace, p.manager.Config().Companion, time.Now()).Messages {
 		if old.Role == "assistant" && old.Media == nil && sameSurfTopic(text, old.Text) {
-			return companion.Decision{Action: "silent", Reason: "surf_duplicate_topic"}, nil
+			return finishSilent("surf_duplicate_topic", "not_shared")
 		}
 	}
 	session.Selected = chosen.ID
 	session.State = "prepared"
+	session.Reason = "surf_content_prepared"
 	if err := s.saveLocked(); err != nil {
 		return companion.Decision{}, err
 	}
@@ -639,8 +662,17 @@ func (s *surfHistoryStore) recordActivity(r bot.Record) error {
 				}
 			}
 		}
+		if r.Status == "failed" && (r.Event == "web_activity" || r.Event == "tool_call_failed") && len(session.ToolFailures) < 30 {
+			// Store only the existing sanitized tool name and public error code,
+			// never provider output or raw error bodies in the decision summary.
+			failure := logText(r.Tool+" / "+r.Reason, 500)
+			if len(session.ToolFailures) == 0 || session.ToolFailures[len(session.ToolFailures)-1] != failure {
+				session.ToolFailures = append(session.ToolFailures, failure)
+			}
+		}
 		if r.Event == "message_sent" && r.Status == "accepted" && session.Selected != "" {
 			session.State = "shared"
+			session.Reason = "surf_share_accepted"
 			for j := range s.data.Items {
 				item := &s.data.Items[j]
 				if item.Item.ID == session.Selected {
@@ -655,15 +687,19 @@ func (s *surfHistoryStore) recordActivity(r bot.Record) error {
 			if session.State != "failed" {
 				session.State = "not_shared"
 			}
+			session.Reason = r.Reason
 		}
 		if r.Event == "model_failed" || r.Event == "send_failed" {
 			session.State = "failed"
+			session.Reason = r.Reason
 		}
 		if r.Event == "utterance_plan_stopped" || r.Event == "utterance_plan_revised" && r.Reason == "plan_cancel" {
 			session.State = "not_shared"
+			session.Reason = r.Reason
 		}
 		if r.Event == "character_decision" && r.Status == "blocked" {
 			session.State = "blocked"
+			session.Reason = r.Reason
 		}
 		return s.saveLocked()
 	}

@@ -22,6 +22,9 @@ func TestLiveDiscoveryModelPreparesMedia(t *testing.T) {
 	}
 	reports := []map[string]any{}
 	for _, kind := range []string{"image", "video", "voice"} {
+		if only := os.Getenv("WECHAT_DISCOVERY_KIND"); only != "" && only != kind {
+			continue
+		}
 		f := setup(t)
 		native := &fakeTools{fakeNative: f.native}
 		f.manager.native = native

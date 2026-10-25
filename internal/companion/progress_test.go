@@ -140,3 +140,36 @@ func TestSurfDiscoversBeforeModelAndAllowsBrowsingWithoutMandatoryShare(t *testi
 		t.Fatal("model still starts with blank keyword search")
 	}
 }
+
+func TestSurfPrematureSilenceGetsOneOptionalInspection(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		answers               []string
+		modelCalls, toolCalls int
+	}{
+		{"inspect_then_share", []string{`{"action":"silent"}`, `{"action":"tool","tool":"web_fetch","arguments":{"url":"https://example.org/cat"}}`, `{"action":"reply","messages":["这只猫好可爱 https://example.org/cat"]}`}, 3, 2},
+		{"still_silent", []string{`{"action":"silent"}`, `{"action":"silent"}`}, 2, 1},
+		{"not_interested", []string{`{"action":"silent","reason":"surf_not_interested"}`}, 1, 1},
+		{"not_suitable", []string{`{"action":"silent","reason":"surf_not_suitable"}`}, 1, 1},
+		{"bookmark", []string{`{"action":"silent","surf_action":"bookmark","surf_item_id":"one"}`}, 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := &discoveryChoiceTools{}
+			m := &sequenceModel{answers: tc.answers}
+			cfg := enabledConfig()
+			cfg.Permissions.Proactive = true
+			e, _ := NewPreview(cfg, m, "role")
+			e.Tools, e.MaxToolCalls = tools, 3
+			d, err := e.Respond(context.Background(), Input{Mode: "proactive", Surf: true, Preview: true, Text: "看看轻松内容"})
+			if err != nil || len(m.turns) != tc.modelCalls || tools.calls != tc.toolCalls {
+				t.Fatal(d, err, len(m.turns), tools.calls)
+			}
+			if tc.name == "inspect_then_share" && d.Action != "reply" {
+				t.Fatal("verified interesting content could not be shared", d)
+			}
+			if tc.name != "inspect_then_share" && d.Action != "silent" {
+				t.Fatal("autonomous silence overridden", d)
+			}
+		})
+	}
+}
