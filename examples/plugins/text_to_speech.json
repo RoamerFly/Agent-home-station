@@ -1,0 +1,33 @@
+{
+  "id": "text_to_speech",
+  "name": "文字转语音 API",
+  "version": "1",
+  "description": "需配置：填写你的语音 API 地址、鉴权请求头和返回音频 URL 路径。",
+  "tools": [
+    {
+      "name": "synthesize",
+      "description": "将文字交给已配置的语音服务。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "url": "https://replace-with-owner-api.example/v1/tts",
+      "method": "POST",
+      "headers": {
+        "Authorization": "Bearer {{secret.API_KEY}}"
+      },
+      "body_template": {
+        "text": "{{arg.text}}"
+      },
+      "media_url_path": "data.audio_url",
+      "media_kind": "voice"
+    }
+  ]
+}

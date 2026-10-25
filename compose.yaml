@@ -1,0 +1,22 @@
+services:
+  wechat-sendd:
+    build: .
+    environment:
+      WECHAT_API_TOKEN: ${WECHAT_API_TOKEN:?set a 24-byte-or-longer API token}
+      # Empty is intentional: without an allowlist, every send is rejected.
+      WECHAT_ALLOWED_RECIPIENTS: ${WECHAT_ALLOWED_RECIPIENTS:-}
+      WECHAT_LISTEN: 0.0.0.0:8787
+      # No session means the daemon starts but remains transport_ready=false.
+      WECHAT_SESSION_FILE: ${WECHAT_SESSION_FILE:-}
+    ports:
+      - "127.0.0.1:8787:8787"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # To use a session, set WECHAT_SESSION_FILE=/run/secrets/wechat-session.json
+    # and uncomment this read-only mount. A missing local file must not block
+    # a sessionless health-check deployment.
+    # volumes:
+    #   - ./secrets/wechat-session.json:/run/secrets/wechat-session.json:ro

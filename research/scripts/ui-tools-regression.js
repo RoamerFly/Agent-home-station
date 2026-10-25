@@ -1,0 +1,42 @@
+async page => {
+
+ await page.reload();await page.locator('#app-view').waitFor({state:'visible'});
+ await page.setViewportSize({width:1440,height:1000});
+ const before=await(await page.request.get('http://127.0.0.1:8081/api/config')).json();
+ let writes=0,dialogs=0,toolCalls=0;
+ const rejectDialog=async dialog=>{dialogs++;await dialog.dismiss()};page.on('dialog',rejectDialog);
+ await page.route('**/api/plugins**',async route=>{if(route.request().method()==='GET')return route.continue();writes++;await route.fulfill({status:500,body:'{"error":"unexpected mutation in UI check"}'})});
+ await page.locator('.main-nav[data-section="plugins"]').click();
+ await page.locator('.plugin-installed').first().click();
+ const savedName=await page.locator('#plugin-display-name').inputValue();
+ await page.locator('#plugin-display-name').fill('不应保存的界面测试');
+ await page.locator('.plugin-template').first().click();
+ await page.locator('.plugin-installed').first().click();
+ if(await page.locator('#plugin-display-name').inputValue()!==savedName)throw new Error('Switching did not discard unsaved template');
+ await page.locator('#plugin-display-name').fill('离开时丢弃');
+ await page.locator('.subnav-link[data-section="mcp"]').click();
+ await page.locator('.subnav-link[data-section="plugins"]').click();
+ if(await page.locator('#plugin-display-name').inputValue()!==savedName)throw new Error('Leaving page kept unsaved draft');
+ if(dialogs||writes)throw new Error('Plugin navigation asked or auto-saved');
+ await page.unroute('**/api/plugins**');
+ await page.locator('.subnav-link[data-section="mcp"]').click();
+ await page.locator('#mcp-inspect').click();await page.locator('.mcp-tool').filter({hasText:'web_fetch ·'}).waitFor();
+ await page.locator('.mcp-tool').filter({hasText:'web_fetch ·'}).click();
+ let args=JSON.parse(await page.locator('#mcp-test-args').inputValue());
+ if(args.url!=='https://example.com/'||args.query)throw new Error('Fetch still uses search parameters');
+ await page.route('**/api/mcp/test',async route=>{toolCalls++;const request=route.request().postDataJSON();if(request.name!=='web_fetch'||!request.arguments.url)throw new Error('Bad tool request');await route.fulfill({status:502,contentType:'application/json',body:JSON.stringify({error:'目标网站返回 HTTP 403；可能需要登录、限制访问或网址已失效'})})});
+ await page.locator('#mcp-test-args').fill('{"query":"wrong-tool"}');await page.locator('#mcp-test').click();
+ if(toolCalls||!await page.locator('#mcp-test-result').textContent().then(t=>t.includes('url')))throw new Error('Required URL not validated locally');
+ await page.locator('#mcp-test-args').fill('{"url":"https://example.com/custom"}');await page.locator('#mcp-test').click();
+ await page.waitForFunction(()=>document.querySelector('#mcp-test-result').textContent.includes('403'));
+ await page.locator('.mcp-tool').filter({hasText:'web_search ·'}).click();
+ args=JSON.parse(await page.locator('#mcp-test-args').inputValue());if(!args.query||args.url)throw new Error('Search did not get its own parameters');
+ await page.locator('.mcp-tool').filter({hasText:'web_fetch ·'}).click();
+ if(JSON.parse(await page.locator('#mcp-test-args').inputValue()).url!=='https://example.com/custom')throw new Error('Tool arguments not retained per tool');
+ await page.locator('.mcp-tool').filter({hasText:'web_media_download ·'}).click();
+ args=JSON.parse(await page.locator('#mcp-test-args').inputValue());if(args.kind!=='video'||!Object.hasOwn(args,'url'))throw new Error('Missing download template');
+ await page.unroute('**/api/mcp/test');page.off('dialog',rejectDialog);
+ const after=await(await page.request.get('http://127.0.0.1:8081/api/config')).json();
+ if(JSON.stringify(before)!==JSON.stringify(after))throw new Error('Real config changed');
+ return {plugin_switch_dialogs:dialogs,plugin_auto_saves:writes,unsaved_drafts_discarded:true,fetch_parameters_correct:true,missing_url_blocked_locally:true,safe_failure_cause_visible:true,tool_parameters_independent:true,download_tool_visible:true,configuration_unchanged:true,real_tool_calls:0};
+}

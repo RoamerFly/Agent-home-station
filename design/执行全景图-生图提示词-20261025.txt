@@ -1,0 +1,137 @@
+Use case: infographic-diagram.
+Create ONE exceptionally large, information-rich Chinese software architecture AND execution flowchart poster for an existing WeChat AI Agent project. This is a precise technical diagram, not a concept illustration or webpage mockup. Request a 3840×2160 landscape canvas, maximum practical resolution, crisp zoom-readable Simplified Chinese text, lots of actual connected flowchart nodes, neat orthogonal labeled arrows, clear decision diamonds, sharp arrowheads. White/very pale blue background, professional engineering diagram with restrained blue/teal/purple/amber/red, no 3D, no decorative scenery, no generic dashboard cards, no watermark. Big title and readable hierarchy. Use space efficiently; long labels split into 2 or 3 lines. It should feel like a large system map one can zoom in and study. Approx 55–65 concise nodes organized into lanes and subflows; do not replace detailed flow with a small summary.
+
+Exact headline: “蓝色大肥鱼 · 微信 AI Agent 执行全景图”
+Subtitle: “当前实现 · 2026-10-25 · 模型决策 / 程序执行 / 持久化任务”
+Top legend: “紫色：AI 决策” “蓝色：后台执行” “绿色：外部服务 / 微信” “橙色：程序行为规则” “红色：失败与待核对” “虚线：配置 / 状态反馈”
+Tiny topology caption: “网页管理端 + Go 后台 + Linux 微信接入 + 外部模型 / MCP / 本地 YuE”
+Depict CURRENT implemented system only, not a future ideal system. No QQ connector, plugin marketplace as storefront, imaginary unrestricted autonomous brain, or hidden model browser. Tools are permission-filtered; functions discovered lazily. Mandatory safety statement for technical accuracy can be a concise amber footnote: “服务器命令使用服务用户权限；工作目录不是命令沙箱”.
+
+LAYOUT:
+Wide poster. Upper slim horizontal management-control band spanning canvas, middle large primary execution lanes left-to-right, lower wide band with 3 detailed subflows plus bottom observability/data strip. Label all three areas clearly. Use numbered sections “01 接收与入库”, “02 理解与上下文”, “03 AI 决策循环”, “04 工具执行”, “05 微信交付”, lower sections “06 长任务续办”, “07 自主冲浪”, “08 状态与恢复”. All branches must have arrow direction and source/destination; minimize crossing lines. A central purple AI box is the visual anchor and actual decisions return to it. Standalone colored groups only when supported by actual arrows. Compact lower side info “当前边界” is permissible.
+
+TOP CONTROL BAND:
+“网页管理端” connects by dashed lines into relevant stages.
+Contains 4 grouped concise nodes:
+“服务商 / API Key / 模型”
+“角色 / 群聊规则 / 安静时间 / 预算”
+“工具 / MCP / 插件 / 服务器权限”
+“会话 / 记忆 / 日志 / Token 与费用”
+Dashed config arrows go into context building, permission checks, decision budgets and send pacing. No secret values. Small note “配置权限 ≠ 已执行动作”.
+
+MAIN PIPELINE (about upper-middle 65% width-height or enough room):
+01 lane blue/green:
+“微信群聊 / 私信”
+→ “Linux 微信接入”
+→ “事件游标 + 持久化收件箱”
+→ “去重 / 会话授权 / 来源识别”
+Decision diamond “允许处理？”
+NO → red-gray “记录跳过原因”
+YES → 02.
+Show incoming text, quote, image, voice, share card as small badges, not 6 giant boxes.
+Show restart recovery feed arrow into persistent inbox.
+
+02 lane blue:
+“解析正文 / 发送者 / @ / 微信引用”
+→ fork for media “图片观察 / 语音转写 / 分享卡片解析” (image understanding uses configured provider; do NOT claim DeepSeek natively supports every medium)
+→ “按会话整理记忆”
+subtext “近期对话 / 摘要 / 关系备注 / 最近媒体来源”
+→ decision “达到压缩阈值？”
+YES → “模型压缩旧上下文” → back “组装结构化输入”
+NO → “组装结构化输入”
+→ “权限 / 安静时间 / 冷却 / 调用预算”
+YES onward AI, blocked → record reason. Clarify short note “直接请求与主动发言规则不同”.
+
+03 central purple:
+“DeepSeek 决策”
+→ diamond “本轮选择？”
+branches:
+“安静 / 等待” → “记录决定与后续唤醒”
+“回复文字 / 选择附件” → amber “输出与执行一致性检查” → send lane
+“原生 function_call” → “已开放工具 Schema” → tool lane.
+Under schema tiny note “常用工具直接提供；其余按需 discover_tools”.
+Tool execution result feeds back via large clearly labeled purple return loop “真实结果 / 具体错误 → 模型继续判断”.
+Around exit consistency check show amber subsidiary box:
+“结构 / 附件 ID / 承诺与实际任务核对”
+arrow if inconsistent back to AI labeled “有限纠正 / 明确失败”.
+Do not suggest checker automatically generates songs or chooses all tools.
+Separate amber small badge near AI “可选：被 @ 必须回复”.
+Normal chat silence chosen by AI subject to config, not automatic reply to all.
+
+04 tool lane blue:
+“参数验证 / 当前权限复核”
+→ “幂等键 + 操作台账”
+→ “工具路由”
+→ 5 compact stack nodes connected as branch family:
+“联网：搜索 / 网页读取 / 媒体下载”
+“MCP / API 插件：按注册接口调用”
+“语音与音乐：百炼 TTS / ASR · 本地 YuE”
+“微信能力：读消息 / 授权账号动作”
+“服务器能力：读写文件 / 执行命令”
+Nodes 4&5 marked “按可信用户 / 会话 / 权限开放”.
+All tool outputs converge into “返回真实结果 / 错误” and clear feedback to DeepSeek. Download tools produce “临时附件 + 原文件缓存” and pass available media IDs back AI; NOT automatically send every downloaded resource.
+Side amber small note “联网必须有实际调用；搜索结果不等于下载成功”.
+Long music generation branch goes into lower section06.
+
+05 delivery lane blue/green:
+From validated reply “持久化发送队列”
+→ “文字 / 图片 / 语音 / 视频 / 文件 / 分享卡片”
+→ amber “随机间隔 + 同会话媒体顺序”
+→ “微信后台提交”
+→ diamond “回执可验证？”
+YES → green “标记已接受 / 更新发送记忆”
+NO → red “延迟核对原任务”
+from delay check → diamond “原生允许补试？”
+YES → “等待后重试同一任务”
+NO → “待核对 / 给出原因”
+Avoid statement that all uncertain sends automatically resent. Never infer delivery merely from conversation memory or HTTP success.
+Clear return arrow “发送结果” to observability/storage below.
+Small interruption branch from “新消息：停止 / 换歌 / 改发文件” to “取消旧语音与过时介绍；不可撤回已送达段”.
+Small note below send queue: “介绍在附件被接受后发送；执行前确认可单独发送”.
+
+LOWER SUBFLOWS:
+06 long task music, blue/purple:
+“AI 调用 music_local_start”
+→ “AI 自拟歌名 / 风格 / 原创歌词”
+→ “传入目标秒数 + 交付格式”
+→ “本地 YuE 真实生成”
+→ “持久化 job_id / 原会话 / 请求者”
+→ “定时读取同一任务状态”
+diamond “完成 / 失败？”
+completed → “唤醒模型 music_local_status”
+→ “准备真实媒体 ID”
+→ up-arrow to primary send queue.
+failed → “如实通知 / 不重复生成”.
+Show output detail callout exactly:
+“默认：完整歌曲拆成每段 ≤ 60 秒的语音”
+“明确要文件：原音频文件”
+“既要演唱又要文件：语音 + 原文件”
+“文件名：大肥鱼原创歌曲-{歌曲名}”
+Amber label “当前包含默认格式与时长纠正规则”.
+Job persistence is automatic after tool starts; model decides start. Draw own little loop while running “继续等待，不重复提交”.
+
+07 autonomous surf:
+“调度器随机到期”
+→ diamond “安静时间？”
+YES → “延后，本次不消耗冲浪次数”
+NO → “AI 选择兴趣 / 来源”
+→ “真实搜索与读取”
+→ “校验来源 / 去重 / 记录浏览”
+→ diamond “值得分享？”
+NO → “安静 / 保留浏览记录”
+YES → “文字 / 图片 / 音乐 / 视频候选”
+→ “AI 决定分享对象与形式”
+→ primary send queue through normal permission and media preparation path.
+Clearly no guaranteed fixed posting interval, no always-scientific-paper theme, no repeated sharing of same URL automatically. Small note “冲浪不是持续联网思考”.
+
+08 state/recovery bottom/right:
+database-style interconnected cylinders “消息与处理状态” “会话记忆与摘要” “媒体原件与来源” “任务与操作台账” “发送任务与回执”.
+“系统日志 / 冲浪记录 / Token 与费用” observes major stages with dashed lines.
+“重启恢复” → “读取游标与收件箱” → inbox main; “恢复待查任务与发送状态” → existing job status and receipt check. Show “不会把未知外部操作当作未执行重放”.
+Status mini strip: “已接收 → 处理中 → 安静 / 待任务 → 发送中 → 已接受 / 失败 / 待核对”.
+Bottom boundary annotation in a slim amber bar:
+“当前架构：事件驱动的模型工具循环 + 持久化调度 + 部分行为规则；尚非无限制账号接管”
+IMPORTANT technical truth: memory is context not proof of delivery. Include “记忆用于理解；微信回执用于确认发送”.
+
+TYPOGRAPHY AND CRAFT:
+Use elegant modern Chinese sans serif; title around 80px at 4K, region headers 38–46px, main labels approximately 25–32px, auxiliary 21–24px; keep enough physical text area. All Chinese should be correct and legible. Align to a clean grid, equal spacing, moderate rounding, minimal shadow. Color semantics consistent. Use no branding mascots that consume diagram space. Prioritize complete correct flow and readability. Do not include code blocks, long paragraphs or invented capabilities.

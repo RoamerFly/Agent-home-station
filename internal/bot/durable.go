@@ -1,0 +1,423 @@
+package bot
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"time"
+	"wechat-bot/internal/companion"
+	"wechat-bot/internal/linuxnative"
+)
+
+type inboxItem struct {
+	ReceivedRecorded bool              `json:"received_recorded,omitempty"`
+	AggregateUntil   time.Time         `json:"aggregate_until,omitempty"`
+	ToolStarted      bool              `json:"tool_started,omitempty"`
+	Event            linuxnative.Event `json:"event"`
+	Phase            string            `json:"phase"`
+	Updated          time.Time         `json:"updated"`
+	RetryAfter       time.Time         `json:"retry_after,omitempty"`
+}
+type runtimeState struct {
+	Wakes        []*conversationWake `json:"conversation_wakes,omitempty"`
+	Plans        []*utterancePlan    `json:"utterance_plans,omitempty"`
+	Version      int                 `json:"version"`
+	Server       string              `json:"server"`
+	Account      string              `json:"account"`
+	Inbox        []inboxItem         `json:"inbox"`
+	Deliveries   []*delivery         `json:"deliveries"`
+	Media        []*mediaDelivery    `json:"media,omitempty"`
+	MediaReplies []*mediaReply       `json:"media_replies,omitempty"`
+}
+
+func atomicState(path string, value any) error {
+	b, e := json.Marshal(value)
+	if e != nil {
+		return e
+	}
+	if len(b) > 24<<20 {
+		return errors.New("durable message queue exceeds limit")
+	}
+	f, e := os.CreateTemp(filepath.Dir(path), ".queue-*")
+	if e != nil {
+		return e
+	}
+	defer os.Remove(f.Name())
+	if e = f.Chmod(0600); e == nil {
+		_, e = f.Write(b)
+	}
+	if e == nil {
+		e = f.Sync()
+	}
+	closeErr := f.Close()
+	if e != nil {
+		return e
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if e = os.Rename(f.Name(), path); e != nil {
+		return e
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+func (w *Worker) saveRuntime() error {
+	if w.runtime == nil {
+		return nil
+	}
+	return atomicState(filepath.Join(w.config.StateDir, "messages-v2.json"), w.runtime)
+}
+func (w *Worker) queuePhase(id, phase string) {
+	if w.runtime == nil || id == "" {
+		return
+	}
+	for i := range w.runtime.Inbox {
+		item := &w.runtime.Inbox[i]
+		if item.Event.Data.MessageID == id {
+			if item.Phase == phase && (phase == "sending" || phase == "replied" || phase == "needs_review" || phase == "stopped") {
+				return
+			}
+			if phase == "tool_running" {
+				item.ToolStarted = true
+			}
+			item.Phase = phase
+			item.Updated = time.Now().UTC()
+			if phase == "read_pending" {
+				item.RetryAfter = time.Now().Add(30 * time.Second)
+			}
+			w.persistErr = w.saveRuntime()
+			return
+		}
+	}
+}
+func (w *Worker) loadRuntime(server string) error {
+	s := runtimeState{Version: 1, Server: server, Account: w.source.Account(), Inbox: []inboxItem{}, Deliveries: []*delivery{}}
+	b, e := os.ReadFile(filepath.Join(w.config.StateDir, "messages-v2.json"))
+	if e != nil && !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	if e == nil && (len(b) > 24<<20 || json.Unmarshal(b, &s) != nil || s.Version != 1 || s.Server != server || s.Account != w.source.Account()) {
+		return errors.New("persistent queue corrupt or account mismatch")
+	}
+	if len(s.Inbox) > 5000 || len(s.Deliveries) > 3000 || len(s.Media) > 1000 || len(s.MediaReplies) > 1000 {
+		return errors.New("persistent queue exceeds bound")
+	}
+	w.runtime = &s
+	if len(s.Wakes) > 200 {
+		return errors.New("conversation wakes exceed bound")
+	}
+	for _, wake := range s.Wakes {
+		if wake == nil || wake.Input.Thread == "" || wake.Parent == "" {
+			return errors.New("conversation wake invalid")
+		}
+		if wake.State == "claimed" || wake.State == "running" {
+			wake.State = "interrupted"
+		}
+	}
+	if len(s.Plans) > 1000 {
+		return errors.New("persistent utterance plans exceed bound")
+	}
+	for _, p := range s.Plans {
+		if p != nil {
+			p.Input.TraceID = p.Trace
+			p.Input.PersonaOverride = w.config.GroupRules[p.Input.Thread].Persona
+			p.InboxChecked = false
+			if p.Quote != nil {
+				p.Input.QuoteServerID = p.Quote.ServerID
+			}
+		}
+		if p == nil || len(p.Messages) < 1 || len(p.Messages) > 12 || p.Index < 0 || p.Index > len(p.Messages) || p.Index == len(p.Messages) && !p.terminal() || p.Input.Thread == "" || p.Slot < 0 {
+			return errors.New("persistent utterance plan invalid; retained")
+		}
+	}
+	for _, r := range s.MediaReplies {
+		if r == nil || len(r.Messages) < 1 || len(r.Messages) > 3 || r.Expected < 1 || r.Expected > 3 || r.Index < 0 || r.Index > len(r.Messages) || r.Index == len(r.Messages) && !r.terminal() {
+			return errors.New("persistent media reply invalid; not discarded")
+		}
+	}
+	return nil
+}
+func (w *Worker) drainInbox(ctx context.Context) error {
+	for i := range w.runtime.Inbox {
+		if w.draining() {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		item := &w.runtime.Inbox[i]
+		if time.Now().Before(item.RetryAfter) {
+			continue
+		}
+		if time.Now().Before(item.AggregateUntil) {
+			continue
+		}
+		switch item.Phase {
+		case "received", "processing", "read_pending":
+		default:
+			continue
+		}
+		item.Phase = "processing"
+		if err := w.saveRuntime(); err != nil {
+			return err
+		}
+		w.recovering = w.config.Options.RecoverBacklog
+		w.handle(ctx, item.Event)
+		w.recovering = false
+		if w.persistErr != nil {
+			return w.persistErr
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		if item.Phase == "processing" {
+			w.activity(Record{Event: "message_processed", Category: "decision", ThreadID: item.Event.Data.ThreadID, MessageID: item.Event.Data.MessageID, Reason: "processed_without_reply", Status: "completed"})
+			w.queuePhase(item.Event.Data.MessageID, "completed")
+		}
+	}
+	return w.persistErr
+}
+func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) error {
+	if err := w.loadRuntime(state.ServerID); err != nil {
+		return err
+	}
+	w.enableGenerations()
+	defer w.closeGenerations()
+	defer w.suspendMedia()
+	for i := range w.runtime.Inbox {
+		item := &w.runtime.Inbox[i]
+		if item.ToolStarted && (item.Phase == "tool_running" || item.Phase == "processing" || item.Phase == "model_running") {
+			item.Phase = "interrupted"
+			w.activity(Record{Event: "tool_task_interrupted", Category: "error", ThreadID: item.Event.Data.ThreadID, MessageID: item.Event.Data.MessageID, Reason: "tool_task_interrupted_not_replayed", Status: "interrupted"})
+			continue
+		}
+		if item.Phase == "model_running" {
+			item.Phase = "received"
+		}
+		if item.Phase != "sending" {
+			continue
+		}
+		tracked := false
+		pending, accepted := false, false
+		for _, p := range w.runtime.Plans {
+			if p.Input.TraceID == item.Event.Data.MessageID {
+				tracked = true
+				pending = pending || !p.terminal()
+				accepted = accepted || len(p.Sent) > 0
+			}
+		}
+		for _, d := range w.runtime.Deliveries {
+			if d.Trace == item.Event.Data.MessageID && d.Bubble >= 0 {
+				tracked = true
+				accepted = accepted || d.State == "accepted"
+				pending = pending || d.State != "accepted" && d.State != "stopped"
+			}
+		}
+		for _, d := range w.runtime.Media {
+			if d.Trace == item.Event.Data.MessageID {
+				tracked = true
+				accepted = accepted || d.State == "accepted"
+				pending = pending || !d.terminal()
+			}
+		}
+		for _, r := range w.runtime.MediaReplies {
+			if r.Trace == item.Event.Data.MessageID {
+				tracked = true
+				pending = pending || !r.terminal()
+			}
+		}
+		if tracked && !pending {
+			if accepted {
+				item.Phase = "replied"
+			} else {
+				item.Phase = "failed"
+			}
+		}
+		if !tracked {
+			item.Phase = "needs_review"
+			w.activity(Record{Event: "message_interrupted_after_send", Category: "error", ThreadID: item.Event.Data.ThreadID, MessageID: item.Event.Data.MessageID, Reason: "interrupted_media_or_legacy_send_check_receipt", Status: "needs_review"})
+		}
+	}
+	if err := w.saveRuntime(); err != nil {
+		return err
+	}
+	if err := w.drainInbox(ctx); err != nil {
+		return err
+	}
+	peekedInterruptions := map[string]bool{}
+	for ctx.Err() == nil {
+		w.collectGenerations(ctx)
+		w.adoptMediaSeeds()
+		if w.draining() {
+			// During an update, do not start a new model task or advance the
+			// cursor. Still allow fresh stop/change-song controls to cancel the
+			// current voice, so a graceful update cannot make it uninterruptible.
+			w.peekVoiceInterruptions(ctx, state.Cursor, peekedInterruptions)
+			w.reviewActiveGenerations(ctx)
+			w.drainGenerations(ctx)
+			w.reconcileMedia(ctx)
+			w.reconcileMediaReplies(ctx)
+			if w.persistErr != nil {
+				return w.persistErr
+			}
+			if !w.pendingMedia() && (w.generation == nil || w.generation.occupied() == 0) {
+				return nil
+			}
+			w.waitGeneration(ctx, time.Second)
+			continue
+		}
+		page, err := w.source.Events(ctx, state.Cursor)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		for _, event := range page.Items {
+			duplicate := state.contains(event.Data.MessageID)
+			for _, item := range w.runtime.Inbox {
+				if item.Event.Data.MessageID == event.Data.MessageID {
+					duplicate = true
+					break
+				}
+			}
+			if event.Kind == "message.committed" && event.Data.MessageID != "" && !duplicate && event.Data.Origin != "local_send" {
+				if len(w.runtime.Inbox) >= 4000 {
+					w.pruneRuntime()
+					if len(w.runtime.Inbox) >= 5000 {
+						return errors.New("inbox full; no message cursor discarded")
+					}
+				}
+				w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Event: event, Phase: "received", Updated: time.Now().UTC()})
+				if c, ok := w.model.(*companion.Engine); ok && c.Config.ConversationConfig().Enabled && !w.pendingConversationThread(event.Data.ThreadID) {
+					window := c.Config.ConversationConfig().AggregateMS
+					w.runtime.Inbox[len(w.runtime.Inbox)-1].AggregateUntil = time.Now().Add(time.Duration(window) * time.Millisecond)
+				}
+				if err = w.saveRuntime(); err != nil {
+					return err
+				}
+				w.activity(Record{Event: "message_queued", Category: "received", ThreadID: event.Data.ThreadID, MessageID: event.Data.MessageID, Status: "queued", Reason: "durable_inbox", Origin: "wechat"})
+			}
+			state.Cursor = event.Cursor
+			if event.Data.MessageID != "" {
+				state.remember(event.Data.MessageID)
+			}
+			if err = saveCheckpoint(path, state); err != nil {
+				return err
+			}
+		}
+		if len(page.Items) < 100 {
+			for _, p := range w.runtime.Plans {
+				p.InboxChecked = true
+			}
+		}
+		if err = w.drainInbox(ctx); err != nil {
+			return err
+		}
+		// Exhaust the current event pages before any old result/caption is
+		// submitted. A stop request on page two is already-arrived context too.
+		if len(page.Items) >= 100 {
+			continue
+		}
+		w.reviewActiveGenerations(ctx)
+		w.drainGenerations(ctx)
+		// Read new instructions before emitting deferred old captions. In
+		// particular, a queued change-song request must stop the old job first.
+		w.reconcileMedia(ctx)
+		w.reconcileMediaReplies(ctx)
+		w.reconcileDeliveries(ctx)
+		w.reconcileUtterancePlans(ctx)
+		if w.persistErr != nil {
+			return w.persistErr
+		}
+		if !w.draining() {
+			w.tickCharacter(ctx)
+		}
+		w.waitGeneration(ctx, w.config.PollInterval)
+	}
+	return nil
+}
+
+func (w *Worker) peekVoiceInterruptions(ctx context.Context, cursor string, seen map[string]bool) {
+	active := map[string]bool{}
+	if w.generation != nil {
+		for thread, j := range w.generation.jobs {
+			if j.resourceKind == "voice" {
+				active[thread] = true
+			}
+		}
+	}
+	for _, d := range w.runtime.Media {
+		if d.Kind == "voice" && !d.terminal() && !d.UserCancelled {
+			active[d.Input.Thread] = true
+		}
+	}
+	if len(active) == 0 {
+		return
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	page, err := w.source.Events(readCtx, cursor)
+	if err != nil {
+		return
+	}
+	for _, event := range page.Items {
+		if !active[event.Data.ThreadID] || seen[event.Data.MessageID] || event.Kind != "message.committed" || event.Data.Origin == "local_send" {
+			continue
+		}
+		message, err := w.source.Message(readCtx, event.Data.MessageID)
+		if err != nil || message.ThreadID != event.Data.ThreadID || message.Direction != event.Data.Direction {
+			continue
+		}
+		if message.Direction != "incoming" && message.ThreadID != "filehelper" {
+			continue
+		}
+		seen[event.Data.MessageID] = true
+		w.stopRequestedVoice(readCtx, message)
+		if w.generation != nil {
+			working := quotedPlainBody(message)
+			if _, eligible := w.prompt(working, time.Now()); eligible {
+				w.deferBusyGeneration(readCtx, working)
+			}
+		}
+		if readCtx.Err() != nil {
+			return
+		}
+	}
+}
+func (w *Worker) pruneRuntime() {
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	keep := []inboxItem{}
+	for _, item := range w.runtime.Inbox {
+		if !item.Updated.Before(cutoff) || inboxActivePhase(item.Phase) {
+			keep = append(keep, item)
+		}
+	}
+	if len(keep) > 3000 {
+		kept := []inboxItem{}
+		for i, item := range keep {
+			if i >= len(keep)-3000 || inboxActivePhase(item.Phase) {
+				kept = append(kept, item)
+			}
+		}
+		keep = kept
+	}
+	w.runtime.Inbox = keep
+	deliveries := []*delivery{}
+	for _, d := range w.runtime.Deliveries {
+		if d.State != "accepted" && d.State != "stopped" || d.Created.After(cutoff) {
+			deliveries = append(deliveries, d)
+		}
+	}
+	w.runtime.Deliveries = deliveries
+}
+
+func inboxActivePhase(phase string) bool {
+	switch phase {
+	case "received", "processing", "read_pending", "sending", "model_running", "tool_running":
+		return true
+	}
+	return false
+}

@@ -1,0 +1,23 @@
+ARG NATIVE_IMAGE=wechat-linux-native:research-7095ef0
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+RUN go test ./internal/admin ./internal/bot ./internal/linuxnative ./internal/deepseek \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/wechat-admin ./cmd/wechat-admin
+
+FROM ${NATIVE_IMAGE}
+USER 0:0
+COPY --from=build /out/wechat-admin /usr/local/bin/wechat-admin
+COPY --chmod=755 scripts/web-entrypoint.sh /usr/local/bin/wechat-web
+USER 10001:10001
+ENV WECHAT_NATIVE_URL=http://127.0.0.1:6174 \
+    WECHAT_NATIVE_TOKEN_FILE=/data/api-token \
+    WECHAT_NATIVE_ACCOUNT=background-test \
+    WECHAT_ADMIN_DATA_DIR=/data/admin \
+    WECHAT_ADMIN_LISTEN=0.0.0.0:8080
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 CMD ["/usr/local/bin/wechat-admin", "healthcheck"]
+ENTRYPOINT ["/usr/local/bin/wechat-web"]
+CMD []

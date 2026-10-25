@@ -1,0 +1,16 @@
+# Overlay: docker compose -f compose.linux-native.yaml -f compose.bot.yaml ...
+services:
+  wechat-bot:
+    environment:
+      WECHAT_BOT_ENABLED: "1"
+      WECHAT_BOT_ALLOWED_THREADS: ${WECHAT_BOT_ALLOWED_THREADS:?set explicit bot thread IDs}
+      WECHAT_BOT_STATE_DIR: /data/bot-state
+      DEEPSEEK_API_KEY_FILE: /run/secrets/deepseek-api-key
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
+    secrets:
+      - deepseek-api-key
+
+secrets:
+  deepseek-api-key:
+    file: ./secrets/deepseek-api-key.txt

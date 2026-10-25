@@ -1,0 +1,120 @@
+"""Authenticated local YuE/Comfy bridge. No source changes or downloads.
+Run with --project <YuE app> --state <private directory> --token-file <file>.
+The bridge persists jobs and never automatically resubmits interrupted work.
+"""
+import argparse, base64, concurrent.futures, hmac, json, os, secrets, threading, time, urllib.request, urllib.error, subprocess
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+def apply_song_duration(graph,seconds):
+    if isinstance(seconds,bool) or not isinstance(seconds,(int,float)) or not 10<=seconds<=600:raise ValueError('invalid_duration')
+    found=False
+    for node in graph.values():
+        if node.get('class_type')=='YuE2GenerateMusic':
+            node['inputs']['max_duration']=float(seconds);found=True
+    if not found:raise ValueError('duration_control_missing')
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');args=p.parse_args()
+    project=Path(args.project).resolve();state=Path(args.state).resolve();state.mkdir(parents=True,exist_ok=True)
+    token=Path(args.token_file).read_text().strip();lock=threading.RLock();pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    db=state/'jobs.json';jobs=json.loads(db.read_text()) if db.exists() else {}
+    def save():
+        tmp=db.with_suffix('.tmp');tmp.write_text(json.dumps(jobs,ensure_ascii=False),encoding='utf8');tmp.replace(db)
+    for job in jobs.values():
+        if job['state'] in ('queued','running'):job.update(state='needs_review',reason='bridge_restarted_no_replay')
+    save()
+    def api(route,body=None,timeout=20):
+        req=urllib.request.Request('http://127.0.0.1:8188'+route,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json'})
+        with urllib.request.urlopen(req,timeout=timeout) as r:return json.load(r)
+    def run(jid,body):
+        try:
+            with lock:
+                if jobs[jid]['state']=='cancelled':return
+                jobs[jid]['state']='running';save()
+            reference=body.get('reference_base64','');filename='audio_yue2_music_cover.json' if reference else 'audio_yue2_text_to_music.json'
+            graph=json.loads((project/'workflows_api'/filename).read_text(encoding='utf-8'))
+            target=body.get('duration_seconds',60)
+            apply_song_duration(graph,target)
+            style=body['style']+f'; complete short song within {target} seconds, brief intro and a finished ending'
+            if reference:
+                data=base64.b64decode(reference,validate=True)
+                if not 0<len(data)<=25*1024*1024:raise ValueError('reference_size_limit')
+                input_dir=project/'comfy/ComfyUI/input';name='wechat-ref-'+jid+'.audio';(input_dir/name).write_bytes(data)
+                graph['45']['inputs']['audio']=name;graph['33:25']['inputs']['style']=style;graph['33:25']['inputs']['lyrics']=body['lyrics']
+            else:
+                graph['33:36']['inputs']['value']=style;graph['33:37']['inputs']['value']=body['lyrics']
+            graph['33:34']['inputs']['seed']=secrets.randbelow(2**31)
+            graph['10']['inputs']['filename_prefix']='wechat-agent/'+jid
+            submitted=api('/prompt',{'prompt':graph,'client_id':'wechat-yue-'+jid})
+            prompt_id=submitted['prompt_id']
+            with lock:jobs[jid]['prompt_id']=prompt_id;save()
+            for _ in range(10800):
+                history=api('/history/'+prompt_id).get(prompt_id)
+                if history:
+                    if history.get('status',{}).get('status_str')=='error':raise ValueError('comfy_execution_error')
+                    files=[item for node in history.get('outputs',{}).values() for key,items in node.items() if isinstance(items,list) for item in items if isinstance(item,dict) and item.get('filename') and item.get('type')=='output']
+                    audio=next((x for x in files if Path(x['filename']).suffix.lower() in ('.wav','.mp3','.flac','.ogg','.m4a')),None)
+                    if not audio:raise ValueError('no_generated_audio')
+                    from urllib.parse import urlencode
+                    with urllib.request.urlopen('http://127.0.0.1:8188/view?'+urlencode(audio),timeout=60) as r:data=r.read(64*1024*1024+1)
+                    if not 0<len(data)<=64*1024*1024:raise ValueError('output_size_limit')
+                    output=state/(jid+Path(audio['filename']).suffix);output.write_bytes(data)
+                    duration=float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(output)],timeout=30))
+                    if duration>target+0.5:raise ValueError('generation_duration_exceeded')
+                    # Remove only codec padding, never shorten a multi-minute result
+                    # and pretend the generator followed the requested duration.
+                    if duration>target:
+                        adjusted=state/(jid+'-bounded.flac')
+                        subprocess.run(['ffmpeg','-v','error','-y','-i',str(output),'-t',str(target),'-c:a','flac',str(adjusted)],check=True,timeout=60)
+                        output=adjusted;duration=float(target)
+                    with lock:jobs[jid].update(state='completed',file=output.name,bytes=output.stat().st_size,duration_seconds=duration,requested_seconds=target);save()
+                    return
+                time.sleep(1)
+            raise ValueError('generation_deadline')
+        except Exception as e:
+            with lock:jobs[jid].update(state='failed',reason=str(e)[:120] if isinstance(e,ValueError) else type(e).__name__);save()
+        finally:
+            with lock:idle=not any(j['state'] in ('queued','running') for j in jobs.values())
+            if idle:
+                try:api('/free',{'unload_models':True,'free_memory':True})
+                except Exception:pass
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self,*args):pass
+        def reply(self,status,value):
+            data=json.dumps(value,ensure_ascii=False).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
+        def authenticated(self):return hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token)
+        def do_GET(self):
+            if not self.authenticated():return self.reply(401,{'error':'unauthorized'})
+            if self.path=='/health':
+                try:api('/system_stats');return self.reply(200,{'ready':True})
+                except Exception:return self.reply(200,{'ready':False})
+            parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
+            with lock:job=dict(jobs.get(jid,{}))
+            if not job:return self.reply(404,{'error':'not_found'})
+            if len(parts)==3 and parts[2]=='audio':
+                if job['state']!='completed':return self.reply(409,{'error':'not_completed'})
+                file=state/job['file'];data=file.read_bytes();self.send_response(200);self.send_header('Content-Type','audio/flac' if file.suffix=='.flac' else 'audio/wav');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data);return
+            job.pop('file',None);return self.reply(200,job)
+        def do_POST(self):
+            if not self.authenticated():return self.reply(401,{'error':'unauthorized'})
+            size=int(self.headers.get('Content-Length','0'))
+            if size<=0 or size>36*1024*1024:return self.reply(413,{'error':'size_limit'})
+            try:body=json.loads(self.rfile.read(size))
+            except Exception:return self.reply(400,{'error':'invalid_json'})
+            if self.path!='/jobs':return self.reply(404,{'error':'not_found'})
+            if not isinstance(body.get('style'),str) or not isinstance(body.get('lyrics'),str) or len(body['style'])>2000 or len(body['lyrics'])>6000:return self.reply(400,{'error':'invalid_song_input'})
+            target=body.get('duration_seconds',60)
+            if isinstance(target,bool) or not isinstance(target,(int,float)) or not 10<=target<=600:return self.reply(400,{'error':'invalid_duration'})
+            key=self.headers.get('Idempotency-Key','')
+            with lock:
+                for old in jobs.values():
+                    if key and old.get('key')==key:return self.reply(200,{k:v for k,v in old.items() if k!='file'})
+                if len(jobs)>=500:return self.reply(409,{'error':'job_history_limit'})
+                if sum(j['state'] in ('queued','running') for j in jobs.values())>=3:return self.reply(429,{'error':'queue_full'})
+                jid=secrets.token_hex(16);jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'reference_used':bool(body.get('reference_base64')),'requested_seconds':target};save();pool.submit(run,jid,body)
+            self.reply(202,{'id':jid,'state':'queued'})
+    # Windows/WSL access: token required on every endpoint. No remote code/API.
+    ThreadingHTTPServer((args.bind,args.port),Handler).serve_forever()
+
+if __name__=='__main__':main()

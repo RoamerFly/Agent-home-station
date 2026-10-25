@@ -1,0 +1,42 @@
+async page => {
+  await page.setViewportSize({width:1440,height:1040});
+  const before=await (await page.request.get('http://127.0.0.1:8081/api/config')).json();
+  let pluginPost=null,configPost=null,posts=0;
+  await page.route('**/api/plugins/text_to_speech',async route=>{if(route.request().method()!=='POST')return route.continue();pluginPost=route.request().postDataJSON();await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({id:'text_to_speech',enabled:false})})});
+  await page.locator('.main-nav[data-section="plugins"]').click();
+  await page.locator('.plugin-installed[data-id="text_to_speech"]').click();
+  await page.locator('#plugin-display-name').fill('语音配置界面测试');
+  await page.locator('#plugin-endpoint').fill('https://example.org/ui-test-tts');
+  await page.locator('#plugin-api-key').fill('dummy-ui-test-key');
+  const descriptor=JSON.parse(await page.locator('#plugin-manifest').inputValue());
+  if(descriptor.name!=='语音配置界面测试'||descriptor.tools[0].url!=='https://example.org/ui-test-tts')throw new Error('Quick fields did not sync');
+  await page.locator('#plugin-save').click();
+  await page.waitForFunction(()=>!document.querySelector('#plugin-save').disabled);
+  if(pluginPost?.manifest.name!=='语音配置界面测试'||pluginPost?.secrets.API_KEY!=='dummy-ui-test-key')throw new Error('Plugin form lost configuration');
+  if(await page.locator('#plugin-api-key').inputValue()!=='')throw new Error('Key input not cleared');
+  await page.unroute('**/api/plugins/text_to_speech');
+  await page.route('**/api/config',async route=>{if(route.request().method()!=='POST')return route.continue();posts++;configPost=route.request().postDataJSON();const response={...configPost,key_configured:true};delete response.api_key;await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(posts>1?before:response)})});
+  await page.locator('.main-nav[data-section="companion"]').click();
+  await page.locator('#companion-name').fill('deepseek蓝色大肥鱼（界面测试）');
+  if(await page.locator('#unsaved-bar').isHidden())throw new Error('Missing unsaved feedback');
+  await page.locator('.main-nav[data-section="wechat"]').click();await page.locator('.subnav-link[data-section="rules"]').click();await page.locator('#group-rules .mention-force input').first().check();
+  await page.locator('.main-nav[data-section="plugins"]').click();
+  await page.locator('.subnav-link[data-section="permissions"]').click();
+  await page.locator('#perm-send-image').uncheck();
+  await page.locator('#save-permissions').click();
+  await page.waitForFunction(()=>document.querySelector('#unsaved-bar').hidden);
+  if(!configPost?.companion.name.includes('界面测试')||configPost.companion.permissions.send_image!==false||configPost.group_rules[0].force_reply_when_mentioned!==true)throw new Error('Moving fields broke serialization');
+  await page.locator('.main-nav[data-section="companion"]').click();
+  await page.locator('.subnav-link[data-section="provider"]').click();
+  await page.locator('#max-tokens').fill('1');
+  await page.locator('#save-config').click();
+  await page.locator('#max-tokens[aria-invalid="true"]').waitFor();
+  if(posts!==1)throw new Error('Invalid form reached backend');
+  await page.locator('#max-tokens').fill(String(before.max_tokens));
+  await page.locator('#save-config').click();await page.waitForFunction(()=>document.querySelector('#unsaved-bar').hidden);await page.unroute('**/api/config');
+  // Reset only browser state: no configuration mutation reached the real service.
+  await page.reload();await page.locator('#app-view').waitFor({state:'visible'});
+  const after=await (await page.request.get('http://127.0.0.1:8081/api/config')).json();
+  if(JSON.stringify(before)!==JSON.stringify(after))throw new Error('Real configuration changed');
+  return {plugin_quick_form_serialized:true,key_input_cleared:true,independent_permissions_serialized:true,unsaved_feedback:true,invalid_numeric_field_blocked:true,real_configuration_unchanged:true,real_writes:0};
+}

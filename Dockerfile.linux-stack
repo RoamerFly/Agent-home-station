@@ -1,0 +1,25 @@
+# Build research/docker/Dockerfile.linux-native from the pinned upstream source first.
+ARG NATIVE_IMAGE=wechat-linux-native:research-7095ef0
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS api-build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/wechat-sendd ./cmd/wechat-sendd \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/wechat-send ./cmd/wechat-send \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/wechat-bot ./cmd/wechat-bot
+
+FROM ${NATIVE_IMAGE}
+USER 0:0
+COPY --from=api-build /out/wechat-sendd /usr/local/bin/wechat-sendd
+COPY --from=api-build /out/wechat-send /usr/local/bin/wechat-send
+COPY --from=api-build /out/wechat-bot /usr/local/bin/wechat-bot
+COPY --chmod=755 scripts/linux-stack-entrypoint.sh /usr/local/bin/wechat-stack
+USER 10001:10001
+ENV WECHAT_TRANSPORT=linux-native \
+    WECHAT_NATIVE_URL=http://127.0.0.1:6174 \
+    WECHAT_NATIVE_TOKEN_FILE=/data/api-token \
+    WECHAT_LISTEN=0.0.0.0:8787
+EXPOSE 8787
+ENTRYPOINT ["/usr/local/bin/wechat-stack"]
+CMD []

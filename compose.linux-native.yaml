@@ -1,0 +1,25 @@
+services:
+  wechat-bot:
+    image: wechat-bot-linux:local
+    build:
+      context: .
+      dockerfile: Dockerfile.linux-stack
+    environment:
+      WECHAT_API_TOKEN: ${WECHAT_API_TOKEN:?set a 24-byte-or-longer API token}
+      WECHAT_NATIVE_ACCOUNT: ${WECHAT_NATIVE_ACCOUNT:-background-test}
+      WECHAT_ALLOWED_RECIPIENTS: ${WECHAT_ALLOWED_RECIPIENTS:-filehelper}
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - native-data:/data
+    tmpfs:
+      - /scratch:uid=10001,gid=10001,mode=0700
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+volumes:
+  native-data:

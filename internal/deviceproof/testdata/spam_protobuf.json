@@ -1,0 +1,151 @@
+{
+  "authority": "Python google.protobuf dynamic proto2 encoder using frozen ABI tags; public synthetic inputs only",
+  "vectors": [
+    {
+      "type": "SpamFileInfo",
+      "input": {
+        "Filepath": "field-1-中文",
+        "Fileuuid": "field-2-中文"
+      },
+      "expected_hex": "0a0e6669656c642d312de4b8ade69687120e6669656c642d322de4b8ade69687"
+    },
+    {
+      "type": "SpamFileStat",
+      "input": {
+        "StBirthtime": 3,
+        "StCtime": 0,
+        "StMtime": 5
+      },
+      "expected_hex": "100318002005"
+    },
+    {
+      "type": "SpamStatFS",
+      "input": {
+        "FType": 2,
+        "FFstypename": "field-2-中文",
+        "FFlags": 0,
+        "FMntonname": "field-4-中文",
+        "FMntfromname": "field-5-中文",
+        "FFsid": 0
+      },
+      "expected_hex": "0802120e6669656c642d322de4b8ade696871800220e6669656c642d342de4b8ade696872a0e6669656c642d352de4b8ade696873000"
+    },
+    {
+      "type": "SpamBody",
+      "input": {
+        "UnKnown1": -2,
+        "TimeStamp": 3,
+        "KeyHash": 0,
+        "Yes1": "field-11-中文",
+        "Yes2": "",
+        "IosVersion": "field-13-中文",
+        "DeviceType": "field-14-中文",
+        "CoreCount": 0,
+        "IdentifierForVendor": "field-16-中文",
+        "AdvertisingIdentifier": "field-17-中文",
+        "Carrier": "",
+        "BatteryInfo": -20,
+        "NetworkName": [
+          "",
+          "重复项"
+        ],
+        "NetType": 0,
+        "AppBundleId": "field-22-中文",
+        "DeviceName": "field-23-中文",
+        "UserName": "",
+        "GetVersion": -26,
+        "GetVersionFromPList": 27,
+        "Unknown5": 0,
+        "Unknown6": 29,
+        "Lang": "field-29-中文",
+        "Country": "",
+        "Unknown7": -32,
+        "DocumentDir": "field-32-中文",
+        "Unknown8": 0,
+        "Unknown9": 35,
+        "HeadMD5": "field-35-中文",
+        "AppUUID": "",
+        "SyslogUUID": "field-37-中文",
+        "Unknown10": "field-38-中文",
+        "Unknown11": "",
+        "AppName": "field-40-中文",
+        "SshPath": "field-41-中文",
+        "TempTest": "",
+        "DevMD5": "field-43-中文",
+        "DevUser": "field-44-中文",
+        "DevPrefix": "",
+        "AppFileInfo": [
+          {
+            "Filepath": "field-1-中文",
+            "Fileuuid": "field-2-中文"
+          }
+        ],
+        "Unknown12": "field-47-中文",
+        "IsModify": 51,
+        "Sdi": "",
+        "RqtHash": 53,
+        "InstallTime": 54,
+        "KernBootTime": 0,
+        "Unknown55": 56,
+        "RqtHash56": 57,
+        "Unknown57": 0,
+        "DeviceId": "field-58-中文",
+        "DeviceIdCrc": -60,
+        "AppFileInfoCrc": "",
+        "Unknown61": "field-61-中文",
+        "Unknown62": 63,
+        "Si": "",
+        "DeviceToken": "field-64-中文",
+        "Now": 71,
+        "NowUsec": 72,
+        "NowUsecScale": 0,
+        "SystemVersionCtime": 83,
+        "DyldSharedCacheArm64Ctime": 84,
+        "PrivateVarDirCTime": 0,
+        "EmptyString": "field-85-中文",
+        "IsCaptured": 87,
+        "ShortBundleVersion": "",
+        "StatfsInfo": [
+          {
+            "FType": 2,
+            "FFstypename": "field-2-中文",
+            "FFlags": 0,
+            "FMntonname": "field-4-中文",
+            "FMntfromname": "field-5-中文",
+            "FFsid": 0
+          }
+        ],
+        "StatfsCrc": 90,
+        "FixedOne": 0,
+        "AppexList": [
+          "",
+          "重复项"
+        ],
+        "FrameworkList": [
+          "",
+          "重复项"
+        ],
+        "PrivateVarDir": {
+          "StBirthtime": 3,
+          "StCtime": 0,
+          "StMtime": 5
+        },
+        "WechatDocBirth": 96,
+        "LAPolicyDeviceOwnerAuthentication": 0,
+        "LAPolicyDeviceOwnerAuthenticationWithBiometrics": 98,
+        "ICloudLogin": 99,
+        "UbiquityIdentityToken": "",
+        "AppStoreReceiptURL": "field-103-中文",
+        "SandboxReceiptExist": 105,
+        "NSClassFromString": 108,
+        "IosBuildVersion": "",
+        "KernelType": "field-109-中文",
+        "DeviceModel": "field-110-中文",
+        "KernelVersion": "",
+        "KernelRelease": "field-112-中文",
+        "DevciceType": "field-113-中文"
+      },
+      "expected_hex": "08feffffffffffffffff01100318005a0f6669656c642d31312de4b8ade6968762006a0f6669656c642d31332de4b8ade69687720f6669656c642d31342de4b8ade69687780082010f6669656c642d31362de4b8ade696878a010f6669656c642d31372de4b8ade696879201009801ecffffffffffffffff01a20100a20109e9878de5a48de9a1b9a80100b2010f6669656c642d32322de4b8ade69687ba010f6669656c642d32332de4b8ade69687c20100c801e6ffffffffffffffff01d0011bd80100e0011dea010f6669656c642d32392de4b8ade69687f20100f801e0ffffffffffffffff0182020f6669656c642d33322de4b8ade696878802009002239a020f6669656c642d33352de4b8ade69687a20200aa020f6669656c642d33372de4b8ade69687b2020f6669656c642d33382de4b8ade69687ba0200c2020f6669656c642d34302de4b8ade69687ca020f6669656c642d34312de4b8ade69687d20200da020f6669656c642d34332de4b8ade69687e2020f6669656c642d34342de4b8ade69687ea0200f202200a0e6669656c642d312de4b8ade69687120e6669656c642d322de4b8ade69687fa020f6669656c642d34372de4b8ade696879003339a0300a00335a80336b00300b80338c00339c80300d2030f6669656c642d35382de4b8ade69687d803c4ffffffffffffffff01e20300ea030f6669656c642d36312de4b8ade69687f0033ffa030082040f6669656c642d36342de4b8ade69687b00447b80448c00400900553980554a00500aa050f6669656c642d38352de4b8ade69687b00557ba0500c205360802120e6669656c642d322de4b8ade696871800220e6669656c642d342de4b8ade696872a0e6669656c642d352de4b8ade696873000c8055ad00500da0500da0509e9878de5a48de9a1b9ea0500ea0509e9878de5a48de9a1b9f20506100318002005f805608006008806629006639a0600ba06106669656c642d3130332de4b8ade69687c00669d8066ce20600ea06106669656c642d3130392de4b8ade69687f206106669656c642d3131302de4b8ade69687fa06008207106669656c642d3131322de4b8ade696878a07106669656c642d3131332de4b8ade69687"
+    }
+  ]
+}

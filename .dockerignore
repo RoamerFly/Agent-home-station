@@ -1,0 +1,11 @@
+.git
+.env
+secrets/
+dist/
+tmp/
+temp/
+research/
+internal/wechatwire/testdata/
+*.session.json
+
+key*.txt

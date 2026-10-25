@@ -1,0 +1,23 @@
+services:
+  wechat-bot:
+    image: wechat-bot-web:0.3.0
+    restart: unless-stopped
+    # Target: Linux servers. Native host networking avoids HTTP-only bridge proxies.
+    network_mode: host
+    volumes:
+      - wechat-data:/data
+    tmpfs:
+      - /scratch:uid=10001,gid=10001,mode=0700
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    environment:
+      WECHAT_ADMIN_LISTEN: "${WECHAT_WEB_BIND:-0.0.0.0}:${WECHAT_WEB_PORT:-8080}"
+      WECHAT_NATIVE_ACCOUNT: ${WECHAT_NATIVE_ACCOUNT:-background-test}
+      # Set only behind a reverse proxy, e.g. https://bot.example.com.
+      WECHAT_ADMIN_ORIGIN: ${WECHAT_ADMIN_ORIGIN:-}
+
+volumes:
+  wechat-data:

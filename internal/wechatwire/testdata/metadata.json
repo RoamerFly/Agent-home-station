@@ -1,0 +1,9 @@
+{
+  "authority": "Google Python protobuf serialization against ELF-recovered descriptor; not live observations",
+  "descriptor_sha256": "9164991c451909f153a55743c9bd786598203c7874beeeb8e9a423d8f8e13765",
+  "recipient": "12345678@chatroom",
+  "content": "后台发送测试\nHello 🌏",
+  "client_message_id": "1234567890123456789",
+  "unix_time": 1792771200,
+  "server_message_id": "9223372036854775000"
+}

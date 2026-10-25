@@ -1,0 +1,13 @@
+{
+  "schema": "wechat-ipad-upgrade-candidate-1",
+  "name": "ipad-402669099-version-compatibility-experiment",
+  "source_url": "https://github.com/WeChatPadPro/WeChatPadPro/releases/tag/v2.01",
+  "artifact_sha256": "3af46a902830de49c040eeb8d910de89ba3d27a81fd6724f1cbf48adea9a7e0b",
+  "change_scope": "client_version_only",
+  "compatibility_note": "ClientVersion observed in the named artifact. Device type, bootstrap key, Hybrid protocol 415, v8 proof and SAE data retain the existing reconstructed implementation. This is a controlled compatibility experiment, not a complete PadPro profile transplant or a verified working login.",
+  "wire": {
+    "version": 402669099,
+    "device_type": "iPad Air iPadOS18.4.1",
+    "bootstrap_public_key_hex": "047ebe7604acf072b0ab0177ea551a7b72588f9b5d3801dfd7bb1bca8e33d1c3b8fa6e4e4026eb38d5bb365088a3d3167c83bdd0bbb46255f88a16ede6f7ab43b5"
+  }
+}

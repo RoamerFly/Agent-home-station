@@ -1,0 +1,81 @@
+{
+  "provenance": "Schema independently reconstructed from fixed ELF ABI tags; Python protobuf 7.36.2 codec; not original-oracle output",
+  "descriptor_base64": "ChhydW5uaW5nX3N0YXRpY19hYmkucHJvdG8SB2Rlcml2ZWQiTQoFV0NTVEYSEQoJU3RhcnRUaW1lGAEgAigEEhEKCUNoZWNrVGltZRgCIAIoBBINCgVDb3VudBgDIAIoDRIPCgdFbmRUaW1lGAQgAygEIs4BCgVXQ1NURRIPCgdDaGVja0lkGAEgAigJEhEKCVN0YXJ0VGltZRgCIAIoDRIRCglDaGVja1RpbWUYAyACKA0SDgoGQ291bnQxGAQgAigNEg4KBkNvdW50MhgFIAIoDRIOCgZDb3VudDMYBiACKA0SDgoGQ29uc3QxGAcgAigEEg4KBkNvbnN0MhgIIAIoBBIOCgZDb25zdDMYCSACKAQSDgoGQ29uc3Q0GAogAigEEg4KBkNvbnN0NRgLIAIoBBIOCgZDb25zdDYYDCACKAQigQEKFERldmljZVJ1bm5pbmdJbmZvTmV3Eg8KB1ZlcnNpb24YASACKAwSDAoEVHlwZRgCIAIoDRITCgtFbmNyeXB0RGF0YRgDIAIoDBIRCglUaW1lc3RhbXAYBCACKA0SEAoIVW5rbm93bjUYBSACKA0SEAoIVW5rbm93bjYYBiACKA1iBnByb3RvMg==",
+  "vectors": [
+    {
+      "seconds": 1792805739,
+      "nanos": 123456789,
+      "second_seconds": 1792805739,
+      "second_nanos": 123456789,
+      "deltas": [
+        0,
+        1,
+        9999
+      ],
+      "millis": 1792805739123,
+      "wcstf": "08f3b4b2dc963410f3b4b2dc9634180320f3b4b2dc963420f4b4b2dc9634208383b3dc9634",
+      "wcste": "0a0b3c4c6f67696e427949443e10eb96f0d60618eb96f0d60620002801300038d1a0c18285aac0aa0540f3b4b2dc963448f3b4b2dc963450f3b4b2dc963458f3b4b2dc96346080808080808090aa05"
+    },
+    {
+      "seconds": 0,
+      "nanos": 0,
+      "second_seconds": 0,
+      "second_nanos": 0,
+      "deltas": [],
+      "millis": 0,
+      "wcstf": "080010001800",
+      "wcste": "0a0b3c4c6f67696e427949443e1000180020002801300038d1a0c18285aac0aa0540004800500058006080808080808090aa05"
+    },
+    {
+      "seconds": -1,
+      "nanos": 999999999,
+      "second_seconds": -1,
+      "second_nanos": 999999999,
+      "deltas": [
+        1
+      ],
+      "millis": 0,
+      "wcstf": "0800100018012001",
+      "wcste": "0a0b3c4c6f67696e427949443e10ffffffff0f18ffffffff0f20002801300038d1a0c18285aac0aa0540004800500058006080808080808090aa05"
+    },
+    {
+      "seconds": 4294967296,
+      "nanos": 1,
+      "second_seconds": 4294967297,
+      "second_nanos": 123456789,
+      "deltas": [
+        42
+      ],
+      "millis": 4294967296000,
+      "wcstf": "0880808080807d1080808080807d180120aa808080807d",
+      "wcste": "0a0b3c4c6f67696e427949443e1000180020002801300038d1a0c18285aac0aa0540e3888080807d48e3888080807d50e3888080807d58e3888080807d6080808080808090aa05"
+    },
+    {
+      "seconds": 16725225600,
+      "nanos": 0,
+      "second_seconds": 16725225600,
+      "second_nanos": 0,
+      "deltas": [
+        7,
+        10
+      ],
+      "millis": -1721518473709,
+      "wcstf": "0893fc82ecf2cdffffff011093fc82ecf2cdffffff011802209afc82ecf2cdffffff0120a4fc82ecf2cdffffff01",
+      "wcste": "0a0b3c4c6f67696e427949443e1080e19aa70e1880e19aa70e20002801300038d1a0c18285aac0aa054093fc82ecf2cdffffff014893fc82ecf2cdffffff015093fc82ecf2cdffffff015893fc82ecf2cdffffff016080808080808090aa05"
+    },
+    {
+      "seconds": 10,
+      "nanos": 999999999,
+      "second_seconds": 11,
+      "second_nanos": 1,
+      "deltas": [
+        0,
+        0
+      ],
+      "millis": 10999,
+      "wcstf": "08f75510f755180220f75520f755",
+      "wcste": "0a0b3c4c6f67696e427949443e100a180a20002801300038d1a0c18285aac0aa0540f85548f85550f85558f8556080808080808090aa05"
+    }
+  ],
+  "outer_zero": "0a08303030303030303810011a10000102030405060708090a0b0c0d0e0f200028053000"
+}

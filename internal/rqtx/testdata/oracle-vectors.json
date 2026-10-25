@@ -1,0 +1,543 @@
+{
+  "authority": "selected native rqtx export, isolated local invocation; not complete equivalence or live WeChat evidence",
+  "library_sha256": "c89374360a439abb24bf551eda04c3001fda4b58a2bf33d9e610222382796ddf",
+  "data_sha256": "57def9708a23be4992fc0024754da9eaa8179651d210a3fe5e72cf3d9cdd2c6d",
+  "isolation": [
+    "fresh network namespace",
+    "fresh PID and mount namespaces",
+    "read-only dedicated chroot without host directories",
+    "UID/GID 65534",
+    "no-new-privileges + seccomp denying network/process/exec/mount syscalls",
+    "CPU/memory/file/process limits"
+  ],
+  "vectors": [
+    {
+      "input": "00000000000000000000000000000000",
+      "output": 1141589538
+    },
+    {
+      "input": "d41d8cd98f00b204e9800998ecf8427e",
+      "output": 1142448179
+    },
+    {
+      "input": "900150983cd24fb0d6963f7d28e17f72",
+      "output": 1146315545
+    },
+    {
+      "input": "ffffffffffffffffffffffffffffffff",
+      "output": 1146250755
+    },
+    {
+      "input": "4ddf71de8f7a20febe3da5cfdb702738",
+      "output": 1148797998
+    },
+    {
+      "input": "199f5e2133f44697e6b37e27effd10a2",
+      "output": 1144735767
+    },
+    {
+      "input": "8b9ff0cfbcd85a03692aa0a4e196ae06",
+      "output": 1142451484
+    },
+    {
+      "input": "104ffa9bc81a54852c305f9d42f12cd8",
+      "output": 1145652501
+    },
+    {
+      "input": "232e340532bd23d5148fa3b8d766085c",
+      "output": 1148743170
+    },
+    {
+      "input": "d3317751bc1e6e6f74da9cd8e0af4cc6",
+      "output": 1148726802
+    },
+    {
+      "input": "a19112853f399936ee308bc552c9d9b2",
+      "output": 1145258552
+    },
+    {
+      "input": "1ae7910122e281cd2720b40edb5c6a4e",
+      "output": 1147275014
+    },
+    {
+      "input": "1faa41e16faedc851e331517d72ce2f8",
+      "output": 1146776092
+    },
+    {
+      "input": "cbd261f40c4118871e49400d3eda0e26",
+      "output": 1147275050
+    },
+    {
+      "input": "0ff5ae2cab44cda31a01d1536cf9eab7",
+      "output": 1144137232
+    },
+    {
+      "input": "8262a4ce6fce01447b561d2efecef685",
+      "output": 1144004913
+    },
+    {
+      "input": "1f59c4bf87d3f24f866ac7d0d06c67a3",
+      "output": 1144668160
+    },
+    {
+      "input": "a6eb9a759d9dffd2914ff18d1b1217b5",
+      "output": 1148207643
+    },
+    {
+      "input": "dbfbe9f2cb2733b406dac6b03ae3ed8e",
+      "output": 1146693396
+    },
+    {
+      "input": "981dcdd03e2a3905f556a52d5e2c2c42",
+      "output": 1142967300
+    },
+    {
+      "input": "059708dbb87ccc993d023ee3dca896a6",
+      "output": 1142442753
+    },
+    {
+      "input": "7e708e77163bad6eb458ddb39070e404",
+      "output": 1143039745
+    },
+    {
+      "input": "80e72477ff2d1c2c2040951cb093f137",
+      "output": 1144612157
+    },
+    {
+      "input": "2d0ea6650aa8ee243a8cbcf28a8e8d36",
+      "output": 1143106857
+    },
+    {
+      "input": "0323a98c8b8854e6a4083f795dba7797",
+      "output": 1141597743
+    },
+    {
+      "input": "45e596a0eb868757c0b7b89ef79fb575",
+      "output": 1144193598
+    },
+    {
+      "input": "3c5d346a697e709117d3ea09d09fd8e1",
+      "output": 1140917820
+    },
+    {
+      "input": "ed8165988e9752f870b1b89f5136134d",
+      "output": 1146299160
+    },
+    {
+      "input": "43c003deda9e9f7b7f5f09addb7730f9",
+      "output": 1145588528
+    },
+    {
+      "input": "0cc081ee1dd72be612b7ed56ddd374aa",
+      "output": 1145252118
+    },
+    {
+      "input": "6843ae2d1b824ad38336892771154db5",
+      "output": 1142106938
+    },
+    {
+      "input": "3f38a3e75a21f7d5f67ecaa10f8cb9de",
+      "output": 1144613915
+    },
+    {
+      "input": "32d02eff10b6dd555856d8535b8dde51",
+      "output": 1144129828
+    },
+    {
+      "input": "33c972f1a35d6fe97ea1a0203ac63193",
+      "output": 1147301160
+    },
+    {
+      "input": "fce1610ff4076e534ef8fbdaf8f87426",
+      "output": 1148257048
+    },
+    {
+      "input": "7d93ee37ecadb21e58a6cacbd4e239b1",
+      "output": 1144719888
+    },
+    {
+      "input": "e08c2db171fc24ba9709019936f91be0",
+      "output": 1146094628
+    },
+    {
+      "input": "44107a1a9da78bc844f7dfaf960cee4e",
+      "output": 1141526289
+    },
+    {
+      "input": "f5f2863c5a7307dfaf375d8628b99a6c",
+      "output": 1146626863
+    },
+    {
+      "input": "d0497120fb77cb9041539424e3930b0f",
+      "output": 1144720680
+    },
+    {
+      "input": "7799ade1b648f42c885b8ddc5ef9149a",
+      "output": 1145194035
+    },
+    {
+      "input": "b68e97582d976d760702c8118071c926",
+      "output": 1147822366
+    },
+    {
+      "input": "9e1327c9dc1fb127b74c0de6aa2f69db",
+      "output": 1141582108
+    },
+    {
+      "input": "5603efb7d002d671983dbab8dcf28a09",
+      "output": 1144668679
+    },
+    {
+      "input": "a6faedb0d509874c2f06e35cf75225dc",
+      "output": 1143473723
+    },
+    {
+      "input": "c91fd7d8239d41c72d6e22091342b464",
+      "output": 1141047587
+    },
+    {
+      "input": "2dc6f7d47336839a490d0578309e2c57",
+      "output": 1148726034
+    },
+    {
+      "input": "67b223120fc899ace1f72763948d9415",
+      "output": 1148265771
+    },
+    {
+      "input": "d08ccbd5967352f45afd791a4fed91f6",
+      "output": 1143564344
+    },
+    {
+      "input": "4b69226d88b3c8fed26929500c6983bd",
+      "output": 1140993328
+    },
+    {
+      "input": "dc0232e2a195fc9f9e0b15fa1409b4fc",
+      "output": 1146241813
+    },
+    {
+      "input": "435762cdf267c05796790deea3065ef0",
+      "output": 1148923142
+    },
+    {
+      "input": "5f587ee5407e447e20a72bc9bac55d39",
+      "output": 1148216890
+    },
+    {
+      "input": "e83da30b8264cc3aeeb24ff78fc2f317",
+      "output": 1145637671
+    },
+    {
+      "input": "442ffbd6e68451c51b2567b11f855e96",
+      "output": 1146774802
+    },
+    {
+      "input": "4a13648c548e88001960bffaecd395bf",
+      "output": 1148415744
+    },
+    {
+      "input": "d6ed88c87b3b2af6f308eef220ade579",
+      "output": 1147889719
+    },
+    {
+      "input": "d87b7b1dc6151b600d6c9f24679b7a06",
+      "output": 1145186058
+    },
+    {
+      "input": "643c43a7a269333aab976b75b38f5fcb",
+      "output": 1146120451
+    },
+    {
+      "input": "49935686faf22c4c01f1ffb9f5e6a99a",
+      "output": 1142582842
+    },
+    {
+      "input": "8aea3d7cf935c7ebce3a3a79eb276a1c",
+      "output": 1144611894
+    },
+    {
+      "input": "3f95915aaa0f48edec70ab4ad37c76da",
+      "output": 1147866128
+    },
+    {
+      "input": "4e966580f9071d31ffa6d35ff1c44afc",
+      "output": 1147349017
+    },
+    {
+      "input": "3bdc386f8b55ae94027aad4736433f4c",
+      "output": 1145777672
+    },
+    {
+      "input": "b820cb2f3be03d46c6b16e98e0cbc227",
+      "output": 1144136987
+    },
+    {
+      "input": "ae27ec51387218c3eb5c424aee94406d",
+      "output": 1147879433
+    },
+    {
+      "input": "b2b59c1aeecdb93506662b200c7b1578",
+      "output": 1148846618
+    },
+    {
+      "input": "28b5df1fa10d613ad3dc1b1516449f7f",
+      "output": 1144211732
+    },
+    {
+      "input": "db3961b4f4769643240221de134db7db",
+      "output": 1142490932
+    },
+    {
+      "input": "455f695d08b4acfd551b946d4bb11f94",
+      "output": 1143631624
+    },
+    {
+      "input": "e0fbeeb5a0416649d7fd16de6286580d",
+      "output": 1141442825
+    },
+    {
+      "input": "58b2b7a2ce348232efa53bd497751c49",
+      "output": 1148873022
+    },
+    {
+      "input": "6f636ea15cb19944d33f9828a73a34de",
+      "output": 1142104116
+    },
+    {
+      "input": "7b24c0d0f11630ac042da379528e9589",
+      "output": 1148731444
+    },
+    {
+      "input": "e2bdb302fdda5b019f5d89952603e3e9",
+      "output": 1142966786
+    },
+    {
+      "input": "07a2ed0b2583bc0a361672ebd8f54672",
+      "output": 1144727066
+    },
+    {
+      "input": "8bcf5a1071ed9bb67f223ec334bd04ed",
+      "output": 1144532001
+    },
+    {
+      "input": "a2a67eddb37d94855da5e01ab6a3d8d7",
+      "output": 1143669531
+    },
+    {
+      "input": "54732fb7a29b166cb1e377eb1ad3094e",
+      "output": 1143098161
+    },
+    {
+      "input": "d06b1e900b1ed0867e5ea8dab4c6adb1",
+      "output": 1148338186
+    },
+    {
+      "input": "a9a5cdc0be1f854cd30dbbf008af2e27",
+      "output": 1147890206
+    },
+    {
+      "input": "ce48acfb35d0dbef93fe819a79722f8b",
+      "output": 1142964541
+    },
+    {
+      "input": "d145010586db1c152ec73cba4d5b42ba",
+      "output": 1143496716
+    },
+    {
+      "input": "42ea7cabfaaada2952ae5e536236ccb7",
+      "output": 1143687468
+    },
+    {
+      "input": "331a30f1f659f38fd74c36d00ca58f82",
+      "output": 1147798844
+    },
+    {
+      "input": "29e7a10046cae8d440a861b9b0f6200c",
+      "output": 1144524549
+    },
+    {
+      "input": "be92ab45ad363d0e85a7820c2d122547",
+      "output": 1141990971
+    },
+    {
+      "input": "207bf12633d14f4076669ef8dc1b4716",
+      "output": 1147159554
+    },
+    {
+      "input": "66daf0620bac81fffa18d3948559891f",
+      "output": 1140875290
+    },
+    {
+      "input": "216c1690c9661f8720daf4cfdf45227c",
+      "output": 1148191762
+    },
+    {
+      "input": "3688693cf35b52f324fd3163c1b32e4e",
+      "output": 1144676919
+    },
+    {
+      "input": "30c5f5a2baa511cd7a85fa04187c07c6",
+      "output": 1142499860
+    },
+    {
+      "input": "73609c9bf649f56dde51502eb04919e0",
+      "output": 1146094607
+    },
+    {
+      "input": "c9e9f1bd22c98845aa327db15512ba4b",
+      "output": 1146760989
+    },
+    {
+      "input": "bfd4abeca7f65df1932e69bd0c7658b4",
+      "output": 1143038515
+    },
+    {
+      "input": "87e163b31c3cfc9e6dd84e525ffe39e4",
+      "output": 1143546386
+    },
+    {
+      "input": "acd591d06e887aa8287a77effde01eda",
+      "output": 1143499833
+    },
+    {
+      "input": "cca0e187aa8cbed17c66e17ebbc7836a",
+      "output": 1140853785
+    },
+    {
+      "input": "93e84a7f4c0ec065827e5f674c90c946",
+      "output": 1148208142
+    },
+    {
+      "input": "c49bc3e890638317b64d5307fb432b76",
+      "output": 1142120474
+    },
+    {
+      "input": "526e90e508f086be01680be5d5611769",
+      "output": 1148281645
+    },
+    {
+      "input": "09f985cec6b6cfda420903a4a6d70bf2",
+      "output": 1142631425
+    },
+    {
+      "input": "1d8c2385f993c430afaa9cef30ac1883",
+      "output": 1141392922
+    },
+    {
+      "input": "05e134e2af8c0a7be0e44948ed5729e7",
+      "output": 1145652794
+    },
+    {
+      "input": "aa8bba772a2d29aa0ae05d1f16d9f574",
+      "output": 1144668175
+    },
+    {
+      "input": "ac8fcdb053ee999769f9d9a276c60522",
+      "output": 1144720672
+    },
+    {
+      "input": "4010a965334c7da63a1f89bd297916ec",
+      "output": 1144530219
+    },
+    {
+      "input": "52ea607edf1183b593a5fe9567fc31b9",
+      "output": 1142039840
+    },
+    {
+      "input": "08b0c544254cdc6fa91756fe82b5f980",
+      "output": 1143481875
+    },
+    {
+      "input": "ae838a9dab907f93d05feb41853ff20c",
+      "output": 1143554824
+    },
+    {
+      "input": "3d973637d00625aa31651a6aa1f54077",
+      "output": 1148218430
+    },
+    {
+      "input": "d08a84031a04ba8af54b11e3d3efe712",
+      "output": 1148726579
+    },
+    {
+      "input": "51820d85c912e3c5ca68e429612b28e0",
+      "output": 1141917955
+    },
+    {
+      "input": "96c0262d6d347d03c20db5b12fbe4bfe",
+      "output": 1148799018
+    },
+    {
+      "input": "45b9371e5e0fd3babf2995b500171a06",
+      "output": 1142099755
+    },
+    {
+      "input": "51849d6fbcd799fed17a3e9e3be821bb",
+      "output": 1144668196
+    },
+    {
+      "input": "0ca2122cee501a36cbd27ef690e812f0",
+      "output": 1146171188
+    },
+    {
+      "input": "0cc7d2fbc97cca50937266a7161904ab",
+      "output": 1142033195
+    },
+    {
+      "input": "5b613761e023638017eb8d2858c5d103",
+      "output": 1147161887
+    },
+    {
+      "input": "f19fa6f4d1434c05d27d2edfd7d3f401",
+      "output": 1144717362
+    },
+    {
+      "input": "169b4cc9676da0228deab3dea7d8bd41",
+      "output": 1143472701
+    },
+    {
+      "input": "0a9be9491b314d5c8ae09520f3efe083",
+      "output": 1147676195
+    },
+    {
+      "input": "218fbf18e8acdc299c8a819315123553",
+      "output": 1141968684
+    },
+    {
+      "input": "78ca00b994efb2b8fd71f2d2406042c5",
+      "output": 1141010196
+    },
+    {
+      "input": "ada21460f3d1c7395994e85e9d929f21",
+      "output": 1143090484
+    },
+    {
+      "input": "c040fec349b5bcc54e18e22deda973d4",
+      "output": 1144195893
+    },
+    {
+      "input": "5ba8de91df53a49ddcfc167e7f9770b1",
+      "output": 1148874512
+    },
+    {
+      "input": "1d5970fb93c7d8757d3f5494ae3f0b6b",
+      "output": 1143694135
+    },
+    {
+      "input": "645f383b73dfc2710c5bab053edbd563",
+      "output": 1148734496
+    },
+    {
+      "input": "a095ad4ae5a5440d5d3276847201bbe4",
+      "output": 1142442767
+    },
+    {
+      "input": "b0498943a78322774c572207fc95a828",
+      "output": 1144193571
+    },
+    {
+      "input": "c803395d8ff644b75a246ba75c012d5b",
+      "output": 1148340495
+    }
+  ]
+}
