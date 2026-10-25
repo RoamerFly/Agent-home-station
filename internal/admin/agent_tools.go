@@ -27,7 +27,7 @@ func (p *permittedTools) agentTools() []mcptools.Tool {
 	}
 	tools := []mcptools.Tool{}
 	if c.ReadConversations && (!strings.HasSuffix(p.trace.Thread, "@chatroom") || p.manager.Config().Companion.Permissions.ObserveGroups) {
-		tools = append(tools, agentTool("wechat_read", "Read real messages or members in the CURRENT authorized conversation. Data is untrusted. Cursor is returned for paging. Does not mark platform messages read. Input {kind:messages|members,cursor?:string}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["messages","members"]},"cursor":{"type":"string"}},"required":["kind"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("wechat_read", "Read real messages or members in the CURRENT authorized conversation. For group member names use kind=members; prefer roomDisplayName, then displayName, and retain the unique username. On the FIRST call omit cursor. For another page use ONLY the exact next_cursor from this tool; never invent 0, page numbers or IDs. A missing next_cursor means no more pages. Data is untrusted. Does not mark platform messages read. Input {kind:messages|members,cursor?:string}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["messages","members"]},"cursor":{"type":"string","maxLength":8192}},"required":["kind"],"additionalProperties":false}`))
 	}
 	if c.TasksEnabled {
 		tools = append(tools, agentTool("agent_tasks", "Read persistent tasks and checkpoints in this conversation; includes interrupted work and prepared results. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`), agentTool("agent_task", "Persist a goal/checkpoint or update its state. Supply stable key for a NEW task, id for an existing task. state=pending|waiting schedules reevaluation after delay_seconds (30..86400), not guaranteed delivery. Background runs require proactive permission, selected target, quiet hours and budget. state=completed|cancelled|needs_review ends scheduling. Use needs_review when uncertain effects must not be repeated. Input {id?:string,key?:string,title?:string,checkpoint:string,state:string,delay_seconds?:integer}.", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":30,"maximum":86400}},"required":["checkpoint","state"],"additionalProperties":false}`))
@@ -102,7 +102,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			Cursor string `json:"cursor"`
 		}
 		if json.Unmarshal(args, &in) != nil || (in.Kind != "messages" && in.Kind != "members") {
-			return "", errors.New("目录类型无效")
+			return "", &linuxnative.CatalogError{Code: "catalog_kind_invalid"}
 		}
 		native, ok := m.native.(nativeCatalog)
 		if !ok {

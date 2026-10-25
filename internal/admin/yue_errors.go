@@ -26,6 +26,11 @@ func (e *yueCallError) Error() string {
 }
 func yueError(code string) error { return &yueCallError{code: code} }
 func safeToolFailure(err error) (string, string) {
+	var safe interface{ SafeToolFailure() (string, string) }
+	if errors.As(err, &safe) {
+		code, message := safe.SafeToolFailure()
+		return message, code
+	}
 	var yue *yueCallError
 	if errors.As(err, &yue) {
 		return yue.Error(), yue.code

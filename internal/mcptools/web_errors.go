@@ -22,6 +22,11 @@ func (e *WebError) Error() string { return e.Code }
 // FailureDescription never includes URLs, request headers, response bodies,
 // subprocess output or arbitrary provider error strings.
 func FailureDescription(err error) string {
+	var safe interface{ SafeToolFailure() (string, string) }
+	if errors.As(err, &safe) {
+		_, message := safe.SafeToolFailure()
+		return message
+	}
 	text := failureSummary(err)
 	var web *WebError
 	if errors.As(err, &web) && web.Attempts > 0 {

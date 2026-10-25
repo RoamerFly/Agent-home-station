@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"net/url"
+	"strings"
+	"time"
 )
 
 type CatalogPage struct {
@@ -33,16 +37,16 @@ func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor strin
 		path = "/threads/" + url.PathEscape(thread) + "/messages"
 		fields = []string{"id", "threadId", "serverId", "senderId", "type", "direction", "body", "createdAt"}
 	case "members":
-		if !safeThreadID(thread) {
-			return CatalogPage{}, errors.New("invalid group")
+		if !safeThreadID(thread) || !strings.HasSuffix(thread, "@chatroom") {
+			return CatalogPage{}, &CatalogError{Code: "catalog_group_invalid"}
 		}
 		path = "/groups/" + url.PathEscape(thread) + "/members"
 		fields = []string{"id", "username", "displayName", "roomDisplayName"}
 	default:
-		return CatalogPage{}, errors.New("unsupported catalog")
+		return CatalogPage{}, &CatalogError{Code: "catalog_kind_invalid"}
 	}
 	if len(search) > 256 || len(cursor) > 8192 {
-		return CatalogPage{}, errors.New("catalog query too long")
+		return CatalogPage{}, &CatalogError{Code: "catalog_query_invalid"}
 	}
 	query := url.Values{"limit": []string{"50"}}
 	if search != "" {
@@ -51,7 +55,7 @@ func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor strin
 	if cursor != "" {
 		query.Set("cursor", cursor)
 	}
-	raw, err := s.toolJSON(ctx, "GET", s.accountPath()+path+"?"+query.Encode(), "", nil, "")
+	raw, err := s.readCatalog(ctx, s.accountPath()+path+"?"+query.Encode(), cursor != "")
 	if err != nil {
 		return CatalogPage{}, err
 	}
@@ -60,8 +64,8 @@ func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor strin
 		NextCursor *string          `json:"nextCursor"`
 		Coverage   any              `json:"coverage"`
 	}
-	if json.Unmarshal(raw, &page) != nil || len(page.Items) > 50 {
-		return CatalogPage{}, errors.New("invalid catalog page")
+	if json.Unmarshal(raw, &page) != nil || page.Items == nil || len(page.Items) > 50 {
+		return CatalogPage{}, &CatalogError{Code: "catalog_response_invalid"}
 	}
 	out := CatalogPage{Items: []map[string]any{}, NextCursor: page.NextCursor, Coverage: page.Coverage}
 	for _, item := range page.Items {
@@ -80,4 +84,53 @@ func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor strin
 		out.Items = append(out.Items, row)
 	}
 	return out, nil
+}
+
+func (s *Sender) readCatalog(ctx context.Context, path string, hasCursor bool) ([]byte, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		r, err := s.do(ctx, http.MethodGet, path, nil, "")
+		if err != nil {
+			if ctx.Err() != nil {
+				code := "catalog_cancelled"
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					code = "catalog_timeout"
+				}
+				return nil, &CatalogError{Code: code}
+			}
+			if attempt == 0 {
+				select {
+				case <-ctx.Done():
+					continue
+				case <-time.After(200 * time.Millisecond):
+				}
+				continue
+			}
+			return nil, &CatalogError{Code: "catalog_network_unavailable"}
+		}
+		if r.StatusCode != 200 {
+			r.Body.Close()
+			code := "catalog_request_rejected"
+			switch {
+			case r.StatusCode == 401 || r.StatusCode == 403:
+				code = "catalog_auth_denied"
+			case r.StatusCode == 404:
+				code = "catalog_not_found"
+			case r.StatusCode == 400 && hasCursor:
+				code = "catalog_cursor_invalid"
+			case r.StatusCode >= 500:
+				code = "catalog_upstream_unavailable"
+			}
+			return nil, &CatalogError{Code: code, HTTPStatus: r.StatusCode}
+		}
+		b, readErr := io.ReadAll(io.LimitReader(r.Body, (1<<20)+1))
+		r.Body.Close()
+		if readErr != nil && attempt == 0 && ctx.Err() == nil {
+			continue
+		}
+		if readErr != nil || len(b) > 1<<20 || !json.Valid(b) {
+			return nil, &CatalogError{Code: "catalog_response_invalid"}
+		}
+		return b, nil
+	}
+	return nil, &CatalogError{Code: "catalog_network_unavailable"}
 }
