@@ -262,7 +262,7 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 			w.activity(Record{Event: "utterance_plan_stopped", Category: "error", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: "needs_review", Reason: "text_sender_cannot_reconcile_unknown"})
 			continue
 		}
-		if !w.allowed[p.Input.Thread] || !c.Config.Enabled || !c.Config.Permissions.ReplyText || (!c.Config.ConversationConfig().Enabled) || time.Since(p.Created) > 30*time.Minute || p.Input.Mode != "direct" && c.Config.Quiet(time.Now()) || p.Input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(p.Input.Thread) {
+		if !w.taskActive(p.Input) || !w.allowed[p.Input.Thread] || !c.Config.Enabled || !c.Config.Permissions.ReplyText || (!c.Config.ConversationConfig().Enabled) || time.Since(p.Created) > 30*time.Minute || p.Input.Mode != "direct" && c.Config.Quiet(time.Now()) || p.Input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(p.Input.Thread) {
 			p.State = "stopped"
 			w.persistErr = w.saveRuntime()
 			w.activity(Record{Event: "utterance_plan_stopped", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: "stopped", Reason: "utterance_permission_quiet_or_expired"})

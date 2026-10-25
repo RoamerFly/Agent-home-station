@@ -186,3 +186,23 @@ func TestForcedSurfRetriesModelSilenceWithoutReexecutingTools(t *testing.T) {
 		t.Fatal(d, err, tools.calls, len(m.turns))
 	}
 }
+
+type asynchronousToolFixture struct{ calls int }
+
+func (*asynchronousToolFixture) List(context.Context) ([]mcptools.Tool, error) {
+	return []mcptools.Tool{{Name: "creative__create", Description: "Create persistent background output"}}, nil
+}
+func (p *asynchronousToolFixture) Call(context.Context, string, json.RawMessage) (string, error) {
+	p.calls++
+	return `{"task_id":"persistent-one","job_id":"remote-one","automatic_followup":true,"state":"waiting"}`, nil
+}
+func TestBackgroundPluginAcknowledgementDoesNotForceDuplicateWorkOrFakeMedia(t *testing.T) {
+	p := &asynchronousToolFixture{}
+	m := &sequenceModel{answers: []string{`{"action":"tool","tool":"creative__create","arguments":{"prompt":"cat picture"}}`, `{"action":"reply","messages":["收到，我做好就发给你～"]}`}}
+	e, _ := NewPreview(enabledConfig(), m, "role")
+	e.Tools, e.MaxToolCalls = p, 4
+	d, err := e.Respond(context.Background(), Input{Mode: "direct", Preview: true, Text: "生成一张可爱的猫咪图片发给我"})
+	if err != nil || d.Action != "reply" || len(d.MediaIDs) != 0 || p.calls != 1 || len(m.turns) != 2 {
+		t.Fatal(d, err, p.calls, len(m.turns))
+	}
+}

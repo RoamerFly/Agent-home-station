@@ -16,6 +16,7 @@ import (
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/plugins"
 )
 
 type agentSettings struct {
@@ -72,7 +73,18 @@ func contains(a []string, s string) bool {
 	return false
 }
 
+type pluginJobState struct {
+	Ticket          plugins.JobTicket `json:"ticket"`
+	Deadline        time.Time         `json:"deadline"`
+	IntervalSeconds int               `json:"interval_seconds"`
+	MaxPolls        int               `json:"max_polls"`
+	Polls           int               `json:"polls"`
+	Prepared        bool              `json:"prepared"`
+	Failure         bool              `json:"failure"`
+	CancelState     string            `json:"cancel_state,omitempty"`
+}
 type agentTask struct {
+	PluginJob         *pluginJobState   `json:"plugin_job,omitempty"`
 	RequestedText     string            `json:"requested_text,omitempty"`
 	MusicFailure      bool              `json:"music_failure,omitempty"`
 	Delivery          *bot.TaskDelivery `json:"delivery,omitempty"`
@@ -148,6 +160,19 @@ func newAgentControl(dir string) (*agentControl, error) {
 		if t.State == "running" {
 			t.State = "needs_review"
 			t.LastResult = "运行中断，需在管理页恢复；不会自动重放外部操作"
+			a.data.Tasks[id] = t
+			changed = true
+		}
+		if t.PluginJob != nil && t.State != "cancelled" && t.PluginJob.Ticket.State == "submitting" {
+			t.State = "needs_review"
+			t.LastResult = "插件创建请求可能已经提交，尚无可核验远端任务编号；不会自动重新创建"
+			a.data.Tasks[id] = t
+			changed = true
+		}
+		if t.PluginJob != nil && t.State == "cancelled" && t.PluginJob.CancelState == "claimed" {
+			t = copyTask(t)
+			t.PluginJob.CancelState = "unconfirmed"
+			t.LastResult = "上次远端取消结果未知，保持停止本地交付，不自动重发取消请求"
 			a.data.Tasks[id] = t
 			changed = true
 		}
@@ -255,6 +280,9 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(t.Thread) || !permittedRecipient(cfg.Config, t.Thread) {
 			continue
 		}
+		if t.PluginJob != nil {
+			return m.claimPluginTask(t, now)
+		}
 		if t.MusicJob != "" {
 			if !m.speechConfig().YuEEnabled || !cfg.Companion.Permissions.SendVoice && !cfg.Companion.Permissions.SendFile {
 				continue
@@ -311,6 +339,28 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 	for _, t := range m.agent.list(in.Account, in.Thread) {
 		if t.ID == in.TaskID && t.State == "running" {
+			if t.PluginJob != nil {
+				if t.PluginJob.Prepared && (state == "reply" || state == "synchronous_round_finished") {
+					t.State = "waiting_delivery"
+					t.LastResult = "插件输出已准备，等待微信交付证据"
+					if t.PluginJob.Failure {
+						t.State = "failed"
+						t.LastResult = "外部插件任务失败，本轮仅说明失败结果"
+					}
+				} else if t.PluginJob.Prepared {
+					t.State = "needs_review"
+					t.LastResult = "插件输出已暂存，但本轮未确认交付；请核对原发送记录，不自动重复暂存或发送"
+				} else if t.Runs < 3 {
+					t.State = "waiting"
+					t.Next = time.Now().Add(30 * time.Second)
+					t.LastResult = "尚未完成交付，后续核对同一插件结果，不重新创建"
+				} else {
+					t.State = "needs_review"
+					t.LastResult = "插件输出未能完成交付，请检查原任务"
+				}
+				_, _ = m.agent.pluginUpdate(t)
+				return
+			}
 			if t.MusicJob != "" && (state == "reply" || state == "synchronous_round_finished") && t.MusicPrepared {
 				t.State = "waiting_delivery"
 				t.LastResult = "生成结果已就绪，正在等待微信交付；全部必需附件确认后才完成"
@@ -387,9 +437,24 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			if t.ID != r.PathValue("id") {
 				continue
 			}
-			if t.State == "running" {
+			if t.State == "running" && !(t.PluginJob != nil && in.Action == "cancel") {
 				fail(w, 409, "任务正在运行；暂停Agent后再取消或恢复")
 				return
+			}
+			if t.PluginJob != nil {
+				if in.Action == "cancel" {
+					updated, err := s.manager.cancelPluginTask(r.Context(), t)
+					if err != nil {
+						fail(w, 409, err.Error())
+						return
+					}
+					respond(w, 200, updated)
+					return
+				}
+				if t.Delivery != nil || t.State == "cancelled" || t.PluginJob.Prepared || t.PluginJob.Ticket.State == "submitting" {
+					fail(w, 409, "此任务不可重新创建；请核对原插件任务与发送回执")
+					return
+				}
 			}
 			if in.Action == "resume" {
 				if t.Delivery != nil {
@@ -402,7 +467,17 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			} else {
 				t.State = "cancelled"
 			}
-			if err := s.manager.agent.task(t); err != nil {
+			var saveErr error
+			if t.PluginJob != nil {
+				var saved bool
+				saved, saveErr = s.manager.agent.pluginUpdate(t)
+				if saveErr == nil && !saved {
+					saveErr = errors.New("任务状态已改变，请刷新")
+				}
+			} else {
+				saveErr = s.manager.agent.task(t)
+			}
+			if err := saveErr; err != nil {
 				fail(w, 500, err.Error())
 				return
 			}

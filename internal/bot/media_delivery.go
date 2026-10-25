@@ -153,7 +153,17 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		if d.terminal() || time.Now().Before(d.Next) {
 			continue
 		}
-		if !w.mediaAllowed(d) {
+		cancelledTask := !w.taskActive(d.Input)
+		if cancelledTask && !d.UserCancelled {
+			w.cancelMedia(n, d, true, "task_cancelled_before_delivery")
+			continue
+		}
+		if cancelledTask && d.ID == "" {
+			d.State = "stopped"
+			w.mediaRecord(d, "media_stopped", "decision")
+			continue
+		}
+		if !cancelledTask && !w.mediaAllowed(d) {
 			w.cancelMedia(n, d, false, "media_permission_or_quiet_changed")
 			continue
 		}

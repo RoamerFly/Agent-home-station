@@ -34,6 +34,7 @@ type Config struct {
 	AgentTask         func(time.Time, func(string) bool) (*companion.Input, error)
 	AgentTaskDone     func(companion.Input, string)
 	AgentTaskDelivery func(companion.Input, TaskDelivery) error
+	AgentTaskActive   func(companion.Input) bool
 	Draining          func() bool
 	MediaSeeds        func() []MediaSeed
 	SurfAllowed       func(string) bool
@@ -463,6 +464,10 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 }
 
 func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engine, input companion.Input, decision companion.Decision, err, processingErr error, toolStarted, progressDelivered bool) {
+	if !w.taskActive(input) {
+		w.activity(Record{Event: "agent_task_cancelled", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "stopped", Reason: "task_cancelled_before_delivery"})
+		return
+	}
 	if err == nil && ctx.Err() == nil && input.Mode == "direct" && character.Config.Permissions.ReplyText {
 		switch decision.Reason {
 		case "invalid_model_decision", "invalid_tool_arguments", "tool_unavailable_or_budget_exhausted", "tool_budget_exhausted":

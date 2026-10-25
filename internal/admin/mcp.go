@@ -114,6 +114,9 @@ func (p *permittedTools) ForkTools() companion.ToolAccess {
 }
 
 func (p *permittedTools) enabled(name string) bool {
+	if name == "plugin_job_status" || name == "plugin_job_cancel" {
+		return p.pluginTaskAllowed()
+	}
 	if name == "music_local_start" || name == "music_local_status" {
 		return len(p.yueTools()) > 0
 	}
@@ -163,9 +166,11 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	ctx = p.mcpContext(ctx)
 	var tools []mcptools.Tool
 	var err error
+
 	if p.settings.Enabled {
 		tools, err = p.hub.List(ctx)
 	}
+	tools = append(tools, p.pluginTaskTools()...)
 	if p.trace.Surf {
 		tools = append(tools, mcptools.Tool{Name: "web_discover", Description: "Discover actual public feed/community/RSS/music/image candidates, with persistent novelty memory and diverse sources. Automatically called once at session start. Continue a rabbit hole with related_url equal to a candidate BV page. Otherwise {} to switch sources. Does not send or claim watching. Input {related_url?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"related_url":{"type":"string","maxLength":2048}},"additionalProperties":false}`)})
 	}
@@ -298,6 +303,9 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	}()
 	if !p.enabled(name) {
 		return "", &mcptools.WebError{Code: "ability_disabled"}
+	}
+	if name == "plugin_job_status" || name == "plugin_job_cancel" {
+		return p.callPluginJob(ctx, name, args)
 	}
 	if name == "speech_synthesize" || name == "music_generate" {
 		return p.callSpeech(ctx, name, args)
@@ -504,6 +512,9 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		return p.stageOutputWithAsset(ctx, plugins.Output{Text: "公开媒体已下载，尚未发送。", Media: []plugins.MediaResult{{Kind: input.Kind, Data: data, MIMEType: typ}}}, original)
 	}
 	if p.apiNames[name] {
+		if p.runtime.Background(name) {
+			return p.startPluginJob(ctx, name, args)
+		}
 		output, err := p.runtime.Call(ctx, name, args)
 		if err != nil {
 			return "", err

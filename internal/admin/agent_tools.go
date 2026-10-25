@@ -223,6 +223,13 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				}
 			}
 		}
+		if t.PluginJob != nil {
+			if in.State == "cancelled" {
+				updated, err := m.cancelPluginTask(ctx, t)
+				return encode(updated, err)
+			}
+			return "", errors.New("插件任务由其持久生命周期管理，请使用plugin_job_status或plugin_job_cancel；不改写为已完成")
+		}
 		t.Checkpoint = in.Checkpoint
 		t.State = in.State
 		t.Next = time.Now().UTC().Add(time.Duration(in.DelaySeconds) * time.Second)

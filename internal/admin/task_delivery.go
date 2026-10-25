@@ -8,7 +8,7 @@ import (
 
 func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDelivery) error {
 	for _, task := range m.agent.list(in.Account, in.Thread) {
-		if task.ID != in.TaskID || task.MusicJob == "" || task.State == "running" || task.State == "cancelled" {
+		if task.ID != in.TaskID || task.MusicJob == "" && task.PluginJob == nil || task.State == "running" || task.State == "cancelled" {
 			continue
 		}
 		if task.Delivery != nil && *task.Delivery == delivery {
@@ -38,7 +38,17 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 			task.State = "needs_review"
 			task.LastResult += "；存在未确认回执，请核对原发送任务"
 		}
-		if err := m.agent.task(task); err != nil {
+		var saveErr error
+		if task.PluginJob != nil {
+			var saved bool
+			saved, saveErr = m.agent.pluginUpdate(task)
+			if saveErr == nil && !saved {
+				return nil
+			}
+		} else {
+			saveErr = m.agent.task(task)
+		}
+		if err := saveErr; err != nil {
 			return err
 		}
 		m.record(bot.Record{Event: "task_delivery_updated", Category: "decision", ThreadID: in.Thread, MessageID: task.OriginTrace, Status: task.State, Reason: "task_delivery_" + delivery.State, Content: task.LastResult, Origin: "agent"})

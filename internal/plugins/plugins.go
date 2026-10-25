@@ -41,6 +41,7 @@ type Manifest struct {
 	ToolMediaKinds map[string]string      `json:"tool_media_kinds,omitempty"`
 }
 type APITool struct {
+	Job            *JobSpec          `json:"job,omitempty"`
 	Name           string            `json:"name"`
 	Description    string            `json:"description"`
 	InputSchema    json.RawMessage   `json:"input_schema"`
@@ -159,6 +160,9 @@ func Validate(m Manifest) error {
 				return err
 			}
 		}
+		if err := validateJob(t); err != nil {
+			return err
+		}
 	}
 	if m.MCP != nil {
 		if len(m.MCP.ID) > 0 && m.MCP.ID != m.ID {
@@ -254,7 +258,11 @@ func New(items []Installed) (*Runtime, error) {
 func (r *Runtime) Tools() []mcptools.Tool {
 	out := make([]mcptools.Tool, 0, len(r.tools))
 	for n, t := range r.tools {
-		out = append(out, mcptools.Tool{Name: n, Description: t.Description, InputSchema: append(json.RawMessage(nil), t.InputSchema...)})
+		description := t.Description
+		if t.Job != nil {
+			description += " Starts a persistent background job once; automatic follow-up returns results to this conversation. Status/cancel use plugin_job_status/plugin_job_cancel, never create again to poll."
+		}
+		out = append(out, mcptools.Tool{Name: n, Description: description, InputSchema: append(json.RawMessage(nil), t.InputSchema...)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -313,6 +321,9 @@ func (r *Runtime) Call(ctx context.Context, name string, args json.RawMessage) (
 	t, ok := r.tools[name]
 	if !ok {
 		return Output{}, errors.New("unknown plugin tool")
+	}
+	if t.Job != nil {
+		return Output{}, errors.New("background tool requires persistent task execution")
 	}
 	parts := strings.SplitN(name, "__", 2)
 	in := r.installed[parts[0]]
@@ -455,6 +466,7 @@ func request(ctx context.Context, raw, method string, headers map[string]string,
 	if e != nil {
 		return nil, "", e
 	}
+	req.GetBody = nil // Mutating creation/cancellation requests are never replayed.
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -686,8 +698,8 @@ func safeErr(error) error { return errors.New("plugin API call failed") }
 func Templates() []Manifest {
 	return []Manifest{
 		{ID: "text_to_speech", Name: "文字转语音 API", Version: "1", Description: "需配置：填写你的语音 API 地址、鉴权请求头和返回音频 URL 路径。", Tools: []APITool{{Name: "synthesize", Description: "将文字交给已配置的语音服务。", InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`), URL: "https://replace-with-owner-api.example/v1/tts", Method: "POST", Headers: map[string]string{"Authorization": "Bearer {{secret.API_KEY}}"}, BodyTemplate: json.RawMessage(`{"text":"{{arg.text}}"}`), MediaURLPath: "data.audio_url", MediaKind: "voice"}}},
-		{ID: "music_singing", Name: "音乐/歌声任务 API", Version: "1", Description: "需配置：填写音乐或歌声生成任务 API、状态轮询路径及媒体 URL 字段。", Tools: []APITool{{Name: "create_song", Description: "创建已配置的音乐/歌声任务。", InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]}`), URL: "https://replace-with-owner-api.example/v1/tasks", Method: "POST", BodyTemplate: json.RawMessage(`{"prompt":"{{arg.prompt}}"}`), MediaKind: "voice", Poll: &PollSpec{URL: "https://replace-with-owner-api.example/v1/tasks/{{result.task_id}}", StatusPath: "status", DoneValues: []string{"done"}, IntervalSeconds: 30, MaxAttempts: 12, MediaURLPath: "data.audio_url"}}}},
-		{ID: "video_generation", Name: "视频生成任务 API", Version: "1", Description: "需配置：填写视频生成服务 API、轮询状态和视频 URL 字段。", Tools: []APITool{{Name: "create_video", Description: "创建已配置的视频生成任务。", InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]}`), URL: "https://replace-with-owner-api.example/v1/tasks", Method: "POST", BodyTemplate: json.RawMessage(`{"prompt":"{{arg.prompt}}"}`), MediaKind: "video", Poll: &PollSpec{URL: "https://replace-with-owner-api.example/v1/tasks/{{result.task_id}}", StatusPath: "status", DoneValues: []string{"done"}, IntervalSeconds: 30, MaxAttempts: 12, MediaURLPath: "data.video_url"}}}},
+		{ID: "music_singing", Name: "音乐/歌声任务 API", Version: "1", Description: "需配置：填写音乐或歌声生成任务 API、状态轮询路径及媒体 URL 字段。", Tools: []APITool{{Name: "create_song", Description: "创建已配置的音乐/歌声任务。", InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]}`), URL: "https://replace-with-owner-api.example/v1/tasks", Method: "POST", BodyTemplate: json.RawMessage(`{"prompt":"{{arg.prompt}}"}`), MediaKind: "voice", Job: &JobSpec{IDPath: "task_id"}, Poll: &PollSpec{URL: "https://replace-with-owner-api.example/v1/tasks/{{result.task_id}}", StatusPath: "status", DoneValues: []string{"done"}, IntervalSeconds: 30, MaxAttempts: 12, MediaURLPath: "data.audio_url"}}}},
+		{ID: "video_generation", Name: "视频生成任务 API", Version: "1", Description: "需配置：填写视频生成服务 API、轮询状态和视频 URL 字段。", Tools: []APITool{{Name: "create_video", Description: "创建已配置的视频生成任务。", InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]}`), URL: "https://replace-with-owner-api.example/v1/tasks", Method: "POST", BodyTemplate: json.RawMessage(`{"prompt":"{{arg.prompt}}"}`), MediaKind: "video", Job: &JobSpec{IDPath: "task_id"}, Poll: &PollSpec{URL: "https://replace-with-owner-api.example/v1/tasks/{{result.task_id}}", StatusPath: "status", DoneValues: []string{"done"}, IntervalSeconds: 30, MaxAttempts: 12, MediaURLPath: "data.video_url"}}}},
 		{ID: "external_mcp", Name: "外部 MCP 服务", Version: "1", Description: "需配置：这是外部 MCP 服务连接模板；地址、鉴权与允许工具均由管理员填写。", MCP: &mcptools.ServerConfig{ID: "external_mcp", Name: "外部 MCP 服务", Transport: "http", URL: "https://replace-with-owner-mcp.example/mcp"}},
 	}
 }

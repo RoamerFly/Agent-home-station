@@ -347,6 +347,10 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		stop()
 		delete(s.reviews, "generation-"+r.input.TraceID)
 	}
+	if !w.taskActive(r.input) {
+		w.activity(Record{Event: "agent_task_cancelled", Category: "decision", ThreadID: r.input.Thread, MessageID: r.input.TraceID, Status: "stopped", Reason: "task_cancelled_before_delivery"})
+		return
+	}
 	if r.input.Surf && !r.job.quietDeadline.IsZero() && !time.Now().Before(r.job.quietDeadline) {
 		w.activity(Record{Event: "surf_review", Category: "tool", ThreadID: r.input.Thread, MessageID: r.input.TraceID, Origin: "surf", Status: "blocked", Reason: "quiet_hours"})
 		w.queuePhase(r.input.TraceID, "blocked")

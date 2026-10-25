@@ -79,7 +79,7 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		if total < r.Expected && time.Since(r.Created) > 30*time.Second {
 			failed = true
 		}
-		if failed || !w.allowed[r.Input.Thread] || !c.Config.Permissions.ReplyText || r.Input.Mode != "direct" && c.Config.Quiet(time.Now()) || r.Input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(r.Input.Thread) {
+		if failed || !w.taskActive(r.Input) || !w.allowed[r.Input.Thread] || !c.Config.Permissions.ReplyText || r.Input.Mode != "direct" && c.Config.Quiet(time.Now()) || r.Input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(r.Input.Thread) {
 			r.State = "stopped"
 			w.activity(Record{Event: "media_reply_stopped", Category: "decision", ThreadID: r.Input.Thread, MessageID: r.Trace, Reason: "media_not_confirmed_no_success_caption", Status: "stopped"})
 			w.refreshMediaParent(r.Trace)

@@ -111,7 +111,7 @@
 <div><label class="switch-row"><span>保存任务与检查点</span><input id="agent-tasks-enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div>
 <div><label for="agent-max-steps">每轮最多行动步数</label><input id="agent-max-steps" type="number" min="1" max="30"></div>
 <div><label for="agent-max-runs">单个任务最多后台执行次数</label><input id="agent-max-runs" type="number" min="1" max="20"></div>
-</div><p class="hint">AI自行选择工具、等待或安静。后台续做沿用主动会话、安静时段与每日预算；中断中的外部操作不会自动重放。</p><p id="agent-save-state" class="hint" role="status"></p></article>
+</div><p class="hint">AI自行选择工具、等待或安静。主动任务遵守安静时段与每日预算；用户已请求的生成结果按原会话续交。中断后不自动重放未知外部操作。</p><p id="agent-save-state" class="hint" role="status"></p></article>
 <details class="panel behavior-settings"><summary>消息理解、发送节奏与故障恢复</summary><button id="save-behavior" type="button" hidden>保存</button>
 <div class="field-grid">
 <div><label class="switch-row"><span>执行较长工具任务前先回应</span><input id="behavior-acknowledge-tools" type="checkbox"><span class="switch" aria-hidden="true"></span></label><p class="hint">AI决定执行后先发一句自然回应，再继续取得资源并回复结果；仍遵守发送权限与预算。</p></div>

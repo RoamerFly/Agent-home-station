@@ -6,6 +6,10 @@ import (
 	"wechat-bot/internal/companion"
 )
 
+func (w *Worker) taskActive(in companion.Input) bool {
+	return in.TaskID == "" || w.config.AgentTaskActive == nil || w.config.AgentTaskActive(in)
+}
+
 func (w *Worker) tickAgentTask(ctx context.Context) bool {
 	c, ok := w.model.(*companion.Engine)
 	if !ok || w.runtime == nil || w.config.AgentTask == nil || w.draining() {
