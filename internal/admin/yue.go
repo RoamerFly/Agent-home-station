@@ -367,7 +367,7 @@ func (m *Manager) claimMusicTask(task agentTask, now time.Time) (*companion.Inpu
 	if err := m.agent.task(task); err != nil {
 		return nil, err
 	}
-	in := &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender, Mode: "direct", IsGroup: strings.HasSuffix(task.Thread, "@chatroom"), Directed: true, TaskID: task.ID, TraceID: "music-" + task.ID + "-" + now.UTC().Format("150405"), QuoteServerID: task.QuoteServerID}
+	in := &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender, Mode: "direct", IsGroup: strings.HasSuffix(task.Thread, "@chatroom"), Directed: true, TaskID: task.ID, OriginTraceID: task.OriginTrace, RequestedText: task.RequestedText, TraceID: "music-" + task.ID + "-" + now.UTC().Format("150405"), QuoteServerID: task.QuoteServerID}
 	if status.State == "completed" {
 		in.Text = "[已请求音乐任务的结果交付，不是新用户请求] music_job=" + task.MusicJob + "；原始需求资料：" + task.RequestedText + "；歌曲：" + task.Title + "。本地模型已经完成，调用music_local_status取得真实附件，kind=" + task.MusicKind + "；结合最新会话，如对方已取消则取消任务，如改要文件则遵从。最终用media_ids交付实际结果，介绍在附件被接受后发送。不要重新生成，也不要只说稍等。"
 	} else {

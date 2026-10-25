@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"time"
 	"wechat-bot/internal/linuxnative"
@@ -51,6 +52,11 @@ func (w *Worker) readQuoteContext(ctx context.Context, m *linuxnative.Message) s
 		text = strings.ToValidUTF8(text[:1600], "")
 	}
 	data := map[string]any{"kind": "quoted_message_context", "verified_same_conversation": true, "from_bot_account": m.ReplyToSelf, "original_type": original.Type, "text": text}
+	if original.Link != nil {
+		if source := quotedSourceURL(original.Link.URL); source != "" {
+			data["source_url"] = source
+		}
+	}
 	if m.ReplyToSelf {
 		if asset := w.quotedMediaAsset(ctx, m.ThreadID, original.ServerID); asset != nil {
 			data["referenced_media"] = asset
@@ -70,7 +76,7 @@ func (w *Worker) quotedMediaAsset(ctx context.Context, thread, server string) ma
 	checks := 0
 	for i := len(w.runtime.Media) - 1; i >= 0; i-- {
 		d := w.runtime.Media[i]
-		if d.Input.Thread != thread || d.AssetID == "" {
+		if d.Input.Thread != thread || d.AssetID == "" && d.URL == "" {
 			continue
 		}
 		matches := func(status linuxnative.ToolStatus) bool {
@@ -91,10 +97,21 @@ func (w *Worker) quotedMediaAsset(ctx context.Context, thread, server string) ma
 			}
 		}
 		if matches(d.Status) {
-			return map[string]string{"asset_id": d.AssetID, "title": d.Title, "kind": d.Kind}
+			return map[string]string{"asset_id": d.AssetID, "parent_asset_id": d.ParentAssetID, "title": d.Title, "kind": d.Kind, "source_url": quotedSourceURL(d.URL), "cached_mime": d.CachedMIME, "requester_id": d.Input.Sender}
 		}
 	}
 	return nil
+}
+
+func quotedSourceURL(raw string) string {
+	if len(raw) > 2048 {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return ""
+	}
+	return u.String()
 }
 
 func quotedPlainBody(m linuxnative.Message) linuxnative.Message {

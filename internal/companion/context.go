@@ -155,10 +155,36 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 }
 func recentMediaFocus(scope Scope) []MediaMemory {
 	items := []MediaMemory{}
-	for i := len(scope.Messages) - 1; i >= 0 && len(items) < 4; i-- {
+	seen := map[string]bool{}
+	requests := map[string]Turn{}
+	for _, turn := range scope.Messages {
+		if turn.Role == "user" && turn.TraceID != "" {
+			requests[turn.TraceID] = turn
+		}
+	}
+	for i := len(scope.Messages) - 1; i >= 0 && len(items) < 6; i-- {
 		m := scope.Messages[i].Media
-		if m != nil && (m.State == "accepted" || m.State == "observed") {
-			items = append(items, *m)
+		if m != nil && (m.State == "accepted" || m.State == "observed" || m.AcceptedParts > 0) {
+			copy := *m
+			if copy.RequestTraceID == "" {
+				copy.RequestTraceID = scope.Messages[i].TraceID
+			}
+			if request, ok := requests[copy.RequestTraceID]; ok {
+				if copy.RequesterID == "" {
+					copy.RequesterID = request.Sender
+				}
+				if copy.RequesterName == "" {
+					copy.RequesterName = request.SenderName
+				}
+			}
+			key := copy.Key
+			if copy.AssetID != "" {
+				key = copy.AssetID + "|" + copy.Kind + "|" + copy.RequestTraceID
+			}
+			if !seen[key] {
+				items = append(items, copy)
+				seen[key] = true
+			}
 		}
 	}
 	return items

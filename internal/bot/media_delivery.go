@@ -27,6 +27,8 @@ type MediaSeed struct {
 	JobID    string                   `json:"job_id"`
 }
 type mediaDelivery struct {
+	ParentAssetID string                 `json:"parent_asset_id,omitempty"`
+	CachedMIME    string                 `json:"cached_mime,omitempty"`
 	NotBefore     time.Time              `json:"not_before,omitempty"`
 	CompletedAt   time.Time              `json:"completed_at,omitempty"`
 	DurationMS    int64                  `json:"duration_ms,omitempty"`
@@ -102,7 +104,7 @@ func (w *Worker) queueMedia(ctx context.Context, c *companion.Engine, input comp
 		w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Reason: "media_queue_full", Status: "failed"})
 		return true
 	}
-	d := &mediaDelivery{DurationMS: m.DurationMS, URL: m.URL, Description: m.Description, Key: key, Trace: input.TraceID, Input: input, SourceID: source, AssetID: m.AssetID, Kind: m.Kind, Title: m.Title, State: "prepared", Created: time.Now().UTC()}
+	d := &mediaDelivery{ParentAssetID: m.ParentAssetID, CachedMIME: m.CachedMIME, DurationMS: m.DurationMS, URL: m.URL, Description: m.Description, Key: key, Trace: input.TraceID, Input: input, SourceID: source, AssetID: m.AssetID, Kind: m.Kind, Title: m.Title, State: "prepared", Created: time.Now().UTC()}
 	w.runtime.Media = append(w.runtime.Media, d)
 	w.persistErr = w.saveRuntime()
 	if w.persistErr != nil {
@@ -126,7 +128,7 @@ func (w *Worker) adoptMediaSeeds() {
 		if exists || len(w.runtime.Media) >= 1000 || !w.allowed[seed.Input.Thread] {
 			continue
 		}
-		d := &mediaDelivery{Key: "adopt-" + seed.JobID, Trace: seed.Trace, Input: seed.Input, SourceID: seed.SourceID, AssetID: seed.Media.AssetID, Kind: seed.Media.Kind, Title: seed.Media.Title, ID: seed.JobID, State: "queued", Created: time.Now().UTC()}
+		d := &mediaDelivery{ParentAssetID: seed.Media.ParentAssetID, CachedMIME: seed.Media.CachedMIME, URL: seed.Media.URL, Description: seed.Media.Description, DurationMS: seed.Media.DurationMS, Key: "adopt-" + seed.JobID, Trace: seed.Trace, Input: seed.Input, SourceID: seed.SourceID, AssetID: seed.Media.AssetID, Kind: seed.Media.Kind, Title: seed.Media.Title, ID: seed.JobID, State: "queued", Created: time.Now().UTC()}
 		w.runtime.Media = append(w.runtime.Media, d)
 		w.persistErr = w.saveRuntime()
 		if w.persistErr != nil {
@@ -314,7 +316,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 	w.persistErr = w.saveRuntime()
 }
 func (w *Worker) mediaRecord(d *mediaDelivery, event, category string) {
-	memory := companion.MediaMemory{URL: d.URL, Key: d.Key, Kind: d.Kind, Title: d.Title, SourceID: d.SourceID, AssetID: d.AssetID, JobID: d.ID, State: d.State, Phase: d.Phase, Reason: d.Reason, Retries: d.Retries, TotalParts: len(d.Status.VoiceChunks)}
+	memory := companion.MediaMemory{ParentAssetID: d.ParentAssetID, CachedMIME: d.CachedMIME, URL: d.URL, Key: d.Key, Kind: d.Kind, Title: d.Title, SourceID: d.SourceID, AssetID: d.AssetID, JobID: d.ID, State: d.State, Phase: d.Phase, Reason: d.Reason, Retries: d.Retries, TotalParts: len(d.Status.VoiceChunks)}
 	for _, p := range d.Status.VoiceChunks {
 		memory.DurationMS += p.DurationMS
 		if p.State == "accepted" && p.HasReceipt {

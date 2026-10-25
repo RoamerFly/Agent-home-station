@@ -533,6 +533,31 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 			break
 		}
 	}
+	if p.trace.SurfForceShare && d.Action == "silent" && d.Reason == "surf_forced_share_unfulfilled" {
+		// A forced share may use a minimal exact title+source fallback when
+		// the model declines despite a completed read. It is not a summary,
+		// a claim to have watched, or permission to bypass normal dedup.
+		verified := func(x *mcptools.DiscoveryItem) bool {
+			for _, raw := range session.Visited {
+				if canonicalSurfURL(raw) == canonicalSurfURL(x.URL) {
+					return true
+				}
+			}
+			return false
+		}
+		if chosen == nil || !verified(chosen) {
+			chosen = nil
+			for i := len(session.Candidates) - 1; i >= 0; i-- {
+				if verified(&session.Candidates[i]) {
+					chosen = &session.Candidates[i]
+					break
+				}
+			}
+		}
+		if chosen != nil {
+			d = companion.Decision{Action: "reply", SurfItemID: chosen.ID, Reason: "surf_forced_link_fallback", Messages: []string{logText(chosen.Title, 700) + "\n" + chosen.URL}}
+		}
+	}
 	finishSilent := func(reason, state string) (companion.Decision, error) {
 		session.State, session.Reason = state, reason
 		if chosen != nil {
@@ -543,7 +568,7 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 	if d.Action == "silent" {
 		reason, state := d.Reason, "not_shared"
 		switch reason {
-		case "surf_not_interested", "surf_not_suitable", "surf_browse_only", "surf_no_verified_source", "surf_duplicate_source", "tool_unavailable_or_budget_exhausted", "tool_budget_exhausted", "invalid_model_decision", "invalid_tool_arguments":
+		case "surf_not_interested", "surf_not_suitable", "surf_browse_only", "surf_no_verified_source", "surf_duplicate_source", "tool_unavailable_or_budget_exhausted", "tool_budget_exhausted", "invalid_model_decision", "invalid_tool_arguments", "surf_forced_share_unfulfilled", "surf_forced_share_failed":
 		case "surf_tool_failed":
 			if len(session.ToolFailures) > 0 {
 				state = "failed"
@@ -563,7 +588,7 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 				reason = "surf_no_novel_candidates"
 			}
 		}
-		if d.SurfAction == "bookmark" && chosen != nil {
+		if d.SurfAction == "bookmark" && chosen != nil && !p.trace.SurfForceShare {
 			reason, state = "surf_bookmarked", "bookmarked"
 			for i := range s.data.Items {
 				if s.data.Items[i].Item.ID == chosen.ID {

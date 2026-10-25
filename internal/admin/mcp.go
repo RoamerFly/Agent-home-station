@@ -172,7 +172,7 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	if p.trace.Thread != "" {
 		recent, _ := p.manager.recentAssets(p.trace)
 		_ = recent
-		tools = append(tools, mcptools.Tool{Name: "media_recent", Description: "Read the recent attachment catalogue for THIS conversation in chronological recency, including source_url and formats. Call this for original video/audio or format conversion. This is a LOCAL catalogue, not Internet search. Use for the same already-known resource or format conversion. A request for a new song/title must use real external search. Input: {}.", InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)}, mcptools.Tool{Name: "media_reuse", Description: "Reuse the exact prior resource only when the user asks for it again or a different format. This performs NO Internet search; never substitute a different old track for a new requested title. Original audio can be sent as file; legacy voice-only sources are WAV. Put returned media.id in reply.media_ids. Input: {asset_id:string,kind:voice|file|image|video}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"kind":{"type":"string","enum":["voice","file","image","video"]}},"required":["asset_id","kind"],"additionalProperties":false}`)})
+		tools = append(tools, mcptools.Tool{Name: "media_recent", Description: "Read the recent attachment catalogue for THIS conversation in chronological recency, including source_url and formats. Returns cached_mime, parent_asset_id and recent requests with requester_id/trace_id/task_id. Parent is the retained source video when this asset is an extracted audio track. Match the verified quote first, then the current speaker and latest context; ask briefly if ambiguous. Call this for original video/audio or format conversion. This is a LOCAL catalogue, not Internet search. Use for the same already-known resource or format conversion. A request for a new song/title must use real external search. Results are bounded and not exhaustive. Filter by exact asset_id, requester_id (self/current speaker supported), or query matching title/filename. Input: {asset_id?:string,requester_id?:string,query?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"requester_id":{"type":"string"},"query":{"type":"string"}},"additionalProperties":false}`)}, mcptools.Tool{Name: "media_reuse", Description: "Reuse the exact prior resource only when the user asks for it again or a different format. This performs NO Internet search; never substitute a different old track for a new requested title. Original audio can be sent as file; legacy voice-only sources are WAV. Put returned media.id in reply.media_ids. Input: {asset_id:string,kind:voice|file|image|video}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"kind":{"type":"string","enum":["voice","file","image","video"]}},"required":["asset_id","kind"],"additionalProperties":false}`)})
 	}
 	tools = append(tools, mcptools.Tool{Name: "web_media_download", Description: "Download media and prepare an attachment. For kind=video, accepts direct video URLs AND anonymously playable Bilibili BV video-page URLs (optional ?p=part) or b23.tv short links; resolves the public progressive MP4 itself, so try the actual BV page instead of searching for guessed mp4 links. Videos longer than 60 seconds are prepared as clickable WeChat share cards with the actual playback page, without downloading the whole video. Short files are limited to 50 MiB. For kind=voice, also accepts these public BV/b23 pages and extracts the existing audio into voice notes, limited to 10 minutes and 25 MiB input; the reusable original is an audio-only M4A file. No paid/logged-in playback. Image/file otherwise need direct files. Does not send until final reply.media_ids. No login, paid formats, DRM or general streaming playlists. For music, DEFAULT preview_seconds=0 sends the COMPLETE audio as voice notes of at most60 seconds. Keep original file cached, but never ask about sending a file; use file only when user asks. Explicit preview requests may set preview_seconds=45. For kind=file on BV pages, audio_only=true gives the full original audio M4A, false gives the original video file. Input: {url:string,kind:voice|video|image|file,preview_seconds?:integer 0..55,audio_only?:boolean}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"kind":{"type":"string","enum":["voice","video","image","file"]},"preview_seconds":{"type":"integer","minimum":0,"maximum":55},"audio_only":{"type":"boolean"}},"required":["url","kind"],"additionalProperties":false}`)})
 	if p.runtime != nil {
@@ -352,7 +352,21 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		}
 	}
 	if name == "media_recent" {
-		items, err := p.manager.recentAssets(p.trace)
+		var input struct {
+			AssetID     string `json:"asset_id"`
+			RequesterID string `json:"requester_id"`
+			Query       string `json:"query"`
+		}
+		if json.Unmarshal(args, &input) != nil || len(input.AssetID) > 128 || len(input.RequesterID) > 256 || len(input.Query) > 128 {
+			return "", errors.New("素材目录筛选参数无效")
+		}
+		if input.RequesterID == "self" {
+			input.RequesterID = p.trace.Sender
+			if input.RequesterID == "" {
+				return "[]", nil
+			}
+		}
+		items, err := p.manager.findAssets(p.trace, input.AssetID, input.RequesterID, input.Query)
 		if err != nil {
 			return "", err
 		}
@@ -418,7 +432,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 				return "", err
 			}
 			downloadBytes = int64(len(video.Data))
-			audioOnly := input.Kind == "voice" || strings.Contains(request, "音频") || strings.Contains(request, "音乐") || strings.Contains(request, "歌") || strings.Contains(request, "这首")
+			audioOnly := input.Kind == "voice"
 			if input.AudioOnly != nil {
 				audioOnly = *input.AudioOnly
 			}
@@ -438,7 +452,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 				filename = "public-audio.m4a"
 			}
 			if input.Kind == "file" {
-				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已提取完整原音轨文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "file", Data: audio, MIMEType: "audio/mp4", Filename: filename}}}, &assetOriginal{Data: audio, MIME: "audio/mp4", URL: video.PageURL, Filename: filename})
+				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已提取完整原音轨文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "file", Data: audio, MIMEType: "audio/mp4", Filename: filename}}}, &assetOriginal{Data: audio, MIME: "audio/mp4", URL: video.PageURL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: video.Title + ".mp4"}})
 			}
 			output, err := preparePublicAudioPreview(ctx, p.manager.dir, audio, preview)
 			if err != nil {
@@ -454,7 +468,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 					output.Media[i].Filename = name
 				}
 			}
-			return p.stageOutputWithAsset(ctx, output, &assetOriginal{Data: audio, MIME: "audio/mp4", URL: video.PageURL, Filename: filename})
+			return p.stageOutputWithAsset(ctx, output, &assetOriginal{Data: audio, MIME: "audio/mp4", URL: video.PageURL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: video.Title + ".mp4"}})
 		}
 		data, typ, err := mcptools.GetPublicMedia(ctx, strings.TrimSpace(input.URL), toolsLimit(input.Kind))
 		if err != nil {
@@ -552,6 +566,8 @@ func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugin
 		return "", errors.New("微信附件后台不可用")
 	}
 	items := []companion.GeneratedMedia{}
+	originals := []assetOriginal{}
+	uploads := []stagedUpload{}
 	permissions := p.manager.Config().Companion.Permissions
 	for _, media := range output.Media {
 		if !companion.MediaPermitted(permissions, media.Kind) {
@@ -604,25 +620,53 @@ func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugin
 		if original != nil {
 			item.URL = original.URL
 		}
-		if p.trace.Thread != "" && !p.trace.Preview && p.manager.Config().Companion.Permissions.Remember {
-			originalMedia := original
-			if originalMedia == nil {
-				originalMedia = &assetOriginal{Data: data, MIME: contentType, Filename: filename}
-			}
-			asset, cacheErr := p.manager.rememberAsset(p.trace, *originalMedia, media.Kind, source)
+		originalMedia := original
+		if originalMedia == nil {
+			originalMedia = &assetOriginal{Data: data, MIME: contentType, Filename: filename}
+		}
+		originals = append(originals, *originalMedia)
+		uploads = append(uploads, stagedUpload{UploadSource: source, Account: p.trace.Account, Kind: media.Kind})
+		items = append(items, item)
+	}
+	if p.trace.Thread != "" && !p.trace.Preview && p.manager.Config().Companion.Permissions.Remember && len(items) > 0 {
+		var shared mediaAsset
+		var cacheErr error
+		if original != nil {
+			shared, cacheErr = p.manager.rememberAssetFormats(p.trace, *original, uploads)
 			if cacheErr != nil {
 				return "", cacheErr
 			}
-			item.AssetID = asset.ID
-			item.Title = asset.Title
 		}
-		p.mediaMu.Lock()
+		for i := range items {
+			asset := shared
+			if original == nil {
+				asset, cacheErr = p.manager.rememberAssetFormats(p.trace, originals[i], uploads[i:i+1])
+				if cacheErr != nil {
+					return "", cacheErr
+				}
+			}
+			items[i].URL, items[i].AssetID = asset.URL, asset.ID
+			items[i].ParentAssetID, items[i].CachedMIME, items[i].Title = asset.ParentAssetID, asset.MIME, asset.Title
+		}
+	}
+	p.mediaMu.Lock()
+	for _, item := range items {
 		p.media[item.ID] = item
-		p.mediaMu.Unlock()
-		items = append(items, item)
+	}
+	p.mediaMu.Unlock()
+
+	continuous := original != nil && strings.HasPrefix(original.MIME, "audio/") && len(items) > 1
+	for _, item := range items {
+		continuous = continuous && item.Kind == "voice"
+	}
+	required := []string{}
+	if continuous {
+		for _, item := range items {
+			required = append(required, item.ID)
+		}
 	}
 	p.manager.log("plugin_output_ready")
-	result, _ := json.Marshal(map[string]any{"text": output.Text, "media": items, "instruction": "媒体已准备好，但尚未发给对方。最终 reply.media_ids 必须取本轮 media[].id，不能使用 asset_id、文件名或job_id。asset_id仅用于以后复用原文件。不要向对方解释工具过程或内部编号。"})
+	result, _ := json.Marshal(map[string]any{"required_media_ids": required, "text": output.Text, "media": items, "instruction": "媒体已准备好，但尚未发给对方。最终 reply.media_ids 必须取本轮 media[].id，不能使用 asset_id、文件名或job_id。asset_id仅用于以后复用原文件。不要向对方解释工具过程或内部编号。"})
 	return string(result), nil
 }
 func (m *Manager) toolAccess() (*permittedTools, int, error) {

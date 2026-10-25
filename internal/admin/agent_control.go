@@ -267,7 +267,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			if err := m.agent.task(t); err != nil {
 				return nil, err
 			}
-			return &companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Text: t.Checkpoint, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, MustReply: true, TaskID: t.ID, TraceID: "recover-" + t.ID, QuoteServerID: t.QuoteServerID}, nil
+			return &companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Text: t.Checkpoint, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, MustReply: true, TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText, TraceID: "recover-" + t.ID, QuoteServerID: t.QuoteServerID}, nil
 		}
 		if cfg.Companion.Quiet(now) {
 			continue
@@ -281,7 +281,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			continue
 		}
 		// Each background continuation consumes the same daily proactive budget.
-		in := companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "proactive", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), TraceID: "task-" + t.ID + "-" + time.Now().UTC().Format("20060102T150405.000000000"), TaskID: t.ID}
+		in := companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "proactive", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), TraceID: "task-" + t.ID + "-" + time.Now().UTC().Format("20060102T150405.000000000"), TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText}
 		if !contains(cfg.Companion.ProactiveThreads, t.Thread) {
 			continue
 		}

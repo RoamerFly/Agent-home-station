@@ -158,16 +158,16 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	m := &Manager{speech: speech, agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug}
 	m.surf = surf
 	if assets, err := m.loadAssets(); err == nil {
-		sources := map[string]map[string]string{}
+		sources := map[string]map[string]companion.MediaMemory{}
 		for _, a := range assets {
-			if a.Account == native.Account() && a.URL != "" {
+			if a.Account == native.Account() {
 				if sources[a.Scope] == nil {
-					sources[a.Scope] = map[string]string{}
+					sources[a.Scope] = map[string]companion.MediaMemory{}
 				}
-				sources[a.Scope][a.ID] = a.URL
+				sources[a.Scope][a.ID] = companion.MediaMemory{URL: a.URL, CachedMIME: a.MIME, ParentAssetID: a.ParentAssetID}
 			}
 		}
-		if err = memory.BackfillMediaSources(sources); err != nil {
+		if err = memory.BackfillMediaMetadata(sources); err != nil {
 			return nil, err
 		}
 	}
@@ -194,6 +194,9 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if err := m.surfHistory.importAccepted(m.journal); err != nil {
 		return nil, err
 	}
+	receiptCtx, cancelReceipts := context.WithTimeout(context.Background(), 3*time.Second)
+	m.importOwnerSurfReceipts(receiptCtx)
+	cancelReceipts()
 	if c.Enabled {
 		m.start(c)
 	}

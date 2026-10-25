@@ -64,12 +64,13 @@ func TestSurfTargetSelectionRoundtripAndDailyDisplay(t *testing.T) {
 	f.manager.config.DirectIDs = []string{"friend"}
 	f.manager.config.GroupRules = []GroupRule{{ID: "room@chatroom", Mode: "mention"}}
 	s := surfDefaults().Settings
+	s.ForceShare = true
 	s.Threads = []string{"room@chatroom", "friend"}
 	if code, _, _ := f.request("POST", "/api/surf", s, true, true); code != 200 {
 		t.Fatal(code)
 	}
 	loaded, err := loadSurf(f.dir)
-	if err != nil || len(loaded.Settings.Threads) != 2 || loaded.Settings.Threads[0] != "room@chatroom" || loaded.Settings.Threads[1] != "friend" {
+	if err != nil || !loaded.Settings.ForceShare || len(loaded.Settings.Threads) != 2 || loaded.Settings.Threads[0] != "room@chatroom" || loaded.Settings.Threads[1] != "friend" {
 		t.Fatal("selection not persisted", err)
 	}
 	for _, ids := range [][]string{{"friend", "friend"}, {"unapproved"}} {

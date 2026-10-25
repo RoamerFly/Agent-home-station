@@ -173,3 +173,16 @@ func TestSurfPrematureSilenceGetsOneOptionalInspection(t *testing.T) {
 		})
 	}
 }
+
+func TestForcedSurfRetriesModelSilenceWithoutReexecutingTools(t *testing.T) {
+	tools := &discoveryChoiceTools{}
+	m := &sequenceModel{answers: []string{`{"action":"tool","tool":"web_fetch","arguments":{"url":"https://example.org/cat"}}`, `{"action":"silent","surf_action":"bookmark","surf_item_id":"one"}`}}
+	cfg := enabledConfig()
+	cfg.Permissions.Proactive = true
+	e, _ := NewPreview(cfg, m, "role")
+	e.Tools, e.MaxToolCalls = tools, 2
+	d, err := e.Respond(context.Background(), Input{Mode: "proactive", Surf: true, SurfForceShare: true, Preview: true, Text: "冲浪分享"})
+	if err != nil || d.Reason != "surf_forced_share_unfulfilled" || d.SurfAction != "" || tools.calls != 2 || len(m.turns) != 4 {
+		t.Fatal(d, err, tools.calls, len(m.turns))
+	}
+}

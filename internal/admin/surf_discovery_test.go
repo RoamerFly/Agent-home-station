@@ -233,3 +233,39 @@ func TestSurfVerificationRejectionIsRecordedWithoutClaimingDelivery(t *testing.T
 		}
 	}
 }
+
+func TestForcedSurfFallbackRequiresReadAndStillChecksDuplicates(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		force, read, duplicate bool
+		action, reason         string
+	}{
+		{"verified", true, true, false, "reply", "surf_forced_link_fallback"},
+		{"not_read", true, false, false, "silent", "surf_forced_share_unfulfilled"},
+		{"default_off", false, true, false, "silent", "surf_forced_share_unfulfilled"},
+		{"duplicate", true, true, true, "silent", "surf_duplicate_topic"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setup(t)
+			p, _, _ := f.manager.toolAccess()
+			in := companion.Input{Thread: "filehelper", TraceID: "surf-force", Surf: true, SurfForceShare: tc.force}
+			p.SetTrace(in)
+			x := mcptools.DiscoveryItem{ID: "cat", Title: "猫咪在雪地玩耍", URL: "https://example.org/cat", Kind: "text"}
+			s := f.manager.surfHistory
+			s.data.Sessions = []surfSession{{ID: in.TraceID, Thread: in.Thread, Candidates: []mcptools.DiscoveryItem{x}}}
+			if tc.read {
+				s.data.Sessions[0].Visited = []string{x.URL}
+			}
+			if tc.duplicate {
+				s.data.Items = []surfSeen{{Item: x, Shared: map[string]time.Time{in.Thread: time.Now()}}}
+			}
+			d, err := p.ReviewSurf(context.Background(), companion.Decision{Action: "silent", Reason: "surf_forced_share_unfulfilled", SurfItemID: x.ID})
+			if err != nil || d.Action != tc.action || d.Reason != tc.reason {
+				t.Fatal(d, err)
+			}
+			if d.Action == "reply" && (len(d.Messages) != 1 || d.Messages[0] != x.Title+"\n"+x.URL) {
+				t.Fatal("invented fallback", d)
+			}
+		})
+	}
+}

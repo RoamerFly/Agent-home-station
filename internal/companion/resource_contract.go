@@ -6,10 +6,11 @@ import (
 )
 
 type ResourceNeed struct {
-	Fresh     bool
-	Kind      string
-	Required  bool
-	DirectURL bool
+	ForceShare bool
+	Fresh      bool
+	Kind       string
+	Required   bool
+	DirectURL  bool
 }
 
 func UserRequestText(text string) string {
@@ -23,6 +24,7 @@ func resourceNeed(turns []map[string]string) ResourceNeed {
 		Kind, Text string
 		Mode       string
 		Surf       bool `json:"surf"`
+		ForceShare bool `json:"surf_force_share"`
 	}
 	for _, turn := range turns {
 		if turn["role"] == "user" {
@@ -30,6 +32,7 @@ func resourceNeed(turns []map[string]string) ResourceNeed {
 				Kind, Text string
 				Mode       string
 				Surf       bool `json:"surf"`
+				ForceShare bool `json:"surf_force_share"`
 			}
 			if json.Unmarshal([]byte(turn["content"]), &v) == nil && v.Kind == "current_message" {
 				current = v
@@ -42,7 +45,7 @@ func resourceNeed(turns []map[string]string) ResourceNeed {
 	text := UserRequestText(current.Text)
 	t := strings.ToLower(text)
 	if current.Surf {
-		return ResourceNeed{Kind: "surf", Required: true}
+		return ResourceNeed{Kind: "surf", Required: true, ForceShare: current.ForceShare}
 	}
 	// Capability questions and explicit refusals must not be converted into a
 	// mandatory download by a keyword match. The model still sees the complete

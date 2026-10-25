@@ -48,7 +48,7 @@ func TestLiveDiscoveryModelPreparesMedia(t *testing.T) {
 		engine.Tools = observed
 		engine.MaxToolCalls = limit
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-		d, err := engine.Respond(ctx, companion.Input{Channel: "isolated", Account: "test", Thread: "discovery-" + kind, TraceID: "surf-isolated-" + kind, Surf: true, SurfPreferredKind: kind, Mode: "direct", Preview: true, Text: (bot.SurfTask{Topic: "轻松日常、有趣动物、音乐和好看的风景", PreferredKind: kind}).Prompt()})
+		d, err := engine.Respond(ctx, companion.Input{Channel: "isolated", Account: "test", Thread: "discovery-" + kind, TraceID: "surf-isolated-" + kind, Surf: true, SurfForceShare: os.Getenv("WECHAT_DISCOVERY_FORCE") == "1", SurfPreferredKind: kind, Mode: "direct", Preview: true, Text: (bot.SurfTask{Topic: "轻松日常、有趣动物、音乐和好看的风景", PreferredKind: kind}).Prompt()})
 		cancel()
 		media := []companion.GeneratedMedia{}
 		for _, id := range d.MediaIDs {

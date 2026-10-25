@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -124,6 +125,8 @@ func TestLiveNamedSongAudioFromVerifiedPublicPage(t *testing.T) {
 	native := &fakeTools{fakeNative: f.native}
 	f.manager.native = native
 	f.manager.config.Companion = c.Companion
+	f.manager.config.Companion.Permissions.Remember = true
+	f.manager.config.Companion.Permissions.SendFile = true
 	access, _, err := f.manager.toolAccess()
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +151,41 @@ func TestLiveNamedSongAudioFromVerifiedPublicPage(t *testing.T) {
 		}
 	}
 	report := map[string]any{"source_page": page, "error": callErr != nil, "downloaded_bytes": bytes, "media": prepared.Media, "wechat_sends": native.submits.Load(), "result": logText(result, 5000)}
+	if callErr == nil && len(prepared.Media) > 0 {
+		child := prepared.Media[0]
+		assets, err := f.manager.loadAssets()
+		if err != nil || child.ParentAssetID == "" || child.CachedMIME != "audio/mp4" {
+			t.Fatal("missing real conversion lineage", err, child)
+		}
+		found := false
+		for _, asset := range assets {
+			if asset.ID != child.ParentAssetID {
+				continue
+			}
+			probe, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov", "-show_entries", "stream=codec_type", "-of", "json", filepath.Join(f.dir, "media-assets", asset.Hash)).Output()
+			var streams struct {
+				Streams []struct {
+					Kind string `json:"codec_type"`
+				} `json:"streams"`
+			}
+			if err != nil || json.Unmarshal(probe, &streams) != nil {
+				t.Fatal("cached parent probe failed", err)
+			}
+			for _, stream := range streams.Streams {
+				found = found || stream.Kind == "video"
+			}
+			report["cached_original_video_bytes"] = asset.Bytes
+		}
+		if !found {
+			t.Fatal("audio-only cache mislabeled as original video")
+		}
+		reused, err := access.reuseAsset(ctx, child.ParentAssetID, "file")
+		if err != nil || !strings.Contains(reused, `"cached_mime":"video/mp4"`) || !strings.Contains(reused, `"network_downloads":0`) {
+			t.Fatal("original video reuse failed", err)
+		}
+		report["original_video_reused_without_download"] = true
+		report["native_staging"] = "simulated; actual public download/extraction/cache"
+	}
 	if callErr != nil {
 		report["error_reason"] = mcptools.FailureDescription(callErr)
 	}

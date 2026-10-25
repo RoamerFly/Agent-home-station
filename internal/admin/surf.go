@@ -16,6 +16,7 @@ import (
 type surfSettings struct {
 	Discovery          *discoverySettings `json:"discovery"`
 	Enabled            bool               `json:"enabled"`
+	ForceShare         bool               `json:"force_share"`
 	IntervalMinutes    int                `json:"interval_minutes"`
 	IntervalMaxMinutes int                `json:"interval_max_minutes"`
 	MaxSessionsPerDay  int                `json:"max_sessions_per_day"`
@@ -133,7 +134,7 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 		return nil, e
 	}
 	m.surf = s
-	return &bot.SurfTask{Topic: topic, Thread: thread, PreferredKind: preferred, QuietDeadline: m.config.Companion.QuietDeadline(now)}, nil
+	return &bot.SurfTask{Topic: topic, Thread: thread, PreferredKind: preferred, ForceShare: s.Settings.ForceShare, QuietDeadline: m.config.Companion.QuietDeadline(now)}, nil
 }
 
 func (m *Manager) surfAllowed(thread string) bool {

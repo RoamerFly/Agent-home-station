@@ -10,6 +10,7 @@ import (
 type SurfTask struct {
 	Topic, Thread string
 	PreferredKind string
+	ForceShare    bool
 	QuietDeadline time.Time
 }
 
@@ -43,6 +44,7 @@ func (w *Worker) tickSurf(ctx context.Context) bool {
 	}
 	input := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: task.Thread, Mode: "proactive", Surf: true, TraceID: trace, IsGroup: strings.HasSuffix(task.Thread, "@chatroom"), Text: task.Prompt()}
 	input.SurfPreferredKind = task.PreferredKind
+	input.SurfForceShare = task.ForceShare
 	w.activity(Record{Event: "surf_started", Category: "tool", ThreadID: task.Thread, MessageID: trace, Content: task.Topic, Origin: "surf", Status: "running", Reason: "autonomous_surf"})
 	if task.Thread != "" && w.allowed[task.Thread] {
 		if w.generation != nil {
