@@ -5,16 +5,17 @@ The bridge persists jobs and never automatically resubmits interrupted work.
 import argparse, base64, concurrent.futures, hashlib, hmac, json, os, secrets, threading, time, urllib.request, urllib.error, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from singing_voice import validate_singing_config
 
 def singing_profile(config_path):
     if not config_path:return None
     path=Path(config_path)
     data=path.read_bytes();config=json.loads(data)
     if not config.get('enabled',False):return None
-    if not all(isinstance(config.get(k),str) and config[k] for k in ('profile','python','runtime','reference','reference_sha256','source_revision')):raise ValueError('singing_voice_config_invalid')
-    if not Path(config['python']).is_file() or not Path(config['reference']).is_file():raise ValueError('singing_voice_resources_missing')
-    if hashlib.sha256(Path(config['reference']).read_bytes()).hexdigest()!=config['reference_sha256']:raise ValueError('singing_voice_reference_changed')
-    return {'profile':config['profile'],'config_sha256':hashlib.sha256(data).hexdigest(),'python':config['python']}
+    if not all(isinstance(config.get(k),str) and config[k] for k in ('profile','python','runtime')):raise ValueError('singing_voice_config_invalid')
+    if not Path(config['python']).is_file():raise ValueError('singing_voice_resources_missing')
+    engine=validate_singing_config(config)
+    return {'profile':config['profile'],'engine':engine,'config_sha256':hashlib.sha256(data).hexdigest(),'python':config['python']}
 
 def convert_singing_voice(config_path,expected,source,destination):
     current=singing_profile(config_path)

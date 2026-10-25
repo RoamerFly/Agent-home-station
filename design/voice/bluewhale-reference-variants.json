@@ -1,6 +1,9 @@
 {
   "target_model": "qwen-audio-3.1-tts-plus",
   "selected_variant": "C",
+  "selected_singing_engine": "rvc",
+  "selected_singing_variant": "A",
+  "singing_index_rate": 0.35,
   "preview_text": "嘿，我是蓝色大肥鱼，今天也想陪你聊点有趣的。别看我圆乎乎的，脑袋里可装着一整片海呢。累了就靠岸歇一会儿，我陪着你。想听歌的话，也可以叫我一声呀。",
   "enrollments": [
     {"code":"raw","prefix":"whaleRefA","preprocess":false,"normalize_volume":false},

@@ -1,7 +1,8 @@
 """Local singing timbre conversion. No Bailian calls or WeChat sends.
 
 Run with the managed audio Python, a private JSON config and explicit paths.
-Only the pinned Seed-VC source is imported; weights remain in the managed cache.
+Supported engines are pinned Seed-VC and an explicitly trained/pinned RVC voice.
+Weights remain in the managed cache; inference never retrains a speaker model.
 """
 import argparse
 import gc
@@ -11,6 +12,25 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
+
+
+def validate_singing_config(config):
+    engine=config.get('engine','seed-vc')
+    if engine=='rvc':
+        for name in ('rvc_python','rvc_project','rvc_model','rvc_index'):
+            if not isinstance(config.get(name),str) or not Path(config[name]).exists():raise ValueError('rvc_resource_missing')
+        for name in ('rvc_model','rvc_index'):
+            if hashlib.sha256(Path(config[name]).read_bytes()).hexdigest()!=config.get(name+'_sha256'):raise ValueError('rvc_resource_changed')
+        rate,shift=config.get('index_rate',.35),config.get('semitones',0)
+        if isinstance(rate,bool) or not isinstance(rate,(int,float)) or not 0<=rate<=1 or isinstance(shift,bool) or not isinstance(shift,int) or not -12<=shift<=12:raise ValueError('invalid_rvc_parameters')
+    elif engine=='seed-vc':
+        reference=Path(config['reference']).resolve()
+        if hashlib.sha256(reference.read_bytes()).hexdigest()!=config['reference_sha256']:raise ValueError('voice_reference_changed')
+        revision=subprocess.check_output(['git','-C',str(Path(config['runtime'])/'seed-vc'),'rev-parse','HEAD'],text=True).strip()
+        if revision!=config['source_revision']:raise ValueError('voice_runtime_revision_changed')
+    else:raise ValueError('unknown_singing_voice_engine')
+    return engine
 
 
 def mix_converted(original, vocals, converted):
@@ -34,19 +54,14 @@ def main():
     p.add_argument('--output', required=True)
     args = p.parse_args()
     config = json.loads(Path(args.config).read_text(encoding='utf-8-sig'))
+    started=time.monotonic();engine=validate_singing_config(config);timings={}
     home = Path(config['runtime']).resolve()
-    reference = Path(config['reference']).resolve()
-    if hashlib.sha256(reference.read_bytes()).hexdigest() != config['reference_sha256']:
-        raise ValueError('voice_reference_changed')
     repo = home/'seed-vc'
-    revision = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
-    if revision != config['source_revision']:
-        raise ValueError('voice_runtime_revision_changed')
     source, output = Path(args.source).resolve(), Path(args.output).resolve()
     work = output.parent/(output.stem+'-voice-work')
     work.mkdir(parents=True, exist_ok=True)
     os.environ.update(HF_HOME=str(home/'hf-cache'), HF_HUB_CACHE=str(home/'hf-cache/hub'), TORCH_HOME=str(home/'torch-cache'), HF_HUB_OFFLINE='1')
-    sys.path[:0] = [str(home/'python-libs'), str(repo)]
+    if engine=='seed-vc':sys.path[:0] = [str(home/'python-libs'), str(repo)]
     import numpy as np
     import soundfile as sf
     import torch
@@ -60,6 +75,7 @@ def main():
     if not 0 < len(original) <= rate*600:
         raise ValueError('song_duration_limit')
     waveform = torch.from_numpy(original.T.copy())
+    timings['load_and_decode']=time.monotonic()-started;separation_started=time.monotonic()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print('Separating vocals locally', flush=True)
     bundle = torchaudio.pipelines.HDEMUCS_HIGH_MUSDB_PLUS
@@ -77,7 +93,11 @@ def main():
             reference_level = block.mean(0)
             std = reference_level.std().clamp_min(1e-5)
             mean = reference_level.mean()
-            separated = model(((block-mean)/std)[None].to(device))[0].cpu()*std
+            normalized_block=(block-mean)/std
+            # Arbitrary final song lengths can violate HDemucs STFT stride
+            # assumptions. Infer a full fixed window and retain only real audio.
+            normalized_block=torch.nn.functional.pad(normalized_block,(0,chunk-normalized_block.shape[-1]))
+            separated = model(normalized_block[None].to(device))[0,...,:end-start].cpu()*std
             # DC mean belongs to the mixture, not to every source.
             separated[model.sources.index('vocals')] += mean
             fade = torch.ones(end-start)
@@ -90,6 +110,21 @@ def main():
     del model, waveform, stems, weights, separated
     gc.collect()
     if device == 'cuda': torch.cuda.empty_cache()
+    timings['separate_vocals']=time.monotonic()-separation_started
+    if engine=='rvc':
+        conversion_started=time.monotonic();converted_path=work/'rvc-vocals.wav'
+        subprocess.run([config['rvc_python'],str(Path(__file__).with_name('rvc_voice.py').resolve()),'--project',config['rvc_project'],'--model',config['rvc_model'],'--index',config['rvc_index'],'--source',str(work/'vocals.wav'),'--output',str(converted_path),'--index-rate',str(config.get('index_rate',.35)),'--semitones',str(config.get('semitones',0))],check=True,timeout=1800)
+        timings['rvc_load_and_convert']=time.monotonic()-conversion_started
+        resampled=work/'rvc-vocals-44k.wav'
+        subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-i',str(converted_path),'-ac','1','-ar',str(rate),str(resampled)],check=True,timeout=90)
+        converted,converted_rate=sf.read(resampled,dtype='float32')
+        if converted_rate!=rate or converted.ndim!=1:raise ValueError('converted_format_mismatch')
+        mixed=mix_converted(original,vocals,converted)
+        sf.write(output,mixed,rate,subtype='PCM_16')
+        timings['total']=time.monotonic()-started
+        output.with_suffix('.voice.json').write_text(json.dumps({'profile':config['profile'],'engine':'RVC','model_sha256':config['rvc_model_sha256'],'index_rate':config.get('index_rate',.35),'duration_seconds':len(mixed)/rate,'timings_seconds':timings,'bailian_calls':0},indent=2),encoding='utf-8')
+        print('RVC singing conversion complete; seconds',round(timings['total'],2),'; no messages sent.',flush=True)
+        return
     # Import after configuring all caches. Upstream's helper uses a relative
     # cache; replace only that resolver with our pinned offline cache lookup.
     os.chdir(repo)
@@ -132,6 +167,7 @@ def main():
     print('Converting singing voice locally with profile '+config['profile'], flush=True)
     # Never alter the source checkout or inherit arbitrary model/style options.
     os.chdir(repo)
+    reference=Path(config['reference']).resolve();revision=config['source_revision']
     inference.main(argparse.Namespace(source=str(work/'vocals.wav'), target=str(reference), output=str(work), diffusion_steps=30, length_adjust=1.0, inference_cfg_rate=.7, f0_condition=True, auto_f0_adjust=False, semi_tone_shift=0, checkpoint=None, config=None, fp16=device=='cuda'))
     converted_paths = list(work.glob('vc_*.wav'))
     if len(converted_paths)!=1: raise ValueError('converted_output_ambiguous')

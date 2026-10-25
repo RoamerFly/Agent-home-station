@@ -1,10 +1,23 @@
 """Synthetic mixing contracts; no model, provider, reference audio or network."""
 import unittest
+from pathlib import Path
+import tempfile
+import hashlib
 import numpy as np
-from singing_voice import mix_converted
+from singing_voice import mix_converted,validate_singing_config
 
 
 class SingingMixTests(unittest.TestCase):
+    def test_rvc_uses_trained_model_and_index_without_seed_vc_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);model=root/'voice.pth';index=root/'voice.index';model.write_bytes(b'synthetic model');index.write_bytes(b'synthetic index')
+            config=dict(engine='rvc',rvc_python=str(model),rvc_project=str(root),rvc_model=str(model),rvc_index=str(index),rvc_model_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),rvc_index_sha256=hashlib.sha256(index.read_bytes()).hexdigest(),index_rate=.35,semitones=0)
+            self.assertEqual(validate_singing_config(config),'rvc')
+            config['index_rate']=True
+            with self.assertRaisesRegex(ValueError,'parameters'):validate_singing_config(config)
+            config['index_rate']=.35;index.write_bytes(b'changed index')
+            with self.assertRaisesRegex(ValueError,'resource_changed'):validate_singing_config(config)
+
     def test_replace_vocal_preserves_accompaniment_and_duration(self):
         accompaniment=np.full((10000,2),.1,dtype=np.float32)
         vocals=np.full((10000,2),.2,dtype=np.float32)

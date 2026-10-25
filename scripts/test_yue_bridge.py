@@ -16,12 +16,12 @@ class SongWorkflowTests(unittest.TestCase):
             root=Path(tmp);reference=root/'voice.wav';reference.write_bytes(b'synthetic voice')
             python=root/'python';python.write_bytes(b'synthetic executable')
             config=root/'voice.json'
-            data=dict(enabled=True,profile='synthetic-C',python=str(python),runtime=str(root),reference=str(reference),reference_sha256=hashlib.sha256(reference.read_bytes()).hexdigest(),source_revision='synthetic')
+            data=dict(enabled=True,engine='rvc',profile='synthetic-C',python=str(python),runtime=str(root),rvc_python=str(python),rvc_project=str(root),rvc_model=str(reference),rvc_index=str(reference),rvc_model_sha256=hashlib.sha256(reference.read_bytes()).hexdigest(),rvc_index_sha256=hashlib.sha256(reference.read_bytes()).hexdigest())
             config.write_text(json.dumps(data))
             expected=singing_profile(config)
             self.assertEqual(expected['profile'],'synthetic-C')
             reference.write_bytes(b'changed reference')
-            with self.assertRaisesRegex(ValueError,'reference_changed'):singing_profile(config)
+            with self.assertRaisesRegex(ValueError,'resource_changed'):singing_profile(config)
             reference.write_bytes(b'synthetic voice')
             data['profile']='synthetic-D';config.write_text(json.dumps(data))
             with patch('yue_bridge.subprocess.run') as run,self.assertRaisesRegex(ValueError,'configuration_changed'):

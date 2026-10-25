@@ -2,6 +2,8 @@
 
 本项目通过外部托管的 [Seed-VC](https://github.com/Plachtaa/seed-vc) 进行零样本歌声转换。固定上游代码提交和模型版本见 `source-manifest.json`。上游为 GPL-3.0；不把第三方源码、模型、Python 环境和用户参考音频打入本仓库。
 
+当前用户已选择 RVC A 为默认唱歌转换引擎，见 `components/rvc/README.md`；Seed-VC 保留为可配置的备选，不在 RVC 路径同时加载。
+
 机器人调用链：YuE 创作/参考翻唱 → Hybrid Demucs 分离人声 → Seed-VC 按角色参考音频转换歌声 → 混回原伴奏 → 暂存和发送。网络下载的原唱文件不经过此转换。转换不调用百炼，也不能直接使用百炼的 TTS 音色 ID；目标是已选 C 版的本地说话音频。
 
 ## 配置与安装
