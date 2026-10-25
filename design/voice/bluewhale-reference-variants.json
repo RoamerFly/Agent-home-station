@@ -1,0 +1,14 @@
+{
+  "target_model": "qwen-audio-3.1-tts-plus",
+  "preview_text": "嘿，我是蓝色大肥鱼，今天也想陪你聊点有趣的。别看我圆乎乎的，脑袋里可装着一整片海呢。累了就靠岸歇一会儿，我陪着你。想听歌的话，也可以叫我一声呀。",
+  "enrollments": [
+    {"code":"raw","prefix":"whaleRefA","preprocess":false,"normalize_volume":false},
+    {"code":"clean","prefix":"whaleRefB","preprocess":true,"normalize_volume":true}
+  ],
+  "variants": [
+    {"code":"A","name":"原声还原","enrollment":"raw","instruction":"保持参考音色的音高、质感和自然表达，普通聊天语气，正常语速，不刻意撒娇，不唱歌。"},
+    {"code":"B","name":"清晰自然","enrollment":"clean","instruction":"保持参考音色的自然特点，清晰流畅地聊天，语速正常，不刻意撒娇，不唱歌。"},
+    {"code":"C","name":"俏皮元气","enrollment":"raw","instruction":"保持参考音色的身份与声线，像活泼可爱的鲸鱼娘和熟人聊天，笑意轻盈，有一点调皮，节奏灵动，不夹嗓子，不尖叫，不唱歌。"},
+    {"code":"D","name":"温柔陪伴","enrollment":"raw","instruction":"保持参考音色的身份与声线，语气温柔亲近，像陪朋友靠岸歇一会儿，稍从容，轻轻带笑，不低哑，不播音，不唱歌。"}
+  ]
+}
