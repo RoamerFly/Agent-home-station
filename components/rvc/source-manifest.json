@@ -1,0 +1,15 @@
+{
+  "upstream": "https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI",
+  "license": "MIT",
+  "local_distribution": "RVC1006Nvidia",
+  "source_files_sha256": {
+    "infer/modules/train/train.py": "0ef61147eedcc003ae3f2e78263494be81286c48d013556cc18c561b9142e288",
+    "infer/modules/train/preprocess.py": "989688c01e916cdd6bebab09b06f2ec98e0783368f31e685671f29b675eb656e",
+    "infer/modules/train/extract_feature_print.py": "4c4d937554096535b95c4199c13e46bf92a44889d7df1d28af8b28b103484b6e",
+    "infer/modules/vc/modules.py": "a21efdb9ebf23619b6563adbc4da01629cbb2951463ddc5e8586dccc7ade984f",
+    "infer/modules/vc/pipeline.py": "ab2318d595ba6a219b1d8d6f8d29ca4fbf3a7f6f11462b8db226f71b8b2b3d41",
+    "LICENSE": "bec61ed1eb9a3748644ddbc50303aa6978e14eeaba46822e59a006c722b52585"
+  },
+  "private_runtime": "separate Python 3.9.13 executable and standard library; existing distribution packages reused without modifying the original",
+  "training_boundary": "C voice distilled from synthetic Bailian speech; experimental, not real singing training data"
+}

@@ -1,0 +1,29 @@
+# RVC 专用声线试训
+
+上游：[RVC WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)，MIT。当前本机包为 `RVC1006Nvidia`，关键源码指纹见 `source-manifest.json`；不是根据文件夹名称推断最新版本。
+
+RVC 需要已训练的目标说话人模型，不能将百炼音色 ID 或10秒参考音频直接传入作为新歌手。已有派蒙等模型只能验证运行环境或其自身音色，不能标成角色 C。用户已授权使用百炼 C 的复刻 ID 合成不同文本，作为实验训练集。文本见 `design/voice/rvc-trial-corpus.json`，音频、模型、检索索引和训练日志全部留在忽略目录。
+
+## 隔离原则
+
+原包的 Python 标准库缺失。验证时在独立私有目录使用官方 Python 3.9.13 embeddable 的可执行文件和标准库，复用原包的 site-packages，并通过 `site.addsitedir` 执行其中的路径配置。没有往原包内覆盖 Python、升级依赖或删除任何模型。
+
+在私有 shadow 项目中复制 `infer/`、`configs/`、`i18n/`，建立独立的 `logs/` 和 `assets/weights/`。只读复用原包的 HuBERT、RMVPE 和 pretrained_v2。不要把整个 `assets/` 链接回原包：训练的 `savee` 会写入 `assets/weights/`。模型、环境和本机数据不进入 Git。
+
+## 运行入口
+
+`scripts/rvc_train_trial.py` 是显式离线试训工具，三个阶段分别执行：
+
+```text
+<音频Python> scripts/rvc_train_trial.py --python <RVC-Python> --project <shadow项目> --dataset <语料目录> --stage prepare
+<音频Python> scripts/rvc_train_trial.py --python <RVC-Python> --project <shadow项目> --dataset <语料目录> --stage train --epochs 30
+<RVC-Python> scripts/rvc_train_trial.py --python <RVC-Python> --project <shadow项目> --dataset <语料目录> --stage index
+```
+
+默认实验名 `bluewhale-C-trial`，32 kHz、v2、RMVPE、batch 4、固定语料排列；从本机 f0G32k/f0D32k 预训练模型开始。每10轮保存可试听权重。训练时只使用同时具备音频、特征和两类音高文件的条目，保留静音样本。小型试训使用精确 L2 检索索引，不把尚未训练/未添加向量的索引当作可用。
+
+`scripts/rvc_voice.py --project <shadow项目> --model <明确的pth文件> --index <明确的index文件> --source <已分离人声.wav> --output <转换人声.wav>` 负责推理，支持显式半音调整和检索比例。输出仅为人声，需与同一原文件中分离出的人声做差，再混回转换结果。不得把完整伴奏直接当作人声换声，也不能重复叠加原唱。工具不改机器人默认引擎，不向微信发送。
+
+## 质量边界
+
+合成语音可用于可行性试训，但不等于具备真实演唱的音域、力度和高音覆盖。重复一段短录音、给它变速或单纯增加训练轮数，不能宣称获得了更多真实训练数据。训练完成、音频能解码和用户认可歌声质量是不同验收项。现有 Seed-VC 后端在用户认可新结果之前保留，不自动替换。

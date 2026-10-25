@@ -1,0 +1,42 @@
+"""Convert an explicit isolated vocal track with an explicit trained RVC model.
+
+This does not create a character model from a short reference recording. It
+does not change the robot's selected engine or send messages.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+
+def main():
+    p=argparse.ArgumentParser()
+    p.add_argument('--project',required=True)
+    p.add_argument('--model',required=True)
+    p.add_argument('--index',default='')
+    p.add_argument('--source',required=True)
+    p.add_argument('--output',required=True)
+    p.add_argument('--semitones',type=int,default=0)
+    p.add_argument('--index-rate',type=float,default=.65)
+    args=p.parse_args()
+    if not -12<=args.semitones<=12 or not 0<=args.index_rate<=1:raise ValueError('invalid_conversion_parameters')
+    project=Path(args.project).resolve();model=Path(args.model).resolve();source=Path(args.source).resolve();output=Path(args.output).resolve()
+    index=str(Path(args.index).resolve()) if args.index else ''
+    if not model.is_file() or not source.is_file() or index and not Path(index).is_file():raise ValueError('conversion_resource_missing')
+    os.environ.update(weight_root=str(model.parent),index_root=str(Path(index).parent) if index else str(project/'logs'),rmvpe_root=str(project/'assets/rmvpe'))
+    os.chdir(project);sys.path.insert(0,str(project))
+    import torch
+    from scipy.io import wavfile
+    from infer.modules.vc.modules import VC
+    config=SimpleNamespace(device='cuda:0' if torch.cuda.is_available() else 'cpu',is_half=torch.cuda.is_available(),x_pad=1,x_query=6,x_center=38,x_max=41)
+    vc=VC(config);vc.get_vc(model.name)
+    status,(rate,audio)=vc.vc_single(0,str(source),args.semitones,None,'rmvpe',index,None,args.index_rate,3,0,.5,.33)
+    if rate is None or audio is None or not status.startswith('Success'):raise RuntimeError('RVC did not produce valid audio: '+status)
+    output.parent.mkdir(parents=True,exist_ok=True);wavfile.write(str(output),rate,audio)
+    output.with_suffix('.rvc.json').write_text(json.dumps({'engine':'RVC','model':model.name,'semitones':args.semitones,'index_rate':args.index_rate,'sample_rate':rate,'seconds':len(audio)/rate,'wechat_sends':0},indent=2),encoding='utf-8')
+    print('RVC conversion complete; seconds',len(audio)/rate,'no messages sent',flush=True)
+
+
+if __name__=='__main__':main()
