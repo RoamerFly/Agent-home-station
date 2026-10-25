@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -12,13 +13,14 @@ import (
 )
 
 type toolRecord struct {
-	Key     string                 `json:"key"`
-	Hash    string                 `json:"hash"`
-	Account string                 `json:"account"`
-	Thread  string                 `json:"thread"`
-	Kind    string                 `json:"kind"`
-	Status  linuxnative.ToolStatus `json:"status"`
-	Created time.Time              `json:"created"`
+	archived bool
+	Key      string                 `json:"key"`
+	Hash     string                 `json:"hash"`
+	Account  string                 `json:"account"`
+	Thread   string                 `json:"thread"`
+	Kind     string                 `json:"kind"`
+	Status   linuxnative.ToolStatus `json:"status"`
+	Created  time.Time              `json:"created"`
 }
 type stagedUpload struct {
 	linuxnative.UploadSource
@@ -60,9 +62,23 @@ func (s *toolStore) change(update func(*toolData) error) error {
 		return err
 	}
 	out, err := json.Marshal(s.data)
-	if err != nil || len(out) > 2<<20 {
+	if err != nil {
 		rollback()
 		return errors.New("发送任务记录达到保存上限")
+	}
+	for len(out) > 2<<20 {
+		if err = s.compactSends(&s.data, true); err != nil {
+			rollback()
+			return errors.New("活跃发送记录超过保存上限且无法归档，原记录保留")
+		}
+		out, err = json.Marshal(s.data)
+		if err != nil {
+			rollback()
+			return err
+		}
+	}
+	if bytes.Equal(out, b) {
+		return nil
 	}
 	if err = writePrivate(s.path, out); err != nil {
 		rollback()
@@ -81,8 +97,19 @@ func (s *toolStore) claim(record toolRecord) (toolRecord, bool, error) {
 			out = old
 			return nil
 		}
-		if len(data.Sends) >= 1000 {
-			return errors.New("发送任务达到上限，请先归档已完成任务")
+		old, exists, err := s.archived("requests", record.Key)
+		if err != nil {
+			return errors.New("原发送归档不可核验，未提交新发送")
+		}
+		if exists {
+			if old.Hash != record.Hash || old.Account != record.Account {
+				return errors.New("操作编号已用于不同内容；请先查询原操作")
+			}
+			out = old
+			return nil
+		}
+		if err := s.compactSends(data, false); err != nil {
+			return err
 		}
 		data.Sends[record.Key] = record
 		out = record
@@ -94,6 +121,15 @@ func (s *toolStore) claim(record toolRecord) (toolRecord, bool, error) {
 func (s *toolStore) update(key string, status linuxnative.ToolStatus) error {
 	return s.change(func(data *toolData) error {
 		record, ok := data.Sends[key]
+		if !ok {
+			old, exists, err := s.archived("requests", key)
+			if err != nil {
+				return errors.New("发送归档不可核验")
+			}
+			if exists && status.State == "accepted" && status.ID == old.Status.ID && status.ServerID == old.Status.ServerID && (status.ThreadID == "" || status.ThreadID == old.Thread) {
+				return nil // Already accepted, immutable historical receipt.
+			}
+		}
 		if !ok || (status.ThreadID != "" && status.ThreadID != record.Thread) {
 			return errors.New("发送任务与会话不匹配")
 		}
@@ -104,21 +140,29 @@ func (s *toolStore) update(key string, status linuxnative.ToolStatus) error {
 		return nil
 	})
 }
-func (s *toolStore) record(key, account string) (toolRecord, bool) {
+func (s *toolStore) record(key, account string) (toolRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.data.Sends[key]
-	return r, ok && r.Account == account
+	if !ok {
+		var err error
+		r, ok, err = s.archived("requests", key)
+		if err != nil {
+			return toolRecord{}, false, err
+		}
+	}
+	return r, ok && r.Account == account, nil
 }
-func (s *toolStore) byID(id, account string) (toolRecord, bool) {
+func (s *toolStore) byID(id, account string) (toolRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.data.Sends {
 		if r.Status.ID == id && r.Account == account {
-			return r, true
+			return r, true, nil
 		}
 	}
-	return toolRecord{}, false
+	r, ok, err := s.archived("ids", account+"\x00"+id)
+	return r, ok && r.Account == account && r.Status.ID == id, err
 }
 func (s *toolStore) upload(source stagedUpload) error {
 	return s.change(func(data *toolData) error {

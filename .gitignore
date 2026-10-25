@@ -42,5 +42,6 @@ key*.txt
 
 # Private history and administrator credentials.
 archive/
+send-ledger/
 admin-token
 admin-password

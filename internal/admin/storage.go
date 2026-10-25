@@ -72,6 +72,7 @@ func (m *Manager) storageStatus(ctx context.Context) (map[string]any, error) {
 		{"任务与素材索引", []string{filepath.Join(m.dir, "agent-state.json"), filepath.Join(m.dir, "tool-state.json"), filepath.Join(m.dir, "media-assets.json")}},
 		{"保留的媒体原件", []string{filepath.Join(m.dir, "media-assets")}},
 		{"只读归档", []string{filepath.Join(m.dir, "archive"), filepath.Join(m.dir, "companion", "archive")}},
+		{"历史发送回执索引", []string{filepath.Join(m.dir, "send-ledger")}},
 		{"收件与交付状态", []string{m.stateDir}},
 	}
 	areas := []storageArea{}

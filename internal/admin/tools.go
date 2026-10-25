@@ -228,9 +228,17 @@ func (s *Server) toolsStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	record, exists := s.manager.tools.byID(r.PathValue("id"), s.manager.native.Account())
+	record, exists, err := s.manager.tools.byID(r.PathValue("id"), s.manager.native.Account())
+	if err != nil {
+		fail(w, 503, "历史发送记录不可核验，请检查存储；不要重新发送")
+		return
+	}
 	if !exists {
 		fail(w, 404, "未找到本网页创建的发送任务")
+		return
+	}
+	if record.archived {
+		respond(w, 200, record.Status)
 		return
 	}
 	status, err := native.ToolSendStatus(r.Context(), record.Status.ID)
@@ -254,9 +262,17 @@ func (s *Server) toolsLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := r.URL.Query().Get("key")
-	record, exists := s.manager.tools.record(key, s.manager.native.Account())
+	record, exists, err := s.manager.tools.record(key, s.manager.native.Account())
+	if err != nil {
+		fail(w, 503, "历史发送记录不可核验，请检查存储；不要重新发送")
+		return
+	}
 	if !exists {
 		fail(w, 404, "未找到本网页创建的操作编号")
+		return
+	}
+	if record.archived {
+		respond(w, 200, record.Status)
 		return
 	}
 	status, err := native.LookupSend(r.Context(), key)
