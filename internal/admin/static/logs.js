@@ -13,6 +13,9 @@
  Object.assign(events,{music_generation_queued:'已提交本地音乐生成并安排后续交付',music_generation_finished:'本地音乐任务已结束，准备交付结果'});
  Object.assign(events,{mcp_tool_call_succeeded:'工具调用成功',mcp_tool_call_failed:'工具调用失败',plugin_output_ready:'附件已准备好'});
  Object.assign(events,{update_drain_expired_resumed:'更新等待已超时，自动恢复收件处理',catalog_sync_completed:'微信目录同步结束',channels_video_observed:'视频号实际内容观察完成',channels_video_observation_unavailable:'视频号内容尚未取得',context_compression_failed:'上下文压缩未保存'});
+ Object.assign(events,{video_content_observed:'已取得视频画面或音轨观察'});
+ Object.assign(events,{channels_video_observed:'已取得视频号画面或音轨观察'});
+ Object.assign(reasons,{video_visual_and_audio:'已取得抽样画面理解和音轨转写',video_partial_frames_and_audio:'已取得部分抽样画面理解和音轨转写',video_visual_only:'已取得抽样画面理解，音轨未转写',video_audio_only:'已取得音轨转写，画面未完成理解',video_observation_providers_unavailable:'画面理解与音轨转写均未完成，不能声称已观看',video_analysis_decoder_unavailable:'视频解码工具未安装或不可用',video_analysis_probe_failed:'视频格式或时长尚无法识别',video_frame_invalid:'本次采样没有取得有效画面，不使用上一张帧替代',video_frame_extraction_failed:'视频抽帧未完成'});
  Object.assign(reasons,{verified_video_sampled_frames:'已取得可播放视频并抽取画面',channels_source_unavailable:'视频号私有来源暂不可读取',channels_source_scope_mismatch:'视频号来源与当前账号或会话不匹配',channels_media_locator_missing:'卡片没有可读取的视频地址',channels_video_download_failed:'视频号媒体下载失败',channels_decode_key_missing:'视频无法播放，卡片也未提供解码密钥',channels_decode_key_invalid:'视频号解码密钥格式无效',channels_video_not_playable:'取得的媒体尚不能解码播放',channels_vision_failed:'视频画面理解接口调用失败'});
  Object.assign(reasons,{progress_receipt_pending:'执行前回应暂未确认，任务继续处理',tool_progress_expired_no_late_resend:'执行前回应未能确认；已过时，不补发迟到的收到，实际任务结果单独交付'});
  Object.assign(reasons,{automatic_music_followup_registered:'已保存音乐任务，完成后继续回复原会话',music_result_ready_for_delivery:'已取得生成任务状态，进入结果交付',music_execution_not_started:'未成功完成音乐执行，已告知用户结果'});

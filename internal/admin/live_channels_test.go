@@ -98,7 +98,8 @@ func TestLiveChannelsActualObservationWithoutWechatSend(t *testing.T) {
 		os.WriteFile(filepath.Join(workspace, "research/evidence/channels-transfer-diagnostic.json"), encoded, 0600)
 	}
 	observation, err := (mediaUnderstanding{manager: f.manager, provider: provider}).Analyze(ctx, msg)
-	report := map[string]any{"wechat_sends": 0, "original_card_read": true, "actual_video_observed": strings.Contains(observation, "[微信视频号实际内容观察"), "observation": observation}
+	visualObserved := strings.Contains(observation, "[微信视频号实际内容观察") && strings.Contains(observation, "[画面观察")
+	report := map[string]any{"wechat_sends": 0, "original_card_read": true, "actual_video_observed": visualObserved, "actual_audio_transcribed": strings.Contains(observation, "[实际音轨转写"), "observation": observation}
 	if err != nil {
 		report["error"] = err.Error()
 	}

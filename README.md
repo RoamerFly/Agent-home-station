@@ -1,6 +1,6 @@
 # 微信鲸鱼娘 AI 与网页管理端
 
-**当前本机测试交付：0.13.1-receipt-archive-local，管理端 http://127.0.0.1:8081/**。支持微信后台收发、角色与群规则、图片/语音理解、分享卡片和视频处理、联网/MCP、声明式插件、本地 YuE 异步歌曲生成、上下文压缩及持久化发送。生成任务独立跟踪交付与回执，时长和格式由模型选参，后台验证权限与范围。优先阅读 [使用说明](USER-GUIDE.md)、[插件配置](PLUGINS.md)、[功能与验收边界](FEATURES.md)。
+**当前本机测试交付：0.13.2-video-observation-local，管理端 http://127.0.0.1:8081/**。支持微信后台收发、角色与群规则、图片/语音理解、分享卡片和视频处理、联网/MCP、声明式插件、本地 YuE 异步歌曲生成、上下文压缩及持久化发送。生成任务独立跟踪交付与回执，时长和格式由模型选参，后台验证权限与范围。优先阅读 [使用说明](USER-GUIDE.md)、[插件配置](PLUGINS.md)、[功能与验收边界](FEATURES.md)。
 
 项目仓库：[RoamerFly/wechat-agent](https://github.com/RoamerFly/wechat-agent)（私有）。每次完成更新后执行相关验证、commit 和 push；协作更新使用独立分支和 PR。具体约定见 [AGENTS.md](AGENTS.md)。
 
