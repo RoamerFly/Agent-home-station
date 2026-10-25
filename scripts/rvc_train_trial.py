@@ -8,6 +8,15 @@ import json
 import os
 from pathlib import Path
 import random
+import shutil
+import hashlib
+
+
+def checkpoint_digest(path):
+    digest=hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda:stream.read(1<<20),b''):digest.update(block)
+    return digest.hexdigest()
 import subprocess
 
 
@@ -23,6 +32,32 @@ def training_filelist(experiment, mute, sample_rate='32k'):
     return rows
 
 
+def resume_experiment(project, previous, target):
+    """Copy mutable optimizer checkpoints; never hardlink to the selected model."""
+    for name in (previous, target):
+        if not name or not name.replace('-', '').replace('_', '').isalnum():
+            raise ValueError('invalid_experiment')
+    project = Path(project).resolve()
+    source, destination = project/'logs'/previous, project/'logs'/target
+    if source == destination or destination.exists():
+        raise ValueError('resume_target_must_be_new')
+    names = ['config.json', 'filelist.txt', 'G_2333333.pth', 'D_2333333.pth']
+    if not all((source/name).is_file() and not (source/name).is_symlink() for name in names):
+        raise ValueError('resume_checkpoint_missing')
+    staging = destination.with_name(destination.name+'.preparing')
+    staging.mkdir()
+    hashes = {}
+    for name in names:
+        original = source/name
+        hashes[name] = checkpoint_digest(original)
+        shutil.copy2(original, staging/name)
+        if checkpoint_digest(staging/name) != hashes[name] or checkpoint_digest(original) != hashes[name]:
+            raise ValueError('resume_checkpoint_changed')
+    (staging/'resume-source.json').write_text(json.dumps({'source_experiment': previous, 'copied_files_sha256': hashes, 'shared_mutable_files': False}, indent=2), encoding='utf-8')
+    staging.rename(destination)
+    return destination
+
+
 def main():
     p=argparse.ArgumentParser()
     p.add_argument('--python',required=True)
@@ -30,12 +65,17 @@ def main():
     p.add_argument('--dataset',required=True)
     p.add_argument('--experiment',default='bluewhale-C-trial')
     p.add_argument('--epochs',type=int,default=30)
+    p.add_argument('--resume-from',default='')
     p.add_argument('--stage',choices=['prepare','train','index'],required=True)
     args=p.parse_args()
     if not args.experiment.replace('-','').replace('_','').isalnum():raise ValueError('invalid_experiment')
     if not 1<=args.epochs<=200:raise ValueError('invalid_epoch_budget')
     project=Path(args.project).resolve();python=str(Path(args.python).resolve());dataset=Path(args.dataset).resolve()
-    experiment=project/'logs'/args.experiment;experiment.mkdir(parents=True,exist_ok=True)
+    experiment=project/'logs'/args.experiment
+    if args.resume_from:
+        if args.stage!='train':raise ValueError('resume_requires_training_stage')
+        experiment=resume_experiment(project,args.resume_from,args.experiment)
+    else:experiment.mkdir(parents=True,exist_ok=True)
     def run(relative,*arguments):
         subprocess.run([python,str(project/relative),*map(str,arguments)],cwd=project,check=True)
     if args.stage=='prepare':

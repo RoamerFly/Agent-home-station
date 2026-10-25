@@ -24,6 +24,9 @@ def validate_singing_config(config):
             if hashlib.sha256(Path(config[name]).read_bytes()).hexdigest()!=config.get(name+'_sha256'):raise ValueError('rvc_resource_changed')
         rate,shift=config.get('index_rate',.35),config.get('semitones',0)
         if isinstance(rate,bool) or not isinstance(rate,(int,float)) or not 0<=rate<=1 or isinstance(shift,bool) or not isinstance(shift,int) or not -12<=shift<=12:raise ValueError('invalid_rvc_parameters')
+        backing=config.get('accompaniment_semitones',0)
+        protect=config.get('protect',.33)
+        if isinstance(backing,bool) or not isinstance(backing,int) or not -12<=backing<=12 or (shift-backing)%12 or isinstance(protect,bool) or not isinstance(protect,(int,float)) or not 0<=protect<=.5:raise ValueError('incompatible_singing_key')
     elif engine=='seed-vc':
         reference=Path(config['reference']).resolve()
         if hashlib.sha256(reference.read_bytes()).hexdigest()!=config['reference_sha256']:raise ValueError('voice_reference_changed')
@@ -33,18 +36,35 @@ def validate_singing_config(config):
     return engine
 
 
-def mix_converted(original, vocals, converted):
+def mix_converted(original, vocals, converted, accompaniment=None):
     import numpy as np
     if len(converted) < len(original) - 4410 or len(converted) > len(original) + 4410:
         raise ValueError('converted_duration_mismatch')
     converted = np.pad(converted[:len(original)], (0, max(0, len(original)-len(converted))))
-    mixed = original-vocals+converted[:, None]
+    backing = original-vocals if accompaniment is None else np.asarray(accompaniment)
+    if backing.shape != original.shape:raise ValueError('accompaniment_shape_mismatch')
+    mixed = backing+converted[:, None]
     peak = float(np.abs(mixed).max())
     if not np.isfinite(mixed).all() or peak < 1e-6:
         raise ValueError('invalid_converted_audio')
     if peak > .98:
         mixed *= .98/peak
     return mixed
+
+
+def transpose_accompaniment(backing, rate, semitones, work):
+    """Shift musical key without changing tempo; never detune just the singer."""
+    import soundfile as sf
+    import numpy as np
+    if semitones==0:return backing
+    if isinstance(semitones,bool) or not isinstance(semitones,int) or not -12<=semitones<=12:raise ValueError('invalid_backing_shift')
+    source,out=Path(work)/'backing-original.wav',Path(work)/'backing-transposed.wav'
+    sf.write(source,backing,rate,subtype='FLOAT')
+    ratio=2**(semitones/12)
+    subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-i',str(source),'-af','rubberband=pitch='+str(ratio)+':tempo=1','-ar',str(rate),'-c:a','pcm_f32le',str(out)],check=True,timeout=180)
+    shifted,actual_rate=sf.read(out,dtype='float32',always_2d=True)
+    if actual_rate!=rate or shifted.shape[1]!=backing.shape[1] or abs(len(shifted)-len(backing))>rate//10 or not np.isfinite(shifted).all():raise ValueError('backing_conversion_invalid')
+    return np.pad(shifted[:len(backing)],((0,max(0,len(backing)-len(shifted))),(0,0)))
 
 
 def main():
@@ -113,16 +133,17 @@ def main():
     timings['separate_vocals']=time.monotonic()-separation_started
     if engine=='rvc':
         conversion_started=time.monotonic();converted_path=work/'rvc-vocals.wav'
-        subprocess.run([config['rvc_python'],str(Path(__file__).with_name('rvc_voice.py').resolve()),'--project',config['rvc_project'],'--model',config['rvc_model'],'--index',config['rvc_index'],'--source',str(work/'vocals.wav'),'--output',str(converted_path),'--index-rate',str(config.get('index_rate',.35)),'--semitones',str(config.get('semitones',0))],check=True,timeout=1800)
+        subprocess.run([config['rvc_python'],str(Path(__file__).with_name('rvc_voice.py').resolve()),'--project',config['rvc_project'],'--model',config['rvc_model'],'--index',config['rvc_index'],'--source',str(work/'vocals.wav'),'--output',str(converted_path),'--index-rate',str(config.get('index_rate',.35)),'--semitones',str(config.get('semitones',0)),'--protect',str(config.get('protect',.33))],check=True,timeout=1800)
         timings['rvc_load_and_convert']=time.monotonic()-conversion_started
         resampled=work/'rvc-vocals-44k.wav'
         subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-i',str(converted_path),'-ac','1','-ar',str(rate),str(resampled)],check=True,timeout=90)
         converted,converted_rate=sf.read(resampled,dtype='float32')
         if converted_rate!=rate or converted.ndim!=1:raise ValueError('converted_format_mismatch')
-        mixed=mix_converted(original,vocals,converted)
+        backing=transpose_accompaniment(original-vocals,rate,config.get('accompaniment_semitones',0),work)
+        mixed=mix_converted(original,vocals,converted,backing)
         sf.write(output,mixed,rate,subtype='PCM_16')
         timings['total']=time.monotonic()-started
-        output.with_suffix('.voice.json').write_text(json.dumps({'profile':config['profile'],'engine':'RVC','model_sha256':config['rvc_model_sha256'],'index_rate':config.get('index_rate',.35),'duration_seconds':len(mixed)/rate,'timings_seconds':timings,'bailian_calls':0},indent=2),encoding='utf-8')
+        output.with_suffix('.voice.json').write_text(json.dumps({'profile':config['profile'],'engine':'RVC','model_sha256':config['rvc_model_sha256'],'index_rate':config.get('index_rate',.35),'semitones':config.get('semitones',0),'accompaniment_semitones':config.get('accompaniment_semitones',0),'protect':config.get('protect',.33),'duration_seconds':len(mixed)/rate,'timings_seconds':timings,'bailian_calls':0},indent=2),encoding='utf-8')
         print('RVC singing conversion complete; seconds',round(timings['total'],2),'; no messages sent.',flush=True)
         return
     # Import after configuring all caches. Upstream's helper uses a relative

@@ -18,6 +18,23 @@ class SingingMixTests(unittest.TestCase):
             config['index_rate']=.35;index.write_bytes(b'changed index')
             with self.assertRaisesRegex(ValueError,'resource_changed'):validate_singing_config(config)
 
+    def test_key_changes_must_preserve_harmony(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);model=root/'voice.pth';index=root/'voice.index';model.write_bytes(b'model');index.write_bytes(b'index')
+            c=dict(engine='rvc',rvc_python=str(model),rvc_project=str(root),rvc_model=str(model),rvc_index=str(index),rvc_model_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),rvc_index_sha256=hashlib.sha256(index.read_bytes()).hexdigest())
+            for voice,backing in [(0,0),(12,0),(7,7),(-5,7)]:
+                c.update(semitones=voice,accompaniment_semitones=backing)
+                self.assertEqual(validate_singing_config(c),'rvc')
+            for voice,backing in [(7,0),(3,True),(13,1)]:
+                c.update(semitones=voice,accompaniment_semitones=backing)
+                with self.assertRaises(ValueError):validate_singing_config(c)
+
+    def test_explicit_accompaniment_does_not_reintroduce_original_singer(self):
+        original=np.full((10000,2),.3,dtype=np.float32)
+        output=mix_converted(original,np.full_like(original,.2),np.full(10000,.3),np.full_like(original,.05))
+        np.testing.assert_allclose(output,.35,atol=1e-6)
+        with self.assertRaisesRegex(ValueError,'shape_mismatch'):mix_converted(original,original,np.ones(10000),np.zeros((100,2)))
+
     def test_replace_vocal_preserves_accompaniment_and_duration(self):
         accompaniment=np.full((10000,2),.1,dtype=np.float32)
         vocals=np.full((10000,2),.2,dtype=np.float32)

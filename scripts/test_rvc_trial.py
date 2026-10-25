@@ -2,7 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
-from rvc_train_trial import training_filelist
+from rvc_train_trial import training_filelist, resume_experiment
 
 
 class RVCManifestTests(unittest.TestCase):
@@ -20,6 +20,17 @@ class RVCManifestTests(unittest.TestCase):
     def test_refuses_empty_dataset(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError,'no_complete_training_samples'):training_filelist(tmp,Path(tmp)/'mute')
+
+    def test_resume_uses_new_independent_checkpoint_copies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'logs'/'old';source.mkdir(parents=True)
+            names=['config.json','filelist.txt','G_2333333.pth','D_2333333.pth']
+            for name in names:(source/name).write_bytes(b'synthetic checkpoint')
+            target=resume_experiment(root,'old','new')
+            (target/'G_2333333.pth').write_bytes(b'new training state')
+            self.assertEqual((source/'G_2333333.pth').read_bytes(),b'synthetic checkpoint')
+            with self.assertRaisesRegex(ValueError,'must_be_new'):resume_experiment(root,'old','new')
+            with self.assertRaisesRegex(ValueError,'invalid_experiment'):resume_experiment(root,'../old','other')
 
 
 if __name__=='__main__':unittest.main()
