@@ -3,11 +3,22 @@ import unittest
 from pathlib import Path
 import tempfile
 import hashlib
+from unittest.mock import patch
 import numpy as np
 from singing_voice import mix_converted,validate_singing_config
 
 
 class SingingMixTests(unittest.TestCase):
+    def test_seed_quality_parameters_are_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ref=Path(tmp)/'ref.wav';ref.write_bytes(b'synthetic reference')
+            c=dict(engine='seed-vc',reference=str(ref),reference_sha256=hashlib.sha256(ref.read_bytes()).hexdigest(),runtime=tmp,source_revision='synthetic-revision',diffusion_steps=50,inference_cfg_rate=.9)
+            with patch('singing_voice.subprocess.check_output',return_value='synthetic-revision\n'):
+                self.assertEqual(validate_singing_config(c),'seed-vc')
+            for steps,cfg in [(True,.7),(0,.7),(101,.7),(50,float('nan')),(50,2)]:
+                c.update(diffusion_steps=steps,inference_cfg_rate=cfg)
+                with self.assertRaisesRegex(ValueError,'invalid_seed_parameters'):validate_singing_config(c)
+
     def test_rvc_uses_trained_model_and_index_without_seed_vc_reference(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);model=root/'voice.pth';index=root/'voice.index';model.write_bytes(b'synthetic model');index.write_bytes(b'synthetic index')
@@ -15,6 +26,10 @@ class SingingMixTests(unittest.TestCase):
             self.assertEqual(validate_singing_config(config),'rvc')
             config['index_rate']=True
             with self.assertRaisesRegex(ValueError,'parameters'):validate_singing_config(config)
+            config['index_rate']=.35;config['precision']='float64'
+            with self.assertRaisesRegex(ValueError,'precision'):validate_singing_config(config)
+            config['precision']='float32'
+            self.assertEqual(validate_singing_config(config),'rvc')
             config['index_rate']=.35;index.write_bytes(b'changed index')
             with self.assertRaisesRegex(ValueError,'resource_changed'):validate_singing_config(config)
 
