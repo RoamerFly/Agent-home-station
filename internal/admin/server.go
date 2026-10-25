@@ -29,6 +29,8 @@ type session struct {
 	Expires time.Time
 }
 type Server struct {
+	catalogMu     sync.Mutex
+	catalogJob    *catalogRefresh
 	manager       *Manager
 	passwordHash  [32]byte
 	origin        string
@@ -117,6 +119,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 	s.toolRoutes(mux)
 	s.libraryRoutes(mux)
 	s.catalogRoutes(mux)
+	s.catalogSyncRoutes(mux)
 	s.actionRoutes(mux)
 	s.mcpRoutes(mux)
 	s.pluginRoutes(mux)
@@ -142,6 +145,8 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 			name = "tools.js"
 		case "/assets/catalog.js":
 			name = "catalog.js"
+		case "/assets/catalog-sync.js":
+			name = "catalog-sync.js"
 		case "/assets/actions.js":
 			name = "actions.js"
 		case "/assets/mcp.js":
@@ -339,7 +344,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		native = linuxnative.Status{Connection: "unavailable"}
 	}
-	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.9.2-platform-lifecycle-local"})
+	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.9.3-catalog-sync-local"})
 }
 func (s *Server) toggle(w http.ResponseWriter, r *http.Request, enabled bool) {
 	if err := s.manager.Toggle(enabled); err != nil {
@@ -358,7 +363,7 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 	items, err := s.manager.native.Groups(r.Context(), r.URL.Query().Get("search"))
 	if err != nil {
-		fail(w, 502, "群列表暂不可用，请先确认微信已登录")
+		fail(w, 502, "群目录暂不可用，请检查登录与同步状态，或缩小搜索范围")
 		return
 	}
 	respond(w, 200, map[string]any{"items": items})

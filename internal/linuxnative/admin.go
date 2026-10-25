@@ -39,24 +39,49 @@ func (s *Sender) Groups(ctx context.Context, search string) ([]Group, error) {
 	if len(search) > 256 {
 		return nil, errors.New("group search too long")
 	}
-	var page struct {
+	type groupPage struct {
 		Items []struct {
 			ID     string `json:"id"`
 			RoomID string `json:"roomId"`
 			Name   string `json:"displayName"`
 		} `json:"items"`
+		NextCursor *string `json:"nextCursor"`
 	}
-	if err := s.readJSON(ctx, s.accountPath()+"/groups?limit=100&search="+url.QueryEscape(search), &page); err != nil {
-		return nil, err
-	}
-	out := make([]Group, 0, len(page.Items))
-	for _, g := range page.Items {
-		if g.RoomID != "" {
-			g.ID = g.RoomID
+	out := []Group{}
+	cursor := ""
+	seen := map[string]bool{}
+	ids := map[string]bool{}
+	for count := 0; count < 20; count++ {
+		var page groupPage
+		path := s.accountPath() + "/groups?limit=100&search=" + url.QueryEscape(search)
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
 		}
-		out = append(out, Group{g.ID, g.Name})
+		if err := s.readJSON(ctx, path, &page); err != nil {
+			return nil, err
+		}
+		if len(page.Items) > 100 {
+			return nil, errors.New("invalid group page")
+		}
+		for _, g := range page.Items {
+			if g.RoomID != "" {
+				g.ID = g.RoomID
+			}
+			if !ids[g.ID] {
+				out = append(out, Group{g.ID, g.Name})
+				ids[g.ID] = true
+			}
+		}
+		if page.NextCursor == nil || *page.NextCursor == "" {
+			return out, nil
+		}
+		cursor = *page.NextCursor
+		if len(cursor) > 8192 || seen[cursor] {
+			return nil, errors.New("invalid group cursor")
+		}
+		seen[cursor] = true
 	}
-	return out, nil
+	return nil, errors.New("group pagination limit; narrow the search")
 }
 
 type LoginOperation struct {
