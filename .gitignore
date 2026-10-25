@@ -39,3 +39,8 @@ design/ui-refresh-20261024/before/
 .playwright-cli/
 
 key*.txt
+
+# Private history and administrator credentials.
+archive/
+admin-token
+admin-password

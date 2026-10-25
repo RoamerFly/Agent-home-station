@@ -200,7 +200,11 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 			}
 			scope = Scope{ID: id, Channel: input.Channel, Account: input.Account, Thread: input.Thread, Messages: []Turn{}, Notes: []string{}}
 		}
-		scope = prune(scope, c, now)
+		var err error
+		scope, err = s.pruneStored(scope, c, now)
+		if err != nil {
+			return err
+		}
 		scope.LastInteraction = now
 		if c.Permissions.Remember {
 			for _, turn := range scope.Messages {
@@ -214,7 +218,10 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 				stamp = parsed
 			}
 			scope.Messages = append(scope.Messages, Turn{TraceID: input.TraceID, Role: "user", Text: boundedText(input.Text, 2048), Sender: boundedText(input.Sender, 128), SenderName: boundedText(input.SenderName, 256), SenderNameSource: input.SenderNameSource, Time: stamp})
-			scope = prune(scope, c, now)
+			scope, err = s.pruneStored(scope, c, now)
+			if err != nil {
+				return err
+			}
 		}
 		data.Scopes[id] = scope
 		return nil
@@ -246,7 +253,11 @@ func (s *Store) Accepted(input Input, text string, c Config, now time.Time) erro
 			return errors.New("character scope missing")
 		}
 		scope.Messages = append(scope.Messages, Turn{Role: "assistant", Text: boundedText(text, 2048), SenderName: c.Name, SenderNameSource: "character", Time: now})
-		data.Scopes[id] = prune(scope, c, now)
+		clean, err := s.pruneStored(scope, c, now)
+		if err != nil {
+			return err
+		}
+		data.Scopes[id] = clean
 		return nil
 	})
 }
@@ -410,6 +421,9 @@ func (s *Store) Clear(id string) error {
 		// Clearing content must not reset send claims or proactive timing.
 		scope.Messages = []Turn{}
 		scope.Notes = []string{}
+		scope.Summary = ""
+		scope.CompressedCount = 0
+		scope.SummaryUpdated = time.Time{}
 		data.Scopes[id] = scope
 		return nil
 	})
@@ -431,7 +445,11 @@ func (s *Store) Expire(c Config, now time.Time) error {
 	}
 	return s.transaction(func(data *persisted) error {
 		for id, scope := range data.Scopes {
-			data.Scopes[id] = prune(scope, c, now)
+			clean, err := s.pruneStored(scope, c, now)
+			if err != nil {
+				return err
+			}
+			data.Scopes[id] = clean
 		}
 		return nil
 	})

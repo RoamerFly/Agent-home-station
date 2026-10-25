@@ -253,7 +253,7 @@ func TestLoginRateLimitAndCredentialCreation(t *testing.T) {
 	}
 	dir := t.TempDir()
 	one, err := Password(dir, "")
-	if err != nil || len(one) < 24 {
+	if err != nil || one != "admin" {
 		t.Fatal("credential initialization failed")
 	}
 	two, err := Password(dir, "")

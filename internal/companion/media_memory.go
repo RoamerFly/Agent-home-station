@@ -82,7 +82,11 @@ func (s *Store) ObserveMedia(input Input, c Config, media MediaMemory, now time.
 		}
 		copy := media
 		scope.Messages = append(scope.Messages, Turn{Role: "assistant", Text: "[媒体附件] " + media.Title, TraceID: input.TraceID, SenderName: c.Name, SenderNameSource: "character", Time: now, Media: &copy})
-		data.Scopes[id] = prune(scope, c, now)
+		clean, err := s.pruneStored(scope, c, now)
+		if err != nil {
+			return err
+		}
+		data.Scopes[id] = clean
 		return nil
 	})
 }

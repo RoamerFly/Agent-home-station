@@ -27,7 +27,11 @@ func (s *Store) AcceptedDelivery(input Input, text, key string, c Config, now ti
 		}
 		scope.Messages = append(scope.Messages, Turn{TraceID: key, Role: "assistant", Text: boundedText(text, 2048), SenderName: c.Name, SenderNameSource: "character", Time: now})
 		scope.LastInteraction = now
-		data.Scopes[id] = prune(scope, c, now)
+		clean, err := s.pruneStored(scope, c, now)
+		if err != nil {
+			return err
+		}
+		data.Scopes[id] = clean
 		return nil
 	})
 }

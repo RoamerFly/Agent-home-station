@@ -81,6 +81,7 @@ type Manager struct {
 	surfHistory  *surfHistoryStore
 	billing      *billingStore
 	assetMu      sync.Mutex
+	storageError string
 	drainTicket  string
 	drainExpires time.Time
 	drainTimer   *time.Timer

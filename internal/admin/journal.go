@@ -25,28 +25,10 @@ func (m *Manager) loadJournal() error {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	if err != nil || len(data) > 8<<20 || json.Unmarshal(data, &m.journal) != nil || len(m.journal) > 1000 {
+	if err != nil || len(data) > 32<<20 || json.Unmarshal(data, &m.journal) != nil || len(m.journal) > 20000 {
 		return errors.New("消息活动日志不可读，未自动覆盖")
 	}
-	cutoff := time.Now().Add(-7 * 24 * time.Hour)
-	retained := make([]LogEntry, 0, len(m.journal))
-	for _, entry := range m.journal {
-		stamp, err := time.Parse(time.RFC3339Nano, entry.Time)
-		if err != nil {
-			return errors.New("消息日志时间格式无效")
-		}
-		if !stamp.Before(cutoff) {
-			retained = append(retained, entry)
-		}
-	}
-	if len(retained) != len(m.journal) {
-		m.journal = retained
-		data, _ := json.Marshal(retained)
-		if err := writePrivate(filepath.Join(m.dir, "activity.json"), data); err != nil {
-			return err
-		}
-	}
-	return nil
+	return m.pruneJournal(time.Now())
 }
 func logText(s string, limit int) string {
 	if !utf8.ValidString(s) {
@@ -118,22 +100,15 @@ func (m *Manager) record(r bot.Record) {
 		entry.Query = strings.ReplaceAll(entry.Query, m.config.APIKey, "[已隐藏密钥]")
 	}
 	m.journal = append(m.journal, entry)
-	cutoff := now.Add(-7 * 24 * time.Hour)
-	first := 0
-	for first < len(m.journal) {
-		stamp, err := time.Parse(time.RFC3339Nano, m.journal[first].Time)
-		if err != nil || !stamp.Before(cutoff) {
-			break
-		}
-		first++
-	}
-	m.journal = m.journal[first:]
-	if len(m.journal) > 1000 {
-		m.journal = m.journal[len(m.journal)-1000:]
+	if err := m.pruneJournal(now); err != nil {
+		m.storageError = "日志归档失败，活跃记录暂不裁剪，请检查目录与磁盘空间"
+	} else {
+		m.storageError = ""
 	}
 	data, err := json.Marshal(m.journal)
-	if err != nil || len(data) > 8<<20 || writePrivate(filepath.Join(m.dir, "activity.json"), data) != nil {
+	if err != nil || len(data) > 32<<20 || len(m.journal) > 20000 || writePrivate(filepath.Join(m.dir, "activity.json"), data) != nil {
 		m.status.LastEvent = "message_log_persistence_failed"
+		m.storageError = "日志未能保存，请检查目录权限、空间与活跃记录上限"
 	}
 }
 func (m *Manager) Logs() []LogEntry {

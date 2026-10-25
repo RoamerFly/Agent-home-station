@@ -11,8 +11,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,39 +49,8 @@ func randomToken() string {
 	return hex.EncodeToString(b[:])
 }
 
-// Password initializes an instance-specific bootstrap credential. It is never
-// put into image layers or printed automatically to container logs.
-func Password(dir, explicit string) (string, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", errors.New("admin directory unavailable")
-	}
-	if explicit != "" {
-		if len(explicit) < 24 {
-			return "", errors.New("admin password must have at least 24 bytes")
-		}
-		return explicit, nil
-	}
-	path := filepath.Join(dir, "admin-token")
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		token := randomToken()
-		if err := writePrivate(path, []byte(token+"\n")); err != nil {
-			return "", err
-		}
-		return token, nil
-	}
-	if err != nil || len(data) > 1024 {
-		return "", errors.New("admin credential unavailable")
-	}
-	token := strings.TrimSpace(string(data))
-	if len(token) < 24 {
-		return "", errors.New("admin credential invalid")
-	}
-	return token, nil
-}
-
 func NewHandler(manager *Manager, password, origin string) (http.Handler, error) {
-	if manager == nil || len(password) < 24 {
+	if manager == nil || !validPassword(password) {
 		return nil, errors.New("invalid admin authentication configuration")
 	}
 	if origin != "" {
@@ -97,6 +64,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, map[string]bool{"ok": true}) })
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.protected(s.logout))
+	mux.HandleFunc("POST /api/password", s.protected(s.changePassword))
 	mux.HandleFunc("GET /api/session", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		_, session, _ := s.session(r)
 		respond(w, 200, map[string]any{"authenticated": true, "csrf": session.CSRF})
@@ -114,6 +82,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 	s.companionRoutes(mux)
 	s.billingRoutes(mux)
 	s.agentRoutes(mux)
+	s.storageRoutes(mux)
 	s.speechRoutes(mux)
 	s.contextRoutes(mux)
 	s.toolRoutes(mux)
@@ -157,6 +126,8 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 			name = "proactive.js"
 		case "/assets/billing.js":
 			name = "billing.js"
+		case "/assets/storage.js":
+			name = "storage.js"
 		case "/assets/logs.js":
 			name = "logs.js"
 		case "/assets/ui.js":
@@ -185,7 +156,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 		switch name {
 		case "index.html":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		case "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "speech.js", "logs.js", "surf.js", "proactive.js", "billing.js":
+		case "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "speech.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "whale-girl.png", "whale-girl-cutout.png":
 			w.Header().Set("Content-Type", "image/png")
@@ -297,12 +268,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hash := sha256.Sum256([]byte(input.Password))
+	s.mu.Lock()
 	if subtle.ConstantTimeCompare(hash[:], s.passwordHash[:]) != 1 {
+		s.mu.Unlock()
 		fail(w, 401, "管理密码不正确")
 		return
 	}
 	id, csrf := randomToken(), randomToken()
-	s.mu.Lock()
 	for key, value := range s.sessions {
 		if time.Now().After(value.Expires) {
 			delete(s.sessions, key)
@@ -344,7 +316,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		native = linuxnative.Status{Connection: "unavailable"}
 	}
-	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.10.0-plugin-jobs-local"})
+	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.11.0-history-archive-local"})
 }
 func (s *Server) toggle(w http.ResponseWriter, r *http.Request, enabled bool) {
 	if err := s.manager.Toggle(enabled); err != nil {

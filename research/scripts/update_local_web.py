@@ -33,7 +33,10 @@ def request(route, body=None, csrf=""):
     req = urllib.request.Request(base + route, data=None if body is None else json.dumps(body).encode(), headers=headers)
     with client.open(req, timeout=10) as response:
         return json.load(response)
-login = request("/api/login", {"password": (root / "admin/admin-token").read_text().strip()})
+credential = root / "admin/admin-password"
+if not credential.exists():
+    credential = root / "admin/admin-token"
+login = request("/api/login", {"password": credential.read_text().strip()})
 try:
     ticket = request("/api/runtime/drain", {}, login["csrf"])["ticket"]
 except urllib.error.HTTPError as exc:

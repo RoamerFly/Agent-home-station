@@ -15,7 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 DENIED_DIRS = {
     "secrets", "temp", "tmp", "dist", ".agents", ".codex", ".playwright-cli",
-    "node_modules", "__pycache__", ".venv", "venv", "media-assets", "bot-state",
+    "node_modules", "__pycache__", ".venv", "venv", "media-assets", "bot-state", "archive",
 }
 DENIED_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".pem", ".key", ".p12", ".pfx", ".pyc", ".log"}
 PATTERNS = [
@@ -54,7 +54,7 @@ def private_values(private_root):
             path = base / "admin" / name
             if path.is_file():
                 collect(json.loads(path.read_text(encoding="utf-8")))
-        for name in ["admin/admin-token", "api-token", "send-api-token", "admin/provider-key"]:
+        for name in ["admin/admin-token", "admin/admin-password", "api-token", "send-api-token", "admin/provider-key"]:
             path = base / name
             if path.is_file():
                 value = path.read_text(encoding="utf-8").strip()
@@ -94,6 +94,7 @@ def main():
         bad |= path.startswith(("research/evidence/", "research/samples/", "design/ui-refresh-20261024/before/"))
         bad |= parts[-1] != ".env.example" and any(fnmatch.fnmatch(parts[-1], p) for p in [".env", ".env.*", "key*.txt", "*.session", "*.session.json"])
         bad |= Path(path).suffix.lower() in DENIED_SUFFIXES
+        bad |= parts[-1] in {"admin-token", "admin-password", "provider-key", "api-token", "send-api-token"}
         if bad:
             failures.append({"path": path, "reason": "private_or_generated_path"})
         if stage != "0" or mode == "160000":
