@@ -43,3 +43,33 @@ func TestSpeechContractsAndPrivateErrors(t *testing.T) {
 		t.Fatal(count)
 	}
 }
+
+func TestTurnExpressionPreservesConfiguredCharacterVoice(t *testing.T) {
+	var input map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input map[string]any `json:"input"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		input = body.Input
+		w.Write([]byte(`{"output":{"audio":{"url":"https://audio.example/test.wav"}}}`))
+	}))
+	defer server.Close()
+	cfg := Defaults()
+	cfg.Endpoint, cfg.Key = server.URL, "synthetic.private.key"
+	cfg.Voice, cfg.Instruction = "synthetic-character-C", "保持角色原声，俏皮元气"
+	c := New(cfg)
+	c.HTTP = server.Client()
+	if _, err := c.Synthesize(context.Background(), "合成台词", "轻声安慰朋友"); err != nil {
+		t.Fatal(err)
+	}
+	if input["voice"] != cfg.Voice || !strings.Contains(input["instruction"].(string), cfg.Instruction) || !strings.Contains(input["instruction"].(string), "轻声安慰朋友") {
+		t.Fatal("turn expression replaced identity", input)
+	}
+	if _, err := c.Synthesize(context.Background(), "合成台词", ""); err != nil {
+		t.Fatal(err)
+	}
+	if input["instruction"] != cfg.Instruction {
+		t.Fatal("default expression changed")
+	}
+}

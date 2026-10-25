@@ -1,0 +1,17 @@
+{
+  "upstream": "https://github.com/Plachtaa/seed-vc",
+  "source_revision": "51383efd921027683c89e5348211d93ff12ac2a8",
+  "source_license": "GPL-3.0",
+  "execution": "external managed checkout; model weights and user audio are not in Git",
+  "model_revisions": {
+    "Plachta/Seed-VC": "257283f9f41585055e8f858fba4fd044e5caed6e",
+    "funasr/campplus": "e4b6ede7ce16997aff4ae69fbca1f0175e2afede",
+    "lj1995/VoiceConversionWebUI": "e6d0c1a17da07c33557852f9dfa2bd44cc75737d",
+    "nvidia/bigvgan_v2_44khz_128band_512x": "95a9d1dcb12906c03edd938d77b9333d6ded7dfb",
+    "openai/whisper-small": "973afd24965f72e36ca33b3055d56a652f456b4d"
+  },
+  "vocal_separator": {
+    "upstream": "https://download.pytorch.org/torchaudio/models/hdemucs_high_trained.pt",
+    "sha256": "a004b2790d73ffeaa535db458a1a79b539dfdbafbccc31f275d07e632ebd7816"
+  }
+}

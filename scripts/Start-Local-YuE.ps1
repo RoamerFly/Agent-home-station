@@ -19,7 +19,10 @@ if(-not(Get-NetTCPConnection -State Listen -LocalPort 8188 -ErrorAction Silently
 if(-not(Get-NetTCPConnection -State Listen -LocalPort 6188 -ErrorAction SilentlyContinue)){
  if(-not(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like ('*'+(Join-Path $PSScriptRoot 'yue_bridge.py')+'*') })){
  $workflowDir=Join-Path $workspace 'components\yue2\app\workflows_api'
- Start-Process -FilePath (Get-Command python).Source -ArgumentList @(('"'+(Join-Path $PSScriptRoot 'yue_bridge.py')+'"'),'--project',('"'+$Project+'"'),'--workflow-dir',('"'+$workflowDir+'"'),'--state',('"'+$state+'"'),'--token-file',('"'+$token+'"'),'--bind',$bind) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $workspace 'temp\yue-bridge.stdout.log') -RedirectStandardError (Join-Path $workspace 'temp\yue-bridge.stderr.log') | Out-Null
+ $bridgeArguments=@(('"'+(Join-Path $PSScriptRoot 'yue_bridge.py')+'"'),'--project',('"'+$Project+'"'),'--workflow-dir',('"'+$workflowDir+'"'),'--state',('"'+$state+'"'),'--token-file',('"'+$token+'"'),'--bind',$bind)
+ $singingConfig=Join-Path $workspace 'secrets\singing-voice\config.json'
+ if(Test-Path -LiteralPath $singingConfig){$bridgeArguments+=@('--singing-voice-config',('"'+$singingConfig+'"'))}
+ Start-Process -FilePath (Get-Command python).Source -ArgumentList $bridgeArguments -WindowStyle Hidden -RedirectStandardOutput (Join-Path $workspace 'temp\yue-bridge.stdout.log') -RedirectStandardError (Join-Path $workspace 'temp\yue-bridge.stderr.log') | Out-Null
  }
 }
 if(-not $WithoutWatchdog){

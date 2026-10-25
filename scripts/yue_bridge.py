@@ -6,6 +6,24 @@ import argparse, base64, concurrent.futures, hashlib, hmac, json, os, secrets, t
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+def singing_profile(config_path):
+    if not config_path:return None
+    path=Path(config_path)
+    data=path.read_bytes();config=json.loads(data)
+    if not config.get('enabled',False):return None
+    if not all(isinstance(config.get(k),str) and config[k] for k in ('profile','python','runtime','reference','reference_sha256','source_revision')):raise ValueError('singing_voice_config_invalid')
+    if not Path(config['python']).is_file() or not Path(config['reference']).is_file():raise ValueError('singing_voice_resources_missing')
+    if hashlib.sha256(Path(config['reference']).read_bytes()).hexdigest()!=config['reference_sha256']:raise ValueError('singing_voice_reference_changed')
+    return {'profile':config['profile'],'config_sha256':hashlib.sha256(data).hexdigest(),'python':config['python']}
+
+def convert_singing_voice(config_path,expected,source,destination):
+    current=singing_profile(config_path)
+    if current is None or current['config_sha256']!=expected['config_sha256']:raise ValueError('singing_voice_configuration_changed')
+    try:subprocess.run([current['python'],str(Path(__file__).with_name('singing_voice.py')),'--config',str(config_path),'--source',str(source),'--output',str(destination)],check=True,timeout=3600)
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired):raise ValueError('singing_voice_conversion_failed') from None
+    if not destination.is_file() or destination.stat().st_size<44:raise ValueError('singing_voice_output_missing')
+    return destination
+
 def apply_song_duration(graph,seconds):
     if isinstance(seconds,bool) or not isinstance(seconds,(int,float)) or not 10<=seconds<=600:raise ValueError('invalid_duration')
     found=False
@@ -52,7 +70,7 @@ def prepare_song_graph(workflow_dir,body,jid,input_dir):
     return graph
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');p.add_argument('--singing-voice-config');args=p.parse_args()
     project=Path(args.project).resolve();state=Path(args.state).resolve();state.mkdir(parents=True,exist_ok=True)
     workflow_dir=Path(args.workflow_dir).resolve() if args.workflow_dir else project/'workflows_api'
     for filename in ('audio_yue2_music_cover.json','audio_yue2_text_to_music.json'):
@@ -66,7 +84,9 @@ def main():
     save()
     def api(route,body=None,timeout=20):
         req=urllib.request.Request('http://127.0.0.1:8188'+route,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json'})
-        with urllib.request.urlopen(req,timeout=timeout) as r:return json.load(r)
+        with urllib.request.urlopen(req,timeout=timeout) as r:
+            data=r.read()
+            return json.loads(data) if data else {}
     def run(jid,body):
         try:
             with lock:
@@ -96,7 +116,12 @@ def main():
                         adjusted=state/(jid+'-bounded.flac')
                         subprocess.run(['ffmpeg','-v','error','-y','-i',str(output),'-t',str(target),'-c:a','flac',str(adjusted)],check=True,timeout=60)
                         output=adjusted;duration=float(target)
-                    with lock:jobs[jid].update(state='completed',file=output.name,bytes=output.stat().st_size,duration_seconds=duration,requested_seconds=target);save()
+                    voice=jobs[jid].get('singing_voice')
+                    if voice:
+                        with lock:jobs[jid]['phase']='converting_voice';save()
+                        api('/free',{'unload_models':True,'free_memory':True})
+                        output=convert_singing_voice(args.singing_voice_config,voice,output,state/(jid+'-character-voice.wav'))
+                    with lock:jobs[jid].update(state='completed',phase='completed',file=output.name,bytes=output.stat().st_size,duration_seconds=duration,requested_seconds=target);save()
                     return
                 time.sleep(1)
             raise ValueError('generation_deadline')
@@ -115,7 +140,9 @@ def main():
         def do_GET(self):
             if not self.authenticated():return self.reply(401,{'error':'unauthorized'})
             if self.path=='/health':
-                try:api('/system_stats');return self.reply(200,{'ready':True,'bridge_version':2,'capabilities':['original','reference_cover','seed','reference_mode'],'cover_boundary':'ABC-conditioned resynthesis; not isolated vocal conversion or exact accompaniment preservation'})
+                try:
+                    api('/system_stats');voice=singing_profile(args.singing_voice_config)
+                    return self.reply(200,{'ready':True,'bridge_version':3,'capabilities':['original','reference_cover','seed','reference_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; no guarantee of exact source accompaniment or reference timbre'})
                 except Exception:return self.reply(200,{'ready':False})
             parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
             with lock:job=dict(jobs.get(jid,{}))
@@ -136,6 +163,8 @@ def main():
             if isinstance(target,bool) or not isinstance(target,(int,float)) or not 10<=target<=600:return self.reply(400,{'error':'invalid_duration'})
             try:mode,reference_mode,seed=song_options(body)
             except ValueError as e:return self.reply(400,{'error':str(e)})
+            try:voice=singing_profile(args.singing_voice_config)
+            except Exception:return self.reply(503,{'error':'singing_voice_not_ready'})
             # Keep a request fingerprint before assigning an optional seed. A
             # reused key cannot silently change the reference, lyrics or take.
             fingerprint=hashlib.sha256(json.dumps(body,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
@@ -158,8 +187,8 @@ def main():
                 if sum(j['state'] in ('queued','running') for j in jobs.values())>=3:return self.reply(429,{'error':'queue_full'})
                 if seed is None:seed=secrets.randbelow(2**31)
                 body['seed']=seed
-                jid=secrets.token_hex(16);jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'reference_used':mode=='cover','mode':mode,'reference_mode':reference_mode,'seed':seed,'request_hash':fingerprint,'requested_seconds':target};save();pool.submit(run,jid,body)
-            self.reply(202,{'id':jid,'state':'queued','seed':seed,'mode':mode,'reference_used':mode=='cover'})
+                jid=secrets.token_hex(16);jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'reference_used':mode=='cover','mode':mode,'reference_mode':reference_mode,'seed':seed,'request_hash':fingerprint,'requested_seconds':target,'singing_voice':{k:v for k,v in voice.items() if k!='python'} if voice else None};save();pool.submit(run,jid,body)
+            self.reply(202,{'id':jid,'state':'queued','seed':seed,'mode':mode,'reference_used':mode=='cover','singing_voice_profile':voice['profile'] if voice else None})
     # Windows/WSL access: token required on every endpoint. No remote code/API.
     ThreadingHTTPServer((args.bind,args.port),Handler).serve_forever()
 

@@ -1,14 +1,33 @@
 """Synthetic workflow tests; no ComfyUI, models, private audio or network."""
 import base64
+import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from yue_bridge import prepare_song_graph, song_options
+from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
 class SongWorkflowTests(unittest.TestCase):
+    def test_fixed_voice_reference_and_queued_configuration_are_pinned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);reference=root/'voice.wav';reference.write_bytes(b'synthetic voice')
+            python=root/'python';python.write_bytes(b'synthetic executable')
+            config=root/'voice.json'
+            data=dict(enabled=True,profile='synthetic-C',python=str(python),runtime=str(root),reference=str(reference),reference_sha256=hashlib.sha256(reference.read_bytes()).hexdigest(),source_revision='synthetic')
+            config.write_text(json.dumps(data))
+            expected=singing_profile(config)
+            self.assertEqual(expected['profile'],'synthetic-C')
+            reference.write_bytes(b'changed reference')
+            with self.assertRaisesRegex(ValueError,'reference_changed'):singing_profile(config)
+            reference.write_bytes(b'synthetic voice')
+            data['profile']='synthetic-D';config.write_text(json.dumps(data))
+            with patch('yue_bridge.subprocess.run') as run,self.assertRaisesRegex(ValueError,'configuration_changed'):
+                convert_singing_voice(config,expected,root/'source.wav',root/'out.wav')
+            run.assert_not_called()
+
     def body(self):
         return dict(title='合成测试',mode='original',style='soft female folk',lyrics='[Verse]\n合成歌词',seed=0,duration_seconds=10)
 

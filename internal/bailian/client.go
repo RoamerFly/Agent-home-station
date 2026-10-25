@@ -115,8 +115,13 @@ func (c *Client) Synthesize(ctx context.Context, text, instruction string) (stri
 	if strings.TrimSpace(text) == "" || len([]rune(text)) > 2000 {
 		return "", errors.New("合成文字须为1–2000字符")
 	}
-	if instruction == "" {
+	if len(instruction) > 1500 {
+		return "", errors.New("本次语气指令过长")
+	}
+	if instruction == "" || instruction == c.Config.Instruction {
 		instruction = c.Config.Instruction
+	} else if c.Config.Instruction != "" {
+		instruction = c.Config.Instruction + "\n本次表达要求（保持上述角色声线，只调整语气与节奏）：" + instruction
 	}
 	out, e := c.request(ctx, "/api/v1/services/audio/tts/SpeechSynthesizer", map[string]any{"model": c.Config.TTSModel, "input": map[string]any{"text": text, "voice": c.Config.Voice, "format": "wav", "sample_rate": 24000, "instruction": instruction}})
 	if e != nil {

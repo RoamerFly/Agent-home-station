@@ -18,7 +18,7 @@
 
 ## 能力边界
 
-本次能力是**说话音色设计与复用**。百炼声音设计 ID 绑定 TTS 模型；当前 YuE 参考翻唱链路没有接入该 TTS 音色 ID，旋律参考也不等于固定歌声音色。用户选中候选后，才能设置对应的说话声音；若要用同一角色声线演唱，还需验证并接入支持目标声线的歌声转换或定制歌声服务。不能把 TTS 试听当作已经完成固定音色演唱。
+百炼声音设计与复刻 ID 绑定 TTS 模型，不能直接传给 YuE。说话复用百炼 ID；固定歌声通过独立的本地参考音频转换模块实现，旋律参考本身不等于固定歌声音色。TTS 试听、歌声转换执行、微信接受回执和用户认可音质需要分别验证。
 
 官方参考：[声音设计 API](https://help.aliyun.com/zh/model-studio/voice-design-api-references)、[声音设计说明](https://help.aliyun.com/zh/model-studio/voice-design-user-guide)、[语音合成](https://help.aliyun.com/zh/model-studio/non-realtime-tts-user-guide)。
 
@@ -32,4 +32,6 @@
 
 此辅助程序不修改当前机器人音色、不向微信发送、不更新 YuE 演唱配置。用户选定前只交付试听。复刻质量与原样本、模型表现和表达指令有关，不能保证与参考完全相同。接口规范见[百炼声音复刻 API](https://help.aliyun.com/zh/model-studio/voice-clone-design-http-api)。
 
-用户已选定参考音频复刻方案 **C「俏皮元气」**，记录在 `selected_variant`。它使用 `raw` 复刻音色与 C 的表达指令。实际服务端音色 ID 只从本机私有登记文件解析，并通过管理端语音配置接口保存，不写入仓库。此选择适用于日常说话；不表示 YuE 已支持该固定歌声音色。
+用户已选定参考音频复刻方案 **C「俏皮元气」**，记录在 `selected_variant`。它使用 `raw` 复刻音色与 C 的表达指令。实际服务端音色 ID 只从本机私有登记文件解析，并通过管理端语音配置接口保存，不写入仓库。C 的试听音频同时作为本地歌声转换参考；YuE 生成器本身不接收该 TTS ID。
+
+后续已接入本地歌声转换模块，见 `components/seed-vc/README.md`。普通说话仍复用百炼音色 ID；临时表达指令叠加在角色默认设定之后，不替换默认设定。唱歌使用保存的 C 音频作为本地参考，不将 TTS ID 当作 YuE 歌手参数。

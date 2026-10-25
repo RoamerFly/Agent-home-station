@@ -79,10 +79,11 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 }
 
 type yueHealth struct {
-	BridgeVersion int    `json:"bridge_version"`
-	State         string `json:"state"`
-	Message       string `json:"message"`
-	Ready         bool   `json:"ready"`
+	SingingVoiceProfile string `json:"singing_voice_profile,omitempty"`
+	BridgeVersion       int    `json:"bridge_version"`
+	State               string `json:"state"`
+	Message             string `json:"message"`
+	Ready               bool   `json:"ready"`
 }
 
 func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
@@ -106,8 +107,9 @@ func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 		return yueHealth{State: "bridge_unavailable", Message: err.Error()}
 	}
 	var reply struct {
-		Ready   bool `json:"ready"`
-		Version int  `json:"bridge_version"`
+		Ready               bool   `json:"ready"`
+		Version             int    `json:"bridge_version"`
+		SingingVoiceProfile string `json:"singing_voice_profile"`
 	}
 	if json.Unmarshal(b, &reply) != nil {
 		return yueHealth{State: "invalid_health", Message: "YuE桥接健康响应无效"}
@@ -115,7 +117,11 @@ func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 	if !reply.Ready {
 		return yueHealth{State: "backend_unavailable", Message: "YuE桥接在线，ComfyUI生成后端尚未就绪；未提交任务"}
 	}
-	return yueHealth{BridgeVersion: reply.Version, State: "ready", Message: "YuE桥接与ComfyUI生成后端均在线", Ready: true}
+	message := "YuE桥接与ComfyUI生成后端均在线"
+	if reply.SingingVoiceProfile != "" {
+		message += "；本地固定歌声已启用：" + reply.SingingVoiceProfile
+	}
+	return yueHealth{BridgeVersion: reply.Version, SingingVoiceProfile: reply.SingingVoiceProfile, State: "ready", Message: message, Ready: true}
 }
 func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	var in struct {
