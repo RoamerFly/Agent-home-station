@@ -15,8 +15,11 @@ def apply_song_duration(graph,seconds):
     if not found:raise ValueError('duration_control_missing')
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');args=p.parse_args()
     project=Path(args.project).resolve();state=Path(args.state).resolve();state.mkdir(parents=True,exist_ok=True)
+    workflow_dir=Path(args.workflow_dir).resolve() if args.workflow_dir else project/'workflows_api'
+    for filename in ('audio_yue2_music_cover.json','audio_yue2_text_to_music.json'):
+        if not (workflow_dir/filename).is_file():raise ValueError('workflow_missing: '+filename)
     token=Path(args.token_file).read_text().strip();lock=threading.RLock();pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
     db=state/'jobs.json';jobs=json.loads(db.read_text()) if db.exists() else {}
     def save():
@@ -33,7 +36,7 @@ def main():
                 if jobs[jid]['state']=='cancelled':return
                 jobs[jid]['state']='running';save()
             reference=body.get('reference_base64','');filename='audio_yue2_music_cover.json' if reference else 'audio_yue2_text_to_music.json'
-            graph=json.loads((project/'workflows_api'/filename).read_text(encoding='utf-8'))
+            graph=json.loads((workflow_dir/filename).read_text(encoding='utf-8'))
             target=body.get('duration_seconds',60)
             apply_song_duration(graph,target)
             style=body['style']+f'; complete short song within {target} seconds, brief intro and a finished ending'

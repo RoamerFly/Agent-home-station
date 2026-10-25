@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
 	"wechat-bot/internal/loginwire"
 	"wechat-bot/internal/mmtls"
 	"wechat-bot/internal/sae08"
+	"wechat-bot/internal/testfixtures"
 )
 
 func syntheticFingerprint() FingerprintInput {
@@ -19,11 +19,7 @@ func syntheticFingerprint() FingerprintInput {
 
 func frozenFingerprintCipher(t *testing.T) *sae08.Cipher {
 	t.Helper()
-	b, err := os.ReadFile("../../research/samples/08sae.dat.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := sae08.ParsePinned(b)
+	c, err := sae08.Parse(testfixtures.SAETables())
 	if err != nil {
 		t.Fatal(err)
 	}

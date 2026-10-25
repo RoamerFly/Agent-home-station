@@ -1,0 +1,196 @@
+{
+  "10": {
+    "inputs": {
+      "filename_prefix": "audio/yue2_cover",
+      "format": "flac",
+      "audio": [
+        "33:9",
+        0
+      ]
+    },
+    "class_type": "SaveAudioAdvanced",
+    "_meta": {
+      "title": "保存音频（高级）"
+    }
+  },
+  "45": {
+    "inputs": {
+      "audio": "陈奕迅 - 十年.mp3"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "33:15": {
+    "inputs": {
+      "ckpt_name": "yue2_3b_int8_convrot.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Checkpoint加载器（简易）"
+    }
+  },
+  "33:25": {
+    "inputs": {
+      "style": "cheerful tropical calypso-pop cover, bright steelpan, syncopated acoustic guitar, warm electric bass, congas, shakers and light brass accents, sunny affectionate fruit-song mood with a catchy familiar pop shape, clear expressive Mandarin lead vocal and restrained group responses; follow the supplied ABC structure and melody closely, preserve the complete song form and instrumental gaps, sing the supplied Mandarin lyrics exactly without adding or omitting words, approximately one Chinese-character syllable per new Vocal Melody note attack, keep all repeated chorus blocks as written, 122 BPM",
+      "lyrics": "如果那块石头没有裂开\n我不会知道 我是谁\n怎么敢低头\n也不过是顽石\n如果对于天庭没有不服\n大闹天宫像游戏\n成千上万个天兵\n总有一个猴要出头\n金箍既然不能挣脱\n何不在取经的时候\n一路降魔 一路西游\n\n五百年前\n我压五行山 我不曾低头\n我还是那猴王\n等待一位取经人到来\n走过漫漫西行的风雨\n取经之后\n我成斗战佛 回首望来路\n原来那些磨难\n都化作今日佛前的金光\n顽猴最后终将修成正果\n\n金箍既然不能挣脱\n何不在取经的时候\n一路降魔 一路西游\n\n五百年前\n我压五行山 我不曾低头\n我还是那猴王\n等待一位取经人到来\n走过漫漫西行的风雨\n取经之后\n我成斗战佛 回首望来路\n原来那些磨难\n都化作今日佛前的金光\n顽猴最后终将修成正果\n\n直到和师父同行十万里\n才明白我的拳头\n不是为闹而挥\n也为苍生而挥\n",
+      "abc": [
+        "33:44",
+        0
+      ],
+      "seed": [
+        "33:34",
+        0
+      ],
+      "mode": "melody",
+      "max_duration": 600,
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 100,
+      "repetition_penalty": 1.2,
+      "cfg_scale": 1,
+      "clip": [
+        "33:15",
+        1
+      ]
+    },
+    "class_type": "YuE2GenerateMusic",
+    "_meta": {
+      "title": "YuE2 Generate Music"
+    }
+  },
+  "33:18": {
+    "inputs": {
+      "conditioning": [
+        "33:25",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "条件零化"
+    }
+  },
+  "33:23": {
+    "inputs": {
+      "source": [
+        "33:25",
+        1
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "预览任意"
+    }
+  },
+  "33:8": {
+    "inputs": {
+      "seed": [
+        "33:34",
+        0
+      ],
+      "steps": 32,
+      "cfg": 1,
+      "sampler_name": "dpm_2",
+      "scheduler": "sgm_uniform",
+      "denoise": 1,
+      "model": [
+        "33:15",
+        0
+      ],
+      "positive": [
+        "33:25",
+        0
+      ],
+      "negative": [
+        "33:18",
+        0
+      ],
+      "latent_image": [
+        "33:5",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "33:5": {
+    "inputs": {
+      "seconds": [
+        "33:25",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyYuE2LatentAudio",
+    "_meta": {
+      "title": "Empty YuE2 Latent Audio"
+    }
+  },
+  "33:9": {
+    "inputs": {
+      "samples": [
+        "33:8",
+        0
+      ],
+      "vae": [
+        "33:15",
+        2
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "VAE解码（音频）"
+    }
+  },
+  "33:34": {
+    "inputs": {
+      "seed": 82125779460717
+    },
+    "class_type": "SeedNode",
+    "_meta": {
+      "title": "种子"
+    }
+  },
+  "33:41": {
+    "inputs": {
+      "mode": "melody",
+      "audio_encoder": [
+        "33:43",
+        0
+      ],
+      "audio": [
+        "45",
+        0
+      ]
+    },
+    "class_type": "SheetSage2AudioToABC",
+    "_meta": {
+      "title": "SheetSage2 Audio to ABC"
+    }
+  },
+  "33:43": {
+    "inputs": {
+      "audio_encoder_name": "sheetsage2_bf16.safetensors"
+    },
+    "class_type": "AudioEncoderLoader",
+    "_meta": {
+      "title": "加载音频编码器"
+    }
+  },
+  "33:44": {
+    "inputs": {
+      "source": [
+        "33:41",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "预览任意"
+    }
+  }
+}

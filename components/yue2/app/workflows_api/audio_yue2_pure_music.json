@@ -1,0 +1,522 @@
+{
+  "43": {
+    "inputs": {
+      "filename_prefix": "audio/yue2_pure",
+      "audio": [
+        "62:60",
+        0
+      ]
+    },
+    "class_type": "SaveAudio",
+    "_meta": {
+      "title": "保存音频"
+    }
+  },
+  "33:15": {
+    "inputs": {
+      "ckpt_name": "yue2_3b_int8_convrot.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Checkpoint加载器（简易）"
+    }
+  },
+  "33:24": {
+    "inputs": {
+      "style": [
+        "33:36",
+        0
+      ],
+      "lyrics": [
+        "33:37",
+        0
+      ],
+      "seed": [
+        "33:34",
+        0
+      ],
+      "mode": "full",
+      "max_abc_tokens": 8192,
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 30,
+      "repetition_penalty": 1.005,
+      "penalty_window": 100,
+      "clip": [
+        "33:15",
+        1
+      ]
+    },
+    "class_type": "YuE2GenerateABC",
+    "_meta": {
+      "title": "YuE2 Generate ABC"
+    }
+  },
+  "33:14": {
+    "inputs": {
+      "source": [
+        "33:30",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "预览任意"
+    }
+  },
+  "33:30": {
+    "inputs": {
+      "switch": [
+        "33:31",
+        0
+      ],
+      "on_false": [
+        "33:32",
+        0
+      ],
+      "on_true": [
+        "33:24",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "切换"
+    }
+  },
+  "33:32": {
+    "inputs": {
+      "value": ""
+    },
+    "class_type": "PrimitiveString",
+    "_meta": {
+      "title": "Text (Empty ABC)"
+    }
+  },
+  "33:25": {
+    "inputs": {
+      "style": [
+        "33:36",
+        0
+      ],
+      "lyrics": [
+        "33:37",
+        0
+      ],
+      "abc": [
+        "33:14",
+        0
+      ],
+      "seed": [
+        "33:34",
+        0
+      ],
+      "mode": "full",
+      "max_duration": 600,
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 100,
+      "repetition_penalty": 1.2,
+      "cfg_scale": 1,
+      "clip": [
+        "33:15",
+        1
+      ]
+    },
+    "class_type": "YuE2GenerateMusic",
+    "_meta": {
+      "title": "YuE2 Generate Music"
+    }
+  },
+  "33:31": {
+    "inputs": {
+      "value": true
+    },
+    "class_type": "PrimitiveBoolean",
+    "_meta": {
+      "title": "Boolean (ABC planning)"
+    }
+  },
+  "33:18": {
+    "inputs": {
+      "conditioning": [
+        "33:25",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "条件零化"
+    }
+  },
+  "33:5": {
+    "inputs": {
+      "seconds": [
+        "33:25",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyYuE2LatentAudio",
+    "_meta": {
+      "title": "Empty YuE2 Latent Audio"
+    }
+  },
+  "33:9": {
+    "inputs": {
+      "samples": [
+        "33:8",
+        0
+      ],
+      "vae": [
+        "33:15",
+        2
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "VAE解码（音频）"
+    }
+  },
+  "33:34": {
+    "inputs": {
+      "seed": 2
+    },
+    "class_type": "SeedNode",
+    "_meta": {
+      "title": "种子"
+    }
+  },
+  "33:36": {
+    "inputs": {
+      "value": "Joyful summer instrumental, piano-led cinematic music, no vocals, no drums, no percussion. Bright and warm piano melody with lively rhythmic chords, gentle bass, soft acoustic guitar and airy ambient textures. Around 105 BPM, flowing and rhythmic yet calm and elegant. Sunny, carefree, refreshing and slightly nostalgic, like a peaceful summer afternoon by the sea. Warm cinematic atmosphere, natural dynamics, spacious and polished production."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Text (Style)"
+    }
+  },
+  "33:37": {
+    "inputs": {
+      "value": ""
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Text (Lyrics)"
+    }
+  },
+  "33:23": {
+    "inputs": {
+      "source": [
+        "33:25",
+        1
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "预览任意"
+    }
+  },
+  "33:8": {
+    "inputs": {
+      "seed": [
+        "33:34",
+        0
+      ],
+      "steps": 32,
+      "cfg": 1,
+      "sampler_name": "dpm_2",
+      "scheduler": "sgm_uniform",
+      "denoise": 1,
+      "model": [
+        "33:15",
+        0
+      ],
+      "positive": [
+        "33:25",
+        0
+      ],
+      "negative": [
+        "33:18",
+        0
+      ],
+      "latent_image": [
+        "33:5",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "45:41": {
+    "inputs": {
+      "chunk_fade_shape": "half_sine",
+      "chunk_length": 16,
+      "chunk_overlap": 0.1,
+      "audio": [
+        "33:9",
+        0
+      ]
+    },
+    "class_type": "AudioSeparation",
+    "_meta": {
+      "title": "AudioSeparation"
+    }
+  },
+  "45:42": {
+    "inputs": {
+      "method": "add",
+      "audio_1": [
+        "45:44",
+        0
+      ],
+      "audio_2": [
+        "45:41",
+        2
+      ]
+    },
+    "class_type": "AudioCombine",
+    "_meta": {
+      "title": "AudioCombine"
+    }
+  },
+  "45:44": {
+    "inputs": {
+      "method": "add",
+      "audio_1": [
+        "45:41",
+        0
+      ],
+      "audio_2": [
+        "45:41",
+        1
+      ]
+    },
+    "class_type": "AudioCombine",
+    "_meta": {
+      "title": "AudioCombine"
+    }
+  },
+  "57:46": {
+    "inputs": {
+      "ckpt_name": "yue2_3b_int8_convrot.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Checkpoint加载器（简易）"
+    }
+  },
+  "57:47": {
+    "inputs": {
+      "style": "Joyful summer instrumental, piano-led cinematic music, no vocals, no drums, no percussion. Bright and warm piano melody with lively rhythmic chords, gentle bass, soft acoustic guitar and airy ambient textures. Around 105 BPM, flowing and rhythmic yet calm and elegant. Sunny, carefree, refreshing and slightly nostalgic, like a peaceful summer afternoon by the sea. Warm cinematic atmosphere, natural dynamics, spacious and polished production.",
+      "lyrics": "",
+      "abc": [
+        "57:56",
+        0
+      ],
+      "seed": [
+        "57:53",
+        0
+      ],
+      "mode": "melody",
+      "max_duration": 600,
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 100,
+      "repetition_penalty": 1.2,
+      "cfg_scale": 1,
+      "clip": [
+        "57:46",
+        1
+      ]
+    },
+    "class_type": "YuE2GenerateMusic",
+    "_meta": {
+      "title": "YuE2 Generate Music"
+    }
+  },
+  "57:48": {
+    "inputs": {
+      "conditioning": [
+        "57:47",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "条件零化"
+    }
+  },
+  "57:49": {
+    "inputs": {
+      "source": [
+        "57:47",
+        1
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "预览任意"
+    }
+  },
+  "57:50": {
+    "inputs": {
+      "seed": [
+        "57:53",
+        0
+      ],
+      "steps": 32,
+      "cfg": 1,
+      "sampler_name": "dpm_2",
+      "scheduler": "sgm_uniform",
+      "denoise": 1,
+      "model": [
+        "57:46",
+        0
+      ],
+      "positive": [
+        "57:47",
+        0
+      ],
+      "negative": [
+        "57:48",
+        0
+      ],
+      "latent_image": [
+        "57:51",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "57:51": {
+    "inputs": {
+      "seconds": [
+        "57:47",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyYuE2LatentAudio",
+    "_meta": {
+      "title": "Empty YuE2 Latent Audio"
+    }
+  },
+  "57:52": {
+    "inputs": {
+      "samples": [
+        "57:50",
+        0
+      ],
+      "vae": [
+        "57:46",
+        2
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "VAE解码（音频）"
+    }
+  },
+  "57:53": {
+    "inputs": {
+      "seed": 720749676772624
+    },
+    "class_type": "SeedNode",
+    "_meta": {
+      "title": "种子"
+    }
+  },
+  "57:54": {
+    "inputs": {
+      "mode": "melody",
+      "audio_encoder": [
+        "57:55",
+        0
+      ],
+      "audio": [
+        "45:42",
+        0
+      ]
+    },
+    "class_type": "SheetSage2AudioToABC",
+    "_meta": {
+      "title": "SheetSage2 Audio to ABC"
+    }
+  },
+  "57:55": {
+    "inputs": {
+      "audio_encoder_name": "sheetsage2_bf16.safetensors"
+    },
+    "class_type": "AudioEncoderLoader",
+    "_meta": {
+      "title": "加载音频编码器"
+    }
+  },
+  "57:56": {
+    "inputs": {
+      "source": [
+        "57:54",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "预览任意"
+    }
+  },
+  "62:59": {
+    "inputs": {
+      "chunk_fade_shape": "half_sine",
+      "chunk_length": 16,
+      "chunk_overlap": 0.1,
+      "audio": [
+        "57:52",
+        0
+      ]
+    },
+    "class_type": "AudioSeparation",
+    "_meta": {
+      "title": "AudioSeparation"
+    }
+  },
+  "62:60": {
+    "inputs": {
+      "method": "add",
+      "audio_1": [
+        "62:61",
+        0
+      ],
+      "audio_2": [
+        "62:59",
+        2
+      ]
+    },
+    "class_type": "AudioCombine",
+    "_meta": {
+      "title": "AudioCombine"
+    }
+  },
+  "62:61": {
+    "inputs": {
+      "method": "add",
+      "audio_1": [
+        "62:59",
+        0
+      ],
+      "audio_2": [
+        "62:59",
+        1
+      ]
+    },
+    "class_type": "AudioCombine",
+    "_meta": {
+      "title": "AudioCombine"
+    }
+  }
+}

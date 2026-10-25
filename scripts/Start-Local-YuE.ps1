@@ -14,6 +14,7 @@ if(-not(Get-NetTCPConnection -State Listen -LocalPort 8188 -ErrorAction Silently
  Start-Process -FilePath $python -ArgumentList @('-s',('"'+$main+'"'),'--listen','127.0.0.1','--port','8188','--lowvram','--disable-auto-launch','--output-directory',('"'+$output+'"')) -WorkingDirectory (Split-Path $main -Parent) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $workspace 'temp\yue-comfy.stdout.log') -RedirectStandardError (Join-Path $workspace 'temp\yue-comfy.stderr.log') | Out-Null
 }
 if(-not(Get-NetTCPConnection -State Listen -LocalPort 6188 -ErrorAction SilentlyContinue)){
- Start-Process -FilePath (Get-Command python).Source -ArgumentList @(('"'+(Join-Path $PSScriptRoot 'yue_bridge.py')+'"'),'--project',('"'+$Project+'"'),'--state',('"'+$state+'"'),'--token-file',('"'+$token+'"'),'--bind',$bind) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $workspace 'temp\yue-bridge.stdout.log') -RedirectStandardError (Join-Path $workspace 'temp\yue-bridge.stderr.log') | Out-Null
+ $workflowDir=Join-Path $workspace 'components\yue2\app\workflows_api'
+ Start-Process -FilePath (Get-Command python).Source -ArgumentList @(('"'+(Join-Path $PSScriptRoot 'yue_bridge.py')+'"'),'--project',('"'+$Project+'"'),'--workflow-dir',('"'+$workflowDir+'"'),'--state',('"'+$state+'"'),'--token-file',('"'+$token+'"'),'--bind',$bind) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $workspace 'temp\yue-bridge.stdout.log') -RedirectStandardError (Join-Path $workspace 'temp\yue-bridge.stderr.log') | Out-Null
 }
 Write-Output ('本地YuE桥接启动中： http://'+$bind+':6188；原有服务不会重复启动。')

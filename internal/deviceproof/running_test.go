@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/sae08"
+	"wechat-bot/internal/testfixtures"
 	"wechat-bot/internal/v08"
 )
 
@@ -84,11 +85,7 @@ func TestRunningClockSemantics(t *testing.T) {
 
 func runningCipher(t *testing.T) *sae08.Cipher {
 	t.Helper()
-	raw, err := os.ReadFile("../../research/samples/08sae.dat.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cipher, err := sae08.ParsePinned(raw)
+	cipher, err := sae08.Parse(testfixtures.SAETables())
 	if err != nil {
 		t.Fatal(err)
 	}

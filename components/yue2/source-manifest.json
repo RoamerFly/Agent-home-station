@@ -1,0 +1,130 @@
+{
+  "component": "yue2-application",
+  "source_url": "git@gitee.com:yuziyue/yue2.git",
+  "base_commit": "63e628e0cf970afe618930932523bb46b3e59992",
+  "local_changes_preserved": true,
+  "license_file_present": false,
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "74e238f442ed34ed6a6aeac70727262abf59ce576bad7ed20146e4bdddf73c4f",
+      "source_sha256": "a4a1732b29e21b926a6626c340125595746b22af7d03feeedefa9d49d36766a7",
+      "bytes": 663
+    },
+    {
+      "path": "comfyui_service.py",
+      "sha256": "0e53165638251dc84e181babbb0f7fe0637e653d1ffad0bbb619c8dd56628732",
+      "source_sha256": "0e53165638251dc84e181babbb0f7fe0637e653d1ffad0bbb619c8dd56628732",
+      "bytes": 28489
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "58b92675fd92567c404d067f05e907188a364cba7958f47c66fd13891e5d8413",
+      "source_sha256": "58b92675fd92567c404d067f05e907188a364cba7958f47c66fd13891e5d8413",
+      "bytes": 29
+    },
+    {
+      "path": "start.bat",
+      "sha256": "b44808bfd08ac30169dddb0c20ac67b722033e86722b446c82eb0f4809dac249",
+      "source_sha256": "b44808bfd08ac30169dddb0c20ac67b722033e86722b446c82eb0f4809dac249",
+      "bytes": 659
+    },
+    {
+      "path": "start.conf",
+      "sha256": "d216415c30fbafa6bd88ed4c6075474c030f2b7936cb8ee77a3e78cc4c7b43a8",
+      "source_sha256": "d216415c30fbafa6bd88ed4c6075474c030f2b7936cb8ee77a3e78cc4c7b43a8",
+      "bytes": 2716
+    },
+    {
+      "path": "start.sh",
+      "sha256": "6b72aed8e95d418570209208c7a49e8a5440369566a83c6029b0c3e2db6d9618",
+      "source_sha256": "6b72aed8e95d418570209208c7a49e8a5440369566a83c6029b0c3e2db6d9618",
+      "bytes": 406
+    },
+    {
+      "path": "system_check.py",
+      "sha256": "cc192f874df65c93a97df00e02288a81d02f96dd3117c849931253762538f726",
+      "source_sha256": "cac7e62e1fba8c684b9ad15aa35fbf1ddb8bd409dce4cc471935ab9cd22580d8",
+      "bytes": 9760
+    },
+    {
+      "path": "task_manager.py",
+      "sha256": "66731452cc92da20898cea08a91c92c06c81652b5e21d9707d71d22ebae79785",
+      "source_sha256": "66731452cc92da20898cea08a91c92c06c81652b5e21d9707d71d22ebae79785",
+      "bytes": 15044
+    },
+    {
+      "path": "test.py",
+      "sha256": "0e5422a3514945d72502ae0ae9f00ab92cbb61670a21adb898133688867f0d0e",
+      "source_sha256": "1dbee44e6d34f71b84d8966a767204cf5119f1241651ee3448784c7d1a53cc0c",
+      "bytes": 72
+    },
+    {
+      "path": "vram_limiter.py",
+      "sha256": "758d40bf2908aee0a7c388c5a145bbbdc7406a934ce637add7f2ed75594de2b1",
+      "source_sha256": "ae1d4d8ad622bf60f0c1890441578737a3d99d8f713094f104b387a394a1d36a",
+      "bytes": 5878
+    },
+    {
+      "path": "webui.css",
+      "sha256": "1d3af009bf846858d8f37e775c671bde27b96c79d0e376f71842e235e64e56ab",
+      "source_sha256": "1d3af009bf846858d8f37e775c671bde27b96c79d0e376f71842e235e64e56ab",
+      "bytes": 29328
+    },
+    {
+      "path": "webui.py",
+      "sha256": "c20e35e837638f68e17351a71101235d3d55378107eb40618c7fb78f0d70aaf1",
+      "source_sha256": "c20e35e837638f68e17351a71101235d3d55378107eb40618c7fb78f0d70aaf1",
+      "bytes": 36293
+    },
+    {
+      "path": "webui_about.py",
+      "sha256": "507d83a079ea1927aa6ec04c4b6994032937a0292e096af629aeb68f3ae41c95",
+      "source_sha256": "507d83a079ea1927aa6ec04c4b6994032937a0292e096af629aeb68f3ae41c95",
+      "bytes": 930
+    },
+    {
+      "path": "webui_base.py",
+      "sha256": "6541d1739fe5e285107116744d217d5d513d1e53c0a4cfb57091b8ec021251b3",
+      "source_sha256": "6541d1739fe5e285107116744d217d5d513d1e53c0a4cfb57091b8ec021251b3",
+      "bytes": 6887
+    },
+    {
+      "path": "webui_history.py",
+      "sha256": "2d9b5a39dc2caaf6886891632df9aabc24a8bc44f3b3195256a4b25db56779e4",
+      "source_sha256": "2d9b5a39dc2caaf6886891632df9aabc24a8bc44f3b3195256a4b25db56779e4",
+      "bytes": 8999
+    },
+    {
+      "path": "workflows/seedvr2_3b_int8_upscale_image.json",
+      "sha256": "1e0713386f2c32550fbe742325ba864845a5c42f58937e279ea1d230eb7ec4a0",
+      "source_sha256": "1e0713386f2c32550fbe742325ba864845a5c42f58937e279ea1d230eb7ec4a0",
+      "bytes": 18543
+    },
+    {
+      "path": "workflows_api/audio_yue2_music_cover.json",
+      "sha256": "929d239ba3577991b47e1dbd4280433a9f626dd9ac5c75e9524eff48e5b82e54",
+      "source_sha256": "929d239ba3577991b47e1dbd4280433a9f626dd9ac5c75e9524eff48e5b82e54",
+      "bytes": 4846
+    },
+    {
+      "path": "workflows_api/audio_yue2_pure_music.json",
+      "sha256": "d50245039c4f7e2b897d481dd1c16c163dc9b012f7d879f06b7817f32b4a78bb",
+      "source_sha256": "d50245039c4f7e2b897d481dd1c16c163dc9b012f7d879f06b7817f32b4a78bb",
+      "bytes": 9421
+    },
+    {
+      "path": "workflows_api/audio_yue2_text_to_music.json",
+      "sha256": "7913a9f17e41ce21b11effcc173752231965fad20d7380ac0f302b3ff06993e8",
+      "source_sha256": "7913a9f17e41ce21b11effcc173752231965fad20d7380ac0f302b3ff06993e8",
+      "bytes": 5177
+    }
+  ],
+  "runtime_dependency": {
+    "name": "ComfyUI",
+    "source_url": "https://github.com/Comfy-Org/ComfyUI",
+    "commit": "830232b856045ca2892833212d7771078a13edd5",
+    "license": "GPL-3.0",
+    "runtime_and_models_included": false
+  }
+}

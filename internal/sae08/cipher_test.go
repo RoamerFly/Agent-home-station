@@ -8,10 +8,14 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+	"wechat-bot/internal/testfixtures"
 )
 
 func TestStaticSampleModel(t *testing.T) {
 	data, err := os.ReadFile("../../research/samples/08sae.dat.bin")
+	if os.IsNotExist(err) {
+		t.Skip("optional original artifact comparison; independent AES and synthetic envelope tests still run")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,11 +123,8 @@ func TestErrorsAndOwnership(t *testing.T) {
 	if !bytes.Equal(before, p) {
 		t.Fatal("input mutated")
 	}
-	data, err := os.ReadFile("../../research/samples/08sae.dat.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	x, err := ParsePinned(data)
+	data := testfixtures.SAETables()
+	x, err := Parse(data)
 	if err != nil {
 		t.Fatal(err)
 	}

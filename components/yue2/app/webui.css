@@ -1,0 +1,835 @@
+/* ==========================================================================
+   webui.css —— 通用 Gradio 主题(基于 gr.themes.Ocean() 布局深度改造)
+   --------------------------------------------------------------------------
+   目标:在保留 Ocean 布局骨架的前提下,重写字体 / 间距 / 圆角 / 组件质感,
+   做出一套「不像默认 Gradio」的、克制而高级的现代控制台风格。配色沿用
+   Electron 启动器的品牌蓝 #1777ff + 冷灰中性色,亮/暗双方案。
+
+   非 Gradio 感的关键改造:
+   * 标签页从「下划线」改为「分段控件(segmented)」外观。
+   * 统一的排版节奏:更小更克制的正文/标签字号 + 中性字重 + 轻微字距。
+   * 卡片式区块 + 发丝级描边 + 极柔投影;输入控件恢复清晰静止边框。
+   * 缩小上传组件「拖拽到此处」等过大的提示文案。
+
+   纯变量 + 通用选择器驱动,可整体拷贝到其它 Gradio 应用复用。
+   加载:launch(css_paths="webui.css") 或 Blocks(css_paths=...)。
+   注意:Gradio 在「启动时」内联 css_paths,改本文件后需重启进程才生效。
+   ========================================================================== */
+
+/* ==========================================================================
+   1. 调色板 —— 品牌蓝(accent)+ 冷灰中性色(neutral)
+   ========================================================================== */
+:root {
+  --yz-accent-50: #eef5ff;
+  --yz-accent-100: #d9e8ff;
+  --yz-accent-200: #b3d1ff;
+  --yz-accent-300: #85b4ff;
+  --yz-accent-400: #4d94ff;
+  --yz-accent-500: #1777ff; /* 主色,与启动器一致 */
+  --yz-accent-600: #0f63e0;
+  --yz-accent-700: #0d4fb5;
+  --yz-accent-800: #0d418f;
+  --yz-accent-900: #0f3873;
+  --yz-accent-950: #0a2249;
+
+  --yz-neutral-50: #f6f8fb;
+  --yz-neutral-100: #eef1f6;
+  --yz-neutral-200: #e3e7ee;
+  --yz-neutral-300: #cfd5e0;
+  --yz-neutral-400: #98a1b2;
+  --yz-neutral-500: #6a7385;
+  --yz-neutral-600: #4b5462;
+  --yz-neutral-700: #333a46;
+  --yz-neutral-800: #1f1f1f; /* 启动器 elevated */
+  --yz-neutral-900: #141414; /* 启动器 body */
+  --yz-neutral-950: #0d0d0d;
+
+  --yz-success: #52c41a;
+  --yz-warning: #faad14;
+  --yz-error: #ff4d4f;
+
+  /* —— 排版:一套统一、克制的字体与字号(现代控制台观感)—— */
+  --font:
+    'Inter', 'Segoe UI Variable Display', 'Segoe UI', -apple-system,
+    BlinkMacSystemFont, 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei',
+    system-ui, sans-serif;
+  --font-mono:
+    'JetBrains Mono', 'Cascadia Code', 'SFMono-Regular', 'Consolas',
+    ui-monospace, monospace;
+
+  --text-xxs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13.5px; /* 正文,比 Gradio 默认更紧凑 */
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --text-xxl: 22px;
+}
+
+/* ==========================================================================
+   2. 亮色方案 —— 把调色板映射到 Gradio 语义变量
+   ========================================================================== */
+:root {
+  --primary-50: var(--yz-accent-50);
+  --primary-100: var(--yz-accent-100);
+  --primary-200: var(--yz-accent-200);
+  --primary-300: var(--yz-accent-300);
+  --primary-400: var(--yz-accent-400);
+  --primary-500: var(--yz-accent-500);
+  --primary-600: var(--yz-accent-600);
+  --primary-700: var(--yz-accent-700);
+  --primary-800: var(--yz-accent-800);
+  --primary-900: var(--yz-accent-900);
+  --primary-950: var(--yz-accent-950);
+
+  --secondary-50: var(--yz-accent-50);
+  --secondary-100: var(--yz-accent-100);
+  --secondary-200: var(--yz-accent-200);
+  --secondary-300: var(--yz-accent-300);
+  --secondary-400: var(--yz-accent-400);
+  --secondary-500: var(--yz-accent-500);
+  --secondary-600: var(--yz-accent-600);
+  --secondary-700: var(--yz-accent-700);
+  --secondary-800: var(--yz-accent-800);
+  --secondary-900: var(--yz-accent-900);
+  --secondary-950: var(--yz-accent-950);
+
+  --neutral-50: var(--yz-neutral-50);
+  --neutral-100: var(--yz-neutral-100);
+  --neutral-200: var(--yz-neutral-200);
+  --neutral-300: var(--yz-neutral-300);
+  --neutral-400: var(--yz-neutral-400);
+  --neutral-500: var(--yz-neutral-500);
+  --neutral-600: var(--yz-neutral-600);
+  --neutral-700: var(--yz-neutral-700);
+  --neutral-800: var(--yz-neutral-800);
+  --neutral-900: var(--yz-neutral-900);
+  --neutral-950: var(--yz-neutral-950);
+
+  /* —— 页面 / 文本 —— */
+  --body-background-fill: var(--yz-neutral-50);
+  --body-text-color: #1a1d24;
+  --body-text-color-subdued: var(--yz-neutral-500);
+  --body-text-size: var(--text-md);
+  --background-fill-primary: #ffffff;
+  --background-fill-secondary: var(--yz-neutral-100);
+
+  --color-accent: var(--yz-accent-500);
+  --color-accent-soft: var(--yz-accent-50);
+  --link-text-color: var(--yz-accent-600);
+  --link-text-color-hover: var(--yz-accent-700);
+  --link-text-color-active: var(--yz-accent-700);
+  --link-text-color-visited: var(--yz-accent-700);
+
+  /* —— 边框(发丝级)—— */
+  --border-color-primary: var(--yz-neutral-200);
+  --border-color-accent: var(--yz-accent-300);
+  --border-color-accent-subdued: var(--yz-accent-200);
+
+  /* —— 面板 / 区块 —— */
+  --panel-background-fill: #ffffff;
+  --panel-border-color: var(--yz-neutral-200);
+  --block-background-fill: #ffffff;
+  --block-border-color: var(--yz-neutral-200);
+  --block-border-width: 1px;
+  --block-label-background-fill: transparent;
+  --block-label-text-color: var(--yz-neutral-500);
+  --block-label-text-size: var(--text-sm);
+  --block-label-text-weight: 600;
+  --block-title-text-color: var(--yz-neutral-600);
+  --block-title-text-size: var(--text-sm);
+  --block-title-text-weight: 600;
+  --block-info-text-color: var(--yz-neutral-400);
+  --block-info-text-size: var(--text-xs);
+  --stat-background-fill: var(--yz-accent-500);
+
+  /* —— 输入控件(--input-border-width 是「有线条感」的核心)—— */
+  --input-border-width: 1px;
+  --input-background-fill: #ffffff;
+  --input-background-fill-focus: #ffffff;
+  --input-border-color: var(--yz-neutral-300);
+  --input-border-color-focus: var(--yz-accent-500);
+  --input-border-color-hover: var(--yz-neutral-400);
+  --input-placeholder-color: var(--yz-neutral-400);
+  --input-text-size: var(--text-md);
+
+  /* —— 主按钮:低调蓝色渐变 —— */
+  --button-primary-background-fill: linear-gradient(
+    180deg,
+    var(--yz-accent-400) 0%,
+    var(--yz-accent-500) 100%
+  );
+  --button-primary-background-fill-hover: linear-gradient(
+    180deg,
+    var(--yz-accent-500) 0%,
+    var(--yz-accent-600) 100%
+  );
+  --button-primary-text-color: #ffffff;
+  --button-primary-text-color-hover: #ffffff;
+  --button-primary-border-color: transparent;
+  --button-primary-border-color-hover: transparent;
+
+  /* —— 次按钮 —— */
+  --button-secondary-background-fill: #ffffff;
+  --button-secondary-background-fill-hover: var(--yz-accent-50);
+  --button-secondary-text-color: var(--yz-neutral-700);
+  --button-secondary-text-color-hover: var(--yz-accent-700);
+  --button-secondary-border-color: var(--yz-neutral-300);
+  --button-secondary-border-color-hover: var(--yz-accent-400);
+
+  /* —— 危险 / 停止按钮 —— */
+  --button-cancel-background-fill: #ffffff;
+  --button-cancel-background-fill-hover: var(--yz-error);
+  --button-cancel-text-color: var(--yz-error);
+  --button-cancel-text-color-hover: #ffffff;
+  --button-cancel-border-color: #ffc2c2;
+  --button-cancel-border-color-hover: var(--yz-error);
+
+  --button-large-text-size: var(--text-md);
+  --button-small-text-size: var(--text-sm);
+  --button-large-text-weight: 600;
+  --button-small-text-weight: 600;
+
+  /* —— 表格 —— */
+  --table-border-color: var(--yz-neutral-200);
+  --table-even-background-fill: #ffffff;
+  --table-odd-background-fill: var(--yz-neutral-50);
+  --table-row-focus: var(--yz-accent-50);
+
+  /* —— 复选 / 滑块 —— */
+  --checkbox-background-color: #ffffff;
+  --checkbox-background-color-selected: var(--yz-accent-500);
+  --checkbox-border-color: var(--yz-neutral-300);
+  --checkbox-border-color-focus: var(--yz-accent-500);
+  --checkbox-border-color-hover: var(--yz-accent-400);
+  --checkbox-border-color-selected: var(--yz-accent-500);
+  --checkbox-label-background-fill: var(--yz-neutral-50);
+  --checkbox-label-background-fill-selected: var(--yz-accent-50);
+  --checkbox-label-background-fill-hover: var(--yz-neutral-100);
+  --checkbox-label-border-color: var(--yz-neutral-200);
+  --checkbox-label-border-color-selected: var(--yz-accent-300);
+  --checkbox-label-text-color: var(--yz-neutral-700);
+  --checkbox-label-text-color-selected: var(--yz-accent-700);
+  --slider-color: var(--yz-accent-500);
+
+  /* —— 圆角 / 间距 / 阴影 —— */
+  --radius-xxs: 3px;
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius-md: 9px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --block-radius: 14px;
+  --container-radius: 14px;
+  --input-radius: 10px;
+  --button-large-radius: 10px;
+  --button-small-radius: 8px;
+  --checkbox-border-radius: 6px;
+
+  --spacing-xxs: 1px;
+  --spacing-xs: 2px;
+  --spacing-sm: 4px;
+  --spacing-md: 6px;
+  --spacing-lg: 8px;
+  --spacing-xl: 11px;
+  --spacing-xxl: 16px;
+  --layout-gap: 8px; /* 行与行(Row/Row)之间的间距,较之前的 16px 收窄一半 */
+  --block-padding: 8px 10px;
+
+  --shadow-drop: 0 1px 2px rgba(20, 30, 60, 0.05);
+  --shadow-drop-lg: 0 12px 32px rgba(20, 30, 60, 0.1);
+  --shadow-inset: inset 0 1px 2px rgba(20, 30, 60, 0.04);
+  --block-shadow: var(--shadow-drop);
+  --input-shadow: none;
+  --input-shadow-focus: 0 0 0 3px var(--yz-accent-100);
+  --button-shadow: none;
+  --button-shadow-hover: 0 6px 18px rgba(23, 119, 255, 0.26);
+  --button-shadow-active: none;
+}
+
+/* ==========================================================================
+   3. 暗色方案 —— 跟随 Gradio 的 .dark 开关(唯一开关,不叠加媒体查询)
+   --------------------------------------------------------------------------
+   底色对齐启动器:body #141414 / elevated #1f1f1f / border #303030。
+   ========================================================================== */
+.dark {
+  --body-background-fill: var(--yz-neutral-900);
+  --body-text-color: #eceef2;
+  --body-text-color-subdued: var(--yz-neutral-400);
+  --background-fill-primary: var(--yz-neutral-800);
+  --background-fill-secondary: #181818;
+
+  --color-accent: var(--yz-accent-400);
+  --color-accent-soft: rgba(23, 119, 255, 0.16);
+  --link-text-color: var(--yz-accent-300);
+  --link-text-color-hover: var(--yz-accent-200);
+  --link-text-color-active: var(--yz-accent-200);
+  --link-text-color-visited: var(--yz-accent-300);
+
+  --border-color-primary: #303030;
+  --border-color-accent: var(--yz-accent-600);
+  --border-color-accent-subdued: rgba(23, 119, 255, 0.35);
+
+  --panel-background-fill: var(--yz-neutral-800);
+  --panel-border-color: #303030;
+  --block-background-fill: var(--yz-neutral-800);
+  --block-border-color: #303030;
+  --block-label-text-color: var(--yz-neutral-400);
+  --block-title-text-color: var(--yz-neutral-300);
+  --block-info-text-color: var(--yz-neutral-500);
+  --stat-background-fill: var(--yz-accent-500);
+
+  --input-background-fill: #1a1a1a;
+  --input-background-fill-focus: #1a1a1a;
+  --input-border-color: #383838;
+  --input-border-color-focus: var(--yz-accent-500);
+  --input-border-color-hover: #4a4a4a;
+  --input-placeholder-color: var(--yz-neutral-500);
+
+  --button-primary-background-fill: linear-gradient(
+    180deg,
+    var(--yz-accent-500) 0%,
+    var(--yz-accent-600) 100%
+  );
+  --button-primary-background-fill-hover: linear-gradient(
+    180deg,
+    var(--yz-accent-400) 0%,
+    var(--yz-accent-500) 100%
+  );
+  --button-primary-text-color: #ffffff;
+  --button-primary-text-color-hover: #ffffff;
+  --button-primary-border-color: transparent;
+  --button-primary-border-color-hover: transparent;
+
+  --button-secondary-background-fill: #262626;
+  --button-secondary-background-fill-hover: #2f2f2f;
+  --button-secondary-text-color: var(--yz-neutral-200);
+  --button-secondary-text-color-hover: #ffffff;
+  --button-secondary-border-color: #3a3a3a;
+  --button-secondary-border-color-hover: var(--yz-accent-500);
+
+  --button-cancel-background-fill: #2a1c1c;
+  --button-cancel-background-fill-hover: var(--yz-error);
+  --button-cancel-text-color: #ff7875;
+  --button-cancel-text-color-hover: #ffffff;
+  --button-cancel-border-color: #5a2f2f;
+  --button-cancel-border-color-hover: var(--yz-error);
+
+  --table-border-color: #303030;
+  --table-even-background-fill: var(--yz-neutral-800);
+  --table-odd-background-fill: #1a1a1a;
+  --table-row-focus: rgba(23, 119, 255, 0.14);
+
+  --checkbox-background-color: #262626;
+  --checkbox-background-color-selected: var(--yz-accent-500);
+  --checkbox-border-color: #3a3a3a;
+  --checkbox-border-color-focus: var(--yz-accent-500);
+  --checkbox-border-color-hover: var(--yz-accent-400);
+  --checkbox-border-color-selected: var(--yz-accent-500);
+  --checkbox-label-background-fill: #262626;
+  --checkbox-label-background-fill-selected: rgba(23, 119, 255, 0.18);
+  --checkbox-label-background-fill-hover: #2f2f2f;
+  --checkbox-label-border-color: #303030;
+  --checkbox-label-border-color-selected: var(--yz-accent-600);
+  --checkbox-label-text-color: var(--yz-neutral-200);
+  --checkbox-label-text-color-selected: #ffffff;
+  --slider-color: var(--yz-accent-400);
+
+  --shadow-drop: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-drop-lg: 0 14px 36px rgba(0, 0, 0, 0.55);
+  --shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+  --block-shadow: var(--shadow-drop);
+  --input-shadow-focus: 0 0 0 3px rgba(23, 119, 255, 0.3);
+  --button-shadow-hover: 0 6px 20px rgba(23, 119, 255, 0.4);
+}
+
+/* ==========================================================================
+   4. 全局排版 & 版心
+   ========================================================================== */
+body,
+.gradio-container {
+  font-family: var(--font) !important;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  letter-spacing: 0.1px;
+}
+/* 表单控件默认不会从 body 继承字体,必须显式指定,否则按钮/输入框会回退到
+   浏览器 UA 字体(暗色下尤其明显)。同时统一字号与字重。 */
+button,
+.gr-button,
+input,
+select,
+textarea,
+.tab-container button {
+  font-family: var(--font) !important;
+}
+button.primary,
+button.secondary,
+button.stop,
+.gr-button {
+  font-size: var(--text-md) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.2px;
+}
+
+.fillable {
+  max-width: 1760px !important;
+  margin: 0 auto !important;
+  padding: 0 28px 28px !important;
+}
+
+/* 区块标题 / 组件标签统一风格:字距、字重更克制。 */
+span[data-testid='block-info'],
+.block-title,
+label > span,
+.gr-box label span {
+  letter-spacing: 0.2px;
+}
+
+/* ==========================================================================
+   5. 标签页 —— 左侧「侧边栏导航」外观(sidebar-tabs)
+   --------------------------------------------------------------------------
+   Gradio 6 标签栏结构:.tabs > .tab-wrapper > .tab-container[role=tablist]
+   > button[role=tab];.tabs 的另一个直接子级是当前激活的 .tabitem 面板。
+
+   目标:把顶部横向 tab 改造成「左侧竖排导航 + 右侧内容」的仪表盘式布局。
+   给 gr.Tabs 传入 elem_classes="sidebar-tabs" 即启用(通用、可复用)。
+
+   ★ 关键坑:Gradio 会用一个隐藏副本 .tab-container.visually-hidden 测量 tab
+   是否「一行放得下」,放不下就把多余的 tab 移进溢出菜单(.overflow-menu)。
+   若只把可见 tablist 改竖排、却把测量副本留在横排,Gradio 会误判「放不下」而
+   把大部分 tab 塞进溢出菜单。因此这里对「两个」tab-container 都改成竖排,
+   让测量结果永远是「放得下」,并隐藏溢出菜单。
+   ========================================================================== */
+.sidebar-tabs {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-start !important;
+  gap: 20px !important;
+}
+/* 让侧边栏的 sticky「吸顶悬浮」生效:Gradio 默认给 .gradio-container 设了
+   overflow:hidden —— 它会成为 sticky 的「滚动容器」却自身不滚动,导致吸顶失效。
+   仅当页面里存在 sidebar-tabs 时,把它改成 visible(:has 选择器,Chromium/
+   Electron 支持;真正滚动的是页面/body,改这里不影响其它布局)。 */
+.gradio-container:has(.sidebar-tabs) {
+  overflow: visible !important;
+}
+/* 左侧导航列:固定宽度,随页面滚动而吸顶。
+   Gradio 默认给 .tab-wrapper 设了固定高度(横向 tab 只需一行高),竖排时必须
+   改成 auto 并纵向拉伸,否则导航卡片只会显示第一行、其余按钮溢出到卡片外。 */
+.sidebar-tabs > .tab-wrapper {
+  /* 展开态宽度:刚好放下「emoji + 4 字中文标签」。想更窄/更宽改这里即可。 */
+  flex: 0 0 120px !important;
+  width: 120px !important;
+  height: auto !important;
+  min-height: 0 !important;
+  align-items: stretch !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  /* 页面上滑时,侧边栏顶部到达距页面顶部约 50px 处即「悬浮」固定(其它布局不变)。 */
+  position: sticky !important;
+  top: 50px !important;
+  align-self: flex-start !important;
+  transition: flex-basis 0.2s ease, width 0.2s ease;
+}
+/* ★ 关键:把「测量副本」的按钮宽度压到 0,让 Gradio 计算出的 tab 总宽 ≈ 0,
+   永远 < 侧栏宽度,于是判定「全部放得下」,绝不把 tab 移进溢出菜单。
+   该副本本就是 visually-hidden 的,压扁它不影响任何可见效果。 */
+.sidebar-tabs .tab-container.visually-hidden button {
+  width: 0 !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+}
+/* 可见 tablist 做成一张竖排导航卡片。折叠按钮浮在卡片右边缘,不再单独占一行。 */
+.sidebar-tabs .tab-container[role='tablist'] {
+  position: relative;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+  overflow: visible !important;
+  gap: 4px !important;
+  padding: 8px !important;
+  border: 1px solid var(--border-color-primary);
+  border-radius: 14px;
+  background: var(--background-fill-secondary);
+}
+/* 去掉底部整行下划线 + 选中项 2px 指示条。 */
+.sidebar-tabs .tab-container[role='tablist']::after,
+.sidebar-tabs .tab-container[role='tablist'] button[role='tab']::after {
+  display: none !important;
+}
+/* 隐藏溢出菜单(竖排导航不需要它)。 */
+.sidebar-tabs .overflow-menu {
+  display: none !important;
+}
+/* 导航项:整行、左对齐、圆角。 */
+.sidebar-tabs .tab-container[role='tablist'] button[role='tab'] {
+  display: block !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 9px 11px !important;
+  text-align: left !important;
+  white-space: nowrap !important;
+  border: none !important;
+  border-radius: 10px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--body-text-color-subdued);
+  background: transparent;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.sidebar-tabs .tab-container[role='tablist'] button[role='tab']:hover {
+  color: var(--body-text-color);
+  background: var(--background-fill-primary);
+}
+/* 选中项:淡色底 + 主色文字 + 左侧一条主色指示条(高级感细节)。 */
+.sidebar-tabs .tab-container[role='tablist'] button[role='tab'].selected {
+  color: var(--color-accent);
+  background: var(--background-fill-primary);
+  box-shadow:
+    inset 3px 0 0 var(--color-accent),
+    var(--shadow-drop);
+}
+.dark .sidebar-tabs .tab-container[role='tablist'] button[role='tab'].selected {
+  color: #ffffff;
+  background: var(--yz-accent-600);
+  box-shadow: inset 3px 0 0 var(--yz-accent-300);
+}
+/* 右侧内容面板:占据剩余空间。 */
+.sidebar-tabs > .tabitem {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  padding-top: 0 !important;
+}
+
+/* -------- 折叠/展开按钮(由 webui_base.py 注入到导航卡片)--------
+   做成一个圆形手柄,浮在导航卡片的右边缘、竖直居中,「一半在里一半在外」,
+   更显眼、也更有设计感。 */
+.sidebar-toggle {
+  position: absolute;
+  top: 50%;
+  right: -14px; /* 按钮宽 28,负 14 = 正好骑在右边框上(半进半出) */
+  transform: translateY(-50%);
+  z-index: 5;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-color-primary);
+  border-radius: 50%;
+  background: var(--background-fill-primary);
+  color: var(--body-text-color-subdued);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(20, 30, 60, 0.14);
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.dark .sidebar-toggle {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+.sidebar-toggle:hover {
+  color: var(--color-accent);
+  border-color: var(--border-color-accent);
+  box-shadow: 0 4px 12px rgba(23, 119, 255, 0.28);
+}
+.sidebar-toggle svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.2s ease;
+}
+
+/* ==========================================================================
+   5b. 折叠态 —— 只显示一列图标(icon rail)
+   --------------------------------------------------------------------------
+   通过 JS 给 .sidebar-tabs 加上 .collapsed 类切换。图标 = 标签文字最前面的那个
+   字符:若以 emoji 开头(推荐),折叠态就只显示该 emoji;否则显示首个汉字。
+   原理:把按钮字号压到 0 隐藏文字,再用 ::first-letter 把「第一个字符」放大显示。
+   ========================================================================== */
+.sidebar-tabs.collapsed > .tab-wrapper {
+  flex-basis: 60px !important;
+  width: 60px !important;
+}
+.sidebar-tabs.collapsed .tab-container[role='tablist'] {
+  padding: 6px !important;
+}
+/* 折叠时按钮居中、隐藏文字,仅用 ::first-letter 显示首个字符/emoji。 */
+.sidebar-tabs.collapsed .tab-container[role='tablist'] button[role='tab'] {
+  padding: 10px 0 !important;
+  text-align: center !important;
+  font-size: 0 !important;
+}
+.sidebar-tabs.collapsed
+  .tab-container[role='tablist']
+  button[role='tab']::first-letter {
+  font-size: 20px !important;
+  line-height: 1.2 !important;
+}
+/* 折叠时按钮仍在右边缘,只把图标翻转指向「展开」。 */
+.sidebar-tabs.collapsed .sidebar-toggle svg {
+  transform: rotate(180deg);
+}
+
+/* ==========================================================================
+   6. 组件质感微调
+   ========================================================================== */
+
+/* 输入类控件:聚焦时细边 + 柔光环。 */
+input[type='text']:focus,
+input[type='number']:focus,
+input[type='password']:focus,
+input[type='email']:focus,
+input[type='search']:focus,
+input[type='url']:focus,
+textarea:focus {
+  border-color: var(--input-border-color-focus) !important;
+  box-shadow: var(--input-shadow-focus) !important;
+  outline: none !important;
+}
+
+/* 主按钮:轻微上浮 + 柔光,点击回落。 */
+button.primary,
+.gr-button-primary {
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease !important;
+}
+button.primary:hover,
+.gr-button-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--button-shadow-hover) !important;
+}
+button.primary:active,
+.gr-button-primary:active {
+  transform: translateY(0);
+  box-shadow: none !important;
+}
+
+/* 区块过渡,悬浮边框轻微转亮。 */
+.block,
+.gr-box,
+.gr-panel {
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease !important;
+}
+
+/* 折叠面板标题更沉稳。 */
+.gr-accordion > .label-wrap,
+.accordion .label-wrap {
+  font-weight: 600;
+  font-size: var(--text-md);
+}
+
+/* ---- 上传组件(File / Image / Audio / Video):缩小过大的提示文案 ---- */
+.wrap.default,
+.upload-container .wrap,
+.file-preview .wrap,
+[class*='upload'] .wrap {
+  font-size: var(--text-sm) !important;
+  font-weight: 600 !important;
+}
+/* 「将文件拖拽到此处」主行 + 「点击上传」等,统一到克制字号。 */
+.wrap .or,
+.wrap span,
+.upload-text,
+.upload-text .or {
+  font-size: var(--text-sm) !important;
+  letter-spacing: 0.2px;
+}
+.upload-text {
+  line-height: 1.5 !important;
+}
+/* 上传区里的大图标略微收敛,避免喧宾夺主。 */
+.wrap .icon-wrap svg,
+.upload-text svg,
+[class*='upload'] svg.icon {
+  width: 28px !important;
+  height: 28px !important;
+  opacity: 0.7;
+}
+
+/* ---- 滚动条:细窄中性色,契合高级观感 ---- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--yz-neutral-300) transparent;
+}
+.dark * {
+  scrollbar-color: #3a3a3a transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--yz-neutral-300);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--yz-neutral-400);
+  background-clip: padding-box;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #3a3a3a;
+  background-clip: padding-box;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #4a4a4a;
+  background-clip: padding-box;
+}
+
+/* ---- 音频波形横向滚动条:默认那条又粗又方,改细、改圆润 ----
+   Gradio 6 音频用 wavesurfer 渲染,长音频时波形容器出现横向滚动条。这里对
+   音频/波形相关容器单独收细到 6px 并做圆角处理。 */
+.audio-container ::-webkit-scrollbar,
+.waveform-container ::-webkit-scrollbar,
+[class*='waveform'] ::-webkit-scrollbar,
+[data-testid='waveform'] ::-webkit-scrollbar,
+[part='scroll']::-webkit-scrollbar {
+  height: 6px !important;
+  width: 6px !important;
+}
+.audio-container ::-webkit-scrollbar-track,
+.waveform-container ::-webkit-scrollbar-track,
+[class*='waveform'] ::-webkit-scrollbar-track,
+[part='scroll']::-webkit-scrollbar-track {
+  background: transparent !important;
+  margin: 0 6px;
+}
+.audio-container ::-webkit-scrollbar-thumb,
+.waveform-container ::-webkit-scrollbar-thumb,
+[class*='waveform'] ::-webkit-scrollbar-thumb,
+[data-testid='waveform'] ::-webkit-scrollbar-thumb,
+[part='scroll']::-webkit-scrollbar-thumb {
+  height: 6px !important;
+  border: none !important;
+  border-radius: 6px !important;
+  background: var(--yz-neutral-300) !important;
+}
+.dark .audio-container ::-webkit-scrollbar-thumb,
+.dark .waveform-container ::-webkit-scrollbar-thumb,
+.dark [class*='waveform'] ::-webkit-scrollbar-thumb,
+.dark [part='scroll']::-webkit-scrollbar-thumb {
+  background: #4a4a4a !important;
+}
+.audio-container *,
+.waveform-container *,
+[class*='waveform'] * {
+  scrollbar-width: thin !important;
+}
+
+/* ==========================================================================
+   7. 品牌页头(通用组件)—— 与新语言统一
+   ========================================================================== */
+:root {
+  --head-bg: linear-gradient(135deg, #ffffff 0%, #f1f4fa 100%);
+  --head-title: #171a21;
+  --head-desc: #5a6474;
+  --head-link: var(--yz-accent-600);
+  --head-border: var(--yz-neutral-200);
+  --head-shadow: rgba(30, 45, 90, 0.06);
+  --head-shadow-hover: rgba(30, 45, 90, 0.12);
+}
+.dark {
+  --head-bg: linear-gradient(135deg, #202020 0%, #161616 100%);
+  --head-title: #f0f2f6;
+  --head-desc: #a7afbd;
+  --head-link: var(--yz-accent-300);
+  --head-border: #303030;
+  --head-shadow: rgba(0, 0, 0, 0.4);
+  --head-shadow-hover: rgba(0, 0, 0, 0.6);
+}
+
+.app-head {
+  border-radius: 16px;
+  padding: 12px 26px;
+  margin: 2px 0 12px;
+  text-align: center;
+  background: var(--head-bg);
+  border: 1px solid var(--head-border);
+  box-shadow: 0 2px 10px var(--head-shadow);
+  transition:
+    transform 0.22s ease,
+    box-shadow 0.22s ease;
+  cursor: default;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.app-head:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px var(--head-shadow-hover);
+}
+.app-head-title {
+  font-size: var(--text-xxl);
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  line-height: 1.25;
+  margin: 0;
+  color: var(--head-title);
+}
+.app-head-sub {
+  font-size: var(--text-sm);
+  margin: 6px 0 0;
+  color: var(--head-desc);
+  letter-spacing: 0.1px;
+}
+.app-head-sep {
+  margin: 0 8px;
+  opacity: 0.4;
+}
+.app-head-sub a {
+  color: var(--head-link);
+  font-weight: 600;
+  text-decoration: none;
+  transition: opacity 0.2s ease;
+}
+.app-head-sub a:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* -------- 「关于」页排版 -------------------------------------------------- */
+.about-box {
+  line-height: 1.85;
+  font-size: var(--text-md);
+}
+.about-box a {
+  font-weight: 600;
+}
+
+/* 隐藏 Gradio 底部 footer 内容,但保留其原有高度。 */
+footer {
+  visibility: hidden;
+}
+
+/* -------- 其他样式 -------------------------------------------------- */
+.height-center {
+  top:0; bottom:0; left:0; right:0; margin:auto;
+}
+
+/* gr.Dataframe 表格居中显示, 需要手动添加 elem_classes="table-centered" */
+.table-centered table th .cell-wrap,
+.table-centered table td .cell-wrap,
+.table-centered .body-cell {
+    justify-content: center !important;
+    text-align: center !important;
+  vertical-align: middle !important;
+}

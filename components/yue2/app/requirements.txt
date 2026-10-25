@@ -1,0 +1,3 @@
+gradio
+requests
+nvidia-ml-py

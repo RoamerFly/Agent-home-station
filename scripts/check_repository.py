@@ -5,6 +5,7 @@ It reads private files only for comparison; none of those values are emitted.
 """
 import argparse
 import fnmatch
+import io
 import json
 from pathlib import Path
 import re
@@ -67,15 +68,27 @@ def main():
     parser.add_argument("--private-root", default="")
     args = parser.parse_args()
     result = subprocess.run(["git", "ls-files", "--stage", "-z"], cwd=ROOT, stdout=subprocess.PIPE, check=True)
+    entries = []
+    for item in result.stdout.split(b"\0"):
+        if item:
+            metadata, name = item.split(b"\t", 1)
+            mode, oid, stage = metadata.decode().split()
+            entries.append((mode, oid, stage, name.decode("utf-8")))
+    oids = list(dict.fromkeys(oid for mode, oid, stage, path in entries if mode != "160000" and stage == "0"))
+    objects = {}
+    if oids:
+        stream = io.BytesIO(subprocess.check_output(["git", "cat-file", "--batch"], cwd=ROOT, input=("\n".join(oids)+"\n").encode()))
+        for oid in oids:
+            header = stream.readline().split()
+            if len(header) != 3 or header[1] != b"blob":
+                raise RuntimeError("Invalid indexed Git object")
+            objects[oid] = stream.read(int(header[2]))
+            if stream.read(1) != b"\n":
+                raise RuntimeError("Invalid Git object boundary")
     secrets = private_values(args.private_root)
     failures = []
     count = total = 0
-    for item in result.stdout.split(b"\0"):
-        if not item:
-            continue
-        metadata, name = item.split(b"\t", 1)
-        mode, oid, stage = metadata.decode().split()
-        path = name.decode("utf-8")
+    for mode, oid, stage, path in entries:
         parts = path.split("/")
         bad = any(p in DENIED_DIRS for p in parts)
         bad |= path.startswith(("research/evidence/", "research/samples/", "design/ui-refresh-20261024/before/"))
@@ -86,7 +99,7 @@ def main():
         if stage != "0" or mode == "160000":
             failures.append({"path": path, "reason": "unmerged_or_embedded_repository"})
             continue
-        data = subprocess.check_output(["git", "cat-file", "blob", oid], cwd=ROOT)
+        data = objects[oid]
         count += 1
         total += len(data)
         if len(data) > 50 << 20:

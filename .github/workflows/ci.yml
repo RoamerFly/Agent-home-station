@@ -38,6 +38,17 @@ jobs:
           fi
       - name: Check JavaScript syntax
         run: find internal/admin/static -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Check Python source and music workflows
+        run: |
+          python - <<'PY'
+          import ast, json
+          from pathlib import Path
+          for root in [Path('scripts'), Path('components/yue2/app')]:
+              for path in root.rglob('*.py'):
+                  ast.parse(path.read_text(encoding='utf-8-sig'), filename=str(path))
+          for path in Path('components/yue2/app/workflows_api').glob('*.json'):
+              json.loads(path.read_text(encoding='utf-8'))
+          PY
       - name: Test
         run: go test ./...
       - name: Vet
