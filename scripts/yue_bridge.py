@@ -110,6 +110,13 @@ def main():
             target=body.get('duration_seconds',60)
             if isinstance(target,bool) or not isinstance(target,(int,float)) or not 10<=target<=600:return self.reply(400,{'error':'invalid_duration'})
             key=self.headers.get('Idempotency-Key','')
+            # Resolve an existing idempotent result even while the backend is
+            # offline. A new job requires a live generator, before persistence.
+            with lock:
+                for old in jobs.values():
+                    if key and old.get('key')==key:return self.reply(200,{k:v for k,v in old.items() if k!='file'})
+            try:api('/system_stats',timeout=5)
+            except Exception:return self.reply(503,{'error':'backend_unavailable'})
             with lock:
                 for old in jobs.values():
                     if key and old.get('key')==key:return self.reply(200,{k:v for k,v in old.items() if k!='file'})

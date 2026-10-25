@@ -54,6 +54,7 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 		req.Header.Set("Idempotency-Key", key)
 	}
 	client := &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}
+	defer client.CloseIdleConnections()
 	response, e := client.Do(req)
 	if e != nil {
 		return nil, "", errors.New("本地YuE桥接无法连接；请检查本机服务")
@@ -64,9 +65,47 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 		return nil, "", errors.New("YuE响应超过限制")
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
+		if response.StatusCode == 401 || response.StatusCode == 403 {
+			return nil, "", errors.New("YuE桥接鉴权失败，请检查桥接令牌")
+		}
+		if response.StatusCode == 503 {
+			return nil, "", errors.New("YuE桥接在线，但ComfyUI生成后端不可用；未提交生成任务")
+		}
 		return nil, "", errors.New("YuE拒绝请求或任务未完成")
 	}
 	return data, response.Header.Get("Content-Type"), nil
+}
+
+type yueHealth struct {
+	State   string `json:"state"`
+	Message string `json:"message"`
+	Ready   bool   `json:"ready"`
+}
+
+func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
+	c := p.manager.speechConfig()
+	if !c.YuEEnabled {
+		return yueHealth{State: "disabled", Message: "本地YuE未启用"}
+	}
+	if c.YuEEndpoint == "" || c.YuEToken == "" {
+		return yueHealth{State: "unconfigured", Message: "YuE桥接地址或令牌尚未配置"}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	b, _, err := p.yueRequest(ctx, "GET", "/health", nil, "")
+	if err != nil {
+		return yueHealth{State: "bridge_unavailable", Message: err.Error()}
+	}
+	var reply struct {
+		Ready bool `json:"ready"`
+	}
+	if json.Unmarshal(b, &reply) != nil {
+		return yueHealth{State: "invalid_health", Message: "YuE桥接健康响应无效"}
+	}
+	if !reply.Ready {
+		return yueHealth{State: "backend_unavailable", Message: "YuE桥接在线，ComfyUI生成后端尚未就绪；未提交任务"}
+	}
+	return yueHealth{State: "ready", Message: "YuE桥接与ComfyUI生成后端均在线", Ready: true}
 }
 func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	var in struct {
@@ -142,6 +181,11 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			}
 		}
 		// Store the remote job mapping under the private effect ledger.
+		// Probe without side effects before claiming a create operation. An offline
+		// bridge must not become a fictitious successful/uncertain generation job.
+		if health := p.probeYuE(ctx); !health.Ready {
+			return "", errors.New(health.Message)
+		}
 		result, callErr := p.privilegedCall(ctx, name, raw, func() (any, error) {
 			data, _, e := p.yueRequest(ctx, "POST", "/jobs", body, p.operationID(name, raw))
 			if e != nil {
@@ -163,7 +207,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		}
 		id, _ := job["job_id"].(string)
 		if !validID(id) {
-			return result, nil
+			return "", errors.New("YuE生成任务未取得有效任务编号；提交结果未确认，请核对任务记录，不重复提交")
 		}
 		taskID := agentID(p.trace.Account, p.trace.Thread, "yue", id)
 		found := false

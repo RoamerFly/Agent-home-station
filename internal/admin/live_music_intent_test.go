@@ -48,6 +48,10 @@ func TestLiveMusicSemanticIntentWithoutGenerationOrWechatSend(t *testing.T) {
 			Duration int `json:"duration_seconds"`
 		}
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" {
+				w.Write([]byte(`{"ready":true}`))
+				return
+			}
 			posts++
 			json.NewDecoder(r.Body).Decode(&submitted)
 			w.Write([]byte(`{"id":"semantic-job","state":"queued"}`))

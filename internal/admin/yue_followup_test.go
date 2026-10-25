@@ -18,6 +18,10 @@ func TestMusicFollowupPersistsPollsAndDeliversWithoutProactivePermission(t *test
 		if r.Header.Get("Authorization") != "Bearer private-fixture-token" {
 			t.Error("missing token")
 		}
+		if r.URL.Path == "/health" {
+			w.Write([]byte(`{"ready":true}`))
+			return
+		}
 		if r.Method == "POST" {
 			starts++
 			w.Write([]byte(`{"id":"fixture-job","state":"queued"}`))

@@ -37,6 +37,9 @@ func speechView(c bailian.Config) map[string]any {
 	return map[string]any{"settings": c, "key_configured": configured}
 }
 func (s *Server) speechRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/speech/yue-health", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		respond(w, 200, (&permittedTools{manager: s.manager}).probeYuE(r.Context()))
+	}))
 	mux.HandleFunc("GET /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, speechView(s.manager.speechConfig())) }))
 	mux.HandleFunc("POST /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var c bailian.Config
