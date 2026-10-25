@@ -384,6 +384,7 @@ func (w *Worker) refreshMediaParent(trace string) {
 		phase = "sending"
 	}
 	w.queuePhase(trace, phase)
+	w.publishTaskDelivery(trace)
 }
 func (w *Worker) cancelMedia(n mediaNative, d *mediaDelivery, user bool, reason string) {
 	d.UserCancelled = d.UserCancelled || user

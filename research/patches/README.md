@@ -1,3 +1,5 @@
+> 当前完整集成补丁为 `native-client-local-integration.patch`，含下述语音修复与后续分享/引用适配；与旧单独补丁二选一应用。来源及哈希见 `components/native-client/source-manifest.json`。
+
 # 原生语音播放补丁
 
 基座 https://github.com/thisnick/agent-wechat ，固定提交 `7095ef01e0cd3d5b567bcb6970f379dcd88bbfa8`。在该仓库根目录应用 `native-voice-playback-fix.patch` 后，进入 `packages/native-client-rust` 使用 Cargo 构建 `wx-native`。补丁修改原生协议源码与合成测试向量，不包含账号、会话或密钥。

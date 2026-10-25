@@ -119,8 +119,8 @@ func TestLiveStyleConfirmationStartsYuEAndReturnsCompletedSong(t *testing.T) {
 	report["task_state"] = f.manager.agent.list("test", "filehelper")[0].State
 	report["song_prepared"] = true
 	save()
-	if report["task_state"] != "completed" {
-		t.Fatal("persistent task not completed")
+	if report["task_state"] != "waiting_delivery" {
+		t.Fatal("task did not enter delivery tracking")
 	}
 }
 

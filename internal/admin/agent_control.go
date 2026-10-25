@@ -73,25 +73,28 @@ func contains(a []string, s string) bool {
 }
 
 type agentTask struct {
-	RecoveryMessageID string    `json:"recovery_message_id,omitempty"`
-	MusicTitle        string    `json:"music_title,omitempty"`
-	MusicJob          string    `json:"music_job,omitempty"`
-	MusicKind         string    `json:"music_kind,omitempty"`
-	MusicPrepared     bool      `json:"music_prepared,omitempty"`
-	MusicDeadline     time.Time `json:"music_deadline,omitempty"`
-	OriginTrace       string    `json:"origin_trace,omitempty"`
-	QuoteServerID     string    `json:"quote_server_id,omitempty"`
-	ID                string    `json:"id"`
-	Account           string    `json:"account"`
-	Thread            string    `json:"thread"`
-	Sender            string    `json:"sender"`
-	Title             string    `json:"title"`
-	Checkpoint        string    `json:"checkpoint"`
-	State             string    `json:"state"`
-	Next              time.Time `json:"next"`
-	Updated           time.Time `json:"updated"`
-	Runs              int       `json:"runs"`
-	LastResult        string    `json:"last_result,omitempty"`
+	RequestedText     string            `json:"requested_text,omitempty"`
+	MusicFailure      bool              `json:"music_failure,omitempty"`
+	Delivery          *bot.TaskDelivery `json:"delivery,omitempty"`
+	RecoveryMessageID string            `json:"recovery_message_id,omitempty"`
+	MusicTitle        string            `json:"music_title,omitempty"`
+	MusicJob          string            `json:"music_job,omitempty"`
+	MusicKind         string            `json:"music_kind,omitempty"`
+	MusicPrepared     bool              `json:"music_prepared,omitempty"`
+	MusicDeadline     time.Time         `json:"music_deadline,omitempty"`
+	OriginTrace       string            `json:"origin_trace,omitempty"`
+	QuoteServerID     string            `json:"quote_server_id,omitempty"`
+	ID                string            `json:"id"`
+	Account           string            `json:"account"`
+	Thread            string            `json:"thread"`
+	Sender            string            `json:"sender"`
+	Title             string            `json:"title"`
+	Checkpoint        string            `json:"checkpoint"`
+	State             string            `json:"state"`
+	Next              time.Time         `json:"next"`
+	Updated           time.Time         `json:"updated"`
+	Runs              int               `json:"runs"`
+	LastResult        string            `json:"last_result,omitempty"`
 }
 type agentOperation struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
@@ -309,8 +312,12 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	for _, t := range m.agent.list(in.Account, in.Thread) {
 		if t.ID == in.TaskID && t.State == "running" {
 			if t.MusicJob != "" && (state == "reply" || state == "synchronous_round_finished") && t.MusicPrepared {
-				t.State = "completed"
-				t.LastResult = "生成结果已交给持久化发送队列；实际送达以微信回执为准"
+				t.State = "waiting_delivery"
+				t.LastResult = "生成结果已就绪，正在等待微信交付；全部必需附件确认后才完成"
+				if t.MusicFailure {
+					t.State = "failed"
+					t.LastResult = "本地生成失败；已交由本轮回复说明结果，没有生成可交付附件"
+				}
 				_ = m.agent.task(t)
 				return
 			}

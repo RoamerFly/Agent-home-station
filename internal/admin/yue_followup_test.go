@@ -93,7 +93,7 @@ func TestMusicFollowupPersistsPollsAndDeliversWithoutProactivePermission(t *test
 		t.Fatal(err)
 	}
 	f.manager.finishAgentTask(*in, "reply")
-	if task = f.manager.agent.list("test", "filehelper")[0]; task.State != "completed" || !task.MusicPrepared {
+	if task = f.manager.agent.list("test", "filehelper")[0]; task.State != "waiting_delivery" || !task.MusicPrepared {
 		t.Fatal("delivery checkpoint missing", task)
 	}
 	if again, _ := f.manager.claimAgentTask(now.Add(4*time.Minute), func(string) bool { return false }); again != nil || starts != 1 {

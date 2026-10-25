@@ -31,14 +31,15 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
-	AgentTask     func(time.Time, func(string) bool) (*companion.Input, error)
-	AgentTaskDone func(companion.Input, string)
-	Draining      func() bool
-	MediaSeeds    func() []MediaSeed
-	SurfAllowed   func(string) bool
-	SurfTask      func(time.Time) (*SurfTask, error)
-	Options       *Options
-	Analyzer      interface {
+	AgentTask         func(time.Time, func(string) bool) (*companion.Input, error)
+	AgentTaskDone     func(companion.Input, string)
+	AgentTaskDelivery func(companion.Input, TaskDelivery) error
+	Draining          func() bool
+	MediaSeeds        func() []MediaSeed
+	SurfAllowed       func(string) bool
+	SurfTask          func(time.Time) (*SurfTask, error)
+	Options           *Options
+	Analyzer          interface {
 		Analyze(context.Context, linuxnative.Message) (string, error)
 	}
 	StateDir       string

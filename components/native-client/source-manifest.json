@@ -1,0 +1,9 @@
+{
+  "component": "agent-wechat-native",
+  "source_url": "https://github.com/thisnick/agent-wechat.git",
+  "base_commit": "7095ef01e0cd3d5b567bcb6970f379dcd88bbfa8",
+  "patch": "research/patches/native-client-local-integration.patch",
+  "patch_sha256": "a513c2fa98f4c360350919903971b26c687bafdf4b6bf343b841956eeb124223",
+  "source_modified": false,
+  "account_data_included": false
+}

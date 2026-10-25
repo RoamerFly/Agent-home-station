@@ -1,6 +1,6 @@
 # 微信鲸鱼娘 AI 与网页管理端
 
-**当前本机测试交付：0.8.4-music-delivery-local，管理端 http://127.0.0.1:8081/**。支持微信后台收发、角色与群规则、图片/语音理解、分享卡片和视频处理、联网/MCP、声明式插件、本地 YuE 异步歌曲生成、上下文压缩及持久化发送。优先阅读 [使用说明](USER-GUIDE.md)、[插件配置](PLUGINS.md)、[功能与验收边界](FEATURES.md)。
+**当前本机测试交付：0.9.0-agent-lifecycle-local，管理端 http://127.0.0.1:8081/**。支持微信后台收发、角色与群规则、图片/语音理解、分享卡片和视频处理、联网/MCP、声明式插件、本地 YuE 异步歌曲生成、上下文压缩及持久化发送。生成任务独立跟踪交付与回执，时长和格式由模型选参，后台验证权限与范围。优先阅读 [使用说明](USER-GUIDE.md)、[插件配置](PLUGINS.md)、[功能与验收边界](FEATURES.md)。
 
 项目仓库：[RoamerFly/wechat-agent](https://github.com/RoamerFly/wechat-agent)（私有）。每次完成更新后执行相关验证、commit 和 push；协作更新使用独立分支和 PR。具体约定见 [AGENTS.md](AGENTS.md)。
 
@@ -62,7 +62,7 @@ WSL 用户服务已启用，但尚未创建 Windows 开机启动 WSL 的任务�
 # 在本项目根目录执行；上游源码放在项目目录外。
 git clone https://github.com/thisnick/agent-wechat.git ../agent-wechat
 git -C ../agent-wechat checkout --detach 7095ef01e0cd3d5b567bcb6970f379dcd88bbfa8
-git -C ../agent-wechat apply "$PWD/research/patches/native-voice-playback-fix.patch"
+git -C ../agent-wechat apply "$PWD/research/patches/native-client-local-integration.patch"
 docker build -f "$PWD/research/docker/Dockerfile.linux-native" \
   -t wechat-linux-native:research-7095ef0 ../agent-wechat
 

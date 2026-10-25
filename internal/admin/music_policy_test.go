@@ -5,28 +5,28 @@ import (
 	"wechat-bot/internal/companion"
 )
 
-func TestMusicRequestedDurationAndDefaultVoiceRespectUserRequest(t *testing.T) {
-	for text, want := range map[string]int{"重新唱一首一分钟左右的歌": 60, "做一首60秒的歌": 60, "半分钟": 30, "一分半": 90, "三分钟": 180, "忧郁风格": 0} {
-		if got := musicRequestedSeconds(text); got != want {
-			t.Fatal(text, got, want)
-		}
-	}
+func TestMusicFormatHonorsModelDecisionAndPermissions(t *testing.T) {
 	f := setup(t)
 	f.manager.config.Companion.Permissions.SendVoice = true
+	f.manager.config.Companion.Permissions.SendFile = true
 	p, _, _ := f.manager.toolAccess()
-	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "重新唱一首一分钟左右的歌"})
-	if p.musicDeliveryKind("file") != "voice" {
-		t.Fatal("model selected unsolicited file")
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "唱完把下载版也给我"})
+	for _, kind := range []string{"voice", "file", "both"} {
+		if p.musicDeliveryKind(kind) != kind {
+			t.Fatal("semantic choice was overwritten", kind)
+		}
 	}
-	p.trace.Text = "把刚才的原音频文件发我"
-	if p.musicDeliveryKind("file") != "file" {
-		t.Fatal("explicit file request lost")
+	if p.musicDeliveryKind("") != "voice" {
+		t.Fatal("voice default missing")
 	}
-	p.trace.Text = "不要文件，发语音"
-	if p.musicDeliveryKind("file") != "voice" {
-		t.Fatal("file refusal ignored")
+	f.manager.config.Companion.Permissions.SendFile = false
+	if p.musicKindPermitted("both") {
+		t.Fatal("both bypassed file permission")
+	}
+	if p.musicDeliveryKind("both") != "both" {
+		t.Fatal("permission failure silently dropped requested file")
 	}
 	if defaultAudioPreview("给我发一首歌") != 0 {
-		t.Fatal("full song became a preview")
+		t.Fatal("full song became preview")
 	}
 }

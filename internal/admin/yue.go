@@ -91,9 +91,6 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			return "", errors.New("生成歌曲需启用Agent持续任务，以便完成后交付")
 		}
 		in.Kind = p.musicDeliveryKind(in.Kind)
-		if seconds := musicRequestedSeconds(p.trace.Text); seconds > 0 {
-			in.Duration = seconds
-		}
 		if in.Duration == 0 {
 			in.Duration = 60
 		}
@@ -174,7 +171,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			found = found || old.ID == taskID
 		}
 		if !found {
-			task := agentTask{ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "原创歌曲 · " + in.Title, MusicTitle: in.Title, Checkpoint: "YuE已提交，等待真实生成结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
+			task := agentTask{ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "原创歌曲 · " + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "YuE已提交，等待真实生成结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
 			if len(task.Title) > 200 {
 				task.Title = "原创歌曲生成"
 			}
@@ -304,9 +301,10 @@ func (m *Manager) claimMusicTask(task agentTask, now time.Time) (*companion.Inpu
 	}
 	in := &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender, Mode: "direct", IsGroup: strings.HasSuffix(task.Thread, "@chatroom"), Directed: true, TaskID: task.ID, TraceID: "music-" + task.ID + "-" + now.UTC().Format("150405"), QuoteServerID: task.QuoteServerID}
 	if status.State == "completed" {
-		in.Text = "[已请求音乐任务的结果交付，不是新用户请求] music_job=" + task.MusicJob + "；原请求：" + task.Title + "。本地模型已经完成，调用music_local_status取得真实附件，kind=" + task.MusicKind + "；结合最新会话，如对方已取消则取消任务，如改要文件则遵从。最终用media_ids交付实际结果，介绍在附件被接受后发送。不要重新生成，也不要只说稍等。"
+		in.Text = "[已请求音乐任务的结果交付，不是新用户请求] music_job=" + task.MusicJob + "；原始需求资料：" + task.RequestedText + "；歌曲：" + task.Title + "。本地模型已经完成，调用music_local_status取得真实附件，kind=" + task.MusicKind + "；结合最新会话，如对方已取消则取消任务，如改要文件则遵从。最终用media_ids交付实际结果，介绍在附件被接受后发送。不要重新生成，也不要只说稍等。"
 	} else {
 		in.Text = "[已请求音乐任务的失败通知，不是新用户请求] 本地YuE任务已终止，状态=" + status.State + "。如实告知这次歌曲没有生成完成，请检查本地服务；不要说还在制作，不自动重新生成。"
+		task.MusicFailure = true
 		task.MusicPrepared = true // A failure notice is the terminal outcome, with no media.
 		_ = m.agent.task(task)
 	}

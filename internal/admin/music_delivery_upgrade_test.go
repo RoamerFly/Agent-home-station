@@ -64,18 +64,7 @@ func TestMusicBothFormatsStageSameOriginalWithPersonalTitle(t *testing.T) {
 }
 
 func TestMusicDeliveryIntentAndNames(t *testing.T) {
-	for _, tc := range []struct{ text, choice, want string }{
-		{"生成后唱给我听并发送文件给我", "both", "both"},
-		{"给我唱一首，音频文件也发一下", "both", "both"},
-		{"只发文件，不用语音", "both", "file"},
-		{"发一首下班听的歌", "file", "voice"},
-		{"不用文件，唱给我听", "both", "voice"},
-		{"把原音频文件发我", "file", "file"},
-	} {
-		if got := musicKindFromText(tc.text, tc.choice); got != tc.want {
-			t.Errorf("%s: %s want %s", tc.text, got, tc.want)
-		}
-	}
+
 	if songTitle("鲸鱼娘的原创歌曲") != "" {
 		t.Fatal("generic title accepted")
 	}
