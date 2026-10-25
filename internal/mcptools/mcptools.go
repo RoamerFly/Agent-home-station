@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -63,7 +64,12 @@ type Tool struct {
 
 type Spec Tool
 
-type Hub struct{ servers []ServerConfig }
+type Hub struct {
+	servers  []ServerConfig
+	mu       sync.Mutex
+	sessions map[string]*mcpSession
+	closed   bool
+}
 
 func New(config []ServerConfig) (*Hub, error) {
 	if len(config) > maxServers {
@@ -114,7 +120,7 @@ func New(config []ServerConfig) (*Hub, error) {
 		}
 		out = append(out, c)
 	}
-	return &Hub{servers: out}, nil
+	return &Hub{servers: out, sessions: map[string]*mcpSession{}}, nil
 }
 
 func builtin() []Tool {
@@ -182,8 +188,16 @@ func (h *Hub) Call(ctx context.Context, name string, args json.RawMessage) (stri
 	return "", fmt.Errorf("unknown tool %q", name)
 }
 
-// Sessions are intentionally ephemeral, so Close has no process or socket to retain.
-func (h *Hub) Close() error { return nil }
+func (h *Hub) Close() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.closed = true
+	for _, s := range h.sessions {
+		s.close()
+	}
+	h.sessions = map[string]*mcpSession{}
+	return nil
+}
 func allowed(c ServerConfig, name string) bool {
 	if len(c.Tools) == 0 {
 		return true
@@ -274,6 +288,9 @@ func (h *Hub) serverCall(ctx context.Context, c ServerConfig, n string, args jso
 	return out, nil
 }
 func (h *Hub) request(ctx context.Context, c ServerConfig, method string, params any, result *json.RawMessage) error {
+	if scope, _ := ctx.Value(sessionScopeKey{}).(string); scope != "" {
+		return h.scopedRequest(ctx, c, scope, method, params, result)
+	}
 	if c.Transport == "stdio" {
 		return stdioRequest(ctx, c, method, params, result)
 	}

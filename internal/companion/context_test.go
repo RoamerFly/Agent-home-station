@@ -14,7 +14,7 @@ type contextModel struct{ seen string }
 
 func (m *contextModel) Chat(_ context.Context, _ string, turns []map[string]string) (string, error) {
 	m.seen = turns[0]["content"]
-	return `{"current_focus":"最近歌曲","media":[{"url":"https://www.bilibili.com/video/BV1S1oeYbEe1/"}],"pending_tasks":[]}`, nil
+	return `{"version":1,"people":[],"topics":[],"current_focus":"最近歌曲","media":[{"url":"https://www.bilibili.com/video/BV1S1oeYbEe1/"}],"pending_tasks":[],"preferences":[],"corrections":[]}`, nil
 }
 func (m *contextModel) ChatFunctions(ctx context.Context, s string, t []map[string]string, _ []mcptools.Tool) (string, error) {
 	return m.Chat(ctx, s, t)

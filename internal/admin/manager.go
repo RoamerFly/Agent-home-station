@@ -383,6 +383,7 @@ func (m *Manager) start(c Config) {
 			if toolErr != nil {
 				m.log("mcp_configuration_error")
 			} else if access != nil {
+				defer access.hub.Close()
 				character.Tools = access
 				character.MaxToolCalls = maxCalls
 				character.ToolLog = m.log

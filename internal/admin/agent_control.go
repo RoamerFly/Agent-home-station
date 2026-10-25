@@ -392,6 +392,10 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 				return
 			}
 			if in.Action == "resume" {
+				if t.Delivery != nil {
+					fail(w, 409, "此任务已进入微信交付，请核对原发送记录；不会重新生成或重复已接受的内容")
+					return
+				}
 				t.State = "pending"
 				t.Next = time.Now()
 				t.Runs = 0

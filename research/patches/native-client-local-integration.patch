@@ -251,6 +251,54 @@ index 3208d8a..0bf48f0 100644
 +
 +App-message type 51 exposes its received description and publisher through normalized link metadata. It does not turn private media locators into public playback URLs or claim that the video has been viewed.
 +
+diff --git a/packages/native-client-rust/crates/wechat-api/src/lib.rs b/packages/native-client-rust/crates/wechat-api/src/lib.rs
+index 2710192..6374e81 100644
+--- a/packages/native-client-rust/crates/wechat-api/src/lib.rs
++++ b/packages/native-client-rust/crates/wechat-api/src/lib.rs
+@@ -824,6 +824,22 @@ async fn quoted_message(
+         .await?,
+     )
+ }
++async fn channels_media(
++    State(app): State<App>,
++    Extension(c): Extension<Claims>,
++    Path((a, id)): Path<(String, String)>,
++) -> ApiResult<Json<Value>> {
++    c.require(Some(&a), "read")?;
++    c.require(Some(&a), "media")?;
++    let guard = app.core.lock_account(&a).await?;
++    Ok(Json(
++        work(move || {
++            let _guard = guard;
++            app.core.channels_media(&a, &id)
++        })
++        .await?,
++    ))
++}
+ async fn avatar(
+     State(app): State<App>,
+     Extension(c): Extension<Claims>,
+@@ -1149,6 +1165,10 @@ pub fn router(core: Arc<Core>, token: &str) -> Router {
+         .route("/v1/accounts/{a}/messages", get(archive_messages))
+         .route("/v1/accounts/{a}/messages/{id}", get(message))
+         .route("/v1/accounts/{a}/messages/{id}/quote", get(quoted_message))
++        .route(
++            "/v1/accounts/{a}/messages/{id}/channels-media",
++            get(channels_media),
++        )
+         .route("/v1/accounts/{a}/avatars/{id}", get(avatar))
+         .route("/v1/accounts/{a}/messages/{id}/image", get(image))
+         .route("/v1/accounts/{a}/sends", post(media::send))
+diff --git a/packages/native-client-rust/crates/wechat-core/src/lib.rs b/packages/native-client-rust/crates/wechat-core/src/lib.rs
+index 8b5dc1c..166a376 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/lib.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/lib.rs
+@@ -1,4 +1,5 @@
+ //! Account coordination, durable intents and profile application barriers.
++mod channels;
+ mod format;
+ mod forwarded;
+ mod links;
 diff --git a/packages/native-client-rust/crates/wechat-core/src/links.rs b/packages/native-client-rust/crates/wechat-core/src/links.rs
 index 30eaea1..21612fe 100644
 --- a/packages/native-client-rust/crates/wechat-core/src/links.rs
@@ -1055,3 +1103,121 @@ index 83fbd7b..b6c6aa7 100644
          parts.push(p::bytes(2, b"synthetic_voice_id"));
          assert_eq!(
              decode_voice_send(&p::message(&parts).unwrap(), "synthetic_voice_id")
+diff --git a/packages/native-client-rust/crates/wechat-core/src/channels.rs b/packages/native-client-rust/crates/wechat-core/src/channels.rs
+new file mode 100644
+index 0000000..db46b8a
+--- /dev/null
++++ b/packages/native-client-rust/crates/wechat-core/src/channels.rs
+@@ -0,0 +1,112 @@
++//! Private media locators from an owned received Channels card. They are not
++//! public share links and must not be included in ordinary message projections.
++use crate::quotes::{child, leaf};
++use crate::{source_message_id, Core};
++use anyhow::Result;
++use serde_json::{json, Value};
++
++fn field(node: roxmltree::Node<'_, '_>, name: &str) -> Option<String> {
++    let text = leaf(child(node, name)?)?;
++    let text = text.trim();
++    (!text.is_empty() && text.len() <= 8192 && !text.contains('\0')).then(|| text.to_owned())
++}
++
++fn locator(content: &str) -> Option<Value> {
++    if content.len() > 256 * 1024
++        || content.to_ascii_uppercase().contains("<!DOCTYPE")
++        || content.to_ascii_uppercase().contains("<!ENTITY")
++    {
++        return None;
++    }
++    let doc = roxmltree::Document::parse_with_options(
++        content,
++        roxmltree::ParsingOptions {
++            allow_dtd: false,
++            nodes_limit: 4096,
++            ..Default::default()
++        },
++    )
++    .ok()?;
++    let root = doc.root_element();
++    if root.tag_name().name() != "msg" || root.tag_name().namespace().is_some() {
++        return None;
++    }
++    let app = child(root, "appmsg")?;
++    if field(app, "type")?.parse::<i32>().ok()? != 51 {
++        return None;
++    }
++    let feed = child(app, "finderFeed")?;
++    let list = child(feed, "mediaList")?;
++    let media = list.children().find(|n| {
++        n.is_element() && n.tag_name().name() == "media" && n.tag_name().namespace().is_none()
++    })?;
++    let url = field(media, "url")?;
++    // Validate syntax here; the consumer must also resolve and reject private
++    // destinations before fetching. No arbitrary card fields become commands.
++    if wechat_protocol::media::validate_shared_link_url(&url).is_err() {
++        return None;
++    }
++    let decode_key = field(media, "decodeKey")
++        .and_then(|s| s.parse::<u64>().ok())
++        .map(|v| v.to_string());
++    Some(
++        json!({"state":"available","mediaUrl":url,"decodeKey":decode_key,"objectId":field(feed,"objectId"),"objectNonceId":field(feed,"objectNonceId"),"title":field(feed,"desc"),"author":field(feed,"nickname"),"duration":field(media,"videoPlayDuration").or_else(||field(media,"videoPlayLen"))}),
++    )
++}
++
++impl Core {
++    /// Requires the API's read AND media scopes. Values remain inside the
++    /// authenticated transfer path; ordinary message/quote APIs are unchanged.
++    pub fn channels_media(&self, account: &str, id: &str) -> Result<Value> {
++        self.ensure_message_not_recalled(account, id)?;
++        let reader = self.profile_reader(account)?;
++        let own = self.profile_username(account)?;
++        let msg = reader.message(&source_message_id(id)?, own.as_deref())?;
++        let mut value = json!({"state":"unavailable","reason":"channels_media_locator_missing"});
++        if crate::quotes::message_app(&msg).is_some_and(|a| a.subtype == 51) {
++            if let Some(content) = msg.content.text.as_deref() {
++                let content = msg
++                    .sender
++                    .as_ref()
++                    .and_then(|s| content.strip_prefix(&format!("{s}:\n")))
++                    .unwrap_or(content);
++                if let Some(found) = locator(content) {
++                    value = found;
++                }
++            }
++        }
++        value["messageId"] = json!(id);
++        value["accountId"] = json!(account);
++        value["threadId"] = json!(msg.peer);
++        self.ensure_message_not_recalled(account, id)?;
++        Ok(value)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn retains_private_locator_without_turning_it_into_a_public_card() {
++        let xml = r#"<msg><appmsg><type>51</type><finderFeed><desc>Seaside park</desc><nickname>Travel</nickname><mediaList><media><url><![CDATA[https://finder.video.qq.com/video?token=synthetic]]></url><decodeKey>18446744073709551614</decodeKey><videoPlayDuration>12</videoPlayDuration></media></mediaList></finderFeed></appmsg></msg>"#;
++        let value = locator(xml).unwrap();
++        assert_eq!(value["decodeKey"], "18446744073709551614");
++        assert_eq!(value["title"], "Seaside park");
++        assert_eq!(value["duration"], "12");
++        assert!(crate::quotes::app_message(xml)
++            .unwrap()
++            .link
++            .unwrap()
++            .card
++            .url
++            .is_none());
++    }
++
++    #[test]
++    fn rejects_other_subtypes_duplicate_fields_and_entities() {
++        assert!(locator("<!DOCTYPE msg><msg/>").is_none());
++        assert!(locator("<msg><appmsg><type>57</type></appmsg></msg>").is_none());
++        assert!(locator("<msg><appmsg><type>51</type><finderFeed><mediaList><media><url>https://example.com/a</url><url>https://example.com/b</url></media></mediaList></finderFeed></appmsg></msg>").is_none());
++    }
++}

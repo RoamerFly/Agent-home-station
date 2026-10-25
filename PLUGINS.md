@@ -9,7 +9,7 @@
 | 声明式 HTTP API | 固定地址、JSON 请求模板、返回字段或二进制、可选轮询 | TTS、绘图、音乐/人声、视频等常见生成接口 |
 | MCP | Streamable HTTP 或 stdio，发现工具描述与参数 | 已有 MCP、复杂 SDK/OAuth/WebSocket、外部任务适配服务 |
 
-远程 API/MCP 只需配置连接。stdio 需要管理端所在的 Linux 环境已安装对应命令与依赖，Windows 的 E 盘 node.exe 不能直接用于 Linux。声明不会安装依赖；外部程序使用管理端用户权限。每个 stdio 请求会启动、初始化、调用后关闭进程，依赖单一常驻进程内存状态的工具需改为远程服务。
+远程 API/MCP 只需配置连接。stdio 需要管理端所在的 Linux 环境已安装对应命令与依赖，Windows 的 E 盘 node.exe 不能直接用于 Linux。声明不会安装依赖；外部程序使用管理端用户权限。正常聊天为每个平台/账号/会话维护独立的MCP会话，stdio进程复用初始化状态，HTTP保留会话头；发现缓存30秒、空闲5分钟关闭，运行退出时清理。取消/断连后不自动重播不确定的操作。手动检查和预演仍使用短会话。详见 [生命周期检查点](docs/lifecycle-upgrade.md)。
 
 ## 同步语音 API 示例
 

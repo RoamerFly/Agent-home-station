@@ -160,6 +160,7 @@ func (p *permittedTools) enabled(name string) bool {
 	return true
 }
 func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
+	ctx = p.mcpContext(ctx)
 	var tools []mcptools.Tool
 	var err error
 	if p.settings.Enabled {
@@ -189,6 +190,7 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	return out, err
 }
 func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMessage) (result string, callErr error) {
+	ctx = p.mcpContext(ctx)
 	started := time.Now()
 	var diagnosticMu sync.Mutex
 	requests, retries, lastStatus := 0, 0, 0

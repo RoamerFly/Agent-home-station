@@ -1,9 +1,10 @@
 """Install the verified share-card quoted reply support after graceful worker drain.
 No image build/export, profile reset or account-data modification.
 """
-import hashlib,http.cookiejar,json,os,pathlib,sqlite3,subprocess,tempfile,time,urllib.parse,urllib.request
+import argparse,hashlib,http.cookiejar,json,os,pathlib,sqlite3,subprocess,tempfile,time,urllib.parse,urllib.request
+parser=argparse.ArgumentParser();parser.add_argument('--channels',action='store_true');args=parser.parse_args()
 root=pathlib.Path('/home/fly/.local/share/wechat-bot-native-research-20261024');workspace=pathlib.Path(__file__).resolve().parents[2]
-candidate=workspace/'temp/wx-share-quotes';binary=root/'bin/wx';assert candidate.read_bytes()[:4]==b'\x7fELF'
+candidate=workspace/('temp/wx-channels-content' if args.channels else 'temp/wx-share-quotes');binary=root/'bin/wx';assert candidate.read_bytes()[:4]==b'\x7fELF'
 base='http://127.0.0.1:8081';client=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 def call(path,data=None,csrf=''):
     headers={'Origin':base,'Content-Type':'application/json'}
@@ -45,8 +46,8 @@ try:
         time.sleep(1)
     else:raise RuntimeError('Native/web still reconnecting; previous binary and profile retained')
     (workspace/'dist/linux-amd64/wx-linux-native').write_bytes(candidate.read_bytes())
-    report={'native_binary_sha256':digest(binary),'previous_native_sha256':old_hash,'source_change':'quote_received_video_and_channels_cards','config_and_keys_unchanged':True,'native_authenticated':True,'web_running':True,'account_reset':False,'docker_images_built_or_exported':0}
-    (workspace/'research/evidence/native-share-quote-update.json').write_text(json.dumps(report,indent=2),encoding='utf8');print(json.dumps(report),flush=True)
+    report={'native_binary_sha256':digest(binary),'previous_native_sha256':old_hash,'source_change':'private_channels_media_source' if args.channels else 'quote_received_video_and_channels_cards','config_and_keys_unchanged':True,'native_authenticated':True,'web_running':True,'account_reset':False,'docker_images_built_or_exported':0}
+    (workspace/'research/evidence'/('native-channels-content-update.json' if args.channels else 'native-share-quote-update.json')).write_text(json.dumps(report,indent=2),encoding='utf8');print(json.dumps(report),flush=True)
 finally:
     if not stopped:
         try:call('/api/runtime/undrain',{'ticket':ticket},csrf)

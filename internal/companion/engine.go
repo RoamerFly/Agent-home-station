@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 	"wechat-bot/internal/identity"
-	"wechat-bot/internal/mcptools"
 )
 
 type Input struct {
@@ -255,12 +254,11 @@ func (e *Engine) Respond(ctx context.Context, input Input) (Decision, error) {
 		reset.ResetMedia()
 	}
 	if !input.Preview {
-		if _, err := e.CompressContext(ctx, input, false); err != nil && e.ToolLog != nil {
+		compressed, compressionErr := e.CompressContext(ctx, input, false)
+		if compressionErr != nil && e.ToolLog != nil {
 			e.ToolLog("context_compression_failed")
 		}
-		if _, native := e.model.(interface {
-			ChatFunctions(context.Context, string, []map[string]string, []mcptools.Tool) (string, error)
-		}); native {
+		if compressed {
 			scope = e.Store.Context(input, c, now)
 		}
 	}

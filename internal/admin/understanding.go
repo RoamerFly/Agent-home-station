@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 )
@@ -42,6 +43,16 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 	if m.Type == 49 {
 		if m.IsQuotedText() {
 			return "[微信引用回复，用户本次正文]\n" + m.Body, nil
+		}
+		if m.AppMessageType != nil && *m.AppMessageType == 51 && c.ReadVideos {
+			bounded, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer cancel()
+			observation, err := a.understandChannels(bounded, m)
+			if err == nil {
+				return shareMessageDescription(m) + "\n" + observation, nil
+			}
+			a.manager.record(bot.Record{Event: "channels_video_observation_unavailable", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, Status: "unavailable", Reason: err.Error(), Origin: "media"})
+			return shareMessageDescription(m) + "\n[视频内容读取未完成，不能声称已观看。原因：" + err.Error() + "]", nil
 		}
 		return shareMessageDescription(m), nil
 	}

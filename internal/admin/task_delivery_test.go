@@ -58,4 +58,9 @@ func TestTaskWaitsForFullDeliveryAndRetainsUnknownOutcome(t *testing.T) {
 	if f.manager.agent.list("test", "filehelper")[0].State != "completed" {
 		t.Fatal("cross-thread mutation")
 	}
+	f.login()
+	code, _, _ := f.request("POST", "/api/agent/tasks/"+task.ID, map[string]string{"action": "resume"}, true, true)
+	if code != 409 || f.manager.agent.list("test", "filehelper")[0].State != "completed" {
+		t.Fatal("resume replayed an existing delivery", code)
+	}
 }
