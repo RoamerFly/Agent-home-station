@@ -5,13 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 	"wechat-bot/internal/bot"
@@ -32,7 +30,8 @@ func (p *permittedTools) yueTools() []mcptools.Tool {
 		return nil
 	}
 	return []mcptools.Tool{
-		agentTool("music_local_start", "Create an original song with local YuE. Supply a meaningful song title chosen from the user intent, style and original [verse]/[chorus] lyrics fitting duration_seconds (10..600, default60). A one-minute request MUST set60 and use short lyrics. Optional reference_asset_id is downloaded audio in THIS conversation. Automatically persists completion/delivery; do not create another agent_task. Defaults to the COMPLETE song as voice notes of at most60 seconds each. Use both when the user requests singing AND the original file; use file for file-only requests; never ask whether user wants a file. Returns job_id and automatic_followup.", `{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":24},"style":{"type":"string"},"lyrics":{"type":"string"},"duration_seconds":{"type":"integer","minimum":10,"maximum":600},"kind":{"type":"string","enum":["voice","file","both"]},"reference_asset_id":{"type":"string"}},"required":["title","style","lyrics"],"additionalProperties":false}`),
+		agentTool("music_local_start", "Generate with local YuE: mode=original writes a new composition; mode=cover requires actual reference_asset_id from THIS conversation and supplied/verified lyrics, never invent replacement words for a cover. Reference workflow extracts melody/ABC and regenerates audio; it cannot preserve the exact backing track, timbre or guarantee faithful singing. reference_mode=melody (default) or full (melody+chords). Optional seed 0..2147483647 fixes a take; omit for a new seeded take. For exactly replaying a previous recording use media_reuse, not generation. Inspect source/previous parameters with music_reference_inspect. Supply title, style, lyrics and duration_seconds (10..600, default60), one minute=60. Automatically follows up; no extra agent_task. Default COMPLETE voice notes <=60 seconds each, both only if user also asks for file. Returns actual job_id and seed, not proof of listening or delivery.", `{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":24},"mode":{"type":"string","enum":["original","cover"]},"style":{"type":"string"},"lyrics":{"type":"string"},"seed":{"type":"integer","minimum":0,"maximum":2147483647},"reference_mode":{"type":"string","enum":["melody","full"]},"duration_seconds":{"type":"integer","minimum":10,"maximum":600},"kind":{"type":"string","enum":["voice","file","both"]},"reference_asset_id":{"type":"string"}},"required":["title","mode","style","lyrics"],"additionalProperties":false}`),
+		agentTool("music_reference_inspect", "Inspect exact cached audio from THIS conversation before covering, rerolling or recovering a take. Returns submitted style/lyrics/seed when this is a known generated song. Optional transcribe=true calls configured ASR for <=60 seconds at offset_seconds; candidate transcript is uncertain, not guaranteed lyrics. Use the exact quoted asset over another newer take. If only an original recording is available, listen/transcribe rather than inventing lyrics; if user demands unchanged accompaniment explain that YuE resynthesizes. Input {asset_id,transcribe?,offset_seconds?,seconds?}.", `{"type":"object","properties":{"asset_id":{"type":"string"},"transcribe":{"type":"boolean"},"offset_seconds":{"type":"integer","minimum":0,"maximum":600},"seconds":{"type":"integer","minimum":1,"maximum":60}},"required":["asset_id"],"additionalProperties":false}`),
 		agentTool("music_local_status", "Read a local job owned by THIS conversation. Completed audio defaults to COMPLETE voice notes (each at most60 seconds), not a preview or file. User can request original file later via media_reuse. Never ask whether a file is wanted. Put real media[].id in final media_ids. No resubmission. Input {job_id:string,kind?:voice|file}.", `{"type":"object","properties":{"job_id":{"type":"string"},"kind":{"type":"string","enum":["file","voice","both"]}},"required":["job_id"],"additionalProperties":false}`),
 	}
 }
@@ -80,9 +79,10 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 }
 
 type yueHealth struct {
-	State   string `json:"state"`
-	Message string `json:"message"`
-	Ready   bool   `json:"ready"`
+	BridgeVersion int    `json:"bridge_version"`
+	State         string `json:"state"`
+	Message       string `json:"message"`
+	Ready         bool   `json:"ready"`
 }
 
 func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
@@ -106,7 +106,8 @@ func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 		return yueHealth{State: "bridge_unavailable", Message: err.Error()}
 	}
 	var reply struct {
-		Ready bool `json:"ready"`
+		Ready   bool `json:"ready"`
+		Version int  `json:"bridge_version"`
 	}
 	if json.Unmarshal(b, &reply) != nil {
 		return yueHealth{State: "invalid_health", Message: "YuE桥接健康响应无效"}
@@ -114,11 +115,14 @@ func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 	if !reply.Ready {
 		return yueHealth{State: "backend_unavailable", Message: "YuE桥接在线，ComfyUI生成后端尚未就绪；未提交任务"}
 	}
-	return yueHealth{State: "ready", Message: "YuE桥接与ComfyUI生成后端均在线", Ready: true}
+	return yueHealth{BridgeVersion: reply.Version, State: "ready", Message: "YuE桥接与ComfyUI生成后端均在线", Ready: true}
 }
 func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	var in struct {
-		Duration             int `json:"duration_seconds"`
+		Mode                 string `json:"mode"`
+		ReferenceMode        string `json:"reference_mode"`
+		Seed                 *int64 `json:"seed"`
+		Duration             int    `json:"duration_seconds"`
 		Title, Style, Lyrics string
 		Reference            string `json:"reference_asset_id"`
 		ID                   string `json:"job_id"`
@@ -126,6 +130,9 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 	}
 	if json.Unmarshal(raw, &in) != nil {
 		return "", errors.New("YuE参数无效")
+	}
+	if name == "music_reference_inspect" {
+		return p.inspectMusicReference(ctx, raw)
 	}
 	if name == "music_local_start" {
 		if p.trace.TaskID != "" {
@@ -155,44 +162,57 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		if in.Title == "" {
 			return "", errors.New("请根据用户歌曲语义自拟具体歌名，不能使用通用占位名称")
 		}
-		body := map[string]any{"title": in.Title, "style": in.Style, "lyrics": in.Lyrics, "duration_seconds": in.Duration}
-		raw, _ = json.Marshal(map[string]any{"title": in.Title, "style": in.Style, "lyrics": in.Lyrics, "kind": in.Kind, "duration_seconds": in.Duration, "reference_asset_id": in.Reference})
+		if in.Mode == "" {
+			if in.Reference != "" {
+				in.Mode = "cover"
+			} else {
+				in.Mode = "original"
+			}
+		}
+		if in.Mode != "original" && in.Mode != "cover" {
+			return "", errors.New("歌曲模式应为original或cover")
+		}
+		if in.Mode == "cover" && in.Reference == "" {
+			return "", errors.New("翻唱必须提供本会话真实原音频reference_asset_id；先读取引用素材或下载原曲，不能改编歌词冒充原曲")
+		}
+		if in.Mode == "original" && in.Reference != "" {
+			return "", errors.New("已提供参考音频，请使用cover模式明确按参考重生成")
+		}
+		if in.ReferenceMode == "" {
+			in.ReferenceMode = "melody"
+		}
+		if in.ReferenceMode != "melody" && in.ReferenceMode != "full" {
+			return "", errors.New("参考模式只能为melody或full")
+		}
+		if in.Seed != nil && (*in.Seed < 0 || *in.Seed > 2147483647) {
+			return "", errors.New("种子范围应为0至2147483647")
+		}
+		// A missing seed selects a fresh take for a new request, but retries of
+		// this same request keep the same seed and idempotency identity.
+		if in.Seed == nil {
+			canonical, _ := json.Marshal(map[string]any{"title": in.Title, "mode": in.Mode, "style": in.Style, "lyrics": in.Lyrics, "duration": in.Duration, "reference": in.Reference, "reference_mode": in.ReferenceMode, "kind": in.Kind})
+			sum := sha256.Sum256(append([]byte(p.trace.Account+"|"+p.trace.Thread+"|"+p.trace.TraceID+"|"), canonical...))
+			seed := int64(binary.LittleEndian.Uint32(sum[:4]) & 0x7fffffff)
+			in.Seed = &seed
+		}
+		spec := &songSpec{Mode: in.Mode, Style: in.Style, Lyrics: in.Lyrics, Seed: *in.Seed, Duration: in.Duration, Reference: in.Reference, ReferenceMode: in.ReferenceMode}
+		body := map[string]any{"title": in.Title, "mode": in.Mode, "style": in.Style, "lyrics": in.Lyrics, "duration_seconds": in.Duration, "seed": *in.Seed, "reference_mode": in.ReferenceMode}
+		raw, _ = json.Marshal(map[string]any{"title": in.Title, "style": in.Style, "lyrics": in.Lyrics, "mode": in.Mode, "kind": in.Kind, "duration_seconds": in.Duration, "seed": *in.Seed, "reference_asset_id": in.Reference, "reference_mode": in.ReferenceMode})
 		if in.Reference != "" {
-			m := p.manager
-			m.assetMu.Lock()
-			assets, e := m.loadAssets()
-			m.assetMu.Unlock()
-			if e != nil {
-				return "", e
+			_, data, err := p.referenceAsset(in.Reference)
+			if err != nil {
+				return "", err
 			}
-			found := false
-			for _, a := range assets {
-				if a.ID != in.Reference || a.Account != p.trace.Account || a.Scope != assetScope(p.trace) {
-					continue
-				}
-				if len(a.Hash) != 64 || !strings.HasPrefix(a.MIME, "audio/") {
-					return "", errors.New("参考素材必须是当前会话已下载的原音频")
-				}
-				data, e := os.ReadFile(filepath.Join(m.dir, "media-assets", a.Hash))
-				if e != nil || len(data) > 25<<20 {
-					return "", errors.New("参考音频缓存不可用")
-				}
-				hash := sha256.Sum256(data)
-				if hex.EncodeToString(hash[:]) != a.Hash {
-					return "", errors.New("参考音频校验失败")
-				}
-				body["reference_base64"] = base64.StdEncoding.EncodeToString(data)
-				found = true
-				break
-			}
-			if !found {
-				return "", errors.New("当前会话找不到该参考音频")
-			}
+			body["reference_base64"] = base64.StdEncoding.EncodeToString(data)
 		}
 		// Store the remote job mapping under the private effect ledger.
 		// Probe without side effects before claiming a create operation. An offline
 		// bridge must not become a fictitious successful/uncertain generation job.
-		if health := p.probeYuE(ctx); !health.Ready {
+		health := p.probeYuE(ctx)
+		if health.Ready && health.BridgeVersion < 2 {
+			return "", yueError("yue_bridge_upgrade_required")
+		}
+		if !health.Ready {
 			if health.State == "backend_unavailable" {
 				return "", yueError("yue_backend_unavailable")
 			}
@@ -230,7 +250,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			found = found || old.ID == taskID
 		}
 		if !found {
-			task := agentTask{ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "原创歌曲 · " + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "YuE已提交，等待真实生成结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
+			task := agentTask{MusicSpec: spec, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: map[bool]string{true: "参考翻唱 · ", false: "原创歌曲 · "}[in.Mode == "cover"] + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "YuE已提交，等待真实生成结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
 			if len(task.Title) > 200 {
 				task.Title = "原创歌曲生成"
 			}
@@ -251,6 +271,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			}
 		}
 		job["title"] = in.Title
+		job["mode"], job["seed"], job["reference_asset_id"], job["reference_mode"] = in.Mode, *in.Seed, in.Reference, in.ReferenceMode
 		job["automatic_followup"] = true
 		job["task_id"] = taskID
 		job["instruction"] = "已真实提交本地YuE，后续检查与交付已自动持久化。可以自然告知正在制作；不要说已生成，不必另建任务或本轮反复查询。"
@@ -305,13 +326,15 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		return "", e
 	}
 	title := ""
+	var spec *songSpec
 	for _, t := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
 		if t.MusicJob == in.ID {
 			title = t.MusicTitle
+			spec = t.MusicSpec
 			break
 		}
 	}
-	result, e := p.stageSongOutput(ctx, audio, typ, title, in.Kind)
+	result, e := p.stageSongOutputSpec(ctx, audio, typ, title, in.Kind, spec)
 	if e == nil && p.trace.TaskID != "" {
 		for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
 			if task.ID == p.trace.TaskID && task.MusicJob == in.ID {

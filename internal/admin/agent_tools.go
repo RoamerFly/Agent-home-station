@@ -183,7 +183,15 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		m.agent.mu.Unlock()
 		return op.Result, err
 	case "agent_tasks":
-		return encode(m.agent.list(p.trace.Account, p.trace.Thread), nil)
+		tasks := m.agent.list(p.trace.Account, p.trace.Thread)
+		for i := range tasks {
+			tasks[i] = copyTask(tasks[i])
+			if tasks[i].MusicSpec != nil {
+				tasks[i].MusicSpec.Style = ""
+				tasks[i].MusicSpec.Lyrics = ""
+			}
+		}
+		return encode(tasks, nil)
 	case "agent_task":
 		var in struct {
 			ID, Key, Title, Checkpoint, State string

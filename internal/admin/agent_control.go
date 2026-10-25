@@ -84,6 +84,7 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	MusicSpec         *songSpec         `json:"music_spec,omitempty"`
 	PluginJob         *pluginJobState   `json:"plugin_job,omitempty"`
 	RequestedText     string            `json:"requested_text,omitempty"`
 	MusicFailure      bool              `json:"music_failure,omitempty"`

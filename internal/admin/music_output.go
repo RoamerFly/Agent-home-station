@@ -33,6 +33,9 @@ func songTitle(title string) string {
 }
 
 func (p *permittedTools) stageSongOutput(ctx context.Context, audio []byte, typ, title, kind string) (string, error) {
+	return p.stageSongOutputSpec(ctx, audio, typ, title, kind, nil)
+}
+func (p *permittedTools) stageSongOutputSpec(ctx context.Context, audio []byte, typ, title, kind string, spec *songSpec) (string, error) {
 	if !p.musicKindPermitted(kind) {
 		return "", errors.New("歌曲发送格式未授权")
 	}
@@ -46,22 +49,26 @@ func (p *permittedTools) stageSongOutput(ctx context.Context, audio []byte, typ,
 	} else if strings.Contains(typ, "wav") {
 		ext = ".wav"
 	}
-	filename := "大肥鱼原创歌曲-" + title + ext
-	out := plugins.Output{Text: "原创歌曲《" + title + "》已生成，尚未发送"}
+	prefix, label := "大肥鱼原创歌曲-", "原创歌曲"
+	if spec != nil && spec.Mode == "cover" {
+		prefix, label = "大肥鱼翻唱-", "参考翻唱"
+	}
+	filename := prefix + title + ext
+	out := plugins.Output{Text: label + "《" + title + "》已生成，尚未发送"}
 	if kind == "voice" || kind == "both" {
 		voices, err := preparePublicAudioPreview(ctx, p.manager.dir, audio, 0)
 		if err != nil {
 			return "", err
 		}
 		for i, v := range voices.Media {
-			v.Filename = fmt.Sprintf("大肥鱼原创歌曲-%s-语音%d%s", title, i+1, filepath.Ext(v.Filename))
+			v.Filename = fmt.Sprintf("%s%s-语音%d%s", prefix, title, i+1, filepath.Ext(v.Filename))
 			out.Media = append(out.Media, v)
 		}
 	}
 	if kind == "file" || kind == "both" {
 		out.Media = append(out.Media, plugins.MediaResult{Kind: "file", Data: audio, MIMEType: typ, Filename: filename})
 	}
-	result, err := p.stageOutputWithAsset(ctx, out, &assetOriginal{Data: audio, MIME: typ, Filename: filename})
+	result, err := p.stageOutputWithAsset(ctx, out, &assetOriginal{Data: audio, MIME: typ, Filename: filename, Music: spec})
 	if err != nil || kind != "both" {
 		return result, err
 	}

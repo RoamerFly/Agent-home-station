@@ -6,6 +6,8 @@ type yueCallError struct{ code string }
 
 func (e *yueCallError) Error() string {
 	switch e.code {
+	case "yue_bridge_upgrade_required":
+		return "本地YuE桥接版本较旧，不能确认参考模式和固定种子已生效；请升级桥接，本次未创建任务"
 	case "yue_bridge_unavailable":
 		return "本地YuE桥接连接失败；请检查6188服务，原任务与音频会保留，不重新生成"
 	case "yue_bridge_auth_failed":

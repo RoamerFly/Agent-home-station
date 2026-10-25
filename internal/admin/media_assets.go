@@ -22,6 +22,7 @@ import (
 )
 
 type assetOriginal struct {
+	Music               *songSpec
 	Data                []byte
 	MIME, URL, Filename string
 	Parent              *assetOriginal
@@ -39,6 +40,7 @@ type assetFormat struct {
 	Sources []string `json:"sources"`
 }
 type mediaAsset struct {
+	Music         *songSpec              `json:"music_generation,omitempty"`
 	FirstRequest  *assetRequest          `json:"first_request,omitempty"`
 	ParentAssetID string                 `json:"parent_asset_id,omitempty"`
 	Requests      []assetRequest         `json:"requests,omitempty"`
@@ -194,6 +196,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		a.URL = u.String()
 	}
 	if index >= 0 {
+		a.Music = items[index].Music
 		a.FirstRequest = items[index].FirstRequest
 		if parentID == "" {
 			parentID = items[index].ParentAssetID
@@ -207,6 +210,10 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		if a.Sources == nil {
 			a.Sources = map[string]string{}
 		}
+	}
+	if original.Music != nil {
+		spec := *original.Music
+		a.Music = &spec
 	}
 	a.ParentAssetID = parentID
 	a.noteRequest(in)
@@ -299,6 +306,9 @@ func (m *Manager) findAssets(in companion.Input, assetID, requester, query strin
 				first = assetRequestSummary(*a.FirstRequest)
 			}
 			row := map[string]any{"asset_id": a.ID, "parent_asset_id": a.ParentAssetID, "title": a.Title, "filename": a.Filename, "bytes": a.Bytes, "formats": formats, "original_cached": a.Hash != "", "cached_mime": a.MIME, "updated": a.Updated, "source_url": a.URL, "first_request": first, "requests": requests}
+			if a.Music != nil {
+				row["generation_mode"], row["reference_asset_id"], row["seed"] = a.Music.Mode, a.Music.Reference, a.Music.Seed
+			}
 			candidate := append(out, row)
 			b, _ := json.Marshal(candidate)
 			if len(b) > 5400 {

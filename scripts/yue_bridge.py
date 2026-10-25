@@ -2,7 +2,7 @@
 Run with --project <YuE app> --state <private directory> --token-file <file>.
 The bridge persists jobs and never automatically resubmits interrupted work.
 """
-import argparse, base64, concurrent.futures, hmac, json, os, secrets, threading, time, urllib.request, urllib.error, subprocess
+import argparse, base64, concurrent.futures, hashlib, hmac, json, os, secrets, threading, time, urllib.request, urllib.error, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -13,6 +13,43 @@ def apply_song_duration(graph,seconds):
         if node.get('class_type')=='YuE2GenerateMusic':
             node['inputs']['max_duration']=float(seconds);found=True
     if not found:raise ValueError('duration_control_missing')
+
+def song_options(body):
+    reference=body.get('reference_base64','')
+    if not isinstance(reference,str):raise ValueError('invalid_reference')
+    mode=body.get('mode') or ('cover' if reference else 'original')
+    if mode not in ('original','cover'):raise ValueError('invalid_mode')
+    if (mode=='cover')!=bool(reference):raise ValueError('cover_requires_reference')
+    reference_mode=body.get('reference_mode','melody')
+    if reference_mode not in ('melody','full'):raise ValueError('invalid_reference_mode')
+    seed=body.get('seed')
+    if seed is not None and (isinstance(seed,bool) or not isinstance(seed,int) or not 0<=seed<=2147483647):raise ValueError('invalid_seed')
+    return mode,reference_mode,seed
+
+def prepare_song_graph(workflow_dir,body,jid,input_dir):
+    mode,reference_mode,seed=song_options(body)
+    if seed is None:raise ValueError('seed_not_persisted')
+    graph=json.loads((workflow_dir/('audio_yue2_music_cover.json' if mode=='cover' else 'audio_yue2_text_to_music.json')).read_text(encoding='utf-8'))
+    target=body.get('duration_seconds',60);apply_song_duration(graph,target)
+    # Preserve the user's supplied style/lyrics. Duration is controlled by the
+    # real generation node, not by silently injecting a new short-song style.
+    if mode=='cover':
+        try:data=base64.b64decode(body['reference_base64'],validate=True)
+        except Exception:raise ValueError('invalid_reference_encoding') from None
+        if not 0<len(data)<=25*1024*1024:raise ValueError('reference_size_limit')
+        input_dir.mkdir(parents=True,exist_ok=True)
+        source=input_dir/('wechat-ref-'+jid+'.audio');source.write_bytes(data)
+        name='wechat-ref-'+jid+'.wav'
+        subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-protocol_whitelist','file','-i',str(source),'-vn','-ar','44100','-ac','2','-t','600',str(input_dir/name)],check=True,timeout=90)
+        graph['45']['inputs']['audio']=name
+        graph['33:25']['inputs']['style']=body['style'];graph['33:25']['inputs']['lyrics']=body['lyrics']
+        graph['33:25']['inputs']['mode']=reference_mode
+        graph['33:41']['inputs']['mode']=reference_mode
+    else:
+        graph['33:36']['inputs']['value']=body['style'];graph['33:37']['inputs']['value']=body['lyrics']
+    graph['33:34']['inputs']['seed']=seed
+    graph['10']['inputs']['filename_prefix']='wechat-agent/'+jid
+    return graph
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');args=p.parse_args()
@@ -35,20 +72,8 @@ def main():
             with lock:
                 if jobs[jid]['state']=='cancelled':return
                 jobs[jid]['state']='running';save()
-            reference=body.get('reference_base64','');filename='audio_yue2_music_cover.json' if reference else 'audio_yue2_text_to_music.json'
-            graph=json.loads((workflow_dir/filename).read_text(encoding='utf-8'))
             target=body.get('duration_seconds',60)
-            apply_song_duration(graph,target)
-            style=body['style']+f'; complete short song within {target} seconds, brief intro and a finished ending'
-            if reference:
-                data=base64.b64decode(reference,validate=True)
-                if not 0<len(data)<=25*1024*1024:raise ValueError('reference_size_limit')
-                input_dir=project/'comfy/ComfyUI/input';name='wechat-ref-'+jid+'.audio';(input_dir/name).write_bytes(data)
-                graph['45']['inputs']['audio']=name;graph['33:25']['inputs']['style']=style;graph['33:25']['inputs']['lyrics']=body['lyrics']
-            else:
-                graph['33:36']['inputs']['value']=style;graph['33:37']['inputs']['value']=body['lyrics']
-            graph['33:34']['inputs']['seed']=secrets.randbelow(2**31)
-            graph['10']['inputs']['filename_prefix']='wechat-agent/'+jid
+            graph=prepare_song_graph(workflow_dir,body,jid,project/'comfy/ComfyUI/input')
             submitted=api('/prompt',{'prompt':graph,'client_id':'wechat-yue-'+jid})
             prompt_id=submitted['prompt_id']
             with lock:jobs[jid]['prompt_id']=prompt_id;save()
@@ -90,7 +115,7 @@ def main():
         def do_GET(self):
             if not self.authenticated():return self.reply(401,{'error':'unauthorized'})
             if self.path=='/health':
-                try:api('/system_stats');return self.reply(200,{'ready':True})
+                try:api('/system_stats');return self.reply(200,{'ready':True,'bridge_version':2,'capabilities':['original','reference_cover','seed','reference_mode'],'cover_boundary':'ABC-conditioned resynthesis; not isolated vocal conversion or exact accompaniment preservation'})
                 except Exception:return self.reply(200,{'ready':False})
             parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
             with lock:job=dict(jobs.get(jid,{}))
@@ -109,21 +134,32 @@ def main():
             if not isinstance(body.get('style'),str) or not isinstance(body.get('lyrics'),str) or len(body['style'])>2000 or len(body['lyrics'])>6000:return self.reply(400,{'error':'invalid_song_input'})
             target=body.get('duration_seconds',60)
             if isinstance(target,bool) or not isinstance(target,(int,float)) or not 10<=target<=600:return self.reply(400,{'error':'invalid_duration'})
+            try:mode,reference_mode,seed=song_options(body)
+            except ValueError as e:return self.reply(400,{'error':str(e)})
+            # Keep a request fingerprint before assigning an optional seed. A
+            # reused key cannot silently change the reference, lyrics or take.
+            fingerprint=hashlib.sha256(json.dumps(body,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
             key=self.headers.get('Idempotency-Key','')
             # Resolve an existing idempotent result even while the backend is
             # offline. A new job requires a live generator, before persistence.
             with lock:
                 for old in jobs.values():
-                    if key and old.get('key')==key:return self.reply(200,{k:v for k,v in old.items() if k!='file'})
+                    if key and old.get('key')==key:
+                        if old.get('request_hash') and old['request_hash']!=fingerprint:return self.reply(409,{'error':'idempotency_conflict'})
+                        return self.reply(200,{k:v for k,v in old.items() if k!='file'})
             try:api('/system_stats',timeout=5)
             except Exception:return self.reply(503,{'error':'backend_unavailable'})
             with lock:
                 for old in jobs.values():
-                    if key and old.get('key')==key:return self.reply(200,{k:v for k,v in old.items() if k!='file'})
+                    if key and old.get('key')==key:
+                        if old.get('request_hash') and old['request_hash']!=fingerprint:return self.reply(409,{'error':'idempotency_conflict'})
+                        return self.reply(200,{k:v for k,v in old.items() if k!='file'})
                 if len(jobs)>=500:return self.reply(409,{'error':'job_history_limit'})
                 if sum(j['state'] in ('queued','running') for j in jobs.values())>=3:return self.reply(429,{'error':'queue_full'})
-                jid=secrets.token_hex(16);jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'reference_used':bool(body.get('reference_base64')),'requested_seconds':target};save();pool.submit(run,jid,body)
-            self.reply(202,{'id':jid,'state':'queued'})
+                if seed is None:seed=secrets.randbelow(2**31)
+                body['seed']=seed
+                jid=secrets.token_hex(16);jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'reference_used':mode=='cover','mode':mode,'reference_mode':reference_mode,'seed':seed,'request_hash':fingerprint,'requested_seconds':target};save();pool.submit(run,jid,body)
+            self.reply(202,{'id':jid,'state':'queued','seed':seed,'mode':mode,'reference_used':mode=='cover'})
     # Windows/WSL access: token required on every endpoint. No remote code/API.
     ThreadingHTTPServer((args.bind,args.port),Handler).serve_forever()
 
