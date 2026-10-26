@@ -158,6 +158,57 @@ func TestPartialDeliveryCreatesOneOwnerRecoveryCheckpoint(t *testing.T) {
 	}
 }
 
+func TestGroupDeliveryReportsGoToOwnerPrivateWithoutMemberEscalation(t *testing.T) {
+	for _, sender := range []string{"wxid_owner", "wxid_member"} {
+		t.Run(sender, func(t *testing.T) {
+			f, p := trustedAgent(t)
+			f.manager.mu.Lock()
+			f.manager.config.Companion.Enabled = true
+			f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: "source@chatroom", Name: "来源群", Mode: "mention"})
+			f.manager.mu.Unlock()
+			ac := f.manager.agent.config()
+			ac.PrivilegedThreads = []string{"*"}
+			if err := f.manager.agent.save(ac); err != nil {
+				t.Fatal(err)
+			}
+			original := agentTask{ID: "source-song", Account: "test", Thread: "source@chatroom", Sender: sender, MusicJob: "generation", State: "waiting_delivery"}
+			if err := f.manager.agent.task(original); err != nil {
+				t.Fatal(err)
+			}
+			in := companion.Input{Account: "test", Thread: original.Thread, Sender: sender, TaskID: original.ID}
+			if err := f.manager.updateAgentDelivery(in, bot.TaskDelivery{Trace: "delivery", State: "needs_review", Expected: 1, PendingJob: "send-original", AcceptedParts: 2, TotalParts: 3}); err != nil {
+				t.Fatal(err)
+			}
+			private := f.manager.agent.list("test", "wxid_owner")
+			if len(private) != 1 || private[0].ReportSourceThread != original.Thread || private[0].QuoteServerID != "" {
+				t.Fatal("report leaked or lost source", private)
+			}
+			report := private[0]
+			report.Next = time.Now().Add(-time.Second)
+			if err := f.manager.agent.task(report); err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := f.manager.claimAgentTask(time.Now(), func(string) bool { return false })
+			if err != nil || claimed == nil || claimed.Thread != "wxid_owner" || claimed.IsGroup {
+				t.Fatal("report routed to group", claimed, err)
+			}
+			if sender == "wxid_member" {
+				if !claimed.ReportOnly {
+					t.Fatal("member-triggered failure elevated to owner")
+				}
+				p.SetTrace(*claimed)
+				tools, err := p.List(context.Background())
+				if err != nil || len(tools) != 0 || p.privileged() {
+					t.Fatal("report-only context exposed tools", tools, err)
+				}
+				if _, err := p.Call(context.Background(), "server_exec", json.RawMessage(`{"path":"/","command":"true"}`)); err == nil {
+					t.Fatal("report-only executed a program")
+				}
+			}
+		})
+	}
+}
+
 func TestMusicServiceHealthIsReadOnlyAndNeverSubmitsGeneration(t *testing.T) {
 	requests := 0
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

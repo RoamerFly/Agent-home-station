@@ -31,6 +31,7 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
+	ReportFailure     func(companion.Input, string) error
 	AgentTask         func(time.Time, func(string) bool) (*companion.Input, error)
 	AgentTaskDone     func(companion.Input, string)
 	AgentTaskDelivery func(companion.Input, TaskDelivery) error
@@ -472,6 +473,10 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 }
 
 func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engine, input companion.Input, decision companion.Decision, err, processingErr error, toolStarted, progressDelivered bool) {
+	if input.ReportOnly {
+		decision.ImageID = ""
+		decision.MediaIDs = nil
+	}
 	if err != nil && w.keepUnavailableObservation(input, err) {
 		return
 	}
@@ -497,6 +502,17 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		}
 		w.activity(Record{Event: "tool_task_finished_without_result", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Reason: "tool_task_no_final_after_progress", Status: "completed"})
 		decision = companion.Decision{Action: "reply", Messages: []string{"这次还没把结果发出来，我先停下这次尝试。"}, Reason: "tool_task_no_final_after_progress"}
+		err = nil
+	}
+	if w.config.ReportFailure != nil && input.IsGroup && (decision.Reason == "decision_failure_reported" || decision.Reason == "tool_task_deadline_exceeded" || decision.Reason == "tool_task_no_final_after_progress" || err != nil && ctx.Err() == nil) {
+		reason := decision.Reason
+		if err != nil {
+			reason = "model_generation_failed"
+		}
+		if reportErr := w.config.ReportFailure(input, reason); reportErr != nil {
+			w.config.Log("private_operation_report_save_failed")
+		}
+		decision = companion.Decision{Action: "silent", Reason: "operation_reported_privately"}
 		err = nil
 	}
 	if err != nil {

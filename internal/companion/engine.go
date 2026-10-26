@@ -30,6 +30,7 @@ type Input struct {
 	ReviewRequired     bool   `json:"review_required,omitempty"`
 	PersonaOverride    string `json:"-"`
 	Preview            bool   `json:"-"`
+	ReportOnly         bool   `json:"report_only,omitempty"`
 	MustReply          bool   `json:"-"`
 	TraceID            string `json:"-"`
 	QuoteServerID      string `json:"-"`

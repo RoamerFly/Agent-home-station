@@ -114,6 +114,9 @@ func (p *permittedTools) ForkTools() companion.ToolAccess {
 }
 
 func (p *permittedTools) enabled(name string) bool {
+	if p.trace.ReportOnly {
+		return false
+	}
 	if strings.HasPrefix(name, "device_") {
 		return p.mobileToolEnabled(name)
 	}
@@ -166,6 +169,9 @@ func (p *permittedTools) enabled(name string) bool {
 	return true
 }
 func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
+	if p.trace.ReportOnly {
+		return nil, nil
+	}
 	ctx = p.mcpContext(ctx)
 	var tools []mcptools.Tool
 	var err error

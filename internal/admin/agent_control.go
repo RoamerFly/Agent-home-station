@@ -102,33 +102,35 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
-	OwnerRequested    bool              `json:"owner_requested,omitempty"`
-	ProcessID         string            `json:"process_id,omitempty"`
-	DeviceTask        string            `json:"device_task,omitempty"`
-	MusicSpec         *songSpec         `json:"music_spec,omitempty"`
-	PluginJob         *pluginJobState   `json:"plugin_job,omitempty"`
-	RequestedText     string            `json:"requested_text,omitempty"`
-	MusicFailure      bool              `json:"music_failure,omitempty"`
-	Delivery          *bot.TaskDelivery `json:"delivery,omitempty"`
-	RecoveryMessageID string            `json:"recovery_message_id,omitempty"`
-	MusicTitle        string            `json:"music_title,omitempty"`
-	MusicJob          string            `json:"music_job,omitempty"`
-	MusicKind         string            `json:"music_kind,omitempty"`
-	MusicPrepared     bool              `json:"music_prepared,omitempty"`
-	MusicDeadline     time.Time         `json:"music_deadline,omitempty"`
-	OriginTrace       string            `json:"origin_trace,omitempty"`
-	QuoteServerID     string            `json:"quote_server_id,omitempty"`
-	ID                string            `json:"id"`
-	Account           string            `json:"account"`
-	Thread            string            `json:"thread"`
-	Sender            string            `json:"sender"`
-	Title             string            `json:"title"`
-	Checkpoint        string            `json:"checkpoint"`
-	State             string            `json:"state"`
-	Next              time.Time         `json:"next"`
-	Updated           time.Time         `json:"updated"`
-	Runs              int               `json:"runs"`
-	LastResult        string            `json:"last_result,omitempty"`
+	ReportOnly         bool              `json:"report_only,omitempty"`
+	ReportSourceThread string            `json:"report_source_thread,omitempty"`
+	OwnerRequested     bool              `json:"owner_requested,omitempty"`
+	ProcessID          string            `json:"process_id,omitempty"`
+	DeviceTask         string            `json:"device_task,omitempty"`
+	MusicSpec          *songSpec         `json:"music_spec,omitempty"`
+	PluginJob          *pluginJobState   `json:"plugin_job,omitempty"`
+	RequestedText      string            `json:"requested_text,omitempty"`
+	MusicFailure       bool              `json:"music_failure,omitempty"`
+	Delivery           *bot.TaskDelivery `json:"delivery,omitempty"`
+	RecoveryMessageID  string            `json:"recovery_message_id,omitempty"`
+	MusicTitle         string            `json:"music_title,omitempty"`
+	MusicJob           string            `json:"music_job,omitempty"`
+	MusicKind          string            `json:"music_kind,omitempty"`
+	MusicPrepared      bool              `json:"music_prepared,omitempty"`
+	MusicDeadline      time.Time         `json:"music_deadline,omitempty"`
+	OriginTrace        string            `json:"origin_trace,omitempty"`
+	QuoteServerID      string            `json:"quote_server_id,omitempty"`
+	ID                 string            `json:"id"`
+	Account            string            `json:"account"`
+	Thread             string            `json:"thread"`
+	Sender             string            `json:"sender"`
+	Title              string            `json:"title"`
+	Checkpoint         string            `json:"checkpoint"`
+	State              string            `json:"state"`
+	Next               time.Time         `json:"next"`
+	Updated            time.Time         `json:"updated"`
+	Runs               int               `json:"runs"`
+	LastResult         string            `json:"last_result,omitempty"`
 }
 type agentOperation struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
@@ -179,6 +181,16 @@ func newAgentControl(dir string) (*agentControl, error) {
 	}
 	changed := false
 	for id, t := range a.data.Tasks {
+		// Migrate only machine-created pending recovery reports, not normal
+		// conversation tasks or already-sent history.
+		if t.ReportSourceThread == "" && t.Title == "处理发送异常" && t.OwnerRequested && strings.HasSuffix(t.Thread, "@chatroom") && contains(a.settings.OwnerIDs, t.Sender) && (t.State == "waiting" || t.State == "pending") {
+			t.ReportSourceThread, t.Thread = t.Thread, t.Sender
+			t.QuoteServerID = ""
+			t.RequestedText = ""
+			t.Checkpoint = "运维反馈只在当前主人私聊说明，原群只补发正常内容。来源会话 " + t.ReportSourceThread + "。查询原任务时显式传thread_id为来源会话。\n" + t.Checkpoint
+			a.data.Tasks[id] = t
+			changed = true
+		}
 		if t.State == "running" {
 			t.State = "needs_review"
 			t.LastResult = "运行中断，需在管理页恢复；不会自动重放外部操作"
@@ -290,7 +302,7 @@ func agentID(parts ...string) string {
 }
 func (p *permittedTools) privileged() bool {
 	c := p.manager.agent.config()
-	return c.Enabled && !p.trace.Preview && !p.trace.Surf && p.trace.Account == p.manager.native.Account() && contains(c.OwnerIDs, p.trace.Sender) && c.allowsPrivilegedThread(p.trace.Thread) && permittedRecipient(p.manager.Config().Config, p.trace.Thread)
+	return c.Enabled && !p.trace.Preview && !p.trace.ReportOnly && !p.trace.Surf && p.trace.Account == p.manager.native.Account() && contains(c.OwnerIDs, p.trace.Sender) && c.allowsPrivilegedThread(p.trace.Thread) && permittedRecipient(p.manager.Config().Config, p.trace.Thread)
 }
 func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*companion.Input, error) {
 	c := m.agent.config()
@@ -326,7 +338,12 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			return &companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Text: t.Checkpoint, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, MustReply: true, TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText, TraceID: "recover-" + t.ID, QuoteServerID: t.QuoteServerID}, nil
 		}
 		ownerContinuation := false
-		if t.OwnerRequested {
+		if t.ReportOnly {
+			if !contains(c.OwnerIDs, t.Thread) {
+				continue
+			}
+			ownerContinuation = true
+		} else if t.OwnerRequested {
 			access := &permittedTools{manager: m, trace: companion.Input{Account: t.Account, Thread: t.Thread, Sender: t.Sender}}
 			if !access.privileged() {
 				t.State = "needs_review"
@@ -354,6 +371,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if ownerContinuation {
 			in.Mode, in.Directed = "direct", true
 			in.MustReply = t.Runs == 0
+			in.ReportOnly = t.ReportOnly
 		} else {
 			if !contains(cfg.Companion.ProactiveThreads, t.Thread) {
 				continue
@@ -385,6 +403,16 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 	for _, t := range m.agent.list(in.Account, in.Thread) {
 		if t.ID == in.TaskID && t.State == "running" {
+			if t.ReportOnly {
+				t.State = "completed"
+				t.LastResult = "私聊运维说明已交给发送链路；实际送达以回执为准"
+				if state != "reply" && state != "synchronous_round_finished" {
+					t.State = "needs_review"
+					t.LastResult = "私聊报告本轮未完成：" + state
+				}
+				_ = m.agent.task(t)
+				return
+			}
 			if t.ProcessID != "" {
 				t.State = "completed"
 				t.LastResult = "程序结果已交给主模型处理；实际操作与消息交付见记录"

@@ -10,11 +10,18 @@ import (
 
 func (p *permittedTools) callDelivery(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	var in struct {
-		Job string `json:"job_id"`
-		Key string `json:"request_key"`
+		Job    string `json:"job_id"`
+		Key    string `json:"request_key"`
+		Thread string `json:"thread_id"`
 	}
 	if json.Unmarshal(args, &in) != nil || !validID(in.Job) {
 		return "", errors.New("需要原发送任务编号")
+	}
+	if in.Thread == "" {
+		in.Thread = p.trace.Thread
+	}
+	if in.Thread != p.trace.Thread && (!p.privileged() || !p.manager.agent.config().CrossConversation || !permittedRecipient(p.manager.Config().Config, in.Thread)) {
+		return "", errors.New("未授权跨会话核对发送任务")
 	}
 	native, ok := p.manager.native.(nativeTools)
 	if !ok {
@@ -24,7 +31,7 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 	if err != nil {
 		return "", errors.New("暂未取得原发送任务状态；未重复提交")
 	}
-	if status.ID != in.Job || status.ThreadID != p.trace.Thread {
+	if status.ID != in.Job || status.ThreadID != in.Thread {
 		return "", errors.New("发送任务不属于当前会话")
 	}
 	if name == "wechat_delivery_status" {

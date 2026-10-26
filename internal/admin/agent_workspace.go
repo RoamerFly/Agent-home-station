@@ -31,7 +31,7 @@ func (m *Manager) initializeWorkspace() error {
 	return nil
 }
 func (p *permittedTools) workspaceScope(shared bool) (string, error) {
-	if p.trace.Preview || p.trace.Surf || p.trace.Account != p.manager.native.Account() || p.trace.Thread == "" || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) || !p.manager.agent.config().Enabled {
+	if p.trace.Preview || p.trace.ReportOnly || p.trace.Surf || p.trace.Account != p.manager.native.Account() || p.trace.Thread == "" || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) || !p.manager.agent.config().Enabled {
 		return "", errors.New("当前会话未获工作区权限")
 	}
 	if shared {
