@@ -298,12 +298,23 @@ func TestUncertainNativeGuardAndDrainDoNotResubmit(t *testing.T) {
 		d.Next = time.Time{}
 		w.reconcileMedia(context.Background())
 	}
-	if d.State != "needs_review" || n.retries != 0 || n.sends != 1 {
+	if d.State != "waiting" || n.retries != 0 || n.sends != 1 {
 		t.Fatal("unsafe resubmit")
+	}
+	if w.pendingConversationThread(in.Thread) || w.pendingMedia() {
+		t.Fatal("read-only uncertain receipt starved recovery tasks or updates")
 	}
 	w.config.Draining = func() bool { return true }
 	w.suspendMedia()
 	if n.cancels != 0 {
 		t.Fatal("drain cancelled completed/reviewed job")
+	}
+	w.config.Draining = nil
+	n.status.State = "accepted"
+	n.status.ServerID = "123"
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if d.State != "accepted" || n.sends != 1 || n.retries != 0 {
+		t.Fatal("late receipt was not reconciled", d)
 	}
 }

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"fmt"
+	"time"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 )
@@ -54,6 +55,37 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		}
 		if err := saveErr; err != nil {
 			return err
+		}
+		if delivery.PendingJob != "" && delivery.State == "needs_review" {
+			access := &permittedTools{manager: m, trace: companion.Input{Account: in.Account, Thread: in.Thread, Sender: in.Sender}}
+			reportTo := ""
+			for _, owner := range m.agent.config().OwnerIDs {
+				if permittedRecipient(m.Config().Config, owner) {
+					reportTo = owner
+					if owner == in.Sender {
+						break
+					}
+				}
+			}
+			if reportTo != "" {
+				id := agentID(in.Account, in.Thread, delivery.Trace, delivery.PendingJob, "delivery-recovery")
+				exists := false
+				for _, old := range m.agent.list(in.Account, "") {
+					exists = exists || old.ID == id
+				}
+				if !exists {
+					recovery := agentTask{ID: id, Account: in.Account, Thread: reportTo, ReportSourceThread: in.Thread, Sender: in.Sender, OwnerRequested: access.privileged(), ReportOnly: !access.privileged(), Title: "处理发送异常", State: "waiting", Next: time.Now().Add(30 * time.Second), OriginTrace: task.OriginTrace, RequestedText: task.RequestedText, Checkpoint: fmt.Sprintf("这是私聊主人的运维任务，技术进展只发当前私聊，原群只发送正常补发内容。来源会话 %s；原发送任务 %s，已接受语音 %d/%d 段，原因 %s。查询wechat_delivery_status时指定thread_id为来源会话；已接受部分绝不重发。原生retryable=true才可wechat_delivery_retry续传原任务，并传来源thread_id，不重新生成歌曲。原生禁止重试时检查原记录与项目文档，结合已获权限排查，保存检查点并私聊说明真实进展。不能把缺失回执说成确定未发送，不以新编号重发整份媒体。", in.Thread, delivery.PendingJob, delivery.AcceptedParts, delivery.TotalParts, delivery.FailureReason)}
+					if recovery.ReportOnly {
+						recovery.Sender = ""
+						recovery.RequestedText = ""
+						recovery.Checkpoint = fmt.Sprintf("私聊主人发送状态报告：来源会话 %s，已接受语音 %d/%d 段，原发送任务 %s，异常 %s。系统正在核对原任务。简短说明已知事实，不声称未确认部分已经送达，不向群发送技术说明；当前仅作报告，不操作文件、程序或其他会话。", in.Thread, delivery.AcceptedParts, delivery.TotalParts, delivery.PendingJob, delivery.FailureReason)
+					}
+					recovery.RequestedText = "" // Repair delivery, not a new music request.
+					if err := m.agent.task(recovery); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		m.record(bot.Record{Event: "task_delivery_updated", Category: "decision", ThreadID: in.Thread, MessageID: task.OriginTrace, Status: task.State, Reason: "task_delivery_" + delivery.State, Content: task.LastResult, Origin: "agent"})
 		return nil

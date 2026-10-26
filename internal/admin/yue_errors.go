@@ -9,7 +9,7 @@ func (e *yueCallError) Error() string {
 	case "yue_bridge_upgrade_required":
 		return "本地YuE桥接版本较旧，不能确认参考模式和固定种子已生效；请升级桥接，本次未创建任务"
 	case "yue_bridge_unavailable":
-		return "本地YuE桥接连接失败；请检查6188服务，原任务与音频会保留，不重新生成"
+		return "本地YuE桥接连接失败；用music_service_status核查，按需读取共享project-yue.md及项目启动文档，在实际运行节点修复并验证。当前请求未取得任务编号，原任务与音频保留；不要盲目重复生成"
 	case "yue_bridge_auth_failed":
 		return "YuE桥接鉴权失败，请检查桥接令牌"
 	case "yue_backend_unavailable":

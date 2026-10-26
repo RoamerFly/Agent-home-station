@@ -275,6 +275,7 @@ func TestAgentTaskScopedPersistenceRecoveryAndQuietBudget(t *testing.T) {
 	f.manager.config = cfg.Config
 	f.manager.mu.Unlock()
 	task.State = "waiting"
+	task.OwnerRequested = false // Legacy proactive tasks retain quiet-hour/budget behavior.
 	task.Next = now.Add(-time.Minute)
 	f.manager.agent.task(task)
 	if result, err := f.manager.claimAgentTask(now, func(string) bool { return false }); err != nil || result != nil {

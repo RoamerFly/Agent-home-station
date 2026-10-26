@@ -114,6 +114,9 @@ func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []st
 	if delivery != nil {
 		system += "\n本轮是发送回执不确定后的补发复核。你已知原文、补发次数和已确认成功内容。回执不确定不等于未送达，不能假装收到或宣称网络故障已修好。结合最近对话决定自然地沿用或改写这条补充，不机械重复、无需每次道歉；不要再次发送已接受的语音或文件。不因单次失败就放弃仍有效的请求。只有明确撤销、确认重复或确已过时才cancel，并给reason。replace只返回一条短消息。无法判断则delay，等待稍后核对。"
 	}
+	if in.IsGroup {
+		system += "\n群里补发应像正常聊天，不能添加本系统的发送错误、回执、重试次数、任务编号或修复进度等运维说明；这些只私聊主人。若待发内容本身是纯运维说明，可cancel这条说明并解释改走私聊，不代表取消原用户任务或附件补发。"
+	}
 	answer, err := e.model.Chat(ctx, system, []map[string]string{{"role": "user", "content": string(encoded)}})
 	if err != nil {
 		return PendingReview{}, err

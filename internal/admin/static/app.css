@@ -31,6 +31,11 @@
 
 .topbar .eyebrow,.topbar .page-description{display:none}
 
+/* The Agent workbench leads with its documents and real work, not policy knobs. */
+.workbench-layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,.85fr);gap:20px;align-items:start}.workbench-main,.workbench-activity{min-width:0}.workbench-page>.section-heading{margin-bottom:12px}.workbench-activity>.panel{margin:0 0 20px}.workbench-main #agent-workspace-panel{margin:0}.workbench-main #agent-doc-content{min-height:410px;font:14px/1.7 ui-monospace,Consolas,monospace;resize:vertical}.workbench-main .workspace-toolbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.workbench-shortcut{display:flex;justify-content:space-between;gap:12px;padding:15px 0;color:var(--accent);border-bottom:1px solid var(--line);text-decoration:none}.workbench-shortcut span{color:var(--muted);font-size:13px}.role-details{margin-top:18px;padding-top:12px;border-top:1px solid var(--line)}.role-details summary{margin-bottom:12px}.workbench-activity h3{margin-top:0}.workbench-activity .agent-task-row{display:block}.workbench-activity .agent-task-row .inline-actions{margin-top:12px}.workbench-activity pre{max-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.field-grid:empty{display:none}#permissions .proactive-target{grid-template-columns:1fr}#permissions .proactive-target-state{margin-bottom:0}#agent-save-state:empty{display:none}
+@media(max-width:1100px){.workbench-layout{grid-template-columns:minmax(0,1fr)}.workbench-main #agent-doc-content{min-height:320px}.workbench-activity{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.workbench-activity>.panel{margin:0}}
+@media(max-width:650px){.workbench-activity{grid-template-columns:1fr}.workbench-main .workspace-toolbar{grid-template-columns:minmax(0,1fr)}.workbench-main #agent-doc-content{min-height:260px}.workbench-page .section-heading{gap:10px}.workbench-shortcut{flex-wrap:wrap}}
+
 .activity-flow-attempted{color:var(--warn)}
 
 .behavior-settings{grid-column:1/-1}.behavior-settings .field-grid>div{min-width:0}
