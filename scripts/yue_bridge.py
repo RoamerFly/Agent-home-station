@@ -45,6 +45,18 @@ def song_options(body):
     if seed is not None and (isinstance(seed,bool) or not isinstance(seed,int) or not 0<=seed<=2147483647):raise ValueError('invalid_seed')
     return mode,reference_mode,seed
 
+def song_recipe(body):
+    """Persist the submitted recipe privately, never infer it from filenames."""
+    mode,reference_mode,seed=song_options(body)
+    result={k:body.get(k) for k in ('title','style','lyrics','duration_seconds')}
+    result.update(mode=mode,reference_mode=reference_mode,seed=seed)
+    if mode=='cover':
+        try:data=base64.b64decode(body['reference_base64'],validate=True)
+        except Exception:raise ValueError('invalid_reference_encoding') from None
+        if not 0<len(data)<=25*1024*1024:raise ValueError('reference_size_limit')
+        result['reference_sha256']=hashlib.sha256(data).hexdigest()
+    return result
+
 def prepare_song_graph(workflow_dir,body,jid,input_dir):
     mode,reference_mode,seed=song_options(body)
     if seed is None:raise ValueError('seed_not_persisted')
@@ -162,7 +174,9 @@ def main():
             if not isinstance(body.get('style'),str) or not isinstance(body.get('lyrics'),str) or len(body['style'])>2000 or len(body['lyrics'])>6000:return self.reply(400,{'error':'invalid_song_input'})
             target=body.get('duration_seconds',60)
             if isinstance(target,bool) or not isinstance(target,(int,float)) or not 10<=target<=600:return self.reply(400,{'error':'invalid_duration'})
-            try:mode,reference_mode,seed=song_options(body)
+            try:
+                mode,reference_mode,seed=song_options(body)
+                recipe=song_recipe(body)
             except ValueError as e:return self.reply(400,{'error':str(e)})
             try:voice=singing_profile(args.singing_voice_config)
             except Exception:return self.reply(503,{'error':'singing_voice_not_ready'})
@@ -188,7 +202,8 @@ def main():
                 if sum(j['state'] in ('queued','running') for j in jobs.values())>=3:return self.reply(429,{'error':'queue_full'})
                 if seed is None:seed=secrets.randbelow(2**31)
                 body['seed']=seed
-                jid=secrets.token_hex(16);jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'reference_used':mode=='cover','mode':mode,'reference_mode':reference_mode,'seed':seed,'request_hash':fingerprint,'requested_seconds':target,'singing_voice':{k:v for k,v in voice.items() if k!='python'} if voice else None};save();pool.submit(run,jid,body)
+                recipe['seed']=seed
+                jid=secrets.token_hex(16);jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'reference_used':mode=='cover','mode':mode,'reference_mode':reference_mode,'seed':seed,'request_hash':fingerprint,'requested_seconds':target,'recipe':recipe,'singing_voice':{k:v for k,v in voice.items() if k!='python'} if voice else None};save();pool.submit(run,jid,body)
             self.reply(202,{'id':jid,'state':'queued','seed':seed,'mode':mode,'reference_used':mode=='cover','singing_voice_profile':voice['profile'] if voice else None})
     # Windows/WSL access: token required on every endpoint. No remote code/API.
     ThreadingHTTPServer((args.bind,args.port),Handler).serve_forever()

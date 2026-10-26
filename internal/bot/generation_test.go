@@ -16,6 +16,22 @@ import (
 
 type generationModelFunc func(context.Context, string, []map[string]string) (string, error)
 
+func TestGenerationCancelRequiresAnActualNewMessageAndReason(t *testing.T) {
+	w, c, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) { return `{"action":"silent"}`, nil }))
+	w.enableGenerations()
+	defer w.closeGenerations()
+	cancelled := false
+	j := &generationJob{input: companion.Input{Thread: "filehelper", TraceID: "birthday"}, engine: c, cancel: func() { cancelled = true }, updates: []companion.ConversationEvent{{MessageID: "offline", Text: "机器人还没开机"}}}
+	w.generation.jobs[j.input.Thread] = j
+	for _, d := range []companion.PendingReview{{Action: "cancel"}, {Action: "cancel", EvidenceMessageID: "invented", Reason: "cancel"}} {
+		w.finishGenerationReview(planReviewResult{generation: j, fingerprint: generationFingerprint(j), decision: d})
+		if cancelled || j.cancelled {
+			t.Fatal("unsubstantiated cancellation stopped request")
+		}
+	}
+	delete(w.generation.jobs, j.input.Thread)
+}
+
 func (f generationModelFunc) Chat(ctx context.Context, s string, m []map[string]string) (string, error) {
 	return f(ctx, s, m)
 }
@@ -227,7 +243,7 @@ func TestModelCanCancelAnInFlightTaskFromNewContextWithoutStopKeywords(t *testin
 	started := make(chan struct{})
 	model := generationModelFunc(func(ctx context.Context, _ string, m []map[string]string) (string, error) {
 		if strings.Contains(m[len(m)-1]["content"], "review_unsent_message_plan") {
-			return `{"action":"cancel"}`, nil
+			return `{"action":"cancel","evidence_message_id":"changed","reason":"requester changed their request"}`, nil
 		}
 		close(started)
 		<-ctx.Done()
@@ -254,7 +270,7 @@ func TestModelCanCancelAnInFlightTaskFromNewContextWithoutStopKeywords(t *testin
 func TestCompletedGenerationIsHeldUntilFreshInboxAndInterruptionReview(t *testing.T) {
 	model := generationModelFunc(func(_ context.Context, _ string, m []map[string]string) (string, error) {
 		if strings.Contains(m[len(m)-1]["content"], "review_unsent_message_plan") {
-			return `{"action":"cancel"}`, nil
+			return `{"action":"cancel","evidence_message_id":"updated","reason":"request already solved"}`, nil
 		}
 		return `{"action":"reply","messages":["old result"]}`, nil
 	})

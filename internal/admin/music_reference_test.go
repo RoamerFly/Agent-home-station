@@ -22,6 +22,11 @@ func TestYuECoverPassesExactReferenceLyricsAndZeroSeedAndRetainsRecipe(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	lyrics := "[Verse]\n用户提供的原词\n[Chorus]\n不要改成新歌词"
+	evidence, err := p.saveLyricEvidence(ref, lyrics, "user_supplied", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var submitted map[string]any
 	var posts atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +40,7 @@ func TestYuECoverPassesExactReferenceLyricsAndZeroSeedAndRetainsRecipe(t *testin
 	}))
 	defer upstream.Close()
 	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
-	raw, _ := json.Marshal(map[string]any{"title": "原曲女声版", "mode": "cover", "style": "female folk", "lyrics": "[Verse]\n用户提供的原词\n[Chorus]\n不要改成新歌词", "seed": 0, "reference_mode": "full", "duration_seconds": 60, "reference_asset_id": ref.ID})
+	raw, _ := json.Marshal(map[string]any{"title": "原曲女声版", "mode": "cover", "style": "female folk", "lyrics": lyrics, "lyrics_evidence_ids": []string{evidence.ID}, "seed": 0, "reference_mode": "full", "duration_seconds": 60, "reference_asset_id": ref.ID})
 	if _, err = p.callYuE(context.Background(), "music_local_start", raw); err != nil {
 		t.Fatal(err)
 	}

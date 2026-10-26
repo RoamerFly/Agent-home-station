@@ -30,8 +30,9 @@ func (p *permittedTools) yueTools() []mcptools.Tool {
 		return nil
 	}
 	return []mcptools.Tool{
-		agentTool("music_local_start", "Generate with local YuE: mode=original writes a new composition; mode=cover requires actual reference_asset_id from THIS conversation and supplied/verified lyrics, never invent replacement words for a cover. Reference workflow extracts melody/ABC and regenerates audio; it cannot preserve the exact backing track, timbre or guarantee faithful singing. reference_mode=melody (default) or full (melody+chords). Optional seed 0..2147483647 fixes a take; omit for a new seeded take. For exactly replaying a previous recording use media_reuse, not generation. Inspect source/previous parameters with music_reference_inspect. Supply title, style, lyrics and duration_seconds (10..600, default60), one minute=60. Automatically follows up; no extra agent_task. Default COMPLETE voice notes <=60 seconds each, both only if user also asks for file. Returns actual job_id and seed, not proof of listening or delivery.", `{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":24},"mode":{"type":"string","enum":["original","cover"]},"style":{"type":"string"},"lyrics":{"type":"string"},"seed":{"type":"integer","minimum":0,"maximum":2147483647},"reference_mode":{"type":"string","enum":["melody","full"]},"duration_seconds":{"type":"integer","minimum":10,"maximum":600},"kind":{"type":"string","enum":["voice","file","both"]},"reference_asset_id":{"type":"string"}},"required":["title","mode","style","lyrics"],"additionalProperties":false}`),
-		agentTool("music_reference_inspect", "Inspect exact cached audio from THIS conversation before covering, rerolling or recovering a take. Returns submitted style/lyrics/seed when this is a known generated song. Optional transcribe=true calls configured ASR for <=60 seconds at offset_seconds; candidate transcript is uncertain, not guaranteed lyrics. Use the exact quoted asset over another newer take. If only an original recording is available, listen/transcribe rather than inventing lyrics; if user demands unchanged accompaniment explain that YuE resynthesizes. Input {asset_id,transcribe?,offset_seconds?,seconds?}.", `{"type":"object","properties":{"asset_id":{"type":"string"},"transcribe":{"type":"boolean"},"offset_seconds":{"type":"integer","minimum":0,"maximum":600},"seconds":{"type":"integer","minimum":1,"maximum":60}},"required":["asset_id"],"additionalProperties":false}`),
+		agentTool("music_lyrics_compare", "Compare one actual ASR lyrics window with a version found on the web. First web_search for song/title/artist lyrics and web_fetch plausible versions; then supply asset_id, lyrics_evidence_id of ORIGINAL ASR, candidate_url and candidate_lyrics copied from that page. Reads the page with permitted web_fetch to verify real text. Aligns the corresponding passage, not the whole song. Only >=88% match and <=12%/12 edits permits minor correction, returning a new lyrics_evidence_id and exact lyrics. Large differences reject this version; compare another. Does not certify artist/version or human accuracy. Never replace uncertain ASR with invented text.", `{"type":"object","properties":{"asset_id":{"type":"string"},"lyrics_evidence_id":{"type":"string"},"candidate_url":{"type":"string","maxLength":2048},"candidate_lyrics":{"type":"string","maxLength":6000}},"required":["asset_id","lyrics_evidence_id","candidate_url","candidate_lyrics"],"additionalProperties":false}`),
+		agentTool("music_local_start", "Generate with local YuE: ALL song creation and covering goes through YuE. mode=original writes a new composition; mode=cover preserves supplied source lyrics and uses matching source style plus actual reference audio, followed by optional RVC. Requires lyrics_evidence_ids returned by music_reference_inspect and actual reference_asset_id from THIS conversation and supplied/verified lyrics, never invent replacement words for a cover. Reference workflow extracts melody/ABC and regenerates audio; it cannot preserve the exact backing track, timbre or guarantee faithful singing. reference_mode=melody (default) or full (melody+chords). Optional seed 0..2147483647 fixes a take; omit for a new seeded take. For exactly replaying a previous recording use media_reuse, not generation. Inspect source/previous parameters with music_reference_inspect. Supply title, style, lyrics and duration_seconds (10..600, default60), one minute=60. Automatically follows up; no extra agent_task. Default COMPLETE voice notes <=60 seconds each, both only if user also asks for file. Returns actual job_id and seed, not proof of listening or delivery.", `{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":24},"mode":{"type":"string","enum":["original","cover"]},"style":{"type":"string"},"lyrics":{"type":"string"},"seed":{"type":"integer","minimum":0,"maximum":2147483647},"reference_mode":{"type":"string","enum":["melody","full"]},"duration_seconds":{"type":"integer","minimum":10,"maximum":600},"kind":{"type":"string","enum":["voice","file","both"]},"reference_asset_id":{"type":"string"},"lyrics_evidence_ids":{"type":"array","items":{"type":"string"},"maxItems":10}},"required":["title","mode","style","lyrics"],"additionalProperties":false}`),
+		agentTool("music_reference_inspect", "Inspect exact cached audio from THIS conversation before covering, rerolling or recovering a take. Returns submitted style/lyrics/seed when this is a known generated song. Optional transcribe=true calls configured ASR for <=60 seconds at offset_seconds; candidate transcript is uncertain, not guaranteed lyrics. Returns lyrics_evidence_id; pass it in music_local_start.lyrics_evidence_ids and copy the transcript exactly (section labels allowed). supplied_lyrics may register words literally provided in the current user message, never invented words. Always use YuE cover with original lyrics and a style faithful to the source unless the user requests a changed arrangement. Use the exact quoted asset over another newer take. If only an original recording is available, listen/transcribe rather than inventing lyrics; if user demands unchanged accompaniment explain that YuE resynthesizes. Input {asset_id,transcribe?,offset_seconds?,seconds?}.", `{"type":"object","properties":{"asset_id":{"type":"string"},"transcribe":{"type":"boolean"},"offset_seconds":{"type":"integer","minimum":0,"maximum":600},"seconds":{"type":"integer","minimum":1,"maximum":60},"supplied_lyrics":{"type":"string","maxLength":6000}},"required":["asset_id"],"additionalProperties":false}`),
 		agentTool("music_local_status", "Read a local job owned by THIS conversation. Completed audio defaults to COMPLETE voice notes (each at most60 seconds), not a preview or file. User can request original file later via media_reuse. Never ask whether a file is wanted. Put real media[].id in final media_ids. No resubmission. Input {job_id:string,kind?:voice|file}.", `{"type":"object","properties":{"job_id":{"type":"string"},"kind":{"type":"string","enum":["file","voice","both"]}},"required":["job_id"],"additionalProperties":false}`),
 	}
 }
@@ -115,7 +116,7 @@ func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 		return yueHealth{State: "invalid_health", Message: "YuE桥接健康响应无效"}
 	}
 	if !reply.Ready {
-		return yueHealth{State: "backend_unavailable", Message: "YuE桥接在线，ComfyUI生成后端尚未就绪；未提交任务"}
+		return yueHealth{State: "backend_unavailable", Message: "YuE生成后端未就绪，未提交歌曲任务"}
 	}
 	message := "YuE桥接与ComfyUI生成后端均在线"
 	if reply.SingingVoiceProfile != "" {
@@ -125,10 +126,11 @@ func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 }
 func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	var in struct {
-		Mode                 string `json:"mode"`
-		ReferenceMode        string `json:"reference_mode"`
-		Seed                 *int64 `json:"seed"`
-		Duration             int    `json:"duration_seconds"`
+		Mode                 string   `json:"mode"`
+		ReferenceMode        string   `json:"reference_mode"`
+		LyricEvidence        []string `json:"lyrics_evidence_ids"`
+		Seed                 *int64   `json:"seed"`
+		Duration             int      `json:"duration_seconds"`
 		Title, Style, Lyrics string
 		Reference            string `json:"reference_asset_id"`
 		ID                   string `json:"job_id"`
@@ -139,6 +141,9 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 	}
 	if name == "music_reference_inspect" {
 		return p.inspectMusicReference(ctx, raw)
+	}
+	if name == "music_lyrics_compare" {
+		return p.compareMusicLyrics(ctx, raw)
 	}
 	if name == "music_local_start" {
 		if p.trace.TaskID != "" {
@@ -184,6 +189,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		if in.Mode == "original" && in.Reference != "" {
 			return "", errors.New("已提供参考音频，请使用cover模式明确按参考重生成")
 		}
+
 		if in.ReferenceMode == "" {
 			in.ReferenceMode = "melody"
 		}
@@ -201,13 +207,18 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			seed := int64(binary.LittleEndian.Uint32(sum[:4]) & 0x7fffffff)
 			in.Seed = &seed
 		}
-		spec := &songSpec{Mode: in.Mode, Style: in.Style, Lyrics: in.Lyrics, Seed: *in.Seed, Duration: in.Duration, Reference: in.Reference, ReferenceMode: in.ReferenceMode}
+		spec := &songSpec{Mode: in.Mode, Style: in.Style, Lyrics: in.Lyrics, Seed: *in.Seed, Duration: in.Duration, Reference: in.Reference, ReferenceMode: in.ReferenceMode, LyricEvidence: in.LyricEvidence}
 		body := map[string]any{"title": in.Title, "mode": in.Mode, "style": in.Style, "lyrics": in.Lyrics, "duration_seconds": in.Duration, "seed": *in.Seed, "reference_mode": in.ReferenceMode}
-		raw, _ = json.Marshal(map[string]any{"title": in.Title, "style": in.Style, "lyrics": in.Lyrics, "mode": in.Mode, "kind": in.Kind, "duration_seconds": in.Duration, "seed": *in.Seed, "reference_asset_id": in.Reference, "reference_mode": in.ReferenceMode})
+		raw, _ = json.Marshal(map[string]any{"title": in.Title, "style": in.Style, "lyrics": in.Lyrics, "mode": in.Mode, "kind": in.Kind, "duration_seconds": in.Duration, "seed": *in.Seed, "reference_asset_id": in.Reference, "reference_mode": in.ReferenceMode, "lyrics_evidence_ids": in.LyricEvidence})
 		if in.Reference != "" {
-			_, data, err := p.referenceAsset(in.Reference)
+			a, data, err := p.referenceAsset(in.Reference)
 			if err != nil {
 				return "", err
+			}
+			if in.Mode == "cover" {
+				if err := p.checkLyricEvidence(a, in.Lyrics, in.LyricEvidence); err != nil {
+					return "", err
+				}
 			}
 			body["reference_base64"] = base64.StdEncoding.EncodeToString(data)
 		}
@@ -215,6 +226,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		// Probe without side effects before claiming a create operation. An offline
 		// bridge must not become a fictitious successful/uncertain generation job.
 		health := p.probeYuE(ctx)
+
 		if health.Ready && health.BridgeVersion < 2 {
 			return "", yueError("yue_bridge_upgrade_required")
 		}
@@ -256,7 +268,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			found = found || old.ID == taskID
 		}
 		if !found {
-			task := agentTask{MusicSpec: spec, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: map[bool]string{true: "参考翻唱 · ", false: "原创歌曲 · "}[in.Mode == "cover"] + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "YuE已提交，等待真实生成结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
+			task := agentTask{MusicSpec: spec, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: map[bool]string{true: "参考翻唱 · ", false: "原创歌曲 · "}[in.Mode == "cover"] + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "歌曲任务已提交，等待真实结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
 			if len(task.Title) > 200 {
 				task.Title = "原创歌曲生成"
 			}

@@ -11,7 +11,8 @@ import (
 // A deterministic task and the existing effect ledger prevent double generation.
 func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		MessageID string `json:"message_id"`
+		MessageID   string `json:"message_id"`
+		PreparedJob string `json:"prepared_job_id"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -59,7 +60,42 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "原消息已有生成操作记录，请检查原任务，未重复生成")
 		return
 	}
-	t := agentTask{ID: id, Account: m.native.Account(), Thread: msg.ThreadID, Sender: msg.SenderID, Title: "补办歌曲请求", Checkpoint: msg.Body, State: "pending", Next: time.Now(), OriginTrace: msg.ID, QuoteServerID: msg.ServerID, RecoveryMessageID: msg.ID}
+	t := agentTask{ID: id, Account: m.native.Account(), Thread: msg.ThreadID, Sender: msg.SenderID, Title: "补办歌曲请求", RequestedText: msg.Body, Checkpoint: msg.Body, State: "pending", Next: time.Now(), OriginTrace: msg.ID, QuoteServerID: msg.ServerID, RecoveryMessageID: msg.ID}
+	if in.PreparedJob != "" {
+		if !validID(in.PreparedJob) || !m.Config().Companion.Permissions.SendVoice {
+			fail(w, 400, "准备任务编号无效或未允许语音")
+			return
+		}
+		for _, old := range m.agent.list(m.native.Account(), "") {
+			if old.MusicJob == in.PreparedJob {
+				fail(w, 409, "该歌曲已关联其他交付任务，请检查原任务，未重复安排")
+				return
+			}
+		}
+		p := &permittedTools{manager: m}
+		b, _, err := p.yueRequest(r.Context(), "GET", "/jobs/"+in.PreparedJob, nil, "")
+		var job struct {
+			ID            string `json:"id"`
+			State         string `json:"state"`
+			ReferenceUsed bool   `json:"reference_used"`
+			Recipe        struct {
+				Title string `json:"title"`
+				songSpec
+			} `json:"recipe"`
+		}
+		if err != nil || json.Unmarshal(b, &job) != nil || job.ID != in.PreparedJob || job.State != "completed" || songTitle(job.Recipe.Title) == "" || job.Recipe.Lyrics == "" || (job.Recipe.Mode != "original" && job.Recipe.Mode != "cover") || job.Recipe.Mode == "cover" && (!job.ReferenceUsed || len(job.Recipe.ReferenceHash) != 64) {
+			fail(w, 409, "需要YuE已完成且保存真实配方的歌曲；不会把未知文件当翻唱")
+			return
+		}
+		t.MusicJob = in.PreparedJob
+		t.MusicTitle = songTitle(job.Recipe.Title)
+		t.MusicKind = "voice"
+		t.MusicSpec = &job.Recipe.songSpec
+		t.MusicDeadline = time.Now().Add(30 * time.Minute)
+		t.State = "waiting"
+		t.Checkpoint = "管理员已准备完成YuE歌曲，补发原请求；只查询并交付，不重新生成"
+		t.Title = "补发歌曲 · " + t.MusicTitle
+	}
 	if err := m.agent.task(t); err != nil {
 		fail(w, 500, err.Error())
 		return

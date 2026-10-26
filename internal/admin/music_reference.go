@@ -10,18 +10,21 @@ import (
 	"strconv"
 	"strings"
 	"wechat-bot/internal/bailian"
+	"wechat-bot/internal/companion"
 )
 
 // Parameters are attached to the generated asset, not a global most-recent song.
 // They describe what was submitted, not a guarantee that the singer followed it.
 type songSpec struct {
-	Mode          string `json:"mode"`
-	Style         string `json:"style"`
-	Lyrics        string `json:"lyrics"`
-	Seed          int64  `json:"seed"`
-	Duration      int    `json:"duration_seconds"`
-	Reference     string `json:"reference_asset_id,omitempty"`
-	ReferenceMode string `json:"reference_mode,omitempty"`
+	Mode          string   `json:"mode"`
+	Style         string   `json:"style"`
+	Lyrics        string   `json:"lyrics"`
+	Seed          int64    `json:"seed"`
+	Duration      int      `json:"duration_seconds"`
+	Reference     string   `json:"reference_asset_id,omitempty"`
+	ReferenceMode string   `json:"reference_mode,omitempty"`
+	LyricEvidence []string `json:"lyrics_evidence_ids,omitempty"`
+	ReferenceHash string   `json:"reference_sha256,omitempty"`
 }
 
 func (p *permittedTools) referenceAsset(id string) (mediaAsset, []byte, error) {
@@ -54,6 +57,7 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 		Transcribe bool   `json:"transcribe"`
 		Offset     int    `json:"offset_seconds"`
 		Seconds    int    `json:"seconds"`
+		Supplied   string `json:"supplied_lyrics"`
 	}
 	if json.Unmarshal(raw, &input) != nil || input.ID == "" || len(input.ID) > 128 || input.Offset < 0 || input.Offset > 600 || input.Seconds < 0 || input.Seconds > 60 {
 		return "", errors.New("参考音频检查参数无效")
@@ -66,6 +70,21 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 		return "", err
 	}
 	out := map[string]any{"asset_id": a.ID, "title": a.Title, "source_url": a.URL, "cached_mime": a.MIME, "bytes": len(data), "generation": a.Music, "instruction": "这是同一会话已校验的原音频。generation如存在是当时提交的风格、歌词和种子；外部原曲不能编造歌词。翻唱应以这份原曲为reference_asset_id；重发原版用media_reuse，不重新生成。参考生成会重新合成伴奏，不是精确换声或原伴奏保留。"}
+	out["available_lyrics"] = p.availableLyricEvidence(a)
+	if a.Music != nil {
+		out["lyrics_evidence_ids"] = a.Music.LyricEvidence
+	}
+	if input.Supplied != "" {
+		request := companion.UserRequestText(p.trace.Text)
+		if len(input.Supplied) > 6000 || !strings.Contains(request, input.Supplied) {
+			return "", errors.New("登记的歌词必须直接来自当前用户正文，不能把模型编写或历史改编歌词当用户原词")
+		}
+		e, err := p.saveLyricEvidence(a, input.Supplied, "user_supplied", 0, 0)
+		if err != nil {
+			return "", err
+		}
+		out["lyrics_evidence_id"], out["lyrics"] = e.ID, e.Text
+	}
 	if input.Transcribe {
 		c := p.manager.speechConfig()
 		if !c.ASREnabled {
@@ -84,6 +103,11 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 			return "", err
 		}
 		out["transcript"], out["offset_seconds"], out["window_seconds"] = text, input.Offset, seconds
+		e, err := p.saveLyricEvidence(a, text, "asr_candidate", input.Offset, seconds)
+		if err != nil {
+			return "", err
+		}
+		out["lyrics_evidence_id"] = e.ID
 		out["transcript_warning"] = "这是指定片段的ASR候选歌词，可能漏字、错字，不保证完整准确；不要声称已精确识别或已还原。按需分段检查，仍不确定时确认歌词，不用原创词替代。"
 	}
 	b, _ := json.Marshal(out)

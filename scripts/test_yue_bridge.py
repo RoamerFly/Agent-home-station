@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice
+from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
@@ -30,6 +30,15 @@ class SongWorkflowTests(unittest.TestCase):
 
     def body(self):
         return dict(title='合成测试',mode='original',style='soft female folk',lyrics='[Verse]\n合成歌词',seed=0,duration_seconds=10)
+
+    def test_private_recipe_binds_original_audio_and_exact_lyrics(self):
+        body=self.body();body.update(mode='cover',reference_base64=base64.b64encode(b'synthetic original').decode())
+        recipe=song_recipe(body)
+        self.assertEqual(recipe['reference_sha256'],hashlib.sha256(b'synthetic original').hexdigest())
+        self.assertEqual(recipe['lyrics'],body['lyrics'])
+        self.assertEqual(recipe['seed'],0)
+        self.assertNotIn('reference_base64',recipe)
+        with self.assertRaises(ValueError):song_recipe(dict(body,mode='voice_convert'))
 
     def test_original_preserves_style_lyrics_and_fixed_zero_seed(self):
         body=self.body()

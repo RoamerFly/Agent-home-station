@@ -31,7 +31,7 @@ func (w *Worker) reviewActiveGenerations(ctx context.Context) {
 		s.reviews[id] = cancel
 		in := j.input
 		updates := append([]companion.ConversationEvent(nil), j.updates...)
-		pending := []string{"当前回复或工具任务尚在执行，尚未提交最终结果；资源类型：" + j.resourceKind + "。新请求另行处理。判断当前任务是否已被停止、改意或替代；无关聊天不取消。cancel表示停止本任务后续工作，不能撤回已经发生的外部操作。"}
+		pending := []string{"当前回复或工具任务尚在执行，尚未提交最终结果；资源类型：" + j.resourceKind + "。新请求另行处理。判断当前任务是否已被停止、改意或替代；无关聊天不取消。cancel表示停止本任务后续工作，不能撤回已经发生的外部操作。若cancel或replace，必须返回evidence_message_id为new_events中实际使原任务失效的消息编号，并给reason说明；不能仅因机器人没开机、催促、表情或新话题取消。"}
 		modelCtx := w.generationContext(jobCtx, in)
 		s.wg.Add(1)
 		go func(j *generationJob, id, fingerprint string) {
@@ -63,6 +63,17 @@ func (w *Worker) finishGenerationReview(r planReviewResult) {
 	j.reviewFailures = 0
 	j.reviewed = r.fingerprint
 	if r.decision.Action == "cancel" || r.decision.Action == "replace" {
+		matched := false
+		for _, event := range j.updates {
+			if event.MessageID != "" && event.MessageID == r.decision.EvidenceMessageID {
+				matched = true
+				break
+			}
+		}
+		if !matched || r.decision.Reason == "" {
+			w.activity(Record{Event: "generation_review_retained", Category: "decision", ThreadID: j.input.Thread, MessageID: j.input.TraceID, Status: "processing", Reason: "cancellation_without_message_evidence"})
+			return
+		}
 		j.cancelled = true
 		j.cancelReason = "model_cancelled_superseded_task"
 		j.cancel()
