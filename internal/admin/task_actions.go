@@ -15,7 +15,7 @@ type taskAction struct {
 }
 
 func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, result string, err error) {
-	if p.trace.TaskID == "" || !p.privileged() || !strings.HasPrefix(name, "server_") || name == "server_read" || name == "server_list" || name == "server_search" || name == "server_status" {
+	if p.trace.TaskID == "" || !p.privileged() || !(strings.HasPrefix(name, "server_") || name == "agent_task" || name == "wechat_send_text") || name == "server_read" || name == "server_list" || name == "server_search" || name == "server_status" {
 		return
 	}
 	a := p.manager.agent
@@ -39,6 +39,15 @@ func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, r
 	if err != nil {
 		state = "failed"
 		result = err.Error()
+	}
+	if name == "agent_task" && err == nil {
+		var saved struct {
+			Task map[string]any `json:"task"`
+		}
+		if json.Unmarshal([]byte(result), &saved) == nil && saved.Task != nil {
+			compact, _ := json.Marshal(map[string]any{"task_id": saved.Task["id"], "state": saved.Task["state"], "next": saved.Task["next"], "checkpoint": saved.Task["checkpoint"]})
+			result = string(compact)
+		}
 	}
 	entry := taskAction{Tool: name, Arguments: logText(string(args), 1200), Result: logText(result, 2200), State: state, At: time.Now().UTC()}
 	if name == "server_process" {

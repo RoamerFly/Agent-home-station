@@ -59,9 +59,6 @@ func OpenJobs(root string) (*Jobs, error) {
 	if e != nil {
 		return nil, e
 	}
-	if len(files) > 200 {
-		return nil, errors.New("后台进程记录超过200条")
-	}
 	for _, f := range files {
 		if !strings.HasSuffix(f.Name(), ".json") {
 			continue
@@ -148,11 +145,8 @@ func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, 
 	if cfg.Mode != "full" || cfg.Validate() != nil || scope == "" || len(key) < 1 || len(key) > 128 || strings.TrimSpace(command) == "" || len(command) > 8000 {
 		return Process{}, errors.New("命令执行未授权或参数无效")
 	}
-	if seconds == 0 {
-		seconds = 1800
-	}
-	if seconds < 1 || seconds > 7200 {
-		return Process{}, errors.New("后台执行时限须为1至7200秒")
+	if seconds < 0 || int64(seconds) > int64((1<<63-1)/time.Second) {
+		return Process{}, errors.New("后台执行时限无效；0表示不设时限")
 	}
 	root, rel, e := (Host{cfg}).rooted(path)
 	if e != nil {
@@ -171,7 +165,6 @@ func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, 
 	if j.closed {
 		return Process{}, errors.New("进程管理器已关闭")
 	}
-	active := 0
 	for _, p := range j.items {
 		if p.Scope == scope && p.Key == key {
 			if p.Hash != hash {
@@ -179,12 +172,6 @@ func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, 
 			}
 			return processCopy(p), nil
 		}
-		if p.State == "running" {
-			active++
-		}
-	}
-	if len(j.items) >= 200 || active >= 4 {
-		return Process{}, errors.New("后台进程记录或并发已达上限")
 	}
 	if allowed != nil && !allowed() {
 		return Process{}, errors.New("执行权限已撤销")
@@ -194,7 +181,11 @@ func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, 
 		return Process{}, e
 	}
 	now := time.Now().UTC()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	if seconds > 0 {
+		cancel()
+		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second)
+	}
 	p := &Process{ID: "process-" + hex.EncodeToString(id), Scope: scope, Key: key, Hash: hash, State: "running", Started: now, Updated: now, cancel: cancel, buffer: &limitedOutput{limit: cfg.OutputBytes, keepTail: true}}
 	if e = j.save(p); e != nil {
 		cancel()

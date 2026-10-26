@@ -23,7 +23,7 @@ func TestTaskContinuationRetainsGoalAndRealActionEvidence(t *testing.T) {
 		t.Fatal(e)
 	}
 	tsk := f.manager.agent.list("test", "wxid_owner")[0]
-	if len(tsk.Actions) != 1 || tsk.Goal != task.Checkpoint {
+	if len(tsk.Actions) != 2 || tsk.Goal != task.Checkpoint {
 		t.Fatal("checkpoint lost original goal/evidence", tsk)
 	}
 	tsk.Next = time.Now().Add(-time.Second)
@@ -36,7 +36,7 @@ func TestTaskContinuationRetainsGoalAndRealActionEvidence(t *testing.T) {
 	}
 	p.trace.Sender = "not-owner"
 	p.rememberTaskAction("server_exec", json.RawMessage(`{}`), "untrusted", nil)
-	if len(f.manager.agent.list("test", "wxid_owner")[0].Actions) != 1 {
+	if len(f.manager.agent.list("test", "wxid_owner")[0].Actions) != 2 {
 		t.Fatal("non-owner overwrote action evidence")
 	}
 }
