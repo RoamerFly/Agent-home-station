@@ -70,3 +70,7 @@
 
 /* Local history stays read-only and does not alter the main reading position. */
 .storage-limit{display:grid;grid-template-columns:minmax(0,1fr) minmax(70px,180px);align-items:center;gap:16px}.storage-limit meter{width:100%;height:14px}.history-archive{margin-top:20px}.history-archive>summary,.history-archive details>summary{min-height:44px;cursor:pointer;overflow-wrap:anywhere}.history-archive details{padding:10px 0;border-top:1px solid var(--line)}.archive-preview{max-height:520px;overflow:auto;overscroll-behavior:contain;margin-top:12px}.archive-log-row{margin:0;padding:10px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere;white-space:pre-wrap}.history-archive .secondary{margin-block:4px}.history-archive .memory-message{max-width:100%}@media(max-width:500px){.storage-limit{grid-template-columns:minmax(0,1fr)}.storage-limit meter{margin-bottom:12px}}
+
+/* Credential controls use the existing whale-theme tokens and keep long card
+   titles inside the form at narrow widths. */
+#channels-settings-panel{display:grid;gap:12px}#channels-settings-panel h3,#channels-settings-panel label,#channels-settings-panel p{margin:0}#channels-settings-panel .inline-actions{gap:10px;flex-wrap:wrap}#channels-settings-panel select{min-width:0;flex:1 1 260px}#channels-settings-panel summary{min-height:44px;cursor:pointer;padding-block:10px}#channels-observation{max-height:420px;overflow:auto}

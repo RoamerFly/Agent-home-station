@@ -28,7 +28,7 @@ PATTERNS = [
 
 def private_values(private_root):
     values = set()
-    fields = {"key", "api_key", "apikey", "token", "yue_token", "password", "secret"}
+    fields = {"key", "api_key", "apikey", "token", "yue_token", "password", "secret", "cookie"}
 
     def collect(value):
         if isinstance(value, dict):
@@ -43,14 +43,14 @@ def private_values(private_root):
             for item in value:
                 collect(item)
 
-    for path in [ROOT / "key阿里云百炼.txt", *list((ROOT / "secrets").glob("*token*.txt")), ROOT / "secrets/deepseek-api-key.txt"]:
+    for path in [ROOT / "key阿里云百炼.txt", *list((ROOT / "secrets").glob("*token*.txt")), *list((ROOT / "secrets").glob("*cookie*.txt")), ROOT / "secrets/deepseek-api-key.txt"]:
         if path.is_file():
             value = path.read_text(encoding="utf-8-sig").strip()
             if len(value) >= 16:
                 values.add(value.encode())
     if private_root:
         base = Path(private_root)
-        for name in ["config.json", "speech-config.json", "plugins.json", "mcp-config.json"]:
+        for name in ["config.json", "speech-config.json", "plugins.json", "mcp-config.json", "channels-config.json"]:
             path = base / "admin" / name
             if path.is_file():
                 collect(json.loads(path.read_text(encoding="utf-8")))

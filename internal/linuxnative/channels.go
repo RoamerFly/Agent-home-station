@@ -8,6 +8,8 @@ import (
 
 // ChannelsSource is private transfer data, never model context or log content.
 type ChannelsSource struct {
+	Title         string `json:"title"`
+	Author        string `json:"author"`
 	State         string `json:"state"`
 	MessageID     string `json:"messageId"`
 	AccountID     string `json:"accountId"`
