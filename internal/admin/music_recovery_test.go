@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -20,9 +21,15 @@ func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 	f := setup(t)
 	f.manager.native = &recoverSongNative{f.native}
 	f.manager.config.Companion.Permissions.SendVoice = true
+	reads := 0
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			t.Error("recovery submitted a generation")
+		}
+		reads++
+		if reads > 1 {
+			w.Write([]byte(`{"id":"prepared-song","state":"queued"}`))
+			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"id": "prepared-song", "state": "completed", "reference_used": true, "recipe": map[string]any{"title": "生日快乐", "mode": "cover", "lyrics": "synthetic original words", "style": "source style", "duration_seconds": 60, "reference_sha256": strings.Repeat("a", 64)}})
 	}))
@@ -46,5 +53,14 @@ func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 	json.Unmarshal(b, &second)
 	if first.ID != second.ID || first.MusicJob != "prepared-song" || first.Thread != "filehelper" || first.MusicKind != "voice" || first.MusicSpec.Mode != "cover" || first.RequestedText != "唱个生日歌" {
 		t.Fatal(first, second)
+	}
+	p, _, _ := f.manager.toolAccess()
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper"})
+	if _, err := p.callYuE(context.Background(), "music_local_status", json.RawMessage(`{"job_id":"prepared-song"}`)); err != nil {
+		t.Fatal("adopted scoped task could not read its output", err)
+	}
+	p.trace.Thread = "other-room"
+	if _, err := p.callYuE(context.Background(), "music_local_status", json.RawMessage(`{"job_id":"prepared-song"}`)); err == nil || reads != 2 {
+		t.Fatal("adoption leaked across rooms", err, reads)
 	}
 }

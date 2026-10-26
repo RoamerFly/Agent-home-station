@@ -314,6 +314,17 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		}
 	}
 	p.manager.agent.mu.Unlock()
+	// Administrator-adopted completed jobs have a verified scoped task rather
+	// than a model-created operation. The persisted account AND room still bind
+	// access; a job ID by itself never grants another conversation access.
+	if !authorized {
+		for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
+			if task.MusicJob == in.ID && task.RecoveryMessageID != "" && task.MusicSpec != nil {
+				authorized = true
+				break
+			}
+		}
+	}
 	if !authorized {
 		return "", yueError("yue_job_scope_denied")
 	}
