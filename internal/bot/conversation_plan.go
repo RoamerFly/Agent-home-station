@@ -12,6 +12,7 @@ import (
 )
 
 type utterancePlan struct {
+	StopReason       string                        `json:"stop_reason,omitempty"`
 	MediaCaption     bool                          `json:"media_caption,omitempty"`
 	InboxChecked     bool                          `json:"inbox_checked"`
 	Trace            string                        `json:"trace"`
