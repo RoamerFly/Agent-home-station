@@ -69,7 +69,7 @@ def ui_nodes(xml: bytes):
             item['text'] = '[password field redacted]'
         if item['text'] or item['content-desc'] or item['clickable']:
             size = len(json.dumps(item, ensure_ascii=True)) + 1
-            if encoded_size + size > 64 << 10:
+            if encoded_size + size > 8 << 10:
                 break
             result.append(item)
             encoded_size += size

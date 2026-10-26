@@ -16,6 +16,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mobile"
 	"wechat-bot/internal/sending"
 )
 
@@ -78,6 +79,7 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
+	mobile       *mobile.Control
 	speech       bailian.Config
 	agent        *agentControl
 	surfHistory  *surfHistoryStore
@@ -159,6 +161,10 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 		return nil, err
 	}
 	m := &Manager{speech: speech, agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug}
+	m.mobile, err = mobile.Open(filepath.Join(dir, "mobile"), m.planMobile)
+	if err != nil {
+		return nil, err
+	}
 	m.surf = surf
 	if assets, err := m.loadAssets(); err == nil {
 		sources := map[string]map[string]companion.MediaMemory{}
@@ -200,6 +206,8 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	receiptCtx, cancelReceipts := context.WithTimeout(context.Background(), 3*time.Second)
 	m.importOwnerSurfReceipts(receiptCtx)
 	cancelReceipts()
+	m.mobile.OnFinished(m.deviceFinished)
+	m.mobile.SetAuthorizer(m.mobileSourceAllowed)
 	if c.Enabled {
 		m.start(c)
 	}
@@ -300,6 +308,11 @@ func (m *Manager) saveLocked(input ConfigInput) (ConfigView, error) {
 func (m *Manager) Toggle(enabled bool) error {
 	m.op.Lock()
 	defer m.op.Unlock()
+	if !enabled && m.mobile != nil {
+		if err := m.mobile.StopAll(); err != nil {
+			return err
+		}
+	}
 	m.mu.Lock()
 	c := cloneConfig(m.config)
 	m.mu.Unlock()
@@ -333,7 +346,14 @@ func (m *Manager) stop() error {
 	m.mu.Unlock()
 	return nil
 }
-func (m *Manager) Close() error          { m.op.Lock(); defer m.op.Unlock(); return m.stop() }
+func (m *Manager) Close() error {
+	m.op.Lock()
+	defer m.op.Unlock()
+	if m.mobile != nil {
+		_ = m.mobile.Close()
+	}
+	return m.stop()
+}
 func (m *Manager) setState(state string) { m.mu.Lock(); m.status.State = state; m.mu.Unlock() }
 func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {
 	if c.APIKey == "" {
