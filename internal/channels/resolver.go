@@ -56,7 +56,7 @@ func (r *Resolver) post(ctx context.Context, endpoint, referer, cookie string, p
 	req.Header.Set("Origin", "https://"+req.URL.Host)
 	req.Header.Set("Referer", referer)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36")
-	if cookie != "" && req.URL.Host == "yuanbao.tencent.com" {
+	if cookie != "" && (req.URL.Host == "yuanbao.tencent.com" && req.URL.Path == "/api/weixin/get_parse_result" || req.URL.Host == "channels.weixin.qq.com" && req.URL.Path == "/cgi-bin/mmfinderassistant-bin/post/get_object_short_link") {
 		req.Header.Set("Cookie", cookie)
 	}
 	resp, err := r.client.Do(req)
@@ -75,6 +75,40 @@ func (r *Resolver) post(ctx context.Context, endpoint, referer, cookie string, p
 		return errors.New("channels_resolver_response_invalid")
 	}
 	return nil
+}
+
+// ObjectShareURL uses a separate Channels Assistant session. Never supply a
+// Yuanbao cookie here: the two first-party login scopes are independent.
+func (r *Resolver) ObjectShareURL(ctx context.Context, id, nonce, cookie string) (string, error) {
+	// This endpoint requires an encrypted export/ handle. A numeric objectId
+	// is accepted syntactically upstream but yields an unplayable short URL.
+	if !strings.HasPrefix(id, "export/") || len(id) < 12 || len(id) > 4096 || nonce == "" || len(nonce) > 4096 {
+		return "", errors.New("channels_assistant_export_id_required")
+	}
+	if !ValidCookie(cookie) {
+		return "", errors.New("channels_assistant_cookie_missing")
+	}
+	var result struct {
+		Code int `json:"errCode"`
+		Data struct {
+			URL string `json:"shortUrl"`
+		} `json:"data"`
+	}
+	err := r.post(ctx, "https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/post/get_object_short_link", "https://channels.weixin.qq.com/platform/post/list", cookie, map[string]any{"exportId": id, "nonceId": nonce, "scene": 40}, &result)
+	if err != nil {
+		if err.Error() == "channels_yuanbao_auth_expired" {
+			return "", errors.New("channels_assistant_auth_expired")
+		}
+		return "", err
+	}
+	if result.Code != 0 {
+		return "", errors.New("channels_assistant_shortlink_failed")
+	}
+	link, err := ShareURL(result.Data.URL)
+	if err != nil {
+		return "", errors.New("channels_assistant_shortlink_missing")
+	}
+	return link, nil
 }
 
 // Resolve only contacts two fixed Tencent HTTPS origins. The Yuanbao cookie

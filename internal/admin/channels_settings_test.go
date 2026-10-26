@@ -14,8 +14,8 @@ func TestChannelsSettingsProtectAndNeverReturnCookie(t *testing.T) {
 	if code, _, _ := f.request("POST", "/api/channels/settings", map[string]any{"enabled": true, "cookie": "hy_user=fixture; hy_token=synthetic-fixture-session"}, true, false); code != 403 {
 		t.Fatal("csrf bypass", code)
 	}
-	code, b, _ := f.request("POST", "/api/channels/settings", map[string]any{"enabled": true, "cookie": "hy_user=fixture; hy_token=synthetic-fixture-session"}, true, true)
-	if code != 200 || strings.Contains(string(b), "synthetic-fixture-session") {
+	code, b, _ := f.request("POST", "/api/channels/settings", map[string]any{"enabled": true, "cookie": "hy_user=fixture; hy_token=synthetic-fixture-session", "assistant_cookie": "sessionid=synthetic-assistant-session"}, true, true)
+	if code != 200 || strings.Contains(string(b), "synthetic-fixture-session") || strings.Contains(string(b), "synthetic-assistant-session") {
 		t.Fatal("secret leaked or save failed", code)
 	}
 	code, b, _ = f.request("GET", "/api/channels/settings", nil, false, false)
@@ -24,12 +24,12 @@ func TestChannelsSettingsProtectAndNeverReturnCookie(t *testing.T) {
 	}
 	f.request("POST", "/api/channels/settings", map[string]any{"enabled": true}, true, true)
 	c, e := loadChannelsSettings(f.dir)
-	if e != nil || !strings.Contains(c.Cookie, "synthetic-fixture-session") {
+	if e != nil || !strings.Contains(c.Cookie, "synthetic-fixture-session") || c.AssistantCookie == "" {
 		t.Fatal("blank save erased credential")
 	}
 	f.request("POST", "/api/channels/settings", map[string]any{"clear_cookie": true}, true, true)
 	c, _ = loadChannelsSettings(f.dir)
-	if c.Cookie != "" || c.Enabled {
+	if c.Cookie != "" || c.AssistantCookie != "" || c.Enabled {
 		t.Fatal("clear did not revoke resolver")
 	}
 }

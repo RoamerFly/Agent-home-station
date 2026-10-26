@@ -1,19 +1,20 @@
 # 视频号授权读取
 
-普通视频号转发卡片可能仅有作品ID、objectNonceId、标题和加密媒体地址，缺少解码密钥及 weixin.qq.com/sph 分享短链。元宝 Cookie 不是解密密钥，也不能独立把任意作品ID变为短链。
+普通视频号转发卡片可能仅有作品ID、objectNonceId、标题和加密媒体地址，缺少解码密钥及 weixin.qq.com/sph 分享短链。元宝 Cookie 不是解密密钥。视频号助手短链接口要求 export/ 导出标识，不能直接使用普通转发卡片里的数字作品ID；助手与元宝的登录态各自只发送到相应腾讯接口。
 
 网页：工具与权限 → 权限与服务器 → 视频号授权读取。配置单独保存到私有数据目录 channels-config.json，API不返回Cookie；无需重启微信。不开启时不联系元宝。
 
-## 两条读取路径
+## 自动读取与备用路径
 
-1. 作品ID自动读取桥接（可选）：兼容 [nobiyou/wx_channel](https://github.com/nobiyou/wx_channel/blob/main/docs/API_QUICK_START.md) 的 GET /api/channels/feed/profile?object_id=...&nonce_id=...。须由管理员单独部署服务，并保持其桌面微信连接；本项目不安装代理、证书或注入程序。填本机 http://127.0.0.1:2026 后可直接使用群转发卡片的ID，无需人工复制每个链接。只接受返回的作品ID与请求完全一致的结果；地址重定向禁止，元宝Cookie不发送给桥接。当前只完成合成fixture兼容验证，未部署/验证真实桌面桥接。
-2. 元宝授权解析：来自卡片本身或管理员绑定的 https://weixin.qq.com/sph/... 短链，带元宝Cookie请求固定腾讯接口，取得播放页，再向视频号详情接口取实际媒体。Cookie只发送给 yuanbao.tencent.com，不转发到播放页、CDN或重定向。不存在同作品ID时，校验标题及作者完全匹配。绑定按账号/会话/原消息保存，并对同会话同作品ID重复转发复用。
+1. 实验性助手短链交换：私有助手Cookie请求固定接口 `/cgi-bin/mmfinderassistant-bin/post/get_object_short_link`。必须提供 `export/` 导出标识和nonce；数字作品ID会被本地校验拒绝。以当前第三方作品的已知导出标识取得有效短链的请求已成功，但导出标识最初来自用户提供的分享链接，不能声称已从任意数字ID完成自动转换。两套Cookie不混用、不回显；不改证书或系统代理。
+2. 作品ID桌面桥接（高级可选）：兼容 [nobiyou/wx_channel](https://github.com/nobiyou/wx_channel/blob/main/docs/API_QUICK_START.md) 的 GET /api/channels/feed/profile?object_id=...&nonce_id=...。须由管理员单独部署服务，并保持其桌面微信连接；本项目不安装代理、证书或注入程序。填本机 http://127.0.0.1:2026 后可直接使用群转发卡片的ID，无需人工复制每个链接。只接受返回的作品ID与请求完全一致的结果；地址重定向禁止，元宝Cookie不发送给桥接。当前只完成合成fixture兼容验证，未部署/验证真实桌面桥接。
+3. 元宝授权解析：来自卡片本身或管理员绑定的 https://weixin.qq.com/sph/... 短链，带元宝Cookie请求固定腾讯接口，取得播放页，再向视频号详情接口取实际媒体。Cookie只发送给 yuanbao.tencent.com，不转发到播放页、CDN或重定向。不存在同作品ID时，校验标题及作者完全匹配。绑定按账号/会话/原消息保存，并对同会话同作品ID重复转发复用。
 
 原生卡片若已经有可播放内容，优先直接读取，不需要备用授权。下载仍通过公共地址安全校验与50MiB上限，再校验媒体容器、抽取实际画面、对实际音轨转写。未取得模态明确标记，绝不以元宝文字摘要或卡片标题冒充视频观察。画面为最多6帧抽样，音轨最多前180秒，不等于完整逐帧观看。
 
 ## 获取元宝 Cookie
 
-浏览器打开 https://yuanbao.tencent.com/ 并自行登录，F12 → Network/网络 → 刷新页面 → 同域名的 Fetch/XHR 请求 → Headers/标头 → Request Headers/请求标头 → 复制 Cookie 冒号后的完整单行值。不是响应 Set-Cookie，也不是 API Key。保存到本机私有文件或网页密码框，不发到聊天，不上传Git。空白保存保留旧值，清除授权会关闭备用解析；Cookie过期后需自行重新登录更新。
+分别打开 https://channels.weixin.qq.com/ 视频号助手和 https://yuanbao.tencent.com/ 元宝并自行登录。对每个站点独立执行：F12 → Network/网络 → 刷新页面 → 同域名的 Fetch/XHR 请求 → Headers/标头 → Request Headers/请求标头 → 复制 Cookie 冒号后的完整单行值。不是响应 Set-Cookie，也不是 API Key。分别保存到对应私有文件或网页密码框：`secrets/channels-assistant-cookie.txt` 与 `secrets/yuanbao-cookie.txt`；不发到聊天，不上传Git。空白保存保留旧值，清除授权会关闭备用解析；Cookie过期后需自行重新登录更新。
 
 ## 读取旧卡片
 
@@ -24,3 +25,9 @@
 已用用户授权的短链与私有Cookie确认元宝解析可用，视频号预览接口返回 HTTP201（成功）也正确接受，实际返回同作品标题和作者。作品ID直接请求无授权预览接口只返回“此内容暂时无法播放”，未把errCode=0误当作取得视频。作品ID桥接仍需独立部署；未实现让元宝凭转发卡片ID自动转换短链。
 
 用户提供的目标作品实际验证：16.834秒，6帧抽样及0–16.836秒音轨转写成功，派生记忆已刷新，微信发送次数为0。桌面/390px移动视口页面检查无JS异常及横向溢出，Cookie字段保持空值不回显；并未做第三方作品ID桥接真实验收。
+
+## 0.15.1 助手接口验证与保护
+
+同一作品做了两种受控对照：数字objectId＋nonce生成短链接口返回HTTP201/errCode=0，但元宝后续只返回通用“视频号”且无播放地址；使用已知正确export/标识＋同一nonce，则元宝返回原作品作者、标题和有效播放页。不能将数值作品ID当作助手接口的exportId。已在发送网络请求前阻止这一错误，实验性接口不作为所有新转发已可用的自动化能力宣传。
+
+若实验性路径不可用，仍使用已配置的同会话绑定链接，不以失败的生成结果覆盖已经可用的来源。原生收到卡片直接取密钥／导出标识仍需继续研究。系统证书、代理及活动微信登录保持原状。

@@ -11,15 +11,17 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/channels"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
 type channelsSettings struct {
-	Enabled      bool   `json:"enabled"`
-	Cookie       string `json:"cookie,omitempty"`
-	ObjectBridge string `json:"object_bridge_url,omitempty"`
+	Enabled         bool   `json:"enabled"`
+	Cookie          string `json:"cookie,omitempty"`
+	ObjectBridge    string `json:"object_bridge_url,omitempty"`
+	AssistantCookie string `json:"assistant_cookie,omitempty"`
 }
 type channelsBinding struct{ Account, Thread, MessageID, URL, ObjectID string }
 
@@ -80,6 +82,15 @@ func (m *Manager) resolveReceivedChannels(ctx context.Context, msg linuxnative.M
 	if !c.Enabled {
 		return source, errors.New("channels_authorized_resolver_disabled")
 	}
+	resolver := channels.NewResolver()
+	autoLink, autoReason := "", ""
+	if c.AssistantCookie != "" && source.ObjectID != "" && source.ObjectNonceID != "" {
+		var err error
+		autoLink, err = resolver.ObjectShareURL(ctx, source.ObjectID, source.ObjectNonceID, c.AssistantCookie)
+		if err != nil {
+			autoReason = err.Error()
+		}
+	}
 	if c.ObjectBridge != "" && source.ObjectID != "" {
 		video, bridgeErr := channels.ResolveObject(ctx, c.ObjectBridge, source.ObjectID, source.ObjectNonceID)
 		if bridgeErr == nil {
@@ -108,24 +119,39 @@ func (m *Manager) resolveReceivedChannels(ctx context.Context, msg linuxnative.M
 		}
 		link = b.URL
 	}
+	fallbackLink := link
+	if autoLink != "" {
+		link = autoLink
+	}
 	if link == "" {
+		if autoReason != "" {
+			return source, errors.New(autoReason)
+		}
 		return source, errors.New("channels_share_link_required")
 	}
 	if !channels.ValidCookie(c.Cookie) {
 		return source, errors.New("channels_yuanbao_cookie_missing")
 	}
-	video, e := channels.NewResolver().Resolve(ctx, link, c.Cookie)
+	video, e := resolver.Resolve(ctx, link, c.Cookie)
+	usedAutomatic := autoLink != "" && link == autoLink
+	if e != nil && usedAutomatic && fallbackLink != "" && fallbackLink != autoLink {
+		video, e = resolver.Resolve(ctx, fallbackLink, c.Cookie)
+		usedAutomatic = false
+	}
 	if e != nil {
 		return source, e
 	}
 	if !matchChannelsVideo(source, msg, video) {
 		return source, errors.New("channels_resolved_video_mismatch")
 	}
+	if usedAutomatic {
+		m.record(bot.Record{Event: "channels_source_resolved", Category: "decision", ThreadID: msg.ThreadID, MessageID: msg.ID, Status: "resolved", Reason: "channels_assistant_shortlink", Origin: "media"})
+	}
 	source.MediaURL, source.DecodeKey, source.State = video.URL, video.DecodeKey, "available"
 	return source, nil
 }
 func channelsSettingsView(c channelsSettings) map[string]any {
-	return map[string]any{"enabled": c.Enabled, "cookie_configured": c.Cookie != "", "object_bridge_url": c.ObjectBridge}
+	return map[string]any{"enabled": c.Enabled, "cookie_configured": c.Cookie != "", "assistant_cookie_configured": c.AssistantCookie != "", "object_bridge_url": c.ObjectBridge}
 }
 func (s *Server) channelsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/channels/settings", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +165,8 @@ func (s *Server) channelsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/channels/settings", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			channelsSettings
-			Clear bool `json:"clear_cookie"`
+			Clear          bool `json:"clear_cookie"`
+			ClearAssistant bool `json:"clear_assistant_cookie"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -156,8 +183,20 @@ func (s *Server) channelsRoutes(mux *http.ServeMux) {
 		if in.Cookie == "" && !in.Clear {
 			in.Cookie = old.Cookie
 		}
+		in.AssistantCookie = strings.TrimSpace(in.AssistantCookie)
+		if in.AssistantCookie == "" && !in.ClearAssistant {
+			in.AssistantCookie = old.AssistantCookie
+		}
+		if in.ClearAssistant {
+			in.AssistantCookie = ""
+		}
+		if in.AssistantCookie != "" && !channels.ValidCookie(in.AssistantCookie) {
+			fail(w, 400, "视频号助手 Cookie 需要为完整单行请求头值")
+			return
+		}
 		if in.Clear {
 			in.Cookie = ""
+			in.AssistantCookie = ""
 			in.Enabled = false
 		}
 		if in.ObjectBridge != "" {

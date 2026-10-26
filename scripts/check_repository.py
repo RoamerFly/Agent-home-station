@@ -28,7 +28,7 @@ PATTERNS = [
 
 def private_values(private_root):
     values = set()
-    fields = {"key", "api_key", "apikey", "token", "yue_token", "password", "secret", "cookie"}
+    fields = {"key", "api_key", "apikey", "token", "yue_token", "password", "secret", "cookie", "assistant_cookie"}
 
     def collect(value):
         if isinstance(value, dict):

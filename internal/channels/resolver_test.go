@@ -95,3 +95,68 @@ func TestObjectBridgeValidatesExactObjectAndDoesNotUsePublicEndpoint(t *testing.
 		t.Fatal("wrong work accepted")
 	}
 }
+
+func TestAutomaticShortlinkKeepsAssistantAndYuanbaoSessionsSeparate(t *testing.T) {
+	r := NewResolver()
+	calls := []string{}
+	r.client.Transport = resolverTransport(func(q *http.Request) (*http.Response, error) {
+		calls = append(calls, q.URL.Host+q.URL.Path)
+		body := ""
+		status := 201
+		switch q.URL.Path {
+		case "/cgi-bin/mmfinderassistant-bin/post/get_object_short_link":
+			if q.URL.Host != "channels.weixin.qq.com" || q.Header.Get("Cookie") != "sessionid=synthetic-assistant-session" {
+				t.Fatal("wrong assistant auth scope")
+			}
+			b, _ := io.ReadAll(q.Body)
+			if !strings.Contains(string(b), `"exportId":"export/synthetic-handle"`) || !strings.Contains(string(b), `"nonceId":"nonce-fixture"`) {
+				t.Fatal("object identity lost")
+			}
+			body = `{"errCode":0,"data":{"shortUrl":"https://weixin.qq.com/sph/Synthetic1"}}`
+		case "/api/weixin/get_parse_result":
+			if q.URL.Host != "yuanbao.tencent.com" || q.Header.Get("Cookie") != "hy_token=synthetic-yuanbao-session" {
+				t.Fatal("assistant cookie escaped to yuanbao")
+			}
+			body = `{"code":0,"data":{"playable_url":"https://channels.weixin.qq.com/finder-preview/pages/feed?token=synthetic-token&eid=export%2Fsynthetic"}}`
+		case "/finder-preview/api/feed/get_feed_info":
+			if q.Header.Get("Cookie") != "" {
+				t.Fatal("session sent to media preview")
+			}
+			body = `{"errCode":0,"data":{"authorInfo":{"nickname":"fixture"},"feedInfo":{"description":"synthetic video","videoUrl":"https://media.example.test/video.mp4"}}}`
+		default:
+			t.Fatal("unknown endpoint")
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: q}, nil
+	})
+	link, e := r.ObjectShareURL(context.Background(), "export/synthetic-handle", "nonce-fixture", "sessionid=synthetic-assistant-session")
+	if e != nil {
+		t.Fatal(e)
+	}
+	v, e := r.Resolve(context.Background(), link, "hy_token=synthetic-yuanbao-session")
+	if e != nil || v.URL == "" || len(calls) != 3 {
+		t.Fatal("automatic chain failed", e, calls)
+	}
+}
+
+func TestAssistantShortlinkFailureIsNotSuccessOnHTTP200(t *testing.T) {
+	r := NewResolver()
+	r.client.Transport = resolverTransport(func(q *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"errCode":300330,"errMsg":"request failed"}`)), Request: q}, nil
+	})
+	_, e := r.ObjectShareURL(context.Background(), "export/synthetic-handle", "nonce-fixture", "sessionid=synthetic-assistant-session")
+	if e == nil || e.Error() != "channels_assistant_shortlink_failed" {
+		t.Fatal("business failure ignored", e)
+	}
+}
+
+func TestAssistantRejectsNumericCardIDBeforeAnyNetworkRequest(t *testing.T) {
+	r := NewResolver()
+	r.client.Transport = resolverTransport(func(*http.Request) (*http.Response, error) {
+		t.Fatal("numeric ID must not generate a misleading short URL")
+		return nil, nil
+	})
+	_, e := r.ObjectShareURL(context.Background(), "18446744073709551614", "nonce-fixture", "sessionid=synthetic-assistant-session")
+	if e == nil || e.Error() != "channels_assistant_export_id_required" {
+		t.Fatal("numeric ID accepted", e)
+	}
+}

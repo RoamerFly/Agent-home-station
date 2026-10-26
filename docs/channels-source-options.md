@@ -43,3 +43,9 @@
 当前固定原生客户端提交 `7095ef01e0cd3d5b567bcb6970f379dcd88bbfa8` 的 wechat-protocol/wechat-core 源码未发现 Finder 详情或视频号短链 RPC 实现。本地累计 channels-media 补丁只读取收到卡片的 XML，不主动查询作品详情。普通收发消息的 MMTLS 通道已实现，不等于已具备 Finder CGI 编号、protobuf 契约及该模块的完整授权。未用活动会话猜测提交未知协议请求。
 
 下一项验证是：用户自行确认能进入视频号助手后台后，以独立且私有的助手登录态，对同一张收到卡片测试上述短链接口；成功还需核对短链解析回来的作品标题／作者或作品 ID，再复用现有元宝读取层。未验证前不将其设为自动回退，不承诺任意卡片已实现免复制。源码参考材料与原始请求返回保留在忽略的本地证据目录，不提交账号资料。
+
+## 助手登录后对照验证（2026-10-26）
+
+用户提供助手授权后，同一数字objectId＋nonce请求get_object_short_link得到HTTP201/errCode=0和shortUrl，但元宝解析该URL只有通用描述，无wx_export_id、作者和playable_url。对照使用人工短链已解析出的正确export/标识＋同一nonce，助手生成的短链则能由元宝返回目标作品标题、作者及播放页。该对照证明助手登录可用，但数字ID不能直接当exportId；先前“生成成功”不证明任意第三方视频可自动读取。现已加入export/格式前置校验并保留已有有效来源回退。
+
+进一步检查了公开Finder.proto的FinderGetCommentDetailRequest/Response（[参考仓库](https://github.com/nsky99/wechatclient/blob/e1344339139a8a8a0b961ad3ee04c156ec23d8fb/pkg/wechat_sdk/mmpb/pb/Finder.proto)）：请求区分uint64 objectid、string encryptedObjectid、objectNonceId及FinderBaseRequest；响应可含FinderObject。但仅有protobuf结构还不足以确认当前Linux登录可调用的CGI编号、Finder上下文、平台授权和响应语义；未在活动账号上试猜发送。目标消息数据库仍加密，未提取密钥或修改数据库。研究原始返回、会话和第三方源码仅留在本机忽略目录，未入库。
