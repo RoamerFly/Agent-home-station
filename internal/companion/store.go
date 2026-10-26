@@ -290,9 +290,7 @@ func (s *Store) ClaimReply(c Config, now time.Time) error {
 			data.ReplyHour = hour
 			data.Replies = 0
 		}
-		if data.Replies >= c.MaxRepliesPerHour {
-			return errors.New("character hourly reply budget exhausted")
-		}
+		// Retain counters for observability, not as a sending quota.
 		data.Replies++
 		return nil
 	})

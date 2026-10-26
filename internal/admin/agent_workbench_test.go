@@ -54,7 +54,7 @@ func TestDeliveryToolsKeepConversationNativeAndMediaPermissionBoundaries(t *test
 	}
 	if _, err := p.Call(context.Background(), "wechat_delivery_retry", args); err == nil || n.retries != 0 {
 		t.Fatal("native no-retry guard bypassed")
-	} else if message, code := safeToolFailure(err); code != "agent_local_operation_failed" || !strings.Contains(message, "原生任务暂不允许续传") {
+	} else if message, code := safeToolFailure(err); code != "agent_local_operation_failed" || !strings.Contains(message, "原媒体来源") {
 		t.Fatal("native refusal mislabeled as connectivity failure", message, code)
 	}
 	n.status.Retryable = true
@@ -101,6 +101,7 @@ func TestOwnerActionContinuationDoesNotRequireProactiveGreeting(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := f.manager.agent.list("test", "wxid_owner")[0]
+	task.Runs = 40 // Legacy six-run budget must not stop an owner request.
 	task.Next = time.Now().Add(-time.Second)
 	if err = f.manager.agent.task(task); err != nil {
 		t.Fatal(err)

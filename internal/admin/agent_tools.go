@@ -42,7 +42,7 @@ func (p *permittedTools) agentTools() []mcptools.Tool {
 		tools = append(tools, agentTool("wechat_forward_file", "At the trusted owner's request, obtain a REAL file attachment from a message in another authorized conversation, then send that same file to target_thread_id (default CURRENT conversation). First resolve source name via wechat_conversations and select actual file message id via wechat_read; never invent IDs or substitute a text description. Files up to64MiB and native limits; expired/unavailable files fail honestly. Stable request_key; queued is not delivered, inspect wechat_operation_status. Do not duplicate the file in final reply. Input {source_thread_id:string,message_id:string,target_thread_id?:string,request_key:string}.", `{"type":"object","properties":{"source_thread_id":{"type":"string"},"message_id":{"type":"string"},"target_thread_id":{"type":"string"},"request_key":{"type":"string"}},"required":["source_thread_id","message_id","request_key"],"additionalProperties":false}`))
 		tools = append(tools, agentTool("wechat_send_text", "Send a text to another authorized conversation at the trusted owner's request. Native receipt is authoritative; queued is not delivered. Choose request_key stable for this logical send, never resubmit an unknown result with a new key. Already-sent text must not be duplicated in the final reply. Input {thread_id:string,text:string,request_key:string}.", `{"type":"object","properties":{"thread_id":{"type":"string"},"text":{"type":"string"},"request_key":{"type":"string"}},"required":["thread_id","text","request_key"],"additionalProperties":false}`))
 	}
-	tools = append(tools, agentTool("wechat_delivery_retry", "Trusted owner: resume an original native media job ONLY if current retryable=true. Preserves accepted parts. Never creates a new send, replays an uncertain final range or regenerates a song. Unknown receipt with retryable=false must be reconciled and investigated. Input {job_id:string,request_key:string,thread_id?:string}; another allowed thread requires owner cross-conversation permission.", `{"type":"object","properties":{"job_id":{"type":"string"},"request_key":{"type":"string"},"thread_id":{"type":"string"}},"required":["job_id","request_key"],"additionalProperties":false}`))
+	tools = append(tools, agentTool("wechat_delivery_retry", "Resume ORIGINAL media job after real same-thread chat reconciliation and dynamic delay. No attempt quota. retryable=false is not a stop condition: this tool reads synchronized messages and resumes only unconfirmed parts, keeping accepted parts and original client IDs. Read failures wait; explicit user cancellation stops. On failure investigate project docs/service and repair, then verify; use agent_task waiting for longer backoff. Stable request_key identifies ONE retry attempt; a subsequent failed attempt may use a new key, same job_id. Do not regenerate a song. Input {job_id:string,request_key:string,thread_id?:string}; another allowed thread requires owner cross-conversation permission.", `{"type":"object","properties":{"job_id":{"type":"string"},"request_key":{"type":"string"},"thread_id":{"type":"string"}},"required":["job_id","request_key"],"additionalProperties":false}`))
 	if len(c.AccountActions) > 0 {
 		b, _ := json.Marshal(c.AccountActions)
 		tools = append(tools, agentTool("wechat_account_action", "Execute only explicitly permitted account actions: "+string(b)+". Must refer to real IDs. Non-accepted result means not confirmed. Input {kind:string,thread_id:string,text?:string,members?:string[],muted?:boolean,message_id?:string,server_id?:string}.", `{"type":"object","properties":{"kind":{"type":"string"},"thread_id":{"type":"string"},"text":{"type":"string"},"members":{"type":"array","items":{"type":"string"}},"muted":{"type":"boolean"},"message_id":{"type":"string"},"server_id":{"type":"string"}},"required":["kind","thread_id"],"additionalProperties":false}`))
@@ -289,6 +289,20 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		t.Checkpoint = in.Checkpoint
 		t.State = in.State
+		if t.DeliveryJob != "" && t.State == "completed" {
+			native, ok := m.native.(nativeTools)
+			if !ok {
+				return "", errors.New("请先核对原发送回执，未标记完成")
+			}
+			status, e := native.ToolSendStatus(ctx, t.DeliveryJob)
+			if e != nil || status.ThreadID != t.ReportSourceThread || status.State != "accepted" {
+				t.State = "waiting"
+				if in.DelaySeconds < 30 {
+					in.DelaySeconds = 120
+				}
+				t.Checkpoint += "\n原发送仍未确认完成，继续核对同群聊天、修复和重试；不能以已查询状态代替完成交付。"
+			}
+		}
 		t.Next = time.Now().UTC().Add(time.Duration(in.DelaySeconds) * time.Second)
 		if in.Title != "" {
 			t.Title = in.Title

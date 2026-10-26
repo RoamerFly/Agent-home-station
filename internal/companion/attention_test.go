@@ -65,8 +65,8 @@ func TestEveryMessageJudgedWhileSendBudgetPermissionsAndQuietHoursRemain(t *test
 	if err := store.ClaimReply(c, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ClaimReply(c, time.Now()); err == nil {
-		t.Fatal("send budget unexpectedly removed")
+	if err := store.ClaimReply(c, time.Now()); err != nil {
+		t.Fatal("legacy send budget blocked reply", err)
 	}
 	d, err := e.Respond(context.Background(), input)
 	if err != nil || d.Reason != "model_chose_silence" || model.calls != 3 {

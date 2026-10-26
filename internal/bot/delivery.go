@@ -186,6 +186,9 @@ func deliveryBackoff(baseSeconds, round int) time.Duration {
 	return base + time.Duration(rand.Int64N(int64(base)+1))
 }
 
+// Shared by durable owner recovery tasks; no retry-count or age expiry.
+func DeliveryRetryBackoff(round int) time.Duration { return deliveryBackoff(120, round) }
+
 func (w *Worker) recordDeliveryWait(d *delivery, reason string) {
 	w.activity(Record{Event: "delivery_waiting", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, SendID: d.ID, Reason: reason, Status: "waiting", RetryAttempts: d.Attempts, RetryAt: d.Next.Format(time.RFC3339)})
 }

@@ -66,6 +66,7 @@ type ToolQuote struct {
 	ServerID  string `json:"server_id"`
 }
 type ToolStatus struct {
+	CreatedAt          string             `json:"created_at,omitempty"`
 	SourceID           string             `json:"source_id,omitempty"`
 	Attempts           int                `json:"attempts,omitempty"`
 	Retryable          bool               `json:"retryable,omitempty"`
@@ -84,6 +85,8 @@ type ToolStatus struct {
 }
 
 type VoiceChunkStatus struct {
+	ClientID      string `json:"client_id,omitempty"`
+	EncodedMD5    string `json:"encoded_md5,omitempty"`
 	ServerID      string `json:"server_id,omitempty"`
 	Index         int    `json:"index"`
 	State         string `json:"state"`
@@ -243,6 +246,7 @@ func (s *Sender) Submit(ctx context.Context, send ToolSend) (ToolStatus, error) 
 }
 func (s *Sender) decodeToolStatus(raw []byte) (ToolStatus, error) {
 	var value struct {
+		CreatedAt       string `json:"createdAt"`
 		SourceID        string `json:"sourceId"`
 		Attempts        int    `json:"attempts"`
 		Retryable       bool   `json:"retryable"`
@@ -263,6 +267,8 @@ func (s *Sender) decodeToolStatus(raw []byte) (ToolStatus, error) {
 			VoiceTransportKind string `json:"voiceTransportKind"`
 			VoiceFailedOffset  *int64 `json:"voiceFailedOffset"`
 			Chunks             []struct {
+				ClientID        string `json:"clientId"`
+				EncodedMD5      string `json:"encodedMd5"`
 				Index           int    `json:"index"`
 				State           string `json:"state"`
 				DurationMS      int64  `json:"durationMs"`
@@ -296,6 +302,7 @@ func (s *Sender) decodeToolStatus(raw []byte) (ToolStatus, error) {
 		value.Reason = "native_job_failed"
 	}
 	status := ToolStatus{ID: value.ID, State: value.State, Phase: value.Phase, Kind: value.Kind, ThreadID: value.ThreadID, ServerID: value.ServerID, Reason: value.Reason}
+	status.CreatedAt = value.CreatedAt
 	if value.SourceID != "" && !safeID(value.SourceID) {
 		return ToolStatus{}, errors.New("invalid media source identity")
 	}
@@ -325,7 +332,7 @@ func (s *Sender) decodeToolStatus(raw []byte) (ToolStatus, error) {
 		if hasReceipt {
 			serverID = chunk.ServerMessageID
 		}
-		status.VoiceChunks = append(status.VoiceChunks, VoiceChunkStatus{ServerID: serverID, Index: chunk.Index, State: chunk.State, DurationMS: chunk.DurationMS, PacingMS: chunk.PacingMS, SubmittedAtMS: chunk.SubmittedAtMS, AcceptedAtMS: chunk.AcceptedAtMS, HasReceipt: hasReceipt, PrefixRetries: retries})
+		status.VoiceChunks = append(status.VoiceChunks, VoiceChunkStatus{ClientID: chunk.ClientID, EncodedMD5: chunk.EncodedMD5, ServerID: serverID, Index: chunk.Index, State: chunk.State, DurationMS: chunk.DurationMS, PacingMS: chunk.PacingMS, SubmittedAtMS: chunk.SubmittedAtMS, AcceptedAtMS: chunk.AcceptedAtMS, HasReceipt: hasReceipt, PrefixRetries: retries})
 	}
 	switch value.Result.VoiceFailureStage {
 	case "voice_handshake_before_submission", "voice_upload_exchange_outcome_unknown", "voice_upload_receipt_unverified":

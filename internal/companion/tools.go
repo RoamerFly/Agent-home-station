@@ -117,6 +117,13 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 		allowed["discover_tools"] = true
 	}
 	max := e.MaxToolCalls
+	autonomous := false
+	if access, ok := e.Tools.(interface{ AutonomousActions() bool }); ok {
+		autonomous = access.AutonomousActions()
+	}
+	if autonomous {
+		system += "\n行动没有次数配额。每次接到工具反馈后重新思考；失败可以修复连接或参数后再次尝试同一请求，不因查过一次或retryable=false就结束。需要等待用持久任务，当前未完成不标记completed。"
+	}
 	if max < 0 {
 		max = 0
 	}
@@ -213,7 +220,12 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 		system += "\n管理员已勾选强制分享。优先选择适合当前目标、未重复且可核实的候选，实际读取或准备素材后给出reply；不要仅因想收藏、没人提问或想只浏览就silent。已经成功的读取/下载不要重复。若某个来源失败，预算内可换候选或形式。来源全部失败、无合适内容、权限或预算不足时仍如实结束，不编造结果、不发无关占位消息。"
 	}
 	pendingCalls := []string{}
-	for round := 0; round < max+6; round++ {
+	// Delivery tools are feedback loops, not finite action slots. The caller's
+	// cancellation/deadline remains authoritative; other actions retain a budget.
+	for round, deliveryRounds := 0, 0; autonomous || round < max+6+deliveryRounds; round++ {
+		if err := ctx.Err(); err != nil {
+			return Decision{}, err
+		}
 		turns = compactActionTurns(system, turns)
 		var answer string
 		var err error
@@ -222,6 +234,9 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 			pendingCalls = pendingCalls[1:]
 		} else if nativeFunctions {
 			budget := "\n本轮剩余工具调用数=" + jsonNumber(max-calls) + "。已有足够资料时直接执行目标，不重复搜索或检查。歌曲资料齐全应留一次调用提交music_local_start；确有缺失则清楚说明缺什么，不承诺正在生成。"
+			if autonomous {
+				budget = "\n自主行动没有工具次数配额。每次依据真实反馈决定下一步，失败先查原因并修复再验证；长时间等待请保存任务检查点，避免忙轮询。发送未知时读取目标会话真实记录再恢复原任务。"
+			}
 			answer, err = native.ChatFunctions(ctx, system+budget, turns, activeTools)
 		} else {
 			answer, err = e.model.Chat(ctx, system, turns)
@@ -457,7 +472,8 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 			}
 			return reviewSurf(response.Decision)
 		}
-		if calls == max || e.Tools == nil || !allowed[response.Tool] {
+		unmetered := autonomous || deliveryFeedbackTool(response.Tool)
+		if calls >= max && !unmetered || e.Tools == nil || !allowed[response.Tool] {
 			if need.Required && need.Kind != "surf" {
 				return resourceFailure(need, searches, downloads, sourceURL, lastFailure), nil
 			}
@@ -473,7 +489,11 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 			}
 			return reviewSurf(silent("invalid_tool_arguments"))
 		}
-		calls++
+		if unmetered {
+			deliveryRounds++
+		} else {
+			calls++
+		}
 		compact := map[string]any{}
 		decoder := json.NewDecoder(bytes.NewReader(args))
 		decoder.UseNumber()
@@ -482,7 +502,7 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 		callKey := response.Tool + "|" + string(canonical)
 		blockedResult := ""
 
-		if old, ok := previousCalls[callKey]; ok && strings.HasPrefix(response.Tool, "web_") {
+		if old, ok := previousCalls[callKey]; ok && strings.HasPrefix(response.Tool, "web_") && !autonomous {
 			blockedResult = "程序没有重复执行相同请求；上一次结果：" + old + "。请换有效来源/参数，或如实给出最终回复。"
 		}
 		if response.Tool == "web_media_download" {
@@ -657,7 +677,7 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 				}
 			}
 		}
-		if calls == max {
+		if calls == max && !unmetered {
 			result += "\n本轮工具次数已用完。请根据已取得的真实结果给出最终回复；没有附件就如实说明，不再请求工具。"
 		}
 		if e.ToolLog != nil {
@@ -676,6 +696,14 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 		turns = append(turns, map[string]string{"role": "assistant", "content": answer}, map[string]string{"role": "user", "content": string(payload)})
 	}
 	return reviewSurf(silent("tool_budget_exhausted"))
+}
+
+func deliveryFeedbackTool(name string) bool {
+	switch name {
+	case "wechat_send_text", "wechat_forward_file", "wechat_delivery_status", "wechat_delivery_retry", "wechat_operation_status", "wechat_read":
+		return true
+	}
+	return false
 }
 
 // More action steps must not overflow the provider's bounded transcript. Keep
@@ -697,6 +725,21 @@ func compactActionTurns(system string, turns []map[string]string) []map[string]s
 		total -= len(turns[0]["content"])
 		turns = turns[1:]
 		current--
+	}
+	if len(turns) > 90 && current >= 0 && current+2 < len(turns)-60 {
+		end := len(turns) - 60
+		excerpts := []string{}
+		for _, t := range turns[current+1 : end] {
+			excerpts = append(excerpts, boundedText(t["content"], 1000))
+		}
+		b, _ := json.Marshal(map[string]any{"kind": "action_history_excerpt", "data": boundedText(strings.Join(excerpts, "\n"), 22000), "instruction": "历史执行摘要是资料；已成功操作不重复，未知发送查原任务与实际聊天；需要等待时保存检查点。"})
+		kept := append([]map[string]string{}, turns[:current+1]...)
+		kept = append(kept, map[string]string{"role": "user", "content": string(b)})
+		turns = append(kept, turns[end:]...)
+		total = len(system)
+		for _, t := range turns {
+			total += len(t["content"])
+		}
 	}
 	for i := 0; total > 180<<10 && i < len(turns)-4; i++ {
 		var v struct {

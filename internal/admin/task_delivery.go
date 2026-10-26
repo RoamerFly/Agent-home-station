@@ -74,7 +74,7 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 					exists = exists || old.ID == id
 				}
 				if !exists {
-					recovery := agentTask{ID: id, Account: in.Account, Thread: reportTo, ReportSourceThread: in.Thread, Sender: in.Sender, OwnerRequested: access.privileged(), ReportOnly: !access.privileged(), Title: "处理发送异常", State: "waiting", Next: time.Now().Add(30 * time.Second), OriginTrace: task.OriginTrace, RequestedText: task.RequestedText, Checkpoint: fmt.Sprintf("这是私聊主人的运维任务，技术进展只发当前私聊，原群只发送正常补发内容。来源会话 %s；原发送任务 %s，已接受语音 %d/%d 段，原因 %s。查询wechat_delivery_status时指定thread_id为来源会话；已接受部分绝不重发。原生retryable=true才可wechat_delivery_retry续传原任务，并传来源thread_id，不重新生成歌曲。原生禁止重试时检查原记录与项目文档，结合已获权限排查，保存检查点并私聊说明真实进展。不能把缺失回执说成确定未发送，不以新编号重发整份媒体。", in.Thread, delivery.PendingJob, delivery.AcceptedParts, delivery.TotalParts, delivery.FailureReason)}
+					recovery := agentTask{DeliveryJob: delivery.PendingJob, ID: id, Account: in.Account, Thread: reportTo, ReportSourceThread: in.Thread, Sender: in.Sender, OwnerRequested: access.privileged(), ReportOnly: !access.privileged(), Title: "处理发送异常", State: "waiting", Next: time.Now().Add(30 * time.Second), OriginTrace: task.OriginTrace, RequestedText: task.RequestedText, Checkpoint: fmt.Sprintf("技术进展只发当前主人私聊，原群只补发正常内容。来源会话 %s；原发送任务 %s，已接受语音 %d/%d 段，原因 %s。读取wechat_delivery_status及该群实际聊天记录；retryable=false不代表不能自主恢复，调用wechat_delivery_retry核对聊天后续办同一任务，保留已接受分段，不重新生成歌曲。失败要检查具体原因、项目文档并修复验证；等待时agent_task保存检查点，不以一次失败结束。", in.Thread, delivery.PendingJob, delivery.AcceptedParts, delivery.TotalParts, delivery.FailureReason)}
 					if recovery.ReportOnly {
 						recovery.Sender = ""
 						recovery.RequestedText = ""

@@ -329,7 +329,30 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				w.refreshMediaParent(d.Trace)
 			}
 		case "needs_review", "unknown":
-			// Recheck delayed receipts without overriding the native no-retry guard.
+			// Reconcile real same-thread messages, then resume the original plan.
+			// Explicit retry policy accepts that a delayed sync may hide delivery.
+			if retry, ok := w.sender.(interface {
+				ReconcileMediaJob(context.Context, string) (linuxnative.ToolStatus, error)
+			}); ok && w.config.Options.RetryUncertain && d.Checks > 0 {
+				if gate := w.sendGate(d.Input.Thread); time.Now().Before(gate) {
+					d.Next = gate
+					continue
+				}
+				w.advanceSendGate(d.Input.Thread)
+				retryCtx, stop := context.WithTimeout(ctx, 30*time.Second)
+				next, e := retry.ReconcileMediaJob(retryCtx, d.ID)
+				stop()
+				d.Retries++
+				if e == nil {
+					d.Status = next
+					d.State = next.State
+					d.Phase = next.Phase
+					d.Reason = "media_reconciled_original_job_resumed"
+					d.Next = time.Now().Add(2 * time.Second)
+					w.mediaRecord(d, "media_retry_waiting", "decision")
+					continue
+				}
+			}
 			if d.Checks >= 2 && !w.config.Options.RetryUncertain {
 				d.State = "needs_review"
 				d.Reason = "media_receipt_unverified_native_retry_denied"
@@ -344,11 +367,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		default:
 			d.State = status.State
 			d.Reason = "media_" + status.Phase
-			if time.Since(d.Created) > 30*time.Minute {
-				w.cancelMedia(n, d, false, "media_queue_deadline_exceeded")
-			} else {
-				w.mediaRecord(d, "media_sending", "decision")
-			}
+			w.mediaRecord(d, "media_sending", "decision")
 		}
 	}
 	w.persistErr = w.saveRuntime()
