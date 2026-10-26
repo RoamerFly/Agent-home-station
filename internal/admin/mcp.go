@@ -205,6 +205,7 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	return out, err
 }
 func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMessage) (result string, callErr error) {
+	defer func() { p.rememberTaskAction(name, args, result, callErr) }()
 	ctx = p.mcpContext(ctx)
 	started := time.Now()
 	var diagnosticMu sync.Mutex

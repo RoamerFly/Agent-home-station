@@ -435,7 +435,12 @@ func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, boo
 		if message.Direction != "incoming" && !(message.ThreadID == "filehelper" && message.Direction == "outgoing") {
 			return "", false
 		}
-		if !strings.HasPrefix(text, w.config.Prefix) && !message.ReplyToSelf {
+		if text == strings.TrimSpace(w.config.Prefix) {
+			return "", false
+		}
+		// Approved private contacts speak normally. Filehelper retains its
+		// explicit trigger because both local/outgoing notes are observed there.
+		if message.ThreadID == "filehelper" && !strings.HasPrefix(text, w.config.Prefix) && !message.ReplyToSelf {
 			return "", false
 		}
 		text = strings.TrimSpace(strings.TrimPrefix(text, w.config.Prefix))

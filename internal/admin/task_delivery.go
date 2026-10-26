@@ -9,7 +9,7 @@ import (
 
 func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDelivery) error {
 	for _, task := range m.agent.list(in.Account, in.Thread) {
-		if task.ID != in.TaskID || task.MusicJob == "" && task.PluginJob == nil || task.State == "running" || task.State == "cancelled" {
+		if task.ID != in.TaskID || task.MusicJob == "" && task.PluginJob == nil && task.RecoveryMessageID == "" || task.State == "running" || task.State == "cancelled" {
 			continue
 		}
 		if task.Delivery != nil && *task.Delivery == delivery {

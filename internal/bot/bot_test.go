@@ -137,6 +137,10 @@ func TestEligibilityUsesStructuredMentionsAndFreshAllowlistedText(t *testing.T) 
 			m.Body = "[AI] /ai 回答"
 		}, false},
 		{"direct incoming", func(m *linuxnative.Message) { m.ThreadID = "friend"; m.Body = "/ai 问题" }, true},
+		{"direct no prefix", func(m *linuxnative.Message) { m.ThreadID = "friend"; m.Body = "帮我检查一下" }, true},
+		{"direct empty", func(m *linuxnative.Message) { m.ThreadID = "friend"; m.Body = "  " }, false},
+		{"direct only prefix", func(m *linuxnative.Message) { m.ThreadID = "friend"; m.Body = "/ai " }, false},
+		{"unapproved direct", func(m *linuxnative.Message) { m.ThreadID = "stranger"; m.Body = "不用前缀" }, false},
 		{"direct own", func(m *linuxnative.Message) { m.ThreadID = "friend"; m.Direction = "outgoing"; m.Body = "/ai 问题" }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

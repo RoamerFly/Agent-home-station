@@ -235,6 +235,10 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		tasks := m.agent.list(p.trace.Account, p.trace.Thread)
 		for i := range tasks {
 			tasks[i] = copyTask(tasks[i])
+			if tasks[i].OwnerRequested && !p.privileged() {
+				tasks[i].Actions = nil
+				tasks[i].Goal = ""
+			}
 			if tasks[i].MusicSpec != nil {
 				tasks[i].MusicSpec.Style = ""
 				tasks[i].MusicSpec.Lyrics = ""

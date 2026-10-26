@@ -130,5 +130,8 @@ func (w *Worker) skipReason(m linuxnative.Message, now time.Time) string {
 		}
 		return "empty_prompt"
 	}
-	return "private_prefix_not_matched_or_empty"
+	if m.ThreadID == "filehelper" {
+		return "private_prefix_not_matched_or_empty"
+	}
+	return "empty_prompt"
 }
