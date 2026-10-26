@@ -40,6 +40,8 @@ func (w *Worker) readQuoteContext(ctx context.Context, m *linuxnative.Message) s
 		switch original.Type {
 		case 3:
 			text = "[图片]"
+		case 47:
+			text = "[表情包，尚未读取画面]"
 		case 34:
 			text = "[语音]"
 		case 43:

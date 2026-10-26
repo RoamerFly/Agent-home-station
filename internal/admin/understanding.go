@@ -45,6 +45,9 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 	if m.Type == 34 {
 		return a.recognizeVoice(ctx, m)
 	}
+	if m.Type == 47 {
+		return a.understandSticker(ctx, m)
+	}
 	if m.Type == 49 {
 		if m.IsQuotedText() {
 			return "[微信引用回复，用户本次正文]\n" + m.Body, nil

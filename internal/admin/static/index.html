@@ -117,7 +117,7 @@
 <details class="panel behavior-settings"><summary>消息理解、发送节奏与故障恢复</summary><button id="save-behavior" type="button" hidden>保存</button>
 <div class="field-grid">
 <div><label class="switch-row"><span>执行较长工具任务前先回应</span><input id="behavior-acknowledge-tools" type="checkbox"><span class="switch" aria-hidden="true"></span></label><p class="hint">AI决定执行后先发一句自然回应，再继续取得资源并回复结果；仍遵守发送权限与预算。</p></div>
-<div><label class="switch-row"><span>理解收到的图片</span><input id="behavior-read-images" type="checkbox"><span class="switch" aria-hidden="true"></span></label><p class="hint">仅处理授权会话，图片发送给当前配置的模型服务；模型须支持图片输入。</p></div>
+<div><label class="switch-row"><span>理解图片与表情包</span><input id="behavior-read-images" type="checkbox"><span class="switch" aria-hidden="true"></span></label><p class="hint">仅处理授权会话，画面发送给当前配置的视觉模型；GIF 采样开头画面，读取失败也保留接收记录。</p></div>
 <div><label class="switch-row"><span>视频画面摘要与分享卡片简介</span><input id="behavior-read-videos" type="checkbox"><span class="switch" aria-hidden="true"></span></label><p class="hint">视频抽取最多 6 帧；启用语音识别时也转写实际音轨。视频号优先自动获取真实内容，读取失败时明确仅有卡片资料。</p></div>
 <div><label class="switch-row"><span>对 @ 和明确提问引用回复</span><input id="behavior-quote-replies" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div>
 <div><label class="switch-row"><span>随机等待后发送</span><input id="behavior-random-delay" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div>

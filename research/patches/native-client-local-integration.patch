@@ -1222,6 +1222,43 @@ index 83fbd7b..b6c6aa7 100644
          parts.push(p::bytes(2, b"synthetic_voice_id"));
          assert_eq!(
              decode_voice_send(&p::message(&parts).unwrap(), "synthetic_voice_id")
+diff --git a/packages/native-client-rust/crates/wechat-protocol/src/sticker.rs b/packages/native-client-rust/crates/wechat-protocol/src/sticker.rs
+index c32d53f..d5ce62b 100644
+--- a/packages/native-client-rust/crates/wechat-protocol/src/sticker.rs
++++ b/packages/native-client-rust/crates/wechat-protocol/src/sticker.rs
+@@ -38,7 +38,7 @@ pub fn validate_sticker_url(value: &str) -> Result<reqwest::Url> {
+         reqwest::Url::parse(value).map_err(|_| anyhow::anyhow!("sticker_source_not_allowed"))?;
+     ensure!(
+         ["http", "https"].contains(&url.scheme())
+-            && url.host_str() == Some("snsvideo.c2c.wechat.com")
++            && matches!(url.host_str(), Some("snsvideo.c2c.wechat.com" | "wxapp.tc.qq.com"))
+             && url.username().is_empty()
+             && url.password().is_none()
+             && url.fragment().is_none()
+@@ -141,12 +141,23 @@ mod tests {
+     use super::*;
+     #[test]
+     fn url_and_network_sources_are_strict() {
++        for u in [
++            "https://snsvideo.c2c.wechat.com/sticker",
++            "https://wxapp.tc.qq.com/sticker",
++            "http://wxapp.tc.qq.com/sticker",
++        ] {
++            assert!(validate_sticker_url(u).is_ok());
++        }
+         for u in [
+             "https://127.0.0.1/x",
+             "https://snsvideo.c2c.wechat.com.evil/x",
+             "https://user@snsvideo.c2c.wechat.com/x",
+             "https://snsvideo.c2c.wechat.com:444/x",
+             "https://snsvideo.c2c.wechat.com/x#fragment",
++            "https://wxapp.tc.qq.com.evil/x",
++            "https://user@wxapp.tc.qq.com/x",
++            "https://wxapp.tc.qq.com:444/x",
++            "https://wxapp.tc.qq.com/x#fragment",
+         ] {
+             assert!(validate_sticker_url(u).is_err());
+         }
 diff --git a/packages/native-client-rust/crates/wechat-core/src/channels.rs b/packages/native-client-rust/crates/wechat-core/src/channels.rs
 new file mode 100644
 index 0000000..d9824c1
