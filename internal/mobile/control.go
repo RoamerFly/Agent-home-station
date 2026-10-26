@@ -265,10 +265,20 @@ func (c *Control) Save(s Settings) error {
 		return e
 	}
 	c.settings = clone(s)
+	for id, t := range c.tasks {
+		if t.State == "queued" || t.State == "running" {
+			t.State, t.Reason, t.Updated = "cancelled", "device_permission_changed", time.Now().UTC()
+			c.tasks[id] = t
+		}
+	}
+	persistErr := c.persistTasks()
+	// Settings are already durable. Even if cancellation persistence fails,
+	// keep the in-memory queue stopped; a restart converts old pending work
+	// to needs_review rather than executing it under changed permissions.
 	for _, cancel := range c.running {
 		cancel()
 	}
-	return nil
+	return persistErr
 }
 func (c *Control) allowed(s Settings, source Source) bool {
 	// The admin adapter verifies the existing trusted identity/thread policy.
@@ -321,8 +331,14 @@ func (c *Control) Start(source Source, device, goal string) (Task, error) {
 	if len(c.tasks) >= 200 {
 		return Task{}, errors.New("device_task_storage_limit")
 	}
-	if c.devices[device] != "" {
-		return Task{}, errors.New("device_busy")
+	pending := 0
+	for _, old := range c.tasks {
+		if old.DeviceID == device && (old.State == "queued" || old.State == "running") {
+			pending++
+		}
+	}
+	if pending >= 8 {
+		return Task{}, errors.New("device_queue_limit")
 	}
 	t := Task{ID: newID(), RequestHash: requestHash, DeviceID: device, Goal: goal, State: "queued", Source: source, Created: time.Now().UTC(), Updated: time.Now().UTC(), Events: []Event{}}
 	c.tasks[t.ID] = t
@@ -330,11 +346,30 @@ func (c *Control) Start(source Source, device, goal string) (Task, error) {
 		delete(c.tasks, t.ID)
 		return Task{}, e
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.MaxSeconds)*time.Second)
-	c.running[t.ID], c.devices[device] = cancel, t.ID
-	c.wg.Add(1)
-	go c.run(ctx, cancel, t.ID, s)
+	c.scheduleLocked(device)
 	return clone(t), nil
+}
+func (c *Control) scheduleLocked(device string) {
+	if c.closed || !c.settings.Enabled || c.devices[device] != "" {
+		return
+	}
+	var next *Task
+	for _, t := range c.tasks {
+		if t.DeviceID != device || t.State != "queued" {
+			continue
+		}
+		if next == nil || t.Created.Before(next.Created) || t.Created.Equal(next.Created) && t.ID < next.ID {
+			copy := t
+			next = &copy
+		}
+	}
+	if next == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.settings.MaxSeconds)*time.Second)
+	c.running[next.ID], c.devices[device] = cancel, next.ID
+	c.wg.Add(1)
+	go c.run(ctx, cancel, next.ID, clone(c.settings))
 }
 func (c *Control) Cancel(id string, source Source) error {
 	c.mu.Lock()
@@ -447,6 +482,7 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 		}
 		fn := c.finished
 		t := clone(c.tasks[id])
+		c.scheduleLocked(t.DeviceID)
 		c.mu.Unlock()
 		if fn != nil {
 			fn(t)
@@ -589,14 +625,19 @@ func (c *Control) Busy() bool { c.mu.Lock(); defer c.mu.Unlock(); return len(c.r
 // StopAll checkpoints cancellation before stopping workers. It does not undo
 // an ADB action already submitted. New tasks remain subject to Settings.Enabled.
 func (c *Control) StopAll() error {
-	for _, t := range c.List(nil) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, t := range c.tasks {
 		if t.State == "queued" || t.State == "running" {
-			if err := c.Cancel(t.ID, Source{Admin: true}); err != nil {
-				return err
-			}
+			t.State, t.Reason, t.Updated = "cancelled", "device_cancelled_by_owner", time.Now().UTC()
+			c.tasks[id] = t
 		}
 	}
-	return nil
+	err := c.persistTasks()
+	for _, cancel := range c.running {
+		cancel()
+	}
+	return err
 }
 
 func (c *Control) Devices(ctx context.Context) (json.RawMessage, error) {
