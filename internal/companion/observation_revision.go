@@ -47,7 +47,7 @@ func (s *Store) ReplaceObservation(scopeID, trace, before, after string) error {
 		for i := range scope.Messages {
 			turn := &scope.Messages[i]
 			if turn.Role == "user" && turn.TraceID == trace && turn.Text == before {
-				turn.Text = boundedText(after, 2048)
+				turn.Text = boundedInputMemory(after)
 				data.Scopes[scopeID] = scope
 				break
 			}

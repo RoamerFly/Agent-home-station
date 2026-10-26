@@ -91,7 +91,11 @@ func failureSummary(err error) string {
 		case "video_prepare_failed":
 			return "视频格式整理失败；请检查 FFmpeg 是否可用以及原视频是否可转换为 MP4"
 		case "video_page_unsupported":
-			return "该视频页面暂未接入解析，请使用公开直链或支持的BV视频页"
+			return "该视频页面暂未接入专用解析，需要通用网页、浏览器或设备读取"
+		case "share_requires_browser":
+			return "未取得分享实际内容，需要浏览器渲染、登录或App读取；未按标题生成回复"
+		case "share_content_unsupported":
+			return "分享返回的内容类型暂不支持读取；未按标题生成回复"
 		case "video_page_metadata_unavailable":
 			return "未取得视频页面的有效播放资料；可能是页面结构变化、验证页或已下架"
 		case "video_public_playback_unavailable":

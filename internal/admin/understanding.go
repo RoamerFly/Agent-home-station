@@ -16,6 +16,7 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
 )
 
 type incomingReader interface {
@@ -57,10 +58,23 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 			defer cancel()
 			observation, err := a.understandChannels(bounded, m)
 			if err == nil {
-				return shareMessageDescription(m) + "\n" + observation, nil
+				return observedShareDescription(m) + "\n" + observation, nil
 			}
 			a.manager.record(bot.Record{Event: "channels_video_observation_unavailable", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, Status: "unavailable", Reason: err.Error(), Origin: "media"})
-			return shareMessageDescription(m) + "\n[视频内容读取未完成，不能声称已观看。原因：" + err.Error() + "]", nil
+			text := shareMessageDescription(m) + "\n[视频内容读取未完成，不能声称已观看，不根据标题猜测或评论。原因：" + sharedVideoReadReason(err) + "]"
+			return text, &bot.ObservationUnavailableError{Observation: text, Reason: sharedVideoReadReason(err)}
+		}
+		if m.Link != nil && m.Link.URL != "" && c.ReadVideos {
+			text, err := a.understandSharedVideo(ctx, m)
+			if err == nil {
+				return text, nil
+			}
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			a.manager.record(bot.Record{Event: "shared_video_observation_unavailable", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, Status: "unavailable", Reason: sharedVideoReadReason(err), Origin: "media"})
+			text = shareMessageDescription(m) + "\n[分享实际内容未取得；可能需要浏览器、登录或App读取，不要根据标题评论或追问视频讲了什么。原因：" + sharedVideoReadReason(err) + "]"
+			return text, &bot.ObservationUnavailableError{Observation: text, Reason: sharedVideoReadReason(err)}
 		}
 		return shareMessageDescription(m), nil
 	}
@@ -100,8 +114,19 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 	return "[收到图片的视觉观察]\n" + result, nil
 }
 
-// Cards are descriptions, not watched videos. Keep metadata out of the command
-// and tool namespace; never execute or follow arbitrary app-message URLs.
+func sharedVideoReadReason(err error) string {
+	var web *mcptools.WebError
+	if errors.As(err, &web) {
+		return "shared_video_" + web.Code
+	}
+	if err != nil && strings.HasPrefix(err.Error(), "channels_") && len(err.Error()) < 100 && !strings.ContainsAny(err.Error(), " /?:\r\n") {
+		return err.Error()
+	}
+	return "shared_video_read_failed"
+}
+
+// This fallback extracts card descriptions only. Actual share URLs are read by
+// the bounded public reader above; XML itself never becomes executable code.
 func shareDescription(body string) string {
 	if len(body) > 128<<10 {
 		return "[分享卡片] 正文超过限制，尚未读取视频内容"

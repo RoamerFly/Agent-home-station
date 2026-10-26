@@ -3,6 +3,7 @@ package companion
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -11,6 +12,32 @@ func TestVideoMemoryPreservesObservedAudioAfterLongFrameDescription(t *testing.T
 	got := boundedInputMemory(text)
 	if len(got) > 2048 || !utf8.ValidString(got) || !strings.Contains(got, "[画面观察：6帧]") || !strings.Contains(got, "[实际音轨转写：0–32秒]") || !strings.Contains(got, "这段音轨的实际内容") {
 		t.Fatal("modality or boundary lost", len(got))
+	}
+}
+
+func TestPublicShareMemoryAndRefreshPreserveAudioAfterLongVisualDescription(t *testing.T) {
+	text := strings.Repeat("原卡片很长的标题和介绍", 60) + "[微信视频实际内容观察]\n[画面观察：6帧]" + strings.Repeat("真实画面", 500) + "\n[实际音轨转写：0–90秒]真实讲话内容"
+	got := boundedInputMemory(text)
+	if len(got) > 2048 || !strings.Contains(got, "真实讲话内容") || !strings.Contains(got, "[微信视频实际内容观察]") {
+		t.Fatal("public share audio lost")
+	}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Defaults()
+	c.Permissions.Remember = true
+	in := Input{Channel: "wechat", Account: "test", Thread: "test", TraceID: "share", Text: "old"}
+	now := time.Now()
+	if err := store.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReplaceObservation(ScopeID("wechat", "test", "test"), "share", "old", text); err != nil {
+		t.Fatal(err)
+	}
+	scope := store.Context(in, c, now)
+	if len(scope.Messages) != 1 || scope.Messages[0].Text != got {
+		t.Fatal("observation refresh erased audio")
 	}
 }
 
