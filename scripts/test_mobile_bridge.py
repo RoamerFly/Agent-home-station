@@ -7,10 +7,12 @@ import subprocess
 import tempfile
 import time
 import unittest
-from mobile_bridge import Bridge, BridgeError, ui_nodes
+from mobile_bridge import Bridge, BridgeError, ui_nodes, public_browser_url
+from unittest.mock import patch
 
 PNG = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\rIHDR' + struct.pack('>II', 480, 800) + b'synthetic'
 XML = b'<hierarchy><node text="Hello" content-desc="" resource-id="app:id/button" class="Button" package="com.example.app" bounds="[1,2][40,50]" clickable="true" password="false"/></hierarchy>'
+MP4 = b'\x00\x00\x00\x20ftyp' + b'synthetic recording fixture' * 400
 
 
 class Runner:
@@ -20,6 +22,7 @@ class Runner:
         self.png = PNG
         self.xml = XML
         self.package = 'com.example.app'
+        self.capture_data = MP4
 
     def __call__(self, command, **kwargs):
         self.calls.append(command)
@@ -32,7 +35,7 @@ class Runner:
         elif args == ['exec-out', 'screencap', '-p']:
             data = self.png
         elif args[:2] == ['exec-out', 'cat']:
-            data = self.xml
+            data = self.capture_data if args[-1].endswith('.mp4') else self.xml
         elif args[:3] == ['shell', 'input', 'tap'] and self.fail_action:
             raise subprocess.TimeoutExpired(command, 15)
         return subprocess.CompletedProcess(command, 0, data, b'private stderr never forwarded')
@@ -60,6 +63,54 @@ class BridgeTests(unittest.TestCase):
 
     def action_calls(self):
         return [x for x in self.runner.calls if x[3:6] == ['shell', 'input', 'tap']]
+
+    def test_recording_real_bytes_chunking_scope_and_no_replay(self):
+        self.cfg['devices']['lab']['actions'].append('capture')
+        self.save_config()
+        obs, _ = self.bridge.observe('lab')
+        request = dict(device_id='lab', action='capture', request_key='recording', observation_id=obs['id'], seconds=3)
+        result = self.bridge.action(request)
+        meta = result['result']['artifact']
+        self.assertFalse(meta['audio'])
+        self.assertFalse(meta['original_media'])
+        self.assertEqual(meta['sha256'], hashlib.sha256(MP4).hexdigest())
+        repeated = self.bridge.action(request)
+        self.assertEqual(repeated['result']['artifact']['id'], meta['id'])
+        self.assertEqual(len([c for c in self.runner.calls if c[3:5] == ['shell', 'screenrecord']]), 1)
+        import base64
+        actual = b''
+        while len(actual) < meta['bytes']:
+            chunk = self.bridge.read_artifact(dict(device_id='lab', artifact_id=meta['id'], request_key='recording', offset=len(actual)))
+            self.assertLess(len(json.dumps(chunk)), 16000)
+            actual += base64.b64decode(chunk['data_base64'])
+        self.assertEqual(actual, MP4)
+        with self.assertRaises(BridgeError):
+            self.bridge.read_artifact(dict(device_id='lab', artifact_id=meta['id'], request_key='other', offset=0))
+        with self.assertRaises(BridgeError):
+            self.bridge.read_artifact(dict(device_id='lab', artifact_id='../config', request_key='recording', offset=0))
+
+    def test_recording_invalid_media_never_marked_submitted(self):
+        self.cfg['devices']['lab']['actions'].append('capture')
+        self.save_config()
+        self.runner.capture_data = b'not a video'
+        obs, _ = self.bridge.observe('lab')
+        result = self.bridge.action(dict(device_id='lab', action='capture', request_key='bad-recording', observation_id=obs['id'], seconds=3))
+        self.assertEqual(result['state'], 'unknown')
+
+    def test_browser_public_scope_and_shell_quoting(self):
+        public = lambda *a, **k: [(2, 1, 6, '', ('93.184.216.34', 443))]
+        private = lambda *a, **k: [(2, 1, 6, '', ('127.0.0.1', 443))]
+        url = 'https://example.com/video?a=1&b=2'
+        self.assertEqual(public_browser_url(url, ['example.com'], public), url)
+        for bad in ['file:///private', 'https://user@example.com/', 'https://other.invalid/', 'https://example.com/$(id)', 'https://example.com/\ncommand']:
+            with self.assertRaises(BridgeError):
+                public_browser_url(bad, ['example.com'], public)
+        with self.assertRaises(BridgeError):
+            public_browser_url(url, ['example.com'], private)
+        device = dict(packages=['com.example.app'], browsers=['com.example.app'], web_hosts=['example.com'])
+        with patch('mobile_bridge.socket.getaddrinfo', public):
+            command = Bridge.action_command(dict(action='open_url', package='com.example.app', url=url), {}, device)
+        self.assertEqual(command[-3], "'" + url + "'")
 
     def test_observe_retains_real_shape_and_bounded_nodes(self):
         self.assertEqual(self.bridge.list_devices()['devices'][0]['state'], 'device')

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mobile"
 )
@@ -38,6 +39,44 @@ func TestMobileRoutesRequireAuthenticationAndCSRF(t *testing.T) {
 	}
 	if status, _, _ := f.request("GET", "/assets/mobile.js", nil, false, false); status != 200 {
 		t.Fatal("asset", status)
+	}
+}
+
+func TestDeviceRecordingParametersAndSourceMemory(t *testing.T) {
+	o := mobile.Observation{AllowedPackages: []string{"test.browser"}, Browsers: []string{"test.browser"}}
+	if validDeviceStep(mobile.Step{Action: "capture"}, o) {
+		t.Fatal("record duration omitted")
+	}
+	if !validDeviceStep(mobile.Step{Action: "capture", Arguments: map[string]any{"seconds": float64(4)}}, o) {
+		t.Fatal("explicit recording duration rejected")
+	}
+	if validDeviceStep(mobile.Step{Action: "open_url"}, o) {
+		t.Fatal("missing browser/url accepted")
+	}
+	if validDeviceStep(mobile.Step{Action: "open_url", Arguments: map[string]any{"package": "other.browser", "url": "https://example.com"}}, o) {
+		t.Fatal("unlisted browser accepted")
+	}
+	if !validDeviceStep(mobile.Step{Action: "open_url", Arguments: map[string]any{"package": "test.browser", "url": "https://example.com"}}, o) {
+		t.Fatal("valid browser rejected")
+	}
+	f := setup(t)
+	cfg := f.manager.Config().Companion
+	cfg.Permissions.Remember = true
+	f.manager.mu.Lock()
+	f.manager.config.Companion.Permissions.Remember = true
+	f.manager.mu.Unlock()
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "synthetic-room", Sender: "owner", TraceID: "source", Text: "观察页面"}
+	if err := f.manager.memory.Observe(in, cfg, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.rememberDevice(mobile.Task{ID: "device-synthetic", DeviceID: "lab", State: "completed", Source: mobile.Source{Account: "test", Thread: "synthetic-room", Sender: "owner", MessageID: "source"}, Result: "真实屏幕观察", Artifacts: []mobile.Artifact{{ID: "clip-synthetic", AssetID: "asset-synthetic", Audio: false, Original: false, Summary: "无音轨录屏"}}})
+	scope := f.manager.memory.Context(in, cfg, time.Now())
+	if len(scope.Messages) != 2 {
+		t.Fatal(scope.Messages)
+	}
+	got := scope.Messages[1].DeviceObservation
+	if got == nil || len(got.Recordings) != 1 || got.Recordings[0].AssetID != "asset-synthetic" || got.Recordings[0].Original || got.Recordings[0].Audio {
+		t.Fatal(got)
 	}
 }
 func TestMobileToolsReuseTrustedIdentityAndNeverPreviewOrSurf(t *testing.T) {

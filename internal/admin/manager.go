@@ -208,6 +208,7 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	cancelReceipts()
 	m.mobile.OnFinished(m.deviceFinished)
 	m.mobile.SetAuthorizer(m.mobileSourceAllowed)
+	m.mobile.SetArtifactAnalyzer(m.analyzeDeviceArtifact)
 	if c.Enabled {
 		m.start(c)
 	}

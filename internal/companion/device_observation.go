@@ -4,11 +4,19 @@ import "time"
 
 // DeviceObservation is local tool evidence, never a sent WeChat message.
 type DeviceObservation struct {
-	TaskID       string `json:"task_id"`
-	DeviceID     string `json:"device_id"`
-	ScreenshotID string `json:"screenshot_id,omitempty"`
-	State        string `json:"state"`
-	Summary      string `json:"summary"`
+	Recordings   []DeviceRecording `json:"recordings,omitempty"`
+	TaskID       string            `json:"task_id"`
+	DeviceID     string            `json:"device_id"`
+	ScreenshotID string            `json:"screenshot_id,omitempty"`
+	State        string            `json:"state"`
+	Summary      string            `json:"summary"`
+}
+type DeviceRecording struct {
+	ID       string `json:"id"`
+	AssetID  string `json:"asset_id,omitempty"`
+	Audio    bool   `json:"audio"`
+	Original bool   `json:"original_media"`
+	Summary  string `json:"summary"`
 }
 
 func (s *Store) ObserveDevice(in Input, c Config, o DeviceObservation, now time.Time) error {
