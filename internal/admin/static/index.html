@@ -208,9 +208,9 @@
 <div class="section-heading"><h3 id="agent-authority-title">账号与服务器授权</h3><button id="agent-save-permissions" class="primary" type="button">保存高权限设置</button></div>
 <div class="field-grid">
 <div><label class="switch-row"><span>读取当前授权会话与成员</span><input id="agent-read-conversations" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div>
-<div><label class="switch-row"><span>允许可信用户要求跨会话发送</span><input id="agent-cross-conversation" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div>
+<div><label class="switch-row"><span>主人可跨会话读取与发送</span><input id="agent-cross-conversation" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div>
 <div><label class="switch-row"><span>外部 MCP / API 插件仅限可信用户调用</span><input id="agent-external-owner-only" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div><div><label for="agent-owner-ids">可信微信用户 ID</label><textarea id="agent-owner-ids" rows="3" placeholder="每行一个真实 wxid；昵称不能作为身份依据"></textarea></div>
-<div><label for="agent-privileged-threads">允许高权限的会话 ID</label><textarea id="agent-privileged-threads" rows="3" placeholder="每行一个已授权会话 ID；建议只选主人私聊"></textarea></div>
+<div><label class="switch-row"><span>主人可在全部已启用会话使用高权限</span><input id="agent-owner-all-threads" type="checkbox"><span class="switch" aria-hidden="true"></span></label><p class="hint">仍按实际发送者的微信用户 ID 核验；群友不会继承主人的权限。</p><label for="agent-privileged-threads">或指定允许高权限的会话 ID</label><textarea id="agent-privileged-threads" rows="3" placeholder="关闭上方开关后，每行一个已授权会话 ID"></textarea></div>
 <div><label for="agent-host-mode">服务器权限</label><select id="agent-host-mode"><option value="disabled">关闭服务器操作</option><option value="read">只读：目录与文本文件</option><option value="files">文件：读取、创建与校验修改</option><option value="full">完整：文件与 Shell 命令</option></select></div>
 <div><label for="agent-host-roots">服务器工作目录</label><textarea id="agent-host-roots" rows="3" placeholder="每行一个绝对路径，例如 /home/fly/agent-workspace"></textarea></div>
 <div><label for="agent-host-timeout">短命令执行时限（秒）</label><input id="agent-host-timeout" type="number" min="1" max="300"></div>

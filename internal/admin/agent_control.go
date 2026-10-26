@@ -44,9 +44,17 @@ func (c agentSettings) validate() error {
 	if len(c.OwnerIDs) > 30 || len(c.PrivilegedThreads) > 100 || len(c.AccountActions) > 8 {
 		return errors.New("授权条目过多")
 	}
-	for _, id := range append(append([]string{}, c.OwnerIDs...), c.PrivilegedThreads...) {
+	for _, id := range c.OwnerIDs {
 		if !validID(id) {
 			return errors.New("高权限用户或会话ID无效")
+		}
+	}
+	for _, id := range c.PrivilegedThreads {
+		if id == "*" && len(c.PrivilegedThreads) == 1 {
+			continue
+		}
+		if !validID(id) {
+			return errors.New("高权限会话需要有效ID，或单独使用*表示全部已允许会话")
 		}
 	}
 	for _, id := range c.OwnerIDs {
@@ -71,6 +79,12 @@ func contains(a []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// This matches only the conversation dimension. Every caller must also check
+// the real sender's owner ID and the normal recipient allowlist.
+func (c agentSettings) allowsPrivilegedThread(thread string) bool {
+	return thread != "" && (contains(c.PrivilegedThreads, thread) || contains(c.PrivilegedThreads, "*"))
 }
 
 type pluginJobState struct {
@@ -271,7 +285,7 @@ func agentID(parts ...string) string {
 }
 func (p *permittedTools) privileged() bool {
 	c := p.manager.agent.config()
-	return c.Enabled && !p.trace.Preview && !p.trace.Surf && p.trace.Account == p.manager.native.Account() && contains(c.OwnerIDs, p.trace.Sender) && contains(c.PrivilegedThreads, p.trace.Thread) && permittedRecipient(p.manager.Config().Config, p.trace.Thread)
+	return c.Enabled && !p.trace.Preview && !p.trace.Surf && p.trace.Account == p.manager.native.Account() && contains(c.OwnerIDs, p.trace.Sender) && c.allowsPrivilegedThread(p.trace.Thread) && permittedRecipient(p.manager.Config().Config, p.trace.Thread)
 }
 func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*companion.Input, error) {
 	c := m.agent.config()
@@ -576,7 +590,7 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 
 func (p *permittedTools) operationID(name string, args json.RawMessage) string {
 	identity := string(args)
-	if name == "wechat_send_text" {
+	if name == "wechat_send_text" || name == "wechat_forward_file" {
 		var v struct {
 			Key string `json:"request_key"`
 		}
