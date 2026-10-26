@@ -71,10 +71,10 @@ func (s *Server) ownerRequestRoutes(mux *http.ServeMux) {
 		defer p.hub.Close()
 		p.trace = companion.Input{Account: m.native.Account(), Thread: owner, Sender: owner, Mode: "direct"}
 		catalog, e := p.List(r.Context())
-		if e != nil {
+		if e != nil && len(catalog) == 0 {
 			fail(w, 503, "工具目录读取失败")
 			return
 		}
-		respond(w, 200, map[string]any{"tools": catalog, "autonomous": p.AutonomousActions(), "host": m.agent.config().Host, "identity": "management service OS user; Windows interop uses the current Windows user"})
+		respond(w, 200, map[string]any{"tools": catalog, "partial": e != nil, "autonomous": p.AutonomousActions(), "host": m.agent.config().Host, "identity": "management service OS user; Windows interop uses the current Windows user"})
 	}))
 }

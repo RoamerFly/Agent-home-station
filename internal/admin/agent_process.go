@@ -11,6 +11,10 @@ import (
 )
 
 func (p *permittedTools) callProcess(ctx context.Context, raw json.RawMessage) (string, error) {
+	return p.callProcessPlatform(ctx, raw, false)
+}
+func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMessage, windows bool) (result string, callErr error) {
+	defer func() { callErr = localAgentError(callErr) }()
 	var in struct {
 		Action, ID, Path, Command string
 		Key                       string `json:"request_key"`
@@ -37,14 +41,26 @@ func (p *permittedTools) callProcess(ctx context.Context, raw json.RawMessage) (
 			current := p.manager.agent.config().Host
 			return access.privileged() && current.Mode == "full" && slices.Equal(current.Roots, cfg.Roots)
 		}
-		result, err := p.privilegedCall(ctx, "server_process", raw, func() (any, error) {
+		toolName := "server_process"
+		if windows {
+			toolName = "server_windows_process"
+		}
+		result, err := p.privilegedCall(ctx, toolName, raw, func() (any, error) {
+			if windows {
+				return p.manager.processes.StartWindows(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
+			}
 			return p.manager.processes.Start(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
 		})
 		if err != nil {
 			return "", err
 		}
 		var process struct {
-			ID string `json:"id"`
+			ID     string `json:"id"`
+			State  string `json:"state"`
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal([]byte(result), &process) == nil && process.State == "rejected" {
+			return "", toolInputError("程序未启动：" + process.Reason + "；更正后可再次尝试")
 		}
 		if json.Unmarshal([]byte(result), &process) != nil || process.ID == "" {
 			return result, nil

@@ -27,3 +27,5 @@ func localAgentError(err error) error {
 	}
 	return &agentLocalError{text}
 }
+
+func toolInputError(message string) error { return &agentLocalError{message} }

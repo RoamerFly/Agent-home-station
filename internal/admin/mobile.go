@@ -303,7 +303,7 @@ func (p *permittedTools) mobileToolEnabled(name string) bool {
 }
 func (p *permittedTools) callMobile(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	if !p.mobileToolEnabled(name) {
-		return "", errors.New("device_task_not_permitted")
+		return "", toolInputError("device_task_not_permitted")
 	}
 	source := mobile.Source{Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, MessageID: p.trace.TraceID, Admin: true}
 	var result any
@@ -314,7 +314,7 @@ func (p *permittedTools) callMobile(ctx context.Context, name string, args json.
 			Goal     string `json:"goal"`
 		}
 		if json.Unmarshal(args, &in) != nil {
-			return "", errors.New("device_arguments_invalid")
+			return "", toolInputError("device_arguments_invalid")
 		}
 		t, err := p.manager.mobile.Start(source, in.DeviceID, in.Goal)
 		if err != nil {
@@ -345,7 +345,7 @@ func (p *permittedTools) callMobile(ctx context.Context, name string, args json.
 			TaskID string `json:"task_id"`
 		}
 		if json.Unmarshal(args, &in) != nil {
-			return "", errors.New("device_arguments_invalid")
+			return "", toolInputError("device_arguments_invalid")
 		}
 		source.Admin = false
 		if err := p.manager.mobile.Cancel(in.TaskID, source); err != nil {
@@ -353,7 +353,7 @@ func (p *permittedTools) callMobile(ctx context.Context, name string, args json.
 		}
 		result = map[string]bool{"cancelled": true}
 	default:
-		return "", errors.New("device_tool_unknown")
+		return "", toolInputError("device_tool_unknown")
 	}
 	b, _ := json.Marshal(result)
 	return string(b), nil

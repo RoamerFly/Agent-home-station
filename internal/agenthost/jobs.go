@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,6 +143,22 @@ func (j *Jobs) Status(scope, id string, cancel bool) (Process, error) {
 	return processCopy(p), nil
 }
 func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, allowed func() bool) (Process, error) {
+	return j.start(cfg, scope, key, path, command, seconds, allowed, false)
+}
+func (j *Jobs) StartWindows(cfg Config, scope, key, path, command string, seconds int, allowed func() bool) (Process, error) {
+	return j.start(cfg, scope, key, path, command, seconds, allowed, true)
+}
+func (j *Jobs) start(cfg Config, scope, key, path, command string, seconds int, allowed func() bool, windows bool) (Process, error) {
+	if windows {
+		if cfg.Windows == nil {
+			return Process{}, errors.New("Windows隐藏执行桥接未配置；请配置pythonw、helper和spool路径")
+		}
+		var e error
+		path, e = WindowsLocalPath(path)
+		if e != nil {
+			return Process{}, e
+		}
+	}
 	if cfg.Mode != "full" || cfg.Validate() != nil || scope == "" || len(key) < 1 || len(key) > 128 || strings.TrimSpace(command) == "" || len(command) > 8000 {
 		return Process{}, errors.New("命令执行未授权或参数无效")
 	}
@@ -157,7 +174,11 @@ func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, 
 	if e != nil || !info.IsDir() {
 		return Process{}, errors.New("执行起始目录不可用")
 	}
-	b, _ := json.Marshal([]any{path, command, seconds})
+	identity := []any{path, command, seconds}
+	if windows {
+		identity = append(identity, "windows")
+	}
+	b, _ := json.Marshal(identity)
 	sum := sha256.Sum256(b)
 	hash := hex.EncodeToString(sum[:])
 	j.mu.Lock()
@@ -196,9 +217,6 @@ func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, 
 	go func() {
 		defer j.wg.Done()
 		defer cancel()
-		cmd := hostCommand(ctx, path, command)
-		cmd.Stdout = p.buffer
-		cmd.Stderr = p.buffer
 		done := make(chan struct{})
 		go func() {
 			ticker := time.NewTicker(time.Second)
@@ -221,7 +239,17 @@ func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, 
 				}
 			}
 		}()
-		err := cmd.Run()
+		var err error
+		if windows {
+			err = runWindowsHidden(ctx, cfg, p.ID, path, command, p.buffer)
+		} else {
+			cmd := hostCommand(ctx, path, command)
+			cmd.Stdout, cmd.Stderr = p.buffer, p.buffer
+			err = cmd.Run()
+		}
+		if err != nil {
+			_, _ = fmt.Fprintln(p.buffer, "执行未完成："+err.Error())
+		}
 		close(done)
 		j.mu.Lock()
 		defer j.mu.Unlock()
@@ -239,6 +267,10 @@ func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, 
 			var exit *exec.ExitError
 			if errors.As(err, &exit) {
 				p.ExitCode = exit.ExitCode()
+			}
+			var windowsExit *windowsExitError
+			if errors.As(err, &windowsExit) {
+				p.ExitCode = windowsExit.code
 			}
 		}
 		if ctx.Err() != nil {

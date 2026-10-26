@@ -72,7 +72,7 @@ func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, r
 		}
 		return
 	}
-	if name == "server_process" {
+	if name == "server_process" || name == "server_windows_process" {
 		var in struct{ Action, ID string }
 		_ = json.Unmarshal(args, &in)
 		if in.Action == "status" {

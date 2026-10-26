@@ -15,24 +15,24 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 		Thread string `json:"thread_id"`
 	}
 	if json.Unmarshal(args, &in) != nil || !validID(in.Job) {
-		return "", errors.New("需要原发送任务编号")
+		return "", toolInputError("需要原发送任务编号")
 	}
 	if in.Thread == "" {
 		in.Thread = p.trace.Thread
 	}
 	if in.Thread != p.trace.Thread && (!p.privileged() || !p.manager.agent.config().CrossConversation || !permittedRecipient(p.manager.Config().Config, in.Thread)) {
-		return "", errors.New("未授权跨会话核对发送任务")
+		return "", toolInputError("未授权跨会话核对发送任务")
 	}
 	native, ok := p.manager.native.(nativeTools)
 	if !ok {
-		return "", errors.New("原生发送回执不可用")
+		return "", toolInputError("原生发送回执不可用")
 	}
 	status, err := native.ToolSendStatus(ctx, in.Job)
 	if err != nil {
-		return "", errors.New("暂未取得原发送任务状态；未重复提交")
+		return "", toolInputError("暂未取得原发送任务状态；未重复提交")
 	}
 	if status.ID != in.Job || status.ThreadID != in.Thread {
-		return "", errors.New("发送任务不属于当前会话")
+		return "", toolInputError("发送任务不属于当前会话")
 	}
 	if name == "wechat_delivery_status" {
 		b, _ := json.Marshal(status)
@@ -52,10 +52,10 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 		return string(b), err
 	}
 	if !p.privileged() || in.Key == "" || len(in.Key) > 128 {
-		return "", errors.New("仅可信主人可续传，需提供稳定请求编号")
+		return "", toolInputError("仅可信主人可续传，需提供稳定请求编号")
 	}
 	if status.CancelRequested {
-		return "", errors.New("用户已取消原发送，停止补发")
+		return "", toolInputError("用户已取消原发送，停止补发")
 	}
 	allowed := false
 	for _, kind := range []string{"voice", "file", "image", "video"} {
@@ -64,13 +64,13 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 		}
 	}
 	if !allowed {
-		return "", errors.New("原媒体来源未获当前发送权限；未续传")
+		return "", toolInputError("原媒体来源未获当前发送权限；未续传")
 	}
 	retry, ok := p.manager.native.(interface {
 		RetryMediaJob(context.Context, string) (linuxnative.ToolStatus, error)
 	})
 	if !ok {
-		return "", errors.New("原生后台不支持原任务续传")
+		return "", toolInputError("原生后台不支持原任务续传")
 	}
 	return p.privilegedCall(ctx, name, args, func() (any, error) {
 		if !p.privileged() || !permittedRecipient(p.manager.Config().Config, in.Thread) {

@@ -168,6 +168,25 @@ func (p *permittedTools) enabled(name string) bool {
 	}
 	return true
 }
+func (p *permittedTools) localTools() []mcptools.Tool {
+	tools := []mcptools.Tool{}
+	tools = append(tools, p.pluginTaskTools()...)
+	if p.trace.Surf {
+		tools = append(tools, mcptools.Tool{Name: "web_discover", Description: "Discover actual public feed/community/RSS/music/image candidates, with persistent novelty memory and diverse sources. Automatically called once at session start. Continue a rabbit hole with related_url equal to a candidate BV page. Otherwise {} to switch sources. Does not send or claim watching. Input {related_url?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"related_url":{"type":"string","maxLength":2048}},"additionalProperties":false}`)})
+	}
+	if p.trace.Thread != "" {
+		tools = append(tools, mcptools.Tool{Name: "media_recent", Description: "Read the recent attachment catalogue for THIS conversation in chronological recency, including source_url and formats. Returns cached_mime, parent_asset_id and recent requests with requester_id/trace_id/task_id. Parent is the retained source video when this asset is an extracted audio track. Match the verified quote first, then the current speaker and latest context; ask briefly if ambiguous. Call this for original video/audio or format conversion. This is a LOCAL catalogue, not Internet search. Use for the same already-known resource or format conversion. A request for a new song/title must use real external search. Results are bounded and not exhaustive. Filter by exact asset_id, requester_id (self/current speaker supported), or query matching title/filename. Input: {asset_id?:string,requester_id?:string,query?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"requester_id":{"type":"string"},"query":{"type":"string"}},"additionalProperties":false}`)}, mcptools.Tool{Name: "media_reuse", Description: "Reuse the exact prior resource only when the user asks for it again or a different format. This performs NO Internet search; never substitute a different old track for a new requested title. Original audio can be sent as file; legacy voice-only sources are WAV. Put returned media.id in reply.media_ids. Input: {asset_id:string,kind:voice|file|image|video}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"kind":{"type":"string","enum":["voice","file","image","video"]}},"required":["asset_id","kind"],"additionalProperties":false}`)})
+	}
+	tools = append(tools, mcptools.Tool{Name: "web_media_download", Description: "Download media and prepare an attachment. For kind=video, accepts direct video URLs AND anonymously playable Bilibili BV video-page URLs (optional ?p=part) or b23.tv short links; resolves the public progressive MP4 itself, so try the actual BV page instead of searching for guessed mp4 links. Videos longer than 60 seconds are prepared as clickable WeChat share cards with the actual playback page, without downloading the whole video. Short files are limited to 50 MiB. For kind=voice, also accepts these public BV/b23 pages and extracts the existing audio into voice notes, limited to 10 minutes and 25 MiB input; the reusable original is an audio-only M4A file. No paid/logged-in playback. Image/file otherwise need direct files. Does not send until final reply.media_ids. No login, paid formats, DRM or general streaming playlists. For music, DEFAULT preview_seconds=0 sends the COMPLETE audio as voice notes of at most60 seconds. Keep original file cached, but never ask about sending a file; use file only when user asks. Explicit preview requests may set preview_seconds=45. For kind=file on BV pages, audio_only=true gives the full original audio M4A, false gives the original video file. Input: {url:string,kind:voice|video|image|file,preview_seconds?:integer 0..55,audio_only?:boolean}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"kind":{"type":"string","enum":["voice","video","image","file"]},"preview_seconds":{"type":"integer","minimum":0,"maximum":55},"audio_only":{"type":"boolean"}},"required":["url","kind"],"additionalProperties":false}`)})
+	if p.runtime != nil {
+		tools = append(tools, p.runtime.Tools()...)
+	}
+	tools = append(p.agentTools(), tools...)
+	tools = append(tools, p.mobileTools()...)
+	tools = append(tools, p.speechTools()...)
+	tools = append(tools, p.yueTools()...)
+	return tools
+}
 func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	if p.trace.ReportOnly {
 		return nil, nil
@@ -179,23 +198,7 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	if p.settings.Enabled {
 		tools, err = p.hub.List(ctx)
 	}
-	tools = append(tools, p.pluginTaskTools()...)
-	if p.trace.Surf {
-		tools = append(tools, mcptools.Tool{Name: "web_discover", Description: "Discover actual public feed/community/RSS/music/image candidates, with persistent novelty memory and diverse sources. Automatically called once at session start. Continue a rabbit hole with related_url equal to a candidate BV page. Otherwise {} to switch sources. Does not send or claim watching. Input {related_url?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"related_url":{"type":"string","maxLength":2048}},"additionalProperties":false}`)})
-	}
-	if p.trace.Thread != "" {
-		recent, _ := p.manager.recentAssets(p.trace)
-		_ = recent
-		tools = append(tools, mcptools.Tool{Name: "media_recent", Description: "Read the recent attachment catalogue for THIS conversation in chronological recency, including source_url and formats. Returns cached_mime, parent_asset_id and recent requests with requester_id/trace_id/task_id. Parent is the retained source video when this asset is an extracted audio track. Match the verified quote first, then the current speaker and latest context; ask briefly if ambiguous. Call this for original video/audio or format conversion. This is a LOCAL catalogue, not Internet search. Use for the same already-known resource or format conversion. A request for a new song/title must use real external search. Results are bounded and not exhaustive. Filter by exact asset_id, requester_id (self/current speaker supported), or query matching title/filename. Input: {asset_id?:string,requester_id?:string,query?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"requester_id":{"type":"string"},"query":{"type":"string"}},"additionalProperties":false}`)}, mcptools.Tool{Name: "media_reuse", Description: "Reuse the exact prior resource only when the user asks for it again or a different format. This performs NO Internet search; never substitute a different old track for a new requested title. Original audio can be sent as file; legacy voice-only sources are WAV. Put returned media.id in reply.media_ids. Input: {asset_id:string,kind:voice|file|image|video}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"kind":{"type":"string","enum":["voice","file","image","video"]}},"required":["asset_id","kind"],"additionalProperties":false}`)})
-	}
-	tools = append(tools, mcptools.Tool{Name: "web_media_download", Description: "Download media and prepare an attachment. For kind=video, accepts direct video URLs AND anonymously playable Bilibili BV video-page URLs (optional ?p=part) or b23.tv short links; resolves the public progressive MP4 itself, so try the actual BV page instead of searching for guessed mp4 links. Videos longer than 60 seconds are prepared as clickable WeChat share cards with the actual playback page, without downloading the whole video. Short files are limited to 50 MiB. For kind=voice, also accepts these public BV/b23 pages and extracts the existing audio into voice notes, limited to 10 minutes and 25 MiB input; the reusable original is an audio-only M4A file. No paid/logged-in playback. Image/file otherwise need direct files. Does not send until final reply.media_ids. No login, paid formats, DRM or general streaming playlists. For music, DEFAULT preview_seconds=0 sends the COMPLETE audio as voice notes of at most60 seconds. Keep original file cached, but never ask about sending a file; use file only when user asks. Explicit preview requests may set preview_seconds=45. For kind=file on BV pages, audio_only=true gives the full original audio M4A, false gives the original video file. Input: {url:string,kind:voice|video|image|file,preview_seconds?:integer 0..55,audio_only?:boolean}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"kind":{"type":"string","enum":["voice","video","image","file"]},"preview_seconds":{"type":"integer","minimum":0,"maximum":55},"audio_only":{"type":"boolean"}},"required":["url","kind"],"additionalProperties":false}`)})
-	if p.runtime != nil {
-		tools = append(tools, p.runtime.Tools()...)
-	}
-	tools = append(p.agentTools(), tools...)
-	tools = append(tools, p.mobileTools()...)
-	tools = append(tools, p.speechTools()...)
-	tools = append(tools, p.yueTools()...)
+	tools = append(tools, p.localTools()...)
 	out := []mcptools.Tool{}
 	for _, tool := range tools {
 		if p.enabled(tool.Name) {
@@ -315,6 +318,11 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	if !p.enabled(name) {
 		return "", &mcptools.WebError{Code: "ability_disabled"}
 	}
+	normalized, validationErr := p.normalizeToolArgs(name, args)
+	if validationErr != nil {
+		return "", validationErr
+	}
+	args = normalized
 	if strings.HasPrefix(name, "device_") {
 		return p.callMobile(ctx, name, args)
 	}
