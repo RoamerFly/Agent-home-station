@@ -86,6 +86,7 @@ func (w *Worker) applyPlanReview(p *utterancePlan, d companion.PendingReview, er
 	switch d.Action {
 	case "cancel":
 		p.State = "stopped"
+		p.StopReason = "model_cancel"
 	case "replace":
 		if p.Index+len(d.Messages) > 12 {
 			p.State = "stopped"

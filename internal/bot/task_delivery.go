@@ -4,12 +4,13 @@ import "wechat-bot/internal/companion"
 
 // TaskDelivery describes delivery evidence separately from model completion.
 type TaskDelivery struct {
-	Trace         string `json:"trace"`
-	State         string `json:"state"`
-	Expected      int    `json:"expected"`
-	Accepted      int    `json:"accepted"`
-	AcceptedParts int    `json:"accepted_parts"`
-	TotalParts    int    `json:"total_parts"`
+	CaptionOmitted bool   `json:"caption_omitted,omitempty"`
+	Trace          string `json:"trace"`
+	State          string `json:"state"`
+	Expected       int    `json:"expected"`
+	Accepted       int    `json:"accepted"`
+	AcceptedParts  int    `json:"accepted_parts"`
+	TotalParts     int    `json:"total_parts"`
 }
 
 func (w *Worker) publishTaskDelivery(trace string) {
@@ -53,7 +54,9 @@ func (w *Worker) publishTaskDelivery(trace string) {
 	for _, p := range w.runtime.Plans {
 		if p.Input.TraceID == trace {
 			pendingCaption = pendingCaption || !p.terminal()
-			failed = failed || p.State == "stopped"
+			omitted := p.MediaCaption && p.State == "stopped" && p.StopReason == "model_cancel"
+			result.CaptionOmitted = result.CaptionOmitted || omitted
+			failed = failed || p.State == "stopped" && !omitted
 		}
 	}
 	switch {

@@ -50,4 +50,22 @@ func TestTaskDeliveryCountsPartialVoiceAndWaitsForCaption(t *testing.T) {
 	if got.State != "needs_review" {
 		t.Fatal("unknown receipt lost", got)
 	}
+	w.runtime.Media[1].State = "accepted"
+	w.runtime.Plans[0].MediaCaption = true
+	w.applyPlanReview(w.runtime.Plans[0], companion.PendingReview{Action: "cancel"}, nil)
+	w.publishTaskDelivery(in.TraceID)
+	if got.State != "accepted" || !got.CaptionOmitted {
+		t.Fatal("voluntary caption silence marked successful media failed", got)
+	}
+	w.runtime.Plans[0].StopReason = ""
+	w.publishTaskDelivery(in.TraceID)
+	if got.State != "partial_failed" {
+		t.Fatal("actual caption failure hidden", got)
+	}
+	w.runtime.Plans[0].StopReason = "model_cancel"
+	w.runtime.Media[1].State = "needs_review"
+	w.publishTaskDelivery(in.TraceID)
+	if got.State != "needs_review" {
+		t.Fatal("silence invented a missing attachment receipt", got)
+	}
 }

@@ -26,7 +26,11 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		switch delivery.State {
 		case "accepted":
 			task.State = "completed"
-			task.LastResult += "；所需附件与介绍已完成交付"
+			if delivery.CaptionOmitted {
+				task.LastResult += "；所需附件已完成交付，说明文字由模型选择省略"
+			} else {
+				task.LastResult += "；所需附件与介绍已完成交付"
+			}
 		case "failed", "partial_failed":
 			task.State = "failed"
 			if delivery.Expected > 0 && delivery.Accepted == delivery.Expected {
