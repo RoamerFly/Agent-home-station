@@ -253,8 +253,11 @@ func TestExpiryQuietHoursAndPersistentBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = store.ClaimReply(c, now); err == nil {
-		t.Fatal("restart reset reply budget")
+	if err = store.ClaimReply(c, now); err != nil {
+		t.Fatal("legacy budget blocked reply after restart", err)
+	}
+	if replies, _ := store.Counters(c, now); replies != 2 {
+		t.Fatal("diagnostic count lost", replies)
 	}
 	if err = store.ClaimReply(c, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)

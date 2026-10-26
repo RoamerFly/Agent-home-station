@@ -18,12 +18,6 @@ func (w *Worker) toolProgress(character *companion.Engine, input companion.Input
 		if text == "" || w.config.Options == nil || !w.config.Options.AcknowledgeTools || !character.Config.Permissions.ReplyText || input.Surf || input.Mode == "proactive" || input.TaskID != "" {
 			return false, nil
 		}
-		// Leave one reply slot for the actual outcome when the hourly budget is
-		// nearly exhausted. Acknowledgement must not suppress the final answer.
-		used, _ := character.Store.Counters(character.Config, time.Now())
-		if used >= character.Config.MaxRepliesPerHour-1 {
-			return false, nil
-		}
 		if err := character.Claim(input); err != nil {
 			return false, nil
 		}

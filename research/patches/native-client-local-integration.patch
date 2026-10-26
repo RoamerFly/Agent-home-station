@@ -251,6 +251,21 @@ index 3208d8a..0bf48f0 100644
 +
 +App-message type 51 exposes its received description and publisher through normalized link metadata. It does not turn private media locators into public playback URLs or claim that the video has been viewed.
 +
+diff --git a/packages/native-client-rust/crates/wechat-api/src/contracts.rs b/packages/native-client-rust/crates/wechat-api/src/contracts.rs
+index 725e196..01f7da8 100644
+--- a/packages/native-client-rust/crates/wechat-api/src/contracts.rs
++++ b/packages/native-client-rust/crates/wechat-api/src/contracts.rs
+@@ -313,6 +313,10 @@ pub fn checked<T: serde::de::DeserializeOwned>(value: Value) -> anyhow::Result<V
+ #[derive(Default, Serialize, Deserialize, TS)]
+ #[serde(rename_all = "camelCase", deny_unknown_fields)]
+ pub struct NativeMediaJobRetryRequest {
++    #[serde(default)]
++    pub reconcile_uncertain: bool,
++    #[serde(default)]
++    pub confirmed_voice_parts: Vec<(usize, String)>,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     #[ts(optional)]
+     pub reuse_completed_upload: Option<bool>,
 diff --git a/packages/native-client-rust/crates/wechat-api/src/lib.rs b/packages/native-client-rust/crates/wechat-api/src/lib.rs
 index 2710192..9b497dc 100644
 --- a/packages/native-client-rust/crates/wechat-api/src/lib.rs
@@ -385,6 +400,33 @@ index 2710192..9b497dc 100644
      #[tokio::test]
      async fn account_message_search_requires_account_read_scope_and_bounded_query() {
          let (_temp, core, app) = setup();
+diff --git a/packages/native-client-rust/crates/wechat-api/src/media.rs b/packages/native-client-rust/crates/wechat-api/src/media.rs
+index 63b2766..6cd98bb 100644
+--- a/packages/native-client-rust/crates/wechat-api/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-api/src/media.rs
+@@ -194,9 +194,19 @@ async fn retry_job(
+         .or_else(|_| c.require(Some(&a), "send"))?;
+     let job = app.core.media_job(&a, &id)?;
+     c.require(Some(&a), if job.kind == "send" { "send" } else { "media" })?;
+-    let reuse = request
+-        .and_then(|Json(request)| request.reuse_completed_upload)
+-        .unwrap_or(false);
++    let request = request.map(|Json(v)| v).unwrap_or_default();
++    if request.reconcile_uncertain {
++        c.require(Some(&a), "send")?;
++        let retried = app
++            .core
++            .retry_reconciled_media_job(&a, &id, request.confirmed_voice_parts)
++            .await?;
++        return Ok((
++            StatusCode::ACCEPTED,
++            Json(serde_json::to_value(retried).map_err(anyhow::Error::from)?),
++        ));
++    }
++    let reuse = request.reuse_completed_upload.unwrap_or(false);
+     if reuse {
+         return Err(ApiError(
+             StatusCode::BAD_REQUEST,
 diff --git a/packages/native-client-rust/crates/wechat-core/src/incoming_groups.rs b/packages/native-client-rust/crates/wechat-core/src/incoming_groups.rs
 index cb5174c..a87a1fa 100644
 --- a/packages/native-client-rust/crates/wechat-core/src/incoming_groups.rs
@@ -471,7 +513,7 @@ index 30eaea1..21612fe 100644
      fn encrypted_profile_plain_and_compressed_group_cards_use_the_same_normalization() {
          use crate::Core;
 diff --git a/packages/native-client-rust/crates/wechat-core/src/media.rs b/packages/native-client-rust/crates/wechat-core/src/media.rs
-index ae4c12b..3e46708 100644
+index ae4c12b..5714512 100644
 --- a/packages/native-client-rust/crates/wechat-core/src/media.rs
 +++ b/packages/native-client-rust/crates/wechat-core/src/media.rs
 @@ -88,6 +88,14 @@ struct VoicePart {
@@ -489,7 +531,113 @@ index ae4c12b..3e46708 100644
  }
  #[derive(Clone, Serialize, Deserialize)]
  struct UploadMaterial {
-@@ -1150,10 +1158,42 @@ impl Core {
+@@ -447,7 +455,20 @@ impl Core {
+         })
+     }
+     pub fn media_job(&self, account: &str, id: &str) -> Result<MediaJob> {
+-        Ok(public_job(account, &self.store.media_job(account, id)?))
++        let mut row = self.store.media_job(account, id)?;
++        if row.kind == "send" {
++            if let Ok(bytes) =
++                self.vault
++                    .open_record(account, &format!("media-job:{id}"), &row.payload)
++            {
++                if let Ok(plan) = serde_json::from_slice::<SendPlan>(&bytes) {
++                    if plan.request.kind == MediaKind::Voice {
++                        row.data["result"]["chunks"] = json!(plan.voice.iter().enumerate().map(|(i,p)|json!({"index":i,"state":p.status,"durationMs":p.duration_ms,"serverMessageId":p.server_id,"pacingMs":p.pacing_ms,"submittedAtMs":p.submitted_at_ms,"acceptedAtMs":p.accepted_at_ms,"prefixRetries":p.prefix_retries,"clientId":p.client_id,"encodedMd5":hex_string(&wechat_protocol::crypto::md5(&p.encoded))})).collect::<Vec<_>>());
++                    }
++                }
++            }
++        }
++        Ok(public_job(account, &row))
+     }
+     pub fn media_job_by_key(&self, account: &str, key: &str) -> Result<MediaJob> {
+         Ok(public_job(
+@@ -466,6 +487,75 @@ impl Core {
+         self.spawn_media_worker(account, id);
+         Ok(public_job(account, &row))
+     }
++    /// Application explicitly reconciles the thread before opting into another
++    /// attempt. Same job/plan/client IDs, accepted voice parts stay untouched.
++    pub async fn retry_reconciled_media_job(
++        self: &Arc<Self>,
++        account: &str,
++        id: &str,
++        confirmed: Vec<(usize, String)>,
++    ) -> Result<MediaJob> {
++        let _guard = self.lock_account(account).await?;
++        ensure!(
++            !self.media_network_suspended(account)?,
++            "media_disconnected"
++        );
++        let row = self.store.media_job(account, id)?;
++        ensure!(
++            row.kind == "send"
++                && !row.cancel_requested
++                && matches!(row.state.as_str(), "needs_review" | "failed"),
++            "media_job_not_retryable"
++        );
++        ensure!(
++            matches!(
++                row.error_code.as_deref(),
++                Some(
++                    "transport_unavailable"
++                        | "worker_interrupted"
++                        | "restart_after_submission"
++                        | "media_worker_stopping"
++                        | "media_disconnected"
++                )
++            ),
++            "media_failure_requires_repair"
++        );
++        let mut plan: SendPlan = serde_json::from_slice(&self.vault.open_record(
++            account,
++            &format!("media-job:{id}"),
++            &row.payload,
++        )?)?;
++        validate_destination(&plan.request.thread_id)?;
++        self.media_authorization_fence(account)?;
++        self.source_bytes(account, &plan.request.source_id)?;
++        for (index, server) in confirmed {
++            ensure!(
++                server.parse::<u64>().is_ok_and(|v| v > 0),
++                "media_sync_identity_invalid"
++            );
++            let part = plan
++                .voice
++                .get_mut(index)
++                .context("media_sync_part_invalid")?;
++            ensure!(
++                part.server_id.as_ref().is_none_or(|old| old == &server),
++                "media_sync_identity_conflict"
++            );
++            part.status = "accepted".into();
++            part.server_id = Some(server);
++            part.accepted_at_ms = Some(chrono::Utc::now().timestamp_millis());
++        }
++        let payload = self.vault.seal(
++            account,
++            &format!("media-job:{id}"),
++            &serde_json::to_vec(&plan)?,
++        )?;
++        let queued = self
++            .store
++            .retry_reconciled_media_job(account, &row, &payload)?;
++        self.spawn_media_worker(account, id);
++        Ok(public_job(account, &queued))
++    }
+     pub async fn retry_media_job_reuse_completed_upload(
+         self: &Arc<Self>,
+         account: &str,
+@@ -496,7 +586,6 @@ impl Core {
+                 && expected.state == "unsupported"
+                 && expected.phase == "readback"
+                 && expected.error_code.as_deref() == Some("unsupported_media")
+-                && expected.attempts < 3
+                 && !expected.cancel_requested
+                 && no_final_media_submission(&expected),
+             "completed_upload_retry_not_admitted"
+@@ -1150,10 +1239,42 @@ impl Core {
      ) -> Result<()> {
          let service = service_diagnostic(error);
          let cdn = cdn_download_failure(error);
@@ -533,16 +681,24 @@ index ae4c12b..3e46708 100644
          if let Some((stage, code)) = service {
              row.data["result"]["serviceStage"] = stage.into();
              row.data["result"]["serviceCode"] = code.into();
-@@ -2239,7 +2279,7 @@ impl Core {
+@@ -1268,7 +1389,6 @@ impl Core {
+         }
+         .into();
+         row.retryable = !uncertain
+-            && row.attempts < 3
+             && matches!(
+                 code,
+                 "transport_unavailable"
+@@ -2239,7 +2359,7 @@ impl Core {
              &serde_json::to_vec(plan)?,
          )?;
          if plan.request.kind == MediaKind::Voice {
 -            row.data["result"]["chunks"] = json!(plan.voice.iter().enumerate().map(|(i,p)|json!({"index":i,"state":p.status,"durationMs":p.duration_ms,"serverMessageId":p.server_id})).collect::<Vec<_>>());
-+            row.data["result"]["chunks"] = json!(plan.voice.iter().enumerate().map(|(i,p)|json!({"index":i,"state":p.status,"durationMs":p.duration_ms,"serverMessageId":p.server_id,"pacingMs":p.pacing_ms,"submittedAtMs":p.submitted_at_ms,"acceptedAtMs":p.accepted_at_ms,"prefixRetries":p.prefix_retries})).collect::<Vec<_>>());
++            row.data["result"]["chunks"] = json!(plan.voice.iter().enumerate().map(|(i,p)|json!({"index":i,"state":p.status,"durationMs":p.duration_ms,"serverMessageId":p.server_id,"pacingMs":p.pacing_ms,"submittedAtMs":p.submitted_at_ms,"acceptedAtMs":p.accepted_at_ms,"prefixRetries":p.prefix_retries,"clientId":p.client_id,"encodedMd5":hex_string(&wechat_protocol::crypto::md5(&p.encoded))})).collect::<Vec<_>>());
          }
          self.store.save_media_job(account, &row)?;
          Ok(())
-@@ -2453,6 +2493,10 @@ impl Core {
+@@ -2453,6 +2573,10 @@ impl Core {
                          duration_ms: ((chunk.len() as u64 * 1000) / 16000) as u32,
                          status: "prepared".into(),
                          server_id: None,
@@ -553,7 +709,7 @@ index ae4c12b..3e46708 100644
                      });
                  }
                  self.save_send_plan(account, id, &plan)?;
-@@ -2462,17 +2506,59 @@ impl Core {
+@@ -2462,17 +2586,59 @@ impl Core {
                      continue;
                  }
                  self.progress_media(account, id, index as u64, Some(plan.voice.len() as u64))?;
@@ -617,7 +773,7 @@ index ae4c12b..3e46708 100644
                  );
                  let receipt = match result {
                      Ok(receipt) => receipt,
-@@ -2484,6 +2570,9 @@ impl Core {
+@@ -2484,6 +2650,9 @@ impl Core {
                      }
                  };
                  plan.voice[index].server_id = receipt.server_message_id.clone();
@@ -627,7 +783,7 @@ index ae4c12b..3e46708 100644
                  plan.voice[index].status = match receipt.status {
                      wechat_protocol::media_send::SendStatus::ServerAccepted => "accepted",
                      wechat_protocol::media_send::SendStatus::Rejected => "rejected",
-@@ -2493,6 +2582,13 @@ impl Core {
+@@ -2493,6 +2662,13 @@ impl Core {
                  // Preserve a known server result before any optional local state
                  // or profile update can fail under a disconnect/logout fence.
                  self.save_send_plan(account, id, &plan)?;
@@ -641,7 +797,15 @@ index ae4c12b..3e46708 100644
                  self.save_state(account, &state)?;
                  if receipt.status == wechat_protocol::media_send::SendStatus::ServerAccepted {
                      let _ = self.project_media_send_receipts(account, id);
-@@ -3322,6 +3418,26 @@ fn run_ffmpeg(
+@@ -2872,7 +3048,6 @@ impl Core {
+             row.kind == "send"
+                 && row.state == "running"
+                 && row.phase == "readback"
+-                && row.attempts <= 3
+                 && no_final_media_submission(&row),
+             "completed_upload_retry_not_admitted"
+         );
+@@ -3322,6 +3497,26 @@ fn run_ffmpeg(
      );
      Ok(std::fs::read(output_path)?)
  }
@@ -668,7 +832,7 @@ index ae4c12b..3e46708 100644
  /// Narrow RIFF/WAVE fast path: one PCM16 mono16kHz data chunk, with bounded
  /// unknown chunks and checked RIFF padding. Other valid formats use FFmpeg.
  fn pcm16k_wav(bytes: &[u8]) -> Result<Option<Vec<i16>>> {
-@@ -3520,6 +3636,22 @@ fn video_thumbnail(bytes: &[u8], cancelled: impl FnMut() -> Result<()>) -> Resul
+@@ -3520,6 +3715,22 @@ fn video_thumbnail(bytes: &[u8], cancelled: impl FnMut() -> Result<()>) -> Resul
  mod tests {
      use super::*;
      #[test]
@@ -691,7 +855,31 @@ index ae4c12b..3e46708 100644
      fn persisted_cdn_download_diagnostics_ignore_response_context_and_preserve_reason() {
          use wechat_protocol::media::{
              LargeFileDownloadControl as Control, LargeFileDownloadError as Failure,
-@@ -5008,7 +5140,7 @@ mod tests {
+@@ -3659,7 +3870,6 @@ mod tests {
+             "malformed_messages",
+             "malformed_root",
+             "malformed_result",
+-            "attempts",
+             "missing_material",
+             "missing_reservation",
+             "changed_aes",
+@@ -3683,15 +3893,6 @@ mod tests {
+                 }
+                 "malformed_root" => row.data = json!(["unexpected"]),
+                 "malformed_result" => row.data["result"] = json!("unexpected"),
+-                "attempts" => {
+-                    // Attempts are immutable through save_media_job.
+-                    for _ in 0..2 {
+-                        let mut queued = core.store.media_job("one", "retry").unwrap();
+-                        queued.state = "queued".into();
+-                        core.store.save_media_job("one", &queued).unwrap();
+-                        assert!(core.store.claim_media_job("one", "retry").unwrap());
+-                    }
+-                }
+                 "missing_material" => plan.material = None,
+                 "missing_reservation" => plan.reservation = None,
+                 "changed_aes" => plan.material.as_mut().unwrap().key[0] ^= 1,
+@@ -5008,7 +5209,7 @@ mod tests {
      #[test]
      fn sticker_discovery_rejects_other_hosts_and_never_returns_xml_bytes() {
          let msg = message(47);
@@ -700,7 +888,7 @@ index ae4c12b..3e46708 100644
          assert!(discover(&msg, xml).is_err());
      }
      fn file_message_xml(encryption: &str, transport: &str) -> String {
-@@ -5303,6 +5435,25 @@ mod tests {
+@@ -5303,6 +5504,25 @@ mod tests {
          assert_eq!(notes(300 * 16000 - 1).len(), 5);
      }
      #[test]
@@ -1259,6 +1447,105 @@ index c32d53f..d5ce62b 100644
          ] {
              assert!(validate_sticker_url(u).is_err());
          }
+diff --git a/packages/native-client-rust/crates/wechat-store/src/media.rs b/packages/native-client-rust/crates/wechat-store/src/media.rs
+index 0a60c3d..26a1224 100644
+--- a/packages/native-client-rust/crates/wechat-store/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-store/src/media.rs
+@@ -377,7 +377,7 @@ impl Store {
+     pub fn retry_media_job(&self, account: &str, id: &str) -> Result<MediaJobRecord> {
+         self.control(account,|db|{
+             let tx=db.transaction()?;let row=read_job(&tx,id)?;
+-            if !row.retryable || !matches!(row.state.as_str(),"failed"|"cancelled") || row.attempts>=3 || matches!(row.phase.as_str(),"reserving"|"uploading"|"submitting") {bail!("media_job_not_retryable");}
++            if !row.retryable || !matches!(row.state.as_str(),"failed"|"cancelled") || matches!(row.phase.as_str(),"reserving"|"uploading"|"submitting") {bail!("media_job_not_retryable");}
+             let queued:u32=tx.query_row("SELECT count(*) FROM media_jobs WHERE state IN ('queued','running')",[],|r|r.get(0))?;
+             if queued>=100 {bail!("media_queue_full");}
+             tx.execute("UPDATE media_jobs SET state='queued',cancel_requested=0,error_code=NULL,retryable=0,updated_at=?2 WHERE id=?1",params![id,chrono::Utc::now().to_rfc3339()])?;
+@@ -385,6 +385,28 @@ impl Store {
+             tx.commit()?;Ok(row)
+         })
+     }
++    // Explicit application reconciliation has already read the source thread.
++    // Keep the encrypted plan and all accepted receipts; atomically fence races.
++    pub fn retry_reconciled_media_job(
++        &self,
++        account: &str,
++        expected: &MediaJobRecord,
++        payload: &[u8],
++    ) -> Result<MediaJobRecord> {
++        self.control(account, |db| {
++            let tx = db.transaction()?;
++            let old = read_job(&tx, &expected.id)?;
++            if old.kind != "send" || old.cancel_requested || !matches!(old.state.as_str(), "needs_review" | "failed")
++                || old.state != expected.state || old.payload != expected.payload || old.data != expected.data || old.updated_at != expected.updated_at {
++                bail!("media_reconciliation_conflict");
++            }
++            tx.execute("UPDATE media_jobs SET state='queued',phase='preparing',retryable=0,error_code=NULL,payload=?3,updated_at=?2 WHERE id=?1",params![old.id,chrono::Utc::now().to_rfc3339(),payload])?;
++            let row = read_job(&tx, &old.id)?;
++            job_event(&tx, account, &row)?;
++            tx.commit()?;
++            Ok(row)
++        })
++    }
+     /// Queue only a core-validated, completed upload before its first business
+     /// submission. The exact old row and authorization must still be current.
+     pub fn retry_media_job_completed_upload(
+@@ -396,7 +418,7 @@ impl Store {
+             let tx=db.transaction()?;
+             let old=read_job(&tx,&retry.expected.id)?;
+             let expected=retry.expected;
+-            if old.kind!="send" || old.state!="unsupported" || old.phase!="readback" || old.attempts>=3 || old.cancel_requested || old.error_code.as_deref()!=Some("unsupported_media")
++            if old.kind!="send" || old.state!="unsupported" || old.phase!="readback" || old.cancel_requested || old.error_code.as_deref()!=Some("unsupported_media")
+                 || !old.data.is_object() || !(old.data["result"].is_null() || old.data["result"].is_object())
+                 || !old.data["serverMessageId"].is_null() || !old.data["result"]["nativeReceipt"].is_null()
+                 || !(old.data["result"]["messageIds"].is_null() || old.data["result"]["messageIds"].as_array().is_some_and(|ids|ids.is_empty()))
+@@ -1051,3 +1073,47 @@ mod tests {
+             .unwrap();
+     }
+ }
++
++#[cfg(test)]
++mod autonomous_retry_tests {
++    use super::*;
++    #[test]
++    fn reconciled_original_job_has_no_attempt_limit_and_is_cas_fenced() {
++        let temp = tempfile::tempdir().unwrap();
++        let s = Store::open(&temp.path().join("data")).unwrap();
++        s.create_account("test").unwrap();
++        let hash = "0".repeat(64);
++        s.create_media_job(
++            "test",
++            "job",
++            "send:job",
++            &hash,
++            "send",
++            &json!({}),
++            b"encrypted-plan",
++        )
++        .unwrap();
++        for _ in 0..12 {
++            assert!(s.claim_media_job("test", "job").unwrap());
++            let mut row = s.media_job("test", "job").unwrap();
++            row.state = "needs_review".into();
++            row.phase = "submitting".into();
++            row.error_code = Some("transport_unavailable".into());
++            s.save_media_job("test", &row).unwrap();
++            let expected = s.media_job("test", "job").unwrap();
++            let next = s
++                .retry_reconciled_media_job("test", &expected, &expected.payload)
++                .unwrap();
++            assert_eq!(next.payload, b"encrypted-plan");
++            assert_eq!(next.state, "queued");
++            assert!(s
++                .retry_reconciled_media_job("test", &expected, &expected.payload)
++                .is_err());
++        }
++        s.cancel_media_job("test", "job").unwrap();
++        let row = s.media_job("test", "job").unwrap();
++        assert!(s
++            .retry_reconciled_media_job("test", &row, &row.payload)
++            .is_err());
++    }
++}
 diff --git a/packages/native-client-rust/crates/wechat-core/src/channels.rs b/packages/native-client-rust/crates/wechat-core/src/channels.rs
 new file mode 100644
 index 0000000..d9824c1

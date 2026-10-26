@@ -487,10 +487,6 @@ func (w *Worker) generationProgress(ctx context.Context, s *generationScheduler,
 		if text == "" || w.config.Options == nil || !w.config.Options.AcknowledgeTools || !c.Config.Permissions.ReplyText || in.TaskID != "" {
 			return nil
 		}
-		used, _ := c.Store.Counters(c.Config, time.Now())
-		if used >= c.Config.MaxRepliesPerHour-1 {
-			return nil
-		}
 		allowed = c.Claim(in) == nil
 		return nil
 	})

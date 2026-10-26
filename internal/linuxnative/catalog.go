@@ -79,6 +79,9 @@ func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor strin
 			}
 		}
 		if kind == "messages" && row["type"] != float64(1) {
+			if item["type"] == float64(34) {
+				addVoiceMatchMetadata(row, item)
+			}
 			row["body"] = "[非文字消息，可通过附件功能处理]"
 			if rawBody, ok := item["body"].(string); ok {
 				m := Message{Type: 49, Body: rawBody}

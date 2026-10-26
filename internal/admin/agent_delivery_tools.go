@@ -39,14 +39,23 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 		var result map[string]any
 		_ = json.Unmarshal(b, &result)
 		result["retryable"] = status.Retryable
+		if reader, ok := p.manager.native.(nativeCatalog); ok && (status.State == "needs_review" || status.State == "unknown") {
+			proof, scanErr := linuxnative.ReconcileMedia(ctx, reader, status)
+			result["chat_reconciliation"] = proof
+			if scanErr != nil {
+				result["next_action"] = "聊天读取失败，保存检查点稍后核对；不能据此断言未发送"
+			} else {
+				result["next_action"] = "已核对同群真实聊天；用wechat_delivery_retry续办原任务，工具会保留已接受和同步确认的分段。retryable=false只是底层原来的自动续传标记，不是停止恢复的理由"
+			}
+		}
 		b, err := json.Marshal(result)
 		return string(b), err
 	}
 	if !p.privileged() || in.Key == "" || len(in.Key) > 128 {
 		return "", errors.New("仅可信主人可续传，需提供稳定请求编号")
 	}
-	if !status.Retryable || status.CancelRequested {
-		return "", errors.New("原生任务暂不允许续传：回执不确定或已取消。保持核对原任务、已接受分段不重发；不得换编号重发整份媒体")
+	if status.CancelRequested {
+		return "", errors.New("用户已取消原发送，停止补发")
 	}
 	allowed := false
 	for _, kind := range []string{"voice", "file", "image", "video"} {
@@ -63,5 +72,26 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 	if !ok {
 		return "", errors.New("原生后台不支持原任务续传")
 	}
-	return p.privilegedCall(ctx, name, args, func() (any, error) { return retry.RetryMediaJob(ctx, in.Job) })
+	return p.privilegedCall(ctx, name, args, func() (any, error) {
+		if !p.privileged() || !permittedRecipient(p.manager.Config().Config, in.Thread) {
+			return nil, errors.New("发送授权已撤销")
+		}
+		// The normal native flag no longer permanently blocks reconciliation.
+		// Real implementation reads this thread again immediately before retry.
+		if !status.Retryable {
+			if reconciler, ok := p.manager.native.(interface {
+				ReconcileMediaJob(context.Context, string) (linuxnative.ToolStatus, error)
+			}); ok {
+				if err := p.deliveryDelay(ctx); err != nil {
+					return nil, err
+				}
+				return reconciler.ReconcileMediaJob(ctx, in.Job)
+			}
+			return nil, errors.New("当前原生版本缺少聊天核对后恢复接口，需要修复服务；保存任务继续处理")
+		}
+		if err := p.deliveryDelay(ctx); err != nil {
+			return nil, err
+		}
+		return retry.RetryMediaJob(ctx, in.Job)
+	})
 }
