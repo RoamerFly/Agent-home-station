@@ -124,6 +124,9 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 			w.persistErr = w.saveRuntime()
 			return sending.Receipt{Recipient: d.Thread, ServerMessageID: status.ServerID}, w.persistErr
 		case "failed", "cancelled":
+			if status.State == "failed" && status.Retryable {
+				return w.waitDelivery(d, status.Reason)
+			}
 			d.State = "stopped"
 			w.persistErr = w.saveRuntime()
 			return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrRejected, Reason: status.Reason, IntentID: d.ID}
@@ -313,11 +316,14 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			w.acceptReconciled(d)
 			continue
 		}
-		if err == nil && (status.State == "failed" || status.State == "cancelled") {
+		if err == nil && (status.State == "failed" && !status.Retryable || status.State == "cancelled") {
 			d.State = "stopped"
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, Reason: status.Reason, Status: "failed", SendID: d.ID})
 			w.persistErr = w.saveRuntime()
 			continue
+		}
+		if err == nil && status.State == "failed" && status.Retryable {
+			d.Reason = status.Reason
 		}
 		// Healthy catalog scans are mandatory; an unavailable read is never
 		// treated as evidence of absence. Search one thread, never other chats.

@@ -77,3 +77,25 @@ func TestModelCancelledRetryFinishesInboxWithoutSending(t *testing.T) {
 		t.Fatal("cancelled delivery remained pending or sent", d, w.runtime.Inbox)
 	}
 }
+
+func TestNativeRetryableTextFailureIsReviewedByModelBeforeRetry(t *testing.T) {
+	model := &planReviewModel{answer: `{"action":"continue"}`}
+	w, _, _, in := planWorker(t, model)
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}, acceptRetry: true}
+	w.sender = n
+	_, _ = w.sendText(context.Background(), in, 0, "还有这条补充")
+	d := w.runtime.Deliveries[0]
+	status := n.intents[d.Key]
+	status.State = "failed"
+	status.Retryable = true
+	status.Reason = "transport_unavailable"
+	n.intents[d.Key] = status
+	for i := 0; i < 3; i++ {
+		d.Next = time.Time{}
+		w.runtime.SendGates = nil
+		w.reconcileDeliveries(context.Background())
+	}
+	if model.calls != 1 || len(n.submissions) != 2 || d.State != "accepted" {
+		t.Fatal("retryable failure skipped model or was abandoned", model.calls, d)
+	}
+}

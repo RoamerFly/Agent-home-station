@@ -241,7 +241,7 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 							w.advanceSendGate(d.Thread)
 							d.ID = status.ID
 							w.persistErr = w.saveRuntime()
-						} else if status.State == "failed" || status.State == "cancelled" {
+						} else if status.State == "failed" && !status.Retryable || status.State == "cancelled" {
 							d.State = "stopped"
 							d.Reason = status.Reason
 							w.persistErr = w.saveRuntime()
