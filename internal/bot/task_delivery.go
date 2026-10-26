@@ -4,6 +4,8 @@ import "wechat-bot/internal/companion"
 
 // TaskDelivery describes delivery evidence separately from model completion.
 type TaskDelivery struct {
+	PendingJob     string `json:"pending_job,omitempty"`
+	FailureReason  string `json:"failure_reason,omitempty"`
 	CaptionOmitted bool   `json:"caption_omitted,omitempty"`
 	Trace          string `json:"trace"`
 	State          string `json:"state"`
@@ -31,6 +33,10 @@ func (w *Worker) publishTaskDelivery(trace string) {
 		}
 		failed = failed || d.State == "stopped" || d.UserCancelled
 		unknown = unknown || d.State == "needs_review"
+		if d.State == "waiting" && (d.Status.State == "needs_review" || d.Status.State == "unknown") && d.Checks >= 2 {
+			unknown = true
+			result.PendingJob, result.FailureReason = d.ID, d.Status.Reason
+		}
 		for _, part := range d.Status.VoiceChunks {
 			result.TotalParts++
 			if part.State == "accepted" && part.HasReceipt {

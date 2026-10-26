@@ -120,7 +120,7 @@ func (p *permittedTools) enabled(name string) bool {
 	if name == "plugin_job_status" || name == "plugin_job_cancel" {
 		return p.pluginTaskAllowed()
 	}
-	if name == "music_local_start" || name == "music_local_status" || name == "music_reference_inspect" || name == "music_lyrics_compare" {
+	if name == "music_local_start" || name == "music_local_status" || name == "music_reference_inspect" || name == "music_lyrics_compare" || name == "music_service_status" {
 		return len(p.yueTools()) > 0
 	}
 	if name == "speech_synthesize" || name == "music_generate" {
@@ -320,7 +320,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	if agentToolName(name) {
 		return p.callAgent(ctx, name, args)
 	}
-	if name == "music_local_start" || name == "music_local_status" || name == "music_reference_inspect" || name == "music_lyrics_compare" {
+	if name == "music_local_start" || name == "music_local_status" || name == "music_reference_inspect" || name == "music_lyrics_compare" || name == "music_service_status" {
 		return p.callYuE(ctx, name, args)
 	}
 	if name == "web_discover" {
@@ -693,7 +693,7 @@ func (m *Manager) toolAccess() (*permittedTools, int, error) {
 	m.mu.Unlock()
 	steps := c.MaxToolCalls
 	if m.agent != nil && m.agent.config().Enabled {
-		steps = m.agent.config().MaxSteps
+		steps = agentTurnToolLimit
 	}
 	runtime, err := plugins.New(m.plugins.installed())
 	if err != nil {

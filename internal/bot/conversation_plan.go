@@ -38,17 +38,17 @@ func (w *Worker) pendingConversationThread(thread string) bool {
 		return true
 	}
 	for _, p := range w.runtime.Plans {
-		if p.Input.Thread == thread && !p.terminal() {
+		if p.Input.Thread == thread && !p.terminal() && !(p.MediaCaption && w.mediaTraceOnlyUnknown(p.Input.TraceID)) {
 			return true
 		}
 	}
 	for _, d := range w.runtime.Media {
-		if d.Input.Thread == thread && !d.terminal() {
+		if d.Input.Thread == thread && !d.terminal() && !awaitingMediaReceipt(d) {
 			return true
 		}
 	}
 	for _, r := range w.runtime.MediaReplies {
-		if r.Input.Thread == thread && !r.terminal() {
+		if r.Input.Thread == thread && !r.terminal() && !w.mediaTraceOnlyUnknown(r.Trace) {
 			return true
 		}
 	}

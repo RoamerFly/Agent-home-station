@@ -58,14 +58,32 @@ func (d *mediaDelivery) terminal() bool {
 	return d.State == "accepted" || d.State == "stopped" || d.State == "needs_review"
 }
 func (w *Worker) draining() bool { return w.config.Draining != nil && w.config.Draining() }
+func awaitingMediaReceipt(d *mediaDelivery) bool {
+	return d.State == "waiting" && (d.Status.State == "needs_review" || d.Status.State == "unknown")
+}
+func (w *Worker) mediaTraceOnlyUnknown(trace string) bool {
+	found := false
+	for _, d := range w.runtime.Media {
+		if d.Trace != trace || d.terminal() {
+			continue
+		}
+		if !awaitingMediaReceipt(d) {
+			return false
+		}
+		found = true
+	}
+	return found
+}
 func (w *Worker) pendingMedia() bool {
 	for _, r := range w.runtime.MediaReplies {
 		if !r.terminal() {
-			return true
+			if !w.mediaTraceOnlyUnknown(r.Trace) {
+				return true
+			}
 		}
 	}
 	for _, d := range w.runtime.Media {
-		if !d.terminal() {
+		if !d.terminal() && !awaitingMediaReceipt(d) {
 			return true
 		}
 	}
@@ -225,11 +243,13 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		cancel()
 		d.Next = time.Now().Add(2 * time.Second)
 		if err != nil {
-			if time.Since(d.Created) > 30*time.Minute {
+			if time.Since(d.Created) > 30*time.Minute && !w.config.Options.RetryUncertain {
 				d.State = "needs_review"
 				d.Reason = "media_status_unavailable_after_deadline"
 			} else {
 				d.Reason = "media_receipt_lookup_pending"
+				d.Checks++
+				d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.Checks))
 			}
 			w.mediaRecord(d, "media_waiting", "decision")
 			continue
@@ -272,11 +292,11 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		switch status.State {
 		case "failed", "cancelled":
 			d.Reason = status.Reason
-			if status.Retryable && d.Retries == 0 && w.config.Options.RetryUncertain {
+			if status.Retryable && w.config.Options.RetryUncertain {
 				if d.State != "retry_wait" {
 					d.State = "retry_wait"
 					d.Checks = 0
-					d.Next = time.Now().Add(time.Duration(w.config.Options.RetryDelaySeconds) * time.Second)
+					d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.Retries))
 				} else {
 					d.Checks++
 					d.Next = time.Now().Add(15 * time.Second)
@@ -310,14 +330,14 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			}
 		case "needs_review", "unknown":
 			// Recheck delayed receipts without overriding the native no-retry guard.
-			if d.Checks >= 2 {
+			if d.Checks >= 2 && !w.config.Options.RetryUncertain {
 				d.State = "needs_review"
 				d.Reason = "media_receipt_unverified_native_retry_denied"
 			} else {
 				d.State = "waiting"
 				d.Checks++
-				d.Reason = status.Reason
-				d.Next = time.Now().Add(time.Duration(w.config.Options.RetryDelaySeconds) * time.Second)
+				d.Reason = "media_receipt_reconciliation_pending"
+				d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.Checks))
 			}
 			w.mediaRecord(d, "media_waiting", "error")
 			w.refreshMediaParent(d.Trace)

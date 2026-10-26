@@ -34,8 +34,12 @@ type agentSettings struct {
 	Host              agenthost.Config `json:"host"`
 }
 
+// An internal liveness bound, not a user-managed task policy. Long work can
+// persist a checkpoint or managed process and resume in a subsequent turn.
+const agentTurnToolLimit = 30
+
 func agentDefaults() agentSettings {
-	return agentSettings{Enabled: true, ReadConversations: true, TasksEnabled: true, OwnerIDs: []string{}, PrivilegedThreads: []string{}, AccountActions: []string{}, MaxSteps: 12, MaxTaskRuns: 6, Host: agenthost.Defaults()}
+	return agentSettings{Enabled: true, ReadConversations: true, TasksEnabled: true, OwnerIDs: []string{}, PrivilegedThreads: []string{}, AccountActions: []string{}, MaxSteps: agentTurnToolLimit, MaxTaskRuns: 6, Host: agenthost.Defaults()}
 }
 func (c agentSettings) validate() error {
 	if c.MaxSteps < 1 || c.MaxSteps > 30 || c.MaxTaskRuns < 1 || c.MaxTaskRuns > 20 {
@@ -98,6 +102,7 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	OwnerRequested    bool              `json:"owner_requested,omitempty"`
 	ProcessID         string            `json:"process_id,omitempty"`
 	DeviceTask        string            `json:"device_task,omitempty"`
 	MusicSpec         *songSpec         `json:"music_spec,omitempty"`
@@ -320,7 +325,20 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			}
 			return &companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Text: t.Checkpoint, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, MustReply: true, TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText, TraceID: "recover-" + t.ID, QuoteServerID: t.QuoteServerID}, nil
 		}
-		if cfg.Companion.Quiet(now) {
+		ownerContinuation := false
+		if t.OwnerRequested {
+			access := &permittedTools{manager: m, trace: companion.Input{Account: t.Account, Thread: t.Thread, Sender: t.Sender}}
+			if !access.privileged() {
+				t.State = "needs_review"
+				t.LastResult = "主人行动授权已撤销，停止自动续办"
+				if err := m.agent.task(t); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			ownerContinuation = true
+		}
+		if !ownerContinuation && cfg.Companion.Quiet(now) {
 			continue
 		}
 		if t.Runs >= c.MaxTaskRuns {
@@ -333,11 +351,16 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		}
 		// Each background continuation consumes the same daily proactive budget.
 		in := companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "proactive", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), TraceID: "task-" + t.ID + "-" + time.Now().UTC().Format("20060102T150405.000000000"), TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText}
-		if !contains(cfg.Companion.ProactiveThreads, t.Thread) {
-			continue
-		}
-		if err := m.memory.ClaimConversationWake(in, withTaskWake(cfg.Companion), now); err != nil {
-			continue
+		if ownerContinuation {
+			in.Mode, in.Directed = "direct", true
+			in.MustReply = t.Runs == 0
+		} else {
+			if !contains(cfg.Companion.ProactiveThreads, t.Thread) {
+				continue
+			}
+			if err := m.memory.ClaimConversationWake(in, withTaskWake(cfg.Companion), now); err != nil {
+				continue
+			}
 		}
 		t.State = "running"
 		t.Runs++

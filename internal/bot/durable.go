@@ -119,6 +119,15 @@ func (w *Worker) loadRuntime(server string) error {
 		return errors.New("persistent queue exceeds bound")
 	}
 	w.runtime = &s
+	for _, media := range s.Media {
+		if media == nil {
+			return errors.New("persistent media invalid")
+		}
+		if w.config.Options != nil && w.config.Options.RetryUncertain && !media.UserCancelled && media.State == "needs_review" && media.Reason == "media_receipt_unverified_native_retry_denied" {
+			media.State, media.Reason = "waiting", "media_receipt_reconciliation_pending"
+			media.Next = time.Now() // Read-only reconciliation may resume immediately.
+		}
+	}
 	for _, d := range s.Deliveries {
 		if d == nil {
 			return errors.New("persistent delivery invalid")
