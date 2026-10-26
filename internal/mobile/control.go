@@ -24,6 +24,8 @@ import (
 
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 var observationPattern = regexp.MustCompile(`^obs-[a-f0-9]{32}$`)
+var artifactPattern = regexp.MustCompile(`^clip-[a-f0-9]{32}$`)
+var bridgeReasonPattern = regexp.MustCompile(`^device_[a-z_]{1,90}$`)
 
 type Settings struct {
 	Revision   int64                 `json:"revision"`
@@ -42,7 +44,7 @@ func (c Settings) Validate() error {
 	if len(c.Bridge.Env) > 0 || len(c.Bridge.Headers) > 0 || c.Bridge.URL != "" {
 		return errors.New("device_bridge_credentials_not_supported")
 	}
-	if c.MaxSteps < 1 || c.MaxSteps > 30 || c.MaxSeconds < 30 || c.MaxSeconds > 900 || len(c.Devices) > 16 || len(c.Actions) > 8 {
+	if c.MaxSteps < 1 || c.MaxSteps > 30 || c.MaxSeconds < 30 || c.MaxSeconds > 900 || len(c.Devices) > 16 || len(c.Actions) > 9 {
 		return errors.New("device_configuration_invalid")
 	}
 	for _, id := range c.Devices {
@@ -51,7 +53,7 @@ func (c Settings) Validate() error {
 		}
 	}
 	for _, action := range c.Actions {
-		if !includes([]string{"launch", "tap", "swipe", "text", "back", "home"}, action) {
+		if !includes([]string{"launch", "tap", "swipe", "text", "back", "home", "capture", "open_url"}, action) {
 			return errors.New("device_action_invalid")
 		}
 	}
@@ -90,29 +92,48 @@ type Event struct {
 	Summary string    `json:"summary,omitempty"`
 }
 type Task struct {
-	RequestHash   string    `json:"request_hash"`
-	ID            string    `json:"id"`
-	DeviceID      string    `json:"device_id"`
-	Goal          string    `json:"goal"`
-	State         string    `json:"state"`
-	Source        Source    `json:"source"`
-	Steps         int       `json:"steps"`
-	ObservationID string    `json:"observation_id,omitempty"`
-	Result        string    `json:"result,omitempty"`
-	Reason        string    `json:"reason,omitempty"`
-	Created       time.Time `json:"created"`
-	Updated       time.Time `json:"updated"`
-	Events        []Event   `json:"events"`
+	Artifacts     []Artifact `json:"artifacts,omitempty"`
+	RequestHash   string     `json:"request_hash"`
+	ID            string     `json:"id"`
+	DeviceID      string     `json:"device_id"`
+	Goal          string     `json:"goal"`
+	State         string     `json:"state"`
+	Source        Source     `json:"source"`
+	Steps         int        `json:"steps"`
+	ObservationID string     `json:"observation_id,omitempty"`
+	Result        string     `json:"result,omitempty"`
+	Reason        string     `json:"reason,omitempty"`
+	Created       time.Time  `json:"created"`
+	Updated       time.Time  `json:"updated"`
+	Events        []Event    `json:"events"`
 }
+type Artifact struct {
+	ID               string `json:"id"`
+	DeviceID         string `json:"device_id"`
+	RequestKey       string `json:"request_key"`
+	Kind             string `json:"kind"`
+	MIME             string `json:"mime"`
+	Bytes            int    `json:"bytes"`
+	SHA256           string `json:"sha256"`
+	RequestedSeconds int    `json:"requested_seconds"`
+	Audio            bool   `json:"audio"`
+	Original         bool   `json:"original_media"`
+	Summary          string `json:"summary,omitempty"`
+	AssetID          string `json:"asset_id,omitempty"`
+}
+type ArtifactAnalyzer func(context.Context, Task, Artifact, []byte) (summary, assetID string, err error)
 type Observation struct {
-	ID       string            `json:"id"`
-	DeviceID string            `json:"device_id"`
-	Package  string            `json:"package"`
-	Width    int               `json:"width"`
-	Height   int               `json:"height"`
-	Nodes    []json.RawMessage `json:"nodes"`
-	Raw      json.RawMessage   `json:"-"`
-	PNG      []byte            `json:"-"`
+	AllowedPackages []string          `json:"allowed_packages,omitempty"`
+	Browsers        []string          `json:"browsers,omitempty"`
+	WebHosts        []string          `json:"web_hosts,omitempty"`
+	ID              string            `json:"id"`
+	DeviceID        string            `json:"device_id"`
+	Package         string            `json:"package"`
+	Width           int               `json:"width"`
+	Height          int               `json:"height"`
+	Nodes           []json.RawMessage `json:"nodes"`
+	Raw             json.RawMessage   `json:"-"`
+	PNG             []byte            `json:"-"`
 }
 type Step struct {
 	Action    string         `json:"action"`
@@ -138,6 +159,7 @@ type Control struct {
 	wg        sync.WaitGroup
 	finished  func(Task)
 	authorize func(Source) bool
+	analyze   ArtifactAnalyzer
 }
 type hubBridge struct{ *mcptools.Hub }
 
@@ -151,7 +173,7 @@ func Open(dir string, planner Planner) (*Control, error) {
 	c := &Control{dir: dir, settings: Defaults(), tasks: map[string]Task{}, running: map[string]context.CancelFunc{}, devices: map[string]string{}, planner: planner}
 	c.factory = func(s Settings) (Bridge, error) {
 		cfg := s.Bridge
-		cfg.Tools = []string{"devices", "observe", "act"}
+		cfg.Tools = []string{"devices", "observe", "act", "read_artifact"}
 		h, e := mcptools.New([]mcptools.ServerConfig{cfg})
 		return hubBridge{h}, e
 	}
@@ -224,7 +246,8 @@ func (c *Control) Settings() Settings       { c.mu.Lock(); defer c.mu.Unlock(); 
 func (c *Control) OnFinished(fn func(Task)) { c.mu.Lock(); defer c.mu.Unlock(); c.finished = fn }
 
 // SetAuthorizer is called before the control is exposed to requests.
-func (c *Control) SetAuthorizer(fn func(Source) bool) { c.authorize = fn }
+func (c *Control) SetAuthorizer(fn func(Source) bool)      { c.authorize = fn }
+func (c *Control) SetArtifactAnalyzer(fn ArtifactAnalyzer) { c.analyze = fn }
 func (c *Control) Save(s Settings) error {
 	if e := s.Validate(); e != nil {
 		return e
@@ -378,6 +401,9 @@ func (c *Control) observe(ctx context.Context, b Bridge, device string) (Observa
 	args, _ := json.Marshal(map[string]string{"device_id": device})
 	raw, e := b.Call(ctx, "observe", args)
 	if e != nil {
+		if bridgeReasonPattern.MatchString(raw) {
+			return out, errors.New(raw)
+		}
 		return out, e
 	}
 	var result struct {
@@ -444,7 +470,11 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 		}
 		o, e := c.observe(ctx, b, t.DeviceID)
 		if e != nil {
-			_ = c.update(id, "needs_review", "", "", "device_observation_unavailable", "")
+			reason := "device_observation_unavailable"
+			if bridgeReasonPattern.MatchString(e.Error()) {
+				reason = e.Error()
+			}
+			_ = c.update(id, "needs_review", "", "", reason, "")
 			return
 		}
 		if e = c.update(id, "running", "", "", "", o.ID); e != nil {
@@ -479,6 +509,28 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 			_ = c.update(id, "stopped", "", "", "device_action_not_permitted", o.ID)
 			return
 		}
+		// Model calls can outlive the bridge's short snapshot TTL. Obtain a new
+		// observation and only reuse coordinates when the app, dimensions and
+		// pixels or exact UI nodes still match what the model actually saw.
+		fresh, e := c.observe(ctx, b, t.DeviceID)
+		if e != nil {
+			reason := "device_observation_unavailable"
+			if bridgeReasonPattern.MatchString(e.Error()) {
+				reason = e.Error()
+			}
+			_ = c.update(id, "needs_review", "", "", reason, "")
+			return
+		}
+		same := fresh.Package == o.Package && fresh.Width == o.Width && fresh.Height == o.Height
+		oldNodes, _ := json.Marshal(o.Nodes)
+		newNodes, _ := json.Marshal(fresh.Nodes)
+		if !same || !(step.Action == "capture" || bytes.Equal(o.PNG, fresh.PNG) || len(o.Nodes) > 0 && bytes.Equal(oldNodes, newNodes)) {
+			if c.update(id, "running", "", "页面已变化，重新交给模型观察", "", fresh.ID) != nil {
+				return
+			}
+			continue
+		}
+		o = fresh
 		if step.Arguments == nil {
 			step.Arguments = map[string]any{}
 		}
@@ -489,15 +541,28 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 		args, _ := json.Marshal(step.Arguments)
 		result, e := b.Call(ctx, "act", args)
 		if e != nil {
-			_ = c.update(id, "needs_review", "", "", "device_action_outcome_unknown", o.ID)
+			reason := "device_action_outcome_unknown"
+			if bridgeReasonPattern.MatchString(result) {
+				reason = result
+			}
+			_ = c.update(id, "needs_review", "", "", reason, o.ID)
 			return
 		}
 		var status struct {
-			State string `json:"state"`
+			State  string `json:"state"`
+			Result struct {
+				Artifact *Artifact `json:"artifact"`
+			} `json:"result"`
 		}
 		if json.Unmarshal([]byte(result), &status) != nil || status.State != "submitted" {
 			_ = c.update(id, "needs_review", "", "", "device_action_outcome_unknown", o.ID)
 			return
+		}
+		if step.Action == "capture" {
+			if status.Result.Artifact == nil || c.collectArtifact(ctx, b, t, *status.Result.Artifact, step.Arguments["request_key"].(string)) != nil {
+				_ = c.update(id, "needs_review", "", "", "device_recording_unavailable", o.ID)
+				return
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -519,6 +584,7 @@ func (c *Control) Close() error {
 	c.wg.Wait()
 	return nil
 }
+func (c *Control) Busy() bool { c.mu.Lock(); defer c.mu.Unlock(); return len(c.running) > 0 }
 
 // StopAll checkpoints cancellation before stopping workers. It does not undo
 // an ADB action already submitted. New tasks remain subject to Settings.Enabled.

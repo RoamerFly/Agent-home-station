@@ -9,22 +9,42 @@ import argparse
 import base64
 import contextlib
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import shlex
+import socket
 import sqlite3
 import subprocess
 import sys
 import time
 import uuid
+from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 
 SERIAL = re.compile(r"[A-Za-z0-9_.:-]{1,100}\Z")
 PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+\Z")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 KEYS = {'back': '4', 'home': '3'}
-ACTIONS = {'observe', 'launch', 'tap', 'swipe', 'text', 'back', 'home'}
+ACTIONS = {'observe', 'launch', 'tap', 'swipe', 'text', 'back', 'home', 'capture', 'open_url'}
+
+
+def public_browser_url(value, hosts, lookup=None):
+    if not isinstance(value, str) or len(value) > 8192 or not re.fullmatch(r'[A-Za-z0-9._~:/?&=%+#@,;!-]+', value):
+        raise BridgeError('device_public_url_invalid')
+    try:
+        url = urlsplit(value)
+        host = (url.hostname or '').lower()
+        if url.scheme != 'https' or url.username or url.password or url.port not in (None, 443) or host not in hosts:
+            raise ValueError()
+        addresses = (lookup or socket.getaddrinfo)(host, 443, type=socket.SOCK_STREAM)
+        if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+            raise ValueError()
+    except (ValueError, OSError) as exc:
+        raise BridgeError('device_public_url_invalid') from exc
+    return value
 
 
 class BridgeError(Exception):
@@ -117,6 +137,11 @@ class Bridge:
                 if not isinstance(device.get('packages'), list) or len(device['packages']) > 30 or not all(PACKAGE.fullmatch(x) for x in device['packages']):
                     raise ValueError()
                 if not set(device.get('actions', [])) <= ACTIONS:
+                    raise ValueError()
+                if not isinstance(device.get('browsers', []), list) or not set(device.get('browsers', [])) <= set(device['packages']):
+                    raise ValueError()
+                hosts = device.get('web_hosts', [])
+                if not isinstance(hosts, list) or len(hosts) > 100 or not all(isinstance(h, str) and re.fullmatch(r'[a-z0-9.-]{1,253}', h) for h in hosts):
                     raise ValueError()
             return cfg
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -216,6 +241,7 @@ class Bridge:
                 raise BridgeError('device_page_changed_during_observation')
             identity = 'obs-' + uuid.uuid4().hex
             snapshot = dict(id=identity, device_id=key, package=package, width=width, height=height,
+                            allowed_packages=device['packages'], browsers=device.get('browsers', []), web_hosts=device.get('web_hosts', []),
                             screenshot_sha256=hashlib.sha256(png).hexdigest(), nodes=nodes,
                             ui_sha256=self.ui_hash(nodes) if nodes else '',
                             node_state=node_state, observed_at=time.time(), view_only=True)
@@ -236,7 +262,7 @@ class Bridge:
             except BridgeError:
                 pass
             items.append(dict(id=key, name=str(device.get('name', key))[:100], state=state,
-                              packages=device['packages'], actions=device.get('actions', [])))
+                              packages=device['packages'], actions=device.get('actions', []), browsers=device.get('browsers', []), web_hosts=device.get('web_hosts', [])))
         return dict(devices=items)
 
     def action(self, request):
@@ -268,25 +294,77 @@ class Bridge:
             # Recheck the page, not only its app name. Video pixels can change
             # while the same controls remain; validate those controls before acting.
             current = self.adb(cfg, device['serial'], ['exec-out', 'screencap', '-p'])
-            if hashlib.sha256(current).hexdigest() != snapshot['screenshot_sha256']:
+            if action != 'capture' and hashlib.sha256(current).hexdigest() != snapshot['screenshot_sha256']:
                 nodes = self.read_ui(cfg, device)
                 if not nodes or not snapshot.get('ui_sha256') or self.ui_hash(nodes) != snapshot['ui_sha256']:
                     raise BridgeError('device_page_changed_reobserve')
                 if self.foreground(cfg, device) != package:
                     raise BridgeError('device_page_changed_reobserve')
-            command = self.action_command(request, snapshot, device)
+            command = None if action == 'capture' else self.action_command(request, snapshot, device)
+            seconds = request.get('seconds', 6)
+            if action == 'capture' and (type(seconds) is not int or not 2 <= seconds <= 12):
+                raise BridgeError('device_capture_duration_invalid')
             with self.db() as db:
                 db.execute('INSERT INTO operation VALUES(?,?,?,?,?,?)', (operation_key, digest, key, 'unknown', '{}', time.time()))
             try:
-                self.adb(cfg, device['serial'], command, timeout=15, bound=1 << 20)
+                capture = self.capture(cfg, device, key, operation_key, seconds) if action == 'capture' else None
+                if command is not None:
+                    self.adb(cfg, device['serial'], command, timeout=15, bound=1 << 20)
             except BridgeError:
                 # A lost response does not prove that the tap did not execute.
                 return dict(state='unknown', result={}, replayed=False, reobserve_required=True)
             result = dict(action=action, device_id=key, reobserve_required=True,
                           instruction='Action submitted; obtain a NEW observation to verify the result.')
+            if capture is not None:
+                result['artifact'] = capture
             with self.db() as db:
                 db.execute('UPDATE operation SET state=?,result=? WHERE key=?', ('submitted', json.dumps(result), operation_key))
             return dict(state='submitted', result=result, replayed=False)
+
+    def capture(self, cfg, device, key, operation_key, seconds):
+        identity = 'clip-' + uuid.uuid4().hex
+        remote = '/sdcard/whale-' + identity + '.mp4'
+        try:
+            self.adb(cfg, device['serial'], ['shell', 'screenrecord', '--size', '480x800', '--bit-rate', '256000', '--time-limit', str(seconds), remote], timeout=seconds + 10, bound=4096)
+            data = self.adb(cfg, device['serial'], ['exec-out', 'cat', remote], bound=2 << 20)
+            if len(data) < 32 or data[4:8] != b'ftyp':
+                raise BridgeError('device_capture_invalid')
+            if self.foreground(cfg, device) not in device['packages']:
+                raise BridgeError('device_capture_app_changed')
+            meta = dict(id=identity, device_id=key, request_key=operation_key, kind='screen_recording',
+                        mime='video/mp4', bytes=len(data), sha256=hashlib.sha256(data).hexdigest(),
+                        requested_seconds=seconds, audio=False, original_media=False, created_at=time.time())
+            atomic(self.storage / (identity + '.mp4'), data)
+            atomic(self.storage / (identity + '.json'), json.dumps(meta).encode())
+            return meta
+        finally:
+            try:
+                self.adb(cfg, device['serial'], ['shell', 'rm', '-f', remote])
+            except BridgeError:
+                pass
+
+    def read_artifact(self, request):
+        cfg = self.config()
+        key = request.get('device_id')
+        self.device(cfg, key, 'capture')
+        identity = request.get('artifact_id', '')
+        offset = request.get('offset', 0)
+        if not isinstance(identity, str) or not re.fullmatch(r'clip-[a-f0-9]{32}', identity) or type(offset) is not int or not 0 <= offset <= 2 << 20:
+            raise BridgeError('device_artifact_invalid')
+        try:
+            meta_path, path = self.storage / (identity + '.json'), self.storage / (identity + '.mp4')
+            if meta_path.is_symlink() or path.is_symlink():
+                raise ValueError()
+            meta = json.loads(meta_path.read_text(encoding='utf8'))
+            if meta['device_id'] != key or meta['request_key'] != request.get('request_key') or not 0 <= time.time() - meta['created_at'] <= 7 * 86400 or path.stat().st_size != meta['bytes']:
+                raise ValueError()
+            with path.open('rb') as f:
+                f.seek(offset)
+                data = f.read(8192)
+            return dict(id=identity, offset=offset, bytes=meta['bytes'], sha256=meta['sha256'],
+                        data_base64=base64.b64encode(data).decode('ascii'), eof=offset + len(data) >= meta['bytes'])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise BridgeError('device_artifact_unavailable') from exc
 
     @staticmethod
     def action_command(request, snapshot, device):
@@ -310,6 +388,14 @@ class Bridge:
             if package not in device['packages'] or not PACKAGE.fullmatch(package):
                 raise BridgeError('device_package_not_permitted')
             return ['shell', 'monkey', '-p', package, '-c', 'android.intent.category.LAUNCHER', '1']
+        if action == 'open_url':
+            package = request.get('package', '')
+            if package not in device.get('browsers', []) or not PACKAGE.fullmatch(package):
+                raise BridgeError('device_browser_not_permitted')
+            url = public_browser_url(request.get('url'), device.get('web_hosts', []))
+            # adb shell joins its arguments before passing them to Android's
+            # shell. Quote the URL so & and ; are data, never shell operators.
+            return ['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', shlex.quote(url), '-p', package]
         if action == 'text':
             text = request.get('text', '')
             if not isinstance(text, str) or not re.fullmatch(r'[A-Za-z0-9 @._-]{1,200}', text):
@@ -323,7 +409,8 @@ def tools():
     return [
         dict(name='devices', description='List explicitly registered devices and permitted actions.', inputSchema={'type': 'object', 'properties': {}, 'additionalProperties': False}),
         dict(name='observe', description='Capture the current permitted app screenshot and bounded UI nodes. Does not mean watching a full video.', inputSchema={'type': 'object', 'properties': {'device_id': device}, 'required': ['device_id'], 'additionalProperties': False}),
-        dict(name='act', description='Execute ONE permitted action from a fresh observation. Repeated request_key never replays an operation, including unknown outcomes. Reobserve after every action.', inputSchema={'type': 'object', 'properties': {'device_id': device, 'action': {'type': 'string', 'enum': sorted(ACTIONS - {'observe'})}, 'request_key': device, 'observation_id': device, 'package': device, 'text': {'type': 'string', 'maxLength': 200}, **{key: {'type': 'integer'} for key in ['x', 'y', 'x2', 'y2', 'duration_ms']}}, 'required': ['device_id', 'action', 'request_key', 'observation_id'], 'additionalProperties': False}),
+        dict(name='act', description='Execute ONE permitted action from a fresh observation. capture records 2-12 seconds of screen WITHOUT audio, never the original video. Repeated request_key never replays an operation, including unknown outcomes. Reobserve after every action.', inputSchema={'type': 'object', 'properties': {'device_id': device, 'action': {'type': 'string', 'enum': sorted(ACTIONS - {'observe'})}, 'request_key': device, 'observation_id': device, 'package': device, 'url':{'type':'string','maxLength':8192}, 'text': {'type': 'string', 'maxLength': 200}, **{key: {'type': 'integer'} for key in ['x', 'y', 'x2', 'y2', 'duration_ms', 'seconds']}}, 'required': ['device_id', 'action', 'request_key', 'observation_id'], 'additionalProperties': False}),
+        dict(name='read_artifact', description='Read a bounded chunk of a recording created by this exact device and request. No arbitrary file access.', inputSchema={'type':'object','properties':{'device_id':device,'artifact_id':device,'request_key':device,'offset':{'type':'integer','minimum':0,'maximum':2097152}},'required':['device_id','artifact_id','request_key','offset'],'additionalProperties':False}),
     ]
 
 
@@ -349,6 +436,8 @@ def serve(bridge):
                     value, png = bridge.observe(args.get('device_id'))
                 elif name == 'act':
                     value, png = bridge.action(args), None
+                elif name == 'read_artifact':
+                    value, png = bridge.read_artifact(args), None
                 else:
                     raise BridgeError('device_tool_unknown')
                 content = [{'type': 'text', 'text': json.dumps(value, ensure_ascii=False)}]

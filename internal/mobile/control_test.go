@@ -140,7 +140,7 @@ func TestDeviceTaskObservationBeforeAndAfterAction(t *testing.T) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if len(b.calls) != 3 || b.calls[0] != "observe" || b.calls[1] != "act" || b.calls[2] != "observe" {
+	if len(b.calls) != 4 || b.calls[0] != "observe" || b.calls[1] != "observe" || b.calls[2] != "act" || b.calls[3] != "observe" {
 		t.Fatal(b.calls)
 	}
 	if b.args[0]["device_id"] != "lab" || b.args[0]["request_key"] == "replay" {
