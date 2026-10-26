@@ -51,3 +51,18 @@ func TestOwnerModelFailureSchedulesContinuation(t *testing.T) {
 		t.Fatal("model error abandoned owner task", got)
 	}
 }
+
+func TestTaskSendEvidenceAdvancesFromQueuedToVerifiedReceipt(t *testing.T) {
+	f, p := trustedAgent(t)
+	task := agentTask{ID: "receipt-task", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", State: "running"}
+	if e := f.manager.agent.task(task); e != nil {
+		t.Fatal(e)
+	}
+	p.trace.TaskID = task.ID
+	p.rememberTaskAction("wechat_send_text", json.RawMessage(`{"text":"你好"}`), `{"operation_id":"op","state":"queued"}`, nil)
+	p.rememberTaskAction("wechat_operation_status", json.RawMessage(`{"operation_id":"op"}`), `{"operation_id":"op","state":"accepted","server_id":"synthetic-receipt"}`, nil)
+	got := f.manager.agent.list("test", "wxid_owner")[0]
+	if len(got.Actions) != 1 || got.Actions[0].State != "accepted" || !strings.Contains(got.Actions[0].Result, "synthetic-receipt") {
+		t.Fatal(got)
+	}
+}
