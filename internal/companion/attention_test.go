@@ -43,12 +43,12 @@ func TestSecondPersonQuestionsRequestJudgementWithoutInventingMentions(t *testin
 	}
 	input.Text = "天气还是不错"
 	d, err = e.Respond(context.Background(), input)
-	if err != nil || model.calls != 2 || d.Reason != "decision_cooldown" {
-		t.Fatal("ambient cooldown removed", d, err)
+	if err != nil || model.calls != 3 || d.Reason != "model_chose_silence" {
+		t.Fatal("normal message skipped before judgement", d, err)
 	}
 }
 
-func TestQuestionReviewRetainsBudgetsPermissionsAndQuietHours(t *testing.T) {
+func TestEveryMessageJudgedWhileSendBudgetPermissionsAndQuietHoursRemain(t *testing.T) {
 	c := enabledConfig()
 	c.Permissions.ObserveGroups = true
 	c.Permissions.AutonomousGroups = true
@@ -62,13 +62,19 @@ func TestQuestionReviewRetainsBudgetsPermissionsAndQuietHours(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := store.ClaimReply(c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClaimReply(c, time.Now()); err == nil {
+		t.Fatal("send budget unexpectedly removed")
+	}
 	d, err := e.Respond(context.Background(), input)
-	if err != nil || d.Reason != "hourly_decision_budget" || model.calls != 2 {
-		t.Fatal("question bypassed hourly budget", d, err, model.calls)
+	if err != nil || d.Reason != "model_chose_silence" || model.calls != 3 {
+		t.Fatal("hidden decision budget blocked model", d, err, model.calls)
 	}
 	e.Config.Permissions.ObserveGroups = false
 	d, _ = e.Respond(context.Background(), input)
-	if d.Reason != "group_observation_or_social_permission_denied" || model.calls != 2 {
+	if d.Reason != "group_observation_or_social_permission_denied" || model.calls != 3 {
 		t.Fatal("question bypassed observation permission", d)
 	}
 	e.Config.Permissions.ObserveGroups = true
@@ -76,7 +82,7 @@ func TestQuestionReviewRetainsBudgetsPermissionsAndQuietHours(t *testing.T) {
 	e.Config.QuietStart = now.Add(-time.Hour).Format("15:04")
 	e.Config.QuietEnd = now.Add(time.Hour).Format("15:04")
 	d, _ = e.Respond(context.Background(), input)
-	if d.Reason != "quiet_hours" || model.calls != 2 {
+	if d.Reason != "quiet_hours" || model.calls != 3 {
 		t.Fatal("question bypassed quiet hours", d)
 	}
 }

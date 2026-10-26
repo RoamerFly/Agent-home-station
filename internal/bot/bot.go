@@ -47,7 +47,6 @@ type Config struct {
 	AllowedThreads []string
 	Prefix         string
 	PollInterval   time.Duration
-	Cooldown       time.Duration
 	MaxAge         time.Duration
 	Log            func(string)
 	Record         func(Record)
@@ -68,7 +67,6 @@ type Worker struct {
 	model           Model
 	sender          sending.Engine
 	allowed         map[string]bool
-	last            map[string]time.Time
 	lastMaintenance time.Time
 }
 
@@ -88,9 +86,6 @@ func New(config Config, source Source, model Model, sender sending.Engine) (*Wor
 	if config.PollInterval <= 0 {
 		config.PollInterval = 2 * time.Second
 	}
-	if config.Cooldown <= 0 {
-		config.Cooldown = 5 * time.Second
-	}
 	if config.MaxAge <= 0 {
 		config.MaxAge = 2 * time.Minute
 	}
@@ -107,7 +102,7 @@ func New(config Config, source Source, model Model, sender sending.Engine) (*Wor
 	if config.Log == nil {
 		config.Log = func(string) {}
 	}
-	return &Worker{config: config, source: source, model: model, sender: sender, allowed: allowed, last: map[string]time.Time{}}, nil
+	return &Worker{config: config, source: source, model: model, sender: sender, allowed: allowed}, nil
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -280,17 +275,13 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if w.generation != nil && w.deferBusyGeneration(ctx, working) {
 		return
 	}
-	reviewQuestion := w.ownerModelReview(message.ID) || w.config.GroupRules[message.ThreadID].Mode == "social" && companion.NeedsQuestionReview(prompt)
-	if since := time.Since(w.last[message.ThreadID]); since < w.config.Cooldown && !w.recovering && !w.addressed(message) && !reviewQuestion {
-		w.config.Log("message_skipped_cooldown")
-		w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "cooldown", Status: "skipped"})
-		return
-	}
-	w.last[message.ThreadID] = time.Now()
+	reviewQuestion := w.config.GroupRules[message.ThreadID].Mode == "social" && companion.NeedsQuestionReview(prompt)
 	prompt += quoteContext
 	w.config.Log("eligible_message_received")
 	processingReason := "trigger_matched"
-	if reviewQuestion {
+	if w.ownerModelReview(message.ID) {
+		processingReason = "owner_model_review"
+	} else if reviewQuestion {
 		processingReason = "direct_question_review"
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
@@ -326,7 +317,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		if w.config.GroupRules[message.ThreadID].Mode == "social" && !w.addressed(message) {
 			mode = "social"
 		}
-		input := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, Text: prompt, Mode: mode, IsGroup: strings.HasSuffix(message.ThreadID, "@chatroom"), Directed: !strings.HasSuffix(message.ThreadID, "@chatroom") || w.addressed(message), ReviewRequired: reviewQuestion, PersonaOverride: w.config.GroupRules[message.ThreadID].Persona, TraceID: message.ID, QuoteServerID: message.ServerID, MessageTime: message.CreatedAt, MustReply: mode == "direct" && message.Mentions.Self != nil && *message.Mentions.Self && w.config.GroupRules[message.ThreadID].ForceReplyWhenMentioned}
+		input := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, Text: prompt, Mode: mode, IsGroup: strings.HasSuffix(message.ThreadID, "@chatroom"), Directed: !strings.HasSuffix(message.ThreadID, "@chatroom") || w.addressed(message), ReviewRequired: reviewQuestion, HistoricalReview: w.ownerModelReview(message.ID), PersonaOverride: w.config.GroupRules[message.ThreadID].Persona, TraceID: message.ID, QuoteServerID: message.ServerID, MessageTime: message.CreatedAt, MustReply: mode == "direct" && message.Mentions.Self != nil && *message.Mentions.Self && w.config.GroupRules[message.ThreadID].ForceReplyWhenMentioned}
 		if message.Type == 49 && message.AppMessageType != nil {
 			switch *message.AppMessageType {
 			case 3, 4, 5, 6, 51:

@@ -31,7 +31,6 @@ type Config struct {
 	Model             string           `json:"model"`
 	SystemPrompt      string           `json:"system_prompt"`
 	Prefix            string           `json:"prefix"`
-	CooldownSeconds   int              `json:"cooldown_seconds"`
 	MaxAgeSeconds     int              `json:"max_age_seconds"`
 	MaxTokens         int              `json:"max_tokens"`
 	Enabled           bool             `json:"enabled"`
@@ -53,7 +52,7 @@ type ConfigView struct {
 }
 
 func defaults() Config {
-	return Config{Behavior: bot.DefaultOptions(), Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", SystemPrompt: deepseek.DefaultSystemPrompt, Prefix: "/ai ", CooldownSeconds: 5, MaxAgeSeconds: 120, MaxTokens: 768, FilehelperEnabled: true, DirectIDs: []string{}, GroupRules: []GroupRule{}, Companion: companion.Defaults()}
+	return Config{Behavior: bot.DefaultOptions(), Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", SystemPrompt: deepseek.DefaultSystemPrompt, Prefix: "/ai ", MaxAgeSeconds: 120, MaxTokens: 768, FilehelperEnabled: true, DirectIDs: []string{}, GroupRules: []GroupRule{}, Companion: companion.Defaults()}
 }
 func (c Config) view() ConfigView {
 	present := c.APIKey != ""
@@ -96,8 +95,8 @@ func validate(c Config) error {
 	if strings.TrimSpace(c.Prefix) == "" || len(c.Prefix) > 64 || !utf8.ValidString(c.Prefix) || strings.ContainsAny(c.Prefix, "\r\n\x00") {
 		return errors.New("私聊触发前缀需要为 1 至 64 字节的单行文字")
 	}
-	if c.CooldownSeconds < 1 || c.CooldownSeconds > 3600 || c.MaxAgeSeconds < 30 || c.MaxAgeSeconds > 3600 || c.MaxTokens < 64 || c.MaxTokens > 4096 {
-		return errors.New("请检查冷却时间、消息有效期或输出 Token 上限")
+	if c.MaxAgeSeconds < 30 || c.MaxAgeSeconds > 3600 || c.MaxTokens < 64 || c.MaxTokens > 4096 {
+		return errors.New("请检查消息有效期或输出 Token 上限")
 	}
 	if c.APIKey != "" && (len(c.APIKey) < 16 || len(c.APIKey) > 4096 || !utf8.ValidString(c.APIKey) || strings.ContainsAny(c.APIKey, " \r\n\t\x00")) {
 		return errors.New("API Key 格式无效，请只填入密钥本身")

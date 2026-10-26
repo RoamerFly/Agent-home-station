@@ -36,7 +36,7 @@ func TestModelFailureRecordsBoundedDiagnosticsWithoutSendingFallback(t *testing.
 	t.Fatal("model failure not recorded")
 }
 
-func TestHistoricalToolQuestionPassesBothCooldownsForJudgement(t *testing.T) {
+func TestHistoricalToolQuestionReachesJudgementWithoutForcingReply(t *testing.T) {
 	c := companion.Defaults()
 	c.Enabled = true
 	c.QuietStart = "00:00"
@@ -60,11 +60,10 @@ func TestHistoricalToolQuestionPassesBothCooldownsForJudgement(t *testing.T) {
 	source := &fakeSource{messages: map[string]linuxnative.Message{"question": message}}
 	sender := &fakeSender{}
 	var activity []Record
-	w, err := New(Config{StateDir: t.TempDir(), AllowedThreads: []string{"room@chatroom"}, Cooldown: time.Minute, GroupRules: map[string]GroupRule{"room@chatroom": {Mode: "social"}}, Record: func(r Record) { activity = append(activity, r) }}, source, engine, sender)
+	w, err := New(Config{StateDir: t.TempDir(), AllowedThreads: []string{"room@chatroom"}, GroupRules: map[string]GroupRule{"room@chatroom": {Mode: "social"}}, Record: func(r Record) { activity = append(activity, r) }}, source, engine, sender)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.last[message.ThreadID] = time.Now()
 	w.handle(context.Background(), fixtureEvent("1", message.ID, message.ThreadID, "incoming", "wechat"))
 	if model.calls != 1 || sender.calls != 0 {
 		t.Fatal("question was dropped or forced to reply", model.calls, sender.calls)

@@ -262,15 +262,6 @@ func (s *Store) Accepted(input Input, text string, c Config, now time.Time) erro
 		return nil
 	})
 }
-func (s *Store) DecisionAllowed(input Input, c Config, now time.Time) bool {
-	if input.Mode != "social" || input.Preview || input.Directed || input.ReviewRequired {
-		return true
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	last := s.data.Scopes[ScopeID(input.Channel, input.Account, input.Thread)].LastDecision
-	return now.Sub(last) >= time.Duration(c.DecisionIntervalSeconds)*time.Second
-}
 func (s *Store) ClaimDecision(input Input, c Config, now time.Time) error {
 	if input.Preview {
 		return nil
@@ -280,9 +271,6 @@ func (s *Store) ClaimDecision(input Input, c Config, now time.Time) error {
 		if data.DecisionHour != hour {
 			data.DecisionHour = hour
 			data.Decisions = 0
-		}
-		if data.Decisions >= c.MaxRepliesPerHour*2 {
-			return errors.New("character decision budget exhausted")
 		}
 		id := ScopeID(input.Channel, input.Account, input.Thread)
 		scope, ok := data.Scopes[id]
