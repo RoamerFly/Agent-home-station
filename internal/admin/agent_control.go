@@ -84,6 +84,7 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	DeviceTask        string            `json:"device_task,omitempty"`
 	MusicSpec         *songSpec         `json:"music_spec,omitempty"`
 	PluginJob         *pluginJobState   `json:"plugin_job,omitempty"`
 	RequestedText     string            `json:"requested_text,omitempty"`
@@ -284,6 +285,9 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if t.PluginJob != nil {
 			return m.claimPluginTask(t, now)
 		}
+		if t.DeviceTask != "" {
+			return m.claimDeviceTask(t, now)
+		}
 		if t.MusicJob != "" {
 			if !m.speechConfig().YuEEnabled || !cfg.Companion.Permissions.SendVoice && !cfg.Companion.Permissions.SendFile {
 				continue
@@ -340,6 +344,16 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 	for _, t := range m.agent.list(in.Account, in.Thread) {
 		if t.ID == in.TaskID && t.State == "running" {
+			if t.DeviceTask != "" {
+				t.State = "completed"
+				t.LastResult = "设备结果已交给角色复核；微信交付以发送记录为准"
+				if state != "reply" && state != "silent" && state != "synchronous_round_finished" {
+					t.State = "needs_review"
+					t.LastResult = "设备结果复核本轮结束：" + state
+				}
+				_ = m.agent.task(t)
+				return
+			}
 			if t.PluginJob != nil {
 				if t.PluginJob.Prepared && (state == "reply" || state == "synchronous_round_finished") {
 					t.State = "waiting_delivery"

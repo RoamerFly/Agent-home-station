@@ -16,14 +16,15 @@ import (
 )
 
 type Turn struct {
-	Media            *MediaMemory `json:"media,omitempty"`
-	SenderName       string       `json:"sender_name,omitempty"`
-	SenderNameSource string       `json:"sender_name_source,omitempty"`
-	TraceID          string       `json:"message_id,omitempty"`
-	Role             string       `json:"role"`
-	Text             string       `json:"text"`
-	Sender           string       `json:"sender"`
-	Time             time.Time    `json:"time"`
+	DeviceObservation *DeviceObservation `json:"device_observation,omitempty"`
+	Media             *MediaMemory       `json:"media,omitempty"`
+	SenderName        string             `json:"sender_name,omitempty"`
+	SenderNameSource  string             `json:"sender_name_source,omitempty"`
+	TraceID           string             `json:"message_id,omitempty"`
+	Role              string             `json:"role"`
+	Text              string             `json:"text"`
+	Sender            string             `json:"sender"`
+	Time              time.Time          `json:"time"`
 }
 type Scope struct {
 	Summary         string    `json:"summary,omitempty"`

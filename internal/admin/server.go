@@ -82,6 +82,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 	s.companionRoutes(mux)
 	s.billingRoutes(mux)
 	s.agentRoutes(mux)
+	s.mobileRoutes(mux)
 	s.storageRoutes(mux)
 	s.speechRoutes(mux)
 	s.channelsRoutes(mux)
@@ -139,6 +140,8 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 			name = "speech.js"
 		case "/assets/agent.js":
 			name = "agent.js"
+		case "/assets/mobile.js":
+			name = "mobile.js"
 		case "/assets/plugins.js":
 			name = "plugins.js"
 		case "/assets/whale-girl.png":
@@ -159,7 +162,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 		switch name {
 		case "index.html":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		case "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "speech.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
+		case "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "mobile.js", "speech.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "whale-girl.png", "whale-girl-cutout.png":
 			w.Header().Set("Content-Type", "image/png")
@@ -319,7 +322,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		native = linuxnative.Status{Connection: "unavailable"}
 	}
-	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.17.0-share-observation-local"})
+	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.18.0-device-workbench-local"})
 }
 func (s *Server) toggle(w http.ResponseWriter, r *http.Request, enabled bool) {
 	if err := s.manager.Toggle(enabled); err != nil {

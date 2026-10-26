@@ -110,7 +110,11 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 				continue
 			}
 			var payload any
-			if t.Role == "user" {
+			role := t.Role
+			if t.DeviceObservation != nil {
+				role = "user"
+				payload = map[string]any{"kind": "device_tool_observation", "data": t.DeviceObservation, "at": t.Time, "sent_to_wechat": false}
+			} else if t.Role == "user" {
 				payload = map[string]any{"kind": "history_message", "speaker": t.SenderName, "speaker_id": t.Sender, "speaker_name_source": t.SenderNameSource, "text": t.Text, "at": t.Time}
 			} else {
 				payload = map[string]any{"kind": "history_reply", "action": "reply", "messages": []string{t.Text}, "media_delivery": t.Media, "at": t.Time}
@@ -120,7 +124,7 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 				break
 			}
 			used += len(b)
-			rows = append(rows, map[string]string{"role": t.Role, "content": string(b)})
+			rows = append(rows, map[string]string{"role": role, "content": string(b)})
 		}
 		for i := len(rows) - 1; i >= 0; i-- {
 			turns = append(turns, rows[i])
@@ -137,6 +141,10 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 			continue
 		}
 		row := map[string]any{"role": t.Role, "speaker": t.SenderName, "speaker_id": t.Sender, "at": t.Time.Format(time.RFC3339Nano), "message_id": t.TraceID, "text": t.Text}
+		if t.DeviceObservation != nil {
+			row["device_observation"] = t.DeviceObservation
+			row["sent_to_wechat"] = false
+		}
 		if t.Media != nil {
 			row["media"] = t.Media
 		}

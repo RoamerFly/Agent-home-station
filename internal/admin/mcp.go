@@ -114,6 +114,9 @@ func (p *permittedTools) ForkTools() companion.ToolAccess {
 }
 
 func (p *permittedTools) enabled(name string) bool {
+	if strings.HasPrefix(name, "device_") {
+		return p.mobileToolEnabled(name)
+	}
 	if name == "plugin_job_status" || name == "plugin_job_cancel" {
 		return p.pluginTaskAllowed()
 	}
@@ -184,6 +187,7 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 		tools = append(tools, p.runtime.Tools()...)
 	}
 	tools = append(p.agentTools(), tools...)
+	tools = append(tools, p.mobileTools()...)
 	tools = append(tools, p.speechTools()...)
 	tools = append(tools, p.yueTools()...)
 	out := []mcptools.Tool{}
@@ -303,6 +307,9 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	}()
 	if !p.enabled(name) {
 		return "", &mcptools.WebError{Code: "ability_disabled"}
+	}
+	if strings.HasPrefix(name, "device_") {
+		return p.callMobile(ctx, name, args)
 	}
 	if name == "plugin_job_status" || name == "plugin_job_cancel" {
 		return p.callPluginJob(ctx, name, args)
