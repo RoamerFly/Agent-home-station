@@ -4,6 +4,8 @@ $workspace=Split-Path $PSScriptRoot -Parent
 $state=Join-Path $workspace 'secrets\yue-jobs'
 $token=Join-Path $workspace 'secrets\yue-bridge-token.txt'
 if(-not(Test-Path -LiteralPath $token)){throw '请先由管理端部署本地YuE桥接令牌。'}
+$stopFile=Join-Path $workspace 'secrets\yue-watchdog.stop'
+if(Test-Path -LiteralPath $stopFile){Remove-Item -LiteralPath $stopFile}
 New-Item -ItemType Directory -Force -Path (Join-Path $workspace 'temp') | Out-Null
 $bind=(Get-NetIPAddress -AddressFamily IPv4 | Where-Object InterfaceAlias -Like '*WSL*' | Select-Object -First 1).IPAddress
 if(-not $bind){$bind='127.0.0.1'}

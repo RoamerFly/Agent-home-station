@@ -15,7 +15,7 @@ type taskAction struct {
 }
 
 func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, result string, err error) {
-	if p.trace.TaskID == "" || !p.privileged() || !strings.HasPrefix(name, "server_") || name == "server_read" || name == "server_list" || name == "server_search" || name == "server_status" {
+	if p.trace.TaskID == "" || !p.privileged() || !(strings.HasPrefix(name, "server_") || name == "agent_task" || name == "wechat_send_text" || name == "wechat_operation_status") || name == "server_read" || name == "server_list" || name == "server_search" || name == "server_status" {
 		return
 	}
 	a := p.manager.agent
@@ -40,7 +40,38 @@ func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, r
 		state = "failed"
 		result = err.Error()
 	}
+	if name == "agent_task" && err == nil {
+		var saved struct {
+			Task map[string]any `json:"task"`
+		}
+		if json.Unmarshal([]byte(result), &saved) == nil && saved.Task != nil {
+			compact, _ := json.Marshal(map[string]any{"task_id": saved.Task["id"], "state": saved.Task["state"], "next": saved.Task["next"], "checkpoint": saved.Task["checkpoint"]})
+			result = string(compact)
+		}
+	}
 	entry := taskAction{Tool: name, Arguments: logText(string(args), 1200), Result: logText(result, 2200), State: state, At: time.Now().UTC()}
+	if name == "wechat_operation_status" {
+		if err != nil {
+			return
+		} // A read failure cannot erase a previously verified effect.
+		var in struct {
+			ID string `json:"operation_id"`
+		}
+		_ = json.Unmarshal(args, &in)
+		for i := len(t.Actions) - 1; i >= 0; i-- {
+			var old map[string]any
+			_ = json.Unmarshal([]byte(t.Actions[i].Result), &old)
+			if in.ID != "" && old["operation_id"] == in.ID && t.Actions[i].Tool == "wechat_send_text" {
+				t.Actions[i].Result, t.Actions[i].State, t.Actions[i].At = entry.Result, state, entry.At
+				a.data.Tasks[t.ID] = t
+				if e := a.persist(); e != nil {
+					p.manager.log("task_action_evidence_save_failed")
+				}
+				return
+			}
+		}
+		return
+	}
 	if name == "server_process" {
 		var in struct{ Action, ID string }
 		_ = json.Unmarshal(args, &in)

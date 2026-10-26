@@ -66,7 +66,7 @@ func (e *Engine) decide(ctx context.Context, system string, turns []map[string]s
 	activeTools := []mcptools.Tool{}
 	if nativeFunctions {
 		for _, t := range tools {
-			if strings.HasPrefix(t.Name, "workspace_") || t.Name == "server_status" || t.Name == "web_search" || t.Name == "web_fetch" || t.Name == "web_media_download" || t.Name == "media_recent" || t.Name == "speech_synthesize" || t.Name == "music_local_start" || t.Name == "music_local_status" {
+			if strings.HasPrefix(t.Name, "workspace_") || strings.HasPrefix(t.Name, "server_") || strings.HasPrefix(t.Name, "agent_") || t.Name == "web_search" || t.Name == "web_fetch" || t.Name == "web_media_download" || t.Name == "media_recent" || t.Name == "speech_synthesize" || t.Name == "music_local_start" || t.Name == "music_local_status" {
 				activeTools = append(activeTools, t)
 			}
 		}

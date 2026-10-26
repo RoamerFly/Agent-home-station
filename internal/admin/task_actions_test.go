@@ -23,7 +23,7 @@ func TestTaskContinuationRetainsGoalAndRealActionEvidence(t *testing.T) {
 		t.Fatal(e)
 	}
 	tsk := f.manager.agent.list("test", "wxid_owner")[0]
-	if len(tsk.Actions) != 1 || tsk.Goal != task.Checkpoint {
+	if len(tsk.Actions) != 2 || tsk.Goal != task.Checkpoint {
 		t.Fatal("checkpoint lost original goal/evidence", tsk)
 	}
 	tsk.Next = time.Now().Add(-time.Second)
@@ -36,7 +36,7 @@ func TestTaskContinuationRetainsGoalAndRealActionEvidence(t *testing.T) {
 	}
 	p.trace.Sender = "not-owner"
 	p.rememberTaskAction("server_exec", json.RawMessage(`{}`), "untrusted", nil)
-	if len(f.manager.agent.list("test", "wxid_owner")[0].Actions) != 1 {
+	if len(f.manager.agent.list("test", "wxid_owner")[0].Actions) != 2 {
 		t.Fatal("non-owner overwrote action evidence")
 	}
 }
@@ -49,5 +49,20 @@ func TestOwnerModelFailureSchedulesContinuation(t *testing.T) {
 	f.manager.finishAgentTask(companion.Input{Account: "test", Thread: "wxid_owner", TaskID: task.ID}, "")
 	if got := f.manager.agent.list("test", "wxid_owner")[0]; got.State != "waiting" || got.Next.Before(time.Now()) {
 		t.Fatal("model error abandoned owner task", got)
+	}
+}
+
+func TestTaskSendEvidenceAdvancesFromQueuedToVerifiedReceipt(t *testing.T) {
+	f, p := trustedAgent(t)
+	task := agentTask{ID: "receipt-task", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", State: "running"}
+	if e := f.manager.agent.task(task); e != nil {
+		t.Fatal(e)
+	}
+	p.trace.TaskID = task.ID
+	p.rememberTaskAction("wechat_send_text", json.RawMessage(`{"text":"你好"}`), `{"operation_id":"op","state":"queued"}`, nil)
+	p.rememberTaskAction("wechat_operation_status", json.RawMessage(`{"operation_id":"op"}`), `{"operation_id":"op","state":"accepted","server_id":"synthetic-receipt"}`, nil)
+	got := f.manager.agent.list("test", "wxid_owner")[0]
+	if len(got.Actions) != 1 || got.Actions[0].State != "accepted" || !strings.Contains(got.Actions[0].Result, "synthetic-receipt") {
+		t.Fatal(got)
 	}
 }
