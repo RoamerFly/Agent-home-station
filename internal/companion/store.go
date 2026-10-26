@@ -217,7 +217,7 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 			if parsed, err := time.Parse(time.RFC3339, input.MessageTime); err == nil && !parsed.After(now) {
 				stamp = parsed
 			}
-			scope.Messages = append(scope.Messages, Turn{TraceID: input.TraceID, Role: "user", Text: boundedText(input.Text, 2048), Sender: boundedText(input.Sender, 128), SenderName: boundedText(input.SenderName, 256), SenderNameSource: input.SenderNameSource, Time: stamp})
+			scope.Messages = append(scope.Messages, Turn{TraceID: input.TraceID, Role: "user", Text: boundedInputMemory(input.Text), Sender: boundedText(input.Sender, 128), SenderName: boundedText(input.SenderName, 256), SenderNameSource: input.SenderNameSource, Time: stamp})
 			scope, err = s.pruneStored(scope, c, now)
 			if err != nil {
 				return err

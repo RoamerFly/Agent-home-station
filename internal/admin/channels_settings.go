@@ -74,7 +74,18 @@ func matchChannelsVideo(source linuxnative.ChannelsSource, msg linuxnative.Messa
 	title = channelTitle(title)
 	return utf8.RuneCountInString(title) >= 8 && title == channelTitle(video.Title) && author != "" && channelTitle(author) == channelTitle(video.Author)
 }
+
+func matchNativeChannelsVideo(source linuxnative.ChannelsSource, video channels.ResolvedVideo, nativeBound bool) bool {
+	// The native RPC verifies the exact numeric ID before returning its short URL.
+	// Preview responses may omit the ID, or carry updated/empty title metadata.
+	// That must not discard a known identity; an explicit conflicting ID still fails.
+	return nativeBound && source.ObjectID != "" && (video.ObjectID == "" || source.ObjectID == video.ObjectID)
+}
+
 func (m *Manager) resolveReceivedChannels(ctx context.Context, msg linuxnative.Message, source linuxnative.ChannelsSource) (linuxnative.ChannelsSource, error) {
+	if source.AccountID != m.native.Account() || source.ThreadID != msg.ThreadID || source.MessageID != msg.ID || msg.Direction != "incoming" {
+		return source, errors.New("channels_source_scope_mismatch")
+	}
 	c, e := loadChannelsSettings(m.dir)
 	if e != nil {
 		return source, e
@@ -84,7 +95,24 @@ func (m *Manager) resolveReceivedChannels(ctx context.Context, msg linuxnative.M
 	}
 	resolver := channels.NewResolver()
 	autoLink, autoReason := "", ""
-	if c.AssistantCookie != "" && source.ObjectID != "" && source.ObjectNonceID != "" {
+	nativeBound := false
+	if native, ok := m.native.(interface {
+		ChannelsShareURL(context.Context, string, string, string) (string, error)
+	}); ok && source.ObjectID != "" && channels.ValidCookie(c.Cookie) {
+		link, err := native.ChannelsShareURL(ctx, msg.ID, msg.ThreadID, source.ObjectID)
+		if err == nil {
+			autoLink, err = channels.ShareURL(link)
+			nativeBound = err == nil
+		}
+		if err != nil {
+			autoReason = "channels_native_share_unavailable"
+			switch err.Error() {
+			case "channels_share_identity_missing", "channels_share_identity_mismatch", "channels_share_lookup_rejected", "channels_share_response_invalid", "channels_share_link_invalid", "channels_object_id_missing", "channels_received_card_required":
+				autoReason = err.Error()
+			}
+		}
+	}
+	if autoLink == "" && c.AssistantCookie != "" && source.ObjectID != "" && source.ObjectNonceID != "" && strings.HasPrefix(source.ObjectID, "export/") {
 		var err error
 		autoLink, err = resolver.ObjectShareURL(ctx, source.ObjectID, source.ObjectNonceID, c.AssistantCookie)
 		if err != nil {
@@ -137,15 +165,17 @@ func (m *Manager) resolveReceivedChannels(ctx context.Context, msg linuxnative.M
 	if e != nil && usedAutomatic && fallbackLink != "" && fallbackLink != autoLink {
 		video, e = resolver.Resolve(ctx, fallbackLink, c.Cookie)
 		usedAutomatic = false
+		nativeBound = false
 	}
 	if e != nil {
 		return source, e
 	}
-	if !matchChannelsVideo(source, msg, video) {
+	matched := matchChannelsVideo(source, msg, video) || matchNativeChannelsVideo(source, video, nativeBound)
+	if !matched {
 		return source, errors.New("channels_resolved_video_mismatch")
 	}
 	if usedAutomatic {
-		m.record(bot.Record{Event: "channels_source_resolved", Category: "decision", ThreadID: msg.ThreadID, MessageID: msg.ID, Status: "resolved", Reason: "channels_assistant_shortlink", Origin: "media"})
+		m.record(bot.Record{Event: "channels_source_resolved", Category: "decision", ThreadID: msg.ThreadID, MessageID: msg.ID, Status: "resolved", Reason: "channels_automatic_shortlink", Origin: "media"})
 	}
 	source.MediaURL, source.DecodeKey, source.State = video.URL, video.DecodeKey, "available"
 	return source, nil

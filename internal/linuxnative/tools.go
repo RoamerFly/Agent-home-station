@@ -134,6 +134,8 @@ func (s *Sender) toolJSON(ctx context.Context, method, path, key string, body io
 				switch failure.Error.Code {
 				case "unsupported_quote_type", "invalid_quote_reference", "quote_target_mismatch", "quote_target_unavailable", "quote_content_unavailable", "quote_sender_unavailable", "quote_target_ambiguous":
 					return nil, &ToolRejection{Code: failure.Error.Code}
+				case "channels_share_identity_missing", "channels_share_identity_mismatch", "channels_share_lookup_rejected", "channels_share_response_invalid", "channels_share_link_invalid", "channels_object_id_missing", "channels_received_card_required":
+					return nil, &ToolRejection{Code: failure.Error.Code}
 				}
 			}
 		}

@@ -252,10 +252,30 @@ index 3208d8a..0bf48f0 100644
 +App-message type 51 exposes its received description and publisher through normalized link metadata. It does not turn private media locators into public playback URLs or claim that the video has been viewed.
 +
 diff --git a/packages/native-client-rust/crates/wechat-api/src/lib.rs b/packages/native-client-rust/crates/wechat-api/src/lib.rs
-index 2710192..6374e81 100644
+index 2710192..9b497dc 100644
 --- a/packages/native-client-rust/crates/wechat-api/src/lib.rs
 +++ b/packages/native-client-rust/crates/wechat-api/src/lib.rs
-@@ -824,6 +824,22 @@ async fn quoted_message(
+@@ -119,6 +119,19 @@ impl IntoResponse for ApiError {
+ impl From<anyhow::Error> for ApiError {
+     fn from(error: anyhow::Error) -> Self {
+         let message = error.to_string();
++        for code in [
++            "channels_share_identity_missing",
++            "channels_share_identity_mismatch",
++            "channels_share_lookup_rejected",
++            "channels_share_response_invalid",
++            "channels_share_link_invalid",
++            "channels_object_id_missing",
++            "channels_received_card_required",
++        ] {
++            if message == code {
++                return Self(StatusCode::BAD_REQUEST, code);
++            }
++        }
+         for code in [
+             "invalid_group_identity",
+             "invalid_group_text",
+@@ -824,6 +837,39 @@ async fn quoted_message(
          .await?,
      )
  }
@@ -275,13 +295,34 @@ index 2710192..6374e81 100644
 +        .await?,
 +    ))
 +}
++async fn channels_share_url(
++    State(app): State<App>,
++    Extension(c): Extension<Claims>,
++    Path((a, id)): Path<(String, String)>,
++) -> ApiResult<Json<Value>> {
++    c.require(Some(&a), "read")?;
++    c.require(Some(&a), "media")?;
++    let guard = app.core.lock_account(&a).await?;
++    Ok(Json(
++        work(move || {
++            let _guard = guard;
++            app.core.channels_share_url(&a, &id)
++        })
++        .await?,
++    ))
++}
++
  async fn avatar(
      State(app): State<App>,
      Extension(c): Extension<Claims>,
-@@ -1149,6 +1165,10 @@ pub fn router(core: Arc<Core>, token: &str) -> Router {
+@@ -1149,6 +1195,14 @@ pub fn router(core: Arc<Core>, token: &str) -> Router {
          .route("/v1/accounts/{a}/messages", get(archive_messages))
          .route("/v1/accounts/{a}/messages/{id}", get(message))
          .route("/v1/accounts/{a}/messages/{id}/quote", get(quoted_message))
++        .route(
++            "/v1/accounts/{a}/messages/{id}/channels-share-url",
++            post(channels_share_url),
++        )
 +        .route(
 +            "/v1/accounts/{a}/messages/{id}/channels-media",
 +            get(channels_media),
@@ -289,6 +330,74 @@ index 2710192..6374e81 100644
          .route("/v1/accounts/{a}/avatars/{id}", get(avatar))
          .route("/v1/accounts/{a}/messages/{id}/image", get(image))
          .route("/v1/accounts/{a}/sends", post(media::send))
+@@ -1524,6 +1578,54 @@ mod tests {
+             assert_eq!(code, expected);
+         }
+     }
++    #[tokio::test]
++    async fn channels_lookup_requires_both_scopes_before_card_or_network_io() {
++        let (_temp, core, app) = setup();
++        let read = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
++        let media = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
++        let both = "cccccccccccccccccccccccccccccccc";
++        for (token, scopes) in [
++            (read, vec!["read".into()]),
++            (media, vec!["media".into()]),
++            (both, vec!["read".into(), "media".into()]),
++        ] {
++            core.store
++                .issue_token(
++                    token,
++                    &format!("{:x}", Sha256::digest(token.as_bytes())),
++                    &["one".into()],
++                    &scopes,
++                    None,
++                )
++                .unwrap();
++        }
++        for (account, token, status) in [
++            ("one", None, StatusCode::UNAUTHORIZED),
++            ("one", Some(read), StatusCode::FORBIDDEN),
++            ("one", Some(media), StatusCode::FORBIDDEN),
++            ("two", Some(both), StatusCode::FORBIDDEN),
++        ] {
++            for (method, suffix) in [("GET", "channels-media"), ("POST", "channels-share-url")] {
++                assert_eq!(
++                    call(
++                        app.clone(),
++                        method,
++                        &format!("/v1/accounts/{account}/messages/synthetic/{suffix}"),
++                        token,
++                        None
++                    )
++                    .await
++                    .0,
++                    status
++                );
++            }
++        }
++        let ApiError(status, code) =
++            ApiError::from(anyhow::anyhow!("channels_share_identity_missing"));
++        assert_eq!(status, StatusCode::BAD_REQUEST);
++        assert_eq!(code, "channels_share_identity_missing");
++    }
++
+     #[tokio::test]
+     async fn account_message_search_requires_account_read_scope_and_bounded_query() {
+         let (_temp, core, app) = setup();
+diff --git a/packages/native-client-rust/crates/wechat-core/src/incoming_groups.rs b/packages/native-client-rust/crates/wechat-core/src/incoming_groups.rs
+index cb5174c..a87a1fa 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/incoming_groups.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/incoming_groups.rs
+@@ -96,7 +96,7 @@ impl Core {
+             &self.vault.seal(account, key, &serde_json::to_vec(job)?)?,
+         )
+     }
+-    pub(super) fn group_read<F>(
++    pub(crate) fn group_read<F>(
+         &self,
+         account: &str,
+         epoch: Option<&[u8]>,
 diff --git a/packages/native-client-rust/crates/wechat-core/src/lib.rs b/packages/native-client-rust/crates/wechat-core/src/lib.rs
 index 8b5dc1c..166a376 100644
 --- a/packages/native-client-rust/crates/wechat-core/src/lib.rs
@@ -736,10 +845,20 @@ index bbfa150..83e6fca 100644
 +  "voiceHex": "0a0e73796e7468657469632d75736572120a66696c6568656c706572180020102a1873796e7468657469635f636c69656e745f69645f3030303138a01f42140810121002232153494c4b5f5633000000000000480152450a0100107b1a1001010101010101010101010101010101209abad093ffffffffff012a1f556e696669656450434c696e75782073796e746865746963207838365f36343000580068047800800100880187ad4b92011c0818121873796e7468657469635f636c69656e745f69645f30303031aa0100"
  }
 diff --git a/packages/native-client-rust/crates/wechat-protocol/src/client.rs b/packages/native-client-rust/crates/wechat-protocol/src/client.rs
-index 7d726a1..42361a0 100644
+index 7d726a1..7d48fd1 100644
 --- a/packages/native-client-rust/crates/wechat-protocol/src/client.rs
 +++ b/packages/native-client-rust/crates/wechat-protocol/src/client.rs
-@@ -23,7 +23,7 @@ use crate::{
+@@ -4,6 +4,9 @@ pub use group_mutation::*;
+ #[path = "group_detail.rs"]
+ mod group_detail;
+ pub use group_detail::*;
++#[path = "channels_share.rs"]
++mod channels_share;
++pub use channels_share::*;
+ #[path = "group_inventory.rs"]
+ mod group_inventory;
+ pub use group_inventory::*;
+@@ -23,7 +26,7 @@ use crate::{
      mmtls::{self, Session},
      protobuf as p, wire,
  };
@@ -748,7 +867,7 @@ index 7d726a1..42361a0 100644
  pub use logout::*;
  use openssl::{nid::Nid, pkey::PKey, rsa::Rsa};
  pub use revoke::*;
-@@ -378,7 +378,9 @@ impl LoginAttempt {
+@@ -378,7 +381,9 @@ impl LoginAttempt {
              "This saved-device attempt has no QR"
          );
          let encoded = base64::engine::general_purpose::STANDARD.encode(&self.qr_png);
@@ -759,7 +878,7 @@ index 7d726a1..42361a0 100644
      }
      fn validate(&self) -> Result<()> {
          self.validate_at(wire::unix_time()?)
-@@ -1226,8 +1228,8 @@ impl NativeClient {
+@@ -1226,8 +1231,8 @@ impl NativeClient {
          )
      }
      /// Submit one voice note, as consecutive byte ranges when it exceeds one
@@ -770,7 +889,7 @@ index 7d726a1..42361a0 100644
      pub fn send_voice(
          &self,
          state: &mut AccountState,
-@@ -1236,6 +1238,30 @@ impl NativeClient {
+@@ -1236,6 +1241,30 @@ impl NativeClient {
          created_at: u32,
          duration_ms: u32,
          encoded: &[u8],
@@ -801,7 +920,7 @@ index 7d726a1..42361a0 100644
      ) -> Result<crate::media_send::MediaSendResult> {
          let mut upload = crate::media_send::VoiceUpload::new(
              destination,
-@@ -1244,10 +1270,62 @@ impl NativeClient {
+@@ -1244,10 +1273,62 @@ impl NativeClient {
              duration_ms,
              encoded,
          )?;
@@ -866,7 +985,7 @@ index 7d726a1..42361a0 100644
              if let Some(result) = upload.accept_reply(&reply)? {
                  return Ok(result);
              }
-@@ -1255,6 +1333,149 @@ impl NativeClient {
+@@ -1255,6 +1336,149 @@ impl NativeClient {
      }
  }
  
@@ -1105,10 +1224,10 @@ index 83fbd7b..b6c6aa7 100644
              decode_voice_send(&p::message(&parts).unwrap(), "synthetic_voice_id")
 diff --git a/packages/native-client-rust/crates/wechat-core/src/channels.rs b/packages/native-client-rust/crates/wechat-core/src/channels.rs
 new file mode 100644
-index 0000000..db46b8a
+index 0000000..d9824c1
 --- /dev/null
 +++ b/packages/native-client-rust/crates/wechat-core/src/channels.rs
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,157 @@
 +//! Private media locators from an owned received Channels card. They are not
 +//! public share links and must not be included in ordinary message projections.
 +use crate::quotes::{child, leaf};
@@ -1147,25 +1266,61 @@ index 0000000..db46b8a
 +        return None;
 +    }
 +    let feed = child(app, "finderFeed")?;
-+    let list = child(feed, "mediaList")?;
-+    let media = list.children().find(|n| {
-+        n.is_element() && n.tag_name().name() == "media" && n.tag_name().namespace().is_none()
-+    })?;
-+    let url = field(media, "url")?;
-+    // Validate syntax here; the consumer must also resolve and reject private
-+    // destinations before fetching. No arbitrary card fields become commands.
-+    if wechat_protocol::media::validate_shared_link_url(&url).is_err() {
-+        return None;
-+    }
-+    let decode_key = field(media, "decodeKey")
++    let media = child(feed, "mediaList").and_then(|list| {
++        list.children().find(|n| {
++            n.is_element() && n.tag_name().name() == "media" && n.tag_name().namespace().is_none()
++        })
++    });
++    let url = media
++        .and_then(|n| field(n, "url"))
++        .filter(|url| wechat_protocol::media::validate_shared_link_url(url).is_ok());
++    let decode_key = media
++        .and_then(|n| field(n, "decodeKey"))
 +        .and_then(|s| s.parse::<u64>().ok())
 +        .map(|v| v.to_string());
++    let object_id = field(feed, "objectId");
++    if url.is_none() && object_id.is_none() {
++        return None;
++    }
 +    Some(
-+        json!({"state":"available","mediaUrl":url,"decodeKey":decode_key,"objectId":field(feed,"objectId"),"objectNonceId":field(feed,"objectNonceId"),"title":field(feed,"desc"),"author":field(feed,"nickname"),"duration":field(media,"videoPlayDuration").or_else(||field(media,"videoPlayLen"))}),
++        json!({"state":if url.is_some(){"available"}else{"unavailable"},
++        "reason":if url.is_some(){""}else{"channels_media_locator_missing"},
++        "mediaUrl":url,"decodeKey":decode_key,"objectId":object_id,
++        "objectNonceId":field(feed,"objectNonceId"),"title":field(feed,"desc"),
++        "author":field(feed,"nickname"),
++        "duration":media.and_then(|n|field(n,"videoPlayDuration").or_else(||field(n,"videoPlayLen")))}),
 +    )
 +}
 +
 +impl Core {
++    /// The API holds the account lock; derive the object exclusively from the
++    /// original received card, never a model-supplied object ID.
++    pub fn channels_share_url(&self, account: &str, id: &str) -> Result<Value> {
++        let source = self.channels_media(account, id)?;
++        let reader = self.profile_reader(account)?;
++        let own = self.profile_username(account)?;
++        let message = reader.message(&source_message_id(id)?, own.as_deref())?;
++        anyhow::ensure!(
++            message.outgoing == Some(false),
++            "channels_received_card_required"
++        );
++        let object_id = source["objectId"]
++            .as_str()
++            .and_then(|s| s.parse::<u64>().ok())
++            .filter(|id| *id != 0)
++            .ok_or_else(|| anyhow::anyhow!("channels_object_id_missing"))?;
++        let epoch = self.store.runtime(account, "logout-epoch")?;
++        let native = wechat_protocol::NativeClient::new(Default::default())?;
++        let raw = self.group_read(account, epoch.as_deref(), |state| {
++            native.channels_share_url(state, object_id)
++        })?;
++        let link = wechat_protocol::decode_channels_share(&raw, object_id)?;
++        self.ensure_message_not_recalled(account, id)?;
++        Ok(
++            json!({"accountId":account,"messageId":id,"threadId":source["threadId"],"objectId":object_id.to_string(),"shareUrl":link}),
++        )
++    }
++
 +    /// Requires the API's read AND media scopes. Values remain inside the
 +    /// authenticated transfer path; ordinary message/quote APIs are unchanged.
 +    pub fn channels_media(&self, account: &str, id: &str) -> Result<Value> {
@@ -1215,9 +1370,147 @@ index 0000000..db46b8a
 +    }
 +
 +    #[test]
++    fn missing_embedded_media_still_retains_received_object_for_native_lookup() {
++        let xml = r#"<msg><appmsg><type>51</type><finderFeed><objectId>18446744073709551614</objectId><desc>Short</desc><nickname>Author</nickname></finderFeed></appmsg></msg>"#;
++        let value = locator(xml).unwrap();
++        assert_eq!(value["objectId"], "18446744073709551614");
++        assert_eq!(value["state"], "unavailable");
++        assert!(value["mediaUrl"].is_null());
++    }
++
++    #[test]
 +    fn rejects_other_subtypes_duplicate_fields_and_entities() {
 +        assert!(locator("<!DOCTYPE msg><msg/>").is_none());
 +        assert!(locator("<msg><appmsg><type>57</type></appmsg></msg>").is_none());
 +        assert!(locator("<msg><appmsg><type>51</type><finderFeed><mediaList><media><url>https://example.com/a</url><url>https://example.com/b</url></media></mediaList></finderFeed></appmsg></msg>").is_none());
++    }
++}
+diff --git a/packages/native-client-rust/crates/wechat-protocol/src/channels_share.rs b/packages/native-client-rust/crates/wechat-protocol/src/channels_share.rs
+new file mode 100644
+index 0000000..a86dedd
+--- /dev/null
++++ b/packages/native-client-rust/crates/wechat-protocol/src/channels_share.rs
+@@ -0,0 +1,123 @@
++//! Read-only Finder H5 URL lookup. Contract recovered from Linux 4.1.13.26;
++//! no browser, certificate, proxy or desktop process is involved.
++use super::*;
++
++pub fn channels_share_request(state: &AccountState, object_id: u64) -> Result<Vec<u8>> {
++    ensure!(object_id != 0, "channels_object_id_invalid");
++    state.validate()?;
++    let base = p::message(&[
++        p::bytes(1, &state.session_key),
++        p::uint(2, state.uin as u64),
++        p::bytes(3, &state.device.device_id),
++        p::int32(4, state.device.client_version),
++        p::bytes(5, state.device.device_type.as_bytes()),
++        p::uint(6, 0),
++    ])?;
++    p::message(&[p::bytes(1, &base), p::bytes(2, &[]), p::uint(3, object_id)])
++}
++
++pub fn decode_channels_share(raw: &[u8], object_id: u64) -> Result<String> {
++    ensure!(
++        object_id != 0 && raw.len() <= 65536,
++        "channels_share_response_invalid"
++    );
++    let fields = p::decode(raw)?;
++    ensure!(
++        p::base_code(&fields)? == 0,
++        "channels_share_lookup_rejected"
++    );
++    let items: Vec<_> = fields.iter().filter(|f| f.number == 3).collect();
++    ensure!(items.len() == 1, "channels_share_identity_missing");
++    let p::Value::Bytes(item) = &items[0].value else {
++        bail!("channels_share_response_invalid")
++    };
++    let item = p::decode(item)?;
++    ensure!(
++        p::scalar(&item, 1)? == object_id,
++        "channels_share_identity_mismatch"
++    );
++    let link = std::str::from_utf8(p::data(&item, 2)?)?;
++    if let Some(top) = p::optional_data(&fields, 2)? {
++        ensure!(top == link.as_bytes(), "channels_share_identity_mismatch");
++    }
++    let tail = link
++        .strip_prefix("https://weixin.qq.com/sph/")
++        .ok_or_else(|| anyhow::anyhow!("channels_share_link_invalid"))?;
++    ensure!(
++        (6..=128).contains(&tail.len())
++            && tail
++                .bytes()
++                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
++        "channels_share_link_invalid"
++    );
++    Ok(link.to_owned())
++}
++
++impl NativeClient {
++    pub fn channels_share_url(&self, state: &mut AccountState, id: u64) -> Result<Vec<u8>> {
++        let request = channels_share_request(state, id)?;
++        let raw = self.authenticated_rpc(
++            state,
++            22069,
++            "/cgi-bin/micromsg-bin/findergetfeedh5url",
++            &request,
++        )?;
++        decode_channels_share(&raw, id)?;
++        Ok(raw)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn response(id: u64, url: &str) -> Vec<u8> {
++        p::message(&[
++            p::bytes(1, &p::uint(1, 0)),
++            p::bytes(2, url.as_bytes()),
++            p::bytes(
++                3,
++                &p::message(&[p::uint(1, id), p::bytes(2, url.as_bytes())]).unwrap(),
++            ),
++        ])
++        .unwrap()
++    }
++    #[test]
++    fn channels_share_requires_exact_full_width_identity_and_public_sph() {
++        let id = u64::MAX - 1;
++        let link = "https://weixin.qq.com/sph/Synthetic12";
++        assert_eq!(
++            decode_channels_share(&response(id, link), id).unwrap(),
++            link
++        );
++        assert!(decode_channels_share(&response(id, link), id - 1).is_err());
++        for bad in [
++            "http://weixin.qq.com/sph/Synthetic12",
++            "https://weixin.qq.com.evil.test/sph/Synthetic12",
++            "https://weixin.qq.com/sph/Synthetic12?token=x",
++            "https://weixin.qq.com/sph/../private",
++        ] {
++            assert!(decode_channels_share(&response(id, bad), id).is_err());
++        }
++    }
++    #[test]
++    fn channels_share_rejects_business_errors_duplicates_and_unbound_links() {
++        let link = "https://weixin.qq.com/sph/Synthetic12";
++        let mut raw = response(99, link);
++        raw.extend(p::bytes(
++            3,
++            &p::message(&[p::uint(1, 99), p::bytes(2, link.as_bytes())]).unwrap(),
++        ));
++        assert!(decode_channels_share(&raw, 99).is_err());
++        assert!(decode_channels_share(
++            &p::message(&[p::bytes(1, &p::int32(1, -2)), p::bytes(2, link.as_bytes())]).unwrap(),
++            99
++        )
++        .is_err());
++        assert!(decode_channels_share(
++            &p::message(&[p::bytes(1, &p::uint(1, 0)), p::bytes(2, link.as_bytes())]).unwrap(),
++            99
++        )
++        .is_err());
++        assert!(decode_channels_share(&vec![0; 65537], 99).is_err());
 +    }
 +}

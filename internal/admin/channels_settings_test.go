@@ -94,3 +94,30 @@ func TestChannelsMemoryRetainsActualAudioWithinTurnBudget(t *testing.T) {
 		t.Fatal("one modality lost from memory", len(text))
 	}
 }
+
+func TestNativeChannelsIdentityDoesNotDependOnPreviewTitleLength(t *testing.T) {
+	source := linuxnative.ChannelsSource{ObjectID: "18446744073709551614"}
+	if !matchNativeChannelsVideo(source, channels.ResolvedVideo{}, true) {
+		t.Fatal("verified native identity lost because preview metadata is absent")
+	}
+	if matchNativeChannelsVideo(source, channels.ResolvedVideo{ObjectID: "18446744073709551613"}, true) {
+		t.Fatal("explicit preview identity mismatch accepted")
+	}
+	if matchNativeChannelsVideo(source, channels.ResolvedVideo{}, false) || matchNativeChannelsVideo(linuxnative.ChannelsSource{}, channels.ResolvedVideo{}, true) {
+		t.Fatal("unverified link accepted as native identity")
+	}
+}
+
+func TestChannelsResolverRefusesWrongScopeBeforeAnyLookup(t *testing.T) {
+	f := setup(t)
+	msg := linuxnative.Message{ID: "received-card", ThreadID: "filehelper", Direction: "incoming"}
+	for _, source := range []linuxnative.ChannelsSource{
+		{AccountID: "another", ThreadID: msg.ThreadID, MessageID: msg.ID},
+		{AccountID: "test", ThreadID: "other@chatroom", MessageID: msg.ID},
+		{AccountID: "test", ThreadID: msg.ThreadID, MessageID: "other-card"},
+	} {
+		if _, err := f.manager.resolveReceivedChannels(context.Background(), msg, source); err == nil || err.Error() != "channels_source_scope_mismatch" {
+			t.Fatal("cross-scope source not rejected", err)
+		}
+	}
+}
