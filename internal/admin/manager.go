@@ -36,6 +36,8 @@ type sendingRequest = sending.TextRequest
 type sendingReceipt = sending.Receipt
 
 type LogEntry struct {
+	RetryAttempts     int    `json:"retry_attempts,omitempty"`
+	RetryAt           string `json:"retry_at,omitempty"`
 	ToolCacheHit      bool   `json:"tool_cache_hit,omitempty"`
 	ToolRequests      int    `json:"tool_requests,omitempty"`
 	ToolRetries       int    `json:"tool_retries,omitempty"`

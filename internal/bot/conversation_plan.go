@@ -88,7 +88,7 @@ func (w *Worker) queueUtteranceFrom(c *companion.Engine, in companion.Input, d c
 		p.State = "review_pending"
 	}
 	if in.QuoteServerID != "" && (in.Directed && w.config.Options.QuoteReplies || in.QuoteSharedMessage) {
-		p.Quote = &linuxnative.ToolQuote{MessageID: in.TraceID, ServerID: in.QuoteServerID}
+		p.Quote = replyQuote(in)
 	}
 	p.Trace = in.TraceID
 	w.runtime.Plans = append(w.runtime.Plans, p)
@@ -235,6 +235,10 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 					if err == nil && status.ThreadID == d.Thread {
 						if status.State == "accepted" {
 							d.State = "accepted"
+							if d.SubmittedText != "" {
+								d.Text = d.SubmittedText
+							}
+							w.advanceSendGate(d.Thread)
 							d.ID = status.ID
 							w.persistErr = w.saveRuntime()
 						} else if status.State == "failed" || status.State == "cancelled" {

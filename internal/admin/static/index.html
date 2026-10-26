@@ -125,7 +125,7 @@
 <div><label for="behavior-delay-max-seconds">最长等待（秒）</label><input id="behavior-delay-max-seconds" type="number" min="0" max="180"></div>
 <div><label class="switch-row"><span>重启后逐条回补判断</span><input id="behavior-recover-backlog" type="checkbox"><span class="switch" aria-hidden="true"></span></label><p class="hint">待处理消息保留接收与处理状态；过时或不适合接话可选择安静。</p></div>
 <div><label for="behavior-backlog-hours">回补消息时限（小时）</label><input id="behavior-backlog-hours" type="number" min="1" max="168"></div>
-<div><label class="switch-row"><span>结果不确定时延迟核对并恢复发送</span><input id="behavior-retry-uncertain" type="checkbox"><span class="switch" aria-hidden="true"></span></label><p class="hint">最多补发一次。先检查原生回执与两次同步记录；未查到记录仍可能是同步延迟，因此可能重复。媒体只续发原生允许重试的原任务，保留成功分段；用户取消后不续发。</p></div>
+<div><label class="switch-row"><span>结果不确定时延迟核对并恢复发送</span><input id="behavior-retry-uncertain" type="checkbox"><span class="switch" aria-hidden="true"></span></label><p class="hint">文字结果不确定时持续重试，间隔随机并逐轮加长，最长在1–2小时之间浮动；重启后继续。每轮先检查所有历史回执与两次同步记录，确认已接受就停止。未查到记录仍可能是同步延迟，因此可能重复。媒体只续发原生允许重试的原任务，保留成功分段；用户取消后不续发。</p></div>
 <div><label for="behavior-retry-delay-seconds">核对前等待（秒）</label><input id="behavior-retry-delay-seconds" type="number" min="30" max="3600"></div>
 </div><p class="hint">随机延迟用于控制聊天节奏，不能保证避免微信限制。开启后使用此处秒数；关闭后沿用已有基础等待。</p></details>
 <details class="panel conversation-settings"><summary>连续发言与等待</summary><div class="field-grid">

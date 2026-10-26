@@ -37,6 +37,8 @@ func TestVoiceAndFileSerializeAndPersistRandomGap(t *testing.T) {
 		t.Fatal("restart lost pacing deadline")
 	}
 	second.NotBefore = time.Now().Add(-time.Second)
+	second.Next = time.Time{}
+	w.runtime.SendGates = nil
 	w.reconcileMedia(context.Background())
 	if n.sends != 2 {
 		t.Fatal("file not delivered after gap", n.sends)

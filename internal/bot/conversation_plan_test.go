@@ -50,6 +50,7 @@ func planWorker(t *testing.T, model *planReviewModel) (*Worker, *companion.Engin
 	return w, engine, n, in
 }
 func readyPlans(w *Worker) {
+	w.runtime.SendGates = nil // Advance the simulated pacing clock.
 	for _, p := range w.runtime.Plans {
 		p.InboxChecked = true
 		p.Next = time.Time{}

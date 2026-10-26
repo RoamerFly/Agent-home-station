@@ -12,6 +12,7 @@ import (
 )
 
 type inboxItem struct {
+	OwnerModelReview bool              `json:"owner_model_review,omitempty"`
 	ReceivedRecorded bool              `json:"received_recorded,omitempty"`
 	AggregateUntil   time.Time         `json:"aggregate_until,omitempty"`
 	ToolStarted      bool              `json:"tool_started,omitempty"`
@@ -20,16 +21,29 @@ type inboxItem struct {
 	Updated          time.Time         `json:"updated"`
 	RetryAfter       time.Time         `json:"retry_after,omitempty"`
 }
+
+func (w *Worker) ownerModelReview(id string) bool {
+	if w.runtime != nil {
+		for _, item := range w.runtime.Inbox {
+			if item.Event.Data.MessageID == id {
+				return item.OwnerModelReview
+			}
+		}
+	}
+	return false
+}
+
 type runtimeState struct {
-	Wakes        []*conversationWake `json:"conversation_wakes,omitempty"`
-	Plans        []*utterancePlan    `json:"utterance_plans,omitempty"`
-	Version      int                 `json:"version"`
-	Server       string              `json:"server"`
-	Account      string              `json:"account"`
-	Inbox        []inboxItem         `json:"inbox"`
-	Deliveries   []*delivery         `json:"deliveries"`
-	Media        []*mediaDelivery    `json:"media,omitempty"`
-	MediaReplies []*mediaReply       `json:"media_replies,omitempty"`
+	SendGates    map[string]time.Time `json:"send_gates,omitempty"`
+	Wakes        []*conversationWake  `json:"conversation_wakes,omitempty"`
+	Plans        []*utterancePlan     `json:"utterance_plans,omitempty"`
+	Version      int                  `json:"version"`
+	Server       string               `json:"server"`
+	Account      string               `json:"account"`
+	Inbox        []inboxItem          `json:"inbox"`
+	Deliveries   []*delivery          `json:"deliveries"`
+	Media        []*mediaDelivery     `json:"media,omitempty"`
+	MediaReplies []*mediaReply        `json:"media_replies,omitempty"`
 }
 
 func atomicState(path string, value any) error {
@@ -105,6 +119,12 @@ func (w *Worker) loadRuntime(server string) error {
 		return errors.New("persistent queue exceeds bound")
 	}
 	w.runtime = &s
+	for _, d := range s.Deliveries {
+		if d == nil {
+			return errors.New("persistent delivery invalid")
+		}
+		d.Input.TraceID = d.Trace
+	}
 	if len(s.Wakes) > 200 {
 		return errors.New("conversation wakes exceed bound")
 	}

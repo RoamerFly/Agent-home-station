@@ -209,6 +209,13 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if message.ThreadID != event.Data.ThreadID || message.Direction != event.Data.Direction {
 		return
 	}
+	// Historical reviews are processed in order. A later recovered message
+	// must not interrupt a previous review before it has had a model decision
+	// and completed its already queued delivery.
+	if w.ownerModelReview(message.ID) && w.pendingConversationThread(message.ThreadID) {
+		w.queuePhase(message.ID, "received")
+		return
+	}
 	if character, ok := w.model.(*companion.Engine); ok && character.Config.Enabled && w.allowed[message.ThreadID] {
 		stamp := time.Now()
 		if parsed, err := time.Parse(time.RFC3339, message.CreatedAt); err == nil && !parsed.After(stamp) {
@@ -266,7 +273,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if w.generation != nil && w.deferBusyGeneration(ctx, working) {
 		return
 	}
-	reviewQuestion := w.config.GroupRules[message.ThreadID].Mode == "social" && companion.NeedsQuestionReview(prompt)
+	reviewQuestion := w.ownerModelReview(message.ID) || w.config.GroupRules[message.ThreadID].Mode == "social" && companion.NeedsQuestionReview(prompt)
 	if since := time.Since(w.last[message.ThreadID]); since < w.config.Cooldown && !w.recovering && !w.addressed(message) && !reviewQuestion {
 		w.config.Log("message_skipped_cooldown")
 		w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "cooldown", Status: "skipped"})

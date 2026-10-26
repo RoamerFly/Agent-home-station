@@ -76,6 +76,8 @@ func (m *Manager) record(r bot.Record) {
 	entry.ModelMaxAttempts = r.ModelMaxAttempts
 	entry.ModelStage = logText(r.ModelStage, 64)
 	entry.ModelRetryDelayMS = r.ModelRetryDelayMS
+	entry.RetryAttempts = r.RetryAttempts
+	entry.RetryAt = r.RetryAt
 	entry.Source = r.ThreadID
 	if r.ThreadID == "" {
 		entry.SourceKind = "system"

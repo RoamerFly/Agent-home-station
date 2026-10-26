@@ -206,9 +206,16 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		} else {
 			status, err = n.LookupSend(checkCtx, d.Key)
 			if errors.Is(err, linuxnative.ErrToolNotFound) {
+				if gate := w.sendGate(d.Input.Thread); time.Now().Before(gate) {
+					d.Next = gate
+					cancel()
+					w.persistErr = w.saveRuntime()
+					continue
+				}
 				// Persist before sending; a lost HTTP response is recovered using this
 				// same idempotency key, never by creating a different send request.
 				d.State = "submitting"
+				w.advanceSendGate(d.Input.Thread)
 				w.persistErr = w.saveRuntime()
 				if w.persistErr == nil {
 					status, err = n.Submit(checkCtx, linuxnative.ToolSend{URL: d.URL, Title: d.Title, Description: d.Description, ThreadID: d.Input.Thread, Kind: d.Kind, SourceID: d.SourceID, IdempotencyKey: d.Key})
@@ -244,6 +251,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			d.State = "accepted"
 			if d.CompletedAt.IsZero() {
 				d.CompletedAt = time.Now().UTC()
+				w.advanceSendGate(d.Input.Thread)
 			}
 			d.Reason = "media_server_accepted"
 			w.mediaRecord(d, "message_sent", "sent")

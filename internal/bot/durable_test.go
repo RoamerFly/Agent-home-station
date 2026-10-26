@@ -67,7 +67,7 @@ func TestShareReplyQuotesOriginalWithoutFabricatingMention(t *testing.T) {
 		t.Fatal("card reply lost its reference or fabricated an @", n.submissions)
 	}
 }
-func TestUnknownResendRequiresTwoHealthyChecksAndStopsAfterOne(t *testing.T) {
+func TestUnknownResendRequiresTwoHealthyChecksAndContinuesAfterRestart(t *testing.T) {
 	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
 	w := durableWorker(t, n)
 	input := companion.Input{Thread: "filehelper", TraceID: "incoming", Directed: true, QuoteServerID: "77", Mode: "direct"}
@@ -78,12 +78,14 @@ func TestUnknownResendRequiresTwoHealthyChecksAndStopsAfterOne(t *testing.T) {
 	d := w.runtime.Deliveries[0]
 	n.scanErr = errors.New("sync unavailable")
 	d.Next = time.Time{}
+	w.runtime.SendGates = nil
 	w.reconcileDeliveries(context.Background())
 	if d.Checks != 0 || len(n.submissions) != 1 {
 		t.Fatal("unavailable sync interpreted as absence")
 	}
 	n.scanErr = nil
 	d.Next = time.Time{}
+	w.runtime.SendGates = nil
 	w.reconcileDeliveries(context.Background())
 	if d.Checks != 1 || len(n.submissions) != 1 {
 		t.Fatal("retry before two checks")
@@ -96,14 +98,37 @@ func TestUnknownResendRequiresTwoHealthyChecksAndStopsAfterOne(t *testing.T) {
 	}
 	d = w2.runtime.Deliveries[0]
 	d.Next = time.Time{}
+	w.runtime.SendGates = nil
+	w2.runtime.SendGates = nil
 	w2.reconcileDeliveries(context.Background())
 	if len(n.submissions) != 2 || d.Attempts != 1 {
 		t.Fatal("one retry missing", len(n.submissions), d)
 	}
 	d.Next = time.Time{}
+	w.runtime.SendGates = nil
+	w2.runtime.SendGates = nil
 	w2.reconcileDeliveries(context.Background())
-	if len(n.submissions) != 2 || d.State != "stopped" {
-		t.Fatal("retry repeated after maximum")
+	if len(n.submissions) != 2 || d.State == "stopped" || d.Checks != 1 {
+		t.Fatal("unknown retry was stopped or sent without checks")
+	}
+	d.Next = time.Time{}
+	w.runtime.SendGates = nil
+	w2.runtime.SendGates = nil
+	w2.reconcileDeliveries(context.Background())
+	if len(n.submissions) != 3 || d.Attempts != 2 || len(d.PreviousKeys) != 2 || d.UncertainRounds != 3 {
+		t.Fatal("persistent repeated retry missing", d)
+	}
+	first := n.submissions[0].IdempotencyKey
+	late := n.intents[first]
+	late.State = "accepted"
+	late.ServerID = "late-receipt"
+	n.intents[first] = late
+	d.Next = time.Time{}
+	w.runtime.SendGates = nil
+	w2.runtime.SendGates = nil
+	w2.reconcileDeliveries(context.Background())
+	if d.State != "accepted" || len(n.submissions) != 3 {
+		t.Fatal("late receipt on the original attempt was ignored")
 	}
 }
 func TestSyncedOutgoingSuppressesUnknownRetry(t *testing.T) {
@@ -113,6 +138,7 @@ func TestSyncedOutgoingSuppressesUnknownRetry(t *testing.T) {
 	n.rows = []map[string]any{{"direction": "outgoing", "body": "已经送达", "serverId": "999", "createdAt": time.Now().Format(time.RFC3339)}}
 	d := w.runtime.Deliveries[0]
 	d.Next = time.Time{}
+	w.runtime.SendGates = nil
 	w.reconcileDeliveries(context.Background())
 	if d.State != "accepted" || len(n.submissions) != 1 {
 		t.Fatal("synced send was resent")
@@ -129,6 +155,7 @@ func TestPendingNativeSubmissionIsNeverResentWhileRunning(t *testing.T) {
 	n.intents[d.Key] = s
 	for i := 0; i < 3; i++ {
 		d.Next = time.Time{}
+		w.runtime.SendGates = nil
 		w.reconcileDeliveries(context.Background())
 	}
 	if d.Checks != 0 || len(n.submissions) != 1 || d.Attempts != 0 {
@@ -222,5 +249,88 @@ func TestInterruptedModelWorkRemainsRecoverable(t *testing.T) {
 	}
 	if w.runtime.Inbox[0].Phase != "replied" {
 		t.Fatal("interrupted request did not recover")
+	}
+}
+
+func TestBackgroundCaptionQuotesOriginalMessage(t *testing.T) {
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
+	w := durableWorker(t, n)
+	_, _ = w.sendText(context.Background(), companion.Input{Thread: "filehelper", TraceID: "music-task-123", OriginTraceID: "native-incoming", QuoteServerID: "77", Directed: true}, 0, "生日歌补上")
+	if n.submissions[0].Quote.MessageID != "native-incoming" {
+		t.Fatal("synthetic task used as quote")
+	}
+}
+func TestUncertainBackoffIsRandomAndGrowsUntilCeiling(t *testing.T) {
+	distinct := map[time.Duration]bool{}
+	for i := 0; i < 50; i++ {
+		a, b, c := deliveryBackoff(120, 1), deliveryBackoff(120, 2), deliveryBackoff(120, 999)
+		if a < 120*time.Second || a > 240*time.Second || b < 240*time.Second || b > 480*time.Second || c < time.Hour || c > 2*time.Hour {
+			t.Fatal(a, b, c)
+		}
+		distinct[a] = true
+	}
+	if len(distinct) < 2 {
+		t.Fatal("backoff was fixed")
+	}
+}
+func TestUncertainDeliveryDoesNotExpireAt24HoursAndHonorsDisable(t *testing.T) {
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
+	w := durableWorker(t, n)
+	_, _ = w.sendText(context.Background(), companion.Input{Thread: "filehelper", TraceID: "older"}, 0, "持续补发")
+	d := w.runtime.Deliveries[0]
+	d.Created = time.Now().Add(-48 * time.Hour)
+	w.config.Options.RetryUncertain = false
+	d.Next = time.Time{}
+	w.runtime.SendGates = nil
+	w.reconcileDeliveries(context.Background())
+	if d.State == "stopped" || len(n.submissions) != 1 {
+		t.Fatal("disabled should pause, not discard or send")
+	}
+	w.config.Options.RetryUncertain = true
+	for i := 0; i < 2; i++ {
+		d.Next = time.Time{}
+		w.runtime.SendGates = nil
+		w.reconcileDeliveries(context.Background())
+	}
+	if len(n.submissions) != 2 {
+		t.Fatal("old unknown expired", d)
+	}
+}
+
+type ownerReviewModel struct{ calls int }
+
+func (m *ownerReviewModel) Chat(context.Context, string, []map[string]string) (string, error) {
+	m.calls++
+	return `{"action":"silent","messages":[]}`, nil
+}
+func TestOwnerReviewActuallyCallsModelForOrdinaryChatWithoutForcingReply(t *testing.T) {
+	c := companion.Defaults()
+	c.Enabled = true
+	c.QuietStart = "00:00"
+	c.QuietEnd = "00:00"
+	c.Permissions.ObserveGroups = true
+	c.Permissions.AutonomousGroups = true
+	store, _ := companion.NewStore(t.TempDir())
+	model := &ownerReviewModel{}
+	engine, e := companion.New(c, store, model, "test")
+	if e != nil {
+		t.Fatal(e)
+	}
+	source := &fakeSource{messages: map[string]linuxnative.Message{}}
+	sender := &fakeSender{}
+	w, e := New(Config{StateDir: t.TempDir(), AllowedThreads: []string{"room@chatroom"}, GroupRules: map[string]GroupRule{"room@chatroom": {Mode: "social"}}}, source, engine, sender)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_ = w.loadRuntime("server-1")
+	for _, id := range []string{"first", "second"} {
+		m := fixtureMessage(id, "room@chatroom", "大家生日快乐", "incoming")
+		source.messages[id] = m
+		ev := fixtureEvent(id, id, "room@chatroom", "incoming", "remote_sync")
+		w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{OwnerModelReview: true, Event: ev, Phase: "received"})
+		w.handle(context.Background(), ev)
+	}
+	if model.calls != 2 || sender.calls != 0 {
+		t.Fatal("review skipped model or forced a reply", model.calls, sender.calls)
 	}
 }

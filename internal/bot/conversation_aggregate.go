@@ -11,6 +11,11 @@ import (
 
 func (w *Worker) aggregateConversation(ctx context.Context, c *companion.Engine, current linuxnative.Message, input *companion.Input) {
 	settings := c.Config.ConversationConfig()
+	// Owner-requested historical reviews must each receive an actual model
+	// decision. Do not fold another review into this one or force a reply.
+	if w.ownerModelReview(current.ID) {
+		return
+	}
 	if current.SenderID == "" && strings.HasSuffix(current.ThreadID, "@chatroom") {
 		return
 	}
@@ -24,7 +29,7 @@ func (w *Worker) aggregateConversation(ctx context.Context, c *companion.Engine,
 	events := []companion.ConversationEvent{}
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
-		if item.Phase != "received" || item.Event.Data.ThreadID != current.ThreadID || item.Event.Data.MessageID == current.ID || item.Event.Data.Direction != current.Direction {
+		if item.OwnerModelReview || item.Phase != "received" || item.Event.Data.ThreadID != current.ThreadID || item.Event.Data.MessageID == current.ID || item.Event.Data.Direction != current.Direction {
 			continue
 		}
 		readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)

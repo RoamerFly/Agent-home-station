@@ -61,6 +61,7 @@ func TestAcknowledgedToolTaskAlwaysReportsItsTerminalOutcome(t *testing.T) {
 	for _, p := range w.runtime.Plans {
 		p.InboxChecked = true
 	}
+	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
 	if len(native.submissions) != 2 || !strings.Contains(native.submissions[1].Text, "先停下") || w.runtime.Inbox[0].Phase != "replied" {
 		t.Fatal("verified acknowledgement was left without a final outcome", native.submissions, w.runtime.Inbox)
@@ -117,6 +118,7 @@ func TestProgressHasOwnDurableReceiptAndDoesNotCompleteTask(t *testing.T) {
 			for _, p := range w.runtime.Plans {
 				p.InboxChecked = true
 			}
+			readyPlans(w)
 			w.reconcileUtterancePlans(context.Background())
 			want := 1
 			if ack {

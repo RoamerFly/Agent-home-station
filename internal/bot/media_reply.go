@@ -47,7 +47,7 @@ func (w *Worker) deferMediaReply(in companion.Input, messages []string, expected
 	}
 	r := &mediaReply{Trace: in.TraceID, Input: in, Messages: append([]string(nil), messages...), Expected: expected, State: "waiting_delivery", Created: time.Now().UTC()}
 	if in.QuoteServerID != "" && in.TraceID != "" && (in.QuoteSharedMessage || in.Directed && w.config.Options.QuoteReplies) {
-		r.Quote = &linuxnative.ToolQuote{MessageID: in.TraceID, ServerID: in.QuoteServerID}
+		r.Quote = replyQuote(in)
 	}
 	w.runtime.MediaReplies = append(w.runtime.MediaReplies, r)
 	w.persistErr = w.saveRuntime()

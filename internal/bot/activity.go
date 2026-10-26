@@ -11,6 +11,8 @@ import (
 // Record is the locally retained activity requested by the account owner.
 // It never contains model reasoning, credentials, or native session material.
 type Record struct {
+	RetryAttempts                                                                         int
+	RetryAt                                                                               string
 	ToolCacheHit                                                                          bool
 	ToolRequests, ToolRetries, ToolHTTPStatus                                             int
 	ToolCode, ToolStage                                                                   string
