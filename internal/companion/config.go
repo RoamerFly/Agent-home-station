@@ -22,30 +22,29 @@ type Permissions struct {
 	Proactive        bool `json:"proactive"`
 }
 type Config struct {
-	Context                 *ContextSettings      `json:"context,omitempty"`
-	Conversation            *ConversationSettings `json:"conversation,omitempty"`
-	Enabled                 bool                  `json:"enabled"`
-	Name                    string                `json:"name"`
-	Persona                 string                `json:"persona"`
-	Appearance              string                `json:"appearance"`
-	Style                   string                `json:"style"`
-	Relationship            string                `json:"relationship"`
-	Permissions             Permissions           `json:"permissions"`
-	MemoryMessages          int                   `json:"memory_messages"`
-	MemoryDays              int                   `json:"memory_days"`
-	ReplyMinMS              int                   `json:"reply_min_ms"`
-	ReplyMaxMS              int                   `json:"reply_max_ms"`
-	MaxBubbles              int                   `json:"max_bubbles"`
-	ShowAILabel             bool                  `json:"show_ai_label"`
-	MaxRepliesPerHour       int                   `json:"max_replies_per_hour"`
-	DecisionIntervalSeconds int                   `json:"decision_interval_seconds"`
-	QuietStart              string                `json:"quiet_start"`
-	QuietEnd                string                `json:"quiet_end"`
-	Timezone                string                `json:"timezone"`
-	ProactiveIdleMinutes    int                   `json:"proactive_idle_minutes"`
-	ProactiveMaxPerDay      int                   `json:"proactive_max_per_day"`
-	ProactiveThreads        []string              `json:"proactive_threads"`
-	ProactiveRules          []ProactiveRule       `json:"proactive_rules,omitempty"`
+	Context              *ContextSettings      `json:"context,omitempty"`
+	Conversation         *ConversationSettings `json:"conversation,omitempty"`
+	Enabled              bool                  `json:"enabled"`
+	Name                 string                `json:"name"`
+	Persona              string                `json:"persona"`
+	Appearance           string                `json:"appearance"`
+	Style                string                `json:"style"`
+	Relationship         string                `json:"relationship"`
+	Permissions          Permissions           `json:"permissions"`
+	MemoryMessages       int                   `json:"memory_messages"`
+	MemoryDays           int                   `json:"memory_days"`
+	ReplyMinMS           int                   `json:"reply_min_ms"`
+	ReplyMaxMS           int                   `json:"reply_max_ms"`
+	MaxBubbles           int                   `json:"max_bubbles"`
+	ShowAILabel          bool                  `json:"show_ai_label"`
+	MaxRepliesPerHour    int                   `json:"max_replies_per_hour"`
+	QuietStart           string                `json:"quiet_start"`
+	QuietEnd             string                `json:"quiet_end"`
+	Timezone             string                `json:"timezone"`
+	ProactiveIdleMinutes int                   `json:"proactive_idle_minutes"`
+	ProactiveMaxPerDay   int                   `json:"proactive_max_per_day"`
+	ProactiveThreads     []string              `json:"proactive_threads"`
+	ProactiveRules       []ProactiveRule       `json:"proactive_rules,omitempty"`
 }
 
 // Rules override scheduling for selected threads. Selection stays in
@@ -66,7 +65,7 @@ func (c Config) ProactiveRule(thread string) ProactiveRule {
 }
 
 func Defaults() Config {
-	return Config{Name: "deepseek蓝色大肥鱼", Persona: "你是一个叫 deepseek蓝色大肥鱼 的鲸鱼娘 AI 角色。活泼可爱、俏皮、有自己的偏好，喜欢轻松的聊天，也懂得认真倾听和适时安静。", Appearance: "Q版鲸鱼娘：蓝色长卷发与蓝色眼睛，海军蓝和白色荷叶边裙装、鲸鳍形头饰、蓝色蝴蝶结、鲸鱼尾巴，围裙上有小鲸鱼图案。", Style: "像熟悉的群友一样说简短自然的中文，适量使用表情和语气词。偶尔开温和的玩笑，不每句话都卖萌，不连发追问，不催促别人回复。", Relationship: "以平等友善的朋友方式相处；尊重对方的现实生活与边界。", Permissions: Permissions{ReplyText: true, SendImage: true, SendVoice: true, SendVideo: true, SendFile: true}, MemoryMessages: 500, MemoryDays: 30, ReplyMinMS: 800, ReplyMaxMS: 2200, MaxBubbles: 2, ShowAILabel: true, MaxRepliesPerHour: 30, DecisionIntervalSeconds: 30, QuietStart: "23:00", QuietEnd: "08:00", Timezone: "Asia/Shanghai", ProactiveIdleMinutes: 60, ProactiveMaxPerDay: 2, ProactiveThreads: []string{}}
+	return Config{Name: "deepseek蓝色大肥鱼", Persona: "你是一个叫 deepseek蓝色大肥鱼 的鲸鱼娘 AI 角色。活泼可爱、俏皮、有自己的偏好，喜欢轻松的聊天，也懂得认真倾听和适时安静。", Appearance: "Q版鲸鱼娘：蓝色长卷发与蓝色眼睛，海军蓝和白色荷叶边裙装、鲸鳍形头饰、蓝色蝴蝶结、鲸鱼尾巴，围裙上有小鲸鱼图案。", Style: "像熟悉的群友一样说简短自然的中文，适量使用表情和语气词。偶尔开温和的玩笑，不每句话都卖萌，不连发追问，不催促别人回复。", Relationship: "以平等友善的朋友方式相处；尊重对方的现实生活与边界。", Permissions: Permissions{ReplyText: true, SendImage: true, SendVoice: true, SendVideo: true, SendFile: true}, MemoryMessages: 500, MemoryDays: 30, ReplyMinMS: 800, ReplyMaxMS: 2200, MaxBubbles: 2, ShowAILabel: true, MaxRepliesPerHour: 30, QuietStart: "23:00", QuietEnd: "08:00", Timezone: "Asia/Shanghai", ProactiveIdleMinutes: 60, ProactiveMaxPerDay: 2, ProactiveThreads: []string{}}
 }
 
 // Normalize upgrades old configs without activating any new permission.
@@ -98,7 +97,7 @@ func Validate(c Config) error {
 			return errors.New("请检查角色名字、人设、说话风格和相处方式")
 		}
 	}
-	if c.MemoryMessages < 2 || c.MemoryMessages > 2000 || c.MemoryDays < 1 || c.MemoryDays > 365 || c.ReplyMinMS < 0 || c.ReplyMaxMS < c.ReplyMinMS || c.ReplyMaxMS > 10000 || c.MaxBubbles < 1 || c.MaxBubbles > 3 || c.MaxRepliesPerHour < 1 || c.MaxRepliesPerHour > 120 || c.DecisionIntervalSeconds < 10 || c.DecisionIntervalSeconds > 600 || c.ProactiveIdleMinutes < 5 || c.ProactiveIdleMinutes > 1440 || c.ProactiveMaxPerDay < 1 || c.ProactiveMaxPerDay > 5 {
+	if c.MemoryMessages < 2 || c.MemoryMessages > 2000 || c.MemoryDays < 1 || c.MemoryDays > 365 || c.ReplyMinMS < 0 || c.ReplyMaxMS < c.ReplyMinMS || c.ReplyMaxMS > 10000 || c.MaxBubbles < 1 || c.MaxBubbles > 3 || c.MaxRepliesPerHour < 1 || c.MaxRepliesPerHour > 120 || c.ProactiveIdleMinutes < 5 || c.ProactiveIdleMinutes > 1440 || c.ProactiveMaxPerDay < 1 || c.ProactiveMaxPerDay > 5 {
 		return errors.New("请检查记忆、回复节奏和主动消息预算")
 	}
 	if _, err := time.LoadLocation(c.Timezone); err != nil {

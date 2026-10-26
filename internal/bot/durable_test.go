@@ -334,3 +334,35 @@ func TestOwnerReviewActuallyCallsModelForOrdinaryChatWithoutForcingReply(t *test
 		t.Fatal("review skipped model or forced a reply", model.calls, sender.calls)
 	}
 }
+
+func TestConsecutiveOrdinaryMessagesCallModelWithoutAnyCooldown(t *testing.T) {
+	c := companion.Defaults()
+	c.Enabled = true
+	c.QuietStart = "00:00"
+	c.QuietEnd = "00:00"
+	c.Permissions.ObserveGroups = true
+	c.Permissions.AutonomousGroups = true
+	store, _ := companion.NewStore(t.TempDir())
+	model := &ownerReviewModel{}
+	engine, e := companion.New(c, store, model, "test")
+	if e != nil {
+		t.Fatal(e)
+	}
+	source := &fakeSource{messages: map[string]linuxnative.Message{}}
+	sender := &fakeSender{}
+	w, e := New(Config{StateDir: t.TempDir(), AllowedThreads: []string{"room@chatroom"}, GroupRules: map[string]GroupRule{"room@chatroom": {Mode: "social"}}}, source, engine, sender)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_ = w.loadRuntime("server-1")
+	for _, id := range []string{"first", "second"} {
+		m := fixtureMessage(id, "room@chatroom", "大家生日快乐", "incoming")
+		source.messages[id] = m
+		ev := fixtureEvent(id, id, "room@chatroom", "incoming", "remote_sync")
+		w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Event: ev, Phase: "received"})
+		w.handle(context.Background(), ev)
+	}
+	if model.calls != 2 || sender.calls != 0 {
+		t.Fatal("review skipped model or forced a reply", model.calls, sender.calls)
+	}
+}

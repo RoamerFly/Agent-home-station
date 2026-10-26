@@ -426,7 +426,7 @@ func (m *Manager) start(c Config) {
 		for _, r := range c.GroupRules {
 			rules[r.ID] = bot.GroupRule{Mode: r.Mode, Prefix: r.Prefix, Persona: r.Persona, ForceReplyWhenMentioned: r.ForceReplyWhenMentioned}
 		}
-		worker, err := bot.New(bot.Config{AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, Cooldown: time.Duration(c.CooldownSeconds) * time.Second, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
+		worker, err := bot.New(bot.Config{AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
 		if err != nil {
 			m.setState("error")
 			m.log("bot_configuration_error")

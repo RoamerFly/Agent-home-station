@@ -229,7 +229,7 @@ func TestValidationRejectsBrokenOrUnsafeSettingsWithoutOverwriting(t *testing.T)
 		func(c *Config) { c.BaseURL = "http://api.deepseek.com" },
 		func(c *Config) { c.BaseURL = "https://user:key@example.com" },
 		func(c *Config) { c.GroupRules = []GroupRule{{ID: "not-a-room", Mode: "all"}} },
-		func(c *Config) { c.CooldownSeconds = 0 },
+		func(c *Config) { c.MaxAgeSeconds = 0 },
 		func(c *Config) { c.Enabled = true },
 	} {
 		c := defaults()
