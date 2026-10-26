@@ -28,7 +28,8 @@ def run(request_path):
             (directory / "running.json").write_text(json.dumps({"pid": process.pid, "helper_pid": os.getpid(), "started": time.time()}), encoding="utf8")
             while process.poll() is None:
                 if (directory / "cancel").exists():
-                    subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags, timeout=5)
+                    taskkill = str(Path(os.environ["SystemRoot"]) / "System32/taskkill.exe")
+                    subprocess.run([taskkill, "/PID", str(process.pid), "/T", "/F"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags, timeout=5)
                     process.wait(timeout=5)
                     result["cancelled"] = True
                     break

@@ -41,10 +41,16 @@ func WindowsLocalPath(path string) (string, error) {
 		}
 	}
 	if len(path) >= 3 && path[1] == ':' && (path[2] == '\\' || path[2] == '/') && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) {
-		return filepath.Clean("/mnt/" + strings.ToLower(path[:1]) + "/" + strings.ReplaceAll(path[3:], `\`, "/")), nil
+		relative := filepath.Clean("/" + strings.ReplaceAll(path[3:], `\`, "/"))
+		return filepath.Join("/mnt/"+strings.ToLower(path[:1]), strings.TrimPrefix(relative, "/")), nil
 	}
 	if strings.HasPrefix(path, "/mnt/") && len(path) >= 6 && ((path[5] >= 'a' && path[5] <= 'z') || (path[5] >= 'A' && path[5] <= 'Z')) && (len(path) == 6 || path[6] == '/') {
-		return filepath.Clean(path), nil
+		clean := filepath.Clean(path)
+		base := path[:6]
+		if clean != base && !strings.HasPrefix(clean, base+"/") {
+			return "", errors.New("映射路径不能越过当前Windows盘符根目录")
+		}
+		return clean, nil
 	}
 	return "", errors.New("Windows工作目录应为C:\\或E:\\等盘符绝对路径，或对应/mnt/c、/mnt/e路径")
 }
