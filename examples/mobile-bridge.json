@@ -1,0 +1,12 @@
+{
+  "adb": "/opt/android-sdk/platform-tools/adb",
+  "devices": {
+    "lab": {
+      "name": "隔离测试安卓",
+      "serial": "emulator-5554",
+      "enabled": false,
+      "packages": ["com.android.settings"],
+      "actions": ["observe"]
+    }
+  }
+}
