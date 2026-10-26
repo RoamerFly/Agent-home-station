@@ -49,7 +49,7 @@ func (c *Client) ChatFunctions(ctx context.Context, system string, turns []map[s
 	for _, t := range tools {
 		catalog = append(catalog, map[string]any{"type": "function", "function": map[string]any{"name": t.Name, "description": t.Description, "parameters": t.InputSchema}})
 	}
-	body := map[string]any{"model": c.model, "messages": messages, "stream": false, "max_tokens": c.maxTokens}
+	body := map[string]any{"model": c.model, "messages": messages, "stream": false, "max_tokens": c.toolMaxTokens}
 	if len(catalog) > 0 {
 		body["tools"] = catalog
 		body["tool_choice"] = "auto"

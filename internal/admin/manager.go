@@ -383,7 +383,11 @@ func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {
 	if err := writePrivate(keyFile, []byte(c.APIKey)); err != nil {
 		return nil, err
 	}
-	return deepseek.New(deepseek.Config{BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
+	toolTokens := c.MaxTokens
+	if c.Companion.Enabled && m.agent != nil && m.agent.config().Enabled {
+		toolTokens = 4096
+	}
+	return deepseek.New(deepseek.Config{BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: toolTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
 		if m.billing != nil {
 			if err := m.billing.record(c, u); err != nil {
 				m.log("usage_record_save_failed")

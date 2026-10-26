@@ -23,6 +23,7 @@ type Config struct {
 	BaseURL, KeyFile, Model string
 	SystemPrompt            string
 	MaxTokens               int
+	ToolMaxTokens           int
 	Compatible              bool
 	OnUsage                 func(Usage)
 }
@@ -30,6 +31,7 @@ type Client struct {
 	endpoint, key, model string
 	systemPrompt         string
 	maxTokens            int
+	toolMaxTokens        int
 	compatible           bool
 	http                 *http.Client
 	onUsage              func(Usage)
@@ -47,6 +49,12 @@ func New(config Config) (*Client, error) {
 	}
 	if config.MaxTokens == 0 {
 		config.MaxTokens = 768
+	}
+	if config.ToolMaxTokens == 0 {
+		config.ToolMaxTokens = config.MaxTokens
+	}
+	if config.ToolMaxTokens < 64 || config.ToolMaxTokens > 4096 {
+		return nil, errors.New("invalid tool output limit")
 	}
 	if len(config.SystemPrompt) > 16384 || !utf8.ValidString(config.SystemPrompt) || config.MaxTokens < 64 || config.MaxTokens > 4096 {
 		return nil, errors.New("invalid model role or output limit")
@@ -69,7 +77,7 @@ func New(config Config) (*Client, error) {
 		return nil, errors.New("invalid DeepSeek key file")
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/chat/completions"
-	return &Client{endpoint: u.String(), key: key, model: config.Model, systemPrompt: config.SystemPrompt, maxTokens: config.MaxTokens, compatible: config.Compatible, onUsage: config.OnUsage, http: &http.Client{
+	return &Client{endpoint: u.String(), key: key, model: config.Model, systemPrompt: config.SystemPrompt, maxTokens: config.MaxTokens, toolMaxTokens: config.ToolMaxTokens, compatible: config.Compatible, onUsage: config.OnUsage, http: &http.Client{
 		Timeout:       90 * time.Second,
 		Transport:     &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 8, MaxIdleConnsPerHost: 2},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") },

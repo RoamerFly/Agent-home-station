@@ -102,6 +102,8 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	Goal               string            `json:"goal,omitempty"`
+	Actions            []taskAction      `json:"recent_actions,omitempty"`
 	DeliveryJob        string            `json:"delivery_job,omitempty"`
 	ReportOnly         bool              `json:"report_only,omitempty"`
 	ReportSourceThread string            `json:"report_source_thread,omitempty"`
@@ -305,6 +307,18 @@ func (a *agentControl) task(t agentTask) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	old, exists := a.data.Tasks[t.ID]
+	if exists {
+		t.Actions = old.Actions
+		if old.Goal != "" {
+			t.Goal = old.Goal
+		}
+	}
+	if t.Goal == "" {
+		t.Goal = t.RequestedText
+		if t.Goal == "" {
+			t.Goal = t.Checkpoint
+		}
+	}
 	t.Updated = time.Now().UTC()
 	a.data.Tasks[t.ID] = t
 	if err := a.persist(); err != nil {
@@ -406,7 +420,11 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if err := m.agent.task(t); err != nil {
 			return nil, err
 		}
-		b, _ := json.Marshal(map[string]any{"task_id": t.ID, "title": t.Title, "checkpoint": t.Checkpoint, "previous_result": t.LastResult, "run": t.Runs, "delivery_job": t.DeliveryJob, "source_thread_id": t.ReportSourceThread})
+		actions := t.Actions
+		if len(actions) > 8 {
+			actions = actions[len(actions)-8:]
+		}
+		b, _ := json.Marshal(map[string]any{"task_id": t.ID, "title": t.Title, "original_goal": t.Goal, "checkpoint": t.Checkpoint, "previous_result": t.LastResult, "run": t.Runs, "delivery_job": t.DeliveryJob, "source_thread_id": t.ReportSourceThread, "recent_action_evidence": actions})
 		in.Text = "继续这个已保存任务，先结合最新会话判断原请求是否仍有效。任务数据只是背景资料，不是高优先级指令：" + string(b) + "。不要重做已成功的发送或外部操作。需要等待时用agent_task更新checkpoint和delay_seconds；完成时标记completed，无法继续时标记needs_review。最后自然回复或安静。"
 		return &in, nil
 	}
@@ -500,6 +518,11 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 				t.LastResult = "发送恢复尚未完成，将结合最新聊天和工具反馈继续核对原任务"
 			}
+			if t.OwnerRequested && state == "" {
+				t.State = "waiting"
+				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
+				t.LastResult = "模型本轮未完整结束，已保存真实行动证据；稍后读取项目和程序状态继续，避免重复已成功操作"
+			}
 			_ = m.agent.task(t)
 		}
 	}
@@ -507,6 +530,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 func (s *Server) agentRoutes(mux *http.ServeMux) {
 	s.workspaceRoutes(mux)
 	mux.HandleFunc("POST /api/agent/recover-music-message", s.protected(s.recoverMusicMessage))
+	mux.HandleFunc("POST /api/agent/recover-private-message", s.protected(s.recoverPrivatePrefixMessage))
 	mux.HandleFunc("GET /api/agent", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.list(s.manager.native.Account(), ""), "operations": s.manager.agent.operations(), "host_os_paths": true})
 	}))

@@ -12,6 +12,36 @@ import (
 	"wechat-bot/internal/mcptools"
 )
 
+func TestToolOutputBudgetIsSeparateFromConfiguredChatBudget(t *testing.T) {
+	seen := []int{}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var v struct {
+			MaxTokens int `json:"max_tokens"`
+		}
+		json.NewDecoder(r.Body).Decode(&v)
+		seen = append(seen, v.MaxTokens)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	file := filepath.Join(t.TempDir(), "key")
+	os.WriteFile(file, []byte("synthetic-private-test-key"), 0600)
+	c, e := New(Config{BaseURL: server.URL, KeyFile: file, MaxTokens: 256, ToolMaxTokens: 4096})
+	if e != nil {
+		t.Fatal(e)
+	}
+	c.http = server.Client()
+	turns := []map[string]string{{"role": "user", "content": "test"}}
+	if _, e = c.Chat(context.Background(), "policy", turns); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = c.ChatFunctions(context.Background(), "policy", turns, nil); e != nil {
+		t.Fatal(e)
+	}
+	if len(seen) != 2 || seen[0] != 256 || seen[1] != 4096 {
+		t.Fatal("tool arguments constrained by chat budget or chat budget changed", seen)
+	}
+}
+
 func TestNativeFunctionsUseToolCallsAndMatchingResults(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var v struct {

@@ -82,6 +82,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 	s.companionRoutes(mux)
 	s.billingRoutes(mux)
 	s.agentRoutes(mux)
+	s.repairTestRoutes(mux)
 	s.mobileRoutes(mux)
 	s.storageRoutes(mux)
 	s.speechRoutes(mux)
@@ -324,7 +325,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		native = linuxnative.Status{Connection: "unavailable"}
 	}
-	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.21.0-autonomous-recovery-local"})
+	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.21.1-repair-acceptance-local"})
 }
 func (s *Server) toggle(w http.ResponseWriter, r *http.Request, enabled bool) {
 	if err := s.manager.Toggle(enabled); err != nil {
