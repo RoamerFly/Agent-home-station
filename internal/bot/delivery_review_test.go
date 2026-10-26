@@ -65,3 +65,15 @@ func TestAcceptedVoiceAndFollowingTextSharePersistentGap(t *testing.T) {
 		t.Fatal("text sent immediately or pacing treated as failed network", e)
 	}
 }
+
+func TestModelCancelledRetryFinishesInboxWithoutSending(t *testing.T) {
+	model := &planReviewModel{answer: `{"action":"cancel","reason":"原请求者已明确取消旧补充"}`}
+	w, c, n, in := planWorker(t, model)
+	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", in.TraceID, in.Thread, "incoming", "remote_sync"), Phase: "sending"}}
+	d := &delivery{Thread: in.Thread, Trace: in.TraceID, Input: in, Text: "旧补充", State: "waiting", Created: time.Now()}
+	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
+	w.reviewUncertainDelivery(context.Background(), c, d)
+	if d.State != "stopped" || w.runtime.Inbox[0].Phase != "cancelled" || len(n.submissions) != 0 {
+		t.Fatal("cancelled delivery remained pending or sent", d, w.runtime.Inbox)
+	}
+}

@@ -57,4 +57,7 @@ func (w *Worker) reviewUncertainDelivery(ctx context.Context, c *companion.Engin
 	}
 	w.persistErr = w.saveRuntime()
 	w.activity(Record{Event: "delivery_review", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, Reason: reason, Status: d.State, RetryAttempts: d.Attempts, RetryAt: d.Next.Format(time.RFC3339)})
+	if d.State == "stopped" {
+		w.activity(Record{Event: "delivery_stopped", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Reason: d.Reason, Status: "cancelled"})
+	}
 }
