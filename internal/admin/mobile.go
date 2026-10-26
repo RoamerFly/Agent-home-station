@@ -25,7 +25,7 @@ func (m *Manager) mobileSourceAllowed(s mobile.Source) bool {
 	}
 	c := m.agent.config()
 	cfg := m.Config()
-	return s.Admin && cfg.Enabled && c.Enabled && s.Account == m.native.Account() && contains(c.OwnerIDs, s.Sender) && contains(c.PrivilegedThreads, s.Thread) && permittedRecipient(cfg.Config, s.Thread)
+	return s.Admin && cfg.Enabled && c.Enabled && s.Account == m.native.Account() && contains(c.OwnerIDs, s.Sender) && c.allowsPrivilegedThread(s.Thread) && permittedRecipient(cfg.Config, s.Thread)
 }
 
 func (m *Manager) planMobile(ctx context.Context, t mobile.Task, o mobile.Observation) (mobile.Step, error) {
@@ -393,7 +393,7 @@ func (m *Manager) claimDeviceTask(t agentTask, now time.Time) (*companion.Input,
 		return nil, m.agent.task(t)
 	}
 	c := m.agent.config()
-	if !ok || !contains(c.OwnerIDs, t.Sender) || !contains(c.PrivilegedThreads, t.Thread) {
+	if !ok || !contains(c.OwnerIDs, t.Sender) || !c.allowsPrivilegedThread(t.Thread) || !permittedRecipient(m.Config().Config, t.Thread) {
 		t.State = "needs_review"
 		t.LastResult = "设备任务或可信授权不可用"
 		return nil, m.agent.task(t)

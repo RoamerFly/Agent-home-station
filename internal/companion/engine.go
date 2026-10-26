@@ -262,6 +262,11 @@ func (e *Engine) Respond(ctx context.Context, input Input) (Decision, error) {
 		}
 	}
 	turns := e.contextTurns(scope, input)
+	if access, ok := e.Tools.(interface{ AgentContext(context.Context) string }); ok {
+		if data := access.AgentContext(ctx); data != "" {
+			turns = append(turns, map[string]string{"role": "user", "content": data})
+		}
+	}
 	speaker := identity.Clean(input.SenderName)
 	if speaker == "" {
 		speaker = input.Sender

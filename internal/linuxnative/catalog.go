@@ -80,6 +80,15 @@ func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor strin
 		}
 		if kind == "messages" && row["type"] != float64(1) {
 			row["body"] = "[非文字消息，可通过附件功能处理]"
+			if rawBody, ok := item["body"].(string); ok {
+				m := Message{Type: 49, Body: rawBody}
+				if item["type"] == float64(49) {
+					if title := m.FileAttachmentName(); title != "" && len(title) <= 512 {
+						row["file_name"] = title
+						row["body"] = "[文件] " + title
+					}
+				}
+			}
 		}
 		out.Items = append(out.Items, row)
 	}

@@ -105,6 +105,9 @@ func (s *Server) mediaRuntimeRoutes(mux *http.ServeMux) {
 		if m.mobile != nil && m.mobile.Busy() {
 			ready = false
 		}
+		if m.processes != nil && m.processes.Busy() {
+			ready = false
+		}
 		respond(w, 200, map[string]any{"ticket": ticket, "ready": ready})
 	}))
 	mux.HandleFunc("POST /api/runtime/undrain", s.protected(func(w http.ResponseWriter, r *http.Request) {

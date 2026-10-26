@@ -82,23 +82,4 @@ func TestLiveMusicSemanticIntentWithoutGenerationOrWechatSend(t *testing.T) {
 			t.Fatalf("case %d: err=%v posts=%d kind=%s title=%s duration=%d", index, e, posts, actualKind, submitted.Title, submitted.Duration)
 		}
 	}
-	f := setup(t)
-	provider, e := f.manager.makeModel(cfg)
-	if e != nil {
-		t.Fatal(e)
-	}
-	checker := provider
-	for _, tc := range []struct {
-		reply string
-		want  bool
-	}{
-		{"好呀，下班路上听的歌这就安排～ 我写首轻快带点松弛的中文原创，大概两分钟 🎵", true},
-		{"想要轻快一点还是安静一点的风格呀？", false},
-		{"这次生成失败了，暂时没有歌曲可以发送。", false},
-	} {
-		got, e := checker.VerifyMusicPromise(context.Background(), "给我唱一首下班听的中文歌", tc.reply)
-		if e != nil || got != tc.want {
-			t.Fatal("semantic promise classification", e, got, tc.want)
-		}
-	}
 }

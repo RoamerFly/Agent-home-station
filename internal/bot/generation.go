@@ -441,6 +441,12 @@ func (t *generationTools) Call(ctx context.Context, name string, args json.RawMe
 	}
 	return t.inner.Call(ctx, name, args)
 }
+func (t *generationTools) AgentContext(ctx context.Context) string {
+	if x, ok := t.inner.(interface{ AgentContext(context.Context) string }); ok {
+		return x.AgentContext(ctx)
+	}
+	return ""
+}
 func (t *generationTools) SetTrace(in companion.Input) {
 	if x, ok := t.inner.(interface{ SetTrace(companion.Input) }); ok {
 		x.SetTrace(in)

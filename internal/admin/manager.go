@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/agentworkspace"
 	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
@@ -79,6 +81,8 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
+	workspace    *agentworkspace.Store
+	processes    *agenthost.Jobs
 	mobile       *mobile.Control
 	speech       bailian.Config
 	agent        *agentControl
@@ -161,6 +165,18 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 		return nil, err
 	}
 	m := &Manager{speech: speech, agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug}
+	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
+	if err != nil {
+		return nil, err
+	}
+	m.processes, err = agenthost.OpenJobs(filepath.Join(dir, "agent-processes"))
+	if err != nil {
+		return nil, err
+	}
+	if err = m.initializeWorkspace(); err != nil {
+		m.processes.Close()
+		return nil, err
+	}
 	m.mobile, err = mobile.Open(filepath.Join(dir, "mobile"), m.planMobile)
 	if err != nil {
 		return nil, err
@@ -350,6 +366,9 @@ func (m *Manager) stop() error {
 func (m *Manager) Close() error {
 	m.op.Lock()
 	defer m.op.Unlock()
+	if m.processes != nil {
+		m.processes.Close()
+	}
 	if m.mobile != nil {
 		_ = m.mobile.Close()
 	}

@@ -50,6 +50,59 @@ func TestAgentPrivilegeChecksAtDiscoveryAndExecution(t *testing.T) {
 	}
 }
 
+func TestOwnerAllAllowedThreadsStillChecksSenderAndRecipient(t *testing.T) {
+	f, p := trustedAgent(t)
+	c := f.manager.agent.config()
+	c.PrivilegedThreads = []string{"*"}
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.agent.save(c); err != nil {
+		t.Fatal(err)
+	}
+	// A newly allowed group does not need a second privileged-thread entry.
+	f.manager.mu.Lock()
+	f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: "new_group@chatroom", Mode: "mention"})
+	f.manager.mu.Unlock()
+	for _, thread := range []string{"wxid_owner", "new_group@chatroom"} {
+		p.SetTrace(companion.Input{Account: "test", Thread: thread, Sender: "wxid_owner"})
+		if !p.agentToolEnabled("server_write") {
+			t.Fatal("owner denied in allowed conversation", thread)
+		}
+	}
+	args, _ := json.Marshal(map[string]string{"path": filepath.Join(c.Host.Roots[0], "must-not-exist.txt"), "content": "forbidden"})
+	for _, input := range []companion.Input{
+		{Account: "test", Thread: "new_group@chatroom", Sender: "wxid_imposter"},
+		{Account: "test", Thread: "not_allowed@chatroom", Sender: "wxid_owner"},
+		{Account: "test", Sender: "wxid_owner"},
+		{Account: "other", Thread: "new_group@chatroom", Sender: "wxid_owner"},
+		{Account: "test", Thread: "new_group@chatroom", Sender: "wxid_owner", Preview: true},
+		{Account: "test", Thread: "new_group@chatroom", Sender: "wxid_owner", Surf: true},
+	} {
+		p.SetTrace(input)
+		if p.agentToolEnabled("server_write") {
+			t.Fatalf("untrusted context offered host: %+v", input)
+		}
+		if _, err := p.Call(context.Background(), "server_write", args); err == nil {
+			t.Fatalf("untrusted context executed host: %+v", input)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(c.Host.Roots[0], "must-not-exist.txt")); !os.IsNotExist(err) {
+		t.Fatal("unauthorized write reached filesystem", err)
+	}
+	for _, mutate := range []func(*agentSettings){
+		func(s *agentSettings) { s.OwnerIDs = []string{"*"} },
+		func(s *agentSettings) { s.OwnerIDs = nil },
+		func(s *agentSettings) { s.PrivilegedThreads = []string{"*", "wxid_owner"} },
+	} {
+		invalid := c
+		mutate(&invalid)
+		if invalid.validate() == nil {
+			t.Fatal("invalid wildcard authorization accepted")
+		}
+	}
+}
+
 func TestExternalPluginOwnerRestrictionCannotBeBypassed(t *testing.T) {
 	f, p := trustedAgent(t)
 	c := f.manager.agent.config()

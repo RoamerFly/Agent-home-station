@@ -44,9 +44,17 @@ func (c agentSettings) validate() error {
 	if len(c.OwnerIDs) > 30 || len(c.PrivilegedThreads) > 100 || len(c.AccountActions) > 8 {
 		return errors.New("授权条目过多")
 	}
-	for _, id := range append(append([]string{}, c.OwnerIDs...), c.PrivilegedThreads...) {
+	for _, id := range c.OwnerIDs {
 		if !validID(id) {
 			return errors.New("高权限用户或会话ID无效")
+		}
+	}
+	for _, id := range c.PrivilegedThreads {
+		if id == "*" && len(c.PrivilegedThreads) == 1 {
+			continue
+		}
+		if !validID(id) {
+			return errors.New("高权限会话需要有效ID，或单独使用*表示全部已允许会话")
 		}
 	}
 	for _, id := range c.OwnerIDs {
@@ -73,6 +81,12 @@ func contains(a []string, s string) bool {
 	return false
 }
 
+// This matches only the conversation dimension. Every caller must also check
+// the real sender's owner ID and the normal recipient allowlist.
+func (c agentSettings) allowsPrivilegedThread(thread string) bool {
+	return thread != "" && (contains(c.PrivilegedThreads, thread) || contains(c.PrivilegedThreads, "*"))
+}
+
 type pluginJobState struct {
 	Ticket          plugins.JobTicket `json:"ticket"`
 	Deadline        time.Time         `json:"deadline"`
@@ -84,6 +98,7 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	ProcessID         string            `json:"process_id,omitempty"`
 	DeviceTask        string            `json:"device_task,omitempty"`
 	MusicSpec         *songSpec         `json:"music_spec,omitempty"`
 	PluginJob         *pluginJobState   `json:"plugin_job,omitempty"`
@@ -270,7 +285,7 @@ func agentID(parts ...string) string {
 }
 func (p *permittedTools) privileged() bool {
 	c := p.manager.agent.config()
-	return c.Enabled && !p.trace.Preview && !p.trace.Surf && p.trace.Account == p.manager.native.Account() && contains(c.OwnerIDs, p.trace.Sender) && contains(c.PrivilegedThreads, p.trace.Thread) && permittedRecipient(p.manager.Config().Config, p.trace.Thread)
+	return c.Enabled && !p.trace.Preview && !p.trace.Surf && p.trace.Account == p.manager.native.Account() && contains(c.OwnerIDs, p.trace.Sender) && c.allowsPrivilegedThread(p.trace.Thread) && permittedRecipient(p.manager.Config().Config, p.trace.Thread)
 }
 func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*companion.Input, error) {
 	c := m.agent.config()
@@ -284,6 +299,9 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		}
 		if t.PluginJob != nil {
 			return m.claimPluginTask(t, now)
+		}
+		if t.ProcessID != "" {
+			return m.claimProcessTask(t, now)
 		}
 		if t.DeviceTask != "" {
 			return m.claimDeviceTask(t, now)
@@ -344,6 +362,16 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 	for _, t := range m.agent.list(in.Account, in.Thread) {
 		if t.ID == in.TaskID && t.State == "running" {
+			if t.ProcessID != "" {
+				t.State = "completed"
+				t.LastResult = "程序结果已交给主模型处理；实际操作与消息交付见记录"
+				if state != "reply" && state != "silent" && state != "synchronous_round_finished" {
+					t.State = "needs_review"
+					t.LastResult = "程序结果本轮未处理完成：" + state
+				}
+				_ = m.agent.task(t)
+				return
+			}
 			if t.DeviceTask != "" {
 				t.State = "completed"
 				t.LastResult = "设备结果已交给角色复核；微信交付以发送记录为准"
@@ -400,6 +428,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 }
 func (s *Server) agentRoutes(mux *http.ServeMux) {
+	s.workspaceRoutes(mux)
 	mux.HandleFunc("POST /api/agent/recover-music-message", s.protected(s.recoverMusicMessage))
 	mux.HandleFunc("GET /api/agent", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.list(s.manager.native.Account(), ""), "operations": s.manager.agent.operations(), "host_os_paths": true})
@@ -481,6 +510,9 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 				t.Runs = 0
 			} else {
 				t.State = "cancelled"
+				if t.ProcessID != "" {
+					_, _ = s.manager.processes.Status(agentID(t.Account, t.Thread, t.Sender), t.ProcessID, true)
+				}
 			}
 			var saveErr error
 			if t.PluginJob != nil {
@@ -558,7 +590,7 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 
 func (p *permittedTools) operationID(name string, args json.RawMessage) string {
 	identity := string(args)
-	if name == "wechat_send_text" {
+	if name == "wechat_send_text" || name == "wechat_forward_file" {
 		var v struct {
 			Key string `json:"request_key"`
 		}

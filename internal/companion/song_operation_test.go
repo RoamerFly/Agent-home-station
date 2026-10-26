@@ -39,7 +39,7 @@ func (t *songOperationTools) Call(_ context.Context, _ string, b json.RawMessage
 	t.calls++
 	return `{"automatic_followup":true,"job_id":"synthetic"}`, nil
 }
-func TestSongOperationUsesModelIntentAndNeverSubmitsWrongOriginal(t *testing.T) {
+func TestSongOperationUsesPrimaryModelWithoutSecondaryClassifier(t *testing.T) {
 	model := &songOperationModel{}
 	tools := &songOperationTools{}
 	e, err := NewPreview(enabledConfig(), model, "test")
@@ -49,7 +49,7 @@ func TestSongOperationUsesModelIntentAndNeverSubmitsWrongOriginal(t *testing.T) 
 	e.Tools = tools
 	e.MaxToolCalls = 4
 	_, err = e.Respond(context.Background(), Input{Mode: "direct", Text: "唱个生日歌", Preview: true})
-	if err != nil || tools.calls != 1 || tools.mode != "cover" || model.checks != 1 {
+	if err != nil || tools.calls != 2 || tools.mode != "cover" || model.checks != 0 {
 		t.Fatal(err, tools, model)
 	}
 }

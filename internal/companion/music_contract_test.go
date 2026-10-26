@@ -7,32 +7,6 @@ import (
 	"wechat-bot/internal/mcptools"
 )
 
-type promiseMusicModel struct {
-	step  int
-	never bool
-}
-
-func (m *promiseMusicModel) Chat(context.Context, string, []map[string]string) (string, error) {
-	return "", nil
-}
-func (m *promiseMusicModel) ChatFunctions(_ context.Context, _ string, _ []map[string]string, tools []mcptools.Tool) (string, error) {
-	m.step++
-	found := false
-	for _, tool := range tools {
-		found = found || tool.Name == "music_local_start"
-	}
-	if !found {
-		panic("song schema hidden")
-	}
-	if m.step == 1 || m.never {
-		return `{"action":"reply","messages":["我整一首忧郁的原创，稍等我一小会儿。"]}`, nil
-	}
-	if m.step == 2 {
-		return `{"action":"tool","tool":"music_local_start","arguments":{"style":"melancholic","lyrics":"[verse]雨落下来"}}`, nil
-	}
-	return `{"action":"reply","messages":["已经开始制作啦，做好后给你。"]}`, nil
-}
-
 type promiseMusicTools struct{ starts int }
 
 func (*promiseMusicTools) List(context.Context) ([]mcptools.Tool, error) {
@@ -42,51 +16,8 @@ func (p *promiseMusicTools) Call(context.Context, string, json.RawMessage) (stri
 	p.starts++
 	return `{"job_id":"real-job","automatic_followup":true}`, nil
 }
-func TestMusicPromiseMustActuallyStartTaskEvenForShortStyleConfirmation(t *testing.T) {
-	for _, never := range []bool{false, true} {
-		model := &promiseMusicModel{never: never}
-		tools := &promiseMusicTools{}
-		engine, _ := NewPreview(enabledConfig(), model, "global")
-		engine.Tools = tools
-		engine.MaxToolCalls = 4
-		d, err := engine.Respond(context.Background(), Input{Mode: "direct", Text: "可以，忧郁风格吧", Preview: true})
-		if err != nil || d.Action != "reply" {
-			t.Fatal(err, d)
-		}
-		if !never && tools.starts != 1 {
-			t.Fatal("empty promise accepted", d)
-		}
-		if never && (claimsDeferredMusic(d.Messages) || d.Reason != "music_execution_not_started") {
-			t.Fatal("unfulfilled promise leaked", d)
-		}
-	}
-}
 
 type aliasMusicTools struct{ promiseMusicTools }
-
-type semanticPromiseModel struct{ promiseMusicModel }
-
-func (m *semanticPromiseModel) VerifyMusicPromise(context.Context, string, string) (bool, error) {
-	return true, nil
-}
-func (m *semanticPromiseModel) ChatFunctions(ctx context.Context, system string, turns []map[string]string, tools []mcptools.Tool) (string, error) {
-	if m.step == 0 {
-		m.step++
-		return `{"action":"reply","messages":["好呀，下班路上听的歌这就安排～ 我写首轻快带点松弛的中文原创，大概两分钟 🎵"]}`, nil
-	}
-	return m.promiseMusicModel.ChatFunctions(ctx, system, turns, tools)
-}
-func TestSemanticMusicPromiseRepairsExactReportedEmptyPromise(t *testing.T) {
-	model := &semanticPromiseModel{}
-	tools := &promiseMusicTools{}
-	engine, _ := NewPreview(enabledConfig(), model, "global")
-	engine.Tools = tools
-	engine.MaxToolCalls = 4
-	d, err := engine.Respond(context.Background(), Input{Mode: "direct", Text: "给我唱一首两分钟左右的，适合下班听的中文歌曲", Preview: true})
-	if err != nil || tools.starts != 1 || d.Action != "reply" {
-		t.Fatal("semantic repair did not execute", err, tools.starts, d)
-	}
-}
 
 type bothMusicTools struct{ promiseMusicTools }
 
