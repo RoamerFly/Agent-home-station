@@ -66,6 +66,15 @@ class HiddenWindowsTests(unittest.TestCase):
             self.assertNotEqual(result["exit_code"], 0)
             child.wait(timeout=5)
 
+    def test_native_child_also_inherits_no_console(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command = "& '" + sys.executable + "' -c 'import ctypes;print(ctypes.windll.kernel32.GetConsoleWindow())'"
+            child = self.launch(directory, command)
+            self.assertEqual(self.result(directory)["exit_code"], 0)
+            child.wait(timeout=5)
+            text = (Path(directory) / "output.log").read_text(encoding="utf8").strip()
+            self.assertEqual(int(text), 0, "native child unexpectedly acquired a console")
+
 
 if __name__ == "__main__":
     unittest.main()
