@@ -6,11 +6,22 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe
+from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe, requested_singing_profile
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
 class SongWorkflowTests(unittest.TestCase):
+    def test_native_is_default_and_never_reads_or_requires_rvc_resources(self):
+        with patch('yue_bridge.singing_profile',side_effect=RuntimeError('broken RVC')) as profile:
+            self.assertIsNone(requested_singing_profile({},'missing-config'))
+            self.assertIsNone(requested_singing_profile({'singing_voice':'native'},'missing-config'))
+            profile.assert_not_called()
+        with patch('yue_bridge.singing_profile',return_value={'profile':'C'}) as profile:
+            self.assertEqual(requested_singing_profile({'singing_voice':'character'},'config'),{'profile':'C'})
+            profile.assert_called_once_with('config')
+        with self.assertRaises(ValueError):requested_singing_profile({'singing_voice':'auto'},None)
+        with self.assertRaises(ValueError):requested_singing_profile({'singing_voice':'character'},None)
+
     def test_fixed_voice_reference_and_queued_configuration_are_pinned(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);reference=root/'voice.wav';reference.write_bytes(b'synthetic voice')

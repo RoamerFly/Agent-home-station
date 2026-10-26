@@ -16,6 +16,8 @@ import (
 // Parameters are attached to the generated asset, not a global most-recent song.
 // They describe what was submitted, not a guarantee that the singer followed it.
 type songSpec struct {
+	SingingVoice  string   `json:"singing_voice,omitempty"`
+	VocalGender   string   `json:"vocal_gender,omitempty"`
 	Mode          string   `json:"mode"`
 	Style         string   `json:"style"`
 	Lyrics        string   `json:"lyrics"`

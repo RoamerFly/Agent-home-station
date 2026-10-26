@@ -17,6 +17,14 @@ def singing_profile(config_path):
     engine=validate_singing_config(config)
     return {'profile':config['profile'],'engine':engine,'config_sha256':hashlib.sha256(data).hexdigest(),'python':config['python']}
 
+def requested_singing_profile(body,config_path):
+    mode=body.get('singing_voice','native')
+    if mode not in ('native','character'):raise ValueError('invalid_singing_voice')
+    if mode=='native':return None
+    voice=singing_profile(config_path)
+    if voice is None:raise ValueError('singing_voice_not_ready')
+    return voice
+
 def convert_singing_voice(config_path,expected,source,destination):
     current=singing_profile(config_path)
     if current is None or current['config_sha256']!=expected['config_sha256']:raise ValueError('singing_voice_configuration_changed')
@@ -48,7 +56,7 @@ def song_options(body):
 def song_recipe(body):
     """Persist the submitted recipe privately, never infer it from filenames."""
     mode,reference_mode,seed=song_options(body)
-    result={k:body.get(k) for k in ('title','style','lyrics','duration_seconds')}
+    result={k:body.get(k) for k in ('title','style','lyrics','duration_seconds','singing_voice','vocal_gender')}
     result.update(mode=mode,reference_mode=reference_mode,seed=seed)
     if mode=='cover':
         try:data=base64.b64decode(body['reference_base64'],validate=True)
@@ -89,7 +97,7 @@ def main():
     for filename in ('audio_yue2_music_cover.json','audio_yue2_text_to_music.json'):
         if not (workflow_dir/filename).is_file():raise ValueError('workflow_missing: '+filename)
     token=Path(args.token_file).read_text().strip();lock=threading.RLock();pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    db=state/'jobs.json';jobs=json.loads(db.read_text()) if db.exists() else {}
+    db=state/'jobs.json';jobs=json.loads(db.read_bytes()) if db.exists() else {}
     def save():
         tmp=db.with_suffix('.tmp');tmp.write_text(json.dumps(jobs,ensure_ascii=False),encoding='utf8');tmp.replace(db)
     for job in jobs.values():
@@ -154,8 +162,10 @@ def main():
             if not self.authenticated():return self.reply(401,{'error':'unauthorized'})
             if self.path=='/health':
                 try:
-                    api('/system_stats');voice=singing_profile(args.singing_voice_config)
-                    return self.reply(200,{'ready':True,'bridge_version':3,'capabilities':['original','reference_cover','seed','reference_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; no guarantee of exact source accompaniment or reference timbre'})
+                    api('/system_stats')
+                    try:voice=singing_profile(args.singing_voice_config)
+                    except Exception:voice=None
+                    return self.reply(200,{'ready':True,'bridge_version':4,'capabilities':['original','reference_cover','seed','reference_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; no guarantee of exact source accompaniment or reference timbre'})
                 except Exception:return self.reply(200,{'ready':False})
             parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
             with lock:job=dict(jobs.get(jid,{}))
@@ -178,7 +188,8 @@ def main():
                 mode,reference_mode,seed=song_options(body)
                 recipe=song_recipe(body)
             except ValueError as e:return self.reply(400,{'error':str(e)})
-            try:voice=singing_profile(args.singing_voice_config)
+            try:voice=requested_singing_profile(body,args.singing_voice_config)
+            except ValueError as e:return self.reply(400,{'error':str(e)})
             except Exception:return self.reply(503,{'error':'singing_voice_not_ready'})
             # Keep a request fingerprint before assigning an optional seed. A
             # reused key cannot silently change the reference, lyrics or take.
