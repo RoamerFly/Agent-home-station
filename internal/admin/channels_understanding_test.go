@@ -33,13 +33,13 @@ func TestChannelsObservationHonorsReadPermissionAndScope(t *testing.T) {
 	f.manager.config.Behavior.ReadVideos = true
 	n.source = linuxnative.ChannelsSource{State: "available", MessageID: msg.ID, AccountID: "test", ThreadID: "other@chatroom", MediaURL: "http://127.0.0.1/private?token=must-not-leak"}
 	text, err = a.Analyze(context.Background(), msg)
-	if err != nil || !strings.Contains(text, "channels_source_scope_mismatch") || strings.Contains(text, "must-not-leak") {
+	if err == nil || !strings.Contains(text, "channels_source_scope_mismatch") || strings.Contains(text, "must-not-leak") {
 		t.Fatal("scope or redaction failed", err, text)
 	}
 	n.source.ThreadID = msg.ThreadID
 	n.source.State = "unavailable"
 	text, err = a.Analyze(context.Background(), msg)
-	if err != nil || !strings.Contains(text, "channels_media_locator_missing") || !strings.Contains(text, "不能声称已观看") {
+	if err == nil || !strings.Contains(text, "channels_media_locator_missing") || !strings.Contains(text, "不能声称已观看") {
 		t.Fatal("missing locator fabricated observation", err, text)
 	}
 }

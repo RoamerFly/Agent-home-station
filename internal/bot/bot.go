@@ -307,6 +307,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 				if ctx.Err() != nil {
 					return
 				}
+				if w.keepUnavailableObservation(companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, TraceID: message.ID, Text: prompt, MessageTime: message.CreatedAt}, analysisErr) {
+					return
+				}
 				w.modelFailed(message.ThreadID, message.ID, analysisErr)
 				return
 			}
@@ -478,6 +481,9 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 }
 
 func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engine, input companion.Input, decision companion.Decision, err, processingErr error, toolStarted, progressDelivered bool) {
+	if err != nil && w.keepUnavailableObservation(input, err) {
+		return
+	}
 	if !w.taskActive(input) {
 		w.activity(Record{Event: "agent_task_cancelled", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "stopped", Reason: "task_cancelled_before_delivery"})
 		return

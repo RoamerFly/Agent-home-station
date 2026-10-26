@@ -97,6 +97,7 @@ func (m *Manager) preview(ctx context.Context, mode, text string) (companion.Dec
 	return engine.Respond(ctx, companion.Input{Channel: "preview", Account: "preview", Thread: "preview", Sender: "假想用户", Text: text, Mode: mode, IsGroup: mode != "direct", Directed: mode == "direct", Preview: true})
 }
 func (s *Server) companionRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/companion/memory/{id}/observe-share", s.protected(s.observeShare))
 	mux.HandleFunc("POST /api/companion/memory/{id}/reply-share", s.protected(s.replyShare))
 	mux.HandleFunc("POST /api/companion/memory/{id}/refresh-shares", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct{}
@@ -111,6 +112,9 @@ func (s *Server) companionRoutes(mux *http.ServeMux) {
 		refreshed := 0
 		for _, turn := range scope.Messages {
 			if turn.Role != "user" || turn.TraceID == "" || !strings.HasPrefix(turn.Text, "收到了一条分享卡片") {
+				continue
+			}
+			if hasActualShareObservation(turn.Text) {
 				continue
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)

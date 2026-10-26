@@ -37,7 +37,7 @@ type biliPage struct {
 
 func IsPublicVideoPage(raw string) bool {
 	u, e := url.Parse(raw)
-	return e == nil && ((u.Hostname() == "www.bilibili.com" || u.Hostname() == "bilibili.com") && biliVideoPath.MatchString(u.Path) || u.Hostname() == "b23.tv" && biliShortPath.MatchString(u.Path))
+	return kuaishouPhotoID(raw) != "" || e == nil && ((u.Hostname() == "www.bilibili.com" || u.Hostname() == "bilibili.com") && biliVideoPath.MatchString(u.Path) || u.Hostname() == "b23.tv" && biliShortPath.MatchString(u.Path))
 }
 func parseBiliPage(body []byte, bvid string, part int) (biliPage, error) {
 	var out biliPage
@@ -110,7 +110,16 @@ func DownloadPublicVideoPage(ctx context.Context, raw string, limit int64) (Publ
 func DownloadPublicVideoAudio(ctx context.Context, raw string, limit int64) (PublicVideo, error) {
 	return downloadPublicVideoPage(ctx, raw, limit, true)
 }
+
+// Receiving and understanding a long video still requires actual content;
+// the one-minute link-only rule applies to delivery, never to observation.
+func DownloadPublicVideoObservation(ctx context.Context, raw string, limit int64) (PublicVideo, error) {
+	return downloadPublicVideoPage(ctx, raw, limit, true)
+}
 func downloadPublicVideoPage(ctx context.Context, raw string, limit int64, audio bool) (PublicVideo, error) {
+	if kuaishouPhotoID(raw) != "" {
+		return downloadKuaishouVideo(ctx, raw, limit, audio)
+	}
 	var out PublicVideo
 	if !IsPublicVideoPage(raw) || validPublicURL(raw) != nil {
 		return out, &WebError{Code: "video_page_unsupported"}
