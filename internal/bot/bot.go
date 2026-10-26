@@ -239,10 +239,13 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		quoteContext = w.readQuoteContext(ctx, &message)
 	}
 	working := quotedPlainBody(message)
-	isMedia := message.Type == 34 || message.Type == 3 || message.Type == 43 || message.Type == 49 && !message.IsQuotedText()
+	isMedia := message.Type == 34 || message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && !message.IsQuotedText()
 	if isMedia && w.config.Options != nil && w.config.Analyzer != nil {
 		working.Type = 1
 		working.Body = "收到了一张图片，请结合内容决定是否回应。"
+		if message.Type == 47 {
+			working.Body = "收到了一条表情包，请结合画面、文字和前后聊天语境判断情绪与含义，自行决定是否回应。"
+		}
 		if message.Type == 34 {
 			working.Body = "收到一条微信语音，请结合转写和上下文决定是否回应。"
 		}
@@ -257,7 +260,11 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 	}
 	prompt, eligible := w.prompt(working, time.Now())
-	w.noticeConversationMessage(message, eligible)
+	noticed := message
+	if message.Type == 47 {
+		noticed = working
+	}
+	w.noticeConversationMessage(noticed, eligible)
 	if w.persistErr != nil {
 		return
 	}
@@ -288,7 +295,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
 	if isMedia && w.config.Options != nil && w.config.Analyzer != nil {
-		if message.Type == 3 && !w.config.Options.ReadImages || message.Type != 3 && message.Type != 34 && !w.config.Options.ReadVideos {
+		if (message.Type == 3 || message.Type == 47) && !w.config.Options.ReadImages || message.Type != 3 && message.Type != 47 && message.Type != 34 && !w.config.Options.ReadVideos {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
 			return
 		}

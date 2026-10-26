@@ -77,6 +77,8 @@ func messageSummary(m linuxnative.Message) string {
 			return "[收到微信语音]"
 		case 3:
 			return "[收到图片]"
+		case 47:
+			return "[收到表情包]"
 		case 43:
 			return "[收到视频]"
 		case 49:
