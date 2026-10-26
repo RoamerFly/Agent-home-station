@@ -29,3 +29,17 @@
 ## 2026-10-26 接入更新
 
 已新增本机元宝Cookie解析、按会话绑定分享链接、同作品重复转发复用、作品ID本机桥接适配和网页只读验证，见 [授权读取](channels-authorized-reading.md)。此前“未完成授权适配”是2026-10-25历史状态；新适配不等于已解决所有新卡片自动读取。
+
+## 不改证书／代理的继续调查（2026-10-26）
+
+用户选择继续研究，明确暂不修改系统证书或代理。未安装／启动 wx_channel，未改变 Windows 微信或 Linux 原生会话。
+
+发现新的可验证方向：[social-harvest 的视频号 short-links 适配器](https://github.com/yangmaoxin/social-harvest/blob/2ad700fb9d5f16352f351b8f91a2d202eaa65e94/adapters/weixin-channels/short-links.js)，及 [shared.js 中 fetchObjectShortLink/fetchFinderApi](https://github.com/yangmaoxin/social-harvest/blob/2ad700fb9d5f16352f351b8f91a2d202eaa65e94/adapters/weixin-channels/shared.js)。固定核对提交 `2ad700fb9d5f16352f351b8f91a2d202eaa65e94`。
+
+源码通过已登录 channels.weixin.qq.com 视频号助手后台，POST `/cgi-bin/mmfinderassistant-bin/post/get_object_short_link`，参数为 `{exportId, nonceId, scene:40}`，从响应取 `shortUrl`。浏览器使用 `credentials:include`。这条链路不要求 SunnyRoot 证书、系统代理或桌面微信页面注入，但需要视频号助手自己的网页登录态；元宝 Cookie 不应也不会被发送到该域名。
+
+使用当前收到卡片的作品 ID/nonce，只做了一次不带登录态的受控 HTTP 请求：HTTP200，业务错误 `300330 / request failed`，没有取得短链。此结果不能单独证明仅缺登录，也可能有账号权限、作品范围、参数语义或接口校验限制。该适配器平时处理登录账号的作品流，尚未证明能转换群聊中任意第三方作品。
+
+当前固定原生客户端提交 `7095ef01e0cd3d5b567bcb6970f379dcd88bbfa8` 的 wechat-protocol/wechat-core 源码未发现 Finder 详情或视频号短链 RPC 实现。本地累计 channels-media 补丁只读取收到卡片的 XML，不主动查询作品详情。普通收发消息的 MMTLS 通道已实现，不等于已具备 Finder CGI 编号、protobuf 契约及该模块的完整授权。未用活动会话猜测提交未知协议请求。
+
+下一项验证是：用户自行确认能进入视频号助手后台后，以独立且私有的助手登录态，对同一张收到卡片测试上述短链接口；成功还需核对短链解析回来的作品标题／作者或作品 ID，再复用现有元宝读取层。未验证前不将其设为自动回退，不承诺任意卡片已实现免复制。源码参考材料与原始请求返回保留在忽略的本地证据目录，不提交账号资料。
