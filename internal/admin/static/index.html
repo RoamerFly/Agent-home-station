@@ -112,7 +112,7 @@
 <div><label class="switch-row"><span>启用自主行动工具</span><input id="agent-enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div>
 <div><label class="switch-row"><span>保存任务与检查点</span><input id="agent-tasks-enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div>
 <div><label for="agent-max-steps">每轮最多行动步数</label><input id="agent-max-steps" type="number" min="1" max="30"></div>
-<div><label for="agent-max-runs">单个任务最多后台执行次数</label><input id="agent-max-runs" type="number" min="1" max="20"></div>
+<div><label for="agent-max-runs">主动任务最多续行轮数</label><input id="agent-max-runs" type="number" min="1" max="20"></div>
 </div><p class="hint">AI自行选择工具、等待或安静。主动任务遵守安静时段与每日预算；用户已请求的生成结果按原会话续交。中断后不自动重放未知外部操作。</p><p id="agent-save-state" class="hint" role="status"></p></article>
 <details class="panel behavior-settings"><summary>消息理解、发送节奏与故障恢复</summary><button id="save-behavior" type="button" hidden>保存</button>
 <div class="field-grid">
@@ -136,6 +136,12 @@
 <div><label for="conversation-wake-min-seconds">延时重新评估最短等待（秒）</label><input id="conversation-wake-min-seconds" type="number" min="15" max="3600"></div>
 <div><label for="conversation-wake-max-seconds">延时重新评估最长等待（秒）</label><input id="conversation-wake-max-seconds" type="number" min="15" max="3600"></div>
 </div><p class="hint">模型决定发几条、何时收尾；新上下文可暂停、改写或取消未发文字。已提交消息和文件任务单独核对。延时补充仅限已选择的主动问候会话，沿用主动权限、每日预算和安静时段；重新评估后仍可保持安静。</p><button id="save-conversation" type="button" hidden>保存</button></details>
+<details class="panel" id="agent-workspace-panel" open><summary>文档记忆与项目</summary>
+<div class="workspace-toolbar"><div><label for="agent-doc-scope">工作区范围</label><select id="agent-doc-scope"><option value="shared">共享项目指南</option></select></div><div><label for="agent-doc-select">已有文档</label><select id="agent-doc-select"><option value="">选择文档</option></select></div><button id="agent-doc-refresh" class="secondary" type="button">刷新目录</button></div>
+<label for="agent-doc-name">文档名称</label><input id="agent-doc-name" placeholder="MEMORY.md" maxlength="100" spellcheck="false">
+<label for="agent-doc-content">Markdown 内容</label><textarea id="agent-doc-content" rows="16" spellcheck="false" placeholder="记录项目用法、稳定事实和待办；不保存密钥。"></textarea>
+<div class="inline-actions"><button id="agent-doc-save" class="primary" type="button">保存文档</button><button id="agent-doc-new" class="secondary" type="button">新建文档</button><span id="agent-doc-state" class="hint" role="status"></span></div>
+<details><summary>后台进程</summary><div id="agent-process-list"></div></details></details>
 <details class="panel context-settings"><summary>上下文与压缩</summary><div class="field-grid"><div><label class="switch-row"><span>自动压缩旧上下文</span><input id="context-auto-compress" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div><div><label for="context-compress-after">未压缩消息达到多少条后压缩</label><input id="context-compress-after" type="number" min="20" max="500"></div><div><label for="context-recent-messages">直接传给模型的近期消息数</label><input id="context-recent-messages" type="number" min="5" max="100"></div><div><label for="context-max-input-chars">近期上下文预算（字节）</label><input id="context-max-input-chars" type="number" min="4000" max="64000"></div></div><p class="hint">旧消息仍可在记忆页查看；模型只读取压缩摘要与未压缩的近期记录，不重新读取已压缩原文。摘要按人物、话题、媒体、待办和更正整理。</p></details><details class="panel agent-budgets"><summary>安静时段与聊天预算</summary><div class="field-grid"><div><label for="timezone">时区</label><input id="timezone" maxlength="64" placeholder="Asia/Shanghai"></div><div><label for="quiet-start">安静开始</label><input id="quiet-start" type="time"></div><div><label for="quiet-end">安静结束</label><input id="quiet-end" type="time"></div><div><label for="max-bubbles">最多气泡数</label><input id="max-bubbles" type="number" min="1" max="3"></div><div><label for="reply-hour">每小时最多回复</label><input id="reply-hour" type="number" min="1" max="120"></div></div></details><article class="panel"><div class="section-heading"><h3>持续任务</h3><button id="agent-refresh" type="button" class="secondary">刷新任务</button></div><div id="agent-task-list" class="agent-task-list"></div></article>
 </section>
 <section id="mobile" class="page" aria-labelledby="mobile-title">
@@ -205,9 +211,9 @@
 <div><label class="switch-row"><span>允许可信用户要求跨会话发送</span><input id="agent-cross-conversation" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div>
 <div><label class="switch-row"><span>外部 MCP / API 插件仅限可信用户调用</span><input id="agent-external-owner-only" type="checkbox"><span class="switch" aria-hidden="true"></span></label></div><div><label for="agent-owner-ids">可信微信用户 ID</label><textarea id="agent-owner-ids" rows="3" placeholder="每行一个真实 wxid；昵称不能作为身份依据"></textarea></div>
 <div><label for="agent-privileged-threads">允许高权限的会话 ID</label><textarea id="agent-privileged-threads" rows="3" placeholder="每行一个已授权会话 ID；建议只选主人私聊"></textarea></div>
-<div><label for="agent-host-mode">服务器权限</label><select id="agent-host-mode"><option value="disabled">关闭服务器操作</option><option value="read">只读：目录与文本文件</option><option value="files">文件：只读及创建新文件</option><option value="full">完整：文件与 Shell 命令</option></select></div>
+<div><label for="agent-host-mode">服务器权限</label><select id="agent-host-mode"><option value="disabled">关闭服务器操作</option><option value="read">只读：目录与文本文件</option><option value="files">文件：读取、创建与校验修改</option><option value="full">完整：文件与 Shell 命令</option></select></div>
 <div><label for="agent-host-roots">服务器工作目录</label><textarea id="agent-host-roots" rows="3" placeholder="每行一个绝对路径，例如 /home/fly/agent-workspace"></textarea></div>
-<div><label for="agent-host-timeout">命令最长执行时间（秒）</label><input id="agent-host-timeout" type="number" min="1" max="300"></div>
+<div><label for="agent-host-timeout">短命令执行时限（秒）</label><input id="agent-host-timeout" type="number" min="1" max="300"></div>
 <div><label for="agent-host-output">单次输出上限（字节）</label><input id="agent-host-output" type="number" min="1024" max="64000"></div>
 </div>
 <p id="agent-host-description" class="hint" role="status"></p>
@@ -255,7 +261,7 @@
   <script src="/assets/mcp.js" defer></script>
   <script src="/assets/plugins.js" defer></script>
   <script src="/assets/ui.js" defer></script>
-<script src="/assets/agent.js" defer></script><script src="/assets/mobile.js" defer></script><script src="/assets/speech.js" defer></script><script src="/assets/channels.js" defer></script>
+<script src="/assets/agent.js" defer></script><script src="/assets/agent-workspace.js" defer></script><script src="/assets/mobile.js" defer></script><script src="/assets/speech.js" defer></script><script src="/assets/channels.js" defer></script>
   <script src="/assets/logs.js" defer></script>
   <script src="/assets/surf.js" defer></script>
   <script src="/assets/billing.js" defer></script>

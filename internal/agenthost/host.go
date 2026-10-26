@@ -5,6 +5,8 @@ package agenthost
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -46,9 +48,13 @@ func (c Config) Validate() error {
 }
 
 type Input struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
-	Command string `json:"command"`
+	Path     string `json:"path"`
+	Content  string `json:"content"`
+	Command  string `json:"command"`
+	Expected string `json:"expected_sha256"`
+	Old      string `json:"old_text"`
+	New      string `json:"new_text"`
+	Offset   int    `json:"offset"`
 }
 type Host struct{ Config Config }
 
@@ -120,15 +126,21 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		if err != nil || !stat.Mode().IsRegular() {
 			return nil, errors.New("仅能读取普通文件")
 		}
-		data, err := io.ReadAll(io.LimitReader(f, int64(h.Config.OutputBytes)+1))
-		if err != nil {
-			return nil, err
+		data, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+		if err != nil || len(data) > 1<<20 {
+			return nil, errors.New("文件超过1MiB，请使用程序工具按需检查")
 		}
-		truncated := len(data) > h.Config.OutputBytes
-		if truncated {
-			data = data[:h.Config.OutputBytes]
+		if in.Offset < 0 || in.Offset > len(data) {
+			return nil, errors.New("读取偏移超出文件范围")
 		}
-		return map[string]any{"content": strings.ToValidUTF8(string(data), "�"), "truncated": truncated}, nil
+		sum := sha256.Sum256(data)
+		end := min(len(data), in.Offset+h.Config.OutputBytes)
+		return map[string]any{"content": strings.ToValidUTF8(string(data[in.Offset:end]), "�"), "truncated": end < len(data), "next_offset": end, "sha256": hex.EncodeToString(sum[:]), "bytes": len(data)}, nil
+
+	case "server_edit":
+		return h.edit(root, rel, in)
+	case "server_search":
+		return h.search(root, rel, in.Content)
 	case "server_write":
 		if h.Config.Mode != "files" && h.Config.Mode != "full" {
 			return nil, errors.New("没有文件写入权限")
@@ -172,24 +184,10 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		}
 		bounded, cancel := context.WithTimeout(ctx, time.Duration(h.Config.TimeoutSeconds)*time.Second)
 		defer cancel()
-		var cmd *exec.Cmd
-		if runtime.GOOS == "windows" {
-			cmd = exec.CommandContext(bounded, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", in.Command)
-		} else {
-			cmd = exec.CommandContext(bounded, "/bin/sh", "-c", in.Command)
-		}
-		cmd.Dir = in.Path
-		// Do not implicitly expose model/API credentials or arbitrary service env.
-		for _, key := range []string{"PATH", "HOME", "USER", "LANG", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR"} {
-			if v, ok := os.LookupEnv(key); ok {
-				cmd.Env = append(cmd.Env, key+"="+v)
-			}
-		}
+		cmd := hostCommand(bounded, in.Path, in.Command)
 		output := &limitedOutput{limit: h.Config.OutputBytes}
 		cmd.Stdout = output
 		cmd.Stderr = output
-		cmd.WaitDelay = time.Second
-		configureProcess(cmd)
 		err = cmd.Run()
 		code := 0
 		if err != nil {
@@ -209,12 +207,26 @@ type limitedOutput struct {
 	data      []byte
 	limit     int
 	truncated bool
+	keepTail  bool
 }
 
 func (b *limitedOutput) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	n := len(p)
+	if b.keepTail {
+		if len(p) >= b.limit {
+			b.truncated = b.truncated || len(b.data) > 0 || len(p) > b.limit
+			b.data = append(b.data[:0], p[len(p)-b.limit:]...)
+			return n, nil
+		}
+		if excess := len(b.data) + len(p) - b.limit; excess > 0 {
+			b.data = append(b.data[:0], b.data[excess:]...)
+			b.truncated = true
+		}
+		b.data = append(b.data, p...)
+		return n, nil
+	}
 	space := b.limit - len(b.data)
 	if len(p) > space {
 		p = p[:space]

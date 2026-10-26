@@ -1,0 +1,295 @@
+package agenthost
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+)
+
+type Process struct {
+	ID        string    `json:"id"`
+	Scope     string    `json:"scope"`
+	Key       string    `json:"request_key"`
+	Hash      string    `json:"request_hash"`
+	State     string    `json:"state"`
+	Output    string    `json:"output"`
+	ExitCode  int       `json:"exit_code"`
+	Truncated bool      `json:"truncated"`
+	Started   time.Time `json:"started"`
+	Updated   time.Time `json:"updated"`
+	Reason    string    `json:"reason,omitempty"`
+	cancel    context.CancelFunc
+	buffer    *limitedOutput
+}
+type Jobs struct {
+	mu     sync.Mutex
+	root   string
+	items  map[string]*Process
+	closed bool
+	wg     sync.WaitGroup
+}
+
+func (j *Jobs) Busy() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, p := range j.items {
+		if p.State == "running" {
+			return true
+		}
+	}
+	return false
+}
+
+func OpenJobs(root string) (*Jobs, error) {
+	if e := os.MkdirAll(root, 0700); e != nil {
+		return nil, e
+	}
+	j := &Jobs{root: root, items: map[string]*Process{}}
+	files, e := os.ReadDir(root)
+	if e != nil {
+		return nil, e
+	}
+	if len(files) > 200 {
+		return nil, errors.New("后台进程记录超过200条")
+	}
+	for _, f := range files {
+		if !strings.HasSuffix(f.Name(), ".json") {
+			continue
+		}
+		b, e := os.ReadFile(filepath.Join(root, f.Name()))
+		var p Process
+		if e != nil || len(b) > 512<<10 || json.Unmarshal(b, &p) != nil || p.ID+".json" != f.Name() {
+			return nil, errors.New("进程记录不可核验，未覆盖")
+		}
+		if p.State == "running" {
+			p.State = "interrupted"
+			p.Reason = "management_restarted_no_replay"
+			p.Updated = time.Now().UTC()
+			if e = j.save(&p); e != nil {
+				return nil, e
+			}
+		}
+		j.items[p.ID] = &p
+	}
+	return j, nil
+}
+func (j *Jobs) save(p *Process) error {
+	b, e := json.Marshal(p)
+	if e != nil {
+		return e
+	}
+	f, e := os.CreateTemp(j.root, ".process-*")
+	if e != nil {
+		return e
+	}
+	defer os.Remove(f.Name())
+	e = f.Chmod(0600)
+	if e == nil {
+		_, e = f.Write(b)
+	}
+	if e == nil {
+		e = f.Sync()
+	}
+	ce := f.Close()
+	if e != nil {
+		return e
+	}
+	if ce != nil {
+		return ce
+	}
+	return os.Rename(f.Name(), filepath.Join(j.root, p.ID+".json"))
+}
+func processCopy(p *Process) Process {
+	out := *p
+	out.buffer = nil
+	out.cancel = nil
+	if p.buffer != nil {
+		p.buffer.mu.Lock()
+		out.Output = strings.ToValidUTF8(string(p.buffer.data), "�")
+		out.Truncated = p.buffer.truncated
+		p.buffer.mu.Unlock()
+	}
+	return out
+}
+func (j *Jobs) List(scope string) []Process {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	out := []Process{}
+	for _, p := range j.items {
+		if scope == "" || p.Scope == scope {
+			out = append(out, processCopy(p))
+		}
+	}
+	return out
+}
+func (j *Jobs) Status(scope, id string, cancel bool) (Process, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	p := j.items[id]
+	if p == nil || scope != "" && p.Scope != scope {
+		return Process{}, errors.New("当前会话找不到此后台进程")
+	}
+	if cancel && p.cancel != nil {
+		p.cancel()
+	}
+	return processCopy(p), nil
+}
+func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, allowed func() bool) (Process, error) {
+	if cfg.Mode != "full" || cfg.Validate() != nil || scope == "" || len(key) < 1 || len(key) > 128 || strings.TrimSpace(command) == "" || len(command) > 8000 {
+		return Process{}, errors.New("命令执行未授权或参数无效")
+	}
+	if seconds == 0 {
+		seconds = 1800
+	}
+	if seconds < 1 || seconds > 7200 {
+		return Process{}, errors.New("后台执行时限须为1至7200秒")
+	}
+	root, rel, e := (Host{cfg}).rooted(path)
+	if e != nil {
+		return Process{}, e
+	}
+	info, e := root.Stat(rel)
+	root.Close()
+	if e != nil || !info.IsDir() {
+		return Process{}, errors.New("执行起始目录不可用")
+	}
+	b, _ := json.Marshal([]any{path, command, seconds})
+	sum := sha256.Sum256(b)
+	hash := hex.EncodeToString(sum[:])
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.closed {
+		return Process{}, errors.New("进程管理器已关闭")
+	}
+	active := 0
+	for _, p := range j.items {
+		if p.Scope == scope && p.Key == key {
+			if p.Hash != hash {
+				return Process{}, errors.New("同一请求编号对应了不同命令；未重复执行")
+			}
+			return processCopy(p), nil
+		}
+		if p.State == "running" {
+			active++
+		}
+	}
+	if len(j.items) >= 200 || active >= 4 {
+		return Process{}, errors.New("后台进程记录或并发已达上限")
+	}
+	if allowed != nil && !allowed() {
+		return Process{}, errors.New("执行权限已撤销")
+	}
+	id := make([]byte, 16)
+	if _, e = rand.Read(id); e != nil {
+		return Process{}, e
+	}
+	now := time.Now().UTC()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second)
+	p := &Process{ID: "process-" + hex.EncodeToString(id), Scope: scope, Key: key, Hash: hash, State: "running", Started: now, Updated: now, cancel: cancel, buffer: &limitedOutput{limit: cfg.OutputBytes, keepTail: true}}
+	if e = j.save(p); e != nil {
+		cancel()
+		return Process{}, e
+	}
+	j.items[p.ID] = p
+	j.wg.Add(1)
+	go func() {
+		defer j.wg.Done()
+		defer cancel()
+		cmd := hostCommand(ctx, path, command)
+		cmd.Stdout = p.buffer
+		cmd.Stderr = p.buffer
+		done := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if allowed != nil && !allowed() {
+						cancel()
+						return
+					}
+					j.mu.Lock()
+					snapshot := processCopy(p)
+					_ = j.save(&snapshot)
+					j.mu.Unlock()
+				}
+			}
+		}()
+		err := cmd.Run()
+		close(done)
+		j.mu.Lock()
+		defer j.mu.Unlock()
+		snapshot := processCopy(p)
+		p.Output = snapshot.Output
+		p.Truncated = snapshot.Truncated
+		p.buffer = nil
+		p.cancel = nil
+		p.Updated = time.Now().UTC()
+		p.State = "completed"
+		p.ExitCode = 0
+		if err != nil {
+			p.State = "failed"
+			p.ExitCode = -1
+			var exit *exec.ExitError
+			if errors.As(err, &exit) {
+				p.ExitCode = exit.ExitCode()
+			}
+		}
+		if ctx.Err() != nil {
+			p.State = "cancelled"
+			p.Reason = "cancelled_or_permission_revoked"
+			if ctx.Err() == context.DeadlineExceeded {
+				p.State = "timed_out"
+				p.Reason = "process_deadline"
+			}
+		}
+		if err = j.save(p); err != nil {
+			p.State = "needs_review"
+			p.Reason = "process_result_persistence_failed"
+		}
+	}()
+	return processCopy(p), nil
+}
+func hostCommand(ctx context.Context, path, command string) *exec.Cmd {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
+	} else {
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	}
+	cmd.Dir = path
+	for _, key := range []string{"PATH", "HOME", "USER", "LANG", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR"} {
+		if v, ok := os.LookupEnv(key); ok {
+			cmd.Env = append(cmd.Env, key+"="+v)
+		}
+	}
+	cmd.WaitDelay = time.Second
+	configureProcess(cmd)
+	return cmd
+}
+func (j *Jobs) Close() {
+	j.mu.Lock()
+	j.closed = true
+	for _, p := range j.items {
+		if p.cancel != nil {
+			p.cancel()
+		}
+	}
+	j.mu.Unlock()
+	j.wg.Wait()
+}

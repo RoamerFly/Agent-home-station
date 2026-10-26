@@ -30,14 +30,14 @@ func TestQuotedOriginalDoesNotBecomeCurrentDownloadInstruction(t *testing.T) {
 	}
 }
 
-func TestNewSongCannotUseOldLocalTrackAsSearchEvidence(t *testing.T) {
+func TestPrimaryModelMayInspectCacheBeforeItsFreshSearch(t *testing.T) {
 	model := &sequenceModel{answers: []string{`{"action":"tool","tool":"media_reuse","arguments":{"asset_id":"old-cloud-dancer","kind":"voice"}}`, `{"action":"tool","tool":"web_search","arguments":{"query":"Traveling Light song audio"}}`, `{"action":"tool","tool":"web_media_download","arguments":{"url":"https://example.org/audio.mp3","kind":"voice"}}`, `{"action":"reply","messages":["这首是 Traveling Light"],"media_ids":["voice-real"]}`}}
 	tools := &newSongTools{demandedTools: &demandedTools{}}
 	e, _ := NewPreview(enabledConfig(), model, "role")
 	e.Tools = tools
 	e.MaxToolCalls = 4
 	d, err := e.Respond(context.Background(), Input{Mode: "direct", Preview: true, Text: "重新找一首，traveling light"})
-	if err != nil || len(d.MediaIDs) != 1 || strings.Join(tools.names, ",") != "web_search,web_media_download" {
+	if err != nil || len(d.MediaIDs) != 1 || strings.Join(tools.names, ",") != "media_reuse,web_search,web_media_download" {
 		t.Fatal("local reuse replaced the new search", d, tools.names, err)
 	}
 }
@@ -100,14 +100,14 @@ func (m *repairedModel) Chat(context.Context, string, []map[string]string) (stri
 		return `{"action":"reply","messages":["给你听这一首～"],"media_ids":["voice-real"]}`, nil
 	}
 }
-func TestMediaDemandCannotEndAtUnsupportedSearchClaim(t *testing.T) {
+func TestPrimaryModelCanReportReadOnlySearchOutcomeWithoutForcedDownload(t *testing.T) {
 	c := enabledConfig()
 	tools := &demandedTools{}
 	e, _ := NewPreview(c, &repairedModel{}, "role")
 	e.Tools = tools
 	e.MaxToolCalls = 3
 	d, err := e.Respond(context.Background(), Input{Mode: "direct", Text: "给我发一首好听的流行歌，发语音", Preview: true})
-	if err != nil || len(d.MediaIDs) != 1 || strings.Join(tools.names, ",") != "web_search,web_media_download" {
+	if err != nil || d.Action != "reply" || strings.Join(tools.names, ",") != "web_search" {
 		t.Fatal("did not enforce actual resource work", d, tools.names, err)
 	}
 }

@@ -84,6 +84,7 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	ProcessID         string            `json:"process_id,omitempty"`
 	DeviceTask        string            `json:"device_task,omitempty"`
 	MusicSpec         *songSpec         `json:"music_spec,omitempty"`
 	PluginJob         *pluginJobState   `json:"plugin_job,omitempty"`
@@ -285,6 +286,9 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if t.PluginJob != nil {
 			return m.claimPluginTask(t, now)
 		}
+		if t.ProcessID != "" {
+			return m.claimProcessTask(t, now)
+		}
 		if t.DeviceTask != "" {
 			return m.claimDeviceTask(t, now)
 		}
@@ -344,6 +348,16 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 	for _, t := range m.agent.list(in.Account, in.Thread) {
 		if t.ID == in.TaskID && t.State == "running" {
+			if t.ProcessID != "" {
+				t.State = "completed"
+				t.LastResult = "程序结果已交给主模型处理；实际操作与消息交付见记录"
+				if state != "reply" && state != "silent" && state != "synchronous_round_finished" {
+					t.State = "needs_review"
+					t.LastResult = "程序结果本轮未处理完成：" + state
+				}
+				_ = m.agent.task(t)
+				return
+			}
 			if t.DeviceTask != "" {
 				t.State = "completed"
 				t.LastResult = "设备结果已交给角色复核；微信交付以发送记录为准"
@@ -400,6 +414,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 }
 func (s *Server) agentRoutes(mux *http.ServeMux) {
+	s.workspaceRoutes(mux)
 	mux.HandleFunc("POST /api/agent/recover-music-message", s.protected(s.recoverMusicMessage))
 	mux.HandleFunc("GET /api/agent", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.list(s.manager.native.Account(), ""), "operations": s.manager.agent.operations(), "host_os_paths": true})
@@ -481,6 +496,9 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 				t.Runs = 0
 			} else {
 				t.State = "cancelled"
+				if t.ProcessID != "" {
+					_, _ = s.manager.processes.Status(agentID(t.Account, t.Thread, t.Sender), t.ProcessID, true)
+				}
 			}
 			var saveErr error
 			if t.PluginJob != nil {

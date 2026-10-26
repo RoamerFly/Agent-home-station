@@ -70,12 +70,12 @@ func TestSemanticReuseDecisionWinsOverLegacyFreshHint(t *testing.T) {
 	e, _ := NewPreview(enabledConfig(), m, "role")
 	e.Tools, e.MaxToolCalls = p, 3
 	d, err := e.Respond(context.Background(), Input{Mode: "direct", Text: "把刚才给我的那首音乐完整语音再发一遍", Preview: true})
-	if err != nil || d.Action != "reply" || p.reused != 1 || m.checks != 1 {
+	if err != nil || d.Action != "reply" || p.reused != 1 || m.checks != 0 {
 		t.Fatal(d, err, p.reused, m.checks)
 	}
 }
 
-func TestSemanticNewResourceDecisionStillRejectsUnrelatedCachedTrack(t *testing.T) {
+func TestPrimaryModelCanReviseResourceChoiceWithoutSecondaryClassifier(t *testing.T) {
 	m := &semanticReuseModel{sequenceModel: &sequenceModel{answers: []string{
 		`{"action":"tool","tool":"media_reuse","arguments":{"asset_id":"old-track","kind":"voice"}}`,
 		`{"action":"tool","tool":"web_search","arguments":{"query":"Traveling Light song audio"}}`,
@@ -86,7 +86,7 @@ func TestSemanticNewResourceDecisionStillRejectsUnrelatedCachedTrack(t *testing.
 	e, _ := NewPreview(enabledConfig(), m, "role")
 	e.Tools, e.MaxToolCalls = p, 4
 	d, err := e.Respond(context.Background(), Input{Mode: "direct", Text: "重新找一首，traveling light", Preview: true})
-	if err != nil || len(d.MediaIDs) != 1 || m.checks != 1 || len(p.names) != 2 || p.names[0] != "web_search" || p.names[1] != "web_media_download" {
+	if err != nil || len(d.MediaIDs) != 1 || m.checks != 0 || len(p.names) != 3 || p.names[0] != "media_reuse" || p.names[1] != "web_search" || p.names[2] != "web_media_download" {
 		t.Fatal(d, err, m.checks, p.names)
 	}
 }

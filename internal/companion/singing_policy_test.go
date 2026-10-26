@@ -40,7 +40,7 @@ func (t *singingPolicyTools) Call(ctx context.Context, name string, b json.RawMe
 	t.voice = in.Voice
 	return t.songOperationTools.Call(ctx, name, b)
 }
-func TestCharacterSingingRequiresIndependentExplicitRequest(t *testing.T) {
+func TestSingingParametersStayWithPrimaryModelWithoutSecondaryClassifier(t *testing.T) {
 	for _, permit := range []bool{false, true} {
 		m := &singingPolicyModel{permit: permit}
 		tools := &singingPolicyTools{}
@@ -52,7 +52,7 @@ func TestCharacterSingingRequiresIndependentExplicitRequest(t *testing.T) {
 		if permit {
 			want = "character"
 		}
-		if err != nil || tools.calls != 1 || tools.voice != want || m.checks != 1 {
+		if err != nil || tools.calls != map[bool]int{false: 2, true: 1}[permit] || tools.voice != want || m.checks != 0 {
 			t.Fatal(err, tools, m)
 		}
 	}

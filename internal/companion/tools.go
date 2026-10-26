@@ -18,9 +18,6 @@ type ToolAccess interface {
 type surfReviewer interface {
 	ReviewSurf(context.Context, Decision) (Decision, error)
 }
-type resourceReuseVerifier interface {
-	VerifyResourceReuse(context.Context, string) (bool, error)
-}
 
 func (e *Engine) decide(ctx context.Context, system string, turns []map[string]string) (Decision, error) {
 	baseSystem := system
@@ -48,8 +45,6 @@ func (e *Engine) decide(ctx context.Context, system string, turns []map[string]s
 	}
 	tools = bounded
 	need := resourceNeed(turns)
-	songRequest := songIntentRequest(turns)
-	songMode, songModeChecked := "", false
 	reviewSurf := func(d Decision) (Decision, error) {
 		if need.Kind == "surf" {
 			if reviewer, ok := e.Tools.(surfReviewer); ok {
@@ -71,7 +66,7 @@ func (e *Engine) decide(ctx context.Context, system string, turns []map[string]s
 	activeTools := []mcptools.Tool{}
 	if nativeFunctions {
 		for _, t := range tools {
-			if t.Name == "web_search" || t.Name == "web_fetch" || t.Name == "web_media_download" || t.Name == "media_recent" || t.Name == "speech_synthesize" || t.Name == "music_local_start" || t.Name == "music_local_status" {
+			if strings.HasPrefix(t.Name, "workspace_") || t.Name == "server_status" || t.Name == "web_search" || t.Name == "web_fetch" || t.Name == "web_media_download" || t.Name == "media_recent" || t.Name == "speech_synthesize" || t.Name == "music_local_start" || t.Name == "music_local_status" {
 				activeTools = append(activeTools, t)
 			}
 		}
@@ -182,7 +177,6 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 	formatPending := false
 	surfHasCandidates, surfInspectionPrompted := false, false
 	surfForcePrompts := 0
-	reuseCheckDone, reuseCheckResult := false, false
 	repairFormat := func(code string, answer string) bool {
 		observeDecision(ctx, code, formatRepairs+1)
 		if formatRepairs >= 2 {
@@ -338,22 +332,12 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 				turns = append(turns, map[string]string{"role": "assistant", "content": answer}, map[string]string{"role": "user", "content": "附件校验：media_ids必须取本轮已准备媒体的media[].id，不是asset_id、job_id或文件名。完整歌曲若有多个附件，请按结果顺序全部选择，不漏分段。不要重新生成或重复下载。"})
 				continue
 			}
-			unstarted := false
-			if !backgroundScheduled && !musicDelivery && len(response.MediaIDs) == 0 && (allowed["music_local_start"] || allowed["music_generate"]) {
-				var checkErr error
-				unstarted, checkErr = e.unexecutedMusicPromise(ctx, currentMessage(turns), response.Messages)
-				if checkErr != nil {
-					return Decision{Action: "reply", Messages: []string{"这次没能确认歌曲任务是否需要执行，暂时没有新建生成任务。"}, Reason: "music_intent_check_failed"}, nil
-				}
-			}
+
 			missingSong := musicDelivery && len(response.MediaIDs) == 0
-			if unstarted || missingSong {
+			if missingSong {
 				if repairs < 2 && calls < max && (allowed["music_local_start"] || allowed["music_local_status"]) {
 					repairs++
-					instruction := "你刚才只承诺了制作歌曲，没有实际提交任务。先判断用户要原创还是翻唱。原创可写新词；翻唱必须取得正确参考音频和真实歌词，使用cover模式；缺资料时先检查素材/转写或询问，不能写新词代替原词。按真实需求调用music_local_start；只有真实返回任务才能说稍等。不能用闲聊代替执行。"
-					if missingSong {
-						instruction = "这次是已完成歌曲的结果交付。立即用当前music_job调用music_local_status，取得真实附件并放入media_ids；不能重复生成，也不能只说稍等或选择安静。"
-					}
+					instruction := "这次是已完成歌曲的结果交付。调用当前music_job的music_local_status核对真实附件并使用media_ids；不能重新生成或冒充已交付。"
 					turns = append(turns, map[string]string{"role": "assistant", "content": answer}, map[string]string{"role": "user", "content": "程序执行校验：" + instruction})
 					continue
 				}
@@ -417,7 +401,7 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 					continue
 				}
 			}
-			missing := need.Required && len(response.MediaIDs) == 0 && response.ImageID == "" && downloads == 0
+			missing := false
 			if backgroundScheduled {
 				missing = false
 			}
@@ -497,70 +481,7 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 		canonical, _ := json.Marshal(compact)
 		callKey := response.Tool + "|" + string(canonical)
 		blockedResult := ""
-		if response.Tool == "music_local_start" {
-			var singing struct {
-				Voice string `json:"singing_voice"`
-			}
-			_ = json.Unmarshal(args, &singing)
-			if singing.Voice == "character" {
-				checker, ok := e.model.(interface {
-					AllowCharacterSinging(context.Context, string) (bool, error)
-				})
-				allowedVoice := false
-				if ok {
-					checkCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
-					var err error
-					allowedVoice, err = checker.AllowCharacterSinging(checkCtx, songRequest)
-					cancel()
-					allowedVoice = allowedVoice && err == nil
-				}
-				if !allowedVoice {
-					blockedResult = "未提交：用户没有明确要求角色自己的歌声或RVC换声，或无法确认该授权。改用singing_voice=native，默认vocal_gender=female，经YuE生成；不要擅自使用RVC。"
-				}
-			}
-		}
-		if response.Tool == "music_local_start" || response.Tool == "music_generate" {
-			if checker, ok := e.model.(interface {
-				ClassifySongOperation(context.Context, string) (string, error)
-			}); ok {
-				if !songModeChecked {
-					checkCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
-					mode, err := checker.ClassifySongOperation(checkCtx, songRequest)
-					cancel()
-					if err != nil {
-						return Decision{Action: "reply", Reason: "song_operation_unconfirmed", Messages: []string{"这次没能确认该按原曲翻唱还是创作新歌，我先不提交错误的歌曲任务。"}}, nil
-					}
-					songMode, songModeChecked = mode, true
-				}
-				var proposed struct {
-					Mode string `json:"mode"`
-				}
-				_ = json.Unmarshal(args, &proposed)
-				if response.Tool == "music_generate" {
-					proposed.Mode = "original"
-				}
-				if proposed.Mode != songMode || songMode == "none" {
-					blockedResult = "未提交歌曲：独立需求分析由模型判断本条需要 " + songMode + "，你提出的模式不符合。重新选工具参数：cover先media_recent核对或真实下载对应原录音，提供reference_asset_id和lyrics_evidence_ids，原歌词保持、风格符合原曲，必须经过YuE；缺原曲先找，不改编新词冒充。none表示不能新建歌曲。"
-				}
-			}
-		}
-		if need.Fresh && response.Tool == "media_reuse" {
-			if checker, ok := e.model.(resourceReuseVerifier); ok {
-				if !reuseCheckDone {
-					checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-					reuse, err := checker.VerifyResourceReuse(checkCtx, currentMessage(turns))
-					cancel()
-					if err != nil {
-						return Decision{Action: "reply", Reason: "resource_reference_unconfirmed", Messages: []string{"我这次没能确认该复用哪份素材，暂时没有重发。可以引用要的那条消息给我。"}}, nil
-					}
-					reuseCheckDone, reuseCheckResult = true, reuse
-				}
-				need.Fresh = !reuseCheckResult
-			}
-			if need.Fresh {
-				blockedResult = "没有复用旧素材：本条请求要找新资源。请按用户给出的曲名、作品或风格真实联网搜索并尝试获取匹配文件；不能用旧歌替代，也不能只查本地目录就声称没找到。"
-			}
-		}
+
 		if old, ok := previousCalls[callKey]; ok && strings.HasPrefix(response.Tool, "web_") {
 			blockedResult = "程序没有重复执行相同请求；上一次结果：" + old + "。请换有效来源/参数，或如实给出最终回复。"
 		}
