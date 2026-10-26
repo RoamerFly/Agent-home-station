@@ -164,17 +164,19 @@ func TestDeviceTaskCancelDeduplicateAndLock(t *testing.T) {
 	if e != nil || again.ID != task.ID {
 		t.Fatal("duplicate task", e)
 	}
-	if _, e = c.Start(Source{Admin: true, MessageID: "other"}, "lab", "另一个"); e == nil {
-		t.Fatal("device lock missing")
+	queued, e := c.Start(Source{Admin: true, MessageID: "other"}, "lab", "另一个")
+	if e != nil || queued.State != "queued" {
+		t.Fatal("durable queue", e)
 	}
 	if e = c.Cancel(task.ID, Source{Account: "other"}); e == nil {
 		t.Fatal("scope bypass")
 	}
-	if e = c.Cancel(task.ID, Source{Admin: true}); e != nil {
+	if e = c.StopAll(); e != nil {
 		t.Fatal(e)
 	}
 	_ = c.Close()
 	waitState(t, c, task.ID, "cancelled")
+	waitState(t, c, queued.ID, "cancelled")
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.args) != 0 {
