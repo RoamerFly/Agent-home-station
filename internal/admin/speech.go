@@ -141,7 +141,7 @@ func (p *permittedTools) generateSpeech(ctx context.Context, name string, args j
 	c := p.manager.speechConfig()
 	var in struct{ Text, Instruction, Prompt, Lyrics, Kind, Title string }
 	if json.Unmarshal(args, &in) != nil {
-		return "", errors.New("语音参数无效")
+		return "", toolInputError("语音参数无效")
 	}
 	var u string
 	var e error
@@ -149,16 +149,16 @@ func (p *permittedTools) generateSpeech(ctx context.Context, name string, args j
 	if name == "speech_synthesize" {
 		kind = "voice"
 		if !c.TTSEnabled {
-			return "", errors.New("语音合成未启用")
+			return "", toolInputError("语音合成未启用")
 		}
 		u, e = bailian.New(c).Synthesize(ctx, in.Text, in.Instruction)
 	} else {
 		kind = p.musicDeliveryKind(kind)
 		if !c.MusicEnabled {
-			return "", errors.New("歌曲生成未启用")
+			return "", toolInputError("歌曲生成未启用")
 		}
 		if songTitle(in.Title) == "" {
-			return "", errors.New("请根据歌曲语义自拟具体歌名")
+			return "", toolInputError("请根据歌曲语义自拟具体歌名")
 		}
 		u, e = bailian.New(c).Music(ctx, in.Prompt, in.Lyrics)
 	}
@@ -167,7 +167,7 @@ func (p *permittedTools) generateSpeech(ctx context.Context, name string, args j
 	}
 	data, typ, e := mcptools.GetPublicMedia(ctx, u, 25<<20)
 	if e != nil {
-		return "", errors.New("生成音频下载失败")
+		return "", toolInputError("生成音频下载失败")
 	}
 	if name == "music_generate" {
 		return p.stageSongOutput(ctx, data, typ, in.Title, kind)
@@ -178,7 +178,7 @@ func (p *permittedTools) generateSpeech(ctx context.Context, name string, args j
 	} else if kind == "file" {
 		out = plugins.Output{Text: "完整生成歌曲，尚未发送", Media: []plugins.MediaResult{{Kind: "file", Data: data, MIMEType: typ, Filename: "鲸鱼娘原创歌曲.mp3"}}}
 	} else {
-		return "", errors.New("发送格式无效")
+		return "", toolInputError("发送格式无效")
 	}
 	if e != nil {
 		return "", e
@@ -212,15 +212,15 @@ func normalizeSpeech(ctx context.Context, dir string, data []byte) ([]byte, erro
 func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnative.Message) (string, error) {
 	c := a.manager.speechConfig()
 	if !c.ASREnabled {
-		return "", errors.New("语音识别未启用")
+		return "", toolInputError("语音识别未启用")
 	}
 	reader, ok := a.manager.native.(incomingReader)
 	if !ok {
-		return "", errors.New("语音下载后台不可用")
+		return "", toolInputError("语音下载后台不可用")
 	}
 	data, _, e := reader.IncomingMedia(ctx, message.ID, 8<<20)
 	if e != nil {
-		return "", errors.New("微信语音下载失败")
+		return "", toolInputError("微信语音下载失败")
 	}
 	wav, e := normalizeSpeech(ctx, a.manager.dir, data)
 	if e != nil {

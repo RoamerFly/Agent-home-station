@@ -67,14 +67,14 @@ func pluginJobSummary(t agentTask) map[string]any {
 }
 func (p *permittedTools) startPluginJob(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	if !p.pluginTaskAllowed() {
-		return "", errors.New("后台插件任务需要启用持续任务并选择已授权会话；预演不创建远端任务")
+		return "", toolInputError("后台插件任务需要启用持续任务并选择已授权会话；预演不创建远端任务")
 	}
 	var arg map[string]any
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
 	if json.Unmarshal(args, &arg) != nil || arg == nil || len(args) > 8192 {
-		return "", errors.New("插件参数无效")
+		return "", toolInputError("插件参数无效")
 	}
 	canonical, _ := json.Marshal(arg)
 	if err := p.runtime.CheckJobArgs(name, canonical); err != nil {
@@ -101,10 +101,6 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 		a.mu.Unlock()
 		b, _ := json.Marshal(pluginJobSummary(old))
 		return string(b), nil
-	}
-	if len(a.data.Tasks) >= 500 {
-		a.mu.Unlock()
-		return "", errors.New("任务记录达到上限")
 	}
 	t.Updated = time.Now().UTC()
 	a.data.Tasks[id] = t
@@ -139,11 +135,11 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 				return string(b), nil
 			}
 		}
-		return "", errors.New("插件任务状态已改变")
+		return "", toolInputError("插件任务状态已改变")
 	}
 	p.manager.record(bot.Record{Event: "plugin_job_submitted", Category: "tool", ThreadID: t.Thread, MessageID: t.OriginTrace, Tool: name, Status: t.State, Reason: "plugin_job_durable_claim", Content: t.LastResult, Origin: "agent"})
 	if callErr != nil {
-		return "", errors.New("plugin_job_submission_unknown")
+		return "", toolInputError("plugin_job_submission_unknown")
 	}
 	b, _ := json.Marshal(pluginJobSummary(t))
 	return string(b), nil
@@ -153,7 +149,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		TaskID string `json:"task_id"`
 	}
 	if json.Unmarshal(args, &in) != nil || len(in.TaskID) > 128 {
-		return "", errors.New("插件任务参数无效")
+		return "", toolInputError("插件任务参数无效")
 	}
 	var task *agentTask
 	for _, old := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
@@ -163,7 +159,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		}
 	}
 	if task == nil || task.Sender != p.trace.Sender && !p.privileged() {
-		return "", errors.New("只能查询或取消本人在本会话发起的插件任务")
+		return "", toolInputError("只能查询或取消本人在本会话发起的插件任务")
 	}
 	if name == "plugin_job_cancel" {
 		out, err := p.manager.cancelPluginTask(ctx, *task)
@@ -182,10 +178,10 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		return string(b), nil
 	}
 	if task.Delivery != nil || task.PluginJob.Prepared {
-		return "", errors.New("任务已进入微信交付，请核对原回执，不重复暂存或发送")
+		return "", toolInputError("任务已进入微信交付，请核对原回执，不重复暂存或发送")
 	}
 	if !p.enabled(task.PluginJob.Ticket.Tool) {
-		return "", errors.New("原插件或媒体权限已关闭")
+		return "", toolInputError("原插件或媒体权限已关闭")
 	}
 	if _, err := p.runtime.NewJobTicket(task.PluginJob.Ticket.Tool); err != nil {
 		return "", err
@@ -193,7 +189,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 	// Validate the original manifest fingerprint before accessing cached output.
 	current, _ := p.runtime.NewJobTicket(task.PluginJob.Ticket.Tool)
 	if current.Fingerprint != task.PluginJob.Ticket.Fingerprint {
-		return "", errors.New("插件声明已改变，旧任务未交给新接口")
+		return "", toolInputError("插件声明已改变，旧任务未交给新接口")
 	}
 	result, err := p.stageOutput(ctx, task.PluginJob.Ticket.Output)
 	if err != nil {
@@ -203,7 +199,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 	if saved, err := p.manager.agent.pluginUpdate(*task); err != nil {
 		return "", err
 	} else if !saved {
-		return "", errors.New("任务状态已改变，未交付过期结果")
+		return "", toolInputError("任务状态已改变，未交付过期结果")
 	}
 	var staged struct {
 		Media []companion.GeneratedMedia `json:"media"`

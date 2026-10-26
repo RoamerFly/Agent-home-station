@@ -64,6 +64,10 @@ type Tool struct {
 
 type Spec Tool
 
+// BuiltinTools exposes only the local, deterministic schemas, without starting
+// or contacting an external MCP server.
+func BuiltinTools() []Tool { return builtin() }
+
 type Hub struct {
 	servers  []ServerConfig
 	mu       sync.Mutex

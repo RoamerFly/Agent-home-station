@@ -20,16 +20,22 @@ import (
 )
 
 type Config struct {
-	Mode           string   `json:"mode"` // disabled, read, files, full
-	Roots          []string `json:"roots"`
-	TimeoutSeconds int      `json:"timeout_seconds"`
-	OutputBytes    int      `json:"output_bytes"`
+	Windows        *WindowsConfig `json:"windows,omitempty"`
+	Mode           string         `json:"mode"` // disabled, read, files, full
+	Roots          []string       `json:"roots"`
+	TimeoutSeconds int            `json:"timeout_seconds"`
+	OutputBytes    int            `json:"output_bytes"`
 }
 
 func Defaults() Config {
 	return Config{Mode: "disabled", Roots: []string{}, TimeoutSeconds: 60, OutputBytes: 16000}
 }
 func (c Config) Validate() error {
+	if c.Windows != nil {
+		if err := c.Windows.Validate(); err != nil {
+			return err
+		}
+	}
 	if c.Mode != "disabled" && c.Mode != "read" && c.Mode != "files" && c.Mode != "full" {
 		return errors.New("服务器权限级别无效")
 	}
@@ -90,7 +96,17 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		return nil, err
 	}
 	if tool == "server_status" {
-		return map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "roots": h.Config.Roots, "mode": h.Config.Mode, "command_identity": "management service OS user; no automatic sudo"}, nil
+		return map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "roots": h.Config.Roots, "mode": h.Config.Mode, "windows_hidden_executor": h.Config.Windows != nil, "command_identity": "management service OS user; no automatic sudo"}, nil
+	}
+	if runtime.GOOS != "windows" && len(in.Path) >= 3 && in.Path[1] == ':' {
+		normalized, e := WindowsLocalPath(in.Path)
+		if e != nil {
+			return nil, e
+		}
+		if stat, e := os.Stat(normalized[:6]); e != nil || !stat.IsDir() {
+			return nil, errors.New("收到Windows盘符路径，但当前节点没有对应挂载；先server_status确认运行节点")
+		}
+		in.Path = normalized
 	}
 	root, rel, err := h.rooted(in.Path)
 	if err != nil {
@@ -135,7 +151,8 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		}
 		sum := sha256.Sum256(data)
 		end := min(len(data), in.Offset+h.Config.OutputBytes)
-		return map[string]any{"content": strings.ToValidUTF8(string(data[in.Offset:end]), "�"), "truncated": end < len(data), "next_offset": end, "sha256": hex.EncodeToString(sum[:]), "bytes": len(data)}, nil
+		resolved, _ := filepath.EvalSymlinks(in.Path)
+		return map[string]any{"path": in.Path, "resolved_path": resolved, "content": strings.ToValidUTF8(string(data[in.Offset:end]), "�"), "truncated": end < len(data), "next_offset": end, "sha256": hex.EncodeToString(sum[:]), "bytes": len(data)}, nil
 
 	case "server_edit":
 		return h.edit(root, rel, in)
@@ -152,7 +169,13 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		// in a future API, rather than silently destroying user data.
 		f, err := root.OpenFile(rel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err != nil {
-			return nil, errors.New("无法创建文件：路径不可用或文件已存在；未覆盖")
+			if errors.Is(err, os.ErrExist) {
+				return nil, errors.New("文件已存在，未覆盖；先server_read再用server_edit按sha256修改")
+			}
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, errors.New("父目录不存在；先检查路径或使用server_exec创建所需目录")
+			}
+			return nil, errors.New("文件创建失败；请检查目录权限与磁盘空间，未覆盖已有文件")
 		}
 		_, err = f.WriteString(in.Content)
 		if err == nil {

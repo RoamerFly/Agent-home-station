@@ -651,6 +651,9 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 	a := p.manager.agent
 	id := p.operationID(name, args)
 	a.mu.Lock()
+	if old, ok := a.data.Operations[id]; ok && old.State == "rejected" {
+		delete(a.data.Operations, id)
+	}
 	if old, ok := a.data.Operations[id]; ok {
 		a.mu.Unlock()
 		if string(old.Arguments) != string(args) {
@@ -671,6 +674,9 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 	value, err := fn()
 	if err != nil {
 		value = map[string]any{"state": "needs_review", "reason": err.Error(), "instruction": "操作可能已经产生影响；请检查实际结果，不自动重复"}
+		if name == "server_process" || name == "server_windows_process" {
+			value = map[string]any{"state": "rejected", "reason": err.Error(), "instruction": "程序未启动；检查路径、参数和本机执行环境后可更正再试，不属于结果不确定"}
+		}
 		if strings.HasPrefix(name, "wechat_") {
 			value = map[string]any{"state": "waiting", "reason": err.Error(), "instruction": "读取目标会话真实记录和原发送任务，依据反馈继续排查并修复。新的一次补发尝试可用新request_key，保留原job_id；已接受部分不重发。需要退避时agent_task保存waiting检查点，不能只说明失败便结束。"}
 		}
@@ -684,6 +690,9 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 	op.State = "completed"
 	if err != nil {
 		op.State = "needs_review"
+		if name == "server_process" || name == "server_windows_process" {
+			op.State = "rejected"
+		}
 	}
 	op.Result = string(b)
 	a.mu.Lock()
