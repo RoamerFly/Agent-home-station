@@ -44,6 +44,12 @@ func TestMobileRoutesRequireAuthenticationAndCSRF(t *testing.T) {
 
 func TestDeviceRecordingParametersAndSourceMemory(t *testing.T) {
 	o := mobile.Observation{AllowedPackages: []string{"test.browser"}, Browsers: []string{"test.browser"}}
+	if validDeviceStep(mobile.Step{Action: "capture"}, o) {
+		t.Fatal("record duration omitted")
+	}
+	if !validDeviceStep(mobile.Step{Action: "capture", Arguments: map[string]any{"seconds": float64(4)}}, o) {
+		t.Fatal("explicit recording duration rejected")
+	}
 	if validDeviceStep(mobile.Step{Action: "open_url"}, o) {
 		t.Fatal("missing browser/url accepted")
 	}
