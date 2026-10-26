@@ -511,6 +511,12 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				_ = m.agent.task(t)
 				return
 			}
+			if t.RecoveryMessageID != "" && (state == "reply" || state == "silent" || state == "synchronous_round_finished") {
+				t.State = "completed"
+				t.LastResult = "原消息已交由模型处理；回复已交给发送链路或模型选择安静，实际送达以发送记录为准"
+				_ = m.agent.task(t)
+				return
+			}
 			t.State = "needs_review"
 			t.LastResult = "本轮结束：" + state + "；模型未安排下一检查点，请在管理页查看或恢复"
 			if t.ReportSourceThread != "" && t.OwnerRequested {

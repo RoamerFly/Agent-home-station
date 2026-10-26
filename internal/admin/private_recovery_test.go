@@ -5,12 +5,40 @@ import (
 	"testing"
 	"time"
 	"wechat-bot/internal/bot"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
 type prefixRecoveryNative struct {
 	*fakeNative
 	msg linuxnative.Message
+}
+
+func TestRecoveredPrivateReplyRecordsProcessingAndActualMediaDelivery(t *testing.T) {
+	f, _ := trustedAgent(t)
+	task := agentTask{ID: "recovered", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", RecoveryMessageID: "original", State: "running"}
+	if e := f.manager.agent.task(task); e != nil {
+		t.Fatal(e)
+	}
+	in := companion.Input{Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TaskID: task.ID, TraceID: "recover-recovered"}
+	f.manager.finishAgentTask(in, "reply")
+	if got := f.manager.agent.list("test", in.Thread)[0]; got.State != "completed" || got.Delivery != nil {
+		t.Fatal("processed reply invented a receipt or requested review", got)
+	}
+	delivery := bot.TaskDelivery{Trace: in.TraceID, Expected: 1, Accepted: 0, State: "partial"}
+	if e := f.manager.updateAgentDelivery(in, delivery); e != nil {
+		t.Fatal(e)
+	}
+	if got := f.manager.agent.list("test", in.Thread)[0]; got.State != "waiting_delivery" {
+		t.Fatal("media state was not tracked", got)
+	}
+	delivery.State, delivery.Accepted = "accepted", 1
+	if e := f.manager.updateAgentDelivery(in, delivery); e != nil {
+		t.Fatal(e)
+	}
+	if got := f.manager.agent.list("test", in.Thread)[0]; got.State != "completed" || got.Delivery.Accepted != 1 {
+		t.Fatal("real media receipt not retained", got)
+	}
 }
 
 func (n *prefixRecoveryNative) Message(context.Context, string) (linuxnative.Message, error) {
