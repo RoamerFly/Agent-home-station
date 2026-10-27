@@ -78,6 +78,30 @@ func TestReadToolsContinueBeyondFormerTotalCeilings(t *testing.T) {
 	}
 }
 
+func TestExplicitReadLengthCanExceedDefaultAndExplainsTransportSplit(t *testing.T) {
+	c := Defaults()
+	c.Mode = "read"
+	c.Roots = []string{t.TempDir()}
+	h := Host{c}
+	path := filepath.Join(c.Roots[0], "long.txt")
+	os.WriteFile(path, []byte(strings.Repeat("a", 200000)), 0600)
+	v, e := invoke(t, h, "server_read", Input{Path: path, Length: 40000})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(v.(map[string]any)["content"].(string)) != 40000 {
+		t.Fatal("explicit length clipped to default")
+	}
+	v, e = invoke(t, h, "server_read", Input{Path: path, Length: 1 << 20})
+	if e != nil {
+		t.Fatal(e)
+	}
+	r := v.(map[string]any)
+	if r["length_adjustment_reason"] == nil || !r["truncated"].(bool) || r["next_offset"].(int64) <= 40000 {
+		t.Fatal("transport continuation missing", r)
+	}
+}
+
 func TestSearchReadsPastFormerFileSizeAndScanCount(t *testing.T) {
 	c := Defaults()
 	c.Mode = "read"

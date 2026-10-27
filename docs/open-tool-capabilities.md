@@ -1,6 +1,8 @@
 # 工具能力暴露与按需读取
 
-版本：`0.29.0-open-tools-local`。
+版本：`0.29.1-adjustable-defaults-local`。
+
+**工具默认值只是起点，不是能力上限。Agent可按聊天需求动态指定精度、范围、分页、批大小、分辨率、分析预算和执行时间；不得把默认值静默当作固定限制。** 此原则已写入项目AGENTS.md及运行时共享指南tool-defaults.md。
 
 ## 本轮问题与改动
 
@@ -39,13 +41,13 @@ MCP的工具目录分页遵循 [2025-06-18版官方协议](https://github.com/mo
 
 每批输出真实 `frame_indexes`、`timestamps_seconds` 和分析。继续调用时使用 `next_start_frame`；`complete=true` 表示从本次起点起的后续范围读到末尾，只有从0开始并保留所有已读页，才能判断完整覆盖。`step>1` 是主动抽样，返回 `coverage=sampled_frames`，不能称为逐帧读取。
 
-单页最多64帧、视觉请求每批最多8图；这控制一次调用的资源载荷，总帧数和页数没有此数量上限。若某批模型请求失败，已成功批次保留，返回未读位置与原因。大结果被保留为 `result_id` 时，先用 `tool_output_read` 续读完整反馈。长任务用 `agent_task` 保存来源、已读范围和下一页起点。
+默认page_size=24、batch_size=8、max_dimension=960，Agent均可动态调整；已移除单页64帧及本地视觉客户端8图硬限制。按批解码、分析并立即释放临时帧，避免把整页图片一次堆入内存。实际字节载荷或提供商要求失败时会返回原因与未读位置，可调整批大小/分辨率继续。timeout_seconds默认240，显式0不添加本地截止时间，仍尊重上游取消。若某批模型请求失败，已成功批次保留，返回未读位置与原因。大结果被保留为 `result_id` 时，先用 `tool_output_read` 续读完整反馈。长任务用 `agent_task` 保存来源、已读范围和下一页起点。
 
 ```json
 {"action":"audio","asset_id":"工具实际返回的素材编号","start_seconds":180,"duration_seconds":90}
 ```
 
-音轨每次默认90秒、最多180秒，继续使用 `next_start_seconds`，可处理开头180秒之后的内容；若实际音轨早于画面结束，会返回 `audio_track_ended_early`。转写权限关闭、没有音轨、解码失败或提供商不可用会明确失败，不把画面观察当成听过音轨的证据。
+音轨默认请求90秒，Agent可以指定更长的duration_seconds，由工具按audio_chunk_seconds（默认180，可调整）处理完整范围；PCM片段若超过8MiB传输预算会分段并返回实际片段大小及原因，不静默缩短请求范围。audio_timeout_seconds默认60，显式0继承上游取消。next_start_seconds用于部分完成后的续读，requested_range_complete表示本次所需范围完成，video_audio_complete表示已到整个音轨末尾；若实际音轨早于画面结束，会返回 `audio_track_ended_early`。转写权限关闭、没有音轨、解码失败或提供商不可用会明确失败，不把画面观察当成听过音轨的证据。
 
 ## 文件、目录与素材的续读
 
@@ -55,7 +57,7 @@ MCP的工具目录分页遵循 [2025-06-18版官方协议](https://github.com/mo
 
 上例用于 `server_list`。`server_search` 增加 `content` 搜索文本，offset指匹配行数；遇到 `has_more=true` 继续下一页。搜索基于实时文件系统，目录变更后应重新核对；异常长行、非UTF-8或无法读取文件会报告 `skipped_files`，不能声称已经完整搜索。
 
-`server_read` 的offset/length以字节计；连续读取必须使用返回的 `next_offset`，可传上次完整 `sha256` 为 `expected_sha256`。读取期间文件变化会拒绝混用两个版本。`workspace_*` 的offset以文档计，`media_recent`以匹配素材计。
+`server_read` 的offset/length以字节计；显式length可以大于默认输出长度。仅在JSON转义后的结果无法装入1MiB保留结果传输封套时拆页，并返回requested_length/effective_length、原因与next_offset；连续读取必须使用返回的 `next_offset`，可传上次完整 `sha256` 为 `expected_sha256`。读取期间文件变化会拒绝混用两个版本。`workspace_*` 的offset以文档计，`media_recent`以匹配素材计。
 
 ## 保留的执行边界与可替代路径
 
@@ -65,7 +67,7 @@ MCP的工具目录分页遵循 [2025-06-18版官方协议](https://github.com/mo
 - 图像提供商可能有自身的模型、上下文、输出和格式要求；`analysis_tokens` 是请求参数，实际可用范围以提供商响应为准。
 - 本轮没有实现所有站点的登录/解密能力、无限磁盘、无限模型上下文或无限单请求内存；原始资料仍需能实际取得。
 
-共享工作区新增 `tool-reading.md`。它解释分页、逐帧、音轨续读与持久化检查点；工具schema按需发现，避免把所有参数说明常驻模型上下文。
+共享工作区有 `tool-reading.md` 与优先适用的 `tool-defaults.md`。它解释分页、逐帧、音轨续读与持久化检查点；工具schema按需发现，避免把所有参数说明常驻模型上下文。
 
 ## 验证证据
 
@@ -77,3 +79,11 @@ MCP的工具目录分页遵循 [2025-06-18版官方协议](https://github.com/mo
 - Agent原生function调用模拟：读取两页工具schema，再真实执行合成目录中第12个工具，证明后续匹配可发现并调用。
 
 合成调用、真实模型分析和微信投递是不同证据。本轮没有向任何微信会话发送测试消息。更新只替换本机管理服务，保留微信登录、私有配置、历史记录和已生成媒体，不构建或导出Docker镜像。
+
+
+## 可调整默认值的验证
+
+- 合成96帧视频中指定一页80帧、每批20帧，实际分4批解码和分析，跨过旧64/8限制；批次临时帧及时清理。
+- 本地视觉HTTP契约测试接受12图请求，普通聊天预算不变；当前配置的真实视觉模型也以每批12图、共2批接收24帧并返回分析。其他提供商可接受的数量以真实响应为准。
+- 指定240秒音轨范围、200秒片段时完整处理240秒；片段请求600秒超过PCM传输载荷时明确分段，仍处理完整范围。
+- server_read显式读取40000字节，超过默认16000；超传输封套时保留可继续的起点与明确原因。

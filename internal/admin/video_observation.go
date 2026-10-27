@@ -91,20 +91,31 @@ func (a mediaUnderstanding) videoAudio(ctx context.Context, data []byte) (string
 }
 
 func (a mediaUnderstanding) videoAudioRange(ctx context.Context, data []byte, start, length float64) (string, float64, error) {
-	if start < 0 || length <= 0 || length > 180 {
+	return a.videoAudioRangeTimed(ctx, data, start, length, 60)
+}
+func (a mediaUnderstanding) videoAudioRangeTimed(ctx context.Context, data []byte, start, length float64, timeout int) (string, float64, error) {
+	if start < 0 || length <= 0 || timeout < 0 {
 		return "", 0, errors.New("video_audio_range_invalid")
 	}
-	budget := 60 * time.Second
+	budget := time.Duration(timeout) * time.Second
 	if deadline, ok := ctx.Deadline(); ok {
 		// Leave time to return already-obtained visual evidence when ASR uses
 		// up the remainder of the overall media-analysis deadline.
-		budget = min(budget, time.Until(deadline)-500*time.Millisecond)
+		left := time.Until(deadline) - 500*time.Millisecond
+		if left <= 0 {
+			return "", 0, errors.New("video_audio_time_budget_exhausted")
+		}
+		if timeout == 0 {
+			budget = left
+		} else {
+			budget = min(budget, left)
+		}
 	}
-	if budget <= 0 {
-		return "", 0, errors.New("video_audio_time_budget_exhausted")
+	if budget > 0 {
+		bounded, cancel := context.WithTimeout(ctx, budget)
+		defer cancel()
+		ctx = bounded
 	}
-	ctx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
 	dir, err := os.MkdirTemp(a.manager.dir, "video-audio-")
 	if err != nil {
 		return "", 0, errors.New("video_audio_staging_failed")
@@ -114,19 +125,15 @@ func (a mediaUnderstanding) videoAudioRange(ctx context.Context, data []byte, st
 	if err = os.WriteFile(in, data, 0600); err != nil {
 		return "", 0, errors.New("video_audio_staging_failed")
 	}
-	extractCtx, stop := context.WithTimeout(ctx, 20*time.Second)
-	cmd := exec.CommandContext(extractCtx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-threads", "1", "-ss", formatSeconds(start), "-i", in, "-map", "0:a:0", "-vn", "-t", formatSeconds(length), "-threads", "1", "-filter_threads", "1", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", out)
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-threads", "1", "-ss", formatSeconds(start), "-i", in, "-map", "0:a:0", "-vn", "-t", formatSeconds(length), "-threads", "1", "-filter_threads", "1", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", out)
 	err = cmd.Run()
-	stop()
 	if err != nil {
 		return "", 0, errors.New("video_audio_unavailable")
 	}
 	// Probe the actual extracted track: audio may end before the video does.
-	probeCtx, stop := context.WithTimeout(ctx, 5*time.Second)
-	probeLength, err := exec.CommandContext(probeCtx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "wav", "-show_entries", "format=duration", "-of", "csv=p=0", out).Output()
-	stop()
+	probeLength, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "wav", "-show_entries", "format=duration", "-of", "csv=p=0", out).Output()
 	seconds, parseErr := strconv.ParseFloat(strings.TrimSpace(string(probeLength)), 64)
-	if err != nil || parseErr != nil || seconds <= 0 || seconds > 180.1 || seconds != seconds {
+	if err != nil || parseErr != nil || seconds <= 0 || seconds > length+.1 || seconds != seconds {
 		return "", 0, errors.New("video_audio_duration_invalid")
 	}
 	wav, err := os.ReadFile(out)

@@ -26,7 +26,7 @@ func (c *Client) VisionWithBudget(ctx context.Context, prompt string, images []I
 
 // Vision sends bytes only to the configured provider and does not persist them.
 func (c *Client) Vision(ctx context.Context, prompt string, images []Image) (string, error) {
-	if len(images) < 1 || len(images) > 8 || len(prompt) > 8192 {
+	if len(images) < 1 || len(prompt) > 8192 {
 		return "", errors.New("invalid vision input")
 	}
 	parts := []map[string]any{{"type": "text", "text": prompt}}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 	"wechat-bot/internal/companion"
@@ -40,8 +41,18 @@ func TestLivePagedVideoInspection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	start, total, batches := 0, 0, 0
+	pageSize, batchSize := 13, 8
+	for key, target := range map[string]*int{"WECHAT_VIDEO_INSPECTION_PAGE_SIZE": &pageSize, "WECHAT_VIDEO_INSPECTION_BATCH_SIZE": &batchSize} {
+		if raw := os.Getenv(key); raw != "" {
+			value, e := strconv.Atoi(raw)
+			if e != nil || value < 1 {
+				t.Fatal("invalid explicit inspection test option")
+			}
+			*target = value
+		}
+	}
 	for {
-		raw := json.RawMessage(fmt.Sprintf(`{"action":"frames","asset_id":%q,"start_frame":%d,"page_size":13,"question":"逐帧用极短句描述色块与位置变化"}`, a.ID, start))
+		raw := json.RawMessage(fmt.Sprintf(`{"action":"frames","asset_id":%q,"start_frame":%d,"page_size":%d,"batch_size":%d,"question":"逐帧用极短句描述色块与位置变化"}`, a.ID, start, pageSize, batchSize))
 		value, e := p.Call(ctx, "video_inspect", raw)
 		var page struct {
 			Next     int `json:"next_start_frame"`

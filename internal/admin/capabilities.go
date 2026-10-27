@@ -45,8 +45,6 @@ func (p *permittedTools) capabilities() []capabilityAdapter {
 // Agent loop. A zero value retains the run deadline and a tool's own deadline.
 func (p *permittedTools) ToolTimeout(name string) time.Duration {
 	switch name {
-	case "video_inspect":
-		return 5 * time.Minute
 	case "web_search", "web_fetch":
 		return 25 * time.Second
 	case "web_audio_search":
