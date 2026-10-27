@@ -15,6 +15,15 @@ type syncCatalogNative struct {
 	hydrated []string
 	block    chan struct{}
 	started  chan struct{}
+	members  atomic.Int32
+}
+
+func (n *syncCatalogNative) RefreshGroupMembers(_ context.Context, id string) (linuxnative.CatalogSyncOperation, error) {
+	n.members.Add(1)
+	var op linuxnative.CatalogSyncOperation
+	op.State = "succeeded"
+	op.Result.RecordCount = 3
+	return op, nil
 }
 
 func (n *syncCatalogNative) StartCatalogSync(context.Context, string) (linuxnative.CatalogSyncOperation, error) {
@@ -106,4 +115,45 @@ func TestRepeatedCatalogRefreshReusesActiveJob(t *testing.T) {
 	if job.Kind != "contacts" || len(n.hydrated) != 0 {
 		t.Fatal(job)
 	}
+}
+
+func TestMemberRefreshUsesDedicatedEndpointAndAuthorizedGroup(t *testing.T) {
+	f := setup(t)
+	n := &syncCatalogNative{fakeNative: f.native}
+	f.manager.native = n
+	f.manager.config.GroupRules = []GroupRule{{ID: "room@chatroom", Name: "合成群", Mode: "mention"}}
+	f.login()
+	for _, thread := range []string{"friend", "unapproved@chatroom"} {
+		if code, _, _ := f.request("POST", "/api/catalog/sync", map[string]string{"kind": "members", "thread": thread}, true, true); code != 403 {
+			t.Fatal("unapproved target", code)
+		}
+	}
+	if code, _, _ := f.request("POST", "/api/catalog/sync", map[string]string{"kind": "members", "thread": "room@chatroom"}, true, false); code != 403 {
+		t.Fatal("missing CSRF accepted", code)
+	}
+	if code, _, _ := f.request("POST", "/api/catalog/sync", map[string]string{"kind": "members", "thread": "room@chatroom"}, true, true); code != 202 {
+		t.Fatal(code)
+	}
+	job := waitCatalogJob(t, f)
+	if job.State != "succeeded" || job.Kind != "members" || job.Thread != "room@chatroom" || job.Records != 3 || n.members.Load() != 1 || n.starts.Load() != 0 {
+		t.Fatal("wrong synchronization route", job)
+	}
+}
+
+func TestMemberRefreshDoesNotMistakeOtherCatalogJobForSelectedGroup(t *testing.T) {
+	f := setup(t)
+	n := &syncCatalogNative{fakeNative: f.native, block: make(chan struct{}), started: make(chan struct{})}
+	f.manager.native = n
+	f.manager.config.GroupRules = []GroupRule{{ID: "room@chatroom", Mode: "mention"}}
+	f.login()
+	if code, _, _ := f.request("POST", "/api/catalog/sync", map[string]string{"kind": "contacts"}, true, true); code != 202 {
+		t.Fatal(code)
+	}
+	<-n.started
+	code, _, _ := f.request("POST", "/api/catalog/sync", map[string]string{"kind": "members", "thread": "room@chatroom"}, true, true)
+	close(n.block)
+	if code != 409 || n.members.Load() != 0 {
+		t.Fatal("unrelated job reported as member refresh", code)
+	}
+	waitCatalogJob(t, f)
 }

@@ -14,7 +14,7 @@ func TestCatalogMetadataOperationScopesAndFixedRoutes(t *testing.T) {
 			t.Error("missing token")
 		}
 		switch r.URL.Path {
-		case "/v1/accounts/test/group-sync", "/v1/accounts/test/contact-sync", "/v1/accounts/test/groups/new@chatroom/refresh":
+		case "/v1/accounts/test/group-sync", "/v1/accounts/test/contact-sync", "/v1/accounts/test/groups/new@chatroom/refresh", "/v1/accounts/test/groups/new@chatroom/members/refresh":
 			if r.Method != "POST" {
 				t.Error(r.Method)
 			}
@@ -36,6 +36,12 @@ func TestCatalogMetadataOperationScopesAndFixedRoutes(t *testing.T) {
 	}
 	if _, err := s.RefreshGroupMetadata(ctx, "new@chatroom"); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := s.RefreshGroupMembers(ctx, "new@chatroom"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RefreshGroupMembers(ctx, "friend"); err == nil {
+		t.Fatal("friend admitted as member refresh")
 	}
 	if _, err := s.RefreshGroupMetadata(ctx, "friend"); err == nil {
 		t.Fatal("friend admitted as group")

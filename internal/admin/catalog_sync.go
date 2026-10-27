@@ -15,9 +15,13 @@ type nativeCatalogSync interface {
 	CatalogSyncStatus(context.Context, string) (linuxnative.CatalogSyncOperation, error)
 	RefreshGroupMetadata(context.Context, string) (linuxnative.CatalogSyncOperation, error)
 }
+type nativeMemberSync interface {
+	RefreshGroupMembers(context.Context, string) (linuxnative.CatalogSyncOperation, error)
+}
 type catalogRefresh struct {
 	ID       string `json:"id"`
 	Kind     string `json:"kind"`
+	Thread   string `json:"thread,omitempty"`
 	State    string `json:"state"`
 	Phase    string `json:"phase"`
 	Message  string `json:"message"`
@@ -38,14 +42,27 @@ func (s *Server) catalogSyncRoutes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("POST /api/catalog/sync", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Kind string `json:"kind"`
+			Kind   string `json:"kind"`
+			Thread string `json:"thread"`
 		}
 		if !decode(w, r, &in) {
 			return
 		}
-		if in.Kind != "groups" && in.Kind != "contacts" {
-			fail(w, 400, "请选择群聊或好友目录")
+		if in.Kind != "groups" && in.Kind != "contacts" && in.Kind != "members" {
+			fail(w, 400, "请选择群聊、好友或群成员目录")
 			return
+		}
+		if in.Kind == "members" {
+			if !strings.HasSuffix(in.Thread, "@chatroom") || !permittedRecipient(s.manager.Config().Config, in.Thread) {
+				fail(w, 403, "请先选择已授权的群聊")
+				return
+			}
+			if _, ok := s.manager.native.(nativeMemberSync); !ok {
+				fail(w, 501, "当前微信后台不支持群成员刷新")
+				return
+			}
+		} else {
+			in.Thread = ""
 		}
 		native, ok := s.manager.native.(nativeCatalogSync)
 		if !ok {
@@ -55,10 +72,17 @@ func (s *Server) catalogSyncRoutes(mux *http.ServeMux) {
 		s.catalogMu.Lock()
 		defer s.catalogMu.Unlock()
 		if s.catalogJob != nil && s.catalogJob.State == "running" {
+			if in.Kind == "members" && (s.catalogJob.Kind != in.Kind || s.catalogJob.Thread != in.Thread) {
+				fail(w, 409, "另一个目录同步正在进行，请完成后再刷新当前群成员")
+				return
+			}
 			respond(w, 202, *s.catalogJob)
 			return
 		}
-		job := &catalogRefresh{ID: randomToken(), Kind: in.Kind, State: "running", Phase: "inventory", Message: "正在同步微信目录…"}
+		job := &catalogRefresh{ID: randomToken(), Kind: in.Kind, Thread: in.Thread, State: "running", Phase: "inventory", Message: "正在同步微信目录…"}
+		if in.Kind == "members" {
+			job.Message = "正在从微信同步当前群的成员资料…"
+		}
 		s.catalogJob = job
 		go s.runCatalogRefresh(native, *job)
 		respond(w, 202, *job)
@@ -102,6 +126,9 @@ func (s *Server) runCatalogRefresh(n nativeCatalogSync, job catalogRefresh) {
 		job.State = "succeeded"
 		job.Phase = "done"
 		job.Message = "目录已刷新，可重新搜索。"
+		if job.Kind == "members" {
+			job.Message = "当前群成员资料已刷新。"
+		}
 		if job.Partial {
 			job.Message = "目录已部分更新，部分资料尚未完成，可再次刷新。"
 		}
@@ -112,7 +139,13 @@ func (s *Server) runCatalogRefresh(n nativeCatalogSync, job catalogRefresh) {
 		s.publishCatalog(job)
 		s.manager.record(bot.Record{Event: "catalog_sync_completed", Category: "system", Status: job.State, Reason: job.Kind, Content: job.Message})
 	}()
-	op, err := n.StartCatalogSync(ctx, job.Kind)
+	var op linuxnative.CatalogSyncOperation
+	var err error
+	if job.Kind == "members" {
+		op, err = n.(nativeMemberSync).RefreshGroupMembers(ctx, job.Thread)
+	} else {
+		op, err = n.StartCatalogSync(ctx, job.Kind)
+	}
 	if err != nil {
 		problem = err
 		return
