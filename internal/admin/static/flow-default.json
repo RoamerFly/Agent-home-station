@@ -1,0 +1,428 @@
+{
+  "version": 1,
+  "name": "大肥鱼的消息与行动",
+  "nodes": [
+    {
+      "id": "receive",
+      "kind": "receive",
+      "title": "微信接入",
+      "note": "接收群聊、好友私信和文件传输助手消息。",
+      "tone": "blue",
+      "x": 0,
+      "y": 240
+    },
+    {
+      "id": "inbox",
+      "kind": "inbox",
+      "title": "接收与去重",
+      "note": "先保存接收状态，再推进事件游标；重启后恢复未处理消息。",
+      "tone": "blue",
+      "x": 248,
+      "y": 240
+    },
+    {
+      "id": "rules",
+      "kind": "rules",
+      "title": "会话与权限",
+      "note": "检查群聊和好友授权、安静时段、消息方向与真正的@。",
+      "tone": "blue",
+      "x": 496,
+      "y": 240
+    },
+    {
+      "id": "observe",
+      "kind": "observe",
+      "title": "媒体理解",
+      "note": "读取图片、表情、语音、视频及分享卡片；失败也交给Agent决定下一步。",
+      "tone": "teal",
+      "x": 992,
+      "y": 240
+    },
+    {
+      "id": "memory",
+      "kind": "memory",
+      "title": "上下文与记忆",
+      "note": "读取会话摘要、近期消息、关系备注、引用素材和项目文档索引。",
+      "tone": "teal",
+      "x": 1240,
+      "y": 240
+    },
+    {
+      "id": "agent",
+      "kind": "agent",
+      "title": "Agent决策",
+      "note": "模型结合当前请求，决定回复、使用工具、等待或选择安静。",
+      "tone": "violet",
+      "x": 1488,
+      "y": 240
+    },
+    {
+      "id": "status",
+      "kind": "status",
+      "title": "运行与费用",
+      "note": "检查账号连接、Agent运行状态、Token消耗和服务商余额。",
+      "tone": "slate",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "quote",
+      "kind": "quote",
+      "title": "引用与正文",
+      "note": "区分用户的引用回复与新分享，关联本会话真实原消息和素材。",
+      "tone": "blue",
+      "x": 496,
+      "y": 420
+    },
+    {
+      "id": "aggregate",
+      "kind": "aggregate",
+      "title": "聚合与补充",
+      "note": "合并同一人的紧邻说明，在任务执行期间接收补充和更改。",
+      "tone": "teal",
+      "x": 744,
+      "y": 240
+    },
+    {
+      "id": "persona",
+      "kind": "persona",
+      "title": "角色与关系",
+      "note": "设置鲸鱼娘的身份、表达习惯、相处方式与群聊补充设定。",
+      "tone": "violet",
+      "x": 992,
+      "y": 0
+    },
+    {
+      "id": "model",
+      "kind": "model",
+      "title": "模型与语音",
+      "note": "配置语言、图片理解、语音识别和合成服务商。",
+      "tone": "violet",
+      "x": 1240,
+      "y": 0
+    },
+    {
+      "id": "tasks",
+      "kind": "tasks",
+      "title": "异步任务续办",
+      "note": "保存音乐生成、后台进程、提醒等任务的进度，完成后回到原会话。",
+      "tone": "amber",
+      "x": 1984,
+      "y": 240
+    },
+    {
+      "id": "archive",
+      "kind": "archive",
+      "title": "投递记忆",
+      "note": "根据实际发送状态记录文本和媒体来源，不能把发送尝试当作成功。",
+      "tone": "teal",
+      "x": 744,
+      "y": 620
+    },
+    {
+      "id": "receipt",
+      "kind": "receipt",
+      "title": "回执核对",
+      "note": "区分已接受、未确认和已观察到；服务端接受不等于手机已播放。",
+      "tone": "teal",
+      "x": 992,
+      "y": 620
+    },
+    {
+      "id": "send",
+      "kind": "send",
+      "title": "动态排队发送",
+      "note": "逐条发送文本、图片、语音、视频或文件，统一动态间隔并保留取消能力。",
+      "tone": "blue",
+      "x": 1240,
+      "y": 620
+    },
+    {
+      "id": "plan",
+      "kind": "plan",
+      "title": "回复计划",
+      "note": "按语义组织文字与媒体，后续新消息可以修改尚未发送的部分。",
+      "tone": "violet",
+      "x": 1488,
+      "y": 620
+    },
+    {
+      "id": "feedback",
+      "kind": "feedback",
+      "title": "工具结果反馈",
+      "note": "把实际执行结果、失败原因和继续位置交回模型，决定继续、重试或换方法。",
+      "tone": "amber",
+      "x": 1736,
+      "y": 420
+    },
+    {
+      "id": "tools",
+      "kind": "tools",
+      "title": "工具与插件",
+      "note": "按需发现MCP、联网、媒体、YuE、提醒及已授权的项目和服务器工具。",
+      "tone": "amber",
+      "x": 1736,
+      "y": 240
+    },
+    {
+      "id": "permissions",
+      "kind": "permissions",
+      "title": "能力权限",
+      "note": "集中管理发送媒体、主动行为及主人的高权限范围。",
+      "tone": "slate",
+      "x": 248,
+      "y": 0
+    },
+    {
+      "id": "retry",
+      "kind": "retry",
+      "title": "恢复与补发",
+      "note": "核对聊天和发送记录；按实际证据与随机退避继续补发，避免重复已确认内容。",
+      "tone": "rose",
+      "x": 992,
+      "y": 820
+    },
+    {
+      "id": "interrupt",
+      "kind": "interrupt",
+      "title": "中断与变更",
+      "note": "识别叫停、换文件、换作品等新需求，只取消尚未执行或发送的旧内容。",
+      "tone": "rose",
+      "x": 496,
+      "y": 620
+    },
+    {
+      "id": "silent",
+      "kind": "silent",
+      "title": "选择安静",
+      "note": "本轮不发言，也可以安排未来再评估；沉默不耗尽后续机会。",
+      "tone": "slate",
+      "x": 1736,
+      "y": 620
+    },
+    {
+      "id": "wake",
+      "kind": "wake",
+      "title": "自主复评",
+      "note": "持久保存后续计划，到期结合新上下文自然接话、探索或安静。",
+      "tone": "violet",
+      "x": 1984,
+      "y": 620
+    },
+    {
+      "id": "surf",
+      "kind": "surf",
+      "title": "网上冲浪",
+      "note": "从多来源发现并核实音乐、图片、视频和生活内容，按目标授权决定是否分享。",
+      "tone": "amber",
+      "x": 1984,
+      "y": 820
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "from": "receive",
+      "to": "inbox",
+      "label": "接收"
+    },
+    {
+      "id": "edge-2",
+      "from": "inbox",
+      "to": "rules",
+      "label": "已落盘"
+    },
+    {
+      "id": "edge-3",
+      "from": "rules",
+      "to": "quote",
+      "label": "引用消息"
+    },
+    {
+      "id": "edge-4",
+      "from": "quote",
+      "to": "aggregate",
+      "label": "当前正文"
+    },
+    {
+      "id": "edge-5",
+      "from": "rules",
+      "to": "aggregate",
+      "label": "文字与补充"
+    },
+    {
+      "id": "edge-6",
+      "from": "aggregate",
+      "to": "observe",
+      "label": "有媒体"
+    },
+    {
+      "id": "edge-7",
+      "from": "aggregate",
+      "to": "memory",
+      "label": "文字"
+    },
+    {
+      "id": "edge-8",
+      "from": "observe",
+      "to": "memory",
+      "label": "观察或失败资料"
+    },
+    {
+      "id": "edge-9",
+      "from": "memory",
+      "to": "agent",
+      "label": "会话上下文"
+    },
+    {
+      "id": "edge-10",
+      "from": "persona",
+      "to": "agent",
+      "label": "角色设定"
+    },
+    {
+      "id": "edge-11",
+      "from": "model",
+      "to": "agent",
+      "label": "模型调用"
+    },
+    {
+      "id": "edge-12",
+      "from": "agent",
+      "to": "tools",
+      "label": "按需行动"
+    },
+    {
+      "id": "edge-13",
+      "from": "tools",
+      "to": "feedback",
+      "label": "实际结果"
+    },
+    {
+      "id": "edge-14",
+      "from": "feedback",
+      "to": "agent",
+      "label": "继续思考"
+    },
+    {
+      "id": "edge-15",
+      "from": "tools",
+      "to": "tasks",
+      "label": "长任务"
+    },
+    {
+      "id": "edge-16",
+      "from": "tasks",
+      "to": "agent",
+      "label": "完成续办"
+    },
+    {
+      "id": "edge-17",
+      "from": "agent",
+      "to": "plan",
+      "label": "决定回复"
+    },
+    {
+      "id": "edge-18",
+      "from": "agent",
+      "to": "silent",
+      "label": "本轮安静"
+    },
+    {
+      "id": "edge-19",
+      "from": "plan",
+      "to": "send",
+      "label": "待发送队列"
+    },
+    {
+      "id": "edge-20",
+      "from": "send",
+      "to": "receipt",
+      "label": "核对结果"
+    },
+    {
+      "id": "edge-21",
+      "from": "receipt",
+      "to": "archive",
+      "label": "已确认记录"
+    },
+    {
+      "id": "edge-22",
+      "from": "receipt",
+      "to": "retry",
+      "label": "失败或未确认"
+    },
+    {
+      "id": "edge-23",
+      "from": "retry",
+      "to": "send",
+      "label": "核对后继续"
+    },
+    {
+      "id": "edge-24",
+      "from": "receive",
+      "to": "interrupt",
+      "label": "新要求"
+    },
+    {
+      "id": "edge-25",
+      "from": "interrupt",
+      "to": "plan",
+      "label": "修改未发内容"
+    },
+    {
+      "id": "edge-26",
+      "from": "interrupt",
+      "to": "tools",
+      "label": "停止或替换"
+    },
+    {
+      "id": "edge-27",
+      "from": "agent",
+      "to": "wake",
+      "label": "安排后续"
+    },
+    {
+      "id": "edge-28",
+      "from": "silent",
+      "to": "wake",
+      "label": "稍后再看"
+    },
+    {
+      "id": "edge-29",
+      "from": "wake",
+      "to": "memory",
+      "label": "重新评估"
+    },
+    {
+      "id": "edge-30",
+      "from": "surf",
+      "to": "tools",
+      "label": "发现与读取"
+    },
+    {
+      "id": "edge-31",
+      "from": "surf",
+      "to": "agent",
+      "label": "分享判断"
+    },
+    {
+      "id": "edge-32",
+      "from": "permissions",
+      "to": "rules",
+      "label": "会话授权"
+    },
+    {
+      "id": "edge-33",
+      "from": "permissions",
+      "to": "tools",
+      "label": "工具权限"
+    },
+    {
+      "id": "edge-34",
+      "from": "permissions",
+      "to": "send",
+      "label": "发送权限"
+    }
+  ]
+}

@@ -83,6 +83,7 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
+	canvasMu     sync.Mutex
 	friendsMu    sync.Mutex
 	friends      map[string]friendEntry
 	workspace    *agentworkspace.Store
