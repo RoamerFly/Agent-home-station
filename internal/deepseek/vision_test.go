@@ -34,3 +34,25 @@ func TestVisionUsesUserImageBlocksAndNeverRetries(t *testing.T) {
 		t.Fatal("unexpected retry or hidden failure", err, calls)
 	}
 }
+
+func TestVisionAllowsAgentSelectedImageCountBeyondDefaultEight(t *testing.T) {
+	data, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
+	count := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Messages []struct{ Content any } `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&input)
+		count = len(input.Messages[1].Content.([]any)) - 1
+		w.Write([]byte(`{"choices":[{"message":{"content":"synthetic observation"},"finish_reason":"stop"}]}`))
+	}))
+	defer s.Close()
+	c := &Client{endpoint: s.URL, key: "synthetic-test-key", model: "fixture", maxTokens: 768, http: s.Client()}
+	images := make([]Image, 12)
+	for i := range images {
+		images[i] = Image{Data: data}
+	}
+	if _, e := c.VisionWithBudget(context.Background(), "describe", images, 2048); e != nil || count != 12 || c.maxTokens != 768 {
+		t.Fatal("local image count ceiling retained or shared budget mutated", count, e)
+	}
+}

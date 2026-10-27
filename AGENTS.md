@@ -12,3 +12,10 @@ Repository: https://github.com/RoamerFly/wechat-agent (private).
 - Keep generated artifacts out of Git except intentional project design assets. Retain source fixtures needed for tests only when synthetic or otherwise safe for repository storage.
 - Document actual capability and evidence boundaries; distinguish simulation, real model decisions, tool execution, WeChat server acceptance and phone playback.
 - Do not use another user-visible Codex/ChatGPT thread to delegate project work. Keep any authorized subagent work inside the current task.
+
+## Tool interface principle
+
+- Defaults are starting values, not capability ceilings. Expose meaningful parameters so the Agent can adjust precision, range, page size, batching and execution time to the conversation's needs.
+- Do not silently clamp an explicit Agent parameter to a project preference. Process the requested range in batches when necessary; return effective parameters, verified progress and a continuation position on partial completion.
+- Distinguish configurable defaults from actual provider/protocol/resource requirements. Report a real boundary and an available continuation or alternative instead of claiming the Agent is generally unable to perform the task.
+- Preserve authorization, cancellation, data integrity and verified delivery semantics. These are independent of task granularity and defaults.

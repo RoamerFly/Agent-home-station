@@ -31,6 +31,7 @@ func videoInspectionError(err error) error {
 		code, message = "video_inspection_interrupted", "本次视频读取已超时或中止；保留已读范围，从未读起点继续，不能宣称完整读取"
 	} else {
 		messages := map[string]string{
+			"video_inspection_result_capacity":        "已读结果接近1MiB工具结果传输封套；保留已返回批次，从next_start_frame继续，或减小分析文字预算",
 			"video_inspect_probe_failed":              "无法解析实际视频；请确认是已解密原件，且运行节点已安装ffmpeg和ffprobe",
 			"video_inspect_metadata_invalid":          "原件没有有效视频帧数或时长，不能用标题代替视频分析",
 			"video_inspect_decode_failed":             "实际视频帧解码失败；可核对原件格式、损坏情况与解码器后重试",
@@ -40,6 +41,12 @@ func videoInspectionError(err error) error {
 			"video_audio_unavailable":                 "此时间范围没有可解码的音轨；可检查实际音轨结尾或选择其他时间范围",
 			"video_audio_transcription_failed":        "实际音轨已尝试转写但提供商没有返回有效文本；核对语音服务配置或稍后重试",
 			"video_audio_time_budget_exhausted":       "剩余执行时间不足以转写；保存检查点后从当前音轨起点继续",
+		}
+		if err.Error() == "vision image size limit" {
+			return &videoInspectionFailure{"vision_payload_too_large", "本批图像字节超过视觉传输预算；可减小batch_size或max_dimension后从未读帧继续，页大小不必缩短", err}
+		}
+		if err.Error() == "video_audio_limit" {
+			return &videoInspectionFailure{"audio_payload_too_large", "本段PCM超过音轨传输预算；减小audio_chunk_seconds后继续，所需总时间范围不受此默认值限制", err}
 		}
 		if text, ok := messages[err.Error()]; ok {
 			code, message = err.Error(), text

@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"wechat-bot/internal/bailian"
+	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -19,6 +23,58 @@ func TestVideoInspectionFailuresExplainNextStepWithoutRawSecrets(t *testing.T) {
 	}
 	if text := mcptools.FailureDescription(videoInspectionError(errors.New("private-path-and-token"))); strings.Contains(text, "private-path") {
 		t.Fatal("raw failure leaked")
+	}
+}
+
+func TestExplicitFramePageAndBatchExceedOldDefaults(t *testing.T) {
+	if _, e := exec.LookPath("ffmpeg"); e != nil {
+		t.Skip("ffmpeg unavailable")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pattern.mp4")
+	if b, e := exec.Command("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=96x64:r=12:d=8", "-c:v", "libx264", "-threads", "1", path).CombinedOutput(); e != nil {
+		t.Fatalf("fixture %v %.100s", e, b)
+	}
+	in := videoInspectionInput{PageSize: 80, Step: 1, BatchSize: 20, MaxDimension: 96, Tokens: 1200}
+	calls, seen := 0, 0
+	rows, next, e := inspectFrameRange(context.Background(), path, dir, in, 80, 96, func(_ context.Context, _ string, images []deepseek.Image, tokens int) (string, error) {
+		calls++
+		seen += len(images)
+		if len(images) != 20 || tokens != 1200 {
+			t.Fatal("explicit options overridden")
+		}
+		return "synthetic analysis", nil
+	})
+	if e != nil || len(rows) != 4 || calls != 4 || seen != 80 || next != 80 {
+		t.Fatal("page or batch clipped", len(rows), calls, seen, next, e)
+	}
+	remaining, _ := os.ReadDir(dir)
+	if len(remaining) != 1 {
+		t.Fatal("decoded batches were not cleaned incrementally", len(remaining))
+	}
+}
+
+func TestExplicitAudioRangeAndChunkAreNotClampedTo180Seconds(t *testing.T) {
+	data := observationFixture(t, "240")
+	f, p := trustedAgent(t)
+	defer p.hub.Close()
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		json.NewEncoder(w).Encode(map[string]any{"output": map[string]string{"text": "synthetic transcription"}})
+	}))
+	defer server.Close()
+	f.manager.speech = bailian.Defaults()
+	f.manager.speech.Endpoint, f.manager.speech.Key = server.URL, "synthetic-test-key"
+	out := map[string]any{}
+	e := p.inspectAudioRange(context.Background(), data, videoInspectionInput{AudioLength: 240, AudioChunk: 200}, 240, 300, out)
+	if e != nil || calls != 2 || out["end_seconds"].(float64) < 239.9 || !out["requested_range_complete"].(bool) || out["video_audio_complete"].(bool) || out["effective_audio_chunk_seconds"] != float64(200) {
+		t.Fatal("audio request was shortened", calls, out, e)
+	}
+	out = map[string]any{}
+	e = p.inspectAudioRange(context.Background(), data, videoInspectionInput{AudioLength: 240, AudioChunk: 600}, 240, 300, out)
+	if e != nil || out["end_seconds"].(float64) < 239.9 || out["audio_chunk_adjustment_reason"] == nil {
+		t.Fatal("transport split lost requested range or explanation", out, e)
 	}
 }
 

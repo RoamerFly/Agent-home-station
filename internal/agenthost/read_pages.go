@@ -42,7 +42,10 @@ func (h Host) readTextPage(ctx context.Context, f *os.File, stat os.FileInfo, in
 	if length == 0 {
 		length = h.Config.OutputBytes
 	}
-	length = min(length, h.Config.OutputBytes)
+	requested := length
+	// Keep a text page below the retained-result envelope even with JSON's
+	// worst-case escaping. Config.OutputBytes is only the omitted-value default.
+	length = min(length, ((1<<20)-(64<<10))/6)
 	data, e := io.ReadAll(io.LimitReader(f, int64(length)))
 	if e != nil {
 		return nil, e
@@ -69,5 +72,9 @@ func (h Host) readTextPage(ctx context.Context, f *os.File, stat os.FileInfo, in
 		return nil, errors.New("读取期间文件变化，请重新读取后再编辑")
 	}
 	resolved, _ := filepath.EvalSymlinks(in.Path)
-	return map[string]any{"path": in.Path, "resolved_path": resolved, "content": string(data), "truncated": end < stat.Size(), "complete": end == stat.Size(), "next_offset": end, "sha256": hex.EncodeToString(hash.Sum(nil)), "bytes": stat.Size()}, nil
+	out := map[string]any{"path": in.Path, "resolved_path": resolved, "content": string(data), "truncated": end < stat.Size(), "complete": end == stat.Size(), "next_offset": end, "sha256": hex.EncodeToString(hash.Sum(nil)), "bytes": stat.Size(), "requested_length": requested, "effective_length": len(data)}
+	if requested > length {
+		out["length_adjustment_reason"] = "JSON-escaped page must fit the1MiB retained tool-result envelope; continue next_offset for the full file"
+	}
+	return out, nil
 }
