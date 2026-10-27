@@ -27,8 +27,11 @@ type Turn struct {
 	Time              time.Time          `json:"time"`
 }
 type Scope struct {
-	Summary         string    `json:"summary,omitempty"`
-	CompressedCount int       `json:"compressed_count,omitempty"`
+	Summary         string `json:"summary,omitempty"`
+	CompressedCount int    `json:"compressed_count,omitempty"`
+	// SummaryBoundary is the conversation snapshot length at compression time.
+	// The UI folds that snapshot, while Context still retains the recent tail.
+	SummaryBoundary int       `json:"summary_boundary,omitempty"`
 	SummaryUpdated  time.Time `json:"summary_updated,omitempty"`
 	ID              string    `json:"id"`
 	Channel         string    `json:"channel"`
@@ -51,6 +54,9 @@ type ScopeSummary struct {
 	MessageCount    int       `json:"message_count"`
 	NoteCount       int       `json:"note_count"`
 	LastInteraction time.Time `json:"last_interaction"`
+	CompressedCount int       `json:"compressed_count,omitempty"`
+	VisibleCount    int       `json:"visible_count"`
+	HasSummary      bool      `json:"has_summary"`
 }
 type persisted struct {
 	Version        int              `json:"version"`
@@ -63,9 +69,11 @@ type persisted struct {
 	Decisions      int              `json:"decisions"`
 }
 type Store struct {
-	mu   sync.Mutex
-	path string
-	data persisted
+	compressionMu sync.Mutex
+	compressing   map[string]bool
+	mu            sync.Mutex
+	path          string
+	data          persisted
 }
 
 func ScopeID(channel, account, thread string) string {
@@ -175,16 +183,24 @@ func (s *Store) transaction(change func(*persisted) error) error {
 func prune(scope Scope, c Config, now time.Time) Scope {
 	cutoff := now.Add(-time.Duration(c.MemoryDays) * 24 * time.Hour)
 	kept := make([]Turn, 0, len(scope.Messages))
-	for _, turn := range scope.Messages {
+	folded, compressed, boundary := scope.FoldedHistoryCount(), 0, 0
+	for index, turn := range scope.Messages {
 		if !turn.Time.Before(cutoff) {
 			kept = append(kept, turn)
+			if index < scope.CompressedCount {
+				compressed++
+			}
+			if index < folded {
+				boundary++
+			}
 		}
 	}
+	trimmed := max(0, len(kept)-c.MemoryMessages)
 	if len(kept) > c.MemoryMessages {
 		kept = kept[len(kept)-c.MemoryMessages:]
 	}
-	removed := len(scope.Messages) - len(kept)
-	scope.CompressedCount = max(0, scope.CompressedCount-removed)
+	scope.CompressedCount = max(0, compressed-trimmed)
+	scope.SummaryBoundary = max(0, boundary-trimmed)
 	scope.Messages = kept
 	return scope
 }
@@ -362,7 +378,7 @@ func (s *Store) Summaries(c Config, now time.Time) []ScopeSummary {
 	out := []ScopeSummary{}
 	for _, stored := range s.data.Scopes {
 		scope := prune(copyScope(stored), c, now)
-		out = append(out, ScopeSummary{ID: scope.ID, Channel: scope.Channel, Thread: scope.Thread, Label: scope.Thread, MessageCount: len(scope.Messages), NoteCount: len(scope.Notes), LastInteraction: scope.LastInteraction})
+		out = append(out, ScopeSummary{ID: scope.ID, Channel: scope.Channel, Thread: scope.Thread, Label: scope.Thread, MessageCount: len(scope.Messages), NoteCount: len(scope.Notes), LastInteraction: scope.LastInteraction, CompressedCount: scope.CompressedCount, VisibleCount: len(scope.Messages) - scope.FoldedHistoryCount(), HasSummary: scope.Summary != ""})
 	}
 	return out
 }
@@ -410,6 +426,7 @@ func (s *Store) Clear(id string) error {
 		scope.Notes = []string{}
 		scope.Summary = ""
 		scope.CompressedCount = 0
+		scope.SummaryBoundary = 0
 		scope.SummaryUpdated = time.Time{}
 		data.Scopes[id] = scope
 		return nil

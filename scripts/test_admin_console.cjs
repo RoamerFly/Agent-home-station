@@ -37,18 +37,18 @@ entries.push({id:'sys1',time:at(0),event:'bot_starting',category:'system'},{id:'
    const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png'};
    try{return route.fulfill({body:await fs.readFile(file),contentType:types[path.extname(file)]||'text/plain'})}catch{return route.continue()}
   });
-  await page.goto(base+'/#logs');await page.locator('.round-card').first().waitFor();
-  assert.equal(await page.locator('.main-nav').count(),6);
+  await page.goto(base+'/#logs');await page.locator('.round-card').first().waitFor();await page.locator('.round-extra-filters > summary').click();await page.selectOption('#log-view','rounds');await page.locator('.round-extra-filters > summary').click();
+  assert.equal(await page.locator('.main-nav').count(),5);
   assert.equal(await page.locator('.round-card').count(),60);assert.equal(await page.locator('.round-step').count(),0,'collapsed rounds must not render steps');
-  await page.locator('.round-card').first().locator('summary').first().click();assert.equal(await page.locator('.round-step').count(),3);
+  await page.locator('.round-card').first().locator('.round-summary').first().click();assert.equal(await page.locator('.round-step').count(),3);
   await fs.mkdir('research/evidence/round-console',{recursive:true});
-  await page.screenshot({path:'research/evidence/round-console/logs-light.png'});
+  await page.screenshot({path:'research/evidence/round-console/logs-light.png'});await page.locator('dialog[open]').last().locator('.dialog-close').click();
   const pane=page.locator('#log-list');await pane.evaluate(el=>el.scrollTop=500);const before=await pane.evaluate(el=>el.scrollTop);
   entries.push({...entries[0],id:'new-1',message_id:'new-message',time:at(500),content:'新的测试消息'});
   await page.evaluate(()=>window.dispatchEvent(new Event('wechat-admin:logs-refresh')));await page.locator('#log-new').waitFor({state:'visible'});
   assert.equal(await pane.evaluate(el=>el.scrollTop),before,'poll moved scroll');
   await page.locator('#log-new').click();assert(Math.abs(await pane.evaluate(el=>el.scrollTop)-before)<130,'load did not preserve reading anchor');
-  assert(await page.locator('.round-card[open]').count(),'expansion lost on update');
+  assert.equal(await page.locator('.round-step').count(),0,'closed dialogs leaked steps into the list');
   await page.locator('#log-search').fill('workspace_read');await page.waitForTimeout(200);assert.equal(await page.locator('#log-count').textContent(),'90 个执行回合');
   await page.locator('#log-search').fill('');await page.waitForTimeout(200);
   await page.locator('.round-extra-filters > summary').click();await page.locator('#log-view').selectOption('system');assert.equal(await page.locator('.round-card').count(),1);
@@ -68,6 +68,6 @@ entries.push({id:'sys1',time:at(0),event:'bot_starting',category:'system'},{id:'
    await page.evaluate(()=>window.WechatAdmin.nav('overview'));await page.screenshot({path:'research/evidence/round-console/overview-'+theme+'.png'});
   }
   assert.deepEqual(errors,[]);assert.deepEqual(blocked,[]);
-  console.log(JSON.stringify({pages:sections.length,themes:2,widths:[375,768,1440],roundGrouping:true,lazyDetails:true,scrollStable:true,expansionStable:true,searchAndSystemView:true,pageErrors:errors,realMutations:0,realWechatSends:0}));
+  console.log(JSON.stringify({pages:sections.length,themes:2,widths:[375,768,1440],roundGrouping:true,lazyDetails:true,scrollStable:true,largeDialogDetails:true,searchAndSystemView:true,pageErrors:errors,realMutations:0,realWechatSends:0}));
  }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});

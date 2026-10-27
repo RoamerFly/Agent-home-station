@@ -164,23 +164,8 @@ func (s *Server) companionRoutes(mux *http.ServeMux) {
 		}
 		respond(w, 200, state)
 	}))
-	mux.HandleFunc("GET /api/companion/memory/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		scope, err := s.manager.memoryScope(r.PathValue("id"))
-		if err != nil {
-			fail(w, 404, err.Error())
-			return
-		}
-		// Account login IDs, internal decision timestamps and budgets do not
-		// need to be included in the UI's conversation detail.
-		scope, err = s.manager.namedMemory(r.Context(), scope)
-		if err != nil {
-			fail(w, 500, "本地记忆名称记录失败，原记忆已保留")
-			return
-		}
-		labelCtx, cancel := context.WithTimeout(r.Context(), time.Second)
-		defer cancel()
-		respond(w, 200, map[string]any{"id": scope.ID, "channel": scope.Channel, "thread": scope.Thread, "label": s.manager.memoryLabel(labelCtx, scope.Thread), "messages": scope.Messages, "notes": scope.Notes, "last_interaction": scope.LastInteraction})
-	}))
+	mux.HandleFunc("GET /api/companion/memory/{id}", s.protected(s.memoryDetail))
+	mux.HandleFunc("GET /api/companion/memory/{id}/history", s.protected(s.memoryHistory))
 	mux.HandleFunc("POST /api/companion/memory/{id}/notes", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Text string `json:"text"`

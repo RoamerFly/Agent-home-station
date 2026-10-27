@@ -20,35 +20,30 @@
   $('#storage-refresh').addEventListener('click',storage);
   $('#storage-panel').addEventListener('toggle',()=>{if($('#storage-panel').open&&!storageLoaded)storage()});
 
+
   function archivePanel(mount,kind){
-    let scope='',cursor='',busy=false,loaded=false,revision=0;
-    const root=document.createElement('details');root.className='panel history-archive';root.id=kind+'-archives';root.hidden=kind==='memory';
-    const summary=document.createElement('summary');summary.textContent=kind==='memory'?'历史记忆归档':'历史日志归档';
-    const hint=paragraph('旧记录先压缩归档，可查看或下载副本；不注入模型、不重发消息。归档是当时快照，后续状态以新记录为准。');
-    const controls=document.createElement('div');controls.className='inline-actions';const refresh=document.createElement('button');refresh.type='button';refresh.className='secondary';refresh.textContent='刷新归档';const status=paragraph('展开后读取归档批次。');status.setAttribute('role','status');controls.append(refresh,status);
-    const list=document.createElement('div'),more=document.createElement('button');more.type='button';more.className='secondary';more.textContent='加载更多批次';more.hidden=true;root.append(summary,hint,controls,list,more);mount.append(root);
+    let scope='';const trigger=document.createElement('button');trigger.type='button';trigger.className='quiet';trigger.textContent=kind==='memory'?'历史归档':'历史日志归档';trigger.hidden=kind==='memory';trigger.setAttribute('aria-haspopup','dialog');mount.append(trigger);
     const base=()=>'/api/archives/'+kind;
-    const query=()=>kind==='memory'?'scope='+encodeURIComponent(scope):'';
-    async function load(reset){
-      if(busy||!window.WechatAdmin.isAuthenticated()||kind==='memory'&&!scope)return;
-      busy=true;refresh.disabled=true;more.disabled=true;const stamp=revision,global=generation;status.textContent='正在读取…';
-      try{
-        const q=[query(),!reset&&cursor?'after='+encodeURIComponent(cursor):''].filter(Boolean).join('&');const data=await api(base()+(q?'?'+q:''));if(stamp!==revision||global!==generation)return;
-        if(reset)list.replaceChildren();for(const item of data.items||[]){
-          const row=document.createElement('details'),title=document.createElement('summary');title.textContent=date(item.created)+' · '+size(item.bytes);row.append(title);
-          const body=document.createElement('div');body.className='archive-preview';const link=document.createElement('a');link.className='secondary';link.textContent='下载 JSON 副本';link.href=base()+'/'+encodeURIComponent(item.id)+'?'+[query(),'download=1'].filter(Boolean).join('&');row.append(link,body);let ready=false,reading=false;
-          row.addEventListener('toggle',async()=>{if(!row.open||ready||reading)return;reading=true;body.replaceChildren(paragraph('正在校验并读取…'));try{const response=await api(base()+'/'+encodeURIComponent(item.id)+(query()?'?'+query():''));if(stamp!==revision||global!==generation)return;body.replaceChildren();const messages=kind==='memory'?response.data.messages:response.data;for(const message of messages||[]){if(kind==='memory')body.append(window.WechatAdmin.renderMemoryMessage(message));else body.append(paragraph(date(message.time)+' · '+(message.source||message.thread_id||'系统')+' · '+(message.content||message.event||'记录')+(message.reason?' · '+(window.WechatLogReason?.(message.reason)||message.reason):''),'archive-log-row'))}if(!messages?.length)body.append(paragraph('此批次没有正文。'));ready=true}catch(e){if(stamp===revision&&global===generation)body.replaceChildren(paragraph(e.message,'form-error'))}finally{reading=false}});
-          list.append(row);
-        }
-        cursor=data.next||'';more.hidden=!cursor;status.textContent=list.children.length?'已加载 '+list.children.length+' 个归档批次':'暂无归档。升级前已被旧策略移出的记录无法补回。';loaded=true;
-      }catch(e){if(stamp===revision&&global===generation)status.textContent=e.message}
-      finally{busy=false;refresh.disabled=false;more.disabled=false;if(stamp!==revision&&root.open)load(true)}
-    }
-    refresh.addEventListener('click',()=>load(true));more.addEventListener('click',()=>load(false));root.addEventListener('toggle',()=>{if(root.open&&!loaded)load(true)});
-    const reset=()=>{revision++;scope='';cursor='';loaded=false;list.replaceChildren();root.open=false;root.hidden=kind==='memory';more.hidden=true;status.textContent='展开后读取归档批次。'};
-    window.addEventListener('wechat-admin:logout',reset);
-    if(kind==='memory')window.addEventListener('wechat-admin:memory-selection',e=>{if(scope===e.detail.id)return;reset();scope=e.detail.id;root.hidden=false});
+    trigger.addEventListener('click',()=>{
+      const selected=scope,stamp=generation;if(kind==='memory'&&!selected)return;
+      const popup=window.WechatDialogs.open({title:kind==='memory'?'历史记忆归档':'历史日志归档',subtitle:'只读查看或下载，不重新注入模型、不重发消息。'});
+      const status=paragraph('正在读取归档…'),list=document.createElement('div');popup.body.append(status,list);let cursor='',busy=false;
+      const more=document.createElement('button');more.type='button';more.className='secondary';more.textContent='加载更多批次';popup.body.append(more);
+      const query=()=>kind==='memory'?'scope='+encodeURIComponent(selected):'';
+      async function batch(item){
+        const detail=window.WechatDialogs.open({title:'归档 · '+date(item.created)}),state=paragraph('正在校验并读取…');detail.body.append(state);
+        const link=document.createElement('a');link.className='secondary';link.textContent='下载 JSON 副本';link.href=base()+'/'+encodeURIComponent(item.id)+'?'+[query(),'download=1'].filter(Boolean).join('&');detail.body.append(link);
+        try{const response=await api(base()+'/'+encodeURIComponent(item.id)+(query()?'?'+query():''));if(!detail.alive()||stamp!==generation)return;state.textContent='消息从新到旧排列。';const messages=kind==='memory'?response.data.messages:response.data;for(const message of [...(messages||[])].sort((a,b)=>Date.parse(b.time)-Date.parse(a.time))){if(kind==='memory')detail.body.append(window.WechatAdmin.renderMemoryMessage(message));else detail.body.append(paragraph(date(message.time)+' · '+(message.source||message.thread_id||'系统')+' · '+(message.content||message.event||'记录')+(message.reason?' · '+(window.WechatLogReason?.(message.reason)||message.reason):''),'archive-log-row'))}if(!messages?.length)state.textContent='此批次没有正文。'}catch(e){if(detail.alive()&&stamp===generation)state.textContent=e.message}
+      }
+      async function load(){
+        if(busy)return;busy=true;more.disabled=true;
+        try{const q=[query(),cursor?'after='+encodeURIComponent(cursor):''].filter(Boolean).join('&'),data=await api(base()+(q?'?'+q:''));if(!popup.alive()||stamp!==generation)return;for(const item of data.items||[]){const row=document.createElement('div');row.className='archive-batch';const title=document.createElement('span');title.textContent=date(item.created)+' · '+size(item.bytes);const read=document.createElement('button');read.type='button';read.className='secondary';read.textContent='查看';read.addEventListener('click',()=>batch(item));row.append(title,read);list.append(row)}cursor=data.next||'';more.hidden=!cursor;status.textContent=list.children.length?'已载入 '+list.children.length+' 个归档批次':'暂无归档。'}catch(e){if(popup.alive()&&stamp===generation)status.textContent=e.message}finally{busy=false;more.disabled=false}
+      }
+      more.addEventListener('click',load);load();
+    });
+    window.addEventListener('wechat-admin:logout',()=>{scope='';trigger.hidden=kind==='memory'});
+    if(kind==='memory')window.addEventListener('wechat-admin:memory-selection',e=>{scope=e.detail.id;trigger.hidden=!scope});
   }
-  archivePanel($('#memory-panel'),'memory');archivePanel($('#logs'),'activity');
+  archivePanel($('#memory-archive-mount'),'memory');archivePanel($('#logs'),'activity');
   window.addEventListener('wechat-admin:logout',()=>{generation++;storageLoaded=false;$('#storage-panel').open=false;$('#storage-areas').replaceChildren();$('#storage-limits').replaceChildren();$('#storage-state').textContent='展开后扫描管理端数据。';$('#storage-error').textContent='';$('#storage-boundary').textContent=''});
 })();
