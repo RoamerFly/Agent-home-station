@@ -58,6 +58,8 @@ func (m *Manager) record(r bot.Record) {
 		entry.Origin = "surf"
 	}
 	entry.SendID = logText(r.SendID, 128)
+	entry.RelatedMessageID = logText(r.RelatedMessageID, 512)
+	entry.DecisionNote = logText(r.DecisionNote, 512)
 	entry.CallID = logText(r.CallID, 128)
 	entry.Tool = logText(r.Tool, 160)
 	entry.ToolCacheHit = r.ToolCacheHit

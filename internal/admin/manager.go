@@ -39,6 +39,8 @@ type sendingRequest = sending.TextRequest
 type sendingReceipt = sending.Receipt
 
 type LogEntry struct {
+	RelatedMessageID  string `json:"related_message_id,omitempty"`
+	DecisionNote      string `json:"decision_note,omitempty"`
 	RetryAttempts     int    `json:"retry_attempts,omitempty"`
 	RetryAt           string `json:"retry_at,omitempty"`
 	ToolCacheHit      bool   `json:"tool_cache_hit,omitempty"`
