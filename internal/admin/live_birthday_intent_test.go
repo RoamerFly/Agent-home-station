@@ -26,7 +26,7 @@ func TestLiveBirthdayMeansExistingSungSongAndUnrelatedChatDoesNotCancel(t *testi
 	f.manager.config.Companion.Permissions.Remember = true
 	f.manager.config.Companion.Permissions.SendVoice = true
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "requester", TraceID: "birthday-intent", Mode: "direct", Directed: true, Text: "大家正在祝寿星生日快乐。大肥鱼唱个生日歌来听一下。是常见生日快乐歌，保留原有旋律歌词唱给大家听，不是念祝福。"}
-	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic Happy Birthday reference recording"), MIME: "audio/wav", Filename: "生日快乐-原曲.wav"}, nil)
+	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: syntheticReferenceWAV(t, 120), MIME: "audio/wav", Filename: "生日快乐-原曲.wav"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestLiveBirthdayMeansExistingSungSongAndUnrelatedChatDoesNotCancel(t *testi
 	var body map[string]any
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
-			w.Write([]byte(`{"ready":true,"bridge_version":4,"voice_conversion_ready":true}`))
+			w.Write([]byte(`{"ready":true,"bridge_version":6,"voice_conversion_ready":true}`))
 			return
 		}
 		posts++

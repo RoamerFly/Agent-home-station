@@ -2,7 +2,7 @@
 Run with --project <YuE app> --state <private directory> --token-file <file>.
 The bridge persists jobs and never automatically resubmits interrupted work.
 """
-import argparse, base64, concurrent.futures, hashlib, hmac, json, os, re, secrets, threading, time, urllib.request, urllib.error, subprocess
+import argparse, base64, concurrent.futures, hashlib, hmac, json, math, os, re, secrets, threading, time, urllib.request, urllib.error, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from singing_voice import validate_singing_config
@@ -55,6 +55,13 @@ def song_options(body):
 
 FAITHFUL_COVER_STYLE='保持原曲调和原歌词 (preserve original melody and lyrics; follow the reference melody, rhythm and phrasing; no new melody or rewritten lyrics)'
 
+def reference_window(body):
+    start=body.get('reference_start_seconds',0)
+    seconds=body.get('reference_seconds',body.get('duration_seconds',60))
+    if isinstance(start,bool) or not isinstance(start,(int,float)) or not math.isfinite(start) or start<0:raise ValueError('invalid_reference_start')
+    if isinstance(seconds,bool) or not isinstance(seconds,(int,float)) or not math.isfinite(seconds) or not 0<seconds<=600:raise ValueError('invalid_reference_seconds')
+    return start,seconds
+
 def generation_style(body):
     """Same effective conditioning for persisted recipe and submitted graph."""
     mode,_,_=song_options(body)
@@ -75,6 +82,10 @@ def song_recipe(body):
         except Exception:raise ValueError('invalid_reference_encoding') from None
         if not 0<len(data)<=25*1024*1024:raise ValueError('reference_size_limit')
         result['reference_sha256']=hashlib.sha256(data).hexdigest()
+        start,seconds=reference_window(body)
+        result.update(reference_start_seconds=start,reference_seconds=seconds)
+        if 'reference_pretrimmed' in body and not isinstance(body['reference_pretrimmed'],bool):raise ValueError('invalid_reference_pretrimmed')
+        result.update(reference_pretrimmed=body.get('reference_pretrimmed',False),reference_source_sha256=body.get('reference_source_sha256'))
     return result
 
 def prepare_song_graph(workflow_dir,body,jid,input_dir):
@@ -92,7 +103,9 @@ def prepare_song_graph(workflow_dir,body,jid,input_dir):
         input_dir.mkdir(parents=True,exist_ok=True)
         source=input_dir/('wechat-ref-'+jid+'.audio');source.write_bytes(data)
         name='wechat-ref-'+jid+'.wav'
-        subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-protocol_whitelist','file','-i',str(source),'-vn','-ar','44100','-ac','2','-t','600',str(input_dir/name)],check=True,timeout=90)
+        start,seconds=reference_window(body)
+        seek=0 if body.get('reference_pretrimmed',False) else start
+        subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-protocol_whitelist','file','-i',str(source),'-ss',str(seek),'-vn','-ar','44100','-ac','2','-t',str(seconds),str(input_dir/name)],check=True,timeout=90)
         graph['45']['inputs']['audio']=name
         graph['33:25']['inputs']['style']=style;graph['33:25']['inputs']['lyrics']=body['lyrics']
         graph['33:25']['inputs']['mode']=reference_mode
@@ -128,6 +141,12 @@ def main():
                 jobs[jid]['state']='running';save()
             target=body.get('duration_seconds',60)
             graph=prepare_song_graph(workflow_dir,body,jid,project/'comfy/ComfyUI/input')
+            if song_options(body)[0]=='cover':
+                prepared=project/'comfy/ComfyUI/input'/('wechat-ref-'+jid+'.wav')
+                seconds=float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(prepared)],timeout=15))
+                start,requested=reference_window(body)
+                if seconds+.1<requested:raise ValueError('reference_window_incomplete')
+                with lock:jobs[jid]['reference_window']={'start_seconds':start,'requested_seconds':requested,'prepared_seconds':seconds,'prepared_sha256':hashlib.sha256(prepared.read_bytes()).hexdigest()};save()
             submitted=api('/prompt',{'prompt':graph,'client_id':'wechat-yue-'+jid})
             prompt_id=submitted['prompt_id']
             with lock:jobs[jid]['prompt_id']=prompt_id;save()
@@ -178,7 +197,7 @@ def main():
                     api('/system_stats')
                     try:voice=singing_profile(args.singing_voice_config)
                     except Exception:voice=None
-                    return self.reply(200,{'ready':True,'bridge_version':5,'generation_policy':'female-faithful-cover-v2','capabilities':['original','reference_cover','seed','reference_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; no guarantee of exact source accompaniment or reference timbre'})
+                    return self.reply(200,{'ready':True,'bridge_version':6,'generation_policy':'female-faithful-cover-v3-reference-window','capabilities':['original','reference_cover','reference_window','seed','reference_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; no guarantee of exact source accompaniment or reference timbre'})
                 except Exception:return self.reply(200,{'ready':False})
             parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
             with lock:job=dict(jobs.get(jid,{}))

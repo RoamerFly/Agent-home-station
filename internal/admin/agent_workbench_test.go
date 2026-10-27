@@ -220,7 +220,7 @@ func TestMusicServiceHealthIsReadOnlyAndNeverSubmitsGeneration(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ready":true,"bridge_version":4}`))
+		w.Write([]byte(`{"ready":true,"bridge_version":6}`))
 	}))
 	defer backend.Close()
 	f := setup(t)

@@ -32,7 +32,7 @@ func (p *permittedTools) yueTools() []mcptools.Tool {
 	return []mcptools.Tool{
 		agentTool("music_service_status", "Read actual YuE bridge and generation backend health without creating or retrying a song. Use this for local health; web_fetch is public-only. When offline, trusted owners can read shared project-yue.md and project startup docs, then use permitted server tools on the correct OS. Report diagnosis separately from verified repair. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
 		agentTool("music_lyrics_compare", "Compare one actual ASR lyrics window with a version found on the web. First web_search for song/title/artist lyrics and web_fetch plausible versions; then supply asset_id, lyrics_evidence_id of ORIGINAL ASR, candidate_url and candidate_lyrics copied from that page. Reads the page with permitted web_fetch to verify real text. Aligns the corresponding passage, not the whole song. Only >=88% match and <=12%/12 edits permits minor correction, returning a new lyrics_evidence_id and exact lyrics. Large differences reject this version; compare another. Does not certify artist/version or human accuracy. Never replace uncertain ASR with invented text.", `{"type":"object","properties":{"asset_id":{"type":"string"},"lyrics_evidence_id":{"type":"string"},"candidate_url":{"type":"string","maxLength":2048},"candidate_lyrics":{"type":"string","maxLength":6000}},"required":["asset_id","lyrics_evidence_id","candidate_url","candidate_lyrics"],"additionalProperties":false}`),
-		agentTool("music_local_start", "Generate with local YuE: ALL song creation and covering goes through YuE. mode=original writes a new composition; mode=cover preserves supplied source lyrics and uses matching source style plus actual reference audio, Native YuE female vocals by default. singing_voice=character uses RVC ONLY when the user explicitly asks for the character own voice; never infer this from the persona. vocal_gender=male only for an explicit male request; supply vocal_gender_request as an exact quote of the current user request. A male original artist is NOT a male voice request. Existing named songs must use cover, never original; missing source is a reason to acquire reference, not switch modes. Cover style explicitly preserves original melody and lyrics. Requires lyrics_evidence_ids returned by music_reference_inspect and actual reference_asset_id from THIS conversation and supplied/verified lyrics, never invent replacement words for a cover. Reference workflow extracts melody/ABC and regenerates audio; it cannot preserve the exact backing track, timbre or guarantee faithful singing. reference_mode=full (default melody+chords) or explicitly melody. Optional seed 0..2147483647 fixes a take; omit for a new seeded take. For exactly replaying a previous recording use media_reuse, not generation. Inspect source/previous parameters with music_reference_inspect. Supply title, style, lyrics and duration_seconds (10..600, default60), one minute=60. Automatically follows up; no extra agent_task. Default COMPLETE voice notes <=60 seconds each, both only if user also asks for file. Returns actual job_id and seed, not proof of listening or delivery.", `{"type":"object","properties":{"singing_voice":{"type":"string","enum":["native","character"]},"vocal_gender":{"type":"string","enum":["female","male"]},"vocal_gender_request":{"type":"string","description":"Exact current-user quote explicitly requesting male singing, required for male"},"title":{"type":"string","minLength":1,"maxLength":24},"mode":{"type":"string","enum":["original","cover"]},"style":{"type":"string"},"lyrics":{"type":"string"},"seed":{"type":"integer","minimum":0,"maximum":2147483647},"reference_mode":{"type":"string","enum":["melody","full"]},"duration_seconds":{"type":"integer","minimum":10,"maximum":600},"kind":{"type":"string","enum":["voice","file","both"]},"reference_asset_id":{"type":"string"},"lyrics_evidence_ids":{"type":"array","items":{"type":"string"},"maxItems":10}},"required":["title","style","lyrics"],"additionalProperties":false}`),
+		agentTool("music_local_start", "Generate with local YuE: ALL song creation and covering goes through YuE. mode=original writes a new composition; mode=cover preserves supplied source lyrics and uses matching source style plus actual reference audio, Native YuE female vocals by default. singing_voice=character uses RVC ONLY when the user explicitly asks for the character own voice; never infer this from the persona. vocal_gender=male only for an explicit male request; supply vocal_gender_request as an exact quote of the current user request. A male original artist is NOT a male voice request. Existing named songs must use cover, never original; missing source is a reason to acquire reference, not switch modes. Cover style explicitly preserves original melody and lyrics. Requires lyrics_evidence_ids returned by music_reference_inspect and actual reference_asset_id from THIS conversation and supplied/verified lyrics, never invent replacement words for a cover. Reference workflow extracts melody/ABC and regenerates audio; it cannot preserve the exact backing track, timbre or guarantee faithful singing. reference_mode=full (default melody+chords) or explicitly melody. reference_start_seconds selects the source offset (explicit0 preserves the intro); omitted follows the earliest submitted ASR lyric window. reference_seconds selects the source window, default target duration within the observed lyric range, maximum600 per local workflow segment. Select a verified singing passage, not a long instrumental intro; lyrics must describe that passage. Offsets are from the original recording, not generated audio. Optional seed 0..2147483647 fixes a take; omit for a new seeded take. For exactly replaying a previous recording use media_reuse, not generation. Inspect source/previous parameters with music_reference_inspect. Supply title, style, lyrics and duration_seconds (10..600, default60), one minute=60. Automatically follows up; no extra agent_task. Default COMPLETE voice notes <=60 seconds each, both only if user also asks for file. Returns actual job_id and seed, not proof of listening or delivery.", `{"type":"object","properties":{"singing_voice":{"type":"string","enum":["native","character"]},"vocal_gender":{"type":"string","enum":["female","male"]},"vocal_gender_request":{"type":"string","description":"Exact current-user quote explicitly requesting male singing, required for male"},"title":{"type":"string","minLength":1,"maxLength":24},"mode":{"type":"string","enum":["original","cover"]},"style":{"type":"string"},"lyrics":{"type":"string"},"seed":{"type":"integer","minimum":0,"maximum":2147483647},"reference_mode":{"type":"string","enum":["melody","full"]},"reference_start_seconds":{"type":"number","minimum":0},"reference_seconds":{"type":"number","exclusiveMinimum":0,"maximum":600},"duration_seconds":{"type":"integer","minimum":10,"maximum":600},"kind":{"type":"string","enum":["voice","file","both"]},"reference_asset_id":{"type":"string"},"lyrics_evidence_ids":{"type":"array","items":{"type":"string"},"maxItems":10}},"required":["title","style","lyrics"],"additionalProperties":false}`),
 		agentTool("music_reference_inspect", "Inspect exact cached audio from THIS conversation before covering, rerolling or recovering a take. Returns submitted style/lyrics/seed when this is a known generated song. Optional transcribe=true calls configured ASR for <=60 seconds at offset_seconds; candidate transcript is uncertain, not guaranteed lyrics. Returns lyrics_evidence_id; pass it in music_local_start.lyrics_evidence_ids and copy the transcript exactly (section labels allowed). supplied_lyrics may register words literally provided in the current user message, never invented words. Always use YuE cover with original lyrics and a style faithful to the source unless the user requests a changed arrangement. Use the exact quoted asset over another newer take. If only an original recording is available, listen/transcribe rather than inventing lyrics; if user demands unchanged accompaniment explain that YuE resynthesizes. Input {asset_id,transcribe?,offset_seconds?,seconds?}.", `{"type":"object","properties":{"asset_id":{"type":"string"},"transcribe":{"type":"boolean"},"offset_seconds":{"type":"integer","minimum":0,"maximum":600},"seconds":{"type":"integer","minimum":1,"maximum":60},"supplied_lyrics":{"type":"string","maxLength":6000}},"required":["asset_id"],"additionalProperties":false}`),
 		agentTool("music_local_status", "Read a local job owned by THIS conversation. Completed audio defaults to COMPLETE voice notes (each at most60 seconds), not a preview or file. User can request original file later via media_reuse. Never ask whether a file is wanted. Put real media[].id in final media_ids. No resubmission. Input {job_id:string,kind?:voice|file}.", `{"type":"object","properties":{"job_id":{"type":"string"},"kind":{"type":"string","enum":["file","voice","both"]}},"required":["job_id"],"additionalProperties":false}`),
 	}
@@ -136,6 +136,8 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		VocalGenderRequest   string   `json:"vocal_gender_request"`
 		Mode                 string   `json:"mode"`
 		ReferenceMode        string   `json:"reference_mode"`
+		ReferenceStart       *float64 `json:"reference_start_seconds"`
+		ReferenceSeconds     *float64 `json:"reference_seconds"`
 		LyricEvidence        []string `json:"lyrics_evidence_ids"`
 		Seed                 *int64   `json:"seed"`
 		Duration             int      `json:"duration_seconds"`
@@ -228,14 +230,14 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		// A missing seed selects a fresh take for a new request, but retries of
 		// this same request keep the same seed and idempotency identity.
 		if in.Seed == nil {
-			canonical, _ := json.Marshal(map[string]any{"title": in.Title, "mode": in.Mode, "style": in.Style, "lyrics": in.Lyrics, "duration": in.Duration, "reference": in.Reference, "reference_mode": in.ReferenceMode, "singing_voice": in.SingingVoice, "vocal_gender": in.VocalGender, "kind": in.Kind})
+			canonical, _ := json.Marshal(map[string]any{"title": in.Title, "mode": in.Mode, "style": in.Style, "lyrics": in.Lyrics, "duration": in.Duration, "reference": in.Reference, "reference_mode": in.ReferenceMode, "reference_start_seconds": in.ReferenceStart, "reference_seconds": in.ReferenceSeconds, "singing_voice": in.SingingVoice, "vocal_gender": in.VocalGender, "kind": in.Kind})
 			sum := sha256.Sum256(append([]byte(p.trace.Account+"|"+p.trace.Thread+"|"+p.trace.TraceID+"|"), canonical...))
 			seed := int64(binary.LittleEndian.Uint32(sum[:4]) & 0x7fffffff)
 			in.Seed = &seed
 		}
 		spec := &songSpec{Mode: in.Mode, Style: in.Style, Lyrics: in.Lyrics, Seed: *in.Seed, Duration: in.Duration, Reference: in.Reference, ReferenceMode: in.ReferenceMode, SingingVoice: in.SingingVoice, VocalGender: in.VocalGender, LyricEvidence: in.LyricEvidence}
 		body := map[string]any{"title": in.Title, "mode": in.Mode, "style": in.Style, "lyrics": in.Lyrics, "duration_seconds": in.Duration, "seed": *in.Seed, "reference_mode": in.ReferenceMode, "singing_voice": in.SingingVoice, "vocal_gender": in.VocalGender}
-		raw, _ = json.Marshal(map[string]any{"title": in.Title, "style": in.Style, "lyrics": in.Lyrics, "mode": in.Mode, "kind": in.Kind, "duration_seconds": in.Duration, "seed": *in.Seed, "reference_asset_id": in.Reference, "reference_mode": in.ReferenceMode, "singing_voice": in.SingingVoice, "vocal_gender": in.VocalGender, "lyrics_evidence_ids": in.LyricEvidence})
+
 		if in.Reference != "" {
 			a, data, err := p.referenceAsset(in.Reference)
 			if err != nil {
@@ -246,9 +248,22 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 				if err := p.checkLyricEvidence(a, in.Lyrics, in.LyricEvidence); err != nil {
 					return "", err
 				}
+				start, seconds, err := p.referenceWindow(a, in.LyricEvidence, in.Duration, in.ReferenceStart, in.ReferenceSeconds)
+				if err != nil {
+					return "", err
+				}
+				spec.ReferenceStart, spec.ReferenceSeconds = start, seconds
+				body["reference_start_seconds"], body["reference_seconds"] = start, seconds
+				clip, actual, err := prepareReferenceClip(ctx, p.manager.dir, data, start, seconds)
+				if err != nil {
+					return "", err
+				}
+				data = clip
+				body["reference_pretrimmed"], body["reference_source_sha256"], body["reference_prepared_seconds"] = true, a.Hash, actual
 			}
 			body["reference_base64"] = base64.StdEncoding.EncodeToString(data)
 		}
+		raw, _ = json.Marshal(map[string]any{"title": in.Title, "style": in.Style, "lyrics": in.Lyrics, "mode": in.Mode, "kind": in.Kind, "duration_seconds": in.Duration, "seed": *in.Seed, "reference_asset_id": in.Reference, "reference_mode": in.ReferenceMode, "singing_voice": in.SingingVoice, "vocal_gender": in.VocalGender, "lyrics_evidence_ids": in.LyricEvidence, "reference_start_seconds": spec.ReferenceStart, "reference_seconds": spec.ReferenceSeconds})
 		// Store the remote job mapping under the private effect ledger.
 		// Probe without side effects before claiming a create operation. An offline
 		// bridge must not become a fictitious successful/uncertain generation job.
@@ -259,6 +274,9 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		}
 		if health.Ready && health.BridgeVersion < 2 {
 			return "", yueError("yue_bridge_upgrade_required")
+		}
+		if health.Ready && in.Mode == "cover" && health.BridgeVersion < 6 {
+			return "", toolInputError("当前YuE桥接尚不支持参考片段定位；请升级到v6后按已核对的演唱段提交，避免生成前奏；本次未提交生成")
 		}
 		if !health.Ready {
 			if health.State == "backend_unavailable" {
@@ -320,6 +338,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		}
 		job["title"] = in.Title
 		job["mode"], job["seed"], job["reference_asset_id"], job["reference_mode"] = in.Mode, *in.Seed, in.Reference, in.ReferenceMode
+		job["reference_start_seconds"], job["reference_seconds"] = spec.ReferenceStart, spec.ReferenceSeconds
 		job["automatic_followup"] = true
 		job["task_id"] = taskID
 		job["instruction"] = "已真实提交本地YuE，后续检查与交付已自动持久化。可以自然告知正在制作；不要说已生成，不必另建任务或本轮反复查询。"
