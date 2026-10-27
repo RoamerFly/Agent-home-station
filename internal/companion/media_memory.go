@@ -49,6 +49,9 @@ func (s *Store) ObserveMedia(input Input, c Config, media MediaMemory, now time.
 		if !exists {
 			return nil
 		}
+		if media.State == "accepted" {
+			recordAutonomyAccepted(&scope, input, c, now)
+		}
 		for i := range scope.Messages {
 			if old := scope.Messages[i].Media; old != nil && old.Key == media.Key {
 				// A status update may lack old request metadata. Never erase a

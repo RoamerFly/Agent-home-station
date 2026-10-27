@@ -42,9 +42,10 @@ type Config struct {
 	QuietEnd             string                `json:"quiet_end"`
 	Timezone             string                `json:"timezone"`
 	ProactiveIdleMinutes int                   `json:"proactive_idle_minutes"`
-	ProactiveMaxPerDay   int                   `json:"proactive_max_per_day"`
-	ProactiveThreads     []string              `json:"proactive_threads"`
-	ProactiveRules       []ProactiveRule       `json:"proactive_rules,omitempty"`
+	// ProactiveMaxPerDay is retained for config compatibility, not enforced.
+	ProactiveMaxPerDay int             `json:"proactive_max_per_day"`
+	ProactiveThreads   []string        `json:"proactive_threads"`
+	ProactiveRules     []ProactiveRule `json:"proactive_rules,omitempty"`
 }
 
 // Rules override scheduling for selected threads. Selection stays in
@@ -52,7 +53,7 @@ type Config struct {
 type ProactiveRule struct {
 	Thread      string `json:"thread"`
 	IdleMinutes int    `json:"idle_minutes"`
-	MaxPerDay   int    `json:"max_per_day"`
+	MaxPerDay   int    `json:"max_per_day"` // Legacy value; not an execution quota.
 }
 
 func (c Config) ProactiveRule(thread string) ProactiveRule {
@@ -97,7 +98,7 @@ func Validate(c Config) error {
 			return errors.New("请检查角色名字、人设、说话风格和相处方式")
 		}
 	}
-	if c.MemoryMessages < 2 || c.MemoryMessages > 2000 || c.MemoryDays < 1 || c.MemoryDays > 365 || c.ReplyMinMS < 0 || c.ReplyMaxMS < c.ReplyMinMS || c.ReplyMaxMS > 10000 || c.MaxBubbles < 1 || c.MaxBubbles > 3 || c.MaxRepliesPerHour < 1 || c.MaxRepliesPerHour > 120 || c.ProactiveIdleMinutes < 5 || c.ProactiveIdleMinutes > 1440 || c.ProactiveMaxPerDay < 1 || c.ProactiveMaxPerDay > 5 {
+	if c.MemoryMessages < 2 || c.MemoryMessages > 2000 || c.MemoryDays < 1 || c.MemoryDays > 365 || c.ReplyMinMS < 0 || c.ReplyMaxMS < c.ReplyMinMS || c.ReplyMaxMS > 10000 || c.MaxBubbles < 1 || c.MaxRepliesPerHour < 1 || c.MaxRepliesPerHour > 120 || c.ProactiveIdleMinutes < 5 || c.ProactiveIdleMinutes > 1440 || c.ProactiveMaxPerDay < 0 {
 		return errors.New("请检查记忆、回复节奏和主动消息预算")
 	}
 	if _, err := time.LoadLocation(c.Timezone); err != nil {
@@ -121,7 +122,7 @@ func Validate(c Config) error {
 	}
 	seen := map[string]bool{}
 	for _, rule := range c.ProactiveRules {
-		if !selected[rule.Thread] || seen[rule.Thread] || rule.IdleMinutes < 5 || rule.IdleMinutes > 1440 || rule.MaxPerDay < 1 || rule.MaxPerDay > 5 {
+		if !selected[rule.Thread] || seen[rule.Thread] || rule.IdleMinutes < 5 || rule.IdleMinutes > 1440 || rule.MaxPerDay < 0 {
 			return errors.New("请检查主动问候目标的闲置时间、每日机会和重复项")
 		}
 		seen[rule.Thread] = true

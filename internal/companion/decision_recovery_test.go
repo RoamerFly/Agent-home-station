@@ -23,7 +23,7 @@ func TestMalformedVideoDecisionCorrectsThenUsesRealTool(t *testing.T) {
 	}
 }
 func TestFormatRepairHasTwoAttemptBoundAndNoToolSideEffects(t *testing.T) {
-	for _, answer := range []string{`{"action":"tool",`, `{"action":"tool","tool":"web_search","arguments":[]}`, `{"action":"nonsense"}`, `{"action":"reply","messages":["a","b","c","d"]}`, `<｜｜DSML｜｜ calls>broken`} {
+	for _, answer := range []string{`{"action":"tool",`, `{"action":"tool","tool":"web_search","arguments":[]}`, `{"action":"nonsense"}`, `<｜｜DSML｜｜ calls>broken`} {
 		model := &sequenceModel{answers: []string{answer}}
 		e, _ := NewPreview(enabledConfig(), model, "role")
 		tools := &toolFixture{}

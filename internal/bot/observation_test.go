@@ -14,13 +14,16 @@ type unavailableShareAnalyzer struct{}
 func (unavailableShareAnalyzer) Analyze(context.Context, linuxnative.Message) (string, error) {
 	return "", &ObservationUnavailableError{Observation: "未能读取视频，需要浏览器", Reason: "shared_video_share_requires_browser"}
 }
-func TestFailedSharedContentIsRememberedWithoutTitleOnlyReply(t *testing.T) {
+func TestFailedSharedContentReachesAgentForRecovery(t *testing.T) {
 	for _, background := range []bool{false, true} {
 		t.Run(map[bool]string{true: "background", false: "sync"}[background], func(t *testing.T) {
 			calls := 0
-			w, c, n := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+			w, c, n := backgroundWorker(t, generationModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
 				calls++
-				return `{"action":"reply","messages":["标题好有趣"]}`, nil
+				if !strings.Contains(turns[len(turns)-1]["content"], "需要浏览器") {
+					t.Error("failure not given to Agent")
+				}
+				return `{"action":"silent","messages":[]}`, nil
 			}))
 			if background {
 				w.enableGenerations()
@@ -39,8 +42,8 @@ func TestFailedSharedContentIsRememberedWithoutTitleOnlyReply(t *testing.T) {
 			for _, turn := range scope.Messages {
 				found = found || turn.TraceID == m.ID && strings.Contains(turn.Text, "需要浏览器")
 			}
-			if !found || calls != 0 || len(n.submissions) != 0 {
-				t.Fatal("missing observation became a title reaction", found, calls)
+			if !found || calls != 1 || len(n.submissions) != 0 {
+				t.Fatal("failure was not delivered to model", found, calls)
 			}
 		})
 	}

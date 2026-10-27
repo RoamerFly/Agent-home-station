@@ -31,5 +31,5 @@ func (s *Server) proactiveTargets(w http.ResponseWriter, r *http.Request) {
 		items = append(items, proactiveTarget{ID: id, Name: s.manager.memoryLabel(ctx, id), Kind: kind, State: s.manager.memory.ProactiveState("wechat", s.manager.native.Account(), id, c.Companion, time.Now())})
 	}
 	_, today := s.manager.memory.Counters(c.Companion, time.Now())
-	respond(w, 200, map[string]any{"items": items, "today": today, "max_per_day": c.Companion.ProactiveMaxPerDay})
+	respond(w, 200, map[string]any{"items": items, "today": today, "evaluated_today": today, "budget_enforced": false, "max_per_day": 0})
 }

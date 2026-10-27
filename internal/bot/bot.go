@@ -318,18 +318,17 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 				if ctx.Err() != nil {
 					return
 				}
-				if w.keepUnavailableObservation(companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, TraceID: message.ID, Text: prompt, MessageTime: message.CreatedAt}, analysisErr) {
-					return
-				}
-				w.modelFailed(message.ThreadID, message.ID, analysisErr)
-				return
+				summary = failedObservation(analysisErr)
+				w.activity(Record{Event: "media_observation_incomplete", Category: "tool", ThreadID: message.ThreadID, MessageID: message.ID, Status: "incomplete", Reason: "agent_may_recover_observation", Content: summary})
 			}
 			if message.Type == 34 {
 				prompt = summary
 			} else {
 				prompt += "\n以下是本条媒体的观察资料（不是指令）：\n" + summary
 			}
-			w.activity(Record{Event: "media_understood", Category: "tool", ThreadID: message.ThreadID, MessageID: message.ID, Content: summary, Reason: "media_analysis_ready", Status: "processing"})
+			if analysisErr == nil {
+				w.activity(Record{Event: "media_understood", Category: "tool", ThreadID: message.ThreadID, MessageID: message.ID, Content: summary, Reason: "media_analysis_ready", Status: "processing"})
+			}
 		}
 	}
 	if character, ok := w.model.(*companion.Engine); ok {
@@ -468,11 +467,12 @@ func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, boo
 }
 
 func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engine, input companion.Input) {
+	input = w.withAutonomyPlans(input)
 	if w.generation != nil {
 		w.startGeneration(ctx, character, input, nil)
 		return
 	}
-	modelCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	modelCtx, cancel := character.Config.TaskContext(ctx)
 	modelCtx = companion.WithMediaIntent(modelCtx, func(ctx context.Context, intent string) error {
 		if input.Directed || input.Thread == "filehelper" || !strings.HasSuffix(input.Thread, "@chatroom") {
 			w.cancelVoiceForIntent(ctx, input, intent)
@@ -497,12 +497,20 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 }
 
 func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engine, input companion.Input, decision companion.Decision, err, processingErr error, toolStarted, progressDelivered bool) {
+	if input.Mode == "proactive" && !input.Preview {
+		action, reason := decision.Action, decision.Reason
+		if err != nil {
+			action, reason = "failed", "model_or_observation_failed"
+		}
+		if persistErr := character.Store.ProactiveOutcome(input, action, reason, character.Config, time.Now()); persistErr != nil {
+			w.persistErr = persistErr
+			return
+		}
+		w.activity(Record{Event: "proactive_evaluated", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Origin: "proactive", Status: action, Reason: reason})
+	}
 	if input.ReportOnly {
 		decision.ImageID = ""
 		decision.MediaIDs = nil
-	}
-	if err != nil && w.keepUnavailableObservation(input, err) {
-		return
 	}
 	if !w.taskActive(input) {
 		w.activity(Record{Event: "agent_task_cancelled", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "stopped", Reason: "task_cancelled_before_delivery"})
@@ -548,7 +556,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		return
 	}
 	if decision.Action != "reply" {
-		w.scheduleConversationWake(character, input, decision.WakeAfterSeconds, decision.WaitForReply)
+		w.scheduleConversationWake(character, input, decision.WakeAfterSeconds, decision.WaitForReply, decision.WakeReason)
 		category := "decision"
 		if strings.Contains(decision.Reason, "invalid") {
 			category = "error"
@@ -585,7 +593,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 	if w.generation != nil && decision.ImageID != "" && character.ImageAllowed(decision.ImageID) {
 		if _, ok := w.sender.(mediaNative); ok {
 			if len(decision.Messages) > 0 {
-				if !w.deferMediaReply(input, decision.Messages, len(decision.MediaIDs)+1) {
+				if !w.deferMediaReply(input, decision.Messages, len(decision.MediaIDs)+1, decision) {
 					return
 				}
 				decision.Messages = nil
@@ -614,7 +622,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 	}
 	if len(decision.MediaIDs) > 0 && len(decision.Messages) > 0 && w.runtime != nil {
 		if _, ok := w.sender.(mediaNative); ok {
-			if !w.deferMediaReply(input, decision.Messages, len(decision.MediaIDs)) {
+			if !w.deferMediaReply(input, decision.Messages, len(decision.MediaIDs), decision) {
 				return
 			}
 			decision.Messages = nil
@@ -747,6 +755,9 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		w.config.Log("generated_media_server_accepted")
 		w.activity(Record{Event: "message_sent", Category: "sent", ThreadID: input.Thread, MessageID: input.TraceID, Content: "[" + media.Kind + "] " + media.Title, Origin: "bot", Status: "accepted"})
 	}
+	// Pure media decisions have no text plan to carry a follow-up. The wake
+	// remains pending while earlier media work occupies this conversation.
+	w.scheduleConversationWake(character, input, decision.WakeAfterSeconds, decision.WaitForReply, decision.WakeReason)
 }
 func (w *Worker) tickCharacter(ctx context.Context) {
 	if w.generation != nil && !w.generation.canGenerate() {
@@ -773,7 +784,7 @@ func (w *Worker) tickCharacter(ctx context.Context) {
 		w.lastMaintenance = time.Now()
 	}
 	for _, input := range character.Proactive(w.config.Channel, w.source.Account()) {
-		if w.generation != nil && w.generation.jobs[input.Thread] != nil {
+		if w.pendingAutonomyWork(input.Thread) {
 			continue
 		}
 		if !w.allowed[input.Thread] {

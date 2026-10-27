@@ -420,7 +420,8 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if !ownerContinuation && cfg.Companion.Quiet(now) {
 			continue
 		}
-		// Each background continuation consumes the same daily proactive budget.
+		// Non-owner continuations retain proactive authorization and quiet checks;
+		// completed evaluations do not exhaust a daily allowance.
 		in := companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "proactive", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), TraceID: "task-" + t.ID + "-" + time.Now().UTC().Format("20060102T150405.000000000"), TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText}
 		if ownerContinuation {
 			in.Mode, in.Directed = "direct", true

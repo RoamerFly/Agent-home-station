@@ -136,8 +136,10 @@ func (s *Server) runCatalogRefresh(n nativeCatalogSync, job catalogRefresh) {
 			job.State = "failed"
 			job.Message = problem.Error()
 		}
-		s.publishCatalog(job)
 		s.manager.record(bot.Record{Event: "catalog_sync_completed", Category: "system", Status: job.State, Reason: job.Kind, Content: job.Message})
+		// Terminal status must be the last operation: callers may release
+		// storage immediately after observing completion (including shutdown).
+		s.publishCatalog(job)
 	}()
 	var op linuxnative.CatalogSyncOperation
 	var err error

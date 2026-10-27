@@ -12,6 +12,7 @@ import (
 )
 
 type utterancePlan struct {
+	WakeReason       string                        `json:"wake_reason,omitempty"`
 	StopReason       string                        `json:"stop_reason,omitempty"`
 	MediaCaption     bool                          `json:"media_caption,omitempty"`
 	InboxChecked     bool                          `json:"inbox_checked"`
@@ -80,7 +81,7 @@ func (w *Worker) queueUtteranceFrom(c *companion.Engine, in companion.Input, d c
 		return true
 	}
 	now := time.Now().UTC()
-	p := &utterancePlan{ID: "utterance-" + messageHash(in.Thread + "|" + in.TraceID)[:32], Input: in, Messages: append([]string{}, d.Messages...), Sent: []string{}, State: "queued", Next: now.Add(w.replyDelay(c)), Created: now, WakeAfterSeconds: d.WakeAfterSeconds, WaitForReply: d.WaitForReply}
+	p := &utterancePlan{WakeReason: d.WakeReason, ID: "utterance-" + messageHash(in.Thread + "|" + in.TraceID)[:32], Input: in, Messages: append([]string{}, d.Messages...), Sent: []string{}, State: "queued", Next: now.Add(w.replyDelay(c)), Created: now, WakeAfterSeconds: d.WakeAfterSeconds, WaitForReply: d.WaitForReply}
 	p.MediaCaption = mediaCaption
 	p.Index, p.Slot = start, start
 	p.Sent = append([]string{}, d.Messages[:start]...)
@@ -132,7 +133,7 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 		}
 	}
 	for _, wake := range w.runtime.Wakes {
-		if wake.State == "waiting" && wake.WaitForReply && wake.Input.Thread == m.ThreadID && wake.Parent != m.ID {
+		if wake.State == "waiting" && wake.WaitForReply && wake.Input.Thread == m.ThreadID && wake.Parent != m.ID && (wake.Input.Sender == "" || wake.Input.Sender == m.SenderID) {
 			wake.State = "stopped"
 			w.activity(Record{Event: "conversation_wake_stopped", Category: "decision", ThreadID: m.ThreadID, MessageID: wake.Parent, Status: "stopped", Reason: "new_reply_before_wake"})
 		}
@@ -184,7 +185,7 @@ func (w *Worker) acceptPlanBubble(c *companion.Engine, p *utterancePlan, text st
 	}
 	if p.Index >= len(p.Messages) {
 		p.State = "accepted"
-		w.scheduleConversationWake(c, p.Input, p.WakeAfterSeconds, p.WaitForReply)
+		w.scheduleConversationWake(c, p.Input, p.WakeAfterSeconds, p.WaitForReply, p.WakeReason)
 	}
 	w.persistErr = w.saveRuntime()
 	if w.persistErr != nil {

@@ -88,10 +88,6 @@ func (w *Worker) applyPlanReview(p *utterancePlan, d companion.PendingReview, er
 		p.State = "stopped"
 		p.StopReason = "model_cancel"
 	case "replace":
-		if p.Index+len(d.Messages) > 12 {
-			p.State = "stopped"
-			break
-		}
 		p.Messages = append(append([]string{}, p.Messages[:p.Index]...), d.Messages...)
 		p.State = "queued"
 	case "delay":
