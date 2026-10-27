@@ -15,25 +15,25 @@ if(-not(Get-NetTCPConnection -State Listen -LocalPort 8188 -ErrorAction Silently
  $main=Join-Path $Project 'comfy\ComfyUI\main.py'
  $output=Join-Path $workspace 'temp\yue-agent-output'
  New-Item -ItemType Directory -Force -Path $output | Out-Null
- Start-Process -FilePath $python -ArgumentList @('-s',('"'+$main+'"'),'--listen','127.0.0.1','--port','8188','--lowvram','--disable-auto-launch','--output-directory',('"'+$output+'"')) -WorkingDirectory (Split-Path $main -Parent) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $workspace 'temp\yue-comfy.stdout.log') -RedirectStandardError (Join-Path $workspace 'temp\yue-comfy.stderr.log') | Out-Null
+ & (Join-Path $PSScriptRoot 'Start-HiddenProcess.ps1') -FilePath $python -Arguments @('-s',$main,'--listen','127.0.0.1','--port','8188','--lowvram','--disable-auto-launch','--output-directory',$output) -WorkingDirectory (Split-Path $main -Parent) -StandardOutput (Join-Path $workspace 'temp\yue-comfy.stdout.log') -StandardError (Join-Path $workspace 'temp\yue-comfy.stderr.log') | Out-Null
  }
 }
 if(-not(Get-NetTCPConnection -State Listen -LocalPort 6188 -ErrorAction SilentlyContinue)){
  if(-not(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like ('*'+(Join-Path $PSScriptRoot 'yue_bridge.py')+'*') })){
  $workflowDir=Join-Path $workspace 'components\yue2\app\workflows_api'
- $bridgeArguments=@(('"'+(Join-Path $PSScriptRoot 'yue_bridge.py')+'"'),'--project',('"'+$Project+'"'),'--workflow-dir',('"'+$workflowDir+'"'),'--state',('"'+$state+'"'),'--token-file',('"'+$token+'"'),'--bind',$bind)
+ $bridgeArguments=@((Join-Path $PSScriptRoot 'yue_bridge.py'),'--project',$Project,'--workflow-dir',$workflowDir,'--state',$state,'--token-file',$token,'--bind',$bind)
  $singingConfig=Join-Path $workspace 'secrets\singing-voice\config.json'
- if(Test-Path -LiteralPath $singingConfig){$bridgeArguments+=@('--singing-voice-config',('"'+$singingConfig+'"'))}
- Start-Process -FilePath (Get-Command python).Source -ArgumentList $bridgeArguments -WindowStyle Hidden -RedirectStandardOutput (Join-Path $workspace 'temp\yue-bridge.stdout.log') -RedirectStandardError (Join-Path $workspace 'temp\yue-bridge.stderr.log') | Out-Null
+ if(Test-Path -LiteralPath $singingConfig){$bridgeArguments+=@('--singing-voice-config',$singingConfig)}
+ & (Join-Path $PSScriptRoot 'Start-HiddenProcess.ps1') -FilePath (Get-Command python).Source -Arguments $bridgeArguments -StandardOutput (Join-Path $workspace 'temp\yue-bridge.stdout.log') -StandardError (Join-Path $workspace 'temp\yue-bridge.stderr.log') | Out-Null
  }
 }
 if(-not $WithoutWatchdog){
- $scheduled=Get-ScheduledTask -TaskName 'WechatAgent-YuE-*' -ErrorAction SilentlyContinue | Where-Object { $_.Actions.Arguments -like ('*'+(Join-Path $PSScriptRoot 'Watch-Local-YuE.ps1')+'*') }
+ $scheduled=Get-ScheduledTask -TaskName 'WechatAgent-YuE-*' -ErrorAction SilentlyContinue | Where-Object { $_.Actions.Arguments -like ('*'+(Join-Path $PSScriptRoot 'hidden_process.pyw')+'*') -and $_.Actions.Arguments -like '*--watch-yue*' }
  if($scheduled){$scheduled | Start-ScheduledTask}
  else {
  $watch=Join-Path $PSScriptRoot 'Watch-Local-YuE.ps1'
  if(-not(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(pwsh|powershell)\.exe$' -and $_.CommandLine -like ('*'+$watch+'*') })){
-  Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList @('-NoProfile','-File',('"'+$watch+'"'),'-Project',('"'+$Project+'"')) -WindowStyle Hidden | Out-Null
+  & (Join-Path $PSScriptRoot 'Start-HiddenProcess.ps1') -FilePath (Get-Process -Id $PID).Path -Arguments @('-NoProfile','-NonInteractive','-File',$watch,'-Project',$Project) | Out-Null
  }
  }
 }

@@ -4,6 +4,7 @@ Run with the managed audio Python, a private JSON config and explicit paths.
 Supported engines are pinned Seed-VC and an explicitly trained/pinned RVC voice.
 Weights remain in the managed cache; inference never retrains a speaker model.
 """
+from process_window import no_console_options
 import argparse
 import gc
 import hashlib
@@ -33,7 +34,7 @@ def validate_singing_config(config):
         if isinstance(steps,bool) or not isinstance(steps,int) or not 10<=steps<=100 or isinstance(cfg,bool) or not isinstance(cfg,(int,float)) or not 0<=cfg<=1:raise ValueError('invalid_seed_parameters')
         reference=Path(config['reference']).resolve()
         if hashlib.sha256(reference.read_bytes()).hexdigest()!=config['reference_sha256']:raise ValueError('voice_reference_changed')
-        revision=subprocess.check_output(['git','-C',str(Path(config['runtime'])/'seed-vc'),'rev-parse','HEAD'],text=True).strip()
+        revision=subprocess.check_output(**no_console_options(), args=['git','-C',str(Path(config['runtime'])/'seed-vc'),'rev-parse','HEAD'],text=True).strip()
         if revision!=config['source_revision']:raise ValueError('voice_runtime_revision_changed')
     else:raise ValueError('unknown_singing_voice_engine')
     return engine
@@ -64,7 +65,7 @@ def transpose_accompaniment(backing, rate, semitones, work):
     source,out=Path(work)/'backing-original.wav',Path(work)/'backing-transposed.wav'
     sf.write(source,backing,rate,subtype='FLOAT')
     ratio=2**(semitones/12)
-    subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-i',str(source),'-af','rubberband=pitch='+str(ratio)+':tempo=1','-ar',str(rate),'-c:a','pcm_f32le',str(out)],check=True,timeout=180)
+    subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-i',str(source),'-af','rubberband=pitch='+str(ratio)+':tempo=1','-ar',str(rate),'-c:a','pcm_f32le',str(out)],check=True,timeout=180,**no_console_options())
     shifted,actual_rate=sf.read(out,dtype='float32',always_2d=True)
     if actual_rate!=rate or shifted.shape[1]!=backing.shape[1] or abs(len(shifted)-len(backing))>rate//10 or not np.isfinite(shifted).all():raise ValueError('backing_conversion_invalid')
     return np.pad(shifted[:len(backing)],((0,max(0,len(backing)-len(shifted))),(0,0)))
@@ -93,7 +94,7 @@ def main():
     import huggingface_hub.constants
     # Decode with FFmpeg rather than Torchaudio's optional TorchCodec runtime.
     normalized = work/'original.wav'
-    subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-i', str(source), '-ac', '2', '-ar', '44100', str(normalized)], check=True, timeout=90)
+    subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-i', str(source), '-ac', '2', '-ar', '44100', str(normalized)], check=True, timeout=90,**no_console_options())
     original, rate = sf.read(normalized, dtype='float32', always_2d=True)
     if not 0 < len(original) <= rate*600:
         raise ValueError('song_duration_limit')
@@ -136,10 +137,10 @@ def main():
     timings['separate_vocals']=time.monotonic()-separation_started
     if engine=='rvc':
         conversion_started=time.monotonic();converted_path=work/'rvc-vocals.wav'
-        subprocess.run([config['rvc_python'],str(Path(__file__).with_name('rvc_voice.py').resolve()),'--project',config['rvc_project'],'--model',config['rvc_model'],'--index',config['rvc_index'],'--source',str(work/'vocals.wav'),'--output',str(converted_path),'--index-rate',str(config.get('index_rate',.35)),'--semitones',str(config.get('semitones',0)),'--protect',str(config.get('protect',.33)),'--precision',config.get('precision','auto')],check=True,timeout=1800)
+        subprocess.run([config['rvc_python'],str(Path(__file__).with_name('rvc_voice.py').resolve()),'--project',config['rvc_project'],'--model',config['rvc_model'],'--index',config['rvc_index'],'--source',str(work/'vocals.wav'),'--output',str(converted_path),'--index-rate',str(config.get('index_rate',.35)),'--semitones',str(config.get('semitones',0)),'--protect',str(config.get('protect',.33)),'--precision',config.get('precision','auto')],check=True,timeout=1800,**no_console_options())
         timings['rvc_load_and_convert']=time.monotonic()-conversion_started
         resampled=work/'rvc-vocals-44k.wav'
-        subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-i',str(converted_path),'-ac','1','-ar',str(rate),str(resampled)],check=True,timeout=90)
+        subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-i',str(converted_path),'-ac','1','-ar',str(rate),str(resampled)],check=True,timeout=90,**no_console_options())
         converted,converted_rate=sf.read(resampled,dtype='float32')
         if converted_rate!=rate or converted.ndim!=1:raise ValueError('converted_format_mismatch')
         backing=transpose_accompaniment(original-vocals,rate,config.get('accompaniment_semitones',0),work)

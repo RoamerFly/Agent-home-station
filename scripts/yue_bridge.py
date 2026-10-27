@@ -2,10 +2,12 @@
 Run with --project <YuE app> --state <private directory> --token-file <file>.
 The bridge persists jobs and never automatically resubmits interrupted work.
 """
+from process_window import no_console_options
 import argparse, base64, concurrent.futures, hashlib, hmac, json, math, os, re, secrets, threading, time, urllib.request, urllib.error, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from singing_voice import validate_singing_config
+import yue_sampling
 
 def singing_profile(config_path):
     if not config_path:return None
@@ -28,7 +30,7 @@ def requested_singing_profile(body,config_path):
 def convert_singing_voice(config_path,expected,source,destination):
     current=singing_profile(config_path)
     if current is None or current['config_sha256']!=expected['config_sha256']:raise ValueError('singing_voice_configuration_changed')
-    try:subprocess.run([current['python'],str(Path(__file__).with_name('singing_voice.py')),'--config',str(config_path),'--source',str(source),'--output',str(destination)],check=True,timeout=3600)
+    try:subprocess.run([current['python'],str(Path(__file__).with_name('singing_voice.py')),'--config',str(config_path),'--source',str(source),'--output',str(destination)],check=True,timeout=3600,**no_console_options())
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):raise ValueError('singing_voice_conversion_failed') from None
     if not destination.is_file() or destination.stat().st_size<44:raise ValueError('singing_voice_output_missing')
     return destination
@@ -102,6 +104,7 @@ def song_recipe(body):
     result.update(mode=mode,reference_mode=reference_mode,seed=seed)
     guidance,minimum=generation_controls(body)
     result.update(text_guidance_scale=guidance,min_duration_seconds=minimum)
+    result.update({k:body[k] for k in ('sampling','planning_mode') if k in body})
     if mode=='cover':
         try:data=base64.b64decode(body['reference_base64'],validate=True)
         except Exception:raise ValueError('invalid_reference_encoding') from None
@@ -119,6 +122,7 @@ def prepare_song_graph(workflow_dir,body,jid,input_dir):
     graph=json.loads((workflow_dir/('audio_yue2_music_cover.json' if mode=='cover' else 'audio_yue2_text_to_music.json')).read_text(encoding='utf-8'))
     target=body.get('duration_seconds',60);apply_song_duration(graph,target)
     graph['33:25']['inputs']['cfg_scale']=generation_controls(body)[0]
+    yue_sampling.apply(graph,body)
     style=generation_style(body)
     # Preserve the user's supplied style/lyrics. Duration is controlled by the
     # real generation node, not by silently injecting a new short-song style.
@@ -131,7 +135,7 @@ def prepare_song_graph(workflow_dir,body,jid,input_dir):
         name='wechat-ref-'+jid+'.wav'
         start,seconds=reference_window(body)
         seek=0 if body.get('reference_pretrimmed',False) else start
-        subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-protocol_whitelist','file','-i',str(source),'-ss',str(seek),'-vn','-ar','44100','-ac','2','-t',str(seconds),str(input_dir/name)],check=True,timeout=90)
+        subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-protocol_whitelist','file','-i',str(source),'-ss',str(seek),'-vn','-ar','44100','-ac','2','-t',str(seconds),str(input_dir/name)],check=True,timeout=90,**no_console_options())
         graph['45']['inputs']['audio']=name
         graph['33:25']['inputs']['style']=style;graph['33:25']['inputs']['lyrics']=body['lyrics']
         graph['33:25']['inputs']['mode']=reference_mode
@@ -169,7 +173,7 @@ def main():
             graph=prepare_song_graph(workflow_dir,body,jid,project/'comfy/ComfyUI/input')
             if song_options(body)[0]=='cover':
                 prepared=project/'comfy/ComfyUI/input'/('wechat-ref-'+jid+'.wav')
-                seconds=float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(prepared)],timeout=15))
+                seconds=float(subprocess.check_output(**no_console_options(), args=['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(prepared)],timeout=15))
                 start,requested=reference_window(body)
                 if seconds+.1<requested:raise ValueError('reference_window_incomplete')
                 with lock:jobs[jid]['reference_window']={'start_seconds':start,'requested_seconds':requested,'prepared_seconds':seconds,'prepared_sha256':hashlib.sha256(prepared.read_bytes()).hexdigest()};save()
@@ -187,7 +191,7 @@ def main():
                     with urllib.request.urlopen('http://127.0.0.1:8188/view?'+urlencode(audio),timeout=60) as r:data=r.read(64*1024*1024+1)
                     if not 0<len(data)<=64*1024*1024:raise ValueError('output_size_limit')
                     output=state/(jid+Path(audio['filename']).suffix);output.write_bytes(data)
-                    duration=float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(output)],timeout=30))
+                    duration=float(subprocess.check_output(**no_console_options(), args=['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(output)],timeout=30))
                     if not math.isfinite(duration) or duration<=0:raise ValueError('generation_audio_invalid')
                     quality=duration_quality(duration,body)
                     with lock:jobs[jid].update(duration_seconds=duration,requested_seconds=target,quality=quality,file=output.name,bytes=output.stat().st_size);save()
@@ -197,7 +201,7 @@ def main():
                     # and pretend the generator followed the requested duration.
                     if duration>target:
                         adjusted=state/(jid+'-bounded.flac')
-                        subprocess.run(['ffmpeg','-v','error','-y','-i',str(output),'-t',str(target),'-c:a','flac',str(adjusted)],check=True,timeout=60)
+                        subprocess.run(['ffmpeg','-v','error','-y','-i',str(output),'-t',str(target),'-c:a','flac',str(adjusted)],check=True,timeout=60,**no_console_options())
                         output=adjusted;duration=float(target)
                     voice=jobs[jid].get('singing_voice')
                     if voice:
@@ -222,12 +226,17 @@ def main():
         def authenticated(self):return hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token)
         def do_GET(self):
             if not self.authenticated():return self.reply(401,{'error':'unauthorized'})
+            if self.path=='/parameters':
+                try:
+                    info={kind:api('/object_info/'+kind)[kind] for _,kind,_ in yue_sampling.GROUPS.values()}
+                    return self.reply(200,{'bridge_version':8,'modes':{mode:yue_sampling.options(workflow_dir,mode,info) for mode in ('original','cover')}})
+                except Exception:return self.reply(503,{'error':'sampling_schema_unavailable'})
             if self.path=='/health':
                 try:
                     api('/system_stats')
                     try:voice=singing_profile(args.singing_voice_config)
                     except Exception:voice=None
-                    return self.reply(200,{'ready':True,'bridge_version':7,'generation_policy':'female-faithful-cover-v4-verified-duration','capabilities':['original','reference_cover','reference_window','text_guidance_scale','duration_quality','seed','reference_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; requested gender is not listening verification; max duration is a ceiling'})
+                    return self.reply(200,{'ready':True,'bridge_version':8,'generation_policy':'female-faithful-cover-v4-verified-duration','capabilities':['original','reference_cover','reference_window','text_guidance_scale','duration_quality','seed','reference_mode','sampling','planning_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; requested gender is not listening verification; max duration is a ceiling'})
                 except Exception:return self.reply(200,{'ready':False})
             parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
             with lock:job=dict(jobs.get(jid,{}))
@@ -264,8 +273,14 @@ def main():
                     if key and old.get('key')==key:
                         if old.get('request_hash') and old['request_hash']!=fingerprint:return self.reply(409,{'error':'idempotency_conflict'})
                         return self.reply(200,{k:v for k,v in old.items() if k!='file'})
-            try:api('/system_stats',timeout=5)
+            try:
+                api('/system_stats',timeout=5)
+                info={kind:api('/object_info/'+kind)[kind] for _,kind,_ in yue_sampling.GROUPS.values()}
             except Exception:return self.reply(503,{'error':'backend_unavailable'})
+            try:
+                effective=yue_sampling.resolve(body,workflow_dir,info)
+            except ValueError as e:return self.reply(400,{'error':str(e)})
+            body.update(effective);recipe.update(effective)
             with lock:
                 for old in jobs.values():
                     if key and old.get('key')==key:
@@ -277,7 +292,7 @@ def main():
                 body['seed']=seed
                 recipe['seed']=seed
                 jid=secrets.token_hex(16);jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'reference_used':mode=='cover','mode':mode,'reference_mode':reference_mode,'seed':seed,'request_hash':fingerprint,'requested_seconds':target,'recipe':recipe,'singing_voice':{k:v for k,v in voice.items() if k!='python'} if voice else None};save();pool.submit(run,jid,body)
-            self.reply(202,{'id':jid,'state':'queued','seed':seed,'mode':mode,'reference_used':mode=='cover','singing_voice_profile':voice['profile'] if voice else None})
+            self.reply(202,{'effective_parameters':effective,'id':jid,'state':'queued','seed':seed,'mode':mode,'reference_used':mode=='cover','singing_voice_profile':voice['profile'] if voice else None})
     # Windows/WSL access: token required on every endpoint. No remote code/API.
     ThreadingHTTPServer((args.bind,args.port),Handler).serve_forever()
 

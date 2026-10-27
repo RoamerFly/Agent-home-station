@@ -2,11 +2,13 @@
 
 带网页管理端的微信 Agent。支持角色聊天、图片/表情包/语音与分享内容理解、联网/MCP、插件、持久任务、媒体发送和本地 YuE 音乐生成。
 
-本机管理端：**http://127.0.0.1:8081/**。界面版本 `0.31.7-unified-results-local`。源码仓库：[RoamerFly/wechat-agent](https://github.com/RoamerFly/wechat-agent)。
+本机管理端：**http://127.0.0.1:8081/**。界面版本 `0.32.0-hidden-sampling-local`。源码仓库：[RoamerFly/wechat-agent](https://github.com/RoamerFly/wechat-agent)。
 
 ## Windows 本机启动
 
-双击根目录 **[启动大肥鱼.bat](启动大肥鱼.bat)**。它恢复已有WSL后台，保留微信登录和配置，网页就绪后打开浏览器；后台运行，不留下常驻命令行窗口。失败时显示提示，日志保存在 `temp/launcher/`。
+双击根目录 **[启动大肥鱼.vbs](启动大肥鱼.vbs)**（无命令窗口入口）。它恢复已有WSL后台，保留微信登录和配置，网页就绪后打开浏览器；后台运行，不留下常驻命令行窗口。失败时显示提示，日志保存在 `temp/launcher/`。
+
+原有BAT入口仍兼容命令行参数；BAT本身由cmd解释，双击可能短暂显示窗口，日常请使用上面的VBS入口。YuE守护任务通过pythonw启动，不分配控制台，也没有开机/登录触发器。
 
 可选命令：
 
@@ -22,7 +24,7 @@
 
 | 目录/文件 | 用途 |
 |---|---|
-| `启动大肥鱼.bat` | 日常启动入口 |
+| `启动大肥鱼.vbs` / `启动大肥鱼.bat` | 无窗口启动入口 / 命令行兼容入口 |
 | `cmd/`、`internal/` | Go服务入口、后端、内嵌网页和测试 |
 | `scripts/` | 稳定路径的运行脚本、媒体桥接和开发检查 |
 | `components/` | YuE源码集成和原生客户端等依赖的来源清单 |
