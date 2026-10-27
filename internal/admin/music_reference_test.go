@@ -18,7 +18,7 @@ func TestYuECoverPassesExactReferenceLyricsAndZeroSeedAndRetainsRecipe(t *testin
 	p, _, _ := f.manager.toolAccess()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "cover-request"}
 	p.SetTrace(in)
-	ref, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic original audio"), MIME: "audio/wav", Filename: "first-original.wav"}, nil)
+	ref, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: syntheticReferenceWAV(t, 120), MIME: "audio/wav", Filename: "first-original.wav"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestYuECoverPassesExactReferenceLyricsAndZeroSeedAndRetainsRecipe(t *testin
 	var posts atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
-			w.Write([]byte(`{"ready":true,"bridge_version":2}`))
+			w.Write([]byte(`{"ready":true,"bridge_version":6}`))
 			return
 		}
 		posts.Add(1)
@@ -48,7 +48,7 @@ func TestYuECoverPassesExactReferenceLyricsAndZeroSeedAndRetainsRecipe(t *testin
 		t.Fatal("parameters lost", submitted)
 	}
 	decoded, err := base64.StdEncoding.DecodeString(submitted["reference_base64"].(string))
-	if err != nil || string(decoded) != "synthetic original audio" {
+	if err != nil || len(decoded) < 8 || string(decoded[4:8]) != "ftyp" || submitted["reference_pretrimmed"] != true || submitted["reference_source_sha256"] != ref.Hash {
 		t.Fatal("wrong reference")
 	}
 	if _, err = p.callYuE(context.Background(), "music_local_start", raw); err != nil || posts.Load() != 1 {
@@ -84,7 +84,7 @@ func TestYuEStableUnspecifiedSeedSurvivesFormattingAndNewRequestRerolls(t *testi
 	seeds := []float64{}
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
-			w.Write([]byte(`{"ready":true,"bridge_version":2}`))
+			w.Write([]byte(`{"ready":true,"bridge_version":6}`))
 			return
 		}
 		var body map[string]any

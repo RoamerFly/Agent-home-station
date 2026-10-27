@@ -16,17 +16,19 @@ import (
 // Parameters are attached to the generated asset, not a global most-recent song.
 // They describe what was submitted, not a guarantee that the singer followed it.
 type songSpec struct {
-	SingingVoice  string   `json:"singing_voice,omitempty"`
-	VocalGender   string   `json:"vocal_gender,omitempty"`
-	Mode          string   `json:"mode"`
-	Style         string   `json:"style"`
-	Lyrics        string   `json:"lyrics"`
-	Seed          int64    `json:"seed"`
-	Duration      int      `json:"duration_seconds"`
-	Reference     string   `json:"reference_asset_id,omitempty"`
-	ReferenceMode string   `json:"reference_mode,omitempty"`
-	LyricEvidence []string `json:"lyrics_evidence_ids,omitempty"`
-	ReferenceHash string   `json:"reference_sha256,omitempty"`
+	SingingVoice     string   `json:"singing_voice,omitempty"`
+	VocalGender      string   `json:"vocal_gender,omitempty"`
+	Mode             string   `json:"mode"`
+	Style            string   `json:"style"`
+	Lyrics           string   `json:"lyrics"`
+	Seed             int64    `json:"seed"`
+	Duration         int      `json:"duration_seconds"`
+	Reference        string   `json:"reference_asset_id,omitempty"`
+	ReferenceMode    string   `json:"reference_mode,omitempty"`
+	LyricEvidence    []string `json:"lyrics_evidence_ids,omitempty"`
+	ReferenceHash    string   `json:"reference_sha256,omitempty"`
+	ReferenceStart   float64  `json:"reference_start_seconds,omitempty"`
+	ReferenceSeconds float64  `json:"reference_seconds,omitempty"`
 }
 
 func (p *permittedTools) referenceAsset(id string) (mediaAsset, []byte, error) {
@@ -71,7 +73,7 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 	if err != nil {
 		return "", err
 	}
-	out := map[string]any{"asset_id": a.ID, "title": a.Title, "source_url": a.URL, "cached_mime": a.MIME, "bytes": len(data), "generation": a.Music, "instruction": "这是同一会话已校验的原音频。generation如存在是当时提交的风格、歌词和种子；外部原曲不能编造歌词。翻唱应以这份原曲为reference_asset_id；重发原版用media_reuse，不重新生成。参考生成会重新合成伴奏，不是精确换声或原伴奏保留。"}
+	out := map[string]any{"asset_id": a.ID, "title": a.Title, "source_url": a.URL, "cached_mime": a.MIME, "bytes": len(data), "generation": a.Music, "instruction": "这是同一会话完整性已校验的缓存，标题不代表已确认歌手、版本或人声。generation如存在是当时提交的配方。先识别并选定与歌词匹配的演唱片段，留意长前奏、主持口播和纯伴奏。music_local_start的reference_start_seconds/reference_seconds指定原录音中的范围，本机会先截取再上传；省略起点时默认采用提交歌词依据的最早位置，显式0仍保留开头。不要把演唱段歌词配到纯前奏。重发原版用media_reuse；生成会重新合成，结果仍需核实。"}
 	out["available_lyrics"] = p.availableLyricEvidence(a)
 	if a.Music != nil {
 		out["lyrics_evidence_ids"] = a.Music.LyricEvidence
@@ -105,6 +107,7 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 			return "", err
 		}
 		out["transcript"], out["offset_seconds"], out["window_seconds"] = text, input.Offset, seconds
+		out["reference_window_candidate"] = map[string]any{"reference_start_seconds": input.Offset, "reference_seconds": seconds, "instruction": "这是本次实际识别的区间；核对是否为目标歌曲演唱，ASR候选不等于音质或人声质量认证"}
 		e, err := p.saveLyricEvidence(a, text, "asr_candidate", input.Offset, seconds)
 		if err != nil {
 			return "", err

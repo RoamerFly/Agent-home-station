@@ -32,7 +32,7 @@ func TestLiveNamedSongContextChoosesFemaleCoverDespiteOldMaleHistory(t *testing.
 	old := in
 	old.TraceID, old.Text = "old-unrelated", "旧任务当时用了male vocal和original；那是已经结束的历史录音。"
 	f.manager.memory.Observe(old, f.manager.config.Companion, time.Now().Add(-time.Minute))
-	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic source audio, not real music"), MIME: "audio/wav", Filename: "朋友的酒-原录音.wav"}, nil)
+	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: syntheticReferenceWAV(t, 120), MIME: "audio/wav", Filename: "朋友的酒-原录音.wav"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestLiveNamedSongContextChoosesFemaleCoverDespiteOldMaleHistory(t *testing.
 	starts := 0
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
-			w.Write([]byte(`{"ready":true,"bridge_version":4}`))
+			w.Write([]byte(`{"ready":true,"bridge_version":6}`))
 			return
 		}
 		starts++

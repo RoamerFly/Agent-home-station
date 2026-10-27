@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe, requested_singing_profile, generation_style
+from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe, requested_singing_profile, generation_style, reference_window
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
@@ -77,6 +77,21 @@ class SongWorkflowTests(unittest.TestCase):
             self.assertIn('保持原曲调和原歌词',graph['33:25']['inputs']['style'])
             self.assertTrue(graph['33:25']['inputs']['style'].endswith('female vocal'))
             self.assertEqual(graph['33:34']['inputs']['seed'],123)
+
+    def test_reference_window_skips_intro_and_pretrimmed_upload_is_not_cut_twice(self):
+        for trimmed,seek in ((False,'70'),(True,'0')):
+            body=self.body();body.update(mode='cover',reference_base64=base64.b64encode(b'synthetic excerpt').decode(),reference_start_seconds=70,reference_seconds=10,reference_pretrimmed=trimmed)
+            with tempfile.TemporaryDirectory() as tmp,patch('yue_bridge.subprocess.run') as run:
+                prepare_song_graph(WORKFLOWS,body,'window',Path(tmp))
+                command=run.call_args.args[0]
+                self.assertEqual(command[command.index('-ss')+1],seek)
+                self.assertEqual(command[command.index('-t')+1],'10')
+            recipe=song_recipe(body)
+            self.assertEqual(recipe['reference_start_seconds'],70)
+            self.assertEqual(recipe['reference_pretrimmed'],trimmed)
+        self.assertEqual(reference_window({'reference_start_seconds':0,'reference_seconds':125}),(0,125))
+        for values in ({'reference_start_seconds':-1},{'reference_seconds':0},{'reference_seconds':True},{'reference_start_seconds':float('nan')}):
+            with self.assertRaises(ValueError):reference_window(values)
 
     def test_invalid_modes_reference_and_seed_are_not_silently_original(self):
         for patch_values in ({'mode':'cover'},{'seed':True},{'seed':-1},{'seed':2147483648},{'reference_mode':'guess'},{'reference_base64':'x'},{'mode':'unknown'}):

@@ -83,7 +83,7 @@ func TestLiveModelUsesQuotedOriginalForCoverAndRecoversFixedSeedRecipe(t *testin
 		f.manager.config.Companion.QuietStart, f.manager.config.Companion.QuietEnd = "00:00", "00:00"
 		in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: scenario, Sender: "alice", Mode: "direct", Directed: true}
 		spec := &songSpec{Mode: "cover", Style: "female acoustic folk,92 BPM", Lyrics: "[Verse]\n晚风吹过小窗台\n[Chorus]\n我们一起等花开", Seed: 123, Duration: 60, Reference: "asset-synthetic-source", ReferenceMode: "melody"}
-		a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic original reference"), MIME: "audio/wav", Filename: "第一首原曲.wav"}, nil)
+		a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: syntheticReferenceWAV(t, 120), MIME: "audio/wav", Filename: "第一首原曲.wav"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,7 +124,7 @@ func TestLiveModelUsesQuotedOriginalForCoverAndRecoversFixedSeedRecipe(t *testin
 		posts := 0
 		u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/health" {
-				w.Write([]byte(`{"ready":true,"bridge_version":4,"voice_conversion_ready":true}`))
+				w.Write([]byte(`{"ready":true,"bridge_version":6,"voice_conversion_ready":true}`))
 				return
 			}
 			posts++
