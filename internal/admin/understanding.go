@@ -26,7 +26,7 @@ type incomingReader interface {
 func formatSeconds(v float64) string { return strconv.FormatFloat(v, 'f', 3, 64) }
 func parseVideoDuration(s string) (float64, error) {
 	v, e := strconv.ParseFloat(s, 64)
-	if e != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 || v > 3600 {
+	if e != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
 		return 0, errors.New("video_analysis_duration_limit")
 	}
 	return v, nil

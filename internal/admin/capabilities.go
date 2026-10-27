@@ -31,6 +31,7 @@ func namedTools(names ...string) func(string) bool {
 
 func (p *permittedTools) capabilities() []capabilityAdapter {
 	return []capabilityAdapter{
+		{"video-inspection", p.videoTools, namedTools("video_inspect"), p.callVideoInspection},
 		{"workspace-agent-wechat", p.agentTools, agentToolName, p.callAgent},
 		{"mobile", p.mobileTools, func(n string) bool { return strings.HasPrefix(n, "device_") }, p.callMobile},
 		{"plugin-jobs", p.pluginTaskTools, namedTools("plugin_job_status", "plugin_job_cancel"), p.callPluginJob},
@@ -44,6 +45,8 @@ func (p *permittedTools) capabilities() []capabilityAdapter {
 // Agent loop. A zero value retains the run deadline and a tool's own deadline.
 func (p *permittedTools) ToolTimeout(name string) time.Duration {
 	switch name {
+	case "video_inspect":
+		return 5 * time.Minute
 	case "web_search", "web_fetch":
 		return 25 * time.Second
 	case "web_audio_search":

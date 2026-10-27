@@ -1,0 +1,49 @@
+package admin
+
+import (
+	"context"
+	"errors"
+	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/mcptools"
+)
+
+type videoInspectionFailure struct {
+	code, message string
+	cause         error
+}
+
+func (e *videoInspectionFailure) Error() string                     { return e.code }
+func (e *videoInspectionFailure) Unwrap() error                     { return e.cause }
+func (e *videoInspectionFailure) SafeToolFailure() (string, string) { return e.code, e.message }
+func videoInspectionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var safe interface{ SafeToolFailure() (string, string) }
+	var web *mcptools.WebError
+	if errors.As(err, &safe) || errors.As(err, &web) {
+		return err
+	}
+	code, message := "video_inspection_failed", "视频读取未完成；请核对原件是否仍可取得、读取权限和已返回的续读起点，不能把失败范围说成已看过"
+	if d, ok := deepseek.ErrorDiagnostics(err); ok {
+		code, message = d.Code, deepseek.UserMessage(err)+"；可按真实原因调整模型参数或稍后从未读帧续读"
+	} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		code, message = "video_inspection_interrupted", "本次视频读取已超时或中止；保留已读范围，从未读起点继续，不能宣称完整读取"
+	} else {
+		messages := map[string]string{
+			"video_inspect_probe_failed":              "无法解析实际视频；请确认是已解密原件，且运行节点已安装ffmpeg和ffprobe",
+			"video_inspect_metadata_invalid":          "原件没有有效视频帧数或时长，不能用标题代替视频分析",
+			"video_inspect_decode_failed":             "实际视频帧解码失败；可核对原件格式、损坏情况与解码器后重试",
+			"video_inspect_frame_evidence_incomplete": "解码帧数或时间戳不完整；未把旧图片当作新帧，可缩小页面后重试",
+			"video_inspect_timestamp_invalid":         "解码器未返回有效帧时间戳，未伪造观察时间",
+			"video_audio_transcription_disabled":      "音轨转写权限未启用；可继续读取画面，不能假称听过音轨",
+			"video_audio_unavailable":                 "此时间范围没有可解码的音轨；可检查实际音轨结尾或选择其他时间范围",
+			"video_audio_transcription_failed":        "实际音轨已尝试转写但提供商没有返回有效文本；核对语音服务配置或稍后重试",
+			"video_audio_time_budget_exhausted":       "剩余执行时间不足以转写；保存检查点后从当前音轨起点继续",
+		}
+		if text, ok := messages[err.Error()]; ok {
+			code, message = err.Error(), text
+		}
+	}
+	return &videoInspectionFailure{code, message, err}
+}

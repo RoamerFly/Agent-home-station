@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -106,8 +107,8 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 			index = append(index, map[string]string{"name": t.Name, "summary": boundedText(t.Description, 120)})
 		}
 		b, _ := json.Marshal(index)
-		activeTools = append(activeTools, mcptools.Tool{Name: "discover_tools", Description: "Find additional tools by name or keywords; returns exact schemas for matching tools. Available names and short summaries: " + string(b), InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}`)})
-		system += "\n工具调用请使用原生function_call，不要把调用写进聊天。最终仍输出reply/silent JSON。最近媒体指代优先quoted_message_context，再按recent_media_focus的时间顺序；原视频指最近音轨的source_url，不重新搜索旧话题。"
+		activeTools = append(activeTools, mcptools.Tool{Name: "discover_tools", Description: "Find additional tools by name or keywords. Returns paginated matches with exact schemas, total, next_offset and has_more; offset/limit choose a page (default8), no total-match cutoff. Available names and short summaries: " + string(b), InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)})
+		system += "\n工具调用请使用原生function_call，不要把调用写进聊天。最终仍输出reply/silent JSON。工具的默认预览或单页结果不是全部能力；按用户所需精度读取next_offset/next_start_frame/next_start_seconds，续读到所需范围完成。不能把6帧概览当作视频精读上限；需要逐帧时可发现video_inspect并按连续帧分页操作。耗时任务保留已读范围与检查点。最近媒体指代优先quoted_message_context，再按recent_media_focus的时间顺序；原视频指最近音轨的source_url，不重新搜索旧话题。"
 		system += "\n每次优先调用一个工具；歌曲参考资料准备齐后应立即提交music_local_start，不持续重复搜索。用户说“下班的歌”“适合下班听的歌”等主题而没有明确歌名时，可以按语义创作，不把主题擅自当成固定歌名。同批调用会依次执行，后一个不能猜测前一个的结果。指定曲名/歌手的歌曲先web_search查对应作品和可播放来源；web_audio_search的器乐目录主要用于公开配乐，不是流行歌曲库。一个来源网络不可达就换来源，不原样重试同一失败工具。"
 		system += "\n当用户已经同意原创歌曲并给了风格时，即使本条只是‘可以，忧郁风格吧’，也要结合近期对话理解为确认制作。可自行写原创分段歌词，真实调用music_local_start；不能只发‘稍等我做一首’就结束。该工具成功后会自动安排生成完成后的交付，无需另建任务；只有返回automatic_followup=true才可说正在制作。制作完成续交任务必须调用music_local_status取得附件并使用media_ids，不重复生成。"
 	}
@@ -599,29 +600,46 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 			}
 			if nativeFunctions && response.Tool == "discover_tools" {
 				var q struct {
-					Query string `json:"query"`
+					Query  string `json:"query"`
+					Offset int    `json:"offset"`
+					Limit  int    `json:"limit"`
 				}
-				_ = json.Unmarshal(args, &q)
-				matches := []mcptools.Tool{}
-				query := strings.ToLower(q.Query)
-				for _, t := range tools {
-					match := strings.Contains(strings.ToLower(t.Name+" "+t.Description), query)
-					for _, word := range strings.Fields(query) {
-						match = match || strings.Contains(strings.ToLower(t.Name+" "+t.Description), word)
-					}
-					if match && len(matches) < 8 {
-						matches = append(matches, t)
-						found := false
-						for _, v := range activeTools {
-							found = found || v.Name == t.Name
+				if err := json.Unmarshal(args, &q); err != nil || q.Offset < 0 || q.Limit < 0 {
+					callErr = errors.New("tool discovery pagination arguments invalid")
+				} else {
+					matches := []mcptools.Tool{}
+					query := strings.ToLower(q.Query)
+					for _, t := range tools {
+						match := strings.Contains(strings.ToLower(t.Name+" "+t.Description), query)
+						for _, word := range strings.Fields(query) {
+							match = match || strings.Contains(strings.ToLower(t.Name+" "+t.Description), word)
 						}
-						if !found {
-							activeTools = append(activeTools, t)
+						if match {
+							matches = append(matches, t)
 						}
 					}
+					if q.Offset > len(matches) {
+						callErr = errors.New("tool discovery offset exceeds matches")
+					} else {
+						limit := q.Limit
+						if limit == 0 {
+							limit = 8
+						}
+						end := q.Offset + min(limit, len(matches)-q.Offset)
+						page := matches[q.Offset:end]
+						for _, t := range page {
+							found := false
+							for _, v := range activeTools {
+								found = found || v.Name == t.Name
+							}
+							if !found {
+								activeTools = append(activeTools, t)
+							}
+						}
+						b, _ := json.Marshal(map[string]any{"matches": page, "total": len(matches), "next_offset": end, "has_more": end < len(matches)})
+						result = string(b)
+					}
 				}
-				b, _ := json.Marshal(matches)
-				result = string(b)
 			} else {
 				result, callErr = e.Tools.Call(callCtx, response.Tool, args)
 			}

@@ -225,6 +225,10 @@ func TestVideoAudioLimitsActualTrackTo180Seconds(t *testing.T) {
 	if err != nil || text == "" || seconds < 179.9 || seconds > 180.01 || submittedBytes < 5760000 || submittedBytes > 5761024 {
 		t.Fatal("audio exceeded observation coverage", seconds, submittedBytes, err)
 	}
+	text, seconds, err = a.videoAudioRange(context.Background(), video, 180, 1)
+	if err != nil || text == "" || seconds < .9 || seconds > 1.1 || submittedBytes > 40000 {
+		t.Fatal("could not read audio beyond former180s cutoff", seconds, submittedBytes, err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	if _, _, err := a.videoAudio(ctx, video); err == nil || err.Error() != "video_audio_time_budget_exhausted" {

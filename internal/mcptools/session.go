@@ -123,7 +123,13 @@ func (h *Hub) scopedRequest(ctx context.Context, c ServerConfig, scope, method s
 		}
 		s.initialized = true
 	}
-	if method == "tools/list" && s.cached != nil && time.Since(s.cachedAt) < 30*time.Second {
+	firstListPage := method == "tools/list"
+	if m, ok := params.(map[string]any); ok {
+		if cursor, _ := m["cursor"].(string); cursor != "" {
+			firstListPage = false
+		}
+	}
+	if firstListPage && s.cached != nil && time.Since(s.cachedAt) < 30*time.Second {
 		*result = append((*result)[:0], s.cached...)
 		return nil
 	}
@@ -136,7 +142,7 @@ func (h *Hub) scopedRequest(ctx context.Context, c ServerConfig, scope, method s
 		return err
 	}
 	*result = response.Result
-	if method == "tools/list" {
+	if firstListPage {
 		s.cached = append([]byte(nil), response.Result...)
 		s.cachedAt = time.Now()
 	}

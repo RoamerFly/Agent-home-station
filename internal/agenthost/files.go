@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,60 +87,4 @@ func (h Host) edit(root *os.Root, rel string, in Input) (any, error) {
 	}
 	sum := sha256.Sum256([]byte(next))
 	return map[string]any{"updated": true, "sha256": hex.EncodeToString(sum[:]), "bytes": len(next)}, nil
-}
-func (h Host) search(root *os.Root, rel, query string) (any, error) {
-	if strings.TrimSpace(query) == "" || len(query) > 200 {
-		return nil, errors.New("搜索文本须为1至200字节")
-	}
-	hits := []map[string]any{}
-	files := 0
-	used := 0
-	truncated := false
-	e := fs.WalkDir(root.FS(), filepath.ToSlash(rel), func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if entry.Name() == ".git" {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
-			return nil
-		}
-		files++
-		if files > 2000 || len(hits) >= 100 {
-			truncated = true
-			return fs.SkipAll
-		}
-		f, e := root.Open(filepath.FromSlash(path))
-		if e != nil {
-			return nil
-		}
-		b, e := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-		f.Close()
-		if e != nil || len(b) > 1<<20 || !utf8.Valid(b) || strings.ContainsRune(string(b), 0) {
-			return nil
-		}
-		for i, line := range strings.Split(string(b), "\n") {
-			if strings.Contains(strings.ToLower(line), strings.ToLower(query)) {
-				if len(line) > 400 {
-					line = line[:400]
-				}
-				used += len(path) + len(line) + 48
-				if used > h.Config.OutputBytes {
-					truncated = true
-					return fs.SkipAll
-				}
-				hits = append(hits, map[string]any{"path": filepath.Join(root.Name(), filepath.FromSlash(path)), "line": i + 1, "text": line})
-				if len(hits) >= 100 {
-					truncated = true
-					return fs.SkipAll
-				}
-			}
-		}
-		return nil
-	})
-	return map[string]any{"matches": hits, "files_examined": min(files, 2000), "truncated": truncated}, e
 }
