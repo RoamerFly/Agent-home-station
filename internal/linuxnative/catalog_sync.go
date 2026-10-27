@@ -57,6 +57,12 @@ func (s *Sender) RefreshGroupMetadata(ctx context.Context, id string) (CatalogSy
 	}
 	return s.startCatalogMetadata(ctx, "/groups/"+url.PathEscape(id)+"/refresh")
 }
+func (s *Sender) RefreshGroupMembers(ctx context.Context, id string) (CatalogSyncOperation, error) {
+	if !safeThreadID(id) || !strings.HasSuffix(id, "@chatroom") {
+		return CatalogSyncOperation{}, errors.New("invalid group identity")
+	}
+	return s.startCatalogMetadata(ctx, "/groups/"+url.PathEscape(id)+"/members/refresh")
+}
 func (s *Sender) CatalogSyncStatus(ctx context.Context, id string) (CatalogSyncOperation, error) {
 	if !safeID(id) {
 		return CatalogSyncOperation{}, errors.New("invalid catalog operation")

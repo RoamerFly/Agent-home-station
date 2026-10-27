@@ -2,7 +2,9 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"time"
 
 	"wechat-bot/internal/linuxnative"
 )
@@ -29,8 +31,19 @@ func (s *Server) catalogRoutes(mux *http.ServeMux) {
 				return
 			}
 		}
-		page, err := native.Catalog(r.Context(), kind, thread, r.URL.Query().Get("search"), r.URL.Query().Get("cursor"))
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		defer cancel()
+		page, err := native.Catalog(ctx, kind, thread, r.URL.Query().Get("search"), r.URL.Query().Get("cursor"))
 		if err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				fail(w, 504, "目录查询超时，可以重新查询；群成员未同步时请刷新当前群成员")
+				return
+			}
+			var catalogErr *linuxnative.CatalogError
+			if errors.As(err, &catalogErr) {
+				fail(w, 502, catalogErr.Error())
+				return
+			}
 			fail(w, 502, "目录读取失败；请检查登录与数据同步状态")
 			return
 		}
