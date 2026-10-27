@@ -3,6 +3,8 @@ package companion
 import "errors"
 
 var ErrCompressionInProgress = errors.New("context_compression_in_progress")
+var ErrSummaryInvalid = errors.New("context_summary_invalid")
+var ErrContextChanged = errors.New("context_changed_during_compression")
 
 // FoldedHistoryCount is a presentation boundary, not the model's context
 // boundary. The model still reads the uncompressed recent tail after Summary.

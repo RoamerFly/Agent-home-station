@@ -10,6 +10,8 @@ func TestConsoleAssetsServeRoundProjectionWithCorrectContentTypes(t *testing.T) 
 	for _, item := range []struct{ path, contentType, marker string }{
 		{"/assets/rounds.js", "text/javascript", "WechatRounds"},
 		{"/assets/console.css", "text/css", ".round-summary"},
+		{"/assets/workbench.js", "text/javascript", "WechatWorkbench"},
+		{"/assets/workbench.css", "text/css", ".flow-node"},
 		{"/", "text/html", `id="log-view"`},
 	} {
 		status, body, response := f.request("GET", item.path, nil, false, false)

@@ -132,6 +132,10 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 			name = "billing.js"
 		case "/assets/storage.js":
 			name = "storage.js"
+		case "/assets/workbench.js":
+			name = "workbench.js"
+		case "/assets/workbench.css":
+			name = "workbench.css"
 		case "/assets/dialogs.js":
 			name = "dialogs.js"
 		case "/assets/conversations.js":
@@ -174,11 +178,11 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 		switch name {
 		case "index.html":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		case "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
+		case "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "whale-girl.png", "whale-girl-cutout.png":
 			w.Header().Set("Content-Type", "image/png")
-		case "app.css", "console.css":
+		case "app.css", "console.css", "workbench.css":
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		}
 		_, _ = w.Write(data)
@@ -334,7 +338,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		native = linuxnative.Status{Connection: "unavailable"}
 	}
-	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.27.0-conversation-workspace-local"})
+	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.28.0-node-workbench-local"})
 }
 func (s *Server) toggle(w http.ResponseWriter, r *http.Request, enabled bool) {
 	if err := s.manager.Toggle(enabled); err != nil {

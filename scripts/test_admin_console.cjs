@@ -38,7 +38,7 @@ entries.push({id:'sys1',time:at(0),event:'bot_starting',category:'system'},{id:'
    try{return route.fulfill({body:await fs.readFile(file),contentType:types[path.extname(file)]||'text/plain'})}catch{return route.continue()}
   });
   await page.goto(base+'/#logs');await page.locator('.round-card').first().waitFor();await page.locator('.round-extra-filters > summary').click();await page.selectOption('#log-view','rounds');await page.locator('.round-extra-filters > summary').click();
-  assert.equal(await page.locator('.main-nav').count(),5);
+  assert.equal(await page.locator('.main-nav').count(),6);
   assert.equal(await page.locator('.round-card').count(),60);assert.equal(await page.locator('.round-step').count(),0,'collapsed rounds must not render steps');
   await page.locator('.round-card').first().locator('.round-summary').first().click();assert.equal(await page.locator('.round-step').count(),3);
   await fs.mkdir('research/evidence/round-console',{recursive:true});
@@ -53,7 +53,7 @@ entries.push({id:'sys1',time:at(0),event:'bot_starting',category:'system'},{id:'
   await page.locator('#log-search').fill('');await page.waitForTimeout(200);
   await page.locator('.round-extra-filters > summary').click();await page.locator('#log-view').selectOption('system');assert.equal(await page.locator('.round-card').count(),1);
   await page.locator('#log-view').selectOption('rounds');await page.locator('.round-extra-filters > summary').click();
-  const sections=['overview','logs','catalog','memory','rules','tools','companion','agent','surf','plugins','provider','mcp','permissions','mobile','wechat','account-actions','settings'];
+  const sections=['workbench','overview','logs','catalog','memory','rules','tools','companion','agent','surf','plugins','provider','mcp','permissions','mobile','wechat','account-actions','settings'];
   for(const theme of ['light','dark']){
    await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
    for(const width of [375,768,1440]){
