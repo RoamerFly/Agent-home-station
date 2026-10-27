@@ -26,7 +26,14 @@ func (w *Worker) tickAgentTask(ctx context.Context) bool {
 		return false
 	}
 	if !w.allowed[in.Thread] {
-		return false
+		if w.config.AuthorizeThread == nil {
+			return false
+		}
+		allowed, e := w.config.AuthorizeThread(ctx, in.Thread)
+		if e != nil || !allowed {
+			return false
+		}
+		w.allowed[in.Thread] = true
 	}
 	in.PersonaOverride = w.config.GroupRules[in.Thread].Persona
 	w.activity(Record{Event: "agent_task_started", Category: "decision", ThreadID: in.Thread, MessageID: in.TraceID, Status: "running", Reason: "persistent_task_continuation", Origin: "agent"})

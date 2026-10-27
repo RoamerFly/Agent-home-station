@@ -25,6 +25,8 @@ type GroupRule struct {
 	ForceReplyWhenMentioned bool   `json:"force_reply_when_mentioned"`
 }
 type Config struct {
+	PrivateAllFriends bool `json:"private_all_friends"`
+	friendIDs         []string
 	Behavior          bot.Options      `json:"behavior"`
 	Provider          string           `json:"provider"`
 	BaseURL           string           `json:"base_url"`
@@ -131,7 +133,7 @@ func validate(c Config) error {
 		}
 		proactiveSeen[id] = true
 	}
-	if c.Enabled && (c.APIKey == "" || len(c.allowed()) == 0) {
+	if c.Enabled && (c.APIKey == "" || len(c.allowed()) == 0 && !(c.PrivateEnabled && c.PrivateAllFriends)) {
 		return errors.New("启动前请先配置 API Key，并启用至少一个回复会话")
 	}
 	return nil
@@ -143,6 +145,9 @@ func (c Config) allowed() []string {
 	}
 	if c.PrivateEnabled {
 		ids = append(ids, c.DirectIDs...)
+		if c.PrivateAllFriends {
+			ids = append(ids, c.friendIDs...)
+		}
 	}
 	for _, r := range c.GroupRules {
 		ids = append(ids, r.ID)

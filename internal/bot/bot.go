@@ -31,6 +31,7 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
+	AuthorizeThread   func(context.Context, string) (bool, error)
 	ReportFailure     func(companion.Input, string) error
 	AgentTask         func(time.Time, func(string) bool) (*companion.Input, error)
 	AgentTaskDone     func(companion.Input, string)
@@ -97,7 +98,7 @@ func New(config Config, source Source, model Model, sender sending.Engine) (*Wor
 			allowed[thread] = true
 		}
 	}
-	if len(allowed) == 0 {
+	if len(allowed) == 0 && config.AuthorizeThread == nil {
 		return nil, errors.New("bot thread allowlist is required")
 	}
 	if config.Log == nil {
@@ -174,7 +175,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			if duplicate || event.Kind != "message.committed" || event.Data.MessageID == "" || event.Data.Origin == "local_send" {
 				continue
 			}
-			if !w.allowed[event.Data.ThreadID] && w.config.Record == nil {
+			if !w.allowed[event.Data.ThreadID] && w.config.Record == nil && w.config.AuthorizeThread == nil {
 				continue
 			}
 
@@ -193,6 +194,23 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
+	if w.config.AuthorizeThread != nil {
+		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		allowed, e := w.config.AuthorizeThread(checkCtx, event.Data.ThreadID)
+		cancel()
+		if e != nil {
+			w.queuePhase(event.Data.MessageID, "read_pending")
+			w.activity(Record{Event: "contact_check_pending", Category: "decision", ThreadID: event.Data.ThreadID, MessageID: event.Data.MessageID, Reason: "contact_directory_unavailable", Status: "queued"})
+			return
+		}
+		if allowed {
+			w.allowed[event.Data.ThreadID] = true
+		} else {
+			delete(w.allowed, event.Data.ThreadID)
+			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: event.Data.ThreadID, MessageID: event.Data.MessageID, Reason: "conversation_not_allowed", Status: "skipped"})
+			return
+		}
+	}
 	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	message, err := w.source.Message(readCtx, event.Data.MessageID)
 	cancel()

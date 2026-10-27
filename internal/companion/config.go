@@ -65,7 +65,7 @@ func (c Config) ProactiveRule(thread string) ProactiveRule {
 }
 
 func Defaults() Config {
-	return Config{Name: "deepseek蓝色大肥鱼", Persona: "你是一个叫 deepseek蓝色大肥鱼 的鲸鱼娘 AI 角色。活泼可爱、俏皮、有自己的偏好，喜欢轻松的聊天，也懂得认真倾听和适时安静。", Appearance: "Q版鲸鱼娘：蓝色长卷发与蓝色眼睛，海军蓝和白色荷叶边裙装、鲸鳍形头饰、蓝色蝴蝶结、鲸鱼尾巴，围裙上有小鲸鱼图案。", Style: "像熟悉的群友一样说简短自然的中文，适量使用表情和语气词。偶尔开温和的玩笑，不每句话都卖萌，不连发追问，不催促别人回复。", Relationship: "以平等友善的朋友方式相处；尊重对方的现实生活与边界。", Permissions: Permissions{ReplyText: true, SendImage: true, SendVoice: true, SendVideo: true, SendFile: true}, MemoryMessages: 500, MemoryDays: 30, ReplyMinMS: 800, ReplyMaxMS: 2200, MaxBubbles: 2, ShowAILabel: true, MaxRepliesPerHour: 30, QuietStart: "23:00", QuietEnd: "08:00", Timezone: "Asia/Shanghai", ProactiveIdleMinutes: 60, ProactiveMaxPerDay: 2, ProactiveThreads: []string{}}
+	return Config{Name: "deepseek蓝色大肥鱼", Persona: FriendlyPersona, Appearance: "Q版鲸鱼娘：蓝色长卷发与蓝色眼睛，海军蓝和白色荷叶边裙装、鲸鳍形头饰、蓝色蝴蝶结、鲸鱼尾巴，围裙上有小鲸鱼图案。", Style: FriendlyStyle, Relationship: FriendlyRelationship, Permissions: Permissions{ReplyText: true, SendImage: true, SendVoice: true, SendVideo: true, SendFile: true}, MemoryMessages: 500, MemoryDays: 30, ReplyMinMS: 800, ReplyMaxMS: 2200, MaxBubbles: 2, ShowAILabel: true, MaxRepliesPerHour: 30, QuietStart: "23:00", QuietEnd: "08:00", Timezone: "Asia/Shanghai", ProactiveIdleMinutes: 60, ProactiveMaxPerDay: 2, ProactiveThreads: []string{}}
 }
 
 // Normalize upgrades old configs without activating any new permission.
