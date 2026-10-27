@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -21,7 +22,10 @@ func observeDecision(ctx context.Context, code string, attempt int) {
 	}
 }
 
-func decisionShape(d Decision, maxBubbles int) string {
+func decisionShape(d Decision, _ int) string {
+	if d.WakeAfterSeconds < 0 || int64(d.WakeAfterSeconds) > int64((time.Duration(1<<63-1))/time.Second) {
+		return "decision_wake_duration_invalid"
+	}
 	switch d.Action {
 	case "tool":
 		return ""
@@ -33,12 +37,6 @@ func decisionShape(d Decision, maxBubbles int) string {
 	case "reply":
 		if len(d.Messages) == 0 && d.ImageID == "" && len(d.MediaIDs) == 0 {
 			return "decision_reply_empty"
-		}
-		if len(d.Messages) > maxBubbles {
-			return "decision_bubbles_exceeded"
-		}
-		if len(d.MediaIDs) > 3 {
-			return "decision_media_count_exceeded"
 		}
 		for _, s := range d.Messages {
 			if strings.TrimSpace(s) == "" || len(s) > 3000 || !utf8.ValidString(s) {

@@ -11,23 +11,26 @@ import (
 )
 
 type mediaReply struct {
-	Updates  []companion.ConversationEvent `json:"updates,omitempty"`
-	Quote    *linuxnative.ToolQuote        `json:"quote,omitempty"`
-	Trace    string                        `json:"trace"`
-	Input    companion.Input               `json:"input"`
-	Messages []string                      `json:"messages"`
-	Expected int                           `json:"expected"`
-	Index    int                           `json:"index"`
-	State    string                        `json:"state"`
-	Next     time.Time                     `json:"next"`
-	Created  time.Time                     `json:"created"`
+	WakeReason       string                        `json:"wake_reason,omitempty"`
+	WakeAfterSeconds int                           `json:"wake_after_seconds,omitempty"`
+	WaitForReply     bool                          `json:"wait_for_reply,omitempty"`
+	Updates          []companion.ConversationEvent `json:"updates,omitempty"`
+	Quote            *linuxnative.ToolQuote        `json:"quote,omitempty"`
+	Trace            string                        `json:"trace"`
+	Input            companion.Input               `json:"input"`
+	Messages         []string                      `json:"messages"`
+	Expected         int                           `json:"expected"`
+	Index            int                           `json:"index"`
+	State            string                        `json:"state"`
+	Next             time.Time                     `json:"next"`
+	Created          time.Time                     `json:"created"`
 }
 
 func (r *mediaReply) terminal() bool {
 	return r.State == "accepted" || r.State == "stopped" || r.State == "queued_plan"
 }
 
-func (w *Worker) deferMediaReply(in companion.Input, messages []string, expected int) bool {
+func (w *Worker) deferMediaReply(in companion.Input, messages []string, expected int, followup ...companion.Decision) bool {
 	for _, r := range w.runtime.MediaReplies {
 		if r.Trace == in.TraceID && r.Input.Thread == in.Thread {
 			return true
@@ -46,6 +49,9 @@ func (w *Worker) deferMediaReply(in companion.Input, messages []string, expected
 		return false
 	}
 	r := &mediaReply{Trace: in.TraceID, Input: in, Messages: append([]string(nil), messages...), Expected: expected, State: "waiting_delivery", Created: time.Now().UTC()}
+	if len(followup) > 0 {
+		r.WakeAfterSeconds, r.WaitForReply, r.WakeReason = followup[0].WakeAfterSeconds, followup[0].WaitForReply, followup[0].WakeReason
+	}
 	if in.QuoteServerID != "" && in.TraceID != "" && (in.QuoteSharedMessage || in.Directed && w.config.Options.QuoteReplies) {
 		r.Quote = replyQuote(in)
 	}
@@ -101,7 +107,7 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 			// The handoff and text plan are persisted together. The attachment
 			// keeps its own receipt/cancellation state; only the caption is replanned.
 			r.State = "queued_plan"
-			w.queueUtteranceFrom(c, in, companion.Decision{Messages: messages}, r.Index, true, r.Updates)
+			w.queueUtteranceFrom(c, in, companion.Decision{Messages: messages, WakeAfterSeconds: r.WakeAfterSeconds, WaitForReply: r.WaitForReply, WakeReason: r.WakeReason}, r.Index, true, r.Updates)
 			w.refreshMediaParent(r.Trace)
 			continue
 		}

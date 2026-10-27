@@ -9,14 +9,18 @@ import (
 	"unicode/utf8"
 )
 
+var ErrWakePermission = errors.New("conversation wake permission denied")
+var ErrWakeContext = errors.New("conversation wake context unavailable")
+
 // ConversationSettings controls scheduling, never extra recipient/tool permissions.
 type ConversationSettings struct {
-	Enabled          bool `json:"enabled"`
-	AggregateMS      int  `json:"aggregate_ms"`
-	RecheckOnMessage bool `json:"recheck_on_message"`
-	AllowWake        bool `json:"allow_wake"`
-	WakeMinSeconds   int  `json:"wake_min_seconds"`
-	WakeMaxSeconds   int  `json:"wake_max_seconds"`
+	Enabled            bool `json:"enabled"`
+	AggregateMS        int  `json:"aggregate_ms"`
+	RecheckOnMessage   bool `json:"recheck_on_message"`
+	AllowWake          bool `json:"allow_wake"`
+	WakeMinSeconds     int  `json:"wake_min_seconds"`
+	WakeMaxSeconds     int  `json:"wake_max_seconds"`
+	TaskTimeoutSeconds int  `json:"task_timeout_seconds,omitempty"`
 }
 
 func ConversationDefaults() *ConversationSettings {
@@ -32,7 +36,7 @@ func validateConversation(c *ConversationSettings) error {
 	if c == nil {
 		return nil
 	}
-	if c.AggregateMS < 0 || c.AggregateMS > 5000 || c.WakeMinSeconds < 15 || c.WakeMaxSeconds < c.WakeMinSeconds || c.WakeMaxSeconds > 3600 {
+	if c.AggregateMS < 0 || c.AggregateMS > 5000 || c.WakeMinSeconds < 1 || c.WakeMaxSeconds < c.WakeMinSeconds || int64(c.WakeMaxSeconds) > int64((time.Duration(1<<63-1))/time.Second) || c.TaskTimeoutSeconds < 0 || int64(c.TaskTimeoutSeconds) > int64((time.Duration(1<<63-1))/time.Second) {
 		return errors.New("请检查消息聚合窗口与延时补充范围")
 	}
 	return nil
@@ -49,31 +53,29 @@ type PendingReview struct {
 func (s *Store) ClaimConversationWake(in Input, c Config, now time.Time) error {
 	return s.transaction(func(data *persisted) error {
 		if !c.Enabled || !c.ConversationConfig().AllowWake || !c.Permissions.Proactive || !c.Permissions.ReplyText || !c.Permissions.Remember || c.Quiet(now) {
-			return errors.New("conversation wake permission denied")
+			return ErrWakePermission
 		}
 		selected := false
 		for _, id := range c.ProactiveThreads {
 			selected = selected || id == in.Thread
 		}
 		if !selected {
-			return errors.New("conversation wake target not selected")
+			return ErrWakePermission
 		}
 		id := ScopeID(in.Channel, in.Account, in.Thread)
 		scope, ok := data.Scopes[id]
 		if !ok || len(scope.Messages) == 0 || now.Sub(scope.LastInteraction) > time.Duration(c.MemoryDays)*24*time.Hour {
-			return errors.New("conversation wake context unavailable")
+			return ErrWakeContext
 		}
 		day := localDay(c, now)
 		if data.ProactiveDay != day {
 			data.ProactiveDay = day
 			data.ProactiveCount = 0
 		}
-		if data.ProactiveCount >= c.ProactiveMaxPerDay || proactiveToday(scope, c, now) >= c.ProactiveRule(in.Thread).MaxPerDay {
-			return errors.New("conversation wake daily budget exhausted")
-		}
 		scope.ProactiveCount = proactiveToday(scope, c, now) + 1
 		scope.ProactiveDay = day
 		scope.LastProactive = now
+		scope.NextProactiveAt = nextProactiveEvaluation(c.ProactiveRule(in.Thread), now)
 		data.Scopes[id] = scope
 		data.ProactiveCount++
 		return nil
@@ -142,7 +144,7 @@ func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []st
 		if generation {
 			return d, errors.New("running task review cannot replace a reply plan")
 		}
-		if len(d.Messages) < 1 || len(d.Messages) > e.Config.MaxBubbles {
+		if len(d.Messages) < 1 {
 			return d, errors.New("invalid replacement plan")
 		}
 	default:

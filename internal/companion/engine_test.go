@@ -92,7 +92,7 @@ func TestPermissionsSilenceAndInvalidOutput(t *testing.T) {
 		t.Fatal("text permission ignored")
 	}
 	engine.Config.Permissions.ReplyText = true
-	for _, answer := range []string{`{"action":"silent","messages":["should not send"]}`, `{"action":"reply","messages":["a","b","c"]}`} {
+	for _, answer := range []string{`{"action":"silent","messages":["should not send"]}`, `{"action":"reply","messages":[""]}`} {
 		model.answer = answer
 		d, err = engine.Respond(context.Background(), input)
 		if err != nil || d.Action != "silent" || len(d.Messages) != 0 {

@@ -31,20 +31,22 @@ type Scope struct {
 	CompressedCount int    `json:"compressed_count,omitempty"`
 	// SummaryBoundary is the conversation snapshot length at compression time.
 	// The UI folds that snapshot, while Context still retains the recent tail.
-	SummaryBoundary int       `json:"summary_boundary,omitempty"`
-	SummaryUpdated  time.Time `json:"summary_updated,omitempty"`
-	ID              string    `json:"id"`
-	Channel         string    `json:"channel"`
-	Account         string    `json:"account"`
-	Thread          string    `json:"thread"`
-	Messages        []Turn    `json:"messages"`
-	Notes           []string  `json:"notes"`
-	LastInteraction time.Time `json:"last_interaction"`
-	LastActivity    time.Time `json:"last_activity,omitempty"`
-	LastDecision    time.Time `json:"last_decision"`
-	LastProactive   time.Time `json:"last_proactive"`
-	ProactiveDay    string    `json:"proactive_day,omitempty"`
-	ProactiveCount  int       `json:"proactive_count,omitempty"`
+	SummaryBoundary int           `json:"summary_boundary,omitempty"`
+	SummaryUpdated  time.Time     `json:"summary_updated,omitempty"`
+	ID              string        `json:"id"`
+	Channel         string        `json:"channel"`
+	Account         string        `json:"account"`
+	Thread          string        `json:"thread"`
+	Messages        []Turn        `json:"messages"`
+	Notes           []string      `json:"notes"`
+	LastInteraction time.Time     `json:"last_interaction"`
+	LastActivity    time.Time     `json:"last_activity,omitempty"`
+	LastDecision    time.Time     `json:"last_decision"`
+	LastProactive   time.Time     `json:"last_proactive"`
+	ProactiveDay    string        `json:"proactive_day,omitempty"`
+	ProactiveCount  int           `json:"proactive_count,omitempty"`
+	NextProactiveAt time.Time     `json:"next_proactive_at,omitempty"`
+	Autonomy        AutonomyStats `json:"autonomy,omitempty"`
 }
 type ScopeSummary struct {
 	ID              string    `json:"id"`
@@ -270,6 +272,7 @@ func (s *Store) Accepted(input Input, text string, c Config, now time.Time) erro
 			return errors.New("character scope missing")
 		}
 		scope.Messages = append(scope.Messages, Turn{Role: "assistant", Text: boundedText(text, 2048), SenderName: c.Name, SenderNameSource: "character", Time: now})
+		recordAutonomyAccepted(&scope, input, c, now)
 		clean, err := s.pruneStored(scope, c, now)
 		if err != nil {
 			return err
@@ -338,14 +341,14 @@ func (s *Store) ProactiveCandidates(channel, account string, c Config, now time.
 		if s.proactiveStatusLocked(channel, account, thread, c, now).Reason != "ready" {
 			continue
 		}
-		out = append(out, Input{Channel: channel, Account: account, Thread: thread, Mode: "proactive", IsGroup: strings.HasSuffix(thread, "@chatroom"), Text: "判断现在是否有充分、自然的理由轻轻续聊；没有理由就保持安静，不催促回复。"})
+		out = append(out, Input{Channel: channel, Account: account, Thread: thread, Mode: "proactive", IsGroup: strings.HasSuffix(thread, "@chatroom"), Text: "这是一次获准的自主活动评估。结合最新群聊、关系记忆、自己的兴趣和未完成事情，决定自然接话、真实查找并分享有趣内容，或安静。可以使用当前可用工具，不必等待冷场，不重复已发内容；也可以用wake_after_seconds安排下次评估，不催促回复。"})
 	}
 	return out
 }
 func (s *Store) ClaimProactive(input Input, c Config, now time.Time) error {
 	return s.transaction(func(data *persisted) error {
-		// Recheck against the transaction copy; claims, including silence or a
-		// crash, are persisted before invoking the model or sending anything.
+		// Persist the evaluation and its next randomized due time before the
+		// model runs. This is restart-safe scheduling, not a sending allowance.
 		if state := proactiveStatus(*data, input.Channel, input.Account, input.Thread, c, now); state.Reason != "ready" {
 			return errors.New("proactive unavailable: " + state.Reason)
 		}
@@ -354,19 +357,17 @@ func (s *Store) ClaimProactive(input Input, c Config, now time.Time) error {
 			data.ProactiveDay = day
 			data.ProactiveCount = 0
 		}
-		if data.ProactiveCount >= c.ProactiveMaxPerDay {
-			return errors.New("proactive daily budget exhausted")
-		}
 		id := ScopeID(input.Channel, input.Account, input.Thread)
 		scope, ok := data.Scopes[id]
 		if !ok {
 			return errors.New("proactive conversation missing")
 		}
-		// Persist before the model/send. A crash or silence still consumes this
-		// opportunity, so restart cannot repeat an uncertain autonomous action.
+		// A crash or silence keeps the next due time, but never exhausts a
+		// daily allowance. Real side effects use their own delivery ledger.
 		scope.ProactiveCount = proactiveToday(scope, c, now) + 1
 		scope.ProactiveDay = day
 		scope.LastProactive = now
+		scope.NextProactiveAt = nextProactiveEvaluation(c.ProactiveRule(input.Thread), now)
 		data.Scopes[id] = scope
 		data.ProactiveCount++
 		return nil

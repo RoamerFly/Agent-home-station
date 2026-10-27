@@ -12,10 +12,12 @@ import (
 type planReviewModel struct {
 	answer string
 	calls  int
+	turns  []map[string]string
 }
 
-func (m *planReviewModel) Chat(context.Context, string, []map[string]string) (string, error) {
+func (m *planReviewModel) Chat(_ context.Context, _ string, turns []map[string]string) (string, error) {
 	m.calls++
+	m.turns = turns
 	return m.answer, nil
 }
 func planWorker(t *testing.T, model *planReviewModel) (*Worker, *companion.Engine, *acceptingProgressNative, companion.Input) {
@@ -192,7 +194,9 @@ func TestWakeIsIndependentBoundedAndOnlyForOwnerSelectedTargets(t *testing.T) {
 	}
 	in.TraceID = "another"
 	w.scheduleConversationWake(c, in, 30, true)
-	w.noticeConversationMessage(fixtureMessage("human-replied", "filehelper", "好呀", "incoming"), true)
+	reply := fixtureMessage("human-replied", "filehelper", "好呀", "incoming")
+	reply.SenderID = in.Sender
+	w.noticeConversationMessage(reply, true)
 	if w.runtime.Wakes[1].State != "stopped" {
 		t.Fatal("wait-for-reply not cancelled")
 	}

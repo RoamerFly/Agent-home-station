@@ -159,12 +159,12 @@ func (w *Worker) loadRuntime(server string) error {
 				p.Input.QuoteServerID = p.Quote.ServerID
 			}
 		}
-		if p == nil || len(p.Messages) < 1 || len(p.Messages) > 12 || p.Index < 0 || p.Index > len(p.Messages) || p.Index == len(p.Messages) && !p.terminal() || p.Input.Thread == "" || p.Slot < 0 {
+		if p == nil || len(p.Messages) < 1 || p.Index < 0 || p.Index > len(p.Messages) || p.Index == len(p.Messages) && !p.terminal() || p.Input.Thread == "" || p.Slot < 0 {
 			return errors.New("persistent utterance plan invalid; retained")
 		}
 	}
 	for _, r := range s.MediaReplies {
-		if r == nil || len(r.Messages) < 1 || len(r.Messages) > 3 || r.Expected < 1 || r.Expected > 3 || r.Index < 0 || r.Index > len(r.Messages) || r.Index == len(r.Messages) && !r.terminal() {
+		if r == nil || len(r.Messages) < 1 || r.Expected < 1 || r.Index < 0 || r.Index > len(r.Messages) || r.Index == len(r.Messages) && !r.terminal() {
 			return errors.New("persistent media reply invalid; not discarded")
 		}
 	}

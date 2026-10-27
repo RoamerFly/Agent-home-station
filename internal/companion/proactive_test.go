@@ -46,29 +46,22 @@ func TestProactiveTargetsIsolationTimingBudgetsAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state := s.ProactiveState("wechat", "account", "room@chatroom", c, now.Add(29*time.Minute)); state.Today != 1 || state.Reason != "idle_wait" {
+	state := s.ProactiveState("wechat", "account", "room@chatroom", c, now)
+	if state.Today != 1 || state.Reason != "scheduled_wait" || state.NextAt.Before(now.Add(15*time.Minute)) || !state.NextAt.Before(now.Add(45*time.Minute)) {
 		t.Fatal(state)
 	}
-	if err = s.ClaimProactive(candidates[0], c, now.Add(30*time.Minute)); err != nil {
-		t.Fatal(err)
+	for i := 0; i < 8; i++ {
+		now = state.NextAt
+		_ = s.TouchActivity(candidates[0], now)
+		if err = s.ClaimProactive(candidates[0], c, now); err != nil {
+			t.Fatal("legacy quota blocked evaluation", i, err)
+		}
+		state = s.ProactiveState("wechat", "account", "room@chatroom", c, now)
+		if state.Reason != "scheduled_wait" || state.Today != i+2 {
+			t.Fatal(state)
+		}
 	}
-	if state := s.ProactiveState("wechat", "account", "room@chatroom", c, now.Add(2*time.Hour)); state.Today != 2 || state.Reason != "target_daily_budget" {
-		t.Fatal(state)
-	}
-	next := s.ProactiveCandidates("wechat", "account", c, now.Add(2*time.Hour))
-	if len(next) != 1 || next[0].Thread != "friend" || next[0].IsGroup {
-		t.Fatal(next)
-	}
-	if err = s.ClaimProactive(next[0], c, now.Add(2*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	c.ProactiveMaxPerDay = 3
-	if state := s.ProactiveState("wechat", "account", "friend", c, now.Add(3*time.Hour)); state.Reason != "proactive_daily_budget" {
-		t.Fatal(state)
-	}
-	if state := s.ProactiveState("wechat", "account", "friend", c, now.Add(24*time.Hour)); state.Today != 0 || state.Reason != "ready" {
-		t.Fatal("local day did not reset", state)
-	}
+
 }
 
 func TestProactiveLegacyLedgerAndActivityRemainPrivate(t *testing.T) {
@@ -87,15 +80,15 @@ func TestProactiveLegacyLedgerAndActivityRemainPrivate(t *testing.T) {
 		data.Scopes[id] = v
 		return nil
 	})
-	if state := s.ProactiveState(in.Channel, in.Account, in.Thread, c, now); state.Today != 1 || state.Reason != "target_daily_budget" {
-		t.Fatal("legacy claim reset", state)
+	if state := s.ProactiveState(in.Channel, in.Account, in.Thread, c, now); state.Today != 1 || state.Reason != "ready" {
+		t.Fatal("legacy quota still enforced", state)
 	}
 	c.ProactiveRules = []ProactiveRule{{Thread: "friend", IdleMinutes: 5, MaxPerDay: 2}}
 	if err := s.TouchActivity(in, now); err != nil {
 		t.Fatal(err)
 	}
-	if state := s.ProactiveState(in.Channel, in.Account, in.Thread, c, now); state.Reason != "idle_wait" || !state.NextAt.Equal(now.Add(5*time.Minute)) {
-		t.Fatal("ambient activity not delaying greeting", state)
+	if state := s.ProactiveState(in.Channel, in.Account, in.Thread, c, now); state.Reason != "ready" {
+		t.Fatal("ambient activity still blocks autonomous evaluation", state)
 	}
 	scope := s.Context(in, c, now)
 	if len(scope.Messages) != 1 || scope.Messages[0].Text != "remembered" {
@@ -138,7 +131,7 @@ func TestProactiveRuleValidation(t *testing.T) {
 	if err := Validate(c); err != nil {
 		t.Fatal(err)
 	}
-	for _, rule := range []ProactiveRule{{Thread: "other", IdleMinutes: 5, MaxPerDay: 2}, {Thread: "friend", IdleMinutes: 0, MaxPerDay: 1}, {Thread: "friend", IdleMinutes: 5, MaxPerDay: 6}} {
+	for _, rule := range []ProactiveRule{{Thread: "other", IdleMinutes: 5, MaxPerDay: 2}, {Thread: "friend", IdleMinutes: 0, MaxPerDay: 1}, {Thread: "friend", IdleMinutes: 5, MaxPerDay: -1}} {
 		copy := c
 		copy.ProactiveRules = []ProactiveRule{rule}
 		if Validate(copy) == nil {

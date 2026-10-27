@@ -68,7 +68,7 @@ func TestProactiveWorkerSendsToSelectedGroupAndFriendOrChoosesSilence(t *testing
 	}
 }
 
-func TestUntriggeredGroupActivityPostponesProactiveWithoutMemorizingBody(t *testing.T) {
+func TestUntriggeredGroupActivityDoesNotPostponeAutonomyOrMemorizeBody(t *testing.T) {
 	c := companion.Defaults()
 	c.Enabled = true
 	c.Permissions.Remember = true
@@ -87,8 +87,8 @@ func TestUntriggeredGroupActivityPostponesProactiveWithoutMemorizingBody(t *test
 	worker, _ := New(Config{Channel: "wechat", StateDir: t.TempDir(), AllowedThreads: []string{"room@chatroom"}, GroupRules: map[string]GroupRule{"room@chatroom": {Mode: "mention"}}}, source, engine, &fakeSender{})
 	worker.handle(context.Background(), fixtureEvent("1", "ambient", "room@chatroom", "incoming", "remote"))
 	worker.tickCharacter(context.Background())
-	if m.calls != 0 {
-		t.Fatal("active group got proactive judgement")
+	if m.calls != 1 {
+		t.Fatal("active group did not get autonomous evaluation")
 	}
 	scope := store.Context(input, c, time.Now())
 	if len(scope.Messages) != 1 || scope.Messages[0].Text != "原有上下文" || scope.LastActivity.IsZero() {

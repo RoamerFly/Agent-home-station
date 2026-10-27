@@ -181,9 +181,9 @@
 </details>
 <details class="panel"><summary>最近账号与服务器操作</summary><div id="agent-operation-list"></div></details>
 <details class="panel disclosure"><summary>安静时段</summary><h3 class="sr-only">安静时段</h3><div class="field-grid"><div><label for="timezone">时区</label><input id="timezone" placeholder="Asia/Shanghai"/></div><div><label for="quiet-start">从</label><input id="quiet-start" type="time"/></div><div><label for="quiet-end">到</label><input id="quiet-end" type="time"/></div></div><p class="hint">约束主动问候和自主冲浪；开始与结束相同表示不设安静时段。</p></details>
-<details aria-labelledby="proactive-title" class="panel proactive-settings disclosure" id="proactive-panel"><summary>主动问候</summary>
-<div class="section-heading"><h3 class="sr-only" id="proactive-title">主动问候</h3><button class="primary" id="save-proactive" type="button">保存问候设置</button></div>
-<p class="hint">闲置后结合本地记忆判断是否适合续聊，可以选择安静。每日机会包括安静和失败，不等于固定发送次数。</p>
+<details aria-labelledby="proactive-title" class="panel proactive-settings disclosure" id="proactive-panel"><summary>自主续聊</summary>
+<div class="section-heading"><h3 class="sr-only" id="proactive-title">主动问候</h3><button class="primary" id="save-proactive" type="button">保存续聊设置</button></div>
+<p class="hint">结合最近话题与关系记忆自主评估，可接话、使用工具探索或安静。模型可安排下次评估；默认评估间隔带随机变化，不要求群里先冷场，不设每日硬额度。</p>
 <div class="field-grid"></div>
 <div class="inline-actions"><label for="proactive-search">查找目标</label><input id="proactive-search" maxlength="128" placeholder="名称、备注或 ID" type="search"/><button class="secondary" id="proactive-refresh" type="button">刷新名称与状态</button></div>
 <p class="hint" id="proactive-state" role="status"></p><div id="proactive-targets"></div>
