@@ -45,6 +45,7 @@
 - [媒体与后续说明的处理顺序](media/media-caption-observation-order.md)
 - [分享实际内容观察](media/share-observation.md)
 - [C声线歌声改进与验收](media/singing-voice-refinement.md)
+- [翻唱的歌词、旋律与节拍对应](media/cover-phrasing-comparison.md)
 - [歌曲请求、参考原曲与歌词依据](media/song-request-integrity.md)
 - [歌曲默认声线与本地桥接恢复](media/song-voice-policy.md)
 - [自主冲浪的分享决定与记录](media/surf-sharing-outcomes.md)

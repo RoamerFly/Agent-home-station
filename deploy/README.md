@@ -23,6 +23,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Start-Local-Admin.ps
 
 本机YuE按需运行 `启动大肥鱼.bat Music`。登录Windows自动启动的触发器已关闭；启动器不会重新开启它。未安装本机YuE时可单独启动管理端和微信聊天。
 
+本机管理端的源代码更新入口统一为 `scripts/update_local_web.py`（在WSL内执行，先准备`dist/linux-amd64/wechat-admin`）；旧`research/scripts/update_local_web.py`仅保留兼容转发。更新前等待活动工作结束，更新后检查健康再保留近期回滚程序。独立预览历史程序清理可运行`python scripts/binary_retention.py --directory <私有运行目录>/bin --keep 3`，默认只输出清单，实际执行须指定匹配的`--apply-plan-hash`。
+
 ## 新机器和 Linux
 
 源码仓库不包含微信登录、Key、模型、原生程序或Python/CUDA环境。新机器须按[原生依赖清单](../components/native-client/README.md)和[YuE集成说明](../components/yue2/README.md)准备依赖，并使用独立私有目录授权。不可只复制源码后同时打开同一个微信会话目录。

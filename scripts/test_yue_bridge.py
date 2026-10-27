@@ -119,4 +119,10 @@ class SongWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp,self.assertRaises(ValueError):
             prepare_song_graph(WORKFLOWS,body,'synthetic',Path(tmp))
 
+    def test_cover_default_follows_melody_and_full_remains_available(self):
+        body=self.body();body.update(mode='cover',reference_base64=base64.b64encode(b'synthetic').decode())
+        self.assertEqual(song_options(body)[1],'melody')
+        body['reference_mode']='full'
+        self.assertEqual(song_options(body)[1],'full')
+
 if __name__=='__main__':unittest.main()

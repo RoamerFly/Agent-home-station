@@ -2,7 +2,7 @@
 
 带网页管理端的微信 Agent。支持角色聊天、图片/表情包/语音与分享内容理解、联网/MCP、插件、持久任务、媒体发送和本地 YuE 音乐生成。
 
-本机管理端：**http://127.0.0.1:8081/**。界面版本 `0.31.6-song-quality-local`。源码仓库：[RoamerFly/wechat-agent](https://github.com/RoamerFly/wechat-agent)。
+本机管理端：**http://127.0.0.1:8081/**。界面版本 `0.31.7-unified-results-local`。源码仓库：[RoamerFly/wechat-agent](https://github.com/RoamerFly/wechat-agent)。
 
 ## Windows 本机启动
 

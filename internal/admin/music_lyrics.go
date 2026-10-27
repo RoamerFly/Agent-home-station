@@ -59,9 +59,8 @@ func (p *permittedTools) saveLyricEvidenceDetails(a mediaAsset, text, source str
 		return e, err
 	}
 	if _, err := os.Stat(filepath.Join(dir, e.ID+".json")); os.IsNotExist(err) {
-		entries, err := os.ReadDir(dir)
-		if err != nil || len(entries) >= 1000 {
-			return e, errors.New("歌词依据存储已满，请整理后再登记；旧依据未删除")
+		if _, err := os.ReadDir(dir); err != nil {
+			return e, err
 		}
 	}
 	b, _ := json.Marshal(e)
@@ -71,7 +70,7 @@ func (p *permittedTools) saveLyricEvidenceDetails(a mediaAsset, text, source str
 func stringMustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
 
 func (p *permittedTools) checkLyricEvidence(a mediaAsset, lyrics string, ids []string) error {
-	if len(ids) == 0 || len(ids) > 10 {
+	if len(ids) == 0 {
 		return toolInputError("参考翻唱需要lyrics_evidence_ids；先用music_reference_inspect实际转写原曲或登记用户本条提供的原词；本次未提交生成")
 	}
 	var texts strings.Builder
@@ -109,11 +108,11 @@ func (p *permittedTools) lyricEvidenceMatches(a mediaAsset, e lyricEvidence) boo
 func (p *permittedTools) availableLyricEvidence(a mediaAsset) []map[string]any {
 	out := []map[string]any{}
 	entries, err := os.ReadDir(filepath.Join(p.manager.dir, "music-lyrics"))
-	if err != nil || len(entries) > 1000 {
+	if err != nil {
 		return out
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || len(out) >= 10 {
+		if entry.IsDir() {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(p.manager.dir, "music-lyrics", entry.Name()))

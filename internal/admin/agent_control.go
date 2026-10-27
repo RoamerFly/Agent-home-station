@@ -302,12 +302,7 @@ func (a *agentControl) list(account, thread string) []agentTask {
 	out := []agentTask{}
 	for _, t := range a.data.Tasks {
 		if t.Account == account && (thread == "" || t.Thread == thread) {
-			// Reminder dispatch mutates its own snapshot, never a shared pointer.
-			if t.Reminder != nil {
-				reminder := *t.Reminder
-				t.Reminder = &reminder
-			}
-			out = append(out, t)
+			out = append(out, copyTask(t))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
@@ -485,63 +480,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				_ = m.agent.task(t)
 				return
 			}
-			if t.ProcessID != "" {
-				t.State = "completed"
-				t.LastResult = "程序结果已交给主模型处理；实际操作与消息交付见记录"
-				if state != "reply" && state != "silent" && state != "synchronous_round_finished" {
-					t.State = "needs_review"
-					t.LastResult = "程序结果本轮未处理完成：" + state
-				}
-				_ = m.agent.task(t)
-				return
-			}
-			if t.DeviceTask != "" {
-				t.State = "completed"
-				t.LastResult = "设备结果已交给角色复核；微信交付以发送记录为准"
-				if state != "reply" && state != "silent" && state != "synchronous_round_finished" {
-					t.State = "needs_review"
-					t.LastResult = "设备结果复核本轮结束：" + state
-				}
-				_ = m.agent.task(t)
-				return
-			}
-			if t.PluginJob != nil {
-				if t.PluginJob.Prepared && (state == "reply" || state == "synchronous_round_finished") {
-					t.State = "waiting_delivery"
-					t.LastResult = "插件输出已准备，等待微信交付证据"
-					if t.PluginJob.Failure {
-						t.State = "failed"
-						t.LastResult = "外部插件任务失败，本轮仅说明失败结果"
-					}
-				} else if t.PluginJob.Prepared {
-					t.State = "needs_review"
-					t.LastResult = "插件输出已暂存，但本轮未确认交付；请核对原发送记录，不自动重复暂存或发送"
-				} else if t.Runs < 3 {
-					t.State = "waiting"
-					t.Next = time.Now().Add(30 * time.Second)
-					t.LastResult = "尚未完成交付，后续核对同一插件结果，不重新创建"
-				} else {
-					t.State = "needs_review"
-					t.LastResult = "插件输出未能完成交付，请检查原任务"
-				}
-				_, _ = m.agent.pluginUpdate(t)
-				return
-			}
-			if t.MusicJob != "" && (state == "reply" || state == "synchronous_round_finished") && t.MusicPrepared {
-				t.State = "waiting_delivery"
-				t.LastResult = "生成结果已就绪，正在等待微信交付；全部必需附件确认后才完成"
-				if t.MusicFailure {
-					t.State = "failed"
-					t.LastResult = "本地生成失败；已交由本轮回复说明结果，没有生成可交付附件"
-				}
-				_ = m.agent.task(t)
-				return
-			}
-			if t.MusicJob != "" && t.Runs < 3 {
-				t.State = "waiting"
-				t.Next = time.Now().Add(30 * time.Second)
-				t.LastResult = "本轮未交付，将核对同一生成结果后再试；不重复生成"
-				_ = m.agent.task(t)
+			if m.finishTaskResult(t, state) {
 				return
 			}
 			if t.RecoveryMessageID != "" && (state == "reply" || state == "silent" || state == "synchronous_round_finished") {
@@ -654,20 +593,16 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 					_, _ = s.manager.processes.Status(agentID(t.Account, t.Thread, t.Sender), t.ProcessID, true)
 				}
 			}
-			var saveErr error
-			if t.PluginJob != nil {
-				var saved bool
-				saved, saveErr = s.manager.agent.pluginUpdate(t)
-				if saveErr == nil && !saved {
-					saveErr = errors.New("任务状态已改变，请刷新")
-				}
-			} else {
-				saveErr = s.manager.agent.task(t)
-			}
-			if err := saveErr; err != nil {
+			saved, err := s.manager.agent.transitionSnapshot(t, in.Action == "resume")
+			if err != nil {
 				fail(w, 500, err.Error())
 				return
 			}
+			if !saved {
+				fail(w, 409, "任务状态已改变，请刷新")
+				return
+			}
+
 			respond(w, 200, t)
 			return
 		}
