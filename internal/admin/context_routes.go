@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 	"wechat-bot/internal/companion"
@@ -33,6 +34,10 @@ func (s *Server) contextRoutes(mux *http.ServeMux) {
 		defer cancel()
 		changed, err := engine.CompressContext(ctx, companion.Input{Channel: scope.Channel, Account: scope.Account, Thread: scope.Thread}, true)
 		if err != nil {
+			if errors.Is(err, companion.ErrCompressionInProgress) {
+				fail(w, 409, "这个会话正在压缩，其他会话仍可独立压缩")
+				return
+			}
 			fail(w, 502, "压缩未保存；原始记忆保留，请稍后重试")
 			return
 		}

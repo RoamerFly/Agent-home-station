@@ -39,6 +39,11 @@ func (e *Engine) CompressContext(ctx context.Context, in Input, force bool) (boo
 	if !force && !settings.AutoCompress {
 		return false, nil
 	}
+	release, ok := e.Store.beginCompression(ScopeID(in.Channel, in.Account, in.Thread))
+	if !ok {
+		return false, ErrCompressionInProgress
+	}
+	defer release()
 	scope, err := e.Store.Read(ScopeID(in.Channel, in.Account, in.Thread), e.Config, time.Now())
 	if err != nil {
 		return false, err
@@ -77,6 +82,7 @@ func (e *Engine) CompressContext(ctx context.Context, in Input, force bool) (boo
 		}
 		s.Summary = result
 		s.CompressedCount = end
+		s.SummaryBoundary = len(scope.Messages)
 		s.SummaryUpdated = time.Now().UTC()
 		data.Scopes[s.ID] = s
 		return nil
