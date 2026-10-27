@@ -13,7 +13,7 @@
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <main class="login-shell" id="login-view">
 <section aria-labelledby="login-title" class="login-card">
-<div class="login-brand"><span aria-hidden="true" class="brand-mark"><svg aria-hidden="true" class="ui-icon"><use href="#icon-whale"></use></svg></span><div><p class="eyebrow">私人管理后台</p><h1 id="login-title">deepseek蓝色大肥鱼</h1></div></div>
+<div class="login-brand"><span aria-hidden="true" class="brand-mark"><svg aria-hidden="true" class="ui-icon"><use href="#icon-whale"></use></svg></span><div><p class="eyebrow">私人管理后台</p><h1 id="login-title"><span>deepseek</span><span>蓝色大肥鱼</span></h1></div></div>
 <p class="muted">管理服务商、角色、微信群聊与本地记忆。</p>
 <div aria-label="界面主题" class="theme-control login-theme" role="group">
 <button aria-pressed="false" data-theme-value="light" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-sun"></use></svg>浅色</button>
@@ -21,7 +21,7 @@
 </div>
 <form id="login-form" novalidate="">
 <label for="login-password">管理密码</label>
-<input autocomplete="current-password" autofocus="" id="login-password" name="password" required="" type="password"/>
+<input aria-describedby="login-error" autocomplete="current-password" autofocus="" id="login-password" name="password" required="" type="password"/>
 <p class="form-error" id="login-error" role="alert"></p>
 <button class="primary wide" type="submit">进入控制台</button>
 </form>
