@@ -688,6 +688,9 @@ func webFetch(ctx context.Context, args json.RawMessage) (string, error) {
 	if err := validPublicURL(in.URL); err != nil {
 		return "", err
 	}
+	if u, err := url.Parse(in.URL); err == nil && u.Hostname() == "api.deepseek.com" && (strings.TrimRight(u.Path, "/") == "/v1/tools/search" || strings.TrimRight(u.Path, "/") == "/v1/tools/fetch") {
+		return "", &WebError{Code: "authenticated_service_endpoint"}
+	}
 	if text, handled, err := discoveryListPage(ctx, in.URL); handled {
 		return text, err
 	}

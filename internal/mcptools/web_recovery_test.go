@@ -3,12 +3,26 @@ package mcptools
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPublicFetchDoesNotMistakeAuthenticatedSearchAPIForContentPage(t *testing.T) {
+	requests := 0
+	ctx := WithWebObserver(context.Background(), func(WebAttempt) { requests++ })
+	_, err := webFetch(ctx, json.RawMessage(`{"url":"https://api.deepseek.com/v1/tools/search"}`))
+	var web *WebError
+	if !errors.As(err, &web) || web.Code != "authenticated_service_endpoint" || requests != 0 || !strings.Contains(FailureDescription(err), "web_search") {
+		t.Fatal("service URL was fetched as a public page", err, requests)
+	}
+	if !strings.Contains(FailureDescription(&WebError{Code: "http_status", Status: 401}), "身份认证") {
+		t.Fatal("authentication failure was mislabeled as a search/network outage")
+	}
+}
 
 func TestPublicGETRecoveryIsBoundedAndReportsSafeStages(t *testing.T) {
 	for _, failure := range []error{io.ErrUnexpectedEOF, &WebError{Code: "http_status", Status: 503, Stage: "http_status"}} {

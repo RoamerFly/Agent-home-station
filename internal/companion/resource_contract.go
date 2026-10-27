@@ -120,22 +120,3 @@ func mentionsKnownURL(messages []string, known map[string]bool) bool {
 	}
 	return false
 }
-
-func resourceFailure(need ResourceNeed, searches, downloads int, source, lastFailure string) Decision {
-	text := "这次还没取得可以发出的资源，暂时不能把它发给你。"
-	if downloads > 0 {
-		text = "这次尝试获取文件了，但还没拿到可发送的资源。"
-	} else if searches > 0 {
-		text = "这次尝试了联网查找，但还没取得可发送的对应文件。"
-	}
-	if lastFailure != "" {
-		text += " 原因：" + boundedText(lastFailure, 200) + "。"
-	}
-	if source != "" {
-		text += " 可以先看这个已读取的页面：" + source
-	}
-	if need.Fresh {
-		text += " 不用之前的其他曲目或素材代替。"
-	}
-	return Decision{Action: "reply", Messages: []string{text}, Reason: "resource_not_obtained"}
-}

@@ -96,3 +96,22 @@ func TestOfficialSearchSendsOnlyQueryAndNeverForwardsKeyToCompatibleHost(t *test
 		t.Fatal("official search key sent to an unverified origin")
 	}
 }
+
+func TestOfficialSearchMissingKeyNeverMakesRequestAnd401IsClassified(t *testing.T) {
+	calls := 0
+	c := &Client{endpoint: "https://api.deepseek.com/v1/chat/completions", http: &http.Client{Transport: balanceTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: 401, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"private upstream detail"}}`)), Header: make(http.Header)}, nil
+	})}}
+	_, err := c.Search(context.Background(), "synthetic query")
+	d, ok := ErrorDiagnostics(err)
+	if !ok || d.Code != "official_search_key_missing" || calls != 0 {
+		t.Fatal("empty credential reached network", d, calls)
+	}
+	c.key = "synthetic-key"
+	_, err = c.Search(context.Background(), "synthetic query")
+	d, ok = ErrorDiagnostics(err)
+	if !ok || d.Code != "official_search_authentication_failed" || d.HTTPStatus != 401 || calls != 1 || strings.Contains(err.Error(), "private upstream") {
+		t.Fatal("authentication failure lost or sensitive body exposed", d, calls, err)
+	}
+}

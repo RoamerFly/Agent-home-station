@@ -2,7 +2,7 @@
 Run with --project <YuE app> --state <private directory> --token-file <file>.
 The bridge persists jobs and never automatically resubmits interrupted work.
 """
-import argparse, base64, concurrent.futures, hashlib, hmac, json, os, secrets, threading, time, urllib.request, urllib.error, subprocess
+import argparse, base64, concurrent.futures, hashlib, hmac, json, os, re, secrets, threading, time, urllib.request, urllib.error, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from singing_voice import validate_singing_config
@@ -47,16 +47,28 @@ def song_options(body):
     mode=body.get('mode') or ('cover' if reference else 'original')
     if mode not in ('original','cover'):raise ValueError('invalid_mode')
     if (mode=='cover')!=bool(reference):raise ValueError('cover_requires_reference')
-    reference_mode=body.get('reference_mode','melody')
+    reference_mode=body.get('reference_mode','full')
     if reference_mode not in ('melody','full'):raise ValueError('invalid_reference_mode')
     seed=body.get('seed')
     if seed is not None and (isinstance(seed,bool) or not isinstance(seed,int) or not 0<=seed<=2147483647):raise ValueError('invalid_seed')
     return mode,reference_mode,seed
 
+FAITHFUL_COVER_STYLE='保持原曲调和原歌词 (preserve original melody and lyrics; follow the reference melody, rhythm and phrasing; no new melody or rewritten lyrics)'
+
+def generation_style(body):
+    """Same effective conditioning for persisted recipe and submitted graph."""
+    mode,_,_=song_options(body)
+    gender=body.get('vocal_gender') or 'female'
+    if gender not in ('female','male'):raise ValueError('invalid_vocal_gender')
+    style=re.sub(r'\b(?:fe)?male\s+(?:vocals?|singer|voice)\b|男声|女声','',body['style'],flags=re.I).strip(' ,;，；\n\r\t')
+    if mode=='cover' and FAITHFUL_COVER_STYLE not in style:style+=', '+FAITHFUL_COVER_STYLE
+    return style+', '+gender+' vocal'
+
 def song_recipe(body):
     """Persist the submitted recipe privately, never infer it from filenames."""
     mode,reference_mode,seed=song_options(body)
     result={k:body.get(k) for k in ('title','style','lyrics','duration_seconds','singing_voice','vocal_gender')}
+    result.update(style=generation_style(body),vocal_gender=body.get('vocal_gender') or 'female',singing_voice=body.get('singing_voice') or 'native')
     result.update(mode=mode,reference_mode=reference_mode,seed=seed)
     if mode=='cover':
         try:data=base64.b64decode(body['reference_base64'],validate=True)
@@ -70,6 +82,7 @@ def prepare_song_graph(workflow_dir,body,jid,input_dir):
     if seed is None:raise ValueError('seed_not_persisted')
     graph=json.loads((workflow_dir/('audio_yue2_music_cover.json' if mode=='cover' else 'audio_yue2_text_to_music.json')).read_text(encoding='utf-8'))
     target=body.get('duration_seconds',60);apply_song_duration(graph,target)
+    style=generation_style(body)
     # Preserve the user's supplied style/lyrics. Duration is controlled by the
     # real generation node, not by silently injecting a new short-song style.
     if mode=='cover':
@@ -81,11 +94,11 @@ def prepare_song_graph(workflow_dir,body,jid,input_dir):
         name='wechat-ref-'+jid+'.wav'
         subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-protocol_whitelist','file','-i',str(source),'-vn','-ar','44100','-ac','2','-t','600',str(input_dir/name)],check=True,timeout=90)
         graph['45']['inputs']['audio']=name
-        graph['33:25']['inputs']['style']=body['style'];graph['33:25']['inputs']['lyrics']=body['lyrics']
+        graph['33:25']['inputs']['style']=style;graph['33:25']['inputs']['lyrics']=body['lyrics']
         graph['33:25']['inputs']['mode']=reference_mode
         graph['33:41']['inputs']['mode']=reference_mode
     else:
-        graph['33:36']['inputs']['value']=body['style'];graph['33:37']['inputs']['value']=body['lyrics']
+        graph['33:36']['inputs']['value']=style;graph['33:37']['inputs']['value']=body['lyrics']
     graph['33:34']['inputs']['seed']=seed
     graph['10']['inputs']['filename_prefix']='wechat-agent/'+jid
     return graph
@@ -165,7 +178,7 @@ def main():
                     api('/system_stats')
                     try:voice=singing_profile(args.singing_voice_config)
                     except Exception:voice=None
-                    return self.reply(200,{'ready':True,'bridge_version':4,'capabilities':['original','reference_cover','seed','reference_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; no guarantee of exact source accompaniment or reference timbre'})
+                    return self.reply(200,{'ready':True,'bridge_version':5,'generation_policy':'female-faithful-cover-v2','capabilities':['original','reference_cover','seed','reference_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; no guarantee of exact source accompaniment or reference timbre'})
                 except Exception:return self.reply(200,{'ready':False})
             parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
             with lock:job=dict(jobs.get(jid,{}))

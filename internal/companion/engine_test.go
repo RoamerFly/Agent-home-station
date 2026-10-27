@@ -286,8 +286,8 @@ func TestPlainReplyAndRequiredMentionRespectPermissions(t *testing.T) {
 	model.answer = `{"action":"silent","messages":[],"reason":"silent"}`
 	input.MustReply = true
 	decision, err = e.Respond(context.Background(), input)
-	if err != nil || decision.Action != "reply" {
-		t.Fatal("required mention silent", decision, err)
+	if err != nil || decision.Action != "silent" || len(decision.Messages) != 0 {
+		t.Fatal("program replaced model silence with a fixed mention reply", decision, err)
 	}
 	e.Config.Permissions.ReplyText = false
 	decision, _ = e.Respond(context.Background(), input)

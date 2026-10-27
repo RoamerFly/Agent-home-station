@@ -79,7 +79,12 @@ func failureSummary(err error) string {
 		case "private_destination":
 			return "目标解析到内网、回环或保留地址，已阻止访问"
 		case "http_status":
+			if web.Status == 401 {
+				return "目标服务要求身份认证（HTTP 401）；请使用该服务已配置的专用工具，或换公开来源"
+			}
 			return fmt.Sprintf("目标网站返回 HTTP %d；可能需要登录、限制访问或网址已失效", web.Status)
+		case "authenticated_service_endpoint":
+			return "这是需要鉴权的服务接口，不是内容网页。搜索请使用web_search；读取网页请传搜索结果的真实内容网址，不要重复访问搜索API地址"
 		case "response_too_large":
 			return "下载内容超过当前类型的大小上限"
 		case "no_readable_text":

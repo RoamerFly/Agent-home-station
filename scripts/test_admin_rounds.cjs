@@ -1,9 +1,16 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { project, stage } = require('../internal/admin/static/rounds.js');
+const { project, stage, activityTarget } = require('../internal/admin/static/rounds.js');
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
+
+test('authenticated API endpoints are labels; real content remains navigable', () => {
+  const api = activityTarget({target_url:'https://api.deepseek.com/v1/tools/search'});
+  assert.equal(api.kind, 'service'); assert.equal(api.href, undefined);
+  assert.equal(activityTarget({target_url:'https://example.org/song'}).href, 'https://example.org/song');
+  assert.equal(activityTarget({target_url:'javascript:alert(1)'}), null);
+});
 
 test('one round keeps receive, decision, failed tool, recovered tool and delivery evidence', () => {
   const rows = project([

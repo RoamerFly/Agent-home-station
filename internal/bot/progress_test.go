@@ -41,7 +41,7 @@ func (m *progressSequence) Chat(context.Context, string, []map[string]string) (s
 	}
 }
 
-func TestAcknowledgedToolTaskAlwaysReportsItsTerminalOutcome(t *testing.T) {
+func TestAcknowledgedToolTaskDoesNotOverrideModelSilence(t *testing.T) {
 	c := companion.Defaults()
 	c.Enabled = true
 	c.ReplyMinMS = 0
@@ -63,8 +63,8 @@ func TestAcknowledgedToolTaskAlwaysReportsItsTerminalOutcome(t *testing.T) {
 	}
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
-	if len(native.submissions) != 2 || !strings.Contains(native.submissions[1].Text, "先停下") || w.runtime.Inbox[0].Phase != "replied" {
-		t.Fatal("verified acknowledgement was left without a final outcome", native.submissions, w.runtime.Inbox)
+	if len(native.submissions) != 1 || !strings.HasSuffix(native.submissions[0].Text, "收到，我看看～") {
+		t.Fatal("program generated an extra fixed reply after model silence", native.submissions)
 	}
 }
 

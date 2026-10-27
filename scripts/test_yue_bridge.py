@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe, requested_singing_profile
+from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe, requested_singing_profile, generation_style
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
@@ -58,7 +58,7 @@ class SongWorkflowTests(unittest.TestCase):
             b=prepare_song_graph(WORKFLOWS,body,'synthetic',Path(tmp))
         self.assertEqual(a,b)
         self.assertEqual(a['33:34']['inputs']['seed'],0)
-        self.assertEqual(a['33:36']['inputs']['value'],body['style'])
+        self.assertEqual(a['33:36']['inputs']['value'],generation_style(body))
         self.assertEqual(a['33:37']['inputs']['value'],body['lyrics'])
         self.assertEqual(a['33:25']['inputs']['max_duration'],10)
 
@@ -73,7 +73,9 @@ class SongWorkflowTests(unittest.TestCase):
             self.assertEqual(graph['33:41']['inputs']['mode'],mode)
             self.assertEqual(graph['33:25']['inputs']['mode'],mode)
             self.assertEqual(graph['33:25']['inputs']['lyrics'],body['lyrics'])
-            self.assertEqual(graph['33:25']['inputs']['style'],body['style'])
+            self.assertEqual(graph['33:25']['inputs']['style'],generation_style(body))
+            self.assertIn('保持原曲调和原歌词',graph['33:25']['inputs']['style'])
+            self.assertTrue(graph['33:25']['inputs']['style'].endswith('female vocal'))
             self.assertEqual(graph['33:34']['inputs']['seed'],123)
 
     def test_invalid_modes_reference_and_seed_are_not_silently_original(self):

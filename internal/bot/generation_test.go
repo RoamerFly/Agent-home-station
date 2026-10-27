@@ -519,7 +519,7 @@ type forkProgressTools struct{ checkedProgressTools }
 func (t *forkProgressTools) ForkTools() companion.ToolAccess {
 	return &forkProgressTools{checkedProgressTools: checkedProgressTools{before: t.before}}
 }
-func TestBackgroundProgressHasAcceptedReceiptBeforeToolAndOneFinalOutcome(t *testing.T) {
+func TestBackgroundProgressHasReceiptAndPreservesModelFinalSilence(t *testing.T) {
 	w, c, n := backgroundWorker(t, &progressSequence{finalSilent: true})
 	var toolCalls atomic.Int32
 	c.Tools = &forkProgressTools{checkedProgressTools: checkedProgressTools{before: func() { toolCalls.Add(1) }}}
@@ -535,8 +535,8 @@ func TestBackgroundProgressHasAcceptedReceiptBeforeToolAndOneFinalOutcome(t *tes
 	}
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
-	if len(n.submissions) != 2 || !strings.Contains(n.submissions[1].Text, "先停下") {
-		t.Fatal("acknowledged task lacks final outcome", n.submissions)
+	if len(n.submissions) != 1 {
+		t.Fatal("program added a fixed final outcome", n.submissions)
 	}
 	scope := c.Store.Context(in, c.Config, time.Now())
 	count := 0

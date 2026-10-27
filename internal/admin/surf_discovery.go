@@ -533,31 +533,6 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 			break
 		}
 	}
-	if p.trace.SurfForceShare && d.Action == "silent" && d.Reason == "surf_forced_share_unfulfilled" {
-		// A forced share may use a minimal exact title+source fallback when
-		// the model declines despite a completed read. It is not a summary,
-		// a claim to have watched, or permission to bypass normal dedup.
-		verified := func(x *mcptools.DiscoveryItem) bool {
-			for _, raw := range session.Visited {
-				if canonicalSurfURL(raw) == canonicalSurfURL(x.URL) {
-					return true
-				}
-			}
-			return false
-		}
-		if chosen == nil || !verified(chosen) {
-			chosen = nil
-			for i := len(session.Candidates) - 1; i >= 0; i-- {
-				if verified(&session.Candidates[i]) {
-					chosen = &session.Candidates[i]
-					break
-				}
-			}
-		}
-		if chosen != nil {
-			d = companion.Decision{Action: "reply", SurfItemID: chosen.ID, Reason: "surf_forced_link_fallback", Messages: []string{logText(chosen.Title, 700) + "\n" + chosen.URL}}
-		}
-	}
 	finishSilent := func(reason, state string) (companion.Decision, error) {
 		session.State, session.Reason = state, reason
 		if chosen != nil {
