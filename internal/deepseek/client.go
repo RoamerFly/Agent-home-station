@@ -94,6 +94,23 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 // Chat accepts only text user/assistant turns. The caller supplies a separate
 // trusted system policy; historical group messages cannot become system roles.
 func (c *Client) Chat(ctx context.Context, system string, messages []map[string]string) (string, error) {
+	return c.chat(ctx, system, messages, false)
+}
+
+// ChatCompression has its own output budget; a short conversational reply
+// limit must not truncate the structured memory summary.
+func (c *Client) ChatCompression(ctx context.Context, system string, messages []map[string]string) (string, error) {
+	copy := *c
+	copy.maxTokens = 4096
+	answer, err := copy.chat(ctx, system, messages, true)
+	if d, ok := ErrorDiagnostics(err); ok && d.Code == "model_invalid_parameters" && c.compatible {
+		// Some compatible services do not implement response_format.
+		return copy.chat(ctx, system, messages, false)
+	}
+	return answer, err
+}
+
+func (c *Client) chat(ctx context.Context, system string, messages []map[string]string, structured bool) (string, error) {
 	if strings.TrimSpace(system) == "" || len(system) > 96<<10 || !utf8.ValidString(system) || len(messages) == 0 || len(messages) > 101 {
 		return "", errors.New("invalid conversation")
 	}
@@ -118,7 +135,7 @@ func (c *Client) Chat(ctx context.Context, system string, messages []map[string]
 		Thinking       map[string]string   `json:"thinking,omitempty"`
 		ResponseFormat map[string]string   `json:"response_format,omitempty"`
 	}{c.model, all, false, c.maxTokens, nil, nil}
-	if strings.Contains(system, "【可自主使用的工具】") {
+	if structured || strings.Contains(system, "【可自主使用的工具】") {
 		input.ResponseFormat = map[string]string{"type": "json_object"}
 	}
 	if !c.compatible {

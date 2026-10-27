@@ -46,7 +46,7 @@
  function time(raw){const date=new Date(raw);if(!Number.isFinite(date.getTime()))return '时间未知';const p=Object.fromEntries(formatter.formatToParts(date).map(x=>[x.type,x.value]));return p.year+'-'+p.month+'-'+p.day+'-'+p.hour+':'+p.minute+':'+p.second}
 
  const key=item=>item.id||item.time+'|'+item.event;
- Object.assign(events,{tool_call_succeeded:'调用成功',tool_call_failed:'调用失败',plugin_output_ready:'媒体已准备',web_activity:'联网操作',context_compression_failed:'上下文压缩失败',eligible_message_received:'收到符合规则的消息',memory_saved:'记忆已保存',bot_started_history_skipped:'机器人已启动'});
+ Object.assign(events,{context_compression_started:'开始压缩上下文',context_compression_completed:'上下文压缩处理完成',context_compression_failed:'上下文压缩失败',tool_call_succeeded:'调用成功',tool_call_failed:'调用失败',plugin_output_ready:'媒体已准备',web_activity:'联网操作',context_compression_failed:'上下文压缩失败',eligible_message_received:'收到符合规则的消息',memory_saved:'记忆已保存',bot_started_history_skipped:'机器人已启动'});
  const roundStates={received:'已接收',running:'执行中',completed:'已完成',accepted:'已发送',waiting:'等待核对',failed:'需处理',silent:'选择安静',skipped:'已跳过',blocked:'已阻止',stopped:'已停止'};
  const stageNames={receive:'接收',decision:'判断',tool:'工具',delivery:'发送',system:'运行'};
  let limit=60,epoch=0;

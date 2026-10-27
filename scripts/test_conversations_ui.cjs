@@ -27,7 +27,7 @@ const data={
    const filename=url.pathname==='/'?'index.html':url.pathname.split('/').pop(),file=path.join(__dirname,'../internal/admin/static',filename);
    try{return route.fulfill({body:await fs.readFile(file),contentType:({'.html':'text/html','.js':'text/javascript','.css':'text/css','.png':'image/png'})[path.extname(file)]||'text/plain'})}catch{return route.continue()}
   });
-  await page.goto(base+'/#memory');await page.locator('.conversation-row[data-scope-id="scope-a"]').waitFor();assert.equal(await page.locator('.main-nav').count(),5);
+  await page.goto(base+'/#memory');await page.locator('.conversation-row[data-scope-id="scope-a"]').waitFor();assert.equal(await page.locator('.main-nav').count(),6);
   await page.locator('[data-scope-id="scope-a"] .conversation-open').click();await page.getByText('A 摘要',{exact:true}).waitFor();
   assert.equal(historyReads,0);assert(!(await page.locator('#memory-content').textContent()).includes('旧消息'));
   assert.deepEqual(await page.locator('#memory-content .memory-message-body').allTextContents(),['A 最新','A 次新']);
@@ -37,7 +37,7 @@ const data={
   await page.locator('dialog[open]').last().locator('.dialog-close').click();
   assert(await page.locator('[data-scope-id="scope-b"] .conversation-row-actions button').isEnabled());
   await page.locator('[data-scope-id="scope-b"] .conversation-open').click();await page.getByText('B 最新',{exact:true}).waitFor();
-  await page.locator('#memory-content .conversation-process').first().click();assert.equal(await page.locator('dialog[open]').count(),2);await page.locator('.round-step').waitFor();await page.locator('dialog[open]').last().locator('.dialog-close').click();
+  assert.equal(await page.locator('#memory-executions,.conversation-process').count(),0,'execution rounds still duplicated in conversation detail');
   await page.locator('#context-compress-now').click();await page.waitForTimeout(100);assert.equal(compressions,2,'B waited behind A');
   await pending.get('scope-a').fulfill({json:{compressed:true,scope_id:'scope-a'}});await page.waitForTimeout(100);
   assert((await page.locator('#memory-content').textContent()).includes('B 最新'));assert(!(await page.locator('#memory-content').textContent()).includes('A 摘要'));assert(await page.locator('#context-compress-now').isDisabled());
@@ -47,6 +47,6 @@ const data={
   await fs.mkdir('research/evidence/conversation-workspace',{recursive:true});await page.screenshot({path:'research/evidence/conversation-workspace/dialog-light.png'});
   await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:'research/evidence/conversation-workspace/dialog-dark.png'});
   await page.locator('dialog[open]').last().locator('.dialog-close').click();await page.screenshot({path:'research/evidence/conversation-workspace/index-dark.png'});
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({combinedConversations:true,descendingMessages:true,historyReadOnDemand:true,largeDialogs:true,focusRestored:true,parallelCompression:true,noCrossConversationCompletion:true,compressedViewHidesOldMessages:true,widths:[375,768,1440],pageErrors:errors,realModelCalls:0,realWechatSends:0}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({separateExecutionPage:true,descendingMessages:true,historyReadOnDemand:true,largeDialogs:true,focusRestored:true,parallelCompression:true,noCrossConversationCompletion:true,compressedViewHidesOldMessages:true,widths:[375,768,1440],pageErrors:errors,realModelCalls:0,realWechatSends:0}));
  }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});

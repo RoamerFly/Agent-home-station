@@ -5,20 +5,11 @@
  function node(parent,tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;parent.append(e);return e}
  function button(parent,text,fn,cls='quiet'){const b=node(parent,'button',text,cls);b.type='button';b.addEventListener('click',fn);return b}
  const time=value=>window.WechatActivity.time(value);
- function conversations(){
-  const threads=new Map();
-  for(const scope of scopes)threads.set(scope.thread,{...scope,label:scope.label||scope.thread,rounds:[],updated:scope.last_interaction});
-  for(const round of window.WechatActivity.rounds()){
-   if(round.system||!round.thread_id)continue;
-   if(!threads.has(round.thread_id))threads.set(round.thread_id,{thread:round.thread_id,label:round.source,rounds:[],message_count:0,updated:round.updated});
-   const item=threads.get(round.thread_id);item.rounds.push(round);if(Date.parse(round.updated)>Date.parse(item.updated||0))item.updated=round.updated;
-  }
-  return [...threads.values()].sort((a,b)=>(Date.parse(b.updated)||0)-(Date.parse(a.updated)||0));
- }
+ function conversations(){return scopes.map(scope=>({...scope,label:scope.label||scope.thread,updated:scope.last_interaction})).sort((a,b)=>(Date.parse(b.updated)||0)-(Date.parse(a.updated)||0))}
  function renderIndex(){
   const query=$('#conversation-search').value.trim().toLocaleLowerCase(),items=conversations().filter(x=>[x.label,x.thread].join(' ').toLocaleLowerCase().includes(query));
   const current=items.find(x=>x.thread===view?.item.thread);if(current)view.item={...view.item,...current};
-  const signature=JSON.stringify([items.map(x=>[x.id,x.thread,x.label,x.updated,x.has_summary,x.message_count,x.rounds.length]),[...jobs]]);if(signature===indexSignature)return;indexSignature=signature;
+  const signature=JSON.stringify([items.map(x=>[x.id,x.thread,x.label,x.updated,x.has_summary,x.message_count]),[...jobs]]);if(signature===indexSignature)return;indexSignature=signature;
   const y=window.scrollY,box=$('#companion-scopes');box.replaceChildren();$('#conversation-state').textContent=items.length+' 个群聊 / 私信，按最近活动排列';
   if(!items.length)node(box,'p','暂时没有匹配的会话。','empty');
   for(const item of items){
@@ -26,7 +17,7 @@
    const open=button(row,'',()=>openConversation(item),'conversation-open');open.setAttribute('aria-haspopup','dialog');
    const name=node(open,'span',undefined,'conversation-name');node(name,'strong',item.label);node(name,'small',item.thread.endsWith('@chatroom')?'群聊':'私信');
    node(open,'span',time(item.updated),'conversation-date');
-   node(open,'span',(item.has_summary?'已压缩 · ':'')+(item.message_count||0)+' 条记忆 / '+item.rounds.length+' 个近期回合','conversation-count');
+   node(open,'span',(item.has_summary?'已压缩 · ':'')+(item.message_count||0)+' 条记忆','conversation-count');
    const actions=node(row,'div',undefined,'conversation-row-actions'),job=jobs.get(item.id);
    const compressButton=button(actions,job?.pending?'压缩中…':'压缩',()=>compress(item),'secondary');compressButton.disabled=!item.id||!!job?.pending;compressButton.setAttribute('aria-label','压缩'+item.label);
    if(job?.text&&(job.pending||job.error))node(actions,'small',job.text,job.error?'form-error':'hint');
@@ -36,7 +27,7 @@
  function syncCompression(){
   renderIndex();if(!view)return;const job=jobs.get(view.item.id);$('#context-compress-now').disabled=!view.item.id||!!job?.pending;$('#context-compress-state').textContent=job?.text||'';
  }
- async function refresh(){const b=$('#conversation-refresh');b.disabled=true;try{await Promise.all([window.WechatAdmin.refreshScopes(),window.WechatActivity.refresh()]);renderIndex();$('#conversation-new').hidden=true}catch(e){$('#conversation-state').textContent=e.message}finally{b.disabled=false}}
+ async function refresh(){const b=$('#conversation-refresh');b.disabled=true;try{await Promise.all([window.WechatAdmin.refreshScopes()]);renderIndex();$('#conversation-new').hidden=true}catch(e){$('#conversation-state').textContent=e.message}finally{b.disabled=false}}
  async function compress(item){
   if(!item.id||jobs.get(item.id)?.pending)return;const stamp=epoch;
   jobs.set(item.id,{pending:true,text:'正在压缩…'});syncCompression();
@@ -67,24 +58,18 @@
  function renderFeed(v){
   if(view!==v||!v.popup.alive())return;
   const root=$('#memory-content'),scroll=v.popup.body.scrollTop;root.replaceChildren();
-  const data=v.data||{messages:[]},matched=new Set(),units=[];
+  const data=v.data||{messages:[]},units=[];
   renderSummary(root,data);
-  for(const message of data.messages||[]){const round=window.WechatActivity.roundForMessage(v.item.thread,message);if(round)matched.add(round.id);units.push({time:message.time,message,round})}
-  for(const round of window.WechatActivity.rounds()){
-   if(round.system||round.thread_id!==v.item.thread||matched.has(round.id))continue;
-   if(data.summary&&(!Number.isFinite(Date.parse(data.summary_updated))||Date.parse(round.updated)<=Date.parse(data.summary_updated)))continue;
-   units.push({time:round.updated,round});
-  }
+  for(const message of data.messages||[])units.push({time:message.time,message});
   units.sort((a,b)=>(Date.parse(b.time)||0)-(Date.parse(a.time)||0));
-  const linked=new Set();
   for(const unit of units){
    const row=node(root,'article',undefined,'conversation-message');
    if(unit.message)row.append(window.WechatAdmin.renderMemoryMessage(unit.message));
-   else{node(row,'time',time(unit.time),'memory-meta');node(row,'p',unit.round.received[0]?.content||'本轮由 Agent 主动发起。','round-body')}
-   if(unit.round&&!linked.has(unit.round.id)){linked.add(unit.round.id);const b=button(row,window.WechatActivity.status(unit.round)+' · '+unit.round.entries.length+' 个步骤 · 查看过程',()=>window.WechatActivity.openRound(unit.round),'quiet conversation-process');b.setAttribute('aria-haspopup','dialog')}
+
+
   }
   if(!units.length)node(root,'p',data.summary?'压缩后的新消息会显示在这里。旧消息可通过上方按钮查看。':'暂时没有保存的聊天内容。','empty');
-  $('#memory-history').hidden=!data.history_count;$('#memory-history').textContent='压缩前的消息（'+(data.history_count||0)+'）';$('#memory-executions').textContent='执行回合（'+v.item.rounds.length+'）';
+  $('#memory-history').hidden=!data.history_count;$('#memory-history').textContent='压缩前的消息（'+(data.history_count||0)+'）';
   v.popup.body.scrollTop=scroll;
  }
  async function loadView(v){
@@ -96,9 +81,9 @@
   }catch(e){if(view===v&&request===v.request)$('#memory-load-state').textContent=e.message}
  }
  function openConversation(item){
-  window.WechatActivity.loadPending();view?.popup.close();const root=$('#memory-detail');root.hidden=false;
+  view?.popup.close();const root=$('#memory-detail');root.hidden=false;
   const v={item,request:0,data:null,popup:null};
-  v.popup=window.WechatDialogs.open({title:item.label,subtitle:item.thread.endsWith('@chatroom')?'群聊 · 消息、记忆与执行过程':'私信 · 消息、记忆与执行过程',content:root,onClose:()=>{if(view===v)view=null;root.hidden=true;$('#conversation-detail-parking').append(root);window.dispatchEvent(new CustomEvent('wechat-admin:memory-selection',{detail:{id:''}}))}});
+  v.popup=window.WechatDialogs.open({title:item.label,subtitle:item.thread.endsWith('@chatroom')?'群聊 · 消息与记忆':'私信 · 消息与记忆',content:root,onClose:()=>{if(view===v)view=null;root.hidden=true;$('#conversation-detail-parking').append(root);window.dispatchEvent(new CustomEvent('wechat-admin:memory-selection',{detail:{id:''}}))}});
   view=v;$('#memory-content').replaceChildren();$('#memory-note').value='';window.dispatchEvent(new CustomEvent('wechat-admin:memory-selection',{detail:{id:item.id||''}}));syncCompression();loadView(v);
  }
  function openHistory(){
@@ -117,10 +102,10 @@
  async function clear(){const v=view;if(!v?.data||!confirm('清除这个会话的活跃记忆和摘要？只读归档和微信聊天记录仍保留。'))return;const b=$('#clear-memory');b.disabled=true;try{await api('/api/companion/memory/'+encodeURIComponent(v.item.id)+'/clear',{method:'POST',json:{}});if(view===v)await loadView(v);await window.WechatAdmin.refreshScopes()}catch(e){node($('#memory-notes'),'p',e.message,'form-error')}finally{b.disabled=false}}
  $('#conversation-search').addEventListener('input',renderIndex);$('#conversation-refresh').addEventListener('click',refresh);
  $('#conversation-new').addEventListener('click',async()=>{const current=view;await refresh();if(current&&view===current)loadView(current)});
- $('#context-compress-now').addEventListener('click',()=>view&&compress(view.item));$('#memory-history').addEventListener('click',openHistory);$('#memory-executions').addEventListener('click',()=>view&&window.WechatActivity.openConversation(view.item.thread,view.item.label));$('#memory-settings').addEventListener('click',manage);$('#save-memory-note').addEventListener('click',saveNote);$('#clear-memory').addEventListener('click',clear);
- window.addEventListener('wechat-admin:scopes',e=>{scopes=e.detail.scopes;renderIndex()});
- window.addEventListener('wechat-admin:activity-updated',()=>{renderIndex();$('#conversation-new').hidden=true});
- window.addEventListener('wechat-admin:activity-pending',()=>{$('#conversation-new').hidden=false});
+ $('#context-compress-now').addEventListener('click',()=>view&&compress(view.item));$('#memory-history').addEventListener('click',openHistory);$('#memory-refresh').addEventListener('click',()=>view&&loadView(view));$('#memory-settings').addEventListener('click',manage);$('#save-memory-note').addEventListener('click',saveNote);$('#clear-memory').addEventListener('click',clear);
+ window.addEventListener('wechat-admin:scopes',e=>{const old=JSON.stringify(scopes);scopes=e.detail.scopes;renderIndex();if(old!==JSON.stringify(scopes))$('#conversation-new').hidden=false});
+
+
  window.addEventListener('wechat-admin:navigate',e=>{if(e.detail.section==='memory'){renderIndex();if(!scopes.length)window.WechatAdmin.refreshScopes()}});
  window.addEventListener('wechat-admin:logout',()=>{epoch++;jobs.clear();scopes=[];view=null;indexSignature='';$('#companion-scopes').replaceChildren();$('#conversation-new').hidden=true});
  window.WechatConversations={getScope:()=>view?.data,reload:()=>view&&loadView(view),openConversation,compress};renderIndex();
