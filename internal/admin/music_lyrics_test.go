@@ -3,8 +3,10 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mcptools"
 )
 
 func TestCoverEvidenceRejectsInventedWordsWrongAudioAndOtherRoom(t *testing.T) {
@@ -25,8 +27,12 @@ func TestCoverEvidenceRejectsInventedWordsWrongAudioAndOtherRoom(t *testing.T) {
 		t.Fatal(e)
 	}
 	for _, words := range []string{"给我一碗新面条", "晚风吹过窗台[偷偷改词]我们等花开"} {
-		if p.checkLyricEvidence(a, words, ids) == nil {
+		err := p.checkLyricEvidence(a, words, ids)
+		if err == nil {
 			t.Fatal("invented words accepted")
+		}
+		if message := mcptools.FailureDescription(err); !strings.Contains(message, "依据不一致") || strings.Contains(message, "工具连接或执行失败") {
+			t.Fatal("actionable lyrics error was masked", message)
 		}
 	}
 	a.Hash = "other-audio"

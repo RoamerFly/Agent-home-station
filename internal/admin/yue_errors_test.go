@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mcptools"
 )
 
 func TestYuEFailureAuditRetainsFixedCauseWithoutUpstreamSecrets(t *testing.T) {
@@ -29,6 +30,9 @@ func TestYuEFailureAuditRetainsFixedCauseWithoutUpstreamSecrets(t *testing.T) {
 			_, err := p.Call(context.Background(), "music_local_start", json.RawMessage(`{"title":"晚风归家","style":"gentle pop","lyrics":"[verse]\n晚风伴我归家","kind":"voice"}`))
 			if err == nil {
 				t.Fatal("failed tool succeeded")
+			}
+			if message := mcptools.FailureDescription(err); message != err.Error() || strings.Contains(message, "工具连接或执行失败") {
+				t.Fatal("safe provider diagnosis was hidden from model feedback", message, err)
 			}
 			found := false
 			for _, row := range f.manager.Logs() {

@@ -345,7 +345,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		native = linuxnative.Status{Connection: "unavailable"}
 	}
-	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.31.3-context-song-local"})
+	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.31.4-background-tools-local"})
 }
 func (s *Server) toggle(w http.ResponseWriter, r *http.Request, enabled bool) {
 	if err := s.manager.Toggle(enabled); err != nil {
