@@ -689,7 +689,7 @@ func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugin
 			required = append(required, item.ID)
 		}
 	}
-	p.manager.log("plugin_output_ready")
+	p.manager.record(bot.Record{Event: "plugin_output_ready", Category: "tool", ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, MediaCount: len(items), Status: "succeeded", Origin: "tool"})
 	result, _ := json.Marshal(map[string]any{"required_media_ids": required, "text": output.Text, "media": items, "instruction": "媒体已准备好，但尚未发给对方。最终 reply.media_ids 必须取本轮 media[].id，不能使用 asset_id、文件名或job_id。asset_id仅用于以后复用原文件。不要向对方解释工具过程或内部编号。"})
 	return string(result), nil
 }

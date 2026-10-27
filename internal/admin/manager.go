@@ -450,7 +450,13 @@ func (m *Manager) start(c Config) {
 				defer access.hub.Close()
 				character.Tools = access
 				character.MaxToolCalls = maxCalls
-				character.ToolLog = m.log
+				character.ToolLog = func(event string) {
+					// permittedTools already retains the scoped result of every call.
+					// Do not add a second anonymous system row for the same action.
+					if event != "mcp_tool_call_succeeded" && event != "mcp_tool_call_failed" {
+						m.log(event)
+					}
+				}
 			}
 			model = character
 		}

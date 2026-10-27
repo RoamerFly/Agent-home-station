@@ -44,56 +44,92 @@
  const statuses={interrupted:'处理已中断',recovered:'模型请求已恢复',accepted:'微信已接受',observed:'已同步到微信消息',received:'已接收',queued:'已排队',running:'处理中',processing:'处理中',waiting:'等待核对',retrying:'补发中',unknown:'结果不确定',needs_review:'需核查',failed:'失败',cancelled:'已取消',silent:'未回复',blocked:'被规则阻止',skipped:'已跳过'};
  const formatter=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
  function time(raw){const date=new Date(raw);if(!Number.isFinite(date.getTime()))return '时间未知';const p=Object.fromEntries(formatter.formatToParts(date).map(x=>[x.type,x.value]));return p.year+'-'+p.month+'-'+p.day+'-'+p.hour+':'+p.minute+':'+p.second}
- const key=item=>item.id||item.time+'|'+item.event;
- function node(parent,tag,text,klass){const element=document.createElement(tag);if(text!==undefined)element.textContent=text;if(klass)element.className=klass;parent.append(element);return element}
- function matches(item){const category=$('#log-category').value,source=$('#log-source').value,query=$('#log-search').value.trim().toLocaleLowerCase();return(category==='all'||item.category===category)&&(source==='all'||item.source_kind===source)&&(!query||[item.source,item.sender,item.thread_id,item.content,item.event,item.reason,reasons[item.reason]].join(' ').toLocaleLowerCase().includes(query))}
- function putSent(row,item,label){
-  row._sentRecords ||= [];
-  let old=item.send_id?row._sentRecords.find(r=>r.id===item.send_id):null;
-  // Old versions recorded both receipt confirmation and plan acceptance, with
-  // no send_id on the latter. Merge only that known pair, never all equal text.
-  if(!old&&!item.send_id&&['semantic_plan_bubble_accepted','media_accepted_then_caption','tool_progress_accepted'].includes(item.reason))old=row._sentRecords.find(r=>r.reason==='delivery_confirmed_by_receipt_or_sync'&&r.text===item.content&&Math.abs(Date.parse(item.time)-Date.parse(r.time))<2000);
-  const accepted=['accepted','observed'].includes(item.status);
-  if(old){if(accepted||!old.accepted)Object.assign(old,{label,accepted});}
-  else row._sentRecords.push({id:item.send_id||'',text:item.content,label,accepted,reason:item.reason,time:item.time});
-  row.sent=row._sentRecords.map(r=>r.label);
- }
- function grouped(items){
-  const rows=[],byTrace=new Map();
-  for(const item of items){
-   const trace=item.message_id&&item.thread_id?item.thread_id+'|'+item.message_id:null;
-   if(!trace){rows.push({...item,received:'',sent:[],categories:[item.category],result:item.reason?reasons[item.reason]||item.reason:events[item.event]||item.event});continue}
-   let row=byTrace.get(trace);
-   if(!row){row={...item,received:'',sent:[],categories:[],result:'',proactive:item.origin==='proactive'};byTrace.set(trace,row);rows.push(row)}
-   row.send_ids ||= [];
-   if(item.send_id&&!row.send_ids.includes(item.send_id))row.send_ids.push(item.send_id);
-   row.categories.push(item.category);
-   if(item.reason)row.reason=item.reason;
-   if(item.send_id)row.send_id=item.send_id;
-   for(const field of ['related_message_id','decision_note','model_http_status','model_attempts','model_max_attempts','model_stage','model_retry_delay_ms','duration_ms','tool_cache_hit','tool_requests','tool_retries','tool_http_status','tool_code','tool_stage','retry_attempts','retry_at'])if(item[field]!==undefined)row[field]=item[field];
-   row.proactive ||=item.origin==='proactive';
-   if(item.category==='sent'&&['accepted','observed'].includes(item.status))delete row.retry_at;
-   if(item.category==='received'&&item.content)row.received=item.content;
-   else if(item.category==='sent'&&item.content){
-    if(item.origin==='manual')row._sentRecords=(row._sentRecords||[]).filter(r=>!r.label.startsWith('发送提交：'));
-    putSent(row,item,(['accepted','observed'].includes(item.status)?'发送消息：':'发送提交：')+item.content);
-    row.result=statuses[item.status]||item.status||'发送完成';
-   }else if(item.category==='error'&&['send_failed','manual_send_submitted','manual_send_status','delivery_stopped'].includes(item.event)){
-    if(item.content)putSent(row,item,'尝试发送'+(['unknown','needs_review'].includes(item.status)?'（结果不确定）':'（失败）')+'：'+item.content);
-    row.result=reasons[item.reason]||statuses[item.status]||'发送异常，未自动重发';
-   }else if(item.reason)row.result=item.reason==='model_chose_silence'&&item.schema_version!==2?'旧记录：静默或决策解析失败':reasons[item.reason]||item.reason;
-   else if(item.status)row.result=statuses[item.status]||item.status;
-   row.content=[row.received,...row.sent].join(' ');row.status=item.status||row.status;
-   row.category=row.categories.includes('error')?'error':row.category;row.event=item.event;
-  }
-  return rows;
- }
- function rowMatches(row){const category=$('#log-category').value,source=$('#log-source').value,query=$('#log-search').value.trim().toLocaleLowerCase();return(category==='all'||row.categories.includes(category))&&(source==='all'||row.source_kind===source)&&(!query||[row.source,row.sender,row.thread_id,row.send_id,...(row.send_ids||[]),row.content,row.received,...row.sent,row.event,row.result,modelDetails(row),toolDetails(row)].join(' ').toLocaleLowerCase().includes(query))}
- function render(){const pane=$('#log-list'),position=pane.scrollTop;pane.replaceChildren();const filtered=grouped(state.items).filter(rowMatches).reverse();$('#log-count').textContent=filtered.length+' 条记录';if(!filtered.length){node(pane,'p','没有匹配的日志。','empty');return}for(const item of filtered){const row=node(pane,'article',undefined,'activity-row activity-line');row.dataset.logId=key(item);const clock=node(row,'time',time(item.time));clock.dateTime=item.time;const flow=node(row,'div',undefined,'activity-flow');node(flow,'strong',item.source||'系统','activity-source-name');if(item.proactive)node(flow,'span','主动触发','activity-flow-stage');else if(item.received)node(flow,'span','收到消息：'+item.received,'activity-flow-message');if(item.result)node(flow,'span',item.result,'activity-flow-result');for(const text of item.sent)node(flow,'span','（'+text+'）',text.startsWith('尝试发送')?'activity-flow-attempted':'activity-flow-sent');const details=node(row,'details',undefined,'activity-line-details');node(details,'summary','详情');node(details,'p',(categories[item.category]||'系统')+' / '+item.event+(item.thread_id?' / '+item.thread_id:'')+(item.sender?' / 发送者 '+item.sender:'')+(item.send_id?' / 发送记录 '+item.send_id:'')+(item.reason?' / '+item.reason:'')+(item.decision_note?' / 复核说明：'+item.decision_note:'')+(item.related_message_id?' / 依据消息：'+item.related_message_id:'')+(!item.message_id&&item.content?' / '+item.content:'')+modelDetails(item)+toolDetails(item)+(item.retry_attempts?' / 已补发 '+item.retry_attempts+' 次':'')+(item.retry_at?' / 下次核对 '+time(item.retry_at):''))}pane.scrollTop=position}
 
+ const key=item=>item.id||item.time+'|'+item.event;
+ Object.assign(events,{tool_call_succeeded:'调用成功',tool_call_failed:'调用失败',plugin_output_ready:'媒体已准备',web_activity:'联网操作',context_compression_failed:'上下文压缩失败',eligible_message_received:'收到符合规则的消息',memory_saved:'记忆已保存',bot_started_history_skipped:'机器人已启动'});
+ const roundStates={received:'已接收',running:'执行中',completed:'已完成',accepted:'已发送',waiting:'等待核对',failed:'需处理',silent:'选择安静',skipped:'已跳过',blocked:'已阻止',stopped:'已停止'};
+ const stageNames={receive:'接收',decision:'判断',tool:'工具',delivery:'发送',system:'运行'};
+ const openRounds=new Set();let limit=60,epoch=0;
+ function node(parent,tag,text,klass){const element=document.createElement(tag);if(text!==undefined)element.textContent=text;if(klass)element.className=klass;parent.append(element);return element}
+ function label(item){return reasons[item.reason]||events[item.event]||item.reason||item.event||'运行事件'}
+ function matches(round){
+  const category=$('#log-category').value,source=$('#log-source').value,query=$('#log-search').value.trim().toLocaleLowerCase(),view=$('#log-view').value,status=$('#log-status').value;
+  return (view==='all'||(view==='system')===round.system)&&(category==='all'||round.categories.includes(category))&&(source==='all'||round.source_kind===source)&&(status==='all'||round.status===status)&&(!query||[round.search,...round.entries.map(label)].join(' ').toLocaleLowerCase().includes(query));
+ }
+ function step(parent,item){
+  const li=node(parent,'li',undefined,'round-step');li.dataset.stage=window.WechatRounds.stage(item);
+  node(li,'span',stageNames[li.dataset.stage],'round-stage');
+  const content=node(li,'div',undefined,'round-step-content');
+  node(content,'strong',item.tool?item.tool+' · '+label(item):label(item));
+  if(item.reason){const reason=reasons[item.reason]||item.reason;if(reason!==label(item))node(content,'p',reason,'hint')}
+  if(item.content&&item.content!==item.tool)node(content,'p',item.content,'round-body');
+  if(item.query)node(content,'p',item.query,'hint');
+  if(item.target_url){try{const url=new URL(item.target_url);if(['https:','http:'].includes(url.protocol)){const a=node(content,'a',url.hostname+' · '+url.pathname,'round-url');a.href=url.href;a.target='_blank';a.rel='noreferrer noopener'}}catch{}}
+  const diagnostics=[item.decision_note,modelDetails(item),toolDetails(item),item.retry_at?'下次核对 '+time(item.retry_at):'',item.retry_attempts?'已补发 '+item.retry_attempts+' 次':''].filter(Boolean).join(' ');
+  if(diagnostics)node(content,'p',diagnostics,'hint');
+  const technical=node(content,'details',undefined,'round-technical');node(technical,'summary','技术信息');
+  node(technical,'pre',JSON.stringify({event:item.event,status:item.status,message_id:item.message_id,related_message_id:item.related_message_id,sender:item.sender,send_id:item.send_id,call_id:item.call_id,reason:item.reason},null,2));
+  const clock=node(li,'time',time(item.time),'round-step-time');clock.dateTime=item.time;
+ }
+ function render(){
+  const pane=$('#log-list'),position=pane.scrollTop,pageY=window.scrollY;
+  // Anchor to a stable round if new items are inserted above the reader.
+  const anchor=[...pane.children].find(el=>el.getBoundingClientRect().bottom>pane.getBoundingClientRect().top);
+  const anchorID=anchor?.dataset.roundId,offset=anchor?anchor.offsetTop-pane.scrollTop:0;
+  const focused=document.activeElement,focusID=focused?.closest('[data-round-id]')?.dataset.roundId;
+  pane.replaceChildren();
+  const rounds=window.WechatRounds.project(state.items),filtered=rounds.filter(matches);
+  $('#log-count').textContent=filtered.length+' 个'+($('#log-view').value==='system'?'系统时段':'执行回合');
+  $('#round-total').textContent=rounds.filter(x=>!x.system).length;
+  $('#round-waiting').textContent=rounds.filter(x=>!x.system&&['running','waiting','received'].includes(x.status)).length;
+  $('#round-errors').textContent=rounds.filter(x=>!x.system&&x.status==='failed').length;
+  $('#round-silent').textContent=rounds.filter(x=>!x.system&&x.status==='silent').length;
+  $('#log-more').hidden=filtered.length<=limit;
+  if(!filtered.length)node(pane,'p','没有匹配的执行记录，试试调整筛选。','empty');
+  for(const round of filtered.slice(0,limit)){
+   const card=node(pane,'details',undefined,'round-card');card.dataset.roundId=round.id;card.dataset.status=round.status;card.open=openRounds.has(round.id);
+   let populated=false;
+   const populate=()=>{
+    if(populated)return;populated=true;
+    if(round.sent.length){const output=node(body,'div',undefined,'round-output');node(output,'h3','发送结果');for(const sent of round.sent){const accepted=['accepted','observed'].includes(sent.status);const text=node(output,'p',sent.content);node(text,'small',accepted?'微信已接受':statuses[sent.status]||'待核对',accepted?'receipt-accepted':'receipt-pending')}}
+    const timeline=node(body,'ol',undefined,'round-timeline');for(const item of round.entries)step(timeline,item);
+   };
+   card.addEventListener('toggle',()=>{if(!card.isConnected)return;if(card.open){openRounds.add(round.id);populate()}else openRounds.delete(round.id)});
+   const summary=node(card,'summary',undefined,'round-summary');
+   const clock=node(summary,'time',time(round.time),'round-time');clock.dateTime=round.time;
+   const overview=node(summary,'div',undefined,'round-overview'),head=node(overview,'div',undefined,'round-head');
+   node(head,'strong',round.source,'round-source');node(head,'span',round.system?'系统':round.source_kind==='group'?'群聊':'私聊','round-kind');
+   const preview=round.received[0]?.content|| (round.proactive?'自主发起':round.entries.find(x=>x.content)?.content)||label(round.entries[0]);
+   node(overview,'p',preview,'round-preview');
+   if(round.received.length>1)node(overview,'small','本轮含 '+round.received.length+' 条消息');
+   const outcome=node(summary,'div',undefined,'round-outcome');node(outcome,'span',round.system?'运行记录':roundStates[round.status]||round.status,'round-status');
+   node(outcome,'small',round.entries.length+' 个步骤'+(round.tools?' / '+round.tools+' 次工具':'')+(round.duration>=1000?' / '+(round.duration/1000).toFixed(round.duration<10000?1:0)+' 秒':''));
+   const body=node(card,'div',undefined,'round-detail');
+   if(card.open)populate();
+  }
+  if(anchorID){const restored=[...pane.children].find(el=>el.dataset.roundId===anchorID);pane.scrollTop=restored?restored.offsetTop-offset:position}else pane.scrollTop=position;
+  if(focusID){const restored=[...pane.children].find(el=>el.dataset.roundId===focusID);restored?.querySelector('summary')?.focus({preventScroll:true})}
+  window.scrollTo({top:pageY,behavior:'instant'});
+ }
  function consume(items,latest=false){state.items=items;state.pending=null;$('#log-new').hidden=true;render();if(latest)$('#log-list').scrollTop=0}
- async function refresh(){if(!window.WechatAdmin?.isAuthenticated()||state.busy)return;state.busy=true;$('#refresh-logs').disabled=true;try{const result=await window.WechatAdmin.api('/api/logs'),items=Array.isArray(result.items)?result.items:[];$('#log-load-error').textContent='';if(!state.ready){state.ready=true;consume(items);return}if(items.length===state.items.length&&items.every((item,index)=>key(item)===key(state.items[index])))return;if($('#log-follow-latest').checked){consume(items,true);return}state.pending=items;const old=new Set(state.items.map(key)),count=items.filter(item=>!old.has(key(item))).length;$('#log-new').textContent=count?'有 '+count+' 条新日志，点击查看':'日志已更新，点击载入';$('#log-new').hidden=false}catch(error){$('#log-load-error').textContent='日志读取失败：'+error.message+'。当前内容已保留。'}finally{state.busy=false;$('#refresh-logs').disabled=false}}
- ['log-category','log-source'].forEach(id=>$('#'+id).addEventListener('change',()=>render()));let searchTimer;$('#log-search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(render,150)});$('#log-new').addEventListener('click',()=>{if(state.pending)consume(state.pending,true)});$('#log-follow-latest').addEventListener('change',()=>{if($('#log-follow-latest').checked&&state.pending)consume(state.pending,true)});
+ async function refresh(){
+  if(!window.WechatAdmin?.isAuthenticated()||state.busy)return;
+  state.busy=true;const stamp=epoch;$('#refresh-logs').disabled=true;
+  try{
+   const result=await window.WechatAdmin.api('/api/logs');if(stamp!==epoch)return;
+   const items=Array.isArray(result.items)?result.items:[];$('#log-load-error').textContent='';
+   if(!state.ready){state.ready=true;consume(items);return}
+   if(items.length===state.items.length&&items.every((item,index)=>key(item)===key(state.items[index])))return;
+   if($('#log-follow-latest').checked){consume(items,true);return}
+   state.pending=items;const old=new Set(state.items.map(key)),changed=items.filter(item=>!old.has(key(item))),rounds=window.WechatRounds.project(changed);
+   $('#log-new').textContent=rounds.length?'有 '+rounds.length+' 组进展，点击载入':'执行记录已更新';$('#log-new').hidden=false;
+  }catch(error){if(stamp===epoch)$('#log-load-error').textContent='读取失败：'+error.message+'。当前内容已保留。'}finally{state.busy=false;$('#refresh-logs').disabled=false}
+ }
+ ['log-category','log-source','log-view','log-status'].forEach(id=>$('#'+id).addEventListener('change',()=>{limit=60;render()}));
+ let searchTimer;$('#log-search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{limit=60;render()},150)});
+ $('#log-new').addEventListener('click',()=>{if(state.pending)consume(state.pending)});
+ $('#log-more').addEventListener('click',()=>{limit+=60;render()});
+ $('#log-follow-latest').addEventListener('change',()=>{if($('#log-follow-latest').checked&&state.pending)consume(state.pending,true)});
  window.addEventListener('wechat-admin:logs-refresh',refresh);
- window.addEventListener('wechat-admin:logout',()=>{state.items=[];state.pending=null;state.ready=false;$('#log-list').replaceChildren();$('#log-search').value='';$('#log-new').hidden=true});
+ window.addEventListener('wechat-admin:logout',()=>{epoch++;state.items=[];state.pending=null;state.ready=false;openRounds.clear();$('#log-list').replaceChildren();$('#log-search').value='';$('#log-new').hidden=true});
 })();
