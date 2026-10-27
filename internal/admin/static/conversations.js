@@ -96,7 +96,7 @@
   }catch(e){if(view===v&&request===v.request)$('#memory-load-state').textContent=e.message}
  }
  function openConversation(item){
-  view?.popup.close();const root=$('#memory-detail');root.hidden=false;
+  window.WechatActivity.loadPending();view?.popup.close();const root=$('#memory-detail');root.hidden=false;
   const v={item,request:0,data:null,popup:null};
   v.popup=window.WechatDialogs.open({title:item.label,subtitle:item.thread.endsWith('@chatroom')?'群聊 · 消息、记忆与执行过程':'私信 · 消息、记忆与执行过程',content:root,onClose:()=>{if(view===v)view=null;root.hidden=true;$('#conversation-detail-parking').append(root);window.dispatchEvent(new CustomEvent('wechat-admin:memory-selection',{detail:{id:''}}))}});
   view=v;$('#memory-content').replaceChildren();$('#memory-note').value='';window.dispatchEvent(new CustomEvent('wechat-admin:memory-selection',{detail:{id:item.id||''}}));syncCompression();loadView(v);
@@ -116,7 +116,7 @@
  async function saveNote(){const v=view,note=$('#memory-note').value.trim();if(!v?.data||!note)return;const b=$('#save-memory-note');b.disabled=true;try{await api('/api/companion/memory/'+encodeURIComponent(v.item.id)+'/notes',{method:'POST',json:{text:note}});if(view!==v)return;$('#memory-note').value='';v.data.notes=[...(v.data.notes||[]),note];node($('#memory-notes'),'p',note,'memory-note');await window.WechatAdmin.refreshScopes()}catch(e){node($('#memory-notes'),'p',e.message,'form-error')}finally{b.disabled=false}}
  async function clear(){const v=view;if(!v?.data||!confirm('清除这个会话的活跃记忆和摘要？只读归档和微信聊天记录仍保留。'))return;const b=$('#clear-memory');b.disabled=true;try{await api('/api/companion/memory/'+encodeURIComponent(v.item.id)+'/clear',{method:'POST',json:{}});if(view===v)await loadView(v);await window.WechatAdmin.refreshScopes()}catch(e){node($('#memory-notes'),'p',e.message,'form-error')}finally{b.disabled=false}}
  $('#conversation-search').addEventListener('input',renderIndex);$('#conversation-refresh').addEventListener('click',refresh);
- $('#conversation-new').addEventListener('click',()=>{window.WechatActivity.loadPending();$('#conversation-new').hidden=true;if(view)loadView(view)});
+ $('#conversation-new').addEventListener('click',async()=>{const current=view;await refresh();if(current&&view===current)loadView(current)});
  $('#context-compress-now').addEventListener('click',()=>view&&compress(view.item));$('#memory-history').addEventListener('click',openHistory);$('#memory-executions').addEventListener('click',()=>view&&window.WechatActivity.openConversation(view.item.thread,view.item.label));$('#memory-settings').addEventListener('click',manage);$('#save-memory-note').addEventListener('click',saveNote);$('#clear-memory').addEventListener('click',clear);
  window.addEventListener('wechat-admin:scopes',e=>{scopes=e.detail.scopes;renderIndex()});
  window.addEventListener('wechat-admin:activity-updated',()=>{renderIndex();$('#conversation-new').hidden=true});
