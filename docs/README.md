@@ -5,6 +5,7 @@
 ## 使用与扩展
 
 - [目录与启动入口](guide/project-layout.md)
+- [运行服务、Agent权限与可迁移性](guide/runtime-and-portability.md)
 
 - [能力和验收边界](guide/FEATURES.md)
 - [大肥鱼：朋友式人设、好友私聊与成员提醒](guide/friendly-persona-friends-reminders.md)

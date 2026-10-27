@@ -11,10 +11,15 @@ import (
 // A deterministic task and the existing effect ledger prevent double generation.
 func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		MessageID   string `json:"message_id"`
-		PreparedJob string `json:"prepared_job_id"`
+		MessageID         string `json:"message_id"`
+		PreparedJob       string `json:"prepared_job_id"`
+		RedeliverPrepared bool   `json:"redeliver_prepared"`
 	}
 	if !decode(w, r, &in) {
+		return
+	}
+	if in.RedeliverPrepared && in.PreparedJob == "" {
+		fail(w, 400, "重新交付必须指定已准备完成的新歌曲任务")
 		return
 	}
 	m := s.manager
@@ -26,7 +31,7 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	at, err := time.Parse(time.RFC3339Nano, msg.CreatedAt)
-	if err != nil || time.Since(at) > 24*time.Hour || at.After(time.Now().Add(time.Minute)) || !strings.Contains(msg.Body, "歌") {
+	if err != nil || time.Since(at) > 24*time.Hour || at.After(time.Now().Add(time.Minute)) || !strings.Contains(msg.Body, "歌") && !strings.Contains(msg.Body, "唱") {
 		fail(w, 400, "仅支持24小时内的歌曲请求")
 		return
 	}
@@ -36,8 +41,13 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := agentID(m.native.Account(), msg.ThreadID, msg.ID, "manual-music-recovery")
+	// Explicit administrator redelivery adopts ONE newly prepared take. The
+	// old delivery remains immutable; the new job is the idempotency identity.
+	if in.RedeliverPrepared {
+		id = agentID(id, in.PreparedJob)
+	}
 	for _, t := range m.agent.list(m.native.Account(), msg.ThreadID) {
-		if t.ID == id || t.OriginTrace == msg.ID && t.MusicJob != "" {
+		if t.ID == id || !in.RedeliverPrepared && t.OriginTrace == msg.ID && t.MusicJob != "" {
 			respond(w, 200, t)
 			return
 		}
@@ -56,7 +66,7 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	m.agent.mu.Unlock()
-	if exists {
+	if exists && !in.RedeliverPrepared {
 		fail(w, 409, "原消息已有生成操作记录，请检查原任务，未重复生成")
 		return
 	}
@@ -79,7 +89,8 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 			State         string `json:"state"`
 			ReferenceUsed bool   `json:"reference_used"`
 			Recipe        struct {
-				Title string `json:"title"`
+				Title      string `json:"title"`
+				SourceHash string `json:"reference_source_sha256"`
 				songSpec
 			} `json:"recipe"`
 		}
@@ -91,6 +102,9 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		t.MusicTitle = songTitle(job.Recipe.Title)
 		t.MusicKind = "voice"
 		t.MusicSpec = &job.Recipe.songSpec
+		if len(job.Recipe.SourceHash) == 64 {
+			t.MusicSpec.ReferenceHash = job.Recipe.SourceHash
+		}
 		t.MusicDeadline = time.Now().Add(30 * time.Minute)
 		t.State = "waiting"
 		t.Checkpoint = "管理员已准备完成YuE歌曲，补发原请求；只查询并交付，不重新生成"

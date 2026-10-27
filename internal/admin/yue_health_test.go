@@ -43,7 +43,7 @@ func TestOfflineYuEPreflightDoesNotClaimOrCreateGeneration(t *testing.T) {
 func TestUnknownYuESubmissionDoesNotReportToolSuccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
-			w.Write([]byte(`{"ready":true,"bridge_version":2}`))
+			w.Write([]byte(`{"ready":true,"bridge_version":7}`))
 			return
 		}
 		w.WriteHeader(503)

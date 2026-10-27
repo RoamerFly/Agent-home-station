@@ -64,3 +64,49 @@ func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 		t.Fatal("adoption leaked across rooms", err, reads)
 	}
 }
+
+func TestExplicitCorrectedTakePreservesOldDeliveryAndIsIdempotent(t *testing.T) {
+	f := setup(t)
+	f.manager.native = &recoverSongNative{f.native}
+	f.manager.config.Companion.Permissions.SendVoice = true
+	f.manager.speech.YuEEnabled = true
+	old := agentTask{ID: "old-task", Account: "test", Thread: "filehelper", Sender: "synthetic-owner", OriginTrace: "birthday-request", MusicJob: "old-take", State: "completed"}
+	if err := f.manager.agent.task(old); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Fatal("unexpected mutation")
+		}
+		reads++
+		json.NewEncoder(w).Encode(map[string]any{"id": "corrected-take", "state": "completed", "reference_used": true, "recipe": map[string]any{"title": "生日快乐", "mode": "cover", "lyrics": "synthetic words", "reference_sha256": strings.Repeat("b", 64), "duration_seconds": 180}})
+	}))
+	defer u.Close()
+	f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = u.URL, "synthetic"
+	f.login()
+	body := map[string]any{"message_id": "birthday-request", "prepared_job_id": "corrected-take", "redeliver_prepared": true}
+	for i := 0; i < 2; i++ {
+		code, b, _ := f.request("POST", "/api/agent/recover-music-message", body, true, true)
+		if code != 201 && code != 200 {
+			t.Fatal(code, string(b))
+		}
+		var got agentTask
+		json.Unmarshal(b, &got)
+		if got.MusicJob != "corrected-take" || got.ID == old.ID {
+			t.Fatal(got)
+		}
+	}
+	if reads != 1 {
+		t.Fatal("duplicate adoption", reads)
+	}
+	all := f.manager.agent.list("test", "filehelper")
+	if len(all) != 2 {
+		t.Fatal(all)
+	}
+	for _, task := range all {
+		if task.ID == old.ID && (task.State != "completed" || task.MusicJob != "old-take") {
+			t.Fatal("old task was overwritten", task)
+		}
+	}
+}
