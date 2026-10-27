@@ -412,7 +412,11 @@ func TestMediaCaptionCannotCancelUnreadObservation(t *testing.T) {
 			}
 			return `{"action":"continue"}`, nil
 		}
-		if !strings.Contains(data, "a visible cat") || !strings.Contains(data, "早餐") {
+		joined := ""
+		for _, turn := range messages {
+			joined += turn["content"]
+		}
+		if !strings.Contains(joined, "a visible cat") || !strings.Contains(joined, "早餐") || !strings.Contains(joined, "current_followup") {
 			t.Error("main decision did not receive observation and subsequent caption")
 		}
 		return `{"action":"reply","messages":["图里的猫也想吃早餐吗"]}`, nil
@@ -427,6 +431,7 @@ func TestMediaCaptionCannotCancelUnreadObservation(t *testing.T) {
 	<-a.started
 	caption := fixtureMessage("caption", "filehelper", "早餐", "incoming")
 	caption.SenderID = "person"
+	w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Event: fixtureEvent("2", "caption", "filehelper", "incoming", "remote"), Phase: "processing"})
 	w.noticeGenerationMessage(caption, true)
 	w.reviewActiveGenerations(context.Background())
 	if len(w.generation.reviews) != 0 || reviews.Load() != 0 {
@@ -435,12 +440,12 @@ func TestMediaCaptionCannotCancelUnreadObservation(t *testing.T) {
 	close(a.release)
 	pumpGeneration(t, w, func() bool { return !w.generation.jobs[in.Thread].observationPending })
 	j := w.generation.jobs[in.Thread]
-	if !strings.Contains(j.input.Text, "a visible cat") || !strings.Contains(j.input.Text, "早餐") {
+	if !strings.Contains(j.input.Text, "a visible cat") {
 		t.Fatal("review still sees placeholder")
 	}
 	w.reviewActiveGenerations(context.Background())
 	pumpGeneration(t, w, func() bool { return len(w.generation.jobs) == 0 })
-	if j.cancelled || reviews.Load() != 1 || len(w.runtime.Plans) != 1 {
+	if j.cancelled || reviews.Load() != 0 || len(w.runtime.Plans) != 1 || w.runtime.Inbox[0].Phase != "completed" {
 		t.Fatal("caption discarded understood media", j.cancelled, reviews.Load(), len(w.runtime.Plans))
 	}
 }

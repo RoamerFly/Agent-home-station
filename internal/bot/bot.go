@@ -275,8 +275,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	prompt, eligible := w.prompt(working, time.Now())
 	noticed := message
-	if message.Type == 47 {
+	if message.IsQuotedText() {
 		noticed = working
+		noticed.Body += quoteContext
 	}
 	w.noticeConversationMessage(noticed, eligible)
 	if w.persistErr != nil {

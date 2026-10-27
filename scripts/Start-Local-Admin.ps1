@@ -20,9 +20,18 @@ if(-not $existing.Count){
 }
 & wsl.exe -d $Distro -u $LinuxUser -- systemctl --user start wechat-bot-native.service wechat-bot-web.service
 if($LASTEXITCODE -ne 0){throw 'WSL user services did not start; existing profile was not changed.'}
-$state=& wsl.exe -d $Distro -u $LinuxUser -- "$DataRoot/bin/wx" --data-dir $DataRoot --token-file "$DataRoot/api-token" --account $Account --json auth status
-if($LASTEXITCODE -ne 0){throw 'Native status unavailable; check the local services.'}
-$current=$state | ConvertFrom-Json
+$current=$null
+# systemctl start confirms the process started, not that its API is listening.
+# Cold WSL boots need a brief readiness wait before querying the saved login.
+for($attempt=0;$attempt -lt 20;$attempt++){
+ $state=& wsl.exe -d $Distro -u $LinuxUser -- "$DataRoot/bin/wx" --data-dir $DataRoot --token-file "$DataRoot/api-token" --account $Account --json auth status 2>$null
+ if($LASTEXITCODE -eq 0){
+  try {$current=$state | ConvertFrom-Json} catch {$current=$null}
+  if($null -ne $current){break}
+ }
+ Start-Sleep -Milliseconds 500
+}
+if($null -eq $current){throw 'Native API did not become ready; check the local services. Existing login was preserved.'}
 if(-not $current.authenticated){
  & wsl.exe -d $Distro -u $LinuxUser -- "$DataRoot/bin/wx" --data-dir $DataRoot --token-file "$DataRoot/api-token" --account $Account --json account connect --detach | Out-Null
  if($LASTEXITCODE -ne 0){throw 'Saved connection could not be started; use the login page without deleting the profile.'}

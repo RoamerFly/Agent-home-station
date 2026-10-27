@@ -51,9 +51,17 @@ func resourceURL(raw string) string {
 }
 func currentMessage(turns []map[string]string) string {
 	for i := len(turns) - 1; i >= 0; i-- {
-		var in struct{ Kind, Text string }
-		if turns[i]["role"] == "user" && json.Unmarshal([]byte(turns[i]["content"]), &in) == nil && in.Kind == "current_message" {
-			return in.Text
+		var in struct {
+			Kind, Text string
+			Events     []struct{ Text string }
+		}
+		if turns[i]["role"] == "user" && json.Unmarshal([]byte(turns[i]["content"]), &in) == nil {
+			if in.Kind == "current_followup" && len(in.Events) > 0 {
+				return in.Events[len(in.Events)-1].Text
+			}
+			if in.Kind == "current_message" {
+				return in.Text
+			}
 		}
 	}
 	return ""

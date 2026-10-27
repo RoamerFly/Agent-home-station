@@ -68,6 +68,39 @@ func TestNativeFunctionsUseToolCallsAndMatchingResults(t *testing.T) {
 	}
 }
 
+func TestNativeToolResultPreservesTypedExecutionEvidence(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var v struct{ Messages []map[string]any }
+		if json.NewDecoder(r.Body).Decode(&v) != nil {
+			t.Fatal("body")
+		}
+		content, _ := v.Messages[len(v.Messages)-1]["content"].(string)
+		var feedback struct {
+			Result    string
+			Execution struct {
+				Status   string
+				ResultID string `json:"result_id"`
+			}
+		}
+		if json.Unmarshal([]byte(content), &feedback) != nil || feedback.Execution.Status != "failed" || feedback.Execution.ResultID != "opaque-reference" || feedback.Result != "actual evidence" {
+			t.Error("execution metadata lost", content)
+		}
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	file := filepath.Join(t.TempDir(), "key")
+	os.WriteFile(file, []byte("synthetic-private-test-key"), 0600)
+	c, err := New(Config{BaseURL: server.URL, KeyFile: file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.http = server.Client()
+	_, err = c.ChatFunctions(context.Background(), "policy", []map[string]string{{"role": "user", "content": "current"}, {"role": "assistant", "content": `{"action":"tool","tool":"probe","arguments":{}}`}, {"role": "user", "content": `{"tool":"probe","result":"actual evidence","source":"untrusted_tool_result","execution":{"status":"failed","result_id":"opaque-reference"}}`}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNativeFunctionContentIsPreservedAsExecutionAcknowledgement(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"choices":[{"message":{"content":"好，我来做一首～","tool_calls":[{"function":{"name":"music_local_start","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`))

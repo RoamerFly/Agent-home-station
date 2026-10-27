@@ -117,6 +117,9 @@ func (p *permittedTools) enabled(name string) bool {
 	if p.trace.ReportOnly {
 		return false
 	}
+	if name == "tool_output_read" {
+		return p.outputScope() != ""
+	}
 	if strings.HasPrefix(name, "device_") {
 		return p.mobileToolEnabled(name)
 	}
@@ -170,7 +173,6 @@ func (p *permittedTools) enabled(name string) bool {
 }
 func (p *permittedTools) localTools() []mcptools.Tool {
 	tools := []mcptools.Tool{}
-	tools = append(tools, p.pluginTaskTools()...)
 	if p.trace.Surf {
 		tools = append(tools, mcptools.Tool{Name: "web_discover", Description: "Discover actual public feed/community/RSS/music/image candidates, with persistent novelty memory and diverse sources. Automatically called once at session start. Continue a rabbit hole with related_url equal to a candidate BV page. Otherwise {} to switch sources. Does not send or claim watching. Input {related_url?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"related_url":{"type":"string","maxLength":2048}},"additionalProperties":false}`)})
 	}
@@ -181,10 +183,9 @@ func (p *permittedTools) localTools() []mcptools.Tool {
 	if p.runtime != nil {
 		tools = append(tools, p.runtime.Tools()...)
 	}
-	tools = append(p.agentTools(), tools...)
-	tools = append(tools, p.mobileTools()...)
-	tools = append(tools, p.speechTools()...)
-	tools = append(tools, p.yueTools()...)
+	for _, module := range p.capabilities() {
+		tools = append(tools, module.list()...)
+	}
 	return tools
 }
 func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
@@ -323,20 +324,10 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		return "", validationErr
 	}
 	args = normalized
-	if strings.HasPrefix(name, "device_") {
-		return p.callMobile(ctx, name, args)
-	}
-	if name == "plugin_job_status" || name == "plugin_job_cancel" {
-		return p.callPluginJob(ctx, name, args)
-	}
-	if name == "speech_synthesize" || name == "music_generate" {
-		return p.callSpeech(ctx, name, args)
-	}
-	if agentToolName(name) {
-		return p.callAgent(ctx, name, args)
-	}
-	if name == "music_local_start" || name == "music_local_status" || name == "music_reference_inspect" || name == "music_lyrics_compare" || name == "music_service_status" {
-		return p.callYuE(ctx, name, args)
+	for _, module := range p.capabilities() {
+		if module.match(name) {
+			return module.call(ctx, name, args)
+		}
 	}
 	if name == "web_discover" {
 		return p.discover(ctx, args)

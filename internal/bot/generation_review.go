@@ -21,7 +21,7 @@ func (w *Worker) reviewActiveGenerations(ctx context.Context) {
 		return
 	}
 	for _, j := range s.jobs {
-		if j.cancelled || j.observationPending || len(j.updates) == 0 || !j.engine.Config.ConversationConfig().RecheckOnMessage || time.Now().Before(j.nextReview) {
+		if j.session != nil || j.cancelled || j.observationPending || len(j.updates) == 0 || !j.engine.Config.ConversationConfig().RecheckOnMessage || time.Now().Before(j.nextReview) {
 			continue
 		}
 		id, fingerprint := "generation-"+j.input.TraceID, generationFingerprint(j)
