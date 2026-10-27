@@ -1,6 +1,8 @@
 services:
   wechat-sendd:
-    build: .
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
     environment:
       WECHAT_API_TOKEN: ${WECHAT_API_TOKEN:?set a 24-byte-or-longer API token}
       # Empty is intentional: without an allowlist, every send is rejected.
@@ -19,4 +21,4 @@ services:
     # and uncomment this read-only mount. A missing local file must not block
     # a sessionless health-check deployment.
     # volumes:
-    #   - ./secrets/wechat-session.json:/run/secrets/wechat-session.json:ro
+    #   - ../../secrets/wechat-session.json:/run/secrets/wechat-session.json:ro

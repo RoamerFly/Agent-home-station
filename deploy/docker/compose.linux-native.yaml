@@ -2,8 +2,8 @@ services:
   wechat-bot:
     image: wechat-bot-linux:local
     build:
-      context: .
-      dockerfile: Dockerfile.linux-stack
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.linux-stack
     environment:
       WECHAT_API_TOKEN: ${WECHAT_API_TOKEN:?set a 24-byte-or-longer API token}
       WECHAT_NATIVE_ACCOUNT: ${WECHAT_NATIVE_ACCOUNT:-background-test}

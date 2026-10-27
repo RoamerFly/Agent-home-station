@@ -5,6 +5,8 @@ param(
  [string]$Account='background-test-20261024'
 )
 $ErrorActionPreference='Stop'
+$OutputEncoding=[Text.UTF8Encoding]::new($false)
+try {[Console]::OutputEncoding=$OutputEncoding} catch {}
 $workspace=Split-Path $PSScriptRoot -Parent
 $digest=[Security.Cryptography.SHA256]::Create()
 try {$identity=([BitConverter]::ToString($digest.ComputeHash([Text.Encoding]::UTF8.GetBytes($workspace.ToLowerInvariant())))).Replace('-','').Substring(0,16)} finally {$digest.Dispose()}
@@ -24,8 +26,15 @@ $current=$null
 # systemctl start confirms the process started, not that its API is listening.
 # Cold WSL boots need a brief readiness wait before querying the saved login.
 for($attempt=0;$attempt -lt 20;$attempt++){
- $state=& wsl.exe -d $Distro -u $LinuxUser -- "$DataRoot/bin/wx" --data-dir $DataRoot --token-file "$DataRoot/api-token" --account $Account --json auth status 2>$null
- if($LASTEXITCODE -eq 0){
+ # Windows PowerShell 5 converts redirected native stderr into ErrorRecords.
+ # A WSL proxy warning is not an auth failure; use the actual exit code.
+ $savedErrorPreference=$ErrorActionPreference
+ try {
+  $ErrorActionPreference='Continue'
+  $state=& wsl.exe -d $Distro -u $LinuxUser -- "$DataRoot/bin/wx" --data-dir $DataRoot --token-file "$DataRoot/api-token" --account $Account --json auth status 2>$null
+  $authExit=$LASTEXITCODE
+ } finally {$ErrorActionPreference=$savedErrorPreference}
+ if($authExit -eq 0){
   try {$current=$state | ConvertFrom-Json} catch {$current=$null}
   if($null -ne $current){break}
  }
