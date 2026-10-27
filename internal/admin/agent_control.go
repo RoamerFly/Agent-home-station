@@ -98,6 +98,7 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	Reminder           *reminderSpec     `json:"reminder,omitempty"`
 	OwnerRequest       bool              `json:"owner_request,omitempty"`
 	ParentID           string            `json:"parent_task_id,omitempty"`
 	Goal               string            `json:"goal,omitempty"`
@@ -182,6 +183,12 @@ func newAgentControl(dir string) (*agentControl, error) {
 	}
 	changed := false
 	for id, t := range a.data.Tasks {
+		if t.Reminder != nil && t.State == "running" {
+			t.State = "waiting_delivery"
+			t.Next = time.Now()
+			a.data.Tasks[id] = t
+			changed = true
+		}
 		if t.ReportSourceThread != "" && t.Title == "处理发送异常" {
 			// Never infer exact job IDs from model prose (which may abbreviate).
 			for _, source := range a.data.Tasks {
@@ -295,6 +302,11 @@ func (a *agentControl) list(account, thread string) []agentTask {
 	out := []agentTask{}
 	for _, t := range a.data.Tasks {
 		if t.Account == account && (thread == "" || t.Thread == thread) {
+			// Reminder dispatch mutates its own snapshot, never a shared pointer.
+			if t.Reminder != nil {
+				reminder := *t.Reminder
+				t.Reminder = &reminder
+			}
 			out = append(out, t)
 		}
 	}
@@ -318,12 +330,29 @@ func (a *agentControl) task(t agentTask) error {
 		}
 	}
 	t.Updated = time.Now().UTC()
-	a.data.Tasks[t.ID] = t
+	a.data.Tasks[t.ID] = copyTask(t)
+	if t.Reminder != nil {
+		if e := a.writeReminderFile(t); e != nil {
+			if exists {
+				a.data.Tasks[t.ID] = old
+			} else {
+				delete(a.data.Tasks, t.ID)
+			}
+			return e
+		}
+	}
 	if err := a.persist(); err != nil {
 		if exists {
 			a.data.Tasks[t.ID] = old
 		} else {
 			delete(a.data.Tasks, t.ID)
+		}
+		if t.Reminder != nil {
+			if exists {
+				_ = a.writeReminderFile(old)
+			} else {
+				_ = os.Remove(filepath.Join(a.dir, "reminders", t.ID+".json"))
+			}
 		}
 		return err
 	}
@@ -344,7 +373,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		return nil, nil
 	}
 	for _, t := range m.agent.list(m.native.Account(), "") {
-		if (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(t.Thread) || !permittedRecipient(cfg.Config, t.Thread) {
+		if t.Reminder != nil || (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(t.Thread) || !permittedRecipient(cfg.Config, t.Thread) {
 			continue
 		}
 		if t.PluginJob != nil {

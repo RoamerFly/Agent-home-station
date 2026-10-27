@@ -81,6 +81,8 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
+	friendsMu    sync.Mutex
+	friends      map[string]friendEntry
 	workspace    *agentworkspace.Store
 	processes    *agenthost.Jobs
 	mobile       *mobile.Control
@@ -232,8 +234,12 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 }
 func (m *Manager) Config() ConfigView {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return cloneConfig(m.config).view()
+	c := cloneConfig(m.config)
+	m.mu.Unlock()
+	if c.PrivateEnabled && c.PrivateAllFriends {
+		c.friendIDs = m.cachedFriends()
+	}
+	return c.view()
 }
 func cloneConfig(c Config) Config {
 	if c.Companion.Context != nil {
@@ -245,6 +251,7 @@ func cloneConfig(c Config) Config {
 		c.Companion.Conversation = &copy
 	}
 	c.DirectIDs = append([]string{}, c.DirectIDs...)
+	c.friendIDs = append([]string{}, c.friendIDs...)
 	c.GroupRules = append([]GroupRule{}, c.GroupRules...)
 	c.Companion.ProactiveThreads = append([]string{}, c.Companion.ProactiveThreads...)
 	c.Companion.ProactiveRules = append([]companion.ProactiveRule{}, c.Companion.ProactiveRules...)
@@ -449,12 +456,20 @@ func (m *Manager) start(c Config) {
 		for _, r := range c.GroupRules {
 			rules[r.ID] = bot.GroupRule{Mode: r.Mode, Prefix: r.Prefix, Persona: r.Persona, ForceReplyWhenMentioned: r.ForceReplyWhenMentioned}
 		}
-		worker, err := bot.New(bot.Config{ReportFailure: m.queueOperationReport, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
+		friendCtx, cancelFriends := context.WithTimeout(ctx, 8*time.Second)
+		m.warmFriends(friendCtx)
+		cancelFriends()
+		c.friendIDs = m.cachedFriends()
+		worker, err := bot.New(bot.Config{AuthorizeThread: m.authorizeConversation, ReportFailure: m.queueOperationReport, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
 		if err != nil {
 			m.setState("error")
 			m.log("bot_configuration_error")
 			return
 		}
+		reminderCtx, cancelReminders := context.WithCancel(ctx)
+		reminderDone := make(chan struct{})
+		go func() { defer close(reminderDone); m.runReminders(reminderCtx) }()
+		defer func() { cancelReminders(); <-reminderDone }()
 		m.setState("running")
 		m.log("bot_starting")
 		err = worker.Run(ctx)
