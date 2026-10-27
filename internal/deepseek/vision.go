@@ -13,6 +13,17 @@ type Image struct {
 	MIME string
 }
 
+// VisionWithBudget lets a detailed tool request a suitable response budget
+// without changing the short-chat budget or shared client state.
+func (c *Client) VisionWithBudget(ctx context.Context, prompt string, images []Image, tokens int) (string, error) {
+	if tokens < 1 {
+		return "", errors.New("vision output budget must be positive")
+	}
+	copy := *c
+	copy.maxTokens = tokens
+	return copy.Vision(ctx, prompt, images)
+}
+
 // Vision sends bytes only to the configured provider and does not persist them.
 func (c *Client) Vision(ctx context.Context, prompt string, images []Image) (string, error) {
 	if len(images) < 1 || len(images) > 8 || len(prompt) > 8192 {

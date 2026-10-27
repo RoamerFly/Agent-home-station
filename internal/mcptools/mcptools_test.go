@@ -184,7 +184,7 @@ func TestLiveBingSearchWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestNewValidatesEndpointAndLimits(t *testing.T) {
+func TestNewValidatesEndpointWithoutServerCountQuota(t *testing.T) {
 	if _, err := New([]ServerConfig{{ID: "bad", Transport: "http", URL: "http://example.com", Enabled: true}}); err == nil {
 		t.Fatal("non-loopback HTTP accepted")
 	}
@@ -195,9 +195,11 @@ func TestNewValidatesEndpointAndLimits(t *testing.T) {
 	for i := 0; i < 9; i++ {
 		many = append(many, ServerConfig{ID: "s" + string(rune('a'+i)), Transport: "stdio", Command: "x", Enabled: true})
 	}
-	if _, err := New(many); err == nil {
-		t.Fatal("too many servers accepted")
+	h, err := New(many)
+	if err != nil {
+		t.Fatal("server count quota retained", err)
 	}
+	h.Close()
 }
 func hasTool(ts []Tool, n string) bool {
 	for _, t := range ts {

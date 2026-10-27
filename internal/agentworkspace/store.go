@@ -106,12 +106,9 @@ func (s *Store) List(scope, query string) ([]Document, error) {
 		return nil, e
 	}
 	defer f.Close()
-	entries, e := f.ReadDir(257)
+	entries, e := f.ReadDir(-1)
 	if e != nil && e != io.EOF {
 		return nil, e
-	}
-	if len(entries) > 256 {
-		return nil, errors.New("工作区文档超过256份，请先整理")
 	}
 	out := []Document{}
 	for _, entry := range entries {
@@ -149,20 +146,6 @@ func (s *Store) Write(scope, name, content, expected string) (Document, error) {
 	}
 	if old.Revision != expected {
 		return old, ErrConflict
-	}
-	if old.Revision == "" {
-		f, e := root.Open(".")
-		if e != nil {
-			return old, e
-		}
-		entries, e := f.ReadDir(257)
-		f.Close()
-		if e != nil && e != io.EOF {
-			return old, e
-		}
-		if len(entries) >= 256 {
-			return old, errors.New("文档已达256份上限")
-		}
 	}
 	f, e := os.CreateTemp(path, ".document-*")
 	if e != nil {

@@ -5,8 +5,6 @@ package agenthost
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +60,8 @@ type Input struct {
 	Old      string `json:"old_text"`
 	New      string `json:"new_text"`
 	Offset   int    `json:"offset"`
+	Limit    int    `json:"limit"`
+	Length   int    `json:"length"`
 }
 type Host struct{ Config Config }
 
@@ -120,18 +121,34 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 			return nil, errors.New("目录无法读取")
 		}
 		defer f.Close()
-		entries, err := f.ReadDir(201)
+		entries, err := f.ReadDir(-1)
 		if err != nil && err != io.EOF {
 			return nil, errors.New("目录无法读取")
 		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+		if in.Offset < 0 || in.Offset > len(entries) || in.Limit < 0 {
+			return nil, errors.New("目录分页参数无效")
+		}
+		limit := in.Limit
+		if limit == 0 {
+			limit = 200
+		}
 		items := []map[string]any{}
-		for i, e := range entries {
-			if i >= 200 {
+		next := in.Offset
+		used := 0
+		for _, e := range entries[in.Offset:] {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			cost := len(e.Name()) + 80
+			if len(items) > 0 && (len(items) >= limit || used+cost > h.Config.OutputBytes) {
 				break
 			}
+			used += cost
 			items = append(items, map[string]any{"name": e.Name(), "directory": e.IsDir(), "symlink": e.Type()&os.ModeSymlink != 0})
+			next++
 		}
-		return map[string]any{"items": items, "truncated": len(entries) > 200}, nil
+		return map[string]any{"items": items, "truncated": next < len(entries), "complete": next == len(entries), "next_offset": next, "total": len(entries)}, nil
 	case "server_read":
 		f, err := root.Open(rel)
 		if err != nil {
@@ -142,22 +159,12 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		if err != nil || !stat.Mode().IsRegular() {
 			return nil, errors.New("仅能读取普通文件")
 		}
-		data, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-		if err != nil || len(data) > 1<<20 {
-			return nil, errors.New("文件超过1MiB，请使用程序工具按需检查")
-		}
-		if in.Offset < 0 || in.Offset > len(data) {
-			return nil, errors.New("读取偏移超出文件范围")
-		}
-		sum := sha256.Sum256(data)
-		end := min(len(data), in.Offset+h.Config.OutputBytes)
-		resolved, _ := filepath.EvalSymlinks(in.Path)
-		return map[string]any{"path": in.Path, "resolved_path": resolved, "content": strings.ToValidUTF8(string(data[in.Offset:end]), "�"), "truncated": end < len(data), "next_offset": end, "sha256": hex.EncodeToString(sum[:]), "bytes": len(data)}, nil
+		return h.readTextPage(ctx, f, stat, in)
 
 	case "server_edit":
 		return h.edit(root, rel, in)
 	case "server_search":
-		return h.search(root, rel, in.Content)
+		return h.searchPage(ctx, root, rel, in)
 	case "server_write":
 		if h.Config.Mode != "files" && h.Config.Mode != "full" {
 			return nil, errors.New("没有文件写入权限")

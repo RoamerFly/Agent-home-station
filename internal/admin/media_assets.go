@@ -67,7 +67,7 @@ func (m *Manager) loadAssets() ([]mediaAsset, error) {
 		return []mediaAsset{}, nil
 	}
 	var items []mediaAsset
-	if err != nil || len(b) > 16<<20 || json.Unmarshal(b, &items) != nil || len(items) > 1000 {
+	if err != nil || len(b) > 16<<20 || json.Unmarshal(b, &items) != nil {
 		return nil, errors.New("媒体素材索引无法读取")
 	}
 	return items, nil
@@ -171,7 +171,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 			index = i
 		}
 	}
-	if index < 0 && (len(items) >= 1000 || total+int64(len(original.Data)) > 512<<20) {
+	if index < 0 && total+int64(len(original.Data)) > 512<<20 {
 		return zero, errors.New("本地素材缓存已满，请清理不再使用的素材")
 	}
 	dir := filepath.Join(m.dir, "media-assets")
@@ -258,16 +258,20 @@ func (m *Manager) recentAssets(in companion.Input) ([]map[string]any, error) {
 	return m.findAssets(in, "", "", "")
 }
 func (m *Manager) findAssets(in companion.Input, assetID, requester, query string) ([]map[string]any, error) {
+	rows, _, err := m.findAssetPage(in, assetID, requester, query, 0, 12)
+	return rows, err
+}
+func (m *Manager) findAssetPage(in companion.Input, assetID, requester, query string, offset, limit int) ([]map[string]any, int, error) {
 	m.assetMu.Lock()
 	defer m.assetMu.Unlock()
 	items, e := m.loadAssets()
 	if e != nil {
-		return nil, e
+		return nil, 0, e
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Updated.Before(items[j].Updated) })
 	out := []map[string]any{}
 	cutoff := time.Now().Add(-time.Duration(m.Config().Companion.MemoryDays) * 24 * time.Hour)
-	for i := len(items) - 1; i >= 0 && len(out) < 12; i-- {
+	for i := len(items) - 1; i >= 0; i-- {
 		a := items[i]
 		if a.Account != in.Account || a.Scope != assetScope(in) || a.Updated.Before(cutoff) {
 			continue
@@ -296,7 +300,7 @@ func (m *Manager) findAssets(in companion.Input, assetID, requester, query strin
 		if a.Hash != "" && companion.MediaPermitted(m.Config().Companion.Permissions, "file") && a.Sources["file"] == "" {
 			formats = append(formats, "file")
 		}
-		if len(formats) > 0 {
+		if len(formats) > 0 || a.Hash != "" && strings.HasPrefix(a.MIME, "video/") && m.Config().Behavior.ReadVideos {
 			requests := []map[string]string{}
 			for _, r := range a.Requests[max(0, len(a.Requests)-2):] {
 				requests = append(requests, assetRequestSummary(r))
@@ -309,19 +313,13 @@ func (m *Manager) findAssets(in companion.Input, assetID, requester, query strin
 			if a.Music != nil {
 				row["generation_mode"], row["reference_asset_id"], row["seed"] = a.Music.Mode, a.Music.Reference, a.Music.Seed
 			}
-			candidate := append(out, row)
-			b, _ := json.Marshal(candidate)
-			if len(b) > 5400 {
-				if len(out) > 0 {
-					break
-				}
-				delete(row, "requests") // Keep the exact source/ID when metadata is large.
-				delete(row, "first_request")
-			}
 			out = append(out, row)
 		}
 	}
-	return out, nil
+	if offset < 0 || offset > len(out) || limit < 1 {
+		return nil, 0, errors.New("素材分页参数无效")
+	}
+	return out[offset : offset+min(limit, len(out)-offset)], len(out), nil
 }
 func assetRequestSummary(r assetRequest) map[string]string {
 	return map[string]string{"trace_id": r.TraceID, "requester_id": r.RequesterID, "requester_name": r.RequesterName, "task_id": r.TaskID}

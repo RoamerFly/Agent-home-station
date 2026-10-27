@@ -28,8 +28,6 @@ import (
 
 const (
 	protocolVersion = "2025-06-18"
-	maxServers      = 8
-	maxTools        = 40
 	maxFrame        = 1 << 20
 	maxBody         = 2 << 20
 	requestTimeout  = 20 * time.Second
@@ -76,9 +74,6 @@ type Hub struct {
 }
 
 func New(config []ServerConfig) (*Hub, error) {
-	if len(config) > maxServers {
-		return nil, fmt.Errorf("at most %d MCP servers are allowed", maxServers)
-	}
 	seen := map[string]bool{}
 	out := make([]ServerConfig, 0, len(config))
 	for _, c := range config {
@@ -154,9 +149,6 @@ func (h *Hub) List(ctx context.Context) ([]Tool, error) {
 			}
 			t.Name = c.ID + "__" + t.Name
 			all = append(all, t)
-			if len(all) >= maxTools {
-				return all, first
-			}
 		}
 	}
 	return all, first
@@ -215,28 +207,49 @@ func allowed(c ServerConfig, name string) bool {
 }
 
 func (h *Hub) serverList(ctx context.Context, c ServerConfig) ([]Tool, error) {
-	var raw json.RawMessage
-	err := h.request(ctx, c, "tools/list", map[string]any{}, &raw)
-	if err != nil {
-		return nil, err
+	out := []Tool{}
+	cursor := ""
+	seen := map[string]bool{}
+	bytes := 0
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		var raw json.RawMessage
+		if err := h.request(ctx, c, "tools/list", params, &raw); err != nil {
+			return nil, err
+		}
+		bytes += len(raw)
+		if bytes > 32<<20 {
+			return nil, errors.New("MCP tool catalogue exceeds32MiB transport budget")
+		}
+		var r struct {
+			Tools []struct {
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				InputSchema json.RawMessage `json:"inputSchema"`
+			} `json:"tools"`
+			Next string `json:"nextCursor"`
+		}
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		for _, t := range r.Tools {
+			out = append(out, Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+		}
+		if r.Next == "" {
+			return out, nil
+		}
+		if seen[r.Next] {
+			return nil, errors.New("MCP tools/list repeated a pagination cursor")
+		}
+		seen[r.Next] = true
+		cursor = r.Next
 	}
-	// MCP calls this member inputSchema, while our public Tool deliberately
-	// marshals it as input_schema for the application-facing tool protocol.
-	var r struct {
-		Tools []struct {
-			Name        string          `json:"name"`
-			Description string          `json:"description"`
-			InputSchema json.RawMessage `json:"inputSchema"`
-		} `json:"tools"`
-	}
-	if err = json.Unmarshal(raw, &r); err != nil {
-		return nil, err
-	}
-	out := make([]Tool, 0, len(r.Tools))
-	for _, t := range r.Tools {
-		out = append(out, Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
-	}
-	return out, nil
 }
 func (h *Hub) serverCall(ctx context.Context, c ServerConfig, n string, args json.RawMessage) (string, error) {
 	var raw json.RawMessage

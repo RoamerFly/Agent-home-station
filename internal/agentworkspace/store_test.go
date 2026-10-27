@@ -2,11 +2,33 @@ package agentworkspace
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestWorkspaceHasNo256DocumentQuota(t *testing.T) {
+	base := t.TempDir()
+	s, e := Open(base)
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.Read("shared", "init.md")
+	for i := 0; i < 256; i++ {
+		if e := os.WriteFile(filepath.Join(base, "shared", fmt.Sprintf("note-%03d.md", i)), []byte("synthetic"), 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e = s.Write("shared", "note-256.md", "new note", ""); e != nil {
+		t.Fatal("old quota retained", e)
+	}
+	docs, e := s.List("shared", "")
+	if e != nil || len(docs) != 257 {
+		t.Fatal("list truncated", len(docs), e)
+	}
+}
 
 func TestNotesPersistAndConflictWithoutCrossScopeAccess(t *testing.T) {
 	root := t.TempDir()
