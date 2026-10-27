@@ -1,8 +1,8 @@
 # 闭源微信协议镜像审计交付
 
-网页版交付已增加：`Dockerfile.web`、`compose.web.yaml`、`cmd/wechat-admin` 和内嵌管理界面。见 [网页部署](../DEPLOY-WEB.md)、[Ubuntu 容器检查](evidence/web-container-validation.json)；导出包位于根目录 `dist/releases/`，镜像不携带运行卷或本机账号凭据。
+网页版交付已增加：`Dockerfile.web`、`compose.web.yaml`、`cmd/wechat-admin` 和内嵌管理界面。见 [网页部署](../deploy/README.md)、[Ubuntu 容器检查](evidence/web-container-validation.json)；导出包位于根目录 `dist/releases/`，镜像不携带运行卷或本机账号凭据。
 
-后续机器人阶段：已经通过真实 DeepSeek 自动回复、文件传输助手触发、白名单测试群只对真实 @ 回复，并由用户确认。见 [机器人说明](../BOT.md)、[脱敏验收](evidence/bot-deepseek-acceptance.json) 和 [Docker 启动检查](evidence/bot-docker-smoke.json)。
+后续机器人阶段：已经通过真实 DeepSeek 自动回复、文件传输助手触发、白名单测试群只对真实 @ 回复，并由用户确认。见 [机器人说明](../docs/guide/USER-GUIDE.md)、[脱敏验收](evidence/bot-deepseek-acceptance.json) 和 [Docker 启动检查](evidence/bot-docker-smoke.json)。
 
 **2026-10-24 后续进展：第一阶段后台文字发送已真实通过。** 当前使用固定公开源码构建的 Linux 原生客户端，不运行原闭源主程序或官方桌面程序；测试小号的文件传输助手已收到“后台发送测试”，用户已确认。入口见 [运行说明](../README.md)、[验收核对](acceptance-status.md)、[脱敏真实回执](evidence/linux-native-acceptance.json)、[构建哈希](evidence/linux-native-build.json) 和 [Docker 本地检查](evidence/linux-stack-smoke.json)。下文关于 iPad 尚未完成发送的描述保留为该路线的历史状态。
 

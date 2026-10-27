@@ -42,6 +42,8 @@ jobs:
           fi
       - name: Check tracked files and credentials
         run: python scripts/check_repository.py
+      - name: Check project structure and documentation links
+        run: python scripts/test_project_structure.py
       - name: Check Go formatting
         shell: bash
         run: |

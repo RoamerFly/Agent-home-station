@@ -13,4 +13,4 @@ services:
 
 secrets:
   deepseek-api-key:
-    file: ./secrets/deepseek-api-key.txt
+    file: ../../secrets/deepseek-api-key.txt
