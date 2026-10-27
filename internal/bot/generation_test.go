@@ -66,7 +66,7 @@ func pumpGeneration(t *testing.T, w *Worker, done func() bool) {
 func TestDurableInboxContinuesWhileAnotherConversationModelWaits(t *testing.T) {
 	started, exited := make(chan struct{}), make(chan struct{})
 	model := generationModelFunc(func(ctx context.Context, _ string, m []map[string]string) (string, error) {
-		if strings.Contains(m[len(m)-1]["content"], "review_unsent_message_plan") {
+		if strings.Contains(m[len(m)-1]["content"], "review_unsent_message_plan") || strings.Contains(m[len(m)-1]["content"], "review_running_task") {
 			return `{"action":"continue"}`, nil
 		}
 		if strings.Contains(m[len(m)-1]["content"], "slow-request") {
@@ -242,7 +242,7 @@ func TestSlowPlanReviewAllowsAnotherThreadAndDiscardsObsoleteReview(t *testing.T
 func TestModelCanCancelAnInFlightTaskFromNewContextWithoutStopKeywords(t *testing.T) {
 	started := make(chan struct{})
 	model := generationModelFunc(func(ctx context.Context, _ string, m []map[string]string) (string, error) {
-		if strings.Contains(m[len(m)-1]["content"], "review_unsent_message_plan") {
+		if strings.Contains(m[len(m)-1]["content"], "review_unsent_message_plan") || strings.Contains(m[len(m)-1]["content"], "review_running_task") {
 			return `{"action":"cancel","evidence_message_id":"changed","reason":"requester changed their request"}`, nil
 		}
 		close(started)
@@ -269,7 +269,7 @@ func TestModelCanCancelAnInFlightTaskFromNewContextWithoutStopKeywords(t *testin
 
 func TestCompletedGenerationIsHeldUntilFreshInboxAndInterruptionReview(t *testing.T) {
 	model := generationModelFunc(func(_ context.Context, _ string, m []map[string]string) (string, error) {
-		if strings.Contains(m[len(m)-1]["content"], "review_unsent_message_plan") {
+		if strings.Contains(m[len(m)-1]["content"], "review_unsent_message_plan") || strings.Contains(m[len(m)-1]["content"], "review_running_task") {
 			return `{"action":"cancel","evidence_message_id":"updated","reason":"request already solved"}`, nil
 		}
 		return `{"action":"reply","messages":["old result"]}`, nil
@@ -400,6 +400,76 @@ func TestAsyncSurfKeepsExplicitQuietDeadlineWithoutImmediateCancellation(t *test
 }
 
 type backgroundAnalyzer struct{ started, release chan struct{} }
+
+func TestMediaCaptionCannotCancelUnreadObservation(t *testing.T) {
+	var reviews atomic.Int32
+	model := generationModelFunc(func(_ context.Context, _ string, messages []map[string]string) (string, error) {
+		data := messages[len(messages)-1]["content"]
+		if strings.Contains(data, "review_unsent_message_plan") || strings.Contains(data, "review_running_task") {
+			reviews.Add(1)
+			if !strings.Contains(data, "a visible cat") || !strings.Contains(data, "早餐") {
+				return `{"action":"cancel","reason":"new topic","evidence_message_id":"caption"}`, nil
+			}
+			return `{"action":"continue"}`, nil
+		}
+		if !strings.Contains(data, "a visible cat") || !strings.Contains(data, "早餐") {
+			t.Error("main decision did not receive observation and subsequent caption")
+		}
+		return `{"action":"reply","messages":["图里的猫也想吃早餐吗"]}`, nil
+	})
+	w, c, _ := backgroundWorker(t, model)
+	a := &backgroundAnalyzer{make(chan struct{}), make(chan struct{})}
+	w.config.Analyzer = a
+	w.enableGenerations()
+	defer w.closeGenerations()
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "image", Mode: "direct", Text: "收到了一张图片"}
+	w.startGeneration(context.Background(), c, in, &linuxnative.Message{ID: "image", Type: 3})
+	<-a.started
+	caption := fixtureMessage("caption", "filehelper", "早餐", "incoming")
+	caption.SenderID = "person"
+	w.noticeGenerationMessage(caption, true)
+	w.reviewActiveGenerations(context.Background())
+	if len(w.generation.reviews) != 0 || reviews.Load() != 0 {
+		t.Fatal("review attempted to replace unread media")
+	}
+	close(a.release)
+	pumpGeneration(t, w, func() bool { return !w.generation.jobs[in.Thread].observationPending })
+	j := w.generation.jobs[in.Thread]
+	if !strings.Contains(j.input.Text, "a visible cat") || !strings.Contains(j.input.Text, "早餐") {
+		t.Fatal("review still sees placeholder")
+	}
+	w.reviewActiveGenerations(context.Background())
+	pumpGeneration(t, w, func() bool { return len(w.generation.jobs) == 0 })
+	if j.cancelled || reviews.Load() != 1 || len(w.runtime.Plans) != 1 {
+		t.Fatal("caption discarded understood media", j.cancelled, reviews.Load(), len(w.runtime.Plans))
+	}
+}
+
+func TestMediaReadFailureWithQueuedCaptionDoesNotWaitForImpossibleReview(t *testing.T) {
+	w, c, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) { return `{"action":"silent"}`, nil }))
+	w.enableGenerations()
+	defer w.closeGenerations()
+	in := companion.Input{Thread: "filehelper", TraceID: "failed-image", Text: "image", Mode: "direct"}
+	j := &generationJob{input: in, engine: c, observationPending: true, cancel: func() {}, updates: []companion.ConversationEvent{{MessageID: "caption", Text: "早餐"}}}
+	w.generation.jobs[in.Thread] = j
+	w.finishGeneration(context.Background(), generationResult{job: j, engine: c, input: in, err: context.DeadlineExceeded})
+	if len(w.generation.jobs) != 0 || len(w.generation.ready) != 0 {
+		t.Fatal("failed observation stuck behind review barrier")
+	}
+}
+
+func TestAnotherGroupMemberCannotCancelOriginalRequest(t *testing.T) {
+	w, c, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) { return `{"action":"silent"}`, nil }))
+	w.enableGenerations()
+	defer w.closeGenerations()
+	cancelled := false
+	j := &generationJob{input: companion.Input{Thread: "filehelper", TraceID: "image", Sender: "person"}, engine: c, cancel: func() { cancelled = true }, updates: []companion.ConversationEvent{{MessageID: "other", Sender: "someone-else", Text: "聊点别的"}}}
+	w.generation.jobs[j.input.Thread] = j
+	w.finishGenerationReview(planReviewResult{generation: j, fingerprint: generationFingerprint(j), decision: companion.PendingReview{Action: "cancel", EvidenceMessageID: "other", Reason: "changed topic"}})
+	if cancelled || j.cancelled {
+		t.Fatal("another person's topic cancelled media")
+	}
+}
 
 func (a *backgroundAnalyzer) Analyze(ctx context.Context, _ linuxnative.Message) (string, error) {
 	close(a.started)
@@ -548,7 +618,7 @@ func (s *pagedGenerationSource) Events(ctx context.Context, cursor string) (linu
 }
 func TestOldResultWaitsForStopRequestOnNextInboxPage(t *testing.T) {
 	w, c, n := backgroundWorker(t, generationModelFunc(func(_ context.Context, _ string, m []map[string]string) (string, error) {
-		if strings.Contains(m[len(m)-1]["content"], "review_unsent_message_plan") {
+		if strings.Contains(m[len(m)-1]["content"], "review_unsent_message_plan") || strings.Contains(m[len(m)-1]["content"], "review_running_task") {
 			return `{"action":"cancel"}`, nil
 		}
 		return `{"action":"silent"}`, nil
