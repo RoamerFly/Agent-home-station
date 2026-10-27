@@ -69,7 +69,30 @@ def generation_style(body):
     if gender not in ('female','male'):raise ValueError('invalid_vocal_gender')
     style=re.sub(r'\b(?:fe)?male\s+(?:vocals?|singer|voice)\b|男声|女声','',body['style'],flags=re.I).strip(' ,;，；\n\r\t')
     if mode=='cover' and FAITHFUL_COVER_STYLE not in style:style+=', '+FAITHFUL_COVER_STYLE
-    return style+', '+gender+' vocal'
+    # Put the requested singer first as well as last. A source artist's vocal
+    # register is not a request to imitate that artist's sex or timbre.
+    lead='solo female lead singer, clear expressive female singing voice' if gender=='female' else 'solo male lead singer, expressive male singing voice'
+    return lead+', '+style+', '+gender+' vocal'
+
+
+def generation_controls(body):
+    """Native guidance and an acceptance range, not a promise about output."""
+    mode,_,_=song_options(body)
+    guidance=body.get('text_guidance_scale',2.0 if mode=='cover' else 1.0)
+    minimum=body.get('min_duration_seconds',body.get('duration_seconds',60)*.9)
+    for value in (guidance,minimum):
+        if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):raise ValueError('invalid_generation_controls')
+    if not 0<=guidance<=100 or not 0<=minimum<=body.get('duration_seconds',60):raise ValueError('invalid_generation_controls')
+    return guidance,minimum
+
+
+def duration_quality(actual,body):
+    _,minimum=generation_controls(body)
+    target=body.get('duration_seconds',60)
+    return {'requested_seconds':target,'actual_seconds':actual,'minimum_seconds':minimum,
+            'duration_passed':math.isfinite(actual) and actual>0 and minimum<=actual<=target+.5,
+            'vocal_gender_requested':body.get('vocal_gender') or 'female',
+            'vocal_gender_verified':False}
 
 def song_recipe(body):
     """Persist the submitted recipe privately, never infer it from filenames."""
@@ -77,6 +100,8 @@ def song_recipe(body):
     result={k:body.get(k) for k in ('title','style','lyrics','duration_seconds','singing_voice','vocal_gender')}
     result.update(style=generation_style(body),vocal_gender=body.get('vocal_gender') or 'female',singing_voice=body.get('singing_voice') or 'native')
     result.update(mode=mode,reference_mode=reference_mode,seed=seed)
+    guidance,minimum=generation_controls(body)
+    result.update(text_guidance_scale=guidance,min_duration_seconds=minimum)
     if mode=='cover':
         try:data=base64.b64decode(body['reference_base64'],validate=True)
         except Exception:raise ValueError('invalid_reference_encoding') from None
@@ -93,6 +118,7 @@ def prepare_song_graph(workflow_dir,body,jid,input_dir):
     if seed is None:raise ValueError('seed_not_persisted')
     graph=json.loads((workflow_dir/('audio_yue2_music_cover.json' if mode=='cover' else 'audio_yue2_text_to_music.json')).read_text(encoding='utf-8'))
     target=body.get('duration_seconds',60);apply_song_duration(graph,target)
+    graph['33:25']['inputs']['cfg_scale']=generation_controls(body)[0]
     style=generation_style(body)
     # Preserve the user's supplied style/lyrics. Duration is controlled by the
     # real generation node, not by silently injecting a new short-song style.
@@ -162,6 +188,10 @@ def main():
                     if not 0<len(data)<=64*1024*1024:raise ValueError('output_size_limit')
                     output=state/(jid+Path(audio['filename']).suffix);output.write_bytes(data)
                     duration=float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(output)],timeout=30))
+                    if not math.isfinite(duration) or duration<=0:raise ValueError('generation_audio_invalid')
+                    quality=duration_quality(duration,body)
+                    with lock:jobs[jid].update(duration_seconds=duration,requested_seconds=target,quality=quality,file=output.name,bytes=output.stat().st_size);save()
+                    if duration<quality['minimum_seconds']:raise ValueError('generation_duration_shortfall')
                     if duration>target+0.5:raise ValueError('generation_duration_exceeded')
                     # Remove only codec padding, never shorten a multi-minute result
                     # and pretend the generator followed the requested duration.
@@ -197,7 +227,7 @@ def main():
                     api('/system_stats')
                     try:voice=singing_profile(args.singing_voice_config)
                     except Exception:voice=None
-                    return self.reply(200,{'ready':True,'bridge_version':6,'generation_policy':'female-faithful-cover-v3-reference-window','capabilities':['original','reference_cover','reference_window','seed','reference_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; no guarantee of exact source accompaniment or reference timbre'})
+                    return self.reply(200,{'ready':True,'bridge_version':7,'generation_policy':'female-faithful-cover-v4-verified-duration','capabilities':['original','reference_cover','reference_window','text_guidance_scale','duration_quality','seed','reference_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; requested gender is not listening verification; max duration is a ceiling'})
                 except Exception:return self.reply(200,{'ready':False})
             parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
             with lock:job=dict(jobs.get(jid,{}))

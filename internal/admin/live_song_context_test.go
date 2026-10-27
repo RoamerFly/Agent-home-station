@@ -41,7 +41,7 @@ func TestLiveNamedSongContextChoosesFemaleCoverDespiteOldMaleHistory(t *testing.
 	starts := 0
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
-			w.Write([]byte(`{"ready":true,"bridge_version":6}`))
+			w.Write([]byte(`{"ready":true,"bridge_version":7}`))
 			return
 		}
 		starts++

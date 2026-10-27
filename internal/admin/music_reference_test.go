@@ -31,7 +31,7 @@ func TestYuECoverPassesExactReferenceLyricsAndZeroSeedAndRetainsRecipe(t *testin
 	var posts atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
-			w.Write([]byte(`{"ready":true,"bridge_version":6}`))
+			w.Write([]byte(`{"ready":true,"bridge_version":7}`))
 			return
 		}
 		posts.Add(1)
@@ -40,12 +40,15 @@ func TestYuECoverPassesExactReferenceLyricsAndZeroSeedAndRetainsRecipe(t *testin
 	}))
 	defer upstream.Close()
 	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
-	raw, _ := json.Marshal(map[string]any{"title": "原曲女声版", "mode": "cover", "style": "female folk", "lyrics": lyrics, "lyrics_evidence_ids": []string{evidence.ID}, "seed": 0, "reference_mode": "full", "duration_seconds": 60, "reference_asset_id": ref.ID})
+	raw, _ := json.Marshal(map[string]any{"title": "原曲女声版", "mode": "cover", "style": "female folk", "lyrics": lyrics, "lyrics_evidence_ids": []string{evidence.ID}, "seed": 0, "reference_mode": "full", "duration_seconds": 60, "reference_asset_id": ref.ID, "text_guidance_scale": 2.7, "min_duration_seconds": 55})
 	if _, err = p.callYuE(context.Background(), "music_local_start", raw); err != nil {
 		t.Fatal(err)
 	}
 	if submitted["seed"] != float64(0) || submitted["mode"] != "cover" || submitted["reference_mode"] != "full" || !strings.Contains(submitted["lyrics"].(string), "用户提供的原词") {
 		t.Fatal("parameters lost", submitted)
+	}
+	if submitted["text_guidance_scale"] != 2.7 || submitted["min_duration_seconds"] != float64(55) {
+		t.Fatal("native controls were lost", submitted)
 	}
 	decoded, err := base64.StdEncoding.DecodeString(submitted["reference_base64"].(string))
 	if err != nil || len(decoded) < 8 || string(decoded[4:8]) != "ftyp" || submitted["reference_pretrimmed"] != true || submitted["reference_source_sha256"] != ref.Hash {
@@ -61,6 +64,9 @@ func TestYuECoverPassesExactReferenceLyricsAndZeroSeedAndRetainsRecipe(t *testin
 	tasks := recovered.list("test", "filehelper")
 	if len(tasks) != 1 || tasks[0].MusicSpec == nil || tasks[0].MusicSpec.Reference != ref.ID || tasks[0].MusicSpec.Seed != 0 {
 		t.Fatal("recipe did not survive restart", tasks)
+	}
+	if tasks[0].MusicSpec.TextGuidance != 2.7 || tasks[0].MusicSpec.MinimumDuration != 55 {
+		t.Fatal("quality controls did not survive restart")
 	}
 }
 func TestYuECoverMissingReferenceAndCrossScopeFailBeforeSubmission(t *testing.T) {
@@ -84,7 +90,7 @@ func TestYuEStableUnspecifiedSeedSurvivesFormattingAndNewRequestRerolls(t *testi
 	seeds := []float64{}
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
-			w.Write([]byte(`{"ready":true,"bridge_version":6}`))
+			w.Write([]byte(`{"ready":true,"bridge_version":7}`))
 			return
 		}
 		var body map[string]any

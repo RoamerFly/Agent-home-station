@@ -36,7 +36,7 @@ func TestSongDefaultsNativeFemaleEvenWithCharacterVoiceConfigured(t *testing.T) 
 	starts := 0
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
-			w.Write([]byte(`{"ready":true,"bridge_version":6,"singing_voice_profile":"configured-C"}`))
+			w.Write([]byte(`{"ready":true,"bridge_version":7,"singing_voice_profile":"configured-C"}`))
 			return
 		}
 		var body map[string]any

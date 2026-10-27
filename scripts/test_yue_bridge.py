@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe, requested_singing_profile, generation_style, reference_window
+from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe, requested_singing_profile, generation_style, reference_window, generation_controls, duration_quality
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
@@ -92,6 +92,24 @@ class SongWorkflowTests(unittest.TestCase):
         self.assertEqual(reference_window({'reference_start_seconds':0,'reference_seconds':125}),(0,125))
         for values in ({'reference_start_seconds':-1},{'reference_seconds':0},{'reference_seconds':True},{'reference_start_seconds':float('nan')}):
             with self.assertRaises(ValueError):reference_window(values)
+
+    def test_short_output_is_not_a_completed_three_minute_song(self):
+        body=self.body();body['duration_seconds']=180
+        self.assertFalse(duration_quality(92.76,body)['duration_passed'])
+        self.assertTrue(duration_quality(179.96,body)['duration_passed'])
+        self.assertFalse(duration_quality(179.96,body)['vocal_gender_verified'])
+        body['min_duration_seconds']=0
+        self.assertTrue(duration_quality(92.76,body)['duration_passed'])
+
+    def test_native_text_guidance_is_effective_and_explicit_values_survive(self):
+        body=self.body();body.update(mode='cover',reference_base64=base64.b64encode(b'synthetic').decode(),text_guidance_scale=2.7,min_duration_seconds=8)
+        with tempfile.TemporaryDirectory() as tmp,patch('yue_bridge.subprocess.run'):
+            graph=prepare_song_graph(WORKFLOWS,body,'guidance',Path(tmp))
+        self.assertEqual(graph['33:25']['inputs']['cfg_scale'],2.7)
+        self.assertEqual(song_recipe(body)['min_duration_seconds'],8)
+        self.assertTrue(graph['33:25']['inputs']['style'].startswith('solo female lead singer'))
+        for patch_values in ({'text_guidance_scale':float('nan')},{'text_guidance_scale':True},{'min_duration_seconds':11}):
+            with self.assertRaises(ValueError):generation_controls(dict(body,**patch_values))
 
     def test_invalid_modes_reference_and_seed_are_not_silently_original(self):
         for patch_values in ({'mode':'cover'},{'seed':True},{'seed':-1},{'seed':2147483648},{'reference_mode':'guess'},{'reference_base64':'x'},{'mode':'unknown'}):

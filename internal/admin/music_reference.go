@@ -29,6 +29,8 @@ type songSpec struct {
 	ReferenceHash    string   `json:"reference_sha256,omitempty"`
 	ReferenceStart   float64  `json:"reference_start_seconds,omitempty"`
 	ReferenceSeconds float64  `json:"reference_seconds,omitempty"`
+	TextGuidance     float64  `json:"text_guidance_scale,omitempty"`
+	MinimumDuration  float64  `json:"min_duration_seconds,omitempty"`
 }
 
 func (p *permittedTools) referenceAsset(id string) (mediaAsset, []byte, error) {

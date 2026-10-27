@@ -19,7 +19,7 @@ func TestMusicFollowupPersistsPollsAndDeliversWithoutProactivePermission(t *test
 			t.Error("missing token")
 		}
 		if r.URL.Path == "/health" {
-			w.Write([]byte(`{"ready":true,"bridge_version":2}`))
+			w.Write([]byte(`{"ready":true,"bridge_version":7}`))
 			return
 		}
 		if r.Method == "POST" {
