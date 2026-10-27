@@ -42,7 +42,7 @@ func resourceNeed(turns []map[string]string) ResourceNeed {
 	// The analyzer appends untrusted card/video observations to the user's
 	// message. Titles and counters such as "视频 / 播放：20万" are data, not
 	// a request to download and send another attachment.
-	text := UserRequestText(current.Text)
+	text := UserRequestText(currentMessage(turns))
 	t := strings.ToLower(text)
 	if current.Surf {
 		return ResourceNeed{Kind: "surf", Required: true, ForceShare: current.ForceShare}

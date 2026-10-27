@@ -109,10 +109,10 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 	if !eligible && strings.HasSuffix(m.ThreadID, "@chatroom") && !c.Config.Permissions.ObserveGroups {
 		return
 	}
+	w.noticeGenerationMessage(m, eligible)
 	if m.Type != 1 && !m.IsQuotedText() {
 		return
 	}
-	w.noticeGenerationMessage(m, eligible)
 	if c.Config.ConversationConfig().RecheckOnMessage {
 		for _, r := range w.runtime.MediaReplies {
 			if r.terminal() || r.Input.Thread != m.ThreadID || r.Trace == m.ID {

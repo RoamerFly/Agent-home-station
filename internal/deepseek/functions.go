@@ -28,9 +28,15 @@ func (c *Client) ChatFunctions(ctx context.Context, system string, turns []map[s
 				Action, Tool string
 				Arguments    json.RawMessage
 			}
-			var result struct{ Tool, Result, Source string }
+			var result struct {
+				Tool, Result, Source string
+				Execution            json.RawMessage `json:"execution"`
+			}
 			if json.Unmarshal([]byte(text), &call) == nil && call.Action == "tool" && json.Unmarshal([]byte(turns[i+1]["content"]), &result) == nil && result.Source == "untrusted_tool_result" && result.Tool == call.Tool {
 				id := fmt.Sprintf("call_%d", i)
+				if len(result.Execution) > 0 {
+					result.Result = turns[i+1]["content"]
+				}
 				messages = append(messages, map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": id, "type": "function", "function": map[string]string{"name": call.Tool, "arguments": string(call.Arguments)}}}}, map[string]any{"role": "tool", "tool_call_id": id, "content": result.Result})
 				total += len(result.Result)
 				i++

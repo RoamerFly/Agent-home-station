@@ -12,6 +12,8 @@ import (
 )
 
 type inboxItem struct {
+	FollowupParent   string            `json:"followup_parent,omitempty"`
+	FollowupConsumed bool              `json:"followup_consumed,omitempty"`
 	OwnerModelReview bool              `json:"owner_model_review,omitempty"`
 	ReceivedRecorded bool              `json:"received_recorded,omitempty"`
 	AggregateUntil   time.Time         `json:"aggregate_until,omitempty"`
@@ -215,6 +217,7 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 	w.enableGenerations()
 	defer w.closeGenerations()
 	defer w.suspendMedia()
+	w.recoverFollowups()
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
 		if item.ToolStarted && (item.Phase == "tool_running" || item.Phase == "processing" || item.Phase == "model_running") {
@@ -445,7 +448,7 @@ func (w *Worker) pruneRuntime() {
 
 func inboxActivePhase(phase string) bool {
 	switch phase {
-	case "received", "processing", "read_pending", "sending", "model_running", "tool_running":
+	case "received", "processing", "read_pending", "sending", "model_running", "tool_running", "following":
 		return true
 	}
 	return false
