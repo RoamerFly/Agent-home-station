@@ -15,7 +15,8 @@ $all=Get-CimInstance Win32_Process
 $owned=@($all | Where-Object {
  $_.ProcessId -ne $PID -and $_.CommandLine -and (
   ($_.Name -eq 'python.exe' -and ($_.CommandLine.Contains($main) -or $_.CommandLine.Contains($bridge))) -or
-  ($_.Name -match '^(pwsh|powershell)\.exe$' -and $_.CommandLine.Contains($watch) -and $_.CommandLine -notmatch '(?i)-Command')
+  ($_.Name -match '^(pwsh|powershell)\.exe$' -and $_.CommandLine.Contains($watch) -and $_.CommandLine -notmatch '(?i)-Command') -or
+  ($_.Name -eq 'pythonw.exe' -and $_.CommandLine.Contains((Join-Path $PSScriptRoot 'hidden_process.pyw')) -and $_.CommandLine.Contains('--watch-yue'))
  )
 })
 foreach($port in 6188,8188){
@@ -25,7 +26,7 @@ foreach($port in 6188,8188){
 }
 $stopFile=Join-Path $workspace 'secrets\yue-watchdog.stop'
 [IO.File]::WriteAllText($stopFile,(Get-Date).ToUniversalTime().ToString('o'),[Text.UTF8Encoding]::new($false))
-$scheduled=@(Get-ScheduledTask -TaskName 'WechatAgent-YuE-*' -ErrorAction SilentlyContinue | Where-Object { $_.Actions.Arguments -like ('*'+$watch+'*') })
+$scheduled=@(Get-ScheduledTask -TaskName 'WechatAgent-YuE-*' -ErrorAction SilentlyContinue | Where-Object { $_.Actions.Arguments -like ('*'+$watch+'*') -or ($_.Actions.Arguments -like ('*'+(Join-Path $PSScriptRoot 'hidden_process.pyw')+'*') -and $_.Actions.Arguments -like '*--watch-yue*') })
 foreach($task in $scheduled){$task | Stop-ScheduledTask}
 foreach($process in $owned){
  $current=Get-CimInstance Win32_Process -Filter ('ProcessId='+$process.ProcessId)

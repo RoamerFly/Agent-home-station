@@ -16,21 +16,23 @@ import (
 // Parameters are attached to the generated asset, not a global most-recent song.
 // They describe what was submitted, not a guarantee that the singer followed it.
 type songSpec struct {
-	SingingVoice     string   `json:"singing_voice,omitempty"`
-	VocalGender      string   `json:"vocal_gender,omitempty"`
-	Mode             string   `json:"mode"`
-	Style            string   `json:"style"`
-	Lyrics           string   `json:"lyrics"`
-	Seed             int64    `json:"seed"`
-	Duration         int      `json:"duration_seconds"`
-	Reference        string   `json:"reference_asset_id,omitempty"`
-	ReferenceMode    string   `json:"reference_mode,omitempty"`
-	LyricEvidence    []string `json:"lyrics_evidence_ids,omitempty"`
-	ReferenceHash    string   `json:"reference_sha256,omitempty"`
-	ReferenceStart   float64  `json:"reference_start_seconds,omitempty"`
-	ReferenceSeconds float64  `json:"reference_seconds,omitempty"`
-	TextGuidance     float64  `json:"text_guidance_scale,omitempty"`
-	MinimumDuration  float64  `json:"min_duration_seconds,omitempty"`
+	Sampling         musicSampling `json:"sampling,omitempty"`
+	PlanningMode     string        `json:"planning_mode,omitempty"`
+	SingingVoice     string        `json:"singing_voice,omitempty"`
+	VocalGender      string        `json:"vocal_gender,omitempty"`
+	Mode             string        `json:"mode"`
+	Style            string        `json:"style"`
+	Lyrics           string        `json:"lyrics"`
+	Seed             int64         `json:"seed"`
+	Duration         int           `json:"duration_seconds"`
+	Reference        string        `json:"reference_asset_id,omitempty"`
+	ReferenceMode    string        `json:"reference_mode,omitempty"`
+	LyricEvidence    []string      `json:"lyrics_evidence_ids,omitempty"`
+	ReferenceHash    string        `json:"reference_sha256,omitempty"`
+	ReferenceStart   float64       `json:"reference_start_seconds,omitempty"`
+	ReferenceSeconds float64       `json:"reference_seconds,omitempty"`
+	TextGuidance     float64       `json:"text_guidance_scale,omitempty"`
+	MinimumDuration  float64       `json:"min_duration_seconds,omitempty"`
 }
 
 func (p *permittedTools) referenceAsset(id string) (mediaAsset, []byte, error) {

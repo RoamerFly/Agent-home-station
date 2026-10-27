@@ -31,9 +31,10 @@ func (p *permittedTools) yueTools() []mcptools.Tool {
 		return nil
 	}
 	return []mcptools.Tool{
+		agentTool("music_sampling_options", "Read live native YuE semantic, ABC score and diffusion sampling parameters: meanings, actual backend limits/enums, workflow defaults. Read this before tuning music_local_start.sampling or original planning_mode; defaults are not capability ceilings. No song created. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
 		agentTool("music_service_status", "Read actual YuE bridge and generation backend health without creating or retrying a song. Use this for local health; web_fetch is public-only. When offline, trusted owners can read shared project-yue.md and project startup docs, then use permitted server tools on the correct OS. Report diagnosis separately from verified repair. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
 		agentTool("music_lyrics_compare", "Compare one actual ASR lyrics window with a version found on the web. First web_search for song/title/artist lyrics and web_fetch plausible versions; then supply asset_id, lyrics_evidence_id of ORIGINAL ASR, candidate_url and candidate_lyrics copied from that page. Reads the page with permitted web_fetch to verify real text. Aligns the corresponding passage, not the whole song. Only >=88% match and <=12%/12 edits permits minor correction, returning a new lyrics_evidence_id and exact lyrics. Large differences reject this version; compare another. Does not certify artist/version or human accuracy. Never replace uncertain ASR with invented text.", `{"type":"object","properties":{"asset_id":{"type":"string"},"lyrics_evidence_id":{"type":"string"},"candidate_url":{"type":"string","maxLength":2048},"candidate_lyrics":{"type":"string","maxLength":6000}},"required":["asset_id","lyrics_evidence_id","candidate_url","candidate_lyrics"],"additionalProperties":false}`),
-		agentTool("music_local_start", "Start local YuE original/cover generation and durable follow-up. Default native female; character/RVC only if explicitly requested. Named existing songs use cover with this conversation actual reference_asset_id, original lyrics and lyrics_evidence_ids from music_reference_inspect/music_lyrics_compare. Keep original melody, rhythm, phrasing and lyrics; follow the music policy supplied in context. On reroll reuse the previously verified recording unless the user changes version; source choice and lyric/score alignment matter more than adding style prose. reference_mode=melody by default (full also available). reference_start_seconds and reference_seconds select the source passage; explicit0 retains intro. Supply words matching that exact passage, preserve musical line breaks/sections, never blindly concatenate overlapping ASR windows. duration_seconds10..600 default60 is a generation ceiling. min_duration_seconds defaults90% of target, explicit0 allows preview; do not pad/stretch. text_guidance_scale0..100 controls native style/lyrics CFG (cover2, original1); stronger is not necessarily more faithful. seed fixes a take; omit for new take. Default complete voice notes<=60s; both only if requested. Result job_id is submission evidence, not audio quality or delivery. Query music_local_status for actual duration and sampled listening; media_reuse resends exact originals.", `{"type":"object","properties":{"singing_voice":{"type":"string","enum":["native","character"]},"vocal_gender":{"type":"string","enum":["female","male"]},"vocal_gender_request":{"type":"string","description":"Exact current-user quote explicitly requesting male singing, required for male"},"title":{"type":"string","minLength":1,"maxLength":24},"mode":{"type":"string","enum":["original","cover"]},"style":{"type":"string"},"lyrics":{"type":"string"},"seed":{"type":"integer","minimum":0,"maximum":2147483647},"reference_mode":{"type":"string","enum":["melody","full"]},"reference_start_seconds":{"type":"number","minimum":0},"reference_seconds":{"type":"number","exclusiveMinimum":0,"maximum":600},"duration_seconds":{"type":"integer","minimum":10,"maximum":600},"text_guidance_scale":{"type":"number","minimum":0,"maximum":100},"min_duration_seconds":{"type":"number","minimum":0},"kind":{"type":"string","enum":["voice","file","both"]},"reference_asset_id":{"type":"string"},"lyrics_evidence_ids":{"type":"array","items":{"type":"string"}}},"required":["title","style","lyrics"],"additionalProperties":false}`),
+		agentTool("music_local_start", "Start local YuE original/cover generation and durable follow-up. Default native female; character/RVC only if explicitly requested. Named existing songs use cover with this conversation actual reference_asset_id, original lyrics and lyrics_evidence_ids from music_reference_inspect/music_lyrics_compare. Keep original melody, rhythm, phrasing and lyrics; follow the music policy supplied in context. On reroll reuse the previously verified recording unless the user changes version; source choice and lyric/score alignment matter more than adding style prose. reference_mode=melody by default (full also available). reference_start_seconds and reference_seconds select the source passage; explicit0 retains intro. Supply words matching that exact passage, preserve musical line breaks/sections, never blindly concatenate overlapping ASR windows. duration_seconds10..600 default60 is a generation ceiling. min_duration_seconds defaults90% of target, explicit0 allows preview; do not pad/stretch. text_guidance_scale0..100 controls native style/lyrics CFG (cover2, original1); stronger is not necessarily more faithful. seed fixes a take; omit for new take. Default complete voice notes<=60s; both only if requested. Result job_id is submission evidence, not audio quality or delivery. Query music_local_status for actual duration and sampled listening; media_reuse resends exact originals.", extendMusicSamplingSchema(`{"type":"object","properties":{"singing_voice":{"type":"string","enum":["native","character"]},"vocal_gender":{"type":"string","enum":["female","male"]},"vocal_gender_request":{"type":"string","description":"Exact current-user quote explicitly requesting male singing, required for male"},"title":{"type":"string","minLength":1,"maxLength":24},"mode":{"type":"string","enum":["original","cover"]},"style":{"type":"string"},"lyrics":{"type":"string"},"seed":{"type":"integer","minimum":0,"maximum":2147483647},"reference_mode":{"type":"string","enum":["melody","full"]},"reference_start_seconds":{"type":"number","minimum":0},"reference_seconds":{"type":"number","exclusiveMinimum":0,"maximum":600},"duration_seconds":{"type":"integer","minimum":10,"maximum":600},"text_guidance_scale":{"type":"number","minimum":0,"maximum":100},"min_duration_seconds":{"type":"number","minimum":0},"kind":{"type":"string","enum":["voice","file","both"]},"reference_asset_id":{"type":"string"},"lyrics_evidence_ids":{"type":"array","items":{"type":"string"}}},"required":["title","style","lyrics"],"additionalProperties":false}`)),
 		agentTool("music_reference_inspect", "Inspect exact cached audio from THIS conversation before covering, rerolling or recovering a take. Returns submitted style/lyrics/seed when this is a known generated song. Optional transcribe=true calls configured ASR for <=60 seconds at offset_seconds; candidate transcript is uncertain, not guaranteed lyrics. Pass lyrics_evidence_ids to inspect combined timing/order/duplicate boundaries BEFORE generating; coarse ASR equality is not word-to-note alignment. Returns lyrics_evidence_id; pass it in music_local_start.lyrics_evidence_ids and copy the transcript exactly (section labels allowed). supplied_lyrics may register words literally provided in the current user message, never invented words. Always use YuE cover with original lyrics and a style faithful to the source unless the user requests a changed arrangement. Use the exact quoted asset over another newer take. If only an original recording is available, listen/transcribe rather than inventing lyrics; if user demands unchanged accompaniment explain that YuE resynthesizes. Input {asset_id,transcribe?,offset_seconds?,seconds?}.", `{"type":"object","properties":{"asset_id":{"type":"string"},"transcribe":{"type":"boolean"},"offset_seconds":{"type":"integer","minimum":0,"maximum":600},"seconds":{"type":"integer","minimum":1,"maximum":60},"lyrics_evidence_ids":{"type":"array","items":{"type":"string"}},"supplied_lyrics":{"type":"string","maxLength":6000}},"required":["asset_id"],"additionalProperties":false}`),
 		agentTool("music_local_status", "Read a local job owned by THIS conversation. Completed audio defaults to COMPLETE voice notes (each at most60 seconds), not a preview or file. User can request original file later via media_reuse. Never ask whether a file is wanted. Put real media[].id in final media_ids. No resubmission. Input {job_id:string,kind?:voice|file}.", `{"type":"object","properties":{"job_id":{"type":"string"},"kind":{"type":"string","enum":["file","voice","both"]}},"required":["job_id"],"additionalProperties":false}`),
 	}
@@ -67,6 +68,14 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 		return nil, "", yueError("yue_response_limit")
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
+		if response.StatusCode == 400 {
+			var detail struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(data, &detail) == nil && (strings.HasPrefix(detail.Error, "sampling_") || strings.HasPrefix(detail.Error, "invalid_sampling_") || detail.Error == "invalid_planning_mode" || detail.Error == "score_sampling_requires_active_planning") {
+				return nil, "", toolInputError("YuE原生参数校验失败：" + detail.Error + "；请查询music_sampling_options后调整")
+			}
+		}
 		if response.StatusCode == 401 || response.StatusCode == 403 {
 			return nil, "", yueError("yue_bridge_auth_failed")
 		}
@@ -127,23 +136,29 @@ func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 	return yueHealth{BridgeVersion: reply.Version, SingingVoiceProfile: reply.SingingVoiceProfile, State: "ready", Message: message, Ready: true}
 }
 func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if name == "music_sampling_options" {
+		data, _, err := p.yueRequest(ctx, "GET", "/parameters", nil, "")
+		return string(data), err
+	}
 	if name == "music_service_status" {
 		result, err := json.Marshal(p.probeYuE(ctx))
 		return string(result), err
 	}
 	var in struct {
-		SingingVoice         string   `json:"singing_voice"`
-		VocalGender          string   `json:"vocal_gender"`
-		VocalGenderRequest   string   `json:"vocal_gender_request"`
-		Mode                 string   `json:"mode"`
-		ReferenceMode        string   `json:"reference_mode"`
-		ReferenceStart       *float64 `json:"reference_start_seconds"`
-		ReferenceSeconds     *float64 `json:"reference_seconds"`
-		TextGuidance         *float64 `json:"text_guidance_scale"`
-		MinimumDuration      *float64 `json:"min_duration_seconds"`
-		LyricEvidence        []string `json:"lyrics_evidence_ids"`
-		Seed                 *int64   `json:"seed"`
-		Duration             int      `json:"duration_seconds"`
+		Sampling             musicSampling `json:"sampling"`
+		PlanningMode         string        `json:"planning_mode"`
+		SingingVoice         string        `json:"singing_voice"`
+		VocalGender          string        `json:"vocal_gender"`
+		VocalGenderRequest   string        `json:"vocal_gender_request"`
+		Mode                 string        `json:"mode"`
+		ReferenceMode        string        `json:"reference_mode"`
+		ReferenceStart       *float64      `json:"reference_start_seconds"`
+		ReferenceSeconds     *float64      `json:"reference_seconds"`
+		TextGuidance         *float64      `json:"text_guidance_scale"`
+		MinimumDuration      *float64      `json:"min_duration_seconds"`
+		LyricEvidence        []string      `json:"lyrics_evidence_ids"`
+		Seed                 *int64        `json:"seed"`
+		Duration             int           `json:"duration_seconds"`
 		Title, Style, Lyrics string
 		Reference            string `json:"reference_asset_id"`
 		ID                   string `json:"job_id"`
@@ -159,6 +174,12 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		return p.compareMusicLyrics(ctx, raw)
 	}
 	if name == "music_local_start" {
+		if err := in.Sampling.validate(); err != nil {
+			return "", err
+		}
+		if in.PlanningMode != "" && in.PlanningMode != "off" && in.PlanningMode != "melody" && in.PlanningMode != "full" {
+			return "", toolInputError("planning_mode参数无效")
+		}
 		if p.trace.TaskID != "" {
 			for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
 				if task.ID == p.trace.TaskID && task.MusicJob != "" {
@@ -233,12 +254,12 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		// A missing seed selects a fresh take for a new request, but retries of
 		// this same request keep the same seed and idempotency identity.
 		if in.Seed == nil {
-			canonical, _ := json.Marshal(map[string]any{"title": in.Title, "mode": in.Mode, "style": in.Style, "lyrics": in.Lyrics, "duration": in.Duration, "reference": in.Reference, "reference_mode": in.ReferenceMode, "reference_start_seconds": in.ReferenceStart, "reference_seconds": in.ReferenceSeconds, "singing_voice": in.SingingVoice, "vocal_gender": in.VocalGender, "kind": in.Kind})
+			canonical, _ := json.Marshal(map[string]any{"title": in.Title, "mode": in.Mode, "style": in.Style, "lyrics": in.Lyrics, "duration": in.Duration, "reference": in.Reference, "reference_mode": in.ReferenceMode, "sampling": in.Sampling, "planning_mode": in.PlanningMode, "reference_start_seconds": in.ReferenceStart, "reference_seconds": in.ReferenceSeconds, "singing_voice": in.SingingVoice, "vocal_gender": in.VocalGender, "kind": in.Kind})
 			sum := sha256.Sum256(append([]byte(p.trace.Account+"|"+p.trace.Thread+"|"+p.trace.TraceID+"|"), canonical...))
 			seed := int64(binary.LittleEndian.Uint32(sum[:4]) & 0x7fffffff)
 			in.Seed = &seed
 		}
-		spec := &songSpec{Mode: in.Mode, Style: in.Style, Lyrics: in.Lyrics, Seed: *in.Seed, Duration: in.Duration, Reference: in.Reference, ReferenceMode: in.ReferenceMode, SingingVoice: in.SingingVoice, VocalGender: in.VocalGender, LyricEvidence: in.LyricEvidence}
+		spec := &songSpec{Sampling: in.Sampling, PlanningMode: in.PlanningMode, Mode: in.Mode, Style: in.Style, Lyrics: in.Lyrics, Seed: *in.Seed, Duration: in.Duration, Reference: in.Reference, ReferenceMode: in.ReferenceMode, SingingVoice: in.SingingVoice, VocalGender: in.VocalGender, LyricEvidence: in.LyricEvidence}
 		spec.MinimumDuration = float64(in.Duration) * .9
 		spec.TextGuidance = 1
 		if in.Mode == "cover" {
@@ -254,6 +275,12 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			return "", toolInputError("text_guidance_scale须为0至100；min_duration_seconds须为0至目标时长，0表示允许短预览；本次未提交生成")
 		}
 		body := map[string]any{"title": in.Title, "mode": in.Mode, "style": in.Style, "lyrics": in.Lyrics, "duration_seconds": in.Duration, "seed": *in.Seed, "reference_mode": in.ReferenceMode, "singing_voice": in.SingingVoice, "vocal_gender": in.VocalGender}
+		if len(in.Sampling) > 0 {
+			body["sampling"] = in.Sampling
+		}
+		if in.PlanningMode != "" {
+			body["planning_mode"] = in.PlanningMode
+		}
 		body["text_guidance_scale"], body["min_duration_seconds"] = spec.TextGuidance, spec.MinimumDuration
 		var lyricTiming map[string]any
 
@@ -286,6 +313,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		raw, _ = json.Marshal(map[string]any{"title": in.Title, "style": in.Style, "lyrics": in.Lyrics, "mode": in.Mode, "kind": in.Kind, "duration_seconds": in.Duration, "seed": *in.Seed, "reference_asset_id": in.Reference, "reference_mode": in.ReferenceMode, "singing_voice": in.SingingVoice, "vocal_gender": in.VocalGender, "lyrics_evidence_ids": in.LyricEvidence, "reference_start_seconds": spec.ReferenceStart, "reference_seconds": spec.ReferenceSeconds})
 		var operation map[string]any
 		_ = json.Unmarshal(raw, &operation)
+		operation["sampling"], operation["planning_mode"] = in.Sampling, in.PlanningMode
 		operation["text_guidance_scale"], operation["min_duration_seconds"] = spec.TextGuidance, spec.MinimumDuration
 		raw, _ = json.Marshal(operation)
 		// Store the remote job mapping under the private effect ledger.
@@ -298,6 +326,9 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		}
 		if health.Ready && health.BridgeVersion < 2 {
 			return "", yueError("yue_bridge_upgrade_required")
+		}
+		if health.Ready && health.BridgeVersion < 8 && (len(in.Sampling) > 0 || in.PlanningMode != "") {
+			return "", toolInputError("采样参数需YuE桥接v8；本次未提交生成")
 		}
 		if health.Ready && health.BridgeVersion < 7 {
 			return "", toolInputError("当前YuE桥接尚不支持文本引导和实际时长验收；请升级到v7，避免把短成品当成完整歌曲；本次未提交生成")
@@ -330,6 +361,17 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		if json.Unmarshal([]byte(result), &job) != nil {
 			return "", toolInputError("歌曲任务响应无效")
 		}
+		for _, field := range []string{"effective_parameters", "recipe"} {
+			if effective, ok := job[field].(map[string]any); ok {
+				if values, ok := effective["sampling"]; ok {
+					data, _ := json.Marshal(values)
+					_ = json.Unmarshal(data, &spec.Sampling)
+				}
+				if value, ok := effective["planning_mode"].(string); ok {
+					spec.PlanningMode = value
+				}
+			}
+		}
 		id, _ := job["job_id"].(string)
 		if !validID(id) {
 			return "", yueError("yue_submission_unknown")
@@ -360,6 +402,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 				}
 			}
 		}
+		job["sampling"], job["planning_mode"] = spec.Sampling, spec.PlanningMode
 		job["title"] = in.Title
 		job["mode"], job["seed"], job["reference_asset_id"], job["reference_mode"] = in.Mode, *in.Seed, in.Reference, in.ReferenceMode
 		job["reference_start_seconds"], job["reference_seconds"] = spec.ReferenceStart, spec.ReferenceSeconds

@@ -7,5 +7,5 @@ if not exist "%~dp0scripts\Launch-Local.ps1" (
   pause
   exit /b 1
 )
-start "" "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\Launch-Local.ps1" %*
+start "" "%SystemRoot%\System32\wscript.exe" //nologo "%~dp0scripts\Launch-Local.vbs" %*
 exit /b

@@ -11,3 +11,5 @@
 - 女声写入style及vocal_gender仅是条件，不是听觉验收。text_guidance_scale可调整原生文本引导（翻唱默认2）；根据实际音频检查和反馈选择新seed/引导强度。不能把female参数直接复述为“已确认女声”，不能擅用RVC纠正音色。
 - music_local_status在已配置百炼时会实际读取成品前、中、后三处音频，并返回generation_result.audio_observation；按真实听感观察判断是否合适交付。检查失败或结论不符时先处理原因，不能把“没有取得观察”当作检查通过。抽样理解不等于逐秒人工试听。
 - 歌词字面正确与唱对旋律、节奏是不同检查。重做同一版本优先沿用已核对的录音，不因歌名相同就换成另一现场/翻唱版本。按乐句整理歌词与参考范围，ASR相邻窗口可能跨窗重复或漏词，不能不核对便顺次拼接；lyric_timing_review提供粗窗口覆盖/重叠/边界重复提示，不代表逐词时间已对齐。增强女声提示、延长输出或换声都不等于修复了词曲节奏。
+
+- 可用music_sampling_options读取本机原生采样参数、枚举、范围与当前工作流默认值；music_local_start.sampling支持semantic（音乐token采样）、render（音频扩散渲染）、score（原创ABC规划），planning_mode控制原创规划模式。默认值不是上限，可根据需求和真实试听调整temperature/top_p/top_k/repetition_penalty、steps/cfg/sampler_name/scheduler/denoise等；参数随成品保存。翻唱从参考提取乐谱，不使用原创score参数。不要把调大采样参数当作质量保证。
