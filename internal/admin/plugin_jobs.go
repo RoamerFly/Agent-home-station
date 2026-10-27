@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
@@ -12,23 +11,6 @@ import (
 	"wechat-bot/internal/plugins"
 )
 
-func (a *agentControl) pluginUpdate(t agentTask) (bool, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	current, ok := a.data.Tasks[t.ID]
-	if !ok || !current.Updated.Equal(t.Updated) || current.State == "cancelled" {
-		return false, nil
-	}
-	// Copy maps/pointers so a cancelled task cannot be resurrected by an old
-	// poll response, and failed persistence never mutates the previous value.
-	t.Updated = time.Now().UTC()
-	a.data.Tasks[t.ID] = t
-	if err := a.persist(); err != nil {
-		a.data.Tasks[t.ID] = current
-		return false, err
-	}
-	return true, nil
-}
 func copyTask(t agentTask) agentTask {
 	b, _ := json.Marshal(t)
 	var out agentTask
@@ -124,7 +106,7 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 	} else {
 		t.LastResult = "外部任务已领取，后台查询同一任务，不重新创建"
 	}
-	saved, saveErr := a.pluginUpdate(t)
+	saved, saveErr := a.updateSnapshot(t)
 	if saveErr != nil {
 		return "", saveErr
 	}
@@ -196,7 +178,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		return "", err
 	}
 	task.PluginJob.Prepared = true
-	if saved, err := p.manager.agent.pluginUpdate(*task); err != nil {
+	if saved, err := p.manager.agent.updateSnapshot(*task); err != nil {
 		return "", err
 	} else if !saved {
 		return "", toolInputError("任务状态已改变，未交付过期结果")
@@ -223,7 +205,7 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 	if job.Ticket.State == "submitting" {
 		task.State = "needs_review"
 		task.LastResult = "创建结果未知，不自动重新创建"
-		_, err := m.agent.pluginUpdate(task)
+		_, err := m.agent.updateSnapshot(task)
 		return nil, err
 	}
 	runtime, err := m.pluginRuntime()
@@ -239,14 +221,14 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 	if !p.enabled(job.Ticket.Tool) {
 		task.LastResult = "插件或任务权限已关闭，保留任务，不创建替代任务"
 		task.Next = now.Add(time.Minute)
-		_, err := m.agent.pluginUpdate(task)
+		_, err := m.agent.updateSnapshot(task)
 		return nil, err
 	}
 	if job.Ticket.State == "waiting" {
 		if !now.Before(job.Deadline) || job.Polls >= job.MaxPolls {
 			task.State = "needs_review"
 			task.LastResult = "插件任务超过本地查询期限或次数，未自动重新生成；远端可能仍在运行"
-			_, err := m.agent.pluginUpdate(task)
+			_, err := m.agent.updateSnapshot(task)
 			return nil, err
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
@@ -257,44 +239,32 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 			if errors.Is(pollErr, plugins.ErrJobConfigChanged) {
 				task.State = "needs_review"
 				task.LastResult = "插件声明已改变，旧任务未交给新接口；请核对原服务商任务"
-				_, err := m.agent.pluginUpdate(task)
+				_, err := m.agent.updateSnapshot(task)
 				return nil, err
 			}
 			task.LastResult = "插件任务状态暂时不可读，稍后查询同一任务，不重新创建"
 			task.Next = now.Add(time.Duration(job.IntervalSeconds) * time.Second)
-			_, err := m.agent.pluginUpdate(task)
+			_, err := m.agent.updateSnapshot(task)
 			return nil, err
 		}
 		job.Ticket = ticket
 		if ticket.State == "waiting" {
 			task.LastResult = "外部任务排队或执行中，尚未取得完成结果"
 			task.Next = now.Add(time.Duration(job.IntervalSeconds) * time.Second)
-			_, err := m.agent.pluginUpdate(task)
+			_, err := m.agent.updateSnapshot(task)
 			return nil, err
 		}
 	}
-	if task.Runs >= 3 {
-		task.State = "needs_review"
-		task.LastResult = "插件结果多次未交付，请检查原任务；不会重新创建"
-		_, err := m.agent.pluginUpdate(task)
-		return nil, err
-	}
-	task.State = "running"
-	task.Runs++
-	task.LastResult = "插件结果已就绪，准备交付原会话"
+	task.LastResult = "插件结果已就绪，交回主模型处理"
 	if job.Ticket.State == "failed" {
 		job.Failure = true
 		job.Prepared = true
-		task.LastResult = "外部插件任务失败，准备告知原会话"
+		task.LastResult = "插件报告失败，交回主模型处理"
 	}
-	if saved, err := m.agent.pluginUpdate(task); err != nil || !saved {
+	facts := map[string]any{"plugin_task": task.ID, "remote_state": job.Ticket.State, "failed": job.Failure}
+	in, err := m.claimTaskResult(task, now, facts, "调用plugin_job_status取得同一任务真实输出；不要重新调用创建工具。失败时根据具体反馈诊断并验证。")
+	if err != nil || in == nil {
 		return nil, err
-	}
-	in := &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender, Mode: "direct", IsGroup: strings.HasSuffix(task.Thread, "@chatroom"), Directed: true, TaskID: task.ID, OriginTraceID: task.OriginTrace, RequestedText: task.RequestedText, TraceID: "plugin-result-" + task.ID + "-" + now.UTC().Format("150405"), QuoteServerID: task.QuoteServerID}
-	if job.Failure {
-		in.Text = "[已请求插件任务的失败通知，不是新用户请求] 外部任务已报告失败。原需求资料：" + task.RequestedText + "。如实说明没有完成，不重新创建。"
-	} else {
-		in.Text = "[已请求插件任务的结果交付，不是新用户请求] plugin_task=" + task.ID + "；原需求资料：" + task.RequestedText + "。调用plugin_job_status(task_id=该编号)取得真实输出，结合最新会话判断是否取消或交付。附件用media_ids，介绍在附件接受后发送；文字输出自然回应，不暴露接口或任务编号。不重新调用创建工具。"
 	}
 	m.record(bot.Record{Event: "plugin_job_result_ready", Category: "tool", ThreadID: task.Thread, MessageID: task.OriginTrace, Tool: job.Ticket.Tool, Status: job.Ticket.State, Reason: "plugin_job_same_task_result", Origin: "agent"})
 	return in, nil

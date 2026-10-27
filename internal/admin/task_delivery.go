@@ -9,7 +9,7 @@ import (
 
 func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDelivery) error {
 	for _, task := range m.agent.list(in.Account, in.Thread) {
-		if task.ID != in.TaskID || task.MusicJob == "" && task.PluginJob == nil && task.RecoveryMessageID == "" || task.State == "running" || task.State == "cancelled" {
+		if task.ID != in.TaskID || task.resultKind() == "" && task.RecoveryMessageID == "" || task.State == "running" || task.State == "cancelled" {
 			continue
 		}
 		if task.Delivery != nil && *task.Delivery == delivery {
@@ -43,17 +43,8 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 			task.State = "needs_review"
 			task.LastResult += "；存在未确认回执，请核对原发送任务"
 		}
-		var saveErr error
-		if task.PluginJob != nil {
-			var saved bool
-			saved, saveErr = m.agent.pluginUpdate(task)
-			if saveErr == nil && !saved {
-				return nil
-			}
-		} else {
-			saveErr = m.agent.task(task)
-		}
-		if err := saveErr; err != nil {
+		saved, err := m.agent.updateSnapshot(task)
+		if err != nil || !saved {
 			return err
 		}
 		if delivery.PendingJob != "" && delivery.State == "needs_review" {

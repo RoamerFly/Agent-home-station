@@ -216,7 +216,7 @@ func TestPluginDeadlineStopsPollingWithoutStartingReplacement(t *testing.T) {
 	j := newJobFixture(t)
 	task := j.start(t)
 	task.PluginJob.Deadline = time.Now().Add(-time.Second)
-	if _, err := j.f.manager.agent.pluginUpdate(task); err != nil {
+	if _, err := j.f.manager.agent.updateSnapshot(task); err != nil {
 		t.Fatal(err)
 	}
 	task = j.f.manager.agent.list("test", "filehelper")[0]

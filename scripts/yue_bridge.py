@@ -47,7 +47,7 @@ def song_options(body):
     mode=body.get('mode') or ('cover' if reference else 'original')
     if mode not in ('original','cover'):raise ValueError('invalid_mode')
     if (mode=='cover')!=bool(reference):raise ValueError('cover_requires_reference')
-    reference_mode=body.get('reference_mode','full')
+    reference_mode=body.get('reference_mode','melody')
     if reference_mode not in ('melody','full'):raise ValueError('invalid_reference_mode')
     seed=body.get('seed')
     if seed is not None and (isinstance(seed,bool) or not isinstance(seed,int) or not 0<=seed<=2147483647):raise ValueError('invalid_seed')

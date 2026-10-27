@@ -59,11 +59,12 @@ func (p *permittedTools) referenceAsset(id string) (mediaAsset, []byte, error) {
 
 func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.RawMessage) (string, error) {
 	var input struct {
-		ID         string `json:"asset_id"`
-		Transcribe bool   `json:"transcribe"`
-		Offset     int    `json:"offset_seconds"`
-		Seconds    int    `json:"seconds"`
-		Supplied   string `json:"supplied_lyrics"`
+		ID         string   `json:"asset_id"`
+		Transcribe bool     `json:"transcribe"`
+		Offset     int      `json:"offset_seconds"`
+		Seconds    int      `json:"seconds"`
+		Supplied   string   `json:"supplied_lyrics"`
+		Evidence   []string `json:"lyrics_evidence_ids"`
 	}
 	if json.Unmarshal(raw, &input) != nil || input.ID == "" || len(input.ID) > 128 || input.Offset < 0 || input.Offset > 600 || input.Seconds < 0 || input.Seconds > 60 {
 		return "", errors.New("参考音频检查参数无效")
@@ -79,6 +80,10 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 	out["available_lyrics"] = p.availableLyricEvidence(a)
 	if a.Music != nil {
 		out["lyrics_evidence_ids"] = a.Music.LyricEvidence
+		out["lyric_timing_review"] = p.lyricTimingFor(a, a.Music.LyricEvidence)
+	}
+	if len(input.Evidence) > 0 {
+		out["lyric_timing_review"] = p.lyricTimingFor(a, input.Evidence)
 	}
 	if input.Supplied != "" {
 		request := companion.UserRequestText(p.trace.Text)
@@ -115,6 +120,7 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 			return "", err
 		}
 		out["lyrics_evidence_id"] = e.ID
+		out["lyric_timing_review"] = lyricTimingReview([]lyricEvidence{e})
 		out["transcript_warning"] = "这是指定片段的ASR候选歌词，可能漏字、错字，不保证完整准确；不要声称已精确识别或已还原。按需分段检查，仍不确定时确认歌词，不用原创词替代。"
 	}
 	b, _ := json.Marshal(out)

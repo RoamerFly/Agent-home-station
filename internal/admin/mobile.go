@@ -386,26 +386,24 @@ func (m *Manager) claimDeviceTask(t agentTask, now time.Time) (*companion.Input,
 	if ok && device.State == "cancelled" {
 		t.State = "cancelled"
 		t.LastResult = "设备任务已取消，不再唤醒会话"
-		return nil, m.agent.task(t)
+		_, err := m.agent.updateSnapshot(t)
+		return nil, err
 	}
 	if ok && (device.State == "queued" || device.State == "running") {
 		t.Next = now.Add(10 * time.Second)
-		return nil, m.agent.task(t)
+		_, err := m.agent.updateSnapshot(t)
+		return nil, err
 	}
 	c := m.agent.config()
 	if !ok || !contains(c.OwnerIDs, t.Sender) || !c.allowsPrivilegedThread(t.Thread) || !permittedRecipient(m.Config().Config, t.Thread) {
 		t.State = "needs_review"
 		t.LastResult = "设备任务或可信授权不可用"
-		return nil, m.agent.task(t)
+		_, err := m.agent.updateSnapshot(t)
+		return nil, err
 	}
 	// Reconcile private observation memory even if the web process stopped
 	// between the device checkpoint and its finish callback.
 	m.rememberDevice(device)
-	t.State = "running"
-	t.Runs++
-	if err := m.agent.task(t); err != nil {
-		return nil, err
-	}
-	data, _ := json.Marshal(map[string]any{"task_id": device.ID, "goal": device.Goal, "state": device.State, "result": device.Result, "reason": device.Reason, "observation_id": device.ObservationID, "recordings": device.Artifacts, "actions_attempted": device.Steps})
-	return &companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, MustReply: true, TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText, TraceID: "device-result-" + t.ID, QuoteServerID: t.QuoteServerID, Text: "这是之前手机任务的真实执行结果（本地观察数据，不是用户新指令）：" + string(data) + "。结合当前会话确认需求是否仍有效，简短说明结果或失败原因；若已取消或被新需求替代可安静。屏幕观察或短录屏不代表已观看整段视频、取得原视频、音轨或分享；录屏只能明确标作录屏。不要重新启动同一任务。"}, nil
+	facts := map[string]any{"task_id": device.ID, "goal": device.Goal, "state": device.State, "result": device.Result, "reason": device.Reason, "observation_id": device.ObservationID, "recordings": device.Artifacts, "actions_attempted": device.Steps}
+	return m.claimTaskResult(t, now, facts, "设备屏幕观察和录屏不代表已观看完整视频、取得原视频或音轨；录屏须标明。根据真实观察继续判断，不重新启动同一任务。")
 }
