@@ -1,0 +1,78 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { project, stage } = require('../internal/admin/static/rounds.js');
+const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
+const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
+
+test('one round keeps receive, decision, failed tool, recovered tool and delivery evidence', () => {
+  const rows = project([
+    entry(1, { category: 'received', event: 'message_received', content: '帮我找一首歌', status: 'received' }),
+    entry(2, { category: 'error', event: 'tool_call_failed', tool: 'web_search', status: 'failed' }),
+    entry(3, { category: 'tool', event: 'tool_call_succeeded', tool: 'web_search', status: 'succeeded' }),
+    entry(4, { category: 'sent', event: 'message_sent', content: '[voice] 歌曲.wav', send_id: 'send-1', status: 'accepted' }),
+    entry(5, { event: 'message_processed', status: 'completed' }),
+  ]);
+  assert.equal(rows.length, 1); assert.equal(rows[0].entries.length, 5);
+  assert.equal(rows[0].status, 'accepted'); assert.equal(rows[0].tools, 2); assert.equal(rows[0].errors, 1);
+  assert(rows[0].categories.includes('error')); assert(rows[0].search.includes('web_search'));
+});
+test('explicit same-session followups merge, cancellation evidence and other threads do not', () => {
+  const rows = project([
+    entry(1, { category: 'received', event: 'message_received', content: '找首歌' }),
+    entry(2, { message_id: 'followup', event: 'message_received', category: 'received', content: '改成文件' }),
+    entry(3, { message_id: 'followup', related_message_id: 'message-1', event: 'generation_followup_consumed', category: 'decision' }),
+    entry(4, { message_id: 'other', related_message_id: 'message-1', event: 'generation_stopped', category: 'decision' }),
+    entry(5, { thread_id: 'other@chatroom', event: 'message_received', category: 'received' }),
+  ]);
+  assert.equal(rows.length, 3);
+  assert.equal(rows.find(x => x.received.some(m => m.content === '改成文件')).received.length, 2);
+});
+test('no time-based merging; orphan system events form separate system periods', () => {
+  const rows = project([
+    entry(1, { message_id: '', thread_id: '', event: 'bot_starting', category: 'system' }),
+    entry(2, { message_id: '', thread_id: '', event: 'memory_saved', category: 'system' }),
+    entry(3, { event: 'message_received', category: 'received' }),
+    entry(4, { message_id: 'message-2', event: 'message_received', category: 'received' }),
+    entry(5, { message_id: '', thread_id: '', event: 'bot_starting', category: 'system' }),
+  ]);
+  assert.equal(rows.filter(x => x.system).length, 2);
+  assert.equal(rows.filter(x => !x.system).length, 2);
+  assert.equal(rows.find(x => x.entries.length === 2).system, true);
+});
+test('same send ID updates receipt; equal text from distinct sends is retained', () => {
+  const rows = project([
+    entry(1, { event: 'send_failed', category: 'error', send_id: 'send-1', content: '你好', status: 'unknown' }),
+    entry(2, { message_id: '', event: 'manual_send_status', category: 'sent', send_id: 'send-1', content: '你好', status: 'accepted' }),
+    entry(3, { event: 'message_sent', category: 'sent', send_id: 'send-2', content: '你好', status: 'accepted' }),
+  ]);
+  assert.equal(rows.length, 1); assert.equal(rows[0].sent.length, 2); assert.equal(rows[0].sent[0].status, 'accepted');
+});
+test('long identifiers cannot collide; cycles do not hang and data is not mutated', () => {
+  const items = [entry(1, { event: 'message_received', category: 'received' }), entry(2, { message_id: 'two', related_message_id: 'message-1', event: 'generation_followup_consumed' }), entry(3, { related_message_id: 'two', event: 'generation_followup_consumed' })];
+  const before = JSON.stringify(items); assert.equal(project(items).length, 1); assert.equal(JSON.stringify(items), before);
+  assert.equal(stage({ category: 'tool', event: 'media_understood' }), 'tool');
+});
+test('an accepted acknowledgement is not completion of a long-running task', () => {
+  const rows = project([
+    entry(1, { category: 'received', event: 'message_received', content: '唱首歌', status: 'received' }),
+    entry(2, { category: 'sent', event: 'message_progress', content: '我来试试～', status: 'accepted' }),
+    entry(3, { category: 'tool', event: 'tool_call_succeeded', tool: 'music_generate', status: 'succeeded' }),
+  ]);
+  assert.equal(rows[0].status, 'running'); assert.equal(rows[0].sent[0].status, 'accepted');
+});
+test('a later partial delivery timeout remains visible after an earlier accepted segment', () => {
+  const rows = project([
+    entry(1, { event: 'message_sent', category: 'sent', content: '第一段', send_id: 'one', status: 'accepted' }),
+    entry(2, { event: 'media_waiting', category: 'error', content: '第二段', send_id: 'two', status: 'unknown' }),
+    entry(3, { event: 'tool_call_succeeded', category: 'tool', tool: 'read_receipt', status: 'succeeded' }),
+  ]);
+  assert.equal(rows[0].status, 'waiting');
+});
+test('ambiguous send IDs cannot attach unscoped records to an unrelated round', () => {
+  const rows = project([
+    entry(1, { send_id: 'collision' }), entry(2, { message_id: 'other', send_id: 'collision' }),
+    entry(3, { send_id: 'collision' }), entry(4, { message_id: '', thread_id: '', send_id: 'collision' }),
+  ]);
+  assert.equal(rows.filter(x => x.system).length, 1);
+});
