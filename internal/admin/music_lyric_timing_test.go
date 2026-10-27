@@ -1,11 +1,41 @@
 package admin
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"wechat-bot/internal/companion"
 )
+
+func TestLyricTimingCanBeDiscoveredBeforeGeneration(t *testing.T) {
+	f := setup(t)
+	f.manager.speech.YuEEnabled = true
+	f.manager.speech.YuEEndpoint = "http://127.0.0.1:1"
+	f.manager.speech.YuEToken = "synthetic"
+	f.manager.config.Companion.Permissions.SendVoice = true
+	p, _, _ := f.manager.toolAccess()
+	p.SetTrace(companion.Input{Account: "test", Thread: "filehelper", Channel: "wechat"})
+	found := false
+	for _, tool := range p.yueTools() {
+		if tool.Name != "music_reference_inspect" {
+			continue
+		}
+		var schema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if e := json.Unmarshal(tool.InputSchema, &schema); e != nil {
+			t.Fatal(e)
+		}
+		if _, ok := schema.Properties["lyrics_evidence_ids"]; !ok {
+			t.Fatal("timing inspection missing from actual discovery schema")
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("inspection tool unavailable")
+	}
+}
 
 func TestLyricTimingReportsCoarseCoverageWithoutClaimingWordAlignment(t *testing.T) {
 	items := []lyricEvidence{{ID: "first", Text: "合成开场晚风轻轻吹过窗台", Offset: 0, Seconds: 30}, {ID: "second", Text: "晚风轻轻吹过窗台合成后半段", Offset: 25, Seconds: 30}, {ID: "third", Text: "合成结尾", Offset: 60, Seconds: 10}}
