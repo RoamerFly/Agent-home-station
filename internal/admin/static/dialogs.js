@@ -23,5 +23,5 @@
  function closeAll(){for(const dialog of [...document.querySelectorAll('dialog[open]')].reverse())dialog.close()}
  window.WechatDialogs={open,closeAll};
  window.addEventListener('wechat-admin:logout',closeAll);
- window.addEventListener('wechat-admin:navigate',closeAll);
+ window.addEventListener('wechat-admin:navigate',e=>{if(!e.detail?.embedded)closeAll()});
 })();

@@ -89,6 +89,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 	s.speechRoutes(mux)
 	s.channelsRoutes(mux)
 	s.contextRoutes(mux)
+	s.canvasRoutes(mux)
 	s.toolRoutes(mux)
 	s.libraryRoutes(mux)
 	s.catalogRoutes(mux)
@@ -134,6 +135,10 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 			name = "storage.js"
 		case "/assets/workbench.js":
 			name = "workbench.js"
+		case "/assets/flow-model.js":
+			name = "flow-model.js"
+		case "/assets/flow-default.json":
+			name = "flow-default.json"
 		case "/assets/workbench.css":
 			name = "workbench.css"
 		case "/assets/dialogs.js":
@@ -178,8 +183,10 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 		switch name {
 		case "index.html":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		case "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
+		case "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "flow-model.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		case "flow-default.json":
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		case "whale-girl.png", "whale-girl-cutout.png":
 			w.Header().Set("Content-Type", "image/png")
 		case "app.css", "console.css", "workbench.css":
@@ -338,7 +345,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		native = linuxnative.Status{Connection: "unavailable"}
 	}
-	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.30.0-autonomous-continuity-local"})
+	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.31.0-editable-flow-local"})
 }
 func (s *Server) toggle(w http.ResponseWriter, r *http.Request, enabled bool) {
 	if err := s.manager.Toggle(enabled); err != nil {
