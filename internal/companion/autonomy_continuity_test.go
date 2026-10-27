@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,6 +42,25 @@ func TestAutonomyOutcomesSeparatePlansFromAcceptedRuns(t *testing.T) {
 	}
 	if st = s.ProactiveState("wechat", "a", "friend", c, now.Add(24*time.Hour)); st.Outcomes.Accepted != 0 {
 		t.Fatal("day rollover", st)
+	}
+}
+
+type autonomousMediaFixture struct{ *toolFixture }
+
+func (*autonomousMediaFixture) Media(id string) (GeneratedMedia, bool) {
+	return GeneratedMedia{ID: id, Kind: "image", Title: "合成图片"}, strings.HasPrefix(id, "image-")
+}
+
+func TestMoreThanThreeVerifiedMediaAreNotRejected(t *testing.T) {
+	model := &fakeModel{answer: `{"action":"reply","messages":[],"media_ids":["image-1","image-2","image-3","image-4"]}`}
+	e, err := NewPreview(enabledConfig(), model, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Tools = &autonomousMediaFixture{&toolFixture{}}
+	d, err := e.Respond(context.Background(), Input{Mode: "direct", Preview: true, Text: "把准备好的内容给我"})
+	if err != nil || d.Action != "reply" || len(d.MediaIDs) != 4 {
+		t.Fatal(d, err)
 	}
 }
 
