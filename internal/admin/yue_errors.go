@@ -26,7 +26,8 @@ func (e *yueCallError) Error() string {
 		return "YuE拒绝请求或任务结果尚未可用，请核对原任务状态"
 	}
 }
-func yueError(code string) error { return &yueCallError{code: code} }
+func yueError(code string) error                          { return &yueCallError{code: code} }
+func (e *yueCallError) SafeToolFailure() (string, string) { return e.code, e.Error() }
 func safeToolFailure(err error) (string, string) {
 	var safe interface{ SafeToolFailure() (string, string) }
 	if errors.As(err, &safe) {

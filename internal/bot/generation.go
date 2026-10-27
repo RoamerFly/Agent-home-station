@@ -464,6 +464,22 @@ type generationTools struct {
 func (t *generationTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	return t.inner.List(ctx)
 }
+func (t *generationTools) AutonomousActions() bool {
+	if p, ok := t.inner.(interface{ AutonomousActions() bool }); ok {
+		return p.AutonomousActions()
+	}
+	return false
+}
+func (t *generationTools) ContextPrepared(report companion.ContextReport) {
+	if p, ok := t.inner.(interface{ ContextPrepared(companion.ContextReport) }); ok {
+		p.ContextPrepared(report)
+	}
+}
+func (t *generationTools) ObserveFollowups(events []agentrun.Event) {
+	if p, ok := t.inner.(interface{ ObserveFollowups([]agentrun.Event) }); ok {
+		p.ObserveFollowups(events)
+	}
+}
 func (t *generationTools) ToolTimeout(name string) time.Duration {
 	if p, ok := t.inner.(interface{ ToolTimeout(string) time.Duration }); ok {
 		return p.ToolTimeout(name)

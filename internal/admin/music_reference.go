@@ -42,15 +42,15 @@ func (p *permittedTools) referenceAsset(id string) (mediaAsset, []byte, error) {
 			continue
 		}
 		if !strings.HasPrefix(a.MIME, "audio/") || a.Hash == "" {
-			return a, nil, errors.New("参考素材必须是本会话缓存的原音频，不能用图片、视频或猜测的主机路径")
+			return a, nil, toolInputError("参考素材必须是本会话缓存的原音频；请用media_recent选择实际音频asset_id；本次未提交生成")
 		}
 		b, err := m.cachedAssetData(a)
 		if err != nil || len(b) == 0 || len(b) > 25<<20 {
-			return a, nil, errors.New("参考音频缓存不可用、校验失败或超过25MiB")
+			return a, nil, toolInputError("参考音频缓存不可用、校验失败或超过25MiB；请核对原素材并准备有效参考；本次未提交生成")
 		}
 		return a, b, nil
 	}
-	return mediaAsset{}, nil, errors.New("本会话找不到参考音频；请先用media_recent核对引用或下载真实原曲")
+	return mediaAsset{}, nil, toolInputError("本会话找不到参考音频；请先用media_recent核对引用或下载真实原曲；本次未提交生成")
 }
 
 func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.RawMessage) (string, error) {

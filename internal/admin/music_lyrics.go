@@ -72,24 +72,24 @@ func stringMustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
 
 func (p *permittedTools) checkLyricEvidence(a mediaAsset, lyrics string, ids []string) error {
 	if len(ids) == 0 || len(ids) > 10 {
-		return errors.New("参考翻唱需要lyrics_evidence_ids；先用music_reference_inspect实际转写原曲或登记用户本条提供的原词，不能自行编词")
+		return toolInputError("参考翻唱需要lyrics_evidence_ids；先用music_reference_inspect实际转写原曲或登记用户本条提供的原词；本次未提交生成")
 	}
 	var texts strings.Builder
 	seen := map[string]bool{}
 	for _, id := range ids {
 		if len(id) != 64 || strings.Trim(id, "0123456789abcdef") != "" || seen[id] {
-			return errors.New("歌词依据编号无效或重复")
+			return toolInputError("歌词依据编号无效或重复；本次未提交生成")
 		}
 		seen[id] = true
 		b, err := os.ReadFile(filepath.Join(p.manager.dir, "music-lyrics", id+".json"))
 		var e lyricEvidence
 		if err != nil || len(b) > 16<<10 || json.Unmarshal(b, &e) != nil || e.ID != id || !p.lyricEvidenceMatches(a, e) {
-			return errors.New("歌词依据与本会话原曲不匹配，请重新读取所选原曲")
+			return toolInputError("歌词依据与本会话原曲不匹配，请重新读取所选原曲；本次未提交生成")
 		}
 		texts.WriteString(e.Text)
 	}
 	if lyricText(lyrics) == "" || lyricText(lyrics) != lyricText(texts.String()) {
-		return errors.New("提交歌词与读取的原曲依据不一致；请原样使用依据歌词，不能改词冒充翻唱")
+		return toolInputError("提交歌词与读取的原曲依据不一致；请读取返回的依据文本，必要时用music_lyrics_compare核对修正后再提交；本次未提交生成")
 	}
 	return nil
 }
