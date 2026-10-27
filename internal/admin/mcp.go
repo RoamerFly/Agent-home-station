@@ -101,9 +101,10 @@ type permittedTools struct {
 	mediaMu         sync.Mutex
 	media           map[string]companion.GeneratedMedia
 	mediaOrigin     map[string]string
+	songFollowups   []string
 }
 
-func (p *permittedTools) SetTrace(input companion.Input) { p.trace = input }
+func (p *permittedTools) SetTrace(input companion.Input) { p.trace = input; p.songFollowups = nil }
 
 func (p *permittedTools) ForkTools() companion.ToolAccess {
 	// Hub and plugin Runtime are immutable after construction. Mutable per-call
@@ -359,6 +360,9 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 					text, formatErr := mcptools.FormatProviderSearch("DeepSeek Search", webArgs.Query, titles, urls, descriptions)
 					if formatErr == nil {
 						endpoint = "https://api.deepseek.com/v1/tools/search"
+						diagnosticMu.Lock()
+						lastStatus, lastStage, lastCode = http.StatusOK, "search", ""
+						diagnosticMu.Unlock()
 						if audioPages {
 							text += "\n音频搜索已使用实时网页来源，未查询器乐目录。以上是候选播放页面，不是已下载的音频；核对歌名、歌手和版本后继续读取或使用web_media_download获取真实文件，不能直接声称已经发歌。"
 						}

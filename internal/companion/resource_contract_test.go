@@ -146,7 +146,7 @@ func (m *surfModel) Chat(context.Context, string, []map[string]string) (string, 
 	case 2:
 		return `{"action":"tool","tool":"web_fetch","arguments":{"url":"https://example.org/ocean"}}`, nil
 	default:
-		return `{"action":"reply","messages":["这个海洋发现好有意思～"]}`, nil
+		return `{"action":"reply","messages":["这个海洋发现好有意思～ https://example.org/ocean"]}`, nil
 	}
 }
 func TestSurfReadsRealSourceBeforeSharingAndKeepsLink(t *testing.T) {

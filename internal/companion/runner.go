@@ -24,6 +24,11 @@ func (r *AgentRunner) followups(ctx context.Context, turns *[]map[string]string)
 	if err != nil || len(events) == 0 {
 		return false, err
 	}
+	// These events have already passed the session's identity and durable
+	// consumption checks. Keep tool intent validation in step with the model.
+	if observer, ok := r.Tools.(interface{ ObserveFollowups([]agentrun.Event) }); ok {
+		observer.ObserveFollowups(events)
+	}
 	for i := range events {
 		events[i].Text = boundedText(events[i].Text, 6000)
 	}

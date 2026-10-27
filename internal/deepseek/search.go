@@ -30,6 +30,9 @@ func (c *Client) Search(ctx context.Context, query string) ([]SearchResult, erro
 	if strings.TrimSpace(query) == "" || utf8.RuneCountInString(query) > 128 {
 		return nil, errors.New("search_query_invalid")
 	}
+	if strings.TrimSpace(c.key) == "" {
+		return nil, requestFailure("official_search_key_missing", "search", 0, false)
+	}
 	u.Path = "/v1/tools/search"
 	body, _ := json.Marshal(map[string]any{"query": query, "count": 6, "need_content": false})
 	ctx, cancel := context.WithTimeout(ctx, 18*time.Second)
@@ -46,7 +49,11 @@ func (c *Client) Search(ctx context.Context, query string) ([]SearchResult, erro
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return nil, requestFailure("official_search_http_error", "search", response.StatusCode, false)
+		code := "official_search_http_error"
+		if response.StatusCode == http.StatusUnauthorized {
+			code = "official_search_authentication_failed"
+		}
+		return nil, requestFailure(code, "search", response.StatusCode, false)
 	}
 	b, err := io.ReadAll(io.LimitReader(response.Body, 128*1024+1))
 	if err != nil || len(b) > 128*1024 {

@@ -11,6 +11,16 @@
     : item.category === 'decision' || /^(generation_|model_|character_|utterance_)/.test(item.event) ? 'decision' : 'system';
   const identity = item => item.round_id || item.message_id;
   const messageKey = (item, id = identity(item)) => id && item.thread_id ? JSON.stringify([item.thread_id, id]) : '';
+  function activityTarget(item) {
+    try {
+      const url = new URL(item.target_url);
+      if (!['https:', 'http:'].includes(url.protocol)) return null;
+      if (url.hostname === 'api.deepseek.com' && /^\/(?:v1\/)?tools\/(search|fetch)\/?$/.test(url.pathname)) {
+        return { kind: 'service', label: url.pathname.includes('/search') ? 'DeepSeek 搜索服务' : 'DeepSeek 网页读取服务', detail: '由后台携带配置的 Key 调用；这是服务地址，实际内容见执行结果。' };
+      }
+      return { kind: 'page', label: url.hostname + ' · ' + url.pathname, href: url.href };
+    } catch { return null; }
+  }
   function project(items) {
     const entries = [...items].sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
     const parents = new Map(), sends = new Map(), groups = new Map();
@@ -83,5 +93,5 @@
       return round;
     }).sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated));
   }
-  return { project, stage };
+  return { project, stage, activityTarget };
 });

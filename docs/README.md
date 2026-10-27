@@ -13,6 +13,8 @@
 
 ## Agent运行与权限
 
+- [上下文传递与歌曲策略](agent/context-and-song-policy.md)
+
 - [自主修复和本机程序启停验收](agent/agent-self-repair-acceptance.md)
 - [Agent 会话执行内核（0.25.0）](agent/agent-session-runtime.md)
 - [Agent 工作台精简](agent/agent-workbench.md)

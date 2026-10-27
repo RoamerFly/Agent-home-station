@@ -520,21 +520,20 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		switch decision.Reason {
 		case "invalid_model_decision", "invalid_tool_arguments", "tool_unavailable_or_budget_exhausted", "tool_budget_exhausted":
 			w.activity(Record{Event: "model_decision_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Reason: decision.Reason, Status: "failed", Origin: "model"})
-			decision = companion.Decision{Action: "reply", Messages: []string{"刚才处理这条请求时出了点问题，这次还没完成，不能说已经发给你了。"}, Reason: "decision_failure_reported"}
+			decision = companion.Decision{Action: "silent", Reason: "decision_failure_reported"}
 		}
 	}
 	if err != nil && toolStarted && processingErr != nil && ctx.Err() == nil {
 		w.activity(Record{Event: "tool_task_timeout", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Reason: "tool_task_deadline_exceeded", Status: "failed"})
-		decision = companion.Decision{Action: "reply", Messages: []string{"这次等得有点久，还没能拿到可用的结果，我先停下这次尝试。"}, Reason: "tool_task_deadline_exceeded"}
-		err = nil
+		decision = companion.Decision{Action: "silent", Reason: "tool_task_deadline_exceeded"}
 	}
 	if progressDelivered && ctx.Err() == nil && (err != nil || decision.Action != "reply") {
 		if err != nil {
 			w.modelFailed(input.Thread, input.TraceID, err)
 		}
 		w.activity(Record{Event: "tool_task_finished_without_result", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Reason: "tool_task_no_final_after_progress", Status: "completed"})
-		decision = companion.Decision{Action: "reply", Messages: []string{"这次还没把结果发出来，我先停下这次尝试。"}, Reason: "tool_task_no_final_after_progress"}
-		err = nil
+		// A model-selected silent outcome remains silent. Errors are recorded
+		// and can be handed to the model through the existing recovery task.
 	}
 	if w.config.ReportFailure != nil && input.IsGroup && (decision.Reason == "decision_failure_reported" || decision.Reason == "tool_task_deadline_exceeded" || decision.Reason == "tool_task_no_final_after_progress" || err != nil && ctx.Err() == nil) {
 		reason := decision.Reason

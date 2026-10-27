@@ -234,16 +234,16 @@ func TestSurfVerificationRejectionIsRecordedWithoutClaimingDelivery(t *testing.T
 	}
 }
 
-func TestForcedSurfFallbackRequiresReadAndStillChecksDuplicates(t *testing.T) {
+func TestForcedSurfNeverSynthesizesShareAfterModelSilence(t *testing.T) {
 	for _, tc := range []struct {
 		name                   string
 		force, read, duplicate bool
 		action, reason         string
 	}{
-		{"verified", true, true, false, "reply", "surf_forced_link_fallback"},
+		{"verified", true, true, false, "silent", "surf_forced_share_unfulfilled"},
 		{"not_read", true, false, false, "silent", "surf_forced_share_unfulfilled"},
 		{"default_off", false, true, false, "silent", "surf_forced_share_unfulfilled"},
-		{"duplicate", true, true, true, "silent", "surf_duplicate_topic"},
+		{"duplicate", true, true, true, "silent", "surf_forced_share_unfulfilled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := setup(t)
@@ -263,8 +263,8 @@ func TestForcedSurfFallbackRequiresReadAndStillChecksDuplicates(t *testing.T) {
 			if err != nil || d.Action != tc.action || d.Reason != tc.reason {
 				t.Fatal(d, err)
 			}
-			if d.Action == "reply" && (len(d.Messages) != 1 || d.Messages[0] != x.Title+"\n"+x.URL) {
-				t.Fatal("invented fallback", d)
+			if len(d.Messages) != 0 {
+				t.Fatal("program invented a share after model silence", d)
 			}
 		})
 	}

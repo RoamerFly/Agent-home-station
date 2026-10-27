@@ -19,7 +19,7 @@ func (m *invalidDecisionModel) Chat(context.Context, string, []map[string]string
 	m.calls++
 	return `{"action":"reply","messages":`, nil
 }
-func TestDirectInvalidDecisionReportsFailureInsteadOfSilentDrop(t *testing.T) {
+func TestDirectInvalidDecisionRecordsFailureWithoutInventingReply(t *testing.T) {
 	c := companion.Defaults()
 	c.Enabled = true
 	c.ReplyMinMS = 0
@@ -42,8 +42,8 @@ func TestDirectInvalidDecisionReportsFailureInsteadOfSilentDrop(t *testing.T) {
 		t.Fatal(e)
 	}
 	w.respondCharacter(context.Background(), engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "video-request", Text: "找个动画视频发给我", Mode: "direct"})
-	if model.calls != 3 || sender.calls != 1 {
-		t.Fatal("request silently dropped or unbounded correction", model.calls, sender.calls)
+	if model.calls != 3 || sender.calls != 0 {
+		t.Fatal("program invented a failure reply or correction became unbounded", model.calls, sender.calls)
 	}
 	failed := false
 	for _, r := range records {
