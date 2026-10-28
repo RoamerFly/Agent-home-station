@@ -81,6 +81,8 @@ jobs:
         run: node --test scripts/test_admin_rounds.cjs
       - name: Test editable canvas model
         run: node --test scripts/test_flow_model.cjs
+      - name: Test account workspace permission preview
+        run: node --test scripts/test_agent_permissions.cjs
       - name: Test mobile bridge contracts
         run: python -m unittest discover -s scripts -p test_mobile_bridge.py
       - name: Test local diagnostic process lifecycle

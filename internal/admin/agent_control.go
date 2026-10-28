@@ -590,7 +590,7 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/recover-music-message", s.protected(s.recoverMusicMessage))
 	mux.HandleFunc("POST /api/agent/recover-private-message", s.protected(s.recoverPrivatePrefixMessage))
 	mux.HandleFunc("GET /api/agent", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.active(s.manager.native.Account(), ""), "history_count": len(s.manager.agent.taskHistory(s.manager.native.Account(), "")), "operations": s.manager.agent.operations(), "host_os_paths": true})
+		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.active(s.manager.native.Account(), ""), "history_count": len(s.manager.agent.taskHistory(s.manager.native.Account(), "")), "operations": s.manager.agent.operations(), "host_os_paths": true, "workspace": s.manager.managedLayoutStatus()})
 	}))
 	mux.HandleFunc("POST /api/agent/config", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var c agentSettings
