@@ -3,6 +3,8 @@ package agenthost
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,5 +65,33 @@ func TestSandboxCannotReadOtherRootsOrHostServices(t *testing.T) {
 	}
 	if b, e := os.ReadFile(filepath.Join(inside, "proof.txt")); e != nil || string(b) != "ok" {
 		t.Fatal(e)
+	}
+}
+
+func TestSandboxChildCannotConnectToLiveHostLoopback(t *testing.T) {
+	requireLinuxSandbox(t)
+	if _, e := exec.LookPath("python3"); e != nil {
+		t.Skip("python3 is required for socket/subprocess acceptance")
+	}
+	listener, e := net.Listen("tcp4", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	c := Defaults()
+	c.Mode = "full"
+	c.Roots = []string{t.TempDir()}
+	c.Isolation = &Isolation{}
+	// The outer isolated process launches a second Python process. Success
+	// requires the socket probe to execute, fail to reach a live host listener,
+	// and report the expected marker (rather than merely lacking Python).
+	script := fmt.Sprintf("import socket,sys\ns=socket.socket();s.settimeout(0.5)\ntry:\n s.connect((\"127.0.0.1\",%d))\nexcept OSError:\n print(\"host-loopback-blocked\");sys.exit(0)\nsys.exit(4)", port)
+	child, _ := json.Marshal(script)
+	command := "python3 -c 'import subprocess,sys; sys.exit(subprocess.run([\"python3\",\"-c\"," + string(child) + "]).returncode)'"
+	raw, _ := json.Marshal(Input{Path: c.Roots[0], Command: command})
+	v, e := (Host{c}).Call(context.Background(), "server_exec", raw)
+	if e != nil || v.(map[string]any)["exit_code"] != 0 || !strings.Contains(v.(map[string]any)["output"].(string), "host-loopback-blocked") {
+		t.Fatal(v, e)
 	}
 }
