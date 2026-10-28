@@ -14,6 +14,7 @@ import (
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/workspacefs"
 )
 
 // ExecutionContext is minted from the authenticated native packet, never from
@@ -48,12 +49,12 @@ func (p *permittedTools) executionContext() ExecutionContext {
 }
 func ensureManaged(paths ...string) error {
 	for _, path := range paths {
-		if e := os.MkdirAll(path, 0700); e != nil {
+		root, e := workspacefs.EnsurePath(path)
+		if e != nil {
 			return e
 		}
-		resolved, e := filepath.EvalSymlinks(path)
-		if e != nil || resolved != filepath.Clean(path) {
-			return errors.New("managed_workspace_symlink_not_allowed")
+		if e = root.Close(); e != nil {
+			return e
 		}
 	}
 	return nil
@@ -134,23 +135,9 @@ func (p *permittedTools) callProject(ctx context.Context, name string, raw json.
 		return "", err
 	}
 	var value any
-	entries, e := os.ReadDir(dir)
+	items, issues, e := readProjectManifests(ctx, x.Public, in.ID, name == "project_read")
 	if e != nil {
 		return "", e
-	}
-	items := []json.RawMessage{}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || entry.Type()&os.ModeSymlink != 0 {
-			continue
-		}
-		if name == "project_read" && entry.Name() != in.ID+".json" {
-			continue
-		}
-		b, e := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if e != nil || len(b) > 65536 || !json.Valid(b) {
-			return "", errors.New("project_manifest_invalid")
-		}
-		items = append(items, b)
 	}
 	if name == "project_read" {
 		if len(items) != 1 {
@@ -158,7 +145,7 @@ func (p *permittedTools) callProject(ctx context.Context, name string, raw json.
 		}
 		value = items[0]
 	} else {
-		value = map[string]any{"projects": items, "execution": x}
+		value = map[string]any{"projects": items, "execution": x, "unavailable_manifests": issues}
 	}
 	b, e := json.Marshal(value)
 	return string(b), e
@@ -238,6 +225,7 @@ func (m *Manager) configureManagedNotes() error {
 		}
 	}
 	m.workspace.ResolveDirectory = resolve
+	m.workspace.BoundaryRoot = base
 	return ensureManaged(filepath.Join(base, "global", "memory"), filepath.Join(base, "assets", "objects"))
 }
 

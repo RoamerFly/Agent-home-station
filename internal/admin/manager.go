@@ -127,6 +127,17 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if native == nil || dir == "" {
 		return nil, errors.New("missing admin runtime configuration")
 	}
+	var err error
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if stateDir != "" {
+		stateDir, err = filepath.Abs(stateDir)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, errors.New("管理目录不可用")
 	}
@@ -178,6 +189,12 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	workspaceInitialized := false
+	defer func() {
+		if !workspaceInitialized {
+			m.workspace.Close()
+		}
+	}()
 	m.processes, err = agenthost.OpenJobs(filepath.Join(dir, "agent-processes"))
 	if err != nil {
 		return nil, err
@@ -248,6 +265,7 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if c.Enabled {
 		m.start(c)
 	}
+	workspaceInitialized = true
 	return m, nil
 }
 func (m *Manager) Config() ConfigView {
@@ -400,7 +418,11 @@ func (m *Manager) Close() error {
 	if m.mobile != nil {
 		_ = m.mobile.Close()
 	}
-	return m.stop()
+	err := m.stop()
+	if m.workspace != nil {
+		err = errors.Join(err, m.workspace.Close())
+	}
+	return err
 }
 func (m *Manager) setState(state string) { m.mu.Lock(); m.status.State = state; m.mu.Unlock() }
 func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {

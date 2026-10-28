@@ -15,6 +15,7 @@ func TestWorkspaceHasNo256DocumentQuota(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	defer s.Close()
 	s.Read("shared", "init.md")
 	for i := 0; i < 256; i++ {
 		if e := os.WriteFile(filepath.Join(base, "shared", fmt.Sprintf("note-%03d.md", i)), []byte("synthetic"), 0600); e != nil {
@@ -44,7 +45,14 @@ func TestNotesPersistAndConflictWithoutCrossScopeAccess(t *testing.T) {
 	if _, e = s.Write(scope, d.Name, "lost", ""); !errors.Is(e, ErrConflict) {
 		t.Fatal("overwrite without revision", e)
 	}
+	if e = s.Close(); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Read(scope, "MEMORY.md"); !errors.Is(e, os.ErrClosed) {
+		t.Fatal("closed store accepted read", e)
+	}
 	s, _ = Open(root)
+	defer s.Close()
 	read, e := s.Read(scope, d.Name)
 	if e != nil || read.Content != d.Content || read.Revision != d.Revision {
 		t.Fatal(read, e)

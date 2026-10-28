@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"wechat-bot/internal/workspacefs"
 )
 
 type Config struct {
@@ -125,7 +126,7 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 	defer root.Close()
 	switch tool {
 	case "server_list":
-		f, err := root.Open(rel)
+		f, err := workspacefs.OpenDirectory(root, rel)
 		if err != nil {
 			return nil, errors.New("目录无法读取")
 		}
@@ -159,7 +160,7 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		}
 		return map[string]any{"items": items, "truncated": next < len(entries), "complete": next == len(entries), "next_offset": next, "total": len(entries)}, nil
 	case "server_read":
-		f, err := root.Open(rel)
+		f, err := workspacefs.OpenRegular(root, rel)
 		if err != nil {
 			return nil, errors.New("文件无法读取或越过目录边界")
 		}
@@ -212,7 +213,7 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		if strings.TrimSpace(in.Command) == "" || len(in.Command) > 8000 || strings.ContainsRune(in.Command, 0) {
 			return nil, errors.New("命令为空或过长")
 		}
-		f, err := root.Open(rel)
+		f, err := workspacefs.OpenDirectory(root, rel)
 		if err != nil {
 			return nil, errors.New("执行目录不存在或越过边界")
 		}

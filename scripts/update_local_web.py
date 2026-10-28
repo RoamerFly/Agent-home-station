@@ -111,15 +111,29 @@ if not dropin.exists() or dropin.read_text()!=text:
     dropin.write_text(text)
     subprocess.run(["systemctl","--user","daemon-reload"],check=True)
 subprocess.run(["systemctl", "--user", "restart", "wechat-bot-web.service"], check=True)
-for attempt in range(20):
+from local_web_recovery import recover_startup
+
+def healthy():
     try:
-        response = urllib.request.build_opener(urllib.request.ProxyHandler({})).open("http://127.0.0.1:8081/healthz", timeout=2)
-        if response.status == 200:
-            break
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(base + "/healthz", timeout=2) as response:
+            return response.status == 200
     except OSError:
-        time.sleep(0.5)
-else:
-    raise RuntimeError("Updated web service did not become healthy; previous binary is retained")
+        return False
+
+def service_state():
+    status = subprocess.run(["systemctl", "--user", "show", "wechat-bot-web.service",
+                             "--property=ActiveState,SubState,ExecMainStatus"],
+                            capture_output=True, text=True, timeout=10)
+    return dict(line.split("=", 1) for line in status.stdout.splitlines() if "=" in line) if status.returncode == 0 else {}
+
+updated_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+result = recover_startup(binary, backup, updated_hash, healthy, service_state,
+    lambda: subprocess.run(["systemctl", "--user", "stop", "wechat-bot-web.service"], check=True, timeout=30),
+    lambda: subprocess.run(["systemctl", "--user", "start", "wechat-bot-web.service"], check=True, timeout=30))
+if result == "restored":
+    raise RuntimeError("New executable failed startup; verified previous web executable restored and healthy; native/config preserved")
+if result != "ready":
+    raise RuntimeError("Web readiness not confirmed: " + result + "; inspect the same service; no retry or further restart performed")
 assert hashlib.sha256(config.read_bytes()).hexdigest() == before, "Existing configuration changed unexpectedly"
 for unit in ["wechat-bot-web.service", "wechat-bot-native.service"]:
     subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], check=True)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+	"wechat-bot/internal/workspacefs"
 )
 
 var fileEditMu sync.Mutex
@@ -28,7 +29,7 @@ func (h Host) edit(root *os.Root, rel string, in Input) (any, error) {
 	if e != nil || filepath.Clean(resolved) != filepath.Clean(in.Path) {
 		return nil, errors.New("修改路径不能经过符号链接")
 	}
-	f, e := root.Open(rel)
+	f, e := workspacefs.OpenRegular(root, rel)
 	if e != nil {
 		return nil, e
 	}
@@ -79,7 +80,7 @@ func (h Host) edit(root *os.Root, rel string, in Input) (any, error) {
 	}
 	// Recheck immediately before replacing; shell tools are not serialized by
 	// this lock. A later external write can still race, so use Git for repairs.
-	check, e := root.Open(rel)
+	check, e := workspacefs.OpenRegular(root, rel)
 	if e != nil {
 		return nil, e
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"wechat-bot/internal/workspacefs"
 )
 
 // Publish a complete verified copy without replacing an existing file. A hard
@@ -15,7 +16,7 @@ import (
 // to the original asset, so editing an inbox cannot alter the cached original.
 func publishVerifiedStream(root *os.Root, name string, src io.Reader, size int64, hash string) error {
 	verify := func() error {
-		f, e := root.Open(name)
+		f, e := workspacefs.OpenRegular(root, name)
 		if e != nil {
 			return e
 		}

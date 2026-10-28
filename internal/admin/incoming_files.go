@@ -16,6 +16,7 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/workspacefs"
 )
 
 type incomingFileReader interface {
@@ -34,6 +35,9 @@ func (m *Manager) assetPath(hash string) string {
 }
 func (a mediaUnderstanding) receiveFile(ctx context.Context, msg linuxnative.Message, name string) (string, error) {
 	m := a.manager
+	if msg.AccountID != m.native.Account() || msg.ThreadID == "" {
+		return "", errors.New("incoming_file_identity_mismatch")
+	}
 	record := func(state, reason string) {
 		m.record(bot.Record{Event: "incoming_file_" + state, Category: "received", ThreadID: msg.ThreadID, Sender: msg.SenderID, MessageID: msg.ID, Content: name, Status: state, Reason: reason, Origin: "media"})
 	}
@@ -42,9 +46,11 @@ func (a mediaUnderstanding) receiveFile(ctx context.Context, msg linuxnative.Mes
 		return "", errors.New("incoming_file_name_invalid")
 	}
 	dir := filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(msg.AccountID), "conversations", companion.ScopeID("wechat", msg.AccountID, msg.ThreadID), "inbox")
-	if err := ensureManaged(dir); err != nil {
+	inboxRoot, err := workspacefs.EnsurePath(dir)
+	if err != nil {
 		return "", err
 	}
+	defer inboxRoot.Close()
 	pending := filepath.Join(dir, agentID(msg.ID, "download")+".part")
 	// Existing partial downloads are disposable, but use a fresh private path so
 	// concurrent readers never overwrite each other or a verified original.
@@ -101,16 +107,7 @@ func (a mediaUnderstanding) receiveFile(ctx context.Context, msg linuxnative.Mes
 		return "", e
 	}
 	defer src.Close()
-	accountRoot, e := os.OpenRoot(filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(msg.AccountID)))
-	if e != nil {
-		return "", e
-	}
-	defer accountRoot.Close()
-	relative, e := filepath.Rel(accountRoot.Name(), originalPath)
-	if e != nil {
-		return "", e
-	}
-	if e = publishVerifiedStream(accountRoot, relative, src, asset.Bytes, asset.Hash); e != nil {
+	if e = publishVerifiedStream(inboxRoot, filepath.Base(originalPath), src, asset.Bytes, asset.Hash); e != nil {
 		record("failed", "incoming_inbox_integrity_failed")
 		return "", e
 	}

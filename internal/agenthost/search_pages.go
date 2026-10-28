@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+	"wechat-bot/internal/workspacefs"
 )
 
 // The token is a continuation position, not an authorization grant. Every call
@@ -93,7 +94,7 @@ func (h Host) searchPage(ctx context.Context, root *os.Root, rel string, in Inpu
 		if !position.Opened && (position.Byte != 0 || position.Line != 0) {
 			return nil, errors.New("搜索cursor缺少续查文件版本；请重新搜索")
 		}
-		f, e := root.Open(filepath.FromSlash(position.Path))
+		f, e := workspacefs.OpenRegular(root, filepath.FromSlash(position.Path))
 		if e != nil {
 			return nil, errors.New("续查文件已不可用；重新搜索以取得当前目录结果")
 		}
@@ -116,7 +117,7 @@ func (h Host) searchPage(ctx context.Context, root *os.Root, rel string, in Inpu
 		position = at
 		return fs.SkipAll
 	}
-	err := fs.WalkDir(root.FS(), rel, func(path string, entry fs.DirEntry, e error) error {
+	err := fs.WalkDir(workspacefs.FS(root), rel, func(path string, entry fs.DirEntry, e error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -151,7 +152,7 @@ func (h Host) searchPage(ctx context.Context, root *os.Root, rel string, in Inpu
 		if files > 0 && expired() {
 			return stop("time_slice", at)
 		}
-		f, e := root.Open(filepath.FromSlash(path))
+		f, e := workspacefs.OpenRegular(root, filepath.FromSlash(path))
 		if e != nil {
 			skipped++
 			return nil

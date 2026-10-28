@@ -34,7 +34,9 @@
   const modal=window.WechatDialogs.open({title:'受管项目',subtitle:'按需使用音乐等扩展能力。项目与模型复用，输入和结果按账号保存。'});modal.body.textContent='正在读取项目清单…';
   try{const data=await api('/api/agent/projects');if(!modal.alive())return;modal.body.replaceChildren();
    for(const project of data.projects||[]){const section=document.createElement('section'),heading=document.createElement('div'),title=document.createElement('h3'),button=document.createElement('button'),usage=document.createElement('p');section.className='managed-project';heading.className='managed-project-heading';title.textContent=project.name||project.id;button.type='button';button.className='secondary';button.textContent='调用详情';button.setAttribute('aria-label','查看'+title.textContent+'的调用详情');button.addEventListener('click',()=>{const detail=window.WechatDialogs.open({title:title.textContent,subtitle:'实际登记的路径与参数，供排查环境和调用项目时使用。'}),pre=document.createElement('pre');pre.className='workspace-code';pre.textContent=JSON.stringify(project,null,2);detail.body.append(pre)});heading.append(title,button);usage.textContent=project.usage||'尚未填写使用说明，请查看调用详情。';section.append(heading,usage);modal.body.append(section)}
-   if(!(data.projects||[]).length)modal.body.textContent='尚未登记项目。请先安装所需插件，再登记其入口和使用说明。';
+   const issues=data.unavailable_manifests||[];
+   if(issues.length){const note=document.createElement('p');note.className='hint';note.setAttribute('role','status');const reasons={project_manifest_invalid:'JSON 对象格式无效',project_manifest_metadata_too_large:'登记信息超过 64 KiB',project_manifest_not_regular:'不是普通文件',project_not_registered:'文件已移除',project_manifest_unavailable:'文件暂不可读'};note.textContent='部分登记文件需检查：'+issues.map(item=>item.name+'（'+(reasons[item.reason]||'读取失败')+'）').join('、')+((data.projects||[]).length?'。其他项目仍可使用。':'。请修复登记信息后重新打开。');modal.body.append(note)}
+   if(!(data.projects||[]).length&&!issues.length)modal.body.textContent='尚未登记项目。请先安装所需插件，再登记其入口和使用说明。';
   }catch(e){if(modal.alive())modal.body.textContent=e.message}
  });
  const mediaButton=document.createElement('button');mediaButton.type='button';mediaButton.className='secondary';mediaButton.textContent='附件投递';toolbar.append(mediaButton);
