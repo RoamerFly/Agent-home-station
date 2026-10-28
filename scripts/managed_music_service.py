@@ -11,6 +11,7 @@ import urllib.request
 from managed_music_runner import command
 from music_unix_client import open_request
 from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
+from managed_music_ipc import AccountIPC
 
 
 def main():
@@ -45,14 +46,6 @@ def main():
     state = private / "music"
     for name in ("input", "output", "user", "base", "jobs"):
         (state / name).mkdir(parents=True, exist_ok=True)
-    ipc = Path(args.ipc)
-    ipc.mkdir(mode=0o700, exist_ok=True)
-    ipc.chmod(0o700)
-    sock = ipc / "comfy.sock"
-    if sock.exists():
-        if not sock.is_socket():
-            raise ValueError("unexpected_music_ipc_file")
-        sock.unlink()
     python = str(Path(args.python).absolute())
     scripts = Path(__file__).resolve().parent
     inference_scripts = public / "projects/agent-tools"
@@ -78,7 +71,10 @@ def main():
         stop(); raise SystemExit(0)
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
+    lease = None
     try:
+        lease = AccountIPC(args.ipc, public, private)
+        ipc, sock = lease.directory, lease.socket
         children.append(subprocess.Popen(command(public, private, private, argv, gpu=True, ipc=ipc)))
         for _ in range(args.startup_timeout):
             if children[0].poll() is not None:
@@ -103,7 +99,11 @@ def main():
             time.sleep(1)
         raise RuntimeError("music_child_exited")
     finally:
-        stop()
+        try:
+            stop()
+        finally:
+            if lease is not None:
+                lease.close()
 
 
 if __name__ == "__main__":

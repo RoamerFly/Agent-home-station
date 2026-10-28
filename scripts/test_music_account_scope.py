@@ -1,4 +1,5 @@
 import hashlib
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import socket
@@ -14,6 +15,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler
 
 from music_account_scope import HEADER, account_scope
+from managed_music_ipc import AccountIPC
 from process_window import no_console_options
 
 
@@ -49,7 +51,6 @@ class MusicAccountScopeTests(unittest.TestCase):
                 (workflows / name).write_text('{}')
             token = root / "control-token"
             token.write_text("synthetic-local-broker-token")
-            sock = root / "comfy.sock"
             children, logs, services = [], [], []
             client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -65,15 +66,20 @@ class MusicAccountScopeTests(unittest.TestCase):
                 except urllib.error.HTTPError as error:
                     return error.code, error.read(), error.headers
 
-            with socketserver.UnixStreamServer(str(sock), Backend) as backend:
-                worker = threading.Thread(target=backend.serve_forever, daemon=True)
-                worker.start()
+            with ExitStack() as stack:
                 try:
                     for account in ("synthetic-one", "synthetic-two"):
                         scope = hashlib.sha256(account.encode()).hexdigest()
                         private = root / "pri_workspace" / scope
                         state = private / "music/jobs"
                         state.mkdir(parents=True)
+                        lease = stack.enter_context(AccountIPC(root / "ipc", public, private))
+                        sock = lease.socket
+                        backend = stack.enter_context(socketserver.UnixStreamServer(str(sock), Backend))
+                        worker = threading.Thread(target=backend.serve_forever, daemon=True)
+                        worker.start()
+                        stack.callback(worker.join)
+                        stack.callback(backend.shutdown)
                         (state / "audio.wav").write_bytes(b"synthetic-audio:" + account.encode())
                         (state / "jobs.json").write_text(json.dumps({"same-job-id": {
                             "id": "same-job-id", "state": "completed", "file": "audio.wav",
@@ -136,8 +142,6 @@ class MusicAccountScopeTests(unittest.TestCase):
                             child.wait()
                     for log in logs:
                         log.close()
-                    backend.shutdown()
-                    worker.join()
 
 
 if __name__ == "__main__":
