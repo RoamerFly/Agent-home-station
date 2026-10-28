@@ -138,6 +138,11 @@ func (w *Worker) loadRuntime(server string) error {
 		if media == nil {
 			return errors.New("persistent media invalid")
 		}
+		if awaitingMediaReceipt(media) && media.ReconcileAfter.IsZero() && media.Next.After(time.Now()) {
+			// Legacy queues used one deadline for both reads and writes. Keep
+			// their retry backoff, but discover late receipts immediately.
+			media.ReconcileAfter, media.Next = media.Next, time.Now()
+		}
 		if w.config.Options != nil && w.config.Options.RetryUncertain && !media.UserCancelled && media.State == "needs_review" && media.Reason == "media_receipt_unverified_native_retry_denied" {
 			media.State, media.Reason = "waiting", "media_receipt_reconciliation_pending"
 			media.Next = time.Now() // Read-only reconciliation may resume immediately.

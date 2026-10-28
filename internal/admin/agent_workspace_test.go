@@ -10,6 +10,53 @@ import (
 	"wechat-bot/internal/companion"
 )
 
+func TestDeliveryWorkingRuleMergesAndSurvivesRestart(t *testing.T) {
+	f := setup(t)
+	d, e := f.manager.workspace.Read("shared", "AGENTS.md")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = f.manager.workspace.Write("shared", "AGENTS.md", "# 私有备注\n保留主人设定\n", d.Revision); e != nil {
+		t.Fatal(e)
+	}
+	for i := 0; i < 2; i++ {
+		if e = f.manager.initializeWorkspace(); e != nil {
+			t.Fatal(e)
+		}
+	}
+	d, e = f.manager.workspace.Read("shared", "AGENTS.md")
+	if e != nil || !strings.Contains(d.Content, "保留主人设定") || strings.Count(d.Content, "## 投递先核查，续办原批次") != 1 {
+		t.Fatal(d, e)
+	}
+}
+
+func TestAutonomousMediaRepairReportIsPrivateAndDoesNotGrantOwnerIdentity(t *testing.T) {
+	f, p := trustedAgent(t)
+	in := p.trace
+	in.Thread = "source@chatroom"
+	in.Sender = "ordinary-member"
+	in.TraceID = "surf-observation"
+	in.Surf = true
+	for i := 0; i < 2; i++ {
+		if e := f.manager.queueMediaRepair(in, "native-job", "media_processing_failed"); e != nil {
+			t.Fatal(e)
+		}
+	}
+	found := 0
+	for _, task := range f.manager.agent.list(in.Account, "") {
+		if task.DeliveryJob != "native-job" {
+			continue
+		}
+		found++
+		if task.Thread == in.Thread || !task.ReportOnly || task.OwnerRequested || task.Sender != "" || task.ReportSourceThread != in.Thread {
+			t.Fatal("source member inherited owner privileges", task)
+		}
+	}
+	if found != 1 {
+		t.Fatal("duplicate repair tasks", found)
+	}
+}
+
 func TestRVCGuideMigrationPreservesCustomPathsAndReplacesOldDefault(t *testing.T) {
 	f := setup(t)
 	d, err := f.manager.workspace.Read("shared", "project-yue.md")

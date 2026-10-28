@@ -32,6 +32,8 @@ type MediaSeed struct {
 	JobID        string                   `json:"job_id"`
 }
 type mediaDelivery struct {
+	RepairReported bool                   `json:"repair_reported,omitempty"`
+	ReconcileAfter time.Time              `json:"reconcile_after,omitempty"`
 	CrossSettled   bool                   `json:"cross_settled,omitempty"`
 	CrossTask      string                 `json:"cross_task,omitempty"`
 	CrossRequester string                 `json:"cross_requester,omitempty"`
@@ -69,7 +71,38 @@ func (d *mediaDelivery) terminal() bool {
 }
 func (w *Worker) draining() bool { return w.config.Draining != nil && w.config.Draining() }
 func awaitingMediaReceipt(d *mediaDelivery) bool {
-	return d.State == "waiting" && (d.Status.State == "needs_review" || d.Status.State == "unknown")
+	return (d.State == "waiting" || d.State == "unknown") && (d.Status.State == "needs_review" || d.Status.State == "unknown" || d.Reason == "media_receipt_id_missing")
+}
+
+func (w *Worker) mediaPredecessor(index int, d *mediaDelivery) (*mediaDelivery, bool) {
+	// Proactive shares can wait behind a real conversation request that has not
+	// started uploading. Never interrupt a live native upload for priority.
+	if d.Input.Surf {
+		for _, other := range w.runtime.Media {
+			if other.Input.Thread == d.Input.Thread && !other.Input.Surf && !other.terminal() && other.ID == "" {
+				return nil, true
+			}
+		}
+	}
+	var previous *mediaDelivery
+	for _, part := range w.runtime.Media[:index] {
+		if part.Input.Thread != d.Input.Thread {
+			continue
+		}
+		if !part.terminal() {
+			// Unknown outcomes remain durable and are reconciled independently;
+			// they must not freeze every later unrelated chat forever.
+			if awaitingMediaReceipt(part) && part.Trace != d.Trace {
+				continue
+			}
+			if !d.Input.Surf && part.Input.Surf && part.ID == "" && part.Trace != d.Trace {
+				continue
+			}
+			return nil, true
+		}
+		previous = part
+	}
+	return previous, false
 }
 func (w *Worker) mediaTraceOnlyUnknown(trace string) bool {
 	found := false
@@ -264,12 +297,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 					continue
 				}
 			}
-			var previous *mediaDelivery
-			for i := index - 1; i >= 0; i-- {
-				if w.runtime.Media[i].Input.Thread == d.Input.Thread {
-					previous = w.runtime.Media[i]
-					break
-				}
+			previous, blocked := w.mediaPredecessor(index, d)
+			if blocked {
+				continue
 			}
 			if previous != nil {
 				if d.CrossRequester != "" && previous.Trace == d.Trace && previous.State != "accepted" {
@@ -422,6 +452,20 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				w.refreshMediaParent(d.Trace)
 			}
 		case "needs_review", "unknown":
+			if d.Input.Surf {
+				// Continue reading the old receipt, but let explicit user delivery
+				// finish before resuming a proactive upload in the same thread.
+				if _, blocked := w.mediaPredecessor(index, d); blocked {
+					d.State = "waiting"
+					d.Next = time.Now().Add(15 * time.Second)
+					continue
+				}
+			}
+			if time.Now().Before(d.ReconcileAfter) {
+				d.State = "waiting"
+				d.Next = time.Now().Add(15 * time.Second)
+				continue
+			}
 			// Reconcile real same-thread messages, then resume the original plan.
 			// Explicit retry policy accepts that a delayed sync may hide delivery.
 			if retry, ok := w.sender.(interface {
@@ -437,6 +481,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				stop()
 				d.Retries++
 				if e == nil {
+					d.ReconcileAfter = time.Time{}
 					d.Status = next
 					d.State = next.State
 					d.Phase = next.Phase
@@ -445,6 +490,22 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 					w.mediaRecord(d, "media_retry_waiting", "decision")
 					continue
 				}
+				d.Reason = "media_reconciliation_failed_" + status.Reason
+				if !d.RepairReported && w.config.MediaRepairRequired != nil {
+					input := d.Input
+					input.TraceID = d.Trace
+					if reportErr := w.config.MediaRepairRequired(input, d.ID, status.Reason); reportErr != nil {
+						w.persistErr = reportErr
+						return
+					}
+					d.RepairReported = true
+				}
+				d.State = "waiting"
+				d.Checks++
+				d.ReconcileAfter = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.Checks))
+				d.Next = time.Now().Add(15 * time.Second)
+				w.mediaRecord(d, "media_reconciliation_failed", "error")
+				continue
 			}
 			if d.Checks >= 2 && !w.config.Options.RetryUncertain {
 				d.State = "needs_review"
@@ -453,7 +514,8 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				d.State = "waiting"
 				d.Checks++
 				d.Reason = "media_receipt_reconciliation_pending"
-				d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.Checks))
+				d.ReconcileAfter = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.Checks))
+				d.Next = time.Now().Add(15 * time.Second)
 			}
 			w.mediaRecord(d, "media_waiting", "error")
 			w.refreshMediaParent(d.Trace)

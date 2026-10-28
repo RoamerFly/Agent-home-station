@@ -3,7 +3,7 @@
   "source_url": "https://github.com/thisnick/agent-wechat.git",
   "base_commit": "7095ef01e0cd3d5b567bcb6970f379dcd88bbfa8",
   "patch": "research/patches/native-client-local-integration.patch",
-  "patch_sha256": "6df1d802eac3e1d951e6c5cb5c3034f85fe41dbb742354ffbcc7db7b287ae1cb",
+  "patch_sha256": "65ad9979b4aa66e622571a83085e506860da928f1efe0ace110ec2445bd3f669",
   "new_source_files": [
     "packages/native-client-rust/crates/wechat-core/src/channels.rs",
     "packages/native-client-rust/crates/wechat-protocol/src/channels_share.rs"

@@ -513,7 +513,7 @@ index 30eaea1..21612fe 100644
      fn encrypted_profile_plain_and_compressed_group_cards_use_the_same_normalization() {
          use crate::Core;
 diff --git a/packages/native-client-rust/crates/wechat-core/src/media.rs b/packages/native-client-rust/crates/wechat-core/src/media.rs
-index ae4c12b..5714512 100644
+index ae4c12b..f12d843 100644
 --- a/packages/native-client-rust/crates/wechat-core/src/media.rs
 +++ b/packages/native-client-rust/crates/wechat-core/src/media.rs
 @@ -88,6 +88,14 @@ struct VoicePart {
@@ -553,7 +553,7 @@ index ae4c12b..5714512 100644
      }
      pub fn media_job_by_key(&self, account: &str, key: &str) -> Result<MediaJob> {
          Ok(public_job(
-@@ -466,6 +487,75 @@ impl Core {
+@@ -466,6 +487,66 @@ impl Core {
          self.spawn_media_worker(account, id);
          Ok(public_job(account, &row))
      }
@@ -578,16 +578,7 @@ index ae4c12b..5714512 100644
 +            "media_job_not_retryable"
 +        );
 +        ensure!(
-+            matches!(
-+                row.error_code.as_deref(),
-+                Some(
-+                    "transport_unavailable"
-+                        | "worker_interrupted"
-+                        | "restart_after_submission"
-+                        | "media_worker_stopping"
-+                        | "media_disconnected"
-+                )
-+            ),
++            reconciled_failure_retryable(row.error_code.as_deref(), row.data["result"]["voiceFailureStage"].as_str()),
 +            "media_failure_requires_repair"
 +        );
 +        let mut plan: SendPlan = serde_json::from_slice(&self.vault.open_record(
@@ -629,7 +620,7 @@ index ae4c12b..5714512 100644
      pub async fn retry_media_job_reuse_completed_upload(
          self: &Arc<Self>,
          account: &str,
-@@ -496,7 +586,6 @@ impl Core {
+@@ -496,7 +577,6 @@ impl Core {
                  && expected.state == "unsupported"
                  && expected.phase == "readback"
                  && expected.error_code.as_deref() == Some("unsupported_media")
@@ -637,7 +628,7 @@ index ae4c12b..5714512 100644
                  && !expected.cancel_requested
                  && no_final_media_submission(&expected),
              "completed_upload_retry_not_admitted"
-@@ -1150,10 +1239,42 @@ impl Core {
+@@ -1150,10 +1230,42 @@ impl Core {
      ) -> Result<()> {
          let service = service_diagnostic(error);
          let cdn = cdn_download_failure(error);
@@ -681,7 +672,7 @@ index ae4c12b..5714512 100644
          if let Some((stage, code)) = service {
              row.data["result"]["serviceStage"] = stage.into();
              row.data["result"]["serviceCode"] = code.into();
-@@ -1268,7 +1389,6 @@ impl Core {
+@@ -1268,7 +1380,6 @@ impl Core {
          }
          .into();
          row.retryable = !uncertain
@@ -689,7 +680,7 @@ index ae4c12b..5714512 100644
              && matches!(
                  code,
                  "transport_unavailable"
-@@ -2239,7 +2359,7 @@ impl Core {
+@@ -2239,7 +2350,7 @@ impl Core {
              &serde_json::to_vec(plan)?,
          )?;
          if plan.request.kind == MediaKind::Voice {
@@ -698,7 +689,7 @@ index ae4c12b..5714512 100644
          }
          self.store.save_media_job(account, &row)?;
          Ok(())
-@@ -2453,6 +2573,10 @@ impl Core {
+@@ -2453,6 +2564,10 @@ impl Core {
                          duration_ms: ((chunk.len() as u64 * 1000) / 16000) as u32,
                          status: "prepared".into(),
                          server_id: None,
@@ -709,7 +700,7 @@ index ae4c12b..5714512 100644
                      });
                  }
                  self.save_send_plan(account, id, &plan)?;
-@@ -2462,17 +2586,59 @@ impl Core {
+@@ -2462,17 +2577,59 @@ impl Core {
                      continue;
                  }
                  self.progress_media(account, id, index as u64, Some(plan.voice.len() as u64))?;
@@ -773,7 +764,7 @@ index ae4c12b..5714512 100644
                  );
                  let receipt = match result {
                      Ok(receipt) => receipt,
-@@ -2484,6 +2650,9 @@ impl Core {
+@@ -2484,6 +2641,9 @@ impl Core {
                      }
                  };
                  plan.voice[index].server_id = receipt.server_message_id.clone();
@@ -783,7 +774,7 @@ index ae4c12b..5714512 100644
                  plan.voice[index].status = match receipt.status {
                      wechat_protocol::media_send::SendStatus::ServerAccepted => "accepted",
                      wechat_protocol::media_send::SendStatus::Rejected => "rejected",
-@@ -2493,6 +2662,13 @@ impl Core {
+@@ -2493,6 +2653,13 @@ impl Core {
                  // Preserve a known server result before any optional local state
                  // or profile update can fail under a disconnect/logout fence.
                  self.save_send_plan(account, id, &plan)?;
@@ -797,7 +788,7 @@ index ae4c12b..5714512 100644
                  self.save_state(account, &state)?;
                  if receipt.status == wechat_protocol::media_send::SendStatus::ServerAccepted {
                      let _ = self.project_media_send_receipts(account, id);
-@@ -2872,7 +3048,6 @@ impl Core {
+@@ -2872,7 +3039,6 @@ impl Core {
              row.kind == "send"
                  && row.state == "running"
                  && row.phase == "readback"
@@ -805,7 +796,7 @@ index ae4c12b..5714512 100644
                  && no_final_media_submission(&row),
              "completed_upload_retry_not_admitted"
          );
-@@ -3322,6 +3497,26 @@ fn run_ffmpeg(
+@@ -3322,6 +3488,26 @@ fn run_ffmpeg(
      );
      Ok(std::fs::read(output_path)?)
  }
@@ -832,7 +823,7 @@ index ae4c12b..5714512 100644
  /// Narrow RIFF/WAVE fast path: one PCM16 mono16kHz data chunk, with bounded
  /// unknown chunks and checked RIFF padding. Other valid formats use FFmpeg.
  fn pcm16k_wav(bytes: &[u8]) -> Result<Option<Vec<i16>>> {
-@@ -3520,6 +3715,22 @@ fn video_thumbnail(bytes: &[u8], cancelled: impl FnMut() -> Result<()>) -> Resul
+@@ -3520,6 +3706,22 @@ fn video_thumbnail(bytes: &[u8], cancelled: impl FnMut() -> Result<()>) -> Resul
  mod tests {
      use super::*;
      #[test]
@@ -855,7 +846,7 @@ index ae4c12b..5714512 100644
      fn persisted_cdn_download_diagnostics_ignore_response_context_and_preserve_reason() {
          use wechat_protocol::media::{
              LargeFileDownloadControl as Control, LargeFileDownloadError as Failure,
-@@ -3659,7 +3870,6 @@ mod tests {
+@@ -3659,7 +3861,6 @@ mod tests {
              "malformed_messages",
              "malformed_root",
              "malformed_result",
@@ -863,7 +854,7 @@ index ae4c12b..5714512 100644
              "missing_material",
              "missing_reservation",
              "changed_aes",
-@@ -3683,15 +3893,6 @@ mod tests {
+@@ -3683,15 +3884,6 @@ mod tests {
                  }
                  "malformed_root" => row.data = json!(["unexpected"]),
                  "malformed_result" => row.data["result"] = json!("unexpected"),
@@ -879,7 +870,7 @@ index ae4c12b..5714512 100644
                  "missing_material" => plan.material = None,
                  "missing_reservation" => plan.reservation = None,
                  "changed_aes" => plan.material.as_mut().unwrap().key[0] ^= 1,
-@@ -5008,7 +5209,7 @@ mod tests {
+@@ -5008,7 +5200,7 @@ mod tests {
      #[test]
      fn sticker_discovery_rejects_other_hosts_and_never_returns_xml_bytes() {
          let msg = message(47);
@@ -888,7 +879,7 @@ index ae4c12b..5714512 100644
          assert!(discover(&msg, xml).is_err());
      }
      fn file_message_xml(encryption: &str, transport: &str) -> String {
-@@ -5303,6 +5504,25 @@ mod tests {
+@@ -5303,6 +5495,25 @@ mod tests {
          assert_eq!(notes(300 * 16000 - 1).len(), 5);
      }
      #[test]
@@ -914,6 +905,30 @@ index ae4c12b..5714512 100644
      fn fresh_audio_uses_independent_codec() {
          let pcm = (0..16000)
              .map(|i| ((i as f64 * 440.0 * std::f64::consts::TAU / 16000.0).sin() * 12000.0) as i16)
+@@ -5315,3 +5526,23 @@ mod tests {
+ 
+ #[path = "recall_send_author_media.rs"]
+ mod recall_send_author;
++
++// A pre-submission voice handshake failed before any upload exchange. Older
++// builds recorded this precise stage under the generic processing error.
++// All other processing errors still require repair rather than blind replay.
++fn reconciled_failure_retryable(code: Option<&str>, stage: Option<&str>) -> bool {
++    matches!(code, Some("transport_unavailable" | "worker_interrupted" | "restart_after_submission" | "media_worker_stopping" | "media_disconnected"))
++        || code == Some("media_processing_failed") && stage == Some("voice_handshake_before_submission")
++}
++#[cfg(test)]
++mod reconciled_voice_admission_tests {
++    use super::*;
++    #[test]
++    fn legacy_handshake_failure_resumes_but_other_processing_errors_do_not() {
++        assert!(reconciled_failure_retryable(Some("media_processing_failed"),Some("voice_handshake_before_submission")));
++        assert!(!reconciled_failure_retryable(Some("media_processing_failed"),None));
++        assert!(!reconciled_failure_retryable(Some("media_processing_failed"),Some("voice_upload_exchange_outcome_unknown")));
++        assert!(reconciled_failure_retryable(Some("transport_unavailable"),None));
++        assert!(!reconciled_failure_retryable(Some("source_integrity_failed"),None));
++    }
++}
 diff --git a/packages/native-client-rust/crates/wechat-core/src/profile.rs b/packages/native-client-rust/crates/wechat-core/src/profile.rs
 index 0545adc..96413f9 100644
 --- a/packages/native-client-rust/crates/wechat-core/src/profile.rs

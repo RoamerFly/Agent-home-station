@@ -31,22 +31,23 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
-	MediaSeedSettled  func(string, string, linuxnative.ToolStatus) error
-	MediaSeedReceipt  func(string, string) (linuxnative.ToolStatus, bool)
-	BacklogSettled    func(string, string, []string, string)
-	AuthorizeThread   func(context.Context, string) (bool, error)
-	ReportFailure     func(companion.Input, string) error
-	AgentTask         func(time.Time, func(string) bool) (*companion.Input, error)
-	AgentTaskDone     func(companion.Input, string)
-	AgentTaskDelivery func(companion.Input, TaskDelivery) error
-	AgentTaskActive   func(companion.Input) bool
-	Draining          func() bool
-	MediaSeedAllowed  func(MediaSeed) bool
-	MediaSeeds        func() []MediaSeed
-	SurfAllowed       func(string) bool
-	SurfTask          func(time.Time) (*SurfTask, error)
-	Options           *Options
-	Analyzer          interface {
+	MediaRepairRequired func(companion.Input, string, string) error
+	MediaSeedSettled    func(string, string, linuxnative.ToolStatus) error
+	MediaSeedReceipt    func(string, string) (linuxnative.ToolStatus, bool)
+	BacklogSettled      func(string, string, []string, string)
+	AuthorizeThread     func(context.Context, string) (bool, error)
+	ReportFailure       func(companion.Input, string) error
+	AgentTask           func(time.Time, func(string) bool) (*companion.Input, error)
+	AgentTaskDone       func(companion.Input, string)
+	AgentTaskDelivery   func(companion.Input, TaskDelivery) error
+	AgentTaskActive     func(companion.Input) bool
+	Draining            func() bool
+	MediaSeedAllowed    func(MediaSeed) bool
+	MediaSeeds          func() []MediaSeed
+	SurfAllowed         func(string) bool
+	SurfTask            func(time.Time) (*SurfTask, error)
+	Options             *Options
+	Analyzer            interface {
 		Analyze(context.Context, linuxnative.Message) (string, error)
 	}
 	StateDir       string

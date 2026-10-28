@@ -2,11 +2,54 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
+
+type brokenReconciler struct{ *mediaFake }
+
+func (n *brokenReconciler) ReconcileMediaJob(context.Context, string) (linuxnative.ToolStatus, error) {
+	n.retries++
+	return n.status, errors.New("repair required")
+}
+func TestFailedReconciliationReportsOnceAndStillReadsLateReceiptDuringBackoff(t *testing.T) {
+	w, n, c, in := mediaWorker(t)
+	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "source", Kind: "voice", Title: "song.wav"})
+	d := w.runtime.Media[0]
+	n.status.State = "needs_review"
+	n.status.Reason = "media_processing_failed"
+	d.Checks = 1
+	d.Next = time.Time{}
+	w.sender = &brokenReconciler{n}
+	w.runtime.SendGates = nil
+	reports := 0
+	w.config.MediaRepairRequired = func(got companion.Input, job, reason string) error {
+		reports++
+		if job != d.ID || reason != "media_processing_failed" {
+			t.Fatal(job, reason)
+		}
+		return nil
+	}
+	w.reconcileMedia(context.Background())
+	if reports != 1 || n.retries != 1 || d.ReconcileAfter.Before(time.Now()) || d.Next.After(time.Now().Add(16*time.Second)) {
+		t.Fatal("failure hidden or receipt reads parked", d, reports, n.retries)
+	}
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if reports != 1 || n.retries != 1 {
+		t.Fatal("repeated repair or ignored backoff", reports, n.retries)
+	}
+	n.status.State = "accepted"
+	n.status.ServerID = "late-receipt"
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if d.State != "accepted" || n.sends != 1 || n.retries != 1 {
+		t.Fatal("late receipt missed or duplicate sent", d, n.sends, n.retries)
+	}
+}
 
 type recoveringMediaNative struct{ *mediaFake }
 

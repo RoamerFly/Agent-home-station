@@ -26,17 +26,19 @@ type crossMediaInput struct {
 	Key     string `json:"request_key"`
 }
 type crossMediaBatch struct {
-	TaskID   string                            `json:"task_id,omitempty"`
-	Receipts map[string]linuxnative.ToolStatus `json:"receipts,omitempty"`
-	ID       string                            `json:"operation_id"`
-	Account  string                            `json:"account"`
-	Origin   string                            `json:"origin_thread_id"`
-	Source   string                            `json:"source_thread_id"`
-	Target   string                            `json:"target_thread_id"`
-	Sender   string                            `json:"requester_id"`
-	Asset    string                            `json:"asset_id"`
-	Created  time.Time                         `json:"created"`
-	Parts    []bot.MediaSeed                   `json:"parts"`
+	RequestIdentity string                            `json:"request_identity,omitempty"`
+	SupersededBy    string                            `json:"superseded_by,omitempty"`
+	TaskID          string                            `json:"task_id,omitempty"`
+	Receipts        map[string]linuxnative.ToolStatus `json:"receipts,omitempty"`
+	ID              string                            `json:"operation_id"`
+	Account         string                            `json:"account"`
+	Origin          string                            `json:"origin_thread_id"`
+	Source          string                            `json:"source_thread_id"`
+	Target          string                            `json:"target_thread_id"`
+	Sender          string                            `json:"requester_id"`
+	Asset           string                            `json:"asset_id"`
+	Created         time.Time                         `json:"created"`
+	Parts           []bot.MediaSeed                   `json:"parts"`
 }
 
 func validCrossReceipt(batch crossMediaBatch, part bot.MediaSeed, status linuxnative.ToolStatus) bool {
@@ -113,6 +115,16 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 	args, _ = json.Marshal(in)
 	return p.privilegedCall(ctx, "wechat_send_media", args, func() (any, error) {
 		m := p.manager
+		m.crossSendMu.Lock()
+		defer m.crossSendMu.Unlock()
+		identity := p.trace.TraceID
+		if p.trace.OriginTraceID != "" {
+			identity = p.trace.OriginTraceID
+		}
+		if p.trace.TaskID != "" {
+			identity = "task:" + p.trace.TaskID
+		}
+
 		if in.Message != "" {
 			msg := *verified
 			var e error
@@ -134,6 +146,26 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 						in.Asset = a.ID
 					}
 				}
+			}
+		}
+		if identity != "" && in.Asset != "" {
+			entries, e := os.ReadDir(filepath.Join(m.dir, "cross-media"))
+			if e != nil && !os.IsNotExist(e) {
+				return nil, e
+			}
+			for _, entry := range entries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+					continue
+				}
+				old, e := m.readCrossBatch(strings.TrimSuffix(entry.Name(), ".json"))
+				if e != nil || old.SupersededBy != "" || old.RequestIdentity != identity && crossBatchAccepted(old) || old.Origin != p.trace.Thread || old.Sender != p.trace.Sender || old.Source != in.Source || old.Target != in.Target || old.Asset != in.Asset || old.Parts[0].Media.Kind != in.Kind {
+					continue
+				}
+				state := "queued"
+				if crossBatchAccepted(old) {
+					state = "accepted"
+				}
+				return map[string]any{"operation_id": old.ID, "state": state, "source_thread_id": old.Source, "target_thread_id": old.Target, "parts": len(old.Parts), "reused_existing_operation": true, "instruction": "同一素材目标已有投递批次；核对原operation_id，不创建新的发送队列。"}, nil
 			}
 		}
 		sourceTrace := p.trace
@@ -219,7 +251,7 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 			return nil, errors.New("cross_media_authorization_revoked")
 		}
 		id := p.operationID("wechat_send_media", args)
-		batch := crossMediaBatch{TaskID: p.trace.TaskID, ID: id, Account: p.trace.Account, Origin: p.trace.Thread, Source: in.Source, Target: in.Target, Sender: p.trace.Sender, Asset: in.Asset, Created: time.Now().UTC()}
+		batch := crossMediaBatch{RequestIdentity: identity, TaskID: p.trace.TaskID, ID: id, Account: p.trace.Account, Origin: p.trace.Thread, Source: in.Source, Target: in.Target, Sender: p.trace.Sender, Asset: in.Asset, Created: time.Now().UTC()}
 		for i, media := range outputs {
 			input := p.trace
 			input.Thread = in.Target
@@ -276,6 +308,9 @@ func (m *Manager) queueCrossBatch(batch crossMediaBatch) error {
 		}
 	}
 	for _, seed := range batch.Parts {
+		if batch.SupersededBy != "" {
+			continue
+		}
 		if status, ok := batch.Receipts[seed.Key]; ok && validCrossReceipt(batch, seed, status) {
 			continue
 		}
@@ -335,6 +370,15 @@ func (m *Manager) restoreCrossMedia() error {
 	}
 	sort.SliceStable(batches, func(i, j int) bool { return batches[i].Created.Before(batches[j].Created) })
 	for _, batch := range batches {
+		if batch.SupersededBy != "" {
+			if err = m.queueCrossBatch(batch); err != nil {
+				return err
+			}
+			if err = m.settleCrossTask(batch); err != nil {
+				return err
+			}
+			continue
+		}
 		if crossBatchAccepted(batch) {
 			// Receipt commit can precede queue and parent-task checkpoints.
 			// Complete that handoff without submitting any part again, even if
@@ -379,6 +423,10 @@ func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (strin
 	if e = validateCrossBatch(batch, p.manager.native.Account()); e != nil {
 		return "", e
 	}
+	if batch.SupersededBy != "" {
+		out, _ := json.Marshal(map[string]any{"operation_id": batch.ID, "state": "superseded", "superseded_by": batch.SupersededBy, "target_thread_id": batch.Target, "instruction": "已合并到另一个投递批次，检查superseded_by；不要恢复重复发送。"})
+		return string(out), nil
+	}
 	native, ok := p.manager.native.(nativeTools)
 	if !ok {
 		return "", errors.New("native_status_unavailable")
@@ -414,6 +462,9 @@ func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (strin
 func (m *Manager) crossSeedAllowed(seed bot.MediaSeed) bool {
 	batch, e := m.readCrossBatch(seed.Trace)
 	if e != nil {
+		return false
+	}
+	if batch.SupersededBy != "" {
 		return false
 	}
 	found := false
@@ -573,7 +624,7 @@ func (m *Manager) settleCrossMediaPart(id, key string, status linuxnative.ToolSt
 }
 
 func (m *Manager) settleCrossTask(batch crossMediaBatch) error {
-	if batch.TaskID != "" && crossBatchAccepted(batch) {
+	if batch.TaskID != "" && (crossBatchAccepted(batch) || batch.SupersededBy != "") {
 		a := m.agent
 		a.mu.Lock()
 		t, ok := a.data.Tasks[batch.TaskID]
@@ -586,7 +637,7 @@ func (m *Manager) settleCrossTask(batch crossMediaBatch) error {
 				}
 			}
 			t.PendingOperations = pending
-			if len(pending) == 0 && t.WorkCompleted && t.State == "waiting_delivery" && (t.Delivery == nil || t.Delivery.State == "accepted") {
+			if batch.SupersededBy == "" && len(pending) == 0 && t.WorkCompleted && t.State == "waiting_delivery" && (t.Delivery == nil || t.Delivery.State == "accepted") {
 				t.State = "completed"
 			}
 			a.data.Tasks[t.ID] = t

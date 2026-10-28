@@ -41,7 +41,7 @@
  mediaButton.addEventListener('click',()=>{
   const modal=window.WechatDialogs.open({title:'跨会话附件投递',subtitle:'查看当前账号的来源、目标与已保存回执，不会重发或重新生成。'}),results=document.createElement('div'),message=document.createElement('p'),more=document.createElement('button');
   message.className='hint';message.setAttribute('role','status');more.type='button';more.className='secondary';more.textContent='继续查看';more.hidden=true;modal.body.append(message,results,more);let offset=0,busy=false;
-  const names={accepted:'微信已接受',queued:'排队或等待核对',paused:'已暂停，请检查授权或原任务',needs_review:'记录需检查',pending:'等待确认'};
+  const names={superseded:'已合并，停止重复投递',accepted:'微信已接受',queued:'排队或等待核对',paused:'已暂停，请检查授权或原任务',needs_review:'记录需检查',pending:'等待确认'};
   const kinds={voice:'语音',file:'文件',image:'图片',video:'视频'};
   async function load(){if(busy)return;busy=true;more.disabled=true;message.textContent='正在读取投递记录…';try{
    const data=await api('/api/agent/media-batches?offset='+offset+'&limit=30');if(!modal.alive())return;

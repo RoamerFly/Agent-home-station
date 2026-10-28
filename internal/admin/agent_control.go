@@ -733,7 +733,11 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 	b, _ := json.Marshal(value)
 	var result map[string]any
 	if json.Unmarshal(b, &result) == nil && result != nil {
-		result["operation_id"] = id
+		if existing, ok := result["operation_id"].(string); !ok || existing == "" {
+			result["operation_id"] = id
+		} else if existing != id {
+			result["invocation_operation_id"] = id
+		}
 		b, _ = json.Marshal(result)
 	}
 	op.State = "completed"

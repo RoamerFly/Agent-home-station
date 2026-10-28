@@ -71,7 +71,9 @@ func (s *Server) crossMediaRoutes(mux *http.ServeMux) {
 				parts = append(parts, part)
 			}
 			state := "queued"
-			if crossBatchAccepted(batch) {
+			if batch.SupersededBy != "" {
+				state = "superseded"
+			} else if crossBatchAccepted(batch) {
 				state = "accepted"
 			} else if !s.manager.crossSeedAllowed(batch.Parts[0]) {
 				state = "paused"

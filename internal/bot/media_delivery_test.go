@@ -55,6 +55,27 @@ type mediaFake struct {
 	keys                    map[string]bool
 }
 
+func TestUnknownOldSurfDoesNotBlockExplicitRequestButPreservesBatchOrder(t *testing.T) {
+	w, n, c, in := mediaWorker(t)
+	old := in
+	old.TraceID = "old-surf"
+	old.Surf = true
+	w.runtime.Media = append(w.runtime.Media, &mediaDelivery{Key: "old-key", Trace: old.TraceID, Input: old, ID: "old-job", Kind: "voice", State: "waiting", Status: linuxnative.ToolStatus{State: "needs_review"}, Next: time.Now().Add(time.Hour)})
+	w.runtime.Media = append(w.runtime.Media, &mediaDelivery{Key: "unsent-surf", Trace: "another-surf", Input: old, Kind: "voice", State: "prepared"})
+	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "explicit-source", Kind: "voice", Title: "requested.wav"})
+	if n.sends != 1 || n.status.SourceID != "explicit-source" || w.runtime.Media[0].State != "waiting" {
+		t.Fatal("old surf blocked unrelated request", n.sends, n.status)
+	}
+	first := w.runtime.Media[2]
+	first.State = "waiting"
+	first.Status.State = "needs_review"
+	first.Next = time.Now().Add(time.Hour)
+	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "part-two", Kind: "voice", Title: "part2.wav"})
+	if n.sends != 1 {
+		t.Fatal("same batch skipped unknown predecessor", n.sends)
+	}
+}
+
 func (n *mediaFake) Submit(_ context.Context, r linuxnative.ToolSend) (linuxnative.ToolStatus, error) {
 	n.sends++
 	n.keys[r.IdempotencyKey] = true

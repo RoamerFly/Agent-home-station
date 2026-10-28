@@ -60,6 +60,30 @@ func acceptedCrossPart(b crossMediaBatch, i int) linuxnative.ToolStatus {
 	return linuxnative.ToolStatus{ID: "job-" + p.Key, State: "accepted", ThreadID: b.Target, SourceID: p.SourceID, ServerID: fmt.Sprint(800 + i)}
 }
 
+func TestCrossMediaNewKeyReusesPendingBatchAndSupersededNeverRestores(t *testing.T) {
+	f, p, b := crossRecoveryFixture(t, 3)
+	for _, trace := range []string{p.trace.TraceID, "another-owner-message"} {
+		p.trace.TraceID = trace
+		raw, _ := json.Marshal(map[string]string{"asset_id": b.Asset, "source_thread_id": b.Source, "target_thread_id": b.Target, "kind": "voice", "request_key": "changed-" + trace})
+		result, e := p.Call(context.Background(), "wechat_send_media", raw)
+		if e != nil || !strings.Contains(result, b.ID) || !strings.Contains(result, "reused_existing_operation") {
+			t.Fatal(result, e)
+		}
+	}
+	entries, _ := os.ReadDir(filepath.Join(f.manager.dir, "cross-media"))
+	if len(entries) != 1 || len(f.manager.mediaSeeds) != 3 {
+		t.Fatal("duplicated pending batch", len(entries), len(f.manager.mediaSeeds))
+	}
+	b.SupersededBy = agentID("canonical-batch")
+	saveCrossRecoveryBatch(t, f, b)
+	if e := f.manager.restoreCrossMedia(); e != nil {
+		t.Fatal(e)
+	}
+	if len(f.manager.takeMediaSeeds()) != 0 || f.manager.crossSeedAllowed(b.Parts[0]) {
+		t.Fatal("superseded batch restored")
+	}
+}
+
 func TestCrossRecoveryPrunesAcceptedReceiptBeforeQueueCheckpoint(t *testing.T) {
 	f, _, b := crossRecoveryFixture(t, 3)
 	b.Receipts = map[string]linuxnative.ToolStatus{b.Parts[0].Key: acceptedCrossPart(b, 0)}
