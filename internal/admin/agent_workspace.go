@@ -11,6 +11,7 @@ import (
 
 func (m *Manager) initializeWorkspace() error {
 	docs := map[string]string{
+		"media-diagnostics.md":        "# 媒体重读与运行诊断（2026-10-28）\n可信管理员在私聊或群里要求检查另一个已授权群的媒体时，不需要让主人重新转发原视频。先用wechat_read或agent_global_search取得真实来源和message_id；video_inspect传message_id会核对本账号的真实来源，使用asset_id时带source_thread_id。普通成员仍只能读当前会话，不能跨账号。音轨ASR_RESPONSE_HAVE_NO_WORDS表示没有识别出可转写的词，不是解码、鉴权或网络失败，也不能据此证明完全无人声；可能为音乐、环境声或不清晰人声。不要反复要求主人给本已具备的跨会话读取授权。\n管理员排障可发现agent_diagnostics，按thread_id、message_id读取当前账号的时间、处理阶段、状态和提供商代码，不必读取含密钥的后台服务目录。它是只读诊断，不自动发送消息。项目源码与参数先project_list/project_read，修改在受管项目中完成；控制面凭证不能因为排障而挂载给Shell。对外区分读取成功、无可转写词、模型听感判断和确实修改/验证代码的证据。\n",
 		"managed-execution.md":        "# 受管执行策略（2026-10-28）\n先用project_list/project_read定位项目和受管运行环境，不搜索C、D、E盘。Windows使用LPAC CMD，Linux使用Bubblewrap，网络隔离，凭证和控制目录不挂载。普通成员可在本会话执行文件处理或无害程序、使用只读公共项目；不能修改公共源码、读取其他会话。管理员可改公共项目，global=true仅临时授予本次调用当前微信账号私有全局工作区，不影响后续群友。\n当前schema与执行器状态优先；旧指南的全盘宿主Shell、PowerShell和跨会话附件默认投到私聊等说明失效。跨会话媒体用wechat_send_media指定source_thread_id和target_thread_id，读取真实回执，尚未送达的任务保持等待。\n",
 		"tool-defaults.md":            "# 工具默认值原则\n默认值只是起点，不是能力上限。根据用户需求自行选择精度、范围、分页、批大小、分辨率、分析预算及执行时间。以当前工具schema为准，不把旧聊天或旧指南里的6帧、64帧、8图、180秒当作不可调整的规则。video_inspect的page_size、batch_size、max_dimension、analysis_tokens、duration_seconds、audio_chunk_seconds、timeout_seconds、audio_timeout_seconds均可动态指定；timeout_seconds=0不添加本地截止时间，仍尊重上游取消。长音轨按可传输的PCM片段处理完整请求范围，不静默缩成默认180秒。server_read的length可大于默认输出长度。\n单次数据若超出真实传输或提供商能力，应读取返回的实际参数、原因和续读起点，调整批次或换方法完成需求；不要直接宣称整个任务做不了。权限、文件版本、取消与投递真实性检查继续有效。\n",
 		"tool-reading.md":             "# 按需读取与分页\n初始媒体观察是快速概览，不是全部能力。需要逐帧或详细视频分析时discover_tools查询video_inspect，action=info取得真实帧数，再action=frames、step=1、start_frame=0逐页读取，继续next_start_frame直到需要的范围完成；真实帧编号与时间戳是证据。step大于1是采样，不能称为逐帧。音轨用action=audio从任意start_seconds读取并按next_start_seconds续读，不限于最初180秒。优先用观察返回的asset_id复用原件；没有缓存时使用当前会话真实message_id或可访问的公开url。provider拒绝预算/格式时根据真实反馈调整，不虚构已读画面。\nserver_list、server_search、workspace_list/search通过next_offset继续；server_read按字节next_offset继续，可带expected_sha256锁定版本；media_recent给offset=0进入全目录分页模式。不把单页当成全量，也不把目录素材当作互联网搜索。长任务用agent_task保存来源、进度与下一页游标，恢复时继续而非重复全部读取。大结果若返回result_id，先用tool_output_read按需继续读取完整反馈，再决定下一步。权限、服务商实际能力和资源边界由运行时返回。\n",
@@ -38,9 +39,10 @@ func (m *Manager) initializeWorkspace() error {
 		if d.Revision != "" {
 			updated := d.Content
 			for old, replacement := range map[string]string{
+				"没有缓存时使用当前会话真实message_id或可访问的公开url。":                                      "没有缓存时使用真实message_id或可访问的公开url；可信管理员的message_id可来自本账号其他已授权会话，asset_id跨会话时带source_thread_id。",
 				"command直接写PowerShell，不需要在Linux shell中转义美元符、反斜线或引号，不要套pwsh.exe -Command。": "command使用LPAC CMD语法，不运行宿主PowerShell；项目解释器先project_read读取。",
-				"完整Shell以服务用户身份运行。":       "Shell及子进程均在受管工作区的系统沙箱内执行，宿主用户目录和凭证不可访问。",
-				"文件级权限不限制完整Shell所能访问的资源。": "文件和Shell均受系统隔离限制，只可访问此次授权的受管目录。",
+				"完整Shell以服务用户身份运行。":                                                       "Shell及子进程均在受管工作区的系统沙箱内执行，宿主用户目录和凭证不可访问。",
+				"文件级权限不限制完整Shell所能访问的资源。":                                                 "文件和Shell均受系统隔离限制，只可访问此次授权的受管目录。",
 			} {
 				updated = strings.ReplaceAll(updated, old, replacement)
 			}

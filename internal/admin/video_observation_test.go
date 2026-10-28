@@ -152,6 +152,53 @@ func TestVideoObservationModalitiesAreIndependentAndScoped(t *testing.T) {
 	}
 }
 
+func TestNoRecognizedWordsKeepsVisualEvidenceAndCompletesAudioRange(t *testing.T) {
+	video := observationFixture(t, "1")
+	f, p := trustedAgent(t)
+	f.manager.config.Companion.Permissions.Remember = false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		w.Write([]byte(`{"code":"CLIENT_ERROR","message":"ASR_RESPONSE_HAVE_NO_WORDS"}`))
+	}))
+	defer server.Close()
+	f.manager.speech = bailian.Defaults()
+	f.manager.speech.Endpoint = server.URL
+	f.manager.speech.Key = "synthetic.private.key"
+	f.manager.speech.ASREnabled = true
+	sample, err := sampleVideo(context.Background(), f.manager.dir, video)
+	if err != nil && (sample.Seconds <= 0 || len(sample.Frames) == 0) {
+		t.Fatal(err)
+	}
+	vision := observationVision(func(context.Context, string, []deepseek.Image) (string, error) { return "合成画面观察", nil })
+	text, err := (mediaUnderstanding{manager: f.manager, provider: vision}).observeVideo(context.Background(), linuxnative.Message{ID: "no-words", AccountID: "test", ThreadID: p.trace.Thread}, video, sample, false)
+	if err != nil || !strings.Contains(text, "ASR_RESPONSE_HAVE_NO_WORDS") || strings.Contains(text, "音轨转写未完成") || !strings.Contains(text, "合成画面观察") {
+		t.Fatal(text, err)
+	}
+	seen := false
+	for _, event := range f.manager.Logs() {
+		if event.Event == "video_audio_no_words" {
+			seen = true
+			if event.Category == "error" || event.ToolHTTPStatus != 400 {
+				t.Fatal(event)
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("audio outcome not recorded")
+	}
+	withoutVision, err := (mediaUnderstanding{manager: f.manager}).observeVideo(context.Background(), linuxnative.Message{ID: "no-words-no-vision", AccountID: "test", ThreadID: p.trace.Thread}, video, sample, false)
+	if err != nil || !strings.Contains(withoutVision, "画面理解未完成") || !strings.Contains(withoutVision, "ASR_RESPONSE_HAVE_NO_WORDS") {
+		t.Fatal(withoutVision, err)
+	}
+	out := map[string]any{}
+	if err = p.inspectAudioRange(context.Background(), video, videoInspectionInput{AudioChunk: .4}, sample.Seconds, sample.Seconds, out); err != nil {
+		t.Fatal(err)
+	}
+	if out["transcription_state"] != "no_recognizable_speech" || out["text"] != "" || !out["requested_range_complete"].(bool) {
+		t.Fatal(out)
+	}
+}
+
 func TestVideoReadPermissionAndCancellationPreventProviderCalls(t *testing.T) {
 	f := setup(t)
 	native := &observationNative{fakeNative: f.native}

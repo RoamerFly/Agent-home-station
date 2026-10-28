@@ -5,6 +5,15 @@ const { project, stage, activityTarget } = require('../internal/admin/static/rou
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
 
+test('no recognized speech remains an observation outcome rather than a failed turn',()=>{
+ const rows=project([
+  entry(1,{event:'message_received',category:'received'}),
+  entry(2,{event:'video_audio_no_words',category:'decision',status:'no_recognizable_speech',tool_http_status:400,tool_code:'ASR_RESPONSE_HAVE_NO_WORDS'}),
+  entry(3,{event:'channels_video_observed',category:'decision',status:'observed',reason:'video_visual_audio_no_words'})
+ ]);
+ assert.equal(rows.length,1);assert.equal(rows[0].errors,0);assert.notEqual(rows[0].status,'failed');
+});
+
 test('authenticated API endpoints are labels; real content remains navigable', () => {
   const api = activityTarget({target_url:'https://api.deepseek.com/v1/tools/search'});
   assert.equal(api.kind, 'service'); assert.equal(api.href, undefined);

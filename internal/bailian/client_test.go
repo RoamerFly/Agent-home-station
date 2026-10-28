@@ -9,6 +9,28 @@ import (
 	"testing"
 )
 
+func TestASRNoRecognizableWordsIsDistinctFromProviderFailure(t *testing.T) {
+	for _, tc := range []struct {
+		body     string
+		noSpeech bool
+	}{
+		{`{"code":"CLIENT_ERROR","message":"ASR_RESPONSE_HAVE_NO_WORDS"}`, true},
+		{`{"code":"ASR_RESPONSE_HAVE_NO_WORDS"}`, true},
+		{`{"code":"InvalidApiKey","message":"private credential detail"}`, false},
+		{`{"code":"CLIENT_ERROR","message":"ASR_RESPONSE_HAVE_NO_WORDS plus private raw details"}`, false},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(400); w.Write([]byte(tc.body)) }))
+		c := New(Defaults())
+		c.Config.Endpoint = server.URL
+		c.Config.Key = "synthetic.private.key"
+		_, err := c.Transcribe(context.Background(), []byte("RIFF-synthetic"))
+		server.Close()
+		if err == nil || IsNoSpeech(err) != tc.noSpeech || strings.Contains(err.Error(), "private credential detail") {
+			t.Fatal(err, tc.noSpeech)
+		}
+	}
+}
+
 func TestSpeechContractsAndPrivateErrors(t *testing.T) {
 	count := 0
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

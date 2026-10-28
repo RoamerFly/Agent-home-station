@@ -227,6 +227,10 @@ func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnat
 		return "", e
 	}
 	text, e := bailian.New(c).Transcribe(ctx, wav)
+	if bailian.IsNoSpeech(e) {
+		a.manager.record(bot.Record{Event: "voice_no_words", Category: "received", MessageID: message.ID, ThreadID: message.ThreadID, Sender: message.SenderID, Status: "no_recognizable_speech", Reason: "ASR_RESPONSE_HAVE_NO_WORDS", ToolCode: "ASR_RESPONSE_HAVE_NO_WORDS", Origin: "speech"})
+		return "[微信语音音频已取得并提交识别，但没有识别出可转写的词；可能为音乐、环境声或不清晰人声。不要编造语音正文。]", nil
+	}
 	if e == nil {
 		a.manager.record(bot.Record{Event: "voice_transcribed", Category: "received", MessageID: message.ID, ThreadID: message.ThreadID, Sender: message.SenderID, Content: text, Status: "succeeded", Origin: "speech"})
 	}

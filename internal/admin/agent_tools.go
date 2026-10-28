@@ -26,6 +26,9 @@ func (p *permittedTools) agentTools() []mcptools.Tool {
 		return nil
 	}
 	tools := p.workspaceTools()
+	if p.privileged() {
+		tools = append(tools, diagnosticsTool())
+	}
 	for _, tool := range p.projectTools() {
 		if tool.Name != "agent_global_search" || p.privileged() {
 			tools = append(tools, tool)
@@ -88,7 +91,7 @@ func agentToolName(name string) bool {
 	if name == "agent_reminder" {
 		return true
 	}
-	return strings.HasPrefix(name, "project_") || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || strings.HasPrefix(name, "wechat_") || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
+	return strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || strings.HasPrefix(name, "wechat_") || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
 }
 func (p *permittedTools) callAgent(ctx context.Context, name string, args json.RawMessage) (result string, callErr error) {
 	defer func() {
@@ -116,6 +119,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		return string(b), e
 	}
 	m := p.manager
+	if name == "agent_diagnostics" {
+		return p.callDiagnostics(args)
+	}
 	if strings.HasPrefix(name, "project_") || name == "agent_global_search" {
 		return p.callProject(ctx, name, args)
 	}

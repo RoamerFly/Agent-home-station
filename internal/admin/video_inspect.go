@@ -21,10 +21,11 @@ func (p *permittedTools) videoTools() []mcptools.Tool {
 	if p.trace.Preview || p.trace.ReportOnly || p.trace.Account != p.manager.native.Account() || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) || !p.manager.Config().Behavior.ReadVideos {
 		return nil
 	}
-	return []mcptools.Tool{agentTool("video_inspect", "视频精读/逐帧读取: inspect actual video metadata, consecutive decoded frames, or arbitrary audio ranges. Automatic6-frame overview is a DEFAULT, not a capability ceiling. Choose ONE source: asset_id, current-thread message_id, or public url. action=info returns actual frame count and timestamps metadata. action=frames defaults start_frame=0,step=1,page_size=24,batch_size=8,max_dimension=960,analysis_tokens=4096; ALL these are adjustable to user needs. page_size has no64-frame clamp; work is decoded/analyzed batch by batch. step>1 is sampling, never call it frame-by-frame. Return actual indexes/timestamps, effective settings and next_start_frame; continue on partial completion. action=audio defaults duration_seconds=90,audio_chunk_seconds=180,audio_timeout_seconds=60; longer requested ranges are processed completely in chunks. requested_range_complete describes that range; complete/video_audio_complete refer to the whole audio endpoint, so continue next_start_seconds when the user wants all audio. Adjust chunk size and timeout; if PCM payload must be split to fit transport, return actual size/reason instead of silently shortening the range. timeout_seconds defaults240 for the whole call;0 adds no local deadline but preserves caller cancellation. audio_timeout_seconds=0 also inherits caller cancellation. Provider-specific limits are actual feedback, not a project image-count quota. question customizes analysis. No WeChat send. For long work persist checkpoints and continue returned cursors. Input {action:info|frames|audio,asset_id?|message_id?|url?,start_frame?,page_size?,step?,batch_size?,max_dimension?,analysis_tokens?,timeout_seconds?,start_seconds?,duration_seconds?,audio_chunk_seconds?,audio_timeout_seconds?,question?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["info","frames","audio"]},"asset_id":{"type":"string"},"message_id":{"type":"string"},"url":{"type":"string"},"start_frame":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1},"step":{"type":"integer","minimum":1},"batch_size":{"type":"integer","minimum":1},"max_dimension":{"type":"integer","minimum":1},"analysis_tokens":{"type":"integer","minimum":1},"timeout_seconds":{"type":"integer","minimum":0},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","minimum":0},"audio_chunk_seconds":{"type":"number","minimum":0},"audio_timeout_seconds":{"type":"integer","minimum":0},"question":{"type":"string"}},"required":["action"],"additionalProperties":false}`)}
+	return []mcptools.Tool{agentTool("video_inspect", "视频精读/逐帧读取: inspect actual video metadata, consecutive decoded frames, or arbitrary audio ranges. Automatic6-frame overview is a DEFAULT, not a capability ceiling. Choose ONE source: asset_id, message_id, or public url. Trusted owners may inspect another authorized conversation of THIS account: use source_thread_id with asset_id; a message_id resolves its actual source automatically. Ordinary members remain current-conversation only. This reads media, not private service directories. action=info returns actual frame count and timestamps metadata. action=frames defaults start_frame=0,step=1,page_size=24,batch_size=8,max_dimension=960,analysis_tokens=4096; ALL these are adjustable to user needs. page_size has no64-frame clamp; work is decoded/analyzed batch by batch. step>1 is sampling, never call it frame-by-frame. Return actual indexes/timestamps, effective settings and next_start_frame; continue on partial completion. action=audio defaults duration_seconds=90,audio_chunk_seconds=180,audio_timeout_seconds=60; longer requested ranges are processed completely in chunks. requested_range_complete describes that range; complete/video_audio_complete refer to the whole audio endpoint, so continue next_start_seconds when the user wants all audio. Adjust chunk size and timeout; if PCM payload must be split to fit transport, return actual size/reason instead of silently shortening the range. timeout_seconds defaults240 for the whole call;0 adds no local deadline but preserves caller cancellation. audio_timeout_seconds=0 also inherits caller cancellation. Provider-specific limits are actual feedback, not a project image-count quota. question customizes analysis. No WeChat send. For long work persist checkpoints and continue returned cursors. Input {action:info|frames|audio,source_thread_id?,asset_id?|message_id?|url?,start_frame?,page_size?,step?,batch_size?,max_dimension?,analysis_tokens?,timeout_seconds?,start_seconds?,duration_seconds?,audio_chunk_seconds?,audio_timeout_seconds?,question?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["info","frames","audio"]},"source_thread_id":{"type":"string"},"asset_id":{"type":"string"},"message_id":{"type":"string"},"url":{"type":"string"},"start_frame":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1},"step":{"type":"integer","minimum":1},"batch_size":{"type":"integer","minimum":1},"max_dimension":{"type":"integer","minimum":1},"analysis_tokens":{"type":"integer","minimum":1},"timeout_seconds":{"type":"integer","minimum":0},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","minimum":0},"audio_chunk_seconds":{"type":"number","minimum":0},"audio_timeout_seconds":{"type":"integer","minimum":0},"question":{"type":"string"}},"required":["action"],"additionalProperties":false}`)}
 }
 
 type videoInspectionInput struct {
+	SourceThread string  `json:"source_thread_id"`
 	Action       string  `json:"action"`
 	Asset        string  `json:"asset_id"`
 	Message      string  `json:"message_id"`
@@ -86,7 +87,18 @@ func probeInspectionVideo(ctx context.Context, path string) (videoMetadata, erro
 	return result, nil
 }
 
-func (p *permittedTools) inspectionSource(ctx context.Context, in videoInspectionInput) ([]byte, string, error) {
+func (p *permittedTools) inspectionThreadAllowed(thread string) bool {
+	if thread == "" || p.trace.Account != p.manager.native.Account() {
+		return false
+	}
+	c := p.manager.Config().Config
+	if !permittedRecipient(c, p.trace.Thread) || !permittedRecipient(c, thread) {
+		return false
+	}
+	return thread == p.trace.Thread || p.crossAllowed(thread, p.trace.Thread)
+}
+
+func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspectionInput) ([]byte, string, error) {
 	count := 0
 	for _, s := range []string{in.Asset, in.Message, in.URL} {
 		if s != "" {
@@ -97,6 +109,15 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in videoInspectio
 		return nil, "", toolInputError("请选择且仅选择asset_id、message_id或url中的一个来源")
 	}
 	m := p.manager
+	explicitSource := in.SourceThread != ""
+	if in.SourceThread == "" {
+		in.SourceThread = p.trace.Thread
+	}
+	if !p.inspectionThreadAllowed(in.SourceThread) {
+		return nil, "", toolInputError("video_source_not_authorized")
+	}
+	sourceTrace := p.trace
+	sourceTrace.Thread = in.SourceThread
 	if in.Asset != "" {
 		m.assetMu.Lock()
 		items, e := m.loadAssets()
@@ -105,7 +126,7 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in videoInspectio
 			return nil, "", e
 		}
 		for _, a := range items {
-			if a.ID == in.Asset && a.Account == p.trace.Account && a.Scope == assetScope(p.trace) {
+			if a.ID == in.Asset && a.Account == p.trace.Account && a.Scope == assetScope(sourceTrace) {
 				if time.Since(a.Updated) > time.Duration(m.Config().Companion.MemoryDays)*24*time.Hour {
 					return nil, "", toolInputError("素材已超过当前保留时限")
 				}
@@ -123,8 +144,31 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in videoInspectio
 		if e != nil {
 			return nil, "", e
 		}
-		if msg.ThreadID != p.trace.Thread || msg.AccountID != p.trace.Account {
-			return nil, "", toolInputError("消息不属于当前账号与会话")
+		if msg.AccountID != p.trace.Account || explicitSource && msg.ThreadID != in.SourceThread || !p.inspectionThreadAllowed(msg.ThreadID) {
+			return nil, "", toolInputError("消息不属于当前账号的已授权来源会话")
+		}
+		in.SourceThread = msg.ThreadID
+		// Reuse the verified original already observed in its own conversation.
+		// A private-chat inspection must not relocate or re-download that media.
+		m.assetMu.Lock()
+		assets, cacheErr := m.loadAssets()
+		m.assetMu.Unlock()
+		if cacheErr != nil {
+			return nil, "", cacheErr
+		}
+		sourceTrace.Thread = msg.ThreadID
+		for _, asset := range assets {
+			if asset.Account != p.trace.Account || asset.Scope != assetScope(sourceTrace) || !strings.HasPrefix(asset.MIME, "video/") || time.Since(asset.Updated) > time.Duration(m.Config().Companion.MemoryDays)*24*time.Hour {
+				continue
+			}
+			for _, request := range asset.Requests {
+				if request.TraceID == msg.ID {
+					data, err := m.cachedAssetData(asset)
+					if err == nil {
+						return data, msg.ID, nil
+					}
+				}
+			}
 		}
 		if msg.Type == 43 {
 			reader, ok := m.native.(incomingReader)
@@ -235,7 +279,7 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 	if in.Tokens == 0 {
 		in.Tokens = 4096
 	}
-	data, source, err := p.inspectionSource(ctx, in)
+	data, source, err := p.inspectionSource(ctx, &in)
 	if err != nil {
 		return "", err
 	}
@@ -252,9 +296,15 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 	if err != nil {
 		return "", err
 	}
-	out := map[string]any{"source": source, "metadata": meta, "read_only": true, "usage": "frames: start_frame=0,step=1; follow next_start_frame until complete. audio: follow next_start_seconds. Total pages are not limited."}
+	out := map[string]any{"source_thread_id": in.SourceThread, "origin_thread_id": p.trace.Thread, "source": source, "metadata": meta, "read_only": true, "usage": "frames: start_frame=0,step=1; follow next_start_frame until complete. audio: follow next_start_seconds. Total pages are not limited."}
 	out["effective_options"] = map[string]any{"batch_size": in.BatchSize, "max_dimension": in.MaxDimension, "analysis_tokens": in.Tokens, "timeout_seconds": seconds}
-	encode := func() (string, error) { b, e := json.Marshal(out); return string(b), e }
+	encode := func() (string, error) {
+		if !p.inspectionThreadAllowed(in.SourceThread) {
+			return "", toolInputError("video_source_authorization_revoked")
+		}
+		b, e := json.Marshal(out)
+		return string(b), e
+	}
 	if in.Action == "info" {
 		return encode()
 	}

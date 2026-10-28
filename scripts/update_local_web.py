@@ -2,6 +2,8 @@
 Run inside Ubuntu-New as fly. Does not build or export a Docker image.
 """
 from pathlib import Path
+import argparse
+import math
 import hashlib
 import http.cookiejar
 import json
@@ -13,6 +15,13 @@ import time
 import urllib.request
 import urllib.error
 import sys
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--drain-timeout-seconds',type=float,default=15,
+                    help='Wait for in-flight work; 0 waits until drained, preserving cancellation and lease renewal')
+args=parser.parse_args()
+if args.drain_timeout_seconds<0 or not math.isfinite(args.drain_timeout_seconds):
+    parser.error('drain timeout must be finite and nonnegative')
 
 workspace = Path(__file__).resolve().parents[1]
 deployment_file = workspace / "secrets/local-deployment.json"
@@ -67,14 +76,17 @@ else:
     from urllib.parse import quote
     # A busy voice can legitimately need minutes. Do not pause all new chats
     # for that duration merely to update the UI; release and try another time.
-    for attempt in range(15):
+    deadline=time.monotonic()+args.drain_timeout_seconds if args.drain_timeout_seconds else None
+    attempt=0
+    while True:
         if request("/api/runtime/drain?ticket=" + quote(ticket))["ready"]:
             break
+        if deadline is not None and time.monotonic()>=deadline:
+            raise RuntimeError("Busy worker: update deferred after requested wait; incoming processing resumed, no executable replaced")
         if attempt % 30 == 0:
             print("Waiting for current work to finish before updating (no cancellation).", flush=True)
+        attempt+=1
         time.sleep(1)
-    else:
-        raise RuntimeError("Busy worker: update deferred after 15 seconds; incoming processing resumed, no executable replaced")
 assert hashlib.sha256(config.read_bytes()).hexdigest() == before, "Configuration changed while preparing update; aborted"
 old = hashlib.sha256(binary.read_bytes()).hexdigest()
 backup = root / "bin" / ("wechat-admin.previous-" + old[:12])

@@ -40,6 +40,8 @@ func videoInspectionError(err error) error {
 			"video_audio_transcription_disabled":      "音轨转写权限未启用；可继续读取画面，不能假称听过音轨",
 			"video_audio_unavailable":                 "此时间范围没有可解码的音轨；可检查实际音轨结尾或选择其他时间范围",
 			"video_audio_transcription_failed":        "实际音轨已尝试转写但提供商没有返回有效文本；核对语音服务配置或稍后重试",
+			"video_source_not_authorized":             "来源会话未授权。可信管理员可在同一账号内用source_thread_id指定已授权群聊；普通成员只能读取当前会话",
+			"video_source_authorization_revoked":      "读取期间来源会话的授权已变更，结果未返回；请重新核对当前权限",
 			"video_audio_time_budget_exhausted":       "剩余执行时间不足以转写；保存检查点后从当前音轨起点继续",
 		}
 		if err.Error() == "vision image size limit" {
