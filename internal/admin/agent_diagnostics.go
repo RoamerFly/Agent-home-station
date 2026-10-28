@@ -60,6 +60,7 @@ func (p *permittedTools) callDiagnostics(raw json.RawMessage) (string, error) {
 	if in.Limit < end-in.Offset {
 		end = in.Offset + in.Limit
 	}
-	b, e := json.Marshal(map[string]any{"account": p.trace.Account, "thread_id": in.Thread, "items": rows[in.Offset:end], "next_offset": end, "has_more": end < len(rows), "total": len(rows), "read_only": true, "asr_enabled": p.manager.speechConfig().ASREnabled, "asr_model": p.manager.speechConfig().ASRModel})
+	speech := p.manager.speechConfig()
+	b, e := json.Marshal(map[string]any{"account": p.trace.Account, "thread_id": in.Thread, "items": rows[in.Offset:end], "next_offset": end, "has_more": end < len(rows), "total": len(rows), "read_only": true, "asr_enabled": speech.ASREnabled, "asr_model": speech.ASRModel, "asr_backend": speech.ASRBackend, "asr_local_model": speech.ASRLocalModel})
 	return string(b), e
 }

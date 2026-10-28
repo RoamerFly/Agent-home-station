@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/companion"
 )
 
@@ -112,7 +111,7 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 		if err != nil {
 			return "", err
 		}
-		text, err := bailian.New(c).Transcribe(ctx, wav)
+		text, err := p.manager.transcribeAudio(ctx, wav)
 		if err != nil {
 			return "", err
 		}

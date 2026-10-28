@@ -10,12 +10,13 @@ import urllib.request
 
 from managed_music_runner import command
 from music_unix_client import open_request
+from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 
 
 def main():
     token = Path(os.environ.get("MUSIC_TOKEN_FILE", "/run/secrets/yue-token"))
     if sys.argv[1:] == ["--healthcheck"]:
-        request = urllib.request.Request("http://127.0.0.1:6188/health", headers={"Authorization": "Bearer " + token.read_text().strip()})
+        request = urllib.request.Request("http://127.0.0.1:6188/health", headers={"Authorization": "Bearer " + token.read_text().strip(), ACCOUNT_HEADER: account_scope(os.environ["MUSIC_PRIVATE_WORKSPACE"])})
         with urllib.request.urlopen(request, timeout=4) as reply:
             if not json.load(reply).get("ready"):
                 raise SystemExit(1)

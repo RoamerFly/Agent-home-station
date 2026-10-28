@@ -10,6 +10,7 @@ import urllib.request
 
 from managed_music_runner import command
 from music_unix_client import open_request
+from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 
 
 def main():
@@ -29,7 +30,8 @@ def main():
     if not 1 <= args.port <= 65535: raise ValueError('invalid_music_port')
     token = Path(args.token_file).resolve(strict=True)
     if args.healthcheck:
-        request = urllib.request.Request(f"http://127.0.0.1:{args.port}/health", headers={"Authorization": "Bearer " + token.read_text().strip()})
+        if not args.private:raise ValueError("music_private_workspace_required")
+        request = urllib.request.Request(f"http://127.0.0.1:{args.port}/health", headers={"Authorization": "Bearer " + token.read_text().strip(), ACCOUNT_HEADER: account_scope(args.private)})
         with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=4) as reply:
             if not json.load(reply).get("ready"):
                 raise SystemExit(1)

@@ -53,6 +53,10 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 	}
 	req.GetBody = nil
 	req.Header.Set("Authorization", "Bearer "+c.YuEToken)
+	// Server-derived identity, independent of model parameters or a resumed
+	// task's quoted account. Managed brokers reject a different account scope.
+	accountScope := accountDirectory(p.manager.native.Account())
+	req.Header.Set("X-Wechat-Agent-Account", accountScope)
 	req.Header.Set("Content-Type", "application/json")
 	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
@@ -64,11 +68,22 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 		return nil, "", yueError("yue_bridge_unavailable")
 	}
 	defer response.Body.Close()
+	if bound := response.Header.Get("X-Wechat-Agent-Account"); bound != "" && bound != accountScope {
+		return nil, "", yueError("yue_account_scope_mismatch")
+	}
 	data, e := io.ReadAll(io.LimitReader(response.Body, (64<<20)+1))
 	if e != nil || len(data) > 64<<20 {
 		return nil, "", yueError("yue_response_limit")
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
+		if response.StatusCode == http.StatusConflict {
+			var detail struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(data, &detail) == nil && detail.Error == "music_account_scope_mismatch" {
+				return nil, "", yueError("yue_account_scope_mismatch")
+			}
+		}
 		if response.StatusCode == 400 {
 			var detail struct {
 				Error string `json:"error"`
@@ -117,6 +132,9 @@ func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 	defer cancel()
 	b, _, err := p.yueRequest(ctx, "GET", "/health", nil, "")
 	if err != nil {
+		if _, code := safeToolFailure(err); code == "yue_account_scope_mismatch" {
+			return yueHealth{State: "account_scope_mismatch", Message: err.Error()}
+		}
 		if _, code := safeToolFailure(err); code == "yue_bridge_auth_failed" {
 			return yueHealth{State: "bridge_auth_failed", Message: err.Error()}
 		}
@@ -344,6 +362,9 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			return "", toolInputError("当前YuE桥接尚不支持文本引导和实际时长验收；请升级到v7，避免把短成品当成完整歌曲；本次未提交生成")
 		}
 		if !health.Ready {
+			if health.State == "account_scope_mismatch" {
+				return "", yueError("yue_account_scope_mismatch")
+			}
 			if health.State == "backend_unavailable" {
 				return "", yueError("yue_backend_unavailable")
 			}

@@ -65,6 +65,7 @@ func TestExplicitAudioRangeAndChunkAreNotClampedTo180Seconds(t *testing.T) {
 	}))
 	defer server.Close()
 	f.manager.speech = bailian.Defaults()
+	f.manager.speech.ASREnabled = true
 	f.manager.speech.Endpoint, f.manager.speech.Key = server.URL, "synthetic-test-key"
 	out := map[string]any{}
 	e := p.inspectAudioRange(context.Background(), data, videoInspectionInput{AudioLength: 240, AudioChunk: 200}, 240, 300, out)

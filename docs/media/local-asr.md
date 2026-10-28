@@ -1,0 +1,29 @@
+# 本地语音识别与公共插件资源
+
+微信语音、视频音轨、歌曲参考片段统一通过识别后端配置调用。旧配置保持百炼；管理页「服务商 → 语音、识别与歌曲服务」可选择百炼、本地 SenseVoice、或本地执行失败后使用百炼。选择纯本地时，不向百炼上传音频；未识别出词属于观察结果，不触发云端补试。TTS 仍按原有百炼声线配置运行。
+
+## 模型与运行方式
+
+当前安装候选为官方 sherpa-onnx 发布的 `sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`，模型文件实测 237,115,547 字节，归档约 166 MB；Silero VAD 643,854 字节。两者均按官方 GitHub Release 的 SHA-256 校验。SDK 使用 `sherpa-onnx==2.0.1` 与 `sherpa-onnx-core==2.0.1`，可复用公共受管 Python 的 NumPy，不向现有音乐环境安装或升级包。
+
+模型放在 `public_workspace/models/asr/`，SDK 放在 `public_workspace/runtimes/sherpa-onnx-cpu/`，入口注册于 `public_workspace/manifests/asr-sensevoice-small-int8.json`。项目清单可通过 `project_list`、`project_read` 读取。清单包含解释器、模型、词表、VAD 以及线程、语言、分块时长、执行超时；默认值可调整，不是整个音频的长度上限。每段保留原始时间范围，所有段处理完才返回完成。
+
+Linux 本地推理由 Bubblewrap 执行，公共资源只读、仅当前账号的临时音频目录可写，无网络、服务令牌和其他账号目录。处理完成或取消后清理临时 WAV。当前本机使用 WSL/Linux CPU 运行库；Windows 原生或其他架构必须安装对应 SDK 并验证隔离解释器，不能直接复用 Linux wheel。
+
+Silero VAD 用于减少音乐和静音产生幻觉文字；它也可能漏掉低音量、短促或伴奏中的声音。可在清单调整 `vad_threshold`，或移除 `vad_model` 后不做预筛。ASR 文字始终是候选，不保证普通话、粤语、歌曲或噪声环境中逐字正确。本次已实际复测普通中文样本与之前的 7.38 秒音乐视频，不代表所有场景准确率。没有证据说明更小模型必然更好；同目录可登记其他兼容模型，但须先适配其解码接口和验收。
+
+## 安装步骤
+
+先从 [官方 SenseVoice 预训练模型说明](https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html) 下载 INT8 归档，从 [官方 Release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) 下载 `silero_vad.onnx`，保存于 `public_workspace/models/asr/downloads/`。然后使用目标平台的受管 Python：
+
+```text
+python scripts/install_local_asr.py --workspace <工作区绝对路径> --archive <INT8归档绝对路径>
+```
+
+无外网安装可另外提供 `--wheel-dir <已校验wheel目录>`；需同时包含两个固定版本的 SDK wheel。安装器验证归档、拒绝不安全条目、保留已存在但不同的模型，先在 staging 安装后切换；不删除旧模型或私人素材。现有清单不会自动覆盖，自定义参数可保留。模型、SDK、下载归档和真实音频均不提交 Git。
+
+## 音乐插件的公共与私有部分
+
+音乐插件的程序、模型、Python/CUDA 运行库属于 `public_workspace`，各小号共用同一份。服务令牌可以共用，并继续由管理服务保存，不放在 Agent 可读的公共目录。管理服务依据真实当前账号附加请求身份，受管音乐实例核对账号任务目录；即使共用令牌，也不能把另一个账号的任务结果读成当前账号素材。
+
+任务状态、上传参考音频和生成文件属于 `pri_workspace/<account-hash>/music/`。当前实现允许多个使用同一程序和令牌的账号实例，实例分别绑定账号目录和地址；这不等同于已实现一个进程中的多账号 GPU 调度器。旧版独立非受管桥接兼容保留，但没有新的服务端账号绑定保证，迁移时应明确区分。

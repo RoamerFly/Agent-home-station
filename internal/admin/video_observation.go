@@ -165,7 +165,7 @@ func (a mediaUnderstanding) videoAudioRangeTimed(ctx context.Context, data []byt
 	if err != nil || len(wav) == 0 || len(wav) > 8<<20 {
 		return "", 0, errors.New("video_audio_limit")
 	}
-	text, err := bailian.New(a.manager.speechConfig()).Transcribe(ctx, wav)
+	text, err := a.manager.transcribeAudio(ctx, wav)
 	if bailian.IsNoSpeech(err) {
 		return "", seconds, err
 	}

@@ -267,6 +267,7 @@ func TestVideoAudioLimitsActualTrackTo180Seconds(t *testing.T) {
 	defer server.Close()
 	f.manager.speech = bailian.Defaults()
 	f.manager.speech.Endpoint, f.manager.speech.Key = server.URL, "synthetic.private.key"
+	f.manager.speech.ASREnabled = true
 	a := mediaUnderstanding{manager: f.manager}
 	text, seconds, err := a.videoAudio(context.Background(), video)
 	if err != nil || text == "" || seconds < 179.9 || seconds > 180.01 || submittedBytes < 5760000 || submittedBytes > 5761024 {

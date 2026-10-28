@@ -37,6 +37,9 @@ func speechView(c bailian.Config) map[string]any {
 	return map[string]any{"settings": c, "key_configured": configured}
 }
 func (s *Server) speechRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/speech/asr-health", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		respond(w, 200, s.manager.localASRStatus())
+	}))
 	mux.HandleFunc("GET /api/speech/yue-health", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, (&permittedTools{manager: s.manager}).probeYuE(r.Context()))
 	}))
@@ -102,7 +105,7 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 				fail(w, 502, e.Error())
 				return
 			}
-			text, e = bailian.New(c).Transcribe(ctx, wav)
+			text, e = s.manager.transcribeAudio(ctx, wav)
 			if e != nil {
 				fail(w, 502, e.Error())
 				return
@@ -226,7 +229,7 @@ func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnat
 	if e != nil {
 		return "", e
 	}
-	text, e := bailian.New(c).Transcribe(ctx, wav)
+	text, e := a.manager.transcribeAudio(ctx, wav)
 	if bailian.IsNoSpeech(e) {
 		a.manager.record(bot.Record{Event: "voice_no_words", Category: "received", MessageID: message.ID, ThreadID: message.ThreadID, Sender: message.SenderID, Status: "no_recognizable_speech", Reason: "ASR_RESPONSE_HAVE_NO_WORDS", ToolCode: "ASR_RESPONSE_HAVE_NO_WORDS", Origin: "speech"})
 		return "[微信语音音频已取得并提交识别，但没有识别出可转写的词；可能为音乐、环境声或不清晰人声。不要编造语音正文。]", nil

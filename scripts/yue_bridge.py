@@ -9,6 +9,7 @@ from pathlib import Path
 from singing_voice import validate_singing_config
 import yue_sampling
 import rvc_cover
+from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 
 def singing_profile(config_path):
     if not config_path:return None
@@ -157,11 +158,12 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');p.add_argument('--singing-voice-config');p.add_argument('--managed-public');p.add_argument('--managed-private');p.add_argument('--comfy-socket');p.add_argument('--comfy-input');args=p.parse_args()
     project=Path(args.project).resolve();state=Path(args.state).resolve();state.mkdir(parents=True,exist_ok=True)
     workflow_dir=Path(args.workflow_dir).resolve() if args.workflow_dir else project/'workflows_api'
-    sandbox=None
+    sandbox=None;bound_account=''
     if args.managed_public or args.managed_private:
         if not args.managed_public or not args.managed_private:raise ValueError('music_managed_scope_incomplete')
         from managed_music_runner import canonical
         sandbox={'public':str(canonical(args.managed_public)),'private':str(canonical(args.managed_private))}
+        bound_account=account_scope(sandbox['private'])
         if not state.is_relative_to(Path(sandbox['private'])):raise ValueError('music_state_outside_account')
         if not args.comfy_socket or not args.comfy_input:raise ValueError('isolated_comfy_paths_required')
     input_dir=Path(args.comfy_input).resolve() if args.comfy_input else project/'comfy/ComfyUI/input'
@@ -262,10 +264,17 @@ def main():
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
         def reply(self,status,value):
-            data=json.dumps(value,ensure_ascii=False).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
+            data=json.dumps(value,ensure_ascii=False).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)))
+            if bound_account and self.authenticated():self.send_header(ACCOUNT_HEADER,bound_account)
+            self.end_headers();self.wfile.write(data)
         def authenticated(self):return hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token)
+        def allowed(self):
+            if not self.authenticated():self.reply(401,{'error':'unauthorized'});return False
+            if bound_account and not hmac.compare_digest(self.headers.get(ACCOUNT_HEADER,''),bound_account):
+                self.reply(409,{'error':'music_account_scope_mismatch'});return False
+            return True
         def do_GET(self):
-            if not self.authenticated():return self.reply(401,{'error':'unauthorized'})
+            if not self.allowed():return
             if self.path=='/rvc-health':
                 try:
                     voice=singing_profile(args.singing_voice_config)
@@ -288,10 +297,12 @@ def main():
             if not job:return self.reply(404,{'error':'not_found'})
             if len(parts)==3 and parts[2]=='audio':
                 if job['state']!='completed':return self.reply(409,{'error':'not_completed'})
-                file=state/job['file'];data=file.read_bytes();self.send_response(200);self.send_header('Content-Type','audio/flac' if file.suffix=='.flac' else 'audio/wav');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data);return
+                file=state/job['file'];data=file.read_bytes();self.send_response(200);self.send_header('Content-Type','audio/flac' if file.suffix=='.flac' else 'audio/wav');self.send_header('Content-Length',str(len(data)))
+                if bound_account:self.send_header(ACCOUNT_HEADER,bound_account)
+                self.end_headers();self.wfile.write(data);return
             job.pop('file',None);return self.reply(200,job)
         def do_POST(self):
-            if not self.authenticated():return self.reply(401,{'error':'unauthorized'})
+            if not self.allowed():return
             size=int(self.headers.get('Content-Length','0'))
             if size<=0 or size>36*1024*1024:return self.reply(413,{'error':'size_limit'})
             try:body=json.loads(self.rfile.read(size))
