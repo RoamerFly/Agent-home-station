@@ -39,6 +39,7 @@ type sendingRequest = sending.TextRequest
 type sendingReceipt = sending.Receipt
 
 type LogEntry struct {
+	SenderName        string `json:"sender_name,omitempty"`
 	RelatedMessageID  string `json:"related_message_id,omitempty"`
 	DecisionNote      string `json:"decision_note,omitempty"`
 	RetryAttempts     int    `json:"retry_attempts,omitempty"`
@@ -83,6 +84,7 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
+	accounts     *accountRegistry
 	canvasMu     sync.Mutex
 	friendsMu    sync.Mutex
 	friends      map[string]friendEntry
@@ -374,6 +376,9 @@ func (m *Manager) stop() error {
 	return nil
 }
 func (m *Manager) Close() error {
+	if m.accounts != nil {
+		m.accounts.close()
+	}
 	m.op.Lock()
 	defer m.op.Unlock()
 	if m.processes != nil {
@@ -417,11 +422,19 @@ func (m *Manager) start(c Config) {
 	go func() {
 		defer close(done)
 		for !m.native.Ready() {
+			if m.draining() {
+				m.setState("drained")
+				return
+			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(2 * time.Second):
 			}
+		}
+		if m.draining() {
+			m.setState("drained")
+			return
 		}
 		if ctx.Err() != nil {
 			return

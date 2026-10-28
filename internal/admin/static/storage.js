@@ -32,7 +32,7 @@
       const query=()=>kind==='memory'?'scope='+encodeURIComponent(selected):'';
       async function batch(item){
         const detail=window.WechatDialogs.open({title:'归档 · '+date(item.created)}),state=paragraph('正在校验并读取…');detail.body.append(state);
-        const link=document.createElement('a');link.className='secondary';link.textContent='下载 JSON 副本';link.href=base()+'/'+encodeURIComponent(item.id)+'?'+[query(),'download=1'].filter(Boolean).join('&');detail.body.append(link);
+        const link=document.createElement('a');link.className='secondary';link.textContent='下载 JSON 副本';link.href=window.WechatAccountContext.url(base()+'/'+encodeURIComponent(item.id)+'?'+[query(),'download=1'].filter(Boolean).join('&'));detail.body.append(link);
         try{const response=await api(base()+'/'+encodeURIComponent(item.id)+(query()?'?'+query():''));if(!detail.alive()||stamp!==generation)return;state.textContent='消息从新到旧排列。';const messages=kind==='memory'?response.data.messages:response.data;for(const message of [...(messages||[])].sort((a,b)=>Date.parse(b.time)-Date.parse(a.time))){if(kind==='memory')detail.body.append(window.WechatAdmin.renderMemoryMessage(message));else detail.body.append(paragraph(date(message.time)+' · '+(message.source||message.thread_id||'系统')+' · '+(message.content||message.event||'记录')+(message.reason?' · '+(window.WechatLogReason?.(message.reason)||message.reason):''),'archive-log-row'))}if(!messages?.length)state.textContent='此批次没有正文。'}catch(e){if(detail.alive()&&stamp===generation)state.textContent=e.message}
       }
       async function load(){

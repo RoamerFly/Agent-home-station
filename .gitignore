@@ -47,3 +47,5 @@ tool-outputs/
 state/
 admin-token
 admin-password
+accounts.json
+/accounts/

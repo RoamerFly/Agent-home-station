@@ -70,43 +70,80 @@ func (m *Manager) takeMediaSeeds() []bot.MediaSeed {
 	}
 	return append([]bot.MediaSeed(nil), m.mediaSeeds...)
 }
+
+// Updating the executable must drain every account, not just the selected tab.
+func (s *Server) drainManagers() []*Manager {
+	if s.accounts == nil {
+		return []*Manager{s.manager}
+	}
+	s.accounts.mu.Lock()
+	defer s.accounts.mu.Unlock()
+	items := []*Manager{s.manager}
+	for _, item := range s.accounts.items {
+		if item.manager != nil && item.manager != s.manager {
+			items = append(items, item.manager)
+		}
+	}
+	return items
+}
 func (s *Server) mediaRuntimeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/runtime/drain", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		m := s.manager
-		m.mu.Lock()
-		if m.drainTicket == "" {
-			m.drainTicket = randomToken()
+		// Serialize account creation with the global update barrier, so a new
+		// worker cannot appear between the snapshot and draining its peers.
+		if s.accounts != nil {
+			s.accounts.mu.Lock()
+			defer s.accounts.mu.Unlock()
 		}
-		ticket := m.drainTicket
-		m.renewDrainLocked()
-		m.status.State = "draining"
-		m.mu.Unlock()
-		respond(w, 200, map[string]any{"ticket": ticket, "status": "draining"})
-	}))
-	mux.HandleFunc("GET /api/runtime/drain", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		m := s.manager
-		m.mu.Lock()
-		ticket, done := m.drainTicket, m.done
-		if ticket == "" || r.URL.Query().Get("ticket") != ticket {
-			m.mu.Unlock()
-			fail(w, 409, "更新等待已失效，请重新准备")
-			return
-		}
-		m.renewDrainLocked()
-		m.mu.Unlock()
-		ready := done == nil
-		if done != nil {
-			select {
-			case <-done:
-				ready = true
-			default:
+		managers := []*Manager{s.manager}
+		if s.accounts != nil {
+			for _, item := range s.accounts.items {
+				if item.manager != nil && item.manager != s.manager {
+					managers = append(managers, item.manager)
+				}
 			}
 		}
-		if m.mobile != nil && m.mobile.Busy() {
-			ready = false
+		root := managers[0]
+		root.mu.Lock()
+		ticket := root.drainTicket
+		if ticket == "" {
+			ticket = randomToken()
 		}
-		if m.processes != nil && m.processes.Busy() {
-			ready = false
+		root.mu.Unlock()
+		for _, m := range managers {
+			m.mu.Lock()
+			m.drainTicket = ticket
+			m.renewDrainLocked()
+			m.status.State = "draining"
+			m.mu.Unlock()
+		}
+		respond(w, 200, map[string]any{"ticket": ticket, "status": "draining", "accounts": len(managers)})
+	}))
+	mux.HandleFunc("GET /api/runtime/drain", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		ticket := r.URL.Query().Get("ticket")
+		ready := true
+		for _, m := range s.drainManagers() {
+			m.mu.Lock()
+			if ticket == "" || m.drainTicket != ticket {
+				m.mu.Unlock()
+				fail(w, 409, "更新等待已失效，请重新准备")
+				return
+			}
+			m.renewDrainLocked()
+			done := m.done
+			m.mu.Unlock()
+			if done != nil {
+				select {
+				case <-done:
+				default:
+					ready = false
+				}
+			}
+			if m.mobile != nil && m.mobile.Busy() {
+				ready = false
+			}
+			if m.processes != nil && m.processes.Busy() {
+				ready = false
+			}
 		}
 		respond(w, 200, map[string]any{"ticket": ticket, "ready": ready})
 	}))
@@ -117,25 +154,29 @@ func (s *Server) mediaRuntimeRoutes(mux *http.ServeMux) {
 		if !decode(w, r, &in) {
 			return
 		}
-		m := s.manager
-		m.op.Lock()
-		defer m.op.Unlock()
-		m.mu.Lock()
-		if m.drainTicket == "" || m.drainTicket != in.Ticket {
+		managers := s.drainManagers()
+		for _, m := range managers {
+			m.mu.Lock()
+			valid := in.Ticket != "" && m.drainTicket == in.Ticket
 			m.mu.Unlock()
-			fail(w, 409, "等待已失效")
-			return
+			if !valid {
+				fail(w, 409, "等待已失效")
+				return
+			}
 		}
-		m.drainTicket = ""
-		if m.drainTimer != nil {
-			m.drainTimer.Stop()
+		for _, m := range managers {
+			m.op.Lock()
+			m.mu.Lock()
+			m.drainTicket = ""
+			if m.drainTimer != nil {
+				m.drainTimer.Stop()
+			}
+			done := m.done
+			c := cloneConfig(m.config)
+			m.mu.Unlock()
+			m.resumeDrainedWorker(done, c)
+			m.op.Unlock()
 		}
-		done := m.done
-		c := cloneConfig(m.config)
-		m.mu.Unlock()
-		// The worker may be between observing drain and returning. Wait briefly
-		// for its state transition before choosing whether a restart is needed.
-		m.resumeDrainedWorker(done, c)
 		respond(w, 200, map[string]bool{"resumed": true})
 	}))
 	mux.HandleFunc("POST /api/media/recover", s.protected(s.recoverMedia))

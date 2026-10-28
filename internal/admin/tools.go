@@ -73,15 +73,7 @@ func (s *Server) toolsState(w http.ResponseWriter, r *http.Request) {
 	c := s.manager.Config()
 	recipients := []map[string]string{}
 	for _, id := range c.allowed() {
-		name := id
-		if id == "filehelper" {
-			name = "文件传输助手"
-		}
-		for _, rule := range c.GroupRules {
-			if rule.ID == id && rule.Name != "" {
-				name = rule.Name
-			}
-		}
+		name := s.manager.memoryLabel(ctx, id)
 		recipients = append(recipients, map[string]string{"id": id, "name": name})
 	}
 	limits := map[string]int64{}
