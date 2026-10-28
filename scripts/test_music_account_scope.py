@@ -115,7 +115,7 @@ class MusicAccountScopeTests(unittest.TestCase):
                                 code, data, _ = request(base, bad_scope, route)
                                 self.assertEqual(code, 409, route)
                                 self.assertEqual(json.loads(data), {"error": "music_account_scope_mismatch"})
-                        for route in ("/jobs", "/rvc-jobs"):
+                        for route in ("/jobs", "/rvc-jobs", "/jobs/"+'a'*32+"/resume"):
                             self.assertEqual(request(base, other, route, {})[0], 409)
                         code, data, headers = request(base, scope, "/jobs/same-job-id/audio")
                         self.assertEqual(code, 200)

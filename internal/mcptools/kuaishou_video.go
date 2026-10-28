@@ -15,6 +15,10 @@ var kuaishouStateMarker = regexp.MustCompile(`window\.__APOLLO_STATE__\s*=\s*`)
 
 type kuaishouRequestKey struct{}
 
+func kuaishouMediaHost(host string) bool {
+	return strings.HasSuffix(host, ".kwaicdn.com") || strings.HasSuffix(host, ".djvod.ndcimgs.com")
+}
+
 func kuaishouPhotoID(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || validPublicURL(raw) != nil || len(raw) > 8192 || u.Port() != "" {
@@ -87,7 +91,7 @@ func parseKuaishouPhoto(body []byte, id string) (kuaishouPhoto, []string, error)
 	seen := map[string]bool{}
 	add := func(raw string) {
 		u, err := url.Parse(raw)
-		if err == nil && u.Scheme == "https" && strings.HasSuffix(u.Hostname(), ".kwaicdn.com") && u.Port() == "" && validPublicURL(raw) == nil && len(raw) <= 8192 && !seen[raw] {
+		if err == nil && u.Scheme == "https" && kuaishouMediaHost(u.Hostname()) && u.Port() == "" && validPublicURL(raw) == nil && len(raw) <= 8192 && !seen[raw] {
 			seen[raw] = true
 			urls = append(urls, raw)
 		}
@@ -106,22 +110,26 @@ func parseKuaishouPhoto(body []byte, id string) (kuaishouPhoto, []string, error)
 			}
 			for _, rawRep := range set.Reps {
 				var rep struct {
-					URL json.RawMessage `json:"url"`
+					URL    json.RawMessage `json:"url"`
+					Backup json.RawMessage `json:"backupUrl"`
 				}
 				if json.Unmarshal(resolve(rawRep), &rep) != nil {
 					continue
 				}
-				var single string
-				if json.Unmarshal(rep.URL, &single) == nil {
-					add(single)
-					continue
-				}
-				var list struct {
-					JSON []string `json:"json"`
-				}
-				if json.Unmarshal(rep.URL, &list) == nil && len(list.JSON) <= 10 {
-					for _, u := range list.JSON {
-						add(u)
+				for _, rawURLs := range []json.RawMessage{rep.URL, rep.Backup} {
+					rawURLs = resolve(rawURLs)
+					var single string
+					if json.Unmarshal(rawURLs, &single) == nil {
+						add(single)
+						continue
+					}
+					var list struct {
+						JSON []string `json:"json"`
+					}
+					if json.Unmarshal(rawURLs, &list) == nil && len(list.JSON) <= 10 {
+						for _, u := range list.JSON {
+							add(u)
+						}
 					}
 				}
 			}

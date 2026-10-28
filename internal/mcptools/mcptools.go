@@ -837,7 +837,7 @@ func publicReadRangeOnce(ctx context.Context, raw string, maxBytes int64, timeou
 	req.Header.Set("User-Agent", "wechat-bot-web-tool/1.0")
 	if enabled, _ := ctx.Value(kuaishouRequestKey{}).(bool); enabled {
 		host := req.URL.Hostname()
-		if host == "www.kuaishou.com" || host == "kuaishou.com" || host == "v.m.chenzhongtech.com" || strings.HasSuffix(host, ".kwaicdn.com") {
+		if host == "www.kuaishou.com" || host == "kuaishou.com" || host == "v.m.chenzhongtech.com" || kuaishouMediaHost(host) {
 			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
 			req.Header.Set("Referer", "https://www.kuaishou.com/")
 		}

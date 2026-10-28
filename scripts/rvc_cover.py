@@ -31,8 +31,8 @@ def convert(body,state,jid,config,profile,convert_voice):
         raise ValueError('rvc_profile_required')
     details=recipe(body)
     state=Path(state)
-    source=state/(jid+'-source.audio')
-    source.write_bytes(base64.b64decode(body['reference_base64'],validate=True))
+    from rvc_recovery import persist_reference
+    source=persist_reference(state,jid,body)
     output=state/(jid+'-rvc.wav')
     # The caller-supplied converter verifies the pinned profile hash again.
     convert_voice(config,profile,source,output)

@@ -42,3 +42,33 @@ func TestKuaishouPageIdentityRejectsAmbiguousAndForeignShares(t *testing.T) {
 		}
 	}
 }
+
+func TestKuaishouNewCDNAndExactPhotoBackupURLs(t *testing.T) {
+	id := "3xsynthetic12345"
+	primary := "https://synthetic.djvod.ndcimgs.com/video.mp4?synthetic=1"
+	backup := "https://synthetic.kwaicdn.com/video.mp4?synthetic=2"
+	makePage := func(direct string, backups []string) []byte {
+		data, _ := json.Marshal(map[string]any{"defaultClient": map[string]any{
+			"VisionVideoDetailPhoto:" + id: map[string]any{"id": id, "caption": "synthetic", "duration": 155100, "photoUrl": direct,
+				"manifest": map[string]any{"adaptationSet": []any{map[string]any{"representation": []any{
+					map[string]any{"url": direct, "backupUrl": map[string]any{"type": "json", "json": backups}},
+				}}}}},
+			"VisionVideoDetailPhoto:unrelated": map[string]any{"id": "unrelated", "photoUrl": "https://other.kwaicdn.com/not-this-video.mp4"},
+		}})
+		return append([]byte("window.__APOLLO_STATE__="), data...)
+	}
+	_, urls, err := parseKuaishouPhoto(makePage(primary, []string{backup, primary}), id)
+	if err != nil || len(urls) != 2 || urls[0] != primary || urls[1] != backup {
+		t.Fatal("valid primary/backup missing or duplicated", urls, err)
+	}
+	for _, unsafe := range []string{"https://synthetic.djvod.ndcimgs.com.evil.invalid/video.mp4", "https://unrelated.ndcimgs.com/video.mp4", "http://synthetic.djvod.ndcimgs.com/video.mp4", "https://user@synthetic.djvod.ndcimgs.com/video.mp4", "https://synthetic.djvod.ndcimgs.com:444/video.mp4", "https://127.0.0.1/video.mp4"} {
+		_, got, e := parseKuaishouPhoto(makePage(unsafe, []string{unsafe}), id)
+		if e == nil || len(got) != 0 {
+			t.Fatal("unsafe primary/backup accepted", unsafe, got, e)
+		}
+	}
+	_, urls, err = parseKuaishouPhoto(makePage("https://unavailable.invalid/no.mp4", []string{backup}), id)
+	if err != nil || len(urls) != 1 || urls[0] != backup {
+		t.Fatal("valid backup lost when primary is unavailable", urls, err)
+	}
+}
