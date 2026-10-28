@@ -125,6 +125,16 @@ for unit in ["wechat-bot-web.service", "wechat-bot-native.service"]:
     subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], check=True)
 print("Updated local web on 127.0.0.1:8081; web/native healthy, existing config unchanged, native session not restarted. No Docker export.")
 
+# Correct only our exact old built-in deployment note, not owner instructions.
+sys.path.insert(0, str(workspace / "scripts"))
+from local_project_guides import refresh_execution_notes
+try:
+    changed_guides = refresh_execution_notes(workspace, deployment.get("backend"))
+    if changed_guides:
+        print(f"Refreshed {changed_guides} obsolete built-in project execution notes for local WSL.")
+except (OSError, ValueError) as exc:
+    print(f"Project guide migration deferred: {type(exc).__name__}; running service preserved.")
+
 # Retain a bounded rollback set only AFTER the new executable is healthy.
 # This helper checks canonical paths, ELF headers and full name/hash bindings;
 # no configurations, conversations, models or generated media are candidates.
