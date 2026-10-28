@@ -40,7 +40,15 @@ func (s *Store) AcceptedDelivery(input Input, text, key string, c Config, now ti
 // ReplaceObservation refreshes only a derived observation already attached to
 // the same incoming message. A comparison prevents concurrent edits being lost.
 func (s *Store) ReplaceObservation(scopeID, trace, before, after string) error {
-	return s.transaction(func(data *persisted) error {
+	_, err := s.UpdateObservation(scopeID, trace, before, after)
+	return err
+}
+
+// Report whether the optimistic replacement actually occurred. An archived or
+// concurrently changed turn is never silently reported as updated or re-added.
+func (s *Store) UpdateObservation(scopeID, trace, before, after string) (bool, error) {
+	changed := false
+	err := s.transaction(func(data *persisted) error {
 		scope, ok := data.Scopes[scopeID]
 		if !ok {
 			return nil
@@ -50,9 +58,11 @@ func (s *Store) ReplaceObservation(scopeID, trace, before, after string) error {
 			if turn.Role == "user" && turn.TraceID == trace && turn.Text == before {
 				turn.Text = boundedInputMemory(after)
 				data.Scopes[scopeID] = scope
+				changed = true
 				break
 			}
 		}
 		return nil
 	})
+	return changed && err == nil, err
 }

@@ -67,7 +67,7 @@ func TestQuotedShareRetainsExactSourceWithoutNeedingCachedAsset(t *testing.T) {
 	// its exact source; a same-title recent card must not replace this one.
 	w.runtime.Media = nil
 	raw = w.readQuoteContext(context.Background(), &m)
-	if !strings.Contains(raw, `"source_url":"https://www.bilibili.com/video/BV1425hzpEtn/?p=2"`) {
+	if !strings.Contains(raw, `"source_url":"https://www.bilibili.com/video/BV1425hzpEtn/?p=2"`) || !strings.Contains(raw, `"message_id":"original-card"`) || !strings.Contains(raw, `"server_id":"777"`) {
 		t.Fatal(raw)
 	}
 	for _, bad := range []string{"javascript:alert(1)", "https://user:password@example.org/video", "file:///private/movie"} {

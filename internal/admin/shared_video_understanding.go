@@ -71,7 +71,13 @@ func (a mediaUnderstanding) understandSharedVideo(ctx context.Context, m linuxna
 	// request such as "send that original video"; observation never uploads/sends.
 	if a.manager.Config().Companion.Permissions.Remember {
 		in := companion.Input{Channel: "wechat", Account: m.AccountID, Thread: m.ThreadID, TraceID: m.ID, Sender: m.SenderID, Text: "收到的视频分享：" + logText(video.Title, 300), MessageTime: m.CreatedAt}
-		asset, e := a.manager.rememberAssetFormats(in, assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: "分享视频.mp4"}, nil)
+		originalURL := video.PageURL
+		if mcptools.IsPublicVideoPage(m.Link.URL) {
+			// A canonical display page may omit parameters needed to retrieve
+			// this exact shared work. Keep its verified native source for reuse.
+			originalURL = m.Link.URL
+		}
+		asset, e := a.manager.rememberAssetFormats(in, assetOriginal{Data: video.Data, MIME: video.ContentType, URL: originalURL, Filename: "分享视频.mp4"}, nil)
 		if e == nil {
 			cache = "[已缓存本会话原视频素材：" + asset.ID + "，可按用户后续要求复用，尚未发送附件]\n"
 		} else {

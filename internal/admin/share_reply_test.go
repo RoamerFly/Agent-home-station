@@ -16,7 +16,11 @@ type manualShareNative struct{ *fakeTools }
 
 func (n *manualShareNative) Message(ctx context.Context, id string) (linuxnative.Message, error) {
 	kind := 51
-	return linuxnative.Message{ID: id, ThreadID: "filehelper", Direction: "incoming", Type: 49, AppMessageType: &kind, Link: &linuxnative.LinkCard{Title: "公园开放", SourceName: "WeChat Channels"}}, nil
+	account := "test"
+	if id != "original-card" {
+		account = "different-account"
+	}
+	return linuxnative.Message{ID: id, AccountID: account, ThreadID: "filehelper", Direction: "incoming", Type: 49, AppMessageType: &kind, Link: &linuxnative.LinkCard{Title: "公园开放", SourceName: "WeChat Channels"}}, nil
 }
 
 func TestManualShareReplyRequiresDrainAndReusesClaimWithoutModelOrResend(t *testing.T) {
@@ -56,6 +60,17 @@ func TestManualShareReplyRequiresDrainAndReusesClaimWithoutModelOrResend(t *test
 		if code != 202 || !bytes.Contains(b, []byte("already-sent")) {
 			t.Fatal(code, string(b))
 		}
+	}
+	// The live window can have pruned the original: native identity, rather
+	// than an indefinitely retained conversation turn, authorizes a reread.
+	if err = f.manager.memory.Clear(id); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.manager.memory.Observe(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "new-turn", Text: "synthetic new request"}, f.manager.config.Companion, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := f.request("POST", path, body, true, true); code != 202 {
+		t.Fatal("valid pruned native share rejected", code)
 	}
 	if native.submits.Load() != 0 {
 		t.Fatal("claimed reply was resent")

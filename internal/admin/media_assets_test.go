@@ -32,6 +32,20 @@ func TestObservationCacheUsesPhysicalSpaceNotAggregateIndexQuota(t *testing.T) {
 	}
 }
 
+func TestCachedPublicSharePreservesPlaybackParametersOnlyOnKnownPage(t *testing.T) {
+	f := setup(t)
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "synthetic-share"}
+	for _, test := range []struct{ url, want string }{
+		{"https://v.m.chenzhongtech.com/fw/photo/3xsynthetic12345?photoId=3xsynthetic12345&shareToken=synthetic-share-value", "https://v.m.chenzhongtech.com/fw/photo/3xsynthetic12345?photoId=3xsynthetic12345&shareToken=synthetic-share-value"},
+		{"https://media.example.org/video.mp4?signature=synthetic-value", "https://media.example.org/video.mp4"},
+	} {
+		asset, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte(test.url), MIME: "video/mp4", URL: test.url}, nil)
+		if err != nil || asset.URL != test.want {
+			t.Fatal("source parameters changed or arbitrary signed URL leaked", asset.URL, err)
+		}
+	}
+}
+
 func TestCachedSongCanBeReusedAsFileAfterEngineRecreation(t *testing.T) {
 	f := setup(t)
 	native := &fakeTools{fakeNative: f.native}

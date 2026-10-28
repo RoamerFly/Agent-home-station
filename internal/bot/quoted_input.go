@@ -54,6 +54,10 @@ func (w *Worker) readQuoteContext(ctx context.Context, m *linuxnative.Message) s
 		text = strings.ToValidUTF8(text[:1600], "")
 	}
 	data := map[string]any{"kind": "quoted_message_context", "verified_same_conversation": true, "from_bot_account": m.ReplyToSelf, "original_type": original.Type, "text": text}
+	data["message_id"], data["server_id"] = original.ID, original.ServerID
+	if original.CreatedAt != "" {
+		data["message_time"] = original.CreatedAt
+	}
 	if original.Link != nil {
 		if source := quotedSourceURL(original.Link.URL); source != "" {
 			data["source_url"] = source

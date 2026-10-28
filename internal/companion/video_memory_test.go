@@ -49,6 +49,35 @@ func TestVideoMemoryDoesNotInventAudioOrRewriteOrdinaryTurns(t *testing.T) {
 	}
 }
 
+func TestObservationUpdateReportsMissingAndConcurrentTurnsWithoutInserting(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Defaults()
+	c.Permissions.Remember = true
+	in := Input{Channel: "wechat", Account: "test", Thread: "test", TraceID: "original", Text: "old"}
+	now := time.Now()
+	if err = store.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	id := ScopeID(in.Channel, in.Account, in.Thread)
+	changed, err := store.UpdateObservation(id, "original", "old", "actual observation")
+	if err != nil || !changed {
+		t.Fatal(changed, err)
+	}
+	for _, trace := range []string{"original", "pruned-original"} {
+		changed, err = store.UpdateObservation(id, trace, "old", "stale replacement")
+		if err != nil || changed {
+			t.Fatal("missing/conflicting turn reported updated", changed, err)
+		}
+	}
+	scope := store.Context(in, c, now)
+	if len(scope.Messages) != 1 || scope.Messages[0].Text != "actual observation" {
+		t.Fatal("stale write or historical reinsertion")
+	}
+}
+
 func TestVideoMemoryKeepsAudioFailureBoundaryAfterLongVisualDescription(t *testing.T) {
 	text := "[微信视频号实际内容观察]\n[画面观察：6帧]" + strings.Repeat("画面", 1400) + "\n[音轨转写未完成；不要推测对白和声音。]"
 	got := boundedInputMemory(text)

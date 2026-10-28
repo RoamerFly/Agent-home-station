@@ -180,7 +180,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	a := mediaAsset{ID: id, Scope: scope, Account: in.Account, Title: assetName(original), Filename: assetName(original), MIME: original.MIME, Hash: digest, Bytes: int64(len(original.Data)), Sources: map[string]string{}, Updated: time.Now().UTC()}
 	if u, e := url.Parse(original.URL); e == nil && u.Host != "" {
 		u.User = nil
-		if !(strings.EqualFold(u.Hostname(), "www.bilibili.com") || strings.EqualFold(u.Hostname(), "bilibili.com")) {
+		if !mcptools.IsPublicVideoPage(original.URL) && !(strings.EqualFold(u.Hostname(), "www.bilibili.com") || strings.EqualFold(u.Hostname(), "bilibili.com")) {
 			u.RawQuery = ""
 		}
 		u.Fragment = ""
