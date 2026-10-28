@@ -91,6 +91,7 @@ jobs:
       - name: Test managed workspace migration
         run: |
           python -m unittest discover -s scripts -p test_managed_migration.py
+          python -m unittest discover -s scripts -p test_migration_integrity.py
           python -m unittest discover -s scripts -p test_local_project_guides.py
           python -m unittest discover -s scripts -p test_managed_music.py
           python -m unittest discover -s scripts -p test_managed_music_ipc.py
