@@ -400,6 +400,33 @@ func TestCrossSeedsRestartTargetAndStrictBatchOrder(t *testing.T) {
 	}
 }
 
+func TestOwnerCrossSeedCanTargetNonReplyConversationWithoutOpeningIt(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread = "no-auto-reply@chatroom"
+	seed := MediaSeed{Key: "owner-cross-key", Trace: "owner-cross-batch", Input: in, Requester: "owner", OriginThread: "owner", SourceID: "owner-cross-source", Media: companion.GeneratedMedia{Kind: "voice", Title: "synthetic.wav"}}
+	w.config.MediaSeeds = func() []MediaSeed { return []MediaSeed{seed} }
+	w.config.MediaSeedAllowed = func(s MediaSeed) bool {
+		return s.Trace == seed.Trace && s.Requester == seed.Requester && s.Input.Thread == seed.Input.Thread
+	}
+	w.adoptMediaSeeds()
+	if len(w.runtime.Media) != 1 || w.allowed[in.Thread] {
+		t.Fatal("owner seed lost or changed auto-reply scope")
+	}
+	w.reconcileMedia(context.Background())
+	if n.sends != 1 || n.status.ThreadID != in.Thread || w.allowed[in.Thread] {
+		t.Fatal("wrong target or reply scope changed", n.sends, n.status)
+	}
+	ordinary := *w.runtime.Media[0]
+	ordinary.CrossRequester = ""
+	if w.mediaAllowed(&ordinary) {
+		t.Fatal("ordinary media inherited temporary owner scope")
+	}
+	w.config.MediaSeedAllowed = func(MediaSeed) bool { return false }
+	if w.mediaAllowed(w.runtime.Media[0]) {
+		t.Fatal("owner authority revocation ignored")
+	}
+}
+
 func TestCrossReceiptJournalOverridesStaleWorkerWithoutNativeResend(t *testing.T) {
 	w, n, _, in := mediaWorker(t)
 	in.Thread = "target@chatroom"

@@ -91,11 +91,7 @@ func (p *permittedTools) inspectionThreadAllowed(thread string) bool {
 	if thread == "" || p.trace.Account != p.manager.native.Account() {
 		return false
 	}
-	c := p.manager.Config().Config
-	if !permittedRecipient(c, p.trace.Thread) || !permittedRecipient(c, thread) {
-		return false
-	}
-	return thread == p.trace.Thread || p.crossAllowed(thread, p.trace.Thread)
+	return p.conversationReadAllowed(thread)
 }
 
 func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspectionInput) ([]byte, string, error) {

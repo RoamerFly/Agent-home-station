@@ -85,6 +85,7 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
+	directoryMu  sync.Mutex
 	accounts     *accountRegistry
 	canvasMu     sync.Mutex
 	friendsMu    sync.Mutex

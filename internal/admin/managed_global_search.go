@@ -78,7 +78,7 @@ func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemo
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		if in.Thread != "" && item.Thread != in.Thread || !permittedRecipient(cfg.Config, item.Thread) {
+		if in.Thread != "" && item.Thread != in.Thread {
 			continue
 		}
 		scope, err := p.manager.memory.Read(item.ID, cfg.Companion, now)
@@ -86,7 +86,7 @@ func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemo
 			skipped++
 			continue
 		}
-		if scope.Account != x.Account {
+		if scope.Account != x.Account || scope.Channel != "wechat" {
 			continue
 		}
 		label := p.manager.memoryLabel(ctx, item.Thread)

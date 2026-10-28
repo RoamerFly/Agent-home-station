@@ -88,7 +88,10 @@ func TestLiveModelChoosesLatestCrossSessionFileAndTarget(t *testing.T) {
 	c.Enabled, c.Permissions.Remember, c.Permissions.SendFile = true, true, true
 	c.QuietStart, c.QuietEnd = "00:00", "00:00"
 	f.manager.config.Companion = c
-	f.manager.config.GroupRules = []GroupRule{{ID: "source@chatroom", Name: "合成资料群", Mode: "mention"}, {ID: "target@chatroom", Name: "合成目标群", Mode: "mention"}}
+	f.manager.config.GroupRules = []GroupRule{{ID: "target@chatroom", Name: "合成目标群", Mode: "mention"}}
+	if err := f.manager.rememberNativeConversations(map[string]string{"source@chatroom": "合成资料群"}); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC()
 	want := ""
 	for index, stamp := range []time.Time{now.Add(-2 * time.Hour).In(time.FixedZone("UTC+8", 8*3600)), now.Add(-time.Hour)} {
@@ -121,7 +124,8 @@ func TestLiveModelChoosesLatestCrossSessionFileAndTarget(t *testing.T) {
 	parts := tools.parts
 	matched := len(parts) == 1 && parts[0].Media.AssetID == want && parts[0].Input.Thread == input.Thread && parts[0].OriginThread == input.Thread && parts[0].SourceThread == "source@chatroom" && parts[0].Media.Kind == "file"
 	bytesMatched := string(native.uploaded) == "synthetic-file-1"
-	report := map[string]any{"scenario": "newest_original_file_across_sessions", "real_model": true, "synthetic_conversations": true, "fake_native_only": true, "real_wechat_sends": 0, "calls": tools.calls, "selected_expected_asset_and_target": matched, "original_bytes_match": bytesMatched, "fake_receipt_verified": tools.receipt, "fake_submissions": native.submits.Load(), "decision_action": decision.Action, "decision": decision, "error": err != nil}
+	sourceAutoReply := permittedRecipient(f.manager.Config().Config, "source@chatroom")
+	report := map[string]any{"scenario": "newest_original_file_across_sessions", "real_model": true, "synthetic_conversations": true, "fake_native_only": true, "source_auto_reply_enabled": sourceAutoReply, "real_wechat_sends": 0, "calls": tools.calls, "selected_expected_asset_and_target": matched, "original_bytes_match": bytesMatched, "fake_receipt_verified": tools.receipt, "fake_submissions": native.submits.Load(), "decision_action": decision.Action, "decision": decision, "error": err != nil}
 	if evidence != "" {
 		data, e := json.MarshalIndent(report, "", "  ")
 		if e != nil {
@@ -131,7 +135,7 @@ func TestLiveModelChoosesLatestCrossSessionFileAndTarget(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	if err != nil || decision.Action != "reply" || !matched || !bytesMatched || !tools.receipt || native.submits.Load() != 1 || len(decision.MediaIDs) != 0 {
+	if err != nil || sourceAutoReply || decision.Action != "reply" || !matched || !bytesMatched || !tools.receipt || native.submits.Load() != 1 || len(decision.MediaIDs) != 0 {
 		data, _ := json.Marshal(report)
 		t.Fatalf("model cross-session selection: err=%v report=%s", err, data)
 	}

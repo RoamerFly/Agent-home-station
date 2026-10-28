@@ -84,8 +84,7 @@ func crossBatchAccepted(batch crossMediaBatch) bool {
 }
 
 func (p *permittedTools) crossAllowed(source, target string) bool {
-	c := p.manager.Config()
-	return p.privileged() && p.manager.agent.config().CrossConversation && permittedRecipient(c.Config, source) && permittedRecipient(c.Config, target)
+	return p.privileged() && p.manager.agent.config().CrossConversation && p.manager.accountThreadKnown(source) && p.manager.accountThreadKnown(target)
 }
 func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (string, error) {
 	var in crossMediaInput
@@ -482,7 +481,7 @@ func (m *Manager) crossSeedAllowed(seed bot.MediaSeed) bool {
 			return false
 		}
 	}
-	return c.Enabled && c.CrossConversation && seed.Input.Account == m.native.Account() && contains(c.OwnerIDs, seed.Requester) && c.allowsPrivilegedThread(seed.OriginThread) && permittedRecipient(m.Config().Config, seed.OriginThread) && permittedRecipient(m.Config().Config, source) && permittedRecipient(m.Config().Config, seed.Input.Thread)
+	return c.Enabled && c.CrossConversation && seed.Input.Account == m.native.Account() && contains(c.OwnerIDs, seed.Requester) && c.allowsPrivilegedThread(seed.OriginThread) && permittedRecipient(m.Config().Config, seed.OriginThread) && m.accountThreadKnown(source) && m.accountThreadKnown(seed.Input.Thread)
 }
 
 func (m *Manager) blockCrossRecovery(id, reason string) error {

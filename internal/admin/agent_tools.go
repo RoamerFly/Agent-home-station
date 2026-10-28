@@ -64,7 +64,7 @@ func (p *permittedTools) agentTools() []mcptools.Tool {
 	if !p.privileged() {
 		return tools
 	}
-	tools = append(tools, agentTool("wechat_conversations", "List the authorized conversation names and IDs. Cross-conversation access only belongs to the configured trusted owner. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
+	tools = append(tools, agentTool("wechat_conversations", "Trusted owner only: list THIS account's known conversations, including groups with automatic replies disabled. Names/IDs come from account configuration, stored account memory and native directories, not tool arguments. Returns items, next_offset, has_more and unavailable_sources; partial directory failures do not hide stored conversations. refresh defaults true; false pages cached results without native refresh. limit defaults50, not a total ceiling. query filters known names/IDs before paging. This does not enable automatic replies or grant other members access. Input {query?:string,offset?:integer,limit?:integer,refresh?:boolean}.", `{"type":"object","properties":{"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"refresh":{"type":"boolean"},"query":{"type":"string"}},"additionalProperties":false}`))
 	tools = append(tools, agentTool("wechat_operation_status", "Inspect an operation_id previously returned to THIS conversation, without replaying it. For a queued send/action this reads the native receipt. Input {operation_id:string}.", `{"type":"object","properties":{"operation_id":{"type":"string"}},"required":["operation_id"],"additionalProperties":false}`))
 	if c.CrossConversation {
 		tools = append(tools, agentTool("wechat_send_media", "Send an existing real file/voice/image/video from an explicitly chosen source conversation to an explicitly chosen target in THIS account. Reuse original bytes, convert cached audio to ordered voice parts. Owner only. This submits a durable destination-bound queue; do NOT add its media to final reply. Poll wechat_operation_status. Input {source_thread_id?,asset_id? OR message_id?,target_thread_id?,kind,request_key}.", `{"type":"object","properties":{"source_thread_id":{"type":"string"},"asset_id":{"type":"string"},"message_id":{"type":"string"},"target_thread_id":{"type":"string"},"kind":{"type":"string","enum":["file","voice","image","video"]},"request_key":{"type":"string"}},"required":["kind","request_key"],"additionalProperties":false}`))
@@ -161,7 +161,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if in.Thread == "" {
 			in.Thread = p.trace.Thread
 		}
-		if !permittedRecipient(m.Config().Config, in.Thread) || in.Thread != p.trace.Thread && (!p.privileged() || !m.agent.config().CrossConversation) {
+		if !p.conversationReadAllowed(in.Thread) {
 			return "", toolInputError("attachment conversation denied")
 		}
 		msg, e := m.native.Message(ctx, in.Message)
@@ -190,7 +190,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if in.Thread == "" {
 			in.Thread = p.trace.Thread
 		}
-		if !permittedRecipient(m.Config().Config, in.Thread) || in.Thread != p.trace.Thread && (!p.privileged() || !m.agent.config().CrossConversation) {
+		if !p.conversationReadAllowed(in.Thread) {
 			return "", toolInputError("只有开启跨会话权限的可信主人可读取其他已允许会话")
 		}
 		native, ok := m.native.(nativeCatalog)
@@ -203,12 +203,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	case "wechat_forward_file":
 		return p.forwardFile(ctx, args)
 	case "wechat_conversations":
-		cfg := m.Config()
-		items := []map[string]string{}
-		for _, id := range cfg.allowed() {
-			items = append(items, map[string]string{"id": id, "name": m.memoryLabel(ctx, id)})
-		}
-		return encode(items, nil)
+		return p.listAccountConversations(ctx, args)
 	case "wechat_operation_status":
 		var in struct {
 			ID string `json:"operation_id"`
@@ -250,7 +245,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			if op.Tool == "wechat_forward_file" {
 				original.Thread, original.Text = forwardReceiptDescription(op, p.trace.Thread)
 			}
-			if status.ThreadID != original.Thread || !permittedRecipient(m.Config().Config, original.Thread) {
+			if status.ThreadID != original.Thread || !p.conversationReadAllowed(original.Thread) {
 				return "", toolInputError("回执目标不匹配或授权已取消")
 			}
 			if op.Tool == "wechat_forward_file" {
@@ -415,7 +410,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			Text   string `json:"text"`
 			Key    string `json:"request_key"`
 		}
-		if json.Unmarshal(args, &in) != nil || !permittedRecipient(m.Config().Config, in.Thread) || strings.TrimSpace(in.Text) == "" || len(in.Text) > 3000 || in.Key == "" || len(in.Key) > 128 || !m.Config().Companion.Permissions.ReplyText {
+		if json.Unmarshal(args, &in) != nil || !p.conversationReadAllowed(in.Thread) || strings.TrimSpace(in.Text) == "" || len(in.Text) > 3000 || in.Key == "" || len(in.Key) > 128 || !m.Config().Companion.Permissions.ReplyText {
 			return "", localAgentError(errors.New("发送目标、正文或request_key无效，或文字发送权限未开启；可发送到当前或其他已授权会话"))
 		}
 		native, ok := m.native.(nativeTools)
@@ -440,6 +435,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			}
 			if err := m.memory.ClaimReply(cfg.Companion, time.Now()); err != nil {
 				return nil, err
+			}
+			if !p.privileged() || !p.conversationReadAllowed(in.Thread) || !m.Config().Companion.Permissions.ReplyText {
+				return nil, errors.New("发送授权已撤销")
 			}
 			key := p.operationID(name, args)
 			status, err := native.Submit(ctx, linuxnative.ToolSend{ThreadID: in.Thread, Kind: "text", Text: in.Text, IdempotencyKey: key})

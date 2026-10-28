@@ -144,11 +144,17 @@ func (w *Worker) pendingMedia() bool {
 	return false
 }
 func (w *Worker) mediaAllowed(d *mediaDelivery) bool {
-	if d.CrossRequester != "" && (w.config.MediaSeedAllowed == nil || !w.config.MediaSeedAllowed(MediaSeed{Key: d.Key, Trace: d.Trace, SourceID: d.SourceID, Input: d.Input, Requester: d.CrossRequester, OriginThread: d.CrossOrigin, SourceThread: d.CrossSource, OriginTask: d.CrossTask})) {
-		return false
+	routeAllowed := w.allowed[d.Input.Thread]
+	if d.CrossRequester != "" {
+		if w.config.MediaSeedAllowed == nil || !w.config.MediaSeedAllowed(MediaSeed{Key: d.Key, Trace: d.Trace, SourceID: d.SourceID, Input: d.Input, Requester: d.CrossRequester, OriginThread: d.CrossOrigin, SourceThread: d.CrossSource, OriginTask: d.CrossTask}) {
+			return false
+		}
+		// An authenticated owner task may target a known account conversation
+		// without enabling ordinary automatic replies in that conversation.
+		routeAllowed = true
 	}
 	c, ok := w.model.(*companion.Engine)
-	return ok && w.allowed[d.Input.Thread] && companion.MediaPermitted(c.Config.Permissions, d.Kind) &&
+	return ok && routeAllowed && companion.MediaPermitted(c.Config.Permissions, d.Kind) &&
 		(d.Input.Mode == "direct" || !c.Config.Quiet(time.Now())) && (!d.Input.Surf || w.config.SurfAllowed == nil || w.config.SurfAllowed(d.Input.Thread))
 }
 func (w *Worker) queueMedia(ctx context.Context, c *companion.Engine, input companion.Input, m companion.GeneratedMedia) bool {
@@ -203,7 +209,7 @@ func (w *Worker) adoptMediaSeeds() {
 				exists = true
 			}
 		}
-		if exists || !w.allowed[seed.Input.Thread] {
+		if exists || !w.allowed[seed.Input.Thread] && seed.Key == "" {
 			continue
 		}
 		d := &mediaDelivery{ParentAssetID: seed.Media.ParentAssetID, CachedMIME: seed.Media.CachedMIME, URL: seed.Media.URL, Description: seed.Media.Description, DurationMS: seed.Media.DurationMS, Key: "adopt-" + seed.JobID, Trace: seed.Trace, Input: seed.Input, SourceID: seed.SourceID, AssetID: seed.Media.AssetID, Kind: seed.Media.Kind, Title: seed.Media.Title, ID: seed.JobID, State: "queued", Created: time.Now().UTC()}
