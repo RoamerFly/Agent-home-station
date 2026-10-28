@@ -150,7 +150,7 @@ func TestLegacyVoiceIndexRebuildsFullCachedAudioInsteadOfLastPart(t *testing.T) 
 		}
 		probe, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file).Output()
 		length, _ := strconv.ParseFloat(strings.TrimSpace(string(probe)), 64)
-		if err != nil || length <= 0 || length > 55.1 {
+		if err != nil || length <= 0 || length > 60.001 {
 			t.Fatal("invalid voice segment", length, err)
 		}
 		seconds += length

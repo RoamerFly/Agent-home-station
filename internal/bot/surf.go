@@ -22,6 +22,18 @@ func (w *Worker) tickSurf(ctx context.Context) bool {
 	if !ok || w.config.SurfTask == nil || ctx.Err() != nil {
 		return false
 	}
+	if w.runtime != nil {
+		for _, d := range w.runtime.Media {
+			if d.Input.Surf && !d.terminal() {
+				return false
+			}
+		}
+		for _, r := range w.runtime.MediaReplies {
+			if r.Input.Surf && !r.terminal() {
+				return false
+			}
+		}
+	}
 	task, err := w.config.SurfTask(time.Now())
 	if err != nil {
 		w.config.Log("surf_schedule_failed")
