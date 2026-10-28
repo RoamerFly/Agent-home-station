@@ -31,7 +31,7 @@ func (p *permittedTools) yueTools() []mcptools.Tool {
 		return nil
 	}
 	return []mcptools.Tool{
-		agentTool("music_local_resume", "Continue the SAME interrupted/failed RVC computation owned by THIS conversation. First inspect music_local_status and fix the actual cause; do not create another song. Revalidates persisted source SHA-256, recipe and pinned voice configuration; keeps original job_id. Active/completed jobs are reused. Cancelled jobs and YuE jobs are not replayed. Does not send audio or messages; query music_local_status for the eventual result. Input {job_id:string}.", `{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false}`),
+		agentTool("music_local_resume", "Recover the SAME interrupted/failed RVC or YuE computation owned by THIS conversation. Inspect music_local_status and fix its cause first. RVC revalidates source/recipe/voice. YuE reconnects to its verified original prompt and collects output; restart_missing=true explicitly permits reusing the frozen graph/seed/reference ONLY if the backend confirms the prompt is absent. A changed recipe is rejected. Keeps job_id, reuses active/completed jobs, never revives cancelled jobs or sends media. Input {job_id:string,restart_missing?:boolean}.", `{"type":"object","properties":{"job_id":{"type":"string"},"restart_missing":{"type":"boolean"}},"required":["job_id"],"additionalProperties":false}`),
 		agentTool("music_rvc_start", "Default for covering an existing song: preserve the original recording melody, lyrics, timing and accompaniment; locally separate vocals, convert to the configured character RVC voice and mix back. No YuE generation, no ASR/rewritten lyrics required. First find and cache the correct vocal recording in THIS conversation. reference_start_seconds/reference_seconds select a passage; omit both for the full actual recording (single processing window up to600s; longer songs use explicit windows). Default complete voice notes; file/both only if requested. Real job_id has durable follow-up via music_local_status. A submission is not listening or delivery verification.", `{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":24},"reference_asset_id":{"type":"string"},"reference_start_seconds":{"type":"number","minimum":0},"reference_seconds":{"type":"number","exclusiveMinimum":0,"maximum":600},"kind":{"type":"string","enum":["voice","file","both"]}},"required":["title","reference_asset_id"],"additionalProperties":false}`),
 		agentTool("music_sampling_options", "Read live native YuE semantic, ABC score and diffusion sampling parameters: meanings, actual backend limits/enums, workflow defaults. Read this before tuning music_local_start.sampling or original planning_mode; defaults are not capability ceilings. No song created. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
 		agentTool("music_service_status", "Read actual YuE bridge and generation backend health without creating or retrying a song. Use this for local health; web_fetch is public-only. When offline, trusted owners can read shared project-yue.md and project startup docs, then use permitted server tools on the correct OS. Report diagnosis separately from verified repair. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
@@ -87,6 +87,12 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 			if strings.HasPrefix(detail.Error, "rvc_recovery_") {
 				return nil, "", toolInputError("原RVC任务恢复校验失败：" + detail.Error + "；检查原文件、配方及声线配置，不新建重复歌曲")
 			}
+			if detail.Error == "yue_recovery_prompt_missing_explicit_restart_required" {
+				return nil, "", toolInputError("YuE后端队列与历史中均未找到原生成任务；原配方和素材仍在。需要继续原需求时，以同一个job_id调用music_local_resume并设置restart_missing=true，按保存的工作流重算")
+			}
+			if strings.HasPrefix(detail.Error, "yue_recovery_") {
+				return nil, "", toolInputError("原YuE任务恢复核对失败：" + detail.Error + "；读取原任务状态，核对保存的请求、参考音频、工作流及声线配置")
+			}
 		}
 		if response.StatusCode == 400 {
 			var detail struct {
@@ -105,6 +111,9 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 			}
 			if json.Unmarshal(data, &detail) == nil && strings.HasPrefix(detail.Error, "rvc_") {
 				return nil, "", toolInputError("RVC服务未就绪：" + detail.Error + "；请检查原任务和本机角色模型，不改为YuE冒充原曲翻唱")
+			}
+			if detail.Error == "music_recovery_unavailable" {
+				return nil, "", toolInputError("原音乐任务恢复时未能核对生成后端或调度器；先检查music_service_status和本机桥接日志，原任务保留。连接失败不代表后端任务已丢失")
 			}
 			return nil, "", yueError("yue_backend_unavailable")
 		}
@@ -194,6 +203,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		Title, Style, Lyrics string
 		Reference            string `json:"reference_asset_id"`
 		ID                   string `json:"job_id"`
+		RestartMissing       bool   `json:"restart_missing"`
 		Kind                 string
 	}
 	if json.Unmarshal(raw, &in) != nil {
@@ -489,12 +499,12 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		return "", toolInputError("原音乐任务身份或状态响应无效")
 	}
 	if name == "music_local_resume" {
-		return p.resumeRVCCover(ctx, in.ID, status)
+		return p.resumeMusicCompute(ctx, in.ID, status, in.RestartMissing)
 	}
 	if status["state"] != "completed" {
-		if status["engine"] == "rvc" && (status["state"] == "failed" || status["state"] == "needs_review") {
+		if (status["engine"] == "rvc" || status["engine"] == "yue") && (status["state"] == "failed" || status["state"] == "needs_review") {
 			status["recovery_tool"] = "music_local_resume"
-			status["recovery_instruction"] = "先检查并修复实际失败原因，再继续原job_id的RVC计算；不用重新下载或新建歌曲任务。恢复不会自行发送微信。"
+			status["recovery_instruction"] = "先核查实际失败原因，再用music_local_resume继续原job_id；YuE优先接回已提交任务，后端确认丢失时可明确选择restart_missing以原配方重算，不新建歌曲。恢复不会自行发送微信。"
 		}
 		if status["state"] == "queued" || status["state"] == "running" {
 			for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {

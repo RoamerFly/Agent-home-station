@@ -73,6 +73,16 @@ class SongWorkflowTests(unittest.TestCase):
         self.assertEqual(a['33:37']['inputs']['value'],body['lyrics'])
         self.assertEqual(a['33:25']['inputs']['max_duration'],10)
 
+    def test_recovery_uses_persisted_workflow_instead_of_changed_project_file(self):
+        body=self.body()
+        template=json.loads((WORKFLOWS/'audio_yue2_text_to_music.json').read_text())
+        template['33:8']['inputs']['steps']=57
+        with tempfile.TemporaryDirectory() as tmp:
+            graph=prepare_song_graph(Path(tmp)/'missing-workflows',body,'synthetic',Path(tmp),template=template)
+        self.assertEqual(graph['33:8']['inputs']['steps'],57)
+        self.assertEqual(graph['33:34']['inputs']['seed'],0)
+        self.assertNotIn('synthetic',json.dumps(template))
+
     def test_cover_uses_reference_modes_seed_and_unmodified_words(self):
         for mode in ('melody','full'):
             body=self.body();body.update(mode='cover',reference_mode=mode,reference_base64=base64.b64encode(b'synthetic audio').decode(),seed=123)

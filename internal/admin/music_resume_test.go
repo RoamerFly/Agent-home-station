@@ -69,7 +69,7 @@ func TestRVCResumeDoesNotReviveCancelledDeliveredTasksOrTrustWrongReply(t *testi
 		wantPost, wantErr                     bool
 	}{
 		{"cancelled", "cancelled", "rvc", "", "cancelled", false, true},
-		{"yue", "needs_review", "yue", "", "needs_review", false, true},
+		{"unknown-engine", "needs_review", "unknown", "", "needs_review", false, true},
 		{"already-complete", "completed", "rvc", "", "completed", false, false},
 		{"delivered-task", "running", "rvc", "", "completed", false, false},
 		{"cancelled-task", "running", "rvc", "", "cancelled", false, false},
@@ -107,5 +107,64 @@ func TestRVCResumeDoesNotReviveCancelledDeliveredTasksOrTrustWrongReply(t *testi
 				t.Fatal("retired task revived", result)
 			}
 		})
+	}
+}
+
+func TestYuEResumePassesExplicitRestartAndRetainsConversationScope(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reattach", true: "restart-missing"}[restart], func(t *testing.T) {
+			f := setup(t)
+			p, _, _ := f.manager.toolAccess()
+			p.SetTrace(companion.Input{Account: "test", Thread: "filehelper", Sender: "owner"})
+			posts := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/jobs/yue-original" && r.URL.Path != "/jobs/yue-original/resume" {
+					t.Error("unexpected generation or audio request", r.URL.Path)
+				}
+				state := "needs_review"
+				if r.Method == "POST" {
+					posts++
+					var options map[string]any
+					if json.NewDecoder(r.Body).Decode(&options) != nil || len(options) != 1 || options["restart_missing"] != restart {
+						t.Error("restart choice changed", options)
+					}
+					state = "queued"
+				}
+				json.NewEncoder(w).Encode(map[string]any{"id": "yue-original", "engine": "yue", "state": state})
+			}))
+			defer upstream.Close()
+			f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
+			task := agentTask{ID: "original", Account: "test", Thread: "filehelper", Sender: "owner", MusicJob: "yue-original", MusicSpec: &songSpec{}, RecoveryMessageID: "request", State: "needs_review", OriginTrace: "original-trace"}
+			if err := f.manager.agent.task(task); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(map[string]any{"job_id": "yue-original", "restart_missing": restart})
+			result, err := p.Call(context.Background(), "music_local_resume", raw)
+			if err != nil || posts != 1 || !strings.Contains(result, `"automatic_followup":true`) {
+				t.Fatal(result, err, posts)
+			}
+			if tasks := f.manager.agent.list("test", "filehelper"); len(tasks) != 1 || tasks[0].MusicJob != "yue-original" || tasks[0].State != "waiting" || tasks[0].OriginTrace != "original-trace" {
+				t.Fatal("lost original task", tasks)
+			}
+			p.trace.Thread = "other-group"
+			if _, err := p.Call(context.Background(), "music_local_resume", raw); err == nil || posts != 1 {
+				t.Fatal("cross-session generation recovered", err, posts)
+			}
+		})
+	}
+}
+
+func TestYuERecoveryFailureExposesActionableOriginalTaskReason(t *testing.T) {
+	f := setup(t)
+	p, _, _ := f.manager.toolAccess()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte(`{"error":"yue_recovery_prompt_missing_explicit_restart_required"}`))
+	}))
+	defer upstream.Close()
+	f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = upstream.URL, "synthetic-token"
+	_, _, err := p.yueRequest(context.Background(), "POST", "/jobs/original/resume", map[string]any{}, "")
+	if err == nil || !strings.Contains(err.Error(), "restart_missing=true") || !strings.Contains(err.Error(), "同一个job_id") {
+		t.Fatal("specific recovery choice hidden", err)
 	}
 }

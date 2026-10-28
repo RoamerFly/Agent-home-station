@@ -8,9 +8,13 @@ import (
 
 // The caller has checked the durable account/conversation job binding. This
 // action only resumes local computation; it never stages or sends an attachment.
-func (p *permittedTools) resumeRVCCover(ctx context.Context, id string, status map[string]any) (string, error) {
-	if status["engine"] != "rvc" {
-		return "", toolInputError("仅可继续原RVC计算；YuE任务需先核查原后端执行状态")
+func (p *permittedTools) resumeMusicCompute(ctx context.Context, id string, status map[string]any, restartMissing bool) (string, error) {
+	engine, _ := status["engine"].(string)
+	if engine != "rvc" && engine != "yue" {
+		return "", toolInputError("原任务未提供可验证的恢复引擎，请核查桥接版本与原任务记录")
+	}
+	if engine == "rvc" && restartMissing {
+		return "", toolInputError("restart_missing仅用于YuE后端任务丢失后的原配方重算")
 	}
 	switch status["state"] {
 	case "completed", "queued", "running":
@@ -21,13 +25,17 @@ func (p *permittedTools) resumeRVCCover(ctx context.Context, id string, status m
 				return "", toolInputError("原任务已取消；先在任务管理中明确恢复，不重新启动其计算")
 			}
 		}
-		data, _, err := p.yueRequest(ctx, "POST", "/jobs/"+id+"/resume", map[string]any{}, "")
+		options := map[string]any{}
+		if engine == "yue" {
+			options["restart_missing"] = restartMissing
+		}
+		data, _, err := p.yueRequest(ctx, "POST", "/jobs/"+id+"/resume", options, "")
 		if err != nil {
 			return "", err
 		}
 		var resumed map[string]any
-		if json.Unmarshal(data, &resumed) != nil || resumed["id"] != id || resumed["engine"] != "rvc" {
-			return "", toolInputError("原RVC任务恢复响应身份无效，请查询同一个job_id")
+		if json.Unmarshal(data, &resumed) != nil || resumed["id"] != id || resumed["engine"] != engine {
+			return "", toolInputError("原音乐任务恢复响应身份无效，请查询同一个job_id")
 		}
 		status = resumed
 	default:
@@ -42,7 +50,7 @@ func (p *permittedTools) resumeRVCCover(ctx context.Context, id string, status m
 			}
 			task.State, task.MusicFailure, task.MusicPrepared = "waiting", false, false
 			task.Next = time.Now().Add(20 * time.Second)
-			task.Checkpoint = "继续原RVC计算，核对同一个job_id；按现有来源和目标交付，不重复转换或重复发送"
+			task.Checkpoint = "继续原音乐计算，核对同一个job_id；按现有来源和目标交付，不重复生成或重复发送"
 			saved, err := p.manager.agent.updateSnapshot(task)
 			if err != nil {
 				return "", err

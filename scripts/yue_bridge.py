@@ -1,16 +1,17 @@
 """Authenticated local YuE/Comfy bridge. No source changes or downloads.
 Run with --project <YuE app> --state <private directory> --token-file <file>.
-The bridge persists jobs. Verified RVC computation can explicitly resume under
-the original job ID; interrupted YuE prompts are never blindly resubmitted.
+The bridge persists jobs and frozen YuE checkpoints. Recovery keeps the original
+job ID; recreating a missing backend prompt requires an explicit choice.
 """
 from process_window import no_console_options
-import argparse, base64, concurrent.futures, hashlib, hmac, json, math, os, re, secrets, threading, time, urllib.request, urllib.error, subprocess
+import argparse, base64, concurrent.futures, copy, hashlib, hmac, json, math, os, re, secrets, threading, time, urllib.request, urllib.error, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from singing_voice import validate_singing_config
 import yue_sampling
 import rvc_cover
 import rvc_recovery
+import yue_recovery
 from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 
 def singing_profile(config_path):
@@ -126,10 +127,10 @@ def song_recipe(body):
         result.update(reference_pretrimmed=body.get('reference_pretrimmed',False),reference_source_sha256=body.get('reference_source_sha256'))
     return result
 
-def prepare_song_graph(workflow_dir,body,jid,input_dir):
+def prepare_song_graph(workflow_dir,body,jid,input_dir,template=None):
     mode,reference_mode,seed=song_options(body)
     if seed is None:raise ValueError('seed_not_persisted')
-    graph=json.loads((workflow_dir/('audio_yue2_music_cover.json' if mode=='cover' else 'audio_yue2_text_to_music.json')).read_text(encoding='utf-8'))
+    graph=copy.deepcopy(template) if template is not None else json.loads((workflow_dir/('audio_yue2_music_cover.json' if mode=='cover' else 'audio_yue2_text_to_music.json')).read_text(encoding='utf-8'))
     target=body.get('duration_seconds',60);apply_song_duration(graph,target)
     graph['33:25']['inputs']['cfg_scale']=generation_controls(body)[0]
     yue_sampling.apply(graph,body)
@@ -185,7 +186,10 @@ def main():
     db=state/'jobs.json';jobs=json.loads(db.read_bytes()) if db.exists() else {}
     def save():
         rvc_recovery.save_jobs(db,jobs)
+    interrupted_yue=[]
     for job in jobs.values():
+        if job['state'] in ('queued','running') and job.get('engine')!='rvc' and (job.get('checkpoint_sha256') or job.get('queued_checkpoint_sha256')):
+            interrupted_yue.append(job['id'])
         if job['state'] in ('queued','running'):job.update(state='needs_review',reason='bridge_restarted_no_replay')
     save()
     def api(route,body=None,timeout=20):
@@ -193,22 +197,33 @@ def main():
         with comfy_open(req,timeout=timeout) as r:
             data=r.read()
             return json.loads(data) if data else {}
-    def run(jid,body):
+    def run(jid,body,checkpoint=None,existing_prompt=None):
         try:
             with lock:
                 if jobs[jid]['state']=='cancelled':return
                 jobs[jid]['state']='running';save()
             target=body.get('duration_seconds',60)
-            graph=prepare_song_graph(workflow_dir,body,jid,input_dir)
-            if song_options(body)[0]=='cover':
+            prepared=bool(checkpoint and checkpoint.get('prepared',True))
+            graph=checkpoint['graph'] if prepared else prepare_song_graph(workflow_dir,body,jid,input_dir,template=checkpoint['graph'] if checkpoint else None)
+            if not prepared and song_options(body)[0]=='cover':
                 prepared=input_dir/('wechat-ref-'+jid+'.wav')
                 seconds=float(subprocess.check_output(**no_console_options(), args=['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(prepared)],timeout=15))
                 start,requested=reference_window(body)
                 if seconds+.1<requested:raise ValueError('reference_window_incomplete')
                 with lock:jobs[jid]['reference_window']={'start_seconds':start,'requested_seconds':requested,'prepared_seconds':seconds,'prepared_sha256':hashlib.sha256(prepared.read_bytes()).hexdigest()};save()
-            submitted=api('/prompt',{'prompt':graph,'client_id':'wechat-yue-'+jid})
-            prompt_id=submitted['prompt_id']
-            with lock:jobs[jid]['prompt_id']=prompt_id;save()
+            if existing_prompt:
+                prompt_id=existing_prompt
+            else:
+                with lock:
+                    if not prepared:
+                        jobs[jid]['checkpoint_sha256']=yue_recovery.persist(state,jid,body,graph,input_dir)
+                        jobs[jid]['graph_sha256']=yue_recovery.digest(graph)
+                    jobs[jid].update(phase='submitting_yue',submission_attempts=jobs[jid].get('submission_attempts',0)+1)
+                    save()
+                submitted=api('/prompt',{'prompt':graph,'client_id':'wechat-yue-'+jid,
+                                         'extra_data':{'wechat_graph_sha256':jobs[jid]['graph_sha256']}})
+                prompt_id=submitted['prompt_id']
+            with lock:jobs[jid].update(prompt_id=prompt_id,phase='waiting_yue');save()
             for _ in range(10800):
                 history=api('/history/'+prompt_id).get(prompt_id)
                 if history:
@@ -242,11 +257,17 @@ def main():
                 time.sleep(1)
             raise ValueError('generation_deadline')
         except Exception as e:
-            with lock:jobs[jid].update(state='failed',reason=str(e)[:120] if isinstance(e,ValueError) else type(e).__name__);save()
+            with lock:
+                uncertain=not isinstance(e,ValueError) and jobs[jid].get('phase') in ('submitting_yue','waiting_yue')
+                jobs[jid].update(state='needs_review' if uncertain else 'failed',reason=str(e)[:120] if isinstance(e,ValueError) else type(e).__name__)
+                save()
         finally:
             with lock:idle=not any(j['state'] in ('queued','running') for j in jobs.values())
             if idle:
-                try:api('/free',{'unload_models':True,'free_memory':True})
+                try:
+                    queue=api('/queue',timeout=5)
+                    if not queue.get('queue_running') and not queue.get('queue_pending'):
+                        api('/free',{'unload_models':True,'free_memory':True})
                 except Exception:pass
     def run_rvc(jid,body):
         try:
@@ -264,6 +285,20 @@ def main():
             with lock:jobs[jid].update(output,state='completed',phase='completed');save()
         except Exception as error:
             with lock:jobs[jid].update(state='failed',reason=str(error)[:120] if isinstance(error,ValueError) else type(error).__name__);save()
+    def resume_yue(jid,restart_missing=False):
+        return yue_recovery.resume(jobs,jid,state,input_dir,song_recipe,
+                                   lambda:singing_profile(args.singing_voice_config),api,save,
+                                   lambda ident,checkpoint,prompt:pool.submit(run,ident,checkpoint['body'],checkpoint,prompt),
+                                   restart_missing=restart_missing)
+    # Only reconnect to an existing prompt on startup. A lost backend requires
+    # an explicit restart choice, never an unattended second generation.
+    for jid in interrupted_yue:
+        try:
+            with lock:resume_yue(jid)
+        except Exception as error:
+            with lock:
+                jobs[jid].update(state='needs_review',reason=str(error)[:120] if isinstance(error,ValueError) else type(error).__name__)
+                save()
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
         def reply(self,status,value):
@@ -281,19 +316,19 @@ def main():
             if self.path=='/rvc-health':
                 try:
                     voice=singing_profile(args.singing_voice_config)
-                    return self.reply(200,{'ready':bool(voice and voice['engine']=='rvc'),'bridge_version':10,'engine':'rvc','profile':voice['profile'] if voice else None,'resume_same_job':True})
-                except Exception:return self.reply(200,{'ready':False,'bridge_version':10,'engine':'rvc','resume_same_job':True})
+                    return self.reply(200,{'ready':bool(voice and voice['engine']=='rvc'),'bridge_version':11,'engine':'rvc','profile':voice['profile'] if voice else None,'resume_same_job':True})
+                except Exception:return self.reply(200,{'ready':False,'bridge_version':11,'engine':'rvc','resume_same_job':True})
             if self.path=='/parameters':
                 try:
                     info={kind:api('/object_info/'+kind)[kind] for _,kind,_ in yue_sampling.GROUPS.values()}
-                    return self.reply(200,{'bridge_version':10,'modes':{mode:yue_sampling.options(workflow_dir,mode,info) for mode in ('original','cover')}})
+                    return self.reply(200,{'bridge_version':11,'modes':{mode:yue_sampling.options(workflow_dir,mode,info) for mode in ('original','cover')}})
                 except Exception:return self.reply(503,{'error':'sampling_schema_unavailable'})
             if self.path=='/health':
                 try:
                     api('/system_stats')
                     try:voice=singing_profile(args.singing_voice_config)
                     except Exception:voice=None
-                    return self.reply(200,{'ready':True,'bridge_version':10,'generation_policy':'female-faithful-cover-v4-verified-duration','capabilities':['original','reference_cover','reference_window','text_guidance_scale','duration_quality','seed','reference_mode','sampling','planning_mode','direct_rvc_cover','rvc_resume_same_job']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; requested gender is not listening verification; max duration is a ceiling'})
+                    return self.reply(200,{'ready':True,'bridge_version':11,'generation_policy':'female-faithful-cover-v4-verified-duration','capabilities':['original','reference_cover','reference_window','text_guidance_scale','duration_quality','seed','reference_mode','sampling','planning_mode','direct_rvc_cover','rvc_resume_same_job','yue_resume_same_job']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; requested gender is not listening verification; max duration is a ceiling'})
                 except Exception:return self.reply(200,{'ready':False})
             parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
             with lock:job=dict(jobs.get(jid,{}))
@@ -312,15 +347,20 @@ def main():
             except Exception:return self.reply(400,{'error':'invalid_json'})
             if not isinstance(body,dict):return self.reply(400,{'error':'invalid_json'})
             if re.fullmatch(r'/jobs/[a-f0-9]{32}/resume',self.path):
-                if body:return self.reply(400,{'error':'rvc_recovery_no_recipe_overrides'})
                 jid=self.path.split('/')[2]
                 try:
                     with lock:
-                        job=rvc_recovery.resume(jobs,jid,state,args.singing_voice_config,singing_profile,save,
-                                                lambda job_id,request:pool.submit(run_rvc,job_id,request))
+                        if jobs.get(jid,{}).get('engine')=='rvc':
+                            if body:return self.reply(400,{'error':'rvc_recovery_no_recipe_overrides'})
+                            job=rvc_recovery.resume(jobs,jid,state,args.singing_voice_config,singing_profile,save,
+                                                   lambda job_id,request:pool.submit(run_rvc,job_id,request))
+                        else:
+                            if set(body)-{'restart_missing'} or not isinstance(body.get('restart_missing',False),bool):
+                                return self.reply(400,{'error':'yue_recovery_no_recipe_overrides'})
+                            job=resume_yue(jid,body.get('restart_missing',False))
                     return self.reply(200,{k:v for k,v in job.items() if k!='file'})
                 except ValueError as error:return self.reply(409,{'error':str(error)})
-                except Exception:return self.reply(503,{'error':'rvc_recovery_unavailable'})
+                except Exception:return self.reply(503,{'error':'music_recovery_unavailable'})
             if self.path=='/rvc-jobs':return self.submit_rvc(body)
             if self.path!='/jobs':return self.reply(404,{'error':'not_found'})
             if not isinstance(body.get('style'),str) or not isinstance(body.get('lyrics'),str) or len(body['style'])>2000 or len(body['lyrics'])>6000:return self.reply(400,{'error':'invalid_song_input'})
@@ -362,7 +402,12 @@ def main():
                 if seed is None:seed=secrets.randbelow(2**31)
                 body['seed']=seed
                 recipe['seed']=seed
-                jid=secrets.token_hex(16);jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'reference_used':mode=='cover','mode':mode,'reference_mode':reference_mode,'seed':seed,'request_hash':fingerprint,'requested_seconds':target,'recipe':recipe,'singing_voice':{k:v for k,v in voice.items() if k!='python'} if voice else None};save();pool.submit(run,jid,body)
+                jid=secrets.token_hex(16)
+                template=yue_sampling.load_graph(workflow_dir,mode)
+                try:queued_hash=yue_recovery.persist(state,jid,body,template,input_dir,prepared=False)
+                except Exception:return self.reply(503,{'error':'yue_request_persist_failed'})
+                jobs[jid]={'id':jid,'engine':'yue','state':'queued','key':key,'created':time.time(),'reference_used':mode=='cover','mode':mode,'reference_mode':reference_mode,'seed':seed,'request_hash':fingerprint,'requested_seconds':target,'recipe':recipe,'queued_checkpoint_sha256':queued_hash,'queued_graph_sha256':yue_recovery.digest(template),'singing_voice':{k:v for k,v in voice.items() if k!='python'} if voice else None}
+                save();pool.submit(run,jid,body,{'body':body,'graph':template,'prepared':False})
             self.reply(202,{'effective_parameters':effective,'id':jid,'state':'queued','seed':seed,'mode':mode,'reference_used':mode=='cover','singing_voice_profile':voice['profile'] if voice else None})
         def submit_rvc(self,body):
             try:details=rvc_cover.recipe(body)
