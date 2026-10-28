@@ -14,6 +14,7 @@ import (
 // A private console projection of durable batch facts. Never queries or sends
 // native messages, exposes upload handles, or returns raw journal input text.
 func (s *Server) crossMediaRoutes(mux *http.ServeMux) {
+	s.crossMediaConsoleRoutes(mux)
 	mux.HandleFunc("GET /api/agent/media-batches", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		offset, limit := 0, 30
 		for key, target := range map[string]*int{"offset": &offset, "limit": &limit} {
