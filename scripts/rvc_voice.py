@@ -8,7 +8,21 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 from types import SimpleNamespace
+
+
+def decode_audio_pcm(file, rate):
+    """Use the managed FFmpeg ABI instead of RVC's obsolete PyAV API."""
+    source=Path(file)
+    if not source.is_file() or isinstance(rate,bool) or not isinstance(rate,int) or rate<=0:
+        raise ValueError('invalid_audio_source_or_rate')
+    from process_window import no_console_options
+    result=subprocess.run(['ffmpeg','-nostdin','-v','error','-i',str(source),'-f','f32le','-ac','1','-ar',str(rate),'pipe:1'],capture_output=True,**no_console_options())
+    if result.returncode:
+        raise RuntimeError('audio_decode_failed: '+(result.stderr or b'').decode('utf8',errors='replace')[:500])
+    if not result.stdout or len(result.stdout)%4:raise ValueError('invalid_decoded_pcm')
+    return result.stdout
 
 
 def main():
@@ -31,7 +45,15 @@ def main():
     os.environ.update(weight_root=str(model.parent),index_root=str(Path(index).parent) if index else str(project/'logs'),rmvpe_root=str(project/'assets/rmvpe'))
     os.chdir(project);sys.path.insert(0,str(project))
     import torch
+    # HuBERT's Fairseq checkpoint stores its vocabulary object. Keep Torch's
+    # weights-only loader and allow this concrete class; never disable safe
+    # loading globally just to support the legacy checkpoint.
+    from fairseq.data.dictionary import Dictionary
+    if hasattr(torch.serialization,'add_safe_globals'):
+        torch.serialization.add_safe_globals([Dictionary])
     from scipy.io import wavfile
+    from infer.lib import audio as rvc_audio
+    rvc_audio.load_audio=lambda file,sr: rvc_audio.np.frombuffer(decode_audio_pcm(file,sr),rvc_audio.np.float32).copy()
     from infer.modules.vc.modules import VC
     device=('cuda:0' if torch.cuda.is_available() else 'cpu') if args.device=='auto' else args.device
     if device=='cpu':torch.set_num_threads(2)

@@ -29,6 +29,22 @@ func TestLegacyShellFailsClosed(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+func TestSandboxSystemMediaLibrariesWithoutHostConfiguration(t *testing.T) {
+	requireLinuxSandbox(t)
+	if _, e := exec.LookPath("ffmpeg"); e != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	inside := t.TempDir()
+	c := Defaults()
+	c.Mode = "full"
+	c.Roots = []string{inside}
+	c.Isolation = &Isolation{}
+	b, _ := json.Marshal(Input{Path: inside, Command: "ffmpeg -version >/dev/null && test ! -e /etc/passwd && test ! -e /etc/shadow"})
+	v, e := (Host{c}).Call(context.Background(), "server_exec", b)
+	if e != nil || v.(map[string]any)["exit_code"] != 0 {
+		t.Fatal(v, e)
+	}
+}
 func TestSandboxCannotReadOtherRootsOrHostServices(t *testing.T) {
 	requireLinuxSandbox(t)
 	inside, outside := t.TempDir(), t.TempDir()

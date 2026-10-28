@@ -51,6 +51,18 @@ def command(public, private, cwd, argv, gpu=False, ipc=None):
     args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/dev/shm"]
     if Path("/etc/ld.so.cache").exists():
         args += ["--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache"]
+    # Debian/Ubuntu BLAS/LAPACK sonames point through /etc/alternatives.
+    # Recreate only library links whose targets are already in read-only /usr
+    # or /lib, rather than exposing the host's whole /etc directory.
+    alternatives = Path('/etc/alternatives')
+    links = []
+    for alias in sorted(alternatives.glob('lib*.so*')):
+        if not alias.is_symlink(): continue
+        try: target = alias.resolve(strict=True)
+        except OSError: continue
+        if not any(target.is_relative_to(Path(base)) for base in ('/usr/lib','/lib')): continue
+        links += ['--symlink',os.readlink(alias),str(alias)]
+    if links: args += ['--dir',str(alternatives),*links]
     if gpu:
         devices = [name for name in ("/dev/dxg", "/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools") if Path(name).exists()]
         if not devices:

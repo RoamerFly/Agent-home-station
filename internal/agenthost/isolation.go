@@ -47,6 +47,28 @@ func isolatedCommand(ctx context.Context, cfg Config, path, command string) (*ex
 	}
 	args = append(args, "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/home/agent", "--setenv", "HOME", "/home/agent", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin", "--setenv", "LANG", "C.UTF-8", "--setenv", "TMPDIR", "/tmp")
 	args = append(args, "--tmpfs", "/dev/shm")
+	if info, e := os.Lstat("/etc/ld.so.cache"); e == nil && info.Mode().IsRegular() {
+		args = append(args, "--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache")
+	}
+	// Library sonames can traverse /etc/alternatives on Debian/Ubuntu. Only
+	// recreate library links into already mounted system libraries, never /etc.
+	aliases, _ := filepath.Glob("/etc/alternatives/lib*.so*")
+	var links []string
+	for _, alias := range aliases {
+		target, e := os.Readlink(alias)
+		if e != nil {
+			continue
+		}
+		resolved, e := filepath.EvalSymlinks(alias)
+		if e != nil || !(strings.HasPrefix(resolved, "/usr/lib/") || strings.HasPrefix(resolved, "/lib/")) {
+			continue
+		}
+		links = append(links, "--symlink", target, alias)
+	}
+	if len(links) > 0 {
+		args = append(args, "--dir", "/etc/alternatives")
+		args = append(args, links...)
+	}
 	if cfg.Isolation.GPU {
 		found := false
 		for _, device := range []string{"/dev/dxg", "/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools"} {

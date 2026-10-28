@@ -15,6 +15,14 @@ from music_unix_client import open_request
 
 @unittest.skipUnless(sys.platform == "linux" and shutil.which("bwrap"), "Linux Bubblewrap integration")
 class ManagedMusicTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg system runtime')
+    def test_media_libraries_work_without_host_configuration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            public=Path(temp)/'public_workspace';private=Path(temp)/'pri_workspace/account'
+            public.mkdir();private.mkdir(parents=True)
+            code="import subprocess;from pathlib import Path;assert not Path('/etc/passwd').exists();assert not Path('/etc/shadow').exists();subprocess.run(['ffmpeg','-version'],check=True,stdout=subprocess.DEVNULL)"
+            result=subprocess.run(command(public,private,private,[str(Path('/usr/bin/python3').resolve()),'-c',code]),capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr)
     def test_process_can_write_only_account_and_has_no_host_network(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

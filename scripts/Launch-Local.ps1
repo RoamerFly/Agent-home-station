@@ -76,6 +76,16 @@ try {
   }
   'Status' {
    $web=if(Test-Web){'ready'}else{'offline'}
+   $localConfig=Join-Path $workspace 'secrets\local-deployment.json'
+   if(Test-Path -LiteralPath $localConfig -PathType Leaf){
+    $local=Get-Content -LiteralPath $localConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+    if($local.backend -eq 'wsl' -and $local.music_service){
+     if([string]$local.music_service -notmatch '^wechat-agent-music(?:-[a-f0-9]+)?\.service$'){throw 'Invalid managed music service name.'}
+     $music=& (Join-Path $PSScriptRoot 'Invoke-HiddenNative.ps1') -FilePath (Get-Command wsl.exe).Source -Arguments @('-d',[string]$local.distro,'-u',[string]$local.linux_user,'--exec','systemctl','--user','is-active',[string]$local.music_service)
+     Show-Result ('Management: '+$web+[Environment]::NewLine+'Managed music process: '+$music+[Environment]::NewLine+'ComfyUI uses a private Unix socket; port 8188 is not required.'+[Environment]::NewLine+$url)
+     break
+    }
+   }
    $ports=@(Get-NetTCPConnection -State Listen -LocalPort 6188,8188 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort)
    Show-Result ('Management: '+$web+[Environment]::NewLine+'YuE ports listening: '+($ports -join ', ')+[Environment]::NewLine+$url)
   }
