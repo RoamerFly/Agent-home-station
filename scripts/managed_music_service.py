@@ -14,6 +14,18 @@ from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 from managed_music_ipc import AccountIPC
 
 
+def comfy_memory_arguments(mode):
+    """Keep backend device selection automatic unless explicitly configured.
+
+    Forced low VRAM also moves YuE's semantic model to CPU on the registered
+    Comfy revision, which can dominate generation time.
+    """
+    flags = {'auto': [], 'normal': ['--normalvram'], 'low': ['--lowvram'], 'none': ['--novram']}
+    if mode not in flags:
+        raise ValueError('invalid_music_vram_mode')
+    return list(flags[mode])
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
@@ -25,8 +37,12 @@ def main():
     parser.add_argument('--bind', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=6188)
     parser.add_argument('--startup-timeout', type=int, default=300)
+    parser.add_argument('--vram-mode', choices=('auto', 'normal', 'low', 'none'),
+                        default=os.environ.get('MUSIC_VRAM_MODE', 'auto'),
+                        help='Comfy memory strategy. auto keeps backend device selection; low/none can put semantic generation on CPU.')
     parser.add_argument('--healthcheck', action='store_true')
     args = parser.parse_args()
+    memory_arguments = comfy_memory_arguments(args.vram_mode)
     if args.startup_timeout <= 0: raise ValueError('startup_timeout_must_be_positive')
     if not 1 <= args.port <= 65535: raise ValueError('invalid_music_port')
     token = Path(args.token_file).resolve(strict=True)
@@ -56,7 +72,7 @@ def main():
             "--entry", str(project / "comfy/ComfyUI/main.py"), "--base-directory", str(state / "base"),
             "--models-directory", str(public / "models/yue"), "--input-directory", str(state / "input"),
             "--output-directory", str(state / "output"), "--user-directory", str(state / "user"),
-            "--disable-all-custom-nodes", "--disable-api-nodes", "--disable-auto-launch", "--lowvram"]
+            "--disable-all-custom-nodes", "--disable-api-nodes", "--disable-auto-launch", *memory_arguments]
     children = []
     def stop(*unused):
         for child in reversed(children):

@@ -10,7 +10,20 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler
 from managed_music_runner import command
+from managed_music_service import comfy_memory_arguments
 from music_unix_client import open_request
+
+
+class MusicMemoryPolicyTests(unittest.TestCase):
+    def test_device_selection_is_not_forced_to_cpu_by_default(self):
+        self.assertEqual(comfy_memory_arguments('auto'), [])
+        self.assertEqual(comfy_memory_arguments('normal'), ['--normalvram'])
+        self.assertEqual(comfy_memory_arguments('low'), ['--lowvram'])
+        self.assertEqual(comfy_memory_arguments('none'), ['--novram'])
+        first = comfy_memory_arguments('auto'); first.append('--cpu')
+        self.assertEqual(comfy_memory_arguments('auto'), [])
+        with self.assertRaisesRegex(ValueError, 'invalid_music_vram_mode'):
+            comfy_memory_arguments('--gpu-only --cpu')
 
 
 @unittest.skipUnless(sys.platform == "linux" and shutil.which("bwrap"), "Linux Bubblewrap integration")
