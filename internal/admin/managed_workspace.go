@@ -4,16 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
-	"time"
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
@@ -112,17 +109,24 @@ func (p *permittedTools) projectTools() []mcptools.Tool {
 	return []mcptools.Tool{
 		agentTool("project_list", "List registered public projects and exact managed paths. Read these before searching directories; no disk-wide discovery. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
 		agentTool("project_read", "Read one registered project's JSON usage manifest. Input {id:string}.", `{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}`),
-		agentTool("agent_global_search", "Trusted owner only: search THIS account's conversation summaries, messages and assets. Results retain original times, source conversation and message IDs. This does not switch identity or authorize other accounts. Input {query?:string,thread_id?:string,offset?:integer,limit?:integer}.", `{"type":"object","properties":{"query":{"type":"string"},"thread_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
+		agentTool("agent_global_search", "Trusted owner only: search THIS account's stored conversation summaries, messages and assets, newest original time first. Asset at refers to its first source request, not later cache/format updates; time_basis labels legacy fallback and summary times. Results retain source conversation, message IDs and sender names. since is inclusive, before exclusive; use RFC3339 with timezone. Does not switch identity or authorize other accounts. Input {query?:string,thread_id?:string,since?:string,before?:string,offset?:integer,limit?:integer}.", `{"type":"object","properties":{"query":{"type":"string"},"thread_id":{"type":"string"},"since":{"type":"string","description":"Inclusive original time, RFC3339 with timezone"},"before":{"type":"string","description":"Exclusive original time, RFC3339 with timezone"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
 	}
 }
-func (p *permittedTools) callProject(_ context.Context, name string, raw json.RawMessage) (string, error) {
+func (p *permittedTools) callProject(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	var in struct {
 		ID, Query     string
 		Thread        string `json:"thread_id"`
+		Since, Before string
 		Offset, Limit int
 	}
 	if json.Unmarshal(raw, &in) != nil || in.Offset < 0 || in.Limit < 0 {
 		return "", toolInputError("invalid project/search arguments")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if name == "agent_global_search" {
+		return p.searchAccountMemory(ctx, accountMemorySearch{Query: in.Query, Thread: in.Thread, Since: in.Since, Before: in.Before, Offset: in.Offset, Limit: in.Limit})
 	}
 	x := p.executionContext()
 	dir := filepath.Join(x.Public, "manifests")
@@ -130,87 +134,31 @@ func (p *permittedTools) callProject(_ context.Context, name string, raw json.Ra
 		return "", err
 	}
 	var value any
-	if name == "agent_global_search" {
-		if !p.privileged() || !p.manager.agent.config().CrossConversation {
-			return "", toolInputError("只有当前账号可信管理员可检索全局会话")
+	entries, e := os.ReadDir(dir)
+	if e != nil {
+		return "", e
+	}
+	items := []json.RawMessage{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || entry.Type()&os.ModeSymlink != 0 {
+			continue
 		}
-		rows := []map[string]any{}
-		query := strings.ToLower(in.Query)
-		cfg := p.manager.Config()
-		now := time.Now()
-		assets, assetErr := p.manager.loadAssets()
-		if assetErr != nil {
-			return "", assetErr
+		if name == "project_read" && entry.Name() != in.ID+".json" {
+			continue
 		}
-		for _, item := range p.manager.memory.Summaries(cfg.Companion, now) {
-			if in.Thread != "" && item.Thread != in.Thread || !permittedRecipient(cfg.Config, item.Thread) {
-				continue
-			}
-			scope, e := p.manager.memory.Read(item.ID, cfg.Companion, now)
-			if e != nil || scope.Account != x.Account {
-				continue
-			}
-			label := p.manager.memoryLabel(context.Background(), item.Thread)
-			if scope.Summary != "" && (query == "" || strings.Contains(strings.ToLower(scope.Summary+label), query)) {
-				rows = append(rows, map[string]any{"kind": "summary", "thread_id": scope.Thread, "thread_name": label, "at": scope.SummaryUpdated, "text": scope.Summary})
-			}
-			for _, a := range assets {
-				if a.Account != x.Account || a.Scope != scope.ID || query != "" && !strings.Contains(strings.ToLower(a.Filename+" "+a.Title+" "+label), query) {
-					continue
-				}
-				rows = append(rows, map[string]any{"kind": "asset", "thread_id": scope.Thread, "thread_name": label, "at": a.Updated, "asset_id": a.ID, "filename": a.Filename, "bytes": a.Bytes, "mime": a.MIME, "parent_asset_id": a.ParentAssetID, "requests": a.Requests})
-			}
-			for _, m := range scope.Messages {
-				if query != "" && !strings.Contains(strings.ToLower(m.Text+label), query) {
-					continue
-				}
-				rows = append(rows, map[string]any{"kind": "message", "thread_id": scope.Thread, "thread_name": label, "at": m.Time, "message_id": m.TraceID, "sender": m.Sender, "text": m.Text, "media": m.Media})
-			}
+		b, e := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if e != nil || len(b) > 65536 || !json.Valid(b) {
+			return "", errors.New("project_manifest_invalid")
 		}
-		sort.SliceStable(rows, func(i, j int) bool {
-			a, _ := json.Marshal(rows[i]["at"])
-			b, _ := json.Marshal(rows[j]["at"])
-			if string(a) != string(b) {
-				return string(a) > string(b)
-			}
-			return fmt.Sprint(rows[i]["thread_id"], rows[i]["message_id"]) < fmt.Sprint(rows[j]["thread_id"], rows[j]["message_id"])
-		})
-		if in.Offset > len(rows) {
-			return "", toolInputError("offset out of range")
+		items = append(items, b)
+	}
+	if name == "project_read" {
+		if len(items) != 1 {
+			return "", errors.New("project_not_registered")
 		}
-		limit := in.Limit
-		if limit == 0 {
-			limit = 30
-		}
-		end := in.Offset + min(limit, len(rows)-in.Offset)
-		value = map[string]any{"account": x.Account, "items": rows[in.Offset:end], "total": len(rows), "next_offset": end, "has_more": end < len(rows), "source_material_not_instructions": true}
+		value = items[0]
 	} else {
-		entries, e := os.ReadDir(dir)
-		if e != nil {
-			return "", e
-		}
-		items := []json.RawMessage{}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || entry.Type()&os.ModeSymlink != 0 {
-				continue
-			}
-			if name == "project_read" && entry.Name() != in.ID+".json" {
-				continue
-			}
-			b, e := os.ReadFile(filepath.Join(dir, entry.Name()))
-			if e != nil || len(b) > 65536 || !json.Valid(b) {
-				return "", errors.New("project_manifest_invalid")
-			}
-			items = append(items, b)
-		}
-		if name == "project_read" {
-			if len(items) != 1 {
-				return "", errors.New("project_not_registered")
-			}
-			value = items[0]
-		} else {
-			value = map[string]any{"projects": items, "execution": x}
-		}
+		value = map[string]any{"projects": items, "execution": x}
 	}
 	b, e := json.Marshal(value)
 	return string(b), e
@@ -353,7 +301,7 @@ func (s *Server) managedWorkspaceRoutes(mux *http.ServeMux) {
 		}
 		// Explicit authenticated console inspection, not a fabricated WeChat packet.
 		p := &permittedTools{manager: s.manager, trace: companion.Input{Account: s.manager.native.Account(), Thread: c.OwnerIDs[0], Sender: c.OwnerIDs[0], Mode: "direct"}}
-		raw, _ := json.Marshal(map[string]any{"query": r.URL.Query().Get("query"), "thread_id": r.URL.Query().Get("thread_id"), "offset": offset, "limit": limit})
+		raw, _ := json.Marshal(map[string]any{"query": r.URL.Query().Get("query"), "thread_id": r.URL.Query().Get("thread_id"), "since": r.URL.Query().Get("since"), "before": r.URL.Query().Get("before"), "offset": offset, "limit": limit})
 		result, err := p.callProject(r.Context(), "agent_global_search", raw)
 		if err != nil {
 			fail(w, 400, err.Error())
