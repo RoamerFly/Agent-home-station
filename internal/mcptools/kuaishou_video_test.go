@@ -1,10 +1,40 @@
 package mcptools
 
 import (
+	"context"
 	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestKuaishouAcceptsFileBudgetWithoutUnsupportedPageError(t *testing.T) {
+	const id = "3xsynthetic12345"
+	page := `window.__APOLLO_STATE__={"defaultClient":{"VisionVideoDetailPhoto:3xsynthetic12345":{"id":"3xsynthetic12345","caption":"synthetic","duration":155100,"photoUrl":"https://synthetic.djvod.ndcimgs.com/video.mp4"}}}`
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(page))
+	}))
+	defer srv.Close()
+	transport := &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}}
+	defer transport.CloseIdleConnections()
+	ctx := context.WithValue(context.Background(), publicSessionKey{}, &publicReadSession{Transport: transport})
+	video, err := DownloadPublicVideoPage(ctx, "http://v.m.chenzhongtech.com/fw/photo/"+id, 512<<20)
+	if err != nil || !video.LinkOnly || video.DurationMS != 155100 || requests != 1 {
+		t.Fatal("file capacity rejected before actual metadata read", video, err, requests)
+	}
+	for _, budget := range []int64{0, -1, MaxPublicMediaBytes + 1} {
+		_, err = DownloadPublicVideoPage(ctx, "http://v.m.chenzhongtech.com/fw/photo/"+id, budget)
+		if err == nil || err.Error() != "media_limit_invalid" || requests != 1 {
+			t.Fatal("invalid budget misreported as unsupported page or performed request", err, requests)
+		}
+	}
+}
 
 func TestKuaishouUsesExactReceivedPhotoAndBoundedReferences(t *testing.T) {
 	id := "3xsynthetic12345"

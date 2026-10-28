@@ -144,8 +144,11 @@ func parseKuaishouPhoto(body []byte, id string) (kuaishouPhoto, []string, error)
 func downloadKuaishouVideo(ctx context.Context, raw string, limit int64, content bool) (PublicVideo, error) {
 	var out PublicVideo
 	id := kuaishouPhotoID(raw)
-	if id == "" || limit <= 0 || limit > 64<<20 {
+	if id == "" {
 		return out, &WebError{Code: "video_page_unsupported"}
+	}
+	if limit <= 0 || limit > MaxPublicMediaBytes {
+		return out, &WebError{Code: "media_limit_invalid"}
 	}
 	ctx = context.WithValue(ctx, kuaishouRequestKey{}, true)
 	metaCtx, cancel := context.WithTimeout(ctx, 30*time.Second)

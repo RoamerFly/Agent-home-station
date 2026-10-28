@@ -10,6 +10,28 @@ import (
 	"wechat-bot/internal/plugins"
 )
 
+func TestObservationCacheUsesPhysicalSpaceNotAggregateIndexQuota(t *testing.T) {
+	f := setup(t)
+	// Synthetic metadata only: no large or real user files are created.
+	items := []mediaAsset{{ID: "synthetic-old-a", Bytes: 300 << 20}, {ID: "synthetic-old-b", Bytes: 300 << 20}}
+	if err := f.manager.saveAssets(items); err != nil {
+		t.Fatal(err)
+	}
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "synthetic-video-observation"}
+	original := []byte("synthetic verified video bytes")
+	asset, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: original, MIME: "video/mp4", Filename: "synthetic.mp4"}, nil)
+	if err != nil {
+		t.Fatal("aggregate index quota blocked a small observation", err)
+	}
+	got, err := f.manager.cachedAssetData(asset)
+	if err != nil || !bytes.Equal(got, original) {
+		t.Fatal("verified original was not reusable", err)
+	}
+	if asset.FirstRequest == nil || asset.FirstRequest.TraceID != in.TraceID {
+		t.Fatal("observation source identity lost")
+	}
+}
+
 func TestCachedSongCanBeReusedAsFileAfterEngineRecreation(t *testing.T) {
 	f := setup(t)
 	native := &fakeTools{fakeNative: f.native}

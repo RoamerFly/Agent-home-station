@@ -757,11 +757,15 @@ func publicGet(ctx context.Context, raw string) ([]byte, string, error) {
 	return b, final, err
 }
 
+// MaxPublicMediaBytes matches the file attachment capacity. It bounds actual
+// buffered content, not the size of every request or a minimum required size.
+const MaxPublicMediaBytes int64 = 512 << 20
+
 // GetPublicMedia downloads public media through the same SSRF protections as
-// web_fetch. maxBytes must be chosen by the caller and cannot exceed 64 MiB.
+// web_fetch. The caller supplies its media-specific byte budget.
 func GetPublicMedia(ctx context.Context, raw string, maxBytes int64) ([]byte, string, error) {
-	if maxBytes <= 0 || maxBytes > 64<<20 {
-		return nil, "", errors.New("media size limit must be between 1 byte and 64 MiB")
+	if maxBytes <= 0 || maxBytes > MaxPublicMediaBytes {
+		return nil, "", &WebError{Code: "media_limit_invalid"}
 	}
 	return downloadPublicMedia(ctx, raw, maxBytes)
 }

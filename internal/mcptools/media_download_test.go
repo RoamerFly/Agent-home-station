@@ -33,3 +33,28 @@ func TestMediaRangesAssembleExactlyAndRejectChangedFile(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicMediaBudgetIsCapacityNotRequiredFileSize(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := GetPublicMedia(ctx, "https://synthetic.invalid/file.mp4", MaxPublicMediaBytes)
+	if err == nil || err.Error() == "media_limit_invalid" {
+		t.Fatal("valid file budget rejected before cancellation", err)
+	}
+	for _, budget := range []int64{0, -1, MaxPublicMediaBytes + 1} {
+		_, _, err = GetPublicMedia(ctx, "https://synthetic.invalid/file.mp4", budget)
+		if err == nil || err.Error() != "media_limit_invalid" {
+			t.Fatal("invalid media budget was not distinguished", err)
+		}
+	}
+	data, _, err := downloadWithReader(context.Background(), "https://synthetic.invalid/file.mp4", MaxPublicMediaBytes,
+		func(_ context.Context, u string, budget int64, _ time.Duration, _, _ string) ([]byte, string, string, rangeHeaders, error) {
+			if budget != MaxPublicMediaBytes {
+				t.Fatal("explicit budget clamped", budget)
+			}
+			return []byte("synthetic small file"), "video/mp4", u, rangeHeaders{Status: 200}, nil
+		})
+	if err != nil || string(data) != "synthetic small file" {
+		t.Fatal("small file requires no full-budget allocation", err)
+	}
+}

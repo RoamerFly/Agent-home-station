@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -284,7 +285,10 @@ func (m *Manager) writeManagedAsset(hash string, data []byte) error {
 		return e
 	}
 	defer root.Remove(temp)
-	_, e = f.Write(data)
+	// Use real free-space checks while writing; index totals include references
+	// to shared objects and are not a physical storage quota.
+	_, e = io.Copy(&capacityWriter{ctx: context.Background(), file: f,
+		dir: filepath.Join(base, "assets", "objects"), free: availableStorageBytes}, bytes.NewReader(data))
 	if e == nil {
 		e = f.Sync()
 	}

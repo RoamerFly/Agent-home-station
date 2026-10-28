@@ -18,6 +18,7 @@ import (
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
 )
 
 type assetOriginal struct {
@@ -148,7 +149,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	m.assetMu.Lock()
 	defer m.assetMu.Unlock()
 	var zero mediaAsset
-	if in.Account != m.native.Account() || in.Thread == "" || len(original.Data) == 0 || len(original.Data) > 64<<20 {
+	if in.Account != m.native.Account() || in.Thread == "" || len(original.Data) == 0 || int64(len(original.Data)) > mcptools.MaxPublicMediaBytes {
 		return zero, errors.New("媒体素材范围或大小无效")
 	}
 	items, e := m.loadAssets()
@@ -164,15 +165,10 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		parentID = ""
 	}
 	index := -1
-	var total int64
 	for i, a := range items {
-		total += a.Bytes
 		if a.ID == id {
 			index = i
 		}
-	}
-	if index < 0 && total+int64(len(original.Data)) > 512<<20 {
-		return zero, errors.New("本地素材缓存已满，请清理不再使用的素材")
 	}
 	dir := m.assetDirectory()
 	if e = os.MkdirAll(dir, 0700); e != nil {
@@ -457,8 +453,8 @@ func (m *Manager) cachedAssetData(a mediaAsset) ([]byte, error) {
 		return nil, errors.New("原始文件缓存不可用")
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, (64<<20)+1))
-	if err != nil || len(data) > 64<<20 || int64(len(data)) != a.Bytes {
+	data, err := io.ReadAll(io.LimitReader(f, mcptools.MaxPublicMediaBytes+1))
+	if err != nil || int64(len(data)) > mcptools.MaxPublicMediaBytes || int64(len(data)) != a.Bytes {
 		return nil, errors.New("原始文件缓存不可用")
 	}
 	sum := sha256.Sum256(data)

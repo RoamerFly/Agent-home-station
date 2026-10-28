@@ -87,6 +87,8 @@ func failureSummary(err error) string {
 			return "这是需要鉴权的服务接口，不是内容网页。搜索请使用web_search；读取网页请传搜索结果的真实内容网址，不要重复访问搜索API地址"
 		case "response_too_large":
 			return "下载内容超过当前类型的大小上限"
+		case "media_limit_invalid":
+			return "媒体读取容量参数无效；需在1字节至512 MiB之间，按实际文件大小和资源选择"
 		case "no_readable_text":
 			return "网页没有可提取的正文；可能依赖 JavaScript 或本身是媒体链接"
 		case "not_text":

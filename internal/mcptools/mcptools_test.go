@@ -169,7 +169,7 @@ func TestPublicMediaLimitIsBounded(t *testing.T) {
 	if _, _, err := GetPublicMedia(context.Background(), "https://example.com/", 0); err == nil {
 		t.Fatal("zero media cap accepted")
 	}
-	if _, _, err := GetPublicMedia(context.Background(), "https://example.com/", 65<<20); err == nil {
+	if _, _, err := GetPublicMedia(context.Background(), "https://example.com/", MaxPublicMediaBytes+1); err == nil {
 		t.Fatal("large media cap accepted")
 	}
 }
