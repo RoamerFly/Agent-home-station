@@ -202,6 +202,63 @@ func (m *Manager) openAsset(hash string) (*os.File, error) {
 	defer root.Close()
 	return root.Open(hash)
 }
+
+// Verify using a bounded buffer and rewind for native streaming. This path is
+// shared by file reuse and does not impose the in-memory media decoder's cap.
+func (m *Manager) openVerifiedAsset(ctx context.Context, a mediaAsset) (*os.File, error) {
+	f, err := m.openAsset(a.Hash)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*os.File, error) { f.Close(); return nil, err }
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != a.Bytes {
+		return fail(errors.New("cached_file_size_mismatch"))
+	}
+	hash := sha256.New()
+	n, err := io.Copy(hash, &uploadContextReader{ctx: ctx, reader: f})
+	if err != nil {
+		return fail(err)
+	}
+	if n != a.Bytes || hex.EncodeToString(hash.Sum(nil)) != a.Hash {
+		return fail(errors.New("cached_file_integrity_failed"))
+	}
+	if _, err = f.Seek(0, 0); err != nil {
+		return fail(err)
+	}
+	return f, nil
+}
+
+func (m *Manager) uploadVerifiedAsset(ctx context.Context, native nativeTools, a mediaAsset) (linuxnative.UploadSource, error) {
+	f, err := m.openVerifiedAsset(ctx, a)
+	if err != nil {
+		return linuxnative.UploadSource{}, err
+	}
+	defer f.Close()
+	hash := sha256.New()
+	source, err := native.Upload(ctx, a.Filename, a.MIME, &uploadContextReader{ctx: ctx, reader: io.TeeReader(f, hash)}, a.Bytes)
+	if err != nil {
+		return linuxnative.UploadSource{}, err
+	}
+	position, err := f.Seek(0, io.SeekCurrent)
+	if err != nil || position != a.Bytes || hex.EncodeToString(hash.Sum(nil)) != a.Hash {
+		// The native source is only staged, never queued for a WeChat send.
+		return linuxnative.UploadSource{}, errors.New("cached_file_changed_during_upload")
+	}
+	return source, nil
+}
+
+type uploadContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *uploadContextReader) Read(b []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(b)
+}
 func (m *Manager) writeManagedAsset(hash string, data []byte) error {
 	base := filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(m.native.Account()))
 	root, e := os.OpenRoot(base)

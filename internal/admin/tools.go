@@ -93,43 +93,45 @@ func (s *Server) toolsUpload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, (64<<20)+(64<<10))
-	if err := r.ParseMultipartForm(4 << 20); err != nil {
-		fail(w, 400, "附件表单无效或超过 64 MiB")
-		return
-	}
-	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
-	}
-	kind := r.FormValue("kind")
-	limit := toolsLimit(kind)
-	if limit == 0 || len(r.MultipartForm.File) != 1 || len(r.MultipartForm.File["file"]) != 1 || len(r.MultipartForm.Value["kind"]) != 1 {
-		fail(w, 400, "请选择一个有效类型和附件")
-		return
-	}
-	file, header, err := r.FormFile("file")
+	ctx, cancel, err := manualUploadContext(w, r)
 	if err != nil {
-		fail(w, 400, "未找到附件")
+		fail(w, 400, err.Error())
 		return
 	}
-	defer file.Close()
-	name := filepath.Base(strings.ReplaceAll(header.Filename, "\\", "/"))
-	if header.Size <= 0 || header.Size > limit || len(name) > 256 || !utf8.ValidString(name) || strings.ContainsAny(name, "\r\n\x00") {
-		fail(w, 400, "附件名称或大小不符合限制")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	capabilities, err := native.Capabilities(ctx)
-	if err != nil || capabilities.MediaSendMaxBytes[kind] <= 0 || header.Size > capabilities.MediaSendMaxBytes[kind] {
+	if err != nil {
+		fail(w, 502, "无法读取微信后台附件能力")
+		return
+	}
+	var maximum int64
+	for kind, upstream := range capabilities.MediaSendMaxBytes {
+		if upstream > 0 {
+			maximum = max(maximum, min(toolsLimit(kind), upstream))
+		}
+	}
+	if maximum <= 0 {
+		fail(w, 400, "微信后台未提供附件上传能力")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maximum+(64<<10))
+	upload, err := stageManualUpload(ctx, r, filepath.Join(s.manager.dir, "manual-uploads"), maximum, availableStorageBytes)
+	if err != nil {
+		var parse *uploadFailure
+		if errors.As(err, &parse) {
+			fail(w, parse.status, parse.message)
+		} else {
+			fail(w, 400, "附件暂存失败")
+		}
+		return
+	}
+	defer upload.close()
+	kind := upload.kind
+	if upload.size > toolsLimit(kind) || capabilities.MediaSendMaxBytes[kind] <= 0 || upload.size > capabilities.MediaSendMaxBytes[kind] {
 		fail(w, 400, "微信后台不支持这个类型或附件超过后台限制")
 		return
 	}
-	contentType := header.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	source, err := native.Upload(ctx, name, contentType, file, header.Size)
+	source, err := native.Upload(ctx, upload.name, upload.contentType, upload.file, upload.size)
 	if err != nil {
 		fail(w, 502, "附件上传失败；未发送微信消息")
 		return

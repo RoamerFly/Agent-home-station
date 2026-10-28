@@ -2,11 +2,8 @@ package admin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -194,19 +191,7 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 			if len(a.Hash) != 64 {
 				return nil, errors.New("original_file_not_cached")
 			}
-			f, e := m.openAsset(a.Hash)
-			if e != nil {
-				return nil, e
-			}
-			defer f.Close()
-			h := sha256.New()
-			n, e := io.Copy(h, f)
-			if e != nil || n != a.Bytes || hex.EncodeToString(h.Sum(nil)) != a.Hash {
-				return nil, errors.New("cached_file_integrity_failed")
-			}
-			if _, e = f.Seek(0, 0); e != nil {
-				return nil, e
-			}
+			n := a.Bytes
 			native, ok := m.native.(nativeTools)
 			if !ok {
 				return nil, errors.New("native_upload_unavailable")
@@ -215,10 +200,10 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 			if e != nil {
 				return nil, e
 			}
-			if limit := caps.MediaSendMaxBytes["file"]; limit > 0 && n > limit {
+			if limit := caps.MediaSendMaxBytes["file"]; limit <= 0 || n > limit {
 				return nil, errors.New("native_file_size_limit")
 			}
-			upload, e := native.Upload(ctx, a.Filename, a.MIME, f, n)
+			upload, e := m.uploadVerifiedAsset(ctx, native, a)
 			if e != nil {
 				return nil, e
 			}

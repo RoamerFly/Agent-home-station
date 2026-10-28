@@ -125,7 +125,10 @@ func TestMusicPreviewRetainsCompleteOriginalForFileReuse(t *testing.T) {
 		t.Skip("FFprobe runtime unavailable")
 	}
 	f := setup(t)
-	f.manager.native = &fakeTools{fakeNative: f.native}
+	// This fixture holds a complete 70-second PCM file, so declare a backend
+	// that supports it rather than the generic 2 KiB upload mock.
+	native := &streamingFileNative{fakeTools: &fakeTools{fakeNative: f.native}}
+	f.manager.native = native
 	f.manager.config.Companion.Permissions.Remember = true
 	file := filepath.Join(t.TempDir(), "original.wav")
 	if out, err := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000", "-t", "70", "-c:a", "pcm_s16le", file).CombinedOutput(); err != nil {
@@ -172,7 +175,7 @@ func TestMusicPreviewRetainsCompleteOriginalForFileReuse(t *testing.T) {
 		t.Fatal("original replaced by preview", err)
 	}
 	result, err = access.reuseAsset(context.Background(), prepared.Media[0].AssetID, "file")
-	if err != nil || !strings.Contains(result, `"kind":"file"`) || !strings.Contains(result, `"network_downloads":0`) {
+	if err != nil || !strings.Contains(result, `"kind":"file"`) || !strings.Contains(result, `"network_downloads":0`) || native.bytes != int64(len(full)) {
 		t.Fatal(err, result)
 	}
 }

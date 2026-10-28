@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -389,15 +388,18 @@ func (p *permittedTools) reuseAsset(ctx context.Context, id, kind string) (strin
 			}
 			return "", errors.New("该素材没有所需格式，请根据真实来源准备")
 		}
-		data, e := m.cachedAssetData(a)
-		if e != nil {
-			return "", e
-		}
 		native, ok := m.native.(nativeTools)
 		if !ok {
 			return "", errors.New("附件后台不可用")
 		}
-		upload, e := native.Upload(ctx, a.Filename, a.MIME, bytes.NewReader(data), int64(len(data)))
+		caps, e := native.Capabilities(ctx)
+		if e != nil {
+			return "", e
+		}
+		if caps.MediaSendMaxBytes[kind] <= 0 || a.Bytes > caps.MediaSendMaxBytes[kind] {
+			return "", errors.New("原件大小超过当前微信后台能力")
+		}
+		upload, e := m.uploadVerifiedAsset(ctx, native, a)
 		if e != nil {
 			return "", e
 		}

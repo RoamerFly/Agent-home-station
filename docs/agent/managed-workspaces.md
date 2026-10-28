@@ -87,6 +87,8 @@ Agent 先调用 `project_list`、`project_read` 读取 `manifests/*.json` 的入
 
 接收阶段依次记录 identified、downloading、available，失败包含阶段原因。原件流式取得后计算哈希，存入账号素材库及会话 inbox；相同字节多次接收保留各次消息身份。声明的原生文件上限目前为 512 MiB；声明上限与实际已测试大小需要区分。
 
+管理上传和原文件复用均为流式路径，按当前后台能力、真实文件大小和暂存磁盘空间校验，移除了旧网页入口及原文件复用的64 MiB拦截。上传暂存属于管理控制面，不挂载给Agent；中途失败不留下可发送的原件记录。可调整的上传超时与已验证范围见 [附件投递与核对](../media/delivery-reconciliation.md)。
+
 管理员调用：
 
 ```json
