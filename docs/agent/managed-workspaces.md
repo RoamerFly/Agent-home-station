@@ -50,6 +50,10 @@
 
 Agent 先调用 `project_list`、`project_read` 读取 `manifests/*.json` 的入口、README、解释器和使用说明，再按需读代码。项目发现不需要扫描 C、D、E 盘。
 
+`server_search` 改为可续接的只读分批搜索，默认每次 100 条匹配、1000 个文件或约 5 秒返回一次；它们是起始值，不是整个任务上限。`max_files`、`timeout_seconds` 可显式调整或设为 0 取消相应分批边界。`has_more=true` 时原样传回 `next_cursor`，省略 `offset`，即使本页没有匹配也要继续；游标按真实文件字节与行号推进，不反复读取之前的文件。游标绑定路径、关键词、目录过滤与当前文件版本，变化时要求重新检索；整个目录是实时视图，不宣称为快照。
+
+默认跳过 `.git`、`__pycache__`、`.venv`、`venv`、`node_modules`、`runtimes`；直接指定某目录作为搜索起点不会因它自身同名被跳过，或用 `exclude_dirs:[]` 检索全部目录。二进制前缀只做小块探测，不再为了检测模型文件读入数 MiB。结果分别给出实际分批参数、停止原因、累计跳过数和覆盖状态；跳过二进制、超长行、不可读文件与主动排除目录不等于证明目标不存在。旧 `offset` 保留兼容但会重扫，大目录应使用新游标。授权边界、`os.Root` 和取消机制保持有效。
+
 `scripts/migrate_managed_workspaces.py` 接收明确的复制清单：
 
 ```json

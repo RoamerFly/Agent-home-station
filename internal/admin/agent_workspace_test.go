@@ -33,6 +33,29 @@ func TestRVCGuideMigrationPreservesCustomPathsAndReplacesOldDefault(t *testing.T
 	}
 }
 
+func TestSearchGuideMigratesLegacyPaginationWithoutReplacingPersonalNotes(t *testing.T) {
+	f := setup(t)
+	d, e := f.manager.workspace.Read("shared", "tool-reading.md")
+	if e != nil {
+		t.Fatal(e)
+	}
+	old := "# 自定义说明\n保留这段项目备注。\nserver_list、server_search、workspace_list/search通过next_offset继续\n"
+	if _, e = f.manager.workspace.Write("shared", "tool-reading.md", old, d.Revision); e != nil {
+		t.Fatal(e)
+	}
+	if e = f.manager.initializeWorkspace(); e != nil {
+		t.Fatal(e)
+	}
+	d, e = f.manager.workspace.Read("shared", "tool-reading.md")
+	if e != nil || !strings.Contains(d.Content, "保留这段项目备注。") || !strings.Contains(d.Content, "server_search使用next_cursor") || strings.Contains(d.Content, "server_list、server_search、workspace_list/search") {
+		t.Fatal(d, e)
+	}
+	guide, e := f.manager.workspace.Read("shared", "project-search.md")
+	if e != nil || !strings.Contains(guide.Content, "不是整个任务的上限") {
+		t.Fatal(guide, e)
+	}
+}
+
 func TestWorkspaceToolsScopeConflictAndSharedWriteAuthority(t *testing.T) {
 	f, p := trustedAgent(t)
 	c := f.manager.config

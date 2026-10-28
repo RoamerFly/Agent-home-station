@@ -112,7 +112,9 @@ func TestSearchReadsPastFormerFileSizeAndScanCount(t *testing.T) {
 	}
 	file := filepath.Join(c.Roots[0], "z-large.txt")
 	os.WriteFile(file, []byte(strings.Repeat("line\n", 220000)+"late-match\n"), 0600)
-	v, e := invoke(t, h, "server_search", Input{Path: c.Roots[0], Content: "late-match"})
+	unlimited := 0
+	unlimitedTime := 0.0
+	v, e := invoke(t, h, "server_search", Input{Path: c.Roots[0], Content: "late-match", MaxFiles: &unlimited, TimeoutSeconds: &unlimitedTime})
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -54,15 +54,19 @@ func (c Config) Validate() error {
 }
 
 type Input struct {
-	Path     string `json:"path"`
-	Content  string `json:"content"`
-	Command  string `json:"command"`
-	Expected string `json:"expected_sha256"`
-	Old      string `json:"old_text"`
-	New      string `json:"new_text"`
-	Offset   int    `json:"offset"`
-	Limit    int    `json:"limit"`
-	Length   int    `json:"length"`
+	Path           string    `json:"path"`
+	Content        string    `json:"content"`
+	Command        string    `json:"command"`
+	Expected       string    `json:"expected_sha256"`
+	Old            string    `json:"old_text"`
+	New            string    `json:"new_text"`
+	Offset         int       `json:"offset"`
+	Limit          int       `json:"limit"`
+	Length         int       `json:"length"`
+	Cursor         string    `json:"cursor,omitempty"`
+	MaxFiles       *int      `json:"max_files,omitempty"`
+	TimeoutSeconds *float64  `json:"timeout_seconds,omitempty"`
+	ExcludeDirs    *[]string `json:"exclude_dirs,omitempty"`
 }
 type Host struct{ Config Config }
 
