@@ -17,6 +17,14 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def backend_failure(history):
+    """Small actionable node diagnostic, without dumping inputs or traceback."""
+    for kind, value in history.get('status', {}).get('messages', []):
+        if kind == 'execution_error' and isinstance(value, dict):
+            return {key: str(value[key])[:1000] for key in ('node_id', 'node_type', 'exception_type', 'exception_message') if key in value}
+    return {'exception_type': 'backend_execution_error'}
+
+
 def read_file(path, limit):
     if path.is_symlink():
         raise ValueError('yue_recovery_file_link')
@@ -86,6 +94,8 @@ def find_prompt(job, api):
         if not isinstance(item, (list, tuple)) or len(item) < 4 or not isinstance(item[3], dict):
             return
         extra = item[3]
+        if item[1] in job.get('retired_prompt_ids', []):
+            return
         if extra.get('client_id') != client_id:
             if item[1] == known:
                 raise ValueError('yue_recovery_prompt_identity_mismatch')
@@ -112,7 +122,7 @@ def find_prompt(job, api):
     return next(iter(matches), None)
 
 
-def resume(jobs, jid, state, input_dir, recipe_reader, profile_reader, api, save, submit, restart_missing=False):
+def resume(jobs, jid, state, input_dir, recipe_reader, profile_reader, api, save, submit, restart_missing=False, restart_failed=False):
     """Caller holds the journal lock; submit accepts the frozen checkpoint."""
     checkpoint_path(state, jid)
     job = jobs.get(jid)
@@ -132,18 +142,35 @@ def resume(jobs, jid, state, input_dir, recipe_reader, profile_reader, api, save
             raise ValueError('yue_recovery_voice_configuration_changed')
     prepared = checkpoint.get('prepared', True)
     prompt_id = find_prompt(job, api) if prepared else None
-    if prepared and not prompt_id and not restart_missing:
+    failed_prompt = None
+    if prompt_id:
+        history = api('/history/' + prompt_id).get(prompt_id, {})
+        if history.get('status', {}).get('status_str') == 'error':
+            if not restart_failed:
+                raise ValueError('yue_recovery_prompt_failed_explicit_retry_required')
+            failed_prompt, prompt_id = prompt_id, None
+    if prepared and not prompt_id and not failed_prompt and not restart_missing:
         raise ValueError('yue_recovery_prompt_missing_explicit_restart_required')
     before = dict(job)
     job.update(state='queued', phase='reattaching_yue' if prompt_id else ('restarting_yue' if prepared else 'preparing_yue'), reason='',
                resumed_at=time.time(), resume_count=job.get('resume_count', 0) + 1)
+    if before.get('backend_error'):
+        job['previous_backend_errors'] = [*job.get('previous_backend_errors', []),
+                                         {'prompt_id':before.get('prompt_id'),'error':before['backend_error']}]
+        job.pop('backend_error',None)
     # A confirmed backend loss permits a new prompt, preserving the song ID,
     # graph, seed, reference and pinned voice. No media is sent here.
     if prompt_id:
         job['prompt_id'] = prompt_id
     elif prepared:
         job.pop('prompt_id', None)
-        job['backend_absent_verified_at'] = time.time()
+        if failed_prompt:
+            job['retired_prompt_ids'] = [*job.get('retired_prompt_ids', []), failed_prompt]
+            job['backend_failed_verified_at'] = time.time()
+        else:
+            if before.get('prompt_id'):
+                job['retired_prompt_ids'] = [*job.get('retired_prompt_ids', []), before['prompt_id']]
+            job['backend_absent_verified_at'] = time.time()
     try:
         save()
     except BaseException:

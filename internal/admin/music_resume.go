@@ -8,13 +8,13 @@ import (
 
 // The caller has checked the durable account/conversation job binding. This
 // action only resumes local computation; it never stages or sends an attachment.
-func (p *permittedTools) resumeMusicCompute(ctx context.Context, id string, status map[string]any, restartMissing bool) (string, error) {
+func (p *permittedTools) resumeMusicCompute(ctx context.Context, id string, status map[string]any, restartMissing, restartFailed bool) (string, error) {
 	engine, _ := status["engine"].(string)
 	if engine != "rvc" && engine != "yue" {
 		return "", toolInputError("原任务未提供可验证的恢复引擎，请核查桥接版本与原任务记录")
 	}
-	if engine == "rvc" && restartMissing {
-		return "", toolInputError("restart_missing仅用于YuE后端任务丢失后的原配方重算")
+	if engine == "rvc" && (restartMissing || restartFailed) {
+		return "", toolInputError("restart_missing/restart_failed仅用于YuE后端任务丢失或执行失败后的原配方重算")
 	}
 	switch status["state"] {
 	case "completed", "queued", "running":
@@ -28,6 +28,9 @@ func (p *permittedTools) resumeMusicCompute(ctx context.Context, id string, stat
 		options := map[string]any{}
 		if engine == "yue" {
 			options["restart_missing"] = restartMissing
+			if restartFailed {
+				options["restart_failed"] = true
+			}
 		}
 		data, _, err := p.yueRequest(ctx, "POST", "/jobs/"+id+"/resume", options, "")
 		if err != nil {

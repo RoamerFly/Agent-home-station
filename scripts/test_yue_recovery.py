@@ -111,7 +111,21 @@ class YueRecoveryTests(unittest.TestCase):
                 return self.queue
             return {} if len(reads) == 1 else {'original-prompt': {'prompt': self.prompt()}}
         self.assertEqual(self.resume(api=api)['prompt_id'], 'original-prompt')
-        self.assertEqual(reads, ['/history', '/queue', '/history'])
+        self.assertEqual(reads, ['/history', '/queue', '/history', '/history/original-prompt'])
+
+    def test_failed_prompt_retry_preserves_prior_attempt_and_never_reattaches_to_it(self):
+        self.history={'old':{'prompt':self.prompt('old'),'status':{'status_str':'error'}}}
+        self.job['prompt_id']='old'
+        with self.assertRaisesRegex(ValueError,'explicit_retry_required'):
+            self.resume(restart_missing=True)
+        result=self.resume(restart_failed=True)
+        self.assertEqual(result['retired_prompt_ids'],['old'])
+        self.assertNotIn('prompt_id',result)
+        self.assertIsNone(self.calls[0][2])
+        self.job['state']='needs_review'
+        self.queue['queue_running']=[self.prompt('new')]
+        self.assertEqual(self.resume()['prompt_id'],'new')
+        self.assertEqual(len(self.jobs),1)
 
     def test_changed_checkpoint_recipe_reference_and_voice_rejected(self):
         path = recovery.checkpoint_path(self.root, self.jid)
@@ -168,6 +182,16 @@ class YueRecoveryTests(unittest.TestCase):
         self.assertEqual(self.job['state'], 'needs_review')
         self.assertEqual(self.job['prompt_id'], 'original-prompt')
         self.assertEqual(self.calls, [])
+
+    def test_backend_error_preserves_node_cause_without_raw_inputs_or_traceback(self):
+        history={'status':{'messages':[['execution_error',{'node_id':'33:25','node_type':'YuE2GenerateMusic',
+                    'exception_type':'ValueError','exception_message':'Expected a cuda device, but got: cpu',
+                    'traceback':['synthetic stack'],'current_inputs':{'private':'not needed'}}]]}}
+        detail=recovery.backend_failure(history)
+        self.assertEqual(detail['node_type'],'YuE2GenerateMusic')
+        self.assertIn('cpu',detail['exception_message'])
+        self.assertNotIn('traceback',detail)
+        self.assertNotIn('current_inputs',detail)
 
     @unittest.skipUnless(shutil.which('ffprobe'), 'real generated-fixture duration validation')
     def test_real_http_broker_restart_lost_response_and_frozen_recompute(self):

@@ -34,6 +34,38 @@ def register_torch_schema_aliases():
                 registry.setdefault(schema_alias(annotation), value)
 
 
+def flash_device_guard(available):
+    """CPU-offloaded YuE caches use ordinary attention, not CUDA flash decode.
+
+    Some comfy-kitchen releases query CUDA capability for every device when a
+    CUDA extension is installed. Keep their GPU decision unchanged.
+    """
+    if getattr(available, '_wechat_device_guard', False):
+        return available
+    def guarded(device=None):
+        kind = getattr(device, 'type', None)
+        if isinstance(device, str):
+            kind = device.partition(':')[0]
+        if kind is not None and kind != 'cuda':
+            return False
+        return available(device)
+    guarded._wechat_device_guard = True
+    return guarded
+
+
+def register_flash_device_guard():
+    import importlib
+    try:
+        kitchen = importlib.import_module('comfy_kitchen')
+    except ImportError:
+        return  # Older registered Comfy environments do not use this helper.
+    for module, name in ((kitchen, 'flash_attention_decode_is_available'),
+                         (sys.modules.get('comfy_kitchen.flash_attention'), 'is_available')):
+        current = getattr(module, name, None)
+        if callable(current):
+            setattr(module, name, flash_device_guard(current))
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
@@ -58,6 +90,7 @@ def main():
     comfy.options.enable_args_parsing()
     import cuda_malloc  # noqa: F401 - applies the registered project's settings
     register_torch_schema_aliases()
+    register_flash_device_guard()
     runpy.run_path(str(entry), run_name="__main__")
 
 

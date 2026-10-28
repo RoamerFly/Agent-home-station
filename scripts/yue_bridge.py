@@ -227,7 +227,9 @@ def main():
             for _ in range(10800):
                 history=api('/history/'+prompt_id).get(prompt_id)
                 if history:
-                    if history.get('status',{}).get('status_str')=='error':raise ValueError('comfy_execution_error')
+                    if history.get('status',{}).get('status_str')=='error':
+                        with lock:jobs[jid]['backend_error']=yue_recovery.backend_failure(history);save()
+                        raise ValueError('comfy_execution_error')
                     files=[item for node in history.get('outputs',{}).values() for key,items in node.items() if isinstance(items,list) for item in items if isinstance(item,dict) and item.get('filename') and item.get('type')=='output']
                     audio=next((x for x in files if Path(x['filename']).suffix.lower() in ('.wav','.mp3','.flac','.ogg','.m4a')),None)
                     if not audio:raise ValueError('no_generated_audio')
@@ -285,11 +287,11 @@ def main():
             with lock:jobs[jid].update(output,state='completed',phase='completed');save()
         except Exception as error:
             with lock:jobs[jid].update(state='failed',reason=str(error)[:120] if isinstance(error,ValueError) else type(error).__name__);save()
-    def resume_yue(jid,restart_missing=False):
+    def resume_yue(jid,restart_missing=False,restart_failed=False):
         return yue_recovery.resume(jobs,jid,state,input_dir,song_recipe,
                                    lambda:singing_profile(args.singing_voice_config),api,save,
                                    lambda ident,checkpoint,prompt:pool.submit(run,ident,checkpoint['body'],checkpoint,prompt),
-                                   restart_missing=restart_missing)
+                                   restart_missing=restart_missing,restart_failed=restart_failed)
     # Only reconnect to an existing prompt on startup. A lost backend requires
     # an explicit restart choice, never an unattended second generation.
     for jid in interrupted_yue:
@@ -355,9 +357,9 @@ def main():
                             job=rvc_recovery.resume(jobs,jid,state,args.singing_voice_config,singing_profile,save,
                                                    lambda job_id,request:pool.submit(run_rvc,job_id,request))
                         else:
-                            if set(body)-{'restart_missing'} or not isinstance(body.get('restart_missing',False),bool):
+                            if set(body)-{'restart_missing','restart_failed'} or any(not isinstance(body.get(key,False),bool) for key in ('restart_missing','restart_failed')):
                                 return self.reply(400,{'error':'yue_recovery_no_recipe_overrides'})
-                            job=resume_yue(jid,body.get('restart_missing',False))
+                            job=resume_yue(jid,body.get('restart_missing',False),body.get('restart_failed',False))
                     return self.reply(200,{k:v for k,v in job.items() if k!='file'})
                 except ValueError as error:return self.reply(409,{'error':str(error)})
                 except Exception:return self.reply(503,{'error':'music_recovery_unavailable'})

@@ -111,8 +111,13 @@ func TestRVCResumeDoesNotReviveCancelledDeliveredTasksOrTrustWrongReply(t *testi
 }
 
 func TestYuEResumePassesExplicitRestartAndRetainsConversationScope(t *testing.T) {
-	for _, restart := range []bool{false, true} {
-		t.Run(map[bool]string{false: "reattach", true: "restart-missing"}[restart], func(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		missing, failed bool
+	}{
+		{"reattach", false, false}, {"restart-missing", true, false}, {"retry-failed", false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			f := setup(t)
 			p, _, _ := f.manager.toolAccess()
 			p.SetTrace(companion.Input{Account: "test", Thread: "filehelper", Sender: "owner"})
@@ -125,7 +130,11 @@ func TestYuEResumePassesExplicitRestartAndRetainsConversationScope(t *testing.T)
 				if r.Method == "POST" {
 					posts++
 					var options map[string]any
-					if json.NewDecoder(r.Body).Decode(&options) != nil || len(options) != 1 || options["restart_missing"] != restart {
+					count := 1
+					if test.failed {
+						count++
+					}
+					if json.NewDecoder(r.Body).Decode(&options) != nil || len(options) != count || options["restart_missing"] != test.missing || test.failed && options["restart_failed"] != true {
 						t.Error("restart choice changed", options)
 					}
 					state = "queued"
@@ -138,7 +147,7 @@ func TestYuEResumePassesExplicitRestartAndRetainsConversationScope(t *testing.T)
 			if err := f.manager.agent.task(task); err != nil {
 				t.Fatal(err)
 			}
-			raw, _ := json.Marshal(map[string]any{"job_id": "yue-original", "restart_missing": restart})
+			raw, _ := json.Marshal(map[string]any{"job_id": "yue-original", "restart_missing": test.missing, "restart_failed": test.failed})
 			result, err := p.Call(context.Background(), "music_local_resume", raw)
 			if err != nil || posts != 1 || !strings.Contains(result, `"automatic_followup":true`) {
 				t.Fatal(result, err, posts)
