@@ -222,11 +222,9 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 				if a.lookup(n.ID) != nil || a.lookup(n.Alias) != nil {
 					continue
 				}
-				id := n.ID
-				if n.Alias != "" {
-					id = n.Alias
-				}
-				if _, err = a.add(accountRecord{ID: id}); err != nil {
+				// Events and messages carry the canonical native ID, not its
+				// editable alias. Keep their account identity checks aligned.
+				if _, err = a.add(accountRecord{ID: n.ID}); err != nil {
 					directoryError = "部分原生账号未能载入，请稍后刷新"
 				}
 			}
@@ -240,11 +238,8 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	primary := a.root.manager.native.Account()
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].record.ID == primary {
-			return true
-		}
-		if items[j].record.ID == primary {
-			return false
+		if (items[i].record.ID == primary) != (items[j].record.ID == primary) {
+			return items[i].record.ID == primary
 		}
 		return items[i].record.ID < items[j].record.ID
 	})

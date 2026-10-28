@@ -25,7 +25,7 @@
  }
  async function load(){
   const data=await window.WechatAdmin.api('/api/accounts');rows=data.items||[];
-  if(!selected)selected=data.primary;else if(!rows.some(x=>x.id===selected)){throw Error('选择的账号不存在，请移除地址中的 account 参数或重新选择账号')}
+  if(!selected)selected=data.primary;else if(!rows.some(x=>x.id===selected)){selected=data.primary;const target=new URL(location.href);target.searchParams.set('account',selected);history.replaceState(null,'',target.href);window.WechatAdmin.notice('原先选择的账号不存在，已切换到当前账号。')}
   $('#add-account').disabled=!data.supported;
   $('#accounts-state').textContent=data.directory_error||`${rows.length} 个账号 · 各自独立处理会话`;
   render();return data;

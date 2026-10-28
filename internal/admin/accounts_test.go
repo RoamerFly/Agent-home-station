@@ -25,7 +25,7 @@ func (n *multiNative) ForAccount(id string) (*linuxnative.Sender, error) {
 	return linuxnative.NewAdmin(linuxnative.Config{URL: n.endpoint, TokenFile: n.tokenFile, Account: id})
 }
 func (n *multiNative) Accounts(context.Context) ([]linuxnative.AccountInfo, error) {
-	return []linuxnative.AccountInfo{{ID: "test", Alias: "test"}, {ID: "second", Alias: "second"}}, nil
+	return []linuxnative.AccountInfo{{ID: "test", Alias: "test"}, {ID: "second", Alias: "second-alias"}}, nil
 }
 func (n *multiNative) DisplayName(context.Context) (string, error) { return "主号昵称", nil }
 func (n *multiNative) Ready() bool                                 { return true }
