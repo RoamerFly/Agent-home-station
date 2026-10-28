@@ -4,6 +4,7 @@
 
 ## 使用与扩展
 
+- [多账号管理与重新扫码登录](guide/MULTI-ACCOUNT.md)
 - [目录与启动入口](guide/project-layout.md)
 - [运行服务、Agent权限与可迁移性](guide/runtime-and-portability.md)
 

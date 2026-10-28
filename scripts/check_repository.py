@@ -15,7 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 DENIED_DIRS = {
     "secrets", "temp", "tmp", "dist", ".agents", ".codex", ".playwright-cli",
-    "node_modules", "__pycache__", ".venv", "venv", "media-assets", "bot-state", "archive", "send-ledger", "tool-outputs", "state",
+    "node_modules", "__pycache__", ".venv", "venv", "media-assets", "bot-state", "archive", "send-ledger", "tool-outputs", "state", "accounts",
 }
 DENIED_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".pem", ".key", ".p12", ".pfx", ".pyc", ".log"}
 PATTERNS = [
@@ -50,10 +50,11 @@ def private_values(private_root):
                 values.add(value.encode())
     if private_root:
         base = Path(private_root)
-        for name in ["config.json", "speech-config.json", "plugins.json", "mcp-config.json", "channels-config.json"]:
-            path = base / "admin" / name
-            if path.is_file():
-                collect(json.loads(path.read_text(encoding="utf-8")))
+        for directory in [base / "admin", *list((base / "admin" / "accounts").glob("*"))]:
+            for name in ["config.json", "speech-config.json", "plugins.json", "mcp-config.json", "channels-config.json"]:
+                path = directory / name
+                if path.is_file():
+                    collect(json.loads(path.read_text(encoding="utf-8")))
         for name in ["admin/admin-token", "admin/admin-password", "api-token", "send-api-token", "admin/provider-key"]:
             path = base / name
             if path.is_file():
@@ -94,7 +95,7 @@ def main():
         bad |= path.startswith(("research/evidence/", "research/samples/", "design/ui-refresh-20261024/before/"))
         bad |= parts[-1] != ".env.example" and any(fnmatch.fnmatch(parts[-1], p) for p in [".env", ".env.*", "key*.txt", "*.session", "*.session.json"])
         bad |= Path(path).suffix.lower() in DENIED_SUFFIXES
-        bad |= parts[-1] in {"admin-token", "admin-password", "provider-key", "api-token", "send-api-token"}
+        bad |= parts[-1] in {"accounts.json", "admin-token", "admin-password", "provider-key", "api-token", "send-api-token"}
         if bad:
             failures.append({"path": path, "reason": "private_or_generated_path"})
         if stage != "0" or mode == "160000":

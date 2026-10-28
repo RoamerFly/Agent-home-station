@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 )
@@ -13,6 +14,31 @@ type namedNative struct{ *fakeNative }
 
 func (*namedNative) ResolveSpeaker(context.Context, string, string) (identity.Name, error) {
 	return identity.Name{Text: "联系人备注", Source: "remark"}, nil
+}
+
+func TestLogNamesAreDisplayOnlyAndPreserveAuditIDs(t *testing.T) {
+	f := setup(t)
+	f.login()
+	f.manager.native = &namedNative{f.native}
+	f.manager.record(bot.Record{Event: "message_received", Category: "received", ThreadID: "friend", Sender: "peer", Content: "合成记录", MessageID: "fixture"})
+	stored := f.manager.Logs()
+	before := stored[len(stored)-1]
+	code, b, _ := f.request("GET", "/api/logs", nil, false, false)
+	var out struct {
+		Items []LogEntry `json:"items"`
+	}
+	json.Unmarshal(b, &out)
+	if code != 200 {
+		t.Fatal(code)
+	}
+	got := out.Items[len(out.Items)-1]
+	if got.Source != "会话备注" || got.SenderName != "联系人备注" || got.ThreadID != "friend" || got.Sender != "peer" {
+		t.Fatal("display identity lost", got)
+	}
+	after := f.manager.Logs()
+	if after[len(after)-1].Source != before.Source || after[len(after)-1].SenderName != "" {
+		t.Fatal("display lookup rewrote audit evidence")
+	}
 }
 func (*namedNative) ResolveConversation(context.Context, string) (identity.Name, error) {
 	return identity.Name{Text: "会话备注", Source: "remark"}, nil

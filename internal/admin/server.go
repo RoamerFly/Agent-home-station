@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -27,6 +28,8 @@ type session struct {
 	Expires time.Time
 }
 type Server struct {
+	authRoot      *Server
+	accounts      *accountRegistry
 	catalogMu     sync.Mutex
 	catalogJob    *catalogRefresh
 	manager       *Manager
@@ -50,7 +53,10 @@ func randomToken() string {
 }
 
 func NewHandler(manager *Manager, password, origin string) (http.Handler, error) {
-	if manager == nil || !validPassword(password) {
+	return newHandler(manager, password, origin, nil)
+}
+func newHandler(manager *Manager, password, origin string, auth *Server) (http.Handler, error) {
+	if manager == nil || auth == nil && !validPassword(password) {
 		return nil, errors.New("invalid admin authentication configuration")
 	}
 	if origin != "" {
@@ -60,7 +66,19 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 		}
 	}
 	s := &Server{manager: manager, passwordHash: sha256.Sum256([]byte(password)), origin: origin, sessions: map[string]session{}}
+	s.authRoot = auth
+	if auth == nil {
+		var err error
+		s.accounts, err = newAccountRegistry(s)
+		if err != nil {
+			return nil, err
+		}
+		manager.accounts = s.accounts
+	}
 	mux := http.NewServeMux()
+	if s.accounts != nil {
+		s.accounts.routes(mux)
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, map[string]bool{"ok": true}) })
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.protected(s.logout))
@@ -73,7 +91,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 	mux.HandleFunc("POST /api/config", s.protected(s.saveConfig))
 	mux.HandleFunc("GET /api/status", s.protected(s.status))
 	mux.HandleFunc("GET /api/logs", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, map[string]any{"items": s.manager.Logs()})
+		respond(w, 200, map[string]any{"items": s.manager.displayLogs(r.Context())})
 	}))
 	mux.HandleFunc("POST /api/bot/start", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, true) }))
 	mux.HandleFunc("POST /api/bot/stop", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, false) }))
@@ -119,6 +137,8 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 			name = "tools.js"
 		case "/assets/catalog.js":
 			name = "catalog.js"
+		case "/assets/accounts.js":
+			name = "accounts.js"
 		case "/assets/catalog-sync.js":
 			name = "catalog-sync.js"
 		case "/assets/actions.js":
@@ -183,7 +203,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 		switch name {
 		case "index.html":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		case "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "flow-model.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
+		case "accounts.js", "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "flow-model.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "flow-default.json":
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -200,7 +220,11 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-		mux.ServeHTTP(w, r)
+		if s.accounts != nil {
+			s.accounts.selectAccount(w, r, mux)
+		} else {
+			mux.ServeHTTP(w, r)
+		}
 	}), nil
 }
 
@@ -243,6 +267,9 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 	return r.Header.Get("Origin") == want
 }
 func (s *Server) session(r *http.Request) (string, session, bool) {
+	if s.authRoot != nil {
+		return s.authRoot.session(r)
+	}
 	cookie, err := r.Cookie("wechat_admin_session")
 	if err != nil {
 		return "", session{}, false
@@ -345,7 +372,15 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		native = linuxnative.Status{Connection: "unavailable"}
 	}
-	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "version": "0.32.1-responsive-private-local"})
+	name := ""
+	if resolver, ok := s.manager.native.(interface {
+		DisplayName(context.Context) (string, error)
+	}); ok {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		name, _ = resolver.DisplayName(ctx)
+		cancel()
+	}
+	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "account_name": name, "version": "0.33.0-multi-account-local"})
 }
 func (s *Server) toggle(w http.ResponseWriter, r *http.Request, enabled bool) {
 	if err := s.manager.Toggle(enabled); err != nil {

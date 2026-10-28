@@ -352,3 +352,7 @@ html:has(#unsaved-bar:not([hidden])) { scroll-padding-bottom:140px; }
   .conversation-summary { padding: 14px; }
   .conversation-actions button { padding-inline: 8px; font-size: 12px; }
 }
+
+.account-context{display:grid;gap:.35rem;margin:.25rem 0 1rem;min-width:0}.account-context label{font-size:.75rem;color:var(--muted)}.account-context select{min-width:0;width:100%;max-width:100%;font-size:.85rem;padding:.5rem}
+.account-list{display:grid;gap:.65rem;margin-bottom:1.25rem}.account-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 1.15rem;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.account-row.selected{border-color:var(--accent)}.account-info{display:grid;gap:.3rem;min-width:0}.account-info strong{overflow-wrap:anywhere}.account-status{font-size:.85rem;color:var(--muted)}.account-info details{font-size:.8rem;color:var(--muted)}.account-info summary{cursor:pointer}.account-info small{display:block;overflow-wrap:anywhere}.account-row>button{flex-shrink:0}.account-context select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media(max-width:560px){.account-row{align-items:flex-start;flex-wrap:wrap}.account-row>button{margin-left:auto}}
