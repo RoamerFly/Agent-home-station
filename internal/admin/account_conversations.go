@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/linuxnative"
 )
 
 // This is an account-bound directory cache, not an auto-reply allowlist or a
@@ -17,6 +18,39 @@ import (
 type accountConversationIndex struct {
 	Account string            `json:"account"`
 	Names   map[string]string `json:"names"`
+}
+
+// Only account-level directory pages can introduce known conversations.
+// A member/message page must never turn arbitrary row IDs into recipients.
+func nativeConversationNames(kind string, page linuxnative.CatalogPage) map[string]string {
+	names := map[string]string{}
+	if kind != "groups" && kind != "threads" && kind != "contacts" {
+		return names
+	}
+	for _, row := range page.Items {
+		id, _ := row["peerId"].(string)
+		if kind == "groups" {
+			id, _ = row["roomId"].(string)
+		}
+		if id == "" {
+			id, _ = row["id"].(string)
+		}
+		if id == "" {
+			id, _ = row["username"].(string)
+		}
+		if !validID(id) || row["deleted"] == true || kind == "groups" && !strings.HasSuffix(id, "@chatroom") || kind == "contacts" && !catalogContactAllowed(row) {
+			continue
+		}
+		name, _ := row["displayName"].(string)
+		if name == "" {
+			name, _ = row["remark"].(string)
+		}
+		if name == "" {
+			name, _ = row["nickname"].(string)
+		}
+		names[id] = name
+	}
+	return names
 }
 
 func (m *Manager) readConversationIndex() (accountConversationIndex, error) {
@@ -171,27 +205,7 @@ func (p *permittedTools) listAccountConversations(ctx context.Context, raw json.
 						issues = append(issues, kind+"_unavailable")
 						break
 					}
-					for _, row := range page.Items {
-						id, _ := row["peerId"].(string)
-						if kind == "groups" {
-							id, _ = row["roomId"].(string)
-						}
-						if id == "" {
-							id, _ = row["id"].(string)
-						}
-						if id == "" {
-							id, _ = row["username"].(string)
-						}
-						if !validID(id) || row["deleted"] == true || kind == "groups" && !strings.HasSuffix(id, "@chatroom") || kind == "contacts" && !catalogContactAllowed(row) {
-							continue
-						}
-						name, _ := row["displayName"].(string)
-						if name == "" {
-							name, _ = row["remark"].(string)
-						}
-						if name == "" {
-							name, _ = row["nickname"].(string)
-						}
+					for id, name := range nativeConversationNames(kind, page) {
 						if old := found[id]; name != "" || old == "" {
 							found[id] = name
 						}

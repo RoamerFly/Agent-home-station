@@ -245,6 +245,7 @@ func (m *Manager) managedLayoutStatus() map[string]any {
 
 func (s *Server) managedWorkspaceRoutes(mux *http.ServeMux) {
 	s.crossMediaRoutes(mux)
+	s.accountConversationConsoleRoutes(mux)
 	mux.HandleFunc("POST /api/agent/file-read", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Message string `json:"message_id"`
@@ -254,7 +255,7 @@ func (s *Server) managedWorkspaceRoutes(mux *http.ServeMux) {
 			return
 		}
 		m := s.manager
-		if !permittedRecipient(m.Config().Config, in.Thread) {
+		if !s.consoleConversationAllowed(in.Thread) {
 			fail(w, 403, "来源会话未授权")
 			return
 		}
@@ -272,9 +273,9 @@ func (s *Server) managedWorkspaceRoutes(mux *http.ServeMux) {
 	}))
 
 	mux.HandleFunc("GET /api/agent/global-search", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		c := s.manager.agent.config()
-		if len(c.OwnerIDs) == 0 || !c.CrossConversation {
-			fail(w, 403, "当前账号未配置管理员全局会话")
+		p, accessErr := s.consoleGlobalAccess()
+		if accessErr != nil {
+			fail(w, 403, accessErr.Error())
 			return
 		}
 		offset, e := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -288,7 +289,6 @@ func (s *Server) managedWorkspaceRoutes(mux *http.ServeMux) {
 			return
 		}
 		// Explicit authenticated console inspection, not a fabricated WeChat packet.
-		p := &permittedTools{manager: s.manager, trace: companion.Input{Account: s.manager.native.Account(), Thread: c.OwnerIDs[0], Sender: c.OwnerIDs[0], Mode: "direct"}}
 		raw, _ := json.Marshal(map[string]any{"query": r.URL.Query().Get("query"), "thread_id": r.URL.Query().Get("thread_id"), "since": r.URL.Query().Get("since"), "before": r.URL.Query().Get("before"), "offset": offset, "limit": limit})
 		result, err := p.callProject(r.Context(), "agent_global_search", raw)
 		if err != nil {

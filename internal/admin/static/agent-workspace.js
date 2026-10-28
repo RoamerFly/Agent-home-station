@@ -64,7 +64,45 @@
   more.addEventListener('click',load);load();
  });
  const globalButton=document.createElement('button');globalButton.type='button';globalButton.className='secondary';globalButton.textContent='账号全局检索';toolbar.append(globalButton);
- globalButton.addEventListener('click',()=>{const modal=window.WechatDialogs.open({title:'管理员全局会话',subtitle:'仅检索当前微信账号。结果保留来源和原消息时间；不会自动发送或转发。'}),label=document.createElement('label'),input=document.createElement('input'),button=document.createElement('button'),more=document.createElement('button'),results=document.createElement('div');label.textContent='群名、文件名或聊天内容';input.type='search';input.setAttribute('aria-label','全局检索关键词');button.type='button';button.className='primary';button.textContent='检索';more.type='button';more.className='secondary';more.textContent='继续查看';more.hidden=true;let offset=0,query='',busy=false,epoch=0;async function search(reset){if(busy)return;busy=true;button.disabled=more.disabled=true;if(reset){epoch++;offset=0;query=input.value;results.replaceChildren()}const current=epoch;try{const data=await api('/api/agent/global-search?query='+encodeURIComponent(query)+'&offset='+offset+'&limit=30');if(!modal.alive()||current!==epoch)return;for(const item of data.items||[]){const row=document.createElement('details'),summary=document.createElement('summary'),text=document.createElement('p');summary.textContent=(item.thread_name||item.thread_id)+' · '+new Date(item.at).toLocaleString('zh-CN',{hour12:false});text.textContent=item.kind==='asset'?('[素材] '+item.filename+' · '+item.bytes+' 字节 · '+item.asset_id):item.text;row.append(summary,text);results.append(row)}offset=data.next_offset;more.hidden=!data.has_more;if(!data.total)results.textContent='没有匹配的记录。'}catch(e){if(modal.alive())results.textContent=e.message}finally{busy=false;button.disabled=more.disabled=false}}button.addEventListener('click',()=>search(true));more.addEventListener('click',()=>search(false));input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();search(true)}});modal.body.append(label,input,button,results,more);search(true)});
+ globalButton.addEventListener('click',()=>{
+  let searchController,epoch=0,busy=false,offset=0,query='',thread='';
+  const directoryController=new AbortController();
+  const modal=window.WechatDialogs.open({title:'管理员全局会话',subtitle:'检索当前账号的全部已保存会话，无需开启群聊自动回复。不会自动发送或转发。',onClose:()=>{epoch++;searchController?.abort();directoryController.abort()}});
+  const form=document.createElement('form'),scopeLabel=document.createElement('label'),scope=document.createElement('select'),label=document.createElement('label'),input=document.createElement('input'),button=document.createElement('button'),more=document.createElement('button'),results=document.createElement('div'),resultStatus=document.createElement('p'),directoryStatus=document.createElement('p');
+  form.className='global-search-controls';scopeLabel.className=label.className='global-search-field';
+  scopeLabel.textContent='会话范围';scope.setAttribute('aria-label','全局检索会话');const all=document.createElement('option');all.value='';all.textContent='全部会话';scope.append(all);scopeLabel.append(scope);
+  label.textContent='关键词';input.type='search';input.placeholder='群名、文件名或聊天内容';input.setAttribute('aria-label','全局检索关键词');label.append(input);
+  button.type='submit';button.className='primary';button.textContent='检索';more.type='button';more.className='secondary';more.textContent='继续查看';more.hidden=true;
+  resultStatus.className=directoryStatus.className='hint';resultStatus.setAttribute('role','status');directoryStatus.setAttribute('role','status');
+  form.append(scopeLabel,label,button);modal.body.append(form,directoryStatus,resultStatus,results,more);input.focus({preventScroll:true});
+  async function search(reset){
+   if(!modal.alive()||busy&&!reset)return;
+   if(reset){epoch++;searchController?.abort();offset=0;query=input.value;thread=scope.value;results.replaceChildren();more.hidden=true}
+   const current=epoch;searchController=new AbortController();busy=true;more.disabled=true;results.setAttribute('aria-busy','true');resultStatus.setAttribute('role','status');resultStatus.textContent='正在检索…';
+   try{
+    const params=new URLSearchParams({query,thread_id:thread,offset:String(offset),limit:'30'});
+    const data=await api('/api/agent/global-search?'+params,{signal:searchController.signal});
+    if(!modal.alive()||current!==epoch)return;
+    for(const item of data.items||[]){const row=document.createElement('details'),summary=document.createElement('summary'),text=document.createElement('p');summary.textContent=(item.thread_name||item.thread_id)+' · '+new Date(item.at).toLocaleString('zh-CN',{hour12:false});text.textContent=item.kind==='asset'?('[素材] '+item.filename+' · '+item.bytes+' 字节 · '+item.asset_id):item.text;row.append(summary,text);results.append(row)}
+    offset=data.next_offset;more.hidden=!data.has_more;resultStatus.textContent=data.total?'已显示 '+offset+' / '+data.total+' 条记录':'没有匹配的记录。';
+   }catch(e){if(modal.alive()&&current===epoch&&e.name!=='AbortError'){resultStatus.setAttribute('role','alert');resultStatus.textContent=e.message}}
+   finally{if(modal.alive()&&current===epoch){busy=false;more.disabled=false;results.setAttribute('aria-busy','false')}}
+  }
+  async function conversations(){
+   directoryStatus.textContent='正在读取会话范围…';let next=0;const seen=new Set(),issues=new Set(),names=new Map();
+   try{
+    do{
+     const data=await api('/api/agent/conversations?offset='+next+'&limit=100&refresh='+(next===0),{signal:directoryController.signal});if(!modal.alive())return;
+     for(const item of data.items||[]){if(seen.has(item.id))continue;seen.add(item.id);const option=document.createElement('option'),name=item.name||item.id;option.value=item.id;option.textContent=name;const same=names.get(name)||[];same.push(option);names.set(name,same);if(same.length>1)for(const choice of same)choice.textContent=name+' · '+choice.value;scope.append(option)}
+     for(const issue of data.unavailable_sources||[])issues.add(issue);
+     if(!data.has_more)break;
+     if(!Number.isInteger(data.next_offset)||data.next_offset<=next)throw new Error('会话范围读取未完成，仍可检索已保存记录。');next=data.next_offset;
+    }while(modal.alive());
+    if(modal.alive()){directoryStatus.textContent=issues.size?'部分微信目录暂不可读，已保存的会话仍可检索。':'';directoryStatus.hidden=!issues.size}
+   }catch(e){if(modal.alive()&&e.name!=='AbortError')directoryStatus.textContent='会话范围暂未加载完整，仍可检索已保存记录。'}
+  }
+  form.addEventListener('submit',e=>{e.preventDefault();search(true)});form.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();modal.close()}});scope.addEventListener('change',()=>search(true));more.addEventListener('click',()=>search(false));search(true);conversations();
+ });
  $('#agent-doc-select').addEventListener('change',()=>{const name=$('#agent-doc-select').value;if(name)read(name)});
  $('#agent-doc-scope').addEventListener('change',()=>{state.epoch++;state.scope=$('#agent-doc-scope').value;clear();refresh(false)});
  $('#agent-doc-refresh').addEventListener('click',()=>refresh(true));
