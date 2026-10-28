@@ -78,7 +78,11 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 			if origin == "" {
 				origin = p.trace.TraceID
 			}
-			task := agentTask{ID: taskID, ProcessID: process.ID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "后台程序", RequestedText: request, Checkpoint: "等待真实程序结果，使用原进程编号查询，不重新运行命令", State: "waiting", Next: time.Now().Add(2 * time.Second), OriginTrace: origin, QuoteServerID: p.trace.QuoteServerID}
+			task := agentTask{ParentID: p.trace.TaskID, ID: taskID, ProcessID: process.ID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "后台程序", RequestedText: request, Checkpoint: "等待真实程序结果，使用原进程编号查询，不重新运行命令", State: "waiting", Next: time.Now().Add(2 * time.Second), OriginTrace: origin, QuoteServerID: p.trace.QuoteServerID}
+			if task.ParentID != "" {
+				task.RequestedText = ""
+				task.Goal = "读取该程序真实结果并通知父任务；不是重新执行原始用户请求"
+			}
 			if e = p.manager.agent.task(task); e != nil {
 				_, _ = p.manager.processes.Status(scope, process.ID, true)
 				b, _ := json.Marshal(map[string]any{"id": process.ID, "state": "needs_review", "automatic_followup": false, "instruction": "程序已启动，但后续任务无法保存，已请求停止。查询此进程编号核对，不重新启动。"})
@@ -125,6 +129,50 @@ func (m *Manager) claimProcessTask(task agentTask, now time.Time) (*companion.In
 		task.Next = now.Add(5 * time.Second)
 		_, err := m.agent.updateSnapshot(task)
 		return nil, err
+	}
+	if task.ParentID != "" {
+		a := m.agent
+		a.mu.Lock()
+		parent, ok := a.data.Tasks[task.ParentID]
+		child, current := a.data.Tasks[task.ID]
+		if current && child.Updated.Equal(task.Updated) && ok && parent.Account == task.Account && parent.Thread == task.Thread && parent.Sender == task.Sender {
+			oldParent := copyTask(parent)
+			result, _ := json.Marshal(process)
+			parent.Actions = append(append([]taskAction{}, parent.Actions...), taskAction{Tool: "background_process_result", State: process.State, At: now, Result: logText(string(result), 2200)})
+			if parent.State == "waiting" || parent.State == "pending" {
+				parent.Next = now
+			}
+			parent.Updated = now
+			child.State = "completed"
+			child.WorkCompleted = true
+			child.LastResult = "程序结果已并入父任务，不单独重复回复原请求"
+			child.Updated = now
+			a.data.Tasks[parent.ID] = parent
+			a.data.Tasks[child.ID] = child
+			err := a.persist()
+			if err != nil {
+				a.data.Tasks[parent.ID] = oldParent
+				a.data.Tasks[child.ID] = task
+			}
+			a.mu.Unlock()
+			if err == nil {
+				err = a.retireSettled()
+			}
+			return nil, err
+		}
+		if _, retired := a.archived[task.ParentID]; retired && current {
+			child.State = "completed"
+			child.WorkCompleted = true
+			child.LastResult = "父任务已结束，程序结果保留，不再单独续办原请求"
+			a.data.Tasks[child.ID] = child
+			err := a.persist()
+			a.mu.Unlock()
+			if err == nil {
+				err = a.retireSettled()
+			}
+			return nil, err
+		}
+		a.mu.Unlock()
 	}
 	return m.claimTaskResult(task, now, process, "读取原进程结果，自行决定检查文件、修复、运行验证、保存经验或回复。interrupted表示应核查，不自动重放。")
 }

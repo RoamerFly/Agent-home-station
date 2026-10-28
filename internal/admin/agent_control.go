@@ -98,6 +98,7 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	WorkCompleted      bool              `json:"work_completed,omitempty"`
 	Reminder           *reminderSpec     `json:"reminder,omitempty"`
 	OwnerRequest       bool              `json:"owner_request,omitempty"`
 	ParentID           string            `json:"parent_task_id,omitempty"`
@@ -148,6 +149,7 @@ type agentData struct {
 	Operations map[string]agentOperation `json:"operations"`
 }
 type agentControl struct {
+	archived map[string]agentTask
 	mu       sync.Mutex
 	dir      string
 	settings agentSettings
@@ -181,6 +183,9 @@ func newAgentControl(dir string) (*agentControl, error) {
 	if a.data.Tasks == nil || a.data.Operations == nil {
 		return nil, errors.New("Agent记录无效")
 	}
+	if err := a.loadTaskArchive(); err != nil {
+		return nil, err
+	}
 	changed := false
 	for id, t := range a.data.Tasks {
 		if t.Reminder != nil && t.State == "running" {
@@ -205,7 +210,7 @@ func newAgentControl(dir string) (*agentControl, error) {
 		}
 		if t.ReportSourceThread != "" && t.OwnerRequested && !t.ReportOnly && (t.State == "needs_review" || t.State == "running" || t.State == "waiting") {
 			old := "原生retryable=true才可wechat_delivery_retry续传原任务"
-			if strings.Contains(t.Checkpoint, old) || t.State == "needs_review" || t.State == "running" {
+			if strings.Contains(t.Checkpoint, old) || t.State == "running" {
 				t.Checkpoint = strings.ReplaceAll(t.Checkpoint, old, "使用wechat_delivery_retry核对同群真实消息后恢复原任务；retryable=false不再是停止条件")
 				t.Checkpoint += "\n当前策略：发送恢复没有次数配额；依据工具反馈持续排查、修复和验证，未完成保存waiting检查点，技术信息只在主人私聊。"
 				t.State = "waiting"
@@ -261,6 +266,9 @@ func newAgentControl(dir string) (*agentControl, error) {
 			return nil, err
 		}
 	}
+	if err := a.retireSettled(); err != nil {
+		return nil, err
+	}
 	return a, nil
 }
 func (a *agentControl) persist() error {
@@ -309,12 +317,25 @@ func (a *agentControl) save(c agentSettings) error {
 	return nil
 }
 func (a *agentControl) list(account, thread string) []agentTask {
+	return a.listTasks(account, thread, true)
+}
+func (a *agentControl) active(account, thread string) []agentTask {
+	return a.listTasks(account, thread, false)
+}
+func (a *agentControl) listTasks(account, thread string, history bool) []agentTask {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	out := []agentTask{}
 	for _, t := range a.data.Tasks {
 		if t.Account == account && (thread == "" || t.Thread == thread) {
 			out = append(out, copyTask(t))
+		}
+	}
+	if history {
+		for id, t := range a.archived {
+			if _, active := a.data.Tasks[id]; !active && t.Account == account && (thread == "" || t.Thread == thread) {
+				out = append(out, copyTask(t))
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
@@ -324,6 +345,23 @@ func (a *agentControl) task(t agentTask) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	old, exists := a.data.Tasks[t.ID]
+	if t.State == "completed" {
+		t.WorkCompleted = true
+	}
+	if t.State == "pending" || t.State == "waiting" {
+		t.WorkCompleted = false
+	}
+	if !exists {
+		if retired, ok := a.archived[t.ID]; ok {
+			if retired.Account == t.Account && retired.Thread == t.Thread && retired.State == t.State {
+				return nil
+			}
+			return errors.New("任务已结束并移出活跃队列，请用新的任务编号")
+		}
+	}
+	if t.State == "completed" && t.Delivery != nil && t.Delivery.State != "accepted" {
+		t.State = "waiting_delivery"
+	}
 	if exists {
 		t.Actions = old.Actions
 		if old.Goal != "" {
@@ -379,7 +417,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 	if !c.Enabled || !c.TasksEnabled || !cfg.Companion.Enabled {
 		return nil, nil
 	}
-	for _, t := range m.agent.list(m.native.Account(), "") {
+	for _, t := range m.agent.active(m.native.Account(), "") {
 		if t.Reminder != nil || (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(t.Thread) || !permittedRecipient(cfg.Config, t.Thread) {
 			continue
 		}
@@ -404,7 +442,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			if err := m.agent.task(t); err != nil {
 				return nil, err
 			}
-			return &companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Text: t.Checkpoint, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, MustReply: true, TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText, TraceID: "recover-" + t.ID, QuoteServerID: t.QuoteServerID}, nil
+			return &companion.Input{BackgroundResult: true, Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Text: t.Checkpoint, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText, TraceID: "recover-" + t.ID, QuoteServerID: t.QuoteServerID}, nil
 		}
 		ownerContinuation := false
 		if t.ReportOnly {
@@ -429,10 +467,9 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		}
 		// Non-owner continuations retain proactive authorization and quiet checks;
 		// completed evaluations do not exhaust a daily allowance.
-		in := companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "proactive", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), TraceID: "task-" + t.ID + "-" + time.Now().UTC().Format("20060102T150405.000000000"), TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText}
+		in := companion.Input{BackgroundResult: true, Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "proactive", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), TraceID: "task-" + t.ID + "-" + time.Now().UTC().Format("20060102T150405.000000000"), TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText}
 		if ownerContinuation {
 			in.Mode, in.Directed = "direct", true
-			in.MustReply = t.Runs == 0
 			in.ReportOnly = t.ReportOnly
 		} else {
 			if !contains(cfg.Companion.ProactiveThreads, t.Thread) {
@@ -467,8 +504,24 @@ func withTaskWake(c companion.Config) companion.Config {
 	return c
 }
 func (m *Manager) finishAgentTask(in companion.Input, state string) {
+	defer func() {
+		if err := m.agent.retireSettled(); err != nil {
+			m.log("task_archive_save_failed")
+		}
+	}()
 	if in.TaskID == "" {
 		return
+	}
+	if state == "reply" {
+		for _, task := range m.agent.active(in.Account, in.Thread) {
+			if task.ID == in.TaskID && task.Delivery == nil {
+				task.Delivery = &bot.TaskDelivery{Trace: in.TraceID, State: "waiting_delivery"}
+				if err := m.agent.task(task); err != nil {
+					m.log("task_delivery_binding_failed")
+					return
+				}
+			}
+		}
 	}
 	for _, t := range m.agent.list(in.Account, in.Thread) {
 		if t.ID == in.TaskID && t.State == "running" {
@@ -525,11 +578,12 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 }
 func (s *Server) agentRoutes(mux *http.ServeMux) {
+	s.taskArchiveRoutes(mux)
 	s.workspaceRoutes(mux)
 	mux.HandleFunc("POST /api/agent/recover-music-message", s.protected(s.recoverMusicMessage))
 	mux.HandleFunc("POST /api/agent/recover-private-message", s.protected(s.recoverPrivatePrefixMessage))
 	mux.HandleFunc("GET /api/agent", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.list(s.manager.native.Account(), ""), "operations": s.manager.agent.operations(), "host_os_paths": true})
+		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.active(s.manager.native.Account(), ""), "history_count": len(s.manager.agent.taskHistory(s.manager.native.Account(), "")), "operations": s.manager.agent.operations(), "host_os_paths": true})
 	}))
 	mux.HandleFunc("POST /api/agent/config", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var c agentSettings
@@ -573,6 +627,10 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 		}
 		if in.Action != "resume" && in.Action != "cancel" {
 			fail(w, 400, "操作无效")
+			return
+		}
+		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok && (old.State == "completed" || old.State == "cancelled") {
+			fail(w, 409, "任务已结束并移至历史，不重新执行；如有新的需求，请创建新任务")
 			return
 		}
 		for _, t := range s.manager.agent.list(s.manager.native.Account(), "") {

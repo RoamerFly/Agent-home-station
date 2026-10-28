@@ -277,7 +277,7 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 		parentCancel := cancel
 		jobCtx, cancel = bounded, func() { stop(); parentCancel() }
 	}
-	j := &generationJob{input: input, engine: fork, cancel: cancel, quietDeadline: quietDeadline, observationPending: analysis != nil}
+	j := &generationJob{input: input, engine: fork, cancel: cancel, quietDeadline: quietDeadline, observationPending: analysis != nil || len(input.UnreadMediaIDs) > 0}
 	if !input.Surf && input.Mode != "proactive" && input.TaskID == "" && input.Sender != "" && input.Account != "" && input.TraceID != "" {
 		j.session = w.liveSession(s, j)
 	}
@@ -316,8 +316,46 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 	go func() {
 		defer s.wg.Done()
 		in := input
+		in.UnreadMessages = append([]companion.ConversationEvent(nil), input.UnreadMessages...)
 		var d companion.Decision
 		var err error
+		if len(in.UnreadMediaIDs) > 0 {
+			for _, id := range in.UnreadMediaIDs {
+				read, stop := context.WithTimeout(modelCtx, 3*time.Minute)
+				m, e := w.source.Message(read, id)
+				summary := ""
+				if e == nil && m.ThreadID == in.Thread {
+					summary, e = w.config.Analyzer.Analyze(read, m)
+				}
+				stop()
+				if e != nil {
+					summary = failedObservation(e)
+				}
+				if modelCtx.Err() != nil {
+					err = modelCtx.Err()
+					break
+				}
+				for index := range in.UnreadMessages {
+					event := &in.UnreadMessages[index]
+					if event.MessageID == id {
+						old := event.Text
+						event.Text += "\n实际媒体观察（对话资料）：\n" + summary
+						updated := event.Text
+						err = s.call(modelCtx, func() error {
+							scope := companion.ScopeID(in.Channel, in.Account, in.Thread)
+							return fork.Store.ReplaceObservation(scope, id, old, updated)
+						})
+						break
+					}
+				}
+				if err != nil {
+					break
+				}
+			}
+			if err == nil {
+				err = s.call(modelCtx, func() error { j.input = in; j.observationPending = false; return w.persistErr })
+			}
+		}
 		if analysis != nil {
 			readCtx, stop := context.WithTimeout(modelCtx, 3*time.Minute)
 			var summary string
@@ -455,6 +493,13 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		if d.Trace == r.input.TraceID && d.Bubble < 0 && d.State == "accepted" {
 			r.progressDelivered = true
 		}
+	}
+	if len(r.input.UnreadMessages) > 0 && r.err == nil && !r.job.cancelled && w.config.BacklogSettled != nil {
+		ids := []string{}
+		for _, m := range r.input.UnreadMessages {
+			ids = append(ids, m.MessageID)
+		}
+		defer w.config.BacklogSettled(r.input.Account, r.input.Thread, ids, r.decision.Action)
 	}
 	w.finishCharacter(ctx, r.engine, r.input, r.decision, r.err, r.processingErr, r.job.toolStarted, r.progressDelivered)
 	if c := r.engine.Config.ConversationConfig(); c.RecheckOnMessage && len(r.job.updates) > 0 {

@@ -4,6 +4,8 @@ import "wechat-bot/internal/companion"
 
 // TaskDelivery describes delivery evidence separately from model completion.
 type TaskDelivery struct {
+	TextExpected   int    `json:"text_expected,omitempty"`
+	TextAccepted   int    `json:"text_accepted,omitempty"`
 	PendingJob     string `json:"pending_job,omitempty"`
 	FailureReason  string `json:"failure_reason,omitempty"`
 	CaptionOmitted bool   `json:"caption_omitted,omitempty"`
@@ -44,9 +46,6 @@ func (w *Worker) publishTaskDelivery(trace string) {
 			}
 		}
 	}
-	if input.TaskID == "" || result.Expected == 0 {
-		return
-	}
 	for _, r := range w.runtime.MediaReplies {
 		if r.Trace != trace {
 			continue
@@ -59,11 +58,19 @@ func (w *Worker) publishTaskDelivery(trace string) {
 	}
 	for _, p := range w.runtime.Plans {
 		if p.Input.TraceID == trace {
+			if p.Input.TaskID != "" {
+				input = p.Input
+			}
+			result.TextExpected += len(p.Messages)
+			result.TextAccepted += len(p.Sent)
 			pendingCaption = pendingCaption || !p.terminal()
 			omitted := p.MediaCaption && p.State == "stopped" && p.StopReason == "model_cancel"
 			result.CaptionOmitted = result.CaptionOmitted || omitted
 			failed = failed || p.State == "stopped" && !omitted
 		}
+	}
+	if input.TaskID == "" || result.Expected == 0 && result.TextExpected == 0 {
+		return
 	}
 	switch {
 	case unknown:

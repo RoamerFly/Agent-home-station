@@ -12,6 +12,17 @@ test('authenticated API endpoints are labels; real content remains navigable', (
   assert.equal(activityTarget({target_url:'javascript:alert(1)'}), null);
 });
 
+test('startup unread from multiple people becomes one conversation round with original times',()=>{
+ const rows=project([
+  entry(1,{message_id:'old-one',event:'message_received',category:'received',sender:'one',message_time:'2026-10-26T22:00:00+08:00',content:'昨晚的问题'}),
+  entry(2,{message_id:'new-two',event:'message_received',category:'received',sender:'two',message_time:'2026-10-27T07:00:00+08:00',content:'问题已解决'}),
+  entry(3,{message_id:'old-one',related_message_id:'new-two',event:'backlog_message_grouped',category:'decision'}),
+  entry(4,{message_id:'new-two',event:'backlog_conversation_started',category:'decision'}),
+  entry(5,{thread_id:'another@chatroom',message_id:'other',event:'message_received',category:'received'})
+ ]);
+ assert.equal(rows.length,2);const batch=rows.find(x=>x.thread_id==='fixture@chatroom');assert.equal(batch.received.length,2);assert.equal(batch.received[0].message_time,'2026-10-26T22:00:00+08:00');
+});
+
 test('one round keeps receive, decision, failed tool, recovered tool and delivery evidence', () => {
   const rows = project([
     entry(1, { category: 'received', event: 'message_received', content: '帮我找一首歌', status: 'received' }),

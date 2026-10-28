@@ -162,6 +162,7 @@ func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []st
 }
 
 type ConversationEvent struct {
+	SenderName string `json:"sender_name,omitempty"`
 	MessageID  string `json:"message_id"`
 	Sender     string `json:"sender"`
 	Text       string `json:"text"`

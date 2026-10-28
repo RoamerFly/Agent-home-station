@@ -13,6 +13,7 @@ var musicPolicy string
 // ContextReport contains counts and versions only, never prompts, messages,
 // summaries, credentials or tool arguments.
 type ContextReport struct {
+	UnreadMessages  int
 	SystemBytes     int
 	InputBytes      int
 	HistoryMessages int
@@ -29,6 +30,7 @@ func inspectContext(system string, turns []map[string]string, tools []mcptools.T
 	for _, turn := range turns {
 		r.InputBytes += len(turn["content"])
 		var packet struct {
+			Unread   []json.RawMessage `json:"unread_messages"`
 			Kind     string            `json:"kind"`
 			Timeline []json.RawMessage `json:"timeline"`
 			Summary  json.RawMessage   `json:"summary"`
@@ -56,6 +58,7 @@ func inspectContext(system string, turns []map[string]string, tools []mcptools.T
 			r.HasWorkspace = true
 		case "current_message":
 			r.HasCurrent = true
+			r.UnreadMessages = len(packet.Unread)
 		}
 	}
 	return r

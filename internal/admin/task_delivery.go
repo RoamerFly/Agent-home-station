@@ -8,8 +8,13 @@ import (
 )
 
 func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDelivery) error {
+	defer func() {
+		if err := m.agent.retireSettled(); err != nil {
+			m.log("task_archive_save_failed")
+		}
+	}()
 	for _, task := range m.agent.list(in.Account, in.Thread) {
-		if task.ID != in.TaskID || task.resultKind() == "" && task.RecoveryMessageID == "" || task.State == "running" || task.State == "cancelled" {
+		if task.ID != in.TaskID || task.State == "cancelled" {
 			continue
 		}
 		if task.Delivery != nil && *task.Delivery == delivery {
@@ -19,14 +24,28 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 			return nil
 		}
 		task.Delivery = &delivery
-		task.State = "waiting_delivery"
+		wasRunning := task.State == "running"
+		previousState := task.State
+		if !wasRunning {
+			task.State = "waiting_delivery"
+		}
 		task.LastResult = fmt.Sprintf("微信已接受附件 %d/%d", delivery.Accepted, delivery.Expected)
+		if delivery.TextExpected > 0 {
+			task.LastResult += fmt.Sprintf("；文字 %d/%d", delivery.TextAccepted, delivery.TextExpected)
+		}
 		if delivery.TotalParts > 0 {
 			task.LastResult += fmt.Sprintf("；语音分段 %d/%d", delivery.AcceptedParts, delivery.TotalParts)
 		}
 		switch delivery.State {
 		case "accepted":
-			task.State = "completed"
+			if !wasRunning {
+				if task.WorkCompleted || previousState == "waiting_delivery" || task.resultKind() != "" || task.RecoveryMessageID != "" || task.ReportOnly {
+					task.State = "completed"
+					task.WorkCompleted = true
+				} else {
+					task.State = previousState
+				}
+			}
 			if delivery.CaptionOmitted {
 				task.LastResult += "；所需附件已完成交付，说明文字由模型选择省略"
 			} else {

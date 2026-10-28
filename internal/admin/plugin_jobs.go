@@ -21,10 +21,8 @@ func (m *Manager) agentTaskActive(in companion.Input) bool {
 	if in.TaskID == "" {
 		return true
 	}
-	for _, t := range m.agent.list(in.Account, in.Thread) {
-		if t.ID == in.TaskID {
-			return t.State != "cancelled"
-		}
+	if t, ok := m.agent.lookupTask(in.TaskID, in.Account, in.Thread); ok {
+		return t.State != "cancelled"
 	}
 	return false
 }

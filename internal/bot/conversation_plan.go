@@ -99,6 +99,7 @@ func (w *Worker) queueUtteranceFrom(c *companion.Engine, in companion.Input, d c
 		return true
 	}
 	w.queuePhase(in.TraceID, "sending")
+	w.publishTaskDelivery(in.TraceID)
 	w.activity(Record{Event: "utterance_plan_queued", Category: "decision", ThreadID: in.Thread, MessageID: in.TraceID, Status: "queued", Reason: "semantic_message_plan", Content: strings.Join(d.Messages, "\n")})
 	return true
 }

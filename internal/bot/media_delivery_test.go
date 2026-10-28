@@ -98,6 +98,19 @@ func TestUpdateDrainWaitsForMediaWithoutCancellingOrTakingNewInbox(t *testing.T)
 		t.Fatal("drain consumed next message")
 	}
 }
+
+func TestUpdateDrainParksPreparedMediaWithoutSubmissionOrCancellation(t *testing.T) {
+	w, n, c, in := mediaWorker(t)
+	w.config.Draining = func() bool { return true }
+	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "source", Kind: "voice", Title: "prepared.wav"})
+	if w.pendingMedia() {
+		t.Fatal("never-submitted media blocked executable update")
+	}
+	w.suspendMedia()
+	if n.cancels != 0 || w.runtime.Media[0].State != "prepared" || w.runtime.Media[0].ID != "" {
+		t.Fatal("prepared work was lost during update")
+	}
+}
 func (n *mediaFake) RetryMediaJob(context.Context, string) (linuxnative.ToolStatus, error) {
 	n.retries++
 	n.status.State = "running"

@@ -12,6 +12,8 @@ import (
 )
 
 type inboxItem struct {
+	Backlog          bool              `json:"backlog,omitempty"`
+	BacklogParent    string            `json:"backlog_parent,omitempty"`
 	FollowupParent   string            `json:"followup_parent,omitempty"`
 	FollowupConsumed bool              `json:"followup_consumed,omitempty"`
 	OwnerModelReview bool              `json:"owner_model_review,omitempty"`
@@ -99,6 +101,17 @@ func (w *Worker) queuePhase(id, phase string) {
 				item.ToolStarted = true
 			}
 			item.Phase = phase
+			for j := range w.runtime.Inbox {
+				child := &w.runtime.Inbox[j]
+				if child.BacklogParent == id && child.Event.Data.MessageID != id {
+					if phase == "model_running" || phase == "tool_running" || phase == "processing" {
+						child.Phase = "backlog_grouped"
+					} else {
+						child.Phase = phase
+					}
+					child.Updated = time.Now().UTC()
+				}
+			}
 			item.Updated = time.Now().UTC()
 			if phase == "read_pending" {
 				item.RetryAfter = time.Now().Add(30 * time.Second)
@@ -179,6 +192,12 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 			return nil
 		}
 		item := &w.runtime.Inbox[i]
+		if item.Backlog && (item.Phase == "received" || item.Phase == "read_pending" || item.Phase == "backlog_grouped") {
+			if err := w.processUnreadConversation(ctx, item.Event.Data.ThreadID); err != nil {
+				return err
+			}
+			continue
+		}
 		if time.Now().Before(item.RetryAfter) {
 			continue
 		}
@@ -274,6 +293,13 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 	}
 	if err := w.saveRuntime(); err != nil {
 		return err
+	}
+	if w.config.Options.RecoverBacklog {
+		if _, ok := w.model.(*companion.Engine); ok {
+			if err := w.captureStartupUnread(ctx, path, &state); err != nil {
+				return err
+			}
+		}
 	}
 	if err := w.drainInbox(ctx); err != nil {
 		return err

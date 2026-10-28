@@ -31,6 +31,7 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
+	BacklogSettled    func(string, string, []string, string)
 	AuthorizeThread   func(context.Context, string) (bool, error)
 	ReportFailure     func(companion.Input, string) error
 	AgentTask         func(time.Time, func(string) bool) (*companion.Input, error)

@@ -22,8 +22,8 @@ func TestRecoveredPrivateReplyRecordsProcessingAndActualMediaDelivery(t *testing
 	}
 	in := companion.Input{Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TaskID: task.ID, TraceID: "recover-recovered"}
 	f.manager.finishAgentTask(in, "reply")
-	if got := f.manager.agent.list("test", in.Thread)[0]; got.State != "completed" || got.Delivery != nil {
-		t.Fatal("processed reply invented a receipt or requested review", got)
+	if got := f.manager.agent.list("test", in.Thread)[0]; got.State != "waiting_delivery" || got.Delivery == nil || got.Delivery.Accepted != 0 {
+		t.Fatal("model completion did not retain unconfirmed delivery", got)
 	}
 	delivery := bot.TaskDelivery{Trace: in.TraceID, Expected: 1, Accepted: 0, State: "partial"}
 	if e := f.manager.updateAgentDelivery(in, delivery); e != nil {

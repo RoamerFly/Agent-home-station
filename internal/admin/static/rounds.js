@@ -32,7 +32,7 @@
     // related_message_id can also mean a quote or cancellation evidence. Only
     // explicit session-followup events establish ownership of another message.
     for (const item of entries) {
-      if (['generation_followup_consumed', 'generation_followup_settled'].includes(item.event) && item.related_message_id) {
+      if (['generation_followup_consumed', 'generation_followup_settled', 'backlog_message_grouped'].includes(item.event) && item.related_message_id) {
         const child = messageKey(item), parent = messageKey(item, item.related_message_id);
         if (child && parent && find(parent) !== child) parents.set(child, parent);
       }
