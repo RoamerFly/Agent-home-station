@@ -4982,19 +4982,44 @@ index 7151b84..9457747 100644
 +    }
 +}
 diff --git a/packages/native-client-rust/crates/wechat-protocol/src/sticker.rs b/packages/native-client-rust/crates/wechat-protocol/src/sticker.rs
-index c32d53f..d5ce62b 100644
+index c32d53f..a797a38 100644
 --- a/packages/native-client-rust/crates/wechat-protocol/src/sticker.rs
 +++ b/packages/native-client-rust/crates/wechat-protocol/src/sticker.rs
-@@ -38,7 +38,7 @@ pub fn validate_sticker_url(value: &str) -> Result<reqwest::Url> {
+@@ -38,7 +38,10 @@ pub fn validate_sticker_url(value: &str) -> Result<reqwest::Url> {
          reqwest::Url::parse(value).map_err(|_| anyhow::anyhow!("sticker_source_not_allowed"))?;
      ensure!(
          ["http", "https"].contains(&url.scheme())
 -            && url.host_str() == Some("snsvideo.c2c.wechat.com")
-+            && matches!(url.host_str(), Some("snsvideo.c2c.wechat.com" | "wxapp.tc.qq.com"))
++            && matches!(
++                url.host_str(),
++                Some("snsvideo.c2c.wechat.com" | "wxapp.tc.qq.com" | "vweixinf.tc.qq.com")
++            )
              && url.username().is_empty()
              && url.password().is_none()
              && url.fragment().is_none()
-@@ -141,12 +141,23 @@ mod tests {
+@@ -69,7 +72,11 @@ pub fn fetch_sticker(
+     }
+     progress(0, Some(descriptor.expected_bytes))?;
+     let port = if url.scheme() == "https" { 443 } else { 80 };
+-    let addresses = ("snsvideo.c2c.wechat.com", port)
++    let host = url
++        .host_str()
++        .ok_or_else(|| anyhow::anyhow!("sticker_source_not_allowed"))?
++        .to_owned();
++    let addresses = (host.as_str(), port)
+         .to_socket_addrs()
+         .map_err(|_| anyhow::anyhow!("sticker_dns_failed"))?
+         .collect::<Vec<_>>();
+@@ -89,7 +96,7 @@ pub fn fetch_sticker(
+         .connect_timeout(Duration::from_secs(5))
+         .redirect(reqwest::redirect::Policy::none())
+         .no_proxy()
+-        .resolve("snsvideo.c2c.wechat.com", *address)
++        .resolve(&host, *address)
+         .build()?;
+     let mut response = client
+         .get(url)
+@@ -141,12 +148,29 @@ mod tests {
      use super::*;
      #[test]
      fn url_and_network_sources_are_strict() {
@@ -5002,6 +5027,8 @@ index c32d53f..d5ce62b 100644
 +            "https://snsvideo.c2c.wechat.com/sticker",
 +            "https://wxapp.tc.qq.com/sticker",
 +            "http://wxapp.tc.qq.com/sticker",
++            "https://vweixinf.tc.qq.com/sticker",
++            "http://vweixinf.tc.qq.com/sticker",
 +        ] {
 +            assert!(validate_sticker_url(u).is_ok());
 +        }
@@ -5015,6 +5042,10 @@ index c32d53f..d5ce62b 100644
 +            "https://user@wxapp.tc.qq.com/x",
 +            "https://wxapp.tc.qq.com:444/x",
 +            "https://wxapp.tc.qq.com/x#fragment",
++            "https://vweixinf.tc.qq.com.evil/x",
++            "https://user@vweixinf.tc.qq.com/x",
++            "https://vweixinf.tc.qq.com:444/x",
++            "https://vweixinf.tc.qq.com/x#fragment",
          ] {
              assert!(validate_sticker_url(u).is_err());
          }

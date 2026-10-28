@@ -31,3 +31,28 @@ func TestNaturalReplyGuidanceReachesNormalAndFailureModelWithoutRewriting(t *tes
 		t.Fatal("post-generation word filter changed model output", d, err)
 	}
 }
+
+func TestCharacterSingingAndVideoSummaryGuidanceReachesModel(t *testing.T) {
+	m := &fakeModel{answer: `{"action":"reply","messages":["这段讲的是母子渐渐分离的过程，最后妈妈说舍不得。"]}`}
+	e, err := NewPreview(enabledConfig(), m, "role")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Respond(context.Background(), Input{Mode: "direct", Text: "视频讲了什么？", Preview: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"角色演唱与视频内容", "第一人称", "原唱资源不冒充", "主要事件或观点", "不要为了接梗", "判断留在action/reason", "决定安静就用silent"} {
+		if !strings.Contains(m.system, part) {
+			t.Fatalf("missing guidance %s", part)
+		}
+	}
+	// The policy asks the model to decide and write. It is never a post-hoc
+	// text filter, including when a user actually asks for the production method.
+	m.answer = `{"action":"reply","messages":["这次是用我的角色声线换声翻唱的。"]}`
+	r := &AgentRunner{Engine: e}
+	d, err := r.finalResponse(context.Background(), "role", nil, "singing_ready", "角色声线已转换完成")
+	if err != nil || len(d.Messages) != 1 || d.Messages[0] != "这次是用我的角色声线换声翻唱的。" {
+		t.Fatal(d, err)
+	}
+}

@@ -106,6 +106,26 @@ func TestSearchGuideMigratesLegacyPaginationWithoutReplacingPersonalNotes(t *tes
 	}
 }
 
+func TestMediaExpressionGuideMigratesOnceAndPreservesCustomNotes(t *testing.T) {
+	f := setup(t)
+	d, err := f.manager.workspace.Read("shared", "AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.manager.workspace.Write("shared", "AGENTS.md", "# 主人备注\n保留这段私人设定。\n", d.Revision); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err = f.manager.initializeWorkspace(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, err = f.manager.workspace.Read("shared", "AGENTS.md")
+	if err != nil || strings.Count(d.Content, "## 角色演唱与视频内容") != 1 || !strings.Contains(d.Content, "保留这段私人设定。") {
+		t.Fatal(d, err)
+	}
+}
+
 func TestWorkspaceToolsScopeConflictAndSharedWriteAuthority(t *testing.T) {
 	f, p := trustedAgent(t)
 	c := f.manager.config

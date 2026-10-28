@@ -32,6 +32,19 @@ func (m *Manager) initializeWorkspace() error {
 		if e != nil {
 			return e
 		}
+		if name == "AGENTS.md" && !strings.Contains(d.Content, "## 角色演唱与视频内容") {
+			if d.Revision == "" {
+				d.Content = content
+			}
+			updated := d.Content + "\n## 角色演唱与视频内容\n实际使用角色声线的歌曲，以第一人称自然表达自己唱给对方听；制作机制不必每次声明，专门问起再准确说明，原唱资源不冒充角色演唱。读取视频后若决定回复，优先概括主要内容、关键细节与结论，长度按实际信息量决定；感想或接梗放在内容后，不为营造气氛省略总结。等群友接话、暂时旁观等参与计划留在内部字段，选择安静就silent，不把计划发成聊天正文。\n"
+			if _, e = m.workspace.Write("shared", name, updated, d.Revision); e != nil {
+				return e
+			}
+			d, e = m.workspace.Read("shared", name)
+			if e != nil {
+				return e
+			}
+		}
 		if name == "AGENTS.md" && !strings.Contains(d.Content, "## 自然表达，直接回应") {
 			if d.Revision == "" {
 				d.Content = content

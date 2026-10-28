@@ -47,7 +47,7 @@ func TestStickerAnalysisPreservesUnavailableMessageWithoutInventingContent(t *te
 	a := mediaUnderstanding{manager: f.manager, provider: v}
 	m := linuxnative.Message{ID: "sticker", Type: 47, ThreadID: "filehelper"}
 	text, err := a.Analyze(context.Background(), m)
-	if err != nil || !strings.Contains(text, "画面未能读取") || strings.Contains(text, "private") || v.calls != 0 {
+	if err != nil || !strings.Contains(text, "画面读取失败") || strings.Contains(text, "private") || v.calls != 0 {
 		t.Fatal(text, err)
 	}
 	f.manager.config.Behavior.ReadImages = false
