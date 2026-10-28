@@ -32,6 +32,19 @@ func (m *Manager) initializeWorkspace() error {
 		if e != nil {
 			return e
 		}
+		if name == "AGENTS.md" && !strings.Contains(d.Content, "## 自然表达，直接回应") {
+			if d.Revision == "" {
+				d.Content = content
+			}
+			updated := d.Content + "\n## 自然表达，直接回应\n先回答对方关心的结果，按需要说明当前进展、具体问题和实际下一步。把核验与工具规则留在内部；避免‘暂时不能把……当成……’‘不能声称……’‘不等于……’等自我辩护句式。原因还在查就简短说明，已确认的直接说，不罗列没做的事、不固定套话。所有回复由模型结合事实组织，不虚构执行结果。\n"
+			if _, e = m.workspace.Write("shared", name, updated, d.Revision); e != nil {
+				return e
+			}
+			d, e = m.workspace.Read("shared", name)
+			if e != nil {
+				return e
+			}
+		}
 		if name == "AGENTS.md" && !strings.Contains(d.Content, "投递先核查，续办原批次") {
 			if d.Revision == "" {
 				d.Content = content

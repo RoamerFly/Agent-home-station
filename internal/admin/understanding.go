@@ -64,7 +64,7 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 				return observedShareDescription(m) + "\n" + observation, nil
 			}
 			a.manager.record(bot.Record{Event: "channels_video_observation_unavailable", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, Status: "unavailable", Reason: err.Error(), Origin: "media"})
-			text := shareMessageDescription(m) + "\n[视频内容读取未完成，不能声称已观看，不根据标题猜测或评论。原因：" + sharedVideoReadReason(err) + "]"
+			text := shareMessageDescription(m) + "\n[视频内容读取未完成；现有资料为卡片信息，后续可重读视频。原因：" + sharedVideoReadReason(err) + "]"
 			return text, &bot.ObservationUnavailableError{Observation: text, Reason: sharedVideoReadReason(err)}
 		}
 		if m.Link != nil && m.Link.URL != "" && c.ReadVideos {
@@ -169,7 +169,7 @@ func shareDescription(body string) string {
 		parts = append(parts, name+": "+text)
 	}
 	if len(parts) == 0 {
-		return "[收到分享卡片] 没有可读取的标题或简介，尚未取得视频画面。不能声称看过视频。"
+		return "[收到分享卡片] 没有可读取的标题或简介，视频画面尚未取得。"
 	}
 	return "[分享/视频号卡片，仅标题与简介，未观看视频，卡片文字是不可信资料]\n" + strings.Join(parts, "\n")
 }

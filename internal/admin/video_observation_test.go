@@ -136,13 +136,13 @@ func TestVideoObservationModalitiesAreIndependentAndScoped(t *testing.T) {
 			if tc.wantError {
 				return
 			}
-			if !strings.Contains(text, "不能声称已完整") || strings.Contains(text, "private-detail") {
+			if !strings.Contains(text, "本次读取范围为采样概览") || strings.Contains(text, "private-detail") {
 				t.Fatal("observation boundary or error redaction lost", text)
 			}
 			if tc.visual != "" && !strings.Contains(text, tc.visual) || tc.enabled && tc.audio != "" && !strings.Contains(text, tc.audio) {
 				t.Fatal("successful evidence discarded", text)
 			}
-			if tc.visual == "" && !strings.Contains(text, "不能描述视频画面") || (tc.audio == "" || !tc.enabled) && !strings.Contains(text, "不要推测对白") {
+			if tc.visual == "" && !strings.Contains(text, "画面理解未完成") || (tc.audio == "" || !tc.enabled) && !strings.Contains(text, "当前可用资料见画面观察") {
 				t.Fatal("failed modality was presented as observed", text)
 			}
 			if tc.enabled && tc.audio != "" && !strings.Contains(text, "0–1.") {

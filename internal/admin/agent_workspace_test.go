@@ -28,6 +28,9 @@ func TestDeliveryWorkingRuleMergesAndSurvivesRestart(t *testing.T) {
 	if e != nil || !strings.Contains(d.Content, "保留主人设定") || strings.Count(d.Content, "## 投递先核查，续办原批次") != 1 {
 		t.Fatal(d, e)
 	}
+	if strings.Count(d.Content, "## 自然表达，直接回应") != 1 {
+		t.Fatal("natural style note missing or duplicated", d)
+	}
 }
 
 func TestAutonomousMediaRepairReportIsPrivateAndDoesNotGrantOwnerIdentity(t *testing.T) {

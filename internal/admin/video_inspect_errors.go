@@ -24,20 +24,20 @@ func videoInspectionError(err error) error {
 	if errors.As(err, &safe) || errors.As(err, &web) {
 		return err
 	}
-	code, message := "video_inspection_failed", "视频读取未完成；请核对原件是否仍可取得、读取权限和已返回的续读起点，不能把失败范围说成已看过"
+	code, message := "video_inspection_failed", "视频读取未完成；请核对原件是否仍可取得、读取权限和已返回的续读起点，按已返回的读取范围继续处理"
 	if d, ok := deepseek.ErrorDiagnostics(err); ok {
 		code, message = d.Code, deepseek.UserMessage(err)+"；可按真实原因调整模型参数或稍后从未读帧续读"
 	} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		code, message = "video_inspection_interrupted", "本次视频读取已超时或中止；保留已读范围，从未读起点继续，不能宣称完整读取"
+		code, message = "video_inspection_interrupted", "本次视频读取已超时或中止；已读范围保留，可从未读起点继续"
 	} else {
 		messages := map[string]string{
 			"video_inspection_result_capacity":        "已读结果接近1MiB工具结果传输封套；保留已返回批次，从next_start_frame继续，或减小分析文字预算",
 			"video_inspect_probe_failed":              "无法解析实际视频；请确认是已解密原件，且运行节点已安装ffmpeg和ffprobe",
-			"video_inspect_metadata_invalid":          "原件没有有效视频帧数或时长，不能用标题代替视频分析",
+			"video_inspect_metadata_invalid":          "原件的帧数或时长无效；需先取得可解析的视频原件",
 			"video_inspect_decode_failed":             "实际视频帧解码失败；可核对原件格式、损坏情况与解码器后重试",
 			"video_inspect_frame_evidence_incomplete": "解码帧数或时间戳不完整；未把旧图片当作新帧，可缩小页面后重试",
-			"video_inspect_timestamp_invalid":         "解码器未返回有效帧时间戳，未伪造观察时间",
-			"video_audio_transcription_disabled":      "音轨转写权限未启用；可继续读取画面，不能假称听过音轨",
+			"video_inspect_timestamp_invalid":         "解码器未返回有效帧时间戳；需核对视频时间基后重试",
+			"video_audio_transcription_disabled":      "音轨转写未启用；当前可以继续读取画面",
 			"video_audio_unavailable":                 "此时间范围没有可解码的音轨；可检查实际音轨结尾或选择其他时间范围",
 			"video_audio_transcription_failed":        "实际音轨已尝试转写但提供商没有返回有效文本；核对语音服务配置或稍后重试",
 			"video_source_not_authorized":             "来源会话未授权。可信管理员可在同一账号内用source_thread_id指定已授权群聊；普通成员只能读取当前会话",

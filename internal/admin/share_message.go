@@ -22,7 +22,7 @@ func shareMessageDescription(m linuxnative.Message) string {
 		}
 	}
 	if m.AppMessageType != nil && *m.AppMessageType == 51 && strings.TrimSpace(m.Body) == "" {
-		return "[收到微信视频号分享] 本条卡片的标题与简介暂未解析，视频画面尚未取得。后续消息可能是在补充这个分享的活动、地点或时间；不要把它当作没收到分享，更不能猜测具体内容或声称看过视频。"
+		return "[收到微信视频号分享] 本条卡片的标题与简介暂未解析，视频画面尚未取得。后续消息可能是在补充这个分享的活动、地点或时间；结合后续文字理解，具体视频内容待继续读取。"
 	}
 	if strings.HasPrefix(m.Body, "[Link]") {
 		return "[收到链接卡片的文字摘要，未观看视频]\n" + logText(m.Body, 4000)
