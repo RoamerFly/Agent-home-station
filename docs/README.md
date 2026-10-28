@@ -15,6 +15,7 @@
 
 ## Agent运行与权限
 
+- [离线未读汇总与任务收尾](agent/unread-conversations-and-task-history.md)
 - [上下文传递与歌曲策略](agent/context-and-song-policy.md)
 
 - [自主修复和本机程序启停验收](agent/agent-self-repair-acceptance.md)

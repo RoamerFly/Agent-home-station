@@ -11,6 +11,7 @@ import (
 // Record is the locally retained activity requested by the account owner.
 // It never contains model reasoning, credentials, or native session material.
 type Record struct {
+	MessageTime                                                                           string
 	RelatedMessageID, DecisionNote                                                        string
 	RetryAttempts                                                                         int
 	RetryAt                                                                               string
@@ -65,7 +66,7 @@ func (w *Worker) recordIncoming(m linuxnative.Message) {
 			}
 		}
 	}
-	w.activity(Record{Event: "message_received", Category: "received", ThreadID: m.ThreadID, Sender: m.SenderID, Content: messageSummary(m), MessageID: m.ID, Origin: "wechat", Status: "received"})
+	w.activity(Record{Event: "message_received", Category: "received", ThreadID: m.ThreadID, Sender: m.SenderID, Content: messageSummary(m), MessageID: m.ID, MessageTime: m.CreatedAt, Origin: "wechat", Status: "received"})
 }
 func messageSummary(m linuxnative.Message) string {
 	if m.IsQuotedText() {

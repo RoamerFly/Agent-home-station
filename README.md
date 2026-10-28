@@ -2,7 +2,7 @@
 
 带网页管理端的微信 Agent。支持角色聊天、图片/表情包/语音与分享内容理解、联网/MCP、插件、持久任务、媒体发送和本地 YuE 音乐生成。
 
-本机管理端：**http://127.0.0.1:8081/**。界面版本 `0.33.0-multi-account-local`。源码仓库：[RoamerFly/wechat-agent](https://github.com/RoamerFly/wechat-agent)。
+本机管理端：**http://127.0.0.1:8081/**。界面版本 `0.34.0-unread-conversations-local`。源码仓库：[RoamerFly/wechat-agent](https://github.com/RoamerFly/wechat-agent)。
 
 支持[多个微信小号同时在线与分别管理](docs/guide/MULTI-ACCOUNT.md)。在“系统 → 账号管理”新增小号或重新扫码登录，左侧选择当前管理账号；切换页面不会暂停其他账号。
 

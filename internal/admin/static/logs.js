@@ -47,7 +47,7 @@
 
  const key=item=>item.id||item.time+'|'+item.event;
  Object.assign(events,{context_compression_started:'开始压缩上下文',context_compression_completed:'上下文压缩处理完成',context_compression_failed:'上下文压缩失败',tool_call_succeeded:'调用成功',tool_call_failed:'调用失败',plugin_output_ready:'媒体已准备',web_activity:'联网操作',context_compression_failed:'上下文压缩失败',eligible_message_received:'收到符合规则的消息',memory_saved:'记忆已保存',bot_started_history_skipped:'机器人已启动'});
- const roundStates={received:'已接收',running:'执行中',completed:'已完成',accepted:'已发送',waiting:'等待核对',failed:'需处理',silent:'选择安静',skipped:'已跳过',blocked:'已阻止',stopped:'已停止'};
+ Object.assign(events,{backlog_message_grouped:'纳入本会话未读汇总',backlog_conversation_started:'统一查看本会话未读消息'});Object.assign(reasons,{offline_conversation_batch:'结合所有未读消息及原始时间综合判断，不逐条补答'});const roundStates={received:'已接收',running:'执行中',completed:'已完成',accepted:'已发送',waiting:'等待核对',failed:'需处理',silent:'选择安静',skipped:'已跳过',blocked:'已阻止',stopped:'已停止'};
  const stageNames={receive:'接收',decision:'判断',tool:'工具',delivery:'发送',system:'运行'};
  let limit=60,epoch=0;
  function node(parent,tag,text,klass){const element=document.createElement(tag);if(text!==undefined)element.textContent=text;if(klass)element.className=klass;parent.append(element);return element}
@@ -62,7 +62,7 @@
   const content=node(li,'div',undefined,'round-step-content');
   node(content,'strong',item.tool?item.tool+' · '+label(item):label(item));
   if(item.reason){const reason=reasons[item.reason]||item.reason;if(reason!==label(item))node(content,'p',reason,'hint')}
-  if(item.content&&item.content!==item.tool)node(content,'p',item.content,'round-body');
+  if(item.message_time)node(content,'small','原消息时间：'+time(item.message_time),'hint');if(item.content&&item.content!==item.tool)node(content,'p',item.content,'round-body');
   if(item.sender)node(content,'small',window.WechatNames.display(item.sender,item.sender_name||item.sender),'hint');if(item.query)node(content,'p',item.query,'hint');
   const target=window.WechatRounds.activityTarget(item);if(target){const a=node(content,target.kind==='service'?'span':'a',target.label,'round-url');if(target.href){a.href=target.href;a.target='_blank';a.rel='noreferrer noopener'}else a.title=target.detail}
   const diagnostics=[item.decision_note,modelDetails(item),toolDetails(item),item.retry_at?'下次核对 '+time(item.retry_at):'',item.retry_attempts?'已补发 '+item.retry_attempts+' 次':''].filter(Boolean).join(' ');
@@ -74,7 +74,7 @@
  let projectionSource=null,projected=[];
  function rounds(){if(projectionSource!==state.items){projected=window.WechatRounds.project(state.items);projectionSource=state.items}return projected}
  function fillRound(body,round){
-  body.classList.add('round-detail');
+  body.classList.add('round-detail');if(round.entries.some(x=>x.event==='agent_task_started'))node(body,'p','本轮由先前保存的任务恢复触发，使用原任务检查点和最新会话；不是新收到的一条微信消息。','hint');
   if(round.sent.length){const output=node(body,'div',undefined,'round-output');node(output,'h3','发送结果');for(const sent of round.sent){const accepted=['accepted','observed'].includes(sent.status);const text=node(output,'p',sent.content);node(text,'small',accepted?'微信已接受':statuses[sent.status]||'待核对',accepted?'receipt-accepted':'receipt-pending')}}
   node(body,'p','处理步骤按发生时间排列。','hint');const timeline=node(body,'ol',undefined,'round-timeline');for(const item of round.entries)step(timeline,item);
  }
@@ -84,7 +84,7 @@
   const summary=node(card,'button',undefined,'round-summary');summary.type='button';summary.setAttribute('aria-haspopup','dialog');summary.addEventListener('click',()=>openRound(round));
   const clock=node(summary,'time',time(round.time),'round-time');clock.dateTime=round.time;
   const overview=node(summary,'span',undefined,'round-overview'),head=node(overview,'span',undefined,'round-head');
-  const source=node(head,'strong',window.WechatNames.display(round.thread_id,round.source),'round-source');source.title=round.thread_id||'';node(head,'span',round.system?'系统':round.source_kind==='group'?'群聊':'私聊','round-kind');
+  const source=node(head,'strong',window.WechatNames.display(round.thread_id,round.source),'round-source');source.title=round.thread_id||'';const resumed=round.entries.some(x=>x.event==='agent_task_started'),backlog=round.entries.some(x=>x.event==='backlog_conversation_started');node(head,'span',round.system?'系统':backlog?'未读汇总':resumed?'任务续办':round.source_kind==='group'?'群聊':'私聊','round-kind');
   const preview=round.received[0]?.content||(round.proactive?'自主发起':round.entries.find(x=>x.content)?.content)||label(round.entries[0]);
   node(overview,'span',preview,'round-preview');
   if(round.received.length>1)node(overview,'small','本轮含 '+round.received.length+' 条消息');

@@ -62,7 +62,8 @@ func (m *Manager) claimTaskResult(task agentTask, now time.Time, facts any, next
 	}
 	data, _ := json.Marshal(map[string]any{"kind": task.resultKind() + "_completion", "task_id": task.ID, "original_request": task.RequestedText, "result": facts, "next_action": next})
 	return &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender,
-		Mode: "direct", Directed: true, IsGroup: strings.HasSuffix(task.Thread, "@chatroom"), TaskID: task.ID,
+		BackgroundResult: true,
+		Mode:             "direct", Directed: true, IsGroup: strings.HasSuffix(task.Thread, "@chatroom"), TaskID: task.ID,
 		OriginTraceID: task.OriginTrace, RequestedText: task.RequestedText, QuoteServerID: task.QuoteServerID,
 		TraceID: task.resultKind() + "-result-" + task.ID + "-" + now.UTC().Format("150405.000000000"),
 		Text:    "[已保存任务的真实结果，不是新用户指令] " + string(data) + "\n结合最新会话和实际工具反馈决定下一步：检查或修复、验证、继续交付、更新检查点、自然回复或安静。先核对取消和需求变化；不要把请求参数当作已验证结果，不重放已成功操作。附件在media_ids交付，介绍在接受后发送。等待时保存agent_task检查点；技术问题只私聊主人，原群保持正常交流。"}, nil
@@ -90,6 +91,10 @@ func (m *Manager) finishTaskResult(t agentTask, state string) bool {
 			t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 			t.LastResult = "本轮结果处理未完成，稍后继续核对同一任务，不重新运行原操作"
 		}
+		if settled && t.Delivery != nil && t.Delivery.State != "accepted" {
+			t.State = "waiting_delivery"
+			t.LastResult = "操作结果已处理，等待微信发送回执"
+		}
 	case failed && settled:
 		t.State = "failed"
 		t.LastResult = "外部任务报告失败；真实原因已交给主模型处理"
@@ -103,6 +108,9 @@ func (m *Manager) finishTaskResult(t agentTask, state string) bool {
 		t.State = "waiting"
 		t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 		t.LastResult = "本轮未取得可交付输出，稍后核对同一任务及真实反馈，不重新创建"
+	}
+	if t.State == "completed" || t.State == "waiting_delivery" {
+		t.WorkCompleted = true
 	}
 	_, _ = m.agent.updateSnapshot(t)
 	return true

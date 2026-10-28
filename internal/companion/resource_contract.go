@@ -21,23 +21,28 @@ func UserRequestText(text string) string {
 
 func resourceNeed(turns []map[string]string) ResourceNeed {
 	var current struct {
-		Kind, Text string
-		Mode       string
-		Surf       bool `json:"surf"`
-		ForceShare bool `json:"surf_force_share"`
+		Kind, Text       string
+		Mode             string
+		Surf             bool `json:"surf"`
+		ForceShare       bool `json:"surf_force_share"`
+		BackgroundResult bool `json:"background_result"`
 	}
 	for _, turn := range turns {
 		if turn["role"] == "user" {
 			var v struct {
-				Kind, Text string
-				Mode       string
-				Surf       bool `json:"surf"`
-				ForceShare bool `json:"surf_force_share"`
+				Kind, Text       string
+				Mode             string
+				Surf             bool `json:"surf"`
+				ForceShare       bool `json:"surf_force_share"`
+				BackgroundResult bool `json:"background_result"`
 			}
 			if json.Unmarshal([]byte(turn["content"]), &v) == nil && v.Kind == "current_message" {
 				current = v
 			}
 		}
+	}
+	if current.BackgroundResult {
+		return ResourceNeed{}
 	}
 	// The analyzer appends untrusted card/video observations to the user's
 	// message. Titles and counters such as "视频 / 播放：20万" are data, not

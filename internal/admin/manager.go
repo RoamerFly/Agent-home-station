@@ -39,6 +39,7 @@ type sendingRequest = sending.TextRequest
 type sendingReceipt = sending.Receipt
 
 type LogEntry struct {
+	MessageTime       string `json:"message_time,omitempty"`
 	SenderName        string `json:"sender_name,omitempty"`
 	RelatedMessageID  string `json:"related_message_id,omitempty"`
 	DecisionNote      string `json:"decision_note,omitempty"`
@@ -482,7 +483,7 @@ func (m *Manager) start(c Config) {
 		m.warmFriends(friendCtx)
 		cancelFriends()
 		c.friendIDs = m.cachedFriends()
-		worker, err := bot.New(bot.Config{AuthorizeThread: m.authorizeConversation, ReportFailure: m.queueOperationReport, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
+		worker, err := bot.New(bot.Config{BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, ReportFailure: m.queueOperationReport, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
 		if err != nil {
 			m.setState("error")
 			m.log("bot_configuration_error")

@@ -106,3 +106,52 @@ func TestProcessCompletionWakesOriginalOwnerWithoutProactivePermission(t *testin
 		}
 	}
 }
+
+func TestDiagnosticProcessResultReturnsToParentInsteadOfReopeningUserRequest(t *testing.T) {
+	f, p := trustedAgent(t)
+	cfg := f.manager.agent.config()
+	cfg.Host.Mode = "full"
+	if err := f.manager.agent.save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	parent := agentTask{ID: "business-parent", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", State: "waiting", RequestedText: "用RVC直接翻唱合成测试曲", Checkpoint: "检查本次任务状态"}
+	f.manager.agent.task(parent)
+	trace := p.trace
+	trace.TaskID = parent.ID
+	trace.RequestedText = parent.RequestedText
+	p.SetTrace(trace)
+	result, err := p.Call(context.Background(), "server_process", json.RawMessage(`{"action":"start","path":"`+strings.ReplaceAll(cfg.Host.Roots[0], `\`, `\\`)+`","command":"echo synthetic-diagnostic-result","request_key":"diagnostic"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		ID     string `json:"id"`
+		TaskID string `json:"task_id"`
+	}
+	json.Unmarshal([]byte(result), &out)
+	child, ok := f.manager.agent.lookupTask(out.TaskID, parent.Account, parent.Thread)
+	if !ok || child.ParentID != parent.ID || child.RequestedText != "" {
+		t.Fatal("diagnostic duplicated old user request", child)
+	}
+	for i := 0; i < 400; i++ {
+		status, err := f.manager.processes.Status(agentID(parent.Account, parent.Thread, parent.Sender), out.ID, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.State != "running" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	input, err := f.manager.claimProcessTask(child, time.Now())
+	if err != nil || input != nil {
+		t.Fatal("child started a separate model reply", input, err)
+	}
+	updated, _ := f.manager.agent.lookupTask(parent.ID, parent.Account, parent.Thread)
+	if len(updated.Actions) < 1 || updated.Actions[len(updated.Actions)-1].Tool != "background_process_result" {
+		t.Fatal("parent did not receive verified result", updated)
+	}
+	if len(f.manager.agent.active(parent.Account, parent.Thread)) != 1 || len(f.manager.agent.taskHistory(parent.Account, parent.Thread)) != 1 {
+		t.Fatal("diagnostic watcher did not leave active queue")
+	}
+}

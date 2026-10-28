@@ -254,7 +254,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		m.agent.mu.Unlock()
 		return op.Result, err
 	case "agent_tasks":
-		tasks := m.agent.list(p.trace.Account, p.trace.Thread)
+		tasks := m.agent.active(p.trace.Account, p.trace.Thread)
 		visible := tasks[:0]
 		for _, task := range tasks {
 			if task.Reminder == nil || task.Sender == p.trace.Sender {
@@ -291,6 +291,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		t := agentTask{ParentID: p.trace.TaskID, OriginTrace: origin, OwnerRequested: p.privileged() && p.trace.Mode == "direct", ID: in.ID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: in.Title}
 		if t.ID != "" {
+			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, p.trace.Thread); ok && (old.State == "completed" || old.State == "cancelled") {
+				return encode(old, nil)
+			}
 			found := false
 			for _, old := range m.agent.list(p.trace.Account, p.trace.Thread) {
 				if old.ID == t.ID {
@@ -310,6 +313,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				return "", toolInputError("新任务需要key和title")
 			}
 			t.ID = agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, in.Key)
+			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, p.trace.Thread); ok && (old.State == "completed" || old.State == "cancelled") {
+				return encode(old, nil)
+			}
 			for _, old := range m.agent.list(p.trace.Account, p.trace.Thread) {
 				if old.ID == t.ID {
 					t = old

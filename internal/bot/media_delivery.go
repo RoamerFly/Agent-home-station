@@ -75,6 +75,17 @@ func (w *Worker) mediaTraceOnlyUnknown(trace string) bool {
 	return found
 }
 func (w *Worker) pendingMedia() bool {
+	if w.draining() {
+		// Prepared files have no native send intent yet. Keep them on disk for
+		// the replacement worker instead of both refusing to send and waiting
+		// forever for them to finish. Unknown receipts are parked as before.
+		for _, d := range w.runtime.Media {
+			if !d.terminal() && !awaitingMediaReceipt(d) && !(d.State == "prepared" && d.ID == "") {
+				return true
+			}
+		}
+		return false
+	}
 	for _, r := range w.runtime.MediaReplies {
 		if !r.terminal() {
 			if !w.mediaTraceOnlyUnknown(r.Trace) {
@@ -179,6 +190,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		if cancelledTask && d.ID == "" {
 			d.State = "stopped"
 			w.mediaRecord(d, "media_stopped", "decision")
+			continue
+		}
+		if w.draining() && d.State == "prepared" && d.ID == "" {
 			continue
 		}
 		if !cancelledTask && !w.mediaAllowed(d) {

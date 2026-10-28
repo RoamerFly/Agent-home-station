@@ -52,7 +52,7 @@ func (m *Manager) record(r bot.Record) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now().UTC()
-	entry := LogEntry{SchemaVersion: 2, ID: m.nextLogIDLocked(), Time: now.Format(time.RFC3339Nano), Event: r.Event, Category: r.Category, ThreadID: logText(r.ThreadID, 256), Sender: logText(r.Sender, 256), Content: logText(r.Content, 4096), Reason: logText(r.Reason, 512), Status: r.Status, MessageID: logText(r.MessageID, 512), Origin: r.Origin}
+	entry := LogEntry{MessageTime: r.MessageTime, SchemaVersion: 2, ID: m.nextLogIDLocked(), Time: now.Format(time.RFC3339Nano), Event: r.Event, Category: r.Category, ThreadID: logText(r.ThreadID, 256), Sender: logText(r.Sender, 256), Content: logText(r.Content, 4096), Reason: logText(r.Reason, 512), Status: r.Status, MessageID: logText(r.MessageID, 512), Origin: r.Origin}
 	entry.SourceKind = "private"
 	if strings.HasPrefix(r.MessageID, "surf-") {
 		entry.Origin = "surf"
