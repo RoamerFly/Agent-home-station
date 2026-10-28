@@ -41,7 +41,7 @@ func TestSpeechSettingsNeverExposeSecretsAndScopeYuE(t *testing.T) {
 	}
 	p, _, _ := f.manager.toolAccess()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "one"})
-	if len(p.yueTools()) != 6 {
+	if len(p.yueTools()) != 7 {
 		t.Fatal("local tools missing")
 	}
 	if _, err := p.callYuE(context.Background(), "music_local_status", json.RawMessage(`{"job_id":"foreign-job"}`)); err == nil {

@@ -53,7 +53,7 @@ func validateSingingRequest(text, mode, gender, maleQuote string) error {
 		}
 	}
 	if mode == "original" && (strings.Contains(text, "唱") || strings.Contains(strings.ToLower(text), "cover")) && (quotedSongTitle.MatchString(text) || strings.Contains(text, "生日歌") || strings.Contains(text, "生日快乐")) && !affirmativeRequest(compositionRequest, text) {
-		return toolInputError("当前是在要求演唱已有具名歌曲，不能用original重新作曲。请查找并下载对应原录音，以mode=cover、reference_asset_id和已核对的原歌词依据提交；风格须保持原曲调和原歌词。尚未生成")
+		return toolInputError("当前是在要求演唱已有具名歌曲，默认用music_rvc_start给原录音直接换声；明确要求YuE参考重新合成时才用mode=cover、reference_asset_id和已核对的原歌词依据。不能用original重新作曲冒充原曲翻唱。尚未生成")
 	}
 	return nil
 }

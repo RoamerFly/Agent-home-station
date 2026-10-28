@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from singing_voice import validate_singing_config
 import yue_sampling
+import rvc_cover
 
 def singing_profile(config_path):
     if not config_path:return None
@@ -219,6 +220,22 @@ def main():
             if idle:
                 try:api('/free',{'unload_models':True,'free_memory':True})
                 except Exception:pass
+    def run_rvc(jid,body):
+        try:
+            with lock:
+                if jobs[jid]['state']=='cancelled':return
+                jobs[jid]['state']='running';save()
+            # Release only idle Comfy models before conversion on a shared GPU.
+            try:
+                queue=api('/queue',timeout=5)
+                if not queue.get('queue_running') and not queue.get('queue_pending'):
+                    api('/free',{'unload_models':True,'free_memory':True},timeout=5)
+            except Exception:pass  # RVC does not require a live Comfy service.
+            with lock:profile=dict(jobs[jid]['singing_voice'])
+            output=rvc_cover.convert(body,state,jid,args.singing_voice_config,profile,convert_singing_voice)
+            with lock:jobs[jid].update(output,state='completed',phase='completed');save()
+        except Exception as error:
+            with lock:jobs[jid].update(state='failed',reason=str(error)[:120] if isinstance(error,ValueError) else type(error).__name__);save()
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
         def reply(self,status,value):
@@ -226,17 +243,22 @@ def main():
         def authenticated(self):return hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token)
         def do_GET(self):
             if not self.authenticated():return self.reply(401,{'error':'unauthorized'})
+            if self.path=='/rvc-health':
+                try:
+                    voice=singing_profile(args.singing_voice_config)
+                    return self.reply(200,{'ready':bool(voice and voice['engine']=='rvc'),'bridge_version':9,'engine':'rvc','profile':voice['profile'] if voice else None})
+                except Exception:return self.reply(200,{'ready':False,'bridge_version':9,'engine':'rvc'})
             if self.path=='/parameters':
                 try:
                     info={kind:api('/object_info/'+kind)[kind] for _,kind,_ in yue_sampling.GROUPS.values()}
-                    return self.reply(200,{'bridge_version':8,'modes':{mode:yue_sampling.options(workflow_dir,mode,info) for mode in ('original','cover')}})
+                    return self.reply(200,{'bridge_version':9,'modes':{mode:yue_sampling.options(workflow_dir,mode,info) for mode in ('original','cover')}})
                 except Exception:return self.reply(503,{'error':'sampling_schema_unavailable'})
             if self.path=='/health':
                 try:
                     api('/system_stats')
                     try:voice=singing_profile(args.singing_voice_config)
                     except Exception:voice=None
-                    return self.reply(200,{'ready':True,'bridge_version':8,'generation_policy':'female-faithful-cover-v4-verified-duration','capabilities':['original','reference_cover','reference_window','text_guidance_scale','duration_quality','seed','reference_mode','sampling','planning_mode']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; requested gender is not listening verification; max duration is a ceiling'})
+                    return self.reply(200,{'ready':True,'bridge_version':9,'generation_policy':'female-faithful-cover-v4-verified-duration','capabilities':['original','reference_cover','reference_window','text_guidance_scale','duration_quality','seed','reference_mode','sampling','planning_mode','direct_rvc_cover']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; requested gender is not listening verification; max duration is a ceiling'})
                 except Exception:return self.reply(200,{'ready':False})
             parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
             with lock:job=dict(jobs.get(jid,{}))
@@ -251,6 +273,8 @@ def main():
             if size<=0 or size>36*1024*1024:return self.reply(413,{'error':'size_limit'})
             try:body=json.loads(self.rfile.read(size))
             except Exception:return self.reply(400,{'error':'invalid_json'})
+            if not isinstance(body,dict):return self.reply(400,{'error':'invalid_json'})
+            if self.path=='/rvc-jobs':return self.submit_rvc(body)
             if self.path!='/jobs':return self.reply(404,{'error':'not_found'})
             if not isinstance(body.get('style'),str) or not isinstance(body.get('lyrics'),str) or len(body['style'])>2000 or len(body['lyrics'])>6000:return self.reply(400,{'error':'invalid_song_input'})
             target=body.get('duration_seconds',60)
@@ -293,6 +317,24 @@ def main():
                 recipe['seed']=seed
                 jid=secrets.token_hex(16);jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'reference_used':mode=='cover','mode':mode,'reference_mode':reference_mode,'seed':seed,'request_hash':fingerprint,'requested_seconds':target,'recipe':recipe,'singing_voice':{k:v for k,v in voice.items() if k!='python'} if voice else None};save();pool.submit(run,jid,body)
             self.reply(202,{'effective_parameters':effective,'id':jid,'state':'queued','seed':seed,'mode':mode,'reference_used':mode=='cover','singing_voice_profile':voice['profile'] if voice else None})
+        def submit_rvc(self,body):
+            try:details=rvc_cover.recipe(body)
+            except ValueError as error:return self.reply(400,{'error':str(error)})
+            fingerprint=hashlib.sha256(json.dumps(body,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+            key=self.headers.get('Idempotency-Key','')
+            with lock:
+                for old in jobs.values():
+                    if key and old.get('key')==key:
+                        if old.get('request_hash')!=fingerprint:return self.reply(409,{'error':'idempotency_conflict'})
+                        return self.reply(200,{k:v for k,v in old.items() if k!='file'})
+                try:voice=singing_profile(args.singing_voice_config)
+                except Exception:return self.reply(503,{'error':'rvc_profile_unavailable'})
+                if not voice or voice['engine']!='rvc':return self.reply(503,{'error':'rvc_profile_required'})
+                jid=secrets.token_hex(16)
+                jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'engine':'rvc','mode':'cover','reference_used':True,'request_hash':fingerprint,
+                           'requested_seconds':details['reference_seconds'],'recipe':details,'singing_voice':{k:v for k,v in voice.items() if k!='python'}}
+                save();pool.submit(run_rvc,jid,body)
+            return self.reply(202,{'id':jid,'state':'queued','engine':'rvc','reference_used':True,'singing_voice_profile':voice['profile']})
     # Windows/WSL access: token required on every endpoint. No remote code/API.
     ThreadingHTTPServer((args.bind,args.port),Handler).serve_forever()
 

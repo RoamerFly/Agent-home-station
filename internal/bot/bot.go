@@ -531,11 +531,15 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		if err != nil {
 			w.modelFailed(input.Thread, input.TraceID, err)
 		}
-		w.activity(Record{Event: "tool_task_finished_without_result", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Reason: "tool_task_no_final_after_progress", Status: "completed"})
+		status, category := "silent", "decision"
+		if err != nil || decision.Reason == "decision_failure_reported" || decision.Reason == "tool_task_deadline_exceeded" {
+			status, category = "failed", "error"
+		}
+		w.activity(Record{Event: "tool_task_finished_without_result", Category: category, ThreadID: input.Thread, MessageID: input.TraceID, Reason: "tool_task_no_final_after_progress", Status: status})
 		// A model-selected silent outcome remains silent. Errors are recorded
 		// and can be handed to the model through the existing recovery task.
 	}
-	if w.config.ReportFailure != nil && input.IsGroup && (decision.Reason == "decision_failure_reported" || decision.Reason == "tool_task_deadline_exceeded" || decision.Reason == "tool_task_no_final_after_progress" || err != nil && ctx.Err() == nil) {
+	if w.config.ReportFailure != nil && !input.ReportOnly && (input.IsGroup || input.Mode == "direct") && (decision.Reason == "decision_failure_reported" || decision.Reason == "tool_task_deadline_exceeded" || decision.Reason == "tool_task_no_final_after_progress" || err != nil && ctx.Err() == nil) {
 		reason := decision.Reason
 		if err != nil {
 			reason = "model_generation_failed"

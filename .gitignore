@@ -44,5 +44,6 @@ key*.txt
 archive/
 send-ledger/
 tool-outputs/
+state/
 admin-token
 admin-password

@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch, Mock
 import ctypes
 from ctypes import wintypes
 
@@ -34,6 +35,20 @@ class HiddenProcessTests(unittest.TestCase):
         self.assertNotIn('New-ScheduledTaskTrigger', text)
         self.assertIn('hidden_process.pyw', text)
         self.assertNotIn('-Trigger ', text)
+        anchor=(ROOT/'scripts/Start-Local-Anchor.ps1').read_text(encoding='utf8')
+        self.assertIn('pythonw.exe',anchor)
+        self.assertNotIn('New-ScheduledTaskTrigger',anchor)
+        self.assertNotIn('-Trigger ',anchor)
+
+    def test_manual_anchor_holds_one_hidden_wsl_session_without_starting_chat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            child=Mock();child.wait.return_value=0
+            argv=['hidden','--keep-wsl','--workspace',tmp,'--distro','Synthetic-Distro','--linux-user','synthetic','--marker','wechat-agent-anchor-012ABC']
+            with patch.object(sys,'argv',argv),patch.object(hidden,'spawn',return_value=child) as spawn:
+                self.assertEqual(hidden.main(),0)
+            command=spawn.call_args.args[0]
+            self.assertEqual(command,['wsl.exe','-d','Synthetic-Distro','-u','synthetic','--','/bin/bash','-c','exec -a wechat-agent-anchor-012ABC sleep infinity'])
+            child.wait.assert_called_once_with()
 
     def test_request_failure_is_explicit_and_does_not_run_shell_text(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -94,8 +94,8 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 				songSpec
 			} `json:"recipe"`
 		}
-		if err != nil || json.Unmarshal(b, &job) != nil || job.ID != in.PreparedJob || job.State != "completed" || songTitle(job.Recipe.Title) == "" || job.Recipe.Lyrics == "" || (job.Recipe.Mode != "original" && job.Recipe.Mode != "cover") || job.Recipe.Mode == "cover" && (!job.ReferenceUsed || len(job.Recipe.ReferenceHash) != 64) {
-			fail(w, 409, "需要YuE已完成且保存真实配方的歌曲；不会把未知文件当翻唱")
+		if err != nil || json.Unmarshal(b, &job) != nil || job.ID != in.PreparedJob || job.State != "completed" || songTitle(job.Recipe.Title) == "" || job.Recipe.Lyrics == "" && job.Recipe.Engine != "rvc" || (job.Recipe.Mode != "original" && job.Recipe.Mode != "cover") || job.Recipe.Mode == "cover" && (!job.ReferenceUsed || len(job.Recipe.ReferenceHash) != 64) {
+			fail(w, 409, "需要已完成且保存真实配方的YuE或RVC歌曲；不会把未知文件当翻唱")
 			return
 		}
 		t.MusicJob = in.PreparedJob
@@ -107,7 +107,7 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		t.MusicDeadline = time.Now().Add(30 * time.Minute)
 		t.State = "waiting"
-		t.Checkpoint = "管理员已准备完成YuE歌曲，补发原请求；只查询并交付，不重新生成"
+		t.Checkpoint = "管理员已准备完成歌曲，补发原请求；只查询并交付，不重新生成或转换"
 		t.Title = "补发歌曲 · " + t.MusicTitle
 	}
 	if err := m.agent.task(t); err != nil {

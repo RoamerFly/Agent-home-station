@@ -41,3 +41,26 @@ func TestOperationalFallbackIsReportedPrivatelyInsteadOfGroupReply(t *testing.T)
 		t.Fatal("technical fallback leaked to group", reports, w.runtime.Plans, w.runtime.Deliveries)
 	}
 }
+
+func TestPrivateModelFailureQueuesModelReportWithoutCannedReplyOrReportLoop(t *testing.T) {
+	for _, reportOnly := range []bool{false, true} {
+		w, _, c, in := mediaWorker(t)
+		in.Mode, in.IsGroup, in.ReportOnly = "direct", false, reportOnly
+		reports := 0
+		w.config.ReportFailure = func(got companion.Input, reason string) error {
+			reports++
+			if got.Thread != in.Thread || reason != "model_generation_failed" {
+				t.Fatal(got, reason)
+			}
+			return nil
+		}
+		w.finishCharacter(context.Background(), c, in, companion.Decision{}, errors.New("synthetic provider failure"), nil, true, true)
+		want := 1
+		if reportOnly {
+			want = 0
+		}
+		if reports != want || len(w.runtime.Plans) != 0 || len(w.runtime.Deliveries) != 0 {
+			t.Fatal("failed private run vanished, canned text sent, or recursive report", reports)
+		}
+	}
+}
