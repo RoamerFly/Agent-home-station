@@ -448,6 +448,15 @@ func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (strin
 		if status.ThreadID != batch.Target || status.SourceID != "" && status.SourceID != part.SourceID {
 			return "", errors.New("cross_media_receipt_target_mismatch")
 		}
+		status = status.WithVoiceReceipts()
+		if !known && validCrossReceipt(batch, part, status) {
+			// This lookup may be the only observer of a late receipt while the
+			// worker is disabled or awaiting a different operation. Commit the
+			// verified fact before returning it to the Agent.
+			if err = p.manager.settleCrossMediaPart(batch.ID, part.Key, status); err != nil {
+				return "", err
+			}
+		}
 		all = all && status.State == "accepted" && status.ServerID != ""
 		states = append(states, status)
 	}

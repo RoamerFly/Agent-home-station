@@ -60,6 +60,67 @@ func acceptedCrossPart(b crossMediaBatch, i int) linuxnative.ToolStatus {
 	return linuxnative.ToolStatus{ID: "job-" + p.Key, State: "accepted", ThreadID: b.Target, SourceID: p.SourceID, ServerID: fmt.Sprint(800 + i)}
 }
 
+type receiptLookupNative struct {
+	*forwardNative
+	statuses map[string]linuxnative.ToolStatus
+	lookups  int
+}
+
+func (n *receiptLookupNative) LookupSend(_ context.Context, key string) (linuxnative.ToolStatus, error) {
+	n.lookups++
+	if s, ok := n.statuses[key]; ok {
+		return s, nil
+	}
+	return linuxnative.ToolStatus{}, linuxnative.ErrToolNotFound
+}
+func TestCrossStatusCommitsObservedReceiptsAndSettlesParentWithoutSending(t *testing.T) {
+	f, p, b := crossRecoveryFixture(t, 2)
+	n := &receiptLookupNative{forwardNative: f.manager.native.(*forwardNative), statuses: map[string]linuxnative.ToolStatus{}}
+	f.manager.native = n
+	for i, part := range b.Parts {
+		s := acceptedCrossPart(b, i)
+		s.State = "running"
+		s.ServerID = ""
+		s.VoiceChunks = []linuxnative.VoiceChunkStatus{{Index: 0, State: "accepted", HasReceipt: true, ServerID: fmt.Sprint(1000 + i)}}
+		n.statuses[part.Key] = s
+	}
+	task, _ := f.manager.agent.lookupTask(b.TaskID, b.Account, b.Origin)
+	task.State = "completed"
+	if e := f.manager.agent.task(task); e != nil {
+		t.Fatal(e)
+	}
+	text, e := p.crossMediaStatus(context.Background(), b.ID)
+	if e != nil || !strings.Contains(text, `"state":"accepted"`) {
+		t.Fatal(text, e)
+	}
+	saved, e := f.manager.readCrossBatch(b.ID)
+	if e != nil || !crossBatchAccepted(saved) || len(f.manager.takeMediaSeeds()) != 0 || len(f.manager.agent.active(b.Account, b.Origin)) != 0 {
+		t.Fatal("lookup did not durably settle", saved, e)
+	}
+	reads := n.lookups
+	if _, e = p.crossMediaStatus(context.Background(), b.ID); e != nil || n.lookups != reads {
+		t.Fatal("durable receipt queried again", e, n.lookups)
+	}
+	if n.submits.Load() != 0 {
+		t.Fatal("status query sent a message")
+	}
+}
+
+func TestCrossStatusRejectsWrongTargetBeforeReceiptCommit(t *testing.T) {
+	f, p, b := crossRecoveryFixture(t, 1)
+	status := acceptedCrossPart(b, 0)
+	status.ThreadID = "wrong@chatroom"
+	n := &receiptLookupNative{forwardNative: f.manager.native.(*forwardNative), statuses: map[string]linuxnative.ToolStatus{b.Parts[0].Key: status}}
+	f.manager.native = n
+	if _, e := p.crossMediaStatus(context.Background(), b.ID); e == nil {
+		t.Fatal("wrong target accepted")
+	}
+	saved, e := f.manager.readCrossBatch(b.ID)
+	if e != nil || len(saved.Receipts) != 0 || len(f.manager.takeMediaSeeds()) != 1 || n.submits.Load() != 0 {
+		t.Fatal("failed lookup mutated delivery", saved, e)
+	}
+}
+
 func TestCrossMediaNewKeyReusesPendingBatchAndSupersededNeverRestores(t *testing.T) {
 	f, p, b := crossRecoveryFixture(t, 3)
 	for _, trace := range []string{p.trace.TraceID, "another-owner-message"} {

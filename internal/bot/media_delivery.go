@@ -373,18 +373,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		d.ID = status.ID
 		d.Status = status
 		d.Phase = status.Phase
-		all := len(status.VoiceChunks) > 0
-		for _, part := range status.VoiceChunks {
-			all = all && part.State == "accepted" && part.HasReceipt && part.ServerID != ""
-		}
-		if all {
-			if status.ServerID == "" {
-				status.ServerID = status.VoiceChunks[len(status.VoiceChunks)-1].ServerID
-			}
-			status.State = "accepted"
-			d.Status = status
-		}
-		if status.State == "accepted" && status.ServerID != "" || all {
+		status = status.WithVoiceReceipts()
+		d.Status = status
+		if status.State == "accepted" && status.ServerID != "" {
 			d.State = "accepted"
 			if d.CompletedAt.IsZero() {
 				d.CompletedAt = time.Now().UTC()
