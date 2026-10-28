@@ -15,7 +15,9 @@ import urllib.error
 import sys
 
 workspace = Path(__file__).resolve().parents[1]
-root = Path("/home/fly/.local/share/wechat-bot-native-research-20261024")
+deployment_file = workspace / "secrets/local-deployment.json"
+deployment = json.loads(deployment_file.read_text(encoding="utf-8-sig")) if deployment_file.exists() else {}
+root = Path(deployment.get("data_root", "/home/fly/.local/share/wechat-bot-native-research-20261024"))
 assert root.is_dir() and root.stat().st_uid == os.getuid() and not root.stat().st_mode & 0o077
 binary = root / "bin/wechat-admin"
 source = workspace / "dist/linux-amd64/wechat-admin"

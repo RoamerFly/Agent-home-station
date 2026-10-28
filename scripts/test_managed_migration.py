@@ -4,6 +4,22 @@ from pathlib import Path
 from migrate_managed_workspaces import migrate
 
 class MigrationTests(unittest.TestCase):
+    def test_root_weight_exclusion_keeps_nested_model_source(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)/'bot';root.mkdir();source=Path(d)/'source'
+            (source/'models').mkdir(parents=True);(source/'models/weights.bin').write_bytes(b'synthetic')
+            (source/'comfy/ldm/models').mkdir(parents=True);(source/'comfy/ldm/models/autoencoder.py').write_text('# synthetic source')
+            (source/'comfy_api/input').mkdir(parents=True);(source/'comfy_api/input/curve.py').write_text('# synthetic API')
+            (source/'input').mkdir();(source/'input/private.wav').write_bytes(b'synthetic private media')
+            plan={'root':str(root),'copies':[{'source':str(source),'target':'public_workspace/projects/yue','exclude_paths':['models']}]}
+            migrate(plan,True)
+            target=root/'public_workspace/projects/yue'
+            self.assertFalse((target/'models').exists())
+            self.assertEqual((target/'comfy/ldm/models/autoencoder.py').read_text(),'# synthetic source')
+            self.assertTrue((target/'comfy_api/input/curve.py').is_file())
+            self.assertFalse((target/'input').exists())
+            plan['copies'][0]['exclude_paths']=['../outside']
+            with self.assertRaisesRegex(ValueError,'invalid_exclude_path'):migrate(plan,True)
     def test_copy_verify_resume_and_conflict_preserves_original(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d)/'bot';root.mkdir();source=Path(d)/'old';source.mkdir()

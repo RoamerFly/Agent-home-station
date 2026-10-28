@@ -43,7 +43,7 @@ function Invoke-LauncherScript([string]$Name) {
  } finally {$process.Dispose()}
 }
 try {
- if(Test-Path -LiteralPath (Join-Path $workspace 'secrets\docker-deployment.json') -PathType Leaf){
+ if(-not(Test-Path -LiteralPath (Join-Path $workspace 'secrets\local-deployment.json') -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $workspace 'secrets\docker-deployment.json') -PathType Leaf)){
   $dockerArgs=@{Action=$Action;NoBrowser=[bool]$NoBrowser;NoDialog=[bool]$NoDialog;CheckOnly=[bool]$CheckOnly}
   & (Join-Path $PSScriptRoot 'Start-Docker.ps1') @dockerArgs
   exit $LASTEXITCODE

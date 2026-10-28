@@ -59,4 +59,4 @@ python scripts/check_repository.py
 
 原生微信接入复用固定版本的 [thisnick/agent-wechat](https://github.com/thisnick/agent-wechat)，来源及补丁见 [components/native-client](components/native-client/README.md)。当前暂不构建、导出Docker镜像或发布版本。
 
-Docker 部署与仅替换镜像更新：见 [Docker 运行说明](docs/guide/DOCKER_AGENT.md)。
+跨平台拆分、插件环境、新机安装和后续镜像规划：见 [镜像构建方案](镜像构建方案.md)。当前使用本机 WSL 后台，暂停镜像构建和导出。

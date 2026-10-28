@@ -8,6 +8,16 @@ $ErrorActionPreference='Stop'
 $OutputEncoding=[Text.UTF8Encoding]::new($false)
 try {[Console]::OutputEncoding=$OutputEncoding} catch {}
 $workspace=Split-Path $PSScriptRoot -Parent
+$localConfig=Join-Path $workspace 'secrets\local-deployment.json'
+if(Test-Path -LiteralPath $localConfig -PathType Leaf){
+ $deployment=Get-Content -LiteralPath $localConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+ if($deployment.backend -ne 'wsl'){throw 'Unsupported local backend; existing services were not changed.'}
+ if(-not $PSBoundParameters.ContainsKey('Distro')){$Distro=[string]$deployment.distro}
+ if(-not $PSBoundParameters.ContainsKey('LinuxUser')){$LinuxUser=[string]$deployment.linux_user}
+ if(-not $PSBoundParameters.ContainsKey('DataRoot')){$DataRoot=[string]$deployment.data_root}
+ if(-not $PSBoundParameters.ContainsKey('Account')){$Account=[string]$deployment.account}
+ if(-not $Distro -or -not $LinuxUser -or -not $Account -or -not $DataRoot.StartsWith('/home/')){throw 'Incomplete local deployment configuration.'}
+}
 $digest=[Security.Cryptography.SHA256]::Create()
 try {$identity=([BitConverter]::ToString($digest.ComputeHash([Text.Encoding]::UTF8.GetBytes($workspace.ToLowerInvariant())))).Replace('-','').Substring(0,16)} finally {$digest.Dispose()}
 $marker='wechat-agent-anchor-'+$identity

@@ -1,6 +1,9 @@
 """Copy registered project resources into managed workspaces without deleting originals.
 
-Plan JSON: {root, copies:[{source,target,exclude?:[]}], text_maps?:{old:new}}.
+Plan JSON: {root, copies:[{source,target,exclude?:[],exclude_paths?:[]}]}.
+exclude matches recursive basenames (legacy); exclude_paths matches relative
+paths at the source root, so excluding model weights need not drop code such
+as comfy/ldm/models/autoencoder.py.
 Targets must be under root/public_workspace or root/pri_workspace. Existing
 different files abort instead of overwriting. Each file is verified by SHA-256;
 repeating an interrupted migration verifies/reuses the completed files.
@@ -46,21 +49,31 @@ def migrate(plan, apply=False):
             raise ValueError("target_outside_managed_workspace")
         if target.is_relative_to(source) or source.is_relative_to(target):
             raise ValueError("recursive_copy")
-        excluded = {".git", "__pycache__", ".env", "output", "outputs", "input", "temp", "tmp", ".gradio", ".idea", *spec.get("exclude", [])}
+        excluded = {".git", "__pycache__", ".env", ".gradio", ".idea", *spec.get("exclude", [])}
+        # Runtime media directories at the project root are not source. Nested
+        # packages can legitimately be named input/output/models and must stay.
+        excluded_paths = {"output", "outputs", "input", "temp", "tmp"}
+        for value in spec.get("exclude_paths", []):
+            path = Path(value)
+            if path.is_absolute() or ".." in path.parts or not path.parts:
+                raise ValueError("invalid_exclude_path")
+            excluded_paths.add(path.as_posix())
+        def path_excluded(path):
+            relative = path.relative_to(source).as_posix()
+            return any(relative == item or relative.startswith(item + "/") for item in excluded_paths)
         files = []
         if source.is_file():
             files.append((source, target))
         else:
             for directory, dirs, names in os.walk(source, followlinks=False):
-                dirs[:]=[n for n in dirs if n not in excluded]
+                dirs[:]=[n for n in dirs if n not in excluded and not path_excluded(Path(directory) / n)]
                 for child in dirs:
                     path = Path(directory) / child
                     if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
                         raise ValueError("source_directory_link_requires_explicit_registration: " + str(path))
-                dirs[:] = [n for n in dirs if n not in excluded]
                 for name in names:
                     path = Path(directory) / name
-                    if name in excluded or name.endswith((".log", ".session.json")) or name.startswith(".env"):
+                    if name in excluded or path_excluded(path) or name.endswith((".log", ".session.json")) or name.startswith(".env"):
                         continue
                     if path.is_symlink():
                         raise ValueError("source_file_link_requires_explicit_registration: " + str(path))

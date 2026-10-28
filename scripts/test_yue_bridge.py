@@ -11,6 +11,17 @@ from yue_bridge import prepare_song_graph, song_options, singing_profile, conver
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
 class SongWorkflowTests(unittest.TestCase):
+    def test_managed_conversion_uses_helper_inside_public_mount(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);output=root/'output.wav';expected={'config_sha256':'synthetic','python':'/usr/bin/python3'}
+            sandbox={'public':str(root/'public_workspace'),'private':str(root/'pri_workspace/account')}
+            def complete(*args,**kwargs):output.write_bytes(b'synthetic wav'+b'\0'*50)
+            with patch('yue_bridge.singing_profile',return_value=expected),patch('managed_music_runner.run',side_effect=complete) as run:
+                self.assertEqual(convert_singing_voice('config',expected,root/'source.wav',output,sandbox),output)
+                argv=run.call_args.args[3]
+                self.assertEqual(Path(argv[1]),root/'public_workspace/projects/agent-tools/singing_voice.py')
+                self.assertTrue(run.call_args.kwargs['gpu'])
+
     def test_native_is_default_and_never_reads_or_requires_rvc_resources(self):
         with patch('yue_bridge.singing_profile',side_effect=RuntimeError('broken RVC')) as profile:
             self.assertIsNone(requested_singing_profile({},'missing-config'))

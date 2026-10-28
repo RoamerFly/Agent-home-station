@@ -31,7 +31,8 @@ def requested_singing_profile(body,config_path):
 def convert_singing_voice(config_path,expected,source,destination,sandbox=None):
     current=singing_profile(config_path)
     if current is None or current['config_sha256']!=expected['config_sha256']:raise ValueError('singing_voice_configuration_changed')
-    argv=[current['python'],str(Path(__file__).with_name('singing_voice.py')),'--config',str(config_path),'--source',str(source),'--output',str(destination)]
+    converter = Path(sandbox['public'])/'projects/agent-tools/singing_voice.py' if sandbox else Path(__file__).with_name('singing_voice.py')
+    argv=[current['python'],str(converter),'--config',str(config_path),'--source',str(source),'--output',str(destination)]
     try:
         if sandbox:
             from managed_music_runner import run

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -292,7 +294,17 @@ func (m *Manager) configureManagedNotes() error {
 }
 
 func (m *Manager) managedLayoutStatus() map[string]any {
-	return map[string]any{"account": m.native.Account(), "private_workspace": filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(m.native.Account())), "public_workspace": filepath.Join(m.managedRoot(), "public_workspace"), "backend": "Linux: bubblewrap / Windows: LPAC CMD（拒绝宿主回退）", "isolation_required": true}
+	backend := "当前平台尚未适配隔离执行器"
+	if runtime.GOOS == "linux" {
+		if _, err := exec.LookPath("bwrap"); err == nil {
+			backend = "Linux · Bubblewrap 已安装"
+		} else {
+			backend = "Linux · 待安装 Bubblewrap"
+		}
+	} else if runtime.GOOS == "windows" {
+		backend = "Windows · LPAC CMD"
+	}
+	return map[string]any{"account": m.native.Account(), "private_workspace": filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(m.native.Account())), "public_workspace": filepath.Join(m.managedRoot(), "public_workspace"), "backend": backend, "platform": runtime.GOOS, "isolation_required": true}
 }
 
 func (s *Server) managedWorkspaceRoutes(mux *http.ServeMux) {

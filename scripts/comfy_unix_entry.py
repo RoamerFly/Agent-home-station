@@ -8,6 +8,30 @@ import os
 from pathlib import Path
 import runpy
 import sys
+import typing
+
+
+def schema_alias(annotation):
+    """Map typing.List forms to their equivalent PEP 585 spellings."""
+    origin, args = typing.get_origin(annotation), typing.get_args(annotation)
+    if origin is list:
+        return list[schema_alias(args[0])]
+    if origin is typing.Union:
+        return typing.Union[tuple(schema_alias(arg) for arg in args)]
+    return annotation
+
+
+def register_torch_schema_aliases():
+    # Torch 2.6's schema registry recognizes typing.List[int], while the
+    # registered Comfy revision also uses list[int]. Keep the same schema and
+    # validation; add only equivalent aliases, without changing tensor ops.
+    import importlib
+    schema = importlib.import_module('torch._library.infer_schema')
+    for name in ('SUPPORTED_PARAM_TYPES', 'SUPPORTED_RETURN_TYPES'):
+        registry = getattr(schema, name, None)
+        if isinstance(registry, dict):
+            for annotation, value in list(registry.items()):
+                registry.setdefault(schema_alias(annotation), value)
 
 
 def main():
@@ -28,6 +52,12 @@ def main():
     os.chdir(entry.parent)
     sys.path.insert(0, str(entry.parent))
     sys.argv = [str(entry), *rest]
+    # Preserve Comfy's allocator/device setup before importing Torch. Loading
+    # Torch first and changing PYTORCH_CUDA_ALLOC_CONF afterwards breaks CUDA.
+    import comfy.options
+    comfy.options.enable_args_parsing()
+    import cuda_malloc  # noqa: F401 - applies the registered project's settings
+    register_torch_schema_aliases()
     runpy.run_path(str(entry), run_name="__main__")
 
 
