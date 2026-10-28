@@ -2,9 +2,11 @@
 
 带网页管理端的微信 Agent。支持角色聊天、图片/表情包/语音与分享内容理解、联网/MCP、插件、持久任务、媒体发送和本地 YuE 音乐生成。
 
-本机管理端：**http://127.0.0.1:8081/**。界面版本 `0.34.0-unread-conversations-local`。源码仓库：[RoamerFly/wechat-agent](https://github.com/RoamerFly/wechat-agent)。
+本机管理端：**http://127.0.0.1:8081/**。界面版本 `0.35.0-managed-workspaces-local`。源码仓库：[RoamerFly/wechat-agent](https://github.com/RoamerFly/wechat-agent)。
 
 支持[多个微信小号同时在线与分别管理](docs/guide/MULTI-ACCOUNT.md)。在“系统 → 账号管理”新增小号或重新扫码登录，左侧选择当前管理账号；切换页面不会暂停其他账号。
+
+[受管工作区与跨会话附件](docs/agent/managed-workspaces.md)将文件和 Shell 限于账号/会话目录；管理员可临时检索当前账号资料并明确指定媒体目标群。音乐项目已复制校验，GPU 沙箱兼容与真实跨群投递仍按文内验收范围推进。
 
 ## Windows 本机启动
 
@@ -36,6 +38,8 @@
 | `design/` | 用户选择的视觉资产、设计与音色素材清单 |
 | `research/` | 协议研究、补丁和开发复核脚本，非日常使用入口 |
 | `secrets/` | 本机私有密钥/配置，不上传Git |
+| `public_workspace/` | 受管公共项目、模型、运行时与项目清单，不上传Git |
+| `pri_workspace/` | 按账号、会话隔离的记忆、文件和生成物，不上传Git |
 | `temp/` | 本机日志、下载和生成媒体；并非所有内容都可删除 |
 | `dist/` | 本机构建产物，不上传Git |
 
@@ -54,3 +58,5 @@ python scripts/check_repository.py
 约定见 [AGENTS.md](AGENTS.md)。API Key、微信会话、真实聊天、模型、运行环境和原始证据不提交。源码检查、合成测试与真实微信回执、手机播放验收分别记录。
 
 原生微信接入复用固定版本的 [thisnick/agent-wechat](https://github.com/thisnick/agent-wechat)，来源及补丁见 [components/native-client](components/native-client/README.md)。当前暂不构建、导出Docker镜像或发布版本。
+
+Docker 部署与仅替换镜像更新：见 [Docker 运行说明](docs/guide/DOCKER_AGENT.md)。

@@ -188,8 +188,8 @@
 <div><label class="switch-row"><span>主人可跨会话读取与发送</span><input id="agent-cross-conversation" type="checkbox"/><span aria-hidden="true" class="switch"></span></label></div>
 <div><label class="switch-row"><span>外部 MCP / API 插件仅限可信用户调用</span><input id="agent-external-owner-only" type="checkbox"/><span aria-hidden="true" class="switch"></span></label></div><div><label for="agent-owner-ids">可信微信用户 ID</label><textarea id="agent-owner-ids" placeholder="每行一个真实 wxid；昵称不能作为身份依据" rows="3"></textarea></div>
 <div><label class="switch-row"><span>主人可在全部已启用会话使用高权限</span><input id="agent-owner-all-threads" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><p class="hint">仍按实际发送者的微信用户 ID 核验；群友不会继承主人的权限。</p><label for="agent-privileged-threads">或指定允许高权限的会话 ID</label><textarea id="agent-privileged-threads" placeholder="关闭上方开关后，每行一个已授权会话 ID" rows="3"></textarea></div>
-<div><label for="agent-host-mode">服务器权限</label><select id="agent-host-mode"><option value="disabled">关闭服务器操作</option><option value="read">只读：目录与文本文件</option><option value="files">文件：读取、创建与校验修改</option><option value="full">完整：文件与 Shell 命令</option></select></div>
-<div><label for="agent-host-roots">服务器工作目录</label><textarea id="agent-host-roots" placeholder="每行一个绝对路径，例如 /home/fly/agent-workspace" rows="3"></textarea></div>
+<div><label for="agent-host-mode">工作区执行能力</label><select id="agent-host-mode"><option value="disabled">关闭服务器操作</option><option value="read">只读：目录与文本文件</option><option value="files">文件：读取、创建与校验修改</option><option value="full">程序：文件与隔离 Shell</option></select></div>
+<div><label for="agent-host-roots">工作区基准目录（按账号和会话自动派生）</label><textarea id="agent-host-roots" readonly="" placeholder="由当前账号与会话派生" rows="3"></textarea></div>
 </div>
 <p class="hint" id="agent-host-description" role="status"></p>
 <details class="agent-account-actions"><summary>允许 AI 执行的微信账号动作</summary><div class="field-grid" id="agent-action-options"></div></details>

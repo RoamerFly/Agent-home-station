@@ -15,6 +15,7 @@
 
 ## Agent运行与权限
 
+- [账号独立 Agent、受管工作区与跨会话附件](agent/managed-workspaces.md)
 - [离线未读汇总与任务收尾](agent/unread-conversations-and-task-history.md)
 - [上下文传递与歌曲策略](agent/context-and-song-policy.md)
 

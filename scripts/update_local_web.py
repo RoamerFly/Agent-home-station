@@ -86,6 +86,16 @@ with tempfile.NamedTemporaryFile(dir=binary.parent, delete=False) as target:
     target.flush()
     os.fsync(target.fileno())
 pending.replace(binary)
+# Workspace mounts contain projects and private session files, never this
+# control-plane directory. Persist the explicit root across normal restarts.
+dropin=Path.home()/".config/systemd/user/wechat-bot-web.service.d/managed-workspace.conf"
+dropin.parent.mkdir(parents=True,exist_ok=True)
+value=str(workspace)
+assert "\n" not in value and '"' not in value
+text='[Service]\nEnvironment="WECHAT_WORKSPACE_ROOT='+value+'"\n'
+if not dropin.exists() or dropin.read_text()!=text:
+    dropin.write_text(text)
+    subprocess.run(["systemctl","--user","daemon-reload"],check=True)
 subprocess.run(["systemctl", "--user", "restart", "wechat-bot-web.service"], check=True)
 for attempt in range(20):
     try:

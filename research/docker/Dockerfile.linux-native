@@ -1,14 +1,16 @@
 # Experimental text-only build of the explicitly selected public source tree.
 # Context: agent-wechat commit 7095ef01e0cd3d5b567bcb6970f379dcd88bbfa8.
 # Neither the official app nor the old closed protocol service is included.
-FROM mirror.gcr.io/library/rust:1.93.1-bookworm@sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31 AS build
+ARG NATIVE_BUILD_IMAGE=mirror.gcr.io/library/rust:1.93.1-bookworm@sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31
+ARG NATIVE_RUNTIME_IMAGE=mirror.gcr.io/library/debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+FROM ${NATIVE_BUILD_IMAGE} AS build
 WORKDIR /src
 ENV CARGO_BUILD_JOBS=4
 COPY packages/native-client-rust/ ./
 RUN cargo test -p wechat-protocol --locked \
     && cargo build --release --locked -p wx-native
 
-FROM mirror.gcr.io/library/debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+FROM ${NATIVE_RUNTIME_IMAGE}
 RUN mkdir -p /data /scratch \
     && chown 10001:10001 /data /scratch \
     && chmod 0700 /data /scratch

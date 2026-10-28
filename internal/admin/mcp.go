@@ -609,9 +609,6 @@ func (p *permittedTools) stageOutput(ctx context.Context, output plugins.Output)
 	return p.stageOutputWithAsset(ctx, output, nil)
 }
 func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugins.Output, original *assetOriginal) (string, error) {
-	if len(output.Media) > 3 {
-		return "", errors.New("工具生成附件超过单次上限")
-	}
 	native, ok := p.manager.native.(nativeTools)
 	if len(output.Media) > 0 && !ok {
 		return "", errors.New("微信附件后台不可用")

@@ -15,6 +15,7 @@ func (p *permittedTools) callProcess(ctx context.Context, raw json.RawMessage) (
 func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMessage, windows bool) (result string, callErr error) {
 	defer func() { callErr = localAgentError(callErr) }()
 	var in struct {
+		GPU                       bool `json:"gpu"`
 		Action, ID, Path, Command string
 		Key                       string `json:"request_key"`
 		Seconds                   int    `json:"timeout_seconds"`
@@ -22,9 +23,13 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 	if json.Unmarshal(raw, &in) != nil {
 		return "", errors.New("进程参数无效")
 	}
-	scope := agentID(p.trace.Account, p.trace.Thread, p.trace.Sender)
-	cfg := p.manager.agent.config().Host
-	if !p.privileged() || cfg.Mode != "full" {
+	scope := p.processScope()
+	cfg, configErr := p.scopedHostConfig(raw)
+	if configErr != nil {
+		return "", configErr
+	}
+	cfg.Isolation.GPU = in.GPU
+	if !p.workspaceExecutionAllowed() || cfg.Mode != "full" {
 		return "", errors.New("后台程序执行未授权")
 	}
 	var value any
@@ -37,19 +42,29 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 		trace := p.trace
 		allowed := func() bool {
 			access := &permittedTools{manager: p.manager, trace: trace}
-			current := p.manager.agent.config().Host
-			return access.privileged() && current.Mode == "full" && slices.Equal(current.Roots, cfg.Roots)
+			current, e := access.scopedHostConfig(raw)
+			return e == nil && access.workspaceExecutionAllowed() && current.Mode == "full" && slices.Equal(current.Roots, cfg.Roots)
 		}
 		toolName := "server_process"
 		if windows {
 			toolName = "server_windows_process"
 		}
-		result, err := p.privilegedCall(ctx, toolName, raw, func() (any, error) {
+		run := func() (any, error) {
 			if windows {
 				return p.manager.processes.StartWindows(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
 			}
 			return p.manager.processes.Start(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
-		})
+		}
+		var result string
+		var err error
+		if p.privileged() {
+			result, err = p.privilegedCall(ctx, toolName, raw, run)
+		} else {
+			v, e := run()
+			err = e
+			b, _ := json.Marshal(v)
+			result = string(b)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -78,7 +93,7 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 			if origin == "" {
 				origin = p.trace.TraceID
 			}
-			task := agentTask{ParentID: p.trace.TaskID, ID: taskID, ProcessID: process.ID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "后台程序", RequestedText: request, Checkpoint: "等待真实程序结果，使用原进程编号查询，不重新运行命令", State: "waiting", Next: time.Now().Add(2 * time.Second), OriginTrace: origin, QuoteServerID: p.trace.QuoteServerID}
+			task := agentTask{OwnerRequested: p.privileged(), ParentID: p.trace.TaskID, ID: taskID, ProcessID: process.ID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "后台程序", RequestedText: request, Checkpoint: "等待真实程序结果，使用原进程编号查询，不重新运行命令", State: "waiting", Next: time.Now().Add(2 * time.Second), OriginTrace: origin, QuoteServerID: p.trace.QuoteServerID}
 			if task.ParentID != "" {
 				task.RequestedText = ""
 				task.Goal = "读取该程序真实结果并通知父任务；不是重新执行原始用户请求"
@@ -112,13 +127,16 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 
 func (m *Manager) claimProcessTask(task agentTask, now time.Time) (*companion.Input, error) {
 	p := &permittedTools{manager: m, trace: companion.Input{Account: task.Account, Thread: task.Thread, Sender: task.Sender}}
-	if !p.privileged() || m.agent.config().Host.Mode != "full" {
+	if !p.workspaceExecutionAllowed() || task.OwnerRequested && !p.privileged() || m.agent.config().Host.Mode != "full" {
 		task.State = "cancelled"
 		task.LastResult = "执行权限已撤销，不交付旧进程内容"
 		_, err := m.agent.updateSnapshot(task)
 		return nil, err
 	}
-	process, err := m.processes.Status(agentID(task.Account, task.Thread, task.Sender), task.ProcessID, false)
+	process, err := m.processes.Status(p.processScope(), task.ProcessID, false)
+	if err != nil && p.privileged() {
+		process, err = m.processes.Status(agentID(task.Account, task.Thread, task.Sender), task.ProcessID, false)
+	}
 	if err != nil {
 		task.State = "needs_review"
 		task.LastResult = "原进程记录不可核验，不重复执行"
@@ -175,4 +193,11 @@ func (m *Manager) claimProcessTask(task agentTask, now time.Time) (*companion.In
 		a.mu.Unlock()
 	}
 	return m.claimTaskResult(task, now, process, "读取原进程结果，自行决定检查文件、修复、运行验证、保存经验或回复。interrupted表示应核查，不自动重放。")
+}
+
+func (p *permittedTools) processScope() string {
+	if p.privileged() {
+		return agentID(p.trace.Account, p.trace.Thread, p.trace.Sender)
+	}
+	return agentID(p.trace.Account, p.trace.Thread, p.trace.Sender, "conversation")
 }

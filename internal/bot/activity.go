@@ -84,6 +84,9 @@ func messageSummary(m linuxnative.Message) string {
 		case 43:
 			return "[收到视频]"
 		case 49:
+			if name := m.FileAttachmentName(); name != "" {
+				return "[文件] " + name
+			}
 			return "[收到分享卡片/视频号]"
 		}
 		return "[非文字消息]"

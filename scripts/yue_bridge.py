@@ -28,10 +28,15 @@ def requested_singing_profile(body,config_path):
     if voice is None:raise ValueError('singing_voice_not_ready')
     return voice
 
-def convert_singing_voice(config_path,expected,source,destination):
+def convert_singing_voice(config_path,expected,source,destination,sandbox=None):
     current=singing_profile(config_path)
     if current is None or current['config_sha256']!=expected['config_sha256']:raise ValueError('singing_voice_configuration_changed')
-    try:subprocess.run([current['python'],str(Path(__file__).with_name('singing_voice.py')),'--config',str(config_path),'--source',str(source),'--output',str(destination)],check=True,timeout=3600,**no_console_options())
+    argv=[current['python'],str(Path(__file__).with_name('singing_voice.py')),'--config',str(config_path),'--source',str(source),'--output',str(destination)]
+    try:
+        if sandbox:
+            from managed_music_runner import run
+            run(sandbox['public'],sandbox['private'],str(destination.parent),argv,gpu=True,timeout=3600)
+        else:subprocess.run(argv,check=True,timeout=3600,**no_console_options())
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):raise ValueError('singing_voice_conversion_failed') from None
     if not destination.is_file() or destination.stat().st_size<44:raise ValueError('singing_voice_output_missing')
     return destination
@@ -148,9 +153,26 @@ def prepare_song_graph(workflow_dir,body,jid,input_dir):
     return graph
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');p.add_argument('--singing-voice-config');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');p.add_argument('--singing-voice-config');p.add_argument('--managed-public');p.add_argument('--managed-private');p.add_argument('--comfy-socket');p.add_argument('--comfy-input');args=p.parse_args()
     project=Path(args.project).resolve();state=Path(args.state).resolve();state.mkdir(parents=True,exist_ok=True)
     workflow_dir=Path(args.workflow_dir).resolve() if args.workflow_dir else project/'workflows_api'
+    sandbox=None
+    if args.managed_public or args.managed_private:
+        if not args.managed_public or not args.managed_private:raise ValueError('music_managed_scope_incomplete')
+        from managed_music_runner import canonical
+        sandbox={'public':str(canonical(args.managed_public)),'private':str(canonical(args.managed_private))}
+        if not state.is_relative_to(Path(sandbox['private'])):raise ValueError('music_state_outside_account')
+        if not args.comfy_socket or not args.comfy_input:raise ValueError('isolated_comfy_paths_required')
+    input_dir=Path(args.comfy_input).resolve() if args.comfy_input else project/'comfy/ComfyUI/input'
+    if sandbox and not input_dir.is_relative_to(Path(sandbox['private'])):raise ValueError('music_input_outside_account')
+    input_dir.mkdir(parents=True,exist_ok=True)
+    def comfy_open(request,timeout=20):
+        if args.comfy_socket:
+            from music_unix_client import open_request
+            return open_request(args.comfy_socket,request,timeout)
+        return urllib.request.urlopen(request,timeout=timeout)
+    def convert_voice(config,expected,source,destination):
+        return convert_singing_voice(config,expected,source,destination,sandbox=sandbox)
     for filename in ('audio_yue2_music_cover.json','audio_yue2_text_to_music.json'):
         if not (workflow_dir/filename).is_file():raise ValueError('workflow_missing: '+filename)
     token=Path(args.token_file).read_text().strip();lock=threading.RLock();pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -162,7 +184,7 @@ def main():
     save()
     def api(route,body=None,timeout=20):
         req=urllib.request.Request('http://127.0.0.1:8188'+route,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json'})
-        with urllib.request.urlopen(req,timeout=timeout) as r:
+        with comfy_open(req,timeout=timeout) as r:
             data=r.read()
             return json.loads(data) if data else {}
     def run(jid,body):
@@ -171,9 +193,9 @@ def main():
                 if jobs[jid]['state']=='cancelled':return
                 jobs[jid]['state']='running';save()
             target=body.get('duration_seconds',60)
-            graph=prepare_song_graph(workflow_dir,body,jid,project/'comfy/ComfyUI/input')
+            graph=prepare_song_graph(workflow_dir,body,jid,input_dir)
             if song_options(body)[0]=='cover':
-                prepared=project/'comfy/ComfyUI/input'/('wechat-ref-'+jid+'.wav')
+                prepared=input_dir/('wechat-ref-'+jid+'.wav')
                 seconds=float(subprocess.check_output(**no_console_options(), args=['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(prepared)],timeout=15))
                 start,requested=reference_window(body)
                 if seconds+.1<requested:raise ValueError('reference_window_incomplete')
@@ -189,7 +211,7 @@ def main():
                     audio=next((x for x in files if Path(x['filename']).suffix.lower() in ('.wav','.mp3','.flac','.ogg','.m4a')),None)
                     if not audio:raise ValueError('no_generated_audio')
                     from urllib.parse import urlencode
-                    with urllib.request.urlopen('http://127.0.0.1:8188/view?'+urlencode(audio),timeout=60) as r:data=r.read(64*1024*1024+1)
+                    with comfy_open('http://127.0.0.1:8188/view?'+urlencode(audio),timeout=60) as r:data=r.read(64*1024*1024+1)
                     if not 0<len(data)<=64*1024*1024:raise ValueError('output_size_limit')
                     output=state/(jid+Path(audio['filename']).suffix);output.write_bytes(data)
                     duration=float(subprocess.check_output(**no_console_options(), args=['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(output)],timeout=30))
@@ -208,7 +230,7 @@ def main():
                     if voice:
                         with lock:jobs[jid]['phase']='converting_voice';save()
                         api('/free',{'unload_models':True,'free_memory':True})
-                        output=convert_singing_voice(args.singing_voice_config,voice,output,state/(jid+'-character-voice.wav'))
+                        output=convert_voice(args.singing_voice_config,voice,output,state/(jid+'-character-voice.wav'))
                     with lock:jobs[jid].update(state='completed',phase='completed',file=output.name,bytes=output.stat().st_size,duration_seconds=duration,requested_seconds=target);save()
                     return
                 time.sleep(1)
@@ -232,7 +254,7 @@ def main():
                     api('/free',{'unload_models':True,'free_memory':True},timeout=5)
             except Exception:pass  # RVC does not require a live Comfy service.
             with lock:profile=dict(jobs[jid]['singing_voice'])
-            output=rvc_cover.convert(body,state,jid,args.singing_voice_config,profile,convert_singing_voice)
+            output=rvc_cover.convert(body,state,jid,args.singing_voice_config,profile,convert_voice)
             with lock:jobs[jid].update(output,state='completed',phase='completed');save()
         except Exception as error:
             with lock:jobs[jid].update(state='failed',reason=str(error)[:120] if isinstance(error,ValueError) else type(error).__name__);save()

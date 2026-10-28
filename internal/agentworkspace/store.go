@@ -3,6 +3,7 @@
 package agentworkspace
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -16,8 +17,9 @@ import (
 )
 
 type Store struct {
-	root string
-	mu   sync.Mutex
+	root             string
+	ResolveDirectory func(string) (string, error)
+	mu               sync.Mutex
 }
 type Document struct {
 	Name     string `json:"name"`
@@ -44,7 +46,14 @@ func (s *Store) directory(scope string) (*os.Root, string, error) {
 		return nil, "", errors.New("工作区范围无效")
 	}
 	path := filepath.Join(s.root, scope)
-	if e := os.Mkdir(path, 0700); e != nil && !os.IsExist(e) {
+	if s.ResolveDirectory != nil {
+		var e error
+		path, e = s.ResolveDirectory(scope)
+		if e != nil {
+			return nil, "", e
+		}
+	}
+	if e := os.MkdirAll(path, 0700); e != nil && !os.IsExist(e) {
 		return nil, "", e
 	}
 	stat, e := os.Lstat(path)
@@ -135,7 +144,7 @@ func (s *Store) Write(scope, name, content, expected string) (Document, error) {
 	if !utf8.ValidString(content) || len(content) > 65536 {
 		return Document{}, errors.New("文档须为不超过64KiB的UTF-8文本")
 	}
-	root, path, e := s.directory(scope)
+	root, _, e := s.directory(scope)
 	if e != nil {
 		return Document{}, e
 	}
@@ -147,11 +156,16 @@ func (s *Store) Write(scope, name, content, expected string) (Document, error) {
 	if old.Revision != expected {
 		return old, ErrConflict
 	}
-	f, e := os.CreateTemp(path, ".document-*")
+	nonce := make([]byte, 16)
+	if _, e = rand.Read(nonce); e != nil {
+		return Document{}, e
+	}
+	pending := ".document-" + hex.EncodeToString(nonce)
+	f, e := root.OpenFile(pending, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
 		return old, e
 	}
-	defer os.Remove(f.Name())
+	defer root.Remove(pending)
 	e = f.Chmod(0600)
 	if e == nil {
 		_, e = f.WriteString(content)
@@ -166,7 +180,7 @@ func (s *Store) Write(scope, name, content, expected string) (Document, error) {
 	if closeErr != nil {
 		return old, closeErr
 	}
-	if e = os.Rename(f.Name(), filepath.Join(path, name)); e != nil {
+	if e = root.Rename(pending, name); e != nil {
 		return old, e
 	}
 	return Document{Name: name, Content: content, Revision: revision([]byte(content))}, nil

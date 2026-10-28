@@ -50,6 +50,9 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 		return a.understandSticker(ctx, m)
 	}
 	if m.Type == 49 {
+		if name := m.FileAttachmentName(); name != "" {
+			return a.receiveFile(ctx, m, name)
+		}
 		if m.IsQuotedText() {
 			return "[微信引用回复，用户本次正文]\n" + m.Body, nil
 		}

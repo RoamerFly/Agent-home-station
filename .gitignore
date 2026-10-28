@@ -49,3 +49,7 @@ admin-token
 admin-password
 accounts.json
 /accounts/
+
+# Managed agent inputs, account data, models and runtime copies.
+pri_workspace/
+public_workspace/

@@ -32,7 +32,7 @@ func toolsLimit(kind string) int64 {
 	case "video":
 		return 50 * 1024 * 1024
 	case "file":
-		return 64 * 1024 * 1024
+		return 512 * 1024 * 1024
 	}
 	return 0
 }

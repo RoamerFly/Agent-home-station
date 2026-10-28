@@ -43,6 +43,11 @@ function Invoke-LauncherScript([string]$Name) {
  } finally {$process.Dispose()}
 }
 try {
+ if(Test-Path -LiteralPath (Join-Path $workspace 'secrets\docker-deployment.json') -PathType Leaf){
+  $dockerArgs=@{Action=$Action;NoBrowser=[bool]$NoBrowser;NoDialog=[bool]$NoDialog;CheckOnly=[bool]$CheckOnly}
+  & (Join-Path $PSScriptRoot 'Start-Docker.ps1') @dockerArgs
+  exit $LASTEXITCODE
+ }
  foreach($name in @('Start-Local-Admin.ps1','Start-Local-YuE.ps1')){
   if(-not(Test-Path -LiteralPath (Join-Path $PSScriptRoot $name) -PathType Leaf)){throw ('Missing launcher dependency: '+$name)}
  }

@@ -160,7 +160,7 @@ func (s *Sender) Capabilities(ctx context.Context) (Capabilities, error) {
 }
 func (s *Sender) Upload(ctx context.Context, filename, contentType string, file io.Reader, size int64) (UploadSource, error) {
 	out := UploadSource{Filename: filename, ContentType: contentType, ByteLength: size}
-	if filename == "" || len(filename) > 256 || strings.ContainsAny(filename, "/\\\r\n\x00") || size <= 0 || size > 64<<20 {
+	if filename == "" || len(filename) > 256 || strings.ContainsAny(filename, "/\\\r\n\x00") || size <= 0 || size > 512<<20 {
 		return out, errors.New("invalid upload")
 	}
 	reader, writer := io.Pipe()

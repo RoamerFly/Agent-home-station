@@ -40,6 +40,11 @@ func (a *agentControl) transitionSnapshot(t agentTask, resume bool) (bool, error
 	if !ok || !current.Updated.Equal(t.Updated) || current.State == "cancelled" && !resume {
 		return false, nil
 	}
+	t.PendingOperations = append([]string{}, current.PendingOperations...)
+	if t.State == "completed" && len(t.PendingOperations) > 0 {
+		t.WorkCompleted = true
+		t.State = "waiting_delivery"
+	}
 	t.Actions = current.Actions
 	if current.Goal != "" {
 		t.Goal = current.Goal

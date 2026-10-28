@@ -28,6 +28,7 @@ type assetOriginal struct {
 	Parent              *assetOriginal
 }
 type assetRequest struct {
+	MessageTime   string    `json:"message_time,omitempty"`
 	TraceID       string    `json:"trace_id,omitempty"`
 	RequesterID   string    `json:"requester_id,omitempty"`
 	RequesterName string    `json:"requester_name,omitempty"`
@@ -91,7 +92,7 @@ func assetRequestFor(in companion.Input) assetRequest {
 	if in.TaskID != "" && in.RequestedText != "" {
 		text = in.RequestedText
 	}
-	return assetRequest{TraceID: logText(trace, 256), RequesterID: logText(in.Sender, 256), RequesterName: logText(in.SenderName, 128), TaskID: logText(in.TaskID, 256), Text: logText(companion.UserRequestText(text), 320), At: time.Now().UTC()}
+	return assetRequest{MessageTime: in.MessageTime, TraceID: logText(trace, 256), RequesterID: logText(in.Sender, 256), RequesterName: logText(in.SenderName, 128), TaskID: logText(in.TaskID, 256), Text: logText(companion.UserRequestText(text), 320), At: time.Now().UTC()}
 }
 func (a *mediaAsset) noteRequest(in companion.Input) {
 	r := assetRequestFor(in)
@@ -174,16 +175,11 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	if index < 0 && total+int64(len(original.Data)) > 512<<20 {
 		return zero, errors.New("本地素材缓存已满，请清理不再使用的素材")
 	}
-	dir := filepath.Join(m.dir, "media-assets")
+	dir := m.assetDirectory()
 	if e = os.MkdirAll(dir, 0700); e != nil {
 		return zero, e
 	}
-	file := filepath.Join(dir, digest)
-	if _, e = os.Stat(file); errors.Is(e, os.ErrNotExist) {
-		if e = writePrivate(file, original.Data); e != nil {
-			return zero, e
-		}
-	} else if e != nil {
+	if e = m.writeManagedAsset(digest, original.Data); e != nil {
 		return zero, e
 	}
 	a := mediaAsset{ID: id, Scope: scope, Account: in.Account, Title: assetName(original), Filename: assetName(original), MIME: original.MIME, Hash: digest, Bytes: int64(len(original.Data)), Sources: map[string]string{}, Updated: time.Now().UTC()}
@@ -235,9 +231,6 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 			found = found || id == upload.ID
 		}
 		if !found {
-			if len(format.Sources) >= 3 {
-				return zero, errors.New("同次素材格式超过附件上限")
-			}
 			format.Sources = append(format.Sources, upload.ID)
 		}
 		formats[upload.Kind] = format
@@ -425,9 +418,6 @@ func (p *permittedTools) reuseAsset(ctx context.Context, id, kind string) (strin
 	if format := a.Formats[kind]; len(format.Sources) > 0 {
 		sources = format.Sources
 	}
-	if len(sources) > 3 {
-		return "", errors.New("缓存素材格式超过附件上限")
-	}
 	itemsOut := []companion.GeneratedMedia{}
 	p.mediaMu.Lock()
 	for i, id := range sources {
@@ -460,7 +450,7 @@ func (m *Manager) cachedAssetData(a mediaAsset) ([]byte, error) {
 	if err != nil || len(a.Hash) != 64 || len(digest) != 32 {
 		return nil, errors.New("素材校验值无效")
 	}
-	f, err := os.Open(filepath.Join(m.dir, "media-assets", a.Hash))
+	f, err := m.openAsset(a.Hash)
 	if err != nil {
 		return nil, errors.New("原始文件缓存不可用")
 	}

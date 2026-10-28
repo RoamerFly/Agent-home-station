@@ -16,6 +16,7 @@ def run(request_path):
     result = {"exit_code": -1}
     try:
         request = json.loads(path.read_text(encoding="utf8"))
+        if request.get("sandbox") is not True: raise RuntimeError("sandbox_required: unrestricted Windows execution is disabled")
         command = request["command"]
         # Preserve Unicode and native nonzero exit codes without bash/$ escaping.
         script = "$ErrorActionPreference='Stop'; $global:LASTEXITCODE=0; "
@@ -24,12 +25,16 @@ def run(request_path):
         encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         with (directory / "output.log").open("wb") as output:
-            process = subprocess.Popen([request["shell"], "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded], cwd=request["cwd"], stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, creationflags=flags)
+            from windows_lpac import launch
+            if Path(request["shell"]).name.lower() == "cmd.exe":
+                argv=[request["shell"],"/d","/s","/c",command]
+            else:
+                argv=[request["shell"],"-NoProfile","-NonInteractive","-WindowStyle","Hidden","-EncodedCommand",encoded]
+            process = launch(argv, request["cwd"], request["roots"], request.get("read_only", []), output)
             (directory / "running.json").write_text(json.dumps({"pid": process.pid, "helper_pid": os.getpid(), "started": time.time()}), encoding="utf8")
             while process.poll() is None:
                 if (directory / "cancel").exists():
-                    taskkill = str(Path(os.environ["SystemRoot"]) / "System32/taskkill.exe")
-                    subprocess.run([taskkill, "/PID", str(process.pid), "/T", "/F"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags, timeout=5)
+                    process.kill()
                     process.wait(timeout=5)
                     result["cancelled"] = True
                     break

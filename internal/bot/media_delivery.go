@@ -20,38 +20,48 @@ type mediaNative interface {
 	CancelMediaJob(context.Context, string) (linuxnative.ToolStatus, error)
 }
 type MediaSeed struct {
-	Trace    string                   `json:"trace"`
-	Input    companion.Input          `json:"input"`
-	Media    companion.GeneratedMedia `json:"media"`
-	SourceID string                   `json:"source_id"`
-	JobID    string                   `json:"job_id"`
+	SourceThread string                   `json:"source_thread,omitempty"`
+	OriginTask   string                   `json:"origin_task,omitempty"`
+	Key          string                   `json:"key,omitempty"`
+	OriginThread string                   `json:"origin_thread,omitempty"`
+	Requester    string                   `json:"requester,omitempty"`
+	Trace        string                   `json:"trace"`
+	Input        companion.Input          `json:"input"`
+	Media        companion.GeneratedMedia `json:"media"`
+	SourceID     string                   `json:"source_id"`
+	JobID        string                   `json:"job_id"`
 }
 type mediaDelivery struct {
-	ParentAssetID string                 `json:"parent_asset_id,omitempty"`
-	CachedMIME    string                 `json:"cached_mime,omitempty"`
-	NotBefore     time.Time              `json:"not_before,omitempty"`
-	CompletedAt   time.Time              `json:"completed_at,omitempty"`
-	DurationMS    int64                  `json:"duration_ms,omitempty"`
-	URL           string                 `json:"url,omitempty"`
-	Description   string                 `json:"description,omitempty"`
-	Key           string                 `json:"key"`
-	Trace         string                 `json:"trace"`
-	Input         companion.Input        `json:"input"`
-	SourceID      string                 `json:"source_id"`
-	AssetID       string                 `json:"asset_id,omitempty"`
-	Kind          string                 `json:"kind"`
-	Title         string                 `json:"title"`
-	ID            string                 `json:"id"`
-	State         string                 `json:"state"`
-	Phase         string                 `json:"phase"`
-	Reason        string                 `json:"reason"`
-	Retries       int                    `json:"retries"`
-	Checks        int                    `json:"checks"`
-	UserCancelled bool                   `json:"user_cancelled,omitempty"`
-	Created       time.Time              `json:"created"`
-	Next          time.Time              `json:"next"`
-	Status        linuxnative.ToolStatus `json:"status"`
-	Signature     string                 `json:"signature,omitempty"`
+	CrossSettled   bool                   `json:"cross_settled,omitempty"`
+	CrossTask      string                 `json:"cross_task,omitempty"`
+	CrossRequester string                 `json:"cross_requester,omitempty"`
+	CrossOrigin    string                 `json:"cross_origin,omitempty"`
+	CrossSource    string                 `json:"cross_source,omitempty"`
+	ParentAssetID  string                 `json:"parent_asset_id,omitempty"`
+	CachedMIME     string                 `json:"cached_mime,omitempty"`
+	NotBefore      time.Time              `json:"not_before,omitempty"`
+	CompletedAt    time.Time              `json:"completed_at,omitempty"`
+	DurationMS     int64                  `json:"duration_ms,omitempty"`
+	URL            string                 `json:"url,omitempty"`
+	Description    string                 `json:"description,omitempty"`
+	Key            string                 `json:"key"`
+	Trace          string                 `json:"trace"`
+	Input          companion.Input        `json:"input"`
+	SourceID       string                 `json:"source_id"`
+	AssetID        string                 `json:"asset_id,omitempty"`
+	Kind           string                 `json:"kind"`
+	Title          string                 `json:"title"`
+	ID             string                 `json:"id"`
+	State          string                 `json:"state"`
+	Phase          string                 `json:"phase"`
+	Reason         string                 `json:"reason"`
+	Retries        int                    `json:"retries"`
+	Checks         int                    `json:"checks"`
+	UserCancelled  bool                   `json:"user_cancelled,omitempty"`
+	Created        time.Time              `json:"created"`
+	Next           time.Time              `json:"next"`
+	Status         linuxnative.ToolStatus `json:"status"`
+	Signature      string                 `json:"signature,omitempty"`
 }
 
 func (d *mediaDelivery) terminal() bool {
@@ -101,6 +111,9 @@ func (w *Worker) pendingMedia() bool {
 	return false
 }
 func (w *Worker) mediaAllowed(d *mediaDelivery) bool {
+	if d.CrossRequester != "" && (w.config.MediaSeedAllowed == nil || !w.config.MediaSeedAllowed(MediaSeed{Key: d.Key, Input: d.Input, Requester: d.CrossRequester, OriginThread: d.CrossOrigin, SourceThread: d.CrossSource, OriginTask: d.CrossTask})) {
+		return false
+	}
 	c, ok := w.model.(*companion.Engine)
 	return ok && w.allowed[d.Input.Thread] && companion.MediaPermitted(c.Config.Permissions, d.Kind) &&
 		(d.Input.Mode == "direct" || !c.Config.Quiet(time.Now())) && (!d.Input.Surf || w.config.SurfAllowed == nil || w.config.SurfAllowed(d.Input.Thread))
@@ -148,16 +161,27 @@ func (w *Worker) adoptMediaSeeds() {
 		return
 	}
 	for _, seed := range w.config.MediaSeeds() {
+		if seed.Key != "" && (w.config.MediaSeedAllowed == nil || !w.config.MediaSeedAllowed(seed)) {
+			continue
+		}
 		exists := false
 		for _, d := range w.runtime.Media {
-			if d.ID == seed.JobID {
+			if seed.JobID != "" && d.ID == seed.JobID || seed.Key != "" && d.Key == seed.Key {
 				exists = true
 			}
 		}
-		if exists || len(w.runtime.Media) >= 1000 || !w.allowed[seed.Input.Thread] {
+		if exists || !w.allowed[seed.Input.Thread] {
 			continue
 		}
 		d := &mediaDelivery{ParentAssetID: seed.Media.ParentAssetID, CachedMIME: seed.Media.CachedMIME, URL: seed.Media.URL, Description: seed.Media.Description, DurationMS: seed.Media.DurationMS, Key: "adopt-" + seed.JobID, Trace: seed.Trace, Input: seed.Input, SourceID: seed.SourceID, AssetID: seed.Media.AssetID, Kind: seed.Media.Kind, Title: seed.Media.Title, ID: seed.JobID, State: "queued", Created: time.Now().UTC()}
+		if seed.Key != "" {
+			d.CrossTask = seed.OriginTask
+			d.CrossRequester = seed.Requester
+			d.CrossOrigin = seed.OriginThread
+			d.CrossSource = seed.SourceThread
+			d.Key = seed.Key
+			d.State = "prepared"
+		}
 		w.runtime.Media = append(w.runtime.Media, d)
 		w.persistErr = w.saveRuntime()
 		if w.persistErr != nil {
@@ -173,6 +197,14 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 	defer func() {
 		for _, d := range w.runtime.Media {
 			w.refreshMediaParent(d.Trace)
+			if d.State == "accepted" && !d.CrossSettled && d.CrossRequester != "" && w.config.MediaSeedSettled != nil {
+				if e := w.config.MediaSeedSettled(d.Trace, d.Key, d.Status); e != nil {
+					w.activity(Record{Event: "cross_media_receipt_save_failed", Category: "error", ThreadID: d.Input.Thread, MessageID: d.Trace, Reason: "durable_receipt_pending"})
+				} else {
+					d.CrossSettled = true
+					w.persistErr = w.saveRuntime()
+				}
+			}
 		}
 	}()
 	for index, d := range w.runtime.Media {
@@ -201,6 +233,18 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		}
 		// Serialize unsent media per conversation. Persist the sampled gap once.
 		if d.ID == "" && d.State == "prepared" {
+			if d.CrossRequester != "" {
+				blocked := false
+				for _, part := range w.runtime.Media[:index] {
+					if part.Trace == d.Trace && part.CrossRequester != "" && part.State != "accepted" {
+						blocked = true
+						break
+					}
+				}
+				if blocked {
+					continue
+				}
+			}
 			var previous *mediaDelivery
 			for i := index - 1; i >= 0; i-- {
 				if w.runtime.Media[i].Input.Thread == d.Input.Thread {
@@ -209,6 +253,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				}
 			}
 			if previous != nil {
+				if d.CrossRequester != "" && previous.Trace == d.Trace && previous.State != "accepted" {
+					continue
+				}
 				if !previous.terminal() {
 					continue
 				}
@@ -414,7 +461,7 @@ func (w *Worker) mediaRecord(d *mediaDelivery, event, category string) {
 	if memory.TotalParts > 0 {
 		content += fmt.Sprintf(" · 已接受 %d/%d 段", memory.AcceptedParts, memory.TotalParts)
 	}
-	w.activity(Record{Event: event, Category: category, ThreadID: d.Input.Thread, MessageID: d.Trace, Content: content, SendID: d.ID, Status: d.State, Reason: d.Reason, Origin: "bot"})
+	w.activity(Record{RelatedMessageID: d.Input.OriginTraceID, Event: event, Category: category, ThreadID: d.Input.Thread, MessageID: d.Trace, Content: content, SendID: d.ID, Status: d.State, Reason: d.Reason, Origin: "bot"})
 	if !d.terminal() {
 		w.markSending(d.Trace)
 	}

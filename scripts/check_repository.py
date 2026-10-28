@@ -14,7 +14,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 DENIED_DIRS = {
-    "secrets", "temp", "tmp", "dist", ".agents", ".codex", ".playwright-cli",
+    "cross-media", "incoming-transfers", "pri_workspace", "public_workspace", "secrets", "temp", "tmp", "dist", ".agents", ".codex", ".playwright-cli",
     "node_modules", "__pycache__", ".venv", "venv", "media-assets", "bot-state", "archive", "send-ledger", "tool-outputs", "state", "accounts",
 }
 DENIED_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".pem", ".key", ".p12", ".pfx", ".pyc", ".log"}

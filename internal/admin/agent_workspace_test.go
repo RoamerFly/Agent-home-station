@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,9 @@ func TestWorkspaceToolsScopeConflictAndSharedWriteAuthority(t *testing.T) {
 	}
 }
 func TestProcessCompletionWakesOriginalOwnerWithoutProactivePermission(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires Linux system-isolated executor; Windows LPAC is validated separately")
+	}
 	f, p := trustedAgent(t)
 	f.manager.config.Companion.Enabled = true
 	cfg := f.manager.agent.config()

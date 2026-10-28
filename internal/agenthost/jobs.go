@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -149,6 +148,9 @@ func (j *Jobs) StartWindows(cfg Config, scope, key, path, command string, second
 	return j.start(cfg, scope, key, path, command, seconds, allowed, true)
 }
 func (j *Jobs) start(cfg Config, scope, key, path, command string, seconds int, allowed func() bool, windows bool) (Process, error) {
+	if cfg.Isolation == nil {
+		return Process{}, errors.New("sandbox_required: legacy unrestricted execution is disabled")
+	}
 	if windows {
 		if cfg.Windows == nil {
 			return Process{}, errors.New("Windows隐藏执行桥接未配置；请配置pythonw、helper和spool路径")
@@ -243,9 +245,13 @@ func (j *Jobs) start(cfg Config, scope, key, path, command string, seconds int, 
 		if windows {
 			err = runWindowsHidden(ctx, cfg, p.ID, path, command, p.buffer)
 		} else {
-			cmd := hostCommand(ctx, path, command)
-			cmd.Stdout, cmd.Stderr = p.buffer, p.buffer
-			err = cmd.Run()
+			cmd, buildErr := isolatedCommand(ctx, cfg, path, command)
+			if buildErr != nil {
+				err = buildErr
+			} else {
+				cmd.Stdout, cmd.Stderr = p.buffer, p.buffer
+				err = cmd.Run()
+			}
 		}
 		if err != nil {
 			_, _ = fmt.Fprintln(p.buffer, "执行未完成："+err.Error())
@@ -287,23 +293,6 @@ func (j *Jobs) start(cfg Config, scope, key, path, command string, seconds int, 
 		}
 	}()
 	return processCopy(p), nil
-}
-func hostCommand(ctx context.Context, path, command string) *exec.Cmd {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
-	} else {
-		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
-	}
-	cmd.Dir = path
-	for _, key := range []string{"PATH", "HOME", "USER", "LANG", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR"} {
-		if v, ok := os.LookupEnv(key); ok {
-			cmd.Env = append(cmd.Env, key+"="+v)
-		}
-	}
-	cmd.WaitDelay = time.Second
-	configureProcess(cmd)
-	return cmd
 }
 func (j *Jobs) Close() {
 	j.mu.Lock()

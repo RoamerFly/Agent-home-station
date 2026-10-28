@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -329,5 +330,50 @@ func TestUncertainNativeGuardAndDrainDoNotResubmit(t *testing.T) {
 	w.reconcileMedia(context.Background())
 	if d.State != "accepted" || n.sends != 1 || n.retries != 0 {
 		t.Fatal("late receipt was not reconciled", d)
+	}
+}
+
+func TestCrossSeedsRestartTargetAndStrictBatchOrder(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread = "target@chatroom"
+	w.allowed[in.Thread] = true
+	seeds := []MediaSeed{}
+	for i := 0; i < 4; i++ {
+		seeds = append(seeds, MediaSeed{Key: fmt.Sprint("cross-key-", i), Trace: "cross-batch", Input: in, Requester: "owner", OriginThread: "owner", SourceID: fmt.Sprint("source-", i), Media: companion.GeneratedMedia{Kind: "voice", Title: "part.wav"}})
+	}
+	w.config.MediaSeeds = func() []MediaSeed { return seeds }
+	w.config.MediaSeedAllowed = func(MediaSeed) bool { return true }
+	w.adoptMediaSeeds()
+	w.adoptMediaSeeds()
+	if len(w.runtime.Media) != 4 {
+		t.Fatal("seed duplicate or loss")
+	}
+	w.reconcileMedia(context.Background())
+	if n.sends != 1 || n.status.ThreadID != in.Thread {
+		t.Fatal("wrong destination", n.sends, n.status)
+	}
+	if e := w.loadRuntime("server-1"); e != nil {
+		t.Fatal(e)
+	}
+	w.adoptMediaSeeds()
+	if len(w.runtime.Media) != 4 {
+		t.Fatal("restart repeated seeds")
+	}
+	// Even if an unrelated send interleaves, the unknown first part blocks later
+	// parts in this batch. An uncertain receipt cannot advance audio order.
+	first := w.runtime.Media[0]
+	first.State = "waiting"
+	first.Status.State = "unknown"
+	first.Next = time.Now().Add(time.Hour)
+	unrelated := &mediaDelivery{Key: "unrelated", Trace: "other", Input: in, State: "accepted", CompletedAt: time.Now().Add(-time.Minute)}
+	w.runtime.Media = append(w.runtime.Media[:1], append([]*mediaDelivery{unrelated}, w.runtime.Media[1:]...)...)
+	w.reconcileMedia(context.Background())
+	if n.sends != 1 {
+		t.Fatal("advanced before earlier part accepted")
+	}
+	w.config.MediaSeedAllowed = func(MediaSeed) bool { return false }
+	w.reconcileMedia(context.Background())
+	if n.sends != 1 {
+		t.Fatal("revoked owner sent")
 	}
 }

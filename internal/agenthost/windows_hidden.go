@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-// The WSL adapter starts a GUI-subsystem pythonw executable. Its PowerShell
-// child uses CREATE_NO_WINDOW; no console/terminal is created for either.
+// The WSL adapter uses a hidden Python broker and an LPAC CMD child.
+// Child tokens and process jobs enforce workspace isolation without a console.
 type WindowsConfig struct {
 	Pythonw string `json:"pythonw"`
 	Helper  string `json:"helper"`
@@ -72,6 +72,9 @@ type windowsExitError struct{ code int }
 
 func (e *windowsExitError) Error() string { return fmt.Sprintf("Windows命令退出码%d", e.code) }
 func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string, out io.Writer) error {
+	if cfg.Isolation == nil {
+		return errors.New("sandbox_required")
+	}
 	w := cfg.Windows
 	if w == nil {
 		return errors.New("Windows桥接未配置")
@@ -81,13 +84,8 @@ func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string,
 			return errors.New("Windows隐藏执行器或脚本不存在；程序未启动")
 		}
 	}
-	// Both project working directory and the private transport directory must
-	// be inside the explicitly configured host roots.
-	root, _, e := (Host{cfg}).rooted(w.Spool)
-	if e != nil {
-		return e
-	}
-	root.Close()
+	// Spool is control-plane data and intentionally outside Agent mounts.
+	var e error
 	if e = os.MkdirAll(w.Spool, 0700); e != nil {
 		return errors.New("Windows桥接暂存目录不可写")
 	}
@@ -106,9 +104,25 @@ func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string,
 	}
 	shell := w.Shell
 	if shell == "" {
-		shell = `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+		shell = `C:\Windows\System32\cmd.exe`
 	}
-	b, _ := json.Marshal(map[string]any{"cwd": winDir, "command": command, "shell": shell})
+	mounts := []string{}
+	readonly := []string{}
+	for _, base := range cfg.Roots {
+		v, err := windowsPath(base)
+		if err != nil {
+			return err
+		}
+		mounts = append(mounts, v)
+	}
+	for _, base := range cfg.Isolation.ReadOnly {
+		v, err := windowsPath(base)
+		if err != nil {
+			return err
+		}
+		readonly = append(readonly, v)
+	}
+	b, _ := json.Marshal(map[string]any{"cwd": winDir, "command": command, "shell": shell, "sandbox": true, "roots": mounts, "read_only": readonly})
 	if e = os.WriteFile(request, b, 0600); e != nil {
 		return e
 	}

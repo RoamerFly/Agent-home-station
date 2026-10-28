@@ -31,6 +31,15 @@ func trustedAgent(t *testing.T) (*webFixture, *permittedTools) {
 		t.Fatal(err)
 	}
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "turn-1", Mode: "direct"})
+	effective, e := p.hostConfig()
+	if e != nil {
+		t.Fatal(e)
+	}
+	c = f.manager.agent.config()
+	c.Host.Roots = effective.Roots
+	if e = f.manager.agent.save(c); e != nil {
+		t.Fatal(e)
+	}
 	return f, p
 }
 func TestAgentPrivilegeChecksAtDiscoveryAndExecution(t *testing.T) {
@@ -72,7 +81,7 @@ func TestOwnerAllAllowedThreadsStillChecksSenderAndRecipient(t *testing.T) {
 	}
 	args, _ := json.Marshal(map[string]string{"path": filepath.Join(c.Host.Roots[0], "must-not-exist.txt"), "content": "forbidden"})
 	for _, input := range []companion.Input{
-		{Account: "test", Thread: "new_group@chatroom", Sender: "wxid_imposter"},
+
 		{Account: "test", Thread: "not_allowed@chatroom", Sender: "wxid_owner"},
 		{Account: "test", Sender: "wxid_owner"},
 		{Account: "other", Thread: "new_group@chatroom", Sender: "wxid_owner"},
@@ -87,12 +96,22 @@ func TestOwnerAllAllowedThreadsStillChecksSenderAndRecipient(t *testing.T) {
 			t.Fatalf("untrusted context executed host: %+v", input)
 		}
 	}
+	p.SetTrace(companion.Input{Account: "test", Thread: "new_group@chatroom", Sender: "wxid_member"})
+	if !p.agentToolEnabled("server_write") {
+		t.Fatal("member lacks isolated session file access")
+	}
+	if p.agentToolEnabled("wechat_conversations") || p.agentToolEnabled("agent_global_search") {
+		t.Fatal("member acquired owner tools")
+	}
+	if _, err := p.Call(context.Background(), "server_write", args); err == nil {
+		t.Fatal("member accessed account-wide directory")
+	}
 	if _, err := os.Stat(filepath.Join(c.Host.Roots[0], "must-not-exist.txt")); !os.IsNotExist(err) {
 		t.Fatal("unauthorized write reached filesystem", err)
 	}
 	for _, mutate := range []func(*agentSettings){
 		func(s *agentSettings) { s.OwnerIDs = []string{"*"} },
-		func(s *agentSettings) { s.OwnerIDs = nil },
+		func(s *agentSettings) { s.OwnerIDs = nil; s.CrossConversation = true },
 		func(s *agentSettings) { s.PrivilegedThreads = []string{"*", "wxid_owner"} },
 	} {
 		invalid := c
@@ -179,8 +198,8 @@ func TestAgentSettingsAPIAuthenticationAndOptimisticSave(t *testing.T) {
 	}
 	c = f.manager.agent.config()
 	c.Host.Mode = "full"
-	if code, _, _ := f.request("POST", "/api/agent/config", c, true, true); code != 400 {
-		t.Fatal("unbound full mode", code)
+	if code, _, _ := f.request("POST", "/api/agent/config", c, true, true); code != 200 {
+		t.Fatal("isolated conversation execution needs no owner escalation", code)
 	}
 }
 

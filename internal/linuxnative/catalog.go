@@ -35,7 +35,7 @@ func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor strin
 			return CatalogPage{}, errors.New("invalid thread")
 		}
 		path = "/threads/" + url.PathEscape(thread) + "/messages"
-		fields = []string{"id", "threadId", "serverId", "senderId", "type", "direction", "body", "createdAt"}
+		fields = []string{"id", "threadId", "serverId", "senderId", "type", "direction", "body", "createdAt", "appMessageType", "media"}
 	case "members":
 		if !safeThreadID(thread) || !strings.HasSuffix(thread, "@chatroom") {
 			return CatalogPage{}, &CatalogError{Code: "catalog_group_invalid"}
@@ -76,6 +76,17 @@ func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor strin
 		for _, field := range fields {
 			if value, ok := item[field]; ok {
 				row[field] = value
+			}
+		}
+		if kind == "messages" && item["type"] == float64(49) {
+			encoded, _ := json.Marshal(item)
+			var m Message
+			_ = json.Unmarshal(encoded, &m)
+			if title := m.FileAttachmentName(); title != "" {
+				row["file_name"] = title
+				row["body"] = "[文件] " + title
+				out.Items = append(out.Items, row)
+				continue
 			}
 		}
 		if kind == "messages" && row["type"] != float64(1) {

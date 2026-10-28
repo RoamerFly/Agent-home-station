@@ -38,7 +38,9 @@ type agentSettings struct {
 const agentTurnToolLimit = 30
 
 func agentDefaults() agentSettings {
-	return agentSettings{Enabled: true, ReadConversations: true, TasksEnabled: true, OwnerIDs: []string{}, PrivilegedThreads: []string{}, AccountActions: []string{}, MaxSteps: agentTurnToolLimit, MaxTaskRuns: 6, Host: agenthost.Defaults()}
+	host := agenthost.Defaults()
+	host.Mode = "files"
+	return agentSettings{Enabled: true, ReadConversations: true, TasksEnabled: true, OwnerIDs: []string{}, PrivilegedThreads: []string{}, AccountActions: []string{}, MaxSteps: agentTurnToolLimit, MaxTaskRuns: 6, Host: host}
 }
 func (c agentSettings) validate() error {
 	if len(c.OwnerIDs) > 30 || len(c.PrivilegedThreads) > 100 || len(c.AccountActions) > 8 {
@@ -67,7 +69,7 @@ func (c agentSettings) validate() error {
 			return errors.New("账号动作无效")
 		}
 	}
-	if (c.Host.Mode != "disabled" || c.CrossConversation || c.ExternalOwnerOnly || len(c.AccountActions) > 0) && (len(c.OwnerIDs) == 0 || len(c.PrivilegedThreads) == 0) {
+	if (c.CrossConversation || c.ExternalOwnerOnly || len(c.AccountActions) > 0) && (len(c.OwnerIDs) == 0 || len(c.PrivilegedThreads) == 0) {
 		return errors.New("高权限能力必须同时配置可信用户和允许触发的会话")
 	}
 	return c.Host.Validate()
@@ -98,6 +100,7 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	PendingOperations  []string          `json:"pending_operations,omitempty"`
 	WorkCompleted      bool              `json:"work_completed,omitempty"`
 	Reminder           *reminderSpec     `json:"reminder,omitempty"`
 	OwnerRequest       bool              `json:"owner_request,omitempty"`
@@ -359,10 +362,14 @@ func (a *agentControl) task(t agentTask) error {
 			return errors.New("任务已结束并移出活跃队列，请用新的任务编号")
 		}
 	}
-	if t.State == "completed" && t.Delivery != nil && t.Delivery.State != "accepted" {
+	if exists {
+		t.PendingOperations = append([]string{}, old.PendingOperations...)
+	}
+	if t.State == "completed" && (len(t.PendingOperations) > 0 || t.Delivery != nil && t.Delivery.State != "accepted") {
 		t.State = "waiting_delivery"
 	}
 	if exists {
+		t.PendingOperations = append([]string{}, old.PendingOperations...)
 		t.Actions = old.Actions
 		if old.Goal != "" {
 			t.Goal = old.Goal
@@ -750,7 +757,7 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 
 func (p *permittedTools) operationID(name string, args json.RawMessage) string {
 	identity := string(args)
-	if name == "wechat_send_text" || name == "wechat_forward_file" {
+	if name == "wechat_send_text" || name == "wechat_forward_file" || name == "wechat_send_media" {
 		var v struct {
 			Key string `json:"request_key"`
 		}

@@ -102,7 +102,7 @@ func TestFriendDirectoryAdmissionIsExactAndDoesNotGrantHostAccess(t *testing.T) 
 		t.Fatal("groups opened")
 	}
 	p.SetTrace(companion.Input{Account: "test", Thread: "room@chatroom", Sender: "wxid_member"})
-	if p.agentToolEnabled("server_write") || p.agentToolEnabled("server_exec") || !p.agentToolEnabled("agent_reminder") {
+	if p.agentToolEnabled("wechat_conversations") || p.agentToolEnabled("agent_global_search") || !p.agentToolEnabled("agent_reminder") {
 		t.Fatal("member privilege boundary")
 	}
 }
@@ -199,7 +199,7 @@ func TestMemberReminderPrivateTargetIsOnlyRequester(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].Reminder.Target != "wxid_member" {
 		t.Fatal("wrong private target", out)
 	}
-	if p.agentToolEnabled("server_read") {
-		t.Fatal("reminder granted project access")
+	if p.agentToolEnabled("agent_global_search") || p.agentToolEnabled("wechat_conversations") {
+		t.Fatal("reminder granted account-wide access")
 	}
 }

@@ -106,7 +106,7 @@ func TestMusicPreviewRetainsCompleteOriginalForFileReuse(t *testing.T) {
 	if err != nil || len(assets) != 1 {
 		t.Fatal(err)
 	}
-	cached, err := os.ReadFile(filepath.Join(f.dir, "media-assets", assets[0].Hash))
+	cached, err := os.ReadFile(f.manager.assetPath(assets[0].Hash))
 	if err != nil || !bytes.Equal(cached, full) || len(cached) <= len(preview.Media[0].Data) {
 		t.Fatal("original replaced by preview", err)
 	}

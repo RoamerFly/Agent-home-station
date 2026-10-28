@@ -64,7 +64,7 @@ func (m *Manager) takeMediaSeeds() []bot.MediaSeed {
 	// deduplicated by job ID and survives a restart during the handoff.
 	if len(m.mediaSeeds) == 0 {
 		b, e := os.ReadFile(filepath.Join(m.dir, "media-recovery.json"))
-		if e == nil && len(b) < 1<<20 {
+		if e == nil {
 			_ = json.Unmarshal(b, &m.mediaSeeds)
 		}
 	}
@@ -223,7 +223,7 @@ func (s *Server) recoverMedia(w http.ResponseWriter, r *http.Request) {
 	defer m.mu.Unlock()
 	if len(m.mediaSeeds) == 0 {
 		b, e := os.ReadFile(filepath.Join(m.dir, "media-recovery.json"))
-		if e == nil && len(b) < 1<<20 {
+		if e == nil {
 			_ = json.Unmarshal(b, &m.mediaSeeds)
 		}
 	}

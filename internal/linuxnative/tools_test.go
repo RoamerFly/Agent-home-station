@@ -140,6 +140,46 @@ func TestFullMusicStatusRetainsAllVoiceChunksBeyondFive(t *testing.T) {
 
 type textReader struct{ value []byte }
 
+type zeroUploadReader struct{}
+
+func (zeroUploadReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
+
+func TestOriginalFileUploadStreamsBeyondLegacy64MiBLimit(t *testing.T) {
+	const size int64 = 65 << 20
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		form, err := r.MultipartReader()
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
+		part, err := form.NextPart()
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
+		n, err := io.Copy(io.Discard, part)
+		if err != nil || n != size {
+			t.Error(n, err)
+		}
+		if _, err = form.NextPart(); err != io.EOF {
+			t.Error(err)
+		}
+		w.WriteHeader(201)
+		write(w, `{"id":"large-original-file"}`)
+	}))
+	defer server.Close()
+	sender := testSender(t, server.URL)
+	upload, err := sender.Upload(context.Background(), "original.flac", "audio/flac", io.LimitReader(zeroUploadReader{}, size), size)
+	if err != nil || upload.ByteLength != size {
+		t.Fatal(upload, err)
+	}
+	if _, err = sender.Upload(context.Background(), "too-large.bin", "application/octet-stream", zeroUploadReader{}, 512<<20+1); err == nil {
+		t.Fatal("protocol size bound ignored")
+	}
+}
+
 func (r *textReader) Read(b []byte) (int, error) {
 	if len(r.value) == 0 {
 		return 0, io.EOF

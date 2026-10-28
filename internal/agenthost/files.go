@@ -1,6 +1,7 @@
 package agenthost
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -52,11 +53,16 @@ func (h Host) edit(root *os.Root, rel string, in Input) (any, error) {
 	if len(next) > 1<<20 {
 		return nil, errors.New("修改结果超过1MiB")
 	}
-	pending, e := os.CreateTemp(filepath.Dir(in.Path), ".agent-edit-*")
+	nonce := make([]byte, 16)
+	if _, e = rand.Read(nonce); e != nil {
+		return nil, e
+	}
+	pendingName := filepath.Join(filepath.Dir(rel), ".agent-edit-"+hex.EncodeToString(nonce))
+	pending, e := root.OpenFile(pendingName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
 		return nil, e
 	}
-	defer os.Remove(pending.Name())
+	defer root.Remove(pendingName)
 	e = pending.Chmod(stat.Mode().Perm())
 	if e == nil {
 		_, e = pending.WriteString(next)
@@ -82,7 +88,7 @@ func (h Host) edit(root *os.Root, rel string, in Input) (any, error) {
 	if e != nil || string(current) != string(b) {
 		return nil, errors.New("文件在修改期间变化；未覆盖")
 	}
-	if e = os.Rename(pending.Name(), in.Path); e != nil {
+	if e = root.Rename(pendingName, rel); e != nil {
 		return nil, e
 	}
 	sum := sha256.Sum256([]byte(next))

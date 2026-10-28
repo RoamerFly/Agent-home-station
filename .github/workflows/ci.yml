@@ -67,6 +67,14 @@ jobs:
           for path in Path('components/yue2/app/workflows_api').glob('*.json'):
               json.loads(path.read_text(encoding='utf-8'))
           PY
+      - name: Prepare isolated execution tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          # Ephemeral runner only: allow nonprivileged namespace sandboxes.
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Test
         run: go test ./...
       - name: Test execution round projection
@@ -77,6 +85,12 @@ jobs:
         run: python -m unittest discover -s scripts -p test_mobile_bridge.py
       - name: Test local diagnostic process lifecycle
         run: python -m unittest discover -s scripts -p test_agent_probe_service.py
+      - name: Test managed workspace migration
+        run: |
+          python -m unittest discover -s scripts -p test_managed_migration.py
+          python -m unittest discover -s scripts -p test_managed_music.py
+          python -m unittest discover -s scripts -p test_docker_data.py
+          python -m unittest discover -s scripts -p test_native_docker_context.py
       - name: Test hidden Windows executor contracts
         run: |
           python -m unittest discover -s scripts -p test_windows_agent_host.py

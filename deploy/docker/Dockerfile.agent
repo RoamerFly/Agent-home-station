@@ -1,0 +1,50 @@
+# Application code and native transport update together. User data/model mounts
+# are deliberately excluded from the build context by the root .dockerignore.
+ARG GO_IMAGE=golang:1.25.3-alpine@sha256:aee43c3ccbf24fdffb7295693b6e33b21e01baec1b2a55acc351fde345e9ec34
+ARG RUNTIME_IMAGE=mirror.gcr.io/library/debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+ARG NATIVE_IMAGE=wechat-linux-native:0.35.0
+ARG APP_RUNTIME_IMAGE=runtime
+FROM ${GO_IMAGE} AS go-build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/wechat-admin ./cmd/wechat-admin
+
+FROM ${RUNTIME_IMAGE} AS runtime
+USER root
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && rm -f /etc/apt/apt.conf.d/docker-clean \
+    && apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends ca-certificates ffmpeg python3 python3-venv bubblewrap ripgrep git curl tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /workspace/public_workspace /workspace/pri_workspace /data /scratch \
+    && chown -R 10001:10001 /workspace /data /scratch
+COPY scripts/ /opt/wechat-agent/scripts/
+COPY components/yue2/app/workflows_api/ /opt/wechat-agent/workflows/
+COPY --chmod=755 scripts/web-entrypoint.sh /usr/local/bin/wechat-web
+
+FROM ${NATIVE_IMAGE} AS native
+FROM ${APP_RUNTIME_IMAGE}
+COPY scripts/ /opt/wechat-agent/scripts/
+COPY --chmod=755 scripts/web-entrypoint.sh /usr/local/bin/wechat-web
+COPY --from=native /usr/local/bin/wx /usr/local/bin/wx
+COPY --from=go-build /out/wechat-admin /usr/local/bin/wechat-admin
+ARG VERSION=0.35.0
+LABEL org.opencontainers.image.title="大肥鱼 WeChat Agent" \
+      org.opencontainers.image.source="https://github.com/RoamerFly/wechat-agent" \
+      org.opencontainers.image.version="${VERSION}"
+ENV HOME=/data TMPDIR=/scratch \
+    WECHAT_WORKSPACE_ROOT=/workspace \
+    WECHAT_NATIVE_URL=http://127.0.0.1:6174 \
+    WECHAT_NATIVE_MMTLS_PORT=443 \
+    WECHAT_NATIVE_TOKEN_FILE=/data/api-token \
+    WECHAT_NATIVE_ACCOUNT=background-test \
+    WECHAT_ADMIN_DATA_DIR=/data/admin \
+    WECHAT_BOT_STATE_DIR=/data/bot-state \
+    WECHAT_ADMIN_LISTEN=0.0.0.0:8080
+USER 10001:10001
+EXPOSE 8080
+HEALTHCHECK --interval=20s --timeout=4s --start-period=30s --retries=3 CMD ["/usr/local/bin/wechat-admin", "healthcheck"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/wechat-web"]

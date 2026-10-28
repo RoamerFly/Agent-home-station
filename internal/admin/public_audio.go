@@ -60,16 +60,16 @@ func preparePublicAudioPreview(ctx context.Context, dir string, data []byte, pre
 	if preview > 0 && sendingSeconds > float64(preview) {
 		sendingSeconds = float64(preview)
 	}
-	chunks := int(math.Ceil(sendingSeconds / 300))
-	output := plugins.Output{Text: fmt.Sprintf("真实音频已下载并转换，时长约 %.1f 秒，将由微信后台分为最多 60 秒一条的语音（约 %d 条）。尚未发送。", seconds, int(math.Ceil(seconds/60)))}
+	chunks := int(math.Ceil(sendingSeconds / 55))
+	output := plugins.Output{Text: fmt.Sprintf("真实音频已下载并转换，时长约 %.1f 秒，将由微信后台分为最多 55 秒一条的语音（约 %d 条）。尚未发送。", seconds, int(math.Ceil(seconds/55)))}
 	if sendingSeconds < seconds {
 		output.Text = fmt.Sprintf("原音频约 %.1f 秒；按要求准备 %.0f 秒试听，原音频完整保留，用户后续要文件可直接复用。不要主动询问文件。尚未发送。", seconds, sendingSeconds)
 	}
 	for i := 0; i < chunks; i++ {
 		filename := fmt.Sprintf("audio-part-%d-of-%d.wav", i+1, chunks)
 		dest := filepath.Join(tmp, filename)
-		length := math.Min(300, sendingSeconds-float64(i*300))
-		cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-protocol_whitelist", "file", "-format_whitelist", "wav,mp3,flac,ogg,aac,mov,matroska,webm", "-threads", "1", "-ss", strconv.Itoa(i*300), "-i", input, "-vn", "-ac", "1", "-ar", "16000", "-t", formatSeconds(length), "-c:a", "pcm_s16le", "-f", "wav", dest)
+		length := math.Min(55, sendingSeconds-float64(i*55))
+		cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-protocol_whitelist", "file", "-format_whitelist", "wav,mp3,flac,ogg,aac,mov,matroska,webm", "-threads", "1", "-ss", strconv.Itoa(i*55), "-i", input, "-vn", "-ac", "1", "-ar", "16000", "-t", formatSeconds(length), "-c:a", "pcm_s16le", "-f", "wav", dest)
 		if err = cmd.Run(); err != nil {
 			if ctx.Err() != nil {
 				return plugins.Output{}, ctx.Err()
@@ -86,7 +86,7 @@ func preparePublicAudioPreview(ctx context.Context, dir string, data []byte, pre
 }
 
 func safeMediaFilename(name string) bool {
-	return name != "" && len(name) <= 128 && !strings.ContainsAny(name, "/\\\x00\r\n")
+	return name != "" && len(name) <= 512 && !strings.ContainsAny(name, "/\\\x00\r\n")
 }
 
 func extractPublicAudioFile(ctx context.Context, dir string, data []byte) ([]byte, error) {

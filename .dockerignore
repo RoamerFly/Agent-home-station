@@ -9,3 +9,22 @@ internal/wechatwire/testdata/
 *.session.json
 
 key*.txt
+
+# Account data, models and local runtimes must never enter an application image.
+public_workspace/
+pri_workspace/
+archive/
+accounts/
+state/
+bot-state/
+media-assets/
+send-ledger/
+tool-outputs/
+.agents/
+.codex/
+.playwright-cli/
+node_modules/
+**/__pycache__/
+**/*.db
+**/*.sqlite*
+**/.env

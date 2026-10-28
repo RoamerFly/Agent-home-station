@@ -1,6 +1,6 @@
 // Package agenthost supplies explicitly configured local-host capabilities.
-// File operations use os.Root; full command mode runs as the service OS user,
-// and is deliberately not presented as a sandbox.
+// File operations use os.Root; commands and descendants require a system
+// sandbox with server-derived mounts and no unrestricted host fallback.
 package agenthost
 
 import (
@@ -19,6 +19,7 @@ import (
 )
 
 type Config struct {
+	Isolation      *Isolation     `json:"isolation,omitempty"`
 	Windows        *WindowsConfig `json:"windows,omitempty"`
 	Mode           string         `json:"mode"` // disabled, read, files, full
 	Roots          []string       `json:"roots"`
@@ -97,7 +98,7 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		return nil, err
 	}
 	if tool == "server_status" {
-		return map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "roots": h.Config.Roots, "mode": h.Config.Mode, "windows_hidden_executor": h.Config.Windows != nil, "command_identity": "management service OS user; no automatic sudo"}, nil
+		return map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "roots": h.Config.Roots, "mode": h.Config.Mode, "windows_hidden_executor": h.Config.Windows != nil, "command_identity": "system-isolated workspace process; no host fallback", "isolation_required": true}, nil
 	}
 	if runtime.GOOS != "windows" && len(in.Path) >= 3 && in.Path[1] == ':' {
 		normalized, e := WindowsLocalPath(in.Path)
@@ -109,7 +110,11 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		}
 		in.Path = normalized
 	}
-	root, rel, err := h.rooted(in.Path)
+	fileHost := h
+	if (tool == "server_read" || tool == "server_list" || tool == "server_search") && h.Config.Isolation != nil {
+		fileHost.Config.Roots = append(append([]string{}, h.Config.Roots...), h.Config.Isolation.ReadOnly...)
+	}
+	root, rel, err := fileHost.rooted(in.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +219,10 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		}
 		bounded, cancel := context.WithTimeout(ctx, time.Duration(h.Config.TimeoutSeconds)*time.Second)
 		defer cancel()
-		cmd := hostCommand(bounded, in.Path, in.Command)
+		cmd, err := isolatedCommand(bounded, h.Config, in.Path, in.Command)
+		if err != nil {
+			return nil, err
+		}
 		output := &limitedOutput{limit: h.Config.OutputBytes}
 		cmd.Stdout = output
 		cmd.Stderr = output
