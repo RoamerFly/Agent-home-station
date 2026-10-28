@@ -15,7 +15,7 @@ func (w *Worker) toolProgress(character *companion.Engine, input companion.Input
 		if w.persistErr != nil {
 			return false, w.persistErr
 		}
-		if text == "" || w.config.Options == nil || !w.config.Options.AcknowledgeTools || !character.Config.Permissions.ReplyText || input.Surf || input.Mode == "proactive" || input.TaskID != "" {
+		if text == "" || w.config.Options == nil || !w.config.Options.AcknowledgeTools || !character.Config.Permissions.ReplyText || input.Surf || input.Mode == "proactive" {
 			return false, nil
 		}
 		if err := character.Claim(input); err != nil {

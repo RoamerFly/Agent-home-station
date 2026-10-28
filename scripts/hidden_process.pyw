@@ -39,12 +39,25 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--request')
     parser.add_argument('--watch-yue', action='store_true')
+    parser.add_argument('--keep-wsl', action='store_true')
+    parser.add_argument('--distro')
+    parser.add_argument('--linux-user')
+    parser.add_argument('--marker')
     parser.add_argument('--workspace')
     parser.add_argument('--project')
     parser.add_argument('--shell')
     args = parser.parse_args()
     if args.request:
         return request_launch(args.request)
+    if args.keep_wsl:
+        root = Path(args.workspace).resolve()
+        logs = root / 'temp/launcher'
+        logs.mkdir(parents=True, exist_ok=True)
+        command = ['wsl.exe', '-d', args.distro, '-u', args.linux_user, '--', '/bin/bash', '-c', 'exec -a '+args.marker+' sleep infinity']
+        # Called only by our manual task with a generated hex workspace marker.
+        if not args.marker.startswith('wechat-agent-anchor-') or not all(c in '0123456789abcdefABCDEF' for c in args.marker[len('wechat-agent-anchor-'):]):
+            parser.error('invalid workspace marker')
+        return spawn(command, root, logs/'wsl-anchor.stdout.log', logs/'wsl-anchor.stderr.log').wait()
     if args.watch_yue:
         root = Path(args.workspace).resolve()
         logs = root / 'temp'

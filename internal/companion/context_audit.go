@@ -25,7 +25,7 @@ type ContextReport struct {
 }
 
 func inspectContext(system string, turns []map[string]string, tools []mcptools.Tool) ContextReport {
-	r := ContextReport{SystemBytes: len(system), InputBytes: len(system), ActiveTools: len(tools), MusicPolicy: strings.Contains(system, "【歌曲演唱策略 v2】")}
+	r := ContextReport{SystemBytes: len(system), InputBytes: len(system), ActiveTools: len(tools), MusicPolicy: strings.Contains(system, "【歌曲演唱策略 v3】")}
 	for _, turn := range turns {
 		r.InputBytes += len(turn["content"])
 		var packet struct {

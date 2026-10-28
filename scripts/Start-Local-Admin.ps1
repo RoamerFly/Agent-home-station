@@ -16,9 +16,9 @@ $marker='wechat-agent-anchor-'+$identity
 # Windows boot task. Linux server deployments use their normal service manager.
 $existing=@(Get-CimInstance Win32_Process | Where-Object {$_.Name -eq 'wsl.exe' -and $_.CommandLine -like ('*'+$marker+'*')})
 if(-not $existing.Count){
- $anchor=& (Join-Path $PSScriptRoot 'Start-HiddenProcess.ps1') -FilePath (Get-Command wsl.exe).Source -Arguments @('-d',$Distro,'-u',$LinuxUser,'--','/bin/bash','-c',('exec -a '+$marker+' sleep infinity'))
+ $anchor=& (Join-Path $PSScriptRoot 'Start-Local-Anchor.ps1') -Distro $Distro -LinuxUser $LinuxUser -Marker $marker
  New-Item -ItemType Directory -Path (Join-Path $workspace 'temp') -Force | Out-Null
- @{pid=$anchor.pid;marker=$marker;distro=$Distro;started=(Get-Date).ToUniversalTime().ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'temp/local-admin-anchor.json') -Encoding utf8
+ @{task=$anchor.task;marker=$marker;distro=$Distro;started=(Get-Date).ToUniversalTime().ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'temp/local-admin-anchor.json') -Encoding utf8
 }
 & (Join-Path $PSScriptRoot 'Invoke-HiddenNative.ps1') -FilePath (Get-Command wsl.exe).Source -Arguments @('-d',$Distro,'-u',$LinuxUser,'--','systemctl','--user','start','wechat-bot-native.service','wechat-bot-web.service')
 if($LASTEXITCODE -ne 0){throw 'WSL user services did not start; existing profile was not changed.'}

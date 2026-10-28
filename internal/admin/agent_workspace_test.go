@@ -9,6 +9,29 @@ import (
 	"wechat-bot/internal/companion"
 )
 
+func TestRVCGuideMigrationPreservesCustomPathsAndReplacesOldDefault(t *testing.T) {
+	f := setup(t)
+	d, err := f.manager.workspace.Read("shared", "project-yue.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := "# 私有路径备注\nWindows runtime stays here\n所有创作和参考翻唱均经过YuE；默认native女声，只有明确要求自己的角色声线才使用RVC。\n"
+	if _, err = f.manager.workspace.Write("shared", "project-yue.md", old, d.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.manager.initializeWorkspace(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = f.manager.workspace.Read("shared", "project-yue.md")
+	if err != nil || !strings.Contains(d.Content, "Windows runtime stays here") || !strings.Contains(d.Content, "原曲翻唱默认music_rvc_start") || strings.Contains(d.Content, "所有创作和参考翻唱均经过YuE") {
+		t.Fatal(d, err)
+	}
+	rvc, err := f.manager.workspace.Read("shared", "project-rvc.md")
+	if err != nil || !strings.Contains(rvc.Content, "scripts/singing_voice.py") {
+		t.Fatal(rvc, err)
+	}
+}
+
 func TestWorkspaceToolsScopeConflictAndSharedWriteAuthority(t *testing.T) {
 	f, p := trustedAgent(t)
 	c := f.manager.config

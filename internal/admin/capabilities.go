@@ -36,7 +36,7 @@ func (p *permittedTools) capabilities() []capabilityAdapter {
 		{"mobile", p.mobileTools, func(n string) bool { return strings.HasPrefix(n, "device_") }, p.callMobile},
 		{"plugin-jobs", p.pluginTaskTools, namedTools("plugin_job_status", "plugin_job_cancel"), p.callPluginJob},
 		{"bailian-speech", p.speechTools, namedTools("speech_synthesize", "music_generate"), p.callSpeech},
-		{"yue", p.yueTools, namedTools("music_sampling_options", "music_local_start", "music_local_status", "music_reference_inspect", "music_lyrics_compare", "music_service_status"), p.callYuE},
+		{"yue", p.yueTools, namedTools("music_rvc_start", "music_sampling_options", "music_local_start", "music_local_status", "music_reference_inspect", "music_lyrics_compare", "music_service_status"), p.callYuE},
 		{"run-output", p.outputTools, namedTools("tool_output_read"), p.readToolOutput},
 	}
 }

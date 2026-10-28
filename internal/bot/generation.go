@@ -33,6 +33,9 @@ type generationRequest struct {
 	done  chan error
 }
 type generationJob struct {
+	toolInFlight       bool
+	yieldRequested     bool
+	yieldMessageID     string
 	session            *agentrun.Session
 	observationPending bool
 	cancelEvidence     string
@@ -198,6 +201,19 @@ func (w *Worker) noticeGenerationMessage(m linuxnative.Message, eligible bool) {
 	}
 	j := w.generation.jobs[m.ThreadID]
 	if j == nil || j.input.TraceID == m.ID {
+		return
+	}
+	// A saved worker result is background work, not the live user's turn.
+	// Yield at a tool boundary instead of keeping a new question queued for
+	// the entire repair/tool loop. The actual external process is untouched.
+	if j.input.TaskID != "" && eligible {
+		if !j.yieldRequested {
+			j.yieldRequested, j.yieldMessageID = true, m.ID
+			w.activity(Record{Event: "background_turn_yield_requested", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, RelatedMessageID: j.input.TraceID, Reason: "new_message_has_priority", Status: "queued"})
+		}
+		if !j.toolInFlight {
+			j.cancel()
+		}
 		return
 	}
 	w.offerGenerationFollowup(j, m, eligible)
@@ -374,6 +390,18 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 	if s.jobs[r.input.Thread] != r.job {
 		return
 	}
+	if r.job.yieldRequested {
+		delete(s.jobs, r.input.Thread)
+		if stop := s.reviews["generation-"+r.input.TraceID]; stop != nil {
+			stop()
+			delete(s.reviews, "generation-"+r.input.TraceID)
+		}
+		if w.config.AgentTaskDone != nil {
+			w.config.AgentTaskDone(r.input, "yielded_to_message")
+		}
+		w.activity(Record{Event: "background_turn_yielded", Category: "decision", ThreadID: r.input.Thread, MessageID: r.input.TraceID, RelatedMessageID: r.job.yieldMessageID, Reason: "saved_task_retained_for_continuation", Status: "waiting"})
+		return
+	}
 	if r.job.session == nil && r.err == nil && !r.job.cancelled && len(r.job.updates) > 0 && r.engine.Config.ConversationConfig().RecheckOnMessage && r.job.reviewed != generationFingerprint(r.job) {
 		s.ready = append(s.ready, r)
 		return
@@ -496,6 +524,11 @@ func (t *generationTools) RetainToolOutput(ctx context.Context, name, result str
 }
 func (t *generationTools) Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	if err := t.scheduler.call(ctx, func() error {
+		if t.job.yieldRequested {
+			t.job.cancel()
+			return context.Canceled
+		}
+		t.job.toolInFlight = true
 		t.job.toolStarted = true
 		if name == "web_audio_search" {
 			t.job.resourceKind = "voice"
@@ -512,7 +545,17 @@ func (t *generationTools) Call(ctx context.Context, name string, args json.RawMe
 	}); err != nil {
 		return "", err
 	}
-	return t.inner.Call(ctx, name, args)
+	result, err := t.inner.Call(ctx, name, args)
+	// Finish the current tool and its durable effect ledger before cancelling
+	// reasoning. Do not cancel a running command merely to answer a new chat.
+	_ = t.scheduler.call(ctx, func() error {
+		t.job.toolInFlight = false
+		if t.job.yieldRequested {
+			t.job.cancel()
+		}
+		return nil
+	})
+	return result, err
 }
 func (t *generationTools) AgentContext(ctx context.Context) string {
 	if x, ok := t.inner.(interface{ AgentContext(context.Context) string }); ok {
@@ -557,7 +600,7 @@ func (w *Worker) generationProgress(ctx context.Context, s *generationScheduler,
 		if w.persistErr != nil {
 			return w.persistErr
 		}
-		if text == "" || w.config.Options == nil || !w.config.Options.AcknowledgeTools || !c.Config.Permissions.ReplyText || in.TaskID != "" {
+		if text == "" || w.config.Options == nil || !w.config.Options.AcknowledgeTools || !c.Config.Permissions.ReplyText {
 			return nil
 		}
 		allowed = c.Claim(in) == nil

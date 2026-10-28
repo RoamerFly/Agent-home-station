@@ -227,6 +227,18 @@ func newAgentControl(dir string) (*agentControl, error) {
 		if t.State == "running" {
 			t.State = "needs_review"
 			t.LastResult = "运行中断，需在管理页恢复；不会自动重放外部操作"
+			if t.ProcessID != "" || t.MusicJob != "" || t.DeviceTask != "" {
+				t.State = "waiting"
+				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
+				t.LastResult = "服务恢复后查询原任务编号和真实输出，继续交给模型处理；不重新提交原操作"
+			}
+			a.data.Tasks[id] = t
+			changed = true
+		}
+		if t.State == "needs_review" && t.LastResult == "运行中断，需在管理页恢复；不会自动重放外部操作" && (t.ProcessID != "" || t.MusicJob != "" || t.DeviceTask != "") {
+			t.State = "waiting"
+			t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
+			t.LastResult = "恢复原任务的只读状态核验；不重新提交已执行操作"
 			a.data.Tasks[id] = t
 			changed = true
 		}
@@ -460,6 +472,13 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 	for _, t := range m.agent.list(in.Account, in.Thread) {
 		if t.ID == in.TaskID && t.State == "running" {
+			if state == "yielded_to_message" {
+				t.State = "waiting"
+				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
+				t.LastResult = "后台思考已让位于新消息；原程序、工具结果和行动证据保留。稍后读取真实状态继续，不重新启动已执行操作"
+				_, _ = m.agent.updateSnapshot(t)
+				return
+			}
 			if t.OwnerRequest && state == "reply" {
 				for _, child := range m.agent.list(in.Account, in.Thread) {
 					if child.ParentID == t.ID && child.State != "cancelled" && child.State != "needs_review" {

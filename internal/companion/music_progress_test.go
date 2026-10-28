@@ -18,7 +18,7 @@ func (m *nativeMusicProgressModel) ChatFunctions(context.Context, string, []map[
 		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"music_local_start"}}`, nil
 	}
 	if m.step == 2 {
-		return `{"action":"tool","tool":"music_local_start","arguments":{"style":"folk","lyrics":"[verse]雨过天晴"}}`, nil
+		return `{"action":"tool","tool":"music_local_start","progress":"我开始做这首忧郁风的小曲啦～","arguments":{"style":"folk","lyrics":"[verse]雨过天晴"}}`, nil
 	}
 	return `{"action":"reply","messages":["正在做啦" ]}`, nil
 }
@@ -42,9 +42,6 @@ func TestNativeMusicHasAcknowledgementBeforeGenerationAfterToolDiscovery(t *test
 		engine.Tools = &nativeMusicProgressTools{before: func() {
 			calls++
 			want := 1
-			if task {
-				want = 0
-			}
 			if acks != want {
 				t.Fatal("acknowledgement not ordered before actual work", acks, want)
 			}
@@ -56,13 +53,16 @@ func TestNativeMusicHasAcknowledgementBeforeGenerationAfterToolDiscovery(t *test
 		}
 		ctx := WithProgress(context.Background(), func(_ context.Context, text string) (bool, error) {
 			if text != "" {
+				if text != "我开始做这首忧郁风的小曲啦～" {
+					t.Fatal("program replaced model-authored progress", text)
+				}
 				acks++
 				return true, nil
 			}
 			return false, nil
 		})
 		d, err := engine.Respond(ctx, in)
-		if err != nil || d.Action != "reply" || calls != 1 || (!task && acks != 1) || (task && acks != 0) {
+		if err != nil || d.Action != "reply" || calls != 1 || acks != 1 {
 			t.Fatal("ack missing or repeated", err, d, calls, acks)
 		}
 	}

@@ -61,6 +61,37 @@ func TestProgressFollowsModelChoicePrecedesToolAndNeverLeaksIntoPreview(t *testi
 	}
 }
 
+func TestSavedTaskProgressReachesHandlerAndMissingProgressStaysEmpty(t *testing.T) {
+	for _, progress := range []string{"我去核对刚才的实际结果～", ""} {
+		order := []string{}
+		tools := &orderedTool{order: &order}
+		call, _ := json.Marshal(map[string]any{"action": "tool", "tool": "web_search", "progress": progress, "arguments": map[string]string{"query": "public topic"}})
+		model := &sequenceModel{answers: []string{string(call), `{"action":"silent","messages":[]}`}}
+		store, _ := NewStore(t.TempDir())
+		e, _ := New(enabledConfig(), store, model, "role")
+		e.Tools = tools
+		e.MaxToolCalls = 2
+		ctx := WithProgress(context.Background(), func(_ context.Context, text string) (bool, error) {
+			if text != "" {
+				order = append(order, "progress:"+text)
+				return true, nil
+			}
+			return false, nil
+		})
+		_, err := e.Respond(ctx, Input{Channel: "test", Account: "a", Thread: "friend", Sender: "owner", Mode: "direct", TaskID: "saved-task", TraceID: "task-result", Text: "检查原任务"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "tool:web_search"
+		if progress != "" {
+			want = "progress:" + progress + "," + want
+		}
+		if strings.Join(order, ",") != want {
+			t.Fatal("continuation progress suppressed or canned text invented", order, want)
+		}
+	}
+}
+
 func TestGuessedDownloadURLIsNotExecutedAndDuplicateCallsAreNotReplayed(t *testing.T) {
 	order := []string{}
 	tools := &orderedTool{order: &order}
