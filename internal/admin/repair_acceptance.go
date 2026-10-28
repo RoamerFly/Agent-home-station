@@ -5,13 +5,11 @@ package admin
 // WeChat delivery are used; fixture source and verification stay isolated.
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -90,14 +88,6 @@ type repairTestRun struct {
 	FollowupFailed bool              `json:"followup_baseline_failed"`
 }
 
-func fileHash(path string) string {
-	b, e := os.ReadFile(path)
-	if e != nil {
-		return ""
-	}
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:])
-}
 func (m *Manager) repairRunPath(id string) string {
 	return filepath.Join(m.dir, "repair-test-runs", id+".json")
 }
@@ -118,6 +108,9 @@ func (m *Manager) loadRepairRun(id string) (repairTestRun, error) {
 		return v, e
 	}
 	e = json.Unmarshal(b, &v)
+	if e == nil && (v.ID != id || !validRepairRun(v.ID) || v.Recipient == "") {
+		e = errors.New("测试记录身份无效，原文件保留")
+	}
 	return v, e
 }
 func (m *Manager) saveRepairRun(v repairTestRun) error {
@@ -129,18 +122,6 @@ func (m *Manager) saveRepairRun(v repairTestRun) error {
 		return e
 	}
 	return writePrivate(m.repairRunPath(v.ID), b)
-}
-func runFixtureChecks(ctx context.Context, project string) (int, string) {
-	cmd := exec.CommandContext(ctx, repairPython(), "-m", "unittest", "discover", "-s", "tests", "-v")
-	cmd.Dir = project
-	b, e := cmd.CombinedOutput()
-	if len(b) > 12000 {
-		b = b[len(b)-12000:]
-	}
-	if e != nil {
-		return 1, string(b)
-	}
-	return 0, string(b)
 }
 func repairPython() string {
 	if runtime.GOOS == "windows" {
@@ -166,31 +147,48 @@ func (m *Manager) startRepairRun(ctx context.Context, recipient string) (repairT
 	if !cfg.TasksEnabled || cfg.Host.Mode != "full" || !access.privileged() || !m.Config().Companion.Enabled || !m.Config().Companion.Permissions.ReplyText {
 		return v, errors.New("需要已配置的主人私聊、运行中的Agent及服务器执行权限；测试不会提升权限")
 	}
-	base := filepath.Join(m.dir, "agent-workspace")
-	authorized := false
-	for _, root := range cfg.Host.Roots {
-		rel, e := filepath.Rel(root, base)
-		if e == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel) {
-			authorized = true
-		}
+	if _, e := access.scopedHostConfig(json.RawMessage(`{}`)); e != nil {
+		return v, e
 	}
-	if !authorized {
-		return v, errors.New("测试工作目录不在现有授权根目录中")
+	conversation := access.executionContext().Conversation
+	base := filepath.Join(conversation, "scratch", "repair-tests")
+	anchor, e := os.OpenRoot(conversation)
+	if e != nil {
+		return v, e
+	}
+	defer anchor.Close()
+	if e = anchor.MkdirAll(filepath.Join("scratch", "repair-tests"), 0700); e != nil {
+		return v, e
 	}
 	v = repairTestRun{ID: randomToken(), Recipient: recipient, Stage: 1, TestHashes: map[string]string{}, InitialHashes: map[string]string{}}
-	v.Project = filepath.Join(base, "repair-tests", v.ID)
-	if e := os.MkdirAll(filepath.Join(v.Project, "tests"), 0700); e != nil {
+	v.Project = filepath.Join(base, v.ID)
+	parent, e := anchor.OpenRoot(filepath.Join("scratch", "repair-tests"))
+	if e != nil {
+		return v, e
+	}
+	defer parent.Close()
+	if e = parent.Mkdir(v.ID, 0700); e != nil {
+		return v, e
+	}
+	root, e := parent.OpenRoot(v.ID)
+	if e != nil {
+		return v, e
+	}
+	defer root.Close()
+	if e = root.Mkdir("tests", 0700); e != nil {
 		return v, e
 	}
 	for name, body := range map[string]string{"README.md": repairReadme, "shipping.py": repairSource, "receipt.py": repairReceipt, "tests/test_quote.py": repairChecks1} {
-		p := filepath.Join(v.Project, filepath.FromSlash(name))
-		if e := os.WriteFile(p, []byte(body), 0600); e != nil {
+		if e := createRepairFixture(root, name, body); e != nil {
 			return v, e
 		}
-		v.InitialHashes[name] = fileHash(p)
+		v.InitialHashes[name] = repairFileHash(root, name)
 	}
 	v.TestHashes["tests/test_quote.py"] = v.InitialHashes["tests/test_quote.py"]
-	code, _ := runFixtureChecks(ctx, v.Project)
+	code, _, e := m.runRepairProgram(ctx, v, "tests")
+	if e != nil {
+		return v, e
+	}
 	v.BaselineFailed = code != 0
 	if !v.BaselineFailed {
 		return v, errors.New("测试故障未复现，未安排修复")
@@ -304,16 +302,26 @@ func (s *Server) repairTestRoutes(mux *http.ServeMux) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
-		code, _ := runFixtureChecks(ctx, v.Project)
-		if code != 0 {
-			fail(w, 409, "第一轮验证尚未通过")
+		root, e := m.openRepairProject(v)
+		if e != nil {
+			fail(w, 400, "测试工作区不可执行；旧记录保留，请使用受管会话创建验收")
 			return
 		}
+		defer root.Close()
 		for name, hash := range v.TestHashes {
-			if fileHash(filepath.Join(v.Project, name)) != hash {
+			if repairFileHash(root, name) != hash {
 				fail(w, 409, "测试被修改，验收拒绝")
 				return
 			}
+		}
+		code, _, e := m.runRepairProgram(ctx, v, "tests")
+		if e != nil {
+			fail(w, 503, "隔离验收执行器未完成，未安排下一阶段")
+			return
+		}
+		if code != 0 {
+			fail(w, 409, "第一轮验证尚未通过")
+			return
 		}
 		for _, t := range m.agent.list(m.native.Account(), v.Recipient) {
 			if t.ID == v.TaskIDs[0] && t.State == "running" {
@@ -321,16 +329,20 @@ func (s *Server) repairTestRoutes(mux *http.ServeMux) {
 				return
 			}
 		}
-		path := filepath.Join(v.Project, "tests/test_receipt.py")
-		if e = os.WriteFile(path, []byte(repairChecks2), 0600); e != nil {
+		if e = createRepairFixture(root, "tests/test_receipt.py", repairChecks2); e != nil {
 			fail(w, 500, "测试文件写入失败")
 			return
 		}
-		v.TestHashes["tests/test_receipt.py"] = fileHash(path)
-		readme := filepath.Join(v.Project, "README.md")
-		f, e := os.OpenFile(readme, os.O_APPEND|os.O_WRONLY, 0600)
+		v.TestHashes["tests/test_receipt.py"] = repairFileHash(root, "tests/test_receipt.py")
+		f, e := root.OpenFile("README.md", os.O_APPEND|os.O_WRONLY|repairNonblockingFlag, 0600)
 		if e != nil {
 			fail(w, 500, "测试说明写入失败")
+			return
+		}
+		info, statErr := f.Stat()
+		if statErr != nil || !info.Mode().IsRegular() {
+			f.Close()
+			fail(w, 409, "测试说明不是普通文件，原文件保留")
 			return
 		}
 		_, e = f.WriteString("\n追问：receipt.describe(quote) 应返回 实付{total}元，保留两位小数，单位为元，不能把分值当成元。\n")
@@ -339,7 +351,11 @@ func (s *Server) repairTestRoutes(mux *http.ServeMux) {
 			fail(w, 500, "测试说明写入失败")
 			return
 		}
-		code, _ = runFixtureChecks(ctx, v.Project)
+		code, _, e = m.runRepairProgram(ctx, v, "tests")
+		if e != nil {
+			fail(w, 503, "隔离验收执行器未完成，原阶段保留")
+			return
+		}
 		v.FollowupFailed = code != 0
 		v.Stage = 2
 		task := m.repairTask(v)
@@ -360,15 +376,24 @@ func (s *Server) repairTestRoutes(mux *http.ServeMux) {
 			fail(w, 404, "测试不存在")
 			return
 		}
+		root, e := m.openRepairProject(v)
+		if e != nil {
+			fail(w, 400, "测试工作区不可执行；旧记录保留，请使用受管会话创建验收")
+			return
+		}
+		defer root.Close()
 		unchanged := true
 		for name, hash := range v.TestHashes {
-			unchanged = unchanged && fileHash(filepath.Join(v.Project, name)) == hash
+			unchanged = unchanged && repairFileHash(root, name) == hash
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
-		code, output := runFixtureChecks(ctx, v.Project)
-		cmd := exec.CommandContext(ctx, repairPython(), "-c", repairGrader, v.Project, string(rune('0'+v.Stage)))
-		b, gradeErr := cmd.CombinedOutput()
+		code, output, runErr := m.runRepairProgram(ctx, v, "tests")
+		if runErr != nil {
+			fail(w, 503, "隔离验收执行器未完成，未生成通过结论")
+			return
+		}
+		gradeCode, graderOutput, gradeErr := m.runRepairProgram(ctx, v, string(rune('0'+v.Stage)))
 		states := []map[string]any{}
 		for _, t := range m.agent.list(m.native.Account(), v.Recipient) {
 			for _, id := range v.TaskIDs {
@@ -379,10 +404,10 @@ func (s *Server) repairTestRoutes(mux *http.ServeMux) {
 		}
 		sourceChanged := false
 		for _, name := range []string{"shipping.py", "receipt.py"} {
-			sourceChanged = sourceChanged || fileHash(filepath.Join(v.Project, name)) != v.InitialHashes[name]
+			sourceChanged = sourceChanged || repairFileHash(root, name) != v.InitialHashes[name]
 		}
-		if len(b) > 1000 {
-			b = b[len(b)-1000:]
+		if len(graderOutput) > 1000 {
+			graderOutput = graderOutput[len(graderOutput)-1000:]
 		}
 		tools := []string{}
 		for _, op := range m.agent.operations() {
@@ -391,6 +416,6 @@ func (s *Server) repairTestRoutes(mux *http.ServeMux) {
 			}
 		}
 		note, _ := m.workspace.Read(companion.ScopeID("wechat", m.native.Account(), v.Recipient), "REPAIR-TEST-"+v.ID+".md")
-		respond(w, 200, map[string]any{"run": v, "tests_passed": code == 0, "tests_unchanged": unchanged, "source_changed": sourceChanged, "independent_grader_passed": gradeErr == nil, "grader_output": string(b), "test_output": output, "tasks": states, "observed_project_tools": tools, "memory_saved": note.Revision != "", "execution": "production_agent_task", "inbound": "synthetic_authenticated_admin_request", "wechat_delivery": "inspect_message_receipts_separately"})
+		respond(w, 200, map[string]any{"run": v, "tests_passed": code == 0, "tests_unchanged": unchanged, "source_changed": sourceChanged, "independent_grader_passed": gradeErr == nil && gradeCode == 0, "grader_output": graderOutput, "test_output": output, "tasks": states, "observed_project_tools": tools, "memory_saved": note.Revision != "", "execution": "production_agent_task", "system_isolated": true, "inbound": "synthetic_authenticated_admin_request", "wechat_delivery": "inspect_message_receipts_separately"})
 	}))
 }

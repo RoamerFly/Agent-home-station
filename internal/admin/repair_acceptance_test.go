@@ -31,6 +31,7 @@ func TestRepairAcceptanceRequiresAdminAndExistingOwnerAuthority(t *testing.T) {
 	}
 }
 func TestRepairAcceptanceFixturesFollowupAndIndependentGrader(t *testing.T) {
+	requireRepairSandbox(t)
 	if _, e := exec.LookPath(repairPython()); e != nil {
 		t.Skip("Python required for acceptance fixture")
 	}
@@ -40,7 +41,6 @@ func TestRepairAcceptanceFixturesFollowupAndIndependentGrader(t *testing.T) {
 	f.manager.mu.Unlock()
 	c := f.manager.agent.config()
 	c.Host.Mode = "full"
-	c.Host.Roots = append(c.Host.Roots, filepath.Join(f.manager.dir, "agent-workspace"))
 	if e := f.manager.agent.save(c); e != nil {
 		t.Fatal(e)
 	}
