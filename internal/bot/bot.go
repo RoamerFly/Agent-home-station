@@ -32,6 +32,7 @@ type mediaSender interface {
 }
 type Config struct {
 	MediaSeedSettled  func(string, string, linuxnative.ToolStatus) error
+	MediaSeedReceipt  func(string, string) (linuxnative.ToolStatus, bool)
 	BacklogSettled    func(string, string, []string, string)
 	AuthorizeThread   func(context.Context, string) (bool, error)
 	ReportFailure     func(companion.Input, string) error

@@ -308,6 +308,7 @@ func (m *Manager) managedLayoutStatus() map[string]any {
 }
 
 func (s *Server) managedWorkspaceRoutes(mux *http.ServeMux) {
+	s.crossMediaRoutes(mux)
 	mux.HandleFunc("POST /api/agent/file-read", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Message string `json:"message_id"`

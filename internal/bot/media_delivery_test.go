@@ -23,6 +23,7 @@ func TestVoiceAndFileSerializeAndPersistRandomGap(t *testing.T) {
 	}
 	first, second := w.runtime.Media[0], w.runtime.Media[1]
 	n.status.State = "accepted"
+	n.status.ServerID = "verified-pacing-receipt"
 	first.Next = time.Time{}
 	w.reconcileMedia(context.Background())
 	gap := second.NotBefore.Sub(first.CompletedAt)
@@ -375,5 +376,67 @@ func TestCrossSeedsRestartTargetAndStrictBatchOrder(t *testing.T) {
 	w.reconcileMedia(context.Background())
 	if n.sends != 1 {
 		t.Fatal("revoked owner sent")
+	}
+}
+
+func TestCrossReceiptJournalOverridesStaleWorkerWithoutNativeResend(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread = "target@chatroom"
+	w.allowed[in.Thread] = true
+	seed := MediaSeed{Key: "cross-key", Trace: "cross-batch", Input: in, Requester: "owner", OriginThread: "owner", SourceID: "cross-source", Media: companion.GeneratedMedia{Kind: "voice", Title: "part.wav"}}
+	w.config.MediaSeeds = func() []MediaSeed { return []MediaSeed{seed} }
+	w.config.MediaSeedAllowed = func(s MediaSeed) bool { return s.Trace == seed.Trace && s.SourceID == seed.SourceID }
+	w.adoptMediaSeeds()
+	// A durable accepted receipt exists, while the checkpoint is still prepared.
+	// Do not depend on native remembering its key or permission staying enabled.
+	w.config.MediaSeedAllowed = func(MediaSeed) bool { return false }
+	w.config.MediaSeedReceipt = func(trace, key string) (linuxnative.ToolStatus, bool) {
+		return linuxnative.ToolStatus{ID: "verified-job", ThreadID: in.Thread, SourceID: seed.SourceID, State: "accepted", ServerID: "verified-receipt"}, trace == seed.Trace && key == seed.Key
+	}
+	settled := 0
+	w.config.MediaSeedSettled = func(trace, key string, s linuxnative.ToolStatus) error { settled++; return nil }
+	w.reconcileMedia(context.Background())
+	d := w.runtime.Media[0]
+	if n.sends != 0 || n.retries != 0 || n.cancels != 0 || d.State != "accepted" || !d.CrossSettled || settled != 1 {
+		t.Fatal("receipt fact lost across checkpoint", d, n.sends, n.retries, n.cancels, settled)
+	}
+	if e := w.loadRuntime("server-1"); e != nil {
+		t.Fatal(e)
+	}
+	w.reconcileMedia(context.Background())
+	if n.sends != 0 || settled != 1 {
+		t.Fatal("restart replayed settled receipt")
+	}
+}
+
+func TestAcceptedStatusWithoutReceiptDoesNotCompleteMedia(t *testing.T) {
+	w, n, c, in := mediaWorker(t)
+	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "source", Kind: "voice", Title: "song.wav"})
+	d := w.runtime.Media[0]
+	n.status.State = "accepted"
+	n.status.ServerID = ""
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if d.State == "accepted" || d.Reason != "media_receipt_id_missing" {
+		t.Fatal("unverified accepted status treated as delivered", d)
+	}
+	n.status.ServerID = "late-receipt"
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if d.State != "accepted" || n.sends != 1 {
+		t.Fatal("late receipt lost or duplicate send", d, n.sends)
+	}
+}
+
+func TestCompleteChunkReceiptsNormalizeAcceptedParentStatus(t *testing.T) {
+	w, n, c, in := mediaWorker(t)
+	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "source", Kind: "voice", Title: "song.wav"})
+	d := w.runtime.Media[0]
+	n.status.State = "running"
+	n.status.VoiceChunks = []linuxnative.VoiceChunkStatus{{Index: 1, State: "accepted", HasReceipt: true, ServerID: "chunk-1"}, {Index: 2, State: "accepted", HasReceipt: true, ServerID: "chunk-2"}}
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if d.State != "accepted" || d.Status.State != "accepted" || d.Status.ServerID != "chunk-2" || n.sends != 1 {
+		t.Fatal("complete voice receipts not normalized", d, n.sends)
 	}
 }

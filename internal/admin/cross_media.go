@@ -39,6 +39,51 @@ type crossMediaBatch struct {
 	Parts    []bot.MediaSeed                   `json:"parts"`
 }
 
+func validCrossReceipt(batch crossMediaBatch, part bot.MediaSeed, status linuxnative.ToolStatus) bool {
+	return status.State == "accepted" && status.ServerID != "" && status.ThreadID == batch.Target && (status.SourceID == "" || status.SourceID == part.SourceID)
+}
+
+// The durable batch is the canonical route. A separately checkpointed worker
+// queue must never override account, origin, target, or part identity.
+func validateCrossBatch(batch crossMediaBatch, account string) error {
+	if !validID(batch.ID) || batch.Account != account || batch.Origin == "" || batch.Source == "" || batch.Target == "" || batch.Sender == "" || batch.Asset == "" || len(batch.Parts) == 0 {
+		return errors.New("invalid_cross_media_journal")
+	}
+	keys := map[string]bool{}
+	for _, p := range batch.Parts {
+		source := p.SourceThread
+		if source == "" {
+			source = p.OriginThread
+		}
+		if !validID(p.Key) || keys[p.Key] || p.SourceID == "" || p.Trace != batch.ID || p.Input.TraceID != "" && p.Input.TraceID != batch.ID || p.Input.Account != batch.Account || p.Input.Thread != batch.Target || p.OriginThread != batch.Origin || source != batch.Source || p.Requester != batch.Sender || p.OriginTask != batch.TaskID || !contains([]string{"voice", "file", "image", "video"}, p.Media.Kind) {
+			return errors.New("cross_media_part_identity_mismatch")
+		}
+		keys[p.Key] = true
+		if status, ok := batch.Receipts[p.Key]; ok && !validCrossReceipt(batch, p, status) {
+			return errors.New("cross_media_receipt_identity_mismatch")
+		}
+	}
+	for key := range batch.Receipts {
+		if !keys[key] {
+			return errors.New("cross_media_receipt_unknown_part")
+		}
+	}
+	return nil
+}
+
+func crossBatchAccepted(batch crossMediaBatch) bool {
+	if len(batch.Parts) == 0 {
+		return false
+	}
+	for _, part := range batch.Parts {
+		status, ok := batch.Receipts[part.Key]
+		if !ok || !validCrossReceipt(batch, part, status) {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *permittedTools) crossAllowed(source, target string) bool {
 	c := p.manager.Config()
 	return p.privileged() && p.manager.agent.config().CrossConversation && permittedRecipient(c.Config, source) && permittedRecipient(c.Config, target)
@@ -206,6 +251,9 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 	})
 }
 func (m *Manager) queueCrossBatch(batch crossMediaBatch) error {
+	if e := validateCrossBatch(batch, m.native.Account()); e != nil {
+		return e
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.mediaSeeds) == 0 {
@@ -213,20 +261,27 @@ func (m *Manager) queueCrossBatch(batch crossMediaBatch) error {
 			if e = json.Unmarshal(b, &m.mediaSeeds); e != nil {
 				return e
 			}
+		} else if !os.IsNotExist(e) {
+			return e
 		}
 	}
-	next := append([]bot.MediaSeed{}, m.mediaSeeds...)
+	keys := map[string]bool{}
 	for _, seed := range batch.Parts {
-		if status, ok := batch.Receipts[seed.Key]; ok && status.State == "accepted" && status.ServerID != "" && status.ThreadID == batch.Target {
+		keys[seed.Key] = true
+	}
+	next := []bot.MediaSeed{}
+	for _, old := range m.mediaSeeds {
+		if old.Trace != batch.ID && !keys[old.Key] {
+			next = append(next, old)
+		}
+	}
+	for _, seed := range batch.Parts {
+		if status, ok := batch.Receipts[seed.Key]; ok && validCrossReceipt(batch, seed, status) {
 			continue
 		}
-		found := false
-		for _, old := range next {
-			found = found || old.Key == seed.Key
-		}
-		if !found {
-			next = append(next, seed)
-		}
+		seed.Input.TraceID = seed.Trace
+		seed.Media.SourceID = seed.SourceID
+		next = append(next, seed)
 	}
 	b, e := json.Marshal(next)
 	if e != nil {
@@ -264,26 +319,45 @@ func (m *Manager) restoreCrossMedia() error {
 			return e
 		}
 		var batch crossMediaBatch
-		if json.Unmarshal(data, &batch) != nil || batch.ID != id || batch.Account != m.native.Account() {
-			return errors.New("invalid_cross_media_journal")
+		if json.Unmarshal(data, &batch) != nil || batch.ID != id {
+			if e = m.blockCrossRecovery(id, "invalid_cross_media_journal"); e != nil {
+				return e
+			}
+			continue
+		}
+		if e = validateCrossBatch(batch, m.native.Account()); e != nil {
+			if e = m.blockCrossRecovery(id, e.Error()); e != nil {
+				return e
+			}
+			continue
 		}
 		batches = append(batches, batch)
 	}
 	sort.SliceStable(batches, func(i, j int) bool { return batches[i].Created.Before(batches[j].Created) })
 	for _, batch := range batches {
-		if len(batch.Parts) == 0 || !m.crossSeedAllowed(batch.Parts[0]) {
+		if crossBatchAccepted(batch) {
+			// Receipt commit can precede queue and parent-task checkpoints.
+			// Complete that handoff without submitting any part again, even if
+			// sending permission was subsequently revoked.
+			if err = m.queueCrossBatch(batch); err != nil {
+				return err
+			}
+			if err = m.settleCrossTask(batch); err != nil {
+				return err
+			}
 			continue
 		}
-		pending := false
-		for _, part := range batch.Parts {
-			status, ok := batch.Receipts[part.Key]
-			pending = pending || !ok || status.State != "accepted" || status.ServerID == "" || status.ThreadID != batch.Target
-		}
-		if !pending {
+		if !m.crossSeedAllowed(batch.Parts[0]) {
 			continue
 		}
 		if batch.TaskID != "" {
 			if err = m.bindCrossTask(batch); err != nil {
+				if err.Error() == "cross_task_scope_mismatch" {
+					if err = m.blockCrossRecovery(batch.ID, "cross_task_scope_mismatch"); err != nil {
+						return err
+					}
+					continue
+				}
 				return err
 			}
 		}
@@ -301,6 +375,9 @@ func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (strin
 	var batch crossMediaBatch
 	if json.Unmarshal(b, &batch) != nil || batch.Account != p.trace.Account || batch.Origin != p.trace.Thread || batch.Sender != p.trace.Sender || !p.crossAllowed(batch.Source, batch.Target) {
 		return "", toolInputError("cross_media_scope_mismatch")
+	}
+	if e = validateCrossBatch(batch, p.manager.native.Account()); e != nil {
+		return "", e
 	}
 	native, ok := p.manager.native.(nativeTools)
 	if !ok {
@@ -335,11 +412,25 @@ func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (strin
 }
 
 func (m *Manager) crossSeedAllowed(seed bot.MediaSeed) bool {
-	c := m.agent.config()
+	batch, e := m.readCrossBatch(seed.Trace)
+	if e != nil {
+		return false
+	}
+	found := false
 	source := seed.SourceThread
 	if source == "" {
 		source = seed.OriginThread
 	}
+	for _, p := range batch.Parts {
+		if p.Key == seed.Key && p.SourceID == seed.SourceID && p.Input.Account == seed.Input.Account && p.Input.Thread == seed.Input.Thread && p.OriginThread == seed.OriginThread && p.Requester == seed.Requester && p.OriginTask == seed.OriginTask && source == batch.Source {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	c := m.agent.config()
 	if seed.OriginTask != "" {
 		t, ok := m.agent.lookupTask(seed.OriginTask, m.native.Account(), seed.OriginThread)
 		if !ok || t.State == "cancelled" {
@@ -347,6 +438,67 @@ func (m *Manager) crossSeedAllowed(seed bot.MediaSeed) bool {
 		}
 	}
 	return c.Enabled && c.CrossConversation && seed.Input.Account == m.native.Account() && contains(c.OwnerIDs, seed.Requester) && c.allowsPrivilegedThread(seed.OriginThread) && permittedRecipient(m.Config().Config, seed.OriginThread) && permittedRecipient(m.Config().Config, source) && permittedRecipient(m.Config().Config, seed.Input.Thread)
+}
+
+func (m *Manager) blockCrossRecovery(id, reason string) error {
+	// Preserve the original journal for inspection/repair. Remove only this
+	// batch's adoption seeds; worker checkpoints also revalidate against it.
+	m.mu.Lock()
+	if len(m.mediaSeeds) == 0 {
+		data, e := os.ReadFile(filepath.Join(m.dir, "media-recovery.json"))
+		if e == nil {
+			if e = json.Unmarshal(data, &m.mediaSeeds); e != nil {
+				m.mu.Unlock()
+				return e
+			}
+		} else if !os.IsNotExist(e) {
+			m.mu.Unlock()
+			return e
+		}
+	}
+	remaining := []bot.MediaSeed{}
+	for _, seed := range m.mediaSeeds {
+		if seed.Trace != id {
+			remaining = append(remaining, seed)
+		}
+	}
+	if len(remaining) != len(m.mediaSeeds) {
+		data, _ := json.Marshal(remaining)
+		if e := writePrivate(filepath.Join(m.dir, "media-recovery.json"), data); e != nil {
+			m.mu.Unlock()
+			return e
+		}
+		m.mediaSeeds = remaining
+	}
+	m.mu.Unlock()
+	m.record(bot.Record{Event: "cross_media_recovery_blocked", Category: "error", Status: "needs_review", MessageID: id, Reason: reason, ToolCode: reason, Origin: "agent"})
+	return nil
+}
+
+func (m *Manager) readCrossBatch(id string) (crossMediaBatch, error) {
+	var batch crossMediaBatch
+	if !validID(id) {
+		return batch, errors.New("invalid_cross_media_identity")
+	}
+	file := filepath.Join(m.dir, "cross-media", id+".json")
+	stat, e := os.Lstat(file)
+	if e != nil || !stat.Mode().IsRegular() {
+		return batch, errors.New("cross_media_journal_unavailable")
+	}
+	data, e := os.ReadFile(file)
+	if e != nil || json.Unmarshal(data, &batch) != nil || batch.ID != id {
+		return batch, errors.New("invalid_cross_media_journal")
+	}
+	return batch, validateCrossBatch(batch, m.native.Account())
+}
+
+func (m *Manager) crossPartReceipt(id, key string) (linuxnative.ToolStatus, bool) {
+	batch, e := m.readCrossBatch(id)
+	if e != nil {
+		return linuxnative.ToolStatus{}, false
+	}
+	status, ok := batch.Receipts[key]
+	return status, ok
 }
 
 func (m *Manager) bindCrossTask(batch crossMediaBatch) error {
@@ -378,6 +530,9 @@ func (m *Manager) settleCrossMediaPart(id, key string, status linuxnative.ToolSt
 	var batch crossMediaBatch
 	if json.Unmarshal(b, &batch) != nil || batch.Account != m.native.Account() || batch.ID != id {
 		return errors.New("cross_batch_account_mismatch")
+	}
+	if e = validateCrossBatch(batch, m.native.Account()); e != nil {
+		return e
 	}
 	found := false
 	for _, part := range batch.Parts {
@@ -414,14 +569,19 @@ func (m *Manager) settleCrossMediaPart(id, key string, status linuxnative.ToolSt
 		}
 		m.mediaSeeds = remaining
 	}
-	if batch.TaskID != "" && len(batch.Receipts) == len(batch.Parts) {
+	return m.settleCrossTask(batch)
+}
+
+func (m *Manager) settleCrossTask(batch crossMediaBatch) error {
+	if batch.TaskID != "" && crossBatchAccepted(batch) {
 		a := m.agent
 		a.mu.Lock()
 		t, ok := a.data.Tasks[batch.TaskID]
-		if ok && t.Account == batch.Account && t.Thread == batch.Origin {
+		var e error
+		if ok && t.Account == batch.Account && t.Thread == batch.Origin && t.Sender == batch.Sender {
 			pending := []string{}
 			for _, op := range t.PendingOperations {
-				if op != id {
+				if op != batch.ID {
 					pending = append(pending, op)
 				}
 			}

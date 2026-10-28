@@ -2,6 +2,7 @@
  'use strict';const $=s=>document.querySelector(s),state={items:[],pending:null,busy:false,ready:false};
  const categories={received:'接收消息',sent:'发送消息',decision:'处理决定',tool:'工具调用',error:'异常与失败',system:'系统运行'};
  const stickerEvents={sticker_observation_unavailable:'表情包已接收，画面暂不可读'};
+ Object.assign(stickerEvents,{cross_media_recovery_blocked:'跨会话附件记录未通过校验，保留原记录待检查',cross_media_receipt_restored:'已按持久回执恢复附件投递状态'});
  Object.assign(stickerEvents,{asr_backend_fallback:'本地识别执行失败，按配置切换百炼',local_asr_failed:'本地音频识别执行异常'});
  Object.assign(stickerEvents,{shared_video_read_started:'正在打开原分享读取实际内容',shared_video_observation_unavailable:'分享实际内容未读取完成',shared_video_cache_unavailable:'实际内容已读取，原视频缓存未完成'});
  const events={message_queued:'消息已持久化排队',message_processed:'消息处理完成',media_understood:'媒体理解完成',delivery_waiting:'等待延迟核对',delivery_retry:'按退避策略补发',delivery_stopped:'停止补发',delivery_review:'模型复核补发文字',message_interrupted_after_send:'发送期间重启，待核查',message_received:'收到消息',message_sent:'发送消息',message_skipped:'未触发回复',message_processing:'正在处理',character_decision:'角色处理结果',model_failed:'模型调用失败',send_failed:'发送失败或结果不确定',manual_send_submitted:'手动发送已提交',manual_send_status:'手动发送状态更新',provider_configuration_error:'模型服务配置异常',configuration_saved:'配置已保存',bot_starting:'机器人正在启动',bot_resumed_saved_cursor:'机器人已恢复处理进度',reply_server_accepted:'微信已接受回复',character_silent:'旧版静默事件（未记录细分原因）'};

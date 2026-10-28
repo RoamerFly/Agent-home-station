@@ -37,6 +37,30 @@
    if(!(data.projects||[]).length)modal.body.textContent='尚未登记项目。请先安装所需插件，再登记其入口和使用说明。';
   }catch(e){if(modal.alive())modal.body.textContent=e.message}
  });
+ const mediaButton=document.createElement('button');mediaButton.type='button';mediaButton.className='secondary';mediaButton.textContent='附件投递';toolbar.append(mediaButton);
+ mediaButton.addEventListener('click',()=>{
+  const modal=window.WechatDialogs.open({title:'跨会话附件投递',subtitle:'查看当前账号的来源、目标与已保存回执，不会重发或重新生成。'}),results=document.createElement('div'),message=document.createElement('p'),more=document.createElement('button');
+  message.className='hint';message.setAttribute('role','status');more.type='button';more.className='secondary';more.textContent='继续查看';more.hidden=true;modal.body.append(message,results,more);let offset=0,busy=false;
+  const names={accepted:'微信已接受',queued:'排队或等待核对',paused:'已暂停，请检查授权或原任务',needs_review:'记录需检查',pending:'等待确认'};
+  const kinds={voice:'语音',file:'文件',image:'图片',video:'视频'};
+  async function load(){if(busy)return;busy=true;more.disabled=true;message.textContent='正在读取投递记录…';try{
+   const data=await api('/api/agent/media-batches?offset='+offset+'&limit=30');if(!modal.alive())return;
+   for(const item of data.items||[]){
+    const row=document.createElement('section'),heading=document.createElement('div'),title=document.createElement('h3'),detail=document.createElement('button'),summary=document.createElement('p');row.className='managed-project';heading.className='managed-project-heading';
+    title.textContent=item.source_name?(item.source_name+' → '+item.target_name):'投递记录需检查';detail.type='button';detail.className='secondary';detail.textContent='投递详情';detail.setAttribute('aria-label','查看'+title.textContent+'的投递详情');
+    detail.addEventListener('click',()=>{
+     const view=window.WechatDialogs.open({title:title.textContent,subtitle:names[item.state]||item.state}),facts=document.createElement('dl');facts.className='workspace-facts';
+     for(const [label,value] of [['发起会话',item.origin_name],['来源会话',item.source_name],['目标会话',item.target_name],['操作编号',item.operation_id],['创建时间',item.created?new Date(item.created).toLocaleString('zh-CN',{hour12:false}):'未记录']]){if(!value)continue;const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=value;facts.append(dt,dd)}
+     view.body.append(facts);
+     for(const part of item.parts||[]){const p=document.createElement('p');p.textContent='第 '+part.index+' 段 · '+(kinds[part.kind]||part.kind)+' · '+part.title+' · '+(names[part.state]||part.state)+(part.server_id?' · 回执 '+part.server_id:'');view.body.append(p)}
+     const note=document.createElement('p');note.className='hint';note.textContent=item.reason||'已接受表示取得微信服务端回执，手机收件和播放需另外确认。';view.body.append(note);
+    });
+    summary.className='hint';summary.textContent=(names[item.state]||item.state)+(item.total_parts?' · 已确认 '+item.accepted_parts+'/'+item.total_parts+' 段':'');heading.append(title,detail);row.append(heading,summary);results.append(row);
+   }
+   offset=data.next_offset;more.hidden=!data.has_more;message.textContent=data.total?data.note:'暂无跨会话附件投递记录。';
+  }catch(e){if(modal.alive())message.textContent=e.message}finally{busy=false;more.disabled=false}}
+  more.addEventListener('click',load);load();
+ });
  const globalButton=document.createElement('button');globalButton.type='button';globalButton.className='secondary';globalButton.textContent='账号全局检索';toolbar.append(globalButton);
  globalButton.addEventListener('click',()=>{const modal=window.WechatDialogs.open({title:'管理员全局会话',subtitle:'仅检索当前微信账号。结果保留来源和原消息时间；不会自动发送或转发。'}),label=document.createElement('label'),input=document.createElement('input'),button=document.createElement('button'),more=document.createElement('button'),results=document.createElement('div');label.textContent='群名、文件名或聊天内容';input.type='search';input.setAttribute('aria-label','全局检索关键词');button.type='button';button.className='primary';button.textContent='检索';more.type='button';more.className='secondary';more.textContent='继续查看';more.hidden=true;let offset=0,query='',busy=false,epoch=0;async function search(reset){if(busy)return;busy=true;button.disabled=more.disabled=true;if(reset){epoch++;offset=0;query=input.value;results.replaceChildren()}const current=epoch;try{const data=await api('/api/agent/global-search?query='+encodeURIComponent(query)+'&offset='+offset+'&limit=30');if(!modal.alive()||current!==epoch)return;for(const item of data.items||[]){const row=document.createElement('details'),summary=document.createElement('summary'),text=document.createElement('p');summary.textContent=(item.thread_name||item.thread_id)+' · '+new Date(item.at).toLocaleString('zh-CN',{hour12:false});text.textContent=item.kind==='asset'?('[素材] '+item.filename+' · '+item.bytes+' 字节 · '+item.asset_id):item.text;row.append(summary,text);results.append(row)}offset=data.next_offset;more.hidden=!data.has_more;if(!data.total)results.textContent='没有匹配的记录。'}catch(e){if(modal.alive())results.textContent=e.message}finally{busy=false;button.disabled=more.disabled=false}}button.addEventListener('click',()=>search(true));more.addEventListener('click',()=>search(false));input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();search(true)}});modal.body.append(label,input,button,results,more);search(true)});
  $('#agent-doc-select').addEventListener('change',()=>{const name=$('#agent-doc-select').value;if(name)read(name)});

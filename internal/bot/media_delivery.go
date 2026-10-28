@@ -111,7 +111,7 @@ func (w *Worker) pendingMedia() bool {
 	return false
 }
 func (w *Worker) mediaAllowed(d *mediaDelivery) bool {
-	if d.CrossRequester != "" && (w.config.MediaSeedAllowed == nil || !w.config.MediaSeedAllowed(MediaSeed{Key: d.Key, Input: d.Input, Requester: d.CrossRequester, OriginThread: d.CrossOrigin, SourceThread: d.CrossSource, OriginTask: d.CrossTask})) {
+	if d.CrossRequester != "" && (w.config.MediaSeedAllowed == nil || !w.config.MediaSeedAllowed(MediaSeed{Key: d.Key, Trace: d.Trace, SourceID: d.SourceID, Input: d.Input, Requester: d.CrossRequester, OriginThread: d.CrossOrigin, SourceThread: d.CrossSource, OriginTask: d.CrossTask})) {
 		return false
 	}
 	c, ok := w.model.(*companion.Engine)
@@ -210,6 +210,25 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 	for index, d := range w.runtime.Media {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
+		}
+		// The receipt journal may have committed just before a crash while this
+		// worker checkpoint still says prepared/unknown. Restore the fact before
+		// considering a new native lookup, cancellation or send.
+		if d.CrossRequester != "" && d.State != "accepted" && w.config.MediaSeedReceipt != nil {
+			if receipt, known := w.config.MediaSeedReceipt(d.Trace, d.Key); known && receipt.State == "accepted" && receipt.ServerID != "" && receipt.ThreadID == d.Input.Thread && (receipt.SourceID == "" || receipt.SourceID == d.SourceID) {
+				d.State, d.Status, d.Phase = "accepted", receipt, receipt.Phase
+				if receipt.ID != "" {
+					d.ID = receipt.ID
+				}
+				if d.CompletedAt.IsZero() {
+					d.CompletedAt = time.Now().UTC()
+				}
+				d.Reason = "cross_media_receipt_restored"
+				w.mediaRecord(d, "cross_media_receipt_restored", "decision")
+				if w.persistErr != nil {
+					return
+				}
+			}
 		}
 		if d.terminal() || time.Now().Before(d.Next) {
 			continue
@@ -326,9 +345,16 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		d.Phase = status.Phase
 		all := len(status.VoiceChunks) > 0
 		for _, part := range status.VoiceChunks {
-			all = all && part.State == "accepted" && part.HasReceipt
+			all = all && part.State == "accepted" && part.HasReceipt && part.ServerID != ""
 		}
-		if status.State == "accepted" || all {
+		if all {
+			if status.ServerID == "" {
+				status.ServerID = status.VoiceChunks[len(status.VoiceChunks)-1].ServerID
+			}
+			status.State = "accepted"
+			d.Status = status
+		}
+		if status.State == "accepted" && status.ServerID != "" || all {
 			d.State = "accepted"
 			if d.CompletedAt.IsZero() {
 				d.CompletedAt = time.Now().UTC()
@@ -337,6 +363,12 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			d.Reason = "media_server_accepted"
 			w.mediaRecord(d, "message_sent", "sent")
 			w.refreshMediaParent(d.Trace)
+			continue
+		}
+		if status.State == "accepted" {
+			d.State = "unknown"
+			d.Reason = "media_receipt_id_missing"
+			w.mediaRecord(d, "media_waiting", "decision")
 			continue
 		}
 		if d.UserCancelled {

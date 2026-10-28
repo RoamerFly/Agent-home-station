@@ -189,10 +189,6 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 		m.processes.Close()
 		return nil, err
 	}
-	if err = m.restoreCrossMedia(); err != nil {
-		m.processes.Close()
-		return nil, err
-	}
 	m.mobile, err = mobile.Open(filepath.Join(dir, "mobile"), m.planMobile)
 	if err != nil {
 		return nil, err
@@ -230,6 +226,13 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 		}
 	}
 	if err := m.loadJournal(); err != nil {
+		return nil, err
+	}
+	// Recovery diagnostics must append to the loaded journal, never overwrite
+	// existing history while manager construction is still in progress.
+	if err = m.restoreCrossMedia(); err != nil {
+		m.processes.Close()
+		m.mobile.Close()
 		return nil, err
 	}
 	if err := m.surfHistory.importAccepted(m.journal); err != nil {
@@ -491,7 +494,7 @@ func (m *Manager) start(c Config) {
 		m.warmFriends(friendCtx)
 		cancelFriends()
 		c.friendIDs = m.cachedFriends()
-		worker, err := bot.New(bot.Config{BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, ReportFailure: m.queueOperationReport, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
+		worker, err := bot.New(bot.Config{BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, ReportFailure: m.queueOperationReport, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
 		if err != nil {
 			m.setState("error")
 			m.log("bot_configuration_error")
