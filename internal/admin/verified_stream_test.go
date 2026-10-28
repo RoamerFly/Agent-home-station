@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"wechat-bot/internal/companion"
+	"wechat-bot/internal/linuxnative"
 )
 
 type interruptedStream struct{ remaining int }
@@ -96,5 +98,63 @@ func TestReceivedFileRejectsDamagedInboxAndRetainsOriginalCache(t *testing.T) {
 	original, e := f.manager.cachedAssetData(assets[0])
 	if e != nil || string(original) != "synthetic attachment bytes" {
 		t.Fatal("inbox edit altered cached original", e)
+	}
+}
+
+func TestReceivedFilesPreserveOriginalTimesAndSeparateConversationProvenance(t *testing.T) {
+	f, _, n := forwardFixture(t)
+	first := n.message
+	first.ID, first.SenderID, first.CreatedAt = "file-earlier", "wxid_sender", "2026-10-27T08:30:00+08:00"
+	later := first
+	later.ID, later.CreatedAt = "file-later", "2026-10-28T09:45:00+08:00"
+	other := first
+	other.ID, other.ThreadID, other.CreatedAt = "file-other-thread", "other@chatroom", "2026-10-28T02:00:00Z"
+	messages := []linuxnative.Message{first, later, other}
+	for _, msg := range messages {
+		if _, err := (mediaUnderstanding{manager: f.manager}).receiveFile(t.Context(), msg, "notes.txt"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assets, err := f.manager.loadAssets()
+	if err != nil || len(assets) != 2 || assets[0].Hash != assets[1].Hash || assets[0].ID == assets[1].ID {
+		t.Fatal("same bytes lost source isolation", len(assets), err)
+	}
+	for _, msg := range messages {
+		scope := companion.ScopeID("wechat", first.AccountID, msg.ThreadID)
+		found := false
+		for _, asset := range assets {
+			if asset.Scope != scope {
+				continue
+			}
+			if asset.Scope == companion.ScopeID("wechat", first.AccountID, first.ThreadID) && (asset.FirstRequest == nil || asset.FirstRequest.TraceID != first.ID || asset.FirstRequest.MessageTime != first.CreatedAt) {
+				t.Fatal("later reception replaced first provenance")
+			}
+			for _, request := range asset.Requests {
+				if request.TraceID == msg.ID && request.MessageTime == msg.CreatedAt {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Fatal("original message time or identity lost", msg.ID)
+		}
+		stages := map[string]bool{}
+		for _, entry := range f.manager.Logs() {
+			if entry.MessageID != msg.ID {
+				continue
+			}
+			if entry.ThreadID != msg.ThreadID || entry.MessageTime != msg.CreatedAt || entry.Time == "" {
+				t.Fatal("reception stage lost original time or scope", entry.Event)
+			}
+			stages[entry.Event] = true
+		}
+		for _, stage := range []string{"identified", "downloading", "available"} {
+			if !stages["incoming_file_"+stage] {
+				t.Fatal("missing reception stage", stage)
+			}
+		}
+	}
+	if n.submits.Load() != 0 {
+		t.Fatal("receiving a file sent a message")
 	}
 }

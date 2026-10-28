@@ -39,7 +39,7 @@ func (a mediaUnderstanding) receiveFile(ctx context.Context, msg linuxnative.Mes
 		return "", errors.New("incoming_file_identity_mismatch")
 	}
 	record := func(state, reason string) {
-		m.record(bot.Record{Event: "incoming_file_" + state, Category: "received", ThreadID: msg.ThreadID, Sender: msg.SenderID, MessageID: msg.ID, Content: name, Status: state, Reason: reason, Origin: "media"})
+		m.record(bot.Record{Event: "incoming_file_" + state, Category: "received", ThreadID: msg.ThreadID, Sender: msg.SenderID, MessageID: msg.ID, MessageTime: msg.CreatedAt, Content: name, Status: state, Reason: reason, Origin: "media"})
 	}
 	record("identified", "")
 	if !safeMediaFilename(name) {
