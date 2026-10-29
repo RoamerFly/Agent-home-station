@@ -156,8 +156,7 @@ func (w *Worker) processUnreadConversation(ctx context.Context, thread string) e
 		}
 		unread = append(unread, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: body, At: m.CreatedAt, NewRequest: eligible})
 		allIDs = append(allIDs, m.ID)
-		readMedia := w.config.Options == nil || m.Type == 34 || (m.Type == 3 || m.Type == 47) && w.config.Options.ReadImages || (m.Type != 3 && m.Type != 47) && w.config.Options.ReadVideos
-		if isMedia && eligible && readMedia && w.config.Analyzer != nil {
+		if isMedia && eligible && w.observationAllowed(m) && w.config.Analyzer != nil {
 			mediaIDs = append(mediaIDs, m.ID)
 		}
 		observed := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: m.SenderID, TraceID: m.ID, Text: body, MessageTime: m.CreatedAt}

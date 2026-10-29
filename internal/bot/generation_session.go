@@ -62,21 +62,7 @@ func (w *Worker) offerGenerationFollowup(j *generationJob, m linuxnative.Message
 	}
 	isText := m.Type == 1 || m.IsQuotedText()
 	if !isText {
-		o := w.config.Options
-		if w.config.Analyzer == nil || o == nil {
-			return
-		}
-		switch m.Type {
-		case 3, 47:
-			if !o.ReadImages {
-				return
-			}
-		case 34:
-		case 43, 49:
-			if !o.ReadVideos {
-				return
-			}
-		default:
+		if w.config.Analyzer == nil || w.config.Options == nil || !w.observationAllowed(m) {
 			return
 		}
 	}

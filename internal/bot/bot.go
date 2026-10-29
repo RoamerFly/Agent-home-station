@@ -273,6 +273,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if message.Type == 49 {
 			working.Body = "收到了一条分享卡片，请结合介绍决定是否回应。"
+			if message.FileAttachmentName() != "" {
+				working.Body = "收到一个文件，请结合原件及前后聊天决定是否回应。"
+			}
 		}
 		if !strings.HasSuffix(message.ThreadID, "@chatroom") {
 			working.Body = w.config.Prefix + working.Body
@@ -311,7 +314,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
 	if isMedia && w.config.Options != nil && w.config.Analyzer != nil {
-		if (message.Type == 3 || message.Type == 47) && !w.config.Options.ReadImages || message.Type != 3 && message.Type != 47 && message.Type != 34 && !w.config.Options.ReadVideos {
+		if !w.observationAllowed(message) {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
 			return
 		}
