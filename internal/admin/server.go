@@ -110,6 +110,7 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 	s.canvasRoutes(mux)
 	s.toolRoutes(mux)
 	s.libraryRoutes(mux)
+	s.voiceLibraryRoutes(mux)
 	s.catalogRoutes(mux)
 	s.catalogSyncRoutes(mux)
 	s.actionRoutes(mux)
@@ -131,6 +132,10 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			name = "index.html"
 		case "/app.js", "/assets/app.js":
 			name = "app.js"
+		case "/assets/voices.js":
+			name = "voices.js"
+		case "/assets/voices.css":
+			name = "voices.css"
 		case "/assets/theme.js":
 			name = "theme.js"
 		case "/assets/tools.js":
@@ -203,13 +208,13 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 		switch name {
 		case "index.html":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		case "accounts.js", "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "flow-model.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
+		case "voices.js", "accounts.js", "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "flow-model.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "flow-default.json":
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		case "whale-girl.png", "whale-girl-cutout.png":
 			w.Header().Set("Content-Type", "image/png")
-		case "app.css", "console.css", "workbench.css":
+		case "voices.css", "app.css", "console.css", "workbench.css":
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		}
 		_, _ = w.Write(data)
