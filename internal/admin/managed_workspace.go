@@ -86,6 +86,7 @@ func (p *permittedTools) hostConfig() (agenthost.Config, error) {
 func (p *permittedTools) scopedHostConfig(raw json.RawMessage) (agenthost.Config, error) {
 	var in struct {
 		Global bool `json:"global"`
+		GPU    bool `json:"gpu"`
 	}
 	if json.Unmarshal(raw, &in) != nil {
 		return agenthost.Config{}, toolInputError("invalid execution scope")
@@ -94,6 +95,7 @@ func (p *permittedTools) scopedHostConfig(raw json.RawMessage) (agenthost.Config
 	if e != nil {
 		return c, e
 	}
+	c.Isolation.GPU = in.GPU
 	if in.Global {
 		if !p.privileged() || !p.manager.agent.config().CrossConversation {
 			return c, toolInputError("account global workspace requires the trusted owner")

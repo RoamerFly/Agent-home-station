@@ -25,9 +25,33 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 		Seconds      *float64 `json:"reference_seconds"`
 		Kind         string   `json:"kind"`
 		VoiceProfile string   `json:"voice_profile_id"`
+		VoiceID      string   `json:"voice_id"`
 	}
 	if json.Unmarshal(raw, &in) != nil || songTitle(in.Title) == "" || in.Reference == "" {
 		return "", toolInputError("RVC翻唱需要具体title和本会话的原录音reference_asset_id")
+	}
+	if in.VoiceID != "" {
+		voices, e := p.accessibleVoices()
+		if e != nil {
+			return "", e
+		}
+		found := false
+		for _, v := range voices {
+			if v.ID != in.VoiceID {
+				continue
+			}
+			found = true
+			if !strings.Contains(strings.ToLower(v.Engine), "rvc") || v.ProfileID == "" {
+				return "", toolInputError("selected_voice_engine_not_rvc: " + v.Engine + "；已能访问声线，但需对应的歌声转换模型，未提交默认声线替代")
+			}
+			if in.VoiceProfile != "" && in.VoiceProfile != v.ProfileID {
+				return "", toolInputError("voice_id_profile_mismatch")
+			}
+			in.VoiceProfile = v.ProfileID
+		}
+		if !found {
+			return "", toolInputError("selected_voice_not_found_or_not_authorized")
+		}
 	}
 	if p.trace.TaskID != "" {
 		for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {

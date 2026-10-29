@@ -418,6 +418,8 @@ func (p *permittedTools) privileged() bool {
 	c := p.manager.agent.config()
 	return c.Enabled && !p.trace.Preview && !p.trace.ReportOnly && !p.trace.Surf && p.trace.Account == p.manager.native.Account() && contains(c.OwnerIDs, p.trace.Sender) && c.allowsPrivilegedThread(p.trace.Thread) && permittedRecipient(p.manager.Config().Config, p.trace.Thread)
 }
+
+func (p *permittedTools) QueueControllerOwner() bool { return p.privileged() }
 func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*companion.Input, error) {
 	c := m.agent.config()
 	cfg := m.Config()

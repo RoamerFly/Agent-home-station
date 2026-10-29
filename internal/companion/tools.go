@@ -73,7 +73,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	activeTools := []mcptools.Tool{}
 	if nativeFunctions {
 		for _, t := range tools {
-			if strings.HasPrefix(t.Name, "workspace_") || strings.HasPrefix(t.Name, "server_") || strings.HasPrefix(t.Name, "agent_") || t.Name == "tool_output_read" || t.Name == "web_search" || t.Name == "web_fetch" || t.Name == "web_media_download" || t.Name == "media_recent" || t.Name == "speech_synthesize" || t.Name == "music_rvc_start" || t.Name == "music_local_start" || t.Name == "music_local_status" {
+			if t.Name == "wechat_queue_control" || t.Name == "wechat_recall" || t.Name == "wechat_operation_status" || strings.HasPrefix(t.Name, "workspace_") || strings.HasPrefix(t.Name, "server_") || strings.HasPrefix(t.Name, "agent_") || t.Name == "tool_output_read" || t.Name == "web_search" || t.Name == "web_fetch" || t.Name == "web_media_download" || t.Name == "media_recent" || t.Name == "speech_synthesize" || t.Name == "music_rvc_start" || t.Name == "music_local_start" || t.Name == "music_local_status" {
 				activeTools = append(activeTools, t)
 			}
 		}
@@ -125,6 +125,16 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 	}
 	for _, tool := range tools {
 		allowed[tool.Name] = true
+	}
+	for _, turn := range turns {
+		var target struct {
+			Kind  string `json:"kind"`
+			Group bool   `json:"is_group"`
+		}
+		if turn["role"] == "user" && json.Unmarshal([]byte(turn["content"]), &target) == nil && target.Kind == "current_message" && target.Group {
+			system += "\n【当前最终输出目标：微信群】这是朋友聊天。禁止把检查过程、推理、模型/权重、运行环境、GPU、沙箱、文件路径和修复选项写进progress或messages；这些内容只能用agent_owner_report私发主人。工具返回技术问题时，先调用该私报工具，再决定在群内简短自然回应或silent；不要在群内解释技术原因、追问技术方案、引用其他私聊的需求或主动改用用户没要求的声线。工具名称可用于function_call，不可成为聊天正文。群内回复由你自然生成，不使用固定错误模板。"
+			break
+		}
 	}
 	if nativeFunctions {
 		allowed["discover_tools"] = true
@@ -575,6 +585,11 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 			progress := strings.TrimSpace(response.Progress)
 			if len(progress) > 300 || !utf8.ValidString(progress) || claimsUnperformedAction([]string{progress}, 0, 0, 0) || strings.Contains(progress, "media_ids") || strings.Contains(progress, "web_") || strings.Contains(progress, response.Tool) || strings.Contains(progress, "做好了") || strings.Contains(progress, "生成好") || strings.HasPrefix(progress, "{") || strings.HasPrefix(progress, "[") || strings.HasPrefix(progress, "```") {
 				progress = ""
+			}
+			var privacyErr error
+			progress, privacyErr = e.reviewProgressPrivacy(ctx, turns, response.Tool, progress)
+			if privacyErr != nil {
+				return Decision{}, privacyErr
 			}
 			if progress != "" {
 				started = true

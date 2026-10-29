@@ -145,6 +145,7 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 		if name == "voice_library_read" {
 			row := voiceSummary(v)
 			row["notes"], row["files"], row["recommended_weights"], row["synthesis_instruction"] = v.Notes, files, v.Recommended, v.Instruction
+			row["engine_compatibility"] = map[string]any{"direct_rvc_cover": strings.Contains(strings.ToLower(v.Engine), "rvc") && v.ProfileID != "", "instruction": "GPT-SoVITS权重用于对应TTS引擎，不是RVC歌声转换权重；能读取不等于可用作原曲换声。指定声线未兼容时不要提交默认声音冒充，也不要把格式差异说成主人权限不足。"}
 			row["usage"] = "voice_library_prepare取得可读模型和参考，然后project_list/project_read定位相应引擎。GPT-SoVITS、RVC和百炼音色不互换；权重齐全不等于运行环境和听感已经验证。"
 			if v.Public && v.ProfileID != "" {
 				row["music_rvc_start"] = map[string]string{"voice_profile_id": v.ProfileID}

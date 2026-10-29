@@ -32,6 +32,7 @@ type MediaSeed struct {
 	JobID        string                   `json:"job_id"`
 }
 type mediaDelivery struct {
+	Paused         bool                   `json:"paused,omitempty"`
 	RepairReported bool                   `json:"repair_reported,omitempty"`
 	ReconcileAfter time.Time              `json:"reconcile_after,omitempty"`
 	CrossSettled   bool                   `json:"cross_settled,omitempty"`
@@ -269,7 +270,17 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				}
 			}
 		}
-		if d.terminal() || time.Now().Before(d.Next) {
+		if d.Paused && !d.terminal() && !time.Now().Before(d.Next) && d.ID != "" && d.Status.State != "cancelled" && d.Status.State != "failed" {
+			// Persisted pauses must also retry a lost native cancel response.
+			// Cancellation never resubmits a part, including after process restart.
+			w.cancelMedia(n, d, false, "media_paused_for_conversation")
+			if d.State == "stopped" {
+				d.State = "waiting"
+			}
+			d.Next = time.Now().Add(5 * time.Second)
+			w.persistErr = w.saveRuntime()
+		}
+		if d.Paused || d.terminal() || time.Now().Before(d.Next) {
 			continue
 		}
 		cancelledTask := !w.taskActive(d.Input)
@@ -599,6 +610,15 @@ func (w *Worker) refreshMediaParent(trace string) {
 }
 func (w *Worker) cancelMedia(n mediaNative, d *mediaDelivery, user bool, reason string) {
 	d.UserCancelled = d.UserCancelled || user
+	if user && d.ID == "" {
+		d.State, d.Reason = "stopped", reason
+		w.persistErr = w.saveRuntime()
+		if w.persistErr == nil {
+			w.mediaRecord(d, "media_stopped", "decision")
+			w.refreshMediaParent(d.Trace)
+		}
+		return
+	}
 	// Persist cancellation intent before the API call so restart never retries it.
 	if user {
 		d.Reason = reason

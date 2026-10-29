@@ -103,7 +103,13 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		return nil, err
 	}
 	if tool == "server_status" {
-		return map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "roots": h.Config.Roots, "mode": h.Config.Mode, "windows_hidden_executor": h.Config.Windows != nil, "command_identity": "system-isolated workspace process; no host fallback", "isolation_required": true}, nil
+		devices := []string{}
+		for _, path := range []string{"/dev/dxg", "/dev/nvidia0"} {
+			if info, e := os.Stat(path); e == nil && info.Mode()&os.ModeDevice != 0 {
+				devices = append(devices, path)
+			}
+		}
+		return map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "roots": h.Config.Roots, "mode": h.Config.Mode, "windows_hidden_executor": h.Config.Windows != nil, "command_identity": "system-isolated workspace process; no host fallback", "isolation_required": true, "gpu_devices_available": devices, "gpu_mounted": h.Config.Isolation != nil && h.Config.Isolation.GPU, "gpu_instruction": "GPU is available to sandbox commands via gpu=true on server_exec/server_process. Use the registered CUDA runtime. cuda=False without that mount or in a CPU-only torch environment does not describe the host hardware."}, nil
 	}
 	if runtime.GOOS != "windows" && len(in.Path) >= 3 && in.Path[1] == ':' {
 		normalized, e := WindowsLocalPath(in.Path)

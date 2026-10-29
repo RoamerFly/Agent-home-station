@@ -30,6 +30,7 @@ func (w *Worker) startPlanReview(ctx context.Context, c *companion.Engine, p *ut
 	jobCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	s.reviews[p.ID] = cancel
 	id, fingerprint, in := p.ID, reviewFingerprint(p), p.Input
+	in.TraceID = p.Trace
 	sent, pending := append([]string(nil), p.Sent...), append([]string(nil), p.Messages[p.Index:]...)
 	updates := append([]companion.ConversationEvent(nil), p.Updates...)
 	media := w.captionAttachments(p)
@@ -99,6 +100,9 @@ func (w *Worker) applyPlanReview(p *utterancePlan, d companion.PendingReview, er
 		p.Messages = append(append([]string{}, p.Messages[:p.Index]...), d.Messages...)
 		p.State = "queued"
 	case "delay":
+		if len(d.Messages) > 0 {
+			p.Messages = append(append([]string{}, p.Messages[:p.Index]...), d.Messages...)
+		}
 		p.Next = time.Now().Add(time.Duration(max(1, d.DelaySeconds)) * time.Second)
 		p.State = "queued"
 	case "continue":
@@ -120,8 +124,10 @@ func (w *Worker) captionAttachments(p *utterancePlan) []companion.DeliveredAttac
 }
 
 func (w *Worker) reviewPlan(ctx context.Context, c *companion.Engine, p *utterancePlan) (companion.PendingReview, error) {
+	in := p.Input
+	in.TraceID = p.Trace
 	if p.MediaCaption {
-		return c.ReviewMediaCaption(ctx, p.Input, p.Sent, p.Messages[p.Index:], p.Updates, w.captionAttachments(p))
+		return c.ReviewMediaCaption(ctx, in, p.Sent, p.Messages[p.Index:], p.Updates, w.captionAttachments(p))
 	}
-	return c.ReviewPending(ctx, p.Input, p.Sent, p.Messages[p.Index:], p.Updates)
+	return c.ReviewPending(ctx, in, p.Sent, p.Messages[p.Index:], p.Updates)
 }

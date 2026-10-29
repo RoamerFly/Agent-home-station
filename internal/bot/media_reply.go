@@ -11,6 +11,7 @@ import (
 )
 
 type mediaReply struct {
+	Paused           bool                          `json:"paused,omitempty"`
 	WakeReason       string                        `json:"wake_reason,omitempty"`
 	WakeAfterSeconds int                           `json:"wake_after_seconds,omitempty"`
 	WaitForReply     bool                          `json:"wait_for_reply,omitempty"`
@@ -68,7 +69,7 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
 		}
-		if r.terminal() {
+		if r.Paused || r.terminal() {
 			continue
 		}
 		total, accepted := 0, 0

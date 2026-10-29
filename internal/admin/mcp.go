@@ -90,21 +90,26 @@ func redactedMCP(c mcpSettings) mcpSettings {
 }
 
 type permittedTools struct {
-	discoveryReader func(context.Context, mcptools.DiscoverySource, string) ([]mcptools.DiscoveryItem, error)
-	trace           companion.Input
-	hub             *mcptools.Hub
-	settings        mcpSettings
-	runtime         *plugins.Runtime
-	apiNames        map[string]bool
-	apiKinds        map[string]string
-	manager         *Manager
-	mediaMu         sync.Mutex
-	media           map[string]companion.GeneratedMedia
-	mediaOrigin     map[string]string
-	songFollowups   []string
+	discoveryReader    func(context.Context, mcptools.DiscoverySource, string) ([]mcptools.DiscoveryItem, error)
+	trace              companion.Input
+	hub                *mcptools.Hub
+	settings           mcpSettings
+	runtime            *plugins.Runtime
+	apiNames           map[string]bool
+	apiKinds           map[string]string
+	manager            *Manager
+	mediaMu            sync.Mutex
+	media              map[string]companion.GeneratedMedia
+	mediaOrigin        map[string]string
+	songFollowups      []string
+	privateDiagnostics bool
 }
 
-func (p *permittedTools) SetTrace(input companion.Input) { p.trace = input; p.songFollowups = nil }
+func (p *permittedTools) SetTrace(input companion.Input) {
+	p.trace = input
+	p.songFollowups = nil
+	p.privateDiagnostics = false
+}
 
 func (p *permittedTools) ForkTools() companion.ToolAccess {
 	// Hub and plugin Runtime are immutable after construction. Mutable per-call
@@ -214,6 +219,22 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	return out, err
 }
 func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMessage) (result string, callErr error) {
+	defer func() {
+		if callErr != nil {
+			p.privateDiagnostics = true
+		}
+	}()
+	if strings.HasPrefix(name, "music_") || strings.HasPrefix(name, "workspace_") || name == "wechat_recall" {
+		p.privateDiagnostics = true
+	}
+	if name == "wechat_read" {
+		var target struct {
+			Thread string `json:"thread_id"`
+		}
+		if json.Unmarshal(args, &target) == nil && target.Thread != "" && target.Thread != p.trace.Thread {
+			p.privateDiagnostics = true
+		}
+	}
 	defer func() { p.rememberTaskAction(name, args, result, callErr) }()
 	ctx = p.mcpContext(ctx)
 	started := time.Now()

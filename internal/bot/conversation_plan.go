@@ -12,6 +12,7 @@ import (
 )
 
 type utterancePlan struct {
+	Paused           bool                          `json:"paused,omitempty"`
 	WakeReason       string                        `json:"wake_reason,omitempty"`
 	StopReason       string                        `json:"stop_reason,omitempty"`
 	MediaCaption     bool                          `json:"media_caption,omitempty"`
@@ -112,6 +113,9 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 		return
 	}
 	w.noticeGenerationMessage(m, eligible)
+	if eligible && (w.addressed(m) || !strings.HasSuffix(m.ThreadID, "@chatroom")) {
+		w.pauseInterruptedMedia(m)
+	}
 	if m.Type != 1 && !m.IsQuotedText() {
 		return
 	}
@@ -216,7 +220,7 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
 		}
-		if p.terminal() || visited[p.Input.Thread] || !p.InboxChecked {
+		if p.Paused || p.terminal() || visited[p.Input.Thread] || !p.InboxChecked {
 			continue
 		}
 		visited[p.Input.Thread] = true

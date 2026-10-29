@@ -177,6 +177,38 @@ func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []st
 	if d.DelaySeconds < 0 || d.DelaySeconds > 300 {
 		return d, errors.New("invalid pending-plan delay")
 	}
+	if in.IsGroup && !generation && d.Action != "cancel" {
+		candidate := pending
+		if d.Action == "replace" {
+			candidate = d.Messages
+		}
+		if diagnosticDraft(candidate) {
+			// Reviews run concurrently with other conversations. Give the
+			// report route this plan's identity without mutating shared tools.
+			fork, err := e.Fork()
+			if err != nil {
+				return PendingReview{}, err
+			}
+			if _, ok := fork.Tools.(GroupReplyPrivacy); !ok {
+				return PendingReview{}, errors.New("private_diagnostic_route_unavailable")
+			}
+			if traced, ok := fork.Tools.(interface{ SetTrace(Input) }); ok {
+				traced.SetTrace(in)
+			}
+			clean, err := fork.reviewReplyPrivacy(ctx, in, Decision{Action: "reply", Messages: candidate})
+			if err != nil {
+				return PendingReview{}, err
+			}
+			if len(clean.Messages) == 0 {
+				d.Action, d.Messages, d.Reason = "cancel", nil, "private_diagnostic_only"
+			} else {
+				d.Messages = clean.Messages
+				if d.Action != "delay" {
+					d.Action = "replace"
+				}
+			}
+		}
+	}
 	return d, nil
 }
 
