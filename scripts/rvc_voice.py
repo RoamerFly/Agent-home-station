@@ -51,19 +51,29 @@ def main():
     index=str(Path(args.index).resolve()) if args.index else ''
     if not model.is_file() or not source.is_file() or index and not Path(index).is_file():raise ValueError('conversion_resource_missing')
     os.environ.update(weight_root=str(model.parent),index_root=str(Path(index).parent) if index else str(project/'logs'),rmvpe_root=str(project/'assets/rmvpe'))
+    os.environ['RVC_AUDIO_FORCE_CPU']='1' # Decode through our managed FFmpeg path.
+    os.environ['outside_index_root']=str(Path(index).parent) if index else str(project/'assets/indices')
     os.chdir(project);sys.path.insert(0,str(project))
     import torch
     # HuBERT's Fairseq checkpoint stores its vocabulary object. Keep Torch's
     # weights-only loader and allow this concrete class; never disable safe
     # loading globally just to support the legacy checkpoint.
-    from fairseq.data.dictionary import Dictionary
-    if hasattr(torch.serialization,'add_safe_globals'):
-        torch.serialization.add_safe_globals([Dictionary])
     from scipy.io import wavfile
-    from infer.lib import audio as rvc_audio
+    from rvc_backend import layout,convert as convert_backend
+    backend=layout(project)
+    if backend=='official-2026':
+        from infer import audio as rvc_audio
+        from infer.vc import modules as rvc_modules
+        from infer.rmvpe import RMVPE
+    else:
+        from fairseq.data.dictionary import Dictionary
+        if hasattr(torch.serialization,'add_safe_globals'):
+            torch.serialization.add_safe_globals([Dictionary])
+        from infer.lib import audio as rvc_audio
+        from infer.modules.vc import modules as rvc_modules
+        from infer.lib.rmvpe import RMVPE
     rvc_audio.load_audio=lambda file,sr: rvc_audio.np.frombuffer(decode_audio_pcm(file,sr),rvc_audio.np.float32).copy()
-    from infer.modules.vc.modules import VC
-    from infer.lib.rmvpe import RMVPE
+    VC=rvc_modules.VC
     from rvc_pitch import install_windowed_rmvpe
     def pitch_progress(state):
         print(json.dumps(state),flush=True)
@@ -74,7 +84,6 @@ def main():
     # float32 sequence. Training and inference still need separate memory.
     config=SimpleNamespace(device=device,is_half=device!='cpu' and args.precision=='auto',x_pad=1,x_query=3 if device=='cpu' else 6,x_center=8 if device=='cpu' else 38,x_max=10 if device=='cpu' else 41)
     vc=VC(config);vc.get_vc(model.name)
-    from infer.modules.vc import modules as rvc_modules
     from rvc_windows import convert_vocal_windows
     original_loader=rvc_modules.load_audio
     waveform=rvc_audio.np.frombuffer(decode_audio_pcm(source,16000),rvc_audio.np.float32).copy()
@@ -88,15 +97,17 @@ def main():
         if conversion_options['chunk_samples']:
             vc.pipeline.t_max=len(part)+vc.pipeline.window
         try:
-            status,(rate,audio)=vc.vc_single(0,str(source),args.semitones,None,'rmvpe',index,None,args.index_rate,3,0,.5,args.protect)
-            if rate is None or audio is None or not status.startswith('Success'):raise RuntimeError('RVC did not produce valid audio: '+status)
+            status,result=convert_backend(vc,str(source),args.semitones,index,args.index_rate,args.protect,backend)
+            if result is None:raise RuntimeError('RVC did not produce audio: '+status)
+            rate,audio=result
+            if rate is None or audio is None:raise RuntimeError('RVC did not produce valid audio: '+status)
             return rate,audio
         finally:
             rvc_modules.load_audio=original_loader
             vc.pipeline.t_max=previous_max
     rate,audio=convert_vocal_windows(waveform,convert_part,chunk_seconds=args.conversion_chunk_seconds,context_seconds=args.conversion_context_seconds,progress=pitch_progress)
     output.parent.mkdir(parents=True,exist_ok=True);wavfile.write(str(output),rate,audio)
-    output.with_suffix('.rvc.json').write_text(json.dumps({'engine':'RVC','model':model.name,'semitones':args.semitones,'index_rate':args.index_rate,'protect':args.protect,'device':device,'precision':'float16' if config.is_half else 'float32','sample_rate':rate,'seconds':len(audio)/rate,'pitch':pitch_options,'conversion':conversion_options,'wechat_sends':0},indent=2),encoding='utf-8')
+    output.with_suffix('.rvc.json').write_text(json.dumps({'engine':'RVC','backend_layout':backend,'model':model.name,'semitones':args.semitones,'index_rate':args.index_rate,'protect':args.protect,'device':device,'precision':'float16' if config.is_half else 'float32','sample_rate':rate,'seconds':len(audio)/rate,'pitch':pitch_options,'conversion':conversion_options,'wechat_sends':0},indent=2),encoding='utf-8')
     print('RVC conversion complete; seconds',len(audio)/rate,'no messages sent',flush=True)
 
 

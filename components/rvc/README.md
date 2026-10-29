@@ -1,6 +1,10 @@
 # RVC 专用声线试训
 
-上游：[RVC WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)，MIT。当前本机包为 `RVC1006Nvidia`，关键源码指纹见 `source-manifest.json`；不是根据文件夹名称推断最新版本。
+上游：[RVC WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)，MIT。2026-10-29已将受管运行源码及`E:\freetime\AI_Sing\RVC1006Nvidia`源码同步到官方提交`81eed5e8f68b6bed1789f682fe78cdd324495afc`（2026-08-04，包含2.3.260718之后的CLI/多说话人更新）。关键源码与资源指纹见[source-manifest.json](source-manifest.json)。原文件夹名称保留以兼容已有位置，不用于推断版本。
+
+当前运行源码在`public_workspace/projects/rvc-upstream`，使用受管Linux音乐环境；注册清单`project_read(id=rvc)`提供实际入口和路径。新版使用`infer.vc`及Transformers HuBERT，`scripts/rvc_backend.py`处理与旧版`infer.modules.vc`的位置参数差异；`scripts/rvc_voice.py`保留可调分块、RMVPE、模型/索引、保护和设备参数。默认声线没有因引擎升级而更换，曼波通过每次任务的`voice_profile_id`选择。原公共旧代码目录已删除，模型、训练基座和历史音频保留；已校验的重复RMVPE及下载分块清理约354MiB，该数值为清理量，不是安装新资源后的净空间变化。
+
+实际验证包括曼波4秒隔离推理，以及经过鉴权桥接的分离人声、曼波转换、混回伴奏，输出均为4秒；未在本次升级验收中发送微信或进行听感验收。后台采用Linux受管环境完成验证。`E:\freetime`中原Windows分发运行时未自动替换为上游推荐的Python3.12，独立Windows GUI尚未验收；源码和新HuBERT资源已同步，原模型与音频2467个文件哈希保留。以下旧包试训、历史运行环境和听感记录作为历史证据保留，不代表当前部署方法。
 
 RVC 需要已训练的目标说话人模型，不能将百炼音色 ID 或10秒参考音频直接传入作为新歌手。已有派蒙等模型只能验证运行环境或其自身音色，不能标成角色 C。用户已授权使用百炼 C 的复刻 ID 合成不同文本，作为实验训练集。文本见 `design/voice/rvc-trial-corpus.json`，音频、模型、检索索引和训练日志全部留在忽略目录。
 
