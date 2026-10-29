@@ -339,7 +339,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			if name == "media_recent" || name == "media_reuse" || name == "media_history" {
 				origin = "local_asset"
 			}
-			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_succeeded", Category: "tool", Tool: name, Content: name, Status: "succeeded", Origin: origin})
+			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_succeeded", Category: "tool", Tool: name, Content: name, Effect: p.toolEffect(name, args, result), Status: "succeeded", Origin: origin})
 		}
 	}()
 	if !p.enabled(name) {

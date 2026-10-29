@@ -1,8 +1,31 @@
-
-'use strict';
-let items=[];const $=id=>document.getElementById(id);
-function element(tag,text,className){const e=document.createElement(tag);if(text)e.textContent=text;if(className)e.className=className;return e;}
-function mediaFile(file){return '/api/voice-library/files/'+encodeURIComponent(file.file);}
-function render(){const q=$('query').value.trim().toLowerCase(),engine=$('engine').value;const shown=items.filter(x=>(!engine||x.engine===engine)&&(!q||JSON.stringify([x.role,x.name,x.engine,x.status]).toLowerCase().includes(q)));$('state').textContent=`共 ${new Set(items.map(x=>x.role||x.name)).size} 个角色 · ${items.length} 个版本 · 显示 ${shown.length} 个版本`;$('list').replaceChildren();for(const item of shown){const card=element('article',null,'voice'),top=element('div',null,'top'),head=element('div');head.append(element('div',(item.role?item.role+' · ':'')+item.engine+(item.library_scope==='public'?' · 公共':' · 私人'),'engine'),element('h2',item.name));top.append(head,element('span',item.status,'status'));card.append(top,element('p',item.notes));const previews=element('div',null,'previews');for(const sample of [...(item.previews||[]),...(item.references||[]).filter(x=>/\.(wav|mp3|flac|m4a)$/.test(x.file))]){const box=element('div',null,'sample');box.append(element('span',sample.filename));const audio=element('audio');audio.controls=true;audio.preload='none';audio.src=mediaFile(sample);audio.setAttribute('aria-label',sample.filename);box.append(audio);previews.append(box);}card.append(previews);const details=element('details',null,'details');details.append(element('summary',`模型与来源 · ${(item.weights||[]).length} 个权重文件`));if(item.recommended_weights)details.append(element('p',item.paired?'GPT / SoVITS 权重齐全；最新轮次只作候选，效果待试听。':'权重未成对，不能直接视为可运行音色。'));const ul=element('ul');for(const file of [...(item.weights||[]),...(item.references||[]).filter(x=>/\.txt$/.test(x.file))]){const li=element('li');if(file.file){const a=element('a',file.filename);a.href=mediaFile(file);a.download=file.filename;li.append(a);}else li.append(element('span',file.filename));li.append(element('span',` · ${(file.bytes/1048576).toFixed(2)} MB${file.epoch?' · '+file.epoch+' 轮':''}`));if(file.path)li.append(element('div',file.path));ul.append(li);}details.append(ul);if(item.source)details.append(element('p','来源：'+item.source));if(item.license)details.append(element('p',item.license));card.append(details);$('list').append(card);}if(!shown.length)$('list').append(element('div','没有匹配的音色','empty'));}
-document.addEventListener('play',e=>{if(e.target.tagName==='AUDIO')document.querySelectorAll('audio').forEach(a=>{if(a!==e.target)a.pause();});},true);
-Promise.resolve().then(async()=>{const r=await fetch('/api/voice-library');if(!r.ok)throw new Error(r.status===401?'请先在工作台登录，再打开语音库。':'语音库暂不可读');const d=await r.json();items=d.items||[];for(const name of [...new Set(items.map(x=>x.engine))]){const o=element('option',name);o.value=name;$('engine').append(o);}render();}).catch(e=>{$('state').textContent=e.message;});$('query').addEventListener('input',render);$('engine').addEventListener('change',render);
+/* Account-aware voice library, sharing the console session and theme. */
+(() => {
+ 'use strict';
+ const $=id=>document.getElementById(id);let items=[],epoch=0,busy=false;
+ function el(tag,text,klass){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(klass)e.className=klass;return e}
+ const fileURL=file=>window.WechatAccountContext.url('/api/voice-library/files/'+encodeURIComponent(file.file));
+ function render(){
+  const q=$('voice-query').value.trim().toLocaleLowerCase(),engine=$('voice-engine').value,box=$('voice-list'),position=box.scrollTop;
+  const shown=items.filter(x=>(!engine||x.engine===engine)&&(!q||JSON.stringify([x.role,x.name,x.engine,x.status]).toLocaleLowerCase().includes(q)));
+  $('voice-state').textContent=new Set(items.map(x=>x.role||x.name)).size+' 个角色，'+items.length+' 个版本；当前显示 '+shown.length+' 个版本';box.replaceChildren();
+  for(const item of shown){
+   const card=el('article',undefined,'voice-card'),meta=el('div',undefined,'voice-meta');meta.append(el('span',item.library_scope==='public'?'公共声线':'本账号私有'),el('span',item.engine));card.append(meta,el('h2',item.name),el('p',item.status,'hint'));if(item.notes)card.append(el('p',item.notes));
+   for(const sample of [...(item.previews||[]),...(item.references||[]).filter(x=>/\.(wav|mp3|flac|m4a)$/.test(x.file))]){
+    card.append(el('p',sample.filename,'hint'));const audio=el('audio');audio.controls=true;audio.preload='none';audio.src=fileURL(sample);audio.setAttribute('aria-label',sample.filename);card.append(audio);
+   }
+   const detail=el('details'),summary=el('summary','模型与来源（'+(item.weights||[]).length+' 个权重文件）');detail.append(summary);
+   if(item.recommended_weights)detail.append(el('p',item.paired?'GPT / SoVITS 权重已配对，效果以试听为准。':'权重尚未成对。','hint'));
+   const ul=el('ul');for(const file of [...(item.weights||[]),...(item.references||[]).filter(x=>/\.txt$/.test(x.file))]){const li=el('li');if(file.file){const a=el('a',file.filename);a.href=fileURL(file);a.download=file.filename;li.append(a)}else li.append(el('span',file.filename));li.append(el('span',' · '+(file.bytes/1048576).toFixed(2)+' MiB'+(file.epoch?' · '+file.epoch+' 轮':'')));if(file.path)li.append(el('p',file.path,'hint'));ul.append(li)}detail.append(ul);
+   if(item.source)detail.append(el('p','来源：'+item.source));if(item.license)detail.append(el('p',item.license));card.append(detail);box.append(card);
+  }
+  if(!shown.length)box.append(el('p','没有匹配的声线。','empty'));box.scrollTop=position;
+ }
+ async function refresh(){if(busy||!window.WechatAdmin?.isAuthenticated())return;busy=true;const stamp=epoch;$('voice-refresh').disabled=true;
+  try{const data=await window.WechatAdmin.api('/api/voice-library');if(stamp!==epoch)return;items=data.items||[];const select=$('voice-engine'),old=select.value;select.replaceChildren(new Option('全部模型',''));for(const name of new Set(items.map(x=>x.engine)))select.append(new Option(name,name));select.value=old;render()}
+  catch(error){if(stamp===epoch)$('voice-state').textContent=error.message}finally{busy=false;$('voice-refresh').disabled=false}
+ }
+ $('voice-query').addEventListener('input',render);$('voice-engine').addEventListener('change',render);$('voice-refresh').addEventListener('click',refresh);
+ window.addEventListener('wechat-admin:navigate',e=>{if(e.detail.section==='voices')refresh()});
+ window.addEventListener('wechat-admin:logout',()=>{epoch++;items=[];$('voice-list').replaceChildren();$('voice-query').value=''});
+ document.addEventListener('play',e=>{if(e.target.tagName==='AUDIO')for(const a of document.querySelectorAll('audio'))if(a!==e.target)a.pause()},true);
+})();

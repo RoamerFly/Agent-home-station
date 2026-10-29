@@ -58,6 +58,7 @@ type LogEntry struct {
 	ModelRetryDelayMS int64  `json:"model_retry_delay_ms,omitempty"`
 	CallID            string `json:"call_id,omitempty"`
 	Tool              string `json:"tool,omitempty"`
+	Effect            string `json:"effect,omitempty"`
 	TargetURL         string `json:"target_url,omitempty"`
 	Query             string `json:"query,omitempty"`
 	DurationMS        int64  `json:"duration_ms,omitempty"`

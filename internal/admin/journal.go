@@ -62,6 +62,7 @@ func (m *Manager) record(r bot.Record) {
 	entry.DecisionNote = logText(r.DecisionNote, 512)
 	entry.CallID = logText(r.CallID, 128)
 	entry.Tool = logText(r.Tool, 160)
+	entry.Effect = logText(r.Effect, 512)
 	entry.ToolCacheHit = r.ToolCacheHit
 	entry.ToolRequests = r.ToolRequests
 	entry.ToolRetries = r.ToolRetries

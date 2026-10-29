@@ -21,7 +21,17 @@
   return {dialog,body,close:()=>dialog.open&&dialog.close(),alive:()=>dialog.isConnected&&dialog.open};
  }
  function closeAll(){for(const dialog of [...document.querySelectorAll('dialog[open]')].reverse())dialog.close()}
- window.WechatDialogs={open,closeAll};
+ function text(parent,value,{title='完整内容',className='',limit=180}={}){
+  const content=String(value??'');
+  if(content.length<=limit){const span=document.createElement('span');span.className=className;span.textContent=content;parent.append(span);return span}
+  const button=document.createElement('button');button.type='button';button.className='long-content '+className;
+  button.setAttribute('aria-label','查看'+title);button.title='点击查看完整内容';
+  const preview=document.createElement('span');preview.className='long-content-preview';preview.textContent=content;
+  const cue=document.createElement('span');cue.className='long-content-cue';cue.textContent='查看完整内容';button.append(preview,cue);
+  button.addEventListener('click',()=>{const popup=open({title});const body=document.createElement('pre');body.className='readable-full-text';body.textContent=content;popup.body.append(body)});
+  parent.append(button);return button;
+ }
+ window.WechatDialogs={open,closeAll,text};
  window.addEventListener('wechat-admin:logout',closeAll);
  window.addEventListener('wechat-admin:navigate',e=>{if(!e.detail?.embedded)closeAll()});
 })();

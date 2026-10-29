@@ -10,11 +10,11 @@
   const query=$('#conversation-search').value.trim().toLocaleLowerCase(),items=conversations().filter(x=>[x.label,x.thread].join(' ').toLocaleLowerCase().includes(query));
   const current=items.find(x=>x.thread===view?.item.thread);if(current)view.item={...view.item,...current};
   const signature=JSON.stringify([items.map(x=>[x.id,x.thread,x.label,x.updated,x.has_summary,x.message_count]),[...jobs]]);if(signature===indexSignature)return;indexSignature=signature;
-  const y=window.scrollY,box=$('#companion-scopes');box.replaceChildren();$('#conversation-state').textContent=items.length+' 个群聊 / 私信，按最近活动排列';
+  const y=window.scrollY,box=$('#companion-scopes'),position=$('#memory-panel').scrollTop;box.replaceChildren();$('#conversation-state').textContent=items.length+' 个群聊 / 私信，按最近活动排列';
   if(!items.length)node(box,'p','暂时没有匹配的会话。','empty');
   for(const item of items){
-   const row=node(box,'article',undefined,'conversation-row');row.dataset.thread=item.thread;if(item.id)row.dataset.scopeId=item.id;
-   const open=button(row,'',()=>openConversation(item),'conversation-open');open.setAttribute('aria-haspopup','dialog');
+   const row=node(box,'article',undefined,'conversation-row');row.dataset.thread=item.thread;row.dataset.selected=String(item.thread===view?.item.thread);if(item.id)row.dataset.scopeId=item.id;
+   const open=button(row,'',()=>openConversation(item),'conversation-open');open.setAttribute('aria-controls','conversation-inspector');
    const name=node(open,'span',undefined,'conversation-name');node(name,'strong',item.label);node(name,'small',item.thread.endsWith('@chatroom')?'群聊':'私信');
    node(open,'span',time(item.updated),'conversation-date');
    node(open,'span',(item.has_summary?'已压缩 · ':'')+(item.message_count||0)+' 条记忆','conversation-count');
@@ -22,7 +22,7 @@
    const compressButton=button(actions,job?.pending?'压缩中…':'压缩',()=>compress(item),'secondary');compressButton.disabled=!item.id||!!job?.pending;compressButton.setAttribute('aria-label','压缩'+item.label);
    if(job?.text&&(job.pending||job.error))node(actions,'small',job.text,job.error?'form-error':'hint');
   }
-  window.scrollTo({top:y,behavior:'instant'});
+  $('#memory-panel').scrollTop=position;window.scrollTo({top:y,behavior:'instant'});
  }
  function syncCompression(){
   renderIndex();if(!view)return;const job=jobs.get(view.item.id);$('#context-compress-now').disabled=!view.item.id||!!job?.pending;$('#context-compress-state').textContent=job?.text||'';
@@ -83,7 +83,13 @@
  function openConversation(item){
   view?.popup.close();const root=$('#memory-detail');root.hidden=false;
   const v={item,request:0,data:null,popup:null};
-  v.popup=window.WechatDialogs.open({title:item.label,subtitle:item.thread.endsWith('@chatroom')?'群聊 · 消息与记忆':'私信 · 消息与记忆',content:root,onClose:()=>{if(view===v)view=null;root.hidden=true;$('#conversation-detail-parking').append(root);window.dispatchEvent(new CustomEvent('wechat-admin:memory-selection',{detail:{id:''}}))}});
+  $('#conversation-title').textContent=item.label;$('#conversation-idle').hidden=true;
+  $('#conversation-inspector').append(root);document.querySelector('.conversation-workspace').classList.add('has-selection');
+  for(const row of document.querySelectorAll('.conversation-row'))row.dataset.selected=String(row.dataset.thread===item.thread);
+  v.popup={body:$('#memory-content'),alive:()=>view===v&&root.isConnected,close:()=>{
+   if(view!==v)return;view=null;root.hidden=true;$('#conversation-detail-parking').append(root);$('#conversation-idle').hidden=false;
+   document.querySelector('.conversation-workspace').classList.remove('has-selection');for(const row of document.querySelectorAll('.conversation-row'))row.dataset.selected='false';window.dispatchEvent(new CustomEvent('wechat-admin:memory-selection',{detail:{id:''}}));
+  }};
   view=v;$('#memory-content').replaceChildren();$('#memory-note').value='';window.dispatchEvent(new CustomEvent('wechat-admin:memory-selection',{detail:{id:item.id||''}}));syncCompression();loadView(v);
  }
  function openHistory(){
@@ -108,5 +114,9 @@
 
  window.addEventListener('wechat-admin:navigate',e=>{if(e.detail.section==='memory'){renderIndex();if(!scopes.length)window.WechatAdmin.refreshScopes()}});
  window.addEventListener('wechat-admin:logout',()=>{epoch++;jobs.clear();scopes=[];view=null;indexSignature='';$('#companion-scopes').replaceChildren();$('#conversation-new').hidden=true});
+ $('#conversation-close').addEventListener('click',()=>view?.popup.close());
+ $('#conversation-send').addEventListener('click',()=>{if(!view)return;window.WechatAdmin.nav('tools');window.dispatchEvent(new CustomEvent('wechat-admin:recipient',{detail:{thread:view.item.thread,label:view.item.label}}))});
+ $('#conversation-members').addEventListener('click',()=>{if(!view)return;window.WechatAdmin.nav('catalog');window.dispatchEvent(new CustomEvent('wechat-admin:catalog-target',{detail:{thread:view.item.thread}}))});
+ $('#conversation-rule').addEventListener('click',()=>{if(!view)return;window.WechatAdmin.nav('rules');window.dispatchEvent(new CustomEvent('wechat-admin:rule-target',{detail:{thread:view.item.thread}}))});
  window.WechatConversations={getScope:()=>view?.data,reload:()=>view&&loadView(view),openConversation,compress};renderIndex();
 })();

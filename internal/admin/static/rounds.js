@@ -89,7 +89,7 @@
       round.source_kind ||= round.system ? 'system' : 'private';
       round.duration = Math.max(0, Date.parse(round.updated) - Date.parse(round.time));
       round.categories = [...new Set(round.entries.map(x => x.category || 'system'))];
-      round.search = round.entries.map(x => [x.source, x.sender, x.thread_id, x.message_id, x.send_id, x.content, x.reason, x.event, x.tool, x.query, x.target_url, x.decision_note].filter(Boolean).join(' ')).join(' ').toLocaleLowerCase();
+      round.search = round.entries.map(x => [x.source, x.sender, x.thread_id, x.message_id, x.send_id, x.content, x.reason, x.event, x.tool, x.query, x.target_url, x.effect, x.decision_note].filter(Boolean).join(' ')).join(' ').toLocaleLowerCase();
       return round;
     }).sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated));
   }

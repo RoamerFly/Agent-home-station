@@ -36,7 +36,7 @@ assert(['127.0.0.1','localhost','[::1]'].includes(new URL(base).hostname));
    try{return route.fulfill({body:await fs.readFile(file),contentType:({'.html':'text/html','.js':'text/javascript','.css':'text/css','.png':'image/png'})[path.extname(file)]||'text/plain'})}catch{return route.continue()}
   });
   await page.goto(base+'/#catalog');await page.locator('#catalog-thread option[value="one@chatroom"]').waitFor({state:'attached'});
-  await page.locator('#catalog-kind').selectOption('members');await page.locator('#catalog-thread').selectOption('one@chatroom');
+  await page.locator('#catalog-kind').selectOption('members',{force:true});await page.locator('#catalog-thread').selectOption('one@chatroom',{force:true});
   await page.locator('#catalog-query').click();await page.waitForFunction(()=>document.querySelector('#catalog-state').textContent.includes('本地尚未同步'));
   assert(await page.locator('#catalog-query').isEnabled());assert.equal(await page.locator('#catalog-list').getAttribute('aria-busy'),'false');
   await page.locator('#catalog-refresh-members').click();await page.clock.runFor(1300);
@@ -46,7 +46,7 @@ assert(['127.0.0.1','localhost','[::1]'].includes(new URL(base).hostname));
   mode='failed';await page.locator('#catalog-more').click();await page.waitForFunction(()=>document.querySelector('#catalog-state').textContent.includes('游标'));
   assert.equal(await page.locator('.catalog-item').count(),1,'page failure discarded existing results');assert(await page.locator('#catalog-query').isEnabled());
   mode='pending';await page.locator('#catalog-query').click();await page.waitForFunction(()=>document.querySelector('#catalog-query').disabled);
-  mode='members';await page.locator('#catalog-thread').selectOption('two@chatroom');assert(await page.locator('#catalog-query').isEnabled());
+  mode='members';await page.locator('#catalog-thread').selectOption('two@chatroom',{force:true});assert(await page.locator('#catalog-query').isEnabled());
   await page.locator('#catalog-query').click();await page.locator('.catalog-item h3').filter({hasText:'第二群成员'}).waitFor();
   for(const route of pending.splice(0))await route.fulfill({json:{items:[{id:'old',roomDisplayName:'不应显示的旧成员'}]}}).catch(()=>{});
   await page.clock.runFor(100);assert(!(await page.locator('#catalog-list').textContent()).includes('旧成员'));

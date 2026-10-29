@@ -1,245 +1,1849 @@
 <!DOCTYPE html>
-
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8"/>
-<meta content="width=device-width,initial-scale=1" name="viewport"/>
-<meta content="dark light" name="color-scheme"/>
+<meta charset="utf-8">
+<meta content="width=device-width,initial-scale=1" name="viewport">
+<meta content="dark light" name="color-scheme">
 <title>蓝色大肥鱼 · 管理后台</title>
-<script src="/assets/theme.js"></script>
-<link href="/assets/app.css" rel="stylesheet"/>
-<link href="/assets/console.css" rel="stylesheet"/><link href="/assets/workbench.css" rel="stylesheet"/></head>
-<body><svg aria-hidden="true" class="icon-sprite" xmlns="http://www.w3.org/2000/svg"><defs><symbol id="icon-dashboard" viewbox="0 0 24 24"><rect height="7" rx="1.5" width="7" x="3" y="3"></rect><rect height="7" rx="1.5" width="7" x="14" y="3"></rect><rect height="7" rx="1.5" width="7" x="3" y="14"></rect><rect height="7" rx="1.5" width="7" x="14" y="14"></rect></symbol><symbol id="icon-account" viewbox="0 0 24 24"><rect height="16" rx="3" width="18" x="3" y="4"></rect><circle cx="9" cy="10" r="2"></circle><path d="M6 16c1-3 5-3 6 0M15 9h3m-3 5h3"></path></symbol><symbol id="icon-chat" viewbox="0 0 24 24"><path d="M20 16a3 3 0 0 1-3 3H9l-5 3v-6a7 7 0 0 1-2-5V9a6 6 0 0 1 6-6h8a6 6 0 0 1 6 6v3a6 6 0 0 1-2 4Z"></path><path d="M7 10h10M7 14h6"></path></symbol><symbol id="icon-whale" viewbox="0 0 24 24"><path d="M3 10c0 6 4 10 10 10 5 0 8-4 8-8-3 2-5 2-7 0 0-4-4-7-8-6-2 0-3 2-3 4Z"></path><path d="M17 5c0 3 2 4 4 3m-4-3c-2-2-2-3-1-4M7 9h.01"></path></symbol><symbol id="icon-tools" viewbox="0 0 24 24"><path d="M14 4a6 6 0 0 0-7 7l-5 5 4 4 5-5a6 6 0 0 0 7-7l-4 4-3-3 4-4Z"></path></symbol><symbol id="icon-memory" viewbox="0 0 24 24"><rect height="18" rx="3" width="16" x="4" y="3"></rect><path d="M8 3v18M12 8h4m-4 4h4m-4 4h2"></path></symbol><symbol id="icon-logs" viewbox="0 0 24 24"><path d="M5 3h10l4 4v14H5Z"></path><path d="M14 3v5h5M8 12h8m-8 4h6"></path></symbol><symbol id="icon-sun" viewbox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"></path></symbol><symbol id="icon-moon" viewbox="0 0 24 24"><path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z"></path></symbol></defs></svg>
+<script src="/assets/theme.js">
+</script>
+<link href="/assets/app.css" rel="stylesheet">
+<link href="/assets/workbench.css" rel="stylesheet">
+<link href="/assets/console.css" rel="stylesheet">
+</head>
+<body>
+<svg aria-hidden="true" class="icon-sprite" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<symbol id="icon-dashboard" viewbox="0 0 24 24">
+<rect height="7" rx="1.5" width="7" x="3" y="3">
+</rect>
+<rect height="7" rx="1.5" width="7" x="14" y="3">
+</rect>
+<rect height="7" rx="1.5" width="7" x="3" y="14">
+</rect>
+<rect height="7" rx="1.5" width="7" x="14" y="14">
+</rect>
+</symbol>
+<symbol id="icon-account" viewbox="0 0 24 24">
+<rect height="16" rx="3" width="18" x="3" y="4">
+</rect>
+<circle cx="9" cy="10" r="2">
+</circle>
+<path d="M6 16c1-3 5-3 6 0M15 9h3m-3 5h3">
+</path>
+</symbol>
+<symbol id="icon-chat" viewbox="0 0 24 24">
+<path d="M20 16a3 3 0 0 1-3 3H9l-5 3v-6a7 7 0 0 1-2-5V9a6 6 0 0 1 6-6h8a6 6 0 0 1 6 6v3a6 6 0 0 1-2 4Z">
+</path>
+<path d="M7 10h10M7 14h6">
+</path>
+</symbol>
+<symbol id="icon-whale" viewbox="0 0 24 24">
+<path d="M3 10c0 6 4 10 10 10 5 0 8-4 8-8-3 2-5 2-7 0 0-4-4-7-8-6-2 0-3 2-3 4Z">
+</path>
+<path d="M17 5c0 3 2 4 4 3m-4-3c-2-2-2-3-1-4M7 9h.01">
+</path>
+</symbol>
+<symbol id="icon-tools" viewbox="0 0 24 24">
+<path d="M14 4a6 6 0 0 0-7 7l-5 5 4 4 5-5a6 6 0 0 0 7-7l-4 4-3-3 4-4Z">
+</path>
+</symbol>
+<symbol id="icon-memory" viewbox="0 0 24 24">
+<rect height="18" rx="3" width="16" x="4" y="3">
+</rect>
+<path d="M8 3v18M12 8h4m-4 4h4m-4 4h2">
+</path>
+</symbol>
+<symbol id="icon-logs" viewbox="0 0 24 24">
+<path d="M5 3h10l4 4v14H5Z">
+</path>
+<path d="M14 3v5h5M8 12h8m-8 4h6">
+</path>
+</symbol>
+<symbol id="icon-sun" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="4">
+</circle>
+<path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1">
+</path>
+</symbol>
+<symbol id="icon-moon" viewbox="0 0 24 24">
+<path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z">
+</path>
+</symbol>
+</defs>
+</svg>
 <a class="skip-link" href="#main-content">跳到主要内容</a>
 <main class="login-shell" id="login-view">
 <section aria-labelledby="login-title" class="login-card">
-<div class="login-brand"><span aria-hidden="true" class="brand-mark"><svg aria-hidden="true" class="ui-icon"><use href="#icon-whale"></use></svg></span><div><p class="eyebrow">私人管理后台</p><h1 id="login-title"><span>deepseek</span><span>蓝色大肥鱼</span></h1></div></div>
+<div class="login-brand">
+<img class="login-avatar" src="/assets/whale-girl-cutout.png" alt="蓝色大肥鱼鲸鱼娘" width="84" height="84">
+<div>
+<p class="eyebrow">管理控制台</p>
+<h1 id="login-title">
+<span>deepseek</span>
+<span>蓝色大肥鱼</span>
+</h1>
+</div>
+</div>
 <p class="muted">管理服务商、角色、微信群聊与本地记忆。</p>
 <div aria-label="界面主题" class="theme-control login-theme" role="group">
-<button aria-pressed="false" data-theme-value="light" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-sun"></use></svg>浅色</button>
-<button aria-pressed="true" data-theme-value="dark" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-moon"></use></svg>深色</button>
+<button aria-pressed="false" data-theme-value="light" type="button">
+<svg aria-hidden="true" class="ui-icon">
+<use href="#icon-sun">
+</use>
+</svg>浅色</button>
+<button aria-pressed="true" data-theme-value="dark" type="button">
+<svg aria-hidden="true" class="ui-icon">
+<use href="#icon-moon">
+</use>
+</svg>深色</button>
 </div>
 <form id="login-form" novalidate="">
 <label for="login-password">管理密码</label>
-<input aria-describedby="login-error" autocomplete="current-password" autofocus="" id="login-password" name="password" required="" type="password"/>
-<p class="form-error" id="login-error" role="alert"></p>
+<input aria-describedby="login-error" autocomplete="current-password" autofocus="" id="login-password" name="password" required="" type="password">
+<p class="form-error" id="login-error" role="alert">
+</p>
 <button class="primary wide" type="submit">进入控制台</button>
 </form>
-<p class="login-note">默认密码：admin。可在系统 → 后台设置中修改。</p>
+<p class="login-note">默认密码：admin。可在设置 → 系统中修改。</p>
 </section>
 </main>
 <div class="app-shell" hidden="" id="app-view">
 <aside class="sidebar">
-<div class="sidebar-brand"><img alt="" class="brand-avatar" height="48" src="/assets/whale-girl-cutout.png" width="40"/><span><b>deepseek<br/>蓝色大肥鱼</b><small>Agent 控制台</small></span></div>
-<div class="account-context"><label for="account-select">管理账号</label><select id="account-select" aria-label="选择要管理的微信账号"><option>正在加载</option></select></div><nav aria-label="主导航"><button class="nav-link main-nav" data-section="workbench" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-dashboard"></use></svg><span>工作台</span></button><button class="nav-link main-nav" data-section="memory" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-chat"></use></svg><span>会话</span></button><button class="nav-link main-nav" data-section="logs" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-logs"></use></svg><span>执行回合</span></button><button class="nav-link main-nav" data-section="companion" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-whale"></use></svg><span>角色</span></button><button class="nav-link main-nav" data-section="plugins" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-tools"></use></svg><span>能力</span></button><button class="nav-link main-nav" data-section="wechat" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-account"></use></svg><span>系统</span></button></nav>
-<div class="sidebar-bottom"><button class="quiet" id="logout">退出登录</button></div>
-</aside>
-<button aria-label="关闭导航" class="drawer-scrim" hidden="" id="drawer-scrim"></button><main class="content" id="main-content" tabindex="-1">
-<header class="topbar">
-<button aria-label="打开菜单" class="icon-button mobile-only" id="menu-toggle"><svg aria-hidden="true" class="ui-icon" viewbox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
-<div><p class="eyebrow"></p><h1 id="page-title" tabindex="-1">总览</h1><p class="page-description" id="page-description"></p></div>
-<div class="top-actions"><button class="pause-control" id="bot-toggle" type="button">读取状态…</button><div aria-atomic="true" aria-live="polite" class="top-status" role="status"><span class="status-dot" id="status-dot"></span><span id="status-label">正在读取状态…</span></div><div aria-label="界面主题" class="theme-control" role="group"><button aria-label="切换为浅色" aria-pressed="false" data-theme-value="light" title="切换为浅色" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-sun"></use></svg></button><button aria-label="切换为深色" aria-pressed="true" data-theme-value="dark" title="切换为深色" type="button"><svg aria-hidden="true" class="ui-icon"><use href="#icon-moon"></use></svg></button></div></div>
-</header>
-<nav aria-label="页内导航" class="context-nav" data-nav-group="memory" hidden=""><button class="nav-link subnav-link" data-section="memory" type="button">群聊与私信</button><button class="nav-link subnav-link" data-section="catalog" type="button">成员与目录</button><button class="nav-link subnav-link" data-section="rules" type="button">回复规则</button><button class="nav-link subnav-link" data-section="tools" type="button">手动发送</button></nav><nav aria-label="页内导航" class="context-nav" data-nav-group="companion" hidden=""><button class="nav-link subnav-link" data-section="companion" type="button">人设与表达</button><button class="nav-link subnav-link" data-section="agent" type="button">任务与文档</button><button class="nav-link subnav-link" data-section="surf" type="button">AI 网上冲浪</button></nav><nav aria-label="页内导航" class="context-nav" data-nav-group="plugins" hidden=""><button class="nav-link subnav-link" data-section="plugins" type="button">插件</button><button class="nav-link subnav-link" data-section="provider" type="button">模型与语音</button><button class="nav-link subnav-link" data-section="mcp" type="button">联网与 MCP</button><button class="nav-link subnav-link" data-section="permissions" type="button">权限</button><button class="nav-link subnav-link" data-section="mobile" type="button">手机探索</button></nav><nav aria-label="页内导航" class="context-nav" data-nav-group="wechat" hidden=""><button class="nav-link subnav-link" data-section="wechat" type="button">账号管理</button><button class="nav-link subnav-link" data-section="account-actions" type="button">账号操作</button><button class="nav-link subnav-link" data-section="settings" type="button">后台设置</button></nav><div class="unsaved-bar" hidden="" id="unsaved-bar" role="status"><span>配置有未保存的更改</span><button class="primary" id="save-floating" type="button">保存更改</button></div>
-<div aria-live="polite" class="notice" hidden="" id="notice" role="status" tabindex="-1"></div>
-<section aria-label="流程设计工作台" class="page" id="workbench">
-<div class="flow-toolbar"><label class="sr-only" for="flow-name">画布名称</label><input id="flow-name" class="flow-name" maxlength="40" value="消息与行动流程"/>
-<span class="flow-save-state" id="flow-save-state" role="status">正在载入</span><label class="sr-only" for="flow-layout">流程排版</label><select id="flow-layout"><option value="chart">流程图排版</option><option value="tree">树形排版</option><option value="free">自由布局</option></select><label class="sr-only" for="flow-trace">查看执行回合</label><select id="flow-trace"><option value="">流程设计</option></select><button class="quiet" hidden id="flow-trace-open" type="button">回合详情</button>
-<button class="secondary" id="flow-add" type="button" aria-expanded="false" aria-controls="flow-library">添加节点</button><button class="primary" id="flow-save" type="button" disabled>保存画布</button>
-<details class="flow-more" id="flow-more"><summary>更多</summary><div class="flow-menu"><button id="flow-arrange" type="button">自动整理布局</button><button id="flow-import-button" type="button">导入画布 JSON</button><button id="flow-export" type="button">导出画布 JSON</button><button id="flow-reset" type="button">恢复默认流程</button></div></details><input hidden id="flow-import" type="file" accept="application/json,.json"/>
+<div class="sidebar-brand">
+<img class="brand-avatar" src="/assets/whale-girl-cutout.png" alt="蓝色大肥鱼鲸鱼娘" width="68" height="68">
+<span>
+<b>deepseek<br>蓝色大肥鱼</b>
+</span>
 </div>
-<div class="flow-conflict" id="flow-conflict" hidden role="alert"><span id="flow-conflict-text"></span><button class="secondary" id="flow-conflict-export" type="button">导出当前草稿</button><button class="secondary" id="flow-reload" type="button">载入服务器版本</button></div>
+<nav aria-label="主导航">
+<button class="nav-link main-nav" data-section="overview" type="button">
+<svg class="ui-icon" aria-hidden="true">
+<use href="#icon-dashboard">
+</use>
+</svg>
+<span>总览</span>
+</button>
+<button class="nav-link main-nav" data-section="memory" type="button">
+<svg class="ui-icon" aria-hidden="true">
+<use href="#icon-chat">
+</use>
+</svg>
+<span>会话</span>
+</button>
+<button class="nav-link main-nav" data-section="logs" type="button">
+<svg class="ui-icon" aria-hidden="true">
+<use href="#icon-logs">
+</use>
+</svg>
+<span>活动</span>
+</button>
+<button class="nav-link main-nav" data-section="companion" type="button">
+<svg class="ui-icon" aria-hidden="true">
+<use href="#icon-whale">
+</use>
+</svg>
+<span>角色</span>
+</button>
+<button class="nav-link main-nav" data-section="wechat" type="button">
+<svg class="ui-icon" aria-hidden="true">
+<use href="#icon-tools">
+</use>
+</svg>
+<span>设置</span>
+</button>
+</nav>
+<div class="sidebar-bottom">
+<button class="quiet" id="logout">退出登录</button>
+</div>
+</aside>
+<button aria-label="关闭导航" class="drawer-scrim" hidden="" id="drawer-scrim">
+</button>
+<main class="content" id="main-content" tabindex="-1">
+<header class="topbar">
+<button aria-label="打开菜单" class="icon-button mobile-only" id="menu-toggle">
+<svg aria-hidden="true" class="ui-icon" viewbox="0 0 24 24">
+<path d="M4 6h16M4 12h16M4 18h16">
+</path>
+</svg>
+</button>
+<div>
+<p class="eyebrow">
+</p>
+<h1 id="page-title" tabindex="-1">总览</h1>
+<p class="page-description" id="page-description">
+</p>
+</div>
+<div class="top-actions">
+<div class="account-context">
+<label for="account-select" class="sr-only">管理账号</label>
+<select id="account-select" aria-label="切换管理的微信账号">
+<option>正在加载</option>
+</select>
+</div>
+<button class="pause-control" id="bot-toggle" type="button">读取状态…</button>
+<div aria-atomic="true" aria-live="polite" class="top-status" role="status">
+<span class="status-dot" id="status-dot">
+</span>
+<span id="status-label">正在读取状态…</span>
+</div>
+<div aria-label="界面主题" class="theme-control" role="group">
+<button aria-label="切换为浅色" aria-pressed="false" data-theme-value="light" title="切换为浅色" type="button">
+<svg aria-hidden="true" class="ui-icon">
+<use href="#icon-sun">
+</use>
+</svg>
+</button>
+<button aria-label="切换为深色" aria-pressed="true" data-theme-value="dark" title="切换为深色" type="button">
+<svg aria-hidden="true" class="ui-icon">
+<use href="#icon-moon">
+</use>
+</svg>
+</button>
+</div>
+</div>
+</header>
+<nav class="context-nav" aria-label="页内导航" data-nav-group="overview" hidden>
+<button class="nav-link subnav-link" data-section="overview" type="button">状态</button>
+<button class="nav-link subnav-link" data-section="agent" type="button">工作区</button>
+<button class="nav-link subnav-link" data-section="workbench" type="button">流程画布</button>
+</nav>
+<nav class="context-nav" aria-label="页内导航" data-nav-group="memory" hidden>
+<button class="nav-link subnav-link" data-section="memory" type="button">会话</button>
+<button class="nav-link subnav-link" data-section="catalog" type="button">通讯录</button>
+<button class="nav-link subnav-link" data-section="rules" type="button">批量规则</button>
+</nav>
+<nav class="context-nav" aria-label="页内导航" data-nav-group="logs" hidden>
+<button class="nav-link subnav-link" data-section="logs" type="button">执行回合</button>
+<button class="nav-link subnav-link" data-section="surf" type="button">网上冲浪</button>
+</nav>
+<nav class="context-nav" aria-label="页内导航" data-nav-group="companion" hidden>
+<button class="nav-link subnav-link" data-section="companion" type="button">人设与表达</button>
+<button class="nav-link subnav-link" data-section="voices" type="button">声线库</button>
+</nav>
+<nav class="context-nav" aria-label="页内导航" data-nav-group="wechat" hidden>
+<button class="nav-link subnav-link" data-section="wechat" type="button">微信账号</button>
+<button class="nav-link subnav-link" data-section="provider" type="button">模型与语音</button>
+<button class="nav-link subnav-link" data-section="plugins" type="button">扩展与连接</button>
+<button class="nav-link subnav-link" data-section="permissions" type="button">权限与行为</button>
+<button class="nav-link subnav-link" data-section="settings" type="button">系统</button>
+</nav>
+<div class="unsaved-bar shell-feedback" hidden="" id="unsaved-bar" role="status">
+<span>配置有未保存的更改</span>
+<button class="primary" id="save-floating" type="button">保存更改</button>
+</div>
+<div aria-live="polite" class="notice shell-feedback" hidden="" id="notice" role="status" tabindex="-1">
+</div>
+<section aria-label="流程设计工作台" class="page" id="workbench">
+<div class="flow-toolbar">
+<label class="sr-only" for="flow-name">画布名称</label>
+<input id="flow-name" class="flow-name" maxlength="40" value="消息与行动流程">
+<span class="flow-save-state" id="flow-save-state" role="status">正在载入</span>
+<label class="sr-only" for="flow-layout">流程排版</label>
+<select id="flow-layout">
+<option value="chart">流程图排版</option>
+<option value="tree">树形排版</option>
+<option value="free">自由布局</option>
+</select>
+<label class="sr-only" for="flow-trace">查看执行回合</label>
+<select id="flow-trace">
+<option value="">流程设计</option>
+</select>
+<button class="quiet" hidden id="flow-trace-open" type="button">回合详情</button>
+<button class="secondary" id="flow-add" type="button" aria-expanded="false" aria-controls="flow-library">添加节点</button>
+<button class="primary" id="flow-save" type="button" disabled>保存画布</button>
+<details class="flow-more" id="flow-more">
+<summary>更多</summary>
+<div class="flow-menu">
+<button id="flow-arrange" type="button">自动整理布局</button>
+<button id="flow-import-button" type="button">导入画布 JSON</button>
+<button id="flow-export" type="button">导出画布 JSON</button>
+<button id="flow-reset" type="button">恢复默认流程</button>
+</div>
+</details>
+<input hidden id="flow-import" type="file" accept="application/json,.json">
+</div>
+<div class="flow-conflict" id="flow-conflict" hidden role="alert">
+<span id="flow-conflict-text">
+</span>
+<button class="secondary" id="flow-conflict-export" type="button">导出当前草稿</button>
+<button class="secondary" id="flow-reload" type="button">载入服务器版本</button>
+</div>
 <div class="flow-workspace" id="flow-workspace">
-<div class="flow-viewport" id="flow-viewport" role="region" aria-label="流程画布，可平移缩放；节点也可通过属性中的坐标移动" tabindex="0"><div class="flow-world" id="flow-world"><svg class="flow-edges" id="flow-edges" aria-label="流程连线"></svg><div id="flow-nodes"></div></div><div class="flow-empty" id="flow-empty" hidden><strong>从一个节点开始</strong><p>添加现有能力，或用便签规划新的想法。</p><button class="secondary" id="flow-empty-add" type="button">添加节点</button></div></div>
-<aside class="flow-library" id="flow-library" hidden aria-label="节点库"><header><h2>节点库</h2><button class="quiet" id="flow-library-close" type="button">关闭</button></header><label class="sr-only" for="flow-library-search">搜索节点</label><input id="flow-library-search" type="search" placeholder="搜索能力或规划节点"/><div class="flow-library-filter" id="flow-library-filter" role="group" aria-label="节点类型"></div><div class="flow-library-items" id="flow-library-items"></div></aside>
-<dialog class="flow-inspector" id="flow-inspector" hidden aria-labelledby="flow-inspector-title"><header><div><p class="flow-inspector-kicker" id="flow-inspector-subtitle"></p><h2 id="flow-inspector-title">节点属性</h2></div><label class="sr-only" for="flow-dialog-node-select">切换节点</label><select id="flow-dialog-node-select"><option value="">切换节点…</option></select><button class="quiet" id="flow-inspector-close" type="button">关闭</button></header>
-<nav id="flow-inspector-tabs" aria-label="属性面板分组"></nav>
-<div class="flow-dialog-conflict" id="flow-dialog-conflict" hidden><span>画布已在其他页面更新，草稿已保留。</span><button class="secondary" id="flow-dialog-export" type="button">导出当前草稿</button><button class="secondary" id="flow-dialog-reload" type="button">载入服务器版本</button></div><div class="flow-property-body" id="flow-properties"></div>
-<div class="flow-config" id="flow-config" hidden><label class="sr-only" for="flow-config-page">选择关联设置</label><select id="flow-config-page"></select><div class="flow-inspector-body" id="flow-inspector-body"></div></div>
-<div class="flow-property-body" id="flow-evidence" hidden></div>
-<footer class="flow-inspector-actions"><div id="flow-dialog-node-actions"><button class="secondary" id="flow-duplicate" type="button">复制节点</button><button class="quiet danger-text" id="flow-delete" type="button">移除节点</button></div><span id="flow-dialog-status" role="status"></span><button class="primary" id="flow-dialog-save" type="button" disabled>保存画布</button></footer></dialog>
-<div class="flow-controls" aria-label="画布工具"><div class="flow-control-group"><button class="quiet" id="flow-undo" type="button" aria-label="撤销" title="撤销 Ctrl+Z">↶</button><button class="quiet" id="flow-redo" type="button" aria-label="重做" title="重做 Ctrl+Shift+Z">↷</button></div><div class="flow-control-group"><button class="quiet" id="flow-view-canvas" type="button" aria-pressed="true">画布</button><button class="quiet" id="flow-view-list" type="button" aria-pressed="false">清单</button></div><label class="sr-only" for="flow-jump">定位节点</label><select id="flow-jump"><option value="">定位节点…</option></select><div class="flow-control-group flow-zoom-controls"><button class="quiet" id="flow-zoom-out" type="button" aria-label="缩小画布">−</button><span id="flow-zoom" aria-live="polite">100%</span><button class="quiet" id="flow-zoom-in" type="button" aria-label="放大画布">＋</button><button class="quiet" id="flow-fit" type="button">适应</button></div></div>
-<button class="flow-minimap" id="flow-minimap" type="button" aria-label="缩略图：点击定位画布"><svg id="flow-minimap-svg" viewBox="0 0 170 100" aria-hidden="true"></svg></button>
+<div class="flow-viewport" id="flow-viewport" role="region" aria-label="流程画布，可平移缩放；节点也可通过属性中的坐标移动" tabindex="0">
+<div class="flow-world" id="flow-world">
+<svg class="flow-edges" id="flow-edges" aria-label="流程连线">
+</svg>
+<div id="flow-nodes">
+</div>
+</div>
+<div class="flow-empty" id="flow-empty" hidden>
+<strong>从一个节点开始</strong>
+<p>添加现有能力，或用便签规划新的想法。</p>
+<button class="secondary" id="flow-empty-add" type="button">添加节点</button>
+</div>
+</div>
+<aside class="flow-library" id="flow-library" hidden aria-label="节点库">
+<header>
+<h2>节点库</h2>
+<button class="quiet" id="flow-library-close" type="button">关闭</button>
+</header>
+<label class="sr-only" for="flow-library-search">搜索节点</label>
+<input id="flow-library-search" type="search" placeholder="搜索能力或规划节点">
+<div class="flow-library-filter" id="flow-library-filter" role="group" aria-label="节点类型">
+</div>
+<div class="flow-library-items" id="flow-library-items">
+</div>
+</aside>
+<dialog class="flow-inspector" id="flow-inspector" hidden aria-labelledby="flow-inspector-title">
+<header>
+<div>
+<p class="flow-inspector-kicker" id="flow-inspector-subtitle">
+</p>
+<h2 id="flow-inspector-title">节点属性</h2>
+</div>
+<label class="sr-only" for="flow-dialog-node-select">切换节点</label>
+<select id="flow-dialog-node-select">
+<option value="">切换节点…</option>
+</select>
+<button class="quiet" id="flow-inspector-close" type="button">关闭</button>
+</header>
+<nav id="flow-inspector-tabs" aria-label="属性面板分组">
+</nav>
+<div class="flow-dialog-conflict" id="flow-dialog-conflict" hidden>
+<span>画布已在其他页面更新，草稿已保留。</span>
+<button class="secondary" id="flow-dialog-export" type="button">导出当前草稿</button>
+<button class="secondary" id="flow-dialog-reload" type="button">载入服务器版本</button>
+</div>
+<div class="flow-property-body" id="flow-properties">
+</div>
+<div class="flow-config" id="flow-config" hidden>
+<label class="sr-only" for="flow-config-page">选择关联设置</label>
+<select id="flow-config-page">
+</select>
+<div class="flow-inspector-body" id="flow-inspector-body">
+</div>
+</div>
+<div class="flow-property-body" id="flow-evidence" hidden>
+</div>
+<footer class="flow-inspector-actions">
+<div id="flow-dialog-node-actions">
+<button class="secondary" id="flow-duplicate" type="button">复制节点</button>
+<button class="quiet danger-text" id="flow-delete" type="button">移除节点</button>
+</div>
+<span id="flow-dialog-status" role="status">
+</span>
+<button class="primary" id="flow-dialog-save" type="button" disabled>保存画布</button>
+</footer>
+</dialog>
+<div class="flow-controls" aria-label="画布工具">
+<div class="flow-control-group">
+<button class="quiet" id="flow-undo" type="button" aria-label="撤销" title="撤销 Ctrl+Z">↶</button>
+<button class="quiet" id="flow-redo" type="button" aria-label="重做" title="重做 Ctrl+Shift+Z">↷</button>
+</div>
+<div class="flow-control-group">
+<button class="quiet" id="flow-view-canvas" type="button" aria-pressed="true">画布</button>
+<button class="quiet" id="flow-view-list" type="button" aria-pressed="false">清单</button>
+</div>
+<label class="sr-only" for="flow-jump">定位节点</label>
+<select id="flow-jump">
+<option value="">定位节点…</option>
+</select>
+<div class="flow-control-group flow-zoom-controls">
+<button class="quiet" id="flow-zoom-out" type="button" aria-label="缩小画布">−</button>
+<span id="flow-zoom" aria-live="polite">100%</span>
+<button class="quiet" id="flow-zoom-in" type="button" aria-label="放大画布">＋</button>
+<button class="quiet" id="flow-fit" type="button">适应</button>
+</div>
+</div>
+<button class="flow-minimap" id="flow-minimap" type="button" aria-label="缩略图：点击定位画布">
+<svg id="flow-minimap-svg" viewbox="0 0 170 100" aria-hidden="true">
+</svg>
+</button>
 <div class="flow-design-label">流程设计</div>
-</div><footer class="flow-footer"><span id="flow-count"></span><span id="flow-coverage"></span><span class="flow-notice" id="flow-notice" role="status">节点关联现有设置，自定义节点用于规划。</span></footer></section><section aria-labelledby="overview-title" class="page active-page" id="overview">
-<div class="hero"><div><h2 id="overview-title">今天，大肥鱼在忙什么？</h2><p>运行状态、执行进展和用量，都在这里。</p><div class="hero-actions"><a class="primary" data-section-link="memory" href="#memory">查看会话</a><button class="quiet" id="refresh-status" type="button">刷新状态</button></div></div><img alt="蓝色大肥鱼鲸鱼娘" class="overview-whale" height="180" src="/assets/whale-girl-cutout.png" width="160"/></div>
+</div>
+<footer class="flow-footer">
+<span id="flow-count">
+</span>
+<span id="flow-coverage">
+</span>
+<span class="flow-notice" id="flow-notice" role="status">节点关联现有设置，自定义节点用于规划。</span>
+</footer>
+</section>
+<section aria-labelledby="overview-title" class="page active-page" id="overview">
+<h2 class="sr-only" id="overview-title">当前账号总览</h2>
 <div class="metric-grid">
-<article class="metric"><span class="metric-label">微信连接</span><strong id="native-state">—</strong><small id="native-detail">正在读取</small></article>
-<article class="metric"><span class="metric-label">Agent</span><strong id="bot-state">—</strong><small id="bot-detail">正在读取</small></article>
-<article class="metric"><span class="metric-label">模型密钥</span><strong id="key-state">—</strong><small>只显示配置状态</small></article>
-<article class="metric"><span class="metric-label">当前账号</span><strong id="account-state">—</strong><small id="version-state">—</small></article>
+<article class="metric">
+<span class="metric-label">微信连接</span>
+<strong id="native-state">—</strong>
+<small id="native-detail">正在读取</small>
+</article>
+<article class="metric">
+<span class="metric-label">Agent</span>
+<strong id="bot-state">—</strong>
+<small id="bot-detail">正在读取</small>
+</article>
+<article class="metric">
+<span class="metric-label">模型密钥</span>
+<strong id="key-state">—</strong>
+<small>只显示配置状态</small>
+</article>
+<article class="metric">
+<span class="metric-label">当前账号</span>
+<strong id="account-state">—</strong>
+<small id="version-state">—</small>
+</article>
+</div>
+<div class="overview-live-grid">
+<article class="panel dashboard-pane">
+<header class="pane-heading">
+<h2>待办</h2>
+<button type="button" class="quiet" data-section-link="agent">全部任务</button>
+</header>
+<div id="overview-tasks" class="pane-scroll" aria-live="polite">
+<p class="empty">正在读取任务</p>
+</div>
+</article>
+<article class="panel dashboard-pane">
+<header class="pane-heading">
+<h2>最近活动</h2>
+<button type="button" class="quiet" data-section-link="logs">全部活动</button>
+<button class="quiet" id="refresh-status" type="button">刷新状态</button>
+</header>
+<div id="overview-activity" class="pane-scroll">
+<p class="empty">正在读取活动</p>
+</div>
+</article>
 </div>
 <article aria-labelledby="billing-title" class="panel billing-panel">
-<div class="billing-heading"><h3 id="billing-title">用量与费用</h3><button class="secondary" id="billing-refresh" type="button">刷新用量与余额</button></div>
+<div class="billing-heading">
+<h3 id="billing-title">用量与费用</h3>
+<button class="secondary" id="billing-refresh" type="button">刷新用量与余额</button>
+</div>
 <p aria-atomic="true" class="hint" id="billing-status" role="status">正在读取用量…</p>
 <div class="billing-metrics">
-<div><span class="metric-label">今日 Token</span><strong id="billing-today">—</strong><small id="billing-today-detail">输入 / 输出 / 缓存命中</small></div>
-<div><span class="metric-label">累计模型估算费用</span><strong id="billing-cost">—</strong><small id="billing-cost-detail">按实际 Token 与单价计算</small></div>
-<div><span class="metric-label">当前 API 余额</span><strong id="billing-balance">—</strong><small id="billing-balance-detail">尚未查询</small></div>
+<div>
+<span class="metric-label">今日 Token</span>
+<strong id="billing-today">—</strong>
+<small id="billing-today-detail">输入 / 输出 / 缓存命中</small>
 </div>
-<p class="hint" id="billing-coverage"></p>
-<details class="billing-details"><summary>用量明细与单价</summary>
-<div aria-label="用量明细，窄屏可左右滚动" class="billing-table-wrap" role="region" tabindex="0"><table class="billing-table"><caption>本机累计调用，按服务地址与模型区分</caption><thead><tr><th scope="col">服务商 / 模型</th><th scope="col">输入 Token</th><th scope="col">输出 Token</th><th scope="col">缓存命中</th><th scope="col">估算费用</th></tr></thead><tbody id="billing-models"></tbody></table></div>
+<div>
+<span class="metric-label">累计模型估算费用</span>
+<strong id="billing-cost">—</strong>
+<small id="billing-cost-detail">按实际 Token 与单价计算</small>
+</div>
+<div>
+<span class="metric-label">当前 API 余额</span>
+<strong id="billing-balance">—</strong>
+<small id="billing-balance-detail">尚未查询</small>
+</div>
+</div>
+<p class="hint" id="billing-coverage">
+</p>
+<details class="billing-details">
+<summary>用量明细与单价</summary>
+<div aria-label="用量明细，窄屏可左右滚动" class="billing-table-wrap" role="region" tabindex="0">
+<table class="billing-table">
+<caption>本机累计调用，按服务地址与模型区分</caption>
+<thead>
+<tr>
+<th scope="col">服务商 / 模型</th>
+<th scope="col">输入 Token</th>
+<th scope="col">输出 Token</th>
+<th scope="col">缓存命中</th>
+<th scope="col">估算费用</th>
+</tr>
+</thead>
+<tbody id="billing-models">
+</tbody>
+</table>
+</div>
 <form class="billing-price-form" id="billing-price-form">
-<p class="hint" id="billing-price-source"></p>
-<p class="hint" id="billing-price-state" role="status"></p>
-<div class="billing-price-grid"><div><label for="billing-currency">计价币种</label><select id="billing-currency"><option value="USD">美元</option><option value="CNY">人民币</option></select></div><div><label for="billing-price-input">输入 / 百万 Token</label><input id="billing-price-input" max="1000000" min="0" required="" step="any" type="number"/></div><div><label for="billing-price-cache">缓存命中 / 百万 Token</label><input id="billing-price-cache" max="1000000" min="0" required="" step="any" type="number"/></div><div><label for="billing-price-output">输出 / 百万 Token</label><input id="billing-price-output" max="1000000" min="0" required="" step="any" type="number"/></div></div>
+<p class="hint" id="billing-price-source">
+</p>
+<p class="hint" id="billing-price-state" role="status">
+</p>
+<div class="billing-price-grid">
+<div>
+<label for="billing-currency">计价币种</label>
+<select id="billing-currency">
+<option value="USD">美元</option>
+<option value="CNY">人民币</option>
+</select>
+</div>
+<div>
+<label for="billing-price-input">输入 / 百万 Token</label>
+<input id="billing-price-input" max="1000000" min="0" required="" step="any" type="number">
+</div>
+<div>
+<label for="billing-price-cache">缓存命中 / 百万 Token</label>
+<input id="billing-price-cache" max="1000000" min="0" required="" step="any" type="number">
+</div>
+<div>
+<label for="billing-price-output">输出 / 百万 Token</label>
+<input id="billing-price-output" max="1000000" min="0" required="" step="any" type="number">
+</div>
+</div>
 <p class="hint">自定义单价仅用于后续模型请求估算，不修改旧记录。联网、插件等单独收费未计入。实际账单、节假日和账户优惠以服务商为准；不同币种分别统计。</p>
-<div class="button-row"><button class="primary" id="billing-save-prices" type="submit">保存自定义单价</button><button class="secondary" id="billing-reset-prices" type="button">恢复参考单价</button></div>
+<div class="button-row">
+<button class="primary" id="billing-save-prices" type="submit">保存自定义单价</button>
+<button class="secondary" id="billing-reset-prices" type="button">恢复参考单价</button>
+</div>
 </form>
 </details>
 </article>
 </section>
 <section aria-labelledby="provider-title" class="page" id="provider">
-<div class="section-heading page-actions"><div><h2 class="sr-only" id="provider-title">模型服务商</h2></div><button class="primary" id="save-config">保存并应用</button></div>
+<div class="section-heading page-actions">
+<div>
+<h2 class="sr-only" id="provider-title">模型服务商</h2>
+</div>
+<button class="primary" id="save-config">保存并应用</button>
+</div>
 <form class="form-layout" id="config-form" novalidate="">
-<article class="panel"><h3>服务商</h3><div class="field-grid"><div><label for="provider-select">API 类型</label><select id="provider-select" name="provider"><option value="deepseek">DeepSeek</option><option value="openai-compatible">OpenAI 兼容接口</option></select></div><div><label for="model">模型名称</label><input id="model" maxlength="128" name="model" placeholder="deepseek-flash"/></div></div><label for="base-url">接口地址</label><input id="base-url" maxlength="512" name="base_url" placeholder="https://api.deepseek.com" type="url"/><label for="api-key">API Key</label><div class="key-row"><input autocomplete="new-password" id="api-key" maxlength="4096" name="api_key" placeholder="未配置" type="password"/><button class="danger-text" id="clear-key" type="button">清除已保存密钥</button></div><p class="hint" id="key-hint">保存后不会显示密钥内容。</p><div class="inline-actions"><button class="secondary" id="model-test" type="button">测试模型连接（会调用 API）</button><span class="hint" id="model-test-result"></span></div></article>
-<details class="panel advanced-card"><summary>模型输出参数</summary><div class="field-grid"><div><label for="max-tokens">最大输出 Token</label><input id="max-tokens" max="4096" min="64" name="max_tokens" step="1" type="number"/></div></div></details>
+<article class="panel">
+<h3>服务商</h3>
+<div class="field-grid">
+<div>
+<label for="provider-select">API 类型</label>
+<select id="provider-select" name="provider">
+<option value="deepseek">DeepSeek</option>
+<option value="openai-compatible">OpenAI 兼容接口</option>
+</select>
+</div>
+<div>
+<label for="model">模型名称</label>
+<input id="model" maxlength="128" name="model" placeholder="deepseek-flash">
+</div>
+</div>
+<label for="base-url">接口地址</label>
+<input id="base-url" maxlength="512" name="base_url" placeholder="https://api.deepseek.com" type="url">
+<label for="api-key">API Key</label>
+<div class="key-row">
+<input autocomplete="new-password" id="api-key" maxlength="4096" name="api_key" placeholder="未配置" type="password">
+<button class="danger-text" id="clear-key" type="button">清除已保存密钥</button>
+</div>
+<p class="hint" id="key-hint">保存后不会显示密钥内容。</p>
+<div class="inline-actions">
+<button class="secondary" id="model-test" type="button">测试模型连接（会调用 API）</button>
+<span class="hint" id="model-test-result">
+</span>
+</div>
+</article>
+<details class="panel advanced-card">
+<summary>模型输出参数</summary>
+<div class="field-grid">
+<div>
+<label for="max-tokens">最大输出 Token</label>
+<input id="max-tokens" max="4096" min="64" name="max_tokens" step="1" type="number">
+</div>
+</div>
+</details>
 </form>
-<details class="panel speech-panel disclosure"><summary>语音、识别与歌曲服务</summary><p><a href="/voice-library" target="_blank" rel="noopener">打开角色语音库 · 试听与模型</a></p><div class="section-heading"><h3 class="sr-only">语音与唱歌</h3><button class="primary" id="speech-save" type="button">保存语音配置</button></div><div class="field-grid">
-<div><label for="speech-endpoint">百炼地域地址</label><input id="speech-endpoint" type="url"/></div><div><label for="speech-key">百炼 API Key</label><input autocomplete="new-password" id="speech-key" placeholder="留空保留已配置密钥" type="password"/></div>
-<div><label class="switch-row"><span>语音合成（说话）</span><input id="speech-tts-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label for="speech-tts-model">TTS 模型</label><input id="speech-tts-model"/></div>
-<div><label class="switch-row"><span>语音与视频音轨识别</span><input id="speech-asr-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label for="speech-asr-backend">识别方式</label><select id="speech-asr-backend" aria-describedby="speech-asr-hint"><option value="bailian">百炼云端</option><option value="local">本地 SenseVoice（离线）</option><option value="local_then_bailian">本地优先，执行失败后用百炼</option></select><p class="hint" id="speech-asr-hint">语音、视频音轨和歌词转写共用此设置。本地模式不上传音频；纯音乐没有可识别的词时，不会自动调用云端。</p></div>
-<div><label for="speech-asr-local-model">本地模型名称</label><input id="speech-asr-local-model" placeholder="sensevoice-small-int8" aria-describedby="speech-asr-health-state"/><p class="hint" id="speech-asr-health-state" role="status"></p><label for="speech-asr-model">百炼识别模型（云端模式使用）</label><input id="speech-asr-model"/></div>
-<div><label for="speech-voice">角色音色</label><input id="speech-voice"/></div><div><label for="speech-instruction">说话风格</label><textarea id="speech-instruction" rows="2"></textarea></div>
-</div><p class="hint">微信语音按所选方式转写后交给 DeepSeek 理解。合成结果发送为微信语音；发语音仍遵循角色权限。</p><details><summary>完整歌曲生成</summary><div class="field-grid"><div><label class="switch-row"><span>本地 YuE 生成歌曲</span><input id="speech-yue-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label for="speech-yue-endpoint">YuE 桥接地址</label><input id="speech-yue-endpoint" type="url"/></div><div><label for="speech-yue-token">YuE 桥接令牌</label><input autocomplete="new-password" id="speech-yue-token" placeholder="留空保留" type="password"/></div><div><label class="switch-row"><span>百炼 Fun-Music（需开通邀测）</span><input id="speech-music-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label for="speech-music-model">歌曲模型</label><input id="speech-music-model"/></div></div><div class="inline-actions"><button class="secondary" id="speech-yue-health" type="button">检查本地歌曲服务</button><span class="hint" id="speech-yue-health-state" role="status"></span></div><p class="hint">本地YuE支持原创与参考翻唱、风格和歌词、固定种子与重新抽卡。参考音频限定本会话缓存；可按需转写歌词，识别结果可能有错。翻唱会提取旋律并重新合成，不能保证原伴奏或音色不变。提交后保存参数和任务，按原会话续交；需开启Agent持续任务，无需主动问候权限。Fun-Music需开通邀测。</p></details><div class="inline-actions"><button class="secondary" id="speech-test" type="button">测试说话与识别（不发微信）</button><span class="hint" id="speech-state" role="status"></span></div></details></section>
+<details class="panel speech-panel disclosure">
+<summary>语音、识别与歌曲服务</summary>
+<p>
+<a href="#voices" rel="noopener" data-section-link="voices">打开角色语音库 · 试听与模型</a>
+</p>
+<div class="section-heading">
+<h3 class="sr-only">语音与唱歌</h3>
+<button class="primary" id="speech-save" type="button">保存语音配置</button>
+</div>
+<div class="field-grid">
+<div>
+<label for="speech-endpoint">百炼地域地址</label>
+<input id="speech-endpoint" type="url">
+</div>
+<div>
+<label for="speech-key">百炼 API Key</label>
+<input autocomplete="new-password" id="speech-key" placeholder="留空保留已配置密钥" type="password">
+</div>
+<div>
+<label class="switch-row">
+<span>语音合成（说话）</span>
+<input id="speech-tts-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label for="speech-tts-model">TTS 模型</label>
+<input id="speech-tts-model">
+</div>
+<div>
+<label class="switch-row">
+<span>语音与视频音轨识别</span>
+<input id="speech-asr-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label for="speech-asr-backend">识别方式</label>
+<select id="speech-asr-backend" aria-describedby="speech-asr-hint">
+<option value="bailian">百炼云端</option>
+<option value="local">本地 SenseVoice（离线）</option>
+<option value="local_then_bailian">本地优先，执行失败后用百炼</option>
+</select>
+<p class="hint" id="speech-asr-hint">语音、视频音轨和歌词转写共用此设置。本地模式不上传音频；纯音乐没有可识别的词时，不会自动调用云端。</p>
+</div>
+<div>
+<label for="speech-asr-local-model">本地模型名称</label>
+<input id="speech-asr-local-model" placeholder="sensevoice-small-int8" aria-describedby="speech-asr-health-state">
+<p class="hint" id="speech-asr-health-state" role="status">
+</p>
+<label for="speech-asr-model">百炼识别模型（云端模式使用）</label>
+<input id="speech-asr-model">
+</div>
+<div>
+<label for="speech-voice">角色音色</label>
+<input id="speech-voice">
+</div>
+<div>
+<label for="speech-instruction">说话风格</label>
+<textarea id="speech-instruction" rows="2">
+</textarea>
+</div>
+</div>
+<p class="hint">微信语音按所选方式转写后交给 DeepSeek 理解。合成结果发送为微信语音；发语音仍遵循角色权限。</p>
+<details>
+<summary>完整歌曲生成</summary>
+<div class="field-grid">
+<div>
+<label class="switch-row">
+<span>本地 YuE 生成歌曲</span>
+<input id="speech-yue-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label for="speech-yue-endpoint">YuE 桥接地址</label>
+<input id="speech-yue-endpoint" type="url">
+</div>
+<div>
+<label for="speech-yue-token">YuE 桥接令牌</label>
+<input autocomplete="new-password" id="speech-yue-token" placeholder="留空保留" type="password">
+</div>
+<div>
+<label class="switch-row">
+<span>百炼 Fun-Music（需开通邀测）</span>
+<input id="speech-music-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label for="speech-music-model">歌曲模型</label>
+<input id="speech-music-model">
+</div>
+</div>
+<div class="inline-actions">
+<button class="secondary" id="speech-yue-health" type="button">检查本地歌曲服务</button>
+<span class="hint" id="speech-yue-health-state" role="status">
+</span>
+</div>
+<p class="hint">本地YuE支持原创与参考翻唱、风格和歌词、固定种子与重新抽卡。参考音频限定本会话缓存；可按需转写歌词，识别结果可能有错。翻唱会提取旋律并重新合成，不能保证原伴奏或音色不变。提交后保存参数和任务，按原会话续交；需开启Agent持续任务，无需主动问候权限。Fun-Music需开通邀测。</p>
+</details>
+<div class="inline-actions">
+<button class="secondary" id="speech-test" type="button">测试说话与识别（不发微信）</button>
+<span class="hint" id="speech-state" role="status">
+</span>
+</div>
+</details>
+</section>
 <section aria-labelledby="rules-title" class="page" id="rules">
-<div class="section-heading page-actions"><div><h2 class="sr-only" id="rules-title">回复规则</h2></div><button class="primary" id="save-rules">保存并应用</button></div>
-<div class="rule-grid"><article class="panel"><h3>私聊与文件传输助手</h3><label class="switch-row"><span>文件传输助手</span><input id="filehelper-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label class="switch-row"><span>启用好友私聊</span><input id="private-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label class="switch-row"><span>全部微信好友可私聊</span><input id="private-all-friends" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label for="direct-ids">限定联系人 ID（关闭全部好友时使用）</label><textarea id="direct-ids" placeholder="每行一个微信 ID" rows="4"></textarea><label for="default-prefix">文件传输助手触发前缀</label><input id="default-prefix" maxlength="64" placeholder="/ai "/><p class="hint">好友私聊可直接发送消息，无需前缀。开启全部好友后，按微信后台联系人目录核对，不需逐个填写 ID。文件传输助手使用此前缀触发，默认 /ai 后加一个空格。</p></article><article class="panel"><h3>群聊规则</h3><div class="inline-actions"><button class="secondary" data-catalog-sync="groups" type="button">刷新群聊</button><button class="secondary" data-catalog-sync="contacts" type="button">刷新好友</button><span class="hint" data-catalog-sync-status="" role="status"></span></div><div class="group-search"><label for="group-search">从已同步的群聊添加</label><div class="search-row"><input id="group-search" maxlength="128" placeholder="输入群名称搜索"/><button class="secondary" id="search-groups" type="button">搜索</button></div><div aria-live="polite" class="search-results" id="group-results"></div></div><hr/><label for="manual-group-id">手动添加群 ID</label><div class="search-row"><input id="manual-group-id" maxlength="256" placeholder="例如 123@chatroom"/><button class="secondary" id="add-manual-group" type="button">添加</button></div><div aria-live="polite" class="rule-list" id="group-rules"></div></article></div>
+<div class="section-heading page-actions">
+<div>
+<h2 class="sr-only" id="rules-title">回复规则</h2>
+</div>
+<button class="primary" id="save-rules">保存并应用</button>
+</div>
+<div class="rule-grid">
+<article class="panel">
+<h3>私聊与文件传输助手</h3>
+<label class="switch-row">
+<span>文件传输助手</span>
+<input id="filehelper-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label class="switch-row">
+<span>启用好友私聊</span>
+<input id="private-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label class="switch-row">
+<span>全部微信好友可私聊</span>
+<input id="private-all-friends" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label for="direct-ids">限定联系人 ID（关闭全部好友时使用）</label>
+<textarea id="direct-ids" placeholder="每行一个微信 ID" rows="4">
+</textarea>
+<label for="default-prefix">文件传输助手触发前缀</label>
+<input id="default-prefix" maxlength="64" placeholder="/ai ">
+<p class="hint">好友私聊可直接发送消息，无需前缀。开启全部好友后，按微信后台联系人目录核对，不需逐个填写 ID。文件传输助手使用此前缀触发，默认 /ai 后加一个空格。</p>
+</article>
+<article class="panel">
+<h3>群聊规则</h3>
+<div class="inline-actions">
+<button class="secondary" data-catalog-sync="groups" type="button">刷新群聊</button>
+<button class="secondary" data-catalog-sync="contacts" type="button">刷新好友</button>
+<span class="hint" data-catalog-sync-status="" role="status">
+</span>
+</div>
+<div class="group-search">
+<label for="group-search">从已同步的群聊添加</label>
+<div class="search-row">
+<input id="group-search" maxlength="128" placeholder="输入群名称搜索">
+<button class="secondary" id="search-groups" type="button">搜索</button>
+</div>
+<div aria-live="polite" class="search-results" id="group-results">
+</div>
+</div>
+<hr>
+<label for="manual-group-id">手动添加群 ID</label>
+<div class="search-row">
+<input id="manual-group-id" maxlength="256" placeholder="例如 123@chatroom">
+<button class="secondary" id="add-manual-group" type="button">添加</button>
+</div>
+<div aria-live="polite" class="rule-list" id="group-rules">
+</div>
+</article>
+</div>
 </section>
 <section aria-labelledby="companion-title" class="page" id="companion">
-<div class="section-heading page-actions"><h2 class="sr-only" id="companion-title">角色</h2><button class="primary" id="save-companion">保存角色</button></div>
-<div class="companion-grid"><article class="panel"><h3 id="companion-name-heading">deepseek蓝色大肥鱼</h3>
-<label for="companion-name">名字</label><input id="companion-name" maxlength="96"/>
-<label for="companion-persona">人物与行为</label><textarea id="companion-persona" maxlength="8000" rows="8"></textarea>
-<label for="companion-style">说话方式</label><textarea id="companion-style" maxlength="4000" rows="3"></textarea>
-<details class="role-details"><summary>外观与相处方式</summary><label for="companion-appearance">外观</label><textarea id="companion-appearance" maxlength="4000" rows="3"></textarea><label for="companion-relationship">相处方式</label><textarea id="companion-relationship" maxlength="4000" rows="3"></textarea></details>
-</article><aside><article class="panel"><h3>对话预演</h3><label for="preview-mode">场景</label><select id="preview-mode"><option value="direct">直接对话 / 被 @</option><option value="social">群友闲聊</option><option value="proactive">主动发言</option></select><label for="preview-text">测试内容</label><textarea id="preview-text" placeholder="例如：今天工作有点累" rows="4"></textarea><button class="secondary" id="companion-preview" type="button">预演（不发送微信）</button><div class="preview-result" id="preview-result" role="status"></div></article><a class="workbench-shortcut" data-section-link="agent" href="#agent">工作台与行为文档</a><a class="workbench-shortcut" data-section-link="provider" href="#provider">模型与语音服务 <span id="provider-summary"></span></a></aside></div></section>
-<section aria-labelledby="agent-title" class="page workbench-page" id="agent">
-<div class="section-heading page-actions"><h2 class="sr-only" id="agent-title">工作台</h2><button class="quiet" id="agent-history" type="button">已结束任务</button><button class="secondary" id="agent-refresh" type="button">刷新工作状态</button></div>
-<p class="form-error" id="agent-save-state" role="status"></p>
-<div class="workbench-layout"><div class="workbench-main"><details class="panel" id="agent-workspace-panel" open=""><summary>文档记忆与项目</summary>
-<div class="workspace-toolbar"><div><label for="agent-doc-scope">工作区范围</label><select id="agent-doc-scope"><option value="shared">共享项目指南</option></select></div><div><label for="agent-doc-select">已有文档</label><select id="agent-doc-select"><option value="">选择文档</option></select></div><button class="secondary" id="agent-doc-refresh" type="button">刷新目录</button></div>
-<label for="agent-doc-name">文档名称</label><input id="agent-doc-name" maxlength="100" placeholder="MEMORY.md" spellcheck="false"/>
-<label for="agent-doc-content">Markdown 内容</label><textarea id="agent-doc-content" placeholder="记录项目用法、稳定事实和待办；不保存密钥。" rows="16" spellcheck="false"></textarea>
-<div class="inline-actions"><button class="primary" id="agent-doc-save" type="button">保存文档</button><button class="secondary" id="agent-doc-new" type="button">新建文档</button><span class="hint" id="agent-doc-state" role="status"></span></div>
-</details></div>
-<aside aria-label="Agent 执行情况" class="workbench-activity"><article class="panel"><h3>持续任务</h3><div id="agent-task-list"></div></article><article class="panel"><h3>后台进程</h3><div id="agent-process-list"></div></article></aside></div></section>
-<section aria-labelledby="mobile-title" class="page" id="mobile">
-<div class="section-heading page-actions"><h2 class="sr-only" id="mobile-title">手机探索</h2><div class="inline-actions"><button class="secondary" id="mobile-refresh" type="button">刷新状态</button><button class="secondary" id="mobile-stop" type="button">停止全部设备任务</button></div></div>
-<article class="panel"><p aria-live="polite" id="mobile-status" role="status">尚未加载设备。</p><div class="mobile-devices" id="mobile-devices"></div>
-<details id="mobile-settings"><summary>执行端与动作权限</summary><p class="hint">微信收发继续使用后台。手机任务沿用“权限与服务器”中的可信用户与授权会话；此处只设置设备范围和动作。应用范围在设备桥的私有配置中限制。</p>
-<div class="field-grid"><div><label class="switch-row"><span>启用手机执行端</span><input autocomplete="off" id="mobile-enabled" name="mobile-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label></div><div><label for="mobile-device-ids">允许设备 ID（每行一个）</label><textarea autocomplete="off" id="mobile-device-ids" name="mobile-device-ids" placeholder="lab" rows="3"></textarea></div></div>
-<fieldset class="mobile-action-options"><legend>允许动作（全部不选时仅观察）</legend><label><input data-mobile-action="launch" type="checkbox"/>打开允许应用</label><label><input data-mobile-action="tap" type="checkbox"/>点击</label><label><input data-mobile-action="swipe" type="checkbox"/>滑动</label><label><input data-mobile-action="back" type="checkbox"/>返回</label><label><input data-mobile-action="home" type="checkbox"/>主屏幕</label><label><input data-mobile-action="text" type="checkbox"/>输入英文/数字</label><label><input data-mobile-action="capture" type="checkbox"/>短录屏观察（无音轨）</label><label><input data-mobile-action="open_url" type="checkbox"/>允许浏览器打开公开链接</label></fieldset>
-<div class="field-grid"><div><label for="mobile-command">MCP 桥接命令</label><input autocomplete="off" id="mobile-command" name="mobile-command" placeholder="python3" spellcheck="false"/></div><div><label for="mobile-args">命令参数（JSON 数组）</label><textarea autocomplete="off" id="mobile-args" name="mobile-args" placeholder='["scripts/mobile_bridge.py","--config","/private/bridge.json","--storage","/private/device"]' rows="4" spellcheck="false"></textarea></div></div><p class="hint">命令以管理端用户运行，填写本人信任的执行文件。不要将登录信息或 API Key 填入命令；桥接进程只读其本机私有配置。修改权限会停止当前任务，已提交动作无法撤销。</p><button class="primary" id="mobile-save" type="button">保存设备设置</button><span id="mobile-save-state" role="status"></span></details></article>
-<article class="panel"><form id="mobile-start-form"><div class="field-grid"><div><label for="mobile-device-select">设备</label><select autocomplete="off" id="mobile-device-select" name="mobile-device-select" required=""></select></div><div><label for="mobile-goal">任务目标</label><textarea autocomplete="off" id="mobile-goal" maxlength="1000" name="mobile-goal" placeholder="查看当前页面，描述可见内容，不点击或修改设置" required="" rows="3"></textarea></div></div><button class="primary" id="mobile-start" type="submit">开始任务</button><p class="hint">模型逐轮观察真实截图与界面节点后调用动作。遇到登录、验证码或账号操作时停止并记录；“动作已提交”不等于目标完成。截图仅在管理端展示。</p></form></article>
-<div aria-label="设备任务" class="mobile-tasks" id="mobile-tasks"></div>
-</section>
-<section aria-labelledby="wechat-title" class="page" id="wechat"><div class="section-heading page-actions"><h2 class="sr-only" id="wechat-title">账号管理</h2><span class="muted" id="accounts-state" role="status">正在读取账号</span><div class="button-row"><button class="quiet" id="refresh-accounts" type="button">刷新状态</button><button class="primary" id="add-account" type="button">添加小号</button></div></div><div class="account-list" id="account-list" aria-label="微信账号列表"></div><article class="panel login-panel"><div><h3 id="account-current-name">当前微信账号</h3><p class="muted">扫码登录当前选中账号；其他账号继续在线。登录后可在此账号的工作台启动 Agent。</p><button class="secondary" id="start-login" type="button">扫码登录此账号</button><p class="login-state" id="wechat-login-state" role="status">尚未发起登录。</p></div><div class="qr-box" hidden id="qr-box"><img alt="当前账号的微信登录二维码" id="qr-image"/><p>请扫码并完成手机确认</p></div></article></section>
-<section aria-labelledby="tools-title" class="page" id="tools">
-<div class="section-heading page-actions"><div><h2 class="sr-only" id="tools-title">消息与附件</h2></div></div>
-<details class="panel tools-intro"><summary>使用说明</summary><h3>按步骤发送</h3><p class="muted">只可选择已授权的会话。上传附件不会发送消息；确认发送后才会执行一次微信操作。网络结果不明确时，请用状态查询确认，不会自动重发。</p></details>
-<div class="panel tools-state" hidden="" id="tools-unavailable"></div>
-<div class="tools-workspace" hidden="" id="tools-workspace">
-<article class="panel tools-compose"><div class="tools-step"><span>1</span><div><h3>选择类型与会话</h3><div aria-label="消息类型" class="tools-kind" id="tools-kind" role="radiogroup"><button aria-checked="true" data-kind="text" role="radio" type="button">文字</button><button aria-checked="false" data-kind="image" role="radio" type="button">图片</button><button aria-checked="false" data-kind="file" role="radio" type="button">文件</button><button aria-checked="false" data-kind="video" role="radio" type="button">视频</button><button aria-checked="false" data-kind="voice" role="radio" type="button">语音</button></div><label for="tools-recipient">已授权接收方</label><select id="tools-recipient"></select></div></div>
-<div class="tools-step"><span>2</span><div><h3>填写或上传</h3><label for="tools-text">文字内容</label><textarea id="tools-text" maxlength="3000" placeholder="文字消息内容" rows="4"></textarea><div hidden="" id="tools-upload-area"><label for="tools-file">选择附件</label><input id="tools-file" type="file"/><p class="hint" id="tools-file-note">请选择符合当前类型和大小限制的附件。</p><div class="tools-preview" hidden="" id="tools-preview"></div><button class="secondary" disabled="" id="tools-upload" type="button">上传附件（不发送）</button><p aria-live="polite" class="hint" id="tools-upload-status"></p></div></div></div>
-<div class="tools-step tools-review"><span>3</span><div><h3>核对并手动发送</h3><dl class="tools-review-list" id="tools-review-list"></dl><button class="primary" disabled="" id="tools-send" type="button">确认发送一次</button><p class="hint">发送不会调用模型，也不会自动重试。</p></div></div>
+<div class="section-heading page-actions">
+<h2 class="sr-only" id="companion-title">角色</h2>
+<button class="primary" id="save-companion">保存角色</button>
+</div>
+<div class="companion-grid">
+<article class="panel">
+<h3 id="companion-name-heading">deepseek蓝色大肥鱼</h3>
+<label for="companion-name">名字</label>
+<input id="companion-name" maxlength="96">
+<label for="companion-persona">人物与行为</label>
+<textarea id="companion-persona" maxlength="8000" rows="8">
+</textarea>
+<label for="companion-style">说话方式</label>
+<textarea id="companion-style" maxlength="4000" rows="3">
+</textarea>
+<details class="role-details">
+<summary>外观与相处方式</summary>
+<label for="companion-appearance">外观</label>
+<textarea id="companion-appearance" maxlength="4000" rows="3">
+</textarea>
+<label for="companion-relationship">相处方式</label>
+<textarea id="companion-relationship" maxlength="4000" rows="3">
+</textarea>
+</details>
 </article>
-<aside class="tools-side"><article class="panel"><h3>发送进度</h3><div aria-live="polite" class="tools-progress" id="tools-progress">等待选择内容。</div></article><article class="panel"><h3>结果不明确？</h3><p class="muted">如果发送请求网络中断，保留本次操作编号并查询状态；请不要再次点击发送。</p><button class="secondary" disabled="" id="tools-lookup" type="button">查询本次发送状态</button><button class="secondary" disabled="" id="tools-new" type="button">新建发送</button><div aria-live="polite" class="tools-result" id="tools-result"></div></article></aside>
-<article class="panel tools-library"><div class="tools-library-head"><div><h3>AI 图片素材库</h3><p class="muted">上传的图片可供角色自主选用；请用简洁的语义描述帮助模型判断合适场景。</p></div><button class="secondary" id="library-refresh" type="button">刷新图片素材</button></div><div aria-live="polite" class="hint" id="library-state"></div><div aria-live="polite" class="library-list" id="library-list"></div></article>
-<article class="panel tools-recent"><div class="tools-library-head"><div><h3>最近发送</h3><p class="muted">恢复查询只读取已有操作，不会再次发送。</p></div></div><div aria-live="polite" class="library-list" id="tools-recent-list"></div></article>
+<aside>
+<details class="panel">
+<summary>对话预演</summary>
+<label for="preview-mode">场景</label>
+<select id="preview-mode">
+<option value="direct">直接对话 / 被 @</option>
+<option value="social">群友闲聊</option>
+<option value="proactive">主动发言</option>
+</select>
+<label for="preview-text">测试内容</label>
+<textarea id="preview-text" placeholder="例如：今天工作有点累" rows="4">
+</textarea>
+<button class="secondary" id="companion-preview" type="button">预演（不发送微信）</button>
+<div class="preview-result" id="preview-result" role="status">
+</div>
+</details>
+<a class="workbench-shortcut" data-section-link="agent" href="#agent">工作台与行为文档</a>
+<a class="workbench-shortcut" data-section-link="provider" href="#provider">模型与语音服务 <span id="provider-summary">
+</span>
+</a>
+</aside>
 </div>
 </section>
-<section aria-labelledby="mcp-title" class="page" id="mcp"><div class="section-heading page-actions"><div><h2 class="sr-only" id="mcp-title">联网与 MCP</h2></div></div><article class="panel mcp-config"><label class="switch-row"><span>启用联网与外部插件</span><input checked="" id="mcp-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><p class="hint">开启后角色可自主决定使用，无需逐次确认。</p><label for="mcp-servers">MCP 服务配置（JSON 数组）</label><textarea id="mcp-servers" placeholder='[{"id":"local-search","name":"本地检索","transport":"stdio","command":"/usr/local/bin/example-mcp","args":[],"env":{},"enabled":true}]' rows="13" spellcheck="false"></textarea><p class="hint">stdio 示例仅供 Linux 部署后手工填写；HTTP 服务填写 url。环境变量为只写，读取配置不会显示已有值。</p><button class="primary" id="mcp-save" type="button">保存 MCP 配置</button><p aria-live="polite" class="hint" id="mcp-save-state"></p></article><details class="panel disclosure"><summary>诊断与手动调用</summary><div class="section-heading"><div><h3 class="sr-only">手动检查与调用</h3><p class="muted">点击检查才会启动并检查已配置的服务；不会自动重试。媒体工具的手动调用只会暂存结果，不会自动发送微信。</p></div><button class="secondary" id="mcp-inspect" type="button">检查可用工具</button></div><div aria-live="polite" class="hint" id="mcp-tools-state">尚未检查。</div><div class="mcp-tools-list" id="mcp-tools-list"></div><label for="mcp-test-args">测试参数（JSON 对象）</label><textarea id="mcp-test-args" rows="3" spellcheck="false">{"query":"deepseek"}</textarea><button class="secondary" id="mcp-test" type="button">手动调用选定工具</button><div aria-live="polite" class="mcp-result" id="mcp-test-result"></div></details></section>
-<section aria-labelledby="plugins-title" class="page" id="plugins"><div class="section-heading page-actions"><div><h2 class="sr-only" id="plugins-title">插件中心</h2></div><button class="secondary" id="plugins-refresh" type="button">更新列表</button></div><div class="plugin-workspace"><aside class="plugin-browser"><div class="plugin-summary"><strong id="plugin-count">0</strong><span>已安装插件</span><span id="plugin-enabled-count">0 个启用</span></div><details class="template-disclosure"><summary>从能力模板添加</summary><div class="plugin-templates" id="plugin-templates"></div></details><h3>已安装</h3><div class="plugin-installed-cards" id="plugin-installed-cards"></div></aside><article class="panel plugin-editor"><div class="plugin-template-head"><h3>配置插件</h3></div><div class="inline-actions"><button class="secondary" id="plugin-new" type="button">新建插件</button><details class="utility-menu"><summary>导入与导出</summary><button class="secondary" id="plugin-import-button" type="button">导入 JSON 文件</button><input accept="application/json,.json" hidden="" id="plugin-import" type="file"/><button class="secondary" id="plugin-export" type="button">导出声明（不含密钥）</button></details></div><label for="plugin-select">已保存插件</label><select id="plugin-select"><option value="">新建声明</option></select><label class="switch-row"><span>启用此插件</span><input id="plugin-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><div class="plugin-quick-fields"><div class="field-grid"><div><label for="plugin-display-name">插件名称</label><input autocomplete="off" id="plugin-display-name" maxlength="128"/></div><div><label for="plugin-media-kind">输出类型</label><select id="plugin-media-kind"><option value="">文字 / 通用工具</option><option value="voice">语音</option><option value="image">图片</option><option value="video">视频</option><option value="file">文件</option></select></div></div><label for="plugin-endpoint">服务地址</label><input autocomplete="off" id="plugin-endpoint" placeholder="https://your-provider.example/v1/tts" spellcheck="false" type="url"/><label for="plugin-api-key">服务密钥</label><input autocomplete="new-password" id="plugin-api-key" placeholder="留空保留已保存的密钥" type="password"/><p class="hint" id="plugin-key-help">先选择模板，再填写服务地址与密钥。</p></div><details class="plugin-advanced"><summary>高级声明与多密钥配置</summary><label for="plugin-manifest">插件声明（JSON）</label><textarea id="plugin-manifest" placeholder="选择模板或粘贴声明式插件 JSON" rows="16" spellcheck="false"></textarea><label for="plugin-secrets">密钥（JSON，只写）</label><textarea id="plugin-secrets" placeholder='{"API_KEY":"粘贴你的服务商密钥"}' rows="4" spellcheck="false"></textarea></details><label class="switch-row"><span>清除本插件保存的密钥</span><input id="plugin-clear-secrets" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><p class="hint">密钥必须填写在独立密钥框，声明内使用占位符，勿直接粘贴真实密钥。读取配置不会显示密钥；留空将保留同一插件已有密钥。启用后角色可在合适时自主调用；普通聊天不会展示工具术语，运行日志仅记录必要状态。</p><div class="inline-actions"><button class="primary" id="plugin-save" type="button">保存声明</button><button class="secondary" disabled="" id="plugin-remove" type="button">移除配置</button></div><p aria-live="polite" class="hint" id="plugin-state"></p></article></div><article class="panel"><h3>使用说明</h3><p class="muted">HTTP API 可用 <code>{{secret.API_KEY}}</code> 填充请求头、<code>{{arg.text}}</code> 填充请求体，并可用轮询路径读取异步结果。远程 MCP 不需要新镜像；stdio 插件则要求部署环境已具备对应依赖。保存后可到“联网与 MCP”手动检查已启用工具。</p></article></section>
+<section aria-labelledby="agent-title" class="page workbench-page" id="agent"><div class="workspace-header"><div class="workspace-tabs" role="tablist" aria-label="工作区内容">
+<button type="button" role="tab" aria-selected="true" aria-controls="workspace-tasks" id="tab-tasks" data-workspace-tab="tasks">任务</button>
+<button type="button" role="tab" aria-selected="false" aria-controls="workspace-documents" id="tab-documents" data-workspace-tab="documents" tabindex="-1">文档</button>
+<button type="button" role="tab" aria-selected="false" aria-controls="workspace-processes" id="tab-processes" data-workspace-tab="processes" tabindex="-1">进程</button>
+</div><div class="section-heading page-actions">
+<h2 class="sr-only" id="agent-title">工作区</h2>
+<button class="quiet" id="agent-history" type="button">已结束任务</button>
+<button class="secondary" id="agent-refresh" type="button">刷新工作状态</button>
+</div></div>
+
+
+<div class="workspace-pane" id="workspace-tasks" role="tabpanel" aria-labelledby="tab-tasks">
+<div id="agent-task-list">
+</div>
+</div>
+<div class="workspace-pane" id="workspace-documents" role="tabpanel" aria-labelledby="tab-documents" hidden>
+<div class="document-editor panel" id="agent-workspace-panel" open="" aria-label="文档编辑器">
+<div class="workspace-toolbar document-directory">
+<div>
+<label for="agent-doc-scope" class="sr-only">工作区范围</label>
+<select id="agent-doc-scope">
+<option value="shared">共享项目指南</option>
+</select>
+</div>
+<div>
+<label for="agent-doc-select" class="sr-only">已有文档</label>
+<select id="agent-doc-select">
+<option value="">选择文档</option>
+</select>
+</div>
+<button class="secondary" id="agent-doc-refresh" type="button">刷新目录</button>
+</div>
+<label for="agent-doc-name">文档名称</label>
+<input id="agent-doc-name" maxlength="100" placeholder="MEMORY.md" spellcheck="false">
+<label for="agent-doc-content">Markdown 内容</label>
+<textarea id="agent-doc-content" placeholder="记录项目用法、稳定事实和待办；不保存密钥。" rows="16" spellcheck="false">
+</textarea>
+<div class="inline-actions">
+<button class="primary" id="agent-doc-save" type="button">保存文档</button>
+<button class="secondary" id="agent-doc-new" type="button">新建文档</button>
+<span class="hint" id="agent-doc-state" role="status">
+</span>
+</div>
+</div>
+</div>
+<div class="workspace-pane" id="workspace-processes" role="tabpanel" aria-labelledby="tab-processes" hidden>
+<div id="agent-process-list">
+</div>
+</div>
+<p class="form-error" id="agent-save-state" role="status">
+</p>
+</section>
+<section aria-labelledby="mobile-title" class="page" id="mobile">
+<nav class="local-nav" aria-label="扩展类型">
+<button type="button" class="nav-link" data-section="plugins">插件</button>
+<button type="button" class="nav-link" data-section="mcp">联网与 MCP</button>
+<button type="button" class="nav-link" data-section="mobile">设备连接</button>
+</nav>
+<div class="section-heading page-actions">
+<h2 class="sr-only" id="mobile-title">手机探索</h2>
+<div class="inline-actions">
+<button class="secondary" id="mobile-refresh" type="button">刷新状态</button>
+<button class="secondary" id="mobile-stop" type="button">停止全部设备任务</button>
+</div>
+</div>
+<article class="panel">
+<p aria-live="polite" id="mobile-status" role="status">尚未加载设备。</p>
+<div class="mobile-devices" id="mobile-devices">
+</div>
+<details id="mobile-settings">
+<summary>执行端与动作权限</summary>
+<p class="hint">微信收发继续使用后台。手机任务沿用“权限与服务器”中的可信用户与授权会话；此处只设置设备范围和动作。应用范围在设备桥的私有配置中限制。</p>
+<div class="field-grid">
+<div>
+<label class="switch-row">
+<span>启用手机执行端</span>
+<input autocomplete="off" id="mobile-enabled" name="mobile-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+</div>
+<div>
+<label for="mobile-device-ids">允许设备 ID（每行一个）</label>
+<textarea autocomplete="off" id="mobile-device-ids" name="mobile-device-ids" placeholder="lab" rows="3">
+</textarea>
+</div>
+</div>
+<fieldset class="mobile-action-options">
+<legend>允许动作（全部不选时仅观察）</legend>
+<label>
+<input data-mobile-action="launch" type="checkbox">打开允许应用</label>
+<label>
+<input data-mobile-action="tap" type="checkbox">点击</label>
+<label>
+<input data-mobile-action="swipe" type="checkbox">滑动</label>
+<label>
+<input data-mobile-action="back" type="checkbox">返回</label>
+<label>
+<input data-mobile-action="home" type="checkbox">主屏幕</label>
+<label>
+<input data-mobile-action="text" type="checkbox">输入英文/数字</label>
+<label>
+<input data-mobile-action="capture" type="checkbox">短录屏观察（无音轨）</label>
+<label>
+<input data-mobile-action="open_url" type="checkbox">允许浏览器打开公开链接</label>
+</fieldset>
+<div class="field-grid">
+<div>
+<label for="mobile-command">MCP 桥接命令</label>
+<input autocomplete="off" id="mobile-command" name="mobile-command" placeholder="python3" spellcheck="false">
+</div>
+<div>
+<label for="mobile-args">命令参数（JSON 数组）</label>
+<textarea autocomplete="off" id="mobile-args" name="mobile-args" placeholder="[&quot;scripts/mobile_bridge.py&quot;,&quot;--config&quot;,&quot;/private/bridge.json&quot;,&quot;--storage&quot;,&quot;/private/device&quot;]" rows="4" spellcheck="false">
+</textarea>
+</div>
+</div>
+<p class="hint">命令以管理端用户运行，填写本人信任的执行文件。不要将登录信息或 API Key 填入命令；桥接进程只读其本机私有配置。修改权限会停止当前任务，已提交动作无法撤销。</p>
+<button class="primary" id="mobile-save" type="button">保存设备设置</button>
+<span id="mobile-save-state" role="status">
+</span>
+</details>
+</article>
+<article class="panel">
+<form id="mobile-start-form">
+<div class="field-grid">
+<div>
+<label for="mobile-device-select">设备</label>
+<select autocomplete="off" id="mobile-device-select" name="mobile-device-select" required="">
+</select>
+</div>
+<div>
+<label for="mobile-goal">任务目标</label>
+<textarea autocomplete="off" id="mobile-goal" maxlength="1000" name="mobile-goal" placeholder="查看当前页面，描述可见内容，不点击或修改设置" required="" rows="3">
+</textarea>
+</div>
+</div>
+<button class="primary" id="mobile-start" type="submit">开始任务</button>
+<p class="hint">模型逐轮观察真实截图与界面节点后调用动作。遇到登录、验证码或账号操作时停止并记录；“动作已提交”不等于目标完成。截图仅在管理端展示。</p>
+</form>
+</article>
+<div aria-label="设备任务" class="mobile-tasks" id="mobile-tasks">
+</div>
+</section>
+<section aria-labelledby="wechat-title" class="page" id="wechat">
+<div class="page-toolbar">
+<button class="quiet nav-link" data-section="account-actions" type="button">操作与复核记录</button>
+</div>
+<div class="section-heading page-actions">
+<h2 class="sr-only" id="wechat-title">账号管理</h2>
+<span class="muted" id="accounts-state" role="status">正在读取账号</span>
+<div class="button-row">
+<button class="quiet" id="refresh-accounts" type="button">刷新状态</button>
+<button class="primary" id="add-account" type="button">添加小号</button>
+</div>
+</div>
+<div class="account-list" id="account-list" aria-label="微信账号列表">
+</div>
+<article class="panel login-panel">
+<div>
+<h3 id="account-current-name">当前微信账号</h3>
+<p class="muted">扫码登录当前选中账号；其他账号继续在线。登录后可在此账号的工作台启动 Agent。</p>
+<button class="secondary" id="start-login" type="button">扫码登录此账号</button>
+<p class="login-state" id="wechat-login-state" role="status">尚未发起登录。</p>
+</div>
+<div class="qr-box" hidden id="qr-box">
+<img alt="当前账号的微信登录二维码" id="qr-image">
+<p>请扫码并完成手机确认</p>
+</div>
+</article>
+</section>
+<section aria-labelledby="tools-title" class="page" id="tools">
+<div class="page-toolbar">
+<button class="quiet nav-link" data-section="memory" type="button">返回会话</button>
+<strong id="send-context-label">手动发送</strong>
+</div>
+<div class="section-heading page-actions">
+<div>
+<h2 class="sr-only" id="tools-title">消息与附件</h2>
+</div>
+</div>
+<details class="panel tools-intro">
+<summary>使用说明</summary>
+<h3>按步骤发送</h3>
+<p class="muted">只可选择已授权的会话。上传附件不会发送消息；确认发送后才会执行一次微信操作。网络结果不明确时，请用状态查询确认，不会自动重发。</p>
+</details>
+<div class="panel tools-state" hidden="" id="tools-unavailable">
+</div>
+<div class="tools-workspace" hidden="" id="tools-workspace">
+<article class="panel tools-compose">
+<div class="tools-step">
+<span>1</span>
+<div>
+<h3>选择类型与会话</h3>
+<div aria-label="消息类型" class="tools-kind" id="tools-kind" role="radiogroup">
+<button aria-checked="true" data-kind="text" role="radio" type="button">文字</button>
+<button aria-checked="false" data-kind="image" role="radio" type="button">图片</button>
+<button aria-checked="false" data-kind="file" role="radio" type="button">文件</button>
+<button aria-checked="false" data-kind="video" role="radio" type="button">视频</button>
+<button aria-checked="false" data-kind="voice" role="radio" type="button">语音</button>
+</div>
+<label for="tools-recipient">已授权接收方</label>
+<select id="tools-recipient">
+</select>
+</div>
+</div>
+<div class="tools-step">
+<span>2</span>
+<div>
+<h3>填写或上传</h3>
+<label for="tools-text">文字内容</label>
+<textarea id="tools-text" maxlength="3000" placeholder="文字消息内容" rows="4">
+</textarea>
+<div hidden="" id="tools-upload-area">
+<label for="tools-file">选择附件</label>
+<input id="tools-file" type="file">
+<p class="hint" id="tools-file-note">请选择符合当前类型和大小限制的附件。</p>
+<div class="tools-preview" hidden="" id="tools-preview">
+</div>
+<button class="secondary" disabled="" id="tools-upload" type="button">上传附件（不发送）</button>
+<p aria-live="polite" class="hint" id="tools-upload-status">
+</p>
+</div>
+</div>
+</div>
+<div class="tools-step tools-review">
+<span>3</span>
+<div>
+<h3>核对并手动发送</h3>
+<dl class="tools-review-list" id="tools-review-list">
+</dl>
+<button class="primary" disabled="" id="tools-send" type="button">确认发送一次</button>
+<p class="hint">发送不会调用模型，也不会自动重试。</p>
+</div>
+</div>
+</article>
+<aside class="tools-side">
+<article class="panel">
+<h3>发送进度</h3>
+<div aria-live="polite" class="tools-progress" id="tools-progress">等待选择内容。</div>
+</article>
+<article class="panel">
+<h3>结果不明确？</h3>
+<p class="muted">如果发送请求网络中断，保留本次操作编号并查询状态；请不要再次点击发送。</p>
+<button class="secondary" disabled="" id="tools-lookup" type="button">查询本次发送状态</button>
+<button class="secondary" disabled="" id="tools-new" type="button">新建发送</button>
+<div aria-live="polite" class="tools-result" id="tools-result">
+</div>
+</article>
+</aside>
+<article class="panel tools-library">
+<div class="tools-library-head">
+<div>
+<h3>AI 图片素材库</h3>
+<p class="muted">上传的图片可供角色自主选用；请用简洁的语义描述帮助模型判断合适场景。</p>
+</div>
+<button class="secondary" id="library-refresh" type="button">刷新图片素材</button>
+</div>
+<div aria-live="polite" class="hint" id="library-state">
+</div>
+<div aria-live="polite" class="library-list" id="library-list">
+</div>
+</article>
+<article class="panel tools-recent">
+<div class="tools-library-head">
+<div>
+<h3>最近发送</h3>
+<p class="muted">恢复查询只读取已有操作，不会再次发送。</p>
+</div>
+</div>
+<div aria-live="polite" class="library-list" id="tools-recent-list">
+</div>
+</article>
+</div>
+</section>
+<section aria-labelledby="mcp-title" class="page" id="mcp">
+<nav class="local-nav" aria-label="扩展类型">
+<button type="button" class="nav-link" data-section="plugins">插件</button>
+<button type="button" class="nav-link" data-section="mcp">联网与 MCP</button>
+<button type="button" class="nav-link" data-section="mobile">设备连接</button>
+</nav>
+<div class="section-heading page-actions">
+<div>
+<h2 class="sr-only" id="mcp-title">联网与 MCP</h2>
+</div>
+</div>
+<article class="panel mcp-config">
+<label class="switch-row">
+<span>启用联网与外部插件</span>
+<input checked="" id="mcp-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<p class="hint">开启后角色可自主决定使用，无需逐次确认。</p>
+<label for="mcp-servers">MCP 服务配置（JSON 数组）</label>
+<textarea id="mcp-servers" placeholder="[{&quot;id&quot;:&quot;local-search&quot;,&quot;name&quot;:&quot;本地检索&quot;,&quot;transport&quot;:&quot;stdio&quot;,&quot;command&quot;:&quot;/usr/local/bin/example-mcp&quot;,&quot;args&quot;:[],&quot;env&quot;:{},&quot;enabled&quot;:true}]" rows="13" spellcheck="false">
+</textarea>
+<p class="hint">stdio 示例仅供 Linux 部署后手工填写；HTTP 服务填写 url。环境变量为只写，读取配置不会显示已有值。</p>
+<button class="primary" id="mcp-save" type="button">保存 MCP 配置</button>
+<p aria-live="polite" class="hint" id="mcp-save-state">
+</p>
+</article>
+<details class="panel disclosure">
+<summary>诊断与手动调用</summary>
+<div class="section-heading">
+<div>
+<h3 class="sr-only">手动检查与调用</h3>
+<p class="muted">点击检查才会启动并检查已配置的服务；不会自动重试。媒体工具的手动调用只会暂存结果，不会自动发送微信。</p>
+</div>
+<button class="secondary" id="mcp-inspect" type="button">检查可用工具</button>
+</div>
+<div aria-live="polite" class="hint" id="mcp-tools-state">尚未检查。</div>
+<div class="mcp-tools-list" id="mcp-tools-list">
+</div>
+<label for="mcp-test-args">测试参数（JSON 对象）</label>
+<textarea id="mcp-test-args" rows="3" spellcheck="false">{"query":"deepseek"}</textarea>
+<button class="secondary" id="mcp-test" type="button">手动调用选定工具</button>
+<div aria-live="polite" class="mcp-result" id="mcp-test-result">
+</div>
+</details>
+</section>
+<section aria-labelledby="plugins-title" class="page" id="plugins">
+<nav class="local-nav" aria-label="扩展类型">
+<button type="button" class="nav-link" data-section="plugins">插件</button>
+<button type="button" class="nav-link" data-section="mcp">联网与 MCP</button>
+<button type="button" class="nav-link" data-section="mobile">设备连接</button>
+</nav>
+<div class="section-heading page-actions">
+<div>
+<h2 class="sr-only" id="plugins-title">插件中心</h2>
+</div>
+<button class="secondary" id="plugins-refresh" type="button">更新列表</button>
+</div>
+<div class="plugin-workspace">
+<aside class="plugin-browser">
+<div class="plugin-summary">
+<strong id="plugin-count">0</strong>
+<span>已安装插件</span>
+<span id="plugin-enabled-count">0 个启用</span>
+</div>
+<details class="template-disclosure">
+<summary>从能力模板添加</summary>
+<div class="plugin-templates" id="plugin-templates">
+</div>
+</details>
+<h3>已安装</h3>
+<div class="plugin-installed-cards" id="plugin-installed-cards">
+</div>
+</aside>
+<article class="panel plugin-editor">
+<div class="plugin-template-head">
+<h3>配置插件</h3>
+</div>
+<div class="inline-actions">
+<button class="secondary" id="plugin-new" type="button">新建插件</button>
+<details class="utility-menu">
+<summary>导入与导出</summary>
+<button class="secondary" id="plugin-import-button" type="button">导入 JSON 文件</button>
+<input accept="application/json,.json" hidden="" id="plugin-import" type="file">
+<button class="secondary" id="plugin-export" type="button">导出声明（不含密钥）</button>
+</details>
+</div>
+<label for="plugin-select">已保存插件</label>
+<select id="plugin-select">
+<option value="">新建声明</option>
+</select>
+<label class="switch-row">
+<span>启用此插件</span>
+<input id="plugin-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<div class="plugin-quick-fields">
+<div class="field-grid">
+<div>
+<label for="plugin-display-name">插件名称</label>
+<input autocomplete="off" id="plugin-display-name" maxlength="128">
+</div>
+<div>
+<label for="plugin-media-kind">输出类型</label>
+<select id="plugin-media-kind">
+<option value="">文字 / 通用工具</option>
+<option value="voice">语音</option>
+<option value="image">图片</option>
+<option value="video">视频</option>
+<option value="file">文件</option>
+</select>
+</div>
+</div>
+<label for="plugin-endpoint">服务地址</label>
+<input autocomplete="off" id="plugin-endpoint" placeholder="https://your-provider.example/v1/tts" spellcheck="false" type="url">
+<label for="plugin-api-key">服务密钥</label>
+<input autocomplete="new-password" id="plugin-api-key" placeholder="留空保留已保存的密钥" type="password">
+<p class="hint" id="plugin-key-help">先选择模板，再填写服务地址与密钥。</p>
+</div>
+<details class="plugin-advanced">
+<summary>高级声明与多密钥配置</summary>
+<label for="plugin-manifest">插件声明（JSON）</label>
+<textarea id="plugin-manifest" placeholder="选择模板或粘贴声明式插件 JSON" rows="16" spellcheck="false">
+</textarea>
+<label for="plugin-secrets">密钥（JSON，只写）</label>
+<textarea id="plugin-secrets" placeholder="{&quot;API_KEY&quot;:&quot;粘贴你的服务商密钥&quot;}" rows="4" spellcheck="false">
+</textarea>
+</details>
+<label class="switch-row">
+<span>清除本插件保存的密钥</span>
+<input id="plugin-clear-secrets" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<p class="hint">密钥必须填写在独立密钥框，声明内使用占位符，勿直接粘贴真实密钥。读取配置不会显示密钥；留空将保留同一插件已有密钥。启用后角色可在合适时自主调用；普通聊天不会展示工具术语，运行日志仅记录必要状态。</p>
+<div class="inline-actions">
+<button class="primary" id="plugin-save" type="button">保存声明</button>
+<button class="secondary" disabled="" id="plugin-remove" type="button">移除配置</button>
+</div>
+<p aria-live="polite" class="hint" id="plugin-state">
+</p>
+</article>
+</div>
+<details class="panel">
+<summary>使用说明</summary>
+<p class="muted">HTTP API 可用 <code>{{secret.API_KEY}}</code> 填充请求头、<code>{{arg.text}}</code> 填充请求体，并可用轮询路径读取异步结果。远程 MCP 不需要新镜像；stdio 插件则要求部署环境已具备对应依赖。保存后可到“联网与 MCP”手动检查已启用工具。</p>
+</details>
+</section>
 <section aria-labelledby="catalog-title" class="page" id="catalog">
-<div class="section-heading page-actions"><div><h2 class="sr-only" id="catalog-title">会话目录</h2></div></div>
-<article class="panel catalog-controls"><div class="field-grid"><div><label for="catalog-kind">目录类型</label><select id="catalog-kind"><option value="contacts">联系人</option><option value="groups">群聊</option><option value="threads">会话</option><option value="messages">消息</option><option value="members">群成员</option></select></div><div hidden="" id="catalog-thread-wrap"><label for="catalog-thread">已授权会话</label><select id="catalog-thread"></select></div></div><label for="catalog-search">搜索</label><div class="search-row"><input id="catalog-search" maxlength="128" placeholder="输入名称、备注或 ID"/><button class="primary" id="catalog-query" type="button">查询目录</button></div><p class="hint" id="catalog-coverage"></p></article>
-<article class="panel"><div aria-live="polite" class="hint" id="catalog-state">请选择类型后手动查询。</div><div class="inline-actions"><button class="secondary" data-catalog-sync="groups" type="button">刷新群聊</button><button class="secondary" data-catalog-sync="contacts" type="button">刷新好友</button><button class="secondary" data-catalog-sync="members" hidden="" id="catalog-refresh-members" type="button">刷新当前群成员</button><span class="hint" data-catalog-sync-status="" role="status"></span></div><div aria-live="polite" class="catalog-list" id="catalog-list"></div><button class="secondary" hidden="" id="catalog-more" type="button">加载更多</button></article>
+<div class="section-heading page-actions">
+<div>
+<h2 class="sr-only" id="catalog-title">会话目录</h2>
+</div>
+</div>
+<article class="panel catalog-controls">
+<div class="field-grid">
+<div>
+<label for="catalog-kind">目录类型</label>
+<select id="catalog-kind">
+<option value="contacts">联系人</option>
+<option value="groups">群聊</option>
+<option value="threads">会话</option>
+<option value="messages">消息</option>
+<option value="members">群成员</option>
+</select>
+</div>
+<div hidden="" id="catalog-thread-wrap">
+<label for="catalog-thread">已授权会话</label>
+<select id="catalog-thread">
+</select>
+</div>
+</div>
+<label for="catalog-search">搜索</label>
+<div class="search-row">
+<input id="catalog-search" maxlength="128" placeholder="输入名称、备注或 ID">
+<button class="primary" id="catalog-query" type="button">查询目录</button>
+</div>
+<p class="hint" id="catalog-coverage">
+</p>
+</article>
+<article class="panel">
+<div aria-live="polite" class="hint" id="catalog-state">请选择类型后手动查询。</div>
+<div class="inline-actions">
+<button class="secondary" data-catalog-sync="groups" type="button">刷新群聊</button>
+<button class="secondary" data-catalog-sync="contacts" type="button">刷新好友</button>
+<button class="secondary" data-catalog-sync="members" hidden="" id="catalog-refresh-members" type="button">刷新当前群成员</button>
+<span class="hint" data-catalog-sync-status="" role="status">
+</span>
+</div>
+<div aria-live="polite" class="catalog-list" id="catalog-list">
+</div>
+<button class="secondary" hidden="" id="catalog-more" type="button">加载更多</button>
+</article>
 </section>
 <section aria-labelledby="account-actions-title" class="page" id="account-actions">
-<div class="section-heading page-actions"><div><h2 class="sr-only" id="account-actions-title">账号操作</h2></div></div>
-<article class="panel action-compose"><div class="field-grid"><div><label for="action-kind">操作类型</label><select id="action-kind"><option value="rename">修改群名称</option><option value="my_name">修改我的群昵称</option><option value="mute">设置群免打扰</option><option value="add_members">邀请群成员</option><option value="remove_members">移除群成员</option><option value="leave">退出群聊</option><option value="clear_announcement">清空群公告</option><option value="create">创建群聊</option><option value="recall">撤回已发送消息</option></select></div><div id="action-thread-wrap"><label for="action-thread">已授权群聊</label><select id="action-thread"></select></div></div><div id="action-text-wrap"><label for="action-text">内容</label><textarea id="action-text" maxlength="1000" placeholder="请输入新的名称或创建群聊名称" rows="3"></textarea></div><div id="action-members-wrap"><label for="action-members">成员 ID</label><textarea id="action-members" maxlength="4000" placeholder="每行一个成员 ID" rows="3"></textarea><p class="hint" id="action-members-note">邀请或移除时可填 1 至 40 个成员 ID。</p></div><label class="switch-row" hidden="" id="action-mute-wrap"><span>开启群免打扰</span><input id="action-muted" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><input id="action-message-id" type="hidden"/><input id="action-server-id" type="hidden"/><button class="primary" id="action-prepare" type="button">准备操作供复核</button><p aria-live="polite" class="hint" id="action-prepare-state"></p></article>
-<article class="panel"><div class="section-heading action-list-head"><div><h3>待复核与操作记录</h3><p class="muted">网络不确定时只查询状态；不要重复准备或重复确认。</p></div><button class="secondary" id="actions-refresh" type="button">刷新记录</button></div><div aria-live="polite" class="hint" id="actions-state">进入本页后可刷新记录。</div><div aria-live="polite" class="actions-list" id="actions-list"></div></article>
-</section>
-<section aria-label="会话与记忆" class="page" id="memory"><div class="conversation-toolbar"><label class="sr-only" for="conversation-search">搜索会话</label><input id="conversation-search" placeholder="搜索群聊或私信…" type="search"/><button class="secondary" id="conversation-refresh" type="button">刷新</button><button class="secondary" hidden="" id="conversation-new" type="button">有新进展</button></div><p class="hint" id="conversation-state" role="status"></p><article class="panel conversation-index" id="memory-panel"><div class="conversation-list" id="companion-scopes"></div></article>
-<div hidden="" id="conversation-detail-parking"><div aria-label="会话详情" hidden="" id="memory-detail" role="region">
-<div class="conversation-actions"><button class="secondary" id="context-compress-now" type="button">压缩上下文</button><button class="quiet" hidden="" id="memory-history" type="button">压缩前的消息</button><button class="quiet" id="memory-refresh" type="button">刷新消息</button><button class="quiet" id="memory-settings" type="button">备注与管理</button><span class="hint" id="context-compress-state" role="status"></span></div>
-<p class="hint" id="memory-load-state" role="status"></p><div class="conversation-feed" id="memory-content"></div>
-<div hidden="" id="memory-management-parking"><div id="memory-management"><span id="memory-archive-mount"></span><label for="memory-note">添加关系备注</label><div class="search-row"><input id="memory-note" maxlength="1000" placeholder="例如：偏好简短回答"/><button class="secondary" id="save-memory-note" type="button">保存备注</button></div><div id="memory-notes"></div><button class="danger-text" id="clear-memory" type="button">清除这个会话的活跃 AI 记忆</button></div></div>
-</div></div></section><section aria-labelledby="permissions-title" class="page" id="permissions"><div class="section-heading page-actions"><div><h2 class="sr-only" id="permissions-title">权限与连接</h2></div><button class="primary" id="save-permissions" type="button">保存权限</button></div>
-<details class="panel disclosure" id="channels-settings-panel"><summary>视频号授权读取</summary><h3 class="sr-only">视频号授权读取</h3>
-<label class="switch-row"><span>自动读取新转发的视频号</span><input id="channels-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label>
-<details><summary>实验性：视频号助手授权</summary><label for="channels-assistant-cookie">视频号助手 Cookie（实验性，仍需 exportId）</label><input autocomplete="off" id="channels-assistant-cookie" maxlength="16384" placeholder="与元宝登录态不同，留空保留" spellcheck="false" type="password"/><p class="hint">助手接口需要 export/ 开头的导出标识。主路径直接通过原生微信查询作品链接，不需要助手 Cookie。此实验授权仅用于已有 exportId 的备用解析。</p>
-</details>
-<label for="channels-cookie">元宝网页登录 Cookie</label><input autocomplete="off" id="channels-cookie" maxlength="16384" placeholder="留空保留已保存的 Cookie" spellcheck="false" type="password"/>
-<div class="inline-actions"><button class="primary" id="channels-save" type="button">保存视频号授权</button><button class="danger-text" id="channels-clear" type="button">清除授权</button></div><p class="hint" id="channels-state" role="status"></p>
-<details><summary>高级：已有桌面桥接（可选）</summary><label for="channels-bridge">作品 ID 自动读取桥接（可选）</label><input id="channels-bridge" maxlength="128" placeholder="http://127.0.0.1:2026" type="url"/><p class="hint">连接你已部署的 wx_channel 桌面桥接，直接用转发卡片作品 ID 获取视频，无需每次复制链接。需同机服务和已登录桌面微信；不是启用此项就自动安装。</p>
-</details>
-<details><summary>如何获取 Cookie，以及备用方式</summary><p class="hint">登录 yuanbao.tencent.com 元宝，F12 → 网络 → 刷新 → 选择同域请求 → 请求标头 → 复制 Cookie 值，填写上方密码框。只需配置一次，授权过期后更新；不要发送到聊天或上传 Git。</p><p class="hint">原生可播放内容优先。否则自动用原卡片作品 ID 查询微信分享链接，再经元宝取得真实视频；需要已更新的原生服务与视频理解权限。自动路径失败时仍可绑定备用链接，不以标题代替视频观察。</p></details>
-<label for="channels-card">最近收到的视频号卡片</label><div class="inline-actions"><select id="channels-card"><option value="">请刷新卡片列表</option></select><button class="secondary" id="channels-refresh" type="button">刷新卡片</button></div>
-<label for="channels-url">这条视频的分享链接</label><input id="channels-url" maxlength="2048" placeholder="https://weixin.qq.com/sph/..." type="url"/>
-<div class="inline-actions"><button class="secondary" id="channels-bind" type="button">保存链接绑定</button><button class="secondary" id="channels-test" type="button">读取并更新观察（不发消息）</button></div><p class="hint" id="channels-test-state" role="status"></p><pre class="mcp-result" hidden="" id="channels-observation"></pre>
-</details>
-<article class="panel" id="permissions-panel"><h3>媒体与主动行为</h3><label class="switch-row"><span>主动问候</span><input id="perm-proactive" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label class="switch-row"><span>自主发送图片</span><input id="perm-send-image" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label class="switch-row"><span>自主发送语音</span><input id="perm-send-voice" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label class="switch-row"><span>自主发送视频</span><input id="perm-send-video" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label class="switch-row"><span>自主发送文件</span><input id="perm-send-file" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><p class="hint">模型按需选择媒体；以上权限决定可发送的类型。</p></article>
-<details aria-labelledby="agent-authority-title" class="panel agent-authority disclosure"><summary>账号与服务器授权</summary>
-<div class="section-heading"><h3 class="sr-only" id="agent-authority-title">账号与服务器授权</h3><button class="primary" id="agent-save-permissions" type="button">保存高权限设置</button></div>
-<div class="field-grid">
-<div></div>
-<div><label class="switch-row"><span>主人可跨会话读取与发送</span><input id="agent-cross-conversation" type="checkbox"/><span aria-hidden="true" class="switch"></span></label></div>
-<div><label class="switch-row"><span>外部 MCP / API 插件仅限可信用户调用</span><input id="agent-external-owner-only" type="checkbox"/><span aria-hidden="true" class="switch"></span></label></div><div><label for="agent-owner-ids">可信微信用户 ID</label><textarea id="agent-owner-ids" placeholder="每行一个真实 wxid；昵称不能作为身份依据" rows="3"></textarea></div>
-<div><label class="switch-row"><span>主人可在全部已启用会话使用高权限</span><input id="agent-owner-all-threads" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><p class="hint">仍按实际发送者的微信用户 ID 核验；群友不会继承主人的权限。</p><label for="agent-privileged-threads">或指定允许高权限的会话 ID</label><textarea id="agent-privileged-threads" placeholder="关闭上方开关后，每行一个已授权会话 ID" rows="3"></textarea></div>
-<div><label for="agent-host-mode">工作区执行能力</label><select id="agent-host-mode"><option value="disabled">关闭服务器操作</option><option value="read">只读：目录与文本文件</option><option value="files">文件：读取、创建与校验修改</option><option value="full">程序：文件与隔离 Shell</option></select></div>
-<div><label for="agent-host-roots">工作区基准目录（按账号和会话自动派生）</label><textarea id="agent-host-roots" readonly="" placeholder="由当前账号与会话派生" rows="3"></textarea></div>
+<div class="page-toolbar">
+<button class="quiet nav-link" data-section="wechat" type="button">返回账号列表</button>
 </div>
-<p class="hint" id="agent-host-description" role="status"></p>
-<details class="agent-account-actions"><summary>允许 AI 执行的微信账号动作</summary><div class="field-grid" id="agent-action-options"></div></details>
-<p class="hint">高权限同时校验可信用户和会话，聊天中自称管理员无效。关闭权限会停止旧执行。服务器指管理端所在的 Linux / Windows 环境；不自动获得 root。</p><p class="hint" id="agent-authority-state" role="status"></p>
+<div class="section-heading page-actions">
+<div>
+<h2 class="sr-only" id="account-actions-title">账号操作</h2>
+</div>
+</div>
+<article class="panel action-compose">
+<div class="field-grid">
+<div>
+<label for="action-kind">操作类型</label>
+<select id="action-kind">
+<option value="rename">修改群名称</option>
+<option value="my_name">修改我的群昵称</option>
+<option value="mute">设置群免打扰</option>
+<option value="add_members">邀请群成员</option>
+<option value="remove_members">移除群成员</option>
+<option value="leave">退出群聊</option>
+<option value="clear_announcement">清空群公告</option>
+<option value="create">创建群聊</option>
+<option value="recall">撤回已发送消息</option>
+</select>
+</div>
+<div id="action-thread-wrap">
+<label for="action-thread">已授权群聊</label>
+<select id="action-thread">
+</select>
+</div>
+</div>
+<div id="action-text-wrap">
+<label for="action-text">内容</label>
+<textarea id="action-text" maxlength="1000" placeholder="请输入新的名称或创建群聊名称" rows="3">
+</textarea>
+</div>
+<div id="action-members-wrap">
+<label for="action-members">成员 ID</label>
+<textarea id="action-members" maxlength="4000" placeholder="每行一个成员 ID" rows="3">
+</textarea>
+<p class="hint" id="action-members-note">邀请或移除时可填 1 至 40 个成员 ID。</p>
+</div>
+<label class="switch-row" hidden="" id="action-mute-wrap">
+<span>开启群免打扰</span>
+<input id="action-muted" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<input id="action-message-id" type="hidden">
+<input id="action-server-id" type="hidden">
+<button class="primary" id="action-prepare" type="button">准备操作供复核</button>
+<p aria-live="polite" class="hint" id="action-prepare-state">
+</p>
+</article>
+<article class="panel">
+<div class="section-heading action-list-head">
+<div>
+<h3>待复核与操作记录</h3>
+<p class="muted">网络不确定时只查询状态；不要重复准备或重复确认。</p>
+</div>
+<button class="secondary" id="actions-refresh" type="button">刷新记录</button>
+</div>
+<div aria-live="polite" class="hint" id="actions-state">进入本页后可刷新记录。</div>
+<div aria-live="polite" class="actions-list" id="actions-list">
+</div>
+</article>
+</section>
+<section aria-label="会话与记忆" class="page" id="memory">
+<div class="conversation-toolbar">
+<label class="sr-only" for="conversation-search">搜索会话</label>
+<input id="conversation-search" placeholder="搜索群聊或私信…" type="search">
+<button class="secondary" id="conversation-refresh" type="button">刷新</button>
+<button class="secondary" hidden="" id="conversation-new" type="button">有新进展</button>
+</div>
+<p class="hint" id="conversation-state" role="status">
+</p>
+<div hidden="" id="conversation-detail-parking">
+<div aria-label="会话详情" hidden="" id="memory-detail" role="region">
+<div class="conversation-actions">
+<button type="button" class="quiet" id="conversation-close">返回会话列表</button>
+<h2 id="conversation-title">
+</h2>
+<button class="secondary" id="context-compress-now" type="button">压缩上下文</button>
+<button class="quiet" hidden="" id="memory-history" type="button">压缩前的消息</button>
+<button class="quiet" id="memory-refresh" type="button">刷新消息</button>
+<button class="quiet" id="memory-settings" type="button">备注与管理</button>
+<span class="hint" id="context-compress-state" role="status">
+</span>
+<button type="button" class="quiet" id="conversation-send">发送消息</button>
+<button type="button" class="quiet" id="conversation-members">成员</button>
+<button type="button" class="quiet" id="conversation-rule">回复规则</button>
+</div>
+<p class="hint" id="memory-load-state" role="status">
+</p>
+<div class="conversation-feed" id="memory-content">
+</div>
+<div hidden="" id="memory-management-parking">
+<div id="memory-management">
+<span id="memory-archive-mount">
+</span>
+<label for="memory-note">添加关系备注</label>
+<div class="search-row">
+<input id="memory-note" maxlength="1000" placeholder="例如：偏好简短回答">
+<button class="secondary" id="save-memory-note" type="button">保存备注</button>
+</div>
+<div id="memory-notes">
+</div>
+<button class="danger-text" id="clear-memory" type="button">清除这个会话的活跃 AI 记忆</button>
+</div>
+</div>
+</div>
+</div>
+<div class="conversation-workspace">
+<article class="panel conversation-index" id="memory-panel">
+<div class="conversation-list" id="companion-scopes">
+</div>
+</article>
+<article class="panel conversation-inspector" id="conversation-inspector">
+<div id="conversation-idle" class="empty">
+<svg class="ui-icon" aria-hidden="true">
+<use href="#icon-chat">
+</use>
+</svg>
+<p>选择一个会话，查看消息与记忆</p>
+</div>
+</article>
+</div>
+</section>
+<section aria-labelledby="permissions-title" class="page" id="permissions">
+<div class="section-heading page-actions">
+<div>
+<h2 class="sr-only" id="permissions-title">权限与连接</h2>
+</div>
+<button class="primary" id="save-permissions" type="button">保存权限</button>
+</div>
+<details class="panel disclosure" id="channels-settings-panel">
+<summary>视频号授权读取</summary>
+<h3 class="sr-only">视频号授权读取</h3>
+<label class="switch-row">
+<span>自动读取新转发的视频号</span>
+<input id="channels-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<details>
+<summary>实验性：视频号助手授权</summary>
+<label for="channels-assistant-cookie">视频号助手 Cookie（实验性，仍需 exportId）</label>
+<input autocomplete="off" id="channels-assistant-cookie" maxlength="16384" placeholder="与元宝登录态不同，留空保留" spellcheck="false" type="password">
+<p class="hint">助手接口需要 export/ 开头的导出标识。主路径直接通过原生微信查询作品链接，不需要助手 Cookie。此实验授权仅用于已有 exportId 的备用解析。</p>
 </details>
-<details class="panel"><summary>最近账号与服务器操作</summary><div id="agent-operation-list"></div></details>
-<details class="panel disclosure"><summary>安静时段</summary><h3 class="sr-only">安静时段</h3><div class="field-grid"><div><label for="timezone">时区</label><input id="timezone" placeholder="Asia/Shanghai"/></div><div><label for="quiet-start">从</label><input id="quiet-start" type="time"/></div><div><label for="quiet-end">到</label><input id="quiet-end" type="time"/></div></div><p class="hint">约束主动问候和自主冲浪；开始与结束相同表示不设安静时段。</p></details>
-<details aria-labelledby="proactive-title" class="panel proactive-settings disclosure" id="proactive-panel"><summary>自主续聊</summary>
-<div class="section-heading"><h3 class="sr-only" id="proactive-title">主动问候</h3><button class="primary" id="save-proactive" type="button">保存续聊设置</button></div>
+<label for="channels-cookie">元宝网页登录 Cookie</label>
+<input autocomplete="off" id="channels-cookie" maxlength="16384" placeholder="留空保留已保存的 Cookie" spellcheck="false" type="password">
+<div class="inline-actions">
+<button class="primary" id="channels-save" type="button">保存视频号授权</button>
+<button class="danger-text" id="channels-clear" type="button">清除授权</button>
+</div>
+<p class="hint" id="channels-state" role="status">
+</p>
+<details>
+<summary>高级：已有桌面桥接（可选）</summary>
+<label for="channels-bridge">作品 ID 自动读取桥接（可选）</label>
+<input id="channels-bridge" maxlength="128" placeholder="http://127.0.0.1:2026" type="url">
+<p class="hint">连接你已部署的 wx_channel 桌面桥接，直接用转发卡片作品 ID 获取视频，无需每次复制链接。需同机服务和已登录桌面微信；不是启用此项就自动安装。</p>
+</details>
+<details>
+<summary>如何获取 Cookie，以及备用方式</summary>
+<p class="hint">登录 yuanbao.tencent.com 元宝，F12 → 网络 → 刷新 → 选择同域请求 → 请求标头 → 复制 Cookie 值，填写上方密码框。只需配置一次，授权过期后更新；不要发送到聊天或上传 Git。</p>
+<p class="hint">原生可播放内容优先。否则自动用原卡片作品 ID 查询微信分享链接，再经元宝取得真实视频；需要已更新的原生服务与视频理解权限。自动路径失败时仍可绑定备用链接，不以标题代替视频观察。</p>
+</details>
+<label for="channels-card">最近收到的视频号卡片</label>
+<div class="inline-actions">
+<select id="channels-card">
+<option value="">请刷新卡片列表</option>
+</select>
+<button class="secondary" id="channels-refresh" type="button">刷新卡片</button>
+</div>
+<label for="channels-url">这条视频的分享链接</label>
+<input id="channels-url" maxlength="2048" placeholder="https://weixin.qq.com/sph/..." type="url">
+<div class="inline-actions">
+<button class="secondary" id="channels-bind" type="button">保存链接绑定</button>
+<button class="secondary" id="channels-test" type="button">读取并更新观察（不发消息）</button>
+</div>
+<p class="hint" id="channels-test-state" role="status">
+</p>
+<pre class="mcp-result" hidden="" id="channels-observation">
+</pre>
+</details>
+<article class="panel" id="permissions-panel">
+<h3>媒体与主动行为</h3>
+<label class="switch-row">
+<span>主动问候</span>
+<input id="perm-proactive" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label class="switch-row">
+<span>自主发送图片</span>
+<input id="perm-send-image" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label class="switch-row">
+<span>自主发送语音</span>
+<input id="perm-send-voice" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label class="switch-row">
+<span>自主发送视频</span>
+<input id="perm-send-video" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label class="switch-row">
+<span>自主发送文件</span>
+<input id="perm-send-file" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<p class="hint">模型按需选择媒体；以上权限决定可发送的类型。</p>
+</article>
+<details aria-labelledby="agent-authority-title" class="panel agent-authority disclosure">
+<summary>账号与服务器授权</summary>
+<div class="section-heading">
+<h3 class="sr-only" id="agent-authority-title">账号与服务器授权</h3>
+<button class="primary" id="agent-save-permissions" type="button">保存高权限设置</button>
+</div>
+<div class="field-grid">
+<div>
+</div>
+<div>
+<label class="switch-row">
+<span>主人可跨会话读取与发送</span>
+<input id="agent-cross-conversation" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+</div>
+<div>
+<label class="switch-row">
+<span>外部 MCP / API 插件仅限可信用户调用</span>
+<input id="agent-external-owner-only" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+</div>
+<div>
+<label for="agent-owner-ids">可信微信用户 ID</label>
+<textarea id="agent-owner-ids" placeholder="每行一个真实 wxid；昵称不能作为身份依据" rows="3">
+</textarea>
+</div>
+<div>
+<label class="switch-row">
+<span>主人可在全部已启用会话使用高权限</span>
+<input id="agent-owner-all-threads" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<p class="hint">仍按实际发送者的微信用户 ID 核验；群友不会继承主人的权限。</p>
+<label for="agent-privileged-threads">或指定允许高权限的会话 ID</label>
+<textarea id="agent-privileged-threads" placeholder="关闭上方开关后，每行一个已授权会话 ID" rows="3">
+</textarea>
+</div>
+<div>
+<label for="agent-host-mode">工作区执行能力</label>
+<select id="agent-host-mode">
+<option value="disabled">关闭服务器操作</option>
+<option value="read">只读：目录与文本文件</option>
+<option value="files">文件：读取、创建与校验修改</option>
+<option value="full">程序：文件与隔离 Shell</option>
+</select>
+</div>
+<div>
+<label for="agent-host-roots">工作区基准目录（按账号和会话自动派生）</label>
+<textarea id="agent-host-roots" readonly="" placeholder="由当前账号与会话派生" rows="3">
+</textarea>
+</div>
+</div>
+<p class="hint" id="agent-host-description" role="status">
+</p>
+<details class="agent-account-actions">
+<summary>允许 AI 执行的微信账号动作</summary>
+<div class="field-grid" id="agent-action-options">
+</div>
+</details>
+<p class="hint">高权限同时校验可信用户和会话，聊天中自称管理员无效。关闭权限会停止旧执行。服务器指管理端所在的 Linux / Windows 环境；不自动获得 root。</p>
+<p class="hint" id="agent-authority-state" role="status">
+</p>
+</details>
+<details class="panel">
+<summary>最近账号与服务器操作</summary>
+<div id="agent-operation-list">
+</div>
+</details>
+<details class="panel disclosure">
+<summary>安静时段</summary>
+<h3 class="sr-only">安静时段</h3>
+<div class="field-grid">
+<div>
+<label for="timezone">时区</label>
+<input id="timezone" placeholder="Asia/Shanghai">
+</div>
+<div>
+<label for="quiet-start">从</label>
+<input id="quiet-start" type="time">
+</div>
+<div>
+<label for="quiet-end">到</label>
+<input id="quiet-end" type="time">
+</div>
+</div>
+<p class="hint">约束主动问候和自主冲浪；开始与结束相同表示不设安静时段。</p>
+</details>
+<details aria-labelledby="proactive-title" class="panel proactive-settings disclosure" id="proactive-panel">
+<summary>自主续聊</summary>
+<div class="section-heading">
+<h3 class="sr-only" id="proactive-title">主动问候</h3>
+<button class="primary" id="save-proactive" type="button">保存续聊设置</button>
+</div>
 <p class="hint">结合最近话题与关系记忆自主评估，可接话、使用工具探索或安静。模型可安排下次评估；默认评估间隔带随机变化，不要求群里先冷场，不设每日硬额度。</p>
-<div class="field-grid"></div>
-<div class="inline-actions"><label for="proactive-search">查找目标</label><input id="proactive-search" maxlength="128" placeholder="名称、备注或 ID" type="search"/><button class="secondary" id="proactive-refresh" type="button">刷新名称与状态</button></div>
-<p class="hint" id="proactive-state" role="status"></p><div id="proactive-targets"></div>
+<div class="field-grid">
+</div>
+<div class="inline-actions">
+<label for="proactive-search">查找目标</label>
+<input id="proactive-search" maxlength="128" placeholder="名称、备注或 ID" type="search">
+<button class="secondary" id="proactive-refresh" type="button">刷新名称与状态</button>
+</div>
+<p class="hint" id="proactive-state" role="status">
+</p>
+<div id="proactive-targets">
+</div>
 <p class="hint">只显示已授权回复的群聊和好友；可在<a data-section-link="rules" href="#rules">回复规则</a>添加。主动行为遵守目标授权和安静时段。</p>
 </details>
 </section>
 <section aria-labelledby="page-title" class="page" id="surf">
-<div class="surf-summary"><span id="surf-schedule">正在读取…</span><button class="secondary" id="surf-refresh" type="button">刷新活动</button></div>
-<details class="panel surf-settings"><summary>自主冲浪设置</summary><label class="switch-row"><span>启用 AI 自主网上冲浪</span><input id="surf-enabled" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><label class="switch-row"><span>强制分享已核实内容</span><input aria-describedby="surf-force-hint" id="surf-force-share" type="checkbox"/><span aria-hidden="true" class="switch"></span></label><p class="hint" id="surf-force-hint">开启后不只浏览或收藏；无合适内容、工具失败、权限或去重受限时仍会停止并记录原因。保存后生效，默认关闭。</p><div class="field-grid"><div><label for="surf-topics">兴趣主题（每行一项）</label><textarea id="surf-topics" placeholder="可爱动物、好听音乐、动画短片、日常趣事…" rows="3"></textarea></div></div><details class="surf-discovery-settings"><summary>内容来源</summary>
-<div class="field-grid">
-</div><p class="hint">先从内容源发现候选，再由角色决定深入、收藏或分享。音乐、视频、图片仍遵守各自发送权限。</p>
-<fieldset id="surf-builtin-sources"><legend>内容源</legend></fieldset>
-<label for="surf-rss-sources">追加RSS／Atom订阅（每行：名称 | 网址 | 文字／音乐／视频／图片）</label><textarea id="surf-rss-sources" placeholder="我的订阅 | https://example.com/feed | 文字" rows="3"></textarea>
-<p class="hint">可填写RSSHub或Miniflux提供的公开订阅地址。受限、需登录或只有网页壳的来源不会被当成有效正文。</p></details><div class="surf-target-picker"><div class="inline-actions"><label for="surf-target-search">主动分享目标</label><input id="surf-target-search" maxlength="128" placeholder="搜索群聊、好友或备注" type="search"/><button class="secondary" id="surf-target-refresh" type="button">刷新目标</button></div><p class="hint" id="surf-target-state" role="status"></p><div id="surf-targets"></div></div><p class="hint" id="surf-share-state"></p><p class="hint">安静时段不启动、不扣次数。此前已启动的浏览仍计次数，包括失败或选择不分享；重启不重置预算。</p><button class="primary" id="surf-save" type="button">保存冲浪设置</button><span aria-live="polite" class="hint" id="surf-save-state"></span></details>
-<details class="panel surf-history-panel" id="surf-history-panel"><summary>浏览轨迹与收藏</summary><div class="inline-actions"><span class="hint" id="surf-history-state" role="status">展开后读取；不会自动移动阅读位置。</span><button class="secondary" id="surf-history-refresh" type="button">刷新浏览记录</button></div><div id="surf-history-list"></div></details><article class="panel surf-controls"><div><label for="surf-origin">触发来源</label><select id="surf-origin"><option value="all">全部</option><option value="chat_tool">聊天需求</option><option value="surf">自主冲浪与分享</option><option value="manual_tool">手动测试</option></select></div><div><label for="surf-status">执行状态</label><select id="surf-status"><option value="all">全部状态</option><option value="running">执行中</option><option value="succeeded">成功</option><option value="failed">失败</option><option value="accepted">已分享</option><option value="not_shared">仅浏览未分享</option><option value="silent">选择安静</option></select></div><div><label for="surf-search">搜索关键词或网址</label><input id="surf-search" placeholder="关键词、域名、处理原因"/></div></article>
-<article class="panel"><div class="inline-actions"><span id="surf-count">0 条活动</span><button class="secondary" hidden="" id="surf-new" type="button">有新活动，点击载入</button></div><p aria-live="polite" class="form-error" id="surf-error"></p><div aria-label="真实上网活动" class="surf-list" id="surf-list"></div></article>
-</section>
-<section aria-labelledby="logs-title" class="page" id="logs"><div aria-label="已载入执行概况" class="round-metrics">
-<div><strong id="round-total">—</strong><span>执行回合</span></div><div><strong id="round-waiting">—</strong><span>待处理 / 执行中</span></div><div><strong id="round-errors">—</strong><span>需要处理</span></div><div><strong id="round-silent">—</strong><span>选择安静</span></div></div>
-<div class="round-filters"><label class="sr-only" for="log-search">搜索回合</label><input autocomplete="off" id="log-search" maxlength="256" placeholder="搜索会话、消息、工具或处理原因…" type="search"/>
-<label class="sr-only" for="log-status">回合状态</label><select id="log-status"><option value="all">全部状态</option><option value="accepted">已发送</option><option value="running">执行中</option><option value="waiting">等待核对</option><option value="failed">需处理</option><option value="silent">选择安静</option><option value="completed">已完成</option><option value="received">已接收</option><option value="skipped">已跳过</option><option value="stopped">已停止</option><option value="blocked">已阻止</option></select>
-<label class="sr-only" for="log-source">来源类型</label><select id="log-source"><option value="all">全部来源</option><option value="group">群聊</option><option value="private">私聊</option><option value="system">系统</option></select>
-<details class="round-extra-filters"><summary>更多筛选</summary><label for="log-view">记录范围</label><select id="log-view"><option selected="" value="rounds">执行回合</option><option value="system">系统时段</option><option value="all">全部记录</option></select><label for="log-category">包含步骤</label><select id="log-category"><option value="all">全部步骤</option><option value="received">接收消息</option><option value="sent">发送消息</option><option value="decision">处理决定</option><option value="tool">工具调用</option><option value="error">异常与失败</option><option value="system">系统运行</option></select></details></div>
-<article class="log-workspace round-workspace"><div class="log-toolbar"><span id="log-count" role="status">正在读取…</span><button class="secondary" hidden="" id="log-new" type="button">载入新进展</button><div class="log-toolbar-end"><label class="follow-control"><input id="log-follow-latest" type="checkbox"/>跟随最新</label><button class="quiet" id="refresh-logs" type="button">刷新</button></div></div><p class="form-error" id="log-load-error" role="status"></p><div aria-label="执行回合，最近更新在前" class="log-list" id="log-list" tabindex="0"></div><button class="quiet wide" hidden="" id="log-more" type="button">加载更多回合</button></article></section>
-<section aria-label="后台设置" class="page" id="settings"><details class="panel" id="admin-password-panel"><summary>管理密码</summary><form id="admin-password-form"><label for="admin-current-password">当前密码</label><input autocomplete="current-password" id="admin-current-password" maxlength="128" required="" type="password"/><label for="admin-new-password">新密码</label><input autocomplete="new-password" id="admin-new-password" maxlength="128" minlength="5" required="" type="password"/><label for="admin-confirm-password">确认新密码</label><input autocomplete="new-password" id="admin-confirm-password" maxlength="128" minlength="5" required="" type="password"/><p class="hint">初始密码为 admin。修改后保存在本机，所有管理会话会退出；微信登录不受影响。</p><button class="primary" id="admin-password-save" type="submit">保存密码并重新登录</button><p class="form-error" id="admin-password-state" role="status"></p></form></details><details class="panel" id="storage-panel"><summary>存储与归档</summary><div class="inline-actions"><button class="secondary" id="storage-refresh" type="button">刷新容量</button><span class="hint" id="storage-state" role="status">展开后扫描管理端数据。</span></div><div id="storage-areas"></div><div id="storage-limits"></div><p class="form-error" id="storage-error" role="status"></p><p class="hint" id="storage-boundary"></p></details></section></main>
+<div class="surf-summary">
+<span id="surf-schedule">正在读取…</span>
+<button class="secondary" id="surf-refresh" type="button">刷新活动</button>
 </div>
-<script defer="" src="/assets/dialogs.js"></script><script defer="" src="/assets/accounts.js"></script><script defer="" src="/assets/app.js"></script>
-<script defer="" src="/assets/proactive.js"></script>
-<script defer="" src="/assets/tools.js"></script>
-<script defer="" src="/assets/catalog.js"></script>
-<script defer="" src="/assets/catalog-sync.js"></script>
-<script defer="" src="/assets/actions.js"></script>
-<script defer="" src="/assets/mcp.js"></script>
-<script defer="" src="/assets/plugins.js"></script>
-<script defer="" src="/assets/ui.js"></script>
-<script defer="" src="/assets/agent.js"></script><script defer="" src="/assets/agent-workspace.js"></script><script defer="" src="/assets/mobile.js"></script><script defer="" src="/assets/speech.js"></script><script defer="" src="/assets/channels.js"></script>
-<script defer="" src="/assets/rounds.js"></script><script defer="" src="/assets/logs.js"></script>
-<script defer="" src="/assets/surf.js"></script>
-<script defer="" src="/assets/billing.js"></script>
-<script defer="" src="/assets/conversations.js"></script><script defer="" src="/assets/storage.js"></script><script defer="" src="/assets/flow-model.js"></script><script defer="" src="/assets/workbench.js"></script>
+<details class="panel surf-settings">
+<summary>自主冲浪设置</summary>
+<label class="switch-row">
+<span>启用 AI 自主网上冲浪</span>
+<input id="surf-enabled" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<label class="switch-row">
+<span>强制分享已核实内容</span>
+<input aria-describedby="surf-force-hint" id="surf-force-share" type="checkbox">
+<span aria-hidden="true" class="switch">
+</span>
+</label>
+<p class="hint" id="surf-force-hint">开启后不只浏览或收藏；无合适内容、工具失败、权限或去重受限时仍会停止并记录原因。保存后生效，默认关闭。</p>
+<div class="field-grid">
+<div>
+<label for="surf-topics">兴趣主题（每行一项）</label>
+<textarea id="surf-topics" placeholder="可爱动物、好听音乐、动画短片、日常趣事…" rows="3">
+</textarea>
+</div>
+</div>
+<details class="surf-discovery-settings">
+<summary>内容来源</summary>
+<div class="field-grid">
+</div>
+<p class="hint">先从内容源发现候选，再由角色决定深入、收藏或分享。音乐、视频、图片仍遵守各自发送权限。</p>
+<fieldset id="surf-builtin-sources">
+<legend>内容源</legend>
+</fieldset>
+<label for="surf-rss-sources">追加RSS／Atom订阅（每行：名称 | 网址 | 文字／音乐／视频／图片）</label>
+<textarea id="surf-rss-sources" placeholder="我的订阅 | https://example.com/feed | 文字" rows="3">
+</textarea>
+<p class="hint">可填写RSSHub或Miniflux提供的公开订阅地址。受限、需登录或只有网页壳的来源不会被当成有效正文。</p>
+</details>
+<div class="surf-target-picker">
+<div class="inline-actions">
+<label for="surf-target-search">主动分享目标</label>
+<input id="surf-target-search" maxlength="128" placeholder="搜索群聊、好友或备注" type="search">
+<button class="secondary" id="surf-target-refresh" type="button">刷新目标</button>
+</div>
+<p class="hint" id="surf-target-state" role="status">
+</p>
+<div id="surf-targets">
+</div>
+</div>
+<p class="hint" id="surf-share-state">
+</p>
+<p class="hint">安静时段不启动、不扣次数。此前已启动的浏览仍计次数，包括失败或选择不分享；重启不重置预算。</p>
+<button class="primary" id="surf-save" type="button">保存冲浪设置</button>
+<span aria-live="polite" class="hint" id="surf-save-state">
+</span>
+</details>
+<details class="panel surf-history-panel" id="surf-history-panel">
+<summary>浏览轨迹与收藏</summary>
+<div class="inline-actions">
+<span class="hint" id="surf-history-state" role="status">展开后读取；不会自动移动阅读位置。</span>
+<button class="secondary" id="surf-history-refresh" type="button">刷新浏览记录</button>
+</div>
+<div id="surf-history-list">
+</div>
+</details>
+<article class="panel surf-controls">
+<div>
+<label for="surf-origin">触发来源</label>
+<select id="surf-origin">
+<option value="all">全部</option>
+<option value="chat_tool">聊天需求</option>
+<option value="surf">自主冲浪与分享</option>
+<option value="manual_tool">手动测试</option>
+</select>
+</div>
+<div>
+<label for="surf-status">执行状态</label>
+<select id="surf-status">
+<option value="all">全部状态</option>
+<option value="running">执行中</option>
+<option value="succeeded">成功</option>
+<option value="failed">失败</option>
+<option value="accepted">已分享</option>
+<option value="not_shared">仅浏览未分享</option>
+<option value="silent">选择安静</option>
+</select>
+</div>
+<div>
+<label for="surf-search">搜索关键词或网址</label>
+<input id="surf-search" placeholder="关键词、域名、处理原因">
+</div>
+</article>
+<article class="panel">
+<div class="inline-actions">
+<span id="surf-count">0 条活动</span>
+<button class="secondary" hidden="" id="surf-new" type="button">有新活动，点击载入</button>
+</div>
+<p aria-live="polite" class="form-error" id="surf-error">
+</p>
+<div aria-label="真实上网活动" class="surf-list" id="surf-list">
+</div>
+</article>
+</section>
+<section aria-labelledby="logs-title" class="page" id="logs">
+<div aria-label="已载入执行概况" class="round-metrics">
+<div>
+<strong id="round-total">—</strong>
+<span>执行回合</span>
+</div>
+<div>
+<strong id="round-waiting">—</strong>
+<span>待处理 / 执行中</span>
+</div>
+<div>
+<strong id="round-errors">—</strong>
+<span>需要处理</span>
+</div>
+<div>
+<strong id="round-silent">—</strong>
+<span>选择安静</span>
+</div>
+</div>
+<div class="round-filters">
+<label class="sr-only" for="log-search">搜索回合</label>
+<input autocomplete="off" id="log-search" maxlength="256" placeholder="搜索会话、消息、工具或处理原因…" type="search">
+<label class="sr-only" for="log-status">回合状态</label>
+<select id="log-status">
+<option value="all">全部状态</option>
+<option value="accepted">已发送</option>
+<option value="running">执行中</option>
+<option value="waiting">等待核对</option>
+<option value="failed">需处理</option>
+<option value="silent">选择安静</option>
+<option value="completed">已完成</option>
+<option value="received">已接收</option>
+<option value="skipped">已跳过</option>
+<option value="stopped">已停止</option>
+<option value="blocked">已阻止</option>
+</select>
+<label class="sr-only" for="log-source">来源类型</label>
+<select id="log-source">
+<option value="all">全部来源</option>
+<option value="group">群聊</option>
+<option value="private">私聊</option>
+<option value="system">系统</option>
+</select>
+<details class="round-extra-filters">
+<summary>更多筛选</summary>
+<label for="log-view">记录范围</label>
+<select id="log-view">
+<option selected="" value="rounds">执行回合</option>
+<option value="system">系统时段</option>
+<option value="all">全部记录</option>
+</select>
+<label for="log-category">包含步骤</label>
+<select id="log-category">
+<option value="all">全部步骤</option>
+<option value="received">接收消息</option>
+<option value="sent">发送消息</option>
+<option value="decision">处理决定</option>
+<option value="tool">工具调用</option>
+<option value="error">异常与失败</option>
+<option value="system">系统运行</option>
+</select>
+</details>
+</div>
+<article class="log-workspace round-workspace">
+<div class="log-toolbar">
+<span id="log-count" role="status">正在读取…</span>
+<button class="secondary" hidden="" id="log-new" type="button">载入新进展</button>
+<div class="log-toolbar-end">
+<label class="follow-control">
+<input id="log-follow-latest" type="checkbox">跟随最新</label>
+<button class="quiet" id="refresh-logs" type="button">刷新</button>
+</div>
+</div>
+<p class="form-error" id="log-load-error" role="status">
+</p>
+
+<button class="quiet wide" hidden="" id="log-more" type="button">加载更多回合</button>
+<div class="round-reading-workspace"><div aria-label="执行回合，最近更新在前；点击回合在弹窗查看完整内容" class="log-list" id="log-list" tabindex="0">
+</div></div></article>
+</section>
+<section aria-label="后台设置" class="page" id="settings">
+<details class="panel" id="admin-password-panel">
+<summary>管理密码</summary>
+<form id="admin-password-form">
+<label for="admin-current-password">当前密码</label>
+<input autocomplete="current-password" id="admin-current-password" maxlength="128" required="" type="password">
+<label for="admin-new-password">新密码</label>
+<input autocomplete="new-password" id="admin-new-password" maxlength="128" minlength="5" required="" type="password">
+<label for="admin-confirm-password">确认新密码</label>
+<input autocomplete="new-password" id="admin-confirm-password" maxlength="128" minlength="5" required="" type="password">
+<p class="hint">初始密码为 admin。修改后保存在本机，所有管理会话会退出；微信登录不受影响。</p>
+<button class="primary" id="admin-password-save" type="submit">保存密码并重新登录</button>
+<p class="form-error" id="admin-password-state" role="status">
+</p>
+</form>
+</details>
+<details class="panel" id="storage-panel">
+<summary>存储与归档</summary>
+<div class="inline-actions">
+<button class="secondary" id="storage-refresh" type="button">刷新容量</button>
+<span class="hint" id="storage-state" role="status">展开后扫描管理端数据。</span>
+</div>
+<div id="storage-areas">
+</div>
+<div id="storage-limits">
+</div>
+<p class="form-error" id="storage-error" role="status">
+</p>
+<p class="hint" id="storage-boundary">
+</p>
+</details>
+</section>
+<section class="page" id="voices" aria-label="声线库">
+<div class="page-toolbar">
+<label class="sr-only" for="voice-query">搜索角色</label>
+<input id="voice-query" type="search" placeholder="搜索角色、模型或版本">
+<label class="sr-only" for="voice-engine">模型类型</label>
+<select id="voice-engine">
+<option value="">全部模型</option>
+</select>
+<button type="button" class="secondary" id="voice-refresh">刷新</button>
+</div>
+<p id="voice-state" class="hint" role="status">正在读取声线库</p>
+<div id="voice-list" class="voice-library-list pane-scroll">
+</div>
+</section>
+</main>
+</div>
+<script defer="" src="/assets/dialogs.js">
+</script>
+<script defer="" src="/assets/accounts.js">
+</script>
+<script defer="" src="/assets/app.js">
+</script>
+<script defer="" src="/assets/proactive.js">
+</script>
+<script defer="" src="/assets/tools.js">
+</script>
+<script defer="" src="/assets/catalog.js">
+</script>
+<script defer="" src="/assets/catalog-sync.js">
+</script>
+<script defer="" src="/assets/actions.js">
+</script>
+<script defer="" src="/assets/mcp.js">
+</script>
+<script defer="" src="/assets/plugins.js">
+</script>
+<script defer="" src="/assets/ui.js">
+</script>
+<script defer="" src="/assets/agent.js">
+</script>
+<script defer="" src="/assets/agent-workspace.js">
+</script>
+<script defer="" src="/assets/mobile.js">
+</script>
+<script defer="" src="/assets/speech.js">
+</script>
+<script defer="" src="/assets/channels.js">
+</script>
+<script defer="" src="/assets/rounds.js">
+</script>
+<script defer="" src="/assets/logs.js">
+</script>
+<script defer="" src="/assets/surf.js">
+</script>
+<script defer="" src="/assets/billing.js">
+</script>
+<script defer="" src="/assets/conversations.js">
+</script>
+<script defer="" src="/assets/storage.js">
+</script>
+<script defer="" src="/assets/flow-model.js">
+</script>
+<script defer="" src="/assets/workbench.js">
+</script>
+<script defer src="/assets/voices.js">
+</script>
+<script defer src="/assets/console.js">
+</script>
 </body>
 </html>

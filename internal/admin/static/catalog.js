@@ -69,4 +69,5 @@
   window.addEventListener('wechat-admin:catalog-synced',event=>{if(state.initialized){loadRecipients();if(!needsThread(state.kind)||event.detail?.kind==='members'&&event.detail.thread===state.thread&&state.kind==='members')query(false)}});
   window.addEventListener('wechat-admin:logout',()=>{cancelQuery();state.recipientsRevision++;state.items=[];state.recipients=[];state.nextCursor=null;state.thread='';stateText('请选择类型后手动查询。');renderItems();updateControls()});
   window.addEventListener('wechat-admin:navigate',event=>{if(event.detail?.section==='catalog')initialize();else if(state.busy)changed('查询已停止，返回后可重新查询。')});
+  window.addEventListener('wechat-admin:catalog-target',async event=>{initialize();await loadRecipients();state.thread=event.detail.thread;state.kind=state.thread.endsWith('@chatroom')?'members':'friends';$('#catalog-kind').value=state.kind;$('#catalog-thread').value=state.thread;updateControls();query(false)});
 })();

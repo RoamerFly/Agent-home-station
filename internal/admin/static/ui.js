@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const side=document.querySelector('.sidebar'),menu=document.querySelector('#menu-toggle'),scrim=document.querySelector('#drawer-scrim'),main=document.querySelector('.content');
-  const mobile=matchMedia('(max-width:850px)');let wasOpen=false;
+  const mobile=matchMedia('(max-width:760px)');let wasOpen=false;
   const focusables=()=>[...side.querySelectorAll('button,a,input,select')].filter(el=>!el.disabled&&el.getClientRects().length);
   function syncDrawer(){const open=mobile.matches&&side.classList.contains('open');scrim.hidden=!open;main.inert=open;side.inert=mobile.matches&&!open;document.body.classList.toggle('nav-open',open);menu.setAttribute('aria-expanded',String(open));if(open&&!wasOpen)focusables()[0]?.focus();if(!open&&wasOpen&&mobile.matches)menu.focus();wasOpen=open}
   new MutationObserver(syncDrawer).observe(side,{attributes:true,attributeFilter:['class']});mobile.addEventListener('change',syncDrawer);syncDrawer();

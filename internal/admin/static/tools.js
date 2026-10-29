@@ -138,4 +138,11 @@
     window.addEventListener('wechat-admin:quote',async e=>{if(state.busy||state.sendStarted){notify('请先完成当前发送，再引用其他消息。',true);return;}await load(true);const q=e.detail||{};if(!state.config?.recipients?.some(r=>r.id===q.thread_id)){notify('引用目标不在已授权会话中。',true);return;}setKind('text');state.quote=q;$('#tools-recipient').value=q.thread_id;render();notify('已选择引用消息；填写回复后核对并手动发送。');});window.addEventListener('wechat-admin:logout',()=>{revoke();state.loaded=false;state.libraryLoaded=false;state.file=null;state.upload=null;state.quote=null;state.send=null;state.sendStarted=false;state.key='';$('#tools-result').replaceChildren();$('#library-list').replaceChildren();$('#tools-recent-list').replaceChildren();$('#tools-text').value='';});window.addEventListener('beforeunload',revoke);
   }
   bind();
+  window.addEventListener('wechat-admin:recipient',async event=>{
+    if(state.busy||state.sendStarted){notify('当前有发送任务，请完成后再切换接收方。',true);return;}
+    await load(true);const target=event.detail;
+    if(!state.config?.recipients?.some(r=>r.id===target.thread)){notify('此会话尚未授权手动发送。',true);return;}
+    $('#tools-recipient').value=target.thread;state.quote=null;renderReview();
+    const label=document.getElementById('send-context-label');if(label)label.textContent='发送至 '+target.label;
+  });
 })();

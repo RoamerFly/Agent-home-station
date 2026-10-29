@@ -66,8 +66,8 @@
 .flow-node-category { font-size:11px; color:var(--node-tone); font-weight:650; }
 .flow-custom-badge { margin-left:auto; font-size:10px; color:var(--muted); }
 .flow-node-title { font-size:var(--flow-label-size,18px); line-height:1.3; font-weight:650; overflow-wrap:anywhere; }
-.flow-node-description { display:none; font-size:12px; line-height:1.35; color:var(--muted); max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.flow-node-state { display:none; font-size:11px; line-height:1.35; color:var(--muted); max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.flow-node-description { display:none; font-size:12px; line-height:1.35; color:var(--muted); max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:clip; }
+.flow-node-state { display:none; font-size:11px; line-height:1.35; color:var(--muted); max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:clip; }
 .flow-node-state::before { content:''; display:inline-block; width:4px; height:4px; border-radius:50%; background:var(--node-tone); vertical-align:middle; margin-right:6px; }
 .flow-node[data-evidence="observed"] { border-color:var(--good); }
 .flow-node[data-evidence="observed"] .flow-node-state { color:var(--good); }

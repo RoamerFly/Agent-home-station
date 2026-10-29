@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,14 +15,12 @@ var voiceObjectName = regexp.MustCompile(`^[a-f0-9]{64}\.(wav|mp3|flac|m4a|txt|p
 
 func (s *Server) voiceLibraryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /voice-library", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		page, err := assets.ReadFile("static/voices.html")
-		if err != nil {
-			fail(w, 500, "语音库页面不可读")
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Write(page)
+		target := "/"
+		if account := r.URL.Query().Get("account"); account != "" {
+			target += "?" + url.Values{"account": {account}}.Encode()
+		}
+		http.Redirect(w, r, target+"#voices", http.StatusFound)
 	}))
 	mux.HandleFunc("GET /api/voice-library", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		path := s.manager.privateVoiceLibrary()

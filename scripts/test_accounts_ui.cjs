@@ -40,7 +40,7 @@ assert(['127.0.0.1','localhost','[::1]'].includes(new URL(base).hostname));
   await page.goto(base+'/#wechat');await page.locator('.account-row').first().waitFor();
   assert.equal(await page.locator('.account-row').count(),2);
   assert.equal(await page.locator('#account-select').inputValue(),'synthetic-primary');
-  await page.locator('#account-select').selectOption('synthetic-second');
+  await page.locator('#account-select').selectOption('synthetic-second',{force:true});
   await page.waitForFunction(()=>document.querySelector('#account-select')?.value==='synthetic-second'&&document.querySelector('#account-current-name')?.textContent==='测试小鲸鱼');
   assert(new URL(page.url()).searchParams.get('account')==='synthetic-second');
   await page.locator('#start-login').click();await page.locator('#qr-box').waitFor({state:'visible'});

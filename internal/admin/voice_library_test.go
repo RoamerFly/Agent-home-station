@@ -19,7 +19,7 @@ func TestVoiceLibraryRequiresLoginAndServesOnlyRootedObjects(t *testing.T) {
 		t.Fatal(code)
 	}
 	f.login()
-	for path, want := range map[string]string{"/assets/voices.js": "text/javascript", "/assets/voices.css": "text/css"} {
+	for path, want := range map[string]string{"/assets/voices.js": "text/javascript", "/assets/console.css": "text/css", "/assets/console.js": "text/javascript"} {
 		code, _, response := f.request("GET", path, nil, false, false)
 		if code != 200 || !strings.HasPrefix(response.Header.Get("Content-Type"), want) {
 			t.Fatal("static voice MIME mismatch", path, code, response.Header.Get("Content-Type"))
@@ -52,7 +52,13 @@ func TestVoiceLibraryRequiresLoginAndServesOnlyRootedObjects(t *testing.T) {
 			t.Fatal("non-object escaped", bad)
 		}
 	}
-	if code, b, _ := f.request("GET", "/voice-library", nil, false, false); code != 200 || !bytes.Contains(b, []byte("角色语音库")) {
+	// The fixture follows redirects: the legacy entry now lands in the same
+	// authenticated console rather than a second standalone application.
+	if code, body, _ := f.request("GET", "/voice-library", nil, false, false); code != http.StatusOK || !bytes.Contains(body, []byte(`id="voices"`)) {
 		t.Fatal(code)
+	}
+	f.client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	if code, _, response := f.request("GET", "/voice-library?account=synthetic", nil, false, false); code != http.StatusFound || response.Header.Get("Location") != "/?account=synthetic#voices" {
+		t.Fatal(code, response.Header.Get("Location"))
 	}
 }

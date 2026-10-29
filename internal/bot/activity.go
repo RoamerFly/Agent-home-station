@@ -22,7 +22,7 @@ type Record struct {
 	ModelStage                                                                            string
 	ModelRetryDelayMS                                                                     int64
 	CallID                                                                                string
-	Tool, TargetURL, Query                                                                string
+	Tool, TargetURL, Query, Effect                                                        string
 	DurationMS, Bytes                                                                     int64
 	MediaCount                                                                            int
 	Event, Category, ThreadID, Sender, Content, Reason, Status, MessageID, Origin, SendID string
