@@ -84,7 +84,7 @@ func TestReceivedFileRejectsDamagedInboxAndRetainsOriginalCache(t *testing.T) {
 	if e != nil || len(assets) != 1 {
 		t.Fatal(e)
 	}
-	path := filepath.Join(f.manager.managedRoot(), "pri_workspace", accountDirectory(n.message.AccountID), "conversations", assets[0].Scope, "inbox", agentID(n.message.ID)[:24]+".txt")
+	path := filepath.Join(f.manager.privateWorkspaceFor(n.message.AccountID), "conversations", assets[0].Scope, "inbox", agentID(n.message.ID)[:24]+".txt")
 	if e = os.WriteFile(path, []byte("edited inbox"), 0600); e != nil {
 		t.Fatal(e)
 	}

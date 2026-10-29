@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,20 @@ import (
 	"testing"
 	"time"
 )
+
+func TestSummaryBudgetIgnoresIndentationAndUnicodeEscapeSpelling(t *testing.T) {
+	valid := `{"version":1,"people":[],"topics":[],"current_focus":"` + strings.Repeat("事实", 700) + `","media":[],"pending_tasks":[],"preferences":[],"corrections":[]}`
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, []byte(valid), "", strings.Repeat(" ", 500)); err != nil {
+		t.Fatal(err)
+	}
+	escaped := strings.ReplaceAll(strings.ReplaceAll(valid, "事", `\u4e8b`), "实", `\u5b9e`)
+	for _, raw := range []string{pretty.String(), escaped} {
+		if _, err := parseContextSummary(raw, true); err != nil {
+			t.Fatal("equivalent valid summary rejected", err)
+		}
+	}
+}
 
 func TestSummarySchemaRejectsScalarsUnknownFieldsAndOversize(t *testing.T) {
 	valid := `{"version":1,"people":[],"topics":[],"current_focus":"最新歌曲","media":[],"pending_tasks":[],"preferences":[],"corrections":[]}`

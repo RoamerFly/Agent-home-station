@@ -157,7 +157,7 @@ def import_whale(workspace, library):
 
 
 def download_manbo(public):
-    folder = public / 'manbo-tlme'
+    folder = public / '曼波' / 'weights'
     folder.mkdir(parents=True, exist_ok=True)
     results = []
     for name, size, expected in MANBO_FILES:
@@ -233,13 +233,24 @@ def main():
     items = import_history(args.history.resolve(strict=True), library)
     items += import_whale(args.workspace.resolve(strict=True), library)
     collected = {item['id']: item for item in existing['items']}
+    for item in items:
+        previous = collected.get(item['id'], {})
+        for field in ('role', 'name'):
+            if previous.get(field):item[field]=previous[field]
     collected.update({item['id']: item for item in items})
     def publish():
         atomic_json(library / 'catalog.json', {'version': 1, 'items': list(collected.values()),
             'policy': '本机管理员音色库；个人权重及参考不挂载给普通群友。仅归档，不修改默认音色，不训练、不发送微信。'})
+        from organize_voice_library import organize
+        # Public entries cached in the old private catalogue are references,
+        # not private weights. Public files retain their own common library.
+        external = [x['id'] for x in collected.values() if x.get('weights') and all(not f.get('file') and f.get('path') for f in x['weights'])]
+        organize(library,exclude_ids=external,apply=True)
     publish()  # Remote failure must not hide successfully imported local voices.
     if args.download_manbo:
         item = download_manbo(args.workspace / 'public_workspace/models/voice-library')
+        from organize_voice_library import organize
+        organize(args.workspace / 'public_workspace/models/voice-library',shared=True,apply=True)
         collected[item['id']] = item
         publish()
     print(json.dumps({'voices': len(collected), 'library': str(library)}, ensure_ascii=False))

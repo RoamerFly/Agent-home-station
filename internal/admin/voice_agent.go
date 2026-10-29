@@ -13,6 +13,7 @@ import (
 )
 
 type voiceFile struct {
+	Relative string `json:"relative_path,omitempty"`
 	File     string `json:"file,omitempty"`
 	Path     string `json:"path,omitempty"`
 	Filename string `json:"filename"`
@@ -22,6 +23,8 @@ type voiceFile struct {
 	Epoch    int    `json:"epoch,omitempty"`
 }
 type voiceEntry struct {
+	Role          string            `json:"role,omitempty"`
+	Directory     string            `json:"directory,omitempty"`
 	ID            string            `json:"id"`
 	Name          string            `json:"name"`
 	Engine        string            `json:"engine"`
@@ -38,7 +41,10 @@ type voiceEntry struct {
 }
 
 func readVoiceEntries(dir string) ([]voiceEntry, error) {
-	r, err := os.OpenRoot(dir)
+	if _, err := os.Lstat(dir); os.IsNotExist(err) {
+		return nil, nil
+	}
+	r, err := workspacefs.EnsurePath(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -74,7 +80,7 @@ func (p *permittedTools) accessibleVoices() ([]voiceEntry, error) {
 		seen[public[i].ID] = true
 	}
 	if p.privileged() {
-		private, err := readVoiceEntries(filepath.Join(p.manager.dir, "voice-library"))
+		private, err := readVoiceEntries(p.manager.privateVoiceLibrary())
 		if err != nil {
 			return nil, err
 		}
@@ -88,13 +94,24 @@ func (p *permittedTools) accessibleVoices() ([]voiceEntry, error) {
 }
 
 func voiceSummary(v voiceEntry) map[string]any {
-	return map[string]any{"id": v.ID, "name": v.Name, "engine": v.Engine, "status": v.Status, "public": v.Public, "weight_files": len(v.Weights), "reference_files": len(v.References), "preview_files": len(v.Previews)}
+	return map[string]any{"id": v.ID, "name": v.Name, "role": v.Role, "directory": v.Directory, "engine": v.Engine, "status": v.Status, "public": v.Public, "weight_files": len(v.Weights), "reference_files": len(v.References), "preview_files": len(v.Previews)}
+}
+
+func privateVoiceRelative(f voiceFile) (string, error) {
+	if f.Relative == "" {
+		return filepath.Join("files", f.File), nil
+	}
+	name := filepath.FromSlash(f.Relative)
+	if filepath.IsAbs(name) || name == "." || name == ".." || strings.ContainsAny(name, ":\x00") || filepath.Clean(name) != name || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+		return "", errors.New("private_voice_relative_path_invalid")
+	}
+	return name, nil
 }
 func (p *permittedTools) voiceTools() []mcptools.Tool {
 	return []mcptools.Tool{
 		agentTool("voice_library_list", "Discover registered character voices by query/engine. Ordinary members see public voices; trusted owner also sees this account's private GPT-SoVITS/Bailian/RVC archive. No disk scan, synthesis or default changes. Paginated, default limit20; follow next_offset. Input {query?,engine?,offset?,limit?}.", `{"type":"object","properties":{"query":{"type":"string"},"engine":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
 		agentTool("voice_library_read", "Read exact discovered voice_id: weight versions, reference names, status and usage. No credentials/other accounts. Archived GPT-SoVITS is not proof of an installed TTS runtime. For shared RVC profile use returned music_rvc_start arguments, not default character voice. Input {voice_id:string}.", `{"type":"object","properties":{"voice_id":{"type":"string"}},"required":["voice_id"],"additionalProperties":false}`),
-		agentTool("voice_library_prepare", "Materialize selected voice files with SHA256 checks for actual file/Shell access. Defaults recommended/latest weight per kind plus references (or previews); file_ids chooses exact hash.ext files from voice_library_read, including older epochs. Personal voices owner only: copy into account global workspace, then server_* global=true. Public models into current conversation. Never mounts credentials or whole private library, never executes weights or sends. Input {voice_id:string,file_ids?:string[]}.", `{"type":"object","properties":{"voice_id":{"type":"string"},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1}},"required":["voice_id"],"additionalProperties":false}`),
+		agentTool("voice_library_prepare", "Prepare selected voice files with SHA256 checks for file/Shell access. Defaults recommended/latest weight per kind plus references (or previews); file_ids chooses exact hash.ext files from voice_library_read, including older epochs. Personal voices owner only: return existing canonical account voice-library files without duplicate copies; legacy control archives are copied into global. Use server_* global=true. Public models are copied into current conversation. Never mounts credentials, executes weights or sends. Input {voice_id:string,file_ids?:string[]}.", `{"type":"object","properties":{"voice_id":{"type":"string"},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1}},"required":["voice_id"],"additionalProperties":false}`),
 	}
 }
 
@@ -147,6 +164,10 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 			row["notes"], row["files"], row["recommended_weights"], row["synthesis_instruction"] = v.Notes, files, v.Recommended, v.Instruction
 			row["engine_compatibility"] = map[string]any{"direct_rvc_cover": strings.Contains(strings.ToLower(v.Engine), "rvc") && v.ProfileID != "", "instruction": "GPT-SoVITS权重用于对应TTS引擎，不是RVC歌声转换权重；能读取不等于可用作原曲换声。指定声线未兼容时不要提交默认声音冒充，也不要把格式差异说成主人权限不足。"}
 			row["usage"] = "voice_library_prepare取得可读模型和参考，然后project_list/project_read定位相应引擎。GPT-SoVITS、RVC和百炼音色不互换；权重齐全不等于运行环境和听感已经验证。"
+			if strings.EqualFold(v.Engine, "GPT-SoVITS") {
+				row["project_id"] = "gpt-sovits"
+				row["usage"] = "先project_read({id:gpt-sovits})读取登记的GPT-SoVITS项目、真实解释器和CLI。voice_library_prepare取得明确选定的GPT/SoVITS配对权重、参考音频及其转录；私人声线server_exec/server_process用global=true，CUDA用gpu=true。不因在群里发起而拒绝真实管理员，也不能只查看旧目录后宣称本机未安装。按需读源码、自写脚本或修复，生成后核验实际音频再发送。"
+			}
 			if v.Public && v.ProfileID != "" {
 				row["music_rvc_start"] = map[string]string{"voice_profile_id": v.ProfileID}
 			}
@@ -160,6 +181,14 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 			base = filepath.Join(p.executionContext().Private, "global")
 		}
 		dest := filepath.Join(base, "voice-library", v.ID)
+		// A migrated private library is already inside the owner's account
+		// mount. Verify and return its canonical files instead of duplicating
+		// hundreds of MB for every prepare call. Legacy control archives still
+		// need an explicit verified copy into the global workspace.
+		canonical := !v.Public && p.manager.privateVoiceLibrary() == filepath.Join(p.executionContext().Private, "voice-library")
+		if canonical {
+			dest = p.manager.privateVoiceLibrary()
+		}
 		root, e := workspacefs.EnsurePath(dest)
 		if e != nil {
 			return "", e
@@ -218,8 +247,11 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 			if !voiceObjectName.MatchString(f.File) || len(f.Hash) != 64 || !strings.HasPrefix(f.File, f.Hash+".") || f.Bytes <= 0 {
 				return "", toolInputError("invalid_voice_file_metadata")
 			}
-			sourceDir := filepath.Join(p.manager.dir, "voice-library", "files")
-			relative := f.File
+			sourceDir := p.manager.privateVoiceLibrary()
+			relative, e := privateVoiceRelative(f)
+			if e != nil {
+				return "", e
+			}
 			if v.Public {
 				sourceDir = filepath.Join(p.executionContext().Public, "models", "voice-library")
 				relative, e = filepath.Rel(sourceDir, f.Path)
@@ -227,20 +259,24 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 					return "", toolInputError("public_voice_path_outside_models")
 				}
 			}
-			srcRoot, e := os.OpenRoot(sourceDir)
+			srcRoot, e := workspacefs.EnsurePath(sourceDir)
 			if e != nil {
 				return "", e
 			}
 			src, e := workspacefs.OpenRegular(srcRoot, relative)
+			target := f.File
+			if canonical {
+				target = relative
+			}
 			if e == nil {
-				e = publishVerifiedStream(root, f.File, &uploadContextReader{ctx: ctx, reader: src}, f.Bytes, f.Hash)
+				e = publishVerifiedStream(root, target, &uploadContextReader{ctx: ctx, reader: src}, f.Bytes, f.Hash)
 				src.Close()
 			}
 			srcRoot.Close()
 			if e != nil {
 				return "", e
 			}
-			prepared = append(prepared, map[string]any{"file_id": f.File, "filename": f.Filename, "path": filepath.Join(dest, f.File), "sha256": f.Hash, "bytes": f.Bytes, "kind": f.Kind})
+			prepared = append(prepared, map[string]any{"file_id": f.File, "filename": f.Filename, "path": filepath.Join(dest, target), "sha256": f.Hash, "bytes": f.Bytes, "kind": f.Kind})
 		}
 		return encode(map[string]any{"voice_id": v.ID, "files": prepared, "global": !v.Public, "directory": dest, "engine": v.Engine, "status": v.Status, "synthesized": false, "wechat_sends": 0, "instruction": "可用server_read/list及隔离Shell读取本次准备的真实文件；私有条目用global=true。只准备文件，未运行模型，不修改默认音色。"})
 	}

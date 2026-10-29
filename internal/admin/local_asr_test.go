@@ -79,7 +79,7 @@ func TestLocalASRUsesIsolatedAccountScratchAndNoWordsDoesNotUpload(t *testing.T)
 	if !bailian.IsNoSpeech(e) {
 		t.Fatal("no-words should not call keyless cloud", e)
 	}
-	scratch := filepath.Join(f.manager.managedRoot(), "pri_workspace", accountDirectory(f.manager.native.Account()), "scratch")
+	scratch := filepath.Join(f.manager.privateWorkspaceFor(f.manager.native.Account()), "scratch")
 	entries, e := os.ReadDir(scratch)
 	if e != nil || len(entries) != 0 {
 		t.Fatal("temporary audio not cleaned", e, entries)

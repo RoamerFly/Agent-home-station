@@ -8,6 +8,7 @@ import argparse, base64, concurrent.futures, copy, hashlib, hmac, json, math, os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from singing_voice import validate_singing_config
+from singing_config import load_singing_config
 import yue_sampling
 import rvc_cover
 import rvc_recovery
@@ -18,7 +19,7 @@ from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 def singing_profile(config_path):
     if not config_path:return None
     path=Path(config_path)
-    data=path.read_bytes();config=json.loads(data)
+    data=path.read_bytes();config=load_singing_config(path,data)
     if not config.get('enabled',False):return None
     if not all(isinstance(config.get(k),str) and config[k] for k in ('profile','python','runtime')):raise ValueError('singing_voice_config_invalid')
     if not Path(config['python']).is_file():raise ValueError('singing_voice_resources_missing')

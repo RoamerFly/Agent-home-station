@@ -90,7 +90,7 @@ func (m *Manager) transcribeLocal(ctx context.Context, wav []byte, id string) (s
 	if manifest.Threads < 1 || manifest.ChunkSeconds <= 0 || manifest.TimeoutSeconds < 0 || manifest.TimeoutSeconds > float64((1<<63-1)/int64(time.Second)) {
 		return "", errors.New("local_asr_parameters_invalid")
 	}
-	private := filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(m.native.Account()), "scratch")
+	private := filepath.Join(m.privateWorkspaceFor(m.native.Account()), "scratch")
 	if e = ensureManaged(private); e != nil {
 		return "", e
 	}

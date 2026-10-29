@@ -44,7 +44,7 @@ func (m *Manager) managedRoot() string {
 }
 func (p *permittedTools) executionContext() ExecutionContext {
 	root := p.manager.managedRoot()
-	private := filepath.Join(root, "pri_workspace", accountDirectory(p.trace.Account))
+	private := p.manager.privateWorkspaceFor(p.trace.Account)
 	return ExecutionContext{Account: p.trace.Account, OriginThread: p.trace.Thread, Requester: p.trace.Sender, Owner: p.privileged(), TaskID: p.trace.TaskID, Private: private, Public: filepath.Join(root, "public_workspace"), Conversation: filepath.Join(private, "conversations", companion.ScopeID("wechat", p.trace.Account, p.trace.Thread))}
 }
 func ensureManaged(paths ...string) error {
@@ -156,8 +156,11 @@ func (p *permittedTools) callProject(ctx context.Context, name string, raw json.
 // Notes are mapped into the same physical session directories as file tools.
 // Legacy notes are copied once, never overwritten or deleted.
 func (m *Manager) configureManagedNotes() error {
-	base := filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(m.native.Account()))
+	base := m.privateWorkspaceFor(m.native.Account())
 	if err := ensureManaged(base, filepath.Join(base, "global", "memory"), filepath.Join(base, "global", "tasks"), filepath.Join(base, "assets", "objects")); err != nil {
+		return err
+	}
+	if err := m.writeWorkspaceIdentity(); err != nil {
 		return err
 	}
 	identity := filepath.Join(base, "account.md")
@@ -242,7 +245,7 @@ func (m *Manager) managedLayoutStatus() map[string]any {
 	} else if runtime.GOOS == "windows" {
 		backend = "Windows · LPAC CMD"
 	}
-	return map[string]any{"account": m.native.Account(), "private_workspace": filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(m.native.Account())), "public_workspace": filepath.Join(m.managedRoot(), "public_workspace"), "backend": backend, "platform": runtime.GOOS, "isolation_required": true}
+	return map[string]any{"account": m.native.Account(), "private_workspace": m.privateWorkspaceFor(m.native.Account()), "private_voice_library": m.privateVoiceLibrary(), "public_workspace": filepath.Join(m.managedRoot(), "public_workspace"), "backend": backend, "platform": runtime.GOOS, "isolation_required": true}
 }
 
 func (s *Server) managedWorkspaceRoutes(mux *http.ServeMux) {

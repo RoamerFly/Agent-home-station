@@ -5,6 +5,7 @@ Supported engines are pinned Seed-VC and an explicitly trained/pinned RVC voice.
 Weights remain in the managed cache; inference never retrains a speaker model.
 """
 from process_window import no_console_options
+from singing_config import load_singing_config
 import argparse
 import gc
 import hashlib
@@ -77,7 +78,7 @@ def main():
     p.add_argument('--source', required=True)
     p.add_argument('--output', required=True)
     args = p.parse_args()
-    config = json.loads(Path(args.config).read_text(encoding='utf-8-sig'))
+    config = load_singing_config(args.config)
     started=time.monotonic();engine=validate_singing_config(config);timings={}
     home = Path(config['runtime']).resolve()
     repo = home/'seed-vc'

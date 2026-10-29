@@ -24,8 +24,9 @@ def main():
         return
     public = Path("/workspace/public_workspace")
     private = Path(os.environ["MUSIC_PRIVATE_WORKSPACE"])
-    if private.parent != Path("/workspace/pri_workspace") or len(private.name) != 64 or any(c not in "0123456789abcdef" for c in private.name):
+    if private.parent != Path("/workspace/pri_workspace"):
         raise ValueError("music_account_directory_required")
+    account_scope(private)
     state = private / "music"
     for name in ("input", "output", "user", "base", "jobs"):
         (state / name).mkdir(parents=True, exist_ok=True)

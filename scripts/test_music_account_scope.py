@@ -20,6 +20,20 @@ from process_window import no_console_options
 
 
 class MusicAccountScopeTests(unittest.TestCase):
+    def test_named_directory_retains_server_account_scope_not_display_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp)/'pri_workspace/蓝色大肥鱼--example'
+            private.mkdir(parents=True)
+            account='synthetic-account'
+            digest=hashlib.sha256(account.encode()).hexdigest()
+            identity={'account_id':account,'scope':digest,'directory':private.name}
+            (private/'account.json').write_text(json.dumps(identity),encoding='utf-8')
+            self.assertEqual(account_scope(private),digest)
+            identity['account_id']='another-account'
+            (private/'account.json').write_text(json.dumps(identity),encoding='utf-8')
+            with self.assertRaises(ValueError):
+                account_scope(private)
+
     def test_requires_account_hash_directory(self):
         digest = hashlib.sha256(b"synthetic-account").hexdigest()
         self.assertEqual(account_scope(Path("/workspace/pri_workspace") / digest), digest)
@@ -70,9 +84,11 @@ class MusicAccountScopeTests(unittest.TestCase):
                 try:
                     for account in ("synthetic-one", "synthetic-two"):
                         scope = hashlib.sha256(account.encode()).hexdigest()
-                        private = root / "pri_workspace" / scope
+                        private = root / "pri_workspace" / ("合成账号-one" if account.endswith('one') else scope)
                         state = private / "music/jobs"
                         state.mkdir(parents=True)
+                        if account.endswith('one'):
+                            (private/'account.json').write_text(json.dumps({'account_id':account,'scope':scope,'directory':private.name}),encoding='utf-8')
                         lease = stack.enter_context(AccountIPC(root / "ipc", public, private))
                         sock = lease.socket
                         backend = stack.enter_context(socketserver.UnixStreamServer(str(sock), Backend))

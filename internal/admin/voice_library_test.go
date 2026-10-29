@@ -29,7 +29,7 @@ func TestVoiceLibraryRequiresLoginAndServesOnlyRootedObjects(t *testing.T) {
 	if code, b, _ := f.request("GET", "/api/voice-library", nil, false, false); code != 200 || !bytes.Contains(b, []byte(`"items":[]`)) {
 		t.Fatal(code, string(b))
 	}
-	dir := filepath.Join(f.manager.dir, "voice-library")
+	dir := f.manager.privateVoiceLibrary()
 	if err := os.MkdirAll(filepath.Join(dir, "files"), 0700); err != nil {
 		t.Fatal(err)
 	}

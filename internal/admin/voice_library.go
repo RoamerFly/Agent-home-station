@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"wechat-bot/internal/workspacefs"
 )
 
 var voiceObjectName = regexp.MustCompile(`^[a-f0-9]{64}\.(wav|mp3|flac|m4a|txt|pth|ckpt|index)$`)
@@ -23,7 +24,17 @@ func (s *Server) voiceLibraryRoutes(mux *http.ServeMux) {
 		w.Write(page)
 	}))
 	mux.HandleFunc("GET /api/voice-library", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		root, err := os.OpenRoot(filepath.Join(s.manager.dir, "voice-library"))
+		path := s.manager.privateVoiceLibrary()
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			value, mergeErr := mergeVoiceCatalogue(map[string]any{"items": []any{}}, filepath.Join(s.manager.managedRoot(), "public_workspace", "models", "voice-library"))
+			if mergeErr != nil {
+				fail(w, 500, "公共语音库索引不可读")
+				return
+			}
+			respond(w, 200, value)
+			return
+		}
+		root, err := workspacefs.EnsurePath(path)
 		if os.IsNotExist(err) {
 			respond(w, 200, map[string]any{"items": []any{}})
 			return
@@ -45,6 +56,11 @@ func (s *Server) voiceLibraryRoutes(mux *http.ServeMux) {
 			fail(w, 500, "语音库索引无效")
 			return
 		}
+		value, err = mergeVoiceCatalogue(value, filepath.Join(s.manager.managedRoot(), "public_workspace", "models", "voice-library"))
+		if err != nil {
+			fail(w, 500, "公共语音库索引不可读")
+			return
+		}
 		respond(w, 200, value)
 	}))
 	mux.HandleFunc("GET /api/voice-library/files/{name}", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -53,13 +69,18 @@ func (s *Server) voiceLibraryRoutes(mux *http.ServeMux) {
 			fail(w, 400, "语音库文件名无效")
 			return
 		}
-		root, err := os.OpenRoot(filepath.Join(s.manager.dir, "voice-library", "files"))
+		directory, relative, err := s.manager.voiceLibraryObject(name)
+		if err != nil {
+			fail(w, 404, "未找到语音库文件")
+			return
+		}
+		root, err := workspacefs.EnsurePath(directory)
 		if err != nil {
 			fail(w, 404, "未找到语音库文件")
 			return
 		}
 		defer root.Close()
-		f, err := root.Open(name)
+		f, err := workspacefs.OpenRegular(root, relative)
 		if err != nil {
 			fail(w, 404, "未找到语音库文件")
 			return

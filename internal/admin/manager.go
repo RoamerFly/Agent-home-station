@@ -85,6 +85,7 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
+	workspaceDir string
 	directoryMu  sync.Mutex
 	accounts     *accountRegistry
 	canvasMu     sync.Mutex
@@ -198,6 +199,10 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	}()
 	m.processes, err = agenthost.OpenJobs(filepath.Join(dir, "agent-processes"))
 	if err != nil {
+		return nil, err
+	}
+	if err = m.configureWorkspaceDirectory(); err != nil {
+		m.processes.Close()
 		return nil, err
 	}
 	if err = m.configureManagedNotes(); err != nil {

@@ -46,6 +46,9 @@ jobs:
         run: |
           python scripts/test_project_structure.py
           python -m unittest discover -s scripts -p test_voice_library.py
+          python -m unittest discover -s scripts -p test_gpt_sovits_tts.py
+          python -m unittest discover -s scripts -p test_rename_account_workspace.py
+          python -m unittest discover -s scripts -p test_organize_voice_library.py
           python -m unittest discover -s scripts -p test_rvc_profiles.py
           python -m unittest discover -s scripts -p test_rvc_backend.py
           python -m unittest discover -s scripts -p test_binary_retention.py

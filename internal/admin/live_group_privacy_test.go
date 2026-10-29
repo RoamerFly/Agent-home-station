@@ -67,7 +67,7 @@ func TestLiveGroupVoiceDiagnosticStaysPrivate(t *testing.T) {
 	f, p, private, public := voiceAgentFixture(t)
 	private.Name = "mom"
 	public.Name = "曼波"
-	for dir, v := range map[string]voiceEntry{filepath.Join(f.manager.dir, "voice-library"): private, filepath.Join(p.executionContext().Public, "models", "voice-library"): public} {
+	for dir, v := range map[string]voiceEntry{f.manager.privateVoiceLibrary(): private, filepath.Join(p.executionContext().Public, "models", "voice-library"): public} {
 		b, _ := json.Marshal(map[string]any{"items": []voiceEntry{v}})
 		if e = os.WriteFile(filepath.Join(dir, "catalog.json"), b, 0600); e != nil {
 			t.Fatal(e)

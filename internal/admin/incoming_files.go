@@ -24,7 +24,7 @@ type incomingFileReader interface {
 }
 
 func (m *Manager) assetDirectory() string {
-	return filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(m.native.Account()), "assets", "objects")
+	return filepath.Join(m.privateWorkspaceFor(m.native.Account()), "assets", "objects")
 }
 func (m *Manager) assetPath(hash string) string {
 	path := filepath.Join(m.assetDirectory(), hash)
@@ -45,7 +45,7 @@ func (a mediaUnderstanding) receiveFile(ctx context.Context, msg linuxnative.Mes
 	if !safeMediaFilename(name) {
 		return "", errors.New("incoming_file_name_invalid")
 	}
-	dir := filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(msg.AccountID), "conversations", companion.ScopeID("wechat", msg.AccountID, msg.ThreadID), "inbox")
+	dir := filepath.Join(m.privateWorkspaceFor(msg.AccountID), "conversations", companion.ScopeID("wechat", msg.AccountID, msg.ThreadID), "inbox")
 	inboxRoot, err := workspacefs.EnsurePath(dir)
 	if err != nil {
 		return "", err
@@ -137,7 +137,7 @@ func (m *Manager) rememberStreamAsset(in companion.Input, file, name, typ string
 	if e = ensureManaged(m.assetDirectory()); e != nil {
 		return zero, e
 	}
-	objects, e := os.OpenRoot(filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(m.native.Account())))
+	objects, e := os.OpenRoot(m.privateWorkspaceFor(m.native.Account()))
 	if e != nil {
 		return zero, e
 	}
@@ -180,7 +180,7 @@ func (m *Manager) openAsset(hash string) (*os.File, error) {
 	if len(hash) != 64 || strings.Trim(hash, "0123456789abcdef") != "" {
 		return nil, errors.New("invalid_asset_hash")
 	}
-	accountRoot, e := os.OpenRoot(filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(m.native.Account())))
+	accountRoot, e := os.OpenRoot(m.privateWorkspaceFor(m.native.Account()))
 	if e == nil {
 		f, err := accountRoot.Open(filepath.Join("assets", "objects", hash))
 		accountRoot.Close()
@@ -258,7 +258,7 @@ func (r *uploadContextReader) Read(b []byte) (int, error) {
 	return r.reader.Read(b)
 }
 func (m *Manager) writeManagedAsset(hash string, data []byte) error {
-	base := filepath.Join(m.managedRoot(), "pri_workspace", accountDirectory(m.native.Account()))
+	base := m.privateWorkspaceFor(m.native.Account())
 	root, e := os.OpenRoot(base)
 	if e != nil {
 		return e
