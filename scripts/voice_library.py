@@ -4,7 +4,6 @@ Personal models/references stay in the administrator's private library. Public
 Manbo models have their own shared managed directory. No API calls or training.
 """
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -12,17 +11,6 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
-import urllib.parse
-import urllib.request
-
-
-MANBO_REPO = 'TLME/RVC-Umamusume'
-MANBO_REVISION = '49cc012b5ad11274a33d61affb11723ec854f944'
-MANBO_FOLDER = 'Models/待兼诗歌剧(マチカネタンホイザ)'
-MANBO_FILES = [
-    ('uma-Matikane_Tannhauser.pth', 57589983, '305ca8238d2d8cecdcf19812f4c85c1c622e8a190af0199ee05d2b1b83d94cd2'),
-    ('added_IVF1310_Flat_nprobe_1_uma-Matikane_Tannhauser_v2.index', 161487619, '93907fce2fcb38a218a5dc66feb45720c9d4d09300bc31f6e035ab7389fc0bae'),
-]
 
 
 def digest(path):
@@ -157,68 +145,11 @@ def import_whale(workspace, library):
 
 
 def download_manbo(public):
-    folder = public / '曼波' / 'weights'
-    folder.mkdir(parents=True, exist_ok=True)
-    results = []
-    for name, size, expected in MANBO_FILES:
-        path = folder / name
-        url = f'https://huggingface.co/{MANBO_REPO}/resolve/{MANBO_REVISION}/' + urllib.parse.quote(MANBO_FOLDER + '/' + name, safe='/')
-        if not path.exists():
-            fd, pending = tempfile.mkstemp(dir=folder, prefix='.download-')
-            try:
-                os.close(fd)
-                # CDN full responses can stall before headers. Read bounded
-                # independent ranges, validate each range and the final LFS hash.
-                chunks = folder / ('.chunks-' + expected)
-                chunks.mkdir(exist_ok=True)
-                block = 4 << 20
-                ranges = [(start, min(size - 1, start + block - 1)) for start in range(0, size, block)]
-                def fetch(bounds):
-                    start, end = bounds
-                    part = chunks / str(start)
-                    if part.is_file() and part.stat().st_size == end - start + 1:
-                        return part
-                    request = urllib.request.Request(url + '?download=true&chunk=' + str(start), headers={'Range': f'bytes={start}-{end}'})
-                    with urllib.request.urlopen(request, timeout=60) as response:
-                        if response.status != 206 or response.headers.get('Content-Range') != f'bytes {start}-{end}/{size}':
-                            raise ValueError('model_download_range_mismatch')
-                        data = response.read(end - start + 2)
-                    if len(data) != end - start + 1:
-                        raise ValueError('model_download_range_incomplete')
-                    part.write_bytes(data)
-                    return part
-                with ThreadPoolExecutor(max_workers=4) as pool:
-                    parts = list(pool.map(fetch, ranges))
-                with Path(pending).open('wb') as out:
-                    for part in parts:
-                        with part.open('rb') as inp:
-                            shutil.copyfileobj(inp, out, 1 << 20)
-                if Path(pending).stat().st_size != size or digest(Path(pending)) != expected:
-                    raise ValueError('download_size_or_hash_mismatch')
-                try:
-                    os.link(pending, path)
-                except FileExistsError:
-                    if path.is_symlink() or path.stat().st_size != size or digest(path) != expected:
-                        raise ValueError('concurrent_manbo_download_mismatch')
-                for part in parts:
-                    part.unlink()
-                chunks.rmdir()
-            finally:
-                Path(pending).unlink(missing_ok=True)
-        if path.is_symlink() or path.stat().st_size != size or digest(path) != expected:
-            raise ValueError('manbo_model_integrity_failed')
-        results.append({'filename': name, 'path': str(path), 'bytes': size, 'sha256': expected, 'url': url})
-        print('Verified Manbo asset:', name, size, flush=True)
-    item = {'id': 'manbo-tlme', 'profile_id': 'voice-manbo', 'name': '曼波 · 待兼诗歌剧', 'engine': 'RVC v2',
-        'status': '下载校验通过，待推理试听', 'notes': '日语角色转换模型；需输入有人声的音频。不是独立文本转语音模型。未自动加载第三方pickle权重。',
-        'weights': results, 'references': [], 'previews': [], 'source': 'https://huggingface.co/' + MANBO_REPO,
-        'revision': MANBO_REVISION, 'license': '模型仓库标注MIT；角色/原始声音权利另属权利人，未据此推定商业授权。'}
-    catalog_path = public / 'catalog.json'
-    catalog = json.loads(catalog_path.read_text(encoding='utf-8')) if catalog_path.exists() else {'items': []}
-    items = {entry['id']: entry for entry in catalog['items']}
-    items[item['id']] = item
-    atomic_json(catalog_path, {'version': 1, 'items': list(items.values())})
-    return item
+    # Keep the legacy CLI, but never reinstall the superseded model as 曼波.
+    from install_public_rvc_voices import download, install
+    workspace = public.resolve().parents[2]
+    download(workspace, roles=['曼波'])
+    return install(workspace, roles=['曼波'])[0]
 
 
 def main():
