@@ -94,9 +94,9 @@ def register(source, public, python):
             config = stage/'GPT_SoVITS/configs/tts_infer.yaml'
             if config.exists():
                 config.unlink()
-            (stage/'SOURCE_REVISION').write_text(revision+'\n')
+            (stage/'SOURCE_REVISION').write_text(revision+'\n',encoding='utf-8')
             stage.rename(project)
-    elif (project/'SOURCE_REVISION').read_text().strip() != revision:
+    elif (project/'SOURCE_REVISION').read_text(encoding='utf-8').strip() != revision:
         raise ValueError('existing_project_revision_differs; stage_an_explicit_upgrade')
     common = public/'models/gpt-sovits'
     for folder in ['chinese-roberta-wwm-ext-large','chinese-hubert-base']:
@@ -123,31 +123,31 @@ def register(source, public, python):
     # compatibility delta explicit and leave the user's original untouched.
     portable = project/'tools/portable_runtime.py'
     if portable.exists():
-        text = portable.read_text()
+        text = portable.read_text(encoding='utf-8')
         old = 'FFMPEG_EXE = RUNTIME_DIR / "ffmpeg.exe"'
         new = 'FFMPEG_EXE = RUNTIME_DIR / "ffmpeg.exe" if os.name == "nt" else "ffmpeg"'
-        portable.write_text('\n'.join(new if line.startswith(old) else line for line in text.splitlines())+'\n')
+        portable.write_text('\n'.join(new if line.startswith(old) else line for line in text.splitlines())+'\n',encoding='utf-8')
     for relative, names in [
         ('GPT_SoVITS/text/g2pw/g2pw.py',['polyphonic.pickle','polyphonic.md5']),
         ('GPT_SoVITS/text/english.py',['engdict_cache.pickle','namedict_cache.pickle']),
     ]:
         path = project/relative
-        text = path.read_text()
+        text = path.read_text(encoding='utf-8')
         for name in names:
             text = text.replace('os.path.join(current_file_path, "'+name+'")',
                                 'os.path.join(os.environ.get("GPT_SOVITS_TEXT_CACHE", current_file_path), "'+name+'")')
-        path.write_text(text)
+        path.write_text(text,encoding='utf-8')
     chinese = project/'GPT_SoVITS/text/chinese2.py'
-    text = chinese.read_text().replace('model_dir="GPT_SoVITS/text/G2PWModel"',
+    text = chinese.read_text(encoding='utf-8').replace('model_dir="GPT_SoVITS/text/G2PWModel"',
         'model_dir=os.environ.get("GPT_SOVITS_G2PW_MODEL", "GPT_SoVITS/text/G2PWModel")')
-    chinese.write_text(text)
+    chinese.write_text(text,encoding='utf-8')
     detector = project/'GPT_SoVITS/text/LangSegmenter/langsegmenter.py'
-    text = detector.read_text()
+    text = detector.read_text(encoding='utf-8')
     if 'import os\n' not in text:
         text = text.replace('import logging\n', 'import logging\nimport os\n')
     text = text.replace('cache_dir=Path(__file__).parent.parent.parent / "pretrained_models" / "fast_langdetect"',
         'cache_dir=Path(os.environ["GPT_SOVITS_LANG_MODEL"]) if "GPT_SOVITS_LANG_MODEL" in os.environ else Path(__file__).parent.parent.parent / "pretrained_models" / "fast_langdetect"')
-    detector.write_text(text)
+    detector.write_text(text,encoding='utf-8')
     manifest = {'id':'gpt-sovits','name':'GPT-SoVITS 本地角色语音合成',
         'root':str(project),'readme':str(project/'AGENT_USAGE.md'),
         'python':str(python),'entry':str(project/'gpt_sovits_tts.py'),

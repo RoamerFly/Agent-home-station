@@ -70,7 +70,7 @@ class GPTSoVITSTests(unittest.TestCase):
             source.mkdir()
             files={
                 'api_v2.py':'# synthetic',
-                'GPT_SoVITS/text/chinese2.py':'import os\nmodel_dir="GPT_SoVITS/text/G2PWModel"\n',
+                'GPT_SoVITS/text/chinese2.py':'# 中文前端 😀\nimport os\nmodel_dir="GPT_SoVITS/text/G2PWModel"\n',
                 'GPT_SoVITS/text/LangSegmenter/langsegmenter.py':'import logging\n',
                 'GPT_SoVITS/text/english.py':'import os\n',
                 'GPT_SoVITS/text/g2pw/g2pw.py':'import os\n',
@@ -82,7 +82,7 @@ class GPTSoVITSTests(unittest.TestCase):
             for name,text in files.items():
                 file=source/name
                 file.parent.mkdir(parents=True,exist_ok=True)
-                file.write_text(text)
+                file.write_text(text,encoding='utf-8')
             for folder in ['chinese-roberta-wwm-ext-large','chinese-hubert-base']:
                 file=source/'GPT_SoVITS/pretrained_models'/folder/'config.json'
                 file.parent.mkdir(parents=True,exist_ok=True)
@@ -94,6 +94,7 @@ class GPTSoVITSTests(unittest.TestCase):
             first=register(source,public,interpreter)
             root=Path(first['root'])
             self.assertTrue((root/'api_v2.py').is_file())
+            self.assertIn('# 中文前端 😀',(root/'GPT_SoVITS/text/chinese2.py').read_text(encoding='utf-8'))
             self.assertFalse((root/'GPT_weights_v2').exists())
             self.assertFalse((root/'logs').exists())
             self.assertFalse((root/'GPT_SoVITS/configs/tts_infer.yaml').exists())
