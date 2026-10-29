@@ -1,0 +1,18 @@
+# Additional training-only packages. Install into an isolated --target folder;
+# keep the registered CUDA torch and its existing numerical dependencies.
+tensorboard==2.19.0
+tensorboard-data-server==0.7.2
+absl-py==2.3.1
+grpcio==1.76.0
+Markdown==3.9
+Werkzeug==3.1.3
+protobuf==5.29.5
+# Pinned upstream logs RGB plots through the pre-3.10 Matplotlib canvas API.
+matplotlib==3.9.4
+contourpy==1.3.1
+cycler==0.12.1
+fonttools==4.59.2
+kiwisolver==1.4.8
+pyparsing==3.2.3
+python-dateutil==2.9.0.post0
+six==1.17.0

@@ -79,6 +79,8 @@ def main():
         print(json.dumps(state),flush=True)
     pitch_options=install_windowed_rmvpe(RMVPE,args.pitch_chunk_seconds,args.pitch_overlap_seconds,pitch_progress)
     device=('cuda:0' if torch.cuda.is_available() else 'cpu') if args.device=='auto' else args.device
+    if device.startswith('cuda') and not torch.cuda.is_available():
+        raise RuntimeError('requested_cuda_unavailable: check gpu=true sandbox mount and CUDA-enabled registered Python; no CPU fallback')
     if device=='cpu':torch.set_num_threads(2)
     # Bound CPU attention windows instead of materializing a full 30-second
     # float32 sequence. Training and inference still need separate memory.

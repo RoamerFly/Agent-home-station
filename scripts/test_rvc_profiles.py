@@ -9,6 +9,19 @@ import rvc_recovery
 
 
 class ProfileTests(unittest.TestCase):
+    def test_private_profile_stays_in_one_accounts_library(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);private=root/'account-a';library=private/'voice-library'
+            (library/'manifests').mkdir(parents=True);(library/'mom').mkdir()
+            config=library/'mom/voice.config';config.write_text('{}')
+            (library/'manifests/private-mom.json').write_text(json.dumps({'configuration':str(config)}))
+            body={'voice_profile_id':'private-mom'}
+            self.assertEqual(rvc_profiles.resolve(None,'default',body,private),str(config))
+            with self.assertRaises(ValueError):rvc_profiles.resolve(None,'default',body)
+            with self.assertRaises(FileNotFoundError):rvc_profiles.resolve(None,'default',body,root/'account-b')
+            (library/'manifests/private-mom.json').write_text(json.dumps({'configuration':str(root/'other.config')}))
+            with self.assertRaises((ValueError,FileNotFoundError)):rvc_profiles.resolve(None,'default',body,private)
+
     def test_selected_profile_is_registered_and_frozen_in_recovery(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

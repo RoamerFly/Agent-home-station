@@ -1,5 +1,7 @@
 # RVC 专用声线试训
 
+当前训练入口、CUDA/虚拟环境核验、私有训练副本与指定声线绑定见 [训练证据与声线选择](../../docs/media/rvc-training-and-voice-selection.md)。训练辅助脚本同时支持本文旧包布局和当前官方 train 模块布局；训练依赖单独安装，不将推理环境能运行当成训练依赖齐全的证明。
+
 上游：[RVC WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)，MIT。2026-10-29已将受管运行源码及`E:\freetime\AI_Sing\RVC1006Nvidia`源码同步到官方提交`81eed5e8f68b6bed1789f682fe78cdd324495afc`（2026-08-04，包含2.3.260718之后的CLI/多说话人更新）。关键源码与资源指纹见[source-manifest.json](source-manifest.json)。原文件夹名称保留以兼容已有位置，不用于推断版本。
 
 当前运行源码在`public_workspace/projects/rvc-upstream`，使用受管Linux音乐环境；注册清单`project_read(id=rvc)`提供实际入口和路径。新版使用`infer.vc`及Transformers HuBERT，`scripts/rvc_backend.py`处理与旧版`infer.modules.vc`的位置参数差异；`scripts/rvc_voice.py`保留可调分块、RMVPE、模型/索引、保护和设备参数。默认声线没有因引擎升级而更换，曼波通过每次任务的`voice_profile_id`选择。原公共旧代码目录已删除，模型、训练基座和历史音频保留；已校验的重复RMVPE及下载分块清理约354MiB，该数值为清理量，不是安装新资源后的净空间变化。

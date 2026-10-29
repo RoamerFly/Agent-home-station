@@ -74,9 +74,76 @@ func TestDirectRVCCoverUsesWholeActualRecordingWithoutYuEOrASRLyrics(t *testing.
 	}
 }
 
+func TestNamedRVCVoiceCannotFallBackWhenRememberedNameIsOnlyInTitle(t *testing.T) {
+	voices := []voiceEntry{{ID: "private-speech", Name: "Aurora", Engine: "GPT-SoVITS"}, {ID: "private-singing", Name: "Aurora", Engine: "RVC", ProfileID: "private-aurora"}, {ID: "other", Name: "Other", Engine: "RVC", ProfileID: "other-profile"}}
+	for _, text := range []string{"请用 Aurora 声线唱", "Aurora翻唱", "aurora cover"} {
+		if e := validateRequestedRVCVoice(text, "", "", voices); e == nil {
+			t.Fatal("named voice silently used the default", text)
+		}
+		if e := validateRequestedRVCVoice(text, "other", "other-profile", voices); e == nil {
+			t.Fatal("wrong registered voice accepted", text)
+		}
+		if e := validateRequestedRVCVoice(text, "private-singing", "private-aurora", voices); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e := validateRequestedRVCVoice("翻唱这首歌，任意声线", "", "", voices); e != nil {
+		t.Fatal("unspecified voice default changed", e)
+	}
+}
+
+func TestPrivateRVCProfileRequiresNewBridgeAndVerifiedOwner(t *testing.T) {
+	f, p, private, _ := voiceAgentFixture(t)
+	private.Engine, private.ProfileID = "RVC", "private-synthetic-singer"
+	data, _ := json.Marshal(map[string]any{"items": []voiceEntry{private}})
+	if e := os.WriteFile(filepath.Join(f.manager.privateVoiceLibrary(), "catalog.json"), data, 0600); e != nil {
+		t.Fatal(e)
+	}
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "private-singing", Text: "请用 owner-voice 翻唱"}
+	p.SetTrace(in)
+	asset, e := f.manager.rememberAssetFormats(in, assetOriginal{Data: syntheticReferenceWAV(t, 2), MIME: "audio/wav", Filename: "synthetic.wav"}, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	capable, posts := false, 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rvc-health" {
+			json.NewEncoder(w).Encode(map[string]any{"ready": true, "bridge_version": 13, "voice_profiles": true, "private_voice_profiles": capable})
+			return
+		}
+		if r.URL.Path != "/rvc-jobs" {
+			t.Error(r.URL.Path)
+			w.WriteHeader(500)
+			return
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["voice_profile_id"] != private.ProfileID {
+			t.Error("private model replaced by default", body)
+		}
+		posts++
+		w.Write([]byte(`{"id":"private-rvc-job"}`))
+	}))
+	defer upstream.Close()
+	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic"
+	raw, _ := json.Marshal(map[string]any{"title": "synthetic", "reference_asset_id": asset.ID, "voice_id": private.ID})
+	if _, e = p.Call(t.Context(), "music_rvc_start", raw); e == nil || posts != 0 {
+		t.Fatal("unsupported private bridge silently fell back", e, posts)
+	}
+	capable = true
+	if _, e = p.Call(t.Context(), "music_rvc_start", raw); e != nil || posts != 1 {
+		t.Fatal(e, posts)
+	}
+	p.trace.Sender = "member"
+	if _, e = p.Call(t.Context(), "music_rvc_start", raw); e == nil || posts != 1 {
+		t.Fatal("private singing model accessible after owner revocation", e, posts)
+	}
+}
+
 func TestDirectRVCSelectedVoiceRequiresCapableBridgeAndSurvivesFollowup(t *testing.T) {
 	_, p, _, public := voiceAgentFixture(t)
 	public.ProfileID = "voice-manbo"
+	public.Engine = "RVC"
 	catalog, _ := json.Marshal(map[string]any{"items": []voiceEntry{public}})
 	if err := os.WriteFile(filepath.Join(p.executionContext().Public, "models", "voice-library", "catalog.json"), catalog, 0600); err != nil {
 		t.Fatal(err)

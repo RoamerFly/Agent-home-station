@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,20 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 	}
 	if json.Unmarshal(raw, &in) != nil || songTitle(in.Title) == "" || in.Reference == "" {
 		return "", toolInputError("RVC翻唱需要具体title和本会话的原录音reference_asset_id")
+	}
+	voices, voiceErr := p.accessibleVoices()
+	if voiceErr != nil {
+		return "", voiceErr
+	}
+	// A remembered/requested name is not a model selection. Require an actual
+	// registered identity when a known voice is named; never infer a new model
+	// from the song title and silently run the character's default weights.
+	request := p.trace.RequestedText
+	if request == "" {
+		request = companion.UserRequestText(p.trace.Text)
+	}
+	if err := validateRequestedRVCVoice(request+" "+in.Title, in.VoiceID, in.VoiceProfile, voices); err != nil {
+		return "", err
 	}
 	if in.VoiceID != "" {
 		voices, e := p.accessibleVoices()
@@ -61,13 +76,16 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 		}
 	}
 	if in.VoiceProfile != "" {
+		if strings.HasPrefix(in.VoiceProfile, "private-") && !p.privileged() {
+			return "", toolInputError("private_voice_requires_verified_owner")
+		}
 		voices, e := p.accessibleVoices()
 		if e != nil {
 			return "", e
 		}
 		known := false
 		for _, v := range voices {
-			known = known || v.Public && v.ProfileID == in.VoiceProfile
+			known = known || v.ProfileID == in.VoiceProfile && strings.Contains(strings.ToLower(v.Engine), "rvc")
 		}
 		if !known {
 			return "", toolInputError("voice_profile_not_registered_use_voice_library_list_and_read")
@@ -106,15 +124,19 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 		return "", err
 	}
 	var ready struct {
-		Ready         bool `json:"ready"`
-		Version       int  `json:"bridge_version"`
-		VoiceProfiles bool `json:"voice_profiles"`
+		Ready           bool `json:"ready"`
+		Version         int  `json:"bridge_version"`
+		VoiceProfiles   bool `json:"voice_profiles"`
+		PrivateProfiles bool `json:"private_voice_profiles"`
 	}
 	if json.Unmarshal(health, &ready) != nil || !ready.Ready || ready.Version < 9 {
 		return "", toolInputError("本地RVC角色模型尚未就绪；需桥接v9和有效角色模型，不改走YuE重新作曲")
 	}
 	if in.VoiceProfile != "" && (ready.Version < 12 || !ready.VoiceProfiles) {
 		return "", toolInputError("换声桥接尚未支持按任务选音色，需升级到v12；未提交默认音色任务")
+	}
+	if strings.HasPrefix(in.VoiceProfile, "private-") && (ready.Version < 13 || !ready.PrivateProfiles) {
+		return "", toolInputError("私有歌声模型需要支持账号隔离音色的v13桥接；未替换为默认声线")
 	}
 	body := map[string]any{"title": in.Title, "reference_base64": base64.StdEncoding.EncodeToString(clip), "reference_source_sha256": asset.Hash, "reference_start_seconds": start, "reference_seconds": seconds, "reference_pretrimmed": true}
 	if in.VoiceProfile != "" {
@@ -165,6 +187,28 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 	job["instruction"] = "已提交原录音直接换声，分离人声→RVC→混回原伴奏；没有调用YuE作曲。完成后查询music_local_status取得完整附件并按当前需求发送；以实际音频检验音色，不重复提交。"
 	output, _ := json.Marshal(job)
 	return string(output), nil
+}
+
+func validateRequestedRVCVoice(request, voiceID, profileID string, voices []voiceEntry) error {
+	named := []voiceEntry{}
+	for _, v := range voices {
+		if len([]rune(v.Name)) < 2 {
+			continue
+		}
+		pattern := `(?i)(^|[^a-z0-9_])` + regexp.QuoteMeta(v.Name) + `($|[^a-z0-9_])`
+		if regexp.MustCompile(pattern).MatchString(request) {
+			named = append(named, v)
+		}
+	}
+	if len(named) == 0 {
+		return nil
+	}
+	for _, v := range named {
+		if voiceID != "" && voiceID == v.ID || profileID != "" && profileID == v.ProfileID {
+			return nil
+		}
+	}
+	return toolInputError("named_voice_requires_matching_selection: 请求或标题指定了登记声线，请先voice_library_list/read，再传匹配的voice_id或voice_profile_id；没有兼容歌声模型时先准备模型，不提交默认声线冒充")
 }
 
 func probeRVCAudioDuration(ctx context.Context, root string, data []byte) (float64, error) {
