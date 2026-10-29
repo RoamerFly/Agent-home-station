@@ -15,6 +15,7 @@ import (
 // Parameters are attached to the generated asset, not a global most-recent song.
 // They describe what was submitted, not a guarantee that the singer followed it.
 type songSpec struct {
+	VoiceProfile     string        `json:"voice_profile_id,omitempty"`
 	Engine           string        `json:"engine,omitempty"`
 	Sampling         musicSampling `json:"sampling,omitempty"`
 	PlanningMode     string        `json:"planning_mode,omitempty"`

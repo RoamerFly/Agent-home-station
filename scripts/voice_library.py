@@ -209,10 +209,16 @@ def download_manbo(public):
             raise ValueError('manbo_model_integrity_failed')
         results.append({'filename': name, 'path': str(path), 'bytes': size, 'sha256': expected, 'url': url})
         print('Verified Manbo asset:', name, size, flush=True)
-    return {'id': 'manbo-tlme', 'name': '曼波 · 待兼诗歌剧', 'engine': 'RVC v2',
+    item = {'id': 'manbo-tlme', 'profile_id': 'voice-manbo', 'name': '曼波 · 待兼诗歌剧', 'engine': 'RVC v2',
         'status': '下载校验通过，待推理试听', 'notes': '日语角色转换模型；需输入有人声的音频。不是独立文本转语音模型。未自动加载第三方pickle权重。',
         'weights': results, 'references': [], 'previews': [], 'source': 'https://huggingface.co/' + MANBO_REPO,
         'revision': MANBO_REVISION, 'license': '模型仓库标注MIT；角色/原始声音权利另属权利人，未据此推定商业授权。'}
+    catalog_path = public / 'catalog.json'
+    catalog = json.loads(catalog_path.read_text(encoding='utf-8')) if catalog_path.exists() else {'items': []}
+    items = {entry['id']: entry for entry in catalog['items']}
+    items[item['id']] = item
+    atomic_json(catalog_path, {'version': 1, 'items': list(items.values())})
+    return item
 
 
 def main():

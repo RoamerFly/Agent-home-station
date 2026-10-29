@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"wechat-bot/internal/companion"
@@ -69,5 +71,53 @@ func TestDirectRVCCoverUsesWholeActualRecordingWithoutYuEOrASRLyrics(t *testing.
 	}
 	if _, err = p.callYuE(context.Background(), "music_rvc_start", raw); err == nil {
 		t.Fatal("cross-room source readable")
+	}
+}
+
+func TestDirectRVCSelectedVoiceRequiresCapableBridgeAndSurvivesFollowup(t *testing.T) {
+	_, p, _, public := voiceAgentFixture(t)
+	public.ProfileID = "voice-manbo"
+	catalog, _ := json.Marshal(map[string]any{"items": []voiceEntry{public}})
+	if err := os.WriteFile(filepath.Join(p.executionContext().Public, "models", "voice-library", "catalog.json"), catalog, 0600); err != nil {
+		t.Fatal(err)
+	}
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "selected-rvc", Mode: "direct"}
+	p.SetTrace(in)
+	asset, err := p.manager.rememberAssetFormats(in, assetOriginal{Data: syntheticReferenceWAV(t, 2), MIME: "audio/wav", Filename: "synthetic.wav"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, posts := 11, 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rvc-health" {
+			json.NewEncoder(w).Encode(map[string]any{"ready": true, "bridge_version": version, "voice_profiles": version >= 12})
+			return
+		}
+		if r.URL.Path != "/rvc-jobs" {
+			t.Errorf("unexpected endpoint: %s", r.URL.Path)
+			w.WriteHeader(500)
+			return
+		}
+		posts++
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["voice_profile_id"] != "voice-manbo" {
+			t.Error("selected profile lost", body)
+		}
+		w.Write([]byte(`{"id":"selected-rvc-job","voice_profile_id":"voice-manbo"}`))
+	}))
+	defer upstream.Close()
+	p.manager.speech.YuEEnabled, p.manager.speech.YuEEndpoint, p.manager.speech.YuEToken = true, upstream.URL, "synthetic"
+	raw, _ := json.Marshal(map[string]any{"title": "synthetic", "reference_asset_id": asset.ID, "voice_profile_id": "voice-manbo"})
+	if _, err = p.Call(context.Background(), "music_rvc_start", raw); err == nil || posts != 0 {
+		t.Fatal("old bridge accepted selected profile", err, posts)
+	}
+	version = 12
+	if _, err = p.Call(context.Background(), "music_rvc_start", raw); err != nil {
+		t.Fatal(err)
+	}
+	tasks := p.manager.agent.list("test", "filehelper")
+	if posts != 1 || len(tasks) != 1 || tasks[0].MusicSpec.VoiceProfile != "voice-manbo" {
+		t.Fatal("followup lost voice identity", posts, tasks)
 	}
 }

@@ -26,8 +26,10 @@ func (p *permittedTools) agentTools() []mcptools.Tool {
 		return nil
 	}
 	tools := p.workspaceTools()
+	tools = append(tools, p.voiceTools()...)
 	if p.privileged() {
 		tools = append(tools, diagnosticsTool())
+		tools = append(tools, agentTool("music_service_start", "Start the installed local managed YuE/RVC service on demand, owner only. No arbitrary unit, command or endpoint. Nonblocking: check music_service_status until ready, then resume original work. Does not create songs, alter voice defaults or send WeChat. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
 	}
 	for _, tool := range p.projectTools() {
 		if tool.Name != "agent_global_search" || p.privileged() {
@@ -91,7 +93,7 @@ func agentToolName(name string) bool {
 	if name == "agent_reminder" {
 		return true
 	}
-	return strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || strings.HasPrefix(name, "wechat_") || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
+	return strings.HasPrefix(name, "voice_library_") || name == "music_service_start" || strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || strings.HasPrefix(name, "wechat_") || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
 }
 func (p *permittedTools) callAgent(ctx context.Context, name string, args json.RawMessage) (result string, callErr error) {
 	defer func() {
@@ -119,6 +121,12 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		return string(b), e
 	}
 	m := p.manager
+	if name == "music_service_start" {
+		return p.startMusicService(ctx)
+	}
+	if strings.HasPrefix(name, "voice_library_") {
+		return p.callVoiceLibrary(ctx, name, args)
+	}
 	if name == "agent_diagnostics" {
 		return p.callDiagnostics(args)
 	}

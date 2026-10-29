@@ -11,6 +11,7 @@ from singing_voice import validate_singing_config
 import yue_sampling
 import rvc_cover
 import rvc_recovery
+import rvc_profiles
 import yue_recovery
 from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 
@@ -283,7 +284,8 @@ def main():
                     api('/free',{'unload_models':True,'free_memory':True},timeout=5)
             except Exception:pass  # RVC does not require a live Comfy service.
             with lock:profile=dict(jobs[jid]['singing_voice'])
-            output=rvc_cover.convert(body,state,jid,args.singing_voice_config,profile,convert_voice)
+            config=rvc_profiles.resolve(args.managed_public,args.singing_voice_config,body)
+            output=rvc_cover.convert(body,state,jid,config,profile,convert_voice)
             with lock:jobs[jid].update(output,state='completed',phase='completed');save()
         except Exception as error:
             with lock:jobs[jid].update(state='failed',reason=str(error)[:120] if isinstance(error,ValueError) else type(error).__name__);save()
@@ -318,19 +320,19 @@ def main():
             if self.path=='/rvc-health':
                 try:
                     voice=singing_profile(args.singing_voice_config)
-                    return self.reply(200,{'ready':bool(voice and voice['engine']=='rvc'),'bridge_version':11,'engine':'rvc','profile':voice['profile'] if voice else None,'resume_same_job':True})
-                except Exception:return self.reply(200,{'ready':False,'bridge_version':11,'engine':'rvc','resume_same_job':True})
+                    return self.reply(200,{'ready':bool(voice and voice['engine']=='rvc'),'bridge_version':12,'engine':'rvc','voice_profiles':True,'profile':voice['profile'] if voice else None,'resume_same_job':True})
+                except Exception:return self.reply(200,{'ready':False,'bridge_version':12,'engine':'rvc','voice_profiles':True,'resume_same_job':True})
             if self.path=='/parameters':
                 try:
                     info={kind:api('/object_info/'+kind)[kind] for _,kind,_ in yue_sampling.GROUPS.values()}
-                    return self.reply(200,{'bridge_version':11,'modes':{mode:yue_sampling.options(workflow_dir,mode,info) for mode in ('original','cover')}})
+                    return self.reply(200,{'bridge_version':12,'modes':{mode:yue_sampling.options(workflow_dir,mode,info) for mode in ('original','cover')}})
                 except Exception:return self.reply(503,{'error':'sampling_schema_unavailable'})
             if self.path=='/health':
                 try:
                     api('/system_stats')
                     try:voice=singing_profile(args.singing_voice_config)
                     except Exception:voice=None
-                    return self.reply(200,{'ready':True,'bridge_version':11,'generation_policy':'female-faithful-cover-v4-verified-duration','capabilities':['original','reference_cover','reference_window','text_guidance_scale','duration_quality','seed','reference_mode','sampling','planning_mode','direct_rvc_cover','rvc_resume_same_job','yue_resume_same_job']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; requested gender is not listening verification; max duration is a ceiling'})
+                    return self.reply(200,{'ready':True,'bridge_version':12,'generation_policy':'female-faithful-cover-v4-verified-duration','capabilities':['original','reference_cover','reference_window','text_guidance_scale','duration_quality','seed','reference_mode','sampling','planning_mode','direct_rvc_cover','rvc_resume_same_job','yue_resume_same_job']+(['singing_voice_conversion'] if voice else []),'singing_voice_profile':voice['profile'] if voice else None,'cover_boundary':'ABC-conditioned resynthesis; optional local singing conversion after generation; requested gender is not listening verification; max duration is a ceiling'})
                 except Exception:return self.reply(200,{'ready':False})
             parts=self.path.strip('/').split('/');jid=parts[1] if len(parts)>1 else ''
             with lock:job=dict(jobs.get(jid,{}))
@@ -354,7 +356,8 @@ def main():
                     with lock:
                         if jobs.get(jid,{}).get('engine')=='rvc':
                             if body:return self.reply(400,{'error':'rvc_recovery_no_recipe_overrides'})
-                            job=rvc_recovery.resume(jobs,jid,state,args.singing_voice_config,singing_profile,save,
+                            config=rvc_profiles.resolve(args.managed_public,args.singing_voice_config,jobs[jid].get('recipe',{}))
+                            job=rvc_recovery.resume(jobs,jid,state,config,singing_profile,save,
                                                    lambda job_id,request:pool.submit(run_rvc,job_id,request))
                         else:
                             if set(body)-{'restart_missing','restart_failed'} or any(not isinstance(body.get(key,False),bool) for key in ('restart_missing','restart_failed')):
@@ -421,7 +424,7 @@ def main():
                     if key and old.get('key')==key:
                         if old.get('request_hash')!=fingerprint:return self.reply(409,{'error':'idempotency_conflict'})
                         return self.reply(200,{k:v for k,v in old.items() if k!='file'})
-                try:voice=singing_profile(args.singing_voice_config)
+                try:voice=singing_profile(rvc_profiles.resolve(args.managed_public,args.singing_voice_config,body))
                 except Exception:return self.reply(503,{'error':'rvc_profile_unavailable'})
                 if not voice or voice['engine']!='rvc':return self.reply(503,{'error':'rvc_profile_required'})
                 jid=secrets.token_hex(16)
@@ -432,7 +435,7 @@ def main():
                 jobs[jid]={'id':jid,'state':'queued','key':key,'created':time.time(),'engine':'rvc','mode':'cover','reference_used':True,'request_hash':fingerprint,
                            'requested_seconds':details['reference_seconds'],'recipe':details,'singing_voice':{k:v for k,v in voice.items() if k!='python'}}
                 save();pool.submit(run_rvc,jid,body)
-            return self.reply(202,{'id':jid,'state':'queued','engine':'rvc','reference_used':True,'singing_voice_profile':voice['profile']})
+            return self.reply(202,{'id':jid,'state':'queued','engine':'rvc','reference_used':True,'singing_voice_profile':voice['profile'],'voice_profile_id':body.get('voice_profile_id','')})
     # Windows/WSL access: token required on every endpoint. No remote code/API.
     try:ThreadingHTTPServer((args.bind,args.port),Handler).serve_forever()
     finally:state_lease.close()

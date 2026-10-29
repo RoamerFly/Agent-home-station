@@ -19,11 +19,12 @@ import (
 // lyrics or submits a YuE prompt. Delivery uses the existing durable song path.
 func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage) (string, error) {
 	var in struct {
-		Title     string   `json:"title"`
-		Reference string   `json:"reference_asset_id"`
-		Start     *float64 `json:"reference_start_seconds"`
-		Seconds   *float64 `json:"reference_seconds"`
-		Kind      string   `json:"kind"`
+		Title        string   `json:"title"`
+		Reference    string   `json:"reference_asset_id"`
+		Start        *float64 `json:"reference_start_seconds"`
+		Seconds      *float64 `json:"reference_seconds"`
+		Kind         string   `json:"kind"`
+		VoiceProfile string   `json:"voice_profile_id"`
 	}
 	if json.Unmarshal(raw, &in) != nil || songTitle(in.Title) == "" || in.Reference == "" {
 		return "", toolInputError("RVC翻唱需要具体title和本会话的原录音reference_asset_id")
@@ -33,6 +34,19 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 			if task.ID == p.trace.TaskID && task.MusicJob != "" {
 				return "", toolInputError("已有歌曲任务请查询原job_id，不重新转换")
 			}
+		}
+	}
+	if in.VoiceProfile != "" {
+		voices, e := p.accessibleVoices()
+		if e != nil {
+			return "", e
+		}
+		known := false
+		for _, v := range voices {
+			known = known || v.Public && v.ProfileID == in.VoiceProfile
+		}
+		if !known {
+			return "", toolInputError("voice_profile_not_registered_use_voice_library_list_and_read")
 		}
 	}
 	in.Title = songTitle(in.Title)
@@ -68,14 +82,25 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 		return "", err
 	}
 	var ready struct {
-		Ready   bool `json:"ready"`
-		Version int  `json:"bridge_version"`
+		Ready         bool `json:"ready"`
+		Version       int  `json:"bridge_version"`
+		VoiceProfiles bool `json:"voice_profiles"`
 	}
 	if json.Unmarshal(health, &ready) != nil || !ready.Ready || ready.Version < 9 {
 		return "", toolInputError("本地RVC角色模型尚未就绪；需桥接v9和有效角色模型，不改走YuE重新作曲")
 	}
+	if in.VoiceProfile != "" && (ready.Version < 12 || !ready.VoiceProfiles) {
+		return "", toolInputError("换声桥接尚未支持按任务选音色，需升级到v12；未提交默认音色任务")
+	}
 	body := map[string]any{"title": in.Title, "reference_base64": base64.StdEncoding.EncodeToString(clip), "reference_source_sha256": asset.Hash, "reference_start_seconds": start, "reference_seconds": seconds, "reference_pretrimmed": true}
-	operation, _ := json.Marshal(map[string]any{"title": in.Title, "reference_asset_id": in.Reference, "reference_sha256": asset.Hash, "reference_start_seconds": start, "reference_seconds": seconds, "kind": in.Kind, "engine": "rvc"})
+	if in.VoiceProfile != "" {
+		body["voice_profile_id"] = in.VoiceProfile
+	}
+	operationData := map[string]any{"title": in.Title, "reference_asset_id": in.Reference, "reference_sha256": asset.Hash, "reference_start_seconds": start, "reference_seconds": seconds, "kind": in.Kind, "engine": "rvc"}
+	if in.VoiceProfile != "" {
+		operationData["voice_profile_id"] = in.VoiceProfile
+	}
+	operation, _ := json.Marshal(operationData)
 	result, err := p.privilegedCall(ctx, "music_rvc_start", operation, func() (any, error) {
 		data, _, e := p.yueRequest(ctx, "POST", "/rvc-jobs", body, p.operationID("music_rvc_start", operation))
 		if e != nil {
@@ -105,14 +130,14 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 		found = found || task.ID == taskID
 	}
 	if !found {
-		spec := &songSpec{Engine: "rvc", Mode: "cover", SingingVoice: "character", VocalGender: "female", Duration: int(math.Ceil(actual)), Reference: asset.ID, ReferenceHash: asset.Hash, ReferenceStart: start, ReferenceSeconds: seconds, Style: "RVC原曲人声换声；保留原词、旋律、节奏与伴奏"}
+		spec := &songSpec{VoiceProfile: in.VoiceProfile, Engine: "rvc", Mode: "cover", SingingVoice: "character", VocalGender: "female", Duration: int(math.Ceil(actual)), Reference: asset.ID, ReferenceHash: asset.Hash, ReferenceStart: start, ReferenceSeconds: seconds, Style: "RVC原曲人声换声；保留原词、旋律、节奏与伴奏"}
 		task := agentTask{ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, MusicSpec: spec, MusicTitle: in.Title, MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, Title: "RVC翻唱 · " + in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "查询原RVC任务结果，不重写歌词、不重生成旋律、不重复转换", State: "waiting", Next: time.Now().Add(20 * time.Second)}
 		if err := p.manager.agent.task(task); err != nil {
 			return "", err
 		}
 		p.manager.record(bot.Record{Event: "music_generation_queued", Category: "tool", ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: "music_rvc_start", Content: in.Title, Status: "waiting", Reason: "rvc_direct_conversion_followup_registered", Origin: "agent"})
 	}
-	job["task_id"], job["automatic_followup"], job["engine"] = taskID, true, "rvc"
+	job["task_id"], job["automatic_followup"], job["engine"], job["voice_profile_id"] = taskID, true, "rvc", in.VoiceProfile
 	job["instruction"] = "已提交原录音直接换声，分离人声→RVC→混回原伴奏；没有调用YuE作曲。完成后查询music_local_status取得完整附件并按当前需求发送；以实际音频检验音色，不重复提交。"
 	output, _ := json.Marshal(job)
 	return string(output), nil

@@ -105,6 +105,8 @@ def recover_body(state, jid, job):
     body = {key: details.get(key) for key in ('title', 'reference_start_seconds',
             'reference_seconds', 'reference_source_sha256')}
     body.update(reference_base64=base64.b64encode(data).decode(), reference_pretrimmed=True)
+    if details.get('voice_profile_id'):
+        body['voice_profile_id']=details['voice_profile_id']
     # Compare the exact stored recipe, including duration/provenance. A valid
     # source alone does not authorize changing this job to a different take.
     if rvc_cover.recipe(body) != details:

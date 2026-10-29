@@ -28,6 +28,16 @@ python scripts/voice_library.py --workspace <项目根> --history <GPT-SoVITS历
 
 `GET /api/voice-library`返回当前账号管理目录的库；`GET /api/voice-library/files/<sha256.ext>`只服务私有库内的哈希文件，支持音频Range；`/voice-library`为页面。三者均要求管理登录，不能通过文件路径参数访问工作区外文件。未登录返回401；不向普通微信会话暴露语音库中的个人录音或模型。
 
+## Agent使用
+
+Agent可调用`voice_library_list`（搜索、引擎筛选及分页）、`voice_library_read`（精确权重、参考、状态和使用说明）、`voice_library_prepare`（将选定文件校验复制到受管工作区）。默认准备登记的推荐检查点与参考；传入`file_ids`可选其他轮次。准备文件不会训练、运行权重或发送微信。
+
+管理员可检索当前账号的私人归档；私人模型和参考准备到本账号`global/voice-library`，后续`server_*`使用`global=true`。普通成员只发现公共库，公共条目准备到当前会话。不会把整个管理目录或凭据挂载给Shell。私人库仍由管理服务保存，工作区只取得明确选中的文件。
+
+曼波公共条目由`voice_library_read`返回`music_rvc_start.voice_profile_id="voice-manbo"`。调用换声时显式传此值；任务配方、幂等身份及重启续办都保留声线选择，不改默认大肥鱼C配置。旧桥接缺少选音色能力时不提交到默认声线。桥接v12支持按任务选择公共清单内的音色配置，配置与权重哈希仍在转换前核验。
+
+本机音乐服务停止时，可信管理员可调用`music_service_start`启动已安装的`wechat-agent-music.service`，再用`music_service_status`核查桥接和后端状态。该操作只适用于已配置的Linux本机127.0.0.1:6188；其他部署由其自身服务管理器启动。它不开放任意宿主Shell、不提交歌曲、不发送微信。服务就绪、任务提交、音频生成及手机播放分别核验。
+
 
 ## 本次收集与验证（2026-10-29）
 
