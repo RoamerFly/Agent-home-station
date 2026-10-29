@@ -110,7 +110,7 @@ func privateVoiceRelative(f voiceFile) (string, error) {
 func (p *permittedTools) voiceTools() []mcptools.Tool {
 	return []mcptools.Tool{
 		agentTool("voice_library_list", "Discover registered character voices by query/engine. Ordinary members see public voices; trusted owner also sees this account's private GPT-SoVITS/Bailian/RVC archive. No disk scan, synthesis or default changes. Paginated, default limit20; follow next_offset. Input {query?,engine?,offset?,limit?}.", `{"type":"object","properties":{"query":{"type":"string"},"engine":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
-		agentTool("voice_library_read", "Read exact discovered voice_id: weight versions, reference names, status and usage. No credentials/other accounts. Archived GPT-SoVITS is not proof of an installed TTS runtime. For shared RVC profile use returned music_rvc_start arguments, not default character voice. Input {voice_id:string}.", `{"type":"object","properties":{"voice_id":{"type":"string"}},"required":["voice_id"],"additionalProperties":false}`),
+		agentTool("voice_library_read", "Read exact discovered voice_id: weight versions, references, current status and matching synthesis route. GPT-SoVITS speech: speech_synthesize(voice_id,text) uses registered project runtime; project_read exposes CLI for custom operation. RVC singing uses returned music_rvc_start profile. No credentials/other accounts; never substitute default voice. Input {voice_id:string}.", `{"type":"object","properties":{"voice_id":{"type":"string"}},"required":["voice_id"],"additionalProperties":false}`),
 		agentTool("voice_library_prepare", "Prepare selected voice files with SHA256 checks for file/Shell access. Defaults recommended/latest weight per kind plus references (or previews); file_ids chooses exact hash.ext files from voice_library_read, including older epochs. Personal voices owner only: return existing canonical account voice-library files without duplicate copies; legacy control archives are copied into global. Use server_* global=true. Public models are copied into current conversation. Never mounts credentials, executes weights or sends. Input {voice_id:string,file_ids?:string[]}.", `{"type":"object","properties":{"voice_id":{"type":"string"},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1}},"required":["voice_id"],"additionalProperties":false}`),
 	}
 }
@@ -166,6 +166,7 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 			row["usage"] = "voice_library_prepare取得可读模型和参考，然后project_list/project_read定位相应引擎。GPT-SoVITS、RVC和百炼音色不互换；权重齐全不等于运行环境和听感已经验证。"
 			if strings.EqualFold(v.Engine, "GPT-SoVITS") {
 				row["project_id"] = "gpt-sovits"
+				row["speech_synthesize"] = map[string]string{"voice_id": v.ID, "text": "填写本次需要合成的原文"}
 				row["usage"] = "先project_read({id:gpt-sovits})读取登记的GPT-SoVITS项目、真实解释器和CLI。voice_library_prepare取得明确选定的GPT/SoVITS配对权重、参考音频及其转录；私人声线server_exec/server_process用global=true，CUDA用gpu=true。不因在群里发起而拒绝真实管理员，也不能只查看旧目录后宣称本机未安装。按需读源码、自写脚本或修复，生成后核验实际音频再发送。"
 			}
 			if v.Public && v.ProfileID != "" {

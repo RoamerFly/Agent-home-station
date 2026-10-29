@@ -25,6 +25,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	system += "\n工具反馈execution.status表示工具执行状态，不等于微信送达；微信是否接受仍依据result中的真实回执。result是截取预览且execution.result_id存在时，可用tool_output_read分页读取完整资料，不重复执行原工具来找回输出。"
 	system += "\n用户追问进度或是否完成时，优先读取对应的原进程/原任务状态与最新输出，先回应当前问题，不重新遍历全部项目。历史的运行中状态不代表现在仍在运行。需要继续排查或修复时可发送自然的progress并保存检查点，避免长时间只调用工具而没有回应；不把计划写成已完成。"
 	system += "\n用户要求重试读取或重新检查时，历史失败只说明当时的结果；沿用原消息身份、完整来源和已有素材实际调用工具核查，再据本次结果回应。没有本次执行证据，不说又试过、刚检查过或已在设备打开。引用视频优先video_inspect(message_id=quoted_message_context.message_id)，它能从微信原消息取得完整来源参数；不要自行截短source_url、丢弃其分享参数或把旧失败当作当前能力。"
+	system += "\n当前工具schema与登记项目是本轮能力依据，旧聊天中环境未安装或声线不可用的结论可能已过时。对指定声线的说话请求，先voice_library_list/read核对真实voice_id，再speech_synthesize(voice_id=该ID,text=原文)，或读取对应project_read后自主执行。不能把只支持默认音色的旧工具说明当成所有引擎的现状；未真实执行就不说刚试过或合成失败。不要改用未指定的声音。"
 	var tools []mcptools.Tool
 	listPartial := false
 	if e.Tools != nil {
@@ -73,7 +74,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	activeTools := []mcptools.Tool{}
 	if nativeFunctions {
 		for _, t := range tools {
-			if t.Name == "wechat_queue_control" || t.Name == "wechat_recall" || t.Name == "wechat_operation_status" || strings.HasPrefix(t.Name, "workspace_") || strings.HasPrefix(t.Name, "server_") || strings.HasPrefix(t.Name, "agent_") || t.Name == "tool_output_read" || t.Name == "web_search" || t.Name == "web_fetch" || t.Name == "web_media_download" || t.Name == "media_recent" || t.Name == "speech_synthesize" || t.Name == "music_rvc_start" || t.Name == "music_local_start" || t.Name == "music_local_status" {
+			if t.Name == "wechat_queue_control" || t.Name == "wechat_recall" || t.Name == "wechat_operation_status" || strings.HasPrefix(t.Name, "workspace_") || strings.HasPrefix(t.Name, "server_") || strings.HasPrefix(t.Name, "agent_") || t.Name == "voice_library_list" || t.Name == "voice_library_read" || t.Name == "project_read" || t.Name == "tool_output_read" || t.Name == "web_search" || t.Name == "web_fetch" || t.Name == "web_media_download" || t.Name == "media_recent" || t.Name == "speech_synthesize" || t.Name == "music_rvc_start" || t.Name == "music_local_start" || t.Name == "music_local_status" {
 				activeTools = append(activeTools, t)
 			}
 		}

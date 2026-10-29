@@ -8,6 +8,7 @@ Python 环境复用同一公共工作区的 Linux music CUDA 包，独立安装 
 ## Agent 调用
 
 1. 用 `voice_library_list` 找到指定名称，再用 `voice_library_read` 核对 `engine`、推荐 GPT/SoVITS 配对和参考。
+   常规说话直接 `speech_synthesize {"voice_id":"查询所得ID","text":"身体健康，吃好喝好"}`，由已登记的本地引擎在系统沙箱中合成并准备语音附件。返回的 `media_ids` 仍需由最终回复发送；此工具本身不发送微信。指定库音色不会退回百炼默认声音，也不依赖百炼 Key。可传 `file_ids`、原生 `parameters`、`device`、`version` 和 `timeout_seconds`（默认600秒，显式值不静默缩小）。
 2. `voice_library_prepare` 校验选定的权重、参考音频和转录文本；已迁移的私人声线直接返回账号 voice-library 中的文件，避免重复复制。旧控制目录归档仍会准备到账号 global。工具返回每个文件的真实路径、原文件名及类型，不能根据哈希文件名猜模型类型。
 3. 私人声线使用账号 global 目录。真实管理员在私聊或群里均可通过 `server_exec` / `server_process` 的 `global=true` 挂载；CUDA 使用 `gpu=true`。
 4. 阅读 CLI `--help` 或直接读取上游 `api_v2.py`、`GPT_SoVITS/TTS_infer_pack/TTS.py`。可编写自己的脚本，不必局限于此适配入口。
@@ -29,6 +30,8 @@ Python 环境复用同一公共工作区的 Linux music CUDA 包，独立安装 
 CLI 输出完整 WAV；流式消费用上游 API 或自写代码。缺少指定权重或 CUDA 不可用会明确报错，不换成默认声线或静默回退 CPU。显式 `--device cpu --no-half` 可使用 CPU。
 
 普通好友/群友只能使用公共条目；个人声线归档仍由账号管理员访问。获得读取权限不代表任意引擎兼容：GPT-SoVITS 的文本合成不能直接作为 RVC checkpoint 使用。
+
+每轮上下文附带当前公共项目登记摘要，详细参数仍通过 `project_read` 按需取得。历史聊天里的“未安装”只记录当时结论；新请求按当前工具、登记文件和真实执行结果重新判断，不能将旧失败表述成刚执行过。
 
 ## 新机器安装
 

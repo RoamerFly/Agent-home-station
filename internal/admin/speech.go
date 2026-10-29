@@ -116,15 +116,12 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 }
 func (p *permittedTools) speechTools() []mcptools.Tool {
 	c := p.manager.speechConfig()
-	if c.Key == "" {
-		return nil
-	}
 	out := []mcptools.Tool{}
 	permissions := p.manager.Config().Companion.Permissions
-	if c.TTSEnabled && permissions.SendVoice {
-		out = append(out, agentTool("speech_synthesize", "Create your spoken voice from text using the configured Alibaba TTS voice; this is speech, not singing. Returns prepared media IDs; final reply.media_ids sends them as WeChat voice. Input {text:string,instruction?:string}.", `{"type":"object","properties":{"text":{"type":"string"},"instruction":{"type":"string"}},"required":["text"],"additionalProperties":false}`))
+	if permissions.SendVoice && (c.TTSEnabled && c.Key != "" || p.workspaceExecutionAllowed() && p.manager.agent.config().Host.Mode == "full") {
+		out = append(out, agentTool("speech_synthesize", "Synthesize actual spoken audio. Omit voice_id for configured Alibaba character voice. For a NAMED library voice first voice_library_list/read, then pass its voice_id: GPT-SoVITS uses the registered local GPU runtime, not Alibaba/default voice. Returns prepared media IDs; final reply.media_ids sends voice. Private voices require trusted owner; no substitution. file_ids selects exact library weight/reference versions; parameters forwards native TTS settings. timeout_seconds defaults600, adjustable; device defaults cuda (cpu explicit). Read project_read(id=gpt-sovits) for direct CLI/custom code too. Input {text,voice_id?,instruction?,file_ids?,parameters?,device?,version?,timeout_seconds?}.", `{"type":"object","properties":{"text":{"type":"string","minLength":1},"voice_id":{"type":"string"},"instruction":{"type":"string"},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1},"parameters":{"type":"object"},"device":{"type":"string"},"version":{"type":"string"},"timeout_seconds":{"type":"number","exclusiveMinimum":0}},"required":["text"],"additionalProperties":false}`))
 	}
-	if c.MusicEnabled && (permissions.SendVoice || permissions.SendFile) {
+	if c.Key != "" && c.MusicEnabled && (permissions.SendVoice || permissions.SendFile) {
 		out = append(out, agentTool("music_generate", "Generate an original complete song with vocals using Alibaba Fun-Music. Requires provider access. Does NOT reproduce an existing recording or accept reference audio. Default: COMPLETE song as voice notes at most60s each; file only on explicit request. Never ask whether user wants a file. Existing released songs must use real search/download. Supply a meaningful title chosen from user intent. Use both for singing AND original file requests. Input {title:string,prompt:string,lyrics?:string,kind:file|voice|both}.", `{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":24},"prompt":{"type":"string"},"lyrics":{"type":"string"},"kind":{"type":"string","enum":["file","voice","both"]}},"required":["title","prompt","kind"],"additionalProperties":false}`))
 	}
 	return out
@@ -141,6 +138,18 @@ func (p *permittedTools) callSpeech(ctx context.Context, name string, args json.
 	})
 }
 func (p *permittedTools) generateSpeech(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if name == "speech_synthesize" {
+		var selected struct {
+			VoiceID string `json:"voice_id"`
+		}
+		if json.Unmarshal(args, &selected) != nil {
+			return "", toolInputError("语音参数无效")
+		}
+		if selected.VoiceID != "" {
+			p.privateDiagnostics = true
+			return p.synthesizeLibraryVoice(ctx, args)
+		}
+	}
 	c := p.manager.speechConfig()
 	var in struct{ Text, Instruction, Prompt, Lyrics, Kind, Title string }
 	if json.Unmarshal(args, &in) != nil {
