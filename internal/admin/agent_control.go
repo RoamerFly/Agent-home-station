@@ -585,6 +585,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 }
 func (s *Server) agentRoutes(mux *http.ServeMux) {
+	s.mediaConsoleRoutes(mux)
 	s.taskArchiveRoutes(mux)
 	s.workspaceRoutes(mux)
 	mux.HandleFunc("POST /api/agent/recover-music-message", s.protected(s.recoverMusicMessage))

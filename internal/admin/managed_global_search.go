@@ -135,7 +135,7 @@ func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemo
 		if query != "" && !strings.Contains(strings.ToLower(asset.Filename+" "+asset.Title+" "+label), query) {
 			continue
 		}
-		data := map[string]any{"kind": "asset", "thread_id": thread, "thread_name": label, "time_basis": basis, "cached_updated_at": asset.Updated, "asset_id": asset.ID, "filename": asset.Filename, "bytes": asset.Bytes, "mime": asset.MIME, "parent_asset_id": asset.ParentAssetID, "first_request": asset.FirstRequest, "requests": asset.Requests}
+		data := map[string]any{"kind": "asset", "thread_id": thread, "thread_name": label, "time_basis": basis, "cached_updated_at": asset.Updated, "asset_id": asset.ID, "filename": asset.Filename, "bytes": asset.Bytes, "mime": asset.MIME, "parent_asset_id": asset.ParentAssetID, "first_request": asset.FirstRequest, "requests": recentAssetRequests(asset), "request_count": len(asset.Requests)}
 		if request != nil {
 			data["message_id"], data["sender"], data["sender_name"] = request.TraceID, request.RequesterID, request.RequesterName
 		}

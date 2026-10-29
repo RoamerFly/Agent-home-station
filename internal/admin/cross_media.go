@@ -15,14 +15,16 @@ import (
 )
 
 type crossMediaInput struct {
-	Source  string `json:"source_thread_id"`
-	Target  string `json:"target_thread_id"`
-	Asset   string `json:"asset_id"`
-	Message string `json:"message_id"`
-	Kind    string `json:"kind"`
-	Key     string `json:"request_key"`
+	Conversion *voiceConversion `json:"conversion,omitempty"`
+	Source     string           `json:"source_thread_id"`
+	Target     string           `json:"target_thread_id"`
+	Asset      string           `json:"asset_id"`
+	Message    string           `json:"message_id"`
+	Kind       string           `json:"kind"`
+	Key        string           `json:"request_key"`
 }
 type crossMediaBatch struct {
+	Conversion      *voiceConversion                  `json:"conversion,omitempty"`
 	RequestIdentity string                            `json:"request_identity,omitempty"`
 	SupersededBy    string                            `json:"superseded_by,omitempty"`
 	TaskID          string                            `json:"task_id,omitempty"`
@@ -47,6 +49,9 @@ func validCrossReceipt(batch crossMediaBatch, part bot.MediaSeed, status linuxna
 func validateCrossBatch(batch crossMediaBatch, account string) error {
 	if !validID(batch.ID) || batch.Account != account || batch.Origin == "" || batch.Source == "" || batch.Target == "" || batch.Sender == "" || batch.Asset == "" || len(batch.Parts) == 0 {
 		return errors.New("invalid_cross_media_journal")
+	}
+	if err := batch.Conversion.validate(batch.Parts[0].Media.Kind); err != nil {
+		return err
 	}
 	keys := map[string]bool{}
 	for _, p := range batch.Parts {
@@ -90,6 +95,9 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 	var in crossMediaInput
 	if json.Unmarshal(args, &in) != nil || in.Key == "" || len(in.Key) > 128 || (in.Asset == "") == (in.Message == "") || !contains([]string{"file", "voice", "video", "image"}, in.Kind) {
 		return "", toolInputError("provide one real asset_id or message_id, kind and stable request_key")
+	}
+	if err := in.Conversion.validate(in.Kind); err != nil {
+		return "", err
 	}
 	if in.Source == "" {
 		in.Source = p.trace.Thread
@@ -154,14 +162,14 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 					continue
 				}
 				old, e := m.readCrossBatch(strings.TrimSuffix(entry.Name(), ".json"))
-				if e != nil || old.SupersededBy != "" || old.RequestIdentity != identity && crossBatchAccepted(old) || old.Origin != p.trace.Thread || old.Sender != p.trace.Sender || old.Source != in.Source || old.Target != in.Target || old.Asset != in.Asset || old.Parts[0].Media.Kind != in.Kind {
+				if e != nil || old.SupersededBy != "" || old.RequestIdentity != identity && crossBatchAccepted(old) || old.Origin != p.trace.Thread || old.Sender != p.trace.Sender || old.Source != in.Source || old.Target != in.Target || old.Asset != in.Asset || old.Parts[0].Media.Kind != in.Kind || !sameVoiceConversion(old.Conversion, in.Conversion) {
 					continue
 				}
 				state := "queued"
 				if crossBatchAccepted(old) {
 					state = "accepted"
 				}
-				return map[string]any{"operation_id": old.ID, "state": state, "source_thread_id": old.Source, "target_thread_id": old.Target, "parts": len(old.Parts), "reused_existing_operation": true, "instruction": "同一素材目标已有投递批次；核对原operation_id，不创建新的发送队列。"}, nil
+				return map[string]any{"operation_id": old.ID, "state": state, "source_thread_id": old.Source, "target_thread_id": old.Target, "parts": len(old.Parts), "effective_conversion": old.Conversion.effective(), "reused_existing_operation": true, "instruction": "同一素材目标已有投递批次；核对原operation_id，不创建新的发送队列。"}, nil
 			}
 		}
 		sourceTrace := p.trace
@@ -211,7 +219,7 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 			}
 			outputs = []companion.GeneratedMedia{{ID: a.ID + "-file", SourceID: upload.ID, AssetID: a.ID, Kind: "file", Title: a.Title, CachedMIME: a.MIME}}
 		} else {
-			raw, e := access.reuseAsset(ctx, in.Asset, in.Kind)
+			raw, e := access.reuseAssetConverted(ctx, in.Asset, in.Kind, in.Conversion)
 			if e != nil {
 				return nil, e
 			}
@@ -235,7 +243,7 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 			return nil, errors.New("cross_media_authorization_revoked")
 		}
 		id := p.operationID("wechat_send_media", args)
-		batch := crossMediaBatch{RequestIdentity: identity, TaskID: p.trace.TaskID, ID: id, Account: p.trace.Account, Origin: p.trace.Thread, Source: in.Source, Target: in.Target, Sender: p.trace.Sender, Asset: in.Asset, Created: time.Now().UTC()}
+		batch := crossMediaBatch{Conversion: in.Conversion, RequestIdentity: identity, TaskID: p.trace.TaskID, ID: id, Account: p.trace.Account, Origin: p.trace.Thread, Source: in.Source, Target: in.Target, Sender: p.trace.Sender, Asset: in.Asset, Created: time.Now().UTC()}
 		for i, media := range outputs {
 			input := p.trace
 			input.Thread = in.Target
@@ -263,7 +271,7 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 			return nil, e
 		}
 		m.record(bot.Record{Event: "cross_media_queued", Category: "decision", ThreadID: in.Target, Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: "[" + in.Kind + "] " + outputs[0].Title, Reason: "explicit_destination_persisted", Status: "queued", Origin: "agent"})
-		return map[string]any{"operation_id": id, "state": "queued", "source_thread_id": in.Source, "target_thread_id": in.Target, "asset_id": in.Asset, "parts": len(batch.Parts), "instruction": "附件已排入明确目标会话的持久队列，尚未确认送达。用wechat_operation_status核对。不要把附件再加入当前私聊reply.media_ids，不重复生成或发送。"}, nil
+		return map[string]any{"operation_id": id, "state": "queued", "source_thread_id": in.Source, "target_thread_id": in.Target, "asset_id": in.Asset, "parts": len(batch.Parts), "effective_conversion": in.Conversion.effective(), "instruction": "附件已排入明确目标会话的持久队列，尚未确认送达。用wechat_operation_status核对。不要把附件再加入当前私聊reply.media_ids，不重复生成或发送。"}, nil
 	})
 }
 func (m *Manager) queueCrossBatch(batch crossMediaBatch) error {
@@ -396,6 +404,9 @@ func (m *Manager) restoreCrossMedia() error {
 	return nil
 }
 func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (string, error) {
+	if !validID(id) {
+		return "", toolInputError("invalid_cross_media_operation_id")
+	}
 	b, e := os.ReadFile(filepath.Join(p.manager.dir, "cross-media", id+".json"))
 	if e != nil {
 		return "", e

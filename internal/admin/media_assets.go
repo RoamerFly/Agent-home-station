@@ -22,6 +22,7 @@ import (
 )
 
 type assetOriginal struct {
+	FormatKey           string
 	Music               *songSpec
 	Data                []byte
 	MIME, URL, Filename string
@@ -45,6 +46,8 @@ type mediaAsset struct {
 	FirstRequest  *assetRequest          `json:"first_request,omitempty"`
 	ParentAssetID string                 `json:"parent_asset_id,omitempty"`
 	Requests      []assetRequest         `json:"requests,omitempty"`
+	HistoryStored bool                   `json:"history_stored,omitempty"`
+	RequestCount  int                    `json:"request_count,omitempty"`
 	Formats       map[string]assetFormat `json:"formats,omitempty"`
 	ID            string                 `json:"id"`
 	Scope         string                 `json:"scope"`
@@ -71,10 +74,26 @@ func (m *Manager) loadAssets() ([]mediaAsset, error) {
 	if err != nil || len(b) > 16<<20 || json.Unmarshal(b, &items) != nil {
 		return nil, errors.New("媒体素材索引无法读取")
 	}
+	for i := range items {
+		if err := m.loadAssetHistory(&items[i]); err != nil {
+			return nil, err
+		}
+	}
 	return items, nil
 }
 func (m *Manager) saveAssets(items []mediaAsset) error {
-	b, e := json.Marshal(items)
+	// History is committed first. An interrupted index replacement can retain
+	// extra verified associations, but must never erase an older association.
+	compact := append([]mediaAsset(nil), items...)
+	for i := range compact {
+		if err := m.saveAssetHistory(&compact[i]); err != nil {
+			return err
+		}
+		// A bounded compatibility preview lets a rolled-back executable keep
+		// operating. It is never the authoritative association history.
+		compact[i].Requests = recentHistoryPreview(compact[i].Requests, 8)
+	}
+	b, e := json.Marshal(compact)
 	if e != nil {
 		return e
 	}
@@ -109,9 +128,6 @@ func (a *mediaAsset) noteRequest(in companion.Input) {
 		}
 	}
 	a.Requests = append(a.Requests, r)
-	if len(a.Requests) > 8 {
-		a.Requests = a.Requests[len(a.Requests)-8:]
-	}
 }
 func assetName(a assetOriginal) string {
 	if safeMediaFilename(a.Filename) {
@@ -216,7 +232,11 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		if upload.Kind == "" || upload.ID == "" {
 			continue
 		}
-		format := formats[upload.Kind]
+		key := upload.Kind
+		if original.FormatKey != "" {
+			key = original.FormatKey
+		}
+		format := formats[key]
 		format.Batch = in.TraceID
 		if format.Batch == "" {
 			format.Batch = upload.ID
@@ -228,8 +248,10 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		if !found {
 			format.Sources = append(format.Sources, upload.ID)
 		}
-		formats[upload.Kind] = format
-		a.Sources[upload.Kind] = upload.ID
+		formats[key] = format
+		if original.FormatKey == "" {
+			a.Sources[upload.Kind] = upload.ID
+		}
 	}
 	for kind, format := range formats {
 		a.Formats[kind] = format
@@ -298,6 +320,9 @@ func (m *Manager) findAssetPage(in companion.Input, assetID, requester, query st
 				first = assetRequestSummary(*a.FirstRequest)
 			}
 			row := map[string]any{"asset_id": a.ID, "parent_asset_id": a.ParentAssetID, "title": a.Title, "filename": a.Filename, "bytes": a.Bytes, "formats": formats, "original_cached": a.Hash != "", "cached_mime": a.MIME, "updated": a.Updated, "source_url": a.URL, "first_request": first, "requests": requests}
+			if len(a.Requests) > 2 {
+				row["request_count"] = len(a.Requests)
+			}
 			if a.Music != nil {
 				row["generation_mode"], row["reference_asset_id"], row["seed"] = a.Music.Mode, a.Music.Reference, a.Music.Seed
 			}
@@ -313,6 +338,12 @@ func assetRequestSummary(r assetRequest) map[string]string {
 	return map[string]string{"trace_id": r.TraceID, "requester_id": r.RequesterID, "requester_name": r.RequesterName, "task_id": r.TaskID}
 }
 func (p *permittedTools) reuseAsset(ctx context.Context, id, kind string) (string, error) {
+	return p.reuseAssetConverted(ctx, id, kind, nil)
+}
+func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind string, conversion *voiceConversion) (string, error) {
+	if err := conversion.validate(kind); err != nil {
+		return "", err
+	}
 	if p.trace.Preview || !companion.MediaPermitted(p.manager.Config().Companion.Permissions, kind) {
 		return "", errors.New("media_permission_denied")
 	}
@@ -339,10 +370,14 @@ func (p *permittedTools) reuseAsset(ctx context.Context, id, kind string) (strin
 		return "", errors.New("当前会话没有该素材")
 	}
 	a := items[index]
+	formatKey := kind
+	if conversion != nil {
+		formatKey = conversion.formatKey()
+	}
 	if time.Since(a.Updated) > time.Duration(m.Config().Companion.MemoryDays)*24*time.Hour {
 		return "", errors.New("素材已超过会话保留时限")
 	}
-	if kind == "voice" && len(a.Formats[kind].Sources) == 0 && a.Hash != "" && strings.HasPrefix(a.MIME, "audio/") {
+	if kind == "voice" && len(a.Formats[formatKey].Sources) == 0 && a.Hash != "" && strings.HasPrefix(a.MIME, "audio/") {
 		// Old indexes retained only the last voice material. Rebuild the
 		// complete sequence locally from the verified full original instead.
 		data, err := m.cachedAssetData(a)
@@ -351,11 +386,15 @@ func (p *permittedTools) reuseAsset(ctx context.Context, id, kind string) (strin
 		}
 		m.assetMu.Unlock()
 		locked = false
-		output, err := preparePublicAudioPreview(ctx, m.dir, data, 0)
+		output, err := preparePublicAudioRange(ctx, m.dir, data, conversion.effective())
 		if err != nil {
 			return "", err
 		}
-		result, err := p.stageOutputWithAsset(ctx, output, &assetOriginal{Data: data, MIME: a.MIME, Filename: a.Filename, URL: a.URL})
+		variant := ""
+		if conversion != nil {
+			variant = formatKey
+		}
+		result, err := p.stageOutputWithAsset(ctx, output, &assetOriginal{FormatKey: variant, Data: data, MIME: a.MIME, Filename: a.Filename, URL: a.URL})
 		if err != nil {
 			return "", err
 		}
@@ -363,11 +402,19 @@ func (p *permittedTools) reuseAsset(ctx context.Context, id, kind string) (strin
 		if json.Unmarshal([]byte(result), &value) != nil {
 			return "", errors.New("重建语音结果无效")
 		}
-		value["reused_existing"], value["rebuilt_legacy_voice"], value["network_downloads"] = true, true, 0
+		value["reused_existing"], value["rebuilt_legacy_voice"], value["network_downloads"] = true, conversion == nil, 0
+		value["effective_conversion"] = conversion.effective()
 		b, _ := json.Marshal(value)
 		return string(b), nil
 	}
 	source := a.Sources[kind]
+	if conversion != nil {
+		format := a.Formats[formatKey]
+		if len(format.Sources) == 0 {
+			return "", toolInputError("voice_conversion_requires_cached_audio_original")
+		}
+		source = format.Sources[0]
+	}
 	if source == "" {
 		if kind != "file" || len(a.Hash) != 64 {
 			if a.ParentAssetID != "" {
@@ -413,13 +460,13 @@ func (p *permittedTools) reuseAsset(ctx context.Context, id, kind string) (strin
 	// The alias binds kind and current-conversation ownership, while SourceID
 	// stays the native upload handle. It never exposes a host filesystem path.
 	sources := []string{source}
-	if format := a.Formats[kind]; len(format.Sources) > 0 {
+	if format := a.Formats[formatKey]; len(format.Sources) > 0 {
 		sources = format.Sources
 	}
 	itemsOut := []companion.GeneratedMedia{}
 	p.mediaMu.Lock()
 	for i, id := range sources {
-		alias := a.ID + "-" + kind
+		alias := a.ID + "-" + formatKey
 		if len(sources) > 1 {
 			alias += "-" + strconv.Itoa(i+1)
 		}
@@ -439,7 +486,7 @@ func (p *permittedTools) reuseAsset(ctx context.Context, id, kind string) (strin
 			required = append(required, item.ID)
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"required_media_ids": required, "media": itemsOut, "reused_existing": true, "network_downloads": 0, "cached_mime": a.MIME, "source_url": a.URL, "instruction": "尚未发送。将所需的全部 media.id 按顺序放入最终 reply.media_ids；已有素材已复用，无需重新搜索。cached_mime是实际缓存文件格式，音轨不是原视频；若要原视频而仅缓存音轨，应使用source_url取得视频，不把音频文件冒充视频。"})
+	b, _ := json.Marshal(map[string]any{"required_media_ids": required, "media": itemsOut, "reused_existing": true, "network_downloads": 0, "effective_conversion": conversion.effective(), "cached_mime": a.MIME, "source_url": a.URL, "instruction": "尚未发送。将所需的全部 media.id 按顺序放入最终 reply.media_ids；已有素材已复用，无需重新搜索。cached_mime是实际缓存文件格式，音轨不是原视频；若要原视频而仅缓存音轨，应使用source_url取得视频，不把音频文件冒充视频。"})
 	return string(b), nil
 }
 
