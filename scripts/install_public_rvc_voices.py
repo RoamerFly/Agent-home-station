@@ -46,9 +46,11 @@ def fetch_asset(url, target, size, sha):
         path = target.with_name(target.name + '.part-' + str(start))
         if path.is_symlink():
             raise ValueError('download_part_symlink')
+        if path.is_file() and path.stat().st_size == end - start + 1:
+            return path
         for attempt in range(4):
             try:
-                request = urllib.request.Request(url + '?download=true&part=' + str(start),
+                request = urllib.request.Request(url + '?download=true&part=' + str(start) + '&attempt=' + str(attempt),
                     headers={'Range': f'bytes={start}-{end}', 'User-Agent': 'wechat-agent-voice-library'})
                 with urllib.request.urlopen(request, timeout=45) as response:
                     if response.status != 206 or response.headers.get('Content-Range') != f'bytes {start}-{end}/{size}':

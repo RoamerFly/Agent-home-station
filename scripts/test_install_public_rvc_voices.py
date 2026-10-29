@@ -11,6 +11,22 @@ from singing_config import load_singing_config
 
 
 class PublicRVCInstallerTests(unittest.TestCase):
+    def test_download_resumes_existing_parts_and_verifies_final_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'synthetic.pth'
+            data = b'synthetic checkpoint bytes'
+            target.with_name(target.name + '.part-0').write_bytes(data)
+            with patch.object(installer.urllib.request, 'urlopen') as network:
+                installer.fetch_asset('https://example.invalid/model', target, len(data), hashlib.sha256(data).hexdigest())
+                network.assert_not_called()
+            self.assertEqual(target.read_bytes(), data)
+            self.assertFalse(target.with_name(target.name + '.part-0').exists())
+            target.unlink()
+            target.with_name(target.name + '.part-0').write_bytes(b'x' * len(data))
+            with self.assertRaises(ValueError):
+                installer.fetch_asset('https://example.invalid/model', target, len(data), hashlib.sha256(data).hexdigest())
+            self.assertFalse(target.exists())
+
     def test_retains_original_and_installs_distinct_profiles_idempotently(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
