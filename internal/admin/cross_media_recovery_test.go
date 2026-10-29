@@ -21,7 +21,7 @@ func crossRecoveryFixture(t *testing.T, parts int) (*webFixture, *permittedTools
 	for i := 0; i < parts; i++ {
 		uploads = append(uploads, stagedUpload{UploadSource: linuxnative.UploadSource{ID: fmt.Sprintf("recovery-part-%d", i), Filename: "part.wav", ContentType: "audio/wav", ByteLength: 15}, Account: "test", Kind: "voice"})
 	}
-	a, e := f.manager.rememberAssetFormats(p.trace, assetOriginal{Data: []byte("synthetic-recovery-audio"), MIME: "audio/wav", Filename: "song.wav"}, uploads)
+	a, e := f.manager.rememberAssetFormats(p.trace, assetOriginal{VoiceComplete: true, Data: []byte("synthetic-recovery-audio"), MIME: "audio/wav", Filename: "song.wav"}, uploads)
 	if e != nil {
 		t.Fatal(e)
 	}

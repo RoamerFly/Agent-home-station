@@ -23,6 +23,7 @@ import (
 
 type assetOriginal struct {
 	FormatKey           string
+	VoiceComplete       bool
 	Music               *songSpec
 	Data                []byte
 	MIME, URL, Filename string
@@ -38,8 +39,9 @@ type assetRequest struct {
 	At            time.Time `json:"at"`
 }
 type assetFormat struct {
-	Batch   string   `json:"batch"`
-	Sources []string `json:"sources"`
+	Batch        string   `json:"batch"`
+	Sources      []string `json:"sources"`
+	FullOriginal bool     `json:"full_original,omitempty"`
 }
 type mediaAsset struct {
 	Music         *songSpec              `json:"music_generation,omitempty"`
@@ -237,6 +239,9 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 			key = original.FormatKey
 		}
 		format := formats[key]
+		if upload.Kind == "voice" {
+			format.FullOriginal = original.VoiceComplete
+		}
 		format.Batch = in.TraceID
 		if format.Batch == "" {
 			format.Batch = upload.ID
@@ -377,7 +382,10 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 	if time.Since(a.Updated) > time.Duration(m.Config().Companion.MemoryDays)*24*time.Hour {
 		return "", errors.New("素材已超过会话保留时限")
 	}
-	if kind == "voice" && len(a.Formats[formatKey].Sources) == 0 && a.Hash != "" && strings.HasPrefix(a.MIME, "audio/") {
+	// An old nonempty formats map is not proof that it contains the whole
+	// recording: historic previews often retained just the first voice part.
+	needsVoice := len(a.Formats[formatKey].Sources) == 0 || conversion == nil && !a.Formats[formatKey].FullOriginal
+	if kind == "voice" && needsVoice && a.Hash != "" && strings.HasPrefix(a.MIME, "audio/") {
 		// Old indexes retained only the last voice material. Rebuild the
 		// complete sequence locally from the verified full original instead.
 		data, err := m.cachedAssetData(a)
@@ -394,7 +402,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		if conversion != nil {
 			variant = formatKey
 		}
-		result, err := p.stageOutputWithAsset(ctx, output, &assetOriginal{FormatKey: variant, Data: data, MIME: a.MIME, Filename: a.Filename, URL: a.URL})
+		result, err := p.stageOutputWithAsset(ctx, output, &assetOriginal{FormatKey: variant, VoiceComplete: conversion == nil, Data: data, MIME: a.MIME, Filename: a.Filename, URL: a.URL})
 		if err != nil {
 			return "", err
 		}

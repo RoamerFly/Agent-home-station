@@ -525,7 +525,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 				filename = "public-audio.m4a"
 			}
 			if input.Kind == "file" {
-				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已提取完整原音轨文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "file", Data: audio, MIMEType: "audio/mp4", Filename: filename}}}, &assetOriginal{Data: audio, MIME: "audio/mp4", URL: video.PageURL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: video.Title + ".mp4"}})
+				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已提取完整原音轨文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "file", Data: audio, MIMEType: "audio/mp4", Filename: filename}}}, &assetOriginal{VoiceComplete: preview == 0, Data: audio, MIME: "audio/mp4", URL: video.PageURL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: video.Title + ".mp4"}})
 			}
 			output, err := preparePublicAudioPreview(ctx, p.manager.dir, audio, preview)
 			if err != nil {
@@ -541,7 +541,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 					output.Media[i].Filename = name
 				}
 			}
-			return p.stageOutputWithAsset(ctx, output, &assetOriginal{Data: audio, MIME: "audio/mp4", URL: video.PageURL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: video.Title + ".mp4"}})
+			return p.stageOutputWithAsset(ctx, output, &assetOriginal{VoiceComplete: preview == 0, Data: audio, MIME: "audio/mp4", URL: video.PageURL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: video.Title + ".mp4"}})
 		}
 		data, typ, err := mcptools.GetPublicMedia(ctx, strings.TrimSpace(input.URL), toolsLimit(input.Kind))
 		if err != nil {
@@ -572,6 +572,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			if err != nil {
 				return "", err
 			}
+			original.VoiceComplete = preview == 0
 			return p.stageOutputWithAsset(ctx, output, original)
 		}
 		return p.stageOutputWithAsset(ctx, plugins.Output{Text: "公开媒体已下载，尚未发送。", Media: []plugins.MediaResult{{Kind: input.Kind, Data: data, MIMEType: typ}}}, original)
@@ -695,7 +696,7 @@ func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugin
 		}
 		originalMedia := original
 		if originalMedia == nil {
-			originalMedia = &assetOriginal{Data: data, MIME: contentType, Filename: filename}
+			originalMedia = &assetOriginal{VoiceComplete: media.Kind == "voice", Data: data, MIME: contentType, Filename: filename}
 		}
 		originals = append(originals, *originalMedia)
 		uploads = append(uploads, stagedUpload{UploadSource: source, Account: p.trace.Account, Kind: media.Kind})

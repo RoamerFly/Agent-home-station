@@ -722,6 +722,8 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 	}
 	a.mu.Unlock()
 	value, err := fn()
+	var inputFailure *agentLocalError
+	mediaInputRejected := name == "wechat_send_media" && errors.As(err, &inputFailure)
 	if err != nil {
 		value = map[string]any{"state": "needs_review", "reason": err.Error(), "instruction": "操作可能已经产生影响；请检查实际结果，不自动重复"}
 		if name == "server_process" || name == "server_windows_process" {
@@ -729,6 +731,9 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 		}
 		if strings.HasPrefix(name, "wechat_") {
 			value = map[string]any{"state": "waiting", "reason": err.Error(), "instruction": "读取目标会话真实记录和原发送任务，依据反馈继续排查并修复。新的一次补发尝试可用新request_key，保留原job_id；已接受部分不重发。需要退避时agent_task保存waiting检查点，不能只说明失败便结束。"}
+		}
+		if mediaInputRejected {
+			value = map[string]any{"state": "rejected", "reason": err.Error(), "instruction": "未创建发送队列。根据实际录音范围更正转换参数，可复用原request_key；无需查询不存在的发送回执。"}
 		}
 	}
 	b, _ := json.Marshal(value)
@@ -744,7 +749,7 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 	op.State = "completed"
 	if err != nil {
 		op.State = "needs_review"
-		if name == "server_process" || name == "server_windows_process" {
+		if name == "server_process" || name == "server_windows_process" || mediaInputRejected {
 			op.State = "rejected"
 		}
 	}

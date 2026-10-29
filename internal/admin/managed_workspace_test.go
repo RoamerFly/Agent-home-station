@@ -68,7 +68,7 @@ func TestGlobalSearchIncludesOriginalTimeAndAccountBoundary(t *testing.T) {
 func TestCrossMediaQueueBindsDestinationAndRetainsAllVoiceParts(t *testing.T) {
 	f, p, n := forwardFixture(t)
 	f.manager.config.Companion.Permissions.SendVoice = true
-	original := assetOriginal{Data: []byte("synthetic-audio"), MIME: "audio/wav", Filename: "test-song.wav"}
+	original := assetOriginal{VoiceComplete: true, Data: []byte("synthetic-audio"), MIME: "audio/wav", Filename: "test-song.wav"}
 	uploads := []stagedUpload{}
 	for i := 0; i < 5; i++ {
 		uploads = append(uploads, stagedUpload{UploadSource: linuxnative.UploadSource{ID: agentID("part", string(rune('0'+i))), Filename: "part.wav", ContentType: "audio/wav", ByteLength: 15}, Account: "test", Kind: "voice"})

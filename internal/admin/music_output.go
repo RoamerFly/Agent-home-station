@@ -68,7 +68,7 @@ func (p *permittedTools) stageSongOutputSpec(ctx context.Context, audio []byte, 
 	if kind == "file" || kind == "both" {
 		out.Media = append(out.Media, plugins.MediaResult{Kind: "file", Data: audio, MIMEType: typ, Filename: filename})
 	}
-	result, err := p.stageOutputWithAsset(ctx, out, &assetOriginal{Data: audio, MIME: typ, Filename: filename, Music: spec})
+	result, err := p.stageOutputWithAsset(ctx, out, &assetOriginal{VoiceComplete: kind == "voice" || kind == "both", Data: audio, MIME: typ, Filename: filename, Music: spec})
 	if err != nil || kind != "both" {
 		return result, err
 	}

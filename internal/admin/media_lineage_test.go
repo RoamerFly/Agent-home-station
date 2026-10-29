@@ -166,7 +166,7 @@ func TestLegacyVoiceIndexRebuildsFullCachedAudioInsteadOfLastPart(t *testing.T) 
 func TestReuseWholeVoiceBundleAfterRecreationAndNewPreparation(t *testing.T) {
 	f := setup(t)
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "first", Sender: "alice"}
-	original := assetOriginal{Data: []byte("synthetic full original song"), MIME: "audio/mpeg", Filename: "完整歌曲.mp3"}
+	original := assetOriginal{VoiceComplete: true, Data: []byte("synthetic full original song"), MIME: "audio/mpeg", Filename: "完整歌曲.mp3"}
 	parts := []stagedUpload{}
 	for _, id := range []string{"part-1", "part-2", "part-3"} {
 		parts = append(parts, stagedUpload{UploadSource: linuxnative.UploadSource{ID: id}, Kind: "voice"})

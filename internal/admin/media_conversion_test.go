@@ -52,7 +52,7 @@ func TestVoiceConversionSelectsRangeCachesVariantAndPreservesFullBundle(t *testi
 	f.manager.config.Companion.Permissions.Remember = true
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "clip-request"}
 	original := syntheticReferenceWAV(t, 100) // First70s silent, then a tone.
-	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: original, MIME: "audio/wav", Filename: "synthetic.wav"}, []stagedUpload{{UploadSource: linuxnative.UploadSource{ID: "full-1"}, Kind: "voice"}, {UploadSource: linuxnative.UploadSource{ID: "full-2"}, Kind: "voice"}})
+	a, err := f.manager.rememberAssetFormats(in, assetOriginal{VoiceComplete: true, Data: original, MIME: "audio/wav", Filename: "synthetic.wav"}, []stagedUpload{{UploadSource: linuxnative.UploadSource{ID: "full-1"}, Kind: "voice"}, {UploadSource: linuxnative.UploadSource{ID: "full-2"}, Kind: "voice"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,5 +159,62 @@ func TestVoiceConversionReportsProtocolAndRangeBoundaries(t *testing.T) {
 	}
 	if !sameVoiceConversion(&voiceConversion{TimeoutSeconds: 90}, &voiceConversion{TimeoutSeconds: 180}) {
 		t.Fatal("budget changed output identity")
+	}
+}
+
+func TestNonemptyLegacyVoiceBundleDoesNotTruncateCompleteOriginal(t *testing.T) {
+	f := setup(t)
+	n := &conversionNative{fakeTools: &fakeTools{fakeNative: f.native}}
+	f.manager.native = n
+	f.manager.config.Companion.Permissions.Remember = true
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "legacy-preview", Sender: "owner"}
+	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: syntheticReferenceWAV(t, 70), MIME: "audio/wav", Filename: "complete.wav"}, []stagedUpload{{UploadSource: linuxnative.UploadSource{ID: "old-first-60-seconds"}, Kind: "voice"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _, _ := f.manager.toolAccess()
+	p.SetTrace(in)
+	result, err := p.reuseAsset(context.Background(), a.ID, "voice")
+	if err != nil || len(n.parts) != 2 || !strings.Contains(result, `"rebuilt_legacy_voice":true`) {
+		t.Fatal(result, err, len(n.parts))
+	}
+	if math.Abs(conversionPartDuration(t, n.parts[0])-60) > 0.002 || math.Abs(conversionPartDuration(t, n.parts[1])-10) > 0.002 {
+		t.Fatal("legacy preview reused")
+	}
+	items, err := f.manager.loadAssets()
+	if err != nil || !items[0].Formats["voice"].FullOriginal || len(items[0].Formats["voice"].Sources) != 2 {
+		t.Fatal(items, err)
+	}
+	if _, err = p.reuseAsset(context.Background(), a.ID, "voice"); err != nil || len(n.parts) != 2 {
+		t.Fatal("verified full bundle rebuilt again", err)
+	}
+	if n.submits.Load() != 0 {
+		t.Fatal("reconstruction sent WeChat")
+	}
+}
+
+func TestCrossMediaOutOfRangeRejectsBeforeQueueAndAllowsCorrectedKey(t *testing.T) {
+	f, p, old := forwardFixture(t)
+	f.manager.config.Companion.Permissions.SendVoice = true
+	n := &conversionNative{fakeTools: old.fakeTools}
+	f.manager.native = n
+	a, err := f.manager.rememberAssetFormats(p.trace, assetOriginal{Data: syntheticReferenceWAV(t, 2), MIME: "audio/wav", Filename: "short.wav"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(start float64) string {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{"source_thread_id": p.trace.Thread, "target_thread_id": "source@chatroom", "asset_id": a.ID, "kind": "voice", "request_key": "correctable-range", "conversion": voiceConversion{StartSeconds: start}})
+		r, e := p.Call(context.Background(), "wechat_send_media", raw)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return r
+	}
+	if r := call(3); !strings.Contains(r, `"state":"rejected"`) || len(f.manager.takeMediaSeeds()) != 0 || len(n.parts) != 0 {
+		t.Fatal("invalid range became uncertain send", r)
+	}
+	if r := call(0); !strings.Contains(r, `"state":"queued"`) || len(f.manager.takeMediaSeeds()) != 1 {
+		t.Fatal("corrected parameters blocked", r)
 	}
 }
