@@ -65,7 +65,11 @@ class PublicRVCInstallerTests(unittest.TestCase):
             self.assertEqual(items[0]['weights'][0]['file'], sha + '.pth')
             for item in items:
                 manifest = workspace / 'public_workspace/manifests' / (item['profile_id'] + '.json')
-                self.assertTrue(Path(json.loads(manifest.read_text(encoding='utf-8'))['configuration']).is_file())
+                config_path = Path(json.loads(manifest.read_text(encoding='utf-8'))['configuration'])
+                self.assertTrue(config_path.is_file())
+                if item['role'] in installer.INCOMPATIBLE_INDEX:
+                    self.assertEqual(json.loads(config_path.read_text(encoding='utf-8'))['index_rate'], 0)
+                    self.assertIn('768', item['notes'])
 
     def test_corrupt_download_never_replaces_current_library(self):
         with tempfile.TemporaryDirectory() as directory:

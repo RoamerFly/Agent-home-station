@@ -11,6 +11,8 @@
 
 新版来源：[模型](https://huggingface.co/chaye741/RVC-Voice-Models/tree/main/weights)、[配套 index](https://huggingface.co/chaye741/RVC-Voice-Models/tree/main/indices)，固定修订 `acfd9f836ca1fc862a594bc303cfccee8d565e94`。
 
+该修订中的丁真模型为256维RVC v1，同名index却为768维；卢本伟模型为768维，同名index却为256维。原文件均保留并校验，但这两套的默认 `index_rate=0`，不将不匹配索引用于推理。曼波使用其配对索引；默认检索率不改变输入歌曲和模型身份。
+
 在 Linux/WSL 的实际运行路径执行：
 
 ```sh

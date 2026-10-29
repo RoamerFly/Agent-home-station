@@ -16,6 +16,12 @@ from voice_library import atomic_json, digest
 
 REPO = 'chaye741/RVC-Voice-Models'
 REVISION = 'acfd9f836ca1fc862a594bc303cfccee8d565e94'
+# The pinned repository includes mismatched same-name indices. Keep their
+# original bytes, disabling retrieval for those pairs during inference.
+INCOMPATIBLE_INDEX = {
+    '丁真': '模型256维，来源同名index768维；默认关闭索引检索，保留原始下载文件。',
+    '卢本伟': '模型768维，来源同名index256维；默认关闭索引检索，保留原始下载文件。',
+}
 VOICES = [
     ('曼波', '卡通-曼波', 'manbo-chaye741', 'voice-manbo', [
         (55222703, 'f3707958b534264b00f8867e0f91bce5f4dbfd02c42267bea9e0c57affee6c62'),
@@ -164,16 +170,17 @@ def install(workspace, roles=None):
             'rvc_project': str(public / 'projects/rvc-upstream'),
             'rvc_model': entries[0]['path'], 'rvc_index': entries[1]['path'],
             'rvc_model_sha256': entries[0]['sha256'], 'rvc_index_sha256': entries[1]['sha256'],
-            'index_rate': .65, 'semitones': 0, 'rvc_device': 'cuda:0'}
+            'index_rate': 0 if role in INCOMPATIBLE_INDEX else .65, 'semitones': 0, 'rvc_device': 'cuda:0'}
         atomic_json(weights / 'singing-voice.config', config)
         item = {'id': identity, 'profile_id': profile, 'name': source_name, 'role': role, 'directory': role,
             'engine': 'RVC', 'status': '下载校验通过，待推理试听', 'weights': entries, 'references': [], 'previews': [],
             'source': 'https://huggingface.co/' + REPO, 'revision': REVISION,
-            'notes': '有人声音频换声；不是独立文本转语音。型号及效果以实际推理和试听为准。'}
+            'notes': '有人声音频换声；不是独立文本转语音。型号及效果以实际推理和试听为准。' + INCOMPATIBLE_INDEX.get(role, '')}
         catalog['items'] = [x for x in catalog['items'] if x['id'] != identity] + [item]
         atomic_json(folder / 'role.json', {'role': role, 'variants': [{k: item[k] for k in ['id', 'name', 'engine']}]})
         (folder / 'README.md').write_text(f'{source_name} RVC\n来源：{item["source"]}\n修订：{REVISION}\n'
-            f'调用：voice_profile_id={profile}；先读取project_read(id=rvc)。\n需要人声音频，不可直接用文本生成该角色语音。\n', encoding='utf-8')
+            f'调用：voice_profile_id={profile}；先读取project_read(id=rvc)。\n需要人声音频，不可直接用文本生成该角色语音。\n'
+            + INCOMPATIBLE_INDEX.get(role, '') + '\n', encoding='utf-8')
         atomic_json(manifests / (profile + '.json'), {'id': profile, 'name': source_name + ' RVC音色',
             'root': str(folder), 'readme': str(folder / 'README.md'),
             'configuration': str(weights / 'singing-voice.config'),
