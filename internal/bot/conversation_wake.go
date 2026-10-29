@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 	"wechat-bot/internal/companion"
 )
@@ -67,7 +68,17 @@ func (w *Worker) tickConversationWake(ctx context.Context) bool {
 		return false
 	}
 	for _, wake := range w.runtime.Wakes {
-		if wake.State != "waiting" || time.Now().Before(wake.Due) {
+		if wake.State != "waiting" {
+			continue
+		}
+		fromSurf := w.surfOrigin(wake.Input)
+		if fromSurf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(wake.Input.Thread) {
+			wake.State = "stopped"
+			w.persistErr = w.saveRuntime()
+			w.activity(Record{Event: "conversation_wake_stopped", Category: "decision", ThreadID: wake.Input.Thread, MessageID: wake.Parent, Status: "stopped", Reason: "surf_disabled_or_share_permission_changed", Origin: "surf"})
+			continue
+		}
+		if time.Now().Before(wake.Due) {
 			continue
 		}
 		if c.Config.Quiet(time.Now()) {
@@ -102,7 +113,7 @@ func (w *Worker) tickConversationWake(ctx context.Context) bool {
 		in.Mode = "proactive"
 		in.Sender, in.SenderName, in.SenderNameSource = "", "", ""
 		in.TaskID, in.OriginTraceID, in.MessageTime = "", "", ""
-		in.HistoricalReview, in.Surf, in.SurfForceShare = false, false, false
+		in.HistoricalReview, in.Surf, in.SurfForceShare = false, fromSurf, false
 		in.PersonaOverride = w.config.GroupRules[in.Thread].Persona
 		in.Directed = false
 		in.QuoteServerID = ""
@@ -120,6 +131,37 @@ func (w *Worker) tickConversationWake(ctx context.Context) bool {
 		}
 		w.persistErr = w.saveRuntime()
 		return true
+	}
+	return false
+}
+
+// Legacy wakes cleared Input.Surf; recover provenance through durable parent
+// wake IDs as well, without giving ordinary autonomous chats a surf identity.
+func (w *Worker) surfOrigin(in companion.Input) bool {
+	if in.Surf || strings.HasPrefix(in.TraceID, "surf-") {
+		return true
+	}
+	seen := map[string]bool{}
+	for w.runtime != nil && !seen[in.TraceID] {
+		seen[in.TraceID] = true
+		found := false
+		for _, wake := range w.runtime.Wakes {
+			if wake == nil {
+				continue
+			}
+			id := "wake-" + messageHash(wake.Parent + "|" + wake.Due.UTC().Format(time.RFC3339Nano))[:40]
+			if id == in.TraceID {
+				in = wake.Input
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+		if in.Surf || strings.HasPrefix(in.TraceID, "surf-") {
+			return true
+		}
 	}
 	return false
 }

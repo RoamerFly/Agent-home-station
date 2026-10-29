@@ -43,6 +43,9 @@ type delivery struct {
 func (w *Worker) markSending(trace string) { w.queuePhase(trace, "sending") }
 
 func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int, text string) (sending.Receipt, error) {
+	if w.surfOrigin(input) && w.config.SurfAllowed != nil && !w.config.SurfAllowed(input.Thread) {
+		return sending.Receipt{}, errors.New("surf_share_permission_changed")
+	}
 	native, ok := w.sender.(reliableNative)
 	if !ok || w.runtime == nil {
 		return w.sender.SendText(ctx, sending.TextRequest{Recipient: input.Thread, Text: text})
@@ -357,6 +360,12 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		if !w.taskActive(d.Input) {
 			d.State, d.Reason = "stopped", "task_cancelled_before_delivery"
 			w.persistErr = w.saveRuntime()
+			continue
+		}
+		if w.surfOrigin(d.Input) && w.config.SurfAllowed != nil && !w.config.SurfAllowed(d.Thread) {
+			d.State, d.Reason = "stopped", "surf_share_permission_changed"
+			w.persistErr = w.saveRuntime()
+			w.activity(Record{Event: "delivery_stopped", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Reason: d.Reason, Status: "stopped", Origin: "surf"})
 			continue
 		}
 		if !d.RetryReviewReady {

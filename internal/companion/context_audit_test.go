@@ -43,7 +43,7 @@ func TestNativeContextKeepsCommonGuidanceCurrentRequestAndStableSongPolicy(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(model.system, "本轮是获取新音频的请求") || !strings.Contains(model.system, "【歌曲演唱策略 v3】") || strings.Contains(model.system, "music生成是原创演唱") {
+	if !strings.Contains(model.system, "先检索本地目录中的匹配原录音") || !strings.Contains(model.system, "【歌曲演唱策略 v3】") || strings.Contains(model.system, "music生成是原创演唱") {
 		t.Fatal("shared guidance or current song policy was overwritten")
 	}
 	if !strings.Contains(model.system, "翻唱默认RVC直接换声") || strings.Contains(model.system, "所有唱歌默认 YuE") {

@@ -134,6 +134,27 @@ func (w *Worker) loadRuntime(server string) error {
 		return errors.New("persistent queue exceeds bound")
 	}
 	w.runtime = &s
+	// Preserve autonomous-surf provenance across legacy wake chains on restart.
+	for _, p := range s.Plans {
+		if p != nil && w.surfOrigin(p.Input) {
+			p.Input.Surf = true
+		}
+	}
+	for _, d := range s.Media {
+		if d != nil && w.surfOrigin(d.Input) {
+			d.Input.Surf = true
+		}
+	}
+	for _, r := range s.MediaReplies {
+		if r != nil && w.surfOrigin(r.Input) {
+			r.Input.Surf = true
+		}
+	}
+	for _, d := range s.Deliveries {
+		if d != nil && w.surfOrigin(d.Input) {
+			d.Input.Surf = true
+		}
+	}
 	for _, media := range s.Media {
 		if media == nil {
 			return errors.New("persistent media invalid")

@@ -5,10 +5,39 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/plugins"
 )
+
+func TestCachedRecordingRemainsSearchableBeyondChatMemoryAge(t *testing.T) {
+	f := setup(t)
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "local-song"}
+	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic local recording"), MIME: "audio/wav", Filename: "原曲-合成歌曲.wav"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := f.manager.loadAssets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range items {
+		items[i].Updated = time.Now().Add(-365 * 24 * time.Hour)
+	}
+	if err = f.manager.saveAssets(items); err != nil {
+		t.Fatal(err)
+	}
+	rows, total, err := f.manager.findAssetPage(in, "", "", "合成歌曲", 0, 20)
+	if err != nil || total != 1 || rows[0]["asset_id"] != a.ID {
+		t.Fatal("local original hidden by chat expiry", rows, total, err)
+	}
+	in.Thread = "other-room"
+	_, total, err = f.manager.findAssetPage(in, "", "", "合成歌曲", 0, 20)
+	if err != nil || total != 0 {
+		t.Fatal("local lookup crossed session", total, err)
+	}
+}
 
 func TestObservationCacheUsesPhysicalSpaceNotAggregateIndexQuota(t *testing.T) {
 	f := setup(t)

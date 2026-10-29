@@ -87,6 +87,18 @@ func (e *Engine) ReviewPending(ctx context.Context, in Input, sent, pending []st
 	return e.reviewPending(ctx, in, sent, pending, updates, nil, false)
 }
 
+// Caption review includes verified attachment delivery, not just the original
+// search request. The model may still rewrite, delay or cancel the unsent text.
+type DeliveredAttachment struct {
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+	State string `json:"state"`
+}
+
+func (e *Engine) ReviewMediaCaption(ctx context.Context, in Input, sent, pending []string, updates []ConversationEvent, media []DeliveredAttachment) (PendingReview, error) {
+	return e.reviewPending(ctx, in, sent, pending, updates, nil, false, media)
+}
+
 // Running requests are not the unsent tail of an obsolete text reply.
 func (e *Engine) ReviewGeneration(ctx context.Context, in Input, pending []string, updates []ConversationEvent) (PendingReview, error) {
 	return e.reviewPending(ctx, in, nil, pending, updates, nil, true)
@@ -103,7 +115,7 @@ func (e *Engine) ReviewDelivery(ctx context.Context, in Input, sent []string, te
 	return e.reviewPending(ctx, in, sent, []string{text}, nil, &delivery, false)
 }
 
-func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []string, updates []ConversationEvent, delivery *DeliveryReview, generation bool) (PendingReview, error) {
+func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []string, updates []ConversationEvent, delivery *DeliveryReview, generation bool, caption ...[]DeliveredAttachment) (PendingReview, error) {
 	data := map[string]any{"kind": "review_unsent_message_plan", "original_request": in.Text, "original_requester_id": in.Sender, "already_sent": sent, "pending_messages": pending, "new_events": updates, "current_time": time.Now().In(location(e.Config.Timezone)).Format(time.RFC3339)}
 	if generation {
 		data["kind"] = "review_running_task"
@@ -111,6 +123,10 @@ func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []st
 	if delivery != nil {
 		data["kind"] = "review_uncertain_delivery"
 		data["delivery_evidence"] = delivery
+	}
+	if len(caption) > 0 {
+		data["kind"] = "review_delivered_media_caption"
+		data["delivered_attachments"] = caption[0]
 	}
 	scope := e.Store.Context(in, e.Config, time.Now())
 	data["relationship_notes"] = scope.Notes
@@ -129,6 +145,9 @@ func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []st
 	}
 	if generation {
 		system = e.policy(in) + "\n本轮检查正在处理的原始请求是否被真正撤销，不是修改旧回复或取消发言尾部。original_request包含原入站内容和已经取得的真实媒体观察；new_events是处理期间的后续消息。只输出JSON {action:continue|cancel|delay,evidence_message_id:字符串,reason:简短依据,delay_seconds:整数}，不调用工具、不回答用户。图片/视频之后同一人发短说明、名称或图注，是补充同一条媒体，应continue，让原主任务结合这些资料完成理解并决定回复或安静。不要因为后续消息标记new_request、另有一轮会处理文字、缺少明确提问或群话题变化就cancel。阅读完后是否接话由主决策的reply/silent决定，不能拿cancel代替安静。只有原请求者明确叫停，或明确提出与原任务相冲突的替代要求，才cancel；必须给真实依据消息ID和具体撤销含义。催促、补充说明、其他人聊天均不撤销原请求。不能撤回已发生的外部操作。无法确认撤销时continue。"
+	}
+	if len(caption) > 0 {
+		system += "\n当前复核的是已发附件的后续配文，delivered_attachments来自真实微信接受状态。pending_messages是主模型为这些附件写好的介绍，尚未发送；附件已发不代表配文重复，也不代表分享已完整结束。按事实继续介绍、压缩为自然短句或根据新上下文调整，不因无人提问、原冲浪请求已经执行或话题普通而丢弃全部配文。允许真正不需要配文、重复、错误或用户叫停时cancel，但需给出具体reason；不编造附件画面。already_sent仅指已发文字，附件见独立字段。"
 	}
 	answer, err := e.model.Chat(ctx, system, []map[string]string{{"role": "user", "content": string(encoded)}})
 	if err != nil {

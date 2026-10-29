@@ -282,7 +282,7 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 				continue
 			}
 			reviewCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			d, err := c.ReviewPending(w.modelContext(reviewCtx, p.Input.Thread, p.Input.TraceID), p.Input, p.Sent, p.Messages[p.Index:], p.Updates)
+			d, err := w.reviewPlan(w.modelContext(reviewCtx, p.Input.Thread, p.Input.TraceID), c, p)
 			cancel()
 			w.applyPlanReview(p, d, err)
 			continue

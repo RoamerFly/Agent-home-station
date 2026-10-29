@@ -32,11 +32,19 @@ func (w *Worker) startPlanReview(ctx context.Context, c *companion.Engine, p *ut
 	id, fingerprint, in := p.ID, reviewFingerprint(p), p.Input
 	sent, pending := append([]string(nil), p.Sent...), append([]string(nil), p.Messages[p.Index:]...)
 	updates := append([]companion.ConversationEvent(nil), p.Updates...)
+	media := w.captionAttachments(p)
+	isCaption := p.MediaCaption
 	modelCtx := w.generationContext(jobCtx, in)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		d, err := c.ReviewPending(modelCtx, in, sent, pending, updates)
+		var d companion.PendingReview
+		var err error
+		if isCaption {
+			d, err = c.ReviewMediaCaption(modelCtx, in, sent, pending, updates, media)
+		} else {
+			d, err = c.ReviewPending(modelCtx, in, sent, pending, updates)
+		}
 		cancel()
 		select {
 		case s.reviewResults <- planReviewResult{id: id, fingerprint: fingerprint, decision: d, err: err}:
@@ -97,6 +105,23 @@ func (w *Worker) applyPlanReview(p *utterancePlan, d companion.PendingReview, er
 		p.State = "queued"
 	}
 	w.persistErr = w.saveRuntime()
-	w.activity(Record{Event: "utterance_plan_revised", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: p.State, Reason: "plan_" + d.Action})
+	w.activity(Record{Event: "utterance_plan_revised", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: p.State, Reason: "plan_" + d.Action, Content: d.Reason})
 	w.refreshMediaParent(p.Input.TraceID)
+}
+
+func (w *Worker) captionAttachments(p *utterancePlan) []companion.DeliveredAttachment {
+	items := []companion.DeliveredAttachment{}
+	for _, d := range w.runtime.Media {
+		if d.Trace == p.Trace && d.Input.Thread == p.Input.Thread && d.State == "accepted" {
+			items = append(items, companion.DeliveredAttachment{Kind: d.Kind, Title: d.Title, State: d.State})
+		}
+	}
+	return items
+}
+
+func (w *Worker) reviewPlan(ctx context.Context, c *companion.Engine, p *utterancePlan) (companion.PendingReview, error) {
+	if p.MediaCaption {
+		return c.ReviewMediaCaption(ctx, p.Input, p.Sent, p.Messages[p.Index:], p.Updates, w.captionAttachments(p))
+	}
+	return c.ReviewPending(ctx, p.Input, p.Sent, p.Messages[p.Index:], p.Updates)
 }

@@ -288,7 +288,7 @@ func (m *Manager) findAssetPage(in companion.Input, assetID, requester, query st
 	cutoff := time.Now().Add(-time.Duration(m.Config().Companion.MemoryDays) * 24 * time.Hour)
 	for i := len(items) - 1; i >= 0; i-- {
 		a := items[i]
-		if a.Account != in.Account || a.Scope != assetScope(in) || a.Updated.Before(cutoff) {
+		if a.Account != in.Account || a.Scope != assetScope(in) || a.Hash == "" && a.Updated.Before(cutoff) {
 			continue
 		}
 		if assetID != "" && a.ID != assetID {
@@ -329,6 +329,8 @@ func (m *Manager) findAssetPage(in companion.Input, assetID, requester, query st
 				row["request_count"] = len(a.Requests)
 			}
 			if a.Music != nil {
+				row["is_generated"] = true
+				row["engine"] = a.Music.Engine
 				row["generation_mode"], row["reference_asset_id"], row["seed"] = a.Music.Mode, a.Music.Reference, a.Music.Seed
 			}
 			out = append(out, row)
@@ -379,7 +381,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 	if conversion != nil {
 		formatKey = conversion.formatKey()
 	}
-	if time.Since(a.Updated) > time.Duration(m.Config().Companion.MemoryDays)*24*time.Hour {
+	if a.Hash == "" && time.Since(a.Updated) > time.Duration(m.Config().Companion.MemoryDays)*24*time.Hour {
 		return "", errors.New("素材已超过会话保留时限")
 	}
 	// An old nonempty formats map is not proof that it contains the whole
