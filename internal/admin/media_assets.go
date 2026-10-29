@@ -102,7 +102,10 @@ func (m *Manager) saveAssets(items []mediaAsset) error {
 	if len(b) > 16<<20 {
 		return errors.New("媒体素材索引超过容量限制")
 	}
-	return writePrivate(filepath.Join(m.dir, "media-assets.json"), b)
+	if e = writePrivate(filepath.Join(m.dir, "media-assets.json"), b); e != nil {
+		return e
+	}
+	return m.indexMemoryAssets(items)
 }
 func assetRequestFor(in companion.Input) assetRequest {
 	trace := in.OriginTraceID

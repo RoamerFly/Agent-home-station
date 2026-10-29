@@ -115,7 +115,9 @@ func TestLiveNativeFunctionsResolveRecentOriginalVideo(t *testing.T) {
 	cfg.Permissions.Remember = true
 	cfg.Permissions.SendFile = true
 	store, _ := companion.NewStore(t.TempDir())
-	if opened := store; opened != nil { t.Cleanup(func(){ _ = opened.Close() }) }
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "test-room", Sender: "same-user", Mode: "direct", TraceID: "old", Text: "忠县高铁站什么时候运营"}
 	store.Observe(in, cfg, time.Now().Add(-2*time.Hour))
 	in.TraceID = "latest"
@@ -240,7 +242,9 @@ func TestLiveStructuredContextCompression(t *testing.T) {
 	c.Permissions.Remember = true
 	c.Context = &companion.ContextSettings{AutoCompress: true, CompressAfter: 20, RecentMessages: 5, MaxInputChars: 8000}
 	store, _ := companion.NewStore(t.TempDir())
-	if opened := store; opened != nil { t.Cleanup(func(){ _ = opened.Close() }) }
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "summary-test", Sender: "person-one"}
 	for i := 0; i < 25; i++ {
 		in.TraceID = time.Now().Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)

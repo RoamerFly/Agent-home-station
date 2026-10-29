@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -8,6 +9,28 @@ import (
 )
 
 func (s *Server) memoryRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/memory/{scope}/entries/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		scope := r.PathValue("scope")
+		if _, e := s.manager.memoryScope(scope); e != nil {
+			fail(w, 404, "会话不存在")
+			return
+		}
+		m, e := s.manager.memory.ReadMemory(r.Context(), []string{scope}, r.PathValue("id"))
+		if e != nil {
+			fail(w, 404, "记忆已不可用或已遗忘")
+			return
+		}
+		revisions, e := s.manager.memory.MemoryRevisions(r.Context(), []string{scope}, m.ID)
+		if e != nil {
+			fail(w, 500, "修订读取失败")
+			return
+		}
+		raw, _ := json.Marshal(m)
+		value := map[string]any{}
+		_ = json.Unmarshal(raw, &value)
+		value["revisions"] = revisions
+		respond(w, 200, value)
+	}))
 	mux.HandleFunc("GET /api/memory/{scope}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("scope")
 		if _, e := s.manager.memoryScope(id); e != nil {
@@ -108,6 +131,9 @@ func (s *Server) memoryRoutes(mux *http.ServeMux) {
 		status["semantic_configured"] = cfg.Embedding.Configured()
 		status["settings"] = cfg.Settings
 		status["at"] = time.Now().UTC()
+		if metrics, e := s.manager.memory.ContextMetrics(r.Context()); e == nil {
+			status["context_metrics"] = metrics
+		}
 		respond(w, 200, status)
 	}))
 }

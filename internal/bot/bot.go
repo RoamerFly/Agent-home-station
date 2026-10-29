@@ -345,6 +345,11 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 			mode = "social"
 		}
 		input := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, Text: prompt, Mode: mode, IsGroup: strings.HasSuffix(message.ThreadID, "@chatroom"), Directed: !strings.HasSuffix(message.ThreadID, "@chatroom") || w.addressed(message), ReviewRequired: reviewQuestion, HistoricalReview: w.ownerModelReview(message.ID), PersonaOverride: w.config.GroupRules[message.ThreadID].Persona, TraceID: message.ID, QuoteServerID: message.ServerID, MessageTime: message.CreatedAt, MustReply: mode == "direct" && message.Mentions.Self != nil && *message.Mentions.Self && w.config.GroupRules[message.ThreadID].ForceReplyWhenMentioned}
+		original := ""
+		if message.Type == 1 {
+			original = message.Body
+		}
+		input.OriginalText = &original
 		if message.Type == 49 && message.AppMessageType != nil {
 			switch *message.AppMessageType {
 			case 3, 4, 5, 6, 51:

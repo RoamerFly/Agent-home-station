@@ -3,7 +3,10 @@ package companion
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -56,18 +59,30 @@ func (e *Engine) memoryContext(ctx context.Context, in Input) string {
 	}
 	id := ScopeID(in.Channel, in.Account, in.Thread)
 	query := UserRequestText(in.Text)
-	q := MemoryQuery{Scopes: []string{id}, Query: query, Limit: 12}
+	q := MemoryQuery{Scopes: []string{id}, Query: query, Limit: 12, EventYear: explicitMemoryYear(query)}
+	if strings.Contains(query, "那个") || strings.Contains(query, "刚才") || strings.Contains(query, "上次") {
+		recent := e.Store.Context(in, e.Config, time.Now())
+		added := 0
+		for i := len(recent.Messages) - 1; i >= 0 && added < 2; i-- {
+			t := recent.Messages[i]
+			if t.Role != "user" || t.TraceID == in.TraceID {
+				continue
+			}
+			q.Query += " " + boundedText(UserRequestText(t.Text), 256)
+			added++
+		}
+	}
 	degraded := ""
 	if e.MemoryEmbedding != nil {
 		cfg := e.MemoryEmbedding()
 		if cfg.Configured() {
-			r, err := cfg.Embed(ctx, []string{query})
+			r, err := cfg.Embed(ctx, []string{q.Query})
 			if err == nil {
 				q.Vector = r.Vectors[0]
 				q.Space = r.Space
 				tokens := r.Tokens
 				if !r.Reported {
-					tokens = int64(EstimateTokens(query))
+					tokens = int64(EstimateTokens(q.Query))
 				}
 				_ = e.Store.RecordMaintenanceUsage(ctx, "recall_embedding", tokens, r.Reported)
 			} else {
@@ -86,7 +101,7 @@ func (e *Engine) memoryContext(ctx context.Context, in Input) string {
 	used := 0
 	coreUsed := 0
 	coreBudget := e.memorySettings().ContinuityTokens
-	core, _ := e.Store.SearchMemory(ctx, MemoryQuery{Scopes: []string{id}, Pinned: true, Limit: 16})
+	core, _ := e.Store.SearchMemory(ctx, MemoryQuery{Scopes: []string{id}, Query: query, EventYear: q.EventYear, Pinned: true, Limit: 16})
 	page.Items = append(core.Items, page.Items...)
 	seen := map[string]bool{}
 	items := []map[string]any{}
@@ -110,7 +125,7 @@ func (e *Engine) memoryContext(ctx context.Context, in Input) string {
 		for _, src := range m.Sources {
 			refs = append(refs, src.EventID)
 		}
-		row := map[string]any{"id": m.ID, "version": m.Version, "kind": m.Kind, "subject": m.Subject, "text": text, "status": m.Status, "inference": m.Inference, "source_event_ids": refs, "continuity": m.Continuity, "needs_review": m.Continuity && time.Since(m.LastMention) > 14*24*time.Hour, "representation": m.Representation(time.Now())}
+		row := map[string]any{"scope": m.Scope, "id": m.ID, "version": m.Version, "kind": m.Kind, "subject": m.Subject, "text": text, "status": m.Status, "inference": m.Inference, "source_event_ids": refs, "continuity": m.Continuity, "needs_review": m.Continuity && time.Since(m.LastMention) > 14*24*time.Hour, "representation": m.Representation(time.Now())}
 		b, _ := json.Marshal(row)
 		cost := EstimateTokens(string(b))
 		if used+cost > budget {
@@ -132,6 +147,17 @@ func (e *Engine) memoryContext(ctx context.Context, in Input) string {
 	return string(b)
 }
 
+var explicitYearPattern = regexp.MustCompile(`(?:^|[^0-9A-Za-z])((?:19|20|21)[0-9]{2})(?:年|[^0-9A-Za-z]|$)`)
+
+func explicitMemoryYear(query string) int {
+	matches := explicitYearPattern.FindAllStringSubmatch(query, -1)
+	if len(matches) != 1 {
+		return 0
+	}
+	year, _ := strconv.Atoi(matches[0][1])
+	return year
+}
+
 // ValidateContextWindow never trims current requests or function/result pairs.
 // Optional content has already been selected before this final request check.
 func ValidateContextWindow(system string, turns []map[string]string, toolJSON []byte, window, reserve int) error {
@@ -143,7 +169,7 @@ func ValidateContextWindow(system string, turns []map[string]string, toolJSON []
 		total += EstimateTokens(t["content"]) + 8
 	}
 	if total > window {
-		return errors.New("model_context_window_exceeded: required request/protocol exceeds configured window; read sources in pages or split task, current message was not truncated")
+		return fmt.Errorf("model_context_window_exceeded: estimated input %d + output reserve %d exceeds configured window %d; read sources in pages or split task, current message was not truncated", total-reserve, reserve, window)
 	}
 	return nil
 }

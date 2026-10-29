@@ -13,7 +13,22 @@ import (
 	"wechat-bot/internal/companion"
 )
 
-func (m *Manager) draining() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.drainTicket != "" }
+func (m *Manager) memoryUpdateHoldPath() string {
+	dir := m.dir
+	if filepath.Base(filepath.Dir(dir)) == "accounts" {
+		dir = filepath.Dir(filepath.Dir(dir))
+	}
+	return filepath.Join(dir, "memory-update-hold")
+}
+func (m *Manager) draining() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.drainTicket != "" {
+		return true
+	}
+	_, e := os.Lstat(m.memoryUpdateHoldPath())
+	return !errors.Is(e, os.ErrNotExist)
+}
 
 // Only an updater actively polling its ticket may keep the worker drained.
 // A dead/disconnected updater must never leave incoming messages paused.
@@ -87,6 +102,34 @@ func (s *Server) drainManagers() []*Manager {
 	return items
 }
 func (s *Server) mediaRuntimeRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/runtime/memory-activate", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		managers := s.drainManagers()
+		hold := s.manager.memoryUpdateHoldPath()
+		if st, e := os.Lstat(hold); e != nil || !st.Mode().IsRegular() {
+			fail(w, 409, "没有待验收的记忆迁移暂停标记")
+			return
+		}
+		for _, m := range managers {
+			if e := m.memory.Verify(r.Context()); e != nil {
+				fail(w, 409, "记忆校验失败，保持暂停")
+				return
+			}
+		}
+		if e := os.Remove(hold); e != nil {
+			fail(w, 500, "无法解除迁移暂停")
+			return
+		}
+		for _, m := range managers {
+			m.op.Lock()
+			m.mu.Lock()
+			done := m.done
+			c := cloneConfig(m.config)
+			m.mu.Unlock()
+			m.resumeDrainedWorker(done, c)
+			m.op.Unlock()
+		}
+		respond(w, 200, map[string]any{"activated": true, "accounts": len(managers), "rollback_to_json_allowed": false})
+	}))
 	mux.HandleFunc("POST /api/runtime/drain", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		// Serialize account creation with the global update barrier, so a new
 		// worker cannot appear between the snapshot and draining its peers.

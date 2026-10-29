@@ -213,7 +213,7 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 		switch name {
 		case "index.html":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		case "console.js", "voices.js", "accounts.js", "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "flow-model.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
+		case "memory.js", "console.js", "voices.js", "accounts.js", "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "flow-model.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "flow-default.json":
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")

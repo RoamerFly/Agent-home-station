@@ -157,6 +157,12 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	memoryInitialized := false
+	defer func() {
+		if !memoryInitialized {
+			memory.Close()
+		}
+	}()
 	tools, err := newToolStore(dir)
 	if err != nil {
 		return nil, err
@@ -225,6 +231,9 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	}
 	m.surf = surf
 	if assets, err := m.loadAssets(); err == nil {
+		if err = m.indexMemoryAssets(assets); err != nil {
+			return nil, err
+		}
 		sources := map[string]map[string]companion.MediaMemory{}
 		for _, a := range assets {
 			if a.Account == native.Account() {
@@ -278,6 +287,7 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 		m.start(c)
 	}
 	workspaceInitialized = true
+	memoryInitialized = true
 	if pending, e := m.memory.PendingRebuilds(context.Background()); e == nil {
 		for _, id := range pending {
 			if _, e = m.memoryScope(id); e == nil {

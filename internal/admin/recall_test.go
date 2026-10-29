@@ -147,7 +147,7 @@ func TestGroupInitialContextDoesNotLoadPrivateChatOrTasks(t *testing.T) {
 	if strings.Contains(ctx+tasks, "synthetic-private-") {
 		t.Fatal("private conversation automatically loaded in group")
 	}
-	if !strings.Contains(ctx, "conversation_disclosure_policy") {
-		t.Fatal("missing source disclosure policy")
+	if !strings.Contains(ctx, "workspace_policy") || !strings.Contains(ctx, "requester_is_trusted_owner") {
+		t.Fatal("missing scoped workspace authorization context")
 	}
 }

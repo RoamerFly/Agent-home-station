@@ -76,6 +76,7 @@ type persisted struct {
 	Decisions      int              `json:"decisions"`
 }
 type Store struct {
+	maintenanceMu sync.Mutex
 	db            *sql.DB
 	compressionMu sync.Mutex
 	compressing   map[string]bool
@@ -171,6 +172,10 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 	if input.Preview {
 		return nil
 	}
+	original := UserRequestText(input.Text)
+	if input.OriginalText != nil {
+		original = *input.OriginalText
+	}
 	return s.scopeTransaction(ScopeID(input.Channel, input.Account, input.Thread), func(data *persisted) error {
 		id := ScopeID(input.Channel, input.Account, input.Thread)
 		scope, exists := data.Scopes[id]
@@ -187,8 +192,16 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 		}
 		scope.LastInteraction = now
 		if c.Permissions.Remember {
-			for _, turn := range scope.Messages {
+			for i, turn := range scope.Messages {
 				if input.TraceID != "" && turn.TraceID == input.TraceID && turn.Role == "user" {
+					if turn.Sender != input.Sender {
+						return errors.New("message identity sender changed")
+					}
+					turn.Text = boundedInputMemory(input.Text)
+					turn.FullText = original
+					turn.HasOriginal = true
+					turn.FullObservation = strings.TrimPrefix(input.Text, UserRequestText(input.Text))
+					scope.Messages[i] = turn
 					data.Scopes[id] = scope
 					return nil
 				}
@@ -197,7 +210,11 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 			if parsed, err := time.Parse(time.RFC3339, input.MessageTime); err == nil && !parsed.After(now) {
 				stamp = parsed
 			}
-			scope.Messages = append(scope.Messages, Turn{TraceID: input.TraceID, Role: "user", Text: boundedInputMemory(input.Text), FullText: UserRequestText(input.Text), HasOriginal: true, FullObservation: strings.TrimPrefix(input.Text, UserRequestText(input.Text)), Sender: boundedText(input.Sender, 128), SenderName: boundedText(input.SenderName, 256), SenderNameSource: input.SenderNameSource, Time: stamp})
+			observation := strings.TrimPrefix(input.Text, UserRequestText(input.Text))
+			if input.OriginalText != nil && original == "" {
+				observation = input.Text
+			}
+			scope.Messages = append(scope.Messages, Turn{TraceID: input.TraceID, Role: "user", Text: boundedInputMemory(input.Text), FullText: original, HasOriginal: true, FullObservation: observation, Sender: boundedText(input.Sender, 128), SenderName: boundedText(input.SenderName, 256), SenderNameSource: input.SenderNameSource, Time: stamp})
 			scope, err = s.pruneStored(scope, c, now)
 			if err != nil {
 				return err
@@ -214,6 +231,38 @@ func (s *Store) Context(input Input, c Config, now time.Time) Scope {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	scope := prune(copyScope(s.data.Scopes[ScopeID(input.Channel, input.Account, input.Thread)]), c, now)
+	if s.db != nil {
+		rows, err := s.db.Query("SELECT event_id FROM memory_blocks WHERE scope=?", scope.ID)
+		if err != nil {
+			return Scope{ID: scope.ID, Messages: []Turn{}}
+		}
+		blocked := map[string]bool{}
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) != nil {
+				rows.Close()
+				return Scope{ID: scope.ID, Messages: []Turn{}}
+			}
+			blocked[id] = true
+		}
+		rowErr := rows.Err()
+		rows.Close()
+		if rowErr != nil {
+			return Scope{ID: scope.ID, Messages: []Turn{}}
+		}
+		kept := []Turn{}
+		for i, t := range scope.Messages {
+			if !blocked[eventID(scope.ID, t, i)] {
+				kept = append(kept, t)
+			}
+		}
+		if len(kept) != len(scope.Messages) {
+			scope.Messages = kept
+			scope.CompressedCount = 0
+			scope.Summary = ""
+			scope.Notes = nil
+		}
+	}
 	scope.Messages = scope.Messages[min(scope.CompressedCount, len(scope.Messages)):]
 	if !c.Permissions.Remember {
 		scope.Summary = ""

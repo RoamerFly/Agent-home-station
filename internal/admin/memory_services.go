@@ -2,8 +2,10 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -132,7 +134,8 @@ func (s *Server) memoryServicesRoutes(mux *http.ServeMux) {
 }
 
 func (m *Manager) memoryProvider(c memoryServices) (companion.LanguageModel, error) {
-	keyPath := filepath.Join(m.dir, "memory-model-key")
+	identity := sha256.Sum256([]byte(c.Maintenance.BaseURL + "\x00" + c.Maintenance.APIKey))
+	keyPath := filepath.Join(m.dir, fmt.Sprintf("memory-model-key-%x", identity[:12]))
 	if e := writePrivate(keyPath, []byte(c.Maintenance.APIKey)); e != nil {
 		return nil, e
 	}
@@ -159,6 +162,7 @@ func (m *Manager) runMemoryMaintenance(ctx context.Context, engine *companion.En
 			if err == nil && services.Settings.Enabled && m.Config().Companion.Permissions.Remember {
 				worker := *engine
 				worker.Config = m.Config().Companion
+				worker.MemoryAllowed = func() bool { return m.Config().Companion.Permissions.Remember }
 				worker.Config.Memory = &services.Settings
 				worker.MemoryOptions = nil
 				if services.Maintenance.Model != "" {
@@ -178,7 +182,7 @@ func (m *Manager) runMemoryMaintenance(ctx context.Context, engine *companion.En
 							e = worker.MaintainScope(ctx, scope.ID, false)
 						}
 						if e == nil {
-							_, e = m.memory.RebuildEmbeddings(ctx, scope.ID, services.Embedding, 32)
+							_, e = m.memory.RebuildEmbeddingsBudget(ctx, scope.ID, services.Embedding, 32, services.Settings.DailyTokens)
 						}
 						m.memory.MemoryError(ctx, scope.ID, e)
 					}

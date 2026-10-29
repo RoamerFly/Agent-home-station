@@ -29,9 +29,6 @@ func (r *AgentRunner) followups(ctx context.Context, turns *[]map[string]string)
 	if observer, ok := r.Tools.(interface{ ObserveFollowups([]agentrun.Event) }); ok {
 		observer.ObserveFollowups(events)
 	}
-	for i := range events {
-		events[i].Text = boundedText(events[i].Text, 6000)
-	}
 	b, _ := json.Marshal(map[string]any{"kind": "current_followup", "events": events})
 	*turns = append(*turns, map[string]string{"role": "user", "content": string(b)})
 	return true, nil

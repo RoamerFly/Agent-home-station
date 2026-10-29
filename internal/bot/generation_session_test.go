@@ -38,7 +38,13 @@ func TestLiveFollowupBecomesOneDecisionAndOneDurableCompletion(t *testing.T) {
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "original", Mode: "direct", Text: "帮我总结"}
 	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "original", "filehelper", "incoming", "remote"), Phase: "processing"}, {Event: fixtureEvent("2", "followup", "filehelper", "incoming", "remote"), Phase: "processing"}}
 	w.startGeneration(context.Background(), c, in, nil)
-	<-started
+	select {
+	case <-started:
+	case early := <-w.generation.results:
+		t.Fatalf("generation returned before invoking model: %v %+v", early.err, early.decision)
+	case <-time.After(3 * time.Second):
+		t.Fatal("generation did not reach model")
+	}
 	m := fixtureMessage("followup", "filehelper", "只总结重点", "incoming")
 	m.SenderID = "person"
 	w.noticeConversationMessage(m, true)

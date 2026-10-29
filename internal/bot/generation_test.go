@@ -38,7 +38,17 @@ func (f generationModelFunc) Chat(ctx context.Context, s string, m []map[string]
 func backgroundWorker(t *testing.T, model companion.LanguageModel) (*Worker, *companion.Engine, *acceptingProgressNative) {
 	t.Helper()
 	w, c, n, _ := planWorker(t, &planReviewModel{})
-	engine, err := companion.New(c.Config, c.Store, model, "test")
+	// Background fixtures supply their own originals and sender identities;
+	// do not reuse planWorker's unrelated message with ID "original".
+	store, err := companion.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err = store.Observe(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "background-fixture-source", Text: "合成历史：下次继续聊天。"}, c.Config, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := companion.New(c.Config, store, model, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +383,7 @@ func TestAsyncSurfKeepsExplicitQuietDeadlineWithoutImmediateCancellation(t *test
 	w.enableGenerations()
 	defer w.closeGenerations()
 	w.config.SurfTask = func(time.Time) (*SurfTask, error) {
-		return &SurfTask{Thread: "filehelper", Topic: "海洋", QuietDeadline: time.Now().Add(50 * time.Millisecond)}, nil
+		return &SurfTask{Thread: "filehelper", Topic: "海洋", QuietDeadline: time.Now().Add(500 * time.Millisecond)}, nil
 	}
 	if !w.tickSurf(context.Background()) {
 		t.Fatal("surf did not start")

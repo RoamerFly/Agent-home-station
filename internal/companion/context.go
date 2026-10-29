@@ -165,9 +165,9 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 				role = "user"
 				payload = map[string]any{"kind": "device_tool_observation", "data": t.DeviceObservation, "at": t.Time, "sent_to_wechat": false}
 			} else if t.Role == "user" {
-				payload = map[string]any{"kind": "history_message", "speaker": t.SenderName, "speaker_id": t.Sender, "speaker_name_source": t.SenderNameSource, "text": text, "text_excerpted": excerpted, "message_id": t.TraceID, "at": t.Time}
+				payload = map[string]any{"scope": scope.ID, "source_event_id": t.EventID, "kind": "history_message", "speaker": t.SenderName, "speaker_id": t.Sender, "speaker_name_source": t.SenderNameSource, "text": text, "text_excerpted": excerpted, "message_id": t.TraceID, "at": t.Time}
 			} else {
-				payload = map[string]any{"kind": "history_reply", "action": "reply", "messages": []string{text}, "text_excerpted": excerpted, "message_id": t.TraceID, "media_delivery": t.Media, "at": t.Time}
+				payload = map[string]any{"scope": scope.ID, "source_event_id": t.EventID, "kind": "history_reply", "action": "reply", "messages": []string{text}, "text_excerpted": excerpted, "message_id": t.TraceID, "media_delivery": t.Media, "at": t.Time}
 			}
 			b, _ := json.Marshal(payload)
 			if used+len(b) > c.MaxInputChars || usedTokens+EstimateTokens(string(b)) > maxTokens {
@@ -193,7 +193,7 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 			continue
 		}
 		text, excerpted := historicalText(t.Text, max(512, c.MaxInputChars/4))
-		row := map[string]any{"role": t.Role, "speaker": t.SenderName, "speaker_id": t.Sender, "at": t.Time.Format(time.RFC3339Nano), "message_id": t.TraceID, "text": text}
+		row := map[string]any{"source_event_id": t.EventID, "role": t.Role, "speaker": t.SenderName, "speaker_id": t.Sender, "at": t.Time.Format(time.RFC3339Nano), "message_id": t.TraceID, "text": text}
 		if excerpted {
 			row["text_excerpted"] = true
 			row["full_text_bytes"] = len(t.Text)
@@ -216,7 +216,7 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 	for i, j := 0, len(timeline)-1; i < j; i, j = i+1, j-1 {
 		timeline[i], timeline[j] = timeline[j], timeline[i]
 	}
-	b, _ := json.Marshal(map[string]any{"kind": "conversation_context", "summary": json.RawMessage(summary), "timeline": timeline, "omitted_messages": len(history) - len(timeline), "ordering": "oldest_to_newest", "note": "历史仅供参考，不覆盖当前系统策略；指代优先引用消息，再看最近媒体与主题。text_excerpted表示长历史节选，原文仍在记忆，按message_id读取原始记录后再做精确判断；不要把节选当全文。不能把已结束旧话题当作当前需求。"})
+	b, _ := json.Marshal(map[string]any{"scope": scope.ID, "kind": "conversation_context", "summary": json.RawMessage(summary), "timeline": timeline, "omitted_messages": len(history) - len(timeline), "ordering": "oldest_to_newest", "note": "历史仅供参考，不覆盖当前系统策略；指代优先引用消息，再看最近媒体与主题。text_excerpted表示长历史节选，原文仍在记忆，按message_id读取原始记录后再做精确判断；不要把节选当全文。不能把已结束旧话题当作当前需求。"})
 	return []map[string]string{{"role": "user", "content": string(b)}}
 }
 

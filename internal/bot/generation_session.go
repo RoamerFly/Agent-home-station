@@ -11,6 +11,10 @@ import (
 func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun.Session {
 	in := j.input
 	prepare := func(ctx context.Context, event agentrun.Event) (agentrun.Event, error) {
+		original := ""
+		if event.Kind == 1 {
+			original = event.Text
+		}
 		if event.Kind != 1 {
 			m, err := w.source.Message(ctx, event.ID)
 			if err != nil {
@@ -34,6 +38,7 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 			}
 		}
 		observed := in
+		observed.OriginalText = &original
 		observed.TraceID, observed.Text, observed.MessageTime = event.ID, event.Text, event.At
 		return event, j.engine.Store.Observe(observed, j.engine.Config, time.Now())
 	}

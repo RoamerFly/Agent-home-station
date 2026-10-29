@@ -20,6 +20,14 @@ import (
 )
 
 func init() {
+	sqlite.MustRegisterDeterministicScalarFunction("memory_time", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		v, _ := args[0].(string)
+		stamp, e := time.Parse(time.RFC3339Nano, v)
+		if e != nil {
+			return "", nil
+		}
+		return memoryTime(stamp), nil
+	})
 	sqlite.MustRegisterDeterministicScalarFunction("memory_cosine", 2, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
 		var a, b []float32
 		asBytes := func(v driver.Value) []byte {

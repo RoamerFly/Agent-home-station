@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // GlobalMessages preserves legacy substring/latest ordering while SQL performs
@@ -35,11 +36,19 @@ func (s *Store) GlobalMessages(ctx context.Context, labels map[string]string, qu
 	}
 	if since != "" {
 		where += " AND e.at>=?"
-		args = append(args, since)
+		stamp, err := time.Parse(time.RFC3339Nano, since)
+		if err != nil {
+			return items, 0, err
+		}
+		args = append(args, memoryTime(stamp))
 	}
 	if before != "" {
 		where += " AND e.at<?"
-		args = append(args, before)
+		stamp, err := time.Parse(time.RFC3339Nano, before)
+		if err != nil {
+			return items, 0, err
+		}
+		args = append(args, memoryTime(stamp))
 	}
 	var total int
 	if err := s.db.QueryRowContext(ctx, cte+"SELECT COUNT(*)"+where, args...).Scan(&total); err != nil {

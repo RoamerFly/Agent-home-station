@@ -52,7 +52,9 @@ func TestLiveRestrainedSocialAndFreshNamedSong(t *testing.T) {
 		config.Permissions.AutonomousGroups = true
 		config.Permissions.Remember = true
 		store, err := companion.NewStore(t.TempDir())
-		if opened := store; opened != nil { t.Cleanup(func(){ _ = opened.Close() }) }
+		if opened := store; opened != nil {
+			t.Cleanup(func() { _ = opened.Close() })
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

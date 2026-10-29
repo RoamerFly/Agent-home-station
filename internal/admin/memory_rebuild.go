@@ -54,6 +54,7 @@ func (m *Manager) startMemoryRebuild(id string) error {
 			return
 		}
 		engine.Config.Memory = &cfg.Settings
+		engine.MemoryAllowed = func() bool { return m.Config().Companion.Permissions.Remember }
 		if cfg.Maintenance.Model != "" {
 			engine.MemoryModel, e = m.memoryProvider(cfg)
 			if e != nil {

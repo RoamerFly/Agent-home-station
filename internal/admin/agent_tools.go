@@ -26,7 +26,7 @@ func (p *permittedTools) agentTools() []mcptools.Tool {
 		return nil
 	}
 	tools := p.workspaceTools()
-	tools = append(tools,p.memoryTools()...)
+	tools = append(tools, p.memoryTools()...)
 	tools = append(tools, p.voiceTools()...)
 	if p.privileged() {
 		tools = append(tools, diagnosticsTool())
@@ -93,7 +93,9 @@ func (p *permittedTools) agentToolEnabled(name string) bool {
 	return false
 }
 func agentToolName(name string) bool {
-	if strings.HasPrefix(name,"memory_"){return true}
+	if strings.HasPrefix(name, "memory_") {
+		return true
+	}
 	if name == "agent_owner_report" {
 		return true
 	}
@@ -131,7 +133,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		return string(b), e
 	}
 	m := p.manager
-	if strings.HasPrefix(name,"memory_"){return p.callMemory(ctx,name,args)}
+	if strings.HasPrefix(name, "memory_") {
+		return p.callMemory(ctx, name, args)
+	}
 	if name == "music_service_start" {
 		return p.startMusicService(ctx)
 	}

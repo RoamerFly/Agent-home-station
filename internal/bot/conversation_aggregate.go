@@ -51,6 +51,7 @@ func (w *Worker) aggregateConversation(ctx context.Context, c *companion.Engine,
 		peer := *input
 		peer.TraceID = m.ID
 		peer.Text = m.Body
+		peer.OriginalText = &m.Body
 		if err = c.Store.Observe(peer, c.Config, stamp); err != nil {
 			w.persistErr = err
 			return

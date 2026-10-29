@@ -30,19 +30,29 @@ CREATE TABLE IF NOT EXISTS observations(event_id TEXT,hash TEXT,text TEXT,PRIMAR
 CREATE TABLE IF NOT EXISTS event_revisions(event_id TEXT,revision INTEGER,text TEXT,hash TEXT,PRIMARY KEY(event_id,revision));
 CREATE TABLE IF NOT EXISTS event_terms(term TEXT,event_id TEXT,scope TEXT,PRIMARY KEY(term,event_id));
 CREATE INDEX IF NOT EXISTS event_terms_scope ON event_terms(scope,term,event_id);
+CREATE INDEX IF NOT EXISTS event_terms_event ON event_terms(event_id);
 CREATE TABLE IF NOT EXISTS jobs(scope TEXT PRIMARY KEY,processed_seq INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'pending',error TEXT NOT NULL DEFAULT '',updated TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS memories(id TEXT PRIMARY KEY,scope TEXT NOT NULL,subject TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,version INTEGER NOT NULL,pinned INTEGER NOT NULL DEFAULT 0,updated TEXT NOT NULL,payload BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS memories(id TEXT PRIMARY KEY,scope TEXT NOT NULL,subject TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,version INTEGER NOT NULL,pinned INTEGER NOT NULL DEFAULT 0,updated TEXT NOT NULL,payload BLOB NOT NULL,statement_at TEXT NOT NULL DEFAULT '',event_at TEXT NOT NULL DEFAULT '',event_year INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS memories_scope ON memories(scope,status,kind,updated,id);
 CREATE TABLE IF NOT EXISTS memory_sources(memory_id TEXT,event_id TEXT,quote TEXT,PRIMARY KEY(memory_id,event_id));
+CREATE INDEX IF NOT EXISTS memory_sources_event ON memory_sources(event_id,memory_id);
 CREATE TABLE IF NOT EXISTS memory_terms(term TEXT,memory_id TEXT,scope TEXT,PRIMARY KEY(term,memory_id));
 CREATE INDEX IF NOT EXISTS memory_terms_scope ON memory_terms(scope,term,memory_id);
+CREATE INDEX IF NOT EXISTS memory_terms_memory ON memory_terms(memory_id);
 CREATE TABLE IF NOT EXISTS memory_revisions(memory_id TEXT,version INTEGER,payload BLOB,PRIMARY KEY(memory_id,version));
 CREATE TABLE IF NOT EXISTS embeddings(memory_id TEXT PRIMARY KEY,space TEXT NOT NULL,version INTEGER NOT NULL,vector BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS embeddings_space ON embeddings(space,memory_id);
 CREATE TABLE IF NOT EXISTS maintenance_usage(day TEXT,purpose TEXT,reported INTEGER,tokens INTEGER,requests INTEGER,PRIMARY KEY(day,purpose,reported));
 CREATE TABLE IF NOT EXISTS memory_blocks(scope TEXT,event_id TEXT,PRIMARY KEY(scope,event_id));
 CREATE TABLE IF NOT EXISTS rebuild_requests(scope TEXT PRIMARY KEY,requested TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS search_documents(namespace TEXT,id TEXT,scope TEXT,kind TEXT,at TEXT,text TEXT,payload BLOB,hash TEXT,PRIMARY KEY(namespace,id));
+CREATE INDEX IF NOT EXISTS search_documents_scope_time ON search_documents(scope,at,id);
+CREATE TABLE IF NOT EXISTS context_metrics(id INTEGER PRIMARY KEY,at TEXT,total INTEGER,bytes INTEGER,components TEXT,method TEXT);
 `
+
+// Fixed-width UTC timestamps sort chronologically in SQLite TEXT indexes,
+// including whole seconds and fractional seconds in the same result set.
+func memoryTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000000000Z") }
 
 // Migration is one SQLite transaction. An interrupted import has no completion
 // marker and is retried from the unchanged legacy file, never from partial rows.
@@ -71,6 +81,9 @@ func openSQLiteStore(dir string) (*Store, error) {
 		return nil, err
 	}
 	if err = s.Verify(context.Background()); err == nil {
+		err = s.verifyProjection(context.Background())
+	}
+	if err == nil {
 		_, err = s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	}
 	closeErr := s.Close()
@@ -94,6 +107,21 @@ func openSQLiteAt(dir, path string, allowImport bool) (*Store, error) {
 	}
 	if st, err := os.Lstat(path); err == nil && (!st.Mode().IsRegular() || st.Mode()&os.ModeSymlink != 0) {
 		return nil, errors.New("unsafe memory database")
+	}
+	if !allowImport {
+		probe, e := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro")
+		if e != nil {
+			return nil, e
+		}
+		var version string
+		e = probe.QueryRow("SELECT value FROM meta WHERE key='schema'").Scan(&version)
+		closeErr := probe.Close()
+		if e != nil || version != "1" && version != "2" {
+			return nil, errors.New("unsupported or incomplete memory database; preserved for inspection")
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
 	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -137,7 +165,7 @@ func openSQLiteAt(dir, path string, allowImport bool) (*Store, error) {
 		state := s.data
 		state.Scopes = nil
 		b, _ := json.Marshal(state)
-		if _, e = tx.Exec("INSERT INTO meta(key,value) VALUES('schema','1'),('state',?)", string(b)); e != nil {
+		if _, e = tx.Exec("INSERT INTO meta(key,value) VALUES('schema','2'),('state',?)", string(b)); e != nil {
 			tx.Rollback()
 			return fail(e)
 		}
@@ -145,7 +173,13 @@ func openSQLiteAt(dir, path string, allowImport bool) (*Store, error) {
 			return fail(e)
 		}
 	} else {
-		if version != "1" {
+		if version == "1" {
+			if err = upgradeMemoryTimes(db); err != nil {
+				return fail(err)
+			}
+			version = "2"
+		}
+		if version != "2" {
 			return fail(errors.New("unsupported memory schema; database preserved"))
 		}
 		var raw string
@@ -186,6 +220,91 @@ func openSQLiteAt(dir, path string, allowImport bool) (*Store, error) {
 		}
 	}
 	return s, nil
+}
+
+func upgradeMemoryTimes(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{"ALTER TABLE memories ADD COLUMN statement_at TEXT NOT NULL DEFAULT ''", "ALTER TABLE memories ADD COLUMN event_at TEXT NOT NULL DEFAULT ''", "ALTER TABLE memories ADD COLUMN event_year INTEGER NOT NULL DEFAULT 0"} {
+		if _, err = tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.Query("SELECT id,at FROM events")
+	if err != nil {
+		return err
+	}
+	type stampRow struct{ id, at string }
+	stamps := []stampRow{}
+	for rows.Next() {
+		var r stampRow
+		if err = rows.Scan(&r.id, &r.at); err != nil {
+			break
+		}
+		stamps = append(stamps, r)
+	}
+	rowErr := rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if rowErr != nil {
+		return rowErr
+	}
+	for _, r := range stamps {
+		stamp, e := time.Parse(time.RFC3339Nano, r.at)
+		if e != nil {
+			return e
+		}
+		if _, err = tx.Exec("UPDATE events SET at=? WHERE id=?", memoryTime(stamp), r.id); err != nil {
+			return err
+		}
+	}
+	rows, err = tx.Query("SELECT id,payload FROM memories")
+	if err != nil {
+		return err
+	}
+	type entryRow struct {
+		id string
+		m  MemoryEntry
+	}
+	entries := []entryRow{}
+	for rows.Next() {
+		var r entryRow
+		var raw []byte
+		if err = rows.Scan(&r.id, &raw); err != nil {
+			break
+		}
+		if err = json.Unmarshal(raw, &r.m); err != nil {
+			break
+		}
+		entries = append(entries, r)
+	}
+	rowErr = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if rowErr != nil {
+		return rowErr
+	}
+	for _, r := range entries {
+		statement := r.m.LastMention
+		if statement.IsZero() {
+			statement = r.m.Created
+		}
+		if _, err = tx.Exec("UPDATE memories SET statement_at=?,updated=? WHERE id=?", memoryTime(statement), memoryTime(r.m.Updated), r.id); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec("UPDATE meta SET value='2' WHERE key='schema'")
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Close() error {
@@ -293,6 +412,7 @@ func eventID(scope string, t Turn, index int) string {
 }
 
 func (s *Store) writeScope(tx *sql.Tx, id string, old, next Scope) error {
+	revisedSource := false
 	if reflect.DeepEqual(old, next) {
 		return nil
 	}
@@ -376,6 +496,7 @@ func (s *Store) writeScope(tx *sql.Tx, id string, old, next Scope) error {
 			if _, err = tx.Exec("INSERT OR IGNORE INTO event_revisions SELECT id,revision,text,hash FROM events WHERE id=?", t.EventID); err != nil {
 				return err
 			}
+			revisedSource = true
 			if _, err = tx.Exec("UPDATE memories SET status='conflicted',version=version+1 WHERE id IN(SELECT memory_id FROM memory_sources WHERE event_id=?) AND status='active'", t.EventID); err != nil {
 				return err
 			}
@@ -385,7 +506,7 @@ func (s *Store) writeScope(tx *sql.Tx, id string, old, next Scope) error {
 		}
 		_, err = tx.Exec(`INSERT INTO events(id,scope,seq,trace,role,sender,at,text,hash,complete,revision,payload)
 VALUES(?,?,(SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE scope=?),?,?,?,?,?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET text=excluded.text,hash=excluded.hash,revision=events.revision+1,payload=excluded.payload,complete=excluded.complete`, t.EventID, id, id, t.TraceID, t.Role, t.Sender, t.Time.UTC().Format(time.RFC3339Nano), text, hash, complete, max(1, revision), payload)
+ON CONFLICT(id) DO UPDATE SET text=excluded.text,hash=excluded.hash,revision=events.revision+1,payload=excluded.payload,complete=excluded.complete`, t.EventID, id, id, t.TraceID, t.Role, t.Sender, memoryTime(t.Time), text, hash, complete, max(1, revision), payload)
 		if err != nil {
 			return err
 		}
@@ -396,6 +517,15 @@ ON CONFLICT(id) DO UPDATE SET text=excluded.text,hash=excluded.hash,revision=eve
 			if _, err = tx.Exec("INSERT OR IGNORE INTO event_terms VALUES(?,?,?)", term, t.EventID, id); err != nil {
 				return err
 			}
+		}
+	}
+	if revisedSource {
+		next.Summary = ""
+		next.Notes = nil
+		next.CompressedCount = 0
+		next.SummaryBoundary = 0
+		if old.ID == id {
+			s.data.Scopes[id] = next
 		}
 	}
 	b, e := json.Marshal(next)

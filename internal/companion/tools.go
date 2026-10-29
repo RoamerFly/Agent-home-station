@@ -271,6 +271,7 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 			requiredMediaIDs = nil // Old prepared attachments remain available, but are not forced onto the changed request.
 			intentEmitted = false
 		}
+		turns = e.refreshMemoryPackets(ctx, turns)
 		turns = compactActionTurns(system, turns)
 		catalogBytes, _ := json.Marshal(activeTools)
 		settings := e.memorySettings()
@@ -287,12 +288,21 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 			if autonomous {
 				budget = "\n自主行动没有工具次数配额。每次依据真实反馈决定下一步，失败先查原因并修复再验证；长时间等待请保存任务检查点，避免忙轮询。发送未知时读取目标会话真实记录再恢复原任务。"
 			}
+			if err := ValidateContextWindow(system+budget, turns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
+				return Decision{}, err
+			}
+			if err := e.Store.recordContextMetrics(ctx, system+budget, turns, catalogBytes); err != nil && e.ToolLog != nil {
+				e.ToolLog("context_metrics_write_failed")
+			}
 			if !contextReported {
 				e.reportContext(system+budget, turns, activeTools)
 				contextReported = true
 			}
 			answer, err = native.ChatFunctions(ctx, system+budget, turns, activeTools)
 		} else {
+			if err := e.Store.recordContextMetrics(ctx, system, turns, nil); err != nil && e.ToolLog != nil {
+				e.ToolLog("context_metrics_write_failed")
+			}
 			if !contextReported {
 				e.reportContext(system, turns, nil)
 				contextReported = true

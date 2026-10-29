@@ -19,26 +19,31 @@ type MemorySource struct {
 	Quote   string `json:"quote"`
 }
 type MemoryEntry struct {
-	Continuity  bool           `json:"continuity,omitempty"`
-	MergeInto   string         `json:"merge_into,omitempty"`
-	ID          string         `json:"id"`
-	Scope       string         `json:"scope"`
-	Subject     string         `json:"subject"`
-	Kind        string         `json:"kind"`
-	Detail      string         `json:"detail"`
-	Summary     string         `json:"summary"`
-	Keywords    []string       `json:"keywords"`
-	Sources     []MemorySource `json:"sources"`
-	Status      string         `json:"status"`
-	Version     int            `json:"version"`
-	Pinned      bool           `json:"pinned"`
-	Inference   bool           `json:"inference"`
-	Manual      bool           `json:"manual"`
-	Supersedes  string         `json:"supersedes,omitempty"`
-	EventTime   string         `json:"event_time,omitempty"`
-	Created     time.Time      `json:"created"`
-	Updated     time.Time      `json:"updated"`
-	LastMention time.Time      `json:"last_mention"`
+	EventYear       int            `json:"event_year,omitempty"`
+	DetailBytes     int            `json:"detail_bytes,omitempty"`
+	DetailExcerpted bool           `json:"detail_excerpted,omitempty"`
+	SourceCount     int            `json:"source_count,omitempty"`
+	Continuity      bool           `json:"continuity,omitempty"`
+	MergeInto       string         `json:"merge_into,omitempty"`
+	ConflictsWith   []string       `json:"conflicts_with,omitempty"`
+	ID              string         `json:"id"`
+	Scope           string         `json:"scope"`
+	Subject         string         `json:"subject"`
+	Kind            string         `json:"kind"`
+	Detail          string         `json:"detail"`
+	Summary         string         `json:"summary"`
+	Keywords        []string       `json:"keywords"`
+	Sources         []MemorySource `json:"sources"`
+	Status          string         `json:"status"`
+	Version         int            `json:"version"`
+	Pinned          bool           `json:"pinned"`
+	Inference       bool           `json:"inference"`
+	Manual          bool           `json:"manual"`
+	Supersedes      string         `json:"supersedes,omitempty"`
+	EventTime       string         `json:"event_time,omitempty"`
+	Created         time.Time      `json:"created"`
+	Updated         time.Time      `json:"updated"`
+	LastMention     time.Time      `json:"last_mention"`
 }
 type MemoryHit struct {
 	Entry  *MemoryEntry `json:"entry,omitempty"`
@@ -62,6 +67,8 @@ type MemoryEvent struct {
 	Seq        int64        `json:"seq"`
 }
 type MemoryQuery struct {
+	EventYear     int       `json:"event_year,omitempty"`
+	TimeBasis     string    `json:"time_basis,omitempty"`
 	MinSimilarity *float64  `json:"min_similarity,omitempty"`
 	Pinned        bool      `json:"pinned,omitempty"`
 	Scopes        []string  `json:"-"`
@@ -78,13 +85,14 @@ type MemoryQuery struct {
 	Space         string    `json:"-"`
 }
 type MemoryPage struct {
-	Items          []MemoryHit `json:"items"`
-	NextCursor     string      `json:"next_cursor,omitempty"`
-	NextOffset     int         `json:"next_offset"`
-	HasMore        bool        `json:"has_more"`
-	Coverage       string      `json:"coverage"`
-	Degraded       string      `json:"degraded,omitempty"`
-	EffectiveLimit int         `json:"effective_limit"`
+	CoverageScopes map[string]string `json:"coverage_scopes,omitempty"`
+	Items          []MemoryHit       `json:"items"`
+	NextCursor     string            `json:"next_cursor,omitempty"`
+	NextOffset     int               `json:"next_offset"`
+	HasMore        bool              `json:"has_more"`
+	Coverage       string            `json:"coverage"`
+	Degraded       string            `json:"degraded,omitempty"`
+	EffectiveLimit int               `json:"effective_limit"`
 }
 
 var ErrMemoryConflict = errors.New("memory revision changed; read current revision before updating")
@@ -102,6 +110,9 @@ func stringsArgs(v []string) []any {
 // Automatic candidates cannot promote assistant prose or tool observations to
 // a user's fact, or use a different group/person as evidence.
 func (s *Store) SaveMemory(ctx context.Context, in MemoryEntry, expected int) (MemoryEntry, error) {
+	in.DetailBytes = 0
+	in.DetailExcerpted = false
+	in.SourceCount = 0
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !validScopeID(in.Scope) || strings.TrimSpace(in.Detail) == "" {
@@ -132,8 +143,29 @@ func (s *Store) SaveMemory(ctx context.Context, in MemoryEntry, expected int) (M
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
+	// Mention time is derived from user sources only, never model output.
+	in.LastMention = time.Time{}
 	latest := time.Time{}
+	if in.EventYear < 0 || in.EventYear > 9999 {
+		return in, errors.New("invalid event year")
+	}
+	if in.EventTime != "" {
+		if _, err := time.Parse(time.RFC3339Nano, in.EventTime); err != nil {
+			return in, errors.New("event_time requires an exact source-backed RFC3339 timestamp")
+		}
+	}
+	yearEvidence := in.EventYear == 0
+	dateEvidence := in.EventTime == ""
 	for _, src := range in.Sources {
+		if in.EventYear != 0 && strings.Contains(src.Quote, fmt.Sprint(in.EventYear)) {
+			yearEvidence = true
+		}
+		if in.EventTime != "" {
+			stamp, _ := time.Parse(time.RFC3339Nano, in.EventTime)
+			if strings.Contains(src.Quote, stamp.Format("2006-01-02")) {
+				dateEvidence = true
+			}
+		}
 		var scope, text, role, sender, at string
 		var suppressed int
 		if e = tx.QueryRowContext(ctx, "SELECT scope,text,role,sender,at,suppressed FROM events WHERE id=?", src.EventID).Scan(&scope, &text, &role, &sender, &at, &suppressed); e != nil {
@@ -154,6 +186,9 @@ func (s *Store) SaveMemory(ctx context.Context, in MemoryEntry, expected int) (M
 			latest = stamp
 		}
 	}
+	if !yearEvidence || !dateEvidence {
+		return in, errors.New("event date/year is not present in source quotes")
+	}
 	if in.ID == "" {
 		b, _ := json.Marshal([]any{in.Scope, in.Subject, in.Kind, in.Detail, in.Sources, in.Manual})
 		h := sha256.Sum256(b)
@@ -171,10 +206,29 @@ func (s *Store) SaveMemory(ctx context.Context, in MemoryEntry, expected int) (M
 		if existing.Subject != in.Subject || existing.Kind != in.Kind {
 			return in, errors.New("duplicate merge must preserve subject and kind")
 		}
+		replay := true
+		for _, src := range in.Sources {
+			found := false
+			for _, prior := range existing.Sources {
+				if src == prior {
+					found = true
+					break
+				}
+			}
+			if !found {
+				replay = false
+				break
+			}
+		}
+		if replay {
+			return existing, nil
+		}
 		in.ID = existing.ID
 		expected = existing.Version
 		in.Detail = existing.Detail
 		in.Summary = existing.Summary
+		in.EventYear = existing.EventYear
+		in.EventTime = existing.EventTime
 		in.Pinned = existing.Pinned
 		in.Continuity = existing.Continuity
 		seen := map[string]bool{}
@@ -238,6 +292,27 @@ func (s *Store) SaveMemory(ctx context.Context, in MemoryEntry, expected int) (M
 	if in.Inference && in.Status == "active" {
 		in.Status = "conflicted"
 	}
+	for _, conflictID := range in.ConflictsWith {
+		var subject, status string
+		var raw []byte
+		var version int
+		if e = tx.QueryRowContext(ctx, "SELECT subject,status,payload,version FROM memories WHERE id=? AND scope=?", conflictID, in.Scope).Scan(&subject, &status, &raw, &version); e != nil {
+			return in, e
+		}
+		if subject != in.Subject || status == "deleted" || status == "superseded" {
+			return in, errors.New("conflict target must be a current memory of the same subject")
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT OR IGNORE INTO memory_revisions VALUES(?,?,?)", conflictID, version, raw); e != nil {
+			return in, e
+		}
+		if _, e = tx.ExecContext(ctx, "UPDATE memories SET status='conflicted',version=version+1 WHERE id=?", conflictID); e != nil {
+			return in, e
+		}
+		if _, e = tx.ExecContext(ctx, "DELETE FROM embeddings WHERE memory_id=?", conflictID); e != nil {
+			return in, e
+		}
+		in.Status = "conflicted"
+	}
 	if in.Supersedes != "" {
 		var prior MemoryEntry
 		var priorRaw []byte
@@ -270,7 +345,16 @@ func (s *Store) SaveMemory(ctx context.Context, in MemoryEntry, expected int) (M
 	if e != nil {
 		return in, e
 	}
-	_, e = tx.ExecContext(ctx, `INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,version=excluded.version,pinned=excluded.pinned,updated=excluded.updated,payload=excluded.payload`, in.ID, in.Scope, in.Subject, in.Kind, in.Status, in.Version, in.Pinned, now.Format(time.RFC3339Nano), b)
+	statement := in.LastMention
+	if statement.IsZero() {
+		statement = now
+	}
+	eventAt := ""
+	if in.EventTime != "" {
+		stamp, _ := time.Parse(time.RFC3339Nano, in.EventTime)
+		eventAt = memoryTime(stamp)
+	}
+	_, e = tx.ExecContext(ctx, `INSERT INTO memories(id,scope,subject,kind,status,version,pinned,updated,payload,statement_at,event_at,event_year) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,version=excluded.version,pinned=excluded.pinned,updated=excluded.updated,payload=excluded.payload,statement_at=excluded.statement_at,event_at=excluded.event_at,event_year=excluded.event_year`, in.ID, in.Scope, in.Subject, in.Kind, in.Status, in.Version, in.Pinned, memoryTime(now), b, memoryTime(statement), eventAt, in.EventYear)
 	if e != nil {
 		return in, e
 	}
@@ -295,9 +379,29 @@ func (s *Store) SaveMemory(ctx context.Context, in MemoryEntry, expected int) (M
 				return in, e
 			}
 		}
+		// Legacy summaries/notes have no per-sentence provenance. Invalidate this
+		// derived view rather than allow a forgotten source through another path.
+		if scope, ok := s.data.Scopes[in.Scope]; ok {
+			scope.Summary = ""
+			scope.Notes = nil
+			scope.CompressedCount = 0
+			scope.SummaryBoundary = 0
+			raw, _ := json.Marshal(scope)
+			if _, e = tx.ExecContext(ctx, "UPDATE scopes SET payload=? WHERE id=?", raw, in.Scope); e != nil {
+				return in, e
+			}
+		}
 	}
 	if e = bumpMemoryEpoch(tx); e == nil {
 		e = tx.Commit()
+	}
+	if e == nil && in.Status == "deleted" {
+		scope := s.data.Scopes[in.Scope]
+		scope.Summary = ""
+		scope.Notes = nil
+		scope.CompressedCount = 0
+		scope.SummaryBoundary = 0
+		s.data.Scopes[in.Scope] = scope
 	}
 	return in, e
 }
@@ -319,6 +423,30 @@ func (s *Store) ReadMemory(ctx context.Context, scopes []string, id string) (Mem
 	}
 	return m, e
 }
+
+func (s *Store) MemoryRevisions(ctx context.Context, scopes []string, id string) ([]MemoryEntry, error) {
+	if _, err := s.ReadMemory(ctx, scopes, id); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT payload FROM memory_revisions WHERE memory_id=? ORDER BY version DESC", id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MemoryEntry{}
+	for rows.Next() {
+		var raw []byte
+		var m MemoryEntry
+		if err = rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(raw, &m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
 func (s *Store) ReadEvent(ctx context.Context, scopes []string, id string) (MemoryEvent, error) {
 	var ev MemoryEvent
 	if len(scopes) == 0 {
@@ -330,6 +458,22 @@ func (s *Store) ReadEvent(ctx context.Context, scopes []string, id string) (Memo
 }
 
 func (s *Store) SearchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, error) {
+	p, e := s.searchMemory(ctx, q)
+	if e != nil {
+		return p, e
+	}
+	p.CoverageScopes = map[string]string{}
+	for _, id := range q.Scopes {
+		progress, e := s.ArchiveProgress(ctx, id)
+		if e != nil {
+			return p, e
+		}
+		p.CoverageScopes[id] = progress
+	}
+	return p, nil
+}
+
+func (s *Store) searchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, error) {
 	p := MemoryPage{Items: []MemoryHit{}, Coverage: "indexed_memory", EffectiveLimit: q.Limit}
 	if len(q.Scopes) == 0 || q.Offset < 0 || q.Limit < 0 {
 		return p, errors.New("invalid memory query range")
@@ -341,6 +485,12 @@ func (s *Store) SearchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 	}
 	if q.Limit == 0 {
 		q.Limit = 10
+	}
+	if q.EventYear < 0 || q.EventYear > 9999 || q.TimeBasis != "" && q.TimeBasis != "statement" && q.TimeBasis != "event" {
+		return p, errors.New("invalid memory event time filter")
+	}
+	if q.Limit == int(^uint(0)>>1) {
+		return p, errors.New("page size exceeds integer range")
 	}
 	q.Scopes = append([]string{}, q.Scopes...)
 	sort.Strings(q.Scopes)
@@ -355,6 +505,13 @@ func (s *Store) SearchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 			}
 		}
 	}
+	if q.Since != "" && q.Before != "" {
+		a, _ := time.Parse(time.RFC3339Nano, q.Since)
+		b, _ := time.Parse(time.RFC3339Nano, q.Before)
+		if !a.Before(b) {
+			return p, errors.New("since must precede before")
+		}
+	}
 	// Cursor is bound to filters and database commit version: changes ask the
 	// caller to restart rather than silently skipping or repeating ranked rows.
 	var version string
@@ -363,7 +520,7 @@ func (s *Store) SearchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 	}
 	var maxUpdated string
 	_ = s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(updated),'') FROM memories").Scan(&maxUpdated)
-	key, _ := json.Marshal([]any{q.Scopes, q.Query, q.Kind, q.Subject, q.Since, q.Before, q.Originals, q.Space, q.Pinned, q.MinSimilarity, maxUpdated, version})
+	key, _ := json.Marshal([]any{q.Scopes, q.Query, q.Kind, q.Subject, q.Since, q.Before, q.EventYear, q.TimeBasis, q.Originals, q.Space, q.Pinned, q.MinSimilarity, maxUpdated, version})
 	hash := sha256.Sum256(key)
 	if q.Cursor != "" {
 		var c struct {
@@ -382,6 +539,10 @@ func (s *Store) SearchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 	}
 	where := "m.scope IN (" + placeholders(len(q.Scopes)) + ") AND m.status IN ('active','conflicted') AND NOT EXISTS(SELECT 1 FROM memory_sources ms JOIN memory_blocks mb ON mb.event_id=ms.event_id AND mb.scope=m.scope WHERE ms.memory_id=m.id)"
 	args := stringsArgs(q.Scopes)
+	if q.EventYear > 0 {
+		where += " AND m.event_year=?"
+		args = append(args, q.EventYear)
+	}
 	if q.Pinned {
 		where += " AND m.pinned=1"
 	}
@@ -394,12 +555,24 @@ func (s *Store) SearchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 		args = append(args, q.Subject)
 	}
 	if q.Since != "" {
-		where += " AND m.updated>=?"
-		args = append(args, q.Since)
+		column := "m.statement_at"
+		if q.TimeBasis == "event" {
+			column = "m.event_at"
+			where += " AND m.event_at!=''"
+		}
+		where += " AND " + column + ">=?"
+		stamp, _ := time.Parse(time.RFC3339Nano, q.Since)
+		args = append(args, memoryTime(stamp))
 	}
 	if q.Before != "" {
-		where += " AND m.updated<?"
-		args = append(args, q.Before)
+		column := "m.statement_at"
+		if q.TimeBasis == "event" {
+			column = "m.event_at"
+			where += " AND m.event_at!=''"
+		}
+		where += " AND " + column + "<?"
+		stamp, _ := time.Parse(time.RFC3339Nano, q.Before)
+		args = append(args, memoryTime(stamp))
 	}
 	lex := "SELECT m.id,ROW_NUMBER() OVER(ORDER BY m.pinned DESC,m.updated DESC,m.id) rank FROM memories m WHERE " + where
 	lexArgs := append([]any{}, args...)
@@ -446,6 +619,16 @@ func (s *Store) SearchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 		if e = json.Unmarshal(b, &m); e != nil {
 			return p, e
 		}
+		m.DetailBytes = len(m.Detail)
+		m.DetailExcerpted = m.DetailBytes > 600
+		m.Detail = boundedText(m.Detail, 600)
+		m.SourceCount = len(m.Sources)
+		if len(m.Sources) > 3 {
+			m.Sources = m.Sources[len(m.Sources)-3:]
+		}
+		for i := range m.Sources {
+			m.Sources[i].Quote = boundedText(m.Sources[i].Quote, 256)
+		}
 		m.Status = status
 		m.Version = version
 		hit.Entry = &m
@@ -480,6 +663,10 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 	p := MemoryPage{Items: []MemoryHit{}, Coverage: "indexed_originals", EffectiveLimit: q.Limit}
 	where := "e.scope IN (" + placeholders(len(q.Scopes)) + ") AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)"
 	args := stringsArgs(q.Scopes)
+	if q.EventYear > 0 {
+		where += " AND instr(e.text,?)>0"
+		args = append(args, fmt.Sprint(q.EventYear))
+	}
 	if q.Subject != "" {
 		where += " AND e.sender=?"
 		args = append(args, q.Subject)
@@ -488,7 +675,7 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 		if b.value != "" {
 			stamp, _ := time.Parse(time.RFC3339Nano, b.value)
 			where += " AND e.at" + b.op + "?"
-			args = append(args, stamp.UTC().Format(time.RFC3339Nano))
+			args = append(args, memoryTime(stamp))
 		}
 	}
 	join := ""

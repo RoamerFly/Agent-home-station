@@ -112,7 +112,7 @@ func (p *permittedTools) projectTools() []mcptools.Tool {
 	return []mcptools.Tool{
 		agentTool("project_list", "List registered public projects and exact managed paths. Read these before searching directories; no disk-wide discovery. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
 		agentTool("project_read", "Read one registered project's JSON usage manifest. Input {id:string}.", `{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}`),
-		agentTool("agent_global_search", "Trusted owner only: search THIS account's stored conversation summaries, messages and assets, newest original time first. Asset at refers to its first source request, not later cache/format updates; time_basis labels legacy fallback and summary times. Results retain source conversation, message IDs and sender names. since is inclusive, before exclusive; use RFC3339 with timezone. Does not switch identity or authorize other accounts. Input {query?:string,thread_id?:string,since?:string,before?:string,offset?:integer,limit?:integer}.", `{"type":"object","properties":{"query":{"type":"string"},"thread_id":{"type":"string"},"since":{"type":"string","description":"Inclusive original time, RFC3339 with timezone"},"before":{"type":"string","description":"Exclusive original time, RFC3339 with timezone"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
+		agentTool("agent_global_search", "Trusted owner only: search THIS account's stored conversation summaries, messages and assets, newest original time first. Asset at refers to its first source request, not later cache/format updates; time_basis labels legacy fallback and summary times. Results retain source conversation, message IDs and sender names. since is inclusive, before exclusive; use RFC3339 with timezone. Does not switch identity or authorize other accounts. Optional archives=true includes retained indexed originals; coverage reports partial indexing. order=relevance uses lexical/metadata ranking. Pagination accepts cursor or offset; a source change invalidates its cursor. Input {query?,thread_id?,since?,before?,offset?,limit?,cursor?,archives?,order?}.", `{"type":"object","properties":{"query":{"type":"string"},"thread_id":{"type":"string"},"since":{"type":"string","description":"Inclusive original time, RFC3339 with timezone"},"before":{"type":"string","description":"Exclusive original time, RFC3339 with timezone"},"cursor":{"type":"string"},"order":{"type":"string","enum":["time","relevance"]},"archives":{"type":"boolean"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
 	}
 }
 func (p *permittedTools) callProject(ctx context.Context, name string, raw json.RawMessage) (string, error) {
@@ -120,6 +120,8 @@ func (p *permittedTools) callProject(ctx context.Context, name string, raw json.
 		ID, Query     string
 		Thread        string `json:"thread_id"`
 		Since, Before string
+		Cursor, Order string
+		Archives      bool
 		Offset, Limit int
 	}
 	if json.Unmarshal(raw, &in) != nil || in.Offset < 0 || in.Limit < 0 {
@@ -129,7 +131,7 @@ func (p *permittedTools) callProject(ctx context.Context, name string, raw json.
 		return "", err
 	}
 	if name == "agent_global_search" {
-		return p.searchAccountMemory(ctx, accountMemorySearch{Query: in.Query, Thread: in.Thread, Since: in.Since, Before: in.Before, Offset: in.Offset, Limit: in.Limit})
+		return p.searchAccountMemory(ctx, accountMemorySearch{Query: in.Query, Thread: in.Thread, Since: in.Since, Before: in.Before, Offset: in.Offset, Limit: in.Limit, Cursor: in.Cursor, Order: in.Order, Archives: in.Archives})
 	}
 	x := p.executionContext()
 	dir := filepath.Join(x.Public, "manifests")
@@ -294,7 +296,7 @@ func (s *Server) managedWorkspaceRoutes(mux *http.ServeMux) {
 			return
 		}
 		// Explicit authenticated console inspection, not a fabricated WeChat packet.
-		raw, _ := json.Marshal(map[string]any{"query": r.URL.Query().Get("query"), "thread_id": r.URL.Query().Get("thread_id"), "since": r.URL.Query().Get("since"), "before": r.URL.Query().Get("before"), "offset": offset, "limit": limit})
+		raw, _ := json.Marshal(map[string]any{"query": r.URL.Query().Get("query"), "thread_id": r.URL.Query().Get("thread_id"), "since": r.URL.Query().Get("since"), "before": r.URL.Query().Get("before"), "offset": offset, "limit": limit, "cursor": r.URL.Query().Get("cursor"), "order": r.URL.Query().Get("order"), "archives": r.URL.Query().Get("archives") == "true"})
 		result, err := p.callProject(r.Context(), "agent_global_search", raw)
 		if err != nil {
 			fail(w, 400, err.Error())

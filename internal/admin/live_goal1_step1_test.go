@@ -35,7 +35,9 @@ func TestLiveGoal1ModelQuestionJudgement(t *testing.T) {
 	config.QuietEnd = "00:00"
 	config.MaxRepliesPerHour = 30
 	store, err := companion.NewStore(t.TempDir())
-	if opened := store; opened != nil { t.Cleanup(func(){ _ = opened.Close() }) }
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
