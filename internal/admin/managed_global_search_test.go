@@ -146,3 +146,67 @@ func TestGlobalSearchLabelsLegacyAssetTime(t *testing.T) {
 		t.Fatal("legacy request time/provenance lost")
 	}
 }
+
+func TestGlobalSearchFindsReceivedFileWithoutConversationMemory(t *testing.T) {
+	f, p := globalSearchFixture(t)
+	if err := f.manager.rememberNativeConversations(map[string]string{"source@chatroom": "合成来源群", "no-memory@chatroom": "合成无记忆群"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	request := assetRequest{TraceID: "received-original", MessageTime: now.Add(-time.Hour).Format(time.RFC3339Nano), RequesterID: "member", At: now}
+	assets := []mediaAsset{
+		{ID: "received-without-memory", Account: "test", Scope: companion.ScopeID("wechat", "test", "no-memory@chatroom"), Filename: "synthetic-recovered.txt", FirstRequest: &request, Updated: now},
+		{ID: "wrong-account", Account: "other", Scope: companion.ScopeID("wechat", "test", "no-memory@chatroom"), Filename: "synthetic-recovered.txt", FirstRequest: &request, Updated: now},
+		{ID: "wrong-channel", Account: "test", Scope: companion.ScopeID("other", "test", "no-memory@chatroom"), Filename: "synthetic-recovered.txt", FirstRequest: &request, Updated: now},
+		{ID: "unknown-source", Account: "test", Scope: companion.ScopeID("wechat", "test", "unknown@chatroom"), Filename: "synthetic-recovered.txt", FirstRequest: &request, Updated: now},
+	}
+	if err := f.manager.saveAssets(assets); err != nil {
+		t.Fatal(err)
+	}
+	for _, thread := range []string{"", "no-memory@chatroom", "source@chatroom"} {
+		raw, _ := json.Marshal(map[string]any{"query": "synthetic-recovered", "thread_id": thread})
+		result, err := p.Call(t.Context(), "agent_global_search", raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct {
+			Total int
+			Items []struct {
+				ID      string `json:"asset_id"`
+				Thread  string `json:"thread_id"`
+				Name    string `json:"thread_name"`
+				Message string `json:"message_id"`
+				At      time.Time
+			}
+		}
+		if err := json.Unmarshal([]byte(result), &response); err != nil {
+			t.Fatal(err)
+		}
+		if thread == "source@chatroom" {
+			if response.Total != 0 {
+				t.Fatal("thread filter ignored", result)
+			}
+			continue
+		}
+		if response.Total != 1 || len(response.Items) != 1 || response.Items[0].ID != assets[0].ID || response.Items[0].Thread != "no-memory@chatroom" || response.Items[0].Name != "合成无记忆群" || response.Items[0].Message != request.TraceID || !response.Items[0].At.Equal(now.Add(-time.Hour)) {
+			t.Fatal("file without memory missing or foreign scope included", result)
+		}
+	}
+	// Searching an attachment must not invent a chat transcript to make it
+	// visible. Time windows, revocation and the real sender still apply.
+	for _, scope := range f.manager.memory.Summaries(f.manager.Config().Companion, now) {
+		if scope.Thread == "no-memory@chatroom" {
+			t.Fatal("search created a conversation memory")
+		}
+	}
+	raw, _ := json.Marshal(map[string]any{"query": "synthetic-recovered", "since": now.Add(-30 * time.Minute).Format(time.RFC3339Nano)})
+	result, err := p.Call(t.Context(), "agent_global_search", raw)
+	var excluded struct{ Total int }
+	if err != nil || json.Unmarshal([]byte(result), &excluded) != nil || excluded.Total != 0 {
+		t.Fatal("cache refresh bypassed original time bound", err, result)
+	}
+	p.trace.Sender = "wxid_member"
+	if _, err := p.Call(t.Context(), "agent_global_search", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("ordinary member inherited account asset access")
+	}
+}

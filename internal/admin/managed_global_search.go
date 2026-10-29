@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"wechat-bot/internal/companion"
 )
 
 type accountMemorySearch struct {
@@ -73,6 +74,19 @@ func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemo
 	if err != nil {
 		return "", err
 	}
+	known, err := p.manager.storedAccountConversations()
+	if err != nil {
+		return "", err
+	}
+	// A received original can outlive its chat memory or be acquired explicitly
+	// before any model turn. Resolve its hash only through this account's known
+	// WeChat conversations; asset metadata cannot introduce a new recipient.
+	assetThreads := map[string]string{}
+	for thread := range known {
+		if in.Thread == "" || in.Thread == thread {
+			assetThreads[companion.ScopeID("wechat", x.Account, thread)] = thread
+		}
+	}
 	skipped := 0
 	for _, item := range p.manager.memory.Summaries(cfg.Companion, now) {
 		if err := ctx.Err(); err != nil {
@@ -93,23 +107,6 @@ func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemo
 		if scope.Summary != "" && (query == "" || strings.Contains(strings.ToLower(scope.Summary+label), query)) {
 			appendRow(scope.SummaryUpdated, map[string]any{"kind": "summary", "thread_id": scope.Thread, "thread_name": label, "time_basis": "summary_updated", "text": scope.Summary})
 		}
-		for _, asset := range assets {
-			if err := ctx.Err(); err != nil {
-				return "", err
-			}
-			if asset.Account != x.Account || asset.Scope != scope.ID {
-				continue
-			}
-			at, basis, request := assetOriginTime(asset)
-			if query != "" && !strings.Contains(strings.ToLower(asset.Filename+" "+asset.Title+" "+label), query) {
-				continue
-			}
-			data := map[string]any{"kind": "asset", "thread_id": scope.Thread, "thread_name": label, "time_basis": basis, "cached_updated_at": asset.Updated, "asset_id": asset.ID, "filename": asset.Filename, "bytes": asset.Bytes, "mime": asset.MIME, "parent_asset_id": asset.ParentAssetID, "first_request": asset.FirstRequest, "requests": asset.Requests}
-			if request != nil {
-				data["message_id"], data["sender"], data["sender_name"] = request.TraceID, request.RequesterID, request.RequesterName
-			}
-			appendRow(at, data)
-		}
 		for _, message := range scope.Messages {
 			if err := ctx.Err(); err != nil {
 				return "", err
@@ -119,6 +116,30 @@ func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemo
 			}
 			appendRow(message.Time, map[string]any{"kind": "message", "thread_id": scope.Thread, "thread_name": label, "time_basis": "message", "message_id": message.TraceID, "sender": message.Sender, "sender_name": message.SenderName, "role": message.Role, "text": message.Text, "media": message.Media})
 		}
+	}
+	labels := map[string]string{}
+	for _, asset := range assets {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		thread, ok := assetThreads[asset.Scope]
+		if !ok || asset.Account != x.Account {
+			continue
+		}
+		label, ok := labels[thread]
+		if !ok {
+			label = p.manager.memoryLabel(ctx, thread)
+			labels[thread] = label
+		}
+		at, basis, request := assetOriginTime(asset)
+		if query != "" && !strings.Contains(strings.ToLower(asset.Filename+" "+asset.Title+" "+label), query) {
+			continue
+		}
+		data := map[string]any{"kind": "asset", "thread_id": thread, "thread_name": label, "time_basis": basis, "cached_updated_at": asset.Updated, "asset_id": asset.ID, "filename": asset.Filename, "bytes": asset.Bytes, "mime": asset.MIME, "parent_asset_id": asset.ParentAssetID, "first_request": asset.FirstRequest, "requests": asset.Requests}
+		if request != nil {
+			data["message_id"], data["sender"], data["sender_name"] = request.TraceID, request.RequesterID, request.RequesterName
+		}
+		appendRow(at, data)
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
