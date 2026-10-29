@@ -44,6 +44,9 @@ func TestHistoricalToolQuestionReachesJudgementWithoutForcingReply(t *testing.T)
 	c.Permissions.ObserveGroups = true
 	c.Permissions.AutonomousGroups = true
 	store, _ := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	model := &questionJudgementModel{}
 	engine, err := companion.New(c, store, model, "test")
 	if err != nil {

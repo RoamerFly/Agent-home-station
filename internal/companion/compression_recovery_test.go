@@ -26,6 +26,9 @@ func TestCompressionRepairsSchemaAndRebasesActualContentChanges(t *testing.T) {
 			cfg.Permissions.Remember = true
 			cfg.Context = &ContextSettings{true, 20, 5, 8000}
 			store, _ := NewStore(t.TempDir())
+			if opened := store; opened != nil {
+				t.Cleanup(func() { _ = opened.Close() })
+			}
 			in := Input{Channel: "wechat", Account: "fixture", Thread: "room"}
 			for i := 0; i < 25; i++ {
 				in.TraceID, in.Text = fmt.Sprint(i), fmt.Sprint("original-", i)

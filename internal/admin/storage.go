@@ -67,7 +67,7 @@ func (m *Manager) storageStatus(ctx context.Context) (map[string]any, error) {
 		name  string
 		paths []string
 	}{
-		{"活跃记忆", []string{filepath.Join(m.dir, "companion", "memory.json")}},
+		{"活跃记忆", []string{filepath.Join(m.dir, "companion", "memory.json"), filepath.Join(m.dir, "companion", "memory.sqlite"), filepath.Join(m.dir, "companion", "memory.sqlite-wal"), filepath.Join(m.dir, "companion", "memory.sqlite-shm")}},
 		{"活跃日志", []string{filepath.Join(m.dir, "activity.json"), filepath.Join(m.dir, "audit.json")}},
 		{"任务与素材索引", []string{filepath.Join(m.dir, "agent-state.json"), filepath.Join(m.dir, "tool-state.json"), filepath.Join(m.dir, "media-assets.json")}},
 		{"保留的媒体原件", []string{filepath.Join(m.dir, "media-assets")}},

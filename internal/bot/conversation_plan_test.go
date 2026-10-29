@@ -31,6 +31,9 @@ func planWorker(t *testing.T, model *planReviewModel) (*Worker, *companion.Engin
 	c.ReplyMinMS = 0
 	c.ReplyMaxMS = 0
 	store, _ := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	engine, err := companion.New(c, store, model, "test")
 	if err != nil {
 		t.Fatal(err)

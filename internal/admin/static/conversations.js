@@ -59,7 +59,7 @@
   if(view!==v||!v.popup.alive())return;
   const root=$('#memory-content'),scroll=v.popup.body.scrollTop;root.replaceChildren();
   const data=v.data||{messages:[]},units=[];
-  renderSummary(root,data);
+  window.WechatMemory?.mount(root,v.item.id);renderSummary(root,data);
   for(const message of data.messages||[])units.push({time:message.time,message});
   units.sort((a,b)=>(Date.parse(b.time)||0)-(Date.parse(a.time)||0));
   for(const unit of units){

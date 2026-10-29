@@ -47,6 +47,9 @@ func TestAcknowledgedToolTaskDoesNotOverrideModelSilence(t *testing.T) {
 	c.ReplyMinMS = 0
 	c.ReplyMaxMS = 0
 	store, _ := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	model := &progressSequence{finalSilent: true}
 	engine, _ := companion.New(c, store, model, "test")
 	native := &acceptingProgressNative{reliableFake: reliableFake{intents: map[string]linuxnative.ToolStatus{}}}
@@ -91,6 +94,9 @@ func TestProgressHasOwnDurableReceiptAndDoesNotCompleteTask(t *testing.T) {
 			c.ReplyMaxMS = 0
 			c.Permissions.Remember = true
 			store, _ := companion.NewStore(t.TempDir())
+			if opened := store; opened != nil {
+				t.Cleanup(func() { _ = opened.Close() })
+			}
 			model := &progressSequence{}
 			engine, _ := companion.New(c, store, model, "test")
 			native := &acceptingProgressNative{reliableFake: reliableFake{intents: map[string]linuxnative.ToolStatus{}}}

@@ -104,16 +104,15 @@ func (m *Manager) storedAccountConversations() (map[string]string, error) {
 		}
 	}
 	if m.memory != nil {
-		now := time.Now()
-		for _, item := range m.memory.Summaries(c.Companion, now) {
-			scope, e := m.memory.Read(item.ID, c.Companion, now)
-			if e == nil && scope.Account == m.native.Account() && scope.Channel == "wechat" && validID(scope.Thread) {
+		for _, scope := range m.memory.ScopeIdentities() {
+			if scope.Account == m.native.Account() && scope.Channel == "wechat" && validID(scope.Thread) {
 				if _, ok := names[scope.Thread]; !ok {
 					names[scope.Thread] = scope.Thread
 				}
 			}
 		}
 	}
+
 	return names, nil
 }
 

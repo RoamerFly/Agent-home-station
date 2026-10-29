@@ -27,6 +27,9 @@ func TestDirectInvalidDecisionRecordsFailureWithoutInventingReply(t *testing.T) 
 	c.QuietStart = "00:00"
 	c.QuietEnd = "00:00"
 	store, e := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -92,6 +95,9 @@ func TestGeneratedVoiceOnlyAndUnknownNotRetried(t *testing.T) {
 	config.ReplyMinMS = 0
 	config.ReplyMaxMS = 0
 	store, err := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,6 +145,9 @@ func TestCharacterImageUnknownIsNotRetried(t *testing.T) {
 	c.QuietStart = "00:00"
 	c.QuietEnd = "00:00"
 	store, err := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

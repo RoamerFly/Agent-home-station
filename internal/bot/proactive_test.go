@@ -33,6 +33,9 @@ func TestProactiveWorkerSendsToSelectedGroupAndFriendOrChoosesSilence(t *testing
 				c.ReplyMinMS = 0
 				c.ReplyMaxMS = 0
 				store, _ := companion.NewStore(t.TempDir())
+				if opened := store; opened != nil {
+					t.Cleanup(func() { _ = opened.Close() })
+				}
 				_ = store.Observe(companion.Input{Channel: "wechat", Account: "test", Thread: thread, Text: "刚才聊的音乐"}, c, time.Now().Add(-time.Hour))
 				m := &proactiveModel{answer: `{"action":"reply","messages":["刚才那首歌挺轻快的～"]}`}
 				if silence {
@@ -78,6 +81,9 @@ func TestUntriggeredGroupActivityDoesNotPostponeAutonomyOrMemorizeBody(t *testin
 	c.ProactiveThreads = []string{"room@chatroom"}
 	c.ProactiveIdleMinutes = 5
 	store, _ := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	input := companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Text: "原有上下文"}
 	_ = store.Observe(input, c, time.Now().Add(-time.Hour))
 	m := &proactiveModel{answer: `{"action":"silent","messages":[]}`}

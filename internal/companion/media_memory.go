@@ -43,7 +43,7 @@ func (s *Store) ObserveMedia(input Input, c Config, media MediaMemory, now time.
 	media.RequesterID = boundedText(input.Sender, 256)
 	media.RequesterName = boundedText(input.SenderName, 128)
 	media.TaskID = boundedText(input.TaskID, 256)
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(input.Channel, input.Account, input.Thread), func(data *persisted) error {
 		id := ScopeID(input.Channel, input.Account, input.Thread)
 		scope, exists := data.Scopes[id]
 		if !exists {

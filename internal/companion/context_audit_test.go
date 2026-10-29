@@ -74,6 +74,9 @@ func TestLongHistoricalVideoDoesNotEvictEarlierPreferenceAndMemoryIsUnchanged(t 
 	cfg.Permissions.Remember = true
 	cfg.Context = &ContextSettings{false, 120, 60, 8000}
 	store, _ := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	e, _ := New(cfg, store, &capturePolicyModel{}, "policy")
 	full := strings.Repeat("这是一段很长的视频观察。", 3000)
 	scope := Scope{Messages: []Turn{

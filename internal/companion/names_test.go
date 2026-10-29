@@ -21,6 +21,9 @@ func (f fixtureNames) ResolveSpeaker(_ context.Context, room, sender string) (id
 func TestMemoryNamesPersistWithoutChangingIdentityContentOrClaims(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewStore(dir)
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := enabledConfig()
 	c.Permissions.Remember = true
 	input := Input{Channel: "wechat", Account: "test", Thread: "one@chatroom", Sender: "peer-one", Text: "第一条", TraceID: "first", Mode: "direct"}
@@ -51,6 +54,9 @@ func TestMemoryNamesPersistWithoutChangingIdentityContentOrClaims(t *testing.T) 
 		t.Fatal("same-name users merged", history, current)
 	}
 	reopened, err := NewStore(dir)
+	if opened := reopened; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +89,9 @@ func TestNamePriorityAndDisabledMemoryDoNotPersistMetadata(t *testing.T) {
 		}
 	}
 	store, _ := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := enabledConfig()
 	c.Permissions.Remember = false
 	input := Input{Channel: "wechat", Account: "test", Thread: "friend", Sender: "peer", Text: "只临时理解", Mode: "direct"}

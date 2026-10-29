@@ -2,6 +2,7 @@ package companion
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -11,7 +12,7 @@ func (s *Store) AcceptedDelivery(input Input, text, key string, c Config, now ti
 	if input.Preview || !c.Permissions.Remember {
 		return nil
 	}
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(input.Channel, input.Account, input.Thread), func(data *persisted) error {
 		id := ScopeID(input.Channel, input.Account, input.Thread)
 		scope, ok := data.Scopes[id]
 		if !ok {
@@ -25,7 +26,7 @@ func (s *Store) AcceptedDelivery(input Input, text, key string, c Config, now ti
 				return nil
 			}
 		}
-		scope.Messages = append(scope.Messages, Turn{TraceID: key, Role: "assistant", Text: boundedText(text, 2048), SenderName: c.Name, SenderNameSource: "character", Time: now})
+		scope.Messages = append(scope.Messages, Turn{TraceID: key, Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
 		scope.LastInteraction = now
 		recordAutonomyAccepted(&scope, input, c, now)
 		clean, err := s.pruneStored(scope, c, now)
@@ -48,7 +49,7 @@ func (s *Store) ReplaceObservation(scopeID, trace, before, after string) error {
 // concurrently changed turn is never silently reported as updated or re-added.
 func (s *Store) UpdateObservation(scopeID, trace, before, after string) (bool, error) {
 	changed := false
-	err := s.transaction(func(data *persisted) error {
+	err := s.scopeTransaction(scopeID, func(data *persisted) error {
 		scope, ok := data.Scopes[scopeID]
 		if !ok {
 			return nil
@@ -57,6 +58,9 @@ func (s *Store) UpdateObservation(scopeID, trace, before, after string) (bool, e
 			turn := &scope.Messages[i]
 			if turn.Role == "user" && turn.TraceID == trace && turn.Text == before {
 				turn.Text = boundedInputMemory(after)
+				turn.FullText = UserRequestText(after)
+				turn.HasOriginal = true
+				turn.FullObservation = strings.TrimPrefix(after, UserRequestText(after))
 				data.Scopes[scopeID] = scope
 				changed = true
 				break

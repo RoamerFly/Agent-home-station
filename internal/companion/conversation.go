@@ -51,7 +51,7 @@ type PendingReview struct {
 }
 
 func (s *Store) ClaimConversationWake(in Input, c Config, now time.Time) error {
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(in.Channel, in.Account, in.Thread), func(data *persisted) error {
 		if !c.Enabled || !c.ConversationConfig().AllowWake || !c.Permissions.Proactive || !c.Permissions.ReplyText || !c.Permissions.Remember || c.Quiet(now) {
 			return ErrWakePermission
 		}

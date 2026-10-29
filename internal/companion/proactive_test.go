@@ -8,6 +8,9 @@ import (
 func TestProactiveTargetsIsolationTimingBudgetsAndRestart(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +46,9 @@ func TestProactiveTargetsIsolationTimingBudgetsAndRestart(t *testing.T) {
 		t.Fatal("immediate duplicate claim")
 	}
 	s, err = NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +72,9 @@ func TestProactiveTargetsIsolationTimingBudgetsAndRestart(t *testing.T) {
 
 func TestProactiveLegacyLedgerAndActivityRemainPrivate(t *testing.T) {
 	s, _ := NewStore(t.TempDir())
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := enabledConfig()
 	c.Permissions.Remember = true
 	c.Permissions.Proactive = true

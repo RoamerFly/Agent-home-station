@@ -60,6 +60,9 @@ func enabledConfig() Config {
 func TestPermissionsSilenceAndInvalidOutput(t *testing.T) {
 	c := enabledConfig()
 	store, err := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +106,9 @@ func TestPermissionsSilenceAndInvalidOutput(t *testing.T) {
 func TestMemoryIsolationPersistenceAndClearPreservesClaims(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewStore(dir)
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +150,9 @@ func TestMemoryIsolationPersistenceAndClearPreservesClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, err = NewStore(dir)
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +163,7 @@ func TestMemoryIsolationPersistenceAndClearPreservesClaims(t *testing.T) {
 	if err = store.ClaimProactive(input, c, now); err == nil {
 		t.Fatal("restart/clear allowed duplicate proactive opportunity")
 	}
-	info, err := os.Stat(filepath.Join(dir, "memory.json"))
+	info, err := os.Stat(filepath.Join(dir, "memory.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,6 +198,9 @@ func TestCurrentMessageIsDistinctFromStoredIdentityQuestions(t *testing.T) {
 	c := enabledConfig()
 	c.Permissions.Remember = true
 	store, err := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,6 +247,9 @@ func TestExpiryQuietHoursAndPersistentBudgets(t *testing.T) {
 	c.MemoryDays = 7
 	dir := t.TempDir()
 	store, _ := NewStore(dir)
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	now := time.Now()
 	input := Input{Channel: "wechat", Account: "one", Thread: "room", Text: "expired"}
 	if err := store.Observe(input, c, now.Add(-8*24*time.Hour)); err != nil {
@@ -250,6 +265,9 @@ func TestExpiryQuietHoursAndPersistentBudgets(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, err := NewStore(dir)
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

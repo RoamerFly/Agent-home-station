@@ -122,6 +122,9 @@ func (s *Server) mediaRuntimeRoutes(mux *http.ServeMux) {
 		ticket := r.URL.Query().Get("ticket")
 		ready := true
 		for _, m := range s.drainManagers() {
+			if m.memoryRebuildBusy() {
+				ready = false
+			}
 			m.mu.Lock()
 			if ticket == "" || m.drainTicket != ticket {
 				m.mu.Unlock()

@@ -43,6 +43,9 @@ func TestSensitiveGroupUnsentRewriteUsesOriginalConversationForPrivateReport(t *
 	tools := &privacyTools{}
 	model := &privacyModel{answers: []string{`{"action":"replace","messages":["GPU 环境缺少模型"]}`, `{"messages":[],"private_report":"synthetic pending diagnosis"}`}}
 	store, err := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

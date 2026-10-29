@@ -10,6 +10,9 @@ import (
 
 func TestAutonomyOutcomesSeparatePlansFromAcceptedRuns(t *testing.T) {
 	s, _ := NewStore(t.TempDir())
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := enabledConfig()
 	c.Permissions.Remember = true
 	c.Permissions.Proactive = true

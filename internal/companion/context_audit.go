@@ -13,6 +13,9 @@ var musicPolicy string
 // ContextReport contains counts and versions only, never prompts, messages,
 // summaries, credentials or tool arguments.
 type ContextReport struct {
+	ComponentBytes  map[string]int
+	EstimatedTokens int
+	ToolSchemaBytes int
 	UnreadMessages  int
 	SystemBytes     int
 	InputBytes      int
@@ -27,8 +30,14 @@ type ContextReport struct {
 
 func inspectContext(system string, turns []map[string]string, tools []mcptools.Tool) ContextReport {
 	r := ContextReport{SystemBytes: len(system), InputBytes: len(system), ActiveTools: len(tools), MusicPolicy: strings.Contains(system, "【歌曲演唱策略 v3】")}
+	r.ComponentBytes = map[string]int{"system": len(system)}
+	catalog, _ := json.Marshal(tools)
+	r.ToolSchemaBytes = len(catalog)
+	r.ComponentBytes["tool_schemas"] = len(catalog)
+	r.EstimatedTokens = EstimateTokens(system) + EstimateTokens(string(catalog))
 	for _, turn := range turns {
 		r.InputBytes += len(turn["content"])
+		r.EstimatedTokens += EstimateTokens(turn["content"]) + 8
 		var packet struct {
 			Unread   []json.RawMessage `json:"unread_messages"`
 			Kind     string            `json:"kind"`
@@ -36,8 +45,10 @@ func inspectContext(system string, turns []map[string]string, tools []mcptools.T
 			Summary  json.RawMessage   `json:"summary"`
 		}
 		if json.Unmarshal([]byte(turn["content"]), &packet) != nil {
+			r.ComponentBytes["action_or_text"] += len(turn["content"])
 			continue
 		}
+		r.ComponentBytes[packet.Kind] += len(turn["content"])
 		switch packet.Kind {
 		case "conversation_context":
 			r.HistoryMessages += len(packet.Timeline)

@@ -24,7 +24,7 @@ func (s *Store) ObserveDevice(in Input, c Config, o DeviceObservation, now time.
 		return nil
 	}
 	o.Summary = boundedText(o.Summary, 2000)
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(in.Channel, in.Account, in.Thread), func(data *persisted) error {
 		id := ScopeID(in.Channel, in.Account, in.Thread)
 		scope, ok := data.Scopes[id]
 		if !ok {

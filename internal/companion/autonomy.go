@@ -43,7 +43,7 @@ func (s *Store) ProactiveOutcome(in Input, action, reason string, c Config, now 
 	if in.Preview || in.Mode != "proactive" {
 		return nil
 	}
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(in.Channel, in.Account, in.Thread), func(data *persisted) error {
 		id := ScopeID(in.Channel, in.Account, in.Thread)
 		scope, ok := data.Scopes[id]
 		if !ok {

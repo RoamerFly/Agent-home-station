@@ -41,6 +41,7 @@ func TestLiveCompressionRecoveryOnPrivateCopy(t *testing.T) {
 		t.Fatal("private copy unavailable")
 	}
 	store, err := companion.NewStore(dir)
+	if opened := store; opened != nil { t.Cleanup(func(){ _ = opened.Close() }) }
 	if err != nil {
 		t.Fatal("copy invalid")
 	}

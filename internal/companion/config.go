@@ -22,6 +22,7 @@ type Permissions struct {
 	Proactive        bool `json:"proactive"`
 }
 type Config struct {
+	Memory               *MemorySettings       `json:"memory,omitempty"`
 	Context              *ContextSettings      `json:"context,omitempty"`
 	Conversation         *ConversationSettings `json:"conversation,omitempty"`
 	Enabled              bool                  `json:"enabled"`
@@ -83,6 +84,9 @@ func Normalize(c Config) Config {
 	return c
 }
 func Validate(c Config) error {
+	if err := c.MemoryConfig().Validate(); err != nil {
+		return err
+	}
 	ctx := c.ContextConfig()
 	if ctx.CompressAfter < 20 || ctx.CompressAfter > 500 || ctx.RecentMessages < 5 || ctx.RecentMessages > 100 || ctx.RecentMessages >= ctx.CompressAfter || ctx.MaxInputChars < 4000 || ctx.MaxInputChars > 64000 {
 		return errors.New("请检查上下文压缩阈值、近期消息数与输入预算")

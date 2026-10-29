@@ -100,6 +100,9 @@ func (c *Client) Chat(ctx context.Context, system string, messages []map[string]
 // ChatCompression has its own output budget; a short conversational reply
 // limit must not truncate the structured memory summary.
 func (c *Client) ChatCompression(ctx context.Context, system string, messages []map[string]string) (string, error) {
+	if ctx.Value(purposeKey{}) == nil {
+		ctx = WithPurpose(ctx, "compression")
+	}
 	copy := *c
 	copy.maxTokens = 4096
 	answer, err := copy.chat(ctx, system, messages, true)
@@ -150,6 +153,13 @@ func (c *Client) chat(ctx context.Context, system string, messages []map[string]
 func (c *Client) requestOnce(ctx context.Context, body []byte) (string, *RequestError) {
 	usage := Usage{Time: time.Now().UTC()}
 	defer func() {
+		usage.Purpose, _ = ctx.Value(purposeKey{}).(string)
+		if usage.Purpose == "" {
+			usage.Purpose = "conversation"
+		}
+		if observer, ok := ctx.Value(usageObserverKey{}).(func(Usage)); ok {
+			observer(usage)
+		}
 		if c.onUsage != nil {
 			c.onUsage(usage)
 		}

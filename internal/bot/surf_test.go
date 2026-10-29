@@ -37,6 +37,9 @@ func TestSurfInProgressStopsAtQuietBoundaryWithoutSending(t *testing.T) {
 	c.QuietStart = "00:00"
 	c.QuietEnd = "00:00"
 	store, _ := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	model := &quietBoundaryModel{}
 	engine, _ := companion.New(c, store, model, "test")
 	sender := &fakeSender{}

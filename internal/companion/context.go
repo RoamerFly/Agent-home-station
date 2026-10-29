@@ -115,7 +115,7 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 	}
 	result = string(canonical)
 	expected := fingerprintTurns(scope.Messages[:end])
-	err = e.Store.transaction(func(data *persisted) error {
+	err = e.Store.scopeTransaction(scope.ID, func(data *persisted) error {
 		s, ok := data.Scopes[scope.ID]
 		if !ok || s.CompressedCount != scope.CompressedCount || len(s.Messages) < end || fingerprintTurns(s.Messages[:end]) != expected {
 			return ErrContextChanged
@@ -134,6 +134,7 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 		return nil
 	}
 	c := e.Config.ContextConfig()
+	maxTokens := e.memorySettings().RecentTokens
 	history := append([]Turn{}, scope.Messages...)
 	sort.SliceStable(history, func(i, j int) bool { return history[i].Time.Before(history[j].Time) })
 	if len(history) > c.RecentMessages {
@@ -145,9 +146,11 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 	}); !native {
 		turns := []map[string]string{}
 		used := 0
+		usedTokens := 0
 		if summary != "null" {
 			turns = append(turns, map[string]string{"role": "user", "content": `{"kind":"conversation_summary","data":` + summary + `}`})
 			used = len(turns[0]["content"])
+			usedTokens = EstimateTokens(turns[0]["content"])
 		}
 		rows := []map[string]string{}
 		for i := len(history) - 1; i >= 0; i-- {
@@ -167,10 +170,11 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 				payload = map[string]any{"kind": "history_reply", "action": "reply", "messages": []string{text}, "text_excerpted": excerpted, "message_id": t.TraceID, "media_delivery": t.Media, "at": t.Time}
 			}
 			b, _ := json.Marshal(payload)
-			if used+len(b) > c.MaxInputChars {
+			if used+len(b) > c.MaxInputChars || usedTokens+EstimateTokens(string(b)) > maxTokens {
 				break
 			}
 			used += len(b)
+			usedTokens += EstimateTokens(string(b))
 			rows = append(rows, map[string]string{"role": role, "content": string(b)})
 		}
 		for i := len(rows) - 1; i >= 0; i-- {
@@ -182,6 +186,7 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 	// output is a fresh assistant decision, and deduplicates current-message echo.
 	timeline := []map[string]any{}
 	size := len(summary) + 600
+	usedTokens := EstimateTokens(summary) + 200
 	for i := len(history) - 1; i >= 0; i-- {
 		t := history[i]
 		if t.TraceID != "" && t.TraceID == input.TraceID && t.Role == "user" {
@@ -201,10 +206,11 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 			row["media"] = t.Media
 		}
 		b, _ := json.Marshal(row)
-		if size+len(b) > c.MaxInputChars {
+		if size+len(b) > c.MaxInputChars || usedTokens+EstimateTokens(string(b)) > maxTokens {
 			break
 		}
 		size += len(b)
+		usedTokens += EstimateTokens(string(b))
 		timeline = append(timeline, row)
 	}
 	for i, j := 0, len(timeline)-1; i < j; i, j = i+1, j-1 {

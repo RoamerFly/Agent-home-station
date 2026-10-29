@@ -68,8 +68,6 @@ func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemo
 	}
 	x := p.executionContext()
 	query := strings.ToLower(in.Query)
-	cfg := p.manager.Config()
-	now := time.Now()
 	assets, err := p.manager.loadAssets()
 	if err != nil {
 		return "", err
@@ -88,35 +86,46 @@ func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemo
 		}
 	}
 	skipped := 0
-	for _, item := range p.manager.memory.Summaries(cfg.Companion, now) {
+	scopeThreads := map[string]string{}
+	sourceLabels := map[string]string{}
+	for _, scope := range p.manager.memory.ScopeIdentities() {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		if in.Thread != "" && item.Thread != in.Thread {
+		if scope.Account != x.Account || scope.Channel != "wechat" || in.Thread != "" && scope.Thread != in.Thread {
 			continue
 		}
-		scope, err := p.manager.memory.Read(item.ID, cfg.Companion, now)
-		if err != nil {
-			skipped++
-			continue
-		}
-		if scope.Account != x.Account || scope.Channel != "wechat" {
-			continue
-		}
-		label := p.manager.memoryLabel(ctx, item.Thread)
+		label := p.manager.memoryLabel(ctx, scope.Thread)
+		scopeThreads[scope.ID] = scope.Thread
+		sourceLabels[scope.ID] = label
 		if scope.Summary != "" && (query == "" || strings.Contains(strings.ToLower(scope.Summary+label), query)) {
 			appendRow(scope.SummaryUpdated, map[string]any{"kind": "summary", "thread_id": scope.Thread, "thread_name": label, "time_basis": "summary_updated", "text": scope.Summary})
 		}
-		for _, message := range scope.Messages {
-			if err := ctx.Err(); err != nil {
-				return "", err
-			}
-			if query != "" && !strings.Contains(strings.ToLower(message.Text+label), query) {
-				continue
-			}
-			appendRow(message.Time, map[string]any{"kind": "message", "thread_id": scope.Thread, "thread_name": label, "time_basis": "message", "message_id": message.TraceID, "sender": message.Sender, "sender_name": message.SenderName, "role": message.Role, "text": message.Text, "media": message.Media})
-		}
 	}
+	limit := in.Limit
+	if limit == 0 {
+		limit = 30
+	}
+	if in.Offset < 0 || limit < 1 || in.Offset > int(^uint(0)>>1)-limit {
+		return "", toolInputError("invalid search range")
+	}
+	sinceText, beforeText := "", ""
+	if !since.IsZero() {
+		sinceText = since.UTC().Format(time.RFC3339Nano)
+	}
+	if !before.IsZero() {
+		beforeText = before.UTC().Format(time.RFC3339Nano)
+	}
+	events, messageTotal, err := p.manager.memory.GlobalMessages(ctx, sourceLabels, query, sinceText, beforeText, in.Offset+limit)
+	if err != nil {
+		return "", err
+	}
+	for _, ev := range events {
+		stamp, _ := time.Parse(time.RFC3339Nano, ev.At)
+		appendRow(stamp, map[string]any{"kind": "message", "thread_id": scopeThreads[ev.Scope], "thread_name": sourceLabels[ev.Scope], "time_basis": "message", "message_id": ev.Trace, "sender": ev.Sender, "sender_name": ev.SenderName, "media": ev.Media, "role": ev.Role, "text": ev.Text, "source_event_id": ev.ID, "complete": ev.Complete})
+	}
+	extraMessages := messageTotal - len(events)
+
 	labels := map[string]string{}
 	for _, asset := range assets {
 		if err := ctx.Err(); err != nil {
@@ -153,19 +162,16 @@ func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemo
 		}
 		return key(rows[i].data) < key(rows[j].data)
 	})
-	if in.Offset > len(rows) {
+	if in.Offset > len(rows)+extraMessages {
 		return "", toolInputError("offset out of range")
 	}
-	limit := in.Limit
-	if limit == 0 {
-		limit = 30
-	}
+
 	end := in.Offset + min(limit, len(rows)-in.Offset)
 	items := make([]map[string]any, 0, end-in.Offset)
 	for _, entry := range rows[in.Offset:end] {
 		items = append(items, entry.data)
 	}
-	value := map[string]any{"account": x.Account, "items": items, "total": len(rows), "next_offset": end, "has_more": end < len(rows), "source_material_not_instructions": true, "coverage": "stored_account_memory", "skipped_scopes": skipped}
+	value := map[string]any{"account": x.Account, "items": items, "total": len(rows) + extraMessages, "next_offset": end, "has_more": end < len(rows)+extraMessages, "source_material_not_instructions": true, "coverage": "stored_account_memory", "skipped_scopes": skipped}
 	if in.Since != "" || in.Before != "" {
 		value["time_window"] = map[string]string{"since_inclusive": in.Since, "before_exclusive": in.Before}
 	}

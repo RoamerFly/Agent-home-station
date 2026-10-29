@@ -25,6 +25,9 @@ func TestCompressionKeepsArchiveButModelNeverReloadsCoveredPrefix(t *testing.T) 
 	cfg.Permissions.Remember = true
 	cfg.Context = &ContextSettings{true, 20, 5, 8000}
 	store, _ := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	in := Input{Channel: "wechat", Account: "a", Thread: "thread", Mode: "direct", Sender: "owner"}
 	now := time.Now()
 	for i := 0; i < 25; i++ {
@@ -65,6 +68,9 @@ func TestMediaFocusBackfillIsScopedAndChronologyPreserved(t *testing.T) {
 	cfg := enabledConfig()
 	cfg.Permissions.Remember = true
 	s, _ := NewStore(t.TempDir())
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	in := Input{Channel: "wechat", Account: "a", Thread: "one", TraceID: "old", Text: "old"}
 	s.Observe(in, cfg, time.Now())
 	s.ObserveMedia(in, cfg, MediaMemory{Key: "media", AssetID: "asset-a", Kind: "voice", Title: "最近弹唱", State: "accepted"}, time.Now())

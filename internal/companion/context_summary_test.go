@@ -41,6 +41,9 @@ func TestInvalidCompressionPreservesArchiveAndCoverage(t *testing.T) {
 	cfg.Permissions.Remember = true
 	cfg.Context = &ContextSettings{true, 20, 5, 4000}
 	s, _ := NewStore(t.TempDir())
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	in := Input{Channel: "wechat", Account: "a", Thread: "one"}
 	for i := 0; i < 25; i++ {
 		in.TraceID = fmt.Sprint(i)
@@ -69,6 +72,9 @@ func TestContextBudgetAppliesToNativeAndFallbackWithSummary(t *testing.T) {
 	}
 	for _, model := range []LanguageModel{&fakeModel{}, &contextModel{}} {
 		s, _ := NewStore(t.TempDir())
+		if opened := s; opened != nil {
+			t.Cleanup(func() { _ = opened.Close() })
+		}
 		e, _ := New(cfg, s, model, "policy")
 		turns := e.contextTurns(scope, Input{})
 		size := 0

@@ -30,6 +30,7 @@ func TestLiveSemanticPlanAndNewContextReview(t *testing.T) {
 	cfg.MaxBubbles = 3
 	cfg.Conversation = companion.ConversationDefaults()
 	store, err := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil { t.Cleanup(func(){ _ = opened.Close() }) }
 	if err != nil {
 		t.Fatal(err)
 	}

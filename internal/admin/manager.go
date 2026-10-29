@@ -86,44 +86,49 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
-	workspaceDir string
-	directoryMu  sync.Mutex
-	accounts     *accountRegistry
-	canvasMu     sync.Mutex
-	friendsMu    sync.Mutex
-	friends      map[string]friendEntry
-	workspace    *agentworkspace.Store
-	processes    *agenthost.Jobs
-	mobile       *mobile.Control
-	speech       bailian.Config
-	agent        *agentControl
-	surfHistory  *surfHistoryStore
-	billing      *billingStore
-	assetMu      sync.Mutex
-	crossSendMu  sync.Mutex
-	storageError string
-	drainTicket  string
-	drainExpires time.Time
-	drainTimer   *time.Timer
-	mediaSeeds   []bot.MediaSeed
-	surf         surfState
-	dir          string
-	stateDir     string
-	native       Native
-	op           sync.Mutex
-	mu           sync.Mutex
-	config       Config
-	status       BotStatus
-	logs         []LogEntry
-	journal      []LogEntry
-	logSequence  uint64
-	cancel       context.CancelFunc
-	done         chan struct{}
-	memory       *companion.Store
-	tools        *toolStore
-	actions      *actionLedger
-	mcp          mcpSettings
-	plugins      *pluginLedger
+	memoryRunnerMu      sync.Mutex
+	memoryRunnerWG      sync.WaitGroup
+	memoryRunners       map[string]context.CancelFunc
+	memoryRunnersClosed bool
+	memoryServiceMu     sync.Mutex
+	workspaceDir        string
+	directoryMu         sync.Mutex
+	accounts            *accountRegistry
+	canvasMu            sync.Mutex
+	friendsMu           sync.Mutex
+	friends             map[string]friendEntry
+	workspace           *agentworkspace.Store
+	processes           *agenthost.Jobs
+	mobile              *mobile.Control
+	speech              bailian.Config
+	agent               *agentControl
+	surfHistory         *surfHistoryStore
+	billing             *billingStore
+	assetMu             sync.Mutex
+	crossSendMu         sync.Mutex
+	storageError        string
+	drainTicket         string
+	drainExpires        time.Time
+	drainTimer          *time.Timer
+	mediaSeeds          []bot.MediaSeed
+	surf                surfState
+	dir                 string
+	stateDir            string
+	native              Native
+	op                  sync.Mutex
+	mu                  sync.Mutex
+	config              Config
+	status              BotStatus
+	logs                []LogEntry
+	journal             []LogEntry
+	logSequence         uint64
+	cancel              context.CancelFunc
+	done                chan struct{}
+	memory              *companion.Store
+	tools               *toolStore
+	actions             *actionLedger
+	mcp                 mcpSettings
+	plugins             *pluginLedger
 }
 
 func NewManager(dir, stateDir string, native Native) (*Manager, error) {
@@ -273,6 +278,13 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 		m.start(c)
 	}
 	workspaceInitialized = true
+	if pending, e := m.memory.PendingRebuilds(context.Background()); e == nil {
+		for _, id := range pending {
+			if _, e = m.memoryScope(id); e == nil {
+				_ = m.startMemoryRebuild(id)
+			}
+		}
+	}
 	return m, nil
 }
 func (m *Manager) Config() ConfigView {
@@ -414,6 +426,7 @@ func (m *Manager) stop() error {
 	return nil
 }
 func (m *Manager) Close() error {
+	m.closeMemoryRunners()
 	if m.accounts != nil {
 		m.accounts.close()
 	}
@@ -428,6 +441,9 @@ func (m *Manager) Close() error {
 	err := m.stop()
 	if m.workspace != nil {
 		err = errors.Join(err, m.workspace.Close())
+	}
+	if m.memory != nil {
+		err = errors.Join(err, m.memory.Close())
 	}
 	return err
 }
@@ -496,6 +512,20 @@ func (m *Manager) start(c Config) {
 				return
 			}
 			character.Images = m.tools.imageAssets(m.native.Account())
+			character.MemoryEmbedding = func() companion.EmbeddingConfig {
+				cfg, e := m.loadMemoryServices()
+				if e != nil {
+					return companion.EmbeddingConfig{}
+				}
+				return cfg.Embedding
+			}
+			character.MemoryOptions = func() companion.MemorySettings {
+				cfg, e := m.loadMemoryServices()
+				if e != nil {
+					return companion.MemorySettings{}
+				}
+				return cfg.Settings
+			}
 			if names, ok := m.native.(companion.NameLookup); ok {
 				character.Names = names
 			}
@@ -531,6 +561,12 @@ func (m *Manager) start(c Config) {
 			return
 		}
 		reminderCtx, cancelReminders := context.WithCancel(ctx)
+		if character, ok := model.(*companion.Engine); ok {
+			memoryCtx, cancelMemory := context.WithCancel(ctx)
+			memoryDone := make(chan struct{})
+			go func() { defer close(memoryDone); m.runMemoryMaintenance(memoryCtx, character) }()
+			defer func() { cancelMemory(); <-memoryDone }()
+		}
 		reminderDone := make(chan struct{})
 		go func() { defer close(reminderDone); m.runReminders(reminderCtx) }()
 		defer func() { cancelReminders(); <-reminderDone }()

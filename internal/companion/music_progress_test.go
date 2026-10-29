@@ -36,6 +36,9 @@ func TestNativeMusicHasAcknowledgementBeforeGenerationAfterToolDiscovery(t *test
 	for _, task := range []bool{false, true} {
 		cfg := enabledConfig()
 		store, _ := NewStore(t.TempDir())
+		if opened := store; opened != nil {
+			t.Cleanup(func() { _ = opened.Close() })
+		}
 		engine, _ := New(cfg, store, &nativeMusicProgressModel{}, "global")
 		acks := 0
 		calls := 0

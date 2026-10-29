@@ -107,6 +107,9 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 	s.speechRoutes(mux)
 	s.channelsRoutes(mux)
 	s.contextRoutes(mux)
+	s.memoryServicesRoutes(mux)
+	s.memoryRoutes(mux)
+	s.memoryRebuildRoutes(mux)
 	s.canvasRoutes(mux)
 	s.toolRoutes(mux)
 	s.libraryRoutes(mux)
@@ -166,6 +169,8 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			name = "workbench.css"
 		case "/assets/dialogs.js":
 			name = "dialogs.js"
+		case "/assets/memory.js":
+			name = "memory.js"
 		case "/assets/conversations.js":
 			name = "conversations.js"
 		case "/assets/rounds.js":

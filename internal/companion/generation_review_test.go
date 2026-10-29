@@ -10,6 +10,9 @@ import (
 func TestRunningRequestReviewIsNotUnsentReplyReplacement(t *testing.T) {
 	model := &fakeModel{answer: `{"action":"replace","messages":["new reply"]}`}
 	store, e := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -39,6 +42,9 @@ func TestRunningRequestReviewIsNotUnsentReplyReplacement(t *testing.T) {
 func TestMediaCaptionReviewRetainsVerifiedAttachmentContext(t *testing.T) {
 	m := &fakeModel{answer: `{"action":"continue","reason":"补充已发视频的介绍"}`}
 	store, _ := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	e, _ := New(enabledConfig(), store, m, "")
 	_, err := e.ReviewMediaCaption(context.Background(), Input{Surf: true, Mode: "proactive", Text: "找个有趣的视频"}, nil, []string{"这个视频很有趣"}, nil, []DeliveredAttachment{{Kind: "video", Title: "合成短视频", State: "accepted"}})
 	if err != nil {

@@ -272,6 +272,11 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 			intentEmitted = false
 		}
 		turns = compactActionTurns(system, turns)
+		catalogBytes, _ := json.Marshal(activeTools)
+		settings := e.memorySettings()
+		if err := ValidateContextWindow(system, turns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
+			return Decision{}, err
+		}
 		var answer string
 		var err error
 		if len(pendingCalls) > 0 {

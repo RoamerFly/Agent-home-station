@@ -311,6 +311,9 @@ func TestOwnerReviewActuallyCallsModelForOrdinaryChatWithoutForcingReply(t *test
 	c.Permissions.ObserveGroups = true
 	c.Permissions.AutonomousGroups = true
 	store, _ := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	model := &ownerReviewModel{}
 	engine, e := companion.New(c, store, model, "test")
 	if e != nil {
@@ -343,6 +346,9 @@ func TestConsecutiveOrdinaryMessagesCallModelWithoutAnyCooldown(t *testing.T) {
 	c.Permissions.ObserveGroups = true
 	c.Permissions.AutonomousGroups = true
 	store, _ := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	model := &ownerReviewModel{}
 	engine, e := companion.New(c, store, model, "test")
 	if e != nil {

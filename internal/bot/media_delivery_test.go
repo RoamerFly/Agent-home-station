@@ -149,6 +149,9 @@ func (n *mediaFake) CancelMediaJob(context.Context, string) (linuxnative.ToolSta
 func mediaWorker(t *testing.T) (*Worker, *mediaFake, *companion.Engine, companion.Input) {
 	t.Helper()
 	store, e := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if e != nil {
 		t.Fatal(e)
 	}

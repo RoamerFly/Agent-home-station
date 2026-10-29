@@ -22,6 +22,9 @@ func TestPublicShareMemoryAndRefreshPreserveAudioAfterLongVisualDescription(t *t
 		t.Fatal("public share audio lost")
 	}
 	store, err := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +54,9 @@ func TestVideoMemoryDoesNotInventAudioOrRewriteOrdinaryTurns(t *testing.T) {
 
 func TestObservationUpdateReportsMissingAndConcurrentTurnsWithoutInserting(t *testing.T) {
 	store, err := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

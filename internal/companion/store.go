@@ -2,13 +2,13 @@ package companion
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +16,10 @@ import (
 )
 
 type Turn struct {
+	EventID           string             `json:"event_id,omitempty"`
+	FullText          string             `json:"-"`
+	HasOriginal       bool               `json:"-"`
+	FullObservation   string             `json:"-"`
 	DeviceObservation *DeviceObservation `json:"device_observation,omitempty"`
 	Media             *MediaMemory       `json:"media,omitempty"`
 	SenderName        string             `json:"sender_name,omitempty"`
@@ -27,8 +31,9 @@ type Turn struct {
 	Time              time.Time          `json:"time"`
 }
 type Scope struct {
-	Summary         string `json:"summary,omitempty"`
-	CompressedCount int    `json:"compressed_count,omitempty"`
+	RecallGeneration int    `json:"recall_generation,omitempty"`
+	Summary          string `json:"summary,omitempty"`
+	CompressedCount  int    `json:"compressed_count,omitempty"`
 	// SummaryBoundary is the conversation snapshot length at compression time.
 	// The UI folds that snapshot, while Context still retains the recent tail.
 	SummaryBoundary int           `json:"summary_boundary,omitempty"`
@@ -71,6 +76,7 @@ type persisted struct {
 	Decisions      int              `json:"decisions"`
 }
 type Store struct {
+	db            *sql.DB
 	compressionMu sync.Mutex
 	compressing   map[string]bool
 	mu            sync.Mutex
@@ -83,6 +89,10 @@ func ScopeID(channel, account, thread string) string {
 	return hex.EncodeToString(sum[:])
 }
 func NewStore(dir string) (*Store, error) {
+	return openSQLiteStore(dir)
+}
+
+func readLegacyStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, errors.New("character memory directory unavailable")
 	}
@@ -131,56 +141,7 @@ func copyScope(scope Scope) Scope {
 // Transactions become visible only after an atomic, private write. No caller
 // can acquire a send/proactive budget from a failed persistence operation.
 func (s *Store) transaction(change func(*persisted) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	before, _ := json.Marshal(s.data)
-	rollback := func() {
-		var restored persisted
-		_ = json.Unmarshal(before, &restored)
-		s.data = restored
-	}
-	if err := change(&s.data); err != nil {
-		rollback()
-		return err
-	}
-	b, err := json.Marshal(s.data)
-	if err != nil || len(b) > 64<<20 {
-		rollback()
-		return errors.New("character memory storage bound reached")
-	}
-	f, err := os.CreateTemp(filepath.Dir(s.path), ".character-*")
-	if err != nil {
-		rollback()
-		return errors.New("character memory cannot be saved")
-	}
-	defer os.Remove(f.Name())
-	if err = f.Chmod(0600); err == nil {
-		_, err = f.Write(b)
-	}
-	if err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err != nil || closeErr != nil {
-		rollback()
-		return errors.New("character memory write failed")
-	}
-	if os.Rename(f.Name(), s.path) != nil {
-		rollback()
-		return errors.New("character memory replace failed")
-	}
-	if runtime.GOOS != "windows" {
-		dir, err := os.Open(filepath.Dir(s.path))
-		if err != nil {
-			return errors.New("character memory directory unavailable")
-		}
-		err = dir.Sync()
-		dir.Close()
-		if err != nil {
-			return errors.New("character memory directory sync failed")
-		}
-	}
-	return nil
+	return s.transact(nil, change)
 }
 func prune(scope Scope, c Config, now time.Time) Scope {
 	cutoff := now.Add(-time.Duration(c.MemoryDays) * 24 * time.Hour)
@@ -210,7 +171,7 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 	if input.Preview {
 		return nil
 	}
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(input.Channel, input.Account, input.Thread), func(data *persisted) error {
 		id := ScopeID(input.Channel, input.Account, input.Thread)
 		scope, exists := data.Scopes[id]
 		if !exists {
@@ -236,7 +197,7 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 			if parsed, err := time.Parse(time.RFC3339, input.MessageTime); err == nil && !parsed.After(now) {
 				stamp = parsed
 			}
-			scope.Messages = append(scope.Messages, Turn{TraceID: input.TraceID, Role: "user", Text: boundedInputMemory(input.Text), Sender: boundedText(input.Sender, 128), SenderName: boundedText(input.SenderName, 256), SenderNameSource: input.SenderNameSource, Time: stamp})
+			scope.Messages = append(scope.Messages, Turn{TraceID: input.TraceID, Role: "user", Text: boundedInputMemory(input.Text), FullText: UserRequestText(input.Text), HasOriginal: true, FullObservation: strings.TrimPrefix(input.Text, UserRequestText(input.Text)), Sender: boundedText(input.Sender, 128), SenderName: boundedText(input.SenderName, 256), SenderNameSource: input.SenderNameSource, Time: stamp})
 			scope, err = s.pruneStored(scope, c, now)
 			if err != nil {
 				return err
@@ -265,13 +226,13 @@ func (s *Store) Accepted(input Input, text string, c Config, now time.Time) erro
 	if input.Preview || !c.Permissions.Remember {
 		return nil
 	}
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(input.Channel, input.Account, input.Thread), func(data *persisted) error {
 		id := ScopeID(input.Channel, input.Account, input.Thread)
 		scope, ok := data.Scopes[id]
 		if !ok {
 			return errors.New("character scope missing")
 		}
-		scope.Messages = append(scope.Messages, Turn{Role: "assistant", Text: boundedText(text, 2048), SenderName: c.Name, SenderNameSource: "character", Time: now})
+		scope.Messages = append(scope.Messages, Turn{Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
 		recordAutonomyAccepted(&scope, input, c, now)
 		clean, err := s.pruneStored(scope, c, now)
 		if err != nil {
@@ -285,7 +246,7 @@ func (s *Store) ClaimDecision(input Input, c Config, now time.Time) error {
 	if input.Preview {
 		return nil
 	}
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(input.Channel, input.Account, input.Thread), func(data *persisted) error {
 		hour := now.UTC().Format("2006-01-02T15")
 		if data.DecisionHour != hour {
 			data.DecisionHour = hour
@@ -303,7 +264,7 @@ func (s *Store) ClaimDecision(input Input, c Config, now time.Time) error {
 	})
 }
 func (s *Store) ClaimReply(c Config, now time.Time) error {
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction("", func(data *persisted) error {
 		hour := now.UTC().Format("2006-01-02T15")
 		if data.ReplyHour != hour {
 			data.ReplyHour = hour
@@ -346,7 +307,7 @@ func (s *Store) ProactiveCandidates(channel, account string, c Config, now time.
 	return out
 }
 func (s *Store) ClaimProactive(input Input, c Config, now time.Time) error {
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(input.Channel, input.Account, input.Thread), func(data *persisted) error {
 		// Persist the evaluation and its next randomized due time before the
 		// model runs. This is restart-safe scheduling, not a sending allowance.
 		if state := proactiveStatus(*data, input.Channel, input.Account, input.Thread, c, now); state.Reason != "ready" {
@@ -400,7 +361,7 @@ func (s *Store) Note(id, text string) error {
 	if !validScopeID(id) || text == "" || len(text) > 1024 || !utf8.ValidString(text) {
 		return errors.New("关系备注需要 1 至 1024 字节的文字")
 	}
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(id, func(data *persisted) error {
 		scope, ok := data.Scopes[id]
 		if !ok {
 			return errors.New("会话不存在")
@@ -417,7 +378,7 @@ func (s *Store) Clear(id string) error {
 	if !validScopeID(id) {
 		return errors.New("invalid memory scope")
 	}
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(id, func(data *persisted) error {
 		scope, ok := data.Scopes[id]
 		if !ok {
 			return errors.New("memory scope not found")
@@ -429,6 +390,7 @@ func (s *Store) Clear(id string) error {
 		scope.CompressedCount = 0
 		scope.SummaryBoundary = 0
 		scope.SummaryUpdated = time.Time{}
+		scope.RecallGeneration++
 		data.Scopes[id] = scope
 		return nil
 	})

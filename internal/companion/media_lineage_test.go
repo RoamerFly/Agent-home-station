@@ -12,6 +12,9 @@ import (
 func TestMediaRequestAssociationSurvivesRecoveryWithoutLosingOrigin(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := enabledConfig()
 	c.Permissions.Remember = true
 	in := Input{Channel: "wechat", Account: "test", Thread: "room", Sender: "alice", SenderName: "小甲", TraceID: "delivery", OriginTraceID: "original", TaskID: "task-1"}
@@ -23,6 +26,9 @@ func TestMediaRequestAssociationSurvivesRecoveryWithoutLosingOrigin(t *testing.T
 		t.Fatal(err)
 	}
 	s, err := NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +110,9 @@ func TestPreparedBundleDoesNotForceAReplyWhenModelChoosesSilence(t *testing.T) {
 func TestBackfillMediaMetadataKeepsReceiptChronologyAndScope(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := enabledConfig()
 	c.Permissions.Remember = true
 	in := Input{Channel: "wechat", Account: "test", Thread: "one", TraceID: "request"}

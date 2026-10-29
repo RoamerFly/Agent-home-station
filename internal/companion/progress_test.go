@@ -44,6 +44,9 @@ func TestProgressFollowsModelChoicePrecedesToolAndNeverLeaksIntoPreview(t *testi
 		tools := &orderedTool{order: &order}
 		model := &sequenceModel{answers: []string{`{"action":"tool","tool":"web_search","progress":"收到，我找找～","arguments":{"query":"song artist"}}`, `{"action":"reply","messages":["这个是真实链接 https://example.org/real.mp3"]}`}}
 		store, _ := NewStore(t.TempDir())
+		if opened := store; opened != nil {
+			t.Cleanup(func() { _ = opened.Close() })
+		}
 		e, _ := New(enabledConfig(), store, model, "role")
 		e.Tools = tools
 		e.MaxToolCalls = 2
@@ -68,6 +71,9 @@ func TestSavedTaskProgressReachesHandlerAndMissingProgressStaysEmpty(t *testing.
 		call, _ := json.Marshal(map[string]any{"action": "tool", "tool": "web_search", "progress": progress, "arguments": map[string]string{"query": "public topic"}})
 		model := &sequenceModel{answers: []string{string(call), `{"action":"silent","messages":[]}`}}
 		store, _ := NewStore(t.TempDir())
+		if opened := store; opened != nil {
+			t.Cleanup(func() { _ = opened.Close() })
+		}
 		e, _ := New(enabledConfig(), store, model, "role")
 		e.Tools = tools
 		e.MaxToolCalls = 2
@@ -131,6 +137,9 @@ func TestSemanticMediaIntentPrecedesToolsAndIsSuppressedInPreview(t *testing.T) 
 		tools := &orderedTool{order: &order}
 		model := &sequenceModel{answers: []string{`{"action":"tool","delivery_intent":"file","tool":"web_search","arguments":{"query":"song source"}}`, `{"action":"reply","delivery_intent":"file","messages":["这个是真实链接 https://example.org/real.mp3"]}`}}
 		store, _ := NewStore(t.TempDir())
+		if opened := store; opened != nil {
+			t.Cleanup(func() { _ = opened.Close() })
+		}
 		e, _ := New(enabledConfig(), store, model, "role")
 		e.Tools, e.MaxToolCalls = tools, 2
 		ctx := WithMediaIntent(context.Background(), func(_ context.Context, intent string) error {
