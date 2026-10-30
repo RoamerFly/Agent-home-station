@@ -9,6 +9,18 @@ permissions:
   contents: read
 
 jobs:
+  windows-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build portable desktop EXE and test lifecycle controller
+        shell: powershell
+        run: ./scripts/Build-Desktop.ps1 -Test
+
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
