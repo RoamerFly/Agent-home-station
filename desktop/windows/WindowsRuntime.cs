@@ -89,6 +89,7 @@ namespace WechatAgent.Desktop {
                 }
             }
             job = new ProcessJob();
+            serverId = generation = null;
             native = OwnedProcess.Start(d.NativeExe, NativeArgs("serve"), d.Workspace, null, Path.Combine(d.Root, "logs", "native.log"), job);
             var deadline = DateTime.UtcNow.AddSeconds(90);
             while (true) {
