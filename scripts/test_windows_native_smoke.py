@@ -23,7 +23,12 @@ class WindowsNativeSmoke(unittest.TestCase):
         scratch = ROOT / "temp" / "windows-native-smoke" / ("合成 空白实例 " + str(time.time_ns()))
         scratch.mkdir(parents=True)
         shutil.copytree(package / "runtimes", scratch / "runtimes")
-        (scratch / "secrets").mkdir()
+        # Use the same explicit user ownership as a fresh desktop install.
+        # Elevated Windows CI otherwise gives Python-created folders the
+        # Administrators group owner, which the native backend correctly rejects.
+        subprocess.run([str(package / "DesktopTests.exe"), "--prepare", str(scratch)],
+                       check=True, capture_output=True, timeout=30,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
         reservations = [socket.socket(), socket.socket()]
         try:
             for listener in reservations:

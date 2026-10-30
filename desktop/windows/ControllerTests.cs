@@ -160,6 +160,10 @@ namespace WechatAgent.Desktop {
             Console.OutputEncoding = new System.Text.UTF8Encoding(false);
             // Only this test executable implements these synthetic server
             // responses; the shipped Go executable uses its real SQLite probe.
+            if (args.Length == 2 && args[0] == "--prepare") {
+                WindowsRuntime.PrivateDirectory(Path.Combine(Path.GetFullPath(args[1]), "secrets"));
+                return 0;
+            }
             if (args.Length == 1 && args[0] == "--desktop") return 23;
             if (args.Length == 2 && args[0] == "desktop-busy") { Console.WriteLine("{\"pending\":0}"); return 0; }
             if (args.Length == 2 && args[0] == "--failure-cycle") {
