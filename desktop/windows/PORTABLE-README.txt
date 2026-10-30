@@ -7,7 +7,8 @@
 
 本目录可放在可写的磁盘位置。请整体保留 EXE、runtimes 和许可证。
 用户资料在 data；页面会话在 secrets；升级时保留这两个目录。
-无需 WSL、Docker、Python、Rust 或 Node。WebView2 使用系统已安装的运行时。
+无需 WSL、Docker、Python、Rust 或 Node。需有 Microsoft Visual C++ x64 运行库
+（提供 VCRUNTIME140.dll）和系统 WebView2 Runtime。
 语音/视频处理另需 FFmpeg 与 FFprobe。音乐模型及 CUDA 是可选独立资源。
 
 这个版本使用独立资料，不会自动导入官方 Windows 微信的旧聊天记录，

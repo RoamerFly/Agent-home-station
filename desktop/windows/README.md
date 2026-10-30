@@ -14,7 +14,7 @@
 
 首次源码构建需要 Go、Git、Rust 1.93.1、MSVC C++/Windows SDK 和完整的原生 Windows Perl（例如 Strawberry Perl，可通过构建环境变量 `PERL` 指定）。这些是构建依赖，使用者无需安装。`Build-WindowsNative.ps1` 固定使用 `components/native-client/source-manifest.json` 的上游提交与累计补丁，核验补丁哈希；构建 `wx.exe` 和无 CGO 的 `wechat-admin.exe`，同时生成 SHA-256 清单和上游许可证。Go 管理端从本仓库当前提交的隔离快照构建，排除已有未提交工作；开发修改须提交后再构建便携包，清单记录该提交。原生构建使用较短的 `temp/wn-target`，避免 OpenSSL/MSVC 嵌套长路径失败。原生程序位于便携包 `runtimes/windows-x64/`，不会下载或打包聊天、模型及 AI 环境。程序包须整体复制。
 
-双击便携包里的 EXE 即可运行，不要求 WSL、Docker、Python、Node 或官方微信桌面版。首次在管理页扫码并配置模型及会话；Agent 默认未启用。系统需有 WebView2 Runtime；语音/视频准备还需要目标机器安装 FFmpeg/FFprobe。首次启动使用空的独立资料，不能读取官方 Windows 微信旧聊天。当前可选的 Linux 音乐服务、ASR 环境与既有私有模型没有自动迁移。
+双击便携包里的 EXE 即可运行，不要求 WSL、Docker、Python、Node 或官方微信桌面版。首次在管理页扫码并配置模型及会话；Agent 默认未启用。系统需有 WebView2 Runtime，以及 Microsoft Visual C++ x64 运行库（当前原生程序导入 `VCRUNTIME140.dll`，由系统安装，未把开发机 DLL 混入包中）；语音/视频准备还需要目标机器安装 FFmpeg/FFprobe。首次启动使用空的独立资料，不能读取官方 Windows 微信旧聊天。当前可选的 Linux 音乐服务、ASR 环境与既有私有模型没有自动迁移。
 
 无配置时数据根为程序目录的 `data/`，端口为管理页 `8081`、微信后台 `6174`，账号 ID 为 `desktop`。可在 `secrets/local-deployment.json` 显式配置数据根和回环端口：
 

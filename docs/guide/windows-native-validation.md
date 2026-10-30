@@ -5,6 +5,7 @@
 ## 本机验证
 
 - 原生后台按 `components/native-client/source-manifest.json` 的固定提交与累计补丁构建，包含现有语音、分享与引用修复；并非直接用较新的上游发布包代替。使用 `--locked` 构建通过，保留上游许可证及媒体/协议/SILK 声明。
+- 原生 `wechat-platform` 与 `wechat-config` 的 Windows release 测试共 12 项通过，涵盖私有 ACL、公共权限拒绝、目录链接拒绝、进程身份与配置解析。PE 依赖检查确认原生程序导入 `VCRUNTIME140.dll`，已在使用说明列为系统先决条件；Go 程序只导入 Windows 系统内核库。
 - Go 管理端从本项目已提交源码快照编译，无 CGO；未带入其他未提交工作。Windows 与 Linux 管理端均构建通过。
 - `go test ./...`、`go vet ./...`、仓库凭据检查、3 项结构检查、28 个前端 JS 语法检查通过。
 - 桌面控制器 43 项断言通过，包含原 WSL 启停兼容、排空失败/取消保护、Windows 原生配置、程序哈希拒绝、路径兼容和 Job Object 进程归属。
