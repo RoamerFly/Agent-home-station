@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [string]$NativeSourceDirectory)
+﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [string]$NativeSourceDirectory)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace 'dist\windows-desktop'}
