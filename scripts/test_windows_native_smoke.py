@@ -4,6 +4,7 @@ Set WECHAT_WINDOWS_NATIVE_PACKAGE to a locally built portable package with
 DesktopTests.exe. The default source suite never launches account software.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -51,6 +52,24 @@ class WindowsNativeSmoke(unittest.TestCase):
                   "package_manifest": json.loads((package / "runtimes/windows-x64/windows-native-manifest.json").read_text(encoding="utf-8"))}
         (scratch / "result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
         print("Native Windows lifecycle evidence:", scratch)
+
+        # Inject a deliberately failing Web server only into this disposable
+        # empty instance. Retry must not retain log locks from an exited child.
+        admin = scratch / "runtimes/windows-x64/wechat-admin.exe"
+        shutil.copyfile(package / "DesktopTests.exe", admin)
+        manifest_path = scratch / "runtimes/windows-x64/windows-native-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["admin_sha256"] = hashlib.sha256(admin.read_bytes()).hexdigest()
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        failed = subprocess.run([str(package / "DesktopTests.exe"), "--failure-cycle", str(scratch)],
+                                capture_output=True, encoding="utf-8", timeout=120,
+                                creationflags=subprocess.CREATE_NO_WINDOW)
+        (scratch / "failed-start-result.txt").write_text(failed.stdout + failed.stderr, encoding="utf-8")
+        self.assertEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+        self.assertIn("recovery passed twice", failed.stdout)
+        for port in ports:
+            with socket.socket() as connection:
+                self.assertNotEqual(connection.connect_ex(("127.0.0.1", port)), 0)
 
 
 if __name__ == "__main__":

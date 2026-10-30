@@ -142,6 +142,24 @@ namespace WechatAgent.Desktop {
         }
         static int Main(string[] args) { try {
             Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+            // Only this test executable implements these synthetic server
+            // responses; the shipped Go executable uses its real SQLite probe.
+            if (args.Length == 1 && args[0] == "--desktop") return 23;
+            if (args.Length == 2 && args[0] == "desktop-busy") { Console.WriteLine("{\"pending\":0}"); return 0; }
+            if (args.Length == 2 && args[0] == "--failure-cycle") {
+                var config = Deployment.Load(args[1]);
+                if (!config.Windows) throw new Exception("failure cycle requires isolated native deployment");
+                using (var c = new ServiceController(config)) {
+                    for (int i = 0; i < 2; i++) {
+                        bool exited = false;
+                        try { c.Start(CancellationToken.None).GetAwaiter().GetResult(); }
+                        catch (InvalidOperationException e) { exited = e.Message.Contains("提前退出"); }
+                        Assert(exited, "early Web exit must remain recoverable without leaked log handles");
+                        c.Stop(CancellationToken.None).GetAwaiter().GetResult();
+                    }
+                }
+                Console.WriteLine("Native Windows failed-start recovery passed twice."); return 0;
+            }
             if (args.Length == 1 && args[0] == "--synthetic-child") { Thread.Sleep(60000); return 0; }
             if (args.Length == 2 && args[0] == "--cycle") {
                 var config = Deployment.Load(args[1]);

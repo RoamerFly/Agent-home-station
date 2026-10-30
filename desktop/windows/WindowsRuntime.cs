@@ -68,6 +68,9 @@ namespace WechatAgent.Desktop {
         internal async Task Start(CancellationToken cancel) {
             VerifyBundle(d);
             if (AnyRunning) { CheckAlive(); return; }
+            // A crashed process can still own its log/pipe handles. Release
+            // the stopped instance before retrying, without adopting any PID.
+            if (native != null || web != null) await Stop();
             FreePort(d.Url); FreePort(d.NativeUrl);
             PrivateDirectory(d.Root);
             PrivateDirectory(Path.Combine(d.Workspace, "secrets"));
@@ -133,13 +136,16 @@ namespace WechatAgent.Desktop {
             return pending;
         }
         internal async Task Stop() {
-            if (WebRunning) { await web.StopWeb(); web.Dispose(); web = null; }
-            if (native != null && native.Alive) {
-                if (String.IsNullOrEmpty(serverId) || String.IsNullOrEmpty(generation)) {
+            if (web != null) {
+                if (web.Alive) await web.StopWeb(); else await web.WaitStopped();
+                web.Dispose(); web = null;
+            }
+            if (native != null) {
+                if (native.Alive && (String.IsNullOrEmpty(serverId) || String.IsNullOrEmpty(generation))) {
                     // Startup failed before admission; this process cannot have
                     // received work through our Web. Only terminate our child.
                     native.StopUnadmitted();
-                } else {
+                } else if (native.Alive) {
                     await NativeRequest("/v1/daemon/shutdown", new { pid = native.ID, serverId = serverId, ownershipGeneration = generation });
                 }
                 await native.WaitStopped(); native.Dispose(); native = null;
