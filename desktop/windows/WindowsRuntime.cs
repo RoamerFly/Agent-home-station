@@ -41,11 +41,19 @@ namespace WechatAgent.Desktop {
         }
         internal static void PrivateDirectory(string path) {
             NoLinks(path);
-            var acl = new DirectorySecurity(); acl.SetAccessRuleProtection(true, false);
+            var user = WindowsIdentity.GetCurrent().User;
+            // Elevated Windows tokens may default new ownership to Administrators.
+            // Explicit ownership must agree with the native backend's user SID.
+            var exists = Directory.Exists(path);
+            if (exists && !user.Equals(Directory.GetAccessControl(path, AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier))))
+                throw new InvalidOperationException("数据目录不属于当前用户，拒绝接管或自动更改所有者。");
+            var acl = new DirectorySecurity();
+            if (!exists) acl.SetOwner(user);
+            acl.SetAccessRuleProtection(true, false);
             var inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
-            acl.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
+            acl.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
             acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
-            if (!Directory.Exists(path)) Directory.CreateDirectory(path, acl); else Directory.SetAccessControl(path, acl);
+            if (!exists) Directory.CreateDirectory(path, acl); else Directory.SetAccessControl(path, acl);
         }
         internal static void VerifyBundle(Deployment config) {
             var dir = Path.GetDirectoryName(config.NativeExe); NoLinks(dir); NoLinks(config.Root);

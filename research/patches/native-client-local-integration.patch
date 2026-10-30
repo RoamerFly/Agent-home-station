@@ -5529,3 +5529,409 @@ index 0000000..8d69ce7
 +    assert_eq!(std::fs::read(account.profile_path.join("preserve")).unwrap(), b"synthetic content");
 +    drop(held);
 +}
+diff --git a/packages/native-client-rust/crates/wechat-profile/src/writer.rs b/packages/native-client-rust/crates/wechat-profile/src/writer.rs
+index 1a30f6a..b8f6cc2 100644
+--- a/packages/native-client-rust/crates/wechat-profile/src/writer.rs
++++ b/packages/native-client-rust/crates/wechat-profile/src/writer.rs
+@@ -247,7 +247,7 @@ pub(crate) fn find_database(location: &ProfileLocation, basename: &str) -> Resul
+                         .map_err(|_| ProfileError::InvalidProfile)?
+                         .to_str()
+                         .ok_or(ProfileError::InvalidProfile)?
+-                        .into(),
++                        .replace('\\', "/"),
+                 );
+             }
+         }
+diff --git a/packages/native-client-rust/crates/wechat-core/src/identity.rs b/packages/native-client-rust/crates/wechat-core/src/identity.rs
+index 6d0f1bd..695c246 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/identity.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/identity.rs
+@@ -296,7 +296,7 @@ pub(super) fn database_files(
+                 path.strip_prefix(root)?
+                     .to_str()
+                     .context("invalid database path")?
+-                    .to_owned(),
++                    .replace('\\', "/"),
+             );
+         }
+     }
+diff --git a/packages/native-client-rust/crates/wechat-core/src/saved_login.rs b/packages/native-client-rust/crates/wechat-core/src/saved_login.rs
+index 9e089ed..1f21f1e 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/saved_login.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/saved_login.rs
+@@ -75,7 +75,7 @@ pub(super) fn read_saved_file(
+     Ok(bytes)
+ }
+ fn require_saved_login_store(binding: &IdentityBinding) -> Result<()> {
+-    if binding.relative != "xwechat_files/all_users/config/global_config" {
++    if binding.relative.replace('\\', "/") != "xwechat_files/all_users/config/global_config" {
+         bail!("saved_login_store_unsupported");
+     }
+     Ok(())
+@@ -464,6 +464,8 @@ mod tests {
+             format_key: vec![9; 16],
+         };
+         require_saved_login_store(&binding).unwrap();
++        let windows = IdentityBinding { relative: r"xwechat_files\all_users\config\global_config".into(), format_key: vec![9; 16] };
++        require_saved_login_store(&windows).unwrap();
+         for relative in [
+             "xwechat_files/all_users/config/other",
+             "xwechat_files/synthetic/config/login_configv2",
+diff --git a/packages/native-client-rust/crates/wechat-profile/src/media.rs b/packages/native-client-rust/crates/wechat-profile/src/media.rs
+index 2875416..dd9685a 100644
+--- a/packages/native-client-rust/crates/wechat-profile/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-profile/src/media.rs
+@@ -172,7 +172,12 @@ fn open_cache(
+     relative: &Path,
+     max: usize,
+ ) -> Result<(fs::File, fs::Metadata, std::path::PathBuf)> {
+-    if !crate::keys::valid_relative_path(relative.to_str().ok_or(ProfileError::InvalidMetadata)?) {
++    let portable = relative.to_str().ok_or(ProfileError::InvalidMetadata)?;
++    // PathBuf joins use the host separator; validate the same portable
++    // namespace on Windows without relaxing external manifest path checks.
++    #[cfg(windows)]
++    let portable = portable.replace('\\', "/");
++    if !crate::keys::valid_relative_path(&portable) {
+         return Err(ProfileError::InvalidMetadata);
+     }
+     let mut here = root.to_path_buf();
+diff --git a/packages/native-client-rust/crates/wechat-profile/tests/login_storage.rs b/packages/native-client-rust/crates/wechat-profile/tests/login_storage.rs
+index aed7d9e..48ff9ab 100644
+--- a/packages/native-client-rust/crates/wechat-profile/tests/login_storage.rs
++++ b/packages/native-client-rust/crates/wechat-profile/tests/login_storage.rs
+@@ -4,7 +4,7 @@ use std::fs;
+ use wechat_profile::*;
+ fn fixture() -> tempfile::TempDir {
+     let d = tempfile::tempdir().unwrap();
+-    let root = d.path();
++    let root = d.path().canonicalize().unwrap();
+     let global = root.join("xwechat_files/all_users/config");
+     fs::create_dir_all(&global).unwrap();
+     let seed = create_mmkv_v4(&[7; 16], [3; 16], 4096).unwrap();
+@@ -38,10 +38,10 @@ fn fixture() -> tempfile::TempDir {
+ fn stopped_saved_login_retains_locked_state_and_uses_native_legacy_fallback() {
+     let d = fixture();
+     assert!(matches!(
+-        read_profile_saved_login(d.path(), &[7; 16], false),
++        read_profile_saved_login(d.path().canonicalize().unwrap(), &[7; 16], false),
+         Err(ProfileError::SnapshotRequired)
+     ));
+-    let got = read_profile_saved_login(d.path(), &[7; 16], true).unwrap();
++    let got = read_profile_saved_login(d.path().canonicalize().unwrap(), &[7; 16], true).unwrap();
+     assert_eq!(got.identity.username, "synthetic_self");
+     assert_eq!(got.identity.uin, 7);
+     assert_eq!(got.identity.device_id, b"synthetic-device-16");
+@@ -55,13 +55,13 @@ fn stopped_saved_login_retains_locked_state_and_uses_native_legacy_fallback() {
+     assert_eq!(got.key_info.as_slice(), b"synthetic legacy key info");
+     assert!(got.cookie.is_empty());
+     assert!(got.pc_account_name.is_none());
+-    assert!(read_profile_saved_login(d.path(), &[8; 16], true).is_err());
++    assert!(read_profile_saved_login(d.path().canonicalize().unwrap(), &[8; 16], true).is_err());
+ }
+ #[test]
+ fn qr_recovery_retains_selected_key_info_without_requiring_reusable_auto_auth() {
+     let d = fixture();
+     let global = d
+-        .path()
++        .path().canonicalize().unwrap()
+         .join("xwechat_files/all_users/config/global_config");
+     let pair = stage_mmkv_values(
+         &fs::read(&global).unwrap(),
+@@ -72,15 +72,15 @@ fn qr_recovery_retains_selected_key_info_without_requiring_reusable_auto_auth()
+     .unwrap();
+     fs::write(&global, pair.data()).unwrap();
+     fs::write(global.with_extension("crc"), pair.metadata()).unwrap();
+-    assert!(read_profile_saved_login(d.path(), &[7; 16], true).is_err());
++    assert!(read_profile_saved_login(d.path().canonicalize().unwrap(), &[7; 16], true).is_err());
+     let before = fs::read(&global).unwrap();
+-    let (key_info, source) = read_profile_key_info(d.path(), "synthetic_self", true).unwrap();
++    let (key_info, source) = read_profile_key_info(d.path().canonicalize().unwrap(), "synthetic_self", true).unwrap();
+     assert_eq!(key_info.as_slice(), b"synthetic legacy key info");
+     assert_eq!(source, KeyInfoSource::LegacyFallback);
+     assert_eq!(fs::read(&global).unwrap(), before);
+-    assert!(read_profile_key_info(d.path(), "different_account", true).is_err());
++    assert!(read_profile_key_info(d.path().canonicalize().unwrap(), "different_account", true).is_err());
+     assert!(matches!(
+-        read_profile_key_info(d.path(), "synthetic_self", false),
++        read_profile_key_info(d.path().canonicalize().unwrap(), "synthetic_self", false),
+         Err(ProfileError::SnapshotRequired)
+     ));
+ }
+@@ -88,7 +88,7 @@ fn qr_recovery_retains_selected_key_info_without_requiring_reusable_auto_auth()
+ fn newest_database_row_is_used_or_falls_back_without_selecting_an_older_row() {
+     let d = fixture();
+     let folder = d
+-        .path()
++        .path().canonicalize().unwrap()
+         .join("xwechat_files/all_users/login/synthetic_self");
+     fs::create_dir_all(&folder).unwrap();
+     let path = folder.join("key_info.db");
+@@ -103,7 +103,7 @@ fn newest_database_row_is_used_or_falls_back_without_selecting_an_older_row() {
+     )
+     .unwrap();
+     let before = fs::read(&path).unwrap();
+-    let got = read_profile_saved_login(d.path(), &[7; 16], true).unwrap();
++    let got = read_profile_saved_login(d.path().canonicalize().unwrap(), &[7; 16], true).unwrap();
+     assert_eq!(got.key_info_source, KeyInfoSource::LatestDatabaseRow);
+     assert_eq!(got.key_info.as_slice(), bytes);
+     assert_eq!(before, fs::read(&path).unwrap());
+@@ -112,7 +112,7 @@ fn newest_database_row_is_used_or_falls_back_without_selecting_an_older_row() {
+         [username],
+     )
+     .unwrap();
+-    let got = read_profile_saved_login(d.path(), &[7; 16], true).unwrap();
++    let got = read_profile_saved_login(d.path().canonicalize().unwrap(), &[7; 16], true).unwrap();
+     assert_eq!(got.key_info_source, KeyInfoSource::LegacyFallback);
+     assert_eq!(got.key_info.as_slice(), b"synthetic legacy key info");
+ }
+@@ -121,7 +121,7 @@ fn saved_login_generation_and_legacy_publication_are_bound_and_retry_safe() {
+     use sha2::Sha256;
+     let d = fixture();
+     let global = d
+-        .path()
++        .path().canonicalize().unwrap()
+         .join("xwechat_files/all_users/config/global_config");
+     let data = fs::read(&global).unwrap();
+     let metadata = fs::read(global.with_extension("crc")).unwrap();
+@@ -143,7 +143,7 @@ fn saved_login_generation_and_legacy_publication_are_bound_and_retry_safe() {
+         allow_plaintext: false,
+     };
+     publish_mmkv_append(&global, &staged, &options).unwrap();
+-    let path = d.path().join(".xwechat/login/synthetic_self/key_info.dat");
++    let path = d.path().canonicalize().unwrap().join(".xwechat/login/synthetic_self/key_info.dat");
+     assert!(matches!(
+         publish_legacy_key_info(&path, login.key_info, None, &options),
+         Err(ProfileError::SourceChanged)
+@@ -151,7 +151,7 @@ fn saved_login_generation_and_legacy_publication_are_bound_and_retry_safe() {
+     let hash = hex::encode(Sha256::digest(fs::read(&path).unwrap()));
+     assert!(publish_legacy_key_info(&path, login.key_info, Some(&hash), &options).unwrap());
+     assert!(!publish_legacy_key_info(&path, login.key_info, Some(&hash), &options).unwrap());
+-    let got = read_profile_saved_login(d.path(), &[7; 16], true).unwrap();
++    let got = read_profile_saved_login(d.path().canonicalize().unwrap(), &[7; 16], true).unwrap();
+     assert_eq!(got.auto_auth_key.as_slice(), token);
+     assert_eq!(got.key_info.as_slice(), login.key_info);
+     assert_eq!(got.logout_locked, Some(true));
+@@ -160,7 +160,7 @@ fn saved_login_generation_and_legacy_publication_are_bound_and_retry_safe() {
+ fn known_keyinfo_database_and_legacy_publish_native_rows_with_cas_and_replay() {
+     let d = fixture();
+     let folder = d
+-        .path()
++        .path().canonicalize().unwrap()
+         .join("xwechat_files/all_users/login/synthetic_self");
+     fs::create_dir_all(&folder).unwrap();
+     let path = folder.join("key_info.db");
+@@ -204,7 +204,7 @@ fn known_keyinfo_database_and_legacy_publish_native_rows_with_cas_and_replay() {
+         (p, b)
+     })
+     .collect::<Vec<_>>();
+-    let plan = plan_saved_key_info(d.path(), "synthetic_self", true).unwrap();
++    let plan = plan_saved_key_info(d.path().canonicalize().unwrap(), "synthetic_self", true).unwrap();
+     for (p, b) in &inputs {
+         assert_eq!(*b, fs::read(p).unwrap());
+     }
+@@ -214,11 +214,11 @@ fn known_keyinfo_database_and_legacy_publish_native_rows_with_cas_and_replay() {
+         durable_intent_id: "synthetic-accepted-keyinfo".into(),
+     };
+     let bytes = b"synthetic renewed key info";
+-    let got = publish_saved_key_info(d.path(), "synthetic_self", &plan, bytes, &options).unwrap();
++    let got = publish_saved_key_info(d.path().canonicalize().unwrap(), "synthetic_self", &plan, bytes, &options).unwrap();
+     assert!(got.database_changed && got.legacy_changed);
+-    let got = publish_saved_key_info(d.path(), "synthetic_self", &plan, bytes, &options).unwrap();
++    let got = publish_saved_key_info(d.path().canonicalize().unwrap(), "synthetic_self", &plan, bytes, &options).unwrap();
+     assert!(!got.database_changed && !got.legacy_changed);
+-    let selected = read_profile_saved_login(d.path(), &[7; 16], true).unwrap();
++    let selected = read_profile_saved_login(d.path().canonicalize().unwrap(), &[7; 16], true).unwrap();
+     assert_eq!(selected.key_info_source, KeyInfoSource::LatestDatabaseRow);
+     assert_eq!(selected.key_info.as_slice(), bytes);
+     for (row, key, data) in old {
+@@ -233,7 +233,7 @@ fn known_keyinfo_database_and_legacy_publish_native_rows_with_cas_and_replay() {
+         );
+     }
+     assert_eq!(c.query_row("SELECT key_md5 FROM LoginKeyInfoTable WHERE user_name_md5=?1 ORDER BY rowid DESC LIMIT 1",[user.clone()],|r|r.get::<_,String>(0)).unwrap(),"");
+-    let next = plan_saved_key_info(d.path(), "synthetic_self", true).unwrap();
++    let next = plan_saved_key_info(d.path().canonicalize().unwrap(), "synthetic_self", true).unwrap();
+     c.execute(
+         "INSERT INTO LoginKeyInfoTable VALUES(?1,'','external',x'090a')",
+         [user],
+@@ -241,7 +241,7 @@ fn known_keyinfo_database_and_legacy_publish_native_rows_with_cas_and_replay() {
+     .unwrap();
+     assert!(matches!(
+         publish_saved_key_info(
+-            d.path(),
++            d.path().canonicalize().unwrap(),
+             "synthetic_self",
+             &next,
+             b"later own credential",
+@@ -250,7 +250,7 @@ fn known_keyinfo_database_and_legacy_publish_native_rows_with_cas_and_replay() {
+         Err(ProfileError::SourceChanged)
+     ));
+     assert_eq!(
+-        fs::read(d.path().join(".xwechat/login/synthetic_self/key_info.dat")).unwrap(),
++        fs::read(d.path().canonicalize().unwrap().join(".xwechat/login/synthetic_self/key_info.dat")).unwrap(),
+         bytes
+     );
+ }
+@@ -258,15 +258,15 @@ fn known_keyinfo_database_and_legacy_publish_native_rows_with_cas_and_replay() {
+ fn keyinfo_publication_refuses_unknown_schemas_and_unrelated_legacy_generation() {
+     let d = fixture();
+     let folder = d
+-        .path()
++        .path().canonicalize().unwrap()
+         .join("xwechat_files/all_users/login/synthetic_self");
+     fs::create_dir_all(&folder).unwrap();
+     let path = folder.join("key_info.db");
+     let c = Connection::open(&path).unwrap();
+     c.execute_batch("CREATE TABLE LoginKeyInfoTable(user_name_md5 TEXT,key_md5 TEXT,key_info_md5 TEXT,key_info_data BLOB);CREATE UNIQUE INDEX LoginKeyInfoTable_USER_KEYINFO ON LoginKeyInfoTable(user_name_md5,key_info_md5);").unwrap();
+-    let plan = plan_saved_key_info(d.path(), "synthetic_self", true).unwrap();
++    let plan = plan_saved_key_info(d.path().canonicalize().unwrap(), "synthetic_self", true).unwrap();
+     fs::write(
+-        d.path().join(".xwechat/login/synthetic_self/key_info.dat"),
++        d.path().canonicalize().unwrap().join(".xwechat/login/synthetic_self/key_info.dat"),
+         b"unexpected legacy generation",
+     )
+     .unwrap();
+@@ -276,7 +276,7 @@ fn keyinfo_publication_refuses_unknown_schemas_and_unrelated_legacy_generation()
+         durable_intent_id: "synthetic-rejected".into(),
+     };
+     assert!(matches!(
+-        publish_saved_key_info(d.path(), "synthetic_self", &plan, b"new key info", &options),
++        publish_saved_key_info(d.path().canonicalize().unwrap(), "synthetic_self", &plan, b"new key info", &options),
+         Err(ProfileError::SourceChanged)
+     ));
+     assert_eq!(
+@@ -290,16 +290,16 @@ fn keyinfo_publication_refuses_unknown_schemas_and_unrelated_legacy_generation()
+     )
+     .unwrap();
+     assert!(matches!(
+-        plan_saved_key_info(d.path(), "synthetic_self", true),
++        plan_saved_key_info(d.path().canonicalize().unwrap(), "synthetic_self", true),
+         Err(ProfileError::UnsupportedSchema(_))
+     ));
+-    assert!(plan_saved_key_info(d.path(), "..", true).is_err());
++    assert!(plan_saved_key_info(d.path().canonicalize().unwrap(), "..", true).is_err());
+ }
+ #[test]
+ fn accepted_login_unlock_is_explicit_and_keeps_auto_login_policy_and_unknowns() {
+     let d = fixture();
+     let p = d
+-        .path()
++        .path().canonicalize().unwrap()
+         .join("xwechat_files/all_users/config/global_config");
+     let data = fs::read(&p).unwrap();
+     let meta = fs::read(p.with_extension("crc")).unwrap();
+@@ -345,23 +345,23 @@ fn accepted_login_unlock_is_explicit_and_keeps_auto_login_policy_and_unknowns()
+ fn keyinfo_guard_stops_between_database_and_legacy_and_exact_intent_replays() {
+     let d = fixture();
+     let folder = d
+-        .path()
++        .path().canonicalize().unwrap()
+         .join("xwechat_files/all_users/login/synthetic_self");
+     fs::create_dir_all(&folder).unwrap();
+     let db = Connection::open(folder.join("key_info.db")).unwrap();
+     db.execute_batch("CREATE TABLE LoginKeyInfoTable(user_name_md5 TEXT,key_md5 TEXT,key_info_md5 TEXT,key_info_data BLOB);CREATE UNIQUE INDEX LoginKeyInfoTable_USER_KEYINFO ON LoginKeyInfoTable(user_name_md5,key_info_md5);").unwrap();
+-    let plan = plan_saved_key_info(d.path(), "synthetic_self", true).unwrap();
++    let plan = plan_saved_key_info(d.path().canonicalize().unwrap(), "synthetic_self", true).unwrap();
+     let options = WriteOptions {
+         exclusive_ownership_confirmed: true,
+         allow_plaintext: false,
+         durable_intent_id: "synthetic-fenced-journal".into(),
+     };
+     let bytes = b"synthetic accepted target";
+-    let legacy = d.path().join(".xwechat/login/synthetic_self/key_info.dat");
++    let legacy = d.path().canonicalize().unwrap().join(".xwechat/login/synthetic_self/key_info.dat");
+     let before = fs::read(&legacy).unwrap();
+     let mut checks = 0;
+     assert!(matches!(
+-        publish_saved_key_info_guarded(d.path(), "synthetic_self", &plan, bytes, &options, || {
++        publish_saved_key_info_guarded(d.path().canonicalize().unwrap(), "synthetic_self", &plan, bytes, &options, || {
+             checks += 1;
+             checks == 1
+         }),
+@@ -369,11 +369,11 @@ fn keyinfo_guard_stops_between_database_and_legacy_and_exact_intent_replays() {
+     ));
+     assert_eq!(checks, 2);
+     assert_eq!(fs::read(&legacy).unwrap(), before);
+-    let got = read_profile_saved_login(d.path(), &[7; 16], true).unwrap();
++    let got = read_profile_saved_login(d.path().canonicalize().unwrap(), &[7; 16], true).unwrap();
+     assert_eq!(got.key_info.as_slice(), bytes);
+     assert_eq!(got.key_info_source, KeyInfoSource::LatestDatabaseRow);
+     let replay =
+-        publish_saved_key_info(d.path(), "synthetic_self", &plan, bytes, &options).unwrap();
++        publish_saved_key_info(d.path().canonicalize().unwrap(), "synthetic_self", &plan, bytes, &options).unwrap();
+     assert!(!replay.database_changed && replay.legacy_changed);
+     assert_eq!(fs::read(&legacy).unwrap(), bytes);
+ }
+@@ -382,13 +382,13 @@ fn keyinfo_guard_stops_between_database_and_legacy_and_exact_intent_replays() {
+ fn keyinfo_non_native_unique_collation_is_not_write_authority() {
+     let d = fixture();
+     let folder = d
+-        .path()
++        .path().canonicalize().unwrap()
+         .join("xwechat_files/all_users/login/synthetic_self");
+     fs::create_dir_all(&folder).unwrap();
+     let c = Connection::open(folder.join("key_info.db")).unwrap();
+     c.execute_batch("CREATE TABLE LoginKeyInfoTable(user_name_md5 TEXT,key_md5 TEXT,key_info_md5 TEXT,key_info_data BLOB);CREATE UNIQUE INDEX LoginKeyInfoTable_USER_KEYINFO ON LoginKeyInfoTable(user_name_md5 COLLATE NOCASE,key_info_md5);").unwrap();
+     assert!(matches!(
+-        plan_saved_key_info(d.path(), "synthetic_self", true),
++        plan_saved_key_info(d.path().canonicalize().unwrap(), "synthetic_self", true),
+         Err(ProfileError::UnsupportedSchema(_))
+     ));
+     assert_eq!(
+diff --git a/packages/native-client-rust/crates/wechat-profile/tests/mmkv_write.rs b/packages/native-client-rust/crates/wechat-profile/tests/mmkv_write.rs
+index 3d7e6e7..46cbb55 100644
+--- a/packages/native-client-rust/crates/wechat-profile/tests/mmkv_write.rs
++++ b/packages/native-client-rust/crates/wechat-profile/tests/mmkv_write.rs
+@@ -122,7 +122,7 @@ fn full_store_grows_without_losing_unknown_records_and_recovers_data_first() {
+     );
+     assert!(!old_view.contains("saved-login-refresh"));
+     let dir = tempfile::tempdir().unwrap();
+-    let path = dir.path().join("global_config");
++    let path = dir.path().canonicalize().unwrap().join("global_config");
+     std::fs::write(&path, old.data()).unwrap();
+     std::fs::write(path.with_extension("crc"), old.metadata()).unwrap();
+     let options = WriteOptions {
+@@ -170,8 +170,8 @@ fn publish_recovers_data_first_interruption_and_rejects_unexpected_generation()
+     let k = [9; 16];
+     let seed = create_mmkv_v4(&k, [7; 16], 4096).unwrap();
+     let d = tempfile::tempdir().unwrap();
+-    let p = d.path().join("store");
+-    let m = d.path().join("store.crc");
++    let p = d.path().canonicalize().unwrap().join("store");
++    let m = d.path().canonicalize().unwrap().join("store.crc");
+     std::fs::write(&p, seed.data()).unwrap();
+     std::fs::write(&m, seed.metadata()).unwrap();
+     let next = stage_mmkv_sync_key(seed.data(), seed.metadata(), &k, b"opaque-cursor").unwrap();
+@@ -205,7 +205,7 @@ fn publish_recovers_data_first_interruption_and_rejects_unexpected_generation()
+ #[test]
+ fn create_pair_is_noclobber_and_recovers_only_its_exact_partial_generation() {
+     let d = tempfile::tempdir().unwrap();
+-    let path = d.path().join("login_configv2");
++    let path = d.path().canonicalize().unwrap().join("login_configv2");
+     let seed = create_mmkv_v4(&[7; 16], [2; 16], 4096).unwrap();
+     let options = WriteOptions {
+         exclusive_ownership_confirmed: true,
+@@ -226,13 +226,13 @@ fn create_pair_is_noclobber_and_recovers_only_its_exact_partial_generation() {
+         Err(ProfileError::SourceChanged)
+     ));
+     assert_eq!(std::fs::read(&path).unwrap(), seed.data());
+-    let second = d.path().join("new");
++    let second = d.path().canonicalize().unwrap().join("new");
+     assert!(
+         publish_mmkv_create(&second, &seed, &options)
+             .unwrap()
+             .data_replaced
+     );
+-    let broken = d.path().join("broken");
++    let broken = d.path().canonicalize().unwrap().join("broken");
+     std::fs::write(broken.with_extension("crc"), b"unknown").unwrap();
+     assert!(matches!(
+         publish_mmkv_create(&broken, &seed, &options),
+@@ -245,7 +245,7 @@ fn append_authorization_fence_is_checked_before_each_file_and_partial_replays()
+     let key = [9; 16];
+     let seed = create_mmkv_v4(&key, [7; 16], 4096).unwrap();
+     let dir = tempfile::tempdir().unwrap();
+-    let path = dir.path().join("store");
++    let path = dir.path().canonicalize().unwrap().join("store");
+     let meta = path.with_extension("crc");
+     std::fs::write(&path, seed.data()).unwrap();
+     std::fs::write(&meta, seed.metadata()).unwrap();

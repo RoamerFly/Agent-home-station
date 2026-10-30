@@ -37,6 +37,9 @@ if($Portable){
  if($Test){$nativeArgs.Test=$true}
  & (Join-Path $PSScriptRoot 'Build-WindowsNative.ps1') @nativeArgs
  if($LASTEXITCODE -ne 0){throw 'Windows native build failed.'}
+ $broker=Join-Path $OutputDirectory 'runtimes\windows-agent-host'
+ New-Item -ItemType Directory -Force -Path $broker | Out-Null
+ foreach($name in @('windows_agent_host.pyw','windows_lpac.py')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
  Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory '使用说明.txt')
 }
 Get-Item -LiteralPath $target | Select-Object FullName,Length

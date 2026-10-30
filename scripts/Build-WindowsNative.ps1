@@ -78,9 +78,9 @@ try {
  & cargo build --release --locked -p wx-native --bin wx --target x86_64-pc-windows-msvc
  if($LASTEXITCODE -ne 0){throw 'Native Windows compilation failed. Rust, MSVC, Perl and Windows SDK are build-time prerequisites.'}
  if($Test){
-  & cargo test --release --locked --target x86_64-pc-windows-msvc -p wechat-profile --test initialize
-  if($LASTEXITCODE -ne 0){throw 'Windows profile initialization tests failed.'}
-  & cargo test --release --locked --target x86_64-pc-windows-msvc -p wechat-store --test windows_bootstrap
+  & cargo test --release --locked --target x86_64-pc-windows-msvc -p wx-native -p wechat-profile --test initialize --test login_storage --test media_write --test mmkv_write --test profile --test projection
+  if($LASTEXITCODE -ne 0){throw 'Windows profile initialization, credential, media and projection tests failed.'}
+  & cargo test --release --locked --target x86_64-pc-windows-msvc -p wx-native -p wechat-store --test windows_bootstrap
   if($LASTEXITCODE -ne 0){throw 'Windows interrupted profile recovery test failed.'}
  }
 } finally {$env:CARGO_TARGET_DIR=$oldTarget; Pop-Location}

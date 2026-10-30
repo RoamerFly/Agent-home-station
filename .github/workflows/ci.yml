@@ -32,6 +32,9 @@ jobs:
         run: |
           $env:PERL = (Get-Command perl -ErrorAction Stop).Source
           ./scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable
+      - name: Test offline Windows account migration
+        shell: powershell
+        run: python -X utf8 -m unittest discover -s scripts -p test_windows_account_migration.py
       - name: Test Windows shutdown pipe and pending job reader
         shell: powershell
         run: go test ./cmd/wechat-admin
@@ -109,6 +112,7 @@ jobs:
           python -m unittest discover -s scripts -p test_binary_retention.py
           python -m unittest discover -s scripts -p test_local_web_recovery.py
           python -m unittest discover -s scripts -p test_memory_update.py
+          python -m unittest discover -s scripts -p test_windows_account_migration.py
       - name: Check Go formatting
         shell: bash
         run: |

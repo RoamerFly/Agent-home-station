@@ -73,3 +73,5 @@ WechatAgent.exe --workspace "E:\项目目录"
 SDK 许可为包内 Microsoft WebView2 SDK License，构建时同时输出 `WebView2-LICENSE.txt`，分发 EXE 时保留此许可。加载器从 EXE 提取到项目 `temp/desktop/runtime/<hash>` 并核验内容；页面登录状态保存在被 Git 忽略的 `secrets/desktop-webview`。不向页面脚本注入密码或提供宿主执行对象；只允许当前本机管理源在内嵌视图导航，用户点击的外站链接交给外部浏览器。
 
 构建依赖缓存、Runtime、页面状态及生成物均不入 Git。程序和测试源码位于本目录，CI 的 Windows job 编译 GUI EXE 并执行控制器回归；Linux Source checks 继续验证服务端。没有生成 Docker 镜像或发布 Release。
+
+迁移旧 WSL 管理资料见[Windows 数据迁移](../../docs/guide/windows-migration.md)。需要分离程序与数据时，部署配置可设置 `runtime_directory` 指向包含原生程序及校验清单的目录；`data_root` 独立保存用户资料。可选 Agent 命令执行仍需本机 Pythonw，包内提供 LPAC 代理脚本。

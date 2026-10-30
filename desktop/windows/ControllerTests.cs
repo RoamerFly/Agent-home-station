@@ -100,6 +100,12 @@ namespace WechatAgent.Desktop {
             } finally { Directory.Delete(root, true); }
             root = Path.Combine(Path.GetTempPath(), "desktop windows native " + Guid.NewGuid()); Directory.CreateDirectory(root);
             try {
+                var privateDir = Path.Combine(root, "private ownership");
+                WindowsRuntime.PrivateDirectory(privateDir);
+                Assert(System.Security.Principal.WindowsIdentity.GetCurrent().User.Equals(Directory.GetAccessControl(privateDir).GetOwner(typeof(System.Security.Principal.SecurityIdentifier))), "private directory owner matches native user identity");
+                File.WriteAllText(Path.Combine(privateDir, "preserve"), "synthetic");
+                WindowsRuntime.PrivateDirectory(privateDir);
+                Assert(File.ReadAllText(Path.Combine(privateDir, "preserve")) == "synthetic", "private directory admission preserves existing contents");
                 var d = Deployment.Load(root);
                 var close = new CloseSettings(root);
                 Assert(close.Behavior == "ask", "close choice is asked by default");
@@ -116,6 +122,9 @@ namespace WechatAgent.Desktop {
                 File.WriteAllText(config, "{\"backend\":\"windows-native\",\"data_root\":\"data with 空格\",\"admin_url\":\"http://127.0.0.1:19081\",\"native_url\":\"http://127.0.0.1:19174\",\"account\":\"synthetic\"}");
                 d = Deployment.Load(root);
                 Assert(d.Root == Path.Combine(root, "data with 空格") && d.Url.EndsWith(":19081") && d.NativeUrl.EndsWith(":19174"), "portable data and port overrides");
+                File.WriteAllText(config, File.ReadAllText(config).Replace("\"backend\":", "\"runtime_directory\":\"separate runtime\",\"backend\":"));
+                d = Deployment.Load(root);
+                Assert(d.NativeExe == Path.Combine(root, "separate runtime", "wx.exe") && d.AdminExe == Path.Combine(root, "separate runtime", "wechat-admin.exe"), "separate verified runtime directory");
                 File.WriteAllText(config, File.ReadAllText(config).Replace("127.0.0.1:19081", "example.com:19081"));
                 await Reject(() => { Deployment.Load(root); return Task.FromResult(0); });
                 File.WriteAllText(config, "{\"backend\":\"unknown\"}");

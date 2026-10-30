@@ -27,6 +27,11 @@ namespace WechatAgent.Desktop {
             var data = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(config, Encoding.UTF8));
             if (Text(data, "backend") == "windows-native") {
                 var win = WindowsDefault(workspace);
+                if (Text(data, "runtime_directory") != "") {
+                    var runtime = Path.GetFullPath(Path.Combine(workspace, Text(data, "runtime_directory")));
+                    win.NativeExe = Path.Combine(runtime, "wx.exe");
+                    win.AdminExe = Path.Combine(runtime, "wechat-admin.exe");
+                }
                 if (Text(data, "data_root") != "") win.Root = Path.GetFullPath(Path.Combine(workspace, Text(data, "data_root")));
                 if (Text(data, "account") != "") win.Account = Text(data, "account");
                 if (Text(data, "admin_url") != "") win.Url = LocalUrl(Text(data, "admin_url"));
