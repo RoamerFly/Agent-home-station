@@ -63,6 +63,25 @@ namespace WechatAgent.Desktop {
                 using (var stream = File.OpenRead(item[0])) using (var sha = SHA256.Create())
                     if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), Deployment.Text(manifest, item[1]), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Windows 运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
             }
+            var resources = Path.GetFullPath(Path.Combine(dir, ".."));
+            foreach (var name in new [] { "windows-python-cli", "windows-media" }) {
+                var folder = Path.Combine(resources, name);
+                if (!Directory.Exists(folder)) continue; // earlier native-only packages remain usable
+                VerifyResourceDirectory(folder);
+            }
+        }
+        internal static void VerifyResourceDirectory(string folder) {
+            NoLinks(folder);
+            var record = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(folder, "runtime-manifest.json"), Encoding.UTF8));
+            var files = record["files"] as Dictionary<string, object>;
+            if (files == null || files.Count == 0) throw new InvalidOperationException("托管运行环境清单为空。");
+            foreach (var entry in files) {
+                var target = Path.GetFullPath(Path.Combine(folder, entry.Key));
+                if (!target.StartsWith(Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("托管运行环境清单包含越界路径。");
+                NoLinks(target);
+                using (var stream = File.OpenRead(target)) using (var sha = SHA256.Create())
+                    if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), Convert.ToString(entry.Value), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("项目内运行环境校验失败；请修复该环境，用户资料已保留。");
+            }
         }
         static void FreePort(string url) {
             var uri = new Uri(url); var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, uri.Port);
@@ -98,7 +117,12 @@ namespace WechatAgent.Desktop {
             }
             job = new ProcessJob();
             serverId = generation = null;
-            native = OwnedProcess.Start(d.NativeExe, NativeArgs("serve"), d.Workspace, null, Path.Combine(d.Root, "logs", "native.log"), job);
+            var resources = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(d.NativeExe), ".."));
+            var media = Path.Combine(resources, "windows-media");
+            var programEnv = new Dictionary<string, string>();
+            if (File.Exists(Path.Combine(media, "ffmpeg.exe")) && File.Exists(Path.Combine(media, "ffprobe.exe")))
+                programEnv["PATH"] = media + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+            native = OwnedProcess.Start(d.NativeExe, NativeArgs("serve"), d.Workspace, programEnv, Path.Combine(d.Root, "logs", "native.log"), job);
             var deadline = DateTime.UtcNow.AddSeconds(90);
             while (true) {
                 cancel.ThrowIfCancellationRequested();
@@ -123,6 +147,12 @@ namespace WechatAgent.Desktop {
                 { "WECHAT_NATIVE_URL", d.NativeUrl }, { "WECHAT_NATIVE_TOKEN_FILE", Path.Combine(d.Root, "api-token") },
                 { "WECHAT_NATIVE_ACCOUNT", d.Account }, { "WECHAT_WORKSPACE_ROOT", Path.Combine(d.Root, "managed-workspaces") }
             };
+            foreach (var pair in programEnv) env[pair.Key] = pair.Value;
+            var pythonw = Path.Combine(resources, "windows-python-cli", "pythonw.exe");
+            var helper = Path.Combine(resources, "windows-agent-host", "windows_agent_host.pyw");
+            if (File.Exists(pythonw) && File.Exists(helper)) env["WECHAT_WINDOWS_BROKER_CONFIG"] = Deployment.Json.Serialize(new {
+                pythonw = pythonw, helper = helper, spool = Path.Combine(adminDir, "windows-broker-spool")
+            });
             web = OwnedProcess.Start(d.AdminExe, new [] { "--desktop" }, d.Workspace, env, Path.Combine(d.Root, "logs", "web.log"), job);
         }
         HttpRequestMessage NativeMessage(string path, object body) {

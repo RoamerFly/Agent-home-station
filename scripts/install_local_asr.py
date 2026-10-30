@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import uuid
 
 SHA256 = "7305f7905bfcf77fa0b39388a313f3da35c68d971661a65475b56fb2162c8e63"
 SDK_VERSION = "2.0.1"
@@ -29,7 +30,15 @@ def digest_file(path):
     return h.hexdigest()
 
 
-def install(workspace, archive, wheel_dir=None):
+def stage_directory(parent, prefix):
+    if os.name != "nt":
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    path = parent / (prefix + uuid.uuid4().hex)
+    path.mkdir(mode=0o755)  # allow the public mount's read-only ACL to inherit
+    return path
+
+
+def install(workspace, archive, wheel_dir=None, replace_registration=False):
     workspace, archive = Path(workspace).resolve(strict=True), Path(archive).resolve(strict=True)
     public = workspace / "public_workspace"
     if public.is_symlink():
@@ -40,7 +49,7 @@ def install(workspace, archive, wheel_dir=None):
     models = public / "models/asr"
     models.mkdir(parents=True, exist_ok=True)
     destination = models / "sensevoice-small-int8"
-    staging = Path(tempfile.mkdtemp(prefix="sensevoice-install-", dir=models))
+    staging = stage_directory(models, "sensevoice-install-")
     try:
         with tarfile.open(archive, "r:bz2") as bundle:
             for member in bundle:
@@ -66,13 +75,35 @@ def install(workspace, archive, wheel_dir=None):
                         raise ValueError("existing_asr_model_differs_preserved")
         else:
             staging.replace(destination)
-        packages = public / "runtimes/sherpa-onnx-cpu"
+        packages = public / ("runtimes/sherpa-onnx-windows-cpu-v2" if os.name == "nt" else "runtimes/sherpa-onnx-cpu")
+        packages.parent.mkdir(parents=True, exist_ok=True)
+        python = str(Path(sys.executable).absolute())
+        if os.name == "nt":
+            from prepare_windows_python import prepare, remove_startup_manifest
+            if sys.version_info[:2] != (3, 13):
+                raise ValueError("Windows SDK installation requires build-time Python 3.13")
+            interpreter = public / "runtimes/windows-python-cli"
+            prepare(interpreter, public / "runtimes/downloads")
+            python = str(interpreter / "python.exe")
         if not (packages / "sherpa_onnx").is_dir():
-            pending = Path(tempfile.mkdtemp(prefix="sherpa-install-", dir=packages.parent))
+            pending = stage_directory(packages.parent, "sherpa-install-")
             try:
                 options=["--no-index", "--find-links", str(Path(wheel_dir).resolve(strict=True))] if wheel_dir else []
+                dependencies = ["numpy==2.2.6"] if os.name == "nt" else []
                 subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", "--timeout", "30", "--retries", "2",
-                                "--target", str(pending), *options, "sherpa-onnx==" + SDK_VERSION, "sherpa-onnx-core=="+SDK_VERSION], check=True, timeout=300)
+                                "--cache-dir", str(public / "runtimes/downloads/pip"), "--only-binary=:all:", "--target", str(pending), *options, "sherpa-onnx==" + SDK_VERSION, "sherpa-onnx-core=="+SDK_VERSION, *dependencies], check=True, timeout=300)
+                if os.name == "nt":
+                    changes = []
+                    for library in pending.rglob("*"):
+                        if library.suffix.lower() in {".dll", ".pyd"}:
+                            before = digest_file(library)
+                            if remove_startup_manifest(library, 2):
+                                changes.append({"file": str(library.relative_to(pending)), "upstream_sha256": before,
+                                                "headless_sha256": digest_file(library)})
+                    record = {"transform": "headless-pe-manifests-v1", "sdk_version": SDK_VERSION,
+                              "changes": changes, "files": {str(p.relative_to(pending)): digest_file(p)
+                                                             for p in pending.rglob("*") if p.is_file()}}
+                    (pending / "runtime-manifest.json").write_text(json.dumps(record, indent=2), encoding="utf8")
                 if packages.exists():
                     raise ValueError("existing_sherpa_directory_preserved")
                 pending.replace(packages)
@@ -91,7 +122,6 @@ def install(workspace, archive, wheel_dir=None):
             shutil.copyfile(vad_download, vad)
         # Keep the venv path, not the symlink-resolved base interpreter: the
         # managed music venv already provides NumPy, which the decoder uses.
-        python = str(Path(sys.executable).absolute())
         manifest = {"id": "asr-sensevoice-small-int8", "name": "SenseVoice Small INT8 本地语音识别",
                     "root": str(destination), "python": python, "entry": str(entry), "packages": str(packages),
                     "model": str(destination / "model.int8.onnx"), "tokens": str(destination / "tokens.txt"),
@@ -103,8 +133,14 @@ def install(workspace, archive, wheel_dir=None):
         manifests = public / "manifests"
         manifests.mkdir(exist_ok=True)
         target = manifests / "asr-sensevoice-small-int8.json"
-        if not target.exists():
-            target.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        text = json.dumps(manifest, ensure_ascii=False, indent=2)
+        if target.exists() and target.read_text(encoding="utf8") != text:
+            if not replace_registration:
+                raise ValueError("existing_asr_registration_preserved_use_replace_registration")
+            shutil.copyfile(target, target.with_suffix(".backup-" + uuid.uuid4().hex + ".json"))
+        pending_manifest = target.with_suffix(".pending-" + uuid.uuid4().hex)
+        pending_manifest.write_text(text, encoding="utf8")
+        pending_manifest.replace(target)
         print(json.dumps({"installed": True, "model_bytes": (destination / "model.int8.onnx").stat().st_size,
                           "sdk_version": SDK_VERSION, "manifest": str(target)}))
     finally:
@@ -117,5 +153,6 @@ if __name__ == "__main__":
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--archive", required=True)
     parser.add_argument("--wheel-dir")
+    parser.add_argument("--replace-registration", action="store_true")
     arguments = parser.parse_args()
-    install(arguments.workspace, arguments.archive, arguments.wheel_dir)
+    install(arguments.workspace, arguments.archive, arguments.wheel_dir, arguments.replace_registration)

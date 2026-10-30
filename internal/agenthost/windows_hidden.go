@@ -72,6 +72,11 @@ type windowsExitError struct{ code int }
 
 func (e *windowsExitError) Error() string { return fmt.Sprintf("Windows命令退出码%d", e.code) }
 func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string, out io.Writer) error {
+	return runWindowsRequest(ctx, cfg, id, path, command, nil, out)
+}
+
+// Fixed broker argv never passes through CMD or PowerShell quoting.
+func runWindowsRequest(ctx context.Context, cfg Config, id, path, command string, argv []string, out io.Writer) error {
 	if cfg.Isolation == nil {
 		return errors.New("sandbox_required")
 	}
@@ -122,7 +127,7 @@ func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string,
 		}
 		readonly = append(readonly, v)
 	}
-	b, _ := json.Marshal(map[string]any{"cwd": winDir, "command": command, "shell": shell, "sandbox": true, "roots": mounts, "read_only": readonly})
+	b, _ := json.Marshal(map[string]any{"cwd": winDir, "command": command, "argv": argv, "shell": shell, "sandbox": true, "roots": mounts, "read_only": readonly})
 	if e = os.WriteFile(request, b, 0600); e != nil {
 		return e
 	}
@@ -160,6 +165,9 @@ func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string,
 	for {
 		readOutput()
 		if b, e := os.ReadFile(resultFile); e == nil {
+			// The child can flush its last bytes between the first read and
+			// publication of result.json. Do not lose a structured response tail.
+			readOutput()
 			var result struct {
 				ExitCode int    `json:"exit_code"`
 				Error    string `json:"error"`

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -178,6 +179,17 @@ func newAgentControl(dir string) (*agentControl, error) {
 		}
 		if err != nil || entry.name == "agent-config.json" && len(b) > 8<<20 || json.Unmarshal(b, entry.v) != nil {
 			return nil, errors.New("Agent配置或任务记录不可读，未覆盖")
+		}
+	}
+	// Desktop-supplied resources are a transport default only. They neither
+	// enable Agent permissions nor override an explicit broker configuration.
+	if runtime.GOOS == "windows" && a.settings.Host.Windows == nil {
+		if raw := os.Getenv("WECHAT_WINDOWS_BROKER_CONFIG"); raw != "" {
+			var windows agenthost.WindowsConfig
+			if json.Unmarshal([]byte(raw), &windows) != nil || windows.Validate() != nil {
+				return nil, errors.New("桌面提供的Windows隔离运行环境无效")
+			}
+			a.settings.Host.Windows = &windows
 		}
 	}
 	if err := a.settings.validate(); err != nil {

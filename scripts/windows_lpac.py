@@ -36,7 +36,7 @@ class PROCESS_INFORMATION(c.Structure):
                 ("dwProcessId", w.DWORD), ("dwThreadId", w.DWORD)]
 
 
-def launch(argv, cwd, writable, readonly, output):
+def launch(argv, cwd, writable, readonly, output, error_output=None):
     """Return a process handle, pid and cleanup. Child inherits only stdio.
 
     LPAC additionally opts out of implicit ALL APPLICATION PACKAGES grants.
@@ -108,10 +108,13 @@ def launch(argv, cwd, writable, readonly, output):
     optout = w.DWORD(1)
     handle = msvcrt.get_osfhandle(output.fileno())
     os.set_handle_inheritable(handle, True)
+    error_handle = msvcrt.get_osfhandle(error_output.fileno()) if error_output else handle
+    os.set_handle_inheritable(error_handle, True)
     stdin = open(os.devnull, "rb")
     input_handle = msvcrt.get_osfhandle(stdin.fileno())
     os.set_handle_inheritable(input_handle, True)
-    handles = (w.HANDLE * 2)(handle, input_handle)
+    inherited = list(dict.fromkeys([handle, error_handle, input_handle]))
+    handles = (w.HANDLE * len(inherited))(*inherited)
     try:
         for key, value in [(0x20009, caps), (0x2000F, optout), (0x20002, handles)]:
             if not k.UpdateProcThreadAttribute(buf, 0, key, c.byref(value), c.sizeof(value), None, None):
@@ -119,7 +122,7 @@ def launch(argv, cwd, writable, readonly, output):
         si.StartupInfo.dwFlags = 0x100
         si.StartupInfo.hStdInput = input_handle
         si.StartupInfo.hStdOutput = handle
-        si.StartupInfo.hStdError = handle
+        si.StartupInfo.hStdError = error_handle
         # Explicit clean environment, not inherited credentials/WSL interop.
         env = {"LOCALAPPDATA":str(Path(writable[0])/"scratch"),"APPDATA":str(Path(writable[0])/"scratch"),"USERPROFILE":str(writable[0]),"SystemDrive":os.environ.get("SystemDrive","C:"),"ALLUSERSPROFILE":os.environ.get("ProgramData",r"C:\ProgramData"),"ProgramData":os.environ.get("ProgramData",r"C:\ProgramData"),"SystemRoot": os.environ["SystemRoot"], "WINDIR": os.environ["SystemRoot"],
                "PATH": str(Path(os.environ["SystemRoot"]) / "System32"),
@@ -144,6 +147,7 @@ def launch(argv, cwd, writable, readonly, output):
         return SandboxedProcess(k,pi.hProcess,job,pi.dwProcessId)
     finally:
         os.set_handle_inheritable(handle, False)
+        os.set_handle_inheritable(error_handle, False)
         stdin.close()
         k.DeleteProcThreadAttributeList(buf)
         adv.FreeSid(sid)

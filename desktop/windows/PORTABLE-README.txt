@@ -10,10 +10,11 @@
 
 本目录可放在可写的磁盘位置。请整体保留 EXE、runtimes 和许可证。
 用户资料在 data；页面会话在 secrets；升级时保留这两个目录。
-微信后台与管理页无需 WSL、Docker、Python、Rust 或 Node。需有 Microsoft Visual C++ x64 运行库
-（提供 VCRUNTIME140.dll）和系统 WebView2 Runtime。
-可选 Agent 命令执行需登记本机 Pythonw，LPAC 代理脚本在 runtimes\windows-agent-host。
-语音/视频处理另需 FFmpeg 与 FFprobe。音乐模型及 CUDA 是可选独立资源。
+微信后台与管理页无需 WSL、Docker、系统 Python、Rust 或 Node。系统需有 WebView2 Runtime。
+便携包自带 runtimes 下的 Python CLI、FFmpeg/FFprobe 和可用的 MSVC 可再发行 DLL。
+LPAC 代理脚本在 runtimes\windows-agent-host；首次安装自动登记包内执行器，仍遵循 Agent 权限设置。
+ASR 模型、SDK、音乐模型及 CUDA 是项目内独立托管资源，升级程序时保留。
+Python CLI 是为隔离命令构建的无 GUI 派生环境，不是通用桌面 Python/Tk 环境。
 
 这个版本使用独立资料，不会自动导入官方 Windows 微信的旧聊天记录，
 底层仍使用 Linux 微信协议/设备身份，因此手机登录确认显示 Linux 电脑；

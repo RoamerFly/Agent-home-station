@@ -1,4 +1,4 @@
-﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [string]$NativeSourceDirectory)
+﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [string]$NativeSourceDirectory, [string]$MediaDirectory)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace 'dist\windows-desktop'}
@@ -32,6 +32,7 @@ if($Test){
  if($LASTEXITCODE -ne 0){throw 'Desktop controller tests failed.'}
 }
 if($Portable){
+ & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') -OutputDirectory (Join-Path $OutputDirectory 'runtimes') -MediaDirectory $MediaDirectory
  $nativeArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes\windows-x64')}
  if($NativeSourceDirectory){$nativeArgs.SourceDirectory=$NativeSourceDirectory}
  if($Test){$nativeArgs.Test=$true}

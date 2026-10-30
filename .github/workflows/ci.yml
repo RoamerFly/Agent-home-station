@@ -21,6 +21,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Install Windows media decoder
+        shell: powershell
+        run: |
+          choco install ffmpeg --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Windows FFmpeg installation failed' }
+          ffmpeg -version
+          if ($LASTEXITCODE -ne 0) { throw 'Windows FFmpeg decoder is unavailable' }
       - name: Restore native compiler cache
         uses: actions/cache/restore@v4
         with:
@@ -31,7 +38,9 @@ jobs:
         shell: powershell
         run: |
           $env:PERL = (Get-Command perl -ErrorAction Stop).Source
-          ./scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable
+          $media = (Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg" -Filter ffmpeg.exe -Recurse | Select-Object -First 1).DirectoryName
+          if (-not $media) { throw 'Cannot locate the actual FFmpeg distribution (a Chocolatey shim is not portable)' }
+          ./scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable -MediaDirectory $media
       - name: Test offline Windows account migration
         shell: powershell
         run: python -X utf8 -m unittest discover -s scripts -p test_windows_account_migration.py
@@ -42,8 +51,10 @@ jobs:
         shell: powershell
         run: |
           $env:WECHAT_WINDOWS_TEST_CONFIG = Join-Path $PWD 'temp/windows-lpac-test.json'
-          python -c "import json,os,sys; from pathlib import Path; r=Path.cwd(); Path(os.environ['WECHAT_WINDOWS_TEST_CONFIG']).write_text(json.dumps({'pythonw':str(Path(sys.executable).with_name('pythonw.exe')),'helper':str(r/'scripts/windows_agent_host.pyw'),'spool':str(r/'temp/windows-lpac-spool')}),encoding='utf8')"
+          python -c "import json,os; from pathlib import Path; r=Path.cwd(); Path(os.environ['WECHAT_WINDOWS_TEST_CONFIG']).write_text(json.dumps({'pythonw':str(r/'dist/windows-native/runtimes/windows-python-cli/pythonw.exe'),'helper':str(r/'scripts/windows_agent_host.pyw'),'spool':str(r/'temp/windows-lpac-spool')}),encoding='utf8')"
           if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare synthetic LPAC test' }
+          go test ./internal/agenthost -run '^TestLiveWindowsIsolatedArgv$' -v -count=1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows fixed-argument broker test failed' }
           go test ./internal/admin -run '^TestLiveNativeWindowsTool$' -v -count=1
       - name: Run actual isolated Windows native service cycles
         shell: powershell

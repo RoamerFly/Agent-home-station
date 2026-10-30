@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/bailian"
 )
 
@@ -93,6 +94,21 @@ func TestLiveLocalASRFromRegisteredPublicModel(t *testing.T) {
 	}
 	t.Setenv("WECHAT_WORKSPACE_ROOT", root)
 	f := setup(t)
+	if runtime.GOOS == "windows" {
+		b, err := os.ReadFile(os.Getenv("WECHAT_WINDOWS_TEST_CONFIG"))
+		if err != nil {
+			t.Fatal("Windows live ASR requires explicit broker configuration")
+		}
+		var windows agenthost.WindowsConfig
+		if json.Unmarshal(b, &windows) != nil {
+			t.Fatal("invalid Windows broker configuration")
+		}
+		settings := f.manager.agent.config()
+		settings.Host.Windows = &windows
+		if err = f.manager.agent.save(settings); err != nil {
+			t.Fatal(err)
+		}
+	}
 	f.manager.speech.ASREnabled = true
 	f.manager.speech.ASRBackend = "local"
 	wav, e := os.ReadFile(input)

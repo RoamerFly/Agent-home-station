@@ -106,11 +106,14 @@ func (m *Manager) transcribeLocal(ctx context.Context, wav []byte, id string) (s
 	bounded, cancel := context.WithTimeout(ctx, time.Duration(manifest.TimeoutSeconds*float64(time.Second)))
 	defer cancel()
 	cfg := agenthost.Defaults()
+	if runtime.GOOS == "windows" {
+		cfg.Windows = m.agent.config().Host.Windows
+	}
 	cfg.Mode = "full"
 	cfg.OutputBytes = 64000
 	cfg.Roots = []string{folder}
 	cfg.Isolation = &agenthost.Isolation{ReadOnly: []string{public}}
-	argv := []string{manifest.Python, manifest.Entry, "--packages", manifest.Packages, "--model", manifest.Model, "--tokens", manifest.Tokens, "--input", input, "--threads", strconv.Itoa(manifest.Threads), "--language", manifest.Language, "--chunk-seconds", strconv.FormatFloat(manifest.ChunkSeconds, 'f', -1, 64)}
+	argv := []string{manifest.Python, "-X", "utf8", manifest.Entry, "--packages", manifest.Packages, "--model", manifest.Model, "--tokens", manifest.Tokens, "--input", input, "--threads", strconv.Itoa(manifest.Threads), "--language", manifest.Language, "--chunk-seconds", strconv.FormatFloat(manifest.ChunkSeconds, 'f', -1, 64)}
 	if manifest.VADModel != "" {
 		threshold := manifest.VADThreshold
 		if threshold == 0 {

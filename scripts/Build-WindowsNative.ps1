@@ -86,6 +86,14 @@ try {
 } finally {$env:CARGO_TARGET_DIR=$oldTarget; Pop-Location}
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $nativeTarget 'x86_64-pc-windows-msvc\release\wx.exe') -Destination (Join-Path $OutputDirectory 'wx.exe')
+# App-local redistributable DLLs avoid a separate machine-wide VC install.
+# These are build-tool redistributables, never downloaded binaries in Git.
+if($env:VCToolsRedistDir){
+ $crt=Get-ChildItem -LiteralPath (Join-Path $env:VCToolsRedistDir 'x64') -Directory | Where-Object Name -like 'Microsoft.VC*.CRT' | Select-Object -Last 1
+ if($crt){Get-ChildItem -LiteralPath $crt.FullName -Filter '*.dll' -File | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $OutputDirectory}}
+}
+if(-not(Test-Path -LiteralPath (Join-Path $OutputDirectory 'vcruntime140.dll'))){throw 'The app-local Microsoft VC release redistributable is required for the portable build.'}
+Copy-Item -LiteralPath (Join-Path $workspace 'components\native-client\MSVC-REDISTRIBUTABLE-NOTICE.txt') -Destination $OutputDirectory
 $oldOS=$env:GOOS;$oldArch=$env:GOARCH;$oldCGO=$env:CGO_ENABLED
 try {
  $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'

@@ -14,9 +14,9 @@
 ./scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable
 ```
 
-首次源码构建需要 Go、Git、Rust 1.93.1、MSVC C++/Windows SDK 和完整的原生 Windows Perl（例如 Strawberry Perl，可通过构建环境变量 `PERL` 指定）。这些是构建依赖，使用者无需安装。`Build-WindowsNative.ps1` 固定使用 `components/native-client/source-manifest.json` 的上游提交与累计补丁，核验补丁哈希；构建 `wx.exe` 和无 CGO 的 `wechat-admin.exe`，同时生成 SHA-256 清单和上游许可证。Go 管理端从本仓库当前提交的隔离快照构建，排除已有未提交工作；开发修改须提交后再构建便携包，清单记录该提交。原生构建使用较短的 `temp/wn-target`，避免 OpenSSL/MSVC 嵌套长路径失败。原生程序位于便携包 `runtimes/windows-x64/`，不会下载或打包聊天、模型及 AI 环境。程序包须整体复制。
+首次源码构建需要 Go、Git、Python 3.13、FFmpeg/FFprobe 分发目录、Rust 1.93.1、MSVC C++/Windows SDK 和完整的原生 Windows Perl（例如 Strawberry Perl，可通过构建环境变量 `PERL` 指定）。这些是构建依赖，使用者无需安装。`Build-WindowsNative.ps1` 固定使用 `components/native-client/source-manifest.json` 的上游提交与累计补丁，核验补丁哈希；构建 `wx.exe` 和无 CGO 的 `wechat-admin.exe`，同时生成 SHA-256 清单和上游许可证。Go 管理端从本仓库当前提交的隔离快照构建，排除已有未提交工作；开发修改须提交后再构建便携包，清单记录该提交。原生构建使用较短的 `temp/wn-target`，避免 OpenSSL/MSVC 嵌套长路径失败。原生程序位于便携包 `runtimes/windows-x64/`，不打包聊天和模型。`Prepare-WindowsResources.ps1` 将校验过的 Python CLI 和 FFmpeg/FFprobe 放在独立的 `runtimes/windows-python-cli`、`runtimes/windows-media`，保留版本、文件哈希与许可；可用 `-MediaDirectory` 指定实际媒体工具分发目录，不能复制依赖系统安装的 shim。程序包须整体复制。
 
-双击便携包里的 EXE 即可运行，不要求 WSL、Docker、Python、Node 或官方微信桌面版。首次在管理页扫码并配置模型及会话；Agent 默认未启用。系统需有 WebView2 Runtime，以及 Microsoft Visual C++ x64 运行库（当前原生程序导入 `VCRUNTIME140.dll`，由系统安装，未把开发机 DLL 混入包中）；语音/视频准备还需要目标机器安装 FFmpeg/FFprobe。首次启动使用空的独立资料，不能读取官方 Windows 微信旧聊天。当前可选的 Linux 音乐服务、ASR 环境与既有私有模型没有自动迁移。
+双击便携包里的 EXE 即可运行，不要求 WSL、Docker、Python、Node 或官方微信桌面版。首次在管理页扫码并配置模型及会话；Agent 默认未启用。系统需有 WebView2 Runtime。程序包包含从 MSVC 构建工具可再发行目录取得的 app-local DLL，并自带媒体工具，优先从项目目录加载。首次启动使用空的独立资料，不能读取官方 Windows 微信旧聊天。Linux 音乐环境与既有私有模型不自动登记为 Windows 可运行资源；本地 ASR 可使用项目内的 Windows 专用运行环境重新登记。
 
 无配置时数据根为程序目录的 `data/`，端口为管理页 `8081`、微信后台 `6174`，账号 ID 为 `desktop`。可在 `secrets/local-deployment.json` 显式配置数据根和回环端口：
 
@@ -74,4 +74,16 @@ SDK 许可为包内 Microsoft WebView2 SDK License，构建时同时输出 `WebV
 
 构建依赖缓存、Runtime、页面状态及生成物均不入 Git。程序和测试源码位于本目录，CI 的 Windows job 编译 GUI EXE 并执行控制器回归；Linux Source checks 继续验证服务端。没有生成 Docker 镜像或发布 Release。
 
-迁移旧 WSL 管理资料见[Windows 数据迁移](../../docs/guide/windows-migration.md)。需要分离程序与数据时，部署配置可设置 `runtime_directory` 指向包含原生程序及校验清单的目录；`data_root` 独立保存用户资料。可选 Agent 命令执行仍需本机 Pythonw，包内提供 LPAC 代理脚本。
+迁移旧 WSL 管理资料见[Windows 数据迁移](../../docs/guide/windows-migration.md)。需要分离程序与数据时，部署配置可设置 `runtime_directory` 指向包含原生程序及校验清单的目录；`data_root` 独立保存用户资料。便携包已提供 Pythonw 与 LPAC 代理脚本，桌面程序仅为缺省配置提供传输路径，不启用或扩大 Agent 权限；已明确登记的执行器不会被覆盖。
+
+## 项目内语音环境
+
+`prepare_windows_python.py` 固定下载 Python 3.13.13 的官方嵌入包并核验 SHA-256；缓存保留原包。LPAC 无界面版本移除 `python.exe`、`pythonw.exe`、`python313.dll` 的 PE 启动清单，以免 Windows SxS 激活上下文在隔离环境中于 Python 启动前返回 `0xC0000022`。这是记录转换及文件哈希的派生 CLI 环境，上游发布者签名不再适用于改动文件，不作为通用 Python/Tk 桌面环境。隔离能力、网络权限与系统 ACL 均不因此扩大。
+
+使用已下载的、哈希固定的模型归档安装 Windows ASR：
+
+```powershell
+python -X utf8 scripts/install_local_asr.py --workspace <数据根>/managed-workspaces --archive <模型归档.tar.bz2>
+```
+
+安装器在项目内准备 Python、固定版本的 NumPy/Sherpa SDK、模型、许可证、脚本与登记清单；SDK 中同样触发 SxS 的清单转换也记录原始/派生哈希。输入只存于当前账号私有 scratch，实际推理仍在 LPAC 中执行。覆盖旧的 Linux ASR 路径登记需明确添加 `--replace-registration`，旧登记会先备份。大型模型、SDK 和下载缓存不放入 Git，不随普通程序升级覆盖。当前音乐/CUDA 环境的 Windows 兼容性须独立验收。后续插件可分别引用这些版本化资源目录，无需将运行环境塞进 EXE 或混入用户数据库。

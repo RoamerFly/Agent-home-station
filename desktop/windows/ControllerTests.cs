@@ -135,6 +135,15 @@ namespace WechatAgent.Desktop {
                 string hash; using (var sha = System.Security.Cryptography.SHA256.Create()) hash = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(d.NativeExe))).Replace("-", "");
                 File.WriteAllText(Path.Combine(Path.GetDirectoryName(d.NativeExe), "windows-native-manifest.json"), "{\"native_sha256\":\"" + hash + "\",\"admin_sha256\":\"" + hash + "\"}");
                 WindowsRuntime.VerifyBundle(d); Assert(true, "bundle checksums match");
+                var resource = Path.Combine(root, "runtimes", "windows-python-cli"); Directory.CreateDirectory(resource);
+                File.WriteAllText(Path.Combine(resource, "python.exe"), "synthetic executable");
+                File.WriteAllText(Path.Combine(resource, "runtime-manifest.json"), "{\"files\":{\"python.exe\":\"" + hash + "\"}}");
+                WindowsRuntime.VerifyBundle(d); Assert(true, "project resource hash matches");
+                File.AppendAllText(Path.Combine(resource, "python.exe"), "tamper");
+                await Reject(() => { WindowsRuntime.VerifyBundle(d); return Task.FromResult(0); });
+                File.WriteAllText(Path.Combine(resource, "runtime-manifest.json"), "{\"files\":{\"../../escape.exe\":\"" + hash + "\"}}");
+                await Reject(() => { WindowsRuntime.VerifyBundle(d); return Task.FromResult(0); });
+                Directory.Delete(resource, true);
                 File.AppendAllText(d.NativeExe, "tamper");
                 await Reject(() => { WindowsRuntime.VerifyBundle(d); return Task.FromResult(0); });
                 using (var job = new ProcessJob()) {

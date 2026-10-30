@@ -24,7 +24,7 @@ go run ./cmd/wechat-memory --dir E:/private-stage/admin/companion --action verif
 - 按 migration report 中的 scope_mapping 迁移私人会话目录，校验每个普通文件；保留账号目录名与 workspace-directory 标记。Linux 链接和临时 scratch 应列入单独报告，不能跟随链接扩大读取范围。
 - 校对人格、模型密钥、群规则、可信用户、记忆设置、声线绑定及素材路径。保留两端任务状态，不把摘要当完成证据。新 Windows 管理目录已有写入时必须合并或显式保留，不能覆盖；同名幂等编号冲突时停止切换。
 - 保留 Windows 的 native accounts、registry、storage-key、cursor-key 和 bot-state。旧原生任务 ID、上传 ID、游标不能作为新后台的可执行状态。旧未完媒体恢复种子留存待复核，禁止自动重发。历史回执留存为历史证据。
-- Windows Agent 的 full 命令模式需单独登记 WindowsConfig（pythonw、helper、spool）；helper 使用包内 `runtimes/windows-agent-host`，spool 在 Agent 可写工作区之外。沿用 LPAC 隔离，不回退到无限制宿主 shell。Linux 公共模型/项目可留存，但需要重新注册兼容的 Windows 运行环境。
+- Windows Agent 的 full 命令模式使用 WindowsConfig（pythonw、helper、spool）；新安装由桌面默认提供包内 Python CLI 和 `runtimes/windows-agent-host`，不会启用权限或覆盖已有显式配置。旧配置迁移时校对这三条路径，spool 在 Agent 可写工作区之外。沿用 LPAC 隔离，不回退到无限制宿主 shell。Linux 公共模型/项目可留存，但需要重新注册兼容的 Windows 运行环境。
 - 在同一磁盘移动已校验的 staging，以目录重命名切换。暂停标记应写到**管理目录** `admin/memory-update-hold`（多账号布局使用其公共管理根），不要误写到 native 数据根。启动后使用原有管理鉴权读取每个记忆范围、来源、任务、声线及配置，最后调用 `POST /api/runtime/memory-activate`，让程序验证后解除标记。
 - 使用 Windows 原生桌面入口重新启动。旧 WSL 项目服务取消自启动并保持停止，保存服务单元，不关闭共享 WSL。配置可用 `runtime_directory` 指定独立的 `wx.exe`/`wechat-admin.exe` 运行目录，仍校验同目录清单和哈希。
 
