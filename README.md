@@ -12,6 +12,8 @@
 
 推荐使用 **Windows 桌面版 `dist/windows-desktop/WechatAgent.exe`**：打开 EXE 自动启动服务，窗口直接显示管理页；最小化收起到托盘并保持运行，关闭窗口或托盘“退出”则等待在途任务后停止全部本实例服务。构建、依赖和数据保留说明见 [Windows 桌面程序](desktop/windows/README.md)。
 
+新增 **Windows 原生便携包**：`scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable`，整体复制构建目录后双击 EXE 即可启动微信后台和管理页，基础收发无需 WSL。已有 WSL 配置继续保留，不自动迁移账号与资料；可选音乐/模型环境另行部署。首次扫码及真实媒体验收边界见上述桌面文档。
+
 原有 **[启动大肥鱼.vbs](启动大肥鱼.vbs)** 继续作为脚本兼容入口：恢复已有 WSL 后台并打开外部浏览器。
 
 原有BAT入口仍兼容命令行参数；BAT本身由cmd解释，双击可能短暂显示窗口，日常请使用上面的VBS入口。YuE守护任务通过pythonw启动，不分配控制台，也没有开机/登录触发器。

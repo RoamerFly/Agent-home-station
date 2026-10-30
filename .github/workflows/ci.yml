@@ -17,9 +17,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
       - name: Build portable desktop EXE and test lifecycle controller
         shell: powershell
         run: ./scripts/Build-Desktop.ps1 -Test
+      - name: Test Windows shutdown pipe and pending job reader
+        shell: powershell
+        run: go test ./cmd/wechat-admin
 
   verify:
     runs-on: ubuntu-24.04

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -50,6 +51,7 @@ namespace WechatAgent.Desktop {
             Assert(HiddenRunner.Quote("space end\\") == "\"space end\\\\\"", "trailing slash");
             Assert(HiddenRunner.Quote("a\"b") == "\"a\\\"b\"", "embedded quote");
             Assert(HiddenRunner.Quote("$()`&") == "$()`&", "no shell evaluation");
+            Assert(WindowsRuntime.ComparablePath(@"\\?\E:\synthetic path\data") == @"E:\synthetic path\data", "Rust canonical Windows paths retain identity");
             var command = new FakeCommands(); var web = new FakeWeb();
             using (var c = new ServiceController(Config(), command, web)) {
                 await c.Start(CancellationToken.None);
@@ -96,6 +98,34 @@ namespace WechatAgent.Desktop {
                 File.WriteAllText(path, File.ReadAllText(path).Replace("unrelated.service", "wechat-agent-music.service"));
                 Assert(Deployment.Load(root).Workspace == Path.GetFullPath(root), "workspace relocation");
             } finally { Directory.Delete(root, true); }
+            root = Path.Combine(Path.GetTempPath(), "desktop windows native " + Guid.NewGuid()); Directory.CreateDirectory(root);
+            try {
+                var d = Deployment.Load(root);
+                Assert(d.Windows && d.Root == Path.Combine(root, "data"), "fresh installation defaults to native Windows");
+                Assert(d.NativeExe == Path.Combine(root, "runtimes/windows-x64/wx.exe".Replace('/', Path.DirectorySeparatorChar)), "native executable resolved from portable root");
+                Directory.CreateDirectory(Path.Combine(root, "secrets"));
+                var config = Path.Combine(root, "secrets", "local-deployment.json");
+                File.WriteAllText(config, "{\"backend\":\"windows-native\",\"data_root\":\"data with 空格\",\"admin_url\":\"http://127.0.0.1:19081\",\"native_url\":\"http://127.0.0.1:19174\",\"account\":\"synthetic\"}");
+                d = Deployment.Load(root);
+                Assert(d.Root == Path.Combine(root, "data with 空格") && d.Url.EndsWith(":19081") && d.NativeUrl.EndsWith(":19174"), "portable data and port overrides");
+                File.WriteAllText(config, File.ReadAllText(config).Replace("127.0.0.1:19081", "example.com:19081"));
+                await Reject(() => { Deployment.Load(root); return Task.FromResult(0); });
+                File.WriteAllText(config, "{\"backend\":\"unknown\"}");
+                await Reject(() => { Deployment.Load(root); return Task.FromResult(0); });
+                d = Deployment.WindowsDefault(root);
+                Directory.CreateDirectory(Path.GetDirectoryName(d.NativeExe));
+                File.WriteAllText(d.NativeExe, "synthetic executable"); File.WriteAllText(d.AdminExe, "synthetic executable");
+                string hash; using (var sha = System.Security.Cryptography.SHA256.Create()) hash = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(d.NativeExe))).Replace("-", "");
+                File.WriteAllText(Path.Combine(Path.GetDirectoryName(d.NativeExe), "windows-native-manifest.json"), "{\"native_sha256\":\"" + hash + "\",\"admin_sha256\":\"" + hash + "\"}");
+                WindowsRuntime.VerifyBundle(d); Assert(true, "bundle checksums match");
+                File.AppendAllText(d.NativeExe, "tamper");
+                await Reject(() => { WindowsRuntime.VerifyBundle(d); return Task.FromResult(0); });
+                using (var job = new ProcessJob()) {
+                    var child = Process.Start(HiddenRunner.Info(System.Reflection.Assembly.GetExecutingAssembly().Location, new [] { "--synthetic-child" }));
+                    job.Assign(child); job.Dispose();
+                    Assert(child.WaitForExit(5000), "owned job closes its process without taskkill or WSL"); child.Dispose();
+                }
+            } finally { Directory.Delete(root, true); }
             root = Path.Combine(Path.GetTempPath(), "desktop 合成 probe " + Guid.NewGuid()); Directory.CreateDirectory(root);
             try {
                 var real = new HiddenRunner();
@@ -110,6 +140,16 @@ namespace WechatAgent.Desktop {
             } finally { Directory.Delete(root, true); }
         }
         static int Main(string[] args) { try {
+            if (args.Length == 1 && args[0] == "--synthetic-child") { Thread.Sleep(60000); return 0; }
+            if (args.Length == 2 && args[0] == "--cycle") {
+                var config = Deployment.Load(args[1]);
+                if (!config.Windows) throw new Exception("cycle requires isolated Windows native deployment");
+                using (var c = new ServiceController(config)) {
+                    c.Progress = Console.WriteLine;
+                    for (int i = 0; i < 2; i++) { c.Start(CancellationToken.None).GetAwaiter().GetResult(); c.Stop(CancellationToken.None).GetAwaiter().GetResult(); }
+                }
+                Console.WriteLine("Native Windows desktop cycle passed twice; no login or message send."); return 0;
+            }
             if (args.Length == 2 && (args[0] == "--probe" || args[0] == "--start" || args[0] == "--stop")) {
                 var d = Deployment.Load(args[1]);
                 using (var c = new ServiceController(d)) {

@@ -15,23 +15,46 @@ using System.Web.Script.Serialization;
 namespace WechatAgent.Desktop {
     internal sealed class Deployment {
         internal string Workspace, Distro, User, Root, Account, Music;
+        internal string Backend = "wsl", NativeUrl = "http://127.0.0.1:6174";
+        internal string NativeExe, AdminExe;
+        internal bool Windows { get { return Backend == "windows-native"; } }
         internal string Url = "http://127.0.0.1:8081";
         internal static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 };
         internal static Deployment Load(string workspace) {
             workspace = Path.GetFullPath(workspace);
-            var data = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(workspace, "secrets", "local-deployment.json"), Encoding.UTF8));
-            if (Text(data, "backend") != "wsl") throw new InvalidOperationException("桌面版需要已有的 WSL 本机部署配置。");
+            var config = Path.Combine(workspace, "secrets", "local-deployment.json");
+            if (!File.Exists(config)) return WindowsDefault(workspace);
+            var data = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(config, Encoding.UTF8));
+            if (Text(data, "backend") == "windows-native") {
+                var win = WindowsDefault(workspace);
+                if (Text(data, "data_root") != "") win.Root = Path.GetFullPath(Path.Combine(workspace, Text(data, "data_root")));
+                if (Text(data, "account") != "") win.Account = Text(data, "account");
+                if (Text(data, "admin_url") != "") win.Url = LocalUrl(Text(data, "admin_url"));
+                if (Text(data, "native_url") != "") win.NativeUrl = LocalUrl(Text(data, "native_url"));
+                if (!Regex.IsMatch(win.Account, @"\A[A-Za-z0-9_-]+\z") || win.Url == win.NativeUrl || Text(data, "music_service") != "") throw new InvalidOperationException("Windows 原生部署配置无效；本机音乐服务需要独立配置与验收。");
+                return win;
+            }
+            if (Text(data, "backend") != "wsl") throw new InvalidOperationException("未知的本机部署后端。");
             var d = new Deployment { Workspace = workspace, Distro = Text(data, "distro"), User = Text(data, "linux_user"), Root = Text(data, "data_root"), Account = Text(data, "account"), Music = Text(data, "music_service") };
             if (!Regex.IsMatch(d.Distro, @"\A[A-Za-z0-9_.-]+\z") || !Regex.IsMatch(d.User, @"\A[a-z_][a-z0-9_-]*\z") || !Regex.IsMatch(d.Account, @"\A[A-Za-z0-9_-]+\z") || !d.Root.StartsWith("/home/", StringComparison.Ordinal) || d.Root.Split('/').Any(x => x == ".." || x == ".") || d.Root.IndexOfAny(new [] {'\0', '\r', '\n'}) >= 0)
                 throw new InvalidOperationException("本机部署配置无效；没有启动或停止服务。");
             if (d.Music != "" && !Regex.IsMatch(d.Music, @"\Awechat-agent-music(?:-[a-f0-9]+)?\.service\z")) throw new InvalidOperationException("受管音乐服务名称无效。");
             return d;
         }
+        internal static string LocalUrl(string value) {
+            Uri uri;
+            if (!Uri.TryCreate(value, UriKind.Absolute, out uri) || uri.Scheme != "http" || uri.Host != "127.0.0.1" || uri.UserInfo != "" || uri.AbsolutePath != "/" || uri.Query != "" || uri.Fragment != "") throw new InvalidOperationException("本机服务地址必须使用 http://127.0.0.1:端口。");
+            return uri.GetLeftPart(UriPartial.Authority);
+        }
+        internal static Deployment WindowsDefault(string workspace) {
+            return new Deployment { Workspace = workspace, Backend = "windows-native", Root = Path.Combine(workspace, "data"), Account = "desktop", Music = "", NativeExe = Path.Combine(workspace, "runtimes", "windows-x64", "wx.exe"), AdminExe = Path.Combine(workspace, "runtimes", "windows-x64", "wechat-admin.exe") };
+        }
         internal static string Text(Dictionary<string, object> data, string key) { object value; return data.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : ""; }
         internal string Identity { get { using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(Workspace.ToLowerInvariant()))).Replace("-", "").Substring(0, 16); } }
         internal static string FindWorkspace(string[] args) {
             if (args.Length == 2 && args[0] == "--workspace") return Path.GetFullPath(args[1]);
             if (args.Length != 0) throw new ArgumentException("参数：--workspace <项目目录>");
+            if (File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "runtimes", "windows-x64", "windows-native-manifest.json"))) return AppDomain.CurrentDomain.BaseDirectory;
             for (var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory); dir != null; dir = dir.Parent)
                 if (File.Exists(Path.Combine(dir.FullName, "secrets", "local-deployment.json"))) return dir.FullName;
             throw new InvalidOperationException("找不到本机部署。请使用桌面快捷方式，或传入 --workspace 项目目录。");
@@ -75,12 +98,14 @@ namespace WechatAgent.Desktop {
         readonly CookieContainer cookies = new CookieContainer();
         readonly Func<TimeSpan, CancellationToken, Task> delay;
         Process anchor;
+        WindowsRuntime windows;
         string csrf = "";
         internal Action<string> Progress = delegate { };
         internal ServiceController(Deployment deployment, ICommandRunner commands = null, HttpMessageHandler http = null, Func<TimeSpan, CancellationToken, Task> wait = null) {
             d = deployment; runner = commands ?? new HiddenRunner();
             client = new HttpClient(http ?? new HttpClientHandler { UseProxy = false, CookieContainer = cookies, AllowAutoRedirect = false });
             client.Timeout = TimeSpan.FromSeconds(10); delay = wait ?? Task.Delay;
+            if (d.Windows) windows = new WindowsRuntime(d, runner);
         }
         internal CookieCollection SessionCookies() { return cookies.GetCookies(new Uri(d.Url)); }
         internal Task<CommandResult> Wsl(CancellationToken token, params string[] args) {
@@ -109,14 +134,33 @@ namespace WechatAgent.Desktop {
         }
         internal async Task Login(CancellationToken token) {
             string password;
-            var r = await Wsl(token, "cat", d.Root + "/admin/admin-password");
-            if (r.Code == 0) password = r.Output.Trim(); else password = await Checked(token, "cat", d.Root + "/admin/admin-token");
+            if (d.Windows) {
+                var path = Path.Combine(d.Root, "admin", "admin-password");
+                if (!File.Exists(path)) path = Path.Combine(d.Root, "admin", "admin-token");
+                password = File.ReadAllText(path, Encoding.UTF8).Trim();
+            } else {
+                var r = await Wsl(token, "cat", d.Root + "/admin/admin-password");
+                if (r.Code == 0) password = r.Output.Trim(); else password = await Checked(token, "cat", d.Root + "/admin/admin-token");
+            }
             var login = await Request("/api/login", new { password = password });
             csrf = Deployment.Text(login, "csrf");
             var status = await Request("/api/status", null);
             if (Deployment.Text(status, "account") != d.Account) throw new InvalidOperationException("端口上的账号与部署配置不符；拒绝管理其他实例。");
         }
         internal async Task Start(CancellationToken token) {
+            if (d.Windows) {
+                Progress("正在启动 Windows 原生微信后台…");
+                await windows.Start(token);
+                var until = DateTime.UtcNow.AddSeconds(90);
+                while (!await Healthy()) {
+                    windows.CheckAlive(); token.ThrowIfCancellationRequested();
+                    if (DateTime.UtcNow > until) throw new InvalidOperationException("Windows 管理服务未就绪，请检查 data/logs；登录与数据已保留。");
+                    await delay(TimeSpan.FromMilliseconds(500), token);
+                }
+                await Login(token);
+                Progress("Windows 原生服务运行中 · 首次使用请在管理页扫码登录");
+                return;
+            }
             Progress("正在启动本机服务…"); token.ThrowIfCancellationRequested();
             if (runner is HiddenRunner && (anchor == null || anchor.HasExited)) {
                 anchor = new Process { StartInfo = HiddenRunner.Info(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "wsl.exe"), new [] { "-d", d.Distro, "-u", d.User, "--exec", "/bin/bash", "-c", "exec -a wechat-agent-desktop-anchor-" + d.Identity + " sleep infinity" }) };
@@ -160,6 +204,7 @@ namespace WechatAgent.Desktop {
             "for p in (workspace/'pri_workspace').glob('*/music/jobs/jobs.json'):\n data=json.loads(p.read_text()); n+=sum(j.get('state') in ('queued','running') for j in data.values())\n" +
             "print(n)";
         internal async Task Stop(CancellationToken token) {
+            if (d.Windows) { await StopWindows(token); return; }
             string ticket = null; bool webStopped = false; Exception failure = null;
             try {
                 if (await Healthy()) {
@@ -204,6 +249,34 @@ namespace WechatAgent.Desktop {
             if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
         void StopAnchor() { if (anchor != null) { try { if (!anchor.HasExited) anchor.Kill(); } catch (InvalidOperationException) { } anchor.Dispose(); anchor = null; } }
-        public void Dispose() { client.Dispose(); StopAnchor(); }
+        async Task StopWindows(CancellationToken token) {
+            string ticket = null; bool committed = false; Exception failure = null;
+            try {
+                if (windows.WebRunning) {
+                    if (!await Healthy()) throw new InvalidOperationException("管理服务未正常响应，保留服务以免中断在途任务；请查看日志后重试。");
+                    await Login(token);
+                    ticket = Deployment.Text(await Request("/api/runtime/drain", new { }), "ticket");
+                    if (ticket == "") throw new InvalidOperationException("没有取得安全停止凭据。");
+                }
+                while (windows.AnyRunning) {
+                    token.ThrowIfCancellationRequested();
+                    bool ready = ticket == null || Convert.ToBoolean((await Request("/api/runtime/drain?ticket=" + Uri.EscapeDataString(ticket), null))["ready"]);
+                    int pending = await windows.Pending(token);
+                    if (ready && pending == 0) break;
+                    Progress("正在等待在途任务结束（微信附件 " + pending + "）… 可取消停止");
+                    await delay(TimeSpan.FromSeconds(2), token);
+                }
+                token.ThrowIfCancellationRequested();
+                Progress("正在停止本实例的 Windows 服务并保存状态…"); committed = true;
+                await windows.Stop();
+                Progress("已停止 · 微信登录资料、会话和模型已保留");
+            } catch (Exception error) { failure = error; }
+            if (ticket != null && (!committed || windows.WebRunning)) {
+                try { await Request("/api/runtime/undrain", new { ticket = ticket }); }
+                catch { Progress("停止未完成，安全等待租约将在 30 秒后解除，请检查状态。"); }
+            }
+            if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+        public void Dispose() { client.Dispose(); StopAnchor(); if (windows != null) windows.Dispose(); }
     }
 }

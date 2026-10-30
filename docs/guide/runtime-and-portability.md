@@ -4,7 +4,7 @@
 
 ## 服务边界
 
-默认Windows启动器调用WSL用户服务：`wechat-bot-native.service`负责原生微信连接和消息/附件能力，`wechat-bot-api.service`提供独立发送入口，`wechat-bot-web.service`承载网页管理、Agent循环、记忆、持续任务、工具分发与后台轮询。WSL锚点仅保持本机发行版运行，不处理聊天。
+Windows 桌面便携包支持原生 `wx.exe` 与 `wechat-admin.exe` 子进程，无需 WSL；桌面进程负责统一启停和托盘生命周期。既有 WSL 部署继续保留：`wechat-bot-native.service`负责原生微信连接和消息/附件能力，`wechat-bot-api.service`提供独立发送入口，`wechat-bot-web.service`承载网页管理、Agent循环、记忆、持续任务、工具分发与后台轮询。WSL锚点仅保持本机发行版运行，不处理聊天。两种后端不同时写同一份微信资料。
 
 音乐是可选的受管Linux服务：隔离ComfyUI负责YuE推理，`scripts/yue_bridge.py`负责鉴权、账号归属、工作流和持久任务；RVC可直接转换已取得的原曲。公共程序、模型和运行环境复用，歌曲输入输出按账号隔离。TTS和文本模型使用已配置提供商，ASR可选公共SenseVoice INT8本地模型或百炼。ADB/安卓模拟器和外部MCP按配置接入；服务健康、真实执行和音质分别验收。
 
@@ -22,9 +22,9 @@
 
 ## 迁移与桌面形态
 
-Go管理端可编译为Windows或Linux可执行文件，前端已内嵌。不过当前微信原生运行在Linux，Windows本机启动依赖WSL；仅拷贝一个管理端exe不等于迁移完整系统。部署还须保留数据根、会话数据库、配置、任务/操作记录，以及服务路径。微信会话能否在不同主机继续使用取决于协议端和账号校验，不能保证无需重新登录。
+Go管理端可编译为Windows或Linux可执行文件，前端已内嵌。Windows 原生包同时携带按本项目固定源码与补丁构建的 `wx.exe`，基础微信接入不依赖 WSL；仅拷贝一个管理端exe仍不等于迁移完整系统。部署还须保留数据根、会话数据库、配置、任务/操作记录，以及服务路径。微信会话能否在不同主机继续使用取决于协议端和账号校验，不能保证无需重新登录。
 
-可以增加桌面壳，内嵌现有管理网页，并统一展示启动、停止、日志、资源路径和健康状态。建议先保持核心服务协议稳定：桌面壳管理WSL与可选YuE Worker；Linux服务器仍直接运行服务。Python/CUDA/模型作为独立资源，不能为一个exe把十几GB环境与所有历史生成物绑进主程序。当前仅有bat/PowerShell启动器，没有交付新的桌面安装包。
+已提供 WinForms/WebView2 桌面 EXE，直接内嵌管理网页，支持最小化到托盘与关闭排空停止。原生 Windows 和 WSL 后端沿用同一管理接口；Linux服务器仍直接运行服务。便携包构建与验证见[桌面程序](../../desktop/windows/README.md)。Python/CUDA/模型作为独立资源，不能为一个exe把十几GB环境与所有历史生成物绑进主程序。当前音乐隔离仍依赖 Linux，不代表完整媒体生成链路已原生 Windows 化；本轮不生成安装器、Docker 镜像或 Release。
 
 ## 精简优先级
 

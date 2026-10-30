@@ -16,6 +16,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "desktop-busy" {
+		if err := printDesktopBusy(os.Args[2]); err != nil {
+			log.Print("wechat-admin: cannot verify native pending jobs")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		host, port, err := net.SplitHostPort(env("WECHAT_ADMIN_LISTEN", "127.0.0.1:8080"))
 		if err != nil {
@@ -68,14 +75,19 @@ func run() error {
 	go func() { stopped <- server.ListenAndServe() }()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	var desktop <-chan struct{}
+	if len(os.Args) == 2 && os.Args[1] == "--desktop" {
+		desktop = desktopStop(os.Stdin)
+	}
 	select {
 	case err := <-stopped:
 		return err
 	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		return server.Shutdown(shutdown)
+	case <-desktop:
 	}
+	shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return server.Shutdown(shutdown)
 }
 func env(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {

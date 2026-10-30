@@ -14,7 +14,7 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
 [assembly: AssemblyTitle("蓝色大肥鱼桌面版")]
-[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
 namespace WechatAgent.Desktop {
     internal static class Program {
         [STAThread]

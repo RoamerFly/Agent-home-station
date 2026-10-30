@@ -47,7 +47,7 @@ namespace WechatAgent.Desktop {
             stopItem.Click += async delegate { await StopServices(false); };
             exitItem.Click += async delegate { RequestExit(); if (!busy) await StopServices(true); };
             var about = new ToolStripMenuItem("关于蓝色大肥鱼");
-            about.Click += delegate { MessageBox.Show("蓝色大肥鱼桌面版 1.0.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/wechat-agent\n反馈：https://github.com/RoamerFly/wechat-agent/issues\n\n最小化：收起到托盘，继续运行\n关闭窗口 / 托盘退出：安全停止全部本实例服务并退出\n\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于蓝色大肥鱼", MessageBoxButtons.OK, MessageBoxIcon.Information); };
+            about.Click += delegate { MessageBox.Show("蓝色大肥鱼桌面版 1.1.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/wechat-agent\n反馈：https://github.com/RoamerFly/wechat-agent/issues\n\n最小化：收起到托盘，继续运行\n关闭窗口 / 托盘退出：安全停止全部本实例服务并退出\n\n后端：" + (d.Windows ? "Windows 原生" : "WSL") + "\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于蓝色大肥鱼", MessageBoxButtons.OK, MessageBoxIcon.Information); };
             menu.Items.AddRange(new ToolStripItem[] {show, hide, new ToolStripSeparator(), startItem, stopItem, new ToolStripSeparator(), about, exitItem});
             tray.Icon = Icon; tray.Text = "蓝色大肥鱼 · 正在启动"; tray.ContextMenuStrip = menu; tray.Visible = true;
             tray.DoubleClick += delegate { RestoreWindow(); };

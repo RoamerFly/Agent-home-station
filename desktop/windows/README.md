@@ -2,7 +2,37 @@
 
 双击 `WechatAgent.exe` 自动启动本机服务，窗口直接显示现有管理页，没有额外的启动控制台或外部浏览器窗口。右上角 **× 关闭窗口** 会等待在途任务，然后停止全部本实例服务并退出。**最小化** 则收起到托盘，服务继续运行；双击托盘图标返回管理页。托盘菜单提供打开窗口、收起到托盘、启动服务、停止服务、关于及“退出并停止全部服务”。启动服务不会更改管理页中的 Agent 自动回复开关。
 
-当前复用 `secrets/local-deployment.json` 的 WSL 部署：原生微信、Web 和可选受管音乐服务。读取 `distro`、`linux_user`、`data_root`、`account`、`music_service`，服务使用已有配置、SQLite、登录资料、模型和素材；不复制大型运行时。当前管理地址沿用本机 `127.0.0.1:8081`。Docker 部署继续使用原入口，桌面版不会擅自控制 Docker。
+支持两个后端：独立便携包默认使用 **Windows 原生**；已有 `secrets/local-deployment.json` 的 `backend=wsl` 仍按原方式管理 WSL 服务，不自动迁移或覆盖资料。Docker 部署继续使用原入口，桌面版不会擅自控制 Docker。
+
+## Windows 原生便携包
+
+开发机执行：
+
+```powershell
+./scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable
+```
+
+首次源码构建需要 Go、Git、Rust 1.93.1、MSVC C++/Windows SDK 和完整的原生 Windows Perl（例如 Strawberry Perl）。这些是构建依赖，使用者无需安装。`Build-WindowsNative.ps1` 固定使用 `components/native-client/source-manifest.json` 的上游提交与累计补丁，核验补丁哈希；构建 `wx.exe` 和无 CGO 的 `wechat-admin.exe`，同时生成 SHA-256 清单和上游许可证。构建缓存位于 `temp/`，原生程序位于便携包 `runtimes/windows-x64/`，不会下载或打包聊天、模型及 AI 环境。程序包须整体复制。
+
+双击便携包里的 EXE 即可运行，不要求 WSL、Docker、Python、Node 或官方微信桌面版。首次在管理页扫码并配置模型及会话；Agent 默认未启用。系统需有 WebView2 Runtime；语音/视频准备还需要目标机器安装 FFmpeg/FFprobe。首次启动使用空的独立资料，不能读取官方 Windows 微信旧聊天。当前可选的 Linux 音乐服务、ASR 环境与既有私有模型没有自动迁移。
+
+无配置时数据根为程序目录的 `data/`，端口为管理页 `8081`、微信后台 `6174`，账号 ID 为 `desktop`。可在 `secrets/local-deployment.json` 显式配置数据根和回环端口：
+
+```json
+{"backend":"windows-native","data_root":"data","account":"desktop","admin_url":"http://127.0.0.1:8081","native_url":"http://127.0.0.1:6174"}
+```
+
+相对数据根按程序工作区解析，不依赖当前工作目录。数据、密钥和日志由当前用户与 SYSTEM 独占；链接/重解析路径、校验失败的程序、非回环地址及占用端口拒绝启动，不接管其他实例。`data/logs/` 记录启动失败。页面会话在 `secrets/`。升级保留 `data/`、`secrets/`、模型和生成物。
+
+Windows 后台使用前台 `wx serve` 子进程，由桌面进程统一管理；使用 Windows Job Object 管理本实例及其子进程。正常退出先鉴权排空全部账号并以只读 SQLite 查询核验原生附件队列，随后通过继承的私有 stdin 管道让 Go 服务优雅退出，再使用绑定实例身份的原生停止协议停止微信；不登出账号，不增加公开停止接口，不依赖 Python。桌面进程意外终止时 Job Object 结束其所属进程树，持久任务由后续启动恢复。新安装不导入或启动已有 WSL 实例。
+
+运行验证命令（仅用于独立空白数据根，禁止指向唯一生产副本）：
+
+```text
+DesktopTests.exe --cycle <隔离便携包目录>
+```
+
+它真实启动/停止两轮 Windows 微信和 Go 服务，但不扫码、不触发模型、不发送消息。真实登录、原有资料迁移及手机媒体播放另行验收，不能以空账号或模拟测试替代。
 
 ## 构建和使用
 
@@ -20,7 +50,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Build-Desktop.ps
 WechatAgent.exe --workspace "E:\项目目录"
 ```
 
-可以为此命令创建桌面快捷方式。关闭、启动与重复双击都只作用于这一个项目实例；重复双击会恢复已有窗口，包括已收起到托盘的窗口。缺少配置、非 WSL 配置、异常服务名或账号不匹配会拒绝操作。
+可以为此命令创建桌面快捷方式。关闭、启动与重复双击都只作用于这一个项目实例；重复双击会恢复已有窗口，包括已收起到托盘的窗口。未知后端、异常服务名或账号不匹配会拒绝操作。仅构建桌面壳时，现有 WSL 使用方式如下。
 
 ## 退出和数据边界
 
