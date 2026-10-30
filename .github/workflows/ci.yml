@@ -11,7 +11,7 @@ permissions:
 jobs:
   windows-desktop:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,10 +23,17 @@ jobs:
           cache: false
       - name: Build portable desktop EXE and test lifecycle controller
         shell: powershell
-        run: ./scripts/Build-Desktop.ps1 -Test
+        run: |
+          $env:PERL = (Get-Command perl -ErrorAction Stop).Source
+          ./scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable
       - name: Test Windows shutdown pipe and pending job reader
         shell: powershell
         run: go test ./cmd/wechat-admin
+      - name: Run actual isolated Windows native service cycles
+        shell: powershell
+        run: |
+          $env:WECHAT_WINDOWS_NATIVE_PACKAGE = (Resolve-Path dist/windows-native).Path
+          python -X utf8 -m unittest discover -s scripts -p test_windows_native_smoke.py
 
   verify:
     runs-on: ubuntu-24.04

@@ -102,6 +102,7 @@ namespace WechatAgent.Desktop {
             try {
                 var d = Deployment.Load(root);
                 Assert(d.Windows && d.Root == Path.Combine(root, "data"), "fresh installation defaults to native Windows");
+                Assert(d.Identity == Deployment.Load(root + Path.DirectorySeparatorChar).Identity, "shortcut and direct launch share one instance");
                 Assert(d.NativeExe == Path.Combine(root, "runtimes/windows-x64/wx.exe".Replace('/', Path.DirectorySeparatorChar)), "native executable resolved from portable root");
                 Directory.CreateDirectory(Path.Combine(root, "secrets"));
                 var config = Path.Combine(root, "secrets", "local-deployment.json");
