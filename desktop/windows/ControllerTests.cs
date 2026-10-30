@@ -140,6 +140,7 @@ namespace WechatAgent.Desktop {
             } finally { Directory.Delete(root, true); }
         }
         static int Main(string[] args) { try {
+            Console.OutputEncoding = new System.Text.UTF8Encoding(false);
             if (args.Length == 1 && args[0] == "--synthetic-child") { Thread.Sleep(60000); return 0; }
             if (args.Length == 2 && args[0] == "--cycle") {
                 var config = Deployment.Load(args[1]);

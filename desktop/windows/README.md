@@ -12,7 +12,7 @@
 ./scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable
 ```
 
-首次源码构建需要 Go、Git、Rust 1.93.1、MSVC C++/Windows SDK 和完整的原生 Windows Perl（例如 Strawberry Perl）。这些是构建依赖，使用者无需安装。`Build-WindowsNative.ps1` 固定使用 `components/native-client/source-manifest.json` 的上游提交与累计补丁，核验补丁哈希；构建 `wx.exe` 和无 CGO 的 `wechat-admin.exe`，同时生成 SHA-256 清单和上游许可证。构建缓存位于 `temp/`，原生程序位于便携包 `runtimes/windows-x64/`，不会下载或打包聊天、模型及 AI 环境。程序包须整体复制。
+首次源码构建需要 Go、Git、Rust 1.93.1、MSVC C++/Windows SDK 和完整的原生 Windows Perl（例如 Strawberry Perl，可通过构建环境变量 `PERL` 指定）。这些是构建依赖，使用者无需安装。`Build-WindowsNative.ps1` 固定使用 `components/native-client/source-manifest.json` 的上游提交与累计补丁，核验补丁哈希；构建 `wx.exe` 和无 CGO 的 `wechat-admin.exe`，同时生成 SHA-256 清单和上游许可证。Go 管理端从本仓库当前提交的隔离快照构建，排除已有未提交工作；开发修改须提交后再构建便携包，清单记录该提交。原生构建使用较短的 `temp/wn-target`，避免 OpenSSL/MSVC 嵌套长路径失败。原生程序位于便携包 `runtimes/windows-x64/`，不会下载或打包聊天、模型及 AI 环境。程序包须整体复制。
 
 双击便携包里的 EXE 即可运行，不要求 WSL、Docker、Python、Node 或官方微信桌面版。首次在管理页扫码并配置模型及会话；Agent 默认未启用。系统需有 WebView2 Runtime；语音/视频准备还需要目标机器安装 FFmpeg/FFprobe。首次启动使用空的独立资料，不能读取官方 Windows 微信旧聊天。当前可选的 Linux 音乐服务、ASR 环境与既有私有模型没有自动迁移。
 
@@ -22,7 +22,7 @@
 {"backend":"windows-native","data_root":"data","account":"desktop","admin_url":"http://127.0.0.1:8081","native_url":"http://127.0.0.1:6174"}
 ```
 
-相对数据根按程序工作区解析，不依赖当前工作目录。数据、密钥和日志由当前用户与 SYSTEM 独占；链接/重解析路径、校验失败的程序、非回环地址及占用端口拒绝启动，不接管其他实例。`data/logs/` 记录启动失败。页面会话在 `secrets/`。升级保留 `data/`、`secrets/`、模型和生成物。
+相对数据根按程序工作区解析，不依赖当前工作目录，需放在支持 Windows ACL 的可写磁盘（如 NTFS）。数据、密钥和日志由当前用户与 SYSTEM 独占；链接/重解析路径、校验失败的程序、非回环地址及占用端口拒绝启动，不接管其他实例。`data/logs/` 记录启动失败。页面会话在 `secrets/`。升级保留 `data/`、`secrets/`、模型和生成物。
 
 Windows 后台使用前台 `wx serve` 子进程，由桌面进程统一管理；使用 Windows Job Object 管理本实例及其子进程。正常退出先鉴权排空全部账号并以只读 SQLite 查询核验原生附件队列，随后通过继承的私有 stdin 管道让 Go 服务优雅退出，再使用绑定实例身份的原生停止协议停止微信；不登出账号，不增加公开停止接口，不依赖 Python。桌面进程意外终止时 Job Object 结束其所属进程树，持久任务由后续启动恢复。新安装不导入或启动已有 WSL 实例。
 
