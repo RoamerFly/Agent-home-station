@@ -22,8 +22,16 @@ if(-not(Test-Path -LiteralPath $SourceDirectory)){
 $revision=& git -C $SourceDirectory rev-parse HEAD
 if($LASTEXITCODE -ne 0 -or $revision -ne $manifest.base_commit){throw 'Native source must match the fixed project commit.'}
 # Reuse the same cumulative patch on Windows. Never stack it twice.
-& git -C $SourceDirectory apply --reverse --check $patch 2>$null
-if($LASTEXITCODE -ne 0){
+$oldPreference=$ErrorActionPreference
+try {
+ # An unapplied patch is the expected result on a new checkout. Windows
+ # PowerShell 5 treats redirected native stderr as a terminating error when
+ # ErrorActionPreference=Stop; inspect only this probe's exit status instead.
+ $ErrorActionPreference='Continue'
+ & git -C $SourceDirectory apply --reverse --check $patch 2>$null
+ $patchApplied=$LASTEXITCODE -eq 0
+} finally {$ErrorActionPreference=$oldPreference}
+if(-not $patchApplied){
  & git -C $SourceDirectory apply --check $patch
  if($LASTEXITCODE -ne 0){throw 'Native integration patch does not match this source; no reset performed.'}
  & git -C $SourceDirectory apply $patch
