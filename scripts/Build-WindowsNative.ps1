@@ -1,4 +1,4 @@
-param([string]$OutputDirectory,[string]$SourceDirectory)
+﻿param([string]$OutputDirectory,[string]$SourceDirectory,[switch]$Test)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace 'dist\windows-native\runtimes\windows-x64'}
@@ -77,6 +77,12 @@ try {
  $env:CARGO_TARGET_DIR=$nativeTarget
  & cargo build --release --locked -p wx-native --bin wx --target x86_64-pc-windows-msvc
  if($LASTEXITCODE -ne 0){throw 'Native Windows compilation failed. Rust, MSVC, Perl and Windows SDK are build-time prerequisites.'}
+ if($Test){
+  & cargo test --release --locked --target x86_64-pc-windows-msvc -p wechat-profile --test initialize
+  if($LASTEXITCODE -ne 0){throw 'Windows profile initialization tests failed.'}
+  & cargo test --release --locked --target x86_64-pc-windows-msvc -p wechat-store --test windows_bootstrap
+  if($LASTEXITCODE -ne 0){throw 'Windows interrupted profile recovery test failed.'}
+ }
 } finally {$env:CARGO_TARGET_DIR=$oldTarget; Pop-Location}
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $nativeTarget 'x86_64-pc-windows-msvc\release\wx.exe') -Destination (Join-Path $OutputDirectory 'wx.exe')

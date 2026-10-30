@@ -39,7 +39,11 @@ class WindowsNativeSmoke(unittest.TestCase):
                                 capture_output=True, encoding="utf-8", timeout=240,
                                 creationflags=subprocess.CREATE_NO_WINDOW)
         (scratch / "controller-result.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        diagnostic = result.stdout + result.stderr
+        if result.returncode:
+            for log in (scratch / "data/logs").glob("*.log"):
+                diagnostic += "\n" + log.name + ":\n" + log.read_text(encoding="utf-8", errors="replace")[-4000:]
+        self.assertEqual(result.returncode, 0, diagnostic)
         self.assertIn("cycle passed twice", result.stdout)
         self.assertTrue((scratch / "data/admin/admin-token").is_file())
         self.assertTrue((scratch / "data/api-token").is_file())

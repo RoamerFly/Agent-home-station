@@ -101,6 +101,13 @@ namespace WechatAgent.Desktop {
             root = Path.Combine(Path.GetTempPath(), "desktop windows native " + Guid.NewGuid()); Directory.CreateDirectory(root);
             try {
                 var d = Deployment.Load(root);
+                var close = new CloseSettings(root);
+                Assert(close.Behavior == "ask", "close choice is asked by default");
+                close.Save("tray"); Assert(new CloseSettings(root).Behavior == "tray", "remember tray across restart");
+                close.Save("exit"); Assert(new CloseSettings(root).Behavior == "exit", "remember exit across restart");
+                Assert(File.Exists(Path.Combine(root, "secrets", "desktop-settings.json.bak")), "previous close choice retained as backup");
+                close.Save("ask"); Assert(new CloseSettings(root).Behavior == "ask", "restore close prompt from tray settings");
+                await Reject(() => { close.Save("unexpected"); return Task.FromResult(0); });
                 Assert(d.Windows && d.Root == Path.Combine(root, "data"), "fresh installation defaults to native Windows");
                 Assert(d.Identity == Deployment.Load(root + Path.DirectorySeparatorChar).Identity, "shortcut and direct launch share one instance");
                 Assert(d.NativeExe == Path.Combine(root, "runtimes/windows-x64/wx.exe".Replace('/', Path.DirectorySeparatorChar)), "native executable resolved from portable root");

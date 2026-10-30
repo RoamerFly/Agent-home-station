@@ -94,7 +94,7 @@ namespace WechatAgent.Desktop {
             var deadline = DateTime.UtcNow.AddSeconds(90);
             while (true) {
                 cancel.ThrowIfCancellationRequested();
-                if (!native.Alive) throw new InvalidOperationException("Windows 微信后台启动失败，请查看 data/logs/native.log。");
+                if (!native.Alive) throw new InvalidOperationException("Windows 微信后台启动失败（退出码 0x" + native.ExitCode.ToString("X8") + "），请查看 data/logs/native.log。若为 0xC0000135，请检查 Microsoft Visual C++ x64 运行库。");
                 try {
                     var value = await NativeRequest("/v1/status", null);
                     if (Convert.ToInt32(value["pid"]) != native.ID || !String.Equals(ComparablePath(Deployment.Text(value, "dataDir")), ComparablePath(d.Root), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("微信后台实例身份不匹配，拒绝接管。");
@@ -167,6 +167,7 @@ namespace WechatAgent.Desktop {
         readonly object gate = new object();
         internal bool Alive { get { return !process.HasExited; } }
         internal int ID { get { return process.Id; } }
+        internal int ExitCode { get { return process.ExitCode; } }
         OwnedProcess(Process child, StreamWriter writer) {
             process = child; log = writer;
             output = Pump(child.StandardOutput); error = Pump(child.StandardError);

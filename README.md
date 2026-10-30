@@ -10,7 +10,7 @@
 
 ## Windows 本机启动
 
-推荐使用 **Windows 桌面版 `dist/windows-desktop/WechatAgent.exe`**：打开 EXE 自动启动服务，窗口直接显示管理页；最小化收起到托盘并保持运行，关闭窗口或托盘“退出”则等待在途任务后停止全部本实例服务。构建、依赖和数据保留说明见 [Windows 桌面程序](desktop/windows/README.md)。
+推荐使用 **Windows 桌面版 `dist/windows-desktop/WechatAgent.exe`**：打开 EXE 默认最大化并自动启动服务，窗口直接显示管理页；关闭窗口默认弹窗选择取消、收起到托盘或退出，可记住选择。只有选择退出才等待在途任务后停止全部本实例服务。构建、依赖和数据保留说明见 [Windows 桌面程序](desktop/windows/README.md)。
 
 新增 **Windows 原生便携包**：`scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable`，整体复制构建目录后双击 EXE 即可启动微信后台和管理页，基础收发无需 WSL。已有 WSL 配置继续保留，不自动迁移账号与资料；可选音乐/模型环境另行部署。首次扫码及真实媒体验收边界见上述桌面文档。
 

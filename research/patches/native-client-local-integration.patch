@@ -5440,3 +5440,92 @@ index 0000000..a86dedd
 +        assert!(decode_channels_share(&vec![0; 65537], 99).is_err());
 +    }
 +}
+diff --git a/packages/native-client-rust/crates/wechat-profile/src/initialize.rs b/packages/native-client-rust/crates/wechat-profile/src/initialize.rs
+index 2340621..fdb38e1 100644
+--- a/packages/native-client-rust/crates/wechat-profile/src/initialize.rs
++++ b/packages/native-client-rust/crates/wechat-profile/src/initialize.rs
+@@ -227,7 +227,31 @@ fn publish_directory(source: &Path, target: &Path) -> Result<()> {
+         }
+         Ok(())
+     }
+-    #[cfg(not(target_os = "linux"))]
++    #[cfg(windows)]
++    {
++        // The caller owns this empty reservation. remove_dir refuses content
++        // introduced by a concurrent writer; publication never overwrites a
++        // destination recreated in the gap. Managed startup can recover the
++        // gap using its already-persisted profile-bootstrap marker.
++        if target.exists() {
++            let metadata = fs::symlink_metadata(target)?;
++            if !metadata.is_dir()
++                || wechat_platform::is_link(&metadata)
++                || fs::read_dir(target)?.next().is_some()
++            {
++                return Err(ProfileError::InvalidProfile);
++            }
++            fs::remove_dir(target)?;
++        }
++        if let Err(error) = wechat_platform::publish_directory(source, target) {
++            if !target.exists() {
++                let _ = wechat_platform::private_dir(target);
++            }
++            return Err(error.into());
++        }
++        Ok(())
++    }
++    #[cfg(all(not(target_os = "linux"), not(windows)))]
+     {
+         wechat_platform::publish_directory(source, target)?;
+         Ok(())
+diff --git a/packages/native-client-rust/crates/wechat-store/src/lib.rs b/packages/native-client-rust/crates/wechat-store/src/lib.rs
+index 7a647dd..fbb97e9 100644
+--- a/packages/native-client-rust/crates/wechat-store/src/lib.rs
++++ b/packages/native-client-rust/crates/wechat-store/src/lib.rs
+@@ -413,7 +413,19 @@ impl Store {
+     pub fn profile_leases(&self) -> Result<Vec<Lease>> {
+         self.accounts()?
+             .into_iter()
+-            .map(|a| profile_lease(&a.profile_path))
++            .map(|a| {
++                #[cfg(windows)]
++                if !a.profile_path.exists()
++                    && a.storage_mode == "managed"
++                    && a.profile_path == self.account_dir(&a.id)?.join("profile")
++                    && self.runtime(&a.id, "profile-bootstrap")?.as_deref() == Some(b"initializing")
++                {
++                    // Recover only our recorded managed empty reservation,
++                    // never an unmarked missing or externally attached profile.
++                    private_dir(&a.profile_path)?;
++                }
++                profile_lease(&a.profile_path)
++            })
+             .collect()
+     }
+ }
+diff --git a/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs b/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs
+new file mode 100644
+index 0000000..8d69ce7
+--- /dev/null
++++ b/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs
+@@ -0,0 +1,21 @@
++#![cfg(windows)]
++use wechat_store::Store;
++
++#[test]
++fn interrupted_managed_bootstrap_restores_only_recorded_empty_reservation() {
++    let temp = tempfile::tempdir().unwrap();
++    let store = Store::open(&temp.path().join("data")).unwrap();
++    let account = store.create_account("synthetic").unwrap();
++    std::fs::remove_dir(&account.profile_path).unwrap();
++    assert!(store.profile_leases().is_err());
++    assert!(!account.profile_path.exists());
++    store.put_runtime("synthetic", "profile-bootstrap", b"initializing").unwrap();
++    let held = store.profile_leases().unwrap();
++    assert!(account.profile_path.is_dir());
++    assert!(std::fs::read_dir(&account.profile_path).unwrap().next().is_none());
++    drop(held);
++    std::fs::write(account.profile_path.join("preserve"), b"synthetic content").unwrap();
++    let held = store.profile_leases().unwrap();
++    assert_eq!(std::fs::read(account.profile_path.join("preserve")).unwrap(), b"synthetic content");
++    drop(held);
++}

@@ -9,6 +9,8 @@
 *.yml text eol=lf
 *.sh text eol=lf
 *.py text eol=lf
+# Unified patch context represents an empty source line with one space.
+*.patch whitespace=-blank-at-eol
 *.ps1 text eol=crlf
 *.bat text eol=crlf
 *.cmd text eol=crlf

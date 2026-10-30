@@ -11,7 +11,7 @@ permissions:
 jobs:
   windows-desktop:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,6 +21,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Restore native compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: temp/wn-target
+          key: windows-native-rust1931-${{ hashFiles('components/native-client/source-manifest.json') }}
+          restore-keys: windows-native-rust1931-
       - name: Build portable desktop EXE and test lifecycle controller
         shell: powershell
         run: |
@@ -29,11 +35,34 @@ jobs:
       - name: Test Windows shutdown pipe and pending job reader
         shell: powershell
         run: go test ./cmd/wechat-admin
+      - name: Test actual native Windows Agent tool and LPAC task
+        shell: powershell
+        run: |
+          $env:WECHAT_WINDOWS_TEST_CONFIG = Join-Path $PWD 'temp/windows-lpac-test.json'
+          python -c "import json,os,sys; from pathlib import Path; r=Path.cwd(); Path(os.environ['WECHAT_WINDOWS_TEST_CONFIG']).write_text(json.dumps({'pythonw':str(Path(sys.executable).with_name('pythonw.exe')),'helper':str(r/'scripts/windows_agent_host.pyw'),'spool':str(r/'temp/windows-lpac-spool')}),encoding='utf8')"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare synthetic LPAC test' }
+          go test ./internal/admin -run '^TestLiveNativeWindowsTool$' -v -count=1
       - name: Run actual isolated Windows native service cycles
         shell: powershell
         run: |
           $env:WECHAT_WINDOWS_NATIVE_PACKAGE = (Resolve-Path dist/windows-native).Path
           python -X utf8 -m unittest discover -s scripts -p test_windows_native_smoke.py
+      - name: Retain synthetic Windows startup diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-startup-diagnostics-${{ github.run_id }}
+          path: |
+            temp/windows-native-smoke/**/controller-result.txt
+            temp/windows-native-smoke/**/data/logs/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Save native compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: temp/wn-target
+          key: windows-native-rust1931-${{ hashFiles('components/native-client/source-manifest.json') }}
 
   verify:
     runs-on: ubuntu-24.04

@@ -20,13 +20,13 @@ $core=Join-Path $cache 'lib\net462\Microsoft.Web.WebView2.Core.dll'
 $forms=Join-Path $cache 'lib\net462\Microsoft.Web.WebView2.WinForms.dll'
 $loader=Join-Path $cache 'runtimes\win-x64\native\WebView2Loader.dll'
 $target=Join-Path $OutputDirectory 'WechatAgent.exe'
-$arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+','/utf8output',('/out:'+$target),('/win32manifest:'+(Join-Path $source 'app.manifest')),'/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll','/reference:System.Net.Http.dll','/reference:System.Web.Extensions.dll',('/reference:'+$core),('/reference:'+$forms),('/resource:'+$core+',Microsoft.Web.WebView2.Core.dll'),('/resource:'+$forms+',Microsoft.Web.WebView2.WinForms.dll'),('/resource:'+$loader+',WebView2Loader.dll'),(Join-Path $source 'Deployment.cs'),(Join-Path $source 'WindowsRuntime.cs'),(Join-Path $source 'Program.cs'),(Join-Path $source 'MainForm.cs'))
+$arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+','/utf8output',('/out:'+$target),('/win32manifest:'+(Join-Path $source 'app.manifest')),'/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll','/reference:System.Net.Http.dll','/reference:System.Web.Extensions.dll',('/reference:'+$core),('/reference:'+$forms),('/resource:'+$core+',Microsoft.Web.WebView2.Core.dll'),('/resource:'+$forms+',Microsoft.Web.WebView2.WinForms.dll'),('/resource:'+$loader+',WebView2Loader.dll'),(Join-Path $source 'Deployment.cs'),(Join-Path $source 'WindowsRuntime.cs'),(Join-Path $source 'CloseSettings.cs'),(Join-Path $source 'CloseChoiceDialog.cs'),(Join-Path $source 'Program.cs'),(Join-Path $source 'MainForm.cs'))
 & $compiler @arguments
 if($LASTEXITCODE -ne 0){throw 'Desktop build failed.'}
 Copy-Item -LiteralPath (Join-Path $cache 'LICENSE.txt') -Destination (Join-Path $OutputDirectory 'WebView2-LICENSE.txt')
 if($Test){
  $tests=Join-Path $OutputDirectory 'DesktopTests.exe'
- & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'ControllerTests.cs')
+ & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'CloseSettings.cs') (Join-Path $source 'ControllerTests.cs')
  if($LASTEXITCODE -ne 0){throw 'Desktop tests did not compile.'}
  & $tests
  if($LASTEXITCODE -ne 0){throw 'Desktop controller tests failed.'}
@@ -34,6 +34,7 @@ if($Test){
 if($Portable){
  $nativeArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes\windows-x64')}
  if($NativeSourceDirectory){$nativeArgs.SourceDirectory=$NativeSourceDirectory}
+ if($Test){$nativeArgs.Test=$true}
  & (Join-Path $PSScriptRoot 'Build-WindowsNative.ps1') @nativeArgs
  if($LASTEXITCODE -ne 0){throw 'Windows native build failed.'}
  Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory '使用说明.txt')

@@ -13,6 +13,7 @@ namespace WechatAgent.Desktop {
     internal sealed class MainForm : Form {
         readonly Deployment deployment;
         readonly ServiceController controller;
+        readonly CloseSettings closeSettings;
         readonly EventWaitHandle activate;
         readonly NotifyIcon tray = new NotifyIcon();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
@@ -24,10 +25,14 @@ namespace WechatAgent.Desktop {
         WebView2 web;
         CancellationTokenSource operation;
         bool busy, allowExit, exitRequested, stoppingCommitted;
+        FormWindowState restoredState = FormWindowState.Maximized;
+        bool closeDialogOpen;
 
         internal MainForm(Deployment d, EventWaitHandle activation) {
             deployment = d; activate = activation; controller = new ServiceController(d);
+            closeSettings = new CloseSettings(d.Workspace);
             Text = "蓝色大肥鱼"; Size = new Size(1440, 980); MinimumSize = new Size(920, 640);
+            WindowState = FormWindowState.Maximized;
             StartPosition = FormStartPosition.CenterScreen; AutoScaleMode = AutoScaleMode.Dpi;
             Font = new Font("Microsoft YaHei UI", 11); BackColor = Color.White; Icon = SystemIcons.Application;
             // The management page owns the full client area. These controls are
@@ -47,11 +52,21 @@ namespace WechatAgent.Desktop {
             stopItem.Click += async delegate { await StopServices(false); };
             exitItem.Click += async delegate { RequestExit(); if (!busy) await StopServices(true); };
             var about = new ToolStripMenuItem("关于蓝色大肥鱼");
-            about.Click += delegate { MessageBox.Show("蓝色大肥鱼桌面版 1.1.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/wechat-agent\n反馈：https://github.com/RoamerFly/wechat-agent/issues\n\n最小化：收起到托盘，继续运行\n关闭窗口 / 托盘退出：安全停止全部本实例服务并退出\n\n后端：" + (d.Windows ? "Windows 原生" : "WSL") + "\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于蓝色大肥鱼", MessageBoxButtons.OK, MessageBoxIcon.Information); };
-            menu.Items.AddRange(new ToolStripItem[] {show, hide, new ToolStripSeparator(), startItem, stopItem, new ToolStripSeparator(), about, exitItem});
+            var closeMode = new ToolStripMenuItem("关闭窗口时");
+            foreach (var value in new [] { new [] {"ask", "每次询问"}, new [] {"tray", "最小化到托盘运行"}, new [] {"exit", "退出并停止全部服务"} }) {
+                string behavior = value[0]; var item = new ToolStripMenuItem(value[1]) { Checked = closeSettings.Behavior == behavior };
+                item.Click += delegate {
+                    try { closeSettings.Save(behavior); foreach (ToolStripMenuItem other in closeMode.DropDownItems) other.Checked = other == item; }
+                    catch (Exception error) { MessageBox.Show(this, "关闭方式未能保存，原设置保留。\n" + error.Message, "蓝色大肥鱼", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                };
+                closeMode.DropDownItems.Add(item);
+            }
+            closeMode.DropDownOpening += delegate { for (int i = 0; i < closeMode.DropDownItems.Count; i++) ((ToolStripMenuItem)closeMode.DropDownItems[i]).Checked = closeSettings.Behavior == new [] {"ask", "tray", "exit"}[i]; };
+            about.Click += delegate { MessageBox.Show("蓝色大肥鱼桌面版 1.1.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/wechat-agent\n反馈：https://github.com/RoamerFly/wechat-agent/issues\n\n最小化：收起到托盘，继续运行\n关闭窗口：选择取消、托盘或退出，可记住选择\n选择退出：安全停止全部本实例服务并退出\n\n后端：" + (d.Windows ? "Windows 原生（Linux 微信协议标识）" : "WSL") + "\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于蓝色大肥鱼", MessageBoxButtons.OK, MessageBoxIcon.Information); };
+            menu.Items.AddRange(new ToolStripItem[] {show, hide, new ToolStripSeparator(), startItem, stopItem, new ToolStripSeparator(), closeMode, about, exitItem});
             tray.Icon = Icon; tray.Text = "蓝色大肥鱼 · 正在启动"; tray.ContextMenuStrip = menu; tray.Visible = true;
             tray.DoubleClick += delegate { RestoreWindow(); };
-            Resize += delegate { if (WindowState == FormWindowState.Minimized) ToTray(); };
+            Resize += delegate { if (WindowState == FormWindowState.Minimized) ToTray(); else restoredState = WindowState; };
             retry.Click += async delegate { await StartServices(); };
             cancel.Click += delegate { if (!stoppingCommitted && operation != null) { exitRequested = false; operation.Cancel(); } };
             controller.Progress = text => {
@@ -60,8 +75,23 @@ namespace WechatAgent.Desktop {
             };
             Shown += async delegate { await StartServices(); };
             FormClosing += async delegate(object sender, FormClosingEventArgs e) {
-                if (allowExit) return; e.Cancel = true; RequestExit();
-                if (!busy) await StopServices(true);
+                if (allowExit) return; e.Cancel = true;
+                if (closeDialogOpen || exitRequested) return;
+                string choice = closeSettings.Behavior;
+                if (choice == "ask") {
+                    closeDialogOpen = true;
+                    try {
+                        using (var dialog = new CloseChoiceDialog()) {
+                            dialog.ShowDialog(this); choice = dialog.Choice;
+                            if (choice == "cancel") return;
+                            if (dialog.Remember) closeSettings.Save(choice);
+                        }
+                    } catch (Exception error) {
+                        MessageBox.Show(this, "关闭方式未能保存，服务保持运行。\n" + error.Message, "蓝色大肥鱼", MessageBoxButtons.OK, MessageBoxIcon.Warning); return;
+                    } finally { closeDialogOpen = false; }
+                }
+                if (choice == "tray") { ToTray(); return; }
+                RequestExit(); if (!busy) await StopServices(true);
             };
             timer.Interval = 1000;
             timer.Tick += delegate { if (activate.WaitOne(0)) RestoreWindow(); }; timer.Start();
@@ -78,7 +108,9 @@ namespace WechatAgent.Desktop {
             tray.ShowBalloonTip(1800, "蓝色大肥鱼", "已收起到托盘，服务继续运行。双击托盘图标打开管理页。", ToolTipIcon.Info);
         }
         void RestoreWindow() {
-            ShowInTaskbar = true; Show(); WindowState = FormWindowState.Normal; Activate();
+            // Restore the state before Show, otherwise showing a minimized
+            // form can fire Resize and immediately hide it in the tray again.
+            WindowState = restoredState; ShowInTaskbar = true; Show(); Activate();
         }
         void ClosePage() { if (web != null) { Controls.Remove(web); web.Dispose(); web = null; } placeholder.Visible = true; placeholder.BringToFront(); }
         void SetBusy(bool value, bool stopping) {
