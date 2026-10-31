@@ -31,7 +31,9 @@
     "runtime/observation.py": "2e1227644c170ff8ded65ec660ab2ca1f13cc6e9eac787c1c39275b8aebdcfb4",
     "runtime/README.md": "900fe2ff7a92d22e758fc20231997f377e02f036846ead5bc0138ff4c4952ede",
     "tests/test_observation.py": "ce1ae132f9f81f942059de212f056378378280ac4a279b40ace3d6550e2b5d41",
-    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b"
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "runtime/transcription.py": "1fb3e0e0384f2bd1ce45c992e370dbb7c40b7c3d0500fbef9416838def4991e0",
+    "tests/test_transcription.py": "00c6c18f17f1b676550e3700682dce410d5ca876d51082db819f3c36a80868a2"
   },
   "http_routes": [
     {
