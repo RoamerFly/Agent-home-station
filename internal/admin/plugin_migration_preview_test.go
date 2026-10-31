@@ -131,6 +131,57 @@ func TestPluginMigrationPreviewLocalProfileAndSourceHashChange(t *testing.T) {
 	}
 }
 
+func TestPluginMigrationPreviewMapsDeclaredLoopbackBridgeButBlocksImplicitCookieFallback(t *testing.T) {
+	f := setup(t)
+	if err := writePrivate(f.dir+"/channels-config.json", []byte(`{"enabled":true,"cookie":"synthetic-cookie","object_bridge_url":"http://127.0.0.1:3210/"}`)); err != nil {
+		t.Fatal(err)
+	}
+	packages := migrationCatalog()
+	if !packages["share-reader"].objectBridge {
+		t.Fatal("share reader bridge declaration was not discovered")
+	}
+	account, err := f.manager.pluginMigrationPreviewFor(context.Background(), packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var share pluginMigrationStep
+	for _, step := range account.Plugins {
+		if step.Plugin == "share-reader" {
+			share = step
+		}
+	}
+	if string(share.Values["object_bridge_url"]) != `"http://127.0.0.1:3210"` || string(share.update.Values["object_bridge_url"]) != `"http://127.0.0.1:3210"` {
+		t.Fatal("declared bridge was not carried into host configuration", share)
+	}
+	if !strings.Contains(strings.Join(share.RequiredMissing, ","), "explicit_bridge_fallback_policy_needed") {
+		t.Fatal("legacy bridge/cookie fallback changed without an explicit decision", share)
+	}
+}
+
+func TestPluginMigrationPreviewRejectsNonLoopbackBridge(t *testing.T) {
+	f := setup(t)
+	if err := writePrivate(f.dir+"/channels-config.json", []byte(`{"enabled":true,"object_bridge_url":"https://bridge.example"}`)); err != nil {
+		t.Fatal(err)
+	}
+	packages := migrationCatalog()
+	if !packages["share-reader"].objectBridge {
+		t.Fatal("share reader bridge declaration was not discovered")
+	}
+	account, err := f.manager.pluginMigrationPreviewFor(context.Background(), packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var share pluginMigrationStep
+	for _, step := range account.Plugins {
+		if step.Plugin == "share-reader" {
+			share = step
+		}
+	}
+	if _, ok := share.Values["object_bridge_url"]; ok || !strings.Contains(strings.Join(share.RequiredMissing, ","), "object_bridge_url_invalid") {
+		t.Fatal("non-loopback bridge reached plugin configuration", share)
+	}
+}
+
 func TestPluginMigrationPreviewBlocksMissingOfficialSourceWithoutStoreWrite(t *testing.T) {
 	t.Setenv("WECHAT_PLUGIN_RUNTIME_CONFIG", "")
 	f := setup(t)

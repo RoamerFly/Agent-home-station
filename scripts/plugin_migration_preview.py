@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import sys
 from typing import Any
+from urllib.parse import urlsplit
 
 
 SCHEMA_VERSION = 1
@@ -231,6 +232,30 @@ def _web_plan(repo: Path, config: dict[str, Any], mcp: dict[str, Any]) -> tuple[
     return _step("web-search", _package(repo, "web-search"), enabled, values, secrets, required, unmapped), handoff
 
 
+def _declares_share_object_bridge(repo: Path) -> bool:
+    """Accept only an ordinary, explicit share-reader bridge setting."""
+    package, package_error = _read_json(repo / "plugins" / "share-reader" / "plugin.json", required=True)
+    schema, schema_error = _read_json(repo / "plugins" / "share-reader" / "config.schema.json", required=True)
+    if package_error or schema_error or package.get("id") != "share-reader":
+        return False
+    properties = schema.get("properties")
+    field = properties.get("object_bridge_url") if isinstance(properties, dict) else None
+    return isinstance(field, dict) and field.get("type") == "string" and field.get("x-secret") is not True and field.get("x-host-only") is not True
+
+
+def _loopback_object_bridge_url(raw: Any) -> str | None:
+    """Mirror the Go loopback-only bridge contract without contacting it."""
+    value = _safe_text(raw)
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme != "http" or parsed.username is not None or parsed.password is not None or parsed.hostname not in {"127.0.0.1", "::1"} or port is None or not 1 <= port <= 65535 or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
+        return None
+    return value[:-1] if parsed.path == "/" else value
+
+
 def _share_plan(repo: Path, channels: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     enabled = bool(channels.get("enabled"))
     cookie_report, cookie = _secret(channels.get("cookie"), "channels-config.json:cookie")
@@ -238,8 +263,25 @@ def _share_plan(repo: Path, channels: dict[str, Any]) -> tuple[dict[str, Any], d
     required: list[str] = []
     if enabled and not (cookie or assistant):
         required.append("yuanbao_cookie_or_assistant_cookie")
-    unmapped = ["channels-config.json:object_bridge_url"] if _safe_text(channels.get("object_bridge_url")) else []
-    step = _step("share-reader", _package(repo, "share-reader"), enabled, {},
+    values: dict[str, Any] = {}
+    unmapped: list[str] = []
+    legacy_bridge = _safe_text(channels.get("object_bridge_url"))
+    if legacy_bridge:
+        bridge = _loopback_object_bridge_url(legacy_bridge)
+        if bridge is None:
+            required.append("object_bridge_url_invalid")
+            unmapped.append("channels-config.json:object_bridge_url")
+        elif not _declares_share_object_bridge(repo):
+            required.append("object_bridge_url_not_declared_by_share_reader_plugin")
+            unmapped.append("channels-config.json:object_bridge_url")
+        else:
+            values["object_bridge_url"] = bridge
+            # Legacy code could try the bridge and then fall back to the
+            # Yuanbao cookie. The plugin resolver is stricter: preserve the
+            # data but require an administrator to choose that policy.
+            if cookie:
+                required.append("explicit_bridge_fallback_policy_needed")
+    step = _step("share-reader", _package(repo, "share-reader"), enabled, values,
                  {"yuanbao_cookie": cookie_report, "assistant_cookie": assistant_report}, required, unmapped)
     secrets: dict[str, str] = {}
     if cookie:

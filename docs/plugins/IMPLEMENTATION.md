@@ -1,5 +1,7 @@
 # 插件化实施状态
 
+2026-11-01 分享增量：share-reader 0.1.6 的公开分享和视频号解析已通过官方包隔离与回环桥接端到端验收。就绪包现为 web-search、media-understanding、speech 和 share-reader，各自只开放已验证能力。显式来源调用已分离当前 actor 与上传者，并持续复核任务/跨会话权限。旧桥接与 Cookie 混合策略仍须确认，旧绑定仍为只读兼容；整体轻主体未完成。见 `../quality/plugin-share-readiness.md`。
+
 2026-11-01 最新就绪范围：官方 media-understanding 0.1.2 的图片/语音能力和 speech 0.1.3 的默认云端合成已通过原样包安装及实际隔离契约验收，和 web-search 一起成为可安装的受限能力。其余服务/本地声线训练以及旧实现删除仍待完成；正式生产配置与 EXE 尚未更新。详见 `../quality/plugin-official-readiness.md`，历史段落的 pending 状态按日期理解。
 
 最新并行集成：收到微信语音已接入来源绑定的 ASR 插件适配，媒体包有独立可选 ASR 配置；依赖支持版本范围及调用前复核；旧官方搜索 HTTP 协议迁入兼容包。完整剩余清单见 `REMAINING-WORK.md`，验证及局限见 `../quality/plugin-parallel-integration.md`。历史阶段记录按时间保留，不能把其中旧的“尚未接通”描述当作最新状态，也不能据此宣称八类待迁移插件已经完成。

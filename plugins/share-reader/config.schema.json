@@ -17,6 +17,12 @@
       "x-host-only": true,
       "maxLength": 16384,
       "description": "仅宿主持有，发送到清单中指定的对应平台接口；不交给插件进程。"
+    },
+    "object_bridge_url": {
+      "type": "string",
+      "title": "视频号本地对象桥接地址",
+      "maxLength": 512,
+      "description": "可选。管理员配置的本机环回 HTTP 服务地址；宿主仅接受合法环回端点，并通过受控 channels_bridge 回调调用。该地址不是凭据，插件进程不会直接请求它。"
     }
   },
   "additionalProperties": false

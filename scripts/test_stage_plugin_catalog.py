@@ -31,6 +31,27 @@ def write_package(root, name="synthetic", extra=None):
 
 
 class StagePluginCatalogTests(unittest.TestCase):
+    def test_rejects_source_output_overlap_before_source_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "plugins"
+            source.mkdir()
+            package = write_package(source)
+            before = {
+                path.relative_to(source).as_posix(): path.read_bytes()
+                for path in source.rglob("*") if path.is_file()
+            }
+            for output in (source, source / "catalog-output", root):
+                with self.subTest(output=output), self.assertRaisesRegex(stage_plugin_catalog.StageError, "source_output_overlap"):
+                    stage_plugin_catalog.stage(source, output)
+                after = {
+                    path.relative_to(source).as_posix(): path.read_bytes()
+                    for path in source.rglob("*") if path.is_file()
+                }
+                self.assertEqual(after, before)
+            self.assertFalse((source / "catalog-output").exists())
+            self.assertTrue(package.exists())
+
     def test_stages_only_indexed_source_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -40,7 +40,7 @@ func ResolveObject(ctx context.Context, base, id, nonce string) (ResolvedVideo, 
 	}
 	q := url.Values{"object_id": {id}, "nonce_id": {nonce}}
 	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/api/channels/feed/profile?"+q.Encode(), nil)
-	client := &http.Client{Timeout: 25 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Timeout: 25 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, e := client.Do(req)
 	if e != nil {
 		return v, errors.New("channels_object_bridge_unavailable")
@@ -97,4 +97,10 @@ func parseObjectVideo(b []byte, id string) (ResolvedVideo, error) {
 		}
 	}
 	return v, nil
+}
+
+// ParseObjectBridgeResponse verifies an already fetched bounded loopback bridge
+// response. It exposes no transport or URL authority to callers.
+func ParseObjectBridgeResponse(b []byte, id string) (ResolvedVideo, error) {
+	return parseObjectVideo(b, id)
 }

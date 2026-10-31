@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
@@ -7,6 +8,8 @@ import unittest
 sys.dont_write_bytecode = True
 spec=importlib.util.spec_from_file_location("channels_adapter",Path(__file__).resolve().parents[1]/"runtime/channels.py")
 adapter=importlib.util.module_from_spec(spec);spec.loader.exec_module(adapter)
+main_spec=importlib.util.spec_from_file_location("share_reader_main",Path(__file__).resolve().parents[1]/"runtime/main.py")
+main=importlib.util.module_from_spec(main_spec);main_spec.loader.exec_module(main)
 SOURCE="https://weixin.qq.com/sph/synthetic123"
 
 
@@ -71,6 +74,79 @@ class ChannelsTests(unittest.TestCase):
         route,calls=self.fixture(mutate)
         with self.assertRaisesRegex(ValueError,"channels_yuanbao_parse_failed"):adapter.resolve({"url":SOURCE},route)
         self.assertEqual(len(calls),1)
+
+    def test_source_bound_object_bridge_preserves_uint64_without_cookie_routes(self):
+        calls=[]
+        def bridge(request):
+            calls.append(request)
+            return {
+                "source_url": SOURCE + "?source=bound",
+                "feed": {
+                    "code": 0,
+                    "data": {"object": {
+                        "id": 18446744073709551614,
+                        "contact": {"nickname": "桥接作者"},
+                        "objectDesc": {
+                            "description": "桥接作品",
+                            "media": [{
+                                "url": "https://media.example/bridge.mp4?from=bridge",
+                                "urlToken": "&token=opaque",
+                                "decodeKey": 18446744073709551615,
+                            }],
+                        },
+                    }},
+                },
+            }
+        out = adapter.resolve_bridge({"object_id":"18446744073709551614","nonce_id":"bound-nonce"}, bridge)
+        self.assertEqual(calls, [{"object_id":"18446744073709551614","nonce_id":"bound-nonce","timeout_seconds":25}])
+        self.assertEqual(out["object_id"], "18446744073709551614")
+        self.assertEqual(out["private_decode_key"], "18446744073709551615")
+        self.assertEqual(out["source_url"], SOURCE + "?source=bound")
+        self.assertEqual(out["private_media_locators"], ["https://media.example/bridge.mp4?from=bridge&token=opaque"])
+
+    def test_bridge_failure_never_falls_back_to_credential_routes(self):
+        calls=[]
+        def denied(request):
+            calls.append(request)
+            raise ValueError("channels_object_bridge_unavailable")
+        with self.assertRaisesRegex(ValueError, "channels_object_bridge_unavailable"):
+            adapter.resolve_bridge({"object_id":"12345"}, denied)
+        self.assertEqual(calls, [{"object_id":"12345","timeout_seconds":25}])
+
+    def test_bridge_explicit_timeout_is_forwarded_unchanged(self):
+        calls=[]
+        def bridge(request):
+            calls.append(request)
+            return {"source_url":SOURCE,"feed":{"code":0,"data":{"object":{"id":"12345","contact":{"nickname":"作者"},"objectDesc":{"description":"标题","media":[{"url":"https://media.example/video.mp4","decodeKey":"9"}]}}}}}
+        adapter.resolve_bridge({"object_id":"12345","timeout_seconds":60}, bridge)
+        self.assertEqual(calls, [{"object_id":"12345","timeout_seconds":60}])
+
+    def test_bridge_rejects_unsafe_or_inexact_response_without_lossy_numbers(self):
+        def response(value):
+            return {"source_url":SOURCE,"feed":value}
+        valid = {"code":0,"data":{"object":{"id":"12345","contact":{"nickname":"作者"},"objectDesc":{"description":"标题","media":[{"url":"https://media.example/video.mp4","decodeKey":"9"}]}}}}
+        for value, expected in [
+            ({"code":0,"data":{"object":{**valid["data"]["object"],"id":12346}}}, "channels_resolved_video_mismatch"),
+            ({"code":0,"data":{"object":{**valid["data"]["object"],"id":1.5}}}, "channels_object_bridge_response_invalid"),
+            ({"code":0,"data":{"object":{**valid["data"]["object"],"objectDesc":{"description":"标题","media":[{"url":"http://media.example/video.mp4","decodeKey":"9"}]}}}}, "channels_media_locator_missing"),
+        ]:
+            with self.subTest(expected=expected), self.assertRaisesRegex(ValueError, expected):
+                adapter.resolve_bridge({"object_id":"12345"}, lambda _request, value=value: response(value))
+
+    def test_stdio_bridge_uses_only_the_bound_object_request(self):
+        context={"account":"synthetic-account","thread":"synthetic-thread","requester":"synthetic-user","purpose":"share","request_key":"synthetic-key"}
+        requests=[
+            {"jsonrpc":"2.0","id":"init","method":"initialize","params":{}},
+            {"jsonrpc":"2.0","id":"call","method":"tools/call","params":{"name":"share.resolve_channels","arguments":{"object_id":"12345","nonce_id":"bound"},"_meta":{"wechat/context":context}}},
+            {"jsonrpc":"2.0","id":"share-read-1","result":{"source_url":SOURCE,"feed":{"code":0,"data":{"object":{"id":"12345","contact":{"nickname":"作者"},"objectDesc":{"description":"标题","media":[{"url":"https://media.example/video.mp4","decodeKey":"9"}]}}}}}},
+        ]
+        incoming=io.StringIO("".join(json.dumps(value,ensure_ascii=False)+"\n" for value in requests))
+        outgoing=io.StringIO()
+        main.Wire(incoming,outgoing).serve()
+        replies=[json.loads(line) for line in outgoing.getvalue().splitlines()]
+        self.assertEqual(replies[1], {"jsonrpc":"2.0","id":"share-read-1","method":"wechat/channels_bridge","params":{"object_id":"12345","nonce_id":"bound","timeout_seconds":25}})
+        self.assertEqual(replies[2]["id"], "call")
+        self.assertEqual(replies[2]["result"]["object_id"], "12345")
 
 
 if __name__=="__main__":unittest.main()

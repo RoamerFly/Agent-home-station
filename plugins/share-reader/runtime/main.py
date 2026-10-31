@@ -1,7 +1,7 @@
-"""MCP stdio entry point for the share reader's migrated public-page parser.
+"""MCP stdio entry point for the ready, source-bound share parsers.
 
-The package remains migration-pending until Channels and artifact handoff are
-connected; the host must not install this development package in production.
+Only the concrete public and Channels resolvers are ready.  They return raw
+source parsing results, never a viewing, media-download, or delivery claim.
 """
 import importlib.util
 import json
@@ -46,6 +46,9 @@ class Wire:
     def route(self, route, body, timeout, referer=""):
         return self.host("wechat/http_route", {"route":route,"body":body,"max_bytes":2*1024*1024,"timeout_seconds":timeout,"referer":referer})
 
+    def channels_bridge(self, request):
+        return self.host("wechat/channels_bridge", request)
+
     def host(self, method, params):
         self.sequence += 1
         identity = "share-read-" + str(self.sequence)
@@ -74,7 +77,7 @@ class Wire:
                 method = request.get("method")
                 if method == "initialize":
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "share-reader", "version": "0.1.4"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "share-reader", "version": "0.1.6"}}
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/call" and initialized:
@@ -85,7 +88,11 @@ class Wire:
                     if params.get("name") == "share.resolve_public":
                         result = parser.resolve(params.get("arguments"), self.get)
                     elif params.get("name") == "share.resolve_channels":
-                        result = channels.resolve(params.get("arguments"), self.route)
+                        arguments = params.get("arguments")
+                        if isinstance(arguments, dict) and "object_id" in arguments:
+                            result = channels.resolve_bridge(arguments, self.channels_bridge)
+                        else:
+                            result = channels.resolve(arguments, self.route)
                     else:
                         raise ValueError("capability_unavailable")
                 else:

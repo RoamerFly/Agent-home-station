@@ -2,8 +2,6 @@ package admin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -47,37 +45,8 @@ func shareBindingFixtureFor(t *testing.T, account, plugin string, runtimeReady b
 	}
 	var p pluginhost.Package
 	json.Unmarshal(raw, &p)
-	p.Status = "ready"
 	p.ID = plugin
-	if runtimeReady {
-		// Only this temporary copy is promoted. The shipped package stays pending.
-		capsRaw, err := os.ReadFile(filepath.Join(dir, "capabilities.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		var caps struct {
-			Version      int                     `json:"version"`
-			Capabilities []pluginhost.Capability `json:"capabilities"`
-		}
-		if err = json.Unmarshal(capsRaw, &caps); err != nil {
-			t.Fatal(err)
-		}
-		selected := []pluginhost.Capability{}
-		for _, cap := range caps.Capabilities {
-			if cap.ID == "share.resolve_channels" || cap.ID == "share.resolve_public" {
-				cap.Implementation, cap.Discoverable = "ready", true
-				selected = append(selected, cap)
-			}
-		}
-		caps.Capabilities = selected
-		capsRaw, _ = json.Marshal(caps)
-		if err = os.WriteFile(filepath.Join(dir, "capabilities.json"), capsRaw, 0600); err != nil {
-			t.Fatal(err)
-		}
-		hash := sha256.Sum256(capsRaw)
-		p.Files["capabilities.json"] = hex.EncodeToString(hash[:])
-		p.Dependencies = nil
-	}
+	_ = runtimeReady // The official package is now staged ready; do not promote a test-only manifest.
 	raw, _ = json.Marshal(p)
 	if err = os.WriteFile(filepath.Join(dir, "plugin.json"), raw, 0600); err != nil {
 		t.Fatal(err)

@@ -35,6 +35,13 @@ func newShareRouteBinding(message linuxnative.Message, source linuxnative.Channe
 	}
 	b := &shareRouteBinding{account: message.AccountID, thread: message.ThreadID, message: message.ID, event: ref.EventID, revision: ref.Revision, object: source.ObjectID, nonce: source.ObjectNonceID}
 	if verifiedShare != "" {
+		if verifiedShare == "bridge" {
+			if _, e := strconv.ParseUint(b.object, 10, 64); e != nil || len(b.nonce) > 4096 {
+				return nil, errors.New("share_native_shortlink_required")
+			}
+			b.phase = "channels-bridge"
+			return b, nil
+		}
 		var err error
 		b.share, err = channels.ShareURL(verifiedShare)
 		if err != nil {

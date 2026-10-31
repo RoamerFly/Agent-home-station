@@ -79,3 +79,64 @@ def resolve(args, route):
     return {"ok":True,"platform":"channels","source_url":source,"object_id":actual,"title":title,"author":author,
             "private_media_locators":[locator],"private_decode_key":key,"coverage":"media_locator_only",
             "video_observed":False,"media_downloaded":False,"untrusted_external_content":True}
+
+
+def resolve_bridge(args, bridge):
+    """Resolve a source-bound Channels object through the host loopback bridge.
+
+    The bridge address, login state, and source binding are deliberately owned
+    by the host.  This parser receives only the already-bound object identity,
+    optional nonce, and the raw bridge response.  A bridge failure is terminal:
+    do not silently retry through a credential-backed provider.
+    """
+    if not isinstance(args, dict) or set(args) - {"object_id", "nonce_id", "timeout_seconds"}:
+        raise ValueError("invalid_channels_bridge_arguments")
+    timeout = args.get("timeout_seconds", 25)
+    if type(timeout) is not int or timeout < 1:
+        raise ValueError("invalid_timeout_seconds")
+    object_id = uint64(args.get("object_id"), "channels_object_id_invalid", True)
+    nonce = args.get("nonce_id")
+    if nonce is not None and (not isinstance(nonce, str) or not 1 <= len(nonce) <= 4096):
+        raise ValueError("channels_nonce_id_invalid")
+    request = {"object_id": object_id, "timeout_seconds": timeout}
+    if nonce is not None:
+        request["nonce_id"] = nonce
+    response = bridge(request)
+    if not isinstance(response, dict):
+        raise ValueError("channels_object_bridge_response_invalid")
+    source = response.get("source_url")
+    if not isinstance(source, str) or not source or len(source) > 16384:
+        raise ValueError("channels_object_bridge_response_invalid")
+    return parse_bridge_feed(response.get("feed"), object_id, source)
+
+
+def parse_bridge_feed(feed, expected_object_id, source):
+    """Parse the fixed /api/channels/feed/profile response without float IDs."""
+    if not isinstance(feed, dict) or type(feed.get("code")) is not int or feed["code"] != 0:
+        raise ValueError("channels_object_bridge_response_invalid")
+    data = feed.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("object"), dict):
+        raise ValueError("channels_object_bridge_response_invalid")
+    object_value = data["object"]
+    actual = uint64(object_value.get("id"), "channels_object_bridge_response_invalid", True)
+    if actual != expected_object_id:
+        raise ValueError("channels_resolved_video_mismatch")
+    contact, description = object_value.get("contact"), object_value.get("objectDesc")
+    if not isinstance(contact, dict) or not isinstance(description, dict):
+        raise ValueError("channels_object_bridge_response_invalid")
+    author, title, media_items = contact.get("nickname"), description.get("description"), description.get("media")
+    if not isinstance(author, str) or not isinstance(title, str) or not isinstance(media_items, list) or not media_items or not isinstance(media_items[0], dict):
+        raise ValueError("channels_object_bridge_response_invalid")
+    item = media_items[0]
+    locator, token = item.get("url"), item.get("urlToken", "")
+    if not isinstance(locator, str) or not isinstance(token, str):
+        raise ValueError("channels_object_bridge_response_invalid")
+    locator += token
+    media = urlsplit(locator)
+    if (media.scheme != "https" or not media.hostname or media.username is not None or media.password is not None
+            or len(locator) > 16384 or "\\" in locator or any(ord(c) < 33 for c in locator)):
+        raise ValueError("channels_media_locator_missing")
+    key = uint64(item.get("decodeKey"), "channels_decode_key_invalid")
+    return {"ok":True,"platform":"channels","source_url":source,"object_id":actual,"title":title,"author":author,
+            "private_media_locators":[locator],"private_decode_key":key,"coverage":"media_locator_only",
+            "video_observed":False,"media_downloaded":False,"untrusted_external_content":True}

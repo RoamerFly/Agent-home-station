@@ -4,11 +4,8 @@
     {
       "id": "share.read",
       "implementation": "migration-pending",
-      "description": "视频号、快手与已有分享适配",
-      "permissions": [
-        "network",
-        "artifact.write"
-      ],
+      "description": "未来的综合分享读取占位能力；当前不请求运行时权限，解析能力请使用已就绪的具体工具。",
+      "permissions": [],
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -21,9 +18,9 @@
     },
     {
       "id": "share.resolve_public",
-      "implementation": "migration-pending",
-      "discoverable": false,
-      "description": "公开分享实际正文与精确作品播放地址解析。媒体地址只供宿主交接，不代表观看视频或素材已下载；完整分享链路仍未接通。",
+      "implementation": "ready",
+      "discoverable": true,
+      "description": "解析已核验的公开分享正文与精确作品播放地址。媒体地址只供宿主受控交接，不代表观看视频、素材已下载或能够发送。",
       "permissions": [
         "network"
       ],
@@ -85,13 +82,13 @@
     },
     {
       "id": "share.resolve_channels",
-      "implementation": "migration-pending",
-      "discoverable": false,
+      "implementation": "ready",
+      "discoverable": true,
       "permissions": [
         "network"
       ],
       "side_effect": "read",
-      "description": "视频号短链或 export 对象解析，仅返回供宿主使用的媒体位置，不代表视频已观察。完整媒体交接未完成。",
+      "description": "解析已核验的视频号短链、export 或宿主绑定对象，仅返回供宿主受控交接的媒体位置，不代表视频已观察、下载或发送。",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -106,6 +103,10 @@
           },
           "expected_object_id": {
             "type": "string"
+          },
+          "object_id": {
+            "type": "string",
+            "description": "仅宿主在已绑定的视频号来源使用本地对象桥接时注入；不能由 Agent 自行选择对象。"
           },
           "timeout_seconds": {
             "type": "integer",

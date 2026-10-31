@@ -49,6 +49,13 @@ class PluginMigrationPreviewTests(unittest.TestCase):
         (web / "config.schema.json").write_text(json.dumps({"properties": {"search_backend": {"enum": ["public", "deepseek"]}, "search_key": {"type": "string", "x-secret": True, "x-host-only": True}}}), encoding="utf8")
         (web / "capabilities.json").write_text(json.dumps({"capabilities": [{"id": "web.search", "implementation": "ready", "permissions": ["network"]}]}), encoding="utf8")
 
+    def add_declared_share_bridge(self, repo):
+        share = repo / "plugins" / "share-reader"
+        manifest = json.loads((share / "plugin.json").read_text(encoding="utf8"))
+        manifest["status"] = "ready"
+        (share / "plugin.json").write_text(json.dumps(manifest), encoding="utf8")
+        (share / "config.schema.json").write_text(json.dumps({"type": "object", "properties": {"object_bridge_url": {"type": "string"}}, "additionalProperties": False}), encoding="utf8")
+
     def test_preview_is_per_account_read_only_and_redacts_secrets(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -83,6 +90,31 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertEqual(web["secrets"]["search_key"]["source_field"], "config.json:api_key")
             self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
             self.assertEqual(handoff["accounts"][0]["secrets"]["web-search.search_key"], secret)
+
+    def test_declared_loopback_bridge_is_mapped_but_cookie_fallback_requires_choice(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_share_bridge(repo)
+            root, _ = self.make_root(base)
+            (root / "channels-config.json").write_text(json.dumps({"enabled": True, "cookie": "synthetic-cookie", "object_bridge_url": "http://127.0.0.1:3210/"}), encoding="utf8")
+            report, _ = preview.build_preview(root, repo, "main")
+            share = next(x for x in report["accounts"][0]["plugins"] if x["plugin"] == "share-reader")
+            self.assertEqual(share["values"]["object_bridge_url"], "http://127.0.0.1:3210")
+            self.assertIn("explicit_bridge_fallback_policy_needed", share["required_missing"])
+            self.assertNotIn("channels-config.json:object_bridge_url", share.get("unmapped_legacy_fields", []))
+
+    def test_invalid_bridge_is_not_mapped_even_when_schema_declares_one(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_share_bridge(repo)
+            root, _ = self.make_root(base)
+            (root / "channels-config.json").write_text(json.dumps({"enabled": True, "object_bridge_url": "https://bridge.example"}), encoding="utf8")
+            report, _ = preview.build_preview(root, repo, "main")
+            share = next(x for x in report["accounts"][0]["plugins"] if x["plugin"] == "share-reader")
+            self.assertNotIn("object_bridge_url", share["values"])
+            self.assertIn("object_bridge_url_invalid", share["required_missing"])
 
     def test_optional_outputs_are_new_private_files_outside_source(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -2,9 +2,9 @@
   "schema_version": 1,
   "id": "share-reader",
   "name": "分享内容读取",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "host_protocol": 1,
-  "status": "migration-pending",
+  "status": "ready",
   "platforms": [
     "windows-amd64",
     "linux-amd64"
@@ -14,28 +14,21 @@
     "entrypoint": "runtime/main.py"
   },
   "permissions": [
-    "network",
-    "artifact.write"
-  ],
-  "dependencies": [
-    {
-      "id": "media-understanding",
-      "version": ">=0.1.1 <0.2.0"
-    }
+    "network"
   ],
   "files": {
-    "capabilities.json": "5873d4f5eb6a0691f19890568ac7fdfdc2c0244387e77fef47a27602a2a6ec4c",
-    "CHANGELOG.md": "e0c7a2dd5178618b8adca01b4ef4442a2220cb1d2e7fa07394d1b09babc77066",
-    "config.schema.json": "91fbea1adb3d8cd98309ef9fcd0e461c5ad6b30f91ced5c4be9d2ac6dfd7d1fd",
-    "MIGRATION.md": "3c89c8ef52adc18a36017c4dc350fc15bf97181feff215156333cc1138dddb8b",
-    "PERMISSIONS.md": "c397fc77d3bbe492386e0314956626c293be6c260cd3726d5509cf115a2a3faf",
-    "README.md": "5e093fca04db0aace4a3c6b6ca7ddd863c250bff3562cd55ca456c112c5daa0b",
-    "runtime/channels.py": "9957e72bb197804534fa5a20d0f83cfbe69bc98fea049ca9057c48a081c81c1d",
-    "runtime/main.py": "6b7006049c90d8d3aea8c30d71b0d6bda3407b4316b4fc80062e2b1a86f3471b",
+    "capabilities.json": "f619e1cb01b53347622069f8ca1569e9b09c8f13315d033fc6a3cea0e1c37f35",
+    "CHANGELOG.md": "3762a4a4f28b1df6f3d0dc81ed17108cf1e2a9dbba2e8e6f4b6b359a18242228",
+    "config.schema.json": "c6073fa4997ea41b02d4b179b99b3d0765bf86a623d2cf56c739eb34f91572c3",
+    "MIGRATION.md": "a89332114145f195eacd0340579f3c1e14c7932bcd4afeb95cb4c15edf1ad1ce",
+    "PERMISSIONS.md": "acb5b1e11b4112ecf064a4ec58ca6392cc0ee80bcec4bea4e3b6cbe638d325d2",
+    "README.md": "9b3720fc52aa682df54cbbc65656063fb8e8bafadf1a0709274375367f87d7ea",
+    "runtime/channels.py": "c9a93464944324e71450ee6a6a188d07537c5ee8f0653c6174d74a20cd147d05",
+    "runtime/main.py": "1cf73e805468be436d3f69225998abf894c26517f25fd3be0dad0dc8bd1a6b81",
     "runtime/public_share.py": "08601664777ffc155e1bdae0dc3030fa7a029e0b2da8b25b027b1d48c0204823",
-    "runtime/README.md": "c8ceeaa17348a2b292e36711b482f93e7ee987f7361e5ceeb7a277cd3a81373b",
+    "runtime/README.md": "54dcef58602b6482915ceafcb80ea15cc17d65777199a2de16dc5bb97944068d",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
-    "tests/test_channels.py": "85d425b35b3352dcad1d18f6c000cf50a2bf2e635fdc3f8733c774db7e21e021",
+    "tests/test_channels.py": "d549a084f92430af4f6952580816bd540435064d09cee86314461f0fe236c1f4",
     "tests/test_public_share.py": "7e15cd4aa71c11b494ba625aaf848b5226d3370f72e096333775d04686bd8a36",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
     "tests/test_bilibili.py": "1dec0cfcdb73232617e85765313a7e8ebd13e883849580ab258b0f6e3a2bc441"

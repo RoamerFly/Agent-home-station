@@ -4,10 +4,6 @@ package channels
 
 // 代码来自 https://github.com/Hanson/WechatSphDecrypt/blob/main/decrypt.go
 
-import (
-	"encoding/binary"
-)
-
 type RandCtx64 struct {
 	RandCnt uint64
 	Seed    [256]uint64
@@ -146,26 +142,4 @@ func mix(a, b, c, d, e, f, g, h *uint64) {
 	*h -= *d
 	*e ^= *g << 14
 	*g += *h
-}
-
-func DecryptData(data []byte, encLen uint32, key uint64) {
-	if len(data) == 0 || uint32(len(data)) < encLen {
-		return
-	}
-
-	aaInst := CreateISAacInst(key)
-
-	for i := uint32(0); i < encLen; i += 8 {
-		randNumber := aaInst.ISAacRandom()
-		tempNumber := make([]byte, 8)
-		binary.BigEndian.PutUint64(tempNumber, randNumber)
-
-		for j := 0; j < 8; j++ {
-			realIndex := i + uint32(j)
-			if realIndex >= encLen {
-				return
-			}
-			data[realIndex] ^= tempNumber[j]
-		}
-	}
 }

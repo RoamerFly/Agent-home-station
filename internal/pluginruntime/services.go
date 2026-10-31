@@ -25,7 +25,7 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 	return context.WithValue(ctx, serviceKey{}, serviceCall(func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 		allowed := false
 		for _, p := range cap.Permissions {
-			if p == "network" && (method == "wechat/http_read" || method == "wechat/http_route") {
+			if p == "network" && (method == "wechat/http_read" || method == "wechat/http_route" || cap.ID == "share.resolve_channels" && method == "wechat/channels_bridge") {
 				allowed = true
 			}
 			if p == "model.invoke" && method == "wechat/model_request" {

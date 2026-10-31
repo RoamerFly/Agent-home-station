@@ -17,6 +17,11 @@ type Invocation struct {
 	SourceVersions map[string]int `json:"source_versions"`
 	EvidenceEpoch  string         `json:"evidence_epoch,omitempty"`
 	Authorization  string         `json:"authorization,omitempty"`
+	// OriginSourceSender and RequestThread are audit-only provenance for an
+	// explicitly authorised cross-message read. They never replace Requester,
+	// which remains the current actor that requested the operation.
+	OriginSourceSender string `json:"origin_source_sender,omitempty"`
+	RequestThread      string `json:"request_thread,omitempty"`
 }
 type Grant struct {
 	Account     string

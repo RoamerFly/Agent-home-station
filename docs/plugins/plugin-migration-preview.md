@@ -16,8 +16,9 @@ python -B scripts/plugin_migration_preview.py `
 ```
 
 未提供 `--output` 时，安全计划写到标准输出。报告只含密钥是否存在、来源字段和 SHA-256，
-绝不含密钥正文。`expected_config_revision: 0` 和包 `version` / `manifest_sha256` 是未来
-应用器的乐观并发条件；应用器必须在一个事务中再次验证它们。
+绝不含密钥正文。`expected_config_revision: 0` 和包 `version` /
+`expected_package_digest`（原始 `plugin.json` 字节的 SHA-256）是未来应用器的乐观并发条件；
+应用器必须在一个事务中重新准备受信任的包目录并再次验证它们。
 
 如需由受控、隔离的后续应用器导入密钥，才显式加入：
 
@@ -42,8 +43,12 @@ python -B scripts/plugin_migration_preview.py `
   需求。`local_then_bailian` 不会被悄悄降级：计划将其标为需要管理员选择。
 - `web-search`：保留 MCP 开关。当前插件没有官方 DeepSeek 付费检索配置时，带官方 DeepSeek key
   的旧账号会被标为 `blocked`，不会被静默替换为公共搜索。
-- `share-reader`：映射视频号 cookie 与助手 cookie 的存在性和私密导入项；`object_bridge_url` 尚无
-  插件字段，会明确报告为未映射。
+- `share-reader`：映射视频号 cookie 与助手 cookie 的存在性和私密导入项。仅当已审核的插件
+  schema 明确声明普通 `object_bridge_url` 字段时，才会迁入旧的本机环回 HTTP 地址；公网、带路径、
+  带查询或其他非法地址仍会阻塞。旧桥接与元宝 cookie 同时存在时，旧版可在桥接失败后回退 cookie，
+  新插件链路不会擅自改变这一语义，计划会标为
+  `explicit_bridge_fallback_policy_needed`，等待管理员选择。既有 `channels-bindings.json` 仍由宿主
+  只读、按账号/会话/消息（或受限对象别名）查询；本轮不复制它、不将其交给插件，也不创建新的绑定。
 
 `required_missing`、`unmapped_legacy_fields` 和插件未 ready 状态必须在真正迁移前解决。对本地
 ASR，预演只记录所需 profile ID，不能假装已经验证模型、解释器或资源注册。

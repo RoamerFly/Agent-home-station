@@ -324,8 +324,8 @@ func TestLivePublicSharePolicyIsolatedExecutionAndRecovery(t *testing.T) {
 				}
 				return page.Data, page.ContentType, nil
 			}
-			if _, err = fresh.handoff(ctx, again, reused, 1024); err == nil || err.Error() != "share_plugin_configuration_changed" {
-				t.Fatal("configuration changed during download but old result accepted", err)
+			if _, err = fresh.handoff(ctx, again, reused, 1024); err == nil || err.Error() != "share_plugin_snapshot_changed" {
+				t.Fatal("configuration change did not reject the old snapshot as expected", err)
 			}
 			// This checks the transfer/type contract, not video decoding or understanding.
 		})

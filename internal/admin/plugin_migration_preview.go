@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"wechat-bot/internal/channels"
 	"wechat-bot/internal/pluginhost"
 	catalog "wechat-bot/plugins"
 )
@@ -34,6 +35,7 @@ type pluginMigrationPackage struct {
 	ExpectedDigest string   `json:"expected_package_digest,omitempty"`
 	Permissions    []string `json:"permissions,omitempty"`
 	deepSeekSearch bool
+	objectBridge   bool
 }
 type pluginMigrationStep struct {
 	Plugin           string                           `json:"plugin"`
@@ -116,6 +118,7 @@ func migrationCatalog() map[string]pluginMigrationPackage {
 			ExpectedDigest: contract.ManifestSHA256,
 			Permissions:    append([]string(nil), contract.Package.Permissions...),
 			deepSeekSearch: catalogDeclaresDeepSeekSearch(contract),
+			objectBridge:   catalogDeclaresShareObjectBridge(contract),
 		}
 	}
 	return out
@@ -151,6 +154,17 @@ func catalogDeclaresDeepSeekSearch(contract catalog.Contract) bool {
 		}
 	}
 	return false
+}
+
+// Object bridges are host-owned loopback configuration. A migration may copy
+// one only when the share-reader's reviewed configuration schema owns this
+// ordinary setting. It must never smuggle a bridge URL into another plugin.
+func catalogDeclaresShareObjectBridge(contract catalog.Contract) bool {
+	if contract.Package.ID != "share-reader" {
+		return false
+	}
+	field, ok := contract.Configuration.Properties["object_bridge_url"]
+	return ok && field.Type == "string" && !field.Secret && !field.HostOnly
 }
 
 func migrationEnumContains(values []json.RawMessage, wanted string) bool {
@@ -235,7 +249,7 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	config, mcp := cloneConfig(m.config), cloneMCP(m.mcp)
 	m.mu.Unlock()
 	speech := m.speechConfig()
-	channels, channelsErr := loadChannelsSettings(m.dir)
+	channelSettings, channelsErr := loadChannelsSettings(m.dir)
 	sources := map[string]string{}
 	sourceErrors := map[string]string{}
 	for name, path := range paths {
@@ -320,17 +334,34 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	webEnabled := mcp.Enabled && (mcp.WebSearchEnabled || mcp.WebFetchEnabled)
 	web := migrationStep("web-search", packages, webEnabled, webValues, webSecrets, webUpdate, webRequired, webUnmapped, "", sources)
 
-	cookieSecret, cookie := migrationSecret(channels.Cookie, "channels-config.json:cookie")
-	assistantSecret, assistant := migrationSecret(channels.AssistantCookie, "channels-config.json:assistant_cookie")
+	cookieSecret, cookie := migrationSecret(channelSettings.Cookie, "channels-config.json:cookie")
+	assistantSecret, assistant := migrationSecret(channelSettings.AssistantCookie, "channels-config.json:assistant_cookie")
 	shareRequired := []string{}
-	if channels.Enabled && cookie == "" && assistant == "" {
+	shareValues := map[string]json.RawMessage{}
+	if channelSettings.Enabled && cookie == "" && assistant == "" {
 		shareRequired = append(shareRequired, "yuanbao_cookie_or_assistant_cookie")
 	}
 	shareUnmapped := []string{}
-	if channels.ObjectBridge != "" {
-		shareUnmapped = append(shareUnmapped, "channels-config.json:object_bridge_url")
+	if channelSettings.ObjectBridge != "" {
+		bridge, bridgeErr := channels.ObjectBridgeURL(channelSettings.ObjectBridge)
+		switch {
+		case bridgeErr != nil:
+			shareRequired = append(shareRequired, "object_bridge_url_invalid")
+			shareUnmapped = append(shareUnmapped, "channels-config.json:object_bridge_url")
+		case !packages["share-reader"].objectBridge:
+			shareRequired = append(shareRequired, "object_bridge_url_not_declared_by_share_reader_plugin")
+			shareUnmapped = append(shareUnmapped, "channels-config.json:object_bridge_url")
+		default:
+			shareValues["object_bridge_url"] = migrationValue(bridge)
+			// Legacy handling allowed bridge failure to fall through to a cookie
+			// resolver. The plugin contract is stricter, so an administrator
+			// must explicitly choose the new policy instead of changing it here.
+			if cookie != "" {
+				shareRequired = append(shareRequired, "explicit_bridge_fallback_policy_needed")
+			}
+		}
 	}
-	share := migrationStep("share-reader", packages, channels.Enabled, map[string]json.RawMessage{}, map[string]pluginMigrationSecret{"yuanbao_cookie": cookieSecret, "assistant_cookie": assistantSecret}, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{}, Secrets: map[string]string{"yuanbao_cookie": cookie, "assistant_cookie": assistant}}, shareRequired, shareUnmapped, "", sources)
+	share := migrationStep("share-reader", packages, channelSettings.Enabled, shareValues, map[string]pluginMigrationSecret{"yuanbao_cookie": cookieSecret, "assistant_cookie": assistantSecret}, pluginhost.ConfigUpdate{Values: shareValues, Secrets: map[string]string{"yuanbao_cookie": cookie, "assistant_cookie": assistant}}, shareRequired, shareUnmapped, "", sources)
 
 	return pluginMigrationAccount{Account: m.native.Account(), SourceHashes: sources, SourceErrors: sourceErrors, Plugins: []pluginMigrationStep{media, speechStep, web, share}}, nil
 }

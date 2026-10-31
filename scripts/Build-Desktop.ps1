@@ -18,6 +18,9 @@ $expectedHash='5EA526BBD728ADDA0DA4D31219267E96460494A427E4894C4E09D9F320F4B9AA'
 $cache=Join-Path $workspace ('temp\desktop-deps\webview2-'+$version)
 $archive=$cache+'.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDirectory | Out-Null
+# Validate and stage the optional catalog before replacing any executable.
+& python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'plugins') --output (Join-Path $OutputDirectory 'plugins')
+if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
 if(-not(Test-Path -LiteralPath $archive)){
  Invoke-WebRequest -Uri ('https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/'+$version+'/microsoft.web.webview2.'+$version+'.nupkg') -OutFile $archive
 }
@@ -77,9 +80,5 @@ if($Portable){
  [IO.File]::WriteAllText((Join-Path $music 'runtime-manifest.json'),(@{schema_version=1;platform='windows-x64';policy='registry-read-private-network-v1';files=$musicFiles}|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
  Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory '使用说明.txt')
 }
-# Keep optional plugin source packages outside the core executable. The staging
-# helper verifies the index and refuses to overwrite a different old catalog.
-& python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'plugins') --output (Join-Path $OutputDirectory 'plugins')
-if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
 Get-Item -LiteralPath $target | Select-Object FullName,Length
 Get-FileHash -LiteralPath $target -Algorithm SHA256

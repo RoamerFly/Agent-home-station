@@ -130,11 +130,30 @@ def _existing_matches(source, output, packages):
     return all(_same_file(source / relative, output / relative) for relative in expected)
 
 
+def _overlaps(source, output):
+    """Return whether either catalog path contains the other, without writing."""
+    try:
+        source_resolved = source.resolve(strict=False)
+        output_resolved = output.resolve(strict=False)
+        output_resolved.relative_to(source_resolved)
+        return True
+    except ValueError:
+        try:
+            source_resolved.relative_to(output_resolved)
+            return True
+        except ValueError:
+            return False
+
+
 def stage(source, output):
     """Validate source catalog then create it once, or prove existing equality."""
     # Do not resolve here: resolving the catalog root would hide a symlink
     # before the no-links validation below can reject it.
     source, output = Path(source).absolute(), Path(output).absolute()
+    # A nested output would become an unindexed source member during a later
+    # invocation. Reject all equal/ancestor relations before mkdir/copyfile.
+    if _overlaps(source, output):
+        raise StageError("source_output_overlap")
     packages = _catalog(source)
     if output.exists():
         if output.is_symlink() or not output.is_dir():

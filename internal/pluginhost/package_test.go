@@ -62,7 +62,7 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "share-reader" {
 				if p.Status != "ready" || p.Runtime.Transport != "mcp-stdio" || p.Runtime.Entrypoint != "runtime/main.py" {
 					t.Fatal("web runtime not connected")
 				}
@@ -70,6 +70,9 @@ func TestOfficialContracts(t *testing.T) {
 					want := map[string]bool{"media.observe": true, "media.transcribe": true}
 					if d.Name() == "speech" {
 						want = map[string]bool{"speech.synthesize": true}
+					}
+					if d.Name() == "share-reader" {
+						want = map[string]bool{"share.resolve_public": true, "share.resolve_channels": true}
 					}
 					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))
 					if err != nil {

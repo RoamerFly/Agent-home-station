@@ -132,7 +132,7 @@ func (p *permittedTools) mediaServiceSource(ctx context.Context, id string) (lin
 	return msg, nil
 }
 
-func (p *permittedTools) callMediaServicePlugin(ctx context.Context, capability string, raw json.RawMessage) (any, error) {
+func (p *permittedTools) callMediaServicePlugin(ctx context.Context, capability, requestKey string, raw json.RawMessage) (any, error) {
 	if !p.mediaServiceCapabilityAvailable(ctx, capability) {
 		return nil, errors.New("media_service_capability_unavailable")
 	}
@@ -140,10 +140,12 @@ func (p *permittedTools) callMediaServicePlugin(ctx context.Context, capability 
 	if err != nil {
 		return nil, err
 	}
+	normalized, _ := json.Marshal(in)
 	message, err := p.mediaServiceSource(ctx, in.SourceMessageID)
 	if err != nil {
 		return nil, err
 	}
+	ctx = withSourceActor(ctx, p, agentID("service-media", requestKey, capability, message.ID, string(normalized)), message.ThreadID)
 	reader, ok := p.manager.native.(incomingReader)
 	if !ok {
 		return nil, errors.New("incoming_media_backend_unavailable")

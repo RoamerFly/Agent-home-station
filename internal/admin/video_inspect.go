@@ -400,7 +400,8 @@ func (p *permittedTools) inspectPluginAudioRange(ctx context.Context, data []byt
 		count := math.Min(chunk, end-next)
 		segmentStart := next
 		text, seconds, err := a.videoAudioRangeTimedWith(ctx, data, segmentStart, count, timeout, func(ctx context.Context, wav []byte) (string, error) {
-			policy, err := p.manager.newMediaTranscriptionPolicy(ctx, message, wav)
+			actorCtx := withSourceActor(ctx, p, agentID("video-inspect-audio", p.trace.TaskID, p.trace.TraceID, message.ID, formatSeconds(segmentStart), formatSeconds(count)), message.ThreadID)
+			policy, err := p.manager.newMediaTranscriptionPolicy(actorCtx, message, wav)
 			if err != nil {
 				return "", err
 			}
