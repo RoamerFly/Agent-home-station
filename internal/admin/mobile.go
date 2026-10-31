@@ -28,6 +28,20 @@ func (m *Manager) mobileSourceAllowed(s mobile.Source) bool {
 	return s.Admin && cfg.Enabled && c.Enabled && s.Account == m.native.Account() && contains(c.OwnerIDs, s.Sender) && c.allowsPrivilegedThread(s.Thread) && permittedRecipient(cfg.Config, s.Thread)
 }
 
+func mobileAvailabilityMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch err.Error() {
+	case "device_plugin_tools_unregistered":
+		return "尚未登记设备连接工具，请完成手机插件的运行环境设置。已有任务仍可查看或取消。"
+	case "device_plugin_deployment_unavailable":
+		return "手机插件运行环境不可用，请检查本机安装。已有任务仍可查看或取消。"
+	default:
+		return "开始新任务前，请在插件中心授权并启用手机插件的规划与设备代理；已有任务仍可查看或取消。"
+	}
+}
+
 func (m *Manager) planMobile(ctx context.Context, t mobile.Task, o mobile.Observation) (mobile.Step, error) {
 	ctx = deepseek.WithRequestObserver(ctx, func(event string, d deepseek.Diagnostics) {
 		m.record(bot.Record{Event: "mobile_" + event, Category: "tool", ThreadID: t.Source.Thread, MessageID: t.ID, Reason: d.Code, Status: event, ModelHTTPStatus: d.HTTPStatus, ModelAttempts: d.Attempts, ModelMaxAttempts: d.MaxAttempts, ModelStage: d.Stage, DurationMS: d.DurationMS, Origin: "mobile"})
@@ -45,11 +59,9 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 			fail(w, 503, "设备服务数据暂不可用，请检查设备配置和存储；原数据未覆盖")
 			return
 		}
-		plannerAvailable := s.manager.mobilePlannerReady(r.Context()) == nil
-		reason := ""
-		if !plannerAvailable {
-			reason = "开始新任务前，请在插件中心安装并启用手机规划插件；已有任务仍可查看或取消。"
-		}
+		plannerError := s.manager.mobileDeviceReady(r.Context())
+		plannerAvailable := plannerError == nil
+		reason := mobileAvailabilityMessage(plannerError)
 		respond(w, 200, map[string]any{"settings": s.manager.mobile.Settings(), "tasks": s.manager.mobile.List(nil), "planner_available": plannerAvailable, "planner_reason": reason})
 	}))
 	mux.HandleFunc("GET /api/mobile/devices", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -104,8 +116,8 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 			fail(w, 400, "需要唯一请求编号")
 			return
 		}
-		if err := s.manager.mobilePlannerReady(r.Context()); err != nil {
-			fail(w, 409, "请先在插件中心安装并启用手机规划插件，再开始新任务")
+		if err := s.manager.mobileDeviceReady(r.Context()); err != nil {
+			fail(w, 409, mobileAvailabilityMessage(err))
 			return
 		}
 		t, err := s.manager.mobile.Start(mobile.Source{Admin: true, MessageID: in.RequestKey}, in.DeviceID, in.Goal)
@@ -241,7 +253,7 @@ func (p *permittedTools) mobileTools() []mcptools.Tool {
 		agentTool("device_tasks", "Inspect this conversation's device task states and actual observation summaries. queued/running/submitted do not mean complete. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
 		agentTool("device_task_cancel", "Cancel only this conversation's task. Already executed actions are retained and not undone. Input {task_id:string}.", `{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false}`),
 	}
-	if p.manager.mobilePlannerReady(context.Background()) == nil {
+	if p.manager.mobileDeviceReady(context.Background()) == nil {
 		tools = append(tools, agentTool("device_task_start", "Start an authorized Android device task using the installed mobile planner. Available device IDs: "+string(devices)+". This returns a task ID, not completion. Results resume this conversation; do not poll repeatedly. Input {device_id:string,goal:string}.", `{"type":"object","properties":{"device_id":{"type":"string"},"goal":{"type":"string","maxLength":1000}},"required":["device_id","goal"],"additionalProperties":false}`))
 	}
 	return tools

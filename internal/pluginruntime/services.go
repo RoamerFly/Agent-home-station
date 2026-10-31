@@ -17,6 +17,15 @@ type ServicePolicy interface {
 type serviceKey struct{}
 type serviceCall func(context.Context, string, json.RawMessage) (json.RawMessage, error)
 
+func deviceProxyCapability(capability string) bool {
+	switch capability {
+	case "device.list", "device.observe", "device.act", "device.record", "device.read_artifact":
+		return true
+	default:
+		return false
+	}
+}
+
 func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, cap pluginhost.Capability) context.Context {
 	service, ok := policy.(ServicePolicy)
 	if !ok {
@@ -35,6 +44,12 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 			// media reference. It does not grant the plugin a general process
 			// executor: the host resolves its fixed runner and resource profile.
 			if p == "artifact.read" && cap.ID == "media.transcribe" && method == "wechat/local_transcription" {
+				allowed = true
+			}
+			// Device access is only a bound host broker request. It does not expose
+			// a physical device, a process launcher, a socket, or a mount to the
+			// plugin. In particular, device.plan has only model.invoke authority.
+			if p == "device" && deviceProxyCapability(cap.ID) && method == "wechat/device_request" {
 				allowed = true
 			}
 		}

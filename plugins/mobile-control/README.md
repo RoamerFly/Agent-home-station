@@ -6,4 +6,4 @@
 
 返回的 `step` 是建议而非执行结果。宿主必须在实际提交前重新校验授权、来源版本、设备状态和动作参数；动作提交也不代表目标完成。模型格式错误最多得到一次修复机会，提供方失败不会由插件重复调用。
 
-`device.observe`、`device.act` 与 `device.record` 仍为不可发现的迁移占位，未来需要独立设备授权和受控代理。现有桥接、设备 broker、队列和录屏素材处理尚未作为独立插件能力迁出，不能据此宣称手机操作已独立可用。
+`device.list`、`device.observe`、`device.act`、`device.record` 与 `device.read_artifact` 已接入宿主受控 `wechat/device_request` 代理。实际设备授权、broker、队列、动作去重和原始截图/录屏私有保存仍由宿主负责；原始 PNG、录屏片段及其 bytes 不经过插件进程，Agent 不能借此自行升级权限或扫描设备。旧队列、配置和 UI 的完整迁出仍未完成，且本轮没有真实设备验收或旧账本自动迁移声明。

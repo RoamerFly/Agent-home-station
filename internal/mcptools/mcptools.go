@@ -188,11 +188,18 @@ func (h *Hub) Close() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.closed = true
-	for _, s := range h.sessions {
-		s.close()
+	var closeErr error
+	for key, s := range h.sessions {
+		if err := s.close(); err != nil {
+			// Keep failed sessions so a later explicit Close can finish proving
+			// native cleanup. Dropping this reference would permit a silent lease
+			// release while a child process remains alive.
+			closeErr = errors.Join(closeErr, err)
+			continue
+		}
+		delete(h.sessions, key)
 	}
-	h.sessions = map[string]*mcpSession{}
-	return nil
+	return closeErr
 }
 func allowed(c ServerConfig, name string) bool {
 	if len(c.Tools) == 0 {

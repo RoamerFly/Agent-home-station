@@ -47,9 +47,11 @@ func (c *Controller) Invoke(ctx context.Context, req CallRequest, policy CallPol
 	if policy == nil || req.Context.Account != c.store.Account() {
 		return out, errors.New("host invocation policy required")
 	}
-	// Reserve lifecycle across store snapshots and checkpointing, including the
-	// gaps before Host.Call and after its active-call counter has been released.
-	if err := c.begin(req.Plugin); err != nil {
+	// Calls to one process must not overlap, but unlike lifecycle operations a
+	// request may wait for the current call to finish.  It has not created or
+	// claimed a Job while waiting; every installation, source and policy check
+	// below is therefore performed again after it owns this reservation.
+	if err := c.beginInvocation(ctx, req.Plugin); err != nil {
 		return out, err
 	}
 	defer c.endCall(req.Plugin)
@@ -163,5 +165,36 @@ func (c *Controller) Invoke(ctx context.Context, req CallRequest, policy CallPol
 func (c *Controller) endCall(id string) {
 	c.mu.Lock()
 	delete(c.busy, id)
+	c.notifyLocked()
 	c.mu.Unlock()
+}
+
+// beginInvocation waits only for the requested plugin.  A lifecycle Start or
+// Stop still uses begin/beginPlan and remains fail-fast while busy.  Waiting is
+// cancellation-aware and intentionally does not create an implicit retry: it
+// merely delays this same original request until its normal durable idempotency
+// path can inspect it.
+func (c *Controller) beginInvocation(ctx context.Context, id string) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.mu.Lock()
+		if c.closed {
+			c.mu.Unlock()
+			return errors.New("plugin controller closed")
+		}
+		if !c.busy[id] {
+			c.busy[id] = true
+			c.mu.Unlock()
+			return nil
+		}
+		changed := c.changed
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
 }

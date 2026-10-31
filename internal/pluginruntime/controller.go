@@ -18,6 +18,10 @@ type Options struct {
 	Pythonw       string   `json:"pythonw"`
 	WindowsHelper string   `json:"windows_helper"`
 	RuntimeRoots  []string `json:"runtime_roots"`
+	// DeviceToolsRoots are deployment-owned host paths (for example ADB). They
+	// are intentionally not copied into LaunchSpec/RuntimeRoots, so plugin
+	// sandboxes never receive this host-only capability by configuration.
+	DeviceToolsRoots []string `json:"device_tools_roots,omitempty"`
 	// CatalogDirectory is a trusted deployment-owned directory containing
 	// verified official plugin packages. It is never supplied by an API caller.
 	CatalogDirectory string           `json:"catalog_directory"`
@@ -82,6 +86,7 @@ type Controller struct {
 	host     *pluginhost.Host
 	mu       sync.Mutex
 	busy     map[string]bool
+	changed  chan struct{}
 	failures map[string]string
 	loaded   map[string]loadedPlugin
 	closed   bool
@@ -105,7 +110,15 @@ func NewController(store *pluginhost.Store, executor pluginhost.Executor) (*Cont
 	if err != nil {
 		return nil, err
 	}
-	return &Controller{store: store, host: h, busy: map[string]bool{}, failures: map[string]string{}, loaded: map[string]loadedPlugin{}}, nil
+	return &Controller{store: store, host: h, busy: map[string]bool{}, changed: make(chan struct{}), failures: map[string]string{}, loaded: map[string]loadedPlugin{}}, nil
+}
+
+// notifyLocked wakes callers waiting to reserve a plugin invocation.  The
+// channel is replaced after close so a waiter always observes one concrete
+// state transition instead of polling a mutable flag.
+func (c *Controller) notifyLocked() {
+	close(c.changed)
+	c.changed = make(chan struct{})
 }
 func (c *Controller) begin(id string) error {
 	c.mu.Lock()
@@ -120,6 +133,7 @@ func (c *Controller) end(id string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.busy, id)
+	c.notifyLocked()
 	if err != nil {
 		c.failures[id] = "runtime_operation_failed"
 	} else {
@@ -253,6 +267,7 @@ func (c *Controller) Close() error {
 	c.mu.Lock()
 	c.closed = true
 	c.loaded = map[string]loadedPlugin{}
+	c.notifyLocked()
 	c.mu.Unlock()
 	// Keep Enabled as administrator intent across restarts. No process starts
 	// automatically; explicit start may recover queries, never tool submissions.

@@ -147,20 +147,34 @@ type Bridge interface {
 	Close() error
 }
 type bridgeFactory func(Settings) (Bridge, error)
+
+// BrokerFactory opens the production device broker for one already-authorized
+// operation.  The host supplies it when the device backend is implemented by
+// an installed plugin.  Task is deliberately empty for the local management
+// Devices operation; its Source is Admin so a binder can distinguish that
+// narrow, unscoped listing operation from a conversation task.
+//
+// A nil factory preserves the legacy in-process MCP bridge for compatibility
+// with existing installations and isolated tests.  A non-nil factory is
+// authoritative: errors (and a nil Bridge) are never retried through legacy
+// configuration, which would otherwise silently widen a plugin boundary.
+type BrokerFactory func(context.Context, Task, Settings) (Bridge, error)
+
 type Control struct {
-	mu        sync.Mutex
-	dir       string
-	settings  Settings
-	tasks     map[string]Task
-	running   map[string]context.CancelFunc
-	devices   map[string]string
-	planner   Planner
-	factory   bridgeFactory
-	closed    bool
-	wg        sync.WaitGroup
-	finished  func(Task)
-	authorize func(Source) bool
-	analyze   ArtifactAnalyzer
+	mu            sync.Mutex
+	dir           string
+	settings      Settings
+	tasks         map[string]Task
+	running       map[string]context.CancelFunc
+	devices       map[string]string
+	planner       Planner
+	factory       bridgeFactory
+	brokerFactory BrokerFactory
+	closed        bool
+	wg            sync.WaitGroup
+	finished      func(Task)
+	authorize     func(Source) bool
+	analyze       ArtifactAnalyzer
 }
 type hubBridge struct{ *mcptools.Hub }
 
@@ -245,6 +259,23 @@ func clone[T any](value T) T {
 }
 func (c *Control) Settings() Settings       { c.mu.Lock(); defer c.mu.Unlock(); return clone(c.settings) }
 func (c *Control) OnFinished(fn func(Task)) { c.mu.Lock(); defer c.mu.Unlock(); c.finished = fn }
+
+// SetBrokerFactory installs (or clears) the authoritative production bridge
+// opener.  A running task has already captured its security context, so do not
+// swap this boundary mid-run.  Queued tasks open the current factory only when
+// they are actually scheduled.
+func (c *Control) SetBrokerFactory(factory BrokerFactory) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errors.New("device_control_closed")
+	}
+	if len(c.running) != 0 {
+		return errors.New("device_task_running")
+	}
+	c.brokerFactory = factory
+	return nil
+}
 
 // SetAuthorizer is called before the control is exposed to requests.
 func (c *Control) SetAuthorizer(fn func(Source) bool)      { c.authorize = fn }
@@ -517,6 +548,73 @@ func (c *Control) currentRunnable(id string) (Task, bool) {
 	t = clone(t)
 	return t, c.allowed(s, t.Source)
 }
+
+// taskBridgeInput takes a fresh durable snapshot immediately before opening a
+// side-effecting backend.  In particular it does not trust the Settings copy
+// captured when a task was queued: Save cancels running work, but a revoked
+// authorization or expired context must also stop a just-to-start bridge.
+func (c *Control) taskBridgeInput(ctx context.Context, id string) (Task, Settings, BrokerFactory, error) {
+	if err := ctx.Err(); err != nil {
+		return Task{}, Settings{}, nil, err
+	}
+	c.mu.Lock()
+	t, ok := c.tasks[id]
+	s := clone(c.settings)
+	factory := c.brokerFactory
+	closed := c.closed
+	c.mu.Unlock()
+	if !ok || closed || t.State == "cancelled" || !c.allowed(s, t.Source) || ctx.Err() != nil {
+		return Task{}, Settings{}, nil, errPermissionChanged
+	}
+	return clone(t), s, factory, nil
+}
+
+func (c *Control) openTaskBridge(ctx context.Context, id string) (Bridge, error) {
+	t, s, factory, err := c.taskBridgeInput(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if factory != nil {
+		// This is intentionally not followed by c.factory.  A configured plugin
+		// broker is a security boundary, not a best-effort preference.
+		bridge, openErr := factory(ctx, t, s)
+		if openErr != nil {
+			return nil, openErr
+		}
+		if bridge == nil {
+			return nil, errors.New("device_bridge_unavailable")
+		}
+		return bridge, nil
+	}
+	return c.factory(s)
+}
+
+func (c *Control) openManagementBridge(ctx context.Context) (Bridge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	management := Task{Source: Source{Admin: true}}
+	c.mu.Lock()
+	s := clone(c.settings)
+	factory := c.brokerFactory
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || !c.allowed(s, management.Source) || ctx.Err() != nil {
+		return nil, errPermissionChanged
+	}
+	if factory != nil {
+		bridge, err := factory(ctx, management, s)
+		if err != nil {
+			return nil, err
+		}
+		if bridge == nil {
+			return nil, errors.New("device_bridge_unavailable")
+		}
+		return bridge, nil
+	}
+	return c.factory(s)
+}
+
 func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string, s Settings) {
 	defer c.wg.Done()
 	defer cancel()
@@ -537,8 +635,12 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 		}
 	}()
 	ctx = mcptools.WithSessionScope(ctx, id)
-	b, e := c.factory(s)
+	b, e := c.openTaskBridge(ctx, id)
 	if e != nil {
+		if errors.Is(e, errPermissionChanged) {
+			_ = c.update(id, "stopped", "", "", "device_permission_changed", "")
+			return
+		}
 		_ = c.update(id, "failed", "", "", "device_bridge_unavailable", "")
 		return
 	}
@@ -736,7 +838,7 @@ func (c *Control) Devices(ctx context.Context) (json.RawMessage, error) {
 	if !s.Enabled {
 		return nil, errors.New("device_control_disabled")
 	}
-	b, err := c.factory(s)
+	b, err := c.openManagementBridge(ctx)
 	if err != nil {
 		return nil, err
 	}

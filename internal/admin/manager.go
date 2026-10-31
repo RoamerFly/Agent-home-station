@@ -17,6 +17,7 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/devicebroker"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -446,6 +447,13 @@ func (m *Manager) Close() error {
 	m.packagesClosed = true
 	packages, packageRuntime := m.packages, m.packageRuntime
 	m.packageMu.Unlock()
+	// Stop task owners while their plugin sessions and private job store are
+	// still available to checkpoint cancellation and reap native child trees.
+	var mobileErr error
+	if m.mobile != nil {
+		mobileErr = m.mobile.Close()
+	}
+	cleanupErr := devicebroker.CleanupQuarantined()
 	var packageErr error
 	if packageRuntime != nil {
 		packageErr = packageRuntime.Close()
@@ -463,10 +471,7 @@ func (m *Manager) Close() error {
 	if m.processes != nil {
 		m.processes.Close()
 	}
-	if m.mobile != nil {
-		_ = m.mobile.Close()
-	}
-	err := errors.Join(packageErr, m.stop())
+	err := errors.Join(mobileErr, cleanupErr, packageErr, m.stop())
 	if m.workspace != nil {
 		err = errors.Join(err, m.workspace.Close())
 	}

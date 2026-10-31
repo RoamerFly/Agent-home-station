@@ -29,6 +29,19 @@ func TestExecutorRejectsUnimplementedGrants(t *testing.T) {
 		t.Fatal("unsupported capability reached launch")
 	}
 }
+
+func TestExecutorAcceptsDeviceOnlyAsHostMediatedPermission(t *testing.T) {
+	called := false
+	e := Executor{Resolve: func(context.Context, pluginhost.Package, pluginhost.Grant) (LaunchSpec, error) {
+		called = true
+		return LaunchSpec{}, errors.New("synthetic resolver stop")
+	}}
+	p := pluginhost.Package{ID: "sample", Version: "1", Status: "ready", Platforms: []string{runtime.GOOS}, Runtime: pluginhost.Runtime{Transport: "mcp-stdio"}, Permissions: []string{"device"}}
+	g := pluginhost.Grant{Account: "a", Plugin: p.ID, Version: p.Version, Permissions: p.Permissions}
+	if _, err := e.Start(context.Background(), p, g); err == nil || !called {
+		t.Fatal("device host-proxy permission was rejected before the host resolver")
+	}
+}
 func TestLaunchMountsCannotWriteCode(t *testing.T) {
 	root := t.TempDir()
 	code := filepath.Join(root, "code")

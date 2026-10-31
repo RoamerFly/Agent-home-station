@@ -75,9 +75,9 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"share.resolve_public": true, "share.resolve_channels": true}
 					}
 					if d.Name() == "mobile-control" {
-						want = map[string]bool{"device.plan": true}
-						if len(p.Permissions) != 1 || p.Permissions[0] != "model.invoke" {
-							t.Fatal("planner must not gain device, process, file or network authority")
+						want = map[string]bool{"device.plan": true, "device.list": true, "device.observe": true, "device.act": true, "device.record": true, "device.read_artifact": true}
+						if len(p.Permissions) != 2 || p.Permissions[0] != "model.invoke" || p.Permissions[1] != "device" {
+							t.Fatal("device package must declare only separate model/device proxies")
 						}
 					}
 					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))
@@ -95,8 +95,14 @@ func TestOfficialContracts(t *testing.T) {
 							if cap.Implementation != "ready" || !cap.Discoverable {
 								t.Fatal("implemented capability hidden", cap.ID)
 							}
-							if d.Name() == "mobile-control" && (cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != "model.invoke") {
-								t.Fatal("planner contract must remain synchronous and model-only")
+							if d.Name() == "mobile-control" {
+								permission := "device"
+								if cap.ID == "device.plan" {
+									permission = "model.invoke"
+								}
+								if cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != permission {
+									t.Fatal("device capability must remain synchronous and use only its own proxy")
+								}
 							}
 							delete(want, cap.ID)
 						} else if cap.Implementation != "migration-pending" || cap.Discoverable {

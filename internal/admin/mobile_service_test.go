@@ -10,7 +10,58 @@ import (
 	"testing"
 
 	"wechat-bot/internal/mobile"
+	"wechat-bot/internal/pluginruntime"
 )
+
+type orderedMobileShutdown struct {
+	deviceService
+	check  func()
+	closed bool
+}
+
+func (s *orderedMobileShutdown) Close() error {
+	if !s.closed {
+		s.closed = true
+		s.check()
+	}
+	return s.deviceService.Close()
+}
+
+func TestManagerStopsDeviceTaskOwnersBeforeClosingPluginSessions(t *testing.T) {
+	f := setup(t)
+	store, err := f.manager.packageStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := store.Prepare(t.Context(), readySpeechFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := store.Install(t.Context(), prepared.Token, prepared.Digest, prepared.Package.Permissions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &packageTestExecutor{}
+	controller, err := pluginruntime.NewController(store, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.manager.packageRuntime = controller
+	if err = controller.Start(t.Context(), installed.Package.ID, installed.Revision); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.mobile = &orderedMobileShutdown{deviceService: f.manager.mobile, check: func() {
+		if controller.Status(installed.Package.ID).State != "running" {
+			t.Error("plugin session was closed before device task cancellation could finish")
+		}
+	}}
+	if err = f.manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if executor.closes != 1 {
+		t.Fatal("plugin session was not reaped", executor.closes)
+	}
+}
 
 func writeLegacyMobileState(t *testing.T, dir string, settings []byte, tasks []byte) {
 	t.Helper()
@@ -58,6 +109,22 @@ func TestLazyMobileServiceColdReadsDoNotCreateDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("cold reads created legacy directory", err)
+	}
+}
+
+func TestLazyMobileServiceBrokerWiringFailureDoesNotExposeLegacyControl(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "mobile")
+	want := errors.New("device_broker_wiring_failed")
+	service := newLazyMobileService(dir, nil, nil, func(control *mobile.Control) error { return want })
+	defer service.Close()
+	if err := service.Save(mobile.Defaults()); !errors.Is(err, want) {
+		t.Fatal("broker wiring failure was hidden", err)
+	}
+	service.mu.Lock()
+	control := service.control
+	service.mu.Unlock()
+	if control != nil || service.Busy() {
+		t.Fatal("legacy control exposed after plugin broker wiring failed")
 	}
 }
 

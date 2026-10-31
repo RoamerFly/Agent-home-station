@@ -45,12 +45,12 @@ type lazyMobileService struct {
 	dir       string
 	planner   mobile.Planner
 	open      mobileControlOpener
-	configure func(*mobile.Control)
+	configure func(*mobile.Control) error
 	control   *mobile.Control
 	closed    bool
 }
 
-func newLazyMobileService(dir string, planner mobile.Planner, opener mobileControlOpener, configure func(*mobile.Control)) *lazyMobileService {
+func newLazyMobileService(dir string, planner mobile.Planner, opener mobileControlOpener, configure func(*mobile.Control) error) *lazyMobileService {
 	if opener == nil {
 		opener = mobile.Open
 	}
@@ -60,10 +60,11 @@ func newLazyMobileService(dir string, planner mobile.Planner, opener mobileContr
 // newMobileService wires legacy callbacks only after a verified Control has
 // opened. Manager construction itself remains independent of device storage.
 func (m *Manager) newMobileService() deviceService {
-	return newLazyMobileService(filepath.Join(m.dir, "mobile"), m.planMobile, mobile.Open, func(control *mobile.Control) {
+	return newLazyMobileService(filepath.Join(m.dir, "mobile"), m.planMobile, mobile.Open, func(control *mobile.Control) error {
 		control.OnFinished(m.deviceFinished)
 		control.SetAuthorizer(m.mobileSourceAllowed)
 		control.SetArtifactAnalyzer(m.analyzeDeviceArtifact)
+		return control.SetBrokerFactory(m.newMobilePluginBridge)
 	})
 }
 
@@ -120,7 +121,10 @@ func (s *lazyMobileService) controlFor(create bool) (*mobile.Control, error) {
 		return nil, errors.New("device_control_unavailable")
 	}
 	if s.configure != nil {
-		s.configure(control)
+		if err := s.configure(control); err != nil {
+			_ = control.Close()
+			return nil, err
+		}
 	}
 	s.control = control
 	return control, nil

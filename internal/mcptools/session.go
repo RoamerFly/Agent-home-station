@@ -27,11 +27,11 @@ func WithSessionScope(ctx context.Context, scope string) context.Context {
 type mcpSession struct {
 	gate        chan struct{}
 	dead        atomic.Bool
-	once        sync.Once
 	fields      sync.Mutex
 	cfg         ServerConfig
 	client      *http.Client
 	cmd         *exec.Cmd
+	process     sessionProcess
 	input       io.WriteCloser
 	output      io.ReadCloser
 	reader      *bufio.Reader
@@ -43,25 +43,51 @@ type mcpSession struct {
 	cachedAt    time.Time
 }
 
-func (s *mcpSession) close() {
-	s.once.Do(func() {
-		s.dead.Store(true)
-		s.fields.Lock()
-		defer s.fields.Unlock()
-		if s.input != nil {
-			_ = s.input.Close()
+// sessionProcess owns the complete native process lifetime of a persistent
+// stdio session.  It is intentionally separate from exec.Cmd: closing only
+// the parent is not enough once a bridge has created an ADB/helper child.
+type sessionProcess interface {
+	terminate() error
+}
+
+func (s *mcpSession) close() error {
+	s.dead.Store(true)
+	s.fields.Lock()
+	defer s.fields.Unlock()
+	var closeErr error
+	if s.input != nil {
+		closeErr = errors.Join(closeErr, s.input.Close())
+		s.input = nil
+	}
+	if s.output != nil {
+		closeErr = errors.Join(closeErr, s.output.Close())
+		s.output = nil
+	}
+	if s.client != nil {
+		s.client.CloseIdleConnections()
+		s.client = nil
+	}
+	if s.process != nil {
+		if err := s.process.terminate(); err != nil {
+			// Keep the process reference. A later Hub.Close may prove the native
+			// tree exited; treating this as success would release a device lease
+			// while a helper could still act.
+			return errors.Join(closeErr, err)
 		}
-		if s.output != nil {
-			_ = s.output.Close()
+		s.process = nil
+	}
+	if s.cmd != nil && s.cmd.Process != nil {
+		// terminate() confirmed no active tree members before this wait, so a
+		// Wait here cannot hang behind a still-live bridge parent.
+		if err := s.cmd.Wait(); err != nil {
+			var exited *exec.ExitError
+			if !errors.As(err, &exited) {
+				closeErr = errors.Join(closeErr, err)
+			}
 		}
-		if s.cmd != nil && s.cmd.Process != nil {
-			killSessionProcess(s.cmd)
-			go func() { _ = s.cmd.Wait() }()
-		}
-		if s.client != nil {
-			s.client.CloseIdleConnections()
-		}
-	})
+		s.cmd = nil
+	}
+	return closeErr
 }
 
 func (h *Hub) scopedRequest(ctx context.Context, c ServerConfig, scope, method string, params any, result *json.RawMessage) error {
@@ -75,9 +101,19 @@ func (h *Hub) scopedRequest(ctx context.Context, c ServerConfig, scope, method s
 	}
 	s := h.sessions[key]
 	if s == nil || s.dead.Load() {
-		for key, old := range h.sessions {
-			if old.dead.Load() {
-				delete(h.sessions, key)
+		if s != nil {
+			// A dead session may still own a native Job/process group. Do not
+			// discard its reference and start another helper until termination is
+			// confirmed by close().
+			if err := s.close(); err != nil {
+				h.mu.Unlock()
+				return errors.New("MCP session cleanup unconfirmed; operation not started")
+			}
+			delete(h.sessions, key)
+		}
+		for oldKey, old := range h.sessions {
+			if old.dead.Load() && old.close() == nil {
+				delete(h.sessions, oldKey)
 			}
 		}
 		if len(h.sessions) >= 32 {
@@ -100,26 +136,23 @@ func (h *Hub) scopedRequest(ctx context.Context, c ServerConfig, scope, method s
 	if s.idle != nil {
 		s.idle.Stop()
 	}
-	stop := context.AfterFunc(ctx, s.close)
+	stop := context.AfterFunc(ctx, func() { _ = s.close() })
 	defer stop()
-	defer func() { s.idle = time.AfterFunc(5*time.Minute, s.close) }()
+	defer func() { s.idle = time.AfterFunc(5*time.Minute, func() { _ = s.close() }) }()
 	if !s.initialized {
 		if err := s.start(); err != nil {
-			s.close()
+			_ = s.close()
 			return errors.New("MCP connection unavailable")
 		}
 		response, err := s.rpc(ctx, "initialize", initParams(), true)
 		if err != nil {
-			s.close()
-			return sessionError(ctx, err)
+			return sessionError(ctx, errors.Join(err, s.close()))
 		}
 		if err = rpcErr(response); err != nil {
-			s.close()
-			return err
+			return errors.Join(err, s.close())
 		}
 		if _, err = s.rpc(ctx, "notifications/initialized", map[string]any{}, false); err != nil {
-			s.close()
-			return sessionError(ctx, err)
+			return sessionError(ctx, errors.Join(err, s.close()))
 		}
 		s.initialized = true
 	}
@@ -135,8 +168,7 @@ func (h *Hub) scopedRequest(ctx context.Context, c ServerConfig, scope, method s
 	}
 	response, err := s.rpc(ctx, method, params, true)
 	if err != nil {
-		s.close()
-		return sessionError(ctx, err)
+		return sessionError(ctx, errors.Join(err, s.close()))
 	}
 	if err = rpcErr(response); err != nil {
 		return err
@@ -151,9 +183,12 @@ func (h *Hub) scopedRequest(ctx context.Context, c ServerConfig, scope, method s
 
 func sessionError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
-		return ctx.Err()
+		// Preserve both caller cancellation and any failed native cleanup. A
+		// caller may classify the operation as cancelled, but it must not assume
+		// a device/plugin lease is safe to reuse when tree confirmation failed.
+		return errors.Join(ctx.Err(), err)
 	}
-	return errors.New("MCP transport interrupted; operation outcome may be unknown, not replayed")
+	return errors.Join(errors.New("MCP transport interrupted; operation outcome may be unknown, not replayed"), err)
 }
 
 func (s *mcpSession) start() error {
@@ -183,6 +218,11 @@ func (s *mcpSession) start() error {
 	for name, value := range s.cfg.Env {
 		cmd.Env = append(cmd.Env, name+"="+value)
 	}
+	s.fields.Lock()
+	defer s.fields.Unlock()
+	if s.dead.Load() {
+		return errors.New("MCP session closed")
+	}
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -197,16 +237,22 @@ func (s *mcpSession) start() error {
 		out.Close()
 		return err
 	}
-	s.fields.Lock()
-	defer s.fields.Unlock()
-	if s.dead.Load() {
-		in.Close()
-		out.Close()
-		killSessionProcess(cmd)
-		go func() { _ = cmd.Wait() }()
-		return errors.New("MCP session closed")
+	process, err := attachSessionProcess(cmd)
+	if err != nil {
+		// Assignment is a hard security boundary.  This direct parent cleanup
+		// is only for a process that never received an RPC; do not continue via
+		// the old taskkill/parent-only path.
+		_ = in.Close()
+		_ = out.Close()
+		killErr := cmd.Process.Kill()
+		waitErr := cmd.Wait()
+		var exited *exec.ExitError
+		if errors.As(waitErr, &exited) {
+			waitErr = nil
+		}
+		return errors.Join(err, killErr, waitErr)
 	}
-	s.cmd, s.input, s.output = cmd, in, out
+	s.cmd, s.process, s.input, s.output = cmd, process, in, out
 	s.reader = bufio.NewReaderSize(out, maxFrame+1)
 	return nil
 }
@@ -221,16 +267,36 @@ func (s *mcpSession) rpc(ctx context.Context, method string, params any, want bo
 	if err != nil || len(b) > maxFrame {
 		return rpcResponse{}, errors.New("MCP request too large")
 	}
-	if s.client == nil {
-		if _, err = s.input.Write(append(b, '\n')); err != nil {
+	// close() must clear its references after closing each transport so a later
+	// retry can distinguish a confirmed shutdown. Snapshot everything rpc uses
+	// under the same mutex, then perform I/O without that lock: Close can still
+	// interrupt a blocked pipe/HTTP request, but cannot turn a field read into a
+	// nil dereference between this check and Write/Do/readRPC.
+	s.fields.Lock()
+	dead := s.dead.Load()
+	client := s.client
+	input := s.input
+	reader := s.reader
+	httpID := s.httpID
+	url := s.cfg.URL
+	headers := s.cfg.Headers
+	s.fields.Unlock()
+	if dead {
+		return rpcResponse{}, errors.New("MCP session closed")
+	}
+	if client == nil {
+		if input == nil || reader == nil {
+			return rpcResponse{}, errors.New("MCP session transport unavailable")
+		}
+		if _, err = input.Write(append(b, '\n')); err != nil {
 			return rpcResponse{}, err
 		}
 		if !want {
 			return rpcResponse{}, nil
 		}
-		return readRPC(s.reader, id)
+		return readRPC(reader, id)
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", s.cfg.URL, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
 	if err != nil {
 		return rpcResponse{}, err
 	}
@@ -238,13 +304,13 @@ func (s *mcpSession) rpc(ctx context.Context, method string, params any, want bo
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("MCP-Protocol-Version", protocolVersion)
-	for key, value := range s.cfg.Headers {
+	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	if s.httpID != "" {
-		req.Header.Set("Mcp-Session-Id", s.httpID)
+	if httpID != "" {
+		req.Header.Set("Mcp-Session-Id", httpID)
 	}
-	response, err := s.client.Do(req)
+	response, err := client.Do(req)
 	if err != nil {
 		return rpcResponse{}, err
 	}
@@ -253,7 +319,11 @@ func (s *mcpSession) rpc(ctx context.Context, method string, params any, want bo
 		return rpcResponse{}, fmt.Errorf("MCP HTTP status %d", response.StatusCode)
 	}
 	if value := response.Header.Get("Mcp-Session-Id"); value != "" {
-		s.httpID = value
+		s.fields.Lock()
+		if !s.dead.Load() {
+			s.httpID = value
+		}
+		s.fields.Unlock()
 	}
 	if !want {
 		return rpcResponse{}, nil

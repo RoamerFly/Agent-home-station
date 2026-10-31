@@ -1,0 +1,782 @@
+// Package devicebroker starts the fixed, owner-approved native mobile bridge.
+// It is deliberately not a plugin fallback executor: callers provide a
+// verified package snapshot and grants, while this package only resolves the
+// legacy private profile into a filtered bridge configuration.
+package devicebroker
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
+	"sync"
+
+	"wechat-bot/internal/mcptools"
+)
+
+var (
+	ErrNeedsMigration = errors.New("device_broker_needs_migration")
+	ErrDeviceBusy     = errors.New("device_busy")
+	errChanged        = errors.New("device_broker_changed")
+	errToolDenied     = errors.New("device_broker_tool_not_permitted")
+	errClosed         = errors.New("device_broker_closed")
+	identifier        = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+	serial            = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,100}$`)
+	packageName       = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$`)
+	hostName          = regexp.MustCompile(`^[a-z0-9.-]{1,253}$`)
+)
+
+// Options contains host-trusted paths. PackageDirectory is an already
+// verified package snapshot; this package does not accept a model-supplied
+// directory, command, script, environment, or endpoint.
+type Options struct {
+	Python             string
+	PackageDirectory   string
+	CompatibilityEntry string
+	WorkspaceDirectory string
+	StateDirectory     string // the caller supplies the selected account's state directory
+	// GlobalLeaseDirectory is a private, host-owned directory shared by
+	// accounts. It must be inside the trusted deployment workspace but outside
+	// any account state directory so aliases cannot bypass a physical-device
+	// lease merely by changing accounts.
+	GlobalLeaseDirectory string
+	// ADBRoots is a bounded set of trusted deployment runtime directories. The
+	// legacy profile's adb path must be an exact non-reparsed child of one root.
+	ADBRoots []string
+	Account  string
+	Legacy   mcptools.ServerConfig
+	Devices  []string
+	Actions  []string // permitted side-effect actions; observe is a required read capability
+}
+
+// Bridge is the small contract used by the durable device controller.
+type Bridge interface {
+	Call(context.Context, string, json.RawMessage) (string, error)
+	// Binding returns an opaque fingerprint of the verified native bridge
+	// inputs. It performs no MCP call and therefore does not start the child.
+	// Callers bind it to durable policy and result reuse.
+	Binding() (string, error)
+	Close() error
+}
+
+type hub interface {
+	Call(context.Context, string, json.RawMessage) (string, error)
+	Close() error
+}
+
+var openHub = func(config mcptools.ServerConfig) (hub, error) {
+	return mcptools.New([]mcptools.ServerConfig{config})
+}
+
+// quarantinedRegistry keeps only brokers whose native-child cleanup was not
+// confirmed. It intentionally has no public identifiers or task data. Without
+// this strong reference, a discarded wrapper could let GC close the retained
+// lease file while a native child outcome was still unknown.
+var quarantinedRegistry = struct {
+	sync.Mutex
+	brokers map[*broker]struct{}
+}{brokers: map[*broker]struct{}{}}
+
+type broker struct {
+	mu              sync.Mutex
+	hub             hub
+	seals           []fileSeal
+	dirs            []string
+	privateDirs     []string
+	leaseDirectory  string
+	leases          map[string]string
+	scope           string
+	binding         string
+	quarantined     bool
+	quarantineLease *physicalLease
+	closed          bool
+}
+
+type resolved struct {
+	server         mcptools.ServerConfig
+	seals          []fileSeal
+	dirs           []string
+	privateDirs    []string
+	leaseDirectory string
+	leases         map[string]string
+	scope          string
+	binding        string
+}
+
+type fileSeal struct {
+	path string
+	hash string
+}
+
+// Open resolves the legacy profile once and starts only the fixed package
+// runtime through mcptools.Hub. It never executes Legacy.Command.
+func Open(ctx context.Context, options Options) (Bridge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r, err := resolve(options)
+	if err != nil {
+		return nil, err
+	}
+	h, err := openHub(r.server)
+	if err != nil {
+		return nil, ErrNeedsMigration
+	}
+	return &broker{hub: h, seals: r.seals, dirs: r.dirs, privateDirs: r.privateDirs, leaseDirectory: r.leaseDirectory, leases: r.leases, scope: r.scope, binding: r.binding}, nil
+}
+
+func (b *broker) Call(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
+	if !allowedTool(name) {
+		return "", errToolDenied
+	}
+	if len(arguments) == 0 || !json.Valid(arguments) {
+		return "", errToolDenied
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || b.quarantined {
+		return "", errClosed
+	}
+	if !b.verified() {
+		return "", errChanged
+	}
+	var lease *physicalLease
+	releaseLease := true
+	defer func() {
+		if releaseLease && lease != nil {
+			_ = lease.Close()
+		}
+	}()
+	if name != "devices" {
+		key, ok := b.leaseKey(name, arguments)
+		if !ok {
+			return "", errToolDenied
+		}
+		var leaseErr error
+		lease, leaseErr = acquireLease(filepath.Join(b.leaseDirectory, "device-"+key+".lock"))
+		if leaseErr != nil {
+			if errors.Is(leaseErr, errLeaseBusy) {
+				return "", ErrDeviceBusy
+			}
+			return "", ErrNeedsMigration
+		}
+	}
+	// Never inherit an upstream conversation scope. The broker owns a stable,
+	// account-and-ledger-bound scope so Hub starts the native bridge with its
+	// explicit stdio session environment allowlist.
+	ctx = mcptools.WithSessionScope(ctx, b.scope)
+	result, err := b.hub.Call(ctx, "device__"+name, arguments)
+	if err != nil {
+		// Do not release the physical-device lease merely because the RPC
+		// returned an error: the native child might still own an unknown action.
+		// Hub.Close is the synchronous process-tree cleanup boundary.
+		if closeErr := b.hub.Close(); closeErr != nil {
+			b.quarantined = true
+			b.quarantineLease = lease
+			releaseLease = false
+			registerQuarantine(b)
+			return "", err
+		}
+		b.closed = true
+		return result, err
+	}
+	// An operation result is not safe to trust after a critical file changed.
+	// In particular, callers must treat an action as unknown and never replay it.
+	if !b.verified() {
+		return "", errChanged
+	}
+	return result, err
+}
+
+func (b *broker) leaseKey(name string, arguments json.RawMessage) (string, bool) {
+	if name != "observe" && name != "act" && name != "read_artifact" {
+		return "", false
+	}
+	var request struct {
+		DeviceID string `json:"device_id"`
+	}
+	if json.Unmarshal(arguments, &request) != nil || !identifier.MatchString(request.DeviceID) {
+		return "", false
+	}
+	key, ok := b.leases[request.DeviceID]
+	return key, ok
+}
+
+func (b *broker) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed && !b.quarantined {
+		return nil
+	}
+	if err := b.hub.Close(); err != nil {
+		b.quarantined = true
+		registerQuarantine(b)
+		return err
+	}
+	if b.quarantineLease != nil {
+		if err := b.quarantineLease.Close(); err != nil {
+			return err
+		}
+		b.quarantineLease = nil
+	}
+	b.quarantined = false
+	b.closed = true
+	unregisterQuarantine(b)
+	return nil
+}
+
+// CleanupQuarantined retries only native-child cleanup for brokers whose prior
+// cleanup failed. It never replays a device operation or starts a new bridge.
+func CleanupQuarantined() error {
+	quarantinedRegistry.Lock()
+	items := make([]*broker, 0, len(quarantinedRegistry.brokers))
+	for item := range quarantinedRegistry.brokers {
+		items = append(items, item)
+	}
+	quarantinedRegistry.Unlock()
+	var first error
+	for _, item := range items {
+		if err := item.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func registerQuarantine(item *broker) {
+	quarantinedRegistry.Lock()
+	quarantinedRegistry.brokers[item] = struct{}{}
+	quarantinedRegistry.Unlock()
+}
+
+func unregisterQuarantine(item *broker) {
+	quarantinedRegistry.Lock()
+	delete(quarantinedRegistry.brokers, item)
+	quarantinedRegistry.Unlock()
+}
+
+func (b *broker) Binding() (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || b.quarantined {
+		return "", errClosed
+	}
+	if !b.verified() {
+		return "", errChanged
+	}
+	return b.binding, nil
+}
+
+func (b *broker) verified() bool {
+	for _, seal := range b.seals {
+		if !seal.matches() {
+			return false
+		}
+	}
+	for _, dir := range b.dirs {
+		if _, err := canonicalDirectory(dir); err != nil {
+			return false
+		}
+	}
+	for _, dir := range b.privateDirs {
+		if err := verifyPrivateDirectory(dir); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (s fileSeal) matches() bool {
+	path, err := canonicalFile(s.path)
+	if err != nil || path != s.path {
+		return false
+	}
+	hash, err := hashFile(path)
+	return err == nil && hash == s.hash
+}
+
+func resolve(options Options) (resolved, error) {
+	if !identifier.MatchString(options.Account) {
+		return resolved{}, ErrNeedsMigration
+	}
+	python, err := canonicalFile(options.Python)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	workspace, err := canonicalDirectory(options.WorkspaceDirectory)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	state, err := canonicalDirectory(options.StateDirectory)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	// Do not alter the ACL/mode of the historical account state directory.
+	// Instead, create one protected leaf for the broker-derived profile.
+	profileDirectory, err := ensurePrivateDirectory(filepath.Join(state, "devicebroker-private"))
+	if err != nil || !within(state, profileDirectory) {
+		return resolved{}, ErrNeedsMigration
+	}
+	leaseCandidate, err := absoluteLeaf(options.GlobalLeaseDirectory)
+	if err != nil || !within(workspace, leaseCandidate) || samePath(leaseCandidate, workspace) || within(state, leaseCandidate) || within(leaseCandidate, state) {
+		return resolved{}, ErrNeedsMigration
+	}
+	parent, err := canonicalDirectory(filepath.Dir(leaseCandidate))
+	if err != nil || !within(workspace, parent) || !samePath(leaseCandidate, filepath.Join(parent, filepath.Base(leaseCandidate))) {
+		return resolved{}, ErrNeedsMigration
+	}
+	leaseDirectory, err := ensurePrivateDirectory(leaseCandidate)
+	if err != nil || !within(workspace, leaseDirectory) || samePath(leaseDirectory, workspace) || within(state, leaseDirectory) || within(leaseDirectory, state) {
+		return resolved{}, ErrNeedsMigration
+	}
+	adbRoots, err := canonicalADBRoots(options.ADBRoots, workspace)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	packageDir, err := canonicalDirectory(options.PackageDirectory)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	runtimeBridge, err := canonicalFile(filepath.Join(packageDir, "runtime", "bridge.py"))
+	if err != nil || !within(packageDir, runtimeBridge) {
+		return resolved{}, ErrNeedsMigration
+	}
+
+	compatibility := ""
+	if options.CompatibilityEntry != "" {
+		compatibility, err = canonicalFile(options.CompatibilityEntry)
+		if err != nil || !within(workspace, compatibility) {
+			return resolved{}, ErrNeedsMigration
+		}
+	}
+	legacyConfig, legacyStorage, err := legacyPaths(options.Legacy, runtimeBridge, compatibility)
+	if err != nil || !withinAny(legacyConfig, workspace, state) || !within(state, legacyStorage) {
+		return resolved{}, ErrNeedsMigration
+	}
+	legacyConfig, err = canonicalFile(legacyConfig)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	legacyStorage, err = canonicalDirectory(legacyStorage)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	legacyHash, err := hashFile(legacyConfig)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	filtered, adb, err := filteredProfile(legacyConfig, options.Devices, options.Actions)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	if after, hashErr := hashFile(legacyConfig); hashErr != nil || after != legacyHash {
+		return resolved{}, ErrNeedsMigration
+	}
+	adb, err = canonicalADB(adb, adbRoots)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	filtered.ADB = adb
+	// StateDirectory is selected by the host for this account. Keep the derived
+	// config account-distinct as a second guard against accidental sharing of a
+	// broader state parent; the durable legacy ledger itself is never relocated.
+	accountHash := sha256.Sum256([]byte(options.Account))
+	filteredConfig := filepath.Join(profileDirectory, "profile-"+hex.EncodeToString(accountHash[:8])+".json")
+	filteredHash, err := writeProfile(filteredConfig, filtered)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	filteredConfig, err = canonicalFile(filteredConfig)
+	if err != nil || !within(profileDirectory, filteredConfig) {
+		return resolved{}, ErrNeedsMigration
+	}
+	if actual, hashErr := hashFile(filteredConfig); hashErr != nil || actual != filteredHash {
+		return resolved{}, ErrNeedsMigration
+	}
+
+	seals := make([]fileSeal, 0, 5)
+	for _, path := range []string{python, runtimeBridge, adb} {
+		seal, err := makeSeal(path)
+		if err != nil {
+			return resolved{}, ErrNeedsMigration
+		}
+		seals = append(seals, seal)
+	}
+	seals = append(seals, fileSeal{path: legacyConfig, hash: legacyHash}, fileSeal{path: filteredConfig, hash: filteredHash})
+	// Do not carry any owner-provided command, URL, headers or environment
+	// through to the child. Hub owns stdio protocol cleanup and framing.
+	server := mcptools.ServerConfig{
+		ID: "device", Transport: "stdio", Command: python,
+		Args:    []string{"-I", "-B", "-u", runtimeBridge, "--config", filteredConfig, "--storage", legacyStorage},
+		Enabled: true, Tools: []string{"devices", "observe", "act", "read_artifact"},
+		Env: map[string]string{},
+	}
+	leases := map[string]string{}
+	for alias, device := range filtered.Devices {
+		leases[alias] = physicalLeaseKey(device.Serial)
+	}
+	privateDirs := []string{profileDirectory, leaseDirectory}
+	return resolved{server: server, seals: seals, dirs: append(append([]string{}, workspace, state, profileDirectory, packageDir, legacyStorage), append(adbRoots, leaseDirectory)...), privateDirs: privateDirs, leaseDirectory: leaseDirectory, leases: leases, scope: brokerScope(options.Account, legacyStorage, filteredHash), binding: brokerBinding(seals, leases, leaseDirectory)}, nil
+}
+
+func brokerBinding(seals []fileSeal, leases map[string]string, leaseDirectory string) string {
+	// json.Marshal orders string map keys deterministically. Paths and serials
+	// remain inside this digest; callers receive no file or device identifiers.
+	type bindingSeal struct {
+		Path string `json:"path"`
+		Hash string `json:"hash"`
+	}
+	boundSeals := make([]bindingSeal, 0, len(seals))
+	for _, seal := range seals {
+		boundSeals = append(boundSeals, bindingSeal{Path: seal.path, Hash: seal.hash})
+	}
+	payload, _ := json.Marshal(struct {
+		Seals     []bindingSeal     `json:"seals"`
+		Leases    map[string]string `json:"leases"`
+		LeaseRoot string            `json:"lease_root"`
+	}{Seals: boundSeals, Leases: leases, LeaseRoot: leaseDirectory})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func canonicalADBRoots(roots []string, workspace string) ([]string, error) {
+	if len(roots) == 0 || len(roots) > 8 {
+		return nil, errors.New("invalid adb roots")
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(roots))
+	for _, root := range roots {
+		canonical, err := canonicalDirectory(root)
+		if err != nil || !within(workspace, canonical) || samePath(workspace, canonical) || seen[canonical] {
+			return nil, errors.New("invalid adb root")
+		}
+		seen[canonical] = true
+		out = append(out, canonical)
+	}
+	return out, nil
+}
+
+func canonicalADB(path string, roots []string) (string, error) {
+	adb, err := canonicalFile(path)
+	if err != nil {
+		return "", err
+	}
+	name := filepath.Base(adb)
+	if !(name == "adb" || strings.EqualFold(name, "adb.exe")) || !withinAny(adb, roots...) {
+		return "", errors.New("untrusted adb")
+	}
+	return adb, nil
+}
+
+func physicalLeaseKey(serial string) string {
+	// Android's default adb server is shared on the local machine. Different
+	// trusted adb binaries can therefore still control the same serial; do not
+	// include their path or version in this physical-device lock identity.
+	sum := sha256.Sum256([]byte(strings.ToLower(serial)))
+	return hex.EncodeToString(sum[:])
+}
+
+func brokerScope(account, ledger, profileHash string) string {
+	sum := sha256.Sum256([]byte(account + "\x00" + ledger + "\x00" + profileHash))
+	return "device:" + account + ":" + hex.EncodeToString(sum[:16])
+}
+
+func legacyPaths(legacy mcptools.ServerConfig, runtimeBridge, compatibility string) (config, storage string, err error) {
+	if legacy.URL != "" || len(legacy.Env) != 0 || len(legacy.Headers) != 0 || (legacy.Transport != "" && legacy.Transport != "stdio") {
+		return "", "", ErrNeedsMigration
+	}
+	args := legacy.Args
+	i := 0
+	flags := map[string]bool{}
+	for i < len(args) && strings.HasPrefix(args[i], "-") {
+		flag := args[i]
+		if (flag != "-I" && flag != "-B" && flag != "-u") || flags[flag] {
+			return "", "", ErrNeedsMigration
+		}
+		flags[flag] = true
+		i++
+	}
+	if i >= len(args) {
+		return "", "", ErrNeedsMigration
+	}
+	script, scriptErr := canonicalFile(args[i])
+	if scriptErr != nil || script != runtimeBridge && (compatibility == "" || script != compatibility) {
+		return "", "", ErrNeedsMigration
+	}
+	i++
+	for i < len(args) {
+		if i+1 >= len(args) || (args[i] != "--config" && args[i] != "--storage") {
+			return "", "", ErrNeedsMigration
+		}
+		value := args[i+1]
+		if !filepath.IsAbs(value) {
+			return "", "", ErrNeedsMigration
+		}
+		if args[i] == "--config" {
+			if config != "" {
+				return "", "", ErrNeedsMigration
+			}
+			config = value
+		} else {
+			if storage != "" {
+				return "", "", ErrNeedsMigration
+			}
+			storage = value
+		}
+		i += 2
+	}
+	if config == "" || storage == "" {
+		return "", "", ErrNeedsMigration
+	}
+	return config, storage, nil
+}
+
+type profile struct {
+	ADB     string                   `json:"adb"`
+	Devices map[string]profileDevice `json:"devices"`
+}
+type profileDevice struct {
+	Serial   string   `json:"serial"`
+	Enabled  bool     `json:"enabled"`
+	Packages []string `json:"packages"`
+	Actions  []string `json:"actions"`
+	Browsers []string `json:"browsers,omitempty"`
+	WebHosts []string `json:"web_hosts,omitempty"`
+}
+
+func filteredProfile(path string, devices, actions []string) (profile, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > 64<<10 {
+		return profile{}, "", ErrNeedsMigration
+	}
+	var source profile
+	if json.Unmarshal(data, &source) != nil || !filepath.IsAbs(source.ADB) || len(source.Devices) == 0 || len(source.Devices) > 16 {
+		return profile{}, "", ErrNeedsMigration
+	}
+	if len(devices) == 0 || len(devices) > 16 || len(actions) > 9 {
+		return profile{}, "", ErrNeedsMigration
+	}
+	allowedActions := map[string]bool{}
+	for _, action := range actions {
+		if !knownAction(action) || action == "observe" {
+			return profile{}, "", ErrNeedsMigration
+		}
+		allowedActions[action] = true
+	}
+	out := profile{Devices: map[string]profileDevice{}}
+	for _, id := range devices {
+		if !identifier.MatchString(id) || out.Devices[id].Serial != "" {
+			return profile{}, "", ErrNeedsMigration
+		}
+		device, ok := source.Devices[id]
+		if !ok || !device.Enabled || !validDevice(device) {
+			return profile{}, "", ErrNeedsMigration
+		}
+		permitted := make([]string, 0, len(device.Actions))
+		observed := false
+		for _, action := range device.Actions {
+			if action == "observe" {
+				observed = true
+				permitted = append(permitted, action)
+				continue
+			}
+			if allowedActions[action] {
+				permitted = append(permitted, action)
+			}
+		}
+		if !observed {
+			return profile{}, "", ErrNeedsMigration
+		}
+		device.Actions = permitted
+		out.Devices[id] = device
+	}
+	if len(out.Devices) == 0 {
+		return profile{}, "", ErrNeedsMigration
+	}
+	return out, source.ADB, nil
+}
+
+func validDevice(device profileDevice) bool {
+	if !serial.MatchString(device.Serial) || len(device.Packages) == 0 || len(device.Packages) > 30 || len(device.Actions) == 0 || len(device.Actions) > 9 || len(device.Browsers) > len(device.Packages) || len(device.WebHosts) > 100 {
+		return false
+	}
+	packages := map[string]bool{}
+	for _, value := range device.Packages {
+		if !packageName.MatchString(value) || packages[value] {
+			return false
+		}
+		packages[value] = true
+	}
+	seenActions := map[string]bool{}
+	for _, value := range device.Actions {
+		if !knownAction(value) || seenActions[value] {
+			return false
+		}
+		seenActions[value] = true
+	}
+	for _, value := range device.Browsers {
+		if !packages[value] {
+			return false
+		}
+	}
+	for _, value := range device.WebHosts {
+		if !hostName.MatchString(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func knownAction(value string) bool {
+	switch value {
+	case "observe", "launch", "tap", "swipe", "text", "back", "home", "capture", "open_url":
+		return true
+	}
+	return false
+}
+
+func allowedTool(name string) bool {
+	switch name {
+	case "devices", "observe", "act", "read_artifact":
+		return true
+	}
+	return false
+}
+
+func writeProfile(path string, value profile) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil || len(data) > 64<<10 {
+		return "", err
+	}
+	// Recheck the trusted private state directory immediately before creating a
+	// temporary file. chmod(0600) below is meaningful on POSIX; on Windows the
+	// protected broker leaf provides the file DACL, while the host-selected
+	// StateDirectory remains the parent-deletion trust boundary. This package
+	// makes no claim that chmod alone provides DACL isolation.
+	if parent, parentErr := canonicalDirectory(filepath.Dir(path)); parentErr != nil || !samePath(parent, filepath.Dir(path)) {
+		return "", errors.New("private directory changed")
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".devicebroker-")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(temporary.Name())
+	if err = temporary.Chmod(0600); err == nil {
+		_, err = temporary.Write(data)
+	}
+	if err == nil {
+		err = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return "", err
+	}
+	if err = os.Rename(temporary.Name(), path); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func makeSeal(path string) (fileSeal, error) {
+	canonical, err := canonicalFile(path)
+	if err != nil {
+		return fileSeal{}, err
+	}
+	hash, err := hashFile(canonical)
+	return fileSeal{path: canonical, hash: hash}, err
+}
+
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func canonicalFile(path string) (string, error) {
+	canonical, err := canonical(path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(canonical)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", errors.New("not regular")
+	}
+	return canonical, nil
+}
+
+func canonicalDirectory(path string) (string, error) {
+	canonical, err := canonical(path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(canonical)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("not directory")
+	}
+	return canonical, nil
+}
+
+func canonical(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", errors.New("not absolute")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	clean := filepath.Clean(abs)
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil || !samePath(clean, filepath.Clean(resolved)) {
+		return "", errors.New("link or unresolved")
+	}
+	return clean, nil
+}
+
+func absoluteLeaf(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", errors.New("not absolute")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(abs), nil
+}
+
+func within(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
+}
+
+func withinAny(candidate string, roots ...string) bool {
+	for _, root := range roots {
+		if within(root, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func samePath(left, right string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
