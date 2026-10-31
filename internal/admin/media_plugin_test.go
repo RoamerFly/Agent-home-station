@@ -240,6 +240,25 @@ func TestMediaPluginDisabledBlocksImageAndVideoFallback(t *testing.T) {
 	}
 }
 
+func TestMediaPluginOwnsAllLegacyTranscriptionCallers(t *testing.T) {
+	f, _, p, ctx := mediaPolicyFixture(t, false)
+	// No audio/model/network is needed: fail at capability ownership before
+	// consulting the old speech configuration or launching its executable.
+	if _, err := f.manager.transcribeAudio(ctx, []byte("synthetic")); err == nil || err.Error() != "media_transcription_adapter_pending" {
+		t.Fatal("installed plugin bypassed through legacy transcription", err)
+	}
+	i, err := p.store.Installed(ctx, "media-understanding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.store.SetEnabled(ctx, i.Package.ID, i.Revision, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.manager.transcribeAudio(ctx, nil); err == nil || err.Error() != "media_plugin_disabled" {
+		t.Fatal("disabled plugin bypassed through legacy transcription", err)
+	}
+}
+
 func TestMediaPluginFailedTransportNeverRetries(t *testing.T) {
 	f, _, p, ctx := mediaPolicyFixture(t, false)
 	j, cap := mediaJob(p)

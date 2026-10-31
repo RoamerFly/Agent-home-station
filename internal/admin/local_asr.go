@@ -30,6 +30,16 @@ type localASRManifest struct {
 }
 
 func (m *Manager) transcribeAudio(ctx context.Context, wav []byte) (string, error) {
+	// All old ASR callers converge here (voice messages, video inspection,
+	// training references). Once installed, the plugin owns this capability;
+	// its absent adapter is not permission to use old credentials or runtimes.
+	installed, err := m.installedServiceState(ctx, "media-understanding", "media")
+	if err != nil {
+		return "", err
+	}
+	if installed {
+		return "", errors.New("media_transcription_adapter_pending")
+	}
 	c := m.speechConfig()
 	if !c.ASREnabled {
 		return "", errors.New("语音识别未启用")

@@ -31,3 +31,5 @@ go test ./internal/admin -run TestLiveMediaSourceAdapterRecovery -v -count=1 -ti
 ## 尚未完成
 
 ASR、视频解码、显式 `video_inspect`、移动端观察等入口尚未全部迁移。分享解析与画面观察目前由主体适配器串接，尚非完整的插件间能力调用代理。旧配置和运行时仍需预演迁移，旧视觉实现尚不能删除。模型真实识别质量、本轮生产升级及最终轻主体体积/启动指标未验收。
+
+后续入口审计发现微信语音、显式视频读取和训练参考音频共用 `transcribeAudio`，仍可能使用旧 ASR 配置。因此该公共入口也检查媒体插件安装状态：未安装保留兼容路径，安装后尚未完成 ASR 适配则返回 `media_transcription_adapter_pending`，停用则返回 `media_plugin_disabled`。定向媒体/本地 ASR 回归及 admin vet 通过。此项只是关闭迁移期间的旧路径绕行，不能算 ASR 已迁移；正式包仍不可安装，现有生产账号能力未切换。
