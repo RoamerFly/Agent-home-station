@@ -18,16 +18,16 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "7222c56292873ae4e1f70efbbe6ee6d574edda97db652b10bfc076e1c3f65d63",
-    "CHANGELOG.md": "0a56920d07bdc1f0d2f6b0279ffe1eaa414ea9c71addbf97d355fa6b6a41ae28",
-    "config.schema.json": "8ff0210883a0307ef02e1cef1abe61a80c240f0448755e78559ecfb382e37a6d",
-    "MIGRATION.md": "1d1baa8217c15973ca1b8b85d44e9434cfe656a6e5f6c87d005f0174eee897bc",
-    "PERMISSIONS.md": "ade70a1ac009e538895bbb0fd278547ec21cf3f012a578617be866824e5865ed",
-    "README.md": "87eea10fe3c6fe6b58ed1edb65625421a6f6686d5734906359a0e5f839a1fc1e",
+    "capabilities.json": "ef5a934fd4d47e436d5035d0fc3acebe3a2e52e6133a5c28c9242f3336cbf44a",
+    "CHANGELOG.md": "89ba120e980bc5049c2b2199c8a8558f4ac19b731896f8562595168f187b30e0",
+    "config.schema.json": "4f355aaabd61baab14303898f72d65b2df4624ffd7c3b3b28ded6ec33d2768be",
+    "MIGRATION.md": "166fedd94e29cbf77e70c73fc515c0ead0d02e3320ecbd7f439c7e5313e87cbd",
+    "PERMISSIONS.md": "4626c7803bc301df88f8c3a26f06e5a8b300ba3d1b7c81d82a9f85e449e880e9",
+    "README.md": "bf5260a219fe6da0d78556decb252db175b598d726d0c2f5f6f6728133f51003",
     "runtime/main.py": "ca27656540a44843cd44cb92c91e8db37c05d5605ec88be230fdc3b242891cf3",
-    "runtime/README.md": "83e3d5ff78e807958c88d37a8991a8a80d0c08cfa175d63cfc3e7666e07ca822",
-    "tests/fixtures/scope.json": "6c11e95a6d41553f04b14b69e66426f51e35ab56623f9b22e58c10c83c2e2b10",
+    "runtime/README.md": "db434e49dba80dbc89fe8e84f88d1af80a8906f20d4a428d1097f61e5daf720f",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "tests/test_runtime.py": "d903ab63f435a8fcbb16b5901faad9ee6715cffbecab83c9a7c01d15b8831b77",
-    "ui.schema.json": "d2df68da051917e4ba8b891c69d93b6d2e2b626675a506192bfd3bdf015c612d"
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   }
 }

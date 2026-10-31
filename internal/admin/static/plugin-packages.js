@@ -98,7 +98,7 @@
     const p=selected?await api('/api/plugin-packages/import',{method:'POST',headers:{'Content-Type':'application/zip'},body:selected}):await api('/api/plugin-packages/prepare',{method:'POST',json:{directory:input.value.trim()}});
     if(!current())return;result.append(el('h3',p.package.name),el('p','版本 '+p.package.version,'hint'));
     if(p.package.status!=='ready'){result.append(el('p','此包尚未完成迁移，不能安装。'));return}
-    const destinations=(p.package.http_routes||[]).filter(r=>r.credential).map(r=>r.endpoint);
+    const destinations=(p.package.http_routes||[]).filter(r=>r.credential).map(r=>r.endpoint||('管理员配置的 HTTPS 接口：'+r.endpoint_config));
     if(destinations.length){result.append(el('p','凭据仅发送到以下声明接口：','hint'));const targets=el('ul');for(const endpoint of [...new Set(destinations)]){const item=el('li',endpoint);item.style.overflowWrap='anywhere';targets.append(item)}result.append(targets)}
     const permissions=[];for(const permission of p.package.permissions||[]){const row=el('label',undefined,'switch-row'),check=el('input');check.type='checkbox';check.checked=true;permissions.push([permission,check]);row.append(el('span',names[permission]||permission),check);result.append(row)}
     const confirm=button('确认安装',async()=>{confirm.disabled=true;try{if(!current())return;await api('/api/plugin-packages/install',{method:'POST',json:{token:p.token,digest:p.digest,permissions:permissions.filter(([,c])=>c.checked).map(([name])=>name),confirm:true}});if(!current())return;modal.close();await load();await choose(p.package.id)}catch(e){if(current()){result.append(el('p',e.message,'error'));confirm.disabled=false}}});confirm.className='primary';result.append(el('p','安装后保持未启用；不会自动启动服务。','hint'),confirm);

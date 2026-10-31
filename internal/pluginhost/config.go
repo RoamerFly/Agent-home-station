@@ -306,6 +306,9 @@ func (s *Store) SaveConfiguration(ctx context.Context, id string, input ConfigUp
 			delete(private, name)
 		}
 	}
+	if err := validateConfiguredRoutes(item.Package, values); err != nil {
+		return Configuration{}, err
+	}
 	rawValues, _ := json.Marshal(values)
 	rawSecrets, _ := json.Marshal(private)
 	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(revision),0)+1 FROM configuration_versions WHERE plugin=?`, id).Scan(&revision); err != nil {

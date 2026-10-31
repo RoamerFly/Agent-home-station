@@ -1,11 +1,58 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "backend": {
+    "vision_endpoint": {
       "type": "string",
-      "description": "配置后端，迁移适配完成前不能启用"
+      "title": "视觉接口地址",
+      "description": "完整 HTTPS chat/completions 地址；密钥仅发送到此处。"
+    },
+    "vision_key": {
+      "type": "string",
+      "title": "视觉接口密钥",
+      "x-secret": true,
+      "x-host-only": true
+    },
+    "vision_model": {
+      "type": "string",
+      "title": "视觉模型",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "vision_backend": {
+      "type": "string",
+      "title": "接口协议",
+      "enum": [
+        "openai-compatible",
+        "deepseek"
+      ],
+      "default": "openai-compatible"
+    },
+    "max_tokens": {
+      "type": "integer",
+      "title": "默认输出额度",
+      "minimum": 1,
+      "default": 768
+    },
+    "thinking": {
+      "type": "boolean",
+      "title": "思考模式",
+      "default": false
+    },
+    "reasoning_effort": {
+      "type": "string",
+      "title": "思考强度",
+      "enum": [
+        "low",
+        "high",
+        "max"
+      ],
+      "default": "low"
     }
   },
+  "required": [
+    "vision_endpoint",
+    "vision_key",
+    "vision_model"
+  ],
   "additionalProperties": false
 }

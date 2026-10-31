@@ -61,7 +61,7 @@ func (e *Executor) Start(ctx context.Context, p pluginhost.Package, g pluginhost
 	// Network is a per-call host proxy, never a direct socket grant. The platform
 	// sandbox stays offline; unsupported GPU/device/workspace grants fail closed.
 	for _, permission := range g.Permissions {
-		if permission != "artifact.read" && permission != "artifact.write" && permission != "network" {
+		if permission != "artifact.read" && permission != "artifact.write" && permission != "network" && permission != "model.invoke" {
 			return nil, errors.New("plugin sandbox capability not implemented: " + permission)
 		}
 	}

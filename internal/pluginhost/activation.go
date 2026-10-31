@@ -67,6 +67,13 @@ func (s *Store) runtimeConfiguration(ctx context.Context, id string) (RuntimeCon
 			return RuntimeConfiguration{}, errors.New("required plugin configuration missing")
 		}
 	}
+	i, err := s.Installed(ctx, id)
+	if err != nil {
+		return RuntimeConfiguration{}, err
+	}
+	if err = validateConfiguredRoutes(i.Package, c.Values); err != nil {
+		return RuntimeConfiguration{}, err
+	}
 	return c, nil
 }
 

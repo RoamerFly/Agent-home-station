@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "media-understanding",
   "name": "媒体理解",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "host_protocol": 1,
   "status": "migration-pending",
   "platforms": [
@@ -10,7 +10,8 @@
     "linux-amd64"
   ],
   "runtime": {
-    "transport": "unbound"
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
   },
   "permissions": [
     "artifact.read",
@@ -19,14 +20,30 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "26e27e01ad3e3bcfc58b33e5c29fcef046b331593bfb82158dd4e32798ba1c48",
-    "CHANGELOG.md": "88459301401ae87baf3a87c8a2b94799ca5dc7cca074b2ecb5eb7dcf3410c0e4",
-    "config.schema.json": "84e3460e30802d08fca68587d507eaafe4105759c5c5916c7344446ff461e6c5",
-    "MIGRATION.md": "923176880b877b9f34dba66c1cfa189763812210cf55296984a6974a4ec76a1c",
-    "PERMISSIONS.md": "a3e7d284c2cee49e07490d95c291c67a0adb653972c89545a3ddfef488d29240",
-    "README.md": "a0ef7a5b1e3d1d79033a82c1fc14f7f65f7b21905889f93403acdfab2ce6277c",
-    "runtime/README.md": "ddd7cd15111d7a238db17418b1b39c62d083aca10afd39632ca2814a59b61f9e",
-    "tests/fixtures/scope.json": "6c11e95a6d41553f04b14b69e66426f51e35ab56623f9b22e58c10c83c2e2b10",
-    "ui.schema.json": "d2df68da051917e4ba8b891c69d93b6d2e2b626675a506192bfd3bdf015c612d"
-  }
+    "capabilities.json": "ae38b17825c0f2ac71de5d179e49825734f36302cb43fa51a68172c69401eadc",
+    "CHANGELOG.md": "5b127414666dd88f8bb6f36324a34c5acae3321d5798719e6859c308bbe76ba9",
+    "config.schema.json": "5ea730c51b6cf13f215b25525752a2748bc4f891d42aa12d499a4f4867e92668",
+    "MIGRATION.md": "3da9b53fbd94913d3489f2ebb8a131f0912378cbd7a7b9e918fb56277d8ed7cf",
+    "PERMISSIONS.md": "b11c7564c7c5b8d59054da08ccdf1ca21c94bef1552759d86c6933c6f571895e",
+    "README.md": "3c94322a1c95fd87e3559b393bf3a3d207219d72bcddfc9964f21f9d36b9333c",
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
+    "runtime/main.py": "b365479dd9bf63e2e7c274604947f5abba1f7999c4d6bd6a09a1a80bc511c602",
+    "runtime/observation.py": "2e1227644c170ff8ded65ec660ab2ca1f13cc6e9eac787c1c39275b8aebdcfb4",
+    "runtime/README.md": "900fe2ff7a92d22e758fc20231997f377e02f036846ead5bc0138ff4c4952ede",
+    "tests/test_observation.py": "ce1ae132f9f81f942059de212f056378378280ac4a279b40ace3d6550e2b5d41",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b"
+  },
+  "http_routes": [
+    {
+      "id": "vision",
+      "endpoint_config": "vision_endpoint",
+      "permission": "model.invoke",
+      "capabilities": [
+        "media.observe"
+      ],
+      "credential": "vision_key",
+      "credential_header": "Authorization",
+      "credential_prefix": "Bearer "
+    }
+  ]
 }

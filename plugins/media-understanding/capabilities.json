@@ -4,15 +4,46 @@
     {
       "id": "media.observe",
       "implementation": "migration-pending",
-      "description": "ASR、图片与视频观察",
+      "description": "观察获准的图片或已抽取视频帧，仅报告实际提供画面；模型调用经宿主代理。",
       "permissions": [
         "artifact.read",
-        "artifact.write",
         "model.invoke"
       ],
       "input_schema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "thinking": {
+            "type": "boolean"
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "enum": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        },
+        "required": [
+          "images"
+        ],
         "additionalProperties": false
       },
       "output_schema": {

@@ -20,9 +20,20 @@ func PostPluginRoute(ctx context.Context, endpoint string, headers map[string]st
 	defer tr.CloseIdleConnections()
 	return postPluginRoute(ctx, tr, endpoint, headers, body, maxBytes, timeout)
 }
+
+// PostPluginModel is the model proxy's larger body path. Authorized media is
+// expanded in the host, rather than transferred across the MCP frame boundary.
+func PostPluginModel(ctx context.Context, endpoint string, headers map[string]string, body json.RawMessage, maxBytes int64, timeout time.Duration) (json.RawMessage, error) {
+	tr := newPublicTransport()
+	defer tr.CloseIdleConnections()
+	return postPluginJSON(ctx, tr, endpoint, headers, body, maxBytes, timeout, 32<<20)
+}
 func postPluginRoute(ctx context.Context, tr http.RoundTripper, endpoint string, headers map[string]string, body json.RawMessage, maxBytes int64, timeout time.Duration) (json.RawMessage, error) {
+	return postPluginJSON(ctx, tr, endpoint, headers, body, maxBytes, timeout, 1<<20)
+}
+func postPluginJSON(ctx context.Context, tr http.RoundTripper, endpoint string, headers map[string]string, body json.RawMessage, maxBytes int64, timeout time.Duration, bodyLimit int) (json.RawMessage, error) {
 	u, err := url.Parse(endpoint)
-	if err != nil || u.Scheme != "https" || validPublicURL(endpoint) != nil || u.RawQuery != "" || u.Opaque != "" || maxBytes < 1 || maxBytes > 4<<20 || timeout <= 0 || len(body) > 1<<20 || !json.Valid(body) {
+	if err != nil || u.Scheme != "https" || validPublicURL(endpoint) != nil || u.RawQuery != "" || u.Opaque != "" || maxBytes < 1 || maxBytes > 4<<20 || timeout <= 0 || len(body) > bodyLimit || !json.Valid(body) {
 		return nil, errors.New("invalid plugin route request")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))

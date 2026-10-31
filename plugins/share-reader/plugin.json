@@ -21,21 +21,21 @@
     "media-understanding"
   ],
   "files": {
-    "capabilities.json": "8d2cf3adb8cc03ea12a8b252843c9a0d152128571714aecbcbf615bd06982de9",
-    "CHANGELOG.md": "29c3d06d60a246e302d298f0230d1e864fdc02a648dbbd142f97baa6203ece7b",
-    "config.schema.json": "f9bdd2e45ff43adb4ec236f07926038fc0b4a94664698c3de4cf4576034a0f75",
-    "MIGRATION.md": "5d4df926b43257d3c9cae0bf2f3d1e2f3ce62d0a7e6ec23e22c13ed4bd347506",
-    "PERMISSIONS.md": "abf446a804f70c1b40f6ad055fc0898a35c57ad34b4310710b5a05642a11dde6",
-    "README.md": "34d0d0c6cedfce1dd4d189b435bf0e7b6e8e728d1e7e7172a651d0623f34979f",
-    "runtime/channels.py": "bbf448c6c62f289e1b8c7089387adda5ec616adc497f3e8a51d31a0784b3cd2e",
-    "runtime/main.py": "dd56da8fa312dd1d0c07761ef4a0d6d194cd8217374b62c0677934259f5d1a1b",
+    "capabilities.json": "5873d4f5eb6a0691f19890568ac7fdfdc2c0244387e77fef47a27602a2a6ec4c",
+    "CHANGELOG.md": "e0c7a2dd5178618b8adca01b4ef4442a2220cb1d2e7fa07394d1b09babc77066",
+    "config.schema.json": "91fbea1adb3d8cd98309ef9fcd0e461c5ad6b30f91ced5c4be9d2ac6dfd7d1fd",
+    "MIGRATION.md": "3c89c8ef52adc18a36017c4dc350fc15bf97181feff215156333cc1138dddb8b",
+    "PERMISSIONS.md": "c397fc77d3bbe492386e0314956626c293be6c260cd3726d5509cf115a2a3faf",
+    "README.md": "5e093fca04db0aace4a3c6b6ca7ddd863c250bff3562cd55ca456c112c5daa0b",
+    "runtime/channels.py": "9957e72bb197804534fa5a20d0f83cfbe69bc98fea049ca9057c48a081c81c1d",
+    "runtime/main.py": "6b7006049c90d8d3aea8c30d71b0d6bda3407b4316b4fc80062e2b1a86f3471b",
     "runtime/public_share.py": "08601664777ffc155e1bdae0dc3030fa7a029e0b2da8b25b027b1d48c0204823",
-    "runtime/README.md": "d389adce307db02610f133c35aaa7a93772ebac6da6822c2911232409b1c3f50",
-    "tests/fixtures/scope.json": "6c11e95a6d41553f04b14b69e66426f51e35ab56623f9b22e58c10c83c2e2b10",
-    "tests/test_channels.py": "1014c9abbb6a67b92cc59ed7ed40dd45df939635b28a0c437122b29618fc008d",
+    "runtime/README.md": "c8ceeaa17348a2b292e36711b482f93e7ee987f7361e5ceeb7a277cd3a81373b",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "tests/test_channels.py": "85d425b35b3352dcad1d18f6c000cf50a2bf2e635fdc3f8733c774db7e21e021",
     "tests/test_public_share.py": "7e15cd4aa71c11b494ba625aaf848b5226d3370f72e096333775d04686bd8a36",
-    "ui.schema.json": "d2df68da051917e4ba8b891c69d93b6d2e2b626675a506192bfd3bdf015c612d",
-    "tests/test_bilibili.py": "ddd27a1d9fc512590bced167a7dbf0763c9c8e45362413328c3c638bbe62cc53"
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
+    "tests/test_bilibili.py": "1dec0cfcdb73232617e85765313a7e8ebd13e883849580ab258b0f6e3a2bc441"
   },
   "http_routes": [
     {

@@ -28,6 +28,9 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 			if p == "network" && (method == "wechat/http_read" || method == "wechat/http_route") {
 				allowed = true
 			}
+			if p == "model.invoke" && method == "wechat/model_request" {
+				allowed = true
+			}
 		}
 		if !allowed {
 			return nil, errors.New("host service not permitted by capability")

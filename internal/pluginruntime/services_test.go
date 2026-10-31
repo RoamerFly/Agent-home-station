@@ -34,3 +34,29 @@ func TestServiceProxyRequiresCurrentCallPermissionAndIdentity(t *testing.T) {
 		t.Fatal("non-service policy gained proxy")
 	}
 }
+
+type syntheticModelDispatch struct{ offlineWebPolicy }
+
+func (p *syntheticModelDispatch) Service(context.Context, pluginhost.Job, pluginhost.Capability, string, json.RawMessage) (json.RawMessage, error) {
+	p.calls++
+	return json.RawMessage(`{}`), nil
+}
+
+func TestModelServiceRequiresSeparatePermission(t *testing.T) {
+	ctx := context.Background()
+	p := &syntheticModelDispatch{}
+	j := pluginhost.Job{Context: invocation()}
+	for _, permissions := range [][]string{nil, {"network"}, {"artifact.read"}} {
+		call := serviceContext(ctx, p, j, pluginhost.Capability{Permissions: permissions}).Value(serviceKey{}).(serviceCall)
+		if _, err := call(ctx, "wechat/model_request", json.RawMessage(`{}`)); err == nil || p.calls != 0 {
+			t.Fatal("model proxy granted without model permission")
+		}
+	}
+	// The fake service handles any method. Reaching it proves dispatch only;
+	// route/source validation has separate tests and is mandatory in production.
+	call := serviceContext(ctx, p, j, pluginhost.Capability{Permissions: []string{"model.invoke"}}).Value(serviceKey{}).(serviceCall)
+	_, _ = call(ctx, "wechat/model_request", json.RawMessage(`{}`))
+	if p.calls != 1 {
+		t.Fatal("declared model service unavailable")
+	}
+}

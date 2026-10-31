@@ -55,3 +55,22 @@ func TestPluginRouteBoundsResponseAndHidesNetworkErrors(t *testing.T) {
 		t.Fatal("non HTTPS route accepted")
 	}
 }
+
+func TestPluginModelBodyLimitDoesNotWeakenOrdinaryRoutes(t *testing.T) {
+	body := []byte(`{"image":"` + strings.Repeat("a", 2<<20) + `"}`)
+	calls := 0
+	tr := pluginRouteTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		b, err := io.ReadAll(r.Body)
+		if err != nil || len(b) != len(body) {
+			t.Fatal("truncated model body")
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: r}, nil
+	})
+	if _, err := postPluginRoute(t.Context(), tr, "https://provider.example/api", nil, body, 100, time.Second); err == nil || calls != 0 {
+		t.Fatal("ordinary body limit bypassed")
+	}
+	if _, err := postPluginJSON(t.Context(), tr, "https://provider.example/api", nil, body, 100, time.Second, 32<<20); err != nil || calls != 1 {
+		t.Fatal("host materialized body failed", err)
+	}
+}

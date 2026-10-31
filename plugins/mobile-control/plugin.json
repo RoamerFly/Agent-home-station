@@ -19,14 +19,14 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "c13073309e36bbb357bc65f9904b63d8e7ddb82942ca941f61ebf8c913613228",
-    "CHANGELOG.md": "88459301401ae87baf3a87c8a2b94799ca5dc7cca074b2ecb5eb7dcf3410c0e4",
-    "config.schema.json": "84e3460e30802d08fca68587d507eaafe4105759c5c5916c7344446ff461e6c5",
-    "MIGRATION.md": "3a28734bda4b4f12b0a85cd2d1ebf20770b36029d790b9f7a9d5fbc02af6454a",
-    "PERMISSIONS.md": "5fe0f70a3cd309948ed46d85387b228509d7eb747b8a99198ee07561453e97f4",
-    "README.md": "7805418e897e5c599ad1efaa3e03bdf4c01bdf72a7d7aa3d31f973b9ee1d4bbd",
-    "runtime/README.md": "ddd7cd15111d7a238db17418b1b39c62d083aca10afd39632ca2814a59b61f9e",
-    "tests/fixtures/scope.json": "6c11e95a6d41553f04b14b69e66426f51e35ab56623f9b22e58c10c83c2e2b10",
-    "ui.schema.json": "d2df68da051917e4ba8b891c69d93b6d2e2b626675a506192bfd3bdf015c612d"
+    "capabilities.json": "4df6eb0a43ac1562b03b87bc92e7b71e99b1d6404d836cc3fb04327a0977f540",
+    "CHANGELOG.md": "0688abebe9b7a3826ee5def33287290c20cd363bdf25bda9f1aaef7a7219920b",
+    "config.schema.json": "95693d311a4827fcd7ab4d1ed7a6f590568841010f9999fe7761e7c810cb753f",
+    "MIGRATION.md": "e5ddb39b026bbcc850999d7aee84b7a3863dba281349ac55047b663431e26caa",
+    "PERMISSIONS.md": "c318bd6ecab255efc21fc0df77dd36ae997e1a4226481d7c670a8d3be8d41aef",
+    "README.md": "472cc109a61db4852189ebcdcf4749c4246d287e8a46172c14b723d71595d04a",
+    "runtime/README.md": "072ef9ce9b7fb7c06975dd7b9cf762a920d23d7aa16fdf9b08beb759d81a5c1a",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   }
 }

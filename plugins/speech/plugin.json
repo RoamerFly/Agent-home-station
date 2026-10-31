@@ -21,14 +21,14 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "b09fec5fd9445ce1335e477a300c256a72f78c5ee2eac4069149d4c506581b31",
-    "CHANGELOG.md": "88459301401ae87baf3a87c8a2b94799ca5dc7cca074b2ecb5eb7dcf3410c0e4",
-    "config.schema.json": "84e3460e30802d08fca68587d507eaafe4105759c5c5916c7344446ff461e6c5",
-    "MIGRATION.md": "32b2ffc01e750640f05d38550888222b9085a9677dfdb6f1274104301ca75bbb",
-    "PERMISSIONS.md": "7f2c41c8cc9484d370414155df342085fe436b519ed591111ae69e6391665016",
-    "README.md": "56ab6528505136ccd9f030d1932d6cd0e9f547a7b652717fb9ddd6519a575246",
-    "runtime/README.md": "ddd7cd15111d7a238db17418b1b39c62d083aca10afd39632ca2814a59b61f9e",
-    "tests/fixtures/scope.json": "6c11e95a6d41553f04b14b69e66426f51e35ab56623f9b22e58c10c83c2e2b10",
-    "ui.schema.json": "d2df68da051917e4ba8b891c69d93b6d2e2b626675a506192bfd3bdf015c612d"
+    "capabilities.json": "46d695ee02e0d92c368aeab496555c37d48a90af1f60e252aca7da5823a4e9f0",
+    "CHANGELOG.md": "0688abebe9b7a3826ee5def33287290c20cd363bdf25bda9f1aaef7a7219920b",
+    "config.schema.json": "95693d311a4827fcd7ab4d1ed7a6f590568841010f9999fe7761e7c810cb753f",
+    "MIGRATION.md": "72f2b911a30ce7b61fd3ee0bebddb369b593b972a904a11d538de6f1676a2f3c",
+    "PERMISSIONS.md": "0d94d0895e236888538612c666a36a770f503fbae321debb949261e54687c336",
+    "README.md": "106304b339267f8b2daf4228cfaf7ff2e771c8a3d74f7afd6eb173c30304493c",
+    "runtime/README.md": "072ef9ce9b7fb7c06975dd7b9cf762a920d23d7aa16fdf9b08beb759d81a5c1a",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   }
 }

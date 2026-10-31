@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -16,12 +17,17 @@ import (
 type HTTPRoute struct {
 	ID                string            `json:"id"`
 	Endpoint          string            `json:"endpoint"`
+	EndpointConfig    string            `json:"endpoint_config,omitempty"`
+	Permission        string            `json:"permission,omitempty"`
 	Capabilities      []string          `json:"capabilities"`
 	Credential        string            `json:"credential,omitempty"`
 	CredentialHeader  string            `json:"credential_header,omitempty"`
+	CredentialPrefix  string            `json:"credential_prefix,omitempty"`
 	Headers           map[string]string `json:"headers,omitempty"`
 	RefererPathPrefix string            `json:"referer_path_prefix,omitempty"`
 }
+
+var routeConfigName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 // HostHTTPRequest must never be serialized into a tool result or diagnostic.
 type HostHTTPRequest struct {
@@ -30,16 +36,39 @@ type HostHTTPRequest struct {
 	Body     json.RawMessage
 }
 
+func (r HTTPRoute) permission() string {
+	if r.Permission == "" {
+		return "network"
+	}
+	return r.Permission
+}
+
+func validRouteEndpoint(raw string) (*url.URL, error) {
+	u, e := url.Parse(raw)
+	if e != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" || strings.ContainsAny(raw, "\\\r\n\x00") {
+		return nil, errors.New("HTTP route requires exact HTTPS endpoint")
+	}
+	return u, nil
+}
+
 func validateHTTPRoutes(p Package) error {
 	seen := map[string]bool{}
 	for _, r := range p.HTTPRoutes {
-		if !identifier.MatchString(r.ID) || seen[r.ID] || !containsString(p.Permissions, "network") {
+		if !identifier.MatchString(r.ID) || seen[r.ID] || (r.permission() != "network" && r.permission() != "model.invoke") || !containsString(p.Permissions, r.permission()) {
 			return errors.New("invalid HTTP route declaration")
 		}
 		seen[r.ID] = true
-		u, e := url.Parse(r.Endpoint)
-		if e != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" || strings.ContainsAny(r.Endpoint, "\\\r\n\x00") {
-			return errors.New("HTTP route requires exact HTTPS endpoint")
+		var u *url.URL
+		if r.EndpointConfig != "" {
+			if r.Endpoint != "" || !routeConfigName.MatchString(r.EndpointConfig) || r.RefererPathPrefix != "" {
+				return errors.New("invalid configurable route endpoint")
+			}
+		} else {
+			var e error
+			u, e = validRouteEndpoint(r.Endpoint)
+			if e != nil {
+				return e
+			}
 		}
 		if len(r.Capabilities) == 0 {
 			return errors.New("HTTP route capability missing")
@@ -55,13 +84,16 @@ func validateHTTPRoutes(p Package) error {
 		if (r.Credential == "") != (r.CredentialHeader == "") || r.Credential != "" && r.CredentialHeader != "Cookie" && r.CredentialHeader != "Authorization" {
 			return errors.New("invalid HTTP route credential")
 		}
+		if r.CredentialPrefix != "" && (r.CredentialPrefix != "Bearer " || r.Credential == "" || r.CredentialHeader != "Authorization") {
+			return errors.New("invalid HTTP credential prefix")
+		}
 		for k, v := range r.Headers {
 			if k != "Accept" && k != "User-Agent" && k != "Origin" && k != "Referer" || strings.ContainsAny(v, "\r\n\x00") {
 				return errors.New("invalid fixed HTTP header")
 			}
 			if k == "Origin" || k == "Referer" {
 				h, e := url.Parse(v)
-				if e != nil || h.Scheme != u.Scheme || h.Host != u.Host || h.User != nil || h.Fragment != "" {
+				if e != nil || u == nil || h.Scheme != u.Scheme || h.Host != u.Host || h.User != nil || h.Fragment != "" {
 					return errors.New("HTTP route referer must share destination origin")
 				}
 			}
@@ -76,6 +108,22 @@ func containsString(items []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func validateConfiguredRoutes(p Package, values map[string]json.RawMessage) error {
+	for _, r := range p.HTTPRoutes {
+		if r.EndpointConfig == "" {
+			continue
+		}
+		var endpoint string
+		if json.Unmarshal(values[r.EndpointConfig], &endpoint) != nil {
+			return errors.New("route endpoint configuration missing")
+		}
+		if _, err := validRouteEndpoint(endpoint); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateHTTPRouteResources(dir string, p Package) error {
@@ -100,11 +148,17 @@ func validateHTTPRouteResources(dir string, p Package) error {
 	if json.Unmarshal(raw, &doc) != nil {
 		return errors.New("invalid HTTP route capabilities")
 	}
-	network := map[string]bool{}
+	capabilities := map[string][]string{}
 	for _, c := range doc.Capabilities {
-		network[c.ID] = containsString(c.Permissions, "network")
+		capabilities[c.ID] = c.Permissions
 	}
 	for _, r := range p.HTTPRoutes {
+		if r.EndpointConfig != "" {
+			field, ok := schema.Properties[r.EndpointConfig]
+			if !ok || field.Secret || field.Type != "string" || !containsString(schema.Required, r.EndpointConfig) {
+				return errors.New("route endpoint requires declared required string configuration")
+			}
+		}
 		if r.Credential != "" {
 			field, ok := schema.Properties[r.Credential]
 			if !ok || !field.Secret || !field.HostOnly || field.Type != "string" || len(field.Default) > 0 {
@@ -112,8 +166,8 @@ func validateHTTPRouteResources(dir string, p Package) error {
 			}
 		}
 		for _, c := range r.Capabilities {
-			if !network[c] {
-				return errors.New("HTTP route references missing network capability")
+			if !containsString(capabilities[c], r.permission()) {
+				return errors.New("HTTP route references missing permitted capability")
 			}
 		}
 	}
@@ -124,9 +178,17 @@ func validateHTTPRouteResources(dir string, p Package) error {
 // before transport. The caller must additionally bind provider payload fields to
 // the original authorized source; network grants alone do not prove that binding.
 func (s *Store) ResolveHTTPRequest(ctx context.Context, j Job, cap Capability, route string, body json.RawMessage, referer ...string) (HostHTTPRequest, error) {
+	return s.resolveRouteRequest(ctx, j, cap, route, body, "network", referer...)
+}
+
+func (s *Store) ResolveModelRequest(ctx context.Context, j Job, cap Capability, route string, body json.RawMessage) (HostHTTPRequest, error) {
+	return s.resolveRouteRequest(ctx, j, cap, route, body, "model.invoke")
+}
+
+func (s *Store) resolveRouteRequest(ctx context.Context, j Job, cap Capability, route string, body json.RawMessage, permission string, referer ...string) (HostHTTPRequest, error) {
 	var result HostHTTPRequest
 	i, err := s.Installed(ctx, j.Plugin)
-	if err != nil || !i.Enabled || i.Removed || j.Context.Account != s.account || j.Version != i.Package.Version || j.PackageDigest != i.Digest || cap.ID != j.Tool || !containsString(cap.Permissions, "network") || !containsString(i.Permissions, "network") {
+	if err != nil || !i.Enabled || i.Removed || j.Context.Account != s.account || j.Version != i.Package.Version || j.PackageDigest != i.Digest || cap.ID != j.Tool || !containsString(cap.Permissions, permission) || !containsString(i.Permissions, permission) {
 		return result, errors.New("HTTP route authorization changed")
 	}
 	if err = validateHTTPRoutes(i.Package); err != nil {
@@ -134,7 +196,7 @@ func (s *Store) ResolveHTTPRequest(ctx context.Context, j Job, cap Capability, r
 	}
 	var selected *HTTPRoute
 	for _, r := range i.Package.HTTPRoutes {
-		if r.ID == route && containsString(r.Capabilities, cap.ID) {
+		if r.ID == route && r.permission() == permission && containsString(r.Capabilities, cap.ID) {
 			copy := r
 			selected = &copy
 			break
@@ -144,14 +206,27 @@ func (s *Store) ResolveHTTPRequest(ctx context.Context, j Job, cap Capability, r
 		return result, errors.New("HTTP route unavailable for capability")
 	}
 	var object map[string]json.RawMessage
-	if len(body) > 1<<20 || json.Unmarshal(body, &object) != nil || object == nil {
-		return result, errors.New("HTTP route body requires JSON object within 1 MiB")
+	limit := 1 << 20
+	if permission == "model.invoke" {
+		limit = 32 << 20
+	}
+	if len(body) > limit || json.Unmarshal(body, &object) != nil || object == nil {
+		return result, errors.New("HTTP route body exceeds transport limit or is not an object")
 	}
 	config, err := s.ConfigurationForExecution(ctx, j.Plugin)
 	if err != nil || strconv.Itoa(config.Revision) != j.ConfigRevision {
 		return result, errors.New("HTTP route configuration changed")
 	}
-	result = HostHTTPRequest{Endpoint: selected.Endpoint, Headers: map[string]string{}, Body: append(json.RawMessage(nil), body...)}
+	endpoint := selected.Endpoint
+	if selected.EndpointConfig != "" {
+		if json.Unmarshal(config.Values[selected.EndpointConfig], &endpoint) != nil {
+			return result, errors.New("route endpoint configuration missing")
+		}
+		if _, err := validRouteEndpoint(endpoint); err != nil {
+			return result, err
+		}
+	}
+	result = HostHTTPRequest{Endpoint: endpoint, Headers: map[string]string{}, Body: append(json.RawMessage(nil), body...)}
 	for k, v := range selected.Headers {
 		result.Headers[k] = v
 	}
@@ -183,7 +258,7 @@ func (s *Store) ResolveHTTPRequest(ctx context.Context, j Job, cap Capability, r
 		if json.Unmarshal(config.Values[selected.Credential], &secret) != nil || secret == "" || len(secret) > 16384 || strings.ContainsAny(secret, "\r\n\x00") {
 			return HostHTTPRequest{}, errors.New("HTTP route credential unavailable")
 		}
-		result.Headers[selected.CredentialHeader] = secret
+		result.Headers[selected.CredentialHeader] = selected.CredentialPrefix + secret
 	}
 	return result, nil
 }
