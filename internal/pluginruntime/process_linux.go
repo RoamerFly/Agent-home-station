@@ -35,7 +35,7 @@ func isolatedCommand(s LaunchSpec, argv []string) (*exec.Cmd, func(), error) {
 	if info, e := os.Stat("/etc/ld.so.cache"); e == nil && info.Mode().IsRegular() {
 		args = append(args, "--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache")
 	}
-	for _, dir := range append([]string{s.PackageDir}, s.RuntimeRoots...) {
+	for _, dir := range readOnlyRoots(s) {
 		args = append(args, "--ro-bind", dir, dir)
 	}
 	args = append(args, "--bind", s.DataDir, s.DataDir, "--chdir", s.DataDir, "--")

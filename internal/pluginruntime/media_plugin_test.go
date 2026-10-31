@@ -116,6 +116,9 @@ func TestLiveMediaPluginScopedModelProxy(t *testing.T) {
 	sum := sha256.Sum256(raw)
 	p := pending.Package
 	p.Status = "ready"
+	// This isolated fixture promotes only visual observation; the production
+	// manifest also declares ASR, which is not part of this synthetic package.
+	p.HTTPRoutes = p.HTTPRoutes[:1]
 	p.Files["capabilities.json"] = hex.EncodeToString(sum[:])
 	raw, _ = json.Marshal(p)
 	os.WriteFile(filepath.Join(dir, "plugin.json"), raw, 0600)

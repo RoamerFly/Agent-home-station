@@ -22,6 +22,14 @@ SDK_VERSION = "2.0.1"
 VAD_SHA256 = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
 
 
+def plugin_runtime_entry():
+    """Return the checked-in plugin runner, never a caller-selected script."""
+    entry = Path(__file__).resolve().parents[1] / "plugins" / "media-understanding" / "runtime" / "local_asr.py"
+    if not entry.is_file():
+        raise ValueError("media_understanding_local_asr_runtime_missing")
+    return entry
+
+
 def digest_file(path):
     h=hashlib.sha256()
     with Path(path).open('rb') as stream:
@@ -113,7 +121,15 @@ def install(workspace, archive, wheel_dir=None, replace_registration=False):
         scripts = public / "projects/agent-tools"
         scripts.mkdir(parents=True, exist_ok=True)
         entry = scripts / "local_asr.py"
-        shutil.copyfile(Path(__file__).with_name("local_asr.py"), entry)
+        # Keep the existing manifest entry stable for already registered local
+        # models, but deploy the single plugin-owned implementation atomically.
+        pending_entry = entry.with_suffix(".pending-" + uuid.uuid4().hex + ".py")
+        try:
+            shutil.copyfile(plugin_runtime_entry(), pending_entry)
+            pending_entry.replace(entry)
+        finally:
+            if pending_entry.exists():
+                pending_entry.unlink()
         vad = models / "silero_vad.onnx"
         vad_download = models / "downloads/silero_vad.onnx"
         if not vad.exists() and vad_download.is_file():

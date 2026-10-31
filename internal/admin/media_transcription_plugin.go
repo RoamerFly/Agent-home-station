@@ -48,6 +48,27 @@ type mediaTranscriptionPolicy struct {
 	arguments      json.RawMessage
 }
 
+func (m *Manager) mediaTranscriptionConfigured(ctx context.Context) bool {
+	s, err := m.packageStore()
+	if err != nil {
+		return false
+	}
+	cfg, err := s.Configuration(ctx, "media-understanding")
+	if err != nil {
+		return false
+	}
+	var endpoint, model string
+	if json.Unmarshal(cfg.Values["asr_endpoint"], &endpoint) != nil || json.Unmarshal(cfg.Values["asr_model"], &model) != nil || endpoint == "" || model == "" {
+		return false
+	}
+	for _, key := range cfg.ConfiguredSecrets {
+		if key == "asr_key" {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) newMediaTranscriptionPolicy(ctx context.Context, message linuxnative.Message, wav []byte) (*mediaTranscriptionPolicy, error) {
 	base, err := m.newReceivedSharePolicyFor(ctx, message, "media.transcribe")
 	if err != nil {
@@ -244,6 +265,14 @@ func (p *mediaTranscriptionPolicy) transcribe(ctx context.Context) (string, erro
 	call, err := controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: p.arguments}, p)
 	if err != nil {
 		return "", errors.New("media_plugin_transcription_needs_review")
+	}
+	if call.Job.State == "failed" {
+		var failure struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(call.Job.Result, &failure) == nil && failure.Error == "asr_provider_failed" {
+			return "", errors.New("media_transcription_provider_failed")
+		}
 	}
 	if call.Job.State != "completed" {
 		return "", errors.New("media_plugin_transcription_needs_review")

@@ -1,10 +1,12 @@
 package pluginruntime
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -40,6 +42,147 @@ func TestLaunchMountsCannotWriteCode(t *testing.T) {
 		if validateSpec(s) == nil {
 			t.Fatal("writable code overlap accepted")
 		}
+	}
+}
+
+func TestSameVerifiedPackageNormalizesOptionalCollections(t *testing.T) {
+	dir := t.TempDir()
+	want := readyFixture(t, dir)
+	got, err := pluginhost.Verify(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameVerifiedPackage(want, got) {
+		t.Fatal("equivalent verified package rejected due to JSON collection representation")
+	}
+	got.Version = "changed"
+	if sameVerifiedPackage(want, got) {
+		t.Fatal("changed package identity accepted")
+	}
+}
+
+func TestReadOnlyResourceRegistrationIsBoundAndImmutable(t *testing.T) {
+	root := t.TempDir()
+	code := filepath.Join(root, "code")
+	data := filepath.Join(root, "data")
+	resourceRoot := filepath.Join(root, "approved-model")
+	for _, dir := range []string{code, data, resourceRoot} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := filepath.Join(resourceRoot, "model.manifest.json")
+	if err := os.WriteFile(manifest, []byte(`{"name":"synthetic-model","files":["model.bin"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(resourceRoot, "model.bin"), []byte("synthetic model bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(`{"name":"synthetic-model","files":["model.bin"]}`))
+	p := pluginhost.Package{ID: "media-understanding", Version: "0.1.1"}
+	g := pluginhost.Grant{Account: "account-a", Plugin: p.ID, Version: p.Version}
+	registered := ReadOnlyResource{
+		ID:             "synthetic-model",
+		Root:           resourceRoot,
+		Account:        g.Account,
+		Plugin:         p.ID,
+		PackageVersion: p.Version,
+		ManifestPath:   manifest,
+		ManifestSHA256: hex.EncodeToString(sum[:]),
+	}
+	spec := LaunchSpec{PackageDir: code, DataDir: data, Resources: []ReadOnlyResource{registered}}
+	if err := validateSpec(spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateResources(p, g, spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte(`{"name":"synthetic-model","files":["replacement.bin"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if validateResources(p, g, spec) == nil {
+		t.Fatal("changed resource manifest accepted")
+	}
+	if err := os.WriteFile(manifest, []byte(`{"name":"synthetic-model","files":["model.bin"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oversized := filepath.Join(resourceRoot, "oversized.manifest.json")
+	if err := os.WriteFile(oversized, bytes.Repeat([]byte{'x'}, int(maxResourceManifestBytes+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readResourceManifest(oversized); err == nil {
+		t.Fatal("oversized resource manifest accepted")
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*LaunchSpec)
+	}{
+		{"foreign account", func(s *LaunchSpec) { s.Resources[0].Account = "account-b" }},
+		{"foreign plugin", func(s *LaunchSpec) { s.Resources[0].Plugin = "music" }},
+		{"foreign version", func(s *LaunchSpec) { s.Resources[0].PackageVersion = "0.1.2" }},
+		{"changed manifest digest", func(s *LaunchSpec) { s.Resources[0].ManifestSHA256 = strings.Repeat("0", 64) }},
+		{"manifest outside root", func(s *LaunchSpec) { s.Resources[0].ManifestPath = filepath.Join(code, "main.py") }},
+		{"private root", func(s *LaunchSpec) { s.Resources[0].Root = data }},
+		{"duplicate resource identity", func(s *LaunchSpec) { s.Resources = append(s.Resources, s.Resources[0]) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := spec
+			candidate.Resources = append([]ReadOnlyResource(nil), spec.Resources...)
+			tc.mutate(&candidate)
+			if validateResources(p, g, candidate) == nil {
+				t.Fatal("invalid resource registration accepted")
+			}
+		})
+	}
+
+	linked := filepath.Join(root, "linked-resource")
+	if err := os.Symlink(resourceRoot, linked); err == nil {
+		candidate := spec
+		candidate.Resources = append([]ReadOnlyResource(nil), spec.Resources...)
+		candidate.Resources[0].Root = linked
+		if validateResources(p, g, candidate) == nil {
+			t.Fatal("symlinked resource root accepted")
+		}
+	}
+}
+
+func TestInstalledExecutorAcceptsResourcesOnlyFromHostResolver(t *testing.T) {
+	store, installed := installedFixture(t)
+	var err error
+	installed, err = store.SetEnabled(context.Background(), installed.Package.ID, installed.Revision, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := pluginhost.Grant{Account: store.Account(), Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
+	called := 0
+	registered := ReadOnlyResource{ID: "model-a", Root: `C:\\synthetic-host-owned-resource`}
+	executor := InstalledExecutor(store, Options{ResourceRoots: func(ctx context.Context, p pluginhost.Package, g pluginhost.Grant) ([]ReadOnlyResource, error) {
+		called++
+		if p.ID != installed.Package.ID || p.Version != installed.Package.Version || g.Account != grant.Account || g.Plugin != grant.Plugin || g.Version != grant.Version || len(g.Permissions) != len(grant.Permissions) {
+			t.Fatal("resource resolver received unbound plugin scope")
+		}
+		return []ReadOnlyResource{registered}, nil
+	}})
+	spec, err := executor.Resolve(context.Background(), installed.Package, grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called != 1 || len(spec.Resources) != 1 || spec.Resources[0] != registered {
+		t.Fatal("host resource registration was not carried into launch spec")
+	}
+	// A deployment that does not explicitly register a resource exposes none.
+	withoutRegistration := InstalledExecutor(store, Options{})
+	spec, err = withoutRegistration.Resolve(context.Background(), installed.Package, grant)
+	if err != nil || len(spec.Resources) != 0 {
+		t.Fatal("unregistered resource was exposed", err, spec.Resources)
+	}
+	denied := InstalledExecutor(store, Options{ResourceRoots: func(context.Context, pluginhost.Package, pluginhost.Grant) ([]ReadOnlyResource, error) {
+		return nil, errors.New("host resource registry unavailable")
+	}})
+	if _, err := denied.Resolve(context.Background(), installed.Package, grant); err == nil {
+		t.Fatal("resource registry failure did not fail closed")
 	}
 }
 
@@ -106,12 +249,24 @@ func TestLiveIsolatedStdio(t *testing.T) {
 	code := filepath.Join(root, "code")
 	data := filepath.Join(root, "data")
 	outside := filepath.Join(root, "other-account.txt")
+	resourceRoot := filepath.Join(root, "approved-model")
 	os.Mkdir(code, 0700)
 	os.Mkdir(data, 0700)
+	os.Mkdir(resourceRoot, 0700)
 	os.WriteFile(outside, []byte("synthetic private boundary"), 0600)
+	resourceManifest := filepath.Join(resourceRoot, "model.manifest.json")
+	resourceFile := filepath.Join(resourceRoot, "model.bin")
+	resourceManifestBytes := []byte(`{"name":"synthetic-model","files":["model.bin"]}`)
+	if err := os.WriteFile(resourceManifest, resourceManifestBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resourceFile, []byte("synthetic model bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	resourceHash := sha256.Sum256(resourceManifestBytes)
 	p := readyFixture(t, code)
 	g := pluginhost.Grant{Account: "a", Plugin: p.ID, Version: p.Version}
-	spec := LaunchSpec{PackageDir: code, DataDir: data, Python: python, Pythonw: filepath.Join(filepath.Dir(python), "pythonw.exe"), WindowsHelper: helper, RuntimeRoots: []string{filepath.Dir(python)}}
+	spec := LaunchSpec{PackageDir: code, DataDir: data, Python: python, Pythonw: filepath.Join(filepath.Dir(python), "pythonw.exe"), RuntimeRoots: []string{filepath.Dir(python)}, WindowsHelper: helper, Resources: []ReadOnlyResource{{ID: "synthetic-model", Root: resourceRoot, Account: g.Account, Plugin: p.ID, PackageVersion: p.Version, ManifestPath: resourceManifest, ManifestSHA256: hex.EncodeToString(resourceHash[:])}}}
 	e := Executor{Resolve: func(context.Context, pluginhost.Package, pluginhost.Grant) (LaunchSpec, error) { return spec, nil }}
 	t.Setenv("PRIVATE_PLUGIN_TEST_TOKEN", "synthetic-not-for-child")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -142,6 +297,12 @@ func TestLiveIsolatedStdio(t *testing.T) {
 	}
 	if r := call("read", map[string]string{"path": outside}); r["denied"] != true {
 		t.Fatal("other account file was readable")
+	}
+	if r := call("read", map[string]string{"path": resourceFile}); r["denied"] != false || r["text"] != "synthetic model bytes" {
+		t.Fatal("approved resource was unavailable", r)
+	}
+	if r := call("write", map[string]string{"path": resourceFile}); r["denied"] != true {
+		t.Fatal("approved resource was writable")
 	}
 	if r := call("write", map[string]string{"path": filepath.Join(code, "main.py")}); r["denied"] != true {
 		t.Fatal("package was writable")

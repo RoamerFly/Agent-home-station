@@ -17,6 +17,7 @@ type Options struct {
 	Pythonw       string   `json:"pythonw"`
 	WindowsHelper string   `json:"windows_helper"`
 	RuntimeRoots  []string `json:"runtime_roots"`
+	ResourceRoots ResourceResolver
 }
 
 func InstalledExecutor(store *pluginhost.Store, options Options) *Executor {
@@ -40,7 +41,14 @@ func InstalledExecutor(store *pluginhost.Store, options Options) *Executor {
 		if err != nil {
 			return LaunchSpec{}, err
 		}
-		return LaunchSpec{PackageDir: code, DataDir: data, Python: options.Python, Pythonw: options.Pythonw, WindowsHelper: options.WindowsHelper, RuntimeRoots: append([]string(nil), options.RuntimeRoots...), Configuration: &config}, nil
+		resources := []ReadOnlyResource(nil)
+		if options.ResourceRoots != nil {
+			resources, err = options.ResourceRoots(ctx, p, g)
+			if err != nil {
+				return LaunchSpec{}, err
+			}
+		}
+		return LaunchSpec{PackageDir: code, DataDir: data, Python: options.Python, Pythonw: options.Pythonw, WindowsHelper: options.WindowsHelper, RuntimeRoots: append([]string(nil), options.RuntimeRoots...), Resources: append([]ReadOnlyResource(nil), resources...), Configuration: &config}, nil
 	}}
 }
 

@@ -48,11 +48,18 @@ func (a mediaUnderstanding) observeVideo(ctx context.Context, msg linuxnative.Me
 	}
 	audio, audioSeconds := "", 0.0
 	var audioErr error
-	// ASR has not migrated yet. Installed visual-only packages must not call
-	// the old separately configured audio provider behind the plugin boundary.
-	audioEnabled := !installed && a.manager.speechConfig().ASREnabled
+	// The plugin owns ASR once installed. A missing ASR configuration simply
+	// leaves audio unread; it never falls back to legacy credentials.
+	audioEnabled := !installed && a.manager.speechConfig().ASREnabled || installed && a.manager.mediaTranscriptionConfigured(ctx)
 	if audioEnabled && ctx.Err() == nil {
-		audio, audioSeconds, audioErr = a.videoAudio(ctx, data)
+		if installed {
+			audio, audioSeconds, audioErr = a.videoAudioPlugin(ctx, msg, data)
+		} else {
+			audio, audioSeconds, audioErr = a.videoAudio(ctx, data)
+		}
+		if installed && audioErr != nil && mediaTranscriptionHardFailure(audioErr) {
+			return "", audioErr
+		}
 		if audioErr != nil {
 			event, category, state, code := "video_audio_observation_failed", "error", "failed", "video_audio_transcription_failed"
 			stage := "extract_audio"
@@ -114,7 +121,7 @@ func (a mediaUnderstanding) observeVideo(ctx context.Context, msg linuxnative.Me
 		if audioEnabled {
 			parts = append(parts, "[音轨转写未完成；当前可用资料见画面观察。]")
 		} else if installed {
-			parts = append(parts, "[当前媒体插件尚不支持音轨转写；本次仅依据画面观察，未读取声音内容。]")
+			parts = append(parts, "[当前媒体插件未配置语音识别；本次仅依据画面观察，未读取声音内容。]")
 		} else {
 			parts = append(parts, "[音轨转写未启用；当前可用资料见画面观察。]")
 		}
@@ -127,10 +134,30 @@ func (a mediaUnderstanding) videoAudio(ctx context.Context, data []byte) (string
 	return a.videoAudioRange(ctx, data, 0, 180)
 }
 
+func mediaTranscriptionHardFailure(err error) bool {
+	if err == nil || err.Error() == "media_transcription_provider_failed" || bailian.IsNoSpeech(err) {
+		return false
+	}
+	return strings.HasPrefix(err.Error(), "share_") || strings.HasPrefix(err.Error(), "media_plugin_") || strings.HasPrefix(err.Error(), "media_transcription_")
+}
+
+func (a mediaUnderstanding) videoAudioPlugin(ctx context.Context, msg linuxnative.Message, data []byte) (string, float64, error) {
+	return a.videoAudioRangeTimedWith(ctx, data, 0, 180, 60, func(ctx context.Context, wav []byte) (string, error) {
+		policy, err := a.manager.newMediaTranscriptionPolicy(ctx, msg, wav)
+		if err != nil {
+			return "", err
+		}
+		return policy.transcribe(ctx)
+	})
+}
+
 func (a mediaUnderstanding) videoAudioRange(ctx context.Context, data []byte, start, length float64) (string, float64, error) {
 	return a.videoAudioRangeTimed(ctx, data, start, length, 60)
 }
 func (a mediaUnderstanding) videoAudioRangeTimed(ctx context.Context, data []byte, start, length float64, timeout int) (string, float64, error) {
+	return a.videoAudioRangeTimedWith(ctx, data, start, length, timeout, a.manager.transcribeAudio)
+}
+func (a mediaUnderstanding) videoAudioRangeTimedWith(ctx context.Context, data []byte, start, length float64, timeout int, transcribe func(context.Context, []byte) (string, error)) (string, float64, error) {
 	if start < 0 || length <= 0 || timeout < 0 {
 		return "", 0, errors.New("video_audio_range_invalid")
 	}
@@ -177,7 +204,7 @@ func (a mediaUnderstanding) videoAudioRangeTimed(ctx context.Context, data []byt
 	if err != nil || len(wav) == 0 || len(wav) > 8<<20 {
 		return "", 0, errors.New("video_audio_limit")
 	}
-	text, err := a.manager.transcribeAudio(ctx, wav)
+	text, err := transcribe(ctx, wav)
 	if bailian.IsNoSpeech(err) {
 		return "", seconds, err
 	}

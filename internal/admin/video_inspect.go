@@ -7,14 +7,12 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediadecode"
 )
 
 func (p *permittedTools) videoTools() []mcptools.Tool {
@@ -53,38 +51,8 @@ type videoMetadata struct {
 }
 
 func probeInspectionVideo(ctx context.Context, path string) (videoMetadata, error) {
-	var result videoMetadata
-	raw, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-select_streams", "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames,avg_frame_rate,width,height:format=duration", "-of", "json", path).Output()
-	var info struct {
-		Streams []struct {
-			Count  string `json:"nb_read_frames"`
-			Rate   string `json:"avg_frame_rate"`
-			Width  int    `json:"width"`
-			Height int    `json:"height"`
-		} `json:"streams"`
-		Format struct {
-			Duration string `json:"duration"`
-		} `json:"format"`
-	}
-	if err != nil || json.Unmarshal(raw, &info) != nil || len(info.Streams) != 1 {
-		return result, errors.New("video_inspect_probe_failed")
-	}
-	s := info.Streams[0]
-	result.Frames, _ = strconv.Atoi(s.Count)
-	result.Seconds, _ = strconv.ParseFloat(info.Format.Duration, 64)
-	result.Width, result.Height = s.Width, s.Height
-	rate := strings.Split(s.Rate, "/")
-	if len(rate) == 2 {
-		a, _ := strconv.ParseFloat(rate[0], 64)
-		b, _ := strconv.ParseFloat(rate[1], 64)
-		if b > 0 {
-			result.FPS = a / b
-		}
-	}
-	if result.Frames < 1 || result.Seconds <= 0 || math.IsNaN(result.Seconds) || math.IsInf(result.Seconds, 0) {
-		return result, errors.New("video_inspect_metadata_invalid")
-	}
-	return result, nil
+	decoded, err := mediadecode.Probe(ctx, path)
+	return videoMetadata{Seconds: decoded.Seconds, Frames: decoded.Frames, FPS: decoded.FPS, Width: decoded.Width, Height: decoded.Height}, err
 }
 
 func (p *permittedTools) inspectionThreadAllowed(thread string) bool {
@@ -216,36 +184,17 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 	return v.Data, in.URL, e
 }
 
-var framePTS = regexp.MustCompile(`pts_time:([0-9.+eE-]+)`)
-
 func extractInspectionFrames(ctx context.Context, path, dir string, start, count, step int) ([]deepseek.Image, []float64, error) {
 	return extractInspectionFramesSized(ctx, path, dir, start, count, step, 960)
 }
 
 func extractInspectionFramesSized(ctx context.Context, path, dir string, start, count, step, dimension int) ([]deepseek.Image, []float64, error) {
-	end := start + (count-1)*step
-	filter := fmt.Sprintf("select=between(n\\,%d\\,%d)*not(mod(n-%d\\,%d)),showinfo,scale=%d:%d:force_original_aspect_ratio=decrease", start, end, start, step, dimension, dimension)
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "info", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-threads", "1", "-i", path, "-map", "0:v:0", "-vf", filter, "-fps_mode", "vfr", "-frames:v", strconv.Itoa(count), "-threads", "1", "-filter_threads", "1", "-q:v", "4", filepath.Join(dir, "frame-%06d.jpg"))
-	log, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, nil, errors.New("video_inspect_decode_failed")
+	decoded, times, err := mediadecode.ExtractFramesSized(ctx, path, dir, start, count, step, dimension)
+	images := make([]deepseek.Image, 0, len(decoded))
+	for _, frame := range decoded {
+		images = append(images, deepseek.Image{Data: frame.Data, MIME: frame.MIME})
 	}
-	matches := framePTS.FindAllStringSubmatch(string(log), -1)
-	images := []deepseek.Image{}
-	times := []float64{}
-	for i := 0; i < count; i++ {
-		b, e := os.ReadFile(filepath.Join(dir, fmt.Sprintf("frame-%06d.jpg", i+1)))
-		if e != nil || len(b) == 0 || len(b) > 8<<20 || i >= len(matches) {
-			return nil, nil, errors.New("video_inspect_frame_evidence_incomplete")
-		}
-		at, e := strconv.ParseFloat(matches[i][1], 64)
-		if e != nil {
-			return nil, nil, errors.New("video_inspect_timestamp_invalid")
-		}
-		images = append(images, deepseek.Image{Data: b, MIME: "image/jpeg"})
-		times = append(times, at)
-	}
-	return images, times, nil
+	return images, times, err
 }
 
 func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args json.RawMessage) (result string, callErr error) {

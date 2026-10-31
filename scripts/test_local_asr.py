@@ -1,9 +1,35 @@
+import importlib.util
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
-from local_asr import clean_text, speech_detected
+
+
+ROOT = Path(__file__).resolve().parents[1]
+RUNTIME = ROOT / "plugins" / "media-understanding" / "runtime" / "local_asr.py"
+SHIM = ROOT / "scripts" / "local_asr.py"
+INSTALLER = ROOT / "scripts" / "install_local_asr.py"
+
+runtime_spec = importlib.util.spec_from_file_location("media_local_asr", RUNTIME)
+runtime = importlib.util.module_from_spec(runtime_spec)
+runtime_spec.loader.exec_module(runtime)
+shim_spec = importlib.util.spec_from_file_location("local_asr_compat", SHIM)
+shim = importlib.util.module_from_spec(shim_spec)
+shim_spec.loader.exec_module(shim)
+installer_spec = importlib.util.spec_from_file_location("local_asr_installer", INSTALLER)
+installer = importlib.util.module_from_spec(installer_spec)
+installer_spec.loader.exec_module(installer)
+
+clean_text = runtime.clean_text
+speech_detected = runtime.speech_detected
 
 
 class LocalASRTests(unittest.TestCase):
+    def test_compatibility_shim_targets_only_packaged_runtime(self):
+        self.assertEqual(shim.plugin_entry().resolve(), RUNTIME.resolve())
+
+    def test_installer_deploys_the_same_plugin_owned_runner(self):
+        self.assertEqual(installer.plugin_runtime_entry().resolve(), RUNTIME.resolve())
+
     def test_non_speech_events_never_become_invented_transcript(self):
         self.assertEqual(clean_text("<|zh|><|NEUTRAL|><|BGM|><|woitn|>"), "")
         self.assertEqual(clean_text("<|zh|><|NEUTRAL|>你好，今天怎么样？<|Speech|>"), "你好，今天怎么样？")

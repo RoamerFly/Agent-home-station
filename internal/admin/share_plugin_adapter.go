@@ -66,7 +66,7 @@ func (m *Manager) newReceivedSharePolicy(ctx context.Context, message linuxnativ
 
 func (m *Manager) newReceivedSharePolicyFor(ctx context.Context, message linuxnative.Message, tool string) (*receivedSharePolicy, error) {
 	validKind := message.AppMessageType != nil && (*message.AppMessageType == 51 && tool == "share.resolve_channels" || (*message.AppMessageType == 4 || *message.AppMessageType == 5) && tool == "share.resolve_public" && message.Link != nil && sharePublicURL(message.Link.URL) != "")
-	validKind = message.Type == 49 && validKind || tool == "media.observe" && (message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && message.AppMessageType != nil && (*message.AppMessageType == 4 || *message.AppMessageType == 5 || *message.AppMessageType == 51)) || tool == "media.transcribe" && message.Type == 34
+	validKind = message.Type == 49 && validKind || tool == "media.observe" && (message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && message.AppMessageType != nil && (*message.AppMessageType == 4 || *message.AppMessageType == 5 || *message.AppMessageType == 51)) || tool == "media.transcribe" && (message.Type == 34 || message.Type == 43 || message.Type == 49)
 	if m.memory == nil || message.ID == "" || message.ThreadID == "" || message.SenderID == "" || message.Direction != "incoming" || !validKind {
 		return nil, errors.New("share_native_source_required")
 	}
@@ -135,7 +135,7 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	if p.tool == "media.observe" || p.tool == "media.transcribe" {
 		plugin = "media-understanding"
 		if p.tool == "media.transcribe" {
-			readAllowed = p.manager.speechConfig().ASREnabled
+			readAllowed = p.message.Type == 34 || c.Behavior.ReadVideos
 		} else if p.message.Type == 3 || p.message.Type == 47 {
 			readAllowed = c.Behavior.ReadImages
 		}

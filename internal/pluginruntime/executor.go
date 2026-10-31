@@ -4,8 +4,11 @@ package pluginruntime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -25,8 +28,28 @@ type LaunchSpec struct {
 	Pythonw       string
 	WindowsHelper string
 	RuntimeRoots  []string
+	Resources     []ReadOnlyResource
 	Configuration *pluginhost.RuntimeConfiguration
 }
+
+// ReadOnlyResource is registered by trusted host deployment code, never a
+// plugin, model, tool argument or package configuration. The manifest binds a
+// particular approved resource root to one account/plugin/version and detects
+// changes to the registered manifest between registration and process launch.
+// It deliberately does not claim to verify every resource file: a parser for
+// the declared manifest format must validate its indexed file hashes before
+// treating model/runtime content as integrity checked.
+type ReadOnlyResource struct {
+	ID             string
+	Root           string
+	Account        string
+	Plugin         string
+	PackageVersion string
+	ManifestPath   string
+	ManifestSHA256 string
+}
+
+type ResourceResolver func(context.Context, pluginhost.Package, pluginhost.Grant) ([]ReadOnlyResource, error)
 type Resolver func(context.Context, pluginhost.Package, pluginhost.Grant) (LaunchSpec, error)
 type Executor struct {
 	Resolve Resolver
@@ -72,11 +95,14 @@ func (e *Executor) Start(ctx context.Context, p pluginhost.Package, g pluginhost
 	if err = validateSpec(spec); err != nil {
 		return nil, err
 	}
+	if err = validateResources(p, g, spec); err != nil {
+		return nil, err
+	}
 	verified, err := pluginhost.Verify(spec.PackageDir)
 	if err != nil {
 		return nil, err
 	}
-	if !reflect.DeepEqual(p, verified) {
+	if !sameVerifiedPackage(p, verified) {
 		return nil, errors.New("installed package changed before launch")
 	}
 	if p.Runtime.Entrypoint == "" {
@@ -106,6 +132,33 @@ func (e *Executor) Start(ctx context.Context, p pluginhost.Package, g pluginhost
 		return nil, err
 	}
 	return s, nil
+}
+
+// sameVerifiedPackage compares the package contract after normalizing the
+// nil-versus-empty JSON collection distinction. A package's optional
+// dependencies are encoded as null by in-memory fixtures but decoded as an
+// empty collection by the backward-compatible Dependencies unmarshaler; that
+// representation difference is not an on-disk package change.
+func sameVerifiedPackage(expected, actual pluginhost.Package) bool {
+	normalize := func(p pluginhost.Package) pluginhost.Package {
+		if p.Platforms == nil {
+			p.Platforms = []string{}
+		}
+		if p.Permissions == nil {
+			p.Permissions = []string{}
+		}
+		if p.Dependencies == nil {
+			p.Dependencies = pluginhost.Dependencies{}
+		}
+		if p.HTTPRoutes == nil {
+			p.HTTPRoutes = []pluginhost.HTTPRoute{}
+		}
+		if p.Files == nil {
+			p.Files = map[string]string{}
+		}
+		return p
+	}
+	return reflect.DeepEqual(normalize(expected), normalize(actual))
 }
 
 func inside(path, root string) bool {
@@ -151,7 +204,11 @@ func validateSpec(s LaunchSpec) error {
 			return err
 		}
 	}
-	for _, readOnly := range append([]string{s.PackageDir}, s.RuntimeRoots...) {
+	readOnlyRoots := append([]string{s.PackageDir}, s.RuntimeRoots...)
+	for _, resource := range s.Resources {
+		readOnlyRoots = append(readOnlyRoots, resource.Root)
+	}
+	for _, readOnly := range readOnlyRoots {
 		if inside(s.DataDir, readOnly) || inside(readOnly, s.DataDir) {
 			return errors.New("plugin writable directory overlaps code or runtime")
 		}
@@ -162,6 +219,81 @@ func validateSpec(s LaunchSpec) error {
 		}
 	}
 	return nil
+}
+
+func readOnlyRoots(s LaunchSpec) []string {
+	roots := append([]string{s.PackageDir}, s.RuntimeRoots...)
+	for _, resource := range s.Resources {
+		roots = append(roots, resource.Root)
+	}
+	return roots
+}
+
+func validateResources(p pluginhost.Package, g pluginhost.Grant, s LaunchSpec) error {
+	seen := map[string]bool{}
+	for i, resource := range s.Resources {
+		if resource.ID == "" || resource.Account != g.Account || resource.Plugin != p.ID || resource.PackageVersion != p.Version || len(resource.ManifestSHA256) != 64 || strings.ToLower(resource.ManifestSHA256) != resource.ManifestSHA256 {
+			return errors.New("plugin resource registration invalid")
+		}
+		if _, err := hex.DecodeString(resource.ManifestSHA256); err != nil || !safeResourceID(resource.ID) || seen[resource.ID] {
+			return errors.New("plugin resource registration invalid")
+		}
+		seen[resource.ID] = true
+		if err := cleanPath(resource.Root, true); err != nil || cleanPath(resource.ManifestPath, false) != nil || !inside(resource.ManifestPath, resource.Root) {
+			return errors.New("plugin resource path unavailable")
+		}
+		manifest, err := readResourceManifest(resource.ManifestPath)
+		if err != nil {
+			return errors.New("plugin resource manifest unavailable")
+		}
+		sum := sha256.Sum256(manifest)
+		if hex.EncodeToString(sum[:]) != resource.ManifestSHA256 {
+			return errors.New("plugin resource manifest changed")
+		}
+		for _, earlier := range s.Resources[:i] {
+			if inside(resource.Root, earlier.Root) || inside(earlier.Root, resource.Root) {
+				return errors.New("plugin resource roots overlap")
+			}
+		}
+		if inside(resource.Root, s.DataDir) || inside(s.DataDir, resource.Root) || inside(resource.Root, s.PackageDir) || inside(s.PackageDir, resource.Root) {
+			return errors.New("plugin resource overlaps private or package data")
+		}
+	}
+	return nil
+}
+
+const maxResourceManifestBytes int64 = 1 << 20
+
+// readResourceManifest bounds host-side parsing even when a resource file is
+// replaced after path validation. This generic runtime only hashes the manifest
+// bytes; resource-file hash semantics remain owned by its manifest parser.
+func readResourceManifest(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxResourceManifestBytes {
+		return nil, errors.New("plugin resource manifest unavailable")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, errors.New("plugin resource manifest unavailable")
+	}
+	defer f.Close()
+	contents, err := io.ReadAll(io.LimitReader(f, maxResourceManifestBytes+1))
+	if err != nil || int64(len(contents)) > maxResourceManifestBytes {
+		return nil, errors.New("plugin resource manifest unavailable")
+	}
+	return contents, nil
+}
+
+func safeResourceID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for i, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' && i > 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // rawCopy prevents a caller mutating invocation evidence while a call is queued.

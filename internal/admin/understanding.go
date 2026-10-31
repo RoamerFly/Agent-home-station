@@ -4,12 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
-	"fmt"
 	"io"
-	"math"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,20 +12,15 @@ import (
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediadecode"
 )
 
 type incomingReader interface {
 	IncomingMedia(context.Context, string, int64) ([]byte, string, error)
 }
 
-func formatSeconds(v float64) string { return strconv.FormatFloat(v, 'f', 3, 64) }
-func parseVideoDuration(s string) (float64, error) {
-	v, e := strconv.ParseFloat(s, 64)
-	if e != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
-		return 0, errors.New("video_analysis_duration_limit")
-	}
-	return v, nil
-}
+func formatSeconds(v float64) string               { return strconv.FormatFloat(v, 'f', 3, 64) }
+func parseVideoDuration(s string) (float64, error) { return mediadecode.ParseDuration(s) }
 
 type mediaUnderstanding struct {
 	manager  *Manager
@@ -192,48 +182,10 @@ type videoSample struct {
 }
 
 func sampleVideo(ctx context.Context, dir string, data []byte) (videoSample, error) {
-	var sample videoSample
-	for _, program := range []string{"ffprobe", "ffmpeg"} {
-		if _, err := exec.LookPath(program); err != nil {
-			return sample, errors.New("video_analysis_decoder_unavailable")
-		}
+	decoded, err := mediadecode.Sample(ctx, dir, data)
+	sample := videoSample{Seconds: decoded.Seconds, Times: decoded.Times}
+	for _, frame := range decoded.Frames {
+		sample.Frames = append(sample.Frames, deepseek.Image{Data: frame.Data, MIME: frame.MIME})
 	}
-	ctx, cancel := context.WithTimeout(ctx, 35*time.Second)
-	defer cancel()
-	tmp, err := os.MkdirTemp(dir, "video-analysis-")
-	if err != nil {
-		return sample, errors.New("video_analysis_staging_failed")
-	}
-	defer os.RemoveAll(tmp)
-	input := filepath.Join(tmp, "input.bin")
-	if os.WriteFile(input, data, 0600) != nil {
-		return sample, errors.New("video_analysis_staging_failed")
-	}
-	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-show_entries", "format=duration", "-of", "csv=p=0", input)
-	duration, err := probe.Output()
-	if err != nil {
-		return sample, errors.New("video_analysis_probe_failed")
-	}
-	seconds, err := parseVideoDuration(strings.TrimSpace(string(duration)))
-	if err != nil {
-		return sample, err
-	}
-	sample.Seconds = seconds
-	for i := 0; i < 6; i++ {
-		at := seconds * (float64(i) + 0.5) / 6
-		// A zero-frame decode can exit successfully. Never reuse a previous
-		// iteration's file as evidence for this sampling time.
-		output := filepath.Join(tmp, fmt.Sprintf("frame-%d.jpg", i))
-		cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-ss", formatSeconds(at), "-threads", "1", "-i", input, "-map", "0:v:0", "-frames:v", "1", "-threads", "1", "-filter_threads", "1", "-vf", "scale=960:960:force_original_aspect_ratio=decrease", "-q:v", "4", output)
-		if cmd.Run() != nil {
-			return sample, errors.New("video_frame_extraction_failed")
-		}
-		b, err := os.ReadFile(output)
-		if err != nil || len(b) == 0 || len(b) > 2<<20 {
-			return sample, errors.New("video_frame_invalid")
-		}
-		sample.Frames = append(sample.Frames, deepseek.Image{Data: b, MIME: "image/jpeg"})
-		sample.Times = append(sample.Times, at)
-	}
-	return sample, nil
+	return sample, err
 }

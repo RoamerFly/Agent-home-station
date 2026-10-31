@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
@@ -397,8 +398,12 @@ func TestMediaTranscriptionSourceAndProviderAuthority(t *testing.T) {
 			}
 			n.msg.Body = ""
 			f.manager.speech.ASREnabled = false
+			if err = p.Check(ctx, j, cap); err != nil {
+				t.Fatal("installed ASR incorrectly depended on legacy switch", err)
+			}
+			f.manager.config.Enabled = false
 			if err = p.Check(ctx, j, cap); err == nil {
-				t.Fatal("ASR permission revocation accepted")
+				t.Fatal("agent authorization revocation accepted")
 			}
 		})
 	}
@@ -453,6 +458,40 @@ func TestMediaTranscriptionUsageWithoutProviderSchemaStaysUnknown(t *testing.T) 
 	total := f.manager.billing.data.Total
 	if total.Requests != 1 || total.Reported != 0 || total.Input != 0 || total.Output != 0 {
 		t.Fatalf("unrecognized ASR usage was misreported: %+v", total)
+	}
+}
+
+func TestMediaTranscriptionVideoUsesVideoReadPermission(t *testing.T) {
+	f, n, p, ctx := transcriptionFixture(t, false)
+	n.msg.ID, n.msg.Type = "synthetic-video-audio", 43
+	p, err := f.manager.newMediaTranscriptionPolicy(ctx, n.msg, syntheticWAV())
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, cap := transcriptionJob(p)
+	if err = p.Check(ctx, j, cap); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.config.Behavior.ReadVideos = false
+	if err = p.Check(ctx, j, cap); err == nil {
+		t.Fatal("video ASR accepted after video permission revoked")
+	}
+	f.manager.config.Behavior.ReadVideos = true
+	if err = p.Check(ctx, j, cap); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMediaTranscriptionProviderFailureKeepsVisualEvidence(t *testing.T) {
+	for _, err := range []error{errors.New("media_transcription_provider_failed"), &bailian.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}} {
+		if mediaTranscriptionHardFailure(err) {
+			t.Fatal("ordinary ASR result discarded visual evidence", err)
+		}
+	}
+	for _, err := range []error{errors.New("media_plugin_configuration_changed"), errors.New("share_source_changed")} {
+		if !mediaTranscriptionHardFailure(err) {
+			t.Fatal("source or authority failure retained stale visual evidence", err)
+		}
 	}
 }
 
