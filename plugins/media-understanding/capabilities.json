@@ -3,8 +3,8 @@
   "capabilities": [
     {
       "id": "media.observe",
-      "implementation": "migration-pending",
-      "description": "观察获准的图片或已抽取视频帧，仅报告实际提供画面；模型调用经宿主代理。",
+      "implementation": "ready",
+      "description": "观察宿主已核验的入站图片或贴纸，仅报告实际提供画面；模型调用经宿主代理。视频帧继续由主体的自动处理与 video_inspect 续读路径负责。",
       "permissions": [
         "artifact.read",
         "model.invoke"
@@ -49,12 +49,12 @@
       "output_schema": {
         "type": "object"
       },
-      "discoverable": false
+      "discoverable": true
     },
     {
       "id": "media.transcribe",
-      "implementation": "migration-pending",
-      "description": "识别获准的 WAV 音频，返回实际转写与来源；可选远程模型路由或宿主登记的本地 ASR，二者都不接收路径、字节或命令参数。",
+      "implementation": "ready",
+      "description": "识别宿主已核验的入站语音 WAV，返回实际转写与来源；可选远程模型路由或宿主登记的本地 ASR，二者都不接收路径、字节或命令参数。视频音轨继续由主体的自动处理与 video_inspect 续读路径负责。",
       "permissions": [
         "artifact.read",
         "model.invoke"
@@ -78,7 +78,7 @@
       "output_schema": {
         "type": "object"
       },
-      "discoverable": false
+      "discoverable": true
     }
   ]
 }

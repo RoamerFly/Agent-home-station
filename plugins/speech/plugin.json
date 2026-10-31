@@ -2,9 +2,9 @@
   "schema_version": 1,
   "id": "speech",
   "name": "语音生成",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "host_protocol": 1,
-  "status": "migration-pending",
+  "status": "ready",
   "platforms": [
     "windows-amd64",
     "linux-amd64"
@@ -14,20 +14,16 @@
     "entrypoint": "runtime/main.py"
   },
   "permissions": [
-    "artifact.read",
-    "artifact.write",
-    "network",
-    "gpu",
     "model.invoke"
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "a4cb47472b880960531800b271ba9eb26d705cfd364e817cb4c38c147d48fdb4",
-    "CHANGELOG.md": "001bcb60f27a5b4a5fccc2a4622a040ea242a024948ecf6ddf6c5c8e5d30ca14",
+    "capabilities.json": "e5b1b1397134bdeddd9df5484071580102f163d65d6c42b97c45595e0ab0304c",
+    "CHANGELOG.md": "67197b4ff0d1975944101e3679349edd13dff88d2069b18c3be0aba37938851a",
     "config.schema.json": "3fda5eefef6c4097c6069009c71530a20cc9bb8ad8c7316bdf468f4e7cef6d95",
-    "MIGRATION.md": "6c0024c9e85c7e10a0f1a83b626235bbe6ab50dac0425ec551e95800ae2bfef9",
-    "PERMISSIONS.md": "97190fd4a6db62b25900b2b68d9d52143a8cb381b66848278fbfd444ebf3b451",
-    "README.md": "75e336127c3799a8e9e2e0fde7c1b727d4d0aeeccd3add026f1c7a395701dc64",
+    "MIGRATION.md": "27a635f28af5bbac845487b7c9adb20008d66dd398b8598d831866a494610f6a",
+    "PERMISSIONS.md": "d94245a3b5d970fa3a0f7ad85d44edd49e615378e8765d7a0d4f9dcf330e8161",
+    "README.md": "4cba495b78f26eac0ff0d5caac58f35aeeaf46786e30f13ab2484cbb4dce6c69",
     "runtime/cloud_tts.py": "821318e57932d2c75c7368ecdec44149b0684beb2e7175b2ea4ad39de1cb2e52",
     "runtime/main.py": "361679e745a9aa3bb9184dba388d26f819e0d1377adb24da692033c125c8e738",
     "runtime/README.md": "e6f6f2834e9ceb85037e5ee5f88afc9b9af55ea9d0a0164c2fb4b6d3bb4655a5",

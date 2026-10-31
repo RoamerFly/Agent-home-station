@@ -3,8 +3,6 @@ package admin
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -25,57 +23,13 @@ func speechPluginFixture(t *testing.T) (*webFixture, *permittedTools, *speechPlu
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	dir := t.TempDir()
-	if err = os.CopyFS(dir, os.DirFS("../../plugins/speech")); err != nil {
-		t.Fatal(err)
-	}
-	// Runtime unit tests may leave CPython bytecode beside the checked manifest.
-	// It is not package input and must not turn this isolated copied fixture into
-	// a different installation.
-	_ = os.RemoveAll(filepath.Join(dir, "runtime", "__pycache__"))
-	_ = os.RemoveAll(filepath.Join(dir, "tests", "__pycache__"))
-	raw, _ := os.ReadFile(filepath.Join(dir, "plugin.json"))
-	var pkg pluginhost.Package
-	if json.Unmarshal(raw, &pkg) != nil {
-		t.Fatal("package decode")
-	}
-	raw, _ = os.ReadFile(filepath.Join(dir, "capabilities.json"))
-	var caps struct {
-		Version      int                     `json:"version"`
-		Capabilities []pluginhost.Capability `json:"capabilities"`
-	}
-	if json.Unmarshal(raw, &caps) != nil {
-		t.Fatal("capabilities decode")
-	}
-	// The production package still carries migration-pending GPU/training
-	// declarations. This isolated cloud-TTS contract installs only the ready
-	// model.invoke capability: the runtime must not receive unrelated GPU
-	// authority merely to test the default cloud voice route.
-	ready := make([]pluginhost.Capability, 0, 1)
-	for i := range caps.Capabilities {
-		if caps.Capabilities[i].ID == "speech.synthesize" {
-			caps.Capabilities[i].Implementation = "ready"
-			caps.Capabilities[i].Discoverable = true
-			ready = append(ready, caps.Capabilities[i])
-		}
-	}
-	caps.Capabilities = ready
-	pkg.Permissions = []string{"model.invoke"}
-	raw, _ = json.Marshal(caps)
-	if err = os.WriteFile(filepath.Join(dir, "capabilities.json"), raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	pkg.Status = "ready"
-	pkg.Files["capabilities.json"] = hex.EncodeToString(sum[:])
-	raw, _ = json.Marshal(pkg)
-	if err = os.WriteFile(filepath.Join(dir, "plugin.json"), raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	prepared, err := s.Prepare(t.Context(), dir)
+	// Install the signed official package exactly as shipped. This fixture must
+	// not promote pending capabilities or rewrite the package permission set.
+	prepared, err := s.Prepare(t.Context(), "../../plugins/speech")
 	if err != nil {
 		t.Fatal(err)
 	}
+	pkg := prepared.Package
 	i, err := s.Install(t.Context(), prepared.Token, prepared.Digest, pkg.Permissions)
 	if err != nil {
 		t.Fatal(err)
@@ -236,5 +190,25 @@ func TestLiveSpeechPluginSynthesisContract(t *testing.T) {
 	result, err := policy.synthesize(t.Context())
 	if err != nil || calls != 1 || result.URL != "https://audio.example/private.wav?token=synthetic" || result.RequestedVoice != "synthetic-voice" || result.ProviderVoiceStatus != "not_reported" {
 		t.Fatal("isolated speech contract", result, err, calls)
+	}
+	// This is the official package, not a promoted test copy: only the cloud
+	// capability is callable. The URL stays in the private checkpoint while the
+	// public job result is safe to expose to the rest of the host.
+	page, err := policy.store.Jobs(t.Context(), "speech", 0, 8)
+	if err != nil || len(page.Items) != 1 || bytes.Contains(page.Items[0].Result, []byte("token=synthetic")) {
+		t.Fatal("official cloud checkpoint is not private", err, page)
+	}
+	private, err := policy.store.PrivateJobResult(t.Context(), page.Items[0], func(ctx context.Context, job pluginhost.Job) error {
+		return policy.Check(ctx, job, pluginhost.Capability{})
+	})
+	if err != nil || !bytes.Contains(private, []byte("token=synthetic")) {
+		t.Fatal("official cloud private checkpoint missing", err, string(private))
+	}
+	if _, err = c.Invoke(t.Context(), pluginruntime.CallRequest{Plugin: "speech", Capability: "speech.voices", Context: policy.invocation, Arguments: json.RawMessage(`{}`)}, policy); err == nil || calls != 1 {
+		t.Fatal("pending voice capability dispatched", err, calls)
+	}
+	caps, err := policy.store.Capabilities(t.Context(), "speech")
+	if err != nil || len(caps) != 3 || caps[0].ID != "speech.synthesize" || !caps[0].Discoverable || caps[0].Implementation != "ready" || caps[1].Discoverable || caps[1].Implementation != "migration-pending" || caps[2].Discoverable || caps[2].Implementation != "migration-pending" {
+		t.Fatal("official capability states changed", caps, err)
 	}
 }

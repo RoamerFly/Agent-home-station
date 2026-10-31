@@ -3,7 +3,7 @@
   "capabilities": [
     {
       "id": "speech.synthesize",
-      "implementation": "migration-pending",
+      "implementation": "ready",
       "description": "通过宿主绑定的云端接口合成默认说话声线；宿主核验音频并负责素材登记与微信投递。",
       "permissions": [
         "model.invoke"
@@ -33,19 +33,13 @@
       "output_schema": {
         "type": "object"
       },
-      "discoverable": false
+      "discoverable": true
     },
     {
       "id": "speech.voices",
       "implementation": "migration-pending",
-      "description": "TTS、说话声线、克隆与训练",
-      "permissions": [
-        "artifact.read",
-        "artifact.write",
-        "network",
-        "gpu",
-        "model.invoke"
-      ],
+      "description": "声线查询、克隆与设计的未来占位能力；尚未迁移，不请求运行时权限或访问声线资料。",
+      "permissions": [],
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -59,14 +53,8 @@
     {
       "id": "speech.train",
       "implementation": "migration-pending",
-      "description": "TTS、说话声线、克隆与训练",
-      "permissions": [
-        "artifact.read",
-        "artifact.write",
-        "network",
-        "gpu",
-        "model.invoke"
-      ],
+      "description": "本地声线训练的未来占位能力；尚未迁移，不请求 GPU、网络、素材或工作区权限。",
+      "permissions": [],
       "input_schema": {
         "type": "object",
         "properties": {},

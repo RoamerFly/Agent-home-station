@@ -39,6 +39,7 @@ func readySpeechFixture(t *testing.T) string {
 	write("config.schema.json", `{"type":"object","properties":{"backend":{"type":"string"}},"additionalProperties":false}`)
 	write("capabilities.json", `{"version":1,"capabilities":[{"id":"speech.synthesize","implementation":"ready","description":"Synthetic capability","permissions":["artifact.read","artifact.write","network","gpu","model.invoke"],"input_schema":{"type":"object"},"output_schema":{"type":"object"},"discoverable":true}]}`)
 	manifest.Status = "ready"
+	manifest.Permissions = []string{"artifact.read", "artifact.write", "network", "gpu", "model.invoke"}
 	manifest.Runtime = pluginhost.Runtime{Transport: "mcp-http"}
 	manifest.HTTPRoutes = nil
 	b, _ = json.Marshal(manifest)

@@ -39,6 +39,7 @@ func readyFixture(t *testing.T) string {
 	write("config.schema.json", `{"type":"object","properties":{"backend":{"type":"string"}},"additionalProperties":false}`)
 	write("capabilities.json", `{"version":1,"capabilities":[{"id":"speech.synthesize","implementation":"ready","description":"Synthetic capability","permissions":["artifact.read","artifact.write","network","gpu","model.invoke"],"input_schema":{"type":"object"},"output_schema":{"type":"object"},"discoverable":true}]}`)
 	p.Status = "ready"
+	p.Permissions = []string{"artifact.read", "artifact.write", "network", "gpu", "model.invoke"}
 	p.Runtime = Runtime{Transport: "mcp-http"}
 	p.HTTPRoutes = nil
 	raw, _ = json.Marshal(p)
@@ -100,7 +101,7 @@ func TestPendingPackageAndPreparedTamperRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	pending, err := store.Prepare(ctx, "../../plugins/speech")
+	pending, err := store.Prepare(ctx, "../../plugins/music")
 	if err != nil {
 		t.Fatal(err)
 	}

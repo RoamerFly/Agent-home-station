@@ -2,9 +2,9 @@
   "schema_version": 1,
   "id": "media-understanding",
   "name": "媒体理解",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "host_protocol": 1,
-  "status": "migration-pending",
+  "status": "ready",
   "platforms": [
     "windows-amd64",
     "linux-amd64"
@@ -20,17 +20,18 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "1f61fcfa94ca997c95b5e5ac9dcca636f4895613c11f5d8d0cc391a100147b5d",
-    "CHANGELOG.md": "0c8553e885093b32d4721a3da0763fc16333683292f89b0972f032e1287d3837",
-    "config.schema.json": "3e0f66f0ab537e51467c81c4d7f142f6d3909dd8ff4de4adb52592fe65e91e81",
-    "MIGRATION.md": "2d386037cd056b52373e5aa44f502eef23aa0f508b915988c35625dc209fa9e1",
-    "PERMISSIONS.md": "e621082134ac28272c823bc1d2714211c301a7593e6b03b63c0cc8b3b6105780",
-    "README.md": "88e231918226f8fe7c923a42708a0b548d2e43bb4ceea1996bbff2ef14e84590",
+    "capabilities.json": "b8509da8e67c860360605ed75a90a073cd6121963011be2498c58b09c74296cb",
+    "CHANGELOG.md": "3a6fbf2239df372ef72e2e8e492f295294598fd7e7613049fe0f750d34f57cfa",
+    "config.schema.json": "c2f98f96de889ac5ed68beeeced4369afd1a16233f9d338b8d390133e812f626",
+    "MIGRATION.md": "c69a5efbe2274081d6db97141edcff02ce88181e6b75fee43a6cda37cf09ba80",
+    "PERMISSIONS.md": "6806af770ad10499a2a4703417fa835a4445555a08c0ac166f8621f3e5c3819c",
+    "README.md": "de52d7623fc0ec43eeefaddad5876cb089d54869b9710dfa9d2e3df271abbaca",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
-    "runtime/main.py": "16bd8e9895338a3f562392dadb4019d4a0adcef7165328860267649fc2a5ce92",
+    "runtime/main.py": "11c2927d4da6f5bdb83900de6166cb04f5cce5f0b9605fc06cddca39dc8101fd",
     "runtime/observation.py": "2e1227644c170ff8ded65ec660ab2ca1f13cc6e9eac787c1c39275b8aebdcfb4",
     "runtime/local_asr.py": "0f450db04bd023769ae812a8d8d3582ce30f3552effb20b0c094be4a0f071ed0",
-    "runtime/README.md": "d95bbbecc8ea10e714f48ffe25672d0a0dde678ad9c38892b360d72df7aed632",
+    "runtime/README.md": "ee141d4035a2357806fd717fd5b0072b929f5f5b28f98132f0bd1dadfd011cff",
+    "tests/test_configuration.py": "b22aed750c1eea922bd7166ffab80d0f6912e25228b40e24e78d11008cc9c360",
     "tests/test_observation.py": "ce1ae132f9f81f942059de212f056378378280ac4a279b40ace3d6550e2b5d41",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "runtime/transcription.py": "f61ea813cbaaf85d876a3ed21746ca7edc09be94acb9b6bd8d7f227b588e4bb9",
@@ -40,6 +41,7 @@
     {
       "id": "vision",
       "endpoint_config": "vision_endpoint",
+      "optional": true,
       "permission": "model.invoke",
       "capabilities": [
         "media.observe"

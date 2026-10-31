@@ -3,8 +3,6 @@ package pluginruntime
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -91,41 +89,14 @@ func TestLiveMediaPluginScopedModelProxy(t *testing.T) {
 	defer store.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	pending, err := store.Prepare(ctx, "../../plugins/media-understanding")
+	prepared, err := store.Prepare(ctx, "../../plugins/media-understanding")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.Install(ctx, pending.Token, pending.Digest, pending.Package.Permissions); err == nil {
-		t.Fatal("unfinished official package installable")
-	}
-	dir := t.TempDir()
-	if err = os.CopyFS(dir, os.DirFS("../../plugins/media-understanding")); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(filepath.Join(dir, "capabilities.json"))
-	var caps struct {
-		Version      int                     `json:"version"`
-		Capabilities []pluginhost.Capability `json:"capabilities"`
-	}
-	json.Unmarshal(raw, &caps)
-	caps.Capabilities = caps.Capabilities[:1]
-	caps.Capabilities[0].Implementation = "ready"
-	caps.Capabilities[0].Discoverable = true
-	raw, _ = json.Marshal(caps)
-	os.WriteFile(filepath.Join(dir, "capabilities.json"), raw, 0600)
-	sum := sha256.Sum256(raw)
-	p := pending.Package
-	p.Status = "ready"
-	// This isolated fixture promotes only visual observation; the production
-	// manifest also declares ASR, which is not part of this synthetic package.
-	p.HTTPRoutes = p.HTTPRoutes[:1]
-	p.Files["capabilities.json"] = hex.EncodeToString(sum[:])
-	raw, _ = json.Marshal(p)
-	os.WriteFile(filepath.Join(dir, "plugin.json"), raw, 0600)
-	prepared, err := store.Prepare(ctx, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Install the checked-in ready package unchanged.  The transcription route
+	// is optional, so this visual-only synthetic configuration proves that an
+	// official install need not carry unrelated ASR credentials.
+	p := prepared.Package
 	i, err := store.Install(ctx, prepared.Token, prepared.Digest, p.Permissions)
 	if err != nil {
 		t.Fatal(err)

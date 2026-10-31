@@ -62,9 +62,38 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" {
 				if p.Status != "ready" || p.Runtime.Transport != "mcp-stdio" || p.Runtime.Entrypoint != "runtime/main.py" {
 					t.Fatal("web runtime not connected")
+				}
+				if d.Name() != "web-search" {
+					want := map[string]bool{"media.observe": true, "media.transcribe": true}
+					if d.Name() == "speech" {
+						want = map[string]bool{"speech.synthesize": true}
+					}
+					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					var doc struct {
+						Capabilities []Capability `json:"capabilities"`
+					}
+					if err = json.Unmarshal(raw, &doc); err != nil {
+						t.Fatal(err)
+					}
+					for _, cap := range doc.Capabilities {
+						if want[cap.ID] {
+							if cap.Implementation != "ready" || !cap.Discoverable {
+								t.Fatal("implemented capability hidden", cap.ID)
+							}
+							delete(want, cap.ID)
+						} else if cap.Implementation != "migration-pending" || cap.Discoverable {
+							t.Fatal("future capability exposed", cap.ID)
+						}
+					}
+					if len(want) != 0 {
+						t.Fatal("missing implemented capability", want)
+					}
 				}
 			} else if p.Status != "migration-pending" {
 				t.Fatal("unimplemented capability claimed ready")

@@ -3,9 +3,7 @@ package admin
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"image"
@@ -33,55 +31,22 @@ func mediaPolicyFixture(t *testing.T, remember bool) (*webFixture, *bindingChann
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	dir := t.TempDir()
-	if err = os.CopyFS(dir, os.DirFS("../../plugins/media-understanding")); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(filepath.Join(dir, "plugin.json"))
-	var pkg pluginhost.Package
-	if err = json.Unmarshal(raw, &pkg); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ = os.ReadFile(filepath.Join(dir, "capabilities.json"))
-	var caps struct {
-		Version      int                     `json:"version"`
-		Capabilities []pluginhost.Capability `json:"capabilities"`
-	}
-	if err = json.Unmarshal(raw, &caps); err != nil {
-		t.Fatal(err)
-	}
-	// Keep declarations for every manifest route. Only the visual capability is
-	// promoted in this fixture; ASR is separately exercised with synthetic host
-	// transport and never a real provider.
-	caps.Capabilities[0].Implementation, caps.Capabilities[0].Discoverable = "ready", true
-	for i := range caps.Capabilities {
-		if caps.Capabilities[i].ID == "media.transcribe" {
-			caps.Capabilities[i].Implementation, caps.Capabilities[i].Discoverable = "ready", true
-		}
-	}
-	raw, _ = json.Marshal(caps)
-	if err = os.WriteFile(filepath.Join(dir, "capabilities.json"), raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	pkg.Status, pkg.Files["capabilities.json"] = "ready", hex.EncodeToString(sum[:])
-	raw, _ = json.Marshal(pkg)
-	if err = os.WriteFile(filepath.Join(dir, "plugin.json"), raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	prepared, err := s.Prepare(t.Context(), dir)
+	// Install the checked-in package unchanged.  Its optional visual/ASR routes
+	// are independently configured below; fixtures must not promote a private
+	// copy into a different package from the one users install.
+	prepared, err := s.Prepare(t.Context(), "../../plugins/media-understanding")
 	if err != nil {
 		t.Fatal(err)
 	}
-	i, err := s.Install(t.Context(), prepared.Token, prepared.Digest, pkg.Permissions)
+	i, err := s.Install(t.Context(), prepared.Token, prepared.Digest, prepared.Package.Permissions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.SaveConfiguration(t.Context(), pkg.ID, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{"vision_endpoint": json.RawMessage(`"https://provider.example/chat/completions"`), "vision_model": json.RawMessage(`"synthetic-model"`)}, Secrets: map[string]string{"vision_key": "synthetic-private-key"}})
+	_, err = s.SaveConfiguration(t.Context(), prepared.Package.ID, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{"vision_endpoint": json.RawMessage(`"https://provider.example/chat/completions"`), "vision_model": json.RawMessage(`"synthetic-model"`)}, Secrets: map[string]string{"vision_key": "synthetic-private-key"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.SetEnabled(t.Context(), pkg.ID, i.Revision, true); err != nil {
+	if _, err = s.SetEnabled(t.Context(), prepared.Package.ID, i.Revision, true); err != nil {
 		t.Fatal(err)
 	}
 	f.manager.packages = s

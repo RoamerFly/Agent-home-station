@@ -76,10 +76,5 @@
       "default": "remote"
     }
   },
-  "required": [
-    "vision_endpoint",
-    "vision_key",
-    "vision_model"
-  ],
   "additionalProperties": false
 }
