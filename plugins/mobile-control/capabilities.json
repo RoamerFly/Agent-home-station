@@ -2,60 +2,52 @@
   "version": 1,
   "capabilities": [
     {
-      "id": "device.observe",
-      "implementation": "migration-pending",
-      "description": "现有设备桥接与任务",
-      "permissions": [
-        "device",
-        "artifact.write",
-        "model.invoke"
-      ],
+      "id": "device.plan",
+      "implementation": "ready",
+      "description": "根据宿主已绑定的单次设备观察规划一个本地校验后的下一步；不观察、操作、录屏或发送。",
+      "permissions": ["model.invoke"],
+      "side_effect": "read",
       "input_schema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "task_id": {"type": "string"},
+          "observation_id": {"type": "string"},
+          "source_version": {"type": "string"},
+          "task": {"type": "object"},
+          "observation": {"type": "object"},
+          "allowed_actions": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["task_id", "observation_id", "source_version", "task", "observation", "allowed_actions"],
         "additionalProperties": false
       },
-      "output_schema": {
-        "type": "object"
-      },
+      "output_schema": {"type": "object"},
+      "discoverable": true
+    },
+    {
+      "id": "device.observe",
+      "implementation": "migration-pending",
+      "description": "未来设备观察能力；尚未迁入受控宿主代理。",
+      "permissions": [],
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {"type": "object"},
       "discoverable": false
     },
     {
       "id": "device.act",
       "implementation": "migration-pending",
-      "description": "现有设备桥接与任务",
-      "permissions": [
-        "device",
-        "artifact.write",
-        "model.invoke"
-      ],
-      "input_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
-      "output_schema": {
-        "type": "object"
-      },
+      "description": "未来设备操作能力；需要独立设备授权与动作代理。",
+      "permissions": [],
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {"type": "object"},
       "discoverable": false
     },
     {
       "id": "device.record",
       "implementation": "migration-pending",
-      "description": "现有设备桥接与任务",
-      "permissions": [
-        "device",
-        "artifact.write",
-        "model.invoke"
-      ],
-      "input_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
-      "output_schema": {
-        "type": "object"
-      },
+      "description": "未来受控录屏能力；需要独立设备授权与素材交接。",
+      "permissions": [],
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {"type": "object"},
       "discoverable": false
     }
   ]

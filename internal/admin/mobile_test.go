@@ -10,7 +10,6 @@ import (
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mobile"
-	mobileplanner "wechat-bot/plugins/mobile-control/backend"
 )
 
 func TestMobileStorageFailureDoesNotPreventChatManagerStartup(t *testing.T) {
@@ -103,21 +102,52 @@ func TestMobileRoutesRequireAuthenticationAndCSRF(t *testing.T) {
 	}
 }
 
+func TestMobileMissingPlannerDoesNotQueueTaskOrConstructModel(t *testing.T) {
+	f := setup(t)
+	f.login()
+	settings := f.manager.mobile.Settings()
+	settings.Enabled = true
+	settings.Devices = []string{"lab"}
+	settings.Bridge.Command = "synthetic-must-not-be-executed"
+	if err := f.manager.mobile.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	status, body, _ := f.request("GET", "/api/mobile", nil, false, false)
+	var view struct {
+		PlannerAvailable bool   `json:"planner_available"`
+		PlannerReason    string `json:"planner_reason"`
+	}
+	if status != 200 || json.Unmarshal(body, &view) != nil || view.PlannerAvailable || view.PlannerReason == "" {
+		t.Fatal("missing planner not represented in management view", status, string(body))
+	}
+	status, _, _ = f.request("POST", "/api/mobile/tasks", map[string]string{"request_key": "planner-required", "device_id": "lab", "goal": "仅查看合成页面"}, true, true)
+	if status != 409 || len(f.manager.mobile.List(nil)) != 0 {
+		t.Fatal("missing planner queued or executed a device task", status)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "provider-key")); !os.IsNotExist(err) {
+		t.Fatal("missing planner constructed a model", err)
+	}
+	status, _, _ = f.request("POST", "/api/mobile/stop", struct{}{}, true, true)
+	if status != 200 {
+		t.Fatal("missing planner prevented stopping existing work", status)
+	}
+}
+
 func TestDeviceRecordingParametersAndSourceMemory(t *testing.T) {
-	o := mobile.Observation{AllowedPackages: []string{"test.browser"}, Browsers: []string{"test.browser"}}
-	if mobileplanner.ValidStep(mobile.Step{Action: "capture"}, o) {
+	o := mobile.Observation{AllowedPackages: []string{"test.browser"}, Browsers: []string{"test.browser"}, WebHosts: []string{"example.com"}}
+	if mobile.ValidStep(mobile.Step{Action: "capture"}, o) {
 		t.Fatal("record duration omitted")
 	}
-	if !mobileplanner.ValidStep(mobile.Step{Action: "capture", Arguments: map[string]any{"seconds": float64(4)}}, o) {
+	if !mobile.ValidStep(mobile.Step{Action: "capture", Arguments: map[string]any{"seconds": float64(4)}}, o) {
 		t.Fatal("explicit recording duration rejected")
 	}
-	if mobileplanner.ValidStep(mobile.Step{Action: "open_url"}, o) {
+	if mobile.ValidStep(mobile.Step{Action: "open_url"}, o) {
 		t.Fatal("missing browser/url accepted")
 	}
-	if mobileplanner.ValidStep(mobile.Step{Action: "open_url", Arguments: map[string]any{"package": "other.browser", "url": "https://example.com"}}, o) {
+	if mobile.ValidStep(mobile.Step{Action: "open_url", Arguments: map[string]any{"package": "other.browser", "url": "https://example.com"}}, o) {
 		t.Fatal("unlisted browser accepted")
 	}
-	if !mobileplanner.ValidStep(mobile.Step{Action: "open_url", Arguments: map[string]any{"package": "test.browser", "url": "https://example.com"}}, o) {
+	if !mobile.ValidStep(mobile.Step{Action: "open_url", Arguments: map[string]any{"package": "test.browser", "url": "https://example.com"}}, o) {
 		t.Fatal("valid browser rejected")
 	}
 	f := setup(t)

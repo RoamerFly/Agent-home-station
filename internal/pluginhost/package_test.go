@@ -62,7 +62,7 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "share-reader" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "share-reader" || d.Name() == "mobile-control" {
 				if p.Status != "ready" || p.Runtime.Transport != "mcp-stdio" || p.Runtime.Entrypoint != "runtime/main.py" {
 					t.Fatal("web runtime not connected")
 				}
@@ -73,6 +73,12 @@ func TestOfficialContracts(t *testing.T) {
 					}
 					if d.Name() == "share-reader" {
 						want = map[string]bool{"share.resolve_public": true, "share.resolve_channels": true}
+					}
+					if d.Name() == "mobile-control" {
+						want = map[string]bool{"device.plan": true}
+						if len(p.Permissions) != 1 || p.Permissions[0] != "model.invoke" {
+							t.Fatal("planner must not gain device, process, file or network authority")
+						}
 					}
 					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))
 					if err != nil {
@@ -88,6 +94,9 @@ func TestOfficialContracts(t *testing.T) {
 						if want[cap.ID] {
 							if cap.Implementation != "ready" || !cap.Discoverable {
 								t.Fatal("implemented capability hidden", cap.ID)
+							}
+							if d.Name() == "mobile-control" && (cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != "model.invoke") {
+								t.Fatal("planner contract must remain synchronous and model-only")
 							}
 							delete(want, cap.ID)
 						} else if cap.Implementation != "migration-pending" || cap.Discoverable {

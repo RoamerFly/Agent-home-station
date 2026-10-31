@@ -17,7 +17,6 @@ import (
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/mobile"
-	mobileplanner "wechat-bot/plugins/mobile-control/backend"
 )
 
 func (m *Manager) mobileSourceAllowed(s mobile.Source) bool {
@@ -33,38 +32,11 @@ func (m *Manager) planMobile(ctx context.Context, t mobile.Task, o mobile.Observ
 	ctx = deepseek.WithRequestObserver(ctx, func(event string, d deepseek.Diagnostics) {
 		m.record(bot.Record{Event: "mobile_" + event, Category: "tool", ThreadID: t.Source.Thread, MessageID: t.ID, Reason: d.Code, Status: event, ModelHTTPStatus: d.HTTPStatus, ModelAttempts: d.Attempts, ModelMaxAttempts: d.MaxAttempts, ModelStage: d.Stage, DurationMS: d.DurationMS, Origin: "mobile"})
 	})
-	m.mu.Lock()
-	c := cloneConfig(m.config)
-	m.mu.Unlock()
-	provider, err := m.makeModel(c)
-	if err != nil {
-		return mobile.Step{}, err
-	}
-	step, err := mobileplanner.Plan(ctx, managerMobilePlannerProvider{provider}, t, o, m.mobile.Settings().Actions)
+	step, err := m.planMobileWithPlugin(ctx, t, o)
 	if err != nil && err.Error() == "device_model_step_invalid" {
 		m.record(bot.Record{Event: "mobile_model_invalid_step", Category: "error", ThreadID: t.Source.Thread, MessageID: t.ID, Reason: "device_model_step_invalid", Status: "failed", Origin: "mobile"})
 	}
 	return step, err
-}
-
-// The compatibility adapter keeps provider configuration, thinking controls,
-// usage accounting and diagnostics on the existing host model path.
-type managerMobilePlannerProvider struct{ model *deepseek.Client }
-
-func (p managerMobilePlannerProvider) DescribeScreen(ctx context.Context, prompt string, png []byte) (string, error) {
-	return p.model.Vision(ctx, prompt, []deepseek.Image{{Data: png, MIME: "image/png"}})
-}
-
-func (p managerMobilePlannerProvider) PlanStep(ctx context.Context, request mobileplanner.Request) (string, error) {
-	turns := make([]map[string]string, 0, len(request.Turns))
-	for _, turn := range request.Turns {
-		turns = append(turns, map[string]string{"role": turn.Role, "content": turn.Content})
-	}
-	tools := make([]mcptools.Tool, 0, len(request.Tools))
-	for _, tool := range request.Tools {
-		tools = append(tools, agentTool(tool.Name, tool.Description, tool.Schema))
-	}
-	return p.model.ChatFunctions(ctx, request.System, turns, tools)
 }
 
 func (s *Server) mobileRoutes(mux *http.ServeMux) {
@@ -73,7 +45,12 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 			fail(w, 503, "设备服务数据暂不可用，请检查设备配置和存储；原数据未覆盖")
 			return
 		}
-		respond(w, 200, map[string]any{"settings": s.manager.mobile.Settings(), "tasks": s.manager.mobile.List(nil)})
+		plannerAvailable := s.manager.mobilePlannerReady(r.Context()) == nil
+		reason := ""
+		if !plannerAvailable {
+			reason = "开始新任务前，请在插件中心安装并启用手机规划插件；已有任务仍可查看或取消。"
+		}
+		respond(w, 200, map[string]any{"settings": s.manager.mobile.Settings(), "tasks": s.manager.mobile.List(nil), "planner_available": plannerAvailable, "planner_reason": reason})
 	}))
 	mux.HandleFunc("GET /api/mobile/devices", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		value, err := s.manager.mobile.Devices(r.Context())
@@ -125,6 +102,10 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 		}
 		if !validID(in.RequestKey) || len(in.RequestKey) > 128 {
 			fail(w, 400, "需要唯一请求编号")
+			return
+		}
+		if err := s.manager.mobilePlannerReady(r.Context()); err != nil {
+			fail(w, 409, "请先在插件中心安装并启用手机规划插件，再开始新任务")
 			return
 		}
 		t, err := s.manager.mobile.Start(mobile.Source{Admin: true, MessageID: in.RequestKey}, in.DeviceID, in.Goal)
@@ -256,11 +237,14 @@ func (p *permittedTools) mobileTools() []mcptools.Tool {
 	}
 	settings := p.manager.mobile.Settings()
 	devices, _ := json.Marshal(settings.Devices)
-	return []mcptools.Tool{
-		agentTool("device_task_start", "Start an authorized Android device task in the background. Available device IDs: "+string(devices)+". This returns a task ID, not completion. The worker observes the real screen using native function calls, with limited actions and no login/verification/purchase/posting. Results are returned to this conversation by its durable continuation; do not poll repeatedly. Input {device_id:string,goal:string}.", `{"type":"object","properties":{"device_id":{"type":"string"},"goal":{"type":"string","maxLength":1000}},"required":["device_id","goal"],"additionalProperties":false}`),
+	tools := []mcptools.Tool{
 		agentTool("device_tasks", "Inspect this conversation's device task states and actual observation summaries. queued/running/submitted do not mean complete. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
 		agentTool("device_task_cancel", "Cancel only this conversation's task. Already executed actions are retained and not undone. Input {task_id:string}.", `{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false}`),
 	}
+	if p.manager.mobilePlannerReady(context.Background()) == nil {
+		tools = append(tools, agentTool("device_task_start", "Start an authorized Android device task using the installed mobile planner. Available device IDs: "+string(devices)+". This returns a task ID, not completion. Results resume this conversation; do not poll repeatedly. Input {device_id:string,goal:string}.", `{"type":"object","properties":{"device_id":{"type":"string"},"goal":{"type":"string","maxLength":1000}},"required":["device_id","goal"],"additionalProperties":false}`))
+	}
+	return tools
 }
 func (p *permittedTools) mobileToolEnabled(name string) bool {
 	for _, t := range p.mobileTools() {

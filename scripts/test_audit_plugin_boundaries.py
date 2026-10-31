@@ -42,14 +42,11 @@ class BoundaryAuditTest(unittest.TestCase):
             {"package": "wechat-bot/plugins/share-reader/runtime", "target_plugin": "share-reader"},
         ])
 
-    def test_current_static_plugin_implementation_residual_is_reported(self):
+    def test_current_go_graph_has_no_static_plugin_implementation_dependency(self):
         output = subprocess.check_output([sys.executable, "scripts/audit_plugin_boundaries.py", "--compact"], cwd=ROOT, text=True)
         report = json.loads(output)
-        self.assertIn(
-            {"package": "wechat-bot/plugins/mobile-control/backend", "target_plugin": "mobile-control"},
-            report["static_plugin_implementation_dependencies"],
-        )
-        self.assertGreater(report["totals"]["core_static_plugin_implementation_packages"], 0)
+        self.assertEqual(report["static_plugin_implementation_dependencies"], [])
+        self.assertEqual(report["totals"]["core_static_plugin_implementation_packages"], 0)
 
     def test_final_gate_fails_while_inventory_is_incomplete(self):
         result = subprocess.run([sys.executable, "scripts/audit_plugin_boundaries.py", "--require-light"], cwd=ROOT, capture_output=True, text=True)

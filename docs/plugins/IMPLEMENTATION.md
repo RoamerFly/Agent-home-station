@@ -1,5 +1,7 @@
 # 插件化实施状态
 
+2026-11-01 手机规划独立运行：mobile-control 0.2.0 只开放 `device.plan`，通过隔离 Python MCP 进程请求宿主当前模型；已删除静态 Go planner 与主体中的详细手机提示。设备观察、操作、录屏、队列及旧配置仍待迁移。缺少规划插件时不排新任务，旧任务仍可查看和取消；整体轻主体尚未完成。见 `../quality/plugin-mobile-planner.md`。
+
 2026-11-01 手机增量：主体通过惰性设备接口加载旧服务，设备存储故障不再阻断聊天启动。桥接源码和动作规划已整理入手机插件目录，规划层仍静态编译进主体，设备权限代理/队列/页面迁出尚未完成，手机包继续 `migration-pending`。边界审计新增静态插件实现依赖检查，禁止把移动源码目录视作完整轻主体。见 `../quality/plugin-mobile-foundation.md`。
 
 2026-11-01 分享增量：share-reader 0.1.6 的公开分享和视频号解析已通过官方包隔离与回环桥接端到端验收。就绪包现为 web-search、media-understanding、speech 和 share-reader，各自只开放已验证能力。显式来源调用已分离当前 actor 与上传者，并持续复核任务/跨会话权限。旧桥接与 Cookie 混合策略仍须确认，旧绑定仍为只读兼容；整体轻主体未完成。见 `../quality/plugin-share-readiness.md`。
