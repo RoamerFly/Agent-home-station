@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	"wechat-bot/internal/adbserver"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -54,6 +55,11 @@ type Options struct {
 	Legacy   mcptools.ServerConfig
 	Devices  []string
 	Actions  []string // permitted side-effect actions; observe is a required read capability
+	// ADBServer is a host-owned foreground server manager. Nil uses the
+	// process-wide managed server, never an MCP-session child.
+	ADBServer interface {
+		Acquire(context.Context, string) (adbserver.Lease, error)
+	}
 }
 
 // Bridge is the small contract used by the durable device controller.
@@ -96,6 +102,7 @@ type broker struct {
 	binding         string
 	quarantined     bool
 	quarantineLease *physicalLease
+	adbLease        adbserver.Lease
 	closed          bool
 }
 
@@ -108,6 +115,7 @@ type resolved struct {
 	leases         map[string]string
 	scope          string
 	binding        string
+	adbLease       adbserver.Lease
 }
 
 type fileSeal struct {
@@ -121,15 +129,16 @@ func Open(ctx context.Context, options Options) (Bridge, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	r, err := resolve(options)
+	r, err := resolve(ctx, options)
 	if err != nil {
 		return nil, err
 	}
 	h, err := openHub(r.server)
 	if err != nil {
+		_ = r.adbLease.Close()
 		return nil, ErrNeedsMigration
 	}
-	return &broker{hub: h, seals: r.seals, dirs: r.dirs, privateDirs: r.privateDirs, leaseDirectory: r.leaseDirectory, leases: r.leases, scope: r.scope, binding: r.binding}, nil
+	return &broker{hub: h, seals: r.seals, dirs: r.dirs, privateDirs: r.privateDirs, leaseDirectory: r.leaseDirectory, leases: r.leases, scope: r.scope, binding: r.binding, adbLease: r.adbLease}, nil
 }
 
 func (b *broker) Call(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
@@ -185,6 +194,9 @@ func (b *broker) Call(ctx context.Context, name string, arguments json.RawMessag
 			return "", err
 		}
 		b.closed = true
+		if closeErr := b.closeADBLease(); closeErr != nil {
+			return "", errors.Join(err, closeErr)
+		}
 		return result, err
 	}
 	// An operation result is not safe to trust after a critical file changed.
@@ -212,12 +224,15 @@ func (b *broker) leaseKey(name string, arguments json.RawMessage) (string, bool)
 func (b *broker) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.closed && !b.quarantined {
+	if b.closed && !b.quarantined && b.adbLease == nil {
 		return nil
 	}
 	if err := b.hub.Close(); err != nil {
 		b.quarantined = true
 		registerQuarantine(b)
+		return err
+	}
+	if err := b.closeADBLease(); err != nil {
 		return err
 	}
 	if b.quarantineLease != nil {
@@ -229,6 +244,21 @@ func (b *broker) Close() error {
 	b.quarantined = false
 	b.closed = true
 	unregisterQuarantine(b)
+	return nil
+}
+
+func (b *broker) closeADBLease() error {
+	if b.adbLease == nil {
+		return nil
+	}
+	if err := b.adbLease.Close(); err != nil {
+		// A failed host-server cleanup must survive this wrapper's disappearance;
+		// CleanupQuarantined retries only Close and never replays the action.
+		b.quarantined = true
+		registerQuarantine(b)
+		return err
+	}
+	b.adbLease = nil
 	return nil
 }
 
@@ -302,7 +332,7 @@ func (s fileSeal) matches() bool {
 	return err == nil && hash == s.hash
 }
 
-func resolve(options Options) (resolved, error) {
+func resolve(ctx context.Context, options Options) (resolved, error) {
 	if !identifier.MatchString(options.Account) {
 		return resolved{}, ErrNeedsMigration
 	}
@@ -383,7 +413,27 @@ func resolve(options Options) (resolved, error) {
 	if err != nil {
 		return resolved{}, ErrNeedsMigration
 	}
+	serverManager := options.ADBServer
+	if serverManager == nil {
+		serverManager = defaultADBServer{}
+	}
+	adbLease, err := serverManager.Acquire(ctx, adb)
+	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	keepLease := false
+	defer func() {
+		if !keepLease {
+			_ = adbLease.Close()
+		}
+	}()
+	endpoint := adbLease.Endpoint()
+	if endpoint.Host != "127.0.0.1" || endpoint.Port != 5037 {
+		return resolved{}, ErrNeedsMigration
+	}
 	filtered.ADB = adb
+	filtered.ADBHost = endpoint.Host
+	filtered.ADBPort = endpoint.Port
 	// StateDirectory is selected by the host for this account. Keep the derived
 	// config account-distinct as a second guard against accidental sharing of a
 	// broader state parent; the durable legacy ledger itself is never relocated.
@@ -423,10 +473,17 @@ func resolve(options Options) (resolved, error) {
 		leases[alias] = physicalLeaseKey(device.Serial)
 	}
 	privateDirs := []string{profileDirectory, leaseDirectory}
-	return resolved{server: server, seals: seals, dirs: append(append([]string{}, workspace, state, profileDirectory, packageDir, legacyStorage), append(adbRoots, leaseDirectory)...), privateDirs: privateDirs, leaseDirectory: leaseDirectory, leases: leases, scope: brokerScope(options.Account, legacyStorage, filteredHash), binding: brokerBinding(seals, leases, leaseDirectory)}, nil
+	keepLease = true
+	return resolved{server: server, seals: seals, dirs: append(append([]string{}, workspace, state, profileDirectory, packageDir, legacyStorage), append(adbRoots, leaseDirectory)...), privateDirs: privateDirs, leaseDirectory: leaseDirectory, leases: leases, scope: brokerScope(options.Account, legacyStorage, filteredHash), binding: brokerBinding(seals, leases, leaseDirectory, adbLease.Binding()), adbLease: adbLease}, nil
 }
 
-func brokerBinding(seals []fileSeal, leases map[string]string, leaseDirectory string) string {
+type defaultADBServer struct{}
+
+func (defaultADBServer) Acquire(ctx context.Context, path string) (adbserver.Lease, error) {
+	return adbserver.Acquire(ctx, path)
+}
+
+func brokerBinding(seals []fileSeal, leases map[string]string, leaseDirectory, adbBinding string) string {
 	// json.Marshal orders string map keys deterministically. Paths and serials
 	// remain inside this digest; callers receive no file or device identifiers.
 	type bindingSeal struct {
@@ -441,7 +498,8 @@ func brokerBinding(seals []fileSeal, leases map[string]string, leaseDirectory st
 		Seals     []bindingSeal     `json:"seals"`
 		Leases    map[string]string `json:"leases"`
 		LeaseRoot string            `json:"lease_root"`
-	}{Seals: boundSeals, Leases: leases, LeaseRoot: leaseDirectory})
+		ADBServer string            `json:"adb_server"`
+	}{Seals: boundSeals, Leases: leases, LeaseRoot: leaseDirectory, ADBServer: adbBinding})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }
@@ -540,6 +598,8 @@ func legacyPaths(legacy mcptools.ServerConfig, runtimeBridge, compatibility stri
 
 type profile struct {
 	ADB     string                   `json:"adb"`
+	ADBHost string                   `json:"adb_host,omitempty"`
+	ADBPort uint16                   `json:"adb_port,omitempty"`
 	Devices map[string]profileDevice `json:"devices"`
 }
 type profileDevice struct {

@@ -46,8 +46,11 @@ type lazyMobileService struct {
 	planner   mobile.Planner
 	open      mobileControlOpener
 	configure func(*mobile.Control) error
-	control   *mobile.Control
-	closed    bool
+	// persistedState detects the active host repository after legacy JSON is
+	// removed; nil keeps isolated legacy compatibility fixtures unchanged.
+	persistedState func() (bool, error)
+	control        *mobile.Control
+	closed         bool
 }
 
 func newLazyMobileService(dir string, planner mobile.Planner, opener mobileControlOpener, configure func(*mobile.Control) error) *lazyMobileService {
@@ -60,17 +63,43 @@ func newLazyMobileService(dir string, planner mobile.Planner, opener mobileContr
 // newMobileService wires legacy callbacks only after a verified Control has
 // opened. Manager construction itself remains independent of device storage.
 func (m *Manager) newMobileService() deviceService {
-	return newLazyMobileService(filepath.Join(m.dir, "mobile"), m.planMobile, mobile.Open, func(control *mobile.Control) error {
+	service := newLazyMobileService(filepath.Join(m.dir, "mobile"), m.planMobile, func(dir string, planner mobile.Planner) (*mobile.Control, error) {
+		store, err := m.packageStore()
+		if err != nil {
+			return nil, err
+		}
+		return mobile.OpenWithRepository(dir, planner, &mobileRepository{store: store})
+	}, func(control *mobile.Control) error {
 		control.OnFinished(m.deviceFinished)
 		control.SetAuthorizer(m.mobileSourceAllowed)
 		control.SetArtifactAnalyzer(m.analyzeDeviceArtifact)
 		return control.SetBrokerFactory(m.newMobilePluginBridge)
 	})
+	service.persistedState = func() (bool, error) {
+		// A chat-only installation does not create or open an optional store.
+		if _, err := os.Stat(filepath.Join(m.dir, "plugin-host", "plugins.sqlite")); errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		} else if err != nil {
+			return false, err
+		}
+		store, err := m.packageStore()
+		if err != nil {
+			return false, err
+		}
+		state, err := store.ReadHostState(context.Background(), mobileDevicePluginID, mobileStateNamespace)
+		return state.Revision > 0, err
+	}
+	return service
 }
 
 // hasLegacyMobileState does not create the mobile directory. A directory with
 // screenshots alone is not a configured service and must remain cold.
 func (s *lazyMobileService) hasLegacyMobileState() (bool, error) {
+	if s.persistedState != nil {
+		if active, err := s.persistedState(); err != nil || active {
+			return active, err
+		}
+	}
 	info, err := os.Stat(s.dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil

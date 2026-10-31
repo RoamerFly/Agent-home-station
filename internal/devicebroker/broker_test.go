@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"wechat-bot/internal/adbserver"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -178,6 +179,63 @@ func TestCallRevalidatesBeforeAndAfterBridgeInvocation(t *testing.T) {
 	}
 	if _, err = bridge.Call(context.Background(), "shell", json.RawMessage(`{}`)); !errors.Is(err, errToolDenied) {
 		t.Fatalf("unexpected tool accepted: %v", err)
+	}
+}
+
+func TestNativeFailureReleasesManagedADBLeaseAfterHubCleanup(t *testing.T) {
+	options, paths := fixtureOptions(t)
+	writeJSON(t, paths.config, validProfile(paths.adb))
+	options.Legacy = legacyConfig(paths.script, paths.config, paths.storage)
+	lease := &trackedADBLease{}
+	options.ADBServer = trackedADBServer{lease: lease}
+	fake := &fakeHub{call: func(context.Context, string, json.RawMessage) (string, error) {
+		return "", errors.New("native failure")
+	}}
+	withHub(t, func(mcptools.ServerConfig) (hub, error) { return fake, nil })
+	bridge, err := Open(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bridge.Call(context.Background(), "act", json.RawMessage(`{"device_id":"allowed"}`)); err == nil {
+		t.Fatal("native failure unexpectedly succeeded")
+	}
+	if lease.closes != 1 {
+		t.Fatalf("adb lease was leaked after native failure: %d", lease.closes)
+	}
+	if err := bridge.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if lease.closes != 1 {
+		t.Fatalf("closed lease twice: %d", lease.closes)
+	}
+}
+
+func TestFailedADBLeaseCleanupIsQuarantinedForRetry(t *testing.T) {
+	options, paths := fixtureOptions(t)
+	writeJSON(t, paths.config, validProfile(paths.adb))
+	options.Legacy = legacyConfig(paths.script, paths.config, paths.storage)
+	lease := &trackedADBLease{err: errors.New("server cleanup pending")}
+	options.ADBServer = trackedADBServer{lease: lease}
+	fake := &fakeHub{call: func(context.Context, string, json.RawMessage) (string, error) {
+		return "", errors.New("native failure")
+	}}
+	withHub(t, func(mcptools.ServerConfig) (hub, error) { return fake, nil })
+	bridge, err := Open(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bridge.Call(context.Background(), "act", json.RawMessage(`{"device_id":"allowed"}`)); err == nil {
+		t.Fatal("native failure unexpectedly succeeded")
+	}
+	if !bridge.(*broker).quarantined {
+		t.Fatal("failed managed cleanup was not quarantined")
+	}
+	lease.err = nil
+	if err := CleanupQuarantined(); err != nil {
+		t.Fatalf("quarantined cleanup retry: %v", err)
+	}
+	if lease.closes < 2 {
+		t.Fatalf("lease cleanup was not retried: %d", lease.closes)
 	}
 }
 
@@ -555,6 +613,43 @@ func TestPhysicalLeaseReleasesAfterCancellationAndProcessExit(t *testing.T) {
 	}
 }
 
+func TestOpenBindsManagedADBEndpointAndReleasesLease(t *testing.T) {
+	options, paths := fixtureOptions(t)
+	writeJSON(t, paths.config, validProfile(paths.adb))
+	options.Legacy = legacyConfig(paths.script, paths.config, paths.storage)
+	lease := &trackedADBLease{}
+	options.ADBServer = trackedADBServer{lease: lease}
+	var captured mcptools.ServerConfig
+	withHub(t, func(config mcptools.ServerConfig) (hub, error) {
+		captured = config
+		return &fakeHub{}, nil
+	})
+	bridge, err := Open(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var derived profile
+	data, err := os.ReadFile(captured.Args[5])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &derived); err != nil {
+		t.Fatal(err)
+	}
+	if derived.ADBHost != "127.0.0.1" || derived.ADBPort != 5037 {
+		t.Fatalf("unbound adb endpoint: %#v", derived)
+	}
+	if _, err := bridge.Binding(); err != nil {
+		t.Fatal(err)
+	}
+	if err := bridge.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if lease.closes != 1 {
+		t.Fatalf("managed adb lease closes=%d", lease.closes)
+	}
+}
+
 func testPython(t *testing.T) string {
 	t.Helper()
 	for _, candidate := range []string{"python", "python3"} {
@@ -607,8 +702,35 @@ func fixtureOptions(t *testing.T) (Options, fixturePaths) {
 	if err := os.MkdirAll(paths.storage, 0700); err != nil {
 		t.Fatal(err)
 	}
-	return Options{Python: paths.python, PackageDirectory: paths.packageDir, WorkspaceDirectory: paths.workspace, StateDirectory: paths.state, GlobalLeaseDirectory: paths.leaseDir, ADBRoots: []string{paths.adbRoot}, Account: "account_1", Devices: []string{"allowed"}, Actions: []string{"tap", "capture"}}, paths
+	return Options{Python: paths.python, PackageDirectory: paths.packageDir, WorkspaceDirectory: paths.workspace, StateDirectory: paths.state, GlobalLeaseDirectory: paths.leaseDir, ADBRoots: []string{paths.adbRoot}, Account: "account_1", Devices: []string{"allowed"}, Actions: []string{"tap", "capture"}, ADBServer: fakeADBServer{}}, paths
 }
+
+type fakeADBServer struct{}
+
+func (fakeADBServer) Acquire(context.Context, string) (adbserver.Lease, error) {
+	return fakeADBLease{}, nil
+}
+
+type fakeADBLease struct{}
+
+func (fakeADBLease) Endpoint() adbserver.Endpoint { return adbserver.DefaultEndpoint() }
+func (fakeADBLease) Binding() string              { return "synthetic-adb-server" }
+func (fakeADBLease) Close() error                 { return nil }
+
+type trackedADBServer struct{ lease *trackedADBLease }
+
+func (s trackedADBServer) Acquire(context.Context, string) (adbserver.Lease, error) {
+	return s.lease, nil
+}
+
+type trackedADBLease struct {
+	closes int
+	err    error
+}
+
+func (l *trackedADBLease) Endpoint() adbserver.Endpoint { return adbserver.DefaultEndpoint() }
+func (l *trackedADBLease) Binding() string              { return "tracked-server" }
+func (l *trackedADBLease) Close() error                 { l.closes++; return l.err }
 
 func legacyConfig(script, config, storage string) mcptools.ServerConfig {
 	return mcptools.ServerConfig{Transport: "stdio", Args: []string{"-I", "-B", "-u", script, "--config", config, "--storage", storage}}

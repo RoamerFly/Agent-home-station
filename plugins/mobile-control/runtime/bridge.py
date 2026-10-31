@@ -29,6 +29,11 @@ PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+\Z")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 KEYS = {'back': '4', 'home': '3'}
 ACTIONS = {'observe', 'launch', 'tap', 'swipe', 'text', 'back', 'home', 'capture', 'open_url'}
+ADB_HOST = '127.0.0.1'
+ADB_PORT = 5037
+ADB_SERVER_VERSION = 41
+ADB_PROBE_TIMEOUT_SECONDS = 1.0
+ADB_PROBE_MAX_RESPONSE_BYTES = 64
 
 
 def public_browser_url(value, hosts, lookup=None):
@@ -49,6 +54,51 @@ def public_browser_url(value, hosts, lookup=None):
 
 class BridgeError(Exception):
     pass
+
+
+def _read_socket_exact(connection, length):
+    data = bytearray()
+    while len(data) < length:
+        chunk = connection.recv(length - len(data))
+        if not chunk:
+            # A connected listener that stops mid-frame is a malformed ADB
+            # protocol reply, not evidence that the configured endpoint may
+            # be replaced with a fallback server.
+            raise ValueError('adb_server_truncated_reply')
+        data.extend(chunk)
+    return bytes(data)
+
+
+def adb_server_version_probe():
+    """Read the fixed local server's ADB protocol version without spawning adb.
+
+    `host:version` returns a four-hex-digit payload.  ADB protocol version 41
+    is therefore the bytes ``b"0029"`` (0x29), not ``b"0041"``.  The bridge
+    only accepts the host-owned loopback listener and never follows an
+    environment-selected ADB endpoint.
+    """
+    try:
+        with socket.create_connection((ADB_HOST, ADB_PORT), timeout=ADB_PROBE_TIMEOUT_SECONDS) as connection:
+            connection.settimeout(ADB_PROBE_TIMEOUT_SECONDS)
+            connection.sendall(b'000chost:version')
+            if _read_socket_exact(connection, 4) != b'OKAY':
+                raise ValueError()
+            encoded_length = _read_socket_exact(connection, 4)
+            if not re.fullmatch(rb'[0-9A-Fa-f]{4}', encoded_length):
+                raise ValueError()
+            length = int(encoded_length, 16)
+            if not 1 <= length <= ADB_PROBE_MAX_RESPONSE_BYTES:
+                raise ValueError()
+            payload = _read_socket_exact(connection, length)
+    except OSError as exc:
+        raise BridgeError('device_adb_server_unavailable') from exc
+    except ValueError as exc:
+        raise BridgeError('device_adb_server_handshake_invalid') from exc
+    if not re.fullmatch(rb'[0-9A-Fa-f]{4}', payload):
+        raise BridgeError('device_adb_server_handshake_invalid')
+    if int(payload, 16) != ADB_SERVER_VERSION:
+        raise BridgeError('device_adb_server_incompatible')
+    return ADB_SERVER_VERSION
 
 
 def atomic(path: Path, data: bytes):
@@ -99,13 +149,14 @@ def ui_nodes(xml: bytes):
 
 
 class Bridge:
-    def __init__(self, config: Path, storage: Path, runner=None):
+    def __init__(self, config: Path, storage: Path, runner=None, server_probe=None):
         self.config_path = config.resolve()
         self.storage = storage.resolve()
         self.storage.mkdir(parents=True, exist_ok=True)
         if os.name != 'nt':
             self.storage.chmod(0o700)
         self.runner = runner or subprocess.run
+        self.server_probe = server_probe or adb_server_version_probe
         self.database = self.storage / 'device-ledger.sqlite'
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS lease(device TEXT PRIMARY KEY,owner TEXT NOT NULL,expires REAL NOT NULL)')
@@ -131,6 +182,13 @@ class Bridge:
                 raise ValueError()
             if not Path(cfg['adb']).is_absolute() or not Path(cfg['adb']).is_file():
                 raise ValueError()
+            # The host derives this private profile. ADB's bare/default
+            # socket can auto-launch a daemon; 127.0.0.1 is deliberately a
+            # remote socket spec, so a failed fixed host connection does not
+            # launch one. See AOSP client/adb_client.cpp:
+            # https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/client/adb_client.cpp
+            if cfg.get('adb_host') != ADB_HOST or cfg.get('adb_port') != ADB_PORT:
+                raise ValueError()
             for key, device in cfg['devices'].items():
                 if not IDENTIFIER.fullmatch(key) or not SERIAL.fullmatch(device['serial']):
                     raise ValueError()
@@ -155,10 +213,32 @@ class Bridge:
 
     def adb(self, cfg, serial, args, timeout=12, bound=8 << 20):
         try:
-            kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False)
+            if not isinstance(args, list) or not args or args[0] in {'start-server', 'kill-server', 'server'}:
+                raise BridgeError('device_command_unavailable')
+            # The probe is intentionally separate from the ADB CLI: when the
+            # listener is absent, malformed, or protocol-incompatible, do not
+            # launch the client at all.  It cannot make the probe/client gap
+            # atomic; the host owns the listener and rejects replacements.
+            try:
+                version = self.server_probe()
+            except BridgeError:
+                raise
+            except Exception as exc:
+                raise BridgeError('device_adb_server_handshake_invalid') from exc
+            if type(version) is not int:
+                raise BridgeError('device_adb_server_handshake_invalid')
+            if version != ADB_SERVER_VERSION:
+                raise BridgeError('device_adb_server_incompatible')
+            # Do not inherit alternate ADB server selectors. The explicit
+            # remote endpoint is the host-owned shared server, never a
+            # session-job daemon and never a fallback to the default socket.
+            environment = dict(os.environ)
+            for key in ('ADB_SERVER_SOCKET', 'ANDROID_ADB_SERVER_ADDRESS', 'ANDROID_ADB_SERVER_PORT', 'ANDROID_SERIAL'):
+                environment.pop(key, None)
+            kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False, env=environment)
             if os.name == 'nt':
                 kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-            result = self.runner([cfg['adb'], '-s', serial, *args], **kwargs)
+            result = self.runner([cfg['adb'], '-H', ADB_HOST, '-P', str(ADB_PORT), '-s', serial, *args], **kwargs)
             if result.returncode != 0 or len(result.stdout) > bound:
                 raise BridgeError('device_command_unavailable')
             return result.stdout

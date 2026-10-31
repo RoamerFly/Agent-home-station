@@ -272,7 +272,9 @@ func mobileFixture(t *testing.T, p Planner) (*Control, *fakeBridge) {
 		t.Fatal(e)
 	}
 	b := &fakeBridge{}
-	c.factory = func(Settings) (Bridge, error) { return b, nil }
+	if e = c.SetBrokerFactory(func(context.Context, Task, Settings) (Bridge, error) { return b, nil }); e != nil {
+		t.Fatal(e)
+	}
 	s := Defaults()
 	s.Enabled = true
 	s.Devices = []string{"lab"}
@@ -445,9 +447,9 @@ func TestDevicePrivateScreenshotAndConfiguration(t *testing.T) {
 		t.Fatal("path escape")
 	}
 	settings := c.Settings()
-	settings.Bridge.Env = map[string]string{"KEY": "synthetic"}
-	if e = c.Save(settings); e == nil {
-		t.Fatal("credentials accepted")
+	settings.Bridge.Env = map[string]string{"KEY": "legacy-compatible"}
+	if e = c.Save(settings); e != nil {
+		t.Fatalf("legacy bridge compatibility fields rejected: %v", e)
 	}
 	if _, e = os.Stat(filepath.Join(c.dir, "observations", got.ObservationID+".png")); e != nil {
 		t.Fatal(e)

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"wechat-bot/internal/adbserver"
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/agentworkspace"
 	"wechat-bot/internal/bailian"
@@ -453,7 +454,7 @@ func (m *Manager) Close() error {
 	if m.mobile != nil {
 		mobileErr = m.mobile.Close()
 	}
-	cleanupErr := devicebroker.CleanupQuarantined()
+	cleanupErr := errors.Join(devicebroker.CleanupQuarantined(), adbserver.CleanupQuarantined())
 	var packageErr error
 	if packageRuntime != nil {
 		packageErr = packageRuntime.Close()

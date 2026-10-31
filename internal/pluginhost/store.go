@@ -72,6 +72,11 @@ func OpenStore(dir, account string) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS jobs(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,plugin TEXT NOT NULL,thread TEXT NOT NULL,request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,record BLOB NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,UNIQUE(plugin,thread,request_key))`,
 		`CREATE INDEX IF NOT EXISTS jobs_plugin_sequence ON jobs(plugin,seq)`,
 		`CREATE TABLE IF NOT EXISTS job_private_results(job_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,payload BLOB NOT NULL)`,
+		// Host state is intentionally separate from plugin configuration and
+		// runtime data. It remains private to this account's host Store even if a
+		// package is disabled, removed, or never installed.
+		`CREATE TABLE IF NOT EXISTS host_states(plugin TEXT NOT NULL,namespace TEXT NOT NULL,revision INTEGER NOT NULL,source_hash TEXT NOT NULL,PRIMARY KEY(plugin,namespace))`,
+		`CREATE TABLE IF NOT EXISTS host_state_records(plugin TEXT NOT NULL,namespace TEXT NOT NULL,key TEXT NOT NULL,payload BLOB NOT NULL,PRIMARY KEY(plugin,namespace,key),FOREIGN KEY(plugin,namespace) REFERENCES host_states(plugin,namespace) ON DELETE CASCADE)`,
 	} {
 		if _, err = db.Exec(query); err != nil {
 			return fail(err)

@@ -27,6 +27,7 @@ var observationPattern = regexp.MustCompile(`^obs-[a-f0-9]{32}$`)
 var artifactPattern = regexp.MustCompile(`^clip-[a-f0-9]{32}$`)
 var bridgeReasonPattern = regexp.MustCompile(`^device_[a-z_]{1,90}$`)
 var errPermissionChanged = errors.New("device_permission_changed")
+var errStorageBlocked = errors.New("device_storage_blocked")
 
 type Settings struct {
 	Revision   int64                 `json:"revision"`
@@ -42,9 +43,6 @@ func Defaults() Settings {
 	return Settings{Devices: []string{}, Actions: []string{}, MaxSteps: 12, MaxSeconds: 300, Bridge: mcptools.ServerConfig{ID: "device", Transport: "stdio", Enabled: true, TimeoutSeconds: 45, Tools: []string{"devices", "observe", "act"}}}
 }
 func (c Settings) Validate() error {
-	if len(c.Bridge.Env) > 0 || len(c.Bridge.Headers) > 0 || c.Bridge.URL != "" {
-		return errors.New("device_bridge_credentials_not_supported")
-	}
 	if c.MaxSteps < 1 || c.MaxSteps > 30 || c.MaxSeconds < 30 || c.MaxSeconds > 900 || len(c.Devices) > 16 || len(c.Actions) > 9 {
 		return errors.New("device_configuration_invalid")
 	}
@@ -58,16 +56,10 @@ func (c Settings) Validate() error {
 			return errors.New("device_action_invalid")
 		}
 	}
-	if c.Enabled {
-		if !c.Bridge.Enabled || c.Bridge.Transport != "stdio" || c.Bridge.ID != "device" {
-			return errors.New("device_bridge_invalid")
-		}
-		h, e := mcptools.New([]mcptools.ServerConfig{c.Bridge})
-		if e != nil {
-			return errors.New("device_bridge_invalid")
-		}
-		_ = h.Close()
-	}
+	// Bridge is a legacy configuration payload consumed only by the explicitly
+	// installed device plugin during migration. Do not construct or probe an
+	// MCP backend here: validation must be local and opening a backend belongs
+	// to BrokerFactory after host authorization.
 	return nil
 }
 func includes(items []string, want string) bool {
@@ -146,7 +138,6 @@ type Bridge interface {
 	Call(context.Context, string, json.RawMessage) (string, error)
 	Close() error
 }
-type bridgeFactory func(Settings) (Bridge, error)
 
 // BrokerFactory opens the production device broker for one already-authorized
 // operation.  The host supplies it when the device backend is implemented by
@@ -154,44 +145,36 @@ type bridgeFactory func(Settings) (Bridge, error)
 // Devices operation; its Source is Admin so a binder can distinguish that
 // narrow, unscoped listing operation from a conversation task.
 //
-// A nil factory preserves the legacy in-process MCP bridge for compatibility
-// with existing installations and isolated tests.  A non-nil factory is
-// authoritative: errors (and a nil Bridge) are never retried through legacy
-// configuration, which would otherwise silently widen a plugin boundary.
+// It is required for execution. A nil factory means the device plugin is not
+// installed or not available; legacy Bridge settings are never executed by
+// Control. Errors (and a nil Bridge) are never retried through old command
+// configuration, which would silently widen a plugin boundary.
 type BrokerFactory func(context.Context, Task, Settings) (Bridge, error)
 
 type Control struct {
-	mu            sync.Mutex
-	dir           string
-	settings      Settings
-	tasks         map[string]Task
-	running       map[string]context.CancelFunc
-	devices       map[string]string
-	planner       Planner
-	factory       bridgeFactory
-	brokerFactory BrokerFactory
-	closed        bool
-	wg            sync.WaitGroup
-	finished      func(Task)
-	authorize     func(Source) bool
-	analyze       ArtifactAnalyzer
+	mu             sync.Mutex
+	dir            string
+	repository     Repository
+	repoRevision   int64
+	settings       Settings
+	tasks          map[string]Task
+	running        map[string]context.CancelFunc
+	devices        map[string]string
+	planner        Planner
+	brokerFactory  BrokerFactory
+	storageBlocked bool
+	closed         bool
+	wg             sync.WaitGroup
+	finished       func(Task)
+	authorize      func(Source) bool
+	analyze        ArtifactAnalyzer
 }
-type hubBridge struct{ *mcptools.Hub }
 
-func (h hubBridge) Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
-	return h.Hub.Call(ctx, "device__"+name, args)
-}
 func Open(dir string, planner Planner) (*Control, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	c := &Control{dir: dir, settings: Defaults(), tasks: map[string]Task{}, running: map[string]context.CancelFunc{}, devices: map[string]string{}, planner: planner}
-	c.factory = func(s Settings) (Bridge, error) {
-		cfg := s.Bridge
-		cfg.Tools = []string{"devices", "observe", "act", "read_artifact"}
-		h, e := mcptools.New([]mcptools.ServerConfig{cfg})
-		return hubBridge{h}, e
-	}
+	c := newControl(dir, planner)
 	if err := load(filepath.Join(dir, "settings.json"), &c.settings); err != nil {
 		return nil, err
 	}
@@ -205,16 +188,11 @@ func Open(dir string, planner Planner) (*Control, error) {
 		return nil, errors.New("device_task_storage_invalid")
 	}
 	for id, t := range c.tasks {
-		if id != t.ID || !idPattern.MatchString(id) {
+		if id != t.ID || !idPattern.MatchString(id) || t.RequestHash == "" {
 			return nil, errors.New("device_task_storage_invalid")
 		}
-		if t.State == "running" || t.State == "queued" {
-			t.State = "needs_review"
-			t.Reason = "device_worker_interrupted_reobserve_required"
-			t.Updated = time.Now().UTC()
-			c.tasks[id] = t
-		}
 	}
+	normalizeInterrupted(c.tasks)
 	return c, c.persistTasks()
 }
 func load(path string, value any) error {
@@ -250,7 +228,21 @@ func write(path string, value any) error {
 	}
 	return os.Rename(f.Name(), path)
 }
-func (c *Control) persistTasks() error { return write(filepath.Join(c.dir, "tasks.json"), c.tasks) }
+func (c *Control) persistTasks() error {
+	if c.repository == nil {
+		return write(filepath.Join(c.dir, "tasks.json"), c.tasks)
+	}
+	next := RepositorySnapshot{Settings: clone(c.settings), Tasks: clone(c.tasks), Revision: c.repoRevision, Initialized: c.repoRevision > 0}
+	committed, err := c.repository.Commit(context.Background(), c.repoRevision, next)
+	if err != nil {
+		return err
+	}
+	if committed.Revision <= c.repoRevision || !committed.Initialized || validateRepositorySnapshot(committed) != nil {
+		return errors.New("device_repository_invalid")
+	}
+	c.settings, c.tasks, c.repoRevision = clone(committed.Settings), clone(committed.Tasks), committed.Revision
+	return nil
+}
 func clone[T any](value T) T {
 	b, _ := json.Marshal(value)
 	var copy T
@@ -293,24 +285,40 @@ func (c *Control) Save(s Settings) error {
 		return errors.New("device_configuration_changed")
 	}
 	s.Revision++
-	if e := write(filepath.Join(c.dir, "settings.json"), s); e != nil {
-		return e
-	}
-	c.settings = clone(s)
-	for id, t := range c.tasks {
+	nextTasks := clone(c.tasks)
+	for id, t := range nextTasks {
 		if t.State == "queued" || t.State == "running" {
 			t.State, t.Reason, t.Updated = "cancelled", "device_permission_changed", time.Now().UTC()
-			c.tasks[id] = t
+			nextTasks[id] = t
 		}
 	}
-	persistErr := c.persistTasks()
-	// Settings are already durable. Even if cancellation persistence fails,
-	// keep the in-memory queue stopped; a restart converts old pending work
-	// to needs_review rather than executing it under changed permissions.
+	if c.repository != nil {
+		next := RepositorySnapshot{Settings: clone(s), Tasks: nextTasks, Revision: c.repoRevision, Initialized: c.repoRevision > 0}
+		committed, err := c.repository.Commit(context.Background(), c.repoRevision, next)
+		if err != nil {
+			return err
+		}
+		if committed.Revision <= c.repoRevision || !committed.Initialized || validateRepositorySnapshot(committed) != nil {
+			return errors.New("device_repository_invalid")
+		}
+		c.settings, c.tasks, c.repoRevision = clone(committed.Settings), clone(committed.Tasks), committed.Revision
+	} else {
+		// Legacy JSON mode remains test-only compatibility. Write settings before
+		// tasks as its historical contract requires.
+		if e := write(filepath.Join(c.dir, "settings.json"), s); e != nil {
+			return e
+		}
+		oldSettings, oldTasks := c.settings, c.tasks
+		c.settings, c.tasks = clone(s), nextTasks
+		if err := c.persistTasks(); err != nil {
+			c.settings, c.tasks = oldSettings, oldTasks
+			return err
+		}
+	}
 	for _, cancel := range c.running {
 		cancel()
 	}
-	return persistErr
+	return nil
 }
 func (c *Control) allowed(s Settings, source Source) bool {
 	// The admin adapter verifies the existing trusted identity/thread policy.
@@ -346,7 +354,16 @@ func (c *Control) Start(source Source, device, goal string) (Task, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := c.settings
-	if c.closed || !c.allowed(s, source) || !includes(s.Devices, device) || c.planner == nil {
+	if c.closed {
+		return Task{}, errors.New("device_control_closed")
+	}
+	if c.storageBlocked {
+		return Task{}, errStorageBlocked
+	}
+	if c.brokerFactory == nil {
+		return Task{}, errors.New("device_plugin_unavailable")
+	}
+	if !c.allowed(s, source) || !includes(s.Devices, device) || c.planner == nil {
 		return Task{}, errors.New("device_task_not_permitted")
 	}
 	if len(goal) == 0 || len(goal) > 3000 || !utf8.ValidString(goal) || source.MessageID == "" || len(source.MessageID) > 8192 {
@@ -382,7 +399,7 @@ func (c *Control) Start(source Source, device, goal string) (Task, error) {
 	return clone(t), nil
 }
 func (c *Control) scheduleLocked(device string) {
-	if c.closed || !c.settings.Enabled || c.devices[device] != "" {
+	if c.closed || c.storageBlocked || !c.settings.Enabled || c.devices[device] != "" {
 		return
 	}
 	var next *Task
@@ -541,8 +558,9 @@ func (c *Control) currentRunnable(id string) (Task, bool) {
 	t, ok := c.tasks[id]
 	s := clone(c.settings)
 	closed := c.closed
+	storageBlocked := c.storageBlocked
 	c.mu.Unlock()
-	if !ok || closed || t.State == "cancelled" {
+	if !ok || closed || storageBlocked || t.State == "cancelled" {
 		return Task{}, false
 	}
 	t = clone(t)
@@ -562,7 +580,11 @@ func (c *Control) taskBridgeInput(ctx context.Context, id string) (Task, Setting
 	s := clone(c.settings)
 	factory := c.brokerFactory
 	closed := c.closed
+	storageBlocked := c.storageBlocked
 	c.mu.Unlock()
+	if storageBlocked {
+		return Task{}, Settings{}, nil, errStorageBlocked
+	}
 	if !ok || closed || t.State == "cancelled" || !c.allowed(s, t.Source) || ctx.Err() != nil {
 		return Task{}, Settings{}, nil, errPermissionChanged
 	}
@@ -574,19 +596,17 @@ func (c *Control) openTaskBridge(ctx context.Context, id string) (Bridge, error)
 	if err != nil {
 		return nil, err
 	}
-	if factory != nil {
-		// This is intentionally not followed by c.factory.  A configured plugin
-		// broker is a security boundary, not a best-effort preference.
-		bridge, openErr := factory(ctx, t, s)
-		if openErr != nil {
-			return nil, openErr
-		}
-		if bridge == nil {
-			return nil, errors.New("device_bridge_unavailable")
-		}
-		return bridge, nil
+	if factory == nil {
+		return nil, errors.New("device_plugin_unavailable")
 	}
-	return c.factory(s)
+	bridge, openErr := factory(ctx, t, s)
+	if openErr != nil {
+		return nil, openErr
+	}
+	if bridge == nil {
+		return nil, errors.New("device_bridge_unavailable")
+	}
+	return bridge, nil
 }
 
 func (c *Control) openManagementBridge(ctx context.Context) (Bridge, error) {
@@ -602,17 +622,17 @@ func (c *Control) openManagementBridge(ctx context.Context) (Bridge, error) {
 	if closed || !c.allowed(s, management.Source) || ctx.Err() != nil {
 		return nil, errPermissionChanged
 	}
-	if factory != nil {
-		bridge, err := factory(ctx, management, s)
-		if err != nil {
-			return nil, err
-		}
-		if bridge == nil {
-			return nil, errors.New("device_bridge_unavailable")
-		}
-		return bridge, nil
+	if factory == nil {
+		return nil, errors.New("device_plugin_unavailable")
 	}
-	return c.factory(s)
+	bridge, err := factory(ctx, management, s)
+	if err != nil {
+		return nil, err
+	}
+	if bridge == nil {
+		return nil, errors.New("device_bridge_unavailable")
+	}
+	return bridge, nil
 }
 
 func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string, s Settings) {
@@ -634,9 +654,11 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 			fn(t)
 		}
 	}()
-	ctx = mcptools.WithSessionScope(ctx, id)
 	b, e := c.openTaskBridge(ctx, id)
 	if e != nil {
+		if errors.Is(e, errStorageBlocked) {
+			return
+		}
 		if errors.Is(e, errPermissionChanged) {
 			_ = c.update(id, "stopped", "", "", "device_permission_changed", "")
 			return
@@ -820,6 +842,7 @@ func (c *Control) Busy() bool { c.mu.Lock(); defer c.mu.Unlock(); return len(c.r
 func (c *Control) StopAll() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	old := clone(c.tasks)
 	for id, t := range c.tasks {
 		if t.State == "queued" || t.State == "running" {
 			t.State, t.Reason, t.Updated = "cancelled", "device_cancelled_by_owner", time.Now().UTC()
@@ -827,10 +850,22 @@ func (c *Control) StopAll() error {
 		}
 	}
 	err := c.persistTasks()
+	if err != nil {
+		c.tasks = old
+		// Persistence uncertainty must never leave a device task running. Keep
+		// the old in-memory records for inspection/retry, but stop every live
+		// worker and prevent its defer scheduling path from starting queued work.
+		c.storageBlocked = true
+		for _, cancel := range c.running {
+			cancel()
+		}
+		return err
+	}
+	c.storageBlocked = false
 	for _, cancel := range c.running {
 		cancel()
 	}
-	return err
+	return nil
 }
 
 func (c *Control) Devices(ctx context.Context) (json.RawMessage, error) {

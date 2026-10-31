@@ -52,14 +52,11 @@ func TestBrokerFactoryRejectsRevokedOrWrongTaskScopeBeforeOpen(t *testing.T) {
 	}
 }
 
-func TestBrokerFactoryFailureNeverFallsBackToLegacy(t *testing.T) {
+func TestBrokerFactoryFailureOrNilNeverExecutesLegacyBridge(t *testing.T) {
 	c, _ := mobileFixture(t, func(context.Context, Task, Observation) (Step, error) { return Step{Action: "finish"}, nil })
-	legacyCalls := 0
-	c.factory = func(Settings) (Bridge, error) {
-		legacyCalls++
-		return &fakeBridge{}, nil
-	}
+	calls := 0
 	if err := c.SetBrokerFactory(func(context.Context, Task, Settings) (Bridge, error) {
+		calls++
 		return nil, errors.New("plugin unavailable")
 	}); err != nil {
 		t.Fatal(err)
@@ -70,10 +67,11 @@ func TestBrokerFactoryFailureNeverFallsBackToLegacy(t *testing.T) {
 	if _, err := c.openTaskBridge(context.Background(), "plugin-failure"); err == nil {
 		t.Fatal("plugin factory failure unexpectedly succeeded")
 	}
-	if legacyCalls != 0 {
-		t.Fatalf("legacy bridge was used after plugin failure: %d", legacyCalls)
+	if calls != 1 {
+		t.Fatalf("factory calls after plugin failure: %d", calls)
 	}
 	if err := c.SetBrokerFactory(func(context.Context, Task, Settings) (Bridge, error) {
+		calls++
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -81,8 +79,21 @@ func TestBrokerFactoryFailureNeverFallsBackToLegacy(t *testing.T) {
 	if _, err := c.openTaskBridge(context.Background(), "plugin-failure"); err == nil {
 		t.Fatal("nil plugin bridge unexpectedly succeeded")
 	}
-	if legacyCalls != 0 {
-		t.Fatalf("legacy bridge was used after nil plugin bridge: %d", legacyCalls)
+	if calls != 2 {
+		t.Fatalf("factory calls after nil plugin bridge: %d", calls)
+	}
+}
+
+func TestMissingBrokerFactoryRejectsNewTasksAndDeviceListing(t *testing.T) {
+	c, _ := mobileFixture(t, func(context.Context, Task, Observation) (Step, error) { return Step{Action: "finish"}, nil })
+	if err := c.SetBrokerFactory(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Start(Source{Admin: true, MessageID: "missing-plugin"}, "lab", "inspect"); err == nil {
+		t.Fatal("new device task accepted without installed broker")
+	}
+	if _, err := c.Devices(context.Background()); err == nil {
+		t.Fatal("device listing used legacy bridge without installed broker")
 	}
 }
 
