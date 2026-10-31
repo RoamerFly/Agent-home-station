@@ -19,6 +19,52 @@ import (
 // artifact/Channels adapter and cannot expose this pending package to an Agent.
 type offlineSharePolicy struct{ offlineWebPolicy }
 
+type offlineBiliPolicy struct{ offlineWebPolicy }
+
+func (p *offlineBiliPolicy) Service(_ context.Context, _ pluginhost.Job, _ pluginhost.Capability, method string, raw json.RawMessage) (json.RawMessage, error) {
+	var request struct {
+		URL string `json:"url"`
+	}
+	if method != "wechat/http_read" || json.Unmarshal(raw, &request) != nil {
+		return nil, errors.New("unexpected synthetic request")
+	}
+	const page = "https://www.bilibili.com/video/BV0000000001/?p=2"
+	const api = "https://api.bilibili.com/x/player/playurl?bvid=BV0000000001&cid=102&qn=32&fnval=0&fourk=0"
+	var body, kind string
+	switch {
+	case p.calls == 0 && request.URL == page:
+		body = `window.__INITIAL_STATE__={"videoData":{"bvid":"BV0000000001","cid":101,"title":"合成作品","pages":[{"cid":101,"part":"一"},{"cid":102,"part":"二"}]}};`
+		kind = "text/html"
+	case p.calls == 1 && request.URL == api:
+		body = `{"code":0,"data":{"timelength":720000,"durl":[{"url":"https://synthetic.bilivideo.com/video.mp4?token=private","size":1234}]}}`
+		kind = "application/json"
+	default:
+		return nil, errors.New("unexpected video or part")
+	}
+	p.calls++
+	if p.revokeAfterRead {
+		p.revoked = true
+	}
+	return json.Marshal(map[string]any{"ok": true, "url": request.URL, "content_type": kind, "body_base64": base64.StdEncoding.EncodeToString([]byte(body))})
+}
+
+func (p *offlineBiliPolicy) Validate(_ context.Context, _ pluginhost.Job, _ pluginhost.Capability, raw json.RawMessage) (VerifiedResult, error) {
+	var result struct {
+		OK         bool     `json:"ok"`
+		ID         string   `json:"object_id"`
+		Source     string   `json:"source_url"`
+		Duration   int64    `json:"duration_ms"`
+		Coverage   string   `json:"coverage"`
+		Observed   bool     `json:"video_observed"`
+		Downloaded bool     `json:"media_downloaded"`
+		Locators   []string `json:"private_media_locators"`
+	}
+	if json.Unmarshal(raw, &result) != nil || !result.OK || result.ID != "BV0000000001" || result.Source != "https://www.bilibili.com/video/BV0000000001/?p=2" || result.Duration != 720000 || result.Coverage != "media_locator_only" || result.Observed || result.Downloaded || len(result.Locators) != 1 || result.Locators[0] != "https://synthetic.bilivideo.com/video.mp4?token=private" {
+		return VerifiedResult{}, errors.New("incorrect synthetic Bilibili result")
+	}
+	return VerifiedResult{Result: json.RawMessage(`{"object_id":"BV0000000001","video_observed":false}`)}, nil
+}
+
 type offlineChannelsPolicy struct {
 	offlineWebPolicy
 	store *pluginhost.Store
@@ -208,6 +254,23 @@ func TestLiveShareParserIsolatedExactWorkAndRevocation(t *testing.T) {
 	reused, err := c.Invoke(ctx, r, policy)
 	if err != nil || !reused.Reused || policy.calls != 1 {
 		t.Fatal("replayed parser invocation", err)
+	}
+	biliPolicy := &offlineBiliPolicy{}
+	biliRequest := CallRequest{Plugin: i.Package.ID, Capability: "share.resolve_public", Context: invocation(), Arguments: json.RawMessage(`{"url":"https://www.bilibili.com/video/BV0000000001/?p=2"}`)}
+	biliRequest.Context.RequestKey = "synthetic-bili-part"
+	bili, err := c.Invoke(ctx, biliRequest, biliPolicy)
+	if err != nil || bili.Job.State != "completed" || biliPolicy.calls != 2 {
+		t.Fatal("Bilibili exact part", bili.Job.State, err, biliPolicy.calls)
+	}
+	biliAgain, err := c.Invoke(ctx, biliRequest, biliPolicy)
+	if err != nil || !biliAgain.Reused || biliPolicy.calls != 2 {
+		t.Fatal("Bilibili source replayed", err, biliPolicy.calls)
+	}
+	biliRevoked := &offlineBiliPolicy{offlineWebPolicy: offlineWebPolicy{revokeAfterRead: true}}
+	biliRequest.Context.RequestKey = "synthetic-bili-revoked"
+	blocked, err := c.Invoke(ctx, biliRequest, biliRevoked)
+	if err == nil || blocked.Job.State != "needs_review" || len(blocked.Job.Result) != 0 || biliRevoked.calls != 1 {
+		t.Fatal("Bilibili continued after revocation", blocked.Job.State, err, biliRevoked.calls)
 	}
 	channelsPolicy := &offlineChannelsPolicy{store: s}
 	channelsRequest := CallRequest{Plugin: i.Package.ID, Capability: "share.resolve_channels", Context: invocation(), Arguments: json.RawMessage(`{"url":"https://weixin.qq.com/sph/synthetic123","expected_object_id":"12345"}`)}

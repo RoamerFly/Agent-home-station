@@ -116,11 +116,8 @@ func (h *Host) Start(ctx context.Context, id string) error {
 	if err := Authorize(p, s.registration.Grant, c, p.Permissions); err != nil {
 		return reject(err)
 	}
-	for _, id := range p.Dependencies {
-		d := h.items[id]
-		if d == nil || !d.registration.Enabled || d.session == nil || d.stopping {
-			return reject(errors.New("plugin dependency unavailable"))
-		}
+	if !h.dependenciesAvailable(p) {
+		return reject(errors.New("plugin dependency unavailable"))
 	}
 	if h.executor == nil {
 		return reject(errors.New("isolated plugin executor unavailable"))
@@ -137,6 +134,9 @@ func (h *Host) Start(ctx context.Context, id string) error {
 	h.mu.Lock()
 	if err == nil && (h.closed || !s.registration.Enabled) {
 		err = errors.New("plugin host stopped during startup")
+	}
+	if err == nil && !h.dependenciesAvailable(p) {
+		err = errors.New("plugin dependency stopped during startup")
 	}
 	if err == nil {
 		s.session = session
@@ -178,12 +178,47 @@ func (h *Host) Call(ctx context.Context, id string, c Invocation, tool string, a
 		h.mu.Unlock()
 		return nil, err
 	}
+	if !h.dependenciesAvailable(s.registration.Package) {
+		h.mu.Unlock()
+		return nil, errors.New("plugin dependency unavailable")
+	}
 	s.active++
 	session := s.session
 	h.mu.Unlock()
 	defer func() { h.mu.Lock(); s.active--; h.mu.Unlock() }()
 	// An interrupted call is returned as-is, never replayed by the host.
 	return session.Call(ctx, c, tool, args)
+}
+
+// Called with h.mu held. A terminated dependency is not healthy merely because
+// the host has not yet released its session object.
+func (h *Host) dependenciesAvailable(p Package) bool {
+	state := map[string]int{}
+	var visit func(Package) bool
+	visit = func(current Package) bool {
+		if state[current.ID] == 1 {
+			return false
+		}
+		if state[current.ID] == 2 {
+			return true
+		}
+		state[current.ID] = 1
+		for _, id := range current.Dependencies {
+			d := h.items[id]
+			if d == nil || !d.registration.Enabled || d.session == nil || d.stopping || d.starting {
+				return false
+			}
+			if live, ok := d.session.(interface{ Alive() bool }); ok && !live.Alive() {
+				return false
+			}
+			if !visit(d.registration.Package) {
+				return false
+			}
+		}
+		state[current.ID] = 2
+		return true
+	}
+	return visit(p)
 }
 func (h *Host) Stop(id string) error {
 	return h.stop(id, false)

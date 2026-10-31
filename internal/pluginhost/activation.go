@@ -83,6 +83,22 @@ func (s *Store) ConfigurationForExecution(ctx context.Context, id string) (Runti
 	return s.runtimeConfiguration(ctx, id)
 }
 
+// CheckConfiguration validates a startup plan without enabling a plugin or
+// exposing any of its secrets. Actual execution rechecks the current version.
+func (s *Store) CheckConfiguration(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, err := s.Installed(ctx, id)
+	if err != nil {
+		return err
+	}
+	if i.Removed {
+		return errors.New("plugin removed")
+	}
+	_, err = s.runtimeConfiguration(ctx, id)
+	return err
+}
+
 // ConfigurationForPlugin excludes secrets held exclusively by host proxies.
 // ConfigurationForExecution remains private to trusted host code.
 func (s *Store) ConfigurationForPlugin(ctx context.Context, id string) (RuntimeConfiguration, error) {

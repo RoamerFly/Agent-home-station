@@ -95,10 +95,49 @@ func (c *Controller) Status(id string) Status {
 	return Status{r, err}
 }
 func (c *Controller) Start(ctx context.Context, id string, revision int) (err error) {
-	if err = c.begin(id); err != nil {
+	plan, err := c.startPlan(ctx, id, revision)
+	if err != nil {
 		return err
 	}
-	defer func() { c.end(id, err) }()
+	if err = c.beginPlan(plan); err != nil {
+		return err
+	}
+	operationErrors := map[string]error{}
+	defer func() {
+		for _, i := range plan {
+			if i.Package.ID == id {
+				c.end(id, err)
+			} else {
+				c.end(i.Package.ID, operationErrors[i.Package.ID])
+			}
+		}
+	}()
+	// Recheck every snapshot before starting even the first dependency.
+	for _, expected := range plan {
+		current, e := c.store.Installed(ctx, expected.Package.ID)
+		if e != nil || current.Revision != expected.Revision || current.Removed || (expected.Package.ID != id && !current.Enabled) {
+			return &DependencyError{Plugin: id, Dependency: expected.Package.ID, Code: "dependency_changed"}
+		}
+	}
+	started := []string{}
+	for _, i := range plan {
+		wasRunning := c.host.Status(i.Package.ID).State == "running"
+		if err = c.startOne(ctx, i.Package.ID, i.Revision); err != nil {
+			operationErrors[i.Package.ID] = err
+			if len(plan) == 1 {
+				return err
+			}
+			return &DependencyError{Plugin: id, Dependency: i.Package.ID, Code: "dependency_start_failed", Started: started}
+		}
+		if !wasRunning {
+			started = append(started, i.Package.ID)
+		}
+	}
+	return nil
+}
+
+// The caller owns lifecycle reservations for this plugin and its dependencies.
+func (c *Controller) startOne(ctx context.Context, id string, revision int) (err error) {
 	i, err := c.store.Installed(ctx, id)
 	if err != nil {
 		return err
