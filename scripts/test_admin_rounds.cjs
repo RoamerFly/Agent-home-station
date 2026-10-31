@@ -103,3 +103,24 @@ test('ambiguous send IDs cannot attach unscoped records to an unrelated round', 
   ]);
   assert.equal(rows.filter(x => x.system).length, 1);
 });
+test('task delivery outcome settles the round without mistaking a progress reply for audio delivery', () => {
+  const received=entry(1,{event:'message_received',category:'received',content:'用指定声音讲解视频',status:'received'});
+  const progress=entry(2,{event:'message_progress',category:'sent',content:'正在处理',status:'accepted'});
+  const working=entry(3,{event:'task_delivery_updated',category:'decision',status:'waiting_delivery',reason:'task_delivery_needs_review'});
+  const settled=entry(4,{event:'task_delivery_updated',category:'decision',status:'completed',reason:'task_delivery_accepted'});
+  assert.equal(project([received,progress,working])[0].status,'waiting');
+  assert.equal(project([received,progress,working,settled])[0].status,'completed');
+  assert.equal(project([received,progress,entry(4,{event:'task_delivery_updated',category:'decision',status:'failed'})])[0].status,'failed');
+});
+
+test('private error-report delivery cannot turn failed share into silence or completion', () => {
+  const rows = [
+    entry(1,{event:'message_received',category:'received',status:'received'}),
+    entry(2,{event:'model_failed',category:'error',status:'failed',reason:'source_identity_conflict_or_unavailable'}),
+    entry(3,{event:'character_decision',category:'decision',status:'silent',reason:'operation_reported_privately'}),
+    entry(4,{event:'task_delivery_updated',category:'decision',status:'completed',reason:'task_delivery_accepted'}),
+  ];
+  assert.equal(project(rows.slice(0,3))[0].status,'failed');
+  assert.equal(project(rows)[0].status,'failed');
+  assert.equal(project([...rows,entry(5,{event:'generation_started',category:'decision',status:'processing'}),entry(6,{event:'character_decision',category:'decision',status:'silent',reason:'model_chose_silence'})])[0].status,'silent');
+});

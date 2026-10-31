@@ -48,6 +48,9 @@ func (m *fakeModel) Chat(_ context.Context, system string, turns []map[string]st
 	m.calls++
 	m.system = system
 	m.turns = turns
+	if system == groundingCheckPolicy {
+		return syntheticGroundingVerdict(turns, "allow"), nil
+	}
 	return m.answer, nil
 }
 func enabledConfig() Config {
@@ -56,6 +59,20 @@ func enabledConfig() Config {
 	c.QuietStart = "00:00"
 	c.QuietEnd = "00:00"
 	return c
+}
+
+// Model/tool ordering tests still use a real inbound identity when exercising
+// non-preview delivery. No fake source is injected by production code.
+func syntheticNativeInput(in Input, id string) Input {
+	if in.Sender == "" {
+		in.Sender = "synthetic-sender"
+	}
+	in.TraceID = id
+	in.MessageTime = time.Now().UTC().Format(time.RFC3339Nano)
+	words := UserRequestText(in.Text)
+	in.OriginalText = &words
+	in.Source = &SourceRef{InstanceID: "synthetic-test-adapter", MessageID: id, ServerID: "server-" + id, Account: in.Account, Thread: in.Thread, Sender: in.Sender, MessageType: 1, OccurredAt: in.MessageTime, BodyHash: sourceHash(words), Revision: 1, Integrity: "verified"}
+	return in
 }
 func TestPermissionsSilenceAndInvalidOutput(t *testing.T) {
 	c := enabledConfig()
@@ -71,7 +88,8 @@ func TestPermissionsSilenceAndInvalidOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := Input{Channel: "wechat", Account: "one", Thread: "room@chatroom", Text: "hi", Mode: "social", IsGroup: true}
+	input := Input{Channel: "wechat", Account: "one", Thread: "room@chatroom", Sender: "synthetic-member", TraceID: "permission-test-message", Text: "hi", Mode: "social", IsGroup: true}
+	input.Source = &SourceRef{MessageID: input.TraceID, ServerID: "permission-test-server", Account: input.Account, Thread: input.Thread, Sender: input.Sender, Integrity: "verified", BodyHash: "synthetic-hi-body-hash", OccurredAt: time.Now().Format(time.RFC3339Nano)}
 	d, err := engine.Respond(context.Background(), input)
 	if err != nil || d.Action != "blocked" || model.calls != 0 {
 		t.Fatal("unauthorized observation invoked model", d, err)
@@ -204,25 +222,27 @@ func TestCurrentMessageIsDistinctFromStoredIdentityQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "friend", Text: "你是谁", Mode: "direct", Directed: true, IsGroup: true}
+	input := Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "friend", Text: "你是谁", TraceID: "historical-question", Source: &SourceRef{InstanceID: "identity-questions", MessageID: "historical-question", Account: "test", Thread: "room@chatroom", Sender: "friend", Integrity: "verified"}, Mode: "direct", Directed: true, IsGroup: true}
 	if err := store.Observe(input, c, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Accepted(input, "我是蓝色大肥鱼。", c, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	model := &fakeModel{answer: `{"action":"reply","messages":["我刚刚说偏了，先回答你现在的问题。"]}`}
+	model := &firstContextModel{fakeModel: fakeModel{answer: `{"action":"reply","messages":["我刚刚说偏了，先回答你现在的问题。"]}`}}
 	engine, err := New(c, store, model, "global")
 	if err != nil {
 		t.Fatal(err)
 	}
 	input.Text = "什么意思"
+	input.TraceID = "current-question"
+	input.Source = &SourceRef{InstanceID: "identity-questions", MessageID: "current-question", Account: "test", Thread: "room@chatroom", Sender: "friend", Integrity: "verified"}
 	decision, err := engine.Respond(context.Background(), input)
-	if err != nil || decision.Action != "reply" || len(model.turns) != 3 {
+	if err != nil || decision.Action != "reply" || len(model.firstTurns) != 3 {
 		t.Fatal("conversation context missing", decision, err)
 	}
 	var historical, current map[string]any
-	if json.Unmarshal([]byte(model.turns[0]["content"]), &historical) != nil || json.Unmarshal([]byte(model.turns[2]["content"]), &current) != nil {
+	if json.Unmarshal([]byte(model.firstTurns[0]["content"]), &historical) != nil || json.Unmarshal([]byte(model.firstTurns[2]["content"]), &current) != nil {
 		t.Fatal("invalid context envelope")
 	}
 	if historical["kind"] != "history_message" || historical["text"] != "你是谁" || current["kind"] != "current_message" || current["text"] != "什么意思" {
@@ -235,6 +255,8 @@ func TestCurrentMessageIsDistinctFromStoredIdentityQuestions(t *testing.T) {
 	// A direct identity question may still produce an introduction; there is no name-stripping filter.
 	model.answer = `{"action":"reply","messages":["我叫蓝色大肥鱼。"]}`
 	input.Text = "你叫什么名字？"
+	input.TraceID = "next-identity-question"
+	input.Source = &SourceRef{InstanceID: "identity-questions", MessageID: input.TraceID, Account: "test", Thread: input.Thread, Sender: input.Sender, Integrity: "verified"}
 	decision, err = engine.Respond(context.Background(), input)
 	if err != nil || decision.Messages[0] != "我叫蓝色大肥鱼。" {
 		t.Fatal("legitimate identity reply was removed")
@@ -318,4 +340,18 @@ func TestPlainReplyAndRequiredMentionRespectPermissions(t *testing.T) {
 	if decision.Reason != "invalid_model_decision" {
 		t.Fatal("parse error mislabeled as silence", decision)
 	}
+}
+
+// A risk review may make another model call. Check the initial request envelope
+// independently of the later narrow review payload.
+type firstContextModel struct {
+	fakeModel
+	firstTurns []map[string]string
+}
+
+func (m *firstContextModel) Chat(ctx context.Context, system string, turns []map[string]string) (string, error) {
+	if m.firstTurns == nil {
+		m.firstTurns = append([]map[string]string(nil), turns...)
+	}
+	return m.fakeModel.Chat(ctx, system, turns)
 }

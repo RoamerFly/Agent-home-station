@@ -9,7 +9,10 @@ import (
 
 // Decorate API views rather than changing persisted IDs or old audit evidence.
 func (m *Manager) displayLogs(ctx context.Context) []LogEntry {
-	entries := m.Logs()
+	return m.nameLogEntries(ctx, m.Logs())
+}
+
+func (m *Manager) nameLogEntries(ctx context.Context, entries []LogEntry) []LogEntry {
 	type key struct{ thread, sender string }
 	keys := map[key]bool{}
 	for _, entry := range entries {

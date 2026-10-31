@@ -32,6 +32,7 @@ func (w *Worker) readQuoteContext(ctx context.Context, m *linuxnative.Message) s
 		return "\n[引用身份不匹配；仅处理本条用户新写的文字]"
 	}
 	m.ReplyToSelf = original.Direction == "outgoing"
+	m.ResolvedQuote = original
 	text := original.Body
 	if original.Link != nil {
 		text = original.Link.Title + "\n" + original.Link.Description
@@ -55,6 +56,18 @@ func (w *Worker) readQuoteContext(ctx context.Context, m *linuxnative.Message) s
 	}
 	data := map[string]any{"kind": "quoted_message_context", "verified_same_conversation": true, "from_bot_account": m.ReplyToSelf, "original_type": original.Type, "text": text}
 	data["message_id"], data["server_id"] = original.ID, original.ServerID
+	data["request_actor_id"], data["quoted_by_id"] = m.SenderID, m.SenderID
+	data["message_sender_id"], data["quoted_message_sender_id"] = original.SenderID, original.SenderID
+	data["quoted_author_id"] = original.SenderID
+	data["quoted_author_role"] = "message_sender_only"
+	data["literal_author_id"] = nil
+	if (original.Type == 1 || original.IsQuotedText()) && strings.TrimSpace(original.Body) != "" {
+		data["literal_author_id"], data["speaker_id"] = original.SenderID, original.SenderID
+	}
+	if original.Type == 34 {
+		data["voice_speaker_id"], data["voice_speaker_state"] = nil, "unknown"
+	}
+	data["mentioned_ids"] = original.Mentions.IDs
 	if original.CreatedAt != "" {
 		data["message_time"] = original.CreatedAt
 	}

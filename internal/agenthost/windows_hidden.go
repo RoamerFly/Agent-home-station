@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// The WSL adapter uses a hidden Python broker and an LPAC CMD child.
+// The Windows adapter uses a hidden Python broker and an LPAC CMD child.
 // Child tokens and process jobs enforce workspace isolation without a console.
 type WindowsConfig struct {
 	Pythonw string `json:"pythonw"`
@@ -77,6 +77,10 @@ func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string,
 
 // Fixed broker argv never passes through CMD or PowerShell quoting.
 func runWindowsRequest(ctx context.Context, cfg Config, id, path, command string, argv []string, out io.Writer) error {
+	return runWindowsPolicyRequest(ctx, cfg, id, path, command, argv, "", nil, out, nil)
+}
+
+func runWindowsPolicyRequest(ctx context.Context, cfg Config, id, path, command string, argv []string, policy string, environment map[string]string, out io.Writer, diagnostic io.Writer) error {
 	if cfg.Isolation == nil {
 		return errors.New("sandbox_required")
 	}
@@ -127,7 +131,7 @@ func runWindowsRequest(ctx context.Context, cfg Config, id, path, command string
 		}
 		readonly = append(readonly, v)
 	}
-	b, _ := json.Marshal(map[string]any{"cwd": winDir, "command": command, "argv": argv, "shell": shell, "sandbox": true, "roots": mounts, "read_only": readonly})
+	b, _ := json.Marshal(map[string]any{"cwd": winDir, "command": command, "argv": argv, "shell": shell, "sandbox": true, "roots": mounts, "read_only": readonly, "music_policy": policy, "environment": environment})
 	if e = os.WriteFile(request, b, 0600); e != nil {
 		return e
 	}
@@ -138,12 +142,25 @@ func runWindowsRequest(ctx context.Context, cfg Config, id, path, command string
 	cmd := exec.CommandContext(context.Background(), w.Pythonw, helperWin, requestWin)
 	configureProcess(cmd)
 	if e = cmd.Start(); e != nil {
-		return fmt.Errorf("Windows隐藏执行器启动失败，请核对pythonw.exe及WSL互操作：%w", e)
+		return fmt.Errorf("Windows隐藏执行器启动失败，请核对受管pythonw.exe和本机执行环境：%w", e)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	resultFile := filepath.Join(dir, "result.json")
 	outputFile := filepath.Join(dir, "output.log")
+	// Only the trusted music caller can request a bounded private copy of the
+	// child's stderr. Generic Agent output never receives runtime diagnostics.
+	readDiagnostic := func() {
+		if diagnostic == nil {
+			return
+		}
+		f, e := os.Open(filepath.Join(dir, "stderr.log"))
+		if e != nil {
+			return
+		}
+		defer f.Close()
+		_, _ = io.CopyN(diagnostic, f, 64<<10)
+	}
 	var offset int64
 	readOutput := func() {
 		f, e := os.Open(outputFile)
@@ -168,6 +185,7 @@ func runWindowsRequest(ctx context.Context, cfg Config, id, path, command string
 			// The child can flush its last bytes between the first read and
 			// publication of result.json. Do not lose a structured response tail.
 			readOutput()
+			readDiagnostic()
 			var result struct {
 				ExitCode int    `json:"exit_code"`
 				Error    string `json:"error"`

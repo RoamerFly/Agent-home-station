@@ -37,6 +37,16 @@ func (n *friendReminderNative) Submit(_ context.Context, r linuxnative.ToolSend)
 func (n *friendReminderNative) ToolSendStatus(context.Context, string) (linuxnative.ToolStatus, error) {
 	return n.status, nil
 }
+func (n *friendReminderNative) LookupSend(_ context.Context, key string) (linuxnative.ToolStatus, error) {
+	for _, request := range n.requests {
+		if request.IdempotencyKey == key {
+			out := n.status
+			out.ThreadID = request.ThreadID
+			return out, nil
+		}
+	}
+	return linuxnative.ToolStatus{}, linuxnative.ErrToolNotFound
+}
 func memberReminder(t *testing.T) (*webFixture, *permittedTools, *friendReminderNative) {
 	t.Helper()
 	f, p := trustedAgent(t)
@@ -45,6 +55,7 @@ func memberReminder(t *testing.T) (*webFixture, *permittedTools, *friendReminder
 	f.manager.mu.Lock()
 	f.manager.config.Enabled = true
 	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.Permissions.Remember = true
 	f.manager.config.PrivateAllFriends = true
 	f.manager.config.Behavior.DelayMinSeconds = 1
 	f.manager.config.Behavior.DelayMaxSeconds = 1
@@ -54,6 +65,16 @@ func memberReminder(t *testing.T) (*webFixture, *permittedTools, *friendReminder
 	f.manager.config.GroupRules = []GroupRule{{ID: "room@chatroom", Mode: "social"}}
 	f.manager.mu.Unlock()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "wxid_member", TraceID: "synthetic-reminder", Mode: "direct", IsGroup: true})
+	p.trace.Text = "请提醒喝水"
+	p.trace.Source = &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: p.trace.TraceID, ServerID: "reminder-source", Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano), Revision: 1, Integrity: "verified"}
+	if err := f.manager.memory.Observe(p.trace, f.manager.Config().Companion, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if source, ok := f.manager.memory.SourceForInput(p.trace); ok {
+		p.trace.Source = source
+	} else {
+		t.Fatal("synthetic reminder source missing")
+	}
 	return f, p, n
 }
 func createReminder(t *testing.T, p *permittedTools, delay int64) agentTask {

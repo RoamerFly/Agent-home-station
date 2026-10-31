@@ -34,10 +34,18 @@ func assetOriginTime(asset mediaAsset) (time.Time, string, *assetRequest) {
 }
 
 func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemorySearch) (string, error) {
+	queryAuthorization := p.memoryQueryAuthorization()
+	if queryAuthorization == "" {
+		return "", toolInputError("memory permission unavailable")
+	}
 	if !p.privileged() || !p.manager.agent.config().CrossConversation {
 		return "", toolInputError("只有当前账号可信管理员可检索全局会话")
 	}
 	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	queryEpoch, err := p.manager.memory.DataEpoch(ctx)
+	if err != nil {
 		return "", err
 	}
 	if in.Since != "" && in.Before != "" {
@@ -84,6 +92,5 @@ func (p *permittedTools) searchAccountMemory(ctx context.Context, in accountMemo
 	if in.Since != "" || in.Before != "" {
 		value["time_window"] = map[string]string{"since_inclusive": in.Since, "before_exclusive": in.Before}
 	}
-	b, err = json.Marshal(value)
-	return string(b), err
+	return p.stampMemoryQuery(ctx, queryEpoch, queryAuthorization, value)
 }

@@ -135,8 +135,13 @@ func (w *Worker) processUnreadConversation(ctx context.Context, thread string) e
 		working := m
 		isMedia := m.Type == 3 || m.Type == 34 || m.Type == 43 || m.Type == 47 || m.Type == 49 && !m.IsQuotedText()
 		body := messageSummary(m)
+		original := ""
+		if m.Type == 1 {
+			original = m.Body
+		}
 		if m.IsQuotedText() {
-			body = m.Body + w.readQuoteContext(ctx, &m)
+			original = quotedPlainBody(m).Body
+			body = original + w.readQuoteContext(ctx, &m)
 			working.Type = 1
 			working.Body = body
 		}
@@ -154,15 +159,16 @@ func (w *Worker) processUnreadConversation(ctx context.Context, thread string) e
 			copy := m
 			anchor = &copy
 		}
-		unread = append(unread, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: body, At: m.CreatedAt, NewRequest: eligible})
 		allIDs = append(allIDs, m.ID)
 		if isMedia && eligible && w.observationAllowed(m) && w.config.Analyzer != nil {
 			mediaIDs = append(mediaIDs, m.ID)
 		}
-		observed := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: m.SenderID, TraceID: m.ID, Text: body, MessageTime: m.CreatedAt}
+		observed := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: m.SenderID, TraceID: m.ID, Text: body, MessageTime: m.CreatedAt, OriginalText: &original}
+		bindInputSource(&observed, m, c)
 		if err = c.Store.Observe(observed, c.Config, now); err != nil {
 			return err
 		}
+		unread = append(unread, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: body, At: m.CreatedAt, NewRequest: eligible, Source: observed.Source, ReplyTo: observed.QuotedSource})
 	}
 	if anchor == nil {
 		for _, id := range allIDs {

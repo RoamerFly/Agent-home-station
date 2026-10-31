@@ -37,13 +37,15 @@ func (m *Manager) startMemoryRebuild(id string) error {
 	go func() {
 		defer m.memoryRunnerWG.Done()
 		defer func() { cancel(); m.memoryRunnerMu.Lock(); delete(m.memoryRunners, id); m.memoryRunnerMu.Unlock() }()
-		c := m.Config().Config
+		// Config() is the public, redacted view. Internal provider calls must
+		// retain the stored credential without exposing it to the UI.
+		c := m.runtimeConfig()
 		provider, e := m.makeModel(c)
 		if e != nil {
 			m.memory.MemoryError(ctx, id, e)
 			return
 		}
-		engine, e := companion.New(c.Companion, m.memory, provider, c.SystemPrompt)
+		engine, e := companion.New(c.sharedCompanion(), m.memory, provider, c.SystemPrompt)
 		if e != nil {
 			m.memory.MemoryError(ctx, id, e)
 			return

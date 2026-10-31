@@ -26,11 +26,11 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 	scope := p.processScope()
 	cfg, configErr := p.scopedHostConfig(raw)
 	if configErr != nil {
-		return "", configErr
+		return "", &RuntimeFailure{Code: "execution_scope_unavailable", Stage: "scope", Message: "程序未启动：当前请求的执行范围不可用", NotStarted: true, EffectiveScope: scope, Continuation: "核对当前账号、会话及global授权后再调用server_status"}
 	}
 	cfg.Isolation.GPU = in.GPU
 	if !p.workspaceExecutionAllowed() || cfg.Mode != "full" {
-		return "", errors.New("后台程序执行未授权")
+		return "", &RuntimeFailure{Code: "execution_permission_denied", Stage: "authorization", Message: "后台程序执行未授权", NotStarted: true, EffectiveScope: scope, Continuation: "核对当前真实请求者和执行权限；不得重用其他账号或会话的授权"}
 	}
 	var value any
 	var e error
@@ -50,10 +50,17 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 			toolName = "server_windows_process"
 		}
 		run := func() (any, error) {
+			var value any
+			var startErr error
 			if windows {
-				return p.manager.processes.StartWindows(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
+				value, startErr = p.manager.processes.StartWindows(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
+			} else {
+				value, startErr = p.manager.processes.Start(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
 			}
-			return p.manager.processes.Start(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
+			if startErr != nil {
+				return nil, processAdmissionFailure(startErr.Error(), scope)
+			}
+			return value, nil
 		}
 		var result string
 		var err error
@@ -74,7 +81,7 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 			Reason string `json:"reason"`
 		}
 		if json.Unmarshal([]byte(result), &process) == nil && process.State == "rejected" {
-			return "", toolInputError("程序未启动：" + process.Reason + "；更正后可再次尝试")
+			return "", processAdmissionFailure(process.Reason, scope)
 		}
 		if json.Unmarshal([]byte(result), &process) != nil || process.ID == "" {
 			return result, nil
@@ -94,6 +101,7 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 				origin = p.trace.TraceID
 			}
 			task := agentTask{OwnerRequested: p.privileged(), ParentID: p.trace.TaskID, ID: taskID, ProcessID: process.ID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "后台程序", RequestedText: request, Checkpoint: "等待真实程序结果，使用原进程编号查询，不重新运行命令", State: "waiting", Next: time.Now().Add(2 * time.Second), OriginTrace: origin, QuoteServerID: p.trace.QuoteServerID}
+			task.Constraints = p.taskConstraints("process", "", "", "")
 			if task.ParentID != "" {
 				task.RequestedText = ""
 				task.Goal = "读取该程序真实结果并通知父任务；不是重新执行原始用户请求"

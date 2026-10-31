@@ -3,6 +3,9 @@ Run with --project <YuE app> --state <private directory> --token-file <file>.
 The bridge persists jobs and frozen YuE checkpoints. Recovery keeps the original
 job ID; recreating a missing backend prompt requires an explicit choice.
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from process_window import no_console_options
 import argparse, base64, concurrent.futures, copy, hashlib, hmac, json, math, os, re, secrets, threading, time, urllib.request, urllib.error, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

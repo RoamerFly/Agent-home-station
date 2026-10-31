@@ -78,10 +78,11 @@ func (s *Server) memoryRoutes(mux *http.ServeMux) {
 			return
 		}
 		var in struct {
-			Action  string                   `json:"action"`
-			Version int                      `json:"expected_revision"`
-			Detail  string                   `json:"detail"`
-			Sources []companion.MemorySource `json:"sources"`
+			Action     string                      `json:"action"`
+			Version    int                         `json:"expected_revision"`
+			Detail     string                      `json:"detail"`
+			Assertions []companion.MemoryAssertion `json:"assertions"`
+			Sources    []companion.MemorySource    `json:"sources"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -106,6 +107,7 @@ func (s *Server) memoryRoutes(mux *http.ServeMux) {
 			m.Detail = in.Detail
 			m.Summary = in.Detail
 			m.Sources = in.Sources
+			m.Assertions = in.Assertions
 		default:
 			fail(w, 400, "未知记忆操作")
 			return

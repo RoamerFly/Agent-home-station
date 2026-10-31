@@ -112,6 +112,7 @@ func TestGeneratedVoiceOnlyAndUnknownNotRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "sing", Mode: "direct"}
+	input = observeSyntheticMediaRequest(t, worker, engine, input)
 	worker.respondCharacter(context.Background(), engine, input)
 	if sender.media != 1 || sender.calls != 0 {
 		t.Fatal("unexpected media sends", sender.media, sender.calls)
@@ -161,12 +162,13 @@ func TestCharacterImageUnknownIsNotRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker.respondCharacter(context.Background(), engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "image", Mode: "direct"})
+	input := observeSyntheticMediaRequest(t, worker, engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "image", Mode: "direct"})
+	worker.respondCharacter(context.Background(), engine, input)
 	if sender.images != 1 || sender.calls != 0 {
 		t.Fatal("image-only action resent or sent extra text", sender.images, sender.calls)
 	}
 	engine.Config.Permissions.SendImage = false
-	worker.respondCharacter(context.Background(), engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "image", Mode: "direct"})
+	worker.respondCharacter(context.Background(), engine, input)
 	if sender.images != 1 {
 		t.Fatal("revoked image permission ignored")
 	}

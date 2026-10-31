@@ -53,3 +53,5 @@ accounts.json
 # Managed agent inputs, account data, models and runtime copies.
 pri_workspace/
 public_workspace/
+# Local cleanup quarantine, pending manual deletion.
+/待删除-*/

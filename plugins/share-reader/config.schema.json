@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "yuanbao_cookie": {
+      "type": "string",
+      "title": "元宝视频号解析凭据",
+      "x-secret": true,
+      "x-host-only": true,
+      "maxLength": 16384,
+      "description": "仅宿主持有，发送到清单中指定的对应平台接口；不交给插件进程。"
+    },
+    "assistant_cookie": {
+      "type": "string",
+      "title": "视频号助手凭据",
+      "x-secret": true,
+      "x-host-only": true,
+      "maxLength": 16384,
+      "description": "仅宿主持有，发送到清单中指定的对应平台接口；不交给插件进程。"
+    }
+  },
+  "additionalProperties": false
+}

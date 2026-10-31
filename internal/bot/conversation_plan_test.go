@@ -49,9 +49,19 @@ func planWorker(t *testing.T, model *planReviewModel) (*Worker, *companion.Engin
 		t.Fatal(err)
 	}
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "original", Sender: "one", Text: "聊一聊", Mode: "direct", Directed: true, QuoteServerID: "77"}
+	original := fixtureMessage(in.TraceID, in.Thread, in.Text, "incoming")
+	original.SenderID, original.ServerID = in.Sender, in.QuoteServerID
+	in.MessageTime = original.CreatedAt
+	in.OriginalText = &original.Body
+	bindInputSource(&in, original, engine)
 	if err = store.Observe(in, c, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	r, err := engine.BindReplyEvidence(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.ReplyContext = &r
 	return w, engine, n, in
 }
 func readyPlans(w *Worker) {
@@ -134,7 +144,7 @@ func TestSleepingPlanDoesNotBlockAnotherConversationAndCancelDoesNotCancelMedia(
 	other := in
 	other.Thread = "friend"
 	other.TraceID = "friend-request"
-	_ = c.Store.Observe(other, c.Config, time.Now())
+	other = observeSyntheticMediaRequest(t, w, c, other)
 	w.queueUtterancePlan(c, other, companion.Decision{Messages: []string{"另一个会话的回复"}})
 	w.runtime.Plans[1].InboxChecked = true
 	w.reconcileUtterancePlans(context.Background())
@@ -165,6 +175,7 @@ func TestShortMessageAggregationPreservesEachIdentityAndDoesNotMixSpeakers(t *te
 	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "original", current.ThreadID, "incoming", "remote"), Phase: "processing"}, {Event: fixtureEvent("2", "peer", current.ThreadID, "incoming", "remote"), Phase: "received"}, {Event: fixtureEvent("3", "other", current.ThreadID, "incoming", "remote"), Phase: "received"}}
 	in.Thread = current.ThreadID
 	in.Text = current.Body
+	in.Source, in.OriginalText, in.MessageTime = nil, nil, current.CreatedAt
 	w.aggregateConversation(context.Background(), c, current, &in)
 	if !strings.Contains(in.Text, "再解释这个词") || w.runtime.Inbox[1].Phase != "aggregated" || w.runtime.Inbox[2].Phase != "received" {
 		t.Fatal("aggregation dropped or mixed messages", in.Text, w.runtime.Inbox)

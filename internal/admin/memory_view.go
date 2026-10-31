@@ -27,6 +27,7 @@ func memoryDetailView(scope companion.Scope) map[string]any {
 	return map[string]any{
 		"id": scope.ID, "channel": scope.Channel, "thread": scope.Thread,
 		"messages": newestMemory(scope.Messages[folded:]), "notes": scope.Notes,
+		"preferences": scope.Preferences, "preferences_revision": scope.PreferencesRevision,
 		"summary": scope.Summary, "summary_updated": scope.SummaryUpdated,
 		"compressed_count": scope.CompressedCount, "history_count": folded,
 		"retained_context_count": max(0, folded-scope.CompressedCount),

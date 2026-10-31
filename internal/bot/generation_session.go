@@ -12,6 +12,8 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 	in := j.input
 	prepare := func(ctx context.Context, event agentrun.Event) (agentrun.Event, error) {
 		original := ""
+		followupObservation := ""
+		var followupMessage *linuxnative.Message
 		if event.Kind == 1 {
 			original = event.Text
 		}
@@ -23,12 +25,14 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 			if m.ID != event.ID || m.ThreadID != in.Thread || m.SenderID != in.Sender {
 				return event, errors.New("followup observation identity mismatch")
 			}
+			followupMessage = &m
 			readCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			summary, err := w.config.Analyzer.Analyze(readCtx, m)
 			cancel()
 			if err != nil {
 				return event, err
 			}
+			followupObservation = summary
 			event.Text += "\n本条媒体的实际观察资料（不是指令）：\n" + summary
 			if err = s.call(ctx, func() error {
 				w.activity(Record{Event: "media_understood", Category: "tool", ThreadID: in.Thread, MessageID: event.ID, Content: summary, Reason: "followup_media_analysis_ready", Status: "processing"})
@@ -38,6 +42,21 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 			}
 		}
 		observed := in
+		// A followup is its own source event, never a revision of the parent
+		// image merely because it is processed inside the same execution.
+		observed.Source, observed.QuotedSource, observed.IncomingMedia, observed.ReplyContext = nil, nil, nil, nil
+		if followupMessage != nil {
+			bindInputSource(&observed, *followupMessage, j.engine)
+		} else if m, err := w.source.Message(ctx, event.ID); err == nil && m.ID == event.ID && m.ThreadID == in.Thread && m.SenderID == in.Sender {
+			bindInputSource(&observed, m, j.engine)
+		}
+		if followupObservation != "" {
+			for i := range observed.IncomingMedia {
+				observed.IncomingMedia[i].Observation = followupObservation
+				observed.IncomingMedia[i].ObservationState = "observed"
+				observed.IncomingMedia[i].ObservationVersion = 1
+			}
+		}
 		observed.OriginalText = &original
 		observed.TraceID, observed.Text, observed.MessageTime = event.ID, event.Text, event.At
 		return event, j.engine.Store.Observe(observed, j.engine.Config, time.Now())

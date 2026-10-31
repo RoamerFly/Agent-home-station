@@ -48,6 +48,10 @@ func TestConsoleCrossMediaRequiresAuthenticatedExplicitAuthorizedRoute(t *testin
 	if len(seeds) != 1 || seeds[0].Input.Thread != input["target_thread_id"] || n.submits.Load() != 0 {
 		t.Fatal("wrong route or immediate submission", seeds)
 	}
+	origin := seeds[0].OriginInput
+	if origin == nil || origin.Mode != "admin_action" || origin.Source != nil || origin.OriginTraceID == "" || origin.ReplyContext == nil || origin.ReplyContext.State != "system_context" || origin.ReplyContext.EvidenceEpoch == "" || origin.ReplyContext.EvidenceAuthorization == "" {
+		t.Fatal("authenticated action was forged as a chat or lacked durable proof", origin)
+	}
 	if code, _, _ = f.request("POST", route, input, true, true); code != 202 || n.downloads != 1 || n.submits.Load() != 0 {
 		t.Fatal("duplicate invocation replayed", code, n.downloads)
 	}

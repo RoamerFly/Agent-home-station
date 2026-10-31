@@ -159,6 +159,8 @@ func (w *Worker) loadRuntime(server string) error {
 		if media == nil {
 			return errors.New("persistent media invalid")
 		}
+		media.Input.TraceID = media.Trace
+		restoreOriginInputTrace(media.OriginInput)
 		if awaitingMediaReceipt(media) && media.ReconcileAfter.IsZero() && media.Next.After(time.Now()) {
 			// Legacy queues used one deadline for both reads and writes. Keep
 			// their retry backoff, but discover late receipts immediately.

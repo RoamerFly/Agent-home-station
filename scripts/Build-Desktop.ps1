@@ -1,6 +1,16 @@
-﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [string]$NativeSourceDirectory, [string]$MediaDirectory)
+﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
+# Keep project-local SDK/model caches outside `go test ./...` discovery.
+# Nested build snapshots retain their own go.mod; never replace an existing one.
+foreach($artifactName in @('temp','dist')){
+ $artifactDirectory=Join-Path $workspace $artifactName
+ New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
+ $boundary=Join-Path $artifactDirectory 'go.mod'
+ if(-not(Test-Path -LiteralPath $boundary)){
+  [IO.File]::WriteAllText($boundary,("module local.invalid/wechat-agent-"+$artifactName+"`n`ngo 1.25.3`n"),[Text.Encoding]::ASCII)
+ }
+}
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace 'dist\windows-desktop'}
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 $version='1.0.3537.50'
@@ -20,27 +30,51 @@ $core=Join-Path $cache 'lib\net462\Microsoft.Web.WebView2.Core.dll'
 $forms=Join-Path $cache 'lib\net462\Microsoft.Web.WebView2.WinForms.dll'
 $loader=Join-Path $cache 'runtimes\win-x64\native\WebView2Loader.dll'
 $target=Join-Path $OutputDirectory 'WechatAgent.exe'
-$arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+','/utf8output',('/out:'+$target),('/win32manifest:'+(Join-Path $source 'app.manifest')),'/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll','/reference:System.Net.Http.dll','/reference:System.Web.Extensions.dll',('/reference:'+$core),('/reference:'+$forms),('/resource:'+$core+',Microsoft.Web.WebView2.Core.dll'),('/resource:'+$forms+',Microsoft.Web.WebView2.WinForms.dll'),('/resource:'+$loader+',WebView2Loader.dll'),(Join-Path $source 'Deployment.cs'),(Join-Path $source 'WindowsRuntime.cs'),(Join-Path $source 'CloseSettings.cs'),(Join-Path $source 'CloseChoiceDialog.cs'),(Join-Path $source 'Program.cs'),(Join-Path $source 'MainForm.cs'))
+$arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+','/utf8output',('/out:'+$target),('/win32manifest:'+(Join-Path $source 'app.manifest')),'/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll','/reference:System.Net.Http.dll','/reference:System.Web.Extensions.dll',('/reference:'+$core),('/reference:'+$forms),('/resource:'+$core+',Microsoft.Web.WebView2.Core.dll'),('/resource:'+$forms+',Microsoft.Web.WebView2.WinForms.dll'),('/resource:'+$loader+',WebView2Loader.dll'),(Join-Path $source 'Deployment.cs'),(Join-Path $source 'WindowsRuntime.cs'),(Join-Path $source 'CloseSettings.cs'),(Join-Path $source 'CloseChoiceDialog.cs'),(Join-Path $source 'DesktopInstance.cs'),(Join-Path $source 'Program.cs'),(Join-Path $source 'MainForm.cs'))
+$icon=Join-Path $source 'assets\agent-chat-plugins.ico'
+$arguments+=(Join-Path $source 'LifecycleSurface.cs')
+if(-not(Test-Path -LiteralPath $icon)){throw 'The project desktop icon is missing.'}
+$arguments+=('/win32icon:'+$icon)
 & $compiler @arguments
 if($LASTEXITCODE -ne 0){throw 'Desktop build failed.'}
 Copy-Item -LiteralPath (Join-Path $cache 'LICENSE.txt') -Destination (Join-Path $OutputDirectory 'WebView2-LICENSE.txt')
 if($Test){
  $tests=Join-Path $OutputDirectory 'DesktopTests.exe'
- & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'CloseSettings.cs') (Join-Path $source 'ControllerTests.cs')
+ & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'CloseSettings.cs') (Join-Path $source 'DesktopInstance.cs') (Join-Path $source 'ControllerTests.cs')
  if($LASTEXITCODE -ne 0){throw 'Desktop tests did not compile.'}
  & $tests
  if($LASTEXITCODE -ne 0){throw 'Desktop controller tests failed.'}
+ $windowTests=Join-Path $OutputDirectory 'DesktopWindowTests.exe'
+ $windowArguments=@('/target:exe','/main:WechatAgent.Desktop.WindowTests',('/out:'+$windowTests))
+ $windowArguments+=@($arguments | Where-Object {$_ -notlike '/target:*' -and $_ -notlike '/out:*'})
+ $windowArguments+=@((Join-Path $source 'ControllerTests.cs'),(Join-Path $source 'WindowTests.cs'))
+ & $compiler @windowArguments
+ if($LASTEXITCODE -ne 0){throw 'Desktop window tests did not compile.'}
+ $windowRunner=Join-Path $OutputDirectory 'DesktopWindowTestRunner.exe'
+ & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$windowRunner) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'WindowTestRunner.cs')
+ if($LASTEXITCODE -ne 0){throw 'Isolated window test runner did not compile.'}
+ & $windowRunner $windowTests
+ if($LASTEXITCODE -ne 0){throw 'Desktop window lifecycle tests failed.'}
 }
 if($Portable){
  & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') -OutputDirectory (Join-Path $OutputDirectory 'runtimes') -MediaDirectory $MediaDirectory
  $nativeArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes\windows-x64')}
  if($NativeSourceDirectory){$nativeArgs.SourceDirectory=$NativeSourceDirectory}
  if($Test){$nativeArgs.Test=$true}
+ if($GoSourcePatch){$nativeArgs.GoSourcePatch=$GoSourcePatch}
  & (Join-Path $PSScriptRoot 'Build-WindowsNative.ps1') @nativeArgs
  if($LASTEXITCODE -ne 0){throw 'Windows native build failed.'}
  $broker=Join-Path $OutputDirectory 'runtimes\windows-agent-host'
  New-Item -ItemType Directory -Force -Path $broker | Out-Null
- foreach($name in @('windows_agent_host.pyw','windows_lpac.py')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
+ foreach($name in @('windows_agent_host.pyw','windows_plugin_host.pyw','windows_lpac.py')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
+ $music=Join-Path $OutputDirectory 'runtimes\windows-music'
+ New-Item -ItemType Directory -Force -Path $music | Out-Null
+ Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.py' | Where-Object {$_.Name -notlike 'test_*'} | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $music}
+ foreach($name in @('gpt_sovits_windows_requirements.txt','rvc_training_requirements.txt')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $music}
+ Copy-Item -LiteralPath (Join-Path $workspace 'components\yue2\app\workflows_api') -Destination (Join-Path $music 'workflows') -Recurse -Force
+ $musicFiles=@{}
+ Get-ChildItem -LiteralPath $music -Recurse -File | Where-Object Name -ne 'runtime-manifest.json' | ForEach-Object {$musicFiles[$_.FullName.Substring($music.Length+1)]=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower()}
+ [IO.File]::WriteAllText((Join-Path $music 'runtime-manifest.json'),(@{schema_version=1;platform='windows-x64';policy='registry-read-private-network-v1';files=$musicFiles}|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
  Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory '使用说明.txt')
 }
 Get-Item -LiteralPath $target | Select-Object FullName,Length

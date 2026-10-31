@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+var ErrDeliveryMemoryConflict = errors.New("delivery memory content mismatch")
+
 // AcceptedDelivery is for explicitly keyed manual replies. Polling a receipt
 // after a restart can recover memory without appending the same reply twice.
 func (s *Store) AcceptedDelivery(input Input, text, key string, c Config, now time.Time) error {
@@ -21,12 +23,12 @@ func (s *Store) AcceptedDelivery(input Input, text, key string, c Config, now ti
 		for _, turn := range scope.Messages {
 			if turn.Role == "assistant" && turn.TraceID == key {
 				if turn.Text != boundedText(text, 2048) {
-					return errors.New("delivery memory content mismatch")
+					return ErrDeliveryMemoryConflict
 				}
 				return nil
 			}
 		}
-		scope.Messages = append(scope.Messages, Turn{TraceID: key, Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
+		scope.Messages = append(scope.Messages, Turn{ReplyContext: cloneReplyContext(input.ReplyContext), TraceID: key, Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
 		scope.LastInteraction = now
 		recordAutonomyAccepted(&scope, input, c, now)
 		clean, err := s.pruneStored(scope, c, now)
@@ -58,9 +60,20 @@ func (s *Store) UpdateObservation(scopeID, trace, before, after string) (bool, e
 			turn := &scope.Messages[i]
 			if turn.Role == "user" && turn.TraceID == trace && turn.Text == before {
 				turn.Text = boundedInputMemory(after)
-				turn.FullText = UserRequestText(after)
-				turn.HasOriginal = true
-				turn.FullObservation = strings.TrimPrefix(after, UserRequestText(after))
+				if turn.Source != nil && turn.HasOriginal {
+					// A refreshed model observation cannot rewrite the user's
+					// original body or promote a vision summary to user speech.
+					turn.FullObservation = after
+					for j := range turn.IncomingMedia {
+						turn.IncomingMedia[j].Observation = after
+						turn.IncomingMedia[j].ObservationVersion++
+						turn.IncomingMedia[j].ObservationState = "observed"
+					}
+				} else {
+					turn.FullText = UserRequestText(after)
+					turn.HasOriginal = true
+					turn.FullObservation = strings.TrimPrefix(after, UserRequestText(after))
+				}
 				data.Scopes[scopeID] = scope
 				changed = true
 				break

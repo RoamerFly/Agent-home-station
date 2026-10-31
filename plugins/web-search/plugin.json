@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "web-search",
+  "name": "联网检索",
+  "version": "0.2.0",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": [
+    "windows-amd64",
+    "linux-amd64"
+  ],
+  "runtime": {
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
+  },
+  "permissions": [
+    "network"
+  ],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "7222c56292873ae4e1f70efbbe6ee6d574edda97db652b10bfc076e1c3f65d63",
+    "CHANGELOG.md": "0a56920d07bdc1f0d2f6b0279ffe1eaa414ea9c71addbf97d355fa6b6a41ae28",
+    "config.schema.json": "8ff0210883a0307ef02e1cef1abe61a80c240f0448755e78559ecfb382e37a6d",
+    "MIGRATION.md": "1d1baa8217c15973ca1b8b85d44e9434cfe656a6e5f6c87d005f0174eee897bc",
+    "PERMISSIONS.md": "ade70a1ac009e538895bbb0fd278547ec21cf3f012a578617be866824e5865ed",
+    "README.md": "87eea10fe3c6fe6b58ed1edb65625421a6f6686d5734906359a0e5f839a1fc1e",
+    "runtime/main.py": "ca27656540a44843cd44cb92c91e8db37c05d5605ec88be230fdc3b242891cf3",
+    "runtime/README.md": "83e3d5ff78e807958c88d37a8991a8a80d0c08cfa175d63cfc3e7666e07ca822",
+    "tests/fixtures/scope.json": "6c11e95a6d41553f04b14b69e66426f51e35ab56623f9b22e58c10c83c2e2b10",
+    "tests/test_runtime.py": "d903ab63f435a8fcbb16b5901faad9ee6715cffbecab83c9a7c01d15b8831b77",
+    "ui.schema.json": "d2df68da051917e4ba8b891c69d93b6d2e2b626675a506192bfd3bdf015c612d"
+  }
+}

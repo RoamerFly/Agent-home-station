@@ -76,7 +76,24 @@
           if (!['accepted', 'observed'].includes(round.sent[previous].status) || ['accepted', 'observed'].includes(item.status)) round.sent[previous] = item;
         } else round.sent.push(item);
       }
-      if (['unknown', 'needs_review', 'waiting', 'retrying'].includes(item.status) && stage(item) === 'delivery') round.status = 'waiting';
+      if (['generation_started', 'message_processing'].includes(item.event)) round.failureReported = false;
+      if (item.reason === 'operation_reported_privately') {
+        // Historical logs used status=silent here. The separate private error
+        // report's receipt also uses the original ID; neither completes its task.
+        round.failureReported = true;
+        round.status = 'failed';
+      }
+      else if (item.event === 'task_delivery_updated' && round.failureReported) round.status = 'failed';
+      else if (item.event === 'task_delivery_updated') {
+        // A final task receipt is authoritative for this round. A previously
+        // accepted progress text never proves that a requested attachment
+        // was made; use the task's persisted outcome instead.
+        if (item.status === 'completed') round.status = 'completed';
+        else if (['failed', 'cancelled'].includes(item.status)) round.status = item.status === 'cancelled' ? 'stopped' : 'failed';
+        else if (['waiting', 'waiting_delivery', 'needs_review'].includes(item.status)) round.status = 'waiting';
+        else if (item.status === 'running') round.status = 'running';
+      }
+      else if (['unknown', 'needs_review', 'waiting', 'retrying'].includes(item.status) && stage(item) === 'delivery') round.status = 'waiting';
       else if (['accepted', 'observed'].includes(item.status) && stage(item) === 'delivery') round.status = item.event === 'message_progress' ? 'running' : 'accepted';
       else if (item.category === 'error' && !item.tool) round.status = ['queued', 'processing', 'running'].includes(item.status) ? 'running' : 'failed';
       else if (item.event === 'message_processed' && !['accepted', 'waiting', 'failed', 'silent', 'stopped'].includes(round.status)) round.status = 'completed';

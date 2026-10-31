@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "speech",
+  "name": "语音生成",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "status": "migration-pending",
+  "platforms": [
+    "windows-amd64",
+    "linux-amd64"
+  ],
+  "runtime": {
+    "transport": "unbound"
+  },
+  "permissions": [
+    "artifact.read",
+    "artifact.write",
+    "network",
+    "gpu",
+    "model.invoke"
+  ],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "b09fec5fd9445ce1335e477a300c256a72f78c5ee2eac4069149d4c506581b31",
+    "CHANGELOG.md": "88459301401ae87baf3a87c8a2b94799ca5dc7cca074b2ecb5eb7dcf3410c0e4",
+    "config.schema.json": "84e3460e30802d08fca68587d507eaafe4105759c5c5916c7344446ff461e6c5",
+    "MIGRATION.md": "32b2ffc01e750640f05d38550888222b9085a9677dfdb6f1274104301ca75bbb",
+    "PERMISSIONS.md": "7f2c41c8cc9484d370414155df342085fe436b519ed591111ae69e6391665016",
+    "README.md": "56ab6528505136ccd9f030d1932d6cd0e9f547a7b652717fb9ddd6519a575246",
+    "runtime/README.md": "ddd7cd15111d7a238db17418b1b39c62d083aca10afd39632ca2814a59b61f9e",
+    "tests/fixtures/scope.json": "6c11e95a6d41553f04b14b69e66426f51e35ab56623f9b22e58c10c83c2e2b10",
+    "ui.schema.json": "d2df68da051917e4ba8b891c69d93b6d2e2b626675a506192bfd3bdf015c612d"
+  }
+}

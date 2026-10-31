@@ -35,6 +35,8 @@ type Config struct {
 	Prefix            string           `json:"prefix"`
 	MaxAgeSeconds     int              `json:"max_age_seconds"`
 	MaxTokens         int              `json:"max_tokens"`
+	ThinkingEnabled   bool             `json:"thinking_enabled"`
+	ReasoningEffort   string           `json:"reasoning_effort"`
 	Enabled           bool             `json:"enabled"`
 	PrivateEnabled    bool             `json:"private_enabled"`
 	FilehelperEnabled bool             `json:"filehelper_enabled"`
@@ -54,7 +56,7 @@ type ConfigView struct {
 }
 
 func defaults() Config {
-	return Config{Behavior: bot.DefaultOptions(), Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", SystemPrompt: deepseek.DefaultSystemPrompt, Prefix: "/ai ", MaxAgeSeconds: 120, MaxTokens: 768, FilehelperEnabled: true, DirectIDs: []string{}, GroupRules: []GroupRule{}, Companion: companion.Defaults()}
+	return Config{Behavior: bot.DefaultOptions(), Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", SystemPrompt: deepseek.DefaultSystemPrompt, Prefix: "/ai ", MaxAgeSeconds: 120, MaxTokens: 4096, ThinkingEnabled: false, ReasoningEffort: "low", FilehelperEnabled: true, DirectIDs: []string{}, GroupRules: []GroupRule{}, Companion: companion.Defaults()}
 }
 func (c Config) view() ConfigView {
 	present := c.APIKey != ""
@@ -97,8 +99,11 @@ func validate(c Config) error {
 	if strings.TrimSpace(c.Prefix) == "" || len(c.Prefix) > 64 || !utf8.ValidString(c.Prefix) || strings.ContainsAny(c.Prefix, "\r\n\x00") {
 		return errors.New("私聊触发前缀需要为 1 至 64 字节的单行文字")
 	}
-	if c.MaxAgeSeconds < 30 || c.MaxAgeSeconds > 3600 || c.MaxTokens < 64 || c.MaxTokens > 4096 {
+	if c.MaxAgeSeconds < 30 || c.MaxAgeSeconds > 3600 || c.MaxTokens < 64 || c.MaxTokens > 393216 {
 		return errors.New("请检查消息有效期或输出 Token 上限")
+	}
+	if c.ReasoningEffort != "" && c.ReasoningEffort != "low" && c.ReasoningEffort != "high" && c.ReasoningEffort != "max" {
+		return errors.New("请选择 low、high 或 max 思考强度")
 	}
 	if c.APIKey != "" && (len(c.APIKey) < 16 || len(c.APIKey) > 4096 || !utf8.ValidString(c.APIKey) || strings.ContainsAny(c.APIKey, " \r\n\t\x00")) {
 		return errors.New("API Key 格式无效，请只填入密钥本身")
@@ -218,4 +223,18 @@ func loadConfig(dir string) (Config, error) {
 		return Config{}, errors.New("管理配置无效，已停止自动启动")
 	}
 	return c, nil
+}
+
+// Review inherits the same model and thinking strength as ordinary conversation.
+func (c Config) sharedCompanion() companion.Config {
+	out := c.Companion
+	settings := out.GroundingConfig()
+	settings.Model = c.Model
+	settings.MaxTokens = c.MaxTokens
+	settings.ReasoningEffort = c.ReasoningEffort
+	if settings.ReasoningEffort == "" {
+		settings.ReasoningEffort = "low"
+	}
+	out.Grounding = &settings
+	return out
 }

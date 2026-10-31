@@ -33,7 +33,7 @@ func TestLiveHiddenWindowsTool(t *testing.T) {
 	if e = f.manager.agent.save(c); e != nil {
 		t.Fatal(e)
 	}
-	args, _ := json.Marshal(map[string]any{"action": "start", "path": `E:\A-Importance\wechat-bot`, "command": "[Console]::WriteLine('隐藏通道 $literal 中文'); exit 7", "request_key": "hidden-real-test", "timeout_seconds": 15})
+	args, _ := json.Marshal(map[string]any{"action": "start", "path": p.executionContext().Conversation, "command": "echo 隐藏通道 中文 & exit /b 7", "request_key": "hidden-real-test", "timeout_seconds": 15})
 	result, e := p.Call(t.Context(), "server_windows_process", args)
 	if e != nil {
 		t.Fatal(e)
@@ -58,7 +58,7 @@ func TestLiveHiddenWindowsTool(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if job.State != "failed" || job.ExitCode != 7 || !strings.Contains(job.Output, "隐藏通道 $literal 中文") {
+	if job.State != "failed" || job.ExitCode != 7 || !strings.Contains(job.Output, "隐藏通道 中文") {
 		t.Fatal(job)
 	}
 	same, e := p.Call(t.Context(), "server_windows_process", args)

@@ -51,7 +51,7 @@ func TestProgressFollowsModelChoicePrecedesToolAndNeverLeaksIntoPreview(t *testi
 		e.Tools = tools
 		e.MaxToolCalls = 2
 		ctx := WithProgress(context.Background(), func(context.Context, string) (bool, error) { order = append(order, "progress"); return true, nil })
-		d, err := e.Respond(ctx, Input{Channel: "test", Account: "a", Thread: "friend", Mode: "direct", Text: "查一下这首歌的来源", Preview: preview})
+		d, err := e.Respond(ctx, syntheticNativeInput(Input{Channel: "test", Account: "a", Thread: "friend", Mode: "direct", Text: "查一下这首歌的来源", Preview: preview}, "progress-native"))
 		if err != nil || d.Action != "reply" || tools.calls != 1 {
 			t.Fatal(d, err)
 		}
@@ -146,7 +146,7 @@ func TestSemanticMediaIntentPrecedesToolsAndIsSuppressedInPreview(t *testing.T) 
 			order = append(order, "intent:"+intent)
 			return nil
 		})
-		d, err := e.Respond(ctx, Input{Channel: "test", Account: "a", Thread: "friend", Mode: "direct", Text: "还是原版吧", Preview: preview})
+		d, err := e.Respond(ctx, syntheticNativeInput(Input{Channel: "test", Account: "a", Thread: "friend", Mode: "direct", Text: "还是原版吧", Preview: preview}, "intent-native"))
 		want := "intent:file,tool:web_search"
 		if preview {
 			want = "tool:web_search"

@@ -777,10 +777,7 @@ func publicReadTimeout(ctx context.Context, raw string, maxBytes int64, timeout 
 	b, t, u, _, e := publicReadRange(ctx, raw, maxBytes, timeout, "", "")
 	return b, t, u, e
 }
-func publicReadRangeOnce(ctx context.Context, raw string, maxBytes int64, timeout time.Duration, byteRange, validator string) ([]byte, string, string, rangeHeaders, error) {
-	if err := validPublicURL(raw); err != nil {
-		return nil, "", "", rangeHeaders{}, err
-	}
+func newPublicTransport() *http.Transport {
 	d := &net.Dialer{Timeout: 4 * time.Second, KeepAlive: 30 * time.Second}
 	tr := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 8 * time.Second, ResponseHeaderTimeout: 12 * time.Second, MaxIdleConnsPerHost: 4, IdleConnTimeout: 30 * time.Second, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -816,6 +813,13 @@ func publicReadRangeOnce(ctx context.Context, raw string, maxBytes int64, timeou
 		}
 		return nil, last
 	}}
+	return tr
+}
+func publicReadRangeOnce(ctx context.Context, raw string, maxBytes int64, timeout time.Duration, byteRange, validator string) ([]byte, string, string, rangeHeaders, error) {
+	if err := validPublicURL(raw); err != nil {
+		return nil, "", "", rangeHeaders{}, err
+	}
+	tr := newPublicTransport()
 	if session, ok := ctx.Value(publicSessionKey{}).(*publicReadSession); ok {
 		if session.Transport != nil {
 			tr = session.Transport

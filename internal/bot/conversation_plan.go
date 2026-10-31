@@ -12,6 +12,8 @@ import (
 )
 
 type utterancePlan struct {
+	ReviewEvidence   *companion.GenerationEvidence `json:"review_evidence,omitempty"`
+	ReplyContexts    []companion.ReplyContext      `json:"reply_contexts,omitempty"`
 	Paused           bool                          `json:"paused,omitempty"`
 	WakeReason       string                        `json:"wake_reason,omitempty"`
 	StopReason       string                        `json:"stop_reason,omitempty"`
@@ -84,6 +86,7 @@ func (w *Worker) queueUtteranceFrom(c *companion.Engine, in companion.Input, d c
 	now := time.Now().UTC()
 	p := &utterancePlan{WakeReason: d.WakeReason, ID: "utterance-" + messageHash(in.Thread + "|" + in.TraceID)[:32], Input: in, Messages: append([]string{}, d.Messages...), Sent: []string{}, State: "queued", Next: now.Add(w.replyDelay(c)), Created: now, WakeAfterSeconds: d.WakeAfterSeconds, WaitForReply: d.WaitForReply}
 	p.MediaCaption = mediaCaption
+	p.ReplyContexts = append([]companion.ReplyContext(nil), d.ReplyContexts...)
 	p.Index, p.Slot = start, start
 	p.Sent = append([]string{}, d.Messages[:start]...)
 	p.Updates = append([]companion.ConversationEvent(nil), updates...)
@@ -124,6 +127,10 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 			if r.terminal() || r.Input.Thread != m.ThreadID || r.Trace == m.ID {
 				continue
 			}
+			if !messageAffectsInput(r.Input, m) {
+				r.Input.QuoteSharedMessage = true
+				continue
+			}
 			seen := false
 			for _, e := range r.Updates {
 				seen = seen || e.MessageID == m.ID
@@ -131,7 +138,7 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 			if seen {
 				continue
 			}
-			r.Updates = append(r.Updates, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: m.Body, At: m.CreatedAt, NewRequest: eligible})
+			r.Updates = append(r.Updates, conversationEvent(m, eligible))
 			if len(r.Updates) > 8 {
 				r.Updates = r.Updates[len(r.Updates)-8:]
 			}
@@ -147,6 +154,13 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 		if p.terminal() || p.Input.Thread != m.ThreadID || p.Input.TraceID == m.ID {
 			continue
 		}
+		if !messageAffectsInput(p.Input, m) {
+			p.Input.QuoteSharedMessage = true
+			if p.Input.QuoteServerID != "" {
+				p.Quote = replyQuote(p.Input)
+			}
+			continue
+		}
 		if !c.Config.ConversationConfig().RecheckOnMessage {
 			continue
 		}
@@ -157,7 +171,7 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 		if seen {
 			continue
 		}
-		p.Updates = append(p.Updates, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: m.Body, At: m.CreatedAt, NewRequest: eligible})
+		p.Updates = append(p.Updates, conversationEvent(m, eligible))
 		if len(p.Updates) > 8 {
 			p.Updates = p.Updates[len(p.Updates)-8:]
 		}
@@ -176,7 +190,27 @@ func (w *Worker) planDelivery(p *utterancePlan) *delivery {
 }
 func (w *Worker) acceptPlanBubble(c *companion.Engine, p *utterancePlan, text string) {
 	key := fmt.Sprintf("%s-%d", p.ID, p.Slot)
-	if err := c.Store.AcceptedDelivery(p.Input, text, key, c.Config, time.Now()); err != nil {
+	in := p.Input
+	if p.Index < len(p.ReplyContexts) {
+		rc := p.ReplyContexts[p.Index]
+		in.ReplyContext = &rc
+	}
+	if d := w.planDelivery(p); d != nil && d.State == "accepted" && d.Input.ReplyContext != nil {
+		in.ReplyContext = d.Input.ReplyContext
+	}
+	err := c.Store.AcceptedDelivery(in, text, key, c.Config, time.Now())
+	if errors.Is(err, companion.ErrDeliveryMemoryConflict) {
+		// Legacy plan IDs can overlap imported history. A committed receipt is
+		// a distinct delivery, never authority to overwrite that older memory.
+		if d := w.planDelivery(p); d != nil && d.State == "accepted" && d.ID != "" && d.Key != "" && !d.Created.IsZero() && d.Text == text {
+			receiptKey := "delivery-" + messageHash(d.Key+"|"+d.ID+"|"+d.Created.UTC().Format(time.RFC3339Nano))
+			err = c.Store.AcceptedDelivery(in, text, receiptKey, c.Config, time.Now())
+			if err == nil {
+				w.activity(Record{Event: "delivery_memory_identity_recovered", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Trace, Status: "completed", Reason: "accepted_receipt_memory_identity", SendID: d.ID})
+			}
+		}
+	}
+	if err != nil {
 		w.persistErr = err
 		return
 	}
@@ -299,6 +333,10 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 			text = "[AI] " + text
 		}
 		in := p.Input
+		if p.Index < len(p.ReplyContexts) {
+			rc := p.ReplyContexts[p.Index]
+			in.ReplyContext = &rc
+		}
 		if p.Quote != nil {
 			in.QuoteServerID = p.Quote.ServerID
 		}
@@ -308,6 +346,9 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 			return
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if p.ReviewEvidence != nil {
+			sendCtx = companion.WithStoredGenerationEvidence(sendCtx, *p.ReviewEvidence)
+		}
 		_, err := w.sendText(sendCtx, in, p.Slot, text)
 		cancel()
 		if err == nil {

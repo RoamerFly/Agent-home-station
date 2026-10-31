@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "music.generate",
+      "implementation": "migration-pending",
+      "description": "歌曲、翻唱、RVC 与 GPU 服务",
+      "permissions": [
+        "artifact.read",
+        "artifact.write",
+        "network",
+        "gpu",
+        "process.execute"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "music.cover",
+      "implementation": "migration-pending",
+      "description": "歌曲、翻唱、RVC 与 GPU 服务",
+      "permissions": [
+        "artifact.read",
+        "artifact.write",
+        "network",
+        "gpu",
+        "process.execute"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "music.train",
+      "implementation": "migration-pending",
+      "description": "歌曲、翻唱、RVC 与 GPU 服务",
+      "permissions": [
+        "artifact.read",
+        "artifact.write",
+        "network",
+        "gpu",
+        "process.execute"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    }
+  ]
+}

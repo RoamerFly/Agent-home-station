@@ -112,6 +112,8 @@ func (w *Worker) tickConversationWake(ctx context.Context) bool {
 		// host/cross-conversation identity or turn an old request into a command.
 		in.Mode = "proactive"
 		in.Sender, in.SenderName, in.SenderNameSource = "", "", ""
+		in.Source, in.QuotedSource, in.ReplyContext = nil, nil, nil
+		in.IncomingMedia, in.MentionedIDs, in.Addressees = nil, nil, nil
 		in.TaskID, in.OriginTraceID, in.MessageTime = "", "", ""
 		in.HistoricalReview, in.Surf, in.SurfForceShare = false, fromSurf, false
 		in.PersonaOverride = w.config.GroupRules[in.Thread].Persona

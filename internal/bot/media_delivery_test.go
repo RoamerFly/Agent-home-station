@@ -171,19 +171,32 @@ func mediaWorker(t *testing.T) (*Worker, *mediaFake, *companion.Engine, companio
 	if e = w.loadRuntime("server-1"); e != nil {
 		t.Fatal(e)
 	}
-	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "incoming", Mode: "direct", Text: "发音乐"}
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "incoming", Sender: "requester", Mode: "direct", Text: "发音乐"}
+	original := fixtureMessage(in.TraceID, in.Thread, in.Text, "incoming")
+	original.SenderID = in.Sender
+	original.ServerID = "77"
+	in.MessageTime = original.CreatedAt
+	in.OriginalText = &original.Body
+	bindInputSource(&in, original, engine)
 	if e = store.Observe(in, c, time.Now()); e != nil {
 		t.Fatal(e)
 	}
+	r, e := engine.BindReplyEvidence(context.Background(), in)
+	if e != nil {
+		t.Fatal(e)
+	}
+	in.ReplyContext = &r
 	return w, n, engine, in
 }
 
 func TestModelFileIntentCancelsOnlyRequestersOldVoiceAndSurvivesRestart(t *testing.T) {
 	w, n, c, in := mediaWorker(t)
 	in.Thread, in.Sender = "room@chatroom", "requester"
+	in = observeSyntheticMediaRequest(t, w, c, in)
 	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "voice-source", Kind: "voice", Title: "song.wav"})
 	other := in
 	other.Sender, other.TraceID = "other-user", "other-trace"
+	other = observeSyntheticMediaRequest(t, w, c, other)
 	w.queueMedia(context.Background(), c, other, companion.GeneratedMedia{ID: "other-source", Kind: "voice", Title: "other.wav"})
 	newRequest := in
 	newRequest.TraceID, newRequest.Text = "new-request", "还是原版吧"
@@ -251,6 +264,7 @@ func TestNewSongCancelsOldVoiceAndItsLateCaptionAcrossRestart(t *testing.T) {
 	w.deferMediaReply(in, []string{"找到 Cloud Dancer，分几段发你"}, 1)
 	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "old", Kind: "voice", Title: "Cloud Dancer"})
 	message := fixtureMessage("new-song", "filehelper", "重新找一首，traveling light", "outgoing")
+	message.SenderID = in.Sender
 	if !w.stopRequestedVoice(context.Background(), message) || n.cancels != 1 || w.runtime.MediaReplies[0].State != "stopped" {
 		t.Fatal("new request did not supersede old voice/caption")
 	}
@@ -274,7 +288,9 @@ func TestUpdateDrainCanPeekStopWithoutConsumingNewTask(t *testing.T) {
 	w, n, c, in := mediaWorker(t)
 	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "old", Kind: "voice"})
 	event := fixtureEvent("2", "new-song", "filehelper", "incoming", "live")
-	w.source = &fakeSource{events: []linuxnative.Event{event}, messages: map[string]linuxnative.Message{"new-song": fixtureMessage("new-song", "filehelper", "重新找一首，traveling light", "incoming")}}
+	message := fixtureMessage("new-song", "filehelper", "重新找一首，traveling light", "incoming")
+	message.SenderID = in.Sender
+	w.source = &fakeSource{events: []linuxnative.Event{event}, messages: map[string]linuxnative.Message{"new-song": message}}
 	before := len(w.runtime.Inbox)
 	w.peekVoiceInterruptions(context.Background(), "1", map[string]bool{})
 	if n.cancels != 1 || len(w.runtime.Inbox) != before || n.sends != 1 || n.calls != 0 {
@@ -360,11 +376,15 @@ func TestUncertainNativeGuardAndDrainDoNotResubmit(t *testing.T) {
 
 func TestCrossSeedsRestartTargetAndStrictBatchOrder(t *testing.T) {
 	w, n, _, in := mediaWorker(t)
+	origin, err := w.prepareMediaEvidence(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
 	in.Thread = "target@chatroom"
 	w.allowed[in.Thread] = true
 	seeds := []MediaSeed{}
 	for i := 0; i < 4; i++ {
-		seeds = append(seeds, MediaSeed{Key: fmt.Sprint("cross-key-", i), Trace: "cross-batch", Input: in, Requester: "owner", OriginThread: "owner", SourceID: fmt.Sprint("source-", i), Media: companion.GeneratedMedia{Kind: "voice", Title: "part.wav"}})
+		seeds = append(seeds, MediaSeed{OriginInput: &origin, Key: fmt.Sprint("cross-key-", i), Trace: "cross-batch", Input: in, Requester: "owner", OriginThread: "owner", SourceID: fmt.Sprint("source-", i), Media: companion.GeneratedMedia{Kind: "voice", Title: "part.wav"}})
 	}
 	w.config.MediaSeeds = func() []MediaSeed { return seeds }
 	w.config.MediaSeedAllowed = func(MediaSeed) bool { return true }
@@ -403,10 +423,47 @@ func TestCrossSeedsRestartTargetAndStrictBatchOrder(t *testing.T) {
 	}
 }
 
+func TestCancelledCrossSeedWithUnknownSubmissionStopsAfterRestart(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread = "target@chatroom"
+	seed := MediaSeed{Key: "cancelled-cross-key", Trace: "cancelled-batch", Input: in, Requester: "owner", OriginThread: "owner", SourceID: "old-source", Media: companion.GeneratedMedia{Kind: "voice", Title: "old.wav"}}
+	w.config.MediaSeeds = func() []MediaSeed { return []MediaSeed{seed} }
+	w.config.MediaSeedAllowed = func(MediaSeed) bool { return true }
+	w.adoptMediaSeeds()
+	d := w.runtime.Media[0]
+	d.State = "submitting"
+	d.Next = time.Time{}
+	if err := w.saveRuntime(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.loadRuntime("server-1"); err != nil {
+		t.Fatal(err)
+	}
+	// The management journal has cancelled this batch after native lookup
+	// proved its key was absent. A stale worker checkpoint must not submit it.
+	w.config.MediaSeedAllowed = func(MediaSeed) bool { return false }
+	w.reconcileMedia(context.Background())
+	d = w.runtime.Media[0]
+	if d.State != "stopped" || n.sends != 0 || n.retries != 0 {
+		t.Fatal("cancelled stale submission was retried", d, n.sends, n.retries)
+	}
+	if err := w.loadRuntime("server-1"); err != nil {
+		t.Fatal(err)
+	}
+	w.reconcileMedia(context.Background())
+	if w.runtime.Media[0].State != "stopped" || n.sends != 0 {
+		t.Fatal("cancelled cross seed restarted", w.runtime.Media[0], n.sends)
+	}
+}
+
 func TestOwnerCrossSeedCanTargetNonReplyConversationWithoutOpeningIt(t *testing.T) {
 	w, n, _, in := mediaWorker(t)
+	origin, err := w.prepareMediaEvidence(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
 	in.Thread = "no-auto-reply@chatroom"
-	seed := MediaSeed{Key: "owner-cross-key", Trace: "owner-cross-batch", Input: in, Requester: "owner", OriginThread: "owner", SourceID: "owner-cross-source", Media: companion.GeneratedMedia{Kind: "voice", Title: "synthetic.wav"}}
+	seed := MediaSeed{OriginInput: &origin, Key: "owner-cross-key", Trace: "owner-cross-batch", Input: in, Requester: "owner", OriginThread: "owner", SourceID: "owner-cross-source", Media: companion.GeneratedMedia{Kind: "voice", Title: "synthetic.wav"}}
 	w.config.MediaSeeds = func() []MediaSeed { return []MediaSeed{seed} }
 	w.config.MediaSeedAllowed = func(s MediaSeed) bool {
 		return s.Trace == seed.Trace && s.Requester == seed.Requester && s.Input.Thread == seed.Input.Thread

@@ -82,7 +82,7 @@ def install(workspace, archive, wheel_dir=None, replace_registration=False):
             from prepare_windows_python import prepare, remove_startup_manifest
             if sys.version_info[:2] != (3, 13):
                 raise ValueError("Windows SDK installation requires build-time Python 3.13")
-            interpreter = public / "runtimes/windows-python-cli"
+            interpreter = public / "runtimes/windows-python-cli-v2"
             prepare(interpreter, public / "runtimes/downloads")
             python = str(interpreter / "python.exe")
         if not (packages / "sherpa_onnx").is_dir():

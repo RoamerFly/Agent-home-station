@@ -9,6 +9,7 @@ import (
 // Each HTTP attempt is observed, including billed responses later rejected by
 // decision validation. Missing usage is unknown, not zero-token consumption.
 type Usage struct {
+	Model    string    `json:"model,omitempty"` // Actual model requested for this HTTP attempt.
 	Purpose  string    `json:"purpose,omitempty"`
 	Time     time.Time `json:"time"`
 	Reported bool      `json:"reported"`

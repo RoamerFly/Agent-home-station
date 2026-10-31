@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS memory_blocks(scope TEXT,event_id TEXT,PRIMARY KEY(sc
 CREATE TABLE IF NOT EXISTS rebuild_requests(scope TEXT PRIMARY KEY,requested TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS search_documents(namespace TEXT,id TEXT,scope TEXT,kind TEXT,at TEXT,text TEXT,payload BLOB,hash TEXT,PRIMARY KEY(namespace,id));
 CREATE INDEX IF NOT EXISTS search_documents_scope_time ON search_documents(scope,at,id);
+CREATE TABLE IF NOT EXISTS source_conflicts(scope TEXT,event_id TEXT,other_event_id TEXT,reason TEXT,PRIMARY KEY(scope,event_id,other_event_id));
 CREATE TABLE IF NOT EXISTS context_metrics(id INTEGER PRIMARY KEY,at TEXT,total INTEGER,bytes INTEGER,components TEXT,method TEXT);
 `
 
@@ -56,7 +58,9 @@ func memoryTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05
 
 // Migration is one SQLite transaction. An interrupted import has no completion
 // marker and is retried from the unchanged legacy file, never from partial rows.
-func openSQLiteStore(dir string) (*Store, error) {
+func openSQLiteStore(dir string) (*Store, error) { return openStoreWithLease(dir, false) }
+
+func openSQLiteStoreUnlocked(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
@@ -219,6 +223,9 @@ func openSQLiteAt(dir, path string, allowImport bool) (*Store, error) {
 			return fail(err)
 		}
 	}
+	if err := s.initializeSourceInstance(); err != nil {
+		return fail(err)
+	}
 	return s, nil
 }
 
@@ -315,6 +322,10 @@ func (s *Store) Close() error {
 	}
 	e := s.db.Close()
 	s.db = nil
+	if s.accessLease != nil {
+		e = errors.Join(e, s.accessLease.Close())
+		s.accessLease = nil
+	}
 	return e
 }
 
@@ -400,6 +411,9 @@ func eventID(scope string, t Turn, index int) string {
 	if t.EventID != "" {
 		return t.EventID
 	}
+	if t.Source != nil && t.Source.InstanceID != "" {
+		return sourceTurnID(scope, t)
+	}
 	key := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d", scope, t.Role, t.TraceID, t.Time.Format(time.RFC3339Nano), index)
 	if t.TraceID != "" {
 		key = scope + "\x00" + t.Role + "\x00" + t.TraceID
@@ -412,10 +426,17 @@ func eventID(scope string, t Turn, index int) string {
 }
 
 func (s *Store) writeScope(tx *sql.Tx, id string, old, next Scope) error {
+	if old.Preferences != next.Preferences {
+		if err := bumpRecallEpoch(tx); err != nil {
+			return err
+		}
+	}
 	revisedSource := false
+	conflictedSource := false
 	if reflect.DeepEqual(old, next) {
 		return nil
 	}
+	recallChanged := old.RecallGeneration != next.RecallGeneration || old.Summary != next.Summary || !slices.Equal(old.Notes, next.Notes)
 	// Clear creates a durable barrier. Read-only archive browsing remains possible,
 	// but indexing, extraction and every model-facing query exclude this prefix.
 	if old.RecallGeneration != next.RecallGeneration {
@@ -444,8 +465,28 @@ func (s *Store) writeScope(tx *sql.Tx, id string, old, next Scope) error {
 	for i := range next.Messages {
 		t := &next.Messages[i]
 		t.EventID = eventID(id, *t, i)
+		if t.Source != nil {
+			t.Source = cloneSource(t.Source)
+			t.Source.EventID = t.EventID
+		}
+		if t.Source != nil {
+			for j := range t.IncomingMedia {
+				m := &t.IncomingMedia[j]
+				if m.Source.MessageID == "" || m.Source.MessageID == t.Source.MessageID {
+					m.Source = *t.Source
+				}
+			}
+		}
 		if prev, ok := previous[t.EventID]; ok && reflect.DeepEqual(prev, *t) {
 			continue
+		}
+		if prev, ok := previous[t.EventID]; ok && t.Role == "user" &&
+			(prev.Text != t.Text || prev.UserTextState != t.UserTextState || prev.FullObservation != t.FullObservation || !reflect.DeepEqual(prev.Source, t.Source) ||
+				!reflect.DeepEqual(prev.QuotedSource, t.QuotedSource) || !reflect.DeepEqual(prev.Addressees, t.Addressees) ||
+				!reflect.DeepEqual(prev.IncomingMedia, t.IncomingMedia)) {
+			// Changes to an existing user's evidence include refreshed media
+			// observations and attribution, even when the original body is intact.
+			recallChanged = true
 		}
 		text, complete := t.Text, 0
 		if t.FullText != "" || t.HasOriginal {
@@ -467,7 +508,26 @@ func (s *Store) writeScope(tx *sql.Tx, id string, old, next Scope) error {
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
+		if t.Source != nil && t.Source.Integrity == "conflicted" {
+			conflictedSource = true
+			if _, err = tx.Exec("INSERT OR IGNORE INTO source_conflicts(scope,event_id,other_event_id,reason) VALUES(?,?,?,?)", id, t.EventID, "", "source_identity_conflict"); err != nil {
+				return err
+			}
+			if _, err = tx.Exec("UPDATE memories SET status='conflicted',version=version+1 WHERE id IN(SELECT memory_id FROM memory_sources WHERE event_id=?) AND status='active'", t.EventID); err != nil {
+				return err
+			}
+			if _, err = tx.Exec("DELETE FROM embeddings WHERE memory_id IN(SELECT memory_id FROM memory_sources WHERE event_id=?)", t.EventID); err != nil {
+				return err
+			}
+			next.Summary = ""
+			next.SummaryBoundary = 0
+			next.CompressedCount = 0
+		}
 		if oldHash == hash {
+			if t.Source != nil {
+				t.Source.Revision = revision
+				payload, _ = json.Marshal(t)
+			}
 			if _, err = tx.Exec("UPDATE events SET payload=? WHERE id=?", payload, t.EventID); err != nil {
 				return err
 			}
@@ -504,9 +564,24 @@ func (s *Store) writeScope(tx *sql.Tx, id string, old, next Scope) error {
 				return err
 			}
 		}
-		_, err = tx.Exec(`INSERT INTO events(id,scope,seq,trace,role,sender,at,text,hash,complete,revision,payload)
-VALUES(?,?,(SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE scope=?),?,?,?,?,?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET text=excluded.text,hash=excluded.hash,revision=events.revision+1,payload=excluded.payload,complete=excluded.complete`, t.EventID, id, id, t.TraceID, t.Role, t.Sender, memoryTime(t.Time), text, hash, complete, max(1, revision), payload)
+		writeRevision := max(1, revision)
+		if oldHash != "" {
+			writeRevision = revision + 1
+		}
+		if t.Source != nil {
+			writeRevision = max(writeRevision, t.Source.Revision)
+			t.Source.Revision = writeRevision
+			payload, _ = json.Marshal(t)
+		}
+		inheritedBlock := 0
+		if t.Role == "user" && t.Source != nil {
+			if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM events e WHERE e.scope=? AND (e.trace=? OR json_extract(e.payload,'$.source.message_id')=?) AND e.sender=? AND e.at=? AND (e.suppressed!=0 OR EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)))", id, t.TraceID, t.Source.MessageID, t.Sender, memoryTime(t.Time)).Scan(&inheritedBlock); err != nil {
+				return err
+			}
+		}
+		_, err = tx.Exec(`INSERT INTO events(id,scope,seq,trace,role,sender,at,text,hash,complete,revision,payload,suppressed)
+VALUES(?,?,(SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE scope=?),?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET text=excluded.text,hash=excluded.hash,revision=excluded.revision,payload=excluded.payload,complete=excluded.complete`, t.EventID, id, id, t.TraceID, t.Role, t.Sender, memoryTime(t.Time), text, hash, complete, writeRevision, payload, inheritedBlock)
 		if err != nil {
 			return err
 		}
@@ -526,6 +601,19 @@ ON CONFLICT(id) DO UPDATE SET text=excluded.text,hash=excluded.hash,revision=eve
 		next.SummaryBoundary = 0
 		if old.ID == id {
 			s.data.Scopes[id] = next
+		}
+	}
+	if conflictedSource {
+		next.Summary = ""
+		next.CompressedCount = 0
+		next.SummaryBoundary = 0
+		if old.ID == id {
+			s.data.Scopes[id] = next
+		}
+	}
+	if recallChanged || revisedSource || conflictedSource {
+		if err := bumpRecallEpoch(tx); err != nil {
+			return err
 		}
 	}
 	b, e := json.Marshal(next)

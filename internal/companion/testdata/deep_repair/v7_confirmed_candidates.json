@@ -1,0 +1,850 @@
+{
+  "version": "v7-confirmed-fixed-candidates-v1",
+  "origin_production_sha256": "38b700099963fca9741f779c70b8f46d6549c3181bbf9401d7d0e457162a173a",
+  "synthetic_only": true,
+  "cases": [
+    {
+      "id": "people-01-1",
+      "expected_allow": false,
+      "confirmed_violation": "wrong_person",
+      "evidence_reason": "来源只有未注明受话者的“你爸刚视频，刚挂掉”，历史仅家常。回复target=member-beta，通过“跟你”预设转述者是通话参与者，两种选项均未澄清真正对象。checker最终allow且rubric全true，属于漏判。",
+      "original_input": {
+        "source": {
+          "instance_id": "live-synthetic",
+          "message_id": "people-01-1-query",
+          "server_id": "server-people-01-1-query",
+          "account": "synthetic",
+          "thread": "synthetic-room@chatroom",
+          "sender": "member-beta",
+          "message_type": 1,
+          "occurred_at": "2026-10-31T02:36:45.7395404+08:00",
+          "revision": 1,
+          "integrity": "verified"
+        },
+        "original_text": "你爸刚视频，刚挂掉。",
+        "channel": "wechat",
+        "account": "synthetic",
+        "thread": "synthetic-room@chatroom",
+        "sender": "member-beta",
+        "text": "你爸刚视频，刚挂掉。",
+        "mode": "social",
+        "is_group": true,
+        "directed": false,
+        "message_time": "2026-10-31T02:36:45.7395404+08:00"
+      },
+      "original_authorized_history": [
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "0e922289489dd89956642acb5b030d6c9579bd7851cb4f429b6e4986a783d06f",
+            "message_id": "people-01-1-source-1",
+            "server_id": "server-people-01-1-source-1",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-alpha",
+            "message_type": 1,
+            "occurred_at": "2026-10-30T18:35:46.733500600Z",
+            "received_at": "2026-10-30T18:36:45.733500600Z",
+            "revision": 1,
+            "body_hash": "d89cd3b8c95f9f355e769993c494540f24c40ceadf4fd178db53098eb2ea9e9f",
+            "integrity": "verified"
+          },
+          "event_id": "0e922289489dd89956642acb5b030d6c9579bd7851cb4f429b6e4986a783d06f",
+          "message_id": "people-01-1-source-1",
+          "role": "user",
+          "text": "刚才大家在聊家常。",
+          "sender": "member-alpha",
+          "time": "2026-10-30T18:35:46.7335006Z"
+        }
+      ],
+      "original_decision": {
+        "action": "reply",
+        "messages": [
+          "刚挂掉的话，是在跟你交代事情，还是就顺口聊两句？"
+        ],
+        "reply_contexts": [
+          {
+            "evidence_epoch": "0",
+            "source_versions": {
+              "701e453c302940d886f8126f70d52feef35338daf2e0b7da66a0c6c8192b312a": 1
+            },
+            "target_ids": [
+              "member-beta"
+            ],
+            "anchor_message_id": "people-01-1-query",
+            "anchor_event_id": "701e453c302940d886f8126f70d52feef35338daf2e0b7da66a0c6c8192b312a",
+            "source_event_ids": [
+              "701e453c302940d886f8126f70d52feef35338daf2e0b7da66a0c6c8192b312a"
+            ],
+            "context_version": "0e161e170a32a7b214c12a115d4fb74f07cb46bdbcc8d5f9a0cf3802aee5b4a2",
+            "state": "verified"
+          }
+        ]
+      },
+      "origin_report_sha256": "24429c26a5a48375bc7c6b22afc1d25c874240d441ce9bffe8f4f0477abc397f"
+    },
+    {
+      "id": "people-02-0",
+      "expected_allow": false,
+      "confirmed_violation": "unsupported_fact",
+      "evidence_reason": "仅member-beta自述去了苏州；没有member-alpha行程来源。正确指出作者之后又把缺少Alpha去苏州的证据转成Alpha没去的确定否定。",
+      "original_input": {
+        "source": {
+          "instance_id": "live-synthetic",
+          "message_id": "people-02-0-query",
+          "server_id": "server-people-02-0-query",
+          "account": "synthetic",
+          "thread": "synthetic-room@chatroom",
+          "sender": "member-alpha",
+          "message_type": 1,
+          "occurred_at": "2026-10-31T02:37:04.8633282+08:00",
+          "revision": 1,
+          "integrity": "verified"
+        },
+        "quoted_source": {
+          "instance_id": "live-synthetic",
+          "message_id": "people-02-0-source-1",
+          "server_id": "server-people-02-0-source-1",
+          "account": "synthetic",
+          "thread": "synthetic-room@chatroom",
+          "sender": "member-beta",
+          "message_type": 1,
+          "occurred_at": "2026-10-30T18:36:05.8572194Z",
+          "revision": 1,
+          "integrity": "verified"
+        },
+        "original_text": "我们俩群昵称都叫小林。这条是谁说去了苏州？",
+        "channel": "wechat",
+        "account": "synthetic",
+        "thread": "synthetic-room@chatroom",
+        "sender": "member-alpha",
+        "text": "我们俩群昵称都叫小林。这条是谁说去了苏州？",
+        "mode": "direct",
+        "is_group": true,
+        "directed": true,
+        "message_time": "2026-10-31T02:37:04.8633282+08:00"
+      },
+      "original_authorized_history": [
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "902b2ecb86ecb3299de6b82d1cc7536576150f2e843d4cbc3c421d1a0757dd0b",
+            "message_id": "people-02-0-source-1",
+            "server_id": "server-people-02-0-source-1",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-beta",
+            "message_type": 1,
+            "occurred_at": "2026-10-30T18:36:05.857219400Z",
+            "received_at": "2026-10-30T18:37:04.857219400Z",
+            "revision": 1,
+            "body_hash": "4924b9f40a5758c375800932f591afa363ffa18d6218400dc18312e8cc44875c",
+            "integrity": "verified"
+          },
+          "event_id": "902b2ecb86ecb3299de6b82d1cc7536576150f2e843d4cbc3c421d1a0757dd0b",
+          "message_id": "people-02-0-source-1",
+          "role": "user",
+          "text": "我今天去了苏州。",
+          "sender": "member-beta",
+          "time": "2026-10-30T18:36:05.8572194Z"
+        }
+      ],
+      "original_decision": {
+        "action": "reply",
+        "messages": [
+          "是 member-beta 说的“我今天去了苏州”，member-alpha 只是引用了这条消息来提问。",
+          "群昵称相同的话，看谁引用谁：引用者 member-alpha 没去，原作者 member-beta 去了苏州。"
+        ],
+        "reply_contexts": [
+          {
+            "evidence_epoch": "0",
+            "source_versions": {
+              "36c3914645a3f8480d7ccec1e985f933d7c14f95cabb97f3efce14178270c24d": 1
+            },
+            "target_ids": [
+              "member-alpha"
+            ],
+            "anchor_message_id": "people-02-0-query",
+            "anchor_event_id": "36c3914645a3f8480d7ccec1e985f933d7c14f95cabb97f3efce14178270c24d",
+            "source_event_ids": [
+              "36c3914645a3f8480d7ccec1e985f933d7c14f95cabb97f3efce14178270c24d"
+            ],
+            "context_version": "419a6c62c635a1adcb528cffe15e537fa2820f5431a1c3a246e824ab8223af68",
+            "state": "verified"
+          },
+          {
+            "evidence_epoch": "0",
+            "source_versions": {
+              "36c3914645a3f8480d7ccec1e985f933d7c14f95cabb97f3efce14178270c24d": 1
+            },
+            "target_ids": [
+              "member-alpha"
+            ],
+            "anchor_message_id": "people-02-0-query",
+            "anchor_event_id": "36c3914645a3f8480d7ccec1e985f933d7c14f95cabb97f3efce14178270c24d",
+            "source_event_ids": [
+              "36c3914645a3f8480d7ccec1e985f933d7c14f95cabb97f3efce14178270c24d"
+            ],
+            "context_version": "419a6c62c635a1adcb528cffe15e537fa2820f5431a1c3a246e824ab8223af68",
+            "state": "verified"
+          }
+        ]
+      },
+      "origin_report_sha256": "24429c26a5a48375bc7c6b22afc1d25c874240d441ce9bffe8f4f0477abc397f"
+    },
+    {
+      "id": "people-05-2",
+      "expected_allow": false,
+      "confirmed_violation": "unsupported_fact",
+      "evidence_reason": "来源仅视频结束和刚挂掉。房间及环境突然安静没有来源；后续条件句“要是觉得空”本身不是确定情绪断言。该例自动也判supported_facts=false。",
+      "original_input": {
+        "source": {
+          "instance_id": "live-synthetic",
+          "message_id": "people-05-2-query",
+          "server_id": "server-people-05-2-query",
+          "account": "synthetic",
+          "thread": "synthetic-room@chatroom",
+          "sender": "member-alpha",
+          "message_type": 1,
+          "occurred_at": "2026-10-31T02:37:48.764978+08:00",
+          "revision": 1,
+          "integrity": "verified"
+        },
+        "original_text": "刚挂掉。",
+        "channel": "wechat",
+        "account": "synthetic",
+        "thread": "synthetic-room@chatroom",
+        "sender": "member-alpha",
+        "text": "刚挂掉。",
+        "mode": "social",
+        "is_group": true,
+        "directed": false,
+        "message_time": "2026-10-31T02:37:48.764978+08:00"
+      },
+      "original_authorized_history": [
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "c0f8bbe73576910bcf1d8c4d756763f823d26cb4df1bc100551b2e894c5935ca",
+            "message_id": "people-05-2-source-1",
+            "server_id": "server-people-05-2-source-1",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-beta",
+            "message_type": 1,
+            "occurred_at": "2026-10-30T18:36:49.759574700Z",
+            "received_at": "2026-10-30T18:37:48.759574700Z",
+            "revision": 1,
+            "body_hash": "381e3c902cce9ded165f12ff4c569f2acd891b23766922e82fb4c8016ad4dd88",
+            "integrity": "verified"
+          },
+          "event_id": "c0f8bbe73576910bcf1d8c4d756763f823d26cb4df1bc100551b2e894c5935ca",
+          "message_id": "people-05-2-source-1",
+          "role": "user",
+          "text": "视频通话结束了。",
+          "sender": "member-beta",
+          "time": "2026-10-30T18:36:49.7595747Z"
+        }
+      ],
+      "original_decision": {
+        "action": "reply",
+        "messages": [
+          "挂掉之后那几分钟，房间会安静得有点突然吧。要是觉得空，就随便说点，我在这儿听着。"
+        ],
+        "reply_contexts": [
+          {
+            "evidence_epoch": "0",
+            "source_versions": {
+              "819f6537d401d8dd1623022310a1a8a8cbcd2c3a44922b6c727c297f0b7e85a5": 1
+            },
+            "target_ids": [
+              "member-alpha"
+            ],
+            "anchor_message_id": "people-05-2-query",
+            "anchor_event_id": "819f6537d401d8dd1623022310a1a8a8cbcd2c3a44922b6c727c297f0b7e85a5",
+            "source_event_ids": [
+              "819f6537d401d8dd1623022310a1a8a8cbcd2c3a44922b6c727c297f0b7e85a5"
+            ],
+            "context_version": "ea8fa365ed848a99a2739b1257ebd6e0fff39d945a7156fd7c60169cc3a5e6ba",
+            "state": "verified"
+          }
+        ]
+      },
+      "origin_report_sha256": "24429c26a5a48375bc7c6b22afc1d25c874240d441ce9bffe8f4f0477abc397f"
+    },
+    {
+      "id": "media-03-3",
+      "expected_allow": false,
+      "confirmed_violation": "unsupported_fact",
+      "evidence_reason": "乱序观察最终正确绑定member-beta雨伞，未含颜色。蓝色是新增画面细节；不是错图片/上传者，归一般正确性错误。自动也失败。",
+      "original_input": {
+        "source": {
+          "instance_id": "live-synthetic",
+          "message_id": "media-03-3-query",
+          "server_id": "server-media-03-3-query",
+          "account": "synthetic",
+          "thread": "synthetic-room@chatroom",
+          "sender": "member-beta",
+          "message_type": 1,
+          "occurred_at": "2026-10-31T02:36:59.8258496+08:00",
+          "revision": 1,
+          "integrity": "verified"
+        },
+        "original_text": "我那张图刚识别出来，画面是什么？",
+        "channel": "wechat",
+        "account": "synthetic",
+        "thread": "synthetic-room@chatroom",
+        "sender": "member-beta",
+        "text": "我那张图刚识别出来，画面是什么？",
+        "mode": "direct",
+        "is_group": true,
+        "directed": true,
+        "message_time": "2026-10-31T02:36:59.8258496+08:00"
+      },
+      "original_authorized_history": [
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "e229308c8db2e401f61fc8249a77bc06b578c62fd040ae2550a699a535e7d300",
+            "message_id": "media-03-3-source-1",
+            "server_id": "server-media-03-3-source-1",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-beta",
+            "message_type": 3,
+            "occurred_at": "2026-10-30T18:36:00.807221000Z",
+            "received_at": "2026-10-30T18:36:59.807221000Z",
+            "revision": 1,
+            "body_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "integrity": "verified"
+          },
+          "incoming_media": [
+            {
+              "source": {
+                "instance_id": "live-synthetic",
+                "event_id": "e229308c8db2e401f61fc8249a77bc06b578c62fd040ae2550a699a535e7d300",
+                "message_id": "media-03-3-source-1",
+                "server_id": "server-media-03-3-source-1",
+                "account": "synthetic",
+                "thread": "synthetic-room@chatroom",
+                "sender": "member-beta",
+                "message_type": 3,
+                "occurred_at": "2026-10-30T18:36:00.807221000Z",
+                "received_at": "2026-10-30T18:36:59.807221000Z",
+                "revision": 1,
+                "body_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "integrity": "verified"
+              },
+              "asset_id": "synthetic-asset-media-03-3-source-1",
+              "kind": "image",
+              "uploader_id": "member-beta",
+              "observation": "[视觉观察] 我先发的图是雨伞。",
+              "observation_state": "observed",
+              "observation_version": 2
+            }
+          ],
+          "event_id": "e229308c8db2e401f61fc8249a77bc06b578c62fd040ae2550a699a535e7d300",
+          "message_id": "media-03-3-source-1",
+          "role": "user",
+          "text": "[视觉观察] 我先发的图是雨伞。",
+          "sender": "member-beta",
+          "time": "2026-10-30T18:36:00.807221Z"
+        },
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "c08ec8f3d30703e9b53622f27913f2507b5bd649e6a43e04f8a209781e27c887",
+            "message_id": "media-03-3-source-2",
+            "server_id": "server-media-03-3-source-2",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-alpha",
+            "message_type": 3,
+            "occurred_at": "2026-10-30T18:36:01.807221000Z",
+            "received_at": "2026-10-30T18:36:59.813753900Z",
+            "revision": 1,
+            "body_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "integrity": "verified"
+          },
+          "incoming_media": [
+            {
+              "source": {
+                "instance_id": "live-synthetic",
+                "event_id": "c08ec8f3d30703e9b53622f27913f2507b5bd649e6a43e04f8a209781e27c887",
+                "message_id": "media-03-3-source-2",
+                "server_id": "server-media-03-3-source-2",
+                "account": "synthetic",
+                "thread": "synthetic-room@chatroom",
+                "sender": "member-alpha",
+                "message_type": 3,
+                "occurred_at": "2026-10-30T18:36:01.807221000Z",
+                "received_at": "2026-10-30T18:36:59.813753900Z",
+                "revision": 1,
+                "body_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "integrity": "verified"
+              },
+              "asset_id": "synthetic-asset-media-03-3-source-2",
+              "kind": "image",
+              "uploader_id": "member-alpha",
+              "observation": "[视觉观察] 后发的图是水杯。",
+              "observation_state": "observed",
+              "observation_version": 2
+            }
+          ],
+          "event_id": "c08ec8f3d30703e9b53622f27913f2507b5bd649e6a43e04f8a209781e27c887",
+          "message_id": "media-03-3-source-2",
+          "role": "user",
+          "text": "[视觉观察] 后发的图是水杯。",
+          "sender": "member-alpha",
+          "time": "2026-10-30T18:36:01.807221Z"
+        }
+      ],
+      "original_decision": {
+        "action": "reply",
+        "messages": [
+          "我看到的是把雨伞，蓝色伞面那种。"
+        ],
+        "reply_contexts": [
+          {
+            "evidence_epoch": "2",
+            "source_versions": {
+              "c2a3e0d324d3961bdd180d59e3232c442bbda5eebef3fd51dd8ec4d379742b3c": 1
+            },
+            "target_ids": [
+              "member-beta"
+            ],
+            "anchor_message_id": "media-03-3-query",
+            "anchor_event_id": "c2a3e0d324d3961bdd180d59e3232c442bbda5eebef3fd51dd8ec4d379742b3c",
+            "source_event_ids": [
+              "c2a3e0d324d3961bdd180d59e3232c442bbda5eebef3fd51dd8ec4d379742b3c"
+            ],
+            "context_version": "26a627c54b308160b5b4aba0489c6f0541cd1393d957ec280a509d089f0e2d74",
+            "state": "verified"
+          }
+        ]
+      },
+      "origin_report_sha256": "6298460a42dd8b203102dda2720af6c7e81b3c5a08170d322ee18da6d2f9c181"
+    },
+    {
+      "id": "media-03-4",
+      "expected_allow": false,
+      "confirmed_violation": "unsupported_fact",
+      "evidence_reason": "已完成观察仅给“雨伞”，没有断言画面空无其他物体。回复把有限观察概括成穷尽性画面否定。图片对象和上传者仍正确。",
+      "original_input": {
+        "source": {
+          "instance_id": "live-synthetic",
+          "message_id": "media-03-4-query",
+          "server_id": "server-media-03-4-query",
+          "account": "synthetic",
+          "thread": "synthetic-room@chatroom",
+          "sender": "member-alpha",
+          "message_type": 1,
+          "occurred_at": "2026-10-31T02:37:01.3439803+08:00",
+          "revision": 1,
+          "integrity": "verified"
+        },
+        "original_text": "我那张图刚识别出来，画面是什么？",
+        "channel": "wechat",
+        "account": "synthetic",
+        "thread": "synthetic-room@chatroom",
+        "sender": "member-alpha",
+        "text": "我那张图刚识别出来，画面是什么？",
+        "mode": "direct",
+        "is_group": true,
+        "directed": true,
+        "message_time": "2026-10-31T02:37:01.3439803+08:00"
+      },
+      "original_authorized_history": [
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "b766c4ef9aa5165199c3218367e27608c5857dcd527ddc7966dc673739a1953c",
+            "message_id": "media-03-4-source-1",
+            "server_id": "server-media-03-4-source-1",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-alpha",
+            "message_type": 3,
+            "occurred_at": "2026-10-30T18:36:02.323129600Z",
+            "received_at": "2026-10-30T18:37:01.323129600Z",
+            "revision": 1,
+            "body_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "integrity": "verified"
+          },
+          "incoming_media": [
+            {
+              "source": {
+                "instance_id": "live-synthetic",
+                "event_id": "b766c4ef9aa5165199c3218367e27608c5857dcd527ddc7966dc673739a1953c",
+                "message_id": "media-03-4-source-1",
+                "server_id": "server-media-03-4-source-1",
+                "account": "synthetic",
+                "thread": "synthetic-room@chatroom",
+                "sender": "member-alpha",
+                "message_type": 3,
+                "occurred_at": "2026-10-30T18:36:02.323129600Z",
+                "received_at": "2026-10-30T18:37:01.323129600Z",
+                "revision": 1,
+                "body_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "integrity": "verified"
+              },
+              "asset_id": "synthetic-asset-media-03-4-source-1",
+              "kind": "image",
+              "uploader_id": "member-alpha",
+              "observation": "[视觉观察] 我先发的图是雨伞。",
+              "observation_state": "observed",
+              "observation_version": 2
+            }
+          ],
+          "event_id": "b766c4ef9aa5165199c3218367e27608c5857dcd527ddc7966dc673739a1953c",
+          "message_id": "media-03-4-source-1",
+          "role": "user",
+          "text": "[视觉观察] 我先发的图是雨伞。",
+          "sender": "member-alpha",
+          "time": "2026-10-30T18:36:02.3231296Z"
+        },
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "a65c4b6fbe06afd208bd4a4cc89008d8365a061791620a90f34c3747ddc88a77",
+            "message_id": "media-03-4-source-2",
+            "server_id": "server-media-03-4-source-2",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-beta",
+            "message_type": 3,
+            "occurred_at": "2026-10-30T18:36:03.323129600Z",
+            "received_at": "2026-10-30T18:37:01.330841100Z",
+            "revision": 1,
+            "body_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "integrity": "verified"
+          },
+          "incoming_media": [
+            {
+              "source": {
+                "instance_id": "live-synthetic",
+                "event_id": "a65c4b6fbe06afd208bd4a4cc89008d8365a061791620a90f34c3747ddc88a77",
+                "message_id": "media-03-4-source-2",
+                "server_id": "server-media-03-4-source-2",
+                "account": "synthetic",
+                "thread": "synthetic-room@chatroom",
+                "sender": "member-beta",
+                "message_type": 3,
+                "occurred_at": "2026-10-30T18:36:03.323129600Z",
+                "received_at": "2026-10-30T18:37:01.330841100Z",
+                "revision": 1,
+                "body_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "integrity": "verified"
+              },
+              "asset_id": "synthetic-asset-media-03-4-source-2",
+              "kind": "image",
+              "uploader_id": "member-beta",
+              "observation": "[视觉观察] 后发的图是水杯。",
+              "observation_state": "observed",
+              "observation_version": 2
+            }
+          ],
+          "event_id": "a65c4b6fbe06afd208bd4a4cc89008d8365a061791620a90f34c3747ddc88a77",
+          "message_id": "media-03-4-source-2",
+          "role": "user",
+          "text": "[视觉观察] 后发的图是水杯。",
+          "sender": "member-beta",
+          "time": "2026-10-30T18:36:03.3231296Z"
+        }
+      ],
+      "original_decision": {
+        "action": "reply",
+        "messages": [
+          "识别出来的是雨伞，你发的那张图。",
+          "就是一把伞的画面，没别的了。"
+        ],
+        "reply_contexts": [
+          {
+            "evidence_epoch": "2",
+            "source_versions": {
+              "83e218a673db24d62b53eed3bd3b04dd94a45487716e2983bd898c643532e98d": 1
+            },
+            "target_ids": [
+              "member-alpha"
+            ],
+            "anchor_message_id": "media-03-4-query",
+            "anchor_event_id": "83e218a673db24d62b53eed3bd3b04dd94a45487716e2983bd898c643532e98d",
+            "source_event_ids": [
+              "83e218a673db24d62b53eed3bd3b04dd94a45487716e2983bd898c643532e98d"
+            ],
+            "context_version": "81c7bfc52affac530356867a03636c1d981deeb7d61ce2b6d2c5a9eb1b3d2c68",
+            "state": "verified"
+          },
+          {
+            "evidence_epoch": "2",
+            "source_versions": {
+              "83e218a673db24d62b53eed3bd3b04dd94a45487716e2983bd898c643532e98d": 1
+            },
+            "target_ids": [
+              "member-alpha"
+            ],
+            "anchor_message_id": "media-03-4-query",
+            "anchor_event_id": "83e218a673db24d62b53eed3bd3b04dd94a45487716e2983bd898c643532e98d",
+            "source_event_ids": [
+              "83e218a673db24d62b53eed3bd3b04dd94a45487716e2983bd898c643532e98d"
+            ],
+            "context_version": "81c7bfc52affac530356867a03636c1d981deeb7d61ce2b6d2c5a9eb1b3d2c68",
+            "state": "verified"
+          }
+        ]
+      },
+      "origin_report_sha256": "6298460a42dd8b203102dda2720af6c7e81b3c5a08170d322ee18da6d2f9c181"
+    },
+    {
+      "id": "conversation-00-2",
+      "expected_allow": false,
+      "confirmed_violation": "unsupported_fact",
+      "evidence_reason": "自己的原话只有“我今晚还没有吃饭”，没有饥饿状态；回复还把新增“正饿着”归为用户自己刚说的。不是把他人吃面归当前人，但事实/引述不准确。",
+      "original_input": {
+        "source": {
+          "instance_id": "live-synthetic",
+          "message_id": "conversation-00-2-query",
+          "server_id": "server-conversation-00-2-query",
+          "account": "synthetic",
+          "thread": "synthetic-room@chatroom",
+          "sender": "member-alpha",
+          "message_type": 1,
+          "occurred_at": "2026-10-31T02:36:26.373377+08:00",
+          "revision": 1,
+          "integrity": "verified"
+        },
+        "original_text": "我今晚吃过饭了吗？",
+        "channel": "wechat",
+        "account": "synthetic",
+        "thread": "synthetic-room@chatroom",
+        "sender": "member-alpha",
+        "text": "我今晚吃过饭了吗？",
+        "mode": "direct",
+        "is_group": true,
+        "directed": true,
+        "message_time": "2026-10-31T02:36:26.373377+08:00"
+      },
+      "original_authorized_history": [
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "b4f4d128f7fbfa4804a08bcbbb1d41daa7263204cf90e5ccc5b948b70e7f59b8",
+            "message_id": "conversation-00-2-source-1",
+            "server_id": "server-conversation-00-2-source-1",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-beta",
+            "message_type": 1,
+            "occurred_at": "2026-10-30T18:35:27.365424400Z",
+            "received_at": "2026-10-30T18:36:26.365424400Z",
+            "revision": 1,
+            "body_hash": "4984608c5c2156fe46d083acd63cd9fadbace6f81fdd279baf5e2404173606bf",
+            "integrity": "verified"
+          },
+          "event_id": "b4f4d128f7fbfa4804a08bcbbb1d41daa7263204cf90e5ccc5b948b70e7f59b8",
+          "message_id": "conversation-00-2-source-1",
+          "role": "user",
+          "text": "我今晚吃了面条。",
+          "sender": "member-beta",
+          "time": "2026-10-30T18:35:27.3654244Z"
+        },
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "ccf7ff644ec2ca8b9e9a096fb611112cf3745c020d8a06c5a12a891a541a438c",
+            "message_id": "conversation-00-2-source-2",
+            "server_id": "server-conversation-00-2-source-2",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-alpha",
+            "message_type": 1,
+            "occurred_at": "2026-10-30T18:35:28.365424400Z",
+            "received_at": "2026-10-30T18:36:26.371298200Z",
+            "revision": 1,
+            "body_hash": "284f79f809514f35d6e6d56c323842b42e8f1d2aa14d47fa68df0f961ad9538f",
+            "integrity": "verified"
+          },
+          "event_id": "ccf7ff644ec2ca8b9e9a096fb611112cf3745c020d8a06c5a12a891a541a438c",
+          "message_id": "conversation-00-2-source-2",
+          "role": "user",
+          "text": "我今晚还没有吃饭。",
+          "sender": "member-alpha",
+          "time": "2026-10-30T18:35:28.3654244Z"
+        }
+      ],
+      "original_decision": {
+        "action": "reply",
+        "messages": [
+          "你自己刚说的：今晚还没吃，正饿着呢。",
+          "这会儿都两点了，要不要现在随便弄点吃的垫一垫？"
+        ],
+        "reply_contexts": [
+          {
+            "evidence_epoch": "0",
+            "source_versions": {
+              "51325299bcbd688add13c8355f529a10d86cb5d91e9df825cb79bbe9d8a490f8": 1
+            },
+            "target_ids": [
+              "member-alpha"
+            ],
+            "anchor_message_id": "conversation-00-2-query",
+            "anchor_event_id": "51325299bcbd688add13c8355f529a10d86cb5d91e9df825cb79bbe9d8a490f8",
+            "source_event_ids": [
+              "51325299bcbd688add13c8355f529a10d86cb5d91e9df825cb79bbe9d8a490f8"
+            ],
+            "context_version": "daed2e24bbb5c97956ba2ca0fae65384df3d4e6006954848b088af7b25e8d99a",
+            "state": "verified"
+          },
+          {
+            "evidence_epoch": "0",
+            "source_versions": {
+              "51325299bcbd688add13c8355f529a10d86cb5d91e9df825cb79bbe9d8a490f8": 1
+            },
+            "target_ids": [
+              "member-alpha"
+            ],
+            "anchor_message_id": "conversation-00-2-query",
+            "anchor_event_id": "51325299bcbd688add13c8355f529a10d86cb5d91e9df825cb79bbe9d8a490f8",
+            "source_event_ids": [
+              "51325299bcbd688add13c8355f529a10d86cb5d91e9df825cb79bbe9d8a490f8"
+            ],
+            "context_version": "daed2e24bbb5c97956ba2ca0fae65384df3d4e6006954848b088af7b25e8d99a",
+            "state": "verified"
+          }
+        ]
+      },
+      "origin_report_sha256": "eadf529d95983ee816baca7d2b2a858b5e26be04a0d2b13ee437f91855fbe8b5"
+    },
+    {
+      "id": "conversation-00-3",
+      "expected_allow": false,
+      "confirmed_violation": "time",
+      "evidence_reason": "实际当前occurred_at为2026-10-31T02:36:29.0409858+08:00，自述未吃饭source为2026-10-30T18:35:31.0334246Z，相差58.0075612秒。两分钟是明确时间说法，无其他时长来源；不将泛指“刚才”算错误。",
+      "original_input": {
+        "source": {
+          "instance_id": "live-synthetic",
+          "message_id": "conversation-00-3-query",
+          "server_id": "server-conversation-00-3-query",
+          "account": "synthetic",
+          "thread": "synthetic-room@chatroom",
+          "sender": "member-beta",
+          "message_type": 1,
+          "occurred_at": "2026-10-31T02:36:29.0409858+08:00",
+          "revision": 1,
+          "integrity": "verified"
+        },
+        "original_text": "我今晚吃过饭了吗？",
+        "channel": "wechat",
+        "account": "synthetic",
+        "thread": "synthetic-room@chatroom",
+        "sender": "member-beta",
+        "text": "我今晚吃过饭了吗？",
+        "mode": "direct",
+        "is_group": true,
+        "directed": true,
+        "message_time": "2026-10-31T02:36:29.0409858+08:00"
+      },
+      "original_authorized_history": [
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "aa65deda34a1dd1e4da210c3e90e9d7f8566d50a8303113e9f32a0426afe1274",
+            "message_id": "conversation-00-3-source-1",
+            "server_id": "server-conversation-00-3-source-1",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-alpha",
+            "message_type": 1,
+            "occurred_at": "2026-10-30T18:35:30.033424600Z",
+            "received_at": "2026-10-30T18:36:29.033424600Z",
+            "revision": 1,
+            "body_hash": "4984608c5c2156fe46d083acd63cd9fadbace6f81fdd279baf5e2404173606bf",
+            "integrity": "verified"
+          },
+          "event_id": "aa65deda34a1dd1e4da210c3e90e9d7f8566d50a8303113e9f32a0426afe1274",
+          "message_id": "conversation-00-3-source-1",
+          "role": "user",
+          "text": "我今晚吃了面条。",
+          "sender": "member-alpha",
+          "time": "2026-10-30T18:35:30.0334246Z"
+        },
+        {
+          "user_text_state": "verified_original",
+          "source": {
+            "instance_id": "live-synthetic",
+            "event_id": "9bd9f5be4b5669702af9814fed6e5da43c9f304bddb9ae0c8afc50691a525ad7",
+            "message_id": "conversation-00-3-source-2",
+            "server_id": "server-conversation-00-3-source-2",
+            "account": "synthetic",
+            "thread": "synthetic-room@chatroom",
+            "sender": "member-beta",
+            "message_type": 1,
+            "occurred_at": "2026-10-30T18:35:31.033424600Z",
+            "received_at": "2026-10-30T18:36:29.038966600Z",
+            "revision": 1,
+            "body_hash": "284f79f809514f35d6e6d56c323842b42e8f1d2aa14d47fa68df0f961ad9538f",
+            "integrity": "verified"
+          },
+          "event_id": "9bd9f5be4b5669702af9814fed6e5da43c9f304bddb9ae0c8afc50691a525ad7",
+          "message_id": "conversation-00-3-source-2",
+          "role": "user",
+          "text": "我今晚还没有吃饭。",
+          "sender": "member-beta",
+          "time": "2026-10-30T18:35:31.0334246Z"
+        }
+      ],
+      "original_decision": {
+        "action": "reply",
+        "messages": [
+          "刚才是你自己说的还没吃呢，这才两分钟过去，总不会悄悄吃上了吧~",
+          "没吃就快去弄点，别到半夜饿得睡不着。"
+        ],
+        "reply_contexts": [
+          {
+            "evidence_epoch": "0",
+            "source_versions": {
+              "ff21e4ba48c941c1383456540281df5d82f8fdab02af59aa0c767d9dc86261fb": 1
+            },
+            "target_ids": [
+              "member-beta"
+            ],
+            "anchor_message_id": "conversation-00-3-query",
+            "anchor_event_id": "ff21e4ba48c941c1383456540281df5d82f8fdab02af59aa0c767d9dc86261fb",
+            "source_event_ids": [
+              "ff21e4ba48c941c1383456540281df5d82f8fdab02af59aa0c767d9dc86261fb"
+            ],
+            "context_version": "d7aca486e47ee0ee83a84c7b9c37d2f9657530205c8108a840e4d7a301cc1293",
+            "state": "verified"
+          },
+          {
+            "evidence_epoch": "0",
+            "source_versions": {
+              "ff21e4ba48c941c1383456540281df5d82f8fdab02af59aa0c767d9dc86261fb": 1
+            },
+            "target_ids": [
+              "member-beta"
+            ],
+            "anchor_message_id": "conversation-00-3-query",
+            "anchor_event_id": "ff21e4ba48c941c1383456540281df5d82f8fdab02af59aa0c767d9dc86261fb",
+            "source_event_ids": [
+              "ff21e4ba48c941c1383456540281df5d82f8fdab02af59aa0c767d9dc86261fb"
+            ],
+            "context_version": "d7aca486e47ee0ee83a84c7b9c37d2f9657530205c8108a840e4d7a301cc1293",
+            "state": "verified"
+          }
+        ]
+      },
+      "origin_report_sha256": "eadf529d95983ee816baca7d2b2a858b5e26be04a0d2b13ee437f91855fbe8b5"
+    }
+  ]
+}

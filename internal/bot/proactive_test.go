@@ -47,6 +47,8 @@ func TestProactiveWorkerSendsToSelectedGroupAndFriendOrChoosesSilence(t *testing
 				if err != nil {
 					t.Fatal(err)
 				}
+				records := []Record{}
+				worker.config.Record = func(r Record) { records = append(records, r) }
 				worker.tickCharacter(context.Background())
 				worker.tickCharacter(context.Background())
 				if m.calls != 1 {
@@ -57,7 +59,7 @@ func TestProactiveWorkerSendsToSelectedGroupAndFriendOrChoosesSilence(t *testing
 					want = 0
 				}
 				if sender.calls != want {
-					t.Fatal("wrong sends", sender.calls)
+					t.Fatal("wrong sends", sender.calls, records)
 				}
 				if want == 1 && sender.requests[0].Recipient != thread {
 					t.Fatal("wrong destination")

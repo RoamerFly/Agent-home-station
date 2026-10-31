@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 
 	"encoding/base64"
 	"encoding/hex"
@@ -20,6 +21,66 @@ type IndexedDocument struct {
 	ID, Scope, Kind, Text string
 	At                    time.Time
 	Data                  map[string]any
+	Evidence              *DocumentEvidence
+}
+
+// DocumentEvidence separates facts from cache bookkeeping. Nil protects every
+// query-visible field. Explicit producers must include all factual fields in
+// Stable; scope, kind and search text are always protected. AppendOnly records
+// may grow without invalidation, but changing/removing old records invalidates.
+type DocumentEvidence struct {
+	Stable     map[string]any
+	AppendOnly map[string][]any
+}
+
+type documentEvidenceState struct {
+	StableHash string              `json:"stable_hash"`
+	AppendOnly map[string][]string `json:"append_only,omitempty"`
+}
+
+func documentEvidenceSnapshot(d IndexedDocument, fullHash string) (documentEvidenceState, error) {
+	state := documentEvidenceState{StableHash: fullHash}
+	if d.Evidence == nil {
+		return state, nil
+	}
+	b, err := json.Marshal([]any{"explicit_evidence_v1", d.Scope, d.Kind, d.Text, d.Evidence.Stable})
+	if err != nil {
+		return state, err
+	}
+	h := sha256.Sum256(b)
+	state.StableHash = hex.EncodeToString(h[:])
+	state.AppendOnly = make(map[string][]string, len(d.Evidence.AppendOnly))
+	for key, records := range d.Evidence.AppendOnly {
+		hashes := make([]string, 0, len(records))
+		for _, record := range records {
+			b, err := json.Marshal(record)
+			if err != nil {
+				return state, err
+			}
+			h := sha256.Sum256(b)
+			hashes = append(hashes, hex.EncodeToString(h[:]))
+		}
+		state.AppendOnly[key] = hashes
+	}
+	return state, nil
+}
+
+func documentEvidenceInvalidated(old, next documentEvidenceState) bool {
+	if old.StableHash != next.StableHash || len(old.AppendOnly) != len(next.AppendOnly) {
+		return true
+	}
+	for key, hashes := range old.AppendOnly {
+		current, ok := next.AppendOnly[key]
+		if !ok || len(current) < len(hashes) {
+			return true
+		}
+		for i, hash := range hashes {
+			if current[i] != hash {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Store) SyncDocuments(ctx context.Context, namespace string, docs []IndexedDocument) error {
@@ -30,13 +91,60 @@ func (s *Store) SyncDocuments(ctx context.Context, namespace string, docs []Inde
 		return e
 	}
 	defer tx.Rollback()
+	changed, invalidated := false, false
+	namespaceHash := sha256.Sum256([]byte(namespace))
+	evidencePrefix := "document_evidence:" + hex.EncodeToString(namespaceHash[:]) + ":"
 	for _, d := range docs {
 		b, e := json.Marshal(d.Data)
 		if e != nil {
 			return e
 		}
-		hash := sha256.Sum256(b)
-		if _, e = tx.ExecContext(ctx, `INSERT INTO search_documents(namespace,id,scope,kind,at,text,payload,hash) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(namespace,id) DO UPDATE SET scope=excluded.scope,kind=excluded.kind,at=excluded.at,text=excluded.text,payload=excluded.payload,hash=excluded.hash WHERE search_documents.hash!=excluded.hash`, namespace, d.ID, d.Scope, d.Kind, memoryTime(d.At), d.Text, b, hex.EncodeToString(hash[:])); e != nil {
+		// Every query-visible field belongs to the projection identity. A text
+		// correction with unchanged auxiliary Data must not keep the old body.
+		identity, e := json.Marshal([]any{d.Scope, d.Kind, memoryTime(d.At), d.Text, d.Data})
+		if e != nil {
+			return e
+		}
+		hash := sha256.Sum256(identity)
+		digest := hex.EncodeToString(hash[:])
+		var previous string
+		readErr := tx.QueryRowContext(ctx, "SELECT hash FROM search_documents WHERE namespace=? AND id=?", namespace, d.ID).Scan(&previous)
+		if readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
+			return readErr
+		}
+		nextEvidence, e := documentEvidenceSnapshot(d, digest)
+		if e != nil {
+			return e
+		}
+		evidenceKey := evidencePrefix + hex.EncodeToString([]byte(d.ID))
+		if readErr == nil {
+			var raw string
+			metaErr := tx.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", evidenceKey).Scan(&raw)
+			if errors.Is(metaErr, sql.ErrNoRows) {
+				// An older binary stored only the full projection hash. Explicit
+				// evidence policies become trustworthy after one conservative bump.
+				invalidated = invalidated || previous != digest || d.Evidence != nil
+			} else if metaErr != nil {
+				return metaErr
+			} else {
+				var priorEvidence documentEvidenceState
+				if e := json.Unmarshal([]byte(raw), &priorEvidence); e != nil {
+					return e
+				}
+				invalidated = invalidated || documentEvidenceInvalidated(priorEvidence, nextEvidence)
+			}
+		}
+		if errors.Is(readErr, sql.ErrNoRows) || previous != digest {
+			changed = true
+		}
+		if _, e = tx.ExecContext(ctx, `INSERT INTO search_documents(namespace,id,scope,kind,at,text,payload,hash) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(namespace,id) DO UPDATE SET scope=excluded.scope,kind=excluded.kind,at=excluded.at,text=excluded.text,payload=excluded.payload,hash=excluded.hash WHERE search_documents.hash!=excluded.hash`, namespace, d.ID, d.Scope, d.Kind, memoryTime(d.At), d.Text, b, digest); e != nil {
+			return e
+		}
+		snapshot, e := json.Marshal(nextEvidence)
+		if e != nil {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value!=excluded.value", evidenceKey, string(snapshot)); e != nil {
 			return e
 		}
 	}
@@ -53,11 +161,30 @@ func (s *Store) SyncDocuments(ctx context.Context, namespace string, docs []Inde
 			return e
 		}
 	}
-	if _, e = tx.ExecContext(ctx, "DELETE FROM search_documents WHERE namespace=? AND id NOT IN (SELECT id FROM document_snapshot)", namespace); e != nil {
+	removed, e := tx.ExecContext(ctx, "DELETE FROM search_documents WHERE namespace=? AND id NOT IN (SELECT id FROM document_snapshot)", namespace)
+	if e != nil {
 		return e
 	}
-	if e = bumpMemoryEpoch(tx); e != nil {
+	n, e := removed.RowsAffected()
+	if e != nil {
 		return e
+	}
+	if n > 0 {
+		changed, invalidated = true, true
+	}
+	if _, e = tx.ExecContext(ctx, "DELETE FROM meta WHERE key GLOB ? AND key NOT IN(SELECT ? || lower(hex(id)) FROM document_snapshot)", evidencePrefix+"*", evidencePrefix); e != nil {
+		return e
+	}
+	if changed {
+		e = bumpMemoryEpoch(tx)
+	}
+	if e != nil {
+		return e
+	}
+	if invalidated {
+		if e = bumpRecallEpoch(tx); e != nil {
+			return e
+		}
 	}
 	return tx.Commit()
 }

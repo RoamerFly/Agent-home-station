@@ -36,7 +36,39 @@ class PROCESS_INFORMATION(c.Structure):
                 ("dwProcessId", w.DWORD), ("dwThreadId", w.DWORD)]
 
 
-def launch(argv, cwd, writable, readonly, output, error_output=None):
+def mount_granted(path, sid, mode):
+    """Avoid recursively repropagating an unchanged root ACE on every job."""
+    adv = c.WinDLL("advapi32", use_last_error=True)
+    kernel = c.WinDLL("kernel32")
+    dacl, descriptor = c.c_void_p(), c.c_void_p()
+    adv.GetNamedSecurityInfoW.argtypes = [w.LPWSTR, c.c_int, w.DWORD, c.c_void_p, c.c_void_p,
+                                        c.POINTER(c.c_void_p), c.c_void_p, c.POINTER(c.c_void_p)]
+    adv.GetAclInformation.argtypes = [c.c_void_p, c.c_void_p, w.DWORD, c.c_int]
+    adv.GetAce.argtypes = [c.c_void_p, w.DWORD, c.POINTER(c.c_void_p)]
+    adv.EqualSid.argtypes = [c.c_void_p, c.c_void_p]
+    kernel.LocalFree.argtypes = [c.c_void_p]
+    if adv.GetNamedSecurityInfoW(str(path), 1, 4, None, None, c.byref(dacl), None, c.byref(descriptor)):
+        return False
+    try:
+        info = (w.DWORD * 3)()
+        if not dacl or not adv.GetAclInformation(dacl, c.byref(info), c.sizeof(info), 2):
+            return False
+        expected = 0x1301BF if mode == "M" else 0x1200A9
+        for i in range(info[0]):
+            ace = c.c_void_p()
+            if not adv.GetAce(dacl, i, c.byref(ace)):
+                return False
+            flags = c.c_ubyte.from_address(ace.value + 1).value
+            kind = c.c_ubyte.from_address(ace.value).value
+            mask = w.DWORD.from_address(ace.value + 4).value
+            if kind == 0 and flags & 3 == 3 and mask & expected == expected and adv.EqualSid(ace.value + 8, sid):
+                return True
+        return False
+    finally:
+        kernel.LocalFree(descriptor)
+
+
+def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_runtime=False, environment=None, input_stream=None):
     """Return a process handle, pid and cleanup. Child inherits only stdio.
 
     LPAC additionally opts out of implicit ALL APPLICATION PACKAGES grants.
@@ -80,7 +112,9 @@ def launch(argv, cwd, writable, readonly, output, error_output=None):
     for p, _ in paths:
         if Path(p).parent == Path(p) or Path(p).is_junction() or Path(p).is_symlink():
             raise RuntimeError("lpac_invalid_mount")
-    name = "WechatAgent." + hashlib.sha256(repr(sorted(paths)).encode()).hexdigest()[:32]
+    if type(music_runtime) is not bool:
+        raise ValueError("invalid_music_runtime_policy")
+    name = "WechatAgent." + hashlib.sha256(repr((sorted(paths), music_runtime)).encode()).hexdigest()[:32]
     hr = u.CreateAppContainerProfile(name, name, "Managed WeChat workspace", None, 0, c.byref(sid))
     if hr != 0 and u.DeriveAppContainerSidFromAppContainerName(name, c.byref(sid)) != 0:
         raise RuntimeError("lpac_profile_unavailable")
@@ -88,7 +122,10 @@ def launch(argv, cwd, writable, readonly, output, error_output=None):
     if not adv.ConvertSidToStringSidW(sid, c.byref(sid_text)):
         raise c.WinError(c.get_last_error())
     try:
+        package_sid = sid_text.value
         for path, mode in paths:
+            if mount_granted(path, sid, mode):
+                continue
             # No /T: grants inherit to descendants; unrelated objects unchanged.
             subprocess.run([str(Path(os.environ["SystemRoot"]) / "System32/icacls.exe"), path,
                             "/grant", "*" + sid_text.value + ":(OI)(CI)" + mode, "/Q"], check=True,
@@ -104,13 +141,17 @@ def launch(argv, cwd, writable, readonly, output, error_output=None):
     si = STARTUPINFOEX()
     si.StartupInfo.cb = c.sizeof(si)
     si.lpAttributeList = c.cast(buf, c.c_void_p)
-    caps = SECURITY_CAPABILITIES(sid, None, 0, 0)
+    # Only the trusted, explicitly enabled music supervisor requests this
+    # policy. windows_agent_host never reads a request field for it.
+    capabilities = MusicCapabilities() if music_runtime else None
+    caps = SECURITY_CAPABILITIES(sid, capabilities.pointer if capabilities else None,
+                                 capabilities.count if capabilities else 0, 0)
     optout = w.DWORD(1)
     handle = msvcrt.get_osfhandle(output.fileno())
     os.set_handle_inheritable(handle, True)
     error_handle = msvcrt.get_osfhandle(error_output.fileno()) if error_output else handle
     os.set_handle_inheritable(error_handle, True)
-    stdin = open(os.devnull, "rb")
+    stdin = input_stream if input_stream is not None else open(os.devnull, "rb")
     input_handle = msvcrt.get_osfhandle(stdin.fileno())
     os.set_handle_inheritable(input_handle, True)
     inherited = list(dict.fromkeys([handle, error_handle, input_handle]))
@@ -127,6 +168,14 @@ def launch(argv, cwd, writable, readonly, output, error_output=None):
         env = {"LOCALAPPDATA":str(Path(writable[0])/"scratch"),"APPDATA":str(Path(writable[0])/"scratch"),"USERPROFILE":str(writable[0]),"SystemDrive":os.environ.get("SystemDrive","C:"),"ALLUSERSPROFILE":os.environ.get("ProgramData",r"C:\ProgramData"),"ProgramData":os.environ.get("ProgramData",r"C:\ProgramData"),"SystemRoot": os.environ["SystemRoot"], "WINDIR": os.environ["SystemRoot"],
                "PATH": str(Path(os.environ["SystemRoot"]) / "System32"),
                "TEMP": str(Path(writable[0]) / "scratch"), "TMP": str(Path(writable[0]) / "scratch")}
+        if environment:
+            permitted = {"PATH", "HF_HOME", "HF_HUB_CACHE", "TORCH_HOME", "HF_HUB_OFFLINE",
+                         "NLTK_DATA",
+                         "TRANSFORMERS_OFFLINE", "PYTHONDONTWRITEBYTECODE", "PYTHONUTF8",
+                         "PYTORCH_CUDA_ALLOC_CONF", "MPLCONFIGDIR", "NUMBA_CACHE_DIR", "WECHAT_WINDOWS_MUSIC_RUNTIME", "USERNAME"}
+            if not music_runtime or set(environment) - permitted or any(not isinstance(v, str) or "\0" in v for v in environment.values()):
+                raise ValueError("invalid_music_runtime_environment")
+            env.update(environment)
         Path(env["TEMP"]).mkdir(exist_ok=True)
         block = c.create_unicode_buffer("\0".join(k + "=" + v for k, v in sorted(env.items())) + "\0\0")
         pi = PROCESS_INFORMATION()
@@ -144,13 +193,55 @@ def launch(argv, cwd, writable, readonly, output, error_output=None):
             if job:k.CloseHandle(job)
             raise RuntimeError("lpac_job_isolation_failed")
         k.ResumeThread(pi.hThread);k.CloseHandle(pi.hThread)
-        return SandboxedProcess(k,pi.hProcess,job,pi.dwProcessId)
+        process = SandboxedProcess(k,pi.hProcess,job,pi.dwProcessId)
+        process.package_sid = package_sid
+        return process
     finally:
         os.set_handle_inheritable(handle, False)
         os.set_handle_inheritable(error_handle, False)
-        stdin.close()
+        os.set_handle_inheritable(input_handle, False)
+        if input_stream is None:
+            stdin.close()
         k.DeleteProcThreadAttributeList(buf)
         adv.FreeSid(sid)
+        if capabilities:
+            capabilities.close()
+
+
+class MusicCapabilities:
+    """The two owner-authorized capabilities, never arbitrary model input."""
+    def __init__(self):
+        class Entry(c.Structure):
+            _fields_ = [("Sid", c.c_void_p), ("Attributes", w.DWORD)]
+        self.allocations = []
+        derive = c.WinDLL("kernelbase", use_last_error=True).DeriveCapabilitySidsFromName
+        derive.argtypes = [w.LPCWSTR, c.POINTER(c.c_void_p), c.POINTER(w.DWORD), c.POINTER(c.c_void_p), c.POINTER(w.DWORD)]
+        entries = []
+        try:
+            for name in ("registryRead", "privateNetworkClientServer"):
+                groups, values = c.c_void_p(), c.c_void_p()
+                group_count, count = w.DWORD(), w.DWORD()
+                if not derive(name, c.byref(groups), c.byref(group_count), c.byref(values), c.byref(count)):
+                    raise c.WinError(c.get_last_error())
+                for array, length in ((groups, group_count.value), (values, count.value)):
+                    for i in range(length):
+                        value = c.cast(array, c.POINTER(c.c_void_p))[i]
+                        self.allocations.append(value)
+                        if array is values:
+                            entries.append(Entry(value, 4))
+                    self.allocations.append(array)
+            self.entries = (Entry * len(entries))(*entries)
+            self.pointer, self.count = c.cast(self.entries, c.c_void_p), len(entries)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        kernel = c.WinDLL("kernel32")
+        kernel.LocalFree.argtypes = [c.c_void_p]
+        for value in reversed(self.allocations):
+            kernel.LocalFree(value)
+        self.allocations.clear()
 
 class BASIC_LIMIT(c.Structure):
     _fields_=[("PerProcessUserTimeLimit",c.c_int64),("PerJobUserTimeLimit",c.c_int64),("LimitFlags",w.DWORD),("MinimumWorkingSetSize",c.c_size_t),("MaximumWorkingSetSize",c.c_size_t),("ActiveProcessLimit",w.DWORD),("Affinity",c.c_size_t),("PriorityClass",w.DWORD),("SchedulingClass",w.DWORD)]
@@ -176,6 +267,19 @@ class SandboxedProcess:
         return self.returncode
     def kill(self):
         if self.job:self.k.TerminateJobObject(self.job,1)
+    def terminate(self):
+        self.kill()
     def __del__(self):
         if self.job:self.k.CloseHandle(self.job)
         if self.handle:self.k.CloseHandle(self.handle)
+
+
+def host_pipe_path(local_name, process):
+    prefix = "\\\\.\\pipe\\LOCAL\\"
+    if not local_name.startswith(prefix) or "\\" in local_name[len(prefix):]:
+        raise ValueError("invalid_music_named_pipe")
+    session = w.DWORD()
+    kernel = c.WinDLL("kernel32", use_last_error=True)
+    if not kernel.ProcessIdToSessionId(process.pid, c.byref(session)):
+        raise c.WinError(c.get_last_error())
+    return "\\\\.\\pipe\\Sessions\\" + str(session.value) + "\\AppContainerNamedObjects\\" + process.package_sid + "\\" + local_name[len(prefix):]

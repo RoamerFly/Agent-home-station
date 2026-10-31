@@ -3,12 +3,31 @@ from pathlib import Path
 import tempfile
 import subprocess
 import unittest
+from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
-from gpt_sovits_tts import parser, prepare
+from gpt_sovits_tts import parser, prepare, install_windows_audio_loader
 from register_gpt_sovits import copy_verified, register
 
 
 class GPTSoVITSTests(unittest.TestCase):
+    def test_windows_decoder_preserves_slice_channels_and_other_errors(self):
+        original=Mock(side_effect=ImportError('TorchCodec is required'))
+        module=SimpleNamespace(torchaudio=SimpleNamespace(load=original))
+        install_windows_audio_loader(module)
+        samples=Mock(); samples.copy.return_value='frames-first'; samples.T.copy.return_value='channels-first'
+        reader=Mock(return_value=(samples,32000))
+        with patch.dict('sys.modules',{'torch':SimpleNamespace(from_numpy=lambda x:x),'soundfile':SimpleNamespace(read=reader)}):
+            result=module.torchaudio.load('synthetic.wav',frame_offset=7,num_frames=19)
+            self.assertEqual(result,('channels-first',32000))
+            reader.assert_called_once_with('synthetic.wav',start=7,frames=19,dtype='float32',always_2d=True)
+            self.assertEqual(module.torchaudio.load('synthetic.wav',channels_first=False),('frames-first',32000))
+            with self.assertRaisesRegex(ValueError,'normalized_samples'):
+                module.torchaudio.load('synthetic.wav',normalize=False)
+            original.side_effect=OSError('unreadable source')
+            with self.assertRaisesRegex(OSError,'unreadable source'):
+                module.torchaudio.load('synthetic.wav')
+
     def fixture(self, directory):
         root = Path(directory)
         for name in ['project/GPT_SoVITS/TTS_infer_pack/TTS.py','models/chinese-roberta-wwm-ext-large/config.json',

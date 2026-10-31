@@ -51,6 +51,7 @@ func TestNativeMusicHasAcknowledgementBeforeGenerationAfterToolDiscovery(t *test
 		}}
 		engine.MaxToolCalls = 4
 		in := Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", Mode: "direct", TraceID: "one", Text: "可以，忧郁风格吧"}
+		in = syntheticNativeInput(in, "one")
 		if task {
 			in.TaskID = "continuation"
 		}

@@ -139,7 +139,8 @@ func (m *Manager) memoryProvider(c memoryServices) (companion.LanguageModel, err
 	if e := writePrivate(keyPath, []byte(c.Maintenance.APIKey)); e != nil {
 		return nil, e
 	}
-	return deepseek.New(deepseek.Config{BaseURL: c.Maintenance.BaseURL, KeyFile: keyPath, Model: c.Maintenance.Model, MaxTokens: 4096, ToolMaxTokens: 4096, Compatible: c.Maintenance.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
+	shared := m.Config().Config
+	return deepseek.New(deepseek.Config{ThinkingEnabled: &shared.ThinkingEnabled, ReasoningEffort: shared.ReasoningEffort, BaseURL: c.Maintenance.BaseURL, KeyFile: keyPath, Model: c.Maintenance.Model, MaxTokens: 4096, ToolMaxTokens: 4096, Compatible: c.Maintenance.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
 		if m.billing != nil {
 			cfg := m.Config().Config
 			cfg.BaseURL = c.Maintenance.BaseURL

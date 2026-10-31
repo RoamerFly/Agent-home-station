@@ -19,25 +19,26 @@ type reliableNative interface {
 	Catalog(context.Context, string, string, string, string) (linuxnative.CatalogPage, error)
 }
 type delivery struct {
-	Trace            string                 `json:"trace"`
-	Thread           string                 `json:"thread"`
-	Text             string                 `json:"text"`
-	Bubble           int                    `json:"bubble"`
-	Key              string                 `json:"key"`
-	ID               string                 `json:"id"`
-	State            string                 `json:"state"`
-	Attempts         int                    `json:"attempts"`
-	Checks           int                    `json:"checks"`
-	Created          time.Time              `json:"created"`
-	Next             time.Time              `json:"next"`
-	Quote            *linuxnative.ToolQuote `json:"quote,omitempty"`
-	Input            companion.Input        `json:"input"`
-	Reason           string                 `json:"reason"`
-	PreviousKeys     []string               `json:"previous_keys,omitempty"`
-	UncertainRounds  int                    `json:"uncertain_rounds,omitempty"`
-	PreviousTexts    []string               `json:"previous_texts,omitempty"`
-	RetryReviewReady bool                   `json:"retry_review_ready,omitempty"`
-	SubmittedText    string                 `json:"submitted_text,omitempty"`
+	ReviewEvidence   *companion.GenerationEvidence `json:"review_evidence,omitempty"`
+	Trace            string                        `json:"trace"`
+	Thread           string                        `json:"thread"`
+	Text             string                        `json:"text"`
+	Bubble           int                           `json:"bubble"`
+	Key              string                        `json:"key"`
+	ID               string                        `json:"id"`
+	State            string                        `json:"state"`
+	Attempts         int                           `json:"attempts"`
+	Checks           int                           `json:"checks"`
+	Created          time.Time                     `json:"created"`
+	Next             time.Time                     `json:"next"`
+	Quote            *linuxnative.ToolQuote        `json:"quote,omitempty"`
+	Input            companion.Input               `json:"input"`
+	Reason           string                        `json:"reason"`
+	PreviousKeys     []string                      `json:"previous_keys,omitempty"`
+	UncertainRounds  int                           `json:"uncertain_rounds,omitempty"`
+	PreviousTexts    []string                      `json:"previous_texts,omitempty"`
+	RetryReviewReady bool                          `json:"retry_review_ready,omitempty"`
+	SubmittedText    string                        `json:"submitted_text,omitempty"`
 }
 
 func (w *Worker) markSending(trace string) { w.queuePhase(trace, "sending") }
@@ -48,6 +49,11 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 	}
 	native, ok := w.sender.(reliableNative)
 	if !ok || w.runtime == nil {
+		var err error
+		input, text, err = w.prepareGroundedText(ctx, input, text)
+		if err != nil {
+			return sending.Receipt{}, err
+		}
 		return w.sender.SendText(ctx, sending.TextRequest{Recipient: input.Thread, Text: text})
 	}
 	if len(w.runtime.Deliveries) >= 3000 {
@@ -64,9 +70,14 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 			return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_reconciliation_pending", IntentID: old.ID}
 		}
 	}
+	var err error
+	input, text, err = w.prepareGroundedText(ctx, input, text)
+	if err != nil {
+		return sending.Receipt{}, err
+	}
 	d := &delivery{Trace: input.TraceID, Thread: input.Thread, Text: text, Bubble: bubble, Created: time.Now().UTC(), State: "prepared", Input: input}
 	d.Key = "bot-" + messageHash(input.Thread + "|" + input.TraceID + fmt.Sprint(bubble))[:48]
-	if (w.config.Options.QuoteReplies && input.Directed || input.QuoteSharedMessage) && input.QuoteServerID != "" && input.TraceID != "" {
+	if (w.config.Options.QuoteReplies && input.Directed || input.QuoteSharedMessage || input.ReplyContext != nil && input.ReplyContext.QuoteRequired) && input.QuoteServerID != "" && input.TraceID != "" {
 		d.Quote = replyQuote(input)
 	}
 	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
@@ -80,6 +91,9 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 	return w.submitDelivery(ctx, native, d, false)
 }
 func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delivery, lookupFirst bool) (sending.Receipt, error) {
+	if d.ReviewEvidence != nil {
+		ctx = companion.WithStoredGenerationEvidence(ctx, *d.ReviewEvidence)
+	}
 	status := linuxnative.ToolStatus{}
 	var err error
 	if lookupFirst {
@@ -89,6 +103,13 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 		}
 	}
 	if !lookupFirst || errors.Is(err, linuxnative.ErrToolNotFound) {
+		in, text, validationErr := w.prepareGroundedText(ctx, d.Input, d.Text)
+		if validationErr != nil {
+			d.State, d.Reason = "stopped", "reply_grounding_invalid"
+			w.persistErr = w.saveRuntime()
+			return sending.Receipt{}, validationErr
+		}
+		d.Input, d.Text = in, text
 		if gate := w.sendGate(d.Thread); time.Now().Before(gate) {
 			d.State, d.Next, d.Reason = "prepared", gate, "delivery_pacing"
 			w.persistErr = w.saveRuntime()
@@ -166,6 +187,9 @@ func (w *Worker) waitDelivery(d *delivery, reason string) (sending.Receipt, erro
 // original incoming message, not the ID of the background task that completed.
 func replyQuote(in companion.Input) *linuxnative.ToolQuote {
 	id := in.OriginTraceID
+	if in.ReplyContext != nil && in.ReplyContext.AnchorMessageID != "" {
+		id = in.ReplyContext.AnchorMessageID
+	}
 	if id == "" {
 		id = in.TraceID
 	}

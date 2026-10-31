@@ -46,7 +46,9 @@ func TestAutonomousWakeSurvivesQuietRestartAndRechainsBeyondDefaults(t *testing.
 	if err := json.Unmarshal([]byte(model.turns[len(model.turns)-1]["content"]), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["speaker_id"] != "" || !strings.Contains(payload["text"].(string), "关注最近提到的新歌") {
+	runtimeContext, _ := payload["runtime_context"].(map[string]any)
+	runtimeText, _ := runtimeContext["text"].(string)
+	if requestActorFromPacket(payload) != "" || payload["text"] != "" || !strings.Contains(runtimeText, "关注最近提到的新歌") || runtimeContext["can_support_user_facts"] != false {
 		t.Fatal("plan lost or old owner identity inherited", payload)
 	}
 }

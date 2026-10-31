@@ -78,7 +78,7 @@ func TestRVCGuideMigrationPreservesCustomPathsAndReplacesOldDefault(t *testing.T
 		t.Fatal(d, err)
 	}
 	rvc, err := f.manager.workspace.Read("shared", "project-rvc.md")
-	if err != nil || !strings.Contains(rvc.Content, "scripts/singing_voice.py") {
+	if err != nil || !strings.Contains(rvc.Content, "project_read(id=rvc)") || strings.Contains(rvc.Content, "实际源码scripts/rvc_cover.py") {
 		t.Fatal(rvc, err)
 	}
 }

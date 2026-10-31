@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "web.search",
+      "implementation": "ready",
+      "description": "搜索公共网页，默认8条，可指定页大小；不相关时回退公共索引。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4194304
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "read"
+    },
+    {
+      "id": "web.read",
+      "implementation": "ready",
+      "description": "读取公共网页正文，默认10000字符，可分页并校验内容哈希。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4194304
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expected_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "read"
+    }
+  ]
+}

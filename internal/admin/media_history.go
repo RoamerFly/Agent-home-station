@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Control-plane metadata, never mounted into an Agent workspace. Keeping this
@@ -22,6 +23,68 @@ type assetHistory struct {
 func (m *Manager) assetHistoryPath(a mediaAsset) string {
 	id := sha256.Sum256([]byte(a.Account + "|" + a.Scope + "|" + a.ID))
 	return filepath.Join(m.dir, "media-history", hex.EncodeToString(id[:])+".json")
+}
+
+// Older local copies can retain the complete, identity-bound history under a
+// different filename. Restore only a missing canonical path from a unique
+// matching envelope. A truly missing history or a wrong envelope still fails
+// closed in loadAssetHistory; the index preview is never treated as complete.
+func (m *Manager) recoverAssetHistoryPaths(items []mediaAsset) error {
+	missing := map[string]mediaAsset{}
+	for _, a := range items {
+		if !a.HistoryStored {
+			continue
+		}
+		if _, err := os.Stat(m.assetHistoryPath(a)); errors.Is(err, os.ErrNotExist) {
+			missing[a.Account+"|"+a.Scope+"|"+a.ID] = a
+		} else if err != nil {
+			return err
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Join(m.dir, "media-history"))
+	if err != nil {
+		return err
+	}
+	if len(entries) > 100000 {
+		return errors.New("media_history_recovery_index_too_large")
+	}
+	recovered := map[string][]byte{}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") || !entry.Type().IsRegular() {
+			continue
+		}
+		path := filepath.Join(m.dir, "media-history", entry.Name())
+		info, err := entry.Info()
+		if err != nil || info.Size() > 16<<20 {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var history assetHistory
+		if json.Unmarshal(data, &history) != nil {
+			continue
+		}
+		key := history.Account + "|" + history.Scope + "|" + history.ID
+		if a, ok := missing[key]; ok && path != m.assetHistoryPath(a) {
+			if _, duplicate := recovered[key]; duplicate {
+				return errors.New("media_history_recovery_ambiguous")
+			}
+			recovered[key] = data
+		}
+	}
+	for key, a := range missing {
+		if data, ok := recovered[key]; ok {
+			if err := writePrivate(m.assetHistoryPath(a), data); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func mergeAssetRequests(groups ...[]assetRequest) []assetRequest {

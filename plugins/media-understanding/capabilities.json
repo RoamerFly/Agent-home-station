@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "media.observe",
+      "implementation": "migration-pending",
+      "description": "ASR、图片与视频观察",
+      "permissions": [
+        "artifact.read",
+        "artifact.write",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "media.transcribe",
+      "implementation": "migration-pending",
+      "description": "ASR、图片与视频观察",
+      "permissions": [
+        "artifact.read",
+        "artifact.write",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    }
+  ]
+}

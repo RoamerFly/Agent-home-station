@@ -73,6 +73,27 @@ func (n *receiptLookupNative) LookupSend(_ context.Context, key string) (linuxna
 	}
 	return linuxnative.ToolStatus{}, linuxnative.ErrToolNotFound
 }
+
+func TestStoppedAgentCancelsOnlyUnsubmittedCrossMediaBatch(t *testing.T) {
+	f, _, batch := crossRecoveryFixture(t, 1)
+	f.login()
+	n := &receiptLookupNative{forwardNative: f.manager.native.(*forwardNative), statuses: map[string]linuxnative.ToolStatus{}}
+	f.manager.native = n
+	f.manager.mu.Lock()
+	f.manager.status.State = "disabled"
+	f.manager.mu.Unlock()
+	path := "/api/agent/media-batches/" + batch.ID + "/cancel"
+	if code, _, _ := f.request("POST", path, map[string]any{}, true, true); code != 200 {
+		t.Fatal("unsubmitted batch was not cancelled", code)
+	}
+	stored, err := f.manager.readCrossBatch(batch.ID)
+	if err != nil || stored.CancelledAt.IsZero() || f.manager.crossSeedAllowed(batch.Parts[0]) || len(f.manager.mediaSeeds) != 0 {
+		t.Fatal("cancelled batch remains sendable", err, stored.CancelledAt, len(f.manager.mediaSeeds))
+	}
+	if n.lookups != 1 || n.submits.Load() != 0 {
+		t.Fatal("cancellation sent WeChat", n.lookups, n.submits.Load())
+	}
+}
 func TestCrossStatusCommitsObservedReceiptsAndSettlesParentWithoutSending(t *testing.T) {
 	f, p, b := crossRecoveryFixture(t, 2)
 	n := &receiptLookupNative{forwardNative: f.manager.native.(*forwardNative), statuses: map[string]linuxnative.ToolStatus{}}

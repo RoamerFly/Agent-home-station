@@ -22,6 +22,7 @@ type Permissions struct {
 	Proactive        bool `json:"proactive"`
 }
 type Config struct {
+	Grounding            *GroundingSettings    `json:"grounding,omitempty"`
 	Memory               *MemorySettings       `json:"memory,omitempty"`
 	Context              *ContextSettings      `json:"context,omitempty"`
 	Conversation         *ConversationSettings `json:"conversation,omitempty"`
@@ -84,6 +85,9 @@ func Normalize(c Config) Config {
 	return c
 }
 func Validate(c Config) error {
+	if _, err := c.GroundingOptions(); err != nil {
+		return err
+	}
 	if err := c.MemoryConfig().Validate(); err != nil {
 		return err
 	}

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "id": "share-reader",
+  "name": "分享内容读取",
+  "version": "0.1.2",
+  "host_protocol": 1,
+  "status": "migration-pending",
+  "platforms": [
+    "windows-amd64",
+    "linux-amd64"
+  ],
+  "runtime": {
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
+  },
+  "permissions": [
+    "network",
+    "artifact.write"
+  ],
+  "dependencies": [
+    "media-understanding"
+  ],
+  "files": {
+    "capabilities.json": "8d2cf3adb8cc03ea12a8b252843c9a0d152128571714aecbcbf615bd06982de9",
+    "CHANGELOG.md": "f5f94e93fba0a40c392b19e858cfce835f475c3939cd8c7c5d7066f4aecf267c",
+    "config.schema.json": "f9bdd2e45ff43adb4ec236f07926038fc0b4a94664698c3de4cf4576034a0f75",
+    "MIGRATION.md": "c4ccfde41fcea182f02c3687fa0acb441824899c2a5a8993005af49aae5d1e8d",
+    "PERMISSIONS.md": "abf446a804f70c1b40f6ad055fc0898a35c57ad34b4310710b5a05642a11dde6",
+    "README.md": "c14aca36043442b97d1ec5fa8407715e71bfd104b7afd8e592f41649ebde1257",
+    "runtime/channels.py": "bbf448c6c62f289e1b8c7089387adda5ec616adc497f3e8a51d31a0784b3cd2e",
+    "runtime/main.py": "c7fa1a8f102e67e8476b8682a8531667fafd12395fa6229e7d026785d46ddd63",
+    "runtime/public_share.py": "03522e2a2c84a2f5338652fd6e860e3ca0cd7398c9f6be1a4f602d2acfff3302",
+    "runtime/README.md": "1f1053374388ec4d3b8c2bd4530b6a890b831409a70535f94d82a3b871907e6f",
+    "tests/fixtures/scope.json": "6c11e95a6d41553f04b14b69e66426f51e35ab56623f9b22e58c10c83c2e2b10",
+    "tests/test_channels.py": "1014c9abbb6a67b92cc59ed7ed40dd45df939635b28a0c437122b29618fc008d",
+    "tests/test_public_share.py": "d490893dc85b1b49867ab2df6985f9b8cff19fd09681904da8c982f8765aa739",
+    "ui.schema.json": "d2df68da051917e4ba8b891c69d93b6d2e2b626675a506192bfd3bdf015c612d"
+  },
+  "http_routes": [
+    {
+      "id": "channels-parse",
+      "endpoint": "https://yuanbao.tencent.com/api/weixin/get_parse_result",
+      "capabilities": [
+        "share.resolve_channels"
+      ],
+      "credential": "yuanbao_cookie",
+      "credential_header": "Cookie",
+      "headers": {
+        "Origin": "https://yuanbao.tencent.com",
+        "Referer": "https://yuanbao.tencent.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"
+      }
+    },
+    {
+      "id": "channels-feed",
+      "endpoint": "https://channels.weixin.qq.com/finder-preview/api/feed/get_feed_info",
+      "capabilities": [
+        "share.resolve_channels"
+      ],
+      "headers": {
+        "Origin": "https://channels.weixin.qq.com",
+        "Referer": "https://channels.weixin.qq.com/finder-preview/"
+      },
+      "referer_path_prefix": "/finder-preview/"
+    },
+    {
+      "id": "channels-shortlink",
+      "endpoint": "https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/post/get_object_short_link",
+      "capabilities": [
+        "share.resolve_channels"
+      ],
+      "credential": "assistant_cookie",
+      "credential_header": "Cookie",
+      "headers": {
+        "Origin": "https://channels.weixin.qq.com",
+        "Referer": "https://channels.weixin.qq.com/platform/post/list"
+      }
+    }
+  ]
+}

@@ -19,6 +19,8 @@ import (
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mobile"
+	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/sending"
 )
 
@@ -86,6 +88,13 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
+	packageMu           sync.Mutex
+	packages            *pluginhost.Store
+	packagesClosed      bool
+	packageRuntime      *pluginruntime.Controller
+	packageRuntimeReady bool
+	musicProcessMu      sync.Mutex
+	windowsMusic        *windowsMusicProcess
 	memoryRunnerMu      sync.Mutex
 	memoryRunnerWG      sync.WaitGroup
 	memoryRunners       map[string]context.CancelFunc
@@ -307,6 +316,10 @@ func (m *Manager) Config() ConfigView {
 	return c.view()
 }
 func cloneConfig(c Config) Config {
+	if c.Companion.Grounding != nil {
+		copy := *c.Companion.Grounding
+		c.Companion.Grounding = &copy
+	}
 	if c.Companion.Context != nil {
 		copy := *c.Companion.Context
 		c.Companion.Context = &copy
@@ -436,6 +449,18 @@ func (m *Manager) stop() error {
 	return nil
 }
 func (m *Manager) Close() error {
+	m.packageMu.Lock()
+	m.packagesClosed = true
+	packages, packageRuntime := m.packages, m.packageRuntime
+	m.packageMu.Unlock()
+	var packageErr error
+	if packageRuntime != nil {
+		packageErr = packageRuntime.Close()
+	}
+	if packages != nil && packageErr == nil {
+		packageErr = packages.Close()
+	}
+	m.closeWindowsMusic()
 	m.closeMemoryRunners()
 	if m.accounts != nil {
 		m.accounts.close()
@@ -448,7 +473,7 @@ func (m *Manager) Close() error {
 	if m.mobile != nil {
 		_ = m.mobile.Close()
 	}
-	err := m.stop()
+	err := errors.Join(packageErr, m.stop())
 	if m.workspace != nil {
 		err = errors.Join(err, m.workspace.Close())
 	}
@@ -467,10 +492,10 @@ func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {
 		return nil, err
 	}
 	toolTokens := c.MaxTokens
-	if c.Companion.Enabled && m.agent != nil && m.agent.config().Enabled {
+	if !c.ThinkingEnabled && c.Companion.Enabled && m.agent != nil && m.agent.config().Enabled {
 		toolTokens = 4096
 	}
-	return deepseek.New(deepseek.Config{BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: toolTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
+	return deepseek.New(deepseek.Config{ThinkingEnabled: &c.ThinkingEnabled, ReasoningEffort: c.ReasoningEffort, BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: toolTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
 		if m.billing != nil {
 			if err := m.billing.record(c, u); err != nil {
 				m.log("usage_record_save_failed")
@@ -515,7 +540,7 @@ func (m *Manager) start(c Config) {
 		}
 		var model bot.Model = provider
 		if c.Companion.Enabled {
-			character, err := companion.New(c.Companion, m.memory, provider, c.SystemPrompt)
+			character, err := companion.New(c.sharedCompanion(), m.memory, provider, c.SystemPrompt)
 			if err != nil {
 				m.setState("error")
 				m.log("character_configuration_error")
@@ -535,6 +560,13 @@ func (m *Manager) start(c Config) {
 					return companion.MemorySettings{}
 				}
 				return cfg.Settings
+			}
+			character.ReplyAuditOptions = func() companion.ReplyAuditSettings {
+				cfg, e := m.loadMemoryServices()
+				if e != nil {
+					return companion.ReplyAuditSettings{Enabled: false, RetentionDays: 7}
+				}
+				return cfg.Settings.AuditConfig()
 			}
 			if names, ok := m.native.(companion.NameLookup); ok {
 				character.Names = names
@@ -564,7 +596,7 @@ func (m *Manager) start(c Config) {
 		m.warmFriends(friendCtx)
 		cancelFriends()
 		c.friendIDs = m.cachedFriends()
-		worker, err := bot.New(bot.Config{MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, ReportFailure: m.queueOperationReport, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
+		worker, err := bot.New(bot.Config{MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, ReportFailure: m.queueOperationReport, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
 		if err != nil {
 			m.setState("error")
 			m.log("bot_configuration_error")
@@ -592,6 +624,8 @@ func (m *Manager) start(c Config) {
 		if err != nil {
 			m.setState("error")
 			m.log("bot_stopped_check_connection_or_checkpoint")
+			m.log(botFailureReason(err))
+			m.record(bot.Record{Event: "bot_runtime_failed", Category: "error", Origin: "system", Status: "failed", Reason: botFailureReason(err)})
 		}
 	}()
 }

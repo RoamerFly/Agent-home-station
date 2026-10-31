@@ -10,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import uuid
 
 
 def canonical(path):
@@ -90,6 +91,18 @@ def command(public, private, cwd, argv, gpu=False, ipc=None):
 
 
 def run(public, private, cwd, argv, *, gpu=False, timeout=None, ipc=None):
+    if sys.platform == "win32":
+        child = launch_windows(public, private, cwd, argv, gpu=gpu)
+        try:
+            code = child.wait(timeout=timeout)
+            if code:
+                raise subprocess.CalledProcessError(code, argv)
+        except BaseException:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+            raise
+        return
     child = subprocess.Popen(command(public, private, cwd, argv, gpu, ipc), env={"PATH": "/usr/bin:/bin"}, start_new_session=True)
     try:
         code = child.wait(timeout=timeout)
@@ -100,6 +113,44 @@ def run(public, private, cwd, argv, *, gpu=False, timeout=None, ipc=None):
             os.killpg(child.pid, signal.SIGKILL)
             child.wait()
         raise
+
+
+def launch_windows(public, private, cwd, argv, *, gpu=False):
+    """Trusted music-only policy; ordinary Agent broker has no such switch."""
+    if sys.platform != "win32" or os.environ.get("WECHAT_WINDOWS_MUSIC_POLICY") != "registry-read-private-network-v1":
+        raise RuntimeError("windows_music_policy_not_authorized")
+    public, private, cwd = map(canonical, (public, private, cwd))
+    if public.name != "public_workspace" or private.parent.name != "pri_workspace" or public.parent != private.parent.parent:
+        raise ValueError("music_managed_layout_required")
+    from music_account_scope import account_scope
+    account_scope(private)
+    if not cwd.is_relative_to(private):
+        raise ValueError("music_working_directory_outside_account")
+    if not argv or any(not isinstance(x, str) or "\0" in x for x in argv):
+        raise ValueError("music_argv_invalid")
+    binary = canonical(argv[0])
+    if not binary.is_relative_to(public / "runtimes"):
+        raise ValueError("music_interpreter_not_managed")
+    from windows_lpac import launch
+    media = canonical(os.environ["WECHAT_WINDOWS_MUSIC_MEDIA"])
+    if not (media / "ffmpeg.exe").is_file() or not (media / "ffprobe.exe").is_file():
+        raise ValueError("windows_music_media_unavailable")
+    scratch = private / "scratch"
+    scratch.mkdir(exist_ok=True)
+    log = private / "music/runtime-logs" / uuid.uuid4().hex
+    log.mkdir(parents=True)
+    environment = {"PATH": str(media) + os.pathsep + str(Path(os.environ["SystemRoot"]) / "System32"),
+                   "HF_HOME": str(scratch / "hf-cache"), "HF_HUB_CACHE": str(scratch / "hf-cache/hub"),
+                   "TORCH_HOME": str(scratch / "torch-cache"), "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+                   "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1", "MPLCONFIGDIR": str(scratch / "matplotlib"),
+                   "NUMBA_CACHE_DIR": str(scratch / "numba-cache")}
+    environment["WECHAT_WINDOWS_MUSIC_RUNTIME"] = "1"
+    environment["USERNAME"] = "managed-music"
+    with (log / "stdout.log").open("wb") as output, (log / "stderr.log").open("wb") as error:
+        child = launch(argv, str(cwd), [str(private)], [str(public), str(media)], output, error,
+                       music_runtime=True, environment=environment)
+        child.log_directory = log
+        return child
 
 
 if __name__ == "__main__":

@@ -100,7 +100,9 @@ func TestNewInboxInstructionIsReadBeforeOldReadyCaption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	pages := 0
-	w.source = &fakeSource{events: []linuxnative.Event{fixtureEvent("1", "new-song", "filehelper", "incoming", "live")}, messages: map[string]linuxnative.Message{"new-song": fixtureMessage("new-song", "filehelper", "重新找一首，traveling light", "incoming")}, onPage: func(string) {
+	message := fixtureMessage("new-song", "filehelper", "重新找一首，traveling light", "incoming")
+	message.SenderID = in.Sender
+	w.source = &fakeSource{events: []linuxnative.Event{fixtureEvent("1", "new-song", "filehelper", "incoming", "live")}, messages: map[string]linuxnative.Message{"new-song": message}, onPage: func(string) {
 		pages++
 		if pages > 1 {
 			cancel()

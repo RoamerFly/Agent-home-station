@@ -86,6 +86,12 @@ func (m *Manager) resolveReceivedChannels(ctx context.Context, msg linuxnative.M
 	if source.AccountID != m.native.Account() || source.ThreadID != msg.ThreadID || source.MessageID != msg.ID || msg.Direction != "incoming" {
 		return source, errors.New("channels_source_scope_mismatch")
 	}
+	if installed, err := m.installedShareState(ctx); installed {
+		if err != nil {
+			return source, err
+		}
+		return m.resolveInstalledChannels(ctx, msg, source)
+	}
 	c, e := loadChannelsSettings(m.dir)
 	if e != nil {
 		return source, e

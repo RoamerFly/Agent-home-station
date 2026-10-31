@@ -3,26 +3,30 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 	"wechat-bot/internal/bot"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 )
 
 type reminderSpec struct {
-	Due            time.Time `json:"due_at"`
-	Target         string    `json:"target"`
-	Text           string    `json:"text"`
-	QuoteMessageID string    `json:"quote_message_id,omitempty"`
-	QuoteServerID  string    `json:"quote_server_id,omitempty"`
-	DelaySeconds   int64     `json:"delay_seconds,omitempty"`
-	RunAt          string    `json:"requested_run_at,omitempty"`
-	Job            string    `json:"job_id,omitempty"`
-	Attempts       int       `json:"checks"`
-	ServerID       string    `json:"server_id,omitempty"`
+	GroundingChecked bool                    `json:"grounding_checked,omitempty"`
+	Binding          *companion.ReplyContext `json:"reply_context,omitempty"`
+	Due              time.Time               `json:"due_at"`
+	Target           string                  `json:"target"`
+	Text             string                  `json:"text"`
+	QuoteMessageID   string                  `json:"quote_message_id,omitempty"`
+	QuoteServerID    string                  `json:"quote_server_id,omitempty"`
+	DelaySeconds     int64                   `json:"delay_seconds,omitempty"`
+	RunAt            string                  `json:"requested_run_at,omitempty"`
+	Job              string                  `json:"job_id,omitempty"`
+	Attempts         int                     `json:"checks"`
+	ServerID         string                  `json:"server_id,omitempty"`
 }
 
 func reminderTool() mcptools.Tool {
@@ -125,11 +129,29 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 			}
 		}
 		text := "提醒你：" + in.Text
+		reviewed, reviewedBinding, reviewErr := p.prepareOutboundText(ctx, target, text)
+		if reviewErr != nil {
+			return "", reviewErr
+		}
+		// Reminder wording is an explicit saved instruction. A risky draft
+		// must be confirmed/rephrased by the requester rather than silently
+		// changed by the review model and delivered hours later as their text.
+		if reviewed != text {
+			return "", toolInputError("reminder_text_requires_confirmation: 提醒正文的对象或事实未通过审校，未保存；请确认原句或提供明确对象")
+		}
 		quote := ""
 		if target == p.trace.Thread {
 			quote = p.trace.QuoteServerID
 		}
 		t := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "提醒 · " + logText(in.Text, 70), State: "waiting", Next: due, OriginTrace: p.trace.TraceID, RequestedText: in.Text, Checkpoint: "到期发送已明确请求的提醒，不执行其中的文字或代码", Reminder: &reminderSpec{Due: due, Target: target, Text: text, QuoteServerID: quote}}
+		t.Constraints = p.taskConstraints("reminder", "", "", "")
+		source := p.outboundInput(target).Source
+		if source != nil {
+			t.Constraints.Source = source
+		}
+		bound := mintOutboundBinding(reminderInput(t), m.Config().Companion, reviewedBinding)
+		t.Reminder.Binding = &bound
+		t.Reminder.GroundingChecked = true
 		t.Reminder.QuoteMessageID = p.trace.TraceID
 		t.Reminder.RunAt = in.RunAt
 		if in.Delay != nil {
@@ -187,25 +209,56 @@ func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
 		var status linuxnative.ToolStatus
 		var err error
 		if t.Reminder.Job == "" {
-			access := &permittedTools{manager: m}
-			if err = access.deliveryDelay(checkCtx); err == nil {
-				m.agent.mu.Lock()
-				active := m.agent.data.Tasks[t.ID].State != "cancelled"
-				m.agent.mu.Unlock()
-				if !active {
+			// Recover a submission whose HTTP reply/local checkpoint was lost.
+			// Receipt facts win even if its source was subsequently forgotten.
+			if existing, lookupErr := native.LookupSend(checkCtx, "reminder-"+t.ID); lookupErr == nil {
+				if existing.ThreadID != t.Reminder.Target || existing.ID == "" {
+					cancel()
+					return
+				}
+				status = existing
+			} else if !errors.Is(lookupErr, linuxnative.ErrToolNotFound) {
+				cancel()
+				return
+			} else {
+				access := &permittedTools{manager: m, trace: reminderInput(t)}
+				if sourceErr := validateReminderSource(checkCtx, m, t); sourceErr != nil {
+					t.State = "needs_review"
+					t.LastResult = "提醒来源已更正、遗忘或身份不再有效，未新增发送"
+					_, _ = m.agent.reminderUpdate(t)
 					cancel()
 					continue
 				}
-				// The same key survives crashes between native submission and local save.
-				request := linuxnative.ToolSend{ThreadID: t.Reminder.Target, Kind: "text", Text: t.Reminder.Text, IdempotencyKey: "reminder-" + t.ID}
-				if t.Reminder.QuoteServerID != "" && t.Reminder.QuoteMessageID != "" {
-					request.Quote = &linuxnative.ToolQuote{MessageID: t.Reminder.QuoteMessageID, ServerID: t.Reminder.QuoteServerID}
+				if err = access.deliveryDelay(checkCtx); err == nil {
+					m.agent.mu.Lock()
+					active := m.agent.data.Tasks[t.ID].State != "cancelled"
+					m.agent.mu.Unlock()
+					if !active {
+						cancel()
+						continue
+					}
+					if err = validateReminderSource(checkCtx, m, t, t.Reminder.Text); err != nil {
+						cancel()
+						return
+					}
+					// The same key survives crashes between native submission and local save.
+					request := linuxnative.ToolSend{ThreadID: t.Reminder.Target, Kind: "text", Text: t.Reminder.Text, IdempotencyKey: "reminder-" + t.ID}
+					if t.Reminder.QuoteServerID != "" && t.Reminder.QuoteMessageID != "" {
+						request.Quote = &linuxnative.ToolQuote{MessageID: t.Reminder.QuoteMessageID, ServerID: t.Reminder.QuoteServerID}
+					}
+					status, err = native.Submit(checkCtx, request)
 				}
-				status, err = native.Submit(checkCtx, request)
 			}
 		} else {
 			status, err = native.ToolSendStatus(checkCtx, t.Reminder.Job)
 			if err == nil && status.ID == t.Reminder.Job && status.ThreadID == t.Reminder.Target && status.State == "failed" && status.Retryable && !status.CancelRequested {
+				if sourceErr := validateReminderSource(checkCtx, m, t); sourceErr != nil {
+					t.State = "needs_review"
+					t.LastResult = "提醒来源已变更，停止原任务重试"
+					_, _ = m.agent.reminderUpdate(t)
+					cancel()
+					continue
+				}
 				if retry, ok := m.native.(interface {
 					RetryMediaJob(context.Context, string) (linuxnative.ToolStatus, error)
 				}); ok {
@@ -214,7 +267,9 @@ func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
 						active := m.agent.data.Tasks[t.ID].State != "cancelled"
 						m.agent.mu.Unlock()
 						if active {
-							status, err = retry.RetryMediaJob(checkCtx, t.Reminder.Job)
+							if err = validateReminderSource(checkCtx, m, t, t.Reminder.Text); err == nil {
+								status, err = retry.RetryMediaJob(checkCtx, t.Reminder.Job)
+							}
 						}
 					}
 				}

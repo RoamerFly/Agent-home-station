@@ -50,7 +50,7 @@ func TestBackgroundToolsPreserveAutonomyContextAndFollowups(t *testing.T) {
 	w.enableGenerations()
 	defer w.closeGenerations()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "capabilities", Mode: "direct", Text: "读取合成分页资料"}
-	w.startGeneration(context.Background(), c, in, nil)
+	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
 	if len(w.generation.jobs) != 1 {
 		t.Fatal("generation did not start")
 	}
@@ -65,5 +65,32 @@ func TestBackgroundToolsPreserveAutonomyContextAndFollowups(t *testing.T) {
 	wrapped.ObserveFollowups([]agentrun.Event{event})
 	if len(probe.followups) != 1 || probe.followups[0].ID != "new" {
 		t.Fatal("followup observer was not forwarded")
+	}
+}
+
+type isolatedReviewTools struct {
+	generatedTools
+	trace companion.Input
+}
+
+func (p *isolatedReviewTools) SetTrace(in companion.Input) { p.trace = in }
+func (p *isolatedReviewTools) ForkTools() companion.ToolAccess {
+	return &isolatedReviewTools{trace: p.trace}
+}
+
+func TestGenerationReviewForkPreservesCallbacksAndIsolatesTrace(t *testing.T) {
+	base := &isolatedReviewTools{trace: companion.Input{Thread: "original-thread"}}
+	scheduler, worker, job := &generationScheduler{}, &Worker{}, &generationJob{}
+	wrapped := &generationTools{inner: base, scheduler: scheduler, worker: worker, job: job}
+	fork, ok := wrapped.ForkTools().(*generationTools)
+	if !ok || fork.inner == base || fork.scheduler != scheduler || fork.worker != worker || fork.job != job {
+		t.Fatal("review fork lost isolation or actor callbacks")
+	}
+	fork.SetTrace(companion.Input{Thread: "review-thread"})
+	if base.trace.Thread != "original-thread" || fork.inner.(*isolatedReviewTools).trace.Thread != "review-thread" {
+		t.Fatal("review rewrote the running task's authorization identity")
+	}
+	if (&generationTools{inner: generatedTools{}}).ForkTools() != nil {
+		t.Fatal("mutable wrapper manufactured a shared fallback fork")
 	}
 }

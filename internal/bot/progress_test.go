@@ -60,7 +60,8 @@ func TestAcknowledgedToolTaskDoesNotOverrideModelSilence(t *testing.T) {
 	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "terminal", "filehelper", "incoming", "remote"), Phase: "processing"}}
 	engine.Tools = &checkedProgressTools{before: func() {}}
 	engine.MaxToolCalls = 3
-	w.respondCharacter(context.Background(), engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "terminal", Mode: "direct", Text: "查一下这个来源"})
+	in := observeSyntheticMediaRequest(t, w, engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "terminal", Mode: "direct", Text: "查一下这个来源"})
+	w.respondCharacter(context.Background(), engine, in)
 	for _, p := range w.runtime.Plans {
 		p.InboxChecked = true
 	}
@@ -120,7 +121,8 @@ func TestProgressHasOwnDurableReceiptAndDoesNotCompleteTask(t *testing.T) {
 			}}
 			engine.Tools = tools
 			engine.MaxToolCalls = 3
-			w.respondCharacter(context.Background(), engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "incoming", Mode: "direct", Text: "请查一下这个来源"})
+			in := observeSyntheticMediaRequest(t, w, engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "incoming", Mode: "direct", Text: "请查一下这个来源"})
+			w.respondCharacter(context.Background(), engine, in)
 			for _, p := range w.runtime.Plans {
 				p.InboxChecked = true
 			}

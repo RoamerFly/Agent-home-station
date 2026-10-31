@@ -99,6 +99,16 @@ func TestPluginLifecycleAndGeneratedVoice(t *testing.T) {
 	if len(f.manager.plugins.installed()) != 0 {
 		t.Fatal("removed plugin remained active")
 	}
+	if code, body, _ := f.request("GET", "/api/plugins", nil, true, false); code != 200 || !bytes.Contains(body, []byte(`"removed":[`)) || bytes.Contains(body, []byte("private-plugin-key")) {
+		t.Fatal("removed list unavailable or leaked secrets")
+	}
+	if code, _, _ := f.request("POST", "/api/plugins/voice", map[string]bool{"enabled": false}, true, true); code != 200 {
+		t.Fatal("restore", code)
+	}
+	entry, _ = f.manager.plugins.get("voice")
+	if entry.Removed || entry.Enabled || entry.Secrets["KEY"] != "private-plugin-key" {
+		t.Fatal("restore lost credentials or enabled plugin")
+	}
 }
 
 func TestMCPConfigCannotConflictWithEnabledPlugin(t *testing.T) {

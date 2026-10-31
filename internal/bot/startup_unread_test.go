@@ -37,7 +37,7 @@ func TestStartupUnreadGroupsAcrossPagesSpeakersAndPreservesTimes(t *testing.T) {
 		Unread []companion.ConversationEvent `json:"unread_messages"`
 		Now    string                        `json:"current_time"`
 		Zone   string                        `json:"timezone"`
-		Sender string                        `json:"speaker_id"`
+		Sender string                        `json:"request_actor_id"`
 	}
 	w, c, _ := backgroundWorker(t, generationModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
 		calls.Add(1)
@@ -77,8 +77,12 @@ func TestStartupUnreadGroupsAcrossPagesSpeakersAndPreservesTimes(t *testing.T) {
 	if calls.Load() != 1 || len(current.Unread) != 104 || current.Now == "" || current.Zone == "" || current.Sender != "wxid_person_0" {
 		t.Fatal("not one timestamped conversation turn", calls.Load(), len(current.Unread), current.Sender)
 	}
-	if current.Unread[0].At != source.messages["offline-1"].CreatedAt || current.Unread[103].At != source.messages["offline-104"].CreatedAt {
-		t.Fatal("original time lost")
+	for _, index := range []int{0, 103} {
+		actual, err := time.Parse(time.RFC3339, current.Unread[index].At)
+		expected, expectedErr := time.Parse(time.RFC3339, source.messages[current.Unread[index].MessageID].CreatedAt)
+		if err != nil || expectedErr != nil || !actual.Equal(expected) {
+			t.Fatal("original time lost", current.Unread[index].At, expected)
+		}
 	}
 	scope := c.Store.Context(companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom"}, c.Config, time.Now())
 	if len(scope.Messages) != 104 {

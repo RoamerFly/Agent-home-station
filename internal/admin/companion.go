@@ -58,6 +58,17 @@ type previewModel struct {
 func (p previewModel) Chat(ctx context.Context, system string, messages []map[string]string) (string, error) {
 	return p.chat(ctx, system, messages)
 }
+
+// The real management preview uses the same dedicated review transport as the
+// running agent. The lightweight previewModel remains a text-only test adapter.
+type previewGroundingModel struct {
+	previewModel
+	grounding func(context.Context, string, []map[string]string, deepseek.GroundingOptions) (string, error)
+}
+
+func (p previewGroundingModel) ChatGrounding(ctx context.Context, system string, messages []map[string]string, options deepseek.GroundingOptions) (string, error) {
+	return p.grounding(ctx, system, messages, options)
+}
 func (m *Manager) preview(ctx context.Context, mode, text string) (companion.Decision, error) {
 	if (mode != "direct" && mode != "social" && mode != "proactive") || strings.TrimSpace(text) == "" || len(text) > 8192 || !utf8.ValidString(text) {
 		return companion.Decision{}, errors.New("请选择有效场景并输入不超过 8 KiB 的测试文字")
@@ -69,7 +80,7 @@ func (m *Manager) preview(ctx context.Context, mode, text string) (companion.Dec
 	m.mu.Unlock()
 	// Lazy initialization allows permission-denied previews without a key,
 	// network request, or access to the real conversation memory store.
-	model := previewModel{chat: func(ctx context.Context, system string, turns []map[string]string) (string, error) {
+	model := previewGroundingModel{previewModel: previewModel{chat: func(ctx context.Context, system string, turns []map[string]string) (string, error) {
 		client, err := m.makeModel(c)
 		if err != nil {
 			return "", err
@@ -79,8 +90,18 @@ func (m *Manager) preview(ctx context.Context, mode, text string) (companion.Dec
 			return "", errors.New(deepseek.UserMessage(err))
 		}
 		return answer, nil
+	}}, grounding: func(ctx context.Context, system string, turns []map[string]string, options deepseek.GroundingOptions) (string, error) {
+		client, err := m.makeModel(c)
+		if err != nil {
+			return "", err
+		}
+		answer, err := client.ChatGrounding(ctx, system, turns, options)
+		if err != nil {
+			return "", errors.New(deepseek.UserMessage(err))
+		}
+		return answer, nil
 	}}
-	engine, err := companion.NewPreview(c.Companion, model, c.SystemPrompt)
+	engine, err := companion.NewPreview(c.sharedCompanion(), model, c.SystemPrompt)
 	if err != nil {
 		return companion.Decision{}, errors.New("角色设置无效")
 	}
@@ -166,6 +187,29 @@ func (s *Server) companionRoutes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("GET /api/companion/memory/{id}", s.protected(s.memoryDetail))
 	mux.HandleFunc("GET /api/companion/memory/{id}/history", s.protected(s.memoryHistory))
+
+	mux.HandleFunc("POST /api/companion/memory/{id}/preferences", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Text     string `json:"text"`
+			Revision int    `json:"revision"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		s.manager.op.Lock()
+		defer s.manager.op.Unlock()
+		scope, err := s.manager.memoryScope(r.PathValue("id"))
+		if err != nil {
+			fail(w, 404, "会话不存在")
+			return
+		}
+		if err = s.manager.memory.SetPreferences(scope.ID, in.Text, in.Revision); err != nil {
+			fail(w, 409, err.Error())
+			return
+		}
+		text, revision := s.manager.memory.Preferences(scope.ID)
+		respond(w, 200, map[string]any{"text": text, "revision": revision})
+	}))
 	mux.HandleFunc("POST /api/companion/memory/{id}/notes", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Text string `json:"text"`

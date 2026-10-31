@@ -69,6 +69,32 @@ func deniedAccountTool(t *testing.T, p *permittedTools, name string, args map[st
 	}
 }
 
+func TestManagedWorkspaceRootsIgnoreBroadStoredHostRoots(t *testing.T) {
+	f, tools := managedAccountPair(t)
+	for _, p := range tools {
+		local, err := p.scopedHostConfig(json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		global, err := p.scopedHostConfig(json.RawMessage(`{"global":true}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		x := p.executionContext()
+		if len(local.Roots) != 2 || local.Roots[0] != x.Conversation || local.Roots[1] != x.Public || len(global.Roots) != 2 || global.Roots[0] != x.Private || global.Roots[1] != x.Public {
+			t.Fatal("effective roots are not scoped to account and conversation", local.Roots, global.Roots)
+		}
+		for _, root := range append(local.Roots, global.Roots...) {
+			if !pathWithin(p.manager.managedRoot(), root) || root == f.dir {
+				t.Fatal("configured broad host root escaped into effective mounts", root)
+			}
+		}
+	}
+	if tools[0].executionContext().Private == tools[1].executionContext().Private {
+		t.Fatal("accounts shared a private workspace")
+	}
+}
+
 func TestManagedAccountPairFilesMemoryTasksAndCapabilityProjection(t *testing.T) {
 	f, p := managedAccountPair(t)
 	x := [2]ExecutionContext{p[0].executionContext(), p[1].executionContext()}

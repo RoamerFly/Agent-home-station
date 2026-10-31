@@ -2,12 +2,28 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 	"wechat-bot/internal/companion"
 )
 
 func (w *Worker) reviewUncertainDelivery(ctx context.Context, c *companion.Engine, d *delivery) {
+	if d.ReviewEvidence != nil {
+		if err := c.ValidateGenerationEvidence(ctx, *d.ReviewEvidence); err != nil {
+			d.Reason = "delivery_review_evidence_changed"
+			d.Next = time.Now().Add(time.Minute)
+			w.persistErr = w.saveRuntime()
+			return
+		}
+		ctx = companion.WithStoredGenerationEvidence(ctx, *d.ReviewEvidence)
+	}
+	if !d.Input.IsGroup && (d.Input.ReplyContext == nil || w.bindingEvidenceMissing(d.Input) || replyProofMetadataMissing(d.Input.ReplyContext)) && d.ReviewEvidence == nil {
+		d.Reason = "private_reply_requires_replan"
+		d.Next = time.Now().Add(time.Minute)
+		w.persistErr = w.saveRuntime()
+		return
+	}
 	sent := []string{}
 	for _, m := range w.runtime.Media {
 		if m.Input.Thread == d.Thread && m.State == "accepted" && (m.Trace == d.Trace || d.Input.OriginTraceID != "" && m.Input.OriginTraceID == d.Input.OriginTraceID) {
@@ -22,6 +38,16 @@ func (w *Worker) reviewUncertainDelivery(ctx context.Context, c *companion.Engin
 	reviewCtx, cancel := context.WithTimeout(w.modelContext(ctx, d.Thread, d.Trace), 30*time.Second)
 	review, err := c.ReviewDelivery(reviewCtx, d.Input, sent, d.Text, companion.DeliveryReview{Reason: d.Reason, Attempts: d.Attempts, Created: d.Created})
 	cancel()
+	if err == nil && review.Action != "cancel" {
+		if evidence, ok := review.GenerationEvidence(); ok {
+			err = c.ValidateGenerationEvidence(ctx, evidence)
+			if err == nil {
+				d.ReviewEvidence = &evidence
+			}
+		} else {
+			err = errors.New("pending_review_evidence_unavailable")
+		}
+	}
 	d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds))
 	reason := "delivery_review_unavailable"
 	if err == nil {
@@ -37,6 +63,7 @@ func (w *Worker) reviewUncertainDelivery(ctx context.Context, c *companion.Engin
 					d.SubmittedText = d.Text
 				}
 				d.Text = text
+				d.Input.ReplyContext = nil
 				d.RetryReviewReady = true
 				d.Next = time.Now()
 				reason = "delivery_model_replace"

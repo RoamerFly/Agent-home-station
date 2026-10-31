@@ -52,17 +52,53 @@ func resourceURL(raw string) string {
 func currentMessage(turns []map[string]string) string {
 	for i := len(turns) - 1; i >= 0; i-- {
 		var in struct {
-			Kind, Text string
-			Events     []struct{ Text string }
+			Kind, Text      string
+			Account, Thread string
+			MessageID       string `json:"message_id"`
+			TaskID          string `json:"task_id"`
+			Task            bool   `json:"task_continuation"`
+			Background      bool   `json:"background_result"`
+			Surf            bool   `json:"surf"`
+			Runtime         struct {
+				Kind, Producer, Text, Account, Thread string
+				MessageID                             string `json:"request_message_id"`
+				TaskID                                string `json:"task_id"`
+			} `json:"runtime_context"`
+			Events []struct{ Text string }
 		}
 		if turns[i]["role"] == "user" && json.Unmarshal([]byte(turns[i]["content"]), &in) == nil {
 			if in.Kind == "current_followup" && len(in.Events) > 0 {
 				return in.Events[len(in.Events)-1].Text
 			}
 			if in.Kind == "current_message" {
+				if in.Runtime.Producer == "runtime" && (in.Runtime.Kind == "task_goal" || in.Runtime.Kind == "unread_digest") && in.Runtime.Account == in.Account && in.Runtime.Thread == in.Thread && in.Runtime.MessageID == in.MessageID && in.Runtime.TaskID == in.TaskID && (in.Task || in.Background || in.Surf || in.Runtime.Kind == "unread_digest") {
+					return in.Runtime.Text
+				}
 				return in.Text
 			}
 		}
 	}
 	return ""
+}
+
+func currentMetadataOnly(turns []map[string]string) bool {
+	for i := len(turns) - 1; i >= 0; i-- {
+		var packet struct {
+			Kind, Text   string
+			Observations []struct {
+				Kind, Observation string
+				State             string `json:"observation_state"`
+			} `json:"media_observations"`
+		}
+		if turns[i]["role"] != "user" || json.Unmarshal([]byte(turns[i]["content"]), &packet) != nil || packet.Kind != "current_message" {
+			continue
+		}
+		for _, observation := range packet.Observations {
+			if observation.Kind == "share" || observation.Kind == "card" || observation.State == "metadata_only" || strings.Contains(observation.Observation, "[收到分享卡片，仅依据卡片标题与简介，尚未观看视频") {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }

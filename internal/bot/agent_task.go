@@ -37,9 +37,12 @@ func (w *Worker) tickAgentTask(ctx context.Context) bool {
 	}
 	in.PersonaOverride = w.config.GroupRules[in.Thread].Persona
 	w.activity(Record{Event: "agent_task_started", Category: "decision", ThreadID: in.Thread, MessageID: in.TraceID, Status: "running", Reason: "persistent_task_continuation", Origin: "agent"})
-	w.respondCharacter(ctx, c, *in)
+	outcome := w.respondCharacter(ctx, c, *in)
 	if w.generation == nil && w.config.AgentTaskDone != nil {
-		w.config.AgentTaskDone(*in, "synchronous_round_finished")
+		if outcome == "" {
+			outcome = "synchronous_round_finished"
+		}
+		w.config.AgentTaskDone(*in, outcome)
 	}
 	return true
 }

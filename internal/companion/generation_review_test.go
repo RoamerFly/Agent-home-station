@@ -21,17 +21,25 @@ func TestRunningRequestReviewIsNotUnsentReplyReplacement(t *testing.T) {
 		t.Fatal(e)
 	}
 	in := Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "person", Text: "实际图像观察：早餐", IsGroup: true}
+	empty := ""
+	in.OriginalText = &empty
+	in.Source = &SourceRef{MessageID: "image-request", Sender: in.Sender, MessageType: 3}
+	in.IncomingMedia = []IncomingMediaRef{{Source: *in.Source, Kind: "image", UploaderID: in.Sender, Observation: "早餐", ObservationState: "observed", ObservationVersion: 1}}
 	updates := []ConversationEvent{{MessageID: "caption", Sender: "person", Text: "早餐", NewRequest: true}}
 	if _, e = engine.ReviewGeneration(context.Background(), in, []string{"observe image"}, updates); e == nil {
 		t.Fatal("a text-tail replacement could cancel a running media request")
 	}
 	var payload struct {
-		Kind    string              `json:"kind"`
-		Request string              `json:"original_request"`
-		Events  []ConversationEvent `json:"new_events"`
+		Kind    string           `json:"kind"`
+		Request map[string]any   `json:"original_request"`
+		Events  []map[string]any `json:"new_events"`
 	}
-	if e = json.Unmarshal([]byte(model.turns[0]["content"]), &payload); e != nil || payload.Kind != "review_running_task" || payload.Request != in.Text || len(payload.Events) != 1 {
+	if e = json.Unmarshal([]byte(model.turns[0]["content"]), &payload); e != nil || payload.Kind != "review_running_task" || payload.Request["text"] != "" || len(payload.Events) != 1 || payload.Events[0]["text"] != "早餐" {
 		t.Fatal("running request context missing", e)
+	}
+	observations, _ := payload.Request["media_observations"].([]any)
+	if len(observations) != 1 || observations[0].(map[string]any)["observation"] != "早餐" {
+		t.Fatal("image observation lost or promoted to human wording", payload.Request)
 	}
 	// Existing unsent-text plans can still be rewritten when needed.
 	if d, e := engine.ReviewPending(context.Background(), in, nil, []string{"old reply"}, updates); e != nil || d.Action != "replace" {

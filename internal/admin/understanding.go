@@ -122,6 +122,12 @@ func sharedVideoReadReason(err error) string {
 	if errors.As(err, &web) {
 		return "shared_video_" + web.Code
 	}
+	if err != nil {
+		switch err.Error() {
+		case "share_plugin_disabled", "share_plugin_store_unavailable", "share_plugin_runtime_unavailable", "share_plugin_start_failed", "share_plugin_resolution_incomplete", "share_plugin_resolution_needs_review", "share_plugin_handoff_unavailable", "share_plugin_handoff_invalid", "share_request_authorization_changed", "share_source_changed", "share_native_source_changed", "share_persisted_source_unavailable", "share_native_source_unavailable", "share_native_shortlink_required", "share_native_shortlink_unavailable", "share_native_shortlink_invalid":
+			return err.Error()
+		}
+	}
 	if err != nil && strings.HasPrefix(err.Error(), "channels_") && len(err.Error()) < 100 && !strings.ContainsAny(err.Error(), " /?:\r\n") {
 		return err.Error()
 	}

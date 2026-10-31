@@ -15,17 +15,22 @@ import (
 	"time"
 )
 
-// Diagnostics contains fixed codes and numbers only. Upstream bodies, URLs,
+// Diagnostics contains fixed codes, bounded finish reasons and numbers only. Upstream bodies, URLs,
 // headers, prompts, keys and underlying error strings never enter this type.
 type Diagnostics struct {
-	Code         string
-	Stage        string
-	HTTPStatus   int
-	Attempts     int
-	MaxAttempts  int
-	DurationMS   int64
-	RetryDelayMS int64
-	Retryable    bool
+	Code              string
+	Stage             string
+	HTTPStatus        int
+	Attempts          int
+	MaxAttempts       int
+	DurationMS        int64
+	RetryDelayMS      int64
+	Retryable         bool
+	FinishReason      string
+	ContentBytes      int
+	JSONValid         bool
+	FormatAttempt     int
+	MaxFormatAttempts int
 }
 
 type RequestError struct {
@@ -75,6 +80,8 @@ func UserMessage(err error) string {
 }
 
 type requestObserverKey struct{}
+type requestAttemptKey struct{}
+type groundingFormatAttemptKey struct{}
 
 // WithRequestObserver scopes retry/recovery events to one conversation. The
 // callback is not stored on the shared client, so simultaneous previews cannot
@@ -163,7 +170,7 @@ func (c *Client) request(ctx context.Context, body []byte) (string, error) {
 	start := time.Now()
 	const attempts = 2
 	for attempt := 1; attempt <= attempts; attempt++ {
-		answer, failure := c.requestOnce(ctx, body)
+		answer, failure := c.requestOnce(context.WithValue(ctx, requestAttemptKey{}, attempt), body)
 		if failure == nil {
 			if attempt > 1 {
 				observeRequest(ctx, "model_recovered", Diagnostics{Attempts: attempt, MaxAttempts: attempts, DurationMS: time.Since(start).Milliseconds()})

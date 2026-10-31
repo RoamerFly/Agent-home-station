@@ -8,8 +8,24 @@
   scrim.addEventListener('click',()=>side.classList.remove('open'));
   document.addEventListener('keydown',event=>{if(!wasOpen)return;if(event.key==='Escape'){side.classList.remove('open');return}if(event.key==='Tab'){const elements=focusables(),first=elements[0],last=elements.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}});
   window.addEventListener('wechat-admin:logout',()=>{side.classList.remove('open');syncDrawer()});
-  // Preserve native forms while making every field understandable to keyboards and password managers.
-  document.querySelectorAll('input,select,textarea').forEach(field=>{if(field.id&&!field.name)field.name=field.id;if(!field.hasAttribute('autocomplete')&&field.tagName==='INPUT')field.autocomplete='off';field.addEventListener('input',()=>{if(!field.hasAttribute('aria-invalid'))return;field.removeAttribute('aria-invalid');document.getElementById(field.id+'-error')?.remove();const descriptions=(field.getAttribute('aria-describedby')||'').split(' ').filter(id=>id!==field.id+'-error');if(descriptions.length)field.setAttribute('aria-describedby',descriptions.join(' '));else field.removeAttribute('aria-describedby')});if(field.type==='number')field.inputMode='numeric';if(field.id.includes('key')||field.id.includes('url')||field.id.includes('id'))field.spellcheck=false;const hint=field.parentElement?.querySelector('.hint');if(hint&&!field.hasAttribute('aria-describedby')){if(!hint.id)hint.id=field.id+'-hint';field.setAttribute('aria-describedby',hint.id)}});
-  document.querySelector('.skip-link').addEventListener('click',event=>{event.preventDefault();main.focus()});
+  // One delegated reset; use native form validation rather than inserting
+  // extra error rows and focus/scroll handlers for every individual input.
+  document.addEventListener('input',event=>event.target.removeAttribute?.('aria-invalid'));
   document.querySelector('#login-password').setAttribute('aria-describedby','login-error');
+  // A single moving selection. CSS transitions can reverse in flight; measure
+  // only on navigation/resize, never on pointer movement or every animation frame.
+  const nav=side.querySelector('nav'),position=document.createElement('span');
+  position.className='nav-position';position.setAttribute('aria-hidden','true');nav.prepend(position);
+  let frame=0;
+  function placeSelection(){
+    frame=0;const active=nav.querySelector('.main-nav.active');
+    if(!active||!active.getClientRects().length){position.style.opacity='0';return}
+    const y=active.offsetTop,height=active.offsetHeight;
+    position.style.height=height+'px';position.style.transform=`translateY(${y}px)`;position.style.opacity='1';nav.classList.add('has-position');
+  }
+  function scheduleSelection(){if(!frame)frame=requestAnimationFrame(placeSelection)}
+  window.addEventListener('wechat-admin:navigate',scheduleSelection);
+  new ResizeObserver(scheduleSelection).observe(nav);
+  window.addEventListener('wechat-admin:logout',()=>{if(frame)cancelAnimationFrame(frame);frame=0;position.style.opacity='0'});
+  scheduleSelection();
 })();

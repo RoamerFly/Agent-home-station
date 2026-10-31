@@ -116,6 +116,19 @@ print(json.dumps({'complete':True}))
 	if json.Unmarshal([]byte(result), &value) != nil || value["voice_id"] != voice.ID || value["synthesized"] != true || len(native.parts) != 1 {
 		t.Fatal(result, len(native.parts))
 	}
+	assets, assetErr := p.manager.loadAssets()
+	if assetErr != nil {
+		t.Fatal(assetErr)
+	}
+	namedAsset := false
+	for _, a := range assets {
+		if a.VoiceID == voice.ID && a.VoiceEngine == voice.Engine {
+			namedAsset = true
+		}
+	}
+	if !namedAsset {
+		t.Fatal("named voice identity only existed in tool response, not durable asset")
+	}
 	if !strings.Contains(p.AgentContext(context.Background()), "synthetic_registered") {
 		t.Fatal("current registration missing from fresh model context")
 	}

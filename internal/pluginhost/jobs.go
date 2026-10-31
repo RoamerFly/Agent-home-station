@@ -1,0 +1,293 @@
+package pluginhost
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"strconv"
+	"time"
+)
+
+var ErrRevision = errors.New("record revision changed")
+var ErrRequestConflict = errors.New("request key already bound to another invocation")
+
+// CreateJob binds an idempotency key to the complete immutable request, including
+// source versions, plugin bytes and configuration revision. It never submits work.
+func (s *Store) CreateJob(ctx context.Context, input Job) (Job, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var empty Job
+	c := input.Context
+	if c.Account != s.account || c.Thread == "" || c.Requester == "" || c.Purpose == "" || c.RequestKey == "" || input.Tool == "" || !json.Valid(input.Arguments) {
+		return empty, false, errors.New("invalid job invocation")
+	}
+	// Canonical JSON makes retries with only object-key ordering differences equal.
+	var args any
+	decoder := json.NewDecoder(bytes.NewReader(input.Arguments))
+	decoder.UseNumber()
+	if err := decoder.Decode(&args); err != nil {
+		return empty, false, err
+	}
+	input.Arguments, _ = json.Marshal(args)
+	request := Job{Plugin: input.Plugin, Version: input.Version, PackageDigest: input.PackageDigest, ConfigRevision: input.ConfigRevision, Context: c, Tool: input.Tool, Arguments: input.Arguments}
+	raw, _ := json.Marshal(request)
+	fingerprint := sha256.Sum256(raw)
+	fp := hex.EncodeToString(fingerprint[:])
+	var previous []byte
+	var oldFP string
+	err := s.db.QueryRowContext(ctx, `SELECT record,fingerprint FROM jobs WHERE plugin=? AND thread=? AND request_key=?`, input.Plugin, c.Thread, c.RequestKey).Scan(&previous, &oldFP)
+	if err == nil {
+		if oldFP != fp {
+			return empty, false, ErrRequestConflict
+		}
+		if json.Unmarshal(previous, &empty) != nil {
+			return Job{}, false, errors.New("invalid job record")
+		}
+		return empty, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return empty, false, err
+	}
+	var digest string
+	var enabled, removed int
+	var manifest []byte
+	if err = s.db.QueryRowContext(ctx, `SELECT digest,enabled,removed,manifest FROM installed WHERE id=?`, input.Plugin).Scan(&digest, &enabled, &removed, &manifest); err != nil {
+		return empty, false, err
+	}
+	var p Package
+	if json.Unmarshal(manifest, &p) != nil {
+		return empty, false, errors.New("invalid plugin registration")
+	}
+	if enabled == 0 || removed != 0 || digest != input.PackageDigest || p.Version != input.Version {
+		return empty, false, errors.New("plugin disabled or version changed")
+	}
+	var configRevision int
+	err = s.db.QueryRowContext(ctx, `SELECT revision FROM configurations WHERE plugin=?`, input.Plugin).Scan(&configRevision)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return empty, false, err
+	}
+	if input.ConfigRevision != strconv.Itoa(configRevision) {
+		return empty, false, errors.New("plugin configuration changed")
+	}
+	idSum := sha256.Sum256([]byte(s.account + "\x00" + input.Plugin + "\x00" + c.Thread + "\x00" + c.RequestKey))
+	request.ID = hex.EncodeToString(idSum[:])
+	request.State = "pending"
+	request.Revision = 1
+	request.Created = time.Now().UTC().Format(time.RFC3339Nano)
+	request.Updated = request.Created
+	raw, _ = json.Marshal(request)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO jobs(id,plugin,thread,request_key,fingerprint,record,revision,state) VALUES(?,?,?,?,?,?,?,?)`, request.ID, request.Plugin, c.Thread, c.RequestKey, fp, raw, 1, request.State)
+	return request, err == nil, err
+}
+func (s *Store) Job(ctx context.Context, id string) (Job, error) {
+	var raw []byte
+	var job Job
+	err := s.db.QueryRowContext(ctx, `SELECT record FROM jobs WHERE id=?`, id).Scan(&raw)
+	if err != nil {
+		return job, err
+	}
+	if err = json.Unmarshal(raw, &job); err != nil {
+		return Job{}, errors.New("invalid job record")
+	}
+	return job, nil
+}
+func (s *Store) mutateJob(ctx context.Context, id string, revision int, change func(*Job) error) (Job, error) {
+	return s.mutateJobPrivate(ctx, id, revision, nil, change)
+}
+
+func (s *Store) mutateJobPrivate(ctx context.Context, id string, revision int, private json.RawMessage, change func(*Job) error) (Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(private) > 1<<20 || len(private) > 0 && !json.Valid(private) {
+		return Job{}, errors.New("invalid private completion checkpoint")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, err
+	}
+	defer tx.Rollback()
+	var job Job
+	var stored []byte
+	err = tx.QueryRowContext(ctx, `SELECT record FROM jobs WHERE id=?`, id).Scan(&stored)
+	if err != nil {
+		return job, err
+	}
+	if json.Unmarshal(stored, &job) != nil {
+		return Job{}, errors.New("invalid job record")
+	}
+	if job.Revision != revision {
+		return job, ErrRevision
+	}
+	if err = change(&job); err != nil {
+		return job, err
+	}
+	job.Revision++
+	job.Updated = time.Now().UTC().Format(time.RFC3339Nano)
+	raw, err := json.Marshal(job)
+	if err != nil {
+		return job, err
+	}
+	r, err := tx.ExecContext(ctx, `UPDATE jobs SET record=?,revision=?,state=? WHERE id=? AND revision=?`, raw, job.Revision, job.State, id, revision)
+	if err != nil {
+		return job, err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return job, err
+	}
+	if n != 1 {
+		return job, ErrRevision
+	}
+	if len(private) > 0 {
+		if job.State != "completed" {
+			return job, errors.New("private result requires completion")
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO job_private_results(job_id,revision,payload) VALUES(?,?,?)`, id, job.Revision, []byte(private)); err != nil {
+			return job, err
+		}
+	}
+	return job, tx.Commit()
+}
+func (s *Store) ClaimJob(ctx context.Context, id string, revision int) (Job, error) {
+	return s.mutateJob(ctx, id, revision, func(j *Job) error {
+		if j.State != "pending" || j.CancelRequested {
+			return errors.New("job already claimed or cancelled")
+		}
+		j.State = "submitting"
+		return nil
+	})
+}
+
+// AcknowledgeJob is called only with a verified provider response. A crash before
+// this checkpoint leaves submitting; recovery must reconcile the original key.
+func (s *Store) AcknowledgeJob(ctx context.Context, id string, revision int, remoteID string) (Job, error) {
+	return s.mutateJob(ctx, id, revision, func(j *Job) error {
+		if remoteID == "" || len(remoteID) > 1024 {
+			return errors.New("invalid remote job id")
+		}
+		if j.State != "submitting" && j.State != "needs_review" {
+			return errors.New("job not awaiting acknowledgement")
+		}
+		if j.RemoteID != "" && j.RemoteID != remoteID {
+			return errors.New("remote identity changed")
+		}
+		j.RemoteID = remoteID
+		j.State = "running"
+		return nil
+	})
+}
+func (s *Store) RequestJobCancel(ctx context.Context, id string, revision int) (Job, error) {
+	return s.mutateJob(ctx, id, revision, func(j *Job) error {
+		if j.Recovery() == "terminal" {
+			return errors.New("job already finished")
+		}
+		j.CancelRequested = true
+		if j.State == "pending" {
+			j.State = "cancelled"
+		}
+		return nil
+	})
+}
+
+// FinishJob is a host-only checkpoint after provider/result validation, never a
+// public endpoint accepting an arbitrary plugin's claim about delivery.
+func (s *Store) FinishJob(ctx context.Context, id string, revision int, state string, verifiedAssets []string) (Job, error) {
+	return s.mutateJob(ctx, id, revision, func(j *Job) error {
+		if j.Recovery() == "terminal" || j.State == "pending" {
+			return errors.New("job not executing")
+		}
+		if state != "completed" && state != "failed" && state != "cancelled" && state != "needs_review" {
+			return errors.New("invalid terminal job state")
+		}
+		if state != "completed" && len(verifiedAssets) > 0 {
+			return errors.New("unfinished job cannot attach completion artifacts")
+		}
+		j.State = state
+		j.Artifacts = append([]string{}, verifiedAssets...)
+		return nil
+	})
+}
+
+type JobPage struct {
+	Items   []Job `json:"items"`
+	Next    int64 `json:"next"`
+	HasMore bool  `json:"has_more"`
+	Limit   int   `json:"limit"`
+}
+
+// CompleteJob stores only a host-validated, scoped result. This is generation
+// completion, never proof of WeChat acceptance. A cancellation request may race
+// a real result; retain both facts rather than claiming cancellation succeeded.
+func (s *Store) CompleteJob(ctx context.Context, id string, revision int, assets []string, result json.RawMessage) (Job, error) {
+	return s.CompleteJobWithPrivate(ctx, id, revision, assets, result, nil)
+}
+
+// CompleteJobWithPrivate atomically checkpoints the public result and a host-only
+// handoff. Private data is never part of Job, task lists or plugin initialization.
+func (s *Store) CompleteJobWithPrivate(ctx context.Context, id string, revision int, assets []string, result, private json.RawMessage) (Job, error) {
+	return s.checkpointResult(ctx, id, revision, "completed", assets, result, private)
+}
+
+// FailJob records a verified failure response, unlike an uncertain transport
+// outcome. It preserves diagnostic codes without replaying the original call.
+func (s *Store) FailJob(ctx context.Context, id string, revision int, result json.RawMessage) (Job, error) {
+	return s.checkpointResult(ctx, id, revision, "failed", nil, result, nil)
+}
+func (s *Store) checkpointResult(ctx context.Context, id string, revision int, state string, assets []string, result, private json.RawMessage) (Job, error) {
+	return s.mutateJobPrivate(ctx, id, revision, private, func(j *Job) error {
+		if j.Recovery() == "terminal" || j.State == "pending" || (len(result) > 0 && !json.Valid(result)) {
+			return errors.New("invalid completion checkpoint")
+		}
+		j.State = state
+		j.Artifacts = append([]string{}, assets...)
+		j.Result = nil
+		if len(result) > 0 {
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, result); err != nil {
+				return err
+			}
+			j.Result = append(json.RawMessage(nil), compact.Bytes()...)
+		}
+		return nil
+	})
+}
+
+func (s *Store) Jobs(ctx context.Context, plugin string, after int64, limit int) (JobPage, error) {
+	page := JobPage{Items: []Job{}, Next: after, Limit: limit}
+	if limit < 1 || after < 0 {
+		return page, errors.New("positive page size and nonnegative cursor required")
+	}
+	// Only the selected plugin's page is loaded; no in-memory full-table filtering.
+	rows, err := s.db.QueryContext(ctx, `SELECT seq,record FROM jobs WHERE plugin=? AND seq>? ORDER BY seq LIMIT ?`, plugin, after, limit)
+	if err != nil {
+		return page, err
+	}
+	for rows.Next() {
+		var seq int64
+		var raw []byte
+		var j Job
+		if err = rows.Scan(&seq, &raw); err != nil {
+			rows.Close()
+			return page, err
+		}
+		if json.Unmarshal(raw, &j) != nil {
+			rows.Close()
+			return page, errors.New("invalid job record")
+		}
+		page.Next = seq
+		page.Items = append(page.Items, j)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return page, err
+	}
+	var more int
+	err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE plugin=? AND seq>?)`, plugin, page.Next).Scan(&more)
+	page.HasMore = more != 0
+	return page, err
+}

@@ -54,21 +54,32 @@ func budgetTokenText(text string, budget int) string {
 }
 
 func (e *Engine) memoryContext(ctx context.Context, in Input) string {
-	if in.Preview || !e.Config.Permissions.Remember || !e.memorySettings().Enabled || e.Store.db == nil {
+	if in.SourceOnlyContext || in.Preview || !e.Config.Permissions.Remember || !e.memorySettings().Enabled || e.Store.db == nil {
 		return ""
 	}
 	id := ScopeID(in.Channel, in.Account, in.Thread)
-	query := UserRequestText(in.Text)
-	q := MemoryQuery{Scopes: []string{id}, Query: query, Limit: 12, EventYear: explicitMemoryYear(query)}
+	query, _ := e.inputLiteral(in)
+	year := explicitMemoryYear(query)
+	if query == "" && runtimeInput(in) {
+		query = UserRequestText(in.Text)
+	}
+	if query == "" {
+		for _, media := range in.IncomingMedia {
+			query += " " + boundedText(media.Observation, 256)
+		}
+	}
+	q := MemoryQuery{Scopes: []string{id}, Query: query, Limit: 12, EventYear: year}
 	if strings.Contains(query, "那个") || strings.Contains(query, "刚才") || strings.Contains(query, "上次") {
 		recent := e.Store.Context(in, e.Config, time.Now())
 		added := 0
 		for i := len(recent.Messages) - 1; i >= 0 && added < 2; i-- {
 			t := recent.Messages[i]
-			if t.Role != "user" || t.TraceID == in.TraceID {
+			if t.Role != "user" || t.TraceID == in.TraceID || in.IsGroup && !relevantSender(in, t.Sender) {
 				continue
 			}
-			q.Query += " " + boundedText(UserRequestText(t.Text), 256)
+			t = e.evidenceTurn(ctx, id, t)
+			literal, _ := literalTurn(t)
+			q.Query += " " + boundedText(literal, 256)
 			added++
 		}
 	}
@@ -125,7 +136,7 @@ func (e *Engine) memoryContext(ctx context.Context, in Input) string {
 		for _, src := range m.Sources {
 			refs = append(refs, src.EventID)
 		}
-		row := map[string]any{"scope": m.Scope, "id": m.ID, "version": m.Version, "kind": m.Kind, "subject": m.Subject, "text": text, "status": m.Status, "inference": m.Inference, "source_event_ids": refs, "continuity": m.Continuity, "needs_review": m.Continuity && time.Since(m.LastMention) > 14*24*time.Hour, "representation": m.Representation(time.Now())}
+		row := map[string]any{"source_quotes": m.Sources, "scope": m.Scope, "id": m.ID, "version": m.Version, "kind": m.Kind, "subject": m.Subject, "text": text, "status": m.Status, "inference": m.Inference, "source_event_ids": refs, "continuity": m.Continuity, "needs_review": m.Continuity && time.Since(m.LastMention) > 14*24*time.Hour, "representation": m.Representation(time.Now())}
 		b, _ := json.Marshal(row)
 		cost := EstimateTokens(string(b))
 		if used+cost > budget {

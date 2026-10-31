@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,10 +18,26 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyVersion("1.1.0.0")]
 namespace WechatAgent.Desktop {
     internal static class Program {
+        static readonly object loaderGate = new object();
+        static bool loaderConfigured;
+        [DllImport("shell32.dll", CharSet=CharSet.Unicode)]
+        static extern int SetCurrentProcessExplicitAppUserModelID(string identity);
         [STAThread]
         static void Main(string[] args) {
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             try {
+                using (var instance = new DesktopInstance()) {
+                    // Admit before reading another copy's configuration or
+                    // constructing any form/WebView/service process.
+                    if (!instance.IsOwner) { instance.ActivateOwner(); return; }
+                    SetCurrentProcessExplicitAppUserModelID("RoamerFly.WechatAgent.Desktop");
+                    RegisterDependencies();
+                    var d = Deployment.Load(Deployment.FindWorkspace(args));
+                    Run(d, instance.Activation);
+                }
+            } catch (Exception error) { MessageBox.Show(error.Message, "大肥鱼 Agent · 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+        internal static void RegisterDependencies() {
                 AppDomain.CurrentDomain.AssemblyResolve += delegate(object sender, ResolveEventArgs e) {
                     string name = new AssemblyName(e.Name).Name;
                     if (name != "Microsoft.Web.WebView2.Core" && name != "Microsoft.Web.WebView2.WinForms") return null;
@@ -28,17 +45,18 @@ namespace WechatAgent.Desktop {
                         var bytes = new byte[stream.Length]; stream.Read(bytes, 0, bytes.Length); return Assembly.Load(bytes);
                     }
                 };
-                var d = Deployment.Load(Deployment.FindWorkspace(args));
-                bool owner;
-                using (var mutex = new Mutex(true, "Local\\WechatAgentDesktop-" + d.Identity, out owner))
-                using (var activate = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\WechatAgentDesktopActivate-" + d.Identity)) {
-                    if (!owner) { activate.Set(); return; }
-                    Run(d, activate); mutex.ReleaseMutex();
-                }
-            } catch (Exception error) { MessageBox.Show(error.Message, "大肥鱼 Agent · 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
         [MethodImpl(MethodImplOptions.NoInlining)]
         static void Run(Deployment d, EventWaitHandle activate) { Application.Run(new MainForm(d, activate)); }
+        internal static void ConfigureWebViewLoader(string workspace) {
+            lock (loaderGate) {
+                if (loaderConfigured) return;
+                // WebView2 permits this setter only before its first API call.
+                // Restarting services/pages must reuse the loaded DLL path.
+                CoreWebView2Environment.SetLoaderDllFolderPath(ExtractLoader(workspace));
+                loaderConfigured = true;
+            }
+        }
         internal static string ExtractLoader(string workspace) {
             byte[] bytes;
             using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("WebView2Loader.dll")) {

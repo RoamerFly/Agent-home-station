@@ -4,18 +4,61 @@ Run with the managed interpreter. The OS executor supplies account/conversation
 mounts; this adapter neither opens control credentials nor sends WeChat messages.
 """
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
+import shutil
+import uuid
+
+
+@contextmanager
+def inference_temporary_directory(parent):
+    if os.name != 'nt':
+        with tempfile.TemporaryDirectory(dir=parent, prefix='.gsv-') as directory:
+            yield directory
+        return
+    # Python 3.13's Windows mkdir(0700) replaces inherited ACLs with an owner
+    # ACL; an LPAC token cannot install it. Inherit the already private mount.
+    directory = Path(parent) / ('.gsv-' + uuid.uuid4().hex)
+    directory.mkdir(mode=0o755)
+    try:
+        yield str(directory)
+    finally:
+        shutil.rmtree(directory)
+
+
+def install_windows_audio_loader(module):
+    """Decode registered reference files when the optional TorchCodec is absent.
+
+    Keep the upstream resampling/device operations; soundfile returns normalized
+    float samples with explicit channels. No runtime download or CPU inference.
+    """
+    original = module.torchaudio.load
+    def load(path, frame_offset=0, num_frames=-1, normalize=True, channels_first=True, format=None, buffer_size=4096, backend=None):
+        import torch
+        try:
+            return original(path, frame_offset=frame_offset, num_frames=num_frames, normalize=normalize,
+                            channels_first=channels_first, format=format, buffer_size=buffer_size, backend=backend)
+        except ImportError as error:
+            if 'TorchCodec' not in str(error):
+                raise
+        if not normalize:
+            raise ValueError('soundfile_reference_decoder_requires_normalized_samples')
+        import soundfile as sf
+        samples, source_sr = sf.read(path, start=frame_offset, frames=num_frames, dtype='float32', always_2d=True)
+        return torch.from_numpy((samples.T if channels_first else samples).copy()), source_sr
+    module.torchaudio.load = load
 
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--project', required=True, type=Path)
     p.add_argument('--models', required=True, type=Path)
+    p.add_argument('--packages', type=Path, help='registered separate dependency overlay for this model family')
     p.add_argument('--gpt', required=True, type=Path)
     p.add_argument('--sovits', required=True, type=Path)
     p.add_argument('--reference', required=True, type=Path)
@@ -37,7 +80,7 @@ def parser():
 def prepare(args):
     # Resolve before changing cwd; reject missing models before upstream can
     # silently replace the requested voice with its pretrained default.
-    for field in ['project','models','gpt','sovits','reference','output','parameters','prompt_text_file']:
+    for field in ['project','models','packages','gpt','sovits','reference','output','parameters','prompt_text_file']:
         value = getattr(args, field)
         if value is not None:
             setattr(args, field, value.expanduser().resolve())
@@ -47,6 +90,8 @@ def prepare(args):
     for name in ['chinese-roberta-wwm-ext-large','chinese-hubert-base']:
         if not (args.models/name/'config.json').is_file():
             raise ValueError('base_model_missing: ' + name)
+    if args.packages is not None and not args.packages.is_dir():
+        raise ValueError('model_package_overlay_missing')
     if args.output.exists() and not args.overwrite:
         raise FileExistsError(args.output)
     prompt = args.prompt_text if args.prompt_text is not None else args.prompt_text_file.read_text(encoding='utf-8-sig').strip()
@@ -90,10 +135,17 @@ def synthesize(args):
     os.environ['version'] = args.version
     os.chdir(args.project)
     sys.path[:0] = [str(args.project), str(args.project/'GPT_SoVITS')]
+    if args.packages is not None:
+        # Keep GPT-SoVITS' Transformers stack separate from YuE's stack.
+        sys.path.insert(0, str(args.packages))
     import torch
     if args.device.startswith('cuda') and not torch.cuda.is_available():
         raise RuntimeError('cuda_unavailable: request server_exec/server_process gpu=true and the registered CUDA interpreter')
-    from TTS_infer_pack.TTS import TTS, TTS_Config
+    import importlib
+    inference_module = importlib.import_module('TTS_infer_pack.TTS')
+    if os.name == 'nt':
+        install_windows_audio_loader(inference_module)
+    TTS, TTS_Config = inference_module.TTS, inference_module.TTS_Config
     import numpy as np
     import soundfile as sf
     config = TTS_Config({'custom': {'version':args.version, 'device':args.device,
@@ -101,7 +153,7 @@ def synthesize(args):
         't2s_weights_path':str(args.gpt),'vits_weights_path':str(args.sovits),
         'bert_base_path':str(args.models/'chinese-roberta-wwm-ext-large'),
         'cnhuhbert_base_path':str(args.models/'chinese-hubert-base')}})
-    with tempfile.TemporaryDirectory(dir=args.output.parent, prefix='.gsv-') as tmp:
+    with inference_temporary_directory(args.output.parent) as tmp:
         config.configs_path = str(Path(tmp)/'tts.yaml')
         model = TTS(config)
         chunks, rate = [], None

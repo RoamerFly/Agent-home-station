@@ -28,6 +28,10 @@ func TestConsoleMediaTransfersUseLiveQueueAndRequireOwnerScope(t *testing.T) {
 	if code != 200 || json.Unmarshal(body, &out) != nil || out.State != "queued" || len(f.manager.takeMediaSeeds()) != 1 || n.submits.Load() != 0 {
 		t.Fatal(code, string(body))
 	}
+	seed := f.manager.takeMediaSeeds()[0]
+	if seed.OriginInput == nil || seed.OriginInput.Mode != "admin_action" || seed.OriginInput.Source != nil || seed.OriginInput.ReplyContext == nil || seed.OriginInput.ReplyContext.State != "system_context" {
+		t.Fatal("console request lost its host action identity", seed.OriginInput)
+	}
 	if code, _, _ := f.request("GET", "/api/agent/media-status/"+out.ID, nil, false, false); code != 200 {
 		t.Fatal("status unavailable", code)
 	}

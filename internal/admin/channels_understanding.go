@@ -27,12 +27,18 @@ func (a mediaUnderstanding) understandChannels(ctx context.Context, msg linuxnat
 	}
 	data, sample, readErr := a.readChannelsVideo(ctx, source)
 	if readErr != nil {
-		cfg, configErr := loadChannelsSettings(a.manager.dir)
-		if configErr != nil {
-			return "", configErr
+		installed, pluginErr := a.manager.installedShareState(ctx)
+		if pluginErr != nil {
+			return "", pluginErr
 		}
-		if !cfg.Enabled {
-			return "", readErr
+		if !installed {
+			cfg, configErr := loadChannelsSettings(a.manager.dir)
+			if configErr != nil {
+				return "", configErr
+			}
+			if !cfg.Enabled {
+				return "", readErr
+			}
 		}
 		source, err = a.manager.resolveReceivedChannels(ctx, msg, source)
 		if err != nil {

@@ -17,10 +17,16 @@ import (
 )
 
 type accountRecord struct {
-	ID    string `json:"id"`
-	Label string `json:"label,omitempty"`
+	ID      string `json:"id"`
+	Label   string `json:"label,omitempty"`
+	Removed bool   `json:"removed,omitempty"`
+}
+type accountAccess struct {
+	mu      sync.RWMutex
+	removed bool
 }
 type accountRuntime struct {
+	access    *accountAccess
 	record    accountRecord
 	manager   *Manager
 	handler   http.Handler
@@ -59,6 +65,10 @@ func newAccountRegistry(root *Server) (*accountRegistry, error) {
 			if !validID(record.ID) || record.ID == primary || a.items[record.ID] != nil {
 				a.close()
 				return nil, errors.New("账号目录身份重复或无效")
+			}
+			if record.Removed {
+				a.items[record.ID] = &accountRuntime{record: record}
+				continue
 			}
 			if _, err := a.open(record, false); err != nil {
 				// A damaged secondary configuration must not take the existing
@@ -124,7 +134,7 @@ func (a *accountRegistry) open(record accountRecord, initialize bool) (*accountR
 		m.Close()
 		return nil, err
 	}
-	item := &accountRuntime{record: record, manager: m, handler: h}
+	item := &accountRuntime{record: record, manager: m, handler: h, access: &accountAccess{}}
 	a.items[record.ID] = item
 	return item, nil
 }
@@ -180,11 +190,17 @@ func (a *accountRegistry) close() {
 func (a *accountRegistry) lookup(id string) *accountRuntime {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.items[id]
+	item := a.items[id]
+	if item == nil {
+		return nil
+	}
+	copy := *item
+	return &copy
 }
 
 func (a *accountRegistry) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/accounts", a.root.protected(a.list))
+	mux.HandleFunc("POST /api/accounts/{id}/manage", a.root.protected(a.manage))
 	mux.HandleFunc("POST /api/accounts", a.root.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Label string `json:"label"`
@@ -205,6 +221,104 @@ func (a *accountRegistry) routes(mux *http.ServeMux) {
 		}
 		respond(w, 201, map[string]any{"id": item.record.ID, "name": in.Label, "created": true})
 	}))
+}
+
+// Keep a tombstone so native directory refresh cannot undo removal. Private
+// history and login material remain intact; a removed account cannot be routed.
+func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Action string `json:"action"`
+		Label  string `json:"label"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.Label = strings.TrimSpace(in.Label)
+	if len(in.Label) > 256 || strings.ContainsAny(in.Label, "\x00\r\n") {
+		fail(w, 400, "账号备注需要为单行文字，最多 256 字节")
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	id := r.PathValue("id")
+	item := a.items[id]
+	if a.closed || a.root.manager.draining() {
+		fail(w, 409, "服务正在收尾，请稍后重试")
+		return
+	}
+	if item == nil {
+		fail(w, 404, "账号不存在")
+		return
+	}
+	if id == a.root.manager.native.Account() {
+		fail(w, 409, "主账号是本机服务入口，可暂停 Agent 或退出微信登录，不能移除入口")
+		return
+	}
+	if item.access != nil {
+		item.access.mu.Lock()
+		defer item.access.mu.Unlock()
+	}
+	record := item.record
+	switch in.Action {
+	case "rename":
+		record.Label = in.Label
+	case "remove":
+		if item.manager != nil {
+			item.manager.op.Lock()
+			defer item.manager.op.Unlock()
+			if (item.manager.mobile != nil && item.manager.mobile.Busy()) || (item.manager.processes != nil && item.manager.processes.Busy()) || item.manager.windowsMusicBusy() {
+				fail(w, 409, "此账号仍有后台任务，请结束任务后再移除")
+				return
+			}
+			state := item.manager.BotStatus().State
+			if item.manager.Config().Enabled || (state != "disabled" && state != "error" && state != "") {
+				fail(w, 409, "请先暂停此账号的 Agent，等待处理结束后再移除")
+				return
+			}
+		}
+		record.Removed = true
+	case "restore":
+		if !record.Removed {
+			respond(w, 200, map[string]any{"id": id})
+			return
+		}
+		record.Removed = false
+	default:
+		fail(w, 400, "不支持的账号操作")
+		return
+	}
+	next := append([]accountRecord{}, a.order...)
+	for i := range next {
+		if next[i].ID == id {
+			next[i] = record
+		}
+	}
+	// Open before committing restoration; keep it inaccessible until persistence.
+	if in.Action == "restore" && item.manager == nil {
+		opened, err := a.open(record, false)
+		if err != nil {
+			fail(w, 409, "账号配置未能恢复，原资料仍保留")
+			return
+		}
+		opened.record = item.record
+		item = opened
+	}
+	data, err := json.Marshal(next)
+	if err == nil {
+		err = writePrivate(filepath.Join(a.root.manager.dir, "accounts.json"), data)
+	}
+	if err != nil {
+		fail(w, 500, "账号目录保存失败，原记录保留")
+		return
+	}
+	copy := *item
+	copy.record = record
+	if copy.access != nil {
+		copy.access.removed = record.Removed
+	}
+	a.items[id] = &copy
+	a.order = next
+	respond(w, 200, map[string]any{"id": id, "removed": record.Removed, "label": record.Label, "history_preserved": true})
 }
 
 func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +347,8 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	items := make([]*accountRuntime, 0, len(a.items))
 	for _, item := range a.items {
-		items = append(items, item)
+		copy := *item
+		items = append(items, &copy)
 	}
 	a.mu.Unlock()
 	primary := a.root.manager.native.Account()
@@ -250,6 +365,10 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(i int, item *accountRuntime) {
 			defer wg.Done()
+			if item.record.Removed {
+				rows[i] = map[string]any{"id": item.record.ID, "name": item.record.Label, "label": item.record.Label, "removed": true}
+				return
+			}
 			if item.manager == nil {
 				name := item.record.Label
 				if name == "" {
@@ -271,7 +390,7 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 			}); ok {
 				nickname, _ = resolver.DisplayName(ctx)
 			}
-			if nickname != "" {
+			if nickname != "" && item.record.Label == "" {
 				name = nickname
 			}
 			if name == "" {
@@ -290,7 +409,7 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 
 // selectAccount never falls back to primary for an unknown or conflicting ID.
 func (a *accountRegistry) selectAccount(w http.ResponseWriter, r *http.Request, primary http.Handler) {
-	if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/accounts" || r.URL.Path == "/api/login" || r.URL.Path == "/api/logout" || r.URL.Path == "/api/password" || r.URL.Path == "/api/session" {
+	if !strings.HasPrefix(r.URL.Path, "/api/") || (r.URL.Path == "/api/accounts" || strings.HasPrefix(r.URL.Path, "/api/accounts/")) || r.URL.Path == "/api/login" || r.URL.Path == "/api/logout" || r.URL.Path == "/api/password" || r.URL.Path == "/api/session" {
 		primary.ServeHTTP(w, r)
 		return
 	}
@@ -311,13 +430,21 @@ func (a *accountRegistry) selectAccount(w http.ResponseWriter, r *http.Request, 
 		id = a.root.manager.native.Account()
 	}
 	item := a.lookup(id)
-	if item == nil {
+	if item == nil || item.record.Removed {
 		fail(w, 404, "账号不存在，请从账号列表重新选择")
 		return
 	}
 	if item.manager == nil {
 		fail(w, 503, item.loadError)
 		return
+	}
+	if item.access != nil {
+		item.access.mu.RLock()
+		defer item.access.mu.RUnlock()
+		if item.access.removed {
+			fail(w, 404, "账号已移除，请重新选择")
+			return
+		}
 	}
 	w.Header().Set("X-Wechat-Account", id)
 	if item.handler == nil {

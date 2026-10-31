@@ -39,7 +39,7 @@ func (s *Server) contextRoutes(mux *http.ServeMux) {
 			reject(err)
 			return
 		}
-		engine, err := companion.New(cfg.Companion, s.manager.memory, provider, cfg.SystemPrompt)
+		engine, err := companion.New(cfg.sharedCompanion(), s.manager.memory, provider, cfg.SystemPrompt)
 		if err != nil {
 			reject(err)
 			return

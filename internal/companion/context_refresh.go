@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -14,7 +15,7 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 		return turns
 	}
 	for i, turn := range turns {
-		if turn["role"] != "user" {
+		if turn == nil {
 			continue
 		}
 		var packet map[string]json.RawMessage
@@ -23,8 +24,76 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 		}
 		var kind string
 		_ = json.Unmarshal(packet["kind"], &kind)
+		if turn["role"] != "user" && !(turn["role"] == "assistant" && kind == "history_reply") {
+			continue
+		}
+		var source, tool string
+		_ = json.Unmarshal(packet["source"], &source)
+		_ = json.Unmarshal(packet["tool"], &tool)
+		if source == "untrusted_tool_result" && (strings.HasPrefix(tool, "memory_") || tool == "agent_global_search" || tool == "tool_output_read") {
+			var raw string
+			_ = json.Unmarshal(packet["result"], &raw)
+			var value any
+			if json.Unmarshal([]byte(raw), &value) == nil {
+				if memoryQueryResult(tool) && !e.memoryToolValueAuthorized(value) {
+					value = invalidatedMemoryResult(value, "Memory authorization changed or is missing; issue a new authorized query before using this result.")
+				} else {
+					value = e.refreshMemoryToolValue(ctx, value)
+				}
+				rawBytes, _ := json.Marshal(value)
+				packet["result"], _ = json.Marshal(string(rawBytes))
+			} else if strings.HasPrefix(tool, "memory_") || tool == "agent_global_search" {
+				packet["result"], _ = json.Marshal("Memory preview cannot be version-validated; read its current source/page again. The original operation was not repeated.")
+			}
+			b, _ := json.Marshal(packet)
+			turns[i] = map[string]string{"role": turn["role"], "content": string(b)}
+			continue
+		}
 		changed := false
 		switch kind {
+		case "current_followup":
+			var rows []map[string]any
+			if json.Unmarshal(packet["events"], &rows) == nil {
+				for _, row := range rows {
+					e.refreshEmbeddedEvidence(ctx, row)
+				}
+				packet["events"], _ = json.Marshal(rows)
+				changed = true
+			}
+		case "current_message":
+			if value := packet["quoted_message_evidence"]; len(value) > 0 {
+				var row map[string]any
+				if json.Unmarshal(value, &row) == nil {
+					e.refreshEmbeddedEvidence(ctx, row)
+					packet["quoted_message_evidence"], _ = json.Marshal(row)
+					changed = true
+				}
+			}
+			var unread []map[string]any
+			if json.Unmarshal(packet["unread_messages"], &unread) == nil && len(unread) > 0 {
+				for _, row := range unread {
+					e.refreshEmbeddedEvidence(ctx, row)
+				}
+				packet["unread_messages"], _ = json.Marshal(unread)
+				changed = true
+			}
+		case "conversation_summary":
+			var scope, epoch, fingerprint string
+			_ = json.Unmarshal(packet["scope"], &scope)
+			_ = json.Unmarshal(packet["data_epoch"], &epoch)
+			_ = json.Unmarshal(packet["summary_fingerprint"], &fingerprint)
+			currentEpoch, err := e.Store.DataEpoch(ctx)
+			e.Store.mu.Lock()
+			current := e.Store.data.Scopes[scope]
+			e.Store.mu.Unlock()
+			if scope == "" || epoch == "" || err != nil || epoch != currentEpoch || current.Summary == "" || fingerprint != summaryFingerprint(current.Summary) {
+				turns[i] = nil
+				continue
+			}
+			if !e.validSummaryPacketSources(ctx, scope, packet["data"]) {
+				turns[i] = nil
+				continue
+			}
 		case "long_term_memory":
 			var rows []map[string]any
 			if json.Unmarshal(packet["items"], &rows) != nil {
@@ -46,6 +115,14 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 				row["text"] = text
 				row["status"] = m.Status
 				row["version"] = m.Version
+				row["subject"] = m.Subject
+				row["assertions"] = m.Assertions
+				row["source_quotes"] = m.Sources
+				ids := []string{}
+				for _, src := range m.Sources {
+					ids = append(ids, src.EventID)
+				}
+				row["source_event_ids"] = ids
 				b, _ := json.Marshal(row)
 				cost := EstimateTokens(string(b))
 				if used+cost > e.memorySettings().RecallTokens {
@@ -71,9 +148,11 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 			for _, row := range rows {
 				id, _ := row["source_event_id"].(string)
 				if id != "" {
-					if _, err := e.Store.ReadEvent(ctx, []string{scope}, id); err != nil {
+					ev, err := e.Store.ReadEvent(ctx, []string{scope}, id)
+					if err != nil {
 						continue
 					}
+					e.refreshEvidenceRow(row, ev)
 				}
 				kept = append(kept, row)
 			}
@@ -90,9 +169,28 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 			_ = json.Unmarshal(packet["source_event_id"], &id)
 			_ = json.Unmarshal(packet["scope"], &scope)
 			if id != "" && scope != "" {
-				if _, err := e.Store.ReadEvent(ctx, []string{scope}, id); err != nil {
+				ev, err := e.Store.ReadEvent(ctx, []string{scope}, id)
+				if err != nil {
 					turns[i] = nil
+					continue
 				}
+				var row map[string]any
+				encoded, _ := json.Marshal(packet)
+				_ = json.Unmarshal(encoded, &row)
+				e.refreshEvidenceRow(row, ev)
+				if kind == "history_reply" {
+					if redacted, _ := row["personal_context_redacted"].(bool); !redacted {
+						row["messages"] = []string{ev.Text}
+						row["media_delivery"] = ev.Media
+					} else {
+						row["messages"] = []string{}
+						row["media_delivery"] = nil
+					}
+				}
+				encoded, _ = json.Marshal(row)
+				_ = json.Unmarshal(encoded, &packet)
+
+				changed = true
 			}
 		}
 		if changed {
@@ -107,4 +205,130 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 		}
 	}
 	return kept
+}
+
+func (e *Engine) refreshEmbeddedEvidence(ctx context.Context, row map[string]any) {
+	id, _ := row["source_event_id"].(string)
+	scope, _ := row["scope"].(string)
+	if id != "" && scope != "" {
+		if ev, err := e.Store.ReadEvent(ctx, []string{scope}, id); err == nil {
+			e.refreshEvidenceRow(row, ev)
+			return
+		}
+		for _, key := range []string{"text", "literal_user_text", "media_observations", "incoming_media", "runtime_context"} {
+			delete(row, key)
+		}
+		row["text"] = ""
+		row["user_text_state"] = "invalidated"
+		row["invalidated"] = true
+	}
+}
+
+func (e *Engine) refreshMemoryToolValue(ctx context.Context, value any) any {
+	switch x := value.(type) {
+	case []any:
+		for i := range x {
+			x[i] = e.refreshMemoryToolValue(ctx, x[i])
+		}
+		return x
+	case string:
+		var nested any
+		if json.Unmarshal([]byte(x), &nested) == nil {
+			b, _ := json.Marshal(e.refreshMemoryToolValue(ctx, nested))
+			return string(b)
+		}
+		return x
+	case map[string]any:
+		if _, exists := x["_memory_authorization"]; exists && !e.memoryToolValueAuthorized(x) {
+			return invalidatedMemoryResult(x, "Memory authorization changed; query the current authorized scope again.")
+		}
+		if stamp, exists := x["_memory_epoch"]; exists {
+			epoch, _ := stamp.(string)
+			current, err := e.Store.DataEpoch(ctx)
+			if epoch == "" || err != nil || epoch != current {
+				clean := map[string]any{"invalidated": true, "instruction": "Memory changed since this result was read; query the current source again."}
+				for _, key := range []string{"result_id", "next_offset", "next_cursor", "next_source_offset", "scope", "id"} {
+					if v, ok := x[key]; ok {
+						clean[key] = v
+					}
+				}
+				return clean
+			}
+		}
+		packetSource, _ := x["source"].(string)
+		packetTool, _ := x["tool"].(string)
+		if packetSource == "untrusted_tool_result" && (strings.HasPrefix(packetTool, "memory_") || packetTool == "agent_global_search") {
+			if memoryQueryResult(packetTool) {
+				stamp, _ := x["memory_authorization"].(string)
+				if !e.memoryResultAuthorized(stamp) {
+					return invalidatedMemoryResult(x, "Retained memory authorization changed or is missing; re-run the authorized query.")
+				}
+			}
+			epoch, _ := x["memory_epoch"].(string)
+			current, err := e.Store.DataEpoch(ctx)
+			if epoch == "" || err != nil || epoch != current {
+				delete(x, "text")
+				delete(x, "result")
+				delete(x, "content")
+				x["invalidated"] = true
+				x["instruction"] = "Retained memory page changed or cannot be validated; re-run the current memory query, preserving the original action identity."
+				return x
+			}
+		}
+		id, _ := x["id"].(string)
+		scope, _ := x["scope"].(string)
+		if id != "" && scope != "" {
+			if _, ok := x["detail"]; ok {
+				m, err := e.Store.ReadMemory(ctx, []string{scope}, id)
+				old, _ := x["version"].(float64)
+				if err != nil || int(old) != m.Version {
+					return map[string]any{"id": id, "scope": scope, "invalidated": true, "instruction": "Memory changed or was forgotten; read the current version before using it."}
+				}
+			}
+			if _, ok := x["role"]; ok {
+				ev, err := e.Store.ReadEvent(ctx, []string{scope}, id)
+				old, _ := x["revision"].(float64)
+				if err != nil || int(old) != ev.Revision {
+					return map[string]any{"id": id, "scope": scope, "invalidated": true, "instruction": "Source changed or was forgotten; read the current version before using it."}
+				}
+				e.refreshEvidenceRow(x, ev)
+			}
+		}
+		for key, v := range x {
+			x[key] = e.refreshMemoryToolValue(ctx, v)
+		}
+		return x
+	default:
+		return value
+	}
+}
+
+func memoryQueryResult(tool string) bool {
+	return tool == "memory_read" || tool == "memory_search" || tool == "agent_global_search"
+}
+
+func (e *Engine) memoryResultAuthorized(stamp string) bool {
+	provider, ok := e.Tools.(interface{ MemoryResultAuthorized(string) bool })
+	return ok && stamp != "" && provider.MemoryResultAuthorized(stamp)
+}
+
+func (e *Engine) memoryToolValueAuthorized(value any) bool {
+	packet, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	stamp, _ := packet["_memory_authorization"].(string)
+	return e.memoryResultAuthorized(stamp)
+}
+
+func invalidatedMemoryResult(value any, instruction string) map[string]any {
+	clean := map[string]any{"invalidated": true, "instruction": instruction}
+	if original, ok := value.(map[string]any); ok {
+		for _, key := range []string{"result_id", "next_offset", "next_cursor", "next_source_offset", "scope", "id", "tool", "source"} {
+			if v, exists := original[key]; exists {
+				clean[key] = v
+			}
+		}
+	}
+	return clean
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"wechat-bot/internal/companion"
@@ -15,7 +16,8 @@ import (
 
 func run() error {
 	dir := flag.String("dir", "", "companion memory directory")
-	action := flag.String("action", "inspect", "inspect|dry-run|migrate|verify|backup|index")
+	action := flag.String("action", "inspect", "inspect|dry-run|migrate|verify|backup|index|source-audit|quarantine")
+	review := flag.String("review", "", "reviewed source-conflict JSON file, with exact revisions and hashes")
 	out := flag.String("out", "", "new SQLite backup path")
 	scope := flag.String("scope", "", "scope ID for archive indexing")
 	allScopes := flag.Bool("all-scopes", false, "index all scopes, reporting aggregate progress only")
@@ -26,6 +28,13 @@ func run() error {
 	}
 	ctx := context.Background()
 	print := func(v any) error { return json.NewEncoder(os.Stdout).Encode(v) }
+	if *action == "source-audit" {
+		items, err := companion.AuditSources(ctx, *dir)
+		if err != nil {
+			return err
+		}
+		return print(map[string]any{"read_only": true, "items": items, "content_included": false})
+	}
 	if *action == "dry-run" {
 		v, e := companion.DryRunMemory(ctx, *dir)
 		if e != nil {
@@ -45,7 +54,13 @@ func run() error {
 			return errors.New("migrate the database first")
 		}
 	}
-	s, e := companion.NewStore(*dir)
+	var s *companion.Store
+	var e error
+	if *action == "quarantine" || *action == "index" || *action == "migrate" {
+		s, e = companion.NewOfflineStore(*dir)
+	} else {
+		s, e = companion.NewStore(*dir)
+	}
 	if e != nil {
 		return e
 	}
@@ -68,6 +83,31 @@ func run() error {
 			return e
 		}
 		return print(map[string]bool{"ok": true})
+	case "quarantine":
+		if *review == "" {
+			return errors.New("--review is required; originals are preserved")
+		}
+		file, err := os.Open(*review)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		decoder := json.NewDecoder(io.LimitReader(file, 4<<20))
+		decoder.DisallowUnknownFields()
+		var items []companion.SourceAudit
+		if err = decoder.Decode(&items); err != nil {
+			return err
+		}
+		if decoder.Decode(new(any)) != io.EOF || len(items) == 0 {
+			return errors.New("one nonempty source review array required")
+		}
+		if err = s.QuarantineSources(ctx, items); err != nil {
+			return err
+		}
+		if err = s.Verify(ctx); err != nil {
+			return err
+		}
+		return print(map[string]any{"state": "quarantined", "count": len(items), "originals_preserved": true, "wechat_sends": 0})
 	case "index":
 		if *batches < 1 || (*scope == "" && !*allScopes) || (*scope != "" && *allScopes) {
 			return errors.New("one of --scope or --all-scopes and positive --batches required")

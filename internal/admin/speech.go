@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/bot"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 
 	"wechat-bot/internal/mcptools"
@@ -37,6 +39,37 @@ func speechView(c bailian.Config) map[string]any {
 	return map[string]any{"settings": c, "key_configured": configured}
 }
 func (s *Server) speechRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/speech/music-service", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		var config windowsMusicConfig
+		data, err := os.ReadFile(filepath.Join(s.manager.dir, "windows-music.json"))
+		configured := err == nil && len(data) <= 16384 && json.Unmarshal(data, &config) == nil && config.Enabled && config.Policy == windowsMusicPolicy
+		s.manager.musicProcessMu.Lock()
+		process := s.manager.windowsMusic
+		s.manager.musicProcessMu.Unlock()
+		running := false
+		if process != nil {
+			select {
+			case <-process.done:
+			default:
+				running = true
+			}
+		}
+		respond(w, 200, map[string]any{"platform": runtime.GOOS, "configured": configured, "running": running, "busy": s.manager.windowsMusicBusy()})
+	}))
+	mux.HandleFunc("POST /api/speech/music-service/start", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if runtime.GOOS != "windows" {
+			fail(w, 400, "此入口用于已登记的Windows音乐后端")
+			return
+		}
+		result, err := s.manager.startWindowsMusic(r.Context())
+		if err != nil {
+			fail(w, 409, err.Error())
+			return
+		}
+		var value any
+		_ = json.Unmarshal([]byte(result), &value)
+		respond(w, 200, value)
+	}))
 	mux.HandleFunc("GET /api/speech/asr-health", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, s.manager.localASRStatus())
 	}))
@@ -144,6 +177,22 @@ func (p *permittedTools) generateSpeech(ctx context.Context, name string, args j
 		}
 		if json.Unmarshal(args, &selected) != nil {
 			return "", toolInputError("语音参数无效")
+		}
+		voices, err := p.accessibleVoices()
+		if err != nil {
+			return "", err
+		}
+		request := p.trace.RequestedText
+		if request == "" {
+			request = companion.UserRequestText(p.trace.Text)
+		}
+		if err = validateRequestedSpeechVoice(request, selected.VoiceID, voices); err != nil {
+			return "", err
+		}
+		if selected.VoiceID == "" {
+			if err = p.bindTaskSpeechVoice(""); err != nil {
+				return "", err
+			}
 		}
 		if selected.VoiceID != "" {
 			p.privateDiagnostics = true

@@ -217,13 +217,16 @@ func (w *Worker) noticeGenerationMessage(m linuxnative.Message, eligible bool) {
 		}
 		return
 	}
+	if !messageAffectsInput(j.input, m) {
+		return
+	}
 	w.offerGenerationFollowup(j, m, eligible)
 	for _, e := range j.updates {
 		if e.MessageID == m.ID {
 			return
 		}
 	}
-	j.updates = append(j.updates, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: messageSummary(m), At: m.CreatedAt, NewRequest: eligible})
+	j.updates = append(j.updates, conversationEvent(m, eligible))
 	if len(j.updates) > 8 {
 		j.updates = j.updates[len(j.updates)-8:]
 	}
@@ -254,6 +257,14 @@ func (w *Worker) deferBusyGeneration(ctx context.Context, m linuxnative.Message)
 
 func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input companion.Input, analysis *linuxnative.Message, deadlineOverride ...time.Time) {
 	input = w.withAutonomyPlans(input)
+	if !c.Config.Permissions.Remember && input.Sender != "" && input.Mode != "proactive" {
+		verified, err := w.verifyEphemeralSource(ctx, input)
+		if err != nil {
+			w.modelFailed(input.Thread, input.TraceID, err)
+			return
+		}
+		input = verified
+	}
 	s := w.generation
 	if s.jobs[input.Thread] != nil || !s.canGenerate() {
 		return
@@ -326,7 +337,7 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 				m, e := w.source.Message(read, id)
 				summary := ""
 				if e == nil && m.ThreadID == in.Thread {
-					summary, e = w.config.Analyzer.Analyze(read, m)
+					summary, e = w.analyzeIncomingMedia(read, m)
 				}
 				stop()
 				if e != nil {
@@ -361,7 +372,7 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 			readCtx, stop := context.WithTimeout(modelCtx, 3*time.Minute)
 			var summary string
 			incomplete := false
-			summary, err = w.config.Analyzer.Analyze(readCtx, *analysis)
+			summary, err = w.analyzeIncomingMedia(readCtx, *analysis)
 			stop()
 			if err != nil && modelCtx.Err() == nil {
 				incomplete = true
@@ -372,6 +383,13 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 				})
 			}
 			if err == nil {
+				for i := range in.IncomingMedia {
+					in.IncomingMedia[i].Observation = summary
+					in.IncomingMedia[i].ObservationState = "observed"
+					if incomplete {
+						in.IncomingMedia[i].ObservationState = "incomplete"
+					}
+				}
 				if analysis.Type == 34 {
 					in.Text = summary
 				} else {
@@ -446,7 +464,12 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		return
 	}
 	if r.input.TaskID != "" && w.config.AgentTaskDone != nil {
-		defer w.config.AgentTaskDone(r.input, r.decision.Action)
+		state := r.decision.Action
+		var changed *companion.GenerationEvidenceChangedError
+		if errors.As(r.err, &changed) {
+			state = "generation_paused"
+		}
+		defer w.config.AgentTaskDone(r.input, state)
 	}
 	delete(s.jobs, r.input.Thread)
 	w.settleGenerationFollowups(r.job, r.err == nil && !r.job.cancelled && w.taskActive(r.input))
@@ -533,6 +556,14 @@ type generationTools struct {
 	scheduler *generationScheduler
 	worker    *Worker
 	job       *generationJob
+}
+
+func (t *generationTools) ForkTools() companion.ToolAccess {
+	factory, ok := t.inner.(interface{ ForkTools() companion.ToolAccess })
+	if !ok {
+		return nil
+	}
+	return &generationTools{inner: factory.ForkTools(), scheduler: t.scheduler, worker: t.worker, job: t.job}
 }
 
 func (t *generationTools) NeedsPrivateReplyReview() bool {

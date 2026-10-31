@@ -26,6 +26,10 @@ func (s *Server) mediaConsoleRoutes(mux *http.ServeMux) {
 			fail(w, 400, "需明确指定来源和目标会话")
 			return
 		}
+		if !access.crossAllowed(in.Source, in.Target) {
+			fail(w, 400, "来源或目标会话未授权")
+			return
+		}
 		// The converter owns the requested execution deadline; the server's
 		// ordinary response timeout must not silently shorten that budget.
 		if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil && err != http.ErrNotSupported {
@@ -33,6 +37,8 @@ func (s *Server) mediaConsoleRoutes(mux *http.ServeMux) {
 			return
 		}
 		access.trace.TraceID = "console-media-" + agentID(in.Key)
+		access.trace.OriginTraceID = access.trace.TraceID
+		access.trace.Mode = "admin_action"
 		raw, _ := json.Marshal(in)
 		result, err := access.sendMedia(r.Context(), raw)
 		if err != nil {

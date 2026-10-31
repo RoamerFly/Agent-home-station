@@ -101,6 +101,7 @@ type pluginJobState struct {
 	CancelState     string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	Constraints        *TaskConstraints  `json:"constraints,omitempty"`
 	PendingOperations  []string          `json:"pending_operations,omitempty"`
 	WorkCompleted      bool              `json:"work_completed,omitempty"`
 	Reminder           *reminderSpec     `json:"reminder,omitempty"`
@@ -360,6 +361,18 @@ func (a *agentControl) task(t agentTask) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	old, exists := a.data.Tasks[t.ID]
+	if exists {
+		if old.Account != t.Account || old.Thread != t.Thread || old.Sender != t.Sender {
+			return errors.New("task_identity_cannot_change")
+		}
+		if old.Constraints != nil {
+			t.Constraints = copyTask(old).Constraints
+		}
+		t.OwnerRequested = t.OwnerRequested || old.OwnerRequested
+	}
+	if err := validateTaskConstraints(t); err != nil {
+		return err
+	}
 	if t.State == "completed" {
 		t.WorkCompleted = true
 	}
@@ -442,6 +455,21 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if t.Reminder != nil || (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(t.Thread) || !permittedRecipient(cfg.Config, t.Thread) {
 			continue
 		}
+		// Recheck identity and owner authority before dispatching any specialized
+		// continuation, including music/process jobs that return earlier below.
+		access := &permittedTools{manager: m, trace: companion.Input{Account: t.Account, Thread: t.Thread, Sender: t.Sender}}
+		if constraintErr := m.validateTaskSource(t); constraintErr != nil || t.OwnerRequested && !access.privileged() {
+			t.State = "needs_review"
+			t.LastResult = "任务身份、素材或主人授权已变化，停止自动续办并保留原任务"
+			if constraintErr != nil {
+				t.LastResult = constraintErr.Error()
+			}
+			_, err := m.agent.updateSnapshot(t)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if t.PluginJob != nil {
 			return m.claimPluginTask(t, now)
 		}
@@ -463,7 +491,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			if err := m.agent.task(t); err != nil {
 				return nil, err
 			}
-			return &companion.Input{BackgroundResult: true, Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Text: t.Checkpoint, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText, TraceID: "recover-" + t.ID, QuoteServerID: t.QuoteServerID}, nil
+			return taskResultInput(t, &companion.Input{BackgroundResult: true, Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Text: t.Checkpoint, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText, TraceID: "recover-" + t.ID, QuoteServerID: t.QuoteServerID}), nil
 		}
 		ownerContinuation := false
 		if t.ReportOnly {
@@ -489,6 +517,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		// Non-owner continuations retain proactive authorization and quiet checks;
 		// completed evaluations do not exhaust a daily allowance.
 		in := companion.Input{BackgroundResult: true, Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "proactive", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), TraceID: "task-" + t.ID + "-" + time.Now().UTC().Format("20060102T150405.000000000"), TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText}
+		taskResultInput(t, &in)
 		if ownerContinuation {
 			in.Mode, in.Directed = "direct", true
 			in.ReportOnly = t.ReportOnly
@@ -518,6 +547,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 	}
 	return nil, nil
 }
+
 func withTaskWake(c companion.Config) companion.Config {
 	x := c.ConversationConfig()
 	x.AllowWake = true
@@ -531,6 +561,26 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 		}
 	}()
 	if in.TaskID == "" {
+		return
+	}
+	if state == "generation_paused" {
+		for _, task := range m.agent.list(in.Account, in.Thread) {
+			if task.ID != in.TaskID {
+				continue
+			}
+			// A tool may have saved a waiting checkpoint before another result
+			// invalidated this generation. Pause that checkpoint as well; keep
+			// actual tool actions, prepared outputs and accepted receipts intact.
+			if task.State == "completed" || task.State == "cancelled" || task.State == "failed" {
+				return
+			}
+			task.State = "needs_review"
+			task.LastResult = "生成期间依据或授权已改变，本轮尚未发送部分已停止；原程序、工具产物和已核验回执保留，重新核验后再继续"
+			if _, err := m.agent.updateSnapshot(task); err != nil {
+				m.log("generation_pause_checkpoint_failed")
+			}
+			return
+		}
 		return
 	}
 	if state == "reply" {
@@ -747,7 +797,12 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 			value = map[string]any{"state": "waiting", "reason": err.Error(), "instruction": "读取目标会话真实记录和原发送任务，依据反馈继续排查并修复。新的一次补发尝试可用新request_key，保留原job_id；已接受部分不重发。需要退避时agent_task保存waiting检查点，不能只说明失败便结束。"}
 		}
 		if mediaInputRejected {
-			value = map[string]any{"state": "rejected", "reason": err.Error(), "instruction": "未创建发送队列。根据实际录音范围更正转换参数，可复用原request_key；无需查询不存在的发送回执。"}
+			value = map[string]any{"state": "rejected", "reason": err.Error(), "instruction": "未创建发送队列。检查原素材、声线及转换参数后更正，可复用原request_key；无需查询不存在的发送回执。"}
+		}
+		var evidenceFailure *outboundEvidenceError
+		if strings.HasPrefix(name, "wechat_") && errors.As(err, &evidenceFailure) {
+			diagnostic := evidenceFailure.diagnostic()
+			value = map[string]any{"state": "needs_review", "reason": err.Error(), "code": diagnostic.Code, "stage": diagnostic.Stage, "not_started": diagnostic.NotStarted, "retryable": diagnostic.Retryable, "continuation": diagnostic.Continuation, "instruction": diagnostic.Continuation}
 		}
 	}
 	b, _ := json.Marshal(value)

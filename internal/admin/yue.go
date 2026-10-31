@@ -432,6 +432,8 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		}
 		if !found {
 			task := agentTask{MusicSpec: spec, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: map[bool]string{true: "参考翻唱 · ", false: "原创歌曲 · "}[in.Mode == "cover"] + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "歌曲任务已提交，等待真实结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
+			task.OwnerRequested = p.privileged()
+			task.Constraints = p.taskConstraints("music", "", spec.VoiceProfile, spec.Reference)
 			if len(task.Title) > 200 {
 				task.Title = "原创歌曲生成"
 			}
@@ -537,6 +539,9 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			spec = t.MusicSpec
 			break
 		}
+	}
+	if err := validateMusicVoiceEvidence(status, spec); err != nil {
+		return "", err
 	}
 	var listening map[string]any
 	if spec != nil && spec.VocalGender != "" {

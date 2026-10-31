@@ -3,15 +3,23 @@ package companion
 import "errors"
 
 type MemorySettings struct {
-	Enabled          bool  `json:"enabled"`
-	BatchMessages    int   `json:"batch_messages"`
-	IdleSeconds      int   `json:"idle_seconds"`
-	DailyTokens      int64 `json:"daily_tokens"`
-	RecentTokens     int   `json:"recent_tokens"`
-	RecallTokens     int   `json:"recall_tokens"`
-	ContinuityTokens int   `json:"continuity_tokens"`
-	ContextWindow    int   `json:"context_window_tokens"`
-	OutputReserve    int   `json:"output_reserve_tokens"`
+	ReplyAudit       *ReplyAuditSettings `json:"reply_audit,omitempty"`
+	Enabled          bool                `json:"enabled"`
+	BatchMessages    int                 `json:"batch_messages"`
+	IdleSeconds      int                 `json:"idle_seconds"`
+	DailyTokens      int64               `json:"daily_tokens"`
+	RecentTokens     int                 `json:"recent_tokens"`
+	RecallTokens     int                 `json:"recall_tokens"`
+	ContinuityTokens int                 `json:"continuity_tokens"`
+	ContextWindow    int                 `json:"context_window_tokens"`
+	OutputReserve    int                 `json:"output_reserve_tokens"`
+}
+
+func (c MemorySettings) AuditConfig() ReplyAuditSettings {
+	if c.ReplyAudit == nil {
+		return ReplyAuditDefaults()
+	}
+	return *c.ReplyAudit
 }
 
 func MemoryDefaults() MemorySettings {
@@ -30,6 +38,9 @@ func (e *Engine) memorySettings() MemorySettings {
 	return e.Config.MemoryConfig()
 }
 func (c MemorySettings) Validate() error {
+	if a := c.AuditConfig(); a.RetentionDays < 1 {
+		return errors.New("reply audit retention must be positive")
+	}
 	if c.BatchMessages < 1 || c.IdleSeconds < 0 || c.DailyTokens < 0 || c.RecentTokens < 1 || c.RecallTokens < 1 || c.ContinuityTokens < 0 || c.ContinuityTokens > c.RecallTokens || c.ContextWindow < 0 || c.OutputReserve < 0 {
 		return errors.New("invalid memory maintenance or context budget")
 	}

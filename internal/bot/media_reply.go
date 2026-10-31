@@ -11,6 +11,7 @@ import (
 )
 
 type mediaReply struct {
+	ReplyContexts    []companion.ReplyContext      `json:"reply_contexts,omitempty"`
 	Paused           bool                          `json:"paused,omitempty"`
 	WakeReason       string                        `json:"wake_reason,omitempty"`
 	WakeAfterSeconds int                           `json:"wake_after_seconds,omitempty"`
@@ -51,6 +52,7 @@ func (w *Worker) deferMediaReply(in companion.Input, messages []string, expected
 	}
 	r := &mediaReply{Trace: in.TraceID, Input: in, Messages: append([]string(nil), messages...), Expected: expected, State: "waiting_delivery", Created: time.Now().UTC()}
 	if len(followup) > 0 {
+		r.ReplyContexts = append([]companion.ReplyContext(nil), followup[0].ReplyContexts...)
 		r.WakeAfterSeconds, r.WaitForReply, r.WakeReason = followup[0].WakeAfterSeconds, followup[0].WaitForReply, followup[0].WakeReason
 	}
 	if in.QuoteServerID != "" && in.TraceID != "" && (in.QuoteSharedMessage || in.Directed && w.config.Options.QuoteReplies) {
@@ -108,7 +110,7 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 			// The handoff and text plan are persisted together. The attachment
 			// keeps its own receipt/cancellation state; only the caption is replanned.
 			r.State = "queued_plan"
-			w.queueUtteranceFrom(c, in, companion.Decision{Messages: messages, WakeAfterSeconds: r.WakeAfterSeconds, WaitForReply: r.WaitForReply, WakeReason: r.WakeReason}, r.Index, true, r.Updates)
+			w.queueUtteranceFrom(c, in, companion.Decision{Messages: messages, ReplyContexts: r.ReplyContexts, WakeAfterSeconds: r.WakeAfterSeconds, WaitForReply: r.WaitForReply, WakeReason: r.WakeReason}, r.Index, true, r.Updates)
 			w.refreshMediaParent(r.Trace)
 			continue
 		}
@@ -122,6 +124,10 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		}
 		in := r.Input
 		in.TraceID = r.Trace
+		if r.Index < len(r.ReplyContexts) {
+			rc := r.ReplyContexts[r.Index]
+			in.ReplyContext = &rc
+		}
 		if r.Quote != nil {
 			in.QuoteServerID = r.Quote.ServerID
 		}

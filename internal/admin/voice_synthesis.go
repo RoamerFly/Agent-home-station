@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"wechat-bot/internal/agenthost"
@@ -49,6 +50,9 @@ func (p *permittedTools) synthesizeLibraryVoice(ctx context.Context, raw json.Ra
 	if !strings.EqualFold(selected.Engine, "GPT-SoVITS") {
 		return "", toolInputError("named_voice_engine_has_no_registered_text_synthesis_route; inspect_voice_library_read")
 	}
+	if err = p.bindTaskSpeechVoice(selected.ID); err != nil {
+		return "", err
+	}
 	x := p.executionContext()
 	manifests, _, err := readProjectManifests(ctx, x.Public, "gpt-sovits", true)
 	if err != nil {
@@ -57,6 +61,7 @@ func (p *permittedTools) synthesizeLibraryVoice(ctx context.Context, raw json.Ra
 	var project struct {
 		Root, Python, Entry string
 		Models              string `json:"base_models"`
+		Packages            string `json:"packages"`
 	}
 	if len(manifests) != 1 || json.Unmarshal(manifests[0], &project) != nil {
 		return "", toolInputError("gpt_sovits_manifest_invalid")
@@ -65,6 +70,11 @@ func (p *permittedTools) synthesizeLibraryVoice(ctx context.Context, raw json.Ra
 		rel, e := filepath.Rel(x.Public, path)
 		if e != nil || !filepath.IsAbs(path) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return "", toolInputError("gpt_sovits_resource_outside_public_workspace")
+		}
+	}
+	if project.Packages != "" {
+		if !pathWithin(x.Public, project.Packages) || regularMusicPath(project.Packages, true) != nil {
+			return "", toolInputError("gpt_sovits_package_overlay_outside_public_workspace_or_missing")
 		}
 	}
 	args, _ := json.Marshal(map[string]any{"voice_id": in.VoiceID, "file_ids": in.Files})
@@ -115,6 +125,22 @@ func (p *permittedTools) synthesizeLibraryVoice(ctx context.Context, raw json.Ra
 	if err != nil {
 		return "", err
 	}
+	// AppContainer appends Packages/<SID>/AC/Temp to its profile. A profile
+	// rooted at the deep conversation output path can exceed Win32's legacy
+	// path limit before Python imports its first dependency. Give each job a
+	// separate short, account-scoped writable root for runtime scratch.
+	var runtimeScratch string
+	if runtime.GOOS == "windows" {
+		base := filepath.Join(x.Private, "scratch")
+		if err = ensureManaged(base); err != nil {
+			return "", err
+		}
+		runtimeScratch, err = os.MkdirTemp(base, "voice-")
+		if err != nil {
+			return "", err
+		}
+		defer os.RemoveAll(runtimeScratch)
+	}
 	// Preserve the result and execution log for diagnosis/reuse, even on error.
 	dest := filepath.Join(folder, "speech.wav")
 	if in.Device == "" {
@@ -131,9 +157,15 @@ func (p *permittedTools) synthesizeLibraryVoice(ctx context.Context, raw json.Ra
 		return "", err
 	}
 	cfg.Roots = []string{folder}
+	if runtimeScratch != "" {
+		cfg.Roots = []string{runtimeScratch, folder}
+	}
 	cfg.Isolation.GPU = strings.HasPrefix(in.Device, "cuda")
 	cfg.Isolation.ReadOnly = []string{x.Public, library.Directory}
 	argv := []string{project.Python, project.Entry, "--project", project.Root, "--models", project.Models, "--gpt", gpt, "--sovits", sovits, "--reference", reference, "--prompt-text-file", prompt, "--text", in.Text, "--device", in.Device, "--version", in.Version, "--output", dest}
+	if project.Packages != "" {
+		argv = append(argv, "--packages", project.Packages)
+	}
 	if in.Device == "cpu" {
 		argv = append(argv, "--no-half")
 	}
@@ -153,7 +185,19 @@ func (p *permittedTools) synthesizeLibraryVoice(ctx context.Context, raw json.Ra
 	// Keep upstream diagnostics privately; the generic sandbox omits stderr.
 	wrapper := "import contextlib,runpy,sys\nlog=sys.argv.pop(1)\nsys.argv=sys.argv[1:]\nwith open(log,'a',encoding='utf-8') as f, contextlib.redirect_stderr(f):\n runpy.run_path(sys.argv[0],run_name='__main__')\n"
 	argv = append([]string{project.Python, "-u", "-c", wrapper, filepath.Join(folder, "stderr.log")}, argv[1:]...)
-	log, runErr := agenthost.RunIsolated(bounded, cfg, folder, argv)
+	var log []byte
+	var diagnostic []byte
+	var runErr error
+	if runtime.GOOS == "windows" {
+		log, diagnostic, runErr = p.manager.runWindowsNamedModel(bounded, cfg, folder, argv)
+	} else {
+		log, runErr = agenthost.RunIsolated(bounded, cfg, folder, argv)
+	}
+	if len(diagnostic) > 0 {
+		if err = os.WriteFile(filepath.Join(folder, "broker-stderr.log"), diagnostic, 0600); err != nil {
+			return "", err
+		}
+	}
 	if err = os.WriteFile(filepath.Join(folder, "execution.log"), log, 0600); err != nil {
 		return "", err
 	}
@@ -161,7 +205,7 @@ func (p *permittedTools) synthesizeLibraryVoice(ctx context.Context, raw json.Ra
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return "", fmt.Errorf("gpt_sovits_inference_failed: %w; execution log: %s", runErr, filepath.Join(folder, "execution.log"))
+		return "", &RuntimeFailure{Code: "gpt_sovits_inference_failed", Stage: "inference", Message: "指定声线的本地推理未完成，输出尚未核验", NotStarted: false, Continuation: "用server_read核对 " + filepath.Join(folder, "execution.log") + " 与 " + filepath.Join(folder, "broker-stderr.log") + "；保持原声线与文案，未核实原因前不切默认声线"}
 	}
 	root, err := os.OpenRoot(folder)
 	if err != nil {
@@ -185,7 +229,7 @@ func (p *permittedTools) synthesizeLibraryVoice(ctx context.Context, raw json.Ra
 	if err != nil {
 		return "", err
 	}
-	result, err := p.stageOutputWithAsset(ctx, out, &assetOriginal{VoiceComplete: true, Data: data, MIME: "audio/wav", Filename: selected.Name + "-语音.wav"})
+	result, err := p.stageOutputWithAsset(ctx, out, &assetOriginal{VoiceID: selected.ID, VoiceEngine: selected.Engine, VoiceComplete: true, Data: data, MIME: "audio/wav", Filename: selected.Name + "-语音.wav"})
 	if err != nil {
 		return "", err
 	}

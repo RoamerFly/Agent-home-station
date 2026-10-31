@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "speech.synthesize",
+      "implementation": "migration-pending",
+      "description": "TTS、说话声线、克隆与训练",
+      "permissions": [
+        "artifact.read",
+        "artifact.write",
+        "network",
+        "gpu",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "speech.voices",
+      "implementation": "migration-pending",
+      "description": "TTS、说话声线、克隆与训练",
+      "permissions": [
+        "artifact.read",
+        "artifact.write",
+        "network",
+        "gpu",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "speech.train",
+      "implementation": "migration-pending",
+      "description": "TTS、说话声线、克隆与训练",
+      "permissions": [
+        "artifact.read",
+        "artifact.write",
+        "network",
+        "gpu",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    }
+  ]
+}

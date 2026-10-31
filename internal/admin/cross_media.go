@@ -24,9 +24,11 @@ type crossMediaInput struct {
 	Key        string           `json:"request_key"`
 }
 type crossMediaBatch struct {
+	OriginInput     *companion.Input                  `json:"origin_input,omitempty"`
 	Conversion      *voiceConversion                  `json:"conversion,omitempty"`
 	RequestIdentity string                            `json:"request_identity,omitempty"`
 	SupersededBy    string                            `json:"superseded_by,omitempty"`
+	CancelledAt     time.Time                         `json:"cancelled_at,omitempty"`
 	TaskID          string                            `json:"task_id,omitempty"`
 	Receipts        map[string]linuxnative.ToolStatus `json:"receipts,omitempty"`
 	ID              string                            `json:"operation_id"`
@@ -53,6 +55,9 @@ func validateCrossBatch(batch crossMediaBatch, account string) error {
 	if err := batch.Conversion.validate(batch.Parts[0].Media.Kind); err != nil {
 		return err
 	}
+	if batch.OriginInput != nil && (batch.OriginInput.Account != batch.Account || batch.OriginInput.Thread != batch.Origin || batch.OriginInput.Sender != batch.Sender || batch.OriginInput.TaskID != batch.TaskID) {
+		return errors.New("cross_media_origin_identity_mismatch")
+	}
 	keys := map[string]bool{}
 	for _, p := range batch.Parts {
 		source := p.SourceThread
@@ -61,6 +66,9 @@ func validateCrossBatch(batch crossMediaBatch, account string) error {
 		}
 		if !validID(p.Key) || keys[p.Key] || p.SourceID == "" || p.Trace != batch.ID || p.Input.TraceID != "" && p.Input.TraceID != batch.ID || p.Input.Account != batch.Account || p.Input.Thread != batch.Target || p.OriginThread != batch.Origin || source != batch.Source || p.Requester != batch.Sender || p.OriginTask != batch.TaskID || !contains([]string{"voice", "file", "image", "video"}, p.Media.Kind) {
 			return errors.New("cross_media_part_identity_mismatch")
+		}
+		if !sameCrossOrigin(p.OriginInput, batch.OriginInput) {
+			return errors.New("cross_media_origin_proof_mismatch")
 		}
 		keys[p.Key] = true
 		if status, ok := batch.Receipts[p.Key]; ok && !validCrossReceipt(batch, p, status) {
@@ -162,15 +170,28 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 					continue
 				}
 				old, e := m.readCrossBatch(strings.TrimSuffix(entry.Name(), ".json"))
-				if e != nil || old.SupersededBy != "" || old.RequestIdentity != identity && crossBatchAccepted(old) || old.Origin != p.trace.Thread || old.Sender != p.trace.Sender || old.Source != in.Source || old.Target != in.Target || old.Asset != in.Asset || old.Parts[0].Media.Kind != in.Kind || !sameVoiceConversion(old.Conversion, in.Conversion) {
+				if e != nil || old.SupersededBy != "" || !old.CancelledAt.IsZero() || old.RequestIdentity != identity && crossBatchAccepted(old) || old.Origin != p.trace.Thread || old.Sender != p.trace.Sender || old.Source != in.Source || old.Target != in.Target || old.Asset != in.Asset || old.Parts[0].Media.Kind != in.Kind || !sameVoiceConversion(old.Conversion, in.Conversion) {
 					continue
 				}
 				state := "queued"
 				if crossBatchAccepted(old) {
 					state = "accepted"
+				} else {
+					if !m.crossSeedAllowed(old.Parts[0]) {
+						return nil, errors.New("cross_media_origin_evidence_requires_review")
+					}
+					for _, part := range old.Parts {
+						if e := p.validateSelectedMediaVoice(part.Media); e != nil {
+							return nil, e
+						}
+					}
 				}
 				return map[string]any{"operation_id": old.ID, "state": state, "source_thread_id": old.Source, "target_thread_id": old.Target, "parts": len(old.Parts), "effective_conversion": old.Conversion.effective(), "reused_existing_operation": true, "instruction": "同一素材目标已有投递批次；核对原operation_id，不创建新的发送队列。"}, nil
 			}
+		}
+		origin, err := p.prepareCrossMediaOrigin(ctx)
+		if err != nil {
+			return nil, err
 		}
 		sourceTrace := p.trace
 		sourceTrace.Thread = in.Source
@@ -217,7 +238,7 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 			if e = m.tools.upload(stagedUpload{UploadSource: upload, Account: p.trace.Account, Kind: "file"}); e != nil {
 				return nil, e
 			}
-			outputs = []companion.GeneratedMedia{{ID: a.ID + "-file", SourceID: upload.ID, AssetID: a.ID, Kind: "file", Title: a.Title, CachedMIME: a.MIME}}
+			outputs = []companion.GeneratedMedia{{ID: a.ID + "-file", SourceID: upload.ID, AssetID: a.ID, Kind: "file", Title: a.Title, CachedMIME: a.MIME, VoiceID: a.VoiceID, VoiceEngine: a.VoiceEngine, VoiceProfile: a.VoiceProfile}}
 		} else {
 			raw, e := access.reuseAssetConverted(ctx, in.Asset, in.Kind, in.Conversion)
 			if e != nil {
@@ -239,13 +260,22 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 				}
 			}
 		}
+		for _, media := range outputs {
+			if e := p.validateSelectedMediaVoice(media); e != nil {
+				return nil, e
+			}
+		}
 		if !p.crossAllowed(in.Source, in.Target) {
-			return nil, errors.New("cross_media_authorization_revoked")
+			return nil, rejectOutboundEvidence(errors.New("cross_media_authorization_revoked"))
 		}
 		id := p.operationID("wechat_send_media", args)
-		batch := crossMediaBatch{Conversion: in.Conversion, RequestIdentity: identity, TaskID: p.trace.TaskID, ID: id, Account: p.trace.Account, Origin: p.trace.Thread, Source: in.Source, Target: in.Target, Sender: p.trace.Sender, Asset: in.Asset, Created: time.Now().UTC()}
+		if err := p.validateCrossMediaOrigin(ctx, origin); err != nil {
+			return nil, err
+		}
+		batch := crossMediaBatch{OriginInput: origin, Conversion: in.Conversion, RequestIdentity: identity, TaskID: p.trace.TaskID, ID: id, Account: p.trace.Account, Origin: p.trace.Thread, Source: in.Source, Target: in.Target, Sender: p.trace.Sender, Asset: in.Asset, Created: time.Now().UTC()}
 		for i, media := range outputs {
 			input := p.trace
+			input.ExpectedVoiceID, input.ExpectedVoiceProfile = p.SelectedVoiceIdentity()
 			input.Thread = in.Target
 			input.TraceID = id
 			input.OriginTraceID = p.trace.TraceID
@@ -253,7 +283,7 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 			input.IsGroup = strings.HasSuffix(in.Target, "@chatroom")
 			input.QuoteServerID = ""
 			key := agentID(id, in.Target, in.Asset, media.SourceID, string(rune(i+1)))
-			batch.Parts = append(batch.Parts, bot.MediaSeed{Key: key, Trace: id, Input: input, SourceID: media.SourceID, Media: media, OriginThread: p.trace.Thread, SourceThread: in.Source, Requester: p.trace.Sender, OriginTask: p.trace.TaskID})
+			batch.Parts = append(batch.Parts, bot.MediaSeed{Key: key, Trace: id, Input: input, OriginInput: origin, SourceID: media.SourceID, Media: media, OriginThread: p.trace.Thread, SourceThread: in.Source, Requester: p.trace.Sender, OriginTask: p.trace.TaskID})
 		}
 		if e := ensureManaged(filepath.Join(m.dir, "cross-media")); e != nil {
 			return nil, e
@@ -273,6 +303,74 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 		m.record(bot.Record{Event: "cross_media_queued", Category: "decision", ThreadID: in.Target, Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: "[" + in.Kind + "] " + outputs[0].Title, Reason: "explicit_destination_persisted", Status: "queued", Origin: "agent"})
 		return map[string]any{"operation_id": id, "state": "queued", "source_thread_id": in.Source, "target_thread_id": in.Target, "asset_id": in.Asset, "parts": len(batch.Parts), "effective_conversion": in.Conversion.effective(), "instruction": "附件已排入明确目标会话的持久队列，尚未确认送达。用wechat_operation_status核对。不要把附件再加入当前私聊reply.media_ids，不重复生成或发送。"}, nil
 	})
+}
+
+// The destination input is only a route. Preserve evidence in the originating
+// request's actual scope, before conversion/upload, and never re-stamp on resume.
+func (p *permittedTools) prepareCrossMediaOrigin(ctx context.Context) (*companion.Input, error) {
+	origin := p.outboundInput(p.trace.Thread)
+	if origin.OriginTraceID == "" {
+		origin.OriginTraceID = outboundAnchor(origin)
+	}
+	r := companion.ReplyContext{TargetIDs: []string{origin.Sender}, AnchorMessageID: outboundAnchor(origin), SourceVersions: map[string]int{}}
+	if origin.Source != nil && origin.Source.EventID != "" {
+		r.SourceEventIDs = []string{origin.Source.EventID}
+		r.SourceVersions[origin.Source.EventID] = origin.Source.Revision
+	}
+	r, err := p.stampOutboundBinding(ctx, origin, r)
+	if err != nil {
+		return nil, rejectOutboundEvidence(err)
+	}
+	origin.ReplyContext = &r
+	if err := p.validateCrossMediaOrigin(ctx, &origin); err != nil {
+		return nil, err
+	}
+	// Detach the durable snapshot from later SetTrace/media observation updates.
+	raw, err := json.Marshal(origin)
+	if err != nil {
+		return nil, err
+	}
+	var snapshot companion.Input
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func (p *permittedTools) validateCrossMediaOrigin(ctx context.Context, origin *companion.Input) error {
+	if origin == nil || origin.ReplyContext == nil || origin.Account != p.trace.Account || origin.Thread != p.trace.Thread || origin.Sender != p.trace.Sender {
+		return rejectOutboundEvidence(errors.New("cross_media_origin_evidence_requires_review"))
+	}
+	input := *origin
+	if input.TraceID == "" {
+		input.TraceID = outboundAnchor(input)
+		if input.TraceID == "" {
+			input.TraceID = input.OriginTraceID
+		}
+	}
+	return rejectOutboundEvidence(validateOutboundSource(ctx, p.manager, input, *input.ReplyContext, p))
+}
+
+func sameCrossOrigin(a, b *companion.Input) bool {
+	// TraceID and other process-only fields are deliberately not persisted by
+	// companion.Input. Canonical identity compares the complete durable shape.
+	left, e1 := json.Marshal(a)
+	right, e2 := json.Marshal(b)
+	return e1 == nil && e2 == nil && string(left) == string(right)
+}
+
+func (p *permittedTools) validateSelectedMediaVoice(media companion.GeneratedMedia) error {
+	voice, profile := p.SelectedVoiceIdentity()
+	if voice == "" && profile == "" {
+		return nil
+	}
+	if media.Kind != "voice" && !strings.HasPrefix(media.CachedMIME, "audio/") {
+		return nil
+	}
+	if voice != "" && media.VoiceID != voice || profile != "" && media.VoiceProfile != profile {
+		return toolInputError("named_voice_result_identity_mismatch: 待发送音频未匹配本任务声线，未入队；请读取原任务并使用指定voice_id/profile继续")
+	}
+	return nil
 }
 func (m *Manager) queueCrossBatch(batch crossMediaBatch) error {
 	if e := validateCrossBatch(batch, m.native.Account()); e != nil {
@@ -300,7 +398,7 @@ func (m *Manager) queueCrossBatch(batch crossMediaBatch) error {
 		}
 	}
 	for _, seed := range batch.Parts {
-		if batch.SupersededBy != "" {
+		if batch.SupersededBy != "" || !batch.CancelledAt.IsZero() {
 			continue
 		}
 		if status, ok := batch.Receipts[seed.Key]; ok && validCrossReceipt(batch, seed, status) {
@@ -362,7 +460,7 @@ func (m *Manager) restoreCrossMedia() error {
 	}
 	sort.SliceStable(batches, func(i, j int) bool { return batches[i].Created.Before(batches[j].Created) })
 	for _, batch := range batches {
-		if batch.SupersededBy != "" {
+		if batch.SupersededBy != "" || !batch.CancelledAt.IsZero() {
 			if err = m.queueCrossBatch(batch); err != nil {
 				return err
 			}
@@ -384,6 +482,12 @@ func (m *Manager) restoreCrossMedia() error {
 			continue
 		}
 		if !m.crossSeedAllowed(batch.Parts[0]) {
+			// Preserve canonical keys for read-only native receipt recovery.
+			// MediaSeedKnown permits adoption, while MediaSeedAllowed still
+			// prevents Submit/Retry for missing, revoked or stale source proof.
+			if err = m.queueCrossBatch(batch); err != nil {
+				return err
+			}
 			continue
 		}
 		if batch.TaskID != "" {
@@ -417,6 +521,10 @@ func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (strin
 	}
 	if e = validateCrossBatch(batch, p.manager.native.Account()); e != nil {
 		return "", e
+	}
+	if !batch.CancelledAt.IsZero() {
+		out, _ := json.Marshal(map[string]any{"operation_id": batch.ID, "state": "cancelled", "target_thread_id": batch.Target})
+		return string(out), nil
 	}
 	if batch.SupersededBy != "" {
 		out, _ := json.Marshal(map[string]any{"operation_id": batch.ID, "state": "superseded", "superseded_by": batch.SupersededBy, "target_thread_id": batch.Target, "instruction": "已合并到另一个投递批次，检查superseded_by；不要恢复重复发送。"})
@@ -463,13 +571,30 @@ func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (strin
 	return string(out), e
 }
 
-func (m *Manager) crossSeedAllowed(seed bot.MediaSeed) bool {
-	batch, e := m.readCrossBatch(seed.Trace)
-	if e != nil {
+// crossSeedKnown authorizes only read-only reconciliation of a canonical send
+// key. Current evidence and send permission are checked separately before any
+// new submission, including a retry.
+func (m *Manager) crossSeedKnown(seed bot.MediaSeed) bool {
+	batch, known := m.crossSeedBatch(seed)
+	if !known {
 		return false
 	}
-	if batch.SupersededBy != "" {
-		return false
+	for _, part := range batch.Parts {
+		if part.Key == seed.Key {
+			canonical, queued := part.Media, seed.Media
+			// SourceID has a separate durable field and is intentionally json:-
+			// in GeneratedMedia. Compare all remaining immutable metadata.
+			canonical.SourceID, queued.SourceID = "", ""
+			return canonical == queued
+		}
+	}
+	return false
+}
+
+func (m *Manager) crossSeedBatch(seed bot.MediaSeed) (crossMediaBatch, bool) {
+	batch, e := m.readCrossBatch(seed.Trace)
+	if e != nil {
+		return batch, false
 	}
 	found := false
 	source := seed.SourceThread
@@ -477,12 +602,29 @@ func (m *Manager) crossSeedAllowed(seed bot.MediaSeed) bool {
 		source = seed.OriginThread
 	}
 	for _, p := range batch.Parts {
-		if p.Key == seed.Key && p.SourceID == seed.SourceID && p.Input.Account == seed.Input.Account && p.Input.Thread == seed.Input.Thread && p.OriginThread == seed.OriginThread && p.Requester == seed.Requester && p.OriginTask == seed.OriginTask && source == batch.Source {
+		if p.Key == seed.Key && p.SourceID == seed.SourceID && p.Input.Account == seed.Input.Account && p.Input.Thread == seed.Input.Thread && sameCrossOrigin(&p.Input, &seed.Input) && p.OriginThread == seed.OriginThread && p.Requester == seed.Requester && p.OriginTask == seed.OriginTask && source == batch.Source && sameCrossOrigin(p.OriginInput, seed.OriginInput) {
 			found = true
 			break
 		}
 	}
 	if !found {
+		return batch, false
+	}
+	return batch, true
+}
+
+func (m *Manager) crossSeedAllowed(seed bot.MediaSeed) bool {
+	batch, known := m.crossSeedBatch(seed)
+	if !known || batch.SupersededBy != "" || !batch.CancelledAt.IsZero() {
+		return false
+	}
+	if seed.OriginInput == nil || seed.OriginInput.ReplyContext == nil || seed.OriginInput.Account != batch.Account || seed.OriginInput.Thread != batch.Origin || seed.OriginInput.Sender != batch.Sender {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	access := &permittedTools{manager: m, trace: *seed.OriginInput}
+	if err := access.validateCrossMediaOrigin(ctx, seed.OriginInput); err != nil {
 		return false
 	}
 	c := m.agent.config()
@@ -492,7 +634,7 @@ func (m *Manager) crossSeedAllowed(seed bot.MediaSeed) bool {
 			return false
 		}
 	}
-	return c.Enabled && c.CrossConversation && seed.Input.Account == m.native.Account() && contains(c.OwnerIDs, seed.Requester) && c.allowsPrivilegedThread(seed.OriginThread) && permittedRecipient(m.Config().Config, seed.OriginThread) && m.accountThreadKnown(source) && m.accountThreadKnown(seed.Input.Thread)
+	return c.Enabled && c.CrossConversation && seed.Input.Account == m.native.Account() && contains(c.OwnerIDs, seed.Requester) && c.allowsPrivilegedThread(seed.OriginThread) && permittedRecipient(m.Config().Config, seed.OriginThread) && m.accountThreadKnown(batch.Source) && m.accountThreadKnown(seed.Input.Thread)
 }
 
 func (m *Manager) blockCrossRecovery(id, reason string) error {

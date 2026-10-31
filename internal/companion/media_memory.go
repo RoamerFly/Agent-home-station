@@ -6,6 +6,9 @@ import (
 )
 
 type MediaMemory struct {
+	VoiceID        string `json:"voice_id,omitempty"`
+	VoiceEngine    string `json:"voice_engine,omitempty"`
+	VoiceProfile   string `json:"voice_profile_id,omitempty"`
 	ParentAssetID  string `json:"parent_asset_id,omitempty"`
 	RequestTraceID string `json:"request_trace_id,omitempty"`
 	RequesterID    string `json:"requester_id,omitempty"`
@@ -73,6 +76,13 @@ func (s *Store) ObserveMedia(input Input, c Config, media MediaMemory, now time.
 				}
 				if media.ParentAssetID == "" {
 					media.ParentAssetID = old.ParentAssetID
+				}
+				if media.VoiceID == "" {
+					media.VoiceID = old.VoiceID
+					media.VoiceEngine = old.VoiceEngine
+				}
+				if media.VoiceProfile == "" {
+					media.VoiceProfile = old.VoiceProfile
 				}
 				if reflect.DeepEqual(*old, media) {
 					return nil

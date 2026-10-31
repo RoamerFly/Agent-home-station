@@ -93,7 +93,16 @@ func (s *Server) pluginRoutes(mux *http.ServeMux) {
 			sort.Strings(keys)
 			items = append(items, map[string]any{"id": entry.Manifest.ID, "manifest": entry.Manifest, "enabled": entry.Enabled, "secret_keys": keys})
 		}
-		respond(w, 200, map[string]any{"installed": items, "templates": plugins.Templates()})
+		removed := []map[string]string{}
+		s.manager.plugins.mu.Lock()
+		for _, entry := range s.manager.plugins.items {
+			if entry.Removed {
+				removed = append(removed, map[string]string{"id": entry.Manifest.ID, "name": entry.Manifest.Name})
+			}
+		}
+		s.manager.plugins.mu.Unlock()
+		sort.Slice(removed, func(i, j int) bool { return removed[i]["id"] < removed[j]["id"] })
+		respond(w, 200, map[string]any{"installed": items, "removed": removed, "templates": plugins.Templates()})
 	}))
 	mux.HandleFunc("POST /api/plugins/install", s.protected(func(w http.ResponseWriter, r *http.Request) { s.savePlugin(w, r, true) }))
 	mux.HandleFunc("POST /api/plugins/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) { s.savePlugin(w, r, false) }))

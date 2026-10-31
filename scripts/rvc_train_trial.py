@@ -20,6 +20,40 @@ def checkpoint_digest(path):
 import subprocess
 
 
+def training_path(path):
+    # LPAC can open its granted files but cannot query the global DOS device
+    # namespace used by GetFinalPathNameByHandle. Host mount admission already
+    # canonicalizes these roots; keep file accesses under the same OS token.
+    return Path(path).absolute() if os.name == 'nt' else Path(path).resolve()
+
+
+def verify_optimizer_steps(experiment):
+    import torch
+    result={}
+    for name, label in [('G_2333333.pth','generator'),('D_2333333.pth','discriminator')]:
+        checkpoint=torch.load(Path(experiment)/name,map_location='cpu',weights_only=True)
+        steps=[int(value['step']) for value in checkpoint.get('optimizer',{}).get('state',{}).values() if 'step' in value]
+        if not steps or max(steps)<=0:
+            raise ValueError('training_optimizer_did_not_update_'+label)
+        result[label+'_steps']=max(steps)
+    return result
+
+
+def training_python_command(python, project, extra_paths, arguments):
+    if os.name != 'nt':
+        return [python, *arguments]
+    # Embedded Python intentionally ignores PYTHONPATH. Supply only the
+    # caller's registered project/dependency paths as structured argv.
+    paths = json.dumps([str(Path(project).absolute()), *[str(Path(p).absolute()) for p in extra_paths]])
+    bootstrap = ("import json,runpy,sys;sys.path[:0]=json.loads(sys.argv.pop(1));"
+                 "kind=sys.argv.pop(1);target=sys.argv.pop(1);sys.argv=[target,*sys.argv[1:]];"
+                 "exec(compile(target,'<training-command>','exec')) if kind=='-c' else "
+                 "runpy.run_module(target,run_name='__main__',alter_sys=True) if kind=='-m' else "
+                 "runpy.run_path(target,run_name='__main__')")
+    entry = arguments if arguments[0] in ('-m', '-c') else ['script', *arguments]
+    return [python, '-c', bootstrap, paths, *entry]
+
+
 def training_layout(project):
     root = Path(project)
     if (root/'train/train.py').is_file():
@@ -33,7 +67,9 @@ def training_layout(project):
 
 def create_shadow(source, destination):
     """Keep all mutable training state private; reuse only read-only assets."""
-    source, destination = Path(source).resolve(strict=True), Path(destination).resolve()
+    source, destination = training_path(source), training_path(destination)
+    if not source.is_dir() or source.is_symlink() or (os.name == 'nt' and source.is_junction()):
+        raise ValueError('training_source_directory_required')
     if destination.exists():
         raise ValueError('training_shadow_destination_must_be_new')
     destination.mkdir(parents=True)
@@ -43,9 +79,15 @@ def create_shadow(source, destination):
     (destination/'assets/weights').mkdir(parents=True)
     for name in ('pretrained_v2', 'rmvpe', 'hubert_base'):
         if (source/'assets'/name).exists():
-            (destination/'assets'/name).symlink_to((source/'assets'/name).resolve(), target_is_directory=True)
+            if os.name == 'nt':
+                # Standard Windows users need no symlink/developer privileges.
+                # Training mutates only this account-private physical copy.
+                shutil.copytree(source/'assets'/name, destination/'assets'/name)
+            else:
+                (destination/'assets'/name).symlink_to((source/'assets'/name).resolve(), target_is_directory=True)
     (destination/'logs').mkdir()
-    (destination/'training-source.json').write_text(json.dumps({'source_project': str(source), 'mutable_assets_shared': False}), encoding='utf-8')
+    (destination/'training-source.json').write_text(json.dumps({'source_project': str(source), 'mutable_assets_shared': False,
+                                                              'asset_strategy': 'private_copy' if os.name == 'nt' else 'read_only_source_links'}), encoding='utf-8')
 
 
 def fix_shadow_preprocess(project):
@@ -140,7 +182,7 @@ def main():
     if min(args.epochs,args.batch_size,args.save_every,args.workers)<1:raise ValueError('positive_training_parameters_required')
     # Resolving a venv interpreter symlink executes the base Python without
     # that venv's torch/CUDA packages. Preserve its invoked absolute path.
-    project=Path(args.project).resolve();python=str(Path(args.python).absolute());dataset=Path(args.dataset).resolve()
+    project=training_path(args.project);python=str(Path(args.python).absolute());dataset=training_path(args.dataset)
     if args.source_project:
         if args.stage!='prepare':raise ValueError('new_shadow_requires_prepare')
         create_shadow(args.source_project, project)
@@ -153,7 +195,9 @@ def main():
     env=dict(os.environ, PYTHONPATH=os.pathsep.join([str(project),*map(lambda x:str(Path(x).absolute()),args.extra_python_path)]), OMP_NUM_THREADS=str(args.workers), MKL_NUM_THREADS=str(args.workers),
              RVC_AUDIO_FORCE_CPU='1', HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1')
     if args.device=='cpu':env['CUDA_VISIBLE_DEVICES']=''
-    probe=subprocess.check_output([python,'-c',"import json,torch; ok=torch.cuda.is_available(); print(json.dumps({'cuda':ok,'build':torch.version.cuda,'name':torch.cuda.get_device_name(0) if ok else None})); x=torch.ones(8,device='cuda' if ok else 'cpu'); assert x.sum().item()==8"], env=env, text=True)
+    def python_command(*arguments):
+        return training_python_command(python, project, args.extra_python_path, list(map(str, arguments)))
+    probe=subprocess.check_output(python_command('-c',"import json,torch; ok=torch.cuda.is_available(); print(json.dumps({'cuda':ok,'build':torch.version.cuda,'name':torch.cuda.get_device_name(0) if ok else None})); x=torch.ones(8,device='cuda' if ok else 'cpu'); assert x.sum().item()==8"), env=env, text=True)
     hardware=json.loads(probe.splitlines()[0]);device='cuda:0' if hardware['cuda'] and args.device!='cpu' else 'cpu'
     if args.device=='cuda:0' and device=='cpu':raise RuntimeError('requested_cuda_unavailable: check gpu=true sandbox mount and registered CUDA runtime; no CPU fallback')
     state_path=experiment/'training-state.json'
@@ -169,7 +213,7 @@ def main():
     save_state();print(json.dumps(state),flush=True)
     def run(relative,*arguments):
         entry=['-m',relative.removesuffix('.py').replace('/','.')] if layout['official'] else [str(project/relative)]
-        command=[python,*entry,*map(str,arguments)]
+        command=python_command(*entry,*arguments)
         child=subprocess.Popen(command,cwd=project,env=env)
         state.update(state='running',pid=child.pid,entry=relative);save_state()
         code=child.wait()
@@ -202,14 +246,15 @@ def main():
         elif args.stage=='train':
             # Inference-only installs can expose CUDA yet lack the trainer's
             # logging dependencies. Check them before loading large weights.
-            subprocess.run([python,'-c',"from torch.utils.tensorboard import SummaryWriter; import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; f=plt.figure(); f.canvas.draw(); assert hasattr(f.canvas,'tostring_rgb'), 'trainer requires Matplotlib <3.10'; plt.close(f)"],env=env,check=True)
+            subprocess.run(python_command('-c',"from torch.utils.tensorboard import SummaryWriter; import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; f=plt.figure(); f.canvas.draw(); assert hasattr(f.canvas,'tostring_rgb'), 'trainer requires Matplotlib <3.10'; plt.close(f)"),env=env,check=True)
             run(layout['train'],'-e',args.experiment,'-sr','32k','-f0',1,'-bs',args.batch_size,'-g',0,'-te',args.epochs,'-se',args.save_every,'-pg',project/'assets/pretrained_v2/f0G32k.pth','-pd',project/'assets/pretrained_v2/f0D32k.pth','-l',1,'-c',0,'-sw',1,'-v','v2')
             final=project/'assets/weights'/(args.experiment+'.pth')
             if not final.is_file():raise ValueError('training_did_not_export_final_model')
             # The upstream parent can return zero even when its spawned trainer
             # crashes. Intermediate checkpoints alone are not a completed trial.
-            subprocess.run([python,'-c',"import sys,torch; c=torch.load(sys.argv[1],map_location='cpu'); assert c.get('info')==sys.argv[2] and c.get('version')=='v2' and c.get('f0')==1, 'training export did not reach requested epoch'",str(final),str(args.epochs)+'epoch'],check=True)
-            state.update(state='completed',optimizer_steps_verified=True,model_sha256=checkpoint_digest(final));save_state()
+            subprocess.run(python_command('-c',"import sys,torch; c=torch.load(sys.argv[1],map_location='cpu'); assert c.get('info')==sys.argv[2] and c.get('version')=='v2' and c.get('f0')==1, 'training export did not reach requested epoch'",final,str(args.epochs)+'epoch'),check=True)
+            verified_steps=verify_optimizer_steps(experiment)
+            state.update(state='completed',optimizer_steps_verified=True,optimizer_steps=verified_steps,model_sha256=checkpoint_digest(final));save_state()
         else:
             import numpy as np
             import faiss
@@ -219,7 +264,12 @@ def main():
             # Exact L2 index is deterministic and sufficient for a small trial.
             index=faiss.IndexFlatL2(768);index.add(features)
             target=experiment/(args.experiment+'-flat.index')
-            faiss.write_index(index,str(target));print('Index vectors:',index.ntotal,flush=True)
+            if os.name == 'nt':
+                # Faiss' narrow Windows fopen cannot encode Chinese paths.
+                target.write_bytes(faiss.serialize_index(index).tobytes())
+            else:
+                faiss.write_index(index,str(target))
+            print('Index vectors:',index.ntotal,flush=True)
             state.update(state='completed',index_vectors=int(index.ntotal));save_state()
     except BaseException as error:
         state.update(state="failed",reason=type(error).__name__)

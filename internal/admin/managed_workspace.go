@@ -110,12 +110,16 @@ func (p *permittedTools) workspaceExecutionAllowed() bool {
 }
 func (p *permittedTools) projectTools() []mcptools.Tool {
 	return []mcptools.Tool{
+		agentTool("project_create", "Create or reopen a project directory in this conversation workspace. shared=true requires trusted owner and uses public projects. Never overwrites files. Continue with server_write/read/edit and isolated process tools; read shared self-tools.md for workflow. Input {name:string,shared?:boolean}.", `{"type":"object","properties":{"name":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,47}$"},"shared":{"type":"boolean"}},"required":["name"],"additionalProperties":false}`),
 		agentTool("project_list", "List registered public projects and exact managed paths. Read these before searching directories; no disk-wide discovery. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
 		agentTool("project_read", "Read one registered project's JSON usage manifest. Input {id:string}.", `{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}`),
 		agentTool("agent_global_search", "Trusted owner only: search THIS account's stored conversation summaries, messages and assets, newest original time first. Asset at refers to its first source request, not later cache/format updates; time_basis labels legacy fallback and summary times. Results retain source conversation, message IDs and sender names. since is inclusive, before exclusive; use RFC3339 with timezone. Does not switch identity or authorize other accounts. Optional archives=true includes retained indexed originals; coverage reports partial indexing. order=relevance uses lexical/metadata ranking. Pagination accepts cursor or offset; a source change invalidates its cursor. Input {query?,thread_id?,since?,before?,offset?,limit?,cursor?,archives?,order?}.", `{"type":"object","properties":{"query":{"type":"string"},"thread_id":{"type":"string"},"since":{"type":"string","description":"Inclusive original time, RFC3339 with timezone"},"before":{"type":"string","description":"Exclusive original time, RFC3339 with timezone"},"cursor":{"type":"string"},"order":{"type":"string","enum":["time","relevance"]},"archives":{"type":"boolean"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
 	}
 }
 func (p *permittedTools) callProject(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if name == "project_create" {
+		return p.createWorkspaceProject(ctx, raw)
+	}
 	var in struct {
 		ID, Query     string
 		Thread        string `json:"thread_id"`
@@ -315,4 +319,24 @@ func (s *Server) managedWorkspaceRoutes(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(result))
 	}))
+}
+
+// Only a current, compact public registration index enters each round. Detailed
+// manuals and private model files are still retrieved on demand by tools.
+func (p *permittedTools) currentProjectIndex(ctx context.Context) []map[string]string {
+	rows := []map[string]string{}
+	items, _, err := readProjectManifests(ctx, p.executionContext().Public, "", false)
+	if err != nil {
+		return rows
+	}
+	for _, raw := range items {
+		var row struct {
+			ID, Name string
+			Status   string `json:"runtime_status"`
+		}
+		if json.Unmarshal(raw, &row) == nil && row.ID != "" {
+			rows = append(rows, map[string]string{"id": row.ID, "name": row.Name, "registered_runtime_status": row.Status, "details_tool": "project_read"})
+		}
+	}
+	return rows
 }

@@ -64,3 +64,25 @@ func TestPrivateModelFailureQueuesModelReportWithoutCannedReplyOrReportLoop(t *t
 		}
 	}
 }
+
+func TestPrivateModelReportRetainsUnderlyingFailureDiagnostic(t *testing.T) {
+	w, _, c, in := mediaWorker(t)
+	in.Mode = "direct"
+	records := []Record{}
+	w.config.Record = func(r Record) { records = append(records, r) }
+	w.config.ReportFailure = func(companion.Input, string) error { return nil }
+	w.finishCharacter(context.Background(), c, in, companion.Decision{}, errors.New("synthetic provider diagnostic"), nil, false, false)
+	failed := 0
+	reportedFailure := false
+	for _, r := range records {
+		if r.Event == "model_failed" && r.Reason == "synthetic provider diagnostic" {
+			failed++
+		}
+		if r.Event == "character_decision" && r.Reason == "operation_reported_privately" {
+			reportedFailure = r.Status == "failed" && r.Category == "error"
+		}
+	}
+	if failed != 1 || !reportedFailure || len(w.runtime.Deliveries) != 0 {
+		t.Fatal("private status report erased model diagnostic or sent canned reply", failed, w.runtime.Deliveries)
+	}
+}

@@ -24,6 +24,11 @@ def run(request_path):
         if direct is not None and (not isinstance(direct, list) or not direct or any(not isinstance(x, str) or "\0" in x for x in direct) or not Path(direct[0]).is_absolute()):
             raise ValueError("invalid_isolated_argv")
         command = request.get("command", "")
+        policy = request.get("music_policy", "")
+        if policy and (policy != "registry-read-private-network-v1" or direct is None or command):
+            raise ValueError("invalid_music_runtime_policy")
+        if request.get("environment") and not policy:
+            raise ValueError("music_runtime_environment_requires_authorized_policy")
         # Preserve Unicode and native nonzero exit codes without bash/$ escaping.
         script = "$ErrorActionPreference='Stop'; $global:LASTEXITCODE=0; "
         script += "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $OutputEncoding=[Console]::OutputEncoding; "
@@ -38,7 +43,8 @@ def run(request_path):
                 argv=[request["shell"],"/d","/s","/c",command]
             else:
                 argv=[request["shell"],"-NoProfile","-NonInteractive","-WindowStyle","Hidden","-EncodedCommand",encoded]
-            process = launch(argv, request["cwd"], request["roots"], request.get("read_only", []), output, diagnostic if direct is not None else None)
+            process = launch(argv, request["cwd"], request["roots"], request.get("read_only", []), output, diagnostic if direct is not None else None,
+                             music_runtime=bool(policy), environment=request.get("environment"))
             (directory / "running.json").write_text(json.dumps({"pid": process.pid, "helper_pid": os.getpid(), "started": time.time()}), encoding="utf8")
             while process.poll() is None:
                 if (directory / "cancel").exists():

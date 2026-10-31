@@ -91,11 +91,31 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 	mux.HandleFunc("POST /api/config", s.protected(s.saveConfig))
 	mux.HandleFunc("GET /api/status", s.protected(s.status))
 	mux.HandleFunc("GET /api/logs", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("date") {
+			s.logsByDate(w, r)
+			return
+		}
 		respond(w, 200, map[string]any{"items": s.manager.displayLogs(r.Context())})
 	}))
 	mux.HandleFunc("POST /api/bot/start", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, true) }))
 	mux.HandleFunc("POST /api/bot/stop", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, false) }))
 	mux.HandleFunc("POST /api/model/test", s.protected(s.testModel))
+	mux.HandleFunc("GET /api/model/models", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		s.manager.mu.Lock()
+		c := cloneConfig(s.manager.config)
+		s.manager.mu.Unlock()
+		client, err := s.manager.makeModel(c)
+		if err != nil {
+			fail(w, 400, "请先保存服务商与密钥配置")
+			return
+		}
+		ids, err := client.Models(r.Context())
+		if err != nil {
+			fail(w, 502, "暂时无法获取模型列表，请检查服务商配置")
+			return
+		}
+		respond(w, 200, map[string]any{"items": ids, "generation_calls": 0})
+	}))
 	mux.HandleFunc("GET /api/groups", s.protected(s.groups))
 	s.companionRoutes(mux)
 	s.billingRoutes(mux)
@@ -109,6 +129,8 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 	s.contextRoutes(mux)
 	s.memoryServicesRoutes(mux)
 	s.memoryRoutes(mux)
+	s.replyAuditRoutes(mux)
+	s.sourceRepairRoutes(mux)
 	s.memoryRebuildRoutes(mux)
 	s.canvasRoutes(mux)
 	s.toolRoutes(mux)
@@ -119,6 +141,7 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 	s.actionRoutes(mux)
 	s.mcpRoutes(mux)
 	s.pluginRoutes(mux)
+	s.pluginPackageRoutes(mux)
 	s.surfRoutes(mux)
 	s.mediaRuntimeRoutes(mux)
 	mux.HandleFunc("POST /api/wechat/login", s.protected(s.beginLogin))
@@ -181,6 +204,8 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			name = "console.js"
 		case "/assets/logs.js":
 			name = "logs.js"
+		case "/assets/save-actions.js":
+			name = "save-actions.js"
 		case "/assets/ui.js":
 			name = "ui.js"
 		case "/assets/channels.js":
@@ -193,6 +218,8 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			name = "agent-workspace.js"
 		case "/assets/mobile.js":
 			name = "mobile.js"
+		case "/assets/plugin-packages.js":
+			name = "plugin-packages.js"
 		case "/assets/plugins.js":
 			name = "plugins.js"
 		case "/assets/whale-girl.png":
@@ -213,7 +240,7 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 		switch name {
 		case "index.html":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		case "memory.js", "console.js", "voices.js", "accounts.js", "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "flow-model.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
+		case "plugin-packages.js", "save-actions.js", "memory.js", "console.js", "voices.js", "accounts.js", "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "flow-model.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "flow-default.json":
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")

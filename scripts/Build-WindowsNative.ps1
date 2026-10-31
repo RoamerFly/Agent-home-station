@@ -1,4 +1,4 @@
-﻿param([string]$OutputDirectory,[string]$SourceDirectory,[switch]$Test)
+﻿param([string]$OutputDirectory,[string]$SourceDirectory,[switch]$Test,[string]$GoSourcePatch)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace 'dist\windows-native\runtimes\windows-x64'}
@@ -107,6 +107,20 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Cannot export committed management source.'}
  & tar -xf $goArchive -C $goSource
  if($LASTEXITCODE -ne 0){throw 'Cannot prepare committed management source.'}
+ $goPatchHash=$null
+ if($GoSourcePatch){
+  $GoSourcePatch=[IO.Path]::GetFullPath($GoSourcePatch)
+  & git -C $goSource init -q
+  if($LASTEXITCODE -ne 0){throw 'Cannot isolate local patch application from the parent checkout.'}
+  foreach($line in Get-Content -LiteralPath $GoSourcePatch){
+   if($line -match '^\+\+\+ b/(.+)$' -and $matches[1] -notmatch '^(internal/|cmd/|go\.mod$|go\.sum$)'){throw 'Local source patch contains a path outside management source.'}
+  }
+  & git -C $goSource apply --check $GoSourcePatch
+  if($LASTEXITCODE -ne 0){throw 'Local management source patch failed validation.'}
+  & git -C $goSource apply $GoSourcePatch
+  if($LASTEXITCODE -ne 0){throw 'Cannot apply local management source patch.'}
+  $goPatchHash=(Get-FileHash -LiteralPath $GoSourcePatch -Algorithm SHA256).Hash.ToLower()
+ }
  Push-Location $goSource
  try {& go build -buildvcs=false -trimpath -o (Join-Path $OutputDirectory 'wechat-admin.exe') ./cmd/wechat-admin; if($LASTEXITCODE -ne 0){throw 'Windows management server build failed.'}} finally {Pop-Location}
 } finally {$env:GOOS=$oldOS;$env:GOARCH=$oldArch;$env:CGO_ENABLED=$oldCGO}
@@ -116,5 +130,6 @@ Copy-Item -LiteralPath $license -Destination (Join-Path $OutputDirectory 'agent-
 $notices=@{'packages/native-client-rust/crates/wechat-media/NOTICE.md'='wechat-media-NOTICE.txt';'packages/native-client-rust/crates/wechat-media/LICENSE-CHATLOG'='wechat-media-LICENSE-CHATLOG.txt';'packages/native-client-rust/crates/wechat-protocol/NOTICE'='wechat-protocol-NOTICE.txt';'packages/native-client-rust/crates/wechat-protocol/vendor/silk/LICENSE-MIT'='silk-LICENSE-MIT.txt';'packages/native-client-rust/crates/wechat-protocol/vendor/silk/LICENSE-SDK'='silk-LICENSE-SDK.txt'}
 foreach($entry in $notices.GetEnumerator()){Copy-Item -LiteralPath (Join-Path $SourceDirectory $entry.Key) -Destination (Join-Path $OutputDirectory $entry.Value)}
 $record=[ordered]@{schema_version=1;platform='windows-x64';native_source=$manifest.source_url;native_commit=$manifest.base_commit;native_patch_sha256=$manifest.patch_sha256;native_license_commit='7527cfc455be74b258cba34f75f38523b59ba1c7';native_sha256=(Get-FileHash -LiteralPath (Join-Path $OutputDirectory 'wx.exe') -Algorithm SHA256).Hash.ToLower();admin_source_commit=$goRevision;admin_sha256=(Get-FileHash -LiteralPath (Join-Path $OutputDirectory 'wechat-admin.exe') -Algorithm SHA256).Hash.ToLower();live_login_verified=$false;live_delivery_verified=$false}
+if($goPatchHash){$record['admin_source_patch_sha256']=$goPatchHash}
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'windows-native-manifest.json'),($record | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
 Write-Output 'Windows native runtime built; private data and models were not packaged.'

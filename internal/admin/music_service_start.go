@@ -16,6 +16,9 @@ func (p *permittedTools) startMusicService(ctx context.Context) (string, error) 
 	if !p.privileged() {
 		return "", toolInputError("music_service_start_requires_owner")
 	}
+	if runtime.GOOS == "windows" {
+		return p.manager.startWindowsMusic(ctx)
+	}
 	u, err := url.Parse(p.manager.speechConfig().YuEEndpoint)
 	if err != nil || runtime.GOOS != "linux" || u.Scheme != "http" || u.Host != "127.0.0.1:6188" || u.Path != "" {
 		return "", toolInputError("managed_local_music_unit_not_applicable")

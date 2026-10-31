@@ -16,6 +16,12 @@ import (
 )
 
 type Turn struct {
+	UserTextState     string             `json:"user_text_state,omitempty"`
+	Source            *SourceRef         `json:"source,omitempty"`
+	QuotedSource      *SourceRef         `json:"quoted_source,omitempty"`
+	Addressees        []string           `json:"addressees,omitempty"`
+	IncomingMedia     []IncomingMediaRef `json:"incoming_media,omitempty"`
+	ReplyContext      *ReplyContext      `json:"reply_context,omitempty"`
 	EventID           string             `json:"event_id,omitempty"`
 	FullText          string             `json:"-"`
 	HasOriginal       bool               `json:"-"`
@@ -31,9 +37,11 @@ type Turn struct {
 	Time              time.Time          `json:"time"`
 }
 type Scope struct {
-	RecallGeneration int    `json:"recall_generation,omitempty"`
-	Summary          string `json:"summary,omitempty"`
-	CompressedCount  int    `json:"compressed_count,omitempty"`
+	Preferences         string `json:"preferences,omitempty"`
+	PreferencesRevision int    `json:"preferences_revision,omitempty"`
+	RecallGeneration    int    `json:"recall_generation,omitempty"`
+	Summary             string `json:"summary,omitempty"`
+	CompressedCount     int    `json:"compressed_count,omitempty"`
 	// SummaryBoundary is the conversation snapshot length at compression time.
 	// The UI folds that snapshot, while Context still retains the recent tail.
 	SummaryBoundary int           `json:"summary_boundary,omitempty"`
@@ -76,13 +84,15 @@ type persisted struct {
 	Decisions      int              `json:"decisions"`
 }
 type Store struct {
-	maintenanceMu sync.Mutex
-	db            *sql.DB
-	compressionMu sync.Mutex
-	compressing   map[string]bool
-	mu            sync.Mutex
-	path          string
-	data          persisted
+	accessLease    *os.File
+	sourceInstance string
+	maintenanceMu  sync.Mutex
+	db             *sql.DB
+	compressionMu  sync.Mutex
+	compressing    map[string]bool
+	mu             sync.Mutex
+	path           string
+	data           persisted
 }
 
 func ScopeID(channel, account, thread string) string {
@@ -130,6 +140,7 @@ func boundedText(text string, max int) string {
 func copyScope(scope Scope) Scope {
 	scope.Messages = append([]Turn{}, scope.Messages...)
 	for i := range scope.Messages {
+		cloneTurnProvenance(&scope.Messages[i])
 		if scope.Messages[i].Media != nil {
 			v := *scope.Messages[i].Media
 			scope.Messages[i].Media = &v
@@ -172,6 +183,28 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 	if input.Preview {
 		return nil
 	}
+	if derivedObservationInput(input) {
+		// A task may need a scope container for durable execution/receipt state,
+		// but its runtime wrapper is never a new statement or user interaction.
+		id := ScopeID(input.Channel, input.Account, input.Thread)
+		s.mu.Lock()
+		_, exists := s.data.Scopes[id]
+		s.mu.Unlock()
+		if exists {
+			return nil
+		}
+		return s.scopeTransaction(id, func(data *persisted) error {
+			if _, exists := data.Scopes[id]; exists {
+				return nil
+			}
+			if len(data.Scopes) >= 512 {
+				return errors.New("character scope limit reached")
+			}
+			data.Scopes[id] = Scope{ID: id, Channel: input.Channel, Account: input.Account, Thread: input.Thread, Messages: []Turn{}, Notes: []string{}}
+			return nil
+		})
+	}
+	userTextState := observedUserTextState(input)
 	original := UserRequestText(input.Text)
 	if input.OriginalText != nil {
 		original = *input.OriginalText
@@ -190,14 +223,53 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 		if err != nil {
 			return err
 		}
-		scope.LastInteraction = now
+		if input.Source != nil && input.Source.Integrity == "verified_import" {
+			// Reconstructing an archived, verified source is not a fresh user
+			// interaction and must not restart social/proactive timers.
+			if at, e := time.Parse(time.RFC3339Nano, input.MessageTime); e == nil && at.After(scope.LastInteraction) {
+				scope.LastInteraction = at
+			}
+		} else {
+			scope.LastInteraction = now
+		}
 		if c.Permissions.Remember {
+			source, err := s.normalizeSource(input, original, now)
+			if err != nil {
+				return err
+			}
 			for i, turn := range scope.Messages {
-				if input.TraceID != "" && turn.TraceID == input.TraceID && turn.Role == "user" {
+				if (input.TraceID != "" && turn.TraceID == input.TraceID || sameSourceMessage(turn.Source, source)) && turn.Role == "user" {
+					if !sameSourceInstance(turn.Source, source) {
+						continue
+					}
+					if sourceReplay(turn.Source, source) {
+						return nil
+					}
+					if sourceCollision(turn, source, original, input.MessageTime) {
+						markSourceConflict(&scope.Messages[i])
+						if source == nil {
+							source = legacyConflictSource(input, original, now, s.SourceInstanceID())
+						}
+						source.Integrity = "conflicted"
+						continue
+					}
 					if turn.Sender != input.Sender {
 						return errors.New("message identity sender changed")
 					}
+					if source != nil {
+						if turn.Source != nil {
+							source.ReceivedAt = turn.Source.ReceivedAt
+							source.Sequence = turn.Source.Sequence
+							source.Revision = max(source.Revision, turn.Source.Revision)
+						}
+						turn.Source = source
+					}
+					turn.ReplyContext = cloneReplyContext(input.ReplyContext)
+					turn.QuotedSource = cloneSource(input.QuotedSource)
+					turn.Addressees = append([]string(nil), input.Addressees...)
+					turn.IncomingMedia = cloneIncomingMedia(input.IncomingMedia)
 					turn.Text = boundedInputMemory(input.Text)
+					turn.UserTextState = userTextState
 					turn.FullText = original
 					turn.HasOriginal = true
 					turn.FullObservation = strings.TrimPrefix(input.Text, UserRequestText(input.Text))
@@ -210,11 +282,16 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 			if parsed, err := time.Parse(time.RFC3339, input.MessageTime); err == nil && !parsed.After(now) {
 				stamp = parsed
 			}
+			if source != nil && source.OccurredAt != "" {
+				if at, e := time.Parse(time.RFC3339Nano, source.OccurredAt); e == nil {
+					stamp = at
+				}
+			}
 			observation := strings.TrimPrefix(input.Text, UserRequestText(input.Text))
 			if input.OriginalText != nil && original == "" {
 				observation = input.Text
 			}
-			scope.Messages = append(scope.Messages, Turn{TraceID: input.TraceID, Role: "user", Text: boundedInputMemory(input.Text), FullText: original, HasOriginal: true, FullObservation: observation, Sender: boundedText(input.Sender, 128), SenderName: boundedText(input.SenderName, 256), SenderNameSource: input.SenderNameSource, Time: stamp})
+			scope.Messages = append(scope.Messages, Turn{UserTextState: userTextState, ReplyContext: cloneReplyContext(input.ReplyContext), Source: source, QuotedSource: cloneSource(input.QuotedSource), Addressees: append([]string(nil), input.Addressees...), IncomingMedia: cloneIncomingMedia(input.IncomingMedia), TraceID: input.TraceID, Role: "user", Text: boundedInputMemory(input.Text), FullText: original, HasOriginal: true, FullObservation: observation, Sender: boundedText(input.Sender, 128), SenderName: boundedText(input.SenderName, 256), SenderNameSource: input.SenderNameSource, Time: stamp})
 			scope, err = s.pruneStored(scope, c, now)
 			if err != nil {
 				return err
@@ -231,8 +308,15 @@ func (s *Store) Context(input Input, c Config, now time.Time) Scope {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	scope := prune(copyScope(s.data.Scopes[ScopeID(input.Channel, input.Account, input.Thread)]), c, now)
+	keptSources := scope.Messages[:0]
+	for _, turn := range scope.Messages {
+		if turn.Source == nil || turn.Source.Integrity != "conflicted" {
+			keptSources = append(keptSources, turn)
+		}
+	}
+	scope.Messages = keptSources
 	if s.db != nil {
-		rows, err := s.db.Query("SELECT event_id FROM memory_blocks WHERE scope=?", scope.ID)
+		rows, err := s.db.Query("SELECT event_id FROM memory_blocks WHERE scope=? UNION SELECT id FROM events WHERE scope=? AND suppressed!=0 UNION SELECT event_id FROM source_conflicts WHERE scope=?", scope.ID, scope.ID, scope.ID)
 		if err != nil {
 			return Scope{ID: scope.ID, Messages: []Turn{}}
 		}
@@ -281,7 +365,7 @@ func (s *Store) Accepted(input Input, text string, c Config, now time.Time) erro
 		if !ok {
 			return errors.New("character scope missing")
 		}
-		scope.Messages = append(scope.Messages, Turn{Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
+		scope.Messages = append(scope.Messages, Turn{ReplyContext: cloneReplyContext(input.ReplyContext), Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
 		recordAutonomyAccepted(&scope, input, c, now)
 		clean, err := s.pruneStored(scope, c, now)
 		if err != nil {
@@ -467,6 +551,35 @@ func (s *Store) Expire(c Config, now time.Time) error {
 			}
 			data.Scopes[id] = clean
 		}
+		return nil
+	})
+}
+
+// Preferences are administrator-authored behavior, separate from remembered facts.
+func (s *Store) Preferences(id string) (string, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	scope := s.data.Scopes[id]
+	return scope.Preferences, scope.PreferencesRevision
+}
+func (s *Store) SetPreferences(id, text string, revision int) error {
+	text = strings.TrimSpace(text)
+	if !validScopeID(id) || len(text) > 4000 || !utf8.ValidString(text) {
+		return errors.New("偏好最多 4000 字节")
+	}
+	return s.scopeTransaction(id, func(data *persisted) error {
+		scope, ok := data.Scopes[id]
+		if !ok {
+			return errors.New("会话不存在")
+		}
+		if scope.PreferencesRevision != revision {
+			return errors.New("偏好已被更新，请重新打开后修改")
+		}
+		if scope.Preferences != text {
+			scope.Preferences = text
+			scope.PreferencesRevision++
+		}
+		data.Scopes[id] = scope
 		return nil
 	})
 }

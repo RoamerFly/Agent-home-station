@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "external-tools",
+  "name": "外部工具连接",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "status": "migration-pending",
+  "platforms": [
+    "windows-amd64",
+    "linux-amd64"
+  ],
+  "runtime": {
+    "transport": "unbound"
+  },
+  "permissions": [
+    "network"
+  ],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "963010a7eef54401c081153c6eaab792123f39d715e423b23a379bba0ef1a8e8",
+    "CHANGELOG.md": "88459301401ae87baf3a87c8a2b94799ca5dc7cca074b2ecb5eb7dcf3410c0e4",
+    "config.schema.json": "84e3460e30802d08fca68587d507eaafe4105759c5c5916c7344446ff461e6c5",
+    "MIGRATION.md": "ca78999345b5f05a4e89c5319da02d54e6f0d2d0ff9ef76d8f48353eea525170",
+    "PERMISSIONS.md": "e3f971c84993db2d1f98334960c084d80637acc34df98f795585ffa0eccfdf13",
+    "README.md": "cd863035cc4fe6ba70358509c83a2612794f3fb4a2a0d0afc3280e9ddbf54145",
+    "runtime/README.md": "ddd7cd15111d7a238db17418b1b39c62d083aca10afd39632ca2814a59b61f9e",
+    "tests/fixtures/scope.json": "6c11e95a6d41553f04b14b69e66426f51e35ab56623f9b22e58c10c83c2e2b10",
+    "ui.schema.json": "d2df68da051917e4ba8b891c69d93b6d2e2b626675a506192bfd3bdf015c612d"
+  }
+}

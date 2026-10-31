@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "project.list",
+      "implementation": "migration-pending",
+      "description": "项目登记、读写、搜索与执行",
+      "permissions": [
+        "workspace.read",
+        "workspace.write",
+        "process.execute"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "project.read",
+      "implementation": "migration-pending",
+      "description": "项目登记、读写、搜索与执行",
+      "permissions": [
+        "workspace.read",
+        "workspace.write",
+        "process.execute"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "project.write",
+      "implementation": "migration-pending",
+      "description": "项目登记、读写、搜索与执行",
+      "permissions": [
+        "workspace.read",
+        "workspace.write",
+        "process.execute"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "project.execute",
+      "implementation": "migration-pending",
+      "description": "项目登记、读写、搜索与执行",
+      "permissions": [
+        "workspace.read",
+        "workspace.write",
+        "process.execute"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    }
+  ]
+}

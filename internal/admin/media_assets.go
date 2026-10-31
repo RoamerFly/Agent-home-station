@@ -22,6 +22,9 @@ import (
 )
 
 type assetOriginal struct {
+	VoiceID             string
+	VoiceEngine         string
+	VoiceProfile        string
 	FormatKey           string
 	VoiceComplete       bool
 	Music               *songSpec
@@ -44,6 +47,9 @@ type assetFormat struct {
 	FullOriginal bool     `json:"full_original,omitempty"`
 }
 type mediaAsset struct {
+	VoiceID       string                 `json:"voice_id,omitempty"`
+	VoiceEngine   string                 `json:"voice_engine,omitempty"`
+	VoiceProfile  string                 `json:"voice_profile_id,omitempty"`
 	Music         *songSpec              `json:"music_generation,omitempty"`
 	FirstRequest  *assetRequest          `json:"first_request,omitempty"`
 	ParentAssetID string                 `json:"parent_asset_id,omitempty"`
@@ -75,6 +81,9 @@ func (m *Manager) loadAssets() ([]mediaAsset, error) {
 	var items []mediaAsset
 	if err != nil || len(b) > 16<<20 || json.Unmarshal(b, &items) != nil {
 		return nil, errors.New("媒体素材索引无法读取")
+	}
+	if err := m.recoverAssetHistoryPaths(items); err != nil {
+		return nil, err
 	}
 	for i := range items {
 		if err := m.loadAssetHistory(&items[i]); err != nil {
@@ -188,6 +197,16 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	index := -1
 	for i, a := range items {
 		if a.ID == id {
+			if original.VoiceID != "" && a.VoiceID != "" && (original.VoiceID != a.VoiceID || original.VoiceEngine != a.VoiceEngine) {
+				return zero, errors.New("cached_voice_identity_conflict")
+			}
+			profile := original.VoiceProfile
+			if original.Music != nil {
+				profile = original.Music.VoiceProfile
+			}
+			if profile != "" && a.VoiceProfile != "" && profile != a.VoiceProfile {
+				return zero, errors.New("cached_voice_profile_conflict")
+			}
 			index = i
 		}
 	}
@@ -198,7 +217,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	if e = m.writeManagedAsset(digest, original.Data); e != nil {
 		return zero, e
 	}
-	a := mediaAsset{ID: id, Scope: scope, Account: in.Account, Title: assetName(original), Filename: assetName(original), MIME: original.MIME, Hash: digest, Bytes: int64(len(original.Data)), Sources: map[string]string{}, Updated: time.Now().UTC()}
+	a := mediaAsset{ID: id, Scope: scope, Account: in.Account, Title: assetName(original), Filename: assetName(original), MIME: original.MIME, Hash: digest, Bytes: int64(len(original.Data)), Sources: map[string]string{}, Updated: time.Now().UTC(), VoiceID: original.VoiceID, VoiceEngine: original.VoiceEngine, VoiceProfile: original.VoiceProfile}
 	if u, e := url.Parse(original.URL); e == nil && u.Host != "" {
 		u.User = nil
 		if !mcptools.IsPublicVideoPage(original.URL) && !(strings.EqualFold(u.Hostname(), "www.bilibili.com") || strings.EqualFold(u.Hostname(), "bilibili.com")) {
@@ -208,6 +227,13 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		a.URL = u.String()
 	}
 	if index >= 0 {
+		if a.VoiceID == "" {
+			a.VoiceID = items[index].VoiceID
+			a.VoiceEngine = items[index].VoiceEngine
+		}
+		if a.VoiceProfile == "" {
+			a.VoiceProfile = items[index].VoiceProfile
+		}
 		a.Music = items[index].Music
 		a.FirstRequest = items[index].FirstRequest
 		if parentID == "" {
@@ -226,6 +252,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	if original.Music != nil {
 		spec := *original.Music
 		a.Music = &spec
+		a.VoiceProfile = spec.VoiceProfile
 	}
 	a.ParentAssetID = parentID
 	a.noteRequest(in)
@@ -407,7 +434,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		if conversion != nil {
 			variant = formatKey
 		}
-		result, err := p.stageOutputWithAsset(ctx, output, &assetOriginal{FormatKey: variant, VoiceComplete: conversion == nil, Data: data, MIME: a.MIME, Filename: a.Filename, URL: a.URL})
+		result, err := p.stageOutputWithAsset(ctx, output, &assetOriginal{FormatKey: variant, VoiceComplete: conversion == nil, Data: data, MIME: a.MIME, Filename: a.Filename, URL: a.URL, VoiceID: a.VoiceID, VoiceEngine: a.VoiceEngine, VoiceProfile: a.VoiceProfile})
 		if err != nil {
 			return "", err
 		}
@@ -483,7 +510,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		if len(sources) > 1 {
 			alias += "-" + strconv.Itoa(i+1)
 		}
-		media := companion.GeneratedMedia{ID: alias, SourceID: id, AssetID: a.ID, ParentAssetID: a.ParentAssetID, Kind: kind, Title: a.Title, URL: a.URL, CachedMIME: a.MIME}
+		media := companion.GeneratedMedia{ID: alias, SourceID: id, AssetID: a.ID, ParentAssetID: a.ParentAssetID, Kind: kind, Title: a.Title, URL: a.URL, CachedMIME: a.MIME, VoiceID: a.VoiceID, VoiceEngine: a.VoiceEngine, VoiceProfile: a.VoiceProfile}
 		p.media[alias] = media
 		itemsOut = append(itemsOut, media)
 	}

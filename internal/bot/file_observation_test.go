@@ -109,7 +109,7 @@ func TestFileFollowupIsObservedWithVisionDisabled(t *testing.T) {
 	defer w.closeGenerations()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: m.ThreadID, Sender: m.SenderID, TraceID: "parent", Mode: "direct", Text: "稍后给你文件"}
 	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", in.TraceID, in.Thread, "incoming", "remote"), Phase: "processing"}, {Event: fixtureEvent("2", m.ID, m.ThreadID, "incoming", "remote"), Phase: "received"}}
-	w.startGeneration(context.Background(), c, in, nil)
+	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
 	select {
 	case <-started:
 	case <-time.After(time.Second):

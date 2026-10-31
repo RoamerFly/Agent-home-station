@@ -69,7 +69,7 @@ def prepare(target, cache):
     target, cache = target.absolute(), cache.absolute()
     if target.exists():
         record = json.loads((target / "runtime-manifest.json").read_text(encoding="utf8"))
-        if record.get("upstream_sha256") != SHA256 or record.get("transform") != "headless-pe-manifests-v1":
+        if record.get("upstream_sha256") != SHA256 or record.get("transform") != "headless-pe-manifests-v2":
             raise RuntimeError("Existing runtime has a different identity; no overwrite performed")
         if any(digest(target / name) != value for name, value in record["files"].items()):
             raise RuntimeError("Existing runtime integrity check failed; no overwrite performed")
@@ -98,10 +98,11 @@ def prepare(target, cache):
                 if name.startswith("/") or ":" in name or ".." in name.split("/"):
                     raise RuntimeError("Unsafe runtime archive member")
             source.extractall(stage)
-        for name, resource in [("python.exe", 1), ("pythonw.exe", 1), ("python313.dll", 2)]:
-            remove_startup_manifest(stage / name, resource)
+        for binary in stage.iterdir():
+            if binary.suffix.lower() in {".exe", ".dll", ".pyd"}:
+                remove_startup_manifest(binary, 1 if binary.suffix.lower() == ".exe" else 2)
         record = {"version": VERSION, "platform": "windows-x64", "upstream_url": URL,
-                  "upstream_sha256": SHA256, "transform": "headless-pe-manifests-v1",
+                  "upstream_sha256": SHA256, "transform": "headless-pe-manifests-v2",
                   "description": "CLI-only derivative; upstream publisher signatures no longer apply",
                   "files": {str(p.relative_to(stage)): digest(p) for p in stage.rglob("*") if p.is_file()}}
         (stage / "runtime-manifest.json").write_text(json.dumps(record, indent=2), encoding="utf8")

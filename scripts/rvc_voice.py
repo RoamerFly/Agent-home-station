@@ -55,6 +55,22 @@ def main():
     os.environ['outside_index_root']=str(Path(index).parent) if index else str(project/'assets/indices')
     os.chdir(project);sys.path.insert(0,str(project))
     import torch
+    index_reads=[]
+    if os.name=='nt' and index and args.index_rate>0:
+        # Faiss' Windows narrow fopen silently fails on Chinese paths inside
+        # upstream's catch-all handler. Verify and serve this exact index from
+        # Python bytes; refuse success if the selected index was never used.
+        import faiss
+        import numpy as np
+        selected=faiss.deserialize_index(np.frombuffer(Path(index).read_bytes(),dtype='uint8'))
+        if selected.ntotal<=0:raise ValueError('selected_rvc_index_empty')
+        original_index_reader=faiss.read_index
+        def read_index(path,*options):
+            if os.path.normcase(os.fspath(path))==os.path.normcase(index) and not options:
+                index_reads.append(selected.ntotal)
+                return selected
+            return original_index_reader(path,*options)
+        faiss.read_index=read_index
     # HuBERT's Fairseq checkpoint stores its vocabulary object. Keep Torch's
     # weights-only loader and allow this concrete class; never disable safe
     # loading globally just to support the legacy checkpoint.
@@ -108,8 +124,10 @@ def main():
             rvc_modules.load_audio=original_loader
             vc.pipeline.t_max=previous_max
     rate,audio=convert_vocal_windows(waveform,convert_part,chunk_seconds=args.conversion_chunk_seconds,context_seconds=args.conversion_context_seconds,progress=pitch_progress)
+    if os.name=='nt' and index and args.index_rate>0 and not index_reads:
+        raise RuntimeError('selected_rvc_index_was_not_used')
     output.parent.mkdir(parents=True,exist_ok=True);wavfile.write(str(output),rate,audio)
-    output.with_suffix('.rvc.json').write_text(json.dumps({'engine':'RVC','backend_layout':backend,'model':model.name,'semitones':args.semitones,'index_rate':args.index_rate,'protect':args.protect,'device':device,'precision':'float16' if config.is_half else 'float32','sample_rate':rate,'seconds':len(audio)/rate,'pitch':pitch_options,'conversion':conversion_options,'wechat_sends':0},indent=2),encoding='utf-8')
+    output.with_suffix('.rvc.json').write_text(json.dumps({'engine':'RVC','backend_layout':backend,'model':model.name,'semitones':args.semitones,'index_rate':args.index_rate,'index_vectors_used':index_reads[0] if index_reads else None,'protect':args.protect,'device':device,'precision':'float16' if config.is_half else 'float32','sample_rate':rate,'seconds':len(audio)/rate,'pitch':pitch_options,'conversion':conversion_options,'wechat_sends':0},indent=2),encoding='utf-8')
     print('RVC conversion complete; seconds',len(audio)/rate,'no messages sent',flush=True)
 
 

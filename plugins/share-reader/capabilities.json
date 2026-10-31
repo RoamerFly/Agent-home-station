@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "share.read",
+      "implementation": "migration-pending",
+      "description": "视频号、快手与已有分享适配",
+      "permissions": [
+        "network",
+        "artifact.write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "share.resolve_public",
+      "implementation": "migration-pending",
+      "discoverable": false,
+      "description": "公开分享实际正文与精确作品播放地址解析。媒体地址只供宿主交接，不代表观看视频或素材已下载；完整分享链路仍未接通。",
+      "permissions": [
+        "network"
+      ],
+      "side_effect": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "video_required": {
+            "type": "boolean",
+            "default": false
+          },
+          "expected_sha256": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "default": 14000,
+            "minimum": 1
+          },
+          "candidate_offset": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0
+          },
+          "candidate_limit": {
+            "type": "integer",
+            "default": 20,
+            "minimum": 1
+          },
+          "max_bytes": {
+            "type": "integer",
+            "default": 2097152,
+            "minimum": 1,
+            "maximum": 4194304,
+            "description": "宿主管道帧的响应体上限，不是视频下载上限。视频原件交接另行处理。"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "default": 30,
+            "minimum": 1
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "share.resolve_channels",
+      "implementation": "migration-pending",
+      "discoverable": false,
+      "permissions": [
+        "network"
+      ],
+      "side_effect": "read",
+      "description": "视频号短链或 export 对象解析，仅返回供宿主使用的媒体位置，不代表视频已观察。完整媒体交接未完成。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "export_id": {
+            "type": "string"
+          },
+          "nonce_id": {
+            "type": "string"
+          },
+          "expected_object_id": {
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 25
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    }
+  ]
+}

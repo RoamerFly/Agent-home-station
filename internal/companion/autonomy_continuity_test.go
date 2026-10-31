@@ -19,7 +19,11 @@ func TestAutonomyOutcomesSeparatePlansFromAcceptedRuns(t *testing.T) {
 	c.ProactiveThreads = []string{"friend"}
 	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
 	in := Input{Channel: "wechat", Account: "a", Thread: "friend", Text: "最近喜欢的音乐", TraceID: "autonomous-1", Mode: "proactive"}
-	_ = s.Observe(in, c, now.Add(-time.Hour))
+	seed := in
+	seed.Mode, seed.Sender, seed.TraceID = "direct", "owner", "incoming-music-interest"
+	if err := s.Observe(seed, c, now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 2; i++ {
 		if err := s.ProactiveOutcome(in, "reply", "prepared", c, now); err != nil {
 			t.Fatal(err)

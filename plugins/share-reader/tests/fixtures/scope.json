@@ -1,0 +1,7 @@
+{
+  "account": "synthetic-account",
+  "thread": "synthetic-room",
+  "requester": "synthetic-user",
+  "request_key": "synthetic-request",
+  "purpose": "offline-contract-test"
+}

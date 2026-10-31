@@ -28,3 +28,4 @@ node_modules/
 **/*.db
 **/*.sqlite*
 **/.env
+待删除-*/

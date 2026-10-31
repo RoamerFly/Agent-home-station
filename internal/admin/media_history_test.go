@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/plugins"
 )
 
 func TestAssetHistoryRetainsEveryAssociationAcrossReloadAndStaleSave(t *testing.T) {
@@ -102,5 +103,73 @@ func TestAssetHistoryLazilyMigratesFirstAndLegacyAssociations(t *testing.T) {
 	}
 	if _, err = f.manager.loadAssets(); err == nil {
 		t.Fatal("tampered identity accepted")
+	}
+}
+
+func TestAssetHistoryRecoversUniqueVerifiedLegacyFilename(t *testing.T) {
+	f := setup(t)
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "alice", TraceID: "first"}
+	original := assetOriginal{Data: []byte("synthetic history recovery"), MIME: "text/plain", Filename: "fixture.txt"}
+	a, err := f.manager.rememberAssetFormats(in, original, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.TraceID = "second"
+	if _, err = f.manager.rememberAssetFormats(in, original, nil); err != nil {
+		t.Fatal(err)
+	}
+	canonical := f.manager.assetHistoryPath(a)
+	legacy := filepath.Join(filepath.Dir(canonical), "legacy-name.json")
+	if err = os.Rename(canonical, legacy); err != nil {
+		t.Fatal(err)
+	}
+	items, err := f.manager.loadAssets()
+	if err != nil || len(items) != 1 || len(items[0].Requests) != 2 {
+		t.Fatalf("verified history not recovered: %v, %+v", err, items)
+	}
+	if _, err = os.Stat(canonical); err != nil {
+		t.Fatal("canonical history not restored", err)
+	}
+	if err = os.Remove(canonical); err != nil {
+		t.Fatal(err)
+	}
+	if err = writePrivate(legacy, []byte(`{"asset_id":"wrong","account":"test","scope":"scope","requests":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.manager.loadAssets(); err == nil {
+		t.Fatal("wrong identity recovered")
+	}
+}
+
+func TestRecoveredHistoryAllowsVoiceStagingAndReuse(t *testing.T) {
+	f := setup(t)
+	f.manager.native = &fakeTools{fakeNative: f.native}
+	f.manager.config.Companion.Permissions.Remember = true
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "alice", TraceID: "older"}
+	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("older synthetic media"), MIME: "audio/wav", Filename: "older.wav"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(f.manager.assetHistoryPath(a), filepath.Join(f.manager.dir, "media-history", "legacy-filename.json")); err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := f.manager.toolAccess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.TraceID = "current"
+	p.SetTrace(in)
+	result, err := p.stageOutputWithAsset(context.Background(), plugins.Output{Media: []plugins.MediaResult{{Kind: "voice", Data: []byte("synthetic prepared voice"), MIMEType: "audio/wav", Filename: "speech.wav"}}}, &assetOriginal{VoiceComplete: true, Data: []byte("synthetic full voice"), MIME: "audio/wav", Filename: "mom.wav"})
+	if err != nil {
+		t.Fatal("staging blocked after history recovery", err)
+	}
+	var staged struct {
+		Media []companion.GeneratedMedia `json:"media"`
+	}
+	if json.Unmarshal([]byte(result), &staged) != nil || len(staged.Media) != 1 || staged.Media[0].AssetID == "" {
+		t.Fatal("voice alias missing", result)
+	}
+	if _, err = p.reuseAsset(context.Background(), staged.Media[0].AssetID, "voice"); err != nil {
+		t.Fatal("voice alias cannot be reused", err)
 	}
 }

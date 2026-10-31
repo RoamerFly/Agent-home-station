@@ -4,6 +4,8 @@
  const state={revision:'',loadedName:'',scope:'shared',busy:false,dirty:false,epoch:0,processSignature:'',loaded:false};
  const labels={running:'运行中',completed:'已完成',failed:'失败',cancelled:'已取消',timed_out:'执行超时',interrupted:'重启后待检查',needs_review:'需要核对'};
  function status(text){$('#agent-doc-state').textContent=text}
+ function discardDraft(){return !state.dirty||confirm('文档有未保存的修改，确定放弃？')}
+ window.addEventListener('beforeunload',event=>{if(state.dirty){event.preventDefault();event.returnValue=''}});
  function clear(){state.revision='';state.loadedName='';state.dirty=false;$('#agent-doc-name').value='';$('#agent-doc-content').value='';status('')}
  function processes(items){
   const signature=JSON.stringify(items);if(signature===state.processSignature)return;state.processSignature=signature;
@@ -103,10 +105,10 @@
   }
   form.addEventListener('submit',e=>{e.preventDefault();search(true)});form.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();modal.close()}});scope.addEventListener('change',()=>search(true));more.addEventListener('click',()=>search(false));search(true);conversations();
  });
- $('#agent-doc-select').addEventListener('change',()=>{const name=$('#agent-doc-select').value;if(name)read(name)});
- $('#agent-doc-scope').addEventListener('change',()=>{state.epoch++;state.scope=$('#agent-doc-scope').value;clear();refresh(false)});
+ $('#agent-doc-select').addEventListener('change',()=>{const name=$('#agent-doc-select').value;if(name&&discardDraft())read(name);else $('#agent-doc-select').value=state.loadedName});
+ $('#agent-doc-scope').addEventListener('change',()=>{if(!discardDraft()){$('#agent-doc-scope').value=state.scope;return}state.epoch++;state.scope=$('#agent-doc-scope').value;clear();refresh(false)});
  $('#agent-doc-refresh').addEventListener('click',()=>refresh(true));
- $('#agent-doc-new').addEventListener('click',()=>{state.epoch++;clear();$('#agent-doc-select').value='';$('#agent-doc-name').focus()});
+ $('#agent-doc-new').addEventListener('click',()=>{if(!discardDraft())return;state.epoch++;clear();$('#agent-doc-select').value=''});
  for(const id of ['agent-doc-name','agent-doc-content'])$('#'+id).addEventListener('input',()=>{state.dirty=true;status('文档有未保存更改')});
  $('#agent-doc-save').addEventListener('click',async()=>{if(state.busy)return;const name=$('#agent-doc-name').value.trim();if(!name)return status('请填写 Markdown 文档名');const epoch=state.epoch,scope=state.scope,content=$('#agent-doc-content').value;state.busy=true;$('#agent-doc-save').disabled=true;try{const d=await api('/api/agent/workspace',{method:'POST',json:{scope,name,content,revision:name===state.loadedName?state.revision:''}});if(epoch!==state.epoch)return;state.loadedName=d.name;state.revision=d.revision;state.dirty=$('#agent-doc-content').value!==content||$('#agent-doc-name').value.trim()!==name;status(state.dirty?'保存期间还有新编辑，尚未保存':'文档已保存');await refresh(false)}catch(e){status(e.message+'；当前编辑内容已保留')}finally{state.busy=false;$('#agent-doc-save').disabled=false}});
  window.addEventListener('wechat-admin:navigate',e=>{if(e.detail?.section==='agent')refresh(true)});

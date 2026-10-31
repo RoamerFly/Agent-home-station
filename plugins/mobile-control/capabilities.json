@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "device.observe",
+      "implementation": "migration-pending",
+      "description": "现有设备桥接与任务",
+      "permissions": [
+        "device",
+        "artifact.write",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "device.act",
+      "implementation": "migration-pending",
+      "description": "现有设备桥接与任务",
+      "permissions": [
+        "device",
+        "artifact.write",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "device.record",
+      "implementation": "migration-pending",
+      "description": "现有设备桥接与任务",
+      "permissions": [
+        "device",
+        "artifact.write",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    }
+  ]
+}

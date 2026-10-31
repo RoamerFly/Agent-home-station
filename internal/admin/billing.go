@@ -89,16 +89,17 @@ func referencePrices(c Config, stamp time.Time) (tokenPrices, bool) {
 	if !officialBilling(c) {
 		return tokenPrices{}, false
 	}
-	p := tokenPrices{Currency: "USD"}
+	// Published CNY reference prices; existing USD ledger entries are retained.
+	p := tokenPrices{Currency: "CNY"}
 	switch c.Model {
 	case "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp":
-		p.Input = .15
-		p.CacheHit = .003
-		p.Output = .6
+		p.Input = 1
+		p.CacheHit = .02
+		p.Output = 4
 	case "deepseek-v4-pro":
-		p.Input = .66
-		p.CacheHit = .022
-		p.Output = 1.98
+		p.Input = 4.5
+		p.CacheHit = .15
+		p.Output = 13.5
 	default:
 		return tokenPrices{}, false
 	}
@@ -137,6 +138,11 @@ func addUsage(t tokenTotals, u deepseek.Usage, p tokenPrices, priced bool) token
 	return t
 }
 func (s *billingStore) record(c Config, u deepseek.Usage) error {
+	// An independent reviewer shares credentials and endpoint, but its actual
+	// model and price identity must not inherit the conversational model.
+	if u.Model != "" {
+		c.Model = u.Model
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	prior, _ := json.Marshal(s.data)
@@ -197,7 +203,7 @@ func (s *billingStore) snapshot(c Config) map[string]any {
 	}
 	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 	p, known, custom := s.pricesLocked(c, time.Now())
-	return map[string]any{"purposes": d.Purposes, "started_at": d.Started, "today": d.Days[day], "total": d.Total, "days": d.Days, "models": models, "active_id": billingIdentity(c), "active_model": c.Model, "prices": p, "priced": known, "custom_prices": custom, "price_reference_date": "2026-10-25", "price_source": "https://api-docs.deepseek.com/quick_start/pricing/", "cost_is_estimate": true, "timezone": "Asia/Shanghai"}
+	return map[string]any{"purposes": d.Purposes, "started_at": d.Started, "today": d.Days[day], "total": d.Total, "days": d.Days, "models": models, "active_id": billingIdentity(c), "active_model": c.Model, "prices": p, "priced": known, "custom_prices": custom, "price_reference_date": "2026-10-30", "price_source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/", "cost_is_estimate": true, "timezone": "Asia/Shanghai"}
 }
 func validPrices(p tokenPrices) bool {
 	if p.Currency != "USD" && p.Currency != "CNY" {

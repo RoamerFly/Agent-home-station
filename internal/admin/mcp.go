@@ -90,19 +90,22 @@ func redactedMCP(c mcpSettings) mcpSettings {
 }
 
 type permittedTools struct {
-	discoveryReader    func(context.Context, mcptools.DiscoverySource, string) ([]mcptools.DiscoveryItem, error)
-	trace              companion.Input
-	hub                *mcptools.Hub
-	settings           mcpSettings
-	runtime            *plugins.Runtime
-	apiNames           map[string]bool
-	apiKinds           map[string]string
-	manager            *Manager
-	mediaMu            sync.Mutex
-	media              map[string]companion.GeneratedMedia
-	mediaOrigin        map[string]string
-	songFollowups      []string
-	privateDiagnostics bool
+	outboundReviewer     companion.LanguageModel
+	discoveryReader      func(context.Context, mcptools.DiscoverySource, string) ([]mcptools.DiscoveryItem, error)
+	trace                companion.Input
+	hub                  *mcptools.Hub
+	settings             mcpSettings
+	runtime              *plugins.Runtime
+	apiNames             map[string]bool
+	apiKinds             map[string]string
+	manager              *Manager
+	mediaMu              sync.Mutex
+	selectedVoiceID      string
+	selectedVoiceProfile string
+	media                map[string]companion.GeneratedMedia
+	mediaOrigin          map[string]string
+	songFollowups        []string
+	privateDiagnostics   bool
 }
 
 func (p *permittedTools) SetTrace(input companion.Input) {
@@ -115,13 +118,22 @@ func (p *permittedTools) ForkTools() companion.ToolAccess {
 	// Hub and plugin Runtime are immutable after construction. Mutable per-call
 	// trace/media state must never be shared between simultaneous conversations.
 	return &permittedTools{hub: p.hub, settings: p.settings, runtime: p.runtime,
-		apiNames: p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
+		outboundReviewer: p.outboundReviewer,
+		apiNames:         p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
 		discoveryReader: p.discoveryReader, media: map[string]companion.GeneratedMedia{}, mediaOrigin: map[string]string{}}
 }
 
 func (p *permittedTools) enabled(name string) bool {
 	if p.trace.ReportOnly {
 		return false
+	}
+	if name == "service_plugins" || name == "service_plugin_call" || name == "service_plugin_task" {
+		return p.servicePluginsAllowed()
+	}
+	if capability := webServiceCapability(name); capability != "" {
+		if installed, enabled := p.installedWebState(); installed {
+			return enabled && p.servicePluginsAllowed() && p.serviceWebAllowed(capability)
+		}
 	}
 	if name == "tool_output_read" {
 		return p.outputScope() != ""
@@ -181,7 +193,7 @@ func (p *permittedTools) enabled(name string) bool {
 	return true
 }
 func (p *permittedTools) localTools() []mcptools.Tool {
-	tools := []mcptools.Tool{}
+	tools := p.installedWebTools()
 	if p.trace.Surf {
 		tools = append(tools, mcptools.Tool{Name: "web_discover", Description: "Discover actual public feed/community/RSS/music/image candidates, with persistent novelty memory and diverse sources. Automatically called once at session start. Continue a rabbit hole with related_url equal to a candidate BV page. Otherwise {} to switch sources. Does not send or claim watching. Input {related_url?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"related_url":{"type":"string","maxLength":2048}},"additionalProperties":false}`)})
 	}
@@ -211,9 +223,15 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	}
 	tools = append(tools, p.localTools()...)
 	out := []mcptools.Tool{}
+	indices := map[string]int{}
 	for _, tool := range tools {
 		if p.enabled(tool.Name) {
-			out = append(out, tool)
+			if i, exists := indices[tool.Name]; exists {
+				out[i] = tool
+			} else {
+				indices[tool.Name] = len(out)
+				out = append(out, tool)
+			}
 		}
 	}
 	return out, err
@@ -350,6 +368,11 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		return "", validationErr
 	}
 	args = normalized
+	if webServiceCapability(name) != "" {
+		if installed, _ := p.installedWebState(); installed {
+			return p.callInstalledWeb(ctx, name, args)
+		}
+	}
 	for _, module := range p.capabilities() {
 		if module.match(name) {
 			return module.call(ctx, name, args)
@@ -651,6 +674,8 @@ func (p *permittedTools) ResetMedia() {
 	defer p.mediaMu.Unlock()
 	p.media = map[string]companion.GeneratedMedia{}
 	p.mediaOrigin = map[string]string{}
+	p.selectedVoiceID = ""
+	p.selectedVoiceProfile = ""
 }
 func (p *permittedTools) stageOutput(ctx context.Context, output plugins.Output) (string, error) {
 	return p.stageOutputWithAsset(ctx, output, nil)
@@ -714,6 +739,10 @@ func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugin
 		item := companion.GeneratedMedia{ID: source.ID, Kind: media.Kind, Title: filename}
 		if original != nil {
 			item.URL = original.URL
+			item.VoiceID, item.VoiceEngine, item.VoiceProfile = original.VoiceID, original.VoiceEngine, original.VoiceProfile
+			if original.Music != nil {
+				item.VoiceProfile = original.Music.VoiceProfile
+			}
 		}
 		originalMedia := original
 		if originalMedia == nil {
@@ -742,6 +771,7 @@ func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugin
 			}
 			items[i].URL, items[i].AssetID = asset.URL, asset.ID
 			items[i].ParentAssetID, items[i].CachedMIME, items[i].Title = asset.ParentAssetID, asset.MIME, asset.Title
+			items[i].VoiceID, items[i].VoiceEngine, items[i].VoiceProfile = asset.VoiceID, asset.VoiceEngine, asset.VoiceProfile
 		}
 	}
 	p.mediaMu.Lock()

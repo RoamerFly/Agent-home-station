@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -67,6 +69,18 @@ func forwardFixture(t *testing.T) (*webFixture, *permittedTools, *forwardNative)
 	f.manager.config.Companion.Permissions.Remember = true
 	f.manager.config.Behavior.RandomDelay = false
 	f.manager.mu.Unlock()
+	p.trace.Text = "请把合成文件转发到指定会话"
+	p.trace.OriginalText = &p.trace.Text
+	p.trace.MessageTime = time.Now().UTC().Format(time.RFC3339Nano)
+	p.trace.Source = &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: p.trace.TraceID, ServerID: "synthetic-forward-request", Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, MessageType: 1, OccurredAt: p.trace.MessageTime, Revision: 1, Integrity: "verified"}
+	if err := f.manager.memory.Observe(p.trace, f.manager.Config().Companion, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if source, ok := f.manager.memory.SourceForInput(p.trace); ok {
+		p.trace.Source = source
+	} else {
+		t.Fatal("missing synthetic forwarding request source")
+	}
 	return f, p, n
 }
 func TestOwnerCrossReadAndForwardUsesRealAttachmentAndReceipt(t *testing.T) {

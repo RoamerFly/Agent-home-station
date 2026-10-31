@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "backend": {
+      "type": "string",
+      "description": "配置后端，迁移适配完成前不能启用"
+    }
+  },
+  "additionalProperties": false
+}

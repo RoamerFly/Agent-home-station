@@ -134,8 +134,14 @@ func TestP224AndStrictSessionDecrypt(t *testing.T) {
 	if err != nil || string(got) != "session-material" {
 		t.Fatalf("decrypt %q %v", got, err)
 	}
-	ct[len(ct)-1] ^= 1
-	if _, err := DecryptSessionKey(aPriv, bPub, ct); !errors.Is(err, ErrInvalidPadding) {
+	// CBC does not authenticate ciphertext: a random bit flip can happen to
+	// produce valid padding. Encrypt a known invalid pad to test strict PKCS#7
+	// rejection deterministically, without claiming integrity protection.
+	badPlain := append([]byte(nil), plain...)
+	badPlain[len(badPlain)-1] = 0
+	badCiphertext := make([]byte, len(badPlain))
+	cipher.NewCBCEncrypter(block, ka).CryptBlocks(badCiphertext, badPlain)
+	if _, err := DecryptSessionKey(aPriv, bPub, badCiphertext); !errors.Is(err, ErrInvalidPadding) {
 		t.Fatalf("tamper err=%v", err)
 	}
 	legacy, err := AuthorizationAESKeyLegacyUnpadded(aPriv, bPub)

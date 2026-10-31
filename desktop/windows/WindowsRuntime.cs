@@ -64,7 +64,7 @@ namespace WechatAgent.Desktop {
                     if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), Deployment.Text(manifest, item[1]), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Windows 运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
             }
             var resources = Path.GetFullPath(Path.Combine(dir, ".."));
-            foreach (var name in new [] { "windows-python-cli", "windows-media" }) {
+            foreach (var name in new [] { "windows-python-cli", "windows-media", "windows-music" }) {
                 var folder = Path.Combine(resources, name);
                 if (!Directory.Exists(folder)) continue; // earlier native-only packages remain usable
                 VerifyResourceDirectory(folder);
@@ -152,6 +152,11 @@ namespace WechatAgent.Desktop {
             var helper = Path.Combine(resources, "windows-agent-host", "windows_agent_host.pyw");
             if (File.Exists(pythonw) && File.Exists(helper)) env["WECHAT_WINDOWS_BROKER_CONFIG"] = Deployment.Json.Serialize(new {
                 pythonw = pythonw, helper = helper, spool = Path.Combine(adminDir, "windows-broker-spool")
+            });
+            var pluginHelper = Path.Combine(resources, "windows-agent-host", "windows_plugin_host.pyw");
+            if (File.Exists(pythonw) && File.Exists(pluginHelper)) env["WECHAT_PLUGIN_RUNTIME_CONFIG"] = Deployment.Json.Serialize(new {
+                python = Path.Combine(resources, "windows-python-cli", "python.exe"), pythonw = pythonw,
+                windows_helper = pluginHelper, runtime_roots = new [] { Path.GetDirectoryName(pythonw) }
             });
             web = OwnedProcess.Start(d.AdminExe, new [] { "--desktop" }, d.Workspace, env, Path.Combine(d.Root, "logs", "web.log"), job);
         }

@@ -154,7 +154,7 @@ def register(source, public, python):
         'voice_workflow':str(project/'VOICE_WORKFLOW.md'),
         'base_models':str(common),'source_revision':revision,
         'upstream':'https://github.com/RVC-Boss/GPT-SoVITS',
-        'usage':'文本转语音。voice_library_list/read/prepare选择真实GPT-SoVITS权重与参考；私有声线server_exec/server_process需global=true，CUDA需gpu=true。读取README和CLI --help后可自行编程、调用或修复。不会自动发送微信。',
+        'usage':'文本转语音。voice_library_list/read/prepare选择真实GPT-SoVITS权重与参考；Windows 使用 speech_synthesize 或受管工作区内的 server_windows_process(global=true,gpu=true)，Linux 使用 server_process。读取README和CLI --help后可自行编程、调用或修复。项目源码仓库根目录不属于账号工作区，也不是运行此模型的前提。不会自动发送微信。',
         'scope':'公共代码、基础模型和依赖共享；个人声线及输出留在账号私有工作区。GPT-SoVITS TTS与RVC原曲换声是不同流程。',
         'runtime_status':'source_and_base_models_registered; verify interpreter, dependencies and real inference separately'}
     directory = public/'manifests'

@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "external.discover",
+      "implementation": "migration-pending",
+      "description": "已有 HTTP/MCP 配置",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "external.call",
+      "implementation": "migration-pending",
+      "description": "已有 HTTP/MCP 配置",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    }
+  ]
+}

@@ -3,6 +3,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -43,6 +44,7 @@ type Config struct {
 	AgentTaskActive     func(companion.Input) bool
 	Draining            func() bool
 	MediaSeedAllowed    func(MediaSeed) bool
+	MediaSeedKnown      func(MediaSeed) bool
 	MediaSeeds          func() []MediaSeed
 	SurfAllowed         func(string) bool
 	SurfTask            func(time.Time) (*SurfTask, error)
@@ -254,6 +256,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		return
 	}
 	quoteContext := ""
+	mediaObservationState := "pending"
 	if message.IsQuotedText() {
 		quoteContext = w.readQuoteContext(ctx, &message)
 	}
@@ -272,7 +275,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 			working.Body = "收到了一段视频，请结合内容决定是否回应。"
 		}
 		if message.Type == 49 {
-			working.Body = "收到了一条分享卡片，请结合介绍决定是否回应。"
+			working.Body = "收到了一条分享。依据实际读取的视频或正文总结主要内容与结论，结合本会话偏好决定是否发送；不能用标题替代实际内容。"
 			if message.FileAttachmentName() != "" {
 				working.Body = "收到一个文件，请结合原件及前后聊天决定是否回应。"
 			}
@@ -281,7 +284,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 			working.Body = w.config.Prefix + working.Body
 		}
 	}
-	prompt, eligible := w.prompt(working, time.Now())
+	prompt, eligible := w.promptWithSharePreference(working, time.Now(), w.considerPreferredShare(message))
 	noticed := message
 	if message.IsQuotedText() {
 		noticed = working
@@ -320,9 +323,11 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation == nil {
 			analysisCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-			summary, analysisErr := w.config.Analyzer.Analyze(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
+			summary, analysisErr := w.analyzeIncomingMedia(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
+			mediaObservationState = "observed"
 			cancel()
 			if analysisErr != nil {
+				mediaObservationState = "incomplete"
 				if ctx.Err() != nil {
 					return
 				}
@@ -341,15 +346,26 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	if character, ok := w.model.(*companion.Engine); ok {
 		mode := "direct"
-		if w.config.GroupRules[message.ThreadID].Mode == "social" && !w.addressed(message) {
+		if (w.config.GroupRules[message.ThreadID].Mode == "social" || w.considerPreferredShare(message)) && !w.addressed(message) {
 			mode = "social"
 		}
 		input := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, Text: prompt, Mode: mode, IsGroup: strings.HasSuffix(message.ThreadID, "@chatroom"), Directed: !strings.HasSuffix(message.ThreadID, "@chatroom") || w.addressed(message), ReviewRequired: reviewQuestion, HistoricalReview: w.ownerModelReview(message.ID), PersonaOverride: w.config.GroupRules[message.ThreadID].Persona, TraceID: message.ID, QuoteServerID: message.ServerID, MessageTime: message.CreatedAt, MustReply: mode == "direct" && message.Mentions.Self != nil && *message.Mentions.Self && w.config.GroupRules[message.ThreadID].ForceReplyWhenMentioned}
 		original := ""
 		if message.Type == 1 {
 			original = message.Body
+		} else if message.IsQuotedText() {
+			// Native type 49/57 already exposes the user's new text in Body.
+			// Preserve it separately from the verified quoted source packet.
+			original = working.Body
 		}
 		input.OriginalText = &original
+		bindInputSource(&input, message, character)
+		for i := range input.IncomingMedia {
+			input.IncomingMedia[i].ObservationState = mediaObservationState
+			if mediaObservationState != "pending" {
+				input.IncomingMedia[i].Observation = prompt
+			}
+		}
 		if message.Type == 49 && message.AppMessageType != nil {
 			switch *message.AppMessageType {
 			case 3, 4, 5, 6, 51:
@@ -420,6 +436,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 }
 
 func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, bool) {
+	return w.promptWithSharePreference(message, now, false)
+}
+func (w *Worker) promptWithSharePreference(message linuxnative.Message, now time.Time, preferredShare bool) (string, bool) {
 	if !w.allowed[message.ThreadID] || message.Type != 1 || !utf8.ValidString(message.Body) || len(message.Body) > 4096 {
 		return "", false
 	}
@@ -442,7 +461,7 @@ func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, boo
 				return "", false
 			}
 		}
-		if rule.Mode != "all" && rule.Mode != "social" && !w.addressed(message) {
+		if rule.Mode != "all" && rule.Mode != "social" && !preferredShare && !w.addressed(message) {
 			return "", false
 		}
 		// Display names are not trusted as evidence of a mention. Remove only
@@ -453,6 +472,10 @@ func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, boo
 				break
 			}
 			text = strings.TrimSpace(text[i:])
+		}
+		if preferredShare {
+			// Considering a share does not manufacture a mention or a user command.
+			return text, text != ""
 		}
 		if rule.Prefix != "" {
 			if !strings.HasPrefix(text, rule.Prefix) {
@@ -479,11 +502,19 @@ func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, boo
 	return text, text != ""
 }
 
-func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engine, input companion.Input) {
+func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engine, input companion.Input) string {
 	input = w.withAutonomyPlans(input)
+	if !character.Config.Permissions.Remember && input.Sender != "" && input.Mode != "proactive" {
+		verified, err := w.verifyEphemeralSource(ctx, input)
+		if err != nil {
+			w.modelFailed(input.Thread, input.TraceID, err)
+			return ""
+		}
+		input = verified
+	}
 	if w.generation != nil {
 		w.startGeneration(ctx, character, input, nil)
-		return
+		return ""
 	}
 	modelCtx, cancel := character.Config.TaskContext(ctx)
 	modelCtx = companion.WithMediaIntent(modelCtx, func(ctx context.Context, intent string) error {
@@ -507,9 +538,41 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 	processingErr := modelCtx.Err()
 	cancel()
 	w.finishCharacter(ctx, character, input, decision, err, processingErr, toolStarted, progressDelivered)
+	var changed *companion.GenerationEvidenceChangedError
+	if errors.As(err, &changed) {
+		return "generation_paused"
+	}
+	return ""
 }
 
 func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engine, input companion.Input, decision companion.Decision, err, processingErr error, toolStarted, progressDelivered bool) {
+	ctx = companion.WithDecisionGenerationEvidence(ctx, decision)
+	var changed *companion.GenerationEvidenceChangedError
+	if errors.As(err, &changed) {
+		if !w.taskActive(input) {
+			w.activity(Record{Event: "agent_task_cancelled", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "stopped", Reason: "task_cancelled_before_delivery"})
+			return
+		}
+		note, _ := json.Marshal(struct {
+			Continuation   string   `json:"continuation"`
+			CompletedTools []string `json:"completed_tools"`
+		}{changed.Continuation, changed.CompletedTools})
+		w.activity(Record{Event: "generation_paused", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "needs_review", Reason: "generation_evidence_changed", ModelStage: changed.Stage, DecisionNote: string(note), Origin: "agent"})
+		w.queuePhase(input.TraceID, "needs_review")
+		return
+	}
+	if err == nil {
+		if input.ExpectedVoiceID != "" && decision.ExpectedVoiceID != "" && input.ExpectedVoiceID != decision.ExpectedVoiceID || input.ExpectedVoiceProfile != "" && decision.ExpectedVoiceProfile != "" && input.ExpectedVoiceProfile != decision.ExpectedVoiceProfile {
+			err = errors.New("named_voice_task_binding_changed")
+		} else {
+			if input.ExpectedVoiceID == "" {
+				input.ExpectedVoiceID = decision.ExpectedVoiceID
+			}
+			if input.ExpectedVoiceProfile == "" {
+				input.ExpectedVoiceProfile = decision.ExpectedVoiceProfile
+			}
+		}
+	}
 	if input.Mode == "proactive" && !input.Preview {
 		action, reason := decision.Action, decision.Reason
 		if err != nil {
@@ -555,6 +618,11 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 	if w.config.ReportFailure != nil && !input.ReportOnly && (input.IsGroup || input.Mode == "direct") && (decision.Reason == "decision_failure_reported" || decision.Reason == "tool_task_deadline_exceeded" || decision.Reason == "tool_task_no_final_after_progress" || err != nil && ctx.Err() == nil) {
 		reason := decision.Reason
 		if err != nil {
+			// The private report contains a short status code. Keep the actual
+			// provider diagnostic in local activity before clearing the error.
+			if !progressDelivered {
+				w.modelFailed(input.Thread, input.TraceID, err)
+			}
 			reason = "model_generation_failed"
 		}
 		if reportErr := w.config.ReportFailure(input, reason); reportErr != nil {
@@ -574,10 +642,15 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 	if decision.Action != "reply" {
 		w.scheduleConversationWake(character, input, decision.WakeAfterSeconds, decision.WaitForReply, decision.WakeReason)
 		category := "decision"
+		status := decision.Action
 		if strings.Contains(decision.Reason, "invalid") {
 			category = "error"
 		}
-		w.activity(Record{Event: "character_decision", Category: category, ThreadID: input.Thread, MessageID: input.TraceID, Reason: decision.Reason, Status: decision.Action})
+		if decision.Reason == "operation_reported_privately" {
+			// Not sending a group error is not a model's social silence decision.
+			category, status = "error", "failed"
+		}
+		w.activity(Record{Event: "character_decision", Category: category, ThreadID: input.Thread, MessageID: input.TraceID, Reason: decision.Reason, Status: status})
 		if strings.Contains(decision.Reason, "budget") {
 			w.config.Log("character_budget_limited")
 		} else if decision.Action == "blocked" {
@@ -645,6 +718,12 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		}
 	}
 	for bubble, body := range decision.Messages {
+		if bubble < len(decision.ReplyContexts) {
+			rc := decision.ReplyContexts[bubble]
+			input.ReplyContext = &rc
+		} else {
+			input.ReplyContext = nil
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -697,6 +776,12 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		if ctx.Err() != nil || input.Mode != "direct" && character.Config.Quiet(time.Now()) {
 			return
 		}
+		bound, proofErr := w.prepareMediaEvidence(ctx, input)
+		if proofErr != nil {
+			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Reason: "media_source_proof_invalid", Status: "stopped"})
+			return
+		}
+		input = bound
 		w.markSending(input.TraceID)
 		if w.persistErr != nil {
 			return
@@ -738,6 +823,12 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		if w.queueMedia(ctx, character, input, media) {
 			continue
 		}
+		bound, proofErr := w.prepareMediaEvidence(ctx, input)
+		if proofErr != nil {
+			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Reason: "media_source_proof_invalid", Status: "stopped"})
+			return
+		}
+		input = bound
 		sourceID := media.SourceID
 		if sourceID == "" {
 			sourceID = media.ID

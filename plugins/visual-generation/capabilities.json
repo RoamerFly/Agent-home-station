@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "visual.generate",
+      "implementation": "migration-pending",
+      "description": "已登记图像与视频生成服务",
+      "permissions": [
+        "network",
+        "artifact.write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    }
+  ]
+}

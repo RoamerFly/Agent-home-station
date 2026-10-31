@@ -7,8 +7,11 @@ import subprocess
 import sys
 import time
 import urllib.request
+import threading
 
-from managed_music_runner import command
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from managed_music_runner import command, launch_windows
 from music_unix_client import open_request
 from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 from managed_music_ipc import AccountIPC
@@ -41,6 +44,7 @@ def main():
                         default=os.environ.get('MUSIC_VRAM_MODE', 'auto'),
                         help='Comfy memory strategy. auto keeps backend device selection; low/none can put semantic generation on CPU.')
     parser.add_argument('--healthcheck', action='store_true')
+    parser.add_argument('--desktop', action='store_true', help='stop when the owning control pipe closes')
     args = parser.parse_args()
     memory_arguments = comfy_memory_arguments(args.vram_mode)
     if args.startup_timeout <= 0: raise ValueError('startup_timeout_must_be_positive')
@@ -75,6 +79,7 @@ def main():
             "--output-directory", str(state / "output"), "--user-directory", str(state / "user"),
             "--disable-all-custom-nodes", "--disable-api-nodes", "--disable-auto-launch", *memory_arguments]
     children = []
+    stopping = threading.Event()
     def stop(*unused):
         for child in reversed(children):
             if child.poll() is None:
@@ -88,12 +93,27 @@ def main():
         stop(); raise SystemExit(0)
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
+    if args.desktop:
+        def control():
+            for line in sys.stdin:
+                if line.strip() == 'stop':
+                    break
+            stopping.set()
+        threading.Thread(target=control, daemon=True).start()
     lease = None
     try:
         lease = AccountIPC(args.ipc, public, private)
         ipc, sock = lease.directory, lease.socket
-        children.append(subprocess.Popen(command(public, private, private, argv, gpu=True, ipc=ipc)))
+        if sys.platform == "win32":
+            argv[argv.index("--socket") + 1] = str(sock)
+            children.append(launch_windows(public, private, private, argv, gpu=True))
+            from windows_lpac import host_pipe_path
+            sock = host_pipe_path(str(sock), children[0])
+        else:
+            children.append(subprocess.Popen(command(public, private, private, argv, gpu=True, ipc=ipc)))
         for _ in range(args.startup_timeout):
+            if stopping.is_set():
+                return
             if children[0].poll() is not None:
                 raise RuntimeError("isolated_comfy_exited")
             try:
@@ -111,9 +131,13 @@ def main():
         voice = public / "manifests/singing-voice.config"
         if voice.is_file():
             bridge += ["--singing-voice-config", str(voice)]
-        children.append(subprocess.Popen(bridge))
-        while all(child.poll() is None for child in children):
+        # The token-bearing HTTP bridge is trusted control code outside the
+        # inference mount, using the same managed interpreter and clean startup.
+        children.append(subprocess.Popen(bridge, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0))
+        while not stopping.is_set() and all(child.poll() is None for child in children):
             time.sleep(1)
+        if stopping.is_set():
+            return
         raise RuntimeError("music_child_exited")
     finally:
         try:

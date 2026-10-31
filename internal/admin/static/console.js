@@ -2,7 +2,53 @@
 (() => {
  'use strict';
  const $=id=>document.getElementById(id),positions=new Map();
- let section='',accountEpoch=0,tasksBusy=false,tasks=[],lastTaskRead=0;
+ const heading=$('page-title').parentElement;
+ heading.classList.add('page-heading');
+ for(const navigation of document.querySelectorAll('.context-nav'))heading.append(navigation);
+ // Page-level navigation, filters and actions share one owned toolbar.
+ for(const page of document.querySelectorAll('.content>.page')){
+  const controls=[...page.children].filter(e=>e.matches('.local-nav,.page-toolbar,.page-actions')&&e.querySelector('button,input,select,a'));
+  if(controls.length){const bar=document.createElement('div');bar.className='page-toolbar-card';page.insertBefore(bar,controls[0]);for(const control of controls)bar.append(control)}
+ }
+ for(const [id,status] of [['memory','conversation-state'],['voices','voice-state']]){
+  const page=$(id),control=page.querySelector('.conversation-toolbar,.page-toolbar-card'),bar=control.classList.contains('page-toolbar-card')?control:document.createElement('div');
+  if(bar!==control){bar.className='page-toolbar-card';page.insertBefore(bar,control);bar.append(control)}bar.append($(status));
+ }
+ for(const id of ['wechat','mcp','mobile','permissions','settings','catalog','tools','account-actions','surf'])$(id).classList.add('page-surface');
+ document.querySelector('.plugin-browser').append(document.querySelector('.plugin-guide'));
+
+ // Group controls by the task being performed. Original nodes/handlers and
+ // form ownership survive; navigation does not reset values or move focus.
+ function expandPanel(panel){
+  if(panel?.tagName!=='DETAILS')return panel;
+  const article=document.createElement('article');for(const a of panel.attributes)if(a.name!=='open')article.setAttribute(a.name,a.value);
+  article.classList.remove('disclosure');
+  for(const child of [...panel.childNodes]){if(child.nodeName==='SUMMARY'){const h=document.createElement('h3');h.textContent=child.textContent;article.append(h)}else article.append(child)}panel.replaceWith(article);return article;
+ }
+ function workflow(page,groups){
+  const nav=document.createElement('nav');nav.className='workflow-nav';nav.setAttribute('aria-label','功能分组');
+  const body=document.createElement('div');body.className='workflow-body';page.classList.add('workflow-page');
+  const pairs=[];
+  for(const [label,nodes] of groups){
+   const pane=document.createElement('div');pane.className='workflow-pane';pane.id=page.id+'-workflow-'+pairs.length;
+   for(let n of nodes.filter(Boolean))pane.append(expandPanel(n));
+   const button=document.createElement('button');button.type='button';button.textContent=label;button.setAttribute('aria-controls',pane.id);button.className='workflow-link';
+   button.addEventListener('click',()=>{for(const p of pairs){p.pane.hidden=p.button!==button;p.button.setAttribute('aria-pressed',String(p.button===button))}window.WechatSaveActions?.sync()});
+   pairs.push({button,pane});nav.append(button);body.append(pane);
+  }
+  const toolbar=page.querySelector(':scope>.page-toolbar-card');if(toolbar)toolbar.after(nav);else page.prepend(nav);nav.after(body);
+  pairs.forEach((p,i)=>{p.pane.hidden=i!==0;p.button.setAttribute('aria-pressed',String(i===0))});
+ }
+ const permissionPage=$('permissions'),authority=permissionPage.querySelector('.agent-authority'),proactive=$('proactive-panel');
+ const others=[...permissionPage.children].filter(e=>e.matches('details.panel')&&e!==authority&&e!==proactive&&e.id!=='channels-settings-panel');
+ const quiet=others.find(e=>e.querySelector('#quiet-start')),operations=others.find(e=>e.querySelector('#agent-operation-list'));
+ workflow($('provider'),[['聊天模型',[$('config-form')]],['声音与歌曲',[$('provider').querySelector('.speech-panel')]],['分享内容读取',[$('channels-settings-panel')]]]);
+ workflow(permissionPage,[['聊天与发送',[$('permissions-panel')]],['自主行为',[quiet,proactive]],['工作区与账号授权',[authority,operations]]]);
+ const preview=document.querySelector('#companion .companion-grid>aside>details');if(preview)expandPanel(preview);
+ const overview=$('overview'),billing=overview.querySelector('.billing-panel');overview.querySelector('.metric-grid').after(billing);
+ for(const grid of document.querySelectorAll('.field-grid'))for(const cell of [...grid.children])if(!cell.children.length&&!cell.textContent.trim())cell.remove();
+
+ let section='',accountEpoch=0,tasksBusy=false,tasks=[],lastTaskRead=0,taskSignature='',activitySignature='';
  const labels={pending:'待处理',running:'执行中',waiting:'等待继续',completed:'已完成',cancelled:'已取消',failed:'需处理',needs_review:'等待核查',interrupted:'已中断',timed_out:'执行超时'};
  const node=(tag,text,klass)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(klass)e.className=klass;return e};
  function workspaceTab(name,focus=false){
@@ -31,7 +77,7 @@
   if(!docList.children.length)docList.append(node('p','当前范围没有文档','hint'));docList.scrollTop=position;
  }
  function renderTasks(){
-  const box=$('overview-tasks');if(!box)return;const position=box.scrollTop;box.replaceChildren();
+  const box=$('overview-tasks');if(!box)return;const signature=JSON.stringify([accountEpoch,tasks]);if(signature===taskSignature)return;taskSignature=signature;const position=box.scrollTop;box.replaceChildren();
   const active=tasks.filter(t=>!['completed','cancelled'].includes(t.state));
   if(!active.length)box.append(node('p','目前没有待办，新的任务会显示在这里。','empty'));
   for(const task of active){const row=node('button',undefined,'dashboard-row');row.type='button';const meta=node('span',undefined,'row-meta');meta.append(node('strong',task.title||'未命名任务'),node('small',labels[task.state]||task.state));row.append(meta);
@@ -46,8 +92,8 @@
   finally{tasksBusy=false}
  }
  function renderActivity(rounds){
+  const recent=rounds.filter(r=>!r.system).slice(0,10),signature=JSON.stringify([accountEpoch,recent]);if(signature===activitySignature)return;activitySignature=signature;
   const box=$('overview-activity'),position=box.scrollTop;box.replaceChildren();
-  const recent=rounds.filter(r=>!r.system).slice(0,10);
   if(!recent.length)box.append(node('p','还没有执行记录。收到消息后会在这里显示。','empty'));
   for(const round of recent){const row=node('button',undefined,'dashboard-row');row.type='button';const meta=node('span',undefined,'row-meta');
    meta.append(node('strong',window.WechatNames?.display(round.thread_id,round.source)||round.source),node('time',window.WechatActivity.time(round.time)));
@@ -59,57 +105,28 @@
   }
   box.scrollTop=position;
  }
- // Complete text menus retain native values/events so existing form adapters
- // and revision validation remain authoritative.
- const selects=new Map();let menu=null;
- function closeMenu(){if(!menu)return;menu.trigger.setAttribute('aria-expanded','false');menu.popup.remove();menu=null}
- function enhance(select){
-  if(selects.has(select)||select.multiple||select.closest('#flow-world'))return;
-  const trigger=node('button',undefined,'select-trigger');trigger.type='button';trigger.setAttribute('role','combobox');trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-controls',select.id+'-options');
-  select.insertAdjacentElement('afterend',trigger);select.classList.add('native-select-proxy');select.tabIndex=-1;select.setAttribute('aria-hidden','true');
-  select.addEventListener('focus',()=>trigger.focus());
-  const state={select,trigger};selects.set(select,state);
-  const update=()=>{trigger.textContent=select.selectedOptions[0]?.textContent||select.options[0]?.textContent||'请选择';trigger.disabled=select.disabled;trigger.hidden=select.hidden;trigger.setAttribute('aria-label',select.getAttribute('aria-label')||document.querySelector('label[for="'+select.id+'"]')?.textContent||trigger.textContent)};
-  state.update=update;select.addEventListener('change',update);select.addEventListener('invalid',event=>{event.preventDefault();trigger.focus();trigger.setAttribute('aria-invalid','true')});
-  trigger.addEventListener('click',()=>{
-   if(menu?.select===select){closeMenu();return}closeMenu();
-   const popup=node('div',undefined,'select-popup');popup.id=select.id+'-options';popup.setAttribute('role','listbox');popup.setAttribute('aria-label',trigger.getAttribute('aria-label'));
-   for(const option of select.options){const b=node('button',option.textContent,'select-option');b.type='button';b.setAttribute('role','option');b.setAttribute('aria-selected',String(option.selected));b.disabled=option.disabled;b.addEventListener('click',()=>{select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));select.dispatchEvent(new Event('input',{bubbles:true}));update();closeMenu();trigger.focus()});popup.append(b)}
-   // Append to the nearest modal so focus cannot escape its native focus trap.
-   (trigger.closest('dialog[open]')||document.body).append(popup);const rect=trigger.getBoundingClientRect();popup.style.width=Math.min(Math.max(rect.width,240),innerWidth-24)+'px';popup.style.left=Math.max(12,Math.min(rect.left,innerWidth-popup.offsetWidth-12))+'px';
-   const available=innerHeight-rect.bottom-12;popup.style.maxHeight=Math.max(100,Math.min(innerHeight*.6,available<150?rect.top-20:available))+'px';
-   popup.style.top=(available<150?Math.max(12,rect.top-popup.offsetHeight-5):rect.bottom+5)+'px';menu={select,trigger,popup};trigger.setAttribute('aria-expanded','true');(popup.querySelector('[aria-selected="true"]')||popup.querySelector('button'))?.focus();
-  });
-  new MutationObserver(update).observe(select,{childList:true,subtree:true,attributes:true});update();
- }
- document.addEventListener('keydown',event=>{
-  if(!menu)return;
-  if(event.key==='Escape'){event.preventDefault();event.stopPropagation();const trigger=menu.trigger;closeMenu();trigger.focus();return}
-  if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
-   event.preventDefault();const options=[...menu.popup.querySelectorAll('button:not(:disabled)')],index=options.indexOf(document.activeElement);
-   const next=event.key==='Home'?0:event.key==='End'?options.length-1:Math.max(0,Math.min(options.length-1,index+(event.key==='ArrowDown'?1:-1)));options[next]?.focus();
-  }
- },true);
- document.addEventListener('pointerdown',event=>{if(menu&&!menu.popup.contains(event.target)&&!menu.trigger.contains(event.target))closeMenu()});
- document.addEventListener('scroll',event=>{if(menu&&!menu.popup.contains(event.target))closeMenu()},true);window.addEventListener('resize',closeMenu);
- function syncSelects(){for(const select of document.querySelectorAll('select[id]'))enhance(select);for(const state of selects.values())state.update();syncDocuments()}
- syncSelects();setInterval(syncSelects,1000);
+ // Keep native selects. Document options change only when the workspace loads.
+ function syncSelects(){syncDocuments()}
+ const documentSelect=$('agent-doc-select');
+ documentSelect.addEventListener('change',syncDocuments);
+ new MutationObserver(syncDocuments).observe(documentSelect,{childList:true,subtree:true});
+ syncDocuments();
  window.addEventListener('wechat-admin:activity-updated',event=>renderActivity(event.detail.rounds));
  window.addEventListener('wechat-admin:rule-target',event=>{
   const target=[...document.querySelectorAll('.rule-row')].find(row=>row.dataset.threadId===event.detail.thread);
   for(const row of document.querySelectorAll('.rule-row'))row.classList.toggle('rule-target',row===target);
-  if(target){target.scrollIntoView({block:'center'});target.querySelector('button,select,input')?.focus({preventScroll:true})}
+  if(target)target.classList.add('rule-target')
  });
  window.addEventListener('wechat-admin:navigate',event=>{
-  if(event.detail.embedded)return;const next=event.detail.section;closeMenu();
+  if(event.detail.embedded)return;const next=event.detail.section;
   if(section){const page=$(section);if(page)positions.set(section,page.scrollTop)}section=next;
   const page=$(next);if(page)page.scrollTop=positions.get(next)||0;
   document.body.dataset.page=next;
   const active=next==='account-actions'?'wechat':next==='mcp'||next==='mobile'?'plugins':next==='tools'?'memory':next;
-  for(const link of document.querySelectorAll('.context-nav .nav-link,.local-nav .nav-link')){const selected=link.dataset.section===active;link.classList.toggle('active',selected);if(selected)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current')}
+  for(const link of document.querySelectorAll('.context-nav .nav-link,.local-nav .nav-link')){const selected=link.dataset.section===(link.closest('.local-nav')?next:active);link.classList.toggle('active',selected);if(selected)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current')}
   if(next==='overview'){loadTasks();renderActivity(window.WechatActivity?.rounds()||[])}syncSelects();
  });
- window.addEventListener('wechat-admin:logout',()=>{accountEpoch++;lastTaskRead=0;tasks=[];positions.clear();closeMenu();workspaceTab('tasks');for(const box of [$('overview-tasks'),$('overview-activity')])box.replaceChildren()});
- setInterval(()=>{if($('overview').classList.contains('active-page'))loadTasks()},15000);
- window.WechatConsole={workspaceTab,closeMenu,syncSelects};
+ window.addEventListener('wechat-admin:logout',()=>{accountEpoch++;lastTaskRead=0;tasks=[];positions.clear();workspaceTab('tasks');for(const box of [$('overview-tasks'),$('overview-activity')])box.replaceChildren()});
+ setInterval(()=>{if(!document.hidden&&$('overview').classList.contains('active-page'))loadTasks()},15000);
+ window.WechatConsole={workspaceTab,syncSelects};
 })();

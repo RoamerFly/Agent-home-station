@@ -102,8 +102,14 @@
  function manage(){
   const v=view;if(!v?.data)return;const content=$('#memory-management');const popup=window.WechatDialogs.open({title:v.item.label+' · 备注与管理',content,onClose:()=>$('#memory-management-parking').append(content)});
   const notes=$('#memory-notes');notes.replaceChildren();for(const note of v.data.notes||[])node(notes,'p',note,'memory-note');
+  $('#conversation-preferences').value=v.data.preferences||'';$('#conversation-preferences-state').textContent='';
   popup.body.dataset.scopeId=v.item.id;
  }
+ async function savePreferences(){
+  const v=view;if(!v?.data)return;const button=$('#save-conversation-preferences'),status=$('#conversation-preferences-state');button.disabled=true;
+  try{const result=await api('/api/companion/memory/'+encodeURIComponent(v.item.id)+'/preferences',{method:'POST',json:{text:$('#conversation-preferences').value,revision:v.data.preferences_revision||0}});if(view!==v)return;v.data.preferences=result.text;v.data.preferences_revision=result.revision;status.textContent='已保存，仅对本会话生效'}catch(e){if(view===v)status.textContent=e.message}finally{button.disabled=false}
+ }
+ $('#save-conversation-preferences').addEventListener('click',savePreferences);
  async function saveNote(){const v=view,note=$('#memory-note').value.trim();if(!v?.data||!note)return;const b=$('#save-memory-note');b.disabled=true;try{await api('/api/companion/memory/'+encodeURIComponent(v.item.id)+'/notes',{method:'POST',json:{text:note}});if(view!==v)return;$('#memory-note').value='';v.data.notes=[...(v.data.notes||[]),note];node($('#memory-notes'),'p',note,'memory-note');await window.WechatAdmin.refreshScopes()}catch(e){node($('#memory-notes'),'p',e.message,'form-error')}finally{b.disabled=false}}
  async function clear(){const v=view;if(!v?.data||!confirm('清除这个会话的活跃记忆和摘要？只读归档和微信聊天记录仍保留。'))return;const b=$('#clear-memory');b.disabled=true;try{await api('/api/companion/memory/'+encodeURIComponent(v.item.id)+'/clear',{method:'POST',json:{}});if(view===v)await loadView(v);await window.WechatAdmin.refreshScopes()}catch(e){node($('#memory-notes'),'p',e.message,'form-error')}finally{b.disabled=false}}
  $('#conversation-search').addEventListener('input',renderIndex);$('#conversation-refresh').addEventListener('click',refresh);

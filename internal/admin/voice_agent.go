@@ -167,7 +167,7 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 			if strings.EqualFold(v.Engine, "GPT-SoVITS") {
 				row["project_id"] = "gpt-sovits"
 				row["speech_synthesize"] = map[string]string{"voice_id": v.ID, "text": "填写本次需要合成的原文"}
-				row["usage"] = "先project_read({id:gpt-sovits})读取登记的GPT-SoVITS项目、真实解释器和CLI。voice_library_prepare取得明确选定的GPT/SoVITS配对权重、参考音频及其转录；私人声线server_exec/server_process用global=true，CUDA用gpu=true。不因在群里发起而拒绝真实管理员，也不能只查看旧目录后宣称本机未安装。按需读源码、自写脚本或修复，生成后核验实际音频再发送。"
+				row["usage"] = "先project_read({id:gpt-sovits})读取登记的GPT-SoVITS项目、真实解释器和CLI。voice_library_prepare取得明确选定的GPT/SoVITS配对权重、参考音频及其转录；优先speech_synthesize(voice_id,text)。自定义命令在Windows使用server_windows_process(global=true,gpu=true)，Linux使用server_process(global=true,gpu=true)，工作目录选账号受管工作区；不需要访问源码仓库根目录。不因在群里发起而拒绝真实管理员，也不能只查看旧目录后宣称本机未安装。生成后核验实际音频再发送。"
 			}
 			if v.ProfileID != "" {
 				row["music_rvc_start"] = map[string]string{"voice_profile_id": v.ProfileID}

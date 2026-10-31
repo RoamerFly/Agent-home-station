@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/linuxnative"
 )
 
 func trustedAgent(t *testing.T) (*webFixture, *permittedTools) {
@@ -203,9 +204,17 @@ func TestAgentSettingsAPIAuthenticationAndOptimisticSave(t *testing.T) {
 	}
 }
 
+type crossTextNative struct{ *fakeTools }
+
+func (n *crossTextNative) LookupSend(ctx context.Context, key string) (linuxnative.ToolStatus, error) {
+	if n.submits.Load() == 0 {
+		return linuxnative.ToolStatus{}, linuxnative.ErrToolNotFound
+	}
+	return n.fakeTools.LookupSend(ctx, key)
+}
 func TestAgentCrossSendReceiptInspectionAndMemory(t *testing.T) {
 	f, p := trustedAgent(t)
-	native := &fakeTools{fakeNative: f.native}
+	native := &crossTextNative{&fakeTools{fakeNative: f.native}}
 	f.manager.native = native
 	c := f.manager.agent.config()
 	c.CrossConversation = true
@@ -216,6 +225,7 @@ func TestAgentCrossSendReceiptInspectionAndMemory(t *testing.T) {
 	f.manager.config.Behavior.RandomDelay = false
 	f.manager.config.Companion.Permissions.Remember = true
 	f.manager.mu.Unlock()
+	observeOutboundSource(t, f, p, "请向文件传输助手发送：来自已授权测试的消息")
 	args := json.RawMessage(`{"thread_id":"filehelper","text":"来自已授权测试的消息","request_key":"one-send"}`)
 	result, err := p.Call(context.Background(), "wechat_send_text", args)
 	if err != nil {
@@ -294,9 +304,28 @@ func TestAgentTaskScopedPersistenceRecoveryAndQuietBudget(t *testing.T) {
 	f.manager.config = cfg.Config
 	f.manager.mu.Unlock()
 	task.State = "waiting"
-	task.OwnerRequested = false // Legacy proactive tasks retain quiet-hour/budget behavior.
+	task.OwnerRequested = false
 	task.Next = now.Add(-time.Minute)
-	f.manager.agent.task(task)
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	ownerTask, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if !ok || !ownerTask.OwnerRequested {
+		t.Fatal("saved owner authorization was downgraded", ownerTask)
+	}
+	// Keep the original requested task intact but parked. Quiet-hour behavior
+	// belongs to a genuinely separate legacy autonomous task, not a downgrade
+	// of the authenticated owner's persisted request.
+	ownerTask.State = "needs_review"
+	if err := f.manager.agent.task(ownerTask); err != nil {
+		t.Fatal(err)
+	}
+	task.ID += "-legacy-proactive"
+	task.Constraints = nil
+	task.OwnerRequested = false
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
 	if result, err := f.manager.claimAgentTask(now, func(string) bool { return false }); err != nil || result != nil {
 		t.Fatal("quiet task ran", result, err)
 	}
