@@ -8,6 +8,9 @@ import sys
 spec = importlib.util.spec_from_file_location("observation", Path(__file__).with_name("observation.py"))
 observation = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(observation)
+asr_spec = importlib.util.spec_from_file_location("transcription", Path(__file__).with_name("transcription.py"))
+transcription = importlib.util.module_from_spec(asr_spec)
+asr_spec.loader.exec_module(transcription)
 FRAME_LIMIT = 8 * 1024 * 1024
 
 
@@ -75,6 +78,8 @@ class Wire:
                         raise ValueError("host_context_required")
                     if params.get("name") == "media.observe":
                         result = observation.observe(params.get("arguments"), configuration, lambda params: self.host("wechat/model_request", params))
+                    elif params.get("name") == "media.transcribe":
+                        result = transcription.transcribe(params.get("arguments"), configuration, lambda params: self.host("wechat/model_request", params))
                     else:
                         raise ValueError("capability_unavailable")
                 else:

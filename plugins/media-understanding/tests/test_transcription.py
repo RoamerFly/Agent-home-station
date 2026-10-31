@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import io
+import json
 
 spec = importlib.util.spec_from_file_location("transcription", Path(__file__).parents[1] / "runtime/transcription.py")
 module = importlib.util.module_from_spec(spec)
@@ -40,5 +42,29 @@ class TranscriptionTest(unittest.TestCase):
         self.audio["version"] = True
         with self.assertRaises(ValueError): self.run_reply({})
         self.assertEqual(self.calls, [])
+
+
+
+class TranscriptionWireTest(unittest.TestCase):
+    def test_stdio_dispatch_reference_and_reply(self):
+        spec = importlib.util.spec_from_file_location("media_asr_wire", Path(__file__).parents[1] / "runtime/main.py")
+        main = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(main)
+        ref = {"media_ref": "audio_1", "sha256": "a"*64, "version": 1, "mime": "audio/wav"}
+        context = {k: "synthetic" for k in ("account", "thread", "requester", "purpose", "request_key")}
+        incoming = [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": {"asr_model": "synthetic-asr"}}}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.transcribe", "arguments": {"audio": ref}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": "media-model-1", "result": {"output": {"text": "synthetic transcript"}}},
+        ]
+        output = io.StringIO()
+        main.Wire(io.StringIO("".join(json.dumps(x)+"\n" for x in incoming)), output).serve()
+        replies = [json.loads(x) for x in output.getvalue().splitlines()]
+        self.assertEqual(len(replies), 3)
+        self.assertEqual(replies[1]["method"], "wechat/model_request")
+        self.assertEqual(replies[1]["params"]["route"], "transcription")
+        self.assertEqual(replies[2]["id"], 2)
+        self.assertEqual(replies[2]["result"]["text"], "synthetic transcript")
+        self.assertEqual(replies[2]["result"]["sources"], [ref])
 
 if __name__ == "__main__": unittest.main()

@@ -54,15 +54,25 @@
     {
       "id": "media.transcribe",
       "implementation": "migration-pending",
-      "description": "ASR、图片与视频观察",
+      "description": "识别获准的 WAV 音频，返回实际转写与来源；宿主适配仍在迁移。",
       "permissions": [
         "artifact.read",
-        "artifact.write",
         "model.invoke"
       ],
       "input_schema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "audio": {
+            "type": "object"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "audio"
+        ],
         "additionalProperties": false
       },
       "output_schema": {

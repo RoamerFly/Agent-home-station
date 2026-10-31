@@ -20,20 +20,20 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "ae38b17825c0f2ac71de5d179e49825734f36302cb43fa51a68172c69401eadc",
+    "capabilities.json": "34306cc0da044c2583a79232d2bf8f6abe1bd24115753ec8b16a6569a26ae739",
     "CHANGELOG.md": "5b127414666dd88f8bb6f36324a34c5acae3321d5798719e6859c308bbe76ba9",
     "config.schema.json": "5ea730c51b6cf13f215b25525752a2748bc4f891d42aa12d499a4f4867e92668",
     "MIGRATION.md": "3da9b53fbd94913d3489f2ebb8a131f0912378cbd7a7b9e918fb56277d8ed7cf",
     "PERMISSIONS.md": "b11c7564c7c5b8d59054da08ccdf1ca21c94bef1552759d86c6933c6f571895e",
     "README.md": "3c94322a1c95fd87e3559b393bf3a3d207219d72bcddfc9964f21f9d36b9333c",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
-    "runtime/main.py": "b365479dd9bf63e2e7c274604947f5abba1f7999c4d6bd6a09a1a80bc511c602",
+    "runtime/main.py": "f9f4bd4751c73b6276257f76f19932f846a26a9058ce139ea8bf682ded046195",
     "runtime/observation.py": "2e1227644c170ff8ded65ec660ab2ca1f13cc6e9eac787c1c39275b8aebdcfb4",
     "runtime/README.md": "900fe2ff7a92d22e758fc20231997f377e02f036846ead5bc0138ff4c4952ede",
     "tests/test_observation.py": "ce1ae132f9f81f942059de212f056378378280ac4a279b40ace3d6550e2b5d41",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "runtime/transcription.py": "1fb3e0e0384f2bd1ce45c992e370dbb7c40b7c3d0500fbef9416838def4991e0",
-    "tests/test_transcription.py": "00c6c18f17f1b676550e3700682dce410d5ca876d51082db819f3c36a80868a2"
+    "tests/test_transcription.py": "bf785678ed7538753408eb7da85958021c4f9cdfe39b7131b1e62cc9e418eaff"
   },
   "http_routes": [
     {
