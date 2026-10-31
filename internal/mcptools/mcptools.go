@@ -836,6 +836,9 @@ func publicReadRangeOnce(ctx context.Context, raw string, maxBytes int64, timeou
 		if enabled, _ := ctx.Value(publicVideoRefererKey{}).(bool); enabled && !strings.HasSuffix(req.URL.Hostname(), ".bilivideo.com") {
 			return &WebError{Code: "video_public_playback_unavailable", Stage: "video_redirect"}
 		}
+		if source, ok := ctx.Value(publicPluginMediaKey{}).(publicPluginMediaOrigin); ok && req.URL.Scheme+"://"+req.URL.Host != source.destination {
+			return &WebError{Code: "share_media_redirect_changed", Stage: "video_redirect"}
+		}
 		return validPublicURL(req.URL.String())
 	}}
 	req, e := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
@@ -843,6 +846,12 @@ func publicReadRangeOnce(ctx context.Context, raw string, maxBytes int64, timeou
 		return nil, "", "", rangeHeaders{}, e
 	}
 	req.Header.Set("User-Agent", "wechat-bot-web-tool/1.0")
+	if source, ok := ctx.Value(publicPluginMediaKey{}).(publicPluginMediaOrigin); ok {
+		if req.URL.Scheme+"://"+req.URL.Host != source.destination {
+			return nil, "", "", rangeHeaders{}, &WebError{Code: "share_media_redirect_changed"}
+		}
+		req.Header.Set("Referer", source.origin)
+	}
 	if enabled, _ := ctx.Value(kuaishouRequestKey{}).(bool); enabled {
 		host := req.URL.Hostname()
 		if host == "www.kuaishou.com" || host == "kuaishou.com" || host == "v.m.chenzhongtech.com" || kuaishouMediaHost(host) {
@@ -867,6 +876,12 @@ func publicReadRangeOnce(ctx context.Context, raw string, maxBytes int64, timeou
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, "", "", rangeHeaders{}, &WebError{Code: "http_status", Status: resp.StatusCode, Stage: "http_status", RetryAfter: retryAfter(resp.Header.Get("Retry-After"))}
+	}
+	if probe, _ := ctx.Value(publicPluginMediaProbeKey{}).(bool); probe {
+		kind := strings.ToLower(resp.Header.Get("Content-Type"))
+		if strings.HasPrefix(kind, "video/") || strings.HasPrefix(kind, "image/") {
+			return []byte{}, kind, resp.Request.URL.String(), rangeHeaders{}, nil
+		}
 	}
 	b, e := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if e != nil {

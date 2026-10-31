@@ -99,6 +99,12 @@ class PublicShareTests(unittest.TestCase):
         self.assertEqual(result["text"], "")
         self.assertFalse(result["video_observed"])
 
+    def test_video_elements_keep_sources_but_not_audio_or_script_urls(self):
+        html = "<video src='/first.mp4'><source src='/second.webm'></video><audio><source src='/audio.mp3'></audio><script><video src='/fake.mp4'></script>"
+        result = parser.resolve({"url": "https://public.example/work", "video_required": True}, lambda *a: response(html, "https://public.example/work"))
+        self.assertEqual(result["private_media_locators"], ["https://public.example/first.mp4", "https://public.example/second.webm"])
+        self.assertEqual(result["text"], "")
+
     def test_stdio_context_and_host_read_binding(self):
         call = {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"share.resolve_public","arguments":{"url":PAGE},"_meta":{"wechat/context":{k:"synthetic" for k in ["account","thread","requester","purpose","request_key"]}}}}
         frames = [{"jsonrpc":"2.0","id":1,"method":"initialize"},call,{"jsonrpc":"2.0","id":"share-read-1","result":response(state())}]

@@ -226,6 +226,7 @@ class ShareHTML(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.base, self.hidden, self.title_depth = base, 0, 0
         self.title, self.parts, self.media = [], [], []
+        self.video_depth = 0
 
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style", "template", "noscript"):
@@ -234,6 +235,16 @@ class ShareHTML(HTMLParser):
             return
         if tag == "title":
             self.title_depth += 1
+        values = dict(attrs)
+        if tag == "video":
+            self.video_depth += 1
+        if tag == "video" or tag == "source" and self.video_depth:
+            try:
+                locator = public_url(urljoin(self.base, values.get("src") or ""))
+                if values.get("src") and locator not in self.media:
+                    self.media.append(locator)
+            except ValueError:
+                pass
         if tag == "meta":
             values = dict(attrs)
             prop = (values.get("property") or values.get("name") or "").lower()
@@ -250,6 +261,8 @@ class ShareHTML(HTMLParser):
             self.hidden = max(0, self.hidden - 1)
         if tag == "title":
             self.title_depth = max(0, self.title_depth - 1)
+        if tag == "video":
+            self.video_depth = max(0, self.video_depth - 1)
 
     def handle_data(self, text):
         if not self.hidden:
@@ -296,7 +309,8 @@ def resolve(args, get):
             raise ValueError("share_identity_conflict")
         duration, locators = bili_playback(playback)
         identity, platform = bvid, "bilibili"
-        final = "https://www.bilibili.com/video/" + bvid + "/" + ("?p=" + str(part) if part > 1 else "")
+        actual = urlsplit(final)
+        final = urlunsplit((actual.scheme, actual.netloc, actual.path, "p=" + str(part) if part > 1 or "p" in parse_qs(actual.query) else "", ""))
     elif kind.startswith("video/"):
         locators = [final]
     elif kind.startswith("image/") and not args.get("video_required"):
@@ -329,7 +343,7 @@ def resolve(args, get):
                 if len(content) > maximum:
                     raise ValueError("host_response_exceeds_requested_bytes")
                 title, duration, locators = kuaishou_photo(content.decode("utf8", errors="replace"), identity)
-            final = canonical
+                final = public_url(replacement["url"])
         else:
             host = urlsplit(final).hostname
             if host in KUAI_HOSTS or host in {"v.kuaishou.com", "weixin.qq.com", "channels.weixin.qq.com", "www.bilibili.com", "bilibili.com", "b23.tv"}:

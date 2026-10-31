@@ -25,6 +25,10 @@ func (n *receivedPluginNative) ChannelsShareURL(_ context.Context, id, thread, o
 }
 
 func receivedPolicyFixture(t *testing.T, remember bool) (*webFixture, *bindingChannelsNative, *receivedSharePolicy, context.Context) {
+	return receivedPolicyFixtureFor(t, remember, 51)
+}
+
+func receivedPolicyFixtureFor(t *testing.T, remember bool, kind int) (*webFixture, *bindingChannelsNative, *receivedSharePolicy, context.Context) {
 	t.Helper()
 	f := setup(t)
 	_, store, _, _ := shareBindingFixtureFor(t, "test", "share-reader", true)
@@ -32,8 +36,13 @@ func receivedPolicyFixture(t *testing.T, remember bool) (*webFixture, *bindingCh
 	f.manager.config.Enabled = true
 	f.manager.config.Behavior.ReadVideos = true
 	f.manager.config.Companion.Permissions.Remember = remember
-	kind := 51
 	n := &bindingChannelsNative{fakeNative: f.native, msg: linuxnative.Message{ID: "message", AccountID: "test", ThreadID: "filehelper", SenderID: "synthetic-user", ServerID: "server-synthetic", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Direction: "incoming", Type: 49, AppMessageType: &kind}, source: linuxnative.ChannelsSource{AccountID: "test", ThreadID: "filehelper", MessageID: "message", ObjectID: "12345"}}
+	tool := "share.resolve_channels"
+	if kind != 51 {
+		tool = "share.resolve_public"
+		n.msg.Link = &linuxnative.LinkCard{URL: "https://public.example/share?key=synthetic", Title: "synthetic share"}
+		f.manager.mcp.Enabled, f.manager.mcp.WebFetchEnabled = true, true
+	}
 	f.manager.native = &receivedPluginNative{n}
 	ctx := t.Context()
 	if remember {
@@ -48,7 +57,7 @@ func receivedPolicyFixture(t *testing.T, remember bool) (*webFixture, *bindingCh
 		}
 		ctx = companion.WithMediaSource(ctx, *ref)
 	}
-	p, err := f.manager.newReceivedSharePolicy(ctx, n.msg)
+	p, err := f.manager.newReceivedSharePolicyFor(ctx, n.msg, tool)
 	if err != nil {
 		t.Fatal(err)
 	}

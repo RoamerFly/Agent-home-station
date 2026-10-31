@@ -50,12 +50,18 @@ type receivedSharePolicy struct {
 	source             companion.SourceRef
 	fingerprint, epoch string
 	remember           bool
+	tool               string
 	binding            *shareRouteBinding
 	send               pluginruntime.RouteTransport
 }
 
 func (m *Manager) newReceivedSharePolicy(ctx context.Context, message linuxnative.Message) (*receivedSharePolicy, error) {
-	if m.memory == nil || message.ID == "" || message.ThreadID == "" || message.SenderID == "" || message.Direction != "incoming" || message.Type != 49 || message.AppMessageType == nil || *message.AppMessageType != 51 {
+	return m.newReceivedSharePolicyFor(ctx, message, "share.resolve_channels")
+}
+
+func (m *Manager) newReceivedSharePolicyFor(ctx context.Context, message linuxnative.Message, tool string) (*receivedSharePolicy, error) {
+	validKind := message.AppMessageType != nil && (*message.AppMessageType == 51 && tool == "share.resolve_channels" || (*message.AppMessageType == 4 || *message.AppMessageType == 5) && tool == "share.resolve_public" && message.Link != nil && sharePublicURL(message.Link.URL) != "")
+	if m.memory == nil || message.ID == "" || message.ThreadID == "" || message.SenderID == "" || message.Direction != "incoming" || message.Type != 49 || !validKind {
 		return nil, errors.New("share_native_source_required")
 	}
 	if message.AccountID == "" {
@@ -72,7 +78,7 @@ func (m *Manager) newReceivedSharePolicy(ctx context.Context, message linuxnativ
 	if err != nil {
 		return nil, err
 	}
-	p := &receivedSharePolicy{manager: m, store: store, message: message, fingerprint: shareNativeFingerprint(message), epoch: epoch, remember: m.Config().Companion.Permissions.Remember, send: mcptools.PostPluginRoute}
+	p := &receivedSharePolicy{manager: m, store: store, message: message, tool: tool, fingerprint: shareNativeFingerprint(message), epoch: epoch, remember: m.Config().Companion.Permissions.Remember, send: mcptools.PostPluginRoute}
 	if p.remember {
 		ref, ok := companion.MediaSourceFromContext(ctx)
 		if !ok {
@@ -105,7 +111,7 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 		return err
 	}
 	c := p.manager.Config().Config
-	if j.Plugin != "share-reader" || j.Tool != "share.resolve_channels" || cap.Async || !c.Enabled || !c.Behavior.ReadVideos || !permittedRecipient(c, p.message.ThreadID) || c.Companion.Permissions.Remember != p.remember || p.manager.native.Account() != p.message.AccountID {
+	if j.Plugin != "share-reader" || j.Tool != p.tool || cap.Async || !c.Enabled || !c.Behavior.ReadVideos || !permittedRecipient(c, p.message.ThreadID) || c.Companion.Permissions.Remember != p.remember || p.manager.native.Account() != p.message.AccountID {
 		return errors.New("share_request_authorization_changed")
 	}
 	if strings.HasSuffix(p.message.ThreadID, "@chatroom") && !c.Companion.Permissions.ObserveGroups {
