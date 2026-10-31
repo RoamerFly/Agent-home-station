@@ -68,6 +68,7 @@ func OpenStore(dir, account string) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS audit(seq INTEGER PRIMARY KEY,at TEXT NOT NULL,plugin TEXT NOT NULL,action TEXT NOT NULL,digest TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS configurations(plugin TEXT PRIMARY KEY,revision INTEGER NOT NULL,values_json BLOB NOT NULL,secrets_json BLOB NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS configuration_versions(plugin TEXT NOT NULL,revision INTEGER NOT NULL,values_json BLOB NOT NULL,secrets_json BLOB NOT NULL,PRIMARY KEY(plugin,revision))`,
+		`CREATE TABLE IF NOT EXISTS migrations(id TEXT PRIMARY KEY,plugin TEXT NOT NULL,digest TEXT NOT NULL,source_hash TEXT NOT NULL,config_revision INTEGER NOT NULL,permissions_hash TEXT NOT NULL DEFAULT '',config_hash TEXT NOT NULL DEFAULT '',installed_revision INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,created TEXT NOT NULL,updated TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS jobs(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,plugin TEXT NOT NULL,thread TEXT NOT NULL,request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,record BLOB NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,UNIQUE(plugin,thread,request_key))`,
 		`CREATE INDEX IF NOT EXISTS jobs_plugin_sequence ON jobs(plugin,seq)`,
 		`CREATE TABLE IF NOT EXISTS job_private_results(job_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,payload BLOB NOT NULL)`,
@@ -75,6 +76,10 @@ func OpenStore(dir, account string) (*Store, error) {
 		if _, err = db.Exec(query); err != nil {
 			return fail(err)
 		}
+	}
+	// Forward-compatible for stores created by an earlier local preview build.
+	for _, query := range []string{`ALTER TABLE migrations ADD COLUMN permissions_hash TEXT NOT NULL DEFAULT ''`, `ALTER TABLE migrations ADD COLUMN config_hash TEXT NOT NULL DEFAULT ''`, `ALTER TABLE migrations ADD COLUMN installed_revision INTEGER NOT NULL DEFAULT 0`} {
+		_, _ = db.Exec(query)
 	}
 	if _, err = db.Exec(`INSERT OR IGNORE INTO owner(singleton,account) VALUES(1,?)`, account); err != nil {
 		return fail(err)

@@ -14,12 +14,15 @@ import (
 
 // Options come from deployment, never plugin/model-supplied tool arguments.
 type Options struct {
-	Python        string           `json:"python"`
-	Pythonw       string           `json:"pythonw"`
-	WindowsHelper string           `json:"windows_helper"`
-	RuntimeRoots  []string         `json:"runtime_roots"`
-	ResourceRoots ResourceResolver `json:"-"`
-	HostMetadata  MetadataResolver `json:"-"`
+	Python        string   `json:"python"`
+	Pythonw       string   `json:"pythonw"`
+	WindowsHelper string   `json:"windows_helper"`
+	RuntimeRoots  []string `json:"runtime_roots"`
+	// CatalogDirectory is a trusted deployment-owned directory containing
+	// verified official plugin packages. It is never supplied by an API caller.
+	CatalogDirectory string           `json:"catalog_directory"`
+	ResourceRoots    ResourceResolver `json:"-"`
+	HostMetadata     MetadataResolver `json:"-"`
 }
 
 func InstalledExecutor(store *pluginhost.Store, options Options) *Executor {

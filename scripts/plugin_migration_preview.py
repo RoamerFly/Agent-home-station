@@ -81,6 +81,10 @@ def _package(repo: Path, plugin_id: str) -> dict[str, Any]:
         "status": value.get("status") if not error else "unavailable",
         "version": value.get("version") if not error else None,
         "manifest_sha256": _sha256(manifest.read_bytes()) if not error else None,
+        # Store.Prepare uses the exact plugin.json bytes as its package digest.
+        # Do not derive a digest from re-serialized JSON here.
+        "expected_package_digest": _sha256(manifest.read_bytes()) if not error else None,
+        "permissions": value.get("permissions") if isinstance(value.get("permissions"), list) and all(isinstance(permission, str) for permission in value["permissions"]) else [],
     }
     if error:
         out["manifest_error"] = error
@@ -94,6 +98,7 @@ def _step(plugin_id: str, package: dict[str, Any], legacy_enabled: bool, values:
     result: dict[str, Any] = {
         "plugin": plugin_id,
         "package": package,
+        "permissions": package.get("permissions", []),
         "expected_config_revision": 0,
         "legacy_enabled": legacy_enabled,
         "proposed_enabled": False,
@@ -185,15 +190,45 @@ def _official_deepseek(config: dict[str, Any]) -> bool:
     return config.get("provider") == "deepseek" and base in {"https://api.deepseek.com", "https://api.deepseek.com/v1"} and bool(_safe_text(config.get("api_key")))
 
 
-def _web_plan(repo: Path, config: dict[str, Any], mcp: dict[str, Any]) -> dict[str, Any]:
+def _declares_deepseek_search(repo: Path) -> bool:
+    """Require all three declarations; never infer paid support from a name."""
+    package, package_error = _read_json(repo / "plugins" / "web-search" / "plugin.json", required=True)
+    schema, schema_error = _read_json(repo / "plugins" / "web-search" / "config.schema.json", required=True)
+    caps, caps_error = _read_json(repo / "plugins" / "web-search" / "capabilities.json", required=True)
+    if package_error or schema_error or caps_error or package.get("status") != "ready":
+        return False
+    properties = schema.get("properties")
+    backend = properties.get("search_backend") if isinstance(properties, dict) else None
+    key = properties.get("search_key") if isinstance(properties, dict) else None
+    if not isinstance(backend, dict) or "deepseek" not in backend.get("enum", []) or not isinstance(key, dict) or key.get("type") != "string" or key.get("x-secret") is not True or key.get("x-host-only") is not True:
+        return False
+    capabilities = caps.get("capabilities")
+    if not isinstance(capabilities, list) or not any(isinstance(cap, dict) and cap.get("id") == "web.search" and cap.get("implementation") == "ready" and "network" in cap.get("permissions", []) for cap in capabilities):
+        return False
+    routes = package.get("http_routes")
+    return isinstance(routes, list) and any(isinstance(route, dict) and route.get("id") == "deepseek-search" and route.get("endpoint") == "https://api.deepseek.com/v1/tools/search" and route.get("credential") == "search_key" and route.get("credential_header") == "Authorization" and route.get("credential_prefix") == "Bearer " and "web.search" in route.get("capabilities", []) for route in routes)
+
+
+def _web_plan(repo: Path, config: dict[str, Any], mcp: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     enabled = bool(mcp.get("enabled", True)) and (bool(mcp.get("web_search_enabled", True)) or bool(mcp.get("web_fetch_enabled", True)))
     required: list[str] = []
     unmapped: list[str] = []
     values = {"legacy_web_search_enabled": bool(mcp.get("web_search_enabled", True)), "legacy_web_fetch_enabled": bool(mcp.get("web_fetch_enabled", True))}
+    secrets: dict[str, Any] = {}
+    handoff: dict[str, str] = {}
     if _official_deepseek(config):
-        required.append("official_deepseek_search_adapter_not_declared_by_web-search_plugin")
-        unmapped.extend(["config.json:base_url", "config.json:api_key", "config.json:provider"])
-    return _step("web-search", _package(repo, "web-search"), enabled, values, {}, required, unmapped)
+        if _declares_deepseek_search(repo):
+            values["search_backend"] = "deepseek"
+            search_key, raw_key = _secret(config.get("api_key"), "config.json:api_key")
+            secrets["search_key"] = search_key
+            if raw_key:
+                handoff["web-search.search_key"] = raw_key
+            else:
+                required.append("search_key")
+        else:
+            required.append("official_deepseek_search_adapter_not_declared_by_web-search_plugin")
+            unmapped.extend(["config.json:base_url", "config.json:api_key", "config.json:provider"])
+    return _step("web-search", _package(repo, "web-search"), enabled, values, secrets, required, unmapped), handoff
 
 
 def _share_plan(repo: Path, channels: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
@@ -252,9 +287,10 @@ def build_preview(root: Path, repo: Path, primary_account: str = "primary") -> t
         media, media_secrets = _media_plan(repo, config, speech)
         speech_step, speech_secrets = _speech_plan(repo, speech)
         share, share_secrets = _share_plan(repo, channels)
-        entry["plugins"] = [media, speech_step, _web_plan(repo, config, mcp), share]
+        web, web_secrets = _web_plan(repo, config, mcp)
+        entry["plugins"] = [media, speech_step, web, share]
         report["accounts"].append(entry)
-        all_secrets = {**media_secrets, **speech_secrets, **share_secrets}
+        all_secrets = {**media_secrets, **speech_secrets, **web_secrets, **share_secrets}
         secret_handoff["accounts"].append({"account": account, "secrets": all_secrets})
     return report, secret_handoff
 

@@ -3,6 +3,8 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +12,151 @@ import (
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
+
+func deepSeekWebJob(t *testing.T) (*webFixture, *permittedTools, *pluginhost.Store, pluginhost.Job, pluginhost.Capability) {
+	t.Helper()
+	f, p := trustedAgent(t)
+	ctx := context.Background()
+	store, err := f.manager.packageStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := store.Prepare(ctx, "../../plugins/web-search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := store.Install(ctx, prepared.Token, prepared.Digest, []string{"network"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := store.SaveConfiguration(ctx, installed.Package.ID, pluginhost.ConfigUpdate{
+		Revision: 0,
+		Values:   map[string]json.RawMessage{"search_backend": json.RawMessage(`"deepseek"`)},
+		Secrets:  map[string]string{"search_key": "synthetic-search-key"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err = store.SetEnabled(ctx, installed.Package.ID, installed.Revision, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps, err := store.Capabilities(ctx, installed.Package.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cap pluginhost.Capability
+	for _, item := range caps {
+		if item.ID == "web.search" {
+			cap = item
+		}
+	}
+	if cap.ID == "" {
+		t.Fatal("web.search capability missing")
+	}
+	epoch, err := f.manager.memory.RecallEpoch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := pluginhost.Job{
+		ID:             "deepseek-synthetic",
+		Plugin:         installed.Package.ID,
+		Version:        installed.Package.Version,
+		PackageDigest:  installed.Digest,
+		ConfigRevision: strconv.Itoa(config.Revision),
+		Tool:           "web.search",
+		Arguments:      json.RawMessage(`{"query":"  synthetic search  ","count":9,"limit":1,"max_bytes":196608,"timeout_seconds":45}`),
+		Context:        pluginhost.Invocation{Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.trace.Sender, Purpose: "synthetic", RequestKey: "deepseek-one", EvidenceEpoch: epoch, Authorization: p.serviceAuthorization()},
+	}
+	return f, p, store, job, cap
+}
+
+func TestServiceDeepSeekRouteBindsProviderAndResult(t *testing.T) {
+	_, p, _, job, cap := deepSeekWebJob(t)
+	ctx := context.Background()
+	calls := 0
+	policy := servicePluginPolicy{p: p, observed: map[string]bool{}, deepseek: map[string]deepSeekSearchEvidence{}, post: func(_ context.Context, endpoint string, headers map[string]string, body json.RawMessage, maxBytes int64, timeout time.Duration) (json.RawMessage, error) {
+		calls++
+		if endpoint != "https://api.deepseek.com/v1/tools/search" || headers["Authorization"] != "Bearer synthetic-search-key" || maxBytes != 196608 || timeout != 45*time.Second || string(body) != `{"query":"synthetic search","count":9,"need_content":false}` {
+			t.Fatalf("unexpected route request: endpoint=%q headers=%v body=%s max=%d timeout=%s", endpoint, headers, body, maxBytes, timeout)
+		}
+		return json.RawMessage(`{"results":[{"title":"  Synthetic  ","url":"https://example.test/a","summary":"  first result "},{"title":"Other","url":"https://example.test/b","snippet":"second"}]}`), nil
+	}}
+	route := json.RawMessage(`{"route":"deepseek-search","body":{"query":"synthetic search","count":9,"need_content":false},"max_bytes":196608,"timeout_seconds":45}`)
+	if _, err := policy.Service(ctx, job, cap, "wechat/http_route", route); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d", calls)
+	}
+	pluginResult := json.RawMessage(`{"ok":true,"backend":"deepseek","query":"  synthetic search  ","items":[{"url":"https://example.test/a","title":"Synthetic","summary":"first result"}],"fallback_used":false,"requested_count":9,"effective_provider_count":9,"requested_limit":1,"provider_items":2,"next_offset":1,"provider_page_exhausted":false,"untrusted_external_content":true}`)
+	if _, err := policy.Validate(ctx, job, cap, pluginResult); err != nil {
+		t.Fatal(err)
+	}
+	forged := json.RawMessage(`{"ok":true,"backend":"deepseek","query":"  synthetic search  ","items":[{"url":"https://attacker.test/a","title":"Synthetic","summary":"first result"}],"fallback_used":false,"requested_count":9,"effective_provider_count":9,"requested_limit":1,"provider_items":2,"next_offset":1,"provider_page_exhausted":false,"untrusted_external_content":true}`)
+	if _, err := policy.Validate(ctx, job, cap, forged); err == nil {
+		t.Fatal("unobserved provider item accepted")
+	}
+}
+
+func TestServiceDeepSeekRouteRejectsPublicConfigAndMismatchedBody(t *testing.T) {
+	_, p, store, job, cap := deepSeekWebJob(t)
+	ctx := context.Background()
+	policy := servicePluginPolicy{p: p, observed: map[string]bool{}, deepseek: map[string]deepSeekSearchEvidence{}, post: func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+		t.Fatal("provider called for rejected request")
+		return nil, nil
+	}}
+	badBody := json.RawMessage(`{"route":"deepseek-search","body":{"query":"other","count":9,"need_content":false},"max_bytes":131072,"timeout_seconds":18}`)
+	if _, err := policy.Service(ctx, job, cap, "wechat/http_route", badBody); err == nil {
+		t.Fatal("mismatched query reached provider")
+	}
+	installed, err := store.Installed(ctx, job.Plugin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SetEnabled(ctx, installed.Package.ID, installed.Revision, false); err != nil {
+		t.Fatal(err)
+	}
+	config, err := store.Configuration(ctx, job.Plugin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SaveConfiguration(ctx, job.Plugin, pluginhost.ConfigUpdate{Revision: config.Revision, Values: map[string]json.RawMessage{"search_backend": json.RawMessage(`"public"`)}}); err != nil {
+		t.Fatal(err)
+	}
+	installed, err = store.Installed(ctx, job.Plugin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SetEnabled(ctx, installed.Package.ID, installed.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policy.Service(ctx, job, cap, "wechat/http_route", json.RawMessage(`{"route":"deepseek-search","body":{"query":"synthetic search","count":9,"need_content":false},"max_bytes":131072,"timeout_seconds":18}`)); err == nil {
+		t.Fatal("public backend accepted deepseek provider route")
+	}
+}
+
+func TestServiceDeepSeekRouteForwardsLongUnicodeQuery(t *testing.T) {
+	_, p, _, job, cap := deepSeekWebJob(t)
+	ctx := context.Background()
+	query := strings.Repeat("检索", 256) // 512 runes: deliberately beyond the old client-only preference.
+	job.Arguments, _ = json.Marshal(map[string]any{"query": query, "count": 3})
+	policy := servicePluginPolicy{p: p, observed: map[string]bool{}, deepseek: map[string]deepSeekSearchEvidence{}, post: func(_ context.Context, endpoint string, headers map[string]string, body json.RawMessage, maxBytes int64, timeout time.Duration) (json.RawMessage, error) {
+		var bound struct {
+			Query       string `json:"query"`
+			Count       int    `json:"count"`
+			NeedContent bool   `json:"need_content"`
+		}
+		if endpoint != "https://api.deepseek.com/v1/tools/search" || headers["Authorization"] != "Bearer synthetic-search-key" || maxBytes != 128<<10 || timeout != 18*time.Second || json.Unmarshal(body, &bound) != nil || bound.Query != query || bound.Count != 3 || bound.NeedContent {
+			t.Fatalf("long query changed in route binding: endpoint=%q body=%s max=%d timeout=%s", endpoint, body, maxBytes, timeout)
+		}
+		return json.RawMessage(`{"results":[]}`), nil
+	}}
+	route, _ := json.Marshal(map[string]any{"route": "deepseek-search", "body": map[string]any{"query": query, "count": 3, "need_content": false}, "max_bytes": 128 << 10, "timeout_seconds": 18})
+	if _, err := policy.Service(ctx, job, cap, "wechat/http_route", route); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestServicePluginDiscoveryScopeAndUnverifiedResult(t *testing.T) {
 	f, p := trustedAgent(t)

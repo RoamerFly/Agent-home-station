@@ -1,5 +1,22 @@
 {
   "type": "object",
-  "properties": {},
+  "properties": {
+    "search_backend": {
+      "type": "string",
+      "title": "搜索后端",
+      "description": "公共索引不使用密钥；DeepSeek 使用受宿主保护的官方检索接口。不会自动切换后端。",
+      "enum": [
+        "public",
+        "deepseek"
+      ],
+      "default": "public"
+    },
+    "search_key": {
+      "type": "string",
+      "title": "DeepSeek 搜索密钥",
+      "x-secret": true,
+      "x-host-only": true
+    }
+  },
   "additionalProperties": false
 }

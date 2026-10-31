@@ -41,6 +41,14 @@ class PluginMigrationPreviewTests(unittest.TestCase):
         (root / "accounts.json").write_text(json.dumps([{"id": account}]), encoding="utf8")
         return root, secret
 
+    def add_declared_deepseek_backend(self, repo):
+        web = repo / "plugins" / "web-search"
+        manifest = json.loads((web / "plugin.json").read_text(encoding="utf8"))
+        manifest["http_routes"] = [{"id": "deepseek-search", "endpoint": "https://api.deepseek.com/v1/tools/search", "credential": "search_key", "credential_header": "Authorization", "credential_prefix": "Bearer ", "capabilities": ["web.search"]}]
+        (web / "plugin.json").write_text(json.dumps(manifest), encoding="utf8")
+        (web / "config.schema.json").write_text(json.dumps({"properties": {"search_backend": {"enum": ["public", "deepseek"]}, "search_key": {"type": "string", "x-secret": True, "x-host-only": True}}}), encoding="utf8")
+        (web / "capabilities.json").write_text(json.dumps({"capabilities": [{"id": "web.search", "implementation": "ready", "permissions": ["network"]}]}), encoding="utf8")
+
     def test_preview_is_per_account_read_only_and_redacts_secrets(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -61,6 +69,20 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertFalse(web["proposed_enabled"])
             self.assertEqual(handoff["accounts"][0]["secrets"]["speech.tts_key"], secret)
             self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
+    def test_declared_deepseek_backend_preserves_provider_and_maps_secret(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_deepseek_backend(repo)
+            root, secret = self.make_root(base)
+            report, handoff = preview.build_preview(root, repo, "main")
+            web = next(x for x in report["accounts"][0]["plugins"] if x["plugin"] == "web-search")
+            self.assertEqual(web["values"]["search_backend"], "deepseek")
+            self.assertNotIn("official_deepseek_search_adapter_not_declared_by_web-search_plugin", web["required_missing"])
+            self.assertEqual(web["secrets"]["search_key"]["source_field"], "config.json:api_key")
+            self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
+            self.assertEqual(handoff["accounts"][0]["secrets"]["web-search.search_key"], secret)
 
     def test_optional_outputs_are_new_private_files_outside_source(self):
         with tempfile.TemporaryDirectory() as temporary:

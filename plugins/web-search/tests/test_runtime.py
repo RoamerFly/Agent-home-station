@@ -1,6 +1,8 @@
 """Offline parser/pagination regression. No real HTTP or model calls."""
 import base64
 import importlib.util
+import io
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -41,6 +43,44 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(result["fallback_used"])
         self.assertEqual(result["items"][0]["url"], "https://example.test/right")
         self.assertTrue(result["provider_page_exhausted"])
+
+    def test_deepseek_forwards_explicit_count_without_public_fallback(self):
+        calls = []
+        def route(name, body, maximum, timeout):
+            calls.append((name, body, maximum, timeout))
+            return {"results": [{"title": "Official", "url": "https://example.test/official", "summary": "synthetic"}]}
+        result = plugin.search({"query": "music", "count": 7, "limit": 1}, lambda *_: self.fail("public fallback"), route, {"search_backend": "deepseek"})
+        self.assertEqual(result["backend"], "deepseek")
+        self.assertEqual(result["effective_provider_count"], 7)
+        self.assertEqual(calls, [("deepseek-search", {"query": "music", "count": 7, "need_content": False}, 131072, 18)])
+        with self.assertRaisesRegex(ValueError, "invalid_count"):
+            plugin.search({"query": "music", "count": 0}, lambda *_: self.fail("public fallback"), route, {"search_backend": "deepseek"})
+        self.assertEqual(len(calls), 1)
+
+    def test_deepseek_forwards_long_unicode_query_unchanged(self):
+        query = "鲸鱼" * 130
+        captured = []
+        def route(name, body, maximum, timeout):
+            captured.append((name, body, maximum, timeout))
+            return {"results": []}
+        result = plugin.search({"query": query}, lambda *_: self.fail("public fallback"), route, {"search_backend": "deepseek"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(captured[0][1], {"query": query, "count": 6, "need_content": False})
+
+    def test_deepseek_wire_uses_route_and_configuration_only(self):
+        context = {key: "synthetic" for key in ("account", "thread", "requester", "purpose", "request_key")}
+        messages = [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": {"search_backend": "deepseek"}}}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "web.search", "arguments": {"query": "music"}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": "web-route-1", "result": {"results": [{"title": "Official", "url": "https://example.test/official", "summary": "synthetic"}]}},
+        ]
+        output = io.StringIO()
+        plugin.Wire(io.StringIO("".join(json.dumps(message) + "\n" for message in messages)), output).serve()
+        replies = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(replies[1]["method"], "wechat/http_route")
+        self.assertEqual(replies[1]["params"]["route"], "deepseek-search")
+        self.assertEqual(replies[1]["params"]["body"], {"query": "music", "count": 6, "need_content": False})
+        self.assertEqual(replies[2]["result"]["backend"], "deepseek")
 
     def test_no_fake_success_or_file_read(self):
         for url in ("file:///secrets", "https://user:secret@example.test/", "ftp://example.test/"):

@@ -156,7 +156,8 @@ namespace WechatAgent.Desktop {
             var pluginHelper = Path.Combine(resources, "windows-agent-host", "windows_plugin_host.pyw");
             if (File.Exists(pythonw) && File.Exists(pluginHelper)) env["WECHAT_PLUGIN_RUNTIME_CONFIG"] = Deployment.Json.Serialize(new {
                 python = Path.Combine(resources, "windows-python-cli", "python.exe"), pythonw = pythonw,
-                windows_helper = pluginHelper, runtime_roots = new [] { Path.GetDirectoryName(pythonw) }
+                windows_helper = pluginHelper, runtime_roots = new [] { Path.GetDirectoryName(pythonw) },
+                catalog_directory = Path.Combine(d.Workspace, "plugins")
             });
             web = OwnedProcess.Start(d.AdminExe, new [] { "--desktop" }, d.Workspace, env, Path.Combine(d.Root, "logs", "web.log"), job);
         }

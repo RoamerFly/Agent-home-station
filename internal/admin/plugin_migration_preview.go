@@ -1,0 +1,361 @@
+package admin
+
+// This file builds a read-only migration proposal.  It deliberately has no
+// package-store call: opening the store can create its database, while a
+// preview must not alter production state.  The transactional applier receives
+// the unexported ConfigUpdate values only after it rechecks the public hash.
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"wechat-bot/internal/pluginhost"
+	catalog "wechat-bot/plugins"
+)
+
+const pluginMigrationPreviewVersion = 1
+
+type pluginMigrationSecret struct {
+	SourceField string `json:"source_field"`
+	Present     bool   `json:"present"`
+	SHA256      string `json:"sha256,omitempty"`
+}
+type pluginMigrationPackage struct {
+	Version        string   `json:"version,omitempty"`
+	CatalogSHA256  string   `json:"catalog_contract_sha256,omitempty"`
+	Status         string   `json:"status,omitempty"`
+	ExpectedDigest string   `json:"expected_package_digest,omitempty"`
+	Permissions    []string `json:"permissions,omitempty"`
+	deepSeekSearch bool
+}
+type pluginMigrationStep struct {
+	Plugin           string                           `json:"plugin"`
+	Package          pluginMigrationPackage           `json:"package"`
+	Permissions      []string                         `json:"permissions"`
+	ExpectedRevision int                              `json:"expected_config_revision"`
+	LegacyEnabled    bool                             `json:"legacy_enabled"`
+	ProposedEnabled  bool                             `json:"proposed_enabled"`
+	EligibleToEnable bool                             `json:"eligible_to_enable_after_confirmation"`
+	Status           string                           `json:"status"`
+	Values           map[string]json.RawMessage       `json:"values"`
+	Secrets          map[string]pluginMigrationSecret `json:"secrets"`
+	RequiredMissing  []string                         `json:"required_missing"`
+	UnmappedLegacy   []string                         `json:"unmapped_legacy_fields,omitempty"`
+	ProfileID        string                           `json:"profile_id,omitempty"`
+	ApplySourceHash  string                           `json:"apply_source_hash"`
+	// update is host-only. It is never serialized through the management API.
+	update pluginhost.ConfigUpdate
+}
+type pluginMigrationAccount struct {
+	Account      string                `json:"account"`
+	SourceHashes map[string]string     `json:"source_hashes"`
+	SourceErrors map[string]string     `json:"source_errors,omitempty"`
+	Plugins      []pluginMigrationStep `json:"plugins"`
+}
+type pluginMigrationPreview struct {
+	SchemaVersion int                      `json:"schema_version"`
+	Kind          string                   `json:"kind"`
+	ReadOnly      bool                     `json:"read_only"`
+	Accounts      []pluginMigrationAccount `json:"accounts"`
+}
+
+func migrationSourceHash(path string) (string, string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		marker := "missing"
+		if !errors.Is(err, os.ErrNotExist) {
+			marker = "unreadable"
+		}
+		sum := sha256.Sum256([]byte(marker))
+		return hex.EncodeToString(sum[:]), marker
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), ""
+}
+
+func migrationSecret(value, source string) (pluginMigrationSecret, string) {
+	out := pluginMigrationSecret{SourceField: source, Present: value != ""}
+	if value != "" {
+		sum := sha256.Sum256([]byte(value))
+		out.SHA256 = hex.EncodeToString(sum[:])
+	}
+	return out, value
+}
+func migrationValue(value any) json.RawMessage { b, _ := json.Marshal(value); return b }
+
+func migrationEndpoint(root, suffix string) string {
+	root = strings.TrimRight(root, "/")
+	if root == "" {
+		return ""
+	}
+	return root + suffix
+}
+
+func migrationCatalog() map[string]pluginMigrationPackage {
+	items, err := catalog.List()
+	if err != nil {
+		return map[string]pluginMigrationPackage{}
+	}
+	out := make(map[string]pluginMigrationPackage, len(items))
+	for _, item := range items {
+		contract, err := catalog.ContractFor(item.ID)
+		if err != nil {
+			continue
+		}
+		out[item.ID] = pluginMigrationPackage{
+			Version:        contract.Package.Version,
+			CatalogSHA256:  contract.ManifestSHA256,
+			Status:         contract.Package.Status,
+			ExpectedDigest: contract.ManifestSHA256,
+			Permissions:    append([]string(nil), contract.Package.Permissions...),
+			deepSeekSearch: catalogDeclaresDeepSeekSearch(contract),
+		}
+	}
+	return out
+}
+
+// The fixed host route, explicit backend schema, host-only secret and ready
+// capability must all be declared before a preview can map a legacy paid key.
+// This prevents an arbitrary network package from receiving the key and also
+// prevents a silent fallback to a public provider.
+func catalogDeclaresDeepSeekSearch(contract catalog.Contract) bool {
+	p := contract.Package
+	if p.ID != "web-search" || p.Status != "ready" {
+		return false
+	}
+	backend, backendOK := contract.Configuration.Properties["search_backend"]
+	key, keyOK := contract.Configuration.Properties["search_key"]
+	if !backendOK || backend.Type != "string" || !migrationEnumContains(backend.Enum, "deepseek") || !keyOK || key.Type != "string" || !key.Secret || !key.HostOnly {
+		return false
+	}
+	capabilityOK := false
+	for _, capability := range contract.Capabilities {
+		if capability.ID == "web.search" && capability.Implementation == "ready" && migrationStringContains(capability.Permissions, "network") {
+			capabilityOK = true
+			break
+		}
+	}
+	if !capabilityOK {
+		return false
+	}
+	for _, route := range p.HTTPRoutes {
+		if route.ID == "deepseek-search" && route.Endpoint == "https://api.deepseek.com/v1/tools/search" && route.Permission == "network" && route.Credential == "search_key" && route.CredentialHeader == "Authorization" && route.CredentialPrefix == "Bearer " && len(route.Capabilities) == 1 && route.Capabilities[0] == "web.search" {
+			return true
+		}
+	}
+	return false
+}
+
+func migrationEnumContains(values []json.RawMessage, wanted string) bool {
+	for _, value := range values {
+		var item string
+		if json.Unmarshal(value, &item) == nil && item == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func migrationStringContains(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func migrationStep(id string, packages map[string]pluginMigrationPackage, legacyEnabled bool, values map[string]json.RawMessage, secrets map[string]pluginMigrationSecret, update pluginhost.ConfigUpdate, required, unmapped []string, profile string, sources map[string]string) pluginMigrationStep {
+	pkg := packages[id]
+	if pkg.ExpectedDigest == "" {
+		required = append(required, "official_package_digest_unavailable")
+	}
+	if _, err := officialMigrationDirectory(id); err != nil {
+		required = append(required, "official_package_source_unavailable")
+	}
+	if pkg.Status != "ready" {
+		required = append(required, "plugin_package_not_ready")
+	}
+	sort.Strings(required)
+	required = uniqueMigrationStrings(required)
+	sort.Strings(unmapped)
+	unmapped = uniqueMigrationStrings(unmapped)
+	step := pluginMigrationStep{Plugin: id, Package: pkg, Permissions: append([]string(nil), pkg.Permissions...), ExpectedRevision: 0, LegacyEnabled: legacyEnabled, ProposedEnabled: false, Values: values, Secrets: secrets, RequiredMissing: required, UnmappedLegacy: unmapped, ProfileID: profile, update: update}
+	if len(required) == 0 {
+		step.Status = "ready_for_administrator_review"
+		step.EligibleToEnable = legacyEnabled
+	} else {
+		step.Status = "blocked"
+	}
+	canonical := struct {
+		Plugin   string                           `json:"plugin"`
+		Package  pluginMigrationPackage           `json:"package"`
+		Revision int                              `json:"revision"`
+		Sources  map[string]string                `json:"sources"`
+		Values   map[string]json.RawMessage       `json:"values"`
+		Secrets  map[string]pluginMigrationSecret `json:"secrets"`
+	}{id, pkg, step.ExpectedRevision, sources, values, secrets}
+	raw, _ := json.Marshal(canonical)
+	sum := sha256.Sum256(raw)
+	step.ApplySourceHash = hex.EncodeToString(sum[:])
+	return step
+}
+func uniqueMigrationStrings(in []string) []string {
+	out := in[:0]
+	for _, value := range in {
+		if len(out) == 0 || out[len(out)-1] != value {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func officialDeepSeekMigration(c Config) bool {
+	base := strings.TrimRight(c.BaseURL, "/")
+	return c.Provider == "deepseek" && c.APIKey != "" && (base == "https://api.deepseek.com" || base == "https://api.deepseek.com/v1")
+}
+
+func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[string]pluginMigrationPackage) (pluginMigrationAccount, error) {
+	if err := ctx.Err(); err != nil {
+		return pluginMigrationAccount{}, err
+	}
+	paths := map[string]string{"config_json": filepath.Join(m.dir, "config.json"), "speech_config_json": filepath.Join(m.dir, "speech-config.json"), "mcp_config_json": filepath.Join(m.dir, "mcp-config.json"), "channels_config_json": filepath.Join(m.dir, "channels-config.json")}
+	before := map[string]string{}
+	for name, path := range paths {
+		before[name], _ = migrationSourceHash(path)
+	}
+	m.mu.Lock()
+	config, mcp := cloneConfig(m.config), cloneMCP(m.mcp)
+	m.mu.Unlock()
+	speech := m.speechConfig()
+	channels, channelsErr := loadChannelsSettings(m.dir)
+	sources := map[string]string{}
+	sourceErrors := map[string]string{}
+	for name, path := range paths {
+		hash, problem := migrationSourceHash(path)
+		sources[name] = hash
+		if problem != "" {
+			sourceErrors[name] = problem
+		}
+	}
+	for name, hash := range sources {
+		if before[name] != hash {
+			return pluginMigrationAccount{}, errors.New("migration source changed during preview")
+		}
+	}
+	if channelsErr != nil {
+		sourceErrors["channels_config_json"] = "invalid"
+	}
+
+	visionSecret, visionKey := migrationSecret(config.APIKey, "config.json:api_key")
+	asrSecret, speechKey := migrationSecret(speech.Key, "speech-config.json:key")
+	mediaValues := map[string]json.RawMessage{"vision_endpoint": migrationValue(migrationEndpoint(config.BaseURL, "/chat/completions")), "vision_model": migrationValue(config.Model), "vision_backend": migrationValue(config.Provider), "max_tokens": migrationValue(config.MaxTokens), "thinking": migrationValue(config.ThinkingEnabled), "reasoning_effort": migrationValue(config.ReasoningEffort)}
+	mediaUpdate := pluginhost.ConfigUpdate{Values: mediaValues, Secrets: map[string]string{"vision_key": visionKey}}
+	mediaRequired := []string{}
+	visionEnabled := config.APIKey != "" && config.Model != ""
+	if visionEnabled && visionKey == "" {
+		mediaRequired = append(mediaRequired, "vision_key")
+	}
+	asrEnabled := speech.ASREnabled
+	backend := speech.ASRBackend
+	if backend == "" {
+		backend = "bailian"
+	}
+	profile := ""
+	if asrEnabled {
+		switch backend {
+		case "local":
+			mediaValues["asr_backend"] = migrationValue("local")
+			profile = speech.ASRLocalModel
+			if profile == "" {
+				profile = "sensevoice-small-int8"
+			}
+			mediaRequired = append(mediaRequired, "registered_local_asr_profile:"+profile)
+		case "bailian":
+			mediaValues["asr_backend"] = migrationValue("remote")
+			mediaValues["asr_endpoint"] = migrationValue(migrationEndpoint(speech.Endpoint, "/api/v1/services/aigc/multimodal-generation/generation"))
+			mediaValues["asr_model"] = migrationValue(speech.ASRModel)
+			mediaUpdate.Secrets["asr_key"] = speechKey
+			if speechKey == "" {
+				mediaRequired = append(mediaRequired, "asr_key")
+			}
+		case "local_then_bailian":
+			mediaRequired = append(mediaRequired, "asr_backend:legacy_local_then_bailian_requires_explicit_choice")
+		default:
+			mediaRequired = append(mediaRequired, "asr_backend:unsupported_legacy_value")
+		}
+	}
+	media := migrationStep("media-understanding", packages, visionEnabled || asrEnabled, mediaValues, map[string]pluginMigrationSecret{"vision_key": visionSecret, "asr_key": asrSecret}, mediaUpdate, mediaRequired, nil, profile, sources)
+
+	ttsSecret, ttsKey := migrationSecret(speech.Key, "speech-config.json:key")
+	speechValues := map[string]json.RawMessage{"tts_endpoint": migrationValue(migrationEndpoint(speech.Endpoint, "/api/v1/services/audio/tts/SpeechSynthesizer")), "tts_model": migrationValue(speech.TTSModel), "default_voice": migrationValue(speech.Voice), "default_instruction": migrationValue(speech.Instruction)}
+	speechRequired := []string{}
+	if speech.TTSEnabled && ttsKey == "" {
+		speechRequired = append(speechRequired, "tts_key")
+	}
+	speechStep := migrationStep("speech", packages, speech.TTSEnabled, speechValues, map[string]pluginMigrationSecret{"tts_key": ttsSecret}, pluginhost.ConfigUpdate{Values: speechValues, Secrets: map[string]string{"tts_key": ttsKey}}, speechRequired, []string{"asr_*", "music_*", "yue_*", "yue_token"}, "", sources)
+
+	webRequired, webUnmapped := []string{}, []string{}
+	webValues := map[string]json.RawMessage{"legacy_web_search_enabled": migrationValue(mcp.WebSearchEnabled), "legacy_web_fetch_enabled": migrationValue(mcp.WebFetchEnabled)}
+	webSecrets := map[string]pluginMigrationSecret{}
+	webUpdate := pluginhost.ConfigUpdate{Values: webValues}
+	if officialDeepSeekMigration(config) {
+		if packages["web-search"].deepSeekSearch {
+			webValues["search_backend"] = migrationValue("deepseek")
+			webSecret, searchKey := migrationSecret(config.APIKey, "config.json:api_key")
+			webSecrets["search_key"] = webSecret
+			webUpdate.Secrets = map[string]string{"search_key": searchKey}
+		} else {
+			webRequired = append(webRequired, "official_deepseek_search_adapter_not_declared_by_web-search_plugin")
+			webUnmapped = append(webUnmapped, "config.json:base_url", "config.json:api_key", "config.json:provider")
+		}
+	}
+	webEnabled := mcp.Enabled && (mcp.WebSearchEnabled || mcp.WebFetchEnabled)
+	web := migrationStep("web-search", packages, webEnabled, webValues, webSecrets, webUpdate, webRequired, webUnmapped, "", sources)
+
+	cookieSecret, cookie := migrationSecret(channels.Cookie, "channels-config.json:cookie")
+	assistantSecret, assistant := migrationSecret(channels.AssistantCookie, "channels-config.json:assistant_cookie")
+	shareRequired := []string{}
+	if channels.Enabled && cookie == "" && assistant == "" {
+		shareRequired = append(shareRequired, "yuanbao_cookie_or_assistant_cookie")
+	}
+	shareUnmapped := []string{}
+	if channels.ObjectBridge != "" {
+		shareUnmapped = append(shareUnmapped, "channels-config.json:object_bridge_url")
+	}
+	share := migrationStep("share-reader", packages, channels.Enabled, map[string]json.RawMessage{}, map[string]pluginMigrationSecret{"yuanbao_cookie": cookieSecret, "assistant_cookie": assistantSecret}, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{}, Secrets: map[string]string{"yuanbao_cookie": cookie, "assistant_cookie": assistant}}, shareRequired, shareUnmapped, "", sources)
+
+	return pluginMigrationAccount{Account: m.native.Account(), SourceHashes: sources, SourceErrors: sourceErrors, Plugins: []pluginMigrationStep{media, speechStep, web, share}}, nil
+}
+
+func (m *Manager) pluginMigrationPreview(ctx context.Context) (pluginMigrationPreview, error) {
+	packages := migrationCatalog()
+	managers := []*Manager{m}
+	if registry := m.accounts; registry != nil {
+		registry.mu.Lock()
+		managers = managers[:0]
+		for _, item := range registry.items {
+			if item != nil && !item.record.Removed && item.manager != nil {
+				managers = append(managers, item.manager)
+			}
+		}
+		registry.mu.Unlock()
+	}
+	sort.Slice(managers, func(i, j int) bool { return managers[i].native.Account() < managers[j].native.Account() })
+	out := pluginMigrationPreview{SchemaVersion: pluginMigrationPreviewVersion, Kind: "plugin_migration_preview", ReadOnly: true}
+	for _, manager := range managers {
+		item, err := manager.pluginMigrationPreviewFor(ctx, packages)
+		if err != nil {
+			return pluginMigrationPreview{}, err
+		}
+		out.Accounts = append(out.Accounts, item)
+	}
+	return out, nil
+}

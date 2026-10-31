@@ -215,6 +215,12 @@ func (s *Store) Configuration(ctx context.Context, id string) (Configuration, er
 	return c, nil
 }
 func (s *Store) SaveConfiguration(ctx context.Context, id string, input ConfigUpdate) (Configuration, error) {
+	return s.saveConfiguration(ctx, id, input, nil)
+}
+
+// saveConfiguration keeps the normal public API semantics while allowing a
+// host-internal lifecycle transition to join the exact same SQLite commit.
+func (s *Store) saveConfiguration(ctx context.Context, id string, input ConfigUpdate, onCommit func(*sql.Tx, int) error) (Configuration, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item, err := s.Installed(ctx, id)
@@ -320,6 +326,11 @@ func (s *Store) SaveConfiguration(ctx context.Context, id string, input ConfigUp
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO configuration_versions(plugin,revision,values_json,secrets_json) VALUES(?,?,?,?)`, id, revision, rawValues, rawSecrets); err != nil {
 		return Configuration{}, err
+	}
+	if onCommit != nil {
+		if err = onCommit(tx, revision); err != nil {
+			return Configuration{}, err
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return Configuration{}, err

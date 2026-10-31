@@ -29,6 +29,7 @@ func (m *Manager) packageStore() (*pluginhost.Store, error) {
 	return store, nil
 }
 func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
+	s.pluginMigrationRoutes(mux)
 	s.pluginRuntimeRoute(mux)
 	mux.HandleFunc("GET /api/plugin-packages/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		store, err := s.manager.packageStore()

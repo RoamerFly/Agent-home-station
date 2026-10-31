@@ -15,6 +15,20 @@ import (
 	"wechat-bot/internal/pluginruntime"
 )
 
+func runtimeDeploymentOptions() (pluginruntime.Options, error) {
+	var options pluginruntime.Options
+	raw := os.Getenv("WECHAT_PLUGIN_RUNTIME_CONFIG")
+	if raw == "" {
+		return options, nil
+	}
+	d := json.NewDecoder(bytes.NewBufferString(raw))
+	d.DisallowUnknownFields()
+	if d.Decode(&options) != nil {
+		return options, errors.New("plugin runtime deployment configuration invalid")
+	}
+	return options, nil
+}
+
 func (m *Manager) installedPluginRuntime() (*pluginruntime.Controller, bool, error) {
 	store, err := m.packageStore()
 	if err != nil {
@@ -28,14 +42,9 @@ func (m *Manager) installedPluginRuntime() (*pluginruntime.Controller, bool, err
 	if m.packageRuntime != nil {
 		return m.packageRuntime, m.packageRuntimeReady, nil
 	}
-	var options pluginruntime.Options
-	raw := os.Getenv("WECHAT_PLUGIN_RUNTIME_CONFIG")
-	if raw != "" {
-		d := json.NewDecoder(bytes.NewBufferString(raw))
-		d.DisallowUnknownFields()
-		if d.Decode(&options) != nil {
-			return nil, false, errors.New("plugin runtime deployment configuration invalid")
-		}
+	options, err := runtimeDeploymentOptions()
+	if err != nil {
+		return nil, false, err
 	}
 	// Local ASR paths are resolved from the administrator-installed public
 	// registration at launch time. They are never accepted from deployment JSON,

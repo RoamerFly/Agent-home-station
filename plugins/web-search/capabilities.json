@@ -4,7 +4,7 @@
     {
       "id": "web.search",
       "implementation": "ready",
-      "description": "搜索公共网页，默认8条，可指定页大小；不相关时回退公共索引。",
+      "description": "按配置搜索公共索引或 DeepSeek 官方检索；默认请求6个候选，可指定候选数与返回页大小。请求参数不会被静默压缩，也不会自动切换后端。",
       "permissions": [
         "network"
       ],
@@ -14,6 +14,10 @@
           "query": {
             "type": "string",
             "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
           },
           "offset": {
             "type": "integer",

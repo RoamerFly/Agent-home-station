@@ -106,12 +106,13 @@ def fetch(args, get):
             "complete": end == len(text), "untrusted_external_content": True}
 
 
-def search(args, get):
-    if set(args) - {"query", "offset", "limit", "max_bytes", "timeout_seconds"}:
+def public_search(args, get):
+    if set(args) - {"query", "count", "offset", "limit", "max_bytes", "timeout_seconds"}:
         raise ValueError("invalid_search_arguments")
     query = args.get("query")
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query_required")
+    count = integer(args, "count", 6, 1)
     url = "https://www.bing.com/search?" + urllib.parse.urlencode({"q": query.strip(), "format": "rss"})
     page, failure = read_page(get, url, args)
     items, seen = [], set()
@@ -147,14 +148,62 @@ def search(args, get):
         items = [item for item in parser.results if relevant(query, item)]
     if not items:
         return {"ok": False, "error": "search_no_relevant_results"}
+    items = items[:count]
     offset, limit = integer(args, "offset", 0, 0), integer(args, "limit", 8, 1)
     end = min(len(items), offset + limit)
     if offset > len(items):
         raise ValueError("offset_outside_results")
-    return {"ok": True, "query": query, "source": source, "items": items[offset:end],
+    return {"ok": True, "backend": "public", "query": query, "source": source, "items": items[offset:end],
             "fallback_used": fallback,
-            "requested_limit": limit, "provider_items": len(items), "next_offset": end if end < len(items) else None,
+            "requested_count": count, "effective_provider_count": len(items), "requested_limit": limit, "provider_items": len(items), "next_offset": end if end < len(items) else None,
             "provider_page_exhausted": end == len(items), "untrusted_external_content": True}
+
+
+def deepseek_search(args, route):
+    if set(args) - {"query", "count", "offset", "limit", "max_bytes", "timeout_seconds"}:
+        raise ValueError("invalid_search_arguments")
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query_required")
+    count = integer(args, "count", 6, 1)
+    timeout = integer(args, "timeout_seconds", 18, 1)
+    maximum = integer(args, "max_bytes", 128 * 1024, 1)
+    reply = route("deepseek-search", {"query": query.strip(), "count": count, "need_content": False}, maximum, timeout)
+    if not isinstance(reply, dict) or set(reply) - {"results"} or not isinstance(reply.get("results"), list):
+        raise ValueError("deepseek_search_response_invalid")
+    items, seen = [], set()
+    for result in reply["results"]:
+        if not isinstance(result, dict) or set(result) - {"title", "url", "summary", "snippet"}:
+            raise ValueError("deepseek_search_response_invalid")
+        try:
+            url = public_url(result.get("url", ""))
+        except ValueError:
+            continue
+        if url in seen:
+            continue
+        title, summary = result.get("title", ""), result.get("summary", result.get("snippet", ""))
+        if not isinstance(title, str) or not isinstance(summary, str):
+            raise ValueError("deepseek_search_response_invalid")
+        seen.add(url)
+        items.append({"url": url, "title": clean(title), "summary": clean(summary)})
+    offset, limit = integer(args, "offset", 0, 0), integer(args, "limit", 8, 1)
+    if offset > len(items):
+        raise ValueError("offset_outside_results")
+    end = min(len(items), offset + limit)
+    return {"ok": True, "backend": "deepseek", "query": query, "items": items[offset:end], "fallback_used": False,
+            "requested_count": count, "effective_provider_count": count, "requested_limit": limit, "provider_items": len(items),
+            "next_offset": end if end < len(items) else None, "provider_page_exhausted": end == len(items), "untrusted_external_content": True}
+
+
+def search(args, get, route=None, configuration=None):
+    backend = (configuration or {}).get("search_backend", "public")
+    if backend == "public":
+        return public_search(args, get)
+    if backend == "deepseek":
+        if route is None:
+            raise ValueError("deepseek_route_unavailable")
+        return deepseek_search(args, route)
+    raise ValueError("search_backend_not_configured")
 
 
 def relevant(query, item):
@@ -203,7 +252,7 @@ class SearchText(HTMLParser):
 
 class Wire:
     def __init__(self, incoming, outgoing):
-        self.incoming, self.outgoing, self.seq = incoming, outgoing, 0
+        self.incoming, self.outgoing, self.seq, self.configuration = incoming, outgoing, 0, {}
 
     def read(self):
         line = self.incoming.readline(FRAME_LIMIT + 1)
@@ -232,6 +281,20 @@ class Wire:
             return {"ok": False, "error": "host_service_denied_or_failed"}
         return reply["result"]
 
+    def route(self, route, body, maximum, timeout):
+        self.seq += 1
+        key = "web-route-" + str(self.seq)
+        self.write({"jsonrpc": "2.0", "id": key, "method": "wechat/http_route",
+                    "params": {"route": route, "body": body, "max_bytes": maximum, "timeout_seconds": timeout}})
+        reply = self.read()
+        if reply.get("jsonrpc") != "2.0" or reply.get("id") != key:
+            raise ValueError("host_response_identity_mismatch")
+        if "error" in reply:
+            raise ValueError("host_service_denied_or_failed")
+        if not isinstance(reply.get("result"), dict):
+            raise ValueError("invalid_host_response")
+        return reply["result"]
+
     def serve(self):
         initialized = False
         while True:
@@ -247,8 +310,11 @@ class Wire:
                     raise ValueError("invalid_protocol")
                 method = req.get("method")
                 if method == "initialize":
+                    self.configuration = req.get("params", {}).get("_meta", {}).get("wechat/configuration", {}).get("values", {})
+                    if not isinstance(self.configuration, dict):
+                        raise ValueError("invalid_configuration")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.2.0"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.2.1"}}
                 elif method == "ping" and initialized:
                     pass
                 elif method == "tools/call" and initialized:
@@ -256,10 +322,10 @@ class Wire:
                     context = params.get("_meta", {}).get("wechat/context", {})
                     if not all(context.get(k) for k in ("account", "thread", "requester", "purpose", "request_key")):
                         raise ValueError("host_context_required")
-                    action = {"web.search": search, "web.read": fetch}.get(params["name"])
+                    action = {"web.search": "search", "web.read": "read"}.get(params["name"])
                     if not action or not isinstance(params.get("arguments"), dict):
                         raise ValueError("unknown_capability_or_arguments")
-                    result = action(params["arguments"], self.get)
+                    result = search(params["arguments"], self.get, self.route, self.configuration) if action == "search" else fetch(params["arguments"], self.get)
                 else:
                     raise ValueError("method_unavailable")
             except (ValueError, KeyError, TypeError, LookupError, ET.ParseError) as error:

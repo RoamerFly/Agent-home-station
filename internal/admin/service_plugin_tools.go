@@ -8,6 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"wechat-bot/internal/companion"
@@ -75,7 +79,7 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 	if err != nil {
 		return "", err
 	}
-	policy := servicePluginPolicy{p: p, observed: map[string]bool{}}
+	policy := servicePluginPolicy{p: p, observed: map[string]bool{}, deepseek: map[string]deepSeekSearchEvidence{}}
 	var result any
 	switch name {
 	case "service_plugins":
@@ -210,6 +214,52 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 type servicePluginPolicy struct {
 	p        *permittedTools
 	observed map[string]bool
+	// deepseek is private, per-invocation evidence produced by the fixed host
+	// route. A plugin result has to be a faithful page of this evidence; its
+	// claimed URL/items are never enough on their own.
+	deepseek map[string]deepSeekSearchEvidence
+	post     pluginruntime.RouteTransport
+}
+
+type deepSeekSearchItem struct {
+	URL     string
+	Title   string
+	Summary string
+}
+
+type deepSeekSearchEvidence struct {
+	Query string
+	Items []deepSeekSearchItem
+}
+
+type serviceWebItem struct {
+	URL     string `json:"url"`
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+}
+
+type serviceWebResult struct {
+	OK                 bool             `json:"ok"`
+	Backend            string           `json:"backend"`
+	Untrusted          bool             `json:"untrusted_external_content"`
+	URL                string           `json:"url"`
+	Source             string           `json:"source"`
+	Query              string           `json:"query"`
+	Title              string           `json:"title"`
+	Text               string           `json:"text"`
+	SHA                string           `json:"sha256"`
+	Offset             int              `json:"offset"`
+	RequestedLimit     int              `json:"requested_limit"`
+	ReturnedCharacters int              `json:"returned_characters"`
+	TotalCharacters    int              `json:"total_characters"`
+	NextOffset         *int             `json:"next_offset"`
+	Complete           bool             `json:"complete"`
+	Items              []serviceWebItem `json:"items"`
+	ProviderItems      int              `json:"provider_items"`
+	RequestedCount     int              `json:"requested_count"`
+	EffectiveCount     int              `json:"effective_provider_count"`
+	ProviderExhausted  bool             `json:"provider_page_exhausted"`
+	Fallback           bool             `json:"fallback_used"`
 }
 
 func (s servicePluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
@@ -304,11 +354,173 @@ func (p *permittedTools) validateServiceOutput(ctx context.Context, name, result
 	}
 	return (servicePluginPolicy{p: p}).Check(ctx, j, pluginhost.Capability{})
 }
+
+// deepSeekConfiguration is intentionally separate from the generic public-web
+// route. Selecting a provider is an administrator configuration decision: a
+// configured chat/model credential is never repurposed as a search credential.
+func (s servicePluginPolicy) deepSeekConfiguration(ctx context.Context, j pluginhost.Job) error {
+	store, err := s.p.manager.packageStore()
+	if err != nil {
+		return err
+	}
+	config, err := store.ConfigurationForExecution(ctx, j.Plugin)
+	if err != nil || strconv.Itoa(config.Revision) != j.ConfigRevision {
+		return errors.New("deepseek search configuration changed")
+	}
+	var backend string
+	if json.Unmarshal(config.Values["search_backend"], &backend) != nil || backend != "deepseek" {
+		return errors.New("deepseek search backend not selected")
+	}
+	var key string
+	if json.Unmarshal(config.Values["search_key"], &key) != nil || strings.TrimSpace(key) == "" {
+		return errors.New("deepseek search credential unavailable")
+	}
+	return nil
+}
+
+func strictServicePluginJSON(raw json.RawMessage, target any) error {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(target); err != nil {
+		return err
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		return errors.New("trailing JSON data")
+	}
+	return nil
+}
+
+func publicSearchURL(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+		return "", false
+	}
+	return raw, true
+}
+
+func cleanSearchText(text string) string { return strings.Join(strings.Fields(text), " ") }
+
+func deepSeekEvidenceFromReply(query string, raw json.RawMessage) (deepSeekSearchEvidence, error) {
+	var reply struct {
+		Results []struct {
+			Title   string  `json:"title"`
+			URL     string  `json:"url"`
+			Summary *string `json:"summary"`
+			Snippet *string `json:"snippet"`
+		} `json:"results"`
+	}
+	if err := strictServicePluginJSON(raw, &reply); err != nil {
+		return deepSeekSearchEvidence{}, errors.New("deepseek search response invalid")
+	}
+	items := make([]deepSeekSearchItem, 0, len(reply.Results))
+	seen := map[string]bool{}
+	for _, result := range reply.Results {
+		link, ok := publicSearchURL(result.URL)
+		if !ok || seen[link] {
+			continue
+		}
+		// This is deliberately the same normalization as the official runtime.
+		// Provider data remains untrusted and is never treated as a host fact.
+		summary := ""
+		if result.Summary != nil {
+			summary = *result.Summary
+		} else if result.Snippet != nil {
+			summary = *result.Snippet
+		}
+		seen[link] = true
+		items = append(items, deepSeekSearchItem{URL: link, Title: cleanSearchText(result.Title), Summary: cleanSearchText(summary)})
+	}
+	return deepSeekSearchEvidence{Query: query, Items: items}, nil
+}
+
+func (s servicePluginPolicy) routeTransport() pluginruntime.RouteTransport {
+	if s.post != nil {
+		return s.post
+	}
+	return mcptools.PostPluginRoute
+}
+
+func (s servicePluginPolicy) deepSeekRoute(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (json.RawMessage, error) {
+	if s.deepseek == nil {
+		return nil, errors.New("deepseek evidence sink unavailable")
+	}
+	if err := s.deepSeekConfiguration(ctx, j); err != nil {
+		return nil, err
+	}
+	store, err := s.p.manager.packageStore()
+	if err != nil {
+		return nil, err
+	}
+	var args struct {
+		Query   string `json:"query"`
+		Count   *int   `json:"count"`
+		Offset  *int   `json:"offset"`
+		Limit   *int   `json:"limit"`
+		Max     *int64 `json:"max_bytes"`
+		Timeout *int64 `json:"timeout_seconds"`
+	}
+	if strictServicePluginJSON(j.Arguments, &args) != nil || len(strings.TrimSpace(args.Query)) == 0 || args.Count != nil && *args.Count < 1 || args.Max != nil && *args.Max < 1 || args.Timeout != nil && *args.Timeout < 1 {
+		return nil, errors.New("deepseek request arguments invalid")
+	}
+	var envelope struct {
+		Route    string          `json:"route"`
+		Body     json.RawMessage `json:"body"`
+		MaxBytes int64           `json:"max_bytes"`
+		Timeout  int64           `json:"timeout_seconds"`
+	}
+	if strictServicePluginJSON(raw, &envelope) != nil {
+		return nil, errors.New("deepseek route arguments invalid")
+	}
+	expectedMax, expectedTimeout := int64(128<<10), int64(18)
+	if args.Max != nil {
+		expectedMax = *args.Max
+	}
+	if args.Timeout != nil {
+		expectedTimeout = *args.Timeout
+	}
+	if envelope.MaxBytes != expectedMax || envelope.Timeout != expectedTimeout {
+		return nil, errors.New("deepseek route limits changed")
+	}
+	return pluginruntime.ProxyHTTPRoute(ctx, store, j, cap, raw, func(route string, body json.RawMessage) error {
+		if route != "deepseek-search" {
+			return errors.New("deepseek route unavailable")
+		}
+		var fields map[string]json.RawMessage
+		if strictServicePluginJSON(body, &fields) != nil || len(fields) != 3 || fields["query"] == nil || fields["count"] == nil || fields["need_content"] == nil {
+			return errors.New("deepseek route body invalid")
+		}
+		var bound struct {
+			Query       string `json:"query"`
+			Count       int    `json:"count"`
+			NeedContent bool   `json:"need_content"`
+		}
+		if strictServicePluginJSON(body, &bound) != nil || bound.Query != strings.TrimSpace(args.Query) || len([]rune(bound.Query)) == 0 || bound.Count < 1 || bound.NeedContent || args.Count != nil && bound.Count != *args.Count {
+			return errors.New("deepseek route source binding changed")
+		}
+		return nil
+	}, func(ctx context.Context, endpoint string, headers map[string]string, body json.RawMessage, maxBytes int64, timeout time.Duration) (json.RawMessage, error) {
+		reply, err := s.routeTransport()(ctx, endpoint, headers, body, maxBytes, timeout)
+		if err != nil {
+			return nil, err
+		}
+		// The runtime returns the original query in its result while its provider
+		// body uses the trimmed form. Retain the former for result binding.
+		evidence, err := deepSeekEvidenceFromReply(args.Query, reply)
+		if err != nil {
+			return nil, err
+		}
+		s.deepseek[j.ID] = evidence
+		return reply, nil
+	})
+}
 func (s servicePluginPolicy) Validate(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
 	// Only text web observations are connected in this migration stage. Media,
 	// async jobs and arbitrary plugin result envelopes need dedicated validators.
 	if j.Plugin != "web-search" || (j.Tool != "web.search" && j.Tool != "web.read") || cap.Async {
 		return pluginruntime.VerifiedResult{}, errors.New("service result adapter unavailable")
+	}
+	if err := s.Check(ctx, j, cap); err != nil {
+		return pluginruntime.VerifiedResult{}, err
 	}
 	var failure struct {
 		OK    *bool  `json:"ok"`
@@ -328,50 +540,92 @@ func (s servicePluginPolicy) Validate(ctx context.Context, j pluginhost.Job, cap
 		}
 		return pluginruntime.VerifiedResult{Failed: true, Result: raw}, nil
 	}
-	var result struct {
-		OK                 bool   `json:"ok"`
-		Untrusted          bool   `json:"untrusted_external_content"`
-		URL                string `json:"url"`
-		Source             string `json:"source"`
-		Query              string `json:"query"`
-		Title              string `json:"title"`
-		Text               string `json:"text"`
-		SHA                string `json:"sha256"`
-		Offset             int    `json:"offset"`
-		RequestedLimit     int    `json:"requested_limit"`
-		ReturnedCharacters int    `json:"returned_characters"`
-		TotalCharacters    int    `json:"total_characters"`
-		NextOffset         *int   `json:"next_offset"`
-		Complete           bool   `json:"complete"`
-		Items              []struct {
-			URL     string `json:"url"`
-			Title   string `json:"title"`
-			Summary string `json:"summary"`
-		} `json:"items"`
-		ProviderItems     int  `json:"provider_items"`
-		ProviderExhausted bool `json:"provider_page_exhausted"`
-		Fallback          bool `json:"fallback_used"`
-	}
+	var result serviceWebResult
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if d.Decode(&result) != nil || !result.OK || !result.Untrusted {
 		return pluginruntime.VerifiedResult{}, errors.New("public content reading failed")
 	}
-	if j.Tool == "web.read" && !s.observed[result.URL] || j.Tool == "web.search" && !s.observed[result.Source] {
+	if j.Tool == "web.read" && !s.observed[result.URL] {
 		return pluginruntime.VerifiedResult{}, errors.New("plugin result source not observed")
 	}
 	if j.Tool == "web.search" {
 		var args struct {
-			Query string `json:"query"`
+			Query   string `json:"query"`
+			Count   *int   `json:"count"`
+			Offset  *int   `json:"offset"`
+			Limit   *int   `json:"limit"`
+			Max     *int64 `json:"max_bytes"`
+			Timeout *int64 `json:"timeout_seconds"`
 		}
-		if json.Unmarshal(j.Arguments, &args) != nil || args.Query != result.Query {
+		if strictServicePluginJSON(j.Arguments, &args) != nil || args.Query != result.Query {
 			return pluginruntime.VerifiedResult{}, errors.New("plugin query binding changed")
+		}
+		if result.Backend == "deepseek" {
+			if err := s.validateDeepSeekResult(ctx, j, args.Query, args.Count, args.Offset, args.Limit, result); err != nil {
+				return pluginruntime.VerifiedResult{}, err
+			}
+		} else if result.Backend != "public" || !s.observed[result.Source] {
+			return pluginruntime.VerifiedResult{}, errors.New("plugin result source not observed")
 		}
 	}
 	return pluginruntime.VerifiedResult{Result: append(json.RawMessage(nil), raw...)}, nil
 }
+
+func (s servicePluginPolicy) validateDeepSeekResult(ctx context.Context, j pluginhost.Job, query string, count, offset, limit *int, result serviceWebResult) error {
+	if err := s.deepSeekConfiguration(ctx, j); err != nil {
+		return err
+	}
+	evidence, ok := s.deepseek[j.ID]
+	if !ok || evidence.Query != query || result.Fallback || result.RequestedCount < 1 || result.EffectiveCount != result.RequestedCount {
+		return errors.New("deepseek result is not backed by host response")
+	}
+	if count != nil && *count != result.RequestedCount {
+		return errors.New("deepseek count binding changed")
+	}
+	start, page := 0, 8
+	if offset != nil {
+		start = *offset
+	}
+	if limit != nil {
+		page = *limit
+	}
+	if start < 0 || page < 1 || start > len(evidence.Items) || result.RequestedLimit != page || result.ProviderItems != len(evidence.Items) {
+		return errors.New("deepseek result page binding changed")
+	}
+	end := start + page
+	if end > len(evidence.Items) {
+		end = len(evidence.Items)
+	}
+	if len(result.Items) != end-start || result.ProviderExhausted != (end == len(evidence.Items)) {
+		return errors.New("deepseek result page changed")
+	}
+	if end < len(evidence.Items) {
+		if result.NextOffset == nil || *result.NextOffset != end {
+			return errors.New("deepseek continuation changed")
+		}
+	} else if result.NextOffset != nil {
+		return errors.New("deepseek unexpected continuation")
+	}
+	for n, item := range result.Items {
+		want := evidence.Items[start+n]
+		if item.URL != want.URL || item.Title != want.Title || item.Summary != want.Summary {
+			return errors.New("deepseek result item not observed")
+		}
+	}
+	return nil
+}
 func (s servicePluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, method string, raw json.RawMessage) (json.RawMessage, error) {
-	if method != "wechat/http_read" {
+	if err := s.Check(ctx, j, cap); err != nil {
+		return nil, err
+	}
+	if method == "wechat/http_route" {
+		if j.Tool != "web.search" {
+			return nil, errors.New("host service unavailable")
+		}
+		return s.deepSeekRoute(ctx, j, cap, raw)
+	}
+	if method != "wechat/http_read" || j.Tool != "web.read" {
 		return nil, errors.New("host service unavailable")
 	}
 	var in struct {
