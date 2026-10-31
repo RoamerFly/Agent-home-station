@@ -60,6 +60,15 @@ func (c *Controller) Invoke(ctx context.Context, req CallRequest, policy CallPol
 	if !i.Enabled || i.Removed || c.host.Status(req.Plugin).State != "running" {
 		return out, errors.New("plugin not running")
 	}
+	// A dependency can be replaced in persistent state after this root was
+	// started. Re-read the complete graph before reserving or dispatching a
+	// tool so an incompatible upgrade cannot keep using the old live session.
+	if _, err = c.startPlan(ctx, req.Plugin, i.Revision); err != nil {
+		return out, err
+	}
+	if err = c.loadedGraphCurrent(ctx, req.Plugin); err != nil {
+		return out, err
+	}
 	caps, err := c.store.Capabilities(ctx, req.Plugin)
 	if err != nil {
 		return out, err

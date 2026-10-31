@@ -1,10 +1,45 @@
 package pluginhost
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestDependencyConstraintContract(t *testing.T) {
+	for _, tc := range []struct {
+		requirement, version string
+		want                 bool
+	}{
+		{"", "opaque-legacy", true}, {"^1.2.0", "1.9.3", true}, {"^1.2.0", "2.0.0", false},
+		{"~1.2.0", "1.2.8", true}, {"~1.2.0", "1.3.0", false}, {">=1.2.0 <2.0.0", "1.2.0", true},
+		{">=1.2.0 <2.0.0", "2.0.0", false}, {"1.2", "1.2.0", false}, {"^0.1.1", "0.1.9", true},
+		{"^0.1.1", "0.2.0", false}, {"^0.0.1", "0.0.2", false}, {"^0.0.1", "0.0.1", true},
+		{"^1.2.3", "+1.2.3", false}, {" ", "1.2.3", false},
+	} {
+		if got := DependencyCompatible(tc.requirement, tc.version); got != tc.want {
+			t.Fatalf("%q against %q = %v", tc.requirement, tc.version, got)
+		}
+	}
+	var legacy Package
+	if err := json.Unmarshal([]byte(`{"dependencies":["media-understanding"]}`), &legacy); err != nil || len(legacy.Dependencies) != 1 || legacy.Dependencies[0].ID != "media-understanding" {
+		t.Fatal(err, legacy.Dependencies)
+	}
+	var fixed Package
+	if err := json.Unmarshal([]byte(`{"dependencies":[{"id":"media-understanding","version":"^1.2.0"}]}`), &fixed); err != nil || fixed.Dependencies[0].Version != "^1.2.0" {
+		t.Fatal(err, fixed.Dependencies)
+	}
+	if validDependencyConstraint("1.2") || validDependencyConstraint(" ") || !validDependencyConstraint("^1.2.0") {
+		t.Fatal("constraint validation")
+	}
+	for _, raw := range []string{`{"dependencies":[{"id":"media-understanding","version":"^1.2.0","surprise":true}]}`, `{"dependencies":[{"id":"media-understanding","version":"^1.2.0"},"legacy"]}`} {
+		var p Package
+		if err := json.Unmarshal([]byte(raw), &p); err == nil {
+			t.Fatal("ambiguous dependency declaration accepted", raw)
+		}
+	}
+}
 
 func TestOfficialContracts(t *testing.T) {
 	dirs, err := os.ReadDir("../../plugins")

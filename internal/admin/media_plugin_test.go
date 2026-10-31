@@ -12,6 +12,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -48,8 +49,15 @@ func mediaPolicyFixture(t *testing.T, remember bool) (*webFixture, *bindingChann
 	if err = json.Unmarshal(raw, &caps); err != nil {
 		t.Fatal(err)
 	}
-	caps.Capabilities = caps.Capabilities[:1]
+	// Keep declarations for every manifest route. Only the visual capability is
+	// promoted in this fixture; ASR is separately exercised with synthetic host
+	// transport and never a real provider.
 	caps.Capabilities[0].Implementation, caps.Capabilities[0].Discoverable = "ready", true
+	for i := range caps.Capabilities {
+		if caps.Capabilities[i].ID == "media.transcribe" {
+			caps.Capabilities[i].Implementation, caps.Capabilities[i].Discoverable = "ready", true
+		}
+	}
 	raw, _ = json.Marshal(caps)
 	if err = os.WriteFile(filepath.Join(dir, "capabilities.json"), raw, 0600); err != nil {
 		t.Fatal(err)
@@ -82,6 +90,7 @@ func mediaPolicyFixture(t *testing.T, remember bool) (*webFixture, *bindingChann
 	f.manager.native = n
 	ctx := t.Context()
 	if remember {
+		f.manager.config.Companion.Permissions.Remember = true
 		original := ""
 		in := companion.Input{Channel: "wechat", Account: "test", Thread: n.msg.ThreadID, Sender: n.msg.SenderID, TraceID: n.msg.ID, MessageTime: n.msg.CreatedAt, OriginalText: &original, Text: "synthetic image", Source: &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: n.msg.ID, ServerID: n.msg.ServerID, Account: "test", Thread: n.msg.ThreadID, Sender: n.msg.SenderID, MessageType: 3, OccurredAt: n.msg.CreatedAt, Revision: 1}}
 		if err = f.manager.memory.Observe(in, f.manager.config.Companion, time.Now()); err != nil {
@@ -274,6 +283,219 @@ func TestMediaPluginFailedTransportNeverRetries(t *testing.T) {
 	}
 	if calls != 1 || f.manager.billing.data.Total.Requests != 1 {
 		t.Fatal("unknown outcome retried or uncounted", calls)
+	}
+}
+
+func syntheticWAV() []byte {
+	// Enough of a PCM WAV header for the transport gate. The adapter does not
+	// pretend this proves audio decoding or provider recognition.
+	b := make([]byte, 44)
+	copy(b[0:], "RIFF")
+	copy(b[8:], "WAVEfmt ")
+	b[16], b[20], b[22], b[24], b[25], b[32], b[34] = 16, 1, 1, 0x80, 0x3e, 2, 16
+	copy(b[36:], "data")
+	return b
+}
+
+func transcriptionFixture(t *testing.T, remember bool) (*webFixture, *bindingChannelsNative, *mediaTranscriptionPolicy, context.Context) {
+	t.Helper()
+	f, n, visual, ctx := mediaPolicyFixture(t, false)
+	n.msg.ID, n.msg.Type, n.msg.Body = "synthetic-voice", 34, ""
+	if remember {
+		f.manager.config.Companion.Permissions.Remember = true
+		original := ""
+		in := companion.Input{Channel: "wechat", Account: "test", Thread: n.msg.ThreadID, Sender: n.msg.SenderID, TraceID: n.msg.ID, MessageTime: n.msg.CreatedAt, OriginalText: &original, Text: "synthetic voice", Source: &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: n.msg.ID, ServerID: n.msg.ServerID, Account: "test", Thread: n.msg.ThreadID, Sender: n.msg.SenderID, MessageType: 34, OccurredAt: n.msg.CreatedAt, Revision: 1}}
+		if err := f.manager.memory.Observe(in, f.manager.config.Companion, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		ref, ok := f.manager.memory.SourceForInput(in)
+		if !ok {
+			t.Fatal("missing voice source")
+		}
+		ctx = companion.WithMediaSource(t.Context(), *ref)
+	}
+	f.manager.speech.ASREnabled = true
+	i, err := visual.store.Installed(ctx, "media-understanding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	i, err = visual.store.SetEnabled(ctx, i.Package.ID, i.Revision, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := visual.store.Configuration(ctx, i.Package.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = visual.store.SaveConfiguration(ctx, i.Package.ID, pluginhost.ConfigUpdate{Revision: cfg.Revision, Values: map[string]json.RawMessage{
+		"vision_endpoint": json.RawMessage(`"https://provider.example/chat/completions"`),
+		"vision_model":    json.RawMessage(`"synthetic-model"`),
+		"asr_endpoint":    json.RawMessage(`"https://provider.example/api/v1/services/aigc/multimodal-generation/generation"`),
+		"asr_model":       json.RawMessage(`"synthetic-asr"`),
+	}, Secrets: map[string]string{"asr_key": "synthetic-asr-key"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = visual.store.SetEnabled(ctx, i.Package.ID, i.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.manager.newMediaTranscriptionPolicy(ctx, n.msg, syntheticWAV())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, n, p, ctx
+}
+
+func transcriptionJob(p *mediaTranscriptionPolicy) (pluginhost.Job, pluginhost.Capability) {
+	i, _ := p.store.Installed(context.Background(), "media-understanding")
+	return pluginhost.Job{Plugin: i.Package.ID, Version: i.Package.Version, PackageDigest: i.Digest, ConfigRevision: strconv.Itoa(p.configRevision), Tool: "media.transcribe", Context: p.invocation()}, pluginhost.Capability{ID: "media.transcribe", Permissions: []string{"artifact.read", "model.invoke"}}
+}
+
+func transcriptionRequest(p *mediaTranscriptionPolicy) json.RawMessage {
+	body := map[string]any{"model": p.model, "input": map[string]any{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": map[string]any{"$media_ref": p.ref}}}}}}}, "parameters": map[string]string{"format": "wav", "sample_rate": "16000"}}
+	raw, _ := json.Marshal(map[string]any{"route": "transcription", "body": body, "max_bytes": 4096, "timeout_seconds": 15})
+	return raw
+}
+
+func TestMediaTranscriptionSourceAndProviderAuthority(t *testing.T) {
+	for _, remember := range []bool{false, true} {
+		t.Run(map[bool]string{true: "remembered", false: "ephemeral"}[remember], func(t *testing.T) {
+			f, n, p, ctx := transcriptionFixture(t, remember)
+			j, cap := transcriptionJob(p)
+			calls := 0
+			p.post = func(_ context.Context, endpoint string, headers map[string]string, body json.RawMessage, _ int64, _ time.Duration) (json.RawMessage, error) {
+				calls++
+				if endpoint != "https://provider.example/api/v1/services/aigc/multimodal-generation/generation" || headers["Authorization"] != "Bearer synthetic-asr-key" || bytes.Contains(body, []byte("$media_ref")) || !bytes.Contains(body, []byte(base64.StdEncoding.EncodeToString(p.wav))) {
+					t.Fatal("unbound ASR transport")
+				}
+				return json.RawMessage(`{"output":{"text":"synthetic transcript"}}`), nil
+			}
+			bad := bytes.Replace(transcriptionRequest(p), []byte("synthetic-asr"), []byte("other"), 1)
+			if _, err := p.Service(ctx, j, cap, "wechat/model_request", bad); err == nil || calls != 0 {
+				t.Fatal("changed model reached ASR", err, calls)
+			}
+			if _, err := p.Service(ctx, j, cap, "wechat/model_request", transcriptionRequest(p)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.Service(ctx, j, cap, "wechat/model_request", transcriptionRequest(p)); err == nil || calls != 1 {
+				t.Fatal("ASR duplicate", err, calls)
+			}
+			result := map[string]any{"ok": true, "text": "synthetic transcript", "status": "transcribed", "sources": []mediaAudioReference{p.ref}, "coverage": "provided_audio_only", "untrusted_external_content": true}
+			raw, _ := json.Marshal(result)
+			verified, err := p.Validate(ctx, j, cap, raw)
+			if err != nil || !bytes.Contains(verified.Private, []byte("synthetic transcript")) || bytes.Contains(verified.Result, []byte("synthetic transcript")) {
+				t.Fatal("private transcription", err)
+			}
+			result["text"] = "forged"
+			raw, _ = json.Marshal(result)
+			if _, err = p.Validate(ctx, j, cap, raw); err == nil {
+				t.Fatal("forged ASR accepted")
+			}
+			n.msg.Body = "edited"
+			if err = p.Check(ctx, j, cap); err == nil {
+				t.Fatal("edited source accepted")
+			}
+			n.msg.Body = ""
+			f.manager.speech.ASREnabled = false
+			if err = p.Check(ctx, j, cap); err == nil {
+				t.Fatal("ASR permission revocation accepted")
+			}
+		})
+	}
+}
+
+func TestMediaTranscriptionNoWordsAndUncertainTransport(t *testing.T) {
+	f, _, p, ctx := transcriptionFixture(t, false)
+	j, cap := transcriptionJob(p)
+	calls := 0
+	p.post = func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+		calls++
+		return json.RawMessage(`{"code":"ASR_RESPONSE_HAVE_NO_WORDS"}`), nil
+	}
+	if _, err := p.Service(ctx, j, cap, "wechat/model_request", transcriptionRequest(p)); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"ok": true, "text": "", "status": "no_recognizable_speech", "sources": []mediaAudioReference{p.ref}, "coverage": "provided_audio_only", "untrusted_external_content": true})
+	verified, err := p.Validate(ctx, j, cap, raw)
+	if err != nil || !bytes.Contains(verified.Private, []byte("no_recognizable_speech")) {
+		t.Fatal(err)
+	}
+	if f.manager.billing.data.Total.Requests != 1 {
+		t.Fatal("ASR attempt not billed")
+	}
+	_ = calls
+}
+
+func TestMediaTranscriptionKnownProviderFailureIsTerminal(t *testing.T) {
+	_, _, p, ctx := transcriptionFixture(t, false)
+	j, cap := transcriptionJob(p)
+	p.requested = true
+	p.providerReply = json.RawMessage(`{"code":"provider_rejected"}`)
+	verified, err := p.Validate(ctx, j, cap, json.RawMessage(`{"ok":false,"error":"asr_provider_failed"}`))
+	if err != nil || !verified.Failed {
+		t.Fatal("known provider failure was not terminal", err)
+	}
+	p.providerReply = nil
+	if _, err = p.Validate(ctx, j, cap, json.RawMessage(`{"ok":false,"error":"asr_provider_failed"}`)); err == nil {
+		t.Fatal("unknown transport was treated as terminal")
+	}
+}
+
+func TestMediaTranscriptionUsageWithoutProviderSchemaStaysUnknown(t *testing.T) {
+	f, _, p, ctx := transcriptionFixture(t, false)
+	j, cap := transcriptionJob(p)
+	p.post = func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+		return json.RawMessage(`{"output":{"text":"synthetic"},"usage":{"input_tokens":7,"output_tokens":3}}`), nil
+	}
+	if _, err := p.Service(ctx, j, cap, "wechat/model_request", transcriptionRequest(p)); err != nil {
+		t.Fatal(err)
+	}
+	total := f.manager.billing.data.Total
+	if total.Requests != 1 || total.Reported != 0 || total.Input != 0 || total.Output != 0 {
+		t.Fatalf("unrecognized ASR usage was misreported: %+v", total)
+	}
+}
+
+func TestLiveMediaTranscriptionSourceAdapterRecovery(t *testing.T) {
+	python := os.Getenv("WECHAT_PLUGIN_TEST_PYTHON")
+	if python == "" {
+		t.Skip("opt-in real isolation, synthetic ASR provider only")
+	}
+	python, _ = filepath.Abs(python)
+	helper, _ := filepath.Abs("../../scripts/windows_plugin_host.pyw")
+	f, n, p, ctx := transcriptionFixture(t, true)
+	calls := 0
+	p.post = func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+		calls++
+		return json.RawMessage(`{"output":{"text":"synthetic transcript"}}`), nil
+	}
+	start := func() *pluginruntime.Controller {
+		c, err := pluginruntime.NewController(p.store, pluginruntime.InstalledExecutor(p.store, pluginruntime.Options{Python: python, Pythonw: filepath.Join(filepath.Dir(python), "pythonw.exe"), WindowsHelper: helper, RuntimeRoots: []string{filepath.Dir(python)}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.manager.packageRuntime, f.manager.packageRuntimeReady = c, true
+		return c
+	}
+	c := start()
+	text, err := p.transcribe(ctx)
+	c.Close()
+	if err != nil || text != "synthetic transcript" || calls != 1 {
+		t.Fatal("ASR execution", text, err, calls)
+	}
+	c = start()
+	defer c.Close()
+	fresh, err := f.manager.newMediaTranscriptionPolicy(ctx, n.msg, p.wav)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh.post = func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+		t.Fatal("ASR recovery resubmitted provider")
+		return nil, nil
+	}
+	text, err = fresh.transcribe(ctx)
+	if err != nil || text != "synthetic transcript" || f.manager.billing.data.Total.Requests != 1 {
+		t.Fatal("ASR recovery", text, err)
 	}
 }
 

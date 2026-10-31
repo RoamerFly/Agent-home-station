@@ -20,8 +20,8 @@ import (
 	"unicode/utf8"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
-	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
+	compatwebsearch "wechat-bot/internal/plugincompat/websearch"
 	"wechat-bot/internal/plugins"
 )
 
@@ -107,6 +107,11 @@ type permittedTools struct {
 	songFollowups        []string
 	privateDiagnostics   bool
 }
+
+// legacyDeepSeekSearch is the only temporary bridge from the core to an
+// account-selected paid search protocol. The implementation is owned by the
+// compatibility boundary so admin does not retain provider HTTP code.
+var legacyDeepSeekSearch = compatwebsearch.Search
 
 func (p *permittedTools) SetTrace(input companion.Input) {
 	p.trace = input
@@ -382,45 +387,45 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		return p.discover(ctx, args)
 	}
 	// Chinese song/artist queries are poorly covered by the Western instrumental
-	// catalog. Use real web search rather than spending the budget on that catalog.
+	// catalog. Keep the existing account's selected official search provider
+	// until its configuration is explicitly migrated into the web-search plugin.
+	// The paid protocol itself lives in plugincompat, not in the admin package.
 	audioPages := name == "web_audio_search" && strings.ContainsFunc(webArgs.Query, func(r rune) bool { return unicode.Is(unicode.Han, r) })
 	if name == "web_search" || audioPages {
 		p.manager.mu.Lock()
 		config := cloneConfig(p.manager.config)
 		p.manager.mu.Unlock()
-		if officialBilling(config) && config.APIKey != "" && strings.TrimSpace(webArgs.Query) != "" && utf8.RuneCountInString(webArgs.Query) <= 128 {
-			provider, err := p.manager.makeModel(config)
-			if err == nil {
-				diagnosticMu.Lock()
-				requests++
-				diagnosticMu.Unlock()
-				items, searchErr := provider.Search(ctx, webArgs.Query)
-				if searchErr == nil {
-					titles, urls, descriptions := []string{}, []string{}, []string{}
-					for _, item := range items {
-						titles = append(titles, item.Title)
-						urls = append(urls, item.URL)
-						descriptions = append(descriptions, item.Summary+" "+item.Snippet)
-					}
-					text, formatErr := mcptools.FormatProviderSearch("DeepSeek Search", webArgs.Query, titles, urls, descriptions)
-					if formatErr == nil {
-						endpoint = "https://api.deepseek.com/v1/tools/search"
-						diagnosticMu.Lock()
-						lastStatus, lastStage, lastCode = http.StatusOK, "search", ""
-						diagnosticMu.Unlock()
-						if audioPages {
-							text += "\n音频搜索已使用实时网页来源，未查询器乐目录。以上是候选播放页面，不是已下载的音频；核对歌名、歌手和版本后继续读取或使用web_media_download获取真实文件，不能直接声称已经发歌。"
-						}
-						return text, nil
-					}
+		legacyConfig := compatwebsearch.Config{BaseURL: config.BaseURL, APIKey: config.APIKey}
+		if officialBilling(config) && compatwebsearch.Supported(legacyConfig) && strings.TrimSpace(webArgs.Query) != "" && utf8.RuneCountInString(webArgs.Query) <= 128 {
+			diagnosticMu.Lock()
+			requests++
+			diagnosticMu.Unlock()
+			items, searchErr := legacyDeepSeekSearch(ctx, legacyConfig, webArgs.Query)
+			if searchErr == nil {
+				titles, urls, descriptions := []string{}, []string{}, []string{}
+				for _, item := range items {
+					titles = append(titles, item.Title)
+					urls = append(urls, item.URL)
+					descriptions = append(descriptions, item.Summary+" "+item.Snippet)
 				}
-				if d, ok := deepseek.ErrorDiagnostics(searchErr); ok {
+				text, formatErr := mcptools.FormatProviderSearch("DeepSeek Search", webArgs.Query, titles, urls, descriptions)
+				if formatErr == nil {
+					endpoint = "https://api.deepseek.com/v1/tools/search"
 					diagnosticMu.Lock()
-					lastStatus = d.HTTPStatus
-					lastCode = d.Code
-					lastStage = "search"
+					lastStatus, lastStage, lastCode = http.StatusOK, "search", ""
 					diagnosticMu.Unlock()
+					if audioPages {
+						text += "\n音频搜索已使用实时网页来源，未查询器乐目录。以上是候选播放页面，不是已下载的音频；核对歌名、歌手和版本后继续读取或使用web_media_download获取真实文件，不能直接声称已经发歌。"
+					}
+					return text, nil
 				}
+			}
+			if d, ok := compatwebsearch.ErrorDiagnostics(searchErr); ok {
+				diagnosticMu.Lock()
+				lastStatus = d.HTTPStatus
+				lastCode = d.Code
+				lastStage = "search"
+				diagnosticMu.Unlock()
 			}
 		}
 	}
@@ -651,6 +656,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	}
 	return text, nil
 }
+
 func (p *permittedTools) Media(id string) (companion.GeneratedMedia, bool) {
 	p.mediaMu.Lock()
 	defer p.mediaMu.Unlock()

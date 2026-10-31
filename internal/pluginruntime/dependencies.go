@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
+	"strconv"
 
 	"wechat-bot/internal/pluginhost"
 )
@@ -65,7 +67,11 @@ func (c *Controller) startPlan(ctx context.Context, id string, revision int) ([]
 		}
 		state[key] = 1
 		for _, dep := range i.Package.Dependencies {
-			if err = visit(dep); err != nil {
+			dependency, e := c.store.Installed(ctx, dep.ID)
+			if e == nil && !pluginhost.DependencyCompatible(dep.Version, dependency.Package.Version) {
+				return &DependencyError{Plugin: id, Dependency: dep.ID, Code: "dependency_version_incompatible"}
+			}
+			if err = visit(dep.ID); err != nil {
 				return err
 			}
 		}
@@ -77,6 +83,41 @@ func (c *Controller) startPlan(ctx context.Context, id string, revision int) ([]
 		return nil, err
 	}
 	return plan, nil
+}
+
+// loadedGraphCurrent confirms the persisted packages and configurations still
+// match every running process in the root's complete dependency graph. A
+// semver-compatible upgrade is still a different program and needs restart.
+func (c *Controller) loadedGraphCurrent(ctx context.Context, root string) error {
+	seen := map[string]bool{}
+	var visit func(string) error
+	visit = func(id string) error {
+		if seen[id] {
+			return nil
+		}
+		seen[id] = true
+		i, err := c.store.Installed(ctx, id)
+		if err != nil {
+			return &DependencyError{Plugin: root, Dependency: id, Code: "dependency_restart_required"}
+		}
+		config, err := c.store.Configuration(ctx, id)
+		if err != nil {
+			return &DependencyError{Plugin: root, Dependency: id, Code: "dependency_restart_required"}
+		}
+		c.mu.Lock()
+		loaded, ok := c.loaded[id]
+		c.mu.Unlock()
+		if !ok || loaded.digest != i.Digest || loaded.revision != i.Revision || loaded.configRevision != strconv.Itoa(config.Revision) || !reflect.DeepEqual(loaded.packageSnapshot, i.Package) {
+			return &DependencyError{Plugin: root, Dependency: id, Code: "dependency_restart_required"}
+		}
+		for _, dep := range i.Package.Dependencies {
+			if err := visit(dep.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return visit(root)
 }
 
 // Reserve the whole graph atomically. Concurrent calls in an overlapping graph

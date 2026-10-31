@@ -34,6 +34,11 @@ class TranscriptionTest(unittest.TestCase):
     def test_invalid_responses(self):
         for reply in ({}, {"output": {"text": " "}}, {"code": "secret-provider-error"}, {"output": {"text": 1}}, []):
             with self.assertRaises(ValueError): self.run_reply(reply)
+
+    def test_provider_failure_has_one_bounded_request(self):
+        with self.assertRaisesRegex(ValueError, "asr_provider_failed"):
+            self.run_reply({"code": "upstream_failure"})
+        self.assertEqual(len(self.calls), 1)
     def test_reject_overrides_before_request(self):
         for args in ({"model": "other"}, {"path": "C:/private.wav"}, {"timeout_seconds": True}):
             with self.assertRaises(ValueError): self.run_reply({}, **args)
@@ -66,5 +71,20 @@ class TranscriptionWireTest(unittest.TestCase):
         self.assertEqual(replies[2]["id"], 2)
         self.assertEqual(replies[2]["result"]["text"], "synthetic transcript")
         self.assertEqual(replies[2]["result"]["sources"], [ref])
+
+    def test_stdio_invalid_audio_never_calls_host(self):
+        spec = importlib.util.spec_from_file_location("media_asr_invalid", Path(__file__).parents[1] / "runtime/main.py")
+        main = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(main)
+        context = {k: "synthetic" for k in ("account", "thread", "requester", "purpose", "request_key")}
+        incoming = [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": {"asr_model": "synthetic-asr"}}}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.transcribe", "arguments": {"audio": {"media_ref": "wrong"}}, "_meta": {"wechat/context": context}}},
+        ]
+        output = io.StringIO()
+        main.Wire(io.StringIO("".join(json.dumps(x)+"\n" for x in incoming)), output).serve()
+        replies = [json.loads(x) for x in output.getvalue().splitlines()]
+        self.assertEqual(len(replies), 2)
+        self.assertEqual(replies[1]["result"]["error"], "invalid_audio_reference")
 
 if __name__ == "__main__": unittest.main()

@@ -20,12 +20,12 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "34306cc0da044c2583a79232d2bf8f6abe1bd24115753ec8b16a6569a26ae739",
+    "capabilities.json": "bcdf63f69fa313ebd7618c3cb4c218703ef955420e2d989308f3dbe9e4cda43d",
     "CHANGELOG.md": "5b127414666dd88f8bb6f36324a34c5acae3321d5798719e6859c308bbe76ba9",
-    "config.schema.json": "5ea730c51b6cf13f215b25525752a2748bc4f891d42aa12d499a4f4867e92668",
-    "MIGRATION.md": "3da9b53fbd94913d3489f2ebb8a131f0912378cbd7a7b9e918fb56277d8ed7cf",
-    "PERMISSIONS.md": "b11c7564c7c5b8d59054da08ccdf1ca21c94bef1552759d86c6933c6f571895e",
-    "README.md": "3c94322a1c95fd87e3559b393bf3a3d207219d72bcddfc9964f21f9d36b9333c",
+    "config.schema.json": "5a5a344f4bc7968fe0d79d74d98f02f596b95fa09b84e42820e44a29251ee0aa",
+    "MIGRATION.md": "2d00107ea88376b891768bba2128608a9c6d4004349ffa5ec3ec6d6e9e9367e3",
+    "PERMISSIONS.md": "0bbeaa91d1556876518c361e94f2b7ae2e5a44707076f3dad844e5a3df9a59fc",
+    "README.md": "0ec3fd07c7f05afdeb901e1e90d1621ba4bd0050a0c711b44d2d465c1794e6ea",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
     "runtime/main.py": "f9f4bd4751c73b6276257f76f19932f846a26a9058ce139ea8bf682ded046195",
     "runtime/observation.py": "2e1227644c170ff8ded65ec660ab2ca1f13cc6e9eac787c1c39275b8aebdcfb4",
@@ -33,7 +33,7 @@
     "tests/test_observation.py": "ce1ae132f9f81f942059de212f056378378280ac4a279b40ace3d6550e2b5d41",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "runtime/transcription.py": "1fb3e0e0384f2bd1ce45c992e370dbb7c40b7c3d0500fbef9416838def4991e0",
-    "tests/test_transcription.py": "bf785678ed7538753408eb7da85958021c4f9cdfe39b7131b1e62cc9e418eaff"
+    "tests/test_transcription.py": "22d9aceac7868d899f41876b81b911696619ada04ef9645aeeb28d50945d44f1"
   },
   "http_routes": [
     {
@@ -44,6 +44,18 @@
         "media.observe"
       ],
       "credential": "vision_key",
+      "credential_header": "Authorization",
+      "credential_prefix": "Bearer "
+    },
+    {
+      "id": "transcription",
+      "endpoint_config": "asr_endpoint",
+      "optional": true,
+      "permission": "model.invoke",
+      "capabilities": [
+        "media.transcribe"
+      ],
+      "credential": "asr_key",
       "credential_header": "Authorization",
       "credential_prefix": "Bearer "
     }

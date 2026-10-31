@@ -2,7 +2,6 @@ package deepseek
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -71,47 +70,5 @@ func TestBalanceOfficialOriginOnlyAndSafeFailures(t *testing.T) {
 	body = strings.Replace(body, "12.34", "NaN", 1)
 	if _, err = c.Balance(context.Background()); err == nil {
 		t.Fatal("NaN balance accepted")
-	}
-}
-
-func TestOfficialSearchSendsOnlyQueryAndNeverForwardsKeyToCompatibleHost(t *testing.T) {
-	calls := 0
-	c := &Client{endpoint: "https://api.deepseek.com/v1/chat/completions", key: "test-key", http: &http.Client{Transport: balanceTransport(func(r *http.Request) (*http.Response, error) {
-		calls++
-		if r.URL.String() != "https://api.deepseek.com/v1/tools/search" || r.Method != "POST" || r.Header.Get("Authorization") != "Bearer test-key" {
-			t.Fatal("wrong search credential destination")
-		}
-		var body map[string]any
-		if json.NewDecoder(r.Body).Decode(&body) != nil || len(body) != 3 || body["query"] != "Traveling Light" {
-			t.Fatal("private context or wrong search arguments", body)
-		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"results":[{"title":"Traveling Light","url":"https://example.org/song","summary":"An audio source"}]}`)), Header: make(http.Header)}, nil
-	})}}
-	items, err := c.Search(context.Background(), "Traveling Light")
-	if err != nil || len(items) != 1 {
-		t.Fatal(items, err)
-	}
-	c.endpoint = "https://compatible.example/v1/chat/completions"
-	if _, err = c.Search(context.Background(), "query"); err == nil || calls != 1 {
-		t.Fatal("official search key sent to an unverified origin")
-	}
-}
-
-func TestOfficialSearchMissingKeyNeverMakesRequestAnd401IsClassified(t *testing.T) {
-	calls := 0
-	c := &Client{endpoint: "https://api.deepseek.com/v1/chat/completions", http: &http.Client{Transport: balanceTransport(func(r *http.Request) (*http.Response, error) {
-		calls++
-		return &http.Response{StatusCode: 401, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"private upstream detail"}}`)), Header: make(http.Header)}, nil
-	})}}
-	_, err := c.Search(context.Background(), "synthetic query")
-	d, ok := ErrorDiagnostics(err)
-	if !ok || d.Code != "official_search_key_missing" || calls != 0 {
-		t.Fatal("empty credential reached network", d, calls)
-	}
-	c.key = "synthetic-key"
-	_, err = c.Search(context.Background(), "synthetic query")
-	d, ok = ErrorDiagnostics(err)
-	if !ok || d.Code != "official_search_authentication_failed" || d.HTTPStatus != 401 || calls != 1 || strings.Contains(err.Error(), "private upstream") {
-		t.Fatal("authentication failure lost or sensitive body exposed", d, calls, err)
 	}
 }

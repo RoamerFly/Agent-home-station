@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strconv"
 	"sync"
 	"time"
 
@@ -51,7 +52,17 @@ type Controller struct {
 	mu       sync.Mutex
 	busy     map[string]bool
 	failures map[string]string
+	loaded   map[string]loadedPlugin
 	closed   bool
+}
+
+// loadedPlugin is the exact persistent identity that the currently running
+// process was launched from. Compatibility is insufficient here: a changed
+// digest or configuration requires an explicit stop/restart before dispatch.
+type loadedPlugin struct {
+	digest, configRevision string
+	revision               int
+	packageSnapshot        pluginhost.Package
 }
 type Status struct {
 	pluginhost.RuntimeStatus
@@ -63,7 +74,7 @@ func NewController(store *pluginhost.Store, executor pluginhost.Executor) (*Cont
 	if err != nil {
 		return nil, err
 	}
-	return &Controller{store: store, host: h, busy: map[string]bool{}, failures: map[string]string{}}, nil
+	return &Controller{store: store, host: h, busy: map[string]bool{}, failures: map[string]string{}, loaded: map[string]loadedPlugin{}}, nil
 }
 func (c *Controller) begin(id string) error {
 	c.mu.Lock()
@@ -156,6 +167,10 @@ func (c *Controller) startOne(ctx context.Context, id string, revision int) (err
 	if err != nil {
 		return err
 	}
+	config, err := c.store.Configuration(ctx, id)
+	if err != nil {
+		return err
+	}
 	r := pluginhost.Registration{Package: i.Package, Grant: pluginhost.Grant{Account: c.store.Account(), Plugin: id, Version: i.Package.Version, Permissions: i.Permissions}, Enabled: true}
 	err = c.host.Register(r)
 	if err == nil {
@@ -173,6 +188,9 @@ func (c *Controller) startOne(ctx context.Context, id string, revision int) (err
 		_, releaseErr := c.store.SetEnabled(cleanup, id, i.Revision, false)
 		return errors.Join(err, releaseErr)
 	}
+	c.mu.Lock()
+	c.loaded[id] = loadedPlugin{digest: i.Digest, revision: i.Revision, configRevision: strconv.Itoa(config.Revision), packageSnapshot: i.Package}
+	c.mu.Unlock()
 	return nil
 }
 func (c *Controller) Stop(ctx context.Context, id string, revision int) (err error) {
@@ -193,11 +211,17 @@ func (c *Controller) Stop(ctx context.Context, id string, revision int) (err err
 		}
 	}
 	_, err = c.store.SetEnabled(ctx, id, revision, false)
+	if err == nil {
+		c.mu.Lock()
+		delete(c.loaded, id)
+		c.mu.Unlock()
+	}
 	return err
 }
 func (c *Controller) Close() error {
 	c.mu.Lock()
 	c.closed = true
+	c.loaded = map[string]loadedPlugin{}
 	c.mu.Unlock()
 	// Keep Enabled as administrator intent across restarts. No process starts
 	// automatically; explicit start may recover queries, never tool submissions.

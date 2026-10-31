@@ -18,7 +18,10 @@
     "artifact.write"
   ],
   "dependencies": [
-    "media-understanding"
+    {
+      "id": "media-understanding",
+      "version": ">=0.1.1 <0.2.0"
+    }
   ],
   "files": {
     "capabilities.json": "5873d4f5eb6a0691f19890568ac7fdfdc2c0244387e77fef47a27602a2a6ec4c",

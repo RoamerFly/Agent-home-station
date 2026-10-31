@@ -47,6 +47,23 @@
         "max"
       ],
       "default": "low"
+    },
+    "asr_endpoint": {
+      "type": "string",
+      "title": "语音识别接口地址",
+      "description": "可选。完整 HTTPS 语音识别接口地址；未配置时不影响视觉观察。"
+    },
+    "asr_key": {
+      "type": "string",
+      "title": "语音识别接口密钥",
+      "x-secret": true,
+      "x-host-only": true
+    },
+    "asr_model": {
+      "type": "string",
+      "title": "语音识别模型",
+      "minLength": 1,
+      "maxLength": 128
     }
   },
   "required": [

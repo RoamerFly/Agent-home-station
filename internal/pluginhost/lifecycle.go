@@ -203,9 +203,12 @@ func (h *Host) dependenciesAvailable(p Package) bool {
 			return true
 		}
 		state[current.ID] = 1
-		for _, id := range current.Dependencies {
-			d := h.items[id]
+		for _, dependency := range current.Dependencies {
+			d := h.items[dependency.ID]
 			if d == nil || !d.registration.Enabled || d.session == nil || d.stopping || d.starting {
+				return false
+			}
+			if !DependencyCompatible(dependency.Version, d.registration.Package.Version) {
 				return false
 			}
 			if live, ok := d.session.(interface{ Alive() bool }); ok && !live.Alive() {
@@ -242,7 +245,7 @@ func (h *Host) stop(id string, disable bool) error {
 			continue
 		}
 		for _, dependency := range d.registration.Package.Dependencies {
-			if dependency == id {
+			if dependency.ID == id {
 				return reject(errors.New("plugin has running dependents"))
 			}
 		}

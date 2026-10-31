@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"wechat-bot/internal/mcptools"
+	compatwebsearch "wechat-bot/internal/plugincompat/websearch"
 )
 
 func TestMCPConfigurationSecretsAndAbilitySwitches(t *testing.T) {
@@ -71,6 +73,35 @@ func TestMCPConfigurationSecretsAndAbilitySwitches(t *testing.T) {
 	}
 	if _, err = access.Call(context.Background(), "web_fetch", json.RawMessage(`{"url":"https://example.org/"}`)); err == nil {
 		t.Fatal("disabled MCP still callable")
+	}
+}
+
+func TestLegacyOfficialSearchUsesCompatibilityAdapter(t *testing.T) {
+	f := setup(t)
+	f.login()
+	f.manager.mu.Lock()
+	f.manager.config.Provider = "deepseek"
+	f.manager.config.BaseURL = "https://api.deepseek.com"
+	f.manager.config.APIKey = "synthetic-compatibility-key-123"
+	f.manager.mu.Unlock()
+
+	original := legacyDeepSeekSearch
+	defer func() { legacyDeepSeekSearch = original }()
+	called := 0
+	legacyDeepSeekSearch = func(ctx context.Context, config compatwebsearch.Config, query string) ([]compatwebsearch.SearchResult, error) {
+		called++
+		if config.BaseURL != "https://api.deepseek.com" || config.APIKey != "synthetic-compatibility-key-123" || query != "Traveling Light" {
+			t.Fatalf("unexpected compatibility request: %#v %q", config, query)
+		}
+		return []compatwebsearch.SearchResult{{Title: "Traveling Light", URL: "https://example.org/song", Summary: "Synthetic source"}}, nil
+	}
+	access, _, err := f.manager.toolAccess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := access.Call(context.Background(), "web_search", json.RawMessage(`{"query":"Traveling Light"}`))
+	if err != nil || called != 1 || !strings.Contains(output, "https://example.org/song") {
+		t.Fatalf("output=%q err=%v calls=%d", output, err, called)
 	}
 }
 

@@ -15,6 +15,14 @@ import (
 	"wechat-bot/internal/pluginhost"
 )
 
+func dependencySpecs(ids []string) pluginhost.Dependencies {
+	items := make(pluginhost.Dependencies, len(ids))
+	for i, id := range ids {
+		items[i] = pluginhost.Dependency{ID: id}
+	}
+	return items
+}
+
 func dependencyFixture(t *testing.T, graph map[string][]string, disabled ...string) (*pluginhost.Store, map[string]pluginhost.InstalledPackage) {
 	t.Helper()
 	s, err := pluginhost.OpenStore(t.TempDir(), "a")
@@ -26,7 +34,7 @@ func dependencyFixture(t *testing.T, graph map[string][]string, disabled ...stri
 	for id, deps := range graph {
 		dir := t.TempDir()
 		p := readyFixture(t, dir)
-		p.ID, p.Dependencies = id, deps
+		p.ID, p.Dependencies = id, dependencySpecs(deps)
 		raw, _ := json.Marshal(p)
 		if err = os.WriteFile(filepath.Join(dir, "plugin.json"), raw, 0600); err != nil {
 			t.Fatal(err)
@@ -166,7 +174,7 @@ func TestDependencyPlanChecksRootConfigurationBeforeStartingDependencies(t *test
 	s, _ := dependencyFixture(t, map[string][]string{"leaf": nil})
 	dir := t.TempDir()
 	p := readyFixture(t, dir)
-	p.ID, p.Dependencies = "root", []string{"leaf"}
+	p.ID, p.Dependencies = "root", dependencySpecs([]string{"leaf"})
 	schema := []byte(`{"type":"object","properties":{"api_key":{"type":"string","x-secret":true}},"required":["api_key"],"additionalProperties":false}`)
 	sum := sha256.Sum256(schema)
 	p.Files["config.schema.json"] = hex.EncodeToString(sum[:])
@@ -201,6 +209,110 @@ func TestDependencyPlanChecksRootConfigurationBeforeStartingDependencies(t *test
 	}
 	if err = c.Start(t.Context(), "root", i.Revision); err != nil || calls != 2 {
 		t.Fatal(err, calls)
+	}
+}
+
+func TestDependencyPlanRejectsIncompatibleVersionBeforeStartingAnything(t *testing.T) {
+	s, _ := dependencyFixture(t, map[string][]string{"leaf": nil, "root": {"leaf"}}, "root")
+	// Replace the root descriptor with a fixed object dependency requirement.
+	root, err := s.Installed(t.Context(), "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	p := readyFixture(t, dir)
+	p.ID, p.Version = "root", "1.0.0"
+	p.Dependencies = pluginhost.Dependencies{{ID: "leaf", Version: "^1.2.0"}}
+	raw, _ := json.Marshal(p)
+	if err = os.WriteFile(filepath.Join(dir, "plugin.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Root is disabled at this point, so replacement must not start a process.
+	prepared, err := s.Prepare(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err = s.Install(t.Context(), prepared.Token, prepared.Digest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	c, _ := NewController(s, startFunc(func(context.Context, pluginhost.Package, pluginhost.Grant) (pluginhost.Session, error) {
+		calls++
+		return &invocationSession{}, nil
+	}))
+	defer c.Close()
+	err = c.Start(t.Context(), "root", root.Revision)
+	var dep *DependencyError
+	if !errors.As(err, &dep) || dep.Code != "dependency_version_incompatible" || dep.Dependency != "leaf" || calls != 0 {
+		t.Fatal(err, calls)
+	}
+}
+
+func TestInvocationDoesNotDispatchAfterCompatibleDependencyUpgrade(t *testing.T) {
+	ctx := t.Context()
+	s, err := pluginhost.OpenStore(t.TempDir(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	install := func(id, version string, dependencies pluginhost.Dependencies) pluginhost.InstalledPackage {
+		dir := t.TempDir()
+		p := readyFixture(t, dir)
+		p.ID, p.Version, p.Dependencies = id, version, dependencies
+		raw, _ := json.Marshal(p)
+		if err := os.WriteFile(filepath.Join(dir, "plugin.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		prepared, e := s.Prepare(ctx, dir)
+		if e != nil {
+			t.Fatal(e)
+		}
+		i, e := s.Install(ctx, prepared.Token, prepared.Digest, nil)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return i
+	}
+	leaf := install("leaf", "1.2.0", nil)
+	leaf, err = s.SetEnabled(ctx, "leaf", leaf.Revision, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := install("root", "1.0.0", pluginhost.Dependencies{{ID: "leaf", Version: "^1.2.0"}})
+	session := &invocationSession{call: func(pluginhost.Invocation, string, json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"ok":true}`), nil
+	}}
+	c, err := NewController(s, startFunc(func(_ context.Context, p pluginhost.Package, _ pluginhost.Grant) (pluginhost.Session, error) {
+		if p.ID == "root" {
+			return session, nil
+		}
+		return &invocationSession{call: func(pluginhost.Invocation, string, json.RawMessage) (json.RawMessage, error) {
+			return nil, errors.New("dependency should not receive tools")
+		}}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err = c.Start(ctx, "root", root.Revision); err != nil {
+		t.Fatal(err)
+	}
+	// Store replacement has its own disable/drain rule. This direct synthetic
+	// administration sequence models a dependency upgraded outside this root's
+	// controller, then re-enabled before the next root request.
+	if _, err = s.SetEnabled(ctx, "leaf", leaf.Revision, false); err != nil {
+		t.Fatal(err)
+	}
+	upgraded := install("leaf", "1.3.0", nil)
+	if _, err = s.SetEnabled(ctx, "leaf", upgraded.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	request := CallRequest{Plugin: "root", Capability: "echo", Context: invocation(), Arguments: json.RawMessage(`{}`)}
+	_, err = c.Invoke(ctx, request, invocationPolicy{})
+	var dep *DependencyError
+	if !errors.As(err, &dep) || dep.Code != "dependency_restart_required" || dep.Dependency != "leaf" || session.calls != 0 {
+		t.Fatal("compatible upgrade dispatched without restart", err, session.calls)
 	}
 }
 

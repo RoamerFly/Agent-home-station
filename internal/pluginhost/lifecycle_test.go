@@ -72,3 +72,36 @@ func TestHostFailsClosedWithoutExecutor(t *testing.T) {
 		t.Fatal("missing isolation accepted")
 	}
 }
+
+func TestHostRejectsCallsAfterDependencyVersionChanges(t *testing.T) {
+	ctx := context.Background()
+	leaf, root := &fakeSession{}, &fakeSession{}
+	h, _ := New("a", &fakeExecutor{session: root})
+	defer h.Close()
+	register := func(id, version string, dependencies Dependencies, session *fakeSession) {
+		// Each Start needs a distinct session; the executor's pointer is only
+		// used while starting this registration in the synthetic contract.
+		h.executor = &fakeExecutor{session: session}
+		p := Package{ID: id, Version: version, Status: "ready", Dependencies: dependencies}
+		if err := h.Register(Registration{Package: p, Grant: Grant{Account: "a", Plugin: id, Version: version}, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.Start(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	register("leaf", "1.2.0", nil, leaf)
+	register("root", "1.0.0", Dependencies{{ID: "leaf", Version: "^1.2.0"}}, root)
+	inv := Invocation{Account: "a", Thread: "t", Requester: "u", Purpose: "synthetic", RequestKey: "k"}
+	if _, err := h.Call(ctx, "root", inv, "echo", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Controller registration is refreshed after an installed dependency is
+	// upgraded. The live root must fail closed before dispatching another call.
+	h.mu.Lock()
+	h.items["leaf"].registration.Package.Version = "2.0.0"
+	h.mu.Unlock()
+	if _, err := h.Call(ctx, "root", inv, "echo", nil, nil); err == nil || root.calls != 1 {
+		t.Fatal("incompatible upgraded dependency accepted", err, root.calls)
+	}
+}

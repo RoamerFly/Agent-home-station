@@ -271,8 +271,13 @@ func normalizeSpeech(ctx context.Context, dir string, data []byte) ([]byte, erro
 	return b, nil
 }
 func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnative.Message) (string, error) {
-	c := a.manager.speechConfig()
-	if !c.ASREnabled {
+	installed, stateErr := a.manager.installedServiceState(ctx, "media-understanding", "media")
+	if stateErr != nil {
+		return "", stateErr
+	}
+	// The legacy switch only governs the compatibility implementation. An
+	// installed plugin has its own declared configuration and authorization.
+	if !installed && !a.manager.speechConfig().ASREnabled {
 		return "", toolInputError("语音识别未启用")
 	}
 	reader, ok := a.manager.native.(incomingReader)
@@ -287,7 +292,16 @@ func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnat
 	if e != nil {
 		return "", e
 	}
-	text, e := a.manager.transcribeAudio(ctx, wav)
+	text := ""
+	if installed {
+		policy, err := a.manager.newMediaTranscriptionPolicy(ctx, message, wav)
+		if err != nil {
+			return "", err
+		}
+		text, e = policy.transcribe(ctx)
+	} else {
+		text, e = a.manager.transcribeAudio(ctx, wav)
+	}
 	if bailian.IsNoSpeech(e) {
 		a.manager.record(bot.Record{Event: "voice_no_words", Category: "received", MessageID: message.ID, ThreadID: message.ThreadID, Sender: message.SenderID, Status: "no_recognizable_speech", Reason: "ASR_RESPONSE_HAVE_NO_WORDS", ToolCode: "ASR_RESPONSE_HAVE_NO_WORDS", Origin: "speech"})
 		return "[微信语音音频已取得并提交识别，但没有识别出可转写的词；可能为音乐、环境声或不清晰人声。不要编造语音正文。]", nil
