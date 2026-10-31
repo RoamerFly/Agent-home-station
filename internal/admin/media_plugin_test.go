@@ -1,0 +1,302 @@
+package admin
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"image"
+	"image/png"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"wechat-bot/internal/companion"
+	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/pluginruntime"
+)
+
+func mediaPolicyFixture(t *testing.T, remember bool) (*webFixture, *bindingChannelsNative, *mediaPluginPolicy, context.Context) {
+	t.Helper()
+	f := setup(t)
+	s, err := pluginhost.OpenStore(t.TempDir(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	dir := t.TempDir()
+	if err = os.CopyFS(dir, os.DirFS("../../plugins/media-understanding")); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "plugin.json"))
+	var pkg pluginhost.Package
+	if err = json.Unmarshal(raw, &pkg); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(filepath.Join(dir, "capabilities.json"))
+	var caps struct {
+		Version      int                     `json:"version"`
+		Capabilities []pluginhost.Capability `json:"capabilities"`
+	}
+	if err = json.Unmarshal(raw, &caps); err != nil {
+		t.Fatal(err)
+	}
+	caps.Capabilities = caps.Capabilities[:1]
+	caps.Capabilities[0].Implementation, caps.Capabilities[0].Discoverable = "ready", true
+	raw, _ = json.Marshal(caps)
+	if err = os.WriteFile(filepath.Join(dir, "capabilities.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	pkg.Status, pkg.Files["capabilities.json"] = "ready", hex.EncodeToString(sum[:])
+	raw, _ = json.Marshal(pkg)
+	if err = os.WriteFile(filepath.Join(dir, "plugin.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := s.Prepare(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i, err := s.Install(t.Context(), prepared.Token, prepared.Digest, pkg.Permissions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.SaveConfiguration(t.Context(), pkg.ID, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{"vision_endpoint": json.RawMessage(`"https://provider.example/chat/completions"`), "vision_model": json.RawMessage(`"synthetic-model"`)}, Secrets: map[string]string{"vision_key": "synthetic-private-key"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SetEnabled(t.Context(), pkg.ID, i.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.packages = s
+	f.manager.config.Enabled, f.manager.config.Behavior.ReadImages, f.manager.config.Behavior.ReadVideos = true, true, true
+	f.manager.config.Companion.Permissions.Remember = remember
+	n := &bindingChannelsNative{fakeNative: f.native, msg: linuxnative.Message{ID: "synthetic-image", AccountID: "test", ThreadID: "filehelper", SenderID: "synthetic-user", ServerID: "synthetic-server", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Direction: "incoming", Type: 3}}
+	f.manager.native = n
+	ctx := t.Context()
+	if remember {
+		original := ""
+		in := companion.Input{Channel: "wechat", Account: "test", Thread: n.msg.ThreadID, Sender: n.msg.SenderID, TraceID: n.msg.ID, MessageTime: n.msg.CreatedAt, OriginalText: &original, Text: "synthetic image", Source: &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: n.msg.ID, ServerID: n.msg.ServerID, Account: "test", Thread: n.msg.ThreadID, Sender: n.msg.SenderID, MessageType: 3, OccurredAt: n.msg.CreatedAt, Revision: 1}}
+		if err = f.manager.memory.Observe(in, f.manager.config.Companion, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		ref, ok := f.manager.memory.SourceForInput(in)
+		if !ok {
+			t.Fatal("missing source")
+		}
+		ctx = companion.WithMediaSource(ctx, *ref)
+	}
+	var buf bytes.Buffer
+	if err = png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.manager.newMediaPluginPolicy(ctx, n.msg, "Describe only this image", []deepseek.Image{{Data: buf.Bytes(), MIME: "image/png"}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, n, p, ctx
+}
+
+func mediaRequest(p *mediaPluginPolicy) json.RawMessage {
+	content := []any{map[string]any{"type": "text", "text": p.prompt}}
+	for _, ref := range p.refs {
+		content = append(content, map[string]any{"type": "image_url", "image_url": map[string]any{"url": map[string]any{"$media_ref": ref}, "detail": "auto"}})
+	}
+	body := map[string]any{"model": p.model, "messages": []any{map[string]any{"role": "system", "content": "Describe only provided pixels"}, map[string]any{"role": "user", "content": content}}, "max_tokens": p.tokens, "stream": false}
+	raw, _ := json.Marshal(map[string]any{"route": "vision", "body": body, "max_bytes": 4096, "timeout_seconds": 10})
+	return raw
+}
+
+const mediaReply = `{"choices":[{"message":{"content":"Synthetic pixels","reasoning_content":"hidden"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110,"prompt_tokens_details":{"cached_tokens":40}}}`
+
+func mediaJob(p *mediaPluginPolicy) (pluginhost.Job, pluginhost.Capability) {
+	i, _ := p.store.Installed(context.Background(), "media-understanding")
+	return pluginhost.Job{Plugin: i.Package.ID, Version: i.Package.Version, PackageDigest: i.Digest, ConfigRevision: "1", Tool: "media.observe", Context: p.invocation()}, pluginhost.Capability{ID: "media.observe", Permissions: []string{"artifact.read", "model.invoke"}}
+}
+
+func TestMediaPluginSourceAndModelAuthority(t *testing.T) {
+	for _, remember := range []bool{false, true} {
+		t.Run(map[bool]string{true: "remembered", false: "ephemeral"}[remember], func(t *testing.T) {
+			f, n, p, ctx := mediaPolicyFixture(t, remember)
+			j, cap := mediaJob(p)
+			calls := 0
+			p.post = func(_ context.Context, endpoint string, headers map[string]string, body json.RawMessage, _ int64, _ time.Duration) (json.RawMessage, error) {
+				calls++
+				if endpoint != "https://provider.example/chat/completions" || headers["Authorization"] != "Bearer synthetic-private-key" || !bytes.Contains(body, []byte(base64.StdEncoding.EncodeToString(p.images[0].Data))) || bytes.Contains(body, []byte("$media_ref")) {
+					t.Fatal("unbound transport")
+				}
+				return json.RawMessage(mediaReply), nil
+			}
+			request := mediaRequest(p)
+			for _, bad := range []json.RawMessage{bytes.Replace(request, []byte("synthetic-model"), []byte("other-model"), 1), bytes.Replace(request, []byte(p.refs[0].SHA), []byte(strings.Repeat("0", 64)), 1), bytes.Replace(request, []byte("image_0"), []byte("foreign"), 1)} {
+				if _, err := p.Service(ctx, j, cap, "wechat/model_request", bad); err == nil {
+					t.Fatal("modified request accepted")
+				}
+			}
+			if calls != 0 {
+				t.Fatal("invalid request billed")
+			}
+			if _, err := p.Service(ctx, j, cap, "wechat/model_request", request); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.Service(ctx, j, cap, "wechat/model_request", request); err == nil || calls != 1 {
+				t.Fatal("duplicate model call", err, calls)
+			}
+			result := map[string]any{"ok": true, "observation": "Synthetic pixels", "status": "observed", "sources": p.refs, "coverage": "provided_images_only", "untrusted_external_content": true, "audio_observed": false, "requested_model": p.model, "requested_max_tokens": p.tokens, "thinking": false, "reasoning_effort": nil, "provider_model": nil, "usage": map[string]any{"total_tokens": 999999}}
+			raw, _ := json.Marshal(result)
+			verified, err := p.Validate(ctx, j, cap, raw)
+			if err != nil || !bytes.Contains(verified.Private, []byte("Synthetic pixels")) || bytes.Contains(verified.Result, []byte("Synthetic pixels")) {
+				t.Fatal("private observation contract", err)
+			}
+			result["observation"] = "fabricated"
+			raw, _ = json.Marshal(result)
+			if _, err = p.Validate(ctx, j, cap, raw); err == nil {
+				t.Fatal("fabricated observation accepted")
+			}
+			f.manager.billing.mu.Lock()
+			total := f.manager.billing.data.Total
+			f.manager.billing.mu.Unlock()
+			if total.Requests != 1 || total.Reported != 1 || total.Input != 100 || total.Output != 10 || total.CacheHit != 40 {
+				t.Fatalf("provider billing: %+v", total)
+			}
+			n.msg.Body = "edited"
+			if err = p.Check(ctx, j, cap); err == nil {
+				t.Fatal("source edit accepted")
+			}
+			n.msg.Body = ""
+			f.manager.config.Behavior.ReadImages = false
+			if err = p.Check(ctx, j, cap); err == nil {
+				t.Fatal("revoked read accepted")
+			}
+			f.manager.config.Behavior.ReadImages = true
+			if remember {
+				if err = f.manager.memory.Clear(companion.ScopeID("wechat", "test", "filehelper")); err != nil {
+					t.Fatal(err)
+				}
+				if err = p.Check(ctx, j, cap); err == nil {
+					t.Fatal("forgotten source accepted")
+				}
+			}
+		})
+	}
+}
+
+func TestMediaPluginRejectsScopeAndConfigChanges(t *testing.T) {
+	_, _, p, ctx := mediaPolicyFixture(t, false)
+	j, cap := mediaJob(p)
+	foreign := j
+	foreign.Context.Thread = "foreign-room"
+	if err := p.Check(ctx, foreign, cap); err == nil {
+		t.Fatal("cross-conversation request accepted")
+	}
+	foreign = j
+	foreign.Context.Account = "foreign-account"
+	if err := p.Check(ctx, foreign, cap); err == nil {
+		t.Fatal("cross-account request accepted")
+	}
+	config, err := p.store.Configuration(ctx, j.Plugin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i, err := p.store.Installed(ctx, j.Plugin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i, err = p.store.SetEnabled(ctx, j.Plugin, i.Revision, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.store.SaveConfiguration(ctx, j.Plugin, pluginhost.ConfigUpdate{Revision: config.Revision, Values: map[string]json.RawMessage{"vision_model": json.RawMessage(`"changed-model"`), "vision_endpoint": json.RawMessage(`"https://provider.example/chat/completions"`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.store.SetEnabled(ctx, j.Plugin, i.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	if err = p.Check(ctx, j, cap); err == nil {
+		t.Fatal("old configuration accepted")
+	}
+}
+
+func TestMediaPluginDisabledBlocksImageAndVideoFallback(t *testing.T) {
+	f, n, p, ctx := mediaPolicyFixture(t, false)
+	i, _ := p.store.Installed(ctx, "media-understanding")
+	if _, err := p.store.SetEnabled(ctx, i.Package.ID, i.Revision, false); err != nil {
+		t.Fatal(err)
+	}
+	a := mediaUnderstanding{manager: f.manager}
+	if _, err := a.observeImages(ctx, n.msg, p.prompt, p.images); err == nil || err.Error() != "media_plugin_disabled" {
+		t.Fatal(err)
+	}
+	if _, err := a.observeVideo(ctx, n.msg, nil, videoSample{Seconds: 1}, false); err == nil || err.Error() != "media_plugin_disabled" {
+		t.Fatal(err)
+	}
+}
+
+func TestMediaPluginFailedTransportNeverRetries(t *testing.T) {
+	f, _, p, ctx := mediaPolicyFixture(t, false)
+	j, cap := mediaJob(p)
+	calls := 0
+	p.post = func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+		calls++
+		return nil, errors.New("synthetic disconnect")
+	}
+	for range 2 {
+		if _, err := p.Service(ctx, j, cap, "wechat/model_request", mediaRequest(p)); err == nil {
+			t.Fatal("transport error lost")
+		}
+	}
+	if calls != 1 || f.manager.billing.data.Total.Requests != 1 {
+		t.Fatal("unknown outcome retried or uncounted", calls)
+	}
+}
+
+func TestLiveMediaSourceAdapterRecovery(t *testing.T) {
+	python := os.Getenv("WECHAT_PLUGIN_TEST_PYTHON")
+	if python == "" {
+		t.Skip("opt-in real isolation, synthetic provider only")
+	}
+	python, _ = filepath.Abs(python)
+	helper, _ := filepath.Abs("../../scripts/windows_plugin_host.pyw")
+	f, n, p, ctx := mediaPolicyFixture(t, true)
+	calls := 0
+	p.post = func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+		calls++
+		return json.RawMessage(mediaReply), nil
+	}
+	start := func() *pluginruntime.Controller {
+		c, err := pluginruntime.NewController(p.store, pluginruntime.InstalledExecutor(p.store, pluginruntime.Options{Python: python, Pythonw: filepath.Join(filepath.Dir(python), "pythonw.exe"), WindowsHelper: helper, RuntimeRoots: []string{filepath.Dir(python)}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.manager.packageRuntime, f.manager.packageRuntimeReady = c, true
+		return c
+	}
+	c := start()
+	text, err := p.observe(ctx)
+	c.Close()
+	if err != nil || text != "Synthetic pixels" || calls != 1 {
+		t.Fatal("source adapter execution", text, err, calls)
+	}
+	c = start()
+	defer c.Close()
+	fresh, err := f.manager.newMediaPluginPolicy(ctx, n.msg, p.prompt, p.images, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh.post = func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+		t.Fatal("recovery resubmitted provider")
+		return nil, nil
+	}
+	text, err = fresh.observe(ctx)
+	if err != nil || text != "Synthetic pixels" || f.manager.billing.data.Total.Requests != 1 {
+		t.Fatal("recovery", text, err)
+	}
+}

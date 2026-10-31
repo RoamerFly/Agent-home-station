@@ -50,3 +50,7 @@ func parseUsage(body []byte, stamp time.Time) Usage {
 	u.CacheHit = hit
 	return u
 }
+
+// ReportedUsage decodes transport evidence for a host-owned plugin model call.
+// Plugin output is not a billing source. Missing/invalid counts remain unknown.
+func ReportedUsage(body []byte, stamp time.Time) Usage { return parseUsage(body, stamp) }
