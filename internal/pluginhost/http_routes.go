@@ -18,6 +18,7 @@ type HTTPRoute struct {
 	ID                string            `json:"id"`
 	Endpoint          string            `json:"endpoint"`
 	EndpointConfig    string            `json:"endpoint_config,omitempty"`
+	Optional          bool              `json:"optional,omitempty"`
 	Permission        string            `json:"permission,omitempty"`
 	Capabilities      []string          `json:"capabilities"`
 	Credential        string            `json:"credential,omitempty"`
@@ -58,6 +59,9 @@ func validateHTTPRoutes(p Package) error {
 			return errors.New("invalid HTTP route declaration")
 		}
 		seen[r.ID] = true
+		if r.Optional && r.EndpointConfig == "" {
+			return errors.New("optional route requires configurable endpoint")
+		}
 		var u *url.URL
 		if r.EndpointConfig != "" {
 			if r.Endpoint != "" || !routeConfigName.MatchString(r.EndpointConfig) || r.RefererPathPrefix != "" {
@@ -116,6 +120,9 @@ func validateConfiguredRoutes(p Package, values map[string]json.RawMessage) erro
 			continue
 		}
 		var endpoint string
+		if _, present := values[r.EndpointConfig]; !present && r.Optional {
+			continue
+		}
 		if json.Unmarshal(values[r.EndpointConfig], &endpoint) != nil {
 			return errors.New("route endpoint configuration missing")
 		}
@@ -155,7 +162,7 @@ func validateHTTPRouteResources(dir string, p Package) error {
 	for _, r := range p.HTTPRoutes {
 		if r.EndpointConfig != "" {
 			field, ok := schema.Properties[r.EndpointConfig]
-			if !ok || field.Secret || field.Type != "string" || !containsString(schema.Required, r.EndpointConfig) {
+			if !ok || field.Secret || field.Type != "string" || !r.Optional && !containsString(schema.Required, r.EndpointConfig) {
 				return errors.New("route endpoint requires declared required string configuration")
 			}
 		}

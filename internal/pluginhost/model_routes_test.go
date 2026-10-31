@@ -23,8 +23,9 @@ func TestModelRouteConfiguredDestinationAndPermissionIsolation(t *testing.T) {
 	json.Unmarshal(raw, &p)
 	p.Permissions = []string{"model.invoke"}
 	p.HTTPRoutes = []HTTPRoute{{ID: "vision", Permission: "model.invoke", EndpointConfig: "vision_endpoint", Capabilities: []string{"speech.synthesize"}, Credential: "key", CredentialHeader: "Authorization", CredentialPrefix: "Bearer "}}
+	p.HTTPRoutes = append(p.HTTPRoutes, HTTPRoute{ID: "optional", Permission: "model.invoke", EndpointConfig: "asr_endpoint", Optional: true, Capabilities: []string{"speech.synthesize"}})
 	files := map[string]string{
-		"config.schema.json": `{"type":"object","properties":{"vision_endpoint":{"type":"string"},"key":{"type":"string","x-secret":true,"x-host-only":true}},"required":["vision_endpoint","key"],"additionalProperties":false}`,
+		"config.schema.json": `{"type":"object","properties":{"asr_endpoint":{"type":"string"},"vision_endpoint":{"type":"string"},"key":{"type":"string","x-secret":true,"x-host-only":true}},"required":["vision_endpoint","key"],"additionalProperties":false}`,
 		"capabilities.json":  `{"version":1,"capabilities":[{"id":"speech.synthesize","implementation":"ready","description":"synthetic","permissions":["model.invoke"],"input_schema":{"type":"object"},"output_schema":{"type":"object"},"discoverable":true}]}`,
 	}
 	for name, content := range files {
@@ -63,6 +64,9 @@ func TestModelRouteConfiguredDestinationAndPermissionIsolation(t *testing.T) {
 	}
 	j := Job{Plugin: p.ID, Version: p.Version, PackageDigest: i.Digest, ConfigRevision: "1", Tool: "speech.synthesize", Context: Invocation{Account: "a"}}
 	cap := Capability{ID: j.Tool, Permissions: []string{"model.invoke"}}
+	if _, err = store.ResolveModelRequest(ctx, j, cap, "optional", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("unconfigured optional route callable")
+	}
 	req, err := store.ResolveModelRequest(ctx, j, cap, "vision", json.RawMessage(`{"model":"synthetic"}`))
 	if err != nil || req.Endpoint != "https://provider.example/chat/completions" || req.Headers["Authorization"] != "Bearer synthetic-key" {
 		t.Fatal("configured model route failed", err)
@@ -93,5 +97,20 @@ func TestModelRouteDeclarationRequiresOneBoundDestination(t *testing.T) {
 		if validateHTTPRoutes(Package{Permissions: []string{"model.invoke"}, HTTPRoutes: []HTTPRoute{r}}) == nil {
 			t.Fatal("invalid model route declaration accepted")
 		}
+	}
+}
+
+func TestOptionalRouteStillValidatesSuppliedEndpoint(t *testing.T) {
+	p := Package{HTTPRoutes: []HTTPRoute{{EndpointConfig: "asr_endpoint", Optional: true}}}
+	if err := validateConfiguredRoutes(p, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{`null`, `""`, `123`, `"http://example.org/asr"`, `"https://example.org/asr?key=x"`} {
+		if validateConfiguredRoutes(p, map[string]json.RawMessage{"asr_endpoint": json.RawMessage(raw)}) == nil {
+			t.Fatal("invalid optional endpoint accepted", raw)
+		}
+	}
+	if err := validateConfiguredRoutes(p, map[string]json.RawMessage{"asr_endpoint": json.RawMessage(`"https://example.org/asr"`)}); err != nil {
+		t.Fatal(err)
 	}
 }
