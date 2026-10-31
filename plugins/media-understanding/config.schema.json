@@ -64,6 +64,16 @@
       "title": "语音识别模型",
       "minLength": 1,
       "maxLength": 128
+    },
+    "asr_backend": {
+      "type": "string",
+      "title": "语音识别方式",
+      "description": "远程接口使用下方模型配置；本地识别仅使用宿主已登记的受控运行环境。",
+      "enum": [
+        "remote",
+        "local"
+      ],
+      "default": "remote"
     }
   },
   "required": [

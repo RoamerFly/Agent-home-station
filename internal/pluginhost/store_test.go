@@ -2,6 +2,8 @@ package pluginhost
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -23,8 +25,22 @@ func readyFixture(t *testing.T) string {
 	if err = json.Unmarshal(raw, &p); err != nil {
 		t.Fatal(err)
 	}
+	// Lifecycle/store tests need a stable synthetic contract, not the evolving
+	// production speech package. Keep the historical backend setting shape and
+	// one ready capability; individual route/config tests install their own
+	// explicit schemas and routes.
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dest, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte(body))
+		p.Files[name] = hex.EncodeToString(sum[:])
+	}
+	write("config.schema.json", `{"type":"object","properties":{"backend":{"type":"string"}},"additionalProperties":false}`)
+	write("capabilities.json", `{"version":1,"capabilities":[{"id":"speech.synthesize","implementation":"ready","description":"Synthetic capability","permissions":["artifact.read","artifact.write","network","gpu","model.invoke"],"input_schema":{"type":"object"},"output_schema":{"type":"object"},"discoverable":true}]}`)
 	p.Status = "ready"
-	p.Runtime.Transport = "mcp-http"
+	p.Runtime = Runtime{Transport: "mcp-http"}
+	p.HTTPRoutes = nil
 	raw, _ = json.Marshal(p)
 	if err = os.WriteFile(filepath.Join(dest, "plugin.json"), raw, 0600); err != nil {
 		t.Fatal(err)

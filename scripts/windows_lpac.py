@@ -61,7 +61,8 @@ def mount_granted(path, sid, mode):
             flags = c.c_ubyte.from_address(ace.value + 1).value
             kind = c.c_ubyte.from_address(ace.value).value
             mask = w.DWORD.from_address(ace.value + 4).value
-            if kind == 0 and flags & 3 == 3 and mask & expected == expected and adv.EqualSid(ace.value + 8, sid):
+            inherited = flags & 3 == 3
+            if kind == 0 and (inherited if Path(path).is_dir() else not inherited) and mask & expected == expected and adv.EqualSid(ace.value + 8, sid):
                 return True
         return False
     finally:
@@ -126,9 +127,11 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
         for path, mode in paths:
             if mount_granted(path, sid, mode):
                 continue
-            # No /T: grants inherit to descendants; unrelated objects unchanged.
+            # No /T: directory grants inherit to descendants; a registered
+            # sidecar file receives only its own RX ACE.
+            inheritance = "(OI)(CI)" if Path(path).is_dir() else ""
             subprocess.run([str(Path(os.environ["SystemRoot"]) / "System32/icacls.exe"), path,
-                            "/grant", "*" + sid_text.value + ":(OI)(CI)" + mode, "/Q"], check=True,
+                            "/grant", "*" + sid_text.value + ":" + inheritance + "(" + mode + ")", "/Q"], check=True,
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                            creationflags=subprocess.CREATE_NO_WINDOW)
     finally:

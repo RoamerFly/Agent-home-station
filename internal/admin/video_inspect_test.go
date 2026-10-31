@@ -13,7 +13,9 @@ import (
 	"strings"
 	"testing"
 	"wechat-bot/internal/bailian"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -153,5 +155,30 @@ func TestVideoInspectionUsesScopedCacheAndAdvertisesContinuation(t *testing.T) {
 	f.manager.config.Behavior.ReadVideos = false
 	if p.enabled("video_inspect") {
 		t.Fatal("closed video permission ignored")
+	}
+}
+
+func TestInspectionPluginAudioUsesCanonicalReceivedAssetSource(t *testing.T) {
+	f, p, n := forwardFixture(t)
+	f.manager.config.Behavior.ReadVideos = true
+	n.message = linuxnative.Message{ID: "canonical-video", AccountID: "test", ThreadID: "source@chatroom", SenderID: "source-member", ServerID: "video-server", CreatedAt: "2026-10-30T12:00:00Z", Direction: "incoming", Type: 43}
+	trace := companion.Input{Channel: "wechat", Account: "test", Thread: "source@chatroom", TraceID: n.message.ID, Sender: n.message.SenderID, MessageTime: n.message.CreatedAt}
+	asset, err := f.manager.rememberAssetFormats(trace, assetOriginal{Data: inspectionFixture(t), MIME: "video/mp4", Filename: "canonical.mp4"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := p.inspectionTranscriptionMessage(context.Background(), videoInspectionInput{Asset: asset.ID, SourceThread: "source@chatroom"})
+	if err != nil || message.ID != n.message.ID || message.ThreadID != "source@chatroom" {
+		t.Fatalf("message=%+v err=%v", message, err)
+	}
+	// An asset is not enough if its original native source is no longer a
+	// received video/share. The adapter must not manufacture a new source.
+	n.message.Direction = "outgoing"
+	if _, err = p.inspectionTranscriptionMessage(context.Background(), videoInspectionInput{Asset: asset.ID, SourceThread: "source@chatroom"}); err == nil {
+		t.Fatal("outgoing source accepted for plugin ASR")
+	}
+	n.message.Direction = "incoming"
+	if _, err = p.inspectionTranscriptionMessage(context.Background(), videoInspectionInput{Asset: asset.ID}); err == nil {
+		t.Fatal("missing canonical source scope accepted")
 	}
 }

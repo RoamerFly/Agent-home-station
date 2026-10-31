@@ -37,6 +37,11 @@ func (m *Manager) installedPluginRuntime() (*pluginruntime.Controller, bool, err
 			return nil, false, errors.New("plugin runtime deployment configuration invalid")
 		}
 	}
+	// Local ASR paths are resolved from the administrator-installed public
+	// registration at launch time. They are never accepted from deployment JSON,
+	// plugin configuration, or a capability argument.
+	options.ResourceRoots = m.localASRPluginResources
+	options.HostMetadata = m.localASRPluginMetadata
 	ready := false
 	if runtime.GOOS == "windows" {
 		ready = options.Pythonw != "" && options.WindowsHelper != ""

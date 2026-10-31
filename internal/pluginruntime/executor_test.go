@@ -113,6 +113,20 @@ func TestReadOnlyResourceRegistrationIsBoundAndImmutable(t *testing.T) {
 	if _, err := readResourceManifest(oversized); err == nil {
 		t.Fatal("oversized resource manifest accepted")
 	}
+	registrationDir := filepath.Join(root, "registrations")
+	if err := os.Mkdir(registrationDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	externalManifest := filepath.Join(registrationDir, "approved-model.json")
+	if err := os.WriteFile(externalManifest, []byte(`{"name":"synthetic-model","files":["model.bin"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	registeredOutsideRoot := spec
+	registeredOutsideRoot.Resources = append([]ReadOnlyResource(nil), spec.Resources...)
+	registeredOutsideRoot.Resources[0].ManifestPath = externalManifest
+	if err := validateResources(p, g, registeredOutsideRoot); err != nil {
+		t.Fatal("host-only external registration manifest rejected", err)
+	}
 
 	cases := []struct {
 		name   string
@@ -122,7 +136,7 @@ func TestReadOnlyResourceRegistrationIsBoundAndImmutable(t *testing.T) {
 		{"foreign plugin", func(s *LaunchSpec) { s.Resources[0].Plugin = "music" }},
 		{"foreign version", func(s *LaunchSpec) { s.Resources[0].PackageVersion = "0.1.2" }},
 		{"changed manifest digest", func(s *LaunchSpec) { s.Resources[0].ManifestSHA256 = strings.Repeat("0", 64) }},
-		{"manifest outside root", func(s *LaunchSpec) { s.Resources[0].ManifestPath = filepath.Join(code, "main.py") }},
+		{"manifest in package directory", func(s *LaunchSpec) { s.Resources[0].ManifestPath = filepath.Join(code, "main.py") }},
 		{"private root", func(s *LaunchSpec) { s.Resources[0].Root = data }},
 		{"duplicate resource identity", func(s *LaunchSpec) { s.Resources = append(s.Resources, s.Resources[0]) }},
 	}
@@ -164,12 +178,14 @@ func TestInstalledExecutorAcceptsResourcesOnlyFromHostResolver(t *testing.T) {
 			t.Fatal("resource resolver received unbound plugin scope")
 		}
 		return []ReadOnlyResource{registered}, nil
+	}, HostMetadata: func(ctx context.Context, p pluginhost.Package, g pluginhost.Grant) (map[string]json.RawMessage, error) {
+		return map[string]json.RawMessage{"local_asr": json.RawMessage(`{"profile_id":"synthetic","resource_version":"v1"}`)}, nil
 	}})
 	spec, err := executor.Resolve(context.Background(), installed.Package, grant)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if called != 1 || len(spec.Resources) != 1 || spec.Resources[0] != registered {
+	if called != 1 || len(spec.Resources) != 1 || spec.Resources[0] != registered || string(spec.HostMetadata["local_asr"]) != `{"profile_id":"synthetic","resource_version":"v1"}` {
 		t.Fatal("host resource registration was not carried into launch spec")
 	}
 	// A deployment that does not explicitly register a resource exposes none.
@@ -184,21 +200,31 @@ func TestInstalledExecutorAcceptsResourcesOnlyFromHostResolver(t *testing.T) {
 	if _, err := denied.Resolve(context.Background(), installed.Package, grant); err == nil {
 		t.Fatal("resource registry failure did not fail closed")
 	}
+	metadataDenied := InstalledExecutor(store, Options{HostMetadata: func(context.Context, pluginhost.Package, pluginhost.Grant) (map[string]json.RawMessage, error) {
+		return nil, errors.New("host metadata registry unavailable")
+	}})
+	if _, err := metadataDenied.Resolve(context.Background(), installed.Package, grant); err == nil {
+		t.Fatal("metadata registry failure did not fail closed")
+	}
 }
 
 const sandboxFixture = `import json, os, sys
 config={}
+host_metadata={}
 for line in sys.stdin:
  q=json.loads(line)
  if 'id' not in q: continue
  r={}
  if q['method']=='initialize':
   config=q.get('params',{}).get('_meta',{}).get('wechat/configuration',{})
+  host_metadata=q.get('params',{}).get('_meta',{}).get('wechat/host_metadata',{})
   r={'protocolVersion':'2025-06-18'}
  if q['method']=='tools/call':
   p=q['params']; a=p.get('arguments',{}); n=p['name']
   if n=='echo': r={'text':a['text'],'secret':os.environ.get('PRIVATE_PLUGIN_TEST_TOKEN')}
   elif n=='configuration': r=config
+
+  elif n=='host_metadata': r=host_metadata
   elif n=='pid': r={'pid':os.getpid()}
   elif n=='read':
    try: r={'text':open(a['path']).read(),'denied':False}
@@ -250,12 +276,15 @@ func TestLiveIsolatedStdio(t *testing.T) {
 	data := filepath.Join(root, "data")
 	outside := filepath.Join(root, "other-account.txt")
 	resourceRoot := filepath.Join(root, "approved-model")
+	sidecarRoot := filepath.Join(root, "sidecars")
 	os.Mkdir(code, 0700)
 	os.Mkdir(data, 0700)
 	os.Mkdir(resourceRoot, 0700)
+	os.Mkdir(sidecarRoot, 0700)
 	os.WriteFile(outside, []byte("synthetic private boundary"), 0600)
 	resourceManifest := filepath.Join(resourceRoot, "model.manifest.json")
 	resourceFile := filepath.Join(resourceRoot, "model.bin")
+	sidecarFile := filepath.Join(sidecarRoot, "vad.onnx")
 	resourceManifestBytes := []byte(`{"name":"synthetic-model","files":["model.bin"]}`)
 	if err := os.WriteFile(resourceManifest, resourceManifestBytes, 0600); err != nil {
 		t.Fatal(err)
@@ -263,10 +292,13 @@ func TestLiveIsolatedStdio(t *testing.T) {
 	if err := os.WriteFile(resourceFile, []byte("synthetic model bytes"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(sidecarFile, []byte("synthetic vad bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	resourceHash := sha256.Sum256(resourceManifestBytes)
 	p := readyFixture(t, code)
 	g := pluginhost.Grant{Account: "a", Plugin: p.ID, Version: p.Version}
-	spec := LaunchSpec{PackageDir: code, DataDir: data, Python: python, Pythonw: filepath.Join(filepath.Dir(python), "pythonw.exe"), RuntimeRoots: []string{filepath.Dir(python)}, WindowsHelper: helper, Resources: []ReadOnlyResource{{ID: "synthetic-model", Root: resourceRoot, Account: g.Account, Plugin: p.ID, PackageVersion: p.Version, ManifestPath: resourceManifest, ManifestSHA256: hex.EncodeToString(resourceHash[:])}}}
+	spec := LaunchSpec{PackageDir: code, DataDir: data, Python: python, Pythonw: filepath.Join(filepath.Dir(python), "pythonw.exe"), RuntimeRoots: []string{filepath.Dir(python)}, WindowsHelper: helper, Resources: []ReadOnlyResource{{ID: "synthetic-model", Root: resourceRoot, Account: g.Account, Plugin: p.ID, PackageVersion: p.Version, ManifestPath: resourceManifest, ManifestSHA256: hex.EncodeToString(resourceHash[:])}, {ID: "synthetic-vad", Root: sidecarFile, Kind: "file", Account: g.Account, Plugin: p.ID, PackageVersion: p.Version, ManifestPath: resourceManifest, ManifestSHA256: hex.EncodeToString(resourceHash[:])}}, HostMetadata: map[string]json.RawMessage{"local_asr": json.RawMessage(`{"profile_id":"synthetic","resource_version":"` + strings.Repeat("a", 64) + `"}`)}}
 	e := Executor{Resolve: func(context.Context, pluginhost.Package, pluginhost.Grant) (LaunchSpec, error) { return spec, nil }}
 	t.Setenv("PRIVATE_PLUGIN_TEST_TOKEN", "synthetic-not-for-child")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -295,6 +327,9 @@ func TestLiveIsolatedStdio(t *testing.T) {
 	if r := call("echo", map[string]string{"text": "合成 MCP 连通"}); r["text"] != "合成 MCP 连通" || r["secret"] != nil {
 		t.Fatal("echo or environment isolation failed")
 	}
+	if r := call("host_metadata", map[string]string{}); r["local_asr"].(map[string]any)["profile_id"] != "synthetic" {
+		t.Fatal("trusted initializer metadata missing", r)
+	}
 	if r := call("read", map[string]string{"path": outside}); r["denied"] != true {
 		t.Fatal("other account file was readable")
 	}
@@ -303,6 +338,12 @@ func TestLiveIsolatedStdio(t *testing.T) {
 	}
 	if r := call("write", map[string]string{"path": resourceFile}); r["denied"] != true {
 		t.Fatal("approved resource was writable")
+	}
+	if r := call("read", map[string]string{"path": sidecarFile}); r["denied"] != false || r["text"] != "synthetic vad bytes" {
+		t.Fatal("approved sidecar file was unavailable", r)
+	}
+	if r := call("write", map[string]string{"path": sidecarFile}); r["denied"] != true {
+		t.Fatal("approved sidecar file was writable")
 	}
 	if r := call("write", map[string]string{"path": filepath.Join(code, "main.py")}); r["denied"] != true {
 		t.Fatal("package was writable")

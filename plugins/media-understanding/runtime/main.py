@@ -64,9 +64,13 @@ class Wire:
                     raise ValueError("invalid_protocol")
                 method = request.get("method")
                 if method == "initialize":
-                    configuration = request.get("params", {}).get("_meta", {}).get("wechat/configuration", {}).get("values", {})
+                    meta = request.get("params", {}).get("_meta", {})
+                    configuration = meta.get("wechat/configuration", {}).get("values", {})
                     if not isinstance(configuration, dict):
                         raise ValueError("invalid_configuration")
+                    host_metadata = meta.get("wechat/host_metadata", {})
+                    if not isinstance(host_metadata, dict):
+                        raise ValueError("invalid_host_metadata")
                     initialized = True
                     result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "media-understanding", "version": "0.1.1"}}
                 elif method == "ping" and initialized:
@@ -79,7 +83,7 @@ class Wire:
                     if params.get("name") == "media.observe":
                         result = observation.observe(params.get("arguments"), configuration, lambda params: self.host("wechat/model_request", params))
                     elif params.get("name") == "media.transcribe":
-                        result = transcription.transcribe(params.get("arguments"), configuration, lambda params: self.host("wechat/model_request", params))
+                        result = transcription.transcribe(params.get("arguments"), configuration, host_metadata, self.host)
                     else:
                         raise ValueError("capability_unavailable")
                 else:

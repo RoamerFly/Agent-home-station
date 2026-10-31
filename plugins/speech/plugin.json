@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "speech",
   "name": "语音生成",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "host_protocol": 1,
   "status": "migration-pending",
   "platforms": [
@@ -10,7 +10,8 @@
     "linux-amd64"
   ],
   "runtime": {
-    "transport": "unbound"
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
   },
   "permissions": [
     "artifact.read",
@@ -21,14 +22,30 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "46d695ee02e0d92c368aeab496555c37d48a90af1f60e252aca7da5823a4e9f0",
-    "CHANGELOG.md": "0688abebe9b7a3826ee5def33287290c20cd363bdf25bda9f1aaef7a7219920b",
-    "config.schema.json": "95693d311a4827fcd7ab4d1ed7a6f590568841010f9999fe7761e7c810cb753f",
-    "MIGRATION.md": "72f2b911a30ce7b61fd3ee0bebddb369b593b972a904a11d538de6f1676a2f3c",
-    "PERMISSIONS.md": "0d94d0895e236888538612c666a36a770f503fbae321debb949261e54687c336",
-    "README.md": "106304b339267f8b2daf4228cfaf7ff2e771c8a3d74f7afd6eb173c30304493c",
-    "runtime/README.md": "072ef9ce9b7fb7c06975dd7b9cf762a920d23d7aa16fdf9b08beb759d81a5c1a",
+    "capabilities.json": "a4cb47472b880960531800b271ba9eb26d705cfd364e817cb4c38c147d48fdb4",
+    "CHANGELOG.md": "001bcb60f27a5b4a5fccc2a4622a040ea242a024948ecf6ddf6c5c8e5d30ca14",
+    "config.schema.json": "3fda5eefef6c4097c6069009c71530a20cc9bb8ad8c7316bdf468f4e7cef6d95",
+    "MIGRATION.md": "6c0024c9e85c7e10a0f1a83b626235bbe6ab50dac0425ec551e95800ae2bfef9",
+    "PERMISSIONS.md": "97190fd4a6db62b25900b2b68d9d52143a8cb381b66848278fbfd444ebf3b451",
+    "README.md": "75e336127c3799a8e9e2e0fde7c1b727d4d0aeeccd3add026f1c7a395701dc64",
+    "runtime/cloud_tts.py": "821318e57932d2c75c7368ecdec44149b0684beb2e7175b2ea4ad39de1cb2e52",
+    "runtime/main.py": "361679e745a9aa3bb9184dba388d26f819e0d1377adb24da692033c125c8e738",
+    "runtime/README.md": "e6f6f2834e9ceb85037e5ee5f88afc9b9af55ea9d0a0164c2fb4b6d3bb4655a5",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "tests/test_cloud_tts.py": "6c17889c9652060c9ebe3e1dcb993b49b9d96502cddc066b59901241bad9a8f3",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
-  }
+  },
+  "http_routes": [
+    {
+      "id": "synthesize",
+      "endpoint_config": "tts_endpoint",
+      "permission": "model.invoke",
+      "capabilities": [
+        "speech.synthesize"
+      ],
+      "credential": "tts_key",
+      "credential_header": "Authorization",
+      "credential_prefix": "Bearer "
+    }
+  ]
 }

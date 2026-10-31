@@ -2,6 +2,7 @@ package pluginruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strconv"
@@ -13,11 +14,12 @@ import (
 
 // Options come from deployment, never plugin/model-supplied tool arguments.
 type Options struct {
-	Python        string   `json:"python"`
-	Pythonw       string   `json:"pythonw"`
-	WindowsHelper string   `json:"windows_helper"`
-	RuntimeRoots  []string `json:"runtime_roots"`
-	ResourceRoots ResourceResolver
+	Python        string           `json:"python"`
+	Pythonw       string           `json:"pythonw"`
+	WindowsHelper string           `json:"windows_helper"`
+	RuntimeRoots  []string         `json:"runtime_roots"`
+	ResourceRoots ResourceResolver `json:"-"`
+	HostMetadata  MetadataResolver `json:"-"`
 }
 
 func InstalledExecutor(store *pluginhost.Store, options Options) *Executor {
@@ -48,8 +50,26 @@ func InstalledExecutor(store *pluginhost.Store, options Options) *Executor {
 				return LaunchSpec{}, err
 			}
 		}
-		return LaunchSpec{PackageDir: code, DataDir: data, Python: options.Python, Pythonw: options.Pythonw, WindowsHelper: options.WindowsHelper, RuntimeRoots: append([]string(nil), options.RuntimeRoots...), Resources: append([]ReadOnlyResource(nil), resources...), Configuration: &config}, nil
+		metadata := map[string]json.RawMessage(nil)
+		if options.HostMetadata != nil {
+			metadata, err = options.HostMetadata(ctx, p, g)
+			if err != nil {
+				return LaunchSpec{}, err
+			}
+		}
+		return LaunchSpec{PackageDir: code, DataDir: data, Python: options.Python, Pythonw: options.Pythonw, WindowsHelper: options.WindowsHelper, RuntimeRoots: append([]string(nil), options.RuntimeRoots...), Resources: append([]ReadOnlyResource(nil), resources...), HostMetadata: cloneMetadata(metadata), Configuration: &config}, nil
 	}}
+}
+
+func cloneMetadata(metadata map[string]json.RawMessage) map[string]json.RawMessage {
+	if len(metadata) == 0 {
+		return nil
+	}
+	copy := make(map[string]json.RawMessage, len(metadata))
+	for key, value := range metadata {
+		copy[key] = append(json.RawMessage(nil), value...)
+	}
+	return copy
 }
 
 // Controller connects persisted administrative state to actual isolated

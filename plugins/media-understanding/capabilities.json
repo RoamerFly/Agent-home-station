@@ -54,7 +54,7 @@
     {
       "id": "media.transcribe",
       "implementation": "migration-pending",
-      "description": "识别获准的 WAV 音频，返回实际转写与来源；接口和密钥单独配置，宿主来源适配仍在迁移。",
+      "description": "识别获准的 WAV 音频，返回实际转写与来源；可选远程模型路由或宿主登记的本地 ASR，二者都不接收路径、字节或命令参数。",
       "permissions": [
         "artifact.read",
         "model.invoke"

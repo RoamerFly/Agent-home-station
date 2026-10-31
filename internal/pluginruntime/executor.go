@@ -29,6 +29,7 @@ type LaunchSpec struct {
 	WindowsHelper string
 	RuntimeRoots  []string
 	Resources     []ReadOnlyResource
+	HostMetadata  map[string]json.RawMessage
 	Configuration *pluginhost.RuntimeConfiguration
 }
 
@@ -36,12 +37,18 @@ type LaunchSpec struct {
 // plugin, model, tool argument or package configuration. The manifest binds a
 // particular approved resource root to one account/plugin/version and detects
 // changes to the registered manifest between registration and process launch.
+// ManifestPath is host-only registration evidence; it is not required to be
+// under Root and is never mounted merely because it was read for validation.
 // It deliberately does not claim to verify every resource file: a parser for
 // the declared manifest format must validate its indexed file hashes before
 // treating model/runtime content as integrity checked.
 type ReadOnlyResource struct {
-	ID             string
+	ID string
+	// Root is a specific directory unless Kind is "file". File resources let
+	// a profile expose one registered sidecar (such as a VAD model) without
+	// granting its whole parent model directory.
 	Root           string
+	Kind           string
 	Account        string
 	Plugin         string
 	PackageVersion string
@@ -50,6 +57,13 @@ type ReadOnlyResource struct {
 }
 
 type ResourceResolver func(context.Context, pluginhost.Package, pluginhost.Grant) ([]ReadOnlyResource, error)
+
+// MetadataResolver supplies small host-owned initialization metadata. It is
+// distinct from persisted plugin configuration and tool arguments, so a
+// model, plugin setting or capability request cannot select host paths or
+// replace registered resources.
+type MetadataResolver func(context.Context, pluginhost.Package, pluginhost.Grant) (map[string]json.RawMessage, error)
+
 type Resolver func(context.Context, pluginhost.Package, pluginhost.Grant) (LaunchSpec, error)
 type Executor struct {
 	Resolve Resolver
@@ -98,6 +112,9 @@ func (e *Executor) Start(ctx context.Context, p pluginhost.Package, g pluginhost
 	if err = validateResources(p, g, spec); err != nil {
 		return nil, err
 	}
+	if err = validateHostMetadata(spec.HostMetadata); err != nil {
+		return nil, err
+	}
 	verified, err := pluginhost.Verify(spec.PackageDir)
 	if err != nil {
 		return nil, err
@@ -127,11 +144,39 @@ func (e *Executor) Start(ctx context.Context, p pluginhost.Package, g pluginhost
 	if err != nil {
 		return nil, err
 	}
-	if err = s.initializeConfigured(ctx, spec.Configuration); err != nil {
+	if err = s.initializeConfigured(ctx, spec.Configuration, spec.HostMetadata); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+const maxHostMetadataBytes = 16 << 10
+
+func validateHostMetadata(metadata map[string]json.RawMessage) error {
+	total := 0
+	for key, raw := range metadata {
+		if !safeMetadataKey(key) || len(raw) == 0 || !json.Valid(raw) {
+			return errors.New("plugin host metadata invalid")
+		}
+		total += len(key) + len(raw)
+		if total > maxHostMetadataBytes {
+			return errors.New("plugin host metadata exceeds limit")
+		}
+	}
+	return nil
+}
+
+func safeMetadataKey(key string) bool {
+	if len(key) == 0 || len(key) > 64 {
+		return false
+	}
+	for i, r := range key {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || (r == '_' || r == '-') && i > 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // sameVerifiedPackage compares the package contract after normalizing the
@@ -239,7 +284,11 @@ func validateResources(p pluginhost.Package, g pluginhost.Grant, s LaunchSpec) e
 			return errors.New("plugin resource registration invalid")
 		}
 		seen[resource.ID] = true
-		if err := cleanPath(resource.Root, true); err != nil || cleanPath(resource.ManifestPath, false) != nil || !inside(resource.ManifestPath, resource.Root) {
+		if resource.Kind != "" && resource.Kind != "file" {
+			return errors.New("plugin resource registration invalid")
+		}
+		resourceDirectory := resource.Kind != "file"
+		if err := cleanPath(resource.Root, resourceDirectory); err != nil || cleanPath(resource.ManifestPath, false) != nil {
 			return errors.New("plugin resource path unavailable")
 		}
 		manifest, err := readResourceManifest(resource.ManifestPath)
@@ -251,15 +300,19 @@ func validateResources(p pluginhost.Package, g pluginhost.Grant, s LaunchSpec) e
 			return errors.New("plugin resource manifest changed")
 		}
 		for _, earlier := range s.Resources[:i] {
-			if inside(resource.Root, earlier.Root) || inside(earlier.Root, resource.Root) {
+			if samePath(resource.Root, earlier.Root) {
 				return errors.New("plugin resource roots overlap")
 			}
 		}
-		if inside(resource.Root, s.DataDir) || inside(s.DataDir, resource.Root) || inside(resource.Root, s.PackageDir) || inside(s.PackageDir, resource.Root) {
+		if inside(resource.Root, s.DataDir) || inside(s.DataDir, resource.Root) || inside(resource.Root, s.PackageDir) || inside(s.PackageDir, resource.Root) || inside(resource.ManifestPath, s.DataDir) || inside(resource.ManifestPath, s.PackageDir) {
 			return errors.New("plugin resource overlaps private or package data")
 		}
 	}
 	return nil
+}
+
+func samePath(left, right string) bool {
+	return left == right || runtime.GOOS == "windows" && strings.EqualFold(left, right)
 }
 
 const maxResourceManifestBytes int64 = 1 << 20

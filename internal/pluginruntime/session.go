@@ -78,13 +78,26 @@ func (s *session) Close() error {
 	}
 }
 func (s *session) initialize(ctx context.Context) error {
-	return s.initializeConfigured(ctx, nil)
+	return s.initializeConfigured(ctx, nil, nil)
 }
 func (s *session) Alive() bool { return !s.dead.Load() }
-func (s *session) initializeConfigured(ctx context.Context, config *pluginhost.RuntimeConfiguration) error {
+func (s *session) initializeConfigured(ctx context.Context, config *pluginhost.RuntimeConfiguration, hostMetadata map[string]json.RawMessage) error {
 	params := map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "wechat-plugin-host", "version": "1"}}
-	if config != nil {
-		params["_meta"] = map[string]any{"wechat/configuration": config}
+	if config != nil || len(hostMetadata) > 0 {
+		meta := map[string]any{}
+		if config != nil {
+			meta["wechat/configuration"] = config
+		}
+		if len(hostMetadata) > 0 {
+			// Values have been JSON-validated by Executor.Start. Copy the raw
+			// value so a resolver cannot mutate the launch metadata after start.
+			copy := map[string]json.RawMessage{}
+			for key, value := range hostMetadata {
+				copy[key] = append(json.RawMessage(nil), value...)
+			}
+			meta["wechat/host_metadata"] = copy
+		}
+		params["_meta"] = meta
 	}
 	r, err := s.rpc(ctx, "initialize", params, true)
 	if err != nil {

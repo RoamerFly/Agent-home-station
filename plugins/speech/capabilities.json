@@ -4,17 +4,30 @@
     {
       "id": "speech.synthesize",
       "implementation": "migration-pending",
-      "description": "TTS、说话声线、克隆与训练",
+      "description": "通过宿主绑定的云端接口合成默认说话声线；宿主核验音频并负责素材登记与微信投递。",
       "permissions": [
-        "artifact.read",
-        "artifact.write",
-        "network",
-        "gpu",
         "model.invoke"
       ],
       "input_schema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "instruction": {
+            "type": "string",
+            "maxLength": 1500
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "text"
+        ],
         "additionalProperties": false
       },
       "output_schema": {

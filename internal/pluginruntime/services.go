@@ -31,6 +31,12 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 			if p == "model.invoke" && method == "wechat/model_request" {
 				allowed = true
 			}
+			// Local transcription is a bounded host adapter for one verified
+			// media reference. It does not grant the plugin a general process
+			// executor: the host resolves its fixed runner and resource profile.
+			if p == "artifact.read" && cap.ID == "media.transcribe" && method == "wechat/local_transcription" {
+				allowed = true
+			}
 		}
 		if !allowed {
 			return nil, errors.New("host service not permitted by capability")

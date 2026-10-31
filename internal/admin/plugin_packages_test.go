@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,8 +12,11 @@ import (
 	"wechat-bot/internal/pluginruntime"
 )
 
-func TestPluginPackageAdminApprovalAndAccountIsolation(t *testing.T) {
-	f, accounts := setupAccounts(t)
+// readySpeechFixture keeps generic package-admin lifecycle tests independent
+// from the production speech plugin's evolving required cloud-TTS settings.
+// Route/config-specific tests declare their own contract elsewhere.
+func readySpeechFixture(t *testing.T) string {
+	t.Helper()
 	source := t.TempDir()
 	if err := os.CopyFS(source, os.DirFS("../../plugins/speech")); err != nil {
 		t.Fatal(err)
@@ -24,10 +29,28 @@ func TestPluginPackageAdminApprovalAndAccountIsolation(t *testing.T) {
 	if err = json.Unmarshal(b, &manifest); err != nil {
 		t.Fatal(err)
 	}
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(source, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte(body))
+		manifest.Files[name] = hex.EncodeToString(sum[:])
+	}
+	write("config.schema.json", `{"type":"object","properties":{"backend":{"type":"string"}},"additionalProperties":false}`)
+	write("capabilities.json", `{"version":1,"capabilities":[{"id":"speech.synthesize","implementation":"ready","description":"Synthetic capability","permissions":["artifact.read","artifact.write","network","gpu","model.invoke"],"input_schema":{"type":"object"},"output_schema":{"type":"object"},"discoverable":true}]}`)
 	manifest.Status = "ready"
-	manifest.Runtime.Transport = "mcp-http"
+	manifest.Runtime = pluginhost.Runtime{Transport: "mcp-http"}
+	manifest.HTTPRoutes = nil
 	b, _ = json.Marshal(manifest)
-	os.WriteFile(filepath.Join(source, "plugin.json"), b, 0600)
+	if err = os.WriteFile(filepath.Join(source, "plugin.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return source
+}
+
+func TestPluginPackageAdminApprovalAndAccountIsolation(t *testing.T) {
+	f, accounts := setupAccounts(t)
+	source := readySpeechFixture(t)
 	input := map[string]any{"directory": source}
 	if code, _, _ := f.request("POST", "/api/plugin-packages/prepare", input, true, false); code != 403 {
 		t.Fatal("CSRF", code)
@@ -37,7 +60,7 @@ func TestPluginPackageAdminApprovalAndAccountIsolation(t *testing.T) {
 		t.Fatalf("prepare %d %s", code, b)
 	}
 	var p pluginhost.Prepared
-	if err = json.Unmarshal(b, &p); err != nil {
+	if err := json.Unmarshal(b, &p); err != nil {
 		t.Fatal(err)
 	}
 	approval := map[string]any{"token": p.Token, "digest": p.Digest, "permissions": []string{"artifact.read"}, "confirm": false}
@@ -106,29 +129,12 @@ func TestPluginPackageRuntimeAdminLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := t.TempDir()
-	if err = os.CopyFS(source, os.DirFS("../../plugins/speech")); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(filepath.Join(source, "plugin.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var p pluginhost.Package
-	if json.Unmarshal(raw, &p) != nil {
-		t.Fatal("manifest")
-	}
-	p.Status = "ready"
-	p.Runtime.Transport = "mcp-http"
-	raw, _ = json.Marshal(p)
-	if err = os.WriteFile(filepath.Join(source, "plugin.json"), raw, 0600); err != nil {
-		t.Fatal(err)
-	}
+	source := readySpeechFixture(t)
 	prepared, err := store.Prepare(ctx, source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	i, err := store.Install(ctx, prepared.Token, prepared.Digest, p.Permissions)
+	i, err := store.Install(ctx, prepared.Token, prepared.Digest, prepared.Package.Permissions)
 	if err != nil {
 		t.Fatal(err)
 	}

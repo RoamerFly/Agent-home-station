@@ -20,21 +20,21 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "bcdf63f69fa313ebd7618c3cb4c218703ef955420e2d989308f3dbe9e4cda43d",
-    "CHANGELOG.md": "5b127414666dd88f8bb6f36324a34c5acae3321d5798719e6859c308bbe76ba9",
-    "config.schema.json": "5a5a344f4bc7968fe0d79d74d98f02f596b95fa09b84e42820e44a29251ee0aa",
-    "MIGRATION.md": "2d00107ea88376b891768bba2128608a9c6d4004349ffa5ec3ec6d6e9e9367e3",
-    "PERMISSIONS.md": "0bbeaa91d1556876518c361e94f2b7ae2e5a44707076f3dad844e5a3df9a59fc",
-    "README.md": "0ec3fd07c7f05afdeb901e1e90d1621ba4bd0050a0c711b44d2d465c1794e6ea",
+    "capabilities.json": "1f61fcfa94ca997c95b5e5ac9dcca636f4895613c11f5d8d0cc391a100147b5d",
+    "CHANGELOG.md": "0c8553e885093b32d4721a3da0763fc16333683292f89b0972f032e1287d3837",
+    "config.schema.json": "3e0f66f0ab537e51467c81c4d7f142f6d3909dd8ff4de4adb52592fe65e91e81",
+    "MIGRATION.md": "2d386037cd056b52373e5aa44f502eef23aa0f508b915988c35625dc209fa9e1",
+    "PERMISSIONS.md": "e621082134ac28272c823bc1d2714211c301a7593e6b03b63c0cc8b3b6105780",
+    "README.md": "88e231918226f8fe7c923a42708a0b548d2e43bb4ceea1996bbff2ef14e84590",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
-    "runtime/main.py": "f9f4bd4751c73b6276257f76f19932f846a26a9058ce139ea8bf682ded046195",
+    "runtime/main.py": "16bd8e9895338a3f562392dadb4019d4a0adcef7165328860267649fc2a5ce92",
     "runtime/observation.py": "2e1227644c170ff8ded65ec660ab2ca1f13cc6e9eac787c1c39275b8aebdcfb4",
     "runtime/local_asr.py": "0f450db04bd023769ae812a8d8d3582ce30f3552effb20b0c094be4a0f071ed0",
-    "runtime/README.md": "2343b7171b90975b8f2f8306da4f79299d6b0af5656eb94ac6625fa42f0d4474",
+    "runtime/README.md": "d95bbbecc8ea10e714f48ffe25672d0a0dde678ad9c38892b360d72df7aed632",
     "tests/test_observation.py": "ce1ae132f9f81f942059de212f056378378280ac4a279b40ace3d6550e2b5d41",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
-    "runtime/transcription.py": "1fb3e0e0384f2bd1ce45c992e370dbb7c40b7c3d0500fbef9416838def4991e0",
-    "tests/test_transcription.py": "22d9aceac7868d899f41876b81b911696619ada04ef9645aeeb28d50945d44f1"
+    "runtime/transcription.py": "f61ea813cbaaf85d876a3ed21746ca7edc09be94acb9b6bd8d7f227b588e4bb9",
+    "tests/test_transcription.py": "0f5fc49b67c74b6d813882e0bc63a257dacdbd954256fb3e380d6db2711c6062"
   },
   "http_routes": [
     {
