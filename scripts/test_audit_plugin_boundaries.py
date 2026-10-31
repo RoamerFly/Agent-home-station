@@ -30,6 +30,27 @@ class BoundaryAuditTest(unittest.TestCase):
         self.assertFalse(report["light_core_ready"])
         self.assertGreater(report["totals"]["core_optional_source_files"], 0)
 
+    def test_static_plugin_implementation_dependency_is_distinct_from_catalog(self):
+        dependencies = {
+            "wechat-bot/plugins",
+            "wechat-bot/plugins/mobile-control/backend",
+            "wechat-bot/plugins/share-reader/runtime",
+            "wechat-bot/internal/admin",
+        }
+        self.assertEqual(AUDIT.static_plugin_implementation_dependencies(dependencies), [
+            {"package": "wechat-bot/plugins/mobile-control/backend", "target_plugin": "mobile-control"},
+            {"package": "wechat-bot/plugins/share-reader/runtime", "target_plugin": "share-reader"},
+        ])
+
+    def test_current_static_plugin_implementation_residual_is_reported(self):
+        output = subprocess.check_output([sys.executable, "scripts/audit_plugin_boundaries.py", "--compact"], cwd=ROOT, text=True)
+        report = json.loads(output)
+        self.assertIn(
+            {"package": "wechat-bot/plugins/mobile-control/backend", "target_plugin": "mobile-control"},
+            report["static_plugin_implementation_dependencies"],
+        )
+        self.assertGreater(report["totals"]["core_static_plugin_implementation_packages"], 0)
+
     def test_final_gate_fails_while_inventory_is_incomplete(self):
         result = subprocess.run([sys.executable, "scripts/audit_plugin_boundaries.py", "--require-light"], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)

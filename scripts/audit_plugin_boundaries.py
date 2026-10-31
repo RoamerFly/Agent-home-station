@@ -36,6 +36,7 @@ DIRECT_DEPS = {
     "wechat-bot/internal/agenthost": "project-development",
     "wechat-bot/internal/channels": "share-reader",
 }
+PLUGIN_IMPLEMENTATION_PREFIX = "wechat-bot/plugins/"
 
 def category(path):
     name = path.name
@@ -83,6 +84,27 @@ def plugin_inventory():
                        "capabilities": capabilities})
     return result
 
+def static_plugin_implementation_dependencies(dependencies):
+    """Return plugin implementation packages compiled into the core binary.
+
+    Package descriptors under ``plugins/`` are catalog input and are not Go
+    dependencies.  A dependency whose import path has a component after the
+    repository ``plugins/`` prefix, however, means the admin binary directly
+    links plugin-specific implementation code.  Keep this separate from the
+    legacy ``internal/*`` residual list: both prevent a lightweight-core
+    release, but they require different migration work.
+    """
+    result = []
+    for package in sorted(set(dependencies)):
+        if not package.startswith(PLUGIN_IMPLEMENTATION_PREFIX):
+            continue
+        relative = package.removeprefix(PLUGIN_IMPLEMENTATION_PREFIX)
+        parts = relative.split("/")
+        if not parts or not parts[0]:
+            continue
+        result.append({"package": package, "target_plugin": parts[0]})
+    return result
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--require-light", action="store_true")
@@ -92,17 +114,21 @@ def main():
                               text=True, capture_output=True, check=True).stdout.splitlines())
     remaining_deps = [{"package": package, "target_plugin": plugin}
                       for package, plugin in DIRECT_DEPS.items() if package in deps]
+    static_plugin_deps = static_plugin_implementation_dependencies(deps)
     inventory, hits = plugin_inventory(), source_hits()
     plugins = {item["id"]: {"status": item["status"], "runtime": item["runtime"],
                              "capabilities": item["capabilities"], "core_references": hits.get(item["id"], [])}
                for item in inventory}
     complete = (len(inventory) == 9 and all(item["status"] == "ready" for item in inventory)
-                and not remaining_deps and not any(hits.values()))
+                and not remaining_deps and not static_plugin_deps and not any(hits.values()))
     report = {"light_core_ready": complete, "audit_only": True,
-              "direct_optional_dependencies": remaining_deps, "plugins": plugins,
+              "direct_optional_dependencies": remaining_deps,
+              "static_plugin_implementation_dependencies": static_plugin_deps,
+              "plugins": plugins,
               "totals": {"plugins": len(inventory), "ready_plugins": sum(item["status"] == "ready" for item in inventory),
                          "core_optional_source_files": sum(len(rows) for rows in hits.values()),
-                         "core_optional_dependency_packages": len(remaining_deps)},
+                         "core_optional_dependency_packages": len(remaining_deps),
+                         "core_static_plugin_implementation_packages": len(static_plugin_deps)},
               "core_boundary": {"retained": ["native_wechat_login_and_send", "account_and_auth", "memory_and_context", "asset_identity_and_delivery", "media_encoding_and_staging", "plugin_host"],
                                 "excluded_from_scan": ["tests", "account_data", "models", "runtimes", "pending_cleanup"]}}
     if args.compact:

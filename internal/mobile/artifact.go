@@ -17,6 +17,9 @@ func (c *Control) collectArtifact(ctx context.Context, b Bridge, t Task, a Artif
 	}
 	data := make([]byte, 0, a.Bytes)
 	for len(data) < a.Bytes {
+		if !c.Allowed(t.Source) {
+			return errPermissionChanged
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -46,6 +49,11 @@ func (c *Control) collectArtifact(ctx context.Context, b Bridge, t Task, a Artif
 	if hex.EncodeToString(digest[:]) != a.SHA256 || string(data[4:8]) != "ftyp" {
 		return errors.New("device_recording_integrity_invalid")
 	}
+	// A bridge call can revoke the requester on its final chunk. Do not write
+	// the recording or expose it to an analyzer after that point.
+	if !c.Allowed(t.Source) {
+		return errPermissionChanged
+	}
 	dir := filepath.Join(c.dir, "recordings")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -58,6 +66,9 @@ func (c *Control) collectArtifact(ctx context.Context, b Bridge, t Task, a Artif
 	a.AssetID = ""
 	var analysisErr error
 	if c.analyze != nil {
+		if !c.Allowed(t.Source) {
+			return errPermissionChanged
+		}
 		summary, assetID, err := c.analyze(ctx, t, a, data)
 		if err == nil {
 			a.Summary, a.AssetID = summary, assetID
@@ -67,6 +78,9 @@ func (c *Control) collectArtifact(ctx context.Context, b Bridge, t Task, a Artif
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.allowed(c.settings, t.Source) {
+		return errPermissionChanged
+	}
 	old := clone(c.tasks[t.ID])
 	current := clone(old)
 	if current.State == "cancelled" {

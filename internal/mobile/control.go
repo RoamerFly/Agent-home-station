@@ -26,6 +26,7 @@ var idPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 var observationPattern = regexp.MustCompile(`^obs-[a-f0-9]{32}$`)
 var artifactPattern = regexp.MustCompile(`^clip-[a-f0-9]{32}$`)
 var bridgeReasonPattern = regexp.MustCompile(`^device_[a-z_]{1,90}$`)
+var errPermissionChanged = errors.New("device_permission_changed")
 
 type Settings struct {
 	Revision   int64                 `json:"revision"`
@@ -375,7 +376,7 @@ func (c *Control) Cancel(id string, source Source) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	t, ok := c.tasks[id]
-	if !ok || !source.Admin && (source.Account != t.Source.Account || source.Thread != t.Source.Thread || source.Sender != t.Source.Sender) {
+	if !ok || !c.cancelAllowed(source, t.Source) {
 		return errors.New("device_task_not_found")
 	}
 	if t.State == "completed" || t.State == "cancelled" {
@@ -392,6 +393,36 @@ func (c *Control) Cancel(id string, source Source) error {
 		cancel()
 	}
 	return nil
+}
+
+// cancelAllowed deliberately differs from Start: a chat-origin request is
+// allowed to stop only its exact original task, even when the adapter marks it
+// non-admin. A management-page request has no conversation scope and must set
+// Admin; an in-conversation Admin bit is never a global cancellation grant.
+// Keep the dynamic adapter authorizer in both cases so revocation wins.
+func (c *Control) cancelAllowed(source, original Source) bool {
+	// Empty identity is reserved for the local management surface; it must not
+	// accidentally match a task that was also created without chat scope.
+	sameSource := source.Account != "" && source.Thread != "" && source.Sender != "" && source.Account == original.Account && source.Thread == original.Thread && source.Sender == original.Sender
+	managementSurface := source.Admin && source.Account == "" && source.Thread == "" && source.Sender == ""
+	if !sameSource && !managementSurface {
+		return false
+	}
+	// Chat adapters intentionally mark a normal cancel command as non-admin,
+	// while Start was authorized using the persisted request source. Once the
+	// caller has proved it is the original requester (or the local unscoped
+	// management surface), revalidate that original authority. Never promote an
+	// arbitrary same-room Admin bit into a global cancellation privilege.
+	if c.authorize == nil {
+		return true
+	}
+	if managementSurface {
+		// A separately authenticated local management surface must retain its
+		// ability to stop an orphaned task after the original chat requester was
+		// revoked or the Agent was paused.
+		return c.authorize(source)
+	}
+	return c.authorize(original)
 }
 func (c *Control) update(id, state, action, summary, reason, observation string) error {
 	c.mu.Lock()
@@ -469,6 +500,23 @@ func (c *Control) observe(ctx context.Context, b Bridge, device string) (Observa
 	}
 	return out, nil
 }
+
+// currentRunnable reads the durable task state before a sensitive hand-off.
+// It deliberately does not require State == running: the first observation is
+// taken while a newly scheduled task is still queued. The caller must still
+// check its context because cancellation can race immediately after this read.
+func (c *Control) currentRunnable(id string) (Task, bool) {
+	c.mu.Lock()
+	t, ok := c.tasks[id]
+	s := clone(c.settings)
+	closed := c.closed
+	c.mu.Unlock()
+	if !ok || closed || t.State == "cancelled" {
+		return Task{}, false
+	}
+	t = clone(t)
+	return t, c.allowed(s, t.Source)
+}
 func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string, s Settings) {
 	defer c.wg.Done()
 	defer cancel()
@@ -513,6 +561,14 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 			_ = c.update(id, "needs_review", "", "", reason, "")
 			return
 		}
+		// The bridge invocation may itself take long enough for access to be
+		// revoked. Never give that fresh screenshot to the planner afterward.
+		if current, runnable := c.currentRunnable(id); ctx.Err() != nil || !runnable {
+			if ctx.Err() == nil && current.ID != "" {
+				_ = c.update(id, "stopped", "", "", "device_permission_changed", o.ID)
+			}
+			return
+		}
 		if e = c.update(id, "running", "", "", "", o.ID); e != nil {
 			return
 		}
@@ -524,6 +580,12 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 		}
 		if ctx.Err() != nil {
 			break
+		}
+		// A planner may take arbitrarily long. Its result is never authority to
+		// finish, block, wait, or act after the requesting source was revoked.
+		if !c.Allowed(t.Source) {
+			_ = c.update(id, "stopped", "", "", "device_permission_changed", o.ID)
+			return
 		}
 		if step.Action == "blocked" {
 			_ = c.update(id, "needs_review", "", step.Summary, "device_user_action_required", o.ID)
@@ -557,6 +619,14 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 			_ = c.update(id, "needs_review", "", "", reason, "")
 			return
 		}
+		// Recheck after the second observation as well: a revoked requester must
+		// not turn a previously approved plan into a device action.
+		if current, runnable := c.currentRunnable(id); ctx.Err() != nil || !runnable {
+			if ctx.Err() == nil && current.ID != "" {
+				_ = c.update(id, "stopped", "", "", "device_permission_changed", fresh.ID)
+			}
+			return
+		}
 		same := fresh.Package == o.Package && fresh.Width == o.Width && fresh.Height == o.Height
 		oldNodes, _ := json.Marshal(o.Nodes)
 		newNodes, _ := json.Marshal(fresh.Nodes)
@@ -572,6 +642,15 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 		}
 		step.Arguments["device_id"], step.Arguments["observation_id"], step.Arguments["request_key"], step.Arguments["action"] = t.DeviceID, o.ID, id+"-step-"+hex.EncodeToString([]byte{byte(n)}), step.Action
 		if e = c.update(id, "running", step.Action, "动作提交前检查点", "", o.ID); e != nil {
+			return
+		}
+		// update() persists the checkpoint but must not be treated as an
+		// authorization lease. Check the latest durable task and policy directly
+		// before invoking the side-effecting bridge action.
+		if current, runnable := c.currentRunnable(id); ctx.Err() != nil || !runnable {
+			if ctx.Err() == nil && current.ID != "" {
+				_ = c.update(id, "stopped", "", "", "device_permission_changed", o.ID)
+			}
 			return
 		}
 		args, _ := json.Marshal(step.Arguments)
@@ -595,7 +674,19 @@ func (c *Control) run(ctx context.Context, cancel context.CancelFunc, id string,
 			return
 		}
 		if step.Action == "capture" {
-			if status.Result.Artifact == nil || c.collectArtifact(ctx, b, t, *status.Result.Artifact, step.Arguments["request_key"].(string)) != nil {
+			if !c.Allowed(t.Source) {
+				_ = c.update(id, "stopped", "", "", "device_permission_changed", o.ID)
+				return
+			}
+			artifactErr := error(nil)
+			if status.Result.Artifact != nil {
+				artifactErr = c.collectArtifact(ctx, b, t, *status.Result.Artifact, step.Arguments["request_key"].(string))
+			}
+			if status.Result.Artifact == nil || artifactErr != nil {
+				if errors.Is(artifactErr, errPermissionChanged) {
+					_ = c.update(id, "stopped", "", "", "device_permission_changed", o.ID)
+					return
+				}
 				_ = c.update(id, "needs_review", "", "", "device_recording_unavailable", o.ID)
 				return
 			}

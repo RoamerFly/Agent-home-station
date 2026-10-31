@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "mobile-control",
   "name": "手机控制",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "host_protocol": 1,
   "status": "migration-pending",
   "platforms": [
@@ -19,13 +19,16 @@
   ],
   "dependencies": [],
   "files": {
+    "backend/planner.go": "ba7d1f004f9fab93e65e159faf673b55ee30cf95bd85ed635a0467096bd6ac53",
+    "backend/planner_test.go": "02159744d7f44509ae02799d18e87c9d572eff79b5f14db57d0fc1193dd9f4cf",
     "capabilities.json": "4df6eb0a43ac1562b03b87bc92e7b71e99b1d6404d836cc3fb04327a0977f540",
-    "CHANGELOG.md": "0688abebe9b7a3826ee5def33287290c20cd363bdf25bda9f1aaef7a7219920b",
+    "CHANGELOG.md": "de7d81a3cf3a1d0ca3836d85c7315499981572ef041e7b8ead71cb441023ab0a",
     "config.schema.json": "95693d311a4827fcd7ab4d1ed7a6f590568841010f9999fe7761e7c810cb753f",
-    "MIGRATION.md": "e5ddb39b026bbcc850999d7aee84b7a3863dba281349ac55047b663431e26caa",
+    "MIGRATION.md": "55e2f8948e41ef0327086544da1b30c56a8733a439553bf966aa13b401eacffa",
     "PERMISSIONS.md": "c318bd6ecab255efc21fc0df77dd36ae997e1a4226481d7c670a8d3be8d41aef",
-    "README.md": "472cc109a61db4852189ebcdcf4749c4246d287e8a46172c14b723d71595d04a",
-    "runtime/README.md": "072ef9ce9b7fb7c06975dd7b9cf762a920d23d7aa16fdf9b08beb759d81a5c1a",
+    "README.md": "77eea66347289ffba903872c4db54325e8a9c24548add476dbe7135f72d38c70",
+    "runtime/bridge.py": "6f1b64e2127dac1cc6f7bafdd10b8051f1e095ece596a9360b002a7ddab8e6c9",
+    "runtime/README.md": "df3736193e18cbf973a022fbd14cfa9710a421004edf5906231f3beb6b010228",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   }

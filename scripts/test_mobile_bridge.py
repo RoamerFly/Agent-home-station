@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -19,6 +20,7 @@ class Runner:
     def __init__(self):
         self.calls = []
         self.fail_action = False
+        self.fail_all = False
         self.png = PNG
         self.xml = XML
         self.package = 'com.example.app'
@@ -26,6 +28,8 @@ class Runner:
 
     def __call__(self, command, **kwargs):
         self.calls.append(command)
+        if self.fail_all:
+            raise OSError("synthetic disconnected device")
         args = command[3:]
         data = b''
         if args == ['get-state']:
@@ -134,6 +138,30 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(BridgeError, 'request_key_conflict'):
             self.bridge.action(request)
         self.assertEqual(len(self.action_calls()), 1)
+
+    def test_disconnected_device_is_offline_and_cannot_be_observed(self):
+        self.runner.fail_all = True
+        self.assertEqual(self.bridge.list_devices()["devices"][0]["state"], "offline")
+        with self.assertRaisesRegex(BridgeError, "device_command_unavailable"):
+            self.bridge.observe("lab")
+
+    def test_plugin_source_and_legacy_entry_share_the_stdio_protocol(self):
+        requests = "\n".join(json.dumps(item) for item in [
+            {"jsonrpc":"2.0","id":"init","method":"initialize","params":{}},
+            {"jsonrpc":"2.0","id":"tools","method":"tools/list","params":{}},
+        ]) + "\n"
+        plugin_source = Path(__file__).parents[1] / "plugins" / "mobile-control" / "runtime" / "bridge.py"
+        legacy_entry = Path(__file__).with_name("mobile_bridge.py")
+        for entry in (plugin_source, legacy_entry):
+            with self.subTest(entry=entry.name):
+                result = subprocess.run(
+                    [sys.executable, "-B", str(entry), "--config", str(self.config), "--storage", str(self.root / (entry.stem + "-state"))],
+                    input=requests, text=True, capture_output=True, cwd=self.root, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                replies = [json.loads(line) for line in result.stdout.splitlines()]
+                self.assertEqual(replies[0]["result"]["serverInfo"]["name"], "whale-mobile-bridge")
+                self.assertEqual([tool["name"] for tool in replies[1]["result"]["tools"]], ["devices", "observe", "act", "read_artifact"])
 
     def test_changed_same_app_controls_force_reobservation(self):
         observation, _ = self.bridge.observe('lab')

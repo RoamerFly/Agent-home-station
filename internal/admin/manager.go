@@ -18,7 +18,6 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
-	"wechat-bot/internal/mobile"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/sending"
@@ -108,7 +107,7 @@ type Manager struct {
 	friends             map[string]friendEntry
 	workspace           *agentworkspace.Store
 	processes           *agenthost.Jobs
-	mobile              *mobile.Control
+	mobile              deviceService
 	speech              bailian.Config
 	agent               *agentControl
 	surfHistory         *surfHistoryStore
@@ -234,10 +233,7 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 		m.processes.Close()
 		return nil, err
 	}
-	m.mobile, err = mobile.Open(filepath.Join(dir, "mobile"), m.planMobile)
-	if err != nil {
-		return nil, err
-	}
+	m.mobile = m.newMobileService()
 	m.surf = surf
 	if assets, err := m.loadAssets(); err == nil {
 		if err = m.indexMemoryAssets(assets); err != nil {
@@ -289,9 +285,6 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	receiptCtx, cancelReceipts := context.WithTimeout(context.Background(), 3*time.Second)
 	m.importOwnerSurfReceipts(receiptCtx)
 	cancelReceipts()
-	m.mobile.OnFinished(m.deviceFinished)
-	m.mobile.SetAuthorizer(m.mobileSourceAllowed)
-	m.mobile.SetArtifactAnalyzer(m.analyzeDeviceArtifact)
 	if c.Enabled {
 		m.start(c)
 	}

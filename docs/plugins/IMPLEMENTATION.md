@@ -1,5 +1,7 @@
 # 插件化实施状态
 
+2026-11-01 手机增量：主体通过惰性设备接口加载旧服务，设备存储故障不再阻断聊天启动。桥接源码和动作规划已整理入手机插件目录，规划层仍静态编译进主体，设备权限代理/队列/页面迁出尚未完成，手机包继续 `migration-pending`。边界审计新增静态插件实现依赖检查，禁止把移动源码目录视作完整轻主体。见 `../quality/plugin-mobile-foundation.md`。
+
 2026-11-01 分享增量：share-reader 0.1.6 的公开分享和视频号解析已通过官方包隔离与回环桥接端到端验收。就绪包现为 web-search、media-understanding、speech 和 share-reader，各自只开放已验证能力。显式来源调用已分离当前 actor 与上传者，并持续复核任务/跨会话权限。旧桥接与 Cookie 混合策略仍须确认，旧绑定仍为只读兼容；整体轻主体未完成。见 `../quality/plugin-share-readiness.md`。
 
 2026-11-01 最新就绪范围：官方 media-understanding 0.1.2 的图片/语音能力和 speech 0.1.3 的默认云端合成已通过原样包安装及实际隔离契约验收，和 web-search 一起成为可安装的受限能力。其余服务/本地声线训练以及旧实现删除仍待完成；正式生产配置与 EXE 尚未更新。详见 `../quality/plugin-official-readiness.md`，历史段落的 pending 状态按日期理解。

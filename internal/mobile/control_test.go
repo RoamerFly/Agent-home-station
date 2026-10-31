@@ -17,11 +17,13 @@ import (
 )
 
 type fakeBridge struct {
-	mu      sync.Mutex
-	calls   []string
-	args    []map[string]any
-	unknown bool
-	invalid bool
+	mu        sync.Mutex
+	calls     []string
+	args      []map[string]any
+	unknown   bool
+	invalid   bool
+	observes  int
+	onObserve func(int)
 }
 
 func TestDevicePermissionRevokedDuringPlanning(t *testing.T) {
@@ -42,6 +44,125 @@ func TestDevicePermissionRevokedDuringPlanning(t *testing.T) {
 	if len(b.args) != 0 {
 		t.Fatal("action after trust revocation")
 	}
+}
+
+func TestDevicePermissionRevokedDuringPlanningCannotFinish(t *testing.T) {
+	var allowed atomic.Bool
+	allowed.Store(true)
+	c, _ := mobileFixture(t, func(context.Context, Task, Observation) (Step, error) {
+		allowed.Store(false)
+		return Step{Action: "finish", Summary: "stale success"}, nil
+	})
+	c.SetAuthorizer(func(Source) bool { return allowed.Load() })
+	task, err := c.Start(Source{Admin: true, MessageID: "revoked-finish"}, "lab", "view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitState(t, c, task.ID, "stopped")
+	if got.Reason != "device_permission_changed" || got.Result != "" {
+		t.Fatalf("revoked planner completed task: %#v", got)
+	}
+}
+
+func TestDeviceCancelRechecksCurrentAuthorizer(t *testing.T) {
+	var allowed atomic.Bool
+	allowed.Store(true)
+	entered := make(chan struct{})
+	c, _ := mobileFixture(t, func(ctx context.Context, _ Task, _ Observation) (Step, error) {
+		close(entered)
+		<-ctx.Done()
+		return Step{}, ctx.Err()
+	})
+	c.SetAuthorizer(func(Source) bool { return allowed.Load() })
+	task, err := c.Start(Source{Admin: true, MessageID: "cancel-revoked"}, "lab", "view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	allowed.Store(false)
+	if err = c.Cancel(task.ID, Source{Admin: true, MessageID: "cancel-revoked"}); err == nil {
+		t.Fatal("revoked caller cancelled durable task")
+	}
+	if err = c.StopAll(); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, c, task.ID, "cancelled")
+}
+
+func TestDeviceCancelBindsOriginalRequesterOrUnscopedManagement(t *testing.T) {
+	entered := make(chan struct{})
+	c, _ := mobileFixture(t, func(ctx context.Context, _ Task, _ Observation) (Step, error) {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-ctx.Done()
+		return Step{}, ctx.Err()
+	})
+	// This mirrors the production adapter: newly started tasks require Admin,
+	// but a normal chat cancellation is deliberately presented without it.
+	c.SetAuthorizer(func(source Source) bool { return source.Admin })
+	original := Source{Admin: true, Account: "account", Thread: "room", Sender: "owner", MessageID: "cancel-owner"}
+	task, err := c.Start(original, "lab", "view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	// The adapter may not classify a normal chat cancel as Admin, but exact
+	// requester identity remains sufficient to stop its own task.
+	if err = c.Cancel(task.ID, Source{Account: "account", Thread: "room", Sender: "owner", MessageID: "cancel-message"}); err != nil {
+		t.Fatalf("original requester could not cancel: %v", err)
+	}
+	waitState(t, c, task.ID, "cancelled")
+
+	entered = make(chan struct{})
+	other, err := c.Start(Source{Admin: true, Account: "account", Thread: "room", Sender: "owner", MessageID: "cancel-other"}, "lab", "view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	if err = c.Cancel(other.ID, Source{Admin: true, Account: "account", Thread: "room", Sender: "member"}); err == nil {
+		t.Fatal("in-conversation admin bit bypassed original requester")
+	}
+	if err = c.Cancel(other.ID, Source{Admin: true}); err != nil {
+		t.Fatalf("unscoped management cancel rejected: %v", err)
+	}
+	waitState(t, c, other.ID, "cancelled")
+}
+
+func TestDeviceManagementCanCancelAfterOriginalRequesterIsRevoked(t *testing.T) {
+	var originalAllowed atomic.Bool
+	originalAllowed.Store(true)
+	entered := make(chan struct{})
+	c, _ := mobileFixture(t, func(ctx context.Context, _ Task, _ Observation) (Step, error) {
+		close(entered)
+		<-ctx.Done()
+		return Step{}, ctx.Err()
+	})
+	c.SetAuthorizer(func(source Source) bool {
+		if !source.Admin {
+			return false
+		}
+		if source.Account == "" && source.Thread == "" && source.Sender == "" {
+			return true // separately authenticated local management surface
+		}
+		return source.Account == "account" && source.Thread == "room" && source.Sender == "owner" && originalAllowed.Load()
+	})
+	original := Source{Admin: true, Account: "account", Thread: "room", Sender: "owner", MessageID: "orphaned-task"}
+	task, err := c.Start(original, "lab", "view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	originalAllowed.Store(false)
+	if err := c.Cancel(task.ID, Source{Account: "account", Thread: "room", Sender: "owner", MessageID: "chat-cancel"}); err == nil {
+		t.Fatal("revoked chat requester cancelled task")
+	}
+	if err := c.Cancel(task.ID, Source{Admin: true}); err != nil {
+		t.Fatalf("authenticated management surface could not cancel orphaned task: %v", err)
+	}
+	waitState(t, c, task.ID, "cancelled")
 }
 func TestDeviceLoginBlockIsNotCompleted(t *testing.T) {
 	c, _ := mobileFixture(t, func(context.Context, Task, Observation) (Step, error) {
@@ -77,6 +198,10 @@ func (b *fakeBridge) Call(ctx context.Context, name string, args json.RawMessage
 		}
 		return `{"state":"submitted"}`, nil
 	}
+	b.observes++
+	if b.onObserve != nil {
+		b.onObserve(b.observes)
+	}
 	var pngData bytes.Buffer
 	_ = png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 10, 20)))
 	if b.invalid {
@@ -86,6 +211,59 @@ func (b *fakeBridge) Call(ctx context.Context, name string, args json.RawMessage
 	snapshot := `{"id":"obs-0123456789abcdef0123456789abcdef","device_id":"lab","package":"test.app","width":10,"height":20,"nodes":[]}`
 	raw, _ := json.Marshal(map[string]any{"text": snapshot, "media": []map[string]string{{"mime_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString(pngData.Bytes())}}})
 	return string(raw), nil
+}
+
+func TestDeviceRevokedDuringFirstObservationNeverReachesPlanner(t *testing.T) {
+	var allowed atomic.Bool
+	allowed.Store(true)
+	var planned atomic.Int32
+	c, b := mobileFixture(t, func(context.Context, Task, Observation) (Step, error) {
+		planned.Add(1)
+		return Step{Action: "finish"}, nil
+	})
+	c.SetAuthorizer(func(Source) bool { return allowed.Load() })
+	b.onObserve = func(call int) {
+		if call == 1 {
+			allowed.Store(false)
+		}
+	}
+	task, err := c.Start(Source{Admin: true, MessageID: "revoke-first-observe"}, "lab", "view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitState(t, c, task.ID, "stopped")
+	if planned.Load() != 0 || got.Reason != "device_permission_changed" {
+		t.Fatalf("revoked first observation reached planner: planned=%d task=%#v", planned.Load(), got)
+	}
+}
+
+func TestDeviceRevokedDuringFreshObservationNeverActs(t *testing.T) {
+	var allowed atomic.Bool
+	allowed.Store(true)
+	var planned atomic.Int32
+	c, b := mobileFixture(t, func(context.Context, Task, Observation) (Step, error) {
+		planned.Add(1)
+		return Step{Action: "tap", Arguments: map[string]any{"x": 1, "y": 1}}, nil
+	})
+	c.SetAuthorizer(func(Source) bool { return allowed.Load() })
+	b.onObserve = func(call int) {
+		if call == 2 { // fresh pre-action observation
+			allowed.Store(false)
+		}
+	}
+	task, err := c.Start(Source{Admin: true, MessageID: "revoke-fresh-observe"}, "lab", "view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitState(t, c, task.ID, "stopped")
+	if planned.Load() != 1 || got.Reason != "device_permission_changed" {
+		t.Fatalf("fresh revocation task=%#v planned=%d", got, planned.Load())
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.args) != 0 {
+		t.Fatalf("action after fresh-observation revocation: %#v", b.args)
+	}
 }
 func mobileFixture(t *testing.T, p Planner) (*Control, *fakeBridge) {
 	t.Helper()
