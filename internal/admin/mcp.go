@@ -89,6 +89,7 @@ func redactedMCP(c mcpSettings) mcpSettings {
 type permittedTools struct {
 	outboundReviewer     companion.LanguageModel
 	discoveryReader      func(context.Context, mcptools.DiscoverySource, string) ([]mcptools.DiscoveryItem, error)
+	webPageReader        func(context.Context, string, int64, time.Duration) ([]byte, string, string, error)
 	trace                companion.Input
 	hub                  *mcptools.Hub
 	settings             mcpSettings
@@ -117,7 +118,7 @@ func (p *permittedTools) ForkTools() companion.ToolAccess {
 	return &permittedTools{hub: p.hub, settings: p.settings, runtime: p.runtime,
 		outboundReviewer: p.outboundReviewer,
 		apiNames:         p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
-		discoveryReader: p.discoveryReader, media: map[string]companion.GeneratedMedia{}, mediaOrigin: map[string]string{}}
+		discoveryReader: p.discoveryReader, webPageReader: p.webPageReader, media: map[string]companion.GeneratedMedia{}, mediaOrigin: map[string]string{}}
 }
 
 func (p *permittedTools) enabled(name string) bool {
@@ -128,14 +129,12 @@ func (p *permittedTools) enabled(name string) bool {
 		return p.servicePluginsAllowed()
 	}
 	if capability := webServiceCapability(name); capability != "" {
-		if installed, enabled := p.installedWebState(); installed {
-			allowed := enabled && p.servicePluginsAllowed() && p.serviceWebAllowed(capability)
-			if name != "web_audio_search" {
-				return allowed
-			}
-			permissions := p.manager.Config().Companion.Permissions
-			return allowed && (permissions.SendVoice || permissions.SendFile)
+		allowed := p.installedWebCapability(context.Background(), capability) == nil && p.servicePluginsAllowed() && p.serviceWebAllowed(capability)
+		if name != "web_audio_search" {
+			return allowed
 		}
+		permissions := p.manager.Config().Companion.Permissions
+		return allowed && (permissions.SendVoice || permissions.SendFile)
 	}
 	if name == "tool_output_read" {
 		return p.outputScope() != ""
@@ -170,17 +169,7 @@ func (p *permittedTools) enabled(name string) bool {
 		return false
 	}
 	if name == "web_discover" {
-		return p.settings.WebFetchEnabled && p.trace.Surf
-	}
-	if name == "web_search" {
-		return p.settings.WebSearchEnabled
-	}
-	if name == "web_audio_search" {
-		permissions := p.manager.Config().Companion.Permissions
-		return p.settings.WebSearchEnabled && (permissions.SendVoice || permissions.SendFile)
-	}
-	if name == "web_fetch" {
-		return p.settings.WebFetchEnabled
+		return p.trace.Surf && p.servicePluginsAllowed() && p.serviceWebAllowed("web.discover") && p.installedWebCapability(context.Background(), "web.discover") == nil
 	}
 	if name == "web_media_download" {
 		c := p.manager.Config().Companion.Permissions
@@ -362,6 +351,15 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_succeeded", Category: "tool", Tool: name, Content: name, Effect: p.toolEffect(name, args, result), Status: "succeeded", Origin: origin})
 		}
 	}()
+	if webServiceCapability(name) != "" || name == "web_discover" {
+		capability := webServiceCapability(name)
+		if name == "web_discover" {
+			capability = "web.discover"
+		}
+		if err := p.installedWebCapability(ctx, capability); err != nil {
+			return "", err
+		}
+	}
 	if !p.enabled(name) {
 		return "", &mcptools.WebError{Code: "ability_disabled"}
 	}
@@ -371,9 +369,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	}
 	args = normalized
 	if webServiceCapability(name) != "" {
-		if installed, _ := p.installedWebState(); installed {
-			return p.callInstalledWeb(ctx, name, args)
-		}
+		return p.callInstalledWeb(ctx, name, args)
 	}
 	for _, module := range p.capabilities() {
 		if module.match(name) {
@@ -382,9 +378,6 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	}
 	if name == "web_discover" {
 		return p.discover(ctx, args)
-	}
-	if (name == "web_search" || name == "web_audio_search") && p.legacyPaidWebMigrationRequired() {
-		return "", &mcptools.WebError{Code: "web_plugin_migration_required", Stage: "plugin_migration"}
 	}
 	if name == "media_history" {
 		var in struct {
@@ -594,12 +587,6 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		return p.stageOutput(ctx, output)
 	}
 	text, err := p.hub.Call(ctx, name, args)
-	if err != nil && name == "web_audio_search" && ctx.Err() == nil {
-		fallback, searchErr := p.Call(ctx, "web_search", args)
-		if searchErr == nil {
-			return fallback + "\n公开音频目录未能取得可用结果，已改用真实网页搜索。以上页面仍需核对并尝试下载，不代表已取得录音文件。", nil
-		}
-	}
 	if err != nil {
 		return "", err
 	}

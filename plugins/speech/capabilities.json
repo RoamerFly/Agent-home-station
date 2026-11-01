@@ -36,6 +36,159 @@
       "discoverable": true
     },
     {
+      "id": "speech.synthesize_named",
+      "implementation": "ready",
+      "description": "使用宿主登记并绑定的 GPT-SoVITS 命名说话声线；宿主核验资源、隔离执行并验证实际 WAV。voice.version 是资源绑定摘要，version 是模型版本。",
+      "permissions": [
+        "artifact.read",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "voice": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9_.@-]{1,128}$"
+              },
+              "version": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "id",
+              "version"
+            ],
+            "additionalProperties": false
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "device": {
+            "type": "string",
+            "pattern": "^(cpu|cuda(:[0-9]+)?)$"
+          },
+          "version": {
+            "type": "string",
+            "enum": [
+              "v1",
+              "v2",
+              "v2Pro",
+              "v2ProPlus",
+              "v3",
+              "v4",
+              "v5dev",
+              "v5turbo"
+            ]
+          },
+          "parameters": {
+            "type": "object"
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "voice",
+          "text",
+          "device",
+          "version",
+          "parameters",
+          "timeout_seconds"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "synthesized"
+          },
+          "audio": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "const": "audio_0"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "sample_rate": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "seconds": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "bytes",
+              "sample_rate",
+              "seconds"
+            ],
+            "additionalProperties": false
+          },
+          "voice": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9_.@-]{1,128}$"
+              },
+              "version": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "id",
+              "version"
+            ],
+            "additionalProperties": false
+          },
+          "device": {
+            "type": "string",
+            "pattern": "^(cpu|cuda(:[0-9]+)?)$"
+          },
+          "version": {
+            "type": "string",
+            "enum": [
+              "v1",
+              "v2",
+              "v2Pro",
+              "v2ProPlus",
+              "v3",
+              "v4",
+              "v5dev",
+              "v5turbo"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "audio",
+          "voice",
+          "device",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "discoverable": true
+    },
+    {
       "id": "speech.voices",
       "implementation": "migration-pending",
       "description": "声线查询、克隆与设计的未来占位能力；尚未迁移，不请求运行时权限或访问声线资料。",

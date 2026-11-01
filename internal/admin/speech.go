@@ -187,20 +187,26 @@ func (p *permittedTools) speechTools() []mcptools.Tool {
 	out := []mcptools.Tool{}
 	permissions := p.manager.Config().Companion.Permissions
 	installed, stateErr := p.manager.installedServiceState(context.Background(), "speech", "speech")
-	// The installed plugin exclusively owns the default cloud voice. Named
-	// local-library voices retain their separate workspace route.
+	// Both default and named synthesis require their own installed capability;
+	// the general workspace permission alone cannot enable a legacy fallback.
 	defaultSpeechReady := stateErr == nil && installed && p.manager.speechPluginConfigured(context.Background())
-	if permissions.SendVoice && (defaultSpeechReady || p.workspaceExecutionAllowed() && p.manager.agent.config().Host.Mode == "full") {
-		description := "Synthesize actual spoken audio. Omit voice_id for the configured default speech voice, which is bound by the installed speech plugin. For a NAMED library voice first voice_library_list/read, then pass its voice_id: GPT-SoVITS uses the registered local GPU runtime, not the default voice."
+	namedSpeechReady := p.workspaceExecutionAllowed() && p.manager.agent.config().Host.Mode == "full" && p.manager.namedSpeechPluginConfigured(context.Background())
+	if permissions.SendVoice && (defaultSpeechReady || namedSpeechReady) {
+		description := "Synthesize actual spoken audio through the installed speech plugin. Omit voice_id for the configured default; select an authorized NAMED voice with voice_library_list/read then pass voice_id."
 		schema := `{"type":"object","properties":{"text":{"type":"string","minLength":1},"voice_id":{"type":"string"},"instruction":{"type":"string"},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1},"parameters":{"type":"object"},"device":{"type":"string"},"version":{"type":"string"},"timeout_seconds":{"type":"number","exclusiveMinimum":0}},"required":["text"],"additionalProperties":false}`
 		input := "Input {text,voice_id?,instruction?,file_ids?,parameters?,device?,version?,timeout_seconds?}."
 		if !defaultSpeechReady {
-			description = "Synthesize actual spoken audio using a registered NAMED library voice only. First voice_library_list/read, then supply the matching voice_id. The default cloud speech plugin is unavailable; voice_id is required. GPT-SoVITS uses the registered local GPU runtime."
+			description = "Synthesize actual spoken audio through the installed local speech capability. First voice_library_list/read and supply the matching voice_id. Default cloud speech is unavailable."
 			schema = strings.Replace(schema, `"required":["text"]`, `"required":["text","voice_id"]`, 1)
 			schema = strings.Replace(schema, `"voice_id":{"type":"string"}`, `"voice_id":{"type":"string","minLength":1}`, 1)
 			input = "Input {text,voice_id,instruction?,file_ids?,parameters?,device?,version?,timeout_seconds?}."
 		}
-		description += " Returns prepared media IDs; final reply.media_ids sends voice. Private voices require trusted owner; no substitution. file_ids selects exact library weight/reference versions; parameters forwards native TTS settings. timeout_seconds defaults600, adjustable; device defaults cuda (cpu explicit). Read project_read(id=gpt-sovits) for direct CLI/custom code too. " + input
+		if !namedSpeechReady {
+			description = "Synthesize actual spoken audio with the installed default speech capability. Named local speech is unavailable; never substitute this voice for a requested named voice."
+			schema = `{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":2000},"instruction":{"type":"string","maxLength":1500},"timeout_seconds":{"type":"integer","minimum":1}},"required":["text"],"additionalProperties":false}`
+			input = "Input {text,instruction?,timeout_seconds?}."
+		}
+		description += " Returns prepared media IDs, not delivery; final reply.media_ids sends voice. Private voices require trusted owner; no substitution. Named file_ids selects exact weights/references; parameters adjusts inference without changing source identity. Named timeout defaults600, cloud180, adjustable; named device defaults cuda, cpu explicit. " + input
 		out = append(out, agentTool("speech_synthesize", description, schema))
 	}
 	musicInstalled, musicErr := p.manager.installedServiceState(context.Background(), "music", "music")

@@ -93,6 +93,90 @@
       },
       "discoverable": true,
       "side_effect": "read"
+    },
+    {
+      "id": "web.discover",
+      "implementation": "ready",
+      "description": "读取宿主已授权的公开订阅、社区、图片或音频目录并解析候选元数据；不代表观看、播放或发送。默认每页40条，可指定offset/limit继续。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "rss",
+                  "bilibili",
+                  "bing_images",
+                  "audio_catalog"
+                ]
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "voice",
+                  "image",
+                  "video"
+                ]
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "type",
+              "url",
+              "kind",
+              "enabled"
+            ],
+            "additionalProperties": false
+          },
+          "related_url": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "read"
     }
   ]
 }

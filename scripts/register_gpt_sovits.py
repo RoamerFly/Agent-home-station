@@ -15,6 +15,61 @@ import tarfile
 import tempfile
 
 
+PLUGIN_ENTRY = '''"""Diagnostic entry for a managed GPT-SoVITS resource project.
+
+Inference belongs to the installed speech plugin. This resource entry never
+loads models, forwards arguments or locates application source code.
+"""
+import json
+import sys
+
+if sys.argv[1:] in (["--help"], ["-h"]):
+    print("Managed GPT-SoVITS resources only. Use speech_synthesize with an "
+          "installed, enabled and configured speech plugin and an explicitly "
+          "selected voice_id. This entry does not run inference. Direct project "
+          "development requires separate explicit authorization.")
+else:
+    print(json.dumps({"error": "speech_plugin_required", "inference_owner": "plugin:speech", "wechat_sends": 0}))
+    raise SystemExit(2)
+'''
+
+
+def install_plugin_entry(project):
+    """Replace only the managed diagnostic entry; no model or SDK copy."""
+    project = Path(project)
+    entry = project / 'gpt_sovits_tts.py'
+    for path in [entry, project, *project.parents]:
+        if path.is_symlink() or getattr(path, 'is_junction', lambda: False)():
+            raise ValueError('linked_install_target_not_allowed')
+    if not project.is_dir():
+        raise ValueError('gpt_sovits_registered_project_required')
+    data = PLUGIN_ENTRY.encode('utf8')
+    if entry.exists() and not entry.is_file():
+        raise ValueError('gpt_sovits_entry_not_regular')
+    if entry.exists() and entry.read_bytes() == data:
+        return entry
+    with tempfile.NamedTemporaryFile(dir=project, delete=False) as output:
+        pending = Path(output.name)
+        output.write(data)
+    try:
+        os.replace(pending, entry)
+    finally:
+        pending.unlink(missing_ok=True)
+    return entry
+
+
+def mark_plugin_inference(manifest, entry):
+    """Keep resource registration and model ownership separate."""
+    manifest.update({
+        'entry': str(entry),
+        'inference_owner': 'plugin:speech',
+        'runtime_status': 'registered_requires_installed_configured_speech_plugin',
+        'execution': 'speech_synthesize via installed, enabled and configured speech plugin; registered entry is diagnostic only',
+        'usage': '已登记的公共 GPT-SoVITS 源码和基础模型可供显式授权的项目开发使用。命名语音生成使用已安装、启用并配置 local_profile_id=gpt-sovits 的 speech 插件，通过 speech_synthesize 显式选择 voice_id。entry 仅诊断，不能推理，也不是宿主信任执行来源；宿主只执行已验证的安装包 runner。手动项目开发需独立显式授权。不会自动发送微信。',
+    })
+    return manifest
+
+
 def source_member_allowed(name):
     parts = PurePosixPath(name).parts
     if any(part.startswith(('GPT_weights', 'SoVITS_weights', '.venv')) or part in
@@ -113,7 +168,8 @@ def register(source, public, python):
                 old.rename(target)
             copy_verified(source/relative, target)
     here = Path(__file__).resolve().parent
-    for name in ['gpt_sovits_tts.py','gpt_sovits_inference_requirements.txt']:
+    install_plugin_entry(project)
+    for name in ['gpt_sovits_inference_requirements.txt']:
         shutil.copyfile(here/name, project/name)
     doc = here.parent/'docs/agent/gpt-sovits-runtime.md'
     shutil.copyfile(doc, project/'AGENT_USAGE.md')
@@ -154,9 +210,8 @@ def register(source, public, python):
         'voice_workflow':str(project/'VOICE_WORKFLOW.md'),
         'base_models':str(common),'source_revision':revision,
         'upstream':'https://github.com/RVC-Boss/GPT-SoVITS',
-        'usage':'文本转语音。voice_library_list/read/prepare选择真实GPT-SoVITS权重与参考；Windows 使用 speech_synthesize 或受管工作区内的 server_windows_process(global=true,gpu=true)，Linux 使用 server_process。读取README和CLI --help后可自行编程、调用或修复。项目源码仓库根目录不属于账号工作区，也不是运行此模型的前提。不会自动发送微信。',
-        'scope':'公共代码、基础模型和依赖共享；个人声线及输出留在账号私有工作区。GPT-SoVITS TTS与RVC原曲换声是不同流程。',
-        'runtime_status':'source_and_base_models_registered; verify interpreter, dependencies and real inference separately'}
+        'scope':'公共代码、基础模型和依赖共享；个人声线及输出留在账号私有工作区。GPT-SoVITS TTS与RVC原曲换声是不同流程。'}
+    mark_plugin_inference(manifest, project/'gpt_sovits_tts.py')
     directory = public/'manifests'
     directory.mkdir(exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=directory, delete=False, mode='w',encoding='utf-8') as f:

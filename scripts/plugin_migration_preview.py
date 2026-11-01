@@ -95,7 +95,7 @@ def _package(repo: Path, plugin_id: str) -> dict[str, Any]:
     return out
 
 
-def _step(plugin_id: str, package: dict[str, Any], legacy_enabled: bool, values: dict[str, Any], secrets: dict[str, Any], required_missing: list[str], unmapped: list[str] | None = None, profile_id: str | None = None) -> dict[str, Any]:
+def _step(plugin_id: str, package: dict[str, Any], legacy_enabled: bool, values: dict[str, Any], secrets: dict[str, Any], required_missing: list[str], unmapped: list[str] | None = None, profile_id: str | None = None, resource_proof: dict[str, Any] | None = None) -> dict[str, Any]:
     status = "ready_for_administrator_review"
     if package["status"] != "ready" or required_missing:
         status = "blocked"
@@ -116,10 +116,51 @@ def _step(plugin_id: str, package: dict[str, Any], legacy_enabled: bool, values:
         result["unmapped_legacy_fields"] = sorted(set(unmapped))
     if profile_id:
         result["profile_id"] = profile_id
+    if resource_proof:
+        result["resource_proof"] = resource_proof
     return result
 
 
-def _speech_plan(repo: Path, speech: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+def _declares_named_speech(repo: Path) -> bool:
+    """Check the package contract, never infer local support from a voice name."""
+    package, package_error = _read_json(repo / "plugins" / "speech" / "plugin.json", required=True)
+    schema, schema_error = _read_json(repo / "plugins" / "speech" / "config.schema.json", required=True)
+    capabilities, capabilities_error = _read_json(repo / "plugins" / "speech" / "capabilities.json", required=True)
+    if package_error or schema_error or capabilities_error or package.get("status") != "ready":
+        return False
+    if not {"artifact.read", "model.invoke"}.issubset(set(package.get("permissions", []))):
+        return False
+    properties = schema.get("properties")
+    profile = properties.get("local_profile_id") if isinstance(properties, dict) else None
+    if not isinstance(profile, dict) or profile.get("type") != "string" or "gpt-sovits" not in profile.get("enum", []):
+        return False
+    rows = capabilities.get("capabilities")
+    return isinstance(rows, list) and any(
+        isinstance(item, dict)
+        and item.get("id") == "speech.synthesize_named"
+        and item.get("implementation") == "ready"
+        and {"artifact.read", "model.invoke"}.issubset(set(item.get("permissions", [])))
+        for item in rows
+    )
+
+
+def _pending_named_speech_manifest(root: Path) -> dict[str, Any] | None:
+    """Find only an explicit managed manifest marker, not a voice/model file.
+
+    Python's offline report has none of the host path/authorization checks.  A
+    marker therefore becomes a blocked host-verification requirement, never a
+    claim that a named voice is usable.
+    """
+    path = root / "managed-workspaces" / "public_workspace" / "manifests" / "gpt-sovits.json"
+    if not path.exists() or path.is_symlink() or not path.is_file():
+        return None
+    _, error = _read_json(path, required=True)
+    if error:
+        return None
+    return {"source": "gpt-sovits-manifest", "present": True, "host_verification": "required"}
+
+
+def _speech_plan(repo: Path, root: Path, speech: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     enabled = bool(speech.get("tts_enabled"))
     key_report, key = _secret(speech.get("key"), "speech-config.json:key")
     required: list[str] = []
@@ -135,8 +176,17 @@ def _speech_plan(repo: Path, speech: dict[str, Any]) -> tuple[dict[str, Any], di
                 required.append(field)
         if not key:
             required.append("tts_key")
+    profile_id: str | None = None
+    proof = _pending_named_speech_manifest(root)
+    if proof and _declares_named_speech(repo):
+        profile_id = "gpt-sovits"
+        values["local_profile_id"] = profile_id
+        # Only the Go host can pin managed paths, grants and resource bytes.
+        # Keep this report blocked until that independent proof is obtained.
+        required.append("registered_named_speech_profile:gpt-sovits:host_verification_required")
+        enabled = True
     step = _step("speech", _package(repo, "speech"), enabled, values, {"tts_key": key_report}, required,
-                 ["asr_*", "music_*", "yue_*", "yue_token"])
+                 ["asr_*", "music_*", "yue_*", "yue_token"], profile_id=profile_id, resource_proof=proof)
     return step, {"speech.tts_key": key} if key else {}
 
 
@@ -354,7 +404,7 @@ def build_preview(root: Path, repo: Path, primary_account: str = "primary") -> t
             if error:
                 entry["source_errors"][name] = error
         media, media_secrets = _media_plan(repo, config, speech)
-        speech_step, speech_secrets = _speech_plan(repo, speech)
+        speech_step, speech_secrets = _speech_plan(repo, root, speech)
         music, music_secrets = _music_plan(repo, speech)
         share, share_secrets = _share_plan(repo, channels)
         web, web_secrets = _web_plan(repo, config, mcp)

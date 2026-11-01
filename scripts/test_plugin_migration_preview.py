@@ -59,6 +59,19 @@ class PluginMigrationPreviewTests(unittest.TestCase):
         (share / "plugin.json").write_text(json.dumps(manifest), encoding="utf8")
         (share / "config.schema.json").write_text(json.dumps({"type": "object", "properties": {"object_bridge_url": {"type": "string"}}, "additionalProperties": False}), encoding="utf8")
 
+    def add_declared_named_speech(self, repo):
+        speech = repo / "plugins" / "speech"
+        manifest = json.loads((speech / "plugin.json").read_text(encoding="utf8"))
+        manifest["permissions"] = ["artifact.read", "model.invoke"]
+        (speech / "plugin.json").write_text(json.dumps(manifest), encoding="utf8")
+        (speech / "config.schema.json").write_text(json.dumps({"type": "object", "properties": {"local_profile_id": {"type": "string", "enum": ["", "gpt-sovits"]}}}), encoding="utf8")
+        (speech / "capabilities.json").write_text(json.dumps({"capabilities": [{"id": "speech.synthesize_named", "implementation": "ready", "permissions": ["artifact.read", "model.invoke"]}]}), encoding="utf8")
+
+    def add_pending_named_speech_manifest(self, root):
+        manifest = root / "managed-workspaces" / "public_workspace" / "manifests" / "gpt-sovits.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"id": "gpt-sovits", "root": "/not-disclosed"}), encoding="utf8")
+
     def test_preview_is_per_account_read_only_and_redacts_secrets(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -109,6 +122,43 @@ class PluginMigrationPreviewTests(unittest.TestCase):
                 self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
                 self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()})
                 self.assertEqual(json.loads(path.read_text(encoding="utf8"))["asr_local_model"], legacy)
+
+    def test_named_speech_manifest_requires_host_verification_without_private_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_named_speech(repo)
+            root, secret = self.make_root(base)
+            self.add_pending_named_speech_manifest(root)
+            before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            report, handoff = preview.build_preview(root, repo, "main")
+            speech = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "speech")
+            self.assertEqual(speech["values"]["local_profile_id"], "gpt-sovits")
+            self.assertEqual(speech["profile_id"], "gpt-sovits")
+            self.assertEqual(speech["resource_proof"], {"source": "gpt-sovits-manifest", "present": True, "host_verification": "required"})
+            self.assertIn("registered_named_speech_profile:gpt-sovits:host_verification_required", speech["required_missing"])
+            self.assertEqual(speech["status"], "blocked")
+            self.assertFalse(speech["eligible_to_enable_after_confirmation"])
+            self.assertFalse(speech["proposed_enabled"])
+            public = json.dumps(report, ensure_ascii=False)
+            self.assertNotIn("/not-disclosed", public)
+            self.assertNotIn(secret, public)
+            self.assertEqual(before, {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()})
+            self.assertEqual(handoff["accounts"][0]["secrets"]["speech.tts_key"], secret)
+
+    def test_no_named_manifest_keeps_cloud_only_speech_preview(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_named_speech(repo)
+            root, _ = self.make_root(base)
+            report, _ = preview.build_preview(root, repo, "main")
+            speech = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "speech")
+            self.assertNotIn("local_profile_id", speech["values"])
+            self.assertNotIn("profile_id", speech)
+            self.assertNotIn("resource_proof", speech)
+            self.assertNotIn("registered_named_speech_profile:gpt-sovits:host_verification_required", speech["required_missing"])
+            self.assertEqual(speech["status"], "ready_for_administrator_review")
 
     def test_audio_review_maps_host_only_key_without_changing_media_enablement(self):
         with tempfile.TemporaryDirectory() as temporary:

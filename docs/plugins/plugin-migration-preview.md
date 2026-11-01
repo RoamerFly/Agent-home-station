@@ -40,8 +40,16 @@ python -B scripts/plugin_migration_preview.py `
 每个账号按 `media-understanding`、`speech`、`music`、`web-search`、`share-reader` 顺序生成五个步骤。
 Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所有步骤默认保持禁用。
 
-- `speech`：仅映射旧云端 TTS 的 endpoint、model、默认声线、表达要求和 key。ASR、音乐、YuE、
-  本地声线都明确不迁入。
+- `speech`：映射旧云端 TTS 的 endpoint、model、默认声线、表达要求和 key。若宿主只读核验到
+  既有受管 `gpt-sovits` manifest、解释器和基础模型均在公共工作区内，且官方 speech 包明确声明
+  `local_profile_id=gpt-sovits` 与 ready 的命名合成能力，Go 预演会额外写入该普通配置字段。公开计划只显示
+  `resource_proof` 的固定来源 `gpt-sovits-manifest`、存在性与不透明版本 SHA-256；不会输出路径、声线 ID、
+  私有声线库、权重、参考音频或密钥，也不会复制任何模型。该资源版本进入 `source_hashes` 和
+  `apply_source_hash`，因此 manifest 或解释器变化会使旧管理员批准失效。迁入仍保持禁用，不会因为现有默认云端
+  声线或某个同名显示名称而推断本地能力，更不会替换成默认声线。无已登记本地资源时保持原云端预演语义。
+  Python 离线工具最多发现受管 manifest 标记并写入 `local_profile_id=gpt-sovits`，同时保留
+  `registered_named_speech_profile:gpt-sovits:host_verification_required` 阻塞项；它不能替代宿主路径、
+  授权和资源校验，也不宣称该本地能力可执行。ASR、音乐、YuE 和训练仍不迁入 speech 配置。
 - `music`：映射 `speech-config.json` 的 `endpoint`、`music_model`、`key` 为
   `music_endpoint`、`music_model`、`music_key`。歌曲接口使用地域根地址加
   `/api/v1/services/audio/music/generation`，并去掉根地址末尾的斜杠；不会沿用 TTS 或 ASR 接口。
@@ -74,12 +82,13 @@ Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所
   只读、按账号/会话/消息（或受限对象别名）查询；本轮不复制它、不将其交给插件，也不创建新的绑定。
 
 `required_missing`、`unmapped_legacy_fields` 和插件未 ready 状态必须在真正迁移前解决。对本地
-ASR，管理端验证的是既有登记契约和可核验的资源完整性，不代表已实际执行模型或验证识别质量。通过
+ASR 与命名 GPT-SoVITS，管理端验证的是既有登记契约和可核验的资源完整性，不代表已实际执行模型或验证识别质量。通过
 预演的迁移仍保持禁用，管理员另行启用后，运行时继续检查所选 profile 和登记版本。
 
-Python 独立预演没有 Manager 的账号资源策略，**不会验证本地登记是否可用**。它只把所需 profile ID
-带入待应用配置与审计信息，并始终保留 `registered_local_asr_profile:<ID>` 待宿主验证状态；即使本地有
-同名文件，也不会将其标为已验证。需要在管理端重新预演并核验资源证明后，才能批准本地 ASR 迁移。
+Python 独立预演没有 Manager 的账号资源策略，**不会验证本地登记是否可用**。它只把所需 ASR profile ID
+带入待应用配置与审计信息，并始终保留 `registered_local_asr_profile:<ID>` 待宿主验证状态；对命名语音，它只在
+受管 manifest 标记存在时写入 `gpt-sovits` 并保留 host-verification 阻塞项。即使本地有同名文件，也不会将其标为
+已验证。需要在管理端重新预演并核验资源证明后，才能批准本地 ASR 或命名语音迁移。
 
 离线回归：
 

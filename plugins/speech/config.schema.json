@@ -29,13 +29,17 @@
       "type": "string",
       "title": "默认表达要求",
       "maxLength": 1500
+    },
+    "local_profile_id": {
+      "type": "string",
+      "title": "本地命名说话声线运行配置",
+      "description": "填 gpt-sovits 使用已登记的受管 GPT-SoVITS 项目；空值关闭本地能力。不下载或替换声线模型。",
+      "enum": [
+        "",
+        "gpt-sovits"
+      ],
+      "default": ""
     }
   },
-  "required": [
-    "tts_endpoint",
-    "tts_key",
-    "tts_model",
-    "default_voice"
-  ],
   "additionalProperties": false
 }

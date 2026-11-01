@@ -33,7 +33,10 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 	}
 	return context.WithValue(ctx, serviceKey{}, serviceCall(func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 		allowed := false
+		artifactRead, modelInvoke := false, false
 		for _, p := range cap.Permissions {
+			artifactRead = artifactRead || p == "artifact.read"
+			modelInvoke = modelInvoke || p == "model.invoke"
 			if p == "network" && (method == "wechat/http_read" || method == "wechat/http_route" || cap.ID == "share.resolve_channels" && method == "wechat/channels_bridge") {
 				allowed = true
 			}
@@ -52,6 +55,11 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 			if p == "device" && deviceProxyCapability(cap.ID) && method == "wechat/device_request" {
 				allowed = true
 			}
+		}
+		// Named inference has one fixed host runner and a bound voice resource
+		// set. This never authorizes an arbitrary process or workspace operation.
+		if job.Plugin == "speech" && cap.ID == "speech.synthesize_named" && method == "wechat/local_speech" {
+			allowed = artifactRead && modelInvoke
 		}
 		if !allowed {
 			return nil, errors.New("host service not permitted by capability")

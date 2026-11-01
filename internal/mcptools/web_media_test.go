@@ -1,23 +1,13 @@
 package mcptools
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"net"
 	"strings"
 	"testing"
 )
 
-func TestFetchMissingURLReturnsActionableSafeDiagnostic(t *testing.T) {
-	h, _ := New(nil)
-	for _, args := range []string{`{}`, `{"query":"deepseek"}`, `null`, `{"url":" "}`} {
-		_, err := h.Call(context.Background(), "web_fetch", json.RawMessage(args))
-		var web *WebError
-		if !errors.As(err, &web) || web.Code != "url_required" || !strings.Contains(FailureDescription(err), "url") {
-			t.Fatal("missing diagnostic", args, err)
-		}
-	}
+func TestFailureDescriptionDoesNotExposeURLsOrSecrets(t *testing.T) {
 	for _, err := range []error{errors.New("https://private.example/?token=secret"), &net.DNSError{Err: "secret", Name: "private.example"}} {
 		if s := FailureDescription(err); strings.Contains(s, "secret") || strings.Contains(s, "private.example") {
 			t.Fatal("credential/url leak", s)

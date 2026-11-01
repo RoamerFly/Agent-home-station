@@ -114,7 +114,7 @@ func assertSpeechVoiceSelectionSchema(t *testing.T, p *permittedTools, namedOnly
 		if requiresVoice != namedOnly || namedOnly && schema.Properties["voice_id"].MinLength < 1 {
 			t.Fatal("discovery does not bind named-only voice selection", string(tool.InputSchema))
 		}
-		if namedOnly && (!strings.Contains(tool.Description, "voice_id is required") || strings.Contains(tool.Description, "Omit voice_id")) {
+		if namedOnly && strings.Contains(tool.Description, "Omit voice_id") {
 			t.Fatal("named-only discovery advertises unavailable default", tool.Description)
 		}
 		return
@@ -173,15 +173,11 @@ func TestSpeechDefaultPluginDoesNotDependOnLegacyTTSFlagOrKey(t *testing.T) {
 }
 
 func TestSpeechDefaultMigrationPreservesNamedLibrarySelection(t *testing.T) {
-	f, p, voice, _ := voiceAgentFixture(t)
+	f, p, policy, _, _ := namedSpeechContractFixture(t)
+	voice := policy.resource.Voice
 	setLegacyDefaultSpeechFixture(f.manager)
-	c := f.manager.agent.config()
-	c.Host.Mode = "full"
-	if err := f.manager.agent.save(c); err != nil {
-		t.Fatal(err)
-	}
 	if !hasDefaultSpeechTool(p) {
-		t.Fatal("named local voice route disappeared without default plugin")
+		t.Fatal("installed local voice capability incorrectly required default cloud configuration")
 	}
 	assertSpeechVoiceSelectionSchema(t, p, true)
 	_, err := p.generateSpeech(t.Context(), "speech_synthesize", json.RawMessage(`{"voice_id":"missing","text":"synthetic"}`))
@@ -190,10 +186,10 @@ func TestSpeechDefaultMigrationPreservesNamedLibrarySelection(t *testing.T) {
 	}
 	raw, _ := json.Marshal(map[string]string{"voice_id": voice.ID, "text": "synthetic"})
 	_, err = p.generateSpeech(t.Context(), "speech_synthesize", raw)
-	if err == nil || !strings.Contains(err.Error(), "gpt_sovits") {
+	if err == nil || !strings.Contains(err.Error(), "named_speech_runtime_unavailable") {
 		t.Fatal("known named voice did not retain library route", err)
 	}
-	p.trace.RequestedText = "请使用 owner-voice 说话"
+	p.trace.RequestedText = "请使用 " + voice.Name + " 说话"
 	_, err = p.generateSpeech(t.Context(), "speech_synthesize", json.RawMessage(`{"text":"synthetic"}`))
 	var selection *RuntimeFailure
 	if !errors.As(err, &selection) || selection.Code != "named_voice_selection_required" {

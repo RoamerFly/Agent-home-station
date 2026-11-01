@@ -13,6 +13,13 @@ import (
 
 func TestDiscoveryPersistsDiverseCandidatesAndContinuesAfterOneSourceFails(t *testing.T) {
 	f := setup(t)
+	installPublicWebFixture(t, f)
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.Permissions.Proactive = true
+	f.manager.config.Companion.QuietStart = "00:00"
+	f.manager.config.Companion.QuietEnd = "00:00"
+	f.manager.surf.Settings.Enabled = true
+	f.manager.surf.Settings.Threads = []string{"filehelper"}
 	p, _, _ := f.manager.toolAccess()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "surf-one", Surf: true})
 	p.discoveryReader = func(_ context.Context, s mcptools.DiscoverySource, _ string) ([]mcptools.DiscoveryItem, error) {
@@ -161,7 +168,7 @@ func TestSurfNoCandidatesExplainsNetworkFailureAndSearchFallbackCanJoinSession(t
 	if err != nil || d.Reason != "surf_sources_unavailable" || s.data.Sessions[0].State != "failed" {
 		t.Fatal(d, err)
 	}
-	extra, err := p.rememberSearchCandidates("Search provider: Test\n\n1. 公开猫咪视频\nhttps://www.bilibili.com/video/BV1425hzpEtn/\n真实简介\n")
+	extra, err := p.rememberSearchCandidates(`{"job":{"state":"completed","result":{"ok":true,"untrusted_external_content":true,"items":[{"title":"公开猫咪视频","url":"https://www.bilibili.com/video/BV1425hzpEtn/","summary":"真实简介"}]}}}`)
 	if err != nil || len(s.data.Sessions[0].Candidates) != 1 || extra == "" {
 		t.Fatal("successful fallback search not retained", extra, err)
 	}

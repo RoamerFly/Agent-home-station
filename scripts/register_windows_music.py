@@ -15,6 +15,7 @@ import subprocess
 
 from prepare_windows_python import prepare, digest
 from install_windows_gpt_nltk import install as install_gpt_nltk
+from register_gpt_sovits import install_plugin_entry, mark_plugin_inference
 
 POLICY = "registry-read-private-network-v1"
 
@@ -40,15 +41,16 @@ def restore_mount_inheritance(root):
                    creationflags=subprocess.CREATE_NO_WINDOW)
 
 
-def publish_json(path, value):
+def publish_json(path, value, backup=True):
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(value, ensure_ascii=False, indent=2)
     if path.exists():
         if path.read_text(encoding="utf8") == text:
             return
-        backups = path.parent / ".backups"
-        backups.mkdir(exist_ok=True)
-        shutil.copy2(path, backups / (path.name + "." + uuid.uuid4().hex + ".bak"))
+        if backup:
+            backups = path.parent / ".backups"
+            backups.mkdir(exist_ok=True)
+            shutil.copy2(path, backups / (path.name + "." + uuid.uuid4().hex + ".bak"))
     pending = path.with_suffix(".pending-" + uuid.uuid4().hex)
     pending.write_text(text, encoding="utf8")
     pending.replace(path)
@@ -120,20 +122,21 @@ def register(workspace, legacy_public, admin, program_runtimes, authorize=False,
         value = paths(json.loads(source.read_text(encoding="utf8")))
         if value.get("id") == "gpt-sovits" and overlay.is_dir():
             value["packages"] = str(overlay)
-            shutil.copy2(Path(__file__).with_name("gpt_sovits_tts.py"), public / "projects/gpt-sovits/gpt_sovits_tts.py")
         if value.get("id") == "gpt-sovits":
-            value["usage"] = value.get("usage", "").replace(
-                "私有声线server_exec/server_process需global=true，CUDA需gpu=true",
-                "Windows 用 speech_synthesize 或受管工作区内的 server_windows_process(global=true,gpu=true)；Linux 用 server_process。源码仓库根目录不是账号工作区")
+            project = Path(value["root"])
+            if not project.resolve().is_relative_to(public.resolve()):
+                raise ValueError("gpt_sovits_project_outside_registered_public_root")
+            mark_plugin_inference(value, install_plugin_entry(project))
         if value.get("id") == "yue":
             value["usage"] = value.get("usage", "").replace(
                 "服务在WSL本机Bubblewrap运行", "Windows 服务在受管音乐/GPU 后端运行")
         if value.get("id") == "rvc" and training_overlay.is_dir():
             value["training_python_paths"] = [str(training_overlay)]
             value["training_instruction"] += " Windows: pass each training_python_paths directory with --extra-python-path; embedded Python bootstrap preserves these paths in child processes."
-        value["execution"] = "Windows native; owner-authorized music/GPU LPAC; account-scoped named pipe; start via music_service_start"
-        value["runtime_status"] = "registered_pending_windows_model_validation"
-        publish_json(public / "manifests" / source.name, value)
+        if value.get("id") != "gpt-sovits":
+            value["execution"] = "Windows native; owner-authorized music/GPU LPAC; account-scoped named pipe; start via music_service_start"
+            value["runtime_status"] = "registered_pending_windows_model_validation"
+        publish_json(public / "manifests" / source.name, value, backup=value.get("id") != "gpt-sovits")
 
     def voice_config(file):
         value = json.loads(file.read_text(encoding="utf8"))

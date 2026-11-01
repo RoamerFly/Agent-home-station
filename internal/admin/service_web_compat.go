@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/pluginhost"
 )
 
 func webServiceCapability(name string) string {
@@ -20,19 +21,73 @@ func webServiceCapability(name string) string {
 	return ""
 }
 
-// legacyPaidWebMigrationRequired is deliberately narrow: a pre-plugin
-// official DeepSeek selection with a saved key used to invoke a paid search
-// endpoint from core. It now requires an explicit administrator migration to
-// the installed web-search plugin instead of silently changing provider or
-// falling back to unrelated public/catalog sources.
-func (p *permittedTools) legacyPaidWebMigrationRequired() bool {
-	if p.manager == nil {
-		return false
+type webPluginAvailabilityError struct{ cause *mcptools.WebError }
+
+func (e *webPluginAvailabilityError) Error() string { return e.cause.Error() }
+func (e *webPluginAvailabilityError) Unwrap() error { return e.cause }
+func (e *webPluginAvailabilityError) SafeToolFailure() (string, string) {
+	message := "联网检索插件尚未安装或已停用；请在插件中心明确安装、授权并启用后使用"
+	switch e.cause.Code {
+	case "web_plugin_configuration_required":
+		message = "联网检索插件配置不完整；请检查所选后端及其专用密钥"
+	case "web_plugin_capability_unavailable":
+		message = "当前联网检索插件版本或已批准权限不支持此能力；请检查安装包与授权"
+	case "web_plugin_runtime_required":
+		message = "联网检索插件缺少可用的隔离执行环境；请完成插件运行环境配置"
 	}
-	p.manager.mu.Lock()
-	config := cloneConfig(p.manager.config)
-	p.manager.mu.Unlock()
-	return officialBilling(config) && strings.TrimSpace(config.APIKey) != ""
+	return e.cause.Code, e.cause.Code + "：" + message
+}
+func webPluginUnavailable(code, stage string) error {
+	return &webPluginAvailabilityError{cause: &mcptools.WebError{Code: code, Stage: stage}}
+}
+
+// Every public-search/read alias requires the installed adapter, including
+// accounts that previously used a free built-in backend. Chat credentials and
+// old provider selections never choose an alternative implementation.
+func (p *permittedTools) installedWebCapability(ctx context.Context, capability string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	migration := webPluginUnavailable("web_plugin_migration_required", "plugin_migration")
+	if p.manager == nil {
+		return migration
+	}
+	store, err := p.manager.packageStore()
+	if err != nil {
+		return migration
+	}
+	installed, err := store.Installed(ctx, "web-search")
+	if err != nil || !installed.Enabled || installed.Removed {
+		return migration
+	}
+	configuration, err := store.ConfigurationForExecution(ctx, installed.Package.ID)
+	if err != nil {
+		return webPluginUnavailable("web_plugin_configuration_required", "plugin_configuration")
+	}
+	var backend string
+	_ = json.Unmarshal(configuration.Values["search_backend"], &backend)
+	if backend == "deepseek" && capability == "web.search" {
+		var key string
+		if json.Unmarshal(configuration.Values["search_key"], &key) != nil || strings.TrimSpace(key) == "" {
+			return webPluginUnavailable("web_plugin_configuration_required", "plugin_configuration")
+		}
+	}
+	caps, err := store.Capabilities(ctx, installed.Package.ID)
+	if err == nil {
+		for _, cap := range caps {
+			if cap.ID != capability || !cap.Discoverable || cap.Implementation != "ready" || cap.Async {
+				continue
+			}
+			inv := pluginhost.Invocation{Account: p.manager.native.Account(), Thread: "host:web-readiness", Requester: "host", Purpose: "inspect granted public web capability", RequestKey: "readiness"}
+			if pluginhost.Authorize(installed.Package, pluginhost.Grant{Account: store.Account(), Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}, inv, cap.Permissions) == nil {
+				if _, ready, err := p.manager.installedPluginRuntime(); err != nil || !ready {
+					return webPluginUnavailable("web_plugin_runtime_required", "plugin_runtime")
+				}
+				return nil
+			}
+		}
+	}
+	return webPluginUnavailable("web_plugin_capability_unavailable", "plugin_configuration")
 }
 
 // Compatibility is one-way after installation: stopping the new plugin must
@@ -69,7 +124,7 @@ func (p *permittedTools) installedWebTools() []mcptools.Tool {
 	}
 	result := []mcptools.Tool{}
 	for _, c := range caps {
-		if !c.Discoverable || c.Implementation != "ready" || !p.serviceWebAllowed(c.ID) {
+		if p.installedWebCapability(context.Background(), c.ID) != nil || !p.serviceWebAllowed(c.ID) {
 			continue
 		}
 		name := ""
@@ -89,7 +144,37 @@ func (p *permittedTools) installedWebTools() []mcptools.Tool {
 	return result
 }
 func (p *permittedTools) callInstalledWeb(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if err := p.installedWebCapability(ctx, webServiceCapability(name)); err != nil {
+		return "", err
+	}
 	key := agentID(p.trace.Account, p.trace.Thread, p.trace.Sender, p.trace.TraceID, p.trace.TaskID, name, string(args))
 	request, _ := json.Marshal(map[string]any{"plugin": "web-search", "capability": webServiceCapability(name), "arguments": args, "request_key": "compat-" + key})
 	return p.callServicePlugin(ctx, "service_plugin_call", request)
+}
+
+func (p *permittedTools) readInstalledDiscovery(ctx context.Context, source mcptools.DiscoverySource, related string) ([]mcptools.DiscoveryItem, error) {
+	args, err := json.Marshal(webDiscoveryArguments{Source: source, Related: related})
+	if err != nil {
+		return nil, err
+	}
+	key := agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, string(args))
+	request, _ := json.Marshal(map[string]any{"plugin": "web-search", "capability": "web.discover", "arguments": json.RawMessage(args), "request_key": "surf-" + key})
+	raw, err := p.callServicePlugin(ctx, "service_plugin_call", request)
+	if err != nil {
+		return nil, err
+	}
+	var envelope struct {
+		Job pluginhost.Job `json:"job"`
+	}
+	if json.Unmarshal([]byte(raw), &envelope) != nil || envelope.Job.State != "completed" || envelope.Job.Tool != "web.discover" {
+		return nil, errors.New("web_discovery_not_completed")
+	}
+	if err := (servicePluginPolicy{p: p}).Check(ctx, envelope.Job, pluginhost.Capability{}); err != nil {
+		return nil, err
+	}
+	var result serviceWebResult
+	if json.Unmarshal(envelope.Job.Result, &result) != nil || !result.OK || !result.Untrusted || !result.MetadataOnly {
+		return nil, errors.New("web_discovery_result_unavailable")
+	}
+	return result.Candidates, nil
 }

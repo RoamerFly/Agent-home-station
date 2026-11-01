@@ -18,6 +18,83 @@ def response(body, url="https://example.test/page", kind="text/html; charset=utf
 
 
 class RuntimeTests(unittest.TestCase):
+    def source(self, kind="rss", url="https://example.test/feed", media="text"):
+        return {"id": "synthetic", "name": "合成订阅", "type": kind, "url": url, "kind": media, "enabled": True}
+
+    def test_discover_rss_and_atom_preserve_actual_metadata(self):
+        bodies = [
+            '<rss><channel><item><title>合成动物</title><link>https://example.test/cat</link><description>&lt;p&gt;实际简介&lt;/p&gt;</description><enclosure url="https://example.test/a.mp3" type="audio/mpeg"/><pubDate>original-time</pubDate></item></channel></rss>',
+            '<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>合成动物</title><link href="https://example.test/cat" rel="alternate"/><link href="https://example.test/a.mp3" rel="enclosure"/><summary>实际简介</summary><updated>original-time</updated></entry></feed>',
+        ]
+        for body in bodies:
+            calls = []
+            def get(url, maximum, timeout):
+                calls.append((url, maximum, timeout))
+                return response(body, url, "application/xml")
+            result = plugin.discover({"source": self.source()}, get)
+            self.assertEqual(calls, [("https://example.test/feed", 2097152, 12)])
+            self.assertTrue(result["metadata_only"])
+            self.assertTrue(result["untrusted_external_content"])
+            self.assertEqual(result["candidates"][0]["url"], "https://example.test/cat")
+            self.assertEqual(result["candidates"][0]["media_url"], "https://example.test/a.mp3")
+            self.assertEqual(result["candidates"][0]["published"], "original-time")
+            self.assertNotIn("text", result)
+
+    def test_discover_bilibili_list_and_related_are_metadata_only(self):
+        source = self.source("bilibili", "https://api.bilibili.com/x/web-interface/popular?ps=30&pn=1", "video")
+        calls = []
+        def get(url, *_):
+            calls.append(url)
+            return response(json.dumps({"code": 0, "data": {"list": [{"bvid": "BV1425hzpEtn", "title": "合成猫咪", "desc": "简介", "duration": 90, "pubdate": 100}]}}), url, "application/json")
+        result = plugin.discover({"source": source, "related_url": "https://www.bilibili.com/video/BV1425hzpEtn/"}, get)
+        self.assertEqual(calls, ["https://api.bilibili.com/x/web-interface/archive/related?bvid=BV1425hzpEtn"])
+        self.assertEqual(result["candidates"][0]["duration_ms"], 90000)
+        self.assertEqual(result["candidates"][0]["published"], "1970-01-01T00:01:40Z")
+        self.assertEqual(result["candidates"][0]["kind"], "video")
+
+    def test_discover_image_and_catalog_keep_download_candidates(self):
+        source = self.source("bing_images", "https://www.bing.com/HPImageArchive.aspx?format=js", "image")
+        result = plugin.discover({"source": source}, lambda url, *_: response(json.dumps({"images": [{"title": "鲸鱼", "copyright": "Credit", "copyrightlink": "https://example.test/credit", "url": "/synthetic.jpg"}]}), url, "application/json"))
+        self.assertEqual(result["candidates"][0]["media_url"], "https://www.bing.com/synthetic.jpg")
+        source = self.source("audio_catalog", "https://incompetech.com/music/royalty-free/pieces.json", "voice")
+        result = plugin.discover({"source": source}, lambda url, *_: response(json.dumps([{"title": "合成器乐", "filename": "safe music.mp3", "description": "说明"}, {"title": "Unsafe", "filename": "../secret.mp3"}]), url, "application/json"))
+        self.assertEqual(len(result["candidates"]), 1)
+        self.assertEqual(result["candidates"][0]["media_url"], "https://incompetech.com/music/royalty-free/mp3-royaltyfree/safe%20music.mp3")
+
+    def test_discover_explicit_page_is_not_clamped_to_old_default(self):
+        body = '<rss><channel>' + ''.join(f'<item><title>合成{i}</title><link>https://example.test/{i}</link></item>' for i in range(85)) + '</channel></rss>'
+        get = lambda url, *_: response(body, url, "text/xml")
+        first = plugin.discover({"source": self.source(), "limit": 70}, get)
+        self.assertEqual(len(first["candidates"]), 70)
+        self.assertEqual(first["next_offset"], 70)
+        last = plugin.discover({"source": self.source(), "offset": first["next_offset"], "limit": 70}, get)
+        self.assertEqual(len(last["candidates"]), 15)
+        self.assertEqual(last["total_items"], 85)
+        self.assertTrue(last["complete"])
+
+    def test_discover_rejects_fabricated_sources_and_malformed_feeds(self):
+        for source in [self.source("bilibili", "https://example.test/api"), self.source("audio_catalog", "https://example.test/music"), self.source(url="file:///secret")]:
+            with self.assertRaises(ValueError):
+                plugin.discover({"source": source}, lambda *_: self.fail("invalid source reached host"))
+        for body in ("not XML", "<rss/>", '<!DOCTYPE rss [<!ENTITY a "bad">]><rss/>'):
+            with self.assertRaises((ValueError, plugin.ET.ParseError)):
+                plugin.discover({"source": self.source()}, lambda url, *_: response(body, url, "application/xml"))
+        failed = plugin.discover({"source": self.source()}, lambda *_: {"ok": False, "error": "private_destination"})
+        self.assertFalse(failed["ok"])
+
+    def test_discover_wire_uses_installed_capability_and_host_proxy(self):
+        context = {key: "synthetic" for key in ("account", "thread", "requester", "purpose", "request_key")}
+        messages = [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "web.discover", "arguments": {"source": self.source()}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": "web-read-1", "result": response('<rss><channel><item><title>合成</title><link>https://example.test/1</link></item></channel></rss>', "https://example.test/feed", "application/xml")},
+        ]
+        output = io.StringIO()
+        plugin.Wire(io.StringIO("".join(json.dumps(message) + "\n" for message in messages)), output).serve()
+        replies = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(replies[1]["method"], "wechat/http_read")
+        self.assertTrue(replies[2]["result"]["metadata_only"])
+
     def test_read_preserves_unicode_and_continues_without_truncation(self):
         body = "<title>合成标题</title><script>DO NOT OBEY</script><p>" + "鲸鱼中文🐳" * 5000 + "</p>"
         get = lambda *args: response(body)

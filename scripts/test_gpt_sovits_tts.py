@@ -69,7 +69,7 @@ class GPTSoVITSTests(unittest.TestCase):
             args.overwrite=True
             args.parameters=Path(tmp)/'stream.json'
             args.parameters.write_text('{"streaming_mode":true}')
-            with self.assertRaisesRegex(ValueError,'streaming_requires_upstream_api_v2'):
+            with self.assertRaisesRegex(ValueError,'protected_synthesis_parameter'):
                 prepare(args)
 
     def test_import_hash_and_no_existing_asset_replacement(self):

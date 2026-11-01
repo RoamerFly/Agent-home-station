@@ -9,6 +9,9 @@ FRAME_LIMIT = 8 * 1024 * 1024
 spec = importlib.util.spec_from_file_location("cloud_tts", Path(__file__).with_name("cloud_tts.py"))
 cloud_tts = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cloud_tts)
+named_spec = importlib.util.spec_from_file_location("named_voice", Path(__file__).with_name("named_voice.py"))
+named_voice = importlib.util.module_from_spec(named_spec)
+named_spec.loader.exec_module(named_voice)
 
 
 class Wire:
@@ -64,7 +67,7 @@ class Wire:
                     if not isinstance(configuration, dict):
                         raise ValueError("invalid_configuration")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "speech", "version": "0.1.4"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "speech", "version": "0.2.0"}}
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/call" and initialized:
@@ -72,9 +75,12 @@ class Wire:
                     context = params.get("_meta", {}).get("wechat/context", {}) if isinstance(params, dict) else {}
                     if not all(isinstance(context.get(k), str) and context[k] for k in ("account", "thread", "requester", "purpose", "request_key")):
                         raise ValueError("host_context_required")
-                    if params.get("name") != "speech.synthesize":
+                    if params.get("name") == "speech.synthesize_named":
+                        result = named_voice.synthesize(params.get("arguments"), configuration, lambda value: self.host("wechat/local_speech", value))
+                    elif params.get("name") == "speech.synthesize":
+                        result = cloud_tts.synthesize(params.get("arguments"), configuration, lambda value: self.host("wechat/model_request", value))
+                    else:
                         raise ValueError("capability_unavailable")
-                    result = cloud_tts.synthesize(params.get("arguments"), configuration, lambda value: self.host("wechat/model_request", value))
                 else:
                     raise ValueError("method_unavailable")
             except (ValueError, KeyError, TypeError, LookupError, AttributeError, RecursionError) as error:

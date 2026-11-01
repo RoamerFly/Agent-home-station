@@ -283,6 +283,12 @@ func chooseDiscoveryMode(weights map[string]int) string {
 }
 
 func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := p.installedWebCapability(ctx, "web.discover"); err != nil {
+		return "", err
+	}
+	if !p.servicePluginsAllowed() || !p.serviceWebAllowed("web.discover") {
+		return "", errors.New("web_discovery_authorization_required")
+	}
 	var in struct {
 		RelatedURL string `json:"related_url"`
 	}
@@ -403,16 +409,13 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 		err    error
 	}
 	results := make([]result, len(sources))
-	var wg sync.WaitGroup
 	for i, s := range sources {
-		wg.Add(1)
-		go func(i int, s mcptools.DiscoverySource) {
-			defer wg.Done()
+		func(i int, s mcptools.DiscoverySource) {
 			start := time.Now()
 			r := result{source: s}
 			read := p.discoveryReader
 			if read == nil {
-				read = mcptools.DiscoverPublic
+				read = p.readInstalledDiscovery
 			}
 			r.items, r.err = read(ctx, s, in.RelatedURL)
 			results[i] = r
@@ -424,7 +427,6 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 			p.manager.record(bot.Record{Event: "surf_source", Category: "tool", ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: "web_discover", TargetURL: s.URL, Content: s.Name, Origin: "surf", Status: status, Reason: reason, DurationMS: time.Since(start).Milliseconds()})
 		}(i, s)
 	}
-	wg.Wait()
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
@@ -751,16 +753,23 @@ func (p *permittedTools) rememberSearchCandidates(result string) (string, error)
 	if session == nil {
 		return "", nil
 	}
-	lines := strings.Split(result, "\n")
+	var envelope struct {
+		Job struct {
+			State  string           `json:"state"`
+			Result serviceWebResult `json:"result"`
+		} `json:"job"`
+	}
+	if json.Unmarshal([]byte(result), &envelope) != nil || envelope.Job.State != "completed" || !envelope.Job.Result.OK || !envelope.Job.Result.Untrusted {
+		return "", nil
+	}
 	added := []mcptools.DiscoveryItem{}
-	for i, line := range lines {
-		raw := strings.TrimSpace(line)
-		if !(strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "http://")) || i == 0 || i+1 >= len(lines) {
+	for _, item := range envelope.Job.Result.Items {
+		raw := strings.TrimSpace(item.URL)
+		if _, ok := publicSearchURL(raw); !ok {
 			continue
 		}
-		raw = strings.TrimSpace(raw)
-		title := strings.TrimSpace(lines[i-1])
-		if title == "" || strings.Contains(title, "Search provider:") {
+		title := strings.TrimSpace(item.Title)
+		if title == "" {
 			continue
 		}
 		kind := "text"
@@ -770,7 +779,7 @@ func (p *permittedTools) rememberSearchCandidates(result string) (string, error)
 				kind = "voice"
 			}
 		}
-		x := mcptools.DiscoveryItem{Title: logText(title, 400), Summary: logText(lines[i+1], 700), URL: raw, Source: "公开搜索", Kind: kind}
+		x := mcptools.DiscoveryItem{Title: logText(title, 400), Summary: logText(item.Summary, 700), URL: raw, Source: "公开搜索", Kind: kind}
 		x.ID = surfIdentity(x)
 		seen := false
 		for _, old := range session.Candidates {

@@ -80,7 +80,7 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 	if err != nil {
 		return "", err
 	}
-	policy := servicePluginPolicy{p: p, observed: map[string]bool{}, deepseek: map[string]deepSeekSearchEvidence{}}
+	policy := servicePluginPolicy{p: p, observed: map[string]bool{}, deepseek: map[string]deepSeekSearchEvidence{}, read: p.webPageReader}
 	var result any
 	switch name {
 	case "service_plugins":
@@ -191,7 +191,7 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 		request := pluginruntime.CallRequest{Plugin: in.Plugin, Capability: in.Capability, Context: inv, Arguments: in.Arguments}
 		// An already enabled plugin may be started after host restart. This never
 		// activates a disabled installation or changes an administrator grant.
-		if e = policy.Check(ctx, pluginhost.Job{Plugin: in.Plugin, Tool: in.Capability, Context: inv}, pluginhost.Capability{}); e != nil {
+		if e = policy.Check(ctx, pluginhost.Job{Plugin: in.Plugin, Tool: in.Capability, Context: inv, Arguments: in.Arguments}, pluginhost.Capability{}); e != nil {
 			return "", e
 		}
 		installed, e := store.Installed(ctx, in.Plugin)
@@ -238,6 +238,7 @@ type servicePluginPolicy struct {
 	// claimed URL/items are never enough on their own.
 	deepseek map[string]deepSeekSearchEvidence
 	post     pluginruntime.RouteTransport
+	read     func(context.Context, string, int64, time.Duration) ([]byte, string, string, error)
 }
 
 type deepSeekSearchItem struct {
@@ -258,36 +259,50 @@ type serviceWebItem struct {
 }
 
 type serviceWebResult struct {
-	OK                 bool             `json:"ok"`
-	Backend            string           `json:"backend"`
-	Untrusted          bool             `json:"untrusted_external_content"`
-	URL                string           `json:"url"`
-	Source             string           `json:"source"`
-	Query              string           `json:"query"`
-	Title              string           `json:"title"`
-	Text               string           `json:"text"`
-	SHA                string           `json:"sha256"`
-	Offset             int              `json:"offset"`
-	RequestedLimit     int              `json:"requested_limit"`
-	ReturnedCharacters int              `json:"returned_characters"`
-	TotalCharacters    int              `json:"total_characters"`
-	NextOffset         *int             `json:"next_offset"`
-	Complete           bool             `json:"complete"`
-	Items              []serviceWebItem `json:"items"`
-	ProviderItems      int              `json:"provider_items"`
-	RequestedCount     int              `json:"requested_count"`
-	EffectiveCount     int              `json:"effective_provider_count"`
-	ProviderExhausted  bool             `json:"provider_page_exhausted"`
-	Fallback           bool             `json:"fallback_used"`
+	OK                 bool                     `json:"ok"`
+	Backend            string                   `json:"backend"`
+	Untrusted          bool                     `json:"untrusted_external_content"`
+	URL                string                   `json:"url"`
+	Source             string                   `json:"source"`
+	Query              string                   `json:"query"`
+	Title              string                   `json:"title"`
+	Text               string                   `json:"text"`
+	SHA                string                   `json:"sha256"`
+	Offset             int                      `json:"offset"`
+	RequestedLimit     int                      `json:"requested_limit"`
+	ReturnedCharacters int                      `json:"returned_characters"`
+	TotalCharacters    int                      `json:"total_characters"`
+	NextOffset         *int                     `json:"next_offset"`
+	Complete           bool                     `json:"complete"`
+	Items              []serviceWebItem         `json:"items"`
+	ProviderItems      int                      `json:"provider_items"`
+	RequestedCount     int                      `json:"requested_count"`
+	EffectiveCount     int                      `json:"effective_provider_count"`
+	ProviderExhausted  bool                     `json:"provider_page_exhausted"`
+	Fallback           bool                     `json:"fallback_used"`
+	Candidates         []mcptools.DiscoveryItem `json:"candidates"`
+	MetadataOnly       bool                     `json:"metadata_only"`
+	TotalItems         int                      `json:"total_items"`
 }
 
 func (s servicePluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
 	p := s.p
-	if j.Plugin != "web-search" || (j.Tool != "web.search" && j.Tool != "web.read") || cap.Async {
+	if p.manager.draining() {
+		return errors.New("web_host_draining")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if j.Plugin != "web-search" || (j.Tool != "web.search" && j.Tool != "web.read" && j.Tool != "web.discover") || cap.Async {
 		return errors.New("service capability adapter unavailable")
 	}
 	if !p.serviceWebAllowed(j.Tool) {
 		return errors.New("public web capability disabled")
+	}
+	if j.Tool == "web.discover" {
+		if _, _, err := p.webDiscoveryRequest(j.Arguments); err != nil {
+			return err
+		}
 	}
 	store, err := p.manager.packageStore()
 	if err != nil {
@@ -296,6 +311,22 @@ func (s servicePluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 	installed, err := store.Installed(ctx, j.Plugin)
 	if err != nil || !installed.Enabled || installed.Removed {
 		return errors.New("service plugin authorization revoked")
+	}
+	if j.PackageDigest != "" && (j.PackageDigest != installed.Digest || j.Version != installed.Package.Version) {
+		return errors.New("service plugin package changed")
+	}
+	configuration, err := store.ConfigurationForExecution(ctx, j.Plugin)
+	if err != nil || j.ConfigRevision != "" && j.ConfigRevision != strconv.Itoa(configuration.Revision) {
+		return errors.New("service plugin configuration changed")
+	}
+	if pluginhost.Authorize(installed.Package, pluginhost.Grant{Account: store.Account(), Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}, j.Context, []string{"network"}) != nil {
+		return errors.New("service plugin permission revoked")
+	}
+	if j.ID != "" && j.State != "" {
+		current, err := store.Job(ctx, j.ID)
+		if err != nil || current.Revision != j.Revision || current.CancelRequested || current.State == "cancelled" {
+			return errors.New("service plugin task changed or cancelled")
+		}
 	}
 	if !p.servicePluginsAllowed() || j.Context.Account != p.trace.Account || j.Context.Thread != p.trace.Thread || j.Context.Requester != p.serviceRequester() || !p.manager.agentTaskActive(p.trace) {
 		return errors.New("service request authorization changed")
@@ -333,7 +364,7 @@ func (p *permittedTools) serviceWebAllowed(tool string) bool {
 	p.manager.mu.Lock()
 	defer p.manager.mu.Unlock()
 	c := p.manager.mcp
-	return c.Enabled && (tool == "web.search" && c.WebSearchEnabled || tool == "web.read" && c.WebFetchEnabled)
+	return c.Enabled && (tool == "web.search" && c.WebSearchEnabled || (tool == "web.read" || tool == "web.discover" && p.trace.Surf) && c.WebFetchEnabled)
 }
 
 func (p *permittedTools) validateServiceOutput(ctx context.Context, name, result string) error {
@@ -535,7 +566,7 @@ func (s servicePluginPolicy) deepSeekRoute(ctx context.Context, j pluginhost.Job
 func (s servicePluginPolicy) Validate(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
 	// Only text web observations are connected in this migration stage. Media,
 	// async jobs and arbitrary plugin result envelopes need dedicated validators.
-	if j.Plugin != "web-search" || (j.Tool != "web.search" && j.Tool != "web.read") || cap.Async {
+	if j.Plugin != "web-search" || (j.Tool != "web.search" && j.Tool != "web.read" && j.Tool != "web.discover") || cap.Async {
 		return pluginruntime.VerifiedResult{}, errors.New("service result adapter unavailable")
 	}
 	if err := s.Check(ctx, j, cap); err != nil {
@@ -567,6 +598,11 @@ func (s servicePluginPolicy) Validate(ctx context.Context, j pluginhost.Job, cap
 	}
 	if j.Tool == "web.read" && !s.observed[result.URL] {
 		return pluginruntime.VerifiedResult{}, errors.New("plugin result source not observed")
+	}
+	if j.Tool == "web.discover" {
+		if err := s.p.validateWebDiscoveryResult(j.Arguments, result, s.observed); err != nil {
+			return pluginruntime.VerifiedResult{}, err
+		}
 	}
 	if j.Tool == "web.search" {
 		var args struct {
@@ -644,7 +680,7 @@ func (s servicePluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 		}
 		return s.deepSeekRoute(ctx, j, cap, raw)
 	}
-	if method != "wechat/http_read" || j.Tool != "web.read" {
+	if method != "wechat/http_read" || (j.Tool != "web.read" && j.Tool != "web.search" && j.Tool != "web.discover") {
 		return nil, errors.New("host service unavailable")
 	}
 	var in struct {
@@ -657,7 +693,17 @@ func (s servicePluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 	if d.Decode(&in) != nil || in.Timeout <= 0 || in.Timeout > int64((1<<63-1)/time.Second) {
 		return nil, errors.New("invalid public read arguments")
 	}
-	body, kind, url, err := mcptools.ReadPublicPluginPage(ctx, in.URL, in.MaxBytes, time.Duration(in.Timeout)*time.Second)
+	if err := s.validatePublicWebRead(ctx, j, in.URL, in.MaxBytes, in.Timeout); err != nil {
+		return nil, err
+	}
+	if s.observed == nil {
+		return nil, errors.New("web_read_evidence_sink_unavailable")
+	}
+	read := s.read
+	if read == nil {
+		read = mcptools.ReadPublicPluginPage
+	}
+	body, kind, url, err := read(ctx, in.URL, in.MaxBytes, time.Duration(in.Timeout)*time.Second)
 	if err != nil {
 		code := "public_read_failed"
 		var web *mcptools.WebError
@@ -665,6 +711,9 @@ func (s servicePluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 			code = web.Code
 		}
 		return json.Marshal(map[string]any{"ok": false, "error": code})
+	}
+	if err := s.Check(ctx, j, cap); err != nil {
+		return nil, err
 	}
 	s.observed[url] = true
 	return json.Marshal(map[string]any{"ok": true, "url": url, "content_type": kind, "body_base64": base64.StdEncoding.EncodeToString(body)})

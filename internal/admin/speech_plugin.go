@@ -210,7 +210,7 @@ func (p *speechPluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 	if err != nil || !i.Enabled || i.Removed || i.Digest != p.packageDigest || i.Package.Version != p.packageVersion || (j.PackageDigest != "" && (i.Digest != j.PackageDigest || i.Package.Version != j.Version || j.ConfigRevision != strconv.Itoa(p.configRevision))) {
 		return errors.New("speech_plugin_version_changed")
 	}
-	if pluginhost.Authorize(i.Package, pluginhost.Grant{Account: p.invocation.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, j.Context, i.Package.Permissions) != nil {
+	if pluginhost.Authorize(i.Package, pluginhost.Grant{Account: p.invocation.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, j.Context, []string{"model.invoke"}) != nil {
 		return errors.New("speech_plugin_permissions_changed")
 	}
 	if j.ID != "" {

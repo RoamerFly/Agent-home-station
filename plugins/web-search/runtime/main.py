@@ -106,6 +106,168 @@ def fetch(args, get):
             "complete": end == len(text), "untrusted_external_content": True}
 
 
+def discovery_url(source, related=""):
+    if not isinstance(source, dict) or set(source) != {"id", "name", "type", "url", "kind", "enabled"}:
+        raise ValueError("discovery_source_invalid")
+    if (not isinstance(source["id"], str) or not 1 <= len(source["id"]) <= 64
+            or not isinstance(source["name"], str) or not 1 <= len(source["name"]) <= 100
+            or source["kind"] not in ("text", "voice", "video", "image") or source["enabled"] is not True
+            or not isinstance(source["url"], str) or len(source["url"]) > 2048):
+        raise ValueError("discovery_source_invalid")
+    url = public_url(source["url"])
+    parsed = urllib.parse.urlsplit(url)
+    kind = source["type"]
+    if kind == "bilibili":
+        if parsed.netloc != "api.bilibili.com" or parsed.path not in ("/x/web-interface/popular", "/x/web-interface/ranking/v2"):
+            raise ValueError("discovery_source_invalid")
+    elif kind == "bing_images":
+        if parsed.netloc != "www.bing.com" or parsed.path != "/HPImageArchive.aspx":
+            raise ValueError("discovery_source_invalid")
+    elif kind == "audio_catalog":
+        if url != "https://incompetech.com/music/royalty-free/pieces.json":
+            raise ValueError("discovery_source_invalid")
+    elif kind != "rss":
+        raise ValueError("discovery_source_invalid")
+    if related:
+        related = urllib.parse.urlsplit(public_url(related))
+        match = re.fullmatch(r"/video/(BV[0-9A-Za-z]{10})/?", related.path)
+        if kind != "bilibili" or related.hostname not in ("www.bilibili.com", "bilibili.com") or not match:
+            raise ValueError("discovery_related_invalid")
+        url = "https://api.bilibili.com/x/web-interface/archive/related?" + urllib.parse.urlencode({"bvid": match[1]})
+    return url
+
+
+def markup_text(value):
+    parser = PageText()
+    parser.feed(value)
+    return clean(" ".join(parser.parts + parser.title))
+
+
+def discover(args, get):
+    if set(args) - {"source", "related_url", "offset", "limit"}:
+        raise ValueError("invalid_discovery_arguments")
+    source = args.get("source")
+    related = args.get("related_url", "")
+    if not isinstance(related, str):
+        raise ValueError("discovery_related_invalid")
+    url = discovery_url(source, related)
+    offset, limit = integer(args, "offset", 0, 0), integer(args, "limit", 40, 1)
+    page, failure = read_page(get, url, {"max_bytes": 2 * 1024 * 1024, "timeout_seconds": 12})
+    if failure:
+        return failure
+    body, _, final_url = page
+    items = []
+
+    def add(title, link, summary="", published="", media="", kind=None, duration=0):
+        if not isinstance(title, str) or not title.strip() or not isinstance(link, str):
+            return
+        try:
+            public_url(link)
+        except ValueError:
+            return
+        if media:
+            media = urllib.parse.urljoin(source["url"], media)
+            try:
+                public_url(media)
+            except ValueError:
+                media = ""
+        row = {"title": markup_text(title)[:400], "summary": markup_text(summary)[:900],
+               "url": link, "kind": kind or source["kind"], "source": source["name"]}
+        if media:
+            row["media_url"] = media
+        if published:
+            row["published"] = str(published)
+        if duration:
+            row["duration_ms"] = duration
+        items.append(row)
+
+    if source["type"] == "bilibili":
+        data = json.loads(body)
+        if not isinstance(data, dict) or data.get("code") != 0:
+            raise ValueError("discovery_feed_unavailable")
+        rows = data.get("data")
+        rows = rows.get("list") if isinstance(rows, dict) else rows
+        if not isinstance(rows, list):
+            raise ValueError("discovery_feed_unavailable")
+        for row in rows:
+            if not isinstance(row, dict) or not re.fullmatch(r"BV[0-9A-Za-z]{10}", str(row.get("bvid", ""))):
+                continue
+            duration = row.get("duration", 0)
+            duration = duration * 1000 if type(duration) is int and duration > 0 else 0
+            stamp = row.get("pubdate", 0)
+            # Provider timestamps remain metadata, never proof of playback.
+            if type(stamp) is int and stamp > 0:
+                import datetime
+                try:
+                    stamp = datetime.datetime.fromtimestamp(stamp, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+                except (ValueError, OverflowError, OSError):
+                    stamp = ""
+            else:
+                stamp = ""
+            add(row.get("title", ""), "https://www.bilibili.com/video/" + row["bvid"] + "/", row.get("desc", ""), stamp, duration=duration)
+    elif source["type"] == "bing_images":
+        data = json.loads(body)
+        for row in data.get("images", []):
+            if isinstance(row, dict):
+                add(row.get("title", ""), row.get("copyrightlink", ""), row.get("copyright", "") + "；来源图片，不代表自由版权。", media=urllib.parse.urljoin("https://www.bing.com", row.get("url", "")), kind="image")
+    elif source["type"] == "audio_catalog":
+        rows = json.loads(body)
+        if not isinstance(rows, list):
+            raise ValueError("catalog_invalid")
+        for row in rows:
+            filename = row.get("filename", "") if isinstance(row, dict) else ""
+            if not isinstance(filename, str) or not filename.lower().endswith(".mp3") or "/" in filename or "\\" in filename:
+                continue
+            add(row.get("title", ""), "https://incompetech.com/music/royalty-free/", "Kevin MacLeod 器乐；按来源标注署名许可。" + row.get("description", ""), media="https://incompetech.com/music/royalty-free/mp3-royaltyfree/" + urllib.parse.quote(filename, safe=""), kind="voice")
+        # Stable pages within one fetched catalogue; host rotates sources and
+        # samples candidates. No hidden cache or provider fallback exists here.
+    else:
+        if b"<!DOCTYPE" in body.upper() or b"<!ENTITY" in body.upper():
+            raise ValueError("discovery_feed_unavailable")
+        root = ET.fromstring(body)
+
+        def child(element, tag):
+            return next((node for node in element if node.tag.rsplit("}", 1)[-1] == tag), None)
+
+        def value(element, tag):
+            node = child(element, tag)
+            return "" if node is None else "".join(node.itertext())
+
+        for entry in root.iter():
+            tag = entry.tag.rsplit("}", 1)[-1]
+            if tag not in ("item", "entry"):
+                continue
+            title, summary = value(entry, "title"), value(entry, "description") + " " + value(entry, "encoded")
+            link, media, kind = value(entry, "link").strip(), "", source["kind"]
+            stamp = value(entry, "pubDate")
+            if tag == "entry":
+                summary, stamp = value(entry, "summary") + " " + value(entry, "content"), value(entry, "published") or value(entry, "updated")
+                for node in entry:
+                    if node.tag.rsplit("}", 1)[-1] == "link":
+                        if node.get("rel", "") in ("", "alternate"):
+                            link = node.get("href", "")
+                        elif node.get("rel") == "enclosure":
+                            media = node.get("href", "")
+            else:
+                enclosure = child(entry, "enclosure")
+                if enclosure is not None:
+                    media = enclosure.get("url", "")
+                    kind = {"audio": "voice", "video": "video", "image": "image"}.get(enclosure.get("type", "").split("/", 1)[0], kind)
+            if kind == "image" and not media:
+                image = re.search(r'<img\b[^>]*\bsrc\s*=\s*["\']([^"\']+)', summary, re.I)
+                if image:
+                    media = image[1]
+            add(title, link, summary, stamp, media, kind)
+    if not items:
+        raise ValueError("discovery_feed_unavailable")
+    if offset > len(items):
+        raise ValueError("offset_outside_results")
+    end = min(len(items), offset + limit)
+    return {"ok": True, "source": final_url, "candidates": items[offset:end], "metadata_only": True,
+            "offset": offset, "requested_limit": limit, "total_items": len(items), "next_offset": end if end < len(items) else None,
+            "complete": end == len(items), "untrusted_external_content": True}
+
+
 def public_search(args, get):
     if set(args) - {"query", "count", "offset", "limit", "max_bytes", "timeout_seconds"}:
         raise ValueError("invalid_search_arguments")
@@ -314,7 +476,7 @@ class Wire:
                     if not isinstance(self.configuration, dict):
                         raise ValueError("invalid_configuration")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.2.1"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.3.0"}}
                 elif method == "ping" and initialized:
                     pass
                 elif method == "tools/call" and initialized:
@@ -322,10 +484,15 @@ class Wire:
                     context = params.get("_meta", {}).get("wechat/context", {})
                     if not all(context.get(k) for k in ("account", "thread", "requester", "purpose", "request_key")):
                         raise ValueError("host_context_required")
-                    action = {"web.search": "search", "web.read": "read"}.get(params["name"])
+                    action = {"web.search": "search", "web.read": "read", "web.discover": "discover"}.get(params["name"])
                     if not action or not isinstance(params.get("arguments"), dict):
                         raise ValueError("unknown_capability_or_arguments")
-                    result = search(params["arguments"], self.get, self.route, self.configuration) if action == "search" else fetch(params["arguments"], self.get)
+                    if action == "search":
+                        result = search(params["arguments"], self.get, self.route, self.configuration)
+                    elif action == "discover":
+                        result = discover(params["arguments"], self.get)
+                    else:
+                        result = fetch(params["arguments"], self.get)
                 else:
                     raise ValueError("method_unavailable")
             except (ValueError, KeyError, TypeError, LookupError, ET.ParseError) as error:

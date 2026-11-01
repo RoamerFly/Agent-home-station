@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -82,6 +83,25 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 	if !s.Settings.Enabled || !m.config.Companion.Enabled || !m.mcp.Enabled || !m.mcp.WebFetchEnabled || m.config.Companion.Quiet(now) || now.Before(s.Next) {
 		return nil, nil
 	}
+	if m.drainTicket != "" {
+		return nil, errors.New("web_host_draining")
+	}
+	if err := (&permittedTools{manager: m}).installedWebCapability(context.Background(), "web.discover"); err != nil {
+		return nil, err
+	}
+	// The current source-bound service adapter requires an explicitly authorized
+	// destination. Private autonomous browsing needs its own durable host-origin
+	// authority before it can run without a conversation; never invent a sender.
+	thread := ""
+	if m.agent != nil && m.agent.config().Enabled && m.config.Companion.Permissions.Proactive && m.config.Companion.Permissions.ReplyText && len(s.Settings.Threads) > 0 {
+		candidate := s.Settings.Threads[s.TopicIndex%len(s.Settings.Threads)]
+		if permittedRecipient(m.config, candidate) {
+			thread = candidate
+		}
+	}
+	if thread == "" {
+		return nil, errors.New("surf_private_browsing_authorization_required")
+	}
 	loc, e := time.LoadLocation(m.config.Companion.Timezone)
 	if e != nil {
 		return nil, e
@@ -122,13 +142,6 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 		return nil, e
 	}
 	preferred := formats[choice.Int64()]
-	thread := ""
-	if m.config.Companion.Permissions.Proactive && m.config.Companion.Permissions.ReplyText && len(s.Settings.Threads) > 0 {
-		candidate := s.Settings.Threads[(s.TopicIndex-1)%len(s.Settings.Threads)]
-		if permittedRecipient(m.config, candidate) {
-			thread = candidate
-		}
-	}
 	b, _ := json.Marshal(s)
 	if e = writePrivate(filepath.Join(m.dir, "surf.json"), b); e != nil {
 		return nil, e
@@ -172,7 +185,14 @@ func (s *Server) surfRoutes(mux *http.ServeMux) {
 				items = append(items, item)
 			}
 		}
-		respond(w, 200, map[string]any{"settings": state.Settings, "next": state.Next, "sessions": sessions, "day": state.Day, "items": items, "share_permission": config.Companion.Permissions.Proactive && config.Companion.Permissions.ReplyText, "allowed_threads": config.allowed(), "quiet_now": config.Companion.Quiet(now), "quiet_start": config.Companion.QuietStart, "quiet_end": config.Companion.QuietEnd, "timezone": config.Companion.Timezone})
+		readyErr := (&permittedTools{manager: m}).installedWebCapability(r.Context(), "web.discover")
+		reason := ""
+		if readyErr != nil {
+			reason = readyErr.Error()
+		} else if len(state.Settings.Threads) == 0 {
+			reason = "surf_private_browsing_authorization_required"
+		}
+		respond(w, 200, map[string]any{"settings": state.Settings, "next": state.Next, "sessions": sessions, "day": state.Day, "items": items, "execution_ready": reason == "", "execution_reason": reason, "share_permission": config.Companion.Permissions.Proactive && config.Companion.Permissions.ReplyText, "allowed_threads": config.allowed(), "quiet_now": config.Companion.Quiet(now), "quiet_start": config.Companion.QuietStart, "quiet_end": config.Companion.QuietEnd, "timezone": config.Companion.Timezone})
 	}))
 	mux.HandleFunc("POST /api/surf", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input surfSettings

@@ -1,5 +1,7 @@
 # 插件化实施状态
 
+2026-11-01 命名语音与公共联网切换：speech 0.2.0 接通已安装包的 GPT-SoVITS runner、单次宿主 broker、真实 WAV 校验及私有完成检查点；旧命名语音不再执行登记中的 Entry。只读选择原始权重，不逐任务复制模型。web-search 0.3.0 增加 `web.discover`，公共搜索/读取/内容发现均经过插件，旧 Hub 联网及订阅解析实现已删除。缺包不回退、不消费冲浪预算；无授权目标的私人浏览仍待独立宿主来源适配。生产账号和 EXE 未切换。见 `../quality/plugin-named-speech-web-cutover.md`。
+
 2026-11-01 媒体观察切换：media-understanding 0.2.0 增加独立的 `media.listen`。图片/表情、视频视觉、手机录屏分析和歌曲音频观察统一经安装插件，删除旧聊天模型视觉回退及 ReviewAudio SDK。音频只在宿主按实际区间解码；来源、任务、命名声线、撤权和私有完成检查点贯穿后续素材登记。迁移新增独立音频观察接口和宿主专用密钥，默认不启用。完整回归、实际 Windows 隔离合成契约及界面验收通过；真实提供商、生产账号和 EXE 尚未切换。见 `../quality/plugin-media-observation-cutover.md`。
 
 2026-11-01 ASR旧路径切换：入站语音、视频音轨、管理员合成校验与音乐参考识别统一经媒体插件，删除旧 Transcribe SDK、裸WAV调度与旧本地runner。非入站来源分别绑定管理员完成任务或同会话素材，不制造微信消息。media-understanding 0.1.3 将本地profile选择纳入独立配置；Go预演只读核验实际登记后可事务导入，资源版本参与来源摘要；Python独立预演仍需宿主验证。旧ASR表单与诊断配置已替换。实际模型、生产数据与EXE尚未切换；见 `../quality/plugin-asr-cutover.md`。

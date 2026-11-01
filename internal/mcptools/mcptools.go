@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"html"
@@ -62,8 +61,8 @@ type Tool struct {
 
 type Spec Tool
 
-// BuiltinTools exposes only the local, deterministic schemas, without starting
-// or contacting an external MCP server.
+// BuiltinTools is empty: optional web capabilities come from installed plugins.
+// It never starts or contacts an external MCP server.
 func BuiltinTools() []Tool { return builtin() }
 
 type Hub struct {
@@ -123,15 +122,10 @@ func New(config []ServerConfig) (*Hub, error) {
 }
 
 func builtin() []Tool {
-	return []Tool{
-		{Name: "web_audio_search", Description: "Search public music catalogs (Incompetech, then Internet Archive) and resolve real downloadable audio candidates; many catalog tracks are instrumental, not mainstream original recordings. Input {query:string}. Use song title/artist or music style; translate broad styles to English when appropriate. Does not download or send. Never substitute a different recording for a requested exact song.", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":200}},"required":["query"],"additionalProperties":false}`)},
-		{Name: "web_search", Description: "Search public web pages. Input: {query:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512}},"required":["query"],"additionalProperties":false}`)},
-		{Name: "web_fetch", Description: "Fetch and extract readable text from a public HTTP(S) page. Input: {url:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","format":"uri","maxLength":2048}},"required":["url"],"additionalProperties":false}`)},
-	}
+	return nil
 }
 
-// List returns built-ins even if a configured external server is unavailable.
-// In that case it also returns the first external error.
+// List returns configured external MCP tools and the first external error.
 func (h *Hub) List(ctx context.Context) ([]Tool, error) {
 	all := builtin()
 	var first error
@@ -162,12 +156,8 @@ func (h *Hub) Call(ctx context.Context, name string, args json.RawMessage) (stri
 		return "", errors.New("tool arguments must be JSON")
 	}
 	switch name {
-	case "web_audio_search":
-		return webAudioSearch(ctx, args)
-	case "web_search":
-		return webSearch(ctx, args)
-	case "web_fetch":
-		return webFetch(ctx, args)
+	case "web_audio_search", "web_search", "web_fetch":
+		return "", errors.New("web_search_plugin_migration_required")
 	}
 	parts := strings.SplitN(name, "__", 2)
 	if len(parts) != 2 {
@@ -640,94 +630,6 @@ func serverTimeout(ctx context.Context, c ServerConfig) (context.Context, contex
 	return context.WithTimeout(ctx, timeout)
 }
 
-type searchInput struct {
-	Query string `json:"query"`
-}
-
-func webSearch(ctx context.Context, args json.RawMessage) (string, error) {
-	var in searchInput
-	if err := json.Unmarshal(args, &in); err != nil || strings.TrimSpace(in.Query) == "" || len(in.Query) > 512 {
-		return "", &WebError{Code: "query_required", Stage: "arguments"}
-	}
-	return searchPublic(ctx, strings.TrimSpace(in.Query), func(ctx context.Context, raw string) ([]byte, error) { b, _, err := publicGet(ctx, raw); return b, err })
-}
-func parseBingSearch(body []byte) ([]searchResult, error) {
-	var feed struct {
-		Channel struct {
-			Items []struct {
-				Title       string `xml:"title"`
-				Link        string `xml:"link"`
-				Description string `xml:"description"`
-			} `xml:"item"`
-		} `xml:"channel"`
-	}
-	if err := xml.Unmarshal(body, &feed); err != nil {
-		return nil, &WebError{Code: "search_invalid", Stage: "decode"}
-	}
-	out := []searchResult{}
-	for i, x := range feed.Channel.Items {
-		if i == 8 {
-			break
-		}
-		if validPublicURL(strings.TrimSpace(x.Link)) == nil {
-			out = append(out, searchResult{cleanText(x.Title), strings.TrimSpace(x.Link), cleanText(x.Description)})
-		}
-	}
-	return out, nil
-}
-
-type fetchInput struct {
-	URL string `json:"url"`
-}
-
-func webFetch(ctx context.Context, args json.RawMessage) (string, error) {
-	var in fetchInput
-	if err := json.Unmarshal(args, &in); err != nil {
-		return "", &WebError{Code: "url_required"}
-	}
-	in.URL = strings.TrimSpace(in.URL)
-	if in.URL == "" {
-		return "", &WebError{Code: "url_required"}
-	}
-	if len(in.URL) > 2048 {
-		return "", errors.New("web_fetch URL exceeds 2048 characters")
-	}
-	if err := validPublicURL(in.URL); err != nil {
-		return "", err
-	}
-	if u, err := url.Parse(in.URL); err == nil && u.Hostname() == "api.deepseek.com" && (strings.TrimRight(u.Path, "/") == "/v1/tools/search" || strings.TrimRight(u.Path, "/") == "/v1/tools/fetch") {
-		return "", &WebError{Code: "authenticated_service_endpoint"}
-	}
-	if text, handled, err := discoveryListPage(ctx, in.URL); handled {
-		return text, err
-	}
-	body, contentType, final, err := publicRead(ctx, in.URL, maxBody)
-	if err != nil {
-		return "", err
-	}
-	if !strings.HasPrefix(contentType, "text/") && !strings.Contains(contentType, "json") && !strings.Contains(contentType, "xml") && contentType != "" {
-		return "", &WebError{Code: "not_text"}
-	}
-	s := string(body)
-	title := ""
-	if m := regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`).FindStringSubmatch(s); len(m) > 1 {
-		title = cleanText(m[1])
-	}
-	s = extractHTMLText(s)
-	if s == "" {
-		return "", &WebError{Code: "no_readable_text"}
-	}
-	out := "Source: " + final + "\n"
-	if title != "" {
-		out += "Title: " + title + "\n"
-	}
-	out += "\n" + trimBytes(s, 10000)
-	if links := ExtractMediaLinks(string(body), final); len(links) > 0 {
-		out += "\nPublic media candidates (not yet downloaded):\n" + strings.Join(links, "\n")
-	}
-	return trimBytes(out, 12000), nil
-}
-
 var unsafeHTML = []*regexp.Regexp{
 	regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script\s*>`),
 	regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style\s*>`),
@@ -758,10 +660,6 @@ func validPublicURL(raw string) error {
 		return &WebError{Code: "invalid_url"}
 	}
 	return nil
-}
-func publicGet(ctx context.Context, raw string) ([]byte, string, error) {
-	b, _, final, err := publicRead(ctx, raw, maxBody)
-	return b, final, err
 }
 
 // MaxPublicMediaBytes matches the file attachment capacity. It bounds actual

@@ -3,14 +3,51 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"wechat-bot/internal/mcptools"
 )
+
+func TestSurfMissingDisabledOrUnreadyPluginNeverConsumesSchedule(t *testing.T) {
+	for _, state := range []string{"missing", "disabled", "runtime_unavailable"} {
+		t.Run(state, func(t *testing.T) {
+			f := setup(t)
+			if state != "missing" {
+				s, i := installPublicWebFixture(t, f)
+				if state == "disabled" {
+					if _, err := s.SetEnabled(t.Context(), i.Package.ID, i.Revision, false); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					f.manager.packageRuntimeReady = false
+				}
+			}
+			f.manager.config.Companion.Enabled = true
+			f.manager.config.Companion.Permissions.Proactive = true
+			f.manager.config.Companion.QuietStart, f.manager.config.Companion.QuietEnd = "00:00", "00:00"
+			f.manager.surf.Settings.Enabled = true
+			f.manager.surf.Settings.Threads = []string{"filehelper"}
+			before, _ := json.Marshal(f.manager.surf)
+			task, err := f.manager.claimSurf(time.Now())
+			after, _ := json.Marshal(f.manager.surf)
+			var web *mcptools.WebError
+			if task != nil || !errors.As(err, &web) || !bytes.Equal(before, after) {
+				t.Fatal("unavailable plugin consumed browsing budget", state, task, err)
+			}
+			if _, err := os.Stat(filepath.Join(f.dir, "surf.json")); !os.IsNotExist(err) {
+				t.Fatal("failed preflight wrote schedule", state, err)
+			}
+		})
+	}
+}
 
 func TestSurfQuietHoursSkipWithoutConsumingOrMutatingSchedule(t *testing.T) {
 	f := setup(t)
+	installPublicWebFixture(t, f)
 	c := &f.manager.config.Companion
 	c.Enabled = true
 	c.Permissions.Proactive = true
@@ -120,8 +157,17 @@ func TestSurfAccessBudgetAndExplicitTargets(t *testing.T) {
 	f.manager.surf.Next = time.Time{}
 	f.manager.mu.Unlock()
 	task, err := f.manager.claimSurf(time.Now())
-	if err != nil || task == nil || task.Thread != "" {
-		t.Fatal("browse-only default broken", task, err)
+	if err == nil || task != nil || f.manager.surf.Sessions != 0 {
+		t.Fatal("unmigrated browse-only consumed budget", task, err)
+	}
+	installPublicWebFixture(t, f)
+	if task, err = f.manager.claimSurf(time.Now()); err == nil || task != nil || f.manager.surf.Sessions != 0 {
+		t.Fatal("private browsing invented conversation authority", task, err)
+	}
+	f.manager.surf.Settings.Threads = []string{"filehelper"}
+	f.manager.config.Companion.Permissions.Proactive = true
+	if task, err = f.manager.claimSurf(time.Now()); err != nil || task == nil || task.Thread != "filehelper" {
+		t.Fatal("authorized installed browsing could not claim", task, err)
 	}
 	f.manager.mu.Lock()
 	f.manager.surf.Next = time.Time{}
@@ -137,9 +183,12 @@ func TestSurfAccessBudgetAndExplicitTargets(t *testing.T) {
 
 func TestFeedDiscoveryCanRunWithSearchDisabledButNotWebReadDisabled(t *testing.T) {
 	f := setup(t)
+	installPublicWebFixture(t, f)
 	f.manager.surf = surfDefaults()
 	f.manager.surf.Settings.Enabled = true
+	f.manager.surf.Settings.Threads = []string{"filehelper"}
 	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.Permissions.Proactive = true
 	f.manager.config.Companion.QuietStart = "00:00"
 	f.manager.config.Companion.QuietEnd = "00:00"
 	f.manager.mcp.WebSearchEnabled = false

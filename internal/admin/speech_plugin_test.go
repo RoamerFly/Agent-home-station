@@ -51,6 +51,21 @@ func speechPluginFixture(t *testing.T) (*webFixture, *permittedTools, *speechPlu
 	return f, p, policy
 }
 
+func TestCloudSpeechConfigurationDoesNotEnableNamedVoice(t *testing.T) {
+	f, access, policy := speechPluginFixture(t)
+	job, capability := speechPluginJob(policy)
+	if err := policy.Check(t.Context(), job, capability); err != nil {
+		t.Fatalf("cloud-only configuration incorrectly required local voice configuration: %v", err)
+	}
+	if f.manager.namedSpeechPluginConfigured(t.Context()) {
+		t.Fatal("cloud-only installation exposed local voice capability")
+	}
+	tools := access.speechTools()
+	if len(tools) != 1 || tools[0].Name != "speech_synthesize" || strings.Contains(string(tools[0].InputSchema), "voice_id") {
+		t.Fatalf("cloud-only tool exposed an unavailable named voice route: %#v", tools)
+	}
+}
+
 func speechPluginJob(p *speechPluginPolicy) (pluginhost.Job, pluginhost.Capability) {
 	i, _ := p.store.Installed(context.Background(), "speech")
 	return pluginhost.Job{Plugin: "speech", Version: i.Package.Version, PackageDigest: i.Digest, ConfigRevision: "1", Tool: "speech.synthesize", Context: p.invocation}, pluginhost.Capability{ID: "speech.synthesize", Permissions: []string{"model.invoke"}}

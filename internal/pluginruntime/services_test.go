@@ -38,6 +38,31 @@ func TestServiceProxyRequiresCurrentCallPermissionAndIdentity(t *testing.T) {
 
 type syntheticModelDispatch struct{ offlineWebPolicy }
 
+func TestNamedSpeechServiceRequiresExactPluginCapabilityAndBothPermissions(t *testing.T) {
+	for _, tc := range []struct {
+		name, plugin, capability string
+		permissions              []string
+		allowed                  bool
+	}{
+		{"valid", "speech", "speech.synthesize_named", []string{"artifact.read", "model.invoke"}, true},
+		{"missing model", "speech", "speech.synthesize_named", []string{"artifact.read"}, false},
+		{"missing artifact", "speech", "speech.synthesize_named", []string{"model.invoke"}, false},
+		{"cloud capability", "speech", "speech.synthesize", []string{"artifact.read", "model.invoke"}, false},
+		{"other plugin", "other", "speech.synthesize_named", []string{"artifact.read", "model.invoke"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &syntheticModelDispatch{}
+			job := pluginhost.Job{Plugin: tc.plugin, Context: invocation()}
+			capability := pluginhost.Capability{ID: tc.capability, Permissions: tc.permissions}
+			call := serviceContext(t.Context(), p, job, capability).Value(serviceKey{}).(serviceCall)
+			_, err := call(t.Context(), "wechat/local_speech", json.RawMessage(`{}`))
+			if (err == nil) != tc.allowed || (p.calls == 1) != tc.allowed {
+				t.Fatalf("unexpected named service admission: calls=%d err=%v", p.calls, err)
+			}
+		})
+	}
+}
+
 func (p *syntheticModelDispatch) Service(context.Context, pluginhost.Job, pluginhost.Capability, string, json.RawMessage) (json.RawMessage, error) {
 	p.calls++
 	return json.RawMessage(`{}`), nil

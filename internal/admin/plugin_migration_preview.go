@@ -41,6 +41,12 @@ type pluginMigrationPackage struct {
 	Permissions    []string `json:"permissions,omitempty"`
 	deepSeekSearch bool
 	objectBridge   bool
+	namedSpeech    bool
+}
+type pluginMigrationResourceProof struct {
+	Source        string `json:"source"`
+	Present       bool   `json:"present"`
+	VersionSHA256 string `json:"version_sha256,omitempty"`
 }
 type pluginMigrationStep struct {
 	Plugin           string                           `json:"plugin"`
@@ -56,6 +62,7 @@ type pluginMigrationStep struct {
 	RequiredMissing  []string                         `json:"required_missing"`
 	UnmappedLegacy   []string                         `json:"unmapped_legacy_fields,omitempty"`
 	ProfileID        string                           `json:"profile_id,omitempty"`
+	ResourceProof    *pluginMigrationResourceProof    `json:"resource_proof,omitempty"`
 	ApplySourceHash  string                           `json:"apply_source_hash"`
 	// update is host-only. It is never serialized through the management API.
 	update pluginhost.ConfigUpdate
@@ -124,9 +131,30 @@ func migrationCatalog() map[string]pluginMigrationPackage {
 			Permissions:    append([]string(nil), contract.Package.Permissions...),
 			deepSeekSearch: catalogDeclaresDeepSeekSearch(contract),
 			objectBridge:   catalogDeclaresShareObjectBridge(contract),
+			namedSpeech:    catalogDeclaresNamedSpeech(contract),
 		}
 	}
 	return out
+}
+
+// Named speech requires an explicit local profile field and the ready named
+// capability.  A cloud TTS package must never acquire a local profile merely
+// because a legacy voice happens to have a familiar display name.
+func catalogDeclaresNamedSpeech(contract catalog.Contract) bool {
+	p := contract.Package
+	if p.ID != "speech" || p.Status != "ready" || !migrationStringContains(p.Permissions, "artifact.read") || !migrationStringContains(p.Permissions, "model.invoke") {
+		return false
+	}
+	profile, ok := contract.Configuration.Properties["local_profile_id"]
+	if !ok || profile.Type != "string" || !migrationEnumContains(profile.Enum, "gpt-sovits") {
+		return false
+	}
+	for _, capability := range contract.Capabilities {
+		if capability.ID == "speech.synthesize_named" && capability.Implementation == "ready" && migrationStringContains(capability.Permissions, "artifact.read") && migrationStringContains(capability.Permissions, "model.invoke") {
+			return true
+		}
+	}
+	return false
 }
 
 // The fixed host route, explicit backend schema, host-only secret and ready
@@ -274,6 +302,37 @@ func (m *Manager) migrationLocalASRResourceVersion(ctx context.Context, id strin
 	return profile.initializer.ResourceVersion, nil
 }
 
+// migrationNamedSpeechResourceVersion verifies only the existing public
+// GPT-SoVITS registration under the official speech package grant.  It does
+// not open the plugin Store, enumerate named voices, copy weights, or start a
+// local interpreter.  The returned digest is deliberately opaque.
+func (m *Manager) migrationNamedSpeechResourceVersion(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	directory, err := officialMigrationDirectory("speech")
+	if err != nil {
+		return "", err
+	}
+	pkg, err := pluginhost.Verify(directory)
+	if err != nil || pkg.ID != "speech" {
+		return "", errors.New("named_speech_migration_package_unavailable")
+	}
+	grant := pluginhost.Grant{Account: m.native.Account(), Plugin: pkg.ID, Version: pkg.Version, Permissions: append([]string(nil), pkg.Permissions...)}
+	invocation := pluginhost.Invocation{Account: grant.Account, Thread: "host:plugin-migration-preview", Requester: "administrator", Purpose: "inspect registered named speech migration resources", RequestKey: "named-speech-migration-preview"}
+	if err := pluginhost.Authorize(pkg, grant, invocation, []string{"artifact.read", "model.invoke"}); err != nil {
+		return "", err
+	}
+	version, ready, err := namedSpeechManifestResourceProof(ctx, filepath.Join(m.managedRoot(), "public_workspace"))
+	if err != nil {
+		return "", err
+	}
+	if !ready || version == "" {
+		return "", errors.New("named_speech_migration_resource_unavailable")
+	}
+	return version, nil
+}
+
 func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[string]pluginMigrationPackage) (pluginMigrationAccount, error) {
 	if err := ctx.Err(); err != nil {
 		return pluginMigrationAccount{}, err
@@ -372,7 +431,26 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	if speech.TTSEnabled && ttsKey == "" {
 		speechRequired = append(speechRequired, "tts_key")
 	}
-	speechStep := migrationStep("speech", packages, speech.TTSEnabled, speechValues, map[string]pluginMigrationSecret{"tts_key": ttsSecret}, pluginhost.ConfigUpdate{Values: speechValues, Secrets: map[string]string{"tts_key": ttsKey}}, speechRequired, []string{"asr_*", "music_*", "yue_*", "yue_token"}, "", sources)
+	speechUpdate := pluginhost.ConfigUpdate{Values: speechValues, Secrets: map[string]string{"tts_key": ttsKey}}
+	var namedProof *pluginMigrationResourceProof
+	namedAvailable := false
+	if version, resourceErr := m.migrationNamedSpeechResourceVersion(ctx); resourceErr == nil {
+		if packages["speech"].namedSpeech {
+			speechValues["local_profile_id"] = migrationValue("gpt-sovits")
+			speechUpdate.Values["local_profile_id"] = migrationValue("gpt-sovits")
+			namedProof = &pluginMigrationResourceProof{Source: "gpt-sovits-manifest", Present: true, VersionSHA256: version}
+			sources["named_speech_resource_version"] = version
+			namedAvailable = true
+		} else {
+			// Do not silently drop a verified local route when the selected
+			// package has not declared a compatible configuration/capability.
+			speechRequired = append(speechRequired, "official_named_speech_adapter_not_declared_by_speech_plugin")
+		}
+	} else if err := ctx.Err(); err != nil {
+		return pluginMigrationAccount{}, err
+	}
+	speechStep := migrationStep("speech", packages, speech.TTSEnabled || namedAvailable, speechValues, map[string]pluginMigrationSecret{"tts_key": ttsSecret}, speechUpdate, speechRequired, []string{"asr_*", "music_*", "yue_*", "yue_token"}, "", sources)
+	speechStep.ResourceProof = namedProof
 	musicSecret, musicKey := migrationSecret(speech.Key, "speech-config.json:key")
 	musicValues := map[string]json.RawMessage{"music_endpoint": migrationValue(migrationEndpoint(speech.Endpoint, "/api/v1/services/audio/music/generation")), "music_model": migrationValue(speech.MusicModel)}
 	musicRequired := []string{}

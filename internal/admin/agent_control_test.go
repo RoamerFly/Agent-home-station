@@ -125,6 +125,7 @@ func TestOwnerAllAllowedThreadsStillChecksSenderAndRecipient(t *testing.T) {
 
 func TestExternalPluginOwnerRestrictionCannotBeBypassed(t *testing.T) {
 	f, p := trustedAgent(t)
+	installPublicWebFixture(t, f)
 	c := f.manager.agent.config()
 	c.ExternalOwnerOnly = true
 	if err := f.manager.agent.save(c); err != nil {

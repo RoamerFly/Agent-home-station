@@ -54,7 +54,7 @@ func TestMCPConfigurationSecretsAndAbilitySwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools, err := access.List(context.Background())
-	if err != nil || len(tools) != 2 || tools[0].Name != "web_fetch" || tools[1].Name != "web_media_download" {
+	if err != nil || len(tools) != 1 || tools[0].Name != "web_media_download" {
 		t.Fatal("search capability not removed")
 	}
 	if _, err = access.Call(context.Background(), "web_search", json.RawMessage(`{"query":"x"}`)); err == nil {
@@ -164,7 +164,7 @@ func TestInstalledWebPluginHandlesChineseAudioAlias(t *testing.T) {
 	}
 	_, err = access.Call(ctx, "web_audio_search", json.RawMessage(`{"query":"周杰伦 稻香"}`))
 	web := (*mcptools.WebError)(nil)
-	if !errors.As(err, &web) || web.Code != "ability_disabled" {
+	if !errors.As(err, &web) || web.Code != "web_plugin_migration_required" {
 		t.Fatalf("disabled audio alias fell through: %v", err)
 	}
 	if executor.calls != 1 {
@@ -173,13 +173,10 @@ func TestInstalledWebPluginHandlesChineseAudioAlias(t *testing.T) {
 }
 
 func TestPublicMediaHonorsPermissionsBeforeDownloadAndReportsMissingURL(t *testing.T) {
-	f := setup(t)
+	f, access := trustedAgent(t)
 	f.login()
-	access, _, err := f.manager.toolAccess()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = access.Call(context.Background(), "web_fetch", json.RawMessage(`{"query":"deepseek"}`))
+	installPublicWebFixture(t, f)
+	_, err := access.Call(context.Background(), "web_fetch", json.RawMessage(`{"query":"deepseek"}`))
 	if err == nil || !bytes.Contains([]byte(mcptools.FailureDescription(err)), []byte("url")) {
 		t.Fatal("missing URL diagnostic")
 	}
@@ -196,7 +193,7 @@ func TestPublicMediaHonorsPermissionsBeforeDownloadAndReportsMissingURL(t *testi
 	if _, err = access.Call(context.Background(), "web_media_download", json.RawMessage(`{"kind":"video","url":"https://www.bilibili.com/video/BV1qP4y187Lf/"}`)); err == nil || err.Error() != "media_permission_denied" {
 		t.Fatal("video page read before permission check", err)
 	}
-	if code, body, _ := f.request("POST", "/api/mcp/test", map[string]any{"name": "web_fetch", "arguments": map[string]string{"query": "deepseek"}}, true, true); code != 502 || !bytes.Contains(body, []byte("url")) {
-		t.Fatal("manual tool hid cause", code, string(body))
+	if code, body, _ := f.request("POST", "/api/mcp/test", map[string]any{"name": "web_fetch", "arguments": map[string]string{"query": "deepseek"}}, true, true); code != 502 || !bytes.Contains(body, []byte("工具能力已关闭")) {
+		t.Fatal("manual tool bypassed conversation authority", code, string(body))
 	}
 }

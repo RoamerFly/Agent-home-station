@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "speech",
   "name": "语音生成",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -14,22 +14,26 @@
     "entrypoint": "runtime/main.py"
   },
   "permissions": [
+    "artifact.read",
     "model.invoke"
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "e5b1b1397134bdeddd9df5484071580102f163d65d6c42b97c45595e0ab0304c",
-    "CHANGELOG.md": "ee59490076f932328c1539bdad44dfe1a4c26c9fb075a5059cd8f840f86ec61a",
-    "config.schema.json": "3fda5eefef6c4097c6069009c71530a20cc9bb8ad8c7316bdf468f4e7cef6d95",
-    "MIGRATION.md": "27a635f28af5bbac845487b7c9adb20008d66dd398b8598d831866a494610f6a",
-    "PERMISSIONS.md": "d94245a3b5d970fa3a0f7ad85d44edd49e615378e8765d7a0d4f9dcf330e8161",
-    "README.md": "7782f4d21e7d92d1114fa8dddc94ff387b1f80cd4979f4c1ef81fbec936a0ef4",
+    "capabilities.json": "e60b2397feb44406d1f0947394d086867d3eae925bc69b2dac3984eb8e50264e",
+    "CHANGELOG.md": "69abda0050c938ef650ea9b74823f4bd9d636f73172a0e828a9071686d805b74",
+    "config.schema.json": "bd72c9a2eab30357b83e26bfd39ab679103f46285fbd23e0cf50eb2ad8ad55a5",
+    "MIGRATION.md": "b3ee1ecbab87d427d5518d0b24047f51de0495c9c6f276e5affe3d7e31cfb704",
+    "PERMISSIONS.md": "3b6ce778bd60ce8adfadfc526a6013563ce7a931e7a3849e2f081ec917bd2f17",
+    "README.md": "b27986e4f58b44f36f9231d57f8c0b24a907731d0f3059b3b88d0854352124cd",
     "runtime/cloud_tts.py": "821318e57932d2c75c7368ecdec44149b0684beb2e7175b2ea4ad39de1cb2e52",
-    "runtime/main.py": "10890094a89814653fbdd891a615dc27597aa861ac521677724062834cf457b2",
-    "runtime/README.md": "e6f6f2834e9ceb85037e5ee5f88afc9b9af55ea9d0a0164c2fb4b6d3bb4655a5",
+    "runtime/gpt_sovits.py": "d9fa7f1449c225f247abc982d66f3ece2ec2b18c93540d1a03c3630a74266e6d",
+    "runtime/main.py": "ac2b919cbd1fe2fbd930501c338d270c77dda7851984f715da518ff9e8a96862",
+    "runtime/named_voice.py": "5a53e87be20fa4ae0cbaea38eb7c89dce86ff5585530fd4e559923ebfca23555",
+    "runtime/README.md": "f2d876271597c3971d54bf5ab620d8e878f05a60deb570f87c28d541b33c360d",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "tests/test_cloud_tts.py": "6c17889c9652060c9ebe3e1dcb993b49b9d96502cddc066b59901241bad9a8f3",
-    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
+    "tests/test_named_voice.py": "7519038e861e5a25205e56b89020e4253d5749474bbdcb5b225ebe0e4a039d47",
+    "ui.schema.json": "897a018b01ecd8ec11d6c9b8ac02e067c442916d061410ffb7459658ff338300"
   },
   "http_routes": [
     {
@@ -41,7 +45,8 @@
       ],
       "credential": "tts_key",
       "credential_header": "Authorization",
-      "credential_prefix": "Bearer "
+      "credential_prefix": "Bearer ",
+      "optional": true
     }
   ]
 }
