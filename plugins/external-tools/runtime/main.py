@@ -126,6 +126,82 @@ def execute(arguments, host):
     return parse_reply(reply, tool)
 
 
+JOB_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$')
+
+def job_protocol(raw):
+    doc = object_of(raw, 'external_job_protocol_invalid')
+    if doc.get('version') != 1 or set(doc) != {'version','tool'}:
+        raise ValueError('external_job_protocol_invalid')
+    item = dict(object_of(doc['tool'], 'external_job_protocol_invalid'))
+    job, poll = item.pop('job', None), item.pop('poll', None)
+    tools = protocol({'version':1,'tools':[item]})
+    tool = next(iter(tools.values()))
+    job, poll = object_of(job, 'external_job_protocol_invalid'), object_of(poll, 'external_job_protocol_invalid')
+    if set(job) != {'id_path'} or not isinstance(job.get('id_path'), str) or not job['id_path'] or set(poll) - {'status_path','done_values','failed_values','text_path','media_url_path','media_kind'} or not isinstance(poll.get('status_path'), str) or not poll['status_path'] or not isinstance(poll.get('done_values'), list) or not poll['done_values'] or not all(isinstance(x,str) for x in poll['done_values']) or not all(isinstance(x,str) for x in poll.get('failed_values',[])):
+        raise ValueError('external_job_protocol_invalid')
+    tool['job'], tool['poll'] = job, {'status_path':poll['status_path'],'done_values':poll['done_values'],'failed_values':poll.get('failed_values',[]),'text_path':poll.get('text_path',tool['text_path']),'media_url_path':poll.get('media_url_path',tool['media_url_path']),'media_kind':poll.get('media_kind',tool['media_kind'])}
+    return tool
+
+def job_ticket(raw, tool):
+    item = object_of(raw, 'external_ticket_invalid')
+    if set(item) - {'tool','fingerprint','remote_id','state','output'} or item.get('tool') != tool['name'] or item.get('fingerprint') != tool['fingerprint'] or item.get('state') not in ('submitting','waiting','completed','failed') or not isinstance(item.get('remote_id',''),str):
+        raise ValueError('external_ticket_invalid')
+    return dict(item)
+
+def job_json(reply):
+    reply = object_of(reply, 'external_host_response_invalid')
+    if set(reply) != {'content_type','body_base64'} or not isinstance(reply['body_base64'],str): raise ValueError('external_host_response_invalid')
+    try: return reply, json.loads(base64.b64decode(reply['body_base64'],validate=True),parse_int=str,parse_float=str)
+    except (ValueError,UnicodeDecodeError,json.JSONDecodeError) as error: raise ValueError('external_response_invalid') from error
+
+def job_result(ticket, tool, observation, value):
+    state = text(at(value,tool['poll']['status_path']))
+    if not state:
+        raise ValueError('external_status_missing')
+    # Legacy jobResult checks failed states before done states.
+    if state in tool['poll']['failed_values']:
+        ticket['state'], ticket['output'] = 'failed', {'text':'','media':[]}
+        return {'observation':observation,'ticket':ticket}
+    if state not in tool['poll']['done_values']:
+        ticket['state'], ticket['output'] = 'waiting', {'text':'','media':[]}
+        if not JOB_ID.fullmatch(ticket.get('remote_id','')):
+            raise ValueError('external_remote_id_invalid')
+        return {'observation':observation,'ticket':ticket}
+    extract = dict(tool); extract.update({'text_path':tool['poll']['text_path'],'media_url_path':tool['poll']['media_url_path'],'media_kind':tool['poll']['media_kind']})
+    synthetic = {'content_type':'application/json','body_base64':observation['body_base64']}
+    ticket['state'], ticket['output'] = 'completed', parse_reply(synthetic,extract)['output']
+    return {'observation':observation,'ticket':ticket}
+
+def job_execute(arguments, host):
+    request = object_of(arguments, 'external_arguments_invalid')
+    if set(request) != {'phase','tool','arguments','arguments_sha256','ticket','ticket_sha256','protocol'} or request.get('phase') not in ('start','poll','cancel') or not isinstance(request.get('tool'),str) or not isinstance(request.get('arguments'),dict) or not isinstance(request.get('arguments_sha256'),str) or not re.fullmatch(r'[a-f0-9]{64}',request['arguments_sha256']) or not isinstance(request.get('ticket_sha256'),str) or not re.fullmatch(r'[a-f0-9]{64}',request['ticket_sha256']): raise ValueError('external_operation_invalid')
+    tool = job_protocol(request['protocol'])
+    if request['tool'] != tool['name']: raise ValueError('external_tool_unavailable')
+    ticket = job_ticket(request['ticket'],tool)
+    phase = request['phase']
+    if phase == 'start' and (ticket['state'] != 'submitting' or ticket.get('remote_id')): raise ValueError('external_ticket_invalid')
+    if phase == 'poll' and (ticket['state'] != 'waiting' or not JOB_ID.fullmatch(ticket.get('remote_id',''))): raise ValueError('external_ticket_invalid')
+    if phase == 'cancel' and not JOB_ID.fullmatch(ticket.get('remote_id','')): raise ValueError('external_ticket_invalid')
+    reply = host({'phase':phase,'tool':tool['name'],'arguments_sha256':request['arguments_sha256'],'ticket_sha256':request['ticket_sha256']})
+    if phase == 'cancel': return {'observation':reply,'cancel_ack':True,'ticket':ticket}
+    observation, value = job_json(reply)
+    if phase == 'start':
+        remote = at(value,tool['job']['id_path'])
+        if isinstance(remote,(str,int)) and JOB_ID.fullmatch(str(remote)): ticket['remote_id'] = str(remote)
+        try:
+            return job_result(ticket,tool,observation,value)
+        except ValueError:
+            status = text(at(value,tool['poll']['status_path']))
+            # Match legacy StartJob: a valid acknowledged remote identity is
+            # retained when an immediate completed response cannot be safely
+            # extracted.  Do not hide provider failure or invent an ID.
+            if ticket.get('remote_id') and status not in tool['poll']['failed_values']:
+                ticket['state'], ticket['output'] = 'waiting', {'text':'','media':[]}
+                return {'observation':observation,'ticket':ticket,'known_remote_only':True}
+            raise
+    return job_result(ticket,tool,observation,value)
+
+
 class Wire:
     def __init__(self, incoming, outgoing):
         self.incoming, self.outgoing, self.sequence = incoming, outgoing, 0
@@ -147,6 +223,7 @@ class Wire:
     def serve(self):
         initialized = False
         schema = {'type':'object','properties':{'phase':{'type':'string','enum':['call']},'tool':{'type':'string'},'arguments':{'type':'object'},'arguments_sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'},'protocol':{'type':'object'}},'required':['phase','tool','arguments','arguments_sha256','protocol'],'additionalProperties':False}
+        job_schema = {'type':'object','properties':{'phase':{'type':'string','enum':['start','poll','cancel']},'tool':{'type':'string'},'arguments':{'type':'object'},'arguments_sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'},'ticket':{'type':'object'},'ticket_sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'},'protocol':{'type':'object'}},'required':['phase','tool','arguments','arguments_sha256','ticket','ticket_sha256','protocol'],'additionalProperties':False}
         while True:
             try: request = self.read()
             except EOFError: return
@@ -158,12 +235,14 @@ class Wire:
                 if method == 'initialize':
                     initialized = True; result = {'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'external-tools','version':'0.3.0'}}
                 elif initialized and method == 'ping': result = {}
-                elif initialized and method == 'tools/list': result = {'tools':[{'name':'external.http_request','description':'Run one exact host-bound synchronous HTTP tool phase.', 'inputSchema':schema}]}
+                elif initialized and method == 'tools/list': result = {'tools':[{'name':'external.http_request','description':'Run one exact host-bound synchronous HTTP tool phase.', 'inputSchema':schema},{'name':'external.job_request','description':'Run exactly one host-bound legacy job start, poll, or cancel phase.', 'inputSchema':job_schema}]}
                 elif initialized and method == 'tools/call':
                     params = object_of(request.get('params'), 'external_arguments_invalid')
                     context = object_of(params.get('_meta', {}).get('wechat/context'), 'host_context_required')
-                    if params.get('name') != 'external.http_request' or not all(isinstance(context.get(k), str) and context[k] for k in ('account','thread','requester','purpose','request_key')): raise ValueError('host_context_required')
-                    result = execute(params.get('arguments'), self.host)
+                    if not all(isinstance(context.get(k), str) and context[k] for k in ('account','thread','requester','purpose','request_key')): raise ValueError('host_context_required')
+                    if params.get('name') == 'external.http_request': result = execute(params.get('arguments'), self.host)
+                    elif params.get('name') == 'external.job_request': result = job_execute(params.get('arguments'), self.host)
+                    else: raise ValueError('method_unavailable')
                 else: raise ValueError('method_unavailable')
             except (ValueError, TypeError, KeyError) as error:
                 code = str(error); result = {'ok':False,'error':code if re.fullmatch(r'[a-z_]{1,96}', code) else 'external_request_invalid'}

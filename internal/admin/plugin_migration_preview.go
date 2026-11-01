@@ -45,6 +45,7 @@ type pluginMigrationPackage struct {
 	namedSpeech    bool
 	localMusic     bool
 	externalSync   bool
+	externalJob    bool
 }
 type pluginMigrationResourceProof struct {
 	Source        string `json:"source"`
@@ -137,6 +138,7 @@ func migrationCatalog() map[string]pluginMigrationPackage {
 			namedSpeech:    catalogDeclaresNamedSpeech(contract),
 			localMusic:     catalogDeclaresLocalMusicBridge(contract),
 			externalSync:   catalogDeclaresExternalSync(contract),
+			externalJob:    catalogDeclaresExternalJob(contract),
 		}
 	}
 	return out
@@ -148,6 +150,17 @@ func migrationCatalog() map[string]pluginMigrationPackage {
 // configuration.  Those details stay in plugins.json and are rechecked by the
 // host bridge for each call.
 func catalogDeclaresExternalSync(contract catalog.Contract) bool {
+	return catalogDeclaresExternalCapability(contract, externalHTTPCapability)
+}
+
+// Job requests are a separately reviewed capability.  A ready one-shot HTTP
+// capability never implies that the package understands persisted start/poll/
+// cancel tickets.
+func catalogDeclaresExternalJob(contract catalog.Contract) bool {
+	return catalogDeclaresExternalCapability(contract, externalJobCapability)
+}
+
+func catalogDeclaresExternalCapability(contract catalog.Contract, wanted string) bool {
 	p := contract.Package
 	if p.ID != externalHTTPPluginID || p.Status != "ready" || !migrationStringContains(p.Permissions, "network") {
 		return false
@@ -156,38 +169,50 @@ func catalogDeclaresExternalSync(contract catalog.Contract) bool {
 		return false
 	}
 	for _, capability := range contract.Capabilities {
-		if capability.ID == externalHTTPCapability && capability.Implementation == "ready" && capability.Discoverable && !capability.Async && migrationStringContains(capability.Permissions, "network") {
+		if capability.ID == wanted && capability.Implementation == "ready" && capability.Discoverable && !capability.Async && migrationStringContains(capability.Permissions, "network") {
 			return true
 		}
 	}
 	return false
 }
 
-// legacyExternalSyncIntent deliberately examines only enablement and whether
-// a declaration is synchronous.  It neither serializes nor interprets URLs,
-// templates, headers or Secrets: plugins.json remains their sole authority.
-// The second return value means an enabled legacy declaration exists but none
-// of it is covered by the synchronous adapter (MCP-only or async-only).
-func legacyExternalSyncIntent(mcpEnabled bool, installed []legacyplugins.Installed) (bool, bool) {
+type legacyExternalIntent struct {
+	declared    bool
+	synchronous bool
+	jobs        bool
+	unsupported bool
+}
+
+// legacyExternalIntentFor deliberately examines only enablement and lifecycle
+// shape. It neither serializes nor interprets URLs, templates, headers or
+// Secrets: plugins.json remains their sole authority. A Job is supported only
+// when it has its Poll companion; bare Poll/MCP declarations retain the old
+// path and cannot be represented as a job request.
+func legacyExternalIntentFor(mcpEnabled bool, installed []legacyplugins.Installed) legacyExternalIntent {
+	var out legacyExternalIntent
 	if !mcpEnabled {
-		return false, false
+		return out
 	}
-	declared, sync := false, false
 	for _, item := range installed {
 		if !item.Enabled {
 			continue
 		}
 		if item.Manifest.MCP != nil {
-			declared = true
+			out.declared, out.unsupported = true, true
 		}
 		for _, tool := range item.Manifest.Tools {
-			declared = true
-			if tool.Job == nil && tool.Poll == nil {
-				sync = true
+			out.declared = true
+			switch {
+			case tool.Job == nil && tool.Poll == nil:
+				out.synchronous = true
+			case tool.Job != nil && tool.Poll != nil:
+				out.jobs = true
+			default:
+				out.unsupported = true
 			}
 		}
 	}
-	return sync, declared && !sync
+	return out
 }
 
 // A YuE/RVC endpoint is not a generic plugin network permission.  The music
@@ -628,17 +653,30 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	// migrated.  Only an enabled one-shot declaration expresses that intent.
 	// MCP-only and background-job/poll declarations retain their original host
 	// behavior and are visibly blocked until a compatible adapter exists.
-	externalEnabled, externalOnlyUnsupported := legacyExternalSyncIntent(mcp.Enabled, legacyExternal)
+	externalIntent := legacyExternalIntentFor(mcp.Enabled, legacyExternal)
+	externalEnabled := externalIntent.synchronous && packages[externalHTTPPluginID].externalSync || externalIntent.jobs && packages[externalHTTPPluginID].externalJob
 	externalRequired := []string{}
 	externalUnmapped := []string{}
-	if mcp.Enabled && (externalEnabled || externalOnlyUnsupported) {
+	if mcp.Enabled && externalIntent.declared {
 		externalUnmapped = append(externalUnmapped, "plugins.json:host_retained_declarations_and_credentials")
 	}
-	if externalOnlyUnsupported {
-		externalRequired = append(externalRequired, "no_matching_sync_external_tools")
+	if externalIntent.jobs {
+		// Existing tasks are never reconstructed from a migration preview. The
+		// job adapter will retain the original ID and mark missing immutable
+		// origin/configuration proof as needs_review instead of replaying it.
+		externalUnmapped = append(externalUnmapped, "legacy_external_tasks:origin_and_configuration_proof_required")
 	}
-	if externalEnabled && !packages[externalHTTPPluginID].externalSync {
+	if externalIntent.declared && !externalEnabled {
+		externalRequired = append(externalRequired, "no_matching_supported_external_tools")
+	}
+	if externalIntent.synchronous && !packages[externalHTTPPluginID].externalSync {
 		externalRequired = append(externalRequired, "official_sync_external_adapter_not_declared_by_external_tools_plugin")
+	}
+	if externalIntent.jobs && !packages[externalHTTPPluginID].externalJob {
+		externalRequired = append(externalRequired, "official_external_job_adapter_not_declared_by_external_tools_plugin")
+	}
+	if externalIntent.unsupported {
+		externalUnmapped = append(externalUnmapped, "plugins.json:unsupported_external_declarations_retained")
 	}
 	external := migrationStep(externalHTTPPluginID, packages, externalEnabled, map[string]json.RawMessage{}, map[string]pluginMigrationSecret{}, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{}}, externalRequired, externalUnmapped, "", sources)
 	return pluginMigrationAccount{Account: m.native.Account(), SourceHashes: sources, SourceErrors: sourceErrors, Plugins: []pluginMigrationStep{media, speechStep, musicStep, web, share, project, external}}, nil

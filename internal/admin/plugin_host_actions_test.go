@@ -42,6 +42,7 @@ func installMobilePackageForManager(t *testing.T, manager *Manager) pluginhost.I
 	if err != nil {
 		t.Fatal(err)
 	}
+	registerSyntheticMobileNativeRuntime(t, manager, store, i)
 	return i
 }
 func TestMobilePluginHostActionsAreProtectedAndSafe(t *testing.T) {

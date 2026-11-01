@@ -20,6 +20,13 @@ type ExternalProtocol struct {
 	Version int                    `json:"version"`
 	Tools   []ExternalProtocolTool `json:"tools"`
 }
+
+// ExternalJobProtocol is separate from the synchronous catalogue so an async
+// legacy declaration cannot be discovered through external.http_request.
+type ExternalJobProtocol struct {
+	Version int                  `json:"version"`
+	Tool    ExternalProtocolTool `json:"tool"`
+}
 type ExternalProtocolTool struct {
 	Name         string          `json:"name"`
 	Description  string          `json:"description"`
@@ -80,6 +87,21 @@ func (b *ExternalBridge) Protocol() ExternalProtocol {
 	}
 	sort.Slice(out.Tools, func(i, j int) bool { return out.Tools[i].Name < out.Tools[j].Name })
 	return out
+}
+
+// JobProtocol projects one exact legacy Job/Poll declaration without any
+// endpoint, credential, request template or host configuration.
+func (b *ExternalBridge) JobProtocol(name string) (ExternalJobProtocol, error) {
+	t, ok := b.runtime.tools[name]
+	if !ok || t.Job == nil || t.Poll == nil {
+		return ExternalJobProtocol{}, errors.New("external_job_tool_unavailable")
+	}
+	return ExternalJobProtocol{Version: 1, Tool: ExternalProtocolTool{
+		Name: name, Description: t.Description, InputSchema: append(json.RawMessage(nil), t.InputSchema...),
+		TextPath: t.TextPath, MediaURLPath: t.MediaURLPath, MediaKind: t.MediaKind, Fingerprint: toolFingerprint(t),
+		Job:  &ExternalJob{IDPath: t.Job.IDPath},
+		Poll: &ExternalPoll{StatusPath: t.Poll.StatusPath, DoneValues: append([]string(nil), t.Poll.DoneValues...), FailedValues: append([]string(nil), t.Poll.FailedValues...), TextPath: t.Poll.TextPath, MediaURLPath: t.Poll.MediaURLPath, MediaKind: t.MediaKind},
+	}}, nil
 }
 
 func (b *ExternalBridge) tool(name string, ticket JobTicket, requireJob bool) (APITool, Installed, error) {

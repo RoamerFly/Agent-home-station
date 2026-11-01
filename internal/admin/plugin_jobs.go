@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -53,7 +54,9 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	if json.Unmarshal(args, &arg) != nil || arg == nil || len(args) > 8192 {
+	decoder := json.NewDecoder(bytes.NewReader(args))
+	decoder.UseNumber()
+	if decoder.Decode(&arg) != nil || arg == nil || len(args) > 8192 {
 		return "", toolInputError("插件参数无效")
 	}
 	canonical, _ := json.Marshal(arg)
@@ -72,7 +75,23 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 		return "", err
 	}
 	interval, deadline, polls := p.runtime.JobLimits(name)
-	t := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "插件任务 · " + name, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, RequestedText: logText(companion.UserRequestText(p.trace.Text), 2000), State: "waiting", Next: time.Now().Add(time.Duration(interval) * time.Second), PluginJob: &pluginJobState{Ticket: ticket, Deadline: time.Now().Add(time.Duration(deadline) * time.Second), IntervalSeconds: interval, MaxPolls: polls}}
+	if _, _, _, err = p.manager.externalPackageCapability(ctx, externalJobCapability); err != nil {
+		return "", err
+	}
+	bridge, legacyHash, err := p.manager.externalHTTPBridge()
+	if err != nil {
+		return "", err
+	}
+	protocol, err := bridge.JobProtocol(name)
+	if err != nil || protocol.Tool.Fingerprint != ticket.Fingerprint {
+		return "", plugins.ErrJobConfigChanged
+	}
+	origin, err := cloneProjectPluginTrace(p.trace)
+	if err != nil {
+		return "", err
+	}
+	t := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "插件任务 · " + name, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, RequestedText: logText(companion.UserRequestText(p.trace.Text), 2000), State: "waiting", Next: time.Now().Add(time.Duration(interval) * time.Second), OwnerRequested: p.privileged(), PluginJob: &pluginJobState{Origin: &origin, LegacyConfigurationSHA256: legacyHash, Ticket: ticket, Deadline: time.Now().Add(time.Duration(deadline) * time.Second), IntervalSeconds: interval, MaxPolls: polls}}
+	t.Constraints = (&permittedTools{manager: p.manager, trace: origin}).taskConstraints("external-job", "", "", "")
 	// Claim the task before the POST. The claim itself is scoped and atomic.
 	a := p.manager.agent
 	a.mu.Lock()
@@ -92,7 +111,7 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 	a.mu.Unlock()
 	// The in-memory ledger must own a distinct copy from the network caller.
 	t = copyTask(t)
-	created, callErr := p.runtime.StartJob(ctx, ticket, canonical)
+	created, callErr := p.manager.callExternalJobPhase(ctx, t, "start", canonical)
 	if callErr != nil && created.RemoteID != "" {
 		created.State = "waiting"
 		callErr = nil
@@ -157,6 +176,19 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		b, _ := json.Marshal(pluginJobSummary(*task))
 		return string(b), nil
 	}
+	if task.PluginJob.LegacyConfigurationSHA256 == "" || task.PluginJob.Origin == nil {
+		return "", toolInputError("legacy_configuration_or_source_proof_missing")
+	}
+	if _, _, _, err := p.manager.externalPackageCapability(ctx, externalJobCapability); err != nil {
+		return "", err
+	}
+	_, configurationHash, err := p.manager.externalHTTPBridge()
+	if err != nil || configurationHash != task.PluginJob.LegacyConfigurationSHA256 {
+		return "", plugins.ErrJobConfigChanged
+	}
+	if err = p.manager.validateTaskSource(*task); err != nil {
+		return "", err
+	}
 	if task.Delivery != nil || task.PluginJob.Prepared {
 		return "", toolInputError("任务已进入微信交付，请核对原回执，不重复暂存或发送")
 	}
@@ -200,14 +232,19 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Input, error) {
 	task = copyTask(task)
 	job := task.PluginJob
+	if job.LegacyConfigurationSHA256 == "" || job.Origin == nil {
+		task.State = "needs_review"
+		task.LastResult = "legacy_configuration_proof_missing：保留原任务及远端编号，等待管理员核验原配置和来源，不重提或改绑"
+		if job.LegacyConfigurationSHA256 != "" {
+			task.LastResult = "legacy_source_proof_missing：原来源证明不可追溯，保留原任务待核验，不推断新的来源授权"
+		}
+		_, err := m.agent.updateSnapshot(task)
+		return nil, err
+	}
 	if job.Ticket.State == "submitting" {
 		task.State = "needs_review"
 		task.LastResult = "创建结果未知，不自动重新创建"
 		_, err := m.agent.updateSnapshot(task)
-		return nil, err
-	}
-	runtime, err := m.pluginRuntime()
-	if err != nil {
 		return nil, err
 	}
 	p, _, err := m.toolAccess()
@@ -215,9 +252,19 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 		return nil, err
 	}
 	defer p.hub.Close()
-	p.SetTrace(companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender})
+	trace, traceErr := m.externalJobTrace(task)
+	if traceErr != nil {
+		return nil, traceErr
+	}
+	p.SetTrace(trace)
 	if !p.enabled(job.Ticket.Tool) {
 		task.LastResult = "插件或任务权限已关闭，保留任务，不创建替代任务"
+		task.Next = now.Add(time.Minute)
+		_, err := m.agent.updateSnapshot(task)
+		return nil, err
+	}
+	if _, _, _, readyErr := m.externalPackageCapability(context.Background(), externalJobCapability); readyErr != nil {
+		task.LastResult = "外部任务插件未安装、停用或不可用；保留同一任务及原远端编号，不创建替代任务"
 		task.Next = now.Add(time.Minute)
 		_, err := m.agent.updateSnapshot(task)
 		return nil, err
@@ -230,7 +277,7 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 			return nil, err
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		ticket, pollErr := runtime.PollJob(ctx, job.Ticket)
+		ticket, pollErr := m.callExternalJobPhase(ctx, task, "poll", json.RawMessage(`{}`))
 		cancel()
 		job.Polls++
 		if pollErr != nil {
@@ -263,6 +310,12 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 	in, err := m.claimTaskResult(task, now, facts, "调用plugin_job_status取得同一任务真实输出；不要重新调用创建工具。失败时根据具体反馈诊断并验证。")
 	if err != nil || in == nil {
 		return nil, err
+	}
+	// Preserve the original named-voice expectations on the continuation. They
+	// remain evidence requirements, never claims that an external API met them.
+	if job.Origin != nil {
+		in.ExpectedVoiceID = job.Origin.ExpectedVoiceID
+		in.ExpectedVoiceProfile = job.Origin.ExpectedVoiceProfile
 	}
 	m.record(bot.Record{Event: "plugin_job_result_ready", Category: "tool", ThreadID: task.Thread, MessageID: task.OriginTrace, Tool: job.Ticket.Tool, Status: job.Ticket.State, Reason: "plugin_job_same_task_result", Origin: "agent"})
 	return in, nil
@@ -298,12 +351,9 @@ func (m *Manager) cancelPluginTask(ctx context.Context, task agentTask) (agentTa
 		return task, err
 	}
 	a.mu.Unlock()
-	runtime, err := m.pluginRuntime()
-	if err == nil {
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err = runtime.CancelJob(ctx, task.PluginJob.Ticket)
-		cancel()
-	}
+	bound, cancel := context.WithTimeout(ctx, 10*time.Second)
+	_, err := m.callExternalJobPhase(bound, task, "cancel", json.RawMessage(`{}`))
+	cancel()
 	task.PluginJob.CancelState = "requested"
 	task.LastResult = "已停止本地交付，远端已接受取消请求；不代表远端已确认终止"
 	if err != nil {

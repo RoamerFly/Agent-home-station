@@ -75,17 +75,26 @@ func (e *externalSyntheticExecutor) Call(ctx context.Context, _ pluginhost.Invoc
 	if json.Unmarshal(raw, &args) != nil {
 		return nil, errors.New("synthetic invalid request")
 	}
-	request, _ := json.Marshal(map[string]any{"phase": args.Phase, "tool": args.Tool, "arguments_sha256": args.ArgumentsSHA256})
+	requestValue := map[string]any{"phase": args.Phase, "tool": args.Tool, "arguments_sha256": args.ArgumentsSHA256}
+	if args.Ticket != nil {
+		requestValue["ticket_sha256"] = args.TicketSHA256
+	}
+	request, _ := json.Marshal(requestValue)
 	observed, err := pluginruntime.InvokeHostService(ctx, "wechat/external_request", request)
 	if err != nil {
 		return nil, err
 	}
 	var reply externalHTTPObservation
 	_ = json.Unmarshal(observed, &reply)
+	if args.Phase != "call" {
+		return syntheticExternalJobReply(args, reply)
+	}
 	output := externalHTTPWireOutput{}
 	if reply.BinaryRef != nil {
 		kind := ""
-		for _, tool := range args.Protocol.Tools {
+		var protocol plugins.ExternalProtocol
+		_ = json.Unmarshal(args.Protocol, &protocol)
+		for _, tool := range protocol.Tools {
 			if tool.Name == args.Tool {
 				kind = tool.MediaKind
 			}

@@ -49,7 +49,7 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 			if p == "network" && job.Plugin == "music" && cap.ID == "music.service_control" && method == "wechat/service_control" {
 				allowed = true
 			}
-			if p == "network" && job.Plugin == "external-tools" && cap.ID == "external.http_request" && method == "wechat/external_request" {
+			if p == "network" && job.Plugin == "external-tools" && (cap.ID == "external.http_request" || cap.ID == "external.job_request") && method == "wechat/external_request" {
 				allowed = true
 			}
 			if job.Plugin == "project-development" && method == "wechat/workspace_request" &&

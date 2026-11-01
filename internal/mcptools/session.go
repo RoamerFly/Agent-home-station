@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,7 +28,7 @@ type mcpSession struct {
 	fields      sync.Mutex
 	cfg         ServerConfig
 	client      *http.Client
-	cmd         *exec.Cmd
+	launcher    StdioLauncher
 	process     sessionProcess
 	input       io.WriteCloser
 	output      io.ReadCloser
@@ -76,17 +74,6 @@ func (s *mcpSession) close() error {
 		}
 		s.process = nil
 	}
-	if s.cmd != nil && s.cmd.Process != nil {
-		// terminate() confirmed no active tree members before this wait, so a
-		// Wait here cannot hang behind a still-live bridge parent.
-		if err := s.cmd.Wait(); err != nil {
-			var exited *exec.ExitError
-			if !errors.As(err, &exited) {
-				closeErr = errors.Join(closeErr, err)
-			}
-		}
-		s.cmd = nil
-	}
 	return closeErr
 }
 
@@ -120,7 +107,7 @@ func (h *Hub) scopedRequest(ctx context.Context, c ServerConfig, scope, method s
 			h.mu.Unlock()
 			return errors.New("MCP session capacity reached")
 		}
-		s = &mcpSession{cfg: c, gate: make(chan struct{}, 1)}
+		s = &mcpSession{cfg: c, gate: make(chan struct{}, 1), launcher: h.stdioLauncher}
 		h.sessions[key] = s
 	}
 	h.mu.Unlock()
@@ -140,9 +127,9 @@ func (h *Hub) scopedRequest(ctx context.Context, c ServerConfig, scope, method s
 	defer stop()
 	defer func() { s.idle = time.AfterFunc(5*time.Minute, func() { _ = s.close() }) }()
 	if !s.initialized {
-		if err := s.start(); err != nil {
+		if err := s.start(ctx); err != nil {
 			_ = s.close()
-			return errors.New("MCP connection unavailable")
+			return errors.Join(errors.New("MCP connection unavailable"), err)
 		}
 		response, err := s.rpc(ctx, "initialize", initParams(), true)
 		if err != nil {
@@ -191,7 +178,7 @@ func sessionError(ctx context.Context, err error) error {
 	return errors.Join(errors.New("MCP transport interrupted; operation outcome may be unknown, not replayed"), err)
 }
 
-func (s *mcpSession) start() error {
+func (s *mcpSession) start(ctx context.Context) error {
 	if s.cfg.Transport == "http" {
 		client, err := mcpClient(s.cfg.URL)
 		if err != nil {
@@ -206,54 +193,21 @@ func (s *mcpSession) start() error {
 		s.client = client
 		return nil
 	}
-	// The persistent child has no caller-owned lifetime. It is closed on failed
-	// requests, runtime shutdown or idle expiry; credentials require explicit Env.
-	cmd := exec.Command(s.cfg.Command, s.cfg.Args...)
-	configureSessionProcess(cmd)
-	for _, name := range []string{"PATH", "HOME", "USER", "LANG", "TZ", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA"} {
-		if value, ok := os.LookupEnv(name); ok {
-			cmd.Env = append(cmd.Env, name+"="+value)
-		}
-	}
-	for name, value := range s.cfg.Env {
-		cmd.Env = append(cmd.Env, name+"="+value)
-	}
 	s.fields.Lock()
 	defer s.fields.Unlock()
 	if s.dead.Load() {
 		return errors.New("MCP session closed")
 	}
-	in, err := cmd.StdinPipe()
+	process, err := launchStdio(ctx, s.cfg, s.launcher)
 	if err != nil {
 		return err
 	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		in.Close()
-		return err
-	}
-	if err = cmd.Start(); err != nil {
-		in.Close()
-		out.Close()
-		return err
-	}
-	process, err := attachSessionProcess(cmd)
-	if err != nil {
-		// Assignment is a hard security boundary.  This direct parent cleanup
-		// is only for a process that never received an RPC; do not continue via
-		// the old taskkill/parent-only path.
-		_ = in.Close()
-		_ = out.Close()
-		killErr := cmd.Process.Kill()
-		waitErr := cmd.Wait()
-		var exited *exec.ExitError
-		if errors.As(waitErr, &exited) {
-			waitErr = nil
-		}
-		return errors.Join(err, killErr, waitErr)
-	}
-	s.cmd, s.process, s.input, s.output = cmd, process, in, out
+	in, out := process.Stdin(), process.Stdout()
+	s.process, s.input, s.output = stdioSessionProcess{process}, in, out
 	s.reader = bufio.NewReaderSize(out, maxFrame+1)
+	if s.dead.Load() {
+		return errors.New("MCP session closed during launch")
+	}
 	return nil
 }
 

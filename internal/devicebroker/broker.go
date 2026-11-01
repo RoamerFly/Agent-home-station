@@ -1,7 +1,8 @@
-// Package devicebroker starts the fixed, owner-approved native mobile bridge.
-// It is deliberately not a plugin fallback executor: callers provide a
-// verified package snapshot and grants, while this package only resolves the
-// legacy private profile into a filtered bridge configuration.
+// Package devicebroker admits only a host-registered, verified mobile stream
+// through mandatory OS isolation. A filtered legacy profile proves scope, not
+// OS isolation, and cannot authorize a process on its own. The existing native
+// ADB bridge still requires protocol migration; it is never substituted with
+// the isolated mobile-control facade or launched through raw command settings.
 package devicebroker
 
 import (
@@ -50,11 +51,12 @@ type Options struct {
 	GlobalLeaseDirectory string
 	// ADBRoots is a bounded set of trusted deployment runtime directories. The
 	// legacy profile's adb path must be an exact non-reparsed child of one root.
-	ADBRoots []string
-	Account  string
-	Legacy   mcptools.ServerConfig
-	Devices  []string
-	Actions  []string // permitted side-effect actions; observe is a required read capability
+	ADBRoots     []string
+	Account      string
+	Legacy       mcptools.ServerConfig
+	Devices      []string
+	Actions      []string             // permitted side-effect actions; observe is a required read capability
+	Registration *RuntimeRegistration // host-only fixed mandatory-sandbox registration
 	// ADBServer is a host-owned foreground server manager. Nil uses the
 	// process-wide managed server, never an MCP-session child.
 	ADBServer interface {
@@ -77,8 +79,8 @@ type hub interface {
 	Close() error
 }
 
-var openHub = func(config mcptools.ServerConfig) (hub, error) {
-	return mcptools.New([]mcptools.ServerConfig{config})
+var openHub = func(config mcptools.ServerConfig, launcher mcptools.StdioLauncher, guard mcptools.ServerGuard) (hub, error) {
+	return mcptools.New([]mcptools.ServerConfig{config}, mcptools.WithStdioLauncher(launcher), mcptools.WithServerGuard(guard))
 }
 
 // quarantinedRegistry keeps only brokers whose native-child cleanup was not
@@ -104,17 +106,17 @@ type broker struct {
 	quarantineLease *physicalLease
 	adbLease        adbserver.Lease
 	closed          bool
+	runtimeCheck    func() bool
 }
 
 type resolved struct {
-	server         mcptools.ServerConfig
+	storage        string
 	seals          []fileSeal
 	dirs           []string
 	privateDirs    []string
 	leaseDirectory string
 	leases         map[string]string
 	scope          string
-	binding        string
 	adbLease       adbserver.Lease
 }
 
@@ -123,22 +125,44 @@ type fileSeal struct {
 	hash string
 }
 
-// Open resolves the legacy profile once and starts only the fixed package
-// runtime through mcptools.Hub. It never executes Legacy.Command.
+// Open resolves scope from the legacy profile and admits only a registered
+// indexed entrypoint through the mandatory sandbox. Legacy commands never run.
 func Open(ctx context.Context, options Options) (Bridge, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Reject old profile-only launches before acquiring/starting the ADB server.
+	if err := options.Registration.Validate(ctx, options.Account); err != nil {
 		return nil, err
 	}
 	r, err := resolve(ctx, options)
 	if err != nil {
 		return nil, err
 	}
-	h, err := openHub(r.server)
+	manifestSeal, sealErr := makeSeal(filepath.Join(options.Registration.directory, "plugin.json"))
+	if sealErr != nil {
+		_ = r.adbLease.Close()
+		return nil, ErrNeedsMigration
+	}
+	r.seals = append(r.seals, manifestSeal)
+	runtimeCheck := func() bool { return options.Registration.Validate(context.Background(), options.Account) == nil }
+	proof := &broker{seals: r.seals, dirs: r.dirs, privateDirs: r.privateDirs, runtimeCheck: runtimeCheck}
+	server := mcptools.ServerConfig{ID: "device", Transport: "stdio", PluginID: options.Registration.pack.ID, Enabled: true, Tools: []string{"devices", "observe", "act", "read_artifact"}}
+	guard := func(ctx context.Context, _ mcptools.ServerConfig) error {
+		if err := options.Registration.Validate(ctx, options.Account); err != nil {
+			return err
+		}
+		if !proof.verified() {
+			return errChanged
+		}
+		return nil
+	}
+	h, err := openHub(server, options.Registration.launcher(options.Account, r.storage, proof.verified), guard)
 	if err != nil {
 		_ = r.adbLease.Close()
 		return nil, ErrNeedsMigration
 	}
-	return &broker{hub: h, seals: r.seals, dirs: r.dirs, privateDirs: r.privateDirs, leaseDirectory: r.leaseDirectory, leases: r.leases, scope: r.scope, binding: r.binding, adbLease: r.adbLease}, nil
+	return &broker{hub: h, seals: r.seals, dirs: r.dirs, privateDirs: r.privateDirs, leaseDirectory: r.leaseDirectory, leases: r.leases, scope: r.scope, binding: brokerBinding(r.seals, r.leases, r.leaseDirectory, r.adbLease.Binding()), adbLease: r.adbLease, runtimeCheck: runtimeCheck}, nil
 }
 
 func (b *broker) Call(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
@@ -178,8 +202,7 @@ func (b *broker) Call(ctx context.Context, name string, arguments json.RawMessag
 		}
 	}
 	// Never inherit an upstream conversation scope. The broker owns a stable,
-	// account-and-ledger-bound scope so Hub starts the native bridge with its
-	// explicit stdio session environment allowlist.
+	// account-and-ledger-bound scope for reuse of its registered isolated stream.
 	ctx = mcptools.WithSessionScope(ctx, b.scope)
 	result, err := b.hub.Call(ctx, "device__"+name, arguments)
 	if err != nil {
@@ -305,6 +328,9 @@ func (b *broker) Binding() (string, error) {
 }
 
 func (b *broker) verified() bool {
+	if b.runtimeCheck != nil && !b.runtimeCheck() {
+		return false
+	}
 	for _, seal := range b.seals {
 		if !seal.matches() {
 			return false
@@ -460,21 +486,14 @@ func resolve(ctx context.Context, options Options) (resolved, error) {
 		seals = append(seals, seal)
 	}
 	seals = append(seals, fileSeal{path: legacyConfig, hash: legacyHash}, fileSeal{path: filteredConfig, hash: filteredHash})
-	// Do not carry any owner-provided command, URL, headers or environment
-	// through to the child. Hub owns stdio protocol cleanup and framing.
-	server := mcptools.ServerConfig{
-		ID: "device", Transport: "stdio", Command: python,
-		Args:    []string{"-I", "-B", "-u", runtimeBridge, "--config", filteredConfig, "--storage", legacyStorage},
-		Enabled: true, Tools: []string{"devices", "observe", "act", "read_artifact"},
-		Env: map[string]string{},
-	}
+
 	leases := map[string]string{}
 	for alias, device := range filtered.Devices {
 		leases[alias] = physicalLeaseKey(device.Serial)
 	}
 	privateDirs := []string{profileDirectory, leaseDirectory}
 	keepLease = true
-	return resolved{server: server, seals: seals, dirs: append(append([]string{}, workspace, state, profileDirectory, packageDir, legacyStorage), append(adbRoots, leaseDirectory)...), privateDirs: privateDirs, leaseDirectory: leaseDirectory, leases: leases, scope: brokerScope(options.Account, legacyStorage, filteredHash), binding: brokerBinding(seals, leases, leaseDirectory, adbLease.Binding()), adbLease: adbLease}, nil
+	return resolved{storage: legacyStorage, seals: seals, dirs: append(append([]string{}, workspace, state, profileDirectory, packageDir, legacyStorage), append(adbRoots, leaseDirectory)...), privateDirs: privateDirs, leaseDirectory: leaseDirectory, leases: leases, scope: brokerScope(options.Account, legacyStorage, filteredHash), adbLease: adbLease}, nil
 }
 
 type defaultADBServer struct{}

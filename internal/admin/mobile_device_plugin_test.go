@@ -120,12 +120,13 @@ func mobileDevicePolicyFixture(t *testing.T) (*mobileDevicePluginBridge, *mobile
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	installed := prepareSyntheticMobileDevicePackage(t, store)
+	registerSyntheticMobileNativeRuntime(t, f.manager, store, installed)
 	f.manager.packages = store
 	task := mobile.Task{ID: "task-device", RequestHash: "request-device", DeviceID: "phone-device", Goal: "检查页面", State: "running", Source: mobile.Source{Admin: true}, ObservationID: "obs-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	settings := mobile.Settings{Revision: 9, Enabled: true, Devices: []string{task.DeviceID}, Actions: []string{"tap", "launch", "open_url"}}
 	f.manager.mobile = &mobilePlanDeviceStub{settings: settings, task: task}
 	fake := &fakeMobileDeviceBroker{raw: `{"text":"{\"id\":\"obs-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"device_id\":\"phone-device\",\"package\":\"com.example.home\",\"width\":100,\"height\":200,\"allowed_packages\":[\"com.example.home\",\"com.browser\"],\"browsers\":[\"com.browser\"],\"web_hosts\":[\"example.test\"],\"nodes\":[],\"observed_at\":1.5,\"screenshot_sha256\":\"private\"}","media":[{"mime_type":"image/png","data_base64":"PRIVATE_PNG_BYTES"}]}`}
-	bridge := &mobileDevicePluginBridge{manager: f.manager, store: store, installed: installed, task: task, settings: settings, brokerOpener: func(context.Context, devicebroker.Options) (devicebroker.Bridge, error) { return fake, nil }, observations: map[string]mobile.Observation{}, artifacts: map[string]mobile.Artifact{}}
+	bridge := &mobileDevicePluginBridge{nativeRegistration: f.manager.loadMobileNativeRegistration(), manager: f.manager, store: store, installed: installed, task: task, settings: settings, brokerOpener: func(context.Context, devicebroker.Options) (devicebroker.Bridge, error) { return fake, nil }, observations: map[string]mobile.Observation{}, artifacts: map[string]mobile.Artifact{}}
 	policy, err := bridge.newPolicy(t.Context(), "observe", json.RawMessage(`{"device_id":"phone-device"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -308,6 +309,7 @@ func TestLiveMobileDevicePluginContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("WECHAT_PLUGIN_RUNTIME_CONFIG", `{"python":"`+strings.ReplaceAll(python, "\\", "\\\\")+`","pythonw":"`+strings.ReplaceAll(filepath.Join(filepath.Dir(python), "pythonw.exe"), "\\", "\\\\")+`","windows_helper":"`+strings.ReplaceAll(helper, "\\", "\\\\")+`","runtime_roots":["`+strings.ReplaceAll(filepath.Dir(python), "\\", "\\\\")+`"],"catalog_directory":"`+strings.ReplaceAll(filepath.Join(workspace, "plugins"), "\\", "\\\\")+`","device_tools_roots":["`+strings.ReplaceAll(filepath.Dir(python), "\\", "\\\\")+`"]}`)
+	registerSyntheticMobileNativeRuntime(t, f.manager, store, installed)
 	bridgeRaw, err := f.manager.newMobilePluginBridge(t.Context(), task, settings)
 	if err != nil {
 		t.Fatal(err)

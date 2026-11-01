@@ -39,3 +39,11 @@ schema 声明由宿主渲染。首版组件为 configuration、tasks、resources
 ## 实施状态
 
 当前文件定义迁移契约，不表示所有宿主功能已接入。migration-pending 和 template 包不得暴露为业务工具。只有契约测试、权限隔离和对应后端迁移完成后才能标为 ready。
+
+### 外部持久任务与本地 MCP 流
+
+`external.job_request` 只执行一次 `start`、`poll` 或 `cancel`，不在进程内轮询或睡眠。宿主持有原始参数及 Ticket，插件通过 `wechat/external_request` 仅回传 phase、工具名和两个绑定摘要；实际 HTTP 使用宿主原始值。每个轮次先持久化调用意图；未知创建不重提，取消先保存本地 claim。返回的编号、状态和输出必须与实际响应对应。有效编号已取得但状态或输出不完整时，只保存该编号继续查询，不把它算作完成。
+
+本地 MCP 连接可用 `{"id":"example","transport":"stdio","plugin_id":"已安装包标识","enabled":true}` 选择已启用的登记包。省略 transport 时，带 plugin_id 的连接默认 stdio；command、args、env 不能与 plugin_id 混用。宿主流复用插件 Executor 的完整校验与强制沙箱，不提供自由 argv、环境或挂载覆盖。旧 raw-command 配置仍可读取，但不能直接启动；没有登记时明确返回迁移需求。
+
+每次请求及缓存发现都会重验包、配置和连接快照；变化时关闭旧会话，不在同一 Hub 自动绑定新版本。私有数据按账号和 MCP scope 分区；管理器关闭、控制器关闭或撤权会回收空闲流。此登记校验不能替代聊天请求者、来源及调用目的授权；完整外部 MCP 代理仍待接入。需要 ADB/设备等宿主能力的后端还必须完成自己的受控操作适配，不能据普通 stdio 往返成功宣称设备已经可用。

@@ -91,14 +91,16 @@ func (c agentSettings) allowsPrivilegedThread(thread string) bool {
 }
 
 type pluginJobState struct {
-	Ticket          plugins.JobTicket `json:"ticket"`
-	Deadline        time.Time         `json:"deadline"`
-	IntervalSeconds int               `json:"interval_seconds"`
-	MaxPolls        int               `json:"max_polls"`
-	Polls           int               `json:"polls"`
-	Prepared        bool              `json:"prepared"`
-	Failure         bool              `json:"failure"`
-	CancelState     string            `json:"cancel_state,omitempty"`
+	LegacyConfigurationSHA256 string            `json:"legacy_configuration_sha256,omitempty"`
+	Origin                    *companion.Input  `json:"origin,omitempty"`
+	Ticket                    plugins.JobTicket `json:"ticket"`
+	Deadline                  time.Time         `json:"deadline"`
+	IntervalSeconds           int               `json:"interval_seconds"`
+	MaxPolls                  int               `json:"max_polls"`
+	Polls                     int               `json:"polls"`
+	Prepared                  bool              `json:"prepared"`
+	Failure                   bool              `json:"failure"`
+	CancelState               string            `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
 	Constraints        *TaskConstraints  `json:"constraints,omitempty"`

@@ -12,6 +12,16 @@
       "output_schema": {"type":"object"}
     },
     {
+      "id": "external.job_request",
+      "implementation": "ready",
+      "discoverable": true,
+      "side_effect": "write",
+      "permissions": ["network"],
+      "description": "固定旧外部任务的单步 start、poll、cancel 协议；等待宿主持久任务和来源校验接线后开放。",
+      "input_schema": {"type":"object","properties":{"phase":{"type":"string","enum":["start","poll","cancel"]},"tool":{"type":"string"},"arguments":{"type":"object"},"arguments_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"ticket":{"type":"object"},"ticket_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"protocol":{"type":"object"}},"required":["phase","tool","arguments","arguments_sha256","ticket","ticket_sha256","protocol"],"additionalProperties":false},
+      "output_schema": {"type":"object","properties":{"observation":{"type":"object"},"ticket":{"type":"object"},"cancel_ack":{"type":"boolean"},"known_remote_only":{"type":"boolean"}},"required":["observation","ticket"],"additionalProperties":false}
+    },
+    {
       "id": "external.discover",
       "implementation": "migration-pending",
       "description": "已有 HTTP/MCP 配置",

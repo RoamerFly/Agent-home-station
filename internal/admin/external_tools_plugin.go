@@ -31,13 +31,16 @@ import (
 
 const externalHTTPPluginID = "external-tools"
 const externalHTTPCapability = "external.http_request"
+const externalJobCapability = "external.job_request"
 
 type externalHTTPArguments struct {
-	Phase           string                   `json:"phase"`
-	Tool            string                   `json:"tool"`
-	Arguments       json.RawMessage          `json:"arguments"`
-	ArgumentsSHA256 string                   `json:"arguments_sha256"`
-	Protocol        plugins.ExternalProtocol `json:"protocol"`
+	Phase           string             `json:"phase"`
+	Tool            string             `json:"tool"`
+	Arguments       json.RawMessage    `json:"arguments"`
+	ArgumentsSHA256 string             `json:"arguments_sha256"`
+	Protocol        json.RawMessage    `json:"protocol"`
+	Ticket          *plugins.JobTicket `json:"ticket,omitempty"`
+	TicketSHA256    string             `json:"ticket_sha256,omitempty"`
 }
 type externalHTTPResult struct {
 	Observation plugins.ExternalResponse `json:"observation"`
@@ -73,6 +76,9 @@ type externalHTTPCheckpoint struct {
 }
 
 func (m *Manager) externalHTTPPackage(ctx context.Context) (*pluginhost.Store, pluginhost.InstalledPackage, int, error) {
+	return m.externalPackageCapability(ctx, externalHTTPCapability)
+}
+func (m *Manager) externalPackageCapability(ctx context.Context, capability string) (*pluginhost.Store, pluginhost.InstalledPackage, int, error) {
 	store, err := m.packageStore()
 	if err != nil {
 		return nil, pluginhost.InstalledPackage{}, 0, err
@@ -98,7 +104,7 @@ func (m *Manager) externalHTTPPackage(ctx context.Context) (*pluginhost.Store, p
 	}
 	ready := false
 	for _, cap := range caps {
-		if cap.ID == externalHTTPCapability && cap.Implementation == "ready" && cap.Discoverable && !cap.Async && slices.Equal(cap.Permissions, []string{"network"}) {
+		if cap.ID == capability && cap.Implementation == "ready" && cap.Discoverable && !cap.Async && slices.Equal(cap.Permissions, []string{"network"}) {
 			ready = true
 		}
 	}
@@ -159,7 +165,10 @@ func (p *permittedTools) installedExternalHTTPTools(ctx context.Context) []mcpto
 }
 
 func (p *permittedTools) externalHTTPAuthorization(tool plugins.ExternalProtocolTool) string {
-	if p.privateSurfOrigin != nil || p.trace.Surf || !p.servicePluginsAllowed() || !p.manager.agentTaskActive(p.trace) {
+	return p.externalHTTPAuthorizationFor(tool, false)
+}
+func (p *permittedTools) externalHTTPAuthorizationFor(tool plugins.ExternalProtocolTool, allowInactiveTask bool) string {
+	if p.privateSurfOrigin != nil || p.trace.Surf || !p.servicePluginsAllowed() || !allowInactiveTask && !p.manager.agentTaskActive(p.trace) {
 		return ""
 	}
 	p.manager.mu.Lock()
@@ -224,15 +233,23 @@ type externalHTTPPolicy struct {
 	contentType    string
 	execute        func(context.Context, plugins.ExternalRequest) (plugins.ExternalResponse, error)
 	admin          *externalHTTPAdminAuthority
+	job            *externalJobAuthority
 }
 
 func (p *permittedTools) newExternalHTTPPolicy(ctx context.Context, name string, raw json.RawMessage) (*externalHTTPPolicy, error) {
+	return p.newExternalPolicy(ctx, name, raw, nil)
+}
+func (p *permittedTools) newExternalPolicy(ctx context.Context, name string, raw json.RawMessage, job *externalJobAuthority) (*externalHTTPPolicy, error) {
 	trace, err := cloneProjectPluginTrace(p.trace)
 	if err != nil {
 		return nil, err
 	}
 	p = &permittedTools{manager: p.manager, trace: trace, privateDiagnostics: p.privateDiagnostics}
-	store, installed, revision, err := p.manager.externalHTTPPackage(ctx)
+	capability := externalHTTPCapability
+	if job != nil {
+		capability = externalJobCapability
+	}
+	store, installed, revision, err := p.manager.externalPackageCapability(ctx, capability)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +257,7 @@ func (p *permittedTools) newExternalHTTPPolicy(ctx context.Context, name string,
 	if err != nil {
 		return nil, err
 	}
-	policy := &externalHTTPPolicy{p: p, store: store, installed: installed, configRevision: revision, bridge: bridge, legacyHash: hash, execute: bridge.Execute}
+	policy := &externalHTTPPolicy{p: p, store: store, installed: installed, configRevision: revision, bridge: bridge, legacyHash: hash, execute: bridge.Execute, job: job}
 	policy.admin, _ = ctx.Value(externalHTTPAdminContextKey{}).(*externalHTTPAdminAuthority)
 	protocol := bridge.Protocol()
 	for _, tool := range protocol.Tools {
@@ -249,7 +266,20 @@ func (p *permittedTools) newExternalHTTPPolicy(ctx context.Context, name string,
 			break
 		}
 	}
-	if policy.tool.Name == "" || policy.tool.Job != nil || policy.tool.Poll != nil {
+	var jobProtocol plugins.ExternalJobProtocol
+	if job != nil {
+		jobProtocol, err = bridge.JobProtocol(name)
+		if err != nil {
+			return nil, err
+		}
+		if jobProtocol.Tool.Fingerprint != job.task.PluginJob.Ticket.Fingerprint {
+			return nil, plugins.ErrJobConfigChanged
+		}
+		if job.task.PluginJob.LegacyConfigurationSHA256 != "" && job.task.PluginJob.LegacyConfigurationSHA256 != hash {
+			return nil, plugins.ErrJobConfigChanged
+		}
+		policy.tool = jobProtocol.Tool
+	} else if policy.tool.Name == "" || policy.tool.Job != nil || policy.tool.Poll != nil {
 		return nil, errors.New("external_sync_tool_unavailable")
 	}
 	if len(raw) == 0 {
@@ -269,14 +299,20 @@ func (p *permittedTools) newExternalHTTPPolicy(ctx context.Context, name string,
 	// A call needs only its selected declaration. Full discovery is separate;
 	// unrelated schemas must not inflate every persisted request and stdio frame.
 	protocol.Tools = []plugins.ExternalProtocolTool{policy.tool}
-	policy.request = externalHTTPArguments{Phase: "call", Tool: name, Arguments: raw, ArgumentsSHA256: namedSpeechSHA(raw), Protocol: protocol}
+	protocolRaw, _ := json.Marshal(protocol)
+	policy.request = externalHTTPArguments{Phase: "call", Tool: name, Arguments: raw, ArgumentsSHA256: namedSpeechSHA(raw), Protocol: protocolRaw}
+	if job != nil {
+		policy.request.Phase = job.phase
+		ticket := job.task.PluginJob.Ticket
+		policy.request.Ticket = &ticket
+		encoded, _ := json.Marshal(ticket)
+		policy.request.TicketSHA256 = namedSpeechSHA(encoded)
+		policy.request.Protocol, _ = json.Marshal(jobProtocol)
+	}
 	policy.arguments, _ = json.Marshal(policy.request)
-	authorization := p.externalHTTPAuthorization(policy.tool)
-	if policy.admin != nil {
-		authorization, err = policy.adminAuthorization(ctx)
-		if err != nil {
-			return nil, err
-		}
+	authorization, err := policy.currentAuthorization(ctx)
+	if err != nil {
+		return nil, err
 	}
 	if authorization == "" {
 		return nil, errors.New("external_http_authorization_denied")
@@ -299,25 +335,40 @@ func (p *permittedTools) newExternalHTTPPolicy(ctx context.Context, name string,
 	if policy.admin != nil {
 		policy.invocation = pluginhost.Invocation{Account: policy.admin.Session.Account, Thread: "host:external-test", Requester: "administrator", Purpose: "manual registered external HTTP test", RequestKey: "external-http-test-" + agentID(authorization, name, policy.request.ArgumentsSHA256), Authorization: authorization}
 	}
+	if job != nil {
+		policy.invocation.RequestKey = "external-job-" + agentID(job.task.Account, job.task.Thread, job.task.ID, job.phase, strconv.Itoa(job.task.PluginJob.Polls))
+		policy.invocation.Purpose = "external job " + job.phase + " task " + job.task.ID
+	}
 	return policy, nil
+}
+func (p *externalHTTPPolicy) capability() string {
+	if p.job != nil {
+		return externalJobCapability
+	}
+	return externalHTTPCapability
+}
+func (p *externalHTTPPolicy) currentAuthorization(ctx context.Context) (string, error) {
+	if p.job != nil {
+		return p.job.authorization(ctx, p)
+	}
+	if p.admin != nil {
+		return p.adminAuthorization(ctx)
+	}
+	return p.p.externalHTTPAuthorization(p.tool), nil
 }
 
 func (p *externalHTTPPolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	authorization := p.p.externalHTTPAuthorization(p.tool)
-	if p.admin != nil {
-		var err error
-		authorization, err = p.adminAuthorization(ctx)
-		if err != nil {
-			return err
-		}
+	authorization, err := p.currentAuthorization(ctx)
+	if err != nil {
+		return err
 	}
-	if j.Plugin != externalHTTPPluginID || j.Tool != externalHTTPCapability || cap.Async || cap.ID != "" && cap.ID != externalHTTPCapability || !reflect.DeepEqual(j.Context, p.invocation) || !sameJSON(j.Arguments, p.arguments) || p.invocation.Authorization == "" || authorization != p.invocation.Authorization {
+	if j.Plugin != externalHTTPPluginID || j.Tool != p.capability() || cap.Async || cap.ID != "" && cap.ID != p.capability() || !reflect.DeepEqual(j.Context, p.invocation) || !sameJSON(j.Arguments, p.arguments) || p.invocation.Authorization == "" || authorization != p.invocation.Authorization {
 		return errors.New("external_http_authorization_changed")
 	}
-	_, installed, revision, err := p.p.manager.externalHTTPPackage(ctx)
+	_, installed, revision, err := p.p.manager.externalPackageCapability(ctx, p.capability())
 	if err != nil || installed.Digest != p.installed.Digest || installed.Revision != p.installed.Revision || !slices.Equal(installed.Permissions, p.installed.Permissions) || revision != p.configRevision || j.PackageDigest != "" && (j.PackageDigest != installed.Digest || j.Version != installed.Package.Version || j.ConfigRevision != strconv.Itoa(revision)) {
 		return errors.New("external_http_package_or_configuration_changed")
 	}
@@ -369,8 +420,9 @@ func (p *externalHTTPPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 		Phase           string `json:"phase"`
 		Tool            string `json:"tool"`
 		ArgumentsSHA256 string `json:"arguments_sha256"`
+		TicketSHA256    string `json:"ticket_sha256,omitempty"`
 	}
-	if musicStrictJSON(raw, &request) != nil || request.Phase != "call" || request.Tool != p.request.Tool || request.ArgumentsSHA256 != p.request.ArgumentsSHA256 || request.ArgumentsSHA256 != namedSpeechSHA(p.request.Arguments) {
+	if musicStrictJSON(raw, &request) != nil || request.Phase != p.request.Phase || request.Tool != p.request.Tool || request.ArgumentsSHA256 != p.request.ArgumentsSHA256 || request.ArgumentsSHA256 != namedSpeechSHA(p.request.Arguments) || request.TicketSHA256 != p.request.TicketSHA256 {
 		return nil, errors.New("external_http_request_changed")
 	}
 	p.requested = true // Unknown transport effects must never be resubmitted.
@@ -398,7 +450,11 @@ func (p *externalHTTPPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 			}
 		}
 	}()
-	reply, err := p.execute(bound, plugins.ExternalRequest{Phase: "call", Tool: p.request.Tool, Arguments: p.request.Arguments})
+	operation := plugins.ExternalRequest{Phase: p.request.Phase, Tool: p.request.Tool, Arguments: p.request.Arguments}
+	if p.request.Ticket != nil {
+		operation.Ticket = *p.request.Ticket
+	}
+	reply, err := p.execute(bound, operation)
 	if err != nil {
 		return nil, errors.New("external_http_outcome_unknown_do_not_resubmit")
 	}
@@ -580,6 +636,9 @@ func (p *externalHTTPPolicy) Validate(ctx context.Context, j pluginhost.Job, cap
 	if err := p.Check(ctx, j, cap); err != nil {
 		return pluginruntime.VerifiedResult{}, err
 	}
+	if p.job != nil {
+		return p.validateJob(ctx, j, cap, raw)
+	}
 	var result externalHTTPWireResult
 	if musicStrictJSON(raw, &result) != nil || !p.requested || len(p.observed) == 0 {
 		return pluginruntime.VerifiedResult{}, errors.New("external_http_result_unverified")
@@ -595,12 +654,15 @@ func (p *externalHTTPPolicy) Validate(ctx context.Context, j pluginhost.Job, cap
 	if _, err = p.materialize(result, data, p.body, p.contentType); err != nil {
 		return pluginruntime.VerifiedResult{}, err
 	}
-	if err = writeExternalPrivate(filepath.Join(p.replyRoot(), j.ID, "verified.json"), raw); err != nil {
+	return p.savePhaseResult(j, raw)
+}
+func (p *externalHTTPPolicy) savePhaseResult(j pluginhost.Job, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
+	if err := writeExternalPrivate(filepath.Join(p.replyRoot(), j.ID, "verified.json"), raw); err != nil {
 		return pluginruntime.VerifiedResult{}, err
 	}
 	checkpoint := externalHTTPCheckpoint{Binding: p.binding(), Body: p.body, Verified: externalHTTPBlobRef{SHA256: namedSpeechSHA(raw), Size: int64(len(raw))}, ContentType: p.contentType}
 	private, _ := json.Marshal(checkpoint)
-	public, _ := json.Marshal(map[string]any{"tool": p.request.Tool, "host_observed": true, "wechat_sends": 0})
+	public, _ := json.Marshal(map[string]any{"tool": p.request.Tool, "phase": p.request.Phase, "host_observed": true, "wechat_sends": 0})
 	return pluginruntime.VerifiedResult{Result: public, Private: private}, nil
 }
 
@@ -629,37 +691,7 @@ func (p *permittedTools) callExternalHTTP(ctx context.Context, name string, args
 	if err != nil {
 		return plugins.Output{}, err
 	}
-	c, ready, err := p.manager.installedPluginRuntime()
-	if err != nil || !ready {
-		return plugins.Output{}, errors.New("external_tools_runtime_unavailable")
-	}
-	if c.Status(externalHTTPPluginID).State == "stopped" {
-		if err = c.Start(ctx, externalHTTPPluginID, policy.installed.Revision); err != nil {
-			return plugins.Output{}, err
-		}
-	}
-	call, err := c.Invoke(ctx, pluginruntime.CallRequest{Plugin: externalHTTPPluginID, Capability: externalHTTPCapability, Context: policy.invocation, Arguments: policy.arguments}, policy)
-	if err != nil {
-		return plugins.Output{}, err
-	}
-	if call.Job.State != "completed" {
-		return plugins.Output{}, errors.New("external_http_outcome_unknown_do_not_resubmit")
-	}
-	private, err := policy.store.PrivateJobResult(ctx, call.Job, func(ctx context.Context, j pluginhost.Job) error {
-		return policy.Check(ctx, j, pluginhost.Capability{})
-	})
-	if err != nil {
-		return plugins.Output{}, err
-	}
-	var checkpoint externalHTTPCheckpoint
-	if musicStrictJSON(private, &checkpoint) != nil || checkpoint.Binding != policy.binding() {
-		return plugins.Output{}, errors.New("external_http_checkpoint_invalid")
-	}
-	data, err := policy.readPrivateFile(call.Job, "reply.bin", checkpoint.Body, 25<<20)
-	if err != nil {
-		return plugins.Output{}, err
-	}
-	verified, err := policy.readPrivateFile(call.Job, "verified.json", checkpoint.Verified, 8<<20)
+	data, verified, checkpoint, err := policy.invokePhase(ctx)
 	if err != nil {
 		return plugins.Output{}, err
 	}
@@ -667,14 +699,47 @@ func (p *permittedTools) callExternalHTTP(ctx context.Context, name string, args
 	if musicStrictJSON(verified, &result) != nil {
 		return plugins.Output{}, errors.New("external_http_checkpoint_invalid")
 	}
-	output, err := policy.materialize(result, data, checkpoint.Body, checkpoint.ContentType)
+	return policy.materialize(result, data, checkpoint.Body, checkpoint.ContentType)
+}
+func (policy *externalHTTPPolicy) invokePhase(ctx context.Context) ([]byte, []byte, externalHTTPCheckpoint, error) {
+	c, ready, err := policy.p.manager.installedPluginRuntime()
+	if err != nil || !ready {
+		return nil, nil, externalHTTPCheckpoint{}, errors.New("external_tools_runtime_unavailable")
+	}
+	if c.Status(externalHTTPPluginID).State == "stopped" {
+		if err = c.Start(ctx, externalHTTPPluginID, policy.installed.Revision); err != nil {
+			return nil, nil, externalHTTPCheckpoint{}, err
+		}
+	}
+	call, err := c.Invoke(ctx, pluginruntime.CallRequest{Plugin: externalHTTPPluginID, Capability: policy.capability(), Context: policy.invocation, Arguments: policy.arguments}, policy)
 	if err != nil {
-		return plugins.Output{}, err
+		return nil, nil, externalHTTPCheckpoint{}, err
+	}
+	if call.Job.State != "completed" {
+		return nil, nil, externalHTTPCheckpoint{}, errors.New("external_http_outcome_unknown_do_not_resubmit")
+	}
+	private, err := policy.store.PrivateJobResult(ctx, call.Job, func(ctx context.Context, j pluginhost.Job) error {
+		return policy.Check(ctx, j, pluginhost.Capability{})
+	})
+	if err != nil {
+		return nil, nil, externalHTTPCheckpoint{}, err
+	}
+	var checkpoint externalHTTPCheckpoint
+	if musicStrictJSON(private, &checkpoint) != nil || checkpoint.Binding != policy.binding() {
+		return nil, nil, externalHTTPCheckpoint{}, errors.New("external_http_checkpoint_invalid")
+	}
+	data, err := policy.readPrivateFile(call.Job, "reply.bin", checkpoint.Body, 25<<20)
+	if err != nil {
+		return nil, nil, externalHTTPCheckpoint{}, err
+	}
+	verified, err := policy.readPrivateFile(call.Job, "verified.json", checkpoint.Verified, 8<<20)
+	if err != nil {
+		return nil, nil, externalHTTPCheckpoint{}, err
 	}
 	if err = policy.Check(ctx, call.Job, pluginhost.Capability{}); err != nil {
-		return plugins.Output{}, err
+		return nil, nil, externalHTTPCheckpoint{}, err
 	}
-	return output, nil
+	return data, verified, checkpoint, nil
 }
 
 var _ pluginruntime.ServicePolicy = (*externalHTTPPolicy)(nil)

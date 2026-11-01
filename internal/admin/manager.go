@@ -89,6 +89,8 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
+	pluginRuntimeBindings sync.Map // host-only registrations; never populated by JSON settings
+
 	packageMu           sync.Mutex
 	packages            *pluginhost.Store
 	packagesClosed      bool

@@ -1,8 +1,6 @@
 package plugins
 
 import (
-	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -36,14 +34,6 @@ type JobTicket struct {
 var jobIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 var fieldPathPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
 var ErrJobConfigChanged = errors.New("plugin_job_configuration_changed")
-
-func decodeJobResult(b []byte) (any, error) {
-	var v any
-	d := json.NewDecoder(bytes.NewReader(b))
-	d.UseNumber()
-	err := d.Decode(&v)
-	return v, err
-}
 
 func validateJob(t APITool) error {
 	j := t.Job
@@ -148,48 +138,6 @@ func (r *Runtime) NewJobTicket(name string) (JobTicket, error) {
 	}
 	return JobTicket{Tool: name, Fingerprint: toolFingerprint(t), State: "submitting"}, nil
 }
-func (r *Runtime) StartJob(ctx context.Context, ticket JobTicket, args json.RawMessage) (JobTicket, error) {
-	t, in, err := r.jobTool(ticket)
-	if err != nil {
-		return ticket, err
-	}
-	if ticket.RemoteID != "" || ticket.State != "submitting" {
-		return ticket, errors.New("plugin_job_creation_not_replayable")
-	}
-	var arg map[string]any
-	if len(args) == 0 {
-		args = json.RawMessage(`{}`)
-	}
-	if len(args) > maxArgs || json.Unmarshal(args, &arg) != nil || arg == nil {
-		return ticket, errors.New("invalid background arguments")
-	}
-	body, err := renderBody(t.BodyTemplate, in.Secrets, arg, nil)
-	if err != nil {
-		return ticket, safeErr(err)
-	}
-	b, ct, err := request(ctx, t.URL, t.Method, t.Headers, body, in.Secrets, arg, nil, t.TimeoutSeconds)
-	if err != nil {
-		return ticket, safeErr(err)
-	}
-	if !isJSON(ct, b) {
-		return ticket, errors.New("background API must return JSON")
-	}
-	result, err := decodeJobResult(b)
-	if err != nil {
-		return ticket, safeErr(err)
-	}
-	if id, ok := at(result, t.Job.IDPath).(string); ok && jobIDPattern.MatchString(id) && id != "." && id != ".." {
-		ticket.RemoteID = id
-	}
-	if id, ok := at(result, t.Job.IDPath).(json.Number); ok && jobIDPattern.MatchString(id.String()) && strings.Trim(id.String(), "0123456789") == "" {
-		ticket.RemoteID = id.String()
-	}
-	ticket, err = jobResult(ticket, t, result)
-	if err == nil && ticket.State == "waiting" && ticket.RemoteID == "" {
-		return ticket, errors.New("background API returned no valid job identifier")
-	}
-	return ticket, err
-}
 func jobSeed(path, id string) any {
 	parts := strings.Split(path, ".")
 	var value any = id
@@ -206,96 +154,6 @@ func followHeaders(createURL, targetURL string, explicit, creation map[string]st
 	b, _ := url.Parse(targetURL)
 	if a.Scheme == b.Scheme && strings.EqualFold(a.Host, b.Host) {
 		return creation
-	}
-	return nil
-}
-func (r *Runtime) PollJob(ctx context.Context, ticket JobTicket) (JobTicket, error) {
-	t, in, err := r.jobTool(ticket)
-	if err != nil {
-		return ticket, err
-	}
-	if !jobIDPattern.MatchString(ticket.RemoteID) || ticket.RemoteID == "." || ticket.RemoteID == ".." {
-		return ticket, errors.New("invalid persisted job id")
-	}
-	seed := jobSeed(t.Job.IDPath, ticket.RemoteID)
-	target, err := renderURL(t.Poll.URL, in.Secrets, nil, seed)
-	if err != nil {
-		return ticket, safeErr(err)
-	}
-	headers := followHeaders(t.URL, target, t.Poll.Headers, t.Headers)
-	b, ct, err := request(ctx, target, http.MethodGet, headers, nil, in.Secrets, nil, nil, t.TimeoutSeconds)
-	if err != nil {
-		return ticket, safeErr(err)
-	}
-	if !isJSON(ct, b) {
-		return ticket, errors.New("background poll returned non-JSON")
-	}
-	result, err := decodeJobResult(b)
-	if err != nil {
-		return ticket, safeErr(err)
-	}
-	return jobResult(ticket, t, result)
-}
-func jobResult(ticket JobTicket, t APITool, result any) (JobTicket, error) {
-	state := stringAt(result, t.Poll.StatusPath)
-	if state == "" {
-		return ticket, errors.New("background status missing")
-	}
-	ticket.State = "waiting"
-	ticket.Output = Output{}
-	if contains(t.Poll.FailedValues, state) {
-		ticket.State = "failed"
-		return ticket, nil
-	}
-	if contains(t.Poll.DoneValues, state) {
-		if t.Poll.MediaURLPath != "" {
-			t.MediaURLPath = t.Poll.MediaURLPath
-		}
-		if t.Poll.TextPath != "" {
-			t.TextPath = t.Poll.TextPath
-		}
-		output := extract(t, result)
-		b, _ := json.Marshal(output)
-		if len(b) > 16<<10 || len(output.Text) > 4096 || output.Text == "" && len(output.Media) == 0 {
-			return ticket, errors.New("invalid completed job output")
-		}
-		for _, m := range output.Media {
-			if len(m.URL) > 2048 {
-				return ticket, errors.New("job output URL too long")
-			}
-		}
-		ticket.State, ticket.Output = "completed", output
-	}
-	return ticket, nil
-}
-func (r *Runtime) CancelJob(ctx context.Context, ticket JobTicket) error {
-	t, in, err := r.jobTool(ticket)
-	if err != nil {
-		return err
-	}
-	c := t.Job.Cancel
-	if c == nil {
-		return errors.New("plugin_job_cancel_unsupported")
-	}
-	if !jobIDPattern.MatchString(ticket.RemoteID) || ticket.RemoteID == "." || ticket.RemoteID == ".." {
-		return errors.New("invalid persisted job id")
-	}
-	seed := jobSeed(t.Job.IDPath, ticket.RemoteID)
-	target, err := renderURL(c.URL, in.Secrets, nil, seed)
-	if err != nil {
-		return safeErr(err)
-	}
-	body, err := renderBody(c.BodyTemplate, in.Secrets, nil, seed)
-	if err != nil {
-		return safeErr(err)
-	}
-	method := c.Method
-	if method == "" {
-		method = http.MethodPost
-	}
-	_, _, err = request(ctx, target, method, followHeaders(t.URL, target, c.Headers, t.Headers), body, in.Secrets, nil, nil, t.TimeoutSeconds)
-	if err != nil {
-		return safeErr(err)
 	}
 	return nil
 }

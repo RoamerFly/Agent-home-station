@@ -44,6 +44,8 @@ func TestInstalledServiceProxyCannotCrossPluginCapabilities(t *testing.T) {
 		allowed                                bool
 	}{
 		{"external-tools", "external.http_request", "network", "wechat/external_request", true},
+		{"external-tools", "external.job_request", "network", "wechat/external_request", true},
+		{"music", "external.job_request", "network", "wechat/external_request", false},
 		{"music", "external.http_request", "network", "wechat/external_request", false},
 		{"external-tools", "external.call", "network", "wechat/external_request", false},
 		{"external-tools", "external.http_request", "model.invoke", "wechat/external_request", false},

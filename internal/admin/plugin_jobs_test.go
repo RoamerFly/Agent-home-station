@@ -68,6 +68,7 @@ func newJobFixture(t *testing.T) *jobFixture {
 	}
 	j.p = p
 	j.p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "alice", TraceID: "request", Mode: "direct", Text: "做一段测试内容"})
+	installExternalHTTPTestRuntime(t, j.p)
 	return j
 }
 func (j *jobFixture) start(t *testing.T) agentTask {

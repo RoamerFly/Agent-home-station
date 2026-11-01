@@ -3,6 +3,8 @@ package devicebroker
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 
 	"wechat-bot/internal/adbserver"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/pluginhost"
 )
 
 type fakeHub struct {
@@ -59,13 +62,13 @@ func TestOpenFiltersLegacyProfileAndPinsFixedRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bridge.Close()
-	if captured.Command != paths.python || len(captured.Args) != 8 || captured.Args[3] != paths.script || captured.Args[4] != "--config" || captured.Args[6] != "--storage" || captured.Args[7] != paths.storage {
-		t.Fatalf("fixed command contract lost: %#v", captured)
+	if captured.Command != "" || len(captured.Args) != 0 || captured.PluginID != "device-fixture" {
+		t.Fatalf("raw command escaped fixed registration: %#v", captured)
 	}
 	if len(captured.Env) != 0 || captured.URL != "" || len(captured.Headers) != 0 {
 		t.Fatal("legacy process settings escaped into broker")
 	}
-	data, err := os.ReadFile(captured.Args[5])
+	data, err := os.ReadFile(derivedProfilePath(t, bridge))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,42 +310,15 @@ func TestBindingPinsProfileADBAndDerivedConfigWithoutStartingBridge(t *testing.T
 }
 
 func TestHubSessionDoesNotPassHostSecretToFixedPythonBridge(t *testing.T) {
-	python := testPython(t)
 	options, paths := fixtureOptions(t)
-	options.Python = python
 	writeJSON(t, paths.config, validProfile(paths.adb))
 	options.Legacy = legacyConfig(paths.script, paths.config, paths.storage)
-	// This is a no-op stdio MCP fixture, not the real bridge and not a device
-	// call. It observes only whether a non-allowlisted host secret reached it.
-	const fixture = `import json, os, sys
-for line in sys.stdin:
-  request = json.loads(line)
-  method = request.get("method")
-  if method == "notifications/initialized":
-    continue
-  if method == "initialize":
-    result = {"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}
-  elif method == "tools/call":
-    result = {"content":[{"type":"text","text":json.dumps({"host_secret_present": "DEVICEBROKER_HOST_SECRET" in os.environ})}]}
-  else:
-    result = {"tools":[]}
-  print(json.dumps({"jsonrpc":"2.0","id":request.get("id"),"result":result}), flush=True)
-`
-	if err := os.WriteFile(paths.script, []byte(fixture), 0600); err != nil {
-		t.Fatal(err)
-	}
+	options.Registration = nil
+	tracked := &countingADBServer{}
+	options.ADBServer = tracked
 	t.Setenv("DEVICEBROKER_HOST_SECRET", "must-not-reach-child")
-	bridge, err := Open(context.Background(), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer bridge.Close()
-	result, err := bridge.Call(context.Background(), "devices", json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(result, "true") {
-		t.Fatalf("host secret reached fixed bridge: %s", result)
+	if _, err := Open(t.Context(), options); !errors.Is(err, ErrNeedsMigration) || tracked.calls != 0 {
+		t.Fatal("unregistered legacy bridge reached process boundary", err, tracked.calls)
 	}
 }
 
@@ -360,9 +336,11 @@ func TestPhysicalLeaseIsSharedAcrossAliasesAndAccounts(t *testing.T) {
 	}
 	second := options
 	second.Account, second.StateDirectory, second.Devices = "account_2", state2, []string{"same-alias"}
+	second.Registration = registrationForAccount(t, options.Registration, second.Account)
 	second.Legacy = legacyConfig(paths.script, paths.config, storage2)
 	third := options
 	third.Account, third.StateDirectory, third.Devices = "account_3", filepath.Join(filepath.Dir(paths.state), "state-three"), []string{"other-serial"}
+	third.Registration = registrationForAccount(t, options.Registration, third.Account)
 	storage3 := filepath.Join(third.StateDirectory, "ledger")
 	if err := os.MkdirAll(storage3, 0700); err != nil {
 		t.Fatal(err)
@@ -445,6 +423,7 @@ func TestUnknownCallKeepsPhysicalLeaseUntilCleanupConfirmed(t *testing.T) {
 	}
 	second := options
 	second.Account, second.StateDirectory, second.Devices = "account_2", state2, []string{"same-alias"}
+	second.Registration = registrationForAccount(t, options.Registration, second.Account)
 	second.Legacy = legacyConfig(paths.script, paths.config, storage2)
 
 	cleanupErr := errors.New("native_child_cleanup_unconfirmed")
@@ -504,6 +483,7 @@ func TestQuarantinedBrokerSurvivesGCUntilCleanup(t *testing.T) {
 	}
 	otherOptions := options
 	otherOptions.Account, otherOptions.StateDirectory, otherOptions.Devices = "account_2", state2, []string{"same-alias"}
+	otherOptions.Registration = registrationForAccount(t, options.Registration, otherOptions.Account)
 	otherOptions.Legacy = legacyConfig(paths.script, paths.config, storage2)
 
 	cleanupErr := errors.New("cleanup_still_unknown")
@@ -619,9 +599,7 @@ func TestOpenBindsManagedADBEndpointAndReleasesLease(t *testing.T) {
 	options.Legacy = legacyConfig(paths.script, paths.config, paths.storage)
 	lease := &trackedADBLease{}
 	options.ADBServer = trackedADBServer{lease: lease}
-	var captured mcptools.ServerConfig
 	withHub(t, func(config mcptools.ServerConfig) (hub, error) {
-		captured = config
 		return &fakeHub{}, nil
 	})
 	bridge, err := Open(context.Background(), options)
@@ -629,7 +607,7 @@ func TestOpenBindsManagedADBEndpointAndReleasesLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	var derived profile
-	data, err := os.ReadFile(captured.Args[5])
+	data, err := os.ReadFile(derivedProfilePath(t, bridge))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,21 +626,6 @@ func TestOpenBindsManagedADBEndpointAndReleasesLease(t *testing.T) {
 	if lease.closes != 1 {
 		t.Fatalf("managed adb lease closes=%d", lease.closes)
 	}
-}
-
-func testPython(t *testing.T) string {
-	t.Helper()
-	for _, candidate := range []string{"python", "python3"} {
-		path, err := exec.LookPath(candidate)
-		if err == nil {
-			absolute, err := filepath.Abs(path)
-			if err == nil {
-				return absolute
-			}
-		}
-	}
-	t.Skip("a local Python interpreter is required only for the isolated stdio environment fixture")
-	return ""
 }
 
 type fixturePaths struct {
@@ -702,7 +665,8 @@ func fixtureOptions(t *testing.T) (Options, fixturePaths) {
 	if err := os.MkdirAll(paths.storage, 0700); err != nil {
 		t.Fatal(err)
 	}
-	return Options{Python: paths.python, PackageDirectory: paths.packageDir, WorkspaceDirectory: paths.workspace, StateDirectory: paths.state, GlobalLeaseDirectory: paths.leaseDir, ADBRoots: []string{paths.adbRoot}, Account: "account_1", Devices: []string{"allowed"}, Actions: []string{"tap", "capture"}, ADBServer: fakeADBServer{}}, paths
+	registration := fixtureRegistration(t, paths.packageDir, paths.python, "account_1")
+	return Options{Registration: registration, Python: paths.python, PackageDirectory: paths.packageDir, WorkspaceDirectory: paths.workspace, StateDirectory: paths.state, GlobalLeaseDirectory: paths.leaseDir, ADBRoots: []string{paths.adbRoot}, Account: "account_1", Devices: []string{"allowed"}, Actions: []string{"tap", "capture"}, ADBServer: fakeADBServer{}}, paths
 }
 
 type fakeADBServer struct{}
@@ -754,6 +718,65 @@ func writeJSON(t *testing.T, path string, value any) {
 func withHub(t *testing.T, replacement func(mcptools.ServerConfig) (hub, error)) {
 	t.Helper()
 	old := openHub
-	openHub = replacement
+	openHub = func(config mcptools.ServerConfig, _ mcptools.StdioLauncher, _ mcptools.ServerGuard) (hub, error) {
+		return replacement(config)
+	}
 	t.Cleanup(func() { openHub = old })
+}
+
+func fixtureRegistration(t *testing.T, code, python, account string) *RuntimeRegistration {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(code, "runtime", "bridge.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	p := pluginhost.Package{SchemaVersion: 1, ID: "device-fixture", Name: "Synthetic device broker", Version: "1.0.0", HostProtocol: 1, Status: "ready", Platforms: []string{"windows-amd64", "linux-amd64"}, Runtime: pluginhost.Runtime{Transport: "mcp-stdio", Entrypoint: "runtime/bridge.py"}, Permissions: []string{"device"}, Files: map[string]string{"runtime/bridge.py": hex.EncodeToString(sum[:])}}
+	for _, name := range []string{"config.schema.json", "ui.schema.json", "capabilities.json", "README.md", "PERMISSIONS.md", "MIGRATION.md", "CHANGELOG.md"} {
+		body := []byte("synthetic fixture\n")
+		if strings.HasSuffix(name, ".json") {
+			body = []byte("{}")
+		}
+		if err := os.WriteFile(filepath.Join(code, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(body)
+		p.Files[name] = hex.EncodeToString(sum[:])
+	}
+	data, _ := json.Marshal(p)
+	if err = os.WriteFile(filepath.Join(code, "plugin.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRuntimeRegistration(t.Context(), code, pluginhost.Grant{Account: account, Plugin: p.ID, Version: p.Version, Permissions: []string{"device"}}, RuntimeEnvironment{Python: python, RuntimeRoots: []string{filepath.Dir(python)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func registrationForAccount(t *testing.T, r *RuntimeRegistration, account string) *RuntimeRegistration {
+	t.Helper()
+	g := r.grant
+	g.Account = account
+	next, err := NewRuntimeRegistration(t.Context(), r.directory, g, r.environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return next
+}
+func derivedProfilePath(t *testing.T, b Bridge) string {
+	t.Helper()
+	for _, seal := range b.(*broker).seals {
+		if strings.Contains(seal.path, "devicebroker-private") {
+			return seal.path
+		}
+	}
+	t.Fatal("derived profile missing")
+	return ""
+}
+
+type countingADBServer struct{ calls int }
+
+func (s *countingADBServer) Acquire(context.Context, string) (adbserver.Lease, error) {
+	s.calls++
+	return fakeADBLease{}, nil
 }

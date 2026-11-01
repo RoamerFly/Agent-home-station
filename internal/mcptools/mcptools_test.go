@@ -41,7 +41,7 @@ func TestHelperMCPProcess(t *testing.T) {
 
 func TestStdioListAndCallRespectAllowlist(t *testing.T) {
 	cfg := ServerConfig{ID: "local", Transport: "stdio", Command: os.Args[0], Args: []string{"-test.run=TestHelperMCPProcess"}, Env: map[string]string{"GO_WANT_MCP_HELPER": "1"}, Enabled: true, Tools: []string{"echo"}}
-	h, err := New([]ServerConfig{cfg})
+	h, err := New([]ServerConfig{cfg}, WithStdioLauncher(syntheticStdioLauncher))
 	if err != nil {
 		t.Fatal(err)
 	}

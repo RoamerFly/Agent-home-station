@@ -163,6 +163,14 @@ func (c *Controller) Status(id string) Status {
 	}
 	return Status{r, err}
 }
+
+// Closed reports host shutdown without changing persisted administrator intent.
+func (c *Controller) Closed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
 func (c *Controller) Start(ctx context.Context, id string, revision int) (err error) {
 	plan, err := c.startPlan(ctx, id, revision)
 	if err != nil {

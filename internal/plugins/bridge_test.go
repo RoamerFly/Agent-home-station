@@ -81,7 +81,88 @@ func TestExternalBridgeRejectsBackgroundCallPhase(t *testing.T) {
 	if len(bridge.Protocol().Tools) != 0 {
 		t.Fatal("async declaration entered synchronous protocol")
 	}
+	job, err := bridge.JobProtocol("jobs__start")
+	if err != nil || job.Tool.Job == nil || job.Tool.Poll == nil || job.Tool.Fingerprint == "" {
+		t.Fatalf("missing credential-free job projection: %#v %v", job, err)
+	}
 	if _, err = bridge.Execute(context.Background(), ExternalRequest{Phase: "call", Tool: "jobs__start", Arguments: json.RawMessage(`{}`)}); err == nil {
 		t.Fatal("background tool entered synchronous bridge")
+	}
+}
+
+func TestExternalBridgeJobPhasesKeepFrozenTicketAndCredentialBoundary(t *testing.T) {
+	creates, polls, cancels := 0, 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer synthetic-plugin-key" {
+			t.Fatal("missing fixed credential")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "POST /jobs":
+			creates++
+			_, _ = w.Write([]byte(`{"task":{"id":"job-1"},"state":"queued"}`))
+		case "GET /jobs/job-1":
+			polls++
+			_, _ = w.Write([]byte(`{"state":"done","text":"ok"}`))
+		case "POST /jobs/job-1/cancel":
+			cancels++
+			_, _ = w.Write([]byte(`{"accepted":true}`))
+		default:
+			t.Fatalf("unexpected phase %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	bridge, err := NewExternalBridge([]Installed{{Manifest: backgroundManifest(server.URL), Enabled: true, Secrets: map[string]string{"KEY": "synthetic-plugin-key"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, _ := bridge.runtime.NewJobTicket("creative__create")
+	if _, err = bridge.Execute(context.Background(), ExternalRequest{Phase: "start", Tool: ticket.Tool, Ticket: ticket, Arguments: json.RawMessage(`{"prompt":"x"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	ticket.RemoteID, ticket.State = "job-1", "waiting"
+	stored, _ := json.Marshal(ticket)
+	var reloaded JobTicket
+	_ = json.Unmarshal(stored, &reloaded)
+	if _, err = bridge.Execute(context.Background(), ExternalRequest{Phase: "poll", Tool: reloaded.Tool, Ticket: reloaded, Arguments: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = bridge.Execute(context.Background(), ExternalRequest{Phase: "cancel", Tool: reloaded.Tool, Ticket: reloaded, Arguments: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if creates != 1 || polls != 1 || cancels != 1 {
+		t.Fatalf("phase counts %d/%d/%d", creates, polls, cancels)
+	}
+	if _, err = bridge.Execute(context.Background(), ExternalRequest{Phase: "start", Tool: reloaded.Tool, Ticket: reloaded, Arguments: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("replayed start accepted")
+	}
+	changed := backgroundManifest(server.URL + "/other")
+	other, _ := NewExternalBridge([]Installed{{Manifest: changed, Enabled: true, Secrets: map[string]string{"KEY": "synthetic-plugin-key"}}})
+	if _, err = other.Execute(context.Background(), ExternalRequest{Phase: "poll", Tool: reloaded.Tool, Ticket: reloaded, Arguments: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("frozen ticket rebound")
+	}
+}
+
+func TestExternalBridgeJobPollDoesNotForwardCreationCredentialsAcrossOrigins(t *testing.T) {
+	seen := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = true
+		if r.Header.Get("Authorization") != "" || r.URL.Path != "/jobs/job-1" {
+			t.Error("cross-origin poll received a creation credential or changed ID")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"state":"done","text":"synthetic"}`))
+	}))
+	defer server.Close()
+	manifest := backgroundManifest("https://example.test")
+	manifest.Tools[0].Poll.URL = server.URL + "/jobs/{{result.task.id}}"
+	bridge, err := NewExternalBridge([]Installed{{Enabled: true, Manifest: manifest, Secrets: map[string]string{"KEY": "synthetic-plugin-key"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, _ := bridge.runtime.NewJobTicket("creative__create")
+	ticket.RemoteID, ticket.State = "job-1", "waiting"
+	if _, err := bridge.Execute(t.Context(), ExternalRequest{Phase: "poll", Tool: ticket.Tool, Ticket: ticket}); err != nil || !seen {
+		t.Fatal("original poll was not performed", err)
 	}
 }

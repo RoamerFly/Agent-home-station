@@ -90,11 +90,11 @@ func TestRPCDoesNotDereferenceTransportClearedByClose(t *testing.T) {
 }
 
 func TestStartThenCloseBeforeInitializeDoesNotPanic(t *testing.T) {
-	s := &mcpSession{cfg: ServerConfig{
+	s := &mcpSession{launcher: syntheticStdioLauncher, cfg: ServerConfig{
 		Transport: "stdio", Command: os.Args[0], Args: []string{"-test.run=^TestPersistentMCPChild$"},
 		Env: map[string]string{"WECHAT_MCP_SESSION_CHILD": "1"},
 	}}
-	if err := s.start(); err != nil {
+	if err := s.start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.close(); err != nil {
@@ -191,7 +191,7 @@ func TestPersistentStdioCancellationTerminatesChildTree(t *testing.T) {
 		ID: "tree", Enabled: true, Transport: "stdio", Command: os.Args[0],
 		Args: []string{"-test.run=^TestMCPProcessTreeFixture$"},
 		Env:  map[string]string{"WECHAT_MCP_TREE_CHILD": "1", "WECHAT_MCP_TREE_READY": ready, "WECHAT_MCP_TREE_MARKER": marker},
-	}})
+	}}, WithStdioLauncher(syntheticStdioLauncher))
 	if err != nil {
 		t.Fatal(err)
 	}

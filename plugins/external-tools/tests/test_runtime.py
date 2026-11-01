@@ -11,6 +11,7 @@ runtime = importlib.util.module_from_spec(spec); spec.loader.exec_module(runtime
 PROTOCOL = {'version': 1, 'tools': [{'name':'voice__speak','description':'Synthetic fixed tool.','input_schema':{'type':'object'},'text_path':'result.text','media_kind':'voice','fingerprint':'a'*64}]}
 CONTEXT = {'account':'a','thread':'t','requester':'r','purpose':'p','request_key':'k'}
 ARG_HASH = 'c'*64
+TICKET_HASH = 'd'*64
 
 class RuntimeTests(unittest.TestCase):
     def test_json_output_uses_only_exact_tool_intent(self):
@@ -52,6 +53,56 @@ class RuntimeTests(unittest.TestCase):
         result = runtime.execute({'phase':'call','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'protocol':protocol}, lambda _: {'content_type':'text/plain','body_base64':base64.b64encode(payload).decode()})
         self.assertEqual(result['output']['text'], 'map[a:x z:[true <nil> 9007199254740993]]')
 
+    def test_job_steps_never_loop_and_keep_ticket_identity(self):
+        job_protocol={'version':1,'tool':dict(PROTOCOL['tools'][0], job={'id_path':'task.id'}, poll={'status_path':'state','done_values':['done'],'failed_values':['failed'],'text_path':'result.text'})}
+        ticket={'tool':'voice__speak','fingerprint':'a'*64,'state':'submitting'}
+        calls=[]
+        started=runtime.job_execute({'phase':'start','tool':'voice__speak','arguments':{'n':9007199254740993},'arguments_sha256':ARG_HASH,'ticket':ticket,'ticket_sha256':TICKET_HASH,'protocol':job_protocol}, lambda x:calls.append(x) or {'content_type':'application/json','body_base64':base64.b64encode(b'{"task":{"id":"remote-1"}}').decode()})
+        self.assertEqual(calls,[{'phase':'start','tool':'voice__speak','arguments_sha256':ARG_HASH,'ticket_sha256':TICKET_HASH}])
+        waited=runtime.job_execute({'phase':'poll','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'ticket':started['ticket'],'ticket_sha256':TICKET_HASH,'protocol':job_protocol}, lambda _: {'content_type':'application/json','body_base64':base64.b64encode(b'{"state":"queued"}').decode()})
+        self.assertEqual(waited['ticket']['state'],'waiting')
+        done=runtime.job_execute({'phase':'poll','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'ticket':started['ticket'],'ticket_sha256':TICKET_HASH,'protocol':job_protocol}, lambda _: {'content_type':'application/json','body_base64':base64.b64encode(b'{"state":"done","result":{"text":"ok"}}').decode()})
+        self.assertEqual(done['ticket']['state'],'completed')
+        self.assertEqual(done['ticket']['remote_id'],'remote-1')
+
+    def test_job_start_can_fail_without_remote_id(self):
+        protocol={'version':1,'tool':dict(PROTOCOL['tools'][0], job={'id_path':'task.id'}, poll={'status_path':'state','done_values':['done'],'failed_values':['failed'],'text_path':'result.text'})}
+        ticket={'tool':'voice__speak','fingerprint':'a'*64,'state':'submitting'}
+        result=runtime.job_execute({'phase':'start','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'ticket':ticket,'ticket_sha256':TICKET_HASH,'protocol':protocol}, lambda _:{'content_type':'application/json','body_base64':base64.b64encode(b'{"state":"failed"}').decode()})
+        self.assertEqual(result['ticket']['state'],'failed')
+        self.assertNotIn('remote_id',result['ticket'])
+
+    def test_job_start_can_complete_without_remote_id(self):
+        protocol={'version':1,'tool':dict(PROTOCOL['tools'][0], job={'id_path':'task.id'}, poll={'status_path':'state','done_values':['done'],'failed_values':['failed'],'text_path':'result.text'})}
+        ticket={'tool':'voice__speak','fingerprint':'a'*64,'state':'submitting'}
+        result=runtime.job_execute({'phase':'start','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'ticket':ticket,'ticket_sha256':TICKET_HASH,'protocol':protocol}, lambda _:{'content_type':'application/json','body_base64':base64.b64encode(b'{"state":"done","result":{"text":"now"}}').decode()})
+        self.assertEqual(result['ticket']['state'],'completed')
+        self.assertEqual(result['ticket']['output']['text'],'now')
+        self.assertNotIn('remote_id',result['ticket'])
+
+    def test_job_start_keeps_known_id_when_immediate_output_is_invalid(self):
+        protocol={'version':1,'tool':dict(PROTOCOL['tools'][0], job={'id_path':'task.id'}, poll={'status_path':'state','done_values':['done'],'failed_values':['failed'],'text_path':'result.text'})}
+        ticket={'tool':'voice__speak','fingerprint':'a'*64,'state':'submitting'}
+        result=runtime.job_execute({'phase':'start','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'ticket':ticket,'ticket_sha256':TICKET_HASH,'protocol':protocol}, lambda _:{'content_type':'application/json','body_base64':base64.b64encode(b'{"task":{"id":"remote-2"},"state":"done","result":{}}').decode()})
+        self.assertTrue(result['known_remote_only'])
+        self.assertEqual(result['ticket']['state'],'waiting')
+        self.assertEqual(result['ticket']['remote_id'],'remote-2')
+        self.assertEqual(result['ticket']['output'],{'text':'','media':[]})
+
+    def test_job_start_keeps_numeric_id_on_missing_status(self):
+        protocol={'version':1,'tool':dict(PROTOCOL['tools'][0], job={'id_path':'task.id'}, poll={'status_path':'state','done_values':['done'],'failed_values':['failed'],'text_path':'result.text'})}
+        ticket={'tool':'voice__speak','fingerprint':'a'*64,'state':'submitting'}
+        result=runtime.job_execute({'phase':'start','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'ticket':ticket,'ticket_sha256':TICKET_HASH,'protocol':protocol}, lambda _:{'content_type':'application/json','body_base64':base64.b64encode(b'{"task":{"id":18446744073709551615}}').decode()})
+        self.assertTrue(result['known_remote_only'])
+        self.assertEqual(result['ticket']['remote_id'],'18446744073709551615')
+
+    def test_job_cancel_allows_completed_ticket_with_remote_id(self):
+        protocol={'version':1,'tool':dict(PROTOCOL['tools'][0], job={'id_path':'task.id'}, poll={'status_path':'state','done_values':['done'],'failed_values':['failed'],'text_path':'result.text'})}
+        ticket={'tool':'voice__speak','fingerprint':'a'*64,'state':'completed','remote_id':'remote-1','output':{'text':'saved','media':[]}}
+        result=runtime.job_execute({'phase':'cancel','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'ticket':ticket,'ticket_sha256':TICKET_HASH,'protocol':protocol}, lambda _:{'content_type':'application/json','body_base64':base64.b64encode(b'{}').decode()})
+        self.assertTrue(result['cancel_ack'])
+        self.assertEqual(result['ticket'],ticket)
+
     def test_json_media_url_is_projected_for_host_validation(self):
         media_protocol={'version':1,'tools':[dict(PROTOCOL['tools'][0], text_path='', media_url_path='result.audio')]}
         reply={'content_type':'application/json','body_base64':base64.b64encode(b'{"result":{"audio":"https://example.test/a.wav"}}').decode()}
@@ -82,6 +133,7 @@ class RuntimeTests(unittest.TestCase):
         ])+'\n')
         outgoing=io.StringIO(); runtime.Wire(incoming,outgoing).serve(); replies=[json.loads(x) for x in outgoing.getvalue().splitlines()]
         self.assertEqual(replies[1]['result']['tools'][0]['name'],'external.http_request')
+        self.assertEqual(replies[1]['result']['tools'][1]['name'],'external.job_request')
         self.assertEqual(replies[2]['method'],'wechat/external_request')
         self.assertEqual(replies[2]['params'],{'phase':'call','tool':'voice__speak','arguments_sha256':ARG_HASH})
         self.assertEqual(replies[3]['result']['output']['text'],'ok')

@@ -225,8 +225,8 @@ def _declares_project_development(repo: Path) -> bool:
     return all(permission in declared.get(capability, set()) for capability, permission in required.items())
 
 
-def _declares_external_sync(repo: Path) -> bool:
-    """Require the exact empty-config synchronous adapter declaration.
+def _declares_external_capability(repo: Path, capability_id: str) -> bool:
+    """Require one exact empty-config external adapter capability.
 
     This is deliberately not a general conversion for old MCP servers or
     background jobs.  They remain host-owned until their own reviewed adapter
@@ -244,7 +244,7 @@ def _declares_external_sync(repo: Path) -> bool:
     rows = capabilities.get("capabilities")
     return isinstance(rows, list) and any(
         isinstance(item, dict)
-        and item.get("id") == "external.http_request"
+        and item.get("id") == capability_id
         and item.get("implementation") == "ready"
         and item.get("discoverable") is True
         and item.get("async") is not True
@@ -253,17 +253,16 @@ def _declares_external_sync(repo: Path) -> bool:
     )
 
 
-def _external_legacy_sync_intent(mcp: dict[str, Any], ledger: dict[str, Any]) -> tuple[bool, bool]:
-    """Return (matching_sync_intent, enabled_but_not_migratable).
+def _external_legacy_intent(mcp: dict[str, Any], ledger: dict[str, Any]) -> dict[str, bool]:
+    """Classify only legacy lifecycle shape, never protocol data.
 
     The old ledger remains the only source of service address, request
     template and credential data.  This reads only the public structural flags
     required to avoid claiming MCP or async declarations migrated.
     """
     if not bool(mcp.get("enabled", True)):
-        return False, False
-    declared = False
-    sync = False
+        return {"declared": False, "sync": False, "job": False, "unsupported": False}
+    intent = {"declared": False, "sync": False, "job": False, "unsupported": False}
     for entry in ledger.values():
         if not isinstance(entry, dict) or entry.get("removed") or not entry.get("enabled"):
             continue
@@ -271,35 +270,49 @@ def _external_legacy_sync_intent(mcp: dict[str, Any], ledger: dict[str, Any]) ->
         if not isinstance(manifest, dict):
             continue
         if isinstance(manifest.get("mcp"), dict):
-            declared = True
+            intent["declared"] = True
+            intent["unsupported"] = True
         tools = manifest.get("tools")
         if not isinstance(tools, list):
             continue
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
-            declared = True
+            intent["declared"] = True
             if tool.get("job") is None and tool.get("poll") is None:
-                sync = True
-    return sync, declared and not sync
+                intent["sync"] = True
+            elif tool.get("job") is not None and tool.get("poll") is not None:
+                intent["job"] = True
+            else:
+                intent["unsupported"] = True
+    return intent
 
 
 def _external_tools_plan(repo: Path, mcp: dict[str, Any], ledger: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
-    """Prepare only the host-bridged synchronous external-tools migration.
+    """Prepare only reviewed sync or start/poll/cancel external adapters.
 
     No legacy endpoint, header, template, MCP setup or secret can enter either
     public values or the host-secret handoff.  The host keeps plugins.json as
     the sole authority for those records.
     """
-    legacy_enabled, unsupported_only = _external_legacy_sync_intent(mcp, ledger)
+    intent = _external_legacy_intent(mcp, ledger)
+    sync_declared = _declares_external_capability(repo, "external.http_request")
+    job_declared = _declares_external_capability(repo, "external.job_request")
+    legacy_enabled = (intent["sync"] and sync_declared) or (intent["job"] and job_declared)
     required: list[str] = []
-    if unsupported_only:
-        required.append("no_matching_sync_external_tools")
-    if legacy_enabled and not _declares_external_sync(repo):
+    if intent["declared"] and not legacy_enabled:
+        required.append("no_matching_supported_external_tools")
+    if intent["sync"] and not sync_declared:
         required.append("official_sync_external_adapter_not_declared_by_external_tools_plugin")
+    if intent["job"] and not job_declared:
+        required.append("official_external_job_adapter_not_declared_by_external_tools_plugin")
     retained = []
-    if bool(mcp.get("enabled", True)) and (legacy_enabled or unsupported_only):
+    if bool(mcp.get("enabled", True)) and intent["declared"]:
         retained.append("plugins.json:host_retained_declarations_and_credentials")
+    if intent["job"]:
+        retained.append("legacy_external_tasks:origin_and_configuration_proof_required")
+    if intent["unsupported"]:
+        retained.append("plugins.json:unsupported_external_declarations_retained")
     return _step("external-tools", _package(repo, "external-tools"), legacy_enabled, {}, {}, required, retained), {}
 
 

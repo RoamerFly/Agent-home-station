@@ -35,6 +35,8 @@ func writeExternalMigrationDeclaration(t *testing.T, f *webFixture, kind string)
 		manifest.Tools = []plugins.APITool{{Name: "lookup", Description: "Synthetic one-shot", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`), URL: "https://private.example/v1/lookup", Method: "POST", Headers: map[string]string{"Authorization": "Bearer {{secret.TOKEN}}"}}}
 	case "async":
 		manifest.Tools = []plugins.APITool{{Name: "render", Description: "Synthetic background job", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`), URL: "https://private.example/v1/jobs", Method: "POST", Job: &plugins.JobSpec{IDPath: "job_id"}, Poll: &plugins.PollSpec{URL: "https://private.example/v1/jobs/{{result.job_id}}", StatusPath: "state", DoneValues: []string{"done"}}}}
+	case "poll-only":
+		manifest.Tools = []plugins.APITool{{Name: "observe", Description: "Synthetic poll without a durable job", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`), URL: "https://private.example/v1/jobs", Method: "POST", Poll: &plugins.PollSpec{URL: "https://private.example/v1/jobs/{{result.job_id}}", StatusPath: "state", DoneValues: []string{"done"}}}}
 	case "mcp":
 		manifest.MCP = &mcptools.ServerConfig{Transport: "http", URL: "https://private.example/mcp"}
 	default:
@@ -61,7 +63,7 @@ func TestExternalToolsPluginMigrationAppliesHostRetainedSyncDeclarationDisabled(
 		t.Fatal(err)
 	}
 	step := previewStep(t, preview, externalHTTPPluginID)
-	if !migrationCatalog()[externalHTTPPluginID].externalSync || step.Status != "ready_for_administrator_review" || !step.LegacyEnabled || !step.EligibleToEnable || step.ProposedEnabled || len(step.Values) != 0 || len(step.Secrets) != 0 || len(step.update.Values) != 0 || len(step.update.Secrets) != 0 || !migrationStringContains(step.UnmappedLegacy, "plugins.json:host_retained_declarations_and_credentials") || preview.Accounts[0].SourceHashes["plugins_json"] == "" {
+	if !migrationCatalog()[externalHTTPPluginID].externalSync || !migrationCatalog()[externalHTTPPluginID].externalJob || step.Status != "ready_for_administrator_review" || !step.LegacyEnabled || !step.EligibleToEnable || step.ProposedEnabled || len(step.Values) != 0 || len(step.Secrets) != 0 || len(step.update.Values) != 0 || len(step.update.Secrets) != 0 || !migrationStringContains(step.UnmappedLegacy, "plugins.json:host_retained_declarations_and_credentials") || preview.Accounts[0].SourceHashes["plugins_json"] == "" {
 		t.Fatal("invalid synchronous external migration proposal", step, preview.Accounts[0].SourceHashes)
 	}
 	encoded, _ := json.Marshal(preview)
@@ -84,9 +86,28 @@ func TestExternalToolsPluginMigrationAppliesHostRetainedSyncDeclarationDisabled(
 	}
 }
 
-func TestExternalToolsPluginMigrationBlocksMCPOrAsyncOnlyDeclarations(t *testing.T) {
+func TestExternalToolsPluginMigrationAppliesHostRetainedJobDeclarationDisabled(t *testing.T) {
 	useOfficialMigrationCatalog(t)
-	for _, kind := range []string{"mcp", "async"} {
+	f := setup(t)
+	writeExternalMigrationMCP(t, f, true)
+	writeExternalMigrationDeclaration(t, f, "async")
+	preview, err := f.manager.pluginMigrationPreview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := previewStep(t, preview, externalHTTPPluginID)
+	if step.Status != "ready_for_administrator_review" || !step.LegacyEnabled || !step.EligibleToEnable || step.ProposedEnabled || len(step.Values) != 0 || len(step.update.Values) != 0 || !migrationStringContains(step.UnmappedLegacy, "legacy_external_tasks:origin_and_configuration_proof_required") {
+		t.Fatal("job/poll external declaration was not mapped to its ready capability", step)
+	}
+	installed, configuration, record, err := f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions)
+	if err != nil || installed.Enabled || record.State != "complete" || len(configuration.Values) != 0 || len(configuration.ConfiguredSecrets) != 0 {
+		t.Fatal("job external migration did not install empty disabled package", installed, configuration, record, err)
+	}
+}
+
+func TestExternalToolsPluginMigrationBlocksMCPOrPollOnlyDeclarations(t *testing.T) {
+	useOfficialMigrationCatalog(t)
+	for _, kind := range []string{"mcp", "poll-only"} {
 		t.Run(kind, func(t *testing.T) {
 			f := setup(t)
 			writeExternalMigrationMCP(t, f, true)
@@ -96,13 +117,38 @@ func TestExternalToolsPluginMigrationBlocksMCPOrAsyncOnlyDeclarations(t *testing
 				t.Fatal(err)
 			}
 			step := previewStep(t, preview, externalHTTPPluginID)
-			if step.Status != "blocked" || step.LegacyEnabled || step.EligibleToEnable || step.ProposedEnabled || !migrationStringContains(step.RequiredMissing, "no_matching_sync_external_tools") || len(step.Values) != 0 || len(step.update.Values) != 0 || len(step.update.Secrets) != 0 {
-				t.Fatal("MCP or async declaration was silently represented as sync", step)
+			if step.Status != "blocked" || step.LegacyEnabled || step.EligibleToEnable || step.ProposedEnabled || !migrationStringContains(step.RequiredMissing, "no_matching_supported_external_tools") || len(step.Values) != 0 || len(step.update.Values) != 0 || len(step.update.Secrets) != 0 {
+				t.Fatal("MCP or poll-only declaration was silently represented as a supported external tool", step)
 			}
 			if _, _, _, err = f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions); err == nil {
 				t.Fatal("blocked legacy declaration applied without a compatible adapter")
 			}
 		})
+	}
+}
+
+func TestExternalToolsPluginMigrationRequiresDeclaredJobCapability(t *testing.T) {
+	useOfficialMigrationCatalog(t)
+	f := setup(t)
+	writeExternalMigrationMCP(t, f, true)
+	writeExternalMigrationDeclaration(t, f, "async")
+	packages := migrationCatalog()
+	pkg := packages[externalHTTPPluginID]
+	pkg.externalJob = false
+	packages[externalHTTPPluginID] = pkg
+	account, err := f.manager.pluginMigrationPreviewFor(context.Background(), packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var step pluginMigrationStep
+	for _, candidate := range account.Plugins {
+		if candidate.Plugin == externalHTTPPluginID {
+			step = candidate
+			break
+		}
+	}
+	if step.Status != "blocked" || step.LegacyEnabled || step.EligibleToEnable || !migrationStringContains(step.RequiredMissing, "no_matching_supported_external_tools") || !migrationStringContains(step.RequiredMissing, "official_external_job_adapter_not_declared_by_external_tools_plugin") {
+		t.Fatal("job/poll declaration accepted without its reviewed capability", step)
 	}
 }
 

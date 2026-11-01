@@ -310,6 +310,10 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		tasks = visible
 		for i := range tasks {
 			tasks[i] = copyTask(tasks[i])
+			if tasks[i].PluginJob != nil {
+				// Origin is host recovery evidence, not conversation-visible data.
+				tasks[i].PluginJob.Origin = nil
+			}
 			if tasks[i].OwnerRequested && !p.privileged() {
 				tasks[i].Actions = nil
 				tasks[i].Goal = ""

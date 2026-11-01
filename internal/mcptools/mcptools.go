@@ -16,8 +16,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -33,24 +31,41 @@ const (
 )
 
 var toolName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+var installedPluginID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 var headerName = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
 // ServerConfig is an owner-controlled MCP endpoint. Transport is "stdio" or
 // "http" ("streamable-http" is accepted as an alias). Tools is an allowlist.
 type ServerConfig struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Transport string            `json:"transport"`
-	URL       string            `json:"url"`
-	Command   string            `json:"command"`
-	Args      []string          `json:"args"`
-	Env       map[string]string `json:"env"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Transport string `json:"transport"`
+	// PluginID names an installed runtime resolved by the host launcher. It
+	// cannot be combined with legacy raw command/args/environment fields.
+	PluginID string            `json:"plugin_id,omitempty"`
+	URL      string            `json:"url"`
+	Command  string            `json:"command"`
+	Args     []string          `json:"args"`
+	Env      map[string]string `json:"env"`
 	// Headers are owner-configured HTTP request headers, for example an
 	// Authorization bearer token. They are never model-controlled.
 	Headers        map[string]string `json:"headers"`
 	Enabled        bool              `json:"enabled"`
 	Tools          []string          `json:"tools"`
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
+}
+
+// Normalized applies transport spelling/defaults only. It confers no launch
+// authority and deliberately leaves timeout zero as the configurable default.
+func (c ServerConfig) Normalized() ServerConfig {
+	c.Transport = strings.ToLower(strings.TrimSpace(c.Transport))
+	if c.Transport == "" && c.PluginID != "" {
+		c.Transport = "stdio"
+	}
+	if c.Transport == "streamable-http" {
+		c.Transport = "http"
+	}
+	return c
 }
 
 type Tool struct {
@@ -66,18 +81,26 @@ type Spec Tool
 func BuiltinTools() []Tool { return builtin() }
 
 type Hub struct {
-	servers  []ServerConfig
-	mu       sync.Mutex
-	sessions map[string]*mcpSession
-	closed   bool
+	servers       []ServerConfig
+	mu            sync.Mutex
+	sessions      map[string]*mcpSession
+	closed        bool
+	stdioLauncher StdioLauncher
+	serverGuard   ServerGuard
 }
 
-func New(config []ServerConfig) (*Hub, error) {
+func New(config []ServerConfig, options ...Option) (*Hub, error) {
 	seen := map[string]bool{}
 	out := make([]ServerConfig, 0, len(config))
 	for _, c := range config {
+		c = c.Normalized()
 		if c.TimeoutSeconds < 0 || c.TimeoutSeconds > 900 {
 			return nil, errors.New("MCP timeout must be between 0 and 900 seconds")
+		}
+		if c.PluginID != "" {
+			if !installedPluginID.MatchString(c.PluginID) || c.Command != "" || len(c.Args) != 0 || len(c.Env) != 0 || strings.ToLower(strings.TrimSpace(c.Transport)) != "stdio" {
+				return nil, errors.New("MCP plugin_id requires stdio and cannot be combined with command, args or env")
+			}
 		}
 		if !c.Enabled {
 			continue
@@ -95,7 +118,7 @@ func New(config []ServerConfig) (*Hub, error) {
 		c.Transport = strings.ToLower(strings.TrimSpace(c.Transport))
 		switch c.Transport {
 		case "stdio":
-			if strings.TrimSpace(c.Command) == "" {
+			if c.PluginID == "" && strings.TrimSpace(c.Command) == "" {
 				return nil, fmt.Errorf("MCP server %q has no command", c.ID)
 			}
 		case "http", "streamable-http":
@@ -118,7 +141,13 @@ func New(config []ServerConfig) (*Hub, error) {
 		}
 		out = append(out, c)
 	}
-	return &Hub{servers: out, sessions: map[string]*mcpSession{}}, nil
+	h := &Hub{servers: out, sessions: map[string]*mcpSession{}}
+	for _, option := range options {
+		if option != nil {
+			option(h)
+		}
+	}
+	return h, nil
 }
 
 func builtin() []Tool {
@@ -302,13 +331,48 @@ func (h *Hub) serverCall(ctx context.Context, c ServerConfig, n string, args jso
 	return out, nil
 }
 func (h *Hub) request(ctx context.Context, c ServerConfig, method string, params any, result *json.RawMessage) error {
+	if err := h.checkServer(ctx, c); err != nil {
+		return err
+	}
+	var err error
 	if scope, _ := ctx.Value(sessionScopeKey{}).(string); scope != "" {
-		return h.scopedRequest(ctx, c, scope, method, params, result)
+		err = h.scopedRequest(ctx, c, scope, method, params, result)
+	} else if c.Transport == "stdio" {
+		err = stdioRequest(ctx, c, method, params, result, h.stdioLauncher)
+	} else {
+		err = httpRequest(ctx, c, method, params, result)
 	}
-	if c.Transport == "stdio" {
-		return stdioRequest(ctx, c, method, params, result)
+	if err == nil {
+		err = h.checkServer(ctx, c)
 	}
-	return httpRequest(ctx, c, method, params, result)
+	return err
+}
+
+func (h *Hub) checkServer(ctx context.Context, c ServerConfig) error {
+	h.mu.Lock()
+	closed := h.closed
+	h.mu.Unlock()
+	if closed {
+		return errors.New("MCP runtime closed")
+	}
+	if h.serverGuard == nil {
+		return nil
+	}
+	if err := h.serverGuard(ctx, c); err != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		for key, session := range h.sessions {
+			if strings.HasPrefix(key, c.ID+"\x00") {
+				if closeErr := session.close(); closeErr != nil {
+					err = errors.Join(err, closeErr)
+				} else {
+					delete(h.sessions, key)
+				}
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 type rpcRequest struct {
@@ -339,54 +403,24 @@ func initParams() map[string]any {
 	return map[string]any{"protocolVersion": protocolVersion, "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "wechat-bot", "version": "1"}}
 }
 
-func stdioRequest(ctx context.Context, c ServerConfig, method string, params any, result *json.RawMessage) (retErr error) {
+func stdioRequest(ctx context.Context, c ServerConfig, method string, params any, result *json.RawMessage, launcher StdioLauncher) (retErr error) {
 	ctx, cancel := serverTimeout(ctx, c)
-	cmd := exec.CommandContext(ctx, c.Command, c.Args...)
-	cmd.WaitDelay = 2 * time.Second
-	// nil connects directly to the null device. An io.Discard writer would
-	// create a copy pipe which inherited descendants could keep alive.
-	cmd.Stderr = nil
-	env := os.Environ()
-	for k, v := range c.Env {
-		env = append(env, k+"="+v)
-	}
-	cmd.Env = env
-	in, err := cmd.StdinPipe()
+	defer cancel()
+	process, err := launchStdio(ctx, c, launcher)
 	if err != nil {
 		return err
 	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err = cmd.Start(); err != nil {
-		return err
-	}
-	// A descendant may inherit stdout even after the configured process is
-	// killed. Close our pipe handles at cancellation so readRPC cannot wait
-	// forever on that descendant's still-open descriptor.
-	stop := context.AfterFunc(ctx, func() {
-		_ = in.Close()
-		_ = out.Close()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-	})
-	// Some MCP servers deliberately stay alive after stdin closes. Cancel and
-	// kill before waiting so a successful short-lived request cannot stall until
-	// the request deadline merely because such a server ignores EOF.
+	in, out := process.Stdin(), process.Stdout()
+	stop := context.AfterFunc(ctx, func() { _ = process.Close() })
 	defer func() {
 		cancelled := ctx.Err()
 		stop()
-		cancel()
-		_ = in.Close()
-		_ = out.Close()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+		closeErr := process.Close()
+		if closeErr != nil {
+			retErr = errors.Join(retErr, closeErr)
 		}
-		_ = cmd.Wait()
 		if cancelled != nil && retErr != nil {
-			retErr = cancelled
+			retErr = errors.Join(cancelled, retErr)
 		}
 	}()
 	r := bufio.NewReaderSize(out, maxFrame+1)

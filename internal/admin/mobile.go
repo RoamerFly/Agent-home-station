@@ -33,6 +33,8 @@ func mobileAvailabilityMessage(err error) string {
 		return ""
 	}
 	switch err.Error() {
+	case "device_broker_runtime_registration_required":
+		return "手机原生执行器尚未完成隔离登记；已有设备和任务保留，当前不会执行实机操作。"
 	case "device_plugin_tools_unregistered":
 		return "尚未登记设备连接工具，请完成手机插件的运行环境设置。已有任务仍可查看或取消。"
 	case "device_plugin_deployment_unavailable":
@@ -59,12 +61,22 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 			fail(w, 503, "设备服务数据暂不可用，请检查设备配置和存储；原数据未覆盖")
 			return
 		}
-		plannerError := s.manager.mobileDeviceReady(r.Context())
+		plannerError := s.manager.mobilePlannerReady(r.Context())
 		plannerAvailable := plannerError == nil
 		reason := mobileAvailabilityMessage(plannerError)
-		respond(w, 200, map[string]any{"settings": s.manager.mobile.Settings(), "tasks": s.manager.mobile.List(nil), "planner_available": plannerAvailable, "planner_reason": reason})
+		nativeRegistered := s.manager.loadMobileNativeRegistration().Validate(r.Context(), s.manager.native.Account()) == nil
+		nativeReason := ""
+		if !nativeRegistered {
+			nativeReason = "手机原生执行器尚未完成隔离登记；已登记设备和历史任务保留，当前不会执行实机操作。"
+		}
+		respond(w, 200, map[string]any{"settings": s.manager.mobile.Settings(), "tasks": s.manager.mobile.List(nil), "planner_available": plannerAvailable, "planner_reason": reason,
+			"native_broker_registered": nativeRegistered, "native_broker_reason": nativeReason})
 	}))
 	mux.HandleFunc("GET /api/mobile/devices", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if err := s.manager.mobileDeviceReady(r.Context()); err != nil {
+			fail(w, 409, mobileAvailabilityMessage(err))
+			return
+		}
 		value, err := s.manager.mobile.Devices(r.Context())
 		if err != nil {
 			fail(w, 409, "设备桥未启用或无法连接，请检查桥接命令和 ADB 状态")

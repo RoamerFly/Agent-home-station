@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -73,72 +74,7 @@ type Executor struct {
 }
 
 func (e *Executor) Start(ctx context.Context, p pluginhost.Package, g pluginhost.Grant) (pluginhost.Session, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if e.Resolve == nil {
-		return nil, errors.New("plugin launch resolver unavailable")
-	}
-	c := pluginhost.Invocation{Account: g.Account, Thread: "host", Requester: "administrator", Purpose: "start installed plugin", RequestKey: "host-start"}
-	if err := pluginhost.Authorize(p, g, c, p.Permissions); err != nil {
-		return nil, err
-	}
-	if p.Runtime.Transport != "mcp-stdio" {
-		return nil, errors.New("local executor requires mcp-stdio transport")
-	}
-	platform := false
-	for _, name := range p.Platforms {
-		if name == runtime.GOOS+"-"+runtime.GOARCH || name == runtime.GOOS {
-			platform = true
-		}
-	}
-	if !platform {
-		return nil, errors.New("plugin does not support current platform")
-	}
-	// Network, device and workspace permissions select per-call host proxies.
-	// They never grant sockets, devices, workspace mounts or process execution
-	// to this sandbox. Unsupported permissions, including direct GPU access,
-	// fail closed; the host separately authorizes every proxy operation.
-	for _, permission := range g.Permissions {
-		if permission != "artifact.read" && permission != "artifact.write" && permission != "network" && permission != "model.invoke" && permission != "device" && permission != "workspace.read" && permission != "workspace.write" && permission != "process.execute" {
-			return nil, errors.New("plugin sandbox capability not implemented: " + permission)
-		}
-	}
-	spec, err := e.Resolve(ctx, p, g)
-	if err != nil {
-		return nil, err
-	}
-	if err = validateSpec(spec); err != nil {
-		return nil, err
-	}
-	if err = validateResources(p, g, spec); err != nil {
-		return nil, err
-	}
-	if err = validateHostMetadata(spec.HostMetadata); err != nil {
-		return nil, err
-	}
-	verified, err := pluginhost.Verify(spec.PackageDir)
-	if err != nil {
-		return nil, err
-	}
-	if !sameVerifiedPackage(p, verified) {
-		return nil, errors.New("installed package changed before launch")
-	}
-	if p.Runtime.Entrypoint == "" {
-		return nil, errors.New("plugin entrypoint missing")
-	}
-	entry := filepath.Join(spec.PackageDir, filepath.FromSlash(p.Runtime.Entrypoint))
-	if _, ok := p.Files[p.Runtime.Entrypoint]; !ok {
-		return nil, errors.New("entrypoint is not indexed")
-	}
-	argv := []string{entry}
-	if strings.EqualFold(filepath.Ext(entry), ".py") {
-		if spec.Python == "" || !inRoots(spec.Python, spec.RuntimeRoots) {
-			return nil, errors.New("approved Python runtime missing")
-		}
-		argv = []string{spec.Python, "-I", "-B", "-u", entry}
-	}
-	cmd, cleanup, err := isolatedCommand(spec, argv)
+	cmd, cleanup, spec, err := e.prepareCommand(ctx, p, g)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +87,81 @@ func (e *Executor) Start(ctx context.Context, p pluginhost.Package, g pluginhost
 		return nil, err
 	}
 	return s, nil
+}
+
+// Both protocol sessions and host-bound streams use the same complete package,
+// permission, resource and platform policy before obtaining a command.
+func (e *Executor) prepareCommand(ctx context.Context, p pluginhost.Package, g pluginhost.Grant) (*exec.Cmd, func(), LaunchSpec, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, LaunchSpec{}, err
+	}
+	if e.Resolve == nil {
+		return nil, nil, LaunchSpec{}, errors.New("plugin launch resolver unavailable")
+	}
+	c := pluginhost.Invocation{Account: g.Account, Thread: "host", Requester: "administrator", Purpose: "start installed plugin", RequestKey: "host-start"}
+	if err := pluginhost.Authorize(p, g, c, p.Permissions); err != nil {
+		return nil, nil, LaunchSpec{}, err
+	}
+	if p.Runtime.Transport != "mcp-stdio" {
+		return nil, nil, LaunchSpec{}, errors.New("local executor requires mcp-stdio transport")
+	}
+	platform := false
+	for _, name := range p.Platforms {
+		if name == runtime.GOOS+"-"+runtime.GOARCH || name == runtime.GOOS {
+			platform = true
+		}
+	}
+	if !platform {
+		return nil, nil, LaunchSpec{}, errors.New("plugin does not support current platform")
+	}
+	// Network, device and workspace permissions select per-call host proxies.
+	// They never grant sockets, devices, workspace mounts or process execution
+	// to this sandbox. Unsupported permissions, including direct GPU access,
+	// fail closed; the host separately authorizes every proxy operation.
+	for _, permission := range g.Permissions {
+		if permission != "artifact.read" && permission != "artifact.write" && permission != "network" && permission != "model.invoke" && permission != "device" && permission != "workspace.read" && permission != "workspace.write" && permission != "process.execute" {
+			return nil, nil, LaunchSpec{}, errors.New("plugin sandbox capability not implemented: " + permission)
+		}
+	}
+	spec, err := e.Resolve(ctx, p, g)
+	if err != nil {
+		return nil, nil, LaunchSpec{}, err
+	}
+	if err = validateSpec(spec); err != nil {
+		return nil, nil, LaunchSpec{}, err
+	}
+	if err = validateResources(p, g, spec); err != nil {
+		return nil, nil, LaunchSpec{}, err
+	}
+	if err = validateHostMetadata(spec.HostMetadata); err != nil {
+		return nil, nil, LaunchSpec{}, err
+	}
+	verified, err := pluginhost.Verify(spec.PackageDir)
+	if err != nil {
+		return nil, nil, LaunchSpec{}, err
+	}
+	if !sameVerifiedPackage(p, verified) {
+		return nil, nil, LaunchSpec{}, errors.New("installed package changed before launch")
+	}
+	if p.Runtime.Entrypoint == "" {
+		return nil, nil, LaunchSpec{}, errors.New("plugin entrypoint missing")
+	}
+	entry := filepath.Join(spec.PackageDir, filepath.FromSlash(p.Runtime.Entrypoint))
+	if _, ok := p.Files[p.Runtime.Entrypoint]; !ok {
+		return nil, nil, LaunchSpec{}, errors.New("entrypoint is not indexed")
+	}
+	argv := []string{entry}
+	if strings.EqualFold(filepath.Ext(entry), ".py") {
+		if spec.Python == "" || !inRoots(spec.Python, spec.RuntimeRoots) {
+			return nil, nil, LaunchSpec{}, errors.New("approved Python runtime missing")
+		}
+		argv = []string{spec.Python, "-I", "-B", "-u", entry}
+	}
+	cmd, cleanup, err := isolatedCommand(spec, argv)
+	if err != nil {
+		return nil, nil, LaunchSpec{}, err
+	}
+	return cmd, cleanup, spec, nil
 }
 
 const maxHostMetadataBytes = 16 << 10

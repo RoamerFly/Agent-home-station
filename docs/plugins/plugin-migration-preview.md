@@ -89,12 +89,15 @@ Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所
   `explicit_bridge_fallback_policy_needed`，等待管理员选择。既有 `channels-bindings.json` 仍由宿主
   只读、按账号/会话/消息（或受限对象别名）查询；本轮不复制它、不将其交给插件，也不创建新的绑定。
 - `external-tools`：这是**部分迁移**，仅覆盖旧 `plugins.json` 中已启用、且在 MCP 总开关开启时声明为
-  同步 HTTP 的工具（没有 `job` 和 `poll`）。官方包必须明确声明空配置、`network` 权限和 ready 的
-  `external.http_request` 能力；应用时只安装空配置且保持禁用，管理员随后才可显式启用。旧端点、请求模板、
+  同步 HTTP（没有 `job` 和 `poll`）或完整 `job` + `poll` 生命周期的工具。前者要求官方包声明 ready 的
+  `external.http_request`，后者还必须明确声明 ready 的 `external.job_request`；二者均要求空配置和 `network`
+  权限。应用时只安装空配置且保持禁用，管理员随后才可显式启用。旧端点、请求模板、
   MCP 服务、凭据与其他声明始终留在宿主的 `plugins.json`，公开计划只以
   `plugins.json:host_retained_declarations_and_credentials` 标记该边界，绝不输出其内容或把密钥复制到交接文件。
-  仅 MCP、仅异步/轮询工具会以 `no_matching_sync_external_tools` 阻塞，不能被伪装为同步工具；混合声明时也只覆盖
-  同步 HTTP 这一项，不表示全部外部工具已经迁完。`plugins_json` 的原始字节摘要进入 Go 宿主的
+  仅 MCP、只有 `poll`（没有 `job`）或其他不完整声明会以 `no_matching_supported_external_tools` 阻塞，不能被伪装为
+  已支持工具；混合声明时只覆盖已支持的 HTTP 或 Job+Poll 项，不表示全部外部工具已经迁完。旧的外部任务不会在预演中
+  被重建、补写来源或重放：保留原 ID，缺少不可变来源或配置摘要时由运行时转为 `needs_review`，预演仅以
+  `legacy_external_tasks:origin_and_configuration_proof_required` 提示需核对。`plugins_json` 的原始字节摘要进入 Go 宿主的
   `source_hashes` 和各步骤的 `apply_source_hash`，因此管理员确认后若旧账本有任何变化，必须重新预演。
 
 `required_missing`、`unmapped_legacy_fields` 和插件未 ready 状态必须在真正迁移前解决。对本地

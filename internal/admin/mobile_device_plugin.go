@@ -36,9 +36,21 @@ type mobileDeviceBrokerOpener func(context.Context, devicebroker.Options) (devic
 
 var openMobileDeviceBroker mobileDeviceBrokerOpener = devicebroker.Open
 
+func (m *Manager) loadMobileNativeRegistration() *devicebroker.RuntimeRegistration {
+	if m == nil {
+		return nil
+	}
+	value, _ := m.pluginRuntimeBindings.Load("mobile-control:native")
+	registration, _ := value.(*devicebroker.RuntimeRegistration)
+	return registration
+}
+
 // mobileDeviceReady is deliberately non-starting. Discovery and task queueing
 // must not start a native process, enable a package, or widen a device grant.
 func (m *Manager) mobileDeviceReady(ctx context.Context) error {
+	if err := m.loadMobileNativeRegistration().Validate(ctx, m.native.Account()); err != nil {
+		return errors.New("device_broker_runtime_registration_required")
+	}
 	store, err := m.packageStore()
 	if err != nil {
 		return errors.New("device_plugin_required")
@@ -112,6 +124,10 @@ type mobileDevicePluginBridge struct {
 	options      pluginruntime.Options
 	stateDir     string
 	brokerOpener mobileDeviceBrokerOpener
+	// Host-only injection. The existing ADB bridge has not been migrated to the
+	// mandatory isolated protocol; no production registration is inferred from
+	// a profile, package presence, fake opener, or deployment command.
+	nativeRegistration *devicebroker.RuntimeRegistration
 
 	mu           sync.Mutex
 	broker       devicebroker.Bridge
@@ -162,12 +178,15 @@ func (m *Manager) newMobilePluginBridge(ctx context.Context, task mobile.Task, s
 	return &mobileDevicePluginBridge{
 		manager: m, store: store, controller: controller, installed: installed,
 		task: task, settings: settings, packageDir: packageDir, options: deployment,
-		stateDir: stateDir, brokerOpener: openMobileDeviceBroker,
+		stateDir: stateDir, brokerOpener: openMobileDeviceBroker, nativeRegistration: m.loadMobileNativeRegistration(),
 		observations: map[string]mobile.Observation{}, artifacts: map[string]mobile.Artifact{},
 	}, nil
 }
 
 func (m *Manager) mobileDeviceCurrent(task mobile.Task, settings mobile.Settings) error {
+	if m == nil || m.loadMobileNativeRegistration().Validate(context.Background(), m.native.Account()) != nil {
+		return errors.New("device_broker_runtime_registration_required")
+	}
 	if m == nil || m.mobile == nil || !settings.Enabled {
 		return errors.New("device_plugin_authorization_changed")
 	}
@@ -444,6 +463,9 @@ func deviceRequestStep(request map[string]any) (mobile.Step, bool) {
 }
 
 func (b *mobileDevicePluginBridge) mobilePluginCurrent(ctx context.Context, task mobile.Task, settings mobile.Settings, binding string, invocation pluginhost.Invocation, capability string) error {
+	if b.nativeRegistration == nil || b.nativeRegistration != b.manager.loadMobileNativeRegistration() {
+		return errors.New("device_broker_runtime_registration_changed")
+	}
 	if err := b.manager.mobileDeviceCurrent(task, settings); err != nil {
 		return err
 	}
@@ -495,7 +517,8 @@ func (b *mobileDevicePluginBridge) ensureBroker(ctx context.Context, task mobile
 	// the isolated package never receives an ADB path or a broader mount.
 	adbRoots := append([]string{}, b.options.DeviceToolsRoots...)
 	options := devicebroker.Options{
-		Python: b.options.Python, PackageDirectory: b.packageDir,
+		Registration: b.nativeRegistration,
+		Python:       b.options.Python, PackageDirectory: b.packageDir,
 		// CatalogDirectory is <workspace>/plugins. The old profile can only
 		// reference this fixed deployment compatibility entry; accepting an
 		// arbitrary Legacy.Args script would silently re-authorize a different

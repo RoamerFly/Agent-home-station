@@ -33,13 +33,17 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             (directory / "plugin.json").write_text(json.dumps(manifest), encoding="utf8")
         return repo
 
-    def add_declared_external_sync(self, repo):
+    def add_declared_external_sync(self, repo, *, jobs=False):
         external = repo / "plugins" / "external-tools"
         (external / "config.schema.json").write_text(json.dumps({"type": "object", "properties": {}, "additionalProperties": False}), encoding="utf8")
-        (external / "capabilities.json").write_text(json.dumps({"capabilities": [{
+        capabilities = [{
             "id": "external.http_request", "implementation": "ready", "discoverable": True,
             "async": False, "permissions": ["network"],
-        }]}), encoding="utf8")
+        }]
+        if jobs:
+            capabilities.append({"id": "external.job_request", "implementation": "ready", "discoverable": True,
+                                 "async": False, "permissions": ["network"]})
+        (external / "capabilities.json").write_text(json.dumps({"capabilities": capabilities}), encoding="utf8")
 
     def write_external_ledger(self, root, *, mode="sync"):
         secret = "external-secret-must-not-appear"
@@ -50,6 +54,10 @@ class PluginMigrationPreviewTests(unittest.TestCase):
         elif mode == "async":
             manifest = {"id": "legacy-async", "name": "Legacy async", "tools": [{
                 "name": "render", "url": "https://private.example/jobs", "job": {"id_path": "job_id"}, "poll": {"url": "https://private.example/jobs/{{result.job_id}}"},
+            }]}
+        elif mode == "poll-only":
+            manifest = {"id": "legacy-poll", "name": "Legacy poll only", "tools": [{
+                "name": "observe", "url": "https://private.example/jobs", "poll": {"url": "https://private.example/jobs/{{result.job_id}}"},
             }]}
         elif mode == "mcp":
             manifest = {"id": "legacy-mcp", "name": "Legacy MCP", "mcp": {"transport": "http", "url": "https://private.example/mcp"}}
@@ -202,8 +210,26 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertFalse(any(key.startswith("external-tools.") for key in handoff["accounts"][0]["secrets"]))
             self.assertEqual(before, {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()})
 
-    def test_external_mcp_or_async_only_is_blocked_without_provider_substitution(self):
-        for mode in ("mcp", "async"):
+    def test_external_job_request_migrates_empty_configuration_but_requires_task_proof_review(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_external_sync(repo, jobs=True)
+            root, _ = self.make_root(base)
+            secret = self.write_external_ledger(root, mode="async")
+            report, handoff = preview.build_preview(root, repo, "main")
+            external = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
+            self.assertEqual(external["status"], "ready_for_administrator_review")
+            self.assertTrue(external["legacy_enabled"])
+            self.assertTrue(external["eligible_to_enable_after_confirmation"])
+            self.assertEqual(external["values"], {})
+            self.assertEqual(external["secrets"], {})
+            self.assertIn("legacy_external_tasks:origin_and_configuration_proof_required", external["unmapped_legacy_fields"])
+            self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
+            self.assertFalse(any(key.startswith("external-tools.") for key in handoff["accounts"][0]["secrets"]))
+
+    def test_external_mcp_or_poll_only_is_blocked_without_provider_substitution(self):
+        for mode in ("mcp", "poll-only"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 base = Path(temporary)
                 repo = self.make_repo(base)
@@ -218,7 +244,7 @@ class PluginMigrationPreviewTests(unittest.TestCase):
                 self.assertFalse(external["proposed_enabled"])
                 self.assertEqual(external["values"], {})
                 self.assertEqual(external["secrets"], {})
-                self.assertIn("no_matching_sync_external_tools", external["required_missing"])
+                self.assertIn("no_matching_supported_external_tools", external["required_missing"])
                 self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
                 self.assertFalse(any(key.startswith("external-tools.") for key in handoff["accounts"][0]["secrets"]))
 
@@ -232,6 +258,20 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             external = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
             self.assertEqual(external["status"], "blocked")
             self.assertIn("official_sync_external_adapter_not_declared_by_external_tools_plugin", external["required_missing"])
+
+    def test_external_job_requires_reviewed_job_capability(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_external_sync(repo)
+            root, _ = self.make_root(base)
+            self.write_external_ledger(root, mode="async")
+            report, _ = preview.build_preview(root, repo, "main")
+            external = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
+            self.assertEqual(external["status"], "blocked")
+            self.assertFalse(external["legacy_enabled"])
+            self.assertIn("no_matching_supported_external_tools", external["required_missing"])
+            self.assertIn("official_external_job_adapter_not_declared_by_external_tools_plugin", external["required_missing"])
 
     def test_project_development_does_not_expand_read_or_files_scope(self):
         with tempfile.TemporaryDirectory() as temporary:
