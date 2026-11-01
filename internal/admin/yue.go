@@ -544,8 +544,27 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		return "", err
 	}
 	var listening map[string]any
+	var listeningAuthority func(context.Context) error
 	if spec != nil && spec.VocalGender != "" {
-		listening = p.reviewSongAudio(ctx, audio, spec.VocalGender)
+		listening, listeningAuthority = p.reviewSongAudio(ctx, audio, spec.VocalGender, in.ID, spec, in.Kind)
+	} else {
+		origin, err := p.newMusicAudioOrigin(ctx, audio, "", in.ID, spec, in.Kind)
+		if err != nil {
+			return "", err
+		}
+		listeningAuthority = origin.Check
+	}
+	if listeningAuthority != nil {
+		if err := listeningAuthority(ctx); err != nil {
+			return "", err
+		}
+		previousAuthority := ctx
+		ctx = withOutputAuthority(ctx, func(current context.Context) error {
+			if err := checkOutputAuthority(previousAuthority); err != nil {
+				return err
+			}
+			return listeningAuthority(current)
+		})
 	}
 	result, e := p.stageSongOutputSpec(ctx, audio, typ, title, in.Kind, spec)
 	if e == nil {

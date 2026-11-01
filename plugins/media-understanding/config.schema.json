@@ -81,6 +81,23 @@
       "description": "选择本机已登记的本地 ASR 资源配置文件；仅在“本地识别”时使用。",
       "minLength": 1,
       "maxLength": 128
+    },
+    "audio_review_endpoint": {
+      "type": "string",
+      "title": "音频内容观察接口地址",
+      "description": "可选。完整 HTTPS 音频理解接口地址；未配置时不影响图片观察和语音转写。"
+    },
+    "audio_review_key": {
+      "type": "string",
+      "title": "音频内容观察接口密钥",
+      "x-secret": true,
+      "x-host-only": true
+    },
+    "audio_review_model": {
+      "type": "string",
+      "title": "音频内容观察模型",
+      "minLength": 1,
+      "maxLength": 128
     }
   },
   "additionalProperties": false

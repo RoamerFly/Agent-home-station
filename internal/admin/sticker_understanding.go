@@ -22,6 +22,11 @@ func (a mediaUnderstanding) understandSticker(ctx context.Context, m linuxnative
 	if !a.manager.Config().Behavior.ReadImages {
 		return "", errors.New("media_understanding_disabled")
 	}
+	// Do not download a private sticker merely to discover that the only image
+	// observer is not installed, disabled, or unconfigured.
+	if err := a.manager.mediaImageObservationReady(ctx); err != nil {
+		return "", err
+	}
 	unavailable := func(reason string) (string, error) {
 		a.manager.record(bot.Record{Event: "sticker_observation_unavailable", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, Status: "unavailable", Reason: reason, Origin: "media"})
 		return "[收到表情包；本次画面读取失败，尚无文字、动作或情绪观察。结合前后聊天决定是否回应，原因：" + reason + "]", nil

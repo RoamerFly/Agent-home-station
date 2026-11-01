@@ -110,6 +110,45 @@ class PluginMigrationPreviewTests(unittest.TestCase):
                 self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()})
                 self.assertEqual(json.loads(path.read_text(encoding="utf8"))["asr_local_model"], legacy)
 
+    def test_audio_review_maps_host_only_key_without_changing_media_enablement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            root, secret = self.make_root(base)
+            speech_path = root / "speech-config.json"
+            speech = json.loads(speech_path.read_text(encoding="utf8"))
+            speech["endpoint"] = "https://dashscope-intl.aliyuncs.com/"
+            speech_path.write_text(json.dumps(speech), encoding="utf8")
+            before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            report, handoff = preview.build_preview(root, repo, "main")
+            media = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "media-understanding")
+            self.assertEqual(media["values"]["audio_review_endpoint"], "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions")
+            self.assertEqual(media["values"]["audio_review_model"], "qwen3.8-omni-flash")
+            self.assertEqual(media["secrets"]["audio_review_key"], {"source_field": "speech-config.json:key", "present": True, "sha256": hashlib.sha256(secret.encode()).hexdigest()})
+            self.assertNotIn("audio_review_key", media["values"])
+            self.assertEqual(handoff["accounts"][0]["secrets"]["media-understanding.audio_review_key"], secret)
+            self.assertTrue(media["legacy_enabled"], "the existing ASR state, not the review key, controls media enablement")
+            self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
+            self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
+    def test_empty_audio_review_key_omits_optional_listening_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            root, _ = self.make_root(base)
+            speech_path = root / "speech-config.json"
+            speech = json.loads(speech_path.read_text(encoding="utf8"))
+            speech["key"] = ""
+            speech["asr_enabled"] = False
+            speech_path.write_text(json.dumps(speech), encoding="utf8")
+            report, handoff = preview.build_preview(root, repo, "main")
+            media = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "media-understanding")
+            self.assertNotIn("audio_review_endpoint", media["values"])
+            self.assertNotIn("audio_review_model", media["values"])
+            self.assertNotIn("audio_review_key", media["secrets"])
+            self.assertNotIn("media-understanding.audio_review_key", handoff["accounts"][0]["secrets"])
+            self.assertNotIn("audio_review_key", media["required_missing"])
+
     def test_non_local_asr_does_not_select_profile_or_silently_convert_fallback(self):
         for backend, enabled in (("bailian", True), ("local_then_bailian", True), ("local", False)):
             with self.subTest(backend=backend, enabled=enabled), tempfile.TemporaryDirectory() as temporary:

@@ -21,7 +21,12 @@ import (
 	catalog "wechat-bot/plugins"
 )
 
-const pluginMigrationPreviewVersion = 1
+const (
+	pluginMigrationPreviewVersion = 1
+	// legacyAudioReviewModel is an immutable record of the legacy
+	// ReviewAudio route, not a default for new media plugin configurations.
+	legacyAudioReviewModel = "qwen3.8-omni-flash"
+)
 
 type pluginMigrationSecret struct {
 	SourceField string `json:"source_field"`
@@ -348,7 +353,18 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 			mediaRequired = append(mediaRequired, "asr_backend:unsupported_legacy_value")
 		}
 	}
-	media := migrationStep("media-understanding", packages, visionEnabled || asrEnabled, mediaValues, map[string]pluginMigrationSecret{"vision_key": visionSecret, "asr_key": asrSecret}, mediaUpdate, mediaRequired, nil, profile, sources)
+	mediaSecrets := map[string]pluginMigrationSecret{"vision_key": visionSecret, "asr_key": asrSecret}
+	// Legacy ReviewAudio always used the configured DashScope regional root and
+	// the fixed Omni Flash model. Keep it separate from vision/ASR: possessing a
+	// legacy key must not make the media plugin eligible to auto-enable.
+	if speechKey != "" {
+		audioReviewSecret, audioReviewKey := migrationSecret(speech.Key, "speech-config.json:key")
+		mediaValues["audio_review_endpoint"] = migrationValue(migrationEndpoint(speech.Endpoint, "/compatible-mode/v1/chat/completions"))
+		mediaValues["audio_review_model"] = migrationValue(legacyAudioReviewModel)
+		mediaUpdate.Secrets["audio_review_key"] = audioReviewKey
+		mediaSecrets["audio_review_key"] = audioReviewSecret
+	}
+	media := migrationStep("media-understanding", packages, visionEnabled || asrEnabled, mediaValues, mediaSecrets, mediaUpdate, mediaRequired, nil, profile, sources)
 
 	ttsSecret, ttsKey := migrationSecret(speech.Key, "speech-config.json:key")
 	speechValues := map[string]json.RawMessage{"tts_endpoint": migrationValue(migrationEndpoint(speech.Endpoint, "/api/v1/services/audio/tts/SpeechSynthesizer")), "tts_model": migrationValue(speech.TTSModel), "default_voice": migrationValue(speech.Voice), "default_instruction": migrationValue(speech.Instruction)}

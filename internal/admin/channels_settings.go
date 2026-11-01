@@ -273,14 +273,9 @@ func (s *Server) channelsRoutes(mux *http.ServeMux) {
 			fail(w, 403, "请先开启视频理解权限")
 			return
 		}
-		provider, e := s.manager.makeModel(s.manager.runtimeConfig())
-		if e != nil {
-			fail(w, 400, "请先配置理解模型")
-			return
-		}
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 		defer cancel()
-		text, e := (mediaUnderstanding{manager: s.manager, provider: provider}).understandChannels(ctx, msg)
+		text, e := (mediaUnderstanding{manager: s.manager}).understandChannels(ctx, msg)
 		if e != nil {
 			respond(w, 200, map[string]any{"observed": false, "reason": e.Error(), "wechat_sends": 0})
 			return

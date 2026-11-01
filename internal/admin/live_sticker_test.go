@@ -47,11 +47,7 @@ func TestLiveReceivedStickerDiagnostic(t *testing.T) {
 	f := setup(t)
 	f.manager.config = c
 	f.manager.native = native
-	provider, err := f.manager.makeModel(c)
-	if err != nil {
-		t.Fatal("configured provider unavailable")
-	}
-	text, err := (mediaUnderstanding{manager: f.manager, provider: provider}).Analyze(ctx, m)
+	text, err := (mediaUnderstanding{manager: f.manager}).Analyze(ctx, m)
 	if err != nil || !strings.HasPrefix(text, "[收到表情包的视觉观察") {
 		t.Fatal("real sticker observation failed", err)
 	}

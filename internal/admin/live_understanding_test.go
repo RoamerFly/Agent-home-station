@@ -91,7 +91,7 @@ func TestLiveReceivedImageObservation(t *testing.T) {
 	if e != nil {
 		t.Fatal("vision provider unavailable")
 	}
-	observation, e := (mediaUnderstanding{manager: f.manager, provider: provider}).Analyze(ctx, m)
+	observation, e := (mediaUnderstanding{manager: f.manager}).Analyze(ctx, m)
 	if e != nil {
 		t.Fatal("actual image reading failed", e)
 	}

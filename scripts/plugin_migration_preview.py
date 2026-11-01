@@ -25,6 +25,8 @@ MAX_JSON = 1 << 20
 SPEECH_PATH = "/api/v1/services/audio/tts/SpeechSynthesizer"
 ASR_PATH = "/api/v1/services/aigc/multimodal-generation/generation"
 MUSIC_PATH = "/api/v1/services/audio/music/generation"
+AUDIO_REVIEW_PATH = "/compatible-mode/v1/chat/completions"
+AUDIO_REVIEW_MODEL = "qwen3.8-omni-flash"
 
 
 def _sha256(data: bytes) -> str:
@@ -190,15 +192,25 @@ def _media_plan(repo: Path, config: dict[str, Any], speech: dict[str, Any]) -> t
             required.append("asr_backend:legacy_local_then_bailian_requires_explicit_choice")
         else:
             required.append("asr_backend:unsupported_legacy_value")
+    media_secrets: dict[str, Any] = {"vision_key": key_report, "asr_key": asr_key_report}
+    handoff: dict[str, str] = {}
+    if api_key:
+        handoff["media-understanding.vision_key"] = api_key
+    if asr_enabled and legacy_backend == "bailian" and asr_key:
+        handoff["media-understanding.asr_key"] = asr_key
+    # Legacy ReviewAudio used the existing regional root, credential and fixed
+    # Omni Flash model. It is now an optional media.listen route, not evidence
+    # that media-understanding was previously enabled.
+    if asr_key:
+        audio_key_report, audio_key = _secret(speech.get("key"), "speech-config.json:key")
+        values.update({"audio_review_endpoint": _join_endpoint(_safe_text(speech.get("endpoint")), AUDIO_REVIEW_PATH), "audio_review_model": AUDIO_REVIEW_MODEL})
+        media_secrets["audio_review_key"] = audio_key_report
+        if audio_key:
+            handoff["media-understanding.audio_review_key"] = audio_key
     enabled = vision_enabled or asr_enabled
     step = _step("media-understanding", _package(repo, "media-understanding"), enabled, values,
-                 {"vision_key": key_report, "asr_key": asr_key_report}, required, profile_id=profile_id)
-    secrets: dict[str, str] = {}
-    if api_key:
-        secrets["media-understanding.vision_key"] = api_key
-    if asr_enabled and legacy_backend == "bailian" and asr_key:
-        secrets["media-understanding.asr_key"] = asr_key
-    return step, secrets
+                 media_secrets, required, profile_id=profile_id)
+    return step, handoff
 
 
 def _official_deepseek(config: dict[str, Any]) -> bool:

@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
@@ -35,6 +37,12 @@ type mediaObservation struct {
 }
 type mediaPluginPolicy struct {
 	*receivedSharePolicy
+	manager                        *Manager
+	store                          *pluginhost.Store
+	invocationValue                pluginhost.Invocation
+	originCheck                    func(context.Context, pluginhost.Job, pluginhost.Capability) error
+	packageDigest, packageVersion  string
+	completedJob                   pluginhost.Job
 	mu                             sync.Mutex
 	images                         []deepseek.Image
 	refs                           []mediaImageReference
@@ -51,14 +59,30 @@ func (m *Manager) newMediaPluginPolicy(ctx context.Context, message linuxnative.
 	if err != nil {
 		return nil, err
 	}
-	if prompt == "" || len(prompt) > 8192 || len(images) == 0 {
-		return nil, errors.New("media_observation_input_invalid")
-	}
-	config, err := base.store.Configuration(ctx, "media-understanding")
+	p, err := m.newMediaVisualPolicyForOrigin(ctx, base.store, base.source.Revision, prompt, images, tokens)
 	if err != nil {
 		return nil, err
 	}
-	p := &mediaPluginPolicy{receivedSharePolicy: base, prompt: prompt, configRevision: config.Revision, post: mcptools.PostPluginModel}
+	p.receivedSharePolicy = base
+	p.originCheck = base.Check
+	base.requestSuffix = agentID(string(p.arguments), strconv.Itoa(p.configRevision))
+	p.invocationValue = base.invocation()
+	return p, nil
+}
+
+func (m *Manager) newMediaVisualPolicyForOrigin(ctx context.Context, store *pluginhost.Store, revision int, prompt string, images []deepseek.Image, tokens int) (*mediaPluginPolicy, error) {
+	if store == nil || revision < 1 || prompt == "" || !utf8.ValidString(prompt) || utf8.RuneCountInString(prompt) > 8192 || len(images) == 0 {
+		return nil, errors.New("media_observation_input_invalid")
+	}
+	config, err := store.Configuration(ctx, "media-understanding")
+	if err != nil {
+		return nil, err
+	}
+	installed, err := store.Installed(ctx, "media-understanding")
+	if err != nil {
+		return nil, err
+	}
+	p := &mediaPluginPolicy{manager: m, store: store, packageDigest: installed.Digest, packageVersion: installed.Package.Version, prompt: prompt, configRevision: config.Revision, post: mcptools.PostPluginModel}
 	json.Unmarshal(config.Values["vision_model"], &p.model)
 	json.Unmarshal(config.Values["vision_backend"], &p.backend)
 	json.Unmarshal(config.Values["thinking"], &p.thinking)
@@ -93,27 +117,50 @@ func (m *Manager) newMediaPluginPolicy(ctx context.Context, message linuxnative.
 		copy := append([]byte(nil), image.Data...)
 		sum := sha256.Sum256(copy)
 		p.images = append(p.images, deepseek.Image{Data: copy, MIME: kind})
-		p.refs = append(p.refs, mediaImageReference{Ref: fmt.Sprintf("image_%d", i), SHA: hex.EncodeToString(sum[:]), Version: base.source.Revision, MIME: kind})
+		p.refs = append(p.refs, mediaImageReference{Ref: fmt.Sprintf("image_%d", i), SHA: hex.EncodeToString(sum[:]), Version: revision, MIME: kind})
 	}
 	p.arguments, _ = json.Marshal(map[string]any{"images": p.refs, "prompt": prompt, "max_tokens": p.tokens, "thinking": p.thinking, "reasoning_effort": p.effort})
-	base.requestSuffix = agentID(string(p.arguments), strconv.Itoa(config.Revision))
 	return p, nil
 }
 
+func (p *mediaPluginPolicy) invocation() pluginhost.Invocation {
+	if p.receivedSharePolicy != nil {
+		return p.receivedSharePolicy.invocation()
+	}
+	invocation := p.invocationValue
+	invocation.SourceVersions = maps.Clone(p.invocationValue.SourceVersions)
+	return invocation
+}
+
 func (p *mediaPluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
-	if err := p.receivedSharePolicy.Check(ctx, j, cap); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.manager == nil || p.store == nil || p.originCheck == nil || j.Plugin != "media-understanding" || j.Tool != "media.observe" || cap.Async || p.invocationValue.Account == "" || p.invocationValue.Account != p.manager.native.Account() {
+		return errors.New("media_observation_authorization_changed")
+	}
+	want, _ := json.Marshal(p.invocation())
+	actual, _ := json.Marshal(j.Context)
+	if !bytes.Equal(want, actual) {
+		return errors.New("media_observation_invocation_changed")
+	}
+	if err := p.originCheck(ctx, j, cap); err != nil {
 		return err
 	}
 	config, err := p.store.Configuration(ctx, j.Plugin)
 	if err != nil || config.Revision != p.configRevision {
 		return errors.New("media_plugin_configuration_changed")
 	}
+	installed, err := p.store.Installed(ctx, j.Plugin)
+	if err != nil || !installed.Enabled || installed.Removed || installed.Digest != p.packageDigest || installed.Package.Version != p.packageVersion || !p.manager.mediaObservationConfigured(ctx) {
+		return errors.New("media_plugin_version_changed")
+	}
 	if j.PackageDigest != "" {
 		i, err := p.store.Installed(ctx, j.Plugin)
 		if err != nil || i.Digest != j.PackageDigest || i.Package.Version != j.Version || j.ConfigRevision != strconv.Itoa(p.configRevision) {
 			return errors.New("media_plugin_version_changed")
 		}
-		if pluginhost.Authorize(i.Package, pluginhost.Grant{Account: p.message.AccountID, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, j.Context, i.Package.Permissions) != nil {
+		if pluginhost.Authorize(i.Package, pluginhost.Grant{Account: p.invocationValue.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, j.Context, i.Package.Permissions) != nil {
 			return errors.New("media_plugin_permissions_changed")
 		}
 	}
@@ -215,6 +262,9 @@ func (p *mediaPluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 			return nil, errors.New("media_usage_record_failed")
 		}
 		if err != nil {
+			return nil, err
+		}
+		if err := p.Check(ctx, j, cap); err != nil {
 			return nil, err
 		}
 		p.providerReply = append(json.RawMessage(nil), reply...)
@@ -331,6 +381,7 @@ func (p *mediaPluginPolicy) observe(ctx context.Context) (string, error) {
 		}
 		return "", errors.New("media_plugin_observation_needs_review")
 	}
+	p.completedJob = call.Job
 	raw, err := p.store.PrivateJobResult(ctx, call.Job, func(ctx context.Context, j pluginhost.Job) error { return p.Check(ctx, j, pluginhost.Capability{}) })
 	if err != nil {
 		return "", errors.New("media_plugin_result_unavailable")
@@ -339,32 +390,53 @@ func (p *mediaPluginPolicy) observe(ctx context.Context) (string, error) {
 	if json.Unmarshal(raw, &result) != nil || result.Text == "" {
 		return "", errors.New("media_plugin_result_invalid")
 	}
+	if err := p.checkCompleted(ctx); err != nil {
+		return "", err
+	}
 	if result.Status == "partial" {
 		return "[本次画面观察被模型截断，以下内容不完整]\n" + result.Text, nil
 	}
 	return result.Text, nil
 }
 
+func (p *mediaPluginPolicy) checkCompleted(ctx context.Context) error {
+	if p.completedJob.ID == "" || p.completedJob.State != "completed" {
+		return errors.New("media_plugin_result_unavailable")
+	}
+	return p.Check(ctx, p.completedJob, pluginhost.Capability{})
+}
+
 func (a mediaUnderstanding) observeImages(ctx context.Context, message linuxnative.Message, prompt string, images []deepseek.Image) (string, error) {
-	installed, err := a.manager.installedServiceState(ctx, "media-understanding", "media")
+	if err := a.manager.mediaImageObservationReady(ctx); err != nil {
+		return "", err
+	}
+	policy, err := a.manager.newMediaPluginPolicy(ctx, message, prompt, images, 0)
 	if err != nil {
 		return "", err
 	}
-	if installed {
-		policy, err := a.manager.newMediaPluginPolicy(ctx, message, prompt, images, 0)
-		if err != nil {
-			return "", err
-		}
-		return policy.observe(ctx)
+	return policy.observe(ctx)
+}
+
+// mediaImageObservationReady is deliberately stricter than merely having a
+// model key: incoming images may only be materialized for the installed,
+// authorized media-understanding package. It also lets callers reject before a
+// private native attachment download.
+func (m *Manager) mediaImageObservationReady(ctx context.Context) error {
+	installed, err := m.installedServiceState(ctx, "media-understanding", "media")
+	if err != nil {
+		return err
 	}
-	if a.provider == nil {
-		return "", errors.New("vision_provider_unavailable")
+	if !installed {
+		return errors.New("media_plugin_migration_required")
 	}
-	return a.provider.Vision(ctx, prompt, images)
+	if !m.mediaObservationConfigured(ctx) {
+		return errors.New("media_observation_configuration_required")
+	}
+	return nil
 }
 
 func mediaObservationReason(err error) string {
-	if err != nil && publicShareErrorCode.MatchString(err.Error()) && (strings.HasPrefix(err.Error(), "media_") || strings.HasPrefix(err.Error(), "share_") || err.Error() == "vision_provider_unavailable") {
+	if err != nil && publicShareErrorCode.MatchString(err.Error()) && (strings.HasPrefix(err.Error(), "media_") || strings.HasPrefix(err.Error(), "share_")) {
 		return err.Error()
 	}
 	return "vision_provider_failed_check_model"

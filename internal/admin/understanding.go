@@ -23,12 +23,7 @@ func formatSeconds(v float64) string               { return strconv.FormatFloat(
 func parseVideoDuration(s string) (float64, error) { return mediadecode.ParseDuration(s) }
 
 type mediaUnderstanding struct {
-	manager  *Manager
-	provider mediaVision
-}
-
-type mediaVision interface {
-	Vision(context.Context, string, []deepseek.Image) (string, error)
+	manager *Manager
 }
 
 func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) (string, error) {
@@ -73,6 +68,26 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 	}
 	if m.Type == 3 && !c.ReadImages || m.Type == 43 && !c.ReadVideos {
 		return "", errors.New("media_understanding_disabled")
+	}
+	// Image/sticker bytes are private incoming media. Verify the only supported
+	// image observer before asking the native bridge to download any bytes; do
+	// not fall back to a chat model when the media package is absent.
+	if m.Type == 3 {
+		if err := a.manager.mediaImageObservationReady(ctx); err != nil {
+			return "", err
+		}
+	}
+	if m.Type == 43 {
+		installed, stateErr := a.manager.installedServiceState(ctx, "media-understanding", "media")
+		if stateErr != nil {
+			return "", stateErr
+		}
+		if !installed {
+			return "", errors.New("media_plugin_migration_required")
+		}
+		if !a.manager.mediaObservationConfigured(ctx) && !a.manager.mediaTranscriptionConfigured(ctx) {
+			return "", errors.New("media_plugin_capability_not_configured")
+		}
 	}
 	native, ok := a.manager.native.(incomingReader)
 	if !ok {

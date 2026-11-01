@@ -10,15 +10,8 @@ import (
 	"testing"
 	"time"
 	"wechat-bot/internal/bailian"
-	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 )
-
-type observationVision func(context.Context, string, []deepseek.Image) (string, error)
-
-func (fn observationVision) Vision(ctx context.Context, prompt string, images []deepseek.Image) (string, error) {
-	return fn(ctx, prompt, images)
-}
 
 type observationNative struct {
 	*fakeNative
@@ -67,52 +60,15 @@ func TestVideoSamplingDoesNotReuseAFramePastTheVideoTrack(t *testing.T) {
 	}
 }
 
-func TestVideoObservationModalitiesAreIndependentAndScoped(t *testing.T) {
+func TestVideoObservationRejectsBeforeDownloadWithoutConfiguredPluginCapability(t *testing.T) {
 	video := observationFixture(t, "1")
-	for _, tc := range []struct {
-		name, visual string
-		wantError    bool
-	}{
-		{"visual", "合成蓝色画面", false},
-		{"visual-fail", "", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := setup(t)
-			native := &observationNative{fakeNative: f.native, data: video}
-			f.manager.native = native
-			f.manager.config.Behavior.ReadVideos = true
-			visionCalls := 0
-			vision := observationVision(func(ctx context.Context, prompt string, images []deepseek.Image) (string, error) {
-				visionCalls++
-				if len(images) < 1 || len(images) > 6 || !strings.Contains(prompt, "采样时刻") {
-					t.Error("missing temporal evidence", len(images))
-				}
-				if tc.visual == "" {
-					return "", errors.New("synthetic-provider-failure-private-detail")
-				}
-				return tc.visual, nil
-			})
-			msg := linuxnative.Message{ID: "synthetic-video", ThreadID: "filehelper", Type: 43}
-			text, err := (mediaUnderstanding{manager: f.manager, provider: vision}).Analyze(context.Background(), msg)
-			if (err != nil) != tc.wantError || native.calls != 1 || visionCalls != 1 {
-				t.Fatal(text, err, native.calls, visionCalls)
-			}
-			if tc.wantError {
-				return
-			}
-			if !strings.Contains(text, "本次读取范围为采样概览") || strings.Contains(text, "private-detail") {
-				t.Fatal("observation boundary or error redaction lost", text)
-			}
-			if tc.visual != "" && !strings.Contains(text, tc.visual) {
-				t.Fatal("successful evidence discarded", text)
-			}
-			if !strings.Contains(text, "媒体理解插件未安装或未启用语音识别") {
-				t.Fatal("missing plugin state was not disclosed", text)
-			}
-			if tc.visual == "" && !strings.Contains(text, "画面理解未完成") {
-				t.Fatal("failed modality was presented as observed", text)
-			}
-		})
+	f := setup(t)
+	native := &observationNative{fakeNative: f.native, data: video}
+	f.manager.native = native
+	f.manager.config.Behavior.ReadVideos = true
+	msg := linuxnative.Message{ID: "synthetic-video", ThreadID: "filehelper", Type: 43}
+	if _, err := (mediaUnderstanding{manager: f.manager}).Analyze(context.Background(), msg); err == nil || err.Error() != "media_plugin_migration_required" || native.calls != 0 {
+		t.Fatal("unconfigured video path downloaded media or used an old vision fallback", err, native.calls)
 	}
 }
 
@@ -133,11 +89,7 @@ func TestVideoReadPermissionAndCancellationPreventProviderCalls(t *testing.T) {
 	native := &observationNative{fakeNative: f.native}
 	f.manager.native = native
 	f.manager.config.Behavior.ReadVideos = false
-	vision := observationVision(func(context.Context, string, []deepseek.Image) (string, error) {
-		t.Fatal("provider called without permission or after cancellation")
-		return "", nil
-	})
-	a := mediaUnderstanding{manager: f.manager, provider: vision}
+	a := mediaUnderstanding{manager: f.manager}
 	if _, err := a.Analyze(context.Background(), linuxnative.Message{Type: 43}); err == nil || native.calls != 0 {
 		t.Fatal("disabled video read accessed media")
 	}
@@ -153,12 +105,12 @@ func TestVideoWithoutAudioStillKeepsVisualObservation(t *testing.T) {
 	f := setup(t)
 	f.manager.config.Behavior.ReadVideos = true
 	f.manager.native = &observationNative{fakeNative: f.native, data: video}
-	vision := observationVision(func(context.Context, string, []deepseek.Image) (string, error) {
-		return "合成无声蓝色画面", nil
-	})
-	text, err := (mediaUnderstanding{manager: f.manager, provider: vision}).Analyze(context.Background(), linuxnative.Message{ID: "silent-video", ThreadID: "filehelper", Type: 43})
-	if err != nil || !strings.Contains(text, "合成无声蓝色画面") || !strings.Contains(text, "媒体理解插件未安装或未启用语音识别") || strings.Contains(text, "[实际音轨转写") {
+	text, err := (mediaUnderstanding{manager: f.manager}).Analyze(context.Background(), linuxnative.Message{ID: "silent-video", ThreadID: "filehelper", Type: 43})
+	if err == nil || err.Error() != "media_plugin_migration_required" || text != "" {
 		t.Fatal(text, err)
+	}
+	if f.manager.native.(*observationNative).calls != 0 {
+		t.Fatal("missing plugin downloaded a silent video")
 	}
 	entries, err := os.ReadDir(f.dir)
 	if err != nil {

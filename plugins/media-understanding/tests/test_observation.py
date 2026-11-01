@@ -56,6 +56,13 @@ class ObservationTests(unittest.TestCase):
             with self.subTest(extra=extra),self.assertRaises(ValueError):
                 observe({"images":[IMAGE],**extra},CONFIG,lambda _:self.fail("model called"))
 
+    def test_prompt_limit_counts_unicode_characters_not_utf8_bytes(self):
+        accepted="图"*8192
+        self.assertEqual(observe({"images":[IMAGE],"prompt":accepted},CONFIG,lambda _:copy.deepcopy(REPLY))["status"],"observed")
+        self.assertEqual(observe({"images":[IMAGE],"prompt":"图"*3000},CONFIG,lambda _:copy.deepcopy(REPLY))["status"],"observed")
+        with self.assertRaisesRegex(ValueError,"invalid_observation_prompt"):
+            observe({"images":[IMAGE],"prompt":"图"*8193},CONFIG,lambda _:self.fail("model called"))
+
     def test_no_tool_calls_empty_response_or_moderation_as_observation(self):
         for change in ({"finish_reason":"content_filter"},{"message":{"content":"","reasoning_content":"reasoning only"}},{"message":{"content":"text","tool_calls":[{}]}}):
             reply=copy.deepcopy(REPLY);reply["choices"][0].update(change)

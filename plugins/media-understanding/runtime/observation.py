@@ -50,7 +50,9 @@ def observe(args, config, request):
             raise ValueError("invalid_media_reference")
         seen.add(ref)
     prompt = args.get("prompt", "请用中文客观描述所提供图片，读出与交流相关的文字；仅依据实际可见内容。")
-    if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode("utf8")) > 8192:
+    # Python's string length and the host's Go RuneCount use the same Unicode
+    # code-point contract. This is not a UTF-8 byte or provider-token limit.
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 8192:
         raise ValueError("invalid_observation_prompt")
     tokens = args.get("max_tokens", config.get("max_tokens", 768))
     timeout = args.get("timeout_seconds", 90)

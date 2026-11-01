@@ -42,11 +42,7 @@ func TestLiveReceivedPublicVideoObservation(t *testing.T) {
 	if err != nil {
 		t.Fatal("speech configuration unavailable")
 	}
-	provider, err := f.manager.makeModel(c)
-	if err != nil {
-		t.Fatal("vision unavailable")
-	}
-	text, err := (mediaUnderstanding{manager: f.manager, provider: provider}).Analyze(ctx, actual)
+	text, err := (mediaUnderstanding{manager: f.manager}).Analyze(ctx, actual)
 	if err != nil || !strings.Contains(text, "[微信视频实际内容观察") {
 		t.Fatal("actual video observation failed", sharedVideoReadReason(err))
 	}

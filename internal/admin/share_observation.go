@@ -47,12 +47,7 @@ func (s *Server) observeShare(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "无法核实原分享消息")
 		return
 	}
-	provider, err := m.makeModel(c)
-	if err != nil {
-		fail(w, 400, "模型配置不可用")
-		return
-	}
-	text, err := (mediaUnderstanding{manager: m, provider: provider}).Analyze(ctx, message)
+	text, err := (mediaUnderstanding{manager: m}).Analyze(ctx, message)
 	if err != nil {
 		fail(w, 502, "暂未取得分享实际内容，请查看系统日志中的读取原因")
 		return

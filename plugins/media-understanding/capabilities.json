@@ -19,7 +19,8 @@
             }
           },
           "prompt": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 8192
           },
           "max_tokens": {
             "type": "integer",
@@ -72,6 +73,44 @@
         },
         "required": [
           "audio"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true
+    },
+    {
+      "id": "media.listen",
+      "implementation": "ready",
+      "description": "观察宿主已核验的 WAV 音频内容，仅报告模型对实际提供音频的观察；不等同人工试听、声纹识别或身份确认。",
+      "permissions": [
+        "artifact.read",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "audio": {
+            "type": "object"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "audio",
+          "prompt"
         ],
         "additionalProperties": false
       },

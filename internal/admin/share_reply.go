@@ -110,7 +110,7 @@ func (s *Server) replyShare(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "模型配置不可用")
 		return
 	}
-	description, err := (mediaUnderstanding{manager: m, provider: provider}).Analyze(ctx, message)
+	description, err := (mediaUnderstanding{manager: m}).Analyze(ctx, message)
 	if err != nil || !hasActualShareObservation(description) {
 		finish("stopped", "shared_video_observation_unavailable")
 		fail(w, 422, "尚未取得分享实际内容，未发送仅凭标题的补充回复")

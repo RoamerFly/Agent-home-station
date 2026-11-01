@@ -67,7 +67,7 @@ func TestOfficialContracts(t *testing.T) {
 					t.Fatal("web runtime not connected")
 				}
 				if d.Name() != "web-search" {
-					want := map[string]bool{"media.observe": true, "media.transcribe": true}
+					want := map[string]bool{"media.observe": true, "media.transcribe": true, "media.listen": true}
 					if d.Name() == "speech" {
 						want = map[string]bool{"speech.synthesize": true}
 					}
@@ -112,6 +112,9 @@ func TestOfficialContracts(t *testing.T) {
 							}
 							if d.Name() == "music" && (cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != "model.invoke") {
 								t.Fatal("music generation must remain synchronous and use only model proxy")
+							}
+							if d.Name() == "media-understanding" && (cap.Async || len(cap.Permissions) != 2 || cap.Permissions[0] != "artifact.read" || cap.Permissions[1] != "model.invoke") {
+								t.Fatal("media capability must remain synchronous and use only artifact/model proxies", cap.ID)
 							}
 							delete(want, cap.ID)
 						} else if cap.Implementation != "migration-pending" || cap.Discoverable {

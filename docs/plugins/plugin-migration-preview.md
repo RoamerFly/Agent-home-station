@@ -60,6 +60,10 @@ Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所
   Store、不启用插件、不启动解释器，也不给旧配置回写默认值。
   远程后端不写入 `local_asr_profile_id`。`local_then_bailian` 仍标为
   `asr_backend:legacy_local_then_bailian_requires_explicit_choice`，不会静默改成本地后端或自动填入 profile。
+  旧 `bailian.Client.ReviewAudio` 不再保留为主体设置：只要旧 `speech-config.json:key` 存在，预演会把同一地域根映射为
+  `audio_review_endpoint=<endpoint>/compatible-mode/v1/chat/completions`、固定
+  `audio_review_model=qwen3.8-omni-flash`，并以仅宿主可见的 `audio_review_key` 导入。公开计划只显示该密钥来自
+  `speech-config.json:key`、是否存在及其 SHA-256；它不会输出密钥正文。此映射供新的 `media.listen` 音频内容观察使用，和视觉、ASR 独立，且不会仅因旧 key 存在而改变媒体插件原有的启用资格。旧 key 为空时，预演省略这三个听感字段，不阻断已有视觉或 ASR 迁移。
 - `web-search`：保留 MCP 开关。当前插件没有官方 DeepSeek 付费检索配置时，带官方 DeepSeek key
   的旧账号会被标为 `blocked`，不会被静默替换为公共搜索。
 - `share-reader`：映射视频号 cookie 与助手 cookie 的存在性和私密导入项。仅当已审核的插件

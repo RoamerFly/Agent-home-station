@@ -11,6 +11,9 @@ spec.loader.exec_module(observation)
 asr_spec = importlib.util.spec_from_file_location("transcription", Path(__file__).with_name("transcription.py"))
 transcription = importlib.util.module_from_spec(asr_spec)
 asr_spec.loader.exec_module(transcription)
+audio_spec = importlib.util.spec_from_file_location("audio_observation", Path(__file__).with_name("audio_observation.py"))
+audio_observation = importlib.util.module_from_spec(audio_spec)
+audio_spec.loader.exec_module(audio_observation)
 FRAME_LIMIT = 8 * 1024 * 1024
 
 
@@ -72,7 +75,7 @@ class Wire:
                     if not isinstance(host_metadata, dict):
                         raise ValueError("invalid_host_metadata")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "media-understanding", "version": "0.1.3"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "media-understanding", "version": "0.2.0"}}
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/call" and initialized:
@@ -84,6 +87,8 @@ class Wire:
                         result = observation.observe(params.get("arguments"), configuration, lambda params: self.host("wechat/model_request", params))
                     elif params.get("name") == "media.transcribe":
                         result = transcription.transcribe(params.get("arguments"), configuration, host_metadata, self.host)
+                    elif params.get("name") == "media.listen":
+                        result = audio_observation.observe(params.get("arguments"), configuration, lambda params: self.host("wechat/model_request", params))
                     else:
                         raise ValueError("capability_unavailable")
                 else:

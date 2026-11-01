@@ -63,10 +63,6 @@ func TestLiveChannelsActualObservationWithoutWechatSend(t *testing.T) {
 	if err != nil {
 		t.Fatal("speech config unavailable")
 	}
-	provider, err := f.manager.makeModel(c)
-	if err != nil {
-		t.Fatal("provider unavailable")
-	}
 	if os.Getenv("WECHAT_CHANNELS_DIAGNOSTIC") == "1" {
 		source, sourceErr := sender.ChannelsMedia(ctx, id)
 		diagnostic := map[string]any{"has_decode_key": source.DecodeKey != "", "source_state": source.State}
@@ -97,7 +93,7 @@ func TestLiveChannelsActualObservationWithoutWechatSend(t *testing.T) {
 		encoded, _ := json.MarshalIndent(diagnostic, "", "  ")
 		os.WriteFile(filepath.Join(workspace, "research/evidence/channels-transfer-diagnostic.json"), encoded, 0600)
 	}
-	observation, err := (mediaUnderstanding{manager: f.manager, provider: provider}).Analyze(ctx, msg)
+	observation, err := (mediaUnderstanding{manager: f.manager}).Analyze(ctx, msg)
 	visualObserved := strings.Contains(observation, "[微信视频号实际内容观察") && strings.Contains(observation, "[画面观察")
 	report := map[string]any{"wechat_sends": 0, "original_card_read": true, "actual_video_observed": visualObserved, "actual_audio_transcribed": strings.Contains(observation, "[实际音轨转写"), "observation": observation}
 	if err != nil {

@@ -28,17 +28,17 @@ func (p *permittedTools) referenceTranscriptionAuthorization() string {
 	return agentID(string(data))
 }
 
-func (p *permittedTools) newReferenceTranscriptionPolicy(ctx context.Context, asset mediaAsset, wav []byte, offset, seconds int) (*mediaTranscriptionPolicy, error) {
+// newReferenceAudioOrigin binds a cached audio asset to the current authorized
+// request.  It deliberately returns no bytes: callers must independently
+// normalize a verified cache read before giving it to a bound media policy.
+func (p *permittedTools) newReferenceAudioOrigin(ctx context.Context, asset mediaAsset, offset, seconds int, purpose, keyPrefix string) (pluginhost.Invocation, func(context.Context) error, error) {
 	authorization := p.referenceTranscriptionAuthorization()
 	if authorization == "" || asset.ID == "" || asset.Hash == "" || asset.Account != p.trace.Account || asset.Scope != assetScope(p.trace) || !strings.HasPrefix(asset.MIME, "audio/") || offset < 0 || seconds < 1 {
-		return nil, errors.New("media_reference_transcription_not_authorized")
-	}
-	if !p.manager.mediaTranscriptionConfigured(ctx) {
-		return nil, errors.New("media_transcription_plugin_required_or_unconfigured")
+		return pluginhost.Invocation{}, nil, errors.New("media_reference_audio_not_authorized")
 	}
 	epoch, err := p.manager.memory.RecallEpoch(ctx)
 	if err != nil {
-		return nil, err
+		return pluginhost.Invocation{}, nil, err
 	}
 	version := referenceTranscriptionAssetVersion(asset)
 	assetSource := "asset:" + asset.ID + ":" + version
@@ -51,7 +51,10 @@ func (p *permittedTools) newReferenceTranscriptionPolicy(ctx context.Context, as
 			sources[id] = revision
 		}
 	}
-	inv := pluginhost.Invocation{Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.trace.Sender, Purpose: "transcribe selected reference recording", RequestKey: "reference-asr-" + agentID(p.trace.TraceID, p.trace.TaskID, asset.ID, version, strconv.Itoa(offset), strconv.Itoa(seconds)), SourceVersions: sources, EvidenceEpoch: epoch, Authorization: authorization}
+	if purpose == "" || keyPrefix == "" {
+		return pluginhost.Invocation{}, nil, errors.New("media_reference_audio_origin_required")
+	}
+	inv := pluginhost.Invocation{Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.trace.Sender, Purpose: purpose, RequestKey: keyPrefix + "-" + agentID(p.trace.TraceID, p.trace.TaskID, asset.ID, version, strconv.Itoa(offset), strconv.Itoa(seconds)), SourceVersions: sources, EvidenceEpoch: epoch, Authorization: authorization}
 	check := func(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -86,6 +89,17 @@ func (p *permittedTools) newReferenceTranscriptionPolicy(ctx context.Context, as
 			return errors.New("media_reference_transcription_asset_changed")
 		}
 		return nil
+	}
+	return inv, check, nil
+}
+
+func (p *permittedTools) newReferenceTranscriptionPolicy(ctx context.Context, asset mediaAsset, wav []byte, offset, seconds int) (*mediaTranscriptionPolicy, error) {
+	if !p.manager.mediaTranscriptionConfigured(ctx) {
+		return nil, errors.New("media_transcription_plugin_required_or_unconfigured")
+	}
+	inv, check, err := p.newReferenceAudioOrigin(ctx, asset, offset, seconds, "transcribe selected reference recording", "reference-asr")
+	if err != nil {
+		return nil, err
 	}
 	return p.manager.newBoundMediaTranscriptionPolicy(ctx, wav, inv, 1, check)
 }

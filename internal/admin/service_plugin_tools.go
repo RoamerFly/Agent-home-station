@@ -56,7 +56,7 @@ func (p *permittedTools) servicePluginTools() []mcptools.Tool {
 	if err != nil {
 		web.Enabled = false
 	}
-	mediaAvailable := p.mediaServiceCapabilityAvailable(context.Background(), "media.observe") || p.mediaServiceCapabilityAvailable(context.Background(), "media.transcribe")
+	mediaAvailable := p.mediaServiceCapabilityAvailable(context.Background(), "media.observe") || p.mediaServiceCapabilityAvailable(context.Background(), "media.transcribe") || p.mediaServiceCapabilityAvailable(context.Background(), "media.listen")
 	shareAvailable := p.shareServiceCapabilityAvailable(context.Background())
 	if (!web.Enabled || web.Removed) && !mediaAvailable && !shareAvailable {
 		return nil
@@ -148,7 +148,7 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 			return "", errors.New("service runtime or arguments unavailable")
 		}
 		if in.Plugin == mediaServicePluginID {
-			if in.Capability != "media.observe" && in.Capability != "media.transcribe" {
+			if in.Capability != "media.observe" && in.Capability != "media.transcribe" && in.Capability != "media.listen" {
 				return "", errors.New("media_service_capability_unavailable")
 			}
 			if in.Key == "" {

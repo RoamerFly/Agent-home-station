@@ -31,10 +31,6 @@ func TestLiveVideoObservationWithSelectedCharacterSpeech(t *testing.T) {
 	if err != nil || !f.manager.speech.ASREnabled {
 		t.Fatal("configured ASR unavailable")
 	}
-	provider, err := f.manager.makeModel(c)
-	if err != nil {
-		t.Fatal("configured vision provider unavailable")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	video := filepath.Join(f.dir, "synthetic-character-video.mp4")
@@ -49,7 +45,7 @@ func TestLiveVideoObservationWithSelectedCharacterSpeech(t *testing.T) {
 	native := &observationNative{fakeNative: f.native, data: data}
 	f.manager.native = native
 	msg := linuxnative.Message{ID: "synthetic-live-video", ThreadID: "filehelper", Type: 43}
-	text, err := (mediaUnderstanding{manager: f.manager, provider: provider}).Analyze(ctx, msg)
+	text, err := (mediaUnderstanding{manager: f.manager}).Analyze(ctx, msg)
 	report := map[string]any{"actual_channels_card": false, "synthetic_local_video": true, "real_model_vision": strings.Contains(text, "[画面观察"), "real_model_asr": strings.Contains(text, "[实际音轨转写"), "wechat_sends": 0, "observations_bounded": strings.Contains(text, "本次读取范围为采样概览"), "local_video_bytes": len(data), "success": err == nil}
 	if err != nil {
 		report["failure"] = "video_observation_unavailable"
