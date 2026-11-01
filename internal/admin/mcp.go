@@ -640,6 +640,9 @@ func (p *permittedTools) stageOutput(ctx context.Context, output plugins.Output)
 	return p.stageOutputWithAsset(ctx, output, nil)
 }
 func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugins.Output, original *assetOriginal) (string, error) {
+	if err := checkOutputAuthority(ctx); err != nil {
+		return "", err
+	}
 	native, ok := p.manager.native.(nativeTools)
 	if len(output.Media) > 0 && !ok {
 		return "", errors.New("微信附件后台不可用")
@@ -688,9 +691,15 @@ func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugin
 		if safeMediaFilename(media.Filename) {
 			filename = media.Filename
 		}
+		if err := checkOutputAuthority(ctx); err != nil {
+			return "", err
+		}
 		source, err := native.Upload(ctx, filename, contentType, bytes.NewReader(data), int64(len(data)))
 		if err != nil {
 			return "", errors.New("生成媒体暂存失败")
+		}
+		if err = checkOutputAuthority(ctx); err != nil {
+			return "", err
 		}
 		if err = p.manager.tools.upload(stagedUpload{UploadSource: source, Account: p.manager.native.Account(), Kind: media.Kind}); err != nil {
 			return "", err
@@ -710,6 +719,9 @@ func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugin
 		originals = append(originals, *originalMedia)
 		uploads = append(uploads, stagedUpload{UploadSource: source, Account: p.trace.Account, Kind: media.Kind})
 		items = append(items, item)
+	}
+	if err := checkOutputAuthority(ctx); err != nil {
+		return "", err
 	}
 	if p.trace.Thread != "" && !p.trace.Preview && p.manager.Config().Companion.Permissions.Remember && len(items) > 0 {
 		var shared mediaAsset

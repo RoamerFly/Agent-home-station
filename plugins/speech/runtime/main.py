@@ -64,7 +64,7 @@ class Wire:
                     if not isinstance(configuration, dict):
                         raise ValueError("invalid_configuration")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "speech", "version": "0.1.1"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "speech", "version": "0.1.4"}}
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/call" and initialized:

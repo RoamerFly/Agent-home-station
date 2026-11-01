@@ -1,242 +1,54 @@
-# Speech plugin: executable cloud-TTS migration map
+# 默认云端语音迁移与保留边界
 
-This map covers the **cloud character-TTS** path only.  It is deliberately
-separate from local GPT-SoVITS, RVC singing, ASR, Fun-Music, and the Windows
-YuE service.  Those use different runtimes, resource models, or task
-semantics and must not be enabled merely because cloud TTS has migrated.
+当前源码：`speech` 0.1.4 仅开放默认云端 `speech.synthesize`。主体中的旧 `bailian.Client.Synthesize` 已删除；未安装、未配置、停用或撤权时明确失败，不回退旧密钥。本机生产配置与程序尚未切换，启用前仍须完成隔离迁移和校验。
 
-Status at the time of this map: `plugins/speech` is an unbound,
-`migration-pending` descriptor.  The existing production route remains in
-the core.  Nothing in this document authorizes enabling the package or
-removing the old path.
-
-## 1. Behaviour to preserve
-
-The current default-cloud synthesis flow is:
+## 实际调用链
 
 ```text
-speech_synthesize(text, instruction, no voice_id)
-  -> permittedTools.generateSpeech (internal/admin/speech.go)
-  -> bailian.Client.Synthesize (internal/bailian/client.go)
-  -> provider POST /api/v1/services/audio/tts/SpeechSynthesizer
-  -> returned, validated audio URL
-  -> host download with GetPublicMedia
-  -> preparePublicAudioPreview / stageOutputWithAsset
-  -> core-owned WeChat voice upload and receipt
+speech_synthesize（未指定 voice_id）
+  → 宿主绑定账号、请求者、来源版本、任务和配置
+  → 已安装 speech 插件的隔离 MCP stdio
+  → wechat/model_request 固定 synthesize 路由
+  → 宿主验证模型、默认声线、文字、表达要求及 WAV/24kHz
+  → 提供商返回值与插件候选结果比对
+  → 私有保存提供商 URL，公开结果只报告 provider_accepted
+  → 宿主有界下载、实际解码、编码及素材暂存
+  → 核心微信发送队列与回执
 ```
 
-The plugin must return a verified generated artifact to the host; it must
-never upload or send a WeChat message itself.  A successful provider response
-is not a delivery receipt.
+提供商接受、音频有效、素材暂存、微信接受与手机播放是不同阶段。默认云声线只证明请求配置；仅当提供商报告一致的声线身份时记录 `verified`，未报告则为 `not_reported`，不能把插件复述当作声纹证明。
 
-The following rules are non-negotiable when moving that flow:
+## 配置映射
 
-- `text` is 1--2,000 Unicode characters; a per-call instruction is at most
-  1,500 characters.
-- Empty instruction uses the configured instruction.  A non-empty instruction
-  is appended as a *delivery adjustment*, not a replacement for the configured
-  character instruction.  This is the exact composition currently performed
-  by `bailian.Client.Synthesize`.
-- The exact configured `tts_model`, `default_voice`, WAV format and 24 kHz
-  sample rate are host-bound.  Tool arguments cannot select a provider model,
-  endpoint, credential, or substitute voice.
-- The provider audio URL is untrusted intermediate data.  The host must check
-  its scheme/host, download it with the existing bounded media reader, validate
-  the actual bytes, make the voice-note preview, register lineage, and only
-  then expose `media_ids` to the reply path.
-- An uncertain POST must become `needs_review` with its provider task/response
-  identity retained; do not retry it automatically.  A successful synchronous
-  response can complete only after host artifact validation.
-- Named library voices remain a distinct route.  A `voice_id` selects the
-  existing GPT-SoVITS path and is never allowed to fall back to the configured
-  Alibaba voice.  RVC profiles are singing-only and must not be used for TTS.
+| 插件配置 | 旧来源 | 处理 |
+| --- | --- | --- |
+| tts_endpoint | Endpoint + /api/v1/services/audio/tts/SpeechSynthesizer | 完整 HTTPS 路由 |
+| tts_key | Key | 宿主私密存储，不进入插件初始化、公开响应或日志 |
+| tts_model | TTSModel | 请求绑定，不能由工具参数更换 |
+| default_voice | Voice | 请求绑定，不能替代命名声线 |
+| default_instruction | Instruction | 本次表达要求追加到已配置要求 |
+| enabled | TTSEnabled | 仅作旧状态提示；迁移始终先保持停用，管理员核验后启用 |
 
-## 2. Exact current ownership and migration destination
+Go 管理接口和 Python 只读预演均提供映射。应用时重核原配置哈希、包摘要、权限和配置修订，阻止旧批准计划覆盖新配置。兼容 `/api/speech` 仍供尚未迁出的 ASR、本地服务等读取，不双写插件配置；该入口的旧 TTS 开关和 key 不再控制默认云端插件。
 
-| Current responsibility | Current code / test evidence | Destination | Cutover condition |
-| --- | --- | --- | --- |
-| Tool discovery, group/owner authority and `SendVoice` gate | `internal/admin/speech.go`: `speechTools`, `callSpeech`; `internal/admin/voice_synthesis_test.go` | Core | Keep in core; discover the plugin tool only when installed, enabled and configured. |
-| Named-voice selection and no-default-substitution rule | `speech.go`: `generateSpeech`; `speech_voice_constraints.go`; `voice_synthesis.go`; `voice_synthesis_test.go` | Core identity policy | Keep `voice_library_*` and task bindings in core.  Invoke cloud TTS only when `voice_id` is absent. |
-| Alibaba TTS request construction and provider response parsing | `internal/bailian/client.go`: `Synthesize`, `audioURL`; `internal/bailian/client_test.go` | `plugins/speech/runtime/cloud_tts.py` plus a host route binder | Plugin prepares the constrained request and parses its declared result.  Host performs the authenticated POST and binds every field. |
-| Endpoint/key/model/default voice/default instruction | `speech-config.json`, `bailian.Config`, `/api/speech` in `internal/admin/speech.go` | Plugin configuration, host secret store | Migrate with optimistic config revision.  Do not copy the whole legacy speech config. |
-| Provider result URL fetch, audio byte bounds, preview conversion and asset registration | `mcptools.GetPublicMedia`, `preparePublicAudioPreview`, `stageOutputWithAsset` in `internal/admin` | Core result validator | This cannot move to a plugin because the core owns media IDs, conversion limits, asset lineage, upload idempotency and WeChat delivery. |
-| Local GPT-SoVITS execution | `internal/admin/voice_synthesis.go`; `voice_synthesis_test.go` | Later local-runtime speech migration | Exclude from the cloud-TTS package cutover.  It has GPU/sandbox/weight/reference constraints. |
-| Voice catalogue/privacy and selected-voice task constraints | `voice_agent.go`, `task_constraints.go`, `media_assets.go`, `cross_media.go`, `media_voice_identity_test.go` | Core | Preserve account-scoped visibility and result identity checks. |
-| Voice clone/design | `internal/bailian/voice_clone.go`, `voice_design.go` and their unit tests | Later `speech.voices` operation | These currently have provider contracts and live-test helpers, not an ordinary Agent/admin capability path.  Do not expose them as migrated functionality without a durable operation record. |
-| ASR, music generation, YuE/RVC | `local_asr.go`, `music_*`, `yue.go` | Other plugins | Explicitly out of this cloud-TTS change. |
+## 授权与中断
 
-## 3. Plugin contract to implement before enabling
+聊天路径绑定当前账号、会话、请求者、来源版本、记忆遗忘边界和任务身份。完成后仍核对同一持久任务；下载前后、转码后、每段上传前后和素材登记前再次检查。撤权后丢弃未使用结果，不能因模型已生成就继续上传。已发生的外部动作不能被描述为已撤回。
 
-The first production capability should be **only** `speech.synthesize`.
-`speech.voices` and `speech.train` remain `migration-pending`; they need their
-own operation/recovery design.
+管理员测试使用单独的本地登录会话身份，无微信接收方、无聊天来源和发送权限。整条合成、下载、格式验证、可选识别流程保留同一授权；退出、过期、排空、停包或配置变化阻止后续步骤。测试不发送微信。
 
-### Capability input
+每次真实提供商尝试只允许一个 POST；用量由宿主记录，未知用量保持未知。相同持久请求不会自动重复提交，断线或未核验结果保留待核对。插件生成完成不代表素材已验证或已投递。
 
-```json
-{
-  "text": "要朗读的文本",
-  "instruction": "可选的本次语气调整",
-  "timeout_seconds": 180
-}
-```
+## 尚未迁出的能力
 
-`timeout_seconds` is an execution deadline, not an authorization override.
-The host applies a bounded maximum but reports the effective value rather than
-silently pretending that a different value was used.
+指定 `voice_id` 的 GPT-SoVITS、本地声线目录、克隆/设计、训练与相关 GPU 运行时继续使用旧实现及既有身份约束；不得因默认插件 ready 宣称这些能力已迁入。ASR 属于媒体理解；云音乐已有单独 music 插件；YuE/RVC、翻唱与训练仍待迁移。移除生成插件不能影响核心发送已有音频。
 
-No `voice_id`, endpoint, API key, model, output URL, filename, target thread,
-or send flag belongs in plugin input.  A named `voice_id` remains routed to
-the core's current local-GPT-SoVITS path until that route has its own complete
-plugin migration.
+## 离线证据
 
-### Configuration mapping
+- speech_plugin_test.go：实际提供商请求绑定、来源和私有结果。
+- speech_default_migration_test.go：仅安装插件执行、默认与命名声线路由、认证/CSRF/排空、伪造成品拒绝、无配置双写。
+- speech_plugin_admin_test.go：独立管理员身份、单次 POST、真实 LPAC 假提供商契约。
+- speech_plugin_revocation_test.go：真实持久完成任务与登录会话，下载阻塞期间撤权、遗忘、取消和配置变化。
+- output_authority_test.go：实际核心暂存链在上传前后撤权、取消及多段中断，无真实外发。
 
-Create a new revisioned plugin configuration; read `speech-config.json` only
-during one-way import.  Suggested fields are:
-
-| Plugin field | Legacy source | Secret / host-only | Notes |
-| --- | --- | --- | --- |
-| `tts_endpoint` | `Endpoint` plus fixed `/api/v1/services/audio/tts/SpeechSynthesizer` | no | Store the complete HTTPS route.  Validate the approved DashScope regional/business-space origin and exact path. |
-| `tts_key` | `Key` | yes / yes | Never enter plugin initialization, arguments, logs, task public results, or UI responses. |
-| `tts_model` | `TTSModel` | no | 1--128 chars; bound by the host route binder. |
-| `default_voice` | `Voice` | no | Bound by the host route binder; cannot be overwritten per invocation. |
-| `default_instruction` | `Instruction` | no | Subject to the existing 1,500-character limit. |
-| plugin enabled state | `TTSEnabled` | n/a | Import `true` only after configuration validation and administrator confirmation.  A disabled legacy flag must not enable the package. |
-
-Do **not** copy `ASR*`, `Music*`, `YuE*`, `YuEToken`, or local model fields.
-Keep the old `speech-config.json` as compatibility input until an explicit
-per-account migration record says it was imported.  Do not dual-write it
-after cutover.  An endpoint or secret change must invalidate pending work from
-the earlier configuration revision.
-
-### Host services and result envelope
-
-The plugin calls one fixed `wechat/http_route` route, for example
-`cloud_tts`, under `network` permission.  The package declaration must bind
-that route to `tts_endpoint`, `tts_key`, `speech.synthesize`, and the exact
-authorization header.  A trusted core policy must verify:
-
-1. account, conversation, requester, request purpose, source versions and
-   idempotency key;
-2. package digest/version, configuration revision, current `SendVoice`
-   permission and plugin grant, before and after the POST;
-3. model, configured default voice, 24 kHz WAV, text and composed instruction
-   before passing body bytes to the provider; and
-4. that the response's `output.audio.url` is a syntactically safe URL before
-   the host attempts the bounded download.
-
-The plugin may return only a small, untrusted candidate envelope such as:
-
-```json
-{
-  "ok": true,
-  "provider_audio_url": "https://...",
-  "provider_model": "...",
-  "voice": "...",
-  "coverage": "provider_tts_response"
-}
-```
-
-The host validator must compare `provider_model` and `voice` with the
-provider response it actually received, then download and stage the audio.
-Its verified result should contain core asset/media identifiers and source
-lineage, not raw audio bytes or the provider URL.  The final WeChat send stays
-on the existing core upload/queue/receipt path.
-
-## 4. Tasks, identities, recovery and costs
-
-Cloud TTS is normally synchronous, but the invocation still needs a durable
-plugin job before the POST.  The job must retain account, conversation,
-requester, request key, source versions, package digest, configuration
-revision, exact text hash, default voice/model identity, and the selected
-delivery mode.  It must not retain the API key or a raw private reference
-audio file.
-
-- Before provider acceptance: failures may be retried only by an explicitly
-  new user/administrator action with a new idempotency key.
-- After an uncertain POST or an accepted response whose audio cannot be
-  retrieved/validated: state is `needs_review`; retain the safe provider
-  response identity and do not blindly post again.
-- After a verified artifact: completion records the asset ID and expected
-  cloud voice identity.  The regular core send path still obtains the final
-  WeChat receipt and prevents duplicate upload/send.
-- Cancellation before the POST cancels locally.  Cancellation after a POST
-  cannot claim that provider work was cancelled unless the provider has an
-  actual verified cancel/query protocol.
-- Provider usage is recorded by the host from actual response data; unknown
-  usage remains unknown.  The plugin never supplies billing totals.
-
-The existing selected-voice mechanism in `task_constraints.go` and the
-asset/cross-send identity checks must remain authoritative.  For the default
-cloud voice, add a stable provider voice identity to the staged asset before
-enabling cross-conversation reuse; do not relabel old audio after generation.
-
-## 5. Ordered implementation steps
-
-1. Add the complete `speech.synthesize` schema/config/HTTP route and rehash
-   the official package only once the runtime and host validator are present.
-   Keep package and the other two capabilities pending until their contracts
-   are real.
-2. Implement `cloud_tts.py` as a stdio MCP operation with strict argument
-   parsing.  It may request the fixed route and parse a response, but cannot
-   download files, access secrets, select a route, or send media.
-3. Add a core `speechPluginPolicy` analogous to the existing service-plugin
-   policies.  It constructs the host invocation, enforces the legacy text and
-   instruction composition, validates source/config/package changes, and
-   performs result download/staging through the existing asset pipeline.
-4. Add installed-state dispatch: absent plugin keeps the current Bailian path;
-   installed-but-disabled/unconfigured plugin fails explicitly and does not
-   fall back to old credentials.  Only after the migration is accepted should
-   `speech_synthesize` be removed from the `bailian-speech` adapter for the
-   no-`voice_id` case.
-5. Import each account's cloud fields transactionally from `speech-config.json`
-   in an isolated copy.  Compare source endpoint, model, voice and secret
-   presence; require an administrator confirmation before enabling.  Retain a
-   read-only mapping record and do not migrate ASR/music/YuE fields.
-6. Run drain/backup/update only after plugin jobs and legacy in-flight speech
-   work are reconciled.  Existing staged media remains core-owned and must be
-   viewable/re-sendable with no plugin installed.
-7. Delete the legacy provider path and old cloud-only UI fields only after
-   all supported accounts have an explicit migration status.  Do not delete
-   local GPT-SoVITS, catalogue, delivery or asset code as part of this step.
-
-## 6. Reusable tests and required new synthetic tests
-
-Reuse or preserve these current tests:
-
-- `internal/bailian/client_test.go` for request/response behavior;
-- `internal/admin/speech_test.go` for secret redaction, blank-secret
-  preservation and endpoint-change rejection;
-- `internal/admin/voice_synthesis_test.go` for named-voice isolation and
-  sandboxed GPT-SoVITS output;
-- `internal/admin/voice_agent_test.go`, `media_voice_identity_test.go` and
-  cross-media tests for catalogue visibility, hash verification and identity
-  preservation;
-- `internal/bailian/voice_clone_test.go` and `voice_design_test.go` as future
-  protocol tests only, not evidence that `speech.voices` is ready.
-
-Add offline/synthetic contract coverage before changing the descriptor to
-ready:
-
-1. exact body composition for default instruction and per-call adjustment;
-2. invalid text/instruction/model/voice/format rejected before any route call;
-3. host secret never appears in plugin config, stdin, job public result,
-   activity record or error;
-4. request source/config/package/permission changes before and after route
-   call reject the result and do not stage it;
-5. provider errors, timeout, malformed JSON, missing/unsafe URL, oversized or
-   invalid audio, and download failure all preserve non-delivery and the
-   correct `needs_review`/failed state;
-6. same idempotency key never repeats a POST or uploads/sends a second voice;
-7. completed verified audio retains default provider voice identity and cannot
-   be relabelled or satisfy a different named-voice task;
-8. absent plugin uses legacy cloud TTS; installed disabled/unconfigured plugin
-   does not fall back; named GPT-SoVITS voice remains usable without cloud TTS;
-9. plugin crash, restart, cancellation and configuration upgrade preserve the
-   original request and never send a default voice in place of a named voice.
-
-Only the above synthetic tests, package verification, focused Go tests and
-the plugin runtime's isolated contract test are suitable for this migration
-stage.  No paid model call, real voice creation, or real WeChat message is
-needed to prove the contract.
+旧可选 Live 测试的默认 TTS 部分也经过临时安装插件和隔离执行器；未显式选择时跳过。本轮不运行付费测试或真实微信发送。

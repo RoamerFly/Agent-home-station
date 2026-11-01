@@ -17,6 +17,9 @@ func TestLiveBailianWhaleVoiceCandidates(t *testing.T) {
 	if root == "" || workspace == "" || os.Getenv("WECHAT_VOICE_DESIGN_LIVE") != "1" {
 		t.Skip("explicit owner-requested voice design; does not select or send a voice")
 	}
+	// Do this before any paid design/inspection request. The audition must not
+	// create a candidate when the official isolated speech route is unavailable.
+	_ = requireLiveSpeechPluginRuntime(t)
 	cfg, err := loadSpeech(filepath.Join(root, "admin"))
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +101,7 @@ func TestLiveBailianWhaleVoiceCandidates(t *testing.T) {
 		reuse := cfg
 		reuse.Voice = voice.ID
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		url, err := bailian.New(reuse).Synthesize(ctx, spec.Preview, "保持该音色的自然特点，亲切轻松，正常语速，不唱歌。")
+		url, err := livePluginSynthesize(t, ctx, reuse, spec.Preview, "保持该音色的自然特点，亲切轻松，正常语速，不唱歌。")
 		if err == nil {
 			voice.Preview, _, err = mcptools.GetPublicMedia(ctx, url, 8<<20)
 		}
@@ -127,7 +130,7 @@ func TestLiveBailianWhaleVoiceCandidates(t *testing.T) {
 		save()
 		// Confirm the returned voice can be reused with its bound TTS model.
 		ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
-		url, err = bailian.New(reuse).Synthesize(ctx, "今天也陪你聊点有趣的，等你选好，我就用这个声音和你打招呼。", "保持该音色的自然特点，亲切轻松，正常语速，不唱歌。")
+		url, err = livePluginSynthesize(t, ctx, reuse, "今天也陪你聊点有趣的，等你选好，我就用这个声音和你打招呼。", "保持该音色的自然特点，亲切轻松，正常语速，不唱歌。")
 		if err == nil {
 			var audio []byte
 			audio, _, err = mcptools.GetPublicMedia(ctx, url, 8<<20)

@@ -2,33 +2,46 @@
   "schema_version": 1,
   "id": "music",
   "name": "音乐与换声",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "host_protocol": 1,
-  "status": "migration-pending",
+  "status": "ready",
   "platforms": [
     "windows-amd64",
     "linux-amd64"
   ],
   "runtime": {
-    "transport": "unbound"
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
   },
   "permissions": [
-    "artifact.read",
-    "artifact.write",
-    "network",
-    "gpu",
-    "process.execute"
+    "model.invoke"
   ],
   "dependencies": [],
+  "http_routes": [
+    {
+      "id": "generate",
+      "endpoint_config": "music_endpoint",
+      "permission": "model.invoke",
+      "capabilities": [
+        "music.generate"
+      ],
+      "credential": "music_key",
+      "credential_header": "Authorization",
+      "credential_prefix": "Bearer "
+    }
+  ],
   "files": {
-    "capabilities.json": "cdc8216f3d79b82fe61533cff2ef63c00c1cec2d3b5add2c3da94f1085d5ec96",
-    "CHANGELOG.md": "0688abebe9b7a3826ee5def33287290c20cd363bdf25bda9f1aaef7a7219920b",
-    "config.schema.json": "95693d311a4827fcd7ab4d1ed7a6f590568841010f9999fe7761e7c810cb753f",
-    "MIGRATION.md": "87c859cf2208dd6d8739a0b967209fff2bdfbcbef29b4b4b6ff544dcf2254ec4",
-    "PERMISSIONS.md": "d936832bc9ef47a40f7df2e26871cfe262ea4345514e2f59b101f42797021907",
-    "README.md": "5e8e8306e28a065fabba9b910d8f6da5dfb78b502f1ab77258265687abb5df4d",
-    "runtime/README.md": "072ef9ce9b7fb7c06975dd7b9cf762a920d23d7aa16fdf9b08beb759d81a5c1a",
+    "capabilities.json": "744fc9885d689baf08a25bf526aec80d895c482c8e2a53ba887d05dd03768eb8",
+    "CHANGELOG.md": "2b94f4c74a39e763c6a040b7164ac7e470b9b05d386528a1c623b1e499d66865",
+    "config.schema.json": "17da2ae49eaec7b0a3aedf75a5c0050a2d1bc028aad076ea301d3e5cbdec93df",
+    "MIGRATION.md": "3226ed00435c9be76e4785ecf3be08cffc1c063328852cec40c492f519603f6d",
+    "PERMISSIONS.md": "0ad55478409d215f5e17ddd1bd22b474910b90a3c202e234bd026c3d3cabd0de",
+    "README.md": "bfb3fe65aac414454146f166e60688d0252e621fcda7489c73be9db713cc4cea",
+    "runtime/cloud_music.py": "4cbc104694f1f921fa0b9cf3dd6fb721a5911058eaae1ddb06f03d89ded40bea",
+    "runtime/main.py": "7c88afd0b2c629bf0b0c01234c4d44d6862a9cf4aa2602792d9d676e39b2af6d",
+    "runtime/README.md": "286f75a4bf94a2e127a4bbed0df50b31903d7516c2a1fa7ac1fd4139dffdd5f7",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "tests/test_cloud_music.py": "5071f073d62ad5028e11bb96f310d9ff8fc126e4da142885eccb44f120ba9a8a",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   }
 }

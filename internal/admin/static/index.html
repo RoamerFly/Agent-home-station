@@ -526,8 +526,28 @@
 <a href="#voices" rel="noopener" data-section-link="voices">打开角色语音库 · 试听与模型</a>
 </p>
 <div class="section-heading">
-<h3 class="sr-only">语音与唱歌</h3>
-<button class="primary" id="speech-save" type="button">保存语音配置</button>
+<h3>生成能力</h3>
+</div>
+<div class="field-grid">
+<div>
+<strong>说话声线</strong>
+<p class="hint" id="speech-plugin-state">由语音生成插件管理声线、模型和表达方式。</p>
+<button class="secondary" data-speech-plugin="speech" type="button">打开语音生成插件</button>
+</div>
+<div>
+<strong>歌曲与换声</strong>
+<p class="hint" id="music-plugin-state">音乐插件管理已接入的云端原创歌曲；本地 YuE、换声与训练仍保留在当前环境。</p>
+<button class="secondary" data-speech-plugin="music" type="button">打开音乐与换声插件</button>
+</div>
+</div>
+<div class="inline-actions">
+<button class="secondary" id="speech-test" type="button">测试默认语音插件（不发微信）</button>
+<span class="hint" id="speech-test-state" role="status"></span>
+</div>
+<p class="hint">插件未安装时会打开已有设置的迁移预览；不会自动安装、授权或启动。测试只验证默认语音插件，不会发送微信。</p>
+<div class="section-heading">
+<h3>识别与本地歌曲服务</h3>
+<button class="primary" id="speech-save" type="button">保存剩余配置</button>
 </div>
 <div class="field-grid">
 <div>
@@ -537,15 +557,6 @@
 <div>
 <label for="speech-key">百炼 API Key</label>
 <input autocomplete="new-password" id="speech-key" placeholder="留空保留已配置密钥" type="password">
-</div>
-<div>
-<label class="switch-row">
-<span>语音合成（说话）</span>
-<input id="speech-tts-enabled" type="checkbox">
-<span aria-hidden="true" class="switch"></span>
-</label>
-<label for="speech-tts-model">TTS 模型</label>
-<input id="speech-tts-model">
 </div>
 <div>
 <label class="switch-row">
@@ -569,20 +580,6 @@
 <input id="speech-asr-model">
 </div>
 <div>
-<label for="speech-voice">角色音色</label>
-<input id="speech-voice">
-</div>
-<div>
-<label for="speech-instruction">说话风格</label>
-<textarea id="speech-instruction" rows="2">
-</textarea>
-</div>
-</div>
-<p class="hint">微信语音按所选方式转写后交给 DeepSeek 理解。合成结果发送为微信语音；发语音仍遵循角色权限。</p>
-<details>
-<summary>完整歌曲生成</summary>
-<div class="field-grid">
-<div>
 <label class="switch-row">
 <span>本地 YuE 生成歌曲</span>
 <input id="speech-yue-enabled" type="checkbox">
@@ -595,27 +592,14 @@
 <label for="speech-yue-token">YuE 桥接令牌</label>
 <input autocomplete="new-password" id="speech-yue-token" placeholder="留空保留" type="password">
 </div>
-<div>
-<label class="switch-row">
-<span>百炼 Fun-Music（需开通邀测）</span>
-<input id="speech-music-enabled" type="checkbox">
-<span aria-hidden="true" class="switch"></span>
-</label>
-<label for="speech-music-model">歌曲模型</label>
-<input id="speech-music-model">
-</div>
 </div>
 <div class="inline-actions">
 <button class="secondary" id="speech-yue-health" type="button">检查本地歌曲服务</button>
 <button class="secondary" id="speech-music-service-start" type="button" aria-describedby="speech-yue-health-state" hidden>启动本机音乐服务</button>
 <span class="hint" id="speech-yue-health-state" role="status"></span>
 </div>
-<p class="hint">本地YuE支持原创与参考翻唱、风格和歌词、固定种子与重新抽卡。参考音频限定本会话缓存；可按需转写歌词，识别结果可能有错。翻唱会提取旋律并重新合成，不能保证原伴奏或音色不变。提交后保存参数和任务，按原会话续交；需开启Agent持续任务，无需主动问候权限。Fun-Music需开通邀测。</p>
-</details>
-<div class="inline-actions">
-<button class="secondary" id="speech-test" type="button">测试说话与识别（不发微信）</button>
-<span class="hint" id="speech-state" role="status"></span>
-</div>
+<p class="hint">识别设置用于语音、视频音轨和歌词转写。本地 YuE 提供本机歌曲服务状态；换声与训练仍按当前声线库和本机服务使用。</p>
+<p class="hint" id="speech-state" role="status"></p>
 </details>
 </section>
 <section aria-labelledby="rules-title" class="page" id="rules">

@@ -20,10 +20,13 @@ SPEC.loader.exec_module(preview)
 class PluginMigrationPreviewTests(unittest.TestCase):
     def make_repo(self, base):
         repo = base / "repo"
-        for plugin, status in (("speech", "ready"), ("media-understanding", "ready"), ("web-search", "ready"), ("share-reader", "migration-pending")):
+        for plugin, status in (("speech", "ready"), ("media-understanding", "ready"), ("music", "ready"), ("web-search", "ready"), ("share-reader", "migration-pending")):
             directory = repo / "plugins" / plugin
             directory.mkdir(parents=True)
-            (directory / "plugin.json").write_text(json.dumps({"id": plugin, "version": "1.2.3", "status": status}), encoding="utf8")
+            manifest = {"id": plugin, "version": "1.2.3", "status": status}
+            if plugin == "music":
+                manifest["permissions"] = ["model.invoke"]
+            (directory / "plugin.json").write_text(json.dumps(manifest), encoding="utf8")
         return repo
 
     def make_root(self, base):
@@ -31,7 +34,7 @@ class PluginMigrationPreviewTests(unittest.TestCase):
         root.mkdir()
         secret = "synthetic-secret-never-report"
         (root / "config.json").write_text(json.dumps({"provider": "deepseek", "base_url": "https://api.deepseek.com", "api_key": secret, "model": "vision-a", "max_tokens": 900, "thinking_enabled": True, "reasoning_effort": "high"}), encoding="utf8")
-        (root / "speech-config.json").write_text(json.dumps({"endpoint": "https://dashscope.aliyuncs.com", "key": secret, "tts_enabled": True, "tts_model": "tts-a", "voice": "voice-a", "instruction": "calm", "asr_enabled": True, "asr_backend": "local", "asr_local_model": "sensevoice-test"}), encoding="utf8")
+        (root / "speech-config.json").write_text(json.dumps({"endpoint": "https://dashscope.aliyuncs.com", "key": secret, "tts_enabled": True, "tts_model": "tts-a", "voice": "voice-a", "instruction": "calm", "asr_enabled": True, "asr_backend": "local", "asr_local_model": "sensevoice-test", "music_enabled": True, "music_model": "music-a"}), encoding="utf8")
         (root / "mcp-config.json").write_text(json.dumps({"enabled": True, "web_search_enabled": True, "web_fetch_enabled": True}), encoding="utf8")
         (root / "channels-config.json").write_text(json.dumps({"enabled": True, "cookie": "synthetic-cookie", "assistant_cookie": "synthetic-assistant", "object_bridge_url": "https://bridge.example"}), encoding="utf8")
         account = "secondary"
@@ -67,6 +70,8 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertNotIn(secret, encoded)
             self.assertEqual([a["account"] for a in report["accounts"]], ["main", "secondary"])
             main = report["accounts"][0]
+            self.assertEqual([step["plugin"] for step in main["plugins"]], ["media-understanding", "speech", "music", "web-search", "share-reader"])
+            self.assertTrue(all(step["proposed_enabled"] is False for account in report["accounts"] for step in account["plugins"]))
             media = next(x for x in main["plugins"] if x["plugin"] == "media-understanding")
             self.assertIn("registered_local_asr_profile:sensevoice-test", media["required_missing"])
             speech = next(x for x in main["plugins"] if x["plugin"] == "speech")
@@ -75,7 +80,72 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertIn("official_deepseek_search_adapter_not_declared_by_web-search_plugin", web["required_missing"])
             self.assertFalse(web["proposed_enabled"])
             self.assertEqual(handoff["accounts"][0]["secrets"]["speech.tts_key"], secret)
+            self.assertEqual(handoff["accounts"][0]["secrets"]["music.music_key"], secret)
             self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
+    def test_music_step_maps_endpoint_model_and_only_private_secret_handoff(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            root, secret = self.make_root(base)
+            speech_path = root / "speech-config.json"
+            speech = json.loads(speech_path.read_text(encoding="utf8"))
+            speech["endpoint"] = "https://dashscope-intl.aliyuncs.com/"
+            speech_path.write_text(json.dumps(speech), encoding="utf8")
+            report, handoff = preview.build_preview(root, repo, "main")
+            music = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "music")
+            self.assertEqual(music["values"], {"music_endpoint": "https://dashscope-intl.aliyuncs.com/api/v1/services/audio/music/generation", "music_model": "music-a"})
+            self.assertEqual(music["status"], "ready_for_administrator_review")
+            self.assertTrue(music["legacy_enabled"])
+            self.assertTrue(music["eligible_to_enable_after_confirmation"])
+            self.assertIs(music["proposed_enabled"], False)
+            self.assertEqual(music["permissions"], ["model.invoke"])
+            self.assertEqual(music["required_missing"], [])
+            self.assertEqual(music["secrets"]["music_key"], {"source_field": "speech-config.json:key", "present": True, "sha256": hashlib.sha256(secret.encode()).hexdigest()})
+            self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
+            self.assertNotIn("music_key", music["values"])
+            self.assertEqual(handoff["accounts"][0]["secrets"]["music.music_key"], secret)
+            for field in ("tts_*", "asr_*", "yue_*", "yue_token", "named_voice_library", "rvc_profiles"):
+                self.assertIn(field, music["unmapped_legacy_fields"])
+            second = next(step for step in report["accounts"][1]["plugins"] if step["plugin"] == "music")
+            self.assertFalse(second["legacy_enabled"])
+            self.assertFalse(second["eligible_to_enable_after_confirmation"])
+            self.assertNotIn("music.music_key", handoff["accounts"][1]["secrets"])
+
+    def test_music_enabled_without_key_is_blocked_without_handoff(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            root, _ = self.make_root(base)
+            speech_path = root / "speech-config.json"
+            speech = json.loads(speech_path.read_text(encoding="utf8"))
+            speech.pop("key")
+            speech_path.write_text(json.dumps(speech), encoding="utf8")
+            before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            report, handoff = preview.build_preview(root, repo, "main")
+            music = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "music")
+            self.assertEqual(music["status"], "blocked")
+            self.assertIn("music_key", music["required_missing"])
+            self.assertEqual(music["secrets"]["music_key"], {"source_field": "speech-config.json:key", "present": False})
+            self.assertFalse(music["eligible_to_enable_after_confirmation"])
+            self.assertIs(music["proposed_enabled"], False)
+            self.assertNotIn("music.music_key", handoff["accounts"][0]["secrets"])
+            self.assertEqual(before, {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()})
+
+    def test_real_music_package_contract_remains_disabled_in_public_preview(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, secret = self.make_root(Path(temporary))
+            repo = MODULE.resolve().parents[1]
+            report, handoff = preview.build_preview(root, repo, "main")
+            music = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "music")
+            digest = hashlib.sha256((repo / "plugins" / "music" / "plugin.json").read_bytes()).hexdigest()
+            self.assertEqual(music["package"]["expected_package_digest"], digest)
+            self.assertEqual(music["package"]["version"], "0.2.0")
+            self.assertEqual(music["package"]["status"], "ready")
+            self.assertEqual(music["permissions"], ["model.invoke"])
+            self.assertIs(music["proposed_enabled"], False)
+            self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
+            self.assertEqual(handoff["accounts"][0]["secrets"]["music.music_key"], secret)
 
     def test_declared_deepseek_backend_preserves_provider_and_maps_secret(self):
         with tempfile.TemporaryDirectory() as temporary:

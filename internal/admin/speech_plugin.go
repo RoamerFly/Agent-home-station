@@ -25,17 +25,23 @@ import (
 // voice: both are materialized from the installed package configuration.
 type speechPluginPolicy struct {
 	p              *permittedTools
+	manager        *Manager
+	admin          *speechAdminTestAuthority
 	store          *pluginhost.Store
 	text           string
 	instruction    string
 	model, voice   string
 	configRevision int
+	packageDigest  string
+	packageVersion string
+	timeout        int64
 	invocation     pluginhost.Invocation
 	arguments      json.RawMessage
 	post           pluginruntime.RouteTransport
 	mu             sync.Mutex
 	requested      bool
 	providerReply  json.RawMessage
+	completedJob   pluginhost.Job
 }
 
 type speechPluginResult struct {
@@ -51,6 +57,14 @@ func (m *Manager) speechPluginConfigured(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
+	installed, err := s.Installed(ctx, "speech")
+	if err != nil || !installed.Enabled || installed.Removed || s.CheckConfiguration(ctx, "speech") != nil {
+		return false
+	}
+	inv := pluginhost.Invocation{Account: m.native.Account(), Thread: "host:capability-check", Requester: "host", Purpose: "check installed speech capability", RequestKey: "speech-availability"}
+	if pluginhost.Authorize(installed.Package, pluginhost.Grant{Account: m.native.Account(), Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}, inv, []string{"model.invoke"}) != nil {
+		return false
+	}
 	c, err := s.Configuration(ctx, "speech")
 	if err != nil {
 		return false
@@ -61,16 +75,21 @@ func (m *Manager) speechPluginConfigured(ctx context.Context) bool {
 	}
 	for _, key := range c.ConfiguredSecrets {
 		if key == "tts_key" {
-			return true
+			caps, err := s.Capabilities(ctx, "speech")
+			if err != nil {
+				return false
+			}
+			for _, cap := range caps {
+				if cap.ID == "speech.synthesize" && cap.Implementation == "ready" && cap.Discoverable && !cap.Async {
+					return true
+				}
+			}
 		}
 	}
 	return false
 }
 
-func (p *permittedTools) newSpeechPluginPolicy(ctx context.Context, raw json.RawMessage) (*speechPluginPolicy, error) {
-	if p == nil || p.manager == nil || !p.manager.agentTaskActive(p.trace) || p.trace.Preview || p.trace.ReportOnly || p.trace.Account == "" || p.trace.Thread == "" || p.trace.Sender == "" || p.trace.Account != p.manager.native.Account() || !p.manager.Config().Companion.Permissions.SendVoice || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) {
-		return nil, errors.New("speech_plugin_request_not_authorized")
-	}
+func newSpeechPluginRequest(ctx context.Context, m *Manager, raw json.RawMessage) (*speechPluginPolicy, error) {
 	var in struct {
 		Text        string `json:"text"`
 		Instruction string `json:"instruction"`
@@ -84,9 +103,16 @@ func (p *permittedTools) newSpeechPluginPolicy(ctx context.Context, raw json.Raw
 	if d.Decode(&in) != nil || in.Text == "" || utf8.RuneCountInString(in.Text) > 2000 || strings.TrimSpace(in.Text) == "" || strings.ContainsRune(in.Text, 0) || utf8.RuneCountInString(in.Instruction) > 1500 || strings.ContainsRune(in.Instruction, 0) || in.Timeout < 0 || in.Timeout > int64((1<<63-1)/int64(time.Second)) {
 		return nil, toolInputError("invalid_tts_arguments")
 	}
-	store, err := p.manager.packageStore()
+	store, err := m.packageStore()
 	if err != nil {
 		return nil, err
+	}
+	installed, installErr := store.Installed(ctx, "speech")
+	if installErr != nil {
+		return nil, errors.New("speech_plugin_migration_required")
+	}
+	if !installed.Enabled || installed.Removed {
+		return nil, errors.New("speech_plugin_unavailable")
 	}
 	cfg, err := store.Configuration(ctx, "speech")
 	if err != nil {
@@ -98,6 +124,18 @@ func (p *permittedTools) newSpeechPluginPolicy(ctx context.Context, raw json.Raw
 	}
 	if in.Timeout == 0 {
 		in.Timeout = 180
+	}
+	args, _ := json.Marshal(map[string]any{"text": in.Text, "instruction": in.Instruction, "timeout_seconds": in.Timeout})
+	return &speechPluginPolicy{manager: m, packageDigest: installed.Digest, packageVersion: installed.Package.Version, timeout: in.Timeout, store: store, text: in.Text, instruction: in.Instruction, model: model, voice: voice, configRevision: cfg.Revision, arguments: args, post: mcptools.PostPluginModel}, nil
+}
+
+func (p *permittedTools) newSpeechPluginPolicy(ctx context.Context, raw json.RawMessage) (*speechPluginPolicy, error) {
+	if p == nil || p.manager == nil || !p.manager.agentTaskActive(p.trace) || p.trace.Preview || p.trace.ReportOnly || p.trace.Account == "" || p.trace.Thread == "" || p.trace.Sender == "" || p.trace.Account != p.manager.native.Account() || !p.manager.Config().Companion.Permissions.SendVoice || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) {
+		return nil, errors.New("speech_plugin_request_not_authorized")
+	}
+	policy, err := newSpeechPluginRequest(ctx, p.manager, raw)
+	if err != nil {
+		return nil, err
 	}
 	epoch, err := p.manager.memory.RecallEpoch(ctx)
 	if err != nil {
@@ -116,10 +154,10 @@ func (p *permittedTools) newSpeechPluginPolicy(ctx context.Context, raw json.Raw
 	if auth == "" {
 		return nil, errors.New("speech_plugin_request_not_authorized")
 	}
-	key := "speech-" + agentID(p.trace.Account, p.trace.Thread, p.serviceRequester(), p.trace.TaskID, p.trace.TraceID, in.Text, in.Instruction, model, voice, strconv.Itoa(cfg.Revision))
-	inv := pluginhost.Invocation{Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.serviceRequester(), Purpose: "synthesize conversation speech", RequestKey: key, EvidenceEpoch: epoch, Authorization: auth, SourceVersions: sources}
-	args, _ := json.Marshal(map[string]any{"text": in.Text, "instruction": in.Instruction, "timeout_seconds": in.Timeout})
-	return &speechPluginPolicy{p: p, store: store, text: in.Text, instruction: in.Instruction, model: model, voice: voice, configRevision: cfg.Revision, invocation: inv, arguments: args, post: mcptools.PostPluginModel}, nil
+	key := "speech-" + agentID(p.trace.Account, p.trace.Thread, p.serviceRequester(), p.trace.TaskID, p.trace.TraceID, policy.text, policy.instruction, policy.model, policy.voice, strconv.Itoa(policy.configRevision))
+	policy.p = p
+	policy.invocation = pluginhost.Invocation{Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.serviceRequester(), Purpose: "synthesize conversation speech", RequestKey: key, EvidenceEpoch: epoch, Authorization: auth, SourceVersions: sources}
+	return policy, nil
 }
 
 func (p *permittedTools) speechPluginAuthorization() string {
@@ -135,23 +173,33 @@ func (p *speechPluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	access := p.p
+	manager := p.hostManager()
 	wantContext, _ := json.Marshal(p.invocation)
 	gotContext, _ := json.Marshal(j.Context)
-	if access == nil || access.manager == nil || !access.manager.agentTaskActive(access.trace) || j.Plugin != "speech" || j.Tool != "speech.synthesize" || cap.Async || string(gotContext) != string(wantContext) || p.invocation.Authorization == "" || p.invocation.Authorization != access.speechPluginAuthorization() {
+	if manager == nil || j.Plugin != "speech" || j.Tool != "speech.synthesize" || cap.Async || !bytes.Equal(wantContext, gotContext) {
 		return errors.New("speech_plugin_authorization_changed")
 	}
-	if !access.manager.Config().Config.Enabled || !access.manager.Config().Companion.Permissions.SendVoice || !permittedRecipient(access.manager.Config().Config, access.trace.Thread) {
-		return errors.New("speech_plugin_authorization_changed")
-	}
-	current, err := access.manager.memory.RecallEpoch(ctx)
-	if err != nil || current != p.invocation.EvidenceEpoch {
-		return errors.New("speech_plugin_evidence_changed")
-	}
-	for id, revision := range p.invocation.SourceVersions {
-		ev, e := access.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", access.trace.Account, access.trace.Thread)}, id)
-		if e != nil || ev.Revision != revision {
-			return errors.New("speech_plugin_source_changed")
+	if p.admin != nil {
+		if err := p.admin.valid(ctx, manager); err != nil {
+			return err
+		}
+	} else {
+		access := p.p
+		if access == nil || access.manager == nil || !access.manager.agentTaskActive(access.trace) || j.Plugin != "speech" || j.Tool != "speech.synthesize" || cap.Async || p.invocation.Authorization == "" || p.invocation.Authorization != access.speechPluginAuthorization() {
+			return errors.New("speech_plugin_authorization_changed")
+		}
+		if !access.manager.Config().Config.Enabled || !access.manager.Config().Companion.Permissions.SendVoice || !permittedRecipient(access.manager.Config().Config, access.trace.Thread) {
+			return errors.New("speech_plugin_authorization_changed")
+		}
+		current, err := access.manager.memory.RecallEpoch(ctx)
+		if err != nil || current != p.invocation.EvidenceEpoch {
+			return errors.New("speech_plugin_evidence_changed")
+		}
+		for id, revision := range p.invocation.SourceVersions {
+			ev, e := access.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", access.trace.Account, access.trace.Thread)}, id)
+			if e != nil || ev.Revision != revision {
+				return errors.New("speech_plugin_source_changed")
+			}
 		}
 	}
 	cfg, err := p.store.Configuration(ctx, "speech")
@@ -159,10 +207,10 @@ func (p *speechPluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 		return errors.New("speech_plugin_configuration_changed")
 	}
 	i, err := p.store.Installed(ctx, "speech")
-	if err != nil || !i.Enabled || i.Removed || (j.PackageDigest != "" && (i.Digest != j.PackageDigest || i.Package.Version != j.Version || j.ConfigRevision != strconv.Itoa(p.configRevision))) {
+	if err != nil || !i.Enabled || i.Removed || i.Digest != p.packageDigest || i.Package.Version != p.packageVersion || (j.PackageDigest != "" && (i.Digest != j.PackageDigest || i.Package.Version != j.Version || j.ConfigRevision != strconv.Itoa(p.configRevision))) {
 		return errors.New("speech_plugin_version_changed")
 	}
-	if pluginhost.Authorize(i.Package, pluginhost.Grant{Account: access.trace.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, j.Context, i.Package.Permissions) != nil {
+	if pluginhost.Authorize(i.Package, pluginhost.Grant{Account: p.invocation.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, j.Context, i.Package.Permissions) != nil {
 		return errors.New("speech_plugin_permissions_changed")
 	}
 	if j.ID != "" {
@@ -228,6 +276,15 @@ func (p *speechPluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 	if err := p.Check(ctx, j, cap); err != nil {
 		return nil, err
 	}
+	var request struct {
+		Route    string          `json:"route"`
+		Body     json.RawMessage `json:"body"`
+		MaxBytes int64           `json:"max_bytes"`
+		Timeout  int64           `json:"timeout_seconds"`
+	}
+	if strictServicePluginJSON(raw, &request) != nil || request.Route != "synthesize" || request.Timeout != p.timeout || request.MaxBytes < 1 || request.MaxBytes > 1<<20 {
+		return nil, errors.New("speech_model_request_changed")
+	}
 	return pluginruntime.ProxyModelRoute(ctx, p.store, j, cap, raw, p.materialize, func(ctx context.Context, endpoint string, headers map[string]string, body json.RawMessage, limit int64, timeout time.Duration) (json.RawMessage, error) {
 		if err := p.Check(ctx, j, cap); err != nil {
 			return nil, err
@@ -237,10 +294,16 @@ func (p *speechPluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 		usage := deepseek.ReportedUsage(reply, time.Now().UTC())
 		usage.Model = p.model
 		usage.Purpose = "plugin_speech_synthesis"
-		if p.p.manager.billing == nil || p.p.manager.billing.record(Config{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/aigc/multimodal-generation/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}, usage) != nil {
+		if p.admin != nil {
+			usage.Purpose = "plugin_speech_admin_test"
+		}
+		if p.hostManager().billing == nil || p.hostManager().billing.record(Config{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/aigc/multimodal-generation/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}, usage) != nil {
 			return nil, errors.New("speech_usage_record_failed")
 		}
 		if err != nil {
+			return nil, err
+		}
+		if err := p.Check(ctx, j, cap); err != nil {
 			return nil, err
 		}
 		p.providerReply = append(json.RawMessage(nil), reply...)
@@ -309,7 +372,7 @@ func (p *speechPluginPolicy) synthesize(ctx context.Context) (speechPluginResult
 	if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
 		return speechPluginResult{}, err
 	}
-	c, ready, err := p.p.manager.installedPluginRuntime()
+	c, ready, err := p.hostManager().installedPluginRuntime()
 	if err != nil || !ready {
 		return speechPluginResult{}, errors.New("speech_plugin_runtime_unavailable")
 	}
@@ -337,7 +400,31 @@ func (p *speechPluginPolicy) synthesize(ctx context.Context) (speechPluginResult
 	if json.Unmarshal(raw, &r) != nil || r.URL == "" || r.RequestedVoice != p.voice || (r.ProviderVoiceStatus != "verified" && r.ProviderVoiceStatus != "not_reported") || r.ProviderVoiceStatus == "verified" && r.ProviderVoice != p.voice {
 		return speechPluginResult{}, errors.New("speech_plugin_result_invalid")
 	}
+	p.completedJob = call.Job
 	return r, nil
+}
+
+// Completion does not grant a lasting right to read or upload the artifact.
+// Recheck the exact completed job after every potentially slow boundary.
+func (p *speechPluginPolicy) checkCompleted(ctx context.Context) error {
+	if p.completedJob.ID == "" || p.completedJob.State != "completed" {
+		return errors.New("speech_plugin_result_unavailable")
+	}
+	return p.Check(ctx, p.completedJob, pluginhost.Capability{})
+}
+
+func (p *speechPluginPolicy) readAudio(ctx context.Context, url string, limit int64, fetch func(context.Context, string, int64) ([]byte, string, error)) ([]byte, string, error) {
+	if err := p.checkCompleted(ctx); err != nil {
+		return nil, "", err
+	}
+	data, mime, err := fetch(ctx, url, limit)
+	if err != nil {
+		return nil, "", err
+	}
+	if err = p.checkCompleted(ctx); err != nil {
+		return nil, "", err
+	}
+	return data, mime, nil
 }
 
 func (p *permittedTools) synthesizePluginSpeech(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -349,7 +436,7 @@ func (p *permittedTools) synthesizePluginSpeech(ctx context.Context, raw json.Ra
 	if err != nil {
 		return "", err
 	}
-	data, mime, err := mcptools.GetPublicMedia(ctx, result.URL, 25<<20)
+	data, mime, err := policy.readAudio(ctx, result.URL, 25<<20, mcptools.GetPublicMedia)
 	if err != nil {
 		return "", toolInputError("speech_plugin_audio_download_failed")
 	}
@@ -357,7 +444,10 @@ func (p *permittedTools) synthesizePluginSpeech(ctx context.Context, raw json.Ra
 	if err != nil {
 		return "", err
 	}
-	staged, err := p.stageOutputWithAsset(ctx, out, &assetOriginal{VoiceEngine: "plugin:speech", VoiceComplete: true, Data: data, MIME: mime, Filename: "默认声线-语音.wav"})
+	if err = policy.checkCompleted(ctx); err != nil {
+		return "", err
+	}
+	staged, err := p.stageOutputWithAsset(withOutputAuthority(ctx, policy.checkCompleted), out, &assetOriginal{VoiceEngine: "plugin:speech", VoiceComplete: true, Data: data, MIME: mime, Filename: "默认声线-语音.wav"})
 	if err != nil {
 		return "", err
 	}
@@ -376,4 +466,14 @@ func (p *permittedTools) synthesizePluginSpeech(ctx context.Context, raw json.Ra
 	}
 	encoded, err := json.Marshal(value)
 	return string(encoded), err
+}
+
+func (p *speechPluginPolicy) hostManager() *Manager {
+	if p.manager != nil {
+		return p.manager
+	}
+	if p.p != nil {
+		return p.p.manager
+	}
+	return nil
 }

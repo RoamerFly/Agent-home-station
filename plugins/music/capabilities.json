@@ -3,36 +3,40 @@
   "capabilities": [
     {
       "id": "music.generate",
-      "implementation": "migration-pending",
-      "description": "歌曲、翻唱、RVC 与 GPU 服务",
+      "implementation": "ready",
+      "description": "通过宿主绑定的云端接口提交歌曲生成；只返回未经下载或投递验证的提供商音频 URL。",
       "permissions": [
-        "artifact.read",
-        "artifact.write",
-        "network",
-        "gpu",
-        "process.execute"
+        "model.invoke"
       ],
       "input_schema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "lyrics": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
         "additionalProperties": false
       },
       "output_schema": {
         "type": "object"
       },
-      "discoverable": false
+      "discoverable": true,
+      "side_effect": "external_request"
     },
     {
       "id": "music.cover",
       "implementation": "migration-pending",
       "description": "歌曲、翻唱、RVC 与 GPU 服务",
-      "permissions": [
-        "artifact.read",
-        "artifact.write",
-        "network",
-        "gpu",
-        "process.execute"
-      ],
+      "permissions": [],
       "input_schema": {
         "type": "object",
         "properties": {},
@@ -47,13 +51,7 @@
       "id": "music.train",
       "implementation": "migration-pending",
       "description": "歌曲、翻唱、RVC 与 GPU 服务",
-      "permissions": [
-        "artifact.read",
-        "artifact.write",
-        "network",
-        "gpu",
-        "process.execute"
-      ],
+      "permissions": [],
       "input_schema": {
         "type": "object",
         "properties": {},

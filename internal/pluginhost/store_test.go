@@ -48,6 +48,37 @@ func readyFixture(t *testing.T) string {
 	}
 	return dest
 }
+
+func pendingFixture(t *testing.T) string {
+	t.Helper()
+	dest := readyFixture(t)
+	manifest := filepath.Join(dest, "plugin.json")
+	raw, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p Package
+	if err = json.Unmarshal(raw, &p); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dest, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte(body))
+		p.Files[name] = hex.EncodeToString(sum[:])
+	}
+	write("capabilities.json", `{"version":1,"capabilities":[{"id":"synthetic.pending","implementation":"migration-pending","description":"Synthetic pending capability","permissions":[],"input_schema":{"type":"object"},"output_schema":{"type":"object"},"discoverable":false}]}`)
+	p.Status = "migration-pending"
+	p.Permissions = nil
+	p.Runtime = Runtime{Transport: "unbound"}
+	p.HTTPRoutes = nil
+	raw, _ = json.Marshal(p)
+	if err = os.WriteFile(manifest, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return dest
+}
 func TestPreparedSnapshotApprovalAndReopen(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -101,7 +132,7 @@ func TestPendingPackageAndPreparedTamperRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	pending, err := store.Prepare(ctx, "../../plugins/music")
+	pending, err := store.Prepare(ctx, pendingFixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}

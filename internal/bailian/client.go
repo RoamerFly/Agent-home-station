@@ -133,34 +133,6 @@ func (c *Client) request(ctx context.Context, path string, v any) (map[string]an
 	}
 	return out, nil
 }
-func (c *Client) Synthesize(ctx context.Context, text, instruction string) (string, error) {
-	if strings.TrimSpace(text) == "" || len([]rune(text)) > 2000 {
-		return "", errors.New("合成文字须为1–2000字符")
-	}
-	if len(instruction) > 1500 {
-		return "", errors.New("本次语气指令过长")
-	}
-	if instruction == "" || instruction == c.Config.Instruction {
-		instruction = c.Config.Instruction
-	} else if c.Config.Instruction != "" {
-		instruction = c.Config.Instruction + "\n本次表达要求（保持上述角色声线，只调整语气与节奏）：" + instruction
-	}
-	out, e := c.request(ctx, "/api/v1/services/audio/tts/SpeechSynthesizer", map[string]any{"model": c.Config.TTSModel, "input": map[string]any{"text": text, "voice": c.Config.Voice, "format": "wav", "sample_rate": 24000, "instruction": instruction}})
-	if e != nil {
-		return "", e
-	}
-	return audioURL(out)
-}
-func audioURL(out map[string]any) (string, error) {
-	output, _ := out["output"].(map[string]any)
-	audio, _ := output["audio"].(map[string]any)
-	u, _ := audio["url"].(string)
-	parsed, e := url.Parse(u)
-	if e != nil || parsed.Hostname() == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return "", errors.New("百炼未返回完整音频")
-	}
-	return u, nil
-}
 func (c *Client) Transcribe(ctx context.Context, data []byte) (string, error) {
 	if len(data) == 0 || len(data) > 10<<20 {
 		return "", errors.New("语音识别文件须小于10MB")
@@ -179,18 +151,4 @@ func (c *Client) Transcribe(ctx context.Context, data []byte) (string, error) {
 		return "", errors.New("语音中未取得有效转写文字")
 	}
 	return text, nil
-}
-func (c *Client) Music(ctx context.Context, prompt, lyrics string) (string, error) {
-	if len([]rune(prompt)) > 2000 || len([]rune(lyrics)) > 2000 || strings.TrimSpace(prompt+lyrics) == "" {
-		return "", errors.New("歌曲提示词或歌词无效")
-	}
-	input := map[string]any{"prompt": prompt, "gender": "female", "format": "mp3"}
-	if lyrics != "" {
-		input["lyrics"] = lyrics
-	}
-	out, e := c.request(ctx, "/api/v1/services/audio/music/generation", map[string]any{"model": c.Config.MusicModel, "input": input})
-	if e != nil {
-		return "", e
-	}
-	return audioURL(out)
 }

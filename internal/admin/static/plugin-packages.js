@@ -220,6 +220,7 @@
   card.append(apply);box.append(card);
  }
  async function openMigration(){
+  if(!window.WechatAdmin?.isAuthenticated())return;mode(true);
   const account=window.WechatAccountContext?.id||'',version=state.migrationVersion,modal=window.WechatDialogs.open({title:'迁移旧设置',subtitle:'先只读核对；每个插件需单独确认，迁移后保持未启用。'}),box=el('div'),loading=el('p','正在读取当前账号的迁移预演…','hint');modal.dialog.style.width='min(720px, calc(100vw - 40px))';modal.dialog.style.height='min(720px, calc(100dvh - 48px))';modal.dialog.style.maxHeight='calc(100dvh - 48px)';const heading=modal.dialog.querySelector('.dialog-heading');heading.style.cssText='flex-wrap:nowrap;padding:14px 16px 12px';heading.querySelector('div').style.minWidth='0';box.append(loading);modal.body.append(box);
   try{
    const preview=await api('/api/plugin-migrations/preview');if(!migrationCurrent(modal,account,version))return;box.replaceChildren();
@@ -254,11 +255,14 @@
  window.addEventListener('wechat-admin:navigate',e=>{if(e.detail?.section==='plugins'&&!area.hidden)load()});
  window.WechatPluginPackages={
   async open(id,section){
-   if(!window.WechatAdmin?.isAuthenticated())return;const owner=account(),epoch=state.epoch;
+   if(!window.WechatAdmin?.isAuthenticated())return;mode(true);const owner=account(),epoch=state.epoch;
    await load();if(owner!==account()||epoch!==state.epoch)return;
    if(id===state.selected&&state.detail){const scope=context(),next=await api('/api/plugin-packages/'+encodeURIComponent(id));if(current(scope)){state.detail=next;if(!state.dirty)renderDetail(next)}}else await choose(id);
    if(section&&owner===account()){const scope=context();requestAnimationFrame(()=>{if(current(scope))document.getElementById('plugin-section-'+section)?.scrollIntoView({block:'start',behavior:'auto'})})}
-  }
+  },
+  // Reuse the existing read-only migration preview from capability entry points.
+  // It never installs, grants permissions, starts a runtime, or applies a step.
+  openMigration
  };
  window.addEventListener('wechat-admin:logout',()=>{state.epoch++;state.migrationVersion++;state.loaded=false;state.loadPromise=null;state.busy=false;state.selected='';state.detail=null;state.catalog=[];state.installed=[];state.runtimes={};state.retained.clear();state.hostRequest=null;dirty(false);list.replaceChildren();editor.replaceChildren(status);status.textContent='选择服务查看配置、权限和任务。'});
  mode(true);

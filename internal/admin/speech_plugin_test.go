@@ -58,7 +58,7 @@ func speechPluginJob(p *speechPluginPolicy) (pluginhost.Job, pluginhost.Capabili
 
 func speechPluginRequest(p *speechPluginPolicy) json.RawMessage {
 	instruction, _ := p.expectedInstruction()
-	b, _ := json.Marshal(map[string]any{"route": "synthesize", "body": map[string]any{"model": p.model, "input": map[string]any{"text": p.text, "voice": p.voice, "format": "wav", "sample_rate": 24000, "instruction": instruction}}, "max_bytes": 4096, "timeout_seconds": 10})
+	b, _ := json.Marshal(map[string]any{"route": "synthesize", "body": map[string]any{"model": p.model, "input": map[string]any{"text": p.text, "voice": p.voice, "format": "wav", "sample_rate": 24000, "instruction": instruction}}, "max_bytes": 4096, "timeout_seconds": p.timeout})
 	return b
 }
 

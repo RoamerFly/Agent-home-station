@@ -24,6 +24,7 @@ SCHEMA_VERSION = 1
 MAX_JSON = 1 << 20
 SPEECH_PATH = "/api/v1/services/audio/tts/SpeechSynthesizer"
 ASR_PATH = "/api/v1/services/aigc/multimodal-generation/generation"
+MUSIC_PATH = "/api/v1/services/audio/music/generation"
 
 
 def _sha256(data: bytes) -> str:
@@ -135,6 +136,19 @@ def _speech_plan(repo: Path, speech: dict[str, Any]) -> tuple[dict[str, Any], di
     step = _step("speech", _package(repo, "speech"), enabled, values, {"tts_key": key_report}, required,
                  ["asr_*", "music_*", "yue_*", "yue_token"])
     return step, {"speech.tts_key": key} if key else {}
+
+
+def _music_plan(repo: Path, speech: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    enabled = bool(speech.get("music_enabled"))
+    key_report, key = _secret(speech.get("key"), "speech-config.json:key")
+    values = {
+        "music_endpoint": _join_endpoint(_safe_text(speech.get("endpoint")), MUSIC_PATH),
+        "music_model": _safe_text(speech.get("music_model")),
+    }
+    required = ["music_key"] if enabled and not key else []
+    step = _step("music", _package(repo, "music"), enabled, values, {"music_key": key_report}, required,
+                 ["tts_*", "asr_*", "yue_*", "yue_token", "named_voice_library", "rvc_profiles"])
+    return step, {"music.music_key": key} if key else {}
 
 
 def _media_plan(repo: Path, config: dict[str, Any], speech: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
@@ -328,11 +342,12 @@ def build_preview(root: Path, repo: Path, primary_account: str = "primary") -> t
                 entry["source_errors"][name] = error
         media, media_secrets = _media_plan(repo, config, speech)
         speech_step, speech_secrets = _speech_plan(repo, speech)
+        music, music_secrets = _music_plan(repo, speech)
         share, share_secrets = _share_plan(repo, channels)
         web, web_secrets = _web_plan(repo, config, mcp)
-        entry["plugins"] = [media, speech_step, web, share]
+        entry["plugins"] = [media, speech_step, music, web, share]
         report["accounts"].append(entry)
-        all_secrets = {**media_secrets, **speech_secrets, **web_secrets, **share_secrets}
+        all_secrets = {**media_secrets, **speech_secrets, **music_secrets, **web_secrets, **share_secrets}
         secret_handoff["accounts"].append({"account": account, "secrets": all_secrets})
     return report, secret_handoff
 

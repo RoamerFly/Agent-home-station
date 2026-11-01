@@ -315,6 +315,13 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 		speechRequired = append(speechRequired, "tts_key")
 	}
 	speechStep := migrationStep("speech", packages, speech.TTSEnabled, speechValues, map[string]pluginMigrationSecret{"tts_key": ttsSecret}, pluginhost.ConfigUpdate{Values: speechValues, Secrets: map[string]string{"tts_key": ttsKey}}, speechRequired, []string{"asr_*", "music_*", "yue_*", "yue_token"}, "", sources)
+	musicSecret, musicKey := migrationSecret(speech.Key, "speech-config.json:key")
+	musicValues := map[string]json.RawMessage{"music_endpoint": migrationValue(migrationEndpoint(speech.Endpoint, "/api/v1/services/audio/music/generation")), "music_model": migrationValue(speech.MusicModel)}
+	musicRequired := []string{}
+	if speech.MusicEnabled && musicKey == "" {
+		musicRequired = append(musicRequired, "music_key")
+	}
+	musicStep := migrationStep("music", packages, speech.MusicEnabled, musicValues, map[string]pluginMigrationSecret{"music_key": musicSecret}, pluginhost.ConfigUpdate{Values: musicValues, Secrets: map[string]string{"music_key": musicKey}}, musicRequired, []string{"tts_*", "asr_*", "yue_*", "yue_token", "named_voice_library", "rvc_profiles"}, "", sources)
 
 	webRequired, webUnmapped := []string{}, []string{}
 	// Keep the legacy switches in the read-only proposal so an administrator can
@@ -370,7 +377,7 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	}
 	share := migrationStep("share-reader", packages, channelSettings.Enabled, shareValues, map[string]pluginMigrationSecret{"yuanbao_cookie": cookieSecret, "assistant_cookie": assistantSecret}, pluginhost.ConfigUpdate{Values: shareValues, Secrets: map[string]string{"yuanbao_cookie": cookie, "assistant_cookie": assistant}}, shareRequired, shareUnmapped, "", sources)
 
-	return pluginMigrationAccount{Account: m.native.Account(), SourceHashes: sources, SourceErrors: sourceErrors, Plugins: []pluginMigrationStep{media, speechStep, web, share}}, nil
+	return pluginMigrationAccount{Account: m.native.Account(), SourceHashes: sources, SourceErrors: sourceErrors, Plugins: []pluginMigrationStep{media, speechStep, musicStep, web, share}}, nil
 }
 
 func (m *Manager) pluginMigrationPreview(ctx context.Context) (pluginMigrationPreview, error) {

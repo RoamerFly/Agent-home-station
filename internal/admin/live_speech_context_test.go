@@ -151,7 +151,7 @@ func TestLiveBailianSpeechRoundTrip(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	u, e := bailian.New(c).Synthesize(ctx, "你好呀，蓝色大肥鱼今天很开心。", "")
+	u, e := livePluginSynthesize(t, ctx, c, "你好呀，蓝色大肥鱼今天很开心。", "")
 	if e != nil {
 		t.Fatal(e)
 	}

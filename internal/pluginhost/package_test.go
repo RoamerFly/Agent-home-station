@@ -62,7 +62,7 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "share-reader" || d.Name() == "mobile-control" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" {
 				if p.Status != "ready" || p.Runtime.Transport != "mcp-stdio" || p.Runtime.Entrypoint != "runtime/main.py" {
 					t.Fatal("web runtime not connected")
 				}
@@ -70,6 +70,12 @@ func TestOfficialContracts(t *testing.T) {
 					want := map[string]bool{"media.observe": true, "media.transcribe": true}
 					if d.Name() == "speech" {
 						want = map[string]bool{"speech.synthesize": true}
+					}
+					if d.Name() == "music" {
+						want = map[string]bool{"music.generate": true}
+						if len(p.Permissions) != 1 || p.Permissions[0] != "model.invoke" {
+							t.Fatal("music package must declare only the model proxy")
+						}
 					}
 					if d.Name() == "share-reader" {
 						want = map[string]bool{"share.resolve_public": true, "share.resolve_channels": true}
@@ -103,6 +109,9 @@ func TestOfficialContracts(t *testing.T) {
 								if cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != permission {
 									t.Fatal("device capability must remain synchronous and use only its own proxy")
 								}
+							}
+							if d.Name() == "music" && (cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != "model.invoke") {
+								t.Fatal("music generation must remain synchronous and use only model proxy")
 							}
 							delete(want, cap.ID)
 						} else if cap.Implementation != "migration-pending" || cap.Discoverable {

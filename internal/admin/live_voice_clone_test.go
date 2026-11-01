@@ -21,6 +21,9 @@ func TestLiveBailianReferenceVoiceVariants(t *testing.T) {
 	if root == "" || workspace == "" || reference == "" || os.Getenv("WECHAT_VOICE_CLONE_LIVE") != "1" {
 		t.Skip("explicit owner-requested reference voice audition")
 	}
+	// Do this before any paid clone/inspection request. The audition must not
+	// create a voice when the official isolated speech route is unavailable.
+	_ = requireLiveSpeechPluginRuntime(t)
 	cfg, err := loadSpeech(filepath.Join(root, "admin"))
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +125,7 @@ func TestLiveBailianReferenceVoiceVariants(t *testing.T) {
 		voiceCfg := cfg
 		voiceCfg.Voice = id
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		url, synthErr := bailian.New(voiceCfg).Synthesize(ctx, spec.Preview, variant.Instruction)
+		url, synthErr := livePluginSynthesize(t, ctx, voiceCfg, spec.Preview, variant.Instruction)
 		var audio []byte
 		if synthErr == nil {
 			audio, _, synthErr = mcptools.GetPublicMedia(ctx, url, 8<<20)
