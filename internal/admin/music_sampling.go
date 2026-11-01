@@ -1,69 +1,104 @@
 package admin
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"math"
+	"unicode/utf8"
+)
 
-// Native numeric ranges and sampler enums come from music_sampling_options;
-// this layer rejects typos without replacing explicit values with defaults.
+// Native bounds and enums remain authoritative at the live service. Host
+// preflight checks the administrator-installed declarative JSON shape only.
 type musicSampling map[string]map[string]any
 
-func (s musicSampling) validate() error {
-	allowed := map[string]map[string]bool{
-		"semantic": {"temperature": true, "top_p": true, "top_k": true, "repetition_penalty": true},
-		"render":   {"steps": true, "cfg": true, "sampler_name": true, "scheduler": true, "denoise": true},
-		"score":    {"max_abc_tokens": true, "temperature": true, "top_p": true, "top_k": true, "repetition_penalty": true, "penalty_window": true},
+func (p *permittedTools) validateMusicSampling(ctx context.Context, s musicSampling, planning string) error {
+	if len(s) == 0 && planning == "" {
+		return nil
 	}
-	for group, values := range s {
-		keys, ok := allowed[group]
-		if !ok || values == nil {
-			return toolInputError("未知采样参数组；请先调用music_sampling_options")
+	resources, err := p.manager.musicCatalogResources(ctx, musicNativeSamplingFile)
+	if err != nil {
+		return toolInputError("music_plugin_catalog_unavailable")
+	}
+	definitions, err := musicNativeDefinitions(resources[musicNativeSamplingFile])
+	if err != nil {
+		return toolInputError("music_plugin_catalog_invalid")
+	}
+	values := map[string]any{}
+	if s != nil {
+		values["sampling"] = s
+	}
+	if planning != "" {
+		values["planning_mode"] = planning
+	}
+	for name, value := range values {
+		var schema map[string]any
+		raw, ok := definitions[name]
+		if !ok || json.Unmarshal(raw, &schema) != nil {
+			return toolInputError("music_plugin_catalog_invalid")
 		}
-		for key, value := range values {
-			if !keys[key] {
-				return toolInputError("未知采样参数：" + group + "." + key)
-			}
-			if key == "sampler_name" || key == "scheduler" {
-				if v, ok := value.(string); !ok || v == "" {
-					return toolInputError("采样器/调度器名称无效")
-				}
-			} else if _, ok := value.(float64); !ok {
-				return toolInputError("采样数值无效：" + group + "." + key)
-			}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return toolInputError("音乐参数无法编码：" + name)
+		}
+		var canonical any
+		if json.Unmarshal(encoded, &canonical) != nil || validateMusicDeclaredShape(canonical, schema) != nil {
+			return toolInputError("音乐参数不匹配已安装插件声明：" + name + "；请先调用music_sampling_options核对实际原生参数")
 		}
 	}
 	return nil
 }
 
-func musicSamplingSchema() map[string]any {
-	groups := map[string]any{}
-	for group, keys := range map[string][]string{
-		"semantic": {"temperature", "top_p", "top_k", "repetition_penalty"},
-		"render":   {"steps", "cfg", "sampler_name", "scheduler", "denoise"},
-		"score":    {"max_abc_tokens", "temperature", "top_p", "top_k", "repetition_penalty", "penalty_window"},
-	} {
-		fields := map[string]any{}
-		for _, key := range keys {
-			kind := "number"
-			if key == "sampler_name" || key == "scheduler" {
-				kind = "string"
-			}
-			if key == "steps" || key == "top_k" || key == "max_abc_tokens" || key == "penalty_window" {
-				kind = "integer"
-			}
-			fields[key] = map[string]any{"type": kind}
+func validateMusicDeclaredShape(value any, schema map[string]any) error {
+	invalid := errors.New("music_plugin_parameter_shape_invalid")
+	switch schema["type"] {
+	case "object":
+		object, ok := value.(map[string]any)
+		if !ok {
+			return invalid
 		}
-		groups[group] = map[string]any{"type": "object", "properties": fields, "additionalProperties": false}
+		properties, ok := schema["properties"].(map[string]any)
+		if !ok {
+			return invalid
+		}
+		for name, item := range object {
+			definition, declared := properties[name]
+			if !declared {
+				if schema["additionalProperties"] == false {
+					return invalid
+				}
+				continue
+			}
+			child, ok := definition.(map[string]any)
+			if !ok || validateMusicDeclaredShape(item, child) != nil {
+				return invalid
+			}
+		}
+	case "string":
+		text, ok := value.(string)
+		if !ok {
+			return invalid
+		}
+		if minimum, ok := schema["minLength"].(float64); ok && utf8.RuneCountInString(text) < int(minimum) {
+			return invalid
+		}
+	case "number", "integer":
+		number, ok := value.(float64)
+		if !ok || math.IsNaN(number) || math.IsInf(number, 0) || schema["type"] == "integer" && number != math.Trunc(number) {
+			return invalid
+		}
+	default:
+		return invalid
 	}
-	return map[string]any{"type": "object", "description": "Optional native overrides. Query music_sampling_options for live native limits, enum choices, meanings and workflow defaults. Explicit zero values are preserved. score applies to original planning only.", "properties": groups, "additionalProperties": false}
-}
-
-func extendMusicSamplingSchema(raw string) string {
-	var schema map[string]any
-	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
-		panic(err)
+	if choices, ok := schema["enum"].([]any); ok {
+		encoded, _ := json.Marshal(value)
+		for _, choice := range choices {
+			candidate, _ := json.Marshal(choice)
+			if string(encoded) == string(candidate) {
+				return nil
+			}
+		}
+		return invalid
 	}
-	properties := schema["properties"].(map[string]any)
-	properties["sampling"] = musicSamplingSchema()
-	properties["planning_mode"] = map[string]any{"type": "string", "enum": []string{"off", "melody", "full"}, "description": "Original song ABC planning: keep workflow default if omitted. Covers use the reference score and reference_mode instead."}
-	result, _ := json.Marshal(schema)
-	return string(result)
+	return nil
 }

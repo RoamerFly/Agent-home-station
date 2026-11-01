@@ -10,12 +10,6 @@ import (
 	"runtime"
 )
 
-// Trusted service lifecycle operation, not an unconfined Agent shell. Only
-// the locally installed music unit may be started; no arbitrary command/args.
-func (p *permittedTools) startMusicService(ctx context.Context) (string, error) {
-	return p.controlMusicService(ctx, "start")
-}
-
 // Called only by the installed capability's bound host-service callback.
 func (p *permittedTools) startMusicServiceHost(ctx context.Context) (string, error) {
 	authority, _ := ctx.Value(speechAdminTestContextKey{}).(*speechAdminTestAuthority)

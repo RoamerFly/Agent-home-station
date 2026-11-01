@@ -2,6 +2,16 @@
   "version": 1,
   "capabilities": [
     {
+      "id": "external.http_request",
+      "implementation": "ready",
+      "discoverable": true,
+      "side_effect": "write",
+      "permissions": ["network"],
+      "description": "只通过宿主受控桥执行一个已声明的同步 HTTP 调用；端点、凭据、来源绑定与结果暂存均不进入插件进程。",
+      "input_schema": {"type":"object","properties":{"phase":{"type":"string","enum":["call"]},"tool":{"type":"string"},"arguments":{"type":"object"},"arguments_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"protocol":{"type":"object"}},"required":["phase","tool","arguments","arguments_sha256","protocol"],"additionalProperties":false},
+      "output_schema": {"type":"object"}
+    },
+    {
       "id": "external.discover",
       "implementation": "migration-pending",
       "description": "已有 HTTP/MCP 配置",

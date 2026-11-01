@@ -202,8 +202,15 @@ func (p *permittedTools) localTools() []mcptools.Tool {
 	}
 	tools = append(tools, mcptools.Tool{Name: "web_media_download", Description: "Download media and prepare an attachment, not an observation tool. To understand an already received video/share use video_inspect with its message_id or cached asset_id; info/frames/audio return actual observations without uploading. Public Kuaishou/chenzhongtech video pages are also supported for video, voice and file. For kind=video, accepts direct video URLs AND anonymously playable Bilibili BV video-page URLs (optional ?p=part) or b23.tv short links; resolves the public progressive MP4 itself, so try the actual BV page instead of searching for guessed mp4 links. Videos longer than 60 seconds are prepared as clickable WeChat share cards with the actual playback page, without downloading the whole video. Short files are limited to 50 MiB. For kind=voice, also accepts these public BV/b23 pages and extracts the existing audio into voice notes, limited to 10 minutes and 25 MiB input; the reusable original is an audio-only M4A file. No paid/logged-in playback. Image/file otherwise need direct files. Does not send until final reply.media_ids. No login, paid formats, DRM or general streaming playlists. For music, DEFAULT preview_seconds=0 sends the COMPLETE audio as voice notes of at most60 seconds. Keep original file cached, but never ask about sending a file; use file only when user asks. Explicit preview requests may set preview_seconds=45. For kind=file on BV pages, audio_only=true gives the full original audio M4A, false gives the original video file. Input: {url:string,kind:voice|video|image|file,preview_seconds?:integer 0..900,audio_only?:boolean}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"kind":{"type":"string","enum":["voice","video","image","file"]},"preview_seconds":{"type":"integer","minimum":0,"maximum":900},"audio_only":{"type":"boolean"}},"required":["url","kind"],"additionalProperties":false}`)})
 	if p.runtime != nil {
-		tools = append(tools, p.runtime.Tools()...)
+		// Async and legacy polling retain their existing compatibility path until
+		// their separately checkpointed phases are migrated.
+		for _, tool := range p.runtime.Tools() {
+			if p.runtime.Background(tool.Name) || p.externalLegacyHTTP(tool.Name) {
+				tools = append(tools, tool)
+			}
+		}
 	}
+	tools = append(tools, p.installedExternalHTTPTools(context.Background())...)
 	for _, module := range p.capabilities() {
 		tools = append(tools, module.list()...)
 	}
@@ -605,7 +612,13 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		if p.runtime.Background(name) {
 			return p.startPluginJob(ctx, name, args)
 		}
-		output, err := p.runtime.Call(ctx, name, args)
+		var output plugins.Output
+		var err error
+		if p.externalLegacyHTTP(name) {
+			output, err = p.runtime.Call(ctx, name, args)
+		} else {
+			output, err = p.callExternalHTTP(ctx, name, args)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -930,7 +943,16 @@ func (s *Server) mcpRoutes(mux *http.ServeMux) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 		defer cancel()
-		result, err := access.Call(ctx, input.Name, input.Arguments)
+		var result string
+		if access.apiNames[input.Name] && !access.runtime.Background(input.Name) && !access.externalLegacyHTTP(input.Name) {
+			// Explicit authenticated manual API test: no incoming WeChat actor and no
+			// destination conversation are invented for this management action.
+			access.trace = companion.Input{Account: s.manager.native.Account()}
+			ctx = s.externalHTTPTestContext(ctx, r, input.Name)
+			result, err = access.callManualExternalHTTP(ctx, input.Name, input.Arguments)
+		} else {
+			result, err = access.Call(ctx, input.Name, input.Arguments)
+		}
 		if err != nil {
 			s.manager.log("mcp_manual_call_failed")
 			detail := mcptools.FailureDescription(err)

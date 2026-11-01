@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "definitions": {
+    "sampling": {
+      "type": "object",
+      "description": "Optional native overrides. Query music_sampling_options for live native limits, enum choices, meanings and workflow defaults. Explicit zero values are preserved. score applies to original planning only.",
+      "properties": {
+        "semantic": {
+          "type": "object",
+          "properties": {
+            "temperature": {
+              "type": "number"
+            },
+            "top_p": {
+              "type": "number"
+            },
+            "top_k": {
+              "type": "integer"
+            },
+            "repetition_penalty": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "render": {
+          "type": "object",
+          "properties": {
+            "steps": {
+              "type": "integer"
+            },
+            "cfg": {
+              "type": "number"
+            },
+            "sampler_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "scheduler": {
+              "type": "string",
+              "minLength": 1
+            },
+            "denoise": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "score": {
+          "type": "object",
+          "properties": {
+            "max_abc_tokens": {
+              "type": "integer"
+            },
+            "temperature": {
+              "type": "number"
+            },
+            "top_p": {
+              "type": "number"
+            },
+            "top_k": {
+              "type": "integer"
+            },
+            "repetition_penalty": {
+              "type": "number"
+            },
+            "penalty_window": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "planning_mode": {
+      "type": "string",
+      "enum": [
+        "off",
+        "melody",
+        "full"
+      ],
+      "description": "Original song ABC planning: keep workflow default if omitted. Covers use the reference score and reference_mode instead."
+    }
+  }
+}

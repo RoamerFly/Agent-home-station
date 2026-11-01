@@ -48,6 +48,8 @@
     "tests/test_cloud_music.py": "5071f073d62ad5028e11bb96f310d9ff8fc126e4da142885eccb44f120ba9a8a",
     "tests/test_local_music.py": "5494a0a9834cbce83a8cdd9c86f5a0f196ecb239420ff412123c8153f4f02273",
     "ui.schema.json": "56d50eb51aa5db6f23d65a179de61ff4f82c2def68e3e7883515c281654eaa42",
-    "tests/test_service_control.py": "c914970f913e8a5f59fa905289af2c94fdb5c247eb98268c9e5d91edfc05165e"
+    "tests/test_service_control.py": "c914970f913e8a5f59fa905289af2c94fdb5c247eb98268c9e5d91edfc05165e",
+    "runtime/tool_catalog.json": "d287989ada882408d219d954a588f47b89753fa60b77df2e0598e57bf64c8f79",
+    "runtime/native_sampling.json": "a8c460f9529039311f104d953f92b2ade695fe38c8725c2730d56ee3dfd610de"
   }
 }

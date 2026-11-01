@@ -29,6 +29,7 @@ MUSIC_PATH = "/api/v1/services/audio/music/generation"
 AUDIO_REVIEW_PATH = "/compatible-mode/v1/chat/completions"
 AUDIO_REVIEW_MODEL = "qwen3.8-omni-flash"
 PROJECT_DEVELOPMENT_PERMISSIONS = {"workspace.read", "workspace.write", "process.execute"}
+EXTERNAL_SYNC_PERMISSION = "network"
 
 
 def _sha256(data: bytes) -> str:
@@ -58,6 +59,26 @@ def _read_json(path: Path, *, required: bool = False) -> tuple[dict[str, Any], s
     if not isinstance(value, dict):
         return {}, "not_object"
     return value, None
+
+
+def _source_hash(path: Path) -> tuple[str, str | None]:
+    """Return a report-safe source fingerprint without exporting its bytes.
+
+    In particular plugins.json can contain endpoint templates and credentials.
+    Its hash is an approval boundary only; it is never parsed into public plan
+    values beyond the enablement/async classification below.
+    """
+    if not path.exists():
+        return _sha256(b"missing"), "missing"
+    if path.is_symlink() or not path.is_file():
+        return _sha256(b"not_regular"), "not_regular"
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return _sha256(b"unreadable"), "unreadable"
+    if len(data) > MAX_JSON:
+        return _sha256(b"too_large"), "too_large"
+    return _sha256(data), None
 
 
 def _safe_text(value: Any) -> str:
@@ -202,6 +223,84 @@ def _declares_project_development(repo: Path) -> bool:
         if isinstance(item, dict) and item.get("implementation") == "ready"
     }
     return all(permission in declared.get(capability, set()) for capability, permission in required.items())
+
+
+def _declares_external_sync(repo: Path) -> bool:
+    """Require the exact empty-config synchronous adapter declaration.
+
+    This is deliberately not a general conversion for old MCP servers or
+    background jobs.  They remain host-owned until their own reviewed adapter
+    exists, rather than being silently represented as a one-shot HTTP call.
+    """
+    package, package_error = _read_json(repo / "plugins" / "external-tools" / "plugin.json", required=True)
+    schema, schema_error = _read_json(repo / "plugins" / "external-tools" / "config.schema.json", required=True)
+    capabilities, capabilities_error = _read_json(repo / "plugins" / "external-tools" / "capabilities.json", required=True)
+    if package_error or schema_error or capabilities_error or package.get("id") != "external-tools" or package.get("status") != "ready":
+        return False
+    if EXTERNAL_SYNC_PERMISSION not in package.get("permissions", []):
+        return False
+    if schema.get("type") != "object" or schema.get("properties") != {} or schema.get("additionalProperties") is not False:
+        return False
+    rows = capabilities.get("capabilities")
+    return isinstance(rows, list) and any(
+        isinstance(item, dict)
+        and item.get("id") == "external.http_request"
+        and item.get("implementation") == "ready"
+        and item.get("discoverable") is True
+        and item.get("async") is not True
+        and EXTERNAL_SYNC_PERMISSION in item.get("permissions", [])
+        for item in rows
+    )
+
+
+def _external_legacy_sync_intent(mcp: dict[str, Any], ledger: dict[str, Any]) -> tuple[bool, bool]:
+    """Return (matching_sync_intent, enabled_but_not_migratable).
+
+    The old ledger remains the only source of service address, request
+    template and credential data.  This reads only the public structural flags
+    required to avoid claiming MCP or async declarations migrated.
+    """
+    if not bool(mcp.get("enabled", True)):
+        return False, False
+    declared = False
+    sync = False
+    for entry in ledger.values():
+        if not isinstance(entry, dict) or entry.get("removed") or not entry.get("enabled"):
+            continue
+        manifest = entry.get("manifest")
+        if not isinstance(manifest, dict):
+            continue
+        if isinstance(manifest.get("mcp"), dict):
+            declared = True
+        tools = manifest.get("tools")
+        if not isinstance(tools, list):
+            continue
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            declared = True
+            if tool.get("job") is None and tool.get("poll") is None:
+                sync = True
+    return sync, declared and not sync
+
+
+def _external_tools_plan(repo: Path, mcp: dict[str, Any], ledger: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Prepare only the host-bridged synchronous external-tools migration.
+
+    No legacy endpoint, header, template, MCP setup or secret can enter either
+    public values or the host-secret handoff.  The host keeps plugins.json as
+    the sole authority for those records.
+    """
+    legacy_enabled, unsupported_only = _external_legacy_sync_intent(mcp, ledger)
+    required: list[str] = []
+    if unsupported_only:
+        required.append("no_matching_sync_external_tools")
+    if legacy_enabled and not _declares_external_sync(repo):
+        required.append("official_sync_external_adapter_not_declared_by_external_tools_plugin")
+    retained = []
+    if bool(mcp.get("enabled", True)) and (legacy_enabled or unsupported_only):
+        retained.append("plugins.json:host_retained_declarations_and_credentials")
+    return _step("external-tools", _package(repo, "external-tools"), legacy_enabled, {}, {}, required, retained), {}
 
 
 def _safe_local_music_endpoint(raw: str) -> str | None:
@@ -531,10 +630,20 @@ def build_preview(root: Path, repo: Path, primary_account: str = "primary") -> t
         mcp, mcp_error = _read_json(directory / "mcp-config.json")
         channels, channels_error = _read_json(directory / "channels-config.json")
         agent, agent_error = _read_json(directory / "agent-config.json")
+        legacy_plugins, plugins_error = _read_json(directory / "plugins.json")
         if not mcp:
             mcp = {"enabled": True, "web_search_enabled": True, "web_fetch_enabled": True}
-        entry: dict[str, Any] = {"account": account, "source_directory": str(directory), "source_errors": {}}
-        for name, error in (("config.json", config_error), ("speech-config.json", speech_error), ("mcp-config.json", mcp_error), ("channels-config.json", channels_error), ("agent-config.json", agent_error)):
+        source_paths = {
+            "config_json": directory / "config.json",
+            "speech_config_json": directory / "speech-config.json",
+            "mcp_config_json": directory / "mcp-config.json",
+            "channels_config_json": directory / "channels-config.json",
+            "agent_config_json": directory / "agent-config.json",
+            "plugins_json": directory / "plugins.json",
+        }
+        source_hashes = {name: _source_hash(path)[0] for name, path in source_paths.items()}
+        entry: dict[str, Any] = {"account": account, "source_directory": str(directory), "source_hashes": source_hashes, "source_errors": {}}
+        for name, error in (("config.json", config_error), ("speech-config.json", speech_error), ("mcp-config.json", mcp_error), ("channels-config.json", channels_error), ("agent-config.json", agent_error), ("plugins.json", plugins_error)):
             if error:
                 entry["source_errors"][name] = error
         media, media_secrets = _media_plan(repo, config, speech)
@@ -543,9 +652,10 @@ def build_preview(root: Path, repo: Path, primary_account: str = "primary") -> t
         project_development, project_secrets = _project_development_plan(repo, agent)
         share, share_secrets = _share_plan(repo, channels)
         web, web_secrets = _web_plan(repo, config, mcp)
-        entry["plugins"] = [media, speech_step, music, project_development, web, share]
+        external, external_secrets = _external_tools_plan(repo, mcp, legacy_plugins)
+        entry["plugins"] = [media, speech_step, music, project_development, web, share, external]
         report["accounts"].append(entry)
-        all_secrets = {**media_secrets, **speech_secrets, **music_secrets, **project_secrets, **web_secrets, **share_secrets}
+        all_secrets = {**media_secrets, **speech_secrets, **music_secrets, **project_secrets, **web_secrets, **share_secrets, **external_secrets}
         secret_handoff["accounts"].append({"account": account, "secrets": all_secrets})
     return report, secret_handoff
 

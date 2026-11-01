@@ -20,7 +20,7 @@ SPEC.loader.exec_module(preview)
 class PluginMigrationPreviewTests(unittest.TestCase):
     def make_repo(self, base):
         repo = base / "repo"
-        for plugin, status in (("speech", "ready"), ("media-understanding", "ready"), ("music", "ready"), ("project-development", "ready"), ("web-search", "ready"), ("share-reader", "migration-pending")):
+        for plugin, status in (("speech", "ready"), ("media-understanding", "ready"), ("music", "ready"), ("project-development", "ready"), ("web-search", "ready"), ("share-reader", "migration-pending"), ("external-tools", "ready")):
             directory = repo / "plugins" / plugin
             directory.mkdir(parents=True)
             manifest = {"id": plugin, "version": "1.2.3", "status": status}
@@ -28,8 +28,35 @@ class PluginMigrationPreviewTests(unittest.TestCase):
                 manifest["permissions"] = ["model.invoke"]
             if plugin == "project-development":
                 manifest["permissions"] = ["workspace.read", "workspace.write", "process.execute"]
+            if plugin == "external-tools":
+                manifest["permissions"] = ["network"]
             (directory / "plugin.json").write_text(json.dumps(manifest), encoding="utf8")
         return repo
+
+    def add_declared_external_sync(self, repo):
+        external = repo / "plugins" / "external-tools"
+        (external / "config.schema.json").write_text(json.dumps({"type": "object", "properties": {}, "additionalProperties": False}), encoding="utf8")
+        (external / "capabilities.json").write_text(json.dumps({"capabilities": [{
+            "id": "external.http_request", "implementation": "ready", "discoverable": True,
+            "async": False, "permissions": ["network"],
+        }]}), encoding="utf8")
+
+    def write_external_ledger(self, root, *, mode="sync"):
+        secret = "external-secret-must-not-appear"
+        if mode == "sync":
+            manifest = {"id": "legacy-http", "name": "Legacy HTTP", "tools": [{
+                "name": "lookup", "url": "https://private.example/v1", "headers": {"Authorization": "Bearer {{secret.TOKEN}}"},
+            }]}
+        elif mode == "async":
+            manifest = {"id": "legacy-async", "name": "Legacy async", "tools": [{
+                "name": "render", "url": "https://private.example/jobs", "job": {"id_path": "job_id"}, "poll": {"url": "https://private.example/jobs/{{result.job_id}}"},
+            }]}
+        elif mode == "mcp":
+            manifest = {"id": "legacy-mcp", "name": "Legacy MCP", "mcp": {"transport": "http", "url": "https://private.example/mcp"}}
+        else:
+            raise ValueError(mode)
+        (root / "plugins.json").write_text(json.dumps({manifest["id"]: {"manifest": manifest, "enabled": True, "secrets": {"TOKEN": secret}}}), encoding="utf8")
+        return secret
 
     def make_root(self, base):
         root = base / "admin"
@@ -105,7 +132,8 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertNotIn(secret, encoded)
             self.assertEqual([a["account"] for a in report["accounts"]], ["main", "secondary"])
             main = report["accounts"][0]
-            self.assertEqual([step["plugin"] for step in main["plugins"]], ["media-understanding", "speech", "music", "project-development", "web-search", "share-reader"])
+            self.assertEqual([step["plugin"] for step in main["plugins"]], ["media-understanding", "speech", "music", "project-development", "web-search", "share-reader", "external-tools"])
+            self.assertIn("plugins_json", main["source_hashes"])
             self.assertTrue(all(step["proposed_enabled"] is False for account in report["accounts"] for step in account["plugins"]))
             media = next(x for x in main["plugins"] if x["plugin"] == "media-understanding")
             self.assertIn("registered_local_asr_profile:sensevoice-test", media["required_missing"])
@@ -146,6 +174,64 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertNotIn("do-not-copy", public)
             self.assertNotIn("project-development", handoff["accounts"][0]["secrets"])
             self.assertEqual(before, {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()})
+
+    def test_external_sync_migration_keeps_legacy_ledger_and_credentials_host_retained(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_external_sync(repo)
+            root, _ = self.make_root(base)
+            secret = self.write_external_ledger(root, mode="sync")
+            before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            report, handoff = preview.build_preview(root, repo, "main")
+            account = report["accounts"][0]
+            external = next(step for step in account["plugins"] if step["plugin"] == "external-tools")
+            self.assertEqual(external["status"], "ready_for_administrator_review")
+            self.assertTrue(external["legacy_enabled"])
+            self.assertTrue(external["eligible_to_enable_after_confirmation"])
+            self.assertFalse(external["proposed_enabled"])
+            self.assertEqual(external["values"], {})
+            self.assertEqual(external["secrets"], {})
+            self.assertEqual(external["permissions"], ["network"])
+            self.assertEqual(external["required_missing"], [])
+            self.assertIn("plugins.json:host_retained_declarations_and_credentials", external["unmapped_legacy_fields"])
+            self.assertIn("plugins_json", account["source_hashes"])
+            public = json.dumps(report, ensure_ascii=False)
+            self.assertNotIn(secret, public)
+            self.assertNotIn("private.example", public)
+            self.assertFalse(any(key.startswith("external-tools.") for key in handoff["accounts"][0]["secrets"]))
+            self.assertEqual(before, {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()})
+
+    def test_external_mcp_or_async_only_is_blocked_without_provider_substitution(self):
+        for mode in ("mcp", "async"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                repo = self.make_repo(base)
+                self.add_declared_external_sync(repo)
+                root, _ = self.make_root(base)
+                secret = self.write_external_ledger(root, mode=mode)
+                report, handoff = preview.build_preview(root, repo, "main")
+                external = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
+                self.assertEqual(external["status"], "blocked")
+                self.assertFalse(external["legacy_enabled"])
+                self.assertFalse(external["eligible_to_enable_after_confirmation"])
+                self.assertFalse(external["proposed_enabled"])
+                self.assertEqual(external["values"], {})
+                self.assertEqual(external["secrets"], {})
+                self.assertIn("no_matching_sync_external_tools", external["required_missing"])
+                self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
+                self.assertFalse(any(key.startswith("external-tools.") for key in handoff["accounts"][0]["secrets"]))
+
+    def test_external_sync_requires_reviewed_adapter_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            root, _ = self.make_root(base)
+            self.write_external_ledger(root, mode="sync")
+            report, _ = preview.build_preview(root, repo, "main")
+            external = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
+            self.assertEqual(external["status"], "blocked")
+            self.assertIn("official_sync_external_adapter_not_declared_by_external_tools_plugin", external["required_missing"])
 
     def test_project_development_does_not_expand_read_or_files_scope(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -126,7 +126,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		return p.callMemory(ctx, name, args)
 	}
 	if name == "music_service_start" {
-		return p.startMusicService(ctx)
+		return p.controlMusicService(ctx, "start")
 	}
 	if strings.HasPrefix(name, "voice_library_") {
 		return p.callVoiceLibrary(ctx, name, args)

@@ -62,7 +62,7 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" {
 				if p.Status != "ready" || p.Runtime.Transport != "mcp-stdio" || p.Runtime.Entrypoint != "runtime/main.py" {
 					t.Fatal("web runtime not connected")
 				}
@@ -84,6 +84,12 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"project.workspace_read": true, "project.workspace_write": true, "project.workspace_execute": true}
 						if len(p.Permissions) != 3 || p.Permissions[0] != "workspace.read" || p.Permissions[1] != "workspace.write" || p.Permissions[2] != "process.execute" {
 							t.Fatal("project package must declare three separate workspace/process proxies")
+						}
+					}
+					if d.Name() == "external-tools" {
+						want = map[string]bool{"external.http_request": true}
+						if len(p.Permissions) != 1 || p.Permissions[0] != "network" {
+							t.Fatal("external HTTP must use the bounded network proxy only")
 						}
 					}
 					if d.Name() == "mobile-control" {
@@ -124,6 +130,9 @@ func TestOfficialContracts(t *testing.T) {
 								if cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != permission {
 									t.Fatal("music capability must remain synchronous and use its own proxy")
 								}
+							}
+							if d.Name() == "external-tools" && (cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != "network") {
+								t.Fatal("external HTTP capability must remain synchronous and use its network proxy")
 							}
 							if d.Name() == "project-development" {
 								permission := map[string]string{

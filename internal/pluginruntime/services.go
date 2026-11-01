@@ -49,6 +49,9 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 			if p == "network" && job.Plugin == "music" && cap.ID == "music.service_control" && method == "wechat/service_control" {
 				allowed = true
 			}
+			if p == "network" && job.Plugin == "external-tools" && cap.ID == "external.http_request" && method == "wechat/external_request" {
+				allowed = true
+			}
 			if job.Plugin == "project-development" && method == "wechat/workspace_request" &&
 				(cap.ID == "project.workspace_read" && p == "workspace.read" || cap.ID == "project.workspace_write" && p == "workspace.write" || cap.ID == "project.workspace_execute" && p == "process.execute") {
 				allowed = true

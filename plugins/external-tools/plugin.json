@@ -2,9 +2,9 @@
   "schema_version": 1,
   "id": "external-tools",
   "name": "外部工具连接",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "host_protocol": 1,
-  "status": "migration-pending",
+  "status": "ready",
   "platforms": [
     "windows-amd64",
     "linux-amd64"
@@ -18,15 +18,15 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "8b98113d6b07d5af8e6682329685ef1cf61f75eaa2da10df55d5473d8b93bc9f",
-    "CHANGELOG.md": "f920992f080e776e29237ed0dc69161e336162b1565cebee68298e69b7af3fb5",
-    "config.schema.json": "95693d311a4827fcd7ab4d1ed7a6f590568841010f9999fe7761e7c810cb753f",
+    "capabilities.json": "1ff0302bfacd1397b1f0621c928923c1e0ef5a44848a17c596bd611b5261f83a",
+    "CHANGELOG.md": "a97de500d854fbd9977d66453aa201c177d73cd6fd7793877a0d01efccddf6d0",
+    "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
     "MIGRATION.md": "1dd4bd2e9a9e0de0f9d29313f7bec675387843bd6b595c24edf8236bb175a7c0",
     "PERMISSIONS.md": "bb1b1e62a8e8b21b921225cb425ca3bb03f196fc6fccf9cb6d5d8f16d934eb00",
-    "README.md": "4c5d1111016792c8142cb31a184f408064b599387da6bac54e8a7381bf1399ee",
-    "runtime/README.md": "57e10354c7f51074241ecbad440f4ffe067a35beb8265c12f88c1d5d9652d300",
-    "runtime/main.py": "797c47ced3159e6b468632ca4d3940cdfadd89ebfc052780dd48076c41f13a7a",
-    "tests/test_runtime.py": "7a23e3d89cbee133440c5c3cb2ca5c9c40aec75a931ea30149cbdf03a356f6c1",
+    "README.md": "9a878b50c93f1f5d6d6c87b1edcb6b3dc9809404fac601cc3560ceff478e1bbb",
+    "runtime/README.md": "755bdc1bb2e50062af9e17cf455723f7b7011b421e031ddfaf349ad303afdb9b",
+    "runtime/main.py": "cf18cbb7ef3cf89796289e9cdc63be6d9efa1f179e0273b5be887a75b7a096a8",
+    "tests/test_runtime.py": "c1a99dc524fca73e5de23b7cb8dc0977f625a9a0a6d2d7dd4bc38dc249a1e93f",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   }

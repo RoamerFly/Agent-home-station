@@ -58,6 +58,8 @@ func TestPluginLifecycleAndGeneratedVoice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	access.SetTrace(companion.Input{Channel: "wechat", Account: f.manager.native.Account(), Thread: "filehelper", Sender: "synthetic-requester", TraceID: "synthetic-plugin-voice"})
+	installExternalHTTPTestRuntime(t, access)
 	result, err := access.Call(context.Background(), "voice__speak", json.RawMessage(`{"text":"hello"}`))
 	if err != nil {
 		t.Fatal(err)

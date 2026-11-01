@@ -1,5 +1,5 @@
 # 变更
 
-0.2.0：新增离线 MCP stdio 声明解析与 HTTP 工具 schema 投影；仅产生受控宿主请求意图，不含网络或凭据执行。能力继续保持 migration-pending，等待宿主接线。
+0.3.0：新增固定 `external.http_request` stdio 协议和受控单步 legacy HTTP bridge；运行时只编排同步 call 的解析，宿主保留端点、凭据和实际网络。其他外部能力继续保持 migration-pending。
 
 0.1.0：建立迁移契约，尚未迁出旧实现。

@@ -2,7 +2,7 @@
 
 `scripts/plugin_migration_preview.py` 是一个**只读**预演器。它读取管理目录中主账号和
 `accounts.json` 所列未移除账号的旧 `config.json`、`speech-config.json`、
-`mcp-config.json`、`channels-config.json`，生成可供后续事务式迁移器消费的版本化计划。
+`mcp-config.json`、`channels-config.json`、`agent-config.json` 与 `plugins.json`，生成可供后续事务式迁移器消费的版本化计划。
 
 它不会安装或启用插件，不写入 SQLite 配置，不复制模型、素材、聊天记录或记忆，也不修改
 任何旧配置。计划中的 `proposed_enabled` 始终为 `false`；即使旧能力开启，也必须在核验
@@ -37,7 +37,7 @@ python -B scripts/plugin_migration_preview.py `
 
 ## 映射边界
 
-每个账号按 `media-understanding`、`speech`、`music`、`web-search`、`share-reader` 顺序生成五个步骤。
+每个账号按 `media-understanding`、`speech`、`music`、`project-development`、`web-search`、`share-reader`、`external-tools` 顺序生成七个步骤。
 Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所有步骤默认保持禁用。
 
 - `speech`：映射旧云端 TTS 的 endpoint、model、默认声线、表达要求和 key。若宿主只读核验到
@@ -88,6 +88,14 @@ Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所
   新插件链路不会擅自改变这一语义，计划会标为
   `explicit_bridge_fallback_policy_needed`，等待管理员选择。既有 `channels-bindings.json` 仍由宿主
   只读、按账号/会话/消息（或受限对象别名）查询；本轮不复制它、不将其交给插件，也不创建新的绑定。
+- `external-tools`：这是**部分迁移**，仅覆盖旧 `plugins.json` 中已启用、且在 MCP 总开关开启时声明为
+  同步 HTTP 的工具（没有 `job` 和 `poll`）。官方包必须明确声明空配置、`network` 权限和 ready 的
+  `external.http_request` 能力；应用时只安装空配置且保持禁用，管理员随后才可显式启用。旧端点、请求模板、
+  MCP 服务、凭据与其他声明始终留在宿主的 `plugins.json`，公开计划只以
+  `plugins.json:host_retained_declarations_and_credentials` 标记该边界，绝不输出其内容或把密钥复制到交接文件。
+  仅 MCP、仅异步/轮询工具会以 `no_matching_sync_external_tools` 阻塞，不能被伪装为同步工具；混合声明时也只覆盖
+  同步 HTTP 这一项，不表示全部外部工具已经迁完。`plugins_json` 的原始字节摘要进入 Go 宿主的
+  `source_hashes` 和各步骤的 `apply_source_hash`，因此管理员确认后若旧账本有任何变化，必须重新预演。
 
 `required_missing`、`unmapped_legacy_fields` 和插件未 ready 状态必须在真正迁移前解决。对本地
 ASR 与命名 GPT-SoVITS，管理端验证的是既有登记契约和可核验的资源完整性，不代表已实际执行模型或验证识别质量。通过

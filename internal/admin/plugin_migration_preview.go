@@ -18,6 +18,7 @@ import (
 
 	"wechat-bot/internal/channels"
 	"wechat-bot/internal/pluginhost"
+	legacyplugins "wechat-bot/internal/plugins"
 	catalog "wechat-bot/plugins"
 )
 
@@ -43,6 +44,7 @@ type pluginMigrationPackage struct {
 	objectBridge   bool
 	namedSpeech    bool
 	localMusic     bool
+	externalSync   bool
 }
 type pluginMigrationResourceProof struct {
 	Source        string `json:"source"`
@@ -134,9 +136,58 @@ func migrationCatalog() map[string]pluginMigrationPackage {
 			objectBridge:   catalogDeclaresShareObjectBridge(contract),
 			namedSpeech:    catalogDeclaresNamedSpeech(contract),
 			localMusic:     catalogDeclaresLocalMusicBridge(contract),
+			externalSync:   catalogDeclaresExternalSync(contract),
 		}
 	}
 	return out
+}
+
+// External tools remain host-owned declarations.  The first migration slice
+// only installs the reviewed synchronous HTTP adapter; it does not copy an
+// endpoint, credentials, MCP server, job or polling protocol into plugin
+// configuration.  Those details stay in plugins.json and are rechecked by the
+// host bridge for each call.
+func catalogDeclaresExternalSync(contract catalog.Contract) bool {
+	p := contract.Package
+	if p.ID != externalHTTPPluginID || p.Status != "ready" || !migrationStringContains(p.Permissions, "network") {
+		return false
+	}
+	if contract.Configuration.Type != "object" || contract.Configuration.AdditionalProperties || len(contract.Configuration.Properties) != 0 {
+		return false
+	}
+	for _, capability := range contract.Capabilities {
+		if capability.ID == externalHTTPCapability && capability.Implementation == "ready" && capability.Discoverable && !capability.Async && migrationStringContains(capability.Permissions, "network") {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyExternalSyncIntent deliberately examines only enablement and whether
+// a declaration is synchronous.  It neither serializes nor interprets URLs,
+// templates, headers or Secrets: plugins.json remains their sole authority.
+// The second return value means an enabled legacy declaration exists but none
+// of it is covered by the synchronous adapter (MCP-only or async-only).
+func legacyExternalSyncIntent(mcpEnabled bool, installed []legacyplugins.Installed) (bool, bool) {
+	if !mcpEnabled {
+		return false, false
+	}
+	declared, sync := false, false
+	for _, item := range installed {
+		if !item.Enabled {
+			continue
+		}
+		if item.Manifest.MCP != nil {
+			declared = true
+		}
+		for _, tool := range item.Manifest.Tools {
+			declared = true
+			if tool.Job == nil && tool.Poll == nil {
+				sync = true
+			}
+		}
+	}
+	return sync, declared && !sync
 }
 
 // A YuE/RVC endpoint is not a generic plugin network permission.  The music
@@ -360,7 +411,7 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	if err := ctx.Err(); err != nil {
 		return pluginMigrationAccount{}, err
 	}
-	paths := map[string]string{"config_json": filepath.Join(m.dir, "config.json"), "speech_config_json": filepath.Join(m.dir, "speech-config.json"), "mcp_config_json": filepath.Join(m.dir, "mcp-config.json"), "channels_config_json": filepath.Join(m.dir, "channels-config.json"), "agent_config_json": filepath.Join(m.dir, "agent-config.json")}
+	paths := map[string]string{"config_json": filepath.Join(m.dir, "config.json"), "speech_config_json": filepath.Join(m.dir, "speech-config.json"), "mcp_config_json": filepath.Join(m.dir, "mcp-config.json"), "channels_config_json": filepath.Join(m.dir, "channels-config.json"), "agent_config_json": filepath.Join(m.dir, "agent-config.json"), "plugins_json": filepath.Join(m.dir, "plugins.json")}
 	before := map[string]string{}
 	for name, path := range paths {
 		before[name], _ = migrationSourceHash(path)
@@ -371,6 +422,7 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	speech := m.speechConfig()
 	agent := m.agent.config()
 	channelSettings, channelsErr := loadChannelsSettings(m.dir)
+	legacyExternal := m.plugins.installed()
 	sources := map[string]string{}
 	sourceErrors := map[string]string{}
 	for name, path := range paths {
@@ -571,7 +623,25 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	}
 	projectValues := map[string]json.RawMessage{}
 	project := migrationStep(projectPluginID, packages, projectEnabled, projectValues, map[string]pluginMigrationSecret{}, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{}}, projectRequired, nil, "", sources)
-	return pluginMigrationAccount{Account: m.native.Account(), SourceHashes: sources, SourceErrors: sourceErrors, Plugins: []pluginMigrationStep{media, speechStep, musicStep, web, share, project}}, nil
+
+	// A configured MCP switch alone is not enough to claim external HTTP has
+	// migrated.  Only an enabled one-shot declaration expresses that intent.
+	// MCP-only and background-job/poll declarations retain their original host
+	// behavior and are visibly blocked until a compatible adapter exists.
+	externalEnabled, externalOnlyUnsupported := legacyExternalSyncIntent(mcp.Enabled, legacyExternal)
+	externalRequired := []string{}
+	externalUnmapped := []string{}
+	if mcp.Enabled && (externalEnabled || externalOnlyUnsupported) {
+		externalUnmapped = append(externalUnmapped, "plugins.json:host_retained_declarations_and_credentials")
+	}
+	if externalOnlyUnsupported {
+		externalRequired = append(externalRequired, "no_matching_sync_external_tools")
+	}
+	if externalEnabled && !packages[externalHTTPPluginID].externalSync {
+		externalRequired = append(externalRequired, "official_sync_external_adapter_not_declared_by_external_tools_plugin")
+	}
+	external := migrationStep(externalHTTPPluginID, packages, externalEnabled, map[string]json.RawMessage{}, map[string]pluginMigrationSecret{}, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{}}, externalRequired, externalUnmapped, "", sources)
+	return pluginMigrationAccount{Account: m.native.Account(), SourceHashes: sources, SourceErrors: sourceErrors, Plugins: []pluginMigrationStep{media, speechStep, musicStep, web, share, project, external}}, nil
 }
 
 func (m *Manager) pluginMigrationPreview(ctx context.Context) (pluginMigrationPreview, error) {

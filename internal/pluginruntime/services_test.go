@@ -38,6 +38,33 @@ func TestServiceProxyRequiresCurrentCallPermissionAndIdentity(t *testing.T) {
 
 type syntheticModelDispatch struct{ offlineWebPolicy }
 
+func TestInstalledServiceProxyCannotCrossPluginCapabilities(t *testing.T) {
+	for _, tc := range []struct {
+		plugin, capability, permission, method string
+		allowed                                bool
+	}{
+		{"external-tools", "external.http_request", "network", "wechat/external_request", true},
+		{"music", "external.http_request", "network", "wechat/external_request", false},
+		{"external-tools", "external.call", "network", "wechat/external_request", false},
+		{"external-tools", "external.http_request", "model.invoke", "wechat/external_request", false},
+		{"music", "music.service_control", "network", "wechat/service_control", true},
+		{"external-tools", "music.service_control", "network", "wechat/service_control", false},
+		{"music", "music.bridge_request", "network", "wechat/service_control", false},
+		{"project-development", "project.workspace_read", "workspace.read", "wechat/workspace_request", true},
+		{"project-development", "project.workspace_write", "workspace.read", "wechat/workspace_request", false},
+		{"external-tools", "project.workspace_read", "workspace.read", "wechat/workspace_request", false},
+	} {
+		t.Run(tc.plugin+"/"+tc.capability+"/"+tc.permission+"/"+tc.method, func(t *testing.T) {
+			policy := &syntheticModelDispatch{}
+			ctx := serviceContext(t.Context(), policy, pluginhost.Job{Plugin: tc.plugin, Context: invocation()}, pluginhost.Capability{ID: tc.capability, Permissions: []string{tc.permission}})
+			_, err := InvokeHostService(ctx, tc.method, json.RawMessage(`{}`))
+			if (err == nil) != tc.allowed || (policy.calls == 1) != tc.allowed {
+				t.Fatalf("cross-plugin proxy boundary failed: calls=%d err=%v", policy.calls, err)
+			}
+		})
+	}
+}
+
 func TestNamedSpeechServiceRequiresExactPluginCapabilityAndBothPermissions(t *testing.T) {
 	for _, tc := range []struct {
 		name, plugin, capability string
