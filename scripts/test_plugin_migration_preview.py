@@ -4,6 +4,8 @@ import io
 import json
 import os
 from pathlib import Path
+import base64
+import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -79,6 +81,26 @@ class PluginMigrationPreviewTests(unittest.TestCase):
         mcp = json.loads(path.read_text(encoding="utf8"))
         mcp["servers"] = [{"id": "legacy-mcp-server", "name": "Legacy MCP", "transport": transport, "url": url, "plugin_id": plugin_id, "command": command, "args": args or [], "env": env or {}, "enabled": True}]
         path.write_text(json.dumps(mcp), encoding="utf8")
+
+    def write_active_external_state(self, root, settings, connections):
+        path = root / "plugin-host" / "plugins.sqlite"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            path.unlink()
+        document = {"version": 1, "settings": settings, "connections": connections}
+        raw = json.dumps(document, separators=(",", ":"), sort_keys=True).encode("utf8")
+        source_hash = hashlib.sha256(b"legacy-source").hexdigest()
+        manifest = {"version": 1, "chunks": 1, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(), "source_hash": source_hash}
+        db = sqlite3.connect(path)
+        try:
+            db.execute("CREATE TABLE host_states(plugin TEXT, namespace TEXT, revision INTEGER, source_hash TEXT)")
+            db.execute("CREATE TABLE host_state_records(plugin TEXT, namespace TEXT, key TEXT, payload BLOB)")
+            db.execute("INSERT INTO host_states VALUES(?,?,?,?)", ("external-tools", "configuration-v1", 1, source_hash))
+            db.execute("INSERT INTO host_state_records VALUES(?,?,?,?)", ("external-tools", "configuration-v1", "manifest", json.dumps(manifest).encode("utf8")))
+            db.execute("INSERT INTO host_state_records VALUES(?,?,?,?)", ("external-tools", "configuration-v1", "document:000000", json.dumps(base64.b64encode(raw).decode("ascii")).encode("utf8")))
+            db.commit()
+        finally:
+            db.close()
 
     def make_root(self, base):
         root = base / "admin"
@@ -304,6 +326,30 @@ class PluginMigrationPreviewTests(unittest.TestCase):
                 else:
                     self.assertEqual(external["status"], "blocked")
                     self.assertIn("no_matching_supported_external_tools", external["required_missing"])
+
+    def test_external_active_host_state_ignores_retained_json_and_tracks_sqlite_change(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_external_sync(repo)
+            root, _ = self.make_root(base)
+            self.write_external_ledger(root, mode="sync")
+            settings = {"enabled": True, "web_search_enabled": True, "web_fetch_enabled": True, "max_tool_calls": 3}
+            connections = {"active-http": {"manifest": {"id": "active-http", "tools": [{"name": "lookup", "url": "https://private.example/v1"}]}, "enabled": True, "secrets": {"TOKEN": "active-secret"}}}
+            self.write_active_external_state(root, settings, connections)
+            first, _ = preview.build_preview(root, repo, "main")
+            initial = next(step for step in first["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
+            initial_sources = {name: first["accounts"][0]["source_hashes"][name] for name in ("mcp_config_json", "plugins_json")}
+            self.assertEqual(initial["status"], "ready_for_administrator_review")
+            (root / "plugins.json").write_text(json.dumps({"changed-legacy": {"enabled": False}}), encoding="utf8")
+            retained_changed, _ = preview.build_preview(root, repo, "main")
+            retained = next(step for step in retained_changed["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
+            self.assertEqual({name: retained_changed["accounts"][0]["source_hashes"][name] for name in initial_sources}, initial_sources)
+            self.assertNotIn("active-secret", json.dumps(retained_changed, ensure_ascii=False))
+            self.write_active_external_state(root, {**settings, "max_tool_calls": 4}, connections)
+            active_changed, _ = preview.build_preview(root, repo, "main")
+            changed = next(step for step in active_changed["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
+            self.assertNotEqual({name: active_changed["accounts"][0]["source_hashes"][name] for name in initial_sources}, initial_sources)
 
     def test_external_sync_requires_reviewed_adapter_contract(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -73,7 +73,7 @@ if($Portable){
  $music=Join-Path $OutputDirectory 'runtimes\windows-music'
  New-Item -ItemType Directory -Force -Path $music | Out-Null
  Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.py' | Where-Object {$_.Name -notlike 'test_*'} | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $music}
- foreach($name in @('gpt_sovits_windows_requirements.txt','rvc_training_requirements.txt')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $music}
+ foreach($name in @('gpt_sovits_windows_requirements.txt')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $music}
  Copy-Item -LiteralPath (Join-Path $workspace 'components\yue2\app\workflows_api') -Destination (Join-Path $music 'workflows') -Recurse -Force
  $musicFiles=@{}
  Get-ChildItem -LiteralPath $music -Recurse -File | Where-Object Name -ne 'runtime-manifest.json' | ForEach-Object {$musicFiles[$_.FullName.Substring($music.Length+1)]=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower()}

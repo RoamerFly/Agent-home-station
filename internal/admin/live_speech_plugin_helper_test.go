@@ -11,7 +11,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"wechat-bot/internal/bailian"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -72,7 +72,7 @@ func liveSpeechInstruction(t *testing.T, configured, requested string) string {
 // official package and its host-bound transport, but it neither stages media
 // nor calls any native WeChat API. The caller's opt-in test guard remains the
 // sole authorization for a billable provider request.
-func livePluginSynthesize(t *testing.T, ctx context.Context, cfg bailian.Config, text, instruction string) (string, error) {
+func livePluginSynthesize(t *testing.T, ctx context.Context, cfg mediaspec.Config, text, instruction string) (string, error) {
 	t.Helper()
 	options := requireLiveSpeechPluginRuntime(t)
 	if strings.TrimSpace(text) == "" || utf8.RuneCountInString(text) > 2000 {

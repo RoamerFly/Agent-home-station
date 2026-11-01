@@ -114,7 +114,7 @@ class PlannerTests(unittest.TestCase):
         outgoing = io.StringIO()
         main.Wire(io.StringIO("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in requests)), outgoing).serve()
         replies = [json.loads(line) for line in outgoing.getvalue().splitlines()]
-        self.assertEqual(replies[0]["result"]["serverInfo"]["version"], "0.5.0")
+        self.assertEqual(replies[0]["result"]["serverInfo"]["version"], "0.6.0")
         self.assertEqual(replies[1]["method"], "wechat/model_request")
         self.assertEqual(replies[1]["params"]["operation"], "describe_screen")
         self.assertEqual(replies[2]["params"]["operation"], "plan_step")

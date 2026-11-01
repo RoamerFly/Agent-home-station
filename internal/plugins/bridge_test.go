@@ -71,7 +71,7 @@ func TestExternalBridgeRejectsBackgroundCallPhase(t *testing.T) {
 	item := Installed{
 		Enabled: true,
 		Manifest: Manifest{ID: "jobs", Name: "jobs", Version: "1", Tools: []APITool{
-			{Name: "start", Description: "x", InputSchema: json.RawMessage(`{"type":"object"}`), URL: "https://example.test/jobs", Job: &JobSpec{IDPath: "id"}, Poll: &PollSpec{URL: "https://example.test/jobs/{{result.id}}", StatusPath: "state", DoneValues: []string{"done"}}},
+			{Name: "start", Description: "x", InputSchema: json.RawMessage(`{"type":"object"}`), URL: "https://example.test/jobs", TimeoutSeconds: 60, Job: &JobSpec{IDPath: "id", DeadlineSeconds: 1800, MaxPolls: 9}, Poll: &PollSpec{URL: "https://example.test/jobs/{{result.id}}", StatusPath: "state", DoneValues: []string{"done"}, IntervalSeconds: 2, MaxAttempts: 12}},
 		}},
 	}
 	bridge, err := NewExternalBridge([]Installed{item})
@@ -84,6 +84,15 @@ func TestExternalBridgeRejectsBackgroundCallPhase(t *testing.T) {
 	job, err := bridge.JobProtocol("jobs__start")
 	if err != nil || job.Tool.Job == nil || job.Tool.Poll == nil || job.Tool.Fingerprint == "" {
 		t.Fatalf("missing credential-free job projection: %#v %v", job, err)
+	}
+	encoded, _ := json.Marshal(job)
+	for _, field := range []string{"interval_seconds", "max_attempts", "timeout_seconds"} {
+		if strings.Contains(string(encoded), field) {
+			t.Fatal("host scheduling settings entered the strict job parser contract", field)
+		}
+	}
+	if interval, deadline, polls := bridge.runtime.JobLimits("jobs__start"); interval != 2 || deadline != 1800 || polls != 9 {
+		t.Fatal("job projection changed the actual host scheduling settings", interval, deadline, polls)
 	}
 	if _, err = bridge.Execute(context.Background(), ExternalRequest{Phase: "call", Tool: "jobs__start", Arguments: json.RawMessage(`{}`)}); err == nil {
 		t.Fatal("background tool entered synchronous bridge")

@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -450,7 +450,7 @@ func TestMediaTranscriptionVideoUsesVideoReadPermission(t *testing.T) {
 }
 
 func TestMediaTranscriptionProviderFailureKeepsVisualEvidence(t *testing.T) {
-	for _, err := range []error{errors.New("media_transcription_provider_failed"), &bailian.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}} {
+	for _, err := range []error{errors.New("media_transcription_provider_failed"), &mediaspec.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}} {
 		if mediaTranscriptionHardFailure(err) {
 			t.Fatal("ordinary ASR result discarded visual evidence", err)
 		}

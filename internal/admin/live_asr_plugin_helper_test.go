@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"wechat-bot/internal/bailian"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -30,7 +30,7 @@ type liveASRPlugin struct {
 // Called only after each live test's explicit opt-in guard, and before its
 // first billable clone/TTS/ASR request. Starting the official isolated runtime
 // performs initialization/health only; no model or native WeChat call occurs.
-func prepareLiveASRPlugin(t *testing.T, cfg bailian.Config) *liveASRPlugin {
+func prepareLiveASRPlugin(t *testing.T, cfg mediaspec.Config) *liveASRPlugin {
 	t.Helper()
 	if os.Getenv("WECHAT_REFERENCE_ASR_LIVE") != "1" && os.Getenv("WECHAT_COVER_OUTPUT_LIVE") != "1" && os.Getenv("WECHAT_VOICE_CLONE_LIVE") != "1" && os.Getenv("WECHAT_SPEECH_CONTEXT_LIVE") != "1" {
 		t.Skip("explicit opt-in is required for live media transcription")

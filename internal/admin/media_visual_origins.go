@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"wechat-bot/internal/deepseek"
-	"wechat-bot/internal/mobile"
+	mobile "wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
 )
 

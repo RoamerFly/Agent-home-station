@@ -10,8 +10,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -19,6 +17,7 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/plugins"
 )
 
@@ -32,15 +31,11 @@ type mcpSettings struct {
 
 func mcpDefaults() mcpSettings { return mcpSettings{true, true, true, 3, []mcptools.ServerConfig{}} }
 func loadMCP(dir string) (mcpSettings, error) {
-	c := mcpDefaults()
-	data, err := os.ReadFile(filepath.Join(dir, "mcp-config.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return c, nil
+	repository, err := newExternalConfigurationRepository(dir, "")
+	if err != nil {
+		return mcpSettings{}, err
 	}
-	if err != nil || len(data) > 64<<10 || json.Unmarshal(data, &c) != nil {
-		return c, errors.New("MCP 配置不可读")
-	}
-	return c, validateMCP(c)
+	return repository.snapshot().Settings, nil
 }
 func validateMCP(c mcpSettings) error {
 	if c.MaxToolCalls < 1 || c.MaxToolCalls > 5 {
@@ -819,6 +814,12 @@ func (m *Manager) toolAccess() (*permittedTools, int, error) {
 func (s *Server) mcpRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/mcp", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		m := s.manager
+		m.op.Lock()
+		defer m.op.Unlock()
+		if err := m.refreshExternalConfiguration(r.Context()); err != nil {
+			fail(w, 503, "外部连接配置读取失败；原数据未覆盖")
+			return
+		}
 		m.mu.Lock()
 		c := redactedMCP(m.mcp)
 		m.mu.Unlock()
@@ -887,7 +888,11 @@ func (s *Server) mcpRoutes(mux *http.ServeMux) {
 			}
 			defer m.start(c)
 		}
-		if err = writePrivate(filepath.Join(m.dir, "mcp-config.json"), data); err != nil {
+		if err = m.plugins.repository.SaveSettings(r.Context(), input); err != nil {
+			if errors.Is(err, pluginhost.ErrRevision) || errors.Is(err, errExternalConfigurationChanged) {
+				fail(w, 409, "外部配置已变化，请重新加载后再保存")
+				return
+			}
 			fail(w, 500, "MCP 配置保存失败")
 			return
 		}

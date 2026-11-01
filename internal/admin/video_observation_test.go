@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mediaspec"
 )
 
 type observationNative struct {
@@ -77,9 +77,9 @@ func TestPluginAudioExtractionPreservesNoRecognizableSpeech(t *testing.T) {
 	f := setup(t)
 	a := mediaUnderstanding{manager: f.manager}
 	text, seconds, err := a.videoAudioRangeTimedWith(context.Background(), video, 0, 1, 60, func(context.Context, []byte) (string, error) {
-		return "", &bailian.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
+		return "", &mediaspec.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
 	})
-	if !bailian.IsNoSpeech(err) || text != "" || seconds < .9 || seconds > 1.1 {
+	if !mediaspec.IsNoSpeech(err) || text != "" || seconds < .9 || seconds > 1.1 {
 		t.Fatal("plugin extraction lost no-speech boundary", text, seconds, err)
 	}
 }

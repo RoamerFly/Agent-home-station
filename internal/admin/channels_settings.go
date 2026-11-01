@@ -11,7 +11,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/channels"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
@@ -92,99 +91,11 @@ func (m *Manager) resolveReceivedChannels(ctx context.Context, msg linuxnative.M
 		}
 		return m.resolveInstalledChannels(ctx, msg, source)
 	}
-	c, e := loadChannelsSettings(m.dir)
-	if e != nil {
-		return source, e
-	}
-	if !c.Enabled {
-		return source, errors.New("channels_authorized_resolver_disabled")
-	}
-	resolver := channels.NewResolver()
-	autoLink, autoReason := "", ""
-	nativeBound := false
-	if native, ok := m.native.(interface {
-		ChannelsShareURL(context.Context, string, string, string) (string, error)
-	}); ok && source.ObjectID != "" && channels.ValidCookie(c.Cookie) {
-		link, err := native.ChannelsShareURL(ctx, msg.ID, msg.ThreadID, source.ObjectID)
-		if err == nil {
-			autoLink, err = channels.ShareURL(link)
-			nativeBound = err == nil
-		}
-		if err != nil {
-			autoReason = "channels_native_share_unavailable"
-			switch err.Error() {
-			case "channels_share_identity_missing", "channels_share_identity_mismatch", "channels_share_lookup_rejected", "channels_share_response_invalid", "channels_share_link_invalid", "channels_object_id_missing", "channels_received_card_required":
-				autoReason = err.Error()
-			}
-		}
-	}
-	if autoLink == "" && c.AssistantCookie != "" && source.ObjectID != "" && source.ObjectNonceID != "" && strings.HasPrefix(source.ObjectID, "export/") {
-		var err error
-		autoLink, err = resolver.ObjectShareURL(ctx, source.ObjectID, source.ObjectNonceID, c.AssistantCookie)
-		if err != nil {
-			autoReason = err.Error()
-		}
-	}
-	if c.ObjectBridge != "" && source.ObjectID != "" {
-		video, bridgeErr := channels.ResolveObject(ctx, c.ObjectBridge, source.ObjectID, source.ObjectNonceID)
-		if bridgeErr == nil {
-			source.MediaURL, source.DecodeKey, source.State = video.URL, video.DecodeKey, "available"
-			return source, nil
-		}
-		if c.Cookie == "" {
-			return source, bridgeErr
-		}
-	}
-	bindings, e := loadChannelsBindings(m.dir)
-	if e != nil {
-		return source, e
-	}
-	link := ""
-	if msg.Link != nil {
-		link = msg.Link.URL
-	}
-	b, ok := bindings[channelBindingID(source.AccountID, source.ThreadID, msg.ID)]
-	if !ok && source.ObjectID != "" {
-		b, ok = bindings[channelBindingID(source.AccountID, source.ThreadID, "object:"+source.ObjectID)]
-	}
-	if ok {
-		if b.Account != source.AccountID || b.Thread != source.ThreadID || (b.MessageID != msg.ID && (b.ObjectID == "" || b.ObjectID != source.ObjectID)) {
-			return source, errors.New("channels_binding_scope_mismatch")
-		}
-		link = b.URL
-	}
-	fallbackLink := link
-	if autoLink != "" {
-		link = autoLink
-	}
-	if link == "" {
-		if autoReason != "" {
-			return source, errors.New(autoReason)
-		}
-		return source, errors.New("channels_share_link_required")
-	}
-	if !channels.ValidCookie(c.Cookie) {
-		return source, errors.New("channels_yuanbao_cookie_missing")
-	}
-	video, e := resolver.Resolve(ctx, link, c.Cookie)
-	usedAutomatic := autoLink != "" && link == autoLink
-	if e != nil && usedAutomatic && fallbackLink != "" && fallbackLink != autoLink {
-		video, e = resolver.Resolve(ctx, fallbackLink, c.Cookie)
-		usedAutomatic = false
-		nativeBound = false
-	}
-	if e != nil {
-		return source, e
-	}
-	matched := matchChannelsVideo(source, msg, video) || matchNativeChannelsVideo(source, video, nativeBound)
-	if !matched {
-		return source, errors.New("channels_resolved_video_mismatch")
-	}
-	if usedAutomatic {
-		m.record(bot.Record{Event: "channels_source_resolved", Category: "decision", ThreadID: msg.ThreadID, MessageID: msg.ID, Status: "resolved", Reason: "channels_automatic_shortlink", Origin: "media"})
-	}
-	source.MediaURL, source.DecodeKey, source.State = video.URL, video.DecodeKey, "available"
-	return source, nil
+	// Do not revive the legacy resolver, object bridge, or its credentialed
+	// network routes when the installed share-reader is absent. Card metadata
+	// and explicitly saved bindings remain read-only archive/UI data; only the
+	// installed package may turn them into a resolved media locator.
+	return source, errors.New("share_plugin_migration_required")
 }
 func channelsSettingsView(c channelsSettings) map[string]any {
 	return map[string]any{"enabled": c.Enabled, "cookie_configured": c.Cookie != "", "assistant_cookie_configured": c.AssistantCookie != "", "object_bridge_url": c.ObjectBridge}

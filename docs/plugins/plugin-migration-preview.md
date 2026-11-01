@@ -104,6 +104,12 @@ Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所
   `needs_review`，预演仅以 `legacy_external_tasks:origin_and_configuration_proof_required` 提示需核对。
   `plugins_json` 与 `mcp_config_json` 的原始字节摘要进入 Go 宿主的 `source_hashes` 和各步骤的
   `apply_source_hash`，因此管理员确认后任一旧声明变化都必须重新预演。
+  外部声明一旦由管理员确认迁入，SQLite 中 `external-tools/configuration-v1` 的受控私有记录成为唯一权威来源；
+  后续预演会读取其中的规范化 MCP 与连接记录，保留的 JSON 文件即使被编辑也不会改变已激活来源的审批摘要。
+  反之，受控记录本身变化会使摘要失效。离线 Python 预演也只读该 SQLite 记录；若记录损坏或无法安全读取，
+  它会将 external-tools 标为 `host_active_requires_host_preview`，绝不回退使用旧 JSON。应用外部插件时，
+  先完成保持禁用的包安装，再原子激活这份 host state；激活失败会向调用方返回失败，保留可重试的迁移记录，
+  不会启用或执行任何外部工具。
 
 `required_missing`、`unmapped_legacy_fields` 和插件未 ready 状态必须在真正迁移前解决。对本地
 ASR 与命名 GPT-SoVITS，管理端验证的是既有登记契约和可核验的资源完整性，不代表已实际执行模型或验证识别质量。通过

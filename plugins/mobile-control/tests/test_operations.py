@@ -54,7 +54,7 @@ class OperationsTests(unittest.TestCase):
         for forbidden in ("import subprocess", "import socket", "import urllib", "bridge.py", "open("):
             self.assertNotIn(forbidden, source)
         caps = json.loads((ROOT / "capabilities.json").read_text(encoding="utf8"))["capabilities"]
-        device_caps = [item for item in caps if item["id"] != "device.plan"]
+        device_caps = [item for item in caps if item["id"] not in ("device.plan", "device.workflow")]
         self.assertEqual({item["id"] for item in device_caps}, {"device.list", "device.observe", "device.act", "device.record", "device.read_artifact"})
         self.assertTrue(all(item["implementation"] == "ready" and item["discoverable"] and item["permissions"] == ["device"] for item in device_caps))
         manifest = json.loads((ROOT / "plugin.json").read_text(encoding="utf8"))
@@ -67,7 +67,7 @@ class OperationsTests(unittest.TestCase):
 
     def test_tool_list_exposes_all_ready_capabilities_with_real_schemas(self):
         names = [tool["name"] for tool in main.TOOLS]
-        self.assertEqual(set(names), {"device.plan", "device.list", "device.observe", "device.act", "device.record", "device.read_artifact"})
+        self.assertEqual(set(names), {"device.workflow", "device.plan", "device.list", "device.observe", "device.act", "device.record", "device.read_artifact"})
         for tool in main.TOOLS:
             self.assertIn("properties", tool["inputSchema"])
             self.assertFalse(tool["inputSchema"] == {"type":"object"})

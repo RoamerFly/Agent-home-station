@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"wechat-bot/internal/mobile"
+	mobile "wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
 )
 
@@ -56,7 +56,7 @@ func decodeMobileHostState(state pluginhost.HostState, account string) (mobile.R
 		return mobile.RepositorySnapshot{}, invalid
 	}
 	for key, record := range state.Records {
-		if key == "settings" || key == "manifest" {
+		if key == "settings" || key == "manifest" || strings.HasPrefix(key, "workflow:") {
 			continue
 		}
 		if !strings.HasPrefix(key, "task:") {
@@ -156,6 +156,10 @@ func (r *mobileRepository) Commit(ctx context.Context, revision int64, next mobi
 		}
 	}
 	for key := range r.current.Records {
+		if strings.HasPrefix(key, "workflow:") {
+			records[key] = r.current.Records[key]
+			continue
+		}
 		if _, exists := records[key]; !exists {
 			deletes = append(deletes, key)
 		}

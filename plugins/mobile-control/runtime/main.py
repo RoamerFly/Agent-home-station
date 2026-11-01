@@ -15,9 +15,14 @@ _OPERATIONS_SPEC.loader.exec_module(operations)
 _NATIVE_SPEC = importlib.util.spec_from_file_location("mobile_control_native", Path(__file__).with_name("native.py"))
 native = importlib.util.module_from_spec(_NATIVE_SPEC)
 _NATIVE_SPEC.loader.exec_module(native)
+_WORKFLOW_SPEC = importlib.util.spec_from_file_location("mobile_control_workflow", Path(__file__).with_name("workflow.py"))
+workflow = importlib.util.module_from_spec(_WORKFLOW_SPEC)
+_WORKFLOW_SPEC.loader.exec_module(workflow)
 FRAME_LIMIT = 8 * 1024 * 1024
 PLAN_SCHEMA = {"type":"object", "properties":{"task_id":{"type":"string"}, "observation_id":{"type":"string"}, "source_version":{"type":"string","pattern":"^[0-9a-f]{64}$"}, "task":{"type":"object"}, "observation":{"type":"object"}, "allowed_actions":{"type":"array","items":{"type":"string"}}}, "required":["task_id","observation_id","source_version","task","observation","allowed_actions"], "additionalProperties":False}
-TOOLS = [{"name":"device.plan", "description":"Plan one validated next step from a host-bound mobile observation. This does not observe, operate, record, or send anything.", "inputSchema":PLAN_SCHEMA}] + [{"name":operation, "description":"Host-mediated registered-device operation. Source binding and authorization are checked by the host.", "inputSchema":operations.tool_schema(operation)} for operation in sorted(operations.OPERATIONS)]
+WORKFLOW_SCHEMA = {"type":"object", "properties":{key:{"type":"string"} for key in ("op","now","nonce")}, "required":["op","snapshot","input","now","nonce","facts"], "additionalProperties":False}
+WORKFLOW_SCHEMA["properties"].update({key:{"type":"object"} for key in ("snapshot","input","facts")})
+TOOLS = [{"name":"device.workflow","description":"Apply one pure durable queue/state transition to host-bound mobile metadata. Performs no device, model or background callback.","inputSchema":WORKFLOW_SCHEMA}] + [{"name":"device.plan", "description":"Plan one validated next step from a host-bound mobile observation. This does not observe, operate, record, or send anything.", "inputSchema":PLAN_SCHEMA}] + [{"name":operation, "description":"Host-mediated registered-device operation. Source binding and authorization are checked by the host.", "inputSchema":operations.tool_schema(operation)} for operation in sorted(operations.OPERATIONS)]
 
 
 class Wire:
@@ -90,7 +95,7 @@ class Wire:
                     if not isinstance(metadata, dict):
                         raise ValueError("invalid_protocol")
                     initialized = True
-                    result = {"protocolVersion":"2025-06-18", "capabilities":{"tools":{}}, "serverInfo":{"name":"mobile-control", "version":"0.5.0"}}
+                    result = {"protocolVersion":"2025-06-18", "capabilities":{"tools":{}}, "serverInfo":{"name":"mobile-control", "version":"0.6.0"}}
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/list" and initialized:
@@ -100,7 +105,9 @@ class Wire:
                     context = params.get("_meta", {}).get("wechat/context", {}) if isinstance(params, dict) else {}
                     if not all(isinstance(context.get(key), str) and context[key] for key in ("account", "thread", "requester", "purpose", "request_key")):
                         raise ValueError("host_context_required")
-                    if params.get("name") != "device.plan":
+                    if params.get("name") == "device.workflow":
+                        result = workflow.transition(params.get("arguments"))
+                    elif params.get("name") != "device.plan":
                         if params.get("name") not in operations.OPERATIONS:
                             raise ValueError("capability_unavailable")
                         result = native.invoke(params["name"], params.get("arguments"), self.device, operations.validate_request)

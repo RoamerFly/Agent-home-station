@@ -103,7 +103,7 @@ try {
  $goSource=Join-Path $workspace ('temp\win-go-'+[Guid]::NewGuid().ToString('N').Substring(0,8))
  New-Item -ItemType Directory -Path $goSource | Out-Null
  $goArchive=Join-Path $goSource 'source.tar'
- & git -C $workspace archive --format=tar ('--output='+$goArchive) HEAD cmd internal go.mod go.sum
+ & git -C $workspace archive --format=tar ('--output='+$goArchive) HEAD cmd internal plugins go.mod go.sum
  if($LASTEXITCODE -ne 0){throw 'Cannot export committed management source.'}
  & tar -xf $goArchive -C $goSource
  if($LASTEXITCODE -ne 0){throw 'Cannot prepare committed management source.'}
@@ -113,7 +113,7 @@ try {
   & git -C $goSource init -q
   if($LASTEXITCODE -ne 0){throw 'Cannot isolate local patch application from the parent checkout.'}
   foreach($line in Get-Content -LiteralPath $GoSourcePatch){
-   if($line -match '^\+\+\+ b/(.+)$' -and $matches[1] -notmatch '^(internal/|cmd/|go\.mod$|go\.sum$)'){throw 'Local source patch contains a path outside management source.'}
+   if($line -match '^\+\+\+ b/(.+)$' -and $matches[1] -notmatch '^(internal/|cmd/|plugins/|go\.mod$|go\.sum$)'){throw 'Local source patch contains a path outside management source.'}
   }
   & git -C $goSource apply --check $GoSourcePatch
   if($LASTEXITCODE -ne 0){throw 'Local management source patch failed validation.'}

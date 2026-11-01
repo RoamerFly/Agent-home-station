@@ -5,14 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mediaspec"
 )
 
 func TestSpeechSettingsNeverExposeSecretsAndScopeYuE(t *testing.T) {
 	f := setup(t)
 	f.login()
-	c := bailian.Defaults()
+	c := mediaspec.Defaults()
 	c.Key = "synthetic.private.api.key"
 	c.YuEToken = "synthetic.yue.token"
 	c.YuEEndpoint = "http://127.0.0.1:6188"

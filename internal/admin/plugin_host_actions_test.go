@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"wechat-bot/internal/mobile"
+	mobile "wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -432,13 +432,15 @@ func TestMobilePluginHostResourcesRequireSessionAndSelectedAccount(t *testing.T)
 	task.ObservationID = "obs-" + strings.Repeat("b", 32)
 	clip := "clip-" + strings.Repeat("c", 32)
 	task.Artifacts = []mobile.Artifact{{ID: clip, Kind: "screenrecord", MIME: "video/mp4"}}
-	seedMobileHostState(t, second, task)
 	var pngData bytes.Buffer
 	if err := png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
 		t.Fatal(err)
 	}
 	// A synthetic container header verifies routing only, not playback.
 	mp4Data := []byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom")
+	task.Artifacts[0].Bytes = len(mp4Data)
+	task.Artifacts[0].SHA256 = namedSpeechSHA(mp4Data)
+	seedMobileHostState(t, second, task)
 	for path, data := range map[string][]byte{filepath.Join(second.dir, "mobile", "observations", task.ObservationID+".png"): pngData.Bytes(), filepath.Join(second.dir, "mobile", "recordings", clip+".mp4"): mp4Data} {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			t.Fatal(err)

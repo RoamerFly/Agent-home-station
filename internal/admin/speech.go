@@ -12,16 +12,16 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mediaspec"
 
 	"wechat-bot/internal/mcptools"
 )
 
-func loadSpeech(dir string) (bailian.Config, error) {
-	c := bailian.Defaults()
+func loadSpeech(dir string) (mediaspec.Config, error) {
+	c := mediaspec.Defaults()
 	b, e := os.ReadFile(filepath.Join(dir, "speech-config.json"))
 	if errors.Is(e, os.ErrNotExist) {
 		return c, nil
@@ -31,8 +31,8 @@ func loadSpeech(dir string) (bailian.Config, error) {
 	}
 	return c, c.Validate()
 }
-func (m *Manager) speechConfig() bailian.Config { m.mu.Lock(); defer m.mu.Unlock(); return m.speech }
-func speechView(c bailian.Config) map[string]any {
+func (m *Manager) speechConfig() mediaspec.Config { m.mu.Lock(); defer m.mu.Unlock(); return m.speech }
+func speechView(c mediaspec.Config) map[string]any {
 	configured := c.Key != ""
 	c.Key = ""
 	c.YuEToken = ""
@@ -85,7 +85,7 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("GET /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, speechView(s.manager.speechConfig())) }))
 	mux.HandleFunc("POST /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		var c bailian.Config
+		var c mediaspec.Config
 		if !decode(w, r, &c) {
 			return
 		}
@@ -331,7 +331,7 @@ func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnat
 	}
 	text := ""
 	text, e = policy.transcribe(ctx)
-	if bailian.IsNoSpeech(e) {
+	if mediaspec.IsNoSpeech(e) {
 		a.manager.record(bot.Record{Event: "voice_no_words", Category: "received", MessageID: message.ID, ThreadID: message.ThreadID, Sender: message.SenderID, Status: "no_recognizable_speech", Reason: "ASR_RESPONSE_HAVE_NO_WORDS", ToolCode: "ASR_RESPONSE_HAVE_NO_WORDS", Origin: "speech"})
 		return "[微信语音音频已取得并提交识别，但没有识别出可转写的词；可能为音乐、环境声或不清晰人声。不要编造语音正文。]", nil
 	}

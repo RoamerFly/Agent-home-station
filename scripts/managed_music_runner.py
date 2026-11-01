@@ -5,12 +5,89 @@ models/runtimes and ONE account's private workspace are mounted. This helper
 does not add a host-shell fallback or pass broker credentials to inference.
 """
 import os
+import json
+import hashlib
 from pathlib import Path
 import shutil
 import signal
 import subprocess
 import sys
 import uuid
+
+
+def _training_script(argv):
+    """Locate an explicit Python script without accepting -c/-m bootstraps."""
+    index = 1
+    while index < len(argv):
+        option = argv[index]
+        if option in ("-I", "-B", "-u", "-E", "-s", "-S", "-O", "-OO"):
+            index += 1
+        elif option in ("-X", "-W") and index + 1 < len(argv):
+            index += 2
+        elif option == "--":
+            return argv[index + 1] if index + 1 < len(argv) else None
+        else:
+            return option if not option.startswith("-") else None
+    return None
+
+
+def _training_object(path):
+    path = canonical(path)
+    if not path.is_file() or path.stat().st_size > 1 << 20:
+        raise ValueError("music_training_registration_invalid")
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("music_training_registration_invalid")
+            value[key] = item
+        return value
+    value = json.loads(path.read_text(encoding="utf8"), object_pairs_hook=unique)
+    if not isinstance(value, dict):
+        raise ValueError("music_training_registration_invalid")
+    return value
+
+
+def training_readonly(public, argv):
+    """Admit only the deployed music training CLI for this explicit command.
+
+    The Agent-editable RVC manifest is a binding, never a source of new mount
+    paths: the catalog root comes from this trusted deployed runner's location.
+    Other music commands receive no training-code mount.
+    """
+    script = _training_script(argv)
+    if script is None or Path(script).name.lower() != "rvc_train_trial.py":
+        return []
+    control = canonical(Path(__file__).parent)
+    if control.name != "windows-music":
+        raise ValueError("music_training_deployed_runner_required")
+    expected = canonical(control.parent.parent / "plugins/music")
+    public = canonical(public)
+    registration = _training_object(public / "manifests/rvc.json")
+    if registration.get("training_owner") != "plugin:music" or canonical(registration.get("training_package_directory", "")) != expected:
+        raise ValueError("music_training_package_not_deployed_catalog")
+    # The managed interpreter also has public project paths on sys.path. Never
+    # resolve this security check through an Agent-editable module shadow.
+    stub = canonical(control / "rvc_train_trial.py")
+    helper = {"__name__": "_managed_music_training_binding", "__file__": str(stub)}
+    exec(compile(stub.read_bytes(), str(stub), "exec"), helper)
+    digest = registration.get("training_package_sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise ValueError("music_training_package_binding_invalid")
+    resources = helper["training_resources"](expected, digest)
+    entry, requirements = canonical(resources["entry"]), canonical(resources["requirements"])
+    if canonical(registration.get("training_entry", "")) != entry or canonical(registration.get("training_requirements", "")) != requirements:
+        raise ValueError("music_training_package_binding_invalid")
+    candidate = canonical(script)
+    if candidate != entry:
+        if not candidate.is_relative_to(public / "projects") or not candidate.is_file():
+            raise ValueError("music_training_cli_not_registered")
+        binding = _training_object(candidate.with_name(helper["BINDING"]))
+        if binding != {"version": 1, "package_directory": str(expected), "manifest_sha256": digest}:
+            raise ValueError("music_training_legacy_binding_changed")
+        if hashlib.sha256(candidate.read_bytes()).digest() != hashlib.sha256(stub.read_bytes()).digest():
+            raise ValueError("music_training_legacy_cli_changed")
+    return [str(expected)]
 
 
 def canonical(path):
@@ -131,6 +208,7 @@ def launch_windows(public, private, cwd, argv, *, gpu=False):
     binary = canonical(argv[0])
     if not binary.is_relative_to(public / "runtimes"):
         raise ValueError("music_interpreter_not_managed")
+    training = training_readonly(public, argv)
     from windows_lpac import launch
     media = canonical(os.environ["WECHAT_WINDOWS_MUSIC_MEDIA"])
     if not (media / "ffmpeg.exe").is_file() or not (media / "ffprobe.exe").is_file():
@@ -147,7 +225,7 @@ def launch_windows(public, private, cwd, argv, *, gpu=False):
     environment["WECHAT_WINDOWS_MUSIC_RUNTIME"] = "1"
     environment["USERNAME"] = "managed-music"
     with (log / "stdout.log").open("wb") as output, (log / "stderr.log").open("wb") as error:
-        child = launch(argv, str(cwd), [str(private)], [str(public), str(media)], output, error,
+        child = launch(argv, str(cwd), [str(private)], [str(public), str(media), *training], output, error,
                        music_runtime=True, environment=environment)
         child.log_directory = log
         return child

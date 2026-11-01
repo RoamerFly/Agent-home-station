@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/mcptools"
+	bailian "wechat-bot/plugins/speech/dev/legacy-sdk"
 )
 
 func TestLiveBailianWhaleVoiceCandidates(t *testing.T) {

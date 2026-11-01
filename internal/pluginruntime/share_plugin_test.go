@@ -16,7 +16,7 @@ import (
 )
 
 // This policy validates only synthetic parser output. It is not the production
-// artifact/Channels adapter and cannot expose this pending package to an Agent.
+// artifact/Channels adapter and cannot expose the synthetic fixture to an Agent.
 type offlineSharePolicy struct{ offlineWebPolicy }
 
 type offlineBiliPolicy struct{ offlineWebPolicy }
@@ -175,18 +175,26 @@ func TestLiveShareParserIsolatedExactWorkAndRevocation(t *testing.T) {
 	defer s.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	// Pending package must remain rejected. Only an isolated copy is promoted
-	// to a test fixture, containing the implemented public parser capability.
-	pending, err := s.Prepare(ctx, "../../plugins/share-reader")
+	dir := t.TempDir()
+	if err = os.CopyFS(dir, os.DirFS("../../plugins/share-reader")); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the rejection contract independent of production package readiness.
+	pendingPackage, err := pluginhost.Verify(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingPackage.ID, pendingPackage.Status = "synthetic-share-parser", "migration-pending"
+	pendingManifest, _ := json.Marshal(pendingPackage)
+	if err = os.WriteFile(filepath.Join(dir, "plugin.json"), pendingManifest, 0600); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.Prepare(ctx, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.Install(ctx, pending.Token, pending.Digest, []string{"network"}); err == nil {
-		t.Fatal("pending production package installable")
-	}
-	dir := t.TempDir()
-	if err = os.CopyFS(dir, os.DirFS("../../plugins/share-reader")); err != nil {
-		t.Fatal(err)
+		t.Fatal("synthetic pending package installable")
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "capabilities.json"))
 	if err != nil {

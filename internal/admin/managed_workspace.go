@@ -61,6 +61,11 @@ func ensureManaged(paths ...string) error {
 }
 func (p *permittedTools) hostConfig() (agenthost.Config, error) {
 	c := p.manager.agent.config().Host
+	if c.Windows != nil {
+		windows := *c.Windows
+		windows.MusicRegistration = filepath.Join(p.manager.dir, "windows-music.json")
+		c.Windows = &windows
+	}
 	x := p.executionContext()
 	publicProjects := filepath.Join(x.Public, "projects")
 	models, runtimes := filepath.Join(x.Public, "models"), filepath.Join(x.Public, "runtimes")

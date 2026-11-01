@@ -16,7 +16,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
-	"wechat-bot/internal/mobile"
+	mobile "wechat-bot/internal/devicespec"
 )
 
 func (m *Manager) mobileSourceAllowed(s mobile.Source) bool {

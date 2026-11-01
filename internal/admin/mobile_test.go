@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 	"wechat-bot/internal/companion"
-	"wechat-bot/internal/mobile"
+	mobile "wechat-bot/internal/devicespec"
 )
 
 func TestMobileStorageFailureDoesNotPreventChatManagerStartup(t *testing.T) {

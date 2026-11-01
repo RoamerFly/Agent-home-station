@@ -101,6 +101,11 @@ func migrationSourceHash(path string) (string, string) {
 	return hex.EncodeToString(sum[:]), ""
 }
 
+func migrationBytesHash(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
 func migrationSecret(value, source string) (pluginMigrationSecret, string) {
 	out := pluginMigrationSecret{SourceField: source, Present: value != ""}
 	if value != "" {
@@ -482,9 +487,19 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 		return pluginMigrationAccount{}, err
 	}
 	paths := map[string]string{"config_json": filepath.Join(m.dir, "config.json"), "speech_config_json": filepath.Join(m.dir, "speech-config.json"), "mcp_config_json": filepath.Join(m.dir, "mcp-config.json"), "channels_config_json": filepath.Join(m.dir, "channels-config.json"), "agent_config_json": filepath.Join(m.dir, "agent-config.json"), "plugins_json": filepath.Join(m.dir, "plugins.json")}
+	activeExternal, externalActive := m.externalConfigurationSources()
+	externalSourceName := map[string]string{"mcp_config_json": "mcp-config.json", "plugins_json": "plugins.json"}
+	sourceHash := func(name, path string, sources map[string][]byte, active bool) (string, string) {
+		if active {
+			if source, ok := externalSourceName[name]; ok {
+				return migrationBytesHash(sources[source]), ""
+			}
+		}
+		return migrationSourceHash(path)
+	}
 	before := map[string]string{}
 	for name, path := range paths {
-		before[name], _ = migrationSourceHash(path)
+		before[name], _ = sourceHash(name, path, activeExternal, externalActive)
 	}
 	m.mu.Lock()
 	config, mcp := cloneConfig(m.config), cloneMCP(m.mcp)
@@ -493,10 +508,29 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	agent := m.agent.config()
 	channelSettings, channelsErr := loadChannelsSettings(m.dir)
 	legacyExternal := m.plugins.installed()
+	if externalActive {
+		var activeMCP mcpSettings
+		var activeEntries map[string]pluginEntry
+		if json.Unmarshal(activeExternal["mcp-config.json"], &activeMCP) != nil || json.Unmarshal(activeExternal["plugins.json"], &activeEntries) != nil {
+			return pluginMigrationAccount{}, errExternalConfigurationCorrupt
+		}
+		mcp = cloneMCP(activeMCP)
+		legacyExternal = []legacyplugins.Installed{}
+		for _, entry := range activeEntries {
+			if !entry.Removed {
+				legacyExternal = append(legacyExternal, clonePluginEntry(entry).Installed)
+			}
+		}
+		sort.Slice(legacyExternal, func(i, j int) bool { return legacyExternal[i].Manifest.ID < legacyExternal[j].Manifest.ID })
+	}
 	sources := map[string]string{}
 	sourceErrors := map[string]string{}
+	activeAfter, activeAfterEnabled := m.externalConfigurationSources()
+	if externalActive != activeAfterEnabled {
+		return pluginMigrationAccount{}, errors.New("migration source changed during preview")
+	}
 	for name, path := range paths {
-		hash, problem := migrationSourceHash(path)
+		hash, problem := sourceHash(name, path, activeAfter, activeAfterEnabled)
 		sources[name] = hash
 		if problem != "" {
 			sourceErrors[name] = problem

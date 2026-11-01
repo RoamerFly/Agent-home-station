@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"wechat-bot/internal/bailian"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -57,7 +57,7 @@ func installDefaultSpeechFixture(t *testing.T, m *Manager, configured, enabled b
 func setLegacyDefaultSpeechFixture(m *Manager) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.speech = bailian.Defaults()
+	m.speech = mediaspec.Defaults()
 	m.speech.TTSEnabled = true
 	m.speech.Key = "synthetic-legacy-key-never-dispatched"
 	m.speech.Voice = "synthetic-legacy-voice-never-dispatched"
@@ -265,7 +265,7 @@ func TestSpeechDefaultLegacySettingsRemainCompatibilityOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := bailian.Defaults()
+	legacy := mediaspec.Defaults()
 	legacy.Key, legacy.TTSEnabled, legacy.Voice = "synthetic-legacy-only-new-key", true, "synthetic-legacy-new-voice"
 	if code, body, _ := f.request("POST", "/api/speech", legacy, true, true); code != 200 {
 		t.Fatalf("compatibility settings not retained: %d %s", code, body)

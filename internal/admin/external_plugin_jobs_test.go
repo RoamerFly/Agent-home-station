@@ -251,7 +251,14 @@ func TestLiveExternalJobInstalledLPACPreservesStartPollAndCompletedCancel(t *tes
 	}
 	j.f.manager.packageRuntime, j.f.manager.packageRuntimeReady = controller, true
 	t.Cleanup(func() { _ = controller.Close() })
-	task := j.start(t)
+	if _, err := j.p.Call(t.Context(), "demo__create", json.RawMessage(`{"prompt":"synthetic"}`)); err != nil {
+		page, _ := store.Jobs(t.Context(), externalHTTPPluginID, 0, 10)
+		for _, job := range page.Items {
+			t.Logf("isolated phase: tool=%s state=%s result=%s", job.Tool, job.State, job.Result)
+		}
+		t.Fatalf("isolated create: %v provider_creates=%d", err, j.creates.Load())
+	}
+	task := j.f.manager.agent.list("test", "filehelper")[0]
 	if task.PluginJob.Ticket.RemoteID != "remote-one" || j.creates.Load() != 1 {
 		t.Fatal("isolated creation lost actual remote identity", task)
 	}

@@ -114,8 +114,10 @@ func (b *ExternalBridge) JobProtocol(name string) (ExternalJobProtocol, error) {
 	return ExternalJobProtocol{Version: 1, Tool: ExternalProtocolTool{
 		Name: name, Description: t.Description, InputSchema: append(json.RawMessage(nil), t.InputSchema...),
 		TextPath: t.TextPath, MediaURLPath: t.MediaURLPath, MediaKind: t.MediaKind, Fingerprint: toolFingerprint(t),
-		Job:  &ExternalJob{IDPath: t.Job.IDPath},
-		Poll: &ExternalPoll{StatusPath: t.Poll.StatusPath, DoneValues: append([]string(nil), t.Poll.DoneValues...), FailedValues: append([]string(nil), t.Poll.FailedValues...), TextPath: t.Poll.TextPath, MediaURLPath: t.Poll.MediaURLPath, MediaKind: t.MediaKind, IntervalSeconds: t.Poll.IntervalSeconds, MaxAttempts: t.Poll.MaxAttempts, TimeoutSeconds: t.TimeoutSeconds},
+		Job: &ExternalJob{IDPath: t.Job.IDPath},
+		// Job cadence and deadlines belong to the host's durable task. This
+		// single-phase parser contract contains response interpretation only.
+		Poll: &ExternalPoll{StatusPath: t.Poll.StatusPath, DoneValues: append([]string(nil), t.Poll.DoneValues...), FailedValues: append([]string(nil), t.Poll.FailedValues...), TextPath: t.Poll.TextPath, MediaURLPath: t.Poll.MediaURLPath, MediaKind: t.MediaKind},
 	}}, nil
 }
 

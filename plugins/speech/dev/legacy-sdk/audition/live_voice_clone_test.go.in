@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/mcptools"
+	bailian "wechat-bot/plugins/speech/dev/legacy-sdk"
 )
 
 // Explicit local audition only. CI skips this; it never changes the active voice

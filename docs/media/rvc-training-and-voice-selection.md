@@ -12,12 +12,12 @@
 
 固定上游的静音切分中，每个短句的尾段写入曾放在外循环外，导致只保留最后一个短句。辅助脚本仅在有来源清单的私有副本中修正这个已知位置，记录 compatibility_patches；不修改公共上游源文件。合成测试验证多个短句都保留，全部波形必须拥有匹配的 F0 与 HuBERT 特征才生成训练清单。
 
-训练额外依赖见 `scripts/rvc_training_requirements.txt`，安装进独立目录，保留 CUDA torch 和推理环境。固定 Matplotlib 3.9.4 兼容上游 RGB 画布接口。训练前验证 TensorBoard 和画布依赖，避免已加载大模型后才因日志依赖缺失退出。
+训练实现与额外依赖归音乐插件所有。使用 `project_read {"id":"rvc"}` 返回的 `training_entry` 和 `training_requirements`，确认 `training_owner`、安装目录和包哈希匹配后，安装进独立目录，保留 CUDA torch 和推理环境。固定 Matplotlib 3.9.4 兼容上游 RGB 画布接口。训练前验证 TensorBoard 和画布依赖，避免已加载大模型后才因日志依赖缺失退出。旧脚本仅作已登记安装包的校验转发，不回退执行仓库副本。
 
 ```text
-<CUDA-Python> -m pip install --no-deps --target <private-training-libs> -r scripts/rvc_training_requirements.txt
-<CUDA-Python> scripts/rvc_train_trial.py --python <CUDA-Python> --source-project <registered-rvc> --project <new-private-shadow> --dataset <authorized-samples> --experiment <new-name> --stage prepare --device cuda:0 --extra-python-path <private-training-libs>
-<CUDA-Python> scripts/rvc_train_trial.py --python <CUDA-Python> --project <private-shadow> --dataset <authorized-samples> --experiment <name> --stage train --device cuda:0 --batch-size 2 --epochs 60 --extra-python-path <private-training-libs>
+<CUDA-Python> -m pip install --no-deps --target <private-training-libs> -r <training_requirements>
+<CUDA-Python> <training_entry> --python <CUDA-Python> --source-project <registered-rvc> --project <new-private-shadow> --dataset <authorized-samples> --experiment <new-name> --stage prepare --device cuda:0 --extra-python-path <private-training-libs>
+<CUDA-Python> <training_entry> --python <CUDA-Python> --project <private-shadow> --dataset <authorized-samples> --experiment <name> --stage train --device cuda:0 --batch-size 2 --epochs 60 --extra-python-path <private-training-libs>
 ```
 
 消息准备、特征完成、训练进程、优化步骤和模型导出是不同状态。每阶段写 training-state.json，失败明确标记 failed；子进程返回 0 后仍检查最终权重存在、epoch、版本和音高配置，再记录权重哈希。调用者还应核对进程及优化日志，不能将外层 shell 的 0 退出码当成内部失败程序成功的证据。epochs、batch、保存间隔和进程数可配置，默认值不是能力上限。

@@ -1,16 +1,11 @@
-// Package bailian connects only to administrator-configured Alibaba endpoints.
-package bailian
+// Package mediaspec defines legacy media configuration and observation contracts.
+// It performs no provider requests, synthesis, transcription or model execution.
+package mediaspec
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 type Config struct {
@@ -64,71 +59,4 @@ func (c Config) Validate() error {
 		return errors.New("百炼参数无效")
 	}
 	return nil
-}
-
-type Client struct {
-	Config Config
-	HTTP   *http.Client
-}
-
-func New(c Config) *Client {
-	return &Client{Config: c, HTTP: &http.Client{Timeout: 180 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}}
-}
-
-type Failure struct {
-	Status int
-	Code   string
-}
-
-func (e *Failure) Error() string {
-	if e.Code == "ASR_RESPONSE_HAVE_NO_WORDS" {
-		return "音频中未识别到可转写的词；可能为音乐、环境声或不清晰人声"
-	}
-	return "百炼调用失败：" + e.Code + "（请检查地域、模型权限或额度；不会自动重复生成）"
-}
-
-// No recognized words is an observation outcome, not an authentication,
-// transport, or decoder failure. Do not infer complete silence from this code.
-func IsNoSpeech(err error) bool {
-	var failure *Failure
-	return errors.As(err, &failure) && failure.Code == "ASR_RESPONSE_HAVE_NO_WORDS"
-}
-func (c *Client) request(ctx context.Context, path string, v any) (map[string]any, error) {
-	if c.Config.Key == "" {
-		return nil, errors.New("百炼密钥尚未配置")
-	}
-	b, _ := json.Marshal(v)
-	req, e := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.Config.Endpoint, "/")+path, bytes.NewReader(b))
-	if e != nil {
-		return nil, e
-	}
-	req.GetBody = nil
-	req.Header.Set("Authorization", "Bearer "+c.Config.Key)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-DashScope-SSE", "disable")
-	resp, e := c.HTTP.Do(req)
-	if e != nil {
-		return nil, errors.New("百炼连接失败或等待超时")
-	}
-	defer resp.Body.Close()
-	data, e := io.ReadAll(io.LimitReader(resp.Body, (2<<20)+1))
-	if e != nil || len(data) > 2<<20 {
-		return nil, errors.New("百炼响应超过限制")
-	}
-	var out map[string]any
-	if json.Unmarshal(data, &out) != nil {
-		return nil, errors.New("百炼响应无效")
-	}
-	if resp.StatusCode != 200 {
-		code, _ := out["code"].(string)
-		message, _ := out["message"].(string)
-		if code == "CLIENT_ERROR" && strings.TrimSpace(message) == "ASR_RESPONSE_HAVE_NO_WORDS" {
-			code = "ASR_RESPONSE_HAVE_NO_WORDS"
-		}
-		if len(code) > 100 || strings.ContainsAny(code, "\r\n ") {
-			code = "provider_rejected"
-		}
-		return nil, &Failure{resp.StatusCode, code}
-	}
-	return out, nil
 }

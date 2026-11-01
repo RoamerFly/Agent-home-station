@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -477,7 +477,7 @@ func (p *mediaTranscriptionPolicy) transcribe(ctx context.Context) (string, erro
 		return "", errors.New("media_plugin_result_invalid")
 	}
 	if r.Status == "no_recognizable_speech" {
-		return "", &bailian.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
+		return "", &mediaspec.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
 	}
 	if r.Status != "transcribed" || r.Text == "" {
 		return "", errors.New("media_plugin_result_invalid")

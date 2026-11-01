@@ -93,7 +93,7 @@ func TestOfficialContracts(t *testing.T) {
 						}
 					}
 					if d.Name() == "mobile-control" {
-						want = map[string]bool{"device.plan": true, "device.list": true, "device.observe": true, "device.act": true, "device.record": true, "device.read_artifact": true}
+						want = map[string]bool{"device.workflow": true, "device.plan": true, "device.list": true, "device.observe": true, "device.act": true, "device.record": true, "device.read_artifact": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "model.invoke" || p.Permissions[1] != "device" {
 							t.Fatal("device package must declare only separate model/device proxies")
 						}
@@ -118,7 +118,11 @@ func TestOfficialContracts(t *testing.T) {
 								if cap.ID == "device.plan" {
 									permission = "model.invoke"
 								}
-								if cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != permission {
+								if cap.ID == "device.workflow" {
+									if cap.Async || len(cap.Permissions) != 2 || cap.Permissions[0] != "device" || cap.Permissions[1] != "model.invoke" {
+										t.Fatal("pure workflow must remain synchronous and require both scoped host authorities")
+									}
+								} else if cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != permission {
 									t.Fatal("device capability must remain synchronous and use only its own proxy")
 								}
 							}

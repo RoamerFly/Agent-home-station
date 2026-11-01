@@ -20,7 +20,7 @@ import (
 
 	"wechat-bot/internal/adbserver"
 	"wechat-bot/internal/devicebroker"
-	"wechat-bot/internal/mobile"
+	mobile "wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )

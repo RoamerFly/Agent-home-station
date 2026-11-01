@@ -14,12 +14,12 @@ import (
 	"wechat-bot/internal/adbserver"
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/agentworkspace"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/devicebroker"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/sending"
@@ -110,7 +110,7 @@ type Manager struct {
 	workspace           *agentworkspace.Store
 	processes           *agenthost.Jobs
 	mobile              deviceService
-	speech              bailian.Config
+	speech              mediaspec.Config
 	agent               *agentControl
 	surfHistory         *surfHistoryStore
 	billing             *billingStore
@@ -181,14 +181,12 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	mcp, err := loadMCP(dir)
+	externalConfiguration, err := newExternalConfigurationRepository(dir, native.Account())
 	if err != nil {
 		return nil, err
 	}
-	plug, err := newPluginLedger(dir)
-	if err != nil {
-		return nil, err
-	}
+	mcp := externalConfiguration.snapshot().Settings
+	plug := newPluginLedgerForRepository(externalConfiguration)
 	if stateDir == "" {
 		stateDir = filepath.Join(dir, "bot-state")
 	}
@@ -209,6 +207,7 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 		return nil, err
 	}
 	m := &Manager{speech: speech, agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug}
+	externalConfiguration.openStore, externalConfiguration.owned = m.packageStore, false
 	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
 	if err != nil {
 		return nil, err

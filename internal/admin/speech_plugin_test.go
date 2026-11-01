@@ -206,8 +206,8 @@ func TestLiveSpeechPluginSynthesisContract(t *testing.T) {
 	if err != nil || calls != 1 || result.URL != "https://audio.example/private.wav?token=synthetic" || result.RequestedVoice != "synthetic-voice" || result.ProviderVoiceStatus != "not_reported" {
 		t.Fatal("isolated speech contract", result, err, calls)
 	}
-	// This is the official package, not a promoted test copy: only the cloud
-	// capability is callable. The URL stays in the private checkpoint while the
+	// This is the official package, without promoting any capabilities.
+	// The URL stays in the private checkpoint while the
 	// public job result is safe to expose to the rest of the host.
 	page, err := policy.store.Jobs(t.Context(), "speech", 0, 8)
 	if err != nil || len(page.Items) != 1 || bytes.Contains(page.Items[0].Result, []byte("token=synthetic")) {
@@ -223,7 +223,22 @@ func TestLiveSpeechPluginSynthesisContract(t *testing.T) {
 		t.Fatal("pending voice capability dispatched", err, calls)
 	}
 	caps, err := policy.store.Capabilities(t.Context(), "speech")
-	if err != nil || len(caps) != 3 || caps[0].ID != "speech.synthesize" || !caps[0].Discoverable || caps[0].Implementation != "ready" || caps[1].Discoverable || caps[1].Implementation != "migration-pending" || caps[2].Discoverable || caps[2].Implementation != "migration-pending" {
-		t.Fatal("official capability states changed", caps, err)
+	if err != nil || len(caps) != 4 {
+		t.Fatal("official capability count changed", len(caps), err)
+	}
+	want := map[string]bool{"speech.synthesize": true, "speech.synthesize_named": true, "speech.voices": false, "speech.train": false}
+	for _, cap := range caps {
+		ready, exists := want[cap.ID]
+		implementation := "migration-pending"
+		if ready {
+			implementation = "ready"
+		}
+		if !exists || cap.Discoverable != ready || cap.Implementation != implementation {
+			t.Fatal("official capability state changed", cap.ID, cap.Implementation, cap.Discoverable)
+		}
+		delete(want, cap.ID)
+	}
+	if len(want) != 0 {
+		t.Fatal("official capabilities missing", want)
 	}
 }

@@ -1,4 +1,4 @@
-package bailian
+package legacysdk
 
 import (
 	"context"

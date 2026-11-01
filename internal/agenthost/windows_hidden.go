@@ -21,6 +21,9 @@ type WindowsConfig struct {
 	Helper  string `json:"helper"`
 	Spool   string `json:"spool"`
 	Shell   string `json:"shell,omitempty"`
+	// Host-only path to the account's owner-approved music registration. It is
+	// never accepted from Agent/configuration JSON and adds no general mount.
+	MusicRegistration string `json:"-"`
 }
 
 func (c WindowsConfig) Validate() error {
@@ -31,6 +34,9 @@ func (c WindowsConfig) Validate() error {
 	}
 	if !strings.EqualFold(filepath.Base(c.Pythonw), "pythonw.exe") {
 		return errors.New("隐藏Windows执行必须使用pythonw.exe，不能使用控制台python.exe")
+	}
+	if c.MusicRegistration != "" && (!filepath.IsAbs(c.MusicRegistration) || filepath.Clean(c.MusicRegistration) != c.MusicRegistration || strings.ContainsRune(c.MusicRegistration, 0)) {
+		return errors.New("Windows音乐登记需宿主绝对规范路径")
 	}
 	return nil
 }
@@ -131,7 +137,22 @@ func runWindowsPolicyRequest(ctx context.Context, cfg Config, id, path, command 
 		}
 		readonly = append(readonly, v)
 	}
-	b, _ := json.Marshal(map[string]any{"cwd": winDir, "command": command, "argv": argv, "shell": shell, "sandbox": true, "roots": mounts, "read_only": readonly, "music_policy": policy, "environment": environment})
+	registration := ""
+	if w.MusicRegistration != "" {
+		registration, e = windowsPath(w.MusicRegistration)
+		if e != nil {
+			return e
+		}
+	}
+	requestDocument := map[string]any{"cwd": winDir, "command": command, "argv": argv, "shell": shell, "sandbox": true, "roots": mounts, "read_only": readonly, "music_policy": policy, "environment": environment, "music_registration": registration, "gpu_authorized": cfg.Isolation.GPU}
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline).Seconds()
+		if remaining <= 0 {
+			return context.DeadlineExceeded
+		}
+		requestDocument["timeout_seconds"] = remaining
+	}
+	b, _ := json.Marshal(requestDocument)
 	if e = os.WriteFile(request, b, 0600); e != nil {
 		return e
 	}

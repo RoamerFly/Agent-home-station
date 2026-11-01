@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mediaspec"
 )
 
 func TestMusicFollowupPersistsPollsAndDeliversWithoutProactivePermission(t *testing.T) {
@@ -48,7 +48,7 @@ func TestMusicFollowupPersistsPollsAndDeliversWithoutProactivePermission(t *test
 	cfg.Companion.QuietStart = now.In(zone).Add(-time.Hour).Format("15:04")
 	cfg.Companion.QuietEnd = now.In(zone).Add(time.Hour).Format("15:04")
 	f.manager.config = cfg
-	c := bailian.Defaults()
+	c := mediaspec.Defaults()
 	c.YuEEnabled = true
 	c.YuEEndpoint = server.URL
 	c.YuEToken = "private-fixture-token"

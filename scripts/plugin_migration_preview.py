@@ -11,11 +11,14 @@ target. The normal report never contains secret values.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import ipaddress
 import json
 import os
 from pathlib import Path
+import sqlite3
 import sys
 from typing import Any
 from urllib.parse import urlsplit
@@ -79,6 +82,72 @@ def _source_hash(path: Path) -> tuple[str, str | None]:
     if len(data) > MAX_JSON:
         return _sha256(b"too_large"), "too_large"
     return _sha256(data), None
+
+
+def _canonical_host_json(value: Any) -> bytes:
+    """Match the compact, deterministic host JSON form closely enough for
+    offline approval change detection. It is never written back to disk."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _read_active_external_configuration(directory: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, bytes] | None, str | None]:
+    """Read the activated external host state without opening a writable DB.
+
+    Once active, SQLite is authoritative: retained JSON must not influence a
+    preview. A malformed active state deliberately blocks this standalone
+    preview instead of falling back to stale legacy files.
+    """
+    path = directory / "plugin-host" / "plugins.sqlite"
+    if not path.exists():
+        return None, None, None, None
+    if path.is_symlink() or not path.is_file():
+        return None, None, None, "host_active_requires_host_preview"
+    try:
+        uri = path.resolve().as_uri() + "?mode=ro"
+        db = sqlite3.connect(uri, uri=True)
+        try:
+            row = db.execute("SELECT revision,source_hash FROM host_states WHERE plugin=? AND namespace=?", ("external-tools", "configuration-v1")).fetchone()
+            if row is None:
+                return None, None, None, None
+            revision, source_hash = row
+            if not isinstance(revision, int) or revision < 1 or not isinstance(source_hash, str) or len(source_hash) != 64:
+                return None, None, None, "host_active_requires_host_preview"
+            records: dict[str, bytes] = {}
+            total_payload = 0
+            for key, payload in db.execute("SELECT key,payload FROM host_state_records WHERE plugin=? AND namespace=?", ("external-tools", "configuration-v1")):
+                if not isinstance(key, str) or not isinstance(payload, bytes) or not payload or len(payload) > 1 << 20 or key in records:
+                    return None, None, None, "host_active_requires_host_preview"
+                total_payload += len(payload)
+                if total_payload > 8 << 20 or len(records) >= 32:
+                    return None, None, None, "host_active_requires_host_preview"
+                records[key] = payload
+        finally:
+            db.close()
+    except (OSError, sqlite3.Error, ValueError):
+        return None, None, None, "host_active_requires_host_preview"
+    try:
+        manifest_raw = records.pop("manifest")
+        manifest = json.loads(bytes(manifest_raw).decode("utf-8"))
+        chunks = manifest.get("chunks")
+        total = manifest.get("bytes")
+        if not isinstance(chunks, int) or chunks < 1 or chunks > 16 or not isinstance(total, int) or total < 1 or total > 3 << 20 or len(records) != chunks:
+            raise ValueError("invalid manifest")
+        pieces: list[bytes] = []
+        for index in range(chunks):
+            encoded = json.loads(bytes(records[f"document:{index:06d}"]).decode("utf-8"))
+            if not isinstance(encoded, str):
+                raise ValueError("invalid chunk")
+            pieces.append(base64.b64decode(encoded, validate=True))
+        raw = b"".join(pieces)
+        if len(raw) != total or manifest.get("sha256") != _sha256(raw) or manifest.get("source_hash") != source_hash:
+            raise ValueError("invalid digest")
+        document = json.loads(raw.decode("utf-8"))
+        if not isinstance(document, dict) or document.get("version") != 1 or not isinstance(document.get("settings"), dict) or not isinstance(document.get("connections"), dict):
+            raise ValueError("invalid document")
+        settings, connections = document["settings"], document["connections"]
+        return settings, connections, {"mcp_config_json": _canonical_host_json(settings), "plugins_json": _canonical_host_json(connections)}, None
+    except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError, ValueError, binascii.Error):
+        return None, None, None, "host_active_requires_host_preview"
 
 
 def _safe_text(value: Any) -> str:
@@ -323,7 +392,7 @@ def _external_legacy_intent(mcp: dict[str, Any], ledger: dict[str, Any]) -> dict
     return intent
 
 
-def _external_tools_plan(repo: Path, mcp: dict[str, Any], ledger: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+def _external_tools_plan(repo: Path, mcp: dict[str, Any], ledger: dict[str, Any], host_state_error: str | None = None) -> tuple[dict[str, Any], dict[str, str]]:
     """Prepare only reviewed sync or start/poll/cancel external adapters.
 
     No legacy endpoint, header, template, MCP setup or secret can enter either
@@ -337,6 +406,8 @@ def _external_tools_plan(repo: Path, mcp: dict[str, Any], ledger: dict[str, Any]
     mcp_declared = _declares_external_capability(repo, "external.mcp_request")
     legacy_enabled = (intent["sync"] and sync_declared) or (intent["job"] and job_declared) or (intent["poll"] and poll_declared) or (intent["mcp"] and mcp_declared)
     required: list[str] = []
+    if host_state_error:
+        required.append(host_state_error)
     if intent["declared"] and not legacy_enabled:
         required.append("no_matching_supported_external_tools")
     if intent["sync"] and not sync_declared:
@@ -689,6 +760,10 @@ def build_preview(root: Path, repo: Path, primary_account: str = "primary") -> t
         channels, channels_error = _read_json(directory / "channels-config.json")
         agent, agent_error = _read_json(directory / "agent-config.json")
         legacy_plugins, plugins_error = _read_json(directory / "plugins.json")
+        active_mcp, active_plugins, active_sources, external_host_error = _read_active_external_configuration(directory)
+        if active_sources is not None:
+            mcp, legacy_plugins = active_mcp or {}, active_plugins or {}
+            mcp_error = plugins_error = None
         if not mcp:
             mcp = {"enabled": True, "web_search_enabled": True, "web_fetch_enabled": True}
         source_paths = {
@@ -700,6 +775,8 @@ def build_preview(root: Path, repo: Path, primary_account: str = "primary") -> t
             "plugins_json": directory / "plugins.json",
         }
         source_hashes = {name: _source_hash(path)[0] for name, path in source_paths.items()}
+        if active_sources is not None:
+            source_hashes.update({name: _sha256(raw) for name, raw in active_sources.items()})
         entry: dict[str, Any] = {"account": account, "source_directory": str(directory), "source_hashes": source_hashes, "source_errors": {}}
         for name, error in (("config.json", config_error), ("speech-config.json", speech_error), ("mcp-config.json", mcp_error), ("channels-config.json", channels_error), ("agent-config.json", agent_error), ("plugins.json", plugins_error)):
             if error:
@@ -710,7 +787,7 @@ def build_preview(root: Path, repo: Path, primary_account: str = "primary") -> t
         project_development, project_secrets = _project_development_plan(repo, agent)
         share, share_secrets = _share_plan(repo, channels)
         web, web_secrets = _web_plan(repo, config, mcp)
-        external, external_secrets = _external_tools_plan(repo, mcp, legacy_plugins)
+        external, external_secrets = _external_tools_plan(repo, mcp, legacy_plugins, external_host_error)
         entry["plugins"] = [media, speech_step, music, project_development, web, share, external]
         report["accounts"].append(entry)
         all_secrets = {**media_secrets, **speech_secrets, **music_secrets, **project_secrets, **web_secrets, **share_secrets, **external_secrets}

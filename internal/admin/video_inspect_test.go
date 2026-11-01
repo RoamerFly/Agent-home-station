@@ -147,6 +147,30 @@ func TestVideoInspectionUsesScopedCacheAndAdvertisesContinuation(t *testing.T) {
 	}
 }
 
+// Frame inspection is a visual-media operation.  A chat-model key must never
+// revive the removed direct VisionWithBudget path when the media package is not
+// installed and authorized.
+func TestVideoInspectionFramesRequireInstalledMediaPlugin(t *testing.T) {
+	f, p := trustedAgent(t)
+	defer p.hub.Close()
+	f.manager.config.Behavior.ReadVideos = true
+	f.manager.config.Companion.Permissions.Remember = true
+	f.manager.config.APIKey = "would-have-enabled-the-legacy-chat-model"
+	asset, err := f.manager.rememberAssetFormats(p.trace, assetOriginal{Data: inspectionFixture(t), MIME: "video/mp4", Filename: "plugin-only.mp4"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plugin-only.mp4")
+	if err = os.WriteFile(path, inspectionFixture(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = p.inspectVideoFrameRange(t.Context(), path, dir, videoInspectionInput{SourceThread: p.trace.Thread, Start: 0, Step: 1, BatchSize: 1, MaxDimension: 96, Tokens: 128}, 1, 24, asset.ID, inspectionFixture(t))
+	if err == nil || !strings.Contains(err.Error(), "media_plugin_migration_required") {
+		t.Fatalf("frame inspection used a legacy model path or hid the package boundary: %v", err)
+	}
+}
+
 func TestInspectionPluginAudioUsesCanonicalReceivedAssetSource(t *testing.T) {
 	f, p, n := forwardFixture(t)
 	f.manager.config.Behavior.ReadVideos = true

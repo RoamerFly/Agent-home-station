@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"sort"
 
 	"wechat-bot/internal/pluginhost"
 	catalog "wechat-bot/plugins"
@@ -95,6 +96,17 @@ func (m *Manager) applyPluginMigration(ctx context.Context, account, id, sourceH
 	if target == nil {
 		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, errors.New("migration account unavailable")
 	}
+	// Activating external host state replaces the legacy JSON source bytes with
+	// canonical SQLite bytes. A browser retry after the successful POST can
+	// therefore carry the just-completed legacy digest. Accept only that exact,
+	// disabled and empty-config migration record; never re-import or mutate it.
+	if id == externalHTTPPluginID {
+		if installed, configuration, record, ok, err := target.completedExternalMigrationReplay(ctx, account, sourceHash, digest, permissions); err != nil {
+			return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, err
+		} else if ok {
+			return installed, configuration, record, nil
+		}
+	}
 	preview, err := target.pluginMigrationPreviewFor(ctx, migrationCatalog())
 	if err != nil {
 		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, err
@@ -147,5 +159,57 @@ func (m *Manager) applyPluginMigration(ctx context.Context, account, id, sourceH
 	if prepared.Digest != digest || prepared.Package.ID != id || prepared.Package.Version != step.Package.Version {
 		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, errors.New("prepared package changed")
 	}
-	return store.ApplyMigration(ctx, pluginhost.MigrationApply{ID: migrationID, SourceHash: sourceHash, PreparedToken: prepared.Token, PreparedDigest: prepared.Digest, ExpectedPackage: id, Permissions: permissions, Configuration: step.update})
+	installed, configuration, record, err := store.ApplyMigration(ctx, pluginhost.MigrationApply{ID: migrationID, SourceHash: sourceHash, PreparedToken: prepared.Token, PreparedDigest: prepared.Digest, ExpectedPackage: id, Permissions: permissions, Configuration: step.update})
+	if err != nil {
+		return installed, configuration, record, err
+	}
+	if id == externalHTTPPluginID {
+		// The external package is only an adapter. Its legacy MCP and HTTP
+		// declarations stay host-owned, so activation happens after the
+		// disabled install and is retried on the same apply request if it was
+		// interrupted. No tool is enabled or executed here.
+		if err := target.migrateExternalConfiguration(ctx); err != nil {
+			return installed, configuration, record, err
+		}
+	}
+	return installed, configuration, record, nil
+}
+
+func (m *Manager) completedExternalMigrationReplay(ctx context.Context, account, sourceHash, digest string, permissions []string) (pluginhost.InstalledPackage, pluginhost.Configuration, pluginhost.MigrationRecord, bool, error) {
+	store, err := m.packageStore()
+	if err != nil {
+		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, false, err
+	}
+	migrationID := "legacy-" + account + "-" + externalHTTPPluginID + "-" + sourceHash
+	record, err := store.Migration(ctx, migrationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, false, nil
+	}
+	if err != nil {
+		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, false, err
+	}
+	installed, err := store.Installed(ctx, externalHTTPPluginID)
+	if err != nil {
+		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, false, err
+	}
+	configuration, err := store.Configuration(ctx, externalHTTPPluginID)
+	if err != nil {
+		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, false, err
+	}
+	requested := append([]string(nil), permissions...)
+	actual := append([]string(nil), installed.Permissions...)
+	sort.Strings(requested)
+	sort.Strings(actual)
+	if record.State != "complete" || record.Plugin != externalHTTPPluginID || record.Digest != digest || record.SourceHash != sourceHash || record.InstalledRevision != installed.Revision || installed.Digest != digest || installed.Enabled || installed.Removed || len(configuration.Values) != 0 || len(configuration.ConfiguredSecrets) != 0 || len(requested) != len(actual) {
+		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, false, nil
+	}
+	for i := range requested {
+		if requested[i] != actual[i] {
+			return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, false, nil
+		}
+	}
+	if _, active := m.externalConfigurationSources(); !active {
+		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, false, nil
+	}
+	return installed, configuration, record, true, nil
 }

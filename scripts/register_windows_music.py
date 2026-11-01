@@ -16,8 +16,56 @@ import subprocess
 from prepare_windows_python import prepare, digest
 from install_windows_gpt_nltk import install as install_gpt_nltk
 from register_gpt_sovits import install_plugin_entry, mark_plugin_inference
+from rvc_train_trial import BINDING as TRAINING_BINDING, training_resources
 
 POLICY = "registry-read-private-network-v1"
+
+
+def deployed_training_resources(program_runtimes):
+    """Read only the shipped catalog; never search a repository source tree."""
+    package = Path(program_runtimes).parent / "plugins/music"
+    if not package.exists():
+        return None
+    return training_resources(package)
+
+
+def mark_plugin_training(value, public, resources):
+    """Update tool declarations without moving voices, jobs or checkpoints."""
+    legacy_entries = [value.get(name) for name in ("training_entry", "training_script", "training_cli")]
+    legacy_entries.append(str(Path(public) / "projects/agent-tools/rvc_train_trial.py"))
+    for candidate in dict.fromkeys(p for p in legacy_entries if isinstance(p, str) and p):
+        path = Path(candidate)
+        if path.name != "rvc_train_trial.py" or not path.exists():
+            continue
+        # A catalog entry is already the implementation, never replace it.
+        if resources and path == Path(resources["entry"]):
+            continue
+        if any(part.is_symlink() or getattr(part, "is_junction", lambda: False)() for part in (path, *path.parents)) or not path.is_file() or not path.resolve().is_relative_to((Path(public) / "projects").resolve()):
+            raise ValueError("training_cli_outside_registered_projects")
+        if resources:
+            publish_json(path.with_name(TRAINING_BINDING), {"version": 1,
+                         "package_directory": resources["package_directory"],
+                         "manifest_sha256": resources["manifest_sha256"]}, backup=False)
+        stub = Path(__file__).with_name("rvc_train_trial.py").read_text(encoding="utf8")
+        if path.read_text(encoding="utf8") != stub:
+            pending = path.with_suffix(".pending-" + uuid.uuid4().hex)
+            pending.write_text(stub, encoding="utf8", newline="\n")
+            pending.replace(path)
+    value["training_owner"] = "plugin:music"
+    value["training_product_api"] = "pending"
+    value["training_status"] = "registered_explicit_project_cli" if resources else "requires_deployed_music_training_package"
+    value["training_instruction"] = (
+        "Run training_entry only through the explicitly authorized registered project execution; "
+        "GPU use still requires gpu=true and the registered CUDA interpreter/profile. "
+        "Preserve the selected voice, --project, --dataset, --experiment, --resume-from, --device and all original parameters. "
+        "Install training_requirements into a separate dependency directory; pass each training_python_paths directory with --extra-python-path. "
+        "prepare/train/index, optimizer and final export checks are owned by the installed music package. music.train has no product API.")
+    if resources:
+        value.update(training_entry=resources["entry"], training_requirements=resources["requirements"],
+                     training_package_directory=resources["package_directory"],
+                     training_package_sha256=resources["manifest_sha256"], training_package_version=resources["version"])
+    else:
+        value["training_instruction"] = "Install/deploy and verify the music package training resources before invoking the historical training CLI. " + value["training_instruction"]
 
 
 def restore_mount_inheritance(root):
@@ -61,6 +109,7 @@ def register(workspace, legacy_public, admin, program_runtimes, authorize=False,
         raise ValueError("explicit_windows_music_policy_authorization_required")
     workspace, legacy_public, admin, program_runtimes = [Path(p).resolve(strict=True) for p in
                                                         (workspace, legacy_public, admin, program_runtimes)]
+    training = deployed_training_resources(program_runtimes)
     public = workspace / "public_workspace"
     packages = public / "runtimes/windows-music-packages"
     if not (packages / "torch").is_dir() or not (packages / "aiohttp").is_dir():
@@ -130,9 +179,10 @@ def register(workspace, legacy_public, admin, program_runtimes, authorize=False,
         if value.get("id") == "yue":
             value["usage"] = value.get("usage", "").replace(
                 "服务在WSL本机Bubblewrap运行", "Windows 服务在受管音乐/GPU 后端运行")
-        if value.get("id") == "rvc" and training_overlay.is_dir():
-            value["training_python_paths"] = [str(training_overlay)]
-            value["training_instruction"] += " Windows: pass each training_python_paths directory with --extra-python-path; embedded Python bootstrap preserves these paths in child processes."
+        if value.get("id") == "rvc":
+            if training_overlay.is_dir():
+                value["training_python_paths"] = [str(training_overlay)]
+            mark_plugin_training(value, public, training)
         if value.get("id") != "gpt-sovits":
             value["execution"] = "Windows native; owner-authorized music/GPU LPAC; account-scoped named pipe; start via music_service_start"
             value["runtime_status"] = "registered_pending_windows_model_validation"

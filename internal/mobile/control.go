@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
-	"wechat-bot/internal/mcptools"
 )
 
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
@@ -29,39 +28,6 @@ var bridgeReasonPattern = regexp.MustCompile(`^device_[a-z_]{1,90}$`)
 var errPermissionChanged = errors.New("device_permission_changed")
 var errStorageBlocked = errors.New("device_storage_blocked")
 
-type Settings struct {
-	Revision   int64                 `json:"revision"`
-	Enabled    bool                  `json:"enabled"`
-	Bridge     mcptools.ServerConfig `json:"bridge"`
-	Devices    []string              `json:"devices"`
-	Actions    []string              `json:"actions"`
-	MaxSteps   int                   `json:"max_steps"`
-	MaxSeconds int                   `json:"max_seconds"`
-}
-
-func Defaults() Settings {
-	return Settings{Devices: []string{}, Actions: []string{}, MaxSteps: 12, MaxSeconds: 300, Bridge: mcptools.ServerConfig{ID: "device", Transport: "stdio", Enabled: true, TimeoutSeconds: 45, Tools: []string{"devices", "observe", "act"}}}
-}
-func (c Settings) Validate() error {
-	if c.MaxSteps < 1 || c.MaxSteps > 30 || c.MaxSeconds < 30 || c.MaxSeconds > 900 || len(c.Devices) > 16 || len(c.Actions) > 9 {
-		return errors.New("device_configuration_invalid")
-	}
-	for _, id := range c.Devices {
-		if !idPattern.MatchString(id) {
-			return errors.New("device_id_invalid")
-		}
-	}
-	for _, action := range c.Actions {
-		if !includes([]string{"launch", "tap", "swipe", "text", "back", "home", "capture", "open_url"}, action) {
-			return errors.New("device_action_invalid")
-		}
-	}
-	// Bridge is a legacy configuration payload consumed only by the explicitly
-	// installed device plugin during migration. Do not construct or probe an
-	// MCP backend here: validation must be local and opening a backend belongs
-	// to BrokerFactory after host authorization.
-	return nil
-}
 func includes(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {
@@ -70,86 +36,6 @@ func includes(items []string, want string) bool {
 	}
 	return false
 }
-
-type Source struct {
-	Account   string `json:"account"`
-	Thread    string `json:"thread"`
-	Sender    string `json:"sender"`
-	MessageID string `json:"message_id"`
-	Admin     bool   `json:"admin"`
-}
-type Event struct {
-	At      time.Time `json:"at"`
-	State   string    `json:"state"`
-	Action  string    `json:"action,omitempty"`
-	Summary string    `json:"summary,omitempty"`
-}
-type Task struct {
-	Artifacts     []Artifact `json:"artifacts,omitempty"`
-	RequestHash   string     `json:"request_hash"`
-	ID            string     `json:"id"`
-	DeviceID      string     `json:"device_id"`
-	Goal          string     `json:"goal"`
-	State         string     `json:"state"`
-	Source        Source     `json:"source"`
-	Steps         int        `json:"steps"`
-	ObservationID string     `json:"observation_id,omitempty"`
-	Result        string     `json:"result,omitempty"`
-	Reason        string     `json:"reason,omitempty"`
-	Created       time.Time  `json:"created"`
-	Updated       time.Time  `json:"updated"`
-	Events        []Event    `json:"events"`
-}
-type Artifact struct {
-	ID               string `json:"id"`
-	DeviceID         string `json:"device_id"`
-	RequestKey       string `json:"request_key"`
-	Kind             string `json:"kind"`
-	MIME             string `json:"mime"`
-	Bytes            int    `json:"bytes"`
-	SHA256           string `json:"sha256"`
-	RequestedSeconds int    `json:"requested_seconds"`
-	Audio            bool   `json:"audio"`
-	Original         bool   `json:"original_media"`
-	Summary          string `json:"summary,omitempty"`
-	AssetID          string `json:"asset_id,omitempty"`
-}
-type ArtifactAnalyzer func(context.Context, Task, Artifact, []byte) (summary, assetID string, err error)
-type Observation struct {
-	AllowedPackages []string          `json:"allowed_packages,omitempty"`
-	Browsers        []string          `json:"browsers,omitempty"`
-	WebHosts        []string          `json:"web_hosts,omitempty"`
-	ID              string            `json:"id"`
-	DeviceID        string            `json:"device_id"`
-	Package         string            `json:"package"`
-	Width           int               `json:"width"`
-	Height          int               `json:"height"`
-	Nodes           []json.RawMessage `json:"nodes"`
-	Raw             json.RawMessage   `json:"-"`
-	PNG             []byte            `json:"-"`
-}
-type Step struct {
-	Action    string         `json:"action"`
-	Arguments map[string]any `json:"arguments,omitempty"`
-	Summary   string         `json:"summary,omitempty"`
-}
-type Planner func(context.Context, Task, Observation) (Step, error)
-type Bridge interface {
-	Call(context.Context, string, json.RawMessage) (string, error)
-	Close() error
-}
-
-// BrokerFactory opens the production device broker for one already-authorized
-// operation.  The host supplies it when the device backend is implemented by
-// an installed plugin.  Task is deliberately empty for the local management
-// Devices operation; its Source is Admin so a binder can distinguish that
-// narrow, unscoped listing operation from a conversation task.
-//
-// It is required for execution. A nil factory means the device plugin is not
-// installed or not available; legacy Bridge settings are never executed by
-// Control. Errors (and a nil Bridge) are never retried through old command
-// configuration, which would silently widen a plugin boundary.
-type BrokerFactory func(context.Context, Task, Settings) (Bridge, error)
 
 type Control struct {
 	mu             sync.Mutex

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
-	"wechat-bot/internal/mobile"
+	mobile "wechat-bot/internal/devicespec"
 )
 
 type mobilePluginSettingsView struct {

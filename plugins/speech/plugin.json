@@ -33,7 +33,17 @@
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "tests/test_cloud_tts.py": "6c17889c9652060c9ebe3e1dcb993b49b9d96502cddc066b59901241bad9a8f3",
     "tests/test_named_voice.py": "7519038e861e5a25205e56b89020e4253d5749474bbdcb5b225ebe0e4a039d47",
-    "ui.schema.json": "897a018b01ecd8ec11d6c9b8ac02e067c442916d061410ffb7459658ff338300"
+    "ui.schema.json": "897a018b01ecd8ec11d6c9b8ac02e067c442916d061410ffb7459658ff338300",
+    "dev/legacy-sdk/client.go": "4dcd019791ccda44ca685a61b9471ff5295d9d242bac849d2eee77b88ad42192",
+    "dev/legacy-sdk/client_test.go": "9329dfb6bfc5809b113633fa724430836447068d43ae1c2008593cbec4fa787a",
+    "dev/legacy-sdk/README.md": "766fee63d74a9ad7172891bf63469f46cffc1af3e534760c68641a14f5fedff6",
+    "dev/legacy-sdk/voice_clone.go": "342ef66859d72d460a464a4d181f1c52232dba37cd0936189fcf892f7e2c0ea6",
+    "dev/legacy-sdk/voice_clone_test.go": "6dbe8b53eb7fc33776d11957766bbbe435f2670de5649830822c6153fc73a452",
+    "dev/legacy-sdk/voice_design.go": "fc46e408785dd620f4726ea46d42c4b6cb1472b5c3a0abec47831f36b25c058b",
+    "dev/legacy-sdk/voice_design_test.go": "89e626620580c6670cc9d348d8658ff743c97573e5ae4379c1d8c961f61dd1f0",
+    "dev/legacy-sdk/audition/live_voice_clone_test.go.in": "d13822f6f5224d5ed4de47125134f897aaeb410202a83e79bdb8f9edfa33be00",
+    "dev/legacy-sdk/audition/live_voice_design_test.go.in": "4c47659adc3c7d3a231b9b090f0eff2a8f927dee1a07774c51824a91a84ac7a0",
+    "dev/legacy-sdk/audition/run_audition.py": "8fb02a8c892fd462cb0372192c3a35e5e19471c441ee18d5c6caf83ab28225d3"
   },
   "http_routes": [
     {

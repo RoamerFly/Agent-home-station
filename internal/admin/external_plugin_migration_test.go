@@ -3,12 +3,14 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/plugins"
 )
 
@@ -22,6 +24,15 @@ func writeExternalMigrationMCP(t *testing.T, f *webFixture, enabled bool) {
 	if err = writePrivate(filepath.Join(f.dir, "mcp-config.json"), raw); err != nil {
 		t.Fatal(err)
 	}
+	// setup(t) intentionally starts with an empty directory. Reopen the
+	// repository after preparing the legacy fixture so the test does not model
+	// an out-of-band edit that happened after a live repository had loaded it.
+	repository, err := newExternalConfigurationRepository(f.dir, f.manager.native.Account())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.openStore, repository.owned = f.manager.packageStore, false
+	f.manager.plugins = newPluginLedgerForRepository(repository)
 	f.manager.mu.Lock()
 	f.manager.mcp = settings
 	f.manager.mu.Unlock()
@@ -44,14 +55,20 @@ func writeExternalMigrationDeclaration(t *testing.T, f *webFixture, kind string)
 	default:
 		t.Fatal("unknown external declaration kind", kind)
 	}
-	entry := pluginEntry{Installed: plugins.Installed{Enabled: true, Manifest: manifest, Secrets: map[string]string{"TOKEN": "synthetic-external-secret"}}}
-	if err := f.manager.plugins.save(entry); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(filepath.Join(f.dir, "plugins.json"))
+	entries := map[string]pluginEntry{manifest.ID: {Installed: plugins.Installed{Enabled: true, Manifest: manifest, Secrets: map[string]string{"TOKEN": "synthetic-external-secret"}}}}
+	raw, err := json.Marshal(entries)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err = writePrivate(filepath.Join(f.dir, "plugins.json"), raw); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := newExternalConfigurationRepository(f.dir, f.manager.native.Account())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.openStore, repository.owned = f.manager.packageStore, false
+	f.manager.plugins = newPluginLedgerForRepository(repository)
 	return raw
 }
 
@@ -173,18 +190,28 @@ func TestExternalToolsPluginMigrationBlocksRawStdioButRetainsMixedWarnings(t *te
 			writeExternalMigrationMCP(t, f, true)
 			writeExternalMigrationDeclaration(t, f, "raw-stdio")
 			if kind == "sync-with-raw-stdio" {
-				entry := pluginEntry{Installed: plugins.Installed{
-					Enabled: true,
-					Manifest: plugins.Manifest{
+				entries := f.manager.plugins.repository.snapshot().Connections
+				entries["legacy-external-sync"] = pluginEntry{Installed: plugins.Installed{
+					Enabled: true, Manifest: plugins.Manifest{
 						ID:      "legacy-external-sync",
 						Name:    "sync",
 						Version: "1",
-						Tools:   []plugins.APITool{{Name: "lookup", URL: "https://private.example/v1"}},
+						Tools:   []plugins.APITool{{Name: "lookup", URL: "https://private.example/v1", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)}},
 					},
 				}}
-				if err := f.manager.plugins.save(entry); err != nil {
+				raw, err := json.Marshal(entries)
+				if err != nil {
 					t.Fatal(err)
 				}
+				if err = writePrivate(filepath.Join(f.dir, "plugins.json"), raw); err != nil {
+					t.Fatal(err)
+				}
+				repository, err := newExternalConfigurationRepository(f.dir, f.manager.native.Account())
+				if err != nil {
+					t.Fatal(err)
+				}
+				repository.openStore, repository.owned = f.manager.packageStore, false
+				f.manager.plugins = newPluginLedgerForRepository(repository)
 			}
 			preview, err := f.manager.pluginMigrationPreview(context.Background())
 			if err != nil {
@@ -284,5 +311,101 @@ func TestExternalToolsPluginMigrationRejectsChangedMCPConfig(t *testing.T) {
 	f.manager.mu.Unlock()
 	if _, _, _, err = f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions); err == nil {
 		t.Fatal("changed MCP configuration retained a stale migration approval")
+	}
+}
+
+func TestExternalToolsPluginMigrationUsesActiveHostStateInsteadOfEditedLegacyJSON(t *testing.T) {
+	useOfficialMigrationCatalog(t)
+	f := setup(t)
+	writeExternalMigrationMCP(t, f, true)
+	writeExternalMigrationDeclaration(t, f, "sync")
+	preview, err := f.manager.pluginMigrationPreview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := previewStep(t, preview, externalHTTPPluginID)
+	if _, _, _, err = f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions); err != nil {
+		t.Fatal("activate external host state", err)
+	}
+	activeBefore, err := f.manager.pluginMigrationPreview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeStep := previewStep(t, activeBefore, externalHTTPPluginID)
+	if err = os.WriteFile(filepath.Join(f.dir, "plugins.json"), []byte(`{"edited":"legacy-only"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	afterLegacyEdit, err := f.manager.pluginMigrationPreview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed := previewStep(t, afterLegacyEdit, externalHTTPPluginID); changed.ApplySourceHash != activeStep.ApplySourceHash {
+		t.Fatal("retained legacy JSON changed an active host-state approval", activeStep, changed)
+	}
+	if replayed, _, record, replayErr := f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions); replayErr != nil || replayed.Enabled || record.SourceHash != step.ApplySourceHash {
+		t.Fatal("completed legacy-source migration was not safely idempotent after activation", replayed, record, replayErr)
+	}
+	settings := f.manager.plugins.repository.snapshot().Settings
+	settings.MaxToolCalls++
+	if err = f.manager.plugins.repository.SaveSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	afterActiveChange, err := f.manager.pluginMigrationPreview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed := previewStep(t, afterActiveChange, externalHTTPPluginID); changed.ApplySourceHash == activeStep.ApplySourceHash {
+		t.Fatal("active SQLite configuration change retained stale approval", activeStep, changed)
+	}
+}
+
+func TestExternalToolsPluginMigrationRetriesHostStateActivationAfterDisabledInstall(t *testing.T) {
+	useOfficialMigrationCatalog(t)
+	f := setup(t)
+	settings := mcpSettings{Enabled: true, WebSearchEnabled: true, WebFetchEnabled: true, MaxToolCalls: 3}
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = writePrivate(filepath.Join(f.dir, "mcp-config.json"), raw); err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]pluginEntry{"legacy-external-sync": {Installed: plugins.Installed{Enabled: true, Manifest: plugins.Manifest{ID: "legacy-external-sync", Name: "sync", Version: "1", Tools: []plugins.APITool{{Name: "lookup", URL: "https://private.example/v1", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)}}}}}}
+	raw, err = json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = writePrivate(filepath.Join(f.dir, "plugins.json"), raw); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := newExternalConfigurationRepository(f.dir, f.manager.native.Account())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.owned = false
+	f.manager.plugins = newPluginLedgerForRepository(repository)
+	f.manager.mu.Lock()
+	f.manager.mcp = settings
+	f.manager.mu.Unlock()
+	preview, err := f.manager.pluginMigrationPreview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := previewStep(t, preview, externalHTTPPluginID)
+	repository.openStore = func() (*pluginhost.Store, error) { return nil, errors.New("synthetic activation storage failure") }
+	installed, _, _, err := f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions)
+	if err == nil || installed.Enabled {
+		t.Fatal("activation failure was reported as completed or enabled", installed, err)
+	}
+	if _, active := f.manager.externalConfigurationSources(); active {
+		t.Fatal("failed activation made retained external configuration authoritative")
+	}
+	repository.openStore = f.manager.packageStore
+	installed, _, _, err = f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions)
+	if err != nil || installed.Enabled {
+		t.Fatal("retry did not activate the existing disabled install", installed, err)
+	}
+	if _, active := f.manager.externalConfigurationSources(); !active {
+		t.Fatal("successful retry did not activate host configuration")
 	}
 }

@@ -50,6 +50,10 @@
     "ui.schema.json": "56d50eb51aa5db6f23d65a179de61ff4f82c2def68e3e7883515c281654eaa42",
     "tests/test_service_control.py": "c914970f913e8a5f59fa905289af2c94fdb5c247eb98268c9e5d91edfc05165e",
     "runtime/tool_catalog.json": "d287989ada882408d219d954a588f47b89753fa60b77df2e0598e57bf64c8f79",
-    "runtime/native_sampling.json": "a8c460f9529039311f104d953f92b2ade695fe38c8725c2730d56ee3dfd610de"
+    "runtime/native_sampling.json": "a8c460f9529039311f104d953f92b2ade695fe38c8725c2730d56ee3dfd610de",
+    "runtime/training/rvc_train_trial.py": "83d363725e15bfd7a2a12ceb22f06cd30bf8390543f52438e5f3790ee762e406",
+    "runtime/training/requirements.txt": "37ca2a53842fdf911d0fdca9fdee5bba13019c74bad636fe7fccc0b8d860bd69",
+    "tests/test_training.py": "e064ce3ef7a98288037093636716c92744e781e2665a37f8b4dc19b75264b788",
+    "runtime/training/README.md": "f725d765206d6c6c7eccaa3eafe86f13a0544a25b8f66da7daf3f6850642b628"
   }
 }

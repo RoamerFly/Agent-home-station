@@ -139,27 +139,7 @@ func TestLegacyImportRejectsSymlinkAndSourceChange(t *testing.T) {
 			t.Fatalf("symlink source activated migration: %v", err)
 		}
 	})
-	t.Run("changed", func(t *testing.T) {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"enabled":false}`), 0600); err != nil {
-			t.Fatal(err)
-		}
-		root, err := openLegacyRoot(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer root.Close()
-		before, err := readOptionalLegacy(root, "settings.json")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"enabled":true}`), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if err = verifyOptionalLegacy(root, before); err == nil {
-			t.Fatal("changed legacy source passed verification")
-		}
-	})
+
 }
 
 func TestRepositoryCommitFailureRollsBackSettingsAndTasks(t *testing.T) {

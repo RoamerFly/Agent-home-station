@@ -2,20 +2,24 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/mediadecode"
+	"wechat-bot/internal/mediaspec"
+	"wechat-bot/internal/pluginhost"
 )
 
 func (p *permittedTools) videoTools() []mcptools.Tool {
@@ -305,20 +309,77 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 	rows := []map[string]any{}
 	next := in.Start
 	if count > 0 {
-		provider, e := p.manager.makeModel(p.manager.runtimeConfig())
-		if e != nil {
-			return "", e
-		}
-		rows, next, e = inspectFrameRange(ctx, path, dir, in, count, meta.Frames, provider.VisionWithBudget)
-		if e != nil {
+		rows, next, err = p.inspectVideoFrameRange(ctx, path, dir, in, count, meta.Frames, source, data)
+		if err != nil {
 			if len(rows) == 0 {
-				return "", e
+				return "", err
 			}
-			out["continuation_reason"] = mcptools.FailureDescription(videoInspectionError(e))
+			out["continuation_reason"] = mcptools.FailureDescription(videoInspectionError(err))
 		}
 	}
 	out["batches"], out["next_start_frame"], out["complete"], out["consecutive_frames"] = rows, min(next, meta.Frames), next >= meta.Frames, in.Step == 1
 	return encode()
+}
+
+// inspectVideoFrameRange keeps decoded frames inside the host and asks the
+// installed media-understanding plugin to observe them.  It deliberately does
+// not use the chat model directly: video_inspect has the same source and
+// package/permission boundary as every other visual observation.
+func (p *permittedTools) inspectVideoFrameRange(ctx context.Context, path, dir string, in videoInspectionInput, count, total int, source string, data []byte) ([]map[string]any, int, error) {
+	if err := p.manager.mediaImageObservationReady(ctx); err != nil {
+		return nil, in.Start, err
+	}
+	if !p.servicePluginsAllowed() || !p.inspectionThreadAllowed(in.SourceThread) {
+		return nil, in.Start, errors.New("video_source_authorization_revoked")
+	}
+	epoch, err := p.serviceEvidenceEpoch(ctx)
+	if err != nil {
+		return nil, in.Start, err
+	}
+	authorization := p.serviceAuthorization()
+	if authorization == "" {
+		return nil, in.Start, errors.New("video_source_authorization_revoked")
+	}
+	sum := sha256.Sum256(data)
+	sourceID := "video-inspection:" + hex.EncodeToString(sum[:])
+	sources := map[string]int{sourceID: 1}
+	if p.trace.Source != nil && p.trace.Source.EventID != "" {
+		sources[p.trace.Source.EventID] = p.trace.Source.Revision
+	}
+	if p.trace.ReplyContext != nil {
+		for id, version := range p.trace.ReplyContext.SourceVersions {
+			sources[id] = version
+		}
+	}
+	baseKey := agentID("video-inspection-frames", p.trace.Account, p.trace.Thread, p.serviceRequester(), p.trace.TaskID, p.trace.TraceID, in.SourceThread, source, sourceID, strconv.Itoa(in.Start), strconv.Itoa(in.Step), strconv.Itoa(count), strconv.Itoa(in.BatchSize), strconv.Itoa(in.MaxDimension), strconv.Itoa(in.Tokens), in.Question)
+	actorCtx := withSourceActor(ctx, p, baseKey, in.SourceThread)
+	check := func(checkCtx context.Context) error {
+		if !p.servicePluginsAllowed() || !p.inspectionThreadAllowed(in.SourceThread) || p.serviceAuthorization() != authorization {
+			return errors.New("video_source_authorization_revoked")
+		}
+		currentEpoch, e := p.serviceEvidenceEpoch(checkCtx)
+		if e != nil || currentEpoch != epoch {
+			return errors.New("video_source_authorization_revoked")
+		}
+		return nil
+	}
+	analyze := func(analyzeCtx context.Context, prompt string, images []deepseek.Image, tokens int) (string, error) {
+		if err := check(analyzeCtx); err != nil {
+			return "", err
+		}
+		inv := pluginhost.Invocation{
+			Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.serviceRequester(),
+			Purpose: "inspect authorized video frames", RequestKey: agentID(baseKey, prompt),
+			EvidenceEpoch: epoch, Authorization: authorization, SourceVersions: sources,
+			RequestThread: p.trace.Thread,
+		}
+		policy, e := p.manager.newBoundMediaVisualObservationPolicy(actorCtx, images, inv, 1, check, prompt, tokens)
+		if e != nil {
+			return "", e
+		}
+		return policy.observe(analyzeCtx)
+	}
+	return inspectFrameRange(actorCtx, path, dir, in, count, total, analyze)
 }
 
 // inspectionTranscriptionMessage resolves only a canonical received message for
@@ -408,7 +469,7 @@ func (p *permittedTools) inspectPluginAudioRange(ctx context.Context, data []byt
 			policy.requestSuffix = agentID(policy.requestSuffix, formatSeconds(segmentStart), formatSeconds(count))
 			return policy.transcribe(ctx)
 		})
-		noSpeech := bailian.IsNoSpeech(err)
+		noSpeech := mediaspec.IsNoSpeech(err)
 		if err != nil && !noSpeech {
 			if len(parts) == 0 {
 				return err

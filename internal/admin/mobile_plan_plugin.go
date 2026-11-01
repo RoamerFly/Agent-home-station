@@ -18,7 +18,7 @@ import (
 
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
-	"wechat-bot/internal/mobile"
+	mobile "wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -295,7 +295,7 @@ func (p *mobilePlanPluginPolicy) Check(ctx context.Context, job pluginhost.Job, 
 	}
 	wantContext, _ := json.Marshal(p.invocation)
 	gotContext, _ := json.Marshal(job.Context)
-	if !bytes.Equal(wantContext, gotContext) || !bytes.Equal(job.Arguments, p.arguments) {
+	if !bytes.Equal(wantContext, gotContext) || !sameJSON(job.Arguments, p.arguments) {
 		return errors.New("device_planner_authorization_changed")
 	}
 	current, ok := p.manager.mobile.Get(p.task.ID)
