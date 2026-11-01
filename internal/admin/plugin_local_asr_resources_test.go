@@ -7,10 +7,55 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"wechat-bot/internal/pluginhost"
 )
+
+func TestLocalASRRuntimeManifestRelativePathsStayCanonical(t *testing.T) {
+	if _, err := localASRRuntimeRelative(`C:\sdk\payload.py`); err == nil {
+		t.Fatal("Windows absolute path accepted")
+	}
+	for _, raw := range []string{"../payload.py", "nested/../payload.py", `nested\..\payload.py`, "/payload.py", "nested//payload.py"} {
+		if _, err := localASRRuntimeRelative(raw); err == nil {
+			t.Fatalf("non-canonical runtime path accepted: %q", raw)
+		}
+	}
+	if runtime.GOOS == "windows" {
+		got, err := localASRRuntimeRelative(`nested\safe/file.py`)
+		if err != nil || got != filepath.Join("nested", "safe", "file.py") {
+			t.Fatalf("Windows manifest separators were not canonically accepted: %q %v", got, err)
+		}
+	} else if _, err := localASRRuntimeRelative(`nested\safe\file.py`); err == nil {
+		t.Fatal("non-Windows host accepted Windows separator form")
+	}
+}
+
+func TestLocalASRRuntimeManifestRejectsNormalizedDuplicatePaths(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the alternate Windows spelling is intentionally rejected on non-Windows hosts")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("synthetic-sdk")
+	if err := os.WriteFile(filepath.Join(root, "nested", "payload.py"), payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	raw, err := json.Marshal(map[string]any{"files": map[string]string{`nested\payload.py`: hex.EncodeToString(sum[:]), "nested/payload.py": hex.EncodeToString(sum[:])}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, localASRRuntimeManifest), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = verifyLocalASRRuntimeManifest(root); err == nil {
+		t.Fatal("same SDK file under mixed separators was accepted twice")
+	}
+}
 
 func TestLocalASRPluginRegistrationUsesBoundResourceRootsAndMetadata(t *testing.T) {
 	f, _, policy, ctx := mediaPolicyFixture(t, false)

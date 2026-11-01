@@ -13,6 +13,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -451,14 +452,44 @@ func verifyLocalASRRuntimeManifest(packages string) error {
 	if json.Unmarshal(raw, &record) != nil || len(record.Files) == 0 || len(record.Files) > 4096 {
 		return errors.New("local_asr_sdk_manifest_invalid")
 	}
+	seen := make(map[string]bool, len(record.Files))
 	for relative, digest := range record.Files {
-		if relative == "" || filepath.IsAbs(relative) || filepath.Clean(relative) != relative || strings.ContainsAny(relative, `:\`) || !validLowerSHA256(digest) {
+		normalized, err := localASRRuntimeRelative(relative)
+		if err != nil || !validLowerSHA256(digest) || seen[normalized] {
 			return errors.New("local_asr_sdk_manifest_invalid")
 		}
-		file, err := cleanLocalASRPath(filepath.Join(packages, relative), false)
+		seen[normalized] = true
+		file, err := cleanLocalASRPath(filepath.Join(packages, normalized), false)
 		if err != nil || !insideLocalASR(packages, file) || hashLocalASRFile(file) != digest {
 			return errors.New("local_asr_sdk_content_changed")
 		}
 	}
 	return nil
+}
+
+// localASRRuntimeRelative accepts the native separator convention of a
+// Windows-produced SDK manifest, but only after making it one canonical,
+// strictly relative path. It deliberately does not turn Windows drive paths
+// into relative paths on non-Windows hosts.
+func localASRRuntimeRelative(relative string) (string, error) {
+	if relative == "" || strings.IndexByte(relative, 0) >= 0 {
+		return "", errors.New("local_asr_sdk_manifest_invalid")
+	}
+	normalized := relative
+	if runtime.GOOS == "windows" {
+		normalized = strings.ReplaceAll(normalized, `\`, "/")
+	} else if strings.Contains(normalized, `\`) {
+		return "", errors.New("local_asr_sdk_manifest_invalid")
+	}
+	// Colon excludes drive-qualified and URI-like input on every platform.
+	// path.Clean is used intentionally: manifest entries use slash separators,
+	// even while the SDK itself is hosted on Windows.
+	if strings.Contains(normalized, ":") || strings.HasPrefix(normalized, "/") {
+		return "", errors.New("local_asr_sdk_manifest_invalid")
+	}
+	clean := path.Clean(normalized)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean != normalized {
+		return "", errors.New("local_asr_sdk_manifest_invalid")
+	}
+	return filepath.FromSlash(clean), nil
 }
