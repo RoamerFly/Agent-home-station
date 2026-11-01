@@ -43,6 +43,9 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 			if p == "model.invoke" && method == "wechat/model_request" {
 				allowed = true
 			}
+			if p == "network" && job.Plugin == "music" && cap.ID == "music.bridge_request" && method == "wechat/music_bridge" {
+				allowed = true
+			}
 			// Local transcription is a bounded host adapter for one verified
 			// media reference. It does not grant the plugin a general process
 			// executor: the host resolves its fixed runner and resource profile.
@@ -75,6 +78,16 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 	}))
 }
 
+// InvokeHostService dispatches through the authority bound to this exact call.
+// Executors cannot manufacture that authority: its context key is private to
+// this package and serviceContext always performs the current policy checks.
+func InvokeHostService(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+	if handler, ok := ctx.Value(serviceKey{}).(serviceCall); ok {
+		return handler(ctx, method, params)
+	}
+	return nil, errors.New("host service unavailable")
+}
+
 func (s *session) serviceReply(ctx context.Context, id json.RawMessage, method string, params json.RawMessage) error {
 	var requestID any
 	if json.Unmarshal(id, &requestID) != nil || requestID == nil {
@@ -85,11 +98,7 @@ func (s *session) serviceReply(ctx context.Context, id json.RawMessage, method s
 	default:
 		return errors.New("invalid plugin service request identity")
 	}
-	var result json.RawMessage
-	err := errors.New("host service unavailable")
-	if handler, ok := ctx.Value(serviceKey{}).(serviceCall); ok {
-		result, err = handler(ctx, method, params)
-	}
+	result, err := InvokeHostService(ctx, method, params)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

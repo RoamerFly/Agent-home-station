@@ -33,6 +33,133 @@
       "side_effect": "external_request"
     },
     {
+      "id": "music.bridge_request",
+      "implementation": "ready",
+      "description": "宿主内部本地 YuE/RVC 服务协议：校验固定路由并分类实际HTTP错误；所有正文、音频、凭据和任务授权保留在宿主，不直接向Agent开放任意HTTP。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "POST"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "body_ref": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "const": "request_0"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "bytes"
+            ],
+            "additionalProperties": false
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "method",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          },
+          "mime": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "body_ref": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "const": "reply_0"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "bytes"
+            ],
+            "additionalProperties": false
+          },
+          "json": {},
+          "normalized_error": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "service",
+                  "input"
+                ]
+              },
+              "code": {
+                "type": "string"
+              },
+              "provider_code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "status",
+          "mime",
+          "body_ref"
+        ],
+        "additionalProperties": false
+      },
+      "discoverable": true,
+      "side_effect": "external_request"
+    },
+    {
       "id": "music.cover",
       "implementation": "migration-pending",
       "description": "歌曲、翻唱、RVC 与 GPU 服务",

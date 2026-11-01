@@ -161,13 +161,8 @@ func TestSurfAccessBudgetAndExplicitTargets(t *testing.T) {
 		t.Fatal("unmigrated browse-only consumed budget", task, err)
 	}
 	installPublicWebFixture(t, f)
-	if task, err = f.manager.claimSurf(time.Now()); err == nil || task != nil || f.manager.surf.Sessions != 0 {
-		t.Fatal("private browsing invented conversation authority", task, err)
-	}
-	f.manager.surf.Settings.Threads = []string{"filehelper"}
-	f.manager.config.Companion.Permissions.Proactive = true
-	if task, err = f.manager.claimSurf(time.Now()); err != nil || task == nil || task.Thread != "filehelper" {
-		t.Fatal("authorized installed browsing could not claim", task, err)
+	if task, err = f.manager.claimSurf(time.Now()); err != nil || task == nil || task.Thread != "" || task.PrivateBrowseTools == nil || f.manager.surf.Sessions != 1 {
+		t.Fatal("installed private browsing failed to claim its own readonly origin", task, err)
 	}
 	f.manager.mu.Lock()
 	f.manager.surf.Next = time.Time{}

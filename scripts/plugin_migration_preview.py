@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -144,6 +145,56 @@ def _declares_named_speech(repo: Path) -> bool:
     )
 
 
+def _declares_local_music_bridge(repo: Path) -> bool:
+    """Require the local bridge's exact configuration and ready capability."""
+    package, package_error = _read_json(repo / "plugins" / "music" / "plugin.json", required=True)
+    schema, schema_error = _read_json(repo / "plugins" / "music" / "config.schema.json", required=True)
+    capabilities, capabilities_error = _read_json(repo / "plugins" / "music" / "capabilities.json", required=True)
+    if package_error or schema_error or capabilities_error or package.get("status") != "ready":
+        return False
+    if "network" not in package.get("permissions", []):
+        return False
+    properties = schema.get("properties")
+    endpoint = properties.get("local_endpoint") if isinstance(properties, dict) else None
+    token = properties.get("local_token") if isinstance(properties, dict) else None
+    if not isinstance(endpoint, dict) or endpoint.get("type") != "string" or endpoint.get("x-secret") or endpoint.get("x-host-only"):
+        return False
+    if not isinstance(token, dict) or token.get("type") != "string" or not token.get("x-secret") or not token.get("x-host-only"):
+        return False
+    rows = capabilities.get("capabilities")
+    return isinstance(rows, list) and any(
+        isinstance(item, dict)
+        and item.get("id") == "music.bridge_request"
+        and item.get("implementation") == "ready"
+        and "network" in item.get("permissions", [])
+        for item in rows
+    )
+
+
+def _safe_local_music_endpoint(raw: str) -> str | None:
+    """Mirror localMusicEndpoint: only a root HTTPS or local/private HTTP URL."""
+    if not raw or len(raw) > 4096 or any(character.isspace() for character in raw) or "\\" in raw or "\x00" in raw or "?" in raw or "#" in raw:
+        return None
+    try:
+        parsed = urlsplit(raw)
+        host = parsed.hostname
+        # Access port as well: urlsplit otherwise tolerates malformed ports.
+        _ = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not host or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path.rstrip("/"):
+        return None
+    if parsed.scheme == "https":
+        return raw.rstrip("/")
+    if host.lower() == "localhost":
+        return raw.rstrip("/")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    return raw.rstrip("/") if address.is_loopback or address.is_private else None
+
+
 def _pending_named_speech_manifest(root: Path) -> dict[str, Any] | None:
     """Find only an explicit managed manifest marker, not a voice/model file.
 
@@ -191,16 +242,37 @@ def _speech_plan(repo: Path, root: Path, speech: dict[str, Any]) -> tuple[dict[s
 
 
 def _music_plan(repo: Path, speech: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
-    enabled = bool(speech.get("music_enabled"))
+    cloud_enabled = bool(speech.get("music_enabled"))
+    local_enabled = bool(speech.get("yue_enabled"))
+    local_endpoint = _safe_text(speech.get("yue_endpoint"))
+    local_configured = local_enabled or bool(local_endpoint) or bool(_safe_text(speech.get("yue_token")))
     key_report, key = _secret(speech.get("key"), "speech-config.json:key")
+    local_token_report, local_token = _secret(speech.get("yue_token"), "speech-config.json:yue_token")
     values = {
         "music_endpoint": _join_endpoint(_safe_text(speech.get("endpoint")), MUSIC_PATH),
         "music_model": _safe_text(speech.get("music_model")),
     }
-    required = ["music_key"] if enabled and not key else []
-    step = _step("music", _package(repo, "music"), enabled, values, {"music_key": key_report}, required,
-                 ["tts_*", "asr_*", "yue_*", "yue_token", "named_voice_library", "rvc_profiles"])
-    return step, {"music.music_key": key} if key else {}
+    required = ["music_key"] if cloud_enabled and not key and not local_enabled else []
+    secrets = {"music_key": key_report, "local_token": local_token_report}
+    handoff = {"music.music_key": key} if key else {}
+    if local_configured:
+        if not _declares_local_music_bridge(repo):
+            required.append("official_local_music_bridge_not_declared_by_music_plugin")
+        elif not local_endpoint:
+            required.append("local_endpoint")
+        else:
+            safe_endpoint = _safe_local_music_endpoint(local_endpoint)
+            if not safe_endpoint:
+                required.append("local_endpoint_invalid")
+            else:
+                values["local_endpoint"] = safe_endpoint
+                if local_token:
+                    handoff["music.local_token"] = local_token
+                if local_enabled and not local_token:
+                    required.append("local_token")
+    step = _step("music", _package(repo, "music"), cloud_enabled or local_enabled, values, secrets, required,
+                 ["tts_*", "asr_*", "named_voice_library", "rvc_profiles"])
+    return step, handoff
 
 
 def _media_plan(repo: Path, config: dict[str, Any], speech: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:

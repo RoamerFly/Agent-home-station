@@ -25,11 +25,12 @@ type surfSettings struct {
 	Threads            []string           `json:"threads"`
 }
 type surfState struct {
-	Settings   surfSettings `json:"settings"`
-	Next       time.Time    `json:"next"`
-	Day        string       `json:"day"`
-	Sessions   int          `json:"sessions"`
-	TopicIndex int          `json:"topic_index"`
+	SettingsRevision int          `json:"settings_revision,omitempty"`
+	Settings         surfSettings `json:"settings"`
+	Next             time.Time    `json:"next"`
+	Day              string       `json:"day"`
+	Sessions         int          `json:"sessions"`
+	TopicIndex       int          `json:"topic_index"`
 }
 
 func surfDefaults() surfState {
@@ -57,7 +58,7 @@ func loadSurf(dir string) (surfState, error) {
 	if s.Settings.IntervalMaxMinutes == 0 {
 		s.Settings.IntervalMaxMinutes = min(1440, s.Settings.IntervalMinutes*2)
 	}
-	if validateSurf(s.Settings) != nil {
+	if s.SettingsRevision < 0 || validateSurf(s.Settings) != nil {
 		return s, errors.New("网上冲浪配置不可读")
 	}
 	return s, nil
@@ -83,24 +84,19 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 	if !s.Settings.Enabled || !m.config.Companion.Enabled || !m.mcp.Enabled || !m.mcp.WebFetchEnabled || m.config.Companion.Quiet(now) || now.Before(s.Next) {
 		return nil, nil
 	}
-	if m.drainTicket != "" {
+	_, holdErr := os.Lstat(m.memoryUpdateHoldPath())
+	if m.drainTicket != "" || !errors.Is(holdErr, os.ErrNotExist) {
 		return nil, errors.New("web_host_draining")
 	}
 	if err := (&permittedTools{manager: m}).installedWebCapability(context.Background(), "web.discover"); err != nil {
 		return nil, err
 	}
-	// The current source-bound service adapter requires an explicitly authorized
-	// destination. Private autonomous browsing needs its own durable host-origin
-	// authority before it can run without a conversation; never invent a sender.
 	thread := ""
 	if m.agent != nil && m.agent.config().Enabled && m.config.Companion.Permissions.Proactive && m.config.Companion.Permissions.ReplyText && len(s.Settings.Threads) > 0 {
 		candidate := s.Settings.Threads[s.TopicIndex%len(s.Settings.Threads)]
 		if permittedRecipient(m.config, candidate) {
 			thread = candidate
 		}
-	}
-	if thread == "" {
-		return nil, errors.New("surf_private_browsing_authorization_required")
 	}
 	loc, e := time.LoadLocation(m.config.Companion.Timezone)
 	if e != nil {
@@ -142,12 +138,20 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 		return nil, e
 	}
 	preferred := formats[choice.Int64()]
+	task := &bot.SurfTask{Topic: topic, Thread: thread, PreferredKind: preferred, ForceShare: thread != "" && s.Settings.ForceShare, QuietDeadline: m.config.Companion.QuietDeadline(now)}
+	if thread == "" {
+		factory, err := m.privateSurfFactoryLocked(now, task)
+		if err != nil {
+			return nil, err
+		}
+		task.PrivateBrowseTools = factory
+	}
 	b, _ := json.Marshal(s)
 	if e = writePrivate(filepath.Join(m.dir, "surf.json"), b); e != nil {
 		return nil, e
 	}
 	m.surf = s
-	return &bot.SurfTask{Topic: topic, Thread: thread, PreferredKind: preferred, ForceShare: s.Settings.ForceShare, QuietDeadline: m.config.Companion.QuietDeadline(now)}, nil
+	return task, nil
 }
 
 func (m *Manager) surfAllowed(thread string) bool {
@@ -189,8 +193,6 @@ func (s *Server) surfRoutes(mux *http.ServeMux) {
 		reason := ""
 		if readyErr != nil {
 			reason = readyErr.Error()
-		} else if len(state.Settings.Threads) == 0 {
-			reason = "surf_private_browsing_authorization_required"
 		}
 		respond(w, 200, map[string]any{"settings": state.Settings, "next": state.Next, "sessions": sessions, "day": state.Day, "items": items, "execution_ready": reason == "", "execution_reason": reason, "share_permission": config.Companion.Permissions.Proactive && config.Companion.Permissions.ReplyText, "allowed_threads": config.allowed(), "quiet_now": config.Companion.Quiet(now), "quiet_start": config.Companion.QuietStart, "quiet_end": config.Companion.QuietEnd, "timezone": config.Companion.Timezone})
 	}))
@@ -229,6 +231,7 @@ func (s *Server) surfRoutes(mux *http.ServeMux) {
 		}
 		state := m.surf
 		state.Settings = input
+		state.SettingsRevision++
 		delay, err := surfRandomDelay(input)
 		if err != nil {
 			fail(w, 500, "随机调度暂时不可用")

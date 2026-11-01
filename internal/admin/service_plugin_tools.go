@@ -21,6 +21,9 @@ import (
 )
 
 func (p *permittedTools) servicePluginsAllowed() bool {
+	if p.privateSurfOrigin != nil {
+		return p.manager == p.privateSurfOrigin.manager && p.privateSurfOrigin.check(context.Background(), p.trace) == nil
+	}
 	if p.manager == nil || p.manager.agent == nil || p.trace.ReportOnly || p.trace.Preview {
 		return false
 	}
@@ -147,6 +150,9 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 		if json.Unmarshal(raw, &in) != nil || !ready {
 			return "", errors.New("service runtime or arguments unavailable")
 		}
+		if p.privateSurfOrigin != nil && (in.Plugin != "web-search" || in.Capability != "web.search" && in.Capability != "web.read" && in.Capability != "web.discover") {
+			return "", errors.New("surf_read_only_capability_denied")
+		}
 		if in.Plugin == mediaServicePluginID {
 			if in.Capability != "media.observe" && in.Capability != "media.transcribe" && in.Capability != "media.listen" {
 				return "", errors.New("media_service_capability_unavailable")
@@ -172,12 +178,18 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 			result = shareResult
 			break
 		}
-		epoch, e := p.manager.memory.RecallEpoch(ctx)
+		epoch, e := p.serviceEvidenceEpoch(ctx)
 		if e != nil {
 			return "", e
 		}
 		inv := pluginhost.Invocation{Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.serviceRequester(), Purpose: "conversation service request", RequestKey: in.Key, EvidenceEpoch: epoch, Authorization: p.serviceAuthorization(), SourceVersions: map[string]int{}}
-		if g, ok := companion.GenerationEvidenceFromContext(ctx); ok && (g.RecallEpoch != epoch || g.Authorization != p.MemoryResultAuthorization()) {
+		expectedEpoch, expectedAuth := epoch, p.MemoryResultAuthorization()
+		if p.privateSurfOrigin != nil {
+			inv.Purpose = "private autonomous public web browsing"
+			inv.SourceVersions = map[string]int{"host:surf-claim:" + p.privateSurfOrigin.claim: p.privateSurfOrigin.revision + 1}
+			expectedEpoch, expectedAuth = "", p.privateSurfAuthorization()
+		}
+		if g, ok := companion.GenerationEvidenceFromContext(ctx); ok && (g.RecallEpoch != expectedEpoch || g.Authorization != expectedAuth) {
 			return "", errors.New("generation_evidence_changed")
 		}
 		if p.trace.Source != nil && p.trace.Source.EventID != "" {
@@ -287,6 +299,11 @@ type serviceWebResult struct {
 
 func (s servicePluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
 	p := s.p
+	if p.privateSurfOrigin != nil {
+		if err := p.privateSurfOrigin.check(ctx, p.trace); err != nil {
+			return err
+		}
+	}
 	if p.manager.draining() {
 		return errors.New("web_host_draining")
 	}
@@ -334,12 +351,18 @@ func (s servicePluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 	if j.Context.Authorization == "" || j.Context.Authorization != p.serviceAuthorization() {
 		return errors.New("service evidence authorization changed")
 	}
-	epoch, e := p.manager.memory.RecallEpoch(ctx)
+	epoch, e := p.serviceEvidenceEpoch(ctx)
 	if e != nil {
 		return e
 	}
 	if j.Context.EvidenceEpoch == "" || j.Context.EvidenceEpoch != epoch {
 		return errors.New("service evidence epoch changed")
+	}
+	if p.privateSurfOrigin != nil {
+		if j.Context.Purpose != "private autonomous public web browsing" || len(j.Context.SourceVersions) != 1 || j.Context.SourceVersions["host:surf-claim:"+p.privateSurfOrigin.claim] != p.privateSurfOrigin.revision+1 {
+			return errors.New("surf_claim_proof_changed")
+		}
+		return nil
 	}
 	for id, rev := range j.Context.SourceVersions {
 		ev, e := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", j.Context.Account, j.Context.Thread)}, id)
@@ -351,6 +374,9 @@ func (s servicePluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 }
 
 func (p *permittedTools) serviceAuthorization() string {
+	if p.privateSurfOrigin != nil {
+		return p.privateSurfAuthorization()
+	}
 	if !p.servicePluginsAllowed() {
 		return ""
 	}
@@ -358,6 +384,16 @@ func (p *permittedTools) serviceAuthorization() string {
 	b, _ := json.Marshal([]any{p.trace.Account, p.trace.Channel, p.trace.Thread, p.serviceRequester(), p.trace.Surf, p.MemoryResultAuthorization(), a.Enabled, a.ExternalOwnerOnly, p.serviceWebAllowed("web.search"), p.serviceWebAllowed("web.read")})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
+}
+
+func (p *permittedTools) serviceEvidenceEpoch(ctx context.Context) (string, error) {
+	if p.privateSurfOrigin != nil {
+		if err := p.privateSurfOrigin.check(ctx, p.trace); err != nil {
+			return "", err
+		}
+		return "surf:" + p.privateSurfOrigin.claim, nil
+	}
+	return p.manager.memory.RecallEpoch(ctx)
 }
 
 func (p *permittedTools) serviceWebAllowed(tool string) bool {

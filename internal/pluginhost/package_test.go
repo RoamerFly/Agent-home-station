@@ -72,9 +72,9 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"speech.synthesize": true, "speech.synthesize_named": true}
 					}
 					if d.Name() == "music" {
-						want = map[string]bool{"music.generate": true}
-						if len(p.Permissions) != 1 || p.Permissions[0] != "model.invoke" {
-							t.Fatal("music package must declare only the model proxy")
+						want = map[string]bool{"music.generate": true, "music.bridge_request": true}
+						if len(p.Permissions) != 2 || p.Permissions[0] != "model.invoke" || p.Permissions[1] != "network" {
+							t.Fatal("music package must declare separate cloud and local bridge proxies")
 						}
 					}
 					if d.Name() == "share-reader" {
@@ -110,8 +110,14 @@ func TestOfficialContracts(t *testing.T) {
 									t.Fatal("device capability must remain synchronous and use only its own proxy")
 								}
 							}
-							if d.Name() == "music" && (cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != "model.invoke") {
-								t.Fatal("music generation must remain synchronous and use only model proxy")
+							if d.Name() == "music" {
+								permission := "model.invoke"
+								if cap.ID == "music.bridge_request" {
+									permission = "network"
+								}
+								if cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != permission {
+									t.Fatal("music capability must remain synchronous and use its own proxy")
+								}
 							}
 							if d.Name() == "speech" {
 								wantPermissions := []string{"model.invoke"}

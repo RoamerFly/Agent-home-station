@@ -13,7 +13,7 @@ import (
 func TestMusicSamplingDiscoveryForwardingPersistenceAndIdentity(t *testing.T) {
 	f := setup(t)
 	p, _, _ := f.manager.toolAccess()
-	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "sampling"})
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "sampling"})
 	posts := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
@@ -40,6 +40,7 @@ func TestMusicSamplingDiscoveryForwardingPersistenceAndIdentity(t *testing.T) {
 	}))
 	defer upstream.Close()
 	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	result, err := p.callYuE(context.Background(), "music_sampling_options", json.RawMessage(`{}`))
 	if err != nil || !strings.Contains(result, "native_limits_verified") || posts != 0 {
 		t.Fatal(result, err)
@@ -82,12 +83,14 @@ func TestMusicSamplingDiscoveryForwardingPersistenceAndIdentity(t *testing.T) {
 func TestMusicSamplingNativeFailureIsActionableAndNotSuccess(t *testing.T) {
 	f := setup(t)
 	p, _, _ := f.manager.toolAccess()
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "sampling-failure"})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		w.Write([]byte(`{"error":"sampling_outside_native_spec:render.steps"}`))
 	}))
 	defer upstream.Close()
 	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	_, _, err := p.yueRequest(context.Background(), "POST", "/jobs", map[string]any{}, "test")
 	if err == nil || !strings.Contains(err.Error(), "render.steps") || !strings.Contains(err.Error(), "music_sampling_options") {
 		t.Fatal(err)

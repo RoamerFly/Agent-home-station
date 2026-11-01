@@ -229,6 +229,7 @@ func TestMusicServiceHealthIsReadOnlyAndNeverSubmitsGeneration(t *testing.T) {
 	c.YuEEndpoint = backend.URL
 	c.YuEToken = "synthetic-token"
 	f.manager.speech = c
+	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, err := f.manager.toolAccess()
 	if err != nil {
 		t.Fatal(err)

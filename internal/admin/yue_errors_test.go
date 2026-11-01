@@ -25,6 +25,7 @@ func TestYuEFailureAuditRetainsFixedCauseWithoutUpstreamSecrets(t *testing.T) {
 			f.manager.speech.YuEEnabled = true
 			f.manager.speech.YuEEndpoint = upstream.URL
 			f.manager.speech.YuEToken = "private-fixture-token"
+			installLegacyLocalMusicPlugin(t, f.manager)
 			p, _, _ := f.manager.toolAccess()
 			p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "failure-audit"})
 			_, err := p.Call(context.Background(), "music_local_start", json.RawMessage(`{"title":"晚风归家","style":"gentle pop","lyrics":"[verse]\n晚风伴我归家","kind":"voice"}`))

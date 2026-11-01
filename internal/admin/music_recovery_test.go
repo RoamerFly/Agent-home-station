@@ -12,14 +12,17 @@ import (
 	"wechat-bot/internal/linuxnative"
 )
 
-type recoverSongNative struct{ *fakeNative }
+type recoverSongNative struct {
+	*fakeNative
+	createdAt string
+}
 
 func (n *recoverSongNative) Message(_ context.Context, id string) (linuxnative.Message, error) {
-	return linuxnative.Message{ID: id, ThreadID: "filehelper", SenderID: "synthetic-owner", Direction: "incoming", Body: "唱个生日歌", CreatedAt: time.Now().Format(time.RFC3339)}, nil
+	return linuxnative.Message{ID: id, ThreadID: "filehelper", SenderID: "synthetic-owner", Direction: "incoming", Body: "唱个生日歌", CreatedAt: n.createdAt}, nil
 }
 func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 	f := setup(t)
-	f.manager.native = &recoverSongNative{f.native}
+	f.manager.native = &recoverSongNative{fakeNative: f.native, createdAt: time.Now().Format(time.RFC3339)}
 	f.manager.config.Companion.Permissions.SendVoice = true
 	reads := 0
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +40,7 @@ func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 	f.manager.speech.YuEEnabled = true
 	f.manager.speech.YuEEndpoint = u.URL
 	f.manager.speech.YuEToken = "synthetic"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	f.login()
 	body := map[string]string{"message_id": "birthday-request", "prepared_job_id": "prepared-song"}
 	code, b, _ := f.request("POST", "/api/agent/recover-music-message", body, true, true)
@@ -55,7 +59,7 @@ func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 		t.Fatal(first, second)
 	}
 	p, _, _ := f.manager.toolAccess()
-	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper"})
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "synthetic-owner"})
 	if _, err := p.callYuE(context.Background(), "music_local_status", json.RawMessage(`{"job_id":"prepared-song"}`)); err != nil {
 		t.Fatal("adopted scoped task could not read its output", err)
 	}
@@ -67,7 +71,7 @@ func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 
 func TestExplicitCorrectedTakePreservesOldDeliveryAndIsIdempotent(t *testing.T) {
 	f := setup(t)
-	f.manager.native = &recoverSongNative{f.native}
+	f.manager.native = &recoverSongNative{fakeNative: f.native, createdAt: time.Now().Format(time.RFC3339)}
 	f.manager.config.Companion.Permissions.SendVoice = true
 	f.manager.speech.YuEEnabled = true
 	old := agentTask{ID: "old-task", Account: "test", Thread: "filehelper", Sender: "synthetic-owner", OriginTrace: "birthday-request", MusicJob: "old-take", State: "completed"}
@@ -84,6 +88,7 @@ func TestExplicitCorrectedTakePreservesOldDeliveryAndIsIdempotent(t *testing.T) 
 	}))
 	defer u.Close()
 	f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = u.URL, "synthetic"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	f.login()
 	body := map[string]any{"message_id": "birthday-request", "prepared_job_id": "corrected-take", "redeliver_prepared": true}
 	for i := 0; i < 2; i++ {

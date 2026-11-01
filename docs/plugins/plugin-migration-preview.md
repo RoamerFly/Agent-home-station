@@ -50,14 +50,22 @@ Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所
   Python 离线工具最多发现受管 manifest 标记并写入 `local_profile_id=gpt-sovits`，同时保留
   `registered_named_speech_profile:gpt-sovits:host_verification_required` 阻塞项；它不能替代宿主路径、
   授权和资源校验，也不宣称该本地能力可执行。ASR、音乐、YuE 和训练仍不迁入 speech 配置。
-- `music`：映射 `speech-config.json` 的 `endpoint`、`music_model`、`key` 为
-  `music_endpoint`、`music_model`、`music_key`。歌曲接口使用地域根地址加
-  `/api/v1/services/audio/music/generation`，并去掉根地址末尾的斜杠；不会沿用 TTS 或 ASR 接口。
-  旧 `music_enabled` 只用于标记启用资格，`proposed_enabled` 仍为 `false`。旧音乐已开启而缺少 key
-  时，该步骤标为 `blocked`。公开计划中的 `music_key` 仅含来源、是否存在及 SHA-256；原始密钥只可
-  进入显式请求的宿主私密交接项 `music.music_key`，不会放入公开 `values` 或插件配置。
-  当前包仅就绪云端 `music.generate`，权限为 `model.invoke`；命名歌声、RVC profile、YuE、模型和
-  生成媒体均不迁入。提供商受理不代表音频已验证或微信已发送。
+- `music`：云端和本地桥接分别迁移。旧 `endpoint`、`music_model`、`key` 映射为
+  `music_endpoint`、`music_model`、`music_key`；歌曲接口使用地域根地址加
+  `/api/v1/services/audio/music/generation`，并去掉根地址末尾的斜杠。旧 `yue_endpoint`、`yue_token`
+  仅在官方 music 包明确声明普通 `local_endpoint`、host-only `local_token`、`network` 权限及 ready 的
+  `music.bridge_request` 能力时，映射为本地桥接配置。它们不会沿用 TTS 或 ASR 接口，也不会因包升级而
+  推测为已支持：缺少该精确合约时计划以
+  `official_local_music_bridge_not_declared_by_music_plugin` 阻塞。
+  本地 endpoint 必须通过宿主与离线预演共同采用的根地址策略：HTTPS 根地址，或 `localhost`、回环/私有 IP 的
+  HTTP 根地址；带路径、查询、凭据、公开 HTTP 地址等旧值以 `local_endpoint_invalid` 阻塞，绝不静默替换。
+  `music_enabled` 与 `yue_enabled` 共同只表示旧启用意图，所有 `proposed_enabled` 仍为 `false`。因此有效的
+  本地 YuE 配置可以在没有云端 key 时预演和迁入；云端字段不会变成本地桥接依赖。已启用的本地桥接仍要求 token，
+  缺少时以 `local_token` 阻塞。
+  公开计划中的 `music_key` 与 `local_token` 仅含来源、是否存在及 SHA-256；原始值只可进入显式请求的宿主私密交接项
+  `music.music_key`、`music.local_token`，不会放入公开 `values` 或插件配置。`speech-config.json` 的完整哈希进入
+  每一步 `apply_source_hash`，所以 endpoint、token 或启用意图变更都会令旧管理员批准失效。当前已迁入的仅是
+  受管本地桥接和云端原创歌曲请求；命名歌声、RVC profile、训练、模型和生成媒体仍不迁入。提供商受理不代表音频已验证或微信已发送。
 - `media-understanding`：映射旧聊天模型为视觉路由，并按旧 ASR 后端生成远程 ASR 或本地 profile
   需求。已启用的 `local` 后端将旧 `asr_local_model` 写入插件普通配置
   `values.local_asr_profile_id`；旧值为空时，计划使用 `sensevoice-small-int8`，同时保留审计字段

@@ -53,6 +53,7 @@ func TestMusicFollowupPersistsPollsAndDeliversWithoutProactivePermission(t *test
 	c.YuEEndpoint = server.URL
 	c.YuEToken = "private-fixture-token"
 	f.manager.speech = c
+	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, _ := f.manager.toolAccess()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "requested-song"})
 	raw := json.RawMessage(`{"title":"晚风下班路","style":"melancholic female folk","lyrics":"[verse]\n雨落窗台\n[chorus]\n也会放晴","kind":"file"}`)

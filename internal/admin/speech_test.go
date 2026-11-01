@@ -41,6 +41,10 @@ func TestSpeechSettingsNeverExposeSecretsAndScopeYuE(t *testing.T) {
 	}
 	p, _, _ := f.manager.toolAccess()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "one"})
+	if len(p.yueTools()) != 0 {
+		t.Fatal("legacy speech settings authorized music without an installed plugin")
+	}
+	installLegacyLocalMusicPlugin(t, f.manager)
 	if len(p.yueTools()) != 8 {
 		t.Fatal("local tools missing")
 	}

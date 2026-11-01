@@ -67,6 +67,17 @@ class PluginMigrationPreviewTests(unittest.TestCase):
         (speech / "config.schema.json").write_text(json.dumps({"type": "object", "properties": {"local_profile_id": {"type": "string", "enum": ["", "gpt-sovits"]}}}), encoding="utf8")
         (speech / "capabilities.json").write_text(json.dumps({"capabilities": [{"id": "speech.synthesize_named", "implementation": "ready", "permissions": ["artifact.read", "model.invoke"]}]}), encoding="utf8")
 
+    def add_declared_local_music_bridge(self, repo):
+        music = repo / "plugins" / "music"
+        manifest = json.loads((music / "plugin.json").read_text(encoding="utf8"))
+        manifest["permissions"] = ["model.invoke", "network"]
+        (music / "plugin.json").write_text(json.dumps(manifest), encoding="utf8")
+        (music / "config.schema.json").write_text(json.dumps({"type": "object", "properties": {
+            "local_endpoint": {"type": "string"},
+            "local_token": {"type": "string", "x-secret": True, "x-host-only": True},
+        }, "additionalProperties": False}), encoding="utf8")
+        (music / "capabilities.json").write_text(json.dumps({"capabilities": [{"id": "music.bridge_request", "implementation": "ready", "permissions": ["network"]}]}), encoding="utf8")
+
     def add_pending_named_speech_manifest(self, root):
         manifest = root / "managed-workspaces" / "public_workspace" / "manifests" / "gpt-sovits.json"
         manifest.parent.mkdir(parents=True)
@@ -265,7 +276,7 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
             self.assertNotIn("music_key", music["values"])
             self.assertEqual(handoff["accounts"][0]["secrets"]["music.music_key"], secret)
-            for field in ("tts_*", "asr_*", "yue_*", "yue_token", "named_voice_library", "rvc_profiles"):
+            for field in ("tts_*", "asr_*", "named_voice_library", "rvc_profiles"):
                 self.assertIn(field, music["unmapped_legacy_fields"])
             second = next(step for step in report["accounts"][1]["plugins"] if step["plugin"] == "music")
             self.assertFalse(second["legacy_enabled"])
@@ -300,12 +311,60 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             music = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "music")
             digest = hashlib.sha256((repo / "plugins" / "music" / "plugin.json").read_bytes()).hexdigest()
             self.assertEqual(music["package"]["expected_package_digest"], digest)
-            self.assertEqual(music["package"]["version"], "0.2.0")
+            self.assertEqual(music["package"]["version"], "0.3.0")
             self.assertEqual(music["package"]["status"], "ready")
-            self.assertEqual(music["permissions"], ["model.invoke"])
+            self.assertEqual(music["permissions"], ["model.invoke", "network"])
             self.assertIs(music["proposed_enabled"], False)
             self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
             self.assertEqual(handoff["accounts"][0]["secrets"]["music.music_key"], secret)
+
+    def test_local_music_bridge_maps_without_cloud_key_and_redacts_local_token(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_local_music_bridge(repo)
+            root, _ = self.make_root(base)
+            path = root / "speech-config.json"
+            speech = json.loads(path.read_text(encoding="utf8"))
+            speech.update({"music_enabled": True, "key": "", "yue_enabled": True, "yue_endpoint": "http://127.0.0.1:8765/", "yue_token": "synthetic-local-token"})
+            path.write_text(json.dumps(speech), encoding="utf8")
+            report, handoff = preview.build_preview(root, repo, "main")
+            music = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "music")
+            self.assertEqual(music["status"], "ready_for_administrator_review")
+            self.assertTrue(music["legacy_enabled"])
+            self.assertTrue(music["eligible_to_enable_after_confirmation"])
+            self.assertFalse(music["proposed_enabled"])
+            self.assertEqual(music["values"]["local_endpoint"], "http://127.0.0.1:8765")
+            self.assertEqual(music["secrets"]["local_token"], {"source_field": "speech-config.json:yue_token", "present": True, "sha256": hashlib.sha256(b"synthetic-local-token").hexdigest()})
+            self.assertEqual(handoff["accounts"][0]["secrets"]["music.local_token"], "synthetic-local-token")
+            self.assertNotIn("music_key", music["required_missing"])
+            self.assertNotIn("synthetic-local-token", json.dumps(report, ensure_ascii=False))
+
+    def test_local_music_bridge_requires_declared_safe_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            root, _ = self.make_root(base)
+            path = root / "speech-config.json"
+            speech = json.loads(path.read_text(encoding="utf8"))
+            speech.update({"yue_enabled": True, "yue_endpoint": "http://127.0.0.1:8765", "yue_token": "synthetic-local-token"})
+            path.write_text(json.dumps(speech), encoding="utf8")
+            report, handoff = preview.build_preview(root, repo, "main")
+            music = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "music")
+            self.assertEqual(music["status"], "blocked")
+            self.assertIn("official_local_music_bridge_not_declared_by_music_plugin", music["required_missing"])
+            self.assertNotIn("local_endpoint", music["values"])
+            self.assertNotIn("music.local_token", handoff["accounts"][0]["secrets"])
+
+            self.add_declared_local_music_bridge(repo)
+            speech["yue_endpoint"] = "http://music.example"
+            path.write_text(json.dumps(speech), encoding="utf8")
+            report, handoff = preview.build_preview(root, repo, "main")
+            music = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "music")
+            self.assertEqual(music["status"], "blocked")
+            self.assertIn("local_endpoint_invalid", music["required_missing"])
+            self.assertNotIn("local_endpoint", music["values"])
+            self.assertNotIn("music.local_token", handoff["accounts"][0]["secrets"])
 
     def test_declared_deepseek_backend_preserves_provider_and_maps_secret(self):
         with tempfile.TemporaryDirectory() as temporary:

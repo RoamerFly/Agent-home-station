@@ -501,6 +501,7 @@ func TestSongAudioReviewYuePreservesUpstreamOutputAuthority(t *testing.T) {
 	}))
 	defer server.Close()
 	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, server.URL, "synthetic-local-only"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	blocked := errors.New("synthetic upstream output authority revoked")
 	ctx := withOutputAuthority(t.Context(), func(context.Context) error { return blocked })
 	raw, _ := json.Marshal(map[string]any{"job_id": origin.task.MusicJob, "kind": "file"})

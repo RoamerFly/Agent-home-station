@@ -1,17 +1,13 @@
 package admin
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"io"
 	"math"
-	"net/http"
-	"strings"
 	"time"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
@@ -19,11 +15,10 @@ import (
 )
 
 func (p *permittedTools) yueTools() []mcptools.Tool {
-	c := p.manager.speechConfig()
 	if p.manager.agent == nil || !p.manager.agent.config().Enabled || !p.manager.agent.config().TasksEnabled {
 		return nil
 	}
-	if !c.YuEEnabled || c.YuEEndpoint == "" || c.YuEToken == "" || p.trace.Preview || p.trace.Account != p.manager.native.Account() || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) {
+	if !p.manager.localMusicPluginConfigured(context.Background()) || p.trace.Preview || p.trace.Account != p.manager.native.Account() || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) {
 		return nil
 	}
 	perms := p.manager.Config().Companion.Permissions
@@ -42,90 +37,12 @@ func (p *permittedTools) yueTools() []mcptools.Tool {
 	}
 }
 func (p *permittedTools) yueRequest(ctx context.Context, method, path string, body any, key string) ([]byte, string, error) {
-	c := p.manager.speechConfig()
-	var r io.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		r = bytes.NewReader(b)
+	policy, err := p.newLocalMusicPluginPolicy(ctx, method, path, body, key)
+	if err != nil {
+		return nil, "", err
 	}
-	req, e := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.YuEEndpoint, "/")+path, r)
-	if e != nil {
-		return nil, "", e
-	}
-	req.GetBody = nil
-	req.Header.Set("Authorization", "Bearer "+c.YuEToken)
-	// Server-derived identity, independent of model parameters or a resumed
-	// task's quoted account. Managed brokers reject a different account scope.
-	accountScope := accountDirectory(p.manager.native.Account())
-	req.Header.Set("X-Wechat-Agent-Account", accountScope)
-	req.Header.Set("Content-Type", "application/json")
-	if key != "" {
-		req.Header.Set("Idempotency-Key", key)
-	}
-	client := &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}
-	defer client.CloseIdleConnections()
-	response, e := client.Do(req)
-	if e != nil {
-		return nil, "", yueError("yue_bridge_unavailable")
-	}
-	defer response.Body.Close()
-	if bound := response.Header.Get("X-Wechat-Agent-Account"); bound != "" && bound != accountScope {
-		return nil, "", yueError("yue_account_scope_mismatch")
-	}
-	data, e := io.ReadAll(io.LimitReader(response.Body, (64<<20)+1))
-	if e != nil || len(data) > 64<<20 {
-		return nil, "", yueError("yue_response_limit")
-	}
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		if response.StatusCode == http.StatusConflict {
-			var detail struct {
-				Error string `json:"error"`
-			}
-			if json.Unmarshal(data, &detail) == nil && detail.Error == "music_account_scope_mismatch" {
-				return nil, "", yueError("yue_account_scope_mismatch")
-			}
-			if strings.HasPrefix(detail.Error, "rvc_recovery_") {
-				return nil, "", toolInputError("原RVC任务恢复校验失败：" + detail.Error + "；检查原文件、配方及声线配置，不新建重复歌曲")
-			}
-			if detail.Error == "yue_recovery_prompt_missing_explicit_restart_required" {
-				return nil, "", toolInputError("YuE后端队列与历史中均未找到原生成任务；原配方和素材仍在。需要继续原需求时，以同一个job_id调用music_local_resume并设置restart_missing=true，按保存的工作流重算")
-			}
-			if detail.Error == "yue_recovery_prompt_failed_explicit_retry_required" {
-				return nil, "", toolInputError("YuE原后端任务已确认执行失败；先读取并修复实际错误，再用同一个job_id调用music_local_resume并设置restart_failed=true，按保存的工作流重算。旧失败记录保留")
-			}
-			if strings.HasPrefix(detail.Error, "yue_recovery_") {
-				return nil, "", toolInputError("原YuE任务恢复核对失败：" + detail.Error + "；读取原任务状态，核对保存的请求、参考音频、工作流及声线配置")
-			}
-		}
-		if response.StatusCode == 400 {
-			var detail struct {
-				Error string `json:"error"`
-			}
-			if json.Unmarshal(data, &detail) == nil && (strings.HasPrefix(detail.Error, "rvc_") || strings.HasPrefix(detail.Error, "sampling_") || strings.HasPrefix(detail.Error, "invalid_sampling_") || detail.Error == "invalid_planning_mode" || detail.Error == "score_sampling_requires_active_planning") {
-				return nil, "", toolInputError("YuE原生参数校验失败：" + detail.Error + "；请查询music_sampling_options后调整")
-			}
-		}
-		if response.StatusCode == 401 || response.StatusCode == 403 {
-			return nil, "", yueError("yue_bridge_auth_failed")
-		}
-		if response.StatusCode == 503 {
-			var detail struct {
-				Error string `json:"error"`
-			}
-			if json.Unmarshal(data, &detail) == nil && strings.HasPrefix(detail.Error, "rvc_") {
-				return nil, "", toolInputError("RVC服务未就绪：" + detail.Error + "；请检查原任务和本机角色模型，不改为YuE冒充原曲翻唱")
-			}
-			if detail.Error == "music_recovery_unavailable" {
-				return nil, "", toolInputError("原音乐任务恢复时未能核对生成后端或调度器；先检查music_service_status和本机桥接日志，原任务保留。连接失败不代表后端任务已丢失")
-			}
-			return nil, "", yueError("yue_backend_unavailable")
-		}
-		if response.StatusCode == 404 {
-			return nil, "", yueError("yue_job_not_found")
-		}
-		return nil, "", yueError("yue_request_rejected")
-	}
-	return data, response.Header.Get("Content-Type"), nil
+	data, mime, _, err := policy.invoke(ctx)
+	return data, mime, err
 }
 
 type yueHealth struct {
@@ -137,12 +54,8 @@ type yueHealth struct {
 }
 
 func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
-	c := p.manager.speechConfig()
-	if !c.YuEEnabled {
-		return yueHealth{State: "disabled", Message: "本地YuE未启用"}
-	}
-	if c.YuEEndpoint == "" || c.YuEToken == "" {
-		return yueHealth{State: "unconfigured", Message: "YuE桥接地址或令牌尚未配置"}
+	if !p.manager.localMusicPluginConfigured(ctx) {
+		return yueHealth{State: "migration_required", Message: "请安装、授权并配置音乐插件的本地桥接；旧版语音配置不再直接授权音乐请求"}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -592,7 +505,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 // Poll read-only state before invoking the model; never resubmit generation.
 func (m *Manager) claimMusicTask(task agentTask, now time.Time) (*companion.Input, error) {
 	previousResult := task.LastResult
-	p := &permittedTools{manager: m}
+	p := &permittedTools{manager: m, trace: *taskResultInput(task, &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender, TraceID: task.OriginTrace, TaskID: task.ID})}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	data, _, err := p.yueRequest(ctx, "GET", "/jobs/"+task.MusicJob, nil, "")

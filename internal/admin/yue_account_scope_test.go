@@ -23,8 +23,9 @@ func TestYuERequestsUseNativeAccountRatherThanQuotedTrace(t *testing.T) {
 	f.manager.speech.YuEEnabled = true
 	f.manager.speech.YuEEndpoint = server.URL
 	f.manager.speech.YuEToken = "synthetic-scope-token"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	p := &permittedTools{manager: f.manager, trace: companion.Input{Account: "quoted-other-account"}}
-	if _, _, e := p.yueRequest(context.Background(), "GET", "/health", nil, ""); e != nil {
+	if _, _, e := p.yueRequest(legacyLocalMusicAdminContext(t, f.manager), "GET", "/health", nil, ""); e != nil {
 		t.Fatal(e)
 	}
 }
@@ -48,6 +49,7 @@ func TestYuEWrongAccountStopsBeforeClaimingOrSubmittingGeneration(t *testing.T) 
 			f.manager.speech.YuEEnabled = true
 			f.manager.speech.YuEEndpoint = server.URL
 			f.manager.speech.YuEToken = "synthetic-scope-token"
+			installLegacyLocalMusicPlugin(t, f.manager)
 			p, _, _ := f.manager.toolAccess()
 			p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "wrong-account-request"})
 			health := p.probeYuE(context.Background())

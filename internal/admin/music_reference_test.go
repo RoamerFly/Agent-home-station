@@ -40,6 +40,7 @@ func TestYuECoverPassesExactReferenceLyricsAndZeroSeedAndRetainsRecipe(t *testin
 	}))
 	defer upstream.Close()
 	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	raw, _ := json.Marshal(map[string]any{"title": "原曲女声版", "mode": "cover", "style": "female folk", "lyrics": lyrics, "lyrics_evidence_ids": []string{evidence.ID}, "seed": 0, "reference_mode": "full", "duration_seconds": 60, "reference_asset_id": ref.ID, "text_guidance_scale": 2.7, "min_duration_seconds": 55})
 	if _, err = p.callYuE(context.Background(), "music_local_start", raw); err != nil {
 		t.Fatal(err)
@@ -86,7 +87,7 @@ func TestYuECoverMissingReferenceAndCrossScopeFailBeforeSubmission(t *testing.T)
 func TestYuEStableUnspecifiedSeedSurvivesFormattingAndNewRequestRerolls(t *testing.T) {
 	f := setup(t)
 	p, _, _ := f.manager.toolAccess()
-	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "first"})
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "first"})
 	seeds := []float64{}
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
@@ -100,6 +101,7 @@ func TestYuEStableUnspecifiedSeedSurvivesFormattingAndNewRequestRerolls(t *testi
 	}))
 	defer u.Close()
 	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, u.URL, "synthetic-token"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	for _, body := range []string{`{"title":"下班晚风","style":"folk","lyrics":"[Verse] supplied"}`, `{ "lyrics":"[Verse] supplied", "style":"folk", "title":"下班晚风" }`} {
 		if _, err := p.callYuE(context.Background(), "music_local_start", json.RawMessage(body)); err != nil {
 			t.Fatal(err)

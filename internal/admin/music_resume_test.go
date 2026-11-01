@@ -35,6 +35,7 @@ func TestRVCResumeKeepsOriginalScopedTaskAndNeverStagesMedia(t *testing.T) {
 	}))
 	defer u.Close()
 	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, u.URL, "synthetic-token"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	task := agentTask{ID: "original-task", Account: "test", Thread: "filehelper", Sender: "owner", MusicJob: "synthetic-rvc", MusicSpec: &songSpec{Engine: "rvc"}, RecoveryMessageID: "original-request", MusicFailure: true, MusicPrepared: true, State: "needs_review", OriginTrace: "original-trace", MusicKind: "voice"}
 	if err := f.manager.agent.task(task); err != nil {
 		t.Fatal(err)
@@ -80,7 +81,7 @@ func TestRVCResumeDoesNotReviveCancelledDeliveredTasksOrTrustWrongReply(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			f := setup(t)
 			p, _, _ := f.manager.toolAccess()
-			p.SetTrace(companion.Input{Account: "test", Thread: "filehelper", Sender: "owner"})
+			p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner"})
 			posts := 0
 			u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == "POST" {
@@ -92,6 +93,7 @@ func TestRVCResumeDoesNotReviveCancelledDeliveredTasksOrTrustWrongReply(t *testi
 			}))
 			defer u.Close()
 			f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, u.URL, "synthetic-token"
+			installLegacyLocalMusicPlugin(t, f.manager)
 			task := agentTask{ID: "original", Account: "test", Thread: "filehelper", Sender: "owner", MusicJob: "job", MusicSpec: &songSpec{Engine: "rvc"}, RecoveryMessageID: "request", State: test.taskState}
 			if err := f.manager.agent.task(task); err != nil {
 				t.Fatal(err)
@@ -120,7 +122,7 @@ func TestYuEResumePassesExplicitRestartAndRetainsConversationScope(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			f := setup(t)
 			p, _, _ := f.manager.toolAccess()
-			p.SetTrace(companion.Input{Account: "test", Thread: "filehelper", Sender: "owner"})
+			p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner"})
 			posts := 0
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/jobs/yue-original" && r.URL.Path != "/jobs/yue-original/resume" {
@@ -143,6 +145,7 @@ func TestYuEResumePassesExplicitRestartAndRetainsConversationScope(t *testing.T)
 			}))
 			defer upstream.Close()
 			f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
+			installLegacyLocalMusicPlugin(t, f.manager)
 			task := agentTask{ID: "original", Account: "test", Thread: "filehelper", Sender: "owner", MusicJob: "yue-original", MusicSpec: &songSpec{}, RecoveryMessageID: "request", State: "needs_review", OriginTrace: "original-trace"}
 			if err := f.manager.agent.task(task); err != nil {
 				t.Fatal(err)
@@ -166,12 +169,17 @@ func TestYuEResumePassesExplicitRestartAndRetainsConversationScope(t *testing.T)
 func TestYuERecoveryFailureExposesActionableOriginalTaskReason(t *testing.T) {
 	f := setup(t)
 	p, _, _ := f.manager.toolAccess()
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "recovery-choice"})
+	if err := f.manager.agent.task(agentTask{ID: "recovery-choice-task", Account: "test", Thread: "filehelper", Sender: "owner", MusicJob: "original", State: "needs_review"}); err != nil {
+		t.Fatal(err)
+	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
 		w.Write([]byte(`{"error":"yue_recovery_prompt_missing_explicit_restart_required"}`))
 	}))
 	defer upstream.Close()
 	f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = upstream.URL, "synthetic-token"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	_, _, err := p.yueRequest(context.Background(), "POST", "/jobs/original/resume", map[string]any{}, "")
 	if err == nil || !strings.Contains(err.Error(), "restart_missing=true") || !strings.Contains(err.Error(), "同一个job_id") {
 		t.Fatal("specific recovery choice hidden", err)

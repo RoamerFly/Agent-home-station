@@ -74,7 +74,7 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 		respond(w, 200, s.manager.localASRStatus())
 	}))
 	mux.HandleFunc("GET /api/speech/yue-health", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, (&permittedTools{manager: s.manager}).probeYuE(r.Context()))
+		respond(w, 200, (&permittedTools{manager: s.manager}).probeYuE(s.speechPluginTestContext(r)))
 	}))
 	mux.HandleFunc("GET /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, speechView(s.manager.speechConfig())) }))
 	mux.HandleFunc("POST /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) {

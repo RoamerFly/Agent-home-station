@@ -93,7 +93,11 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 			return "", toolInputError("windows_music_control_inside_agent_workspace")
 		}
 	}
-	u, err := url.Parse(m.speechConfig().YuEEndpoint)
+	localEndpoint, localToken, err := m.localMusicPluginConnection(ctx)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(localEndpoint)
 	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return "", toolInputError("windows_music_requires_loopback_endpoint")
 	}
@@ -115,10 +119,10 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 		return "", err
 	}
 	token := filepath.Join(m.dir, "windows-music-token")
-	if m.speechConfig().YuEToken == "" {
+	if localToken == "" {
 		return "", toolInputError("windows_music_authentication_not_configured")
 	}
-	if err := writePrivate(token, []byte(m.speechConfig().YuEToken)); err != nil {
+	if err := writePrivate(token, []byte(localToken)); err != nil {
 		return "", err
 	}
 	command := exec.Command(config.Python, "-X", "utf8", config.Entry, "--workspace", m.managedRoot(), "--private", private,

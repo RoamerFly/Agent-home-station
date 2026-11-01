@@ -42,6 +42,7 @@ type pluginMigrationPackage struct {
 	deepSeekSearch bool
 	objectBridge   bool
 	namedSpeech    bool
+	localMusic     bool
 }
 type pluginMigrationResourceProof struct {
 	Source        string `json:"source"`
@@ -132,9 +133,31 @@ func migrationCatalog() map[string]pluginMigrationPackage {
 			deepSeekSearch: catalogDeclaresDeepSeekSearch(contract),
 			objectBridge:   catalogDeclaresShareObjectBridge(contract),
 			namedSpeech:    catalogDeclaresNamedSpeech(contract),
+			localMusic:     catalogDeclaresLocalMusicBridge(contract),
 		}
 	}
 	return out
+}
+
+// A YuE/RVC endpoint is not a generic plugin network permission.  The music
+// package must explicitly own both host-only fields and the reviewed bridge
+// capability before a legacy local token can be prepared for migration.
+func catalogDeclaresLocalMusicBridge(contract catalog.Contract) bool {
+	p := contract.Package
+	if p.ID != "music" || p.Status != "ready" || !migrationStringContains(p.Permissions, "network") {
+		return false
+	}
+	endpoint, endpointOK := contract.Configuration.Properties["local_endpoint"]
+	token, tokenOK := contract.Configuration.Properties["local_token"]
+	if !endpointOK || endpoint.Type != "string" || endpoint.Secret || endpoint.HostOnly || !tokenOK || token.Type != "string" || !token.Secret || !token.HostOnly {
+		return false
+	}
+	for _, capability := range contract.Capabilities {
+		if capability.ID == localMusicCapability && capability.Implementation == "ready" && migrationStringContains(capability.Permissions, "network") {
+			return true
+		}
+	}
+	return false
 }
 
 // Named speech requires an explicit local profile field and the ready named
@@ -452,12 +475,35 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	speechStep := migrationStep("speech", packages, speech.TTSEnabled || namedAvailable, speechValues, map[string]pluginMigrationSecret{"tts_key": ttsSecret}, speechUpdate, speechRequired, []string{"asr_*", "music_*", "yue_*", "yue_token"}, "", sources)
 	speechStep.ResourceProof = namedProof
 	musicSecret, musicKey := migrationSecret(speech.Key, "speech-config.json:key")
+	localMusicSecret, localMusicToken := migrationSecret(speech.YuEToken, "speech-config.json:yue_token")
 	musicValues := map[string]json.RawMessage{"music_endpoint": migrationValue(migrationEndpoint(speech.Endpoint, "/api/v1/services/audio/music/generation")), "music_model": migrationValue(speech.MusicModel)}
+	musicSecrets := map[string]pluginMigrationSecret{"music_key": musicSecret, "local_token": localMusicSecret}
+	musicUpdate := pluginhost.ConfigUpdate{Values: musicValues, Secrets: map[string]string{"music_key": musicKey}}
 	musicRequired := []string{}
-	if speech.MusicEnabled && musicKey == "" {
+	localMusicConfigured := speech.YuEEnabled || speech.YuEEndpoint != "" || speech.YuEToken != ""
+	if speech.MusicEnabled && musicKey == "" && !speech.YuEEnabled {
 		musicRequired = append(musicRequired, "music_key")
 	}
-	musicStep := migrationStep("music", packages, speech.MusicEnabled, musicValues, map[string]pluginMigrationSecret{"music_key": musicSecret}, pluginhost.ConfigUpdate{Values: musicValues, Secrets: map[string]string{"music_key": musicKey}}, musicRequired, []string{"tts_*", "asr_*", "yue_*", "yue_token", "named_voice_library", "rvc_profiles"}, "", sources)
+	if localMusicConfigured {
+		switch {
+		case !packages["music"].localMusic:
+			musicRequired = append(musicRequired, "official_local_music_bridge_not_declared_by_music_plugin")
+		case speech.YuEEndpoint == "":
+			musicRequired = append(musicRequired, "local_endpoint")
+		case !localMusicEndpoint(speech.YuEEndpoint):
+			musicRequired = append(musicRequired, "local_endpoint_invalid")
+		default:
+			musicValues["local_endpoint"] = migrationValue(strings.TrimRight(speech.YuEEndpoint, "/"))
+			musicUpdate.Values["local_endpoint"] = musicValues["local_endpoint"]
+			if localMusicToken != "" {
+				musicUpdate.Secrets["local_token"] = localMusicToken
+			}
+			if speech.YuEEnabled && localMusicToken == "" {
+				musicRequired = append(musicRequired, "local_token")
+			}
+		}
+	}
+	musicStep := migrationStep("music", packages, speech.MusicEnabled || speech.YuEEnabled, musicValues, musicSecrets, musicUpdate, musicRequired, []string{"tts_*", "asr_*", "named_voice_library", "rvc_profiles"}, "", sources)
 
 	webRequired, webUnmapped := []string{}, []string{}
 	// Keep the legacy switches in the read-only proposal so an administrator can

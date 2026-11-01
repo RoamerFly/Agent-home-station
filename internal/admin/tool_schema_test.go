@@ -28,6 +28,7 @@ func TestBuiltinSchemasRejectWrongShapesBeforeAnyAction(t *testing.T) {
 	f.manager.speech.YuEEnabled = true
 	f.manager.speech.YuEEndpoint = "http://127.0.0.1:1"
 	f.manager.speech.YuEToken = "synthetic-local-token"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	mobile := f.manager.mobile.Settings()
 	mobile.Enabled = true
 	mobile.Bridge.Command = "synthetic-not-executed-device"

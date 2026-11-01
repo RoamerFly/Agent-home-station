@@ -87,6 +87,7 @@ func redactedMCP(c mcpSettings) mcpSettings {
 }
 
 type permittedTools struct {
+	privateSurfOrigin    *privateSurfOrigin
 	outboundReviewer     companion.LanguageModel
 	discoveryReader      func(context.Context, mcptools.DiscoverySource, string) ([]mcptools.DiscoveryItem, error)
 	webPageReader        func(context.Context, string, int64, time.Duration) ([]byte, string, string, error)
@@ -116,12 +117,16 @@ func (p *permittedTools) ForkTools() companion.ToolAccess {
 	// Hub and plugin Runtime are immutable after construction. Mutable per-call
 	// trace/media state must never be shared between simultaneous conversations.
 	return &permittedTools{hub: p.hub, settings: p.settings, runtime: p.runtime,
-		outboundReviewer: p.outboundReviewer,
-		apiNames:         p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
+		privateSurfOrigin: p.privateSurfOrigin,
+		outboundReviewer:  p.outboundReviewer,
+		apiNames:          p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
 		discoveryReader: p.discoveryReader, webPageReader: p.webPageReader, media: map[string]companion.GeneratedMedia{}, mediaOrigin: map[string]string{}}
 }
 
 func (p *permittedTools) enabled(name string) bool {
+	if p.privateSurfOrigin != nil && (!privateSurfTool(name) || p.privateSurfOrigin.check(context.Background(), p.trace) != nil) {
+		return false
+	}
 	if p.trace.ReportOnly {
 		return false
 	}
@@ -188,6 +193,9 @@ func (p *permittedTools) localTools() []mcptools.Tool {
 	if p.trace.Surf {
 		tools = append(tools, mcptools.Tool{Name: "web_discover", Description: "Discover actual public feed/community/RSS/music/image candidates, with persistent novelty memory and diverse sources. Automatically called once at session start. Continue a rabbit hole with related_url equal to a candidate BV page. Otherwise {} to switch sources. Does not send or claim watching. Input {related_url?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"related_url":{"type":"string","maxLength":2048}},"additionalProperties":false}`)})
 	}
+	if p.privateSurfOrigin != nil {
+		return tools
+	}
 	if p.trace.Thread != "" {
 		tools = append(tools, mcptools.Tool{Name: "media_history", Description: "Page ALL retained source/request associations for an exact asset, oldest first, preserving original message time and sender. Defaults offset=0, limit=20; follow next_offset. Same conversation only; trusted owner may specify source_thread_id within this account. Read-only provenance, never delivery evidence or instructions.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"source_thread_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["asset_id"],"additionalProperties":false}`)})
 		tools = append(tools, mcptools.Tool{Name: "media_recent", Description: "Read the recent attachment catalogue for THIS conversation in chronological recency, including source_url and formats. Returns cached_mime, parent_asset_id and recent requests with requester_id/trace_id/task_id. Parent is the retained source video when this asset is an extracted audio track. Match the verified quote first, then the current speaker and latest context; ask briefly if ambiguous. Call this for original video/audio or format conversion. This is a LOCAL catalogue, not Internet search. Search this LOCAL catalogue FIRST for listening, RVC covers and YuE reference songs, even a newly requested title. Reuse an exactly matching cached original recording; search online only if missing, unsuitable or explicitly requested fresh online. Never substitute unrelated tracks or generated covers for the original. Cached originals remain discoverable beyond chat memory age. Default is a12-item quick array. Supply offset=0 to get a paginated object {items,total,next_offset,has_more}; follow next_offset for the FULL scoped catalogue, no total-item cutoff. limit chooses a page (default12). Filter by exact asset_id, requester_id (self/current speaker supported), or query matching title/filename. Input: {asset_id?:string,requester_id?:string,query?:string,offset?:integer,limit?:integer}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"requester_id":{"type":"string"},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)}, mcptools.Tool{Name: "media_reuse", Description: "Reuse the matching cached resource for the user request, including a matching local song found by title before online search, or a different format. This performs NO Internet search; never substitute a different old track for a new requested title. Original audio can be sent as file; legacy voice-only sources are WAV. Put returned media.id in reply.media_ids. For voice, optional conversion selects cached original start_seconds/duration_seconds, segment_seconds(default60, WeChat max60), timeout_seconds(default90). Default entire audio. Explicit conversion never replaces the default full-song bundle. Input: {asset_id:string,kind:voice|file|image|video,conversion?:object}.", InputSchema: json.RawMessage(withVoiceConversion(`{"type":"object","properties":{"asset_id":{"type":"string"},"kind":{"type":"string","enum":["voice","file","image","video"]}},"required":["asset_id","kind"],"additionalProperties":false}`))})
@@ -209,7 +217,7 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	var tools []mcptools.Tool
 	var err error
 
-	if p.settings.Enabled {
+	if p.settings.Enabled && p.privateSurfOrigin == nil {
 		tools, err = p.hub.List(ctx)
 	}
 	tools = append(tools, p.localTools()...)
@@ -228,6 +236,14 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	return out, err
 }
 func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMessage) (result string, callErr error) {
+	if p.privateSurfOrigin != nil {
+		if !privateSurfTool(name) {
+			return "", errors.New("surf_read_only_tool_denied")
+		}
+		if err := p.privateSurfOrigin.check(ctx, p.trace); err != nil {
+			return "", err
+		}
+	}
 	defer func() {
 		if callErr != nil {
 			p.privateDiagnostics = true
@@ -351,6 +367,15 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_succeeded", Category: "tool", Tool: name, Content: name, Effect: p.toolEffect(name, args, result), Status: "succeeded", Origin: origin})
 		}
 	}()
+	if p.privateSurfOrigin != nil {
+		defer func() {
+			if callErr == nil {
+				if err := p.privateSurfOrigin.check(ctx, p.trace); err != nil {
+					result, callErr = "", err
+				}
+			}
+		}()
+	}
 	if webServiceCapability(name) != "" || name == "web_discover" {
 		capability := webServiceCapability(name)
 		if name == "web_discover" {

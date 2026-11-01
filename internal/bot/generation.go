@@ -289,6 +289,20 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 		parentCancel := cancel
 		jobCtx, cancel = bounded, func() { stop(); parentCancel() }
 	}
+	if input.Preview && input.Surf {
+		if scoped, ok := fork.Tools.(interface {
+			BindSurfBrowseContext(context.Context) (context.Context, context.CancelFunc, error)
+		}); ok {
+			bounded, stop, err := scoped.BindSurfBrowseContext(jobCtx)
+			if err != nil {
+				cancel()
+				w.modelFailed(input.Thread, input.TraceID, err)
+				return
+			}
+			parentCancel := cancel
+			jobCtx, cancel = bounded, func() { stop(); parentCancel() }
+		}
+	}
 	j := &generationJob{input: input, engine: fork, cancel: cancel, quietDeadline: quietDeadline, observationPending: analysis != nil || len(input.UnreadMediaIDs) > 0}
 	if !input.Surf && input.Mode != "proactive" && input.TaskID == "" && input.Sender != "" && input.Account != "" && input.TraceID != "" {
 		j.session = w.liveSession(s, j)
@@ -556,6 +570,21 @@ type generationTools struct {
 	scheduler *generationScheduler
 	worker    *Worker
 	job       *generationJob
+}
+
+// The observer's readonly host origin participates in model evidence checks.
+// Other tool adapters retain their existing generation behavior.
+func (t *generationTools) MemoryResultAuthorization() string {
+	if scoped, ok := t.inner.(interface{ PrivateSurfAuthorization() string }); ok {
+		return scoped.PrivateSurfAuthorization()
+	}
+	return ""
+}
+func (t *generationTools) MemoryResultAuthorized(stamp string) bool {
+	if scoped, ok := t.inner.(interface{ PrivateSurfAuthorization() string }); ok {
+		return stamp != "" && stamp == scoped.PrivateSurfAuthorization()
+	}
+	return false
 }
 
 func (t *generationTools) ForkTools() companion.ToolAccess {

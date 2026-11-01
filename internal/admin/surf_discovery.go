@@ -430,6 +430,11 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
+	if p.privateSurfOrigin != nil {
+		if err := p.privateSurfOrigin.check(ctx, p.trace); err != nil {
+			return "", err
+		}
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	now := time.Now().UTC()
@@ -504,11 +509,20 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 		mode = "search_verification"
 	}
 	out := map[string]any{"session_id": session.ID, "entry_mode": mode, "depth": depth, "max_depth": settings.MaxDepth, "candidates": selected, "filtered_duplicates": filtered, "source_failures": session.Failures, "instruction": "这是实际读取公开列表/订阅/目录得到的候选，不代表看过视频或听过音频。选值得继续的具体内容，用web_fetch读正文；视频/音乐/图片可用media_url（若有）或BV页执行web_media_download。不要把标题摘要当完整文章；发现适合当前群的新内容就是分享理由，无需等待群友提问；优先读取感兴趣的具体候选或准备媒体。确实没有兴趣或不适合可silent并用reason=surf_not_interested或surf_not_suitable；喜欢但只想收藏可在silent对象加surf_action=bookmark和surf_item_id。分享时给reply加surf_item_id，比较近期主题，不能用同主题换网址凑新鲜。可用web_discover(related_url=候选BV页)继续关联探索，搜索仅用于核实具体疑问；不要退回搜索宽泛兴趣句子或首页。失败源已记录，其他源候选仍可用。"}
+	if p.privateSurfOrigin != nil {
+		out["instruction"] = "这是实际读取公开列表/订阅/目录得到的候选元数据，不代表观看或播放。当前仅供私人浏览，没有发送目标或发送权限。可用web_fetch分页读取候选正文、web_search核实具体疑问，或web_discover继续发现；不得下载、准备或发送素材，也不能读取会话记忆。最终silent；喜欢的候选可用surf_action=bookmark与surf_item_id收藏，其他候选可略过。"
+	}
 	b, _ := json.Marshal(out)
 	return string(b), nil
 }
 
 func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (companion.Decision, error) {
+	if p.privateSurfOrigin != nil {
+		if err := p.privateSurfOrigin.check(ctx, p.trace); err != nil {
+			return companion.Decision{}, err
+		}
+		d.Action, d.Reason, d.Messages, d.MediaIDs = "silent", "surf_browse_only", nil, nil
+	}
 	if !p.trace.Surf {
 		return d, nil
 	}

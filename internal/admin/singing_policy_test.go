@@ -54,8 +54,9 @@ func TestSongDefaultsNativeFemaleEvenWithCharacterVoiceConfigured(t *testing.T) 
 	f.manager.speech.YuEEnabled = true
 	f.manager.speech.YuEEndpoint = u.URL
 	f.manager.speech.YuEToken = "synthetic-token"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, _ := f.manager.toolAccess()
-	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "native-voice-test", Text: "唱一首下班主题的歌"})
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "native-voice-test", Text: "唱一首下班主题的歌"})
 	_, err := p.callYuE(context.Background(), "music_local_start", json.RawMessage(`{"mode":"original","title":"晚风归途","style":"warm male vocal, acoustic folk","lyrics":"[Verse]\n合成测试"}`))
 	if err != nil || starts != 1 {
 		t.Fatal(starts, err)
@@ -104,6 +105,7 @@ func TestCoverStyleIsFaithfulFemaleAndIdempotent(t *testing.T) {
 func TestWrongMaleNamedSongFailsBeforeHealthOrGeneration(t *testing.T) {
 	f := setup(t)
 	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, "http://127.0.0.1:1", "synthetic-token"
+	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, _ := f.manager.toolAccess()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "named-song", Text: "给我唱一首“朋友的酒”"})
 	for _, input := range []string{

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"wechat-bot/internal/companion"
 )
 
 // Recovery reads the actual incoming message, preserving its recipient and scope.
@@ -36,7 +37,7 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ac := m.agent.config()
-	if !ac.Enabled || !ac.TasksEnabled || !m.speechConfig().YuEEnabled {
+	if !ac.Enabled || !ac.TasksEnabled || !m.localMusicPluginConfigured(r.Context()) {
 		fail(w, 409, "请先开启Agent持续任务和本地歌曲生成")
 		return
 	}
@@ -82,8 +83,9 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		p := &permittedTools{manager: m}
-		b, _, err := p.yueRequest(r.Context(), "GET", "/jobs/"+in.PreparedJob, nil, "")
+		p := &permittedTools{manager: m, trace: companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, TraceID: t.OriginTrace}}
+		ctx := withLocalMusicRecovery(r.Context(), t, in.PreparedJob)
+		b, _, err := p.yueRequest(ctx, "GET", "/jobs/"+in.PreparedJob, nil, "")
 		var job struct {
 			ID            string `json:"id"`
 			State         string `json:"state"`

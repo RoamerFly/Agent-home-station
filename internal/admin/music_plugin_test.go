@@ -30,6 +30,12 @@ func installMusicPluginFixture(t *testing.T, f *webFixture, permissions []string
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Enabling the combined official package requires approval for its local
+	// bridge as well as its cloud capability. The disabled negative fixture
+	// deliberately retains its missing grant.
+	if enable {
+		permissions = append(append([]string(nil), permissions...), "network")
+	}
 	i, err := s.Install(t.Context(), prepared.Token, prepared.Digest, permissions)
 	if err != nil {
 		t.Fatal(err)
