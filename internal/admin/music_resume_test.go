@@ -34,7 +34,11 @@ func TestRVCResumeKeepsOriginalScopedTaskAndNeverStagesMedia(t *testing.T) {
 		}
 	}))
 	defer u.Close()
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, u.URL, "synthetic-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, u.URL, "synthetic-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	task := agentTask{ID: "original-task", Account: "test", Thread: "filehelper", Sender: "owner", MusicJob: "synthetic-rvc", MusicSpec: &songSpec{Engine: "rvc"}, RecoveryMessageID: "original-request", MusicFailure: true, MusicPrepared: true, State: "needs_review", OriginTrace: "original-trace", MusicKind: "voice"}
 	if err := f.manager.agent.task(task); err != nil {
@@ -92,7 +96,11 @@ func TestRVCResumeDoesNotReviveCancelledDeliveredTasksOrTrustWrongReply(t *testi
 				json.NewEncoder(w).Encode(map[string]any{"id": "job", "state": test.state, "engine": test.engine})
 			}))
 			defer u.Close()
-			f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, u.URL, "synthetic-token"
+			{
+				legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+				legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, u.URL, "synthetic-token"
+				writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+			}
 			installLegacyLocalMusicPlugin(t, f.manager)
 			task := agentTask{ID: "original", Account: "test", Thread: "filehelper", Sender: "owner", MusicJob: "job", MusicSpec: &songSpec{Engine: "rvc"}, RecoveryMessageID: "request", State: test.taskState}
 			if err := f.manager.agent.task(task); err != nil {
@@ -144,7 +152,11 @@ func TestYuEResumePassesExplicitRestartAndRetainsConversationScope(t *testing.T)
 				json.NewEncoder(w).Encode(map[string]any{"id": "yue-original", "engine": "yue", "state": state})
 			}))
 			defer upstream.Close()
-			f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
+			{
+				legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+				legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, upstream.URL, "synthetic-token"
+				writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+			}
 			installLegacyLocalMusicPlugin(t, f.manager)
 			task := agentTask{ID: "original", Account: "test", Thread: "filehelper", Sender: "owner", MusicJob: "yue-original", MusicSpec: &songSpec{}, RecoveryMessageID: "request", State: "needs_review", OriginTrace: "original-trace"}
 			if err := f.manager.agent.task(task); err != nil {
@@ -178,7 +190,11 @@ func TestYuERecoveryFailureExposesActionableOriginalTaskReason(t *testing.T) {
 		w.Write([]byte(`{"error":"yue_recovery_prompt_missing_explicit_restart_required"}`))
 	}))
 	defer upstream.Close()
-	f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = upstream.URL, "synthetic-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = upstream.URL, "synthetic-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	_, _, err := p.yueRequest(context.Background(), "POST", "/jobs/original/resume", map[string]any{}, "")
 	if err == nil || !strings.Contains(err.Error(), "restart_missing=true") || !strings.Contains(err.Error(), "同一个job_id") {

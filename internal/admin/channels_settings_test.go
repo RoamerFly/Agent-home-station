@@ -2,35 +2,39 @@ package admin
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/sharespec"
 )
 
-func TestChannelsSettingsProtectAndNeverReturnCookie(t *testing.T) {
+func TestChannelsSettingsCompatibilityRoutesAreMigrationOnly(t *testing.T) {
 	f := setup(t)
 	f.login()
-	if code, _, _ := f.request("POST", "/api/channels/settings", map[string]any{"enabled": true, "cookie": "hy_user=fixture; hy_token=synthetic-fixture-session"}, true, false); code != 403 {
+	path := filepath.Join(f.dir, "channels-config.json")
+	legacy := []byte(`{"enabled":true,"cookie":"hy_user=fixture; hy_token=synthetic-fixture-session","assistant_cookie":"sessionid=synthetic-assistant-session","object_bridge_url":"http://127.0.0.1:2026"}`)
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := f.request("POST", "/api/channels/settings", map[string]any{"enabled": false}, true, false); code != 403 {
 		t.Fatal("csrf bypass", code)
 	}
-	code, b, _ := f.request("POST", "/api/channels/settings", map[string]any{"enabled": true, "cookie": "hy_user=fixture; hy_token=synthetic-fixture-session", "assistant_cookie": "sessionid=synthetic-assistant-session"}, true, true)
-	if code != 200 || strings.Contains(string(b), "synthetic-fixture-session") || strings.Contains(string(b), "synthetic-assistant-session") {
-		t.Fatal("secret leaked or save failed", code)
+	code, b, _ := f.request("POST", "/api/channels/settings", map[string]any{"clear_cookie": true}, true, true)
+	if code != 409 || !strings.Contains(string(b), "channels_legacy_configuration_migration_required") || strings.Contains(string(b), "synthetic-fixture-session") {
+		t.Fatal("legacy write was not rejected safely", code, string(b))
 	}
 	code, b, _ = f.request("GET", "/api/channels/settings", nil, false, false)
-	if code != 200 || strings.Contains(string(b), "synthetic-fixture-session") || !strings.Contains(string(b), `"cookie_configured":true`) {
-		t.Fatal("credential view unsafe", code)
+	if code != 200 || strings.Contains(string(b), "synthetic-fixture-session") || !strings.Contains(string(b), `"migration_required":true`) || !strings.Contains(string(b), `"legacy_configuration_present":true`) {
+		t.Fatal("migration status unsafe", code, string(b))
 	}
-	f.request("POST", "/api/channels/settings", map[string]any{"enabled": true}, true, true)
 	c, e := loadChannelsSettings(f.dir)
 	if e != nil || !strings.Contains(c.Cookie, "synthetic-fixture-session") || c.AssistantCookie == "" {
-		t.Fatal("blank save erased credential")
+		t.Fatal("migration source was changed")
 	}
-	f.request("POST", "/api/channels/settings", map[string]any{"clear_cookie": true}, true, true)
-	c, _ = loadChannelsSettings(f.dir)
-	if c.Cookie != "" || c.AssistantCookie != "" || c.Enabled {
-		t.Fatal("clear did not revoke resolver")
+	if after, err := os.ReadFile(path); err != nil || string(after) != string(legacy) {
+		t.Fatal("compatibility routes rewrote legacy source", err)
 	}
 }
 
@@ -73,7 +77,7 @@ func TestChannelsBindingStoresSameRoomObjectAliasAndRejectsOtherRooms(t *testing
 
 func TestResolvedVideoRequiresExactWorkOrTitleAndAuthor(t *testing.T) {
 	s := linuxnative.ChannelsSource{ObjectID: "123", Title: "合成测试原视频的标题", Author: "作者甲"}
-	v := channels.ResolvedVideo{ObjectID: "456", Title: s.Title, Author: s.Author}
+	v := sharespec.ResolvedVideo{ObjectID: "456", Title: s.Title, Author: s.Author}
 	if matchChannelsVideo(s, linuxnative.Message{}, v) {
 		t.Fatal("different object used")
 	}
@@ -97,13 +101,13 @@ func TestChannelsMemoryRetainsActualAudioWithinTurnBudget(t *testing.T) {
 
 func TestNativeChannelsIdentityDoesNotDependOnPreviewTitleLength(t *testing.T) {
 	source := linuxnative.ChannelsSource{ObjectID: "18446744073709551614"}
-	if !matchNativeChannelsVideo(source, channels.ResolvedVideo{}, true) {
+	if !matchNativeChannelsVideo(source, sharespec.ResolvedVideo{}, true) {
 		t.Fatal("verified native identity lost because preview metadata is absent")
 	}
-	if matchNativeChannelsVideo(source, channels.ResolvedVideo{ObjectID: "18446744073709551613"}, true) {
+	if matchNativeChannelsVideo(source, sharespec.ResolvedVideo{ObjectID: "18446744073709551613"}, true) {
 		t.Fatal("explicit preview identity mismatch accepted")
 	}
-	if matchNativeChannelsVideo(source, channels.ResolvedVideo{}, false) || matchNativeChannelsVideo(linuxnative.ChannelsSource{}, channels.ResolvedVideo{}, true) {
+	if matchNativeChannelsVideo(source, sharespec.ResolvedVideo{}, false) || matchNativeChannelsVideo(linuxnative.ChannelsSource{}, sharespec.ResolvedVideo{}, true) {
 		t.Fatal("unverified link accepted as native identity")
 	}
 }

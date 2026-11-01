@@ -14,7 +14,7 @@ import (
 
 func writeAudioReviewMigrationLegacy(t *testing.T, f *webFixture, endpoint, key string) {
 	t.Helper()
-	legacy := f.manager.speechConfig()
+	legacy := readLegacySpeechTestConfig(t, f.manager)
 	legacy.Endpoint, legacy.Key = endpoint, key
 	b, err := json.Marshal(legacy)
 	if err != nil {
@@ -23,9 +23,7 @@ func writeAudioReviewMigrationLegacy(t *testing.T, f *webFixture, endpoint, key 
 	if err = writePrivate(filepath.Join(f.dir, "speech-config.json"), b); err != nil {
 		t.Fatal(err)
 	}
-	f.manager.mu.Lock()
-	f.manager.speech = legacy
-	f.manager.mu.Unlock()
+	writeLegacySpeechMigrationFixture(t, f.manager, legacy)
 }
 
 func TestMediaAudioReviewMigrationPreviewApplyDisabled(t *testing.T) {

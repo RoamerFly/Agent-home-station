@@ -18,10 +18,14 @@ func TestASRDiagnosticsReportsPluginConfigurationAndLiveReadiness(t *testing.T) 
 		t.Fatal(err)
 	}
 	p := &permittedTools{manager: f.manager, trace: companion.Input{Channel: "wechat", Account: "test", Thread: native.msg.ThreadID, Sender: native.msg.SenderID}}
-	f.manager.speech.ASREnabled = false
-	f.manager.speech.ASRModel = "stale-legacy-model"
-	f.manager.speech.ASRBackend = "local_then_bailian"
-	f.manager.speech.ASRLocalModel = "stale-legacy-local-profile"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.ASREnabled = false
+		legacySpeechFixture.ASRModel = "stale-legacy-model"
+		legacySpeechFixture.ASRBackend = "local_then_bailian"
+		legacySpeechFixture.ASRLocalModel = "stale-legacy-local-profile"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	assert := func(ready bool) {
 		t.Helper()
 		raw, err := p.callDiagnostics(json.RawMessage(`{}`))

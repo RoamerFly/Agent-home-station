@@ -9,7 +9,7 @@ import (
 
 func writeLocalMusicMigrationLegacy(t *testing.T, f *webFixture, enabled bool, endpoint, token string) {
 	t.Helper()
-	legacy := f.manager.speechConfig()
+	legacy := readLegacySpeechTestConfig(t, f.manager)
 	legacy.YuEEnabled, legacy.YuEEndpoint, legacy.YuEToken = enabled, endpoint, token
 	data, err := json.Marshal(legacy)
 	if err != nil {
@@ -18,16 +18,14 @@ func writeLocalMusicMigrationLegacy(t *testing.T, f *webFixture, enabled bool, e
 	if err = writePrivate(filepath.Join(f.dir, "speech-config.json"), data); err != nil {
 		t.Fatal(err)
 	}
-	f.manager.mu.Lock()
-	f.manager.speech = legacy
-	f.manager.mu.Unlock()
+	writeLegacySpeechMigrationFixture(t, f.manager, legacy)
 }
 
 func TestLocalMusicPluginMigrationMapsReviewedBridgeWithoutCloudKey(t *testing.T) {
 	useOfficialMigrationCatalog(t)
 	f := setup(t)
 	writeLocalMusicMigrationLegacy(t, f, true, "http://127.0.0.1:8765/", "synthetic-local-music-token")
-	legacy := f.manager.speechConfig()
+	legacy := readLegacySpeechTestConfig(t, f.manager)
 	legacy.MusicEnabled, legacy.Key = true, ""
 	data, err := json.Marshal(legacy)
 	if err != nil {
@@ -36,9 +34,7 @@ func TestLocalMusicPluginMigrationMapsReviewedBridgeWithoutCloudKey(t *testing.T
 	if err = writePrivate(filepath.Join(f.dir, "speech-config.json"), data); err != nil {
 		t.Fatal(err)
 	}
-	f.manager.mu.Lock()
-	f.manager.speech = legacy
-	f.manager.mu.Unlock()
+	writeLegacySpeechMigrationFixture(t, f.manager, legacy)
 
 	preview, err := f.manager.pluginMigrationPreview(context.Background())
 	if err != nil {

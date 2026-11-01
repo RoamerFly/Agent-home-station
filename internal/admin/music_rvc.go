@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"os/exec"
@@ -126,24 +127,9 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 	if err != nil {
 		return "", err
 	}
-	var ready struct {
-		Ready           bool `json:"ready"`
-		Version         int  `json:"bridge_version"`
-		VoiceProfiles   bool `json:"voice_profiles"`
-		PrivateProfiles bool `json:"private_voice_profiles"`
-	}
-	if json.Unmarshal(health, &ready) != nil || !ready.Ready || ready.Version < 9 {
-		return "", toolInputError("本地RVC角色模型尚未就绪；需桥接v9和有效角色模型，不改走YuE重新作曲")
-	}
-	if in.VoiceProfile != "" && (ready.Version < 12 || !ready.VoiceProfiles) {
-		return "", toolInputError("换声桥接尚未支持按任务选音色，需升级到v12；未提交默认音色任务")
-	}
-	if strings.HasPrefix(in.VoiceProfile, "private-") && (ready.Version < 13 || !ready.PrivateProfiles) {
-		return "", toolInputError("私有歌声模型需要支持账号隔离音色的v13桥接；未替换为默认声线")
-	}
-	body := map[string]any{"title": in.Title, "reference_base64": base64.StdEncoding.EncodeToString(clip), "reference_source_sha256": asset.Hash, "reference_start_seconds": start, "reference_seconds": seconds, "reference_pretrimmed": true}
-	if in.VoiceProfile != "" {
-		body["voice_profile_id"] = in.VoiceProfile
+	body, err := p.prepareRVCRequest(ctx, health, in.Title, in.VoiceProfile, asset.Hash, start, seconds, clip)
+	if err != nil {
+		return "", err
 	}
 	operationData := map[string]any{"title": in.Title, "reference_asset_id": in.Reference, "reference_sha256": asset.Hash, "reference_start_seconds": start, "reference_seconds": seconds, "kind": in.Kind, "engine": "rvc"}
 	if in.VoiceProfile != "" {
@@ -192,6 +178,64 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 	job["instruction"] = "已提交原录音直接换声，分离人声→RVC→混回原伴奏；没有调用YuE作曲。完成后查询music_local_status取得完整附件并按当前需求发送；以实际音频检验音色，不重复提交。"
 	output, _ := json.Marshal(job)
 	return string(output), nil
+}
+
+// The package owns bridge negotiation and request construction. Only the host
+// can materialize this exact audio reference, and it rejects any change to the
+// authorized title, selected voice, source hash or requested recording range.
+func (p *permittedTools) prepareRVCRequest(ctx context.Context, health []byte, title, profile, sourceHash string, start, seconds float64, clip []byte) (any, error) {
+	var observed map[string]json.RawMessage
+	if json.Unmarshal(health, &observed) != nil {
+		return nil, toolInputError("rvc_health_invalid")
+	}
+	safeHealth := map[string]json.RawMessage{}
+	for _, name := range []string{"ready", "bridge_version", "voice_profiles", "private_voice_profiles"} {
+		if value, ok := observed[name]; ok {
+			safeHealth[name] = value
+		}
+	}
+	ref := localMusicBodyRef{Ref: "reference_0", SHA256: namedSpeechSHA(clip), Bytes: int64(len(clip))}
+	var prepared struct {
+		Method string `json:"method"`
+		Path   string `json:"path"`
+		Body   struct {
+			Title     string          `json:"title"`
+			Reference json.RawMessage `json:"reference_base64"`
+			Hash      string          `json:"reference_source_sha256"`
+			Start     float64         `json:"reference_start_seconds"`
+			Seconds   float64         `json:"reference_seconds"`
+			Precut    bool            `json:"reference_pretrimmed"`
+			Profile   string          `json:"voice_profile_id,omitempty"`
+		} `json:"body"`
+	}
+	input := map[string]any{"action": "rvc_request", "health": safeHealth, "title": title, "voice_profile_id": profile, "reference_sha256": sourceHash, "reference_start_seconds": start, "reference_seconds": seconds, "audio_ref": ref}
+	err := p.prepareMusic(ctx, "/rvc-health", input, &prepared, func() error {
+		var reference struct {
+			Ref localMusicBodyRef `json:"$music_ref"`
+		}
+		b := prepared.Body
+		if prepared.Method != "POST" || prepared.Path != "/rvc-jobs" {
+			return errors.New("music_preparation_route_changed")
+		}
+		if b.Title != title || b.Profile != profile {
+			return errors.New("music_preparation_voice_or_title_changed")
+		}
+		if b.Hash != sourceHash {
+			return errors.New("music_preparation_source_changed")
+		}
+		if b.Start != start || b.Seconds != seconds || !b.Precut {
+			return errors.New("music_preparation_range_changed")
+		}
+		if musicStrictJSON(b.Reference, &reference) != nil || reference.Ref != ref {
+			return errors.New("music_preparation_audio_reference_changed")
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	prepared.Body.Reference, _ = json.Marshal(base64.StdEncoding.EncodeToString(clip))
+	return prepared.Body, nil
 }
 
 func validateRequestedRVCVoice(request, voiceID, profileID string, voices []voiceEntry) error {

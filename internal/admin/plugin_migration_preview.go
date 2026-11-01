@@ -16,10 +16,10 @@ import (
 	"sort"
 	"strings"
 
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	legacyplugins "wechat-bot/internal/plugins"
+	"wechat-bot/internal/sharespec"
 	catalog "wechat-bot/plugins"
 )
 
@@ -504,7 +504,13 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	m.mu.Lock()
 	config, mcp := cloneConfig(m.config), cloneMCP(m.mcp)
 	m.mu.Unlock()
-	speech := m.speechConfig()
+	speech, speechSourceHash, speechErr := loadSpeechMigrationSource(m.dir)
+	if speechErr != nil {
+		return pluginMigrationAccount{}, speechErr
+	}
+	if before["speech_config_json"] != speechSourceHash {
+		return pluginMigrationAccount{}, errors.New("migration source changed during preview")
+	}
 	agent := m.agent.config()
 	channelSettings, channelsErr := loadChannelsSettings(m.dir)
 	legacyExternal := m.plugins.installed()
@@ -696,7 +702,7 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	}
 	shareUnmapped := []string{}
 	if channelSettings.ObjectBridge != "" {
-		bridge, bridgeErr := channels.ObjectBridgeURL(channelSettings.ObjectBridge)
+		bridge, bridgeErr := sharespec.ObjectBridgeURL(channelSettings.ObjectBridge)
 		switch {
 		case bridgeErr != nil:
 			shareRequired = append(shareRequired, "object_bridge_url_invalid")

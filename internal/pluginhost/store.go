@@ -267,7 +267,8 @@ func (s *Store) Install(ctx context.Context, token, digest string, granted []str
 	defer tx.Rollback()
 	var enabled, revision int
 	var previous string
-	err = tx.QueryRowContext(ctx, `SELECT digest,enabled,revision FROM installed WHERE id=?`, p.ID).Scan(&previous, &enabled, &revision)
+	var previousManifest []byte
+	err = tx.QueryRowContext(ctx, `SELECT digest,manifest,enabled,revision FROM installed WHERE id=?`, p.ID).Scan(&previous, &previousManifest, &enabled, &revision)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return result, err
 	}
@@ -275,7 +276,7 @@ func (s *Store) Install(ctx context.Context, token, digest string, granted []str
 		return result, errors.New("disable and drain plugin before installation")
 	}
 	if previous != "" && previous != expected {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM configurations WHERE plugin=?`, p.ID); err != nil {
+		if err = s.validateUpgradeConfiguration(ctx, tx, previous, previousManifest, p, expected); err != nil {
 			return result, err
 		}
 	}

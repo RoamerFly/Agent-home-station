@@ -132,9 +132,13 @@ func TestLocalMusicMissingPluginNeverUsesLegacyConfiguration(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
 	defer server.Close()
-	f.manager.speech.YuEEnabled = true
-	f.manager.speech.YuEEndpoint = server.URL
-	f.manager.speech.YuEToken = "legacy-private-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = server.URL
+		legacySpeechFixture.YuEToken = "legacy-private-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	p := &permittedTools{manager: f.manager, trace: companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner"}}
 	if _, _, err := p.yueRequest(t.Context(), "GET", "/health", nil, ""); err == nil || !strings.Contains(err.Error(), "migration_required") || calls != 0 {
 		t.Fatal("legacy HTTP fallback survived", err, calls)

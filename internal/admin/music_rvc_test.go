@@ -39,7 +39,11 @@ func TestDirectRVCCoverUsesWholeActualRecordingWithoutYuEOrASRLyrics(t *testing.
 		}
 	}))
 	defer upstream.Close()
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, upstream.URL, "synthetic-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	p.settings.Enabled = false // A local music tool is independent of web/MCP switches.
 	raw, _ := json.Marshal(map[string]any{"title": "原曲换声", "reference_asset_id": asset.ID})
@@ -126,7 +130,11 @@ func TestPrivateRVCProfileRequiresNewBridgeAndVerifiedOwner(t *testing.T) {
 		w.Write([]byte(`{"id":"private-rvc-job"}`))
 	}))
 	defer upstream.Close()
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, upstream.URL, "synthetic"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	raw, _ := json.Marshal(map[string]any{"title": "synthetic", "reference_asset_id": asset.ID, "voice_id": private.ID})
 	if _, e = p.Call(t.Context(), "music_rvc_start", raw); e == nil || posts != 0 {
@@ -176,7 +184,11 @@ func TestDirectRVCSelectedVoiceRequiresCapableBridgeAndSurvivesFollowup(t *testi
 		w.Write([]byte(`{"id":"selected-rvc-job","voice_profile_id":"voice-manbo"}`))
 	}))
 	defer upstream.Close()
-	p.manager.speech.YuEEnabled, p.manager.speech.YuEEndpoint, p.manager.speech.YuEToken = true, upstream.URL, "synthetic"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, p.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, upstream.URL, "synthetic"
+		writeLegacySpeechMigrationFixture(t, p.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, p.manager)
 	raw, _ := json.Marshal(map[string]any{"title": "synthetic", "reference_asset_id": asset.ID, "voice_profile_id": "voice-manbo"})
 	if _, err = p.Call(context.Background(), "music_rvc_start", raw); err == nil || posts != 0 {

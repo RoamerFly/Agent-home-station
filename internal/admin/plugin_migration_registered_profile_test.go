@@ -135,7 +135,7 @@ func TestPluginMigrationRegisteredLocalASRCanApplyDisabledThenEnable(t *testing.
 				t.Fatal("migrated profile and runtime metadata differ", initializer, profile.Initializer, err)
 			}
 			after, err := os.ReadFile(filepath.Join(f.dir, "speech-config.json"))
-			if err != nil || string(after) != string(legacy) || f.manager.speechConfig().ASRLocalModel != test.legacy || !reflect.DeepEqual(resources, migrationRegistrationSnapshot(t, profile.Public)) {
+			if err != nil || string(after) != string(legacy) || readLegacySpeechTestConfig(t, f.manager).ASRLocalModel != test.legacy || !reflect.DeepEqual(resources, migrationRegistrationSnapshot(t, profile.Public)) {
 				t.Fatal("migration or enable modified legacy/public sources", err)
 			}
 		})

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -31,8 +32,9 @@ func installLegacyLocalMusicPlugin(t *testing.T, m *Manager) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpoint, _ := json.Marshal(m.speech.YuEEndpoint)
-	if _, err = store.SaveConfiguration(t.Context(), "music", pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{"local_endpoint": endpoint}, Secrets: map[string]string{"local_token": m.speech.YuEToken}}); err != nil {
+	legacy := readLegacySpeechTestConfig(t, m)
+	endpoint, _ := json.Marshal(legacy.YuEEndpoint)
+	if _, err = store.SaveConfiguration(t.Context(), "music", pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{"local_endpoint": endpoint}, Secrets: map[string]string{"local_token": legacy.YuEToken}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.SetEnabled(t.Context(), "music", installed.Revision, true); err != nil {
@@ -42,7 +44,15 @@ func installLegacyLocalMusicPlugin(t *testing.T, m *Manager) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	python, err := exec.LookPath("python")
+	python := os.Getenv("WECHAT_PLUGIN_TEST_PYTHON")
+	if python == "" {
+		local, _ := filepath.Abs("../../dist/windows-native/runtimes/windows-python-cli/python.exe")
+		if _, statErr := os.Stat(local); statErr == nil {
+			python = local
+		} else {
+			python, err = exec.LookPath("python")
+		}
+	}
 	if err != nil {
 		t.Fatal("official local music classifier requires Python", err)
 	}
@@ -68,6 +78,26 @@ func (legacyLocalMusicExecutor) Health(ctx context.Context) error { return ctx.E
 func (legacyLocalMusicExecutor) Close() error                     { return nil }
 
 func (e legacyLocalMusicExecutor) Call(ctx context.Context, _ pluginhost.Invocation, tool string, args json.RawMessage) (json.RawMessage, error) {
+	if tool == musicPreparationCapability {
+		const prepare = `import importlib.util,json,sys
+sys.stdin.reconfigure(encoding="utf8")
+sys.stdout.reconfigure(encoding="utf8")
+spec=importlib.util.spec_from_file_location("official_music_preparation",sys.argv[1])
+module=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+try:
+ result=module.prepare(json.load(sys.stdin))
+except ValueError as error:
+ result={"ok":False,"error":str(error)}
+json.dump(result,sys.stdout)`
+		cmd := exec.CommandContext(ctx, e.python, "-I", "-B", "-c", prepare, filepath.Join(filepath.Dir(e.module), "preparation.py"))
+		cmd.Stdin = bytes.NewReader(args)
+		result, err := cmd.Output()
+		if err != nil {
+			return nil, errors.New("official music preparation fixture failed")
+		}
+		return json.RawMessage(result), nil
+	}
 	if tool != localMusicCapability {
 		return nil, errors.New("legacy music fixture only executes the local bridge capability")
 	}

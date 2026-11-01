@@ -45,7 +45,10 @@ func TestLiveMusicOneMinuteControlsDurationAndDefaultsToCompleteVoice(t *testing
 	f.manager.config.Companion.Permissions.Remember = true
 	n := &fullMusicStager{fakeTools: &fakeTools{fakeNative: f.native}}
 	f.manager.native = n
-	f.manager.speech, e = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, e := loadSpeech(filepath.Join(root, "admin"))
+	if e == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if e != nil {
 		t.Fatal(e)
 	}

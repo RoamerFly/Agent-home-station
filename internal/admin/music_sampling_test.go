@@ -39,7 +39,11 @@ func TestMusicSamplingDiscoveryForwardingPersistenceAndIdentity(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"id": "sampling-" + r.Header.Get("Idempotency-Key")[:8], "state": "queued", "effective_parameters": map[string]any{"sampling": sampling, "planning_mode": "melody"}})
 	}))
 	defer upstream.Close()
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, upstream.URL, "synthetic-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	result, err := p.callYuE(context.Background(), "music_sampling_options", json.RawMessage(`{}`))
 	if err != nil || !strings.Contains(result, "native_limits_verified") || posts != 0 {
@@ -89,7 +93,11 @@ func TestMusicSamplingNativeFailureIsActionableAndNotSuccess(t *testing.T) {
 		w.Write([]byte(`{"error":"sampling_outside_native_spec:render.steps"}`))
 	}))
 	defer upstream.Close()
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, upstream.URL, "synthetic-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	_, _, err := p.yueRequest(context.Background(), "POST", "/jobs", map[string]any{}, "test")
 	if err == nil || !strings.Contains(err.Error(), "render.steps") || !strings.Contains(err.Error(), "music_sampling_options") {

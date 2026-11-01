@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "music",
   "name": "音乐与换声",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -33,7 +33,7 @@
     }
   ],
   "files": {
-    "capabilities.json": "8b507b7c7f7369461550ee574e04b89a6f12a7278482d673eed6ddadf0ba0792",
+    "capabilities.json": "a371f71cba2ecf8dac7818e2a033a7b3998b4db01d6717eab43770617c966b68",
     "CHANGELOG.md": "dc6ccb03c3904edd8e6d10675f57503ae86e53236bf153fee5e021104e761235",
     "config.schema.json": "54c7a68ff866ea7589dd7a2869d10466201f0ead97f467b68da5fb8599ef708d",
     "MIGRATION.md": "ef494861d42420045984b7733b83d2d2194bedd203b69cab12419524ab489149",
@@ -42,18 +42,20 @@
     "runtime/cloud_music.py": "4cbc104694f1f921fa0b9cf3dd6fb721a5911058eaae1ddb06f03d89ded40bea",
     "runtime/error_templates.json": "2188d8830e003eefffa019873df14d391e3412d393270a5d72f6a32d18e09f04",
     "runtime/local_music.py": "c401c03d2b9342125c01f92d8cfd219f4dc1708256a71474a29160be6c9a7f0c",
-    "runtime/main.py": "ac374d8f1973b000adf58cf4bec6065d2397082c68166346258f9e2c21d2dcb7",
-    "runtime/README.md": "429669f2db135e944eb173a72b0d1cd3d83aabee6121d572c5a24264295b00bf",
+    "runtime/main.py": "4cca4849aeda4a1ce9b6d0a90440794d5ab057722384fa0703f07419291f0970",
+    "runtime/README.md": "8f348c14c0798d4732918815fdcd90bd1d8cbd17ced7074fa8773efd0f575e42",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "tests/test_cloud_music.py": "5071f073d62ad5028e11bb96f310d9ff8fc126e4da142885eccb44f120ba9a8a",
     "tests/test_local_music.py": "5494a0a9834cbce83a8cdd9c86f5a0f196ecb239420ff412123c8153f4f02273",
     "ui.schema.json": "56d50eb51aa5db6f23d65a179de61ff4f82c2def68e3e7883515c281654eaa42",
     "tests/test_service_control.py": "c914970f913e8a5f59fa905289af2c94fdb5c247eb98268c9e5d91edfc05165e",
-    "runtime/tool_catalog.json": "d287989ada882408d219d954a588f47b89753fa60b77df2e0598e57bf64c8f79",
+    "runtime/tool_catalog.json": "88fb1a471af84c62d9c9941eab69ce127a60193fdf9a5542b4cb339e7556919e",
     "runtime/native_sampling.json": "a8c460f9529039311f104d953f92b2ade695fe38c8725c2730d56ee3dfd610de",
     "runtime/training/rvc_train_trial.py": "83d363725e15bfd7a2a12ceb22f06cd30bf8390543f52438e5f3790ee762e406",
     "runtime/training/requirements.txt": "37ca2a53842fdf911d0fdca9fdee5bba13019c74bad636fe7fccc0b8d860bd69",
     "tests/test_training.py": "e064ce3ef7a98288037093636716c92744e781e2665a37f8b4dc19b75264b788",
-    "runtime/training/README.md": "f725d765206d6c6c7eccaa3eafe86f13a0544a25b8f66da7daf3f6850642b628"
+    "runtime/training/README.md": "f725d765206d6c6c7eccaa3eafe86f13a0544a25b8f66da7daf3f6850642b628",
+    "runtime/preparation.py": "08e7ac6217d862792dfb7ca0bb695dffdb8105e4f93ea9abf4e7af7e30f1235c",
+    "tests/test_preparation.py": "8698e15836072c605bfa9bc3cf376249be91fdf7bcef5cf95e9f3c11793003c5"
   }
 }

@@ -41,7 +41,7 @@ func writeNamedSpeechMigrationManifest(t *testing.T, m *Manager) (public, manife
 
 func configureNamedSpeechMigrationLegacy(t *testing.T, f *webFixture) []byte {
 	t.Helper()
-	legacy := f.manager.speechConfig()
+	legacy := readLegacySpeechTestConfig(t, f.manager)
 	// The local named route is deliberately independent from the cloud default.
 	legacy.TTSEnabled, legacy.Key = false, ""
 	raw, err := json.Marshal(legacy)
@@ -51,9 +51,7 @@ func configureNamedSpeechMigrationLegacy(t *testing.T, f *webFixture) []byte {
 	if err = writePrivate(filepath.Join(f.dir, "speech-config.json"), raw); err != nil {
 		t.Fatal(err)
 	}
-	f.manager.mu.Lock()
-	f.manager.speech = legacy
-	f.manager.mu.Unlock()
+	writeLegacySpeechMigrationFixture(t, f.manager, legacy)
 	return raw
 }
 

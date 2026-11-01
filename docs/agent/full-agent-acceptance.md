@@ -26,6 +26,8 @@ Linux使用Bubblewrap，Windows使用隐藏LPAC执行器；管理服务凭证与
 
 ## 管理端验收接口
 
+专用 `repair-tests` 场景现为开发工具，源码和原测试已移入 `plugins/project-development/dev/repair-acceptance`，仅 `run_contract.py --test/--vet` 的临时合成 overlay 会注册历史路由；生产管理端不会注册。下面的评分器描述保留为既有验证证据，不代表主程序仍内置该业务，也不代表本轮重新运行了 Linux 实机评分。
+
 受管改造后的代码验收项目位于当前账号、主人私聊会话的 `scratch/repair-tests/<id>`。故障复现、单元测试和独立评分器都通过同一Bubblewrap执行器；导入被修改模块及其子进程时，管理配置、宿主文件和其他账号数据仍不可见。当前该评分执行后端为Linux，其他平台或隔离缺失时返回不可用，不回退宿主Python。普通Agent的Windows LPAC程序能力另行配置，不能用早期Windows历史验收代替现有评分器兼容性。
 
 旧路径的验收记录仍保留，但不会直接执行。新项目创建、测试写入和摘要检查使用会话根下的`os.Root`，拒绝外部链接、路径越界和冲突覆盖；Linux非阻塞打开避免Agent创建的FIFO卡住控制面。执行期间持续检查主人和执行权限，撤销时取消沙箱。执行器失败与“成功复现了测试故障”分别报告，前者不会自动安排修复任务。

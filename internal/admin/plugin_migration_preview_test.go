@@ -41,7 +41,11 @@ func TestPluginMigrationPreviewRedactsSecretsAndPreservesDeclaredDeepSeekBackend
 	f.manager.config.Provider, f.manager.config.BaseURL, f.manager.config.APIKey, f.manager.config.Model = "deepseek", "https://api.deepseek.com", "synthetic-private-key", "vision-model"
 	f.manager.mcp = mcpSettings{Enabled: true, WebSearchEnabled: true, WebFetchEnabled: true}
 	f.manager.mu.Unlock()
-	f.manager.speech.TTSEnabled, f.manager.speech.ASREnabled, f.manager.speech.ASRBackend, f.manager.speech.ASRLocalModel, f.manager.speech.Key = true, true, "local_then_bailian", "synthetic-asr", "synthetic-private-key"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.TTSEnabled, legacySpeechFixture.ASREnabled, legacySpeechFixture.ASRBackend, legacySpeechFixture.ASRLocalModel, legacySpeechFixture.Key = true, true, "local_then_bailian", "synthetic-asr", "synthetic-private-key"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	if err := writePrivate(f.dir+"/channels-config.json", []byte(`{"enabled":true,"cookie":"synthetic-cookie","object_bridge_url":"http://127.0.0.1:1234"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +200,11 @@ func TestPluginMigrationPreviewBlocksPaidSearchWithoutDeclaredBackend(t *testing
 func TestPluginMigrationPreviewLocalProfileAndSourceHashChange(t *testing.T) {
 	useOfficialMigrationCatalog(t)
 	f := setup(t)
-	f.manager.speech.ASREnabled, f.manager.speech.ASRBackend, f.manager.speech.ASRLocalModel = true, "local", "sensevoice-synthetic"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.ASREnabled, legacySpeechFixture.ASRBackend, legacySpeechFixture.ASRLocalModel = true, "local", "sensevoice-synthetic"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	first, err := f.manager.pluginMigrationPreview(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +299,11 @@ func TestPluginMigrationApplyRouteInstallsDisabledAndRejectsStalePlan(t *testing
 	useOfficialMigrationCatalog(t)
 	f := setup(t)
 	f.login()
-	f.manager.speech.TTSEnabled, f.manager.speech.Endpoint, f.manager.speech.Key, f.manager.speech.TTSModel, f.manager.speech.Voice = true, "https://provider.example", "synthetic-private", "speech-model", "voice-a"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.TTSEnabled, legacySpeechFixture.Endpoint, legacySpeechFixture.Key, legacySpeechFixture.TTSModel, legacySpeechFixture.Voice = true, "https://dashscope.aliyuncs.com", "synthetic-private", "speech-model", "voice-a"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	p, err := f.manager.pluginMigrationPreview(context.Background())
 	if err != nil {
 		t.Fatal(err)

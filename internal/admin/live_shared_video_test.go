@@ -38,7 +38,10 @@ func TestLiveReceivedPublicVideoObservation(t *testing.T) {
 	f := setup(t)
 	f.manager.config = c
 	f.manager.native = native
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if err != nil {
 		t.Fatal("speech configuration unavailable")
 	}

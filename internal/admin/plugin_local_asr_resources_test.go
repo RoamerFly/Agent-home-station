@@ -143,7 +143,11 @@ func TestLocalASRProfileSelectionComesOnlyFromMediaConfiguration(t *testing.T) {
 
 	// A stale legacy speech setting cannot select, replace, or disable the
 	// media plugin's explicitly selected profile.
-	f.manager.speech.ASRLocalModel = "not-a-media-profile"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.ASRLocalModel = "not-a-media-profile"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	metadata, err := f.manager.localASRPluginMetadata(ctx, p, g)
 	if err != nil || metadata["local_asr"] == nil {
 		t.Fatal("legacy speech setting changed the selected media profile", err, metadata)

@@ -19,12 +19,6 @@ func (a mediaUnderstanding) understandSharedVideo(ctx context.Context, m linuxna
 	if m.Link == nil || m.Link.URL == "" || m.AccountID != a.manager.native.Account() {
 		return "", errors.New("shared_video_source_invalid")
 	}
-	a.manager.mu.Lock()
-	webAllowed := a.manager.mcp.Enabled && a.manager.mcp.WebFetchEnabled
-	a.manager.mu.Unlock()
-	if !webAllowed {
-		return "", &mcptools.WebError{Code: "ability_disabled"}
-	}
 	bounded, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	a.manager.record(bot.Record{Event: "shared_video_read_started", Category: "tool", ThreadID: m.ThreadID, MessageID: m.ID, Status: "processing", Reason: "shared_video_actual_content", Origin: "media"})
@@ -35,18 +29,14 @@ func (a mediaUnderstanding) understandSharedVideo(ctx context.Context, m linuxna
 	if stateErr != nil {
 		return "", stateErr
 	}
-	if installed {
-		policy, e := a.manager.newPublicSharePolicy(bounded, m)
-		if e != nil {
-			return "", e
-		}
-		page, err = policy.readShare(bounded, 50<<20)
-	} else if mcptools.IsPublicVideoPage(m.Link.URL) {
-		video, err = mcptools.DownloadPublicVideoObservation(bounded, m.Link.URL, 50<<20)
-	} else {
-		requireVideo := m.AppMessageType != nil && *m.AppMessageType == 4
-		page, err = mcptools.ReadPublicShare(bounded, m.Link.URL, 50<<20, requireVideo)
+	if !installed {
+		return "", errors.New("share_plugin_migration_required")
 	}
+	policy, e := a.manager.newPublicSharePolicy(bounded, m)
+	if e != nil {
+		return "", e
+	}
+	page, err = policy.readShare(bounded, 50<<20)
 	if err == nil {
 		switch page.Kind {
 		case "page":

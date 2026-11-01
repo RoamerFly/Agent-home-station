@@ -154,6 +154,68 @@ func TestPublicShareReadBoundsAndActualMediaFailure(t *testing.T) {
 	}
 }
 
+func TestExplicitPublicURLPolicyBindsActualTriggerWithoutForgingShare(t *testing.T) {
+	f, n, _, ctx := receivedPolicyFixtureFor(t, false, 4)
+	// The source is an ordinary incoming text turn. The explicit URL is a
+	// separately bound request parameter, never written into this native value.
+	n.msg.Type, n.msg.AppMessageType, n.msg.Link, n.msg.Body = 1, nil, nil, "请看这个公开视频"
+	policy, err := f.manager.newExplicitPublicSharePolicy(ctx, n.msg, "https://public.example/video?tracking=discarded", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.message.Type != 1 || policy.message.Link != nil || policy.requestedURL != "https://public.example/video" {
+		t.Fatal("explicit URL forged a native share source", policy.message, policy.requestedURL)
+	}
+	job := pluginhost.Job{Plugin: "share-reader", Tool: "share.resolve_public", Context: policy.invocation(), Arguments: json.RawMessage(`{"url":"https://public.example/video","video_required":true}`)}
+	policy.read = func(context.Context, string, int64, time.Duration) ([]byte, string, string, error) {
+		return []byte(`<video src="https://cdn.example/video.mp4?signature=synthetic"></video>`), "text/html", policy.requestedURL, nil
+	}
+	read, _ := json.Marshal(map[string]any{"url": policy.requestedURL, "max_bytes": 1024, "timeout_seconds": 2})
+	if _, err := policy.Service(ctx, job, pluginhost.Capability{}, "wechat/http_read", read); err != nil {
+		t.Fatal(err)
+	}
+	wrong, _ := json.Marshal(map[string]any{"url": "https://other.example/video", "max_bytes": 1024, "timeout_seconds": 2})
+	if _, err := policy.Service(ctx, job, pluginhost.Capability{}, "wechat/http_read", wrong); err == nil {
+		t.Fatal("explicit URL policy read an unbound URL")
+	}
+}
+
+func TestExplicitPublicURLPolicyRejectsForgottenSource(t *testing.T) {
+	f, n, _, ctx := receivedPolicyFixtureFor(t, true, 4)
+	policy, err := f.manager.newExplicitPublicSharePolicy(ctx, n.msg, "https://public.example/video", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := pluginhost.Job{Plugin: "share-reader", Tool: "share.resolve_public", Context: policy.invocation()}
+	if err := policy.Check(ctx, job, pluginhost.Capability{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.memory.Clear(companion.ScopeID("wechat", "test", n.msg.ThreadID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.Check(ctx, job, pluginhost.Capability{}); err == nil || err.Error() != "share_source_changed" {
+		t.Fatal("forgotten explicit URL source remained readable", err)
+	}
+}
+
+func TestExplicitPublicURLPolicyRechecksCurrentActor(t *testing.T) {
+	f, n, _, _ := receivedPolicyFixtureFor(t, false, 4)
+	tools := &permittedTools{manager: f.manager, trace: companion.Input{Channel: "wechat", Account: "test", Thread: n.msg.ThreadID, Sender: "current-actor", TraceID: "explicit-url-turn", Mode: "direct"}}
+	ctx := withSourceActor(t.Context(), tools, "explicit-url-request", n.msg.ThreadID)
+	policy, err := f.manager.newExplicitPublicSharePolicy(ctx, n.msg, "https://public.example/video", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := pluginhost.Job{Plugin: "share-reader", Tool: "share.resolve_public", Context: policy.invocation()}
+	if err := policy.Check(ctx, job, pluginhost.Capability{}); err != nil {
+		t.Fatal(err)
+	}
+	tools.trace.Sender = "revoked-actor"
+	if err := policy.Check(ctx, job, pluginhost.Capability{}); err == nil || err.Error() != "source_actor_authorization_changed" {
+		t.Fatal("revoked actor retained explicit URL access", err)
+	}
+}
+
 func TestPublicShareLocatorEvidenceEscaping(t *testing.T) {
 	got := publicShareLocations([]byte(`<video src="/media.mp4?a=1&amp;b=2"></video><script>{"url":"https:\/\/cdn.example\/video.mp4?a=1\u0026b=2"}</script>`), "https://page.example/work")
 	for _, s := range []string{"https://page.example/media.mp4?a=1&b=2", "https://cdn.example/video.mp4?a=1&b=2"} {

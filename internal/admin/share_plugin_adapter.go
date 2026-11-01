@@ -10,12 +10,12 @@ import (
 	"strconv"
 	"strings"
 
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/sharespec"
 )
 
 func (m *Manager) installedShareState(ctx context.Context) (bool, error) {
@@ -68,8 +68,23 @@ func (m *Manager) newReceivedSharePolicy(ctx context.Context, message linuxnativ
 }
 
 func (m *Manager) newReceivedSharePolicyFor(ctx context.Context, message linuxnative.Message, tool string) (*receivedSharePolicy, error) {
+	return m.newReceivedSharePolicyInner(ctx, message, tool, false)
+}
+
+// newExplicitPublicURLSourcePolicy uses an actual incoming message solely as
+// the source/actor proof for a caller-supplied public URL. It deliberately
+// does not change that native message's type, body or link into a pretend
+// share card: the requested URL is bound separately by publicSharePolicy.
+func (m *Manager) newExplicitPublicURLSourcePolicy(ctx context.Context, message linuxnative.Message) (*receivedSharePolicy, error) {
+	return m.newReceivedSharePolicyInner(ctx, message, "share.resolve_public", true)
+}
+
+func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linuxnative.Message, tool string, explicitPublicURL bool) (*receivedSharePolicy, error) {
 	validKind := message.AppMessageType != nil && (*message.AppMessageType == 51 && tool == "share.resolve_channels" || (*message.AppMessageType == 4 || *message.AppMessageType == 5) && tool == "share.resolve_public" && message.Link != nil && sharePublicURL(message.Link.URL) != "")
 	validKind = message.Type == 49 && validKind || tool == "media.observe" && (message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && message.AppMessageType != nil && (*message.AppMessageType == 4 || *message.AppMessageType == 5 || *message.AppMessageType == 51)) || tool == "media.transcribe" && (message.Type == 34 || message.Type == 43 || message.Type == 49) || tool == "media.listen" && message.Type == 34
+	if explicitPublicURL {
+		validKind = tool == "share.resolve_public"
+	}
 	if m.memory == nil || message.ID == "" || message.ThreadID == "" || message.SenderID == "" || message.Direction != "incoming" || !validKind {
 		return nil, errors.New("share_native_source_required")
 	}
@@ -318,7 +333,7 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 				return source, errors.New("share_native_shortlink_unavailable")
 			}
 		}
-		link, err = channels.ShareURL(link)
+		link, err = sharespec.ShareURL(link)
 		if err != nil {
 			return source, errors.New("share_native_shortlink_invalid")
 		}

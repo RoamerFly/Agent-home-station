@@ -51,9 +51,13 @@ func TestSongDefaultsNativeFemaleEvenWithCharacterVoiceConfigured(t *testing.T) 
 	}))
 	defer u.Close()
 	f := setup(t)
-	f.manager.speech.YuEEnabled = true
-	f.manager.speech.YuEEndpoint = u.URL
-	f.manager.speech.YuEToken = "synthetic-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = u.URL
+		legacySpeechFixture.YuEToken = "synthetic-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, _ := f.manager.toolAccess()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "native-voice-test", Text: "唱一首下班主题的歌"})
@@ -90,21 +94,39 @@ func TestSingingIntentRejectsArtistGenderAndNamedSongComposition(t *testing.T) {
 }
 
 func TestCoverStyleIsFaithfulFemaleAndIdempotent(t *testing.T) {
-	style := singingGenerationStyle("acoustic male vocal", "female", "cover")
+	f := setup(t)
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEndpoint = "http://127.0.0.1:6188"
+		legacySpeechFixture.YuEToken = "synthetic-local-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
+	installLegacyLocalMusicPlugin(t, f.manager)
+	p, _, _ := f.manager.toolAccess()
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "style-prepare"})
+	style, err := p.prepareSingingStyle(t.Context(), "acoustic male vocal", "female", "cover")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(style, "保持原曲调和原歌词") || !strings.HasSuffix(style, "female vocal") {
 		t.Fatal(style)
 	}
-	if again := singingGenerationStyle(style, "female", "cover"); again != style {
+	if again, err := p.prepareSingingStyle(t.Context(), style, "female", "cover"); err != nil || again != style {
 		t.Fatal("effective prompt changed on reuse", style, again)
 	}
-	if strings.Contains(singingGenerationStyle("folk", "female", "original"), "保持原曲") {
+	original, err := p.prepareSingingStyle(t.Context(), "folk", "female", "original")
+	if err != nil || strings.Contains(original, "保持原曲") {
 		t.Fatal("original creation was given nonexistent reference constraint")
 	}
 }
 
 func TestWrongMaleNamedSongFailsBeforeHealthOrGeneration(t *testing.T) {
 	f := setup(t)
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, "http://127.0.0.1:1", "synthetic-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, "http://127.0.0.1:1", "synthetic-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, _ := f.manager.toolAccess()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "named-song", Text: "给我唱一首“朋友的酒”"})

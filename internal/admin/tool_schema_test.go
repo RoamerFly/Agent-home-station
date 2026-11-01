@@ -23,12 +23,16 @@ func TestBuiltinSchemasRejectWrongShapesBeforeAnyAction(t *testing.T) {
 	if e := f.manager.agent.save(c); e != nil {
 		t.Fatal(e)
 	}
-	f.manager.speech.Key = "synthetic-local-fixture"
-	f.manager.speech.TTSEnabled = true
-	f.manager.speech.MusicEnabled = true
-	f.manager.speech.YuEEnabled = true
-	f.manager.speech.YuEEndpoint = "http://127.0.0.1:1"
-	f.manager.speech.YuEToken = "synthetic-local-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.Key = "synthetic-local-fixture"
+		legacySpeechFixture.TTSEnabled = true
+		legacySpeechFixture.MusicEnabled = true
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = "http://127.0.0.1:1"
+		legacySpeechFixture.YuEToken = "synthetic-local-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	mobile := f.manager.mobile.Settings()
 	mobile.Enabled = true

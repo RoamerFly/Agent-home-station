@@ -103,11 +103,14 @@ func TestLiveDiagnosticCoverOutputRecognition(t *testing.T) {
 		t.Fatal("diagnostic receipt missing")
 	}
 	f := setup(t)
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	asr := prepareLiveASRPlugin(t, f.manager.speech)
+	asr := prepareLiveASRPlugin(t, readLegacySpeechTestConfig(t, f.manager))
 	p, _, _ := f.manager.toolAccess()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

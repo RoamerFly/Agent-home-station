@@ -39,7 +39,11 @@ func TestYuECoverPassesExactReferenceLyricsAndZeroSeedAndRetainsRecipe(t *testin
 		w.Write([]byte(`{"id":"cover-job","state":"queued","seed":0,"reference_used":true}`))
 	}))
 	defer upstream.Close()
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, upstream.URL, "synthetic-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	raw, _ := json.Marshal(map[string]any{"title": "原曲女声版", "mode": "cover", "style": "female folk", "lyrics": lyrics, "lyrics_evidence_ids": []string{evidence.ID}, "seed": 0, "reference_mode": "full", "duration_seconds": 60, "reference_asset_id": ref.ID, "text_guidance_scale": 2.7, "min_duration_seconds": 55})
 	if _, err = p.callYuE(context.Background(), "music_local_start", raw); err != nil {
@@ -100,7 +104,11 @@ func TestYuEStableUnspecifiedSeedSurvivesFormattingAndNewRequestRerolls(t *testi
 		json.NewEncoder(w).Encode(map[string]string{"id": "job-" + r.Header.Get("Idempotency-Key")[:8], "state": "queued"})
 	}))
 	defer u.Close()
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, u.URL, "synthetic-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, u.URL, "synthetic-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	for _, body := range []string{`{"title":"下班晚风","style":"folk","lyrics":"[Verse] supplied"}`, `{ "lyrics":"[Verse] supplied", "style":"folk", "title":"下班晚风" }`} {
 		if _, err := p.callYuE(context.Background(), "music_local_start", json.RawMessage(body)); err != nil {

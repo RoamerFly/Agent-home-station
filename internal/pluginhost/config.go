@@ -94,14 +94,18 @@ func (s *Store) PackageFile(ctx context.Context, id, name string) ([]byte, error
 	return raw, nil
 }
 func (s *Store) ConfigSchema(ctx context.Context, id string) (ConfigSchema, error) {
-	var schema ConfigSchema
 	raw, err := s.PackageFile(ctx, id, "config.schema.json")
 	if err != nil {
-		return schema, err
+		return ConfigSchema{}, err
 	}
+	return parseConfigSchema(raw)
+}
+
+func parseConfigSchema(raw []byte) (ConfigSchema, error) {
+	var schema ConfigSchema
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&schema); err != nil {
+	if err := decoder.Decode(&schema); err != nil {
 		return schema, errors.New("unsupported configuration schema")
 	}
 	if schema.Type != "object" || schema.AdditionalProperties {
@@ -129,6 +133,100 @@ func (s *Store) ConfigSchema(ctx context.Context, id string) (ConfigSchema, erro
 		}
 	}
 	return schema, nil
+}
+
+var ErrConfigurationMigrationRequired = errors.New("plugin upgrade requires configuration migration; existing installation and configuration retained")
+
+// A package replacement never resets configuration. Compatibility is checked
+// inside the installation transaction before replacing the registration. The
+// original row, revision and private history remain byte-for-byte untouched.
+func (s *Store) validateUpgradeConfiguration(ctx context.Context, tx *sql.Tx, previousDigest string, previousManifest []byte, next Package, digest string) error {
+	var revision int
+	var rawValues, rawSecrets []byte
+	err := tx.QueryRowContext(ctx, `SELECT revision,values_json,secrets_json FROM configurations WHERE plugin=?`, next.ID).Scan(&revision, &rawValues, &rawSecrets)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // A never-configured installation still requires setup before activation.
+	}
+	if err != nil {
+		return err
+	}
+	values := map[string]json.RawMessage{}
+	private := map[string]string{}
+	if revision <= 0 || json.Unmarshal(rawValues, &values) != nil || json.Unmarshal(rawSecrets, &private) != nil || values == nil || private == nil {
+		return ErrConfigurationMigrationRequired
+	}
+	readSchema := func(p Package, packageDigest string) (ConfigSchema, error) {
+		dir, err := s.PackageDirectory(packageDigest)
+		if err != nil {
+			return ConfigSchema{}, err
+		}
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			return ConfigSchema{}, err
+		}
+		defer root.Close()
+		raw, err := root.ReadFile("config.schema.json")
+		if err != nil {
+			return ConfigSchema{}, err
+		}
+		sum := sha256.Sum256(raw)
+		if hex.EncodeToString(sum[:]) != p.Files["config.schema.json"] {
+			return ConfigSchema{}, ErrConfigurationMigrationRequired
+		}
+		return parseConfigSchema(raw)
+	}
+	schema, err := readSchema(next, digest)
+	if err != nil {
+		return ErrConfigurationMigrationRequired
+	}
+	for name, raw := range values {
+		field, ok := schema.Properties[name]
+		if !ok || field.Secret || validateField(field, raw) != nil {
+			return ErrConfigurationMigrationRequired
+		}
+	}
+	var previous Package
+	if len(private) > 0 && json.Unmarshal(previousManifest, &previous) != nil {
+		return ErrConfigurationMigrationRequired
+	}
+	var oldSchema ConfigSchema
+	if len(private) > 0 {
+		oldSchema, err = readSchema(previous, previousDigest)
+		if err != nil {
+			return ErrConfigurationMigrationRequired
+		}
+	}
+	for name, value := range private {
+		field, ok := schema.Properties[name]
+		old, wasDeclared := oldSchema.Properties[name]
+		if !ok || !field.Secret || !wasDeclared || !old.Secret || old.HostOnly && !field.HostOnly {
+			return ErrConfigurationMigrationRequired
+		}
+		if value != "" {
+			raw, _ := json.Marshal(value)
+			if validateField(field, raw) != nil {
+				return ErrConfigurationMigrationRequired
+			}
+			values[name] = raw
+		}
+	}
+	for name, field := range schema.Properties {
+		if _, present := values[name]; !present && !field.Secret && len(field.Default) > 0 {
+			if !json.Valid(field.Default) || validateField(field, field.Default) != nil {
+				return ErrConfigurationMigrationRequired
+			}
+			values[name] = field.Default
+		}
+	}
+	for _, name := range schema.Required {
+		if _, present := values[name]; !present {
+			return ErrConfigurationMigrationRequired
+		}
+	}
+	if validateConfiguredRoutes(next, values) != nil {
+		return ErrConfigurationMigrationRequired
+	}
+	return nil
 }
 func validateField(field ConfigField, raw json.RawMessage) error {
 	var value any

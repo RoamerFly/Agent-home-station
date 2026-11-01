@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,55 @@ import (
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
+
+func TestPluginPackageUpgradeReportsRequiredConfigurationMigration(t *testing.T) {
+	f := setup(t)
+	f.login()
+	store, err := f.manager.packageStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := readySpeechFixture(t)
+	prepared, err := store.Prepare(t.Context(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Install(t.Context(), prepared.Token, prepared.Digest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := store.SaveConfiguration(t.Context(), "speech", pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{"backend": json.RawMessage(`"synthetic-backend"`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := []byte(`{"type":"object","properties":{"backend":{"type":"integer"}},"additionalProperties":false}`)
+	if err := os.WriteFile(filepath.Join(source, "config.schema.json"), schema, 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := prepared.Package
+	sum := sha256.Sum256(schema)
+	manifest.Files["config.schema.json"] = hex.EncodeToString(sum[:])
+	raw, _ := json.Marshal(manifest)
+	if err := os.WriteFile(filepath.Join(source, "plugin.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Prepare(t.Context(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ := f.request("POST", "/api/plugin-packages/install", map[string]any{"token": updated.Token, "digest": updated.Digest, "permissions": []string{}, "confirm": true}, true, true)
+	if code != 409 || !bytes.Contains(body, []byte(`"configuration_migration_required"`)) {
+		t.Fatalf("upgrade response %d %s", code, body)
+	}
+	after, err := store.Installed(t.Context(), "speech")
+	if err != nil || after.Digest != before.Digest || after.Revision != before.Revision {
+		t.Fatal("failed upgrade changed installation", err)
+	}
+	retained, err := store.Configuration(t.Context(), "speech")
+	if err != nil || retained.Revision != config.Revision || string(retained.Values["backend"]) != `"synthetic-backend"` {
+		t.Fatal("failed upgrade changed configuration", err)
+	}
+}
 
 // readySpeechFixture keeps generic package-admin lifecycle tests independent
 // from the production speech plugin's evolving required cloud-TTS settings.

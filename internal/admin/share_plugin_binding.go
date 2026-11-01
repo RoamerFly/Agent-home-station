@@ -12,11 +12,11 @@ import (
 	"strings"
 	"sync"
 
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/sharespec"
 )
 
 // One resolver chain for one host-verified native message. Never construct from
@@ -43,7 +43,7 @@ func newShareRouteBinding(message linuxnative.Message, source linuxnative.Channe
 			return b, nil
 		}
 		var err error
-		b.share, err = channels.ShareURL(verifiedShare)
+		b.share, err = sharespec.ShareURL(verifiedShare)
 		if err != nil {
 			return nil, errors.New("share_source_binding_invalid")
 		}
@@ -194,7 +194,7 @@ func (b *shareRouteBinding) accept(phase string, raw json.RawMessage) error {
 		if json.Unmarshal(raw, &r) != nil || r.Code == nil || *r.Code != 0 {
 			return fail()
 		}
-		share, e := channels.ShareURL(r.Data.URL)
+		share, e := sharespec.ShareURL(r.Data.URL)
 		if e != nil {
 			return fail()
 		}

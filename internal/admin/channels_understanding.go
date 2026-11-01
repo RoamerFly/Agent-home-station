@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"strconv"
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediadecode"
 )
 
 type channelsReader interface {
@@ -32,13 +32,7 @@ func (a mediaUnderstanding) understandChannels(ctx context.Context, msg linuxnat
 			return "", pluginErr
 		}
 		if !installed {
-			cfg, configErr := loadChannelsSettings(a.manager.dir)
-			if configErr != nil {
-				return "", configErr
-			}
-			if !cfg.Enabled {
-				return "", readErr
-			}
+			return "", errors.New("share_plugin_migration_required")
 		}
 		source, err = a.manager.resolveReceivedChannels(ctx, msg, source)
 		if err != nil {
@@ -66,7 +60,7 @@ func (a mediaUnderstanding) readChannelsVideo(ctx context.Context, source linuxn
 		if e != nil {
 			return nil, sample, errors.New("channels_decode_key_invalid")
 		}
-		channels.DecodePrefix(data, key)
+		mediadecode.DecodeChannelsPrefix(data, key)
 	}
 	sample, err = sampleVideo(ctx, a.manager.dir, data)
 	if err != nil && (sample.Seconds == 0 || ctx.Err() != nil) {

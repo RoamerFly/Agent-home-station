@@ -22,6 +22,9 @@ spec.loader.exec_module(cloud_music)
 local_spec = importlib.util.spec_from_file_location("local_music", Path(__file__).with_name("local_music.py"))
 local_music = importlib.util.module_from_spec(local_spec)
 local_spec.loader.exec_module(local_music)
+prepare_spec = importlib.util.spec_from_file_location("music_preparation", Path(__file__).with_name("preparation.py"))
+preparation = importlib.util.module_from_spec(prepare_spec)
+prepare_spec.loader.exec_module(preparation)
 
 
 def _duplicate_pairs(pairs):
@@ -120,7 +123,7 @@ class Wire:
                     if not isinstance(configuration, dict):
                         raise ValueError("invalid_configuration")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "music", "version": "0.4.0"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "music", "version": "0.5.0"}}
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/list" and initialized:
@@ -130,7 +133,9 @@ class Wire:
                     context = params.get("_meta", {}).get("wechat/context", {}) if isinstance(params, dict) else {}
                     if not all(isinstance(context.get(k), str) and context[k] for k in ("account", "thread", "requester", "purpose", "request_key")):
                         raise ValueError("host_context_required")
-                    if params.get("name") == "music.bridge_request":
+                    if params.get("name") == "music.prepare":
+                        result = preparation.prepare(params.get("arguments"))
+                    elif params.get("name") == "music.bridge_request":
                         result = local_music.bridge_request(params.get('arguments'), lambda value: self.local_request(context, value))
                     elif params.get("name") == "music.service_control":
                         arguments = params.get("arguments")

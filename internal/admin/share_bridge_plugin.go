@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"time"
 
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/sharespec"
 )
 
 // configuredChannelsBridge reads only the installed share-reader
@@ -33,7 +33,7 @@ func (p *receivedSharePolicy) configuredChannelsBridge(ctx context.Context) (str
 	if json.Unmarshal(raw, &configured) != nil || configured == "" {
 		return "", false, errors.New("share_bridge_configuration_invalid")
 	}
-	base, err := channels.ObjectBridgeURL(configured)
+	base, err := sharespec.ObjectBridgeURL(configured)
 	if err != nil {
 		return "", false, errors.New("share_bridge_configuration_invalid")
 	}
@@ -130,7 +130,7 @@ func (p *receivedSharePolicy) channelsBridge(ctx context.Context, j pluginhost.J
 	if err != nil || len(body) > 2<<20 {
 		return nil, errors.New("share_bridge_response_invalid")
 	}
-	video, err := channels.ParseObjectBridgeResponse(body, in.ObjectID)
+	video, err := sharespec.ParseObjectBridgeResponse(body, in.ObjectID)
 	if err != nil {
 		return nil, errors.New("share_bridge_response_invalid")
 	}

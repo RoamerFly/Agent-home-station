@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediadecode"
 )
 
 func TestLiveChannelsActualObservationWithoutWechatSend(t *testing.T) {
@@ -59,7 +59,10 @@ func TestLiveChannelsActualObservationWithoutWechatSend(t *testing.T) {
 	f.manager.config = c
 	f.manager.config.Behavior.ReadVideos = true
 	f.manager.native = sender
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if err != nil {
 		t.Fatal("speech config unavailable")
 	}
@@ -76,7 +79,7 @@ func TestLiveChannelsActualObservationWithoutWechatSend(t *testing.T) {
 				os.MkdirAll(dir, 0700)
 				os.WriteFile(filepath.Join(dir, "channels-transfer-original.bin"), data, 0600)
 				if key, e := strconv.ParseUint(source.DecodeKey, 10, 64); e == nil {
-					channels.DecodePrefix(data, key)
+					mediadecode.DecodeChannelsPrefix(data, key)
 				}
 				diagnostic["decoded_prefix"] = hex.EncodeToString(data[:min(16, len(data))])
 				os.WriteFile(filepath.Join(dir, "channels-transfer-decoded.bin"), data, 0600)

@@ -500,7 +500,11 @@ func TestSongAudioReviewYuePreservesUpstreamOutputAuthority(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": origin.task.MusicJob, "state": "completed"})
 	}))
 	defer server.Close()
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, server.URL, "synthetic-local-only"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, server.URL, "synthetic-local-only"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	blocked := errors.New("synthetic upstream output authority revoked")
 	ctx := withOutputAuthority(t.Context(), func(context.Context) error { return blocked })

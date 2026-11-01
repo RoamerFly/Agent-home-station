@@ -69,6 +69,38 @@ func (p *permittedTools) inspectionThreadAllowed(thread string) bool {
 	return p.conversationReadAllowed(thread)
 }
 
+// inspectionPublicURLPolicy binds an explicit URL to the actual incoming
+// message that triggered this Agent turn. The URL is a purpose parameter, not
+// a claim that the message itself was a native share card.
+func (p *permittedTools) inspectionPublicURLPolicy(ctx context.Context, rawURL string) (*publicSharePolicy, error) {
+	if !p.servicePluginsAllowed() || p.trace.Account != p.manager.native.Account() || !p.inspectionThreadAllowed(p.trace.Thread) {
+		return nil, toolInputError("video_source_authorization_revoked")
+	}
+	messageID := p.trace.TraceID
+	if p.trace.Source != nil && p.trace.Source.MessageID != "" {
+		messageID = p.trace.Source.MessageID
+	}
+	if messageID == "" {
+		return nil, toolInputError("video_public_url_source_required")
+	}
+	message, err := p.manager.native.Message(ctx, messageID)
+	if err != nil {
+		return nil, toolInputError("share_native_source_unavailable")
+	}
+	if message.AccountID == "" {
+		message.AccountID = p.manager.native.Account()
+	}
+	if message.ID != messageID || message.AccountID != p.trace.Account || message.ThreadID != p.trace.Thread || message.Direction != "incoming" {
+		return nil, toolInputError("video_public_url_source_required")
+	}
+	actorCtx := withSourceActor(ctx, p, agentID("video-inspect-public-url", p.trace.TaskID, p.trace.TraceID, message.ID, sharePublicURL(rawURL)), message.ThreadID)
+	policy, err := p.manager.newExplicitPublicSharePolicy(actorCtx, message, rawURL, true)
+	if err != nil {
+		return nil, err
+	}
+	return policy, nil
+}
+
 func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspectionInput) ([]byte, string, error) {
 	count := 0
 	for _, s := range []string{in.Asset, in.Message, in.URL} {
@@ -180,15 +212,25 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 	if !p.settings.Enabled || !p.settings.WebFetchEnabled {
 		return nil, "", toolInputError("当前联网读取权限已关闭")
 	}
-	if mcptools.IsPublicVideoPage(in.URL) {
-		v, e := mcptools.DownloadPublicVideoObservation(ctx, in.URL, 64<<20)
-		return v.Data, in.URL, e
+	installed, stateErr := m.installedShareState(ctx)
+	if stateErr != nil {
+		return nil, "", stateErr
 	}
-	v, e := mcptools.ReadPublicShare(ctx, in.URL, 64<<20, true)
-	if e == nil && v.Kind != "video" {
-		e = toolInputError("分享链接没有返回实际视频")
+	if !installed {
+		return nil, "", toolInputError("share_plugin_migration_required")
 	}
-	return v.Data, in.URL, e
+	policy, err := p.inspectionPublicURLPolicy(ctx, in.URL)
+	if err != nil {
+		return nil, "", err
+	}
+	v, err := policy.readShare(ctx, 64<<20)
+	if err != nil {
+		return nil, "", err
+	}
+	if v.Kind != "video" {
+		return nil, "", toolInputError("分享链接没有返回实际视频")
+	}
+	return v.Data, policy.requestedURL, nil
 }
 
 func extractInspectionFrames(ctx context.Context, path, dir string, start, count, step int) ([]deepseek.Image, []float64, error) {

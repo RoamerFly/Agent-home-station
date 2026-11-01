@@ -3,8 +3,8 @@ package admin
 import (
 	"errors"
 
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/sharespec"
 )
 
 // legacyShareBindingURL reads a pre-plugin, administrator-created share URL
@@ -44,7 +44,7 @@ func legacyShareBindingURL(dir string, source linuxnative.ChannelsSource) (strin
 		if binding.Account != source.AccountID || binding.Thread != source.ThreadID || !identityMatches {
 			return "", false, errors.New("share_legacy_binding_scope_mismatch")
 		}
-		url, err := channels.ShareURL(binding.URL)
+		url, err := sharespec.ShareURL(binding.URL)
 		if err != nil {
 			return "", false, errors.New("share_legacy_binding_invalid")
 		}

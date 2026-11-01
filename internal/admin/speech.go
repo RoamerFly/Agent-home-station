@@ -20,23 +20,25 @@ import (
 	"wechat-bot/internal/mcptools"
 )
 
+// loadSpeech is retained for explicit migration and opt-in compatibility tests.
+// Runtime readiness and startup must use installed plugin configuration instead.
 func loadSpeech(dir string) (mediaspec.Config, error) {
+	c, _, err := loadSpeechMigrationSource(dir)
+	return c, err
+}
+
+// Return the digest of the same bytes that were parsed, so a migration proposal
+// cannot bind a newly changed file to an old in-memory configuration.
+func loadSpeechMigrationSource(dir string) (mediaspec.Config, string, error) {
 	c := mediaspec.Defaults()
 	b, e := os.ReadFile(filepath.Join(dir, "speech-config.json"))
 	if errors.Is(e, os.ErrNotExist) {
-		return c, nil
+		return c, migrationBytesHash([]byte("missing")), nil
 	}
 	if e != nil || len(b) > 16000 || json.Unmarshal(b, &c) != nil {
-		return c, errors.New("语音配置不可读")
+		return c, "", errors.New("语音配置不可读")
 	}
-	return c, c.Validate()
-}
-func (m *Manager) speechConfig() mediaspec.Config { m.mu.Lock(); defer m.mu.Unlock(); return m.speech }
-func speechView(c mediaspec.Config) map[string]any {
-	configured := c.Key != ""
-	c.Key = ""
-	c.YuEToken = ""
-	return map[string]any{"settings": c, "key_configured": configured}
+	return c, migrationBytesHash(b), c.Validate()
 }
 func (s *Server) speechRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/speech/music-service", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -83,40 +85,14 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/speech/yue-health", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, (&permittedTools{manager: s.manager}).probeYuE(s.speechPluginTestContext(r)))
 	}))
-	mux.HandleFunc("GET /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, speechView(s.manager.speechConfig())) }))
+	// The former speech-config.json is retained solely for the explicit plugin
+	// migration. Runtime configuration belongs to the installed capability
+	// packages; this compatibility endpoint must not become a second writer.
+	mux.HandleFunc("GET /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		respond(w, 200, map[string]any{"migration_required": true})
+	}))
 	mux.HandleFunc("POST /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		var c mediaspec.Config
-		if !decode(w, r, &c) {
-			return
-		}
-		m := s.manager
-		m.op.Lock()
-		defer m.op.Unlock()
-		old := m.speechConfig()
-		if c.Key == "" {
-			if c.Endpoint != old.Endpoint && old.Key != "" {
-				fail(w, 400, "变更地域时请重新填写该地域密钥")
-				return
-			}
-			c.Key = old.Key
-		}
-		if c.YuEToken == "" && c.YuEEndpoint == old.YuEEndpoint {
-			c.YuEToken = old.YuEToken
-		}
-		if e := c.Validate(); e != nil {
-			fail(w, 400, e.Error())
-			return
-		}
-		b, _ := json.Marshal(c)
-		if e := writePrivate(filepath.Join(m.dir, "speech-config.json"), b); e != nil {
-			fail(w, 500, e.Error())
-			return
-		}
-		m.mu.Lock()
-		m.speech = c
-		m.mu.Unlock()
-		m.log("speech_configuration_saved")
-		respond(w, 200, speechView(c))
+		fail(w, http.StatusConflict, "speech_legacy_configuration_migration_required")
 	}))
 	mux.HandleFunc("POST /api/speech/test", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		if s.manager.draining() {

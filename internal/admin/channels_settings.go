@@ -11,9 +11,9 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/sharespec"
 )
 
 type channelsSettings struct {
@@ -57,7 +57,7 @@ func channelTitle(s string) string {
 		return -1
 	}, s)
 }
-func matchChannelsVideo(source linuxnative.ChannelsSource, msg linuxnative.Message, video channels.ResolvedVideo) bool {
+func matchChannelsVideo(source linuxnative.ChannelsSource, msg linuxnative.Message, video sharespec.ResolvedVideo) bool {
 	if source.ObjectID != "" && video.ObjectID != "" {
 		return source.ObjectID == video.ObjectID
 	}
@@ -74,7 +74,7 @@ func matchChannelsVideo(source linuxnative.ChannelsSource, msg linuxnative.Messa
 	return utf8.RuneCountInString(title) >= 8 && title == channelTitle(video.Title) && author != "" && channelTitle(author) == channelTitle(video.Author)
 }
 
-func matchNativeChannelsVideo(source linuxnative.ChannelsSource, video channels.ResolvedVideo, nativeBound bool) bool {
+func matchNativeChannelsVideo(source linuxnative.ChannelsSource, video sharespec.ResolvedVideo, nativeBound bool) bool {
 	// The native RPC verifies the exact numeric ID before returning its short URL.
 	// Preview responses may omit the ID, or carry updated/empty title metadata.
 	// That must not discard a known identity; an explicit conflicting ID still fails.
@@ -97,8 +97,11 @@ func (m *Manager) resolveReceivedChannels(ctx context.Context, msg linuxnative.M
 	// installed package may turn them into a resolved media locator.
 	return source, errors.New("share_plugin_migration_required")
 }
-func channelsSettingsView(c channelsSettings) map[string]any {
-	return map[string]any{"enabled": c.Enabled, "cookie_configured": c.Cookie != "", "assistant_cookie_configured": c.AssistantCookie != "", "object_bridge_url": c.ObjectBridge}
+func channelsSettingsMigrationView(c channelsSettings) map[string]any {
+	return map[string]any{
+		"migration_required":           true,
+		"legacy_configuration_present": c.Enabled || c.Cookie != "" || c.ObjectBridge != "" || c.AssistantCookie != "",
+	}
 }
 func (s *Server) channelsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/channels/settings", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -107,63 +110,10 @@ func (s *Server) channelsRoutes(mux *http.ServeMux) {
 			fail(w, 500, "视频号授权配置不可读")
 			return
 		}
-		respond(w, 200, channelsSettingsView(c))
+		respond(w, 200, channelsSettingsMigrationView(c))
 	}))
 	mux.HandleFunc("POST /api/channels/settings", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		var in struct {
-			channelsSettings
-			Clear          bool `json:"clear_cookie"`
-			ClearAssistant bool `json:"clear_assistant_cookie"`
-		}
-		if !decode(w, r, &in) {
-			return
-		}
-		m := s.manager
-		m.op.Lock()
-		defer m.op.Unlock()
-		old, e := loadChannelsSettings(m.dir)
-		if e != nil {
-			fail(w, 500, "视频号授权配置不可读")
-			return
-		}
-		in.Cookie = strings.TrimSpace(in.Cookie)
-		if in.Cookie == "" && !in.Clear {
-			in.Cookie = old.Cookie
-		}
-		in.AssistantCookie = strings.TrimSpace(in.AssistantCookie)
-		if in.AssistantCookie == "" && !in.ClearAssistant {
-			in.AssistantCookie = old.AssistantCookie
-		}
-		if in.ClearAssistant {
-			in.AssistantCookie = ""
-		}
-		if in.AssistantCookie != "" && !channels.ValidCookie(in.AssistantCookie) {
-			fail(w, 400, "视频号助手 Cookie 需要为完整单行请求头值")
-			return
-		}
-		if in.Clear {
-			in.Cookie = ""
-			in.AssistantCookie = ""
-			in.Enabled = false
-		}
-		if in.ObjectBridge != "" {
-			normalized, e := channels.ObjectBridgeURL(in.ObjectBridge)
-			if e != nil {
-				fail(w, 400, "作品ID桥接地址须为本机 http://127.0.0.1:端口")
-				return
-			}
-			in.ObjectBridge = normalized
-		}
-		if in.Cookie != "" && !channels.ValidCookie(in.Cookie) || in.Enabled && in.Cookie == "" && in.ObjectBridge == "" {
-			fail(w, 400, "请填写完整的元宝 Cookie 请求头值（单行），不要填写 API Key")
-			return
-		}
-		b, _ := json.Marshal(in.channelsSettings)
-		if writePrivate(filepath.Join(m.dir, "channels-config.json"), b) != nil {
-			fail(w, 500, "保存失败")
-			return
-		}
-		respond(w, 200, channelsSettingsView(in.channelsSettings))
+		fail(w, http.StatusConflict, "channels_legacy_configuration_migration_required")
 	}))
 	mux.HandleFunc("GET /api/channels/cards", s.protected(s.channelsCards))
 	mux.HandleFunc("POST /api/channels/bind", s.protected(s.bindChannelsCard))
@@ -265,7 +215,7 @@ func (s *Server) bindChannelsCard(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	link, e := channels.ShareURL(in.URL)
+	link, e := sharespec.ShareURL(in.URL)
 	if e != nil {
 		fail(w, 400, "请填写这条视频的 https://weixin.qq.com/sph/ 分享链接")
 		return

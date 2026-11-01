@@ -43,6 +43,67 @@ func trustedAgent(t *testing.T) (*webFixture, *permittedTools) {
 	}
 	return f, p
 }
+
+func TestMusicContinuationWithoutInstalledPluginNeedsReview(t *testing.T) {
+	f, p := trustedAgent(t)
+	f.manager.mu.Lock()
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.Permissions.SendFile = true
+	f.manager.mu.Unlock()
+	settings := f.manager.agent.config()
+	settings.Enabled, settings.TasksEnabled = true, true
+	if err := f.manager.agent.save(settings); err != nil {
+		t.Fatal(err)
+	}
+	// A populated retired setting must not revive the legacy transport.
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = "http://127.0.0.1:9000"
+		legacySpeechFixture.YuEToken = "synthetic-retired-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
+	task := agentTask{ID: "legacy-music-continuation", Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, State: "waiting", Next: time.Now().Add(-time.Second), MusicJob: "original-music-job"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	in, err := f.manager.claimAgentTask(time.Now(), func(string) bool { return false })
+	if err != nil || in != nil {
+		t.Fatal("uninstalled music plugin resumed legacy job", in, err)
+	}
+	stored := f.manager.agent.list(task.Account, task.Thread)
+	if len(stored) != 1 || stored[0].State != "needs_review" || stored[0].MusicJob != task.MusicJob || stored[0].LastResult != "music_local_plugin_migration_required" {
+		t.Fatal("legacy continuation was not retained for review", stored)
+	}
+}
+
+func TestMusicContinuationWithUnreadyPluginNeedsReviewWithoutResubmission(t *testing.T) {
+	f, p := trustedAgent(t)
+	f.manager.mu.Lock()
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.Permissions.SendFile = true
+	f.manager.mu.Unlock()
+	settings := f.manager.agent.config()
+	settings.Enabled, settings.TasksEnabled = true, true
+	if err := f.manager.agent.save(settings); err != nil {
+		t.Fatal(err)
+	}
+	// This official package is enabled for cloud generation but deliberately
+	// lacks the local bridge connection needed to continue this existing job.
+	installMusicPluginFixture(t, f, []string{"model.invoke"}, true)
+	task := agentTask{ID: "unready-music-continuation", Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, State: "waiting", Next: time.Now().Add(-time.Second), MusicJob: "original-music-job"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	in, err := f.manager.claimAgentTask(time.Now(), func(string) bool { return false })
+	if err != nil || in != nil {
+		t.Fatal("unready music plugin submitted or resumed legacy job", in, err)
+	}
+	stored := f.manager.agent.list(task.Account, task.Thread)
+	if len(stored) != 1 || stored[0].State != "needs_review" || stored[0].MusicJob != task.MusicJob || stored[0].LastResult != "music_local_plugin_configuration_required" {
+		t.Fatal("unready continuation was not retained for review", stored)
+	}
+}
 func TestAgentPrivilegeChecksAtDiscoveryAndExecution(t *testing.T) {
 	_, p := trustedAgent(t)
 	installProjectPluginTestRuntime(t, p)

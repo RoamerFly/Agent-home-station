@@ -27,8 +27,11 @@ func TestLiveVideoObservationWithSelectedCharacterSpeech(t *testing.T) {
 	f := setup(t)
 	f.manager.config = c
 	f.manager.config.Behavior.ReadVideos = true
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
-	if err != nil || !f.manager.speech.ASREnabled {
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
+	if err != nil || !readLegacySpeechTestConfig(t, f.manager).ASREnabled {
 		t.Fatal("configured ASR unavailable")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

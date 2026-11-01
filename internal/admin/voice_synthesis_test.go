@@ -15,8 +15,12 @@ import (
 
 func TestNamedVoiceIsDiscoverableWithoutBailianKeyAndNeverFallsBack(t *testing.T) {
 	f, p, _, _, _ := namedSpeechContractFixture(t)
-	f.manager.speech.Key = ""
-	f.manager.speech.TTSEnabled = false
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.Key = ""
+		legacySpeechFixture.TTSEnabled = false
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	tools := p.speechTools()
 	if len(tools) != 1 || tools[0].Name != "speech_synthesize" || !strings.Contains(string(tools[0].InputSchema), "voice_id") {
 		t.Fatal("configured named TTS hidden by unrelated cloud key", tools)

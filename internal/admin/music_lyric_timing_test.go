@@ -10,9 +10,13 @@ import (
 
 func TestLyricTimingCanBeDiscoveredBeforeGeneration(t *testing.T) {
 	f := setup(t)
-	f.manager.speech.YuEEnabled = true
-	f.manager.speech.YuEEndpoint = "http://127.0.0.1:1"
-	f.manager.speech.YuEToken = "synthetic"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = "http://127.0.0.1:1"
+		legacySpeechFixture.YuEToken = "synthetic"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	f.manager.config.Companion.Permissions.SendVoice = true
 	p, _, _ := f.manager.toolAccess()

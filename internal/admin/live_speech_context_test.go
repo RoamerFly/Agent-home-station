@@ -44,7 +44,10 @@ func TestLiveCompletedYuESongStagesOriginalFile(t *testing.T) {
 	job := evidence.Job
 	f := setup(t)
 	f.manager.config.Companion.Permissions.Remember = true
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +186,7 @@ func TestLiveModelSynthesizesAndPreparesWechatVoice(t *testing.T) {
 		t.Fatal(e)
 	}
 	f := setup(t)
-	f.manager.speech = speech
+	writeLegacySpeechMigrationFixture(t, f.manager, speech)
 	f.manager.native = &fakeTools{fakeNative: f.native}
 	f.manager.mu.Lock()
 	f.manager.mcp.Enabled = false

@@ -63,7 +63,10 @@ func TestLiveReportedSongFailureWithoutExternalActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := setup(t)
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -368,7 +368,11 @@ func TestMusicPluginDiscoveryIgnoresLegacyAndRequiresGrant(t *testing.T) {
 	f := setup(t)
 	f.manager.config.Enabled = true
 	f.manager.config.Companion.Permissions.SendVoice = true
-	f.manager.speech.MusicEnabled, f.manager.speech.Key = true, "synthetic-legacy-key"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.MusicEnabled, legacySpeechFixture.Key = true, "synthetic-legacy-key"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	p := &permittedTools{manager: f.manager, trace: companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "synthetic-user", TraceID: "migration", Text: "原创歌曲"}}
 	for _, tool := range p.speechTools() {
 		if tool.Name == "music_generate" {

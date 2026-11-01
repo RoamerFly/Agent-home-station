@@ -17,7 +17,7 @@ import (
 
 func writeMusicMigrationLegacy(t *testing.T, f *webFixture, endpoint, key string) {
 	t.Helper()
-	legacy := f.manager.speechConfig()
+	legacy := readLegacySpeechTestConfig(t, f.manager)
 	legacy.MusicEnabled, legacy.Endpoint, legacy.Key, legacy.MusicModel = true, endpoint, key, "synthetic-music-migration"
 	data, err := json.Marshal(legacy)
 	if err != nil {
@@ -26,9 +26,7 @@ func writeMusicMigrationLegacy(t *testing.T, f *webFixture, endpoint, key string
 	if err = writePrivate(filepath.Join(f.dir, "speech-config.json"), data); err != nil {
 		t.Fatal(err)
 	}
-	f.manager.mu.Lock()
-	f.manager.speech = legacy
-	f.manager.mu.Unlock()
+	writeLegacySpeechMigrationFixture(t, f.manager, legacy)
 }
 
 func TestMusicPluginMigrationPreviewApplyPrivateConfigurationAndEnable(t *testing.T) {
@@ -149,7 +147,7 @@ func TestMusicPluginMigrationRejectsChangedLegacySource(t *testing.T) {
 				t.Fatal(err)
 			}
 			step := previewStep(t, preview, "music")
-			legacy := f.manager.speechConfig()
+			legacy := readLegacySpeechTestConfig(t, f.manager)
 			switch change {
 			case "endpoint":
 				legacy.Endpoint = "https://dashscope-intl.aliyuncs.com"
@@ -163,9 +161,7 @@ func TestMusicPluginMigrationRejectsChangedLegacySource(t *testing.T) {
 				}
 			}
 			if change != "file_only" {
-				f.manager.mu.Lock()
-				f.manager.speech = legacy
-				f.manager.mu.Unlock()
+				writeLegacySpeechMigrationFixture(t, f.manager, legacy)
 			}
 			if _, _, _, err = f.manager.applyPluginMigration(t.Context(), "test", "music", step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions); err == nil {
 				t.Fatal("changed legacy music source accepted an old approval", change)

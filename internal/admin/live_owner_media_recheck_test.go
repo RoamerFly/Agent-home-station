@@ -56,7 +56,10 @@ func TestLiveOwnerMediaRecheckNoWechatSend(t *testing.T) {
 	if err = f.manager.agent.save(settings); err != nil {
 		t.Fatalf("test configuration could not be saved: %v", err)
 	}
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if err != nil {
 		t.Fatal("speech unavailable")
 	}

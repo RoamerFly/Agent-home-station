@@ -12,10 +12,14 @@ import (
 func writeLocalASRMigrationSource(t *testing.T, f *webFixture, profile, backend string, enabled bool) []byte {
 	t.Helper()
 	f.manager.mu.Lock()
-	f.manager.speech.ASREnabled, f.manager.speech.ASRBackend, f.manager.speech.ASRLocalModel = enabled, backend, profile
-	f.manager.speech.Key = "synthetic-legacy-asr-key"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.ASREnabled, legacySpeechFixture.ASRBackend, legacySpeechFixture.ASRLocalModel = enabled, backend, profile
+		legacySpeechFixture.Key = "synthetic-legacy-asr-key"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	f.manager.config.APIKey = "synthetic-legacy-vision-key"
-	speech := f.manager.speech
+	speech := readLegacySpeechTestConfig(t, f.manager)
 	f.manager.mu.Unlock()
 	raw, err := json.Marshal(speech)
 	if err != nil {
@@ -86,7 +90,7 @@ func TestPluginMigrationLocalASRProfileMapsIntoRealConfigurationButUnverifiedApp
 				}
 			}
 			after, err := os.ReadFile(filepath.Join(f.dir, "speech-config.json"))
-			if err != nil || string(after) != string(original) || f.manager.speechConfig().ASRLocalModel != test.legacy {
+			if err != nil || string(after) != string(original) || readLegacySpeechTestConfig(t, f.manager).ASRLocalModel != test.legacy {
 				t.Fatal("profile selection wrote defaults back into legacy settings", err)
 			}
 		})
@@ -147,20 +151,6 @@ func TestPluginMigrationLocalASRProfileSourceChangeInvalidatesPlan(t *testing.T)
 	}
 	if _, _, _, err := f.manager.applyPluginMigration(t.Context(), "test", after.Plugin, before.ApplySourceHash, before.Package.ExpectedDigest, before.Permissions); err == nil {
 		t.Fatal("old profile plan was applied after source changed")
-	}
-	// The live settings snapshot is also part of the reviewed proposal. Even
-	// before its source JSON is replaced, a different selected profile must
-	// produce a different confirmation token rather than reuse the old plan.
-	f.manager.mu.Lock()
-	f.manager.speech.ASRLocalModel = "sensevoice-memory-selection"
-	f.manager.mu.Unlock()
-	third, err := f.manager.pluginMigrationPreview(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	changed := previewStep(t, third, "media-understanding")
-	if third.Accounts[0].SourceHashes["speech_config_json"] != second.Accounts[0].SourceHashes["speech_config_json"] || changed.ApplySourceHash == after.ApplySourceHash || changed.ProfileID != "sensevoice-memory-selection" {
-		t.Fatal("profile values were not bound to the reviewed plan", after, changed)
 	}
 	actualSource, err := os.ReadFile(filepath.Join(f.dir, "speech-config.json"))
 	if err != nil || string(actualSource) != string(latestSource) {

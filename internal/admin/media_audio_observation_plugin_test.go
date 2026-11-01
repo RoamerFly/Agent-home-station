@@ -47,7 +47,11 @@ func audioObservationFixture(t *testing.T) (*webFixture, *mediaAudioObservationP
 	// not impose conversation-send permissions, ASR or a visual model on it.
 	f.manager.config.Enabled = false
 	f.manager.config.Companion.Permissions.SendVoice = false
-	f.manager.speech.ASREnabled = false
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.ASREnabled = false
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	valid := true
 	p, err := f.manager.newBoundMediaAudioObservationPolicy(t.Context(), syntheticWAV(), audioObservationInvocation(), 7, func(ctx context.Context) error {
 		if !valid {

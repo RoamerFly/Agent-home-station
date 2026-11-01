@@ -52,13 +52,15 @@ type publicShareRead func(context.Context, string, int64, time.Duration) ([]byte
 
 type publicSharePolicy struct {
 	*receivedSharePolicy
-	mu       sync.Mutex
-	read     publicShareRead
-	media    func(context.Context, string, string, int64) ([]byte, string, error)
-	reads    int
-	bytes    int64
-	pages    map[string]string
-	locators map[string]bool
+	requestedURL  string
+	videoRequired bool
+	mu            sync.Mutex
+	read          publicShareRead
+	media         func(context.Context, string, string, int64) ([]byte, string, error)
+	reads         int
+	bytes         int64
+	pages         map[string]string
+	locators      map[string]bool
 }
 
 func (m *Manager) newPublicSharePolicy(ctx context.Context, message linuxnative.Message) (*publicSharePolicy, error) {
@@ -66,7 +68,23 @@ func (m *Manager) newPublicSharePolicy(ctx context.Context, message linuxnative.
 	if err != nil {
 		return nil, err
 	}
-	return &publicSharePolicy{receivedSharePolicy: base, read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}}, nil
+	return &publicSharePolicy{receivedSharePolicy: base, requestedURL: message.Link.URL, videoRequired: *message.AppMessageType == 4, read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}}, nil
+}
+
+// newExplicitPublicSharePolicy keeps an actual incoming source as evidence,
+// while binding an explicit public URL as the requested purpose. In particular
+// it never turns a text message into a fabricated native share card.
+func (m *Manager) newExplicitPublicSharePolicy(ctx context.Context, source linuxnative.Message, rawURL string, videoRequired bool) (*publicSharePolicy, error) {
+	requestedURL := sharePublicURL(rawURL)
+	if requestedURL == "" {
+		return nil, errors.New("share_public_url_invalid")
+	}
+	base, err := m.newExplicitPublicURLSourcePolicy(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	base.requestSuffix = agentID("explicit-public-url", requestedURL, strconv.FormatBool(videoRequired))
+	return &publicSharePolicy{receivedSharePolicy: base, requestedURL: requestedURL, videoRequired: videoRequired, read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}}, nil
 }
 
 func (p *publicSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
@@ -177,8 +195,13 @@ func (p *publicSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 	if d.Decode(&in) != nil || in.MaxBytes <= 0 || in.MaxBytes > 4<<20 || in.Timeout <= 0 || in.Timeout > int64((1<<63-1)/time.Second) {
 		return nil, errors.New("share_invalid_public_read")
 	}
-	if p.reads == 0 && in.URL != originalPublicShareURL(p.message.Link.URL) {
+	requested := originalPublicShareURL(in.URL)
+	if p.reads == 0 && requested != originalPublicShareURL(p.requestedURL) {
 		return nil, errors.New("share_initial_source_mismatch")
+	}
+	_, knownPage := p.pages[sharePublicURL(requested)]
+	if p.reads > 0 && !p.locators[requested] && !knownPage {
+		return nil, errors.New("share_followup_source_unverified")
 	}
 	// This bounds host-side proof accumulation, not video length/download size.
 	if p.bytes+in.MaxBytes > 32<<20 {
@@ -258,11 +281,11 @@ func (p *publicSharePolicy) Validate(ctx context.Context, j pluginhost.Job, cap 
 		CandidateOffset int    `json:"candidate_offset"`
 		CandidateLimit  int    `json:"candidate_limit"`
 	}{Limit: 14000, CandidateLimit: 20}
-	if json.Unmarshal(j.Arguments, &args) != nil || args.URL != p.message.Link.URL || args.VideoRequired != (*p.message.AppMessageType == 4) || result.Offset != args.Offset || result.CandidateOffset != args.CandidateOffset || result.RequestedLimit != args.Limit || result.RequestedCandidateLimit != args.CandidateLimit {
+	if json.Unmarshal(j.Arguments, &args) != nil || args.URL != p.requestedURL || args.VideoRequired != p.videoRequired || result.Offset != args.Offset || result.CandidateOffset != args.CandidateOffset || result.RequestedLimit != args.Limit || result.RequestedCandidateLimit != args.CandidateLimit {
 		return pluginruntime.VerifiedResult{}, errors.New("share_public_arguments_changed")
 	}
 	if result.Coverage == "page_text" {
-		if result.Text == "" || len(result.Locators) != 0 || *p.message.AppMessageType == 4 {
+		if result.Text == "" || len(result.Locators) != 0 || p.videoRequired {
 			return pluginruntime.VerifiedResult{}, errors.New("share_public_video_not_observed")
 		}
 	} else if result.Coverage != "media_locator_only" || result.Text != "" || len(result.Locators) == 0 {
@@ -297,7 +320,7 @@ func (p *publicSharePolicy) resolve(ctx context.Context) (publicShareObservation
 			return result, j, errors.New("share_plugin_start_failed")
 		}
 	}
-	args, _ := json.Marshal(map[string]any{"url": p.message.Link.URL, "video_required": *p.message.AppMessageType == 4})
+	args, _ := json.Marshal(map[string]any{"url": p.requestedURL, "video_required": p.videoRequired})
 	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: args}, p)
 	if err != nil {
 		return result, out.Job, errors.New("share_plugin_resolution_incomplete")
@@ -362,7 +385,7 @@ func (p *publicSharePolicy) handoff(ctx context.Context, result publicShareObser
 			continue
 		}
 		out.Kind = "video"
-		if strings.HasPrefix(strings.ToLower(kind), "image/") && *p.message.AppMessageType != 4 {
+		if strings.HasPrefix(strings.ToLower(kind), "image/") && !p.videoRequired {
 			if !p.manager.Config().Behavior.ReadImages {
 				return mcptools.PublicShare{}, errors.New("media_understanding_disabled")
 			}

@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"wechat-bot/internal/mobile"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/plugins/mobile-control/dev/legacy-sdk"
 )
 
 type orderedMobileShutdown struct {

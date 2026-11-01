@@ -8,35 +8,19 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"wechat-bot/internal/sharespec"
 )
 
-// ResolvedVideo contains private transfer material, never model context/logs.
-type ResolvedVideo struct {
-	URL, DecodeKey, Title, Author, ObjectID string
-}
+// Compatibility aliases retain the legacy package's focused tests while all
+// production callers use sharespec and therefore do not link resolver code.
+type ResolvedVideo = sharespec.ResolvedVideo
 
-var sphPath = regexp.MustCompile(`^/sph/[A-Za-z0-9_-]{6,128}$`)
-
-func ShareURL(raw string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Scheme != "https" || u.Host != "weixin.qq.com" || u.User != nil || !sphPath.MatchString(u.Path) || u.RawPath != "" {
-		return "", errors.New("channels_share_link_invalid")
-	}
-	u.RawQuery, u.Fragment = "", ""
-	return u.String(), nil
-}
-
-func ValidCookie(cookie string) bool {
-	if len(cookie) < 16 || len(cookie) > 16384 || strings.ContainsAny(cookie, "\r\n\x00") {
-		return false
-	}
-	r := &http.Request{Header: http.Header{"Cookie": []string{cookie}}}
-	return len(r.Cookies()) > 0
-}
+func ShareURL(raw string) (string, error) { return sharespec.ShareURL(raw) }
+func ValidCookie(cookie string) bool      { return sharespec.ValidCookie(cookie) }
 
 type Resolver struct{ client *http.Client }
 

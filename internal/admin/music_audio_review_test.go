@@ -30,7 +30,11 @@ func TestSongAudioSamplesUseActualShortRecordingAndRejectNonAudio(t *testing.T) 
 
 func TestSongAudioReviewMissingPluginIgnoresLegacyKeyAndBareJSONCache(t *testing.T) {
 	f, p, audio, spec, origin := songAudioFixture(t, false, false)
-	f.manager.speech.Key = "synthetic-legacy-key"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.Key = "synthetic-legacy-key"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	cache := filepath.Join(f.dir, "music-audio-reviews")
 	if err := os.MkdirAll(cache, 0700); err != nil {
 		t.Fatal(err)
@@ -38,7 +42,7 @@ func TestSongAudioReviewMissingPluginIgnoresLegacyKeyAndBareJSONCache(t *testing
 	legacyHash := sha256.New()
 	legacyHash.Write([]byte("song-listening-v1|female|qwen3.8-omni-flash|"))
 	legacyHash.Write(audio)
-	legacyHash.Write([]byte(f.manager.speech.Endpoint))
+	legacyHash.Write([]byte(readLegacySpeechTestConfig(t, f.manager).Endpoint))
 	path := filepath.Join(cache, hex.EncodeToString(legacyHash.Sum(nil))+".json")
 	raw := []byte(`{"state":"observed","model":"legacy-default","observation":"fabricated old cached review"}`)
 	if err := os.WriteFile(path, raw, 0600); err != nil {

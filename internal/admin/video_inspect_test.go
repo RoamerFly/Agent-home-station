@@ -171,6 +171,17 @@ func TestVideoInspectionFramesRequireInstalledMediaPlugin(t *testing.T) {
 	}
 }
 
+func TestVideoInspectionPublicURLRequiresInstalledSharePlugin(t *testing.T) {
+	f, p := trustedAgent(t)
+	defer p.hub.Close()
+	f.manager.config.Behavior.ReadVideos = true
+	p.settings.Enabled, p.settings.WebFetchEnabled = true, true
+	in := videoInspectionInput{URL: "https://public.example/video"}
+	if _, _, err := p.inspectionSource(t.Context(), &in); err == nil || !strings.Contains(err.Error(), "share_plugin_migration_required") {
+		t.Fatal("public URL used a retired network reader", err)
+	}
+}
+
 func TestInspectionPluginAudioUsesCanonicalReceivedAssetSource(t *testing.T) {
 	f, p, n := forwardFixture(t)
 	f.manager.config.Behavior.ReadVideos = true

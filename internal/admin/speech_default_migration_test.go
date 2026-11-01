@@ -54,13 +54,16 @@ func installDefaultSpeechFixture(t *testing.T, m *Manager, configured, enabled b
 	return i
 }
 
-func setLegacyDefaultSpeechFixture(m *Manager) {
+func setLegacyDefaultSpeechFixture(t *testing.T, m *Manager) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.speech = mediaspec.Defaults()
-	m.speech.TTSEnabled = true
-	m.speech.Key = "synthetic-legacy-key-never-dispatched"
-	m.speech.Voice = "synthetic-legacy-voice-never-dispatched"
+	{
+		legacySpeechFixture := mediaspec.Defaults()
+		legacySpeechFixture.TTSEnabled = true
+		legacySpeechFixture.Key = "synthetic-legacy-key-never-dispatched"
+		legacySpeechFixture.Voice = "synthetic-legacy-voice-never-dispatched"
+		writeLegacySpeechMigrationFixture(t, m, legacySpeechFixture)
+	}
 	m.config.Enabled = true
 	m.config.Companion.Permissions.SendVoice = true
 }
@@ -126,7 +129,7 @@ func TestSpeechDefaultRequiresInstalledAuthorizedConfiguredPlugin(t *testing.T) 
 	for _, mode := range []string{"missing", "disabled", "misconfigured", "unauthorized", "ready"} {
 		t.Run(mode, func(t *testing.T) {
 			f, p := trustedAgent(t)
-			setLegacyDefaultSpeechFixture(f.manager)
+			setLegacyDefaultSpeechFixture(t, f.manager)
 			if mode != "missing" {
 				installDefaultSpeechFixture(t, f.manager, true, mode != "disabled")
 				if mode == "misconfigured" || mode == "unauthorized" {
@@ -145,10 +148,10 @@ func TestSpeechDefaultRequiresInstalledAuthorizedConfiguredPlugin(t *testing.T) 
 			if mode == "missing" && !strings.Contains(err.Error(), "speech_plugin_migration_required") {
 				t.Fatal("missing package did not explain migration", err)
 			}
-			if strings.Contains(err.Error(), "百炼") || strings.Contains(err.Error(), f.manager.speechConfig().Key) {
+			if strings.Contains(err.Error(), "百炼") || strings.Contains(err.Error(), readLegacySpeechTestConfig(t, f.manager).Key) {
 				t.Fatal("default fell through to legacy provider", err)
 			}
-			if f.manager.speechConfig().Key != "synthetic-legacy-key-never-dispatched" {
+			if readLegacySpeechTestConfig(t, f.manager).Key != "synthetic-legacy-key-never-dispatched" {
 				t.Fatal("plugin route changed compatibility profile")
 			}
 		})
@@ -157,10 +160,14 @@ func TestSpeechDefaultRequiresInstalledAuthorizedConfiguredPlugin(t *testing.T) 
 
 func TestSpeechDefaultPluginDoesNotDependOnLegacyTTSFlagOrKey(t *testing.T) {
 	f, p := trustedAgent(t)
-	setLegacyDefaultSpeechFixture(f.manager)
+	setLegacyDefaultSpeechFixture(t, f.manager)
 	installDefaultSpeechFixture(t, f.manager, true, true)
 	f.manager.mu.Lock()
-	f.manager.speech.Key, f.manager.speech.TTSEnabled = "", false
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.Key, legacySpeechFixture.TTSEnabled = "", false
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	f.manager.mu.Unlock()
 	if !hasDefaultSpeechTool(p) {
 		t.Fatal("installed default hidden by legacy TTS switch")
@@ -175,7 +182,7 @@ func TestSpeechDefaultPluginDoesNotDependOnLegacyTTSFlagOrKey(t *testing.T) {
 func TestSpeechDefaultMigrationPreservesNamedLibrarySelection(t *testing.T) {
 	f, p, policy, _, _ := namedSpeechContractFixture(t)
 	voice := policy.resource.Voice
-	setLegacyDefaultSpeechFixture(f.manager)
+	setLegacyDefaultSpeechFixture(t, f.manager)
 	if !hasDefaultSpeechTool(p) {
 		t.Fatal("installed local voice capability incorrectly required default cloud configuration")
 	}
@@ -225,7 +232,7 @@ func (e *defaultSpeechTestExecutor) Call(_ context.Context, inv pluginhost.Invoc
 
 func TestSpeechDefaultAdminTestRequiresAuthCSRFAndNotDraining(t *testing.T) {
 	f := setup(t)
-	setLegacyDefaultSpeechFixture(f.manager)
+	setLegacyDefaultSpeechFixture(t, f.manager)
 	input := map[string]string{"text": "synthetic administrator test"}
 	if code, _, _ := f.request("POST", "/api/speech/test", input, true, false); code != 401 {
 		t.Fatal("unauthenticated speech test", code)
@@ -267,22 +274,22 @@ func TestSpeechDefaultLegacySettingsRemainCompatibilityOnly(t *testing.T) {
 	}
 	legacy := mediaspec.Defaults()
 	legacy.Key, legacy.TTSEnabled, legacy.Voice = "synthetic-legacy-only-new-key", true, "synthetic-legacy-new-voice"
-	if code, body, _ := f.request("POST", "/api/speech", legacy, true, true); code != 200 {
-		t.Fatalf("compatibility settings not retained: %d %s", code, body)
+	if code, body, _ := f.request("POST", "/api/speech", legacy, true, true); code != 409 || !strings.Contains(string(body), "speech_legacy_configuration_migration_required") {
+		t.Fatalf("legacy compatibility writer remained active: %d %s", code, body)
 	}
 	after, err := store.ConfigurationForExecution(t.Context(), "speech")
 	if err != nil || !reflect.DeepEqual(before, after) {
 		t.Fatal("legacy settings silently overwrote installed plugin", err)
 	}
-	if f.manager.speechConfig().Key != legacy.Key {
-		t.Fatal("compatibility settings were not saved")
+	if readLegacySpeechTestConfig(t, f.manager).Key == legacy.Key {
+		t.Fatal("legacy configuration write was accepted")
 	}
 }
 
 func TestSpeechDefaultAdminTestUsesInstalledControllerAndRejectsUnverifiedAudio(t *testing.T) {
 	f := setup(t)
 	f.login()
-	setLegacyDefaultSpeechFixture(f.manager)
+	setLegacyDefaultSpeechFixture(t, f.manager)
 	installDefaultSpeechFixture(t, f.manager, true, true)
 	store, err := f.manager.packageStore()
 	if err != nil {
@@ -299,7 +306,11 @@ func TestSpeechDefaultAdminTestUsesInstalledControllerAndRejectsUnverifiedAudio(
 	f.manager.mu.Lock()
 	f.manager.config.Enabled = false
 	f.manager.config.Companion.Permissions.SendVoice = false
-	f.manager.speech.Key, f.manager.speech.TTSEnabled = "", false
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.Key, legacySpeechFixture.TTSEnabled = "", false
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	f.manager.mu.Unlock()
 	code, body, _ := f.request("POST", "/api/speech/test", map[string]string{"text": "synthetic administrator test"}, true, true)
 	if code != 502 || executor.starts != 1 || executor.calls != 1 {
@@ -325,7 +336,7 @@ func TestSpeechDefaultAdminTestNeverFallsBackFromDisabledOrMisconfiguredPlugin(t
 		t.Run(mode, func(t *testing.T) {
 			f := setup(t)
 			f.login()
-			setLegacyDefaultSpeechFixture(f.manager)
+			setLegacyDefaultSpeechFixture(t, f.manager)
 			installDefaultSpeechFixture(t, f.manager, true, mode != "disabled")
 			if mode != "disabled" {
 				breakDefaultSpeechFixture(t, f.manager, mode)

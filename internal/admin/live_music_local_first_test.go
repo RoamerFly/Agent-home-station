@@ -74,7 +74,11 @@ func TestLiveMusicUsesCachedOriginalBeforeOnlineSearch(t *testing.T) {
 		w.Write([]byte(`{"id":"cached-song-conversion","state":"queued"}`))
 	}))
 	defer upstream.Close()
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, upstream.URL, "synthetic"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, upstream.URL, "synthetic"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	model, err := f.manager.makeModel(live)
 	if err != nil {
 		t.Fatal(err)

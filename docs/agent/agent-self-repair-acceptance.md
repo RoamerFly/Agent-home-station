@@ -17,13 +17,16 @@
 
 ## 可复验入口
 
-在已有主人、任务和服务器执行权限下，管理端提供以下带登录和 CSRF 验证的接口；接口不会自行提升执行权限：
+以下 `repair-tests` 接口属于历史验收记录，已退出生产管理端。专用报价示例、评分器与合成测试保存在 `plugins/project-development/dev/repair-acceptance`，开发者通过该目录的 `run_contract.py --test` 或 `--vet` 在临时测试 overlay 中复验；应用没有启用它们的配置开关，不会加载这些开发文件。现有项目、任务与验收记录继续保留。
+
+历史接口及用途：
 
 - `POST /api/agent/repair-tests`：创建隔离测试项目并交给生产 Agent。
 - `POST /api/agent/repair-tests/{id}/followup`：第一轮验证通过后提交第二个故障。
 - `POST /api/agent/repair-tests/{id}/lifecycle`：提供已授权目录中的程序和说明路径，安排实际文件与进程验收。
 - `GET /api/agent/repair-tests/{id}`：读取测试哈希、独立验证、笔记保存和任务状态。
-- `POST /api/agent/recover-private-message`：按真实消息 ID 补办旧前缀规则跳过的私聊。
+
+核心仍保留 `POST /api/agent/recover-private-message`，按真实消息 ID 补办旧前缀规则跳过的私聊；它与开发验收场景无关，继续要求登录、CSRF 与原消息授权。
 
 本机诊断程序仅监听 `127.0.0.1`，不接触账号、模型或微信数据。常规回归可运行 `python -m unittest discover -s scripts -p test_agent_probe_service.py`，它使用独立子进程验证启动、健康检查、关闭口令和实际退出。
 

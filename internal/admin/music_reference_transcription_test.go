@@ -380,7 +380,11 @@ func TestReferenceInspectDisabledPluginNeverFallsBackToLegacyASR(t *testing.T) {
 	if _, err := policy.store.SetEnabled(t.Context(), "media-understanding", installed.Revision, false); err != nil {
 		t.Fatal(err)
 	}
-	f.manager.speech.ASREnabled, f.manager.speech.ASRBackend, f.manager.speech.Endpoint, f.manager.speech.Key = true, "bailian", "https://legacy.invalid", "synthetic-legacy-key"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.ASREnabled, legacySpeechFixture.ASRBackend, legacySpeechFixture.Endpoint, legacySpeechFixture.Key = true, "bailian", "https://legacy.invalid", "synthetic-legacy-key"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	raw, _ := json.Marshal(map[string]any{"asset_id": asset.ID, "transcribe": true, "seconds": 1})
 	result, err := access.inspectMusicReference(t.Context(), raw)
 	if err == nil || result != "" || !strings.Contains(err.Error(), "media_transcription_plugin_required_or_unconfigured") {

@@ -225,11 +225,11 @@ func TestMusicServiceHealthIsReadOnlyAndNeverSubmitsGeneration(t *testing.T) {
 	}))
 	defer backend.Close()
 	f := setup(t)
-	c := f.manager.speech
+	c := readLegacySpeechTestConfig(t, f.manager)
 	c.YuEEnabled = true
 	c.YuEEndpoint = backend.URL
 	c.YuEToken = "synthetic-token"
-	f.manager.speech = c
+	writeLegacySpeechMigrationFixture(t, f.manager, c)
 	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, err := f.manager.toolAccess()
 	if err != nil {

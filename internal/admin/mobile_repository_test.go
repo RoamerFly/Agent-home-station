@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"wechat-bot/internal/mobile"
 	"wechat-bot/internal/pluginhost"
+	"wechat-bot/plugins/mobile-control/dev/legacy-sdk"
 )
 
 func mobileRepositoryFixture(t *testing.T) (*pluginhost.Store, string, string) {

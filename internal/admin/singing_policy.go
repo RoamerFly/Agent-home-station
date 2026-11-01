@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"wechat-bot/internal/agentrun"
@@ -23,13 +25,10 @@ func (p *permittedTools) singingRequestText() string {
 	return strings.Join(append([]string{text}, p.songFollowups...), "\n")
 }
 
-var vocalGenderTag = regexp.MustCompile(`(?i)\b(?:fe)?male\s+(?:vocals?|singer|voice)\b|男声|女声`)
 var maleSingingRequest = regexp.MustCompile(`(?i)(?:用|以|要|换成|改成|改用|采用|选择|希望|想听).{0,3}男声|男声(?:唱|演唱|来唱)|男生唱|男性演唱|^\s*男声\s*$|\bmale\s+(?:vocals?|singer|voice)\b`)
 var compositionRequest = regexp.MustCompile(`原创|创作|写一首|写首|作词|作曲|\bcompose\b|\boriginal song\b`)
 var quotedSongTitle = regexp.MustCompile(`《[^》]+》|“[^”]+”|"[^"]+"|「[^」]+」|『[^』]+』`)
 var negatedRequest = regexp.MustCompile(`(?:不要|别|不用|不许|不准|禁止|不是|并非|无需|不需要|不).{0,3}$`)
-
-const faithfulCoverStyle = "保持原曲调和原歌词 (preserve original melody and lyrics; follow the reference melody, rhythm and phrasing; no new melody or rewritten lyrics)"
 
 func affirmativeRequest(pattern *regexp.Regexp, text string) bool {
 	for _, match := range pattern.FindAllStringIndex(text, -1) {
@@ -58,18 +57,15 @@ func validateSingingRequest(text, mode, gender, maleQuote string) error {
 	return nil
 }
 
-func singingGenerationStyle(style, gender, mode string) string {
-	if mode == "cover" && !strings.Contains(style, faithfulCoverStyle) {
-		style = strings.TrimSpace(style) + ", " + faithfulCoverStyle
+func (p *permittedTools) prepareSingingStyle(ctx context.Context, style, gender, mode string) (string, error) {
+	var result struct {
+		Style string `json:"style"`
 	}
-	return normalizeSingingStyle(style, gender)
-}
-
-// Gender is a generation condition, not a guarantee about the rendered singer.
-func normalizeSingingStyle(style, gender string) string {
-	style = strings.Trim(vocalGenderTag.ReplaceAllString(style, ""), " ,;，；\n\r\t")
-	if style == "" {
-		return ""
-	}
-	return style + ", " + gender + " vocal"
+	err := p.prepareMusic(ctx, "/health", map[string]any{"action": "style", "style": style, "gender": gender, "mode": mode}, &result, func() error {
+		if len(result.Style) > 4096 || strings.ContainsRune(result.Style, '\x00') {
+			return errors.New("music_style_result_invalid")
+		}
+		return nil
+	})
+	return result.Style, err
 }

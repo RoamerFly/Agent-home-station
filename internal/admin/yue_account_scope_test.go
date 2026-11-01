@@ -20,9 +20,13 @@ func TestYuERequestsUseNativeAccountRatherThanQuotedTrace(t *testing.T) {
 		w.Write([]byte(`{"ready":true,"bridge_version":9}`))
 	}))
 	defer server.Close()
-	f.manager.speech.YuEEnabled = true
-	f.manager.speech.YuEEndpoint = server.URL
-	f.manager.speech.YuEToken = "synthetic-scope-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = server.URL
+		legacySpeechFixture.YuEToken = "synthetic-scope-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	p := &permittedTools{manager: f.manager, trace: companion.Input{Account: "quoted-other-account"}}
 	if _, _, e := p.yueRequest(legacyLocalMusicAdminContext(t, f.manager), "GET", "/health", nil, ""); e != nil {
@@ -46,9 +50,13 @@ func TestYuEWrongAccountStopsBeforeClaimingOrSubmittingGeneration(t *testing.T) 
 			}))
 			defer server.Close()
 			f := setup(t)
-			f.manager.speech.YuEEnabled = true
-			f.manager.speech.YuEEndpoint = server.URL
-			f.manager.speech.YuEToken = "synthetic-scope-token"
+			{
+				legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+				legacySpeechFixture.YuEEnabled = true
+				legacySpeechFixture.YuEEndpoint = server.URL
+				legacySpeechFixture.YuEToken = "synthetic-scope-token"
+				writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+			}
 			installLegacyLocalMusicPlugin(t, f.manager)
 			p, _, _ := f.manager.toolAccess()
 			p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "wrong-account-request"})

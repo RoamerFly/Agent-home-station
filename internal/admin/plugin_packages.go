@@ -286,6 +286,10 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		}
 		installed, err := store.Install(r.Context(), input.Token, input.Digest, input.Permissions)
 		if err != nil {
+			if errors.Is(err, pluginhost.ErrConfigurationMigrationRequired) {
+				respond(w, http.StatusConflict, map[string]string{"code": "configuration_migration_required", "error": "升级需要迁移插件配置；原安装、配置和密钥已保留。"})
+				return
+			}
 			fail(w, 409, "安装未完成：包尚未就绪、确认已失效、权限不匹配或文件已变化，请重新检查")
 			return
 		}

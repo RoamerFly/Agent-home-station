@@ -153,7 +153,6 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		if in.VocalGender != "female" && in.VocalGender != "male" {
 			return "", toolInputError("演唱性别应为female或male")
 		}
-		in.Style = normalizeSingingStyle(in.Style, in.VocalGender)
 		in.Kind = p.musicDeliveryKind(in.Kind)
 		if in.Duration == 0 {
 			in.Duration = 60
@@ -185,7 +184,14 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		if err := validateSingingRequest(requestText, in.Mode, in.VocalGender, in.VocalGenderRequest); err != nil {
 			return "", err
 		}
-		in.Style = singingGenerationStyle(in.Style, in.VocalGender, in.Mode)
+		preparedStyle, err := p.prepareSingingStyle(ctx, in.Style, in.VocalGender, in.Mode)
+		if err != nil {
+			return "", err
+		}
+		in.Style = preparedStyle
+		if in.Style == "" {
+			return "", toolInputError("请提供有效音乐风格")
+		}
 		if in.Mode == "cover" && in.Reference == "" {
 			return "", toolInputError("翻唱必须提供本会话真实原音频reference_asset_id；先读取引用素材或下载原曲，不能改编歌词冒充原曲")
 		}

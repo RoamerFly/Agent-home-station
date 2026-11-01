@@ -56,9 +56,13 @@ func TestLiveMusicSemanticIntentWithoutGenerationOrWechatSend(t *testing.T) {
 			json.NewDecoder(r.Body).Decode(&submitted)
 			w.Write([]byte(`{"id":"semantic-job","state":"queued"}`))
 		}))
-		f.manager.speech.YuEEnabled = true
-		f.manager.speech.YuEEndpoint = server.URL
-		f.manager.speech.YuEToken = "private-fixture-token"
+		{
+			legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+			legacySpeechFixture.YuEEnabled = true
+			legacySpeechFixture.YuEEndpoint = server.URL
+			legacySpeechFixture.YuEToken = "private-fixture-token"
+			writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+		}
 		tools, _, _ := f.manager.toolAccess()
 		engine, e := companion.New(f.manager.config.Companion, f.manager.memory, provider, cfg.SystemPrompt)
 		if e != nil {

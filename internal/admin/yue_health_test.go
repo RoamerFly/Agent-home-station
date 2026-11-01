@@ -27,9 +27,13 @@ func TestOfflineYuEPreflightDoesNotClaimOrCreateGeneration(t *testing.T) {
 			}))
 			defer server.Close()
 			f := setup(t)
-			f.manager.speech.YuEEnabled = true
-			f.manager.speech.YuEEndpoint = server.URL
-			f.manager.speech.YuEToken = "fixture-token"
+			{
+				legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+				legacySpeechFixture.YuEEnabled = true
+				legacySpeechFixture.YuEEndpoint = server.URL
+				legacySpeechFixture.YuEToken = "fixture-token"
+				writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+			}
 			installLegacyLocalMusicPlugin(t, f.manager)
 			p, _, _ := f.manager.toolAccess()
 			p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "offline-request"})
@@ -51,9 +55,13 @@ func TestUnknownYuESubmissionDoesNotReportToolSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 	f := setup(t)
-	f.manager.speech.YuEEnabled = true
-	f.manager.speech.YuEEndpoint = server.URL
-	f.manager.speech.YuEToken = "fixture-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = server.URL
+		legacySpeechFixture.YuEToken = "fixture-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, _ := f.manager.toolAccess()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "unknown-request"})

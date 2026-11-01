@@ -190,6 +190,83 @@
       "side_effect": "local_service_control"
     },
     {
+      "id": "music.prepare",
+      "implementation": "ready",
+      "description": "宿主内部纯音乐准备：解释RVC桥接协议、原任务恢复配方与生成风格；只接受已绑定观测与音频引用，不读取音频、凭据或路径，不发送请求。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "style",
+              "rvc_request",
+              "resume_plan",
+              "resume_result",
+              "recover_recipe"
+            ]
+          },
+          "style": {
+            "type": "string"
+          },
+          "gender": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "voice_profile_id": {
+            "type": "string"
+          },
+          "reference_sha256": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "health": {
+            "type": "object"
+          },
+          "audio_ref": {
+            "type": "object"
+          },
+          "status": {
+            "type": "object"
+          },
+          "reference_start_seconds": {
+            "type": "number"
+          },
+          "reference_seconds": {
+            "type": "number"
+          },
+          "restart_missing": {
+            "type": "boolean"
+          },
+          "restart_failed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "none"
+    },
+    {
       "id": "music.cover",
       "implementation": "migration-pending",
       "description": "歌曲、翻唱、RVC 与 GPU 服务",

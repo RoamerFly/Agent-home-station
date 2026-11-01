@@ -52,7 +52,7 @@ func TestMusicFollowupPersistsPollsAndDeliversWithoutProactivePermission(t *test
 	c.YuEEnabled = true
 	c.YuEEndpoint = server.URL
 	c.YuEToken = "private-fixture-token"
-	f.manager.speech = c
+	writeLegacySpeechMigrationFixture(t, f.manager, c)
 	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, _ := f.manager.toolAccess()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "requested-song"})

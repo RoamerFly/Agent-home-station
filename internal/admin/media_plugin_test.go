@@ -219,8 +219,12 @@ func TestMediaPluginOwnsAllLegacyTranscriptionCallers(t *testing.T) {
 	f, _, p, ctx := mediaPolicyFixture(t, false)
 	// No audio/model/network is needed: configuration is checked before the
 	// incoming-media reader can obtain private recording bytes.
-	f.manager.speech.ASREnabled = true
-	f.manager.speech.ASRBackend = "local_then_bailian"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.ASREnabled = true
+		legacySpeechFixture.ASRBackend = "local_then_bailian"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	if _, err := (mediaUnderstanding{manager: f.manager}).recognizeVoice(ctx, linuxnative.Message{ID: "synthetic-voice", Type: 34}); err == nil || err.Error() != "media_transcription_configuration_required" {
 		t.Fatal("legacy speech configuration bypassed media plugin readiness", err)
 	}
@@ -282,7 +286,11 @@ func transcriptionFixture(t *testing.T, remember bool) (*webFixture, *bindingCha
 		}
 		ctx = companion.WithMediaSource(t.Context(), *ref)
 	}
-	f.manager.speech.ASREnabled = true
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.ASREnabled = true
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	i, err := visual.store.Installed(ctx, "media-understanding")
 	if err != nil {
 		t.Fatal(err)
@@ -364,7 +372,11 @@ func TestMediaTranscriptionSourceAndProviderAuthority(t *testing.T) {
 				t.Fatal("edited source accepted")
 			}
 			n.msg.Body = ""
-			f.manager.speech.ASREnabled = false
+			{
+				legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+				legacySpeechFixture.ASREnabled = false
+				writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+			}
 			if err = p.Check(ctx, j, cap); err != nil {
 				t.Fatal("installed ASR incorrectly depended on legacy switch", err)
 			}

@@ -120,7 +120,6 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 	s.companionRoutes(mux)
 	s.billingRoutes(mux)
 	s.agentRoutes(mux)
-	s.repairTestRoutes(mux)
 	s.ownerRequestRoutes(mux)
 	s.mobileRoutes(mux)
 	s.storageRoutes(mux)

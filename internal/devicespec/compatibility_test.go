@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"wechat-bot/internal/devicespec"
-	"wechat-bot/internal/mobile"
+	"wechat-bot/plugins/mobile-control/dev/legacy-sdk"
 )
 
 // These assignments must compile without conversion: the old SDK's metadata

@@ -54,8 +54,12 @@ func TestWindowsMusicPolicyScopeAndForeignPortRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	f.manager.speech.YuEEndpoint = "http://" + listener.Addr().String()
-	f.manager.speech.YuEToken = "synthetic-local-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEndpoint = "http://" + listener.Addr().String()
+		legacySpeechFixture.YuEToken = "synthetic-local-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	installLegacyLocalMusicPlugin(t, f.manager)
 	if _, err := f.manager.startWindowsMusic(t.Context()); err == nil || !strings.Contains(err.Error(), "port_occupied") {
 		t.Fatal("foreign listener adopted", err)

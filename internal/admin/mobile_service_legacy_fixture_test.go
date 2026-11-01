@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"wechat-bot/internal/mobile"
+	"wechat-bot/plugins/mobile-control/dev/legacy-sdk"
 )
 
 type mobileControlOpener func(string, mobile.Planner) (*mobile.Control, error)

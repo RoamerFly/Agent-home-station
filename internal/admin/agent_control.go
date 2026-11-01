@@ -486,7 +486,20 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			return m.claimDeviceTask(t, now)
 		}
 		if t.MusicJob != "" {
-			if !m.speechConfig().YuEEnabled || !cfg.Companion.Permissions.SendVoice && !cfg.Companion.Permissions.SendFile {
+			if !cfg.Companion.Permissions.SendVoice && !cfg.Companion.Permissions.SendFile {
+				continue
+			}
+			if !m.localMusicPluginConfigured(context.Background()) {
+				t.State = "needs_review"
+				t.LastResult = "music_local_plugin_configuration_required"
+				if store, err := m.packageStore(); err != nil {
+					t.LastResult = "music_local_plugin_migration_required"
+				} else if installed, err := store.Installed(context.Background(), "music"); err != nil || installed.Removed {
+					t.LastResult = "music_local_plugin_migration_required"
+				}
+				if _, err := m.agent.updateSnapshot(t); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			return m.claimMusicTask(t, now)

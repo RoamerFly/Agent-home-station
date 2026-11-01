@@ -72,7 +72,7 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"speech.synthesize": true, "speech.synthesize_named": true}
 					}
 					if d.Name() == "music" {
-						want = map[string]bool{"music.generate": true, "music.bridge_request": true, "music.service_control": true}
+						want = map[string]bool{"music.generate": true, "music.bridge_request": true, "music.service_control": true, "music.prepare": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "model.invoke" || p.Permissions[1] != "network" {
 							t.Fatal("music package must declare separate cloud and local bridge proxies")
 						}

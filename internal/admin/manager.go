@@ -19,7 +19,6 @@ import (
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/devicebroker"
 	"wechat-bot/internal/linuxnative"
-	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/sending"
@@ -110,7 +109,6 @@ type Manager struct {
 	workspace           *agentworkspace.Store
 	processes           *agenthost.Jobs
 	mobile              deviceService
-	speech              mediaspec.Config
 	agent               *agentControl
 	surfHistory         *surfHistoryStore
 	billing             *billingStore
@@ -198,15 +196,11 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if surfErr != nil {
 		return nil, surfErr
 	}
-	speech, err := loadSpeech(dir)
-	if err != nil {
-		return nil, err
-	}
 	agent, err := newAgentControl(dir)
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{speech: speech, agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug}
+	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug}
 	externalConfiguration.openStore, externalConfiguration.owned = m.packageStore, false
 	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
 	if err != nil {
