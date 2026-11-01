@@ -20,11 +20,11 @@
 |---|---|---|
 | 插件宿主 | 7 个既有启用插件均通过正式 runtime/start，最终 running | 未将已停用 external-tools 自动启用 |
 | 媒体理解 | 官方包/Controller/LPAC/host transcription/真实 SenseVoice ONNX CPU+VAD，单合成短句实际识别一致，临时任务 completed，26.55 秒 | 云视觉/云听音未调用；两个独立合成样本（SAPI 与本地命名声线产物）通过；不代表广泛准确率 |
-| 分享读取 | 上轮实际失败响应通过修复后 Go/Python 双解析及结果核验重放；本轮来源已核验视频完整 1,406,115 B，21.617s H264/AAC，生产采样 6 帧及音轨提取通过 | 当前运行安装仍为 0.1.6，0.1.7 等待正常停止后的本机更新；无模型观看质量声称 |
+| 分享读取 | 上轮实际失败响应通过修复后 Go/Python 双解析及结果核验重放；本轮来源已核验视频完整 1,406,115 B，21.617s H264/AAC，生产采样 6 帧及音轨提取通过 | 本机已升级至 0.1.7 并通过实际宿主启动；无模型观看质量声称 |
 | 本地说话声线 | 真实登记资源与正式 RunMusicIsolated/Windows helper/LPAC，单次短句推理 86 秒；PCM16/32kHz/5.480s/350764B，四件套与 text hash 核对，无默认声线替换 | 非云 TTS；模型 runner 隔离实测，完整来源权限合同另有合成测试 |
 | 音乐/RVC | 正式按需启动；实际 RVC 分离/转换/混回 1 次，固定非默认声线、GPU 与源 hash，92.71 秒；临时 LPAC Comfy 单任务 10 秒音乐生成 1 次，95.20 秒，只有一次 prompt 提交；两者均有效非静音 PCM | 音乐是明确的 2 步功能预览；未验证人耳音色、歌词质量；未训练或恢复旧任务 |
 | 项目开发 | 已安装包运行，真实 LPAC 合成工作区读写和 CPU 命令测试通过 | 不修改用户项目作为测试 |
-| 手机控制 | 包与 planner 运行；旧 profile/设备/允许动作及任务仍在。已将既有 SDK r33.0.1 的公开文件校验并 stage 到项目受信目录；准备 ADB、持久 profile 和账号 storage 的来源 hash 条件迁移 | 当前部署缺工具根且旧路径不满足 host scope；候选迁移纯 Inspect 通过，真实切换等待正常停止。ADB 当前设备数 0，不宣称实机控制通过 |
+| 手机控制 | 包与 planner 运行；旧 profile/设备/允许动作及任务仍在。已将既有 SDK r33.0.1 的公开文件校验并 stage 到项目受信目录；准备 ADB、持久 profile 和账号 storage 的来源 hash 条件迁移 | 正常停止后已发布受信工具及持久 profile/storage，通过 Store.UpdateHostState CAS 仅更新权威 settings。在线 broker 与实际设备列表查询通过，1 个登记设备为 offline，不宣称实机控制通过 |
 | 联网检索 | 包运行、配置存在，公共读取/发现/模型请求绑定合成测试通过 | 不调用真实付费搜索；Surf 发现取决于既有授权 session |
 | 外部工具连接 | HTTP/job/poll/MCP 四种 LPAC 合成协议通过 | 插件和保留连接均停用，MCP 声明 0；保持管理员选择 |
 
@@ -45,8 +45,12 @@
 - Windows 桌面 55 个 controller、86 个 window lifecycle 断言通过；8 个真实 WinForms/WebView 退出周期、12 个并发单例探测，均使用隔离合成服务及私有 desktop，不影响实际用户任务栏。
 - 静态 JavaScript、仓库安全检查、Windows/Linux 构建在提交前后执行；结果以本轮终端记录与最终交付说明为准。
 
-## 本机启用状态
+## 本机启用状态（已更新）
 
-本轮保留实际登录、配置、消息、模型、素材及任务。应用的正常停止路径由桌面私有 stdin 持有；没有独立安全热重启 API。已经准备更新程序与 share-reader 0.1.7，但替换仍需桌面正常停止全部服务。不得把源码/构建通过写成当前旧进程已应用修复，不强杀或启动第二个使用真实数据的 Web 实例。
+用户正常停止后，已启用干净提交 `949d879f6805c7948d7dfce681385b4ae2e847e9` 构建的 Windows 管理程序；实际部署 SHA256 为 `4e945fb0a616258f43e249b32d78754a3c0b68d858699258deca19ed131e22bd`。share-reader 已升级 0.1.7、保留原权限与启用状态。程序/插件更新阶段核对配置与密钥记录、插件 jobs、原生二进制与登录 registry 不变；未重提历史未知任务。
 
-更新替换程序和校验通过的插件成员，并按条件迁移已登记设备的运行路径（设备、动作与权限不变）；插件升级保留配置、密钥、原授权、启用状态和旧任务，不自动重提 needs_review。本轮不新建备份、不运行 CI、不发布 Release 或 Docker 镜像。
+设备迁移使用唯一权威 plugin-host SQLite `device-state-v1`，不写历史 settings.json。以原 revision 和 settings SHA 为条件，核对完整设置仅变更 profile/storage 路径，设备、动作、限制和其他桥接参数均保持；通过正式 Store API 把 settings 从 revision 1 CAS 更新到 2，其他 host records（含任务）逐字节不变。原 profile 仅替换已登记 ADB 路径；旧 profile 与 storage 原样保留为迁移来源，不新建额外备份。151 个桥接存储文件、3,910,617 B 发布前后清单一致，目标 profile/storage 位于本账号持久目录；真实目标的最终 Inspect 通过。
+
+已重新启动现有桌面应用，快捷方式显式绑定原配置工作区。微信 authenticated=true、connection=online；Web 健康正常，内嵌插件中心可用。7 个原已启用插件全部通过更新后的正式 runtime/start 并处于 running；外部连接保持停用。实际在线公共声线文件接口对 8 个权重全部返回 206，原 404 已消除。手机 native_broker_registered=true，实际 devices.list 成功，当前登记 1 个设备但状态 offline，在线设备数 0。
+
+本次启用阶段未新增付费模型调用，未重复发送前一阶段的 27 条验收消息。手机实机操作、云模型语义质量及手机播放仍按上述边界报告。本轮没有 CI、Release 或 Docker 镜像发布。
