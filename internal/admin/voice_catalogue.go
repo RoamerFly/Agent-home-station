@@ -1,7 +1,11 @@
 package admin
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -75,6 +79,11 @@ func mergeVoiceCatalogue(private map[string]any, public string) (map[string]any,
 }
 
 func (m *Manager) voiceLibraryObject(name string) (string, string, error) {
+	directory, relative, _, err := m.voiceLibraryObjectMetadata(name)
+	return directory, relative, err
+}
+
+func (m *Manager) voiceLibraryObjectMetadata(name string) (string, string, *voiceFile, error) {
 	private := m.privateVoiceLibrary()
 	public := filepath.Join(m.managedRoot(), "public_workspace", "models", "voice-library")
 	for _, source := range []struct {
@@ -83,7 +92,7 @@ func (m *Manager) voiceLibraryObject(name string) (string, string, error) {
 	}{{public, true}, {private, false}} {
 		entries, err := readVoiceEntries(source.directory)
 		if err != nil {
-			return "", "", err
+			return "", "", nil, err
 		}
 		for _, item := range entries {
 			for _, file := range append(append(append([]voiceFile{}, item.Weights...), item.References...), item.Previews...) {
@@ -96,15 +105,73 @@ func (m *Manager) voiceLibraryObject(name string) (string, string, error) {
 				}
 				if !source.shared {
 					relative, err := privateVoiceRelative(file)
-					return source.directory, relative, err
+					return source.directory, relative, nil, err
 				}
-				relative, err := filepath.Rel(source.directory, file.Path)
-				if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-					return "", "", os.ErrPermission
+				relative, err := publicVoiceRelative(source.directory, file)
+				if err != nil {
+					return "", "", nil, err
 				}
-				return source.directory, relative, nil
+				return source.directory, relative, &file, nil
 			}
 		}
 	}
-	return private, filepath.Join("files", name), nil
+	return private, filepath.Join("files", name), nil, nil
+}
+
+// Relative registrations are portable across a Linux/Windows deployment. An
+// obsolete absolute path is never used to widen the current public model root.
+func publicVoiceRelative(public string, file voiceFile) (string, error) {
+	if file.Relative != "" {
+		normalized := strings.ReplaceAll(file.Relative, `\`, "/")
+		if strings.HasPrefix(normalized, "/") || strings.ContainsAny(normalized, ":\x00") {
+			return "", os.ErrPermission
+		}
+		for _, part := range strings.Split(normalized, "/") {
+			if part == "" || part == "." || part == ".." {
+				return "", os.ErrPermission
+			}
+		}
+		return filepath.FromSlash(normalized), nil
+	}
+	if !filepath.IsAbs(file.Path) {
+		return "", os.ErrPermission
+	}
+	relative, err := filepath.Rel(public, file.Path)
+	if err != nil || filepath.IsAbs(relative) || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", os.ErrPermission
+	}
+	return relative, nil
+}
+
+func (m *Manager) openVoiceLibraryObject(ctx context.Context, name string) (*os.File, int64, error) {
+	directory, relative, registered, err := m.voiceLibraryObjectMetadata(name)
+	if err != nil {
+		return nil, 0, err
+	}
+	root, err := workspacefs.EnsurePath(directory)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer root.Close()
+	f, err := workspacefs.OpenRegular(root, relative)
+	if err != nil {
+		return nil, 0, err
+	}
+	if registered == nil { // Preserve the account-private catalogue/file scope.
+		return f, -1, nil
+	}
+	fail := func() (*os.File, int64, error) { f.Close(); return nil, 0, errors.New("public_voice_file_changed") }
+	info, err := f.Stat()
+	if err != nil || registered.Bytes <= 0 || info.Size() != registered.Bytes || len(registered.Hash) != 64 || strings.Trim(registered.Hash, "0123456789abcdef") != "" || !strings.HasPrefix(name, registered.Hash+".") {
+		return fail()
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, &uploadContextReader{ctx: ctx, reader: io.LimitReader(f, registered.Bytes)})
+	if err != nil || n != registered.Bytes || hex.EncodeToString(h.Sum(nil)) != registered.Hash {
+		return fail()
+	}
+	if _, err = f.Seek(0, io.SeekStart); err != nil {
+		return fail()
+	}
+	return f, registered.Bytes, nil // Serve this verified handle and byte range.
 }

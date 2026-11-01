@@ -237,8 +237,8 @@ func (p *permittedTools) verifyNamedSpeechFiles(ctx context.Context, voice voice
 		}
 		rel, err := privateVoiceRelative(item)
 		if voice.Public {
-			rel, err = filepath.Rel(base, item.Path)
-			if err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			rel, err = publicVoiceRelative(base, item)
+			if err != nil {
 				return errors.New("named_speech_resource_path_invalid")
 			}
 		}
@@ -268,7 +268,7 @@ func (p *permittedTools) namedSpeechFilePath(voice voiceEntry, f voiceFile) (str
 	}
 	rel, err := privateVoiceRelative(f)
 	if voice.Public {
-		rel, err = filepath.Rel(base, f.Path)
+		rel, err = publicVoiceRelative(base, f)
 	}
 	if err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", errors.New("named_speech_resource_path_invalid")

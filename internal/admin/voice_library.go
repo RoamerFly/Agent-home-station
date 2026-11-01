@@ -68,18 +68,7 @@ func (s *Server) voiceLibraryRoutes(mux *http.ServeMux) {
 			fail(w, 400, "语音库文件名无效")
 			return
 		}
-		directory, relative, err := s.manager.voiceLibraryObject(name)
-		if err != nil {
-			fail(w, 404, "未找到语音库文件")
-			return
-		}
-		root, err := workspacefs.EnsurePath(directory)
-		if err != nil {
-			fail(w, 404, "未找到语音库文件")
-			return
-		}
-		defer root.Close()
-		f, err := workspacefs.OpenRegular(root, relative)
+		f, verifiedBytes, err := s.manager.openVoiceLibraryObject(r.Context(), name)
 		if err != nil {
 			fail(w, 404, "未找到语音库文件")
 			return
@@ -92,6 +81,10 @@ func (s *Server) voiceLibraryRoutes(mux *http.ServeMux) {
 		}
 		w.Header().Set("Cache-Control", "private, no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		http.ServeContent(w, r, name, info.ModTime(), f)
+		var content io.ReadSeeker = f
+		if verifiedBytes >= 0 {
+			content = io.NewSectionReader(f, 0, verifiedBytes)
+		}
+		http.ServeContent(w, r, name, info.ModTime(), content)
 	}))
 }

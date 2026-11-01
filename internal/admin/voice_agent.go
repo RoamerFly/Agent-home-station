@@ -255,8 +255,8 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 			}
 			if v.Public {
 				sourceDir = filepath.Join(p.executionContext().Public, "models", "voice-library")
-				relative, e = filepath.Rel(sourceDir, f.Path)
-				if e != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+				relative, e = publicVoiceRelative(sourceDir, f)
+				if e != nil {
 					return "", toolInputError("public_voice_path_outside_models")
 				}
 			}
