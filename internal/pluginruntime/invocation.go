@@ -122,14 +122,18 @@ func (c *Controller) Invoke(ctx context.Context, req CallRequest, policy CallPol
 	// Execute the exact canonical request read back by ClaimJob, not caller-owned
 	// maps or alternate JSON text that differs from the durable fingerprint.
 	raw, callErr := c.host.Call(serviceContext(ctx, policy, j, cap), req.Plugin, j.Context, cap.ID, j.Arguments, cap.Permissions)
+	failureStage := pluginhost.JobFailureDispatch
 	var verified VerifiedResult
 	if callErr == nil {
+		failureStage = pluginhost.JobFailureAuthority
 		callErr = policy.Check(ctx, j, cap)
 	}
 	if callErr == nil {
+		failureStage = pluginhost.JobFailureValidation
 		verified, callErr = policy.Validate(ctx, j, cap, raw)
 	}
 	if callErr == nil && ((!verified.Failed && cap.Async && verified.RemoteID == "") || (!cap.Async && verified.RemoteID != "") || (verified.RemoteID != "" && (verified.Failed || len(verified.Assets) > 0 || len(verified.Result) > 0 || len(verified.Private) > 0)) || (verified.Failed && (len(verified.Assets) > 0 || len(verified.Private) > 0))) {
+		failureStage = pluginhost.JobFailureResultMode
 		callErr = errors.New("plugin result does not match capability execution mode")
 	}
 	// Checkpoint with a separate bounded context even when the caller cancelled.
@@ -144,7 +148,7 @@ func (c *Controller) Invoke(ctx context.Context, req CallRequest, policy CallPol
 		var writeErr error
 		switch {
 		case callErr != nil:
-			next, writeErr = c.store.FinishJob(checkpoint, j.ID, current.Revision, "needs_review", nil)
+			next, writeErr = c.store.ReviewJobFailure(checkpoint, j.ID, current.Revision, failureStage)
 		case verified.RemoteID != "":
 			next, writeErr = c.store.AcknowledgeJob(checkpoint, j.ID, current.Revision, verified.RemoteID)
 		case verified.Failed:

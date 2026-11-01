@@ -75,6 +75,25 @@ type Job struct {
 	Created         string          `json:"created"`
 	Updated         string          `json:"updated"`
 	Result          json.RawMessage `json:"result,omitempty"`
+	Diagnostic      *JobDiagnostic  `json:"diagnostic,omitempty"`
+}
+
+// JobFailureStage is chosen by trusted host control flow, not parsed from a
+// plugin response or arbitrary error string.
+type JobFailureStage string
+
+const (
+	JobFailureDispatch   JobFailureStage = "dispatch"
+	JobFailureAuthority  JobFailureStage = "authority"
+	JobFailureValidation JobFailureStage = "validation"
+	JobFailureResultMode JobFailureStage = "result_mode"
+)
+
+// JobDiagnostic contains only fixed host-owned labels. It is independent from
+// Result: an uncertain call still has no validated provider result to expose.
+type JobDiagnostic struct {
+	Stage JobFailureStage `json:"stage"`
+	Code  string          `json:"code"`
 }
 
 // Recovery never infers successful delivery or retries an unknown submission.

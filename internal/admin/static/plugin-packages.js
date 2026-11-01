@@ -6,32 +6,76 @@
  const page=$('#plugins'),legacy=page.querySelector('.plugin-workspace'),guide=$('#plugin-guide');
  const el=(tag,text,klass)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(klass)n.className=klass;return n};
  const button=(text,action)=>{const b=el('button',text,'quiet');b.type='button';b.addEventListener('click',action);return b};
- const tabs=el('nav',undefined,'package-tabs');tabs.setAttribute('aria-label','插件类型');
  const area=el('div',undefined,'package-workspace'),browser=el('aside',undefined,'panel package-browser'),editor=el('article',undefined,'panel package-editor');
  const list=el('div',undefined,'package-list'),status=el('p','选择服务查看配置、权限和任务。','hint');status.setAttribute('role','status');
- const refreshList=$('#plugins-refresh'),refreshOwner=refreshList.parentElement;
- const head=el('div',undefined,'section-heading');head.append(el('h3','服务插件'),refreshList,button('迁移旧设置',openMigration),button('导入本机插件',importPackage));browser.append(head,list);editor.append(status);area.append(browser,editor);
- const services=button('服务插件',()=>mode(true)),external=button('外部接口',()=>mode(false));tabs.append(services,external);legacy.before(area);
- // Share the existing toolbar instead of consuming another full row.
- const toolbar=page.querySelector('.page-toolbar-card');if(toolbar)toolbar.append(tabs);else area.before(tabs);
- function mode(packages){area.hidden=!packages;legacy.hidden=packages;if(guide)guide.hidden=packages;(packages?head:refreshOwner).append(refreshList);refreshOwner.hidden=packages;services.setAttribute('aria-pressed',String(packages));external.setAttribute('aria-pressed',String(!packages));window.WechatSaveActions?.sync();if(packages)load()}
+ const refreshList=$('#plugins-refresh');
+ const head=el('div',undefined,'section-heading');head.append(el('h3','能力目录'),button('迁移旧设置',openMigration),button('导入本机插件',importPackage));browser.append(head,list);editor.append(status);area.append(browser,editor);legacy.before(area);
+ // The legacy declaration editor remains mounted for compatibility, but all
+ // provider-facing configuration now has one visible home: the package detail
+ // or the dedicated Connection & MCP page.
+ function showPackages(){area.hidden=false;legacy.hidden=true;if(guide)guide.hidden=true;window.WechatSaveActions?.sync()}
  const account=()=>window.WechatAccountContext?.id||'';
  const context=()=>({id:state.selected,account:account(),epoch:state.epoch});
  const current=scope=>scope.epoch===state.epoch&&scope.id===state.selected&&scope.account===account()&&window.WechatAdmin?.isAuthenticated();
  const requestKey=()=>crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join('');
  const runtimeNames={running:'运行中',starting:'正在启动',stopping:'正在停止',failed:'异常',stopped:'已停止'};
  const names={'network':'访问网络','gpu':'使用 GPU','device':'控制设备','workspace.read':'读取授权工作区','workspace.write':'修改授权工作区','process.execute':'执行受控进程','artifact.read':'读取授权素材','artifact.write':'生成素材','model.invoke':'调用模型'};
+ const capabilityGroups=[
+  ['语音与音乐',['speech','music']],
+  ['媒体与分享',['media-understanding','share-reader','web-search']],
+  ['创作',['visual-generation']],
+  ['开发与设备',['project-development','mobile-control']],
+  ['连接',['external-tools']],
+ ];
+ const groupFor=id=>capabilityGroups.find(([,ids])=>ids.includes(id))?.[0]||'其他能力';
+ function packageStatus(id,installed){
+  if(!installed)return state.retained.has(id)?'已卸载 · 可查看保留任务':'未安装';
+  if(installed.removed)return '已移除 · 可查看保留任务';
+  const runtime=state.runtimes[id]?.state;
+  if(runtime==='running'||runtime==='starting'||runtime==='stopping')return runtimeNames[runtime];
+  if(runtime==='failed')return '异常 · 请打开检查';
+  return installed.enabled?'已启用 · 未运行':'已安装 · 未启用';
+ }
+ function allPackages(){
+  const all=new Map(state.catalog.map(p=>[p.id,p]));
+  for(const item of state.installed)all.set(item.package.id,item.package);
+  for(const id of state.retained)if(!all.has(id))all.set(id,{id,name:id==='mobile-control'?'设备控制':'已保留插件',status:'retained'});
+  return all;
+ }
+ function capabilityCard(p,installed,klass='package-choice'){
+  const card=button('',()=>choose(p.id));card.className=klass;card.setAttribute('aria-pressed',String(state.selected===p.id));
+  card.append(el('strong',p.name),el('small',packageStatus(p.id,installed)));
+  const next=installed&&!installed.enabled?'下一步：打开后检查配置并手动启动。':state.runtimes[p.id]?.state==='failed'?'下一步：打开查看运行原因。':!installed&&p.status==='ready'?'下一步：导入或迁移后再配置。':!installed?'开发模板，尚不能运行。':'打开配置、权限和任务';
+  card.append(el('small',next,'hint'));
+  return card;
+ }
+ function renderOverview(all){
+  if(state.selected)return;
+  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3','已安装能力'),el('p','选择一项能力即可查看真实安装、启用、运行、配置和任务状态。服务不会因浏览此页面而自动启动。','hint'));const actions=el('div',undefined,'package-overview-actions');actions.append(button('迁移旧设置',openMigration),button('导入本机插件',importPackage));intro.append(copy,actions);
+  const grid=el('div',undefined,'capability-overview-grid'),used=new Set();
+  for(const [title,ids] of capabilityGroups){
+   const items=ids.map(id=>[id,all.get(id)]).filter(([,p])=>p);
+   if(!items.length)continue;
+   const group=el('section',undefined,'capability-overview-group');group.append(el('h4',title));
+   for(const [,p] of items){used.add(p.id);group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id),'capability-overview-card'))}
+   if(title==='连接'){const connections=button('管理 HTTP 与 MCP',()=>window.WechatAdmin.nav('mcp'));connections.className='secondary capability-connections';group.append(connections)}
+   grid.append(group);
+  }
+  const other=[...all.values()].filter(p=>!used.has(p.id));if(other.length){const group=el('section',undefined,'capability-overview-group');group.append(el('h4','其他能力'));for(const p of other)group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id),'capability-overview-card'));grid.append(group)}
+  if(!grid.children.length)grid.append(el('p','暂无可用插件。可导入本机插件目录，或先查看迁移旧设置。','empty'));
+  editor.replaceChildren(intro,grid);window.WechatSaveActions?.sync();
+ }
  function dirty(value){state.dirty=value;if(value){state.editVersion++;state.migrationVersion++;for(const check of document.querySelectorAll('[data-migration-confirm]')){check.checked=false;const action=check.closest('.package-migration-step')?.querySelector('button.primary');if(action)action.disabled=true}}window.WechatAdmin.pluginPackageDirty=value}
  function discard(){return !state.dirty||confirm('有未保存的插件配置，确定放弃？')}
  function renderList(){
-  list.replaceChildren();const all=new Map(state.catalog.map(p=>[p.id,p]));for(const item of state.installed)all.set(item.package.id,item.package);
-  for(const id of state.retained)if(!all.has(id))all.set(id,{id,name:id==='mobile-control'?'设备控制':'已保留插件',status:'retained'});
-  for(const p of all.values()){
-   const installed=state.installed.find(x=>x.package.id===p.id),b=button('',()=>choose(p.id));b.className='package-choice';b.setAttribute('aria-pressed',String(state.selected===p.id));
-   b.append(el('strong',p.name),el('small',installed?(installed.removed?'已移除':state.runtimes[p.id]?.state==='running'?'运行中':state.runtimes[p.id]?.state==='failed'?'异常':installed.enabled?(p.id==='mobile-control'?'已启用':'已启用 · 未运行'):'已安装 · 未启用'):state.retained.has(p.id)?'已卸载 · 可查看保留任务':p.status==='ready'?'未安装':'迁移中'));
-   list.append(b);
+  area.classList.toggle('package-overview',!state.selected);list.replaceChildren();const all=allPackages(),used=new Set();
+  for(const [title,ids] of capabilityGroups){
+   const items=ids.map(id=>all.get(id)).filter(Boolean);if(!items.length)continue;for(const p of items)used.add(p.id);
+   const group=el('section',undefined,'package-group');group.append(el('h4',title));for(const p of items)group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id)));list.append(group);
   }
+  const other=[...all.values()].filter(p=>!used.has(p.id));if(other.length){const group=el('section',undefined,'package-group');group.append(el('h4','其他能力'));for(const p of other)group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id)));list.append(group)}
   if(!all.size)list.append(el('p','暂无服务插件，可导入本机插件目录。','empty'));
+  renderOverview(all);
  }
  async function load(){
   if(!window.WechatAdmin?.isAuthenticated())return;if(state.loadPromise)return state.loadPromise;state.busy=true;const epoch=state.epoch,owner=account();
@@ -42,7 +86,7 @@
   if(id===state.selected&&state.detail)return;if(!discard())return;
   const epoch=++state.epoch,owner=account();state.selected=id;state.detail=null;dirty(false);renderList();editor.replaceChildren(status);status.textContent='正在读取插件…';
   const installed=state.installed.find(x=>x.package.id===id),p=installed?.package||state.catalog.find(x=>x.id===id);
-  if(!installed&&!state.retained.has(id)){status.textContent=p?.status==='ready'?'此插件尚未安装。导入并确认权限后可配置。':'此服务正在迁移为独立插件，当前已有功能继续沿用原设置。';editor.prepend(el('h3',p?.name||id));return}
+  if(!installed&&!state.retained.has(id)){status.textContent=p?.status==='ready'?'此插件尚未安装。导入并确认权限后可配置。':'此开发模板尚不能运行。';editor.prepend(el('h3',p?.name||id));return}
   try{const d=await api('/api/plugin-packages/'+encodeURIComponent(id));if(epoch!==state.epoch||owner!==account())return;state.detail=d;renderDetail(d)}catch(e){if(epoch===state.epoch&&owner===account())status.textContent=e.message}
  }
  function renderDetail(d){
@@ -84,11 +128,19 @@
   try{const result=await api('/api/plugin-packages/'+encodeURIComponent(id)+'/configuration',{method:'POST',json:body});if(!current(scope))return;state.detail.configuration=result;if(editVersion!==state.editVersion){status.textContent='已保存提交的配置，后续编辑尚未保存。';return}dirty(false);renderDetail(state.detail);status.textContent='插件配置已保存，未启动服务。'}catch(e){if(current(scope))status.textContent=e.message+'；当前编辑已保留。'}finally{if(save.isConnected)save.disabled=false}
  }
  let next=0;
+ function jobDiagnostic(job){
+  const stage=job?.diagnostic?.stage;
+  if(stage==='dispatch')return '调用插件未完成。';
+  if(stage==='authority')return '核对权限时未能继续执行。';
+  if(stage==='validation')return '检查结果时未能通过核对。';
+  if(stage==='result_mode')return '结果格式不符合此操作。';
+  return job?.state==='needs_review'?'结果需要核对；未自动重试。':'';
+ }
  async function loadJobs(reset){
   const id=state.selected,epoch=state.epoch,box=$('#package-jobs');if(!box)return;if(reset){next=0;box.replaceChildren()}
   try{const page=await api('/api/plugin-packages/'+encodeURIComponent(id)+'/jobs?limit=30&after='+next);if(epoch!==state.epoch||!box.isConnected)return;box.querySelector('[data-more-jobs]')?.remove();next=page.next;
    const labels={pending:'待执行',submitting:'正在提交',running:'运行中',completed:'已完成',failed:'失败',cancelled:'已取消',needs_review:'需要核对'};
-   for(const job of page.items||[]){const row=el('div',undefined,'package-job');row.append(el('span',(labels[job.state]||job.state)+(job.cancel_requested&&job.state!=='cancelled'?' · 正在请求取消':'')));if(!['completed','failed','cancelled'].includes(job.state)){const cancel=button('取消任务',async()=>{cancel.disabled=true;try{await api('/api/plugin-packages/'+encodeURIComponent(id)+'/jobs/'+encodeURIComponent(job.id)+'/cancel',{method:'POST',json:{revision:job.revision}});if(epoch===state.epoch)loadJobs(true)}catch(e){status.textContent=e.message;cancel.disabled=false}});cancel.disabled=job.cancel_requested;row.append(cancel)}box.append(row)}
+   for(const job of page.items||[]){const row=el('div',undefined,'package-job'),summary=el('div');summary.append(el('span',(labels[job.state]||job.state)+(job.cancel_requested&&job.state!=='cancelled'?' · 正在请求取消':'')));const diagnosis=jobDiagnostic(job);if(diagnosis)summary.append(el('small',diagnosis,'hint'));row.append(summary);if(!['completed','failed','cancelled'].includes(job.state)){const cancel=button('取消任务',async()=>{cancel.disabled=true;try{await api('/api/plugin-packages/'+encodeURIComponent(id)+'/jobs/'+encodeURIComponent(job.id)+'/cancel',{method:'POST',json:{revision:job.revision}});if(epoch===state.epoch)loadJobs(true)}catch(e){status.textContent=e.message;cancel.disabled=false}});cancel.disabled=job.cancel_requested;row.append(cancel)}box.append(row)}
    if(!box.children.length)box.append(el('p','暂无插件任务。','hint'));if(page.has_more){const more=button('继续读取任务',()=>loadJobs(false));more.dataset.moreJobs='';box.append(more)}
   }catch(e){if(epoch===state.epoch)status.textContent=e.message}
  }
@@ -221,7 +273,7 @@
   card.append(apply);box.append(card);
  }
  async function openMigration(){
-  if(!window.WechatAdmin?.isAuthenticated())return;mode(true);
+  if(!window.WechatAdmin?.isAuthenticated())return;showPackages();
   const account=window.WechatAccountContext?.id||'',version=state.migrationVersion,modal=window.WechatDialogs.open({title:'迁移旧设置',subtitle:'先只读核对；每个插件需单独确认，迁移后保持未启用。'}),box=el('div'),loading=el('p','正在读取当前账号的迁移预演…','hint');modal.dialog.style.width='min(720px, calc(100vw - 40px))';modal.dialog.style.height='min(720px, calc(100dvh - 48px))';modal.dialog.style.maxHeight='calc(100dvh - 48px)';const heading=modal.dialog.querySelector('.dialog-heading');heading.style.cssText='flex-wrap:nowrap;padding:14px 16px 12px';heading.querySelector('div').style.minWidth='0';box.append(loading);modal.body.append(box);
   try{
    const preview=await api('/api/plugin-migrations/preview');if(!migrationCurrent(modal,account,version))return;box.replaceChildren();
@@ -252,11 +304,11 @@
    }catch(e){if(current())result.append(el('p',e.message,'error'))}finally{prepare.disabled=false;file.disabled=false;input.disabled=false}
   });modal.body.append(fileLabel,label,prepare,result);
  }
- $('#plugins-refresh').addEventListener('click',()=>{if(!area.hidden)load()});
- window.addEventListener('wechat-admin:navigate',e=>{if(e.detail?.section==='plugins'&&!area.hidden)load()});
+ $('#plugins-refresh').addEventListener('click',load);
+ window.addEventListener('wechat-admin:navigate',e=>{if(e.detail?.section==='plugins')load()});
  window.WechatPluginPackages={
   async open(id,section){
-   if(!window.WechatAdmin?.isAuthenticated())return;mode(true);const owner=account(),epoch=state.epoch;
+   if(!window.WechatAdmin?.isAuthenticated())return;showPackages();const owner=account(),epoch=state.epoch;
    await load();if(owner!==account()||epoch!==state.epoch)return;
    if(id===state.selected&&state.detail){const scope=context(),next=await api('/api/plugin-packages/'+encodeURIComponent(id));if(current(scope)){state.detail=next;if(!state.dirty)renderDetail(next)}}else await choose(id);
    if(section&&owner===account()){const scope=context();requestAnimationFrame(()=>{if(current(scope))document.getElementById('plugin-section-'+section)?.scrollIntoView({block:'start',behavior:'auto'})})}
@@ -266,5 +318,5 @@
   openMigration
  };
  window.addEventListener('wechat-admin:logout',()=>{state.epoch++;state.migrationVersion++;state.loaded=false;state.loadPromise=null;state.busy=false;state.selected='';state.detail=null;state.catalog=[];state.installed=[];state.runtimes={};state.retained.clear();state.hostRequest=null;dirty(false);list.replaceChildren();editor.replaceChildren(status);status.textContent='选择服务查看配置、权限和任务。'});
- mode(true);
+ showPackages();
 })();

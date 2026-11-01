@@ -1,5 +1,11 @@
 # 变更
 
+## 0.1.7（来源绑定兼容修复）
+
+- 兼容成功 feed 省略 numeric objectId 的响应：仅在本次 parse 取得的 export 与 feed.sceneInfo.dynamicExportId 精确一致，且宿主已绑定原生对象身份时，延续该原生对象身份。显式 objectId 仍须逐字匹配；缺失或冲突的 export 不放行。
+- 不为缺失 decodeKey 编造默认值；无密钥媒体仍须经宿主实际容器与解码验证。
+- 新增匿名结构回归，覆盖错误 export、跨来源、无原生对象证明和显式错误/null 对象身份。
+
 ## 0.1.6（分阶段就绪）
 
 - `share.resolve_public` 和 `share.resolve_channels` 已开放发现及调用；两者只报告经过来源绑定的原始解析结果和受控交接位置。

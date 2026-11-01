@@ -9,7 +9,10 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
@@ -61,6 +64,73 @@ type receivedSharePolicy struct {
 	actor              *sourceActorProof
 	binding            *shareRouteBinding
 	send               pluginruntime.RouteTransport
+	failureMu          sync.Mutex
+	failure            *shareResolutionFailure
+}
+
+// Only host-observed, reviewed diagnostics cross this boundary. Provider text,
+// URLs, credentials and arbitrary executor errors must never reach the journal.
+type shareResolutionFailure struct {
+	code, stage string
+	status      int
+	provider    *int64
+}
+
+func (e *shareResolutionFailure) Error() string { return e.code }
+func (e *shareResolutionFailure) SafeToolFailure() (string, string) {
+	return e.code, "分享解析未完成；请根据日志中的解析阶段、HTTP状态和安全错误码检查服务状态。原任务未自动重提。"
+}
+
+func safeShareResolutionFailure(stage string, err error) *shareResolutionFailure {
+	switch stage {
+	case "channels_parse", "channels_feed", "channels_shortlink", "channels_bridge", "result_validation", "plugin_invoke":
+	default:
+		stage = "host_callback"
+	}
+	failure := &shareResolutionFailure{code: "share_plugin_resolution_incomplete", stage: stage}
+	if err == nil {
+		return failure
+	}
+	if errors.Is(err, context.Canceled) {
+		failure.code = "share_resolution_cancelled"
+		return failure
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		failure.code = "share_resolution_timeout"
+		return failure
+	}
+	var web *mcptools.WebError
+	if errors.As(err, &web) {
+		switch web.Code {
+		case "plugin_route_network_failed", "plugin_route_http_rejected", "plugin_route_response_failed", "plugin_route_response_invalid", "response_too_large":
+			failure.code = "share_" + web.Code
+			if web.Status >= 100 && web.Status <= 599 {
+				failure.status = web.Status
+			}
+		}
+		return failure
+	}
+	switch err.Error() {
+	case "share_native_source_required", "share_source_scope_mismatch", "share_persisted_source_unavailable", "source_actor_not_authorized", "source_actor_authorization_changed", "share_request_authorization_changed", "share_plugin_disabled", "share_plugin_snapshot_changed", "share_invocation_changed", "share_source_changed", "share_native_source_unavailable", "share_native_source_changed", "share_source_binding_unavailable", "share_source_binding_changed", "share_route_out_of_order", "share_route_source_mismatch", "share_route_chain_finished", "share_route_response_invalid", "share_route_response_binding_failed", "share_result_binding_failed", "share_bridge_unavailable", "share_bridge_rejected", "share_bridge_response_invalid", "share_bridge_source_mismatch", "share_bridge_timeout_invalid", "share_bridge_already_consumed", "share_bridge_configuration_unavailable", "share_bridge_configuration_invalid":
+		failure.code = err.Error()
+	}
+	return failure
+}
+
+func (p *receivedSharePolicy) recordResolutionFailure(j pluginhost.Job, failure *shareResolutionFailure) *shareResolutionFailure {
+	p.failureMu.Lock()
+	defer p.failureMu.Unlock()
+	// A failed callback is more specific than its later failed result validation.
+	if p.failure != nil {
+		return p.failure
+	}
+	p.failure = failure
+	note := ""
+	if failure.provider != nil {
+		note = "provider_code=" + strconv.FormatInt(*failure.provider, 10)
+	}
+	p.manager.record(bot.Record{Event: "share_resolution_failed", Category: "error", ThreadID: p.message.ThreadID, MessageID: p.message.ID, CallID: j.ID, Tool: j.Tool, Status: "needs_review", Reason: failure.code, ToolCode: failure.code, ToolStage: failure.stage, ToolHTTPStatus: failure.status, DecisionNote: note, Origin: "share"})
+	return failure
 }
 
 func (m *Manager) newReceivedSharePolicy(ctx context.Context, message linuxnative.Message) (*receivedSharePolicy, error) {
@@ -252,17 +322,56 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	return nil
 }
 
-func (p *receivedSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, method string, raw json.RawMessage) (json.RawMessage, error) {
+func (p *receivedSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, method string, raw json.RawMessage) (result json.RawMessage, err error) {
+	stage := "host_callback"
+	var route struct {
+		Route string `json:"route"`
+	}
+	if method == "wechat/http_route" && json.Unmarshal(raw, &route) == nil {
+		stage = strings.ReplaceAll(route.Route, "-", "_")
+	} else if method == "wechat/channels_bridge" {
+		stage = "channels_bridge"
+	}
+	defer func() {
+		if err != nil {
+			p.recordResolutionFailure(j, safeShareResolutionFailure(stage, err))
+		}
+	}()
 	if method == "wechat/channels_bridge" {
 		return p.channelsBridge(ctx, j, cap, raw)
 	}
 	if method != "wechat/http_route" || p.binding == nil {
 		return nil, errors.New("share_host_service_unavailable")
 	}
-	return p.binding.Call(ctx, p.store, j, cap, raw, func(ctx context.Context) error { return p.Check(ctx, j, cap) }, p.send)
+	return p.binding.Call(ctx, p.store, j, cap, raw, func(ctx context.Context) error { return p.Check(ctx, j, cap) }, func(ctx context.Context, endpoint string, headers map[string]string, body json.RawMessage, maximum int64, timeout time.Duration) (json.RawMessage, error) {
+		reply, sendErr := p.send(ctx, endpoint, headers, body, maximum, timeout)
+		if sendErr != nil {
+			p.recordResolutionFailure(j, safeShareResolutionFailure(stage, sendErr))
+		} else {
+			var provider struct {
+				Code    *int64 `json:"code"`
+				ErrCode *int64 `json:"errCode"`
+			}
+			if json.Unmarshal(reply, &provider) == nil {
+				code := provider.ErrCode
+				if route.Route == "channels-parse" {
+					code = provider.Code
+				}
+				if code != nil && *code != 0 {
+					p.recordResolutionFailure(j, &shareResolutionFailure{code: "share_route_provider_rejected", stage: stage, provider: code})
+				}
+			}
+		}
+		return reply, sendErr
+	})
 }
 
-func (p *receivedSharePolicy) Validate(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
+func (p *receivedSharePolicy) Validate(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (result pluginruntime.VerifiedResult, err error) {
+	defer func() {
+		if err != nil {
+			err = p.recordResolutionFailure(j, safeShareResolutionFailure("result_validation", err))
+		}
+	}()
 	if p.binding == nil {
 		return pluginruntime.VerifiedResult{}, errors.New("share_source_binding_unavailable")
 	}
@@ -364,7 +473,7 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 	raw, _ := json.Marshal(args)
 	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: raw}, p)
 	if err != nil {
-		return source, errors.New("share_plugin_resolution_incomplete")
+		return source, p.recordResolutionFailure(out.Job, safeShareResolutionFailure("plugin_invoke", err))
 	}
 	if out.Job.State != "completed" {
 		return source, errors.New("share_plugin_resolution_needs_review")

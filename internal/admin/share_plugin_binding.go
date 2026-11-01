@@ -235,6 +235,9 @@ func (b *shareRouteBinding) accept(phase string, raw json.RawMessage) error {
 		var r struct {
 			Code *int `json:"errCode"`
 			Data struct {
+				Scene struct {
+					Export json.RawMessage `json:"dynamicExportId"`
+				} `json:"sceneInfo"`
 				Author struct {
 					Name string `json:"nickname"`
 				} `json:"authorInfo"`
@@ -252,7 +255,23 @@ func (b *shareRouteBinding) accept(phase string, raw json.RawMessage) error {
 		if json.Unmarshal(raw, &r) != nil || r.Code == nil || *r.Code != 0 {
 			return fail()
 		}
+		// Newer feed responses omit the numeric objectId. They must echo the
+		// exact export identity from this host-observed parse/feed chain before
+		// the already-bound native object identity can be carried forward.
+		export := ""
+		if len(r.Data.Scene.Export) > 0 {
+			if json.Unmarshal(r.Data.Scene.Export, &export) != nil || export == "" || export != b.export {
+				return fail()
+			}
+		}
 		id, e := shareUint64(r.Data.Feed.ID, true)
+		if len(r.Data.Feed.ID) == 0 {
+			if export == "" {
+				return fail()
+			}
+			nativeID, _ := json.Marshal(b.object)
+			id, e = shareUint64(nativeID, true)
+		}
 		if e != nil {
 			return fail()
 		}

@@ -120,6 +120,10 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 }
 
 func sharedVideoReadReason(err error) string {
+	var resolution *shareResolutionFailure
+	if errors.As(err, &resolution) {
+		return resolution.code
+	}
 	if err != nil && strings.HasPrefix(err.Error(), "media_") && publicShareErrorCode.MatchString(err.Error()) {
 		return err.Error()
 	}

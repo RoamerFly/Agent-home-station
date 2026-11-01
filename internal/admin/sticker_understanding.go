@@ -29,7 +29,8 @@ func (a mediaUnderstanding) understandSticker(ctx context.Context, m linuxnative
 	}
 	unavailable := func(reason string) (string, error) {
 		a.manager.record(bot.Record{Event: "sticker_observation_unavailable", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, Status: "unavailable", Reason: reason, Origin: "media"})
-		return "[收到表情包；本次画面读取失败，尚无文字、动作或情绪观察。结合前后聊天决定是否回应，原因：" + reason + "]", nil
+		text := "[收到表情包；本次画面读取失败，尚无文字、动作或情绪观察。结合前后聊天决定是否回应，原因：" + reason + "]"
+		return text, &bot.ObservationUnavailableError{Observation: text, Reason: reason}
 	}
 	native, ok := a.manager.native.(incomingReader)
 	if !ok {

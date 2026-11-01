@@ -69,7 +69,20 @@ def resolve(args, route):
     media = urlsplit(locator)
     if media.scheme != "https" or not media.hostname or media.username is not None or media.password is not None or len(locator) > 16384 or "\\" in locator or any(ord(c) < 33 for c in locator):
         raise ValueError("channels_media_locator_missing")
-    actual = uint64(info.get("objectId"), "channels_resolver_response_invalid", bool(expected))
+    scene = feed_data.get("sceneInfo", {})
+    if not isinstance(scene, dict):
+        raise ValueError("channels_resolver_response_invalid")
+    dynamic = scene.get("dynamicExportId")
+    if "dynamicExportId" in scene and (not isinstance(dynamic, str) or not dynamic or dynamic != identity):
+        raise ValueError("channels_resolved_video_mismatch")
+    if "objectId" in info:
+        # An explicit null/malformed/mismatched object is never replaced by the
+        # expected native identity, even when the export identity matches.
+        actual = uint64(info["objectId"], "channels_resolver_response_invalid", True)
+    elif expected and isinstance(dynamic, str) and dynamic == identity:
+        actual = expected
+    else:
+        raise ValueError("channels_feed_identity_unverified")
     if expected and actual != expected:
         raise ValueError("channels_resolved_video_mismatch")
     key = uint64(info.get("decodeKey"), "channels_decode_key_invalid")

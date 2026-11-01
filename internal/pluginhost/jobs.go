@@ -177,6 +177,7 @@ func (s *Store) AcknowledgeJob(ctx context.Context, id string, revision int, rem
 		}
 		j.RemoteID = remoteID
 		j.State = "running"
+		j.Diagnostic = nil // The previously uncertain submission is now verified.
 		return nil
 	})
 }
@@ -196,6 +197,22 @@ func (s *Store) RequestJobCancel(ctx context.Context, id string, revision int) (
 // FinishJob is a host-only checkpoint after provider/result validation, never a
 // public endpoint accepting an arbitrary plugin's claim about delivery.
 func (s *Store) FinishJob(ctx context.Context, id string, revision int, state string, verifiedAssets []string) (Job, error) {
+	return s.finishJob(ctx, id, revision, state, verifiedAssets, nil)
+}
+
+// ReviewJobFailure checkpoints an uncertain host invocation with a fixed safe
+// diagnostic. Neither plugin output nor error.Error() is accepted by this API.
+// It uses the same transaction and revision CAS as other job transitions.
+func (s *Store) ReviewJobFailure(ctx context.Context, id string, revision int, stage JobFailureStage) (Job, error) {
+	switch stage {
+	case JobFailureDispatch, JobFailureAuthority, JobFailureValidation, JobFailureResultMode:
+	default:
+		return Job{}, errors.New("invalid host job failure stage")
+	}
+	return s.finishJob(ctx, id, revision, "needs_review", nil, &JobDiagnostic{Stage: stage, Code: "plugin_invocation_failed"})
+}
+
+func (s *Store) finishJob(ctx context.Context, id string, revision int, state string, verifiedAssets []string, diagnostic *JobDiagnostic) (Job, error) {
 	return s.mutateJob(ctx, id, revision, func(j *Job) error {
 		if j.Recovery() == "terminal" || j.State == "pending" {
 			return errors.New("job not executing")
@@ -208,6 +225,11 @@ func (s *Store) FinishJob(ctx context.Context, id string, revision int, state st
 		}
 		j.State = state
 		j.Artifacts = append([]string{}, verifiedAssets...)
+		if diagnostic != nil {
+			j.Diagnostic = &JobDiagnostic{Stage: diagnostic.Stage, Code: diagnostic.Code}
+		} else if state != "needs_review" {
+			j.Diagnostic = nil
+		}
 		return nil
 	})
 }
@@ -244,6 +266,7 @@ func (s *Store) checkpointResult(ctx context.Context, id string, revision int, s
 		}
 		j.State = state
 		j.Artifacts = append([]string{}, assets...)
+		j.Diagnostic = nil // A verified result replaces the uncertain-call diagnostic.
 		j.Result = nil
 		if len(result) > 0 {
 			var compact bytes.Buffer

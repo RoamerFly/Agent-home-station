@@ -254,6 +254,77 @@ func TestShareBindingRejectsScopeRevisionAndFeedObjectConflict(t *testing.T) {
 	}
 }
 
+func TestShareBindingModernFeedRequiresNativeObjectAndExactObservedExport(t *testing.T) {
+	for _, mode := range []string{"valid", "metadata_changed", "missing_export", "wrong_export", "other_source", "unbound_object", "explicit_wrong", "explicit_null", "invalid_key"} {
+		t.Run(mode, func(t *testing.T) {
+			binding, _, job, _ := shareBindingFixture(t)
+			native := linuxnative.ChannelsSource{AccountID: "account", ThreadID: "room", MessageID: "message", ObjectID: "12345", Title: "Synthetic video", Author: "Synthetic author"}
+			if mode == "metadata_changed" {
+				native.Title, native.Author = "Earlier card description", "Earlier display name"
+				var err error
+				binding, err = newShareRouteBinding(linuxnative.Message{AccountID: "account", ThreadID: "room", ID: "message"}, native, companion.SourceRef{Account: "account", Thread: "room", MessageID: "message", EventID: "event", Revision: 2}, "https://weixin.qq.com/sph/synthetic123")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			play := previewURL
+			if mode == "other_source" {
+				play += "-foreign-source"
+			}
+			if err := binding.accept("channels-parse", json.RawMessage(`{"code":0,"data":{"playable_url":"`+play+`"}}`)); err != nil {
+				t.Fatal(err)
+			}
+			var feed map[string]any
+			if err := json.Unmarshal([]byte(verifiedFeed), &feed); err != nil {
+				t.Fatal(err)
+			}
+			data := feed["data"].(map[string]any)
+			info := data["feedInfo"].(map[string]any)
+			delete(info, "objectId")
+			delete(info, "decodeKey")
+			data["sceneInfo"] = map[string]any{"dynamicExportId": "export/synthetic"}
+			switch mode {
+			case "missing_export":
+				delete(data, "sceneInfo")
+			case "wrong_export":
+				data["sceneInfo"] = map[string]any{"dynamicExportId": "export/foreign"}
+			case "unbound_object":
+				binding.object = ""
+			case "explicit_wrong":
+				info["objectId"] = "999"
+			case "explicit_null":
+				info["objectId"] = nil
+			case "invalid_key":
+				info["decodeKey"] = "not-a-key"
+			}
+			raw, _ := json.Marshal(feed)
+			err := binding.accept("channels-feed", raw)
+			if mode != "valid" && mode != "metadata_changed" {
+				if err == nil || binding.resolved != nil {
+					t.Fatal("unproven identity or key accepted", mode)
+				}
+				return
+			}
+			if err != nil || binding.resolved.ObjectID != "12345" || binding.resolved.DecodeKey != "" {
+				t.Fatal("bound native identity or absent key changed", err)
+			}
+			if mode == "metadata_changed" && (native.Title != "Earlier card description" || native.Author != "Earlier display name" || binding.resolved.Title != "Synthetic video" || binding.resolved.Author != "Synthetic author") {
+				t.Fatal("native card and feed descriptions were conflated")
+			}
+			var result map[string]any
+			if err = json.Unmarshal([]byte(verifiedShareResult), &result); err != nil {
+				t.Fatal(err)
+			}
+			result["private_decode_key"] = ""
+			raw, _ = json.Marshal(result)
+			verified, _, err := binding.ValidateResult(t.Context(), job, raw, func(context.Context) error { return nil })
+			if err != nil || len(verified.Private) == 0 || strings.Contains(string(verified.Result), "export/synthetic") {
+				t.Fatal("verified private handoff was not retained safely", err)
+			}
+		})
+	}
+}
+
 const verifiedFeed = `{"errCode":0,"data":{"authorInfo":{"nickname":"Synthetic author"},"feedInfo":{"objectId":"12345","description":"Synthetic video","videoUrl":"https://media.example/video?token=synthetic-private","decodeKey":"18446744073709551615"}}}`
 const verifiedShareResult = `{"ok":true,"platform":"channels","source_url":"https://weixin.qq.com/sph/synthetic123","object_id":"12345","title":"Synthetic video","author":"Synthetic author","private_media_locators":["https://media.example/video?token=synthetic-private"],"private_decode_key":"18446744073709551615","coverage":"media_locator_only","video_observed":false,"media_downloaded":false,"untrusted_external_content":true}`
 

@@ -136,6 +136,13 @@
 </svg>
 <span>活动</span>
 </button>
+<button class="nav-link main-nav" data-section="plugins" type="button">
+<svg class="ui-icon" aria-hidden="true">
+<use href="#icon-tools">
+</use>
+</svg>
+<span>插件</span>
+</button>
 <button class="nav-link main-nav" data-section="companion" type="button">
 <svg class="ui-icon" aria-hidden="true">
 <use href="#icon-whale">
@@ -219,7 +226,6 @@
 <nav class="context-nav" aria-label="页内导航" data-nav-group="wechat" hidden>
 <button class="nav-link subnav-link" data-section="wechat" type="button">微信账号</button>
 <button class="nav-link subnav-link" data-section="provider" type="button">模型与语音</button>
-<button class="nav-link subnav-link" data-section="plugins" type="button">扩展与连接</button>
 <button class="nav-link subnav-link" data-section="permissions" type="button">权限与行为</button>
 <button class="nav-link subnav-link" data-section="settings" type="button">系统</button>
 </nav>
@@ -867,17 +873,12 @@
 <div aria-live="polite" class="mcp-result" id="mcp-test-result"></div>
 </details>
 </section>
-<section aria-labelledby="plugins-title" class="page" id="plugins">
-<nav class="local-nav" aria-label="扩展类型">
-<button type="button" class="nav-link" data-section="plugins">插件</button>
-<button type="button" class="nav-link" data-section="mcp">联网与 MCP</button>
+<section aria-label="插件中心" class="page" id="plugins">
+<nav class="local-nav" aria-label="插件中心页面">
+<button type="button" class="nav-link" data-section="plugins">能力插件</button>
+<button type="button" class="nav-link" data-section="mcp">连接与 MCP</button>
+<button class="secondary plugin-refresh" id="plugins-refresh" type="button">更新列表</button>
 </nav>
-<div class="section-heading page-actions">
-<div>
-<h2 class="sr-only" id="plugins-title">插件中心</h2>
-</div>
-<button class="secondary" id="plugins-refresh" type="button">更新列表</button>
-</div>
 <div class="plugin-workspace">
 <aside class="panel plugin-browser">
 <div class="plugin-summary">

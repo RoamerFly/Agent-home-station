@@ -46,6 +46,39 @@ class ChannelsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"ambiguous_channels_source"):
             adapter.resolve({"url":SOURCE,"export_id":"export/synthetic","nonce_id":"synthetic"},route)
 
+    def test_feed_export_echo_keeps_the_bound_native_object_without_inventing_a_key(self):
+        def modern(name, value):
+            if name == "channels-feed":
+                value["data"]["feedInfo"].pop("objectId")
+                value["data"]["feedInfo"].pop("decodeKey")
+                value["data"]["sceneInfo"] = {"dynamicExportId":"export/synthetic"}
+        route, calls = self.fixture(modern)
+        result = adapter.resolve({"url":SOURCE,"expected_object_id":"12345678901234567890"}, route)
+        self.assertEqual(result["object_id"], "12345678901234567890")
+        self.assertEqual(result["private_decode_key"], "")
+        self.assertFalse(result["media_downloaded"])
+        self.assertEqual(len(calls), 2)
+
+    def test_missing_numeric_object_needs_exact_export_echo_and_native_binding(self):
+        for mode in ("missing_export", "wrong_export", "cross_source", "missing_native", "explicit_wrong", "explicit_null", "explicit_wrong_with_wrong_export"):
+            def mutate(name, value):
+                if name == "channels-parse" and mode == "cross_source":
+                    value["data"]["playable_url"] = "https://channels.weixin.qq.com/finder-preview/detail?token=other&eid=export/other-source"
+                if name == "channels-feed":
+                    info = value["data"]["feedInfo"]
+                    info.pop("objectId")
+                    value["data"]["sceneInfo"] = {"dynamicExportId":"export/synthetic"}
+                    if mode == "missing_export": value["data"].pop("sceneInfo")
+                    if mode in ("wrong_export", "explicit_wrong_with_wrong_export"):
+                        value["data"]["sceneInfo"]["dynamicExportId"] = "export/foreign"
+                    if mode in ("explicit_wrong", "explicit_wrong_with_wrong_export"): info["objectId"] = "9"
+                    if mode == "explicit_null": info["objectId"] = None
+            route, _ = self.fixture(mutate)
+            arguments = {"url":SOURCE,"expected_object_id":"12345678901234567890"}
+            if mode == "missing_native": arguments.pop("expected_object_id")
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                adapter.resolve(arguments, route)
+
     def test_wrong_work_and_uint64_never_accepted(self):
         route,_=self.fixture()
         with self.assertRaisesRegex(ValueError,"channels_resolved_video_mismatch"):
