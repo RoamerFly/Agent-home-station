@@ -8,6 +8,7 @@ import (
 
 func TestWindowsToolCatalogueOmitsUnsupportedLinuxExecutor(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	c := f.manager.agent.config()
 	c.Enabled, c.Host.Mode = true, "full"
 	c.Host.Windows = &agenthost.WindowsConfig{Pythonw: filepath.Join(c.Host.Roots[0], "pythonw.exe"), Helper: filepath.Join(c.Host.Roots[0], "helper.pyw"), Spool: filepath.Join(c.Host.Roots[0], "private")}

@@ -1,7 +1,9 @@
 # 项目开发
 
-范围：项目登记、读写、搜索与执行。
+独立 Python MCP stdio 插件，提供 project_list/read/create、server_status/list/read/search/write/edit、server_exec、server_process 与 server_windows_process。工具描述、schema、命令映射和项目登记 JSON 的解释保存在 runtime/catalog.json 与 runtime/main.py 中。
 
-当前状态：迁移契约，旧实现仍在主体中，尚未迁入独立进程。不得作为可安装成品或可调用能力宣传。
+必须安装、配置并启用本插件，部署受管 Python 与平台隔离执行器后才能实际调用；未安装或隔离不可用时没有主体实现回退。安装不会自动启用。共享代码、模型、运行库和当前账号会话目录继续使用宿主管理的原路径，不迁移或复制用户数据。
 
-宿主协议见 ../../docs/plugins/PROTOCOL.md。不得绕过宿主直接发送微信；生成结果与投递回执分别记录。
+插件只通过 wechat/workspace_request 请求本次已绑定的操作；没有工作区挂载、网络、宿主凭证或直接进程执行权。文件与命令由宿主按真实来源、账号、会话、权限、原参数执行并保存实际结果。Markdown workspace_* 记忆与其编辑器仍为主体核心功能。
+
+离线验证：python -B -m unittest discover -s plugins/project-development/tests。Go 的 TestProjectPlugin* 验证宿主安全边界；TestLiveProjectPluginIsolatedRuntimeWithSyntheticWorkspace 使用 WECHAT_PLUGIN_TEST_PYTHON 显式选择隔离 Python，仅操作临时合成工作区，不调用模型或微信。

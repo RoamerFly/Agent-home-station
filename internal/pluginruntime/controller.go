@@ -90,6 +90,7 @@ type Controller struct {
 	failures map[string]string
 	loaded   map[string]loadedPlugin
 	closed   bool
+	services *ManagedServices
 }
 
 // loadedPlugin is the exact persistent identity that the currently running
@@ -111,6 +112,18 @@ func NewController(store *pluginhost.Store, executor pluginhost.Executor) (*Cont
 		return nil, err
 	}
 	return &Controller{store: store, host: h, busy: map[string]bool{}, changed: make(chan struct{}), failures: map[string]string{}, loaded: map[string]loadedPlugin{}}, nil
+}
+
+// AttachManagedServices binds the host-owned resource registry once. It does
+// not expose service descriptors or process-launch rights to plugin code.
+func (c *Controller) AttachManagedServices(services *ManagedServices) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || services == nil || c.services != nil && c.services != services {
+		return errors.New("plugin service registry unavailable or already bound")
+	}
+	c.services = services
+	return nil
 }
 
 // notifyLocked wakes callers waiting to reserve a plugin invocation.  The
@@ -250,6 +263,14 @@ func (c *Controller) Stop(ctx context.Context, id string, revision int) (err err
 	if i.Revision != revision {
 		return pluginhost.ErrRevision
 	}
+	c.mu.Lock()
+	services := c.services
+	c.mu.Unlock()
+	if services != nil {
+		if err = services.StopOwner(ctx, id); err != nil {
+			return err
+		}
+	}
 	if c.host.Status(id).Registered {
 		if err = c.host.Disable(id); err != nil {
 			return err
@@ -266,10 +287,17 @@ func (c *Controller) Stop(ctx context.Context, id string, revision int) (err err
 func (c *Controller) Close() error {
 	c.mu.Lock()
 	c.closed = true
+	services := c.services
 	c.loaded = map[string]loadedPlugin{}
 	c.notifyLocked()
 	c.mu.Unlock()
 	// Keep Enabled as administrator intent across restarts. No process starts
 	// automatically; explicit start may recover queries, never tool submissions.
-	return c.host.Close()
+	err := c.host.Close()
+	if services != nil {
+		cleanup, cancel := context.WithTimeout(context.Background(), 56*time.Second)
+		defer cancel()
+		err = errors.Join(err, services.Close(cleanup))
+	}
+	return err
 }

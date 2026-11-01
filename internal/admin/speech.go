@@ -40,28 +40,35 @@ func speechView(c bailian.Config) map[string]any {
 }
 func (s *Server) speechRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/speech/music-service", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		var config windowsMusicConfig
-		data, err := os.ReadFile(filepath.Join(s.manager.dir, "windows-music.json"))
-		configured := err == nil && len(data) <= 16384 && json.Unmarshal(data, &config) == nil && config.Enabled && config.Policy == windowsMusicPolicy
-		s.manager.musicProcessMu.Lock()
-		process := s.manager.windowsMusic
-		s.manager.musicProcessMu.Unlock()
-		running := false
-		if process != nil {
-			select {
-			case <-process.done:
-			default:
-				running = true
-			}
+		result, err := (&permittedTools{manager: s.manager}).controlMusicService(s.speechPluginTestContext(r), "status")
+		if err != nil {
+			fail(w, 409, err.Error())
+			return
 		}
-		respond(w, 200, map[string]any{"platform": runtime.GOOS, "configured": configured, "running": running, "busy": s.manager.windowsMusicBusy()})
+		var value any
+		_ = json.Unmarshal([]byte(result), &value)
+		respond(w, 200, value)
 	}))
 	mux.HandleFunc("POST /api/speech/music-service/start", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		if runtime.GOOS != "windows" {
 			fail(w, 400, "此入口用于已登记的Windows音乐后端")
 			return
 		}
-		result, err := s.manager.startWindowsMusic(r.Context())
+		result, err := (&permittedTools{manager: s.manager}).controlMusicService(s.speechPluginTestContext(r), "start")
+		if err != nil {
+			fail(w, 409, err.Error())
+			return
+		}
+		var value any
+		_ = json.Unmarshal([]byte(result), &value)
+		respond(w, 200, value)
+	}))
+	mux.HandleFunc("POST /api/speech/music-service/stop", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if runtime.GOOS != "windows" {
+			fail(w, 400, "此入口用于已登记的Windows音乐后端")
+			return
+		}
+		result, err := (&permittedTools{manager: s.manager}).controlMusicService(s.speechPluginTestContext(r), "stop")
 		if err != nil {
 			fail(w, 409, err.Error())
 			return

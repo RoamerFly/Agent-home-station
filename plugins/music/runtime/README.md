@@ -34,3 +34,5 @@ kind 为 service 或 input；service code 使用 yue_account_scope_mismatch、yu
 模板数据形状为 `{"version":1,"templates":{"rvc_recovery_failed":{"kind":"input","message":"原RVC任务恢复校验失败：{provider_code}；检查原文件、配方及声线配置，不新建重复歌曲"}}}`。当前共有 12 个固定 code，每项恰含 kind、message；唯一占位符是 `{provider_code}`。Python 及宿主均只做字面替换，不求值格式表达式。
 
 宿主必须通过已安装包文件索引读取并验证该 JSON 的哈希，按 opaque code 查固定 kind/message 模板，核验 provider_code 与实际 JSON error 一致，并用实际安全 provider_code（无值时空串）替换后严格比较 message。分类逻辑不应再复制到 Go。宿主还必须核验原传输字段未变，再使用插件分类；不得把插件提供的引用当成已下载或已发送的音频。每个绑定调用只回调一次，失败或不确定结果不重试。相同 account/thread/requester/purpose/request_key 在同一运行时内不能再次请求，即使第一次宿主失败；恢复进程与持久幂等仍由宿主控制，不在插件伪造缓存成功。
+
+music.service_control 是仅宿主调用的固定服务动作协议：start/status/stop 经 wechat/service_control 回调，插件无启动器、进程句柄或主机路径。状态不证明 GPU/模型就绪。

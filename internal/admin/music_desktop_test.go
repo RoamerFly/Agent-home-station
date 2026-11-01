@@ -3,11 +3,15 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+	"wechat-bot/internal/pluginruntime"
 )
 
 func TestWindowsMusicPolicyScopeAndForeignPortRefused(t *testing.T) {
@@ -61,28 +65,44 @@ func TestWindowsMusicPolicyScopeAndForeignPortRefused(t *testing.T) {
 	if _, err := f.manager.startWindowsMusic(ctx); err != context.Canceled {
 		t.Fatal("cancelled launch admitted", err)
 	}
+	listener.Close()
+	revoked := errors.New("synthetic source revoked during launch preparation")
+	ctx = context.WithValue(t.Context(), musicServiceControlCheckKey{}, func(context.Context) error {
+		// Simulate authority changing after the private credential has been
+		// prepared, before the final process admission. The fake executable
+		// must never be invoked, and no process may be adopted.
+		if _, err := os.Stat(filepath.Join(f.manager.dir, "windows-music-token")); err == nil {
+			return revoked
+		}
+		return nil
+	})
+	if _, err := f.manager.startWindowsMusic(ctx); !errors.Is(err, revoked) || f.manager.windowsMusicStatus().Running {
+		t.Fatal("launch preparation bypassed current source check", err)
+	}
 }
 
-func TestWindowsMusicBusyIncludesJobsAndCorruption(t *testing.T) {
-	f := setup(t)
-	if f.manager.windowsMusicBusy() {
-		t.Fatal("unstarted music marked busy")
+func TestManagedServiceRegistryInitializationDoesNotAcquireManagerLock(t *testing.T) {
+	m := &Manager{}
+	m.mu.Lock()
+	initialized := make(chan *pluginruntime.ManagedServices, 1)
+	go func() { initialized <- m.managedServiceRegistry() }()
+	var registry *pluginruntime.ManagedServices
+	select {
+	case registry = <-initialized:
+		m.mu.Unlock()
+	case <-time.After(2 * time.Second):
+		m.mu.Unlock()
+		t.Fatal("generic registry initialization waits on Manager.mu")
 	}
-	f.manager.windowsMusic = &windowsMusicProcess{done: make(chan struct{})}
-	defer func() { f.manager.windowsMusic = nil }()
-	path := filepath.Join(f.manager.privateWorkspaceFor(f.manager.native.Account()), "music/jobs/jobs.json")
-	os.MkdirAll(filepath.Dir(path), 0700)
-	for _, item := range []struct {
-		data string
-		busy bool
-	}{{`{"a":{"state":"running"}}`, true}, {`{"a":{"state":"queued"}}`, true}, {`{"a":{"state":"completed"}}`, false}, {`invalid`, true}} {
-		os.WriteFile(path, []byte(item.data), 0600)
-		if f.manager.windowsMusicBusy() != item.busy {
-			t.Fatal("wrong drain decision", item.data)
-		}
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if m.managedServiceRegistry() != registry {
+				t.Error("multiple registry instances")
+			}
+		}()
 	}
-	close(f.manager.windowsMusic.done)
-	if f.manager.windowsMusicBusy() {
-		t.Fatal("exited service retained a busy lock")
-	}
+	wg.Wait()
 }

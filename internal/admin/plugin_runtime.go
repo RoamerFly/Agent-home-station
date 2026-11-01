@@ -71,6 +71,10 @@ func (m *Manager) installedPluginRuntime() (*pluginruntime.Controller, bool, err
 	if err != nil {
 		return nil, false, err
 	}
+	if err = h.AttachManagedServices(m.managedServiceRegistry()); err != nil {
+		_ = h.Close()
+		return nil, false, err
+	}
 	m.packageRuntime = h
 	m.packageRuntimeReady = ready
 	return h, ready, nil

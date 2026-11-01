@@ -95,12 +95,12 @@ func (e *Executor) Start(ctx context.Context, p pluginhost.Package, g pluginhost
 	if !platform {
 		return nil, errors.New("plugin does not support current platform")
 	}
-	// Network and device are per-call host proxies, never direct socket or device
-	// grants. The platform sandbox stays offline and does not receive process,
-	// mount, private-network, or device authority; unsupported GPU/workspace
-	// grants fail closed.
+	// Network, device and workspace permissions select per-call host proxies.
+	// They never grant sockets, devices, workspace mounts or process execution
+	// to this sandbox. Unsupported permissions, including direct GPU access,
+	// fail closed; the host separately authorizes every proxy operation.
 	for _, permission := range g.Permissions {
-		if permission != "artifact.read" && permission != "artifact.write" && permission != "network" && permission != "model.invoke" && permission != "device" {
+		if permission != "artifact.read" && permission != "artifact.write" && permission != "network" && permission != "model.invoke" && permission != "device" && permission != "workspace.read" && permission != "workspace.write" && permission != "process.execute" {
 			return nil, errors.New("plugin sandbox capability not implemented: " + permission)
 		}
 	}

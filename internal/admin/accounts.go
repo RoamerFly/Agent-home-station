@@ -266,7 +266,7 @@ func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 		if item.manager != nil {
 			item.manager.op.Lock()
 			defer item.manager.op.Unlock()
-			if (item.manager.mobile != nil && item.manager.mobile.Busy()) || (item.manager.processes != nil && item.manager.processes.Busy()) || item.manager.windowsMusicBusy() {
+			if (item.manager.mobile != nil && item.manager.mobile.Busy()) || (item.manager.processes != nil && item.manager.processes.Busy()) || item.manager.managedServiceRegistry().Busy() {
 				fail(w, 409, "此账号仍有后台任务，请结束任务后再移除")
 				return
 			}

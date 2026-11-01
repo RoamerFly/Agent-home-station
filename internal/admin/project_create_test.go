@@ -10,6 +10,7 @@ import (
 
 func TestProjectCreatePreservesFilesAndChecksScope(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	ctx := context.Background()
 	raw := json.RawMessage(`{"name":"my-tool"}`)
 	result, err := p.Call(ctx, "project_create", raw)

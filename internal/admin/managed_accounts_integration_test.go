@@ -97,6 +97,9 @@ func TestManagedWorkspaceRootsIgnoreBroadStoredHostRoots(t *testing.T) {
 
 func TestManagedAccountPairFilesMemoryTasksAndCapabilityProjection(t *testing.T) {
 	f, p := managedAccountPair(t)
+	for _, tool := range p {
+		installProjectPluginTestRuntime(t, tool)
+	}
 	x := [2]ExecutionContext{p[0].executionContext(), p[1].executionContext()}
 	if x[0].Private == x[1].Private || x[0].Conversation == x[1].Conversation || x[0].Public != x[1].Public {
 		t.Fatal("incorrect account/public layout")
@@ -215,6 +218,9 @@ func TestManagedAccountPairRealLinuxCommandsAndReadOnlyPublicProjects(t *testing
 		t.Skip("bubblewrap not installed")
 	}
 	_, p := managedAccountPair(t)
+	for _, tool := range p {
+		installProjectPluginTestRuntime(t, tool)
+	}
 	x := [2]ExecutionContext{p[0].executionContext(), p[1].executionContext()}
 	shared := filepath.Join(x[0].Public, "projects", "shared-program.txt")
 	accountTool(t, p[0], "server_write", map[string]any{"path": shared, "content": "synthetic shared program"})

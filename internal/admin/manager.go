@@ -94,8 +94,8 @@ type Manager struct {
 	packagesClosed      bool
 	packageRuntime      *pluginruntime.Controller
 	packageRuntimeReady bool
-	musicProcessMu      sync.Mutex
-	windowsMusic        *windowsMusicProcess
+	managedServices     *pluginruntime.ManagedServices
+	managedServicesOnce sync.Once
 	memoryRunnerMu      sync.Mutex
 	memoryRunnerWG      sync.WaitGroup
 	memoryRunners       map[string]context.CancelFunc

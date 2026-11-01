@@ -2,15 +2,16 @@
   "schema_version": 1,
   "id": "project-development",
   "name": "项目开发",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "host_protocol": 1,
-  "status": "migration-pending",
+  "status": "ready",
   "platforms": [
     "windows-amd64",
     "linux-amd64"
   ],
   "runtime": {
-    "transport": "unbound"
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
   },
   "permissions": [
     "workspace.read",
@@ -19,14 +20,17 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "06f2d76f84988b3f8833d41c6487805c778d07ff9d62b16a15ee7046bca1f344",
-    "CHANGELOG.md": "0688abebe9b7a3826ee5def33287290c20cd363bdf25bda9f1aaef7a7219920b",
-    "config.schema.json": "95693d311a4827fcd7ab4d1ed7a6f590568841010f9999fe7761e7c810cb753f",
-    "MIGRATION.md": "32dd93d45a27e5bbb964040cd5932bb16fd48e52920e3102dd83dc367191c2f3",
-    "PERMISSIONS.md": "77f687e08957cfa44442b5fbdf76c2ee86dc843e43c744a83983d503206477d3",
-    "README.md": "12fcb3a156d2ba12e28933cd4afda04e776c1a1f946fe12fcb7bec76c7373fae",
-    "runtime/README.md": "072ef9ce9b7fb7c06975dd7b9cf762a920d23d7aa16fdf9b08beb759d81a5c1a",
+    "capabilities.json": "2ff57ad4a7b42dd4387e511c71b1aa7df3e902ceb2875313401bbe8f934ae4f2",
+    "CHANGELOG.md": "294ebeacebd478abc76badfe482e801c7a8555b80a1eab426771bf6f5aad5c9d",
+    "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
+    "MIGRATION.md": "f635b576057cb7ea5790502e2fefb1452f28eac8bef4e4062767404d7d742c9b",
+    "PERMISSIONS.md": "3ac515ec64e7c9ca5154fe112ca473cea21548a78f7c32ca5d548b22b97ea5e3",
+    "README.md": "7874ab6ac5da862e54a8c3122318c3ff60c4df24918a29ebb20570985acd9467",
+    "runtime/catalog.json": "343a2e3fdd043563b609e20f78bf4ce1475547f448165d5c59a8ddb8e6eb390d",
+    "runtime/main.py": "c74b0c68c9c3ac6983e6888965a8080b10b32d38213a2de4960e82e5b82e0501",
+    "runtime/README.md": "e4fc54945be25e944d679220c56b89a0ff1b80fdc57ecf86395150274ed40175",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "tests/test_runtime.py": "ded76809cd879217d941ace6990435208f085cf5d965042f0509fef207bb0ee1",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   }
 }

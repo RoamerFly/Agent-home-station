@@ -62,7 +62,7 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" {
 				if p.Status != "ready" || p.Runtime.Transport != "mcp-stdio" || p.Runtime.Entrypoint != "runtime/main.py" {
 					t.Fatal("web runtime not connected")
 				}
@@ -72,13 +72,19 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"speech.synthesize": true, "speech.synthesize_named": true}
 					}
 					if d.Name() == "music" {
-						want = map[string]bool{"music.generate": true, "music.bridge_request": true}
+						want = map[string]bool{"music.generate": true, "music.bridge_request": true, "music.service_control": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "model.invoke" || p.Permissions[1] != "network" {
 							t.Fatal("music package must declare separate cloud and local bridge proxies")
 						}
 					}
 					if d.Name() == "share-reader" {
 						want = map[string]bool{"share.resolve_public": true, "share.resolve_channels": true}
+					}
+					if d.Name() == "project-development" {
+						want = map[string]bool{"project.workspace_read": true, "project.workspace_write": true, "project.workspace_execute": true}
+						if len(p.Permissions) != 3 || p.Permissions[0] != "workspace.read" || p.Permissions[1] != "workspace.write" || p.Permissions[2] != "process.execute" {
+							t.Fatal("project package must declare three separate workspace/process proxies")
+						}
 					}
 					if d.Name() == "mobile-control" {
 						want = map[string]bool{"device.plan": true, "device.list": true, "device.observe": true, "device.act": true, "device.record": true, "device.read_artifact": true}
@@ -112,11 +118,21 @@ func TestOfficialContracts(t *testing.T) {
 							}
 							if d.Name() == "music" {
 								permission := "model.invoke"
-								if cap.ID == "music.bridge_request" {
+								if cap.ID != "music.generate" {
 									permission = "network"
 								}
 								if cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != permission {
 									t.Fatal("music capability must remain synchronous and use its own proxy")
+								}
+							}
+							if d.Name() == "project-development" {
+								permission := map[string]string{
+									"project.workspace_read":    "workspace.read",
+									"project.workspace_write":   "workspace.write",
+									"project.workspace_execute": "process.execute",
+								}[cap.ID]
+								if cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != permission {
+									t.Fatal("project capability must use only its corresponding host proxy", cap.ID)
 								}
 							}
 							if d.Name() == "speech" {

@@ -163,6 +163,7 @@ func TestGroupDeliveryReportsGoToOwnerPrivateWithoutMemberEscalation(t *testing.
 	for _, sender := range []string{"wxid_owner", "wxid_member"} {
 		t.Run(sender, func(t *testing.T) {
 			f, p := trustedAgent(t)
+			installProjectPluginTestRuntime(t, p)
 			f.manager.mu.Lock()
 			f.manager.config.Companion.Enabled = true
 			f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: "source@chatroom", Name: "来源群", Mode: "mention"})

@@ -120,7 +120,7 @@ class Wire:
                     if not isinstance(configuration, dict):
                         raise ValueError("invalid_configuration")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "music", "version": "0.3.0"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "music", "version": "0.4.0"}}
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/list" and initialized:
@@ -132,6 +132,16 @@ class Wire:
                         raise ValueError("host_context_required")
                     if params.get("name") == "music.bridge_request":
                         result = local_music.bridge_request(params.get('arguments'), lambda value: self.local_request(context, value))
+                    elif params.get("name") == "music.service_control":
+                        arguments = params.get("arguments")
+                        if (not isinstance(arguments, dict) or set(arguments) != {"action"}
+                                or arguments["action"] not in ("start", "status", "stop")):
+                            raise ValueError("invalid_service_control")
+                        identity = ("service", hashlib.sha256(json.dumps(context, sort_keys=True, ensure_ascii=False).encode("utf8")).digest())
+                        if identity in self.local_contexts:
+                            raise ValueError("music_service_request_already_used")
+                        self.local_contexts.add(identity)
+                        result = self.host("wechat/service_control", arguments)
                     elif params.get("name") == "music.generate":
                         result = cloud_music.generate(params.get("arguments"), configuration, lambda value: self.host("wechat/model_request", value))
                     else:

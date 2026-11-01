@@ -46,6 +46,13 @@ func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, 
 			if p == "network" && job.Plugin == "music" && cap.ID == "music.bridge_request" && method == "wechat/music_bridge" {
 				allowed = true
 			}
+			if p == "network" && job.Plugin == "music" && cap.ID == "music.service_control" && method == "wechat/service_control" {
+				allowed = true
+			}
+			if job.Plugin == "project-development" && method == "wechat/workspace_request" &&
+				(cap.ID == "project.workspace_read" && p == "workspace.read" || cap.ID == "project.workspace_write" && p == "workspace.write" || cap.ID == "project.workspace_execute" && p == "process.execute") {
+				allowed = true
+			}
 			// Local transcription is a bounded host adapter for one verified
 			// media reference. It does not grant the plugin a general process
 			// executor: the host resolves its fixed runner and resource profile.

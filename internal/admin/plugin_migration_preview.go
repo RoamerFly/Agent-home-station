@@ -360,7 +360,7 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	if err := ctx.Err(); err != nil {
 		return pluginMigrationAccount{}, err
 	}
-	paths := map[string]string{"config_json": filepath.Join(m.dir, "config.json"), "speech_config_json": filepath.Join(m.dir, "speech-config.json"), "mcp_config_json": filepath.Join(m.dir, "mcp-config.json"), "channels_config_json": filepath.Join(m.dir, "channels-config.json")}
+	paths := map[string]string{"config_json": filepath.Join(m.dir, "config.json"), "speech_config_json": filepath.Join(m.dir, "speech-config.json"), "mcp_config_json": filepath.Join(m.dir, "mcp-config.json"), "channels_config_json": filepath.Join(m.dir, "channels-config.json"), "agent_config_json": filepath.Join(m.dir, "agent-config.json")}
 	before := map[string]string{}
 	for name, path := range paths {
 		before[name], _ = migrationSourceHash(path)
@@ -369,6 +369,7 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	config, mcp := cloneConfig(m.config), cloneMCP(m.mcp)
 	m.mu.Unlock()
 	speech := m.speechConfig()
+	agent := m.agent.config()
 	channelSettings, channelsErr := loadChannelsSettings(m.dir)
 	sources := map[string]string{}
 	sourceErrors := map[string]string{}
@@ -559,7 +560,18 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	}
 	share := migrationStep("share-reader", packages, channelSettings.Enabled, shareValues, map[string]pluginMigrationSecret{"yuanbao_cookie": cookieSecret, "assistant_cookie": assistantSecret}, pluginhost.ConfigUpdate{Values: shareValues, Secrets: map[string]string{"yuanbao_cookie": cookie, "assistant_cookie": assistant}}, shareRequired, shareUnmapped, "", sources)
 
-	return pluginMigrationAccount{Account: m.native.Account(), SourceHashes: sources, SourceErrors: sourceErrors, Plugins: []pluginMigrationStep{media, speechStep, musicStep, web, share}}, nil
+	// Legacy filesystem roots and host grants are security boundaries owned
+	// by the host. They are never copied into this empty plugin configuration.
+	// Only an explicitly enabled full executor expresses the old intent for all
+	// three proxy permissions; read/files require a new administrator decision.
+	projectRequired := []string{}
+	projectEnabled := agent.Enabled && agent.Host.Mode == "full"
+	if !projectEnabled {
+		projectRequired = append(projectRequired, "explicit_project_permissions_review_required")
+	}
+	projectValues := map[string]json.RawMessage{}
+	project := migrationStep(projectPluginID, packages, projectEnabled, projectValues, map[string]pluginMigrationSecret{}, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{}}, projectRequired, nil, "", sources)
+	return pluginMigrationAccount{Account: m.native.Account(), SourceHashes: sources, SourceErrors: sourceErrors, Plugins: []pluginMigrationStep{media, speechStep, musicStep, web, share, project}}, nil
 }
 
 func (m *Manager) pluginMigrationPreview(ctx context.Context) (pluginMigrationPreview, error) {

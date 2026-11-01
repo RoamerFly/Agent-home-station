@@ -28,6 +28,7 @@ ASR_PATH = "/api/v1/services/aigc/multimodal-generation/generation"
 MUSIC_PATH = "/api/v1/services/audio/music/generation"
 AUDIO_REVIEW_PATH = "/compatible-mode/v1/chat/completions"
 AUDIO_REVIEW_MODEL = "qwen3.8-omni-flash"
+PROJECT_DEVELOPMENT_PERMISSIONS = {"workspace.read", "workspace.write", "process.execute"}
 
 
 def _sha256(data: bytes) -> str:
@@ -171,6 +172,38 @@ def _declares_local_music_bridge(repo: Path) -> bool:
     )
 
 
+def _declares_project_development(repo: Path) -> bool:
+    """Accept only the reviewed empty-config workspace/project bridge.
+
+    The legacy agent host remains the authority for roots, isolation and
+    process profiles.  This offline preview therefore validates the package
+    declaration but never tries to derive, copy or expose those controls.
+    """
+    package, package_error = _read_json(repo / "plugins" / "project-development" / "plugin.json", required=True)
+    schema, schema_error = _read_json(repo / "plugins" / "project-development" / "config.schema.json", required=True)
+    capabilities, capabilities_error = _read_json(repo / "plugins" / "project-development" / "capabilities.json", required=True)
+    if package_error or schema_error or capabilities_error or package.get("id") != "project-development" or package.get("status") != "ready":
+        return False
+    if not PROJECT_DEVELOPMENT_PERMISSIONS.issubset(set(package.get("permissions", []))):
+        return False
+    if schema.get("type") != "object" or schema.get("properties") != {} or schema.get("additionalProperties") is not False:
+        return False
+    rows = capabilities.get("capabilities")
+    if not isinstance(rows, list):
+        return False
+    required = {
+        "project.workspace_read": "workspace.read",
+        "project.workspace_write": "workspace.write",
+        "project.workspace_execute": "process.execute",
+    }
+    declared = {
+        item.get("id"): set(item.get("permissions", []))
+        for item in rows
+        if isinstance(item, dict) and item.get("implementation") == "ready"
+    }
+    return all(permission in declared.get(capability, set()) for capability, permission in required.items())
+
+
 def _safe_local_music_endpoint(raw: str) -> str | None:
     """Mirror localMusicEndpoint: only a root HTTPS or local/private HTTP URL."""
     if not raw or len(raw) > 4096 or any(character.isspace() for character in raw) or "\\" in raw or "\x00" in raw or "?" in raw or "#" in raw:
@@ -273,6 +306,34 @@ def _music_plan(repo: Path, speech: dict[str, Any]) -> tuple[dict[str, Any], dic
     step = _step("music", _package(repo, "music"), cloud_enabled or local_enabled, values, secrets, required,
                  ["tts_*", "asr_*", "named_voice_library", "rvc_profiles"])
     return step, handoff
+
+
+def _project_development_plan(repo: Path, agent: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Describe legacy workspace intent without transferring host authority.
+
+    A ready project-development package exposes read/write/execute together.
+    Old `read` or `files` host modes therefore cannot be silently converted to
+    it: the administrator must explicitly review the expanded package grant.
+    Roots and platform/process profiles remain in host-owned state and are
+    intentionally neither inspected nor put into this plan.
+    """
+    host = agent.get("host") if isinstance(agent.get("host"), dict) else {}
+    mode = _safe_text(host.get("mode"))
+    legacy_enabled = bool(agent.get("enabled")) and mode == "full"
+    required: list[str] = []
+    if bool(agent.get("enabled")):
+        if not _declares_project_development(repo):
+            required.append("official_project_development_adapter_not_declared_by_plugin")
+        elif mode != "full":
+            required.append("explicit_project_permissions_review_required")
+    unmapped = [
+        "agent-config.json:host.roots",
+        "agent-config.json:host.isolation",
+        "agent-config.json:host.windows",
+        "agent-config.json:host.timeout_seconds",
+        "agent-config.json:host.output_bytes",
+    ]
+    return _step("project-development", _package(repo, "project-development"), legacy_enabled, {}, {}, required, unmapped), {}
 
 
 def _media_plan(repo: Path, config: dict[str, Any], speech: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
@@ -469,20 +530,22 @@ def build_preview(root: Path, repo: Path, primary_account: str = "primary") -> t
         speech, speech_error = _read_json(directory / "speech-config.json")
         mcp, mcp_error = _read_json(directory / "mcp-config.json")
         channels, channels_error = _read_json(directory / "channels-config.json")
+        agent, agent_error = _read_json(directory / "agent-config.json")
         if not mcp:
             mcp = {"enabled": True, "web_search_enabled": True, "web_fetch_enabled": True}
         entry: dict[str, Any] = {"account": account, "source_directory": str(directory), "source_errors": {}}
-        for name, error in (("config.json", config_error), ("speech-config.json", speech_error), ("mcp-config.json", mcp_error), ("channels-config.json", channels_error)):
+        for name, error in (("config.json", config_error), ("speech-config.json", speech_error), ("mcp-config.json", mcp_error), ("channels-config.json", channels_error), ("agent-config.json", agent_error)):
             if error:
                 entry["source_errors"][name] = error
         media, media_secrets = _media_plan(repo, config, speech)
         speech_step, speech_secrets = _speech_plan(repo, root, speech)
         music, music_secrets = _music_plan(repo, speech)
+        project_development, project_secrets = _project_development_plan(repo, agent)
         share, share_secrets = _share_plan(repo, channels)
         web, web_secrets = _web_plan(repo, config, mcp)
-        entry["plugins"] = [media, speech_step, music, web, share]
+        entry["plugins"] = [media, speech_step, music, project_development, web, share]
         report["accounts"].append(entry)
-        all_secrets = {**media_secrets, **speech_secrets, **music_secrets, **web_secrets, **share_secrets}
+        all_secrets = {**media_secrets, **speech_secrets, **music_secrets, **project_secrets, **web_secrets, **share_secrets}
         secret_handoff["accounts"].append({"account": account, "secrets": all_secrets})
     return report, secret_handoff
 

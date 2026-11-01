@@ -11,6 +11,7 @@ import (
 
 func TestProjectCatalogRetainsValidProjectsAndExplainsInvalidMetadata(t *testing.T) {
 	_, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	dir := filepath.Join(p.executionContext().Public, "manifests")
 	files := map[string]string{"valid.json": `{"id":"valid","usage":"synthetic"}`, "bad.json": "{", "null.json": "null", "array.json": "[]", "large.json": `{"data":"` + strings.Repeat("x", projectManifestBytes) + `"}`, "edge.json": `{"id":"edge"}` + strings.Repeat(" ", projectManifestBytes-len(`{"id":"edge"}`))}
 	for name, data := range files {
@@ -48,6 +49,7 @@ func TestProjectCatalogRetainsValidProjectsAndExplainsInvalidMetadata(t *testing
 
 func TestProjectManifestLinksCannotExposeOtherRoots(t *testing.T) {
 	_, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	public := p.executionContext().Public
 	dir := filepath.Join(public, "manifests")
 	outside := t.TempDir()

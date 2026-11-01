@@ -79,6 +79,7 @@ func TestMemoryResultCannotBeRestampedAfterConcurrentChange(t *testing.T) {
 
 func TestToolOutputPaginationIsIsolatedByVerifiedSpeakerAndConversation(t *testing.T) {
 	_, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	ctx := context.Background()
 	full := strings.Repeat("中文结果\n", 3000)
 	id, err := p.RetainToolOutput(ctx, "server_read", full)

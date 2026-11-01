@@ -4,16 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/pluginruntime"
 )
 
 const windowsMusicPolicy = "registry-read-private-network-v1"
@@ -27,10 +26,27 @@ type windowsMusicConfig struct {
 	IPC     string `json:"ipc"`
 }
 
-type windowsMusicProcess struct {
-	command *exec.Cmd
-	input   io.WriteCloser
-	done    chan struct{}
+const windowsMusicServiceID = "music.local"
+
+// Manager owns one generic registry; the profile resolver below never retains
+// commands, pipes, PIDs or service lifecycle state.
+func (m *Manager) managedServiceRegistry() *pluginruntime.ManagedServices {
+	m.managedServicesOnce.Do(func() {
+		if m.managedServices == nil {
+			m.managedServices = &pluginruntime.ManagedServices{}
+		}
+	})
+	return m.managedServices
+}
+
+func (m *Manager) windowsMusicStatus() pluginruntime.ManagedServiceStatus {
+	return m.managedServiceRegistry().Status(windowsMusicServiceID)
+}
+
+func (m *Manager) windowsMusicRegistered() bool {
+	data, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
+	var profile windowsMusicConfig
+	return err == nil && len(data) <= 16384 && json.Unmarshal(data, &profile) == nil && profile.Enabled && profile.Policy == windowsMusicPolicy
 }
 
 func regularMusicPath(path string, directory bool) error {
@@ -55,16 +71,6 @@ func regularMusicPath(path string, directory bool) error {
 func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	if m.draining() {
 		return "", toolInputError("windows_music_start_paused_for_update")
-	}
-	m.musicProcessMu.Lock()
-	defer m.musicProcessMu.Unlock()
-	if m.windowsMusic != nil {
-		select {
-		case <-m.windowsMusic.done:
-			m.windowsMusic = nil
-		default:
-			return `{"state":"starting_or_active","backend":"windows-native"}`, nil
-		}
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -105,11 +111,6 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	if err != nil || port < 1024 || port > 65535 {
 		return "", toolInputError("windows_music_port_invalid")
 	}
-	listener, err := net.Listen("tcp", u.Host)
-	if err != nil {
-		return "", toolInputError("windows_music_port_occupied_no_adoption")
-	}
-	listener.Close()
 	private := m.privateWorkspaceFor(m.native.Account())
 	if err := ensureManaged(private); err != nil {
 		return "", err
@@ -122,54 +123,109 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	if localToken == "" {
 		return "", toolInputError("windows_music_authentication_not_configured")
 	}
-	if err := writePrivate(token, []byte(localToken)); err != nil {
-		return "", err
-	}
-	command := exec.Command(config.Python, "-X", "utf8", config.Entry, "--workspace", m.managedRoot(), "--private", private,
-		"--python", config.Python, "--token-file", token, "--ipc", config.IPC, "--bind", "127.0.0.1", "--port", strconv.Itoa(port), "--desktop")
-	command.Dir = filepath.Dir(config.Entry)
-	command.Env = []string{"SystemRoot=" + os.Getenv("SystemRoot"), "WINDIR=" + os.Getenv("WINDIR"), "SystemDrive=" + os.Getenv("SystemDrive"),
-		"PATH=" + config.Media + string(os.PathListSeparator) + filepath.Join(os.Getenv("SystemRoot"), "System32"),
-		"WECHAT_WINDOWS_MUSIC_POLICY=" + config.Policy, "WECHAT_WINDOWS_MUSIC_MEDIA=" + config.Media,
-		"TEMP=" + scratch, "TMP=" + scratch, "APPDATA=" + scratch, "LOCALAPPDATA=" + scratch, "USERPROFILE=" + scratch,
-		"USERNAME=managed-music",
-		"HF_HOME=" + filepath.Join(private, "scratch", "hf-cache"), "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1", "PYTHONDONTWRITEBYTECODE=1"}
-	configureMusicProcess(command)
-	input, err := command.StdinPipe()
+	// The launch profile is a host-owned compatibility registration. Bind it
+	// to the exact installed plugin/configuration; recheck before admission and
+	// on repeated starts, including when a supervisor is already running.
+	authority, err := m.musicServiceAuthority(ctx)
 	if err != nil {
 		return "", err
 	}
-	log, err := os.OpenFile(filepath.Join(m.dir, "windows-music.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	binding := namedSpeechSHA(append(append([]byte{}, data...), []byte(authority)...))
+	check := func(ctx context.Context) error {
+		if err := checkMusicServiceControl(ctx); err != nil {
+			return err
+		}
+		current, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
+		if err != nil || string(current) != string(data) {
+			return toolInputError("windows_music_registration_changed")
+		}
+		currentAuthority, err := m.musicServiceAuthority(ctx)
+		if err != nil || currentAuthority != authority {
+			return toolInputError("windows_music_plugin_authorization_changed")
+		}
+		for _, resource := range []struct {
+			path string
+			dir  bool
+		}{{config.Python, false}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
+			if err := regularMusicPath(resource.path, resource.dir); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	spec := pluginruntime.ManagedServiceSpec{
+		OwnerPlugin: "music",
+		Binding:     binding, Executable: config.Python,
+		Arguments: []string{"-X", "utf8", config.Entry, "--workspace", m.managedRoot(), "--private", private,
+			"--python", config.Python, "--token-file", token, "--ipc", config.IPC, "--bind", "127.0.0.1", "--port", strconv.Itoa(port), "--desktop"},
+		Directory: filepath.Dir(config.Entry),
+		Environment: []string{"SystemRoot=" + os.Getenv("SystemRoot"), "WINDIR=" + os.Getenv("WINDIR"), "SystemDrive=" + os.Getenv("SystemDrive"),
+			"PATH=" + config.Media + string(os.PathListSeparator) + filepath.Join(os.Getenv("SystemRoot"), "System32"),
+			"WECHAT_WINDOWS_MUSIC_POLICY=" + config.Policy, "WECHAT_WINDOWS_MUSIC_MEDIA=" + config.Media,
+			"TEMP=" + scratch, "TMP=" + scratch, "APPDATA=" + scratch, "LOCALAPPDATA=" + scratch, "USERPROFILE=" + scratch,
+			"USERNAME=managed-music", "HF_HOME=" + filepath.Join(scratch, "hf-cache"), "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1", "PYTHONDONTWRITEBYTECODE=1"},
+		LogPath:         filepath.Join(m.dir, "windows-music.log"),
+		PendingJobsPath: filepath.Join(private, "music", "jobs", "jobs.json"),
+		StopInput:       "stop\n", StopTimeout: 50 * time.Second, Check: check,
+	}
+	_, err = m.managedServiceRegistry().Start(ctx, windowsMusicServiceID, spec, func(ctx context.Context, start func() error) error {
+		if err := checkMusicServiceControl(ctx); err != nil {
+			return err
+		}
+		// Refuse any listener we did not start. This runs only for a fresh
+		// launch, so an owned live service is not mistaken for a foreign port.
+		listener, err := net.Listen("tcp", u.Host)
+		if err != nil {
+			return toolInputError("windows_music_port_occupied_no_adoption")
+		}
+		listener.Close()
+		if err = writePrivate(token, []byte(localToken)); err != nil {
+			return err
+		}
+		if err := check(ctx); err != nil {
+			return err
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		_, holdError := os.Lstat(m.memoryUpdateHoldPath())
+		if m.drainTicket != "" || !errors.Is(holdError, os.ErrNotExist) {
+			return toolInputError("windows_music_start_paused_for_update")
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := start(); err != nil {
+			return toolInputError("windows_music_start_failed_check_private_log")
+		}
+		return nil
+	})
 	if err != nil {
-		input.Close()
 		return "", err
 	}
-	command.Stdout, command.Stderr = log, log
-	// Serialize final admission with the update barrier, after disk checks.
-	m.mu.Lock()
-	_, holdError := os.Lstat(m.memoryUpdateHoldPath())
-	if m.drainTicket != "" || !errors.Is(holdError, os.ErrNotExist) {
-		m.mu.Unlock()
-		input.Close()
-		log.Close()
-		return "", toolInputError("windows_music_start_paused_for_update")
-	}
-	err = command.Start()
-	m.mu.Unlock()
-	if err != nil {
-		input.Close()
-		log.Close()
-		return "", toolInputError("windows_music_start_failed_check_private_log")
-	}
-	process := &windowsMusicProcess{command: command, input: input, done: make(chan struct{})}
-	m.windowsMusic = process
-	go func() {
-		_ = command.Wait()
-		input.Close()
-		log.Close()
-		close(process.done)
-	}()
 	return `{"state":"starting_or_active","backend":"windows-native","instruction":"用music_service_status核对模型就绪；启动不代表任务完成。"}`, nil
+}
+
+// Only the currently installed, enabled plugin configuration confers launch
+// authority. Retired speech settings never select the local service endpoint.
+func (m *Manager) musicServiceAuthority(ctx context.Context) (string, error) {
+	endpoint, token, err := m.localMusicPluginConnection(ctx)
+	if err != nil {
+		return "", err
+	}
+	store, err := m.packageStore()
+	if err != nil {
+		return "", err
+	}
+	installed, err := store.Installed(ctx, "music")
+	if err != nil {
+		return "", err
+	}
+	configuration, err := store.Configuration(ctx, "music")
+	if err != nil {
+		return "", err
+	}
+	raw, _ := json.Marshal([]any{store.Account(), installed, configuration.Revision, endpoint, token})
+	return namedSpeechSHA(raw), nil
 }
 
 func pathWithin(root, path string) bool {
@@ -211,51 +267,11 @@ func (m *Manager) runWindowsNamedModel(ctx context.Context, cfg agenthost.Config
 }
 
 func (m *Manager) closeWindowsMusic() {
-	m.musicProcessMu.Lock()
-	process := m.windowsMusic
-	m.windowsMusic = nil
-	m.musicProcessMu.Unlock()
-	if process == nil {
-		return
-	}
-	_, _ = io.WriteString(process.input, "stop\n")
-	process.input.Close()
-	select {
-	case <-process.done:
-	case <-time.After(50 * time.Second):
-		// Only the owned supervisor is stopped. Its LPAC child Job Objects
-		// close with its process; the desktop also owns the complete tree.
-		_ = process.command.Process.Kill()
-		<-process.done
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 56*time.Second)
+	defer cancel()
+	_ = m.managedServiceRegistry().Close(ctx)
 }
 
 func (m *Manager) windowsMusicBusy() bool {
-	m.musicProcessMu.Lock()
-	process := m.windowsMusic
-	m.musicProcessMu.Unlock()
-	if process == nil {
-		return false
-	}
-	select {
-	case <-process.done:
-		return false
-	default:
-	}
-	data, err := os.ReadFile(filepath.Join(m.privateWorkspaceFor(m.native.Account()), "music", "jobs", "jobs.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return false
-	}
-	var jobs map[string]struct {
-		State string `json:"state"`
-	}
-	if err != nil || len(data) > 32<<20 || json.Unmarshal(data, &jobs) != nil {
-		return true
-	}
-	for _, job := range jobs {
-		if job.State == "queued" || job.State == "running" {
-			return true
-		}
-	}
-	return false
+	return m.windowsMusicStatus().Busy
 }

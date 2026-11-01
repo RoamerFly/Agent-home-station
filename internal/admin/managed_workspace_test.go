@@ -15,6 +15,7 @@ import (
 
 func TestManagedContextCannotBeSpoofedAcrossAccountsOrConversations(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	owner := p.executionContext()
 	cfg, e := p.hostConfig()
 	if e != nil || cfg.Isolation == nil {

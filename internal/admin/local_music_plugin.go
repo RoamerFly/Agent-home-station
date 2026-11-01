@@ -381,6 +381,12 @@ func (p *permittedTools) newLocalMusicPluginPolicy(ctx context.Context, method, 
 }
 
 func (p *localMusicPluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
+	return p.checkBoundCall(ctx, j, cap, localMusicCapability, p.arguments)
+}
+
+// Lifecycle requests reuse this exact source/account/configuration proof while
+// retaining their real persisted capability and arguments throughout the call.
+func (p *localMusicPluginPolicy) checkBoundCall(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, capability string, arguments json.RawMessage) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -394,7 +400,7 @@ func (p *localMusicPluginPolicy) Check(ctx context.Context, j pluginhost.Job, ca
 			return err
 		}
 	}
-	if j.Plugin != "music" || j.Tool != localMusicCapability || cap.Async || cap.ID != "" && cap.ID != localMusicCapability || !bytes.Equal(a, b) || p.invocation.Authorization == "" || p.invocation.Authorization != currentAuthorization || len(j.Arguments) > 0 && !sameJSON(j.Arguments, p.arguments) {
+	if j.Plugin != "music" || j.Tool != capability || cap.Async || cap.ID != "" && cap.ID != capability || !bytes.Equal(a, b) || p.invocation.Authorization == "" || p.invocation.Authorization != currentAuthorization || len(j.Arguments) > 0 && !sameJSON(j.Arguments, arguments) {
 		return errors.New("music_local_authorization_changed")
 	}
 	id, ok := localMusicRoute(p.request.Method, p.request.Path)
@@ -456,7 +462,7 @@ func (p *localMusicPluginPolicy) Check(ctx context.Context, j pluginhost.Job, ca
 	}
 	if j.ID != "" {
 		current, e := p.store.Job(ctx, j.ID)
-		if e != nil || current.CancelRequested || current.Revision != j.Revision {
+		if e != nil || current.CancelRequested || current.Revision != j.Revision || current.Plugin != j.Plugin || current.Tool != j.Tool {
 			return errors.New("music_local_job_changed")
 		}
 	}

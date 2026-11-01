@@ -45,6 +45,7 @@ func trustedAgent(t *testing.T) (*webFixture, *permittedTools) {
 }
 func TestAgentPrivilegeChecksAtDiscoveryAndExecution(t *testing.T) {
 	_, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	if !p.agentToolEnabled("server_write") {
 		t.Fatal("owner lacks tool")
 	}
@@ -62,6 +63,7 @@ func TestAgentPrivilegeChecksAtDiscoveryAndExecution(t *testing.T) {
 
 func TestOwnerAllAllowedThreadsStillChecksSenderAndRecipient(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	c := f.manager.agent.config()
 	c.PrivilegedThreads = []string{"*"}
 	if err := c.validate(); err != nil {
@@ -145,6 +147,7 @@ func TestExternalPluginOwnerRestrictionCannotBeBypassed(t *testing.T) {
 }
 func TestAgentHostOperationDeduplicatedAcrossRestart(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	path := filepath.Join(f.manager.agent.config().Host.Roots[0], "once.txt")
 	b, _ := json.Marshal(map[string]string{"path": path, "content": "once"})
 	first, err := p.Call(context.Background(), "server_write", b)
@@ -169,17 +172,22 @@ func TestAgentHostOperationDeduplicatedAcrossRestart(t *testing.T) {
 		t.Fatal("bad file")
 	}
 	// A claimed operation with no result must remain unknown, never executed.
+	// Use an unresolved request: the installed Controller correctly retains
+	// the verified private result of the completed request checked above.
+	unknownPath := filepath.Join(filepath.Dir(path), "unknown-must-not-run.txt")
+	b, _ = json.Marshal(map[string]string{"path": unknownPath, "content": "must not execute"})
 	id := agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, "server_write", string(b))
 	next.mu.Lock()
-	op := next.data.Operations[id]
-	op.Result = `{"state":"unknown"}`
-	op.State = "running"
+	op := agentOperation{ID: id, Tool: "server_write", Thread: p.trace.Thread, Arguments: b, Result: `{"state":"unknown"}`, State: "running", At: time.Now()}
 	next.data.Operations[id] = op
 	next.persist()
 	next.mu.Unlock()
 	result, err := p.Call(context.Background(), "server_write", b)
 	if err != nil || !strings.Contains(result, "unknown") {
 		t.Fatal(result, err)
+	}
+	if _, err := os.Stat(unknownPath); !os.IsNotExist(err) {
+		t.Fatal("unknown operation executed", err)
 	}
 }
 func TestAgentSettingsAPIAuthenticationAndOptimisticSave(t *testing.T) {

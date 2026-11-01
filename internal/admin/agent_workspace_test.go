@@ -164,6 +164,7 @@ func TestProcessCompletionWakesOriginalOwnerWithoutProactivePermission(t *testin
 		t.Skip("requires Linux system-isolated executor; Windows LPAC is validated separately")
 	}
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	f.manager.config.Companion.Enabled = true
 	cfg := f.manager.agent.config()
 	cfg.Host.Mode = "full"
@@ -206,6 +207,7 @@ func TestProcessCompletionWakesOriginalOwnerWithoutProactivePermission(t *testin
 
 func TestDiagnosticProcessResultReturnsToParentInsteadOfReopeningUserRequest(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	cfg := f.manager.agent.config()
 	cfg.Host.Mode = "full"
 	if err := f.manager.agent.save(cfg); err != nil {

@@ -16,9 +16,9 @@
 | media-understanding | `understanding.go`、`video_observation.go`、`video_inspect*.go`、`local_asr.go` | ASR、图片/表情、视频视觉、录屏分析及歌曲音频观察均走安装插件；旧视觉回退和 ReviewAudio SDK 已删除。继续收拢剩余配置/视频策略，完成生产账号迁移。保留核心下载、实际区间解码、来源及素材校验。 |
 | share-reader | `channels_settings.go`、`channels_understanding.go`、`share_*` | 迁移视频号对象桥接和旧配置；由受控素材交接给媒体插件；删除旧公开页/Channels解析分支。 |
 | speech | `speech.go`、`voice_synthesis.go`、`voice_agent.go`、`bailian` | 默认云端与命名 GPT-SoVITS 推理均走安装插件，旧直连/登记 Entry 已退出执行链；所选资源、私有完成结果与投递持续校验。继续迁出声线训练、克隆/设计、余下共享配置与主体内专用适配，完成真实账号迁移。主体最终只保留通用授权/资源/素材及微信投递。 |
-| music | `music_*.go`、`yue.go`、`singing_policy.go` | 云端原创新歌及本地 RVC/YuE 服务请求均走 music 0.3.0 插件；错误分类/模板迁入包，正文与音频由受控引用交接，查询/恢复/取消使用原任务，配置与令牌只读插件权威存储。继续迁出训练、GPU服务进程生命周期、歌曲编排/详细工具协议及剩余主体专用适配。保留成品约束与核心素材校验，禁止默认声线替代。 |
+| music | `music_*.go`、`yue.go`、`singing_policy.go` | music 0.4.0 已接云端生成、本地桥接及服务控制；进程由通用宿主注册表按插件归属管理，停止插件回收其自有服务。继续迁出训练与歌曲编排、剩余主体专用适配并完成生产迁移。保留成品约束与核心素材校验，禁止默认声线替代。 |
 | mobile-control | 惰性 `deviceService`、`mobile.go`、设备队列与受控资源路由 | 规划及五项设备门面已接隔离 MCP/受控原生代理；默认 legacy 执行工厂及专用页面已删除，设置/任务使用宿主私有 SQLite，录屏分析转交媒体插件。管理入口按声明合并到插件详情。仍需迁出具体队列、连接档案登记流程及外部旧账本映射，并完成生产预演；主体保留授权、来源、素材和投递相关结果。 |
-| project-development | `agent_workspace.go`、`agent_process.go`、`project_*.go` | 将项目登记、读写、命令执行迁到工作区权限插件；主体提供受限工作区和授权代理。 |
+| project-development | `project_plugin.go`、`agent_process.go` 的受控代理 | 0.2.0 已迁入项目登记解释、工具声明及项目业务，12 项兼容工具通过安装插件调用；主体保留工作区授权、真实文件/进程执行及来源结果核验。空配置迁移已可应用且默认停用，受限旧权限须重新确认。仍需生产迁移与 Linux 实际进程验收。 |
 | web-search | `mcp.go`、稳定工具别名、`surf*` 宿主授权与历史 | 旧付费兼容和公共搜索/网页读取/内容发现网络解析实现均已删除，来源、分页及候选由 web-search 0.3.0 返回；无分享目标时的一次性只读浏览来源也已接通，空非持久记忆且不授发送/下载权限。继续收拢剩余配置/主体专用适配并完成真实账号迁移；核心保留安全运输、来源授权和历史校验。 |
 | visual-generation | 生成接口和对应 UI/任务路径 | 迁出图像/视频生成适配器、异步任务和结果素材校验；未有实现的能力不可标记可用。 |
 | external-tools | MCP、外部 HTTP/API 编辑器和调用路径 | 合并现有配置入口，迁出远程声明与调用，完成凭据、取消、结果验证和迁移。 |

@@ -10,9 +10,19 @@ import (
 )
 
 func (p *permittedTools) callProcess(ctx context.Context, raw json.RawMessage) (string, error) {
-	return p.callProcessPlatform(ctx, raw, false)
+	return p.callProjectPlugin(ctx, "server_process", raw)
 }
-func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMessage, windows bool) (result string, callErr error) {
+func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMessage, windows bool) (string, error) {
+	name := "server_process"
+	if windows {
+		name = "server_windows_process"
+	}
+	return p.callProjectPlugin(ctx, name, raw)
+}
+
+// The host retains durable process identity, sandbox admission, cancellation
+// and original actor follow-up. This is reached only through the bound broker.
+func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.RawMessage, windows bool, authorized func() bool) (result string, callErr error) {
 	defer func() { callErr = localAgentError(callErr) }()
 	var in struct {
 		GPU                       bool `json:"gpu"`
@@ -43,7 +53,7 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 		allowed := func() bool {
 			access := &permittedTools{manager: p.manager, trace: trace}
 			current, e := access.scopedHostConfig(raw)
-			return e == nil && access.workspaceExecutionAllowed() && current.Mode == "full" && slices.Equal(current.Roots, cfg.Roots)
+			return authorized != nil && authorized() && e == nil && access.workspaceExecutionAllowed() && current.Mode == "full" && slices.Equal(current.Roots, cfg.Roots)
 		}
 		toolName := "server_process"
 		if windows {

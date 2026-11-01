@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "external-tools",
   "name": "外部工具连接",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "host_protocol": 1,
   "status": "migration-pending",
   "platforms": [
@@ -10,7 +10,8 @@
     "linux-amd64"
   ],
   "runtime": {
-    "transport": "unbound"
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
   },
   "permissions": [
     "network"
@@ -18,12 +19,14 @@
   "dependencies": [],
   "files": {
     "capabilities.json": "8b98113d6b07d5af8e6682329685ef1cf61f75eaa2da10df55d5473d8b93bc9f",
-    "CHANGELOG.md": "0688abebe9b7a3826ee5def33287290c20cd363bdf25bda9f1aaef7a7219920b",
+    "CHANGELOG.md": "f920992f080e776e29237ed0dc69161e336162b1565cebee68298e69b7af3fb5",
     "config.schema.json": "95693d311a4827fcd7ab4d1ed7a6f590568841010f9999fe7761e7c810cb753f",
     "MIGRATION.md": "1dd4bd2e9a9e0de0f9d29313f7bec675387843bd6b595c24edf8236bb175a7c0",
     "PERMISSIONS.md": "bb1b1e62a8e8b21b921225cb425ca3bb03f196fc6fccf9cb6d5d8f16d934eb00",
-    "README.md": "9a9f908411fdaa34805c3912afe91c1790b7454a1ab4b57b309ec3a6568dfd5e",
-    "runtime/README.md": "072ef9ce9b7fb7c06975dd7b9cf762a920d23d7aa16fdf9b08beb759d81a5c1a",
+    "README.md": "4c5d1111016792c8142cb31a184f408064b599387da6bac54e8a7381bf1399ee",
+    "runtime/README.md": "57e10354c7f51074241ecbad440f4ffe067a35beb8265c12f88c1d5d9652d300",
+    "runtime/main.py": "797c47ced3159e6b468632ca4d3940cdfadd89ebfc052780dd48076c41f13a7a",
+    "tests/test_runtime.py": "7a23e3d89cbee133440c5c3cb2ca5c9c40aec75a931ea30149cbdf03a356f6c1",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   }

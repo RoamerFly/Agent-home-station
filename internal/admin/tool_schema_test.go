@@ -14,6 +14,7 @@ import (
 
 func TestBuiltinSchemasRejectWrongShapesBeforeAnyAction(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	c := f.manager.agent.config()
 	c.Host.Mode = "full"
 	c.CrossConversation = true
@@ -61,6 +62,7 @@ func TestBuiltinSchemasRejectWrongShapesBeforeAnyAction(t *testing.T) {
 }
 func TestToolArgumentCompatibilityNeverChangesMeaning(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	c := f.manager.agent.config()
 	c.Host.Mode = "full"
 	f.manager.agent.save(c)
@@ -89,7 +91,8 @@ func TestExternalMCPArgumentTypesAndNamesAreNotRewritten(t *testing.T) {
 }
 
 func TestCapabilityCatalogKeepsLocalToolsWhenExternalServerFails(t *testing.T) {
-	f, _ := trustedAgent(t)
+	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
 	defer server.Close()
 	f.manager.mcp.Servers = []mcptools.ServerConfig{{ID: "broken", Transport: "http", URL: server.URL, Enabled: true, TimeoutSeconds: 1}}
@@ -102,6 +105,7 @@ func TestCapabilityCatalogKeepsLocalToolsWhenExternalServerFails(t *testing.T) {
 
 func TestRejectedProcessCanRetryAfterEnvironmentIsRepaired(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	c := f.manager.agent.config()
 	c.Host.Mode = "full"
 	if e := f.manager.agent.save(c); e != nil {

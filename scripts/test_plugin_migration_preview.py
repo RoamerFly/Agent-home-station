@@ -20,12 +20,14 @@ SPEC.loader.exec_module(preview)
 class PluginMigrationPreviewTests(unittest.TestCase):
     def make_repo(self, base):
         repo = base / "repo"
-        for plugin, status in (("speech", "ready"), ("media-understanding", "ready"), ("music", "ready"), ("web-search", "ready"), ("share-reader", "migration-pending")):
+        for plugin, status in (("speech", "ready"), ("media-understanding", "ready"), ("music", "ready"), ("project-development", "ready"), ("web-search", "ready"), ("share-reader", "migration-pending")):
             directory = repo / "plugins" / plugin
             directory.mkdir(parents=True)
             manifest = {"id": plugin, "version": "1.2.3", "status": status}
             if plugin == "music":
                 manifest["permissions"] = ["model.invoke"]
+            if plugin == "project-development":
+                manifest["permissions"] = ["workspace.read", "workspace.write", "process.execute"]
             (directory / "plugin.json").write_text(json.dumps(manifest), encoding="utf8")
         return repo
 
@@ -83,6 +85,15 @@ class PluginMigrationPreviewTests(unittest.TestCase):
         manifest.parent.mkdir(parents=True)
         manifest.write_text(json.dumps({"id": "gpt-sovits", "root": "/not-disclosed"}), encoding="utf8")
 
+    def add_declared_project_development(self, repo):
+        project = repo / "plugins" / "project-development"
+        (project / "config.schema.json").write_text(json.dumps({"type": "object", "properties": {}, "additionalProperties": False}), encoding="utf8")
+        (project / "capabilities.json").write_text(json.dumps({"capabilities": [
+            {"id": "project.workspace_read", "implementation": "ready", "permissions": ["workspace.read"]},
+            {"id": "project.workspace_write", "implementation": "ready", "permissions": ["workspace.write"]},
+            {"id": "project.workspace_execute", "implementation": "ready", "permissions": ["process.execute"]},
+        ]}), encoding="utf8")
+
     def test_preview_is_per_account_read_only_and_redacts_secrets(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -94,7 +105,7 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertNotIn(secret, encoded)
             self.assertEqual([a["account"] for a in report["accounts"]], ["main", "secondary"])
             main = report["accounts"][0]
-            self.assertEqual([step["plugin"] for step in main["plugins"]], ["media-understanding", "speech", "music", "web-search", "share-reader"])
+            self.assertEqual([step["plugin"] for step in main["plugins"]], ["media-understanding", "speech", "music", "project-development", "web-search", "share-reader"])
             self.assertTrue(all(step["proposed_enabled"] is False for account in report["accounts"] for step in account["plugins"]))
             media = next(x for x in main["plugins"] if x["plugin"] == "media-understanding")
             self.assertIn("registered_local_asr_profile:sensevoice-test", media["required_missing"])
@@ -107,6 +118,81 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertEqual(handoff["accounts"][0]["secrets"]["speech.tts_key"], secret)
             self.assertEqual(handoff["accounts"][0]["secrets"]["music.music_key"], secret)
             self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
+    def test_project_development_preserves_full_intent_without_copying_host_scope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_project_development(repo)
+            root, _ = self.make_root(base)
+            private_root = "E:\\private-project-root"
+            (root / "agent-config.json").write_text(json.dumps({"enabled": True, "host": {
+                "mode": "full", "roots": [private_root], "isolation": {"private_profile": "do-not-copy"},
+                "windows": {"helper": "do-not-copy"}, "timeout_seconds": 90, "output_bytes": 32000,
+            }}), encoding="utf8")
+            before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            report, handoff = preview.build_preview(root, repo, "main")
+            project = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "project-development")
+            self.assertEqual(project["status"], "ready_for_administrator_review")
+            self.assertTrue(project["legacy_enabled"])
+            self.assertTrue(project["eligible_to_enable_after_confirmation"])
+            self.assertFalse(project["proposed_enabled"])
+            self.assertEqual(project["values"], {})
+            self.assertEqual(project["secrets"], {})
+            self.assertEqual(set(project["permissions"]), {"workspace.read", "workspace.write", "process.execute"})
+            self.assertIn("agent-config.json:host.roots", project["unmapped_legacy_fields"])
+            public = json.dumps(report, ensure_ascii=False)
+            self.assertNotIn(private_root, public)
+            self.assertNotIn("do-not-copy", public)
+            self.assertNotIn("project-development", handoff["accounts"][0]["secrets"])
+            self.assertEqual(before, {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()})
+
+    def test_project_development_does_not_expand_read_or_files_scope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            self.add_declared_project_development(repo)
+            root, _ = self.make_root(base)
+            path = root / "agent-config.json"
+            for mode in ("read", "files"):
+                with self.subTest(mode=mode):
+                    path.write_text(json.dumps({"enabled": True, "host": {"mode": mode, "roots": ["E:\\private-root"]}}), encoding="utf8")
+                    report, _ = preview.build_preview(root, repo, "main")
+                    project = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "project-development")
+                    self.assertEqual(project["status"], "blocked")
+                    self.assertFalse(project["legacy_enabled"])
+                    self.assertFalse(project["eligible_to_enable_after_confirmation"])
+                    self.assertIn("explicit_project_permissions_review_required", project["required_missing"])
+                    self.assertEqual(project["values"], {})
+
+    def test_project_development_requires_reviewed_three_capability_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            root, _ = self.make_root(base)
+            (root / "agent-config.json").write_text(json.dumps({"enabled": True, "host": {"mode": "full", "roots": ["E:\\private-root"]}}), encoding="utf8")
+            report, _ = preview.build_preview(root, repo, "main")
+            project = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "project-development")
+            self.assertEqual(project["status"], "blocked")
+            self.assertIn("official_project_development_adapter_not_declared_by_plugin", project["required_missing"])
+
+    def test_real_project_development_contract_preserves_disabled_application(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, _ = self.make_root(Path(temporary))
+            (root / "agent-config.json").write_text(json.dumps({"enabled": True, "host": {"mode": "full", "roots": ["E:\\private-root"]}}), encoding="utf8")
+            repo = MODULE.resolve().parents[1]
+            report, handoff = preview.build_preview(root, repo, "main")
+            project = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "project-development")
+            manifest_raw = (repo / "plugins" / "project-development" / "plugin.json").read_bytes()
+            manifest = json.loads(manifest_raw)
+            self.assertEqual(project["package"]["version"], manifest["version"])
+            self.assertEqual(project["package"]["expected_package_digest"], hashlib.sha256(manifest_raw).hexdigest())
+            self.assertEqual(project["status"], "ready_for_administrator_review")
+            self.assertTrue(project["legacy_enabled"])
+            self.assertFalse(project["proposed_enabled"])
+            self.assertEqual(project["values"], {})
+            self.assertEqual(project["secrets"], {})
+            self.assertFalse(any(key.startswith("project-development.") for key in handoff["accounts"][0]["secrets"]))
 
     def test_local_asr_default_and_custom_profile_are_config_values_but_still_blocked(self):
         for legacy, wanted in (("", "sensevoice-small-int8"), ("sensevoice-explicit", "sensevoice-explicit")):
@@ -309,11 +395,13 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             repo = MODULE.resolve().parents[1]
             report, handoff = preview.build_preview(root, repo, "main")
             music = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "music")
-            digest = hashlib.sha256((repo / "plugins" / "music" / "plugin.json").read_bytes()).hexdigest()
+            manifest_raw = (repo / "plugins" / "music" / "plugin.json").read_bytes()
+            manifest = json.loads(manifest_raw)
+            digest = hashlib.sha256(manifest_raw).hexdigest()
             self.assertEqual(music["package"]["expected_package_digest"], digest)
-            self.assertEqual(music["package"]["version"], "0.3.0")
+            self.assertEqual(music["package"]["version"], manifest["version"])
             self.assertEqual(music["package"]["status"], "ready")
-            self.assertEqual(music["permissions"], ["model.invoke", "network"])
+            self.assertEqual(music["permissions"], manifest["permissions"])
             self.assertIs(music["proposed_enabled"], False)
             self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
             self.assertEqual(handoff["accounts"][0]["secrets"]["music.music_key"], secret)

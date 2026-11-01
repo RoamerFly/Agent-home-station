@@ -14,6 +14,7 @@ import (
 
 func TestProjectReadRejectsPipeWithoutWaitingForWriter(t *testing.T) {
 	_, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	pipe := filepath.Join(p.executionContext().Public, "manifests", "blocked.json")
 	if err := syscall.Mkfifo(pipe, 0600); err != nil {
 		t.Fatal(err)

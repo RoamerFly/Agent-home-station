@@ -160,6 +160,36 @@
       "side_effect": "external_request"
     },
     {
+      "id": "music.service_control",
+      "implementation": "ready",
+      "description": "宿主内部已登记本地音乐服务的启动、所有权状态和停止；每次验证所有者或当前管理员会话，不接受命令或路径。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "start",
+              "status",
+              "stop"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "local_service_control"
+    },
+    {
       "id": "music.cover",
       "implementation": "migration-pending",
       "description": "歌曲、翻唱、RVC 与 GPU 服务",

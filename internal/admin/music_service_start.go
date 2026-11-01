@@ -13,13 +13,27 @@ import (
 // Trusted service lifecycle operation, not an unconfined Agent shell. Only
 // the locally installed music unit may be started; no arbitrary command/args.
 func (p *permittedTools) startMusicService(ctx context.Context) (string, error) {
-	if !p.privileged() {
+	return p.controlMusicService(ctx, "start")
+}
+
+// Called only by the installed capability's bound host-service callback.
+func (p *permittedTools) startMusicServiceHost(ctx context.Context) (string, error) {
+	authority, _ := ctx.Value(speechAdminTestContextKey{}).(*speechAdminTestAuthority)
+	if authority != nil {
+		if err := authority.valid(ctx, p.manager); err != nil {
+			return "", err
+		}
+	} else if !p.privileged() {
 		return "", toolInputError("music_service_start_requires_owner")
 	}
 	if runtime.GOOS == "windows" {
 		return p.manager.startWindowsMusic(ctx)
 	}
-	u, err := url.Parse(p.manager.speechConfig().YuEEndpoint)
+	endpoint, _, err := p.manager.localMusicPluginConnection(ctx)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(endpoint)
 	if err != nil || runtime.GOOS != "linux" || u.Scheme != "http" || u.Host != "127.0.0.1:6188" || u.Path != "" {
 		return "", toolInputError("managed_local_music_unit_not_applicable")
 	}
@@ -31,6 +45,9 @@ func (p *permittedTools) startMusicService(ctx context.Context) (string, error) 
 	info, err := os.Lstat(unit)
 	if err != nil || !info.Mode().IsRegular() {
 		return "", toolInputError("managed_music_unit_not_installed")
+	}
+	if err := checkMusicServiceControl(ctx); err != nil {
+		return "", err
 	}
 	if err := exec.CommandContext(ctx, "systemctl", "--user", "start", "--no-block", "wechat-agent-music.service").Run(); err != nil {
 		return "", toolInputError("managed_music_start_failed_check_diagnostics")
