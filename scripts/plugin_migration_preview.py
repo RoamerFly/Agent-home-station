@@ -253,6 +253,28 @@ def _declares_external_capability(repo: Path, capability_id: str) -> bool:
     )
 
 
+def _classify_external_mcp(server: Any) -> str:
+    """Classify one enabled MCP declaration without exposing its connection.
+
+    HTTP and streamable HTTP use the reviewed MCP adapter. Stdio only counts
+    when it names an already registered plugin runtime and has no raw launch
+    data. A command/args/env descriptor is never a migration-time execution
+    grant.
+    """
+    if not isinstance(server, dict):
+        return "unsupported"
+    transport = _safe_text(server.get("transport")).strip().lower()
+    if not transport and _safe_text(server.get("plugin_id")):
+        transport = "stdio"
+    if transport in {"http", "streamable-http"}:
+        return "mcp"
+    if transport == "stdio":
+        if _safe_text(server.get("plugin_id")) and not _safe_text(server.get("command")) and not server.get("args") and not server.get("env"):
+            return "mcp"
+        return "raw_stdio"
+    return "unsupported"
+
+
 def _external_legacy_intent(mcp: dict[str, Any], ledger: dict[str, Any]) -> dict[str, bool]:
     """Classify only legacy lifecycle shape, never protocol data.
 
@@ -261,8 +283,17 @@ def _external_legacy_intent(mcp: dict[str, Any], ledger: dict[str, Any]) -> dict
     required to avoid claiming MCP or async declarations migrated.
     """
     if not bool(mcp.get("enabled", True)):
-        return {"declared": False, "sync": False, "job": False, "unsupported": False}
-    intent = {"declared": False, "sync": False, "job": False, "unsupported": False}
+        return {"declared": False, "sync": False, "job": False, "poll": False, "mcp": False, "raw_stdio": False, "unsupported": False, "mcp_config": False, "plugin_ledger": False}
+    intent = {"declared": False, "sync": False, "job": False, "poll": False, "mcp": False, "raw_stdio": False, "unsupported": False, "mcp_config": False, "plugin_ledger": False}
+    servers = mcp.get("servers")
+    if isinstance(servers, list):
+        for server in servers:
+            if not isinstance(server, dict) or not server.get("enabled"):
+                continue
+            kind = _classify_external_mcp(server)
+            intent["declared"] = True
+            intent["mcp_config"] = True
+            intent[kind] = True
     for entry in ledger.values():
         if not isinstance(entry, dict) or entry.get("removed") or not entry.get("enabled"):
             continue
@@ -271,7 +302,8 @@ def _external_legacy_intent(mcp: dict[str, Any], ledger: dict[str, Any]) -> dict
             continue
         if isinstance(manifest.get("mcp"), dict):
             intent["declared"] = True
-            intent["unsupported"] = True
+            intent["plugin_ledger"] = True
+            intent[_classify_external_mcp(manifest["mcp"])] = True
         tools = manifest.get("tools")
         if not isinstance(tools, list):
             continue
@@ -279,10 +311,13 @@ def _external_legacy_intent(mcp: dict[str, Any], ledger: dict[str, Any]) -> dict
             if not isinstance(tool, dict):
                 continue
             intent["declared"] = True
+            intent["plugin_ledger"] = True
             if tool.get("job") is None and tool.get("poll") is None:
                 intent["sync"] = True
             elif tool.get("job") is not None and tool.get("poll") is not None:
                 intent["job"] = True
+            elif tool.get("job") is None and tool.get("poll") is not None:
+                intent["poll"] = True
             else:
                 intent["unsupported"] = True
     return intent
@@ -298,7 +333,9 @@ def _external_tools_plan(repo: Path, mcp: dict[str, Any], ledger: dict[str, Any]
     intent = _external_legacy_intent(mcp, ledger)
     sync_declared = _declares_external_capability(repo, "external.http_request")
     job_declared = _declares_external_capability(repo, "external.job_request")
-    legacy_enabled = (intent["sync"] and sync_declared) or (intent["job"] and job_declared)
+    poll_declared = _declares_external_capability(repo, "external.poll_request")
+    mcp_declared = _declares_external_capability(repo, "external.mcp_request")
+    legacy_enabled = (intent["sync"] and sync_declared) or (intent["job"] and job_declared) or (intent["poll"] and poll_declared) or (intent["mcp"] and mcp_declared)
     required: list[str] = []
     if intent["declared"] and not legacy_enabled:
         required.append("no_matching_supported_external_tools")
@@ -306,13 +343,21 @@ def _external_tools_plan(repo: Path, mcp: dict[str, Any], ledger: dict[str, Any]
         required.append("official_sync_external_adapter_not_declared_by_external_tools_plugin")
     if intent["job"] and not job_declared:
         required.append("official_external_job_adapter_not_declared_by_external_tools_plugin")
+    if intent["poll"] and not poll_declared:
+        required.append("official_external_poll_adapter_not_declared_by_external_tools_plugin")
+    if intent["mcp"] and not mcp_declared:
+        required.append("official_external_mcp_adapter_not_declared_by_external_tools_plugin")
     retained = []
-    if bool(mcp.get("enabled", True)) and intent["declared"]:
+    if intent["plugin_ledger"]:
         retained.append("plugins.json:host_retained_declarations_and_credentials")
-    if intent["job"]:
+    if intent["mcp_config"]:
+        retained.append("mcp-config.json:host_retained_connections_and_credentials")
+    if intent["job"] or intent["poll"]:
         retained.append("legacy_external_tasks:origin_and_configuration_proof_required")
+    if intent["raw_stdio"]:
+        retained.append("mcp_stdio_runtime_package_required")
     if intent["unsupported"]:
-        retained.append("plugins.json:unsupported_external_declarations_retained")
+        retained.append("external_declarations:unsupported_runtime_retained")
     return _step("external-tools", _package(repo, "external-tools"), legacy_enabled, {}, {}, required, retained), {}
 
 

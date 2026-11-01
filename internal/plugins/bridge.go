@@ -27,6 +27,7 @@ type ExternalJobProtocol struct {
 	Version int                  `json:"version"`
 	Tool    ExternalProtocolTool `json:"tool"`
 }
+
 type ExternalProtocolTool struct {
 	Name         string          `json:"name"`
 	Description  string          `json:"description"`
@@ -39,12 +40,15 @@ type ExternalProtocolTool struct {
 	Fingerprint  string          `json:"fingerprint,omitempty"`
 }
 type ExternalPoll struct {
-	StatusPath   string   `json:"status_path"`
-	DoneValues   []string `json:"done_values"`
-	FailedValues []string `json:"failed_values,omitempty"`
-	TextPath     string   `json:"text_path,omitempty"`
-	MediaURLPath string   `json:"media_url_path,omitempty"`
-	MediaKind    string   `json:"media_kind,omitempty"`
+	StatusPath      string   `json:"status_path"`
+	DoneValues      []string `json:"done_values"`
+	FailedValues    []string `json:"failed_values,omitempty"`
+	TextPath        string   `json:"text_path,omitempty"`
+	MediaURLPath    string   `json:"media_url_path,omitempty"`
+	MediaKind       string   `json:"media_kind,omitempty"`
+	IntervalSeconds int      `json:"interval_seconds,omitempty"`
+	MaxAttempts     int      `json:"max_attempts,omitempty"`
+	TimeoutSeconds  int      `json:"timeout_seconds,omitempty"`
 }
 type ExternalJob struct {
 	IDPath string `json:"id_path"`
@@ -59,6 +63,17 @@ type ExternalRequest struct {
 type ExternalResponse struct {
 	ContentType string `json:"content_type"`
 	BodyBase64  string `json:"body_base64"`
+}
+
+// ExternalPollRequest is one phase of a non-Job legacy poll declaration.
+// InitialResponse is supplied only by the host's durable operation record; it
+// is never supplied by the stdio plugin or an agent.
+type ExternalPollRequest struct {
+	Phase       string           `json:"phase"`
+	Tool        string           `json:"tool"`
+	Arguments   json.RawMessage  `json:"arguments,omitempty"`
+	Fingerprint string           `json:"fingerprint"`
+	Initial     ExternalResponse `json:"initial,omitempty"`
 }
 
 type ExternalBridge struct{ runtime *Runtime }
@@ -100,8 +115,44 @@ func (b *ExternalBridge) JobProtocol(name string) (ExternalJobProtocol, error) {
 		Name: name, Description: t.Description, InputSchema: append(json.RawMessage(nil), t.InputSchema...),
 		TextPath: t.TextPath, MediaURLPath: t.MediaURLPath, MediaKind: t.MediaKind, Fingerprint: toolFingerprint(t),
 		Job:  &ExternalJob{IDPath: t.Job.IDPath},
-		Poll: &ExternalPoll{StatusPath: t.Poll.StatusPath, DoneValues: append([]string(nil), t.Poll.DoneValues...), FailedValues: append([]string(nil), t.Poll.FailedValues...), TextPath: t.Poll.TextPath, MediaURLPath: t.Poll.MediaURLPath, MediaKind: t.MediaKind},
+		Poll: &ExternalPoll{StatusPath: t.Poll.StatusPath, DoneValues: append([]string(nil), t.Poll.DoneValues...), FailedValues: append([]string(nil), t.Poll.FailedValues...), TextPath: t.Poll.TextPath, MediaURLPath: t.Poll.MediaURLPath, MediaKind: t.MediaKind, IntervalSeconds: t.Poll.IntervalSeconds, MaxAttempts: t.Poll.MaxAttempts, TimeoutSeconds: t.TimeoutSeconds},
 	}}, nil
+}
+
+// PollProtocol projects exactly one legacy Poll-without-Job declaration. Its
+// URL, headers, method, templates and secrets remain host authority.
+func (b *ExternalBridge) PollProtocol(name string) (ExternalJobProtocol, error) {
+	t, ok := b.runtime.tools[name]
+	if !ok || t.Job != nil || t.Poll == nil {
+		return ExternalJobProtocol{}, errors.New("external_poll_tool_unavailable")
+	}
+	return ExternalJobProtocol{Version: 1, Tool: ExternalProtocolTool{
+		Name: name, Description: t.Description, InputSchema: append(json.RawMessage(nil), t.InputSchema...),
+		TextPath: t.TextPath, MediaURLPath: t.MediaURLPath, MediaKind: t.MediaKind, Fingerprint: toolFingerprint(t),
+		Poll: &ExternalPoll{StatusPath: t.Poll.StatusPath, DoneValues: append([]string(nil), t.Poll.DoneValues...), FailedValues: append([]string(nil), t.Poll.FailedValues...), TextPath: t.Poll.TextPath, MediaURLPath: t.Poll.MediaURLPath, MediaKind: t.MediaKind, IntervalSeconds: t.Poll.IntervalSeconds, MaxAttempts: t.Poll.MaxAttempts, TimeoutSeconds: t.TimeoutSeconds},
+	}}, nil
+}
+
+// PollLimits gives the durable host operation the legacy poll defaults. An
+// explicit manifest value is returned unchanged; the host, not the stdio
+// runtime, owns timing and any deadline policy.
+func (b *ExternalBridge) PollLimits(name string) (interval, attempts, timeout int, err error) {
+	t, ok := b.runtime.tools[name]
+	if !ok || t.Job != nil || t.Poll == nil {
+		err = errors.New("external_poll_tool_unavailable")
+		return
+	}
+	interval, attempts, timeout = t.Poll.IntervalSeconds, t.Poll.MaxAttempts, t.TimeoutSeconds
+	if interval == 0 {
+		interval = 2
+	}
+	if attempts == 0 {
+		attempts = 12
+	}
+	if timeout == 0 {
+		timeout = 60
+	}
+	return
 }
 
 func (b *ExternalBridge) tool(name string, ticket JobTicket, requireJob bool) (APITool, Installed, error) {
@@ -215,5 +266,61 @@ func (b *ExternalBridge) Execute(ctx context.Context, in ExternalRequest) (Exter
 		return externalReply(data, typ), nil
 	default:
 		return ExternalResponse{}, errors.New("external_phase_unavailable")
+	}
+}
+
+// ExecutePoll performs exactly one create or poll HTTP request for a legacy
+// Poll-without-Job declaration. The caller owns durable scheduling, initial
+// response retention, phase authorization, and source/config binding.
+func (b *ExternalBridge) ExecutePoll(ctx context.Context, in ExternalPollRequest) (ExternalResponse, error) {
+	args, err := externalArguments(in.Arguments)
+	if err != nil {
+		return ExternalResponse{}, err
+	}
+	t, installed, err := b.tool(in.Tool, JobTicket{}, false)
+	if err != nil || t.Poll == nil || toolFingerprint(t) != in.Fingerprint {
+		return ExternalResponse{}, errors.New("external_poll_tool_unavailable")
+	}
+	switch in.Phase {
+	case "start":
+		body, err := renderBody(t.BodyTemplate, installed.Secrets, args, nil)
+		if err != nil {
+			return ExternalResponse{}, safeErr(err)
+		}
+		data, typ, err := request(ctx, t.URL, t.Method, t.Headers, body, installed.Secrets, args, nil, t.TimeoutSeconds)
+		if err != nil {
+			return ExternalResponse{}, safeErr(err)
+		}
+		return externalReply(data, typ), nil
+	case "query":
+		if in.Initial.ContentType == "" || in.Initial.BodyBase64 == "" {
+			return ExternalResponse{}, errors.New("external_initial_response_invalid")
+		}
+		body, err := base64.StdEncoding.DecodeString(in.Initial.BodyBase64)
+		if err != nil || !isJSON(in.Initial.ContentType, body) {
+			return ExternalResponse{}, errors.New("external_initial_response_invalid")
+		}
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.UseNumber()
+		var initial any
+		if decoder.Decode(&initial) != nil || decoder.Decode(new(any)) != io.EOF {
+			return ExternalResponse{}, errors.New("external_initial_response_invalid")
+		}
+		target, err := renderURL(t.Poll.URL, installed.Secrets, args, initial)
+		if err != nil {
+			return ExternalResponse{}, safeErr(err)
+		}
+		headers := followHeaders(t.URL, target, t.Poll.Headers, t.Headers)
+		method := t.Poll.Method
+		if method == "" {
+			method = http.MethodGet
+		}
+		data, typ, err := request(ctx, target, method, headers, nil, installed.Secrets, args, nil, t.TimeoutSeconds)
+		if err != nil {
+			return ExternalResponse{}, safeErr(err)
+		}
+		return externalReply(data, typ), nil
+	default:
+		return ExternalResponse{}, errors.New("external_poll_phase_unavailable")
 	}
 }

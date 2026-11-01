@@ -33,7 +33,7 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             (directory / "plugin.json").write_text(json.dumps(manifest), encoding="utf8")
         return repo
 
-    def add_declared_external_sync(self, repo, *, jobs=False):
+    def add_declared_external_sync(self, repo, *, jobs=False, polls=False, mcp=False):
         external = repo / "plugins" / "external-tools"
         (external / "config.schema.json").write_text(json.dumps({"type": "object", "properties": {}, "additionalProperties": False}), encoding="utf8")
         capabilities = [{
@@ -42,6 +42,12 @@ class PluginMigrationPreviewTests(unittest.TestCase):
         }]
         if jobs:
             capabilities.append({"id": "external.job_request", "implementation": "ready", "discoverable": True,
+                                 "async": False, "permissions": ["network"]})
+        if polls:
+            capabilities.append({"id": "external.poll_request", "implementation": "ready", "discoverable": True,
+                                 "async": False, "permissions": ["network"]})
+        if mcp:
+            capabilities.append({"id": "external.mcp_request", "implementation": "ready", "discoverable": True,
                                  "async": False, "permissions": ["network"]})
         (external / "capabilities.json").write_text(json.dumps({"capabilities": capabilities}), encoding="utf8")
 
@@ -61,10 +67,18 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             }]}
         elif mode == "mcp":
             manifest = {"id": "legacy-mcp", "name": "Legacy MCP", "mcp": {"transport": "http", "url": "https://private.example/mcp"}}
+        elif mode == "raw-stdio":
+            manifest = {"id": "legacy-stdio", "name": "Legacy raw stdio", "mcp": {"transport": "stdio", "command": "private-command", "args": ["--private"], "env": {"TOKEN": "private"}}}
         else:
             raise ValueError(mode)
         (root / "plugins.json").write_text(json.dumps({manifest["id"]: {"manifest": manifest, "enabled": True, "secrets": {"TOKEN": secret}}}), encoding="utf8")
         return secret
+
+    def add_external_mcp_server(self, root, *, transport="http", url="https://private.example/mcp", plugin_id="", command="", args=None, env=None):
+        path = root / "mcp-config.json"
+        mcp = json.loads(path.read_text(encoding="utf8"))
+        mcp["servers"] = [{"id": "legacy-mcp-server", "name": "Legacy MCP", "transport": transport, "url": url, "plugin_id": plugin_id, "command": command, "args": args or [], "env": env or {}, "enabled": True}]
+        path.write_text(json.dumps(mcp), encoding="utf8")
 
     def make_root(self, base):
         root = base / "admin"
@@ -228,25 +242,68 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
             self.assertFalse(any(key.startswith("external-tools.") for key in handoff["accounts"][0]["secrets"]))
 
-    def test_external_mcp_or_poll_only_is_blocked_without_provider_substitution(self):
+    def test_external_mcp_or_poll_only_migrates_when_matching_ready_adapter_exists(self):
         for mode in ("mcp", "poll-only"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 base = Path(temporary)
                 repo = self.make_repo(base)
-                self.add_declared_external_sync(repo)
+                self.add_declared_external_sync(repo, polls=mode == "poll-only", mcp=mode == "mcp")
                 root, _ = self.make_root(base)
                 secret = self.write_external_ledger(root, mode=mode)
                 report, handoff = preview.build_preview(root, repo, "main")
                 external = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
-                self.assertEqual(external["status"], "blocked")
-                self.assertFalse(external["legacy_enabled"])
-                self.assertFalse(external["eligible_to_enable_after_confirmation"])
+                self.assertEqual(external["status"], "ready_for_administrator_review")
+                self.assertTrue(external["legacy_enabled"])
+                self.assertTrue(external["eligible_to_enable_after_confirmation"])
                 self.assertFalse(external["proposed_enabled"])
                 self.assertEqual(external["values"], {})
                 self.assertEqual(external["secrets"], {})
-                self.assertIn("no_matching_supported_external_tools", external["required_missing"])
+                self.assertEqual(external["required_missing"], [])
                 self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
                 self.assertFalse(any(key.startswith("external-tools.") for key in handoff["accounts"][0]["secrets"]))
+
+    def test_external_mcp_config_http_and_registered_stdio_migrate_without_connection_values(self):
+        for server in (
+            {"transport": "streamable-http", "url": "https://private.example/mcp"},
+            {"plugin_id": "registered-runtime"},
+        ):
+            with self.subTest(server=server), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                repo = self.make_repo(base)
+                self.add_declared_external_sync(repo, mcp=True)
+                root, _ = self.make_root(base)
+                self.add_external_mcp_server(root, **server)
+                report, handoff = preview.build_preview(root, repo, "main")
+                external = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
+                self.assertEqual(external["status"], "ready_for_administrator_review")
+                self.assertTrue(external["legacy_enabled"])
+                self.assertIn("mcp-config.json:host_retained_connections_and_credentials", external["unmapped_legacy_fields"])
+                public = json.dumps(report, ensure_ascii=False)
+                self.assertNotIn("private.example", public)
+                self.assertNotIn("registered-runtime", public)
+                self.assertFalse(any(key.startswith("external-tools.") for key in handoff["accounts"][0]["secrets"]))
+
+    def test_external_raw_stdio_blocks_but_mixed_sync_stays_reviewable(self):
+        for mixed in (False, True):
+            with self.subTest(mixed=mixed), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                repo = self.make_repo(base)
+                self.add_declared_external_sync(repo, mcp=True)
+                root, _ = self.make_root(base)
+                self.write_external_ledger(root, mode="raw-stdio")
+                if mixed:
+                    ledger = json.loads((root / "plugins.json").read_text(encoding="utf8"))
+                    ledger["legacy-http"] = {"manifest": {"id": "legacy-http", "tools": [{"name": "lookup", "url": "https://private.example/v1"}]}, "enabled": True}
+                    (root / "plugins.json").write_text(json.dumps(ledger), encoding="utf8")
+                report, _ = preview.build_preview(root, repo, "main")
+                external = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "external-tools")
+                self.assertIn("mcp_stdio_runtime_package_required", external["unmapped_legacy_fields"])
+                if mixed:
+                    self.assertEqual(external["status"], "ready_for_administrator_review")
+                    self.assertTrue(external["legacy_enabled"])
+                else:
+                    self.assertEqual(external["status"], "blocked")
+                    self.assertIn("no_matching_supported_external_tools", external["required_missing"])
 
     def test_external_sync_requires_reviewed_adapter_contract(self):
         with tempfile.TemporaryDirectory() as temporary:

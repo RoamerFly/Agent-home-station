@@ -1,8 +1,5 @@
-// Package devicebroker admits only a host-registered, verified mobile stream
-// through mandatory OS isolation. A filtered legacy profile proves scope, not
-// OS isolation, and cannot authorize a process on its own. The existing native
-// ADB bridge still requires protocol migration; it is never substituted with
-// the isolated mobile-control facade or launched through raw command settings.
+// Package devicebroker binds original device authority to fixed host I/O.
+// High-level native protocol runs only in the installed isolated mobile plugin.
 package devicebroker
 
 import (
@@ -28,7 +25,6 @@ var (
 	ErrDeviceBusy     = errors.New("device_busy")
 	errChanged        = errors.New("device_broker_changed")
 	errToolDenied     = errors.New("device_broker_tool_not_permitted")
-	errClosed         = errors.New("device_broker_closed")
 	identifier        = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 	serial            = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,100}$`)
 	packageName       = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$`)
@@ -39,6 +35,8 @@ var (
 // verified package snapshot; this package does not accept a model-supplied
 // directory, command, script, environment, or endpoint.
 type Options struct {
+	inspectOnly        bool
+	Runner             IORunner // host-only bounded native executor; never JSON or plugin arguments
 	Python             string
 	PackageDirectory   string
 	CompatibilityEntry string
@@ -51,12 +49,11 @@ type Options struct {
 	GlobalLeaseDirectory string
 	// ADBRoots is a bounded set of trusted deployment runtime directories. The
 	// legacy profile's adb path must be an exact non-reparsed child of one root.
-	ADBRoots     []string
-	Account      string
-	Legacy       mcptools.ServerConfig
-	Devices      []string
-	Actions      []string             // permitted side-effect actions; observe is a required read capability
-	Registration *RuntimeRegistration // host-only fixed mandatory-sandbox registration
+	ADBRoots []string
+	Account  string
+	Legacy   mcptools.ServerConfig
+	Devices  []string
+	Actions  []string // permitted side-effect actions; observe is a required read capability
 	// ADBServer is a host-owned foreground server manager. Nil uses the
 	// process-wide managed server, never an MCP-session child.
 	ADBServer interface {
@@ -64,59 +61,32 @@ type Options struct {
 	}
 }
 
-// Bridge is the small contract used by the durable device controller.
-type Bridge interface {
-	Call(context.Context, string, json.RawMessage) (string, error)
-	// Binding returns an opaque fingerprint of the verified native bridge
-	// inputs. It performs no MCP call and therefore does not start the child.
-	// Callers bind it to durable policy and result reuse.
-	Binding() (string, error)
-	Close() error
-}
-
-type hub interface {
-	Call(context.Context, string, json.RawMessage) (string, error)
-	Close() error
-}
-
-var openHub = func(config mcptools.ServerConfig, launcher mcptools.StdioLauncher, guard mcptools.ServerGuard) (hub, error) {
-	return mcptools.New([]mcptools.ServerConfig{config}, mcptools.WithStdioLauncher(launcher), mcptools.WithServerGuard(guard))
-}
-
 // quarantinedRegistry keeps only brokers whose native-child cleanup was not
 // confirmed. It intentionally has no public identifiers or task data. Without
 // this strong reference, a discarded wrapper could let GC close the retained
 // lease file while a native child outcome was still unknown.
+type cleanupOwner interface{ Close() error }
+
 var quarantinedRegistry = struct {
 	sync.Mutex
-	brokers map[*broker]struct{}
-}{brokers: map[*broker]struct{}{}}
+	brokers map[cleanupOwner]struct{}
+}{brokers: map[cleanupOwner]struct{}{}}
 
-type broker struct {
-	mu              sync.Mutex
-	hub             hub
-	seals           []fileSeal
-	dirs            []string
-	privateDirs     []string
-	leaseDirectory  string
-	leases          map[string]string
-	scope           string
-	binding         string
-	quarantined     bool
-	quarantineLease *physicalLease
-	adbLease        adbserver.Lease
-	closed          bool
-	runtimeCheck    func() bool
+type resourceProof struct {
+	seals       []fileSeal
+	dirs        []string
+	privateDirs []string
 }
 
 type resolved struct {
+	profile        profile
+	adb            string
 	storage        string
 	seals          []fileSeal
 	dirs           []string
 	privateDirs    []string
 	leaseDirectory string
 	leases         map[string]string
-	scope          string
 	adbLease       adbserver.Lease
 }
 
@@ -125,171 +95,11 @@ type fileSeal struct {
 	hash string
 }
 
-// Open resolves scope from the legacy profile and admits only a registered
-// indexed entrypoint through the mandatory sandbox. Legacy commands never run.
-func Open(ctx context.Context, options Options) (Bridge, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	// Reject old profile-only launches before acquiring/starting the ADB server.
-	if err := options.Registration.Validate(ctx, options.Account); err != nil {
-		return nil, err
-	}
-	r, err := resolve(ctx, options)
-	if err != nil {
-		return nil, err
-	}
-	manifestSeal, sealErr := makeSeal(filepath.Join(options.Registration.directory, "plugin.json"))
-	if sealErr != nil {
-		_ = r.adbLease.Close()
-		return nil, ErrNeedsMigration
-	}
-	r.seals = append(r.seals, manifestSeal)
-	runtimeCheck := func() bool { return options.Registration.Validate(context.Background(), options.Account) == nil }
-	proof := &broker{seals: r.seals, dirs: r.dirs, privateDirs: r.privateDirs, runtimeCheck: runtimeCheck}
-	server := mcptools.ServerConfig{ID: "device", Transport: "stdio", PluginID: options.Registration.pack.ID, Enabled: true, Tools: []string{"devices", "observe", "act", "read_artifact"}}
-	guard := func(ctx context.Context, _ mcptools.ServerConfig) error {
-		if err := options.Registration.Validate(ctx, options.Account); err != nil {
-			return err
-		}
-		if !proof.verified() {
-			return errChanged
-		}
-		return nil
-	}
-	h, err := openHub(server, options.Registration.launcher(options.Account, r.storage, proof.verified), guard)
-	if err != nil {
-		_ = r.adbLease.Close()
-		return nil, ErrNeedsMigration
-	}
-	return &broker{hub: h, seals: r.seals, dirs: r.dirs, privateDirs: r.privateDirs, leaseDirectory: r.leaseDirectory, leases: r.leases, scope: r.scope, binding: brokerBinding(r.seals, r.leases, r.leaseDirectory, r.adbLease.Binding()), adbLease: r.adbLease, runtimeCheck: runtimeCheck}, nil
-}
-
-func (b *broker) Call(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
-	if !allowedTool(name) {
-		return "", errToolDenied
-	}
-	if len(arguments) == 0 || !json.Valid(arguments) {
-		return "", errToolDenied
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed || b.quarantined {
-		return "", errClosed
-	}
-	if !b.verified() {
-		return "", errChanged
-	}
-	var lease *physicalLease
-	releaseLease := true
-	defer func() {
-		if releaseLease && lease != nil {
-			_ = lease.Close()
-		}
-	}()
-	if name != "devices" {
-		key, ok := b.leaseKey(name, arguments)
-		if !ok {
-			return "", errToolDenied
-		}
-		var leaseErr error
-		lease, leaseErr = acquireLease(filepath.Join(b.leaseDirectory, "device-"+key+".lock"))
-		if leaseErr != nil {
-			if errors.Is(leaseErr, errLeaseBusy) {
-				return "", ErrDeviceBusy
-			}
-			return "", ErrNeedsMigration
-		}
-	}
-	// Never inherit an upstream conversation scope. The broker owns a stable,
-	// account-and-ledger-bound scope for reuse of its registered isolated stream.
-	ctx = mcptools.WithSessionScope(ctx, b.scope)
-	result, err := b.hub.Call(ctx, "device__"+name, arguments)
-	if err != nil {
-		// Do not release the physical-device lease merely because the RPC
-		// returned an error: the native child might still own an unknown action.
-		// Hub.Close is the synchronous process-tree cleanup boundary.
-		if closeErr := b.hub.Close(); closeErr != nil {
-			b.quarantined = true
-			b.quarantineLease = lease
-			releaseLease = false
-			registerQuarantine(b)
-			return "", err
-		}
-		b.closed = true
-		if closeErr := b.closeADBLease(); closeErr != nil {
-			return "", errors.Join(err, closeErr)
-		}
-		return result, err
-	}
-	// An operation result is not safe to trust after a critical file changed.
-	// In particular, callers must treat an action as unknown and never replay it.
-	if !b.verified() {
-		return "", errChanged
-	}
-	return result, err
-}
-
-func (b *broker) leaseKey(name string, arguments json.RawMessage) (string, bool) {
-	if name != "observe" && name != "act" && name != "read_artifact" {
-		return "", false
-	}
-	var request struct {
-		DeviceID string `json:"device_id"`
-	}
-	if json.Unmarshal(arguments, &request) != nil || !identifier.MatchString(request.DeviceID) {
-		return "", false
-	}
-	key, ok := b.leases[request.DeviceID]
-	return key, ok
-}
-
-func (b *broker) Close() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed && !b.quarantined && b.adbLease == nil {
-		return nil
-	}
-	if err := b.hub.Close(); err != nil {
-		b.quarantined = true
-		registerQuarantine(b)
-		return err
-	}
-	if err := b.closeADBLease(); err != nil {
-		return err
-	}
-	if b.quarantineLease != nil {
-		if err := b.quarantineLease.Close(); err != nil {
-			return err
-		}
-		b.quarantineLease = nil
-	}
-	b.quarantined = false
-	b.closed = true
-	unregisterQuarantine(b)
-	return nil
-}
-
-func (b *broker) closeADBLease() error {
-	if b.adbLease == nil {
-		return nil
-	}
-	if err := b.adbLease.Close(); err != nil {
-		// A failed host-server cleanup must survive this wrapper's disappearance;
-		// CleanupQuarantined retries only Close and never replays the action.
-		b.quarantined = true
-		registerQuarantine(b)
-		return err
-	}
-	b.adbLease = nil
-	return nil
-}
-
-// CleanupQuarantined retries only native-child cleanup for brokers whose prior
-// cleanup failed. It never replays a device operation or starts a new bridge.
+// CleanupQuarantined retries only cleanup for brokers whose prior cleanup
+// failed. It never replays an operation or starts a new process.
 func CleanupQuarantined() error {
 	quarantinedRegistry.Lock()
-	items := make([]*broker, 0, len(quarantinedRegistry.brokers))
+	items := make([]cleanupOwner, 0, len(quarantinedRegistry.brokers))
 	for item := range quarantinedRegistry.brokers {
 		items = append(items, item)
 	}
@@ -303,34 +113,19 @@ func CleanupQuarantined() error {
 	return first
 }
 
-func registerQuarantine(item *broker) {
+func registerQuarantine(item cleanupOwner) {
 	quarantinedRegistry.Lock()
 	quarantinedRegistry.brokers[item] = struct{}{}
 	quarantinedRegistry.Unlock()
 }
 
-func unregisterQuarantine(item *broker) {
+func unregisterQuarantine(item cleanupOwner) {
 	quarantinedRegistry.Lock()
 	delete(quarantinedRegistry.brokers, item)
 	quarantinedRegistry.Unlock()
 }
 
-func (b *broker) Binding() (string, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed || b.quarantined {
-		return "", errClosed
-	}
-	if !b.verified() {
-		return "", errChanged
-	}
-	return b.binding, nil
-}
-
-func (b *broker) verified() bool {
-	if b.runtimeCheck != nil && !b.runtimeCheck() {
-		return false
-	}
+func (b *resourceProof) verified() bool {
 	for _, seal := range b.seals {
 		if !seal.matches() {
 			return false
@@ -372,24 +167,6 @@ func resolve(ctx context.Context, options Options) (resolved, error) {
 	}
 	state, err := canonicalDirectory(options.StateDirectory)
 	if err != nil {
-		return resolved{}, ErrNeedsMigration
-	}
-	// Do not alter the ACL/mode of the historical account state directory.
-	// Instead, create one protected leaf for the broker-derived profile.
-	profileDirectory, err := ensurePrivateDirectory(filepath.Join(state, "devicebroker-private"))
-	if err != nil || !within(state, profileDirectory) {
-		return resolved{}, ErrNeedsMigration
-	}
-	leaseCandidate, err := absoluteLeaf(options.GlobalLeaseDirectory)
-	if err != nil || !within(workspace, leaseCandidate) || samePath(leaseCandidate, workspace) || within(state, leaseCandidate) || within(leaseCandidate, state) {
-		return resolved{}, ErrNeedsMigration
-	}
-	parent, err := canonicalDirectory(filepath.Dir(leaseCandidate))
-	if err != nil || !within(workspace, parent) || !samePath(leaseCandidate, filepath.Join(parent, filepath.Base(leaseCandidate))) {
-		return resolved{}, ErrNeedsMigration
-	}
-	leaseDirectory, err := ensurePrivateDirectory(leaseCandidate)
-	if err != nil || !within(workspace, leaseDirectory) || samePath(leaseDirectory, workspace) || within(state, leaseDirectory) || within(leaseDirectory, state) {
 		return resolved{}, ErrNeedsMigration
 	}
 	adbRoots, err := canonicalADBRoots(options.ADBRoots, workspace)
@@ -437,6 +214,27 @@ func resolve(ctx context.Context, options Options) (resolved, error) {
 	}
 	adb, err = canonicalADB(adb, adbRoots)
 	if err != nil {
+		return resolved{}, ErrNeedsMigration
+	}
+	leaseCandidate, err := absoluteLeaf(options.GlobalLeaseDirectory)
+	if err != nil || !within(workspace, leaseCandidate) || samePath(leaseCandidate, workspace) || within(state, leaseCandidate) || within(leaseCandidate, state) {
+		return resolved{}, ErrNeedsMigration
+	}
+	parent, err := canonicalDirectory(filepath.Dir(leaseCandidate))
+	if err != nil || !within(workspace, parent) || !samePath(leaseCandidate, filepath.Join(parent, filepath.Base(leaseCandidate))) {
+		return resolved{}, ErrNeedsMigration
+	}
+	if options.inspectOnly {
+		return resolved{}, nil
+	}
+	// Do not alter the ACL/mode of the historical account state directory.
+	// Instead, create one protected leaf for the broker-derived profile.
+	profileDirectory, err := ensurePrivateDirectory(filepath.Join(state, "devicebroker-private"))
+	if err != nil || !within(state, profileDirectory) {
+		return resolved{}, ErrNeedsMigration
+	}
+	leaseDirectory, err := ensurePrivateDirectory(leaseCandidate)
+	if err != nil || !within(workspace, leaseDirectory) || samePath(leaseDirectory, workspace) || within(state, leaseDirectory) || within(leaseDirectory, state) {
 		return resolved{}, ErrNeedsMigration
 	}
 	serverManager := options.ADBServer
@@ -493,7 +291,7 @@ func resolve(ctx context.Context, options Options) (resolved, error) {
 	}
 	privateDirs := []string{profileDirectory, leaseDirectory}
 	keepLease = true
-	return resolved{storage: legacyStorage, seals: seals, dirs: append(append([]string{}, workspace, state, profileDirectory, packageDir, legacyStorage), append(adbRoots, leaseDirectory)...), privateDirs: privateDirs, leaseDirectory: leaseDirectory, leases: leases, scope: brokerScope(options.Account, legacyStorage, filteredHash), adbLease: adbLease}, nil
+	return resolved{profile: filtered, adb: adb, storage: legacyStorage, seals: seals, dirs: append(append([]string{}, workspace, state, profileDirectory, packageDir, legacyStorage), append(adbRoots, leaseDirectory)...), privateDirs: privateDirs, leaseDirectory: leaseDirectory, leases: leases, adbLease: adbLease}, nil
 }
 
 type defaultADBServer struct{}
@@ -558,11 +356,6 @@ func physicalLeaseKey(serial string) string {
 	// include their path or version in this physical-device lock identity.
 	sum := sha256.Sum256([]byte(strings.ToLower(serial)))
 	return hex.EncodeToString(sum[:])
-}
-
-func brokerScope(account, ledger, profileHash string) string {
-	sum := sha256.Sum256([]byte(account + "\x00" + ledger + "\x00" + profileHash))
-	return "device:" + account + ":" + hex.EncodeToString(sum[:16])
 }
 
 func legacyPaths(legacy mcptools.ServerConfig, runtimeBridge, compatibility string) (config, storage string, err error) {

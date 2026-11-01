@@ -64,11 +64,9 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 		plannerError := s.manager.mobilePlannerReady(r.Context())
 		plannerAvailable := plannerError == nil
 		reason := mobileAvailabilityMessage(plannerError)
-		nativeRegistered := s.manager.loadMobileNativeRegistration().Validate(r.Context(), s.manager.native.Account()) == nil
-		nativeReason := ""
-		if !nativeRegistered {
-			nativeReason = "手机原生执行器尚未完成隔离登记；已登记设备和历史任务保留，当前不会执行实机操作。"
-		}
+		nativeError := s.manager.mobileDeviceReady(r.Context())
+		nativeRegistered := nativeError == nil
+		nativeReason := mobileAvailabilityMessage(nativeError)
 		respond(w, 200, map[string]any{"settings": s.manager.mobile.Settings(), "tasks": s.manager.mobile.List(nil), "planner_available": plannerAvailable, "planner_reason": reason,
 			"native_broker_registered": nativeRegistered, "native_broker_reason": nativeReason})
 	}))

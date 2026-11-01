@@ -91,16 +91,17 @@ func (c agentSettings) allowsPrivilegedThread(thread string) bool {
 }
 
 type pluginJobState struct {
-	LegacyConfigurationSHA256 string            `json:"legacy_configuration_sha256,omitempty"`
-	Origin                    *companion.Input  `json:"origin,omitempty"`
-	Ticket                    plugins.JobTicket `json:"ticket"`
-	Deadline                  time.Time         `json:"deadline"`
-	IntervalSeconds           int               `json:"interval_seconds"`
-	MaxPolls                  int               `json:"max_polls"`
-	Polls                     int               `json:"polls"`
-	Prepared                  bool              `json:"prepared"`
-	Failure                   bool              `json:"failure"`
-	CancelState               string            `json:"cancel_state,omitempty"`
+	PollState                 *externalPollState `json:"poll_state,omitempty"`
+	LegacyConfigurationSHA256 string             `json:"legacy_configuration_sha256,omitempty"`
+	Origin                    *companion.Input   `json:"origin,omitempty"`
+	Ticket                    plugins.JobTicket  `json:"ticket"`
+	Deadline                  time.Time          `json:"deadline"`
+	IntervalSeconds           int                `json:"interval_seconds"`
+	MaxPolls                  int                `json:"max_polls"`
+	Polls                     int                `json:"polls"`
+	Prepared                  bool               `json:"prepared"`
+	Failure                   bool               `json:"failure"`
+	CancelState               string             `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
 	Constraints        *TaskConstraints  `json:"constraints,omitempty"`
@@ -268,6 +269,9 @@ func newAgentControl(dir string) (*agentControl, error) {
 		if t.PluginJob != nil && t.State != "cancelled" && t.PluginJob.Ticket.State == "submitting" {
 			t.State = "needs_review"
 			t.LastResult = "插件创建请求可能已经提交，尚无可核验远端任务编号；不会自动重新创建"
+			if t.PluginJob.PollState != nil {
+				t.LastResult = "旧轮询首次请求结果未知，保留原操作、参数和来源；不会重新提交创建请求"
+			}
 			a.data.Tasks[id] = t
 			changed = true
 		}

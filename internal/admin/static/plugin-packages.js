@@ -197,6 +197,7 @@
    card.append(el('p','暂不能应用；旧功能继续保持原设置。','hint'));
    const reasons=[...blocked];if(!sourceHash)reasons.push('apply_source_hash_missing');if(!digest)reasons.push('prepared_package_digest');
    if(reasons.length){const list=el('ul');for(const reason of [...new Set(reasons)])list.append(el('li',migrationReason(reason)));card.append(list)}
+   if(preserved.length)card.append(el('p','其他设置保留原处：'+preserved.join('、')+'。','hint'));
    box.append(card);return;
   }
   const summary=el('p','将迁移到当前账号，安装后保持未启用；不会启动服务或发送消息。','hint');summary.style.margin='0';card.append(summary);

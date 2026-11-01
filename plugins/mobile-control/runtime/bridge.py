@@ -15,8 +15,7 @@ import os
 from pathlib import Path
 import re
 import shlex
-import socket
-import sqlite3
+import importlib
 import subprocess
 import sys
 import time
@@ -34,6 +33,16 @@ ADB_PORT = 5037
 ADB_SERVER_VERSION = 41
 ADB_PROBE_TIMEOUT_SECONDS = 1.0
 ADB_PROBE_MAX_RESPONSE_BYTES = 64
+
+class _LegacyModule:
+    # Importing socket itself calls WSAStartup, forbidden in the offline LPAC.
+    # Legacy CLI/test imports resolve it only when explicitly used; the single
+    # isolated native protocol never invokes this proxy.
+    def __getattr__(self, name):
+        return getattr(importlib.import_module('socket'), name)
+
+socket = _LegacyModule()
+
 
 
 def public_browser_url(value, hosts, lookup=None):
@@ -150,7 +159,8 @@ def ui_nodes(xml: bytes):
 
 class Bridge:
     def __init__(self, config: Path, storage: Path, runner=None, server_probe=None):
-        self.config_path = config.resolve()
+        self.config_object = json.loads(json.dumps(config)) if isinstance(config, dict) else None
+        self.config_path = None if self.config_object is not None else config.resolve()
         self.storage = storage.resolve()
         self.storage.mkdir(parents=True, exist_ok=True)
         if os.name != 'nt':
@@ -164,6 +174,7 @@ class Bridge:
 
     @contextlib.contextmanager
     def db(self):
+        import sqlite3  # legacy CLI only; native protocol journals on the host
         db = sqlite3.connect(self.database, timeout=3)
         try:
             db.execute('PRAGMA synchronous=FULL')
@@ -174,20 +185,20 @@ class Bridge:
 
     def config(self):
         try:
-            data = self.config_path.read_bytes()
+            data = json.dumps(self.config_object).encode() if self.config_object is not None else self.config_path.read_bytes()
             if len(data) > 64 << 10:
                 raise ValueError()
             cfg = json.loads(data)
             if not isinstance(cfg, dict) or not isinstance(cfg.get('devices'), dict) or len(cfg['devices']) > 16:
                 raise ValueError()
-            if not Path(cfg['adb']).is_absolute() or not Path(cfg['adb']).is_file():
+            if self.config_object is None and (not Path(cfg['adb']).is_absolute() or not Path(cfg['adb']).is_file()):
                 raise ValueError()
             # The host derives this private profile. ADB's bare/default
             # socket can auto-launch a daemon; 127.0.0.1 is deliberately a
             # remote socket spec, so a failed fixed host connection does not
             # launch one. See AOSP client/adb_client.cpp:
             # https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/client/adb_client.cpp
-            if cfg.get('adb_host') != ADB_HOST or cfg.get('adb_port') != ADB_PORT:
+            if self.config_object is None and (cfg.get('adb_host') != ADB_HOST or cfg.get('adb_port') != ADB_PORT):
                 raise ValueError()
             for key, device in cfg['devices'].items():
                 if not IDENTIFIER.fullmatch(key) or not SERIAL.fullmatch(device['serial']):

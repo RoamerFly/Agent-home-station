@@ -42,7 +42,6 @@ func installMobilePackageForManager(t *testing.T, manager *Manager) pluginhost.I
 	if err != nil {
 		t.Fatal(err)
 	}
-	registerSyntheticMobileNativeRuntime(t, manager, store, i)
 	return i
 }
 func TestMobilePluginHostActionsAreProtectedAndSafe(t *testing.T) {
@@ -364,7 +363,7 @@ func TestMobilePluginHostCreateRequiresEnabledReadyDeviceAndNotDraining(t *testi
 				options.Python, options.CatalogDirectory = executable, t.TempDir()
 			}
 			if mode == "draining" {
-				options.DeviceToolsRoots = []string{t.TempDir()}
+				options, guard.settings = mobileDeviceIOResourceFixture(t, f.manager, guard.settings, "")
 			}
 			raw, _ := json.Marshal(options)
 			t.Setenv("WECHAT_PLUGIN_RUNTIME_CONFIG", string(raw))

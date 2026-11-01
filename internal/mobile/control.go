@@ -530,8 +530,15 @@ func (c *Control) observe(ctx context.Context, b Bridge, device string) (Observa
 	if json.Unmarshal([]byte(raw), &result) != nil || json.Unmarshal([]byte(result.Text), &out) != nil || len(result.Media) != 1 || result.Media[0].MIME != "image/png" || out.DeviceID != device || !observationPattern.MatchString(out.ID) || out.Width < 1 || out.Height < 1 || out.Width > 4096 || out.Height > 4096 || len(out.Nodes) > 100 {
 		return out, errors.New("device_observation_invalid")
 	}
+	// Screenshots now travel through host-private artifacts instead of an MCP
+	// frame. Bound memory explicitly; the former 650 KiB frame budget no longer
+	// describes this path. Inspect the decoded size before allocating it.
+	const maxScreenshotBytes = 128 << 20
+	if base64.StdEncoding.DecodedLen(len(result.Media[0].Data)) > maxScreenshotBytes {
+		return Observation{}, errors.New("device_screenshot_exceeds_host_memory_budget")
+	}
 	out.PNG, e = base64.StdEncoding.DecodeString(result.Media[0].Data)
-	if e != nil || len(out.PNG) > 650<<10 || len(out.PNG) < 24 {
+	if e != nil || len(out.PNG) > maxScreenshotBytes || len(out.PNG) < 24 {
 		return Observation{}, errors.New("device_screenshot_invalid")
 	}
 	image, e := png.DecodeConfig(bytes.NewReader(out.PNG))

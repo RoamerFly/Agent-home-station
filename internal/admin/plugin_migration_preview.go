@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"wechat-bot/internal/channels"
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	legacyplugins "wechat-bot/internal/plugins"
 	catalog "wechat-bot/plugins"
@@ -46,6 +47,8 @@ type pluginMigrationPackage struct {
 	localMusic     bool
 	externalSync   bool
 	externalJob    bool
+	externalPoll   bool
+	externalMCP    bool
 }
 type pluginMigrationResourceProof struct {
 	Source        string `json:"source"`
@@ -139,6 +142,8 @@ func migrationCatalog() map[string]pluginMigrationPackage {
 			localMusic:     catalogDeclaresLocalMusicBridge(contract),
 			externalSync:   catalogDeclaresExternalSync(contract),
 			externalJob:    catalogDeclaresExternalJob(contract),
+			externalPoll:   catalogDeclaresExternalPoll(contract),
+			externalMCP:    catalogDeclaresExternalMCP(contract),
 		}
 	}
 	return out
@@ -160,6 +165,14 @@ func catalogDeclaresExternalJob(contract catalog.Contract) bool {
 	return catalogDeclaresExternalCapability(contract, externalJobCapability)
 }
 
+func catalogDeclaresExternalPoll(contract catalog.Contract) bool {
+	return catalogDeclaresExternalCapability(contract, externalPollCapability)
+}
+
+func catalogDeclaresExternalMCP(contract catalog.Contract) bool {
+	return catalogDeclaresExternalCapability(contract, externalMCPCapability)
+}
+
 func catalogDeclaresExternalCapability(contract catalog.Contract, wanted string) bool {
 	p := contract.Package
 	if p.ID != externalHTTPPluginID || p.Status != "ready" || !migrationStringContains(p.Permissions, "network") {
@@ -177,42 +190,74 @@ func catalogDeclaresExternalCapability(contract catalog.Contract, wanted string)
 }
 
 type legacyExternalIntent struct {
-	declared    bool
-	synchronous bool
-	jobs        bool
-	unsupported bool
+	declared         bool
+	synchronous      bool
+	jobs             bool
+	polls            bool
+	mcp              bool
+	rawStdio         bool
+	unsupported      bool
+	fromMCPConfig    bool
+	fromPluginLedger bool
 }
 
 // legacyExternalIntentFor deliberately examines only enablement and lifecycle
 // shape. It neither serializes nor interprets URLs, templates, headers or
-// Secrets: plugins.json remains their sole authority. A Job is supported only
-// when it has its Poll companion; bare Poll/MCP declarations retain the old
-// path and cannot be represented as a job request.
-func legacyExternalIntentFor(mcpEnabled bool, installed []legacyplugins.Installed) legacyExternalIntent {
+// Secrets: plugins.json remains their sole authority. HTTP, Job+Poll,
+// Poll-without-Job and declared remote MCP have distinct reviewed adapters.
+// Raw stdio command declarations are deliberately not execution authority.
+func legacyExternalIntentFor(mcp mcpSettings, installed []legacyplugins.Installed) legacyExternalIntent {
 	var out legacyExternalIntent
-	if !mcpEnabled {
+	if !mcp.Enabled {
 		return out
+	}
+	for _, server := range mcp.Servers {
+		if server.Enabled {
+			out.fromMCPConfig = true
+			out.addMCP(server)
+		}
 	}
 	for _, item := range installed {
 		if !item.Enabled {
 			continue
 		}
 		if item.Manifest.MCP != nil {
-			out.declared, out.unsupported = true, true
+			out.fromPluginLedger = true
+			out.addMCP(*item.Manifest.MCP)
 		}
 		for _, tool := range item.Manifest.Tools {
 			out.declared = true
+			out.fromPluginLedger = true
 			switch {
 			case tool.Job == nil && tool.Poll == nil:
 				out.synchronous = true
 			case tool.Job != nil && tool.Poll != nil:
 				out.jobs = true
+			case tool.Job == nil && tool.Poll != nil:
+				out.polls = true
 			default:
 				out.unsupported = true
 			}
 		}
 	}
 	return out
+}
+
+func (out *legacyExternalIntent) addMCP(server mcptools.ServerConfig) {
+	out.declared = true
+	server = server.Normalized()
+	switch server.Transport {
+	case "http", "streamable-http":
+		out.mcp = true
+	case "stdio":
+		if server.PluginID != "" && server.Command == "" && len(server.Args) == 0 && len(server.Env) == 0 {
+			out.mcp = true
+		} else {
+			out.rawStdio = true
+		}
+	default:
+		out.unsupported = true
+	}
 }
 
 // A YuE/RVC endpoint is not a generic plugin network permission.  The music
@@ -649,21 +694,27 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	projectValues := map[string]json.RawMessage{}
 	project := migrationStep(projectPluginID, packages, projectEnabled, projectValues, map[string]pluginMigrationSecret{}, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{}}, projectRequired, nil, "", sources)
 
-	// A configured MCP switch alone is not enough to claim external HTTP has
-	// migrated.  Only an enabled one-shot declaration expresses that intent.
-	// MCP-only and background-job/poll declarations retain their original host
-	// behavior and are visibly blocked until a compatible adapter exists.
-	externalIntent := legacyExternalIntentFor(mcp.Enabled, legacyExternal)
-	externalEnabled := externalIntent.synchronous && packages[externalHTTPPluginID].externalSync || externalIntent.jobs && packages[externalHTTPPluginID].externalJob
+	// A configured MCP switch alone is not enough to claim an external
+	// declaration migrated. Only an enabled declaration with its matching ready
+	// adapter expresses intent. Connection data and legacy task evidence remain
+	// host-owned regardless of the supported lifecycle.
+	externalIntent := legacyExternalIntentFor(mcp, legacyExternal)
+	externalEnabled := externalIntent.synchronous && packages[externalHTTPPluginID].externalSync || externalIntent.jobs && packages[externalHTTPPluginID].externalJob || externalIntent.polls && packages[externalHTTPPluginID].externalPoll || externalIntent.mcp && packages[externalHTTPPluginID].externalMCP
 	externalRequired := []string{}
 	externalUnmapped := []string{}
-	if mcp.Enabled && externalIntent.declared {
+	if externalIntent.fromPluginLedger {
 		externalUnmapped = append(externalUnmapped, "plugins.json:host_retained_declarations_and_credentials")
+	}
+	if externalIntent.fromMCPConfig {
+		externalUnmapped = append(externalUnmapped, "mcp-config.json:host_retained_connections_and_credentials")
 	}
 	if externalIntent.jobs {
 		// Existing tasks are never reconstructed from a migration preview. The
 		// job adapter will retain the original ID and mark missing immutable
 		// origin/configuration proof as needs_review instead of replaying it.
+		externalUnmapped = append(externalUnmapped, "legacy_external_tasks:origin_and_configuration_proof_required")
+	}
+	if externalIntent.polls {
 		externalUnmapped = append(externalUnmapped, "legacy_external_tasks:origin_and_configuration_proof_required")
 	}
 	if externalIntent.declared && !externalEnabled {
@@ -675,8 +726,17 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	if externalIntent.jobs && !packages[externalHTTPPluginID].externalJob {
 		externalRequired = append(externalRequired, "official_external_job_adapter_not_declared_by_external_tools_plugin")
 	}
+	if externalIntent.polls && !packages[externalHTTPPluginID].externalPoll {
+		externalRequired = append(externalRequired, "official_external_poll_adapter_not_declared_by_external_tools_plugin")
+	}
+	if externalIntent.mcp && !packages[externalHTTPPluginID].externalMCP {
+		externalRequired = append(externalRequired, "official_external_mcp_adapter_not_declared_by_external_tools_plugin")
+	}
+	if externalIntent.rawStdio {
+		externalUnmapped = append(externalUnmapped, "mcp_stdio_runtime_package_required")
+	}
 	if externalIntent.unsupported {
-		externalUnmapped = append(externalUnmapped, "plugins.json:unsupported_external_declarations_retained")
+		externalUnmapped = append(externalUnmapped, "external_declarations:unsupported_runtime_retained")
 	}
 	external := migrationStep(externalHTTPPluginID, packages, externalEnabled, map[string]json.RawMessage{}, map[string]pluginMigrationSecret{}, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{}}, externalRequired, externalUnmapped, "", sources)
 	return pluginMigrationAccount{Account: m.native.Account(), SourceHashes: sources, SourceErrors: sourceErrors, Plugins: []pluginMigrationStep{media, speechStep, musicStep, web, share, project, external}}, nil

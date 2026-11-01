@@ -19,8 +19,10 @@ import (
 )
 
 type externalJobAuthority struct {
-	task  agentTask
-	phase string
+	task   agentTask
+	phase  string
+	poll   bool
+	cached bool
 }
 type externalJobWireResult struct {
 	Observation     externalHTTPObservation `json:"observation"`
@@ -56,14 +58,21 @@ func (m *Manager) externalJobTrace(task agentTask) (companion.Input, error) {
 	return cloneProjectPluginTrace(trace)
 }
 func (g *externalJobAuthority) authorization(ctx context.Context, p *externalHTTPPolicy) (string, error) {
-	if g.task.PluginJob == nil || !slices.Contains([]string{"start", "poll", "cancel"}, g.phase) {
+	phases := []string{"start", "poll", "cancel"}
+	if g.poll {
+		phases = []string{"start", "query"}
+		if g.cached {
+			phases = []string{"read"}
+		}
+	}
+	if g.task.PluginJob == nil || !slices.Contains(phases, g.phase) {
 		return "", errors.New("external_job_phase_denied")
 	}
 	if g.task.PluginJob.LegacyConfigurationSHA256 == "" || g.task.PluginJob.Origin == nil {
 		return "", errors.New("external_job_original_proof_missing")
 	}
 	current, ok := p.p.manager.agent.lookupTask(g.task.ID, g.task.Account, g.task.Thread)
-	if !ok || current.PluginJob == nil || !current.Updated.Equal(g.task.Updated) || current.Account != p.p.trace.Account || current.Thread != p.p.trace.Thread || current.Sender != p.p.trace.Sender || current.State != g.task.State || current.PluginJob.Polls != g.task.PluginJob.Polls || current.PluginJob.CancelState != g.task.PluginJob.CancelState || current.PluginJob.LegacyConfigurationSHA256 != g.task.PluginJob.LegacyConfigurationSHA256 || !reflect.DeepEqual(current.PluginJob.Origin, g.task.PluginJob.Origin) || !reflect.DeepEqual(current.PluginJob.Ticket, g.task.PluginJob.Ticket) || !reflect.DeepEqual(current.Constraints, g.task.Constraints) {
+	if !ok || current.PluginJob == nil || !current.Updated.Equal(g.task.Updated) || current.Account != p.p.trace.Account || current.Thread != p.p.trace.Thread || current.Sender != p.p.trace.Sender || current.State != g.task.State || current.PluginJob.Polls != g.task.PluginJob.Polls || current.PluginJob.CancelState != g.task.PluginJob.CancelState || current.PluginJob.LegacyConfigurationSHA256 != g.task.PluginJob.LegacyConfigurationSHA256 || !reflect.DeepEqual(current.PluginJob.Origin, g.task.PluginJob.Origin) || !reflect.DeepEqual(current.PluginJob.Ticket, g.task.PluginJob.Ticket) || !reflect.DeepEqual(current.Constraints, g.task.Constraints) || !reflect.DeepEqual(current.PluginJob.PollState, g.task.PluginJob.PollState) {
 		return "", errors.New("external_job_task_changed")
 	}
 	if err := p.p.manager.validateTaskSource(current); err != nil {
@@ -77,11 +86,18 @@ func (g *externalJobAuthority) authorization(ctx context.Context, p *externalHTT
 			return "", errors.New("external_job_cancel_claim_required")
 		}
 	} else {
-		if current.State != "waiting" && current.State != "pending" {
+		if g.cached {
+			if current.State != "running" || current.PluginJob.Ticket.State != "completed" {
+				return "", errors.New("external_poll_result_not_claimed")
+			}
+		} else if current.State != "waiting" && current.State != "pending" {
 			return "", errors.New("external_job_task_not_waiting")
 		}
 		if g.phase == "start" && (current.PluginJob.Ticket.State != "submitting" || current.PluginJob.Ticket.RemoteID != "") {
 			return "", errors.New("external_job_start_not_replayable")
+		}
+		if g.phase == "query" && (current.PluginJob.PollState == nil || current.PluginJob.PollState.Initial == nil || current.PluginJob.Ticket.State != "waiting" || current.PluginJob.Ticket.RemoteID != "") {
+			return "", errors.New("external_poll_initial_response_required")
 		}
 		if g.phase == "poll" && (current.PluginJob.Ticket.State != "waiting" || !validExternalRemoteID(current.PluginJob.Ticket.RemoteID)) {
 			return "", errors.New("external_job_original_remote_id_required")

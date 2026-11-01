@@ -131,7 +131,7 @@ func TestMCPConfigCannotConflictWithEnabledPlugin(t *testing.T) {
 }
 
 func TestInlineMCPAudioStagedAndPermissionCheckedBeforeCalling(t *testing.T) {
-	f := setup(t)
+	f, origin := trustedAgent(t)
 	f.manager.native = &fakeTools{fakeNative: f.native}
 	var generated atomic.Int32
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +161,9 @@ func TestInlineMCPAudioStagedAndPermissionCheckedBeforeCalling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	access.SetTrace(origin.trace)
+	installExternalMCPTestRuntime(t, access)
+	defer access.hub.Close()
 	output, err := access.Call(context.Background(), "mcpvoice__sing", json.RawMessage(`{}`))
 	if err != nil || !bytes.Contains([]byte(output), []byte("source-one")) {
 		t.Fatal("MCP audio not staged", output, err)

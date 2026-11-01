@@ -69,6 +69,7 @@ type externalHTTPWireResult struct {
 	Output      externalHTTPWireOutput  `json:"output"`
 }
 type externalHTTPCheckpoint struct {
+	JobID       string              `json:"job_id,omitempty"`
 	Binding     string              `json:"binding"`
 	Body        externalHTTPBlobRef `json:"body"`
 	Verified    externalHTTPBlobRef `json:"verified"`
@@ -234,6 +235,7 @@ type externalHTTPPolicy struct {
 	execute        func(context.Context, plugins.ExternalRequest) (plugins.ExternalResponse, error)
 	admin          *externalHTTPAdminAuthority
 	job            *externalJobAuthority
+	mcp            *externalMCPAuthority
 }
 
 func (p *permittedTools) newExternalHTTPPolicy(ctx context.Context, name string, raw json.RawMessage) (*externalHTTPPolicy, error) {
@@ -248,6 +250,9 @@ func (p *permittedTools) newExternalPolicy(ctx context.Context, name string, raw
 	capability := externalHTTPCapability
 	if job != nil {
 		capability = externalJobCapability
+		if job.poll {
+			capability = externalPollCapability
+		}
 	}
 	store, installed, revision, err := p.manager.externalPackageCapability(ctx, capability)
 	if err != nil {
@@ -268,7 +273,11 @@ func (p *permittedTools) newExternalPolicy(ctx context.Context, name string, raw
 	}
 	var jobProtocol plugins.ExternalJobProtocol
 	if job != nil {
-		jobProtocol, err = bridge.JobProtocol(name)
+		if job.poll {
+			jobProtocol, err = bridge.PollProtocol(name)
+		} else {
+			jobProtocol, err = bridge.JobProtocol(name)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -279,6 +288,11 @@ func (p *permittedTools) newExternalPolicy(ctx context.Context, name string, raw
 			return nil, plugins.ErrJobConfigChanged
 		}
 		policy.tool = jobProtocol.Tool
+		if job.poll {
+			policy.execute = func(call context.Context, in plugins.ExternalRequest) (plugins.ExternalResponse, error) {
+				return policy.executePoll(call, in)
+			}
+		}
 	} else if policy.tool.Name == "" || policy.tool.Job != nil || policy.tool.Poll != nil {
 		return nil, errors.New("external_sync_tool_unavailable")
 	}
@@ -342,12 +356,21 @@ func (p *permittedTools) newExternalPolicy(ctx context.Context, name string, raw
 	return policy, nil
 }
 func (p *externalHTTPPolicy) capability() string {
+	if p.mcp != nil {
+		return externalMCPCapability
+	}
 	if p.job != nil {
+		if p.job.poll {
+			return externalPollCapability
+		}
 		return externalJobCapability
 	}
 	return externalHTTPCapability
 }
 func (p *externalHTTPPolicy) currentAuthorization(ctx context.Context) (string, error) {
+	if p.mcp != nil {
+		return p.mcp.authorization(ctx, p)
+	}
 	if p.job != nil {
 		return p.job.authorization(ctx, p)
 	}
@@ -372,7 +395,12 @@ func (p *externalHTTPPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 	if err != nil || installed.Digest != p.installed.Digest || installed.Revision != p.installed.Revision || !slices.Equal(installed.Permissions, p.installed.Permissions) || revision != p.configRevision || j.PackageDigest != "" && (j.PackageDigest != installed.Digest || j.Version != installed.Package.Version || j.ConfigRevision != strconv.Itoa(revision)) {
 		return errors.New("external_http_package_or_configuration_changed")
 	}
-	_, hash, err := p.p.manager.externalHTTPBridge()
+	var hash string
+	if p.mcp != nil {
+		hash, err = p.p.manager.externalMCPConfigurationHash()
+	} else {
+		_, hash, err = p.p.manager.externalHTTPBridge()
+	}
 	if err != nil || hash != p.legacyHash {
 		return errors.New("external_http_declaration_changed")
 	}
@@ -380,7 +408,7 @@ func (p *externalHTTPPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 		return err
 	}
 	epoch, err := p.p.manager.memory.RecallEpoch(ctx)
-	if p.admin != nil {
+	if p.admin != nil || p.mcp != nil && p.mcp.admin != nil {
 		epoch = ""
 	}
 	if err != nil || epoch != p.invocation.EvidenceEpoch {
@@ -408,6 +436,9 @@ func (p *externalHTTPPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 }
 
 func (p *externalHTTPPolicy) Service(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, method string, raw json.RawMessage) (json.RawMessage, error) {
+	if p.mcp != nil {
+		return p.mcpService(ctx, j, cap, method, raw)
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if method != "wechat/external_request" || p.requested || j.ID == "" {
@@ -426,10 +457,39 @@ func (p *externalHTTPPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 		return nil, errors.New("external_http_request_changed")
 	}
 	p.requested = true // Unknown transport effects must never be resubmitted.
+	bound, stop := p.boundContext(ctx, j, cap)
+	defer stop()
+	operation := plugins.ExternalRequest{Phase: p.request.Phase, Tool: p.request.Tool, Arguments: p.request.Arguments}
+	if p.request.Ticket != nil {
+		operation.Ticket = *p.request.Ticket
+	}
+	reply, err := p.execute(bound, operation)
+	if err != nil {
+		return nil, errors.New("external_http_outcome_unknown_do_not_resubmit")
+	}
+	if err = p.Check(ctx, j, cap); err != nil {
+		return nil, err
+	}
+	data, err := base64.StdEncoding.Strict().DecodeString(reply.BodyBase64)
+	if err != nil {
+		return nil, errors.New("external_http_response_invalid")
+	}
+	if err = p.captureReply(j, data, reply.ContentType); err != nil {
+		return nil, err
+	}
+	observation := externalHTTPObservation{ContentType: reply.ContentType, BodyBase64: reply.BodyBase64}
+	if !externalHTTPIsJSON(data, reply.ContentType) {
+		observation.BodyBase64 = ""
+		ref := p.body
+		observation.BinaryRef = &ref
+	}
+	p.observed, _ = json.Marshal(observation)
+	return append(json.RawMessage(nil), p.observed...), nil
+}
+
+func (p *externalHTTPPolicy) boundContext(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) (context.Context, context.CancelFunc) {
 	bound, cancel := context.WithCancel(ctx)
-	defer cancel()
 	done := make(chan struct{})
-	defer close(done)
 	go func() {
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
@@ -450,41 +510,22 @@ func (p *externalHTTPPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 			}
 		}
 	}()
-	operation := plugins.ExternalRequest{Phase: p.request.Phase, Tool: p.request.Tool, Arguments: p.request.Arguments}
-	if p.request.Ticket != nil {
-		operation.Ticket = *p.request.Ticket
-	}
-	reply, err := p.execute(bound, operation)
-	if err != nil {
-		return nil, errors.New("external_http_outcome_unknown_do_not_resubmit")
-	}
-	if err = p.Check(ctx, j, cap); err != nil {
-		return nil, err
-	}
-	data, err := base64.StdEncoding.Strict().DecodeString(reply.BodyBase64)
-	if err != nil {
-		return nil, errors.New("external_http_response_invalid")
-	}
+	return bound, func() { close(done); cancel() }
+}
+func (p *externalHTTPPolicy) captureReply(j pluginhost.Job, data []byte, contentType string) error {
 	p.body = externalHTTPBlobRef{SHA256: namedSpeechSHA(data), Size: int64(len(data))}
-	p.contentType = reply.ContentType
+	p.contentType = contentType
 	directory := filepath.Join(p.replyRoot(), j.ID)
-	if err = ensureManaged(p.replyRoot()); err != nil {
-		return nil, err
+	if err := ensureManaged(p.replyRoot()); err != nil {
+		return err
 	}
-	if err = os.Mkdir(directory, 0700); err != nil {
-		return nil, errors.New("external_http_reply_already_exists")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		return errors.New("external_http_reply_already_exists")
 	}
-	if err = writeExternalPrivate(filepath.Join(directory, "reply.bin"), data); err != nil {
-		return nil, err
+	if err := writeExternalPrivate(filepath.Join(directory, "reply.bin"), data); err != nil {
+		return err
 	}
-	observation := externalHTTPObservation{ContentType: reply.ContentType, BodyBase64: reply.BodyBase64}
-	if !externalHTTPIsJSON(data, reply.ContentType) {
-		observation.BodyBase64 = ""
-		ref := p.body
-		observation.BinaryRef = &ref
-	}
-	p.observed, _ = json.Marshal(observation)
-	return append(json.RawMessage(nil), p.observed...), nil
+	return nil
 }
 
 func externalHTTPValue(data any, path string) any {
@@ -636,7 +677,13 @@ func (p *externalHTTPPolicy) Validate(ctx context.Context, j pluginhost.Job, cap
 	if err := p.Check(ctx, j, cap); err != nil {
 		return pluginruntime.VerifiedResult{}, err
 	}
+	if p.mcp != nil {
+		return p.validateMCP(ctx, j, cap, raw)
+	}
 	if p.job != nil {
+		if p.job.poll {
+			return p.validatePoll(ctx, j, cap, raw)
+		}
 		return p.validateJob(ctx, j, cap, raw)
 	}
 	var result externalHTTPWireResult
@@ -660,9 +707,12 @@ func (p *externalHTTPPolicy) savePhaseResult(j pluginhost.Job, raw json.RawMessa
 	if err := writeExternalPrivate(filepath.Join(p.replyRoot(), j.ID, "verified.json"), raw); err != nil {
 		return pluginruntime.VerifiedResult{}, err
 	}
-	checkpoint := externalHTTPCheckpoint{Binding: p.binding(), Body: p.body, Verified: externalHTTPBlobRef{SHA256: namedSpeechSHA(raw), Size: int64(len(raw))}, ContentType: p.contentType}
+	checkpoint := externalHTTPCheckpoint{JobID: j.ID, Binding: p.binding(), Body: p.body, Verified: externalHTTPBlobRef{SHA256: namedSpeechSHA(raw), Size: int64(len(raw))}, ContentType: p.contentType}
 	private, _ := json.Marshal(checkpoint)
 	public, _ := json.Marshal(map[string]any{"tool": p.request.Tool, "phase": p.request.Phase, "host_observed": true, "wechat_sends": 0})
+	if p.mcp != nil {
+		public, _ = json.Marshal(map[string]any{"operation": p.mcp.request.Operation, "server_id": p.mcp.request.ServerID, "tool": p.mcp.request.Tool, "host_observed": true, "wechat_sends": 0})
+	}
 	return pluginruntime.VerifiedResult{Result: public, Private: private}, nil
 }
 

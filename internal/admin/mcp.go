@@ -94,6 +94,7 @@ type permittedTools struct {
 	trace                companion.Input
 	hub                  *mcptools.Hub
 	settings             mcpSettings
+	mcpSourceHash        string
 	runtime              *plugins.Runtime
 	apiNames             map[string]bool
 	apiKinds             map[string]string
@@ -116,7 +117,7 @@ func (p *permittedTools) SetTrace(input companion.Input) {
 func (p *permittedTools) ForkTools() companion.ToolAccess {
 	// Hub and plugin Runtime are immutable after construction. Mutable per-call
 	// trace/media state must never be shared between simultaneous conversations.
-	return &permittedTools{hub: p.hub, settings: p.settings, runtime: p.runtime,
+	return &permittedTools{hub: p.hub, settings: p.settings, runtime: p.runtime, mcpSourceHash: p.mcpSourceHash,
 		privateSurfOrigin: p.privateSurfOrigin,
 		outboundReviewer:  p.outboundReviewer,
 		apiNames:          p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
@@ -201,17 +202,9 @@ func (p *permittedTools) localTools() []mcptools.Tool {
 		tools = append(tools, mcptools.Tool{Name: "media_recent", Description: "Read the recent attachment catalogue for THIS conversation in chronological recency, including source_url and formats. Returns cached_mime, parent_asset_id and recent requests with requester_id/trace_id/task_id. Parent is the retained source video when this asset is an extracted audio track. Match the verified quote first, then the current speaker and latest context; ask briefly if ambiguous. Call this for original video/audio or format conversion. This is a LOCAL catalogue, not Internet search. Search this LOCAL catalogue FIRST for listening, RVC covers and YuE reference songs, even a newly requested title. Reuse an exactly matching cached original recording; search online only if missing, unsuitable or explicitly requested fresh online. Never substitute unrelated tracks or generated covers for the original. Cached originals remain discoverable beyond chat memory age. Default is a12-item quick array. Supply offset=0 to get a paginated object {items,total,next_offset,has_more}; follow next_offset for the FULL scoped catalogue, no total-item cutoff. limit chooses a page (default12). Filter by exact asset_id, requester_id (self/current speaker supported), or query matching title/filename. Input: {asset_id?:string,requester_id?:string,query?:string,offset?:integer,limit?:integer}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"requester_id":{"type":"string"},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)}, mcptools.Tool{Name: "media_reuse", Description: "Reuse the matching cached resource for the user request, including a matching local song found by title before online search, or a different format. This performs NO Internet search; never substitute a different old track for a new requested title. Original audio can be sent as file; legacy voice-only sources are WAV. Put returned media.id in reply.media_ids. For voice, optional conversion selects cached original start_seconds/duration_seconds, segment_seconds(default60, WeChat max60), timeout_seconds(default90). Default entire audio. Explicit conversion never replaces the default full-song bundle. Input: {asset_id:string,kind:voice|file|image|video,conversion?:object}.", InputSchema: json.RawMessage(withVoiceConversion(`{"type":"object","properties":{"asset_id":{"type":"string"},"kind":{"type":"string","enum":["voice","file","image","video"]}},"required":["asset_id","kind"],"additionalProperties":false}`))})
 	}
 	tools = append(tools, mcptools.Tool{Name: "web_media_download", Description: "Download media and prepare an attachment, not an observation tool. To understand an already received video/share use video_inspect with its message_id or cached asset_id; info/frames/audio return actual observations without uploading. Public Kuaishou/chenzhongtech video pages are also supported for video, voice and file. For kind=video, accepts direct video URLs AND anonymously playable Bilibili BV video-page URLs (optional ?p=part) or b23.tv short links; resolves the public progressive MP4 itself, so try the actual BV page instead of searching for guessed mp4 links. Videos longer than 60 seconds are prepared as clickable WeChat share cards with the actual playback page, without downloading the whole video. Short files are limited to 50 MiB. For kind=voice, also accepts these public BV/b23 pages and extracts the existing audio into voice notes, limited to 10 minutes and 25 MiB input; the reusable original is an audio-only M4A file. No paid/logged-in playback. Image/file otherwise need direct files. Does not send until final reply.media_ids. No login, paid formats, DRM or general streaming playlists. For music, DEFAULT preview_seconds=0 sends the COMPLETE audio as voice notes of at most60 seconds. Keep original file cached, but never ask about sending a file; use file only when user asks. Explicit preview requests may set preview_seconds=45. For kind=file on BV pages, audio_only=true gives the full original audio M4A, false gives the original video file. Input: {url:string,kind:voice|video|image|file,preview_seconds?:integer 0..900,audio_only?:boolean}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"kind":{"type":"string","enum":["voice","video","image","file"]},"preview_seconds":{"type":"integer","minimum":0,"maximum":900},"audio_only":{"type":"boolean"}},"required":["url","kind"],"additionalProperties":false}`)})
-	if p.runtime != nil {
-		// Legacy in-call polling has no durable remote identity yet. Keep only
-		// that compatibility path; durable jobs use the installed capability.
-		for _, tool := range p.runtime.Tools() {
-			if !p.runtime.Background(tool.Name) && p.externalLegacyHTTP(tool.Name) {
-				tools = append(tools, tool)
-			}
-		}
-	}
 	tools = append(tools, p.installedExternalHTTPTools(context.Background())...)
 	tools = append(tools, p.installedExternalJobTools(context.Background())...)
+	tools = append(tools, p.installedExternalPollTools(context.Background())...)
 	for _, module := range p.capabilities() {
 		tools = append(tools, module.list()...)
 	}
@@ -226,13 +219,13 @@ func (p *permittedTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	var err error
 
 	if p.settings.Enabled && p.privateSurfOrigin == nil {
-		tools, err = p.hub.List(ctx)
+		tools, err = p.installedExternalMCPTools(ctx)
 	}
 	tools = append(tools, p.localTools()...)
 	out := []mcptools.Tool{}
 	indices := map[string]int{}
 	for _, tool := range tools {
-		if p.enabled(tool.Name) {
+		if p.enabled(tool.Name) || p.externalMCPAdminListed(ctx, tool.Name) {
 			if i, exists := indices[tool.Name]; exists {
 				out[i] = tool
 			} else {
@@ -610,30 +603,16 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		return p.stageOutputWithAsset(ctx, plugins.Output{Text: "公开媒体已下载，尚未发送。", Media: []plugins.MediaResult{{Kind: input.Kind, Data: data, MIMEType: typ}}}, original)
 	}
 	if p.apiNames[name] {
-		if p.runtime.Background(name) {
+		if p.runtime.Background(name) || p.externalPollOnly(name) {
 			return p.startPluginJob(ctx, name, args)
 		}
-		var output plugins.Output
-		var err error
-		if p.externalLegacyHTTP(name) {
-			output, err = p.runtime.Call(ctx, name, args)
-		} else {
-			output, err = p.callExternalHTTP(ctx, name, args)
-		}
+		output, err := p.callExternalHTTP(ctx, name, args)
 		if err != nil {
 			return "", err
 		}
 		return p.stageOutput(ctx, output)
 	}
-	text, err := p.hub.Call(ctx, name, args)
-	if err != nil {
-		return "", err
-	}
-	var output plugins.Output
-	if json.Unmarshal([]byte(text), &output) == nil && len(output.Media) > 0 {
-		return p.stageOutput(ctx, output)
-	}
-	return text, nil
+	return p.callExternalMCP(ctx, name, args)
 }
 
 func (p *permittedTools) Media(id string) (companion.GeneratedMedia, bool) {
@@ -799,7 +778,15 @@ func (m *Manager) toolAccess() (*permittedTools, int, error) {
 	if m.agent != nil && m.agent.config().Enabled {
 		steps = agentTurnToolLimit
 	}
-	runtime, err := plugins.New(m.plugins.installed())
+	installedRaw, err := json.Marshal(m.plugins.installed())
+	if err != nil {
+		return nil, 0, err
+	}
+	var installed []plugins.Installed
+	if err = json.Unmarshal(installedRaw, &installed); err != nil {
+		return nil, 0, err
+	}
+	runtime, err := plugins.New(installed)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -814,7 +801,7 @@ func (m *Manager) toolAccess() (*permittedTools, int, error) {
 	}
 	names := map[string]bool{}
 	kinds := map[string]string{}
-	for _, plugin := range m.plugins.installed() {
+	for _, plugin := range installed {
 		if plugin.Enabled {
 			for tool, kind := range plugin.Manifest.ToolMediaKinds {
 				kinds[plugin.Manifest.ID+"__"+tool] = kind
@@ -827,7 +814,7 @@ func (m *Manager) toolAccess() (*permittedTools, int, error) {
 	for _, tool := range runtime.Tools() {
 		names[tool.Name] = true
 	}
-	return &permittedTools{hub: hub, settings: c, runtime: runtime, apiNames: names, apiKinds: kinds, manager: m, media: map[string]companion.GeneratedMedia{}}, steps, nil
+	return &permittedTools{hub: hub, settings: c, runtime: runtime, mcpSourceHash: externalMCPSourceHash(c, installed), apiNames: names, apiKinds: kinds, manager: m, media: map[string]companion.GeneratedMedia{}}, steps, nil
 }
 func (s *Server) mcpRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/mcp", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -920,8 +907,10 @@ func (s *Server) mcpRoutes(mux *http.ServeMux) {
 			respond(w, 200, map[string]any{"items": []mcptools.Tool{}})
 			return
 		}
+		defer access.hub.Close()
 		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 		defer cancel()
+		ctx = s.externalMCPAdminContext(ctx, r, "list", "")
 		tools, listErr := access.List(ctx)
 		out := map[string]any{"items": tools}
 		if listErr != nil {
@@ -942,6 +931,7 @@ func (s *Server) mcpRoutes(mux *http.ServeMux) {
 			fail(w, 400, "工具能力未开启或配置无效")
 			return
 		}
+		defer access.hub.Close()
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 		defer cancel()
 		var result string
@@ -951,6 +941,10 @@ func (s *Server) mcpRoutes(mux *http.ServeMux) {
 			access.trace = companion.Input{Account: s.manager.native.Account()}
 			ctx = s.externalHTTPTestContext(ctx, r, input.Name)
 			result, err = access.callManualExternalHTTP(ctx, input.Name, input.Arguments)
+		} else if !access.apiNames[input.Name] && strings.Contains(input.Name, "__") {
+			access.trace = companion.Input{Account: s.manager.native.Account()}
+			ctx = s.externalMCPAdminContext(ctx, r, "call", input.Name)
+			result, err = access.callExternalMCP(ctx, input.Name, input.Arguments)
 		} else {
 			result, err = access.Call(ctx, input.Name, input.Arguments)
 		}

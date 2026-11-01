@@ -1,11 +1,7 @@
-"""Source-bound facade for future device broker operations.
+"""Pure input grammar for the packaged native operation state machine.
 
-This module never imports the legacy bridge or performs I/O. The host owns the
-registered-device policy, raw screenshots/recordings, durable receipt ledger,
-and all action submission semantics.
+The host independently binds all physical I/O to the original request.
 """
-import json
-import math
 import re
 
 
@@ -13,7 +9,6 @@ SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 OBSERVATION = re.compile(r"obs-[a-f0-9]{32}\Z")
 ARTIFACT = re.compile(r"clip-[a-f0-9]{32}\Z")
-FORBIDDEN = {"path", "serial", "model", "account", "env", "png", "data", "data_base64", "raw", "stdout", "stderr"}
 OPERATIONS = {"device.list", "device.observe", "device.act", "device.record", "device.read_artifact"}
 SOURCE_SCHEMA = {"type":"string", "pattern":"^[0-9a-f]{64}$"}
 
@@ -33,7 +28,7 @@ def tool_schema(operation):
     elif operation == "device.record":
         request = _object({**common, "seconds":{"type":"integer","minimum":2,"maximum":12}}, ["device_id", "observation_id", "request_key", "action", "seconds"])
     elif operation == "device.read_artifact":
-        request = _object({"device_id":{"type":"string"}, "artifact_id":{"type":"string"}, "request_key":{"type":"string"}, "offset":{"type":"integer","minimum":0,"maximum":2097152}}, ["device_id", "artifact_id", "request_key", "offset"])
+        request = _object({"device_id":{"type":"string"}, "artifact_id":{"type":"string"}, "request_key":{"type":"string"}, "offset":{"type":"integer","minimum":0}, "bytes":{"type":"integer","minimum":1}}, ["device_id", "artifact_id", "request_key", "offset"])
     else:
         _error("capability_unavailable")
     return _object({"source_version":SOURCE_SCHEMA, "request":request}, ["source_version", "request"])
@@ -117,40 +112,12 @@ def validate_request(operation, arguments):
     elif operation == "device.record":
         _act_request(request, True)
     else:
-        _exact(request, {"device_id", "artifact_id", "request_key", "offset"}, "device_request_invalid")
+        if not isinstance(request, dict) or set(request) not in ({"device_id", "artifact_id", "request_key", "offset"}, {"device_id", "artifact_id", "request_key", "offset", "bytes"}):
+            _error("device_request_invalid")
         _string(request["device_id"], "device_request_invalid", IDENTIFIER, 128)
         _string(request["artifact_id"], "device_request_invalid", ARTIFACT, 64)
         _string(request["request_key"], "device_request_invalid", IDENTIFIER, 128)
-        _integer(request["offset"], "device_request_invalid", 0, 2 << 20)
+        _integer(request["offset"], "device_request_invalid", 0)
+        if "bytes" in request:
+            _integer(request["bytes"], "device_request_invalid", 1)
     return source_version, request
-
-
-def _safe_metadata(value, depth=0):
-    if depth > 8:
-        return False
-    if value is None or isinstance(value, bool) or type(value) is int:
-        return True
-    if type(value) is float:
-        return math.isfinite(value)
-    if isinstance(value, str):
-        return len(value) <= 8192 and not any(0xD800 <= ord(char) <= 0xDFFF for char in value)
-    if isinstance(value, list):
-        return len(value) <= 100 and all(_safe_metadata(item, depth + 1) for item in value)
-    if isinstance(value, dict):
-        if len(value) > 100 or any(not isinstance(key, str) or key.lower() in FORBIDDEN for key in value):
-            return False
-        try:
-            return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf8")) <= 64 << 10 and all(_safe_metadata(item, depth + 1) for item in value.values())
-        except (TypeError, ValueError, UnicodeError):
-            return False
-    return False
-
-
-def invoke(operation, arguments, host_call):
-    source_version, request = validate_request(operation, arguments)
-    reply = host_call({"operation":operation, "source_version":source_version, "request":request})
-    if not isinstance(reply, dict) or set(reply) != {"receipt", "source_version", "operation"} or reply.get("source_version") != source_version or reply.get("operation") != operation or not _safe_metadata(reply.get("receipt")):
-        _error("device_host_receipt_invalid")
-    # The receipt is untrusted device data. Preserve its exact metadata shape;
-    # the host independently compares it with its durable broker ledger.
-    return {"receipt":reply["receipt"], "source_version":source_version, "operation":operation}

@@ -87,7 +87,7 @@ func TestOfficialContracts(t *testing.T) {
 						}
 					}
 					if d.Name() == "external-tools" {
-						want = map[string]bool{"external.http_request": true, "external.job_request": true}
+						want = map[string]bool{"external.http_request": true, "external.job_request": true, "external.poll_request": true, "external.mcp_request": true}
 						if len(p.Permissions) != 1 || p.Permissions[0] != "network" {
 							t.Fatal("external HTTP must use the bounded network proxy only")
 						}

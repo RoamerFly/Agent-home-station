@@ -1,4 +1,4 @@
-"""Isolated MCP entry point for side-effect-free mobile task planning."""
+"""Isolated single-process MCP entry point for planning and native mobile logic."""
 import importlib.util
 import json
 from pathlib import Path
@@ -12,6 +12,9 @@ _SPEC.loader.exec_module(planner)
 _OPERATIONS_SPEC = importlib.util.spec_from_file_location("mobile_control_operations", Path(__file__).with_name("operations.py"))
 operations = importlib.util.module_from_spec(_OPERATIONS_SPEC)
 _OPERATIONS_SPEC.loader.exec_module(operations)
+_NATIVE_SPEC = importlib.util.spec_from_file_location("mobile_control_native", Path(__file__).with_name("native.py"))
+native = importlib.util.module_from_spec(_NATIVE_SPEC)
+_NATIVE_SPEC.loader.exec_module(native)
 FRAME_LIMIT = 8 * 1024 * 1024
 PLAN_SCHEMA = {"type":"object", "properties":{"task_id":{"type":"string"}, "observation_id":{"type":"string"}, "source_version":{"type":"string","pattern":"^[0-9a-f]{64}$"}, "task":{"type":"object"}, "observation":{"type":"object"}, "allowed_actions":{"type":"array","items":{"type":"string"}}}, "required":["task_id","observation_id","source_version","task","observation","allowed_actions"], "additionalProperties":False}
 TOOLS = [{"name":"device.plan", "description":"Plan one validated next step from a host-bound mobile observation. This does not observe, operate, record, or send anything.", "inputSchema":PLAN_SCHEMA}] + [{"name":operation, "description":"Host-mediated registered-device operation. Source binding and authorization are checked by the host.", "inputSchema":operations.tool_schema(operation)} for operation in sorted(operations.OPERATIONS)]
@@ -55,7 +58,7 @@ class Wire:
     def device(self, params):
         self.sequence += 1
         identity = "mobile-device-" + str(self.sequence)
-        self.write({"jsonrpc":"2.0", "id":identity, "method":"wechat/device_request", "params":params})
+        self.write({"jsonrpc":"2.0", "id":identity, "method":"wechat/device_io", "params":params})
         reply = self.read()
         if reply.get("jsonrpc") != "2.0" or reply.get("id") != identity:
             raise ValueError("host_response_identity_mismatch")
@@ -87,7 +90,7 @@ class Wire:
                     if not isinstance(metadata, dict):
                         raise ValueError("invalid_protocol")
                     initialized = True
-                    result = {"protocolVersion":"2025-06-18", "capabilities":{"tools":{}}, "serverInfo":{"name":"mobile-control", "version":"0.4.0"}}
+                    result = {"protocolVersion":"2025-06-18", "capabilities":{"tools":{}}, "serverInfo":{"name":"mobile-control", "version":"0.5.0"}}
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/list" and initialized:
@@ -100,7 +103,7 @@ class Wire:
                     if params.get("name") != "device.plan":
                         if params.get("name") not in operations.OPERATIONS:
                             raise ValueError("capability_unavailable")
-                        result = operations.invoke(params["name"], params.get("arguments"), self.device)
+                        result = native.invoke(params["name"], params.get("arguments"), self.device, operations.validate_request)
                     else:
                         result = planner.plan(params.get("arguments"), self.host)
                 else:

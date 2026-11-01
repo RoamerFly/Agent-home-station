@@ -14,83 +14,56 @@ func schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}}}`)
 }
 
-func TestCallJSONPollAndBinary(t *testing.T) {
-	var create, check int32
+func TestBridgeSingleStepTransportRendersTemplateAndReturnsRawReply(t *testing.T) {
 	var gotBody map[string]any
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/create":
-			atomic.AddInt32(&create, 1)
-			if r.Header.Get("Authorization") != "Bearer private-token" {
-				t.Error("secret header was not rendered")
-			}
-			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-				t.Fatal(err)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"task":{"id":"a/b"},"status":"pending"}`))
-		case "/tasks/a%2Fb":
-			atomic.AddInt32(&check, 1)
-			if r.Header.Get("Authorization") != "Bearer private-token" {
-				t.Error("poll lost authentication")
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"status":"done","data":{"audio":"https://media.example/song.mp3"},"message":"finished"}`))
-		default:
-			t.Errorf("unexpected endpoint %q", r.URL.Path)
-			w.WriteHeader(404)
+		if r.URL.Path != "/create" || r.Header.Get("Authorization") != "Bearer private-token" {
+			t.Fatal("bridge did not keep the fixed transport configuration")
 		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":"finished"}`))
 	}))
 	defer s.Close()
 	u := strings.Replace(s.URL, "127.0.0.1", "localhost", 1)
-	r, err := New([]Installed{{
-		Enabled: true, Secrets: map[string]string{"TOKEN": "private-token"},
-		Manifest: Manifest{ID: "music", Name: "Music", Version: "1", Tools: []APITool{{
-			Name: "make", Description: "x", InputSchema: schema(), URL: u + "/create",
-			Headers:      map[string]string{"Authorization": "Bearer {{secret.TOKEN}}"},
-			BodyTemplate: json.RawMessage(`{"prompt":"{{arg.text}}","count":"{{arg.count}}","fixed":true}`),
-			MediaKind:    "voice", TextPath: "message",
-			Poll: &PollSpec{URL: u + "/tasks/{{result.task.id}}", StatusPath: "status", DoneValues: []string{"done"}, IntervalSeconds: 0, MaxAttempts: 1, MediaURLPath: "data.audio"},
-		}}},
-	}})
+	b, err := NewExternalBridge([]Installed{{Enabled: true, Secrets: map[string]string{"TOKEN": "private-token"}, Manifest: Manifest{ID: "music", Name: "Music", Version: "1", Tools: []APITool{{Name: "make", Description: "x", InputSchema: schema(), URL: u + "/create", Headers: map[string]string{"Authorization": "Bearer {{secret.TOKEN}}"}, BodyTemplate: json.RawMessage(`{"prompt":"{{arg.text}}","count":"{{arg.count}}","fixed":true}`)}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	o, err := r.Call(context.Background(), "music__make", json.RawMessage(`{"text":"hello","count":3}`))
+	reply, err := b.Execute(context.Background(), ExternalRequest{Phase: "call", Tool: "music__make", Arguments: json.RawMessage(`{"text":"hello","count":3}`)})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if create != 1 || check != 1 {
-		t.Fatalf("POST=%d poll=%d", create, check)
 	}
 	if gotBody["count"] != float64(3) || gotBody["fixed"] != true {
 		t.Fatalf("template types not preserved: %#v", gotBody)
 	}
-	if o.Text != "finished" || len(o.Media) != 1 || o.Media[0].URL != "https://media.example/song.mp3" {
-		t.Fatalf("unexpected output %#v", o)
+	if reply.ContentType != "application/json" || reply.BodyBase64 == "" {
+		t.Fatalf("bridge did not preserve raw reply: %#v", reply)
 	}
 }
 
-func TestBinaryResponse(t *testing.T) {
+func TestBridgeBinaryResponsePreservesRawBytes(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "audio/mpeg")
 		_, _ = w.Write([]byte("sound"))
 	}))
 	defer s.Close()
 	u := strings.Replace(s.URL, "127.0.0.1", "localhost", 1)
-	r, err := New([]Installed{{
+	b, err := NewExternalBridge([]Installed{{
 		Enabled:  true,
 		Manifest: Manifest{ID: "voice", Name: "Voice", Version: "1", Tools: []APITool{{Name: "make", Description: "x", InputSchema: schema(), URL: u, MediaKind: "voice"}}},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	o, err := r.Call(context.Background(), "voice__make", json.RawMessage(`{"text":"x"}`))
+	reply, err := b.Execute(context.Background(), ExternalRequest{Phase: "call", Tool: "voice__make", Arguments: json.RawMessage(`{"text":"x"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(o.Media) != 1 || string(o.Media[0].Data) != "sound" || o.Media[0].MIMEType != "audio/mpeg" {
-		t.Fatalf("bad binary: %#v", o)
+	if reply.ContentType != "audio/mpeg" || reply.BodyBase64 == "" {
+		t.Fatalf("bad raw binary reply: %#v", reply)
 	}
 }
 
@@ -106,14 +79,14 @@ func TestNoCrossOriginRedirectWithCredentials(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
 	defer origin.Close()
 	u := strings.Replace(origin.URL, "127.0.0.1", "localhost", 1)
-	r, err := New([]Installed{{
+	b, err := NewExternalBridge([]Installed{{
 		Enabled: true, Secrets: map[string]string{"K": "not-for-errors"},
 		Manifest: Manifest{ID: "safe", Name: "Safe", Version: "1", Tools: []APITool{{Name: "go", Description: "x", InputSchema: schema(), URL: u, Headers: map[string]string{"Authorization": "Bearer {{secret.K}}"}}}},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = r.Call(context.Background(), "safe__go", json.RawMessage(`{}`))
+	_, err = b.Execute(context.Background(), ExternalRequest{Phase: "call", Tool: "safe__go", Arguments: json.RawMessage(`{}`)})
 	if err == nil {
 		t.Fatal("redirect accepted")
 	}
@@ -140,30 +113,8 @@ func TestNamespaceAndURLValidation(t *testing.T) {
 	}
 }
 
-func TestPollKeepsCreationIDAndRejectsMissingID(t *testing.T) {
-	var polls atomic.Int32
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/create" {
-			w.Write([]byte(`{"id":"original","status":"pending"}`))
-			return
-		}
-		if r.URL.Path != "/tasks/original" {
-			t.Error("lost creation task ID", r.URL.Path)
-		}
-		if polls.Add(1) == 1 {
-			w.Write([]byte(`{"status":"pending"}`))
-		} else {
-			w.Write([]byte(`{"status":"done","text":"success"}`))
-		}
-	}))
-	defer s.Close()
-	tool := APITool{Name: "make", InputSchema: schema(), URL: s.URL + "/create", Poll: &PollSpec{URL: s.URL + "/tasks/{{result.id}}", StatusPath: "status", DoneValues: []string{"done"}, MaxAttempts: 2, IntervalSeconds: 1, TextPath: "text"}}
-	output, err := invoke(context.Background(), tool, nil, map[string]any{})
-	if err != nil || output.Text != "success" || polls.Load() != 2 {
-		t.Fatal("poll", output, err)
-	}
-	if _, err := renderURL(s.URL+"/tasks/{{result.missing}}", nil, nil, map[string]any{}); err == nil {
+func TestPollURLValidationRejectsMissingID(t *testing.T) {
+	if _, err := renderURL("https://example.test/tasks/{{result.missing}}", nil, nil, map[string]any{}); err == nil {
 		t.Fatal("missing task ID accepted")
 	}
 	if validPoll(&PollSpec{URL: "http://remote.example/{{result.id}}", StatusPath: "s", DoneValues: []string{"done"}}) == nil {

@@ -23,11 +23,11 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),path=require('nod
    window.WechatAccountContext={id:'synthetic-one'};window.calls=[];
    const pkg={id:'speech',name:'默认云端语音',version:'0.1.3',status:'ready',permissions:['model.invoke'],http_routes:[]};
    const project={id:'project-development',name:'项目开发',version:'0.2.0',status:'ready',permissions:['workspace.read','workspace.write','process.execute'],http_routes:[]};
-	   const external={id:'external-tools',name:'外部工具连接',version:'0.4.0',status:'ready',permissions:['network'],http_routes:[]};
+	   const external={id:'external-tools',name:'外部工具连接',version:'0.6.0',status:'ready',permissions:['network'],http_routes:[]};
    const ready={plugin:'speech',status:'ready_for_administrator_review',required_missing:[],unmapped_legacy_fields:['asr_*','music_*','yue_*'],apply_source_hash:'source-hash-one',permissions:['model.invoke'],package:{version:'0.1.3',expected_package_digest:'package-digest-one'},values:{tts_model:'should-not-render'},secrets:{tts_key:{present:true,sha256:'private-secret-not-rendered'}}};
    const blocked={plugin:'share-reader',status:'blocked',required_missing:['yuanbao_cookie_or_assistant_cookie','prepared_package_digest','channels-config.json:object_bridge_url'],unmapped_legacy_fields:[],apply_source_hash:'blocked-source',permissions:['network'],package:{version:'0.1.0'}};
    const projectReady={plugin:'project-development',status:'ready_for_administrator_review',required_missing:[],unmapped_legacy_fields:['agent-config.json:host.roots','agent-config.json:host.isolation','agent-config.json:host.windows'],apply_source_hash:'project-source-hash',permissions:['workspace.read','workspace.write','process.execute'],package:{version:'0.2.0',expected_package_digest:'project-package-digest'},values:{},secrets:{}};
-	   const externalBlocked={plugin:'external-tools',status:'blocked',required_missing:['no_matching_supported_external_tools'],unmapped_legacy_fields:['plugins.json:host_retained_declarations_and_credentials','plugins.json:unsupported_external_declarations_retained'],apply_source_hash:'external-blocked-source',permissions:['network'],package:{version:'0.4.0',expected_package_digest:'external-package-digest'},values:{},secrets:{}};
+	   const externalBlocked={plugin:'external-tools',status:'blocked',required_missing:['no_matching_supported_external_tools'],unmapped_legacy_fields:['plugins.json:host_retained_declarations_and_credentials','mcp_stdio_runtime_package_required'],apply_source_hash:'external-blocked-source',permissions:['network'],package:{version:'0.6.0',expected_package_digest:'external-package-digest'},values:{},secrets:{}};
    window.WechatAdmin={isAuthenticated:()=>true,api:async(url,opt={})=>{
     calls.push({url,json:opt.json});
     if(url==='/api/plugin-packages')return {catalog:[pkg,project,external],installed:[]};
@@ -42,6 +42,7 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),path=require('nod
   await dialog.getByText('项目开发',{exact:true}).waitFor();
 	  const externalStep=dialog.locator('section.package-migration-step').filter({hasText:'外部工具连接'});
 	  await externalStep.getByText('no_matching_supported_external_tools',{exact:true}).waitFor();
+	  assert((await externalStep.textContent()).includes('mcp_stdio_runtime_package_required'),'raw stdio migration requirement was not shown');
 	  assert.equal(await externalStep.getByRole('button',{name:'确认并应用迁移',exact:true}).count(),0,'MCP or poll-only external migration unexpectedly became applicable');
   assert.equal(await dialog.locator('[data-migration-permission="workspace.read"]').count(),1,'project migration did not present the reviewed read grant');
   assert.equal(await dialog.locator('[data-migration-permission="workspace.write"]').count(),1,'project migration did not present the reviewed write grant');

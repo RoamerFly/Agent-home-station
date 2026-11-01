@@ -39,6 +39,8 @@ func writeExternalMigrationDeclaration(t *testing.T, f *webFixture, kind string)
 		manifest.Tools = []plugins.APITool{{Name: "observe", Description: "Synthetic poll without a durable job", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`), URL: "https://private.example/v1/jobs", Method: "POST", Poll: &plugins.PollSpec{URL: "https://private.example/v1/jobs/{{result.job_id}}", StatusPath: "state", DoneValues: []string{"done"}}}}
 	case "mcp":
 		manifest.MCP = &mcptools.ServerConfig{Transport: "http", URL: "https://private.example/mcp"}
+	case "raw-stdio":
+		manifest.MCP = &mcptools.ServerConfig{Transport: "stdio", Command: "private-command", Args: []string{"--private"}, Env: map[string]string{"TOKEN": "private"}}
 	default:
 		t.Fatal("unknown external declaration kind", kind)
 	}
@@ -105,7 +107,7 @@ func TestExternalToolsPluginMigrationAppliesHostRetainedJobDeclarationDisabled(t
 	}
 }
 
-func TestExternalToolsPluginMigrationBlocksMCPOrPollOnlyDeclarations(t *testing.T) {
+func TestExternalToolsPluginMigrationAppliesPollOnlyAndMCPHTTPDeclarationsDisabled(t *testing.T) {
 	useOfficialMigrationCatalog(t)
 	for _, kind := range []string{"mcp", "poll-only"} {
 		t.Run(kind, func(t *testing.T) {
@@ -117,11 +119,86 @@ func TestExternalToolsPluginMigrationBlocksMCPOrPollOnlyDeclarations(t *testing.
 				t.Fatal(err)
 			}
 			step := previewStep(t, preview, externalHTTPPluginID)
-			if step.Status != "blocked" || step.LegacyEnabled || step.EligibleToEnable || step.ProposedEnabled || !migrationStringContains(step.RequiredMissing, "no_matching_supported_external_tools") || len(step.Values) != 0 || len(step.update.Values) != 0 || len(step.update.Secrets) != 0 {
-				t.Fatal("MCP or poll-only declaration was silently represented as a supported external tool", step)
+			if step.Status != "ready_for_administrator_review" || !step.LegacyEnabled || !step.EligibleToEnable || step.ProposedEnabled || len(step.Values) != 0 || len(step.update.Values) != 0 || len(step.update.Secrets) != 0 {
+				t.Fatal("supported MCP or poll-only declaration was not mapped to its ready adapter", step)
 			}
-			if _, _, _, err = f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions); err == nil {
-				t.Fatal("blocked legacy declaration applied without a compatible adapter")
+			installed, _, _, err := f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions)
+			if err != nil || installed.Enabled {
+				t.Fatal("supported external declaration did not install disabled", installed, err)
+			}
+		})
+	}
+}
+
+func TestExternalToolsPluginMigrationMCPConfigHTTPAndRegisteredStdioAreSupported(t *testing.T) {
+	useOfficialMigrationCatalog(t)
+	for _, server := range []mcptools.ServerConfig{
+		{ID: "remote", Transport: "streamable-http", URL: "https://private.example/mcp", Enabled: true},
+		{ID: "registered", PluginID: "registered-runtime", Enabled: true},
+	} {
+		t.Run(server.ID, func(t *testing.T) {
+			f := setup(t)
+			settings := mcpSettings{Enabled: true, Servers: []mcptools.ServerConfig{server}}
+			raw, err := json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = writePrivate(filepath.Join(f.dir, "mcp-config.json"), raw); err != nil {
+				t.Fatal(err)
+			}
+			f.manager.mu.Lock()
+			f.manager.mcp = settings
+			f.manager.mu.Unlock()
+			preview, err := f.manager.pluginMigrationPreview(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			step := previewStep(t, preview, externalHTTPPluginID)
+			if step.Status != "ready_for_administrator_review" || !step.LegacyEnabled || !migrationStringContains(step.UnmappedLegacy, "mcp-config.json:host_retained_connections_and_credentials") {
+				t.Fatal("MCP config was not mapped without exposing connection data", step)
+			}
+			encoded, _ := json.Marshal(preview)
+			if strings.Contains(string(encoded), "private.example") || strings.Contains(string(encoded), "registered-runtime") {
+				t.Fatal("MCP connection data leaked into preview", string(encoded))
+			}
+		})
+	}
+}
+
+func TestExternalToolsPluginMigrationBlocksRawStdioButRetainsMixedWarnings(t *testing.T) {
+	useOfficialMigrationCatalog(t)
+	for _, kind := range []string{"raw-stdio", "sync-with-raw-stdio"} {
+		t.Run(kind, func(t *testing.T) {
+			f := setup(t)
+			writeExternalMigrationMCP(t, f, true)
+			writeExternalMigrationDeclaration(t, f, "raw-stdio")
+			if kind == "sync-with-raw-stdio" {
+				entry := pluginEntry{Installed: plugins.Installed{
+					Enabled: true,
+					Manifest: plugins.Manifest{
+						ID:      "legacy-external-sync",
+						Name:    "sync",
+						Version: "1",
+						Tools:   []plugins.APITool{{Name: "lookup", URL: "https://private.example/v1"}},
+					},
+				}}
+				if err := f.manager.plugins.save(entry); err != nil {
+					t.Fatal(err)
+				}
+			}
+			preview, err := f.manager.pluginMigrationPreview(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			step := previewStep(t, preview, externalHTTPPluginID)
+			if !migrationStringContains(step.UnmappedLegacy, "mcp_stdio_runtime_package_required") {
+				t.Fatal("raw stdio requirement was silently omitted", step)
+			}
+			if kind == "raw-stdio" && (step.Status != "blocked" || !migrationStringContains(step.RequiredMissing, "no_matching_supported_external_tools")) {
+				t.Fatal("raw stdio was treated as runnable", step)
+			}
+			if kind == "sync-with-raw-stdio" && (step.Status != "ready_for_administrator_review" || !step.LegacyEnabled) {
+				t.Fatal("usable HTTP adapter was incorrectly blocked by retained raw stdio", step)
 			}
 		})
 	}
@@ -172,5 +249,40 @@ func TestExternalToolsPluginMigrationRejectsChangedLegacyLedger(t *testing.T) {
 	}
 	if _, _, _, err = f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions); err == nil {
 		t.Fatal("changed host ledger retained a stale migration approval")
+	}
+}
+
+func TestExternalToolsPluginMigrationRejectsChangedMCPConfig(t *testing.T) {
+	useOfficialMigrationCatalog(t)
+	f := setup(t)
+	settings := mcpSettings{Enabled: true, Servers: []mcptools.ServerConfig{{ID: "remote", Transport: "http", URL: "https://private.example/mcp", Enabled: true}}}
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = writePrivate(filepath.Join(f.dir, "mcp-config.json"), raw); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.mu.Lock()
+	f.manager.mcp = settings
+	f.manager.mu.Unlock()
+	preview, err := f.manager.pluginMigrationPreview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := previewStep(t, preview, externalHTTPPluginID)
+	settings.Servers[0].URL = "https://private.example/changed"
+	raw, err = json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = writePrivate(filepath.Join(f.dir, "mcp-config.json"), raw); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.mu.Lock()
+	f.manager.mcp = settings
+	f.manager.mu.Unlock()
+	if _, _, _, err = f.manager.applyPluginMigration(context.Background(), "test", externalHTTPPluginID, step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions); err == nil {
+		t.Fatal("changed MCP configuration retained a stale migration approval")
 	}
 }

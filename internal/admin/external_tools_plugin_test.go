@@ -70,7 +70,7 @@ func (e *externalSyntheticExecutor) Start(context.Context, pluginhost.Package, p
 }
 func (e *externalSyntheticExecutor) Health(context.Context) error { return nil }
 func (e *externalSyntheticExecutor) Close() error                 { return nil }
-func (e *externalSyntheticExecutor) Call(ctx context.Context, _ pluginhost.Invocation, _ string, raw json.RawMessage) (json.RawMessage, error) {
+func (e *externalSyntheticExecutor) Call(ctx context.Context, _ pluginhost.Invocation, name string, raw json.RawMessage) (json.RawMessage, error) {
 	var args externalHTTPArguments
 	if json.Unmarshal(raw, &args) != nil {
 		return nil, errors.New("synthetic invalid request")
@@ -86,6 +86,9 @@ func (e *externalSyntheticExecutor) Call(ctx context.Context, _ pluginhost.Invoc
 	}
 	var reply externalHTTPObservation
 	_ = json.Unmarshal(observed, &reply)
+	if name == externalPollCapability {
+		return syntheticExternalPollReply(args, reply)
+	}
 	if args.Phase != "call" {
 		return syntheticExternalJobReply(args, reply)
 	}

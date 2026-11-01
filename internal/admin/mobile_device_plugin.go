@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,6 +23,7 @@ import (
 	"wechat-bot/internal/mobile"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/workspacefs"
 )
 
 const mobileDevicePluginID = "mobile-control"
@@ -32,25 +34,13 @@ var mobileDeviceCapabilities = []string{
 
 // mobileDeviceBrokerOpener is a package seam for synthetic host-policy tests.
 // Production always uses the fixed devicebroker implementation.
-type mobileDeviceBrokerOpener func(context.Context, devicebroker.Options) (devicebroker.Bridge, error)
+type mobileDeviceBrokerOpener func(context.Context, devicebroker.Options) (devicebroker.IOBroker, error)
 
-var openMobileDeviceBroker mobileDeviceBrokerOpener = devicebroker.Open
-
-func (m *Manager) loadMobileNativeRegistration() *devicebroker.RuntimeRegistration {
-	if m == nil {
-		return nil
-	}
-	value, _ := m.pluginRuntimeBindings.Load("mobile-control:native")
-	registration, _ := value.(*devicebroker.RuntimeRegistration)
-	return registration
-}
+var openMobileDeviceBroker mobileDeviceBrokerOpener = devicebroker.OpenIO
 
 // mobileDeviceReady is deliberately non-starting. Discovery and task queueing
 // must not start a native process, enable a package, or widen a device grant.
 func (m *Manager) mobileDeviceReady(ctx context.Context) error {
-	if err := m.loadMobileNativeRegistration().Validate(ctx, m.native.Account()); err != nil {
-		return errors.New("device_broker_runtime_registration_required")
-	}
 	store, err := m.packageStore()
 	if err != nil {
 		return errors.New("device_plugin_required")
@@ -90,12 +80,21 @@ func (m *Manager) mobileDeviceReady(ctx context.Context) error {
 	if err != nil || !mobileDeviceDeploymentPath(deployment.Python, false) || !mobileDeviceDeploymentPath(deployment.CatalogDirectory, true) {
 		return errors.New("device_plugin_deployment_unavailable")
 	}
+	registeredTools := false
 	for _, root := range deployment.DeviceToolsRoots {
-		if mobileDeviceDeploymentPath(root, true) {
-			return nil
-		}
+		registeredTools = registeredTools || mobileDeviceDeploymentPath(root, true)
 	}
-	return errors.New("device_plugin_tools_unregistered")
+	if !registeredTools {
+		return errors.New("device_plugin_tools_unregistered")
+	}
+	options, err := m.mobileDeviceIOOptions(store, installed, deployment, m.mobile.Settings())
+	if err != nil {
+		return err
+	}
+	if err = devicebroker.InspectIOOptions(ctx, options); err != nil {
+		return errors.New("device_plugin_broker_unavailable")
+	}
+	return nil
 }
 
 func mobileDeviceDeploymentPath(path string, directory bool) bool {
@@ -124,13 +123,8 @@ type mobileDevicePluginBridge struct {
 	options      pluginruntime.Options
 	stateDir     string
 	brokerOpener mobileDeviceBrokerOpener
-	// Host-only injection. The existing ADB bridge has not been migrated to the
-	// mandatory isolated protocol; no production registration is inferred from
-	// a profile, package presence, fake opener, or deployment command.
-	nativeRegistration *devicebroker.RuntimeRegistration
-
 	mu           sync.Mutex
-	broker       devicebroker.Bridge
+	broker       devicebroker.IOBroker
 	closed       bool
 	sequence     uint64
 	observations map[string]mobile.Observation
@@ -178,15 +172,12 @@ func (m *Manager) newMobilePluginBridge(ctx context.Context, task mobile.Task, s
 	return &mobileDevicePluginBridge{
 		manager: m, store: store, controller: controller, installed: installed,
 		task: task, settings: settings, packageDir: packageDir, options: deployment,
-		stateDir: stateDir, brokerOpener: openMobileDeviceBroker, nativeRegistration: m.loadMobileNativeRegistration(),
+		stateDir: stateDir, brokerOpener: openMobileDeviceBroker,
 		observations: map[string]mobile.Observation{}, artifacts: map[string]mobile.Artifact{},
 	}, nil
 }
 
 func (m *Manager) mobileDeviceCurrent(task mobile.Task, settings mobile.Settings) error {
-	if m == nil || m.loadMobileNativeRegistration().Validate(context.Background(), m.native.Account()) != nil {
-		return errors.New("device_broker_runtime_registration_required")
-	}
 	if m == nil || m.mobile == nil || !settings.Enabled {
 		return errors.New("device_plugin_authorization_changed")
 	}
@@ -234,6 +225,7 @@ func (b *mobileDevicePluginBridge) Call(ctx context.Context, name string, reques
 	if err != nil {
 		return "", err
 	}
+	defer policy.closeIO()
 	if err = b.mobilePluginCurrent(ctx, policy.task, policy.settings, policy.boundBinding, policy.invocation, policy.capability); err != nil {
 		return "", err
 	}
@@ -255,6 +247,9 @@ func (b *mobileDevicePluginBridge) Call(ctx context.Context, name string, reques
 	}
 	call, err := b.controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: mobileDevicePluginID, Capability: policy.capability, Context: policy.invocation, Arguments: policy.arguments}, policy)
 	if err != nil || call.Job.State != "completed" {
+		if failure := policy.ioFailureValue(); failure != nil {
+			return "", failure
+		}
 		return "", errors.New("device_plugin_needs_review")
 	}
 	private, err := b.store.PrivateJobResult(ctx, call.Job, func(ctx context.Context, job pluginhost.Job) error {
@@ -263,15 +258,15 @@ func (b *mobileDevicePluginBridge) Call(ctx context.Context, name string, reques
 	if err != nil {
 		return "", errors.New("device_plugin_result_unavailable")
 	}
-	var result struct {
-		Raw           json.RawMessage `json:"raw"`
-		SourceVersion string          `json:"source_version"`
-		Operation     string          `json:"operation"`
-	}
-	if mobilePlanStrictJSON(private, &result) != nil || result.SourceVersion != policy.sourceVersion || result.Operation != policy.capability || !json.Valid(result.Raw) {
+	var checkpoint mobileDeviceCheckpoint
+	if mobilePlanStrictJSON(private, &checkpoint) != nil {
 		return "", errors.New("device_plugin_result_unavailable")
 	}
-	return string(result.Raw), nil
+	raw, err := policy.readCheckpoint(ctx, call.Job, checkpoint)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func (b *mobileDevicePluginBridge) newPolicy(ctx context.Context, name string, raw json.RawMessage) (*mobileDevicePluginPolicy, error) {
@@ -342,7 +337,11 @@ func (b *mobileDevicePluginBridge) newPolicy(ctx context.Context, name string, r
 	if sender == "" {
 		sender = "administrator"
 	}
-	invocation := pluginhost.Invocation{Account: b.manager.native.Account(), Thread: thread, Requester: sender, Purpose: task.Goal, RequestKey: "mobile-device-" + agentID(task.ID, capability, task.RequestHash, version), SourceVersions: map[string]int{task.ID: task.Steps + 1}, Authorization: version}
+	purpose := task.Goal
+	if task.ID == "" {
+		purpose = "list registered mobile devices"
+	}
+	invocation := pluginhost.Invocation{Account: b.manager.native.Account(), Thread: thread, Requester: sender, Purpose: purpose, RequestKey: "mobile-device-" + agentID(task.ID, capability, task.RequestHash, version), SourceVersions: map[string]int{task.ID: task.Steps + 1}, Authorization: version}
 	if task.ID == "" {
 		invocation.SourceVersions = map[string]int{}
 	}
@@ -463,14 +462,23 @@ func deviceRequestStep(request map[string]any) (mobile.Step, bool) {
 }
 
 func (b *mobileDevicePluginBridge) mobilePluginCurrent(ctx context.Context, task mobile.Task, settings mobile.Settings, binding string, invocation pluginhost.Invocation, capability string) error {
-	if b.nativeRegistration == nil || b.nativeRegistration != b.manager.loadMobileNativeRegistration() {
-		return errors.New("device_broker_runtime_registration_changed")
-	}
 	if err := b.manager.mobileDeviceCurrent(task, settings); err != nil {
 		return err
 	}
 	installed, err := b.store.Installed(ctx, mobileDevicePluginID)
 	if err != nil || !installed.Enabled || installed.Removed || installed.Digest != b.installed.Digest || installed.Revision != b.installed.Revision {
+		return errors.New("device_plugin_version_changed")
+	}
+	code, err := b.store.PackageDirectory(installed.Digest)
+	if err != nil {
+		return errors.New("device_plugin_version_changed")
+	}
+	verified, err := pluginhost.Verify(code)
+	if err != nil || !reflect.DeepEqual(verified, installed.Package) {
+		return errors.New("device_plugin_version_changed")
+	}
+	manifest, err := os.ReadFile(filepath.Join(code, "plugin.json"))
+	if err != nil || namedSpeechSHA(manifest) != installed.Digest {
 		return errors.New("device_plugin_version_changed")
 	}
 	if b.store.CheckConfiguration(ctx, mobileDevicePluginID) != nil {
@@ -499,7 +507,7 @@ func (b *mobileDevicePluginBridge) bindingCurrent(want string) error {
 	return nil
 }
 
-func (b *mobileDevicePluginBridge) ensureBroker(ctx context.Context, task mobile.Task, settings mobile.Settings) (devicebroker.Bridge, error) {
+func (b *mobileDevicePluginBridge) ensureBroker(ctx context.Context, task mobile.Task, settings mobile.Settings) (devicebroker.IOBroker, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
@@ -511,22 +519,9 @@ func (b *mobileDevicePluginBridge) ensureBroker(ctx context.Context, task mobile
 	if err := b.manager.mobileDeviceCurrent(task, settings); err != nil {
 		return nil, err
 	}
-	workspace := filepath.Dir(b.options.CatalogDirectory)
-	leaseDir := filepath.Join(workspace, ".device-broker-leases")
-	// This deployment-only list is not copied into LaunchSpec/RuntimeRoots, so
-	// the isolated package never receives an ADB path or a broader mount.
-	adbRoots := append([]string{}, b.options.DeviceToolsRoots...)
-	options := devicebroker.Options{
-		Registration: b.nativeRegistration,
-		Python:       b.options.Python, PackageDirectory: b.packageDir,
-		// CatalogDirectory is <workspace>/plugins. The old profile can only
-		// reference this fixed deployment compatibility entry; accepting an
-		// arbitrary Legacy.Args script would silently re-authorize a different
-		// native program during migration.
-		CompatibilityEntry: filepath.Join(workspace, "scripts", "mobile_bridge.py"),
-		WorkspaceDirectory: workspace, StateDirectory: b.stateDir,
-		GlobalLeaseDirectory: leaseDir, ADBRoots: adbRoots, Account: b.manager.native.Account(),
-		Legacy: settings.Bridge, Devices: nonNilMobileSlice(settings.Devices), Actions: nonNilMobileSlice(settings.Actions),
+	options, err := b.manager.mobileDeviceIOOptions(b.store, b.installed, b.options, settings)
+	if err != nil {
+		return nil, err
 	}
 	broker, err := b.brokerOpener(ctx, options)
 	if err != nil {
@@ -534,6 +529,24 @@ func (b *mobileDevicePluginBridge) ensureBroker(ctx context.Context, task mobile
 	}
 	b.broker = broker
 	return broker, nil
+}
+
+// Paths come exclusively from deployment and the selected account. Inspection
+// of these options never opens ADB or admits a device lease.
+func (m *Manager) mobileDeviceIOOptions(store *pluginhost.Store, installed pluginhost.InstalledPackage, deployment pluginruntime.Options, settings mobile.Settings) (devicebroker.Options, error) {
+	code, err := store.PackageDirectory(installed.Digest)
+	if err != nil {
+		return devicebroker.Options{}, errors.New("device_plugin_required")
+	}
+	workspace := filepath.Dir(deployment.CatalogDirectory)
+	return devicebroker.Options{
+		Python: deployment.Python, PackageDirectory: code,
+		CompatibilityEntry: filepath.Join(workspace, "scripts", "mobile_bridge.py"),
+		WorkspaceDirectory: workspace, StateDirectory: filepath.Join(m.dir, "mobile"),
+		GlobalLeaseDirectory: filepath.Join(workspace, ".device-broker-leases"),
+		ADBRoots:             append([]string(nil), deployment.DeviceToolsRoots...), Account: m.native.Account(),
+		Legacy: settings.Bridge, Devices: nonNilMobileSlice(settings.Devices), Actions: nonNilMobileSlice(settings.Actions),
+	}, nil
 }
 
 type mobileDevicePluginPolicy struct {
@@ -548,15 +561,18 @@ type mobileDevicePluginPolicy struct {
 	nativeName    string
 	request       map[string]any
 
-	mu      sync.Mutex
-	used    bool
-	receipt json.RawMessage
-	raw     json.RawMessage
-	status  string
+	mu        sync.Mutex
+	used      bool
+	failed    bool
+	completed bool
+	ioCall    devicebroker.IOCall
+	ioFailure error
+	receipt   json.RawMessage
+	status    string
 }
 
 func (p *mobileDevicePluginPolicy) Check(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability) (err error) {
-	if p == nil || p.bridge == nil || cap.ID != p.capability || job.Plugin != mobileDevicePluginID || job.Tool != p.capability || !bytes.Equal(job.Arguments, p.arguments) {
+	if p == nil || p.bridge == nil || cap.Async || cap.ID != p.capability || job.Plugin != mobileDevicePluginID || job.Tool != p.capability || !bytes.Equal(job.Arguments, p.arguments) {
 		return errors.New("device_plugin_authorization_changed")
 	}
 	if want, got := mustJSON(p.invocation), mustJSON(job.Context); !bytes.Equal(want, got) || job.Context.Authorization != p.sourceVersion {
@@ -577,74 +593,231 @@ func (p *mobileDevicePluginPolicy) Check(ctx context.Context, job pluginhost.Job
 	return nil
 }
 
+// Each policy owns one native call and its physical-device lease. The package
+// performs high-level sequencing; this host accepts only bounded IO steps for
+// the exact original request and checks live authority around every step.
 func (p *mobileDevicePluginPolicy) Service(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, method string, raw json.RawMessage) (json.RawMessage, error) {
 	p.mu.Lock()
-	if p.used || method != "wechat/device_request" {
-		p.mu.Unlock()
+	defer p.mu.Unlock()
+	if p.failed || p.completed || method != "wechat/device_io" {
 		return nil, errors.New("device_plugin_host_service_unavailable")
 	}
 	if err := p.Check(ctx, job, cap); err != nil {
-		p.mu.Unlock()
 		return nil, err
 	}
 	var in struct {
-		Operation     string         `json:"operation"`
-		SourceVersion string         `json:"source_version"`
-		Request       map[string]any `json:"request"`
+		Operation     string          `json:"operation"`
+		SourceVersion string          `json:"source_version"`
+		DeviceID      string          `json:"device_id,omitempty"`
+		Step          string          `json:"step"`
+		Parameters    json.RawMessage `json:"parameters"`
 	}
-	if mobilePlanStrictJSON(raw, &in) != nil || in.Operation != p.capability || in.SourceVersion != p.sourceVersion || !reflect.DeepEqual(in.Request, p.request) {
-		p.mu.Unlock()
+	var parameters map[string]json.RawMessage
+	if mobilePlanStrictJSON(raw, &in) != nil || in.Operation != p.capability || in.SourceVersion != p.sourceVersion || mobilePlanStrictJSON(in.Parameters, &parameters) != nil || parameters == nil {
 		return nil, errors.New("device_plugin_request_changed")
 	}
-	p.used = true // Unknown native outcomes must never be replayed.
-	p.mu.Unlock()
-	broker, err := p.bridge.ensureBroker(ctx, p.task, p.settings)
-	if err != nil {
+	switch in.Step {
+	case "profile", "state", "foreground", "screenshot", "ui", "dispatch", "record", "artifact_read":
+	default:
+		return nil, errors.New("device_plugin_request_changed")
+	}
+	if in.DeviceID != "" && (p.capability != "device.list" && in.DeviceID != p.task.DeviceID || p.capability == "device.list" && !contains(p.settings.Devices, in.DeviceID)) {
+		return nil, errors.New("device_plugin_request_changed")
+	}
+	ioContext := devicebroker.WithIOAuthority(ctx, func(current context.Context) error { return p.Check(current, job, cap) })
+	if p.ioCall == nil {
+		broker, err := p.bridge.ensureBroker(ctx, p.task, p.settings)
+		if err != nil {
+			return nil, err
+		}
+		if err = p.Check(ctx, job, cap); err != nil {
+			return nil, err
+		}
+		p.used = true
+		p.ioCall, err = broker.Begin(ioContext, p.nativeName, mustJSON(p.request))
+		if err != nil {
+			p.failed = true
+			p.ioFailure = mobileDeviceIOFailure(err)
+			return nil, p.ioFailure
+		}
+	}
+	if err := p.Check(ctx, job, cap); err != nil {
+		p.failed = true
 		return nil, err
 	}
-	// Opening/reusing a broker can block on a protected profile. Re-check the
-	// immutable task snapshot and seal immediately before the native side effect.
+	reply, err := p.ioCall.Service(ioContext, in.Step, in.DeviceID, in.Parameters)
+	if err != nil || !json.Valid(reply) {
+		p.failed = true
+		p.ioFailure = mobileDeviceIOFailure(err)
+		return nil, p.ioFailure
+	}
 	if err = p.Check(ctx, job, cap); err != nil {
+		p.failed = true
 		return nil, err
 	}
-	rawText, err := broker.Call(ctx, p.nativeName, mustJSON(p.request))
-	if err != nil || !json.Valid([]byte(rawText)) {
-		return nil, errors.New("device_plugin_broker_unavailable")
+	return append(json.RawMessage(nil), reply...), nil
+}
+
+// Only fixed host failure codes may retain a resource diagnosis. Raw runner
+// errors can contain filenames, serials or credentials and are never exposed.
+func mobileDeviceIOFailure(err error) error {
+	failure := &RuntimeFailure{Code: "device_plugin_broker_unavailable", Stage: "device_io", Message: "设备IO请求未完成；请核对原任务状态、授权和本机资源", Continuation: "保留原任务；设备动作结果未确认时先检查状态，不重复提交动作"}
+	if err == nil {
+		return failure
 	}
-	receipt, err := p.bridge.safeReceipt(p.task, p.capability, p.nativeName, json.RawMessage(rawText), p.request)
-	if err != nil {
-		return nil, err
+	switch err.Error() {
+	case "device_artifact_page_limit":
+		failure.Code = "device_artifact_page_limit"
+		failure.Stage = "artifact_read"
+		failure.Message = "素材单页读取达到宿主资源边界；请减小bytes，使用原artifact_id、request_key及已验证的offset分小页继续读取"
+		failure.NotStarted, failure.Retryable = true, true
+		failure.Continuation = "不重新录制；从未完成的offset缩小单页bytes继续，每页后按实际取得的字节数推进offset"
+		return failure
+	case "device_io_response_limit":
+		failure.Code = "device_io_response_limit"
+		failure.Stage = "response"
+		failure.Message = "单次设备IO响应达到宿主资源边界；可分页素材请减小bytes并沿已验证的offset分小页继续；设备动作先核查原任务状态，不重复执行"
+		failure.Continuation = "可分页素材保留原artifact_id和request_key，以更小bytes继续，按实际取得的字节数推进offset；其他操作核查实际资源限制及原任务状态"
+		return failure
+	case "device_broker_needs_migration":
+		failure.Stage = "resource"
+	case "device_broker_tool_not_permitted":
+		failure.Stage = "authorization"
 	}
-	if err = p.Check(ctx, job, cap); err != nil {
-		return nil, err
+	if errors.Is(err, os.ErrPermission) {
+		failure.Stage = "filesystem"
+	} else if errors.Is(err, os.ErrNotExist) {
+		failure.Stage = "resource"
 	}
+	return failure
+}
+
+func (p *mobileDevicePluginPolicy) ioFailureValue() error {
 	p.mu.Lock()
-	p.raw, p.receipt = append(json.RawMessage(nil), rawText...), receipt
-	p.status = mobileReceiptStatus(p.capability, receipt)
-	p.mu.Unlock()
-	return json.Marshal(map[string]any{"receipt": json.RawMessage(receipt), "source_version": p.sourceVersion, "operation": p.capability})
+	defer p.mu.Unlock()
+	return p.ioFailure
+}
+
+func (p *mobileDevicePluginPolicy) closeIO() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ioCall == nil {
+		return nil
+	}
+	if err := p.ioCall.Close(); err != nil {
+		return err
+	}
+	p.ioCall = nil
+	return nil
+}
+
+const mobileDeviceReplyLimit = 96 << 20
+
+type mobileDeviceCheckpoint struct {
+	JobID   string `json:"job_id"`
+	Binding string `json:"binding"`
+	SHA256  string `json:"sha256"`
+	Bytes   int64  `json:"bytes"`
+}
+
+func (p *mobileDevicePluginPolicy) replyRoot() string {
+	return filepath.Join(p.bridge.manager.privateWorkspaceFor(p.invocation.Account), "device-plugin-replies")
+}
+
+func (p *mobileDevicePluginPolicy) checkpointBinding() string {
+	return namedSpeechSHA(mustJSON([]any{p.invocation, p.arguments, p.boundBinding, p.bridge.installed.Digest}))
+}
+
+func (p *mobileDevicePluginPolicy) readCheckpoint(ctx context.Context, job pluginhost.Job, checkpoint mobileDeviceCheckpoint) ([]byte, error) {
+	if checkpoint.JobID != job.ID || !validID(job.ID) || checkpoint.Binding != p.checkpointBinding() || checkpoint.Bytes < 0 || checkpoint.Bytes > mobileDeviceReplyLimit || len(checkpoint.SHA256) != 64 {
+		return nil, errors.New("device_plugin_result_unavailable")
+	}
+	if err := p.Check(ctx, job, pluginhost.Capability{ID: p.capability}); err != nil {
+		return nil, err
+	}
+	root, err := workspacefs.EnsurePath(p.replyRoot())
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	file, err := workspacefs.OpenRegular(root, filepath.Join(job.ID, "reply.json"))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, mobileDeviceReplyLimit+1))
+	if err != nil || int64(len(raw)) != checkpoint.Bytes || namedSpeechSHA(raw) != checkpoint.SHA256 || !json.Valid(raw) {
+		return nil, errors.New("device_plugin_private_reply_changed")
+	}
+	if err = p.Check(ctx, job, pluginhost.Capability{ID: p.capability}); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func (p *mobileDevicePluginPolicy) Validate(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if err := p.Check(ctx, job, cap); err != nil {
 		return pluginruntime.VerifiedResult{}, err
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	var out struct {
-		Receipt       json.RawMessage `json:"receipt"`
+		Result        json.RawMessage `json:"result"`
 		SourceVersion string          `json:"source_version"`
 		Operation     string          `json:"operation"`
 	}
-	if !p.used || len(p.receipt) == 0 || len(p.raw) == 0 || mobilePlanStrictJSON(raw, &out) != nil || out.SourceVersion != p.sourceVersion || out.Operation != p.capability || !sameJSON(out.Receipt, p.receipt) {
+	if !p.used || p.failed || p.completed || p.ioCall == nil || mobilePlanStrictJSON(raw, &out) != nil || out.SourceVersion != p.sourceVersion || out.Operation != p.capability || !json.Valid(out.Result) {
 		return pluginruntime.VerifiedResult{}, errors.New("device_plugin_result_unverified")
 	}
-	private, _ := json.Marshal(map[string]any{"raw": json.RawMessage(p.raw), "source_version": p.sourceVersion, "operation": p.capability})
+	p.completed = true // Even a rejected completion cannot replay the native call.
+	ioContext := devicebroker.WithIOAuthority(ctx, func(current context.Context) error { return p.Check(current, job, cap) })
+	observed, err := p.ioCall.Complete(ioContext, out.Result)
+	if err != nil || !json.Valid(observed) || len(observed) > mobileDeviceReplyLimit {
+		return pluginruntime.VerifiedResult{}, errors.New("device_plugin_result_unverified")
+	}
+	if err = p.Check(ctx, job, cap); err != nil {
+		return pluginruntime.VerifiedResult{}, err
+	}
+	receipt, err := p.bridge.safeReceipt(p.task, p.capability, p.nativeName, observed, p.request)
+	if err != nil {
+		return pluginruntime.VerifiedResult{}, err
+	}
+	p.receipt, p.status = receipt, mobileReceiptStatus(p.capability, receipt)
+	if !validID(job.ID) {
+		return pluginruntime.VerifiedResult{}, errors.New("device_plugin_result_unavailable")
+	}
+	root, err := workspacefs.EnsurePath(p.replyRoot())
+	if err != nil {
+		return pluginruntime.VerifiedResult{}, err
+	}
+	defer root.Close()
+	if err = root.Mkdir(job.ID, 0700); err != nil {
+		return pluginruntime.VerifiedResult{}, errors.New("device_plugin_reply_already_exists")
+	}
+	dir, err := workspacefs.EnsureDirectory(root, job.ID)
+	if err != nil {
+		return pluginruntime.VerifiedResult{}, err
+	}
+	defer dir.Close()
+	file, err := dir.OpenFile("reply.json", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return pluginruntime.VerifiedResult{}, err
+	}
+	_, writeErr := file.Write(observed)
+	closeErr := file.Close()
+	if err = errors.Join(writeErr, closeErr); err != nil {
+		return pluginruntime.VerifiedResult{}, err
+	}
+	checkpoint := mobileDeviceCheckpoint{JobID: job.ID, Binding: p.checkpointBinding(), SHA256: namedSpeechSHA(observed), Bytes: int64(len(observed))}
+	if _, err = p.readCheckpoint(ctx, job, checkpoint); err != nil {
+		return pluginruntime.VerifiedResult{}, err
+	}
+	private, _ := json.Marshal(checkpoint)
 	status := p.status
 	if status == "" {
 		status = "completed"
 	}
-	public, _ := json.Marshal(map[string]any{"operation": p.capability, "status": status, "preview": json.RawMessage(p.receipt)})
+	public, _ := json.Marshal(map[string]any{"operation": p.capability, "status": status, "preview": json.RawMessage(receipt)})
 	return pluginruntime.VerifiedResult{Result: public, Private: private}, nil
 }
 

@@ -103,6 +103,41 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(result['cancel_ack'])
         self.assertEqual(result['ticket'],ticket)
 
+    def test_poll_steps_are_single_host_calls_without_remote_id(self):
+        protocol={'version':1,'tool':dict(PROTOCOL['tools'][0], poll={'status_path':'state','done_values':['done'],'failed_values':['failed'],'text_path':'result.text','interval_seconds':2,'max_attempts':12,'timeout_seconds':60})}
+        ticket={'tool':'voice__speak','fingerprint':'a'*64,'state':'submitting'}
+        calls=[]
+        waiting=runtime.poll_execute({'phase':'start','tool':'voice__speak','arguments':{'n':9007199254740993},'arguments_sha256':ARG_HASH,'ticket':ticket,'ticket_sha256':TICKET_HASH,'protocol':protocol}, lambda x:calls.append(x) or {'content_type':'application/json','body_base64':base64.b64encode(b'{"state":"queued"}').decode()})
+        self.assertEqual(calls,[{'phase':'start','tool':'voice__speak','arguments_sha256':ARG_HASH,'ticket_sha256':TICKET_HASH}])
+        self.assertEqual(waiting['ticket']['state'],'waiting'); self.assertEqual(waiting['ticket']['remote_id'],'')
+        completed=runtime.poll_execute({'phase':'query','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'ticket':waiting['ticket'],'ticket_sha256':TICKET_HASH,'protocol':protocol}, lambda x:calls.append(x) or {'content_type':'application/json','body_base64':base64.b64encode(b'{"state":"done","result":{"text":"ok"}}').decode()})
+        self.assertEqual(calls[-1],{'phase':'query','tool':'voice__speak','arguments_sha256':ARG_HASH,'ticket_sha256':TICKET_HASH})
+        self.assertEqual(completed['ticket']['state'],'completed'); self.assertEqual(completed['ticket']['remote_id'],''); self.assertEqual(completed['output']['text'],'ok')
+
+    def test_poll_failed_takes_precedence_and_rejects_job_protocol(self):
+        protocol={'version':1,'tool':dict(PROTOCOL['tools'][0], poll={'status_path':'state','done_values':['done'],'failed_values':['done']})}
+        ticket={'tool':'voice__speak','fingerprint':'a'*64,'state':'submitting'}
+        result=runtime.poll_execute({'phase':'start','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'ticket':ticket,'ticket_sha256':TICKET_HASH,'protocol':protocol}, lambda _:{'content_type':'application/json','body_base64':base64.b64encode(b'{"state":"done"}').decode()})
+        self.assertEqual(result['ticket']['state'],'failed')
+        bad={'version':1,'tool':dict(PROTOCOL['tools'][0], job={'id_path':'id'},poll={'status_path':'state','done_values':['done']})}
+        with self.assertRaises(ValueError): runtime.poll_protocol(bad)
+
+    def test_poll_start_binary_completes_without_json_or_media_bytes(self):
+        protocol={'version':1,'tool':dict(PROTOCOL['tools'][0], poll={'status_path':'state','done_values':['done'],'media_kind':'voice'})}
+        ticket={'tool':'voice__speak','fingerprint':'a'*64,'state':'submitting'}
+        result=runtime.poll_execute({'phase':'start','tool':'voice__speak','arguments':{},'arguments_sha256':ARG_HASH,'ticket':ticket,'ticket_sha256':TICKET_HASH,'protocol':protocol}, lambda _:{'content_type':'audio/wav','binary_ref':{'sha256':'b'*64,'size':25*1024*1024}})
+        self.assertEqual(result['ticket']['state'],'completed')
+        self.assertEqual(result['ticket']['remote_id'],'')
+        self.assertEqual(result['output']['media'],[{'kind':'voice','host_binary_ref':'b'*64}])
+
+    def test_mcp_list_and_call_preserve_refs_and_allowlist(self):
+        proto={'version':1,'server_id':'server','allowlist':['read']}
+        base={'server_id':'server','arguments':{},'arguments_sha256':ARG_HASH,'request_sha256':'e'*64,'protocol':proto}
+        listed=runtime.mcp_execute(dict(base,operation='list'),lambda x:{'body_ref':{'sha256':'f'*64,'size':2},'raw_result':{'tools':[{'name':'read','description':'r','inputSchema':{'type':'object'}},{'name':'other','description':'x','inputSchema':{}}],'nextCursor':'n'}})
+        self.assertEqual(listed['tools'][0]['name'],'server__read'); self.assertEqual(listed['next_cursor'],'n')
+        called=runtime.mcp_execute(dict(base,operation='call',tool='read'),lambda x:{'body_ref':{'sha256':'f'*64,'size':3},'raw_result':{'content':[{'type':'text','text':'x'*40000},{'type':'image','host_media_ref':'m1','mimeType':'image/png'},{'type':'audio','host_media_ref':'m2','mimeType':'audio/wav'},{'type':'image','host_media_ref':'m3','mimeType':'image/png'},{'type':'image','host_media_ref':'m4','mimeType':'image/png'}],'isError':True}})
+        self.assertEqual(len(called['output']['text']),40000); self.assertEqual(len(called['output']['media']),4); self.assertTrue(called['is_error'])
+
     def test_json_media_url_is_projected_for_host_validation(self):
         media_protocol={'version':1,'tools':[dict(PROTOCOL['tools'][0], text_path='', media_url_path='result.audio')]}
         reply={'content_type':'application/json','body_base64':base64.b64encode(b'{"result":{"audio":"https://example.test/a.wav"}}').decode()}

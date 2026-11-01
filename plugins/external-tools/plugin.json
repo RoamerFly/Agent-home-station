@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "external-tools",
   "name": "外部工具连接",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -18,15 +18,15 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "16e13adcfc598bddbc29678e4f6ec6b3491fab91db38c86c11a8350e76f04378",
-    "CHANGELOG.md": "d8c36757ff2e23d0ad0071a3d4b46ee0e2a6f2651c68678fe5f495cf3c45204c",
+    "capabilities.json": "cfe0f8106b764c89505029d822131f0a8b953cbdaac11c3c32e85c0cbc9c4a03",
+    "CHANGELOG.md": "5f8eacd586ed4e6d7a4d7a88c1af81ce5d8a376c35c73f5479e1ab0860cdf7b9",
     "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
     "MIGRATION.md": "1dd4bd2e9a9e0de0f9d29313f7bec675387843bd6b595c24edf8236bb175a7c0",
     "PERMISSIONS.md": "bb1b1e62a8e8b21b921225cb425ca3bb03f196fc6fccf9cb6d5d8f16d934eb00",
-    "README.md": "55dd3d41923dd6c888661975a4f00bfc8eb929385f5c5ce0c6163393f69f5cfd",
+    "README.md": "59ec8715a937e905018d9453e17b8286a133829e402c7f18d78f13d11d406df4",
     "runtime/README.md": "755bdc1bb2e50062af9e17cf455723f7b7011b421e031ddfaf349ad303afdb9b",
-    "runtime/main.py": "ca6c70bc0a42540f38129abbcf72f6ab252751cc8aac08c0bb1bd106d256283f",
-    "tests/test_runtime.py": "d5544e2c242ef1f2d44ef36a5e7561a9161f7859d83caaf5f11492b8a178694f",
+    "runtime/main.py": "246f83cfdf0eefbed24e22532e6b58f50e17fe8bb060344234b7ca36aa5ee706",
+    "tests/test_runtime.py": "cfe393bd6f75a05b5a86b6ba68089199b0b93ec2d14982751129b5af09d772bd",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   }

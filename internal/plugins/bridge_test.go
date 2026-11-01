@@ -166,3 +166,79 @@ func TestExternalBridgeJobPollDoesNotForwardCreationCredentialsAcrossOrigins(t *
 		t.Fatal("original poll was not performed", err)
 	}
 }
+
+func TestExternalBridgePollWithoutJobUsesFrozenInitialResponseOnce(t *testing.T) {
+	create, query := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/create":
+			create++
+			_, _ = w.Write([]byte(`{"task":{"id":9007199254740993},"state":"queued"}`))
+		case "/tasks/9007199254740993":
+			query++
+			if r.Header.Get("Authorization") != "Bearer synthetic-key" {
+				t.Fatal("same-origin poll did not retain fixed credential")
+			}
+			_, _ = w.Write([]byte(`{"state":"done","result":{"text":"ok"}}`))
+		default:
+			t.Fatalf("unexpected URL %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	manifest := Manifest{ID: "short", Name: "short", Version: "1", Tools: []APITool{{
+		Name: "create", Description: "x", InputSchema: json.RawMessage(`{"type":"object"}`), URL: server.URL + "/create", Method: http.MethodPost,
+		Headers: map[string]string{"Authorization": "Bearer {{secret.KEY}}"}, BodyTemplate: json.RawMessage(`{"prompt":"{{arg.prompt}}"}`),
+		Poll: &PollSpec{URL: server.URL + "/tasks/{{result.task.id}}", StatusPath: "state", DoneValues: []string{"done"}, IntervalSeconds: 2, MaxAttempts: 12, TextPath: "result.text"},
+	}}}
+	bridge, err := NewExternalBridge([]Installed{{Enabled: true, Manifest: manifest, Secrets: map[string]string{"KEY": "synthetic-key"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocol, err := bridge.PollProtocol("short__create")
+	if err != nil || protocol.Tool.Job != nil || protocol.Tool.Poll == nil || protocol.Tool.Poll.IntervalSeconds != 2 || protocol.Tool.Poll.MaxAttempts != 12 {
+		t.Fatalf("bad projection %#v %v", protocol, err)
+	}
+	interval, attempts, timeout, err := bridge.PollLimits("short__create")
+	if err != nil || interval != 2 || attempts != 12 || timeout != 60 {
+		t.Fatalf("bad poll limits %d/%d/%d: %v", interval, attempts, timeout, err)
+	}
+	encoded, _ := json.Marshal(protocol)
+	if strings.Contains(string(encoded), server.URL) || strings.Contains(string(encoded), "synthetic-key") {
+		t.Fatalf("poll projection leaked host configuration: %s", encoded)
+	}
+	initial, err := bridge.ExecutePoll(context.Background(), ExternalPollRequest{Phase: "start", Tool: "short__create", Fingerprint: protocol.Tool.Fingerprint, Arguments: json.RawMessage(`{"prompt":"x"}`)})
+	if err != nil || create != 1 {
+		t.Fatalf("start %#v %v", initial, err)
+	}
+	if _, err = bridge.ExecutePoll(context.Background(), ExternalPollRequest{Phase: "query", Tool: "short__create", Fingerprint: protocol.Tool.Fingerprint, Arguments: json.RawMessage(`{"prompt":"x"}`), Initial: initial}); err != nil || query != 1 {
+		t.Fatalf("query %v, count=%d", err, query)
+	}
+	if _, err = bridge.ExecutePoll(context.Background(), ExternalPollRequest{Phase: "query", Tool: "short__create", Fingerprint: "bad", Arguments: json.RawMessage(`{}`), Initial: initial}); err == nil {
+		t.Fatal("changed fingerprint accepted")
+	}
+}
+
+func TestExternalBridgePollWithoutJobDoesNotForwardCrossOriginCredentials(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" || r.URL.Path != "/tasks/frozen" {
+			t.Fatal("cross-origin non-Job poll received creation credential")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"state":"done"}`))
+	}))
+	defer target.Close()
+	manifest := Manifest{ID: "short", Name: "short", Version: "1", Tools: []APITool{{
+		Name: "create", Description: "x", InputSchema: json.RawMessage(`{"type":"object"}`), URL: "https://example.test/create", Headers: map[string]string{"Authorization": "Bearer {{secret.KEY}}"},
+		Poll: &PollSpec{URL: target.URL + "/tasks/{{result.task.id}}", StatusPath: "state", DoneValues: []string{"done"}},
+	}}}
+	bridge, err := NewExternalBridge([]Installed{{Enabled: true, Manifest: manifest, Secrets: map[string]string{"KEY": "synthetic-key"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocol, _ := bridge.PollProtocol("short__create")
+	initial := externalReply([]byte(`{"task":{"id":"frozen"}}`), "application/json")
+	if _, err = bridge.ExecutePoll(t.Context(), ExternalPollRequest{Phase: "query", Tool: "short__create", Fingerprint: protocol.Tool.Fingerprint, Arguments: json.RawMessage(`{}`), Initial: initial}); err != nil {
+		t.Fatal(err)
+	}
+}

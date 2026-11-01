@@ -88,17 +88,22 @@ Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所
   新插件链路不会擅自改变这一语义，计划会标为
   `explicit_bridge_fallback_policy_needed`，等待管理员选择。既有 `channels-bindings.json` 仍由宿主
   只读、按账号/会话/消息（或受限对象别名）查询；本轮不复制它、不将其交给插件，也不创建新的绑定。
-- `external-tools`：这是**部分迁移**，仅覆盖旧 `plugins.json` 中已启用、且在 MCP 总开关开启时声明为
-  同步 HTTP（没有 `job` 和 `poll`）或完整 `job` + `poll` 生命周期的工具。前者要求官方包声明 ready 的
-  `external.http_request`，后者还必须明确声明 ready 的 `external.job_request`；二者均要求空配置和 `network`
-  权限。应用时只安装空配置且保持禁用，管理员随后才可显式启用。旧端点、请求模板、
-  MCP 服务、凭据与其他声明始终留在宿主的 `plugins.json`，公开计划只以
-  `plugins.json:host_retained_declarations_and_credentials` 标记该边界，绝不输出其内容或把密钥复制到交接文件。
-  仅 MCP、只有 `poll`（没有 `job`）或其他不完整声明会以 `no_matching_supported_external_tools` 阻塞，不能被伪装为
-  已支持工具；混合声明时只覆盖已支持的 HTTP 或 Job+Poll 项，不表示全部外部工具已经迁完。旧的外部任务不会在预演中
-  被重建、补写来源或重放：保留原 ID，缺少不可变来源或配置摘要时由运行时转为 `needs_review`，预演仅以
-  `legacy_external_tasks:origin_and_configuration_proof_required` 提示需核对。`plugins_json` 的原始字节摘要进入 Go 宿主的
-  `source_hashes` 和各步骤的 `apply_source_hash`，因此管理员确认后若旧账本有任何变化，必须重新预演。
+- `external-tools`：这是**部分迁移**。在 MCP 总开关开启时，已启用的同步 HTTP、完整 `job` + `poll`、
+  仅有 `poll` 的 HTTP 工具，分别要求官方包声明 ready 的 `external.http_request`、
+  `external.job_request`、`external.poll_request`。已启用的 MCP HTTP 或 streamable-HTTP 连接，以及没有原始
+  command/args/env 的已登记 stdio `plugin_id`，要求 ready 的 `external.mcp_request`。各能力均要求空配置和
+  `network` 权限；应用时只安装空配置且保持禁用，管理员随后才可显式启用。
+  旧端点、请求模板、MCP 连接、凭据与其他声明仍由宿主权威保存：账本记录只公开
+  `plugins.json:host_retained_declarations_and_credentials`，MCP 配置只公开
+  `mcp-config.json:host_retained_connections_and_credentials`，绝不输出内容或把密钥复制到交接文件。
+  原始 stdio `command`、`args` 或 `env` 永远不作为执行授权，预演标为
+  `mcp_stdio_runtime_package_required`；需安装受控运行时并由管理员另行授权。若混合了可迁移 HTTP 与原始
+  stdio，HTTP 部分仍可待审核，stdio 标记会保留，不能宣称所有外部能力已经迁完。
+  缺少相应 ready capability 的声明以 `no_matching_supported_external_tools` 和具体能力原因阻塞，不能静默降级或
+  替换提供商。旧的外部任务不会在预演中被重建、补写来源或重放：保留原 ID，缺少不可变来源或配置摘要时由运行时转为
+  `needs_review`，预演仅以 `legacy_external_tasks:origin_and_configuration_proof_required` 提示需核对。
+  `plugins_json` 与 `mcp_config_json` 的原始字节摘要进入 Go 宿主的 `source_hashes` 和各步骤的
+  `apply_source_hash`，因此管理员确认后任一旧声明变化都必须重新预演。
 
 `required_missing`、`unmapped_legacy_fields` 和插件未 ready 状态必须在真正迁移前解决。对本地
 ASR 与命名 GPT-SoVITS，管理端验证的是既有登记契约和可核验的资源完整性，不代表已实际执行模型或验证识别质量。通过

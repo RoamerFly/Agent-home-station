@@ -18,16 +18,8 @@ OBS = "obs-" + "a" * 32
 ARTIFACT = "clip-" + "c" * 32
 
 
-def invoke(operation, request, reply=None):
-    calls = []
-    def host(params):
-        calls.append(params)
-        return reply if reply is not None else {"operation":operation, "source_version":VERSION, "receipt":{"state":"accepted", "ui_nodes":[{"text":"untrusted device data"}]}}
-    return operations.invoke(operation, {"source_version":VERSION, "request":request}, host), calls
-
-
 class OperationsTests(unittest.TestCase):
-    def test_each_operation_forwards_one_exact_source_bound_request(self):
+    def test_each_operation_preserves_exact_source_and_original_request(self):
         cases = [
             ("device.list", {}),
             ("device.observe", {"device_id":"phone_a"}),
@@ -37,38 +29,25 @@ class OperationsTests(unittest.TestCase):
         ]
         for operation, request in cases:
             with self.subTest(operation=operation):
-                result, calls = invoke(operation, request)
-                self.assertEqual(calls, [{"operation":operation, "source_version":VERSION, "request":request}])
-                self.assertEqual(result, {"operation":operation, "source_version":VERSION, "receipt":{"state":"accepted", "ui_nodes":[{"text":"untrusted device data"}]}})
+                source, parsed = operations.validate_request(operation, {"source_version":VERSION,"request":request})
+                self.assertEqual(source, VERSION)
+                self.assertEqual(parsed, request)
 
-    def test_rejects_tampering_unknown_fields_and_raw_bytes(self):
-        with self.assertRaisesRegex(ValueError, "device_request_invalid"):
-            invoke("device.observe", {"device_id":"phone_a", "serial":"private"})
-        with self.assertRaisesRegex(ValueError, "device_operation_arguments_invalid"):
-            operations.validate_request("device.list", {"source_version":VERSION, "request":{}, "account":"private"})
-        request = {"device_id":"phone_a"}
-        for reply in (
-            {"operation":"device.observe", "source_version":"a" * 64, "receipt":{}},
-            {"operation":"device.list", "source_version":VERSION, "receipt":{}},
-            {"operation":"device.observe", "source_version":VERSION, "receipt":{"data_base64":"raw"}},
-            {"operation":"device.observe", "source_version":VERSION, "receipt":{}, "extra":True},
-        ):
-            with self.subTest(reply=reply), self.assertRaisesRegex(ValueError, "device_host_receipt_invalid"):
-                invoke("device.observe", request, reply)
+    def test_rejects_raw_authority_overrides_and_unknown_fields(self):
+        for field in ("serial", "path", "argv", "env", "account", "data_base64"):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "device_request_invalid"):
+                operations.validate_request("device.observe", {"source_version":VERSION,"request":{"device_id":"phone_a",field:"forbidden"}})
+        with self.assertRaisesRegex(ValueError,"device_operation_arguments_invalid"):
+            operations.validate_request("device.list", {"source_version":VERSION,"request":{},"account":"private"})
+        for source in ("", "invalid", "a" * 63):
+            with self.assertRaisesRegex(ValueError,"device_source_version_invalid"):
+                operations.validate_request("device.list", {"source_version":source,"request":{}})
 
-    def test_safe_receipt_preserves_finite_time_and_coordinate_metadata(self):
-        receipt = {"observed_at":1735689600.25, "created_at":1735689601.5, "width":1080, "height":2400, "ui_nodes":[{"bounds":[1,2,30,40]}]}
-        result, _ = invoke("device.observe", {"device_id":"phone_a"}, {"operation":"device.observe", "source_version":VERSION, "receipt":receipt})
-        self.assertEqual(result["receipt"], receipt)
-        for bad in (float("nan"), float("inf"), float("-inf")):
-            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "device_host_receipt_invalid"):
-                invoke("device.observe", {"device_id":"phone_a"}, {"operation":"device.observe", "source_version":VERSION, "receipt":{"observed_at":bad}})
-
-    def test_request_key_and_unknown_outcome_are_not_rewritten(self):
-        request = {"device_id":"phone_a", "observation_id":OBS, "request_key":"fixed_key", "action":"back"}
-        result, calls = invoke("device.act", request, {"operation":"device.act", "source_version":VERSION, "receipt":{"state":"unknown", "reobserve_required":True}})
-        self.assertEqual(calls[0]["request"]["request_key"], "fixed_key")
-        self.assertEqual(result["receipt"]["state"], "unknown")
+    def test_text_url_and_action_request_are_never_rewritten(self):
+        for action, extra in (("text", {"text":"original text"}), ("open_url", {"package":"com.browser","url":"https://example.test/?a=1&b=2"}), ("back", {})):
+            request={"device_id":"phone_a","observation_id":OBS,"request_key":"original-key","action":action,**extra}
+            _, parsed=operations.validate_request("device.act", {"source_version":VERSION,"request":request})
+            self.assertEqual(parsed, request)
 
     def test_no_bridge_or_network_imports_and_ready_capabilities_match_permissions(self):
         source = (ROOT / "runtime" / "operations.py").read_text(encoding="utf8")

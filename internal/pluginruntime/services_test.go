@@ -45,6 +45,12 @@ func TestInstalledServiceProxyCannotCrossPluginCapabilities(t *testing.T) {
 	}{
 		{"external-tools", "external.http_request", "network", "wechat/external_request", true},
 		{"external-tools", "external.job_request", "network", "wechat/external_request", true},
+		{"external-tools", "external.poll_request", "network", "wechat/external_request", true},
+		{"external-tools", "external.mcp_request", "network", "wechat/external_mcp", true},
+		{"music", "external.mcp_request", "network", "wechat/external_mcp", false},
+		{"mobile-control", "device.observe", "device", "wechat/device_io", true},
+		{"mobile-control", "device.observe", "device", "wechat/device_request", false},
+		{"other", "device.observe", "device", "wechat/device_io", false},
 		{"music", "external.job_request", "network", "wechat/external_request", false},
 		{"music", "external.http_request", "network", "wechat/external_request", false},
 		{"external-tools", "external.call", "network", "wechat/external_request", false},
@@ -137,7 +143,7 @@ func (p *syntheticDeviceDispatch) Validate(context.Context, pluginhost.Job, plug
 
 func (p *syntheticDeviceDispatch) Service(_ context.Context, _ pluginhost.Job, _ pluginhost.Capability, method string, _ json.RawMessage) (json.RawMessage, error) {
 	p.calls++
-	if method != "wechat/device_request" {
+	if method != "wechat/device_io" {
 		return nil, errors.New("unexpected device method")
 	}
 	if p.serviceFail != nil {
@@ -150,7 +156,7 @@ func TestDeviceServiceIsBoundToExplicitCapabilityAndCurrentJob(t *testing.T) {
 	ctx := context.Background()
 	args := json.RawMessage(`{"operation":"observe"}`)
 	p := &syntheticDeviceDispatch{}
-	j := pluginhost.Job{Context: invocation()}
+	j := pluginhost.Job{Plugin: "mobile-control", Context: invocation()}
 
 	for _, cap := range []pluginhost.Capability{
 		{ID: "device.observe"},
@@ -158,7 +164,7 @@ func TestDeviceServiceIsBoundToExplicitCapabilityAndCurrentJob(t *testing.T) {
 		{ID: "media.observe", Permissions: []string{"device"}},
 	} {
 		call := serviceContext(ctx, p, j, cap).Value(serviceKey{}).(serviceCall)
-		if _, err := call(ctx, "wechat/device_request", args); err == nil || p.calls != 0 {
+		if _, err := call(ctx, "wechat/device_io", args); err == nil || p.calls != 0 {
 			t.Fatalf("unauthorized device proxy reached dispatcher for %#v", cap)
 		}
 	}
@@ -170,17 +176,17 @@ func TestDeviceServiceIsBoundToExplicitCapabilityAndCurrentJob(t *testing.T) {
 	if _, err := call(ctx, "wechat/execute", args); err == nil || p.calls != 0 {
 		t.Fatal("arbitrary device execution reached dispatcher")
 	}
-	if _, err := call(ctx, "wechat/device_request", args); err != nil || p.calls != 1 || p.checks != 2 {
+	if _, err := call(ctx, "wechat/device_io", args); err != nil || p.calls != 1 || p.checks != 2 {
 		t.Fatalf("bound current device request failed: err=%v calls=%d checks=%d", err, p.calls, p.checks)
 	}
 
 	foreign := j
 	foreign.Context.Account = "foreign"
-	if _, err := serviceContext(ctx, p, foreign, valid).Value(serviceKey{}).(serviceCall)(ctx, "wechat/device_request", args); err == nil || p.calls != 1 {
+	if _, err := serviceContext(ctx, p, foreign, valid).Value(serviceKey{}).(serviceCall)(ctx, "wechat/device_io", args); err == nil || p.calls != 1 {
 		t.Fatal("cross-account device request reached dispatcher")
 	}
 	p.revoked = true
-	if _, err := call(ctx, "wechat/device_request", args); err == nil || p.calls != 1 {
+	if _, err := call(ctx, "wechat/device_io", args); err == nil || p.calls != 1 {
 		t.Fatal("revoked device request reached dispatcher")
 	}
 }
@@ -188,8 +194,8 @@ func TestDeviceServiceIsBoundToExplicitCapabilityAndCurrentJob(t *testing.T) {
 func TestDeviceServiceFailureIsNotMasked(t *testing.T) {
 	ctx := context.Background()
 	p := &syntheticDeviceDispatch{serviceFail: errors.New("synthetic device broker unavailable")}
-	call := serviceContext(ctx, p, pluginhost.Job{Context: invocation()}, pluginhost.Capability{ID: "device.act", Permissions: []string{"device"}}).Value(serviceKey{}).(serviceCall)
-	if _, err := call(ctx, "wechat/device_request", json.RawMessage(`{"operation":"tap"}`)); !errors.Is(err, p.serviceFail) || p.calls != 1 || p.checks != 1 {
+	call := serviceContext(ctx, p, pluginhost.Job{Plugin: "mobile-control", Context: invocation()}, pluginhost.Capability{ID: "device.act", Permissions: []string{"device"}}).Value(serviceKey{}).(serviceCall)
+	if _, err := call(ctx, "wechat/device_io", json.RawMessage(`{"operation":"tap"}`)); !errors.Is(err, p.serviceFail) || p.calls != 1 || p.checks != 1 {
 		t.Fatalf("service failure was masked: err=%v calls=%d checks=%d", err, p.calls, p.checks)
 	}
 }
