@@ -67,6 +67,13 @@ const log=(id,content,event='message_received')=>({id,time:dateKey+'T08:00:00Z',
    try{return route.fulfill({body:await fs.readFile(file),contentType:({'.html':'text/html','.css':'text/css','.js':'text/javascript','.png':'image/png','.json':'application/json'})[path.extname(file)]||'text/plain'})}catch{return route.continue()}
   });
   await page.goto(base);await page.locator('#overview.active-page').waitFor();assert.equal(await page.locator('.main-nav').count(),5);
+  // Mobile control is now rendered from the installed package detail, rather
+  // than a permanent console page. Guard both the source and live navigation
+  // so a stale standalone page/script cannot quietly return.
+  const indexSource=await fs.readFile(path.join(__dirname,'../internal/admin/static/index.html'),'utf8');
+  assert(!/id=["']mobile["']/.test(indexSource),'legacy #mobile page remains in index.html');
+  assert(!/assets\/mobile\.js/.test(indexSource),'legacy mobile.js remains loaded by index.html');
+  assert.equal(await page.locator('#mobile,[data-section="mobile"],script[src$="/mobile.js"]').count(),0,'legacy mobile navigation or script remains in the live console');
   await page.locator('#overview-tasks').getByText('整理项目资料',{exact:true}).waitFor();
   assert((await page.locator('#overview-tasks').textContent()).includes('【正文末尾完整保留】'));assert.equal(await page.locator('#overview-tasks p').first().evaluate(e=>getComputedStyle(e).webkitLineClamp),'3');
   // Full documents, save revision and unsaved edits across navigation/refresh.
@@ -129,7 +136,8 @@ const log=(id,content,event='message_received')=>({id,time:dateKey+'T08:00:00Z',
   await page.emulateMedia({reducedMotion:'reduce'});
   assert.equal(await page.locator('.nav-position').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
   await page.emulateMedia({reducedMotion:'no-preference'});
-  const pages=['overview','agent','workbench','memory','logs','surf','companion','voices','wechat','provider','plugins','mcp','permissions','mobile','settings','rules','catalog','tools','account-actions'];
+  const pages=['overview','agent','workbench','memory','logs','surf','companion','voices','wechat','provider','plugins','mcp','permissions','settings','rules','catalog','tools','account-actions'];
+  assert.equal(pages.length,18,'console page inventory must exclude the removed standalone mobile page');
   for(const theme of ['light','dark'])for(const viewport of [{width:375,height:812},{width:768,height:1024},{width:1024,height:768},{width:1440,height:900},{width:1920,height:1080}]){
    await page.setViewportSize(viewport);await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
    for(const id of pages){await page.evaluate(s=>window.WechatAdmin.nav(s),id);await page.waitForTimeout(30);const result=await page.evaluate(()=>{const p=document.querySelector('.content>.active-page');return {visiblePages:[...document.querySelectorAll('.content>.page')].filter(e=>e.getClientRects().length).map(e=>e.id),horizontal:document.documentElement.scrollWidth>innerWidth+2||p.scrollWidth>p.clientWidth+2,bodyHeight:document.body.scrollHeight>innerHeight+2,misplacedSaves:[...document.querySelectorAll('button')].filter(b=>/^保存|^确认保存/.test(b.textContent.trim())&&b.getClientRects().length&&!b.closest('#top-save-actions,.dialog-save-actions')).map(b=>b.id)}});assert.deepEqual(result.visiblePages,[id],id+': inactive page leaked');assert(!result.horizontal,`${theme}/${viewport.width}/${id}: horizontal overflow`);assert(!result.bodyHeight,`${theme}/${viewport.width}x${viewport.height}/${id}: unbounded document`);assert.deepEqual(result.misplacedSaves,[],id+': save action outside header')}
@@ -141,6 +149,6 @@ const log=(id,content,event='message_received')=>({id,time:dateKey+'T08:00:00Z',
   await page.setViewportSize({width:375,height:812});await page.evaluate(()=>window.WechatAdmin.nav('overview'));await page.locator('#menu-toggle').click();assert(await page.locator('#drawer-scrim').isVisible());await page.locator('.main-nav[data-section="memory"]').click();assert(await page.locator('#memory').isVisible());assert(!(await page.locator('#drawer-scrim').isVisible()));
   if(screens){await fs.mkdir(screens,{recursive:true});await page.setViewportSize({width:1440,height:900});for(const theme of ['dark','light']){await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);for(const id of pages){await page.evaluate(s=>window.WechatAdmin.nav(s),id);await page.waitForTimeout(260);await page.screenshot({path:path.join(screens,`${id}-${theme}.png`)})}}}
   if(process.env.WECHAT_ADMIN_VISUAL_AUDIT)await require('./audit_console_visual.cjs')(page,pages,process.env.WECHAT_ADMIN_VISUAL_AUDIT);
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({fiveNavigationGroups:true,fullBusinessText:true,boundedPanes:true,documentRevision:true,editorDraftPreserved:true,conversationRefreshPreserved:true,roundModal:true,rawDataLast:true,settingsPreserved:true,themes:2,viewports:5,pages:19,pageErrors:errors,realWechatSends:0}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({fiveNavigationGroups:true,fullBusinessText:true,boundedPanes:true,documentRevision:true,editorDraftPreserved:true,conversationRefreshPreserved:true,roundModal:true,rawDataLast:true,settingsPreserved:true,themes:2,viewports:5,pages:18,pageErrors:errors,realWechatSends:0}));
  }finally{await browser.close()}
 })().catch(error=>{console.error(error);process.exitCode=1});

@@ -317,12 +317,19 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	speechStep := migrationStep("speech", packages, speech.TTSEnabled, speechValues, map[string]pluginMigrationSecret{"tts_key": ttsSecret}, pluginhost.ConfigUpdate{Values: speechValues, Secrets: map[string]string{"tts_key": ttsKey}}, speechRequired, []string{"asr_*", "music_*", "yue_*", "yue_token"}, "", sources)
 
 	webRequired, webUnmapped := []string{}, []string{}
-	webValues := map[string]json.RawMessage{"legacy_web_search_enabled": migrationValue(mcp.WebSearchEnabled), "legacy_web_fetch_enabled": migrationValue(mcp.WebFetchEnabled)}
+	// Keep the legacy switches in the read-only proposal so an administrator can
+	// audit the source state.  They are host authorization settings, however,
+	// and are not fields declared by the web-search package.  In particular,
+	// they must never reach ConfigUpdate.Values: the package schema deliberately
+	// rejects undeclared fields.
+	webValues := map[string]json.RawMessage{"legacy_web_search_enabled": migrationValue(mcp.WebSearchEnabled), "legacy_web_fetch_enabled": migrationValue(mcp.WebFetchEnabled), "search_backend": migrationValue("public")}
 	webSecrets := map[string]pluginMigrationSecret{}
-	webUpdate := pluginhost.ConfigUpdate{Values: webValues}
+	webUpdateValues := map[string]json.RawMessage{"search_backend": migrationValue("public")}
+	webUpdate := pluginhost.ConfigUpdate{Values: webUpdateValues}
 	if officialDeepSeekMigration(config) {
 		if packages["web-search"].deepSeekSearch {
 			webValues["search_backend"] = migrationValue("deepseek")
+			webUpdateValues["search_backend"] = migrationValue("deepseek")
 			webSecret, searchKey := migrationSecret(config.APIKey, "config.json:api_key")
 			webSecrets["search_key"] = webSecret
 			webUpdate.Secrets = map[string]string{"search_key": searchKey}

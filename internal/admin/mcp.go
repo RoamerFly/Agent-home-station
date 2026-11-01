@@ -16,12 +16,9 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
-	"unicode/utf8"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
-	compatwebsearch "wechat-bot/internal/plugincompat/websearch"
 	"wechat-bot/internal/plugins"
 )
 
@@ -108,11 +105,6 @@ type permittedTools struct {
 	privateDiagnostics   bool
 }
 
-// legacyDeepSeekSearch is the only temporary bridge from the core to an
-// account-selected paid search protocol. The implementation is owned by the
-// compatibility boundary so admin does not retain provider HTTP code.
-var legacyDeepSeekSearch = compatwebsearch.Search
-
 func (p *permittedTools) SetTrace(input companion.Input) {
 	p.trace = input
 	p.songFollowups = nil
@@ -137,7 +129,12 @@ func (p *permittedTools) enabled(name string) bool {
 	}
 	if capability := webServiceCapability(name); capability != "" {
 		if installed, enabled := p.installedWebState(); installed {
-			return enabled && p.servicePluginsAllowed() && p.serviceWebAllowed(capability)
+			allowed := enabled && p.servicePluginsAllowed() && p.serviceWebAllowed(capability)
+			if name != "web_audio_search" {
+				return allowed
+			}
+			permissions := p.manager.Config().Companion.Permissions
+			return allowed && (permissions.SendVoice || permissions.SendFile)
 		}
 	}
 	if name == "tool_output_read" {
@@ -386,48 +383,8 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	if name == "web_discover" {
 		return p.discover(ctx, args)
 	}
-	// Chinese song/artist queries are poorly covered by the Western instrumental
-	// catalog. Keep the existing account's selected official search provider
-	// until its configuration is explicitly migrated into the web-search plugin.
-	// The paid protocol itself lives in plugincompat, not in the admin package.
-	audioPages := name == "web_audio_search" && strings.ContainsFunc(webArgs.Query, func(r rune) bool { return unicode.Is(unicode.Han, r) })
-	if name == "web_search" || audioPages {
-		p.manager.mu.Lock()
-		config := cloneConfig(p.manager.config)
-		p.manager.mu.Unlock()
-		legacyConfig := compatwebsearch.Config{BaseURL: config.BaseURL, APIKey: config.APIKey}
-		if officialBilling(config) && compatwebsearch.Supported(legacyConfig) && strings.TrimSpace(webArgs.Query) != "" && utf8.RuneCountInString(webArgs.Query) <= 128 {
-			diagnosticMu.Lock()
-			requests++
-			diagnosticMu.Unlock()
-			items, searchErr := legacyDeepSeekSearch(ctx, legacyConfig, webArgs.Query)
-			if searchErr == nil {
-				titles, urls, descriptions := []string{}, []string{}, []string{}
-				for _, item := range items {
-					titles = append(titles, item.Title)
-					urls = append(urls, item.URL)
-					descriptions = append(descriptions, item.Summary+" "+item.Snippet)
-				}
-				text, formatErr := mcptools.FormatProviderSearch("DeepSeek Search", webArgs.Query, titles, urls, descriptions)
-				if formatErr == nil {
-					endpoint = "https://api.deepseek.com/v1/tools/search"
-					diagnosticMu.Lock()
-					lastStatus, lastStage, lastCode = http.StatusOK, "search", ""
-					diagnosticMu.Unlock()
-					if audioPages {
-						text += "\n音频搜索已使用实时网页来源，未查询器乐目录。以上是候选播放页面，不是已下载的音频；核对歌名、歌手和版本后继续读取或使用web_media_download获取真实文件，不能直接声称已经发歌。"
-					}
-					return text, nil
-				}
-			}
-			if d, ok := compatwebsearch.ErrorDiagnostics(searchErr); ok {
-				diagnosticMu.Lock()
-				lastStatus = d.HTTPStatus
-				lastCode = d.Code
-				lastStage = "search"
-				diagnosticMu.Unlock()
-			}
-		}
+	if (name == "web_search" || name == "web_audio_search") && p.legacyPaidWebMigrationRequired() {
+		return "", &mcptools.WebError{Code: "web_plugin_migration_required", Stage: "plugin_migration"}
 	}
 	if name == "media_history" {
 		var in struct {
@@ -636,12 +593,8 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		}
 		return p.stageOutput(ctx, output)
 	}
-	effectiveTool := name
-	if audioPages {
-		effectiveTool = "web_search"
-	}
-	text, err := p.hub.Call(ctx, effectiveTool, args)
-	if err != nil && name == "web_audio_search" && !audioPages && ctx.Err() == nil {
+	text, err := p.hub.Call(ctx, name, args)
+	if err != nil && name == "web_audio_search" && ctx.Err() == nil {
 		fallback, searchErr := p.Call(ctx, "web_search", args)
 		if searchErr == nil {
 			return fallback + "\n公开音频目录未能取得可用结果，已改用真实网页搜索。以上页面仍需核对并尝试下载，不代表已取得录音文件。", nil

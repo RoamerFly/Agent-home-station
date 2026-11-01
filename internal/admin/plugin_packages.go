@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -31,6 +32,7 @@ func (m *Manager) packageStore() (*pluginhost.Store, error) {
 func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 	s.pluginMigrationRoutes(mux)
 	s.pluginRuntimeRoute(mux)
+	s.pluginHostActionRoutes(mux)
 	mux.HandleFunc("GET /api/plugin-packages/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		store, err := s.manager.packageStore()
 		if err != nil {
@@ -39,7 +41,31 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		}
 		id := r.PathValue("id")
 		installed, err := store.Installed(r.Context(), id)
+		if err == nil && installed.Removed && id == mobileDevicePluginID {
+			state, stateErr := store.ReadHostState(r.Context(), mobileDevicePluginID, mobileStateNamespace)
+			if stateErr != nil {
+				fail(w, 500, "手机历史读取失败")
+				return
+			}
+			if state.Revision > 0 {
+				respond(w, 200, s.mobilePluginArchive())
+				return
+			}
+			fail(w, 404, "插件尚未安装")
+			return
+		}
 		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				fail(w, 500, "插件登记读取失败")
+				return
+			}
+			if id == mobileDevicePluginID {
+				state, stateErr := store.ReadHostState(r.Context(), mobileDevicePluginID, mobileStateNamespace)
+				if stateErr == nil && state.Revision > 0 {
+					respond(w, 200, s.mobilePluginArchive())
+					return
+				}
+			}
 			fail(w, 404, "插件尚未安装")
 			return
 		}
@@ -58,7 +84,22 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		if runtimeErr == nil {
 			status = h.Status(id)
 		}
-		respond(w, 200, map[string]any{"installed": installed, "schema": schema, "configuration": config, "runtime_connected": connected, "runtime": status})
+		uiRaw, err := store.PackageFile(r.Context(), id, "ui.schema.json")
+		if err != nil {
+			fail(w, 409, "插件界面声明无效或已变化")
+			return
+		}
+		ui, err := pluginhost.ParseUISchema(uiRaw)
+		if err != nil {
+			fail(w, 409, "插件界面声明无效或已变化")
+			return
+		}
+		result := map[string]any{"installed": installed, "schema": schema, "configuration": config, "runtime_connected": connected, "runtime": status, "ui_schema": ui}
+		if id == mobileDevicePluginID {
+			plannerErr := s.manager.mobileDeviceReady(r.Context())
+			result["host_data"] = map[string]any{"state": "active", "settings": mobilePluginSettings(s.manager.mobile.Settings()), "tasks": s.manager.mobile.List(nil), "resources": map[string]any{}, "diagnostics": map[string]any{"planner_available": plannerErr == nil, "planner_reason": mobileAvailabilityMessage(plannerErr)}}
+		}
+		respond(w, 200, result)
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/{id}/configuration", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input pluginhost.ConfigUpdate
@@ -158,7 +199,11 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 				statuses[item.Package.ID] = h.Status(item.Package.ID)
 			}
 		}
-		respond(w, 200, map[string]any{"installed": installed, "catalog": official, "runtime_connected": connected, "runtimes": statuses})
+		retained := []string{}
+		if state, stateErr := store.ReadHostState(r.Context(), mobileDevicePluginID, mobileStateNamespace); stateErr == nil && state.Revision > 0 {
+			retained = append(retained, mobileDevicePluginID)
+		}
+		respond(w, 200, map[string]any{"installed": installed, "catalog": official, "runtime_connected": connected, "runtimes": statuses, "retained_ids": retained})
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/prepare", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -246,4 +291,22 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		}
 		respond(w, 201, installed)
 	}))
+}
+
+// An uninstalled package cannot supply a UI declaration. The host retains only
+// the history/resource view and existing-task stop controls, never creation or
+// settings actions from the former package.
+func (s *Server) mobilePluginArchive() map[string]any {
+	return map[string]any{
+		"archive": true,
+		"ui_schema": pluginhost.UISchema{Version: 1, Sections: []pluginhost.UISection{
+			{ID: "tasks", Title: "保留的设备任务", Component: "tasks", Binding: "host_data.tasks", Action: "tasks.cancel"},
+			{ID: "resources", Title: "任务素材", Component: "resources", Binding: "host_data.resources"},
+			{ID: "diagnostics", Title: "状态与说明", Component: "diagnostics", Binding: "host_data.diagnostics"},
+		}},
+		"host_data": map[string]any{
+			"state": "archive", "tasks_retained": true, "tasks": s.manager.mobile.List(nil), "resources": map[string]any{},
+			"diagnostics": map[string]any{"planner_available": false, "planner_reason": "手机插件未安装；只能查看历史或停止已有任务"},
+		},
+	}
 }

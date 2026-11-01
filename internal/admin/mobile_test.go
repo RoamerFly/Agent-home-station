@@ -97,8 +97,11 @@ func TestMobileRoutesRequireAuthenticationAndCSRF(t *testing.T) {
 	if status, _, _ := f.request("POST", "/api/mobile/tasks", map[string]string{"request_key": "safe", "device_id": "lab", "goal": "view"}, true, true); status != 409 {
 		t.Fatal("disabled start", status)
 	}
-	if status, _, _ := f.request("GET", "/assets/mobile.js", nil, false, false); status != 200 {
+	if status, _, _ := f.request("GET", "/assets/plugin-packages.js", nil, false, false); status != 200 {
 		t.Fatal("asset", status)
+	}
+	if status, _, _ := f.request("GET", "/assets/mobile.js", nil, false, false); status != 404 {
+		t.Fatal("removed asset", status)
 	}
 }
 

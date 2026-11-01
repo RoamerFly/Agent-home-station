@@ -12,6 +12,8 @@
 
 0.3.1 将兼容 bridge 的 ADB server 生命周期固定到宿主 profile：仅 `127.0.0.1:5037` 可用，客户端显式传递 `-H`/`-P` 并清除可替换端点的环境变量。每次调用先只读校验 `host:version` 的 `0029` 响应（协议 41）；端点缺失、坏握手或版本不兼容时不启动客户端，不能回退默认端点。该 probe 与客户端执行之间仍可能有同机端口替换竞态，bridge 没有协议代理，也不直接执行启动/停止共享 server；物理 lease 和操作账本语义保持不变。
 
-0.3.1 配置与任务迁移由宿主私有 SQLite `plugin-host/plugins.sqlite` 的 `host_states` / `host_state_records` 管理。首次仅只读核验旧 Settings/Tasks JSON，原任务 ID、来源、哈希及 `queued`、`running`、`needs_review` 状态原样保留；正式启用后只写 SQLite 差异记录并以 CAS 保护并发，不再与旧 JSON 双写。截图、录屏、操作 ledger 和原始媒体继续留在原 host-private mobile 路径，不迁出为外部 ledger。
+0.3.1 配置与任务迁移由宿主私有 SQLite `plugin-host/plugins.sqlite` 的 `host_states` / `host_state_records` 管理。首次仅只读核验旧 Settings/Tasks JSON，保留原任务 ID、来源与哈希；中断的 `queued/running` 转为 `needs_review`，不重放未知操作。正式启用后只写 SQLite 差异记录并以 CAS 保护并发，不再与旧 JSON 双写。截图、录屏、操作 ledger 和原始媒体继续留在原 host-private mobile 路径，不迁出为外部 ledger。
 
 接受新 SQLite 写入后不自动回切旧 JSON 或旧版本；故障时暂停新的设备处理并由兼容路径修复记录。设备队列、录屏分析的具体调度实现和专用 UI 尚未整体迁出，不能将当前受控代理视为全部手机插件化完成。
+
+0.4.0 将管理页收敛为宿主渲染的声明式区域：执行设置与已登记连接、设备任务、任务素材和状态与说明。设置的唯一权威仍是宿主配置仓库，不向通用 `config.schema.json` 复制手机设置；页面只可调用已登记的 `settings.save`、`devices.list`、`tasks.create`、`tasks.cancel` 与 `tasks.stop`，不接受任意 bridge 命令或 ADB 参数。独立手机页面与脚本已删除；旧版空 binding/action 声明映射为组件固定默认值。新详情只保留已登记连接，连接档案的新增或替换仍依赖宿主管理员兼容路径，尚未完成声明式登记流程，不应宣称首次安装的全部手机配置流程已就绪。

@@ -87,7 +87,7 @@ class Wire:
                     if not isinstance(metadata, dict):
                         raise ValueError("invalid_protocol")
                     initialized = True
-                    result = {"protocolVersion":"2025-06-18", "capabilities":{"tools":{}}, "serverInfo":{"name":"mobile-control", "version":"0.3.1"}}
+                    result = {"protocolVersion":"2025-06-18", "capabilities":{"tools":{}}, "serverInfo":{"name":"mobile-control", "version":"0.4.0"}}
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/list" and initialized:

@@ -599,6 +599,26 @@ details:not([open]) > :not(summary) { display:none; }
 #plugins>.page-toolbar-card{justify-content:flex-start;gap:8px}
 #plugins>.page-toolbar-card>.page-actions{order:2;margin-left:auto}
 #plugins>.page-toolbar-card>.package-tabs{margin:0;padding-left:10px;border-left:1px solid var(--line)}
+/* Package forms keep their labels and native checkbox targets close together. */
+.package-browser>.section-heading{flex-wrap:wrap;justify-content:flex-start;gap:6px;margin:0 0 12px}
+.package-browser>.section-heading h3{flex-basis:100%;margin:0}
+.package-browser>.section-heading button{min-height:34px;padding:5px 8px;font-size:12px}
+.package-editor>.section-heading:first-child{margin-top:0}
+.package-editor>[data-host-component]{padding:14px;margin-bottom:12px}
+.package-editor>[data-host-component] h3{margin:0 0 10px}
+.package-editor>[data-host-component] .hint{margin:0}
+.package-host-form,.package-host-task-form{display:grid;gap:10px}
+.package-host-form label,.package-host-task-form label{margin:0 0 5px}
+.package-host-form .field-grid,.package-host-task-form .field-grid{gap:10px 12px}
+.package-host-form .switch-row{align-items:center;min-height:40px;padding:5px 0;margin:0}
+.package-host-form .switch-row>input{margin:0}
+.package-host-form .mobile-action-options{gap:2px 16px;margin:0;padding:0}
+.package-host-form .mobile-action-options legend{font-size:13px;margin-bottom:4px}
+.package-host-form .mobile-action-options label{min-height:32px;gap:7px;margin:0;font-weight:400}
+.package-host-form .mobile-action-options input{flex:0 0 18px;width:18px;margin:0}
+.package-host-tasks>.inline-actions{margin-bottom:10px}
+.package-host-task-form{padding-block:10px;margin-bottom:0}
+@media(max-width:600px){.package-host-form .mobile-action-options{display:grid;grid-template-columns:1fr}.package-editor>[data-host-component]{padding:12px}.package-browser>.section-heading h3{flex-basis:auto;margin-right:auto}}
 .sidebar-brand{position:relative;isolation:isolate;overflow:hidden}
 .sidebar-brand::before{content:"";position:absolute;inset:0;pointer-events:none;z-index:-1;background:radial-gradient(ellipse at 18% 40%,color-mix(in srgb,var(--accent) 15%,transparent),transparent 65%);opacity:0}
 @media(prefers-reduced-motion:no-preference){.app-shell:not([hidden]) .sidebar-brand::before{animation:startup-light 280ms ease-out}@keyframes startup-light{0%{opacity:0;transform:translateX(-15px)}35%{opacity:1}100%{opacity:0;transform:translateX(15px)}}}

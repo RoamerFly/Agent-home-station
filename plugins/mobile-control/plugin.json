@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "mobile-control",
   "name": "手机控制",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -20,19 +20,20 @@
   "dependencies": [],
   "files": {
     "capabilities.json": "880a0a37ebdcf89f3d9ef28d3e16446c52501519dec9792b0ab0491961d4d0c5",
-    "CHANGELOG.md": "50a6eb584bc625add19a9a6d62b4c94ffe493936053628a0a9129bb4500a7b4c",
+    "CHANGELOG.md": "0d10e351e47837c46696a64a8669f4693830a4327f95276c62ccc54104e7bdfb",
     "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
-    "MIGRATION.md": "e1bed7d71b6ddfa28530b900fb2bdff45aa7dc7c8e84cbbd976776b887956c07",
+    "MIGRATION.md": "f8ae8038145ec2053effb180fcdd3f09ff8c673a361354d0216c64d499f5bba6",
     "PERMISSIONS.md": "b025a70ad3f6b11dfd5d7fe5de291b5a284c5a5988a89dbc218b7e8112e7057e",
-    "README.md": "c903227146792f14ae2b64abbaa77e55b603a0ece5027fc8853ccb07d70c02a1",
+    "README.md": "1f459defc12b07f7efa0a1ac515f61e2bc4f1e5ebcd0c3a4d210b93eb8bb3a58",
     "runtime/bridge.py": "0ec5b82d99d55c6f0be07218644101d98b418bebc4ec0888da0f3dbf55d7a312",
-    "runtime/main.py": "714af5a813a7712a266cecfa6f1466e0d938ec737b66c9c983b65edbd5ade2fe",
+    "runtime/main.py": "8b340294527814bc45110551b434b88df85098ceacf6d8b90177f47aea50b90e",
     "runtime/operations.py": "08de97444fe737304ccba58daaae62a9bdd6db1a674cbffbec13530dc1436258",
     "runtime/planner.py": "366d706ba60febdceb095e32b2e0c54c2dfeef43cfbe5ac8fa9325ddfeb47aa7",
     "runtime/README.md": "9fcbc2c52634f6bcb81be70fd25de01e47826b5201c6437e0065f29baa3cdb7b",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "tests/test_operations.py": "85f2d4d5b78df53372dfd9bf808aa611b13a326453f6f824bff5c265d334fd4e",
-    "tests/test_planner.py": "229f3bc5c72a744f72de6a96433fd19d3a5a45b58de7683596f6cd3bb41f7902",
-    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
+    "tests/test_planner.py": "7d62bc740b52436e99cb7f06a7677ff3a67a5b7fb0e8f0ac4cab46dab175f788",
+    "tests/test_ui_schema.py": "9fc0f543b261898f7a49e4cb292d3a23370cfeee4f85f9ea03aa900515b3d691",
+    "ui.schema.json": "6c2afafab4ed9003403369ff58c9f415617b2b2b491156f81b6241b5310e3ec7"
   }
 }

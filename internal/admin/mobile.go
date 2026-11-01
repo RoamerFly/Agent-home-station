@@ -72,7 +72,47 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 		}
 		respond(w, 200, value)
 	}))
-	mux.HandleFunc("POST /api/mobile/stop", s.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/mobile/stop", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "tasks.stop") }))
+	mux.HandleFunc("POST /api/mobile/config", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "settings.save") }))
+	mux.HandleFunc("POST /api/mobile/tasks", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "tasks.create") }))
+	mux.HandleFunc("POST /api/mobile/tasks/{id}/cancel", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "tasks.cancel") }))
+	mux.HandleFunc("GET /api/mobile/tasks/{id}/screenshot/{observation}", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		data, err := s.manager.mobile.Screenshot(r.PathValue("id"), r.PathValue("observation"))
+		if err != nil {
+			fail(w, 404, "观察画面不可用")
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(data)
+	}))
+	mux.HandleFunc("GET /api/mobile/tasks/{id}/recording/{artifact}", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		_, data, err := s.manager.mobile.Artifact(r.PathValue("id"), r.PathValue("artifact"))
+		if err != nil {
+			fail(w, 404, "录屏不可用")
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(data)
+	}))
+}
+
+// mobileHostAction is the single protected implementation used by both the
+// legacy resource URLs and the mobile-control package's declarative UI.
+func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action string) {
+	switch action {
+	case "devices.list":
+		var in struct{}
+		if !decode(w, r, &in) {
+			return
+		}
+		value, err := s.manager.mobile.Devices(r.Context())
+		if err != nil {
+			fail(w, 409, "设备桥未启用或无法连接，请检查桥接命令和 ADB 状态")
+			return
+		}
+		respond(w, 200, value)
+	case "tasks.stop":
 		var in struct{}
 		if !decode(w, r, &in) {
 			return
@@ -82,8 +122,11 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 			return
 		}
 		respond(w, 200, map[string]bool{"stopped": true})
-	}))
-	mux.HandleFunc("POST /api/mobile/config", s.protected(func(w http.ResponseWriter, r *http.Request) {
+	case "settings.save":
+		if s.manager.draining() {
+			fail(w, 409, "管理端正在准备更新，请稍后保存设备设置")
+			return
+		}
 		var cfg mobile.Settings
 		if !decode(w, r, &cfg) {
 			return
@@ -91,15 +134,14 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 		if err := s.manager.mobile.Save(cfg); err != nil {
 			if err.Error() == "device_configuration_changed" {
 				fail(w, 409, "设备设置已被更新，请刷新后再保存")
-				return
+			} else {
+				fail(w, 400, "设备配置无效，请检查桥接命令、设备与动作范围")
 			}
-			fail(w, 400, "设备配置无效，请检查桥接命令、设备与动作范围")
 			return
 		}
 		s.manager.log("mobile_settings_saved")
 		respond(w, 200, s.manager.mobile.Settings())
-	}))
-	mux.HandleFunc("POST /api/mobile/tasks", s.protected(func(w http.ResponseWriter, r *http.Request) {
+	case "tasks.create":
 		if s.manager.draining() {
 			fail(w, 409, "管理端正在准备更新，请稍后开始新设备任务")
 			return
@@ -127,37 +169,24 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 		}
 		s.manager.record(bot.Record{Event: "mobile_task_started", Category: "tool", MessageID: t.ID, Content: in.Goal, Origin: "mobile", Status: t.State, Reason: "mobile_device_task"})
 		respond(w, 202, t)
-	}))
-	mux.HandleFunc("POST /api/mobile/tasks/{id}/cancel", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		var in struct{}
+	case "tasks.cancel":
+		var in struct {
+			ID string `json:"id"`
+		}
 		if !decode(w, r, &in) {
 			return
 		}
-		if err := s.manager.mobile.Cancel(r.PathValue("id"), mobile.Source{Admin: true}); err != nil {
+		if in.ID == "" {
+			in.ID = r.PathValue("id")
+		}
+		if err := s.manager.mobile.Cancel(in.ID, mobile.Source{Admin: true}); err != nil {
 			fail(w, 404, "任务不存在")
 			return
 		}
 		respond(w, 200, map[string]bool{"cancelled": true})
-	}))
-	mux.HandleFunc("GET /api/mobile/tasks/{id}/screenshot/{observation}", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		data, err := s.manager.mobile.Screenshot(r.PathValue("id"), r.PathValue("observation"))
-		if err != nil {
-			fail(w, 404, "观察画面不可用")
-			return
-		}
-		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write(data)
-	}))
-	mux.HandleFunc("GET /api/mobile/tasks/{id}/recording/{artifact}", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		_, data, err := s.manager.mobile.Artifact(r.PathValue("id"), r.PathValue("artifact"))
-		if err != nil {
-			fail(w, 404, "录屏不可用")
-			return
-		}
-		w.Header().Set("Content-Type", "video/mp4")
-		w.Header().Set("Cache-Control", "no-store")
-		_, _ = w.Write(data)
-	}))
+	default:
+		fail(w, 404, "插件操作不可用")
+	}
 }
 
 func (m *Manager) analyzeDeviceArtifact(ctx context.Context, t mobile.Task, a mobile.Artifact, data []byte) (summary string, assetID string, resultErr error) {

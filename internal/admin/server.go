@@ -216,8 +216,6 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			name = "agent.js"
 		case "/assets/agent-workspace.js":
 			name = "agent-workspace.js"
-		case "/assets/mobile.js":
-			name = "mobile.js"
 		case "/assets/plugin-packages.js":
 			name = "plugin-packages.js"
 		case "/assets/plugins.js":

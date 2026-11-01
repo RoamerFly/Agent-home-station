@@ -17,9 +17,9 @@
 | share-reader | `channels_settings.go`、`channels_understanding.go`、`share_*` | 迁移视频号对象桥接和旧配置；由受控素材交接给媒体插件；删除旧公开页/Channels解析分支。 |
 | speech | `speech.go`、`voice_synthesis.go`、`voice_agent.go`、`bailian` | 迁出云端与本地声线生成、声线训练和任务恢复；主体只保留素材校验与微信投递。 |
 | music | `music_*.go`、`yue.go`、`singing_policy.go` | 迁出 YuE/RVC、训练、GPU服务、恢复和输出校验；插件显式返回成品约束，禁止默认声线替代。 |
-| mobile-control | 惰性 `deviceService`、`mobile.go`、设备队列与路由 | 规划及五项设备门面已接隔离 MCP/受控原生代理；默认 legacy 执行工厂已删除，设置/任务改用宿主私有 SQLite 单一仓储。仍需迁出具体队列与录屏分析实现、声明式页面及外部旧账本映射，并完成生产预演；主体保留授权、来源、素材和投递相关结果。 |
+| mobile-control | 惰性 `deviceService`、`mobile.go`、设备队列与受控资源路由 | 规划及五项设备门面已接隔离 MCP/受控原生代理；默认 legacy 执行工厂及专用页面已删除，设置/任务使用宿主私有 SQLite。管理入口按声明合并到插件详情。仍需迁出具体队列/录屏分析、连接档案登记流程及外部旧账本映射，并完成生产预演；主体保留授权、来源、素材和投递相关结果。 |
 | project-development | `agent_workspace.go`、`agent_process.go`、`project_*.go` | 将项目登记、读写、命令执行迁到工作区权限插件；主体提供受限工作区和授权代理。 |
-| web-search | `mcp.go`、`service_web_compat.go`、旧 `mcptools` 调用 | 完成真实账号配置迁移，删除兼容搜索/网页读取分支，保留插件失败与撤权语义。 |
+| web-search | `mcp.go`、稳定工具别名、旧公共 `mcptools` 调用 | 旧付费提供商兼容模块已删除，Web 迁移实际应用已通过合成验证；未迁移付费搜索明确阻断。仍需完成真实账号迁移、公共搜索/网页读取与内容发现的旧实现迁出，保留插件失败与撤权语义。 |
 | visual-generation | 生成接口和对应 UI/任务路径 | 迁出图像/视频生成适配器、异步任务和结果素材校验；未有实现的能力不可标记可用。 |
 | external-tools | MCP、外部 HTTP/API 编辑器和调用路径 | 合并现有配置入口，迁出远程声明与调用，完成凭据、取消、结果验证和迁移。 |
 

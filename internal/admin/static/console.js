@@ -14,7 +14,7 @@
   const page=$(id),control=page.querySelector('.conversation-toolbar,.page-toolbar-card'),bar=control.classList.contains('page-toolbar-card')?control:document.createElement('div');
   if(bar!==control){bar.className='page-toolbar-card';page.insertBefore(bar,control);bar.append(control)}bar.append($(status));
  }
- for(const id of ['wechat','mcp','mobile','permissions','settings','catalog','tools','account-actions','surf'])$(id).classList.add('page-surface');
+ for(const id of ['wechat','mcp','permissions','settings','catalog','tools','account-actions','surf'])$(id).classList.add('page-surface');
  document.querySelector('.plugin-browser').append(document.querySelector('.plugin-guide'));
 
  // Group controls by the task being performed. Original nodes/handlers and
@@ -122,7 +122,7 @@
   if(section){const page=$(section);if(page)positions.set(section,page.scrollTop)}section=next;
   const page=$(next);if(page)page.scrollTop=positions.get(next)||0;
   document.body.dataset.page=next;
-  const active=next==='account-actions'?'wechat':next==='mcp'||next==='mobile'?'plugins':next==='tools'?'memory':next;
+  const active=next==='account-actions'?'wechat':next==='mcp'?'plugins':next==='tools'?'memory':next;
   for(const link of document.querySelectorAll('.context-nav .nav-link,.local-nav .nav-link')){const selected=link.dataset.section===(link.closest('.local-nav')?next:active);link.classList.toggle('active',selected);if(selected)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current')}
   if(next==='overview'){loadTasks();renderActivity(window.WechatActivity?.rounds()||[])}syncSelects();
  });

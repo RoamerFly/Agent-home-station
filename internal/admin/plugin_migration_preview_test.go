@@ -57,6 +57,9 @@ func TestPluginMigrationPreviewRedactsSecretsAndPreservesDeclaredDeepSeekBackend
 	if string(web.Values["search_backend"]) != `"deepseek"` || !web.Secrets["search_key"].Present || web.update.Secrets["search_key"] != "synthetic-private-key" {
 		t.Fatal("declared DeepSeek backend was not bound", web)
 	}
+	if string(web.Values["legacy_web_search_enabled"]) != "true" || string(web.Values["legacy_web_fetch_enabled"]) != "true" || string(web.update.Values["search_backend"]) != `"deepseek"` || len(web.update.Values) != 1 {
+		t.Fatal("legacy web switches escaped the preview-only audit boundary", web)
+	}
 	contract, err := catalog.ContractFor("web-search")
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +84,89 @@ func TestPluginMigrationPreviewRedactsSecretsAndPreservesDeclaredDeepSeekBackend
 		if step.ProposedEnabled || step.ApplySourceHash == "" {
 			t.Fatal("unsafe or incomplete step", id, step)
 		}
+	}
+}
+
+func TestWebMigrationAppliesOnlyDeclaredConfigurationAndCanEnable(t *testing.T) {
+	useOfficialMigrationCatalog(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name                        string
+		searchEnabled, fetchEnabled bool
+		deepSeek                    bool
+		backend                     string
+	}{
+		{name: "public fetch only", fetchEnabled: true, backend: "public"},
+		{name: "official deepseek search only", searchEnabled: true, deepSeek: true, backend: "deepseek"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setup(t)
+			f.manager.mu.Lock()
+			f.manager.mcp = mcpSettings{Enabled: true, WebSearchEnabled: tc.searchEnabled, WebFetchEnabled: tc.fetchEnabled, MaxToolCalls: 3}
+			if tc.deepSeek {
+				f.manager.config.Provider = "deepseek"
+				f.manager.config.BaseURL = "https://api.deepseek.com"
+				f.manager.config.APIKey = "synthetic-search-key"
+			}
+			f.manager.mu.Unlock()
+
+			preview, err := f.manager.pluginMigrationPreview(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			step := previewStep(t, preview, "web-search")
+			if step.Status != "ready_for_administrator_review" || !step.EligibleToEnable || string(step.Values["legacy_web_search_enabled"]) != strconv.FormatBool(tc.searchEnabled) || string(step.Values["legacy_web_fetch_enabled"]) != strconv.FormatBool(tc.fetchEnabled) || string(step.Values["search_backend"]) != strconv.Quote(tc.backend) {
+				t.Fatalf("unexpected web preview: %#v", step)
+			}
+			if len(step.update.Values) != 1 || string(step.update.Values["search_backend"]) != strconv.Quote(tc.backend) {
+				t.Fatalf("non-schema legacy fields entered apply configuration: %#v", step.update.Values)
+			}
+			if tc.deepSeek != (step.update.Secrets["search_key"] == "synthetic-search-key") {
+				t.Fatalf("unexpected key mapping: %#v", step.update.Secrets)
+			}
+
+			installed, config, record, err := f.manager.applyPluginMigration(ctx, "test", "web-search", step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions)
+			if err != nil || installed.Enabled || record.State != "complete" || len(config.Values) != 1 || string(config.Values["search_backend"]) != strconv.Quote(tc.backend) {
+				t.Fatalf("actual web migration failed: installed=%+v config=%+v record=%+v err=%v", installed, config, record, err)
+			}
+			store, err := f.manager.packageStore()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A replay before enable is an idempotent migration resume, not a
+			// second install or a changed configuration.
+			again, againConfig, againRecord, err := f.manager.applyPluginMigration(ctx, "test", "web-search", step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions)
+			if err != nil || again.Revision != installed.Revision || againConfig.Revision != config.Revision || againRecord.ID != record.ID {
+				t.Fatalf("identical migration did not resume: %+v %+v %+v %v", again, againConfig, againRecord, err)
+			}
+			if _, err = store.SetEnabled(ctx, "web-search", installed.Revision, true); err != nil {
+				t.Fatalf("valid migrated web configuration could not enable: %v", err)
+			}
+			execution, err := store.ConfigurationForExecution(ctx, "web-search")
+			if err != nil || string(execution.Values["search_backend"]) != strconv.Quote(tc.backend) || tc.deepSeek != (string(execution.Values["search_key"]) == `"synthetic-search-key"`) {
+				t.Fatalf("execution configuration mismatch: %#v %v", execution, err)
+			}
+		})
+	}
+}
+
+func TestWebMigrationRejectsChangedLegacySource(t *testing.T) {
+	useOfficialMigrationCatalog(t)
+	ctx := context.Background()
+	f := setup(t)
+	f.manager.mu.Lock()
+	f.manager.mcp = mcpSettings{Enabled: true, WebSearchEnabled: true, WebFetchEnabled: false, MaxToolCalls: 3}
+	f.manager.mu.Unlock()
+	preview, err := f.manager.pluginMigrationPreview(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := previewStep(t, preview, "web-search")
+	if err = writePrivate(filepath.Join(f.dir, "mcp-config.json"), []byte(`{"enabled":true,"web_search_enabled":false,"web_fetch_enabled":true,"max_tool_calls":3,"servers":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err = f.manager.applyPluginMigration(ctx, "test", "web-search", step.ApplySourceHash, step.Package.ExpectedDigest, step.Permissions); err == nil {
+		t.Fatal("migration accepted a plan after its mcp source hash changed")
 	}
 }
 
