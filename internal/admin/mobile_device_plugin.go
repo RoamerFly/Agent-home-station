@@ -92,6 +92,9 @@ func (m *Manager) mobileDeviceReady(ctx context.Context) error {
 		return err
 	}
 	if err = devicebroker.InspectIOOptions(ctx, options); err != nil {
+		if errors.Is(err, devicebroker.ErrNeedsMigration) {
+			return errors.New("device_plugin_broker_migration_required")
+		}
 		return errors.New("device_plugin_broker_unavailable")
 	}
 	return nil

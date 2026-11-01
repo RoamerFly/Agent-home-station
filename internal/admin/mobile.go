@@ -15,8 +15,8 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
-	"wechat-bot/internal/mcptools"
 	mobile "wechat-bot/internal/devicespec"
+	"wechat-bot/internal/mcptools"
 )
 
 func (m *Manager) mobileSourceAllowed(s mobile.Source) bool {
@@ -39,6 +39,10 @@ func mobileAvailabilityMessage(err error) string {
 		return "尚未登记设备连接工具，请完成手机插件的运行环境设置。已有任务仍可查看或取消。"
 	case "device_plugin_deployment_unavailable":
 		return "手机插件运行环境不可用，请检查本机安装。已有任务仍可查看或取消。"
+	case "device_plugin_broker_migration_required":
+		return "已登记的设备连接配置需要迁移到当前运行环境；请核对工具路径和账号存储目录，已有设备授权与任务保留。"
+	case "device_plugin_broker_unavailable":
+		return "设备连接代理暂时不可用，请检查本机运行环境；已有任务仍可查看或取消，不会重复提交未确认的设备操作。"
 	default:
 		return "开始新任务前，请在插件中心授权并启用手机插件的规划与设备代理；已有任务仍可查看或取消。"
 	}
