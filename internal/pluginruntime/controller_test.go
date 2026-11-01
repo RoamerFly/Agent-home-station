@@ -78,6 +78,75 @@ func TestControllerFailedStartupReleasesReservationAndRejectsStaleState(t *testi
 	}
 }
 
+func TestControllerStartAcceptsHostJSONCloneOfOptionalManifestCollections(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	readyFixture(t, source)
+	manifestPath := filepath.Join(source, "plugin.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err = json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	delete(manifest, "dependencies")
+	raw, err = json.Marshal(manifest)
+	if err != nil || os.WriteFile(manifestPath, raw, 0600) != nil {
+		t.Fatal("cannot omit optional dependencies from fixture")
+	}
+	store, err := pluginhost.OpenStore(t.TempDir(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	prepared, err := store.Prepare(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := store.Install(ctx, prepared.Token, prepared.Digest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Package.Dependencies != nil {
+		t.Fatal("fixture must omit optional dependencies")
+	}
+	resolver := InstalledExecutor(store, Options{})
+	started := false
+	controller, err := NewController(store, startFunc(func(ctx context.Context, p pluginhost.Package, g pluginhost.Grant) (pluginhost.Session, error) {
+		// Controller.Start reaches this through Host.Register, whose defensive
+		// JSON clone represents omitted optional collections as empty ones.
+		if p.Dependencies == nil {
+			t.Fatal("host registration did not exercise JSON clone")
+		}
+		if _, err := resolver.Resolve(ctx, p, g); err != nil {
+			return nil, err
+		}
+		started = true
+		return &invocationSession{call: func(pluginhost.Invocation, string, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		}}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	if err = controller.Start(ctx, installed.Package.ID, installed.Revision); err != nil {
+		t.Fatalf("equivalent host registration was rejected: %v", err)
+	}
+	if !started || controller.Status(installed.Package.ID).State != "running" {
+		t.Fatal("controller did not start cloned package")
+	}
+	current, err := store.Installed(ctx, installed.Package.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = controller.Stop(ctx, current.Package.ID, current.Revision); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLiveInstalledControllerConfigurationAndRestart(t *testing.T) {
 	python := os.Getenv("WECHAT_PLUGIN_TEST_PYTHON")
 	if python == "" {

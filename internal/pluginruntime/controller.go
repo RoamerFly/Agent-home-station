@@ -35,7 +35,12 @@ func InstalledExecutor(store *pluginhost.Store, options Options) *Executor {
 		if err != nil {
 			return LaunchSpec{}, err
 		}
-		if !i.Enabled || i.Removed || store.Account() != g.Account || !reflect.DeepEqual(i.Package, p) || !reflect.DeepEqual(i.Permissions, g.Permissions) {
+		// Host.Register serializes its registration defensively. Optional manifest
+		// collections can therefore round-trip from nil to empty without any
+		// package, grant, or authorization change. Compare the canonical package
+		// representation used by verification rather than rejecting that harmless
+		// representation change.
+		if !i.Enabled || i.Removed || store.Account() != g.Account || !sameVerifiedPackage(i.Package, p) || !reflect.DeepEqual(i.Permissions, g.Permissions) {
 			return LaunchSpec{}, errors.New("installed plugin authorization changed")
 		}
 		code, err := store.PackageDirectory(i.Digest)
