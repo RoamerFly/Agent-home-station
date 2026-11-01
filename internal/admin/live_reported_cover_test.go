@@ -3,12 +3,11 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-	"wechat-bot/internal/bailian"
-	"wechat-bot/internal/companion"
 )
 
 // Read only the explicitly selected cached audio; no production task ledger is
@@ -40,27 +39,15 @@ func TestLiveReportedReferenceLyricsWithoutWeChatSend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := setup(t)
-	f.manager.config.Companion.Permissions.Remember = true
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	cfg, err := loadSpeech(filepath.Join(root, "admin"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "isolated-reference-inspection"}
-	asset, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: data, MIME: original.MIME, Filename: original.Filename, URL: original.URL}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, _, _ := f.manager.toolAccess()
-	p.SetTrace(in)
+	asr := prepareLiveASRPlugin(t, cfg)
 	if os.Getenv("WECHAT_REFERENCE_ASR_FULL") == "1" {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		wav, err := normalizeSpeech(ctx, f.dir, data)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text, err := bailian.New(f.manager.speech).Transcribe(ctx, wav)
+		text, err := asr.transcribe(ctx, data, "reported-reference-full:"+id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,18 +59,21 @@ func TestLiveReportedReferenceLyricsWithoutWeChatSend(t *testing.T) {
 	}
 	report := []map[string]any{}
 	for _, offset := range []int{0, 60} {
-		args, _ := json.Marshal(map[string]any{"asset_id": asset.ID, "transcribe": true, "offset_seconds": offset, "seconds": 60})
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		result, err := p.inspectMusicReference(ctx, args)
+		wav, err := musicTranscriptionWindow(ctx, asr.f.dir, data, offset, 60)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		text, err := asr.transcribe(ctx, wav, fmt.Sprintf("reported-reference:%s:%d:60", id, offset))
 		cancel()
 		if err != nil {
 			t.Fatal(err)
 		}
-		var body map[string]any
-		if json.Unmarshal([]byte(result), &body) != nil || body["transcript"] == "" {
+		if text == "" {
 			t.Fatal("no transcript")
 		}
-		report = append(report, body)
+		report = append(report, map[string]any{"asset_id": id, "source_url": original.URL, "cached_mime": original.MIME, "transcript": text, "offset_seconds": offset, "window_seconds": 60, "transcript_warning": "ASR candidate for this selected interval; not independently lyric-verified"})
 	}
 	if workspace != "" {
 		b, _ := json.MarshalIndent(map[string]any{"reference_asset_id": id, "source_url": original.URL, "observations": report, "wechat_sends": 0}, "", "  ")
@@ -117,6 +107,7 @@ func TestLiveDiagnosticCoverOutputRecognition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	asr := prepareLiveASRPlugin(t, f.manager.speech)
 	p, _, _ := f.manager.toolAccess()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -132,11 +123,7 @@ func TestLiveDiagnosticCoverOutputRecognition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wav, err := normalizeSpeech(ctx, f.dir, audio)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text, err := bailian.New(f.manager.speech).Transcribe(ctx, wav)
+	text, err := asr.transcribe(ctx, audio, "diagnostic-cover-output:"+report.JobID)
 	if err != nil {
 		t.Fatal(err)
 	}

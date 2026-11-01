@@ -74,6 +74,7 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertTrue(all(step["proposed_enabled"] is False for account in report["accounts"] for step in account["plugins"]))
             media = next(x for x in main["plugins"] if x["plugin"] == "media-understanding")
             self.assertIn("registered_local_asr_profile:sensevoice-test", media["required_missing"])
+            self.assertEqual(media["values"]["local_asr_profile_id"], "sensevoice-test")
             speech = next(x for x in main["plugins"] if x["plugin"] == "speech")
             self.assertEqual(speech["values"]["tts_endpoint"], "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer")
             web = next(x for x in main["plugins"] if x["plugin"] == "web-search")
@@ -82,6 +83,76 @@ class PluginMigrationPreviewTests(unittest.TestCase):
             self.assertEqual(handoff["accounts"][0]["secrets"]["speech.tts_key"], secret)
             self.assertEqual(handoff["accounts"][0]["secrets"]["music.music_key"], secret)
             self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
+    def test_local_asr_default_and_custom_profile_are_config_values_but_still_blocked(self):
+        for legacy, wanted in (("", "sensevoice-small-int8"), ("sensevoice-explicit", "sensevoice-explicit")):
+            with self.subTest(profile=legacy), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                repo = self.make_repo(base)
+                root, secret = self.make_root(base)
+                path = root / "speech-config.json"
+                speech = json.loads(path.read_text(encoding="utf8"))
+                speech["asr_local_model"] = legacy
+                path.write_text(json.dumps(speech), encoding="utf8")
+                before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+                report, handoff = preview.build_preview(root, repo, "main")
+                media = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "media-understanding")
+                self.assertEqual(media["values"]["asr_backend"], "local")
+                self.assertEqual(media["values"]["local_asr_profile_id"], wanted)
+                self.assertEqual(media["profile_id"], wanted)
+                self.assertIn("registered_local_asr_profile:" + wanted, media["required_missing"])
+                self.assertEqual(media["status"], "blocked")
+                self.assertFalse(media["proposed_enabled"])
+                self.assertFalse(media["eligible_to_enable_after_confirmation"])
+                self.assertNotIn("asr_key", media["values"])
+                self.assertNotIn("media-understanding.asr_key", handoff["accounts"][0]["secrets"])
+                self.assertNotIn(secret, json.dumps(report, ensure_ascii=False))
+                self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()})
+                self.assertEqual(json.loads(path.read_text(encoding="utf8"))["asr_local_model"], legacy)
+
+    def test_non_local_asr_does_not_select_profile_or_silently_convert_fallback(self):
+        for backend, enabled in (("bailian", True), ("local_then_bailian", True), ("local", False)):
+            with self.subTest(backend=backend, enabled=enabled), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                repo = self.make_repo(base)
+                root, secret = self.make_root(base)
+                path = root / "speech-config.json"
+                speech = json.loads(path.read_text(encoding="utf8"))
+                speech.update({"asr_backend": backend, "asr_enabled": enabled, "asr_local_model": "sensevoice-unused"})
+                path.write_text(json.dumps(speech), encoding="utf8")
+                original = path.read_bytes()
+                report, handoff = preview.build_preview(root, repo, "main")
+                media = next(step for step in report["accounts"][0]["plugins"] if step["plugin"] == "media-understanding")
+                self.assertNotIn("local_asr_profile_id", media["values"])
+                self.assertNotIn("profile_id", media)
+                if backend == "local_then_bailian":
+                    self.assertEqual(media["status"], "blocked")
+                    self.assertIn("asr_backend:legacy_local_then_bailian_requires_explicit_choice", media["required_missing"])
+                    self.assertNotIn("asr_backend", media["values"])
+                    self.assertNotIn("media-understanding.asr_key", handoff["accounts"][0]["secrets"])
+                elif backend == "bailian":
+                    self.assertEqual(media["values"]["asr_backend"], "remote")
+                    self.assertEqual(handoff["accounts"][0]["secrets"]["media-understanding.asr_key"], secret)
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_local_profile_source_change_updates_new_plan_without_mutating_old_plan(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repo = self.make_repo(base)
+            root, _ = self.make_root(base)
+            first, _ = preview.build_preview(root, repo, "main")
+            before = next(step for step in first["accounts"][0]["plugins"] if step["plugin"] == "media-understanding")
+            path = root / "speech-config.json"
+            speech = json.loads(path.read_text(encoding="utf8"))
+            speech["asr_local_model"] = "sensevoice-reselected"
+            path.write_text(json.dumps(speech), encoding="utf8")
+            original = path.read_bytes()
+            second, _ = preview.build_preview(root, repo, "main")
+            after = next(step for step in second["accounts"][0]["plugins"] if step["plugin"] == "media-understanding")
+            self.assertEqual(before["values"]["local_asr_profile_id"], "sensevoice-test")
+            self.assertEqual(after["values"]["local_asr_profile_id"], "sensevoice-reselected")
+            self.assertNotEqual(before, after)
+            self.assertEqual(path.read_bytes(), original)
 
     def test_music_step_maps_endpoint_model_and_only_private_secret_handoff(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -51,7 +51,15 @@ Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所
   当前包仅就绪云端 `music.generate`，权限为 `model.invoke`；命名歌声、RVC profile、YuE、模型和
   生成媒体均不迁入。提供商受理不代表音频已验证或微信已发送。
 - `media-understanding`：映射旧聊天模型为视觉路由，并按旧 ASR 后端生成远程 ASR 或本地 profile
-  需求。`local_then_bailian` 不会被悄悄降级：计划将其标为需要管理员选择。
+  需求。已启用的 `local` 后端将旧 `asr_local_model` 写入插件普通配置
+  `values.local_asr_profile_id`；旧值为空时，计划使用 `sensevoice-small-int8`，同时保留审计字段
+  `profile_id`。管理端 Go 预演只读核验官方插件包、当前账号的公开资源登记及其受约束路径、SDK/VAD
+  校验记录；成功后把登记的 `ResourceVersion` 放进 `source_hashes.local_asr_profile_resource_version`，
+  并纳入 `apply_source_hash`。缺失或无效时保留 `registered_local_asr_profile:<ID>` 前置条件并阻塞应用。
+  应用器会重新计算该资源证明；登记版本更新或已绑定资源校验失败都会使旧批准失效。预演不打开插件
+  Store、不启用插件、不启动解释器，也不给旧配置回写默认值。
+  远程后端不写入 `local_asr_profile_id`。`local_then_bailian` 仍标为
+  `asr_backend:legacy_local_then_bailian_requires_explicit_choice`，不会静默改成本地后端或自动填入 profile。
 - `web-search`：保留 MCP 开关。当前插件没有官方 DeepSeek 付费检索配置时，带官方 DeepSeek key
   的旧账号会被标为 `blocked`，不会被静默替换为公共搜索。
 - `share-reader`：映射视频号 cookie 与助手 cookie 的存在性和私密导入项。仅当已审核的插件
@@ -62,7 +70,12 @@ Python 离线报告和管理端 Go 预演均包含独立的 `music` 步骤；所
   只读、按账号/会话/消息（或受限对象别名）查询；本轮不复制它、不将其交给插件，也不创建新的绑定。
 
 `required_missing`、`unmapped_legacy_fields` 和插件未 ready 状态必须在真正迁移前解决。对本地
-ASR，预演只记录所需 profile ID，不能假装已经验证模型、解释器或资源注册。
+ASR，管理端验证的是既有登记契约和可核验的资源完整性，不代表已实际执行模型或验证识别质量。通过
+预演的迁移仍保持禁用，管理员另行启用后，运行时继续检查所选 profile 和登记版本。
+
+Python 独立预演没有 Manager 的账号资源策略，**不会验证本地登记是否可用**。它只把所需 profile ID
+带入待应用配置与审计信息，并始终保留 `registered_local_asr_profile:<ID>` 待宿主验证状态；即使本地有
+同名文件，也不会将其标为已验证。需要在管理端重新预演并核验资源证明后，才能批准本地 ASR 迁移。
 
 离线回归：
 

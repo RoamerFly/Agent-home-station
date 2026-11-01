@@ -528,7 +528,7 @@
 <div class="section-heading">
 <h3>生成能力</h3>
 </div>
-<div class="field-grid">
+<div class="field-grid speech-capability-grid">
 <div>
 <strong>说话声线</strong>
 <p class="hint" id="speech-plugin-state">由语音生成插件管理声线、模型和表达方式。</p>
@@ -539,6 +539,11 @@
 <p class="hint" id="music-plugin-state">音乐插件管理已接入的云端原创歌曲；本地 YuE、换声与训练仍保留在当前环境。</p>
 <button class="secondary" data-speech-plugin="music" type="button">打开音乐与换声插件</button>
 </div>
+<div>
+<strong>媒体理解与识别</strong>
+<p class="hint" id="media-plugin-state">由媒体理解插件管理语音、视频音轨与图片识别。</p>
+<button class="secondary" data-speech-plugin="media-understanding" type="button">打开媒体理解插件</button>
+</div>
 </div>
 <div class="inline-actions">
 <button class="secondary" id="speech-test" type="button">测试默认语音插件（不发微信）</button>
@@ -546,39 +551,10 @@
 </div>
 <p class="hint">插件未安装时会打开已有设置的迁移预览；不会自动安装、授权或启动。测试只验证默认语音插件，不会发送微信。</p>
 <div class="section-heading">
-<h3>识别与本地歌曲服务</h3>
+<h3>本地歌曲服务</h3>
 <button class="primary" id="speech-save" type="button">保存剩余配置</button>
 </div>
 <div class="field-grid">
-<div>
-<label for="speech-endpoint">百炼地域地址</label>
-<input id="speech-endpoint" type="url">
-</div>
-<div>
-<label for="speech-key">百炼 API Key</label>
-<input autocomplete="new-password" id="speech-key" placeholder="留空保留已配置密钥" type="password">
-</div>
-<div>
-<label class="switch-row">
-<span>语音与视频音轨识别</span>
-<input id="speech-asr-enabled" type="checkbox">
-<span aria-hidden="true" class="switch"></span>
-</label>
-<label for="speech-asr-backend">识别方式</label>
-<select id="speech-asr-backend" aria-describedby="speech-asr-hint">
-<option value="bailian">百炼云端</option>
-<option value="local">本地 SenseVoice（离线）</option>
-<option value="local_then_bailian">本地优先，执行失败后用百炼</option>
-</select>
-<p class="hint" id="speech-asr-hint">语音、视频音轨和歌词转写共用此设置。本地模式不上传音频；纯音乐没有可识别的词时，不会自动调用云端。</p>
-</div>
-<div>
-<label for="speech-asr-local-model">本地模型名称</label>
-<input id="speech-asr-local-model" placeholder="sensevoice-small-int8" aria-describedby="speech-asr-health-state">
-<p class="hint" id="speech-asr-health-state" role="status"></p>
-<label for="speech-asr-model">百炼识别模型（云端模式使用）</label>
-<input id="speech-asr-model">
-</div>
 <div>
 <label class="switch-row">
 <span>本地 YuE 生成歌曲</span>
@@ -598,7 +574,7 @@
 <button class="secondary" id="speech-music-service-start" type="button" aria-describedby="speech-yue-health-state" hidden>启动本机音乐服务</button>
 <span class="hint" id="speech-yue-health-state" role="status"></span>
 </div>
-<p class="hint">识别设置用于语音、视频音轨和歌词转写。本地 YuE 提供本机歌曲服务状态；换声与训练仍按当前声线库和本机服务使用。</p>
+<p class="hint">语音、视频音轨和图片识别请在媒体理解插件中配置。本地 YuE 只维护本机歌曲服务状态；换声与训练仍按当前声线库和本机服务使用。</p>
 <p class="hint" id="speech-state" role="status"></p>
 </details>
 </section>

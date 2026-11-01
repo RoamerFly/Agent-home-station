@@ -236,6 +236,39 @@ func officialDeepSeekMigration(c Config) bool {
 	return c.Provider == "deepseek" && c.APIKey != "" && (base == "https://api.deepseek.com" || base == "https://api.deepseek.com/v1")
 }
 
+// Resolve only the existing public registration under the trusted official
+// package/grant contract. A migration preview must not open the package Store,
+// change enablement, provision resources or start an interpreter.
+func (m *Manager) migrationLocalASRResourceVersion(ctx context.Context, id string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	directory, err := officialMigrationDirectory(localASRPluginID)
+	if err != nil {
+		return "", err
+	}
+	pkg, err := pluginhost.Verify(directory)
+	if err != nil || pkg.ID != localASRPluginID {
+		return "", errors.New("local_asr_migration_package_unavailable")
+	}
+	grant := pluginhost.Grant{Account: m.native.Account(), Plugin: pkg.ID, Version: pkg.Version, Permissions: append([]string(nil), pkg.Permissions...)}
+	invocation := pluginhost.Invocation{Account: grant.Account, Thread: "host:plugin-migration-preview", Requester: "administrator", Purpose: "inspect registered local ASR migration resources", RequestKey: "local-asr-migration-preview"}
+	if err := pluginhost.Authorize(pkg, grant, invocation, pkg.Permissions); err != nil {
+		return "", err
+	}
+	profile, err := m.readRegisteredLocalASRProfile(pkg, grant, id)
+	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if profile.initializer.ProfileID != id || profile.initializer.ResourceVersion == "" {
+		return "", errors.New("local_asr_migration_resource_unavailable")
+	}
+	return profile.initializer.ResourceVersion, nil
+}
+
 func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[string]pluginMigrationPackage) (pluginMigrationAccount, error) {
 	if err := ctx.Err(); err != nil {
 		return pluginMigrationAccount{}, err
@@ -291,7 +324,16 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 			if profile == "" {
 				profile = "sensevoice-small-int8"
 			}
-			mediaRequired = append(mediaRequired, "registered_local_asr_profile:"+profile)
+			mediaValues["local_asr_profile_id"] = migrationValue(profile)
+			resourceVersion, resourceErr := m.migrationLocalASRResourceVersion(ctx, profile)
+			if err := ctx.Err(); err != nil {
+				return pluginMigrationAccount{}, err
+			}
+			if resourceErr != nil {
+				mediaRequired = append(mediaRequired, "registered_local_asr_profile:"+profile)
+			} else {
+				sources["local_asr_profile_resource_version"] = resourceVersion
+			}
 		case "bailian":
 			mediaValues["asr_backend"] = migrationValue("remote")
 			mediaValues["asr_endpoint"] = migrationValue(migrationEndpoint(speech.Endpoint, "/api/v1/services/aigc/multimodal-generation/generation"))

@@ -5,14 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
@@ -56,28 +53,20 @@ func TestExplicitFramePageAndBatchExceedOldDefaults(t *testing.T) {
 	}
 }
 
-func TestExplicitAudioRangeAndChunkAreNotClampedTo180Seconds(t *testing.T) {
+func TestPluginAudioExtractionRangeIsNotClampedTo180Seconds(t *testing.T) {
 	data := observationFixture(t, "240")
-	f, p := trustedAgent(t)
-	defer p.hub.Close()
+	f := setup(t)
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	a := mediaUnderstanding{manager: f.manager}
+	text, seconds, err := a.videoAudioRangeTimedWith(context.Background(), data, 0, 240, 60, func(_ context.Context, wav []byte) (string, error) {
 		calls++
-		json.NewEncoder(w).Encode(map[string]any{"output": map[string]string{"text": "synthetic transcription"}})
-	}))
-	defer server.Close()
-	f.manager.speech = bailian.Defaults()
-	f.manager.speech.ASREnabled = true
-	f.manager.speech.Endpoint, f.manager.speech.Key = server.URL, "synthetic-test-key"
-	out := map[string]any{}
-	e := p.inspectAudioRange(context.Background(), data, videoInspectionInput{AudioLength: 240, AudioChunk: 200}, 240, 300, out)
-	if e != nil || calls != 2 || out["end_seconds"].(float64) < 239.9 || !out["requested_range_complete"].(bool) || out["video_audio_complete"].(bool) || out["effective_audio_chunk_seconds"] != float64(200) {
-		t.Fatal("audio request was shortened", calls, out, e)
-	}
-	out = map[string]any{}
-	e = p.inspectAudioRange(context.Background(), data, videoInspectionInput{AudioLength: 240, AudioChunk: 600}, 240, 300, out)
-	if e != nil || out["end_seconds"].(float64) < 239.9 || out["audio_chunk_adjustment_reason"] == nil {
-		t.Fatal("transport split lost requested range or explanation", out, e)
+		if len(wav) < 44 || string(wav[:4]) != "RIFF" {
+			t.Fatal("plugin would receive invalid extracted WAV")
+		}
+		return "synthetic transcription", nil
+	})
+	if err != nil || calls != 1 || text != "synthetic transcription" || seconds < 239.9 || seconds > 240.1 {
+		t.Fatal("plugin extraction range was shortened", calls, text, seconds, err)
 	}
 }
 

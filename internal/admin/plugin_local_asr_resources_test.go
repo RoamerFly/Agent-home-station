@@ -13,8 +13,9 @@ import (
 )
 
 func TestLocalASRPluginRegistrationUsesBoundResourceRootsAndMetadata(t *testing.T) {
-	f := setup(t)
+	f, _, policy, ctx := mediaPolicyFixture(t, false)
 	p, g, expected := writeRegisteredLocalASRProfile(t, f.manager)
+	p, g = configureLocalASRProfileForTest(t, policy.store, ctx, expected.Initializer.ProfileID)
 	resources, err := f.manager.localASRPluginResources(context.Background(), p, g)
 	if err != nil || len(resources) != 4 {
 		t.Fatal("registered local ASR resources unavailable", err, resources)
@@ -51,8 +52,9 @@ func TestLocalASRPluginRegistrationUsesBoundResourceRootsAndMetadata(t *testing.
 }
 
 func TestLocalASRPluginRegistrationFailsClosedOnTamperedContracts(t *testing.T) {
-	f := setup(t)
+	f, _, policy, ctx := mediaPolicyFixture(t, false)
 	p, g, expected := writeRegisteredLocalASRProfile(t, f.manager)
+	p, g = configureLocalASRProfileForTest(t, policy.store, ctx, expected.Initializer.ProfileID)
 	if err := os.WriteFile(expected.VAD, []byte("tampered"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +89,101 @@ func TestLocalASRPluginRegistrationFailsClosedOnTamperedContracts(t *testing.T) 
 	if resources, err := f.manager.localASRPluginResources(context.Background(), p, g); err != nil || len(resources) != 0 {
 		t.Fatal("external model was registered", err, resources)
 	}
+}
+
+func TestLocalASRProfileSelectionComesOnlyFromMediaConfiguration(t *testing.T) {
+	f, _, policy, ctx := mediaPolicyFixture(t, false)
+	p, g, expected := writeRegisteredLocalASRProfile(t, f.manager)
+	p, g = configureLocalASRProfileForTest(t, policy.store, ctx, expected.Initializer.ProfileID)
+
+	// A stale legacy speech setting cannot select, replace, or disable the
+	// media plugin's explicitly selected profile.
+	f.manager.speech.ASRLocalModel = "not-a-media-profile"
+	metadata, err := f.manager.localASRPluginMetadata(ctx, p, g)
+	if err != nil || metadata["local_asr"] == nil {
+		t.Fatal("legacy speech setting changed the selected media profile", err, metadata)
+	}
+
+	installed, err := policy.store.Installed(ctx, localASRPluginID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err = policy.store.SetEnabled(ctx, localASRPluginID, installed.Revision, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := policy.store.Configuration(ctx, localASRPluginID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[string]json.RawMessage, len(configuration.Values))
+	for key, value := range configuration.Values {
+		values[key] = append(json.RawMessage(nil), value...)
+	}
+	delete(values, "local_asr_profile_id")
+	if _, err = policy.store.SaveConfiguration(ctx, localASRPluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values}); err != nil {
+		t.Fatal(err)
+	}
+	installed, err = policy.store.Installed(ctx, localASRPluginID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = policy.store.SetEnabled(ctx, localASRPluginID, installed.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	if resources, err := f.manager.localASRPluginResources(ctx, p, g); err != nil || len(resources) != 0 {
+		t.Fatal("missing media profile selection fell back to a legacy/default profile", err, resources)
+	}
+}
+
+// configureLocalASRProfileForTest follows the same enabled/configured path as
+// production. A legacy speech setting never makes a local profile visible.
+func configureLocalASRProfileForTest(t *testing.T, store *pluginhost.Store, ctx context.Context, id string) (pluginhost.Package, pluginhost.Grant) {
+	t.Helper()
+	installed, err := store.Installed(ctx, localASRPluginID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Enabled {
+		installed, err = store.SetEnabled(ctx, localASRPluginID, installed.Revision, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	configuration, err := store.Configuration(ctx, localASRPluginID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[string]json.RawMessage, len(configuration.Values)+2)
+	for key, value := range configuration.Values {
+		values[key] = append(json.RawMessage(nil), value...)
+	}
+	values["asr_backend"] = json.RawMessage(`"local"`)
+	values["local_asr_profile_id"] = mustJSONRaw(t, id)
+	if _, err = store.SaveConfiguration(ctx, localASRPluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values, ClearSecrets: []string{"asr_key"}}); err != nil {
+		t.Fatal(err)
+	}
+	installed, err = store.Installed(ctx, localASRPluginID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err = store.SetEnabled(ctx, localASRPluginID, installed.Revision, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ConfigurationForExecution(ctx, localASRPluginID); err != nil {
+		t.Fatalf("configured local ASR profile was not executable: %v", err)
+	}
+	return installed.Package, pluginhost.Grant{Account: store.Account(), Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
+}
+
+func mustJSONRaw(t *testing.T, value string) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 type localASRTestProfile struct {
@@ -132,6 +229,6 @@ func writeRegisteredLocalASRProfile(t *testing.T, manager *Manager) (pluginhost.
 	manifestSum := sha256.Sum256(manifestRaw)
 	p := pluginhost.Package{ID: localASRPluginID, Version: "0.1.1"}
 	g := pluginhost.Grant{Account: "test", Plugin: p.ID, Version: p.Version}
-	profile := localASRTestProfile{Public: public, Manifest: manifestPath, VAD: vad, SDKFile: sdkFile, ResourceVersion: hex.EncodeToString(manifestSum[:]), Initializer: localASRInitializer{ProfileID: manifest.ID, ResourceVersion: hex.EncodeToString(manifestSum[:])}}
+	profile := localASRTestProfile{Public: public, Manifest: manifestPath, VAD: vad, SDKFile: sdkFile, ResourceVersion: hex.EncodeToString(manifestSum[:]), Initializer: localASRInitializer{ProfileID: "sensevoice-small-int8", ResourceVersion: hex.EncodeToString(manifestSum[:])}}
 	return p, g, profile
 }

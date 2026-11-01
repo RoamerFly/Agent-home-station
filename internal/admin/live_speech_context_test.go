@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
@@ -149,6 +148,8 @@ func TestLiveBailianSpeechRoundTrip(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	// Complete ASR isolation preflight before the billable TTS round trip.
+	asr := prepareLiveASRPlugin(t, c)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	u, e := livePluginSynthesize(t, ctx, c, "你好呀，蓝色大肥鱼今天很开心。", "")
@@ -159,11 +160,7 @@ func TestLiveBailianSpeechRoundTrip(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	wav, e := normalizeSpeech(ctx, t.TempDir(), audio)
-	if e != nil {
-		t.Fatal(e)
-	}
-	text, e := bailian.New(c).Transcribe(ctx, wav)
+	text, e := asr.transcribe(ctx, audio, "speech-roundtrip-audio")
 	report := map[string]any{"tts_model": c.TTSModel, "asr_model": c.ASRModel, "tts_bytes": len(audio), "asr_text": text, "wechat_sends": 0}
 	b, _ := json.MarshalIndent(report, "", "  ")
 	os.WriteFile(filepath.Join(workspace, "research/evidence/bailian-go-roundtrip.json"), b, 0600)

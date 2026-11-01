@@ -37,22 +37,30 @@ type mediaTranscription struct {
 // mediaTranscriptionPolicy is deliberately separate from the visual policy:
 // the provider protocol is non-chat and audio may never be substituted for an image.
 type mediaTranscriptionPolicy struct {
+	// receivedSharePolicy remains only for the native incoming-media origin.
+	// Administrator and asset origins deliberately do not manufacture a
+	// linuxnative.Message; they supply their own immutable invocation/checker.
 	*receivedSharePolicy
-	mu             sync.Mutex
-	wav            []byte
-	ref            mediaAudioReference
-	model, backend string
-	localProfileID string
-	localVersion   string
-	localTimeout   int
-	localState     string
-	localText      string
-	configRevision int
-	requested      bool
-	providerReply  json.RawMessage
-	post           pluginruntime.RouteTransport
-	runLocal       func(context.Context, pluginhost.Package, pluginhost.Grant, localASRProfile, []byte, int) (string, string, error)
-	arguments      json.RawMessage
+	manager         *Manager
+	store           *pluginhost.Store
+	invocationValue pluginhost.Invocation
+	originCheck     func(context.Context, pluginhost.Job, pluginhost.Capability) error
+	mu              sync.Mutex
+	wav             []byte
+	ref             mediaAudioReference
+	model, backend  string
+	localProfileID  string
+	localVersion    string
+	localTimeout    int
+	localState      string
+	localText       string
+	configRevision  int
+	requested       bool
+	providerReply   json.RawMessage
+	post            pluginruntime.RouteTransport
+	runLocal        func(context.Context, pluginhost.Package, pluginhost.Grant, localASRProfile, []byte, int) (string, string, error)
+	arguments       json.RawMessage
+	completedJob    pluginhost.Job
 }
 
 func (m *Manager) mediaTranscriptionConfigured(ctx context.Context) bool {
@@ -60,7 +68,22 @@ func (m *Manager) mediaTranscriptionConfigured(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	cfg, err := s.Configuration(ctx, "media-understanding")
+	installed, err := s.Installed(ctx, localASRPluginID)
+	invocation := pluginhost.Invocation{Account: s.Account(), Thread: "host", Requester: "administrator", Purpose: "inspect media transcription readiness", RequestKey: "host-media-transcription-readiness"}
+	if err != nil || !installed.Enabled || installed.Removed || pluginhost.Authorize(installed.Package, pluginhost.Grant{Account: s.Account(), Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}, invocation, []string{"artifact.read", "model.invoke"}) != nil || s.CheckConfiguration(ctx, localASRPluginID) != nil {
+		return false
+	}
+	ready := false
+	for _, capability := range mustCapabilities(ctx, s, localASRPluginID) {
+		if capability.ID == "media.transcribe" && capability.Discoverable && capability.Implementation == "ready" && !capability.Async {
+			ready = true
+			break
+		}
+	}
+	if !ready {
+		return false
+	}
+	cfg, err := s.ConfigurationForExecution(ctx, localASRPluginID)
 	if err != nil {
 		return false
 	}
@@ -83,12 +106,8 @@ func (m *Manager) mediaTranscriptionConfigured(ctx context.Context) bool {
 	if json.Unmarshal(cfg.Values["asr_endpoint"], &endpoint) != nil || json.Unmarshal(cfg.Values["asr_model"], &model) != nil || endpoint == "" || model == "" {
 		return false
 	}
-	for _, key := range cfg.ConfiguredSecrets {
-		if key == "asr_key" {
-			return true
-		}
-	}
-	return false
+	var key string
+	return json.Unmarshal(cfg.Values["asr_key"], &key) == nil && key != ""
 }
 
 func (m *Manager) newMediaTranscriptionPolicy(ctx context.Context, message linuxnative.Message, wav []byte) (*mediaTranscriptionPolicy, error) {
@@ -96,10 +115,28 @@ func (m *Manager) newMediaTranscriptionPolicy(ctx context.Context, message linux
 	if err != nil {
 		return nil, err
 	}
-	if len(wav) == 0 || len(wav) > 10<<20 || !bytes.HasPrefix(wav, []byte("RIFF")) || len(wav) < 12 || string(wav[8:12]) != "WAVE" {
+	p, err := m.newMediaTranscriptionPolicyForOrigin(ctx, base.store, base.source.Revision, wav)
+	if err != nil {
+		return nil, err
+	}
+	p.receivedSharePolicy = base
+	p.invocationValue = base.invocation()
+	p.originCheck = func(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
+		return base.Check(ctx, j, cap)
+	}
+	base.requestSuffix = agentID(string(p.arguments), strconv.Itoa(p.configRevision))
+	p.invocationValue = base.invocation()
+	return p, nil
+}
+
+// newMediaTranscriptionPolicyForOrigin keeps protocol/configuration/WAV
+// handling identical for every trusted origin. Origin proof itself is injected
+// by the caller and is rechecked at every host boundary in Check.
+func (m *Manager) newMediaTranscriptionPolicyForOrigin(ctx context.Context, store *pluginhost.Store, sourceRevision int, wav []byte) (*mediaTranscriptionPolicy, error) {
+	if store == nil || sourceRevision < 1 || len(wav) == 0 || len(wav) > 10<<20 || !bytes.HasPrefix(wav, []byte("RIFF")) || len(wav) < 12 || string(wav[8:12]) != "WAVE" {
 		return nil, errors.New("media_audio_format_invalid")
 	}
-	cfg, err := base.store.Configuration(ctx, "media-understanding")
+	cfg, err := store.Configuration(ctx, "media-understanding")
 	if err != nil {
 		return nil, err
 	}
@@ -116,14 +153,16 @@ func (m *Manager) newMediaTranscriptionPolicy(ctx context.Context, message linux
 	}
 	copyWAV := append([]byte(nil), wav...)
 	sum := sha256.Sum256(copyWAV)
-	p := &mediaTranscriptionPolicy{receivedSharePolicy: base, wav: copyWAV, ref: mediaAudioReference{Ref: "audio_0", SHA: hex.EncodeToString(sum[:]), Version: base.source.Revision, MIME: "audio/wav"}, model: model, backend: backend, configRevision: cfg.Revision, post: mcptools.PostPluginModel}
+	p := &mediaTranscriptionPolicy{manager: m, store: store, wav: copyWAV, ref: mediaAudioReference{Ref: "audio_0", SHA: hex.EncodeToString(sum[:]), Version: sourceRevision, MIME: "audio/wav"}, model: model, backend: backend, configRevision: cfg.Revision, post: mcptools.PostPluginModel}
 	p.runLocal = m.runRegisteredLocalASR
 	if backend == "local" {
-		i, err := base.store.Installed(ctx, localASRPluginID)
+		i, err := store.Installed(ctx, localASRPluginID)
 		if err != nil {
 			return nil, errors.New("local_asr_plugin_unavailable")
 		}
-		profile, ok := m.registeredLocalASRProfile(ctx, i.Package, pluginhost.Grant{Account: message.AccountID, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions})
+		// The origin is attached below. A local profile is resolved after that
+		// immutable account binding is supplied by the caller.
+		profile, ok := m.registeredLocalASRProfile(ctx, i.Package, pluginhost.Grant{Account: m.native.Account(), Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions})
 		if !ok {
 			return nil, errors.New("local_asr_profile_unavailable")
 		}
@@ -137,24 +176,69 @@ func (m *Manager) newMediaTranscriptionPolicy(ctx context.Context, message linux
 		timeout = p.localTimeout
 	}
 	p.arguments, _ = json.Marshal(map[string]any{"audio": p.ref, "timeout_seconds": timeout})
-	base.requestSuffix = agentID(string(p.arguments), strconv.Itoa(cfg.Revision))
 	return p, nil
 }
+
+func (p *mediaTranscriptionPolicy) invocation() pluginhost.Invocation {
+	// Incoming policies deliberately retain the received-share policy's mutable
+	// suffix. Video audio continuation adds its requested time range there so
+	// equal silent PCM chunks do not collapse into one idempotency job. Bound
+	// administrator/asset origins have no received message and keep their
+	// immutable host-supplied invocation instead.
+	if p.receivedSharePolicy != nil {
+		return p.receivedSharePolicy.invocation()
+	}
+	return p.invocationValue
+}
+
 func (p *mediaTranscriptionPolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
-	if err := p.receivedSharePolicy.Check(ctx, j, cap); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.manager == nil || p.store == nil || p.originCheck == nil || p.invocationValue.Account == "" || p.invocationValue.Thread == "" || p.invocationValue.Requester == "" || p.invocationValue.Purpose == "" || p.invocationValue.RequestKey == "" || p.invocationValue.Authorization == "" || j.Plugin != "media-understanding" || j.Tool != "media.transcribe" || cap.Async {
+		return errors.New("media_transcription_authorization_changed")
+	}
+	want, _ := json.Marshal(p.invocation())
+	got, _ := json.Marshal(j.Context)
+	if !bytes.Equal(want, got) {
+		return errors.New("media_transcription_invocation_changed")
+	}
+	if err := p.originCheck(ctx, j, cap); err != nil {
 		return err
 	}
 	cfg, err := p.store.Configuration(ctx, j.Plugin)
 	if err != nil || cfg.Revision != p.configRevision {
 		return errors.New("media_plugin_configuration_changed")
 	}
-	if j.PackageDigest != "" {
-		i, err := p.store.Installed(ctx, j.Plugin)
-		if err != nil || i.Digest != j.PackageDigest || i.Package.Version != j.Version || j.ConfigRevision != strconv.Itoa(p.configRevision) {
-			return errors.New("media_plugin_version_changed")
-		}
-		if pluginhost.Authorize(i.Package, pluginhost.Grant{Account: p.message.AccountID, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, j.Context, i.Package.Permissions) != nil {
+	i, err := p.store.Installed(ctx, j.Plugin)
+	if err != nil || !i.Enabled || i.Removed || i.Digest == "" || (j.PackageDigest != "" && (i.Digest != j.PackageDigest || i.Package.Version != j.Version || j.ConfigRevision != strconv.Itoa(p.configRevision))) {
+		return errors.New("media_plugin_version_changed")
+	}
+	required := cap.Permissions
+	if len(required) == 0 {
+		caps, capErr := p.store.Capabilities(ctx, j.Plugin)
+		if capErr != nil {
 			return errors.New("media_plugin_permissions_changed")
+		}
+		for _, available := range caps {
+			if available.ID == j.Tool && available.Discoverable && available.Implementation == "ready" && !available.Async {
+				required = available.Permissions
+				break
+			}
+		}
+	}
+	if len(required) == 0 || pluginhost.Authorize(i.Package, pluginhost.Grant{Account: p.invocationValue.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, j.Context, required) != nil {
+		return errors.New("media_plugin_permissions_changed")
+	}
+	// Local ASR results are only valid while the selected registered profile is
+	// still intact. The runner checks this before execution too, but it may be
+	// changed while an isolated process/callback is in flight; recheck here so
+	// Validate, private-result reads, and completed-result handoff cannot accept
+	// a transcript under a replaced SDK, VAD, or manifest.
+	if p.backend == "local" {
+		profile, ok := p.manager.registeredLocalASRProfile(ctx, i.Package, pluginhost.Grant{Account: p.invocationValue.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions})
+		if !ok || profile.initializer.ProfileID != p.localProfileID || profile.initializer.ResourceVersion != p.localVersion {
+			return errors.New("media_local_transcription_profile_changed")
 		}
 	}
 	if j.ID != "" {
@@ -260,11 +344,11 @@ func (p *mediaTranscriptionPolicy) localTranscription(ctx context.Context, j plu
 	if err != nil {
 		return nil, errors.New("media_local_transcription_unavailable")
 	}
-	profile, ok := p.manager.registeredLocalASRProfile(ctx, i.Package, pluginhost.Grant{Account: p.message.AccountID, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions})
+	profile, ok := p.manager.registeredLocalASRProfile(ctx, i.Package, pluginhost.Grant{Account: p.invocationValue.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions})
 	if !ok || profile.initializer.ProfileID != p.localProfileID || profile.initializer.ResourceVersion != p.localVersion {
 		return nil, errors.New("media_local_transcription_profile_changed")
 	}
-	state, text, err := p.runLocal(ctx, i.Package, pluginhost.Grant{Account: p.message.AccountID, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, profile, p.wav, request.TimeoutSeconds)
+	state, text, err := p.runLocal(ctx, i.Package, pluginhost.Grant{Account: p.invocationValue.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, profile, p.wav, request.TimeoutSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -383,6 +467,7 @@ func (p *mediaTranscriptionPolicy) transcribe(ctx context.Context) (string, erro
 	if call.Job.State != "completed" {
 		return "", errors.New("media_plugin_transcription_needs_review")
 	}
+	p.completedJob = call.Job
 	raw, err := p.store.PrivateJobResult(ctx, call.Job, func(ctx context.Context, j pluginhost.Job) error { return p.Check(ctx, j, pluginhost.Capability{}) })
 	if err != nil {
 		return "", errors.New("media_plugin_result_unavailable")
@@ -397,5 +482,18 @@ func (p *mediaTranscriptionPolicy) transcribe(ctx context.Context) (string, erro
 	if r.Status != "transcribed" || r.Text == "" {
 		return "", errors.New("media_plugin_result_invalid")
 	}
+	if err = p.checkCompleted(ctx); err != nil {
+		return "", err
+	}
 	return r.Text, nil
+}
+
+// checkCompleted is required before a caller persists or otherwise acts on a
+// transcript. Completion does not preserve authorization after source,
+// session, package, configuration, or cancellation changes.
+func (p *mediaTranscriptionPolicy) checkCompleted(ctx context.Context) error {
+	if p.completedJob.ID == "" || p.completedJob.State != "completed" {
+		return errors.New("media_plugin_result_unavailable")
+	}
+	return p.Check(ctx, p.completedJob, pluginhost.Capability{})
 }

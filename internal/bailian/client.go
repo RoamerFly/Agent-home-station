@@ -4,7 +4,6 @@ package bailian
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -132,23 +131,4 @@ func (c *Client) request(ctx context.Context, path string, v any) (map[string]an
 		return nil, &Failure{resp.StatusCode, code}
 	}
 	return out, nil
-}
-func (c *Client) Transcribe(ctx context.Context, data []byte) (string, error) {
-	if len(data) == 0 || len(data) > 10<<20 {
-		return "", errors.New("语音识别文件须小于10MB")
-	}
-	out, e := c.request(ctx, "/api/v1/services/aigc/multimodal-generation/generation", map[string]any{"model": c.Config.ASRModel, "input": map[string]any{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_audio", "input_audio": map[string]string{"data": "data:audio/wav;base64," + base64.StdEncoding.EncodeToString(data)}}}}}}, "parameters": map[string]string{"format": "wav", "sample_rate": "16000"}})
-	if e != nil {
-		return "", e
-	}
-	output, _ := out["output"].(map[string]any)
-	text, _ := output["text"].(string)
-	if text == "" {
-		inner, _ := output["output"].(map[string]any)
-		text, _ = inner["text"].(string)
-	}
-	if strings.TrimSpace(text) == "" || len(text) > 16000 {
-		return "", errors.New("语音中未取得有效转写文字")
-	}
-	return text, nil
 }

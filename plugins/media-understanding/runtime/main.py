@@ -72,7 +72,7 @@ class Wire:
                     if not isinstance(host_metadata, dict):
                         raise ValueError("invalid_host_metadata")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "media-understanding", "version": "0.1.2"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "media-understanding", "version": "0.1.3"}}
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/call" and initialized:

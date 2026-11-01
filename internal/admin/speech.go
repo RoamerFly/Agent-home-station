@@ -126,7 +126,6 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 			fail(w, 400, "合成文字须为1–2000字符")
 			return
 		}
-		c := s.manager.speechConfig()
 		ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
 		defer cancel()
 		ctx = s.speechPluginTestContext(r.WithContext(ctx))
@@ -155,13 +154,17 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 			fail(w, 502, "测试音频格式验证失败")
 			return
 		}
-		text := "未启用语音识别"
+		text := "未配置语音识别插件，本次已验证音频格式"
 		if e = policy.checkCompleted(ctx); e != nil {
 			fail(w, 409, "语音测试授权或配置已变更，请重新测试")
 			return
 		}
-		if c.ASREnabled {
-			text, e = s.manager.transcribeAudio(ctx, wav)
+		var transcription *mediaTranscriptionPolicy
+		if s.manager.mediaTranscriptionConfigured(ctx) {
+			transcription, e = s.manager.newAdminMediaTranscriptionPolicy(ctx, policy, wav)
+			if e == nil {
+				text, e = transcription.transcribe(ctx)
+			}
 			if e != nil {
 				fail(w, 502, e.Error())
 				return
@@ -170,6 +173,12 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 		if e = policy.checkCompleted(ctx); e != nil {
 			fail(w, 409, "语音测试授权或配置已变更，请重新测试")
 			return
+		}
+		if transcription != nil {
+			if e = transcription.checkCompleted(ctx); e != nil {
+				fail(w, 409, "识别插件授权或配置已变更，请重新测试")
+				return
+			}
 		}
 		respond(w, 200, map[string]any{"audio_bytes": len(data), "transcript": text, "wechat_sends": 0})
 	}))
@@ -282,10 +291,14 @@ func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnat
 	if stateErr != nil {
 		return "", stateErr
 	}
-	// The legacy switch only governs the compatibility implementation. An
-	// installed plugin has its own declared configuration and authorization.
-	if !installed && !a.manager.speechConfig().ASREnabled {
-		return "", toolInputError("语音识别未启用")
+	// Do this before requesting the original bytes.  An absent or incomplete
+	// plugin must not cause a private incoming recording to be downloaded only
+	// to fail later through a removed compatibility backend.
+	if !installed {
+		return "", toolInputError("media_transcription_plugin_migration_required")
+	}
+	if !a.manager.mediaTranscriptionConfigured(ctx) {
+		return "", toolInputError("media_transcription_configuration_required")
 	}
 	reader, ok := a.manager.native.(incomingReader)
 	if !ok {
@@ -299,16 +312,12 @@ func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnat
 	if e != nil {
 		return "", e
 	}
-	text := ""
-	if installed {
-		policy, err := a.manager.newMediaTranscriptionPolicy(ctx, message, wav)
-		if err != nil {
-			return "", err
-		}
-		text, e = policy.transcribe(ctx)
-	} else {
-		text, e = a.manager.transcribeAudio(ctx, wav)
+	policy, err := a.manager.newMediaTranscriptionPolicy(ctx, message, wav)
+	if err != nil {
+		return "", err
 	}
+	text := ""
+	text, e = policy.transcribe(ctx)
 	if bailian.IsNoSpeech(e) {
 		a.manager.record(bot.Record{Event: "voice_no_words", Category: "received", MessageID: message.ID, ThreadID: message.ThreadID, Sender: message.SenderID, Status: "no_recognizable_speech", Reason: "ASR_RESPONSE_HAVE_NO_WORDS", ToolCode: "ASR_RESPONSE_HAVE_NO_WORDS", Origin: "speech"})
 		return "[微信语音音频已取得并提交识别，但没有识别出可转写的词；可能为音乐、环境声或不清晰人声。不要编造语音正文。]", nil

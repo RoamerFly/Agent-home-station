@@ -77,6 +77,16 @@ func TestMediaServiceReadinessIsIndependentPerCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if f.manager.mediaTranscriptionConfigured(ctx) {
+		t.Fatal("disabled media package was reported ready for transcription")
+	}
+	i, err = s.Installed(ctx, mediaServicePluginID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SetEnabled(ctx, mediaServicePluginID, i.Revision, true); err != nil {
+		t.Fatal(err)
+	}
 	if f.manager.mediaObservationConfigured(ctx) || !f.manager.mediaTranscriptionConfigured(ctx) {
 		t.Fatal("remote ASR-only configuration leaked a visual requirement")
 	}

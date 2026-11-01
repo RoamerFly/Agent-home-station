@@ -2,11 +2,7 @@ package admin
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,49 +70,17 @@ func TestVideoSamplingDoesNotReuseAFramePastTheVideoTrack(t *testing.T) {
 func TestVideoObservationModalitiesAreIndependentAndScoped(t *testing.T) {
 	video := observationFixture(t, "1")
 	for _, tc := range []struct {
-		name, visual, audio string
-		enabled             bool
-		wantError           bool
+		name, visual string
+		wantError    bool
 	}{
-		{"both", "合成蓝色画面", "合成音轨文字", true, false},
-		{"audio-only", "", "合成音轨文字", true, false},
-		{"visual-only", "合成蓝色画面", "", true, false},
-		{"audio-disabled", "合成蓝色画面", "unused", false, false},
-		{"both-fail", "", "", true, true},
+		{"visual", "合成蓝色画面", false},
+		{"visual-fail", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := setup(t)
 			native := &observationNative{fakeNative: f.native, data: video}
 			f.manager.native = native
 			f.manager.config.Behavior.ReadVideos = true
-			asrCalls := 0
-			asr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				asrCalls++
-				var input struct {
-					Input struct {
-						Messages []struct {
-							Content []struct {
-								Audio struct {
-									Data string `json:"data"`
-								} `json:"input_audio"`
-							} `json:"content"`
-						} `json:"messages"`
-					} `json:"input"`
-				}
-				if json.NewDecoder(r.Body).Decode(&input) != nil || len(input.Input.Messages) != 1 || len(input.Input.Messages[0].Content) != 1 {
-					t.Error("invalid ASR input")
-					w.WriteHeader(400)
-					return
-				}
-				raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(input.Input.Messages[0].Content[0].Audio.Data, "data:audio/wav;base64,"))
-				if err != nil || len(raw) < 44 || string(raw[:4]) != "RIFF" {
-					t.Error("ASR did not receive extracted audio")
-				}
-				json.NewEncoder(w).Encode(map[string]any{"output": map[string]string{"text": tc.audio}})
-			}))
-			defer asr.Close()
-			f.manager.speech = bailian.Defaults()
-			f.manager.speech.Endpoint, f.manager.speech.Key, f.manager.speech.ASREnabled = asr.URL, "synthetic.private.key", tc.enabled
 			visionCalls := 0
 			vision := observationVision(func(ctx context.Context, prompt string, images []deepseek.Image) (string, error) {
 				visionCalls++
@@ -130,8 +94,8 @@ func TestVideoObservationModalitiesAreIndependentAndScoped(t *testing.T) {
 			})
 			msg := linuxnative.Message{ID: "synthetic-video", ThreadID: "filehelper", Type: 43}
 			text, err := (mediaUnderstanding{manager: f.manager, provider: vision}).Analyze(context.Background(), msg)
-			if (err != nil) != tc.wantError || native.calls != 1 || visionCalls != 1 || (asrCalls > 0) != tc.enabled {
-				t.Fatal(text, err, native.calls, visionCalls, asrCalls)
+			if (err != nil) != tc.wantError || native.calls != 1 || visionCalls != 1 {
+				t.Fatal(text, err, native.calls, visionCalls)
 			}
 			if tc.wantError {
 				return
@@ -139,63 +103,28 @@ func TestVideoObservationModalitiesAreIndependentAndScoped(t *testing.T) {
 			if !strings.Contains(text, "本次读取范围为采样概览") || strings.Contains(text, "private-detail") {
 				t.Fatal("observation boundary or error redaction lost", text)
 			}
-			if tc.visual != "" && !strings.Contains(text, tc.visual) || tc.enabled && tc.audio != "" && !strings.Contains(text, tc.audio) {
+			if tc.visual != "" && !strings.Contains(text, tc.visual) {
 				t.Fatal("successful evidence discarded", text)
 			}
-			if tc.visual == "" && !strings.Contains(text, "画面理解未完成") || (tc.audio == "" || !tc.enabled) && !strings.Contains(text, "当前可用资料见画面观察") {
-				t.Fatal("failed modality was presented as observed", text)
+			if !strings.Contains(text, "媒体理解插件未安装或未启用语音识别") {
+				t.Fatal("missing plugin state was not disclosed", text)
 			}
-			if tc.enabled && tc.audio != "" && !strings.Contains(text, "0–1.") {
-				t.Fatal("actual extracted duration missing", text)
+			if tc.visual == "" && !strings.Contains(text, "画面理解未完成") {
+				t.Fatal("failed modality was presented as observed", text)
 			}
 		})
 	}
 }
 
-func TestNoRecognizedWordsKeepsVisualEvidenceAndCompletesAudioRange(t *testing.T) {
+func TestPluginAudioExtractionPreservesNoRecognizableSpeech(t *testing.T) {
 	video := observationFixture(t, "1")
-	f, p := trustedAgent(t)
-	f.manager.config.Companion.Permissions.Remember = false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(400)
-		w.Write([]byte(`{"code":"CLIENT_ERROR","message":"ASR_RESPONSE_HAVE_NO_WORDS"}`))
-	}))
-	defer server.Close()
-	f.manager.speech = bailian.Defaults()
-	f.manager.speech.Endpoint = server.URL
-	f.manager.speech.Key = "synthetic.private.key"
-	f.manager.speech.ASREnabled = true
-	sample, err := sampleVideo(context.Background(), f.manager.dir, video)
-	if err != nil && (sample.Seconds <= 0 || len(sample.Frames) == 0) {
-		t.Fatal(err)
-	}
-	vision := observationVision(func(context.Context, string, []deepseek.Image) (string, error) { return "合成画面观察", nil })
-	text, err := (mediaUnderstanding{manager: f.manager, provider: vision}).observeVideo(context.Background(), linuxnative.Message{ID: "no-words", AccountID: "test", ThreadID: p.trace.Thread}, video, sample, false)
-	if err != nil || !strings.Contains(text, "ASR_RESPONSE_HAVE_NO_WORDS") || strings.Contains(text, "音轨转写未完成") || !strings.Contains(text, "合成画面观察") {
-		t.Fatal(text, err)
-	}
-	seen := false
-	for _, event := range f.manager.Logs() {
-		if event.Event == "video_audio_no_words" {
-			seen = true
-			if event.Category == "error" || event.ToolHTTPStatus != 400 {
-				t.Fatal(event)
-			}
-		}
-	}
-	if !seen {
-		t.Fatal("audio outcome not recorded")
-	}
-	withoutVision, err := (mediaUnderstanding{manager: f.manager}).observeVideo(context.Background(), linuxnative.Message{ID: "no-words-no-vision", AccountID: "test", ThreadID: p.trace.Thread}, video, sample, false)
-	if err != nil || !strings.Contains(withoutVision, "画面理解未完成") || !strings.Contains(withoutVision, "ASR_RESPONSE_HAVE_NO_WORDS") {
-		t.Fatal(withoutVision, err)
-	}
-	out := map[string]any{}
-	if err = p.inspectAudioRange(context.Background(), video, videoInspectionInput{AudioChunk: .4}, sample.Seconds, sample.Seconds, out); err != nil {
-		t.Fatal(err)
-	}
-	if out["transcription_state"] != "no_recognizable_speech" || out["text"] != "" || !out["requested_range_complete"].(bool) {
-		t.Fatal(out)
+	f := setup(t)
+	a := mediaUnderstanding{manager: f.manager}
+	text, seconds, err := a.videoAudioRangeTimedWith(context.Background(), video, 0, 1, 60, func(context.Context, []byte) (string, error) {
+		return "", &bailian.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
+	})
+	if !bailian.IsNoSpeech(err) || text != "" || seconds < .9 || seconds > 1.1 {
+		t.Fatal("plugin extraction lost no-speech boundary", text, seconds, err)
 	}
 }
 
@@ -223,14 +152,12 @@ func TestVideoWithoutAudioStillKeepsVisualObservation(t *testing.T) {
 	video := observationFixture(t, "")
 	f := setup(t)
 	f.manager.config.Behavior.ReadVideos = true
-	f.manager.speech = bailian.Defaults()
-	f.manager.speech.ASREnabled = true
 	f.manager.native = &observationNative{fakeNative: f.native, data: video}
 	vision := observationVision(func(context.Context, string, []deepseek.Image) (string, error) {
 		return "合成无声蓝色画面", nil
 	})
 	text, err := (mediaUnderstanding{manager: f.manager, provider: vision}).Analyze(context.Background(), linuxnative.Message{ID: "silent-video", ThreadID: "filehelper", Type: 43})
-	if err != nil || !strings.Contains(text, "合成无声蓝色画面") || !strings.Contains(text, "音轨转写未完成") || strings.Contains(text, "[实际音轨转写") {
+	if err != nil || !strings.Contains(text, "合成无声蓝色画面") || !strings.Contains(text, "媒体理解插件未安装或未启用语音识别") || strings.Contains(text, "[实际音轨转写") {
 		t.Fatal(text, err)
 	}
 	entries, err := os.ReadDir(f.dir)
@@ -248,38 +175,25 @@ func TestVideoAudioLimitsActualTrackTo180Seconds(t *testing.T) {
 	video := observationFixture(t, "181")
 	f := setup(t)
 	var submittedBytes int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var input map[string]any
-		if json.NewDecoder(r.Body).Decode(&input) != nil {
-			t.Error("invalid ASR body")
-			return
-		}
-		messages := input["input"].(map[string]any)["messages"].([]any)
-		content := messages[0].(map[string]any)["content"].([]any)
-		audio := content[0].(map[string]any)["input_audio"].(map[string]any)["data"].(string)
-		wav, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(audio, "data:audio/wav;base64,"))
-		if err != nil {
-			t.Error("invalid WAV payload")
-		}
-		submittedBytes = len(wav)
-		json.NewEncoder(w).Encode(map[string]any{"output": map[string]string{"text": "合成180秒音轨转写"}})
-	}))
-	defer server.Close()
-	f.manager.speech = bailian.Defaults()
-	f.manager.speech.Endpoint, f.manager.speech.Key = server.URL, "synthetic.private.key"
-	f.manager.speech.ASREnabled = true
 	a := mediaUnderstanding{manager: f.manager}
-	text, seconds, err := a.videoAudio(context.Background(), video)
+	transcribe := func(_ context.Context, wav []byte) (string, error) {
+		submittedBytes = len(wav)
+		if len(wav) < 44 || string(wav[:4]) != "RIFF" {
+			t.Fatal("plugin would receive invalid extracted WAV")
+		}
+		return "合成180秒音轨转写", nil
+	}
+	text, seconds, err := a.videoAudioRangeTimedWith(context.Background(), video, 0, 180, 60, transcribe)
 	if err != nil || text == "" || seconds < 179.9 || seconds > 180.01 || submittedBytes < 5760000 || submittedBytes > 5761024 {
 		t.Fatal("audio exceeded observation coverage", seconds, submittedBytes, err)
 	}
-	text, seconds, err = a.videoAudioRange(context.Background(), video, 180, 1)
+	text, seconds, err = a.videoAudioRangeTimedWith(context.Background(), video, 180, 1, 60, transcribe)
 	if err != nil || text == "" || seconds < .9 || seconds > 1.1 || submittedBytes > 40000 {
 		t.Fatal("could not read audio beyond former180s cutoff", seconds, submittedBytes, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, _, err := a.videoAudio(ctx, video); err == nil || err.Error() != "video_audio_time_budget_exhausted" {
+	if _, _, err := a.videoAudioRangeTimedWith(ctx, video, 0, 180, 60, transcribe); err == nil || err.Error() != "video_audio_time_budget_exhausted" {
 		t.Fatal("exhausted deadline still attempted extraction", err)
 	}
 }

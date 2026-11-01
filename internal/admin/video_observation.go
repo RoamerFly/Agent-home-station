@@ -48,16 +48,13 @@ func (a mediaUnderstanding) observeVideo(ctx context.Context, msg linuxnative.Me
 	}
 	audio, audioSeconds := "", 0.0
 	var audioErr error
-	// The plugin owns ASR once installed. A missing ASR configuration simply
-	// leaves audio unread; it never falls back to legacy credentials.
-	audioEnabled := !installed && a.manager.speechConfig().ASREnabled || installed && a.manager.mediaTranscriptionConfigured(ctx)
+	// Audio is read only through the installed media plugin. A missing plugin or
+	// ASR configuration leaves the track unread; it is never submitted to a
+	// legacy provider or local runner.
+	audioEnabled := installed && a.manager.mediaTranscriptionConfigured(ctx)
 	if audioEnabled && ctx.Err() == nil {
-		if installed {
-			audio, audioSeconds, audioErr = a.videoAudioPlugin(ctx, msg, data)
-		} else {
-			audio, audioSeconds, audioErr = a.videoAudio(ctx, data)
-		}
-		if installed && audioErr != nil && mediaTranscriptionHardFailure(audioErr) {
+		audio, audioSeconds, audioErr = a.videoAudioPlugin(ctx, msg, data)
+		if audioErr != nil && mediaTranscriptionHardFailure(audioErr) {
 			return "", audioErr
 		}
 		if audioErr != nil {
@@ -123,15 +120,11 @@ func (a mediaUnderstanding) observeVideo(ctx context.Context, msg linuxnative.Me
 		} else if installed {
 			parts = append(parts, "[当前媒体插件未配置语音识别；本次仅依据画面观察，未读取声音内容。]")
 		} else {
-			parts = append(parts, "[音轨转写未启用；当前可用资料见画面观察。]")
+			parts = append(parts, "[媒体理解插件未安装或未启用语音识别；本次仅依据画面观察，未读取声音内容。]")
 		}
 	}
 	a.manager.record(bot.Record{Event: event, Category: "decision", ThreadID: msg.ThreadID, MessageID: msg.ID, Status: status, Reason: reason, Bytes: int64(len(data)), MediaCount: count, Origin: "media"})
 	return strings.Join(parts, "\n"), nil
-}
-
-func (a mediaUnderstanding) videoAudio(ctx context.Context, data []byte) (string, float64, error) {
-	return a.videoAudioRange(ctx, data, 0, 180)
 }
 
 func mediaTranscriptionHardFailure(err error) bool {
@@ -151,12 +144,6 @@ func (a mediaUnderstanding) videoAudioPlugin(ctx context.Context, msg linuxnativ
 	})
 }
 
-func (a mediaUnderstanding) videoAudioRange(ctx context.Context, data []byte, start, length float64) (string, float64, error) {
-	return a.videoAudioRangeTimed(ctx, data, start, length, 60)
-}
-func (a mediaUnderstanding) videoAudioRangeTimed(ctx context.Context, data []byte, start, length float64, timeout int) (string, float64, error) {
-	return a.videoAudioRangeTimedWith(ctx, data, start, length, timeout, a.manager.transcribeAudio)
-}
 func (a mediaUnderstanding) videoAudioRangeTimedWith(ctx context.Context, data []byte, start, length float64, timeout int, transcribe func(context.Context, []byte) (string, error)) (string, float64, error) {
 	if start < 0 || length <= 0 || timeout < 0 {
 		return "", 0, errors.New("video_audio_range_invalid")

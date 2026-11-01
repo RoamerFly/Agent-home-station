@@ -62,7 +62,7 @@ class TranscriptionTest(unittest.TestCase):
     def test_local_uses_bound_profile_once(self):
         result = self.run_reply(
             {"state": "transcribed", "text": "local transcript"},
-            config={"asr_backend": "local"},
+            config={"asr_backend": "local", "local_asr_profile_id": "sensevoice-small-int8"},
             metadata=self.local_metadata(),
         )
         self.assertEqual(result["text"], "local transcript")
@@ -71,23 +71,37 @@ class TranscriptionTest(unittest.TestCase):
     def test_local_no_words_and_invalid_metadata(self):
         result = self.run_reply(
             {"state": "no_recognizable_speech"},
-            config={"asr_backend": "local"},
+            config={"asr_backend": "local", "local_asr_profile_id": "sensevoice-small-int8"},
             metadata=self.local_metadata(),
         )
         self.assertEqual(result["status"], "no_recognizable_speech")
         for metadata in ({}, self.local_metadata(profile_id="../bad"), self.local_metadata(path="C:/private")):
             with self.assertRaisesRegex(ValueError, "local_asr_unavailable"):
-                self.run_reply({}, config={"asr_backend": "local"}, metadata=metadata)
+                self.run_reply({}, config={"asr_backend": "local", "local_asr_profile_id": "sensevoice-small-int8"}, metadata=metadata)
         self.assertEqual(len(self.calls), 1)
 
     def test_local_rejects_result_or_backend_without_retry(self):
         metadata = self.local_metadata()
         for reply in ({}, {"state": "transcribed", "text": " "}, {"state": "no_recognizable_speech", "text": "invented"}, {"state": "unknown", "text": "x"}, {"state": "transcribed", "text": "x", "path": "C:/private"}):
             with self.assertRaisesRegex(ValueError, "local_asr_response_invalid"):
-                self.run_reply(reply, config={"asr_backend": "local"}, metadata=metadata)
+                self.run_reply(reply, config={"asr_backend": "local", "local_asr_profile_id": "sensevoice-small-int8"}, metadata=metadata)
         with self.assertRaisesRegex(ValueError, "asr_backend_not_configured"):
             self.run_reply({}, config={"asr_backend": "automatic"})
         self.assertEqual(len(self.calls), 5)
+
+    def test_local_requires_matching_configured_profile_before_host_call(self):
+        for config, metadata, code in (
+            ({"asr_backend": "local"}, self.local_metadata(), "local_asr_profile_not_configured"),
+            ({"asr_backend": "local", "local_asr_profile_id": "../outside"}, self.local_metadata(), "local_asr_profile_not_configured"),
+            ({"asr_backend": "local", "local_asr_profile_id": "different-profile"}, self.local_metadata(), "local_asr_profile_mismatch"),
+        ):
+            with self.assertRaisesRegex(ValueError, code):
+                self.run_reply({}, config=config, metadata=metadata)
+        self.assertEqual(self.calls, [])
+
+    def test_remote_does_not_require_local_profile(self):
+        result = self.run_reply({"output": {"text": "remote transcript"}}, config={"asr_model": "synthetic-asr"})
+        self.assertEqual(result["text"], "remote transcript")
 
 
 
@@ -135,7 +149,7 @@ class TranscriptionWireTest(unittest.TestCase):
         ref = {"media_ref": "audio_1", "sha256": "a"*64, "version": 1, "mime": "audio/wav"}
         context = {k: "synthetic" for k in ("account", "thread", "requester", "purpose", "request_key")}
         incoming = [
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": {"asr_backend": "local"}}, "wechat/host_metadata": local_metadata()}}},
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": {"asr_backend": "local", "local_asr_profile_id": "sensevoice-small-int8"}}, "wechat/host_metadata": local_metadata()}}},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.transcribe", "arguments": {"audio": ref}, "_meta": {"wechat/context": context}}},
             {"jsonrpc": "2.0", "id": "media-model-1", "result": {"state": "transcribed", "text": "local transcript"}},
         ]

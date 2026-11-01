@@ -261,8 +261,11 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 		if installedErr != nil {
 			return "", installedErr
 		}
-		if !installedMedia && !p.manager.speechConfig().ASREnabled {
-			return "", errors.New("video_audio_transcription_disabled")
+		if !installedMedia {
+			return "", toolInputError("media_transcription_plugin_migration_required")
+		}
+		if !p.manager.mediaTranscriptionConfigured(ctx) {
+			return "", toolInputError("media_transcription_configuration_required")
 		}
 		if in.AudioStart >= meta.Seconds {
 			return "", toolInputError("音轨起点已超过视频时长")
@@ -272,15 +275,11 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 			length = 90
 		}
 		length = math.Min(length, meta.Seconds-in.AudioStart)
-		if installedMedia {
-			message, e := p.inspectionTranscriptionMessage(ctx, in)
-			if e != nil {
-				return "", e
-			}
-			if e = p.inspectPluginAudioRange(ctx, data, in, length, meta.Seconds, message, out); e != nil {
-				return "", e
-			}
-		} else if e := p.inspectAudioRange(ctx, data, in, length, meta.Seconds, out); e != nil {
+		message, e := p.inspectionTranscriptionMessage(ctx, in)
+		if e != nil {
+			return "", e
+		}
+		if e = p.inspectPluginAudioRange(ctx, data, in, length, meta.Seconds, message, out); e != nil {
 			return "", e
 		}
 		return encode()
@@ -372,9 +371,8 @@ func (p *permittedTools) inspectionTranscriptionMessage(ctx context.Context, in 
 	return message, nil
 }
 
-// inspectPluginAudioRange mirrors the existing continuation output but binds
-// every PCM chunk to the original received message and its live source version.
-// Manager.transcribeAudio intentionally cannot do that for installed plugins.
+// inspectPluginAudioRange mirrors the continuation output while binding every
+// PCM chunk to the original received message and its live source version.
 func (p *permittedTools) inspectPluginAudioRange(ctx context.Context, data []byte, in videoInspectionInput, length, total float64, message linuxnative.Message, out map[string]any) error {
 	requested := in.AudioChunk
 	chunk := requested

@@ -217,10 +217,12 @@ func TestMediaPluginDisabledBlocksImageAndVideoFallback(t *testing.T) {
 
 func TestMediaPluginOwnsAllLegacyTranscriptionCallers(t *testing.T) {
 	f, _, p, ctx := mediaPolicyFixture(t, false)
-	// No audio/model/network is needed: fail at capability ownership before
-	// consulting the old speech configuration or launching its executable.
-	if _, err := f.manager.transcribeAudio(ctx, []byte("synthetic")); err == nil || err.Error() != "media_transcription_adapter_pending" {
-		t.Fatal("installed plugin bypassed through legacy transcription", err)
+	// No audio/model/network is needed: configuration is checked before the
+	// incoming-media reader can obtain private recording bytes.
+	f.manager.speech.ASREnabled = true
+	f.manager.speech.ASRBackend = "local_then_bailian"
+	if _, err := (mediaUnderstanding{manager: f.manager}).recognizeVoice(ctx, linuxnative.Message{ID: "synthetic-voice", Type: 34}); err == nil || err.Error() != "media_transcription_configuration_required" {
+		t.Fatal("legacy speech configuration bypassed media plugin readiness", err)
 	}
 	i, err := p.store.Installed(ctx, "media-understanding")
 	if err != nil {
@@ -229,8 +231,8 @@ func TestMediaPluginOwnsAllLegacyTranscriptionCallers(t *testing.T) {
 	if _, err = p.store.SetEnabled(ctx, i.Package.ID, i.Revision, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.manager.transcribeAudio(ctx, nil); err == nil || err.Error() != "media_plugin_disabled" {
-		t.Fatal("disabled plugin bypassed through legacy transcription", err)
+	if _, err = (mediaUnderstanding{manager: f.manager}).recognizeVoice(ctx, linuxnative.Message{ID: "synthetic-voice", Type: 34}); err == nil || err.Error() != "media_plugin_disabled" {
+		t.Fatal("disabled media plugin bypassed through legacy transcription", err)
 	}
 }
 

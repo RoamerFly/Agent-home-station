@@ -74,6 +74,13 @@
         "local"
       ],
       "default": "remote"
+    },
+    "local_asr_profile_id": {
+      "type": "string",
+      "title": "本地识别资源配置文件",
+      "description": "选择本机已登记的本地 ASR 资源配置文件；仅在“本地识别”时使用。",
+      "minLength": 1,
+      "maxLength": 128
     }
   },
   "additionalProperties": false

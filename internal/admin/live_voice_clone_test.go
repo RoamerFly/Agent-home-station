@@ -28,6 +28,8 @@ func TestLiveBailianReferenceVoiceVariants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// ASR isolation must also be ready before creating any billable voice.
+	asr := prepareLiveASRPlugin(t, cfg)
 	var spec struct {
 		Model       string `json:"target_model"`
 		Preview     string `json:"preview_text"`
@@ -150,7 +152,7 @@ func TestLiveBailianReferenceVoiceVariants(t *testing.T) {
 	transcriptPath := filepath.Join(output, "reference-transcript.txt")
 	if _, err = os.Stat(transcriptPath); os.IsNotExist(err) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		text, asrErr := client.Transcribe(ctx, sample)
+		text, asrErr := asr.transcribe(ctx, sample, "clone-reference:"+fingerprint)
 		cancel()
 		if asrErr == nil {
 			if err = os.WriteFile(transcriptPath, []byte(text), 0600); err != nil {

@@ -188,7 +188,28 @@ func (m *Manager) registeredLocalASRProfile(ctx context.Context, p pluginhost.Pa
 	if err := ctx.Err(); err != nil || p.ID != localASRPluginID || g.Account == "" || g.Account != m.native.Account() || g.Plugin != p.ID || g.Version != p.Version {
 		return localASRProfile{}, false
 	}
-	profile, err := m.readRegisteredLocalASRProfile(p, g)
+	// The selected local profile belongs to the media plugin configuration, not
+	// the legacy speech configuration.  In particular, an old ASRLocalModel
+	// value must never cause an arbitrary public-workspace profile to be
+	// mounted after the media plugin has been configured for remote ASR (or has
+	// not selected a local profile at all).
+	store, err := m.packageStore()
+	if err != nil {
+		return localASRProfile{}, false
+	}
+	installed, err := store.Installed(ctx, localASRPluginID)
+	if err != nil || !installed.Enabled || installed.Removed || installed.Package.ID != p.ID || installed.Package.Version != p.Version {
+		return localASRProfile{}, false
+	}
+	configuration, err := store.ConfigurationForExecution(ctx, localASRPluginID)
+	if err != nil {
+		return localASRProfile{}, false
+	}
+	var backend, id string
+	if json.Unmarshal(configuration.Values["asr_backend"], &backend) != nil || backend != "local" || json.Unmarshal(configuration.Values["local_asr_profile_id"], &id) != nil || !safeLocalASRID(id) {
+		return localASRProfile{}, false
+	}
+	profile, err := m.readRegisteredLocalASRProfile(p, g, id)
 	if err != nil {
 		// An absent, stale or tampered registration does not grant a broad public
 		// workspace mount. The media plugin can still use its separately configured
@@ -198,11 +219,7 @@ func (m *Manager) registeredLocalASRProfile(ctx context.Context, p pluginhost.Pa
 	return profile, true
 }
 
-func (m *Manager) readRegisteredLocalASRProfile(p pluginhost.Package, g pluginhost.Grant) (localASRProfile, error) {
-	id := m.speechConfig().ASRLocalModel
-	if id == "" {
-		id = "sensevoice-small-int8"
-	}
+func (m *Manager) readRegisteredLocalASRProfile(p pluginhost.Package, g pluginhost.Grant, id string) (localASRProfile, error) {
 	if !safeLocalASRID(id) {
 		return localASRProfile{}, errors.New("local_asr_model_id_invalid")
 	}
@@ -290,7 +307,11 @@ func (m *Manager) readRegisteredLocalASRProfile(p pluginhost.Package, g pluginho
 	if err := verifyLocalASRRuntimeManifest(packages); err != nil {
 		return localASRProfile{}, err
 	}
-	initializer := localASRInitializer{ProfileID: manifest.ID, ResourceVersion: version}
+	// The profile identifier is the explicit media-plugin configuration value.
+	// The public manifest is still named `asr-<profile-id>.json`; exposing that
+	// filename prefix in host metadata would make the runtime compare two
+	// different identifiers and tempt callers to reconstruct a path-like ID.
+	initializer := localASRInitializer{ProfileID: id, ResourceVersion: version}
 	var vadPath string
 	var vadThreshold float64
 	if manifest.VADModel != "" {

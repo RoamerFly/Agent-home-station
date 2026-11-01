@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestASRNoRecognizableWordsIsDistinctFromProviderFailure(t *testing.T) {
+func TestSharedProviderFailureKeepsNoSpeechDistinctAndPrivate(t *testing.T) {
 	for _, tc := range []struct {
 		body     string
 		noSpeech bool
@@ -23,7 +23,7 @@ func TestASRNoRecognizableWordsIsDistinctFromProviderFailure(t *testing.T) {
 		c := New(Defaults())
 		c.Config.Endpoint = server.URL
 		c.Config.Key = "synthetic.private.key"
-		_, err := c.Transcribe(context.Background(), []byte("RIFF-synthetic"))
+		_, err := c.request(context.Background(), "/synthetic-service", map[string]string{"action": "synthetic"})
 		server.Close()
 		if err == nil || IsNoSpeech(err) != tc.noSpeech || strings.Contains(err.Error(), "private credential detail") {
 			t.Fatal(err, tc.noSpeech)
@@ -31,7 +31,7 @@ func TestASRNoRecognizableWordsIsDistinctFromProviderFailure(t *testing.T) {
 	}
 }
 
-func TestASRContractAndPrivateKey(t *testing.T) {
+func TestSharedRequestAuthenticatesAndPreservesProviderResult(t *testing.T) {
 	count := 0
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count++
@@ -41,10 +41,10 @@ func TestASRContractAndPrivateKey(t *testing.T) {
 		var body struct {
 			Model string `json:"model"`
 		}
-		if json.NewDecoder(r.Body).Decode(&body) != nil || body.Model != Defaults().ASRModel || r.URL.Path != "/api/v1/services/aigc/multimodal-generation/generation" {
-			t.Error("ASR request changed", body, r.URL.Path)
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.Model != "synthetic-model" || r.URL.Path != "/synthetic-service" {
+			t.Error("shared provider request changed", body, r.URL.Path)
 		}
-		w.Write([]byte(`{"output":{"output":{"text":"你好小鲸鱼"}}}`))
+		w.Write([]byte(`{"output":{"id":"synthetic-provider-result"}}`))
 	}))
 	defer server.Close()
 	cfg := Defaults()
@@ -52,8 +52,10 @@ func TestASRContractAndPrivateKey(t *testing.T) {
 	cfg.Key = "synthetic.private.key"
 	c := New(cfg)
 	c.HTTP.Transport = server.Client().Transport
-	if text, e := c.Transcribe(context.Background(), []byte("RIFF-test")); e != nil || text != "你好小鲸鱼" {
-		t.Fatal(text, e)
+	result, err := c.request(context.Background(), "/synthetic-service", map[string]string{"model": "synthetic-model"})
+	output, _ := result["output"].(map[string]any)
+	if err != nil || output["id"] != "synthetic-provider-result" {
+		t.Fatal(result, err)
 	}
 	if count != 1 {
 		t.Fatal(count)

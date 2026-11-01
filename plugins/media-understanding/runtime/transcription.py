@@ -33,6 +33,14 @@ def _local_profile(metadata):
     return profile, version
 
 
+def _configured_local_profile(config):
+    profile = config.get("local_asr_profile_id") if isinstance(config, dict) else None
+    identifier = r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}"
+    if not isinstance(profile, str) or not re.fullmatch(identifier, profile):
+        raise ValueError("local_asr_profile_not_configured")
+    return profile
+
+
 def _local_result(reply, audio):
     if not isinstance(reply, dict) or set(reply) - {"state", "text"}:
         raise ValueError("local_asr_response_invalid")
@@ -52,7 +60,10 @@ def transcribe(args, config, host_metadata, request):
     timeout = _timeout(args)
     backend = config.get("asr_backend", "remote")
     if backend == "local":
+        configured_profile = _configured_local_profile(config)
         profile, version = _local_profile(host_metadata.get("local_asr") if isinstance(host_metadata, dict) else None)
+        if configured_profile != profile:
+            raise ValueError("local_asr_profile_mismatch")
         reply = request("wechat/local_transcription", {"profile_id": profile, "resource_version": version, "audio": audio, "timeout_seconds": timeout})
         return _local_result(reply, audio)
     if backend != "remote":

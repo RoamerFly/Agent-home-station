@@ -1,133 +1,72 @@
 package admin
 
 import (
-	"context"
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
-	"wechat-bot/internal/agenthost"
-	"wechat-bot/internal/bailian"
+
+	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/pluginhost"
 )
 
-func TestLocalASRDoesNotFallBackToCloudUnlessConfigured(t *testing.T) {
+func TestIncomingVoiceRequiresMediaPluginBeforeDownloading(t *testing.T) {
 	f := setup(t)
-	f.manager.speech.ASREnabled = true
-	f.manager.speech.ASRBackend = "local"
-	if _, e := f.manager.transcribeAudio(context.Background(), []byte("synthetic")); e == nil || strings.Contains(e.Error(), "密钥") {
-		t.Fatal("local selection called cloud", e)
-	}
-	f.manager.speech.ASRBackend = "local_then_bailian"
-	if _, e := f.manager.transcribeAudio(context.Background(), []byte("synthetic")); e == nil || !strings.Contains(e.Error(), "密钥") {
-		t.Fatal("explicit fallback not used", e)
-	}
-	f.manager.speech.ASREnabled = false
-	if _, e := f.manager.transcribeAudio(context.Background(), nil); e == nil || !strings.Contains(e.Error(), "未启用") {
-		t.Fatal(e)
-	}
-}
-
-func TestLocalASRManifestRejectsExternalResourcesAndPathTraversal(t *testing.T) {
-	f := setup(t)
-	public := filepath.Join(f.manager.managedRoot(), "public_workspace")
-	os.MkdirAll(filepath.Join(public, "manifests"), 0700)
-	b, _ := json.Marshal(localASRManifest{Python: filepath.Join(t.TempDir(), "python")})
-	os.WriteFile(filepath.Join(public, "manifests", "asr-sensevoice-small-int8.json"), b, 0600)
-	if _, e := f.manager.transcribeLocal(context.Background(), nil, ""); e == nil || !strings.Contains(e.Error(), "outside_public") {
-		t.Fatal(e)
-	}
-	if _, e := f.manager.transcribeLocal(context.Background(), nil, "../external"); e == nil {
-		t.Fatal("model traversal")
-	}
-	if f.manager.localASRStatus()["available"] != false {
-		t.Fatal("external manifest reported available")
-	}
-}
-
-func TestLocalASRUsesIsolatedAccountScratchAndNoWordsDoesNotUpload(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("local isolated Python integration on Linux")
-	}
-	if _, e := exec.LookPath("bwrap"); e != nil {
-		t.Skip("bwrap not installed")
-	}
-	if _, e := os.Stat("/usr/bin/python3"); e != nil {
-		t.Skip("system Python missing")
-	}
-	f := setup(t)
-	public := filepath.Join(f.manager.managedRoot(), "public_workspace")
-	for _, name := range []string{"models", "runtimes", "projects", "manifests"} {
-		os.MkdirAll(filepath.Join(public, name), 0700)
-	}
-	python := filepath.Join(public, "runtimes", "python")
-	if e := os.Symlink("/usr/bin/python3", python); e != nil {
-		t.Fatal(e)
-	}
-	entry := filepath.Join(public, "projects", "test_asr.py")
-	code := "import sys,json,pathlib; p=pathlib.Path(sys.argv[sys.argv.index('--input')+1]); assert p.read_bytes()==b'synthetic-wav'; assert not pathlib.Path('/etc/passwd').exists(); print(json.dumps({'text':'','state':'no_recognizable_speech','range_complete':True}))"
-	os.WriteFile(entry, []byte(code), 0600)
-	model := filepath.Join(public, "models", "synthetic.onnx")
-	os.WriteFile(model, nil, 0600)
-	manifest := localASRManifest{Python: python, Entry: entry, Model: model, Tokens: model, Packages: filepath.Join(public, "runtimes")}
-	b, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(public, "manifests", "asr-sensevoice-small-int8.json"), b, 0600)
+	native := &observationNative{fakeNative: f.native, data: []byte("must not be read")}
+	f.manager.native = native
 	f.manager.speech.ASREnabled = true
 	f.manager.speech.ASRBackend = "local_then_bailian"
-	_, e := f.manager.transcribeAudio(context.Background(), []byte("synthetic-wav"))
-	if !bailian.IsNoSpeech(e) {
-		t.Fatal("no-words should not call keyless cloud", e)
+	if _, err := (mediaUnderstanding{manager: f.manager}).recognizeVoice(t.Context(), linuxnative.Message{ID: "incoming-voice", Type: 34}); err == nil || err.Error() != "media_transcription_plugin_migration_required" {
+		t.Fatal("missing plugin did not stop before download", err)
 	}
-	scratch := filepath.Join(f.manager.privateWorkspaceFor(f.manager.native.Account()), "scratch")
-	entries, e := os.ReadDir(scratch)
-	if e != nil || len(entries) != 0 {
-		t.Fatal("temporary audio not cleaned", e, entries)
+	if native.calls != 0 {
+		t.Fatal("missing plugin downloaded incoming audio", native.calls)
 	}
 }
 
-func TestLiveLocalASRFromRegisteredPublicModel(t *testing.T) {
-	root, input := os.Getenv("WECHAT_LIVE_ASR_WORKSPACE"), os.Getenv("WECHAT_LIVE_ASR_WAV")
-	if root == "" || input == "" {
-		t.Skip("explicit local-model and audio paths required; no network or WeChat sends")
-	}
-	t.Setenv("WECHAT_WORKSPACE_ROOT", root)
+func TestLocalASRStatusRequiresInstalledConfiguredRegisteredPlugin(t *testing.T) {
 	f := setup(t)
-	if runtime.GOOS == "windows" {
-		b, err := os.ReadFile(os.Getenv("WECHAT_WINDOWS_TEST_CONFIG"))
-		if err != nil {
-			t.Fatal("Windows live ASR requires explicit broker configuration")
-		}
-		var windows agenthost.WindowsConfig
-		if json.Unmarshal(b, &windows) != nil {
-			t.Fatal("invalid Windows broker configuration")
-		}
-		settings := f.manager.agent.config()
-		settings.Host.Windows = &windows
-		if err = f.manager.agent.save(settings); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// Old speech flags and a legacy model name no longer make local ASR
+	// available. The plugin registry is the only source of that claim.
 	f.manager.speech.ASREnabled = true
-	f.manager.speech.ASRBackend = "local"
-	wav, e := os.ReadFile(input)
-	if e != nil {
-		t.Fatal(e)
+	f.manager.speech.ASRBackend = "local_then_bailian"
+	f.manager.speech.ASRLocalModel = "sensevoice-small-int8"
+	if status := f.manager.localASRStatus(); status["available"] != false || status["message"] != "媒体理解插件未安装或未启用" {
+		t.Fatal("legacy speech state was treated as local plugin readiness", status)
 	}
-	text, e := f.manager.transcribeAudio(context.Background(), wav)
-	if os.Getenv("WECHAT_LIVE_ASR_EXPECT_NO_WORDS") == "1" {
-		if !bailian.IsNoSpeech(e) {
-			t.Fatal("expected processed no-words outcome", e)
-		}
-		t.Log("real offline model processed audio with no recognized speech; WeChat sends=0")
-		return
+
+	fixture, _, policy, ctx := mediaPolicyFixture(t, false)
+	installed, err := policy.store.Installed(ctx, localASRPluginID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if e != nil {
-		t.Fatal(e)
+	if _, err = policy.store.SetEnabled(ctx, localASRPluginID, installed.Revision, false); err != nil {
+		t.Fatal(err)
 	}
-	if strings.TrimSpace(text) == "" {
-		t.Fatal("empty known-speech transcription")
+	configuration, err := policy.store.Configuration(ctx, localASRPluginID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("real offline model processed audio; text_characters=%d; WeChat sends=0", len([]rune(text)))
+	values := map[string]json.RawMessage{}
+	for key, value := range configuration.Values {
+		values[key] = append(json.RawMessage(nil), value...)
+	}
+	values["asr_backend"] = json.RawMessage(`"local"`)
+	values["local_asr_profile_id"] = json.RawMessage(`"sensevoice-small-int8"`)
+	if _, err = policy.store.SaveConfiguration(ctx, localASRPluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values, ClearSecrets: []string{"asr_key"}}); err != nil {
+		t.Fatal(err)
+	}
+	installed, err = policy.store.Installed(ctx, localASRPluginID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = policy.store.SetEnabled(ctx, localASRPluginID, installed.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	if status := fixture.manager.localASRStatus(); status["available"] != false || status["message"] != "本地语音识别资源尚未登记或已失效" {
+		t.Fatal("unregistered local resources were accepted", status)
+	}
+	_, _, expected := writeRegisteredLocalASRProfile(t, fixture.manager)
+	status := fixture.manager.localASRStatus()
+	if status["available"] != true || status["id"] != expected.Initializer.ProfileID || status["resource_version"] != expected.ResourceVersion {
+		t.Fatal("registered local profile status changed", status)
+	}
 }

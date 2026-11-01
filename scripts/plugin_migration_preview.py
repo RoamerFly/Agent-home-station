@@ -177,6 +177,7 @@ def _media_plan(repo: Path, config: dict[str, Any], speech: dict[str, Any]) -> t
         if legacy_backend == "local":
             values["asr_backend"] = "local"
             profile_id = _safe_text(speech.get("asr_local_model")) or "sensevoice-small-int8"
+            values["local_asr_profile_id"] = profile_id
             required.append("registered_local_asr_profile:" + profile_id)
         elif legacy_backend == "bailian":
             values.update({"asr_backend": "remote", "asr_endpoint": _join_endpoint(_safe_text(speech.get("endpoint")), ASR_PATH), "asr_model": _safe_text(speech.get("asr_model"))})

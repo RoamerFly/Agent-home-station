@@ -202,7 +202,7 @@ func TestPluginMigrationPreviewLocalProfileAndSourceHashChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	media := previewStep(t, first, "media-understanding")
-	if media.ProfileID != "sensevoice-synthetic" || !strings.Contains(strings.Join(media.RequiredMissing, ","), "registered_local_asr_profile:sensevoice-synthetic") {
+	if media.ProfileID != "sensevoice-synthetic" || string(media.Values["local_asr_profile_id"]) != `"sensevoice-synthetic"` || string(media.update.Values["local_asr_profile_id"]) != `"sensevoice-synthetic"` || !strings.Contains(strings.Join(media.RequiredMissing, ","), "registered_local_asr_profile:sensevoice-synthetic") {
 		t.Fatal(media)
 	}
 	if err = writePrivate(f.dir+"/mcp-config.json", []byte(`{"enabled":false,"web_search_enabled":false,"web_fetch_enabled":false,"max_tool_calls":3,"servers":[]}`)); err != nil {

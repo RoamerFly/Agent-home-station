@@ -20,9 +20,11 @@ class ConfigurationContractTests(unittest.TestCase):
         for name in ("vision_endpoint", "vision_key", "vision_model", "asr_endpoint", "asr_key", "asr_model"):
             self.assertIn(name, self.schema["properties"])
         self.assertEqual(self.schema["properties"]["asr_backend"]["default"], "remote")
+        profile = self.schema["properties"]["local_asr_profile_id"]
+        self.assertEqual((profile["minLength"], profile["maxLength"]), (1, 128))
 
     def test_staged_ready_scope_is_exactly_observe_and_transcribe(self):
-        self.assertEqual((self.manifest["version"], self.manifest["status"]), ("0.1.2", "ready"))
+        self.assertEqual((self.manifest["version"], self.manifest["status"]), ("0.1.3", "ready"))
         capabilities = json.loads((ROOT / "capabilities.json").read_text(encoding="utf8"))["capabilities"]
         self.assertEqual([item["id"] for item in capabilities], ["media.observe", "media.transcribe"])
         for item in capabilities:
@@ -44,7 +46,7 @@ class ConfigurationContractTests(unittest.TestCase):
         spec.loader.exec_module(transcription)
         audio = {"media_ref": "audio_1", "sha256": "a" * 64, "version": 1, "mime": "audio/wav"}
         remote = transcription.transcribe({"audio": audio}, {"asr_model": "synthetic-asr"}, {}, lambda method, _: {"output": {"text": "remote"}})
-        local = transcription.transcribe({"audio": audio}, {"asr_backend": "local"}, {"local_asr": {"profile_id": "sensevoice-small-int8", "resource_version": "1"}}, lambda method, _: {"state": "transcribed", "text": "local"})
+        local = transcription.transcribe({"audio": audio}, {"asr_backend": "local", "local_asr_profile_id": "sensevoice-small-int8"}, {"local_asr": {"profile_id": "sensevoice-small-int8", "resource_version": "1"}}, lambda method, _: {"state": "transcribed", "text": "local"})
         self.assertEqual((remote["text"], local["text"]), ("remote", "local"))
 
 
