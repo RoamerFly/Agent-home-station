@@ -121,3 +121,43 @@ func TestStartupUnreadGroupsAcrossPagesSpeakersAndPreservesTimes(t *testing.T) {
 		t.Fatal("already viewed messages replayed")
 	}
 }
+
+func TestUnreadGroupReplyBindsDispatchToRealAnchor(t *testing.T) {
+	const thread = "room@chatroom"
+	w, c, n := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+		return `{"action":"reply","messages":["好的。"]}`, nil
+	}))
+	c.Config.Permissions.ObserveGroups, c.Config.Permissions.AutonomousGroups = true, true
+	w.config.GroupRules = map[string]GroupRule{thread: {Mode: "social"}}
+	source := &fakeSource{messages: map[string]linuxnative.Message{}}
+	for k, body := range []string{"群友的原话", "另一位群友的提问"} {
+		id := fmt.Sprintf("unread-%d", k)
+		m := fixtureMessage(id, thread, body, "incoming")
+		m.SenderID = fmt.Sprintf("member%d", k)
+		m.ServerID = strconv.Itoa(80 + k)
+		m.CreatedAt = time.Now().Add(time.Duration(k-3) * time.Minute).UTC().Format(time.RFC3339)
+		source.messages[id] = m
+		w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Backlog: true, Phase: "received", Event: fixtureEvent(strconv.Itoa(k+1), id, thread, "incoming", "remote")})
+	}
+	w.source = source
+	if err := w.processUnreadConversation(t.Context(), thread); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.runtime.Plans) != 1 {
+		t.Fatalf("plans=%d", len(w.runtime.Plans))
+	}
+	p := w.runtime.Plans[0]
+	ref := p.Input.Source
+	if ref == nil || ref.EventID == "" || ref.MessageID != "unread-1" || ref.Sender != "member1" || ref.Revision < 1 {
+		t.Fatal("missing canonical anchor", ref)
+	}
+	ev, err := c.Store.ReadEvent(t.Context(), []string{companion.ScopeID("wechat", "test", thread)}, ref.EventID)
+	if err != nil || ev.Text != "另一位群友的提问" || p.Input.Text == ev.Text {
+		t.Fatal("digest changed original body", err)
+	}
+	readyPlans(w)
+	w.reconcileUtterancePlans(t.Context())
+	if p.State != "accepted" || len(n.submissions) != 1 {
+		t.Fatal("group digest did not pass real dispatch admission", p.State, p.StopReason, len(n.submissions))
+	}
+}

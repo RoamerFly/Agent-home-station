@@ -126,6 +126,7 @@ func (w *Worker) processUnreadConversation(ctx context.Context, thread string) e
 	unread := []companion.ConversationEvent{}
 	mediaIDs := []string{}
 	var anchor *linuxnative.Message
+	var anchorInput companion.Input
 	var allIDs []string
 	w.recovering = true
 	defer func() { w.recovering = false }()
@@ -185,6 +186,9 @@ func (w *Worker) processUnreadConversation(ctx context.Context, thread string) e
 		if err = c.Store.Observe(observed, c.Config, now); err != nil {
 			return err
 		}
+		if eligible {
+			anchorInput = observed
+		}
 		unread = append(unread, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: body, At: m.CreatedAt, NewRequest: eligible, Source: observed.Source, ReplyTo: observed.QuotedSource})
 	}
 	if anchor == nil {
@@ -197,6 +201,14 @@ func (w *Worker) processUnreadConversation(ctx context.Context, thread string) e
 	// contextual data, never aliases for the anchor's authenticated sender.
 	in := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: anchor.SenderID, TraceID: anchor.ID, MessageTime: anchor.CreatedAt, QuoteServerID: anchor.ServerID, Mode: "social", IsGroup: strings.HasSuffix(thread, "@chatroom"), Directed: w.addressed(*anchor), PersonaOverride: w.config.GroupRules[thread].Persona, UnreadMessages: unread, UnreadMediaIDs: mediaIDs, HistoryObserved: true,
 		Text: "这是重新上线后本会话尚未查看的一段未读消息。按unread_messages里的真实时间和发言者整体理解，结合后续消息判断哪些事项仍需要回复或行动；不逐条追着旧话补答。自然回应，也可以安静。"}
+	// The digest is runtime context. Bind its dispatch to the actual incoming
+	// message, without treating the digest as the anchor author's literal words.
+	in.Source, in.QuotedSource = anchorInput.Source, anchorInput.QuotedSource
+	if c.Config.Permissions.Remember {
+		if source, ok := c.Store.SourceForInput(anchorInput); ok {
+			in.Source = source
+		}
+	}
 	if !in.IsGroup || in.Directed {
 		in.Mode = "direct"
 	}

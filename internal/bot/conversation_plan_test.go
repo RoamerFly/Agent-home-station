@@ -224,16 +224,59 @@ func TestWakeIsIndependentBoundedAndOnlyForOwnerSelectedTargets(t *testing.T) {
 	}
 }
 
-func TestPlanPollsExistingReceiptWithoutWaitingForResendTimerOrSubmittingAgain(t *testing.T) {
-	w, c, n, in := planWorker(t, &planReviewModel{})
-	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"只核对一次"}})
+type countedReceiptReader struct {
+	*reliableFake
+	reads int
+}
+
+func (n *countedReceiptReader) LookupSend(ctx context.Context, key string) (linuxnative.ToolStatus, error) {
+	n.reads++
+	return n.reliableFake.LookupSend(ctx, key)
+}
+
+func (n *countedReceiptReader) ToolSendStatus(ctx context.Context, id string) (linuxnative.ToolStatus, error) {
+	n.reads++
+	return n.reliableFake.ToolSendStatus(ctx, id)
+}
+
+func TestPendingPlanSharesPersistedReceiptBackoff(t *testing.T) {
+	w, c, _, in := planWorker(t, &planReviewModel{})
+	n := &countedReceiptReader{reliableFake: &reliableFake{intents: map[string]linuxnative.ToolStatus{}}}
+	w.sender = n
+	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"合成回复"}})
 	readyPlans(w)
-	d := &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, Bubble: 0, Text: "只核对一次", State: "waiting", ID: "existing-job", Key: "existing-job", Created: time.Now(), Next: time.Now().Add(time.Hour)}
+	d := &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, Bubble: 0, Text: "合成回复", State: "waiting", ID: "existing-job", Key: "stable-key", Created: time.Now()}
 	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
-	n.intents[d.ID] = linuxnative.ToolStatus{ID: d.ID, State: "accepted", ThreadID: in.Thread, ServerID: "123"}
-	w.reconcileUtterancePlans(context.Background())
-	if len(n.submissions) != 0 || w.runtime.Plans[0].State != "accepted" || d.State != "accepted" {
-		t.Fatal("receipt check waited for resend timer or resubmitted", len(n.submissions), w.runtime.Plans[0], d)
+	w.config.Options.RetryDelaySeconds = 120
+	for round := 1; round <= 3; round++ {
+		d.Next = time.Time{} // advance to the next scheduled check
+		at := time.Now()
+		w.reconcileDeliveries(t.Context())
+		base := time.Duration(120<<(round-1)) * time.Second
+		if d.UncertainRounds != round || d.Next.Before(at.Add(base)) || d.Next.After(time.Now().Add(2*base)) {
+			t.Fatal("incorrect backoff", round, d.Next.Sub(at))
+		}
+		reads, next := n.reads, d.Next
+		w.reconcileUtterancePlans(t.Context())
+		w.reconcileDeliveries(t.Context())
+		if n.reads != reads || !d.Next.Equal(next) {
+			t.Fatal("plan bypassed or resampled receipt deadline")
+		}
+	}
+	if err := w.loadRuntime("server-1"); err != nil {
+		t.Fatal(err)
+	}
+	saved := w.runtime.Deliveries[0]
+	if !saved.Next.Equal(d.Next) || saved.UncertainRounds != 3 {
+		t.Fatal("restart lost sampled deadline")
+	}
+	n.intents[d.Key] = linuxnative.ToolStatus{ID: d.ID, ThreadID: in.Thread, State: "accepted", ServerID: "123"}
+	saved.Next = time.Time{}
+	w.runtime.Plans[0].InboxChecked = true
+	w.reconcileDeliveries(t.Context())
+	w.reconcileUtterancePlans(t.Context())
+	if len(n.submissions) != 0 || w.runtime.Plans[0].State != "accepted" || saved.State != "accepted" {
+		t.Fatal("late receipt missed or duplicated", saved.State, w.runtime.Plans[0].State)
 	}
 }
 func TestNewContextPreventsSubmissionOfPreparedOldText(t *testing.T) {

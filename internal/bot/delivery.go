@@ -178,16 +178,24 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 }
 func (w *Worker) waitDelivery(d *delivery, reason string) (sending.Receipt, error) {
 	d.State = "waiting"
+	d.Checks = 0
+	w.deferReceiptLookup(d, reason)
+	if w.persistErr != nil {
+		return sending.Receipt{}, w.persistErr
+	}
+	return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_reconciliation_pending", IntentID: d.ID}
+}
+
+// Record the sampled deadline once per inconclusive observation. Restarts and
+// plan pacing ticks must not sample again before this deadline expires.
+func (w *Worker) deferReceiptLookup(d *delivery, reason string) {
 	d.Reason = reason
 	d.UncertainRounds++
-	d.Checks = 0
 	d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds))
-	if err := w.saveRuntime(); err != nil {
-		w.persistErr = err
-		return sending.Receipt{}, err
+	w.persistErr = w.saveRuntime()
+	if w.persistErr == nil {
+		w.recordDeliveryWait(d, reason)
 	}
-	w.recordDeliveryWait(d, "delivery_random_backoff")
-	return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_reconciliation_pending", IntentID: d.ID}
 }
 
 func (w *Worker) deliveryCancelled(d *delivery) bool {
@@ -246,8 +254,26 @@ func deliveryBackoff(baseSeconds, round int) time.Duration {
 func DeliveryRetryBackoff(round int) time.Duration { return deliveryBackoff(120, round) }
 
 func (w *Worker) recordDeliveryWait(d *delivery, reason string) {
-	w.activity(Record{Event: "delivery_waiting", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, SendID: d.ID, Reason: reason, Status: "waiting", RetryAttempts: d.Attempts, RetryAt: d.Next.Format(time.RFC3339)})
+	event := "delivery_waiting"
+	if d.Bubble < 0 {
+		// A late acknowledgement for progress does not reopen the parent turn.
+		event = "tool_progress_receipt_waiting"
+	}
+	w.activity(Record{Event: event, Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, SendID: d.ID, Reason: reason, Status: "waiting", RetryAttempts: d.Attempts, RetryAt: d.Next.Format(time.RFC3339)})
 }
+
+// Prefer the known native job. A missing job can still be resolved by the
+// original idempotency key. Neither read creates a new send.
+func lookupTextReceipt(ctx context.Context, n reliableNative, d *delivery) (linuxnative.ToolStatus, error) {
+	if d.ID != "" {
+		status, err := n.ToolSendStatus(ctx, d.ID)
+		if !errors.Is(err, linuxnative.ErrToolNotFound) {
+			return status, err
+		}
+	}
+	return n.LookupSend(ctx, d.Key)
+}
+
 func (w *Worker) reconcileDeliveries(ctx context.Context) {
 	n, ok := w.sender.(reliableNative)
 	if !ok {
@@ -262,7 +288,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		}
 		if d.Bubble < 0 {
 			readCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-			status, err := n.LookupSend(readCtx, d.Key)
+			status, err := lookupTextReceipt(readCtx, n, d)
 			cancel()
 			if err == nil && status.State == "accepted" {
 				w.acceptReconciled(d)
@@ -279,8 +305,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 				continue
 			}
 			if time.Since(d.Created) < 15*time.Minute && (time.Since(d.Created) < 5*time.Minute || scanErr != nil || !complete) {
-				d.Next = time.Now().Add(30 * time.Second)
-				w.persistErr = w.saveRuntime()
+				w.deferReceiptLookup(d, "receipt_lookup_failed")
 				continue
 			}
 			d.State = "stopped"
@@ -351,8 +376,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		}
 		if !historyClear {
 			if d.State != "accepted" {
-				d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds))
-				w.persistErr = w.saveRuntime()
+				w.deferReceiptLookup(d, "previous_receipt_unverified")
 			}
 			continue
 		}
@@ -375,7 +399,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			continue
 		}
 		readCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		status, err := n.LookupSend(readCtx, d.Key)
+		status, err := lookupTextReceipt(readCtx, n, d)
 		cancel()
 		if err == nil && (status.State == "queued" || status.State == "sending" || status.State == "submitting" || status.State == "running") {
 			d.Next = time.Now().Add(15 * time.Second)
@@ -407,25 +431,20 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			continue
 		}
 		if err != nil && !errors.Is(err, linuxnative.ErrToolNotFound) || scanErr != nil || !complete || !w.sender.Ready() {
-			d.Next = time.Now().Add(30 * time.Second)
-			w.persistErr = w.saveRuntime()
+			w.deferReceiptLookup(d, "receipt_lookup_failed")
 			continue
 		}
 		if d.Cancelled {
 			// Cancellation changes the recovery rule, not the evidence: keep
 			// checking the original key for a late receipt, but do not resend.
-			d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds+1))
-			w.persistErr = w.saveRuntime()
+			w.deferReceiptLookup(d, "delivery_receipt_unverified")
 			continue
 		}
 		if !confirmedRetryable {
 			// An absent, unreadable or otherwise unknown idempotency key is never
 			// proof that WeChat did not receive the text.  Preserve the original
 			// draft and evidence, and retry only the lookup on a randomized delay.
-			d.Reason = "delivery_receipt_unverified"
-			d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds+1))
-			w.persistErr = w.saveRuntime()
-			w.recordDeliveryWait(d, "delivery_receipt_unverified")
+			w.deferReceiptLookup(d, "delivery_receipt_unverified")
 			continue
 		}
 		if !w.config.Options.RetryUncertain {

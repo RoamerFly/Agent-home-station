@@ -258,35 +258,8 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 		// An already submitted bubble is reconciled independently, never replaced
 		// or assumed absent because a new human message arrived.
 		if d := w.planDelivery(p); d != nil {
-			if d.State != "accepted" && d.State != "stopped" && !time.Now().Before(p.Next) {
-				if n, ok := w.sender.(reliableNative); ok {
-					pollCtx, cancel := context.WithTimeout(ctx, time.Second)
-					var status linuxnative.ToolStatus
-					var err error
-					if d.ID != "" {
-						status, err = n.ToolSendStatus(pollCtx, d.ID)
-					} else {
-						status, err = n.LookupSend(pollCtx, d.Key)
-					}
-					cancel()
-					p.Next = time.Now().Add(2 * time.Second)
-					if err == nil && status.ThreadID == d.Thread {
-						if status.State == "accepted" {
-							d.State = "accepted"
-							if d.SubmittedText != "" {
-								d.Text = d.SubmittedText
-							}
-							w.advanceSendGate(d.Thread)
-							d.ID = status.ID
-							w.persistErr = w.saveRuntime()
-						} else if status.State == "failed" && !status.Retryable || status.State == "cancelled" {
-							d.State = "stopped"
-							d.Reason = status.Reason
-							w.persistErr = w.saveRuntime()
-						}
-					}
-				}
-			}
+			// The delivery reconciler owns the persisted receipt deadline. Plans
+			// only consume its outcome, even if their pacing timer expires first.
 			if d.State == "accepted" {
 				w.acceptPlanBubble(c, p, d.Text)
 			} else if d.State == "stopped" {
@@ -355,7 +328,7 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 			p.Next = time.Now().Add(time.Second)
 			w.persistErr = w.saveRuntime()
 		} else {
-			p.State = "stopped"
+			p.State, p.StopReason = "stopped", sending.FailureReason(err)
 			w.persistErr = w.saveRuntime()
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, Content: text, Status: "failed", Reason: sending.FailureReason(err)})
 		}
