@@ -306,6 +306,9 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 			return "", toolInputError("video_source_authorization_revoked")
 		}
 		b, e := json.Marshal(out)
+		if e == nil {
+			p.routeCrossConversationThread(in.SourceThread)
+		}
 		return string(b), e
 	}
 	if in.Action == "info" {

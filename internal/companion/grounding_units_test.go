@@ -274,7 +274,7 @@ func TestAtomicReadOnlyCheckerOmitsMustReplyButEditorPreservesIt(t *testing.T) {
 	in.MustReply = true
 	model := &groundingSequenceModel{checks: []string{"reject", "allow"}, answers: []string{`{"action":"reply","bubbles":[{"text":"收到。","route_id":"R1"}]}`}}
 	e := &Engine{Store: s, Config: c, model: model}
-	out, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"待核对草稿。"}, ReplyContexts: []ReplyContext{{RiskFlags: []string{"atomic_required_response_test"}}}})
+	out, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"待核对草稿。"}, ReplyContexts: []ReplyContext{{RiskFlags: []string{"atomic_required_response_test"}}}})
 	if err != nil || out.Action != "reply" || len(model.inputs) != 3 {
 		t.Fatal(out, err, model.calls)
 	}

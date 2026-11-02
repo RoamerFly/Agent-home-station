@@ -16,7 +16,7 @@ func namedReplyFixture(t *testing.T) (*Engine, Input, Decision) {
 		t.Fatal(err)
 	}
 	e := &Engine{Store: s, Config: c, model: &groundingSequenceModel{}}
-	d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"收到。"}})
+	d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"收到。"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestNamedAddressMismatchCanBeRepairedOnceUsingOriginalRoute(t *testing.T) {
 	e, in, _ := namedReplyFixture(t)
 	model := &groundingSequenceModel{answers: []string{`{"action":"reply","bubbles":[{"text":"收到。","route_id":"R1"}]}`}}
 	e.model = model
-	out, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"小周，收到。"}})
+	out, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"小周，收到。"}})
 	if err != nil || out.Action != "reply" || model.calls != 2 || out.ReplyContexts[0].TargetIDs[0] != "alpha" {
 		t.Fatal(out, err, model.calls)
 	}
@@ -76,7 +76,7 @@ func TestConversationDeliveryDoesNotBindDestinationVocativeToOriginRequester(t *
 	if e.ValidateReplyContext(t.Context(), in, d.ReplyContexts[0]) == nil {
 		t.Fatal("member proof was silently changed into conversation delivery")
 	}
-	d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"小周，收到。"}})
+	d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"小周，收到。"}})
 	if err != nil || d.ReplyContexts[0].ContextVersion == original {
 		t.Fatal(d, err)
 	}

@@ -116,9 +116,6 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 		return
 	}
 	w.noticeGenerationMessage(m, eligible)
-	if eligible && (w.addressed(m) || !strings.HasSuffix(m.ThreadID, "@chatroom")) {
-		w.pauseInterruptedMedia(m)
-	}
 	if m.Type != 1 && !m.IsQuotedText() {
 		return
 	}

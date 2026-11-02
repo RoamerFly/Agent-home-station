@@ -129,7 +129,7 @@ func TestTemporalSpecificityRoutesKnownFailureIntoOneReadOnlyReview(t *testing.T
 	if !e.temporalSpecificityRisk(t.Context(), in, draft) {
 		t.Fatal("a weekday became a selected calendar week on the fast path")
 	}
-	checked, err := e.ReviewGroundedReply(t.Context(), in, draft)
+	checked, err := e.DiagnoseGroundedReply(t.Context(), in, draft)
 	if err != nil || checked.Action != "reply" || strings.Join(checked.Messages, "") != strings.Join(draft.Messages, "") || model.state == nil {
 		t.Fatal("temporal routing edited/rejected a draft independently of the reviewer", checked, err)
 	}

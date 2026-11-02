@@ -37,9 +37,9 @@ type Config struct {
 	MediaSeedReceipt    func(string, string) (linuxnative.ToolStatus, bool)
 	BacklogSettled      func(string, string, []string, string)
 	AuthorizeThread     func(context.Context, string) (bool, error)
-	ReportFailure       func(companion.Input, string) error
 	AgentTask           func(time.Time, func(string) bool) (*companion.Input, error)
 	AgentTaskDone       func(companion.Input, string)
+	AgentTaskRetry      func(companion.Input, time.Duration, string)
 	AgentTaskDelivery   func(companion.Input, TaskDelivery) error
 	AgentTaskActive     func(companion.Input) bool
 	Draining            func() bool
@@ -275,7 +275,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 			working.Body = "收到了一段视频，请结合内容决定是否回应。"
 		}
 		if message.Type == 49 {
-			working.Body = "收到了一条分享。依据实际读取的视频或正文总结主要内容与结论，结合本会话偏好决定是否发送；不能用标题替代实际内容。"
+			working.Body = "收到了一条分享，结合会话偏好判断是否读取内容并回复。"
 			if message.FileAttachmentName() != "" {
 				working.Body = "收到一个文件，请结合原件及前后聊天决定是否回应。"
 			}
@@ -294,9 +294,19 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if w.persistErr != nil {
 		return
 	}
-	if w.stopRequestedVoice(ctx, working) {
-		if !eligible {
+	if stoppedVoice := w.stopRequestedVoice(ctx, working); stoppedVoice {
+		// A plain stop is a local queue operation, never a model turn.  A
+		// replacement such as “不是这首，换成…” is allowed through so the same
+		// message can create its new, separately traced request after the old
+		// delivery has already been made ineligible.
+		if !replacesVoice(working.Body) {
 			return
+		}
+		// The same unmentioned group message can explicitly replace a song.
+		// It has already proved ownership by stopping exactly one prior trace,
+		// so promote only this replacement instruction into a fresh turn.
+		if !eligible {
+			eligible, prompt = true, working.Body
 		}
 	}
 	if !eligible {
@@ -316,12 +326,13 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		processingReason = "direct_question_review"
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
+	readMedia := isMedia && w.readMediaBeforeDecision(message)
 	if isMedia && w.config.Options != nil && w.config.Analyzer != nil {
 		if !w.observationAllowed(message) {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
 			return
 		}
-		if w.generation == nil {
+		if w.generation == nil && readMedia {
 			analysisCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			summary, analysisErr := w.analyzeIncomingMedia(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
 			mediaObservationState = "observed"
@@ -378,7 +389,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation != nil {
 			var analysis *linuxnative.Message
-			if isMedia && w.config.Analyzer != nil {
+			if readMedia && w.config.Analyzer != nil {
 				copy := message
 				analysis = &copy
 			}
@@ -501,6 +512,15 @@ func (w *Worker) promptWithSharePreference(message linuxnative.Message, now time
 }
 
 func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engine, input companion.Input) string {
+	if input.RecoveryBlocked || !recoveryPrivacySupported(character.Tools, input) {
+		// Persistent task continuations can run without the background
+		// generation scheduler. Do the same fail-closed check here so a
+		// cross-conversation checkpoint never reaches Engine.Respond after the
+		// host adapter has reset its private route.
+		w.activity(Record{Event: "model_recovery_blocked", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "needs_review", Reason: "cross_conversation_checkpoint_requires_fresh_authorization"})
+		w.queuePhase(input.TraceID, "needs_review")
+		return "generation_paused"
+	}
 	input = w.withAutonomyPlans(input)
 	if !character.Config.Permissions.Remember && input.Sender != "" && input.Mode != "proactive" {
 		verified, err := w.verifyEphemeralSource(ctx, input)
@@ -535,6 +555,9 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 	decision, err := character.Respond(w.modelContext(modelCtx, input.Thread, input.TraceID), input)
 	processingErr := modelCtx.Err()
 	cancel()
+	if w.scheduleModelContinuation(input, err, toolStarted) {
+		return "retrying_model"
+	}
 	w.finishCharacter(ctx, character, input, decision, err, processingErr, toolStarted, progressDelivered)
 	var changed *companion.GenerationEvidenceChangedError
 	if errors.As(err, &changed) {
@@ -594,7 +617,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		switch decision.Reason {
 		case "invalid_model_decision", "invalid_tool_arguments", "tool_unavailable_or_budget_exhausted", "tool_budget_exhausted":
 			w.activity(Record{Event: "model_decision_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Reason: decision.Reason, Status: "failed", Origin: "model"})
-			decision = companion.Decision{Action: "silent", Reason: "decision_failure_reported"}
+			decision.Action = "failed"
 		}
 	}
 	if err != nil && toolStarted && processingErr != nil && ctx.Err() == nil {
@@ -606,29 +629,14 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			w.modelFailed(input.Thread, input.TraceID, err)
 		}
 		status, category := "silent", "decision"
-		if err != nil || decision.Reason == "decision_failure_reported" || decision.Reason == "tool_task_deadline_exceeded" {
+		if err != nil || decision.Action == "failed" || decision.Reason == "tool_task_deadline_exceeded" {
 			status, category = "failed", "error"
 		}
 		w.activity(Record{Event: "tool_task_finished_without_result", Category: category, ThreadID: input.Thread, MessageID: input.TraceID, Reason: "tool_task_no_final_after_progress", Status: status})
 		// A model-selected silent outcome remains silent. Errors are recorded
 		// and can be handed to the model through the existing recovery task.
 	}
-	if w.config.ReportFailure != nil && !input.ReportOnly && (input.IsGroup || input.Mode == "direct") && (decision.Reason == "decision_failure_reported" || decision.Reason == "tool_task_deadline_exceeded" || decision.Reason == "tool_task_no_final_after_progress" || err != nil && ctx.Err() == nil) {
-		reason := decision.Reason
-		if err != nil {
-			// The private report contains a short status code. Keep the actual
-			// provider diagnostic in local activity before clearing the error.
-			if !progressDelivered {
-				w.modelFailed(input.Thread, input.TraceID, err)
-			}
-			reason = "model_generation_failed"
-		}
-		if reportErr := w.config.ReportFailure(input, reason); reportErr != nil {
-			w.config.Log("private_operation_report_save_failed")
-		}
-		decision = companion.Decision{Action: "silent", Reason: "operation_reported_privately"}
-		err = nil
-	}
+
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -636,6 +644,16 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		w.config.Log("character_model_or_memory_failed")
 		w.modelFailed(input.Thread, input.TraceID, err)
 		return
+	}
+	if coverage := decision.HistoryCoverage; coverage != nil {
+		status, reason := "completed", "history_read_completed"
+		if coverage.Failed > 0 || coverage.Attempted < coverage.Selected {
+			status, reason = "partial", "history_read_partial"
+		}
+		note, marshalErr := json.Marshal(coverage)
+		if marshalErr == nil {
+			w.activity(Record{Event: "history_read_coverage", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: status, Reason: reason, DecisionNote: string(note), Origin: "agent"})
+		}
 	}
 	if decision.Action != "reply" {
 		w.scheduleConversationWake(character, input, decision.WakeAfterSeconds, decision.WaitForReply, decision.WakeReason)
@@ -645,7 +663,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			category = "error"
 			status = "failed"
 		}
-		if decision.Reason == "operation_reported_privately" {
+		if decision.Action == "failed" || decision.Reason == "tool_task_deadline_exceeded" {
 			// Not sending a group error is not a model's social silence decision.
 			category, status = "error", "failed"
 		}

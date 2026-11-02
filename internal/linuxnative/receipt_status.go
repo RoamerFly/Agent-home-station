@@ -3,7 +3,7 @@ package linuxnative
 // WithVoiceReceipts folds a complete set of actual per-note receipts into the
 // job result. It does not create receipts, query the network, or resend anything.
 func (s ToolStatus) WithVoiceReceipts() ToolStatus {
-	if len(s.VoiceChunks) == 0 {
+	if s.VoicePartsIncomplete || len(s.VoiceChunks) == 0 {
 		return s
 	}
 	seen := map[int]bool{}

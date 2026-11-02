@@ -104,7 +104,7 @@ func TestGroundingReviewHonorsSilentAndRejectsUnknownAction(t *testing.T) {
 		}
 		in.MustReply = tc.wantError
 		e := &Engine{Store: s, Config: c, model: &groundingSequenceModel{answers: []string{tc.answer}, checks: []string{"reject"}}}
-		d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"你爸心里有点空"}})
+		d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"你爸心里有点空"}})
 		if tc.wantError {
 			if err == nil {
 				t.Fatal("unknown action accepted")
@@ -317,7 +317,7 @@ func groundedInput(t *testing.T, s *Store, c Config, actor, id, text string) Inp
 	}
 	return in
 }
-func TestMandatoryPlatformReplyRepairsSilenceWithoutForcingSocial(t *testing.T) {
+func TestMandatoryPlatformSilenceRecordsFailureWithoutPaidEditor(t *testing.T) {
 	for _, must := range []bool{true, false} {
 		s, c, _ := memoryFixture(t)
 		c.Enabled = true
@@ -330,7 +330,7 @@ func TestMandatoryPlatformReplyRepairsSilenceWithoutForcingSocial(t *testing.T) 
 		}
 		d, err := e.Respond(t.Context(), in)
 		if must {
-			if err != nil || d.Action != "reply" || len(d.Messages) == 0 || model.calls != 3 {
+			if (err == nil && d.ReviewFailure == nil) || d.Action == "reply" || model.calls != 1 {
 				t.Fatal(d, err, model.calls)
 			}
 		} else if err != nil || d.Action != "silent" || model.calls != 1 {
@@ -343,7 +343,7 @@ func TestGroundingReviewCorrectsUnsupportedSceneOnce(t *testing.T) {
 	in := groundedInput(t, s, c, "alpha", "scene", "刚挂掉。")
 	model := &groundingSequenceModel{answers: []string{`{"action":"reply","bubbles":[{"text":"刚结束通话呀。","route_id":"R1"}]}`}, checks: []string{"reject", "allow"}}
 	e := &Engine{Store: s, Config: c, model: model}
-	d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"屋里突然安静得有点空。"}})
+	d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"屋里突然安静得有点空。"}})
 	if err != nil || d.Action != "reply" || model.calls != 3 || len(d.Messages) == 0 {
 		t.Fatal(d, err, model.calls)
 	}
@@ -358,7 +358,7 @@ func TestReviewRetargetRequiresExplicitPersonAndOriginalQuote(t *testing.T) {
 	in.Addressees = []string{"beta"}
 	model := &groundingSequenceModel{answers: []string{`{"action":"reply","bubbles":[{"text":"和爸爸聊得怎么样？","route_id":"R2"}]}`}, checks: []string{"reject", "allow"}}
 	e := &Engine{Store: s, Config: c, model: model}
-	d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"你刚和他视频结束？"}})
+	d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"你刚和他视频结束？"}})
 	if err != nil || len(d.ReplyContexts) != 1 {
 		t.Fatal(d, err)
 	}
@@ -390,7 +390,7 @@ func TestKnownAddresseeRelationCannotRebindToReporter(t *testing.T) {
 			model.checks = []string{"allow"}
 			wantCalls, editorIndex = 2, 0
 		} // The explicit plural contract rejects before a model check.
-		d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{draft}})
+		d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{draft}})
 		if err != nil || d.Action != "reply" || model.calls != wantCalls || model.inputs[editorIndex]["rejected_verdict"] == nil {
 			t.Fatal(draft, d, err, model.calls, model.inputs)
 		}
@@ -416,7 +416,7 @@ func TestAssistantStatementReviewSourceIsEvidenceNotFact(t *testing.T) {
 	in := groundedInput(t, s, c, "alpha", "correction", "我没说自己伤心，你刚才是编的。")
 	model := &assistantAliasProposalModel{groundingSequenceModel: groundingSequenceModel{checks: []string{"reject", "allow"}}, anchor: old.TraceID}
 	e := &Engine{Store: s, Config: c, model: model}
-	d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"对，是我擅自添加了你的感受，抱歉。"}, ReplyContexts: []ReplyContext{{RiskFlags: []string{"unsupported_prior_reply"}}}})
+	d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"对，是我擅自添加了你的感受，抱歉。"}, ReplyContexts: []ReplyContext{{RiskFlags: []string{"unsupported_prior_reply"}}}})
 	if err != nil || d.Action != "reply" || model.calls != 3 {
 		t.Fatal(d, err, model.calls)
 	}

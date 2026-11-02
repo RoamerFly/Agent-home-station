@@ -85,6 +85,27 @@ func TestQuoteAdmissionFailureHasSafeCodeWithoutLeakingNativeBody(t *testing.T) 
 	}
 }
 
+func TestResumeMissingMediaUsesFreshIdempotencyKeyAndNewJob(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/v1/accounts/test/tools/media/old-job/resume-missing" || r.Header.Get("Idempotency-Key") != "fresh-resume-key" {
+			t.Fatalf("bad resume route or idempotency key: %s %s %q", r.Method, r.URL.Path, r.Header.Get("Idempotency-Key"))
+		}
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["idempotencyKey"] != "fresh-resume-key" {
+			t.Fatal("missing resume key", body)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		write(w, `{"id":"new-job","accountId":"test","threadId":"filehelper","sourceId":"source-one","state":"queued","phase":"voice"}`)
+	}))
+	defer server.Close()
+	s := testSender(t, server.URL)
+	status, err := s.ResumeMissingMediaJob(context.Background(), "old-job", "fresh-resume-key")
+	if err != nil || status.ID != "new-job" || status.ThreadID != "filehelper" || status.SourceID != "source-one" || status.State != "queued" {
+		t.Fatal(status, err)
+	}
+}
+
 func TestVoiceStatusPreservesPacingAndReceiptEvidenceWithoutPrivateDetails(t *testing.T) {
 	s := &Sender{account: "test"}
 	status, err := s.decodeToolStatus([]byte(`{"id":"job-voice","accountId":"test","state":"running","phase":"pacing","result":{"private":"must not expose","voiceFailureStage":"voice_upload_exchange_outcome_unknown","chunks":[{"index":0,"state":"accepted","durationMs":40124,"pacingMs":0,"submittedAtMs":123,"acceptedAtMs":456,"serverMessageId":"18446744073709551615"},{"index":1,"state":"prepared","durationMs":40124,"pacingMs":41999,"serverMessageId":null},{"index":9,"state":"accepted","durationMs":1,"pacingMs":0}]}}`))
@@ -187,4 +208,12 @@ func (r *textReader) Read(b []byte) (int, error) {
 	n := copy(b, r.value)
 	r.value = r.value[n:]
 	return n, nil
+}
+
+func TestPartialCancellationCannotBecomeCompleteReceipt(t *testing.T) {
+	s := &Sender{account: "a"}
+	status, err := s.decodeToolStatus([]byte(`{"id":"job","accountId":"a","state":"cancelled","cancelRequested":true,"result":{"chunks":[{"index":0,"state":"accepted","durationMs":1000,"serverMessageId":"22"},{"index":1,"state":"submitting","durationMs":1000},{"index":2,"state":"cancelled","durationMs":1000}]}}`))
+	if err != nil || len(status.VoiceChunks) != 3 || status.VoiceChunks[2].State != "cancelled" || status.WithVoiceReceipts().State == "accepted" {
+		t.Fatal(status, err)
+	}
 }

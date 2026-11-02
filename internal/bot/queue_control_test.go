@@ -74,6 +74,93 @@ func TestQueueResumeReportsNativeBoundaryWithoutCloning(t *testing.T) {
 	}
 }
 
+func TestQueueResumeCancelledVoiceReportsSafeContinuationBoundary(t *testing.T) {
+	w, n, _, base := mediaWorker(t)
+	d := &mediaDelivery{Key: "cancelled-segments", Trace: base.TraceID, ID: "cancelled-job", Input: base, Kind: "voice", State: "stopped", UserCancelled: true, Status: linuxnative.ToolStatus{VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 1, State: "accepted", HasReceipt: true, ServerID: "one"}, {Index: 2, State: "cancelled"}}}}
+	w.runtime.Media = []*mediaDelivery{d}
+	in := companion.Input{Account: "test", Thread: d.Input.Thread, Sender: d.Input.Sender, TraceID: "new-control"}
+	result, err := w.controlQueue(context.Background(), in, false, json.RawMessage(`{"action":"resume","trace_id":"incoming"}`))
+	if err != nil || !strings.Contains(result, "native_resume_missing_identity_mismatch") || !strings.Contains(result, `"accepted_parts":1`) || !strings.Contains(result, `"total_parts":2`) || !d.UserCancelled || d.State != "stopped" || n.sends != 0 || n.retries != 0 {
+		t.Fatalf("cancelled voice was presented as resumable: result=%s err=%v delivery=%+v sends=%d retries=%d", result, err, d, n.sends, n.retries)
+	}
+}
+
+func TestQueueResumeMissingCreatesNewTraceAndNeverMutatesCancelledJob(t *testing.T) {
+	w, n, _, base := mediaWorker(t)
+	old := &mediaDelivery{Key: "cancelled-segments", Trace: base.TraceID, ID: "cancelled-job", Input: base, SourceID: "source", Kind: "voice", State: "stopped", UserCancelled: true, Status: linuxnative.ToolStatus{VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 1, State: "accepted", HasReceipt: true, ServerID: "one"}, {Index: 2, State: "cancelled"}}}}
+	w.runtime.Media = []*mediaDelivery{old}
+	n.resumeStatus = linuxnative.ToolStatus{ID: "new-missing-parts-job", State: "queued", ThreadID: old.Input.Thread, SourceID: old.SourceID, VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 2, State: "queued"}}}
+	in := companion.Input{Account: "test", Thread: old.Input.Thread, Sender: old.Input.Sender, TraceID: "explicit-resume-message"}
+	raw := json.RawMessage(`{"action":"resume","trace_id":"incoming"}`)
+	result, err := w.controlQueue(context.Background(), in, false, raw)
+	if err != nil || n.resumes != 1 || len(w.runtime.Media) != 2 || !old.UserCancelled || old.State != "stopped" || w.runtime.Media[1].Trace != in.TraceID || w.runtime.Media[1].ResumedFrom != old.Key || w.runtime.Media[1].UserCancelled || !strings.Contains(result, `"resumed_job_id":"new-missing-parts-job"`) {
+		t.Fatalf("explicit missing-part resume did not create a safe new delivery: result=%s err=%v resumes=%d old=%+v new=%+v", result, err, n.resumes, old, w.runtime.Media)
+	}
+	// Repeating this explicit user message is idempotent.
+	_, err = w.controlQueue(context.Background(), in, false, raw)
+	if err != nil || n.resumes != 1 || len(w.runtime.Media) != 2 {
+		t.Fatalf("duplicate explicit resume created another job: err=%v resumes=%d media=%+v", err, n.resumes, w.runtime.Media)
+	}
+	// A second “continue” is also not a licence to clone the same missing
+	// suffix under a different trace.
+	second := in
+	second.TraceID = "another-explicit-resume-message"
+	_, err = w.controlQueue(context.Background(), second, false, raw)
+	if err != nil || n.resumes != 1 || len(w.runtime.Media) != 2 {
+		t.Fatalf("second explicit resume duplicated missing parts: err=%v resumes=%d media=%+v", err, n.resumes, w.runtime.Media)
+	}
+}
+
+func TestQueueResumeMissingRejectsUnsettledChunks(t *testing.T) {
+	w, n, _, base := mediaWorker(t)
+	d := &mediaDelivery{Key: "unsettled", Trace: base.TraceID, ID: "old-job", Input: base, SourceID: "source", Kind: "voice", State: "cancelling", UserCancelled: true, Status: linuxnative.ToolStatus{VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 1, State: "accepted", HasReceipt: true, ServerID: "one"}, {Index: 2, State: "running"}}}}
+	w.runtime.Media = []*mediaDelivery{d}
+	in := companion.Input{Account: "test", Thread: d.Input.Thread, Sender: d.Input.Sender, TraceID: "explicit-resume-message"}
+	result, err := w.controlQueue(context.Background(), in, false, json.RawMessage(`{"action":"resume","trace_id":"incoming"}`))
+	if err != nil || n.resumes != 0 || len(w.runtime.Media) != 1 || !strings.Contains(result, "media_resume_missing_requires_verified_terminal_chunks") {
+		t.Fatalf("unsettled chunks were resumed: result=%s err=%v resumes=%d media=%+v", result, err, n.resumes, w.runtime.Media)
+	}
+}
+
+func TestQueueResumeMissingRejectsIncompleteChunkInventory(t *testing.T) {
+	w, n, _, base := mediaWorker(t)
+	d := &mediaDelivery{Key: "incomplete", Trace: base.TraceID, ID: "old-job", Input: base, SourceID: "source", Kind: "voice", State: "stopped", UserCancelled: true, Status: linuxnative.ToolStatus{VoicePartsIncomplete: true, VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 1, State: "accepted", HasReceipt: true, ServerID: "one"}, {Index: 2, State: "cancelled"}}}}
+	w.runtime.Media = []*mediaDelivery{d}
+	in := companion.Input{Account: "test", Thread: d.Input.Thread, Sender: d.Input.Sender, TraceID: "explicit-resume-message"}
+	result, err := w.controlQueue(context.Background(), in, false, json.RawMessage(`{"action":"resume","trace_id":"incoming"}`))
+	if err != nil || n.resumes != 0 || !strings.Contains(result, "media_resume_missing_requires_verified_terminal_chunks") {
+		t.Fatalf("incomplete chunk inventory was resumed: result=%s err=%v resumes=%d", result, err, n.resumes)
+	}
+}
+
+func TestQueueResumeMissingRechecksCurrentAuthorizationAndSource(t *testing.T) {
+	newCancelled := func(base companion.Input) *mediaDelivery {
+		return &mediaDelivery{Key: "recheck", Trace: base.TraceID, ID: "old-job", Input: base, SourceID: "source", Kind: "voice", State: "stopped", UserCancelled: true, Status: linuxnative.ToolStatus{VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 1, State: "accepted", HasReceipt: true, ServerID: "one"}, {Index: 2, State: "cancelled"}}}}
+	}
+	t.Run("revoked route", func(t *testing.T) {
+		w, n, _, base := mediaWorker(t)
+		d := newCancelled(base)
+		w.runtime.Media = []*mediaDelivery{d}
+		w.allowed[base.Thread] = false
+		in := companion.Input{Account: "test", Thread: base.Thread, Sender: base.Sender, TraceID: "resume-message"}
+		result, err := w.controlQueue(context.Background(), in, false, json.RawMessage(`{"action":"resume","trace_id":"incoming"}`))
+		if err != nil || n.resumes != 0 || !strings.Contains(result, "media_resume_missing_not_authorized") {
+			t.Fatalf("revoked route resumed old media: result=%s err=%v resumes=%d", result, err, n.resumes)
+		}
+	})
+	t.Run("invalid source proof", func(t *testing.T) {
+		w, n, _, base := mediaWorker(t)
+		base.ReplyContext = nil
+		d := newCancelled(base)
+		w.runtime.Media = []*mediaDelivery{d}
+		in := companion.Input{Account: "test", Thread: base.Thread, Sender: base.Sender, TraceID: "resume-message"}
+		result, err := w.controlQueue(context.Background(), in, false, json.RawMessage(`{"action":"resume","trace_id":"incoming"}`))
+		if err != nil || n.resumes != 0 || !strings.Contains(result, "media_resume_missing_source_invalid") {
+			t.Fatalf("invalid source proof resumed old media: result=%s err=%v resumes=%d", result, err, n.resumes)
+		}
+	})
+}
+
 func TestAddressedInterruptionPausesOwnAndSurfMedia(t *testing.T) {
 	w, _, _, _ := mediaWorker(t)
 	old := companion.Input{Thread: "filehelper", Sender: "requester", TraceID: "old"}

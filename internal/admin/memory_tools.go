@@ -298,7 +298,11 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 		return "", toolInputError("记忆权限已撤销")
 	}
 	if name == "memory_search" || name == "memory_read" {
-		return p.stampMemoryQuery(ctx, queryEpoch, queryAuthorization, value)
+		result, err := p.stampMemoryQuery(ctx, queryEpoch, queryAuthorization, value)
+		if err == nil {
+			p.routeCrossConversationThread(in.Thread)
+		}
+		return result, err
 	}
 	b, e := json.Marshal(value)
 	return string(b), e

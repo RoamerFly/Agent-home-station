@@ -19,26 +19,30 @@ type reliableNative interface {
 	Catalog(context.Context, string, string, string, string) (linuxnative.CatalogPage, error)
 }
 type delivery struct {
-	ReviewEvidence   *companion.GenerationEvidence `json:"review_evidence,omitempty"`
-	Trace            string                        `json:"trace"`
-	Thread           string                        `json:"thread"`
-	Text             string                        `json:"text"`
-	Bubble           int                           `json:"bubble"`
-	Key              string                        `json:"key"`
-	ID               string                        `json:"id"`
-	State            string                        `json:"state"`
-	Attempts         int                           `json:"attempts"`
-	Checks           int                           `json:"checks"`
-	Created          time.Time                     `json:"created"`
-	Next             time.Time                     `json:"next"`
-	Quote            *linuxnative.ToolQuote        `json:"quote,omitempty"`
-	Input            companion.Input               `json:"input"`
-	Reason           string                        `json:"reason"`
-	PreviousKeys     []string                      `json:"previous_keys,omitempty"`
-	UncertainRounds  int                           `json:"uncertain_rounds,omitempty"`
-	PreviousTexts    []string                      `json:"previous_texts,omitempty"`
-	RetryReviewReady bool                          `json:"retry_review_ready,omitempty"`
-	SubmittedText    string                        `json:"submitted_text,omitempty"`
+	ReviewEvidence  *companion.GenerationEvidence `json:"review_evidence,omitempty"`
+	Trace           string                        `json:"trace"`
+	Thread          string                        `json:"thread"`
+	Text            string                        `json:"text"`
+	Bubble          int                           `json:"bubble"`
+	Key             string                        `json:"key"`
+	ID              string                        `json:"id"`
+	State           string                        `json:"state"`
+	Attempts        int                           `json:"attempts"`
+	Checks          int                           `json:"checks"`
+	Created         time.Time                     `json:"created"`
+	Next            time.Time                     `json:"next"`
+	Quote           *linuxnative.ToolQuote        `json:"quote,omitempty"`
+	Input           companion.Input               `json:"input"`
+	Reason          string                        `json:"reason"`
+	PreviousKeys    []string                      `json:"previous_keys,omitempty"`
+	UncertainRounds int                           `json:"uncertain_rounds,omitempty"`
+	PreviousTexts   []string                      `json:"previous_texts,omitempty"`
+	SubmittedText   string                        `json:"submitted_text,omitempty"`
+	// Cancelled means the originating task was withdrawn after this delivery
+	// might already have reached WeChat.  It deliberately keeps the record in
+	// reconciliation mode: we may read the old idempotency key, but must never
+	// create a replacement text intent.
+	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 func (w *Worker) markSending(trace string) { w.queuePhase(trace, "sending") }
@@ -103,6 +107,9 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 		}
 	}
 	if !lookupFirst || errors.Is(err, linuxnative.ErrToolNotFound) {
+		if w.deliveryCancelled(d) {
+			return w.cancelledDelivery(d)
+		}
 		in, text, validationErr := w.prepareGroundedText(ctx, d.Input, d.Text)
 		if validationErr != nil {
 			failure := replyAdmissionFailure(validationErr)
@@ -173,7 +180,6 @@ func (w *Worker) waitDelivery(d *delivery, reason string) (sending.Receipt, erro
 	d.State = "waiting"
 	d.Reason = reason
 	d.UncertainRounds++
-	d.RetryReviewReady = false
 	d.Checks = 0
 	d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds))
 	if err := w.saveRuntime(); err != nil {
@@ -181,6 +187,28 @@ func (w *Worker) waitDelivery(d *delivery, reason string) (sending.Receipt, erro
 		return sending.Receipt{}, err
 	}
 	w.recordDeliveryWait(d, "delivery_random_backoff")
+	return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_reconciliation_pending", IntentID: d.ID}
+}
+
+func (w *Worker) deliveryCancelled(d *delivery) bool {
+	return d.Cancelled || !w.taskActive(d.Input)
+}
+
+// cancelledDelivery prevents a not-yet-submitted draft from leaving the
+// process.  Once a native intent exists, retain only the immutable key and
+// evidence so reconciliation can account for a late receipt; it is never a
+// permission to send a replacement message.
+func (w *Worker) cancelledDelivery(d *delivery) (sending.Receipt, error) {
+	d.Cancelled = true
+	d.Reason = "task_cancelled_before_delivery"
+	if d.ID == "" && d.SubmittedText == "" && len(d.PreviousKeys) == 0 {
+		d.State = "stopped"
+	} else {
+		d.State = "cancelled_reconciling"
+		d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds+1))
+	}
+	w.persistErr = w.saveRuntime()
+	w.activity(Record{Event: "delivery_stopped", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Reason: d.Reason, Status: d.State, SendID: d.ID})
 	return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_reconciliation_pending", IntentID: d.ID}
 }
 
@@ -260,7 +288,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 			continue
 		}
-		if d.State == "prepared" {
+		if d.State == "prepared" && !d.Cancelled {
 			superseded := false
 			for _, p := range w.runtime.Plans {
 				if p.Input.Thread == d.Thread && p.Input.TraceID == d.Trace && p.Slot == d.Bubble && len(p.Updates) > 0 {
@@ -286,6 +314,16 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		}
 		if c, ok := w.model.(*companion.Engine); ok && (!c.Config.Permissions.ReplyText || c.Config.Quiet(time.Now()) && d.Input.Mode != "direct") {
 			continue
+		}
+		if w.deliveryCancelled(d) {
+			// A withdrawn text may have crossed the process boundary already.
+			// Keep looking up that exact intent below, but never enter a submit
+			// branch or generate a new idempotency key.
+			d.Cancelled = true
+			if d.State != "cancelled_reconciling" {
+				d.State, d.Reason = "cancelled_reconciling", "task_cancelled_before_delivery"
+				w.activity(Record{Event: "delivery_stopped", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Reason: d.Reason, Status: d.State, SendID: d.ID})
+			}
 		}
 		// Any earlier attempt may receive a late receipt. Never create a fresh
 		// intent until every previous key has been checked successfully.
@@ -319,6 +357,10 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			continue
 		}
 		if d.State == "prepared" || d.State == "submitting" {
+			if d.Cancelled {
+				_, _ = w.cancelledDelivery(d)
+				continue
+			}
 			if d.Attempts > 0 && !w.config.Options.RetryUncertain {
 				d.Next = time.Now().Add(time.Minute)
 				w.persistErr = w.saveRuntime()
@@ -353,7 +395,8 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 			continue
 		}
-		if err == nil && status.State == "failed" && status.Retryable {
+		confirmedRetryable := err == nil && status.State == "failed" && status.Retryable
+		if confirmedRetryable {
 			d.Reason = status.Reason
 		}
 		// Healthy catalog scans are mandatory; an unavailable read is never
@@ -368,23 +411,31 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 			continue
 		}
+		if d.Cancelled {
+			// Cancellation changes the recovery rule, not the evidence: keep
+			// checking the original key for a late receipt, but do not resend.
+			d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds+1))
+			w.persistErr = w.saveRuntime()
+			continue
+		}
+		if !confirmedRetryable {
+			// An absent, unreadable or otherwise unknown idempotency key is never
+			// proof that WeChat did not receive the text.  Preserve the original
+			// draft and evidence, and retry only the lookup on a randomized delay.
+			d.Reason = "delivery_receipt_unverified"
+			d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds+1))
+			w.persistErr = w.saveRuntime()
+			w.recordDeliveryWait(d, "delivery_receipt_unverified")
+			continue
+		}
 		if !w.config.Options.RetryUncertain {
 			d.Next = time.Now().Add(time.Minute)
 			d.Reason = "delivery_retry_disabled"
 			w.persistErr = w.saveRuntime()
 			continue
 		}
-		d.Checks++
-		d.Next = time.Now().Add(15 * time.Second)
-		if w.persistErr = w.saveRuntime(); w.persistErr != nil {
-			return
-		}
-		if d.Checks < 2 {
-			continue
-		}
 		if !w.taskActive(d.Input) {
-			d.State, d.Reason = "stopped", "task_cancelled_before_delivery"
-			w.persistErr = w.saveRuntime()
+			_, _ = w.cancelledDelivery(d)
 			continue
 		}
 		if w.surfOrigin(d.Input) && w.config.SurfAllowed != nil && !w.config.SurfAllowed(d.Thread) {
@@ -393,14 +444,9 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			w.activity(Record{Event: "delivery_stopped", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Reason: d.Reason, Status: "stopped", Origin: "surf"})
 			continue
 		}
-		if !d.RetryReviewReady {
-			if c, ok := w.model.(*companion.Engine); ok {
-				w.reviewUncertainDelivery(ctx, c, d)
-				continue // Read the inbox and late receipts again before submitting.
-			}
-		}
-		// Absence in local memory is not proof of non-delivery. The owner's
-		// explicit retry policy permits another intent after two healthy scans.
+		// A fresh idempotency key is allowed only after the native service has
+		// explicitly reported a terminal *retryable* failure.  Unknown outcomes
+		// remain lookup-only and never invoke another model review.
 		d.Attempts++
 		d.Checks = 0
 		{
@@ -422,7 +468,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		if w.persistErr = w.saveRuntime(); w.persistErr != nil {
 			return
 		}
-		w.activity(Record{Event: "delivery_retry", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, Reason: "delayed_retry_after_two_sync_checks", Status: "retrying", SendID: d.ID, RetryAttempts: d.Attempts})
+		w.activity(Record{Event: "delivery_retry", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, Reason: "confirmed_retryable_native_failure", Status: "retrying", SendID: d.ID, RetryAttempts: d.Attempts})
 		sendCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		_, err = w.submitDelivery(sendCtx, n, d, true)
 		cancel()

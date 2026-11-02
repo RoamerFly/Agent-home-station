@@ -35,7 +35,7 @@ func TestGroundingUsesDedicatedTransportAndIndependentConfiguredBudget(t *testin
 	in := groundedInput(t, s, c, "alpha", "dedicated-check", "刚挂掉。")
 	model := &dedicatedGroundingModel{}
 	e := &Engine{Store: s, Config: c, model: model}
-	d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"这是需要独立核验的候选回复。"}, ReplyContexts: []ReplyContext{{RiskFlags: []string{"synthetic_review_budget_test"}}}})
+	d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"这是需要独立核验的候选回复。"}, ReplyContexts: []ReplyContext{{RiskFlags: []string{"synthetic_review_budget_test"}}}})
 	if err != nil || d.Action != "reply" || model.calls != 3 {
 		t.Fatal(d, err, model.calls)
 	}
@@ -82,7 +82,7 @@ func TestLexicalRiskDoesNotOverrideSemanticallyScopedReview(t *testing.T) {
 	model := &groundingSequenceModel{}
 	e := &Engine{Store: s, Config: c, model: model}
 	text := "你提到的“你爸刚视频”是在说谁的父亲？"
-	d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{text}})
+	d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{text}})
 	if err != nil || d.Action != "reply" || d.Messages[0] != text || model.calls != 1 {
 		t.Fatal("quoted clarification was vetoed by an unscoped substring", d, err, model.calls)
 	}

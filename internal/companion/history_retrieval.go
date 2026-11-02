@@ -13,17 +13,26 @@ const historyRetrievalPolicy = "\n【按需读原始记录】近期上下文和�
 var previousVideos = regexp.MustCompile(`(?:前面|前|之前的?|此前的?)([0-9一二两三四五六七八九十百]+)(?:条|个|段)视频`)
 
 type historyMaterialNeed struct {
-	ExplicitConversation bool
-	Anchor               string
-	Count                int
-	IDs                  map[string]bool
-	MessageIDs           map[string]string
-	ReadIDs              map[string]bool
-	ContentRead          bool
-	ReadFailed           bool
-	Prompted             bool
-	Events               map[string]MemoryEvent
-	ReadPackets          map[string]string // exact tool feedback -> verified directory event
+	Anchor      string
+	Count       int
+	IDs         map[string]bool
+	MessageIDs  map[string]string
+	ReadIDs     map[string]bool
+	FailedIDs   map[string]bool
+	Events      map[string]MemoryEvent
+	ReadPackets map[string]string // exact tool feedback -> verified directory event
+}
+
+// HistoryReadCoverage is host-authored execution evidence for a selected
+// historical range. It intentionally leaves unattempted sources out of Failed:
+// selection alone never proves a read failure.
+type HistoryReadCoverage struct {
+	Requested      int      `json:"requested"`
+	Selected       int      `json:"selected"`
+	Attempted      int      `json:"attempted"`
+	Read           int      `json:"read"`
+	Failed         int      `json:"failed"`
+	FailedEventIDs []string `json:"failed_event_ids,omitempty"`
 }
 
 func historyCount(text string) int {
@@ -70,13 +79,12 @@ func historyCount(text string) int {
 	return value + digit
 }
 
-// Narrow, read-only prefetch for explicit numbered previous-video requests.
-// It never selects a creator's feed or searches another conversation.
+// Recognize an explicit numbered previous-video request so that model-selected
+// reads can be sorted and attributed. Recognition itself never fetches data.
 func requestedHistory(turns []map[string]string) *historyMaterialNeed {
 	for i := len(turns) - 1; i >= 0; i-- {
 		var p struct {
 			Kind, Text string
-			IsGroup    bool       `json:"is_group"`
 			Source     *SourceRef `json:"source"`
 			Quoted     *SourceRef `json:"quoted_source"`
 		}
@@ -107,13 +115,72 @@ func requestedHistory(turns []map[string]string) *historyMaterialNeed {
 		if anchor == "" {
 			return nil
 		}
-		explicit := p.IsGroup
-		for _, word := range []string{"本群", "群里", "群内", "聊天记录", "发过的", "分享过的"} {
-			explicit = explicit || strings.Contains(p.Text, word)
-		}
-		return &historyMaterialNeed{ExplicitConversation: explicit, Anchor: anchor, Count: count, IDs: map[string]bool{}, MessageIDs: map[string]string{}, ReadIDs: map[string]bool{}}
+		return &historyMaterialNeed{Anchor: anchor, Count: count, IDs: map[string]bool{}, MessageIDs: map[string]string{}, ReadIDs: map[string]bool{}, FailedIDs: map[string]bool{}}
 	}
 	return nil
+}
+
+func (h *historyMaterialNeed) readEventID(name string, args json.RawMessage) string {
+	if h == nil {
+		return ""
+	}
+	var q struct {
+		ID      string `json:"id"`
+		Message string `json:"message_id"`
+	}
+	if json.Unmarshal(args, &q) != nil {
+		return ""
+	}
+	if name == "memory_read" {
+		if h.IDs[q.ID] {
+			return q.ID
+		}
+		if id := h.MessageIDs[q.ID]; id != "" {
+			return id
+		}
+		return h.MessageIDs[q.Message]
+	}
+	if name == "video_inspect" {
+		return h.MessageIDs[q.Message]
+	}
+	return ""
+}
+
+// observeReadFailure records only a source that was actually selected and
+// actually attempted. It is reporting metadata, never a gate on the reply.
+func (h *historyMaterialNeed) observeReadFailure(name string, args json.RawMessage) {
+	if id := h.readEventID(name, args); id != "" {
+		if h.FailedIDs == nil {
+			h.FailedIDs = map[string]bool{}
+		}
+		h.FailedIDs[id] = true
+	}
+}
+
+func (h *historyMaterialNeed) coverage() *HistoryReadCoverage {
+	if h == nil || len(h.Events) == 0 {
+		return nil
+	}
+	coverage := &HistoryReadCoverage{Requested: h.Count, Selected: len(h.Events)}
+	for id := range h.Events {
+		if h.ReadIDs[id] {
+			coverage.Read++
+			coverage.Attempted++
+			continue
+		}
+		if h.FailedIDs[id] {
+			coverage.Failed++
+			coverage.Attempted++
+			coverage.FailedEventIDs = append(coverage.FailedEventIDs, id)
+		}
+	}
+	if coverage.Attempted == 0 {
+		return nil
+	}
+	sort.SliceStable(coverage.FailedEventIDs, func(i, j int) bool {
+		return historyEventLess(h.Events[coverage.FailedEventIDs[i]], h.Events[coverage.FailedEventIDs[j]])
+	})
+	return coverage
 }
 
 func (h *historyMaterialNeed) rememberDirectory(result string) {
@@ -130,61 +197,6 @@ func (h *historyMaterialNeed) rememberDirectory(result string) {
 			h.MessageIDs[item.Event.Trace] = item.Event.ID
 			h.Events[item.Event.ID] = *item.Event
 		}
-	}
-}
-
-func (h *historyMaterialNeed) existingContent(turns []map[string]string) {
-	seen := map[string]bool{}
-	var walk func(any)
-	walk = func(v any) {
-		switch x := v.(type) {
-		case []any:
-			for _, item := range x {
-				walk(item)
-			}
-		case map[string]any:
-			if obs, ok := x["media_observations"].([]any); ok {
-				for _, item := range obs {
-					m, _ := item.(map[string]any)
-					source, _ := m["source"].(map[string]any)
-					id, _ := source["event_id"].(string)
-					text, _ := m["observation"].(string)
-					state, _ := m["observation_state"].(string)
-					if h.IDs[id] && text != "" && (state == "observed" || state == "complete" || state == "succeeded") {
-						seen[id] = true
-					}
-				}
-			}
-			for _, item := range x {
-				walk(item)
-			}
-		}
-	}
-	for _, turn := range turns {
-		var v any
-		if json.Unmarshal([]byte(turn["content"]), &v) == nil {
-			walk(v)
-		}
-	}
-	h.ReadIDs = seen
-	if len(h.IDs) > 0 && len(seen) == len(h.IDs) {
-		h.ContentRead = true
-	}
-}
-
-// A real source-read failure may need a user-facing explanation or continuation.
-// Do not turn that explanation into silence merely because content is incomplete.
-func (h *historyMaterialNeed) observeReadFailure(name string, args json.RawMessage) {
-	if h == nil {
-		return
-	}
-	var q struct {
-		ID      string `json:"id"`
-		Message string `json:"message_id"`
-		Event   bool   `json:"event"`
-	}
-	if json.Unmarshal(args, &q) == nil && (name == "memory_read" && (q.Event && h.IDs[q.ID] || h.MessageIDs[q.ID] != "" || h.MessageIDs[q.Message] != "") || name == "video_inspect" && h.MessageIDs[q.Message] != "") {
-		h.ReadFailed = true
 	}
 }
 
@@ -220,6 +232,7 @@ func (h *historyMaterialNeed) observeRead(name string, args json.RawMessage, res
 			}
 			if h.IDs[id] {
 				h.ReadIDs[id] = true
+				delete(h.FailedIDs, id)
 			}
 		}
 	}
@@ -240,42 +253,7 @@ func (h *historyMaterialNeed) observeRead(name string, args json.RawMessage, res
 		// not count as inspecting the other requested videos.
 		if id := h.MessageIDs[message]; id != "" {
 			h.ReadIDs[id] = true
+			delete(h.FailedIDs, id)
 		}
 	}
-	read := 0
-	for id := range h.IDs {
-		if h.ReadIDs[id] {
-			read++
-		}
-	}
-	h.ContentRead = len(h.IDs) > 0 && read >= len(h.IDs)
-}
-
-func (h *historyMaterialNeed) unreadDirectory() string {
-	ids := []string{}
-	for id := range h.IDs {
-		if !h.ReadIDs[id] {
-			ids = append(ids, id)
-		}
-	}
-	sort.SliceStable(ids, func(i, j int) bool {
-		a, b := h.Events[ids[i]], h.Events[ids[j]]
-		if a.ID == "" || b.ID == "" {
-			return ids[i] < ids[j]
-		}
-		return historyEventLess(a, b)
-	})
-	rows := []map[string]string{}
-	for _, id := range ids {
-		row := map[string]string{"event_id": id}
-		for message, event := range h.MessageIDs {
-			if event == id {
-				row["message_id"] = message
-				break
-			}
-		}
-		rows = append(rows, row)
-	}
-	raw, _ := json.Marshal(rows)
-	return string(raw)
 }

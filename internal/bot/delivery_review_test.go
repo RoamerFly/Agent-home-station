@@ -10,46 +10,20 @@ import (
 	"wechat-bot/internal/sending"
 )
 
-func TestRetryModelKnowsFailureAndRewritesBeforeFreshSubmission(t *testing.T) {
-	model := &planReviewModel{answer: `{"action":"replace","messages":["生日歌已经唱好啦，祝寿星生日快乐～"]}`}
+func TestUnknownTextDeliveryDoesNotCallModelOrCreateReplacementIntent(t *testing.T) {
+	model := &planReviewModel{answer: `{"action":"replace","messages":["不应被用于投递重试"]}`}
 	w, _, _, in := planWorker(t, model)
 	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
 	w.sender = n
-	_, _ = w.sendText(context.Background(), in, 0, "来啦来啦，生日歌补上")
+	_, _ = w.sendText(context.Background(), in, 0, "原始正文")
 	d := w.runtime.Deliveries[0]
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3; i++ {
 		d.Next = time.Time{}
 		w.runtime.SendGates = nil
 		w.reconcileDeliveries(context.Background())
 	}
-	if model.calls != 1 || !d.RetryReviewReady || len(n.submissions) != 1 {
-		t.Fatal("model was not consulted before resend", d, model.calls)
-	}
-	d.Next = time.Time{}
-	w.runtime.SendGates = nil
-	w.reconcileDeliveries(context.Background())
-	if len(n.submissions) != 2 || n.submissions[1].Text != "生日歌已经唱好啦，祝寿星生日快乐～" || d.PreviousTexts[0] != "来啦来啦，生日歌补上" {
-		t.Fatal("lost actual sent version", n.submissions, d)
-	}
-	// The old wording appearing in native sync must suppress another rewrite.
-	n.rows = []map[string]any{{"direction": "outgoing", "body": "来啦来啦，生日歌补上", "serverId": "late", "createdAt": time.Now().Format(time.RFC3339)}}
-	d.Next = time.Time{}
-	w.reconcileDeliveries(context.Background())
-	if d.State != "accepted" || d.Text != "来啦来啦，生日歌补上" || model.calls != 1 || len(n.submissions) != 2 {
-		t.Fatal("late old wording ignored", d)
-	}
-}
-
-func TestDeliveryReviewRejectsMultiMessageReplacement(t *testing.T) {
-	model := &planReviewModel{answer: `{"action":"replace","messages":["第一条","第二条"]}`}
-	w, c, _, in := planWorker(t, model)
-	d := &delivery{Thread: in.Thread, Trace: in.TraceID, Input: in, Text: "原回复", State: "waiting", Created: time.Now()}
-	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
-	var record Record
-	w.config.Record = func(got Record) { record = got }
-	w.reviewUncertainDelivery(context.Background(), c, d)
-	if d.Text != "原回复" || d.RetryReviewReady || record.Reason != "delivery_review_requires_single_message" {
-		t.Fatal("multi-message review replacement was accepted", d, record)
+	if model.calls != 0 || len(n.submissions) != 1 || d.Attempts != 0 || d.Text != "原始正文" || len(d.PreviousKeys) != 0 {
+		t.Fatal("unknown outcome invoked model or created a second intent", model.calls, n.submissions, d)
 	}
 }
 func TestAcceptedVoiceAndFollowingTextSharePersistentGap(t *testing.T) {
@@ -79,20 +53,8 @@ func TestAcceptedVoiceAndFollowingTextSharePersistentGap(t *testing.T) {
 	}
 }
 
-func TestModelCancelledRetryFinishesInboxWithoutSending(t *testing.T) {
-	model := &planReviewModel{answer: `{"action":"cancel","reason":"原请求者已明确取消旧补充"}`}
-	w, c, n, in := planWorker(t, model)
-	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", in.TraceID, in.Thread, "incoming", "remote_sync"), Phase: "sending"}}
-	d := &delivery{Thread: in.Thread, Trace: in.TraceID, Input: in, Text: "旧补充", State: "waiting", Created: time.Now()}
-	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
-	w.reviewUncertainDelivery(context.Background(), c, d)
-	if d.State != "stopped" || w.runtime.Inbox[0].Phase != "cancelled" || len(n.submissions) != 0 {
-		t.Fatal("cancelled delivery remained pending or sent", d, w.runtime.Inbox)
-	}
-}
-
-func TestNativeRetryableTextFailureIsReviewedByModelBeforeRetry(t *testing.T) {
-	model := &planReviewModel{answer: `{"action":"continue"}`}
+func TestConfirmedRetryableTextFailureRetriesOriginalTextWithoutModel(t *testing.T) {
+	model := &planReviewModel{answer: `{"action":"replace","messages":["不应被用于投递重试"]}`}
 	w, _, _, in := planWorker(t, model)
 	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}, acceptRetry: true}
 	w.sender = n
@@ -103,12 +65,38 @@ func TestNativeRetryableTextFailureIsReviewedByModelBeforeRetry(t *testing.T) {
 	status.Retryable = true
 	status.Reason = "transport_unavailable"
 	n.intents[d.Key] = status
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		d.Next = time.Time{}
 		w.runtime.SendGates = nil
 		w.reconcileDeliveries(context.Background())
 	}
-	if model.calls != 1 || len(n.submissions) != 2 || d.State != "accepted" {
-		t.Fatal("retryable failure skipped model or was abandoned", model.calls, d)
+	if model.calls != 0 || len(n.submissions) != 2 || d.State != "accepted" || n.submissions[1].Text != "还有这条补充" || len(d.PreviousKeys) != 1 {
+		t.Fatal("confirmed retryable failure did not retry the original text directly", model.calls, n.submissions, d)
+	}
+}
+
+func TestCancelledTextDeliveryOnlyReconcilesExistingKey(t *testing.T) {
+	w, _, _, in := planWorker(t, &planReviewModel{})
+	in.TaskID = "text-task"
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
+	w.sender = n
+	active := true
+	w.config.AgentTaskActive = func(companion.Input) bool { return active }
+	_, _ = w.sendText(context.Background(), in, 0, "这条不该重发")
+	d := w.runtime.Deliveries[0]
+	active = false
+	d.Next = time.Time{}
+	w.runtime.SendGates = nil
+	w.reconcileDeliveries(context.Background())
+	if !d.Cancelled || d.State != "cancelled_reconciling" || len(n.submissions) != 1 || d.Attempts != 0 {
+		t.Fatal("cancelled text created a new submission instead of entering receipt-only reconciliation", d, n.submissions)
+	}
+	status := n.intents[d.Key]
+	status.State, status.ServerID = "accepted", "late-receipt"
+	n.intents[d.Key] = status
+	d.Next = time.Time{}
+	w.reconcileDeliveries(context.Background())
+	if d.State != "accepted" || len(n.submissions) != 1 {
+		t.Fatal("late receipt was not recorded correctly after cancellation", d, n.submissions)
 	}
 }

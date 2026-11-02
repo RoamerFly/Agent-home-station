@@ -172,6 +172,9 @@ func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pendin
 	scope := e.Store.Context(in, e.Config, time.Now())
 	data["relationship_notes"] = map[string]any{"evidence_kind": "legacy_unverified_notes", "items": scope.Notes}
 	data["recent_conversation"] = e.contextTurns(scope, in)
+	if scope.Preferences != "" {
+		data["conversation_preferences"] = scope.Preferences
+	}
 	encoded, _ := json.Marshal(data)
 	system := e.policy(in) + "\n本轮只复核旧发言计划的未发部分，不是回复最新用户的独立任务。新请求由另一轮处理，别抢答或重复生成其答案。只输出JSON {action:continue|cancel|replace|delay,messages:[语义完整的未发短句],delay_seconds:整数}。continue保留，cancel取消旧尾部，replace只修改有必要保留的旧补充，delay暂缓。根据新上下文判断；无关群友互聊不必打断。不能改已经发送的内容，不调用工具、不生成媒体、不承诺执行。取消需识别具体哪条新消息使原请求失效；原请求者真正叫停或改需求时才取消执行任务。其他人说机器人未开机、笑脸、生日祝福、聊别的话题、催促或重复原请求，都不代表撤销；不因最新话题变化就丢弃尚未完成的唱歌/下载请求。图片、视频、语音及分享的观察内容属于原请求的一部分；同一人紧跟发来的短说明、名称、图注通常是在补充媒体，要结合实际观察继续理解，不能仅因后发文字被标记为new_request就当成替代。只有明确撤销或相冲突的新要求才取消媒体任务；读取完成后仍可按正常社交判断选择安静。无法确定时continue。旧内容已过时、用户改意或明确叫停时取消。不要机械按标点拆分，不固定气泡数。"
 	if delivery != nil {

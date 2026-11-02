@@ -74,7 +74,7 @@ func TestDeepRepairGeneratedReviewE2EPreparation(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := json.Marshal(draft)
-	out, err := engine.ReviewGroundedReply(t.Context(), in, draft)
+	out, err := engine.DiagnoseGroundedReply(t.Context(), in, draft)
 	after, _ := json.Marshal(draft)
 	if err != nil || out.Action != "reply" || len(out.Messages) != 1 || out.Messages[0] != sample.Draft || fake.grounding != 1 || string(before) != string(after) {
 		t.Fatal("product preparation changed fixture or skipped actual checker", err, out, fake.grounding)
@@ -228,7 +228,7 @@ func TestDeepRepairGeneratedReviewE2ERealModel(t *testing.T) {
 		usageStart := len(usage)
 		ctx, cancel := context.WithTimeout(t.Context(), deepRepairOuterDeadline(engine.Config, 3))
 		client.Begin(fmt.Sprintf("generated-control-product-round-%d", round), "review")
-		final, reviewErr := engine.ReviewGroundedReply(ctx, in, draft)
+		final, reviewErr := engine.DiagnoseGroundedReply(ctx, in, draft)
 		cancel()
 		after, _ := json.Marshal(draft)
 		scopeAfter, _ := json.Marshal(engine.Store.Context(in, engine.Config, time.Now()))

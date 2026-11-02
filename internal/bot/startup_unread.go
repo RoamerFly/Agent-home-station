@@ -159,15 +159,25 @@ func (w *Worker) processUnreadConversation(ctx context.Context, thread string) e
 				working.Body = w.config.Prefix + working.Body
 			}
 		}
-		_, eligible := w.prompt(working, now)
+		_, eligible := w.promptWithSharePreference(working, now, w.considerPreferredShare(m))
 		w.noticeConversationMessage(m, eligible)
-		w.stopRequestedVoice(ctx, working)
+		if stoppedVoice := w.stopRequestedVoice(ctx, working); stoppedVoice {
+			if replacesVoice(working.Body) {
+				// A verified replacement belongs to the recovered unread turn even
+				// when the member did not repeat an @ mention.
+				eligible = true
+			} else {
+				// Plain stops are durable local queue changes, not candidates for
+				// the grouped model recovery turn.
+				eligible = false
+			}
+		}
 		if eligible {
 			copy := m
 			anchor = &copy
 		}
 		allIDs = append(allIDs, m.ID)
-		if isMedia && eligible && w.observationAllowed(m) && w.config.Analyzer != nil {
+		if isMedia && eligible && w.readMediaBeforeDecision(m) && w.observationAllowed(m) && w.config.Analyzer != nil {
 			mediaIDs = append(mediaIDs, m.ID)
 		}
 		observed := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: m.SenderID, TraceID: m.ID, Text: body, MessageTime: m.CreatedAt, OriginalText: &original}

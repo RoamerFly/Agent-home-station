@@ -3,7 +3,6 @@ package bot
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"strings"
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
@@ -36,16 +35,14 @@ func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.En
 	}
 }
 
-// Only same-author followups or a verified platform quote affect a pending
-// plan. Ambient group chat can require a visible quote but cannot rewrite it.
+// Only the original requester can change an unsent plan. A platform quote
+// from another member is valuable conversational context, but it cannot
+// replace, delay or cancel someone else's task; a reply citation is not an
+// authorization grant. This applies to direct conversations as well: a
+// background/admin task may be delivering into a direct thread whose next
+// inbound event belongs to another logical requester.
 func messageAffectsInput(in companion.Input, m linuxnative.Message) bool {
-	if !strings.HasSuffix(m.ThreadID, "@chatroom") {
-		return true
-	}
-	if in.Sender != "" && in.Sender == m.SenderID {
-		return true
-	}
-	return m.ResolvedQuote != nil && m.ResolvedQuote.ID == in.TraceID
+	return in.Sender != "" && in.Sender == m.SenderID
 }
 
 func conversationEvent(m linuxnative.Message, eligible bool) companion.ConversationEvent {

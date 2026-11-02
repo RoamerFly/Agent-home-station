@@ -98,28 +98,23 @@ func TestPendingReplacementRetainsReviewEvidenceAcrossRestart(t *testing.T) {
 	}
 }
 
-func TestUncertainReplacementRetainsReviewEvidenceAcrossRestart(t *testing.T) {
-	w, e, in, m, forget := pendingSecondaryFixture(t)
+func TestUncertainDeliveryRetainsEvidenceAndNeverRewritesAcrossRestart(t *testing.T) {
+	w, _, in, m, forget := pendingSecondaryFixture(t)
 	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
 	w.sender = n
 	_, _ = w.sendText(context.Background(), in, 0, "原未知回执草稿")
 	d := w.runtime.Deliveries[0]
-	m.answer = `{"action":"replace","messages":["复核后的草稿"]}`
-	w.reviewUncertainDelivery(context.Background(), e, d)
-	if d.ReviewEvidence == nil || d.Input.ReplyContext != nil {
-		t.Fatal("retry rewrite lost original review proof")
-	}
+	beforeCalls := m.calls
 	if err := w.loadRuntime("server-1"); err != nil {
 		t.Fatal(err)
 	}
 	d = w.runtime.Deliveries[0]
 	forget()
-	d.Key += "-new-attempt"
 	before := len(n.submissions)
-	if _, err := w.submitDelivery(context.Background(), n, d, true); err == nil {
-		t.Fatal("expired retry draft submitted")
-	}
-	if len(n.submissions) != before {
-		t.Fatal("expired retry made another native submission")
+	d.Next = time.Time{}
+	w.runtime.SendGates = nil
+	w.reconcileDeliveries(context.Background())
+	if d.Text != "原未知回执草稿" || m.calls != beforeCalls || len(n.submissions) != before || d.State == "accepted" {
+		t.Fatal("unknown delivery rewrote or resubmitted an expired draft", d, m.calls, n.submissions)
 	}
 }

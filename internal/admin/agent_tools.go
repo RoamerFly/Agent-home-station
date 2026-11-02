@@ -47,7 +47,7 @@ func (p *permittedTools) agentTools() []mcptools.Tool {
 	tools = append(tools, agentTool("wechat_file_read", "Obtain a real received file original into THIS conversation's managed inbox and asset catalogue. Defaults current thread; only owner may select another allowed thread_id. Never executes file content. Input {message_id:string,thread_id?:string}.", `{"type":"object","properties":{"message_id":{"type":"string"},"thread_id":{"type":"string"}},"required":["message_id"],"additionalProperties":false}`))
 	if c.TasksEnabled {
 		tools = append(tools, reminderTool())
-		tools = append(tools, agentTool("agent_tasks", "Read persistent tasks and checkpoints in this conversation; includes interrupted work and prepared results. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`), agentTool("agent_task", "Persist a goal/checkpoint or update its state. Supply stable key for a NEW task, id for an existing task. state=pending|waiting schedules reevaluation after delay_seconds (nonnegative), not guaranteed delivery; real disk path and due_at are returned. Trusted owner direct requests continue under their original authorization (rechecked at execution), without proactive-greeting permission. Other scheduled tasks use proactive permission, selected target, quiet hours and budget. state=completed|cancelled|needs_review ends scheduling. Use needs_review when uncertain effects must not be repeated. Input {id?:string,key?:string,title?:string,checkpoint:string,state:string,delay_seconds?:integer}.", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0}},"required":["checkpoint","state"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("agent_tasks", "Read persistent tasks and checkpoints in this conversation; includes interrupted work and prepared results. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`), agentTool("agent_task", "Persist a goal/checkpoint or update its state. Supply stable key for a NEW task, id for an existing task. state=pending|waiting schedules reevaluation after delay_seconds (nonnegative), not guaranteed delivery; real disk path and due_at are returned. source_thread_id and source_message_ids are accepted only after a successful read of those exact messages in this turn; retain their original chronological order for later requests such as ‘第二条再展开’. For an owner group request, a verified cross-conversation source defaults delivery to the requesting owner's private chat; delivery_thread_id may only name an already authorized recipient. target_task_id may cancel one of the same owner's tasks across conversations. Trusted owner requests continue under original authorization (rechecked at execution), without proactive-greeting permission. state=completed|cancelled|needs_review ends scheduling. Input {id?:string,key?:string,title?:string,checkpoint:string,state:string,delay_seconds?:integer,source_thread_id?:string,source_message_ids?:string[],delivery_thread_id?:string,target_task_id?:string}.", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
 	}
 	tools = append(tools, agentTool("wechat_delivery_status", "Read real native send job in CURRENT conversation; trusted owner with cross-conversation permission may specify another allowed thread_id, e.g. inspecting group delivery while privately reporting to owner. Includes accepted voice parts and explicit retryable. A timeout does not mean not sent. Input {job_id:string,thread_id?:string}.", `{"type":"object","properties":{"job_id":{"type":"string"},"thread_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false}`))
 	if !p.privileged() {
@@ -99,7 +99,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	if !p.agentToolEnabled(name) {
 		return "", toolInputError("当前用户、会话或预演没有此项权限")
 	}
-	if strings.HasPrefix(name, "server_") || strings.HasPrefix(name, "voice_library_") || name == "agent_owner_report" || name == "agent_global_search" {
+	if strings.HasPrefix(name, "server_") || strings.HasPrefix(name, "voice_library_") || name == "agent_owner_report" {
 		p.privateDiagnostics = true
 	}
 	if err := ctx.Err(); err != nil {
@@ -135,7 +135,11 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		return p.callDiagnostics(args)
 	}
 	if strings.HasPrefix(name, "project_") || name == "agent_global_search" {
-		return p.callProject(ctx, name, args)
+		result, err := p.callProject(ctx, name, args)
+		if err == nil && name == "agent_global_search" {
+			p.routeGlobalSearchResult(result)
+		}
+		return result, err
 	}
 	if strings.HasPrefix(name, "workspace_") {
 		return p.callWorkspace(ctx, name, args)
@@ -172,7 +176,11 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if e != nil || msg.AccountID != p.trace.Account || msg.ThreadID != in.Thread || msg.FileAttachmentName() == "" {
 			return "", toolInputError("source is not an owned file message")
 		}
-		return (mediaUnderstanding{manager: m}).receiveFile(ctx, msg, msg.FileAttachmentName())
+		result, err := (mediaUnderstanding{manager: m}).receiveFile(ctx, msg, msg.FileAttachmentName())
+		if err == nil {
+			p.routeCrossConversationThread(in.Thread)
+		}
+		return result, err
 	case "agent_reminder":
 		return p.callReminder(ctx, args)
 	case "agent_clock":
@@ -201,7 +209,14 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if !ok {
 			return "", toolInputError("后台不支持会话读取")
 		}
-		return encode(native.Catalog(ctx, in.Kind, in.Thread, "", in.Cursor))
+		result, err := encode(native.Catalog(ctx, in.Kind, in.Thread, "", in.Cursor))
+		if err == nil {
+			if in.Kind == "messages" {
+				p.recordCrossSourceMessages(in.Thread, result)
+			}
+			p.routeCrossConversationThread(in.Thread)
+		}
+		return result, err
 	case "wechat_send_media":
 		return p.sendMedia(ctx, args)
 	case "wechat_forward_file":
@@ -327,8 +342,16 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		return encode(tasks, nil)
 	case "agent_task":
 		var in struct {
-			ID, Key, Title, Checkpoint, State string
-			DelaySeconds                      int `json:"delay_seconds"`
+			ID               string   `json:"id"`
+			Key              string   `json:"key"`
+			Title            string   `json:"title"`
+			Checkpoint       string   `json:"checkpoint"`
+			State            string   `json:"state"`
+			SourceThread     string   `json:"source_thread_id"`
+			SourceMessageIDs []string `json:"source_message_ids"`
+			DeliveryThread   string   `json:"delivery_thread_id"`
+			TargetTaskID     string   `json:"target_task_id"`
+			DelaySeconds     int      `json:"delay_seconds"`
 		}
 		if json.Unmarshal(args, &in) != nil || len(in.Checkpoint) > 6000 || len(in.Title) > 200 || !contains([]string{"pending", "waiting", "completed", "cancelled", "needs_review"}, in.State) {
 			return "", toolInputError("任务参数无效")
@@ -340,14 +363,69 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if origin == "" {
 			origin = p.trace.TraceID
 		}
-		t := agentTask{ParentID: p.trace.TaskID, OriginTrace: origin, OwnerRequested: p.privileged() && p.trace.Mode == "direct", ID: in.ID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: in.Title}
+		if in.TargetTaskID != "" {
+			if in.ID != "" || in.State != "cancelled" || !p.privileged() || !p.manager.agent.config().CrossConversation {
+				return "", toolInputError("跨会话任务只能由可信主人明确取消")
+			}
+			target, ok := m.agent.lookupTask(in.TargetTaskID, p.trace.Account, "")
+			if !ok || target.Sender != p.trace.Sender || !p.conversationReadAllowed(taskDeliveryThread(target)) {
+				return "", toolInputError("指定任务不存在、不是本人任务或投递目标已撤权")
+			}
+			if target.State == "cancelled" {
+				return encode(target, nil)
+			}
+			target.State = "cancelled"
+			target.LastResult = "已由原请求管理员取消；未提交部分停止，已提交部分仅核对回执"
+			target.Checkpoint = strings.TrimSpace(in.Checkpoint)
+			if target.Checkpoint == "" {
+				target.Checkpoint = "原请求者已明确取消；不再提交剩余内容，已提交部分仅核对回执。"
+			}
+			if err := m.agent.task(target); err != nil {
+				return "", err
+			}
+			m.record(bot.Record{Event: "agent_task_cancelled", Category: "decision", ThreadID: taskDeliveryThread(target), Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: target.Title, Status: "cancelled", Reason: "owner_cross_conversation_task_cancelled", Origin: "agent"})
+			return encode(target, nil)
+		}
+
+		sourceThread := in.SourceThread
+		if sourceThread == "" {
+			sourceThread = p.trace.Thread
+		}
+		if !p.trustedTaskSource(sourceThread) {
+			return "", toolInputError("任务来源必须是本轮已成功读取的会话，不能由模型自行指定")
+		}
+		if !p.trustedTaskSourceMessages(sourceThread, in.SourceMessageIDs) {
+			return "", toolInputError("任务消息来源必须来自本轮成功读取的原消息，不能由模型自行填写")
+		}
+		deliveryThread := in.DeliveryThread
+		if deliveryThread == "" {
+			deliveryThread = p.trace.Thread
+			if sourceThread != p.trace.Thread && p.trace.IsGroup && p.privileged() {
+				deliveryThread = p.trace.Sender
+			}
+		}
+		if !p.conversationReadAllowed(deliveryThread) || sourceThread != p.trace.Thread && !p.privileged() {
+			return "", toolInputError("任务投递目标未获授权")
+		}
+		t := agentTask{ParentID: p.trace.TaskID, OriginTrace: origin, OwnerRequested: p.privileged(), ID: in.ID, Account: p.trace.Account, Thread: deliveryThread, RequestThread: p.trace.Thread, SourceThread: sourceThread, SourceMessageIDs: append([]string(nil), in.SourceMessageIDs...), DeliveryThread: deliveryThread, Sender: p.trace.Sender, Title: in.Title}
 		t.Constraints = p.taskConstraints("agent_task", "", "", "")
+		t.Constraints.Thread = sourceThread
+		t.Constraints.DeliveryThread = deliveryThread
+		if sourceThread != p.trace.Thread {
+			// Cross-session reads prove that a conversation was read, but do not
+			// manufacture a user-event stamp or a group quote for a private task.
+			t.Constraints.Source = nil
+			t.Constraints.ReplyContext = nil
+		}
+		if sourceThread != deliveryThread {
+			t.QuoteServerID = ""
+		}
 		if t.ID != "" {
-			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, p.trace.Thread); ok && (old.State == "completed" || old.State == "cancelled") {
+			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, deliveryThread); ok && (old.State == "completed" || old.State == "cancelled") {
 				return encode(old, nil)
 			}
 			found := false
-			for _, old := range m.agent.list(p.trace.Account, p.trace.Thread) {
+			for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
 				if old.ID == t.ID {
 					if old.Sender != p.trace.Sender {
 						return "", toolInputError("只能调整本人发起的任务")
@@ -364,11 +442,11 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			if in.Key == "" || len(in.Key) > 128 || in.Title == "" {
 				return "", toolInputError("新任务需要key和title")
 			}
-			t.ID = agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, in.Key)
-			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, p.trace.Thread); ok && (old.State == "completed" || old.State == "cancelled") {
+			t.ID = agentID(p.trace.Account, deliveryThread, p.trace.TraceID, in.Key)
+			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, deliveryThread); ok && (old.State == "completed" || old.State == "cancelled") {
 				return encode(old, nil)
 			}
-			for _, old := range m.agent.list(p.trace.Account, p.trace.Thread) {
+			for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
 				if old.ID == t.ID {
 					t = old
 					break

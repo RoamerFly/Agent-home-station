@@ -29,7 +29,7 @@ func (m *Manager) validateTaskSource(t agentTask) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	ev, err := m.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", t.Account, t.Thread)}, source.EventID)
+	ev, err := m.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", t.Account, taskSourceThread(t))}, source.EventID)
 	if err != nil || ev.Role != "user" || ev.Sender != t.Sender || source.Revision > 0 && source.Revision != ev.Revision {
 		return errors.New("task_source_unavailable_or_changed: 来源已遗忘、更正或无法核验，未继续执行任务")
 	}
@@ -39,15 +39,18 @@ func (m *Manager) validateTaskSource(t agentTask) error {
 // TaskConstraints are minted by the authenticated tool adapter. Model text
 // cannot replace requester, destination, source or selected voice on resume.
 type TaskConstraints struct {
-	Purpose      string                  `json:"purpose"`
-	Account      string                  `json:"account"`
-	Thread       string                  `json:"thread"`
-	Requester    string                  `json:"requester"`
-	Source       *companion.SourceRef    `json:"source,omitempty"`
-	ReplyContext *companion.ReplyContext `json:"reply_context,omitempty"`
-	VoiceID      string                  `json:"voice_id,omitempty"`
-	VoiceProfile string                  `json:"voice_profile_id,omitempty"`
-	AssetID      string                  `json:"asset_id,omitempty"`
+	Purpose string `json:"purpose"`
+	Account string `json:"account"`
+	// Thread is the evidence/source conversation. DeliveryThread is optional
+	// for compatibility with existing tasks whose result belongs there too.
+	Thread         string                  `json:"thread"`
+	DeliveryThread string                  `json:"delivery_thread,omitempty"`
+	Requester      string                  `json:"requester"`
+	Source         *companion.SourceRef    `json:"source,omitempty"`
+	ReplyContext   *companion.ReplyContext `json:"reply_context,omitempty"`
+	VoiceID        string                  `json:"voice_id,omitempty"`
+	VoiceProfile   string                  `json:"voice_profile_id,omitempty"`
+	AssetID        string                  `json:"asset_id,omitempty"`
 }
 
 func (p *permittedTools) taskConstraints(purpose, voice, profile, asset string) *TaskConstraints {
@@ -64,10 +67,13 @@ func (p *permittedTools) taskConstraints(purpose, voice, profile, asset string) 
 }
 func validateTaskConstraints(t agentTask) error {
 	if c := t.Constraints; c != nil {
-		if c.Account != t.Account || c.Thread != t.Thread || c.Requester != t.Sender || c.Purpose == "" {
+		if c.Account != t.Account || c.Thread != taskSourceThread(t) || c.Requester != t.Sender || c.Purpose == "" {
 			return errors.New("task_identity_constraints_mismatch")
 		}
-		if c.Source != nil && (c.Source.Account != "" && c.Source.Account != t.Account || c.Source.Thread != "" && c.Source.Thread != t.Thread || c.Source.Sender != "" && c.Source.Sender != t.Sender) {
+		if c.DeliveryThread != "" && c.DeliveryThread != taskDeliveryThread(t) {
+			return errors.New("task_delivery_constraints_mismatch")
+		}
+		if c.Source != nil && (c.Source.Account != "" && c.Source.Account != t.Account || c.Source.Thread != "" && c.Source.Thread != taskSourceThread(t) || c.Source.Sender != "" && c.Source.Sender != t.Sender) {
 			return errors.New("task_source_constraints_mismatch")
 		}
 		if c.VoiceProfile != "" && (t.MusicSpec == nil || t.MusicSpec.VoiceProfile != c.VoiceProfile) {
@@ -82,10 +88,41 @@ func validateTaskConstraints(t agentTask) error {
 	}
 	return nil
 }
+
+func taskSourceThread(t agentTask) string {
+	if t.SourceThread != "" {
+		return t.SourceThread
+	}
+	return t.Thread
+}
+
+func taskDeliveryThread(t agentTask) string {
+	if t.DeliveryThread != "" {
+		return t.DeliveryThread
+	}
+	return t.Thread
+}
 func taskResultInput(t agentTask, in *companion.Input) *companion.Input {
+	// A retryable model failure may occur after an authorized read completed.
+	// Carry only the task's own persisted checkpoint into the resumed input;
+	// the bot validates its evidence again before exposing it to the model.
+	in.RecoveryToolResults = append([]companion.RecoveryToolResult(nil), t.RecoveryTools...)
+	if t.RecoveryEvidence != nil {
+		copy := *t.RecoveryEvidence
+		in.RecoveryEvidence = &copy
+	}
+	if t.RecoveryPrivacy != nil {
+		copy := *t.RecoveryPrivacy
+		copy.SourceThreads = append([]string(nil), t.RecoveryPrivacy.SourceThreads...)
+		in.RecoveryPrivacy = &copy
+	}
 	if t.Constraints != nil {
 		in.Source = t.Constraints.Source
-		in.ReplyContext = t.Constraints.ReplyContext
+		// A quote in the source group must never be replayed against an owner
+		// private delivery conversation. The source stays available as evidence.
+		if taskSourceThread(t) == taskDeliveryThread(t) {
+			in.ReplyContext = t.Constraints.ReplyContext
+		}
 		in.ExpectedVoiceID = t.Constraints.VoiceID
 		in.ExpectedVoiceProfile = t.Constraints.VoiceProfile
 	}

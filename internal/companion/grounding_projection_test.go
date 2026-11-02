@@ -51,7 +51,7 @@ func TestGroundingCheckEditorAndFinalUseOnlyLocalMetadataAliases(t *testing.T) {
 			}
 			model := &projectedEditorModel{invalidRef: ref}
 			e := &Engine{Store: s, Config: c, model: model}
-			out, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"待核验文字。"}, ReplyContexts: []ReplyContext{{RiskFlags: []string{"projection_protocol_test"}}}})
+			out, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"待核验文字。"}, ReplyContexts: []ReplyContext{{RiskFlags: []string{"projection_protocol_test"}}}})
 			if invalid == "" {
 				if err != nil || out.Action != "reply" || model.calls != 3 || out.ReplyContexts[0].SourceEventIDs[0] != source.EventID {
 					t.Fatal(out, err, model.calls)

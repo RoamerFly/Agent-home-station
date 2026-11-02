@@ -66,22 +66,23 @@ type ToolQuote struct {
 	ServerID  string `json:"server_id"`
 }
 type ToolStatus struct {
-	CreatedAt          string             `json:"created_at,omitempty"`
-	SourceID           string             `json:"source_id,omitempty"`
-	Attempts           int                `json:"attempts,omitempty"`
-	Retryable          bool               `json:"retryable,omitempty"`
-	CancelRequested    bool               `json:"cancel_requested,omitempty"`
-	ID                 string             `json:"id"`
-	State              string             `json:"state"`
-	Phase              string             `json:"phase"`
-	Kind               string             `json:"kind"`
-	ThreadID           string             `json:"thread_id"`
-	ServerID           string             `json:"server_id"`
-	Reason             string             `json:"reason"`
-	VoiceChunks        []VoiceChunkStatus `json:"voice_chunks,omitempty"`
-	VoiceFailureStage  string             `json:"voice_failure_stage,omitempty"`
-	VoiceTransportKind string             `json:"voice_transport_kind,omitempty"`
-	VoiceFailedOffset  *int64             `json:"voice_failed_offset,omitempty"`
+	CreatedAt            string             `json:"created_at,omitempty"`
+	SourceID             string             `json:"source_id,omitempty"`
+	Attempts             int                `json:"attempts,omitempty"`
+	Retryable            bool               `json:"retryable,omitempty"`
+	CancelRequested      bool               `json:"cancel_requested,omitempty"`
+	ID                   string             `json:"id"`
+	State                string             `json:"state"`
+	Phase                string             `json:"phase"`
+	Kind                 string             `json:"kind"`
+	ThreadID             string             `json:"thread_id"`
+	ServerID             string             `json:"server_id"`
+	Reason               string             `json:"reason"`
+	VoicePartsIncomplete bool               `json:"voice_parts_incomplete,omitempty"`
+	VoiceChunks          []VoiceChunkStatus `json:"voice_chunks,omitempty"`
+	VoiceFailureStage    string             `json:"voice_failure_stage,omitempty"`
+	VoiceTransportKind   string             `json:"voice_transport_kind,omitempty"`
+	VoiceFailedOffset    *int64             `json:"voice_failed_offset,omitempty"`
 }
 
 type VoiceChunkStatus struct {
@@ -318,7 +319,7 @@ func (s *Sender) decodeToolStatus(raw []byte) (ToolStatus, error) {
 			continue
 		}
 		switch chunk.State {
-		case "prepared", "submitting", "accepted", "rejected", "needs_review":
+		case "prepared", "submitting", "accepted", "rejected", "needs_review", "cancelled":
 		default:
 			continue
 		}
@@ -334,6 +335,7 @@ func (s *Sender) decodeToolStatus(raw []byte) (ToolStatus, error) {
 		}
 		status.VoiceChunks = append(status.VoiceChunks, VoiceChunkStatus{ClientID: chunk.ClientID, EncodedMD5: chunk.EncodedMD5, ServerID: serverID, Index: chunk.Index, State: chunk.State, DurationMS: chunk.DurationMS, PacingMS: chunk.PacingMS, SubmittedAtMS: chunk.SubmittedAtMS, AcceptedAtMS: chunk.AcceptedAtMS, HasReceipt: hasReceipt, PrefixRetries: retries})
 	}
+	status.VoicePartsIncomplete = len(status.VoiceChunks) != len(value.Result.Chunks)
 	switch value.Result.VoiceFailureStage {
 	case "voice_handshake_before_submission", "voice_upload_exchange_outcome_unknown", "voice_upload_receipt_unverified":
 		status.VoiceFailureStage = value.Result.VoiceFailureStage

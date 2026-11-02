@@ -2,6 +2,7 @@ package admin
 
 import (
 	"testing"
+	"time"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 )
@@ -29,6 +30,32 @@ func TestGenerationPauseStopsOwnerRecoveryWithoutLosingRealEvidence(t *testing.T
 				}
 			})
 		}
+	}
+}
+
+func TestRetryableModelContinuationPersistsReadOnlyCheckpoint(t *testing.T) {
+	f, p := trustedAgent(t)
+	f.manager.mu.Lock()
+	f.manager.config.Companion.Enabled = true
+	f.manager.mu.Unlock()
+	settings := f.manager.agent.config()
+	settings.Enabled, settings.TasksEnabled = true, true
+	if err := f.manager.agent.save(settings); err != nil {
+		t.Fatal(err)
+	}
+	task := agentTask{ID: "retry-model-task", Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, OwnerRequested: true, State: "running", Next: time.Now().Add(-time.Second), RequestedText: "读取后继续总结"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	evidence := companion.GenerationEvidence{RecallEpoch: "synthetic-source-version"}
+	f.manager.retryAgentTask(companion.Input{Account: task.Account, Thread: task.Thread, Sender: task.Sender, TaskID: task.ID, RecoveryToolResults: []companion.RecoveryToolResult{{Tool: "memory_search", CallKey: "same-call", Result: `{"items":["safe"]}`, ResultID: "retained", ReadOnly: true}}, RecoveryEvidence: &evidence}, time.Millisecond, "model_rate_limited")
+	stored, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if !ok || stored.State != "waiting" || len(stored.RecoveryTools) != 1 || stored.RecoveryEvidence == nil {
+		t.Fatal("retry checkpoint was not durable", stored, ok)
+	}
+	in, err := f.manager.claimAgentTask(time.Now().Add(time.Second), func(string) bool { return false })
+	if err != nil || in == nil || len(in.RecoveryToolResults) != 1 || in.RecoveryToolResults[0].CallKey != "same-call" || in.RecoveryEvidence == nil || in.RecoveryEvidence.RecallEpoch != evidence.RecallEpoch {
+		t.Fatal("claimed retry lost source checkpoint", in, err)
 	}
 }
 

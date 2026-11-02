@@ -38,7 +38,7 @@ func TestGroundingCheckDoesNotEditAllowedCandidate(t *testing.T) {
 	model := &groundingSequenceModel{}
 	e := &Engine{Store: s, Config: c, model: model}
 	original := Decision{Action: "reply", Messages: []string{"通话刚结束了，有想说的可以告诉我。"}}
-	out, err := e.ReviewGroundedReply(t.Context(), in, original)
+	out, err := e.DiagnoseGroundedReply(t.Context(), in, original)
 	if err != nil || model.calls != 1 || out.Messages[0] != original.Messages[0] {
 		t.Fatal(out, err, model.calls)
 	}
@@ -65,7 +65,7 @@ func TestGroundingRepairedCandidateRequiresFinalReadOnlyCheck(t *testing.T) {
 		in.MustReply = required
 		model := &groundingSequenceModel{checks: []string{"reject", "reject"}, answers: []string{`{"action":"reply","bubbles":[{"text":"另一条仍没有支持的个人描写。","route_id":"R1"}]}`}}
 		e := &Engine{Store: s, Config: c, model: model}
-		out, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"没有支持的个人描写，等一次修复。"}})
+		out, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"没有支持的个人描写，等一次修复。"}})
 		if model.calls != 3 || model.checkCalls != 2 || model.answerCalls != 1 || len(out.Messages) > 0 {
 			t.Fatal("unverified repaired text escaped", out, err, model.calls)
 		}
@@ -85,7 +85,7 @@ func TestLowRiskOrdinaryReplySkipsSemanticCalls(t *testing.T) {
 	in := groundedInput(t, s, c, "alpha", "low-risk", "晚安")
 	model := &groundingSequenceModel{}
 	e := &Engine{Store: s, Config: c, model: model}
-	out, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"晚安"}})
+	out, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"晚安"}})
 	if err != nil || out.Action != "reply" || model.calls != 0 {
 		t.Fatal(out, err, model.calls)
 	}
@@ -163,7 +163,7 @@ func TestStaleReplyProofCannotRecoverByDroppingSourceVersions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	out, err := e.ReviewGroundedReply(t.Context(), in, d)
+	out, err := e.DiagnoseGroundedReply(t.Context(), in, d)
 	if err == nil || len(out.Messages) > 0 || e.model.(*groundingSequenceModel).calls != 0 {
 		t.Fatal("old source proof was replaced", out, err)
 	}
@@ -184,7 +184,7 @@ func TestQueuedReplyEvidenceSurvivesAppendButRejectsInvalidationOrRevocation(t *
 	in := groundedInput(t, s, c, "alpha", "sealed-current", "你好")
 	authority := &memoryAuthorizationFixture{stamp: "grant-v1"}
 	e := &Engine{Store: s, Config: c, Tools: authority, model: &groundingSequenceModel{}}
-	d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"你好"}})
+	d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"你好"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestQueuedReplyEvidenceSurvivesAppendButRejectsInvalidationOrRevocation(t *
 	if e.ValidateReplyContext(t.Context(), in, r) == nil {
 		t.Fatal("invalidated background evidence remained sendable")
 	}
-	if _, err = e.ReviewGroundedReply(t.Context(), in, d); err == nil {
+	if _, err = e.DiagnoseGroundedReply(t.Context(), in, d); err == nil {
 		t.Fatal("old evidence was silently re-signed")
 	}
 	private := in

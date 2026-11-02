@@ -138,11 +138,13 @@ func TestDurableInboxContinuesWhileAnotherConversationModelWaits(t *testing.T) {
 		return `{"action":"reply","messages":["independent-result"]}`, nil
 	})
 	w, _, n := backgroundWorker(t, model)
-	s := &fakeSource{events: []linuxnative.Event{fixtureEvent("1", "slow", "filehelper", "incoming", "remote")}, messages: map[string]linuxnative.Message{
-		"slow":      fixtureMessage("slow", "filehelper", "/ai slow-request", "incoming"),
-		"friend":    fixtureMessage("friend", "friend", "/ai independent-request", "incoming"),
-		"interrupt": fixtureMessage("interrupt", "filehelper", "/ai 先不用讲了", "incoming"),
-	}}
+	slow := fixtureMessage("slow", "filehelper", "/ai slow-request", "incoming")
+	slow.SenderID = "person"
+	friend := fixtureMessage("friend", "friend", "/ai independent-request", "incoming")
+	friend.SenderID = "friend-person"
+	interrupt := fixtureMessage("interrupt", "filehelper", "/ai 先不用讲了", "incoming")
+	interrupt.SenderID = "person"
+	s := &fakeSource{events: []linuxnative.Event{fixtureEvent("1", "slow", "filehelper", "incoming", "remote")}, messages: map[string]linuxnative.Message{"slow": slow, "friend": friend, "interrupt": interrupt}}
 	added := false
 	s.onPage = func(string) {
 		select {
@@ -185,8 +187,8 @@ func TestDurableInboxContinuesWhileAnotherConversationModelWaits(t *testing.T) {
 		t.Fatal("interruption not retained during generation")
 	}
 	for _, item := range w.runtime.Inbox {
-		if item.Event.Data.MessageID == "interrupt" && item.Phase != "received" {
-			t.Fatal("deferred request was marked completed", item)
+		if item.Event.Data.MessageID == "interrupt" && item.Phase != "received" && item.Phase != "following" {
+			t.Fatal("deferred same-requester update was marked completed", item)
 		}
 	}
 }
@@ -269,7 +271,9 @@ func TestSlowPlanReviewAllowsAnotherThreadAndDiscardsObsoleteReview(t *testing.T
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "old", Mode: "direct", Text: "聊一聊"}
 	in = observeSyntheticMediaRequest(t, w, c, in)
 	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"old pending"}})
-	w.noticeConversationMessage(fixtureMessage("update-one", "filehelper", "简单说", "incoming"), true)
+	updateOne := fixtureMessage("update-one", "filehelper", "简单说", "incoming")
+	updateOne.SenderID = in.Sender
+	w.noticeConversationMessage(updateOne, true)
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
 	select {
@@ -287,7 +291,9 @@ func TestSlowPlanReviewAllowsAnotherThreadAndDiscardsObsoleteReview(t *testing.T
 	if len(n.submissions) != 1 || n.submissions[0].ThreadID != "friend" {
 		t.Fatal("review blocked another conversation")
 	}
-	w.noticeConversationMessage(fixtureMessage("update-two", "filehelper", "先别说了", "incoming"), true)
+	updateTwo := fixtureMessage("update-two", "filehelper", "先别说了", "incoming")
+	updateTwo.SenderID = in.Sender
+	w.noticeConversationMessage(updateTwo, true)
 	close(release)
 	pumpGeneration(t, w, func() bool { return len(w.generation.reviews) == 0 })
 	p := w.runtime.Plans[0]
@@ -382,7 +388,9 @@ func TestMediaCaptionJoinsInterruptiblePlanOnlyAfterAttachmentReceipt(t *testing
 	if len(w.runtime.Plans) != 1 || !w.runtime.Plans[0].MediaCaption || len(n.submissions) != 0 {
 		t.Fatal("caption did not join semantic queue")
 	}
-	w.noticeConversationMessage(fixtureMessage("new-file", "filehelper", "不用介绍了，直接给我原文件吧", "incoming"), true)
+	update := fixtureMessage("new-file", "filehelper", "不用介绍了，直接给我原文件吧", "incoming")
+	update.SenderID = in.Sender
+	w.noticeConversationMessage(update, true)
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
 	pumpGeneration(t, w, func() bool { return len(w.generation.reviews) == 0 })
@@ -711,6 +719,9 @@ func TestOldResultWaitsForStopRequestOnNextInboxPage(t *testing.T) {
 	}
 	s.events = append(s.events, fixtureEvent("101", "stop", "filehelper", "incoming", "remote"))
 	s.messages["stop"] = fixtureMessage("stop", "filehelper", "/ai 不用再说了", "incoming")
+	stop := s.messages["stop"]
+	stop.SenderID = in.Sender
+	s.messages["stop"] = stop
 	w.source = s
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -773,7 +784,9 @@ func TestPendingPlanDelayAndContinueRetainUnsentContentWithoutBlockingOtherThrea
 				t.Fatal(err)
 			}
 			w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"需要保留的未发内容"}})
-			w.noticeConversationMessage(fixtureMessage("update", "filehelper", "稍等一下再说", "incoming"), true)
+			update := fixtureMessage("update", "filehelper", "稍等一下再说", "incoming")
+			update.SenderID = in.Sender
+			w.noticeConversationMessage(update, true)
 			readyPlans(w)
 			w.reconcileUtterancePlans(context.Background())
 			pumpGeneration(t, w, func() bool { return len(w.generation.reviews) == 0 })

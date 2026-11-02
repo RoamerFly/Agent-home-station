@@ -67,7 +67,7 @@ func TestShareReplyQuotesOriginalWithoutFabricatingMention(t *testing.T) {
 		t.Fatal("card reply lost its reference or fabricated an @", n.submissions)
 	}
 }
-func TestUnknownResendRequiresTwoHealthyChecksAndContinuesAfterRestart(t *testing.T) {
+func TestUnknownDeliveryOnlyReconcilesSameKeyAcrossRestart(t *testing.T) {
 	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
 	w := durableWorker(t, n)
 	input := companion.Input{Thread: "filehelper", TraceID: "incoming", Directed: true, QuoteServerID: "77", Mode: "direct"}
@@ -87,8 +87,8 @@ func TestUnknownResendRequiresTwoHealthyChecksAndContinuesAfterRestart(t *testin
 	d.Next = time.Time{}
 	w.runtime.SendGates = nil
 	w.reconcileDeliveries(context.Background())
-	if d.Checks != 1 || len(n.submissions) != 1 {
-		t.Fatal("retry before two checks")
+	if d.Attempts != 0 || len(n.submissions) != 1 || d.Reason != "delivery_receipt_unverified" {
+		t.Fatal("unknown receipt created a retry intent", d, n.submissions)
 	}
 	// Persist and reload between checks: restart must not erase attempt budget.
 	w2 := durableWorker(t, n)
@@ -101,22 +101,22 @@ func TestUnknownResendRequiresTwoHealthyChecksAndContinuesAfterRestart(t *testin
 	w.runtime.SendGates = nil
 	w2.runtime.SendGates = nil
 	w2.reconcileDeliveries(context.Background())
-	if len(n.submissions) != 2 || d.Attempts != 1 {
-		t.Fatal("one retry missing", len(n.submissions), d)
+	if len(n.submissions) != 1 || d.Attempts != 0 {
+		t.Fatal("restart created a retry for an unknown receipt", len(n.submissions), d)
 	}
 	d.Next = time.Time{}
 	w.runtime.SendGates = nil
 	w2.runtime.SendGates = nil
 	w2.reconcileDeliveries(context.Background())
-	if len(n.submissions) != 2 || d.State == "stopped" || d.Checks != 1 {
-		t.Fatal("unknown retry was stopped or sent without checks")
+	if len(n.submissions) != 1 || d.State == "stopped" || d.Attempts != 0 {
+		t.Fatal("unknown receipt was stopped or resent")
 	}
 	d.Next = time.Time{}
 	w.runtime.SendGates = nil
 	w2.runtime.SendGates = nil
 	w2.reconcileDeliveries(context.Background())
-	if len(n.submissions) != 3 || d.Attempts != 2 || len(d.PreviousKeys) != 2 || d.UncertainRounds != 3 {
-		t.Fatal("persistent repeated retry missing", d)
+	if len(n.submissions) != 1 || d.Attempts != 0 || len(d.PreviousKeys) != 0 || d.UncertainRounds < 1 {
+		t.Fatal("unknown receipt was not retained as a lookup-only delivery", d)
 	}
 	first := n.submissions[0].IdempotencyKey
 	late := n.intents[first]
@@ -127,7 +127,7 @@ func TestUnknownResendRequiresTwoHealthyChecksAndContinuesAfterRestart(t *testin
 	w.runtime.SendGates = nil
 	w2.runtime.SendGates = nil
 	w2.reconcileDeliveries(context.Background())
-	if d.State != "accepted" || len(n.submissions) != 3 {
+	if d.State != "accepted" || len(n.submissions) != 1 {
 		t.Fatal("late receipt on the original attempt was ignored")
 	}
 }
@@ -292,8 +292,8 @@ func TestUncertainDeliveryDoesNotExpireAt24HoursAndHonorsDisable(t *testing.T) {
 		w.runtime.SendGates = nil
 		w.reconcileDeliveries(context.Background())
 	}
-	if len(n.submissions) != 2 {
-		t.Fatal("old unknown expired", d)
+	if len(n.submissions) != 1 || d.Attempts != 0 || d.State == "stopped" {
+		t.Fatal("old unknown was resent or expired", d)
 	}
 }
 

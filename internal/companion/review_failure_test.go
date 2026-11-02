@@ -73,7 +73,7 @@ func TestReplyAuditStoresSafeReviewFailureWithoutSnapshot(t *testing.T) {
 	}
 }
 
-func TestRespondPreservesReviewFailureInsteadOfModelSilence(t *testing.T) {
+func TestOrdinaryRespondDoesNotRunLegacySemanticReview(t *testing.T) {
 	s, c, _ := memoryFixture(t)
 	c.Enabled = true
 	in := groundedInput(t, s, c, "alpha", "protocol-respond", "刚挂掉。")
@@ -82,7 +82,7 @@ func TestRespondPreservesReviewFailureInsteadOfModelSilence(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, err := e.Respond(t.Context(), in)
-	if err != nil || d.Action != "silent" || d.Reason != "grounding_check_failed" || d.ReviewFailure == nil || d.ReviewFailure.Code != "review_units_count_mismatch" {
+	if err != nil || d.Action != "reply" || d.ReviewFailure != nil {
 		t.Fatal(d, err)
 	}
 }

@@ -12,7 +12,7 @@ func TestPrivateReplyAndMediaBindUseStructuralProofWithoutSemanticCall(t *testin
 	model := &groundingSequenceModel{}
 	access := &memoryAuthorizationFixture{stamp: "private-grant"}
 	e := &Engine{Store: s, Config: c, Tools: access, model: model}
-	d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"收到，我会按指定声线处理。"}})
+	d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"收到，我会按指定声线处理。"}})
 	if err != nil || len(d.ReplyContexts) != 1 || model.calls != 0 {
 		t.Fatal("private reply did not obtain structural proof without review", d, err, model.calls)
 	}
@@ -50,7 +50,7 @@ func TestBindingGeneratedDraftNeverMintsCurrentStampAfterInvalidation(t *testing
 	if _, err = s.db.Exec("INSERT INTO meta(key,value) VALUES('recall_epoch','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = e.ReviewGroundedReply(t.Context(), in, d); err == nil {
+	if _, err = e.DiagnoseGroundedReply(t.Context(), in, d); err == nil {
 		t.Fatal("private generated draft was signed against a new epoch")
 	}
 	if _, err = e.BindReplyEvidence(WithDecisionGenerationEvidence(t.Context(), d), in); err == nil {

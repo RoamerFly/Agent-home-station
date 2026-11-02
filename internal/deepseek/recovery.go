@@ -196,6 +196,11 @@ func (c *Client) request(ctx context.Context, body []byte) (string, error) {
 		if failure.retryAfter > delay {
 			delay = failure.retryAfter
 		}
+		// The worker may persist this failure and resume it later rather than
+		// blocking a conversation for a provider-directed long wait.  Keep the
+		// requested delay in the safe diagnostic even when this process does not
+		// perform the second HTTP attempt.
+		failure.RetryDelayMS = delay.Milliseconds()
 		// Respect a long Retry-After without tying up the conversation worker.
 		if delay > 30*time.Second {
 			return "", failure
@@ -203,7 +208,6 @@ func (c *Client) request(ctx context.Context, body []byte) (string, error) {
 		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= delay {
 			return "", failure
 		}
-		failure.RetryDelayMS = delay.Milliseconds()
 		observeRequest(ctx, "model_retry", failure.Diagnostics)
 		wait := time.NewTimer(delay)
 		select {

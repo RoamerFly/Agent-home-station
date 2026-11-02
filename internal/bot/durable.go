@@ -12,18 +12,21 @@ import (
 )
 
 type inboxItem struct {
-	Backlog          bool              `json:"backlog,omitempty"`
-	BacklogParent    string            `json:"backlog_parent,omitempty"`
-	FollowupParent   string            `json:"followup_parent,omitempty"`
-	FollowupConsumed bool              `json:"followup_consumed,omitempty"`
-	OwnerModelReview bool              `json:"owner_model_review,omitempty"`
-	ReceivedRecorded bool              `json:"received_recorded,omitempty"`
-	AggregateUntil   time.Time         `json:"aggregate_until,omitempty"`
-	ToolStarted      bool              `json:"tool_started,omitempty"`
-	Event            linuxnative.Event `json:"event"`
-	Phase            string            `json:"phase"`
-	Updated          time.Time         `json:"updated"`
-	RetryAfter       time.Time         `json:"retry_after,omitempty"`
+	Backlog          bool                              `json:"backlog,omitempty"`
+	BacklogParent    string                            `json:"backlog_parent,omitempty"`
+	FollowupParent   string                            `json:"followup_parent,omitempty"`
+	FollowupConsumed bool                              `json:"followup_consumed,omitempty"`
+	OwnerModelReview bool                              `json:"owner_model_review,omitempty"`
+	ReceivedRecorded bool                              `json:"received_recorded,omitempty"`
+	AggregateUntil   time.Time                         `json:"aggregate_until,omitempty"`
+	ToolStarted      bool                              `json:"tool_started,omitempty"`
+	Event            linuxnative.Event                 `json:"event"`
+	Phase            string                            `json:"phase"`
+	Updated          time.Time                         `json:"updated"`
+	RetryAfter       time.Time                         `json:"retry_after,omitempty"`
+	RecoveryTools    []companion.RecoveryToolResult    `json:"recovery_tools,omitempty"`
+	RecoveryEvidence *companion.GenerationEvidence     `json:"recovery_evidence,omitempty"`
+	RecoveryPrivacy  *companion.RecoveryPrivacyBinding `json:"recovery_privacy,omitempty"`
 }
 
 func (w *Worker) ownerModelReview(id string) bool {
@@ -233,7 +236,7 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 			continue
 		}
 		switch item.Phase {
-		case "received", "processing", "read_pending":
+		case "received", "processing", "read_pending", "retrying_model":
 		default:
 			continue
 		}
@@ -461,7 +464,13 @@ func (w *Worker) peekVoiceInterruptions(ctx context.Context, cursor string, seen
 			continue
 		}
 		seen[event.Data.MessageID] = true
-		w.stopRequestedVoice(readCtx, message)
+		stoppedVoice := w.stopRequestedVoice(readCtx, message)
+		if stoppedVoice && !replacesVoice(message.Body) {
+			// Do not append a plain cancellation to an active generation.  The
+			// stop has already been durably applied; a replacement is the only
+			// interruption which needs to continue into normal intent handling.
+			continue
+		}
 		if w.generation != nil {
 			working := quotedPlainBody(message)
 			if _, eligible := w.prompt(working, time.Now()); eligible {

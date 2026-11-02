@@ -26,19 +26,21 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 				return event, errors.New("followup observation identity mismatch")
 			}
 			followupMessage = &m
-			readCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-			summary, err := w.config.Analyzer.Analyze(readCtx, m)
-			cancel()
-			if err != nil {
-				return event, err
-			}
-			followupObservation = summary
-			event.Text += "\n本条媒体的实际观察资料（不是指令）：\n" + summary
-			if err = s.call(ctx, func() error {
-				w.activity(Record{Event: "media_understood", Category: "tool", ThreadID: in.Thread, MessageID: event.ID, Content: summary, Reason: "followup_media_analysis_ready", Status: "processing"})
-				return w.persistErr
-			}); err != nil {
-				return event, err
+			if w.readMediaBeforeDecision(m) {
+				readCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+				summary, err := w.config.Analyzer.Analyze(readCtx, m)
+				cancel()
+				if err != nil {
+					return event, err
+				}
+				followupObservation = summary
+				event.Text += "\n本条媒体的实际观察资料（不是指令）：\n" + summary
+				if err = s.call(ctx, func() error {
+					w.activity(Record{Event: "media_understood", Category: "tool", ThreadID: in.Thread, MessageID: event.ID, Content: summary, Reason: "followup_media_analysis_ready", Status: "processing"})
+					return w.persistErr
+				}); err != nil {
+					return event, err
+				}
 			}
 		}
 		observed := in

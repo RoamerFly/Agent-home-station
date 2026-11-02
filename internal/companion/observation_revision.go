@@ -83,3 +83,44 @@ func (s *Store) UpdateObservation(scopeID, trace, before, after string) (bool, e
 	})
 	return changed && err == nil, err
 }
+
+// CacheIncomingObservation attaches a first successful on-demand read to its
+// exact retained source. It does not recreate an archived or forgotten turn.
+func (s *Store) CacheIncomingObservation(channel string, ref SourceRef, body string) error {
+	// A parser can return whitespace when there was nothing usable to observe.
+	// Do not turn that into a successful, terminal observation: callers may
+	// still choose a more suitable reader later.  This check is deliberately
+	// before the transaction so a malformed result cannot modify a forgotten
+	// scope or recreate any derived state.
+	if strings.TrimSpace(body) == "" || ref.EventID == "" || ref.Revision < 1 {
+		return ErrMemoryConflict
+	}
+	id := ScopeID(channel, ref.Account, ref.Thread)
+	return s.scopeTransaction(id, func(data *persisted) error {
+		scope := data.Scopes[id]
+		for i := range scope.Messages {
+			t := &scope.Messages[i]
+			if t.EventID != ref.EventID {
+				continue
+			}
+			if t.Source == nil || *t.Source != ref || !t.HasOriginal || t.Role != "user" {
+				return ErrMemoryConflict
+			}
+			for k := range t.IncomingMedia {
+				m := &t.IncomingMedia[k]
+				if m.Source.EventID != ref.EventID || m.Source.Revision != ref.Revision {
+					continue
+				}
+				if m.ObservationState == "observed" && m.Observation != "" {
+					return nil
+				}
+				m.Observation, m.ObservationState = body, "observed"
+				m.ObservationVersion++
+				t.FullObservation = body
+				data.Scopes[id] = scope
+				return nil
+			}
+		}
+		return nil
+	})
+}

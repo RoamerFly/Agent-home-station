@@ -34,6 +34,10 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 	if status.ID != in.Job || status.ThreadID != in.Thread {
 		return "", toolInputError("发送任务不属于当前会话")
 	}
+	// A verified delivery record is cross-conversation evidence. It may route a
+	// later natural-language result to the requesting owner, but never changes
+	// the actual delivery target or grants send authority.
+	p.routeCrossConversationThread(in.Thread)
 	if name == "wechat_delivery_status" {
 		b, _ := json.Marshal(status)
 		var result map[string]any

@@ -101,12 +101,30 @@ type permittedTools struct {
 	mediaOrigin          map[string]string
 	songFollowups        []string
 	privateDiagnostics   bool
+	// Minted only after a trusted owner actually reads another conversation
+	// from a group. The final text is delivered to the owner privately while
+	// retaining the real source conversation for authorization checks.
+	privateReplyTarget   string
+	privateReplyRequired bool
+	recoveryRouteErr     error
+	// Threads become eligible as task sources only after a successful readonly
+	// tool result. A model-supplied thread_id is never enough on its own.
+	crossSourceThreads  map[string]bool
+	crossSourceMessages map[string][]string
 }
 
 func (p *permittedTools) SetTrace(input companion.Input) {
 	p.trace = input
 	p.songFollowups = nil
 	p.privateDiagnostics = false
+	p.privateReplyTarget = ""
+	p.privateReplyRequired = false
+	p.recoveryRouteErr = nil
+	p.crossSourceThreads = map[string]bool{}
+	p.crossSourceMessages = map[string][]string{}
+	if input.RecoveryPrivacy != nil && input.RecoveryPrivacy.Required {
+		p.recoveryRouteErr = p.restoreRecoveryPrivacyBinding(*input.RecoveryPrivacy)
+	}
 }
 
 func (p *permittedTools) ForkTools() companion.ToolAccess {
@@ -116,7 +134,7 @@ func (p *permittedTools) ForkTools() companion.ToolAccess {
 		privateSurfOrigin: p.privateSurfOrigin,
 		outboundReviewer:  p.outboundReviewer,
 		apiNames:          p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
-		discoveryReader: p.discoveryReader, webPageReader: p.webPageReader, media: map[string]companion.GeneratedMedia{}, mediaOrigin: map[string]string{}}
+		discoveryReader: p.discoveryReader, webPageReader: p.webPageReader, media: map[string]companion.GeneratedMedia{}, mediaOrigin: map[string]string{}, crossSourceThreads: map[string]bool{}, crossSourceMessages: map[string][]string{}}
 }
 
 func (p *permittedTools) enabled(name string) bool {
@@ -247,14 +265,6 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	}()
 	if strings.HasPrefix(name, "music_") || strings.HasPrefix(name, "workspace_") || name == "wechat_recall" {
 		p.privateDiagnostics = true
-	}
-	if name == "wechat_read" {
-		var target struct {
-			Thread string `json:"thread_id"`
-		}
-		if json.Unmarshal(args, &target) == nil && target.Thread != "" && target.Thread != p.trace.Thread {
-			p.privateDiagnostics = true
-		}
 	}
 	defer func() { p.rememberTaskAction(name, args, result, callErr) }()
 	ctx = p.mcpContext(ctx)
@@ -419,7 +429,11 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			}
 			scoped := &permittedTools{manager: p.manager, trace: p.trace}
 			scoped.trace.Thread = in.Source
-			return scoped.assetHistoryPage(in.AssetID, in.Offset, in.Limit)
+			result, err := scoped.assetHistoryPage(in.AssetID, in.Offset, in.Limit)
+			if err == nil {
+				p.routeCrossConversationThread(in.Source)
+			}
+			return result, err
 		}
 		return p.assetHistoryPage(in.AssetID, in.Offset, in.Limit)
 	}

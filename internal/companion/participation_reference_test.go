@@ -137,7 +137,7 @@ func TestParticipationReferenceCanRepairByExistingRouteWithoutChangingProof(t *t
 	model := &groundingSequenceModel{answers: []string{`{"action":"reply","bubbles":[{"text":"你们聊得怎么样？","route_id":"R2"}]}`}}
 	e.model = model
 	d.Messages = []string{"那你们聊得怎么样？"}
-	out, err := e.ReviewGroundedReply(t.Context(), in, d)
+	out, err := e.DiagnoseGroundedReply(t.Context(), in, d)
 	if err != nil || out.Action != "reply" || model.calls != 2 || out.ReplyContexts[0].TargetIDs[0] != "beta" || !out.ReplyContexts[0].QuoteRequired || out.ReplyContexts[0].AnchorMessageID != in.QuotedSource.MessageID {
 		t.Fatal(out, err, model.calls)
 	}

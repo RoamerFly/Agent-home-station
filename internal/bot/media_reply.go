@@ -33,6 +33,9 @@ func (r *mediaReply) terminal() bool {
 }
 
 func (w *Worker) deferMediaReply(in companion.Input, messages []string, expected int, followup ...companion.Decision) bool {
+	if w.mediaTraceCancelled(in.TraceID) {
+		return true
+	}
 	for _, r := range w.runtime.MediaReplies {
 		if r.Trace == in.TraceID && r.Input.Thread == in.Thread {
 			return true

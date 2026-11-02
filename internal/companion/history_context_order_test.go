@@ -21,9 +21,6 @@ func TestHistoryPresentationKeepsNearestSelectionAndOpaqueCursor(t *testing.T) {
 	if json.Unmarshal([]byte(ordered), &p) != nil || len(p.Items) != 3 || p.Items[0].Event.ID != "A" || p.Items[1].Event.ID != "B" || p.Items[2].Event.ID != "C" || p.NextCursor != "opaque-desc-cursor" || !p.HasMore || !strings.Contains(ordered, "preserved") {
 		t.Fatal(ordered)
 	}
-	if ids := h.unreadDirectory(); strings.Index(ids, `"A"`) > strings.Index(ids, `"B"`) || strings.Index(ids, `"B"`) > strings.Index(ids, `"C"`) {
-		t.Fatal(ids)
-	}
 }
 
 func TestModelHistoryOrderIndependentOfToolCompletionWithoutDuplicatingContent(t *testing.T) {
@@ -69,6 +66,20 @@ func TestHistoryAnchorObservationsExcludedAndRequestPreserved(t *testing.T) {
 	}
 	if prepared[0]["content"] == raw || !strings.Contains(raw, "excluded-anchor-content") {
 		t.Fatal("fixture not transformed")
+	}
+}
+
+func TestHistoryContextKeepsCurrentRequestUntilDirectoryAndWhenSourceFallbackMatches(t *testing.T) {
+	raw := `{"kind":"current_message","text":"总结这条之前的前3条视频","message_id":"current","source":{"message_id":"current"},"media_observations":[{"source":{"message_id":"current"},"observation":"current-anchor-observation"}]}`
+	h := &historyMaterialNeed{Anchor: "current", Count: 3, IDs: map[string]bool{}, MessageIDs: map[string]string{}, ReadIDs: map[string]bool{}}
+	before := h.contextForModel([]map[string]string{{"role": "user", "content": raw}})
+	if len(before) != 1 || before[0]["content"] != raw {
+		t.Fatal("history request was transformed before model selected a directory", before)
+	}
+	h.rememberDirectory(`{"items":[{"event":{"id":"older","message_id":"older-native","at":"2026-11-01T00:00:00Z"}}]}`)
+	after := h.contextForModel([]map[string]string{{"role": "user", "content": raw}})
+	if !strings.Contains(after[0]["content"], "总结这条之前的前3条视频") || !strings.Contains(after[0]["content"], "current-anchor-observation") {
+		t.Fatal("current request was mistaken for an excluded historical anchor", after)
 	}
 }
 

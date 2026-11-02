@@ -134,7 +134,10 @@ func (h *historyMaterialNeed) tagReadPacket(name string, args json.RawMessage, r
 // receipts and full-result continuation handles in their original positions.
 // The durable transcript is untouched, including when a follow-up changes scope.
 func (h *historyMaterialNeed) contextForModel(turns []map[string]string) []map[string]string {
-	if h == nil {
+	// Before the model has selected and received a directory, this helper must
+	// be a no-op. In particular, never hide the current request or its quoted
+	// anchor merely because it may later become a history locator.
+	if h == nil || len(h.Events) == 0 {
 		return turns
 	}
 	out := make([]map[string]string, 0, len(turns)+1)
@@ -183,7 +186,8 @@ func (h *historyMaterialNeed) contextForModel(turns []map[string]string) []map[s
 }
 
 func (h *historyMaterialNeed) prepareHistoryData(data map[string]any, contents map[string][]any) {
-	if kind, _ := data["kind"].(string); kind == "current_message" {
+	kind, _ := data["kind"].(string)
+	if kind == "current_message" {
 		if text, ok := data["text"].(string); ok {
 			data["text"] = UserRequestText(text)
 		}
@@ -200,7 +204,9 @@ func (h *historyMaterialNeed) prepareHistoryData(data map[string]any, contents m
 	if message == "" {
 		message, _ = source["message_id"].(string)
 	}
-	if message == h.Anchor {
+	// A fallback anchor may be the current message's own source. The current
+	// request remains authoritative and cannot be reduced to a locator.
+	if message == h.Anchor && kind != "current_message" {
 		delete(data, "media_observations")
 		delete(data, "text")
 		data["history_anchor_role"] = "locator_only_excluded"
@@ -212,7 +218,10 @@ func (h *historyMaterialNeed) prepareHistoryData(data map[string]any, contents m
 			src, _ := row["source"].(map[string]any)
 			id, _ := src["event_id"].(string)
 			mid, _ := src["message_id"].(string)
-			if mid == h.Anchor {
+			// A quoted anchor is excluded even when carried beside the current
+			// request. Preserve it only for the source-fallback case where the
+			// current message itself was (necessarily) used as the locator.
+			if mid == h.Anchor && !(kind == "current_message" && message == h.Anchor) {
 				continue
 			}
 			if h.IDs[id] {

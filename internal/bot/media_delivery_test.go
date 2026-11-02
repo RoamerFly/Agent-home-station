@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -48,10 +49,14 @@ func TestVoiceAndFileSerializeAndPersistRandomGap(t *testing.T) {
 }
 
 type mediaFake struct {
-	onStatus func()
+	onStatus   func()
+	lookupErrs []error
 	fakeSender
 	status                  linuxnative.ToolStatus
+	resumeStatus            linuxnative.ToolStatus
+	resumeErr               error
 	sends, retries, cancels int
+	resumes                 int
 	keys                    map[string]bool
 }
 
@@ -83,6 +88,11 @@ func (n *mediaFake) Submit(_ context.Context, r linuxnative.ToolSend) (linuxnati
 	return n.status, nil
 }
 func (n *mediaFake) LookupSend(_ context.Context, key string) (linuxnative.ToolStatus, error) {
+	if len(n.lookupErrs) > 0 {
+		err := n.lookupErrs[0]
+		n.lookupErrs = n.lookupErrs[1:]
+		return linuxnative.ToolStatus{}, err
+	}
 	if !n.keys[key] {
 		return linuxnative.ToolStatus{}, linuxnative.ErrToolNotFound
 	}
@@ -146,6 +156,10 @@ func (n *mediaFake) CancelMediaJob(context.Context, string) (linuxnative.ToolSta
 	n.status.Retryable = true
 	return n.status, nil
 }
+func (n *mediaFake) ResumeMissingMediaJob(context.Context, string, string) (linuxnative.ToolStatus, error) {
+	n.resumes++
+	return n.resumeStatus, n.resumeErr
+}
 func mediaWorker(t *testing.T) (*Worker, *mediaFake, *companion.Engine, companion.Input) {
 	t.Helper()
 	store, e := companion.NewStore(t.TempDir())
@@ -198,10 +212,15 @@ func TestModelFileIntentCancelsOnlyRequestersOldVoiceAndSurvivesRestart(t *testi
 	other.Sender, other.TraceID = "other-user", "other-trace"
 	other = observeSyntheticMediaRequest(t, w, c, other)
 	w.queueMedia(context.Background(), c, other, companion.GeneratedMedia{ID: "other-source", Kind: "voice", Title: "other.wav"})
+	// A legacy group record without a requester cannot be safely attributed to
+	// the current member's new request.
+	anonymous := other
+	anonymous.Sender, anonymous.TraceID = "", "anonymous-trace"
+	w.runtime.Media = append(w.runtime.Media, &mediaDelivery{Trace: anonymous.TraceID, Input: anonymous, ID: "anonymous-job", Kind: "voice", State: "running"})
 	newRequest := in
 	newRequest.TraceID, newRequest.Text = "new-request", "还是原版吧"
 	w.cancelVoiceForIntent(context.Background(), newRequest, "file")
-	if n.cancels != 1 || !w.runtime.Media[0].UserCancelled || w.runtime.Media[0].State != "cancelling" || w.runtime.Media[1].UserCancelled {
+	if n.cancels != 1 || !w.runtime.Media[0].UserCancelled || w.runtime.Media[0].State != "cancelling" || w.runtime.Media[1].UserCancelled || w.runtime.Media[2].UserCancelled {
 		t.Fatal("file intent failed or interrupted someone else", n.cancels, w.runtime.Media)
 	}
 	w.runtime.Media[0].Next = time.Time{}
@@ -281,6 +300,250 @@ func TestNewSongCancelsOldVoiceAndItsLateCaptionAcrossRestart(t *testing.T) {
 		if text != "你们换首歌吧" && replacesVoice(text) {
 			t.Fatal("negated instruction cancelled current song")
 		}
+	}
+}
+
+func TestUnmentionedGroupStopCancelsOnlyRequestersVoiceTrace(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread, in.Sender, in.TraceID = "room@chatroom", "requester", "requester-song"
+	other := in
+	other.Sender, other.TraceID = "other-member", "other-song"
+	w.runtime.Media = []*mediaDelivery{
+		{Trace: in.TraceID, Input: in, ID: "requester-job", Kind: "voice", State: "running"},
+		{Trace: other.TraceID, Input: other, Kind: "voice", State: "prepared"},
+	}
+	m := fixtureMessage("stop-wrong-song", in.Thread, "发错了，不是这首歌，后面别发了", "incoming")
+	m.SenderID = in.Sender
+	if !w.stopRequestedVoice(context.Background(), m) {
+		t.Fatal("unmentioned requester stop was ignored")
+	}
+	if n.cancels != 1 || !w.runtime.Media[0].UserCancelled || w.runtime.Media[0].CancelTrace != m.ID || w.runtime.Media[1].UserCancelled {
+		t.Fatalf("wrong group delivery was stopped: cancels=%d first=%+v second=%+v", n.cancels, w.runtime.Media[0], w.runtime.Media[1])
+	}
+	// A late callback with a different source cannot resurrect the cancelled
+	// request under the old trace.
+	w.queueMedia(context.Background(), nil, in, companion.GeneratedMedia{ID: "late-plugin-source", Kind: "voice", Title: "late.wav"})
+	if len(w.runtime.Media) != 2 {
+		t.Fatal("late callback revived cancelled trace", w.runtime.Media)
+	}
+}
+
+func TestGroupStopAmbiguityPausesOnlyRequestersCandidateTraces(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread, in.Sender, in.TraceID = "room@chatroom", "requester", "first-song"
+	second := in
+	second.TraceID = "second-song"
+	other := in
+	other.Sender, other.TraceID = "other-member", "other-song"
+	w.runtime.Media = []*mediaDelivery{
+		{Trace: in.TraceID, Input: in, ID: "first-job", Kind: "voice", State: "running"},
+		{Trace: second.TraceID, Input: second, Kind: "voice", State: "prepared"},
+		{Trace: other.TraceID, Input: other, Kind: "voice", State: "prepared"},
+	}
+	m := fixtureMessage("ambiguous-stop", in.Thread, "发错了", "incoming")
+	m.SenderID = in.Sender
+	if !w.stopRequestedVoice(context.Background(), m) {
+		t.Fatal("ambiguous stop not recognised")
+	}
+	if !w.runtime.Media[0].Paused || !w.runtime.Media[1].Paused || w.runtime.Media[0].UserCancelled || w.runtime.Media[1].UserCancelled || w.runtime.Media[2].Paused || w.runtime.Media[2].UserCancelled {
+		t.Fatalf("ambiguity affected the wrong deliveries: %+v %+v %+v", w.runtime.Media[0], w.runtime.Media[1], w.runtime.Media[2])
+	}
+	if n.cancels != 1 { // only the first native job had begun; prepared work is simply held.
+		t.Fatal("ambiguous pause submitted unnecessary cancels", n.cancels)
+	}
+	if len(w.runtime.Plans) != 1 || w.runtime.Plans[0].Input.TraceID != m.ID || w.runtime.Plans[0].State != "queued" {
+		t.Fatal("ambiguous interruption did not queue one clarification", w.runtime.Plans)
+	}
+	if err := w.loadRuntime("server-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !w.runtime.Media[0].Paused || !w.runtime.Media[1].Paused || w.runtime.Media[0].UserCancelled || w.runtime.Media[1].UserCancelled {
+		t.Fatalf("restart changed ambiguous pause into cancellation or resume: %+v %+v", w.runtime.Media[0], w.runtime.Media[1])
+	}
+}
+
+func TestQuotedGroupStopSelectsExactlyOneConcurrentTrace(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread, in.Sender, in.TraceID = "room@chatroom", "requester", "first-song"
+	second := in
+	second.TraceID = "second-song"
+	w.runtime.Media = []*mediaDelivery{
+		{Trace: in.TraceID, Input: in, ID: "first-job", Kind: "voice", State: "running"},
+		{Trace: second.TraceID, Input: second, Kind: "voice", State: "prepared"},
+	}
+	m := fixtureMessage("quoted-stop", in.Thread, "这首发错了", "incoming")
+	m.SenderID = "requester"
+	m.ResolvedQuote = &linuxnative.Message{ID: second.TraceID}
+	if !w.stopRequestedVoice(context.Background(), m) {
+		t.Fatal("quoted stop ignored")
+	}
+	if n.cancels != 0 || w.runtime.Media[0].UserCancelled || !w.runtime.Media[1].UserCancelled {
+		t.Fatalf("quote did not select exactly one prepared trace: cancels=%d first=%+v second=%+v", n.cancels, w.runtime.Media[0], w.runtime.Media[1])
+	}
+}
+
+func TestQuotedUnrelatedMessageNeverFallsBackToUniqueVoiceTask(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread, in.Sender, in.TraceID = "room@chatroom", "requester", "only-song"
+	w.runtime.Media = []*mediaDelivery{{Trace: in.TraceID, Input: in, ID: "only-native-job", Kind: "voice", State: "running"}}
+	m := fixtureMessage("unrelated-quoted-stop", in.Thread, "停", "incoming")
+	m.SenderID = in.Sender
+	m.ResolvedQuote = &linuxnative.Message{ID: "an-unrelated-message"}
+	if w.stopRequestedVoice(context.Background(), m) || n.cancels != 0 || w.runtime.Media[0].UserCancelled {
+		t.Fatalf("unrelated quote fell back to the only voice task: cancels=%d delivery=%+v", n.cancels, w.runtime.Media[0])
+	}
+}
+
+func TestShortVoiceStopsAreExactAndDoNotMatchOrdinaryWords(t *testing.T) {
+	for _, text := range []string{"停", "停一下", "停下", "先停", "先停一下", "先停下"} {
+		if !parseVoiceInterrupt(text).stop {
+			t.Fatal("short stop was not recognised", text)
+		}
+	}
+	for _, text := range []string{"停车场", "停电了", "先停靠一下", "这首不停"} {
+		if parseVoiceInterrupt(text).stop {
+			t.Fatal("ordinary text was interpreted as a stop", text)
+		}
+	}
+}
+
+func TestUserCancelRecoversLostNativeIDByIdempotencyKey(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	d := &mediaDelivery{Key: "lost-native-key", Trace: in.TraceID, Input: in, SourceID: "source", Kind: "voice", State: "submitting", Created: time.Now().UTC()}
+	w.runtime.Media = []*mediaDelivery{d}
+	n.keys[d.Key] = true
+	n.status = linuxnative.ToolStatus{ID: "native-job-created-before-crash", State: "running", ThreadID: in.Thread, SourceID: d.SourceID}
+	w.cancelMedia(n, d, true, "media_cancel_requested_by_user")
+	if n.cancels != 1 || d.ID != "native-job-created-before-crash" || !d.UserCancelled || d.State != "cancelling" {
+		t.Fatalf("lost native id was not recovered and cancelled: cancels=%d delivery=%+v", n.cancels, d)
+	}
+	if err := w.loadRuntime("server-1"); err != nil {
+		t.Fatal(err)
+	}
+	d = w.runtime.Media[0]
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if d.State != "stopped" || n.sends != 0 || n.retries != 0 {
+		t.Fatalf("cancelled lost-id job revived after restart: %+v sends=%d retries=%d", d, n.sends, n.retries)
+	}
+}
+
+func TestUserCancelUnknownSubmittingKeyNeverSubmitsAgain(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	d := &mediaDelivery{Key: "never-created-key", Trace: in.TraceID, Input: in, SourceID: "source", Kind: "voice", State: "submitting", Created: time.Now().UTC()}
+	w.runtime.Media = []*mediaDelivery{d}
+	w.cancelMedia(n, d, true, "media_cancel_requested_by_user")
+	if d.State != "stopped" || !d.UserCancelled || n.cancels != 0 {
+		t.Fatalf("unknown submission was not safely stopped: cancels=%d delivery=%+v", n.cancels, d)
+	}
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if n.sends != 0 || n.retries != 0 {
+		t.Fatal("cancelled unknown submission was recreated", n.sends, n.retries)
+	}
+}
+
+func TestCancelledUnknownKeyNeverSubmitsAfterLookupFailureAndRestart(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	d := &mediaDelivery{Key: "interrupted-lookup-key", Trace: in.TraceID, Input: in, SourceID: "source", Kind: "voice", State: "cancelling", UserCancelled: true, Created: time.Now().UTC()}
+	w.runtime.Media = []*mediaDelivery{d}
+	n.lookupErrs = []error{errors.New("temporary native disconnect")}
+	w.reconcileMedia(context.Background())
+	if d.State != "cancelling" || n.sends != 0 || n.retries != 0 {
+		t.Fatalf("lookup outage changed a cancelled task into a send: %+v sends=%d retries=%d", d, n.sends, n.retries)
+	}
+	if err := w.loadRuntime("server-1"); err != nil {
+		t.Fatal(err)
+	}
+	d = w.runtime.Media[0]
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background()) // native now reports idempotency key absent
+	if d.State != "stopped" || !d.UserCancelled || n.sends != 0 || n.retries != 0 {
+		t.Fatalf("404 after restart recreated cancelled task: %+v sends=%d retries=%d", d, n.sends, n.retries)
+	}
+}
+
+func TestCancelledUnknownKeyAcceptsOnlyLateOriginalReceipt(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	d := &mediaDelivery{Key: "late-receipt-key", Trace: in.TraceID, Input: in, SourceID: "source", Kind: "voice", State: "cancelling", UserCancelled: true, Created: time.Now().UTC()}
+	w.runtime.Media = []*mediaDelivery{d}
+	n.keys[d.Key] = true
+	n.status = linuxnative.ToolStatus{ID: "already-submitted", State: "accepted", ServerID: "accepted-before-cancel", ThreadID: in.Thread, SourceID: d.SourceID}
+	w.reconcileMedia(context.Background())
+	if d.State != "accepted" || !d.UserCancelled || d.ID != "already-submitted" || n.sends != 0 || n.retries != 0 {
+		t.Fatalf("late original receipt was not reconciled safely: %+v sends=%d retries=%d", d, n.sends, n.retries)
+	}
+}
+
+func TestCancelledKnownUnknownJobKeepsPollingOnlyForLateReceipt(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	d := &mediaDelivery{Key: "known-unknown-key", Trace: in.TraceID, Input: in, SourceID: "source", ID: "known-job", Kind: "voice", State: "cancelling", UserCancelled: true, Created: time.Now().UTC()}
+	w.runtime.Media = []*mediaDelivery{d}
+	n.status = linuxnative.ToolStatus{ID: d.ID, State: "unknown", ThreadID: in.Thread, SourceID: d.SourceID}
+	w.reconcileMedia(context.Background())
+	if d.State != "cancelling" || d.Reason != "media_cancel_receipt_pending" || n.sends != 0 || n.retries != 0 {
+		t.Fatalf("unknown cancelled job was not retained for receipt only: %+v sends=%d retries=%d", d, n.sends, n.retries)
+	}
+	n.status = linuxnative.ToolStatus{ID: d.ID, State: "accepted", ServerID: "late-server-receipt", ThreadID: in.Thread, SourceID: d.SourceID}
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if d.State != "accepted" || !d.UserCancelled || n.sends != 0 || n.retries != 0 {
+		t.Fatalf("late receipt was not recorded without retry: %+v sends=%d retries=%d", d, n.sends, n.retries)
+	}
+}
+
+func TestHandleUnmentionedGroupStopRunsBeforeEligibility(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread, in.Sender, in.TraceID = "room@chatroom", "requester", "active-song"
+	w.runtime.Media = []*mediaDelivery{{Trace: in.TraceID, Input: in, ID: "native-active", Kind: "voice", State: "running"}}
+	m := fixtureMessage("unmentioned-stop", in.Thread, "发错了，后面别发", "incoming")
+	m.SenderID = in.Sender
+	w.source = &fakeSource{messages: map[string]linuxnative.Message{m.ID: m}}
+	w.handle(context.Background(), fixtureEvent("1", m.ID, m.ThreadID, m.Direction, "remote"))
+	if n.cancels != 1 || !w.runtime.Media[0].UserCancelled || n.calls != 0 {
+		t.Fatalf("normal inbound path did not use the local stop path: cancels=%d text_calls=%d media=%+v", n.cancels, n.calls, w.runtime.Media[0])
+	}
+}
+
+func TestUnmentionedReplacementPromotesOnlyNewSongTurn(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread, in.Sender, in.TraceID = "room@chatroom", "requester", "old-song"
+	w.runtime.Media = []*mediaDelivery{{Trace: in.TraceID, Input: in, ID: "native-active", Kind: "voice", State: "running"}}
+	model := &fakeModel{answer: "已换成新歌。"}
+	w.model = model
+	m := fixtureMessage("replace-song", in.Thread, "发错了，换成《正确的歌》", "incoming")
+	m.SenderID = in.Sender
+	w.source = &fakeSource{messages: map[string]linuxnative.Message{m.ID: m}}
+	w.handle(context.Background(), fixtureEvent("1", m.ID, m.ThreadID, m.Direction, "remote"))
+	if n.cancels != 1 || !w.runtime.Media[0].UserCancelled || model.calls != 1 {
+		t.Fatalf("unmentioned replacement did not cancel then start the new turn: cancels=%d model_calls=%d media=%+v", n.cancels, model.calls, w.runtime.Media[0])
+	}
+}
+
+func TestRecoveredUnmentionedGroupStopCancelsBeforeGenerationResumes(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Thread, in.Sender, in.TraceID = "room@chatroom", "requester", "active-song"
+	w.runtime.Media = []*mediaDelivery{{Trace: in.TraceID, Input: in, ID: "native-active", Kind: "voice", State: "running"}}
+	m := fixtureMessage("recovered-stop", in.Thread, "不是这首歌", "incoming")
+	m.SenderID = in.Sender
+	w.source = &fakeSource{events: []linuxnative.Event{fixtureEvent("2", m.ID, m.ThreadID, m.Direction, "remote")}, messages: map[string]linuxnative.Message{m.ID: m}}
+	w.peekVoiceInterruptions(context.Background(), "1", map[string]bool{})
+	if n.cancels != 1 || !w.runtime.Media[0].UserCancelled {
+		t.Fatalf("recovered stop did not cancel native delivery: cancels=%d media=%+v", n.cancels, w.runtime.Media[0])
+	}
+}
+
+func TestOrdinaryMessageDoesNotPauseMediaQueue(t *testing.T) {
+	w, _, _, in := mediaWorker(t)
+	in.Thread, in.Sender, in.TraceID = "room@chatroom", "requester", "active-song"
+	w.runtime.Media = []*mediaDelivery{{Trace: in.TraceID, Input: in, ID: "native-active", Kind: "voice", State: "running"}}
+	m := fixtureMessage("ordinary-group-chat", in.Thread, "这首歌挺好听", "incoming")
+	m.SenderID = in.Sender
+	m.Mentions.Self = new(bool)
+	*m.Mentions.Self = true
+	w.noticeConversationMessage(m, true)
+	if w.runtime.Media[0].Paused || w.runtime.Media[0].UserCancelled {
+		t.Fatalf("ordinary chat changed an active delivery: %+v", w.runtime.Media[0])
 	}
 }
 

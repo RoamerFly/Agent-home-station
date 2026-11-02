@@ -68,3 +68,64 @@ func TestSourceConflictManagementRejectsCrossScopeAndMissingCSRF(t *testing.T) {
 		t.Fatal("cross-scope quarantine admitted", code)
 	}
 }
+
+func TestReplyAuditDiagnosticOnlyUsesSavedCandidateAndCurrentTrigger(t *testing.T) {
+	scope := companion.Scope{Channel: "wechat", Account: "test", Thread: "room@chatroom", Messages: []companion.Turn{{Role: "user", TraceID: "incoming", Sender: "member", Text: "请回复", Source: &companion.SourceRef{EventID: "event", MessageID: "incoming", Account: "test", Thread: "room@chatroom", Sender: "member"}}}}
+	direct, ok := replyAuditCandidate(scope, companion.ReplyAudit{Messages: []string{"已保存的草稿"}})
+	if !ok || direct.Action != "reply" || len(direct.Messages) != 1 || direct.Messages[0] != "已保存的草稿" {
+		t.Fatalf("direct candidate=%+v ok=%v", direct, ok)
+	}
+	snapshot := json.RawMessage(`{"candidate":{"action":"reply","messages":["快照草稿"]}}`)
+	fromSnapshot, ok := replyAuditCandidate(scope, companion.ReplyAudit{Snapshot: snapshot})
+	if !ok || len(fromSnapshot.Messages) != 1 || fromSnapshot.Messages[0] != "快照草稿" {
+		t.Fatalf("snapshot candidate=%+v ok=%v", fromSnapshot, ok)
+	}
+	if _, ok := replyAuditCandidate(companion.Scope{}, companion.ReplyAudit{Snapshot: json.RawMessage(`{"candidate":{"action":"silent","messages":[]}}`)}); ok {
+		t.Fatal("diagnostic accepted a non-reply as a saved candidate")
+	}
+	scope.Messages = append(scope.Messages, companion.Turn{Role: "assistant", Text: "已发送的回复", ReplyContext: &companion.ReplyContext{AnchorMessageID: "incoming"}})
+	accepted, ok := replyAuditCandidate(scope, companion.ReplyAudit{TriggerMessageID: "incoming"})
+	if !ok || len(accepted.Messages) != 1 || accepted.Messages[0] != "已发送的回复" {
+		t.Fatalf("accepted fallback=%+v ok=%v", accepted, ok)
+	}
+	in, ok := replyAuditInput(scope, companion.ReplyAudit{TriggerMessageID: "incoming", Sender: "member"})
+	if !ok || !in.IsGroup || in.Mode != "social" || in.Source == nil || in.Source.EventID != "event" {
+		t.Fatalf("diagnostic input=%+v ok=%v", in, ok)
+	}
+	if _, ok := replyAuditInput(scope, companion.ReplyAudit{TriggerMessageID: "missing"}); ok {
+		t.Fatal("diagnostic reconstructed a missing trigger from audit metadata")
+	}
+}
+
+func TestReplyAuditDiagnosisRequiresCSRFScopeAndSavedDraft(t *testing.T) {
+	f := setup(t)
+	f.login()
+	c := f.manager.Config().Companion
+	c.Permissions.Remember = true
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "member", TraceID: "diagnose-source", Text: "原文"}
+	if err := f.manager.memory.Observe(in, c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	scope := companion.ScopeID(in.Channel, in.Account, in.Thread)
+	id := strings.Repeat("b", 64)
+	audit := companion.ReplyAudit{ID: id, Scope: scope, At: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour), TriggerMessageID: in.TraceID, Sender: in.Sender, State: "validated"}
+	dir := filepath.Join(f.manager.dir, "companion", "reply-audits", scope)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(audit)
+	if err := os.WriteFile(filepath.Join(dir, id+".json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/memory/" + scope + "/reply-audits/" + id + "/diagnose"
+	if code, _, _ := f.request("POST", path, map[string]any{}, true, false); code != http.StatusForbidden {
+		t.Fatalf("diagnostic bypassed CSRF: %d", code)
+	}
+	if code, body, _ := f.request("POST", path, map[string]any{}, true, true); code != http.StatusConflict || !strings.Contains(string(body), "没有保留") {
+		t.Fatalf("missing candidate diagnostic=%d %s", code, body)
+	}
+	other := companion.ScopeID("wechat", "other-account", in.Thread)
+	if code, _, _ := f.request("POST", "/api/memory/"+other+"/reply-audits/"+id+"/diagnose", map[string]any{}, true, true); code != http.StatusNotFound {
+		t.Fatalf("cross-account diagnostic admitted: %d", code)
+	}
+}

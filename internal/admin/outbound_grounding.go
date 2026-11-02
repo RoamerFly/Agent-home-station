@@ -191,15 +191,10 @@ func (p *permittedTools) prepareOutboundText(ctx context.Context, target, text s
 	cfg := p.manager.runtimeConfig()
 	reviewer := p.outboundReviewer
 	if reviewer == nil {
-		model, modelErr := p.manager.makeModel(cfg)
-		reviewer = model
-		if modelErr != nil {
-			reviewer = unavailableOutboundReview{modelErr}
-		}
+		// Sending an existing draft is a local admission check, including for
+		// old accounts that once opted into automatic semantic review.
+		reviewer = unavailableOutboundReview{errors.New("outbound_validation_is_local")}
 	}
-	// Low-risk sourced reminders need only deterministic validation. A missing
-	// provider must fail when a risk actually needs review, not force an API
-	// dependency onto harmless explicit reminders with no semantic model call.
 	e, err := companion.New(cfg.sharedCompanion(), p.manager.memory, reviewer, cfg.SystemPrompt)
 	if err != nil {
 		return "", r, err

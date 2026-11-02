@@ -46,7 +46,7 @@ func TestInvalidCitationUsesOneEditorAndIndependentFinalCheck(t *testing.T) {
 		in := groundedInput(t, s, c, "member", "video-citation", "视频展示煮面。")
 		m := &citationRepairModel{finalInvalid: badFinal}
 		e := &Engine{Store: s, Config: c, model: m}
-		d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"视频主要展示煮面。"}, ReplyContexts: []ReplyContext{{RiskFlags: []string{"incoming_media"}}}})
+		d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"视频主要展示煮面。"}, ReplyContexts: []ReplyContext{{RiskFlags: []string{"incoming_media"}}}})
 		if err != nil || m.checks != 2 || m.edits != 1 {
 			t.Fatalf("review did not follow reject/edit/final-check: %+v %v checks=%d edits=%d", d, err, m.checks, m.edits)
 		}

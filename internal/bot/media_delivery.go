@@ -33,6 +33,15 @@ type MediaSeed struct {
 	JobID        string                   `json:"job_id"`
 }
 type mediaDelivery struct {
+	// Cancellation is a durable decision made by a particular incoming
+	// message.  It is deliberately separate from a native job state: native
+	// may still report receipts for chunks which had already been claimed when
+	// the user interrupted the send.
+	CancelTrace    string                 `json:"cancel_trace,omitempty"`
+	CancelSender   string                 `json:"cancel_sender,omitempty"`
+	CancelledAt    time.Time              `json:"cancelled_at,omitempty"`
+	StateVersion   int                    `json:"state_version,omitempty"`
+	ResumedFrom    string                 `json:"resumed_from,omitempty"`
 	OriginInput    *companion.Input       `json:"origin_input,omitempty"`
 	VoiceProfile   string                 `json:"voice_profile_id,omitempty"`
 	VoiceID        string                 `json:"voice_id,omitempty"`
@@ -170,10 +179,37 @@ func (w *Worker) mediaAllowed(d *mediaDelivery) bool {
 	return ok && routeAllowed && companion.MediaPermitted(c.Config.Permissions, d.Kind) &&
 		(explicitAction || !c.Config.Quiet(time.Now())) && (!d.Input.Surf || w.config.SurfAllowed == nil || w.config.SurfAllowed(d.Input.Thread))
 }
+
+// mediaTraceCancelled is the durable tombstone used by late plugin callbacks,
+// seed adoption and retry recovery.  A new request always gets a new trace;
+// reusing a cancelled trace is never permission to revive its delivery.
+func (w *Worker) mediaTraceCancelled(trace string) bool {
+	if w.runtime == nil || trace == "" {
+		return false
+	}
+	for _, d := range w.runtime.Media {
+		if d.Trace == trace && d.UserCancelled {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *Worker) mediaRetryDelay() int {
+	if w.config.Options == nil {
+		return 0
+	}
+	return w.config.Options.RetryDelaySeconds
+}
+
 func (w *Worker) queueMedia(ctx context.Context, c *companion.Engine, input companion.Input, m companion.GeneratedMedia) bool {
 	_, ok := w.sender.(mediaNative)
 	if !ok || w.runtime == nil {
 		return false
+	}
+	if w.mediaTraceCancelled(input.TraceID) {
+		w.activity(Record{Event: "media_callback_ignored", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "stopped", Reason: "media_trace_cancelled"})
+		return true
 	}
 	source := m.SourceID
 	if source == "" {
@@ -221,6 +257,9 @@ func (w *Worker) adoptMediaSeeds() {
 		return
 	}
 	for _, seed := range w.config.MediaSeeds() {
+		if w.mediaTraceCancelled(seed.Trace) {
+			continue
+		}
 		if seed.Key != "" {
 			known := w.config.MediaSeedKnown
 			if known == nil {
@@ -307,6 +346,58 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 		}
 		if d.Paused || d.terminal() || time.Now().Before(d.Next) {
+			continue
+		}
+		// A user cancellation is a one-way delivery fence.  In particular, a
+		// lost native response may leave ID empty while State is submitting or
+		// cancelling; lookup is allowed solely to settle/cancel the original
+		// idempotency key, never to submit it again.
+		if d.UserCancelled && d.ID == "" {
+			lookupCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			status, err := n.LookupSend(lookupCtx, d.Key)
+			cancel()
+			if err != nil {
+				if errors.Is(err, linuxnative.ErrToolNotFound) {
+					d.State, d.Reason = "stopped", "media_cancelled_before_native_submission"
+					d.Next = time.Time{}
+					w.mediaRecord(d, "media_stopped", "decision")
+					w.refreshMediaParent(d.Trace)
+				} else {
+					d.State, d.Reason = "cancelling", "media_cancel_lookup_pending"
+					d.Checks++
+					d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
+					w.mediaRecord(d, "media_cancel_lookup_pending", "decision")
+				}
+				continue
+			}
+			if status.ID == "" || status.ThreadID != d.Input.Thread || status.SourceID != "" && status.SourceID != d.SourceID {
+				d.State, d.Reason = "cancelling", "media_cancel_identity_pending"
+				d.Checks++
+				d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
+				w.mediaRecord(d, "media_cancel_lookup_pending", "error")
+				continue
+			}
+			d.ID, d.Status, d.Phase = status.ID, status.WithVoiceReceipts(), status.Phase
+			if d.Status.State == "accepted" && d.Status.ServerID != "" {
+				d.State, d.Reason, d.CompletedAt = "accepted", "media_server_accepted_before_cancel", time.Now().UTC()
+				w.mediaRecord(d, "message_sent", "sent")
+				w.refreshMediaParent(d.Trace)
+				continue
+			}
+			if d.Status.State == "queued" || d.Status.State == "running" || d.Status.State == "submitting" {
+				w.cancelMedia(n, d, true, "media_cancel_requested_by_user")
+				continue
+			}
+			if d.Status.State == "unknown" || d.Status.State == "needs_review" {
+				d.State, d.Reason = "cancelling", "media_cancel_receipt_pending"
+				d.Checks++
+				d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
+				w.mediaRecord(d, "media_cancel_receipt_pending", "decision")
+				continue
+			}
+			d.State, d.Reason = "stopped", "media_cancelled_by_user"
+			w.mediaRecord(d, "media_stopped", "decision")
+			w.refreshMediaParent(d.Trace)
 			continue
 		}
 		cancelledTask := !w.taskActive(d.Input)
@@ -415,7 +506,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			} else {
 				d.Reason = "media_receipt_lookup_pending"
 				d.Checks++
-				d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.Checks))
+				d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
 			}
 			w.mediaRecord(d, "media_waiting", "decision")
 			continue
@@ -453,8 +544,13 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			continue
 		}
 		if d.UserCancelled {
-			if status.State == "queued" || status.State == "running" {
+			if status.State == "queued" || status.State == "running" || status.State == "submitting" {
 				w.cancelMedia(n, d, true, "media_cancel_requested_by_user")
+			} else if status.State == "unknown" || status.State == "needs_review" {
+				d.State, d.Reason = "cancelling", "media_cancel_receipt_pending"
+				d.Checks++
+				d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
+				w.mediaRecord(d, "media_cancel_receipt_pending", "decision")
 			} else {
 				d.State = "stopped"
 				d.Reason = "media_cancelled_by_user"
@@ -671,20 +767,48 @@ func (w *Worker) refreshMediaParent(trace string) {
 	w.publishTaskDelivery(trace)
 }
 func (w *Worker) cancelMedia(n mediaNative, d *mediaDelivery, user bool, reason string) {
+	wasCancelled := d.UserCancelled
 	d.UserCancelled = d.UserCancelled || user
+	if user && !wasCancelled {
+		d.StateVersion++
+	}
 	if user && d.ID == "" {
-		d.State, d.Reason = "stopped", reason
-		w.persistErr = w.saveRuntime()
-		if w.persistErr == nil {
-			w.mediaRecord(d, "media_stopped", "decision")
-			w.refreshMediaParent(d.Trace)
+		// "submitting" is the crash window after the durable intent was
+		// written but before the native job id reached us.  Do not assume it
+		// was never submitted: discover the original idempotency key and stop
+		// that native job before marking this delivery terminal.
+		if d.State == "submitting" || d.State == "queued" || d.State == "running" || d.State == "waiting" {
+			lookupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			status, err := n.LookupSend(lookupCtx, d.Key)
+			cancel()
+			if err == nil && status.ID != "" && status.ThreadID == d.Input.Thread && (status.SourceID == "" || status.SourceID == d.SourceID) {
+				d.ID, d.Status, d.Phase = status.ID, status, status.Phase
+			} else if err != nil && !errors.Is(err, linuxnative.ErrToolNotFound) {
+				d.State, d.Reason, d.Next = "cancelling", reason, time.Now().Add(time.Second)
+				w.persistErr = w.saveRuntime()
+				if w.persistErr == nil {
+					w.mediaRecord(d, "media_cancel_lookup_pending", "decision")
+				}
+				return
+			}
 		}
-		return
+		if d.ID == "" {
+			d.State, d.Reason = "stopped", reason
+			w.persistErr = w.saveRuntime()
+			if w.persistErr == nil {
+				w.mediaRecord(d, "media_stopped", "decision")
+				w.refreshMediaParent(d.Trace)
+			}
+			return
+		}
 	}
 	// Persist cancellation intent before the API call so restart never retries it.
 	if user {
 		d.Reason = reason
 		w.persistErr = w.saveRuntime()
+		if w.persistErr == nil {
+			w.mediaRecord(d, "media_cancel_requested", "decision")
+		}
 		if w.persistErr != nil {
 			return
 		}
@@ -708,69 +832,210 @@ func (w *Worker) cancelMedia(n mediaNative, d *mediaDelivery, user bool, reason 
 	w.mediaRecord(d, "media_cancel_requested", "decision")
 	w.refreshMediaParent(d.Trace)
 }
+
+// voiceInterrupt describes a direct, local delivery instruction.  It must be
+// intentionally conservative: a sentence which merely mentions a song must
+// never stop a different member's delivery.
+type voiceInterrupt struct {
+	stop    bool
+	replace bool
+}
+
+func parseVoiceInterrupt(text string) voiceInterrupt {
+	text = strings.ToLower(strings.NewReplacer(" ", "", "　", "", "，", "", "。", "", "！", "", "？", "").Replace(text))
+	if text == "" {
+		return voiceInterrupt{}
+	}
+	for _, phrase := range []string{"不要换", "不用换", "别换", "不换了", "不用重新找", "不要重新找"} {
+		if strings.Contains(text, phrase) {
+			return voiceInterrupt{}
+		}
+	}
+	// These are complete-meaning guards.  In particular, “不是这首也没关
+	// 系，继续发” is not a cancellation merely because it contains 不是这首.
+	for _, phrase := range []string{"继续发", "继续这首", "别停", "不要停", "不用停", "不用取消", "别取消", "不是这首也没关系", "不是这首没关系"} {
+		if strings.Contains(text, phrase) {
+			return voiceInterrupt{}
+		}
+	}
+	for _, phrase := range []string{"重新找一首", "重新找首", "换成", "换一首", "换首歌", "换首", "换歌", "换个歌", "下一首"} {
+		if strings.Contains(text, phrase) {
+			return voiceInterrupt{stop: true, replace: true}
+		}
+	}
+	for _, phrase := range []string{"停", "停一下", "停下", "先停", "先停一下", "先停下"} {
+		if text == phrase {
+			return voiceInterrupt{stop: true}
+		}
+	}
+	for _, phrase := range []string{"不用发语音", "不用语音", "别发语音", "不要发语音", "停止语音", "停下语音", "后面别发", "后面的别发", "发错了", "发错歌", "不是这首", "别放这首", "改发文件", "换成文件"} {
+		if strings.Contains(text, phrase) {
+			return voiceInterrupt{stop: true}
+		}
+	}
+	return voiceInterrupt{}
+}
+
+func mediaQuoteMatches(m linuxnative.Message, d *mediaDelivery) bool {
+	if m.ResolvedQuote != nil {
+		q := m.ResolvedQuote
+		if q.ID != "" && (q.ID == d.Trace || q.ID == d.Input.TraceID || q.ID == d.Input.OriginTraceID) {
+			return true
+		}
+		if q.ServerID != "" && d.Input.QuoteServerID == q.ServerID {
+			return true
+		}
+	}
+	serverID := ""
+	if m.Quote != nil {
+		serverID = m.Quote.ServerID
+	}
+	if serverID == "" {
+		return false
+	}
+	if serverID == d.Input.QuoteServerID || serverID == d.Status.ServerID {
+		return true
+	}
+	for _, chunk := range d.Status.VoiceChunks {
+		if chunk.ServerID == serverID {
+			return true
+		}
+	}
+	return false
+}
+
+// pendingMediaFollowup is the text/caption tail belonging to an otherwise
+// accepted voice delivery.  A replacement still needs to identify this trace:
+// the audio cannot be unsent, but its late caption must not leak out.
+func (w *Worker) pendingMediaFollowup(trace, thread string) bool {
+	for _, r := range w.runtime.MediaReplies {
+		if r.Trace == trace && r.Input.Thread == thread && !r.terminal() {
+			return true
+		}
+	}
+	for _, p := range w.runtime.Plans {
+		if p.MediaCaption && p.Input.TraceID == trace && p.Input.Thread == thread && !p.terminal() {
+			return true
+		}
+	}
+	return false
+}
+
+// voiceCancellationCandidates returns delivery *turns*, rather than raw
+// chunks.  Cancelling by trace is what prevents a later plugin callback or
+// queued caption from reviving the rest of the same request.
+func (w *Worker) voiceCancellationCandidates(m linuxnative.Message) map[string][]*mediaDelivery {
+	byTrace := map[string][]*mediaDelivery{}
+	quoted := m.ResolvedQuote != nil || m.Quote != nil
+	for _, d := range w.runtime.Media {
+		if d.Kind != "voice" || d.Input.Thread != m.ThreadID || d.UserCancelled {
+			continue
+		}
+		if d.terminal() && !w.pendingMediaFollowup(d.Trace, d.Input.Thread) {
+			continue
+		}
+		if quoted {
+			if !mediaQuoteMatches(m, d) {
+				continue
+			}
+		} else if m.SenderID == "" && !strings.HasSuffix(m.ThreadID, "@chatroom") {
+			// Older direct-message records did not always retain sender IDs.
+			// They are still safe if there is only one candidate turn below.
+		} else if m.SenderID == "" || d.Input.Sender == "" || d.Input.Sender != m.SenderID {
+			// Old records without a requester remain manageable through an
+			// explicit queue action, but never by an ambiguous natural phrase.
+			continue
+		}
+		byTrace[d.Trace] = append(byTrace[d.Trace], d)
+	}
+	return byTrace
+}
+
+func (w *Worker) stopVoiceTrace(n mediaNative, m linuxnative.Message, trace, reason string) {
+	for _, d := range w.runtime.Media {
+		if d.Trace != trace || d.Input.Thread != m.ThreadID || d.Kind != "voice" || d.terminal() {
+			continue
+		}
+		d.CancelTrace, d.CancelSender, d.CancelledAt = m.ID, m.SenderID, time.Now().UTC()
+		w.cancelMedia(n, d, true, reason)
+	}
+	for _, r := range w.runtime.MediaReplies {
+		if r.Trace == trace && r.Input.Thread == m.ThreadID && !r.terminal() {
+			r.State, r.Paused = "stopped", false
+			w.activity(Record{Event: "media_reply_stopped", Category: "decision", ThreadID: m.ThreadID, MessageID: trace, Reason: reason, Status: "stopped"})
+		}
+	}
+	for _, p := range w.runtime.Plans {
+		if p.MediaCaption && p.Input.TraceID == trace && p.Input.Thread == m.ThreadID && !p.terminal() {
+			p.State, p.Paused, p.StopReason = "stopped", false, reason
+		}
+	}
+	w.refreshMediaParent(trace)
+}
+
+func (w *Worker) pauseAmbiguousVoiceTraces(n mediaNative, m linuxnative.Message, candidates map[string][]*mediaDelivery) {
+	for trace, deliveries := range candidates {
+		for _, d := range deliveries {
+			d.Paused, d.Reason = true, "media_stop_ambiguous"
+			if d.ID != "" {
+				w.cancelMedia(n, d, false, "media_stop_ambiguous")
+				if d.State == "stopped" {
+					d.State = "waiting"
+				}
+			}
+		}
+		w.activity(Record{Event: "media_stop_ambiguous", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, RelatedMessageID: trace, Status: "waiting", Reason: "multiple_requester_voice_tasks"})
+	}
+	// An ambiguous interruption must not guess.  Queue exactly one brief,
+	// non-model clarification under the interruption message id; deduplication
+	// in queueUtteranceFrom makes repeated delivery of the same incoming event
+	// harmless.
+	if c, ok := w.model.(*companion.Engine); ok && c.Config.Permissions.ReplyText {
+		in := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: m.ThreadID, Sender: m.SenderID, TraceID: m.ID, QuoteServerID: m.ServerID, Text: m.Body, Mode: "direct", IsGroup: strings.HasSuffix(m.ThreadID, "@chatroom"), Directed: true, MessageTime: m.CreatedAt}
+		w.queueUtteranceFrom(c, in, companion.Decision{Action: "reply", Messages: []string{"我先暂停了你正在发送的内容。你指的是哪一项？"}}, 0, false, nil)
+	}
+}
 func (w *Worker) stopRequestedVoice(ctx context.Context, m linuxnative.Message) bool {
 	created, e := time.Parse(time.RFC3339, m.CreatedAt)
 	if e != nil || time.Since(created) > w.maxMessageAge() || created.After(time.Now().Add(30*time.Second)) {
 		return false
 	}
-	if w.runtime == nil || m.Type != 1 || !w.allowed[m.ThreadID] || (!w.addressed(m) && strings.HasSuffix(m.ThreadID, "@chatroom")) {
+	if w.runtime == nil || m.Type != 1 || !w.allowed[m.ThreadID] {
 		return false
 	}
-	stop := rejectVoice(m.Body)
-	replace := replacesVoice(m.Body)
-	if !stop && !replace {
+	interrupt := parseVoiceInterrupt(m.Body)
+	if !interrupt.stop {
 		return false
 	}
 	n, ok := w.sender.(mediaNative)
 	if !ok {
 		return false
 	}
-	cancelled := false
-	for _, d := range w.runtime.Media {
-		if d.Kind == "voice" && d.Input.Thread == m.ThreadID && !d.terminal() && (!replace || stop || d.Input.Sender == "" || d.Input.Sender == m.SenderID) {
-			reason := "media_cancel_requested_by_user"
-			if replace && !stop {
-				reason = "media_superseded_by_new_request"
-			}
-			w.cancelMedia(n, d, true, reason)
-			cancelled = true
-		}
+	candidates := w.voiceCancellationCandidates(m)
+	if len(candidates) == 0 {
+		return false
 	}
-	if replace || stop {
-		for _, r := range w.runtime.MediaReplies {
-			if r.Input.Thread != m.ThreadID || r.terminal() || r.Input.Sender != "" && r.Input.Sender != m.SenderID {
-				continue
-			}
-			voice := false
-			for _, d := range w.runtime.Media {
-				voice = voice || d.Trace == r.Trace && d.Kind == "voice"
-			}
-			if voice {
-				r.State = "stopped"
-				cancelled = true
-				w.activity(Record{Event: "media_reply_stopped", Category: "decision", ThreadID: m.ThreadID, MessageID: r.Trace, Reason: "media_superseded_by_new_request", Status: "stopped"})
-				w.refreshMediaParent(r.Trace)
-			}
-		}
-	}
-	if cancelled {
+	// A quoted segment is an explicit target.  Without a quote, a member may
+	// stop only one of their own active delivery turns.  This permits the
+	// natural group “发错了” path without making it possible to stop someone
+	// else's song or to guess among the sender's concurrent requests.
+	if len(candidates) != 1 {
+		w.pauseAmbiguousVoiceTraces(n, m, candidates)
 		w.persistErr = w.saveRuntime()
+		return true
 	}
-	return cancelled
+	for trace := range candidates {
+		reason := "media_cancel_requested_by_user"
+		if interrupt.replace {
+			reason = "media_superseded_by_new_request"
+		}
+		w.stopVoiceTrace(n, m, trace, reason)
+	}
+	w.persistErr = w.saveRuntime()
+	return w.persistErr == nil
 }
 func replacesVoice(text string) bool {
-	text = strings.ToLower(strings.ReplaceAll(text, " ", ""))
-	for _, p := range []string{"不要换", "不用换", "别换", "不换了", "不用重新找", "不要重新找"} {
-		if strings.Contains(text, p) {
-			return false
-		}
-	}
-	for _, p := range []string{"重新找一首", "重新找首", "换一首", "换首歌", "换首", "换歌", "换个歌", "下一首", "别放这首"} {
-		if strings.Contains(text, p) {
-			return true
-		}
-	}
-	return false
+	return parseVoiceInterrupt(text).replace
 }
 
 func (w *Worker) cancelVoiceForIntent(ctx context.Context, in companion.Input, intent string) {
@@ -782,7 +1047,8 @@ func (w *Worker) cancelVoiceForIntent(ctx context.Context, in companion.Input, i
 		return
 	}
 	for _, d := range w.runtime.Media {
-		if d.Kind == "voice" && d.Input.Thread == in.Thread && !d.terminal() && d.Trace != in.TraceID && (d.Input.Sender == "" || d.Input.Sender == in.Sender) {
+		legacyDirect := !strings.HasSuffix(in.Thread, "@chatroom") && d.Input.Sender == ""
+		if d.Kind == "voice" && d.Input.Thread == in.Thread && !d.terminal() && d.Trace != in.TraceID && (legacyDirect || d.Input.Sender == in.Sender) {
 			w.cancelMedia(n, d, true, "media_superseded_by_new_request")
 		}
 	}
@@ -791,7 +1057,8 @@ func (w *Worker) cancelVoiceForIntent(ctx context.Context, in companion.Input, i
 		for _, d := range w.runtime.Media {
 			voice = voice || d.Trace == r.Trace && d.Kind == "voice"
 		}
-		if voice && r.Input.Thread == in.Thread && r.Trace != in.TraceID && !r.terminal() && (r.Input.Sender == "" || r.Input.Sender == in.Sender) {
+		legacyDirect := !strings.HasSuffix(in.Thread, "@chatroom") && r.Input.Sender == ""
+		if voice && r.Input.Thread == in.Thread && r.Trace != in.TraceID && !r.terminal() && (legacyDirect || r.Input.Sender == in.Sender) {
 			r.State = "stopped"
 			w.activity(Record{Event: "media_reply_stopped", Category: "decision", ThreadID: in.Thread, MessageID: r.Trace, Reason: "media_superseded_by_new_request", Status: "stopped"})
 			w.refreshMediaParent(r.Trace)
@@ -800,13 +1067,7 @@ func (w *Worker) cancelVoiceForIntent(ctx context.Context, in companion.Input, i
 	w.persistErr = w.saveRuntime()
 }
 func rejectVoice(text string) bool {
-	text = strings.ReplaceAll(text, " ", "")
-	for _, phrase := range []string{"不用发语音", "不用语音", "别发语音", "不要发语音", "停止语音", "停下语音", "改发文件", "换成文件"} {
-		if strings.Contains(text, phrase) {
-			return true
-		}
-	}
-	return false
+	return parseVoiceInterrupt(text).stop
 }
 func (w *Worker) suspendMedia() {
 	if w.runtime == nil || w.draining() && !w.pendingMedia() {

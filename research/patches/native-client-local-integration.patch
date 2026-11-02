@@ -5935,3 +5935,561 @@ index 3d7e6e7..46cbb55 100644
      let meta = path.with_extension("crc");
      std::fs::write(&path, seed.data()).unwrap();
      std::fs::write(&meta, seed.metadata()).unwrap();
+diff --git a/packages/native-client-rust/crates/wechat-core/src/media.rs b/packages/native-client-rust/crates/wechat-core/src/media.rs
+index f12d843..fc82920 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/media.rs
+@@ -461,8 +461,20 @@ impl Core {
+                 self.vault
+                     .open_record(account, &format!("media-job:{id}"), &row.payload)
+             {
+-                if let Ok(plan) = serde_json::from_slice::<SendPlan>(&bytes) {
++                if let Ok(mut plan) = serde_json::from_slice::<SendPlan>(&bytes) {
+                     if plan.request.kind == MediaKind::Voice {
++                        // The encrypted plan keeps authoritative receipts.  A
++                        // cancellation never erases them, but every part that
++                        // never crossed the per-part submission claim is
++                        // visibly terminal and cannot be mistaken for a
++                        // retryable pending delivery.
++                        if row.cancel_requested {
++                            for part in &mut plan.voice {
++                                if part.status == "prepared" {
++                                    part.status = "cancelled".into();
++                                }
++                            }
++                        }
+                         row.data["result"]["chunks"] = json!(plan.voice.iter().enumerate().map(|(i,p)|json!({"index":i,"state":p.status,"durationMs":p.duration_ms,"serverMessageId":p.server_id,"pacingMs":p.pacing_ms,"submittedAtMs":p.submitted_at_ms,"acceptedAtMs":p.accepted_at_ms,"prefixRetries":p.prefix_retries,"clientId":p.client_id,"encodedMd5":hex_string(&wechat_protocol::crypto::md5(&p.encoded))})).collect::<Vec<_>>());
+                     }
+                 }
+@@ -1300,6 +1312,30 @@ impl Core {
+         );
+         Ok(row)
+     }
++    /// Used only after `claim_voice_chunk_submission` has won the durable
++    /// cancel/submission race.  Cancellation is intentionally not checked
++    /// here: the current protocol exchange must finish so its receipt can be
++    /// recorded, while later chunks are stopped by their own claims.
++    fn claimed_voice_submission_active(&self, account: &str, id: &str) -> Result<()> {
++        let row = self.store.media_job(account, id)?;
++        ensure!(
++            row.kind == "send" && row.state == "running",
++            "media_submission_no_longer_active"
++        );
++        ensure!(
++            self.store.runtime(account, "logged-out")?.is_none(),
++            "auth_required"
++        );
++        ensure!(
++            !self.media_network_suspended(account)?,
++            "media_disconnected"
++        );
++        ensure!(
++            !self.stopping.load(Ordering::Acquire),
++            "media_worker_stopping"
++        );
++        Ok(())
++    }
+     fn media_authorization_fence(&self, account: &str) -> Result<MediaAuthorizationFence> {
+         let logout_epoch = self.store.runtime(account, "logout-epoch")?;
+         let encrypted = self
+@@ -2576,6 +2612,10 @@ impl Core {
+                 if plan.voice[index].status == "accepted" {
+                     continue;
+                 }
++                // Do not turn a stale plan loaded before a user cancellation
++                // into more submissions.  This is repeated by the atomic
++                // claim below, but provides the fast path before pacing.
++                self.active_media_job(account, id)?;
+                 self.progress_media(account, id, index as u64, Some(plan.voice.len() as u64))?;
+                 // Pace consecutive notes by the next note's recording time.
+                 // Release the account guard while waiting so push/sync and
+@@ -2611,7 +2651,17 @@ impl Core {
+                     })?;
+                     state = self.resume_media_state(account, id, &fence)?;
+                 }
+-                self.phase_media(account, id, "submitting")?;
++                // This is the business-submission boundary.  A cancellation
++                // that commits first makes the claim fail, so this part never
++                // reaches the native WeChat sender.  If the claim commits
++                // first, this one part is already in flight and is allowed to
++                // finish only to record its receipt; all later parts remain
++                // fenced by their own claims.
++                ensure!(
++                    self.store
++                        .claim_voice_chunk_submission(account, id, index)?,
++                    "media_cancelled"
++                );
+                 plan.voice[index].status = "submitting".into();
+                 plan.voice[index].submitted_at_ms = Some(chrono::Utc::now().timestamp_millis());
+                 self.save_send_plan(account, id, &plan)?;
+@@ -2626,7 +2676,12 @@ impl Core {
+                     part.duration_ms,
+                     &part.encoded,
+                     || {
+-                        self.active_media_job(account, id)?;
++                        // The submission claim above is deliberately the
++                        // cancellation boundary.  Do not let a late cancel
++                        // restart this partially-written protocol exchange;
++                        // keep reconciling its one receipt.  Logout/network
++                        // fences still apply to the transport retry itself.
++                        self.claimed_voice_submission_active(account, id)?;
+                         plan.voice[index].prefix_retries += 1;
+                         self.save_send_plan(account, id, &plan)
+                     },
+diff --git a/packages/native-client-rust/crates/wechat-store/src/media.rs b/packages/native-client-rust/crates/wechat-store/src/media.rs
+index 26a1224..bf7bf70 100644
+--- a/packages/native-client-rust/crates/wechat-store/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-store/src/media.rs
+@@ -374,6 +374,42 @@ impl Store {
+             tx.commit()?;Ok(row)
+         })
+     }
++    /// Cross the irreversible boundary immediately before one voice part is
++    /// submitted.  Cancellation and this claim deliberately contend on the
++    /// same SQLite write transaction: whichever commits first wins.  A later
++    /// cancel therefore cannot start another part, while a part already
++    /// claimed remains an in-flight submission whose receipt must be
++    /// reconciled instead of blindly retried.
++    pub fn claim_voice_chunk_submission(
++        &self,
++        account: &str,
++        id: &str,
++        index: usize,
++    ) -> Result<bool> {
++        self.control(account, |db| {
++            let tx = db.transaction()?;
++            let old = read_job(&tx, id)?;
++            let mut data = old.data.clone();
++            data["result"]["voiceSubmissionClaim"] = json!({
++                "index": index,
++                "claimedAt": chrono::Utc::now().to_rfc3339(),
++            });
++            let changed = tx.execute(
++                "UPDATE media_jobs SET phase='submitting',data_json=?3,updated_at=?2 \
++                 WHERE id=?1 AND kind='send' AND state='running' AND cancel_requested=0",
++                params![
++                    id,
++                    chrono::Utc::now().to_rfc3339(),
++                    serde_json::to_string(&data)?
++                ],
++            )? == 1;
++            if changed {
++                job_event(&tx, account, &read_job(&tx, id)?)?;
++            }
++            tx.commit()?;
++            Ok(changed)
++        })
++    }
+     pub fn retry_media_job(&self, account: &str, id: &str) -> Result<MediaJobRecord> {
+         self.control(account,|db|{
+             let tx=db.transaction()?;let row=read_job(&tx,id)?;
+@@ -987,6 +1023,34 @@ mod tests {
+         assert!(!s.claim_media_job("test", "download1").unwrap());
+     }
+     #[test]
++    fn voice_submission_claim_and_cancel_have_one_durable_winner() {
++        let (_t, s) = setup();
++        s.create_media_job(
++            "test",
++            "voice1",
++            "send:voice1",
++            &"0".repeat(64),
++            "send",
++            &json!({"result":{"chunks":[{"index":0,"state":"prepared"},{"index":1,"state":"prepared"},{"index":2,"state":"prepared"}]}}),
++            b"protected",
++        )
++        .unwrap();
++        assert!(s.claim_media_job("test", "voice1").unwrap());
++
++        // The first chunk has crossed the durable submission boundary; a
++        // following cancellation cannot erase that in-flight receipt.
++        assert!(s.claim_voice_chunk_submission("test", "voice1", 0).unwrap());
++        let running = s.cancel_media_job("test", "voice1").unwrap();
++        assert!(running.cancel_requested);
++        assert_eq!(running.state, "running");
++
++        // The cancellation wins every later chunk, including after a worker
++        // restart that reloads the same row.
++        assert!(!s.claim_voice_chunk_submission("test", "voice1", 1).unwrap());
++        let row = s.media_job("test", "voice1").unwrap();
++        assert_eq!(row.data["result"]["voiceSubmissionClaim"]["index"], 0);
++    }
++    #[test]
+     fn source_limits_and_asset_metadata_do_not_require_payload_copies() {
+         let (_t, store) = setup();
+         let max = wechat_media::MAX_FILE_BYTES as u64;
+diff --git a/packages/native-client-rust/crates/wechat-api/src/contracts.rs b/packages/native-client-rust/crates/wechat-api/src/contracts.rs
+index 01f7da8..c3064e7 100644
+--- a/packages/native-client-rust/crates/wechat-api/src/contracts.rs
++++ b/packages/native-client-rust/crates/wechat-api/src/contracts.rs
+@@ -322,6 +322,12 @@ pub struct NativeMediaJobRetryRequest {
+     pub reuse_completed_upload: Option<bool>,
+ }
+ 
++#[derive(Serialize, Deserialize, TS)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub struct NativeResumeMissingVoiceRequest {
++    pub idempotency_key: String,
++}
++
+ pub fn typescript() -> String {
+     let declarations = [
+         NativeMentions::decl(),
+@@ -356,6 +362,7 @@ pub fn typescript() -> String {
+         NativeForgetRequest::decl(),
+         NativeMediaWritebackRequest::decl(),
+         NativeMediaJobRetryRequest::decl(),
++        NativeResumeMissingVoiceRequest::decl(),
+         wechat_core::OfficialProfileRequest::decl(),
+         wechat_core::OfficialProfileSelection::decl(),
+         wechat_core::LoginStrategy::decl(),
+diff --git a/packages/native-client-rust/crates/wechat-api/src/media.rs b/packages/native-client-rust/crates/wechat-api/src/media.rs
+index 6cd98bb..da9ef2e 100644
+--- a/packages/native-client-rust/crates/wechat-api/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-api/src/media.rs
+@@ -32,6 +32,10 @@ pub(super) fn routes() -> Router<App> {
+         .route("/v1/accounts/{a}/jobs/{id}", get(job))
+         .route("/v1/accounts/{a}/jobs/{id}/cancel", post(cancel_job))
+         .route("/v1/accounts/{a}/jobs/{id}/retry", post(retry_job))
++        .route(
++            "/v1/accounts/{a}/tools/media/{id}/resume-missing",
++            post(resume_missing_voice),
++        )
+         .route(
+             "/v1/accounts/{a}/jobs/{id}/retry-completed-upload",
+             post(retry_completed_upload),
+@@ -241,6 +245,21 @@ async fn retry_completed_upload(
+         Json(serde_json::to_value(retried).map_err(anyhow::Error::from)?),
+     ))
+ }
++async fn resume_missing_voice(
++    State(app): State<App>,
++    Extension(c): Extension<Claims>,
++    Path((a, id)): Path<(String, String)>,
++    Json(request): Json<contracts::NativeResumeMissingVoiceRequest>,
++) -> ApiResult<(StatusCode, Json<Value>)> {
++    c.require(Some(&a), "send")?;
++    let job = app
++        .core
++        .resume_missing_voice_parts(&a, &id, &request.idempotency_key)?;
++    Ok((
++        StatusCode::ACCEPTED,
++        Json(serde_json::to_value(job).map_err(anyhow::Error::from)?),
++    ))
++}
+ async fn content(
+     State(app): State<App>,
+     Extension(c): Extension<Claims>,
+diff --git a/packages/native-client-rust/crates/wechat-core/src/media.rs b/packages/native-client-rust/crates/wechat-core/src/media.rs
+index fc82920..b376833 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/media.rs
+@@ -1090,6 +1090,79 @@ impl Core {
+         }
+         Ok(public_job(account, &row))
+     }
++    /// Explicitly resume only the parts that never crossed a cancelled voice
++    /// job's submission boundary. The cancelled job stays immutable evidence.
++    pub fn resume_missing_voice_parts(
++        self: &Arc<Self>, account: &str, old_id: &str, key: &str,
++    ) -> Result<MediaJob> {
++        ensure!(
++            !key.is_empty() && key.len() <= 200 && !key.chars().any(char::is_control),
++            "invalid_media_idempotency_key"
++        );
++        ensure!(self.store.send_by_key(account, key).is_err(), "idempotency_conflict");
++        let old = self.store.media_job(account, old_id)?;
++        ensure!(
++            old.kind == "send" && old.cancel_requested && old.state == "cancelled",
++            "media_cancelled_resume_requires_cancelled_job"
++        );
++        let old_plan: SendPlan = serde_json::from_slice(&self.vault.open_record(
++            account, &format!("media-job:{old_id}"), &old.payload,
++        )?)?;
++        ensure!(
++            old_plan.request.kind == MediaKind::Voice && !old_plan.voice.is_empty(),
++            "media_cancelled_resume_requires_voice_parts"
++        );
++        validate_destination(&old_plan.request.thread_id)?;
++        let (source, _) = self.source_bytes(account, &old_plan.request.source_id)?;
++        let mut missing = Vec::new();
++        let mut accepted = Vec::new();
++        for (index, part) in old_plan.voice.iter().enumerate() {
++            match part.status.as_str() {
++                "accepted" => {
++                    let server = part.server_id.clone().filter(|value| !value.is_empty())
++                        .context("media_cancelled_resume_receipt_missing")?;
++                    accepted.push(json!({"index":index,"serverMessageId":server,"acceptedAtMs":part.accepted_at_ms}));
++                }
++                "prepared" | "cancelled" => missing.push((index, part.clone())),
++                _ => bail!("media_cancelled_resume_requires_terminal_chunks"),
++            }
++        }
++        ensure!(!missing.is_empty(), "media_cancelled_resume_no_missing_chunks");
++        let id = format!("job_{}", uuid::Uuid::new_v4());
++        let created_at = wechat_protocol::wire::unix_time()?;
++        let client_prefix = format!("aw_{}", uuid::Uuid::new_v4().simple());
++        let resumed_indexes = missing.iter().map(|(index, _)| *index).collect::<Vec<_>>();
++        let voice = missing.into_iter().enumerate().map(|(position, (_old_index, mut part))| {
++            part.client_id = format!("{client_prefix}_{position}");
++            part.status = "prepared".into();
++            part.server_id = None;
++            part.pacing_ms = 0;
++            part.submitted_at_ms = None;
++            part.accepted_at_ms = None;
++            part.prefix_retries = 0;
++            part
++        }).collect();
++        let plan = SendPlan {
++            request: old_plan.request.clone(), client_id: client_prefix, created_at,
++            material: None, reservation: None, file_upload_progress_id: None,
++            uploaded_file: None, uploaded_image: None, uploaded_video: None,
++            prepared_video_thumbnail_source_id: None, prepared_video_source_id: None,
++            original_video_material: None, voice, reuse_completed_upload: None,
++        };
++        let hash = media_request_hash(&plan.request, &source.sha256, None, None, None)?;
++        let payload = self.vault.seal(account, &format!("media-job:{id}"), &serde_json::to_vec(&plan)?)?;
++        let data = json!({
++            "threadId":plan.request.thread_id, "sourceId":plan.request.source_id,
++            "completedBytes":0, "resumedFrom":old_id,
++            "resumedChunkIndexes":resumed_indexes, "acceptedVoiceChunks":accepted,
++        });
++        let (row, created) = self.store.create_media_job(
++            account, &id, &format!("send:{key}"), &hash, "send", &data, &payload,
++        )?;
++        ensure!(created, "idempotency_conflict");
++        self.spawn_media_worker(account, &row.id);
++        Ok(public_job(account, &row))
++    }
+     fn cache_asset(
+         &self,
+         account: &str,
+diff --git a/packages/native-client-rust/crates/wechat-core/src/media.rs b/packages/native-client-rust/crates/wechat-core/src/media.rs
+index b376833..f2fa7da 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/media.rs
+@@ -1091,22 +1091,28 @@ impl Core {
+         Ok(public_job(account, &row))
+     }
+     /// Explicitly resume only the parts that never crossed a cancelled voice
+-    /// job's submission boundary. The cancelled job stays immutable evidence.
++    /// job's submission boundary.  The cancelled job is immutable evidence:
++    /// its accepted receipts stay on the old job, and this creates a fresh
++    /// idempotency namespace and fresh protocol client IDs for the remainder.
+     pub fn resume_missing_voice_parts(
+-        self: &Arc<Self>, account: &str, old_id: &str, key: &str,
++        self: &Arc<Self>,
++        account: &str,
++        old_id: &str,
++        key: &str,
+     ) -> Result<MediaJob> {
+         ensure!(
+             !key.is_empty() && key.len() <= 200 && !key.chars().any(char::is_control),
+             "invalid_media_idempotency_key"
+         );
+-        ensure!(self.store.send_by_key(account, key).is_err(), "idempotency_conflict");
+         let old = self.store.media_job(account, old_id)?;
+         ensure!(
+             old.kind == "send" && old.cancel_requested && old.state == "cancelled",
+             "media_cancelled_resume_requires_cancelled_job"
+         );
+         let old_plan: SendPlan = serde_json::from_slice(&self.vault.open_record(
+-            account, &format!("media-job:{old_id}"), &old.payload,
++            account,
++            &format!("media-job:{old_id}"),
++            &old.payload,
+         )?)?;
+         ensure!(
+             old_plan.request.kind == MediaKind::Voice && !old_plan.voice.is_empty(),
+@@ -1123,6 +1129,9 @@ impl Core {
+                         .context("media_cancelled_resume_receipt_missing")?;
+                     accepted.push(json!({"index":index,"serverMessageId":server,"acceptedAtMs":part.accepted_at_ms}));
+                 }
++                // `prepared` is the durable representation of a part which
++                // never submitted. `cancelled` is accepted for forward
++                // compatibility with a persisted per-part cancellation state.
+                 "prepared" | "cancelled" => missing.push((index, part.clone())),
+                 _ => bail!("media_cancelled_resume_requires_terminal_chunks"),
+             }
+@@ -1132,35 +1141,62 @@ impl Core {
+         let created_at = wechat_protocol::wire::unix_time()?;
+         let client_prefix = format!("aw_{}", uuid::Uuid::new_v4().simple());
+         let resumed_indexes = missing.iter().map(|(index, _)| *index).collect::<Vec<_>>();
+-        let voice = missing.into_iter().enumerate().map(|(position, (_old_index, mut part))| {
+-            part.client_id = format!("{client_prefix}_{position}");
+-            part.status = "prepared".into();
+-            part.server_id = None;
+-            part.pacing_ms = 0;
+-            part.submitted_at_ms = None;
+-            part.accepted_at_ms = None;
+-            part.prefix_retries = 0;
+-            part
+-        }).collect();
++        let voice = missing
++            .into_iter()
++            .enumerate()
++            .map(|(position, (_old_index, mut part))| {
++                part.client_id = format!("{client_prefix}_{position}");
++                part.status = "prepared".into();
++                part.server_id = None;
++                part.pacing_ms = 0;
++                part.submitted_at_ms = None;
++                part.accepted_at_ms = None;
++                part.prefix_retries = 0;
++                part
++            })
++            .collect();
+         let plan = SendPlan {
+-            request: old_plan.request.clone(), client_id: client_prefix, created_at,
+-            material: None, reservation: None, file_upload_progress_id: None,
+-            uploaded_file: None, uploaded_image: None, uploaded_video: None,
+-            prepared_video_thumbnail_source_id: None, prepared_video_source_id: None,
+-            original_video_material: None, voice, reuse_completed_upload: None,
++            request: old_plan.request.clone(),
++            client_id: client_prefix,
++            created_at,
++            material: None,
++            reservation: None,
++            file_upload_progress_id: None,
++            uploaded_file: None,
++            uploaded_image: None,
++            uploaded_video: None,
++            prepared_video_thumbnail_source_id: None,
++            prepared_video_source_id: None,
++            original_video_material: None,
++            voice,
++            reuse_completed_upload: None,
+         };
+-        let hash = media_request_hash(&plan.request, &source.sha256, None, None, None)?;
+-        let payload = self.vault.seal(account, &format!("media-job:{id}"), &serde_json::to_vec(&plan)?)?;
++        let hash = media_request_hash(
++            &plan.request,
++            &source.sha256,
++            None,
++            None,
++            None,
++        )?;
++        let payload = self.vault.seal(
++            account,
++            &format!("media-job:{id}"),
++            &serde_json::to_vec(&plan)?,
++        )?;
+         let data = json!({
+-            "threadId":plan.request.thread_id, "sourceId":plan.request.source_id,
+-            "completedBytes":0, "resumedFrom":old_id,
+-            "resumedChunkIndexes":resumed_indexes, "acceptedVoiceChunks":accepted,
++            "threadId":plan.request.thread_id,
++            "sourceId":plan.request.source_id,
++            "completedBytes":0,
++            "resumedFrom":old_id,
++            "resumedChunkIndexes":resumed_indexes,
++            "acceptedVoiceChunks":accepted,
+         });
+-        let (row, created) = self.store.create_media_job(
+-            account, &id, &format!("send:{key}"), &hash, "send", &data, &payload,
++        let (row, created) = self.store.create_resumed_voice_job(
++            account, old_id, &id, &format!("send:{key}"), &hash, &data, &payload,
+         )?;
+-        ensure!(created, "idempotency_conflict");
+-        self.spawn_media_worker(account, &row.id);
++        if created {
++            self.spawn_media_worker(account, &row.id);
++        }
+         Ok(public_job(account, &row))
+     }
+     fn cache_asset(
+diff --git a/packages/native-client-rust/crates/wechat-store/src/media.rs b/packages/native-client-rust/crates/wechat-store/src/media.rs
+index bf7bf70..ebac73b 100644
+--- a/packages/native-client-rust/crates/wechat-store/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-store/src/media.rs
+@@ -260,6 +260,65 @@ impl Store {
+         })
+     }
+ 
++    /// Create one explicit continuation for a cancelled multi-part voice job.
++    /// The idempotency key and the parent-to-continuation uniqueness check live
++    /// in the same transaction so concurrent resume requests cannot create two
++    /// queues. This intentionally does not inspect the encrypted plan; Core
++    /// has already validated per-part receipts before calling it.
++    #[allow(clippy::too_many_arguments)]
++    pub fn create_resumed_voice_job(
++        &self,
++        account: &str,
++        parent_id: &str,
++        id: &str,
++        key: &str,
++        hash: &str,
++        data: &Value,
++        payload: &[u8],
++    ) -> Result<(MediaJobRecord, bool)> {
++        self.control(account, |db| {
++            if key.is_empty() || key.len() > 250 || id.is_empty() || id.len() > 100 || hash.len() != 64 {
++                bail!("invalid media job");
++            }
++            let tx = db.transaction()?;
++            let key = key.strip_prefix("send:").ok_or_else(|| anyhow::anyhow!("invalid media idempotency namespace"))?;
++            let text_exists: bool = tx.query_row(
++                "SELECT EXISTS(SELECT 1 FROM outbox WHERE idempotency_key=?1)",
++                [key], |r| r.get(0),
++            )?;
++            if text_exists { bail!("idempotency_conflict"); }
++            let existing: Option<(String, String, String)> = tx.query_row(
++                "SELECT id,request_hash,data_json FROM media_jobs WHERE idempotency_key=?1",
++                [format!("send:{key}")], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
++            ).optional()?;
++            if let Some((existing_id, existing_hash, existing_data)) = existing {
++                let existing_data: Value = serde_json::from_str(&existing_data)?;
++                if existing_hash != hash || existing_data["resumedFrom"].as_str() != Some(parent_id) {
++                    bail!("idempotency_conflict");
++                }
++                return Ok((read_job(&tx, &existing_id)?, false));
++            }
++            let prior: Option<String> = tx.query_row(
++                "SELECT id FROM media_jobs WHERE kind='send' AND json_extract(data_json,'$.resumedFrom')=?1 LIMIT 1",
++                [parent_id], |r| r.get(0),
++            ).optional()?;
++            if prior.is_some() { bail!("media_cancelled_resume_already_created"); }
++            let queued: u32 = tx.query_row(
++                "SELECT count(*) FROM media_jobs WHERE state IN ('queued','running')", [], |r| r.get(0),
++            )?;
++            if queued >= 100 { bail!("media_queue_full"); }
++            let now = chrono::Utc::now().to_rfc3339();
++            tx.execute(
++                "INSERT INTO media_jobs VALUES(?1,?2,?3,'send','queued','queued',0,0,0,NULL,?4,?5,?6,?6)",
++                params![id, format!("send:{key}"), hash, serde_json::to_string(data)?, payload, now],
++            )?;
++            let row = read_job(&tx, id)?;
++            job_event(&tx, account, &row)?;
++            tx.commit()?;
++            Ok((row, true))
++        })
++    }
++
+     pub fn media_job(&self, account: &str, id: &str) -> Result<MediaJobRecord> {
+         self.control(account, |db| read_job(db, id))
+     }
+@@ -1051,6 +1110,24 @@ mod tests {
+         assert_eq!(row.data["result"]["voiceSubmissionClaim"]["index"], 0);
+     }
+     #[test]
++    fn resumed_voice_job_is_idempotent_and_has_one_parent_continuation() {
++        let (_t, s) = setup();
++        let hash = "a".repeat(64);
++        let data = json!({"threadId":"room","sourceId":"source","resumedFrom":"old"});
++        let first = s.create_resumed_voice_job(
++            "test", "old", "resume-one", "send:resume-key", &hash, &data, b"sealed",
++        ).unwrap();
++        assert!(first.1);
++        let replay = s.create_resumed_voice_job(
++            "test", "old", "resume-other-id", "send:resume-key", &hash, &data, b"different sealed bytes",
++        ).unwrap();
++        assert!(!replay.1);
++        assert_eq!(replay.0.id, "resume-one");
++        assert!(s.create_resumed_voice_job(
++            "test", "old", "resume-two", "send:different-key", &hash, &data, b"sealed",
++        ).is_err());
++    }
++    #[test]
+     fn source_limits_and_asset_metadata_do_not_require_payload_copies() {
+         let (_t, store) = setup();
+         let max = wechat_media::MAX_FILE_BYTES as u64;

@@ -11,6 +11,9 @@
     : item.category === 'decision' || /^(generation_|model_|character_|utterance_)/.test(item.event) ? 'decision' : 'system';
   const identity = item => item.round_id || item.message_id;
   const messageKey = (item, id = identity(item)) => id && item.thread_id ? JSON.stringify([item.thread_id, id]) : '';
+  const partialCancellation = item => item.status === 'stopped'
+    && ['media_cancel_requested_by_user', 'media_superseded_by_new_request'].includes(item.reason)
+    && /已接受\s+[1-9]\d*\s*\/\s*\d+\s*段/.test(item.content || '');
   // A failed safety review is deliberately fail-closed, but it is not a social
   // decision to stay quiet. Older persisted entries used status=silent, so
   // identify the reason as well as the status when projecting a round.
@@ -97,13 +100,28 @@
         // was made; use the task's persisted outcome instead.
         if (item.status === 'completed') round.status = 'completed';
         else if (['failed', 'cancelled'].includes(item.status)) round.status = item.status === 'cancelled' ? 'stopped' : 'failed';
+        else if (['partially_cancelled', 'partial_cancelled'].includes(item.status)) round.status = 'partially_cancelled';
+        else if (['partially_completed', 'partial_completed', 'partial', 'partial_failed'].includes(item.status)) round.status = 'partially_completed';
+        else if (['cancelling', 'stopping'].includes(item.status)) round.status = 'cancelling';
+        else if (['waiting_receipt', 'receipt_pending'].includes(item.status)) round.status = 'waiting_receipt';
+        else if (['retrying_tool', 'waiting_tool_retry'].includes(item.status)) round.status = 'retrying_tool';
+        else if (['retrying_model', 'waiting_model_retry'].includes(item.status)) round.status = 'retrying_model';
+        else if (['retrying_delivery', 'waiting_delivery_retry'].includes(item.status)) round.status = 'retrying_delivery';
         else if (['waiting', 'waiting_delivery', 'needs_review'].includes(item.status)) round.status = 'waiting';
         else if (item.status === 'running') round.status = 'running';
       }
+      else if (['partially_cancelled', 'partial_cancelled'].includes(item.status)) round.status = 'partially_cancelled';
+      else if (['partially_completed', 'partial_completed', 'partial', 'partial_failed'].includes(item.status)) round.status = 'partially_completed';
+      else if (['cancelling', 'stopping'].includes(item.status)) round.status = 'cancelling';
+      else if (['waiting_receipt', 'receipt_pending'].includes(item.status)) round.status = 'waiting_receipt';
+      else if (['retrying_tool', 'waiting_tool_retry'].includes(item.status)) round.status = 'retrying_tool';
+      else if (['retrying_model', 'waiting_model_retry'].includes(item.status)) round.status = 'retrying_model';
+      else if (['retrying_delivery', 'waiting_delivery_retry'].includes(item.status)) round.status = 'retrying_delivery';
       else if (['unknown', 'needs_review', 'waiting', 'retrying'].includes(item.status) && stage(item) === 'delivery') round.status = 'waiting';
       else if (['accepted', 'observed'].includes(item.status) && stage(item) === 'delivery') round.status = item.event === 'message_progress' ? 'running' : 'accepted';
       else if (item.category === 'error' && !item.tool) round.status = ['queued', 'processing', 'running'].includes(item.status) ? 'running' : 'failed';
       else if (item.event === 'message_processed' && !['accepted', 'waiting', 'failed', 'silent', 'stopped'].includes(round.status)) round.status = 'completed';
+      else if (partialCancellation(item)) round.status = 'partially_cancelled';
       else if (['silent', 'skipped', 'blocked', 'stopped', 'cancelled'].includes(item.status)) round.status = item.status === 'cancelled' ? 'stopped' : item.status;
       else if (item.event === 'character_decision' && /silence|silent/.test(item.reason || '')) round.status = 'silent';
       else if (['processing', 'running', 'queued', 'received'].includes(item.status)) round.status = item.status === 'received' && round.entries.length === 1 ? 'received' : 'running';

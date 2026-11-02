@@ -76,7 +76,7 @@ func TestDeepRepairRouteAdapterRepairsFrozenGeneratedCandidateWithoutFactIDRouti
 				t.Fatal(err)
 			}
 			before, _ := json.Marshal(draft)
-			out, err := engine.ReviewGroundedReply(t.Context(), in, draft)
+			out, err := engine.DiagnoseGroundedReply(t.Context(), in, draft)
 			after, _ := json.Marshal(draft)
 			if string(before) != string(after) || probe.Edits != 1 || len(probe.EditorPacket) == 0 || engine.Tools != nil {
 				t.Fatal("consumer changed original candidate, skipped editor or installed tools", err)

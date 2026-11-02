@@ -38,7 +38,7 @@ func TestPrivateTemporalReviewOnlyForAddedSpecificity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, in, model, tools := privateTemporalFixture(t, tc.source)
-			out, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{tc.draft}})
+			out, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{tc.draft}})
 			if err != nil || out.Action != "reply" || out.Messages[0] != tc.draft || model.calls != tc.calls {
 				t.Fatal(out, err, model.calls)
 			}
@@ -58,7 +58,7 @@ func TestPrivateTemporalReviewOnlyForAddedSpecificity(t *testing.T) {
 func TestPrivateTemporalReviewerKeepsAuthorizedDiagnostics(t *testing.T) {
 	e, in, model, tools := privateTemporalFixture(t, "我准备星期六检查这项任务。")
 	draft := "API与模型环境诊断已经记录，计划下周六检查。"
-	out, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{draft}})
+	out, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{draft}})
 	if err != nil || out.Action != "reply" || out.Messages[0] != draft || model.calls != 1 || model.inputs[0]["privacy_review"] != false || tools.report != "" {
 		t.Fatal(out, err, model.calls, tools.report)
 	}

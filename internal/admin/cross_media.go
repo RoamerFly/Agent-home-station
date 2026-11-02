@@ -629,8 +629,11 @@ func (m *Manager) crossSeedAllowed(seed bot.MediaSeed) bool {
 	}
 	c := m.agent.config()
 	if seed.OriginTask != "" {
-		t, ok := m.agent.lookupTask(seed.OriginTask, m.native.Account(), seed.OriginThread)
-		if !ok || t.State == "cancelled" {
+		// A cross-session owner task keeps its source separately and executes in
+		// its delivery conversation (normally the owner's private chat). Do not
+		// require the legacy Thread field to equal the source group here.
+		t, ok := m.agent.lookupTask(seed.OriginTask, m.native.Account(), "")
+		if !ok || taskSourceThread(t) != seed.OriginThread || t.State == "cancelled" {
 			return false
 		}
 	}

@@ -152,7 +152,9 @@ func TestSleepingPlanDoesNotBlockAnotherConversationAndCancelDoesNotCancelMedia(
 		t.Fatal("sleep blocked another thread", n.submissions)
 	}
 	w.runtime.Media = []*mediaDelivery{{Kind: "file", State: "running", Input: in, Trace: in.TraceID}}
-	w.noticeConversationMessage(fixtureMessage("stop", "filehelper", "先别说了", "incoming"), true)
+	stop := fixtureMessage("stop", "filehelper", "先别说了", "incoming")
+	stop.SenderID = in.Sender
+	w.noticeConversationMessage(stop, true)
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
 	if w.runtime.Plans[0].State != "stopped" || w.runtime.Media[0].State != "running" {
@@ -239,7 +241,9 @@ func TestNewContextPreventsSubmissionOfPreparedOldText(t *testing.T) {
 	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"不该继续的旧内容"}})
 	readyPlans(w)
 	w.runtime.Deliveries = append(w.runtime.Deliveries, &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, Bubble: 0, Text: "不该继续的旧内容", State: "prepared", Key: "never-submitted", Created: time.Now()})
-	w.noticeConversationMessage(fixtureMessage("new-context", "filehelper", "不用说了", "incoming"), true)
+	update := fixtureMessage("new-context", "filehelper", "不用说了", "incoming")
+	update.SenderID = in.Sender
+	w.noticeConversationMessage(update, true)
 	w.reconcileDeliveries(context.Background())
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())

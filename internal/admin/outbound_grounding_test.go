@@ -67,15 +67,16 @@ func (s syntheticOutboundReviewer) Chat(context.Context, string, []map[string]st
 	*s.calls++
 	return `{"action":"reply","messages":["改写后的提醒"],"reply_contexts":[]}`, nil
 }
-func TestOptInHighRiskReminderIsReviewedAndNotSilentlyRewritten(t *testing.T) {
+func TestLegacyReviewSettingDoesNotEditOrRecheckScheduledReminder(t *testing.T) {
 	f, p, n := memberReminder(t)
 	f.manager.config.Companion.Grounding = &companion.GroundingSettings{Enabled: true}
 	calls := 0
 	p.outboundReviewer = syntheticOutboundReviewer{&calls}
 	args, _ := json.Marshal(map[string]any{"action": "create", "text": "你爸心里有点空", "delay_seconds": 1, "request_key": "needs-review"})
 	_, err := p.Call(context.Background(), "agent_reminder", args)
-	if err == nil || calls != 1 || len(n.requests) != 0 || len(f.manager.agent.list(p.trace.Account, p.trace.Thread)) != 0 {
-		t.Fatal("risky reminder bypassed review or was silently rewritten", err, calls, len(n.requests))
+	tasks := f.manager.agent.list(p.trace.Account, p.trace.Thread)
+	if err != nil || calls != 0 || len(n.requests) != 0 || len(tasks) != 1 || tasks[0].Reminder.Text != "提醒你：你爸心里有点空" {
+		t.Fatal("reminder was rechecked, changed or sent early", err, calls, len(n.requests))
 	}
 }
 func TestReminderAcceptedReceiptWinsAfterForgetAndLostCheckpoint(t *testing.T) {

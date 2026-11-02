@@ -86,7 +86,7 @@ func TestMediaProcessCommentaryUsesOneEditorAndCannotPassFinalCheck(t *testing.T
 		in.IncomingMedia = []IncomingMediaRef{{Kind: "video", UploaderID: "member", ObservationState: "observed"}}
 		m := &naturalMediaReviewModel{badFinal: badFinal}
 		e := &Engine{Store: s, Config: c, model: m}
-		d, err := e.ReviewGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"这视频我这次只拿到采样概览，先不把片段当成完整结论。"}})
+		d, err := e.DiagnoseGroundedReply(t.Context(), in, Decision{Action: "reply", Messages: []string{"这视频我这次只拿到采样概览，先不把片段当成完整结论。"}})
 		if err != nil || m.edits != 1 || m.checks != 1 {
 			t.Fatal(d, err, m.edits, m.checks)
 		}
