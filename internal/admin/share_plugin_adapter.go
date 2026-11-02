@@ -201,9 +201,17 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 		if !ok {
 			// Explicit rereads can resolve an existing source, never create one
 			// from model arguments or infer identity from a neighboring message.
-			original := ""
-			in := companion.Input{Channel: "wechat", Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID, TraceID: message.ID, MessageTime: message.CreatedAt, OriginalText: &original, Source: &companion.SourceRef{InstanceID: m.memory.SourceInstanceID(), MessageID: message.ID, ServerID: message.ServerID}}
+			in := companion.Input{Channel: "wechat", Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID, TraceID: message.ID, MessageTime: message.CreatedAt, Source: &companion.SourceRef{InstanceID: m.memory.SourceInstanceID(), MessageID: message.ID, ServerID: message.ServerID}}
 			found, valid := m.memory.SourceForInput(in)
+			if !valid {
+				// The caller has read the actual native message. Repair only the
+				// old false collision with an unknown legacy namespace; explicit
+				// quarantine, forgetting and current-dataset conflicts stay blocked.
+				found, valid, err = m.memory.ReconcileLegacySource(ctx, in)
+				if err != nil {
+					return nil, err
+				}
+			}
 			if !valid {
 				return nil, errors.New("share_persisted_source_unavailable")
 			}

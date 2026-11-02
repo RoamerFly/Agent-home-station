@@ -255,7 +255,7 @@ func (s *Store) QuarantineSources(ctx context.Context, items []SourceAudit) erro
 				return e
 			}
 		}
-		if _, e = tx.ExecContext(ctx, "INSERT OR IGNORE INTO source_conflicts VALUES(?,?,?,?)", scope, item.EventID, "", "reviewed_source_identity_conflict"); e != nil {
+		if _, e = tx.ExecContext(ctx, "INSERT INTO source_conflicts VALUES(?,?,?,?) ON CONFLICT(scope,event_id,other_event_id) DO UPDATE SET reason=excluded.reason", scope, item.EventID, "", "reviewed_source_identity_conflict"); e != nil {
 			return e
 		}
 		if _, e = tx.ExecContext(ctx, "UPDATE memories SET status='conflicted',version=version+1 WHERE id IN(SELECT memory_id FROM memory_sources WHERE event_id=?) AND status='active'", item.EventID); e != nil {

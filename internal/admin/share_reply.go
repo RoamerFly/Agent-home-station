@@ -225,7 +225,7 @@ func (s *Server) replyShare(w http.ResponseWriter, r *http.Request) {
 
 func bindManualShareInput(m *Manager, in *companion.Input, message linuxnative.Message, observation string) error {
 	empty := ""
-	lookup := companion.Input{Channel: "wechat", Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID, TraceID: message.ID, MessageTime: message.CreatedAt, OriginalText: &empty, Source: &companion.SourceRef{InstanceID: m.memory.SourceInstanceID(), MessageID: message.ID, ServerID: message.ServerID}}
+	lookup := companion.Input{Channel: "wechat", Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID, TraceID: message.ID, MessageTime: message.CreatedAt, Source: &companion.SourceRef{InstanceID: m.memory.SourceInstanceID(), MessageID: message.ID, ServerID: message.ServerID}}
 	ref, ok := m.memory.SourceForInput(lookup)
 	if !ok {
 		return errors.New("share_reply_source_unavailable")
