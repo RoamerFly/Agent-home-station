@@ -37,7 +37,8 @@ type GroundingViolation struct {
 }
 
 const groundingCheckPolicy = `你是只读的来源蕴含、受话角色及隐私审核器。candidate和review_units是宿主固定的待审文字，evidence_table是本轮唯一授权证据表；不能改写候选或执行工具。不要输出隐藏推理，只输出可核对的短命题、证据片段和结论。只输出JSON：
-{"units":[{"unit_id":"U1","atoms":[{"span":"该句段中的确切子串","mode":"assertion|presupposition|report|quote|conditional|nonfactual","claim":"一个短原子事实命题；非事实留空","status":"supported|unsupported|uncertain|nonfactual","nonfactual_category":"仅非事实填写greeting|open_question|conditional_offer|acknowledgment|social_offer，其他留空","supports":[{"ref":"E1","quote":"该行text或metadata中的确切片段"}],"reason":"简短、可核验的结论"}]}]}
+{"units":[{"unit_id":"U1","atoms":[{"span":"该句段中的确切子串","mode":"assertion","claim":"一个短原子事实命题","status":"supported","nonfactual_category":"","supports":[{"ref":"E1","quote":"该行text或metadata中的确切片段"}],"reason":"简短、可核验的结论"}]}]}
+上面仅示意结构，实际span与quote必须复制本次输入的原文。mode单选assertion、presupposition、report、quote、conditional、nonfactual；status单选supported、unsupported、uncertain、nonfactual，不能输出竖线连接的枚举。status=nonfactual时mode必须为nonfactual，claim必须是空字符串，supports必须为[]，nonfactual_category单选greeting、open_question、conditional_offer、acknowledgment、social_offer；其余status的nonfactual_category必须是空字符串。
 review_units每项必须且只能出现一次。逐句段列出全部实际断言、具体猜测和问句前提，复合内容拆成多个原子命题；每个atom.span须是该段确切原文，所有span合起来覆盖该段非标点文字，不能遗漏不支持的半句。不得只写allow或空问题数组。supported必须逐项引用确切E行及原文；没有支持写unsupported，确实无法解除的歧义写uncertain，不能拿相关但不蕴含命题的引文充数。supports可用[]。原话存在不代表它的解释正确；exact quote不是语义证明。
 只有没有外界事实承诺的问候、礼貌确认、开放询问和纯条件邀请可以用nonfactual，mode也必须nonfactual、claim留空、supports为[]，填写明确nonfactual_category。不能把具体人的经历、感受、环境、参与者、话题、数量或已知状态改成问句、玩笑、可能语气或条件后句来免审。先核对每个分句的语法作用域：后句的如果不改变前句已经作出的断言；提问未知答案可以，但问题里已经承诺的人物、事件和属性仍是presupposition。引号内的引用按原作者视角核对，引用以外的候选自身断言另列；并非每个引号内容都是候选认可的事实。
 采用开放世界：来源未说不等于否定，一个人的肯定不支持另一个人的否定；常见相关也不证明实际状态。一个来源只支持事件发生或结束，不自动支持其具体话题、数量、情绪或在场者。检查所有原子命题，不因其他部分正确而放行新增的无据部分。关系、状态与时间使用实际范围，不补齐未给信息。

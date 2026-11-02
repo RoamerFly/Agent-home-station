@@ -234,6 +234,20 @@ func TestShareRequestConflictIsSafeDiagnostic(t *testing.T) {
 	}
 }
 
+func TestReceivedMediaReadIdentityIncludesEvidenceEpoch(t *testing.T) {
+	for _, tool := range []string{"media.observe", "media.transcribe", "media.listen"} {
+		p := &receivedSharePolicy{tool: tool, epoch: "one", source: companion.SourceRef{EventID: "source", Revision: 1}, message: linuxnative.Message{AccountID: "account", ThreadID: "thread", SenderID: "member", ID: "message"}, fingerprint: "fingerprint", requestSuffix: "same-binary-input"}
+		first := p.invocation().RequestKey
+		if p.invocation().RequestKey != first {
+			t.Fatal("identical read did not reuse identity")
+		}
+		p.epoch = "two"
+		if p.invocation().RequestKey == first {
+			t.Fatalf("%s reused a job under a changed evidence epoch", tool)
+		}
+	}
+}
+
 func TestReceivedShareDisabledPluginDoesNotFallBackToLegacy(t *testing.T) {
 	f, n, p, ctx := receivedPolicyFixture(t, false)
 	i, err := p.store.Installed(ctx, "share-reader")

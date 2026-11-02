@@ -192,13 +192,15 @@ func decodeGroundingUnits(answer, id string, units []GroundingReviewUnit, table 
 				refs = append(refs, row.SourceRefs...)
 			}
 			if atom.Status == "nonfactual" {
-				if atom.Mode != "nonfactual" || len(atom.Supports) != 0 || atom.Claim != "" {
-					return fail("review_nonfactual_invalid")
-				}
+				invalidNonfactual := atom.Mode != "nonfactual" || len(atom.Supports) != 0 || atom.Claim != ""
 				switch atom.NonfactualCategory {
 				case "greeting", "open_question", "conditional_offer", "acknowledgment", "social_offer":
 				default:
-					return fail("review_nonfactual_invalid")
+					invalidNonfactual = true
+				}
+				if invalidNonfactual {
+					bubble.Verdict, out.Verdict = "reject", "reject"
+					bubble.Violations = append(bubble.Violations, GroundingViolation{Span: atom.Span, Kind: "invalid_nonfactual_classification", SourceRefs: uniqueSortedEvidence(refs), Reason: "The proposed nonfactual classification contradicts its mode, claim, evidence or category. This span has not passed review; repair or remove unsupported content and independently review the new draft."})
 				}
 			} else {
 				if atom.Mode == "nonfactual" || atom.NonfactualCategory != "" || strings.TrimSpace(atom.Claim) == "" {

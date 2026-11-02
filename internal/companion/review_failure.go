@@ -79,7 +79,7 @@ func reviewFailure(state string, err error) ReviewFailure {
 			for _, violation := range bubble.Violations {
 				// Fixed host classifications only; never copy a model's prose.
 				switch violation.Kind {
-				case "invalid_evidence_quote", "unsupported_fact", "presupposition", "unsupported_relation":
+				case "invalid_evidence_quote", "invalid_nonfactual_classification", "unsupported_fact", "presupposition", "unsupported_relation":
 					f.ViolationKinds = append(f.ViolationKinds, violation.Kind)
 				}
 			}
@@ -88,6 +88,9 @@ func reviewFailure(state string, err error) ReviewFailure {
 		for _, kind := range f.ViolationKinds {
 			if kind == "invalid_evidence_quote" {
 				f.Detail = "改稿后的复核仍引用了无法在来源中核对的证据摘录，已停止发送"
+			}
+			if kind == "invalid_nonfactual_classification" {
+				f.Detail = "改稿后的复核仍有不一致的非事实标记，该句段未通过核验，已停止发送"
 			}
 		}
 	}

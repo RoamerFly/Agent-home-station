@@ -235,7 +235,7 @@ func (p *receivedSharePolicy) invocation() pluginhost.Invocation {
 	}
 	if p.tool == "media.observe" || p.tool == "media.transcribe" || p.tool == "media.listen" {
 		c.Purpose = "observe received media"
-		parts := []string{p.source.EventID, p.message.ID, p.fingerprint, p.requestSuffix}
+		parts := []string{p.source.EventID, p.message.ID, p.fingerprint, p.requestSuffix, p.epoch, strconv.Itoa(p.source.Revision)}
 		if p.actor != nil {
 			parts = append(parts, p.actor.actor, p.actor.requestThread, p.actor.taskID, p.actor.requestKey, p.tool)
 		}

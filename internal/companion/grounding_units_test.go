@@ -81,7 +81,12 @@ func TestAtomicGroundingRequiresEveryUnitAndEveryClaimSpan(t *testing.T) {
 			json.Unmarshal([]byte(good), &value)
 			mutate(value)
 			raw, _ := json.Marshal(value)
-			if _, err := decodeGroundingUnits(string(raw), "bound", units, nil, 1); err == nil {
+			verdict, err := decodeGroundingUnits(string(raw), "bound", units, nil, 1)
+			if name == "no_category" || name == "invented_category" {
+				if err != nil || verdict.Verdict != "reject" {
+					t.Fatal("invalid nonfactual label must reject, never allow", verdict, err)
+				}
+			} else if err == nil {
 				t.Fatal("incomplete or malformed units were accepted", string(raw))
 			}
 		})
