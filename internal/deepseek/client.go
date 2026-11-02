@@ -132,6 +132,17 @@ func (c *Client) chat(ctx context.Context, system string, messages []map[string]
 }
 
 func (c *Client) chatWithGrounding(ctx context.Context, system string, messages []map[string]string, structured bool, grounding *GroundingOptions) (string, error) {
+	messageLimit, totalLimit := 96<<10, 192<<10
+	if grounding != nil {
+		// Structured evidence is one message, unlike paginated tool history.
+		// This is a transport guard, not a claim about any model's token window.
+		messageLimit, totalLimit = 1<<20, 2<<20
+	}
+	sizeFailure := func(size, limit int) error {
+		err := requestFailure("model_input_transport_limit", "input_validation", 0, false)
+		err.InputBytes, err.InputByteLimit = size, limit
+		return err
+	}
 	if strings.TrimSpace(system) == "" || len(system) > 96<<10 || !utf8.ValidString(system) || len(messages) == 0 || len(messages) > 101 {
 		return "", errors.New("invalid conversation")
 	}
@@ -139,14 +150,17 @@ func (c *Client) chatWithGrounding(ctx context.Context, system string, messages 
 	total := len(system)
 	for _, message := range messages {
 		role, text := message["role"], message["content"]
-		if (role != "user" && role != "assistant") || text == "" || len(text) > 96<<10 || !utf8.ValidString(text) {
+		if (role != "user" && role != "assistant") || text == "" || !utf8.ValidString(text) {
 			return "", errors.New("invalid conversation turn")
+		}
+		if len(text) > messageLimit {
+			return "", sizeFailure(len(text), messageLimit)
 		}
 		total += len(text)
 		all = append(all, map[string]string{"role": role, "content": text})
 	}
-	if total > 192<<10 {
-		return "", errors.New("conversation exceeds input bound")
+	if total > totalLimit {
+		return "", sizeFailure(total, totalLimit)
 	}
 	input := struct {
 		Model           string              `json:"model"`

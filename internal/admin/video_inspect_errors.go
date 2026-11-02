@@ -5,6 +5,7 @@ import (
 	"errors"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediaspec"
 )
 
 type videoInspectionFailure struct {
@@ -15,6 +16,26 @@ type videoInspectionFailure struct {
 func (e *videoInspectionFailure) Error() string                     { return e.code }
 func (e *videoInspectionFailure) Unwrap() error                     { return e.cause }
 func (e *videoInspectionFailure) SafeToolFailure() (string, string) { return e.code, e.message }
+
+func videoAudioTranscriptionError(err error) error {
+	if mediaspec.IsNoSpeech(err) {
+		return err
+	}
+	code, message := "video_audio_transcription_failed", "音轨已提取，但语音识别未完成；需要核对具体失败阶段，不表示视频没有说话声音"
+	switch err.Error() {
+	case "share_persisted_source_unavailable", "share_source_changed", "share_source_scope_mismatch", "share_native_source_changed":
+		code, message = "video_audio_source_unverified", "音轨已提取，但原消息与保存的来源身份或版本不匹配，尚未取得可用的识别结果；请核对历史导入和来源冲突，不是未检测到人声"
+	case "media_plugin_transcription_needs_review", "media_plugin_task_changed", "media_plugin_result_unavailable":
+		code, message = "video_audio_plugin_result_unavailable", "音轨已提取，但识别插件的任务或结果未能核验；请查询原任务状态，不重复提交未知结果"
+	case "local_asr_profile_unavailable", "local_asr_plugin_unavailable", "media_transcription_configuration_invalid", "media_plugin_runtime_unavailable", "media_plugin_start_failed":
+		code, message = "video_audio_backend_unavailable", "音轨已提取，但识别插件、配置或本地运行资源不可用；请检查媒体理解插件状态"
+	default:
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			code, message = "video_inspection_interrupted", "音轨已提取，但识别等待超时或已取消；保留当前时间范围以便续读"
+		}
+	}
+	return &videoInspectionFailure{code, message, err}
+}
 func videoInspectionError(err error) error {
 	if err == nil {
 		return nil

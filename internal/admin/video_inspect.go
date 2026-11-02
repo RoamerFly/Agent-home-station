@@ -551,7 +551,7 @@ func (p *permittedTools) inspectPluginAudioRange(ctx context.Context, data []byt
 			texts = append(texts, text)
 		}
 		next = stop
-		if seconds < count-.1 {
+		if seconds < count-.1 || end-next > 0 && end-next <= .05 {
 			early = true
 			break
 		}
@@ -566,6 +566,7 @@ func (p *permittedTools) inspectPluginAudioRange(ctx context.Context, data []byt
 	out["start_seconds"], out["end_seconds"], out["next_start_seconds"], out["complete"] = in.AudioStart, next, next, next >= total-.05 || early
 	out["requested_range_complete"], out["video_audio_complete"] = next >= end-.0001 || early, next >= total-.05 || early
 	out["audio_track_ended_early"], out["requested_duration_seconds"], out["effective_duration_seconds"] = early, in.AudioLength, length
+	out["audio_endpoint_tolerance_seconds"] = .05
 	out["requested_audio_chunk_seconds"], out["effective_audio_chunk_seconds"], out["audio_timeout_seconds"] = requested, chunk, timeout
 	if requested > chunk {
 		out["audio_chunk_adjustment_reason"] = "16kHz mono PCM16 must fit the8MiB ASR transport; the full requested range is processed in multiple chunks"

@@ -19,6 +19,8 @@ func memoryFixture(t *testing.T) (*Store, Config, Input) {
 	}
 	t.Cleanup(func() { s.Close() })
 	c := Defaults()
+	// Source/review fixtures explicitly exercise the optional model check.
+	c.Grounding = &GroundingSettings{Enabled: true}
 	c.Permissions.Remember = true
 	return s, c, Input{Channel: "wechat", Account: "synthetic", Thread: "room", Sender: "alice", TraceID: "source"}
 }

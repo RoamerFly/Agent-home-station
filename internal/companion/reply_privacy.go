@@ -15,6 +15,9 @@ type GroupReplyPrivacy interface {
 }
 
 func (e *Engine) reviewReplyPrivacy(ctx context.Context, in Input, d Decision) (Decision, error) {
+	if !e.Config.GroundingConfig().Enabled {
+		return d, nil
+	}
 	access, ok := e.Tools.(GroupReplyPrivacy)
 	if !in.IsGroup || !ok || len(d.Messages) == 0 || !access.NeedsPrivateReplyReview() && !diagnosticDraft(d.Messages) {
 		return d, nil
@@ -86,6 +89,9 @@ func sensitiveReplyTool(tool string) bool {
 }
 
 func (e *Engine) reviewProgressPrivacy(ctx context.Context, turns []map[string]string, tool, text string) (string, error) {
+	if !e.Config.GroundingConfig().Enabled {
+		return text, nil
+	}
 	access, ok := e.Tools.(GroupReplyPrivacy)
 	if text == "" || !ok || !access.NeedsPrivateReplyReview() && !sensitiveReplyTool(tool) && !diagnosticDraft([]string{text}) {
 		return text, nil

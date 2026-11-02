@@ -2,6 +2,7 @@ package companion
 
 import (
 	"errors"
+	"strings"
 	"wechat-bot/internal/deepseek"
 )
 
@@ -47,27 +48,34 @@ func reviewFailure(state string, err error) ReviewFailure {
 	// provider or plugin error strings as an operator-facing review detail.
 	if err != nil {
 		hostDetails := map[string]string{
-			"reply_context_count_mismatch":              "回复与逐条对象的数量不匹配",
-			"reply_source_identity_unavailable":         "原消息身份暂时无法核验",
-			"reply_source_identity_conflict":            "原消息身份发生冲突",
-			"reply_context_not_verified":                "回复上下文尚未核验",
-			"reply_context_fingerprint_mismatch":        "回复与已核验的上下文不匹配",
-			"reply_source_proof_missing":                "缺少原消息的来源证明",
-			"reply_target_missing":                      "缺少明确的回复对象",
-			"reply_target_not_grounded":                 "回复对象没有对应来源",
-			"reply_retarget_requires_quote":             "切换回复对象时缺少必要引用",
-			"reply_source_unavailable":                  "回复引用的来源不可用或已遗忘",
-			"reply_source_revision_changed":             "回复引用的来源版本已变化",
-			"assistant_statement_is_not_fact_source":    "不能将助手旧回复作为用户事实的依据",
-			"reply_source_personal_media_requires_link": "人物与素材之间缺少明确的来源关系",
-			"reply_media_owner_or_source_mismatch":      "回复使用的素材与来源或上传者不匹配",
-			"reply_grounding_repair_invalid":            "改稿返回不符合回复协议",
-			"reply_grounding_repair_empty_message":      "改稿没有有效回复正文",
-			"reply_route_unknown":                       "改稿选择了未经授权的回复路径",
-			"reply_route_duplicate":                     "回复路径标识发生冲突",
+			"reply_grounding_evidence_identity_conflict":   "复核材料包含相同消息编号下不同的来源身份",
+			"reply_grounding_evidence_version_conflict":    "复核材料包含同一来源的不同版本",
+			"reply_grounding_evidence_projection_conflict": "复核材料中同一来源的正文不一致",
+			"reply_grounding_candidate_empty":              "没有生成可发送的回复正文",
+			"reply_context_count_mismatch":                 "回复与逐条对象的数量不匹配",
+			"reply_source_identity_unavailable":            "原消息身份暂时无法核验",
+			"reply_source_identity_conflict":               "原消息身份发生冲突",
+			"reply_context_not_verified":                   "回复上下文尚未核验",
+			"reply_context_fingerprint_mismatch":           "回复与已核验的上下文不匹配",
+			"reply_source_proof_missing":                   "缺少原消息的来源证明",
+			"reply_target_missing":                         "缺少明确的回复对象",
+			"reply_target_not_grounded":                    "回复对象没有对应来源",
+			"reply_retarget_requires_quote":                "切换回复对象时缺少必要引用",
+			"reply_source_unavailable":                     "回复引用的来源不可用或已遗忘",
+			"reply_source_revision_changed":                "回复引用的来源版本已变化",
+			"assistant_statement_is_not_fact_source":       "不能将助手旧回复作为用户事实的依据",
+			"reply_source_personal_media_requires_link":    "人物与素材之间缺少明确的来源关系",
+			"reply_media_owner_or_source_mismatch":         "回复使用的素材与来源或上传者不匹配",
+			"reply_grounding_repair_invalid":               "改稿返回不符合回复协议",
+			"reply_grounding_repair_empty_message":         "改稿没有有效回复正文",
+			"reply_route_unknown":                          "改稿选择了未经授权的回复路径",
+			"reply_route_duplicate":                        "回复路径标识发生冲突",
 		}
 		if detail := hostDetails[err.Error()]; detail != "" {
 			f.Code, f.Stage, f.Detail = err.Error(), "source_validation", detail+"，已停止发送"
+		}
+		if strings.HasPrefix(err.Error(), "model_context_window_exceeded:") {
+			f.Code, f.Stage, f.Detail = "model_context_window_exceeded", "input_validation", "复核输入与输出预留超过已配置的模型窗口，尚未调用API；请分页或分批处理，正文没有被截断"
 		}
 	}
 	if state == "final_check_rejected" || state == "repair_no_supported_reply" {

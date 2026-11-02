@@ -67,8 +67,9 @@ func (s syntheticOutboundReviewer) Chat(context.Context, string, []map[string]st
 	*s.calls++
 	return `{"action":"reply","messages":["改写后的提醒"],"reply_contexts":[]}`, nil
 }
-func TestHighRiskReminderIsReviewedAndNotSilentlyRewritten(t *testing.T) {
+func TestOptInHighRiskReminderIsReviewedAndNotSilentlyRewritten(t *testing.T) {
 	f, p, n := memberReminder(t)
+	f.manager.config.Companion.Grounding = &companion.GroundingSettings{Enabled: true}
 	calls := 0
 	p.outboundReviewer = syntheticOutboundReviewer{&calls}
 	args, _ := json.Marshal(map[string]any{"action": "create", "text": "你爸心里有点空", "delay_seconds": 1, "request_key": "needs-review"})

@@ -28,6 +28,8 @@ type Diagnostics struct {
 	Retryable         bool
 	FinishReason      string
 	ContentBytes      int
+	InputBytes        int
+	InputByteLimit    int
 	JSONValid         bool
 	FormatAttempt     int
 	MaxFormatAttempts int
@@ -59,7 +61,8 @@ func UserMessage(err error) string {
 		return "模型调用失败，请检查服务商配置"
 	}
 	messages := map[string]string{
-		"model_output_token_limit": "模型输出达到Token上限，内容被截断", "model_content_filtered": "模型服务停止了本次内容生成", "model_tool_call_count_invalid": "模型返回了不受支持的工具调用数量", "model_tool_arguments_too_large": "模型工具参数超过长度限制", "model_tool_arguments_invalid": "模型返回的工具参数格式无效",
+		"model_input_transport_limit": "模型请求超过本地传输大小限制，尚未发送到 API",
+		"model_output_token_limit":    "模型输出达到Token上限，内容被截断", "model_content_filtered": "模型服务停止了本次内容生成", "model_tool_call_count_invalid": "模型返回了不受支持的工具调用数量", "model_tool_arguments_too_large": "模型工具参数超过长度限制", "model_tool_arguments_invalid": "模型返回的工具参数格式无效",
 		"model_network_unavailable": "模型网络连接不可用", "model_network_timeout": "模型连接或响应超时", "model_connection_closed": "模型连接提前关闭",
 		"model_dns_failed": "模型服务域名解析失败", "model_tls_validation_failed": "模型服务证书验证失败", "model_authentication_failed": "模型鉴权失败，请检查 Key",
 		"model_insufficient_balance": "模型账户额度不足", "model_invalid_parameters": "模型请求参数不受支持", "model_endpoint_or_model_missing": "服务地址或模型不存在",
@@ -77,6 +80,9 @@ func UserMessage(err error) string {
 	}
 	if d.Attempts > 0 {
 		message += fmt.Sprintf("；已尝试 %d 次", d.Attempts)
+	}
+	if d.InputByteLimit > 0 {
+		message += fmt.Sprintf("；输入 %d 字节，限制 %d 字节，请分页或拆分处理", d.InputBytes, d.InputByteLimit)
 	}
 	return message
 }

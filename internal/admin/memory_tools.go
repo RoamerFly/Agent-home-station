@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -9,6 +10,13 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
 )
+
+type memoryRecordUnavailable struct{}
+
+func (memoryRecordUnavailable) Error() string { return "memory_record_unavailable" }
+func (memoryRecordUnavailable) SafeToolFailure() (string, string) {
+	return "memory_record_unavailable", "当前授权范围内找不到这条记录，或记录已隔离、遗忘；请用memory_search返回的id读取。原生微信消息编号应使用wechat_read核对，不能据此断言聊天历史不存在"
+}
 
 func (p *permittedTools) memoryTools() []mcptools.Tool {
 	if !p.manager.Config().Companion.Permissions.Remember {
@@ -111,6 +119,9 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 		if in.Event {
 			ev, err := store.ReadEvent(ctx, []string{scope}, in.ID)
 			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return "", memoryRecordUnavailable{}
+				}
 				return "", localAgentError(err)
 			}
 			if in.Expected > 0 && in.Expected != ev.Revision {
@@ -174,6 +185,9 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 		} else {
 			m, err := store.ReadMemory(ctx, []string{scope}, in.ID)
 			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return "", memoryRecordUnavailable{}
+				}
 				return "", localAgentError(err)
 			}
 			if in.Expected > 0 && in.Expected != m.Version {

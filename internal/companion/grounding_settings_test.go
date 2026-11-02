@@ -31,7 +31,7 @@ func (m *dedicatedGroundingModel) ChatGrounding(_ context.Context, policy string
 }
 func TestGroundingUsesDedicatedTransportAndIndependentConfiguredBudget(t *testing.T) {
 	s, c, _ := memoryFixture(t)
-	c.Grounding = &GroundingSettings{Model: "deepseek-v4-pro", MaxTokens: 16000, TimeoutSeconds: 45, ReasoningEffort: "max"}
+	c.Grounding = &GroundingSettings{Enabled: true, Model: "deepseek-v4-pro", MaxTokens: 16000, TimeoutSeconds: 45, ReasoningEffort: "max"}
 	in := groundedInput(t, s, c, "alpha", "dedicated-check", "刚挂掉。")
 	model := &dedicatedGroundingModel{}
 	e := &Engine{Store: s, Config: c, model: model}

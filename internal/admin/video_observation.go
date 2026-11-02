@@ -253,7 +253,7 @@ func (a mediaUnderstanding) videoAudioRangeTimedWith(ctx context.Context, data [
 		return "", seconds, err
 	}
 	if err != nil {
-		return "", seconds, &videoInspectionFailure{"video_audio_transcription_failed", "音轨已提取，但语音识别服务调用失败；可根据日志中的服务状态检查配置或重试", err}
+		return "", seconds, videoAudioTranscriptionError(err)
 	}
 	if err != nil || strings.TrimSpace(text) == "" {
 		return "", 0, errors.New("video_audio_transcription_failed")

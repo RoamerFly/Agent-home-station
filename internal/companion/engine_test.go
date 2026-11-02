@@ -55,6 +55,8 @@ func (m *fakeModel) Chat(_ context.Context, system string, turns []map[string]st
 }
 func enabledConfig() Config {
 	c := Defaults()
+	// Existing model-review tests opt in; production defaults stay off.
+	c.Grounding = &GroundingSettings{Enabled: true}
 	c.Enabled = true
 	c.QuietStart = "00:00"
 	c.QuietEnd = "00:00"

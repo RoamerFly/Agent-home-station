@@ -11,6 +11,7 @@ import (
 // Grounding budgets are independent from the conversational answer budget.
 // Values are configurable starting points, never silent precision/call caps.
 type GroundingSettings struct {
+	Enabled         bool   `json:"enabled"`
 	Model           string `json:"model,omitempty"`
 	MaxTokens       int    `json:"max_tokens"`
 	TimeoutSeconds  int    `json:"timeout_seconds"`
@@ -23,6 +24,7 @@ func GroundingDefaults() GroundingSettings {
 func (c Config) GroundingConfig() GroundingSettings {
 	settings := GroundingDefaults()
 	if c.Grounding != nil {
+		settings.Enabled = c.Grounding.Enabled
 		settings.Model = c.Grounding.Model
 		if c.Grounding.MaxTokens != 0 {
 			settings.MaxTokens = c.Grounding.MaxTokens
@@ -65,6 +67,10 @@ func (e *Engine) groundingChatValidated(ctx context.Context, system string, mess
 	ctx = withGenerationEvidence(ctx, evidence)
 	options, err := e.Config.GroundingOptions()
 	if err != nil {
+		return "", err
+	}
+	settings := e.memorySettings()
+	if err := ValidateContextWindow(system, messages, nil, settings.ContextWindow, options.MaxTokens); err != nil {
 		return "", err
 	}
 	var answer string

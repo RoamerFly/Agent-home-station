@@ -398,6 +398,22 @@ func (e *Engine) ReviewGroundedReply(ctx context.Context, in Input, d Decision) 
 			d.ReplyContexts[i].RiskFlags = append(d.ReplyContexts[i].RiskFlags, "unverified_proposed_binding")
 		}
 	}
+	if !e.Config.GroundingConfig().Enabled {
+		// Identity, sources, authorization and delivery are host checks. A
+		// second model call is an explicit option, never a prerequisite for chat.
+		if originalAction != "reply" || len(d.Messages) == 0 || strings.TrimSpace(strings.Join(d.Messages, "")) == "" {
+			return e.groundingFailed(in, d, nil, "preflight_context_invalid", errors.New("reply_grounding_candidate_empty"), nil)
+		}
+		d, err = e.bindReplyEvidence(ctx, in, d)
+		if err == nil {
+			err = e.validateReplyTexts(ctx, in, d)
+		}
+		if err != nil {
+			return e.groundingFailed(in, d, nil, "preflight_binding_invalid", err, nil)
+		}
+		e.writeReplyAudit(in, d, nil, "validated", nil)
+		return d, nil
+	}
 	referenceIssues := e.sourceReferenceIssues(ctx, in, d)
 	qualityIssues := mediaReplyQualityIssues(in, d)
 	if !in.IsGroup && !e.temporalSpecificityRisk(ctx, in, d) && len(referenceIssues) == 0 && len(qualityIssues) == 0 {

@@ -518,7 +518,9 @@
 <label class="switch-row" for="thinking-enabled"><span>开启思考模式</span><input id="thinking-enabled" type="checkbox" name="thinking_enabled"><span aria-hidden="true" class="switch"></span></label>
 <label for="reasoning-effort">思考强度</label>
 <select id="reasoning-effort" name="reasoning_effort"><option value="low">低 · 更省 Token</option><option value="high">高</option><option value="max">最高</option></select>
-<p class="hint">聊天、工具执行与回复复核使用相同设置。</p>
+<p class="hint">聊天与工具执行使用相同设置。</p>
+<label class="switch-row" for="reply-review-enabled"><span>额外模型复核</span><input id="reply-review-enabled" type="checkbox"><span aria-hidden="true" class="switch"></span></label>
+<p class="hint">默认关闭。开启后另行调用模型检查回复，会增加用量和等待时间。</p>
 </div><div>
 <label for="max-tokens">单次输出上限（包含思考与回复）</label>
 <input id="max-tokens" max="393216" min="64" name="max_tokens" step="1" type="number">
