@@ -1388,20 +1388,20 @@
 <section aria-labelledby="logs-title" class="page" id="logs">
 <div aria-label="已载入执行概况" class="round-metrics">
 <div>
-<strong id="round-total">—</strong>
-<span>执行回合</span>
+<strong id="round-done">—</strong>
+<span>已完成</span>
 </div>
 <div>
-<strong id="round-waiting">—</strong>
-<span>待处理 / 执行中</span>
+<strong id="round-active">—</strong>
+<span>进行中</span>
 </div>
 <div>
-<strong id="round-errors">—</strong>
-<span>需要处理</span>
+<strong id="round-verify">—</strong>
+<span>待核对</span>
 </div>
 <div>
-<strong id="round-silent">—</strong>
-<span>选择安静</span>
+<strong id="round-closed">—</strong>
+<span>已结束</span>
 </div>
 </div>
 <div class="round-filters">
@@ -1412,16 +1412,10 @@
 <label class="sr-only" for="log-status">回合状态</label>
 <select id="log-status">
 <option value="all">全部状态</option>
-<option value="accepted">已发送</option>
-<option value="running">执行中</option>
-<option value="waiting">等待核对</option>
-<option value="failed">需处理</option>
-<option value="silent">选择安静</option>
-<option value="completed">已完成</option>
-<option value="received">已接收</option>
-<option value="skipped">已跳过</option>
-<option value="stopped">已停止</option>
-<option value="blocked">已阻止</option>
+<option value="active">进行中</option>
+<option value="verify">待核对</option>
+<option value="done">已完成</option>
+<option value="closed">已结束</option>
 </select>
 <label class="sr-only" for="log-source">来源类型</label>
 <select id="log-source">

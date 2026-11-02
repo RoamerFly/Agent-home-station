@@ -18,6 +18,16 @@
   // decision to stay quiet. Older persisted entries used status=silent, so
   // identify the reason as well as the status when projecting a round.
   const reviewFailureReason = reason => ['grounding_check_failed', 'grounding_check_rejected', 'grounding_context_invalidated', 'grounding_check_stopped_unverified_reply'].includes(reason);
+  // The filter describes the disposition of the round. The detailed status
+  // stays available for receipts, failures and partial results.
+  const statusGroups = {
+    active: ['received','running','retrying_tool','retrying_model','retrying_delivery','cancelling'],
+    done: ['accepted','completed'],
+    closed: ['silent','skipped','blocked','stopped','failed','partially_completed','partially_cancelled'],
+    verify: ['waiting','waiting_receipt','needs_review'],
+  };
+  const groupByStatus = Object.fromEntries(Object.entries(statusGroups).flatMap(([group, states]) => states.map(state => [state,group])));
+  const groupLabels = {active:'进行中',done:'已完成',closed:'已结束',verify:'待核对'};
   // Derive the reader's timeline after grouping. Raw entries still drive
   // search, receipts and diagnostics, including records from older versions.
   function present(round) {
@@ -138,7 +148,8 @@
         else if (['retrying_tool', 'waiting_tool_retry'].includes(item.status)) round.status = 'retrying_tool';
         else if (['retrying_model', 'waiting_model_retry'].includes(item.status)) round.status = 'retrying_model';
         else if (['retrying_delivery', 'waiting_delivery_retry'].includes(item.status)) round.status = 'retrying_delivery';
-        else if (['waiting', 'waiting_delivery', 'needs_review'].includes(item.status)) round.status = 'waiting';
+        else if (item.status === 'needs_review') round.status = 'needs_review';
+        else if (['waiting', 'waiting_delivery'].includes(item.status)) round.status = 'waiting';
         else if (item.status === 'running') round.status = 'running';
       }
       else if (['partially_cancelled', 'partial_cancelled'].includes(item.status)) round.status = 'partially_cancelled';
@@ -148,10 +159,14 @@
       else if (['retrying_tool', 'waiting_tool_retry'].includes(item.status)) round.status = 'retrying_tool';
       else if (['retrying_model', 'waiting_model_retry'].includes(item.status)) round.status = 'retrying_model';
       else if (['retrying_delivery', 'waiting_delivery_retry'].includes(item.status)) round.status = 'retrying_delivery';
-      else if (['unknown', 'needs_review', 'waiting', 'retrying'].includes(item.status) && stage(item) === 'delivery') round.status = 'waiting';
+      else if (item.status === 'needs_review') round.status = 'needs_review';
+      else if (stage(item) === 'delivery' && ['send_outcome_unknown','submission_outcome_unknown','receipt_wait_timeout','receipt_lookup_failed'].includes(item.reason) && item.status === 'failed') round.status = 'waiting_receipt';
+      else if (item.status === 'retrying' && stage(item) === 'delivery') round.status = 'retrying_delivery';
+      else if (['unknown', 'waiting'].includes(item.status) && stage(item) === 'delivery') round.status = 'waiting';
       else if (['accepted', 'observed'].includes(item.status) && stage(item) === 'delivery') round.status = item.event === 'message_progress' ? 'running' : 'accepted';
       else if (item.category === 'error' && !item.tool) round.status = ['queued', 'processing', 'running'].includes(item.status) ? 'running' : 'failed';
-      else if (item.event === 'message_processed' && !['accepted', 'waiting', 'failed', 'silent', 'stopped'].includes(round.status)) round.status = 'completed';
+      else if (item.event === 'context_compression_completed' && item.status === 'completed' && ['running','received'].includes(round.status) && round.entries.some(e=>e.event==='context_compression_started')) round.status = 'completed';
+      else if (item.event === 'message_processed' && ['running','received'].includes(round.status)) round.status = 'completed';
       else if (partialCancellation(item)) round.status = 'partially_cancelled';
       else if (item.event === 'character_decision' && ['quiet_hours','no_reliable_context'].includes(item.reason)) round.status = 'skipped';
       else if (item.event === 'character_decision' && ['invalid_model_decision','invalid_tool_arguments','tool_unavailable_or_budget_exhausted','tool_budget_exhausted','unverified_model_response','media_unavailable_or_permission_denied'].includes(item.reason)) round.status = 'failed';
@@ -163,6 +178,7 @@
     }
     return [...groups.values()].map(round => {
       present(round);
+      round.group = groupByStatus[round.status] || 'verify';
       round.source ||= round.system ? '系统运行' : round.thread_id || '来源未知';
       round.source_kind ||= round.system ? 'system' : 'private';
       round.duration = Math.max(0, Date.parse(round.updated) - Date.parse(round.time));
@@ -171,5 +187,5 @@
       return round;
     }).sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated));
   }
-  return { project, stage, activityTarget };
+  return { project, stage, activityTarget, groupLabels };
 });

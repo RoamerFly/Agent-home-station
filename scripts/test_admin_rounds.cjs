@@ -5,6 +5,28 @@ const { project, stage, activityTarget } = require('../internal/admin/static/rou
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
 
+test('status filters group terminal failures separately from unresolved receipts and active retries',()=>{
+ const cases=[
+  ['message_received','received','received','','active'],
+  ['model_failed','error','failed','model_dns_failed','closed'],
+  ['character_decision','decision','silent','nothing_to_add','closed'],
+  ['task_delivery_updated','decision','partially_cancelled','','closed'],
+  ['task_delivery_updated','decision','partially_completed','','closed'],
+  ['task_delivery_updated','decision','waiting_tool_retry','','active'],
+  ['generation_paused','decision','needs_review','generation_evidence_changed','verify'],
+  ['send_failed','error','failed','send_outcome_unknown','verify'],
+  ['message_sent','sent','accepted','','done']
+ ];
+ for(const [event,category,status,reason,group] of cases){
+  const r=project([entry(1,{event,category,status,reason})])[0];
+  assert.equal(r.group,group,event);assert.equal(r.entries[0].status,status);
+  if(group==='verify'){
+   const processed=entry(2,{event:'message_processed',category:'decision',status:'completed'});
+   assert.equal(project([...r.entries,processed])[0].group,'verify');
+  }
+ }
+});
+
 test('a 25-message unread batch retains all evidence but has a single timeline entry before the actual failure',()=>{
  const items=[];
  for(let i=0;i<25;i++) items.push(entry(i,{message_id:'m'+i,event:'message_received',category:'received',content:'合成消息'}));
