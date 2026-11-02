@@ -918,7 +918,11 @@ func deepRepairModelConfigWithBudgets(baseURL, model string, compatible bool, re
 	return config
 }
 
-func deepRepairApplyReviewProfile(c *Config, profile GroundingSettings) { c.Grounding = &profile }
+func deepRepairApplyReviewProfile(c *Config, profile GroundingSettings) {
+	// These acceptance fixtures intentionally exercise the optional reviewer.
+	profile.Enabled = true
+	c.Grounding = &profile
+}
 
 func deepRepairApplyReviewModel(c *Config, model string) {
 	if model == "" {

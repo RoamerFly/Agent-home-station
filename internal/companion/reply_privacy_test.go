@@ -63,7 +63,7 @@ func TestSensitiveGroupUnsentRewriteUsesOriginalConversationForPrivateReport(t *
 func TestSensitiveGroupDraftIsModelEditedAndMediaPreserved(t *testing.T) {
 	tools := &privacyTools{needed: true}
 	model := &privacyModel{answer: `{"messages":[],"private_report":"synthetic diagnosis"}`}
-	e := &Engine{Tools: tools, model: model}
+	e := &Engine{Config: enabledConfig(), Tools: tools, model: model}
 	d, err := e.reviewReplyPrivacy(context.Background(), Input{IsGroup: true}, Decision{Action: "reply", Messages: []string{"technical draft"}, MediaIDs: []string{"verified-media"}})
 	if err != nil || tools.report != "synthetic diagnosis" || len(d.Messages) != 0 || d.Action != "reply" || d.MediaIDs[0] != "verified-media" {
 		t.Fatal(d, err)
@@ -86,7 +86,7 @@ func TestSensitiveGroupDraftIsModelEditedAndMediaPreserved(t *testing.T) {
 func TestSensitiveGroupProgressReviewedBeforeToolExecution(t *testing.T) {
 	tools := &privacyTools{}
 	model := &privacyModel{answer: `{"messages":[],"private_report":"synthetic GPU diagnostic"}`}
-	e := &Engine{Tools: tools, model: model}
+	e := &Engine{Config: enabledConfig(), Tools: tools, model: model}
 	turns := []map[string]string{{"role": "user", "content": `{"kind":"current_message","text":"唱首歌","is_group":true}`}}
 	text, err := e.reviewProgressPrivacy(context.Background(), turns, "server_exec", "synthetic environment draft")
 	if err != nil || text != "" || tools.report == "" || model.calls != 1 {
