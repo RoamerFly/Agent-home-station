@@ -424,7 +424,7 @@ func TestAgentTaskScopedPersistenceRecoveryAndQuietBudget(t *testing.T) {
 		t.Fatal("running task reclaimed", again, err)
 	}
 	f.manager.finishAgentTask(*claimed, "silent")
-	if tasks := f.manager.agent.list("test", "wxid_owner"); tasks[0].State != "needs_review" {
-		t.Fatal("uncheckpointed task repeated", tasks)
+	if settled, ok := f.manager.agent.lookupTask(claimed.TaskID, "test", "wxid_owner"); !ok || settled.State != "stopped" || f.manager.agentTaskActive(*claimed) {
+		t.Fatal("silent uncheckpointed task left active", settled)
 	}
 }

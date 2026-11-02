@@ -86,7 +86,59 @@ func (d *mediaDelivery) terminal() bool {
 }
 func (w *Worker) draining() bool { return w.config.Draining != nil && w.config.Draining() }
 func awaitingMediaReceipt(d *mediaDelivery) bool {
-	return (d.State == "waiting" || d.State == "unknown") && (d.Status.State == "needs_review" || d.Status.State == "unknown" || d.Reason == "media_receipt_id_missing")
+	return d.State == "checking_receipt" || (d.State == "waiting" || d.State == "unknown") && (d.Status.State == "needs_review" || d.Status.State == "unknown" || d.Reason == "media_receipt_id_missing")
+}
+
+// Once a submission is uncertain and resending is disabled, this lane may
+// only read the original receipt. In particular, "key not found" is not
+// permission to drop back into the submit path, even after a restart.
+func (w *Worker) awaitMediaReceipt(d *mediaDelivery) {
+	d.State, d.Reason = "checking_receipt", "media_readonly_receipt_pending"
+	d.Checks++
+	d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
+	w.mediaRecord(d, "media_waiting", "decision")
+}
+
+func (w *Worker) checkMediaReceipt(ctx context.Context, n mediaNative, d *mediaDelivery) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var s linuxnative.ToolStatus
+	err := linuxnative.ErrToolNotFound
+	if d.ID != "" {
+		s, err = n.ToolSendStatus(ctx, d.ID)
+	}
+	if errors.Is(err, linuxnative.ErrToolNotFound) && d.Key != "" {
+		s, err = n.LookupSend(ctx, d.Key)
+	}
+	if err == nil {
+		if s.ID == "" || d.ID != "" && d.ID != s.ID || s.ThreadID != d.Input.Thread || s.SourceID != "" && s.SourceID != d.SourceID {
+			d.State, d.Reason = "needs_review", "media_identity_mismatch"
+			w.mediaRecord(d, "media_stopped", "error")
+			return
+		}
+		s = s.WithVoiceReceipts()
+		// Some status reads omit per-part detail. Preserve previously
+		// observed receipts for display, without using the cached list to
+		// infer that every part of an uncertain job has now been accepted.
+		if len(s.VoiceChunks) == 0 && len(d.Status.VoiceChunks) > 0 {
+			s.VoiceChunks, s.VoicePartsIncomplete = d.Status.VoiceChunks, true
+		}
+		d.ID, d.Status, d.Phase = s.ID, s, s.Phase
+		switch s.State {
+		case "accepted":
+			if s.ServerID != "" {
+				d.State, d.Reason, d.CompletedAt = "accepted", "media_server_accepted", time.Now().UTC()
+				w.advanceSendGate(d.Input.Thread)
+				w.mediaRecord(d, "message_sent", "sent")
+				return
+			}
+		case "failed", "cancelled", "rejected":
+			d.State, d.Reason = "stopped", s.Reason
+			w.mediaRecord(d, "media_stopped", "error")
+			return
+		}
+	}
+	w.awaitMediaReceipt(d)
 }
 
 func (w *Worker) mediaPredecessor(index int, d *mediaDelivery) (*mediaDelivery, bool) {
@@ -410,6 +462,10 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			w.mediaRecord(d, "media_stopped", "decision")
 			continue
 		}
+		if (d.State == "checking_receipt" || d.State == "submitting" && !w.config.Options.RetryUncertain) && !d.UserCancelled {
+			w.checkMediaReceipt(ctx, n, d)
+			continue
+		}
 		if w.draining() && d.State == "prepared" && d.ID == "" {
 			continue
 		}
@@ -500,9 +556,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		cancel()
 		d.Next = time.Now().Add(2 * time.Second)
 		if err != nil {
-			if time.Since(d.Created) > 30*time.Minute && !w.config.Options.RetryUncertain {
-				d.State = "needs_review"
-				d.Reason = "media_status_unavailable_after_deadline"
+			if !w.config.Options.RetryUncertain && (d.ID != "" || d.State == "submitting") && !d.UserCancelled {
+				w.awaitMediaReceipt(d)
+				continue
 			} else {
 				d.Reason = "media_receipt_lookup_pending"
 				d.Checks++
@@ -534,6 +590,10 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			continue
 		}
 		if status.State == "accepted" {
+			if !w.config.Options.RetryUncertain && !d.UserCancelled {
+				w.awaitMediaReceipt(d)
+				continue
+			}
 			d.State = "unknown"
 			d.Reason = "media_receipt_id_missing"
 			w.mediaRecord(d, "media_waiting", "decision")
@@ -609,6 +669,10 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				w.refreshMediaParent(d.Trace)
 			}
 		case "needs_review", "unknown":
+			if !w.config.Options.RetryUncertain {
+				w.awaitMediaReceipt(d)
+				continue
+			}
 			if d.Input.Surf {
 				// Continue reading the old receipt, but let explicit user delivery
 				// finish before resuming a proactive upload in the same thread.
@@ -673,16 +737,11 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				w.mediaRecord(d, "media_reconciliation_failed", "error")
 				continue
 			}
-			if d.Checks >= 2 && !w.config.Options.RetryUncertain {
-				d.State = "needs_review"
-				d.Reason = "media_receipt_unverified_native_retry_denied"
-			} else {
-				d.State = "waiting"
-				d.Checks++
-				d.Reason = "media_receipt_reconciliation_pending"
-				d.ReconcileAfter = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.Checks))
-				d.Next = time.Now().Add(15 * time.Second)
-			}
+			d.State = "waiting"
+			d.Checks++
+			d.Reason = "media_receipt_reconciliation_pending"
+			d.ReconcileAfter = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.Checks))
+			d.Next = time.Now().Add(15 * time.Second)
 			w.mediaRecord(d, "media_waiting", "error")
 			w.refreshMediaParent(d.Trace)
 		default:
@@ -777,7 +836,7 @@ func (w *Worker) cancelMedia(n mediaNative, d *mediaDelivery, user bool, reason 
 		// written but before the native job id reached us.  Do not assume it
 		// was never submitted: discover the original idempotency key and stop
 		// that native job before marking this delivery terminal.
-		if d.State == "submitting" || d.State == "queued" || d.State == "running" || d.State == "waiting" {
+		if d.State == "submitting" || d.State == "queued" || d.State == "running" || d.State == "waiting" || d.State == "checking_receipt" {
 			lookupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			status, err := n.LookupSend(lookupCtx, d.Key)
 			cancel()
@@ -1083,6 +1142,9 @@ func (w *Worker) suspendMedia() {
 	for _, d := range w.runtime.Media {
 		if time.Now().After(deadline) {
 			break
+		}
+		if d.State == "checking_receipt" && (d.Status.State == "needs_review" || d.Status.State == "unknown") {
+			continue // No active native upload; preserve the scheduled receipt query.
 		}
 		if !d.terminal() && d.ID != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

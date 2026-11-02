@@ -21,13 +21,12 @@
   // The filter describes the disposition of the round. The detailed status
   // stays available for receipts, failures and partial results.
   const statusGroups = {
-    active: ['received','running','retrying_tool','retrying_model','retrying_delivery','cancelling'],
+    active: ['received','running','retrying_tool','retrying_model','retrying_delivery','cancelling','waiting','waiting_receipt','checking_receipt'],
     done: ['accepted','completed'],
-    closed: ['silent','skipped','blocked','stopped','failed','partially_completed','partially_cancelled'],
-    verify: ['waiting','waiting_receipt','needs_review'],
+    closed: ['silent','skipped','blocked','stopped','failed','partially_completed','partially_cancelled','needs_review'],
   };
   const groupByStatus = Object.fromEntries(Object.entries(statusGroups).flatMap(([group, states]) => states.map(state => [state,group])));
-  const groupLabels = {active:'进行中',done:'已完成',closed:'已结束',verify:'待核对'};
+  const groupLabels = {active:'进行中',done:'已完成',closed:'已结束'};
   // Derive the reader's timeline after grouping. Raw entries still drive
   // search, receipts and diagnostics, including records from older versions.
   function present(round) {
@@ -139,7 +138,8 @@
         // A final task receipt is authoritative for this round. A previously
         // accepted progress text never proves that a requested attachment
         // was made; use the task's persisted outcome instead.
-        if (item.status === 'completed') round.status = 'completed';
+        if (item.reason === 'task_delivery_checking_receipt' && item.status === 'waiting_delivery') round.status = 'checking_receipt';
+        else if (item.status === 'completed') round.status = 'completed';
         else if (['failed', 'cancelled'].includes(item.status)) round.status = item.status === 'cancelled' ? 'stopped' : 'failed';
         else if (['partially_cancelled', 'partial_cancelled'].includes(item.status)) round.status = 'partially_cancelled';
         else if (['partially_completed', 'partial_completed', 'partial', 'partial_failed'].includes(item.status)) round.status = 'partially_completed';
@@ -155,12 +155,17 @@
       else if (['partially_cancelled', 'partial_cancelled'].includes(item.status)) round.status = 'partially_cancelled';
       else if (['partially_completed', 'partial_completed', 'partial', 'partial_failed'].includes(item.status)) round.status = 'partially_completed';
       else if (['cancelling', 'stopping'].includes(item.status)) round.status = 'cancelling';
+      else if (item.status === 'checking_receipt' || item.event === 'delivery_waiting' && item.retry_at) round.status = 'checking_receipt';
       else if (['waiting_receipt', 'receipt_pending'].includes(item.status)) round.status = 'waiting_receipt';
       else if (['retrying_tool', 'waiting_tool_retry'].includes(item.status)) round.status = 'retrying_tool';
       else if (['retrying_model', 'waiting_model_retry'].includes(item.status)) round.status = 'retrying_model';
       else if (['retrying_delivery', 'waiting_delivery_retry'].includes(item.status)) round.status = 'retrying_delivery';
       else if (item.status === 'needs_review') round.status = 'needs_review';
-      else if (stage(item) === 'delivery' && ['send_outcome_unknown','submission_outcome_unknown','receipt_wait_timeout','receipt_lookup_failed'].includes(item.reason) && item.status === 'failed') round.status = 'waiting_receipt';
+      else if (stage(item) === 'delivery' && ['send_outcome_unknown','submission_outcome_unknown','receipt_wait_timeout','receipt_lookup_failed'].includes(item.reason) && item.status === 'failed') {
+        // A legacy error without a scheduled lookup is evidence of an unknown
+        // result, not a live job. Preserve a lookup already recorded for it.
+        if (!['checking_receipt','waiting_receipt','waiting'].includes(round.status)) round.status = 'needs_review';
+      }
       else if (item.status === 'retrying' && stage(item) === 'delivery') round.status = 'retrying_delivery';
       else if (['unknown', 'waiting'].includes(item.status) && stage(item) === 'delivery') round.status = 'waiting';
       else if (['accepted', 'observed'].includes(item.status) && stage(item) === 'delivery') round.status = item.event === 'message_progress' ? 'running' : 'accepted';
@@ -178,7 +183,7 @@
     }
     return [...groups.values()].map(round => {
       present(round);
-      round.group = groupByStatus[round.status] || 'verify';
+      round.group = groupByStatus[round.status] || 'closed';
       round.source ||= round.system ? '系统运行' : round.thread_id || '来源未知';
       round.source_kind ||= round.system ? 'system' : 'private';
       round.duration = Math.max(0, Date.parse(round.updated) - Date.parse(round.time));

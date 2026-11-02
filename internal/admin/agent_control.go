@@ -262,21 +262,14 @@ func newAgentControl(dir string) (*agentControl, error) {
 			a.data.Tasks[id] = t
 			changed = true
 		}
-		if t.State == "running" {
+		if t.State == "running" || t.State == "needs_review" && t.LastResult == "运行中断，需在管理页恢复；不会自动重放外部操作" {
 			t.State = "needs_review"
-			t.LastResult = "运行中断，需在管理页恢复；不会自动重放外部操作"
-			if t.ProcessID != "" || t.MusicJob != "" || t.DeviceTask != "" {
+			t.LastResult = "运行中断，缺少可查询的原操作编号；已停止，不重复执行"
+			if !settleFromDelivery(&t, false) && (t.ProcessID != "" || t.MusicJob != "" || t.DeviceTask != "" || t.PluginJob != nil && t.PluginJob.Ticket.RemoteID != "" && t.PluginJob.Ticket.State == "waiting" && !t.PluginJob.Prepared) {
 				t.State = "waiting"
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 				t.LastResult = "服务恢复后查询原任务编号和真实输出，继续交给模型处理；不重新提交原操作"
 			}
-			a.data.Tasks[id] = t
-			changed = true
-		}
-		if t.State == "needs_review" && t.LastResult == "运行中断，需在管理页恢复；不会自动重放外部操作" && (t.ProcessID != "" || t.MusicJob != "" || t.DeviceTask != "") {
-			t.State = "waiting"
-			t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
-			t.LastResult = "恢复原任务的只读状态核验；不重新提交已执行操作"
 			a.data.Tasks[id] = t
 			changed = true
 		}
@@ -646,6 +639,21 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 					}
 				}
 			}
+			// Silence is a decision, not a request for an operator. Only close
+			// the conversational follow-up; live jobs and deliveries retain
+			// their own scheduler, including late receipt reconciliation.
+			if state == "silent" && t.Reminder == nil && t.resultKind() == "" && t.DeliveryJob == "" &&
+				t.RecoveryMessageID == "" && (t.ReportOnly || t.ReportSourceThread == "") && t.Delivery == nil &&
+				len(t.PendingOperations) == 0 && len(t.Actions) == 0 {
+				t.State, t.LastResult = "stopped", "Agent 决定本轮不回复，没有安排后续任务"
+				if t.ReportOnly {
+					t.LastResult = "Agent 决定不发送本次技术私报"
+				}
+				if _, err := m.agent.updateSnapshot(t); err != nil {
+					m.log("task_checkpoint_save_failed")
+				}
+				return
+			}
 			if t.ReportOnly {
 				t.State = "completed"
 				t.LastResult = "私聊运维说明已交给发送链路；实际送达以回执为准"
@@ -666,7 +674,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				return
 			}
 			t.State = "needs_review"
-			t.LastResult = "本轮结束：" + state + "；模型未安排下一检查点，请在管理页查看或恢复"
+			t.LastResult = "本轮结束：" + state + "；未生成可安全续办的检查点，已停止"
 			if t.ReportSourceThread != "" && t.OwnerRequested {
 				t.State = "waiting"
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
@@ -677,7 +685,10 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 				t.LastResult = "模型本轮未完整结束，已保存真实行动证据；稍后读取项目和程序状态继续，避免重复已成功操作"
 			}
-			_ = m.agent.task(t)
+			settleFromDelivery(&t, state == "reply")
+			if _, err := m.agent.updateSnapshot(t); err != nil {
+				m.log("task_checkpoint_save_failed")
+			}
 		}
 	}
 }
@@ -769,7 +780,7 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			fail(w, 400, "操作无效")
 			return
 		}
-		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok && (old.State == "completed" || old.State == "cancelled") {
+		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok && (old.State == "completed" || old.State == "cancelled" || old.State == "stopped") {
 			fail(w, 409, "任务已结束并移至历史，不重新执行；如有新的需求，请创建新任务")
 			return
 		}

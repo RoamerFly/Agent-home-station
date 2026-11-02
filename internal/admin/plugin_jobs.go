@@ -24,7 +24,7 @@ func (m *Manager) agentTaskActive(in companion.Input) bool {
 		return true
 	}
 	if t, ok := m.agent.lookupTask(in.TaskID, in.Account, in.Thread); ok {
-		return t.State != "cancelled"
+		return t.State != "cancelled" && t.State != "stopped"
 	}
 	return false
 }
@@ -286,7 +286,7 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 	job := task.PluginJob
 	if job.LegacyConfigurationSHA256 == "" || job.Origin == nil {
 		task.State = "needs_review"
-		task.LastResult = "legacy_configuration_proof_missing：保留原任务及远端编号，等待管理员核验原配置和来源，不重提或改绑"
+		task.LastResult = "legacy_configuration_proof_missing：保留原任务及远端编号，缺少可验证的原配置或来源，已停止续办，不重提或改绑"
 		if job.LegacyConfigurationSHA256 != "" {
 			task.LastResult = "legacy_source_proof_missing：原来源证明不可追溯，保留原任务待核验，不推断新的来源授权"
 		}

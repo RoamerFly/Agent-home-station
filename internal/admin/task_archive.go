@@ -47,7 +47,7 @@ func (a *agentControl) retireSettledLocked() error {
 		if len(t.PendingOperations) > 0 && t.State != "cancelled" {
 			continue
 		}
-		if t.State != "cancelled" && (t.State != "completed" || t.Delivery != nil && t.Delivery.State != "accepted") {
+		if t.State != "cancelled" && ((t.State != "completed" && t.State != "stopped") || t.Delivery != nil && t.Delivery.State != "accepted") {
 			continue
 		}
 		dir := filepath.Join(a.dir, "archive", "agent-tasks")

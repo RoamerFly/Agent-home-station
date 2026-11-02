@@ -51,3 +51,23 @@ func TestAcknowledgementDoesNotCompleteWaitingBusinessGoal(t *testing.T) {
 		t.Fatal("a progress message completed the actual task")
 	}
 }
+
+func TestSilentReportAndEmptyFollowupRetireWithoutOperatorOrDelivery(t *testing.T) {
+	for _, report := range []bool{true, false} {
+		f, p := trustedAgent(t)
+		task := agentTask{ID: "original", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", ReportOnly: report, State: "running"}
+		if report {
+			task.ReportSourceThread = "fixture@chatroom"
+		}
+		if err := f.manager.agent.task(task); err != nil {
+			t.Fatal(err)
+		}
+		in := p.trace
+		in.TaskID = task.ID
+		f.manager.finishAgentTask(in, "silent")
+		history := f.manager.agent.taskHistory(task.Account, task.Thread)
+		if len(f.manager.agent.active(task.Account, "")) != 0 || len(history) != 1 || history[0].State != "stopped" || history[0].Delivery != nil || history[0].WorkCompleted || f.manager.agentTaskActive(in) {
+			t.Fatal(history)
+		}
+	}
+}
