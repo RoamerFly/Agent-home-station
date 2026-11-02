@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"time"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 )
@@ -42,6 +43,28 @@ func (s *Server) sourceRepairRoutes(mux *http.ServeMux) {
 		if !valid {
 			ref, changed, err = m.memory.ReconcileLegacySource(r.Context(), lookup)
 			valid = changed
+		}
+		if err == nil && !valid {
+			var canImport bool
+			canImport, err = m.memory.CanImportUnboundNative(r.Context(), lookup)
+			if err == nil && canImport && m.Config().Companion.Permissions.Remember {
+				// Fresh native text gets its own durable dataset identity; the
+				// legacy original is retained and is never used as replacement text.
+				body := message.Body
+				lookup.Text = body
+				lookup.OriginalText = &body
+				lookup.Source.MessageType = message.Type
+				lookup.Source.Integrity = "verified_import"
+				kind := map[int]string{49: "share", 43: "video", 34: "voice", 3: "image"}[message.Type]
+				if kind != "" {
+					lookup.IncomingMedia = []companion.IncomingMediaRef{{Kind: kind, UploaderID: message.SenderID, ObservationState: "pending", ObservationVersion: 1}}
+				}
+				err = m.memory.Observe(lookup, m.Config().Companion, time.Now())
+				if err == nil {
+					ref, valid = m.memory.SourceForInput(lookup)
+					changed = valid
+				}
+			}
 		}
 		if err != nil || !valid {
 			fail(w, 409, "未找到可安全恢复的来源；人工隔离、遗忘或同一数据集内的真实冲突不会解除")

@@ -46,6 +46,14 @@ namespace WechatAgent.Desktop {
         static Deployment Config() { return new Deployment { Workspace = @"E:\synthetic workspace", Distro = "Synthetic", User = "synthetic", Root = "/home/synthetic/data", Account = "synthetic", Music = "wechat-agent-music.service" }; }
         static async Task Reject(Func<Task> action) { bool failed = false; try { await action(); } catch (Exception) { failed = true; } Assert(failed, "Expected refusal"); }
         static async Task Tests() {
+            var controlName = "Local\\WechatAgent.Tests." + Guid.NewGuid().ToString("N");
+            using (var instance = new DesktopInstance(controlName)) {
+                Assert(DesktopInstance.RequestCommand("stop-services", controlName) && instance.StopRequested.WaitOne(0), "local stop command reaches owner");
+                Assert(DesktopInstance.RequestCommand("start-services", controlName) && instance.StartRequested.WaitOne(0), "local start command reaches owner");
+                Assert(DesktopInstance.RequestCommand("exit-services", controlName) && instance.ExitRequested.WaitOne(0), "local exit command reaches owner");
+                Assert(!DesktopInstance.RequestCommand("unknown", controlName), "unknown lifecycle command refused");
+            }
+            Assert(!DesktopInstance.RequestCommand("stop-services", controlName), "absent instance is not created by command");
             Assert(HiddenRunner.Quote("plain") == "plain", "plain argv");
             Assert(HiddenRunner.Quote("") == "\"\"", "empty argv");
             Assert(HiddenRunner.Quote("space end\\") == "\"space end\\\\\"", "trailing slash");

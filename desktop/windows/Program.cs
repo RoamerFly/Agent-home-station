@@ -24,6 +24,10 @@ namespace WechatAgent.Desktop {
         static extern int SetCurrentProcessExplicitAppUserModelID(string identity);
         [STAThread]
         static void Main(string[] args) {
+            if (args.Length == 1 && (args[0] == "--start-services" || args[0] == "--stop-services" || args[0] == "--exit-services")) {
+                Environment.ExitCode = DesktopInstance.RequestCommand(args[0].Substring(2)) ? 0 : 1;
+                return;
+            }
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             try {
                 using (var instance = new DesktopInstance()) {
@@ -33,7 +37,7 @@ namespace WechatAgent.Desktop {
                     SetCurrentProcessExplicitAppUserModelID("RoamerFly.WechatAgent.Desktop");
                     RegisterDependencies();
                     var d = Deployment.Load(Deployment.FindWorkspace(args));
-                    Run(d, instance.Activation);
+                    Run(d, instance);
                 }
             } catch (Exception error) { MessageBox.Show(error.Message, "大肥鱼 Agent · 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
@@ -47,7 +51,7 @@ namespace WechatAgent.Desktop {
                 };
         }
         [MethodImpl(MethodImplOptions.NoInlining)]
-        static void Run(Deployment d, EventWaitHandle activate) { Application.Run(new MainForm(d, activate)); }
+        static void Run(Deployment d, DesktopInstance instance) { Application.Run(new MainForm(d, instance)); }
         internal static void ConfigureWebViewLoader(string workspace) {
             lock (loaderGate) {
                 if (loaderConfigured) return;

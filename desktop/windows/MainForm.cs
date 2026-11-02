@@ -32,7 +32,11 @@ namespace WechatAgent.Desktop {
         int pageGeneration;
         int webGeneration;
         bool closeQueued;
+        EventWaitHandle startControl, stopControl, exitControl;
 
+        internal MainForm(Deployment d, DesktopInstance instance) : this(d, instance.Activation) {
+            startControl = instance.StartRequested; stopControl = instance.StopRequested; exitControl = instance.ExitRequested;
+        }
         internal MainForm(Deployment d, EventWaitHandle activation) : this(d, activation, new ServiceController(d), true) { }
         internal MainForm(Deployment d, EventWaitHandle activation, ServiceController services, bool startOnShown) {
             deployment = d; activate = activation; controller = services;
@@ -105,7 +109,13 @@ namespace WechatAgent.Desktop {
                 RequestExit(); if (!busy) await StopServices(true);
             };
             timer.Interval = 250;
-            timer.Tick += delegate { if (activate.WaitOne(0)) RestoreWindow(); }; timer.Start();
+            timer.Tick += async delegate {
+                if (activate.WaitOne(0)) RestoreWindow();
+                if (exitControl != null && exitControl.WaitOne(0)) { RequestExit(); if (!busy) await StopServices(true); return; }
+                if (busy || exitRequested) return;
+                if (stopControl != null && stopControl.WaitOne(0)) await StopServices(false);
+                else if (startControl != null && startControl.WaitOne(0)) await StartServices();
+            }; timer.Start();
         }
         void RequestExit() {
             WindowEvent("exit_requested");

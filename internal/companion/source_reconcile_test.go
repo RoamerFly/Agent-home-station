@@ -90,3 +90,27 @@ func TestReconcileOnlyFalseLegacyNamespaceCollision(t *testing.T) {
 		})
 	}
 }
+
+func TestUnboundLegacyImportRequiresExactNativeMetadataAndNoBlocks(t *testing.T) {
+	s, c, in := memoryFixture(t)
+	in.MessageTime = time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+	in.Text = "legacy presentation"
+	if err := s.Observe(in, c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, ServerID: "native-server"}
+	if ok, err := s.CanImportUnboundNative(t.Context(), in); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	other := in
+	other.Sender = "different-member"
+	if ok, _ := s.CanImportUnboundNative(t.Context(), other); ok {
+		t.Fatal("different native identity adopted legacy record")
+	}
+	if err := s.Clear(ScopeID(in.Channel, in.Account, in.Thread)); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.CanImportUnboundNative(t.Context(), in); ok {
+		t.Fatal("clear boundary bypassed by legacy import")
+	}
+}

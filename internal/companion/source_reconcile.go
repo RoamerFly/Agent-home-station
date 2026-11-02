@@ -7,6 +7,42 @@ import (
 	"time"
 )
 
+// CanImportUnboundNative permits a management-side re-read only where the
+// existing unbound legacy record agrees with the native sender and timestamp.
+// A named namespace, quarantine, forgetting or a different identity refuses it.
+func (s *Store) CanImportUnboundNative(ctx context.Context, in Input) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if in.Source == nil || in.Source.InstanceID != s.SourceInstanceID() || in.Source.ServerID == "" || in.Sender == "" {
+		return false, nil
+	}
+	at, err := time.Parse(time.RFC3339Nano, in.MessageTime)
+	if err != nil {
+		return false, nil
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT e.sender,e.at,e.payload,e.suppressed,(SELECT COUNT(*) FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)+(SELECT COUNT(*) FROM source_conflicts c WHERE c.event_id=e.id) FROM events e WHERE e.scope=? AND e.trace=? AND e.role='user'", ScopeID(in.Channel, in.Account, in.Thread), in.TraceID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var sender, stamp string
+		var raw []byte
+		var suppressed, blocked int
+		if err = rows.Scan(&sender, &stamp, &raw, &suppressed, &blocked); err != nil {
+			return false, err
+		}
+		var turn Turn
+		storedAt, parseErr := time.Parse(time.RFC3339Nano, stamp)
+		if json.Unmarshal(raw, &turn) != nil || parseErr != nil || !storedAt.Equal(at) || sender != in.Sender || suppressed != 0 || blocked != 0 || turn.Source != nil && (turn.Source.InstanceID != "" || turn.Source.Integrity == "conflicted" || turn.Source.ServerID != "" && turn.Source.ServerID != in.Source.ServerID) {
+			return false, nil
+		}
+		found = true
+	}
+	return found, rows.Err()
+}
+
 // ReconcileLegacySource is for trusted adapters which have just resolved an
 // actual native message. It repairs only a historical automatic collision
 // between a current, exact identity and an unknown legacy dataset. It never
