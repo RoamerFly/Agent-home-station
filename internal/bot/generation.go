@@ -448,12 +448,7 @@ func (w *Worker) generationContext(ctx context.Context, input companion.Input) c
 		record(Record{ThreadID: input.Thread, MessageID: input.TraceID, Event: event, Category: "system", Reason: d.Code, Status: status, ModelAttempts: d.Attempt, ModelMaxAttempts: 2, ModelStage: "decision_format", Origin: "model"})
 	})
 	return deepseek.WithRequestObserver(ctx, func(event string, d deepseek.Diagnostics) {
-		r := modelRecord(input.Thread, input.TraceID, d)
-		r.Event, r.Category, r.Reason, r.Status = event, "system", d.Code, "retrying"
-		if event == "model_recovered" {
-			r.Status = "recovered"
-		}
-		record(r)
+		record(modelEventRecord(input.Thread, input.TraceID, event, d))
 	})
 }
 func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {

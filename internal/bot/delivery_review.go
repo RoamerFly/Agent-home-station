@@ -57,7 +57,11 @@ func (w *Worker) reviewUncertainDelivery(ctx context.Context, c *companion.Engin
 			d.Next = time.Now()
 			reason = "delivery_model_continue"
 		case "replace":
-			text := strings.TrimSpace(strings.Join(review.Messages, "\n"))
+			if len(review.Messages) != 1 {
+				reason = "delivery_review_requires_single_message"
+				break
+			}
+			text := strings.TrimSpace(review.Messages[0])
 			if len(text) > 0 && len(text) <= 4096 {
 				if d.SubmittedText == "" {
 					d.SubmittedText = d.Text
@@ -67,6 +71,8 @@ func (w *Worker) reviewUncertainDelivery(ctx context.Context, c *companion.Engin
 				d.RetryReviewReady = true
 				d.Next = time.Now()
 				reason = "delivery_model_replace"
+			} else {
+				reason = "delivery_review_requires_single_message"
 			}
 		case "delay":
 			if next := time.Now().Add(time.Duration(review.DelaySeconds) * time.Second); next.After(d.Next) {

@@ -194,6 +194,46 @@ func TestReceivedSharePolicyScopeRevocationAndNoMemory(t *testing.T) {
 	}
 }
 
+func TestReceivedShareReadOnlySnapshotIdentity(t *testing.T) {
+	_, _, policy, ctx := receivedPolicyFixture(t, false)
+	installed, err := policy.store.Installed(ctx, "share-reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := policy.store.Configuration(ctx, "share-reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := json.RawMessage(`{"url":"https://weixin.qq.com/sph/synthetic123","expected_object_id":"12345"}`)
+	policy.setReadOnlyResolutionSnapshot(args, installed, configuration)
+	first := policy.invocation().RequestKey
+	policy.setReadOnlyResolutionSnapshot(args, installed, configuration)
+	if got := policy.invocation().RequestKey; got != first {
+		t.Fatal("identical read-only request did not deduplicate")
+	}
+	changedArgs := json.RawMessage(`{"url":"https://weixin.qq.com/sph/synthetic456","expected_object_id":"12345"}`)
+	policy.setReadOnlyResolutionSnapshot(changedArgs, installed, configuration)
+	if got := policy.invocation().RequestKey; got == first {
+		t.Fatal("changed parser arguments reused the old immutable request key")
+	}
+	policy.setReadOnlyResolutionSnapshot(args, installed, pluginhost.Configuration{Revision: configuration.Revision + 1})
+	if got := policy.invocation().RequestKey; got == first {
+		t.Fatal("changed plugin configuration reused the old immutable request key")
+	}
+	policy.epoch += "-changed"
+	policy.setReadOnlyResolutionSnapshot(args, installed, configuration)
+	if got := policy.invocation().RequestKey; got == first {
+		t.Fatal("changed recall epoch collided with the previous completed read")
+	}
+}
+
+func TestShareRequestConflictIsSafeDiagnostic(t *testing.T) {
+	failure := safeShareResolutionFailure("plugin_invoke", pluginhost.ErrRequestConflict)
+	if failure.code != "share_request_conflict" || failure.stage != "plugin_invoke" {
+		t.Fatalf("request conflict was not retained as a safe diagnostic: %+v", failure)
+	}
+}
+
 func TestReceivedShareDisabledPluginDoesNotFallBackToLegacy(t *testing.T) {
 	f, n, p, ctx := receivedPolicyFixture(t, false)
 	i, err := p.store.Installed(ctx, "share-reader")

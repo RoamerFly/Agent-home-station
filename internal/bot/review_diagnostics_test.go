@@ -34,3 +34,17 @@ func TestGroundingResponseMetadataSurvivesActivityProjection(t *testing.T) {
 		t.Fatalf("metadata lost: %+v", r)
 	}
 }
+
+func TestModelResponseAndRetryAreDifferentInBothGenerationPaths(t *testing.T) {
+	for _, tc := range []struct{ event, code, want string }{
+		{"model_grounding_response", "", "received"},
+		{"model_grounding_validation_failed", "model_review_protocol_invalid", "failed"},
+		{"model_grounding_format_repair", "model_review_protocol_invalid", "retrying"},
+		{"model_grounding_format_recovered", "", "recovered"},
+	} {
+		r := modelEventRecord("room", "message", tc.event, deepseek.Diagnostics{Code: tc.code, HTTPStatus: 200})
+		if r.Status != tc.want {
+			t.Fatalf("%s: %+v", tc.event, r)
+		}
+	}
+}

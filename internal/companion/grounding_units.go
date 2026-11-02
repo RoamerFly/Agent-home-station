@@ -176,13 +176,18 @@ func decodeGroundingUnits(answer, id string, units []GroundingReviewUnit, table 
 				start = at + len(atom.Span)
 			}
 			refs := []string{}
+			invalidQuote := false
 			for _, support := range atom.Supports {
 				row, exists := evidence[support.Ref]
 				if !exists {
 					return fail("review_support_reference_invalid")
 				}
-				if strings.TrimSpace(support.Quote) == "" || !groundingEvidenceContains(row, support.Quote) {
+				if strings.TrimSpace(support.Quote) == "" {
 					return fail("review_support_quote_invalid")
+				}
+				if !groundingEvidenceContains(row, support.Quote) {
+					invalidQuote = true
+					continue
 				}
 				refs = append(refs, row.SourceRefs...)
 			}
@@ -210,6 +215,14 @@ func decodeGroundingUnits(answer, id string, units []GroundingReviewUnit, table 
 				default:
 					return fail("review_atom_status_invalid")
 				}
+			}
+			if invalidQuote {
+				// A well-formed but invented/paraphrased citation is a failed
+				// evidence check, not a JSON problem. Reject this immutable draft
+				// and let the existing single editor fix its claims/citations;
+				// never resample a format verdict or count the citation as support.
+				bubble.Verdict, out.Verdict = "reject", "reject"
+				bubble.Violations = append(bubble.Violations, GroundingViolation{Span: atom.Span, Kind: "invalid_evidence_quote", SourceRefs: uniqueSortedEvidence(refs), Reason: "The supplied quotation is not present in the referenced evidence row. Recheck the actual source; do not treat a paraphrased or invented quotation as support."})
 			}
 		}
 		for i, r := range unit.Text {

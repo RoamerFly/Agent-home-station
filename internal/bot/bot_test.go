@@ -254,9 +254,9 @@ func TestLocalSendAndUnapprovedConversationAreNeverRead(t *testing.T) {
 	}
 }
 
-func TestOutputIsUTF8BoundedAndHasLoopPreventionPrefix(t *testing.T) {
+func TestOutputPreservesUTF8BodyAndLoopPreventionPrefix(t *testing.T) {
 	s := &fakeSource{messages: map[string]linuxnative.Message{"one": fixtureMessage("one", "filehelper", "/ai hello", "outgoing")}}
-	m := &fakeModel{answer: strings.Repeat("中文", 1500)}
+	m := &fakeModel{answer: strings.Repeat("中文", 400)}
 	sender := &fakeSender{}
 	w := newTestWorker(t, s, m, sender)
 	w.handle(context.Background(), fixtureEvent("1", "one", "filehelper", "outgoing", "remote_sync"))
@@ -264,8 +264,8 @@ func TestOutputIsUTF8BoundedAndHasLoopPreventionPrefix(t *testing.T) {
 		t.Fatal("missing send")
 	}
 	text := sender.requests[0].Text
-	if !utf8.ValidString(text) || len(text) > 4096 || !strings.HasPrefix(text, "[AI] ") || !strings.HasSuffix(text, "\n…") {
-		t.Fatal("invalid bounded output")
+	if !utf8.ValidString(text) || text != "[AI] "+m.answer {
+		t.Fatal("output was changed or lost its loop prevention prefix")
 	}
 }
 

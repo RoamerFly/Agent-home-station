@@ -39,6 +39,19 @@ func TestRetryModelKnowsFailureAndRewritesBeforeFreshSubmission(t *testing.T) {
 		t.Fatal("late old wording ignored", d)
 	}
 }
+
+func TestDeliveryReviewRejectsMultiMessageReplacement(t *testing.T) {
+	model := &planReviewModel{answer: `{"action":"replace","messages":["第一条","第二条"]}`}
+	w, c, _, in := planWorker(t, model)
+	d := &delivery{Thread: in.Thread, Trace: in.TraceID, Input: in, Text: "原回复", State: "waiting", Created: time.Now()}
+	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
+	var record Record
+	w.config.Record = func(got Record) { record = got }
+	w.reviewUncertainDelivery(context.Background(), c, d)
+	if d.Text != "原回复" || d.RetryReviewReady || record.Reason != "delivery_review_requires_single_message" {
+		t.Fatal("multi-message review replacement was accepted", d, record)
+	}
+}
 func TestAcceptedVoiceAndFollowingTextSharePersistentGap(t *testing.T) {
 	w, n, c, in := mediaWorker(t)
 	w.config.Options.RandomDelay = true

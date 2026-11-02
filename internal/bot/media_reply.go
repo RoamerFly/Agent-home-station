@@ -104,9 +104,6 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 				in.QuoteServerID = r.Quote.ServerID
 			}
 			messages := append([]string(nil), r.Messages...)
-			for i := range messages {
-				messages[i] = deliveredCaption(messages[i])
-			}
 			// The handoff and text plan are persisted together. The attachment
 			// keeps its own receipt/cancellation state; only the caption is replanned.
 			r.State = "queued_plan"
@@ -131,7 +128,7 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		if r.Quote != nil {
 			in.QuoteServerID = r.Quote.ServerID
 		}
-		text := deliveredCaption(strings.TrimSpace(r.Messages[r.Index]))
+		text := strings.TrimSpace(r.Messages[r.Index])
 		if c.Config.ShowAILabel && !strings.HasPrefix(text, "[AI]") {
 			text = "[AI] " + text
 		}
@@ -167,13 +164,4 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		w.persistErr = w.saveRuntime()
 		w.refreshMediaParent(r.Trace)
 	}
-}
-
-func deliveredCaption(text string) string {
-	for _, negative := range []string{"不能", "无法", "没法", "没有"} {
-		if strings.Contains(text, negative) {
-			return text
-		}
-	}
-	return strings.NewReplacer("分几段发给你", "已经分段发给你了", "分几段发你", "已经分段发给你了", "分段发你", "已经分段发给你了", "接下来发给你", "已经发给你了", "这就发给你", "已经发给你了").Replace(text)
 }

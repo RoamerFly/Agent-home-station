@@ -60,12 +60,18 @@ type receivedSharePolicy struct {
 	remember           bool
 	tool               string
 	requestSuffix      string
-	timeoutSeconds     int64
-	actor              *sourceActorProof
-	binding            *shareRouteBinding
-	send               pluginruntime.RouteTransport
-	failureMu          sync.Mutex
-	failure            *shareResolutionFailure
+	// resolutionSnapshotSuffix distinguishes immutable read-only share parses
+	// from a stale job that happened to use the same source message.  It is
+	// deliberately separate from requestSuffix: callers may already use that
+	// suffix for their own request scope, and recomputing from the combined
+	// value would make an identical retry look new.
+	resolutionSnapshotSuffix string
+	timeoutSeconds           int64
+	actor                    *sourceActorProof
+	binding                  *shareRouteBinding
+	send                     pluginruntime.RouteTransport
+	failureMu                sync.Mutex
+	failure                  *shareResolutionFailure
 }
 
 // Only host-observed, reviewed diagnostics cross this boundary. Provider text,
@@ -97,6 +103,14 @@ func safeShareResolutionFailure(stage string, err error) *shareResolutionFailure
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		failure.code = "share_resolution_timeout"
+		return failure
+	}
+	// CreateJob protects an immutable request key from being rebound to
+	// different arguments or a changed package/configuration snapshot.  This is
+	// actionable for a read-only parser, but remains deliberately opaque about
+	// the conflicting values.
+	if errors.Is(err, pluginhost.ErrRequestConflict) {
+		failure.code = "share_request_conflict"
 		return failure
 	}
 	var web *mcptools.WebError
@@ -216,6 +230,9 @@ func (p *receivedSharePolicy) invocation() pluginhost.Invocation {
 	if p.requestSuffix != "" {
 		c.RequestKey += "-" + p.requestSuffix
 	}
+	if p.resolutionSnapshotSuffix != "" {
+		c.RequestKey += "-" + p.resolutionSnapshotSuffix
+	}
 	if p.tool == "media.observe" || p.tool == "media.transcribe" || p.tool == "media.listen" {
 		c.Purpose = "observe received media"
 		parts := []string{p.source.EventID, p.message.ID, p.fingerprint, p.requestSuffix}
@@ -225,6 +242,29 @@ func (p *receivedSharePolicy) invocation() pluginhost.Invocation {
 		c.RequestKey = "received-media-" + agentID(parts...)
 	}
 	return c
+}
+
+// setReadOnlyResolutionSnapshot makes the request key track every immutable
+// input which the runtime stores in its job fingerprint.  It is intentionally
+// limited to share.resolve_channels: other tools have distinct side-effect and
+// replay contracts.  The digest is a one-way identifier, so neither a short
+// link nor private configuration is exposed in the durable request key.
+func (p *receivedSharePolicy) setReadOnlyResolutionSnapshot(raw json.RawMessage, installed pluginhost.InstalledPackage, configuration pluginhost.Configuration) {
+	if p.tool != "share.resolve_channels" {
+		return
+	}
+	p.resolutionSnapshotSuffix = "snapshot-" + agentID(
+		"share.resolve_channels.readonly.v1",
+		p.requestSuffix,
+		string(raw),
+		p.source.EventID,
+		strconv.Itoa(p.source.Revision),
+		p.epoch,
+		p.fingerprint,
+		installed.Package.Version,
+		installed.Digest,
+		strconv.Itoa(configuration.Revision),
+	)
 }
 
 func receivedSourceFingerprint(m linuxnative.Message, tool string) string {
@@ -401,8 +441,10 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 			return source, errors.New("share_native_source_changed")
 		}
 	}
-	job := pluginhost.Job{Plugin: "share-reader", Tool: "share.resolve_channels", Context: p.invocation()}
-	if err = p.Check(ctx, job, pluginhost.Capability{}); err != nil {
+	// Recheck access before requesting a new native short link. The final
+	// immutable snapshot below has its own check after the read arguments exist.
+	preflight := pluginhost.Job{Plugin: "share-reader", Tool: "share.resolve_channels", Context: p.invocation()}
+	if err = p.Check(ctx, preflight, pluginhost.Capability{}); err != nil {
 		return source, err
 	}
 	args := map[string]any{}
@@ -457,6 +499,10 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 	if p.timeoutSeconds > 0 {
 		args["timeout_seconds"] = p.timeoutSeconds
 	}
+	raw, marshalErr := json.Marshal(args)
+	if marshalErr != nil {
+		return source, errors.New("share_route_arguments_invalid")
+	}
 	h, ready, err := m.installedPluginRuntime()
 	if err != nil || !ready {
 		return source, errors.New("share_plugin_runtime_unavailable")
@@ -465,12 +511,24 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 	if err != nil {
 		return source, err
 	}
+	configuration, err := p.store.Configuration(ctx, "share-reader")
+	if err != nil {
+		return source, errors.New("share_plugin_configuration_unavailable")
+	}
+	// This must happen before both Check calls.  The runtime persists the
+	// resulting invocation and rechecks it around dispatch, so a retry with an
+	// identical immutable parser request deduplicates while a changed read-only
+	// request cannot collide with an older job for the same received card.
+	p.setReadOnlyResolutionSnapshot(raw, i, configuration)
+	job := pluginhost.Job{Plugin: "share-reader", Tool: "share.resolve_channels", Context: p.invocation()}
+	if err = p.Check(ctx, job, pluginhost.Capability{}); err != nil {
+		return source, err
+	}
 	if h.Status("share-reader").State == "stopped" {
 		if err = h.Start(ctx, "share-reader", i.Revision); err != nil {
 			return source, errors.New("share_plugin_start_failed")
 		}
 	}
-	raw, _ := json.Marshal(args)
 	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: raw}, p)
 	if err != nil {
 		return source, p.recordResolutionFailure(out.Job, safeShareResolutionFailure("plugin_invoke", err))

@@ -526,7 +526,7 @@ must_reply=true时必须提供有依据的有效回应或必要澄清，不能si
 	}
 	checks, _ := json.Marshal(map[string]any{"initial_verdict": initial, "repair_binding": repairBinding, "route_proofs": proofs, "edited_bubbles": out.Bubbles, "repair_binding_hash": repairID, "repaired_candidate": candidate, "final_verdict": final})
 	if final.Verdict != "allow" {
-		return e.groundingFailed(in, candidate, risks, "final_check_rejected", errors.New("reply_grounding_final_check_rejected"), checks)
+		return e.groundingFailed(in, candidate, risks, "final_check_rejected", &groundingRejectedError{verdict: final}, checks)
 	}
 	if err = e.validateReplyTexts(ctx, in, candidate); err != nil {
 		return e.groundingFailed(in, candidate, risks, "final_binding_invalid", err, checks)

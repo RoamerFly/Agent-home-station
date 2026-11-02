@@ -9,14 +9,19 @@ import (
 // protected reply was stopped. It never contains a draft, evidence text or a
 // provider response body.
 type ReviewFailure struct {
-	Code        string                `json:"code"`
-	Stage       string                `json:"stage"`
-	ReviewState string                `json:"review_state"`
-	Detail      string                `json:"detail"`
-	Request     *deepseek.Diagnostics `json:"request,omitempty"`
-	UnitIndex   int                   `json:"unit_index,omitempty"`
-	AtomIndex   int                   `json:"atom_index,omitempty"`
+	Code           string                `json:"code"`
+	Stage          string                `json:"stage"`
+	ReviewState    string                `json:"review_state"`
+	Detail         string                `json:"detail"`
+	Request        *deepseek.Diagnostics `json:"request,omitempty"`
+	UnitIndex      int                   `json:"unit_index,omitempty"`
+	AtomIndex      int                   `json:"atom_index,omitempty"`
+	ViolationKinds []string              `json:"violation_kinds,omitempty"`
 }
+
+type groundingRejectedError struct{ verdict GroundingVerdict }
+
+func (*groundingRejectedError) Error() string { return "reply_grounding_final_check_rejected" }
 
 // ReviewError keeps the underlying error available to internal callers while
 // making the stable, safe diagnostic available to activity logging.
@@ -67,6 +72,24 @@ func reviewFailure(state string, err error) ReviewFailure {
 	}
 	if state == "final_check_rejected" || state == "repair_no_supported_reply" {
 		f.Code, f.Detail = "grounding_review_rejected", "复核未通过：现有证据不足以支持该回复，已停止发送"
+	}
+	var rejected *groundingRejectedError
+	if errors.As(err, &rejected) {
+		for _, bubble := range rejected.verdict.Bubbles {
+			for _, violation := range bubble.Violations {
+				// Fixed host classifications only; never copy a model's prose.
+				switch violation.Kind {
+				case "invalid_evidence_quote", "unsupported_fact", "presupposition", "unsupported_relation":
+					f.ViolationKinds = append(f.ViolationKinds, violation.Kind)
+				}
+			}
+		}
+		f.ViolationKinds = uniqueSortedEvidence(f.ViolationKinds)
+		for _, kind := range f.ViolationKinds {
+			if kind == "invalid_evidence_quote" {
+				f.Detail = "改稿后的复核仍引用了无法在来源中核对的证据摘录，已停止发送"
+			}
+		}
 	}
 	var changed *GenerationEvidenceChangedError
 	if errors.As(err, &changed) || (err != nil && (err.Error() == "reply_grounding_evidence_changed_during_snapshot" || err.Error() == "reply_evidence_epoch_changed" || err.Error() == "reply_evidence_authorization_changed")) {

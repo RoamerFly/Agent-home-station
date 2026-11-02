@@ -104,13 +104,17 @@ func TestAtomicGroundingExactEvidenceAndUnsupportedPresuppositions(t *testing.T)
 	}
 	for _, bad := range []string{
 		strings.Replace(good, `"ref":"E1"`, `"ref":"E999"`, 1),
-		strings.Replace(good, "刚打完电话", "根本没有这句", 1),
 		strings.Replace(good, `"quote":"刚打完电话"`, `"quote":"刚打完电话","version":3`, 1),
 		strings.Replace(good, `"supports":[{"ref":"E1","quote":"刚打完电话"}]`, `"supports":[]`, 1),
 	} {
 		if _, err := decodeGroundingUnits(bad, "bound", units, []GroundingEvidenceRow{row}, 1); err == nil {
 			t.Fatal("unsupported or invented provenance accepted", bad)
 		}
+	}
+	badQuote := strings.Replace(good, "刚打完电话", "根本没有这句", 1)
+	rejected, quoteErr := decodeGroundingUnits(badQuote, "bound", units, []GroundingEvidenceRow{row}, 1)
+	if quoteErr != nil || rejected.Verdict != "reject" || rejected.Bubbles[0].Violations[0].Kind != "invalid_evidence_quote" {
+		t.Fatal("invalid evidence quote must reject the candidate, not pass or retry JSON", rejected, quoteErr)
 	}
 	question := groundingReviewUnits([]string{"通话内容涉及许多工作安排吧？"})
 	for _, status := range []string{"unsupported", "uncertain"} {

@@ -249,7 +249,7 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 		if len(answer) <= 8000 && utf8.ValidString(answer) && strings.TrimSpace(answer) != "" {
 			turns = append(turns, deepseek.AssistantTurn(ctx, answer))
 		}
-		turns = append(turns, map[string]string{"role": "user", "content": "程序格式校验：" + code + "。上一条没有执行任何新工具或发送，请修正为唯一JSON对象。工具调用用 {\"action\":\"tool\",\"tool\":\"实际列表中的工具名\",\"arguments\":{}}；最终回复用 {\"action\":\"reply\",\"messages\":[\"自然回复\"],\"media_ids\":[]}。messages最多" + jsonNumber(e.Config.MaxBubbles) + "条。不要重做已成功的工具，不编造素材ID；保持当前请求和之前已取得的结果。"})
+		turns = append(turns, map[string]string{"role": "user", "content": "程序格式校验：" + code + "。上一条没有执行任何新工具或发送，请修正为唯一JSON对象。工具调用用 {\"action\":\"tool\",\"tool\":\"实际列表中的工具名\",\"arguments\":{}}；最终回复用 {\"action\":\"reply\",\"messages\":[\"自然回复\"],\"media_ids\":[]}。messages 的条数由实际语义决定，不设固定数量；每一项是一条完整独立消息，不要为了格式或长度机械拆分、合并或截断。不要重做已成功的工具，不编造素材ID；保持当前请求和之前已取得的结果。"})
 		return true
 	}
 	if need.Kind == "surf" && allowed["web_discover"] && max > 0 {

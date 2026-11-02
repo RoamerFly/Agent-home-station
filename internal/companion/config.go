@@ -22,28 +22,30 @@ type Permissions struct {
 	Proactive        bool `json:"proactive"`
 }
 type Config struct {
-	Grounding            *GroundingSettings    `json:"grounding,omitempty"`
-	Memory               *MemorySettings       `json:"memory,omitempty"`
-	Context              *ContextSettings      `json:"context,omitempty"`
-	Conversation         *ConversationSettings `json:"conversation,omitempty"`
-	Enabled              bool                  `json:"enabled"`
-	Name                 string                `json:"name"`
-	Persona              string                `json:"persona"`
-	Appearance           string                `json:"appearance"`
-	Style                string                `json:"style"`
-	Relationship         string                `json:"relationship"`
-	Permissions          Permissions           `json:"permissions"`
-	MemoryMessages       int                   `json:"memory_messages"`
-	MemoryDays           int                   `json:"memory_days"`
-	ReplyMinMS           int                   `json:"reply_min_ms"`
-	ReplyMaxMS           int                   `json:"reply_max_ms"`
-	MaxBubbles           int                   `json:"max_bubbles"`
-	ShowAILabel          bool                  `json:"show_ai_label"`
-	MaxRepliesPerHour    int                   `json:"max_replies_per_hour"`
-	QuietStart           string                `json:"quiet_start"`
-	QuietEnd             string                `json:"quiet_end"`
-	Timezone             string                `json:"timezone"`
-	ProactiveIdleMinutes int                   `json:"proactive_idle_minutes"`
+	Grounding      *GroundingSettings    `json:"grounding,omitempty"`
+	Memory         *MemorySettings       `json:"memory,omitempty"`
+	Context        *ContextSettings      `json:"context,omitempty"`
+	Conversation   *ConversationSettings `json:"conversation,omitempty"`
+	Enabled        bool                  `json:"enabled"`
+	Name           string                `json:"name"`
+	Persona        string                `json:"persona"`
+	Appearance     string                `json:"appearance"`
+	Style          string                `json:"style"`
+	Relationship   string                `json:"relationship"`
+	Permissions    Permissions           `json:"permissions"`
+	MemoryMessages int                   `json:"memory_messages"`
+	MemoryDays     int                   `json:"memory_days"`
+	ReplyMinMS     int                   `json:"reply_min_ms"`
+	ReplyMaxMS     int                   `json:"reply_max_ms"`
+	// MaxBubbles is retained only to read and round-trip legacy configuration.
+	// Message boundaries are model-selected; this value is not a quota.
+	MaxBubbles           int    `json:"max_bubbles,omitempty"`
+	ShowAILabel          bool   `json:"show_ai_label"`
+	MaxRepliesPerHour    int    `json:"max_replies_per_hour"`
+	QuietStart           string `json:"quiet_start"`
+	QuietEnd             string `json:"quiet_end"`
+	Timezone             string `json:"timezone"`
+	ProactiveIdleMinutes int    `json:"proactive_idle_minutes"`
 	// ProactiveMaxPerDay is retained for config compatibility, not enforced.
 	ProactiveMaxPerDay int             `json:"proactive_max_per_day"`
 	ProactiveThreads   []string        `json:"proactive_threads"`
@@ -68,7 +70,7 @@ func (c Config) ProactiveRule(thread string) ProactiveRule {
 }
 
 func Defaults() Config {
-	return Config{Name: "deepseek蓝色大肥鱼", Persona: FriendlyPersona, Appearance: "Q版鲸鱼娘：蓝色长卷发与蓝色眼睛，海军蓝和白色荷叶边裙装、鲸鳍形头饰、蓝色蝴蝶结、鲸鱼尾巴，围裙上有小鲸鱼图案。", Style: FriendlyStyle, Relationship: FriendlyRelationship, Permissions: Permissions{ReplyText: true, SendImage: true, SendVoice: true, SendVideo: true, SendFile: true}, MemoryMessages: 500, MemoryDays: 30, ReplyMinMS: 800, ReplyMaxMS: 2200, MaxBubbles: 2, ShowAILabel: true, MaxRepliesPerHour: 30, QuietStart: "23:00", QuietEnd: "08:00", Timezone: "Asia/Shanghai", ProactiveIdleMinutes: 60, ProactiveMaxPerDay: 2, ProactiveThreads: []string{}}
+	return Config{Name: "deepseek蓝色大肥鱼", Persona: FriendlyPersona, Appearance: "Q版鲸鱼娘：蓝色长卷发与蓝色眼睛，海军蓝和白色荷叶边裙装、鲸鳍形头饰、蓝色蝴蝶结、鲸鱼尾巴，围裙上有小鲸鱼图案。", Style: FriendlyStyle, Relationship: FriendlyRelationship, Permissions: Permissions{ReplyText: true, SendImage: true, SendVoice: true, SendVideo: true, SendFile: true}, MemoryMessages: 500, MemoryDays: 30, ReplyMinMS: 800, ReplyMaxMS: 2200, ShowAILabel: true, MaxRepliesPerHour: 30, QuietStart: "23:00", QuietEnd: "08:00", Timezone: "Asia/Shanghai", ProactiveIdleMinutes: 60, ProactiveMaxPerDay: 2, ProactiveThreads: []string{}}
 }
 
 // Normalize upgrades old configs without activating any new permission.
@@ -106,7 +108,7 @@ func Validate(c Config) error {
 			return errors.New("请检查角色名字、人设、说话风格和相处方式")
 		}
 	}
-	if c.MemoryMessages < 2 || c.MemoryMessages > 2000 || c.MemoryDays < 1 || c.MemoryDays > 365 || c.ReplyMinMS < 0 || c.ReplyMaxMS < c.ReplyMinMS || c.ReplyMaxMS > 10000 || c.MaxBubbles < 1 || c.MaxRepliesPerHour < 1 || c.MaxRepliesPerHour > 120 || c.ProactiveIdleMinutes < 5 || c.ProactiveIdleMinutes > 1440 || c.ProactiveMaxPerDay < 0 {
+	if c.MemoryMessages < 2 || c.MemoryMessages > 2000 || c.MemoryDays < 1 || c.MemoryDays > 365 || c.ReplyMinMS < 0 || c.ReplyMaxMS < c.ReplyMinMS || c.ReplyMaxMS > 10000 || c.MaxRepliesPerHour < 1 || c.MaxRepliesPerHour > 120 || c.ProactiveIdleMinutes < 5 || c.ProactiveIdleMinutes > 1440 || c.ProactiveMaxPerDay < 0 {
 		return errors.New("请检查记忆、回复节奏和主动消息预算")
 	}
 	if _, err := time.LoadLocation(c.Timezone); err != nil {

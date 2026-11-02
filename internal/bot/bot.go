@@ -405,11 +405,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		return
 	}
 	if len(text) > 4096 {
-		limit := 4096 - len("\n…")
-		for !utf8.ValidString(text[:limit]) {
-			limit--
-		}
-		text = text[:limit] + "\n…"
+		w.config.Log("model_reply_text_too_long")
+		w.activity(Record{Event: "model_failed", Category: "error", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "model_reply_text_too_long", Status: "failed"})
+		return
 	}
 	w.markSending(message.ID)
 	if w.persistErr != nil {
