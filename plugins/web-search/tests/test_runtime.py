@@ -18,6 +18,34 @@ def response(body, url="https://example.test/page", kind="text/html; charset=utf
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_site_refusal_falls_back_to_matching_indexed_bv_only(self):
+        def get(url, *_):
+            if url.startswith("https://api.bilibili.com/"):
+                return {"ok": False, "error": "http_status"}
+            self.assertIn("site%3Abilibili.com%2Fvideo", url)
+            rss = "<rss><channel>" + "".join(
+                f"<item><title>{title}</title><link>{link}</link></item>" for title, link in [
+                    ("歌手 另一首", "https://www.bilibili.com/video/BV0000000001/"),
+                    ("歌手 歌名", "https://example.test/other"),
+                    ("歌手 歌名", "https://www.bilibili.com/video/BV0000000002/")]) + "</channel></rss>"
+            return response(rss, url, "text/xml")
+        r = plugin.search({"source": "bilibili", "query": "歌手 歌名 原唱"}, get)
+        self.assertTrue(r["fallback_used"])
+        self.assertEqual([i["url"] for i in r["items"]], ["https://www.bilibili.com/video/BV0000000002/"])
+
+    def test_bilibili_audio_page_uses_public_search_with_exact_source_and_cursor(self):
+        args = {"query": "合成歌手 合成作品", "source": "bilibili", "offset": 20, "count": 45, "limit": 1}
+        def get(url, *_):
+            self.assertEqual(plugin.urllib.parse.parse_qs(plugin.urllib.parse.urlsplit(url).query),
+                             {"search_type": ["video"], "keyword": [args["query"]], "page": ["2"], "page_size": ["20"]})
+            rows = [{"bvid": "BV0123456789", "title": "<em>合成作品</em>", "author": "测试"}]
+            return response(json.dumps({"code": 0, "data": {"page": 2, "pagesize": 20, "numPages": 3, "numResults": 41, "result": rows}}), url, "application/json")
+        result = plugin.search(args, get, configuration={"search_backend": "deepseek"})
+        self.assertEqual(result["backend"], "bilibili")
+        self.assertEqual(result["items"][0]["url"], "https://www.bilibili.com/video/BV0123456789/")
+        self.assertEqual(result["items"][0]["title"], "合成作品")
+        self.assertEqual(result["next_offset"], 21)
+
     def source(self, kind="rss", url="https://example.test/feed", media="text"):
         return {"id": "synthetic", "name": "合成订阅", "type": kind, "url": url, "kind": media, "enabled": True}
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"wechat-bot/internal/mcptools"
@@ -75,6 +76,7 @@ func (s servicePluginPolicy) validatePublicWebRead(ctx context.Context, j plugin
 	var args struct {
 		URL     string `json:"url"`
 		Query   string `json:"query"`
+		Offset  int    `json:"offset"`
 		Max     *int64 `json:"max_bytes"`
 		Timeout *int64 `json:"timeout_seconds"`
 	}
@@ -93,6 +95,29 @@ func (s servicePluginPolicy) validatePublicWebRead(ctx context.Context, j plugin
 	case "web.read":
 		allowed = args.URL != "" && args.URL == rawURL
 	case "web.search":
+		var selection struct {
+			Source string `json:"source"`
+		}
+		if json.Unmarshal(j.Arguments, &selection) != nil {
+			return errors.New("web_read_source_changed")
+		}
+		if selection.Source == "bilibili" {
+			u, err := url.Parse(rawURL)
+			expected := url.Values{"keyword": {strings.TrimSpace(args.Query)}, "search_type": {"video"}, "page_size": {"20"}, "page": {strconv.Itoa(args.Offset/20 + 1)}}
+			if err != nil || u.Scheme != "https" || u.User != nil || u.Fragment != "" || args.Offset < 0 || strings.TrimSpace(args.Query) == "" {
+				return errors.New("web_read_source_changed")
+			}
+			term := strings.TrimSpace(args.Query) + " site:bilibili.com/video"
+			switch u.Host + u.EscapedPath() {
+			case "api.bilibili.com/x/web-interface/search/type":
+				allowed = u.Query().Encode() == expected.Encode()
+			case "www.bing.com/search":
+				allowed = u.Query().Encode() == (url.Values{"q": {term}, "format": {"rss"}}).Encode()
+			case "www.so.com/s":
+				allowed = u.Query().Encode() == (url.Values{"q": {term}}).Encode()
+			}
+			break
+		}
 		store, err := s.p.manager.packageStore()
 		if err != nil {
 			return err

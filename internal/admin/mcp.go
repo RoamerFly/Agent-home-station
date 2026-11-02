@@ -354,6 +354,17 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 				endpoint = media.SourceCatalog
 			}
 			diagnosticMu.Lock()
+			var web *mcptools.WebError
+			if errors.As(callErr, &web) {
+				if lastCode == "" {
+					lastCode, lastStage, lastStatus = web.Code, web.Stage, web.Status
+				} else if web.Code == "http_status" && web.Status == 0 && lastStatus > 0 {
+					detail := *web
+					detail.Status = lastStatus
+					callErr = &detail
+					reason = mcptools.FailureDescription(callErr)
+				}
+			}
 			record := bot.Record{Event: "web_activity", CallID: started.Format(time.RFC3339Nano), Category: category, ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: name, TargetURL: endpoint, Query: webArgs.Query, Origin: origin, Status: status, Reason: reason, DurationMS: time.Since(started).Milliseconds(), Bytes: downloadBytes, MediaCount: len(media.Media), ToolCacheHit: media.CatalogCacheHit, ToolRequests: requests, ToolRetries: retries, ToolHTTPStatus: lastStatus, ToolCode: lastCode, ToolStage: lastStage}
 			diagnosticMu.Unlock()
 			p.manager.record(record)

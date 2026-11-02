@@ -158,6 +158,19 @@ type legacyEvidenceTools struct {
 	stamp string
 }
 
+func TestGenerationToolsForwardChatAuthorizationAndRevocation(t *testing.T) {
+	adapter := &legacyEvidenceTools{stamp: "original"}
+	run := &generationTools{inner: adapter}
+	stamp := run.MemoryResultAuthorization()
+	if stamp != "original" || !run.MemoryResultAuthorized(stamp) {
+		t.Fatal("ordinary chat lost its host authorization")
+	}
+	adapter.stamp = "changed"
+	if run.MemoryResultAuthorized(stamp) || run.MemoryResultAuthorized("") {
+		t.Fatal("a changed grant reauthorized an old query")
+	}
+}
+
 func (p *legacyEvidenceTools) MemoryResultAuthorization() string { return p.stamp }
 func (p *legacyEvidenceTools) MemoryResultAuthorized(stamp string) bool {
 	return stamp != "" && stamp == p.stamp

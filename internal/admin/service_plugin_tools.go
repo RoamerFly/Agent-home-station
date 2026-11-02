@@ -190,7 +190,7 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 			expectedEpoch, expectedAuth = "", p.privateSurfAuthorization()
 		}
 		if g, ok := companion.GenerationEvidenceFromContext(ctx); ok && (g.RecallEpoch != expectedEpoch || g.Authorization != expectedAuth) {
-			return "", errors.New("generation_evidence_changed")
+			return "", &mcptools.WebError{Code: "generation_evidence_changed", Stage: "authorization"}
 		}
 		if p.trace.Source != nil && p.trace.Source.EventID != "" {
 			inv.SourceVersions[p.trace.Source.EventID] = p.trace.Source.Revision
@@ -643,6 +643,7 @@ func (s servicePluginPolicy) Validate(ctx context.Context, j pluginhost.Job, cap
 	if j.Tool == "web.search" {
 		var args struct {
 			Query   string `json:"query"`
+			Source  string `json:"source"`
 			Count   *int   `json:"count"`
 			Offset  *int   `json:"offset"`
 			Limit   *int   `json:"limit"`
@@ -652,7 +653,16 @@ func (s servicePluginPolicy) Validate(ctx context.Context, j pluginhost.Job, cap
 		if strictServicePluginJSON(j.Arguments, &args) != nil || args.Query != result.Query {
 			return pluginruntime.VerifiedResult{}, errors.New("plugin query binding changed")
 		}
-		if result.Backend == "deepseek" {
+		if args.Source == "bilibili" {
+			if result.Backend != "bilibili" || !s.observed[result.Source] {
+				return pluginruntime.VerifiedResult{}, errors.New("bilibili result source not observed")
+			}
+			for _, item := range result.Items {
+				if !strings.HasPrefix(item.URL, "https://www.bilibili.com/video/BV") || !mcptools.IsPublicVideoPage(item.URL) {
+					return pluginruntime.VerifiedResult{}, errors.New("unexpected bilibili result URL")
+				}
+			}
+		} else if result.Backend == "deepseek" {
 			if err := s.validateDeepSeekResult(ctx, j, args.Query, args.Count, args.Offset, args.Limit, result); err != nil {
 				return pluginruntime.VerifiedResult{}, err
 			}

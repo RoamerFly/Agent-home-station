@@ -15,6 +15,11 @@
             "type": "string",
             "minLength": 1
           },
+          "source": {
+            "type": "string",
+            "enum": ["bilibili"],
+            "description": "选择 bilibili 可直接按作品或歌手搜索 B 站视频。省略时使用配置的通用搜索后端。"
+          },
           "count": {
             "type": "integer",
             "minimum": 1

@@ -268,14 +268,24 @@ def discover(args, get):
             "complete": end == len(items), "untrusted_external_content": True}
 
 
-def public_search(args, get):
+def public_search(args, get, bilibili_only=False):
     if set(args) - {"query", "count", "offset", "limit", "max_bytes", "timeout_seconds"}:
         raise ValueError("invalid_search_arguments")
     query = args.get("query")
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query_required")
     count = integer(args, "count", 6, 1)
-    url = "https://www.bing.com/search?" + urllib.parse.urlencode({"q": query.strip(), "format": "rss"})
+    term = query.strip() + (" site:bilibili.com/video" if bilibili_only else "")
+    def matches(item):
+        if not bilibili_only:
+            return relevant(query, item)
+        if not re.fullmatch(r"https://(?:www\.)?bilibili\.com/video/BV[A-Za-z0-9]{10}/?(?:\?[^#]*)?", item["url"]):
+            return False
+        qualifiers = {"原唱", "原曲", "试听", "音频", "下载", "音乐", "歌曲", "mv", "b站", "bilibili"}
+        terms = [t for t in re.findall(r"[^\W_]+", query.casefold()) if t not in qualifiers]
+        text = (item["title"] + " " + item["summary"]).casefold()
+        return bool(terms) and all(t in text for t in terms)
+    url = "https://www.bing.com/search?" + urllib.parse.urlencode({"q": term, "format": "rss"})
     page, failure = read_page(get, url, args)
     items, seen = [], set()
     source = url
@@ -297,17 +307,17 @@ def public_search(args, get):
                 items.append({"url": link, "title": clean(item.findtext("title", "")), "summary": clean(" ".join(summary.parts))})
         except ET.ParseError:
             items = []
-    items = [item for item in items if relevant(query, item)]
+    items = [item for item in items if matches(item)]
     fallback = not items
     if fallback:
-        secondary = "https://www.so.com/s?" + urllib.parse.urlencode({"q": query.strip()})
+        secondary = "https://www.so.com/s?" + urllib.parse.urlencode({"q": term})
         page, failure = read_page(get, secondary, args)
         if failure:
             return failure
         body, _, source = page
         parser = SearchText()
         parser.feed(body.decode("utf8", errors="replace"))
-        items = [item for item in parser.results if relevant(query, item)]
+        items = [item for item in parser.results if matches(item)]
     if not items:
         return {"ok": False, "error": "search_no_relevant_results"}
     items = items[:count]
@@ -315,8 +325,8 @@ def public_search(args, get):
     end = min(len(items), offset + limit)
     if offset > len(items):
         raise ValueError("offset_outside_results")
-    return {"ok": True, "backend": "public", "query": query, "source": source, "items": items[offset:end],
-            "fallback_used": fallback,
+    return {"ok": True, "backend": "bilibili" if bilibili_only else "public", "query": query, "source": source, "items": items[offset:end],
+            "fallback_used": fallback or bilibili_only,
             "requested_count": count, "effective_provider_count": len(items), "requested_limit": limit, "provider_items": len(items), "next_offset": end if end < len(items) else None,
             "provider_page_exhausted": end == len(items), "untrusted_external_content": True}
 
@@ -357,7 +367,55 @@ def deepseek_search(args, route):
             "next_offset": end if end < len(items) else None, "provider_page_exhausted": end == len(items), "untrusted_external_content": True}
 
 
+def bilibili_search(args, get):
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query_required")
+    count = integer(args, "count", 6, 1)
+    offset, limit = integer(args, "offset", 0, 0), integer(args, "limit", 8, 1)
+    page_size = 20
+    number, start = divmod(offset, page_size)
+    endpoint = "https://api.bilibili.com/x/web-interface/search/type?" + urllib.parse.urlencode(
+        {"search_type": "video", "keyword": query.strip(), "page": number + 1, "page_size": page_size})
+    page, failure = read_page(get, endpoint, args)
+    if failure:
+        return failure
+    body, _, final = page
+    data = json.loads(body)
+    if final != endpoint or data.get("code") != 0 or not isinstance(data.get("data"), dict):
+        return {"ok": False, "error": "bilibili_search_unavailable"}
+    result = data["data"]
+    rows = result.get("result") or []
+    if not isinstance(rows, list) or result.get("page") != number + 1 or result.get("pagesize") != page_size:
+        return {"ok": False, "error": "bilibili_search_unavailable"}
+    total = min(count, result["numResults"], result["numPages"] * page_size)
+    if offset > total:
+        raise ValueError("offset_outside_results")
+    window = rows[start:start + min(limit, total - offset)]
+    items = []
+    for row in window:
+        bvid = row.get("bvid", "")
+        if not re.fullmatch(r"BV[A-Za-z0-9]{10}", bvid):
+            continue
+        title = PageText()
+        title.feed(row.get("title", ""))
+        items.append({"url": "https://www.bilibili.com/video/" + bvid + "/",
+                      "title": clean("".join(title.parts)), "summary": clean(row.get("author", ""))})
+    end = offset + len(window)
+    return {"ok": True, "backend": "bilibili", "query": query, "source": final, "items": items,
+            "requested_count": count, "requested_limit": limit, "effective_provider_count": total,
+            "provider_items": result["numResults"], "next_offset": end if window and end < total else None,
+            "provider_page_exhausted": not window or end >= total, "untrusted_external_content": True}
+
+
 def search(args, get, route=None, configuration=None):
+    if args.get("source") == "bilibili":
+        result = bilibili_search(args, get)
+        if result.get("ok") and (result.get("items") or args.get("offset", 0) > 0):
+            return result
+        if not result.get("ok") and result.get("error") not in ("http_status", "bilibili_search_unavailable"):
+            return result
+        return public_search({k:v for k,v in args.items() if k != "source"}, get, bilibili_only=True)
     backend = (configuration or {}).get("search_backend", "public")
     if backend == "public":
         return public_search(args, get)
@@ -476,7 +534,7 @@ class Wire:
                     if not isinstance(self.configuration, dict):
                         raise ValueError("invalid_configuration")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.3.0"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.3.1"}}
                 elif method == "ping" and initialized:
                     pass
                 elif method == "tools/call" and initialized:

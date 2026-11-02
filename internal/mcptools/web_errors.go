@@ -105,6 +105,10 @@ func failureSummary(err error) string {
 			return "分享返回的内容类型暂不支持读取；未按标题生成回复"
 		case "video_page_metadata_unavailable":
 			return "未取得视频页面的有效播放资料；可能是页面结构变化、验证页或已下架"
+		case "generation_evidence_changed":
+			return "本轮消息依据或工具授权已变化，联网请求未发出"
+		case "bilibili_search_unavailable":
+			return "B站搜索未返回可用结果，可改用网页搜索或直接读取已有 BV 分享链接"
 		case "video_public_playback_unavailable":
 			return "该视频未提供可直接使用的免登录公开播放文件，未尝试账号或付费访问"
 		case "video_progressive_unavailable":

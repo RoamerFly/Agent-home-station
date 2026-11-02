@@ -250,3 +250,71 @@ func TestLiveWebPublicMigrationIsolationContract(t *testing.T) {
 		t.Fatal("same plugin candidates duplicated or re-fetched", discovered, calls, err)
 	}
 }
+
+func TestLiveBilibiliAudioAliasFromGroup(t *testing.T) {
+	query, python := os.Getenv("WECHAT_TEST_BILI_QUERY"), os.Getenv("WECHAT_PLUGIN_TEST_PYTHON")
+	if query == "" || python == "" {
+		t.Skip("opt-in public Bilibili search in an isolated account")
+	}
+	f, p := trustedAgent(t)
+	const group = "example@chatroom"
+	f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: group, Mode: "mention"})
+	f.manager.config.Companion.Permissions.SendFile = true
+	p.SetTrace(companion.Input{Account: "test", Channel: "wechat", Thread: group, Sender: "example-member", TraceID: "audio-search", IsGroup: true})
+	store, _ := installPublicWebFixture(t, f)
+	helper, err := filepath.Abs("../../scripts/windows_plugin_host.pyw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := pluginruntime.NewController(store, pluginruntime.InstalledExecutor(store, pluginruntime.Options{Python: python, Pythonw: filepath.Join(filepath.Dir(python), "pythonw.exe"), WindowsHelper: helper, RuntimeRoots: []string{filepath.Dir(python)}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	f.manager.packageRuntime, f.manager.packageRuntimeReady = controller, true
+	args, _ := json.Marshal(map[string]any{"query": query, "count": 6})
+	p.webPageReader = func(ctx context.Context, u string, max int64, timeout time.Duration) ([]byte, string, string, error) {
+		data, mime, final, err := mcptools.ReadPublicPluginPage(ctx, u, max, timeout)
+		var failure *mcptools.WebError
+		if errors.As(err, &failure) {
+			t.Logf("public GET stage=%s code=%s HTTP=%d", failure.Stage, failure.Code, failure.Status)
+		}
+		return data, mime, final, err
+	}
+	epoch, err := f.manager.memory.RecallEpoch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := companion.WithStoredGenerationEvidence(t.Context(), companion.GenerationEvidence{RecallEpoch: epoch, Authorization: p.MemoryResultAuthorization()})
+	raw, err := p.Call(ctx, "web_audio_search", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Job struct {
+			Result serviceWebResult `json:"result"`
+		} `json:"job"`
+	}
+	if json.Unmarshal([]byte(raw), &result) != nil || result.Job.Result.Backend != "bilibili" || len(result.Job.Result.Items) == 0 {
+		t.Fatal("no verified Bilibili candidates")
+	}
+	for _, item := range result.Job.Result.Items {
+		t.Logf("public candidate %s %s", item.Title, item.URL)
+	}
+	if shared := os.Getenv("WECHAT_TEST_BILI_SHARE"); shared != "" {
+		f.manager.native = &fakeTools{fakeNative: f.native}
+		for _, page := range []string{result.Job.Result.Items[0].URL, shared} {
+			if !mcptools.IsPublicVideoPage(page) {
+				t.Fatal("expected a public video page")
+			}
+			args, _ := json.Marshal(map[string]any{"kind": "file", "audio_only": true, "url": page})
+			raw, err := p.Call(ctx, "web_media_download", args)
+			var output struct {
+				Media []companion.GeneratedMedia `json:"media"`
+			}
+			if err != nil || json.Unmarshal([]byte(raw), &output) != nil || len(output.Media) != 1 || output.Media[0].ID == "" || output.Media[0].Kind != "file" {
+				t.Fatal("audio file was not staged for reuse", err)
+			}
+		}
+	}
+}

@@ -51,7 +51,14 @@ func parseBiliPage(body []byte, bvid string, part int) (biliPage, error) {
 		return out, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_metadata"}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data[1:]))
-	if decoder.Decode(&out) != nil || out.Video.BVID != bvid || out.Video.CID <= 0 || len(out.Video.Title) > 1024 {
+	if decoder.Decode(&out) != nil {
+		return out, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_metadata"}
+	}
+	return selectBiliPart(out, bvid, part)
+}
+
+func selectBiliPart(out biliPage, bvid string, part int) (biliPage, error) {
+	if out.Video.BVID != bvid || out.Video.CID <= 0 || strings.TrimSpace(out.Video.Title) == "" || len(out.Video.Title) > 1024 || part < 1 {
 		return out, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_metadata"}
 	}
 	if part > 1 {
@@ -143,7 +150,7 @@ func downloadPublicVideoPage(ctx context.Context, raw string, limit int64, audio
 	part := 1
 	if p := u.Query().Get("p"); p != "" {
 		n, e := strconv.Atoi(p)
-		if e != nil || n < 1 || n > 100 {
+		if e != nil || n < 1 {
 			return out, &WebError{Code: "video_part_unavailable"}
 		}
 		part = n
@@ -161,6 +168,24 @@ func downloadPublicVideoPage(ctx context.Context, raw string, limit int64, audio
 		return out, err
 	}
 	state, err := parseBiliPage(body, match[1], part)
+	// Some public share pages contain only the player shell. Resolve the
+	// same BV through the public metadata API before selecting its exact CID.
+	if err != nil && !bytes.Contains(body, []byte("window.__INITIAL_STATE__")) {
+		viewURL := "https://api.bilibili.com/x/web-interface/view?bvid=" + match[1]
+		raw, _, final, readErr := publicRead(metaCtx, viewURL, maxBody)
+		if readErr != nil {
+			return out, readErr
+		}
+		var view struct {
+			Code *int            `json:"code"`
+			Data json.RawMessage `json:"data"`
+		}
+		var exact biliPage
+		if final != viewURL || json.Unmarshal(raw, &view) != nil || view.Code == nil || *view.Code != 0 || json.Unmarshal(view.Data, &exact.Video) != nil {
+			return out, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_metadata"}
+		}
+		state, err = selectBiliPart(exact, match[1], part)
+	}
 	if err != nil {
 		return out, err
 	}

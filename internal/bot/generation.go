@@ -605,17 +605,16 @@ type generationTools struct {
 	job           *generationJob
 }
 
-// The observer's readonly host origin participates in model evidence checks.
-// Other tool adapters retain their existing generation behavior.
+// Capture and recheck the same authority that the actual tool invocation uses.
 func (t *generationTools) MemoryResultAuthorization() string {
-	if scoped, ok := t.inner.(interface{ PrivateSurfAuthorization() string }); ok {
-		return scoped.PrivateSurfAuthorization()
+	if scoped, ok := t.inner.(interface{ MemoryResultAuthorization() string }); ok {
+		return scoped.MemoryResultAuthorization()
 	}
 	return ""
 }
 func (t *generationTools) MemoryResultAuthorized(stamp string) bool {
-	if scoped, ok := t.inner.(interface{ PrivateSurfAuthorization() string }); ok {
-		return stamp != "" && stamp == scoped.PrivateSurfAuthorization()
+	if scoped, ok := t.inner.(interface{ MemoryResultAuthorized(string) bool }); ok {
+		return stamp != "" && scoped.MemoryResultAuthorized(stamp)
 	}
 	return false
 }
