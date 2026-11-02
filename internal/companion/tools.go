@@ -38,6 +38,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	system += "\n当前实际工具schema与登记资源是本轮能力依据，旧聊天中的环境或声线不可用结论可能已过时。指定声线必须核验真实身份、适用引擎及来源，并保留到生成与交付；不要改用未指定的声音。具体操作按需发现并读取工具说明，未真实执行不说刚试过或合成失败。"
 	system += historyRetrievalPolicy
 	historyNeed := requestedHistory(turns)
+	if historyNeed != nil {
+		system += "\n本轮引用视频只作历史定位锚点，不属于待总结材料。chronological_history_materials按原消息时间从早到晚列出目标，逐条对应其中position与来源，覆盖目标集合；不要用锚点内容替换其中一条。资料的工具完成顺序不是视频分享顺序。"
+	}
 	native, nativeFunctions := e.model.(interface {
 		ChatFunctions(context.Context, string, []map[string]string, []mcptools.Tool) (string, error)
 	})
@@ -197,12 +200,13 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 		if lookupErr == nil {
 			historyNeed.rememberDirectory(result)
 			historyNeed.existingContent(turns)
+			result = historyNeed.directoryForModel(result)
 			returnedTools = append(returnedTools, "memory_search")
 		} else {
 			result = mcptools.FailureDescription(lookupErr)
 		}
 		turns = append(turns, map[string]string{"role": "user", "content": e.toolFeedback(ctx, "memory_search", result, at, lookupErr, false)})
-		turns = append(turns, map[string]string{"role": "user", "content": "宿主已按当前会话与引用锚点查找前序视频/分享的来源目录（首批最多8条，可按next_cursor继续；不是请求总量上限）。这是当前群的只读目录，不是作者作品列表，也不表示已经读过视频。明确目标是群历史时，按原顺序memory_read(event=true,part=transcript)优先读取已保存的口述正文，画面细节再part=observation，不足再video_inspect。范围仍有歧义时先澄清群历史还是作者作品，不要求重新转发。分享候选需核对是否确为视频；未覆盖完整请求时保存进度，不能只重述引用视频当作完成。"})
+		turns = append(turns, map[string]string{"role": "user", "content": "宿主已选取引用锚点之前最近的前序视频/分享，再按原消息时间从早到晚呈现（首批最多8条，next_cursor仍按查询方向续页，不是请求总量上限）。引用视频只作定位，不在总结集合内。目录不表示已读；memory_read(event=true,part=transcript)优先读取保存正文，不足再video_inspect。读取结果按chronological_history_materials的position归回原视频，不按工具完成顺序编号。"})
 		if err := e.ValidateGenerationEvidence(ctx, callEvidence); err != nil {
 			return Decision{}, err
 		}
@@ -329,9 +333,10 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 		}
 		turns = e.refreshMemoryPackets(ctx, turns)
 		turns = compactActionTurns(system, turns)
+		modelTurns := historyNeed.contextForModel(turns)
 		catalogBytes, _ := json.Marshal(activeTools)
 		settings := e.memorySettings()
-		if err := ValidateContextWindow(system, turns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
+		if err := ValidateContextWindow(system, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
 			return Decision{}, err
 		}
 		var answer string
@@ -349,28 +354,28 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 			if autonomous {
 				budget = "\n自主行动没有工具次数配额。每次依据真实反馈决定下一步，失败先查原因并修复再验证；长时间等待请保存任务检查点，避免忙轮询。发送未知时读取目标会话真实记录再恢复原任务。"
 			}
-			if err := ValidateContextWindow(system+budget, turns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
+			if err := ValidateContextWindow(system+budget, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
 				return Decision{}, err
 			}
-			if err := e.Store.recordContextMetrics(ctx, system+budget, turns, catalogBytes); err != nil && e.ToolLog != nil {
+			if err := e.Store.recordContextMetrics(ctx, system+budget, modelTurns, catalogBytes); err != nil && e.ToolLog != nil {
 				e.ToolLog("context_metrics_write_failed")
 			}
 			if !contextReported {
-				e.reportContext(system+budget, turns, activeTools)
+				e.reportContext(system+budget, modelTurns, activeTools)
 				contextReported = true
 			}
-			e.capturePreparedContext(system+budget, turns, activeTools)
-			answer, err = native.ChatFunctions(ctx, system+budget, turns, activeTools)
+			e.capturePreparedContext(system+budget, modelTurns, activeTools)
+			answer, err = native.ChatFunctions(ctx, system+budget, modelTurns, activeTools)
 		} else {
-			if err := e.Store.recordContextMetrics(ctx, system, turns, nil); err != nil && e.ToolLog != nil {
+			if err := e.Store.recordContextMetrics(ctx, system, modelTurns, nil); err != nil && e.ToolLog != nil {
 				e.ToolLog("context_metrics_write_failed")
 			}
 			if !contextReported {
-				e.reportContext(system, turns, nil)
+				e.reportContext(system, modelTurns, nil)
 				contextReported = true
 			}
-			e.capturePreparedContext(system, turns, nil)
-			answer, err = e.model.Chat(ctx, system, turns)
+			e.capturePreparedContext(system, modelTurns, nil)
+			answer, err = e.model.Chat(ctx, system, modelTurns)
 		}
 		if err != nil {
 			return Decision{}, err
@@ -896,7 +901,17 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 				e.ToolLog("mcp_tool_call_succeeded")
 			}
 		}
+		if historyNeed != nil && response.Tool == "memory_search" && callErr == nil {
+			var query MemoryQuery
+			if json.Unmarshal(args, &query) == nil && query.Originals && query.BeforeMessageID == historyNeed.Anchor {
+				historyNeed.rememberDirectory(result)
+				result = historyNeed.directoryForModel(result)
+			}
+		}
 		payload := e.toolFeedback(ctx, response.Tool, result, toolStartedAt, callErr, blockedResult != "")
+		if callErr == nil && blockedResult == "" {
+			payload = historyNeed.tagReadPacket(response.Tool, args, result, payload)
+		}
 		turns = append(turns, deepseek.AssistantTurn(ctx, answer), map[string]string{"role": "user", "content": payload})
 	}
 	return reviewSurf(silent("tool_budget_exhausted"))

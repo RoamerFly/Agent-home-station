@@ -22,6 +22,8 @@ type historyMaterialNeed struct {
 	ContentRead          bool
 	ReadFailed           bool
 	Prompted             bool
+	Events               map[string]MemoryEvent
+	ReadPackets          map[string]string // exact tool feedback -> verified directory event
 }
 
 func historyCount(text string) int {
@@ -81,6 +83,7 @@ func requestedHistory(turns []map[string]string) *historyMaterialNeed {
 		if json.Unmarshal([]byte(turns[i]["content"]), &p) != nil || p.Kind != "current_message" {
 			continue
 		}
+		p.Text = UserRequestText(p.Text)
 		for _, s := range []string{"不要读取前", "不要查前", "别查前", "别读取前", "不用读取前", "无需读取前", "不要总结前", "别总结前", "作者", "主页", "作品列表", "视频号里", "该账号", "这个账号"} {
 			if strings.Contains(p.Text, s) {
 				return nil
@@ -118,10 +121,14 @@ func (h *historyMaterialNeed) rememberDirectory(result string) {
 	if json.Unmarshal([]byte(result), &p) != nil {
 		return
 	}
+	if h.Events == nil {
+		h.Events = map[string]MemoryEvent{}
+	}
 	for _, item := range p.Items {
-		if item.Event != nil {
+		if item.Event != nil && item.Event.Trace != h.Anchor {
 			h.IDs[item.Event.ID] = true
 			h.MessageIDs[item.Event.Trace] = item.Event.ID
+			h.Events[item.Event.ID] = *item.Event
 		}
 	}
 }
@@ -251,7 +258,13 @@ func (h *historyMaterialNeed) unreadDirectory() string {
 			ids = append(ids, id)
 		}
 	}
-	sort.Strings(ids)
+	sort.SliceStable(ids, func(i, j int) bool {
+		a, b := h.Events[ids[i]], h.Events[ids[j]]
+		if a.ID == "" || b.ID == "" {
+			return ids[i] < ids[j]
+		}
+		return historyEventLess(a, b)
+	})
 	rows := []map[string]string{}
 	for _, id := range ids {
 		row := map[string]string{"event_id": id}
