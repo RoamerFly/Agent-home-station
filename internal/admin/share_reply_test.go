@@ -14,6 +14,66 @@ import (
 
 type manualShareNative struct{ *fakeTools }
 
+type manualShareInputModel struct {
+	calls          int
+	hasRuntimeGoal bool
+}
+
+func (m *manualShareInputModel) Chat(_ context.Context, _ string, turns []map[string]string) (string, error) {
+	m.calls++
+	for _, turn := range turns {
+		var p map[string]any
+		if json.Unmarshal([]byte(turn["content"]), &p) == nil && p["kind"] == "current_message" {
+			m.hasRuntimeGoal = p["runtime_context"] != nil
+		}
+	}
+	return `{"action":"silent","messages":[],"reason":"synthetic_read_only_acceptance"}`, nil
+}
+
+func TestManualShareInputPreservesNativeSourceInsteadOfAdminWrapper(t *testing.T) {
+	f := setup(t)
+	c := companion.Defaults()
+	c.Enabled = true
+	c.Permissions.Remember = true
+	empty := ""
+	msg := linuxnative.Message{ID: "synthetic-share", AccountID: "test", ThreadID: "filehelper", SenderID: "synthetic-sender", ServerID: "123", Type: 49, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	original := companion.Input{Channel: "wechat", Account: msg.AccountID, Thread: msg.ThreadID, Sender: msg.SenderID, TraceID: msg.ID, OriginalText: &empty, MessageTime: msg.CreatedAt, Text: "收到分享", Source: &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: msg.ID, ServerID: msg.ServerID, Account: msg.AccountID, Thread: msg.ThreadID, Sender: msg.SenderID, MessageType: 49}}
+	if err := f.manager.memory.Observe(original, c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	in := original
+	in.Text = "管理员要求重新总结，不能登记为用户原话"
+	in.Source = nil
+	in.OriginalText = nil
+	if err := bindManualShareInput(f.manager, &in, msg, "[微信视频实际内容观察] 合成资料"); err != nil {
+		t.Fatal(err)
+	}
+	if in.Source == nil || in.Source.EventID == "" || in.OriginalText == nil || *in.OriginalText != "" || !in.HistoryObserved || !in.BackgroundResult || in.OriginTraceID != msg.ID || len(in.IncomingMedia) != 1 || in.IncomingMedia[0].Source.EventID != in.Source.EventID {
+		t.Fatal("manual reread lost source/observation boundaries", in)
+	}
+	if _, ok := f.manager.memory.SourceForInput(in); !ok {
+		t.Fatal("manual reread rejected its existing source")
+	}
+	in.Mode = "direct"
+	in.ConversationDelivery = true
+	model := &manualShareInputModel{}
+	engine, err := companion.New(c, f.manager.memory, model, "synthetic policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = engine.Respond(t.Context(), in); err != nil || model.calls == 0 || !model.hasRuntimeGoal {
+		t.Fatal("manual reread failed before generation or lost its explicit goal", err, model.calls, model.hasRuntimeGoal)
+	}
+	scope, err := f.manager.memory.Read(companion.ScopeID(in.Channel, in.Account, in.Thread), c, time.Now())
+	if err != nil || len(scope.Messages) != 1 || scope.Messages[0].FullText != "" {
+		t.Fatal("admin wrapper was stored as new native speech", err, len(scope.Messages))
+	}
+	msg.SenderID = "another-member"
+	if err := bindManualShareInput(f.manager, &in, msg, "synthetic"); err == nil {
+		t.Fatal("different uploader accepted")
+	}
+}
+
 func (n *manualShareNative) Message(ctx context.Context, id string) (linuxnative.Message, error) {
 	kind := 51
 	account := "test"

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"syscall"
 	"time"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
@@ -65,6 +67,14 @@ func compressionFailure(err error) (string, string, int) {
 		return "context_compression_in_progress", "这个会话正在压缩，其他会话仍可独立压缩", 409
 	case errors.Is(err, companion.ErrSummaryInvalid):
 		return "context_summary_invalid", "模型摘要格式或长度仍不合要求，已尝试一次格式修复；原始记忆保留", 502
+	case errors.Is(err, companion.ErrSummarySourceMissing):
+		return "context_summary_source_missing", "模型摘要缺少事实来源编号，修复后仍不完整；未覆盖原摘要和聊天", 502
+	case errors.Is(err, companion.ErrSummarySourceInvalid):
+		return "context_summary_source_invalid", "模型摘要引用了本批消息或有效旧摘要之外的来源，修复后仍未通过；未覆盖原摘要和聊天", 502
+	case errors.Is(err, os.ErrPermission):
+		return "context_compression_permission_denied", "保存摘要时本地文件权限不足；原始记忆保留", 500
+	case errors.Is(err, syscall.ENOSPC):
+		return "context_compression_disk_full", "保存摘要时磁盘空间不足；原始记忆保留", 500
 	case errors.Is(err, companion.ErrContextChanged):
 		return "context_changed_during_compression", "会话内容在压缩期间持续变化，已重新读取后再试一次；原始记忆保留，可稍后重试", 409
 	case errors.Is(err, context.DeadlineExceeded):
@@ -72,5 +82,5 @@ func compressionFailure(err error) (string, string, int) {
 	case errors.Is(err, context.Canceled):
 		return "context_compression_cancelled", "压缩请求已中止，原始记忆保留", 408
 	}
-	return "context_compression_storage_or_configuration", "压缩未完成，请检查模型配置与本地存储权限、磁盘空间；原始记忆保留", 502
+	return "context_compression_unclassified", "压缩未完成：发生尚未分类的内部错误，不能据此判断为权限或磁盘问题；原始记忆保留", 502
 }

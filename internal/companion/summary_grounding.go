@@ -6,9 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sort"
 )
 
-func (e *Engine) bindSummarySources(ctx context.Context, in Input, s *contextSummary, selected []Turn) error {
+var ErrSummarySourceMissing = errors.New("summary_item_source_missing")
+var ErrSummarySourceInvalid = errors.New("summary_item_source_invalid")
+
+func (e *Engine) bindSummarySources(ctx context.Context, in Input, s *contextSummary, selected []Turn, previous []SourceRef) error {
 	refs := map[string]SourceRef{}
 	for _, t := range selected {
 		if t.EventID != "" && t.Role == "user" {
@@ -25,20 +29,24 @@ func (e *Engine) bindSummarySources(ctx context.Context, in Input, s *contextSum
 			refs[t.EventID] = r
 		}
 	}
-	for _, r := range s.Sources {
+	// Previous provenance comes from the saved host snapshot, not a model's
+	// new sources array. An invented source cannot introduce an unseen event.
+	for _, r := range previous {
 		ev, err := e.Store.ReadEvent(ctx, []string{ScopeID(in.Channel, in.Account, in.Thread)}, r.EventID)
 		if err == nil && ev.Revision == r.Revision {
 			refs[r.EventID] = r
 		}
 	}
+	used := map[string]bool{}
 	validate := func(ids []string) error {
 		if len(ids) == 0 && in.Source != nil {
-			return errors.New("summary_item_source_missing")
+			return ErrSummarySourceMissing
 		}
 		for _, id := range ids {
 			if _, ok := refs[id]; !ok {
-				return errors.New("summary_item_source_invalid")
+				return ErrSummarySourceInvalid
 			}
+			used[id] = true
 		}
 		return nil
 	}
@@ -63,8 +71,13 @@ func (e *Engine) bindSummarySources(ctx context.Context, in Input, s *contextSum
 		}
 	}
 	s.Sources = nil
-	for _, r := range refs {
-		s.Sources = append(s.Sources, r)
+	ids := make([]string, 0, len(used))
+	for id := range used {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		s.Sources = append(s.Sources, refs[id])
 	}
 	return nil
 }
