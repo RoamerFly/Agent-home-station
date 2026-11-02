@@ -20,13 +20,14 @@ import (
 	"wechat-bot/internal/mediadecode"
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/transcript"
 )
 
 func (p *permittedTools) videoTools() []mcptools.Tool {
 	if p.trace.Preview || p.trace.ReportOnly || p.trace.Account != p.manager.native.Account() || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) || !p.manager.Config().Behavior.ReadVideos {
 		return nil
 	}
-	return []mcptools.Tool{agentTool("video_inspect", "视频精读/逐帧读取: inspect actual video metadata, consecutive decoded frames, or arbitrary audio ranges. Automatic6-frame overview is a DEFAULT, not a capability ceiling. Choose ONE source: asset_id, message_id, or public url. Trusted owners may inspect another authorized conversation of THIS account: use source_thread_id with asset_id; a message_id resolves its actual source automatically. Ordinary members remain current-conversation only. This reads media, not private service directories. action=info returns actual frame count and timestamps metadata. action=frames defaults start_frame=0,step=1,page_size=24,batch_size=8,max_dimension=960,analysis_tokens=4096; ALL these are adjustable to user needs. page_size has no64-frame clamp; work is decoded/analyzed batch by batch. step>1 is sampling, never call it frame-by-frame. Return actual indexes/timestamps, effective settings and next_start_frame; continue on partial completion. action=audio defaults duration_seconds=90,audio_chunk_seconds=180,audio_timeout_seconds=60; longer requested ranges are processed completely in chunks. requested_range_complete describes that range; complete/video_audio_complete refer to the whole audio endpoint, so continue next_start_seconds when the user wants all audio. Adjust chunk size and timeout; if PCM payload must be split to fit transport, return actual size/reason instead of silently shortening the range. timeout_seconds defaults240 for the whole call;0 adds no local deadline but preserves caller cancellation. audio_timeout_seconds=0 also inherits caller cancellation. Provider-specific limits are actual feedback, not a project image-count quota. question customizes analysis. No WeChat send. For long work persist checkpoints and continue returned cursors. Input {action:info|frames|audio,source_thread_id?,asset_id?|message_id?|url?,start_frame?,page_size?,step?,batch_size?,max_dimension?,analysis_tokens?,timeout_seconds?,start_seconds?,duration_seconds?,audio_chunk_seconds?,audio_timeout_seconds?,question?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["info","frames","audio"]},"source_thread_id":{"type":"string"},"asset_id":{"type":"string"},"message_id":{"type":"string"},"url":{"type":"string"},"start_frame":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1},"step":{"type":"integer","minimum":1},"batch_size":{"type":"integer","minimum":1},"max_dimension":{"type":"integer","minimum":1},"analysis_tokens":{"type":"integer","minimum":1},"timeout_seconds":{"type":"integer","minimum":0},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","minimum":0},"audio_chunk_seconds":{"type":"number","minimum":0},"audio_timeout_seconds":{"type":"integer","minimum":0},"question":{"type":"string"}},"required":["action"],"additionalProperties":false}`)}
+	return []mcptools.Tool{agentTool("video_inspect", "视频精读/逐帧读取: inspect actual video metadata, consecutive decoded frames, or arbitrary audio ranges. Automatic6-frame overview is a DEFAULT, not a capability ceiling. Choose ONE source: asset_id, message_id, or public url. Trusted owners may inspect another authorized conversation of THIS account: use source_thread_id with asset_id; a message_id resolves its actual source automatically. Ordinary members remain current-conversation only. This reads media, not private service directories. action defaults to info when omitted; info returns metadata only, then choose frames/audio for content. action=info returns actual frame count and timestamps metadata. action=frames defaults start_frame=0,step=1,page_size=24,batch_size=8,max_dimension=960,analysis_tokens=4096; ALL these are adjustable to user needs. page_size has no64-frame clamp; work is decoded/analyzed batch by batch. step>1 is sampling, never call it frame-by-frame. Return actual indexes/timestamps, effective settings and next_start_frame; continue on partial completion. action=audio defaults duration_seconds=90,audio_chunk_seconds=180,audio_timeout_seconds=60; longer requested ranges are processed completely in chunks. requested_range_complete describes that range; complete/video_audio_complete refer to the whole audio endpoint, so continue next_start_seconds when the user wants all audio. Adjust chunk size and timeout; if PCM payload must be split to fit transport, return actual size/reason instead of silently shortening the range. timeout_seconds defaults240 for the whole call;0 adds no local deadline but preserves caller cancellation. audio_timeout_seconds=0 also inherits caller cancellation. Provider-specific limits are actual feedback, not a project image-count quota. question customizes analysis. No WeChat send. For long work persist checkpoints and continue returned cursors. Input {action:info|frames|audio,source_thread_id?,asset_id?|message_id?|url?,start_frame?,page_size?,step?,batch_size?,max_dimension?,analysis_tokens?,timeout_seconds?,start_seconds?,duration_seconds?,audio_chunk_seconds?,audio_timeout_seconds?,question?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["info","frames","audio"],"default":"info"},"source_thread_id":{"type":"string"},"asset_id":{"type":"string"},"message_id":{"type":"string"},"url":{"type":"string"},"start_frame":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1},"step":{"type":"integer","minimum":1},"batch_size":{"type":"integer","minimum":1},"max_dimension":{"type":"integer","minimum":1},"analysis_tokens":{"type":"integer","minimum":1},"timeout_seconds":{"type":"integer","minimum":0},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","minimum":0},"audio_chunk_seconds":{"type":"number","minimum":0},"audio_timeout_seconds":{"type":"integer","minimum":0},"question":{"type":"string"}},"additionalProperties":false}`)}
 }
 
 type videoInspectionInput struct {
@@ -252,6 +253,14 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 	if json.Unmarshal(args, &in) != nil || in.Start < 0 || in.PageSize < 0 || in.Step < 0 || in.AudioStart < 0 || in.AudioLength < 0 || in.Tokens < 0 || in.BatchSize < 0 || in.MaxDimension < 0 || in.AudioChunk < 0 {
 		return "", toolInputError("视频精读参数无效")
 	}
+	// Discovery is a safe, read-only default. Validate explicit operations
+	// before resolving/downloading a source; never guess frames vs audio.
+	if in.Action == "" {
+		in.Action = "info"
+	}
+	if in.Action != "info" && in.Action != "frames" && in.Action != "audio" {
+		return "", toolInputError("action应为info、frames或audio")
+	}
 	seconds := 240
 	if in.Timeout != nil {
 		seconds = *in.Timeout
@@ -291,7 +300,7 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 		return "", err
 	}
 	out := map[string]any{"source_thread_id": in.SourceThread, "origin_thread_id": p.trace.Thread, "source": source, "metadata": meta, "read_only": true, "usage": "frames: start_frame=0,step=1; follow next_start_frame until complete. audio: follow next_start_seconds. Total pages are not limited."}
-	out["effective_options"] = map[string]any{"batch_size": in.BatchSize, "max_dimension": in.MaxDimension, "analysis_tokens": in.Tokens, "timeout_seconds": seconds}
+	out["effective_options"] = map[string]any{"action": in.Action, "batch_size": in.BatchSize, "max_dimension": in.MaxDimension, "analysis_tokens": in.Tokens, "timeout_seconds": seconds}
 	encode := func() (string, error) {
 		if !p.inspectionThreadAllowed(in.SourceThread) {
 			return "", toolInputError("video_source_authorization_revoked")
@@ -523,7 +532,8 @@ func (p *permittedTools) inspectPluginAudioRange(ctx context.Context, data []byt
 		if stop <= next {
 			return toolInputError("音轨读取未推进，已停止以保留可核对的起点")
 		}
-		part := map[string]any{"start_seconds": next, "end_seconds": stop, "text": text}
+		text = transcript.Readable(text)
+		part := map[string]any{"start_seconds": next, "end_seconds": stop, "text": text, "text_format": "local_readability_v1", "recognized_words_preserved": true}
 		if noSpeech {
 			part["state"] = "no_recognizable_speech"
 			part["provider_code"] = "ASR_RESPONSE_HAVE_NO_WORDS"

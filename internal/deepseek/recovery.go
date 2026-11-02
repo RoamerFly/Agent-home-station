@@ -66,7 +66,7 @@ func UserMessage(err error) string {
 		"model_rate_limited": "模型服务限流", "model_service_unavailable": "模型服务暂时不可用", "model_upstream_timeout": "模型服务处理超时",
 		"model_redirect_denied": "模型地址返回跳转，未转发凭据", "model_request_cancelled": "模型请求已取消", "model_deadline_exceeded": "本次模型处理超时",
 		"model_response_too_large": "模型响应超过大小限制", "model_invalid_response": "模型返回格式无效", "model_response_incomplete": "模型响应未完整生成", "model_response_empty": "模型返回空内容",
-		"model_review_protocol_invalid": "复核结果不符合来源核验协议，未放行回复",
+		"model_review_protocol_invalid": "回复复核结果格式错误，尚未完成检查；不是模型选择安静",
 	}
 	message := messages[d.Code]
 	if message == "" {

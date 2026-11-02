@@ -1,0 +1,55 @@
+package companion
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestVideoEvidenceKeepsFullAudioSeparateFromSampledFramesAndOldFailures(t *testing.T) {
+	state := atomicProjectionState()
+	current := state["current"].(map[string]any)
+	fullAudio := strings.Repeat("第一个整理书桌第二个整理书架", 80) + "第六个坚持每周复盘最后一句原文也必须保留。"
+	obs := "[分享来源资料；以下文字为发布者描述]\n标题：六个整理方法\n[微信视频实际内容观察]\n本次读取范围为采样概览\n[画面观察：6帧]\n六张有字幕的画面\n[实际音轨转写：0–120秒]\n" + fullAudio
+	current["media_observations"] = []map[string]any{{"observation": obs, "observation_state": "observed", "result_available": true, "source": current["source"], "uploader_id": "member-a", "observation_version": 1}}
+	var old map[string]any
+	json.Unmarshal([]byte(state["sources"].([]map[string]string)[0]["content"]), &old)
+	oldID := strings.Repeat("b", 64)
+	old["source_event_id"] = oldID
+	oldSource := old["source"].(map[string]any)
+	oldSource["event_id"] = oldID
+	oldSource["message_id"] = "different-old-video"
+	old["message_id"] = "different-old-video"
+	old["media_observations"] = []map[string]any{{"observation": "旧视频读取失败，未取得音轨。", "observation_state": "incomplete", "source": oldSource, "uploader_id": "member-a"}}
+	oldRaw, _ := json.Marshal(old)
+	state["sources"] = []map[string]string{{"role": "user", "content": string(oldRaw)}}
+	state["evidence_event_ids"] = []string{strings.Repeat("a", 64), oldID}
+	before, _ := canonicalGroundingJSON(state)
+	binding, _, err := projectGroundingCheckState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcripts, visuals, failures := 0, 0, 0
+	for _, row := range binding.EvidenceTable {
+		switch row.Kind {
+		case "media_transcript":
+			transcripts++
+			if !strings.HasSuffix(row.Text, fullAudio) || row.Metadata["coverage_basis"] != "audio_header_not_visual_sampling" || row.Metadata["result_available"] != true || len(row.SourceVersions) != 1 {
+				t.Fatal("audio lost its body/source/status", row)
+			}
+			if strings.Contains(row.Text, "采样概览") || strings.Contains(row.Text, "旧视频") {
+				t.Fatal("unrelated status contaminated audio", row)
+			}
+		case "media_visual_observation":
+			visuals++
+		case "media_observation":
+			if strings.Contains(row.Text, "旧视频读取失败") {
+				failures++
+			}
+		}
+	}
+	after, _ := canonicalGroundingJSON(state)
+	if transcripts != 1 || visuals != 1 || failures != 1 || string(before) != string(after) {
+		t.Fatal(transcripts, visuals, failures)
+	}
+}

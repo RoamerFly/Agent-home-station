@@ -19,6 +19,25 @@ type observationNative struct {
 	calls int
 }
 
+func TestVideoObservationCoverageSeparatesSampledFramesFromCompleteAudio(t *testing.T) {
+	short := videoObservationCoverage(60, []float64{0, 12, 24, 36, 48, 59}, true, 60, true, false)
+	if short.Visual != "sampled" || !short.AudioComplete || short.Audio != "transcribed" {
+		t.Fatal(short)
+	}
+	long := videoObservationCoverage(600, []float64{0, 100, 200, 300, 400, 500}, true, 180, true, false)
+	if long.AudioComplete || long.NextStart != 180 {
+		t.Fatal("partial audio mislabeled complete", long)
+	}
+	failed := videoObservationCoverage(60, nil, false, 60, false, false)
+	if failed.AudioComplete || failed.Audio != "unavailable" {
+		t.Fatal(failed)
+	}
+	noSpeech := videoObservationCoverage(60, nil, false, 60, false, true)
+	if !noSpeech.AudioComplete || noSpeech.Audio != "no_recognizable_speech" {
+		t.Fatal(noSpeech)
+	}
+}
+
 func (n *observationNative) IncomingMedia(context.Context, string, int64) ([]byte, string, error) {
 	n.calls++
 	return n.data, "video/mp4", nil

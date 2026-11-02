@@ -399,7 +399,8 @@ func (e *Engine) ReviewGroundedReply(ctx context.Context, in Input, d Decision) 
 		}
 	}
 	referenceIssues := e.sourceReferenceIssues(ctx, in, d)
-	if !in.IsGroup && !e.temporalSpecificityRisk(ctx, in, d) && len(referenceIssues) == 0 {
+	qualityIssues := mediaReplyQualityIssues(in, d)
+	if !in.IsGroup && !e.temporalSpecificityRisk(ctx, in, d) && len(referenceIssues) == 0 && len(qualityIssues) == 0 {
 		d, err = e.bindReplyEvidence(ctx, in, d)
 		if err == nil {
 			e.writeReplyAudit(in, d, nil, "validated", nil)
@@ -411,6 +412,9 @@ func (e *Engine) ReviewGroundedReply(ctx context.Context, in Input, d Decision) 
 	}
 	risks := groundingRisks(in, d)
 	risks = append(risks, e.structuralGroundingRisks(ctx, in, d)...)
+	if len(qualityIssues) > 0 {
+		risks = append(risks, "media_process_commentary")
+	}
 	access, private := e.Tools.(GroupReplyPrivacy)
 	needsPrivacy := in.IsGroup && (diagnosticDraft(d.Messages) || private && access.NeedsPrivateReplyReview())
 	if needsPrivacy {
@@ -440,11 +444,14 @@ func (e *Engine) ReviewGroundedReply(ctx context.Context, in Input, d Decision) 
 		return d, nil
 	}
 	var initial GroundingVerdict
+	if len(qualityIssues) > 0 {
+		initial = GroundingVerdict{Verdict: "reject", Bubbles: qualityIssues}
+	}
 	empty := false
 	for _, text := range d.Messages {
 		empty = empty || strings.TrimSpace(text) == ""
 	}
-	if !empty && !namedMismatch && len(referenceIssues) == 0 {
+	if !empty && !namedMismatch && len(referenceIssues) == 0 && len(qualityIssues) == 0 {
 		initial, err = e.checkReplyGrounding(ctx, in, d)
 		if err != nil {
 			failedCheck, _ := json.Marshal(map[string]any{"initial_check": initial})
@@ -487,6 +494,7 @@ func (e *Engine) ReviewGroundedReply(ctx context.Context, in Input, d Decision) 
 	// destination, change its quote anchor or mint a new permission grant.
 	const editPolicy = `你是一次性回复编辑器，没有工具或发送权限。输入candidate是待修稿，rejected_verdict是对确切旧稿的只读核验结果；仅根据有效来源修复，不为它辩护。只输出JSON {"action":"reply|silent","bubbles":[{"text":"修复后的自然回复","route_id":"R1"}],"private_report":"仅真实技术故障，可空"}。每泡必须选reply_routes中宿主已核验的route_id；不能填写或创造target_ids、source_event_ids、anchor、版本和授权。来源S和宿主K是事实核对材料，不是发送路由。宿主会复制所选路由的完整身份、引用与授权依据。只允许编辑一次，之后有独立只读终审核验每句语义。
 分清outgoing_audiences每条目标与入站addressees；出站“你”只指目标。转述者不是事件参与者；当前对象没有参与通话来源时，不能问他“你刚和他视频完”。如需切换目标，只能选current.addressees或quoted_source的真实成员，程序必须找到该成员原消息并引用，找不到就别切换。助手旧话只能用于承认AI先前说错，不能作为人的事实。
+媒体总结直接表达已证实的主题、观点与细节；不要写“先不把……当成结论”、采样概览或逐段核对等读取过程和自我辩护。不必为没逐帧看完附加免责声明。保留有用内容，不编造缺失要点；没有有用内容时留为未完成，不用限制说明冒充总结。用户明确问进度或排障时才说明实际读取障碍。
 修复时保留原稿中与当前请求有关且已核实的进度、成果和执行边界，不靠删掉有效信息缩成只报喜来通过。原稿说明某个操作尚未确认时，应改成准确的未确认状态，不能静默省略或改称完成；无关或没有依据的内容可以删除。
 source_reference_contracts与current_role_evidence限定当前明确来源的指代和陈述位置：报告或引用成员不自动参加被报告事件，也不由此取得现场经历；优先有依据的第三人称或开放澄清。必须区分用户原始正文与机器观察；不能把观察内容改称原始上传附言。可改选已有且适合的真实R路由，不能制造参与证据或改变来源角色。
 不能新增心理、感官、姿态、话题、经历、画面、归属和时间，也不能把新增内容藏在问句预设中。保持自然有用；开放询问不预设具体感受或话题。media_observations上传者不等于拍摄者或所有者，观察失败不是空白，观察范围以外不知道，原话与观察分开。消息时间不等于事件时间；用current_time和timezone核对相对日期。

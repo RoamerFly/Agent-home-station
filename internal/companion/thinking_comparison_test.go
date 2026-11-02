@@ -68,7 +68,7 @@ func TestFlashThinkingTargetedComparison(t *testing.T) {
 				save()
 				t.Fatal(callErr)
 			}
-			verdict, err := decodeGroundingUnits(answer, "comparison", binding.ReviewUnits, binding.EvidenceTable, 1)
+			verdict, err := decodeGroundingVerdict(answer, "comparison", d.Messages, nil, binding.EvidenceTable...)
 			if err != nil {
 				row["protocol_error"] = err.Error()
 			} else {

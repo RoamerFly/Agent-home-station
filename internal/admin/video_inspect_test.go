@@ -137,6 +137,15 @@ func TestVideoInspectionUsesScopedCacheAndAdvertisesContinuation(t *testing.T) {
 	if e != nil || json.Unmarshal([]byte(value), &out) != nil || out.Metadata.Frames != 24 {
 		t.Fatal(value, e)
 	}
+	// Omitted action must pass the advertised schema and execute the safe
+	// metadata default, not fail before reaching the tool on its first call.
+	value, e = p.Call(context.Background(), "video_inspect", json.RawMessage(fmt.Sprintf(`{"asset_id":%q}`, a.ID)))
+	if e != nil || !strings.Contains(value, `"action":"info"`) || !strings.Contains(value, `"total_frames":24`) {
+		t.Fatal("default info call failed", value, e)
+	}
+	if _, e = p.Call(context.Background(), "video_inspect", json.RawMessage(fmt.Sprintf(`{"action":"guess","asset_id":%q}`, a.ID))); e == nil {
+		t.Fatal("explicit invalid action accepted")
+	}
 	p.trace.Thread = "filehelper"
 	if _, e = p.Call(context.Background(), "video_inspect", raw); e == nil {
 		t.Fatal("cross-conversation video exposed")

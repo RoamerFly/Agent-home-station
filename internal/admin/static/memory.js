@@ -17,7 +17,7 @@
  }
  const person=id=>window.WechatNames?.display(id,'群成员')||'群成员';
  const reviewField=(request,lower,upper)=>request?.[lower]??request?.[upper];
- const reviewStage=stage=>({connection_or_headers:'连接或等待响应头',response_body:'读取响应正文',http_status:'服务端状态',decode:'解析模型响应',retry_wait:'补试等待',review_protocol:'逐句复核结果校验',source_validation:'回复对象与来源校验',grounding_review:'来源与隐私复核'})[stage]||stage;
+ const reviewStage=stage=>({connection_or_headers:'连接或等待响应头',response_body:'读取响应正文',http_status:'服务端状态',decode:'解析模型响应',retry_wait:'补试等待',review_protocol:'回复复核格式检查',source_validation:'回复对象与来源校验',grounding_review:'来源与隐私复核'})[stage]||stage;
  function reviewFailure(card,a){
   const failure=a.review_failure||a.reviewFailure;if(!failure||typeof failure!=='object')return;
   const labels={initial_check_failed:'首次复核未完成',final_check_failed:'最终复核未完成',repair_check_failed:'修复后的复核未完成',final_check_rejected:'最终复核未通过',repair_no_supported_reply:'修复后仍没有有依据的回复',preflight_proof_invalid:'回复证明校验失败',preflight_context_invalid:'回复上下文校验失败',preflight_binding_invalid:'来源绑定校验失败',allowed_binding_invalid:'发送前绑定校验失败'};

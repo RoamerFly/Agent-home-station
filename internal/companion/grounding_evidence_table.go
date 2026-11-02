@@ -10,8 +10,8 @@ import (
 )
 
 // A review row is an immutable, typed view of already-authorized evidence. Its
-// source revisions remain host-bound; the model echoes only a short row ref and
-// an exact quotation. An exact quote proves presence, not semantic entailment.
+// source revisions remain host-bound; the reviewer returns short row refs.
+// Their existence does not mechanically prove semantic entailment.
 type GroundingEvidenceRow struct {
 	Ref            string         `json:"ref"`
 	Kind           string         `json:"kind"`
@@ -221,7 +221,24 @@ func (b *groundingTableBuilder) message(row map[string]any) error {
 		if b.messageIdentity(observation, mediaRef) == "" {
 			identity = ""
 		}
-		if err := b.add("media_observation", groundingString(observation["observation"]), b.refs([]string{mediaRef}), meta, identity); err != nil {
+		text := groundingString(observation["observation"])
+		if parts := videoEvidenceParts(text); len(parts) > 0 {
+			for _, part := range parts {
+				partMeta := map[string]any{}
+				for key, value := range meta {
+					partMeta[key] = value
+				}
+				partMeta["modality"] = part.kind
+				if part.kind == "media_transcript" {
+					partMeta["coverage_basis"] = "audio_header_not_visual_sampling"
+				}
+				if err := b.add(part.kind, part.text, b.refs([]string{mediaRef}), partMeta, identity); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if err := b.add("media_observation", text, b.refs([]string{mediaRef}), meta, identity); err != nil {
 			return err
 		}
 	}
