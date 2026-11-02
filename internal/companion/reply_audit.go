@@ -45,6 +45,7 @@ type ReplyAudit struct {
 	State            string            `json:"state"`
 	RiskFlags        []string          `json:"risk_flags,omitempty"`
 	ContextHash      string            `json:"context_hash,omitempty"`
+	ReviewFailure    *ReviewFailure    `json:"review_failure,omitempty"`
 	Snapshot         json.RawMessage   `json:"snapshot,omitempty"`
 }
 
@@ -70,7 +71,7 @@ func (e *Engine) writeReplyAudit(in Input, d Decision, risks []string, state str
 	}
 	h := sha256.Sum256([]byte(scope + trigger + at.Format(time.RFC3339Nano)))
 	id := hex.EncodeToString(h[:])
-	a := ReplyAudit{ID: id, Scope: scope, At: at, TriggerMessageID: trigger, Sender: in.Sender, Contexts: d.ReplyContexts, State: state, RiskFlags: risks, ExpiresAt: at.AddDate(0, 0, cfg.RetentionDays), ReviewSettings: e.Config.GroundingConfig(), ReviewTransport: e.groundingTransport()}
+	a := ReplyAudit{ID: id, Scope: scope, At: at, TriggerMessageID: trigger, Sender: in.Sender, Contexts: d.ReplyContexts, State: state, RiskFlags: risks, ReviewFailure: d.ReviewFailure, ExpiresAt: at.AddDate(0, 0, cfg.RetentionDays), ReviewSettings: e.Config.GroundingConfig(), ReviewTransport: e.groundingTransport()}
 	if len(snapshot) > 0 {
 		if prepared := e.preparedContext(); len(prepared) > 0 {
 			b, _ := json.Marshal(map[string]any{"model_request": json.RawMessage(prepared), "review_input": json.RawMessage(snapshot), "decision": d})

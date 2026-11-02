@@ -3,7 +3,6 @@ package companion
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -79,22 +78,47 @@ func groundingReviewUnits(messages []string) []GroundingReviewUnit {
 	return out
 }
 
+// GroundingProtocolError exposes only a fixed validation code and positional
+// indices. It deliberately excludes model text, quotes and provider error bodies.
+// Error retains the legacy code for callers that persisted it before diagnostics.
+type GroundingProtocolError struct {
+	Code      string
+	UnitIndex int
+	AtomIndex int
+}
+
+func (e *GroundingProtocolError) Error() string              { return "reply_grounding_verdict_invalid" }
+func (e *GroundingProtocolError) ReviewProtocolCode() string { return e.Code }
+
 func decodeGroundingUnits(answer, id string, units []GroundingReviewUnit, table []GroundingEvidenceRow, messageCount int) (GroundingVerdict, error) {
-	fail := func() (GroundingVerdict, error) {
-		return GroundingVerdict{}, errors.New("reply_grounding_verdict_invalid")
+	unitIndex, atomIndex := 0, 0
+	fail := func(code string) (GroundingVerdict, error) {
+		return GroundingVerdict{}, &GroundingProtocolError{Code: code, UnitIndex: unitIndex, AtomIndex: atomIndex}
 	}
 	// Match the dedicated review transport's explicit response resource bound.
 	// A caller-selected output budget must not inherit a short-chat parser cap.
-	if len(answer) > 16<<20 || !utf8.ValidString(answer) {
-		return fail()
+	if len(answer) > 16<<20 {
+		return fail("review_response_too_large")
+	}
+	if !utf8.ValidString(answer) {
+		return fail("review_invalid_encoding")
+	}
+	if !json.Valid([]byte(answer)) {
+		return fail("review_json_invalid")
 	}
 	var wire struct {
 		Units []GroundingUnitVerdict `json:"units"`
 	}
 	decoder := json.NewDecoder(bytes.NewBufferString(answer))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&wire) != nil || decoder.Decode(new(any)) != io.EOF || len(wire.Units) != len(units) || wire.Units == nil {
-		return fail()
+	if decoder.Decode(&wire) != nil || decoder.Decode(new(any)) != io.EOF {
+		return fail("review_schema_invalid")
+	}
+	if wire.Units == nil {
+		return fail("review_units_missing")
+	}
+	if len(wire.Units) != len(units) {
+		return fail("review_units_count_mismatch")
 	}
 	byID := map[string]GroundingReviewUnit{}
 	for _, unit := range units {
@@ -109,22 +133,36 @@ func decodeGroundingUnits(answer, id string, units []GroundingReviewUnit, table 
 		out.Bubbles[i] = GroundingBubbleVerdict{Index: i, Verdict: "allow", Violations: []GroundingViolation{}}
 	}
 	seen := map[string]bool{}
-	for _, result := range wire.Units {
+	for ui, result := range wire.Units {
+		unitIndex, atomIndex = ui+1, 0
 		unit, ok := byID[result.UnitID]
-		if !ok || seen[result.UnitID] || result.Atoms == nil || len(result.Atoms) == 0 {
-			return fail()
+		if !ok {
+			return fail("review_unit_unknown")
+		}
+		if seen[result.UnitID] {
+			return fail("review_unit_duplicate")
+		}
+		if len(result.Atoms) == 0 {
+			return fail("review_atoms_missing")
 		}
 		seen[result.UnitID] = true
 		covered := make([]bool, len(unit.Text))
 		bubble := &out.Bubbles[unit.BubbleIndex]
-		for _, atom := range result.Atoms {
-			if atom.Span == "" || atom.Supports == nil || !strings.Contains(unit.Text, atom.Span) || strings.TrimSpace(atom.Reason) == "" {
-				return fail()
+		for ai, atom := range result.Atoms {
+			atomIndex = ai + 1
+			if atom.Span == "" || !strings.Contains(unit.Text, atom.Span) {
+				return fail("review_atom_span_invalid")
+			}
+			if atom.Supports == nil {
+				return fail("review_atom_supports_missing")
+			}
+			if strings.TrimSpace(atom.Reason) == "" {
+				return fail("review_atom_reason_missing")
 			}
 			switch atom.Mode {
 			case "assertion", "presupposition", "report", "quote", "conditional", "nonfactual":
 			default:
-				return fail()
+				return fail("review_atom_mode_invalid")
 			}
 			for start := 0; start <= len(unit.Text)-len(atom.Span); {
 				at := strings.Index(unit.Text[start:], atom.Span)
@@ -140,34 +178,37 @@ func decodeGroundingUnits(answer, id string, units []GroundingReviewUnit, table 
 			refs := []string{}
 			for _, support := range atom.Supports {
 				row, exists := evidence[support.Ref]
-				if !exists || strings.TrimSpace(support.Quote) == "" || !groundingEvidenceContains(row, support.Quote) {
-					return fail()
+				if !exists {
+					return fail("review_support_reference_invalid")
+				}
+				if strings.TrimSpace(support.Quote) == "" || !groundingEvidenceContains(row, support.Quote) {
+					return fail("review_support_quote_invalid")
 				}
 				refs = append(refs, row.SourceRefs...)
 			}
 			if atom.Status == "nonfactual" {
 				if atom.Mode != "nonfactual" || len(atom.Supports) != 0 || atom.Claim != "" {
-					return fail()
+					return fail("review_nonfactual_invalid")
 				}
 				switch atom.NonfactualCategory {
 				case "greeting", "open_question", "conditional_offer", "acknowledgment", "social_offer":
 				default:
-					return fail()
+					return fail("review_nonfactual_invalid")
 				}
 			} else {
 				if atom.Mode == "nonfactual" || atom.NonfactualCategory != "" || strings.TrimSpace(atom.Claim) == "" {
-					return fail()
+					return fail("review_atom_claim_invalid")
 				}
 				switch atom.Status {
 				case "supported":
 					if len(atom.Supports) == 0 {
-						return fail()
+						return fail("review_supported_without_evidence")
 					}
 				case "unsupported", "uncertain":
 					bubble.Verdict, out.Verdict = "reject", "reject"
 					bubble.Violations = append(bubble.Violations, GroundingViolation{Span: atom.Span, Kind: groundingAtomViolationKind(atom), SourceRefs: uniqueSortedEvidence(refs), Reason: atom.Reason})
 				default:
-					return fail()
+					return fail("review_atom_status_invalid")
 				}
 			}
 		}
@@ -177,7 +218,7 @@ func decodeGroundingUnits(answer, id string, units []GroundingReviewUnit, table 
 			}
 			for at := i; at < i+utf8.RuneLen(r); at++ {
 				if !covered[at] {
-					return fail()
+					return fail("review_text_coverage_incomplete")
 				}
 			}
 		}

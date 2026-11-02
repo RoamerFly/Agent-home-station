@@ -124,3 +124,13 @@ test('private error-report delivery cannot turn failed share into silence or com
   assert.equal(project(rows)[0].status,'failed');
   assert.equal(project([...rows,entry(5,{event:'generation_started',category:'decision',status:'processing'}),entry(6,{event:'character_decision',category:'decision',status:'silent',reason:'model_chose_silence'})])[0].status,'silent');
 });
+
+test('a fail-closed grounding review remains a failed round, never model silence', () => {
+  const rows = project([
+    entry(1, { event: 'message_received', category: 'received', status: 'received', content: '请总结分享' }),
+    entry(2, { event: 'character_decision', category: 'decision', status: 'silent', reason: 'grounding_check_failed', review_failure: { code: 'model_invalid_response', stage: 'decode', review_state: 'initial_check_failed' } }),
+    entry(3, { event: 'message_processed', category: 'decision', status: 'completed' }),
+  ]);
+  assert.equal(rows[0].status, 'failed');
+  assert.equal(rows[0].errors, 0, 'legacy records may not have category=error, but must retain failed status');
+});

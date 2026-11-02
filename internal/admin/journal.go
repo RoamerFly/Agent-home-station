@@ -79,6 +79,13 @@ func (m *Manager) record(r bot.Record) {
 	entry.ModelMaxAttempts = r.ModelMaxAttempts
 	entry.ModelStage = logText(r.ModelStage, 64)
 	entry.ModelRetryDelayMS = r.ModelRetryDelayMS
+	entry.ModelFinishReason = logText(r.ModelFinishReason, 64)
+	entry.ModelContentBytes = r.ModelContentBytes
+	entry.ModelJSONValid = r.ModelJSONValid
+	entry.ModelFormatAttempt = r.ModelFormatAttempt
+	entry.ModelMaxFormatAttempts = r.ModelMaxFormatAttempts
+	entry.ModelProtocolCode = logText(r.ModelProtocolCode, 64)
+	entry.ReviewFailure = r.ReviewFailure
 	entry.RetryAttempts = r.RetryAttempts
 	entry.RetryAt = r.RetryAt
 	entry.Source = r.ThreadID

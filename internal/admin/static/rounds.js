@@ -11,6 +11,10 @@
     : item.category === 'decision' || /^(generation_|model_|character_|utterance_)/.test(item.event) ? 'decision' : 'system';
   const identity = item => item.round_id || item.message_id;
   const messageKey = (item, id = identity(item)) => id && item.thread_id ? JSON.stringify([item.thread_id, id]) : '';
+  // A failed safety review is deliberately fail-closed, but it is not a social
+  // decision to stay quiet. Older persisted entries used status=silent, so
+  // identify the reason as well as the status when projecting a round.
+  const reviewFailureReason = reason => ['grounding_check_failed', 'grounding_check_rejected', 'grounding_context_invalidated', 'grounding_check_stopped_unverified_reply'].includes(reason);
   function activityTarget(item) {
     try {
       const url = new URL(item.target_url);
@@ -77,7 +81,10 @@
         } else round.sent.push(item);
       }
       if (['generation_started', 'message_processing'].includes(item.event)) round.failureReported = false;
-      if (item.reason === 'operation_reported_privately') {
+      if (reviewFailureReason(item.reason)) {
+        round.status = 'failed';
+      }
+      else if (item.reason === 'operation_reported_privately') {
         // Historical logs used status=silent here. The separate private error
         // report's receipt also uses the original ID; neither completes its task.
         round.failureReported = true;

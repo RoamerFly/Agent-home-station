@@ -186,7 +186,14 @@ func (e *Engine) checkReplyGroundingWithPurpose(ctx context.Context, in Input, d
 	digest := sha256.Sum256(bound)
 	id := hex.EncodeToString(digest[:])
 	partial := GroundingVerdict{CandidateID: id, ReviewBinding: binding}
-	answer, err := e.groundingChat(deepseek.WithPurpose(ctx, purpose), groundingCheckPolicy, []map[string]string{{"role": "user", "content": string(binding.ReviewInput)}})
+	validate := func(answer string) error {
+		if err := e.ValidateGenerationEvidence(ctx, evidence); err != nil {
+			return err
+		}
+		_, err := decodeGroundingVerdict(answer, id, verified.Messages, aliases, binding.EvidenceTable...)
+		return err
+	}
+	answer, err := e.groundingChatValidated(deepseek.WithPurpose(ctx, purpose), groundingCheckPolicy, []map[string]string{{"role": "user", "content": string(binding.ReviewInput)}}, validate)
 	if err != nil {
 		return partial, err
 	}

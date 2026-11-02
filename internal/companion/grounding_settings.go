@@ -49,7 +49,15 @@ type groundingLanguageModel interface {
 	ChatGrounding(context.Context, string, []map[string]string, deepseek.GroundingOptions) (string, error)
 }
 
+type validatedGroundingLanguageModel interface {
+	ChatGroundingValidated(context.Context, string, []map[string]string, deepseek.GroundingOptions, func(string) error) (string, error)
+}
+
 func (e *Engine) groundingChat(ctx context.Context, system string, messages []map[string]string) (string, error) {
+	return e.groundingChatValidated(ctx, system, messages, nil)
+}
+
+func (e *Engine) groundingChatValidated(ctx context.Context, system string, messages []map[string]string, validate func(string) error) (string, error) {
 	evidence, err := e.captureGenerationEvidence(ctx)
 	if err != nil {
 		return "", err
@@ -60,7 +68,9 @@ func (e *Engine) groundingChat(ctx context.Context, system string, messages []ma
 		return "", err
 	}
 	var answer string
-	if model, ok := e.model.(groundingLanguageModel); ok {
+	if model, ok := e.model.(validatedGroundingLanguageModel); ok && validate != nil {
+		answer, err = model.ChatGroundingValidated(ctx, system, messages, options, validate)
+	} else if model, ok := e.model.(groundingLanguageModel); ok {
 		answer, err = model.ChatGrounding(ctx, system, messages, options)
 	} else {
 		// Synthetic/unit adapters implement Chat only. This path is explicit in the

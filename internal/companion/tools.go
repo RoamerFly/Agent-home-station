@@ -391,6 +391,10 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 				return reviewSurf(silent("invalid_model_decision"))
 			}
 		}
+		// Review failures are host-authored observations. A model response must
+		// never be able to manufacture an operator error, its detail, or a
+		// provider diagnostic through the ordinary decision protocol.
+		response.Decision.ReviewFailure = nil
 		if code := decisionShape(response.Decision, e.Config.MaxBubbles); code != "" {
 			if repairFormat(code, answer) {
 				continue

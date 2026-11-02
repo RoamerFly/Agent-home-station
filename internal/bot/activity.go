@@ -11,21 +11,24 @@ import (
 // Record is the locally retained activity requested by the account owner.
 // It never contains model reasoning, credentials, or native session material.
 type Record struct {
-	MessageTime                                                                           string
-	RelatedMessageID, DecisionNote                                                        string
-	RetryAttempts                                                                         int
-	RetryAt                                                                               string
-	ToolCacheHit                                                                          bool
-	ToolRequests, ToolRetries, ToolHTTPStatus                                             int
-	ToolCode, ToolStage                                                                   string
-	ModelHTTPStatus, ModelAttempts, ModelMaxAttempts                                      int
-	ModelStage                                                                            string
-	ModelRetryDelayMS                                                                     int64
-	CallID                                                                                string
-	Tool, TargetURL, Query, Effect                                                        string
-	DurationMS, Bytes                                                                     int64
-	MediaCount                                                                            int
-	Event, Category, ThreadID, Sender, Content, Reason, Status, MessageID, Origin, SendID string
+	MessageTime                                                                                                     string
+	RelatedMessageID, DecisionNote                                                                                  string
+	RetryAttempts                                                                                                   int
+	RetryAt                                                                                                         string
+	ToolCacheHit                                                                                                    bool
+	ToolRequests, ToolRetries, ToolHTTPStatus                                                                       int
+	ToolCode, ToolStage                                                                                             string
+	ModelHTTPStatus, ModelAttempts, ModelMaxAttempts, ModelContentBytes, ModelFormatAttempt, ModelMaxFormatAttempts int
+	ModelStage                                                                                                      string
+	ModelFinishReason, ModelProtocolCode                                                                            string
+	ModelJSONValid                                                                                                  bool
+	ModelRetryDelayMS                                                                                               int64
+	CallID                                                                                                          string
+	Tool, TargetURL, Query, Effect                                                                                  string
+	DurationMS, Bytes                                                                                               int64
+	MediaCount                                                                                                      int
+	Event, Category, ThreadID, Sender, Content, Reason, Status, MessageID, Origin, SendID                           string
+	ReviewFailure                                                                                                   *companion.ReviewFailure
 }
 
 func (w *Worker) activity(record Record) {

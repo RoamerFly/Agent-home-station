@@ -63,11 +63,19 @@ func (p previewModel) Chat(ctx context.Context, system string, messages []map[st
 // running agent. The lightweight previewModel remains a text-only test adapter.
 type previewGroundingModel struct {
 	previewModel
-	grounding func(context.Context, string, []map[string]string, deepseek.GroundingOptions) (string, error)
+	grounding          func(context.Context, string, []map[string]string, deepseek.GroundingOptions) (string, error)
+	groundingValidated func(context.Context, string, []map[string]string, deepseek.GroundingOptions, func(string) error) (string, error)
 }
 
 func (p previewGroundingModel) ChatGrounding(ctx context.Context, system string, messages []map[string]string, options deepseek.GroundingOptions) (string, error) {
 	return p.grounding(ctx, system, messages, options)
+}
+
+func (p previewGroundingModel) ChatGroundingValidated(ctx context.Context, system string, messages []map[string]string, options deepseek.GroundingOptions, validate func(string) error) (string, error) {
+	if p.groundingValidated != nil {
+		return p.groundingValidated(ctx, system, messages, options, validate)
+	}
+	return p.ChatGrounding(ctx, system, messages, options)
 }
 func (m *Manager) preview(ctx context.Context, mode, text string) (companion.Decision, error) {
 	if (mode != "direct" && mode != "social" && mode != "proactive") || strings.TrimSpace(text) == "" || len(text) > 8192 || !utf8.ValidString(text) {
@@ -100,6 +108,12 @@ func (m *Manager) preview(ctx context.Context, mode, text string) (companion.Dec
 			return "", errors.New(deepseek.UserMessage(err))
 		}
 		return answer, nil
+	}, groundingValidated: func(ctx context.Context, system string, turns []map[string]string, options deepseek.GroundingOptions, validate func(string) error) (string, error) {
+		client, err := m.makeModel(c)
+		if err != nil {
+			return "", err
+		}
+		return client.ChatGroundingValidated(ctx, system, turns, options, validate)
 	}}
 	engine, err := companion.NewPreview(c.sharedCompanion(), model, c.SystemPrompt)
 	if err != nil {

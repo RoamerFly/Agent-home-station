@@ -362,13 +362,13 @@ func (e *Engine) ReviewGroundedReply(ctx context.Context, in Input, d Decision) 
 	}
 	if original, ok := d.GenerationEvidence(); ok {
 		if previous, exists := GenerationEvidenceFromContext(ctx); exists && original != previous {
-			return Decision{}, generationEvidenceChanged()
+			return e.groundingFailed(in, d, nil, "preflight_context_invalid", generationEvidenceChanged(), nil)
 		}
 		ctx = withGenerationEvidence(ctx, original)
 	}
 	evidence, captureErr := e.captureGenerationEvidence(ctx)
 	if captureErr != nil {
-		return Decision{}, captureErr
+		return e.groundingFailed(in, d, nil, "preflight_context_invalid", captureErr, nil)
 	}
 	ctx = withGenerationEvidence(ctx, evidence)
 	d.generationEvidence = &evidence
@@ -380,19 +380,19 @@ func (e *Engine) ReviewGroundedReply(ctx context.Context, in Input, d Decision) 
 	}
 	d.Action = "reply"
 	if err := e.validateExistingReplyProof(ctx, in, d); err != nil {
-		return Decision{}, err
+		return e.groundingFailed(in, d, nil, "preflight_proof_invalid", err, nil)
 	}
 	proposed := d
 	var err error
 	d, err = e.normalizeReplyContexts(ctx, in, d)
 	if err != nil {
 		if !recoverableInitialBindingError(proposed, err) {
-			return Decision{}, err
+			return e.groundingFailed(in, d, nil, "preflight_context_invalid", err, nil)
 		}
 		proposed.ReplyContexts = nil
 		d, err = e.normalizeReplyContexts(ctx, in, proposed)
 		if err != nil {
-			return Decision{}, err
+			return e.groundingFailed(in, proposed, nil, "preflight_context_invalid", err, nil)
 		}
 		for i := range d.ReplyContexts {
 			d.ReplyContexts[i].RiskFlags = append(d.ReplyContexts[i].RiskFlags, "unverified_proposed_binding")
@@ -404,7 +404,10 @@ func (e *Engine) ReviewGroundedReply(ctx context.Context, in Input, d Decision) 
 		if err == nil {
 			e.writeReplyAudit(in, d, nil, "validated", nil)
 		}
-		return d, err
+		if err != nil {
+			return e.groundingFailed(in, d, nil, "allowed_binding_invalid", err, nil)
+		}
+		return d, nil
 	}
 	risks := groundingRisks(in, d)
 	risks = append(risks, e.structuralGroundingRisks(ctx, in, d)...)
@@ -418,7 +421,7 @@ func (e *Engine) ReviewGroundedReply(ctx context.Context, in Input, d Decision) 
 	}
 	d, err = e.bindReplyEvidence(ctx, in, d)
 	if err != nil {
-		return Decision{}, err
+		return e.groundingFailed(in, d, risks, "preflight_binding_invalid", err, nil)
 	}
 	namedMismatch := false
 	for i, text := range d.Messages {
@@ -449,7 +452,7 @@ func (e *Engine) ReviewGroundedReply(ctx context.Context, in Input, d Decision) 
 		}
 		if initial.Verdict == "allow" {
 			if err = e.validateReplyTexts(ctx, in, d); err != nil {
-				return Decision{}, err
+				return e.groundingFailed(in, d, risks, "allowed_binding_invalid", err, nil)
 			}
 			payload, _ := json.Marshal(map[string]any{"initial_verdict": initial, "candidate": d})
 			e.writeReplyAudit(in, d, risks, "checked", payload)
@@ -562,11 +565,27 @@ func recoverableInitialBindingError(d Decision, err error) bool {
 }
 
 func (e *Engine) groundingFailed(in Input, d Decision, risks []string, state string, err error, snapshot []byte) (Decision, error) {
+	failure := reviewFailure(state, err)
+	d.ReviewFailure = &failure
 	e.writeReplyAudit(in, d, risks, state, snapshot)
-	if in.MustReply {
-		return Decision{}, err
+	var changed *GenerationEvidenceChangedError
+	// Preflight previously returned an error. Keep that control flow (especially
+	// the task pause signal) while enriching it; never turn a changed generation
+	// into a successful optional-silence result and lose its continuation.
+	if in.MustReply || errors.As(err, &changed) || strings.HasPrefix(state, "preflight_") || state == "allowed_binding_invalid" {
+		return Decision{}, &ReviewError{Failure: failure, cause: err}
 	}
-	return Decision{Action: "silent", Messages: []string{}, Reason: "grounding_check_stopped_unverified_reply"}, nil
+	return Decision{Action: "silent", Messages: []string{}, Reason: reviewOutcomeReason(state, failure), ReviewFailure: &failure}, nil
+}
+
+func reviewOutcomeReason(state string, failure ReviewFailure) string {
+	if failure.Code == "grounding_review_context_invalidated" {
+		return "grounding_context_invalidated"
+	}
+	if state == "final_check_rejected" || state == "repair_no_supported_reply" {
+		return "grounding_check_rejected"
+	}
+	return "grounding_check_failed"
 }
 
 func (e *Engine) structuralGroundingRisks(ctx context.Context, in Input, d Decision) []string {

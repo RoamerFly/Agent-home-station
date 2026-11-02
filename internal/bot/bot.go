@@ -643,15 +643,18 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		w.scheduleConversationWake(character, input, decision.WakeAfterSeconds, decision.WaitForReply, decision.WakeReason)
 		category := "decision"
 		status := decision.Action
-		if strings.Contains(decision.Reason, "invalid") {
+		if strings.Contains(decision.Reason, "invalid") || decision.ReviewFailure != nil || strings.HasPrefix(decision.Reason, "grounding_") {
 			category = "error"
+			status = "failed"
 		}
 		if decision.Reason == "operation_reported_privately" {
 			// Not sending a group error is not a model's social silence decision.
 			category, status = "error", "failed"
 		}
-		w.activity(Record{Event: "character_decision", Category: category, ThreadID: input.Thread, MessageID: input.TraceID, Reason: decision.Reason, Status: status})
-		if strings.Contains(decision.Reason, "budget") {
+		w.activity(Record{Event: "character_decision", Category: category, ThreadID: input.Thread, MessageID: input.TraceID, Reason: decision.Reason, Status: status, ReviewFailure: decision.ReviewFailure})
+		if decision.ReviewFailure != nil {
+			w.config.Log("character_review_failed")
+		} else if strings.Contains(decision.Reason, "budget") {
 			w.config.Log("character_budget_limited")
 		} else if decision.Action == "blocked" {
 			w.config.Log("character_permission_denied")
