@@ -444,7 +444,7 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 			return decision, nil
 		}
 		switch decision.Reason {
-		case "invalid_model_decision", "invalid_tool_arguments", "tool_unavailable_or_budget_exhausted", "tool_budget_exhausted", "surf_duplicate_source", "surf_no_verified_source", "social_relevance_insufficient", "unverified_model_response", "grounding_check_failed", "grounding_check_rejected", "grounding_context_invalidated", "grounding_review_protocol_invalid", "grounding_review_provider_failed":
+		case "history_materials_not_inspected", "invalid_model_decision", "invalid_tool_arguments", "tool_unavailable_or_budget_exhausted", "tool_budget_exhausted", "surf_duplicate_source", "surf_no_verified_source", "social_relevance_insufficient", "unverified_model_response", "grounding_check_failed", "grounding_check_rejected", "grounding_context_invalidated", "grounding_review_protocol_invalid", "grounding_review_provider_failed":
 			out := silent(decision.Reason)
 			out.ReviewFailure = decision.ReviewFailure
 			return out, nil

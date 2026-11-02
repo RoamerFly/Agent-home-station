@@ -2,6 +2,18 @@ package companion
 
 import "strings"
 
+// SavedVideoTranscript returns the existing transcript section without
+// re-summarizing or re-running ASR. False means this observation has no such
+// section, not that the underlying video has no audio.
+func SavedVideoTranscript(observation string) (string, bool) {
+	for _, part := range videoEvidenceParts(observation) {
+		if part.kind == "media_transcript" {
+			return part.text, true
+		}
+	}
+	return "", false
+}
+
 // Separate modalities without summarizing, shortening or inventing coverage.
 // A sampled visual observation must not downgrade the independently returned
 // audio transcript. Source identity and versions remain on every resulting row.

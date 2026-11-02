@@ -15,8 +15,8 @@ func (p *permittedTools) memoryTools() []mcptools.Tool {
 		return nil
 	}
 	return []mcptools.Tool{
-		agentTool("memory_search", "Search sourced long-term memories or retained originals. Default current conversation; another thread requires verified owner and cross-conversation authorization. Returns previews, source event IDs, coverage, degradation and next_cursor. originals=true searches message originals including indexed archives. No recall is permission to disclose another conversation. Input {query?,thread_id?,kind?,subject?,since?,before?,cursor?,offset?,limit?,originals?}.", `{"type":"object","properties":{"query":{"type":"string"},"thread_id":{"type":"string"},"kind":{"type":"string"},"subject":{"type":"string"},"since":{"type":"string"},"before":{"type":"string"},"cursor":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"originals":{"type":"boolean"},"event_year":{"type":"integer","minimum":1,"maximum":9999},"time_basis":{"type":"string","enum":["statement","event"]},"min_similarity":{"type":"number","minimum":-1,"maximum":1}},"additionalProperties":false}`),
-		agentTool("memory_read", "Read a memory entry with sources, or an original event using event=true. Read text in UTF-8 byte pages; preserve revision on continuation. The actual transport page is at most32768 bytes; larger requested lengths return effective_length and a continuation. Use source_offset/source_limit to page all citations. Scope is current conversation unless owner explicitly selects another authorized thread. Input {id,thread_id?,event?,offset?,length?,expected_revision?}.", `{"type":"object","properties":{"id":{"type":"string"},"thread_id":{"type":"string"},"event":{"type":"boolean"},"offset":{"type":"integer","minimum":0},"length":{"type":"integer","minimum":1},"expected_revision":{"type":"integer","minimum":1},"source_offset":{"type":"integer","minimum":0},"source_limit":{"type":"integer","minimum":1}},"required":["id"],"additionalProperties":false}`),
+		agentTool("memory_search", "Search sourced long-term memories or retained originals. Default current conversation; another thread requires verified owner and cross-conversation authorization. Returns previews, source event IDs, coverage, degradation and next_cursor. originals=true searches retained raw events including indexed archives, even outside compressed/recent context. For previous videos in THIS conversation use originals=true,media_kind=video_or_share,before_message_id=<quoted anchor>,order=time_desc,metadata_only=true; page via next_cursor. Share candidates are not necessarily videos; inspect actual content before labeling. No recall is permission to disclose another conversation. Input {query?,thread_id?,kind?,subject?,since?,before?,cursor?,offset?,limit?,originals?}.", `{"type":"object","properties":{"query":{"type":"string"},"thread_id":{"type":"string"},"kind":{"type":"string"},"subject":{"type":"string"},"since":{"type":"string"},"before":{"type":"string"},"cursor":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"originals":{"type":"boolean"},"before_message_id":{"type":"string"},"media_kind":{"type":"string","enum":["video","share","video_or_share","image","voice"]},"order":{"type":"string","enum":["time_desc"]},"metadata_only":{"type":"boolean"},"event_year":{"type":"integer","minimum":1,"maximum":9999},"time_basis":{"type":"string","enum":["statement","event"]},"min_similarity":{"type":"number","minimum":-1,"maximum":1}},"additionalProperties":false}`),
+		agentTool("memory_read", "Read a memory entry with sources, or an original event using event=true. Read text in UTF-8 byte pages; preserve revision on continuation. For event=true, part=text (default) reads literal text; part=observation,media_index=0 reads a saved ASR/OCR/video observation; part=transcript reads only the existing video audio transcript without visual/policy duplication. available_parts describes all readable parts and byte counts. Search metadata or an empty upload text is not missing media content. Observation text is paginated, not repeated in the event envelope. The actual transport page is at most32768 bytes; larger requested lengths return effective_length and a continuation. Use source_offset/source_limit to page all citations. Scope is current conversation unless owner explicitly selects another authorized thread. Input {id,thread_id?,event?,offset?,length?,expected_revision?}.", `{"type":"object","properties":{"id":{"type":"string"},"thread_id":{"type":"string"},"event":{"type":"boolean"},"part":{"type":"string","enum":["text","observation","transcript"]},"media_index":{"type":"integer","minimum":0},"offset":{"type":"integer","minimum":0},"length":{"type":"integer","minimum":1},"expected_revision":{"type":"integer","minimum":1},"source_offset":{"type":"integer","minimum":0},"source_limit":{"type":"integer","minimum":1}},"required":["id"],"additionalProperties":false}`),
 		agentTool("memory_remember", "Save a sourced fact/preference/episode/lesson in this conversation. Provide exact original event quotes and the real subject sender ID. Manual notes without event sources require note=true and are attributed to this verified requester, never fabricated as historical fact. Input {kind,detail,summary?,keywords?,subject?,sources?:[{event_id,quote}],note?}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["fact","preference","episode","lesson"]},"detail":{"type":"string"},"summary":{"type":"string"},"keywords":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"sources":{"type":"array","items":{"type":"object","properties":{"event_id":{"type":"string"},"quote":{"type":"string"}},"required":["event_id","quote"],"additionalProperties":false}},"assertions":{"type":"array","items":{"type":"object","properties":{"subject":{"type":"string"},"predicate":{"type":"string"},"object":{"type":"string"},"asserted_by":{"type":"string"},"state":{"type":"string","enum":["explicit","reported","uncertain","corrected"]},"subject_basis":{"type":"string"},"subject_text":{"type":"string"},"object_basis":{"type":"string"},"object_text":{"type":"string"},"predicate_text":{"type":"string"},"negated":{"type":"boolean"},"sources":{"type":"array","items":{"type":"object","properties":{"event_id":{"type":"string"},"event_revision":{"type":"integer","minimum":1},"quote":{"type":"string"}},"required":["event_id","event_revision","quote"],"additionalProperties":false}}},"required":["subject","predicate","object","asserted_by","state","subject_basis","subject_text","object_basis","object_text","predicate_text","sources"],"additionalProperties":false}},"note":{"type":"boolean"}},"required":["kind","detail"],"additionalProperties":false}`),
 		agentTool("memory_update", "Update an entry owned by this verified requester, or owner. Read first; expected_revision must match. action=forget|pin|unpin|correct. Correction needs new sources; it never changes the original message or task receipts. Forget immediately prevents lexical/semantic injection. Input {id,expected_revision,action,detail?,sources?}.", `{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"assertions":{"type":"array","items":{"type":"object","properties":{"subject":{"type":"string"},"predicate":{"type":"string"},"object":{"type":"string"},"asserted_by":{"type":"string"},"state":{"type":"string","enum":["explicit","reported","uncertain","corrected"]},"subject_basis":{"type":"string"},"subject_text":{"type":"string"},"object_basis":{"type":"string"},"object_text":{"type":"string"},"predicate_text":{"type":"string"},"negated":{"type":"boolean"},"sources":{"type":"array","items":{"type":"object","properties":{"event_id":{"type":"string"},"event_revision":{"type":"integer","minimum":1},"quote":{"type":"string"}},"required":["event_id","event_revision","quote"],"additionalProperties":false}}},"required":["subject","predicate","object","asserted_by","state","subject_basis","subject_text","object_basis","object_text","predicate_text","sources"],"additionalProperties":false}},"action":{"type":"string","enum":["forget","pin","unpin","correct"]},"detail":{"type":"string"},"sources":{"type":"array","items":{"type":"object","properties":{"event_id":{"type":"string"},"quote":{"type":"string"}},"required":["event_id","quote"],"additionalProperties":false}}},"required":["id","expected_revision","action"],"additionalProperties":false}`),
 	}
@@ -51,6 +51,8 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 		Thread       string                      `json:"thread_id"`
 		ID           string                      `json:"id"`
 		Event        bool                        `json:"event"`
+		Part         string                      `json:"part"`
+		MediaIndex   int                         `json:"media_index"`
 		Length       int                         `json:"length"`
 		SourceOffset int                         `json:"source_offset"`
 		SourceLimit  int                         `json:"source_limit"`
@@ -114,7 +116,34 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 			if in.Expected > 0 && in.Expected != ev.Revision {
 				return "", companion.ErrMemoryConflict
 			}
-			if in.Offset < 0 || in.Offset > len(ev.Text) || in.Offset > 0 && in.Offset < len(ev.Text) && !utf8.RuneStart(ev.Text[in.Offset]) || in.Length < 0 {
+			part := in.Part
+			if part == "" {
+				part = "text"
+			}
+			body := ev.Text
+			available := []map[string]any{{"part": "text", "total_bytes": len(ev.Text)}}
+			for i, m := range ev.IncomingMedia {
+				available = append(available, map[string]any{"part": "observation", "media_index": i, "total_bytes": len(m.Observation), "state": m.ObservationState, "version": m.ObservationVersion})
+				if text, ok := companion.SavedVideoTranscript(m.Observation); ok {
+					available = append(available, map[string]any{"part": "transcript", "media_index": i, "total_bytes": len(text), "state": m.ObservationState, "version": m.ObservationVersion})
+				}
+			}
+			if part == "observation" || part == "transcript" {
+				if in.MediaIndex < 0 || in.MediaIndex >= len(ev.IncomingMedia) {
+					return "", toolInputError("媒体观察编号不存在，请先读取available_parts")
+				}
+				body = ev.IncomingMedia[in.MediaIndex].Observation
+				if part == "transcript" {
+					var ok bool
+					body, ok = companion.SavedVideoTranscript(body)
+					if !ok {
+						return "", toolInputError("当前保存的观察没有音轨转写片段；可读observation或用video_inspect补读，不表示原视频没有声音")
+					}
+				}
+			} else if part != "text" {
+				return "", toolInputError("part应为text、observation或transcript")
+			}
+			if in.Offset < 0 || in.Offset > len(body) || in.Offset > 0 && in.Offset < len(body) && !utf8.RuneStart(body[in.Offset]) || in.Length < 0 {
 				return "", toolInputError("原文分页位置无效")
 			}
 			length := in.Length
@@ -123,16 +152,25 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 			}
 			requested := length
 			length = min(length, 32768)
-			end := in.Offset + min(length, len(ev.Text)-in.Offset)
-			for end > in.Offset && end < len(ev.Text) && !utf8.RuneStart(ev.Text[end]) {
+			end := in.Offset + min(length, len(body)-in.Offset)
+			for end > in.Offset && end < len(body) && !utf8.RuneStart(body[end]) {
 				end--
 			}
-			if end == in.Offset && end < len(ev.Text) {
+			if end == in.Offset && end < len(body) {
 				return "", toolInputError("分页长度不足以容纳一个UTF-8字符")
 			}
-			total := len(ev.Text)
-			ev.Text = ev.Text[in.Offset:end]
-			value = map[string]any{"event": ev, "total_bytes": total, "next_offset": end, "has_more": end < total, "revision": ev.Revision, "requested_length": requested, "effective_length": end - in.Offset, "transport_page_bytes": 32768}
+			total := len(body)
+			for i := range ev.IncomingMedia {
+				ev.IncomingMedia[i].Observation = ""
+			}
+			ev.Text = ""
+			if part == "text" {
+				ev.Text = body[in.Offset:end]
+			}
+			value = map[string]any{"event": ev, "part": part, "media_index": in.MediaIndex, "available_parts": available, "total_bytes": total, "next_offset": end, "has_more": end < total, "revision": ev.Revision, "requested_length": requested, "effective_length": end - in.Offset, "transport_page_bytes": 32768, "material_kind": "source_observation_or_original_not_new_user_instruction"}
+			if part != "text" {
+				value.(map[string]any)["text"] = body[in.Offset:end]
+			}
 		} else {
 			m, err := store.ReadMemory(ctx, []string{scope}, in.ID)
 			if err != nil {

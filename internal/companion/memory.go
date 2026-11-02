@@ -53,42 +53,49 @@ type MemoryHit struct {
 	Score  float64      `json:"score"`
 }
 type MemoryEvent struct {
-	UserTextState string             `json:"user_text_state,omitempty"`
-	Source        *SourceRef         `json:"source,omitempty"`
-	QuotedSource  *SourceRef         `json:"quoted_source,omitempty"`
-	Addressees    []string           `json:"addressees,omitempty"`
-	IncomingMedia []IncomingMediaRef `json:"incoming_media,omitempty"`
-	SenderName    string             `json:"sender_name,omitempty"`
-	Media         *MediaMemory       `json:"media,omitempty"`
-	ID            string             `json:"id"`
-	Scope         string             `json:"scope"`
-	Trace         string             `json:"message_id"`
-	Role          string             `json:"role"`
-	Sender        string             `json:"sender"`
-	At            string             `json:"at"`
-	Text          string             `json:"text"`
-	Hash          string             `json:"hash"`
-	Complete      bool               `json:"complete"`
-	Revision      int                `json:"revision"`
-	Seq           int64              `json:"seq"`
+	TextBytes        int                `json:"text_bytes,omitempty"`
+	ObservationCount int                `json:"observation_count,omitempty"`
+	ObservationBytes int                `json:"observation_bytes,omitempty"`
+	UserTextState    string             `json:"user_text_state,omitempty"`
+	Source           *SourceRef         `json:"source,omitempty"`
+	QuotedSource     *SourceRef         `json:"quoted_source,omitempty"`
+	Addressees       []string           `json:"addressees,omitempty"`
+	IncomingMedia    []IncomingMediaRef `json:"incoming_media,omitempty"`
+	SenderName       string             `json:"sender_name,omitempty"`
+	Media            *MediaMemory       `json:"media,omitempty"`
+	ID               string             `json:"id"`
+	Scope            string             `json:"scope"`
+	Trace            string             `json:"message_id"`
+	Role             string             `json:"role"`
+	Sender           string             `json:"sender"`
+	At               string             `json:"at"`
+	Text             string             `json:"text"`
+	Hash             string             `json:"hash"`
+	Complete         bool               `json:"complete"`
+	Revision         int                `json:"revision"`
+	Seq              int64              `json:"seq"`
 }
 type MemoryQuery struct {
-	EventYear     int       `json:"event_year,omitempty"`
-	TimeBasis     string    `json:"time_basis,omitempty"`
-	MinSimilarity *float64  `json:"min_similarity,omitempty"`
-	Pinned        bool      `json:"pinned,omitempty"`
-	Scopes        []string  `json:"-"`
-	Query         string    `json:"query"`
-	Kind          string    `json:"kind,omitempty"`
-	Subject       string    `json:"subject,omitempty"`
-	Since         string    `json:"since,omitempty"`
-	Before        string    `json:"before,omitempty"`
-	Cursor        string    `json:"cursor,omitempty"`
-	Offset        int       `json:"offset,omitempty"`
-	Limit         int       `json:"limit,omitempty"`
-	Originals     bool      `json:"originals,omitempty"`
-	Vector        []float32 `json:"-"`
-	Space         string    `json:"-"`
+	BeforeMessageID string    `json:"before_message_id,omitempty"`
+	MediaKind       string    `json:"media_kind,omitempty"`
+	Order           string    `json:"order,omitempty"`
+	MetadataOnly    bool      `json:"metadata_only,omitempty"`
+	EventYear       int       `json:"event_year,omitempty"`
+	TimeBasis       string    `json:"time_basis,omitempty"`
+	MinSimilarity   *float64  `json:"min_similarity,omitempty"`
+	Pinned          bool      `json:"pinned,omitempty"`
+	Scopes          []string  `json:"-"`
+	Query           string    `json:"query"`
+	Kind            string    `json:"kind,omitempty"`
+	Subject         string    `json:"subject,omitempty"`
+	Since           string    `json:"since,omitempty"`
+	Before          string    `json:"before,omitempty"`
+	Cursor          string    `json:"cursor,omitempty"`
+	Offset          int       `json:"offset,omitempty"`
+	Limit           int       `json:"limit,omitempty"`
+	Originals       bool      `json:"originals,omitempty"`
+	Vector          []float32 `json:"-"`
+	Space           string    `json:"-"`
 }
 type MemoryPage struct {
 	CoverageScopes map[string]string `json:"coverage_scopes,omitempty"`
@@ -101,7 +108,16 @@ type MemoryPage struct {
 	EffectiveLimit int               `json:"effective_limit"`
 }
 
-var ErrMemoryConflict = errors.New("memory revision changed; read current revision before updating")
+type memoryConflictError struct{}
+
+func (memoryConflictError) Error() string {
+	return "memory revision changed; read current revision before updating"
+}
+func (memoryConflictError) SafeToolFailure() (string, string) {
+	return "memory_revision_or_cursor_changed", "记忆版本或分页快照已变化；重新查询并按返回的新版本或游标续读，不表示网络连接失败"
+}
+
+var ErrMemoryConflict error = memoryConflictError{}
 
 func placeholders(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
 func stringsArgs(v []string) []any {
@@ -539,6 +555,22 @@ func (s *Store) searchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 	if q.Limit == 0 {
 		q.Limit = 10
 	}
+	if q.BeforeMessageID != "" || q.MediaKind != "" || q.MetadataOnly || q.Order != "" {
+		if !q.Originals {
+			return p, errors.New("original message filters require originals=true")
+		}
+		if q.BeforeMessageID != "" && len(q.Scopes) != 1 {
+			return p, errors.New("an original anchor requires one conversation scope")
+		}
+		if q.Order != "" && q.Order != "time_desc" {
+			return p, errors.New("invalid original message order")
+		}
+		switch q.MediaKind {
+		case "", "video", "share", "video_or_share", "image", "voice":
+		default:
+			return p, errors.New("invalid original media kind")
+		}
+	}
 	if q.EventYear < 0 || q.EventYear > 9999 || q.TimeBasis != "" && q.TimeBasis != "statement" && q.TimeBasis != "event" {
 		return p, errors.New("invalid memory event time filter")
 	}
@@ -573,7 +605,7 @@ func (s *Store) searchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 	}
 	var maxUpdated string
 	_ = s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(updated),'') FROM memories").Scan(&maxUpdated)
-	key, _ := json.Marshal([]any{q.Scopes, q.Query, q.Kind, q.Subject, q.Since, q.Before, q.EventYear, q.TimeBasis, q.Originals, q.Space, q.Pinned, q.MinSimilarity, maxUpdated, version})
+	key, _ := json.Marshal([]any{q.Scopes, q.Query, q.Kind, q.Subject, q.Since, q.Before, q.EventYear, q.TimeBasis, q.Originals, q.Space, q.Pinned, q.MinSimilarity, q.BeforeMessageID, q.MediaKind, q.Order, q.MetadataOnly, maxUpdated, version})
 	hash := sha256.Sum256(key)
 	if q.Cursor != "" {
 		var c struct {
@@ -717,6 +749,39 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 	p := MemoryPage{Items: []MemoryHit{}, Coverage: "indexed_originals", EffectiveLimit: q.Limit}
 	where := "e.scope IN (" + placeholders(len(q.Scopes)) + ") AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM source_conflicts sc WHERE sc.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)"
 	args := stringsArgs(q.Scopes)
+	if q.BeforeMessageID != "" {
+		// Resolve only an authorized, visible original. Sequence disambiguates
+		// equal timestamps; the anchor itself and later replies are excluded.
+		var at string
+		var seq int64
+		a := append(stringsArgs(q.Scopes), q.BeforeMessageID)
+		err := s.db.QueryRowContext(ctx, "SELECT e.at,e.seq FROM events e WHERE e.scope IN ("+placeholders(len(q.Scopes))+") AND e.trace=? AND e.role='user' AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM source_conflicts sc WHERE sc.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) ORDER BY e.seq DESC LIMIT 1", a...).Scan(&at, &seq)
+		if errors.Is(err, sql.ErrNoRows) {
+			return p, ErrOriginalAnchorUnavailable
+		}
+		if err != nil {
+			return p, err
+		}
+		where += " AND (e.at<? OR (e.at=? AND e.seq<?))"
+		args = append(args, at, at, seq)
+	}
+	if q.MediaKind != "" {
+		kinds := []string{q.MediaKind}
+		if q.MediaKind == "video_or_share" {
+			kinds = []string{"video", "share"}
+		}
+		where += " AND e.role='user' AND (EXISTS(SELECT 1 FROM json_each(e.payload,'$.incoming_media') im WHERE json_extract(im.value,'$.kind') IN (" + placeholders(len(kinds)) + "))"
+		args = append(args, stringsArgs(kinds)...)
+		// Older retained sources may predate incoming_media. A native type is
+		// still useful directory metadata; type 49 remains only a share
+		// candidate until read, never a claim that every share is a video.
+		for _, kind := range kinds {
+			typ := map[string]int{"video": 43, "share": 49, "image": 3, "voice": 34}[kind]
+			where += " OR (json_extract(e.payload,'$.source.message_type')=? AND json_type(e.payload,'$.quoted_source') IS NULL)"
+			args = append(args, typ)
+		}
+		where += ")"
+	}
 	if q.EventYear > 0 {
 		where += " AND instr(e.text,?)>0"
 		args = append(args, fmt.Sprint(q.EventYear))
@@ -740,6 +805,9 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 		args = append(args, stringsArgs(terms)...)
 		order = "COUNT(*) DESC,e.at DESC,e.id"
 	}
+	if q.Order == "time_desc" {
+		order = "e.at DESC,e.seq DESC,e.id"
+	}
 	args = append(args, q.Limit+1, q.Offset)
 	rows, e := s.db.QueryContext(ctx, "SELECT e.id,e.scope,e.trace,e.role,e.sender,e.at,e.text,e.hash,e.complete,e.revision,e.seq,e.payload FROM events e"+join+" WHERE "+where+" GROUP BY e.id ORDER BY "+order+" LIMIT ? OFFSET ?", args...)
 	if e != nil {
@@ -753,7 +821,27 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 			return p, e
 		}
 		enrichMemoryEvent(&ev, payload)
+		ev.TextBytes = len(ev.Text)
+		ev.ObservationCount = len(ev.IncomingMedia)
+		for _, m := range ev.IncomingMedia {
+			ev.ObservationBytes += len(m.Observation)
+		}
 		ev.Text = boundedText(ev.Text, 600)
+		// Search previews never copy complete ASR/OCR/video bodies. Exact
+		// observation pages remain available through memory_read.
+		for i := range ev.IncomingMedia {
+			ev.IncomingMedia[i].Observation = ""
+		}
+		if q.MetadataOnly {
+			ev.Text = ""
+			ev.IncomingMedia = nil
+			ev.Media = nil
+			ev.QuotedSource = nil
+			ev.Addressees = nil
+			if ev.Source != nil {
+				ev.Source = &SourceRef{MessageType: ev.Source.MessageType, Integrity: ev.Source.Integrity}
+			}
+		}
 		p.Items = append(p.Items, MemoryHit{Event: &ev, Reason: "original_source"})
 	}
 	if e = rows.Err(); e != nil {
@@ -762,6 +850,15 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 	finishPage(&p, q, hash)
 	return p, nil
 }
+
+type originalAnchorError struct{}
+
+func (originalAnchorError) Error() string { return "original_history_anchor_unavailable" }
+func (originalAnchorError) SafeToolFailure() (string, string) {
+	return "original_history_anchor_unavailable", "当前授权会话中无法找到或核验锚点原消息；可用wechat_read核对原生历史和覆盖范围，不能据此断言全部历史不存在"
+}
+
+var ErrOriginalAnchorUnavailable error = originalAnchorError{}
 
 func (m MemoryEntry) Representation(now time.Time) string {
 	if m.Pinned || now.Sub(m.LastMention) < 72*time.Hour {
