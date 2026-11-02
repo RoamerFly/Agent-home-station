@@ -526,6 +526,35 @@ func (s *Store) ReadEvent(ctx context.Context, scopes []string, id string) (Memo
 	return ev, e
 }
 
+// OriginalEventID resolves a native transport identifier only inside the
+// authorized scope and current durable dataset. It never selects a legacy row
+// just because a local message number was reused.
+func (s *Store) OriginalEventID(ctx context.Context, scope, message string) (string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT e.id FROM events e WHERE e.scope=? AND e.trace=? AND e.role='user' AND e.suppressed=0 AND json_extract(e.payload,'$.source.instance_id')=? AND COALESCE(json_extract(e.payload,'$.source.integrity'),'')!='conflicted' AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM source_conflicts c WHERE c.event_id=e.id) LIMIT 2", scope, message, s.SourceInstanceID())
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	id := ""
+	for rows.Next() {
+		var value string
+		if err = rows.Scan(&value); err != nil {
+			return "", err
+		}
+		if id != "" {
+			return "", ErrMemoryConflict
+		}
+		id = value
+	}
+	if err = rows.Err(); err != nil {
+		return "", err
+	}
+	if id == "" {
+		return "", sql.ErrNoRows
+	}
+	return id, nil
+}
+
 func (s *Store) SearchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, error) {
 	p, e := s.searchMemory(ctx, q)
 	if e != nil {

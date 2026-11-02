@@ -334,6 +334,7 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 		if e != nil {
 			return "", e
 		}
+		out["source_message_id"] = message.ID
 		if e = p.inspectPluginAudioRange(ctx, data, in, length, meta.Seconds, message, out); e != nil {
 			return "", e
 		}

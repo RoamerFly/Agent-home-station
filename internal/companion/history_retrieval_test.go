@@ -171,3 +171,19 @@ func TestHistoryReadFailureCanBeExplainedInsteadOfBecomingSilence(t *testing.T) 
 		t.Fatal("failed read was confused with inspected content")
 	}
 }
+
+func TestHistoryInspectionUsesVerifiedAssetOriginAndNamesOnlyUnreadSources(t *testing.T) {
+	h := &historyMaterialNeed{IDs: map[string]bool{"A": true, "B": true}, MessageIDs: map[string]string{"native-A": "A", "native-B": "B"}, ReadIDs: map[string]bool{}}
+	h.observeRead("video_inspect", json.RawMessage(`{"asset_id":"asset-A","action":"audio"}`), `{"source_message_id":"native-A","text":"合成音轨正文"}`)
+	if h.ContentRead || h.ReadIDs["A"] != true || strings.Contains(h.unreadDirectory(), "native-A") || !strings.Contains(h.unreadDirectory(), "native-B") {
+		t.Fatal("asset read lost origin or retried already-read source", h.unreadDirectory())
+	}
+	h.observeRead("video_inspect", json.RawMessage(`{"asset_id":"foreign","action":"audio"}`), `{"source_message_id":"foreign-native","text":"其他来源"}`)
+	if h.ContentRead {
+		t.Fatal("unrelated asset completed request")
+	}
+	h.observeRead("memory_read", json.RawMessage(`{"message_id":"native-B","part":"transcript"}`), `{"event":{"id":"B"},"text":"另一条原文","has_more":false}`)
+	if !h.ContentRead {
+		t.Fatal("resolved native original was not counted")
+	}
+}

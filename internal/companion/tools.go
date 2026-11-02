@@ -485,7 +485,7 @@ web_audio_search主要是公开器乐目录与档案，可用于用户接受的�
 				if !historyNeed.Prompted && (calls < max || autonomous) {
 					historyNeed.Prompted = true
 					observeDecision(ctx, "history_materials_not_inspected", 1)
-					turns = append(turns, deepseek.AssistantTurn(ctx, answer), map[string]string{"role": "user", "content": "本轮需要锚点之前的视频，已提供真实来源目录，但尚未读完目录中各条来源的观察。当前引用的单条视频不等于请求的前序视频，读到一条也不代表其他条目已读。逐项读取目录中的来源；没有实际尝试不能要求用户重新转发，也不能把单条总结当作完成。读取失败则保存具体失败和续读位置，不编造。"})
+					turns = append(turns, deepseek.AssistantTurn(ctx, answer), map[string]string{"role": "user", "content": "本轮需要锚点之前的视频，已读来源无需重做。以下是宿主尚未核实读取的具体来源，只补读这些编号：" + historyNeed.unreadDirectory() + "。用message_id调用video_inspect(action=audio)读取音轨，或memory_read(event=true,part=transcript,id=event_id)读取已保存正文。当前引用的单条视频不等于请求的前序视频，读到一条也不代表其他条目已读。没有实际尝试不能要求用户重发，也不能把单条总结当作完成。读取失败则保存具体失败和续读位置，不编造。"})
 					continue
 				}
 				if !e.session.Seal() {

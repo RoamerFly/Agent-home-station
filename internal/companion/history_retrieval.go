@@ -3,6 +3,7 @@ package companion
 import (
 	"encoding/json"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -175,7 +176,7 @@ func (h *historyMaterialNeed) observeReadFailure(name string, args json.RawMessa
 		Message string `json:"message_id"`
 		Event   bool   `json:"event"`
 	}
-	if json.Unmarshal(args, &q) == nil && (name == "memory_read" && q.Event && h.IDs[q.ID] || name == "video_inspect" && h.MessageIDs[q.Message] != "") {
+	if json.Unmarshal(args, &q) == nil && (name == "memory_read" && (q.Event && h.IDs[q.ID] || h.MessageIDs[q.ID] != "" || h.MessageIDs[q.Message] != "") || name == "video_inspect" && h.MessageIDs[q.Message] != "") {
 		h.ReadFailed = true
 	}
 }
@@ -197,19 +198,42 @@ func (h *historyMaterialNeed) observeRead(name string, args json.RawMessage, res
 	if json.Unmarshal(args, &q) != nil {
 		return
 	}
-	if name == "memory_read" && q.Event && (q.Part == "observation" || q.Part == "transcript") && h.IDs[q.ID] {
+	if name == "memory_read" && (q.Part == "observation" || q.Part == "transcript") {
 		var p struct {
-			Text string `json:"text"`
-			More bool   `json:"has_more"`
+			Text  string `json:"text"`
+			More  bool   `json:"has_more"`
+			Event struct {
+				ID string `json:"id"`
+			} `json:"event"`
 		}
 		if json.Unmarshal([]byte(result), &p) == nil && p.Text != "" && !p.More {
-			h.ReadIDs[q.ID] = true
+			id := q.ID
+			if h.IDs[p.Event.ID] {
+				id = p.Event.ID
+			}
+			if h.IDs[id] {
+				h.ReadIDs[id] = true
+			}
 		}
 	}
-	if name == "video_inspect" && h.MessageIDs[q.Message] != "" && (q.Action == "frames" || q.Action == "audio") {
+	if name == "video_inspect" && (q.Action == "frames" || q.Action == "audio") {
+		message := q.Message
+		var p struct {
+			Message string `json:"source_message_id"`
+			Source  string `json:"source"`
+		}
+		if json.Unmarshal([]byte(result), &p) == nil {
+			if h.MessageIDs[p.Message] != "" {
+				message = p.Message
+			} else if h.MessageIDs[p.Source] != "" {
+				message = p.Source
+			}
+		}
 		// The explicit media read is tied to one directory source. It does
 		// not count as inspecting the other requested videos.
-		h.ReadIDs[h.MessageIDs[q.Message]] = true
+		if id := h.MessageIDs[message]; id != "" {
+			h.ReadIDs[id] = true
+		}
 	}
 	read := 0
 	for id := range h.IDs {
@@ -218,4 +242,27 @@ func (h *historyMaterialNeed) observeRead(name string, args json.RawMessage, res
 		}
 	}
 	h.ContentRead = len(h.IDs) > 0 && read >= len(h.IDs)
+}
+
+func (h *historyMaterialNeed) unreadDirectory() string {
+	ids := []string{}
+	for id := range h.IDs {
+		if !h.ReadIDs[id] {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	rows := []map[string]string{}
+	for _, id := range ids {
+		row := map[string]string{"event_id": id}
+		for message, event := range h.MessageIDs {
+			if event == id {
+				row["message_id"] = message
+				break
+			}
+		}
+		rows = append(rows, row)
+	}
+	raw, _ := json.Marshal(rows)
+	return string(raw)
 }
