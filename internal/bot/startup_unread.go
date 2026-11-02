@@ -52,6 +52,13 @@ func (w *Worker) captureStartupUnread(ctx context.Context, path string, state *c
 	}
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
+		if item.OwnerModelReview {
+			// An administrator's explicit single-message retry must retain its
+			// original trigger/preferences path, not become an offline batch
+			// whose policy can silently discard old messages as stale chatter.
+			item.Backlog = false
+			continue
+		}
 		if !item.ToolStarted && (item.Phase == "received" || item.Phase == "read_pending" || item.Phase == "processing" || item.Phase == "backlog_grouped") {
 			item.Backlog = true
 		}

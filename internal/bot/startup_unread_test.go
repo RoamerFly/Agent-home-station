@@ -15,6 +15,25 @@ import (
 
 type pagedUnreadSource struct{ fakeSource }
 
+func TestOwnerSingleMessageRetryIsNotConvertedToUnreadBatch(t *testing.T) {
+	w, _, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+		t.Fatal("capture must not call a model")
+		return "", nil
+	}))
+	w.source = &fakeSource{}
+	w.runtime.Inbox = []inboxItem{
+		{OwnerModelReview: true, Backlog: true, Phase: "received", Event: fixtureEvent("1", "explicit", "room@chatroom", "incoming", "remote")},
+		{Phase: "received", Event: fixtureEvent("2", "ordinary", "room@chatroom", "incoming", "remote")},
+	}
+	state := checkpoint{Version: 1, ServerID: "server-1", Account: "test", Cursor: "2"}
+	if err := w.captureStartupUnread(t.Context(), filepath.Join(w.config.StateDir, "checkpoint.json"), &state); err != nil {
+		t.Fatal(err)
+	}
+	if w.runtime.Inbox[0].Backlog || !w.runtime.Inbox[1].Backlog || !w.runtime.Inbox[0].OwnerModelReview {
+		t.Fatal("explicit retry lost its independent trigger or changed ordinary recovery", w.runtime.Inbox)
+	}
+}
+
 func (s *pagedUnreadSource) Events(ctx context.Context, after string) (linuxnative.EventPage, error) {
 	n, _ := strconv.Atoi(after)
 	page := linuxnative.EventPage{NextCursor: after}

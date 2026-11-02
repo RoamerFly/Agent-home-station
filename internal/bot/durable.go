@@ -220,7 +220,7 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 			return nil
 		}
 		item := &w.runtime.Inbox[i]
-		if item.Backlog && (item.Phase == "received" || item.Phase == "read_pending" || item.Phase == "backlog_grouped") {
+		if item.Backlog && !item.OwnerModelReview && (item.Phase == "received" || item.Phase == "read_pending" || item.Phase == "backlog_grouped") {
 			if err := w.processUnreadConversation(ctx, item.Event.Data.ThreadID); err != nil {
 				return err
 			}
