@@ -61,6 +61,7 @@
  Object.assign(reasons,{manual_reply_diagnosis_failed:'手动诊断未完成；原草稿没有修改，也没有发送微信'});
  Object.assign(events,{backlog_message_grouped:'纳入本会话未读汇总',backlog_conversation_started:'统一查看本会话未读消息'});Object.assign(reasons,{offline_conversation_batch:'结合所有未读消息及原始时间综合判断，不逐条补答'});const roundStates={received:'已接收',running:'执行中',completed:'已完成',accepted:'微信已接受',waiting:'等待核对',waiting_receipt:'等待微信回执',retrying_tool:'等待工具重试',retrying_model:'等待模型重试',retrying_delivery:'等待微信重试',cancelling:'正在停止剩余部分',partially_cancelled:'部分已发送，其余已取消',partially_completed:'部分完成',failed:'需处理',silent:'选择安静',skipped:'已跳过',blocked:'已阻止',stopped:'已停止'};
  const stageNames={receive:'接收',decision:'判断',tool:'工具',delivery:'发送',system:'运行'};
+ Object.assign(reasons,{topic_concluded:'话题已经结束，本轮未发言',awaiting_participant:'在等对方回应，本轮未发言',nothing_to_add:'暂时没有新内容可补充',proactive_trigger:'查看是否适合主动发言',independent_conversation_wake:'按上次安排回来看一看',model_requested_later_reassessment:'已安排稍后再看',cross_conversation_result_private_delivery_handled:'结果已交给私聊投递',cross_conversation_private_route_unavailable:'无法定位私聊接收方',cross_conversation_media_requires_explicit_delivery:'跨会话附件需指定投递目标',private_diagnostic_only:'群内不公开运行诊断',unverified_model_response:'回复内容未能核实',tool_budget_exhausted:'工具调用次数已用尽'});
  let epoch=0,dateEpoch=0,dateItems=[],dateReady=false;
  const dateKey=raw=>time(raw).slice(0,10);
  const today=()=>dateKey(new Date().toISOString());
@@ -90,7 +91,7 @@
   if(item.sender)node(content,'small',window.WechatNames.display(item.sender,item.sender_name||item.sender),'hint');if(item.query)node(content,'p',item.query,'hint');
   const target=window.WechatRounds.activityTarget(item);if(target){const a=node(content,target.kind==='service'?'span':'a',target.label,'round-url');if(target.href){a.href=target.href;a.target='_blank';a.rel='noreferrer noopener'}else a.title=target.detail}
 
-  if(item.retry_at)node(content,'p','下次核对：'+time(item.retry_at),'hint');
+  if(item.retry_at)node(content,'p',(item.event==='conversation_wake_scheduled'?'下次评估：':'下次核对：')+time(item.retry_at),'hint');
   if(item.decision_note)node(content,'p',item.decision_note,'hint');
   const clock=node(li,'time',time(item.time),'round-step-time');clock.dateTime=item.time;
  }
@@ -101,7 +102,21 @@
   body.classList.add('round-detail');if(round.entries.some(x=>x.event==='agent_task_started'))node(body,'p','本轮由先前保存的任务恢复触发，使用原任务检查点和最新会话；不是新收到的一条微信消息。','hint');
   if(round.sent.length){const output=node(body,'div',undefined,'round-output');node(output,'h3','发送结果');for(const sent of round.sent){const accepted=['accepted','observed'].includes(sent.status);readable(output,sent.content,'完整发送内容');node(output,'small',accepted?'微信已接受':statuses[sent.status]||'待核对',accepted?'receipt-accepted':'receipt-pending')}}
   if(!round.system&&round.thread_id){const actions=node(body,'div',undefined,'dialog-actions'),evidence=node(actions,'button','回复依据','secondary');evidence.type='button';evidence.addEventListener('click',()=>window.WechatMemory?.showReplyEvidence({thread:round.thread_id,message:round.received[0]?.message_id||round.entries.find(x=>x.message_id)?.message_id}))}
-  node(body,'p','处理步骤按发生时间排列。','hint');const timeline=node(body,'ol',undefined,'round-timeline');for(const item of round.entries)step(timeline,item);
+  const timeline=node(body,'ol',undefined,'round-timeline');
+  for(const item of round.timeline){
+   if(item.event==='unread_batch_summary'){
+    const li=node(timeline,'li',undefined,'round-step');node(li,'span','接收','round-stage');
+    const group=node(li,'div',undefined,'round-step-content');
+    node(group,'strong','合并处理 '+round.batchSize+' 条未读消息');
+    const messages=round.batchMessages;
+    if(messages.length){const details=node(group,'details');node(details,'summary','查看收到的消息（'+messages.length+'）');details.addEventListener('toggle',()=>{if(!details.open||details.querySelector('ol'))return;const list=node(details,'ol',undefined,'round-timeline');for(const message of messages)step(list,message)})}
+   }else step(timeline,item);
+  }
+  if(round.timeline.length===0)node(body,'p','正在准备处理。','hint');
+  if(round.hasDiagnostics){
+   const details=node(body,'details');node(details,'summary','原始运行记录（'+round.entries.length+'）');
+   details.addEventListener('toggle',()=>{if(!details.open||details.querySelector('ol'))return;const list=node(details,'ol',undefined,'round-timeline');for(const item of round.entries)step(list,item)});
+  }
  }
  function openRound(round){const popup=window.WechatDialogs.open({title:round.source+' · 执行过程',subtitle:time(round.time)+' · '+(roundStates[round.status]||round.status)});fillRound(popup.body,round);return popup}
  function roundRow(parent,round){
@@ -110,12 +125,12 @@
   const clock=node(summary,'time',time(round.time),'round-time');clock.dateTime=round.time;
   const overview=node(summary,'span',undefined,'round-overview'),head=node(overview,'span',undefined,'round-head');
   const source=node(head,'strong',window.WechatNames.display(round.thread_id,round.source),'round-source');source.title=round.thread_id||'';const resumed=round.entries.some(x=>x.event==='agent_task_started'),backlog=round.entries.some(x=>x.event==='backlog_conversation_started');node(head,'span',round.system?'系统':backlog?'未读汇总':resumed?'任务续办':round.source_kind==='group'?'群聊':'私聊','round-kind');
-  const preview=round.received.map(x=>x.content).filter(Boolean).join('\n\n')||(round.proactive?'自主发起':round.entries.find(x=>x.content)?.content)||label(round.entries[0]);
+  const preview=activitySummary(round)||round.received.map(x=>x.content).filter(Boolean).join('\n\n')||round.timeline.find(x=>x.content)?.content||label(round.entries[0]);
   node(overview,'span',preview,'round-preview');
   for(const sent of round.sent)if(sent.content)node(overview,'span','发送：'+sent.content,'round-preview round-sent');
-  if(round.received.length>1)node(overview,'small','本轮含 '+round.received.length+' 条消息');
+  if(!round.batchSize&&round.received.length>1)node(overview,'small','本轮含 '+round.received.length+' 条消息');
   const outcome=node(summary,'span',undefined,'round-outcome');node(outcome,'span',round.system?'运行记录':roundStates[round.status]||round.status,'round-status');
-  node(outcome,'small',round.entries.length+' 个步骤'+(round.tools?' / '+round.tools+' 次工具':'')+(round.duration>=1000?' / '+(round.duration/1000).toFixed(round.duration<10000?1:0)+' 秒':''));return card;
+  node(outcome,'small',[round.tools?round.tools+' 次工具':'',round.duration>=1000?(round.duration/1000).toFixed(round.duration<10000?1:0)+' 秒':''].filter(Boolean).join(' / '));return card;
  }
  function openConversation(thread,title){const popup=window.WechatDialogs.open({title:(title||thread)+' · 执行回合'});const items=rounds().filter(x=>!x.system&&x.thread_id===thread);if(!items.length)node(popup.body,'p','当前活跃日志没有这个会话的执行记录。更早的步骤可在历史日志归档中查看。','empty');for(const round of items)roundRow(popup.body,round);return popup}
  function openSend(id,thread){const candidates=rounds().filter(x=>(!thread||x.thread_id===thread)&&x.entries.some(e=>e.send_id===id));if(candidates.length===1)return openRound(candidates[0]);const popup=window.WechatDialogs.open({title:'发送记录'});node(popup.body,'p','当前活跃日志没有唯一匹配的发送记录，可在历史日志归档中查看。','empty');return popup}
@@ -165,6 +180,12 @@
  window.addEventListener('wechat-admin:navigate',event=>{if(event.detail.section==='logs')loadDate()});
  $('#log-follow-latest').addEventListener('change',()=>{if($('#log-follow-latest').checked&&state.pending)consume(state.pending,true)});
  window.addEventListener('wechat-admin:logs-refresh',()=>refresh());
- window.WechatActivity={rounds,openRound,openConversation,openSend,roundForMessage,time,status:round=>roundStates[round.status]||round.status,refresh:()=>refresh(true),loadPending:()=>{if(state.pending)consume(state.pending)}};
+ function activitySummary(round){
+  if(round.batchSize)return '合并处理 '+round.batchSize+' 条未读消息';
+  if(!round.proactive)return '';
+  const decision=round.timeline.findLast(e=>e.event==='character_decision');
+  return decision&&round.status==='silent'?'自主评估 · '+label(decision):'自主发言评估';
+ }
+ window.WechatActivity={rounds,openRound,openConversation,openSend,roundForMessage,time,activitySummary,status:round=>roundStates[round.status]||round.status,refresh:()=>refresh(true),loadPending:()=>{if(state.pending)consume(state.pending)}};
  window.addEventListener('wechat-admin:logout',()=>{epoch++;dateEpoch++;dateReady=false;dateItems=[];$('#log-date').value=today();state.items=[];state.pending=null;state.ready=false;$('#log-list').replaceChildren();$('#log-search').value='';$('#log-new').hidden=true});
 })();

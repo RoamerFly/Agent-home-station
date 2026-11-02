@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -53,14 +54,28 @@ func budgetTokenText(text string, budget int) string {
 	return boundedText(text, lo)
 }
 
-func (e *Engine) memoryContext(ctx context.Context, in Input) string {
+func (e *Engine) memoryContext(ctx context.Context, in Input, scope Scope) string {
 	if in.SourceOnlyContext || in.Preview || !e.Config.Permissions.Remember || !e.memorySettings().Enabled || e.Store.db == nil {
 		return ""
 	}
 	id := ScopeID(in.Channel, in.Account, in.Thread)
 	query, _ := e.inputLiteral(in)
-	year := explicitMemoryYear(query)
-	if query == "" && runtimeInput(in) {
+	if query == "" && in.Mode == "proactive" && !in.Surf && in.TaskID == "" && !in.BackgroundResult && !in.ReportOnly && len(in.UnreadMessages) == 0 {
+		// The timer's instructions describe scheduling, not a conversation topic.
+		recent := append([]Turn(nil), scope.Messages...)
+		sort.SliceStable(recent, func(i, j int) bool { return recent[i].Time.After(recent[j].Time) })
+		for _, t := range recent {
+			if t.Role == "user" {
+				literal, _ := literalTurn(e.evidenceTurn(ctx, id, t))
+				if query = boundedText(strings.TrimSpace(literal), 256); query != "" {
+					break
+				}
+			}
+		}
+		if query == "" {
+			return ""
+		}
+	} else if query == "" && runtimeInput(in) {
 		query = UserRequestText(in.Text)
 	}
 	if query == "" {
@@ -68,12 +83,11 @@ func (e *Engine) memoryContext(ctx context.Context, in Input) string {
 			query += " " + boundedText(media.Observation, 256)
 		}
 	}
-	q := MemoryQuery{Scopes: []string{id}, Query: query, Limit: 12, EventYear: year}
+	q := MemoryQuery{Scopes: []string{id}, Query: query, Limit: 12, EventYear: explicitMemoryYear(query)}
 	if strings.Contains(query, "那个") || strings.Contains(query, "刚才") || strings.Contains(query, "上次") {
-		recent := e.Store.Context(in, e.Config, time.Now())
 		added := 0
-		for i := len(recent.Messages) - 1; i >= 0 && added < 2; i-- {
-			t := recent.Messages[i]
+		for i := len(scope.Messages) - 1; i >= 0 && added < 2; i-- {
+			t := scope.Messages[i]
 			if t.Role != "user" || t.TraceID == in.TraceID || in.IsGroup && !relevantSender(in, t.Sender) {
 				continue
 			}

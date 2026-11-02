@@ -5,6 +5,26 @@ const { project, stage, activityTarget } = require('../internal/admin/static/rou
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
 
+test('a 25-message unread batch retains all evidence but has a single timeline entry before the actual failure',()=>{
+ const items=[];
+ for(let i=0;i<25;i++) items.push(entry(i,{message_id:'m'+i,event:'message_received',category:'received',content:'合成消息'}));
+ for(let i=0;i<24;i++) items.push(entry(25+i,{message_id:'m'+i,related_message_id:'m24',event:'backlog_message_grouped',category:'decision'}));
+ for(const [event,category] of [['backlog_conversation_started','decision'],['generation_started','decision'],['model_context_prepared','decision'],['send_failed','error']])
+  items.push(entry(items.length,{message_id:'m24',event,category}));
+ const [round]=project(items);
+ assert.equal(round.batchSize,25);assert.equal(round.batchMessages.length,25);
+ assert.deepEqual(round.timeline.map(x=>x.event),['unread_batch_summary','send_failed']);
+ assert.equal(round.entries.length,items.length);assert.equal(round.status,'failed');assert.equal(round.hasDiagnostics,true);
+});
+
+test('one autonomous decision is visible, with its scheduled follow-up and raw context available',()=>{
+ const [r]=project(['conversation_wake_started','generation_started','model_context_prepared','proactive_evaluated','conversation_wake_scheduled','character_decision'].map((event,i)=>entry(i,{event,category:'decision',...(['proactive_evaluated','character_decision'].includes(event)?{reason:'awaiting_participant',status:'silent'}:{})})));
+ assert.deepEqual(r.timeline.map(x=>x.event),['conversation_wake_started','conversation_wake_scheduled','character_decision']);
+ assert.equal(r.status,'silent');assert.equal(r.proactive,true);assert.equal(r.entries.length,6);
+ const [failure]=project([entry(1,{event:'model_context_prepared',category:'error',status:'failed'})]);
+ assert.equal(failure.timeline.length,1);assert.equal(failure.status,'failed');
+});
+
 test('no recognized speech remains an observation outcome rather than a failed turn',()=>{
  const rows=project([
   entry(1,{event:'message_received',category:'received'}),

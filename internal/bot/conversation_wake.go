@@ -58,9 +58,12 @@ func (w *Worker) scheduleConversationWake(c *companion.Engine, in companion.Inpu
 	if len(purpose) > 0 {
 		note = boundedWakePurpose(purpose[0])
 	}
-	w.runtime.Wakes = append(w.runtime.Wakes, &conversationWake{Purpose: note, Input: in, Parent: in.TraceID, Due: time.Now().Add(time.Duration(seconds) * time.Second), State: "waiting", WaitForReply: wait})
+	due := time.Now().Add(time.Duration(seconds) * time.Second)
+	w.runtime.Wakes = append(w.runtime.Wakes, &conversationWake{Purpose: note, Input: in, Parent: in.TraceID, Due: due, State: "waiting", WaitForReply: wait})
 	w.persistErr = w.saveRuntime()
-	w.activity(Record{Event: "conversation_wake_scheduled", Category: "decision", ThreadID: in.Thread, MessageID: in.TraceID, Status: "waiting", Reason: "model_requested_later_reassessment"})
+	if w.persistErr == nil {
+		w.activity(Record{Event: "conversation_wake_scheduled", Category: "decision", ThreadID: in.Thread, MessageID: in.TraceID, Status: "waiting", Reason: "model_requested_later_reassessment", RetryAt: due.UTC().Format(time.RFC3339Nano)})
+	}
 }
 func (w *Worker) tickConversationWake(ctx context.Context) bool {
 	c, ok := w.model.(*companion.Engine)

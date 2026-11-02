@@ -324,7 +324,7 @@ func TestMemoryRefreshExcludesForgottenAndPreservesCurrent(t *testing.T) {
 	in.Text = "我喜欢红茶"
 	m := sourceEntry(t, s, c, in, time.Now(), "preference", in.Text, 0)
 	engine, _ := New(c, s, extractionFixture(func(context.Context, string, []map[string]string) (string, error) { return "", nil }), "")
-	dynamic := engine.memoryContext(t.Context(), in)
+	dynamic := engine.memoryContext(t.Context(), in, s.Context(in, c, time.Now()))
 	current := `{"kind":"current_message","text":"当前请求不可截断"}`
 	turns := []map[string]string{{"role": "user", "content": dynamic}, {"role": "user", "content": current}}
 	m.Status = "deleted"
@@ -337,6 +337,42 @@ func TestMemoryRefreshExcludesForgottenAndPreservesCurrent(t *testing.T) {
 	}
 	if strings.Contains(result[0]["content"], "我喜欢红茶") {
 		t.Fatal("forgotten entry frozen in running context")
+	}
+}
+
+func TestScheduledConversationRecallUsesNewestUserTopic(t *testing.T) {
+	s, c, in := memoryFixture(t)
+	e, _ := New(c, s, extractionFixture(func(context.Context, string, []map[string]string) (string, error) { return "", nil }), "")
+	queries := make(chan string, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Input) != 1 {
+			t.Errorf("unexpected embed input: %v", err)
+			w.WriteHeader(400)
+			return
+		}
+		queries <- body.Input[0]
+		fmt.Fprint(w, `{"data":[{"index":0,"embedding":[1,0]}]}`)
+	}))
+	defer server.Close()
+	e.MemoryEmbedding = func() EmbeddingConfig { return EmbeddingConfig{BaseURL: server.URL, Model: "synthetic"} }
+	in.Mode, in.Sender, in.Source, in.OriginalText, in.Text = "proactive", "", nil, nil, "定时查看群聊"
+	now := time.Now()
+	scope := Scope{Messages: []Turn{{Role: "user", Text: "周六观星", Time: now}, {Role: "user", Text: "迟到的旧话题", Time: now.Add(-time.Hour)}, {Role: "assistant", Text: "以前的答复", Time: now.Add(time.Minute)}}}
+	e.memoryContext(t.Context(), in, scope)
+	select {
+	case query := <-queries:
+		if query != "周六观星" {
+			t.Fatal(query)
+		}
+	default:
+		t.Fatal("missing topic recall")
+	}
+	e.memoryContext(t.Context(), in, Scope{})
+	if len(queries) != 0 {
+		t.Fatal("scheduler instructions used as a memory query")
 	}
 }
 

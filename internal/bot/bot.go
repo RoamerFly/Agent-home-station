@@ -595,7 +595,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		}
 	}
 	if input.Mode == "proactive" && !input.Preview {
-		action, reason := decision.Action, decision.Reason
+		action, reason := decision.RecordStatus(), decision.Reason
 		if err != nil {
 			action, reason = "failed", "model_or_observation_failed"
 		}
@@ -658,14 +658,9 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 	if decision.Action != "reply" {
 		w.scheduleConversationWake(character, input, decision.WakeAfterSeconds, decision.WaitForReply, decision.WakeReason)
 		category := "decision"
-		status := decision.Action
-		if strings.Contains(decision.Reason, "invalid") || decision.ReviewFailure != nil || strings.HasPrefix(decision.Reason, "grounding_") {
+		status := decision.RecordStatus()
+		if status == "failed" {
 			category = "error"
-			status = "failed"
-		}
-		if decision.Action == "failed" || decision.Reason == "tool_task_deadline_exceeded" {
-			// Not sending a group error is not a model's social silence decision.
-			category, status = "error", "failed"
 		}
 		w.activity(Record{Event: "character_decision", Category: category, ThreadID: input.Thread, MessageID: input.TraceID, Reason: decision.Reason, Status: status, ReviewFailure: decision.ReviewFailure})
 		if decision.ReviewFailure != nil {

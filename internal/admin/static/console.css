@@ -245,6 +245,10 @@ details.disclosure:not([open])>:not(summary) { display:none; }
 /* Modal reading and editing surfaces. */
 .console-dialog { width:min(1120px,calc(100vw - 40px)); max-width:calc(100vw - 24px); height:min(840px,calc(100dvh - 48px)); max-height:calc(100dvh - 24px); padding:0; border:1px solid var(--line); border-radius:20px; color:var(--ink); background:var(--raised); box-shadow:0 24px 100px #0005; overflow:hidden; }
 .console-dialog[open] { display:flex; flex-direction:column; }
+.console-dialog:has(> .round-detail) { height:fit-content; width:min(960px,calc(100vw - 24px)); }
+.console-dialog > .round-detail { flex:0 1 auto; }
+.round-detail > details, .round-step-content > details { margin-top:6px; }
+.round-detail summary { cursor:pointer; }
 .console-dialog::backdrop,.flow-inspector::backdrop { background:#01081d88; backdrop-filter:none; }
 .dialog-heading { display:flex; align-items:start; justify-content:space-between; gap:16px; padding:20px 24px 16px; border-bottom:1px solid var(--line); flex-shrink:0; }
 .dialog-heading h2 { font-size:19px; }.dialog-heading p { color:var(--muted); font-size:12px; }

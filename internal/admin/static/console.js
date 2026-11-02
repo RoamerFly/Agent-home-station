@@ -98,9 +98,11 @@
   for(const round of recent){const row=node('button',undefined,'dashboard-row');row.type='button';const meta=node('span',undefined,'row-meta');
    meta.append(node('strong',window.WechatNames?.display(round.thread_id,round.source)||round.source),node('time',window.WechatActivity.time(round.time)));
    row.append(meta,node('small',window.WechatActivity.status(round)));
-   for(const item of round.received||[])if(item.content)row.append(node('p',item.content));
+   const summary=window.WechatActivity.activitySummary(round);
+   if(summary)row.append(node('p',summary));
+   else for(const item of round.received||[])if(item.content)row.append(node('p',item.content));
    for(const item of round.sent||[])if(item.content)row.append(node('p','发送：'+item.content));
-   if(!round.received?.length&&!round.sent?.length)row.append(node('p',round.proactive?'自主发起的一轮活动':'查看处理过程'));
+   if(!summary&&!round.received?.length&&!round.sent?.length)row.append(node('p','查看处理过程'));
    row.addEventListener('click',()=>window.WechatActivity.openRound(round));box.append(row);
   }
   box.scrollTop=position;
