@@ -282,8 +282,27 @@ func (w *Worker) recoverReplySource(ctx context.Context, in companion.Input) (co
 	// inventing a receive time. Legacy incomplete proofs retain the time check.
 	verifiedProof := in.ReplyContext != nil && !w.bindingEvidenceMissing(in) && in.ReplyContext.State == "verified" && in.ReplyContext.SourceVersions[source.EventID] == ev.Revision && e.ValidateReplyContext(ctx, in, *in.ReplyContext) == nil
 	if in.Source != nil {
-		if in.Source.EventID != "" && in.Source.EventID != source.EventID || in.Source.Revision > 0 && in.Source.Revision != ev.Revision || in.Source.BodyHash != "" && in.Source.BodyHash != source.BodyHash {
+		if in.Source.EventID != "" && in.Source.EventID != source.EventID || in.Source.Revision > 0 && in.Source.Revision != ev.Revision {
 			return in, errors.New("legacy_reply_source_changed")
+		}
+		if in.Source.BodyHash != "" && in.Source.BodyHash != source.BodyHash {
+			if in.Source.EventID != "" {
+				return in, errors.New("legacy_reply_source_changed")
+			}
+			// Native media BodyHash describes the raw XML/card; the canonical
+			// event hashes the user's original text separately from observations.
+			// Prove the unchanged native packet before adopting its already
+			// verified canonical reference. Never simply ignore a hash mismatch.
+			message, readErr := w.source.Message(ctx, in.TraceID)
+			if readErr != nil {
+				return in, errors.New("legacy_reply_native_source_unavailable")
+			}
+			raw := messageSource(message)
+			a, ae := time.Parse(time.RFC3339Nano, in.Source.OccurredAt)
+			b, be := time.Parse(time.RFC3339Nano, message.CreatedAt)
+			if raw.BodyHash != in.Source.BodyHash || message.ID != in.TraceID || message.AccountID != in.Account || message.ThreadID != in.Thread || message.SenderID != in.Sender || message.ServerID != source.ServerID || in.Source.MessageType != 0 && message.Type != in.Source.MessageType || ae != nil || be != nil || !a.Equal(b) {
+				return in, errors.New("legacy_reply_source_changed")
+			}
 		}
 		if in.Source.Revision < 1 || in.Source.BodyHash == "" {
 			original := companion.UserRequestText(in.Text)

@@ -52,7 +52,7 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 		var err error
 		input, text, err = w.prepareGroundedText(ctx, input, text)
 		if err != nil {
-			return sending.Receipt{}, err
+			return sending.Receipt{}, replyAdmissionFailure(err)
 		}
 		return w.sender.SendText(ctx, sending.TextRequest{Recipient: input.Thread, Text: text})
 	}
@@ -73,7 +73,7 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 	var err error
 	input, text, err = w.prepareGroundedText(ctx, input, text)
 	if err != nil {
-		return sending.Receipt{}, err
+		return sending.Receipt{}, replyAdmissionFailure(err)
 	}
 	d := &delivery{Trace: input.TraceID, Thread: input.Thread, Text: text, Bubble: bubble, Created: time.Now().UTC(), State: "prepared", Input: input}
 	d.Key = "bot-" + messageHash(input.Thread + "|" + input.TraceID + fmt.Sprint(bubble))[:48]
@@ -105,9 +105,10 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 	if !lookupFirst || errors.Is(err, linuxnative.ErrToolNotFound) {
 		in, text, validationErr := w.prepareGroundedText(ctx, d.Input, d.Text)
 		if validationErr != nil {
-			d.State, d.Reason = "stopped", "reply_grounding_invalid"
+			failure := replyAdmissionFailure(validationErr)
+			d.State, d.Reason = "stopped", sending.FailureReason(failure)
 			w.persistErr = w.saveRuntime()
-			return sending.Receipt{}, validationErr
+			return sending.Receipt{}, failure
 		}
 		d.Input, d.Text = in, text
 		if gate := w.sendGate(d.Thread); time.Now().Before(gate) {
