@@ -334,6 +334,7 @@ details.disclosure:not([open])>:not(summary) { display:none; }
 .document-directory>div { flex:none; }
 .document-directory button { flex-shrink:0; }
 .workspace-runtime { display:flex; flex-direction:column; gap:8px; margin-top:auto; padding-top:14px; min-width:0; }
+#agent>.workspace-runtime { margin:0 0 10px; padding:12px 14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); }
 .workspace-runtime .workspace-facts { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:3px 10px; margin:0; font-size:12px; }
 .workspace-runtime .workspace-facts dt { color:var(--muted); }
 .workspace-runtime .workspace-facts dd { margin:0; min-width:0; overflow-wrap:anywhere; }
@@ -349,7 +350,7 @@ details.disclosure:not([open])>:not(summary) { display:none; }
 @media(max-width:760px) {
  .document-directory { display:flex; gap:6px; flex-direction:row; flex-wrap:wrap; }
  .document-directory>div { flex:1 1 130px; }.document-directory button { flex:1 1 90px; font-size:12px; }
- .document-directory .workspace-runtime { display:flex; flex-basis:100%; }
+ #agent>.workspace-runtime { margin-bottom:8px; }
  #plugins>.plugin-workspace { display:flex; flex-direction:column; overflow:auto; }
  #plugins .plugin-browser,#plugins .plugin-editor { overflow:visible; }
 }

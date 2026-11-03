@@ -230,12 +230,37 @@ func (p *permittedTools) localMusicTaskProof(method, path, id string) (string, e
 		b, _ := json.Marshal([]any{task.ID, task.Account, task.Thread, task.Sender, task.OriginTrace, task.MusicJob, task.MusicSpec, task.Constraints, adminProof, cancelledMetadata})
 		return namedSpeechSHA(b), nil
 	}
+	proofForLinkedStatus := func(parent, child agentTask) (string, error) {
+		// A parent that arranged a durable conversion may observe its one child,
+		// but it never gains the child task's resume, cancel, audio or delivery
+		// authority. Those operations remain bound to the child task.
+		if method != "GET" || path != "/jobs/"+id || parent.State == "cancelled" || child.State == "cancelled" ||
+			p.manager.validateTaskSource(parent) != nil || p.manager.validateTaskSource(child) != nil ||
+			parent.Account != child.Account || parent.Thread != child.Thread || parent.Sender != child.Sender || child.ParentID != parent.ID || child.MusicJob != id {
+			return "", errors.New("music_local_parent_child_status_changed")
+		}
+		b, _ := json.Marshal([]any{"parent_child_status", parent.ID, parent.Account, parent.Thread, parent.Sender, parent.OriginTrace, parent.Constraints, child.ID, child.ParentID, child.OriginTrace, child.MusicJob, child.MusicSpec, child.Constraints})
+		return namedSpeechSHA(b), nil
+	}
 	if p.trace.TaskID != "" {
 		task, ok := p.manager.agent.lookupTask(p.trace.TaskID, p.trace.Account, p.trace.Thread)
-		if !ok || id != "" && task.MusicJob != id || task.Sender != p.trace.Sender && (method != "POST" || privilegeProof == "") {
+		if !ok || task.Sender != p.trace.Sender && (method != "POST" || privilegeProof == "") {
 			return "", errors.New("music_local_task_changed")
 		}
-		return proofFor(task)
+		if id == "" || task.MusicJob == id {
+			return proofFor(task)
+		}
+		children := p.linkedMusicChildren(task, id)
+		if len(children) == 1 {
+			if method != "GET" || path != "/jobs/"+id {
+				return "", toolInputError("该换声任务由子任务持续处理；父任务只能读取状态，恢复、取消和交付会由子任务继续")
+			}
+			return proofForLinkedStatus(task, children[0])
+		}
+		if len(children) > 1 {
+			return "", errors.New("music_local_parent_child_ambiguous")
+		}
+		return "", errors.New("music_local_task_changed")
 	}
 	if id != "" {
 		for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
@@ -271,6 +296,22 @@ func (p *permittedTools) localMusicTaskProof(method, path, id string) (string, e
 		return "", yueError("yue_job_scope_denied")
 	}
 	return "", nil
+}
+
+// linkedMusicChildren returns only children whose durable account, room and
+// requester identity still matches the current parent. A job ID alone never
+// makes an unrelated task a child.
+func (p *permittedTools) linkedMusicChildren(parent agentTask, jobID string) []agentTask {
+	if jobID == "" || parent.ID == "" {
+		return nil
+	}
+	children := make([]agentTask, 0, 1)
+	for _, child := range p.manager.agent.list(parent.Account, parent.Thread) {
+		if child.ParentID == parent.ID && child.MusicJob == jobID && child.Account == parent.Account && child.Thread == parent.Thread && child.Sender == parent.Sender {
+			children = append(children, child)
+		}
+	}
+	return children
 }
 
 func localMusicAdminAuthorization(ctx context.Context, m *Manager, authority *speechAdminTestAuthority, method, path string) (string, error) {

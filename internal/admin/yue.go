@@ -342,7 +342,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			found = found || old.ID == taskID
 		}
 		if !found {
-			task := agentTask{MusicSpec: spec, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: map[bool]string{true: "参考翻唱 · ", false: "原创歌曲 · "}[in.Mode == "cover"] + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "歌曲任务已提交，等待真实结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
+			task := agentTask{ParentID: p.trace.TaskID, MusicSpec: spec, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: map[bool]string{true: "参考翻唱 · ", false: "原创歌曲 · "}[in.Mode == "cover"] + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "歌曲任务已提交，等待真实结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
 			task.OwnerRequested = p.privileged()
 			task.Constraints = p.taskConstraints("music", "", spec.VoiceProfile, spec.Reference)
 			if len(task.Title) > 200 {
@@ -407,6 +407,18 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 	if !authorized {
 		return "", yueError("yue_job_scope_denied")
 	}
+	var parentChild *agentTask
+	if p.trace.TaskID != "" {
+		if parent, ok := p.manager.agent.lookupTask(p.trace.TaskID, p.trace.Account, p.trace.Thread); ok && parent.MusicJob != in.ID {
+			if children := p.linkedMusicChildren(parent, in.ID); len(children) == 1 {
+				child := copyTask(children[0])
+				parentChild = &child
+				if name == "music_local_resume" {
+					return "", toolInputError("该换声任务由子任务持续处理；父任务只能读取状态，恢复、取消和交付会由子任务继续")
+				}
+			}
+		}
+	}
 	data, _, e := p.yueRequest(ctx, "GET", "/jobs/"+in.ID, nil, "")
 	if e != nil {
 		return "", e
@@ -430,6 +442,26 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 					status["job_id"] = in.ID
 				}
 			}
+		}
+		data, _ = json.Marshal(status)
+		return string(data), nil
+	}
+	if parentChild != nil {
+		// A completed status is still only metadata when read by the parent
+		// that arranged this conversion. The child owns audio retrieval,
+		// staging and the idempotent delivery continuation.
+		status["job_id"] = in.ID
+		status["child_task_id"] = parentChild.ID
+		switch parentChild.State {
+		case "waiting", "running", "pending", "waiting_delivery":
+			status["automatic_followup"] = true
+			status["instruction"] = "换声子任务会继续核验成品并交付。当前父任务只读取状态，不读取附件、不恢复计算、不重复发送。"
+		case "needs_review":
+			status["automatic_followup"] = false
+			status["instruction"] = "换声子任务已暂停等待处理。当前父任务只返回状态，不读取附件、不恢复计算、不重复发送。"
+		default:
+			status["automatic_followup"] = false
+			status["instruction"] = "换声子任务已结束。当前父任务只返回状态，不读取附件、不恢复计算、不重复发送。"
 		}
 		data, _ = json.Marshal(status)
 		return string(data), nil

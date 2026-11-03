@@ -178,7 +178,7 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 	}
 	if !found {
 		spec := &songSpec{VoiceID: in.VoiceID, VoiceProfile: in.VoiceProfile, Engine: "rvc", Mode: "cover", SingingVoice: "character", VocalGender: "female", Duration: int(math.Ceil(actual)), Reference: asset.ID, ReferenceHash: asset.Hash, ReferenceStart: start, ReferenceSeconds: seconds, Style: "RVC原曲人声换声；保留原词、旋律、节奏与伴奏"}
-		task := agentTask{ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, MusicSpec: spec, MusicTitle: in.Title, MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, Title: "RVC翻唱 · " + in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "查询原RVC任务结果，不重写歌词、不重生成旋律、不重复转换", State: "waiting", Next: time.Now().Add(20 * time.Second)}
+		task := agentTask{ParentID: p.trace.TaskID, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, MusicSpec: spec, MusicTitle: in.Title, MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, Title: "RVC翻唱 · " + in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "查询原RVC任务结果，不重写歌词、不重生成旋律、不重复转换", State: "waiting", Next: time.Now().Add(20 * time.Second)}
 		task.OwnerRequested = p.privileged()
 		task.Constraints = p.taskConstraints("rvc_cover", in.VoiceID, in.VoiceProfile, in.Reference)
 		if err := p.manager.agent.task(task); err != nil {

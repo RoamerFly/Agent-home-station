@@ -381,6 +381,62 @@ func TestLocalMusicJobMutationsRequireOriginalRequesterAndExactCurrentTask(t *te
 	}
 }
 
+func TestParentTaskMayReadExactlyOneChildMusicStatusButCannotMutateIt(t *testing.T) {
+	f, access, _ := localMusicPluginFixture(t, "http://127.0.0.1:8765")
+	parent := agentTask{ID: "parent-task", Account: "test", Thread: "filehelper", Sender: access.trace.Sender, State: "running", OriginTrace: access.trace.TraceID}
+	child := agentTask{ID: "child-task", ParentID: parent.ID, Account: parent.Account, Thread: parent.Thread, Sender: parent.Sender, State: "waiting", OriginTrace: parent.OriginTrace, MusicJob: "child-rvc-job", MusicSpec: &songSpec{Engine: "rvc"}}
+	for _, task := range []agentTask{parent, child} {
+		if err := f.manager.agent.task(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	access.trace.TaskID = parent.ID
+	var proof string
+	for attempt := 0; attempt < 2; attempt++ {
+		policy, err := access.newLocalMusicPluginPolicy(t.Context(), "GET", "/jobs/child-rvc-job", nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if proof != "" && proof != policy.taskProof {
+			t.Fatal("repeated parent status read changed its durable proof")
+		}
+		proof = policy.taskProof
+	}
+	for _, path := range []string{"/jobs/child-rvc-job/resume", "/jobs/child-rvc-job/cancel", "/jobs/child-rvc-job/audio"} {
+		method, body := "POST", any(map[string]bool{})
+		if path[len(path)-5:] == "audio" {
+			method, body = "GET", nil
+		}
+		if _, err := access.newLocalMusicPluginPolicy(t.Context(), method, path, body, ""); err == nil || !strings.Contains(err.Error(), "子任务") {
+			t.Fatalf("parent obtained protected child operation %s: %v", path, err)
+		}
+	}
+	child.State = "cancelled"
+	if err := f.manager.agent.task(child); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := access.newLocalMusicPluginPolicy(t.Context(), "GET", "/jobs/child-rvc-job", nil, ""); err == nil {
+		t.Fatal("cancelled child remained readable through its parent")
+	}
+	child.State = "waiting"
+	if err := f.manager.agent.task(child); err != nil {
+		t.Fatal(err)
+	}
+	access.trace.Sender = "another-requester"
+	if _, err := access.newLocalMusicPluginPolicy(t.Context(), "GET", "/jobs/child-rvc-job", nil, ""); err == nil {
+		t.Fatal("another requester read a parent's child")
+	}
+	access.trace.Sender = parent.Sender
+	other := child
+	other.ID = "second-child-task"
+	if err := f.manager.agent.task(other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := access.newLocalMusicPluginPolicy(t.Context(), "GET", "/jobs/child-rvc-job", nil, ""); err == nil {
+		t.Fatal("ambiguous child mapping granted status read")
+	}
+}
+
 func TestLocalMusicCancelledTaskAllowsOnlyFreshAuthorizedMetadataRead(t *testing.T) {
 	f, access, _ := localMusicPluginFixture(t, "http://127.0.0.1:8765")
 	original := access.trace.Sender
