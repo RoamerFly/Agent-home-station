@@ -1,0 +1,48 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>群聊、偏好与记忆 · 微信 Agent</title><style>
+:root{color-scheme:light dark;font:17px/1.75 system-ui,sans-serif}
+body{max-width:72rem;margin:auto;padding:1.5rem;color:CanvasText;background:Canvas}
+header{border-bottom:1px solid GrayText;padding-bottom:.7rem}main{display:grid;grid-template-columns:12rem minmax(0,1fr);gap:2rem}
+nav{margin-top:1.4rem}nav a{display:block;padding:.3rem}article{max-width:54rem;overflow-wrap:anywhere}
+a{color:LinkText}a[aria-current]{font-weight:bold}pre,table{display:block;overflow-x:auto}
+pre{padding:1rem;background:color-mix(in srgb,CanvasText 7%,Canvas)}th,td{padding:.4rem;text-align:left;border-bottom:1px solid GrayText}
+@media(max-width:720px){body{padding:1rem}main{display:block}nav a{display:inline-block;margin-right:.5rem}}
+</style><header>大肥鱼 · 微信 Agent　<a href="https://github.com/RoamerFly/wechat-agent">GitHub</a></header><main><nav aria-label="手册目录"><a href="index.html">大肥鱼使用手册</a><a href="installation.html">安装与启动</a><a href="first-chat.html">首次配置与第一条回复</a><a href="conversations.html" aria-current="page">群聊、偏好与记忆</a><a href="artifacts.html">实战：附件转 PDF 与私人声线</a><a href="plugins.html">插件选择、安装与开发</a><a href="operations.html">排障、更新与数据维护</a></nav><article><h1 id="_1">群聊、偏好与记忆</h1>
+<h2 id="_2">为一个群设置默认分享总结</h2>
+<ol>
+<li>在顶部选对微信账号，再进入会话页。如果两个群同名，结合成员和最近活动确认目标。群列表缺项时刷新目录；需要核对群成员时，在该群内刷新成员名单。</li>
+<li>打开目标群的 <strong>备注与管理</strong>。在备注中写清偏好，例如“群里收到视频分享时，请简短概括主要内容；看不清的数字请说明”。如只希望被点名时回应，直接写明。</li>
+<li>若希望所有新分享都尝试总结，同时启用该群的 <strong>对分享内容默认进行总结发送</strong>，保存并应用。再打开同一会话，确认文字和开关均保留。备注表达口吻和偏好，分享开关决定是否默认触发这项行为，账号授权决定可以在哪个群执行。</li>
+<li>用获准测试的分享验证。查看新回合是否取得原分享、是否读到画面或音轨、是否产生了回复与投递回执。若只有标题和发布者简介，先检查分享读取与媒体理解插件。不要把标题当作已读完整视频。</li>
+</ol>
+<h2 id="_3">让“这张”“之前的几条”有明确对象</h2>
+<p>群内有多人交错发图时，引用原图再说“用这张做成表格”。查一段历史时，一起给出会话、时间范围和起点。例如，引用一条视频说“总结本群在这条之前发过的三条视频，按从早到晚排列”。这样可以排除被引用视频本身，也能检查是否误把某位作者的作品列表当作群历史。</p>
+<p>检查回答时，先核对发言者、受话者、附件上传者和原消息时间。某人转发一张照片只说明谁上传了它；照片中的人物或物品归属需要另外的依据。出现混淆时，引用原消息并明确纠正，例如“我说的‘他的父亲’指刚刚提到的人”。</p>
+<h2 id="_4">压缩、更正与遗忘</h2>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>适合什么情况</th>
+<th>如何核对</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>查看近期消息及回复依据</td>
+<td>刚刚回复错了人、漏读附件</td>
+<td>找到触发消息、原引用、所选素材和实际发出的气泡</td>
+</tr>
+<tr>
+<td>压缩上下文</td>
+<td>对话很长，希望后续减少重复输入</td>
+<td>查看压缩结果；需要细节时仍按来源查原文</td>
+</tr>
+<tr>
+<td>更正或遗忘长期条目</td>
+<td>某项偏好已变，或旧事实不应继续召回</td>
+<td>从该会话的记忆查看来源，操作后复查有效条目</td>
+</tr>
+</tbody>
+</table>
+<p>压缩失败时保留原记录，先看模型调用和存储错误。多个账号分别管理记忆；管理员需要跨会话整理时应说明来源和交付目标，例如“总结测试群昨天的讨论，私聊发给我”。</p>
+<p><a href="index.html">返回手册首页</a> · <a href="artifacts.html">查看附件处理实例</a></p></article></main></html>

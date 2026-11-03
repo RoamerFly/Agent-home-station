@@ -1,0 +1,54 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>大肥鱼使用手册 · 微信 Agent</title><style>
+:root{color-scheme:light dark;font:17px/1.75 system-ui,sans-serif}
+body{max-width:72rem;margin:auto;padding:1.5rem;color:CanvasText;background:Canvas}
+header{border-bottom:1px solid GrayText;padding-bottom:.7rem}main{display:grid;grid-template-columns:12rem minmax(0,1fr);gap:2rem}
+nav{margin-top:1.4rem}nav a{display:block;padding:.3rem}article{max-width:54rem;overflow-wrap:anywhere}
+a{color:LinkText}a[aria-current]{font-weight:bold}pre,table{display:block;overflow-x:auto}
+pre{padding:1rem;background:color-mix(in srgb,CanvasText 7%,Canvas)}th,td{padding:.4rem;text-align:left;border-bottom:1px solid GrayText}
+@media(max-width:720px){body{padding:1rem}main{display:block}nav a{display:inline-block;margin-right:.5rem}}
+</style><header>大肥鱼 · 微信 Agent　<a href="https://github.com/RoamerFly/wechat-agent">GitHub</a></header><main><nav aria-label="手册目录"><a href="index.html" aria-current="page">大肥鱼使用手册</a><a href="installation.html">安装与启动</a><a href="first-chat.html">首次配置与第一条回复</a><a href="conversations.html">群聊、偏好与记忆</a><a href="artifacts.html">实战：附件转 PDF 与私人声线</a><a href="plugins.html">插件选择、安装与开发</a><a href="operations.html">排障、更新与数据维护</a></nav><article><h1 id="_1">大肥鱼使用手册</h1>
+<p>第一次使用，先完成一次授权私聊的文字回复，再安装需要的插件。这样遇到问题时，可以判断故障发生在微信连接、模型、加工工具还是投递阶段。</p>
+<table>
+<thead>
+<tr>
+<th>我想做什么</th>
+<th>从哪里开始</th>
+<th>怎样算成功</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>在 Windows 开起来，或部署到 Linux</td>
+<td><a href="installation.html">安装与启动</a></td>
+<td>管理页打开，微信后台可以连接</td>
+</tr>
+<tr>
+<td>扫码、选择模型、收到第一条回复</td>
+<td><a href="first-chat.html">首次配置</a></td>
+<td>指定会话产生执行记录，回复取得微信回执</td>
+</tr>
+<tr>
+<td>让不同群遵循各自的偏好</td>
+<td><a href="conversations.html">群聊与记忆</a></td>
+<td>新回合采用该群规则，回复依据能追到原消息</td>
+</tr>
+<tr>
+<td>把图片做成 PDF，或用自己的声音说话</td>
+<td><a href="artifacts.html">附件与声线</a></td>
+<td>能核对源附件、实际成品和投递目标</td>
+</tr>
+<tr>
+<td>挑选、安装或编写插件</td>
+<td><a href="plugins.html">插件指南</a></td>
+<td>宿主能发现授权工具，插件返回可核验的结果</td>
+</tr>
+<tr>
+<td>查看失败原因、处理未知回执和安全更新</td>
+<td><a href="operations.html">排障与维护</a></td>
+<td>定位失败阶段，恢复时避免重复发送</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_2">适用版本</h2>
+<p>本手册以 Windows 原生开发分支的 <code>89b0bfa</code> 为功能基准。使用较早版本时，可能看不到文档工坊或私人声线入口。源码、便携程序、已安装插件和本机模型分别更新；查看仓库中的功能说明后，还要在自己的管理页检查安装状态。<a href="https://github.com/RoamerFly/wechat-agent/tree/89b0bfaae7cec1b2bac45cce56df1f0f13296bdb">对应源码</a></p>
+<p>在线教程适合按顺序阅读。维护时可从 <a href="https://github.com/RoamerFly/wechat-agent/wiki">GitHub Wiki</a> 按问题查找同一套内容。</p></article></main></html>

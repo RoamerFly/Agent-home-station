@@ -1,0 +1,68 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>排障、更新与数据维护 · 微信 Agent</title><style>
+:root{color-scheme:light dark;font:17px/1.75 system-ui,sans-serif}
+body{max-width:72rem;margin:auto;padding:1.5rem;color:CanvasText;background:Canvas}
+header{border-bottom:1px solid GrayText;padding-bottom:.7rem}main{display:grid;grid-template-columns:12rem minmax(0,1fr);gap:2rem}
+nav{margin-top:1.4rem}nav a{display:block;padding:.3rem}article{max-width:54rem;overflow-wrap:anywhere}
+a{color:LinkText}a[aria-current]{font-weight:bold}pre,table{display:block;overflow-x:auto}
+pre{padding:1rem;background:color-mix(in srgb,CanvasText 7%,Canvas)}th,td{padding:.4rem;text-align:left;border-bottom:1px solid GrayText}
+@media(max-width:720px){body{padding:1rem}main{display:block}nav a{display:inline-block;margin-right:.5rem}}
+</style><header>大肥鱼 · 微信 Agent　<a href="https://github.com/RoamerFly/wechat-agent">GitHub</a></header><main><nav aria-label="手册目录"><a href="index.html">大肥鱼使用手册</a><a href="installation.html">安装与启动</a><a href="first-chat.html">首次配置与第一条回复</a><a href="conversations.html">群聊、偏好与记忆</a><a href="artifacts.html">实战：附件转 PDF 与私人声线</a><a href="plugins.html">插件选择、安装与开发</a><a href="operations.html" aria-current="page">排障、更新与数据维护</a></nav><article><h1 id="_1">排障、更新与数据维护</h1>
+<p>先记下<strong>账号、会话、原消息时间和任务编号</strong>。打开活动页，选择消息发生的日期，再按会话查执行回合。先找最后一步已经成功的操作，从它的下一步排查。</p>
+<table>
+<thead>
+<tr>
+<th>看到的现象</th>
+<th>第一项检查</th>
+<th>下一步</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>管理页能打开，微信未在线</td>
+<td>顶部当前账号、微信连接状态</td>
+<td>回到该账号的扫码页完成手机确认</td>
+</tr>
+<tr>
+<td>微信在线，群内没有回复</td>
+<td>是否启用 Agent、群授权、触发规则，活动页是否收到消息</td>
+<td>有接收记录再查判断结果；模型选择安静与工具失败分别处理</td>
+</tr>
+<tr>
+<td>模型连接失败</td>
+<td>接口地址、模型名、凭据和提供商状态</td>
+<td>401/403 查鉴权；402 查余额；临时限流或服务异常查看下次重试时间</td>
+</tr>
+<tr>
+<td>文件任务刚开始就失败</td>
+<td>原附件消息和下载状态</td>
+<td>引用可读取的原件；若素材已取得，再查加工插件</td>
+</tr>
+<tr>
+<td>视频只总结了标题</td>
+<td>是否获得实际音轨或画面</td>
+<td>查分享和媒体插件的覆盖范围；无人声、无法读取和服务调用失败含义不同</td>
+</tr>
+<tr>
+<td>已生成内容，手机没收到</td>
+<td>目标会话、是否选中成品、发送任务编号</td>
+<td>先查原投递；“待核对”时避免点第二次发送</td>
+</tr>
+<tr>
+<td>更新一直等待</td>
+<td>检查各账号、插件任务及原生发送队列</td>
+<td>区分真正运行中和旧的未知结果；保留原记录，查原引擎或回执</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_2">发送途中纠正</h2>
+<p>例如一首歌分段投递，刚收到第一段就发现选错。由原请求者引用该段说“发错了，后面别发了”，再看任务详情。已被微信接受的分段有独立回执；已提交但结果未知的分段要继续核对。需要换歌时再发新歌名，检查新任务引用的素材和目标会话。不要把“已接受”理解成对方已经播放。</p>
+<h2 id="_3">更新前后检查</h2>
+<ol>
+<li>记录当前版本、启用的账号和插件。先看任务队列，等待正在处理和投递的工作收尾。</li>
+<li>通过桌面菜单正常停止服务。需要迁移时，保存一致的私有数据副本。记忆使用 SQLite，运行中仅复制单个数据库文件可能遗漏仍在日志中的写入。</li>
+<li>在新的目录准备并校验程序与运行资源。保留原部署的私有配置、登录材料、账号数据、素材与模型。不要让新旧程序同时打开同一个数据根。</li>
+<li>启动后依次检查管理页、账号身份、微信在线、模型配置、会话规则、记忆和插件状态。先进行只读检查，再用明确授权的测试会话核对一条实际投递。</li>
+<li>如出现未知回执，从原任务编号继续核对。已经接受新写入后保留新数据排查，避免回切旧数据导致漏发或重复投递。</li>
+</ol>
+<p>反馈问题时提供版本、操作步骤、错误阶段和脱敏后的错误文字即可。聊天导出、二维码、令牌、API Key、私人录音和真实附件请保留在本机。</p>
+<p><a href="first-chat.html">回到首次配置</a> · <a href="index.html">返回手册首页</a></p></article></main></html>

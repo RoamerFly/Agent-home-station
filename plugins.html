@@ -1,0 +1,88 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>插件选择、安装与开发 · 微信 Agent</title><style>
+:root{color-scheme:light dark;font:17px/1.75 system-ui,sans-serif}
+body{max-width:72rem;margin:auto;padding:1.5rem;color:CanvasText;background:Canvas}
+header{border-bottom:1px solid GrayText;padding-bottom:.7rem}main{display:grid;grid-template-columns:12rem minmax(0,1fr);gap:2rem}
+nav{margin-top:1.4rem}nav a{display:block;padding:.3rem}article{max-width:54rem;overflow-wrap:anywhere}
+a{color:LinkText}a[aria-current]{font-weight:bold}pre,table{display:block;overflow-x:auto}
+pre{padding:1rem;background:color-mix(in srgb,CanvasText 7%,Canvas)}th,td{padding:.4rem;text-align:left;border-bottom:1px solid GrayText}
+@media(max-width:720px){body{padding:1rem}main{display:block}nav a{display:inline-block;margin-right:.5rem}}
+</style><header>大肥鱼 · 微信 Agent　<a href="https://github.com/RoamerFly/wechat-agent">GitHub</a></header><main><nav aria-label="手册目录"><a href="index.html">大肥鱼使用手册</a><a href="installation.html">安装与启动</a><a href="first-chat.html">首次配置与第一条回复</a><a href="conversations.html">群聊、偏好与记忆</a><a href="artifacts.html">实战：附件转 PDF 与私人声线</a><a href="plugins.html" aria-current="page">插件选择、安装与开发</a><a href="operations.html">排障、更新与数据维护</a></nav><article><h1 id="_1">插件选择、安装与开发</h1>
+<p>先判断目标是<strong>发送已有文件</strong>，还是<strong>生成或加工文件</strong>。前者使用内置微信接口，后者通常需要安装对应插件。比如手机里已有一个 PDF 要转发时，检查微信文件权限即可；把图片中的表格重建为 PDF 才需要文档工坊。</p>
+<table>
+<thead>
+<tr>
+<th>目标</th>
+<th>检查的插件</th>
+<th>需要额外准备</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>图片、Word、PDF 加工</td>
+<td>文档工坊</td>
+<td>文档运行包、中文字体、适用的 OCR 语言数据</td>
+</tr>
+<tr>
+<td>合成朗读、建立私人说话声线</td>
+<td>语音生成</td>
+<td>已配置的服务商或已注册本地模型与参考音频</td>
+</tr>
+<tr>
+<td>音乐生成、翻唱和唱歌换声</td>
+<td>音乐</td>
+<td>原素材、唱歌模型及后端所需运行环境</td>
+</tr>
+<tr>
+<td>读取分享并理解其中的视频</td>
+<td>分享内容读取、媒体理解</td>
+<td>可读取的原分享、画面或语音理解后端</td>
+</tr>
+<tr>
+<td>搜索网页、调用外部 API/MCP</td>
+<td>联网检索、外部工具连接</td>
+<td>相应的网络授权和服务配置</td>
+</tr>
+<tr>
+<td>操作工作区或设备</td>
+<td>项目开发、手机控制</td>
+<td>登记过的项目或设备，以及对应操作权限</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_2">安装一个能力</h2>
+<ol>
+<li>切换到要使用该能力的账号，在设置的插件中心查找对应条目。确认选的是可选插件；“微信文件收发（内置）”显示的是主体权限。</li>
+<li>从官方目录选择，或导入准备好的插件目录。核对名称、版本、声明的权限和用途后，由管理员安装。</li>
+<li>打开插件详情填写配置。远程服务需要有效的地址和所需凭据，本地后端需要在服务所在的系统上具备运行文件、模型或设备。插件声明、安装登记和实际后端可用是三个不同环节。</li>
+<li>启用插件，在授权会话发一个小任务。例如文档工坊先处理一页含标题与简单表格的样本。检查工具调用结果和实际成品，然后再交给较大的任务。</li>
+<li>要停用或升级时，先查看是否有正在生成、待核对或投递中的任务。插件任务完成只说明成品已生成，最终的微信回执由内置接口记录。</li>
+</ol>
+<h2 id="_3">编写第一个插件</h2>
+<p>从仓库的 <code>templates/plugins/</code> 选一个能运行的模板：本地 Python 选 <code>python-stdio</code>，本地 Go 选 <code>go-stdio</code>，远程接口选 <code>http-mcp</code>。复制到自己的开发目录，给插件设置唯一 ID。</p>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>首次修改的重点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>plugin.json</code></td>
+<td>版本、平台、运行入口、依赖、权限、包内文件摘要</td>
+</tr>
+<tr>
+<td><code>capabilities.json</code></td>
+<td>工具名、参数、返回值、是否异步、有何副作用</td>
+</tr>
+<tr>
+<td><code>config.schema.json</code>、<code>ui.schema.json</code></td>
+<td>配置字段与宿主展示方式；凭据作为密钥字段处理</td>
+</tr>
+<tr>
+<td><code>runtime/</code>、<code>tests/</code></td>
+<td>最小运行实现和不依赖真实账号的合成测试</td>
+</tr>
+</tbody>
+</table>
+<p>从一个只读操作开始，用模板 README 的命令验证协议及错误响应，再通过管理页导入。如果修改过包内文件，更新声明中的摘要后重新准备安装。加工插件接收宿主授权的素材并返回成品，由宿主校验、登记并投递。测试取消或重启时，检查同一个任务编号，避免重新提交有副作用的任务。<a href="https://github.com/RoamerFly/wechat-agent/tree/89b0bfa/templates/plugins">可运行模板</a> · <a href="https://github.com/RoamerFly/wechat-agent/blob/89b0bfa/docs/plugins/PROTOCOL.md">宿主协议</a></p></article></main></html>
