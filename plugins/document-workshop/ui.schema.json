@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "sections": [
+    {"id":"configuration","title":"配置","component":"configuration"},
+    {"id":"resources","title":"文档与成品","component":"resources"},
+    {"id":"tasks","title":"转换任务","component":"tasks"},
+    {"id":"diagnostics","title":"运行状态","component":"diagnostics"}
+  ]
+}

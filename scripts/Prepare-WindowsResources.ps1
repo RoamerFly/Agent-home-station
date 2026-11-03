@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$OutputDirectory,[string]$MediaDirectory)
+param([Parameter(Mandatory=$true)][string]$OutputDirectory,[string]$MediaDirectory,[string]$DocumentPythonPackagesDirectory,[string]$DocumentTesseractDirectory,[string]$DocumentFontsDirectory)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
@@ -40,4 +40,11 @@ Get-ChildItem -LiteralPath $media -File | Where-Object Name -ne 'runtime-manifes
 $record=@{schema_version=1;platform='windows-x64';version=$version[0];build_configuration=$version;files=$files}
 [IO.File]::WriteAllText((Join-Path $media 'runtime-manifest.json'),($record|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
 Move-Item -LiteralPath $media -Destination $mediaTarget
+if($DocumentPythonPackagesDirectory -or $DocumentFontsDirectory -or $DocumentTesseractDirectory){
+ if(-not $DocumentPythonPackagesDirectory -or -not $DocumentFontsDirectory){throw 'Native document runtime requires both DocumentPythonPackagesDirectory and DocumentFontsDirectory.'}
+ $documentArgs=@('--target',(Join-Path $OutputDirectory 'document-workshop'),'--python-packages-source',$DocumentPythonPackagesDirectory,'--fonts-source',$DocumentFontsDirectory)
+ if($DocumentTesseractDirectory){$documentArgs+=@('--tesseract-source',$DocumentTesseractDirectory)}
+ & python -X utf8 (Join-Path $PSScriptRoot 'prepare_document_runtime.py') @documentArgs
+ if($LASTEXITCODE -ne 0){throw 'Project-local document runtime preparation failed.'}
+}
 Write-Output 'Project-local Python and media resources prepared; user data was not changed.'

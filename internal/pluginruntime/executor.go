@@ -29,8 +29,20 @@ type LaunchSpec struct {
 	Pythonw       string
 	WindowsHelper string
 	RuntimeRoots  []string
+	// ReadOnlyFiles are host-minted, per-invocation file mounts. They exist for
+	// narrow inputs such as one already-authorized attachment: unlike a
+	// directory ACL they also grant an AppContainer access to files created
+	// before the sandbox starts. They are never derived from plugin arguments.
+	ReadOnlyFiles []string
+	// ReadOnlyDirs are host-minted, per-invocation traversal roots. A document
+	// processor needs the parent of an authorized input file to resolve that
+	// file on Windows, but it must not receive its conversation or account
+	// directory. Callers therefore provide only the task's input directory and
+	// pair it with the exact ReadOnlyFiles item that may be consumed.
+	ReadOnlyDirs  []string
 	Resources     []ReadOnlyResource
 	HostMetadata  map[string]json.RawMessage
+	Environment   map[string]string
 	Configuration *pluginhost.RuntimeConfiguration
 }
 
@@ -262,7 +274,19 @@ func validateSpec(s LaunchSpec) error {
 			return err
 		}
 	}
+	for _, path := range s.ReadOnlyFiles {
+		if err := cleanPath(path, false); err != nil {
+			return err
+		}
+	}
+	for _, path := range s.ReadOnlyDirs {
+		if err := cleanPath(path, true); err != nil {
+			return err
+		}
+	}
 	readOnlyRoots := append([]string{s.PackageDir}, s.RuntimeRoots...)
+	readOnlyRoots = append(readOnlyRoots, s.ReadOnlyDirs...)
+	readOnlyRoots = append(readOnlyRoots, s.ReadOnlyFiles...)
 	for _, resource := range s.Resources {
 		readOnlyRoots = append(readOnlyRoots, resource.Root)
 	}
@@ -276,11 +300,18 @@ func validateSpec(s LaunchSpec) error {
 			return err
 		}
 	}
+	for key, value := range s.Environment {
+		if key != "DOCUMENT_RUNTIME_ROOT" || !inRoots(value, s.RuntimeRoots) || cleanPath(value, true) != nil {
+			return errors.New("plugin runtime environment invalid")
+		}
+	}
 	return nil
 }
 
 func readOnlyRoots(s LaunchSpec) []string {
 	roots := append([]string{s.PackageDir}, s.RuntimeRoots...)
+	roots = append(roots, s.ReadOnlyDirs...)
+	roots = append(roots, s.ReadOnlyFiles...)
 	for _, resource := range s.Resources {
 		roots = append(roots, resource.Root)
 	}

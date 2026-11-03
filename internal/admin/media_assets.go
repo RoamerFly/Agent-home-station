@@ -23,6 +23,10 @@ import (
 )
 
 type assetOriginal struct {
+	// InboundMessageType is set only for an immutable original received from
+	// WeChat.  In particular, receiving a voice recording never means the
+	// sender agreed to use it as a voice-training sample.
+	InboundMessageType  int
 	VoiceID             string
 	VoiceEngine         string
 	VoiceProfile        string
@@ -36,13 +40,15 @@ type assetOriginal struct {
 	Parent              *assetOriginal
 }
 type assetRequest struct {
-	MessageTime   string    `json:"message_time,omitempty"`
-	TraceID       string    `json:"trace_id,omitempty"`
-	RequesterID   string    `json:"requester_id,omitempty"`
-	RequesterName string    `json:"requester_name,omitempty"`
-	TaskID        string    `json:"task_id,omitempty"`
-	Text          string    `json:"request,omitempty"`
-	At            time.Time `json:"at"`
+	MessageTime        string    `json:"message_time,omitempty"`
+	TraceID            string    `json:"trace_id,omitempty"`
+	RequesterID        string    `json:"requester_id,omitempty"`
+	RequesterName      string    `json:"requester_name,omitempty"`
+	TaskID             string    `json:"task_id,omitempty"`
+	Text               string    `json:"request,omitempty"`
+	SourceMessageType  int       `json:"source_message_type,omitempty"`
+	VoiceSampleConsent bool      `json:"voice_sample_consent,omitempty"`
+	At                 time.Time `json:"at"`
 }
 type assetFormat struct {
 	Batch        string   `json:"batch"`
@@ -149,6 +155,32 @@ func (a *mediaAsset) noteRequest(in companion.Input) {
 		}
 	}
 	a.Requests = append(a.Requests, r)
+}
+
+// noteInboundRequest records the actual message kind alongside the existing
+// source identity.  Consent deliberately remains false: an explicit,
+// owner-authorized enrollment flow is the only code allowed to turn an
+// incoming voice recording into a training sample.
+func (a *mediaAsset) noteInboundRequest(in companion.Input, messageType int) {
+	if messageType == 0 {
+		return
+	}
+	a.noteRequest(in)
+	trace := in.OriginTraceID
+	if trace == "" {
+		trace = in.TraceID
+	}
+	if a.FirstRequest != nil && a.FirstRequest.TraceID == trace && a.FirstRequest.RequesterID == in.Sender && a.FirstRequest.TaskID == in.TaskID {
+		a.FirstRequest.SourceMessageType = messageType
+		a.FirstRequest.VoiceSampleConsent = false
+	}
+	for i := range a.Requests {
+		if a.Requests[i].TraceID == trace && a.Requests[i].RequesterID == in.Sender && a.Requests[i].TaskID == in.TaskID {
+			a.Requests[i].SourceMessageType = messageType
+			a.Requests[i].VoiceSampleConsent = false
+			return
+		}
+	}
 }
 func assetName(a assetOriginal) string {
 	if safeMediaFilename(a.Filename) {
@@ -270,6 +302,9 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	}
 	a.ParentAssetID = parentID
 	a.noteRequest(in)
+	if original.InboundMessageType != 0 {
+		a.noteInboundRequest(in, original.InboundMessageType)
+	}
 	if a.Formats == nil {
 		a.Formats = map[string]assetFormat{}
 	}

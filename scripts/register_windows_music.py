@@ -179,6 +179,8 @@ def register(workspace, legacy_public, admin, program_runtimes, authorize=False,
         if value.get("id") == "yue":
             value["usage"] = value.get("usage", "").replace(
                 "服务在WSL本机Bubblewrap运行", "Windows 服务在受管音乐/GPU 后端运行")
+        if value.get("id") == "gpt-sovits" and training_overlay.is_dir():
+            value["training_packages"] = str(training_overlay)
         if value.get("id") == "rvc":
             if training_overlay.is_dir():
                 value["training_python_paths"] = [str(training_overlay)]

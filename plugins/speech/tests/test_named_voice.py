@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import sys
+
+sys.dont_write_bytecode = True  # Keep the signed package free of generated modules.
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -105,7 +107,7 @@ class NamedVoiceTests(unittest.TestCase):
         output = io.StringIO()
         main.Wire(io.StringIO('\n'.join(json.dumps(row) for row in messages) + '\n'), output).serve()
         rows = [json.loads(row) for row in output.getvalue().splitlines()]
-        self.assertEqual(rows[0]['result']['serverInfo']['version'], '0.2.0')
+        self.assertEqual(rows[0]['result']['serverInfo']['version'], '0.3.0')
         self.assertEqual(rows[1]['method'], 'wechat/local_speech')
         self.assertEqual(rows[1]['params'], ARGS)
         self.assertEqual(rows[2]['result'], RESULT)
@@ -115,7 +117,7 @@ class NamedVoiceTests(unittest.TestCase):
         package = json.loads((ROOT / 'plugin.json').read_text(encoding='utf8'))
         config = json.loads((ROOT / 'config.schema.json').read_text(encoding='utf8'))
         caps = json.loads((ROOT / 'capabilities.json').read_text(encoding='utf8'))['capabilities']
-        self.assertEqual(package['version'], '0.2.0')
+        self.assertEqual(package['version'], '0.3.0')
         self.assertEqual(package['permissions'], ['artifact.read', 'model.invoke'])
         self.assertTrue(package['http_routes'][0]['optional'])
         self.assertFalse(config.get('required'))

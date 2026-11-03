@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +36,7 @@ func namedSpeechContractFixture(t *testing.T) (*webFixture, *permittedTools, *na
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := store.Prepare(t.Context(), "../../plugins/speech")
+	prepared, err := store.Prepare(t.Context(), cleanSpeechPackageFixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,6 +112,45 @@ func namedSpeechContractFixture(t *testing.T) (*webFixture, *permittedTools, *na
 	}
 	cap := pluginhost.Capability{ID: "speech.synthesize_named", Permissions: []string{"artifact.read", "model.invoke"}}
 	return f, access, policy, job, cap
+}
+
+// Package verification intentionally rejects undeclared files.  Python may
+// leave a local __pycache__ behind when a developer runs a plugin script by
+// hand, so fixtures copy only declared-source candidates instead of turning
+// that transient cache into a package integrity exception unrelated to the
+// contract being tested.  Production execution sets PYTHONDONTWRITEBYTECODE
+// and still verifies the installed package itself.
+func cleanSpeechPackageFixture(t *testing.T) string {
+	t.Helper()
+	from := "../../plugins/speech"
+	to := t.TempDir()
+	err := filepath.WalkDir(from, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(from, path)
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "__pycache__" {
+				return filepath.SkipDir
+			}
+			return os.MkdirAll(filepath.Join(to, rel), 0700)
+		}
+		if !d.Type().IsRegular() || filepath.Ext(d.Name()) == ".pyc" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(to, rel), data, 0600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return to
 }
 
 func syntheticNamedSpeechWAV() []byte {

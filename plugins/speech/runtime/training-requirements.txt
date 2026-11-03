@@ -1,0 +1,18 @@
+# Private GPT-SoVITS enrollment training overlay only.
+# Install with --no-deps into the registered training_packages directory; CUDA
+# Torch remains supplied by the managed music runtime, never by this overlay.
+cn2an==0.5.24
+proces==0.1.7
+x-transformers==2.23.2
+einx==0.4.3
+loguru==0.7.3
+torch-einops-utils==0.2.0
+frozendict==2.5.0
+win32-setctime==1.2.1
+pypinyin==0.55.0
+jieba-fast==0.53
+jieba==0.42.1
+opencc-python-reimplemented==0.1.7
+pytorch-lightning==2.5.6
+lightning-utilities==0.15.2
+torchmetrics==1.5.2

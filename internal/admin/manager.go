@@ -95,6 +95,7 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
+	enrollment enrollmentRuntime
 	packageMu           sync.Mutex
 	packages            *pluginhost.Store
 	packagesClosed      bool
@@ -453,6 +454,7 @@ func (m *Manager) stop() error {
 	return nil
 }
 func (m *Manager) Close() error {
+	m.enrollment.close()
 	m.packageMu.Lock()
 	m.packagesClosed = true
 	packages, packageRuntime := m.packages, m.packageRuntime

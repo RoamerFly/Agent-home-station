@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -123,9 +124,38 @@ func (s *session) Call(ctx context.Context, c pluginhost.Invocation, tool string
 	if tool == "" || !json.Valid(args) {
 		return nil, errors.New("invalid plugin tool call")
 	}
+	metadata, err := CallMetadata(ctx)
+	if err != nil {
+		return nil, err
+	}
+	meta := map[string]any{"wechat/context": rawCopy(c)}
+	metadataBytes := 0
+	for key, raw := range metadata {
+		if !safeCallMetadataKey(key) || len(raw) == 0 || !json.Valid(raw) {
+			return nil, errors.New("plugin call metadata invalid")
+		}
+		metadataBytes += len(key) + len(raw)
+		if metadataBytes > maxHostMetadataBytes {
+			return nil, errors.New("plugin call metadata exceeds limit")
+		}
+		// The context is host-authenticated and cannot be replaced by a policy.
+		if key == "wechat/context" {
+			return nil, errors.New("plugin call metadata cannot replace context")
+		}
+		meta[key] = json.RawMessage(append([]byte(nil), raw...))
+	}
 	// Host evidence is outside arguments; a plugin cannot override it with an
 	// argument named account/thread. It still has no direct WeChat credentials.
-	return s.rpc(ctx, "tools/call", map[string]any{"name": tool, "arguments": json.RawMessage(append([]byte(nil), args...)), "_meta": map[string]any{"wechat/context": rawCopy(c)}}, true)
+	return s.rpc(ctx, "tools/call", map[string]any{"name": tool, "arguments": json.RawMessage(append([]byte(nil), args...)), "_meta": meta}, true)
+}
+
+func safeCallMetadataKey(key string) bool {
+	if key == "wechat/document" {
+		return true
+	}
+	// Future host-owned metadata stays namespaced. Plugin code and arguments do
+	// not have an API for injecting this map.
+	return strings.HasPrefix(key, "wechat/") && safeMetadataKey(strings.TrimPrefix(key, "wechat/"))
 }
 func (s *session) rpc(ctx context.Context, method string, params any, response bool) (json.RawMessage, error) {
 	select {

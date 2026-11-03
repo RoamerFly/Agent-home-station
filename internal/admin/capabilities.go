@@ -31,9 +31,11 @@ func namedTools(names ...string) func(string) bool {
 
 func (p *permittedTools) capabilities() []capabilityAdapter {
 	return []capabilityAdapter{
+		{"private-voice-enrollment", p.enrollmentTools, namedTools("voice_enroll"), p.callEnrollment},
 		{"installed-services", p.servicePluginTools, namedTools("service_plugins", "service_plugin_call", "service_plugin_task"), p.callServicePlugin},
 		{"video-inspection", p.videoTools, namedTools("video_inspect"), p.callVideoInspection},
-		{"workspace-agent-wechat", p.agentTools, agentToolName, p.callAgent},
+		{"wechat-communication", p.wechatCommunicationTools, func(n string) bool { return strings.HasPrefix(n, "wechat_") }, p.callAgent},
+		{"workspace-agent", p.workspaceAgentTools, workspaceAgentToolName, p.callAgent},
 		{"mobile", p.mobileTools, func(n string) bool { return strings.HasPrefix(n, "device_") }, p.callMobile},
 		{"plugin-jobs", p.pluginTaskTools, namedTools("plugin_job_status", "plugin_job_cancel"), p.callPluginJob},
 		{"bailian-speech", p.speechTools, namedTools("speech_synthesize", "music_generate"), p.callSpeech},

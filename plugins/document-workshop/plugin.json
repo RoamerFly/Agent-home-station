@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "document-workshop",
+  "name": "文档工坊",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": ["windows-amd64", "linux-amd64"],
+  "runtime": {"transport": "mcp-stdio", "entrypoint": "runtime/main.py"},
+  "permissions": ["artifact.read", "artifact.write"],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "fcccbe095ad10c198a50fe7ae81e8f8c7a805b9ec8ea996fedead58758d2c302",
+    "CHANGELOG.md": "350d97fa459025e088d38007fd6c69c43c3356b288bf63a17b1c1de7c0ad939f",
+    "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
+    "MIGRATION.md": "6553284cefc96a58881bbedcfd773e9f7bfafc72b179253eea2096376193bb79",
+    "PERMISSIONS.md": "e440e67c607f495515972a21a4976a526c077bd842eaed95364e7e377f14d16d",
+    "README.md": "697440dd7c5a4588bd3d395a99150b848b3f1721f858f6792c552210f1f9b2af",
+    "runtime/document_logic.py": "85019f0030d79ce9d9568c8ee2271f6fe583e437ffb35fffc9bd930ab0396a41",
+    "runtime/document_runtime.py": "638de5569555cbf2a323d28373bd1f0c3ba25dd3701d32f2e62a5cfd26f3b837",
+    "runtime/main.py": "4598ca2dab6234e66ee6d7c6d20b87c7e8abe3afbefc82b3debcf29410e89161",
+    "runtime/native_pdf.py": "2f899b4ad148e46cb75e505cd7c28499606ebcd63e421d271928d07c126d4320",
+    "runtime/README.md": "4e13619e9d275d512ebbf0f0bb082de19ce74fa33e65ae20bf19e9cdcdcdf04c",
+    "runtime/reportlab_image.py": "1d0ce754bed0007c2a8fea999e6bdc387d81ff926573501490682b6a521599b8",
+    "tests/fixtures/layout.json": "852d9f67c2e10e8af6e3a11f2acabacff619c5003ab9fa4a6c40e434a7d2be25",
+    "tests/test_document_workshop.py": "fa00033fa05d8f106617df1e15ca0a37f1131a6c92fcd4e642c6ec62fae7e3ce",
+    "ui.schema.json": "e604275d64bb3d977d18729c3130286e4aca8179a15b7b1c3f98d1ed615e05ac"
+  }
+}

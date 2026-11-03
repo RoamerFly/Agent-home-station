@@ -203,7 +203,18 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		if state, stateErr := store.ReadHostState(r.Context(), mobileDevicePluginID, mobileStateNamespace); stateErr == nil && state.Revision > 0 {
 			retained = append(retained, mobileDevicePluginID)
 		}
-		respond(w, 200, map[string]any{"installed": installed, "catalog": official, "runtime_connected": connected, "runtimes": statuses, "retained_ids": retained})
+		permissions := s.manager.Config().Companion.Permissions
+		communicationState := "可用"
+		if !permissions.SendFile {
+			communicationState = "文件发送未授权"
+		}
+		builtins := []map[string]any{{
+			"id": "wechat-file-transport", "name": "微信文件收发（内置）", "state": communicationState,
+			"description": "随核心常驻：在当前账号已授权会话取得文件原件、准备并发送文件、核对投递回执。文档/语音等插件只能加工素材，不能替代或卸载此能力。",
+			"permissions": []string{"当前账号", "已授权会话", "接收文件原件", map[bool]string{true: "发送文件", false: "发送文件未授权"}[permissions.SendFile]},
+			"uninstallable": false,
+		}}
+		respond(w, 200, map[string]any{"installed": installed, "catalog": official, "runtime_connected": connected, "runtimes": statuses, "retained_ids": retained, "builtins": builtins})
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/prepare", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input struct {

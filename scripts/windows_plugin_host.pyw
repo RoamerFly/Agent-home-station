@@ -32,7 +32,7 @@ def main():
     stdin, stdout, stderr = stream(-10, "rb"), stream(-11, "wb"), stream(-12, "wb")
     try:
         request = json.loads(Path(sys.argv[1]).read_text(encoding="utf8"))
-        if set(request) != {"argv", "cwd", "read_only", "writable", "parent_pid"}:
+        if set(request) not in ({"argv", "cwd", "read_only", "writable", "parent_pid"}, {"argv", "cwd", "read_only", "writable", "parent_pid", "environment"}):
             raise ValueError("invalid_plugin_launch_document")
         argv = request["argv"]
         if not isinstance(argv, list) or not argv or any(not isinstance(v, str) or "\0" in v for v in argv) or not Path(argv[0]).is_absolute():
@@ -55,7 +55,10 @@ def main():
             os._exit(1)
         threading.Thread(target=parent_exited, daemon=True).start()
         from windows_lpac import launch
-        process = launch(argv, request["cwd"], request["writable"], request["read_only"], stdout, stderr, input_stream=stdin)
+        environment = request.get("environment") or {}
+        if not isinstance(environment, dict) or set(environment) - {"DOCUMENT_RUNTIME_ROOT"} or any(not isinstance(key, str) or not isinstance(value, str) or "\0" in value for key, value in environment.items()):
+            raise ValueError("invalid_plugin_environment")
+        process = launch(argv, request["cwd"], request["writable"], request["read_only"], stdout, stderr, environment=environment, input_stream=stdin)
         code = process.wait()
         return code if 0 <= code <= 255 else 1
     except Exception:

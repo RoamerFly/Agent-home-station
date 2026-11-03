@@ -2,7 +2,7 @@
 (() => {
  'use strict';
  const $=s=>document.querySelector(s),api=(...a)=>window.WechatAdmin.api(...a);
- const state={catalog:[],installed:[],runtimes:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,migrationVersion:0,hostRequest:null};
+ const state={catalog:[],installed:[],builtins:[],runtimes:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,migrationVersion:0,hostRequest:null};
  const page=$('#plugins'),legacy=page.querySelector('.plugin-workspace'),guide=$('#plugin-guide');
  const el=(tag,text,klass)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(klass)n.className=klass;return n};
  const button=(text,action)=>{const b=el('button',text,'quiet');b.type='button';b.addEventListener('click',action);return b};
@@ -50,10 +50,16 @@
   card.append(el('small',next,'hint'));
   return card;
  }
+ function builtinCard(item,klass='package-choice'){
+  const card=el('div',undefined,klass+' builtin-capability');card.append(el('strong',item.name),el('small',item.state));
+  card.append(el('small',item.description,'hint'));card.append(el('small','授权范围：'+(item.permissions||[]).join('、'),'hint'));
+  return card;
+ }
  function renderOverview(all){
   if(state.selected)return;
   const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3','已安装能力'),el('p','选择一项能力即可查看真实安装、启用、运行、配置和任务状态。服务不会因浏览此页面而自动启动。','hint'));const actions=el('div',undefined,'package-overview-actions');actions.append(button('迁移旧设置',openMigration),button('导入本机插件',importPackage));intro.append(copy,actions);
   const grid=el('div',undefined,'capability-overview-grid'),used=new Set();
+  if(state.builtins.length){const group=el('section',undefined,'capability-overview-group');group.append(el('h4','内置通信'));for(const item of state.builtins)group.append(builtinCard(item,'capability-overview-card'));grid.append(group)}
   for(const [title,ids] of capabilityGroups){
    const items=ids.map(id=>[id,all.get(id)]).filter(([,p])=>p);
    if(!items.length)continue;
@@ -70,6 +76,7 @@
  function discard(){return !state.dirty||confirm('有未保存的插件配置，确定放弃？')}
  function renderList(){
   area.classList.toggle('package-overview',!state.selected);list.replaceChildren();const all=allPackages(),used=new Set();
+  if(state.builtins.length){const group=el('section',undefined,'package-group');group.append(el('h4','内置通信'));for(const item of state.builtins)group.append(builtinCard(item));list.append(group)}
   for(const [title,ids] of capabilityGroups){
    const items=ids.map(id=>all.get(id)).filter(Boolean);if(!items.length)continue;for(const p of items)used.add(p.id);
    const group=el('section',undefined,'package-group');group.append(el('h4',title));for(const p of items)group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id)));list.append(group);
@@ -80,7 +87,7 @@
  }
  async function load(){
   if(!window.WechatAdmin?.isAuthenticated())return;if(state.loadPromise)return state.loadPromise;state.busy=true;const epoch=state.epoch,owner=account();
-  const pending=(async()=>{try{const data=await api('/api/plugin-packages');if(epoch!==state.epoch||owner!==account())return;state.catalog=data.catalog||[];state.installed=data.installed||[];state.runtimes=data.runtimes||{};state.retained=new Set(data.retained_ids||[]);state.loaded=true;renderList()}
+  const pending=(async()=>{try{const data=await api('/api/plugin-packages');if(epoch!==state.epoch||owner!==account())return;state.catalog=data.catalog||[];state.installed=data.installed||[];state.builtins=data.builtins||[];state.runtimes=data.runtimes||{};state.retained=new Set(data.retained_ids||[]);state.loaded=true;renderList()}
   catch(e){if(epoch===state.epoch&&owner===account())status.textContent=e.message}})();state.loadPromise=pending;try{return await pending}finally{if(state.loadPromise===pending){state.busy=false;state.loadPromise=null}}
  }
  async function choose(id){

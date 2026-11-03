@@ -576,6 +576,7 @@ details:not([open]) > :not(summary) { display:none; }
 .package-workspace{display:grid;grid-template-columns:minmax(230px,.65fr) minmax(0,1.65fr);gap:12px;align-items:stretch}
 .package-list{display:grid;gap:8px}.package-choice{color:var(--ink);text-align:left;display:flex;flex-direction:column;gap:4px;padding:12px;border:1px solid var(--line);background:var(--surface);width:100%}
 .package-choice[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.builtin-capability{cursor:default;border-left:3px solid var(--accent)}
 .package-choice small{color:var(--muted)}.package-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .package-field{display:flex;flex-direction:column;gap:6px}.package-field input:not([type=checkbox]),.package-field select{width:100%}
 .package-secret-clear{display:flex;gap:8px;align-items:center}.package-job{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:10px 0}.package-job>div{display:grid;gap:3px}

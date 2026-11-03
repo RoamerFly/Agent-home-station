@@ -53,8 +53,8 @@ func TestOfficialContracts(t *testing.T) {
 		}
 	}
 	dirs = folders
-	if len(dirs) != 9 {
-		t.Fatalf("expected 9 capability packages, got %d", len(dirs))
+	if len(dirs) != 10 {
+		t.Fatalf("expected 10 capability packages, got %d", len(dirs))
 	}
 	for _, d := range dirs {
 		t.Run(d.Name(), func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" {
 				if p.Status != "ready" || p.Runtime.Transport != "mcp-stdio" || p.Runtime.Entrypoint != "runtime/main.py" {
 					t.Fatal("web runtime not connected")
 				}
@@ -96,6 +96,12 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"device.workflow": true, "device.plan": true, "device.list": true, "device.observe": true, "device.act": true, "device.record": true, "device.read_artifact": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "model.invoke" || p.Permissions[1] != "device" {
 							t.Fatal("device package must declare only separate model/device proxies")
+						}
+					}
+					if d.Name() == "document-workshop" {
+						want = map[string]bool{"document.inspect": true, "document.reconstruct": true, "document.export_pdf": true, "document.verify": true}
+						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" {
+							t.Fatal("document workshop must use only artifact read/write permissions")
 						}
 					}
 					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))

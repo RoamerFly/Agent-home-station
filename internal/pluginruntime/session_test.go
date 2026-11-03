@@ -124,6 +124,23 @@ func TestSessionContextAndAuthorization(t *testing.T) {
 		t.Fatal("cross account accepted")
 	}
 }
+
+func TestSessionCarriesHostBoundCallMetadata(t *testing.T) {
+	s := testSession(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ctx = context.WithValue(ctx, callMetadataKey{}, callMetadataResult{metadata: map[string]json.RawMessage{
+		"wechat/document": json.RawMessage(`{"inputs":[{"artifact_id":"asset-synthetic","path":"C:/private/input.png"}],"output_dir":"C:/private/out"}`),
+	}})
+	raw, err := s.Call(ctx, invocation(), "echo", json.RawMessage(`{"artifact_id":"asset-synthetic"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]json.RawMessage
+	if json.Unmarshal(raw, &result) != nil || !strings.Contains(string(result["wechat/document"]), `asset-synthetic`) || strings.Contains(string(result["wechat/context"]), `private/input`) {
+		t.Fatalf("host metadata not bound separately: %s", raw)
+	}
+}
 func TestSessionRejectsBrokenFramesAndNoReplay(t *testing.T) {
 	for _, tool := range []string{"wrong", "overflow", "crash", "block"} {
 		t.Run(tool, func(t *testing.T) {

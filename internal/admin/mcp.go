@@ -158,6 +158,9 @@ func (p *permittedTools) enabled(name string) bool {
 	if name == "tool_output_read" {
 		return p.outputScope() != ""
 	}
+	if name == "voice_enroll" {
+		return p.enrollmentAllowed()
+	}
 	if name == "video_inspect" {
 		return len(p.videoTools()) > 0
 	}

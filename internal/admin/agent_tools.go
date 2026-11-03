@@ -25,6 +25,8 @@ func (p *permittedTools) agentTools() []mcptools.Tool {
 		return nil
 	}
 	tools := p.workspaceTools()
+	tools = append(tools, p.artifactTools()...)
+	tools = append(tools, p.documentTools()...)
 	tools = append(tools, p.memoryTools()...)
 	tools = append(tools, p.voiceTools()...)
 	if p.privileged() {
@@ -86,6 +88,16 @@ func (p *permittedTools) agentToolEnabled(name string) bool {
 	}
 	return false
 }
+func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
+	all := p.agentTools()
+	out := make([]mcptools.Tool, 0, len(all))
+	for _, tool := range all {
+		if !strings.HasPrefix(tool.Name, "wechat_") {
+			out = append(out, tool)
+		}
+	}
+	return out
+}
 func agentToolName(name string) bool {
 	if strings.HasPrefix(name, "memory_") {
 		return true
@@ -96,7 +108,7 @@ func agentToolName(name string) bool {
 	if name == "agent_reminder" {
 		return true
 	}
-	return strings.HasPrefix(name, "voice_library_") || name == "music_service_start" || strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || strings.HasPrefix(name, "wechat_") || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
+	return strings.HasPrefix(name, "voice_library_") || strings.HasPrefix(name, "artifact_") || strings.HasPrefix(name, "document_") || name == "music_service_start" || strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || strings.HasPrefix(name, "wechat_") || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
 }
 func (p *permittedTools) callAgent(ctx context.Context, name string, args json.RawMessage) (result string, callErr error) {
 	defer func() {
@@ -155,6 +167,23 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	if strings.HasPrefix(name, "workspace_") {
 		return p.callWorkspace(ctx, name, args)
 	}
+	if strings.HasPrefix(name, "artifact_") {
+		return p.callArtifact(ctx, name, args)
+	}
+	if strings.HasPrefix(name, "document_") {
+		switch name {
+		case "document_inspect":
+			return p.callDocumentWorkshop(ctx, "document.inspect", args)
+		case "document_reconstruct":
+			return p.callDocumentWorkshop(ctx, "document.reconstruct", args)
+		case "document_export_pdf":
+			return p.callDocumentWorkshop(ctx, "document.export_pdf", args)
+		case "document_verify":
+			return p.callDocumentWorkshop(ctx, "document.verify", args)
+		default:
+			return "", toolInputError("unknown_document_tool")
+		}
+	}
 	switch name {
 	case "wechat_recall":
 		return p.recallMessage(ctx, args)
@@ -183,15 +212,34 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if !p.conversationReadAllowed(in.Thread) {
 			return "", toolInputError("attachment conversation denied")
 		}
-		msg, e := m.native.Message(ctx, in.Message)
-		if e != nil || msg.AccountID != p.trace.Account || msg.ThreadID != in.Thread || msg.FileAttachmentName() == "" {
-			return "", toolInputError("source is not an owned file message")
+		// This built-in transport path intentionally does not depend on media
+		// observation/ASR plugins.  resolveInboundArtifact verifies account,
+		// conversation, direction and same-sender/explicit-quote binding, then
+		// returns a retained original or obtains an un-cached image/voice.
+		// Ordinary file attachments retain the same binding and use the native
+		// streaming receiver only when their original is not yet cached.
+		trace := p.trace
+		trace.Thread = in.Thread
+		asset, msg, e := m.resolveInboundArtifact(ctx, trace, in.Message)
+		if e != nil && strings.Contains(e.Error(), "inbound_artifact_original_not_cached") {
+			message, readErr := m.native.Message(ctx, in.Message)
+			if readErr != nil || message.AccountID != trace.Account || message.ThreadID != trace.Thread || message.FileAttachmentName() == "" {
+				return "", toolInputError("source is not an authorized attachment message")
+			}
+			if _, readErr = (mediaUnderstanding{manager: m}).receiveFile(ctx, message, message.FileAttachmentName()); readErr != nil {
+				return "", readErr
+			}
+			asset, msg, e = m.resolveInboundArtifact(ctx, trace, in.Message)
 		}
-		result, err := (mediaUnderstanding{manager: m}).receiveFile(ctx, msg, msg.FileAttachmentName())
-		if err == nil {
-			p.routeCrossConversationThread(in.Thread)
+		if e != nil {
+			return "", toolInputError("source attachment unavailable: " + e.Error())
 		}
-		return result, err
+		p.routeCrossConversationThread(in.Thread)
+		return encode(map[string]any{
+			"asset_id": asset.ID, "message_id": msg.ID, "filename": asset.Filename,
+			"mime": asset.MIME, "bytes": asset.Bytes, "status": "original_available",
+			"instruction": "已取得经核验的原件；可交给当前会话的已授权处理能力，或按用户要求准备发送。不要猜测本机路径、文件内容或投递结果。",
+		}, nil)
 	case "agent_reminder":
 		return p.callReminder(ctx, args)
 	case "agent_clock":

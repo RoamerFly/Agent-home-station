@@ -168,15 +168,22 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
         si.StartupInfo.hStdOutput = handle
         si.StartupInfo.hStdError = error_handle
         # Explicit clean environment, not inherited credentials/WSL interop.
+        # The managed interpreter's own directory is an already read-only
+        # mounted runtime root. Keep it on PATH so its bundled CPython/Pillow
+        # extension modules can resolve their matching VCRuntime/Python DLLs;
+        # do not inherit a developer, user, or system-wide Python path.
+        managed_python_dir = str(Path(argv[0]).resolve(strict=True).parent)
         env = {"LOCALAPPDATA":str(Path(writable[0])/"scratch"),"APPDATA":str(Path(writable[0])/"scratch"),"USERPROFILE":str(writable[0]),"SystemDrive":os.environ.get("SystemDrive","C:"),"ALLUSERSPROFILE":os.environ.get("ProgramData",r"C:\ProgramData"),"ProgramData":os.environ.get("ProgramData",r"C:\ProgramData"),"SystemRoot": os.environ["SystemRoot"], "WINDIR": os.environ["SystemRoot"],
-               "PATH": str(Path(os.environ["SystemRoot"]) / "System32"),
+               "PATH": managed_python_dir + os.pathsep + str(Path(os.environ["SystemRoot"]) / "System32"),
                "TEMP": str(Path(writable[0]) / "scratch"), "TMP": str(Path(writable[0]) / "scratch")}
         if environment:
-            permitted = {"PATH", "HF_HOME", "HF_HUB_CACHE", "TORCH_HOME", "HF_HUB_OFFLINE",
+            permitted = {"DOCUMENT_RUNTIME_ROOT"}
+            if music_runtime:
+                permitted.update({"PATH", "HF_HOME", "HF_HUB_CACHE", "TORCH_HOME", "HF_HUB_OFFLINE",
                          "NLTK_DATA",
                          "TRANSFORMERS_OFFLINE", "PYTHONDONTWRITEBYTECODE", "PYTHONUTF8",
-                         "PYTORCH_CUDA_ALLOC_CONF", "MPLCONFIGDIR", "NUMBA_CACHE_DIR", "WECHAT_WINDOWS_MUSIC_RUNTIME", "USERNAME"}
-            if not music_runtime or set(environment) - permitted or any(not isinstance(v, str) or "\0" in v for v in environment.values()):
+                         "PYTORCH_CUDA_ALLOC_CONF", "MPLCONFIGDIR", "NUMBA_CACHE_DIR", "WECHAT_WINDOWS_MUSIC_RUNTIME", "USERNAME"})
+            if set(environment) - permitted or any(not isinstance(v, str) or "\0" in v for v in environment.values()):
                 raise ValueError("invalid_music_runtime_environment")
             env.update(environment)
         Path(env["TEMP"]).mkdir(exist_ok=True)

@@ -131,7 +131,7 @@ func TestPluginPackageAdminApprovalAndAccountIsolation(t *testing.T) {
 		Catalog   []pluginhost.Package          `json:"catalog"`
 		Connected bool                          `json:"runtime_connected"`
 	}
-	if code != 200 || json.Unmarshal(b, &result) != nil || len(result.Installed) != 1 || len(result.Catalog) != 9 || result.Connected {
+	if code != 200 || json.Unmarshal(b, &result) != nil || len(result.Installed) != 1 || len(result.Catalog) != 10 || result.Connected {
 		t.Fatalf("invalid catalogue response %d", code)
 	}
 	if result.Installed[0].Enabled || accounts.lookup("second").manager.Config().Enabled {

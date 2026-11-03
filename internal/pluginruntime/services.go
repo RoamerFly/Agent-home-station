@@ -14,8 +14,60 @@ import (
 type ServicePolicy interface {
 	Service(context.Context, pluginhost.Job, pluginhost.Capability, string, json.RawMessage) (json.RawMessage, error)
 }
+
+// CallMetadataPolicy supplies small, host-owned MCP metadata for one exact
+// invocation.  It is deliberately separate from configuration and tool
+// arguments: a model must not be able to choose a filesystem path, artifact
+// mount, or another conversation by adding a JSON field to its request.
+//
+// The metadata is sent alongside wechat/context and is never persisted in the
+// public job arguments.  Adapters should use it only for per-call bindings
+// such as a materialized, already-authorized artifact.
+type CallMetadataPolicy interface {
+	CallMetadata(context.Context, pluginhost.Job, pluginhost.Capability) (map[string]json.RawMessage, error)
+}
+
 type serviceKey struct{}
 type serviceCall func(context.Context, string, json.RawMessage) (json.RawMessage, error)
+type callMetadataKey struct{}
+
+func callMetadataContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, cap pluginhost.Capability) context.Context {
+	metadataPolicy, ok := policy.(CallMetadataPolicy)
+	if !ok {
+		return ctx
+	}
+	metadata, err := metadataPolicy.CallMetadata(ctx, job, cap)
+	if err != nil {
+		return context.WithValue(ctx, callMetadataKey{}, callMetadataResult{err: err})
+	}
+	copy := make(map[string]json.RawMessage, len(metadata))
+	for key, raw := range metadata {
+		copy[key] = append(json.RawMessage(nil), raw...)
+	}
+	return context.WithValue(ctx, callMetadataKey{}, callMetadataResult{metadata: copy})
+}
+
+type callMetadataResult struct {
+	metadata map[string]json.RawMessage
+	err      error
+}
+
+// CallMetadata reads the metadata bound by serviceContext. It is exported for
+// the local MCP session only; callers cannot manufacture the unexported key.
+func CallMetadata(ctx context.Context) (map[string]json.RawMessage, error) {
+	result, ok := ctx.Value(callMetadataKey{}).(callMetadataResult)
+	if !ok {
+		return nil, nil
+	}
+	if result.err != nil {
+		return nil, result.err
+	}
+	copy := make(map[string]json.RawMessage, len(result.metadata))
+	for key, raw := range result.metadata {
+		copy[key] = append(json.RawMessage(nil), raw...)
+	}
+	return copy, nil
+}
 
 func deviceProxyCapability(capability string) bool {
 	switch capability {
@@ -27,6 +79,7 @@ func deviceProxyCapability(capability string) bool {
 }
 
 func serviceContext(ctx context.Context, policy CallPolicy, job pluginhost.Job, cap pluginhost.Capability) context.Context {
+	ctx = callMetadataContext(ctx, policy, job, cap)
 	service, ok := policy.(ServicePolicy)
 	if !ok {
 		return ctx

@@ -14,12 +14,15 @@ import (
 
 // IncomingMedia obtains an owned message's attachment from the native transfer
 // API. It never lets a message choose a local filesystem path or bearer URL.
-func (s *Sender) incomingMediaResponse(ctx context.Context, messageID string, max int64) (*http.Response, error) {
+func (s *Sender) incomingMediaResponse(ctx context.Context, messageID string, max int64, quality string) (*http.Response, error) {
 	if len(messageID) == 0 || len(messageID) > 8192 || max < 1 || max > 512<<20 {
 		return nil, errors.New("invalid incoming media request")
 	}
+	if quality != "best" && quality != "normal" {
+		return nil, errors.New("invalid incoming media quality")
+	}
 	prefix := s.accountPath() + "/messages/" + url.PathEscape(messageID)
-	body, _ := json.Marshal(map[string]string{"messageId": messageID, "quality": "best"})
+	body, _ := json.Marshal(map[string]string{"messageId": messageID, "quality": quality})
 	raw, err := s.toolJSON(ctx, "POST", prefix+"/media-transfers", "", bytes.NewReader(body), "application/json")
 	if err != nil {
 		return nil, err
@@ -69,7 +72,24 @@ func (s *Sender) incomingMediaResponse(ctx context.Context, messageID string, ma
 }
 
 func (s *Sender) IncomingMedia(ctx context.Context, messageID string, max int64) ([]byte, string, error) {
-	resp, err := s.incomingMediaResponse(ctx, messageID, max)
+	resp, err := s.incomingMediaResponse(ctx, messageID, max, "best")
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+	if err != nil || len(data) == 0 || int64(len(data)) > max {
+		return nil, "", errors.New("incoming_media_exceeds_limit")
+	}
+	return data, resp.Header.Get("Content-Type"), nil
+}
+
+// IncomingVoiceMedia asks the native bridge for its normal/playable voice
+// rendition.  Raw WeChat SILK is retained only when that bridge cannot supply
+// normal media; callers must report that condition instead of treating it as a
+// decodable training or ASR input.
+func (s *Sender) IncomingVoiceMedia(ctx context.Context, messageID string, max int64) ([]byte, string, error) {
+	resp, err := s.incomingMediaResponse(ctx, messageID, max, "normal")
 	if err != nil {
 		return nil, "", err
 	}
@@ -84,7 +104,7 @@ func (s *Sender) IncomingMedia(ctx context.Context, messageID string, max int64)
 // IncomingMediaTo streams a native-owned transfer to an exclusively created
 // private file. The caller owns removal on failure; partial files are never assets.
 func (s *Sender) IncomingMediaTo(ctx context.Context, messageID, path string, max int64) (int64, string, error) {
-	resp, err := s.incomingMediaResponse(ctx, messageID, max)
+	resp, err := s.incomingMediaResponse(ctx, messageID, max, "best")
 	if err != nil {
 		return 0, "", err
 	}

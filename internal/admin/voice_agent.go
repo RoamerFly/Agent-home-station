@@ -23,6 +23,7 @@ type voiceFile struct {
 	Epoch    int    `json:"epoch,omitempty"`
 }
 type voiceEntry struct {
+	Owner         string            `json:"owner_id,omitempty"`
 	Role          string            `json:"role,omitempty"`
 	Directory     string            `json:"directory,omitempty"`
 	ID            string            `json:"id"`
@@ -85,7 +86,7 @@ func (p *permittedTools) accessibleVoices() ([]voiceEntry, error) {
 			return nil, err
 		}
 		for _, v := range private {
-			if !seen[v.ID] {
+			if !seen[v.ID] && (v.Owner == "" || v.Owner == p.trace.Sender) {
 				public = append(public, v)
 			}
 		}

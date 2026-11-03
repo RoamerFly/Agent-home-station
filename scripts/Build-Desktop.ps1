@@ -1,4 +1,4 @@
-﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch)
+﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 # Keep project-local SDK/model caches outside `go test ./...` discovery.
@@ -60,7 +60,8 @@ if($Test){
  if($LASTEXITCODE -ne 0){throw 'Desktop window lifecycle tests failed.'}
 }
 if($Portable){
- & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') -OutputDirectory (Join-Path $OutputDirectory 'runtimes') -MediaDirectory $MediaDirectory
+ $resourceArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes');MediaDirectory=$MediaDirectory;DocumentPythonPackagesDirectory=$DocumentPythonPackagesDirectory;DocumentTesseractDirectory=$DocumentTesseractDirectory;DocumentFontsDirectory=$DocumentFontsDirectory}
+ & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') @resourceArgs
  $nativeArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes\windows-x64')}
  if($NativeSourceDirectory){$nativeArgs.SourceDirectory=$NativeSourceDirectory}
  if($Test){$nativeArgs.Test=$true}

@@ -154,6 +154,7 @@ namespace WechatAgent.Desktop {
                 pythonw = pythonw, helper = helper, spool = Path.Combine(adminDir, "windows-broker-spool")
             });
             var pluginHelper = Path.Combine(resources, "windows-agent-host", "windows_plugin_host.pyw");
+            var documentRuntime = Path.Combine(resources, "document-workshop");
             var deviceToolsRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var directory in new [] {
                 Path.Combine(d.Workspace, "runtimes", "android-platform-tools"),
@@ -162,6 +163,7 @@ namespace WechatAgent.Desktop {
             if (File.Exists(pythonw) && File.Exists(pluginHelper)) env["WECHAT_PLUGIN_RUNTIME_CONFIG"] = Deployment.Json.Serialize(new {
                 python = Path.Combine(resources, "windows-python-cli", "python.exe"), pythonw = pythonw,
                 windows_helper = pluginHelper, runtime_roots = new [] { Path.GetDirectoryName(pythonw) },
+                document_runtime_root = Directory.Exists(documentRuntime) ? documentRuntime : "",
                 catalog_directory = Path.Combine(d.Workspace, "plugins"),
                 device_tools_roots = deviceToolsRoots.ToArray()
             });

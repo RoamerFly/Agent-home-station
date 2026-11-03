@@ -58,6 +58,28 @@ func TestLaunchMountsCannotWriteCode(t *testing.T) {
 	}
 }
 
+func TestLaunchSpecAcceptsTaskInputDirectoryAndExactFile(t *testing.T) {
+	root := t.TempDir()
+	code, data := filepath.Join(root, "code"), filepath.Join(root, "output")
+	input := filepath.Join(root, "task-input")
+	for _, dir := range []string{code, data, input} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := filepath.Join(input, "source.docx")
+	if err := os.WriteFile(file, []byte("synthetic"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	spec := LaunchSpec{PackageDir: code, DataDir: data, ReadOnlyDirs: []string{input}, ReadOnlyFiles: []string{file}}
+	if err := validateSpec(spec); err != nil {
+		t.Fatalf("task-scoped traversal plus exact input rejected: %v", err)
+	}
+	if got := readOnlyRoots(spec); len(got) != 3 || got[1] != input || got[2] != file {
+		t.Fatalf("task mounts lost or broadened: %v", got)
+	}
+}
+
 func TestSameVerifiedPackageNormalizesOptionalCollections(t *testing.T) {
 	dir := t.TempDir()
 	want := readyFixture(t, dir)

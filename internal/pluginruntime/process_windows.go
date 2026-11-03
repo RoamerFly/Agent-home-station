@@ -29,7 +29,7 @@ func isolatedCommand(s LaunchSpec, argv []string) (*exec.Cmd, func(), error) {
 	cleanup := func() { _ = os.Remove(f.Name()) }
 	// The document lives outside all plugin mounts; no control-plane credentials
 	// or host environment are inherited by the child.
-	doc := map[string]any{"argv": argv, "cwd": s.DataDir, "writable": []string{s.DataDir}, "read_only": readOnlyRoots(s), "parent_pid": os.Getpid()}
+	doc := map[string]any{"argv": argv, "cwd": s.DataDir, "writable": []string{s.DataDir}, "read_only": readOnlyRoots(s), "parent_pid": os.Getpid(), "environment": s.Environment}
 	err = json.NewEncoder(f).Encode(doc)
 	closeErr := f.Close()
 	if err == nil {

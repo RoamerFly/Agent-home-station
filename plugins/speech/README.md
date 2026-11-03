@@ -1,6 +1,6 @@
 # 语音生成
 
-`speech` 0.2.0 提供两项独立能力：
+`speech` 0.3.0 提供两项独立能力，并附带仅供宿主调用的私人声线登记、试听和显式训练作业协议：
 
 - `speech.synthesize`：默认云端说话声线，通过宿主固定的 `synthesize` HTTP 路由生成音频候选。需要完整的 `tts_endpoint`、宿主私密 `tts_key`、`tts_model` 和 `default_voice`。
 - `speech.synthesize_named`：已登记的 GPT-SoVITS 命名说话声线。配置 `local_profile_id=gpt-sovits`，由宿主解析原受管项目及所选模型、参考录音和参考文本，运行包内的完整推理脚本。无需云端密钥。

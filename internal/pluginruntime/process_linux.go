@@ -38,6 +38,9 @@ func isolatedCommand(s LaunchSpec, argv []string) (*exec.Cmd, func(), error) {
 	for _, dir := range readOnlyRoots(s) {
 		args = append(args, "--ro-bind", dir, dir)
 	}
+	for key, value := range s.Environment {
+		args = append(args, "--setenv", key, value)
+	}
 	args = append(args, "--bind", s.DataDir, s.DataDir, "--chdir", s.DataDir, "--")
 	args = append(args, argv...)
 	cmd := exec.Command(binary, args...)

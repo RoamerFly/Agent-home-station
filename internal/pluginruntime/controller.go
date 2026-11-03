@@ -15,10 +15,11 @@ import (
 
 // Options come from deployment, never plugin/model-supplied tool arguments.
 type Options struct {
-	Python        string   `json:"python"`
-	Pythonw       string   `json:"pythonw"`
-	WindowsHelper string   `json:"windows_helper"`
-	RuntimeRoots  []string `json:"runtime_roots"`
+	Python              string   `json:"python"`
+	Pythonw             string   `json:"pythonw"`
+	WindowsHelper       string   `json:"windows_helper"`
+	RuntimeRoots        []string `json:"runtime_roots"`
+	DocumentRuntimeRoot string   `json:"document_runtime_root,omitempty"`
 	// DeviceToolsRoots are deployment-owned host paths (for example ADB). They
 	// are intentionally not copied into LaunchSpec/RuntimeRoots, so plugin
 	// sandboxes never receive this host-only capability by configuration.
@@ -70,7 +71,13 @@ func InstalledExecutor(store *pluginhost.Store, options Options) *Executor {
 				return LaunchSpec{}, err
 			}
 		}
-		return LaunchSpec{PackageDir: code, DataDir: data, Python: options.Python, Pythonw: options.Pythonw, WindowsHelper: options.WindowsHelper, RuntimeRoots: append([]string(nil), options.RuntimeRoots...), Resources: append([]ReadOnlyResource(nil), resources...), HostMetadata: cloneMetadata(metadata), Configuration: &config}, nil
+		runtimeRoots := append([]string(nil), options.RuntimeRoots...)
+		environment := map[string]string(nil)
+		if p.ID == "document-workshop" && options.DocumentRuntimeRoot != "" {
+			runtimeRoots = append(runtimeRoots, options.DocumentRuntimeRoot)
+			environment = map[string]string{"DOCUMENT_RUNTIME_ROOT": options.DocumentRuntimeRoot}
+		}
+		return LaunchSpec{PackageDir: code, DataDir: data, Python: options.Python, Pythonw: options.Pythonw, WindowsHelper: options.WindowsHelper, RuntimeRoots: runtimeRoots, Resources: append([]ReadOnlyResource(nil), resources...), HostMetadata: cloneMetadata(metadata), Environment: environment, Configuration: &config}, nil
 	}}
 }
 

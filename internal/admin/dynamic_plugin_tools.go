@@ -91,6 +91,8 @@ func (p *permittedTools) dedicatedPluginToolNames(ctx context.Context, id string
 	case "project-development":
 		tools = append(tools, p.projectPluginTools(ctx)...)
 		tools = append(tools, p.projectTools()...)
+	case "document-workshop":
+		tools = append(tools, p.documentTools()...)
 	case "external-tools":
 		tools = append(tools, p.installedExternalHTTPTools(ctx)...)
 		tools = append(tools, p.installedExternalJobTools(ctx)...)
