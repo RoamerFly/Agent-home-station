@@ -37,48 +37,50 @@ type mediaDelivery struct {
 	// message.  It is deliberately separate from a native job state: native
 	// may still report receipts for chunks which had already been claimed when
 	// the user interrupted the send.
-	CancelTrace    string                 `json:"cancel_trace,omitempty"`
-	CancelSender   string                 `json:"cancel_sender,omitempty"`
-	CancelledAt    time.Time              `json:"cancelled_at,omitempty"`
-	StateVersion   int                    `json:"state_version,omitempty"`
-	ResumedFrom    string                 `json:"resumed_from,omitempty"`
-	OriginInput    *companion.Input       `json:"origin_input,omitempty"`
-	VoiceProfile   string                 `json:"voice_profile_id,omitempty"`
-	VoiceID        string                 `json:"voice_id,omitempty"`
-	VoiceEngine    string                 `json:"voice_engine,omitempty"`
-	Paused         bool                   `json:"paused,omitempty"`
-	RepairReported bool                   `json:"repair_reported,omitempty"`
-	ReconcileAfter time.Time              `json:"reconcile_after,omitempty"`
-	CrossSettled   bool                   `json:"cross_settled,omitempty"`
-	CrossTask      string                 `json:"cross_task,omitempty"`
-	CrossRequester string                 `json:"cross_requester,omitempty"`
-	CrossOrigin    string                 `json:"cross_origin,omitempty"`
-	CrossSource    string                 `json:"cross_source,omitempty"`
-	ParentAssetID  string                 `json:"parent_asset_id,omitempty"`
-	CachedMIME     string                 `json:"cached_mime,omitempty"`
-	NotBefore      time.Time              `json:"not_before,omitempty"`
-	CompletedAt    time.Time              `json:"completed_at,omitempty"`
-	DurationMS     int64                  `json:"duration_ms,omitempty"`
-	URL            string                 `json:"url,omitempty"`
-	Description    string                 `json:"description,omitempty"`
-	Key            string                 `json:"key"`
-	Trace          string                 `json:"trace"`
-	Input          companion.Input        `json:"input"`
-	SourceID       string                 `json:"source_id"`
-	AssetID        string                 `json:"asset_id,omitempty"`
-	Kind           string                 `json:"kind"`
-	Title          string                 `json:"title"`
-	ID             string                 `json:"id"`
-	State          string                 `json:"state"`
-	Phase          string                 `json:"phase"`
-	Reason         string                 `json:"reason"`
-	Retries        int                    `json:"retries"`
-	Checks         int                    `json:"checks"`
-	UserCancelled  bool                   `json:"user_cancelled,omitempty"`
-	Created        time.Time              `json:"created"`
-	Next           time.Time              `json:"next"`
-	Status         linuxnative.ToolStatus `json:"status"`
-	Signature      string                 `json:"signature,omitempty"`
+	CancelTrace        string                 `json:"cancel_trace,omitempty"`
+	CancelSender       string                 `json:"cancel_sender,omitempty"`
+	CancelledAt        time.Time              `json:"cancelled_at,omitempty"`
+	StateVersion       int                    `json:"state_version,omitempty"`
+	ResumedFrom        string                 `json:"resumed_from,omitempty"`
+	OriginInput        *companion.Input       `json:"origin_input,omitempty"`
+	VoiceProfile       string                 `json:"voice_profile_id,omitempty"`
+	VoiceID            string                 `json:"voice_id,omitempty"`
+	VoiceEngine        string                 `json:"voice_engine,omitempty"`
+	SynthesisText      string                 `json:"synthesis_text,omitempty"`
+	SynthesisTextKnown bool                   `json:"synthesis_text_known,omitempty"`
+	Paused             bool                   `json:"paused,omitempty"`
+	RepairReported     bool                   `json:"repair_reported,omitempty"`
+	ReconcileAfter     time.Time              `json:"reconcile_after,omitempty"`
+	CrossSettled       bool                   `json:"cross_settled,omitempty"`
+	CrossTask          string                 `json:"cross_task,omitempty"`
+	CrossRequester     string                 `json:"cross_requester,omitempty"`
+	CrossOrigin        string                 `json:"cross_origin,omitempty"`
+	CrossSource        string                 `json:"cross_source,omitempty"`
+	ParentAssetID      string                 `json:"parent_asset_id,omitempty"`
+	CachedMIME         string                 `json:"cached_mime,omitempty"`
+	NotBefore          time.Time              `json:"not_before,omitempty"`
+	CompletedAt        time.Time              `json:"completed_at,omitempty"`
+	DurationMS         int64                  `json:"duration_ms,omitempty"`
+	URL                string                 `json:"url,omitempty"`
+	Description        string                 `json:"description,omitempty"`
+	Key                string                 `json:"key"`
+	Trace              string                 `json:"trace"`
+	Input              companion.Input        `json:"input"`
+	SourceID           string                 `json:"source_id"`
+	AssetID            string                 `json:"asset_id,omitempty"`
+	Kind               string                 `json:"kind"`
+	Title              string                 `json:"title"`
+	ID                 string                 `json:"id"`
+	State              string                 `json:"state"`
+	Phase              string                 `json:"phase"`
+	Reason             string                 `json:"reason"`
+	Retries            int                    `json:"retries"`
+	Checks             int                    `json:"checks"`
+	UserCancelled      bool                   `json:"user_cancelled,omitempty"`
+	Created            time.Time              `json:"created"`
+	Next               time.Time              `json:"next"`
+	Status             linuxnative.ToolStatus `json:"status"`
+	Signature          string                 `json:"signature,omitempty"`
 }
 
 func (d *mediaDelivery) terminal() bool {
@@ -286,7 +288,7 @@ func (w *Worker) queueMedia(ctx context.Context, c *companion.Engine, input comp
 		w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Reason: "media_queue_full", Status: "failed"})
 		return true
 	}
-	d := &mediaDelivery{VoiceProfile: m.VoiceProfile, VoiceID: m.VoiceID, VoiceEngine: m.VoiceEngine, ParentAssetID: m.ParentAssetID, CachedMIME: m.CachedMIME, DurationMS: m.DurationMS, URL: m.URL, Description: m.Description, Key: key, Trace: input.TraceID, Input: input, SourceID: source, AssetID: m.AssetID, Kind: m.Kind, Title: m.Title, State: "prepared", Created: time.Now().UTC()}
+	d := &mediaDelivery{VoiceProfile: m.VoiceProfile, VoiceID: m.VoiceID, VoiceEngine: m.VoiceEngine, SynthesisText: m.SynthesisText, SynthesisTextKnown: m.SynthesisTextKnown, ParentAssetID: m.ParentAssetID, CachedMIME: m.CachedMIME, DurationMS: m.DurationMS, URL: m.URL, Description: m.Description, Key: key, Trace: input.TraceID, Input: input, SourceID: source, AssetID: m.AssetID, Kind: m.Kind, Title: m.Title, State: "prepared", Created: time.Now().UTC()}
 	if bound, err := w.prepareMediaEvidence(ctx, input); err != nil {
 		// The native journal might already contain this deterministic key after
 		// a lost checkpoint. Always reconcile that receipt before stopping a
@@ -330,7 +332,7 @@ func (w *Worker) adoptMediaSeeds() {
 		if exists || !w.allowed[seed.Input.Thread] && seed.Key == "" {
 			continue
 		}
-		d := &mediaDelivery{OriginInput: seed.OriginInput, VoiceProfile: seed.Media.VoiceProfile, VoiceID: seed.Media.VoiceID, VoiceEngine: seed.Media.VoiceEngine, ParentAssetID: seed.Media.ParentAssetID, CachedMIME: seed.Media.CachedMIME, URL: seed.Media.URL, Description: seed.Media.Description, DurationMS: seed.Media.DurationMS, Key: "adopt-" + seed.JobID, Trace: seed.Trace, Input: seed.Input, SourceID: seed.SourceID, AssetID: seed.Media.AssetID, Kind: seed.Media.Kind, Title: seed.Media.Title, ID: seed.JobID, State: "queued", Created: time.Now().UTC()}
+		d := &mediaDelivery{OriginInput: seed.OriginInput, VoiceProfile: seed.Media.VoiceProfile, VoiceID: seed.Media.VoiceID, VoiceEngine: seed.Media.VoiceEngine, SynthesisText: seed.Media.SynthesisText, SynthesisTextKnown: seed.Media.SynthesisTextKnown, ParentAssetID: seed.Media.ParentAssetID, CachedMIME: seed.Media.CachedMIME, URL: seed.Media.URL, Description: seed.Media.Description, DurationMS: seed.Media.DurationMS, Key: "adopt-" + seed.JobID, Trace: seed.Trace, Input: seed.Input, SourceID: seed.SourceID, AssetID: seed.Media.AssetID, Kind: seed.Media.Kind, Title: seed.Media.Title, ID: seed.JobID, State: "queued", Created: time.Now().UTC()}
 		if seed.Key != "" {
 			d.CrossTask = seed.OriginTask
 			d.CrossRequester = seed.Requester
@@ -753,7 +755,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 	w.persistErr = w.saveRuntime()
 }
 func (w *Worker) mediaRecord(d *mediaDelivery, event, category string) {
-	memory := companion.MediaMemory{VoiceProfile: d.VoiceProfile, VoiceID: d.VoiceID, VoiceEngine: d.VoiceEngine, ParentAssetID: d.ParentAssetID, CachedMIME: d.CachedMIME, URL: d.URL, Key: d.Key, Kind: d.Kind, Title: d.Title, SourceID: d.SourceID, AssetID: d.AssetID, JobID: d.ID, State: d.State, Phase: d.Phase, Reason: d.Reason, Retries: d.Retries, TotalParts: len(d.Status.VoiceChunks)}
+	memory := companion.MediaMemory{VoiceProfile: d.VoiceProfile, VoiceID: d.VoiceID, VoiceEngine: d.VoiceEngine, SynthesisText: d.SynthesisText, SynthesisTextKnown: d.SynthesisTextKnown, ParentAssetID: d.ParentAssetID, CachedMIME: d.CachedMIME, URL: d.URL, Key: d.Key, Kind: d.Kind, Title: d.Title, SourceID: d.SourceID, AssetID: d.AssetID, JobID: d.ID, State: d.State, Phase: d.Phase, Reason: d.Reason, Retries: d.Retries, TotalParts: len(d.Status.VoiceChunks)}
 	for _, p := range d.Status.VoiceChunks {
 		memory.DurationMS += p.DurationMS
 		if p.State == "accepted" && p.HasReceipt {
@@ -763,7 +765,7 @@ func (w *Worker) mediaRecord(d *mediaDelivery, event, category string) {
 	if len(d.Status.VoiceChunks) == 0 {
 		memory.DurationMS = d.DurationMS
 	}
-	sig := fmt.Sprintf("%s|%s|%s|%d|%d|%d|%d", d.State+"|"+d.VoiceID+"|"+d.VoiceEngine+"|"+d.VoiceProfile, d.Phase, d.Reason, d.Retries, memory.AcceptedParts, memory.TotalParts, memory.DurationMS)
+	sig := fmt.Sprintf("%s|%s|%s|%t|%s|%d|%d|%d|%d", d.State+"|"+d.VoiceID+"|"+d.VoiceEngine+"|"+d.VoiceProfile, d.Phase, d.Reason, memory.SynthesisTextKnown, memory.SynthesisText, d.Retries, memory.AcceptedParts, memory.TotalParts, memory.DurationMS)
 	if sig == d.Signature {
 		return
 	}
@@ -1011,6 +1013,13 @@ func (w *Worker) voiceCancellationCandidates(m linuxnative.Message) map[string][
 }
 
 func (w *Worker) stopVoiceTrace(n mediaNative, m linuxnative.Message, trace, reason string) {
+	// A model-requested check can outlive the immediate send even without
+	// a persistent task. Cancel it with the same authorized delivery scope.
+	for _, wake := range w.runtime.Wakes {
+		if wake != nil && wake.State == "waiting" && wake.Parent == trace && wake.Input.Thread == m.ThreadID && wake.Input.Sender == m.SenderID {
+			wake.State = "stopped"
+		}
+	}
 	for _, d := range w.runtime.Media {
 		if d.Trace != trace || d.Input.Thread != m.ThreadID || d.Kind != "voice" || d.terminal() {
 			continue

@@ -113,19 +113,25 @@ type Decision struct {
 	MediaIDs             []string             `json:"media_ids,omitempty"`
 }
 type GeneratedMedia struct {
-	VoiceProfile  string `json:"voice_profile_id,omitempty"`
-	VoiceID       string `json:"voice_id,omitempty"`
-	VoiceEngine   string `json:"voice_engine,omitempty"`
-	ParentAssetID string `json:"parent_asset_id,omitempty"`
-	CachedMIME    string `json:"cached_mime,omitempty"`
-	DurationMS    int64  `json:"duration_ms,omitempty"`
-	URL           string `json:"url,omitempty"`
-	Description   string `json:"description,omitempty"`
-	SourceID      string `json:"-"`
-	AssetID       string `json:"asset_id,omitempty"`
-	ID            string `json:"id"`
-	Kind          string `json:"kind"`
-	Title         string `json:"title"`
+	VoiceProfile string `json:"voice_profile_id,omitempty"`
+	VoiceID      string `json:"voice_id,omitempty"`
+	VoiceEngine  string `json:"voice_engine,omitempty"`
+	// SynthesisText is the exact text supplied to a successful speech
+	// synthesizer.  It is deliberately distinct from a caption or the user's
+	// broader request: a later turn may need to tell whether a word was spoken
+	// rather than merely mentioned in text.
+	SynthesisText      string `json:"synthesis_text,omitempty"`
+	SynthesisTextKnown bool   `json:"synthesis_text_known,omitempty"`
+	ParentAssetID      string `json:"parent_asset_id,omitempty"`
+	CachedMIME         string `json:"cached_mime,omitempty"`
+	DurationMS         int64  `json:"duration_ms,omitempty"`
+	URL                string `json:"url,omitempty"`
+	Description        string `json:"description,omitempty"`
+	SourceID           string `json:"-"`
+	AssetID            string `json:"asset_id,omitempty"`
+	ID                 string `json:"id"`
+	Kind               string `json:"kind"`
+	Title              string `json:"title"`
 }
 type MediaAccess interface {
 	Media(string) (GeneratedMedia, bool)
@@ -422,9 +428,11 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 		for _, m := range input.UnreadMessages {
 			ids[m.MessageID] = true
 		}
-		kept := scope.Messages[:0]
+		kept := make([]Turn, 0, len(scope.Messages))
 		for _, m := range scope.Messages {
-			if !ids[m.TraceID] {
+			// Outgoing media and captions can share the inbound request trace.
+			// The unread packet replaces only the original inbound bubble.
+			if m.Role != "user" || !ids[m.TraceID] {
 				kept = append(kept, m)
 			}
 		}

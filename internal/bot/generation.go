@@ -885,7 +885,7 @@ func (w *Worker) generationProgress(ctx context.Context, s *generationScheduler,
 			return nil
 		}
 		sent = true
-		if e = c.Store.AcceptedDelivery(in, body, "progress-"+in.TraceID, c.Config, time.Now()); e != nil {
+		if e = w.acceptTextMemory(c, in, -1, body); e != nil {
 			return e
 		}
 		w.activity(Record{Event: "message_progress", Category: "sent", ThreadID: in.Thread, MessageID: in.TraceID, Content: body, Status: "accepted", Reason: "tool_progress_accepted", Origin: "bot"})

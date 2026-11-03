@@ -64,6 +64,9 @@ func TestCloudSpeechConfigurationDoesNotEnableNamedVoice(t *testing.T) {
 	if len(tools) != 1 || tools[0].Name != "speech_synthesize" || strings.Contains(string(tools[0].InputSchema), "voice_id") {
 		t.Fatalf("cloud-only tool exposed an unavailable named voice route: %#v", tools)
 	}
+	if !strings.Contains(string(tools[0].InputSchema), `"instruction"`) {
+		t.Fatalf("default cloud speech lost its supported instruction field: %s", tools[0].InputSchema)
+	}
 }
 
 func speechPluginJob(p *speechPluginPolicy) (pluginhost.Job, pluginhost.Capability) {

@@ -6,13 +6,38 @@ import (
 	"time"
 )
 
-var ErrDeliveryMemoryConflict = errors.New("delivery memory content mismatch")
+var (
+	ErrDeliveryMemoryConflict   = errors.New("delivery memory content mismatch")
+	ErrDeliveryIdentityRequired = errors.New("delivery memory identity required")
+)
 
-// AcceptedDelivery is for explicitly keyed manual replies. Polling a receipt
-// after a restart can recover memory without appending the same reply twice.
+// AcceptedDelivery records an accepted outgoing bubble identified by a durable
+// transport or host operation identity. Polling the same receipt after a
+// restart recovers memory without appending the same bubble twice. Callers
+// must not derive key from text or an incoming request trace: identical text
+// can be sent as two distinct bubbles, while one incoming request can produce
+// several bubbles.
 func (s *Store) AcceptedDelivery(input Input, text, key string, c Config, now time.Time) error {
+	return s.acceptedDelivery(input, text, key, "", c, now)
+}
+
+// AcceptedDeliveryWithLegacyReceipt upgrades only the deterministic receipt
+// identity written by the pre-upgrade delivery recovery path. legacyKey must
+// be derived from a currently confirmed native idempotency key, native job ID
+// and immutable creation timestamp; plan-slot keys and text hashes are not
+// accepted aliases.
+func (s *Store) AcceptedDeliveryWithLegacyReceipt(input Input, text, key, legacyKey string, c Config, now time.Time) error {
+	return s.acceptedDelivery(input, text, key, legacyKey, c, now)
+}
+
+func (s *Store) acceptedDelivery(input Input, text, key, legacyKey string, c Config, now time.Time) error {
 	if input.Preview || !c.Permissions.Remember {
 		return nil
+	}
+	key = strings.TrimSpace(key)
+	legacyKey = strings.TrimSpace(legacyKey)
+	if key == "" {
+		return ErrDeliveryIdentityRequired
 	}
 	return s.scopeTransaction(ScopeID(input.Channel, input.Account, input.Thread), func(data *persisted) error {
 		id := ScopeID(input.Channel, input.Account, input.Thread)
@@ -20,15 +45,31 @@ func (s *Store) AcceptedDelivery(input Input, text, key string, c Config, now ti
 		if !ok {
 			return errors.New("character scope missing")
 		}
-		for _, turn := range scope.Messages {
-			if turn.Role == "assistant" && turn.TraceID == key {
+		for i := range scope.Messages {
+			turn := &scope.Messages[i]
+			// TraceID fallback is only for records written before DeliveryID was
+			// introduced. It lets recovery finish safely without fabricating an
+			// identity for historical bubbles.
+			if turn.Role == "assistant" && (turn.DeliveryID == key || turn.DeliveryID == "" && turn.TraceID == key) {
 				if turn.Text != boundedText(text, 2048) {
 					return ErrDeliveryMemoryConflict
 				}
 				return nil
 			}
+			if legacyKey != "" && turn.Role == "assistant" && turn.DeliveryID == "" && turn.TraceID == legacyKey {
+				if turn.Text != boundedText(text, 2048) {
+					return ErrDeliveryMemoryConflict
+				}
+				// This is the only migration alias. It is backed by the same
+				// native receipt currently being reconciled, so filling the new
+				// identity does not invent one for ambiguous old records.
+				turn.DeliveryID = key
+				turn.RequestTraceID = input.TraceID
+				data.Scopes[id] = scope
+				return nil
+			}
 		}
-		scope.Messages = append(scope.Messages, Turn{ReplyContext: cloneReplyContext(input.ReplyContext), TraceID: key, Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
+		scope.Messages = append(scope.Messages, Turn{ReplyContext: cloneReplyContext(input.ReplyContext), DeliveryID: key, RequestTraceID: input.TraceID, TraceID: key, Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
 		scope.LastInteraction = now
 		recordAutonomyAccepted(&scope, input, c, now)
 		clean, err := s.pruneStored(scope, c, now)

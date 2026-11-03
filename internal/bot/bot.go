@@ -772,7 +772,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		}
 		w.config.Log("reply_server_accepted")
 		w.activity(Record{Event: "message_sent", Category: "sent", ThreadID: input.Thread, MessageID: input.TraceID, Content: text, Origin: "bot", Status: "accepted"})
-		if err := character.Accepted(input, text); err != nil {
+		if err := w.acceptTextMemory(character, input, bubble, text); err != nil {
 			w.config.Log("memory_save_failed_after_accepted_reply")
 			return
 		}

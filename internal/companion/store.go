@@ -30,11 +30,19 @@ type Turn struct {
 	Media             *MediaMemory       `json:"media,omitempty"`
 	SenderName        string             `json:"sender_name,omitempty"`
 	SenderNameSource  string             `json:"sender_name_source,omitempty"`
-	TraceID           string             `json:"message_id,omitempty"`
-	Role              string             `json:"role"`
-	Text              string             `json:"text"`
-	Sender            string             `json:"sender"`
-	Time              time.Time          `json:"time"`
+	// DeliveryID is the durable identity supplied by the sending transport for
+	// an accepted outgoing bubble.  It is intentionally distinct from TraceID:
+	// TraceID remains the local event key used by older storage/index paths.
+	DeliveryID string `json:"delivery_id,omitempty"`
+	// RequestTraceID links an outgoing bubble back to the incoming request that
+	// caused it.  One request can legitimately produce several bubbles, so it
+	// must never be used as the outgoing event identity or a deduplication key.
+	RequestTraceID string    `json:"request_trace_id,omitempty"`
+	TraceID        string    `json:"message_id,omitempty"`
+	Role           string    `json:"role"`
+	Text           string    `json:"text"`
+	Sender         string    `json:"sender"`
+	Time           time.Time `json:"time"`
 }
 type Scope struct {
 	Preferences         string `json:"preferences,omitempty"`
@@ -316,18 +324,22 @@ func (s *Store) Context(input Input, c Config, now time.Time) Scope {
 	}
 	scope.Messages = keptSources
 	if s.db != nil {
-		rows, err := s.db.Query("SELECT event_id FROM memory_blocks WHERE scope=? UNION SELECT id FROM events WHERE scope=? AND suppressed!=0 UNION SELECT event_id FROM source_conflicts WHERE scope=?", scope.ID, scope.ID, scope.ID)
+		rows, err := s.db.Query(`SELECT e.id,e.trace,e.sender FROM events e WHERE e.scope=? AND (e.suppressed!=0 OR EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) OR EXISTS(SELECT 1 FROM source_conflicts c WHERE c.event_id=e.id))`, scope.ID)
 		if err != nil {
 			return Scope{ID: scope.ID, Messages: []Turn{}}
 		}
 		blocked := map[string]bool{}
+		blockedRequests := map[string]bool{}
 		for rows.Next() {
-			var id string
-			if rows.Scan(&id) != nil {
+			var id, trace, sender string
+			if rows.Scan(&id, &trace, &sender) != nil {
 				rows.Close()
 				return Scope{ID: scope.ID, Messages: []Turn{}}
 			}
 			blocked[id] = true
+			if trace != "" && sender != "" {
+				blockedRequests[mediaRequestIdentity(trace, sender)] = true
+			}
 		}
 		rowErr := rows.Err()
 		rows.Close()
@@ -337,6 +349,14 @@ func (s *Store) Context(input Input, c Config, now time.Time) Scope {
 		kept := []Turn{}
 		for i, t := range scope.Messages {
 			if !blocked[eventID(scope.ID, t, i)] {
+				if t.Media != nil && t.Media.RequestTraceID != "" && t.Media.RequesterID != "" && blockedRequests[mediaRequestIdentity(t.Media.RequestTraceID, t.Media.RequesterID)] {
+					// Preserve the delivery receipt but never expose a verified
+					// synthesis draft after the request which authorized it was
+					// forgotten, suppressed, or put into source conflict.
+					m := *t.Media
+					m.SynthesisText, m.SynthesisTextKnown = "", false
+					t.Media = &m
+				}
 				kept = append(kept, t)
 			}
 		}
@@ -365,7 +385,7 @@ func (s *Store) Accepted(input Input, text string, c Config, now time.Time) erro
 		if !ok {
 			return errors.New("character scope missing")
 		}
-		scope.Messages = append(scope.Messages, Turn{ReplyContext: cloneReplyContext(input.ReplyContext), Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
+		scope.Messages = append(scope.Messages, Turn{ReplyContext: cloneReplyContext(input.ReplyContext), RequestTraceID: input.TraceID, Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
 		recordAutonomyAccepted(&scope, input, c, now)
 		clean, err := s.pruneStored(scope, c, now)
 		if err != nil {

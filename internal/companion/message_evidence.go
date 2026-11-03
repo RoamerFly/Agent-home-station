@@ -413,6 +413,25 @@ func (e *Engine) refreshEvidenceRow(row map[string]any, ev MemoryEvent) {
 	}
 	delete(row, "incoming_media")
 	delete(row, "runtime_context")
+	// A timeline attachment is refreshed from the authoritative event record,
+	// rather than retaining an old serialized MediaMemory after a tool/memory
+	// refresh.  Other evidence consumers keep their existing shape unless they
+	// were explicitly rendered as an attachment timeline row.
+	if _, wasAttachment := row["attachment_delivery"]; wasAttachment {
+		if ev.Media == nil {
+			delete(row, "attachment_delivery")
+			delete(row, "timeline_event")
+			delete(row, "attachment_only")
+		} else {
+			row["timeline_event"] = "assistant_attachment"
+			row["attachment_delivery"] = mediaDeliveryEvidence(*ev.Media)
+			if ev.Text == "[媒体附件] "+ev.Media.Title {
+				delete(row, "text")
+				delete(row, "literal_user_text")
+				row["attachment_only"] = true
+			}
+		}
+	}
 	row["revision"] = ev.Revision
 }
 

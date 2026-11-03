@@ -36,6 +36,81 @@ func TestNamedVoiceIsDiscoverableWithoutBailianKeyAndNeverFallsBack(t *testing.T
 	}
 }
 
+func TestNamedSpeechToolAdvertisesOnlyNamedOptionsAndSpeedFactor(t *testing.T) {
+	_, p, _, _, _ := namedSpeechContractFixture(t)
+	tools := p.speechTools()
+	if len(tools) != 1 || tools[0].Name != "speech_synthesize" {
+		t.Fatal("named speech tool missing", tools)
+	}
+	schema := string(tools[0].InputSchema)
+	if strings.Contains(schema, `"instruction"`) || strings.Contains(tools[0].Description, "instruction?") {
+		t.Fatalf("named speech exposed cloud-only instruction: %s", schema)
+	}
+	if !strings.Contains(schema, `"speed_factor"`) || !strings.Contains(tools[0].Description, "parameters.speed_factor") {
+		t.Fatalf("named speech did not document its supported speed control: %s / %s", schema, tools[0].Description)
+	}
+}
+
+func TestNamedSpeechBadArgumentsNeverClaimAmbiguousOperation(t *testing.T) {
+	f, p, _, _, _ := namedSpeechContractFixture(t)
+	count := func() int {
+		f.manager.agent.mu.Lock()
+		defer f.manager.agent.mu.Unlock()
+		return len(f.manager.agent.data.Operations)
+	}
+	before := count()
+	_, err := p.Call(t.Context(), "speech_synthesize", json.RawMessage(`{"voice_id":"synthetic-named-voice","text":"慢一点","instruction":"slow"}`))
+	if err == nil || !strings.Contains(err.Error(), "named_speech_unsupported_argument: instruction") {
+		t.Fatalf("named argument failure was not returned to the caller: %v", err)
+	}
+	if got := count(); got != before {
+		t.Fatalf("invalid named request claimed a durable operation: before=%d after=%d", before, got)
+	}
+}
+
+func TestJointSpeechToolKeepsDefaultInstructionSeparateFromNamedTuning(t *testing.T) {
+	_, p, policy, _, _ := namedSpeechContractFixture(t)
+	installed, err := policy.store.Installed(t.Context(), "speech")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = policy.store.SetEnabled(t.Context(), "speech", installed.Revision, false); err != nil {
+		t.Fatal(err)
+	}
+	current, err := policy.store.Configuration(t.Context(), "speech")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = policy.store.SaveConfiguration(t.Context(), "speech", pluginhost.ConfigUpdate{Revision: current.Revision, Values: map[string]json.RawMessage{
+		"local_profile_id": json.RawMessage(`"gpt-sovits"`),
+		"tts_endpoint":     json.RawMessage(`"https://provider.example/v1/tts"`),
+		"tts_model":        json.RawMessage(`"synthetic"`),
+		"default_voice":    json.RawMessage(`"synthetic-default"`),
+	}, Secrets: map[string]string{"tts_key": "synthetic-key"}}); err != nil {
+		t.Fatal(err)
+	}
+	installed, err = policy.store.Installed(t.Context(), "speech")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = policy.store.SetEnabled(t.Context(), "speech", installed.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	tools := p.speechTools()
+	if len(tools) != 1 {
+		t.Fatal("joint speech tool missing", tools)
+	}
+	schema := string(tools[0].InputSchema)
+	for _, want := range []string{`"instruction"`, `"speed_factor"`, `"allOf"`, `"voice_id"`} {
+		if !strings.Contains(schema, want) {
+			t.Fatalf("joint schema lost %s: %s", want, schema)
+		}
+	}
+	if !strings.Contains(tools[0].Description, "Omit voice_id") {
+		t.Fatal("joint tool no longer describes the default route", tools[0].Description)
+	}
+}
+
 func completeSyntheticNamedSpeech(t *testing.T) (*webFixture, *permittedTools, *namedSpeechPluginPolicy) {
 	t.Helper()
 	f, p, policy, job, cap := namedSpeechContractFixture(t)
@@ -94,6 +169,9 @@ func TestNamedVoiceCompletedCheckpointStagesActualWAVAndDurableVoiceIdentity(t *
 	for _, a := range assets {
 		if a.VoiceID == policy.resource.Voice.ID && a.VoiceEngine == policy.resource.Voice.Engine {
 			namedAsset = true
+			if !a.SynthesisTextKnown || a.SynthesisText != policy.request.Text {
+				t.Fatal("named voice asset lost verified synthesis text", a)
+			}
 		}
 	}
 	if !namedAsset {

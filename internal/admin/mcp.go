@@ -405,6 +405,12 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	if !p.enabled(name) {
 		return "", &mcptools.WebError{Code: "ability_disabled"}
 	}
+	// Keep strict named-voice argument diagnostics visible to the Agent.  This
+	// precedes generic schema normalization so an unsupported cloud-only field
+	// never turns into an opaque schema failure or a durable side-effect claim.
+	if err := p.preflightSpeechArgs(name, args); err != nil {
+		return "", err
+	}
 	normalized, validationErr := p.normalizeToolArgs(name, args)
 	if validationErr != nil {
 		return "", validationErr
@@ -733,6 +739,8 @@ func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugin
 		if original != nil {
 			item.URL = original.URL
 			item.VoiceID, item.VoiceEngine, item.VoiceProfile = original.VoiceID, original.VoiceEngine, original.VoiceProfile
+			item.SynthesisText = boundedAssetSynthesisText(original.SynthesisText)
+			item.SynthesisTextKnown = original.SynthesisTextKnown && item.SynthesisText != ""
 			if original.Music != nil {
 				item.VoiceProfile = original.Music.VoiceProfile
 			}

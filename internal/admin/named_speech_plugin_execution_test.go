@@ -2,9 +2,60 @@ package admin
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 )
+
+func TestNamedSpeechRequestDiagnosesUnsupportedAndInvalidArgumentsBeforeDispatch(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "cloud_instruction_is_not_a_named_voice_option",
+			raw:  `{"voice_id":"voice-a","text":"hello","instruction":"slow"}`,
+			want: "named_speech_unsupported_argument: instruction",
+		},
+		{
+			name: "unknown_field_is_not_reported_as_runtime_failure",
+			raw:  `{"voice_id":"voice-a","text":"hello","unexpected":true}`,
+			want: "named_speech_unsupported_argument: unexpected",
+		},
+		{
+			name: "parameters_must_remain_an_object",
+			raw:  `{"voice_id":"voice-a","text":"hello","parameters":["slow"]}`,
+			want: "named_speech_parameters_must_be_an_object",
+		},
+		{
+			name: "explicit_zero_timeout_is_not_silently_defaulted",
+			raw:  `{"voice_id":"voice-a","text":"hello","timeout_seconds":0}`,
+			want: "named_speech_timeout_seconds_must_be_positive",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := decodeNamedSpeechRequest(json.RawMessage(test.raw))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("want %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestNamedSpeechRequestDefaultsAndSupportsDocumentedSpeedFactor(t *testing.T) {
+	in, err := decodeNamedSpeechRequest(json.RawMessage(`{"voice_id":"voice-a","text":"慢一点","parameters":{"speed_factor":0.8,"sample_steps":64}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Device != "cuda" || in.Version != "v2" || in.Timeout != 600 {
+		t.Fatalf("named defaults lost: %#v", in)
+	}
+	if got := in.Parameters["speed_factor"]; got != float64(0.8) {
+		t.Fatalf("speed_factor changed: %#v", in.Parameters)
+	}
+}
 
 func TestNamedSpeechWAVRequiresActualCoherentPCMMetadata(t *testing.T) {
 	valid := syntheticNamedSpeechWAV()

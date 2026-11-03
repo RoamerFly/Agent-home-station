@@ -522,6 +522,7 @@ func (s *Store) ReadEvent(ctx context.Context, scopes []string, id string) (Memo
 	e := s.db.QueryRowContext(ctx, "SELECT id,scope,trace,role,sender,at,text,hash,complete,revision,seq,payload FROM events WHERE id=? AND scope IN ("+placeholders(len(scopes))+") AND suppressed=0 AND NOT EXISTS(SELECT 1 FROM source_conflicts sc WHERE sc.event_id=events.id) AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=events.scope AND b.event_id=events.id)", a...).Scan(&ev.ID, &ev.Scope, &ev.Trace, &ev.Role, &ev.Sender, &ev.At, &ev.Text, &ev.Hash, &ev.Complete, &ev.Revision, &ev.Seq, &payload)
 	if e == nil {
 		enrichMemoryEvent(&ev, payload)
+		s.redactUnavailableMediaSynthesis(ctx, &ev)
 	}
 	return ev, e
 }
@@ -851,6 +852,12 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 		}
 		enrichMemoryEvent(&ev, payload)
 		ev.TextBytes = len(ev.Text)
+		// Search returns previews, just as it does for visual observations.
+		// ReadEvent checks source visibility on demand, after this cursor releases
+		// the store's sole SQLite connection.
+		if ev.Media != nil {
+			ev.Media.SynthesisText, ev.Media.SynthesisTextKnown = "", false
+		}
 		ev.ObservationCount = len(ev.IncomingMedia)
 		for _, m := range ev.IncomingMedia {
 			ev.ObservationBytes += len(m.Observation)
@@ -878,6 +885,32 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 	}
 	finishPage(&p, q, hash)
 	return p, nil
+}
+
+// DeliverySynthesisVisible is the single visibility check for a speech draft
+// attached to an outgoing artifact. A receipt may remain readable after its
+// request is forgotten, but the spoken input may not be recovered through a
+// different history or asset route.
+func (s *Store) DeliverySynthesisVisible(ctx context.Context, scope, trace, requester string) bool {
+	if s == nil || s.db == nil || scope == "" || trace == "" || requester == "" {
+		return false
+	}
+	var visible bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM events e WHERE e.scope=? AND e.trace=? AND e.role='user' AND e.sender=? AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM source_conflicts c WHERE c.event_id=e.id))`, scope, trace, requester).Scan(&visible)
+	return err == nil && visible
+}
+
+func (s *Store) redactUnavailableMediaSynthesis(ctx context.Context, ev *MemoryEvent) {
+	if ev == nil || ev.Media == nil || !ev.Media.SynthesisTextKnown {
+		return
+	}
+	m := ev.Media
+	if s.DeliverySynthesisVisible(ctx, ev.Scope, m.RequestTraceID, m.RequesterID) {
+		return
+	}
+	copy := *m
+	copy.SynthesisText, copy.SynthesisTextKnown = "", false
+	ev.Media = &copy
 }
 
 type originalAnchorError struct{}

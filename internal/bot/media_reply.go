@@ -152,7 +152,7 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 			continue
 		}
-		if err = c.Accepted(in, text); err != nil {
+		if err = w.acceptTextMemory(c, in, r.Index, text); err != nil {
 			w.persistErr = err
 			return
 		}

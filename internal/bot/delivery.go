@@ -19,25 +19,29 @@ type reliableNative interface {
 	Catalog(context.Context, string, string, string, string) (linuxnative.CatalogPage, error)
 }
 type delivery struct {
-	ReviewEvidence  *companion.GenerationEvidence `json:"review_evidence,omitempty"`
-	Trace           string                        `json:"trace"`
-	Thread          string                        `json:"thread"`
-	Text            string                        `json:"text"`
-	Bubble          int                           `json:"bubble"`
-	Key             string                        `json:"key"`
-	ID              string                        `json:"id"`
-	State           string                        `json:"state"`
-	Attempts        int                           `json:"attempts"`
-	Checks          int                           `json:"checks"`
-	Created         time.Time                     `json:"created"`
-	Next            time.Time                     `json:"next"`
-	Quote           *linuxnative.ToolQuote        `json:"quote,omitempty"`
-	Input           companion.Input               `json:"input"`
-	Reason          string                        `json:"reason"`
-	PreviousKeys    []string                      `json:"previous_keys,omitempty"`
-	UncertainRounds int                           `json:"uncertain_rounds,omitempty"`
-	PreviousTexts   []string                      `json:"previous_texts,omitempty"`
-	SubmittedText   string                        `json:"submitted_text,omitempty"`
+	ReviewEvidence *companion.GenerationEvidence `json:"review_evidence,omitempty"`
+	Trace          string                        `json:"trace"`
+	Thread         string                        `json:"thread"`
+	Text           string                        `json:"text"`
+	Bubble         int                           `json:"bubble"`
+	Key            string                        `json:"key"`
+	ID             string                        `json:"id"`
+	ServerID       string                        `json:"server_id,omitempty"`
+	// AcceptedAt is populated only from an outgoing message record observed in
+	// the native catalogue. Tool submission time is not a delivery receipt.
+	AcceptedAt      string                 `json:"accepted_at,omitempty"`
+	State           string                 `json:"state"`
+	Attempts        int                    `json:"attempts"`
+	Checks          int                    `json:"checks"`
+	Created         time.Time              `json:"created"`
+	Next            time.Time              `json:"next"`
+	Quote           *linuxnative.ToolQuote `json:"quote,omitempty"`
+	Input           companion.Input        `json:"input"`
+	Reason          string                 `json:"reason"`
+	PreviousKeys    []string               `json:"previous_keys,omitempty"`
+	UncertainRounds int                    `json:"uncertain_rounds,omitempty"`
+	PreviousTexts   []string               `json:"previous_texts,omitempty"`
+	SubmittedText   string                 `json:"submitted_text,omitempty"`
 	// Cancelled means the originating task was withdrawn after this delivery
 	// might already have reached WeChat.  It deliberately keeps the record in
 	// reconciliation mode: we may read the old idempotency key, but must never
@@ -46,6 +50,72 @@ type delivery struct {
 }
 
 func (w *Worker) markSending(trace string) { w.queuePhase(trace, "sending") }
+
+// deliveryMemoryKey uses only an identity returned by the native sender. It
+// deliberately does not fall back to a request trace, text hash or plan slot:
+// one request may yield multiple equal text bubbles, while a recovered native
+// receipt must map to exactly one remembered bubble.
+func deliveryMemoryKey(d *delivery) string {
+	if d == nil {
+		return ""
+	}
+	if d.ID != "" {
+		return "native:" + d.ID
+	}
+	if d.ServerID != "" {
+		return "server:" + d.ServerID
+	}
+	return ""
+}
+
+// legacyReceiptMemoryKey is the exact deterministic identity produced by the
+// previous receipt-recovery implementation. It is available only while the
+// current durable delivery still proves all of its inputs; it must never be
+// substituted with a plan slot, request trace, or text-derived value.
+func legacyReceiptMemoryKey(d *delivery) string {
+	if d == nil || d.ID == "" || d.Key == "" || d.Created.IsZero() {
+		return ""
+	}
+	return "delivery-" + messageHash(d.Key+"|"+d.ID+"|"+d.Created.UTC().Format(time.RFC3339Nano))
+}
+
+// acceptTextMemory writes the actual accepted outgoing bubble. Native
+// deliveries use their receipt identity so restart/reconciliation is
+// idempotent; non-native transports retain the legacy append-only behavior
+// because no reliable receipt identity exists to deduplicate against.
+func deliveryAcceptedTime(d *delivery, fallback time.Time) time.Time {
+	if d != nil && d.AcceptedAt != "" {
+		if at, err := time.Parse(time.RFC3339Nano, d.AcceptedAt); err == nil {
+			return at
+		}
+		if at, err := time.Parse(time.RFC3339, d.AcceptedAt); err == nil {
+			return at
+		}
+	}
+	return fallback
+}
+
+func (w *Worker) acceptTextMemory(c *companion.Engine, input companion.Input, bubble int, text string) error {
+	return w.acceptTextMemoryAt(c, input, bubble, text, time.Now())
+}
+
+func (w *Worker) acceptTextMemoryAt(c *companion.Engine, input companion.Input, bubble int, text string, fallback time.Time) error {
+	if w.runtime != nil {
+		for _, d := range w.runtime.Deliveries {
+			if d.Thread != input.Thread || d.Trace != input.TraceID || d.Bubble != bubble || d.State != "accepted" {
+				continue
+			}
+			if d.Text != text {
+				return companion.ErrDeliveryMemoryConflict
+			}
+			if key := deliveryMemoryKey(d); key != "" {
+				return c.Store.AcceptedDeliveryWithLegacyReceipt(input, text, key, legacyReceiptMemoryKey(d), c.Config, deliveryAcceptedTime(d, fallback))
+			}
+			break
+		}
+	}
+	return c.Store.Accepted(input, text, c.Config, fallback)
+}
 
 func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int, text string) (sending.Receipt, error) {
 	if w.surfOrigin(input) && w.config.SurfAllowed != nil && !w.config.SurfAllowed(input.Thread) {
@@ -139,8 +209,13 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 			return w.waitDelivery(d, "send_outcome_unknown")
 		}
 	}
-	d.ID = status.ID
 	for {
+		if status.ID != "" {
+			d.ID = status.ID
+		}
+		if status.ServerID != "" {
+			d.ServerID = status.ServerID
+		}
 		d.State = status.State
 		d.Reason = status.Reason
 		if e := w.saveRuntime(); e != nil {
@@ -482,6 +557,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			d.Key = fmt.Sprintf("%s-retry%d", base, d.Attempts)
 		}
 		d.ID = ""
+		d.ServerID = ""
 		d.SubmittedText = ""
 		d.State = "prepared"
 		if w.persistErr = w.saveRuntime(); w.persistErr != nil {
@@ -513,12 +589,7 @@ func (w *Worker) acceptReconciled(d *delivery) {
 				return
 			}
 		}
-		var err error
-		if d.Bubble < 0 {
-			err = c.Store.AcceptedDelivery(d.Input, d.Text, "progress-"+d.Trace, c.Config, time.Now())
-		} else {
-			err = c.Accepted(d.Input, d.Text)
-		}
+		err := w.acceptTextMemory(c, d.Input, d.Bubble, d.Text)
 		if err != nil {
 			w.config.Log("memory_save_failed_after_accepted_reply")
 		}
@@ -550,6 +621,8 @@ func (w *Worker) observedDelivery(ctx context.Context, n reliableNative, d *deli
 			}
 			if mString(m, "direction") == "outgoing" && matched && mString(m, "serverId") != "" {
 				d.Text = body
+				d.ServerID = mString(m, "serverId")
+				d.AcceptedAt = mString(m, "createdAt")
 				return true, true, nil
 			}
 		}

@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -66,6 +65,74 @@ type namedSpeechRequest struct {
 	Timeout    float64        `json:"timeout_seconds"`
 }
 
+// decodeNamedSpeechRequest deliberately validates the public tool contract
+// before any voice catalogue, plugin, or inference work is touched.  Named
+// GPT-SoVITS voices are not cloud TTS voices: in particular they do not have
+// an "instruction" field.  Returning that distinction here lets the Agent
+// correct an invalid call instead of repeatedly retrying the same request and
+// reporting a misleading runtime failure.
+func decodeNamedSpeechRequest(raw json.RawMessage) (namedSpeechRequest, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return namedSpeechRequest{}, toolInputError("named_speech_arguments_must_be_an_object")
+	}
+	allowed := map[string]bool{
+		"voice_id": true, "text": true, "device": true, "version": true,
+		"file_ids": true, "parameters": true, "timeout_seconds": true,
+	}
+	for key := range fields {
+		if !allowed[key] {
+			if key == "instruction" {
+				return namedSpeechRequest{}, toolInputError("named_speech_unsupported_argument: instruction; named voices do not support instruction, use parameters.speed_factor (for example 0.8 for slower speech) when tuning is needed")
+			}
+			return namedSpeechRequest{}, toolInputError("named_speech_unsupported_argument: " + key + "; supported fields are text, voice_id, file_ids, parameters, device, version, timeout_seconds")
+		}
+	}
+	var parameters map[string]any
+	if value, ok := fields["parameters"]; ok && string(value) != "null" {
+		if err := json.Unmarshal(value, &parameters); err != nil || parameters == nil {
+			return namedSpeechRequest{}, toolInputError("named_speech_parameters_must_be_an_object")
+		}
+	}
+	var in namedSpeechRequest
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return namedSpeechRequest{}, toolInputError("named_speech_argument_type_invalid")
+	}
+	if !namedSpeechVoiceIDPattern.MatchString(in.VoiceID) || in.VoiceID == "." || in.VoiceID == ".." {
+		return namedSpeechRequest{}, toolInputError("named_speech_voice_id_required_or_invalid")
+	}
+	if strings.TrimSpace(in.Text) == "" || !utf8.ValidString(in.Text) || strings.ContainsRune(in.Text, 0) {
+		return namedSpeechRequest{}, toolInputError("named_speech_text_required_or_invalid")
+	}
+	if value, ok := fields["timeout_seconds"]; ok {
+		if json.Unmarshal(value, &in.Timeout) != nil || math.IsNaN(in.Timeout) || math.IsInf(in.Timeout, 0) || in.Timeout <= 0 || in.Timeout > float64((1<<63-1)/int64(1e9)) {
+			return namedSpeechRequest{}, toolInputError("named_speech_timeout_seconds_must_be_positive")
+		}
+	} else {
+		in.Timeout = 600
+	}
+	if in.Device == "" {
+		in.Device = "cuda"
+	}
+	if !namedSpeechDevicePattern.MatchString(in.Device) {
+		return namedSpeechRequest{}, toolInputError("named_speech_device_invalid_expected_cpu_or_cuda")
+	}
+	if in.Version == "" {
+		in.Version = "v2"
+	}
+	if !namedSpeechVersionPattern.MatchString(in.Version) {
+		return namedSpeechRequest{}, toolInputError("named_speech_version_invalid")
+	}
+	in.Parameters = parameters
+	if in.Parameters == nil {
+		in.Parameters = map[string]any{}
+	}
+	if err := validateNamedSpeechParameters(in.Parameters); err != nil {
+		return namedSpeechRequest{}, toolInputError(err.Error())
+	}
+	return in, nil
+}
+
 var (
 	namedSpeechVoiceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.@-]{1,128}$`)
 	namedSpeechDevicePattern  = regexp.MustCompile(`^(cpu|cuda(:[0-9]+)?)$`)
@@ -93,29 +160,9 @@ type namedSpeechPluginPolicy struct {
 }
 
 func (p *permittedTools) newNamedSpeechPluginPolicy(ctx context.Context, raw json.RawMessage) (*namedSpeechPluginPolicy, error) {
-	var in namedSpeechRequest
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF || !namedSpeechVoiceIDPattern.MatchString(in.VoiceID) || in.VoiceID == "." || in.VoiceID == ".." || strings.TrimSpace(in.Text) == "" || !utf8.ValidString(in.Text) || strings.ContainsRune(in.Text, 0) || math.IsNaN(in.Timeout) || math.IsInf(in.Timeout, 0) || in.Timeout < 0 || in.Timeout > float64((1<<63-1)/int64(1e9)) {
-		return nil, toolInputError("invalid_library_speech_parameters")
-	}
-	if in.Device == "" {
-		in.Device = "cuda"
-	}
-	if in.Version == "" {
-		in.Version = "v2"
-	}
-	if in.Timeout == 0 {
-		in.Timeout = 600
-	}
-	if !namedSpeechDevicePattern.MatchString(in.Device) || !namedSpeechVersionPattern.MatchString(in.Version) {
-		return nil, toolInputError("invalid_library_speech_parameters")
-	}
-	if err := validateNamedSpeechParameters(in.Parameters); err != nil {
-		return nil, toolInputError(err.Error())
-	}
-	if in.Parameters == nil {
-		in.Parameters = map[string]any{}
+	in, err := decodeNamedSpeechRequest(raw)
+	if err != nil {
+		return nil, err
 	}
 	if !p.workspaceExecutionAllowed() || p.manager.agent.config().Host.Mode != "full" || !p.manager.Config().Companion.Permissions.SendVoice {
 		return nil, toolInputError("library_voice_requires_authorized_workspace_execution_and_voice_permission")

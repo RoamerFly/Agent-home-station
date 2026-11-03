@@ -154,6 +154,10 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 					}
 					e.refreshEvidenceRow(row, ev)
 				}
+				if quoted, ok := row["quoted_message"].(map[string]any); ok {
+					e.refreshEmbeddedEvidence(ctx, quoted)
+					row["quoted_message"] = quoted
+				}
 				kept = append(kept, row)
 			}
 			packet["timeline"], _ = json.Marshal(kept)
@@ -178,13 +182,30 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 				encoded, _ := json.Marshal(packet)
 				_ = json.Unmarshal(encoded, &row)
 				e.refreshEvidenceRow(row, ev)
+				if quoted, ok := row["quoted_message"].(map[string]any); ok {
+					e.refreshEmbeddedEvidence(ctx, quoted)
+					row["quoted_message"] = quoted
+				}
 				if kind == "history_reply" {
 					if redacted, _ := row["personal_context_redacted"].(bool); !redacted {
-						row["messages"] = []string{ev.Text}
-						row["media_delivery"] = ev.Media
+						if ev.Media != nil {
+							row["timeline_event"] = "assistant_attachment"
+							row["attachment_delivery"] = mediaDeliveryEvidence(*ev.Media)
+							delete(row, "media_delivery")
+							if ev.Text == "[媒体附件] "+ev.Media.Title {
+								delete(row, "messages")
+								delete(row, "text")
+								row["attachment_only"] = true
+							} else {
+								row["messages"] = []string{ev.Text}
+							}
+						} else {
+							row["messages"] = []string{ev.Text}
+						}
 					} else {
 						row["messages"] = []string{}
-						row["media_delivery"] = nil
+						delete(row, "media_delivery")
+						delete(row, "attachment_delivery")
 					}
 				}
 				encoded, _ = json.Marshal(row)

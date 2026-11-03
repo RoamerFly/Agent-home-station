@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 	"wechat-bot/internal/companion"
@@ -186,7 +185,6 @@ func (w *Worker) planDelivery(p *utterancePlan) *delivery {
 	return nil
 }
 func (w *Worker) acceptPlanBubble(c *companion.Engine, p *utterancePlan, text string) {
-	key := fmt.Sprintf("%s-%d", p.ID, p.Slot)
 	in := p.Input
 	if p.Index < len(p.ReplyContexts) {
 		rc := p.ReplyContexts[p.Index]
@@ -195,17 +193,21 @@ func (w *Worker) acceptPlanBubble(c *companion.Engine, p *utterancePlan, text st
 	if d := w.planDelivery(p); d != nil && d.State == "accepted" && d.Input.ReplyContext != nil {
 		in.ReplyContext = d.Input.ReplyContext
 	}
-	err := c.Store.AcceptedDelivery(in, text, key, c.Config, time.Now())
-	if errors.Is(err, companion.ErrDeliveryMemoryConflict) {
-		// Legacy plan IDs can overlap imported history. A committed receipt is
-		// a distinct delivery, never authority to overwrite that older memory.
-		if d := w.planDelivery(p); d != nil && d.State == "accepted" && d.ID != "" && d.Key != "" && !d.Created.IsZero() && d.Text == text {
-			receiptKey := "delivery-" + messageHash(d.Key+"|"+d.ID+"|"+d.Created.UTC().Format(time.RFC3339Nano))
-			err = c.Store.AcceptedDelivery(in, text, receiptKey, c.Config, time.Now())
-			if err == nil {
-				w.activity(Record{Event: "delivery_memory_identity_recovered", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Trace, Status: "completed", Reason: "accepted_receipt_memory_identity", SendID: d.ID})
-			}
+	var err error
+	if _, native := w.sender.(reliableNative); native {
+		// A durable plan that went through the native sender must be tied to
+		// its confirmed receipt.  Do not substitute a plan/index-derived key:
+		// that can collide with imported history and is not proof of delivery.
+		d := w.planDelivery(p)
+		if d == nil || d.State != "accepted" || deliveryMemoryKey(d) == "" {
+			err = companion.ErrDeliveryIdentityRequired
+		} else if d.Text != text {
+			err = companion.ErrDeliveryMemoryConflict
+		} else {
+			err = w.acceptTextMemoryAt(c, in, p.Slot, text, deliveryAcceptedTime(d, time.Now()))
 		}
+	} else {
+		err = c.Accepted(in, text)
 	}
 	if err != nil {
 		w.persistErr = err

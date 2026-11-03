@@ -250,9 +250,15 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 				if sources[a.Scope] == nil {
 					sources[a.Scope] = map[string]companion.MediaMemory{}
 				}
-				sources[a.Scope][a.ID] = companion.MediaMemory{URL: a.URL, CachedMIME: a.MIME, ParentAssetID: a.ParentAssetID}
+				source := companion.MediaMemory{URL: a.URL, CachedMIME: a.MIME, ParentAssetID: a.ParentAssetID}
+				if a.FirstRequest != nil {
+					source.RequestTraceID, source.RequesterID = a.FirstRequest.TraceID, a.FirstRequest.RequesterID
+				}
+				sources[a.Scope][a.ID] = source
 			}
 		}
+		// Startup owns this account's operation ledger until NewManager returns.
+		joinLegacySpeechScripts(native.Account(), agent.data.Operations, sources)
 		if err = memory.BackfillMediaMetadata(sources); err != nil {
 			return nil, err
 		}

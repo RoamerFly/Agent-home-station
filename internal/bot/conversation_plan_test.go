@@ -111,7 +111,7 @@ func TestPlanRestartKeepsExactTraceQuoteAndDeduplicatesAcceptedMemory(t *testing
 		t.Fatal(err)
 	}
 	p := w.runtime.Plans[0]
-	if err = c.Store.AcceptedDelivery(in, "已接受的第一条", p.ID+"-0", c.Config, time.Now()); err != nil {
+	if err = c.Store.AcceptedDelivery(in, "已接受的第一条", deliveryMemoryKey(w.planDelivery(p)), c.Config, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err = w.loadRuntime("server-1"); err != nil {

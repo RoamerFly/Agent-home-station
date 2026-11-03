@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
@@ -25,6 +26,8 @@ type assetOriginal struct {
 	VoiceID             string
 	VoiceEngine         string
 	VoiceProfile        string
+	SynthesisText       string
+	SynthesisTextKnown  bool
 	FormatKey           string
 	VoiceComplete       bool
 	Music               *songSpec
@@ -47,27 +50,31 @@ type assetFormat struct {
 	FullOriginal bool     `json:"full_original,omitempty"`
 }
 type mediaAsset struct {
-	VoiceID       string                 `json:"voice_id,omitempty"`
-	VoiceEngine   string                 `json:"voice_engine,omitempty"`
-	VoiceProfile  string                 `json:"voice_profile_id,omitempty"`
-	Music         *songSpec              `json:"music_generation,omitempty"`
-	FirstRequest  *assetRequest          `json:"first_request,omitempty"`
-	ParentAssetID string                 `json:"parent_asset_id,omitempty"`
-	Requests      []assetRequest         `json:"requests,omitempty"`
-	HistoryStored bool                   `json:"history_stored,omitempty"`
-	RequestCount  int                    `json:"request_count,omitempty"`
-	Formats       map[string]assetFormat `json:"formats,omitempty"`
-	ID            string                 `json:"id"`
-	Scope         string                 `json:"scope"`
-	Account       string                 `json:"account"`
-	Title         string                 `json:"title"`
-	Filename      string                 `json:"filename"`
-	MIME          string                 `json:"mime"`
-	Hash          string                 `json:"hash,omitempty"`
-	URL           string                 `json:"source_url,omitempty"`
-	Bytes         int64                  `json:"bytes"`
-	Sources       map[string]string      `json:"sources"`
-	Updated       time.Time              `json:"updated"`
+	VoiceID       string `json:"voice_id,omitempty"`
+	VoiceEngine   string `json:"voice_engine,omitempty"`
+	VoiceProfile  string `json:"voice_profile_id,omitempty"`
+	SynthesisText string `json:"synthesis_text,omitempty"`
+	// False means the bytes have no unambiguous, verified speech input. Do
+	// not guess it from titles, requests, captions, or old model prose.
+	SynthesisTextKnown bool                   `json:"synthesis_text_known,omitempty"`
+	Music              *songSpec              `json:"music_generation,omitempty"`
+	FirstRequest       *assetRequest          `json:"first_request,omitempty"`
+	ParentAssetID      string                 `json:"parent_asset_id,omitempty"`
+	Requests           []assetRequest         `json:"requests,omitempty"`
+	HistoryStored      bool                   `json:"history_stored,omitempty"`
+	RequestCount       int                    `json:"request_count,omitempty"`
+	Formats            map[string]assetFormat `json:"formats,omitempty"`
+	ID                 string                 `json:"id"`
+	Scope              string                 `json:"scope"`
+	Account            string                 `json:"account"`
+	Title              string                 `json:"title"`
+	Filename           string                 `json:"filename"`
+	MIME               string                 `json:"mime"`
+	Hash               string                 `json:"hash,omitempty"`
+	URL                string                 `json:"source_url,omitempty"`
+	Bytes              int64                  `json:"bytes"`
+	Sources            map[string]string      `json:"sources"`
+	Updated            time.Time              `json:"updated"`
 }
 
 func assetScope(in companion.Input) string {
@@ -217,7 +224,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	if e = m.writeManagedAsset(digest, original.Data); e != nil {
 		return zero, e
 	}
-	a := mediaAsset{ID: id, Scope: scope, Account: in.Account, Title: assetName(original), Filename: assetName(original), MIME: original.MIME, Hash: digest, Bytes: int64(len(original.Data)), Sources: map[string]string{}, Updated: time.Now().UTC(), VoiceID: original.VoiceID, VoiceEngine: original.VoiceEngine, VoiceProfile: original.VoiceProfile}
+	a := mediaAsset{ID: id, Scope: scope, Account: in.Account, Title: assetName(original), Filename: assetName(original), MIME: original.MIME, Hash: digest, Bytes: int64(len(original.Data)), Sources: map[string]string{}, Updated: time.Now().UTC(), VoiceID: original.VoiceID, VoiceEngine: original.VoiceEngine, VoiceProfile: original.VoiceProfile, SynthesisText: boundedAssetSynthesisText(original.SynthesisText), SynthesisTextKnown: original.SynthesisTextKnown && strings.TrimSpace(original.SynthesisText) != ""}
 	if u, e := url.Parse(original.URL); e == nil && u.Host != "" {
 		u.User = nil
 		if !mcptools.IsPublicVideoPage(original.URL) && !(strings.EqualFold(u.Hostname(), "www.bilibili.com") || strings.EqualFold(u.Hostname(), "bilibili.com")) {
@@ -233,6 +240,13 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		}
 		if a.VoiceProfile == "" {
 			a.VoiceProfile = items[index].VoiceProfile
+		}
+		if !a.SynthesisTextKnown {
+			a.SynthesisText, a.SynthesisTextKnown = items[index].SynthesisText, items[index].SynthesisTextKnown
+		} else if items[index].SynthesisTextKnown && a.SynthesisText != items[index].SynthesisText {
+			// Identical bytes with conflicting scripts are reusable audio, but no
+			// longer establish a single thing that was spoken.
+			a.SynthesisText, a.SynthesisTextKnown = "", false
 		}
 		a.Music = items[index].Music
 		a.FirstRequest = items[index].FirstRequest
@@ -355,6 +369,16 @@ func (m *Manager) findAssetPage(in companion.Input, assetID, requester, query st
 				first = assetRequestSummary(*a.FirstRequest)
 			}
 			row := map[string]any{"asset_id": a.ID, "parent_asset_id": a.ParentAssetID, "title": a.Title, "filename": a.Filename, "bytes": a.Bytes, "formats": formats, "original_cached": a.Hash != "", "cached_mime": a.MIME, "updated": a.Updated, "source_url": a.URL, "first_request": first, "requests": requests}
+			// media_recent is the normal scoped on-demand path for a detailed
+			// generated artifact. The exact speech script is shown only while
+			// the original requester/source remains visible; media titles and
+			// captions are never used to reconstruct it.
+			if assetID == a.ID && a.SynthesisTextKnown && a.FirstRequest != nil && m.memory != nil && m.memory.DeliverySynthesisVisible(context.Background(), a.Scope, a.FirstRequest.TraceID, a.FirstRequest.RequesterID) {
+				row["synthesis_text"] = boundedAssetSynthesisText(a.SynthesisText)
+				row["synthesis_text_state"] = "verified_excerpt"
+			} else {
+				row["synthesis_text_state"] = "unknown"
+			}
 			if len(a.Requests) > 2 {
 				row["request_count"] = len(a.Requests)
 			}
@@ -407,6 +431,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		return "", errors.New("当前会话没有该素材")
 	}
 	a := items[index]
+	synthesisText, synthesisKnown := assetSynthesisForRequest(a, p.trace, kind, conversion)
 	formatKey := kind
 	if conversion != nil {
 		formatKey = conversion.formatKey()
@@ -434,7 +459,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		if conversion != nil {
 			variant = formatKey
 		}
-		result, err := p.stageOutputWithAsset(ctx, output, &assetOriginal{FormatKey: variant, VoiceComplete: conversion == nil, Data: data, MIME: a.MIME, Filename: a.Filename, URL: a.URL, VoiceID: a.VoiceID, VoiceEngine: a.VoiceEngine, VoiceProfile: a.VoiceProfile})
+		result, err := p.stageOutputWithAsset(ctx, output, &assetOriginal{FormatKey: variant, VoiceComplete: conversion == nil, Data: data, MIME: a.MIME, Filename: a.Filename, URL: a.URL, VoiceID: a.VoiceID, VoiceEngine: a.VoiceEngine, VoiceProfile: a.VoiceProfile, SynthesisText: synthesisText, SynthesisTextKnown: synthesisKnown})
 		if err != nil {
 			return "", err
 		}
@@ -510,7 +535,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		if len(sources) > 1 {
 			alias += "-" + strconv.Itoa(i+1)
 		}
-		media := companion.GeneratedMedia{ID: alias, SourceID: id, AssetID: a.ID, ParentAssetID: a.ParentAssetID, Kind: kind, Title: a.Title, URL: a.URL, CachedMIME: a.MIME, VoiceID: a.VoiceID, VoiceEngine: a.VoiceEngine, VoiceProfile: a.VoiceProfile}
+		media := companion.GeneratedMedia{ID: alias, SourceID: id, AssetID: a.ID, ParentAssetID: a.ParentAssetID, Kind: kind, Title: a.Title, URL: a.URL, CachedMIME: a.MIME, VoiceID: a.VoiceID, VoiceEngine: a.VoiceEngine, VoiceProfile: a.VoiceProfile, SynthesisText: synthesisText, SynthesisTextKnown: synthesisKnown}
 		p.media[alias] = media
 		itemsOut = append(itemsOut, media)
 	}
@@ -528,6 +553,39 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 	}
 	b, _ := json.Marshal(map[string]any{"required_media_ids": required, "media": itemsOut, "reused_existing": true, "network_downloads": 0, "effective_conversion": conversion.effective(), "cached_mime": a.MIME, "source_url": a.URL, "instruction": "尚未发送。将所需的全部 media.id 按顺序放入最终 reply.media_ids；已有素材已复用，无需重新搜索。cached_mime是实际缓存文件格式，音轨不是原视频；若要原视频而仅缓存音轨，应使用source_url取得视频，不把音频文件冒充视频。"})
 	return string(b), nil
+}
+
+func boundedAssetSynthesisText(text string) string {
+	text = strings.TrimSpace(text)
+	if len(text) > 4096 {
+		for n := 4096; n > 0; n-- {
+			if utf8.ValidString(text[:n]) {
+				return text[:n]
+			}
+		}
+	}
+	return text
+}
+
+// Preserve a script only for delivery of the exact original, whole voice
+// request. Reuse, cropping and conversion may send the same bytes, but they
+// must not recast the first requester's synthesis input as the new request.
+func assetSynthesisForRequest(a mediaAsset, in companion.Input, kind string, conversion *voiceConversion) (string, bool) {
+	if !a.SynthesisTextKnown || a.FirstRequest == nil || kind != "voice" || conversion != nil {
+		return "", false
+	}
+	trace := in.OriginTraceID
+	if trace == "" {
+		trace = in.TraceID
+	}
+	if trace == "" || in.Sender == "" || a.FirstRequest.TraceID != trace || a.FirstRequest.RequesterID != in.Sender {
+		return "", false
+	}
+	format, ok := a.Formats["voice"]
+	if !ok || !format.FullOriginal {
+		return "", false
+	}
+	return a.SynthesisText, true
 }
 
 func (m *Manager) cachedAssetData(a mediaAsset) ([]byte, error) {

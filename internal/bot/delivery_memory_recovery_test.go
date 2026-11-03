@@ -56,7 +56,55 @@ func TestMemoryCollisionWithoutAcceptedReceiptStillFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.acceptPlanBubble(c, p, "新草稿")
-	if !errors.Is(w.persistErr, companion.ErrDeliveryMemoryConflict) || p.Index != 0 || len(p.Sent) != 0 {
+	if !errors.Is(w.persistErr, companion.ErrDeliveryIdentityRequired) || p.Index != 0 || len(p.Sent) != 0 {
 		t.Fatal("unverified draft bypassed conflict")
+	}
+}
+
+func TestAcceptedTextMemoryUsesReceiptAndRejectsMismatchedBody(t *testing.T) {
+	w, c, _, in := planWorker(t, &planReviewModel{})
+	if _, err := w.sendText(context.Background(), in, 0, "已确认正文"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.acceptTextMemory(c, in, 0, "不同正文"); !errors.Is(err, companion.ErrDeliveryMemoryConflict) {
+		t.Fatalf("mismatched accepted body = %v, want conflict", err)
+	}
+	if err := w.acceptTextMemory(c, in, 0, "已确认正文"); err != nil {
+		t.Fatal(err)
+	}
+	scope := c.Store.Context(in, c.Config, time.Now())
+	for _, turn := range scope.Messages {
+		if turn.Role == "assistant" && turn.Text == "已确认正文" {
+			if turn.DeliveryID == "" || turn.RequestTraceID != in.TraceID {
+				t.Fatalf("receipt/request identity missing: %#v", turn)
+			}
+			return
+		}
+	}
+	t.Fatal("accepted bubble was not retained")
+}
+
+func TestDeliveryAcceptedTimePrefersObservedOutgoingTimestamp(t *testing.T) {
+	fallback := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	want := fallback.Add(-4 * time.Minute)
+	got := deliveryAcceptedTime(&delivery{AcceptedAt: want.Format(time.RFC3339Nano)}, fallback)
+	if !got.Equal(want) {
+		t.Fatalf("accepted time = %s, want receipt time %s", got, want)
+	}
+	if got = deliveryAcceptedTime(&delivery{AcceptedAt: "not-a-time"}, fallback); !got.Equal(fallback) {
+		t.Fatalf("invalid receipt time = %s, want fallback %s", got, fallback)
+	}
+}
+
+func TestLegacyReceiptMemoryKeyRequiresCompleteNativeProof(t *testing.T) {
+	stamp := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	d := &delivery{Key: "native-idempotency", ID: "native-job", Created: stamp}
+	if got := legacyReceiptMemoryKey(d); got == "" || got[:9] != "delivery-" {
+		t.Fatalf("legacy receipt key = %q", got)
+	}
+	for _, incomplete := range []*delivery{{Key: d.Key, Created: stamp}, {ID: d.ID, Created: stamp}, {Key: d.Key, ID: d.ID}} {
+		if got := legacyReceiptMemoryKey(incomplete); got != "" {
+			t.Fatalf("incomplete delivery manufactured legacy key %q from %#v", got, incomplete)
+		}
 	}
 }

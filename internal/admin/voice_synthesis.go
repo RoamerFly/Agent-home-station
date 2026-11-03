@@ -36,7 +36,7 @@ func (policy *namedSpeechPluginPolicy) stage(ctx context.Context) (string, error
 		return "", err
 	}
 	voice := policy.resource.Voice
-	staged, err := p.stageOutputWithAsset(withOutputAuthority(ctx, policy.checkCompleted), out, &assetOriginal{VoiceID: voice.ID, VoiceEngine: voice.Engine, VoiceComplete: true, Data: data, MIME: "audio/wav", Filename: voice.Name + "-语音.wav"})
+	staged, err := p.stageOutputWithAsset(withOutputAuthority(ctx, policy.checkCompleted), out, &assetOriginal{VoiceID: voice.ID, VoiceEngine: voice.Engine, SynthesisText: policy.request.Text, SynthesisTextKnown: true, VoiceComplete: true, Data: data, MIME: "audio/wav", Filename: voice.Name + "-语音.wav"})
 	if err != nil {
 		return "", err
 	}

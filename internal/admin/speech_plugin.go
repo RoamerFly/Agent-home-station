@@ -445,7 +445,7 @@ func (p *permittedTools) synthesizePluginSpeech(ctx context.Context, raw json.Ra
 	if err = policy.checkCompleted(ctx); err != nil {
 		return "", err
 	}
-	staged, err := p.stageOutputWithAsset(withOutputAuthority(ctx, policy.checkCompleted), out, &assetOriginal{VoiceEngine: "plugin:speech", VoiceComplete: true, Data: data, MIME: mime, Filename: "默认声线-语音.wav"})
+	staged, err := p.stageOutputWithAsset(withOutputAuthority(ctx, policy.checkCompleted), out, &assetOriginal{VoiceEngine: "plugin:speech", SynthesisText: policy.text, SynthesisTextKnown: true, VoiceComplete: true, Data: data, MIME: mime, Filename: "默认声线-语音.wav"})
 	if err != nil {
 		return "", err
 	}

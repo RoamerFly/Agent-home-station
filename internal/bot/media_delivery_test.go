@@ -48,6 +48,28 @@ func TestVoiceAndFileSerializeAndPersistRandomGap(t *testing.T) {
 	}
 }
 
+func TestSuccessfulSpeechDeliveryRetainsVerifiedSynthesisText(t *testing.T) {
+	w, n, engine, in := mediaWorker(t)
+	if !w.queueMedia(context.Background(), engine, in, companion.GeneratedMedia{ID: "speech-source", Kind: "voice", Title: "speech.wav", SynthesisText: "cloth。fabric。", SynthesisTextKnown: true}) {
+		t.Fatal("speech was not queued")
+	}
+	if len(w.runtime.Media) != 1 || !w.runtime.Media[0].SynthesisTextKnown {
+		t.Fatal("delivery lost synthesis provenance", w.runtime.Media)
+	}
+	n.status.State, n.status.ServerID = "accepted", "speech-receipt"
+	w.runtime.Media[0].Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	media := []companion.MediaMemory{}
+	for _, turn := range engine.Store.Context(in, engine.Config, time.Now()).Messages {
+		if turn.Media != nil {
+			media = append(media, *turn.Media)
+		}
+	}
+	if len(media) != 1 || media[0].State != "accepted" || !media[0].SynthesisTextKnown || media[0].SynthesisText != "cloth。fabric。" {
+		t.Fatal("receipt or verified script missing", media)
+	}
+}
+
 type mediaFake struct {
 	onStatus   func()
 	lookupErrs []error
@@ -313,9 +335,16 @@ func TestUnmentionedGroupStopCancelsOnlyRequestersVoiceTrace(t *testing.T) {
 		{Trace: other.TraceID, Input: other, Kind: "voice", State: "prepared"},
 	}
 	m := fixtureMessage("stop-wrong-song", in.Thread, "发错了，不是这首歌，后面别发了", "incoming")
+	w.runtime.Wakes = []*conversationWake{
+		{Input: in, Parent: in.TraceID, State: "waiting"},
+		{Input: other, Parent: other.TraceID, State: "waiting"},
+	}
 	m.SenderID = in.Sender
 	if !w.stopRequestedVoice(context.Background(), m) {
 		t.Fatal("unmentioned requester stop was ignored")
+	}
+	if w.runtime.Wakes[0].State != "stopped" || w.runtime.Wakes[1].State != "waiting" {
+		t.Fatal("cancelled delivery and its future reassessment must share the same scope")
 	}
 	if n.cancels != 1 || !w.runtime.Media[0].UserCancelled || w.runtime.Media[0].CancelTrace != m.ID || w.runtime.Media[1].UserCancelled {
 		t.Fatalf("wrong group delivery was stopped: cancels=%d first=%+v second=%+v", n.cancels, w.runtime.Media[0], w.runtime.Media[1])

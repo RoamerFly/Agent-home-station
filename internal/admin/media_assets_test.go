@@ -191,3 +191,20 @@ func TestDrainRoutesRequireAuthCSRFTicketAndDoNotCancelWork(t *testing.T) {
 		t.Fatal("ticket unbound")
 	}
 }
+
+func TestAssetSynthesisScriptIsNotReattributedOnReuse(t *testing.T) {
+	request := assetRequest{TraceID: "original", RequesterID: "alice"}
+	asset := mediaAsset{SynthesisText: "cloth。fabric。", SynthesisTextKnown: true, FirstRequest: &request, Formats: map[string]assetFormat{"voice": {FullOriginal: true}}}
+	input := companion.Input{TraceID: "original", Sender: "alice"}
+	if text, ok := assetSynthesisForRequest(asset, input, "voice", nil); !ok || text != asset.SynthesisText {
+		t.Fatal("exact original request lost verified script", text, ok)
+	}
+	input.Sender = "bob"
+	if text, ok := assetSynthesisForRequest(asset, input, "voice", nil); ok || text != "" {
+		t.Fatal("reused voice inherited another requester's script", text, ok)
+	}
+	input.Sender = "alice"
+	if text, ok := assetSynthesisForRequest(asset, input, "voice", &voiceConversion{}); ok || text != "" {
+		t.Fatal("converted voice inherited full-original script", text, ok)
+	}
+}

@@ -176,13 +176,17 @@ func (p *permittedTools) speechTools() []mcptools.Tool {
 	namedSpeechReady := p.workspaceExecutionAllowed() && p.manager.agent.config().Host.Mode == "full" && p.manager.namedSpeechPluginConfigured(context.Background())
 	if permissions.SendVoice && (defaultSpeechReady || namedSpeechReady) {
 		description := "Synthesize actual spoken audio through the installed speech plugin. Omit voice_id for the configured default; select an authorized NAMED voice with voice_library_list/read then pass voice_id."
-		schema := `{"type":"object","properties":{"text":{"type":"string","minLength":1},"voice_id":{"type":"string"},"instruction":{"type":"string"},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1},"parameters":{"type":"object"},"device":{"type":"string"},"version":{"type":"string"},"timeout_seconds":{"type":"number","exclusiveMinimum":0}},"required":["text"],"additionalProperties":false}`
+		// A named voice is a local GPT-SoVITS request, not a cloud-TTS voice.
+		// Keep the route in one discoverable tool, but make the incompatible
+		// cloud-only instruction field explicitly invalid when voice_id is set.
+		// This prevents an Agent from being told that a named voice supports an
+		// option which the strict local plugin must reject before dispatch.
+		schema := `{"type":"object","properties":{"text":{"type":"string","minLength":1},"voice_id":{"type":"string","description":"Registered named local voice. When present, omit instruction."},"instruction":{"type":"string","description":"Default cloud voice only. Do not send this field with voice_id."},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1,"description":"Optional registered resource selectors for the named voice."},"parameters":{"type":"object","description":"Named GPT-SoVITS tuning only. Use speed_factor below 1 for slower speech (for example 0.8); do not use instruction, speed, or rate as a substitute.","properties":{"speed_factor":{"type":"number","exclusiveMinimum":0,"description":"Speech speed multiplier; lower is slower."},"sample_steps":{"type":"integer","minimum":1},"text_lang":{"type":"string"},"prompt_lang":{"type":"string"},"seed":{"type":"integer"}},"additionalProperties":true},"device":{"type":"string","pattern":"^(cpu|cuda(:[0-9]+)?)$","description":"Named voice only; defaults to cuda."},"version":{"type":"string","enum":["v1","v2","v2Pro","v2ProPlus","v3","v4","v5dev","v5turbo"],"description":"Named voice only; defaults to v2."},"timeout_seconds":{"type":"number","exclusiveMinimum":0}},"required":["text"],"allOf":[{"if":{"required":["voice_id"]},"then":{"not":{"required":["instruction"]}}}],"additionalProperties":false}`
 		input := "Input {text,voice_id?,instruction?,file_ids?,parameters?,device?,version?,timeout_seconds?}."
 		if !defaultSpeechReady {
-			description = "Synthesize actual spoken audio through the installed local speech capability. First voice_library_list/read and supply the matching voice_id. Default cloud speech is unavailable."
-			schema = strings.Replace(schema, `"required":["text"]`, `"required":["text","voice_id"]`, 1)
-			schema = strings.Replace(schema, `"voice_id":{"type":"string"}`, `"voice_id":{"type":"string","minLength":1}`, 1)
-			input = "Input {text,voice_id,instruction?,file_ids?,parameters?,device?,version?,timeout_seconds?}."
+			description = "Synthesize actual spoken audio through the installed named local speech capability. First voice_library_list/read and supply the matching voice_id. It supports text, voice_id, optional file_ids/parameters/device/version/timeout_seconds; it does not support instruction. For slower speech use parameters.speed_factor (for example 0.8). Default cloud speech is unavailable."
+			schema = `{"type":"object","properties":{"text":{"type":"string","minLength":1},"voice_id":{"type":"string","minLength":1},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1,"description":"Optional registered resource selectors for this voice."},"parameters":{"type":"object","description":"GPT-SoVITS tuning. Use speed_factor below 1 for slower speech (for example 0.8). Do not send instruction, speed, or rate.","properties":{"speed_factor":{"type":"number","exclusiveMinimum":0,"description":"Speech speed multiplier; lower is slower."},"sample_steps":{"type":"integer","minimum":1},"text_lang":{"type":"string"},"prompt_lang":{"type":"string"},"seed":{"type":"integer"}},"additionalProperties":true},"device":{"type":"string","pattern":"^(cpu|cuda(:[0-9]+)?)$","description":"Defaults to cuda."},"version":{"type":"string","enum":["v1","v2","v2Pro","v2ProPlus","v3","v4","v5dev","v5turbo"],"description":"Defaults to v2."},"timeout_seconds":{"type":"number","exclusiveMinimum":0,"description":"Defaults to 600."}},"required":["text","voice_id"],"additionalProperties":false}`
+			input = "Input {text,voice_id,file_ids?,parameters?,device?,version?,timeout_seconds?}; named voices do not accept instruction."
 		}
 		if !namedSpeechReady {
 			description = "Synthesize actual spoken audio with the installed default speech capability. Named local speech is unavailable; never substitute this voice for a requested named voice."
@@ -198,7 +202,37 @@ func (p *permittedTools) speechTools() []mcptools.Tool {
 	}
 	return out
 }
+
+// preflightSpeechArgs checks the strict named-voice contract before both the
+// generic tool-schema normalizer and privilegedCall.  The former otherwise
+// hides the useful instruction-specific correction behind a generic undefined
+// field error; the latter would turn it into an ambiguous durable operation.
+func (p *permittedTools) preflightSpeechArgs(name string, args json.RawMessage) error {
+	if name != "speech_synthesize" {
+		return nil
+	}
+	var selected struct {
+		VoiceID string `json:"voice_id"`
+	}
+	if err := json.Unmarshal(args, &selected); err != nil {
+		return toolInputError("speech_arguments_must_be_an_object")
+	}
+	if selected.VoiceID != "" {
+		if _, err := decodeNamedSpeechRequest(args); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *permittedTools) callSpeech(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	// A named local voice has a strict, side-effect-free public contract.  Do
+	// this before privilegedCall claims a durable operation: a schema typo must
+	// be a normal tool-input correction, never an ambiguous "needs_review"
+	// operation that tells the Agent to inspect a synthesis which never started.
+	if err := p.preflightSpeechArgs(name, args); err != nil {
+		return "", err
+	}
 	return p.privilegedCall(ctx, name, args, func() (any, error) {
 		result, err := p.generateSpeech(ctx, name, args)
 		if err != nil {

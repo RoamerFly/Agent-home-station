@@ -75,6 +75,10 @@ func groundedHistory(scope Scope, in Input) []Turn {
 						unrelated = false
 					}
 				}
+			} else if t.Media != nil && t.Media.RequesterID != "" {
+				// A delayed attachment belongs to its recorded request even when
+				// another group member spoke while it was being delivered.
+				unrelated = !relevantSender(in, t.Media.RequesterID)
 			} else {
 				unrelated = previous != "" && !relevantSender(in, previous)
 			}
