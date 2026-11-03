@@ -29,7 +29,7 @@ Windows 本地 stdio 包始终经宿主受管的 LPAC broker 运行；Python 运
 
 ### 受控网络代理
 
-`network` 权限由宿主代理实现，本地插件不因此取得系统套接字权限。在获准的 `tools/call` 期间，插件可发送 JSON-RPC 请求 `wechat/http_read`，参数为 `{url,max_bytes,timeout_seconds}`，使用独立请求 ID。宿主返回同 ID 的 `{ok,url,content_type,body_base64}` 或 `{ok:false,error}`。每次代理调用前后重新验证当前任务的授权与来源；插件不能传入替代账号、身份或认证头。初始化、健康检查和空闲阶段不能使用代理。
+`network` 权限由宿主代理实现，本地插件不因此取得系统套接字权限。`wechat/http_read` 是已有**专用适配器**的来源绑定读取协议，参数为 `{url,max_bytes,timeout_seconds}`；它不对后装通用 network 包开放。后装通用包只能使用上文的单次、固定 `wechat/http_route`。两类代理都会在调用前后重新验证当前任务的授权与来源；插件不能传入替代账号、身份或认证头。初始化、健康检查和空闲阶段不能使用代理。
 
 代理响应受 8 MiB 帧约束，当前公共正文读取上限为 4 MiB（含 base64 开销）；超限明确失败，不悄悄截断。URL、DNS/IP、TLS 和重定向校验复用核心公共读取策略；内容提取、相关性和分页属于插件。普通 stdio、任务幂等与取消行为保持不变。
 
