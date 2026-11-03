@@ -102,6 +102,9 @@ type Manager struct {
 	packageRuntimeReady bool
 	managedServices     *pluginruntime.ManagedServices
 	managedServicesOnce sync.Once
+	musicIdleMu         sync.Mutex
+	musicIdleTimer      *time.Timer
+	musicIdleGeneration uint64
 	memoryRunnerMu      sync.Mutex
 	memoryRunnerWG      sync.WaitGroup
 	memoryRunners       map[string]context.CancelFunc

@@ -31,7 +31,15 @@ func (p *permittedTools) agentTools() []mcptools.Tool {
 		tools = append(tools, diagnosticsTool())
 		tools = append(tools, agentTool("music_service_start", "Start the installed local managed YuE/RVC service on demand, owner only. No arbitrary unit, command or endpoint. Nonblocking: check music_service_status until ready, then resume original work. Does not create songs, alter voice defaults or send WeChat. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
 	}
-	tools = append(tools, p.projectPluginTools(context.Background())...)
+	projectTools := p.projectPluginTools(context.Background())
+	tools = append(tools, projectTools...)
+	projectWriteVisible := false
+	for _, tool := range projectTools {
+		projectWriteVisible = projectWriteVisible || tool.Name == "project_create"
+	}
+	if p.privileged() && p.workspaceExecutionAllowed() && (c.Host.Mode == "files" || c.Host.Mode == "full") && projectWriteVisible {
+		tools = append(tools, agentTool("project_checkout_plugin", "Create or reopen an editable, digest-pinned source working copy of an installed plugin in THIS conversation's private tool-sources directory. Trusted owner with project write permission only. Copies only verified declared package files and plugin.json; never copies configuration, secrets, package-store state or mutable installed files. Same digest reopens without overwriting edits; a new installed digest creates a separate versioned directory. Input {plugin_id:string}.", `{"type":"object","properties":{"plugin_id":{"type":"string"}},"required":["plugin_id"],"additionalProperties":false}`))
+	}
 	for _, tool := range p.projectTools() {
 		if tool.Name == "project_create" && (!p.workspaceExecutionAllowed() || (c.Host.Mode != "files" && c.Host.Mode != "full")) {
 			continue
@@ -127,6 +135,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	}
 	if name == "music_service_start" {
 		return p.controlMusicService(ctx, "start")
+	}
+	if name == "project_checkout_plugin" {
+		return p.checkoutPluginSource(ctx, args)
 	}
 	if strings.HasPrefix(name, "voice_library_") {
 		return p.callVoiceLibrary(ctx, name, args)

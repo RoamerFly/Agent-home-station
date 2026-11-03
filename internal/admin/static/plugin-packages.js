@@ -32,9 +32,10 @@
   if(!installed)return state.retained.has(id)?'已卸载 · 可查看保留任务':'未安装';
   if(installed.removed)return '已移除 · 可查看保留任务';
   const runtime=state.runtimes[id]?.state;
+  if(runtime==='running')return state.runtimes[id].auto_managed?'运行中 · 按需':'运行中 · 常驻';
   if(runtime==='running'||runtime==='starting'||runtime==='stopping')return runtimeNames[runtime];
   if(runtime==='failed')return '异常 · 请打开检查';
-  return installed.enabled?'已启用 · 未运行':'已安装 · 未启用';
+  return installed.enabled?'按需待命':'已安装 · 未启用';
  }
  function allPackages(){
   const all=new Map(state.catalog.map(p=>[p.id,p]));
@@ -45,7 +46,7 @@
  function capabilityCard(p,installed,klass='package-choice'){
   const card=button('',()=>choose(p.id));card.className=klass;card.setAttribute('aria-pressed',String(state.selected===p.id));
   card.append(el('strong',p.name),el('small',packageStatus(p.id,installed)));
-  const next=installed&&!installed.enabled?'下一步：打开后检查配置并手动启动。':state.runtimes[p.id]?.state==='failed'?'下一步：打开查看运行原因。':!installed&&p.status==='ready'?'下一步：导入或迁移后再配置。':!installed?'开发模板，尚不能运行。':'打开配置、权限和任务';
+  const next=installed&&!installed.enabled?'配置后可按需启用。':state.runtimes[p.id]?.state==='failed'?'下一步：打开查看运行原因。':!installed&&p.status==='ready'?'下一步：导入或迁移后再配置。':!installed?'开发模板，尚不能运行。':'打开配置、权限和任务';
   card.append(el('small',next,'hint'));
   return card;
  }
@@ -92,7 +93,7 @@
  function renderDetail(d){
   if(state.selected==='mobile-control'&&d.host_data){renderHostDetail(d);return}
   const p=d.installed.package,heading=el('div',undefined,'section-heading'),runtime=d.runtime||{state:'stopped'};heading.append(el('h3',p.name));
-  if(!d.installed.removed){const stop=d.installed.enabled||runtime.state==='running'||runtime.state==='stopping';const action=button(stop?'停止插件':'启动插件',()=>runtimeAction(stop?'stop':'start'));action.dataset.pluginRuntimeAction=stop?'stop':'start';action.disabled=!stop&&!d.runtime_connected;heading.append(action)}
+  if(!d.installed.removed)runtimeControls(heading,d);
   editor.replaceChildren(heading,status);status.textContent=d.runtime_connected?(runtimeNames[runtime.state]||'状态待核对')+(d.installed.enabled?'；停止后可修改配置。':'；保存配置后可启动。'):'执行环境未配置；可先保存配置，安装不会自动启动。';
   const permissions=el('p',(d.installed.permissions||[]).map(x=>names[x]||x).join('、')||'未授予额外权限','hint');editor.append(permissions);
   const form=el('form');form.id='package-config-form';const fields=el('div',undefined,'package-fields');
@@ -110,14 +111,27 @@
   form.addEventListener('input',()=>dirty(true));form.addEventListener('submit',saveConfig);
   const taskHead=el('div',undefined,'section-heading');taskHead.append(el('h3','任务'),button('刷新任务',()=>loadJobs(true)));editor.append(taskHead);const tasks=el('div');tasks.id='package-jobs';editor.append(tasks);loadJobs(true);window.WechatSaveActions?.sync();
  }
+ function runtimeControls(heading,d){
+  const runtime=d.runtime||{},enabled=d.installed.enabled,scope=context();
+  function add(label,action,tip){
+   const control=button(label,()=>{if(current(scope))runtimeAction(action)});
+   control.title=tip;
+   control.dataset[action==='enable_on_demand'?'pluginPolicyAction':'pluginRuntimeAction']=action;
+   control.disabled=action!=='stop'&&!d.runtime_connected;
+   heading.append(control);
+  }
+  if(!enabled||runtime.state==='running'&&!runtime.auto_managed)add(enabled?'恢复按需':'按需启用','enable_on_demand','任务需要时启动，空闲后释放');
+  if(!enabled||runtime.state==='stopped'||runtime.auto_managed)add('启动插件','start','立即启动并保留至本次服务退出');
+  if(enabled)add('停止插件','stop','停止并停用，后续请求不会启动此插件');
+ }
  async function runtimeAction(action){
   if(!state.detail)return;if(state.dirty){status.textContent='请先保存当前配置，再启动插件。';return}
-  const scope=context(),id=scope.id,editVersion=state.editVersion,button=editor.querySelector('[data-plugin-runtime-action]');if(button)button.disabled=true;
+  const scope=context(),id=scope.id,editVersion=state.editVersion,controls=Array.from(editor.querySelectorAll('[data-plugin-runtime-action],[data-plugin-policy-action]')).filter(control=>!control.disabled);controls.forEach(control=>control.disabled=true);
   let failure='';
   try{await api('/api/plugin-packages/'+encodeURIComponent(id)+'/runtime',{method:'POST',json:{action,revision:state.detail.installed.revision}})}catch(e){failure=e.message}
   if(!current(scope))return;
   try{const d=await api('/api/plugin-packages/'+encodeURIComponent(id));if(!current(scope))return;state.detail=d;const i=state.installed.findIndex(x=>x.package.id===id);if(i>=0)state.installed[i]=d.installed;state.runtimes[id]=d.runtime||{};renderList();if(editVersion!==state.editVersion||state.dirty){status.textContent=failure||'插件状态已更新；当前未保存的编辑已保留。';return}renderDetail(d);if(failure)status.textContent=failure}
-  catch(e){if(current(scope)){status.textContent=failure||e.message;if(button?.isConnected)button.disabled=false}}
+  catch(e){if(current(scope)){status.textContent=failure||e.message;controls.forEach(control=>{if(control.isConnected)control.disabled=false})}}
  }
  async function saveConfig(event){
   event.preventDefault();if(!state.detail)return;const scope=context(),id=scope.id,editVersion=state.editVersion,d=state.detail,form=$('#package-config-form');if(!form.reportValidity())return;
@@ -148,10 +162,9 @@
   const scope=context(),data=d.host_data||{},diagnostics=data.diagnostics||{},archive=data.state==='archive',runtime=d.runtime||{state:'stopped'};
   const heading=el('div',undefined,'section-heading');heading.append(el('h3',d.installed?.package?.name||'设备控制'));
   if(!archive&&d.installed&&!d.installed.removed){
-   const stopping=d.installed.enabled||['running','stopping'].includes(runtime.state),control=button(stopping?'停止插件':'启动插件',()=>{if(current(scope))runtimeAction(stopping?'stop':'start')});
-   control.dataset.pluginRuntimeAction=stopping?'stop':'start';control.disabled=!stopping&&!d.runtime_connected;heading.append(control);
+   runtimeControls(heading,d);
   }
-  editor.replaceChildren(heading,status);status.textContent=archive?'此插件已卸载。原有设备任务和受保护素材仍可查看或停止，不会创建新任务。':!d.installed?.enabled?'插件未启动；保存设备设置后，仍需手动启动插件。':runtimeNames[runtime.state]||'状态待核对';
+  editor.replaceChildren(heading,status);status.textContent=archive?'此插件已卸载。原有设备任务和受保护素材仍可查看或停止，不会创建新任务。':!d.installed?.enabled?'插件未启动；保存设备设置后，可按需启用或手动启动插件。':runtimeNames[runtime.state]||'状态待核对';
   const message=(text,error=false)=>{if(current(scope)){status.textContent=text;status.classList.toggle('form-error',error)}};
   status.classList.remove('form-error');
   const action=async(name,body={})=>{

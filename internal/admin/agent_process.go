@@ -27,8 +27,9 @@ func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.R
 	var in struct {
 		GPU                       bool `json:"gpu"`
 		Action, ID, Path, Command string
-		Key                       string `json:"request_key"`
-		Seconds                   int    `json:"timeout_seconds"`
+		Argv                      []string `json:"argv"`
+		Key                       string   `json:"request_key"`
+		Seconds                   int      `json:"timeout_seconds"`
 	}
 	if json.Unmarshal(raw, &in) != nil {
 		return "", errors.New("进程参数无效")
@@ -63,7 +64,11 @@ func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.R
 			var value any
 			var startErr error
 			if windows {
-				value, startErr = p.manager.processes.StartWindows(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
+				if len(in.Argv) > 0 {
+					value, startErr = p.manager.processes.StartWindowsArgv(cfg, scope, in.Key, in.Path, in.Argv, in.Seconds, allowed)
+				} else {
+					value, startErr = p.manager.processes.StartWindows(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
+				}
 			} else {
 				value, startErr = p.manager.processes.Start(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
 			}

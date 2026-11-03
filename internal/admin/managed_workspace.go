@@ -79,12 +79,39 @@ func (p *permittedTools) hostConfig() (agenthost.Config, error) {
 	}
 	c.Roots = []string{x.Conversation}
 	c.Isolation = &agenthost.Isolation{ReadOnly: []string{publicProjects, models, runtimes, filepath.Join(x.Public, "manifests")}}
+	// The desktop package owns lightweight command-line runtimes once. Mount
+	// only audited non-control children needed by generic workspace work; never
+	// expose the desktop executable, broker, device tools or the package root.
+	c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, packagedWindowsRuntimeRoots(c.Windows)...)
 	if x.Owner {
-		c.Roots = []string{x.Conversation, x.Public}
-		c.Isolation.ReadOnly = nil
+		// An owner may maintain public projects and the current account's private
+		// workspace, but the public workspace root also holds runtime definitions,
+		// model registrations and manifests consumed by trusted host components.
+		// Never turn that parent into a writable mount: it would let a workspace
+		// edit indirectly alter a host control plane. Keep only projects writable;
+		// package/runtime/model/manifests stay explicit read-only mounts.
+		// Account-wide private access remains an explicit global=true elevation;
+		// the normal owner mount retains only this conversation plus public code.
+		c.Roots = []string{x.Conversation, publicProjects}
 	}
 	// Windows uses its own mandatory LPAC backend; never the legacy user shell.
 	return c, nil
+}
+
+func packagedWindowsRuntimeRoots(w *agenthost.WindowsConfig) []string {
+	if w == nil || !strings.EqualFold(filepath.Base(w.Pythonw), "pythonw.exe") || !strings.EqualFold(filepath.Base(filepath.Dir(w.Pythonw)), "windows-python-cli") {
+		return nil
+	}
+	runtimeRoot := filepath.Dir(filepath.Dir(w.Pythonw))
+	roots := []string{}
+	for _, name := range []string{"windows-python-cli", "windows-media"} {
+		candidate := filepath.Join(runtimeRoot, name)
+		info, err := os.Lstat(candidate)
+		if err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			roots = append(roots, candidate)
+		}
+	}
+	return roots
 }
 
 // A global mount is requested for one tool invocation, never stored on a session.
@@ -106,7 +133,9 @@ func (p *permittedTools) scopedHostConfig(raw json.RawMessage) (agenthost.Config
 			return c, toolInputError("account global workspace requires the trusted owner")
 		}
 		x := p.executionContext()
-		c.Roots = []string{x.Private, x.Public}
+		// Match the owner default above. global widens only this account's private
+		// data, not the public runtime/control parent or another account.
+		c.Roots = []string{x.Private, filepath.Join(x.Public, "projects")}
 	}
 	return c, nil
 }

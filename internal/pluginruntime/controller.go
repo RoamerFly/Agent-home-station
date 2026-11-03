@@ -95,8 +95,18 @@ type Controller struct {
 	changed  chan struct{}
 	failures map[string]string
 	loaded   map[string]loadedPlugin
-	closed   bool
-	services *ManagedServices
+	// automatic contains only sessions which were cold-started for on-demand
+	// work.  Explicit Start pins a graph until it is stopped or explicitly
+	// returned to on-demand mode; status and health reads never renew this lease.
+	automatic   map[string]time.Time
+	manual      map[string]map[string]bool // plugin -> explicit root pins
+	idleTimeout time.Duration
+	clock       controllerClock
+	idleWake    chan struct{}
+	idleStop    chan struct{}
+	idleDone    chan struct{}
+	closed      bool
+	services    *ManagedServices
 }
 
 // loadedPlugin is the exact persistent identity that the currently running
@@ -109,7 +119,9 @@ type loadedPlugin struct {
 }
 type Status struct {
 	pluginhost.RuntimeStatus
-	ErrorCode string `json:"error_code,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	AutoManaged  bool   `json:"auto_managed,omitempty"`
+	IdleDeadline string `json:"idle_deadline,omitempty"`
 }
 
 // EnsureStartedError has a stable, model-safe failure description. It never
@@ -125,11 +137,32 @@ func (e *EnsureStartedError) SafeToolFailure() (string, string) {
 }
 
 func NewController(store *pluginhost.Store, executor pluginhost.Executor) (*Controller, error) {
+	return newControllerWithIdleLoop(store, executor, wallClock{}, true)
+}
+
+// newControllerWithClock keeps clock control private to the runtime package so
+// production callers cannot supply a model/plugin-controlled clock.  Tests use
+// it to exercise expiry without sleeping.  Tests drive reapIdle explicitly so
+// a synthetic clock cannot race a real background wake.
+func newControllerWithClock(store *pluginhost.Store, executor pluginhost.Executor, clock controllerClock) (*Controller, error) {
+	return newControllerWithIdleLoop(store, executor, clock, false)
+}
+
+func newControllerWithIdleLoop(store *pluginhost.Store, executor pluginhost.Executor, clock controllerClock, runIdleLoop bool) (*Controller, error) {
 	h, err := pluginhost.New(store.Account(), executor)
 	if err != nil {
 		return nil, err
 	}
-	return &Controller{store: store, host: h, busy: map[string]bool{}, changed: make(chan struct{}), failures: map[string]string{}, loaded: map[string]loadedPlugin{}}, nil
+	if clock == nil {
+		clock = wallClock{}
+	}
+	c := &Controller{store: store, host: h, busy: map[string]bool{}, changed: make(chan struct{}), failures: map[string]string{}, loaded: map[string]loadedPlugin{}, automatic: map[string]time.Time{}, manual: map[string]map[string]bool{}, idleTimeout: 10 * time.Minute, clock: clock, idleWake: make(chan struct{}), idleStop: make(chan struct{}), idleDone: make(chan struct{})}
+	if runIdleLoop {
+		go c.idleLoop()
+	} else {
+		close(c.idleDone)
+	}
+	return c, nil
 }
 
 // AttachManagedServices binds the host-owned resource registry once. It does
@@ -179,7 +212,70 @@ func (c *Controller) Status(id string) Status {
 	if r.State == "stopped" && err != "" {
 		r.State = "failed"
 	}
-	return Status{r, err}
+	status := Status{RuntimeStatus: r, ErrorCode: err}
+	if since, ok := c.automatic[id]; ok && r.State == "running" && c.idleTimeout > 0 {
+		status.AutoManaged = true
+		status.IdleDeadline = since.Add(c.idleTimeout).UTC().Format(time.RFC3339Nano)
+	}
+	return status
+}
+
+// SetIdleTimeout changes automatic session recycling immediately.  Zero (and a
+// negative value) disables recycling.  It never enables, disables or starts a
+// plugin; explicit administrator starts remain resident until stopped or
+// EnableOnDemand returns that graph to on-demand ownership.
+func (c *Controller) SetIdleTimeout(timeout time.Duration) {
+	if timeout < 0 {
+		timeout = 0
+	}
+	c.mu.Lock()
+	if !c.closed {
+		c.idleTimeout = timeout
+		c.notifyIdleLocked()
+	}
+	c.mu.Unlock()
+}
+
+// EnableOnDemand records administrator enable intent without launching a
+// process.  If a graph was previously held by this root's explicit Start, it
+// removes only that root's pins; independently pinned shared dependencies keep
+// running.  A next tool request uses EnsureStarted to cold-start as needed.
+func (c *Controller) EnableOnDemand(ctx context.Context, id string, revision int) (err error) {
+	plan, err := c.startPlan(ctx, id, revision)
+	if err != nil {
+		return err
+	}
+	if err = c.beginPlan(plan); err != nil {
+		return err
+	}
+	defer func() {
+		for _, item := range plan {
+			c.end(item.Package.ID, err)
+		}
+	}()
+	root, err := c.store.Installed(ctx, id)
+	if err != nil {
+		return err
+	}
+	if root.Revision != revision || root.Removed {
+		return pluginhost.ErrRevision
+	}
+	if !root.Enabled {
+		if _, err = c.store.SetEnabled(ctx, id, revision, true); err != nil {
+			return err
+		}
+	}
+	c.mu.Lock()
+	c.releaseManualRootLocked(id)
+	for _, item := range plan {
+		pluginID := item.Package.ID
+		if len(c.manual[pluginID]) == 0 && c.host.Status(pluginID).State == "running" {
+			c.automatic[pluginID] = c.clock.Now()
+		}
+	}
+	c.notifyIdleLocked()
+	c.mu.Unlock()
+	return nil
 }
 
 // Closed reports host shutdown without changing persisted administrator intent.
@@ -289,7 +385,11 @@ func (c *Controller) startGraph(ctx context.Context, id string, revision int, en
 			started = append(started, item.Package.ID)
 		}
 	}
-	return c.loadedGraphCurrent(ctx, id)
+	if err = c.loadedGraphCurrent(ctx, id); err != nil {
+		return err
+	}
+	c.recordGraphMode(plan, id, enableRoot)
+	return nil
 }
 
 func ensureStartedFailure(err error) error {
@@ -422,17 +522,29 @@ func (c *Controller) Stop(ctx context.Context, id string, revision int) (err err
 	if err == nil {
 		c.mu.Lock()
 		delete(c.loaded, id)
+		delete(c.automatic, id)
+		c.releaseManualRootLocked(id)
+		c.notifyIdleLocked()
 		c.mu.Unlock()
 	}
 	return err
 }
 func (c *Controller) Close() error {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
 	c.closed = true
 	services := c.services
 	c.loaded = map[string]loadedPlugin{}
 	c.notifyLocked()
+	close(c.idleStop)
 	c.mu.Unlock()
+	// Let a reaper which already reserved a session finish its exact close
+	// before Host.Close walks remaining slots.  This avoids two concurrent Close
+	// calls targeting the same plugin process during desktop shutdown.
+	<-c.idleDone
 	// Keep Enabled as administrator intent across restarts. No process starts
 	// automatically; explicit start may recover queries, never tool submissions.
 	err := c.host.Close()

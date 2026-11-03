@@ -232,6 +232,18 @@ func TestPluginPackageRuntimeAdminLifecycle(t *testing.T) {
 	if h.Status("speech").State != "stopped" || executor.closes != 1 {
 		t.Fatal("stop not connected")
 	}
+	i, err = store.Installed(ctx, "speech")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request["action"], request["revision"] = "enable_on_demand", i.Revision
+	if code, raw, _ := f.request("POST", path, request, true, true); code != 200 {
+		t.Fatalf("enable on demand %d %s", code, raw)
+	}
+	i, err = store.Installed(ctx, "speech")
+	if err != nil || !i.Enabled || executor.starts != 1 || h.Status("speech").State != "stopped" {
+		t.Fatal("enabling on demand should authorize the next request without starting a process", err)
+	}
 }
 
 func TestPluginPackageCatalogRequiresLogin(t *testing.T) {

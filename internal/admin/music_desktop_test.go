@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,18 @@ import (
 	"time"
 	"wechat-bot/internal/pluginruntime"
 )
+
+func TestWindowsMusicIdleFixture(t *testing.T) {
+	if os.Getenv("WECHAT_WINDOWS_MUSIC_IDLE_FIXTURE") == "" {
+		return
+	}
+	s := bufio.NewScanner(os.Stdin)
+	for s.Scan() {
+		if s.Text() == "stop" {
+			return
+		}
+	}
+}
 
 func TestWindowsMusicPolicyScopeAndForeignPortRefused(t *testing.T) {
 	f := setup(t)
@@ -109,4 +122,114 @@ func TestManagedServiceRegistryInitializationDoesNotAcquireManagerLock(t *testin
 		}()
 	}
 	wg.Wait()
+}
+
+func TestWindowsMusicIdleRecoveryOnlyReclaimsOwnedCompletedBackend(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	registry := &pluginruntime.ManagedServices{}
+	m := &Manager{managedServices: registry}
+	start := func(id string) string {
+		jobs := filepath.Join(dir, id+".json")
+		spec := pluginruntime.ManagedServiceSpec{
+			OwnerPlugin: "music", Binding: id, Executable: executable,
+			Arguments: []string{"-test.run=^TestWindowsMusicIdleFixture$"}, Directory: dir,
+			Environment: []string{"SystemRoot=" + os.Getenv("SystemRoot"), "WECHAT_WINDOWS_MUSIC_IDLE_FIXTURE=1"},
+			LogPath:     filepath.Join(dir, id+".log"), PendingJobsPath: jobs, StopInput: "stop\n", StopTimeout: time.Second,
+			Check: func(ctx context.Context) error { return ctx.Err() },
+		}
+		if _, err := registry.Start(t.Context(), id, spec, func(ctx context.Context, launch func() error) error { return launch() }); err != nil {
+			t.Fatal(err)
+		}
+		return jobs
+	}
+	defer m.closeWindowsMusic()
+	jobs := start(windowsMusicServiceID)
+	// A ready, idle owned process is reclaimed.  This is deliberately a test
+	// hook duration; production scheduling obtains its timeout from the saved
+	// service-retention setting through musicIdleTimeout.
+	m.scheduleWindowsMusicIdle(15*time.Millisecond, 0)
+	deadline := time.Now().Add(3 * time.Second)
+	for registry.Status(windowsMusicServiceID).Running && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if registry.Status(windowsMusicServiceID).Running {
+		t.Fatal("idle owned Windows music backend was not reclaimed")
+	}
+	jobs = start(windowsMusicServiceID)
+	if err := os.WriteFile(jobs, []byte(`{"job":{"state":"accepted"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.scheduleWindowsMusicIdle(15*time.Millisecond, 0)
+	time.Sleep(80 * time.Millisecond)
+	if !registry.Status(windowsMusicServiceID).Running {
+		t.Fatal("unknown receipt allowed idle reaper to stop backend")
+	}
+	if err := os.WriteFile(jobs, []byte(`{"job":{"state":"completed"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A request immediately before expiry refreshes the lease; it should not
+	// be killed by the previous timer.  Re-arm at the short test duration.
+	registry.Touch(windowsMusicServiceID)
+	m.scheduleWindowsMusicIdle(40*time.Millisecond, 0)
+	time.Sleep(20 * time.Millisecond)
+	registry.Touch(windowsMusicServiceID)
+	m.scheduleWindowsMusicIdle(40*time.Millisecond, 0)
+	time.Sleep(25 * time.Millisecond)
+	if !registry.Status(windowsMusicServiceID).Running {
+		t.Fatal("adjacent request raced idle recovery")
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for registry.Status(windowsMusicServiceID).Running && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if registry.Status(windowsMusicServiceID).Running {
+		t.Fatal("completed backend did not reclaim after renewed lease expired")
+	}
+}
+
+func TestWindowsMusicRetentionChangeInvalidatesAlreadyFiredTimer(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	registry := &pluginruntime.ManagedServices{}
+	m := &Manager{managedServices: registry}
+	defer m.closeWindowsMusic()
+	spec := pluginruntime.ManagedServiceSpec{
+		OwnerPlugin: "music", Binding: "retention-test", Executable: executable,
+		Arguments: []string{"-test.run=^TestWindowsMusicIdleFixture$"}, Directory: dir,
+		Environment: []string{"SystemRoot=" + os.Getenv("SystemRoot"), "WECHAT_WINDOWS_MUSIC_IDLE_FIXTURE=1"},
+		LogPath:     filepath.Join(dir, "service.log"), PendingJobsPath: filepath.Join(dir, "jobs.json"), StopInput: "stop\n", StopTimeout: time.Second,
+		Check: func(ctx context.Context) error { return ctx.Err() },
+	}
+	if _, err = registry.Start(t.Context(), windowsMusicServiceID, spec, func(ctx context.Context, launch func() error) error { return launch() }); err != nil {
+		t.Fatal(err)
+	}
+	// Capture the old callback identity, then disable retention before it can
+	// reserve the process. Invoking it directly makes this deterministic rather
+	// than relying on scheduler timing.
+	m.scheduleWindowsMusicIdle(time.Hour, 0)
+	m.musicIdleMu.Lock()
+	stale := m.musicIdleGeneration
+	m.musicIdleMu.Unlock()
+	m.scheduleWindowsMusicIdle(0, 0)
+	m.reclaimWindowsMusicIdle(stale, time.Millisecond)
+	if !registry.Status(windowsMusicServiceID).Running {
+		t.Fatal("stale timer reclaimed backend after retention was disabled")
+	}
+	// Extending retention similarly invalidates an old immediate callback.
+	m.scheduleWindowsMusicIdle(time.Hour, 0)
+	m.musicIdleMu.Lock()
+	stale = m.musicIdleGeneration
+	m.musicIdleMu.Unlock()
+	m.scheduleWindowsMusicIdle(time.Hour, 0)
+	m.reclaimWindowsMusicIdle(stale, time.Millisecond)
+	if !registry.Status(windowsMusicServiceID).Running {
+		t.Fatal("stale timer reclaimed backend after retention was extended")
+	}
 }

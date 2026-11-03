@@ -723,7 +723,9 @@ func TestOldResultWaitsForStopRequestOnNextInboxPage(t *testing.T) {
 	stop.SenderID = in.Sender
 	s.messages["stop"] = stop
 	w.source = s
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The first page requires 100 durable writes. End on the cancellation
+	// event below, with a watchdog independent of normal disk latency.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	w.config.Record = func(r Record) {
 		if r.Event == "utterance_plan_revised" && r.Reason == "plan_cancel" {
@@ -732,6 +734,9 @@ func TestOldResultWaitsForStopRequestOnNextInboxPage(t *testing.T) {
 	}
 	if err := w.runDurable(ctx, filepath.Join(w.config.StateDir, "checkpoint.json"), checkpoint{Version: 1, ServerID: "server-1", Account: "test", Cursor: "0"}); err != nil {
 		t.Fatal(err)
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatal("worker never processed the queued stop on the second page")
 	}
 	if len(n.submissions) != 0 || w.runtime.Plans[0].State != "stopped" {
 		t.Fatal("page-one scan sent old result before queued stop on page two", n.submissions)

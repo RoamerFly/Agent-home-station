@@ -85,7 +85,9 @@ func TestManagedServiceOwnedLifecycleBusyAndConfiguration(t *testing.T) {
 		busy bool
 	}{
 		{`{"a":{"state":"queued"}}`, true}, {`{"a":{"state":"running"}}`, true},
-		{`{"a":{"state":"completed"}}`, false}, {`invalid`, true}, {`null`, true},
+		{`{"a":{"state":"submitted"}}`, true}, {`{"a":{"state":"accepted"}}`, true},
+		{`{"a":{"state":"unknown"}}`, true}, {`{"a":{"state":"completed"}}`, false},
+		{`{"a":{"state":"cancelled"}}`, false}, {`invalid`, true}, {`null`, true},
 		{`{"a":null}`, true}, {`{"a":{}}`, true},
 	} {
 		if err := os.WriteFile(spec.PendingJobsPath, []byte(item.data), 0600); err != nil {
@@ -123,6 +125,90 @@ func TestManagedServiceOwnedLifecycleBusyAndConfiguration(t *testing.T) {
 	}
 	if _, err := r.Start(t.Context(), "a", spec, fixtureAdmission); err == nil {
 		t.Fatal("closed registry restarted")
+	}
+}
+
+func TestManagedServiceIdleReclaimRenewsAdjacentRequestAndProtectsUncertainJob(t *testing.T) {
+	r := &ManagedServices{}
+	spec := managedFixtureSpec(t, "wait")
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	if _, err := r.Start(t.Context(), "music", spec, fixtureAdmission); err != nil {
+		t.Fatal(err)
+	}
+	// A normal adjacent start must reuse the owned child and renew the lease.
+	r.mu.Lock()
+	r.processes["music"].lastActivity = time.Now().Add(-time.Hour)
+	r.mu.Unlock()
+	if _, err := r.Start(t.Context(), "music", spec, func(context.Context, func() error) error {
+		t.Fatal("adjacent request launched a duplicate child")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if idle, ok := r.IdleFor("music", time.Now()); !ok || idle > time.Second {
+		t.Fatalf("reuse did not renew idle lease: %v %v", idle, ok)
+	}
+	r.mu.Lock()
+	r.processes["music"].lastActivity = time.Now().Add(-time.Hour)
+	r.mu.Unlock()
+	if err := os.WriteFile(spec.PendingJobsPath, []byte(`{"job":{"state":"accepted"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if stopped, err := r.StopIfIdle(t.Context(), "music", time.Minute); err != nil || stopped || !r.Status("music").Running {
+		t.Fatalf("uncertain receipt was reclaimed: stopped=%v err=%v status=%+v", stopped, err, r.Status("music"))
+	}
+	if err := os.WriteFile(spec.PendingJobsPath, []byte(`{"job":{"state":"completed"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if stopped, err := r.StopIfIdle(t.Context(), "music", time.Minute); err != nil || !stopped {
+		t.Fatalf("idle completed service not reclaimed: stopped=%v err=%v", stopped, err)
+	}
+	if r.Status("music").Running || r.Touch("music") {
+		t.Fatal("stopped process remained touchable")
+	}
+}
+
+func TestManagedServiceHoldPreventsIdleReclaimUntilTransportCompletes(t *testing.T) {
+	r := &ManagedServices{}
+	spec := managedFixtureSpec(t, "wait")
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	if _, err := r.Start(t.Context(), "music", spec, fixtureAdmission); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.processes["music"].lastActivity = time.Now().Add(-time.Hour)
+	r.mu.Unlock()
+	release, ok := r.Acquire("music")
+	if !ok || !r.Status("music").Busy {
+		t.Fatal("active transport did not acquire an owned service lease")
+	}
+	if stopped, err := r.StopIfIdle(t.Context(), "music", time.Minute); err != nil || stopped || !r.Status("music").Running {
+		t.Fatalf("idle reaper reclaimed active transport: stopped=%v err=%v status=%+v", stopped, err, r.Status("music"))
+	}
+	release()
+	r.mu.Lock()
+	r.processes["music"].lastActivity = time.Now().Add(-time.Hour)
+	r.mu.Unlock()
+	if stopped, err := r.StopIfIdle(t.Context(), "music", time.Minute); err != nil || !stopped {
+		t.Fatalf("idle service remained after transport release: stopped=%v err=%v", stopped, err)
+	}
+}
+
+func TestManagedServiceGuardRejectsStaleIdleTimer(t *testing.T) {
+	r := &ManagedServices{}
+	spec := managedFixtureSpec(t, "wait")
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	if _, err := r.Start(t.Context(), "music", spec, fixtureAdmission); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.processes["music"].lastActivity = time.Now().Add(-time.Hour)
+	r.mu.Unlock()
+	if stopped, err := r.StopIfIdleGuarded(t.Context(), "music", time.Minute, func() bool { return false }); err != nil || stopped || !r.Status("music").Running {
+		t.Fatalf("stale timer stopped owned service: stopped=%v err=%v", stopped, err)
+	}
+	if stopped, err := r.StopIfIdleGuarded(t.Context(), "music", time.Minute, func() bool { return true }); err != nil || !stopped {
+		t.Fatalf("current timer did not reclaim idle service: stopped=%v err=%v", stopped, err)
 	}
 }
 

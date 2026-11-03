@@ -185,6 +185,11 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
         line=subprocess.list2cmdline(argv)
         if Path(argv[0]).name.lower()=="cmd.exe" and len(argv)==5:
             line=subprocess.list2cmdline(argv[:4])+' "'+argv[4]+'"'
+        # CreateProcessW allows at most 32,767 UTF-16 code units including
+        # the terminator. Check the exact rendered command line instead of a
+        # made-up argument-count quota or silent truncation.
+        if len(line.encode("utf-16-le")) // 2 >= 32767:
+            raise ValueError("windows_command_line_too_long")
         cmd = c.create_unicode_buffer(line)
         if not k.CreateProcessW(argv[0], cmd, None, None, True, 0x08000000 | 0x80000 | 0x400 | 4,
                                 block, str(cwd), c.byref(si), c.byref(pi)):

@@ -1240,7 +1240,16 @@
 <textarea id="agent-host-roots" readonly="" placeholder="由当前账号与会话派生" rows="3">
 </textarea>
 </div>
+<div>
+<label for="agent-plugin-idle">插件空闲保留（分钟）</label>
+<input id="agent-plugin-idle" type="number" min="0" step="1" required>
 </div>
+<div>
+<label for="agent-music-idle">音乐服务空闲保留（分钟）</label>
+<input id="agent-music-idle" type="number" min="0" step="1" required>
+</div>
+</div>
+<p class="hint">自动启动的服务在连续请求间复用，空闲到期后释放。填 0 可保持运行。</p>
 <p class="hint" id="agent-host-description" role="status"></p>
 <details class="agent-account-actions">
 <summary>允许 AI 执行的微信账号动作</summary>

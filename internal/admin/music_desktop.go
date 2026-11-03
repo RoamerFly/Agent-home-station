@@ -43,6 +43,112 @@ func (m *Manager) windowsMusicStatus() pluginruntime.ManagedServiceStatus {
 	return m.managedServiceRegistry().Status(windowsMusicServiceID)
 }
 
+// touchWindowsMusic renews the lease only for this account's registry-owned
+// service.  It never probes a port or adopts another account's process.
+func (m *Manager) touchWindowsMusic() bool {
+	if m.managedServiceRegistry().Touch(windowsMusicServiceID) {
+		m.refreshMusicIdleTimeout()
+		return true
+	}
+	return false
+}
+
+// holdWindowsMusic prevents the idle reaper from reserving a running local
+// supervisor while a bound local HTTP request is in flight. It is not a
+// process handle and does not create or discover a service.
+func (m *Manager) holdWindowsMusic() (func(), bool) {
+	release, ok := m.managedServiceRegistry().Acquire(windowsMusicServiceID)
+	if !ok {
+		return nil, false
+	}
+	m.refreshMusicIdleTimeout()
+	return func() {
+		release()
+		m.refreshMusicIdleTimeout()
+	}, true
+}
+
+// refreshMusicIdleTimeout applies a changed administrator setting to an
+// already-running local backend without restarting it.  A zero timeout is an
+// explicit opt-out, not a request to stop a user-configured backend.
+func (m *Manager) refreshMusicIdleTimeout() {
+	m.scheduleWindowsMusicIdle(m.musicIdleTimeout(), 0)
+}
+
+func (m *Manager) scheduleWindowsMusicIdle(timeout, minimumDelay time.Duration) {
+	// Query the registry before taking the timer lock. reclaim's guarded stop
+	// takes these locks in the same order (registry then timer), avoiding a
+	// configuration-save versus reaper lock inversion.
+	status := m.windowsMusicStatus()
+	idle, knownIdle := m.managedServiceRegistry().IdleFor(windowsMusicServiceID, time.Now())
+	m.musicIdleMu.Lock()
+	defer m.musicIdleMu.Unlock()
+	m.musicIdleGeneration++
+	generation := m.musicIdleGeneration
+	if m.musicIdleTimer != nil {
+		m.musicIdleTimer.Stop()
+		m.musicIdleTimer = nil
+	}
+	if timeout <= 0 {
+		return
+	}
+	if !status.Running || status.Stopping {
+		return
+	}
+	delay := timeout
+	if knownIdle {
+		if idle >= timeout {
+			delay = 0
+		} else {
+			delay = timeout - idle
+		}
+	}
+	if minimumDelay > delay {
+		delay = minimumDelay
+	}
+	m.musicIdleTimer = time.AfterFunc(delay, func() {
+		m.reclaimWindowsMusicIdle(generation, timeout)
+	})
+}
+
+func (m *Manager) reclaimWindowsMusicIdle(generation uint64, timeout time.Duration) {
+	// StopIfIdle reserves the exact registry-owned process before releasing its
+	// lock. The guard linearizes the reservation with settings changes: a stale
+	// timer cannot stop a service after retention changed to zero or a longer
+	// value.
+	ctx, cancel := context.WithTimeout(context.Background(), 56*time.Second)
+	stopped, stopErr := m.managedServiceRegistry().StopIfIdleGuarded(ctx, windowsMusicServiceID, timeout, func() bool {
+		m.musicIdleMu.Lock()
+		defer m.musicIdleMu.Unlock()
+		if generation != m.musicIdleGeneration || timeout <= 0 || m.agent != nil && m.musicIdleTimeout() != timeout {
+			return false
+		}
+		m.musicIdleTimer = nil
+		return true
+	})
+	cancel()
+	status := m.windowsMusicStatus()
+	if !status.Running || status.Stopping || timeout <= 0 {
+		return
+	}
+	if stopErr != nil {
+		// Do not immediately re-arm an already-expired timer after a failed
+		// shutdown. That can otherwise spin at zero delay on a broken backend.
+		m.scheduleWindowsMusicIdle(timeout, time.Minute)
+		return
+	}
+	if stopped {
+		return
+	}
+	if status.Busy {
+		// Jobs with an unknown provider/delivery receipt are deliberately busy.
+		// Recheck later instead of retaining a completed backend forever.
+		m.scheduleWindowsMusicIdle(timeout, time.Minute)
+		return
+	}
+	m.refreshMusicIdleTimeout()
+}
+
 func (m *Manager) windowsMusicRegistered() bool {
 	data, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
 	var profile windowsMusicConfig
@@ -202,6 +308,7 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	m.touchWindowsMusic()
 	return `{"state":"starting_or_active","backend":"windows-native","instruction":"用music_service_status核对模型就绪；启动不代表任务完成。"}`, nil
 }
 
@@ -267,6 +374,13 @@ func (m *Manager) runWindowsNamedModel(ctx context.Context, cfg agenthost.Config
 }
 
 func (m *Manager) closeWindowsMusic() {
+	m.musicIdleMu.Lock()
+	m.musicIdleGeneration++
+	if m.musicIdleTimer != nil {
+		m.musicIdleTimer.Stop()
+		m.musicIdleTimer = nil
+	}
+	m.musicIdleMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 56*time.Second)
 	defer cancel()
 	_ = m.managedServiceRegistry().Close(ctx)

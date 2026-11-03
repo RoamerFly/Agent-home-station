@@ -65,7 +65,7 @@ type projectPluginResult struct {
 }
 
 func isProjectPluginTool(name string) bool {
-	return slices.Contains([]string{"project_list", "project_read", "project_create", "server_status", "server_list", "server_read", "server_search", "server_write", "server_edit", "server_exec", "server_process", "server_windows_process"}, name)
+	return slices.Contains([]string{"project_list", "project_read", "project_create", "server_tools", "server_status", "server_list", "server_read", "server_search", "server_write", "server_edit", "server_exec", "server_process", "server_windows_process"}, name)
 }
 
 func (p *permittedTools) projectPluginCatalog(ctx context.Context) ([]projectPluginTool, *pluginhost.Store, pluginhost.InstalledPackage, error) {
@@ -138,6 +138,9 @@ func (p *permittedTools) projectPluginToolAllowed(tool projectPluginTool, grants
 	if tool.Name == "project_list" || tool.Name == "project_read" {
 		operation = "snapshot"
 	}
+	if tool.Name == "server_tools" {
+		operation = "tool_index"
+	}
 	if tool.Name == "project_create" {
 		operation = "mkdir"
 	}
@@ -153,7 +156,7 @@ func (p *permittedTools) projectPluginToolAllowed(tool projectPluginTool, grants
 	}
 	switch tool.Permission {
 	case "workspace.read":
-		return cfg.Mode != "disabled" && slices.Contains([]string{"status", "list", "read", "search", "snapshot"}, tool.Operation)
+		return cfg.Mode != "disabled" && slices.Contains([]string{"status", "list", "read", "search", "snapshot", "tool_index"}, tool.Operation)
 	case "workspace.write":
 		return (cfg.Mode == "files" || cfg.Mode == "full") && slices.Contains([]string{"mkdir", "write", "edit"}, tool.Operation)
 	case "process.execute":
@@ -405,6 +408,9 @@ func (p *projectPluginPolicy) mediate(ctx context.Context, authorized func() boo
 	var err error
 	if p.tool.Operation == "snapshot" {
 		return p.snapshot(ctx)
+	}
+	if p.tool.Operation == "tool_index" {
+		return p.toolIndex(ctx)
 	}
 	if p.tool.Operation == "mkdir" {
 		value, err = p.p.mediateWorkspaceDirectory(ctx, p.request.Arguments)

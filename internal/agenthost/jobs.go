@@ -142,12 +142,55 @@ func (j *Jobs) Status(scope, id string, cancel bool) (Process, error) {
 	return processCopy(p), nil
 }
 func (j *Jobs) Start(cfg Config, scope, key, path, command string, seconds int, allowed func() bool) (Process, error) {
-	return j.start(cfg, scope, key, path, command, seconds, allowed, false)
+	return j.start(cfg, scope, key, path, command, nil, seconds, allowed, false)
 }
 func (j *Jobs) StartWindows(cfg Config, scope, key, path, command string, seconds int, allowed func() bool) (Process, error) {
-	return j.start(cfg, scope, key, path, command, seconds, allowed, true)
+	return j.start(cfg, scope, key, path, command, nil, seconds, allowed, true)
 }
-func (j *Jobs) start(cfg Config, scope, key, path, command string, seconds int, allowed func() bool, windows bool) (Process, error) {
+func (j *Jobs) StartWindowsArgv(cfg Config, scope, key, path string, argv []string, seconds int, allowed func() bool) (Process, error) {
+	return j.start(cfg, scope, key, path, "", argv, seconds, allowed, true)
+}
+
+// executableUnderGrantedRoot is intentionally narrower than a shell command:
+// direct Windows argv mode may start only a real .exe below an already granted
+// workspace/read-only root. Every path component must be a normal directory;
+// a junction/symlink cannot turn a harmless public runtime entry into a host
+// control-plane mount.
+func executableUnderGrantedRoot(cfg Config, executable string) error {
+	if !strings.EqualFold(filepath.Ext(executable), ".exe") {
+		return errors.New("Windows直接执行只允许已授权的exe文件")
+	}
+	for _, base := range append(append([]string{}, cfg.Roots...), cfg.Isolation.ReadOnly...) {
+		cleanBase, cleanExecutable := filepath.Clean(base), filepath.Clean(executable)
+		rel, err := filepath.Rel(cleanBase, cleanExecutable)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			continue
+		}
+		part := cleanBase
+		valid := true
+		for _, name := range append([]string{"."}, strings.Split(rel, string(filepath.Separator))...) {
+			if name != "." {
+				part = filepath.Join(part, name)
+			}
+			info, statErr := os.Lstat(part)
+			if statErr != nil || info.Mode()&os.ModeSymlink != 0 {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			return errors.New("Windows直接执行路径包含链接或不可用组件")
+		}
+		info, statErr := os.Stat(cleanExecutable)
+		if statErr == nil && info.Mode().IsRegular() {
+			return nil
+		}
+		return errors.New("Windows直接执行文件不可用")
+	}
+	return errors.New("Windows直接执行文件不在已授权目录内")
+}
+
+func (j *Jobs) start(cfg Config, scope, key, path, command string, argv []string, seconds int, allowed func() bool, windows bool) (Process, error) {
 	if cfg.Isolation == nil {
 		return Process{}, errors.New("sandbox_required: legacy unrestricted execution is disabled")
 	}
@@ -161,8 +204,21 @@ func (j *Jobs) start(cfg Config, scope, key, path, command string, seconds int, 
 			return Process{}, e
 		}
 	}
-	if cfg.Mode != "full" || cfg.Validate() != nil || scope == "" || len(key) < 1 || len(key) > 128 || strings.TrimSpace(command) == "" || len(command) > 8000 {
+	if cfg.Mode != "full" || cfg.Validate() != nil || scope == "" || len(key) < 1 || len(key) > 128 || len(command) > 8000 || strings.TrimSpace(command) == "" && len(argv) == 0 || strings.TrimSpace(command) != "" && len(argv) != 0 {
 		return Process{}, errors.New("命令执行未授权或参数无效")
+	}
+	if len(argv) > 0 {
+		if !windows || !filepath.IsAbs(argv[0]) {
+			return Process{}, errors.New("Windows直接执行参数无效")
+		}
+		for _, value := range argv {
+			if strings.ContainsRune(value, 0) || len(value) > 8192 {
+				return Process{}, errors.New("Windows直接执行参数无效")
+			}
+		}
+		if err := executableUnderGrantedRoot(cfg, argv[0]); err != nil {
+			return Process{}, err
+		}
 	}
 	if seconds < 0 || int64(seconds) > int64((1<<63-1)/time.Second) {
 		return Process{}, errors.New("后台执行时限无效；0表示不设时限")
@@ -176,7 +232,13 @@ func (j *Jobs) start(cfg Config, scope, key, path, command string, seconds int, 
 	if e != nil || !info.IsDir() {
 		return Process{}, errors.New("执行起始目录不可用")
 	}
+	// Keep the durable identity byte-for-byte compatible for command mode.
+	// Direct argv is a distinct, explicitly tagged protocol shape so it can
+	// never collide with an old shell command request key.
 	identity := []any{path, command, seconds}
+	if len(argv) > 0 {
+		identity = []any{"windows-direct-argv-v1", path, argv, seconds}
+	}
 	if windows {
 		identity = append(identity, "windows")
 	}
@@ -243,7 +305,11 @@ func (j *Jobs) start(cfg Config, scope, key, path, command string, seconds int, 
 		}()
 		var err error
 		if windows {
-			err = runWindowsHidden(ctx, cfg, p.ID, path, command, p.buffer)
+			if len(argv) > 0 {
+				err = runWindowsRequest(ctx, cfg, p.ID, path, "", argv, p.buffer)
+			} else {
+				err = runWindowsHidden(ctx, cfg, p.ID, path, command, p.buffer)
+			}
 		} else {
 			cmd, buildErr := isolatedCommand(ctx, cfg, path, command)
 			if buildErr != nil {

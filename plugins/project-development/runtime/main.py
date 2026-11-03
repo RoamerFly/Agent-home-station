@@ -96,7 +96,7 @@ class Wire:
                 method = request.get('method')
                 if method == 'initialize':
                     initialized = True
-                    result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'project-development', 'version': '0.2.0'}}
+                    result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'project-development', 'version': '0.2.1'}}
                 elif initialized and method == 'ping':
                     result = {}
                 elif initialized and method == 'tools/list':

@@ -42,6 +42,24 @@ func TestProjectCreatePreservesFilesAndChecksScope(t *testing.T) {
 		t.Fatal("nonowner created shared project")
 	}
 	p.trace.Sender = "wxid_owner"
+	shared, err := p.createWorkspaceProject(ctx, json.RawMessage(`{"name":"shared-tool","shared":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sharedValue map[string]any
+	if json.Unmarshal([]byte(shared), &sharedValue) != nil || sharedValue["registered"] != true {
+		t.Fatal("shared project did not receive a fixed registration", shared)
+	}
+	manifest, err := os.ReadFile(filepath.Join(p.executionContext().Public, "manifests", "shared-tool.json"))
+	if err != nil || string(manifest) != `{"entry":"projects/shared-tool","id":"shared-tool","name":"shared-tool"}` {
+		t.Fatal("unexpected shared registration", string(manifest), err)
+	}
+	if _, err = p.createWorkspaceProject(ctx, json.RawMessage(`{"name":"shared-tool","shared":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(p.executionContext().Public, "manifests", "shared-tool.json")); string(b) != string(manifest) {
+		t.Fatal("existing shared registration was overwritten")
+	}
 	c := f.manager.agent.config()
 	c.Host.Mode = "read"
 	if err := f.manager.agent.save(c); err != nil {

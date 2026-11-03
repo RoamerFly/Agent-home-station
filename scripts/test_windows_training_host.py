@@ -40,6 +40,37 @@ def request_for(f, profile, argv):
 
 
 class WindowsTrainingHostPolicyTests(unittest.TestCase):
+
+    def test_registered_runtime_child_is_enough_without_public_parent_mount(self):
+        with training_fixture() as f:
+            host, profile = deployed_host(f)
+            projects = f["public"] / "projects"
+            projects.mkdir(exist_ok=True)
+            argv = [str(f["python"]), f["resources"]["entry"], "--help"]
+            request = request_for(f, profile, argv)
+            request["roots"] = [str(f["private"]), str(projects)]
+            request["read_only"] = [str(f["public"] / "runtimes")]
+            namespace = runpy.run_path(str(host))
+            self.assertEqual(namespace["training_mount"](request, argv, ""), (argv, [str(f["package"])]))
+            # A visible project with a runtime-looking child cannot prove the
+            # trusted interpreter's mount.  The public parent itself is never
+            # implicitly added by training admission.
+            fake = projects / "runtimes"
+            fake.mkdir()
+            request["read_only"] = [str(fake)]
+            with self.assertRaisesRegex(ValueError, "public_workspace_required"):
+                namespace["training_mount"](request, argv, "")
+            # Nor can a profile point at editable project code masquerading as
+            # its interpreter, even if that binary-looking file exists.
+            imposter = projects / "python.exe"
+            imposter.write_bytes(b"synthetic")
+            value = json.loads(profile.read_text(encoding="utf8"))
+            value["python"] = str(imposter)
+            profile.write_text(json.dumps(value), encoding="utf8")
+            request["read_only"] = [str(f["public"] / "runtimes")]
+            with self.assertRaisesRegex(ValueError, "registered_interpreter_required"):
+                namespace["training_mount"](request, argv, "")
+
     def test_cpu_missing_registration_and_changed_control_profile_are_rejected(self):
         for change in ("cpu", "registration", "control", "package", "entry", "interpreter"):
             with self.subTest(change=change), training_fixture() as f:

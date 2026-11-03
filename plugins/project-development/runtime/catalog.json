@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "project_create",
-      "description": "Create or reopen a project directory in this conversation workspace. shared=true requires trusted owner and uses public projects. Never overwrites files. Continue with server_write/read/edit and isolated process tools; read shared self-tools.md for workflow. Input {name:string,shared?:boolean}.",
+      "description": "Create or reopen a project directory in this conversation workspace. shared=true requires trusted owner, uses public projects and atomically registers that fixed project ID for later project_list/project_read discovery; it never overwrites an existing registration or file. Continue with server_write/read/edit and isolated process tools; read shared self-tools.md for workflow. Input {name:string,shared?:boolean}.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -51,6 +51,29 @@
       },
       "permission": "workspace.read",
       "operation": "snapshot"
+    },
+    {
+      "name": "server_tools",
+      "description": "Discover concrete public packaged runtimes that this request may use: FFmpeg, FFprobe and the managed Python CLI. Optional classes filters media/python; optional id selects one exact tool. This only indexes verified public runtime files and never exposes desktop, WeChat, account, credential or broker control files. It does not execute a probe: use server_windows_process with the selected absolute executable in command and a current-workspace path, then poll/retry with a new request_key when appropriate. Input {classes?:string[],id?:string}.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["media", "python"]
+            }
+          },
+          "id": {
+            "type": "string",
+            "enum": ["media.ffmpeg", "media.ffprobe", "python.cli", "python.cli-v2"]
+          }
+        },
+        "additionalProperties": false
+      },
+      "permission": "workspace.read",
+      "operation": "tool_index"
     },
     {
       "name": "server_status",
@@ -244,7 +267,7 @@
     },
     {
       "name": "server_windows_process",
-      "description": "Run Windows CMD commands in an enforced low-privilege AppContainer via hidden transport. Effective interpreter is CMD (not PowerShell). Use registered managed Python executables for project code; no host fallback. action=start returns a durable process ID and automatically schedules follow-up; status reads real UTF-8 output and exit code, cancel stops the owned tree, list reads this scope. path must be under the current conversation workspace, or the current account workspace for an authorized owner call with global=true. Use project_list/project_read for registered training code and runtime paths; the repository root is not mounted. Windows drive paths or /mnt/e paths are accepted only within those roots. Use server_list rather than CMD dir to inspect a directory. command is plain CMD syntax (not PowerShell, no bash escaping). timeout_seconds=0 has no deadline. Keep one request_key per logical invocation; never replay unknown effects. Input {action:start|status|cancel|list,path?,command?,request_key?,id?,timeout_seconds?}.",
+      "description": "Run Windows CMD commands in an enforced low-privilege AppContainer via hidden transport. Effective interpreter is CMD (not PowerShell). Use registered managed Python executables for project code; no host fallback. For a packaged or workspace EXE, argv can directly start the exact authorized .exe without CMD parsing; command and argv are mutually exclusive. action=start returns a durable process ID and automatically schedules follow-up; status reads real UTF-8 output and exit code, cancel stops the owned tree, list reads this scope. path must be under the current conversation workspace, or the current account workspace for an authorized owner call with global=true. Use project_list/project_read/server_tools for registered projects and runtimes; the repository root is not mounted. Windows drive paths or /mnt/e paths are accepted only within those roots. Use server_list rather than CMD dir to inspect a directory. timeout_seconds=0 has no deadline. Keep one request_key per logical invocation; never replay unknown effects. Input {action:start|status|cancel|list,path?,command?|argv?:string[],request_key?,id?,timeout_seconds?}.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -269,6 +292,15 @@
           },
           "command": {
             "type": "string"
+          },
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 64,
+            "description": "Windows direct executable argv. argv[0] must be an .exe under the current authorized workspace or audited read-only runtime; cannot be combined with command."
           },
           "request_key": {
             "type": "string"

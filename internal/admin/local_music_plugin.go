@@ -563,6 +563,27 @@ func (p *localMusicPluginPolicy) Service(ctx context.Context, j pluginhost.Job, 
 	if request.Body != nil && (request.Body.Ref != "request_0" || request.Body.SHA256 != namedSpeechSHA(p.body) || request.Body.Bytes != int64(len(p.body))) {
 		return nil, errors.New("music_local_request_changed")
 	}
+	// Hold an already-owned Windows supervisor across the entire bound HTTP
+	// request. This makes adjacent conversions reuse a warm GPU backend without
+	// allowing the idle reaper to reserve it between request submission and the
+	// response; it grants no process or port discovery authority.
+	musicStatus := p.p.manager.windowsMusicStatus()
+	if musicStatus.Stopping {
+		return nil, errors.New("windows_music_backend_reclaiming_retry")
+	}
+	if musicStatus.Running {
+		release, ok := p.p.manager.holdWindowsMusic()
+		if !ok {
+			return nil, errors.New("windows_music_backend_reclaiming_retry")
+		}
+		defer release()
+	}
+	if musicStatus.Running && p.p.manager.windowsMusicStatus().Stopping {
+		// The idle reaper won the race and reserved its owned process.  Do not
+		// submit into a closing bridge; the existing authorized cold-start path
+		// can retry after the supervisor has fully exited.
+		return nil, errors.New("windows_music_backend_reclaiming_retry")
+	}
 	// Reserve before transport. No callback/session/controller retry may issue
 	// a second POST after an uncertain connection or response.
 	p.requested = true

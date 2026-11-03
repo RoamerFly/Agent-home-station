@@ -314,3 +314,17 @@ func (s *Store) Jobs(ctx context.Context, plugin string, after int64, limit int)
 	page.HasMore = more != 0
 	return page, err
 }
+
+// HasUnfinishedJobs is a narrow lifecycle guard: callers learn only whether a
+// plugin has work whose outcome still needs recovery, never another request's
+// arguments, result, identity or diagnostic.  An uncertain submission is kept
+// live until explicitly terminal rather than being replayed after a process
+// recycle.
+func (s *Store) HasUnfinishedJobs(ctx context.Context, plugin string) (bool, error) {
+	if plugin == "" {
+		return false, errors.New("plugin required")
+	}
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE plugin=? AND state NOT IN ('completed','failed','cancelled'))`, plugin).Scan(&exists)
+	return exists != 0, err
+}

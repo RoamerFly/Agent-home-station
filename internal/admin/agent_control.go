@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -21,18 +22,38 @@ import (
 )
 
 type agentSettings struct {
-	Revision          int              `json:"revision"`
-	Enabled           bool             `json:"enabled"`
-	ReadConversations bool             `json:"read_conversations"`
-	TasksEnabled      bool             `json:"tasks_enabled"`
-	CrossConversation bool             `json:"cross_conversation"`
-	ExternalOwnerOnly bool             `json:"external_owner_only"`
-	OwnerIDs          []string         `json:"owner_ids"`
-	PrivilegedThreads []string         `json:"privileged_threads"`
-	AccountActions    []string         `json:"account_actions"`
-	MaxSteps          int              `json:"max_steps"`
-	MaxTaskRuns       int              `json:"max_task_runs"`
-	Host              agenthost.Config `json:"host"`
+	Revision          int               `json:"revision"`
+	Enabled           bool              `json:"enabled"`
+	ReadConversations bool              `json:"read_conversations"`
+	TasksEnabled      bool              `json:"tasks_enabled"`
+	CrossConversation bool              `json:"cross_conversation"`
+	ExternalOwnerOnly bool              `json:"external_owner_only"`
+	OwnerIDs          []string          `json:"owner_ids"`
+	PrivilegedThreads []string          `json:"privileged_threads"`
+	AccountActions    []string          `json:"account_actions"`
+	MaxSteps          int               `json:"max_steps"`
+	MaxTaskRuns       int               `json:"max_task_runs"`
+	Host              agenthost.Config  `json:"host"`
+	ServiceRetention  *serviceRetention `json:"service_retention,omitempty"`
+}
+
+type serviceRetention struct {
+	PluginMinutes int `json:"plugin_idle_minutes"`
+	MusicMinutes  int `json:"music_idle_minutes"`
+}
+
+func (c agentSettings) retention() serviceRetention {
+	if c.ServiceRetention != nil {
+		return *c.ServiceRetention
+	}
+	return serviceRetention{PluginMinutes: 10, MusicMinutes: 15}
+}
+
+func (m *Manager) musicIdleTimeout() time.Duration {
+	if m.agent == nil {
+		return 15 * time.Minute
+	}
+	return time.Duration(m.agent.config().retention().MusicMinutes) * time.Minute
 }
 
 // Legacy configuration value. Autonomous actions do not consume this quota.
@@ -41,9 +62,15 @@ const agentTurnToolLimit = 30
 func agentDefaults() agentSettings {
 	host := agenthost.Defaults()
 	host.Mode = "files"
-	return agentSettings{Enabled: true, ReadConversations: true, TasksEnabled: true, OwnerIDs: []string{}, PrivilegedThreads: []string{}, AccountActions: []string{}, MaxSteps: agentTurnToolLimit, MaxTaskRuns: 6, Host: host}
+	retention := (agentSettings{}).retention()
+	return agentSettings{Enabled: true, ReadConversations: true, TasksEnabled: true, OwnerIDs: []string{}, PrivilegedThreads: []string{}, AccountActions: []string{}, MaxSteps: agentTurnToolLimit, MaxTaskRuns: 6, Host: host, ServiceRetention: &retention}
 }
 func (c agentSettings) validate() error {
+	retention := c.retention()
+	const maxMinutes = int64((1<<63 - 1) / time.Minute)
+	if retention.PluginMinutes < 0 || int64(retention.PluginMinutes) > maxMinutes || retention.MusicMinutes < 0 || int64(retention.MusicMinutes) > maxMinutes {
+		return errors.New("空闲时间必须为可表示的非负整数分钟")
+	}
 	if len(c.OwnerIDs) > 30 || len(c.PrivilegedThreads) > 100 || len(c.AccountActions) > 8 {
 		return errors.New("授权条目过多")
 	}
@@ -333,6 +360,11 @@ func (a *agentControl) save(c agentSettings) error {
 	defer a.mu.Unlock()
 	if c.Revision != a.settings.Revision {
 		return errors.New("配置已被其他页面更改，请刷新后重新保存")
+	}
+	// Older clients submit the whole action settings object without this field.
+	if c.ServiceRetention == nil {
+		previous := a.settings.retention()
+		c.ServiceRetention = &previous
 	}
 	if err := c.validate(); err != nil {
 		return err
@@ -748,23 +780,35 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			fail(w, 400, err.Error())
 			return
 		}
-		if c.Revision != m.agent.config().Revision {
+		current := m.agent.config()
+		if c.Revision != current.Revision {
 			fail(w, 409, "配置已更改，请刷新后重试")
 			return
 		}
-		cfg := m.runtimeConfig()
-		if err := m.stop(); err != nil {
-			fail(w, 409, err.Error())
-			return
+		previousRetention := current.retention()
+		if c.ServiceRetention == nil {
+			c.ServiceRetention = &previousRetention
 		}
-		defer func() {
-			if cfg.Enabled {
-				m.start(cfg)
+		retentionChanged := c.retention() != previousRetention
+		current.ServiceRetention = c.ServiceRetention
+		// Changing an idle timer does not revoke a conversation or require the
+		// worker to stop processing an already authorized task.
+		if !reflect.DeepEqual(current, c) {
+			cfg := m.runtimeConfig()
+			if err := m.stop(); err != nil {
+				fail(w, 409, err.Error())
+				return
 			}
-		}()
+			if cfg.Enabled {
+				defer m.start(cfg)
+			}
+		}
 		if err := m.agent.save(c); err != nil {
 			fail(w, 409, err.Error())
 			return
+		}
+		if retentionChanged {
+			m.applyServiceRetention(c.retention())
 		}
 		m.log("agent_permissions_saved")
 		respond(w, 200, m.agent.config())

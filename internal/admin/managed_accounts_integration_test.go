@@ -81,7 +81,8 @@ func TestManagedWorkspaceRootsIgnoreBroadStoredHostRoots(t *testing.T) {
 			t.Fatal(err)
 		}
 		x := p.executionContext()
-		if len(local.Roots) != 2 || local.Roots[0] != x.Conversation || local.Roots[1] != x.Public || len(global.Roots) != 2 || global.Roots[0] != x.Private || global.Roots[1] != x.Public {
+		publicProjects := filepath.Join(x.Public, "projects")
+		if len(local.Roots) != 2 || local.Roots[0] != x.Conversation || local.Roots[1] != publicProjects || len(global.Roots) != 2 || global.Roots[0] != x.Private || global.Roots[1] != publicProjects {
 			t.Fatal("effective roots are not scoped to account and conversation", local.Roots, global.Roots)
 		}
 		for _, root := range append(local.Roots, global.Roots...) {
@@ -201,7 +202,7 @@ func TestManagedAccountPairFilesMemoryTasksAndCapabilityProjection(t *testing.T)
 		}
 		expected := tool.executionContext()
 		ownerPath := filepath.Join(expected.Private, "conversations", companion.ScopeID("wechat", x[i].Account, "wxid_owner"))
-		if !report.Required || report.Host.Isolation == nil || len(report.Host.Roots) != 2 || report.Host.Roots[0] != ownerPath || report.Host.Roots[1] != expected.Public || report.Workspace.Account != x[i].Account || strings.Contains(report.Identity, "Windows interop") {
+		if !report.Required || report.Host.Isolation == nil || len(report.Host.Roots) != 2 || report.Host.Roots[0] != ownerPath || report.Host.Roots[1] != filepath.Join(expected.Public, "projects") || report.Workspace.Account != x[i].Account || strings.Contains(report.Identity, "Windows interop") {
 			t.Fatal("legacy host projection", report)
 		}
 		if tool.manager.agent.config().Host.Roots[0] != filepath.VolumeName(f.dir)+string(os.PathSeparator) {

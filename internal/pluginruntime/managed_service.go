@@ -51,6 +51,13 @@ type managedService struct {
 	done     chan struct{}
 	stopOnce sync.Once
 	stopping bool
+	// holds counts host-side requests which are currently using this exact
+	// supervisor. It is deliberately independent from the durable job journal:
+	// an HTTP call can be in flight before its job state has been persisted.
+	holds int
+	// lastActivity is only changed while the registry lock is held.  It is a
+	// lease for a host request, not evidence that an unowned listener exists.
+	lastActivity time.Time
 }
 
 // ManagedServices owns only processes started by this registry. There is no
@@ -92,6 +99,9 @@ func (r *ManagedServices) Start(ctx context.Context, id string, spec ManagedServ
 			if p.stopping {
 				return statusManagedService(p), errors.New("managed_service_stopping")
 			}
+			// A repeated authorized start is the normal adjacent-request reuse
+			// path.  Renew its lease without launching a second GPU service.
+			p.lastActivity = time.Now()
 			return statusManagedService(p), nil
 		}
 	}
@@ -126,7 +136,7 @@ func (r *ManagedServices) Start(ctx context.Context, id string, spec ManagedServ
 		log.Close()
 		return ManagedServiceStatus{}, err
 	}
-	p := &managedService{spec: spec, command: command, input: input, done: make(chan struct{})}
+	p := &managedService{spec: spec, command: command, input: input, done: make(chan struct{}), lastActivity: time.Now()}
 	if r.processes == nil {
 		r.processes = make(map[string]*managedService)
 	}
@@ -156,7 +166,141 @@ func statusManagedService(p *managedService) ManagedServiceStatus {
 		return ManagedServiceStatus{}
 	default:
 	}
-	return ManagedServiceStatus{Running: true, Stopping: p.stopping, Busy: pendingManagedServiceJobs(p.spec.PendingJobsPath)}
+	return ManagedServiceStatus{Running: true, Stopping: p.stopping, Busy: p.holds > 0 || pendingManagedServiceJobs(p.spec.PendingJobsPath)}
+}
+
+// Touch extends the idle lease of a process already owned by this registry.
+// It deliberately cannot create, discover or adopt a process.  A false result
+// means callers must use their normal, authorized start/recovery path.
+func (r *ManagedServices) Touch(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p := r.processes[id]
+	if p == nil || p.stopping {
+		return false
+	}
+	select {
+	case <-p.done:
+		delete(r.processes, id)
+		return false
+	default:
+		p.lastActivity = time.Now()
+		return true
+	}
+}
+
+// Acquire holds an already-owned service across one host-side operation. The
+// release closure is bound to the exact process instance, so a delayed caller
+// cannot refresh or release a later process that reused the same registry ID.
+// It grants neither launch authority nor any handle to the child process.
+func (r *ManagedServices) Acquire(id string) (release func(), ok bool) {
+	r.mu.Lock()
+	p := r.processes[id]
+	if p == nil || p.stopping {
+		r.mu.Unlock()
+		return nil, false
+	}
+	select {
+	case <-p.done:
+		delete(r.processes, id)
+		r.mu.Unlock()
+		return nil, false
+	default:
+	}
+	p.holds++
+	p.lastActivity = time.Now()
+	r.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.processes[id] != p || p.holds == 0 {
+				return
+			}
+			p.holds--
+			p.lastActivity = time.Now()
+		})
+	}, true
+}
+
+// IdleFor reports the owned service's quiet period.  It is intentionally
+// unavailable for a stopping or exited service so an idle reaper cannot race
+// a shutdown or turn a stale pointer into a new process target.
+func (r *ManagedServices) IdleFor(id string, now time.Time) (time.Duration, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p := r.processes[id]
+	if p == nil || p.stopping {
+		return 0, false
+	}
+	select {
+	case <-p.done:
+		delete(r.processes, id)
+		return 0, false
+	default:
+	}
+	if p.lastActivity.IsZero() || now.Before(p.lastActivity) {
+		return 0, false
+	}
+	return now.Sub(p.lastActivity), true
+}
+
+// StopIfIdle reclaims exactly one registry-owned process after an idle lease.
+// Pending work is checked while reserving the stop.  Unknown, malformed and
+// nonterminal journals are busy (see pendingManagedServiceJobs), so this must
+// never stop a conversion whose provider receipt is still uncertain.
+func (r *ManagedServices) StopIfIdle(ctx context.Context, id string, timeout time.Duration) (bool, error) {
+	return r.stopIfIdle(ctx, id, timeout, nil)
+}
+
+// StopIfIdleGuarded makes the final stop reservation only if guard still
+// authorizes it. The guard runs while the service registry is locked, just
+// before p.stopping is set; callers use it to invalidate a timer whose policy
+// changed after it fired. It must not call back into this registry.
+func (r *ManagedServices) StopIfIdleGuarded(ctx context.Context, id string, timeout time.Duration, guard func() bool) (bool, error) {
+	if guard == nil {
+		return false, errors.New("managed_service_idle_guard_invalid")
+	}
+	return r.stopIfIdle(ctx, id, timeout, guard)
+}
+
+func (r *ManagedServices) stopIfIdle(ctx context.Context, id string, timeout time.Duration, guard func() bool) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if timeout <= 0 {
+		return false, nil
+	}
+	r.mu.Lock()
+	p := r.processes[id]
+	if p == nil || p.stopping {
+		r.mu.Unlock()
+		return false, nil
+	}
+	select {
+	case <-p.done:
+		delete(r.processes, id)
+		r.mu.Unlock()
+		return false, nil
+	default:
+	}
+	if p.holds > 0 || pendingManagedServiceJobs(p.spec.PendingJobsPath) || p.lastActivity.IsZero() || time.Since(p.lastActivity) < timeout {
+		r.mu.Unlock()
+		return false, nil
+	}
+	if guard != nil && !guard() {
+		r.mu.Unlock()
+		return false, nil
+	}
+	// Reserve before releasing the registry lock.  A later Touch then returns
+	// false rather than racing a stop with a new request.
+	p.stopping = true
+	r.mu.Unlock()
+	if err := stopManagedService(ctx, p); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // A missing journal means no submitted jobs. An unreadable, oversized or
@@ -187,7 +331,13 @@ func pendingManagedServiceJobs(path string) bool {
 		if job == nil || job.State == "" {
 			return true
 		}
-		if strings.EqualFold(job.State, "queued") || strings.EqualFold(job.State, "running") {
+		// The local journal is also the recovery source after a lost network
+		// reply.  Only explicit terminal states prove this supervisor is safe to
+		// reclaim; accepted/submitted/unknown must continue to occupy it until
+		// their durable delivery/recovery path settles.
+		switch strings.ToLower(strings.TrimSpace(job.State)) {
+		case "completed", "failed", "cancelled", "canceled", "stopped", "delivered":
+		default:
 			return true
 		}
 	}

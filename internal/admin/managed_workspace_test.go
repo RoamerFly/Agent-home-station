@@ -203,3 +203,38 @@ func TestOwnerGlobalExecutionScopeIsExplicitAndNotInherited(t *testing.T) {
 		t.Fatal("member global scope")
 	}
 }
+
+func TestOwnerCannotWritePublicControlDirectories(t *testing.T) {
+	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
+	c := f.manager.agent.config()
+	c.CrossConversation = true
+	if e := f.manager.agent.save(c); e != nil {
+		t.Fatal(e)
+	}
+	x := p.executionContext()
+	local, e := p.scopedHostConfig(json.RawMessage(`{}`))
+	if e != nil {
+		t.Fatal(e)
+	}
+	projects := filepath.Join(x.Public, "projects")
+	if len(local.Roots) != 2 || local.Roots[0] != x.Conversation || local.Roots[1] != projects {
+		t.Fatalf("owner roots leaked public control parent: %#v", local.Roots)
+	}
+	for _, directory := range []string{"models", "runtimes", "manifests"} {
+		path := filepath.Join(x.Public, directory, "owner-must-not-write.txt")
+		raw, _ := json.Marshal(map[string]string{"path": path, "content": "forbidden"})
+		// Privileged calls intentionally return a durable needs_review result on
+		// admission failure, rather than a Go error that could invite replay.
+		if _, e = p.Call(context.Background(), "server_write", raw); e != nil {
+			t.Fatalf("unexpected durable admission error for %q: %v", directory, e)
+		}
+		if _, e = os.Stat(path); !os.IsNotExist(e) {
+			t.Fatalf("owner wrote public control directory %q: %v", directory, e)
+		}
+	}
+	global, e := p.scopedHostConfig(json.RawMessage(`{"global":true}`))
+	if e != nil || len(global.Roots) != 2 || global.Roots[0] != x.Private || global.Roots[1] != projects {
+		t.Fatalf("global roots widened beyond private/projects: %#v, %v", global.Roots, e)
+	}
+}

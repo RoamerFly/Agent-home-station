@@ -119,11 +119,24 @@ def training_mount(request, direct, command):
     profile = _training_json(request["music_registration"])
     if profile.get("enabled") is not True or profile.get("policy") != "registry-read-private-network-v1" or _training_path(profile["entry"]) != controls / "managed_music_service.py":
         raise ValueError("training_registered_gpu_profile_required")
-    if _training_path(profile["python"]) != _training_path(candidate[0]): raise ValueError("training_registered_interpreter_required")
-    publics = {_training_path(path) for path in [*request["roots"], *request.get("read_only", [])] if Path(path).name == "public_workspace"}
-    if len(publics) != 1: raise ValueError("training_registered_public_workspace_required")
-    public = publics.pop()
-    if not _training_path(candidate[0]).is_relative_to(public / "runtimes"): raise ValueError("training_registered_interpreter_required")
+    interpreter = _training_path(candidate[0])
+    if _training_path(profile["python"]) != interpreter: raise ValueError("training_registered_interpreter_required")
+    # The compact workspace layout deliberately mounts public/runtimes as RO
+    # and public/projects separately as RW.  Do not require (or add) the whole
+    # public workspace just to recognise a registered interpreter.  Conversely,
+    # a similarly named editable project directory cannot become a runtime
+    # merely by being supplied as a request root.
+    runtime = next((parent for parent in (interpreter.parent, *interpreter.parents)
+                    if parent.name == "runtimes" and parent.parent.name == "public_workspace"), None)
+    if runtime is None or not interpreter.is_relative_to(runtime):
+        raise ValueError("training_registered_interpreter_required")
+    public = runtime.parent
+    readonly = {_training_path(path) for path in request.get("read_only", [])}
+    # The legacy full public mount remains compatible, but the new layout must
+    # name its exact runtime child.  A writable root is never accepted as this
+    # proof, even if it happens to contain the expected directory tree.
+    if public not in readonly and runtime not in readonly:
+        raise ValueError("training_registered_public_workspace_required")
     return candidate, runner["training_readonly"](public, candidate)
 
 

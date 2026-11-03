@@ -71,6 +71,9 @@ func (m *Manager) installedPluginRuntime() (*pluginruntime.Controller, bool, err
 	if err != nil {
 		return nil, false, err
 	}
+	if m.agent != nil {
+		h.SetIdleTimeout(time.Duration(m.agent.config().retention().PluginMinutes) * time.Minute)
+	}
 	if err = h.AttachManagedServices(m.managedServiceRegistry()); err != nil {
 		_ = h.Close()
 		return nil, false, err
@@ -78,6 +81,16 @@ func (m *Manager) installedPluginRuntime() (*pluginruntime.Controller, bool, err
 	m.packageRuntime = h
 	m.packageRuntimeReady = ready
 	return h, ready, nil
+}
+
+func (m *Manager) applyServiceRetention(retention serviceRetention) {
+	m.packageMu.Lock()
+	h := m.packageRuntime
+	m.packageMu.Unlock()
+	if h != nil {
+		h.SetIdleTimeout(time.Duration(retention.PluginMinutes) * time.Minute)
+	}
+	m.refreshMusicIdleTimeout()
 }
 
 func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
@@ -90,8 +103,8 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 		if !decode(w, r, &input) {
 			return
 		}
-		if input.Action != "start" && input.Action != "stop" {
-			fail(w, 400, "请选择启动或停止")
+		if input.Action != "start" && input.Action != "stop" && input.Action != "enable_on_demand" {
+			fail(w, 400, "请选择按需启用、启动或停止")
 			return
 		}
 		seconds := 30
@@ -118,9 +131,12 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 			defer cancel()
 		}
 		id := r.PathValue("id")
-		if input.Action == "start" {
+		switch input.Action {
+		case "enable_on_demand":
+			err = h.EnableOnDemand(ctx, id, input.Revision)
+		case "start":
 			err = h.Start(ctx, id, input.Revision)
-		} else {
+		case "stop":
 			err = h.Stop(ctx, id, input.Revision)
 		}
 		if err != nil {

@@ -122,6 +122,10 @@ func (c *Controller) Invoke(ctx context.Context, req CallRequest, policy CallPol
 	// Execute the exact canonical request read back by ClaimJob, not caller-owned
 	// maps or alternate JSON text that differs from the durable fingerprint.
 	raw, callErr := c.host.Call(serviceContext(ctx, policy, j, cap), req.Plugin, j.Context, cap.ID, j.Arguments, cap.Permissions)
+	// Only an actual dispatch refreshes an automatic session.  Status, health,
+	// discovery and failed preflight checks deliberately do not keep processes
+	// alive forever.
+	c.touch(req.Plugin)
 	failureStage := pluginhost.JobFailureDispatch
 	var verified VerifiedResult
 	if callErr == nil {
