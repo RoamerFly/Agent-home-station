@@ -185,6 +185,17 @@ func TestProjectPluginMissingHasNoCoreFallbackAndKeepsNotes(t *testing.T) {
 	}
 }
 
+func TestProjectReadFailureExplainsHowToChooseRegisteredProject(t *testing.T) {
+	for code, want := range map[string]string{
+		"project_not_registered":       "project_list",
+		"project_manifest_unavailable": "manifests",
+	} {
+		if got := projectPluginResultError(code).Error(); !strings.Contains(got, want) || !strings.Contains(got, code) {
+			t.Fatalf("%s guidance = %q", code, got)
+		}
+	}
+}
+
 func TestProjectPluginToolPermissionsAndPlatform(t *testing.T) {
 	f, p := trustedAgent(t)
 	installProjectPluginFixture(t, p)

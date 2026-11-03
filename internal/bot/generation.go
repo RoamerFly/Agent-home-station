@@ -259,7 +259,11 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 	input = w.withAutonomyPlans(input)
 	input = w.restoreGenerationCheckpoint(input)
 	if input.RecoveryEvidence != nil {
-		if err := c.ValidateGenerationEvidence(ctx, *input.RecoveryEvidence); err != nil {
+		scoped, err := c.ForEvidenceInput(input)
+		if err == nil {
+			err = scoped.ValidateGenerationEvidence(ctx, *input.RecoveryEvidence)
+		}
+		if err != nil {
 			w.modelFailed(input.Thread, input.TraceID, err)
 			w.queuePhase(input.TraceID, "needs_review")
 			return

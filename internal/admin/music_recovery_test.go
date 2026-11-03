@@ -20,6 +20,32 @@ type recoverSongNative struct {
 func (n *recoverSongNative) Message(_ context.Context, id string) (linuxnative.Message, error) {
 	return linuxnative.Message{ID: id, ThreadID: "filehelper", SenderID: "synthetic-owner", Direction: "incoming", Body: "唱个生日歌", CreatedAt: n.createdAt}, nil
 }
+
+func TestGroupMusicRecoveryBindsOriginalSourceAcrossNewTrace(t *testing.T) {
+	f, _, _ := localMusicPluginFixture(t, "http://127.0.0.1:6188")
+	at := time.Now().UTC()
+	msg := linuxnative.Message{ID: "request", ServerID: "777", ThreadID: "test@chatroom", SenderID: "owner", Direction: "incoming", Type: 1, Body: "唱一首歌", CreatedAt: at.Format(time.RFC3339Nano)}
+	f.manager.native = &localMusicRecoveryNative{fakeNative: f.native, message: msg}
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: msg.ThreadID, Mode: "mention"})
+	f.login()
+	body := map[string]string{"message_id": msg.ID}
+	if code, _, _ := f.request("POST", "/api/agent/recover-music-message", body, true, true); code != 409 {
+		t.Fatalf("unbound group request status %d", code)
+	}
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: msg.ThreadID, Sender: msg.SenderID, TraceID: msg.ID, Text: msg.Body, MessageTime: msg.CreatedAt, Source: &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: msg.ID, ServerID: msg.ServerID}}
+	if err := f.manager.memory.Observe(in, f.manager.Config().Companion, at); err != nil {
+		t.Fatal(err)
+	}
+	if code, res, _ := f.request("POST", "/api/agent/recover-music-message", body, true, true); code != 201 {
+		t.Fatalf("recovery status %d: %s", code, res)
+	}
+	claimed, err := f.manager.claimAgentTask(at.Add(time.Minute), func(string) bool { return false })
+	if err != nil || claimed == nil || claimed.TraceID == msg.ID || claimed.Source == nil || claimed.Source.MessageID != msg.ID || claimed.Source.EventID == "" || claimed.Source.ServerID != msg.ServerID {
+		t.Fatalf("recovery lost source: %+v %v", claimed, err)
+	}
+}
+
 func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 	f := setup(t)
 	f.manager.native = &recoverSongNative{fakeNative: f.native, createdAt: time.Now().Format(time.RFC3339)}

@@ -333,7 +333,10 @@ details.disclosure:not([open])>:not(summary) { display:none; }
 .document-directory { justify-content:flex-start; gap:10px; align-items:stretch; }
 .document-directory>div { flex:none; }
 .document-directory button { flex-shrink:0; }
-.workspace-runtime { display:flex; flex-direction:column; gap:8px; margin-top:auto; padding-top:14px; }
+.workspace-runtime { display:flex; flex-direction:column; gap:8px; margin-top:auto; padding-top:14px; min-width:0; }
+.workspace-runtime .workspace-facts { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:3px 10px; margin:0; font-size:12px; }
+.workspace-runtime .workspace-facts dt { color:var(--muted); }
+.workspace-runtime .workspace-facts dd { margin:0; min-width:0; overflow-wrap:anywhere; }
 .switch-row>span:not(.switch) { flex:1; }
 .switch-row>.switch { display:none; }
 .switch-row>input { position:static; opacity:1; width:18px; height:18px; margin:3px 0 0; flex:0 0 18px; }
@@ -346,7 +349,7 @@ details.disclosure:not([open])>:not(summary) { display:none; }
 @media(max-width:760px) {
  .document-directory { display:flex; gap:6px; flex-direction:row; flex-wrap:wrap; }
  .document-directory>div { flex:1 1 130px; }.document-directory button { flex:1 1 90px; font-size:12px; }
- .document-directory .workspace-runtime { display:none; }
+ .document-directory .workspace-runtime { display:flex; flex-basis:100%; }
  #plugins>.plugin-workspace { display:flex; flex-direction:column; overflow:auto; }
  #plugins .plugin-browser,#plugins .plugin-editor { overflow:visible; }
 }

@@ -91,7 +91,11 @@ func (w *Worker) applyPlanReview(p *utterancePlan, d companion.PendingReview, er
 			if !available {
 				err = errors.New("pending_review_evidence_unavailable")
 			} else {
-				err = c.ValidateGenerationEvidence(context.Background(), evidence)
+				var scoped *companion.Engine
+				scoped, err = c.ForEvidenceInput(p.Input)
+				if err == nil {
+					err = scoped.ValidateGenerationEvidence(context.Background(), evidence)
+				}
 			}
 			if err == nil {
 				p.ReviewEvidence = &evidence
@@ -180,13 +184,20 @@ func (w *Worker) planReviewEvidence(ctx context.Context, c *companion.Engine, p 
 		r := p.ReplyContexts[p.Index]
 		in.ReplyContext = &r
 	}
+	reader, err := w.deliveryEvidenceReader(in)
+	if err != nil {
+		return ctx, in, err
+	}
+	if scoped, ok := reader.model.(*companion.Engine); ok {
+		c = scoped
+	}
 	if p.ReviewEvidence != nil {
 		if err := c.ValidateGenerationEvidence(ctx, *p.ReviewEvidence); err != nil {
 			return ctx, in, err
 		}
 		ctx = companion.WithStoredGenerationEvidence(ctx, *p.ReviewEvidence)
 	}
-	if !in.IsGroup && (in.ReplyContext == nil || w.bindingEvidenceMissing(in) || replyProofMetadataMissing(in.ReplyContext)) && p.ReviewEvidence == nil {
+	if !in.IsGroup && (in.ReplyContext == nil || reader.bindingEvidenceMissing(in) || replyProofMetadataMissing(in.ReplyContext)) && p.ReviewEvidence == nil {
 		return ctx, in, errors.New("private_reply_requires_replan")
 	}
 	return ctx, in, nil

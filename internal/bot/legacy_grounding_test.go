@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 	"wechat-bot/internal/companion"
@@ -198,6 +199,60 @@ func TestLegacyMissingAuthorizationRequiresCurrentReadOnlyRevalidation(t *testin
 	got, _, err := w.prepareGroundedText(context.Background(), in, "收到你的消息")
 	if err != nil || got.ReplyContext.EvidenceAuthorization != "active-authority" {
 		t.Fatal("missing authority did not trigger review", err)
+	}
+}
+
+// queued work is validated by a shared base Engine after the original worker
+// has completed. Its authorization must be calculated for the saved request,
+// rather than whatever trace the base adapter happened to receive last.
+type scopedEvidenceState struct{ revoked bool }
+
+type scopedEvidenceTools struct {
+	companion.ToolAccess
+	state *scopedEvidenceState
+	trace companion.Input
+}
+
+func (p *scopedEvidenceTools) SetTrace(in companion.Input) { p.trace = in }
+func (p *scopedEvidenceTools) ForkTools() companion.ToolAccess {
+	return &scopedEvidenceTools{state: p.state, trace: p.trace}
+}
+func (p *scopedEvidenceTools) MemoryResultAuthorization() string {
+	if p.state.revoked {
+		return "revoked"
+	}
+	return fmt.Sprintf("grant|%s|%s|%s", p.trace.Account, p.trace.Thread, p.trace.Sender)
+}
+func (p *scopedEvidenceTools) MemoryResultAuthorized(stamp string) bool {
+	return !p.state.revoked && stamp != "" && stamp == p.MemoryResultAuthorization()
+}
+
+func TestQueuedReplyEvidenceUsesOriginalTraceWithoutMutatingSharedAdapter(t *testing.T) {
+	w, c, in, _ := sourcedReplyFixture(t)
+	state := &scopedEvidenceState{}
+	base := &scopedEvidenceTools{state: state, trace: companion.Input{Account: "other-account", Thread: "other-thread", Sender: "other-user"}}
+	c.Tools = base
+	in.ReplyContext = nil
+
+	prepared, err := c.ForEvidenceInput(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := prepared.BindReplyEvidence(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.ReplyContext = &proof
+	if _, _, err := w.prepareGroundedText(context.Background(), in, "收到你的消息"); err != nil {
+		t.Fatal("queued original authorization was checked against the wrong trace", err)
+	}
+	if base.trace.Thread != "other-thread" || base.trace.Sender != "other-user" {
+		t.Fatal("queued validation mutated the shared adapter", base.trace)
+	}
+
+	state.revoked = true
+	if _, _, err := w.prepareGroundedText(context.Background(), in, "收到你的消息"); err == nil {
+		t.Fatal("revoked original authorization was accepted")
 	}
 }
 

@@ -79,6 +79,18 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := agentTask{ID: id, Account: m.native.Account(), Thread: msg.ThreadID, Sender: msg.SenderID, Title: "补办歌曲请求", RequestedText: msg.Body, Checkpoint: msg.Body, State: "pending", Next: time.Now(), OriginTrace: msg.ID, QuoteServerID: msg.ServerID, RecoveryMessageID: msg.ID}
+	// A recovery round has a new trace. Bind it to the exact native event so
+	// group tools and the delivery worker can verify the original requester.
+	origin := companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, TraceID: msg.ID, MessageTime: msg.CreatedAt, Source: &companion.SourceRef{InstanceID: m.memory.SourceInstanceID(), MessageID: msg.ID, ServerID: msg.ServerID}}
+	access := &permittedTools{manager: m, trace: origin}
+	t.OwnerRequested = access.privileged()
+	if source, ok := m.memory.SourceForInput(origin); ok {
+		access.trace.Source = source
+		t.Constraints = access.taskConstraints("music_recovery", "", "", "")
+	} else if strings.HasSuffix(t.Thread, "@chatroom") && m.Config().Companion.Permissions.Remember {
+		fail(w, 409, "无法核对该群歌曲请求的当前来源，请检查原消息是否已更正或遗忘")
+		return
+	}
 	if in.PreparedJob != "" {
 		if !validID(in.PreparedJob) || !m.Config().Companion.Permissions.SendVoice {
 			fail(w, 400, "准备任务编号无效或未允许语音")

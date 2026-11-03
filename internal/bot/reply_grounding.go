@@ -15,8 +15,26 @@ type replyGroundingEngine interface {
 	ReviewGroundedReply(context.Context, companion.Input, companion.Decision) (companion.Decision, error)
 }
 
+// Evidence helpers only read the source and engine. Bind both before checking
+// a queued reply; the generation's per-conversation adapter has already exited.
+func (w *Worker) deliveryEvidenceReader(in companion.Input) (*Worker, error) {
+	engine, ok := w.model.(*companion.Engine)
+	if !ok {
+		return w, nil
+	}
+	scoped, err := engine.ForEvidenceInput(in)
+	if err != nil {
+		return nil, err
+	}
+	return &Worker{model: scoped, source: w.source}, nil
+}
+
 func (w *Worker) prepareGroundedText(ctx context.Context, in companion.Input, text string) (companion.Input, string, error) {
 	in.IsGroup = in.IsGroup || strings.HasSuffix(in.Thread, "@chatroom")
+	w, scopeErr := w.deliveryEvidenceReader(in)
+	if scopeErr != nil {
+		return in, text, scopeErr
+	}
 	engine, ok := w.model.(replyGroundingEngine)
 	if !ok {
 		// Non-character adapters have no semantic source store. Preserve their

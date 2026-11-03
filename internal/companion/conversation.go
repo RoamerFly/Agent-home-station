@@ -121,19 +121,29 @@ func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []st
 	// Persisted plans can be reviewed by the base Engine while other requests
 	// are running. Trace-dependent authorization must belong to this plan, not
 	// whichever conversation last used a shared mutable adapter.
-	if _, mutable := e.Tools.(interface{ SetTrace(Input) }); mutable {
-		fork, err := e.Fork()
-		if err != nil {
-			return PendingReview{}, err
-		}
-		traced, ok := fork.Tools.(interface{ SetTrace(Input) })
-		if !ok {
-			return PendingReview{}, errors.New("isolated pending-review trace unavailable")
-		}
-		traced.SetTrace(in)
-		return fork.reviewPendingScoped(ctx, in, sent, pending, updates, delivery, generation, caption...)
+	scoped, err := e.ForEvidenceInput(in)
+	if err != nil {
+		return PendingReview{}, err
 	}
-	return e.reviewPendingScoped(ctx, in, sent, pending, updates, delivery, generation, caption...)
+	return scoped.reviewPendingScoped(ctx, in, sent, pending, updates, delivery, generation, caption...)
+}
+
+// ForEvidenceInput checks the original stamp with the original actor's current
+// permissions. The shared engine itself never acquires a conversation identity.
+func (e *Engine) ForEvidenceInput(in Input) (*Engine, error) {
+	if _, mutable := e.Tools.(interface{ SetTrace(Input) }); !mutable {
+		return e, nil
+	}
+	fork, err := e.Fork()
+	if err != nil {
+		return nil, err
+	}
+	traced, ok := fork.Tools.(interface{ SetTrace(Input) })
+	if !ok {
+		return nil, errors.New("isolated evidence trace unavailable")
+	}
+	traced.SetTrace(in)
+	return fork, nil
 }
 
 func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pending []string, updates []ConversationEvent, delivery *DeliveryReview, generation bool, caption ...[]DeliveredAttachment) (PendingReview, error) {

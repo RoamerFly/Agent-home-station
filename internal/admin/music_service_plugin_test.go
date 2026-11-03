@@ -223,3 +223,73 @@ func TestMusicServiceAuthenticatedRoutesUseInstalledCapability(t *testing.T) {
 		}
 	}
 }
+
+func TestWaitWindowsMusicReadyWaitsForDelayedAuthenticatedHealth(t *testing.T) {
+	probes := 0
+	checks := 0
+	err := waitWindowsMusicReady(t.Context(), func(context.Context) error {
+		checks++
+		return nil
+	}, func() bool { return true }, func(context.Context) (yueHealth, int, error) {
+		probes++
+		if probes < 3 {
+			return yueHealth{Ready: false}, 200, nil
+		}
+		return yueHealth{Ready: true, BridgeVersion: 13}, 200, nil
+	}, 0)
+	if err != nil || probes != 3 || checks != 4 {
+		t.Fatalf("err=%v probes=%d checks=%d", err, probes, checks)
+	}
+}
+
+func TestWaitWindowsMusicReadyStopsForAuthOrRevocation(t *testing.T) {
+	t.Run("authentication", func(t *testing.T) {
+		probes := 0
+		err := waitWindowsMusicReady(t.Context(), func(context.Context) error { return nil }, func() bool { return true }, func(context.Context) (yueHealth, int, error) {
+			probes++
+			return yueHealth{}, 401, nil
+		}, 0)
+		if _, code := safeToolFailure(err); code != "yue_bridge_auth_failed" || probes != 1 {
+			t.Fatalf("err=%v probes=%d", err, probes)
+		}
+	})
+	t.Run("revocation", func(t *testing.T) {
+		probes := 0
+		revoked := errors.New("owner authorization changed")
+		err := waitWindowsMusicReady(t.Context(), func(context.Context) error {
+			if probes > 0 {
+				return revoked
+			}
+			return nil
+		}, func() bool { return true }, func(context.Context) (yueHealth, int, error) {
+			probes++
+			return yueHealth{Ready: false}, 200, nil
+		}, 0)
+		if !errors.Is(err, revoked) || probes != 1 {
+			t.Fatalf("err=%v probes=%d", err, probes)
+		}
+	})
+	t.Run("account scope", func(t *testing.T) {
+		probes := 0
+		err := waitWindowsMusicReady(t.Context(), func(context.Context) error { return nil }, func() bool { return true }, func(context.Context) (yueHealth, int, error) {
+			probes++
+			return yueHealth{}, 0, yueError("yue_account_scope_mismatch")
+		}, 0)
+		if _, code := safeToolFailure(err); code != "yue_account_scope_mismatch" || probes != 1 {
+			t.Fatalf("err=%v probes=%d", err, probes)
+		}
+	})
+	t.Run("cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		probes := 0
+		err := waitWindowsMusicReady(ctx, func(context.Context) error { return nil }, func() bool { return true }, func(context.Context) (yueHealth, int, error) {
+			probes++
+			cancel()
+			return yueHealth{Ready: false}, 200, nil
+		}, 0)
+		if !errors.Is(err, context.Canceled) || probes != 1 {
+			t.Fatalf("err=%v probes=%d", err, probes)
+		}
+	})
+}

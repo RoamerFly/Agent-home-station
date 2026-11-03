@@ -26,6 +26,10 @@ func hostActionProof(in companion.Input) bool {
 // Media has no user-visible text to rewrite. Bind the same immutable source
 // proof as text replies, without generating a caption or calling the model.
 func (w *Worker) prepareMediaEvidence(ctx context.Context, in companion.Input) (companion.Input, error) {
+	w, scopeErr := w.deliveryEvidenceReader(in)
+	if scopeErr != nil {
+		return in, scopeErr
+	}
 	e, ok := w.model.(*companion.Engine)
 	if !ok {
 		return in, errors.New("media_source_proof_unavailable")
@@ -68,6 +72,10 @@ func (w *Worker) validateMediaEvidence(ctx context.Context, d *mediaDelivery) er
 		}
 		in = *d.OriginInput
 		restoreOriginInputTrace(&in)
+	}
+	w, scopeErr := w.deliveryEvidenceReader(in)
+	if scopeErr != nil {
+		return scopeErr
 	}
 	e, ok := w.model.(*companion.Engine)
 	if !ok || in.ReplyContext == nil || w.bindingEvidenceMissing(in) {

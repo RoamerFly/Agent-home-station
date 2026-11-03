@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -124,6 +125,17 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 		return "", err
 	}
 	health, _, err := p.yueRequest(ctx, "GET", "/rvc-health", nil, "")
+	if _, code := safeToolFailure(err); code == "yue_bridge_unavailable" && runtime.GOOS == "windows" && p.privileged() && p.manager.windowsMusicRegistered() {
+		// Nothing has been submitted yet. Start the registered backend and
+		// wait for readiness before issuing exactly one conversion request.
+		if _, startErr := p.controlMusicService(ctx, "start"); startErr != nil {
+			// The start path has the actionable reason, such as a missing
+			// registered runtime or a health timeout. Do not hide it behind the
+			// stale initial connection error.
+			return "", startErr
+		}
+		health, _, err = p.yueRequest(ctx, "GET", "/rvc-health", nil, "")
+	}
 	if err != nil {
 		return "", err
 	}

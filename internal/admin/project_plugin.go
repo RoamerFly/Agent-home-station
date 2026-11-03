@@ -511,7 +511,11 @@ func (p *projectPluginPolicy) snapshot(ctx context.Context) projectPluginObserva
 		record := projectPluginRecord{Name: name}
 		f, e := workspacefs.OpenRegular(dir, name)
 		if e != nil {
-			record.Error = "project_manifest_unavailable"
+			if errors.Is(e, os.ErrNotExist) {
+				record.Error = "project_not_registered"
+			} else {
+				record.Error = "project_manifest_unavailable"
+			}
 		} else {
 			data, e := io.ReadAll(io.LimitReader(f, 65537))
 			f.Close()
@@ -678,9 +682,20 @@ func (p *permittedTools) callProjectPlugin(ctx context.Context, name string, raw
 			verified := *failure
 			return "", &verified
 		}
-		return "", localAgentError(errors.New(result.Error))
+		return "", projectPluginResultError(result.Error)
 	}
 	return string(result.Value), nil
+}
+
+func projectPluginResultError(code string) error {
+	switch code {
+	case "project_not_registered":
+		return toolInputError("project_not_registered: 未找到这个已登记项目。先调用 project_list 获取项目 ID；共享项目说明文件请使用 workspace_read 读取文件名，例如 project-yue.md。")
+	case "project_manifest_unavailable":
+		return toolInputError("project_manifest_unavailable: 项目登记文件当前不可读。可先调用 project_list 查看其他可用项目，或检查公共工作区的 manifests 目录。")
+	default:
+		return localAgentError(errors.New(code))
+	}
 }
 
 var _ pluginruntime.ServicePolicy = (*projectPluginPolicy)(nil)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"runtime"
 	"sync"
+	"time"
 
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -159,7 +160,76 @@ func (p *permittedTools) controlMusicService(ctx context.Context, action string)
 	if err = policy.Check(ctx, call.Job, pluginhost.Capability{}); err != nil {
 		return "", err
 	}
+	if action == "start" && runtime.GOOS == "windows" {
+		// Launch is asynchronous. Check the authenticated account endpoint outside
+		// the plugin call so its stdio session is available for other operations.
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		base := policy.base
+		ready := func(probeCtx context.Context) (yueHealth, int, error) {
+			body, _, status, err := localMusicHTTP(probeCtx, "GET", base.endpoint+"/health", nil, "", base.token, accountDirectory(p.manager.native.Account()))
+			var health yueHealth
+			if err == nil && status == 200 && json.Unmarshal(body, &health) != nil {
+				err = yueError("yue_response_limit")
+			}
+			return health, status, err
+		}
+		if err := waitWindowsMusicReady(ctx, func(checkCtx context.Context) error {
+			return policy.Check(checkCtx, call.Job, pluginhost.Capability{})
+		}, func() bool {
+			return p.manager.windowsMusicStatus().Running
+		}, ready, time.Second); err != nil {
+			return "", err
+		}
+		return `{"state":"ready","backend":"windows-native","ready":true}`, nil
+	}
 	return string(call.Job.Result), nil
+}
+
+// waitWindowsMusicReady keeps launch asynchronous while making readiness part
+// of one bounded, authorization-aware lifecycle operation. Conversion is not
+// submitted until this returns nil.
+func waitWindowsMusicReady(ctx context.Context, check func(context.Context) error, running func() bool, probe func(context.Context) (yueHealth, int, error), retryDelay time.Duration) error {
+	for {
+		if err := check(ctx); err != nil {
+			return err
+		}
+		if !running() {
+			return toolInputError("windows_music_supervisor_exited_check_runtime_logs")
+		}
+		probeCtx, stop := context.WithTimeout(ctx, 3*time.Second)
+		health, status, err := probe(probeCtx)
+		stop()
+		if err == nil && status == 200 && health.Ready && health.BridgeVersion > 0 {
+			return check(ctx)
+		}
+		// Scope, authentication and malformed replies are not warm-up states.
+		// Retrying them hides a real configuration or account boundary.
+		if err != nil {
+			_, code := safeToolFailure(err)
+			switch code {
+			case "yue_account_scope_mismatch", "yue_bridge_auth_failed", "yue_response_limit":
+				return err
+			}
+		}
+		if status == 401 || status == 403 {
+			return yueError("yue_bridge_auth_failed")
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return toolInputError("windows_music_startup_health_timeout")
+		}
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return context.Canceled
+			}
+			return toolInputError("windows_music_startup_health_timeout")
+		case <-time.After(retryDelay):
+		}
+	}
 }
 
 var _ pluginruntime.ServicePolicy = (*musicServiceControlPolicy)(nil)
