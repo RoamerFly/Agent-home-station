@@ -376,7 +376,7 @@ func (m *Manager) findAssetPage(in companion.Input, assetID, requester, query st
 			if assetID == a.ID && a.SynthesisTextKnown && a.FirstRequest != nil && m.memory != nil && m.memory.DeliverySynthesisVisible(context.Background(), a.Scope, a.FirstRequest.TraceID, a.FirstRequest.RequesterID) {
 				row["synthesis_text"] = boundedAssetSynthesisText(a.SynthesisText)
 				row["synthesis_text_state"] = "verified_excerpt"
-			} else {
+			} else if assetID == a.ID {
 				row["synthesis_text_state"] = "unknown"
 			}
 			if len(a.Requests) > 2 {
