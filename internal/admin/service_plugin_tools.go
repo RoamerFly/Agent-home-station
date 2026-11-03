@@ -61,7 +61,42 @@ func (p *permittedTools) servicePluginTools() []mcptools.Tool {
 	}
 	mediaAvailable := p.mediaServiceCapabilityAvailable(context.Background(), "media.observe") || p.mediaServiceCapabilityAvailable(context.Background(), "media.transcribe") || p.mediaServiceCapabilityAvailable(context.Background(), "media.listen")
 	shareAvailable := p.shareServiceCapabilityAvailable(context.Background())
+	dynamicAvailable := false
+	dedicatedAvailable := false
+	var items []pluginhost.InstalledPackage
+	var listErr error
+	// The common service entry is already needed for the three native adapters;
+	// avoid constructing every dedicated adapter just to answer that cheap
+	// availability question. Detailed dedicated names are resolved only when the
+	// Agent actually asks service_plugins.
 	if (!web.Enabled || web.Removed) && !mediaAvailable && !shareAvailable {
+		items, listErr = store.List(context.Background())
+	}
+	if listErr == nil && items != nil {
+		for _, item := range items {
+			if !item.Enabled || item.Removed || !builtInServicePlugin(item.Package.ID) || item.Package.ID == "web-search" || item.Package.ID == mediaServicePluginID || item.Package.ID == shareServicePluginID {
+				continue
+			}
+			if len(p.dedicatedPluginToolNames(context.Background(), item.Package.ID)) > 0 {
+				dedicatedAvailable = true
+				break
+			}
+		}
+	}
+	if p.dynamicPluginAllowed() {
+		if items == nil && listErr == nil {
+			items, listErr = store.List(context.Background())
+		}
+		if listErr == nil {
+			for _, item := range items {
+				if caps, capabilityErr := p.dynamicPluginCapabilities(context.Background(), item.Package.ID); capabilityErr == nil && len(caps) > 0 {
+					dynamicAvailable = true
+					break
+				}
+			}
+		}
+	}
+	if (!web.Enabled || web.Removed) && !mediaAvailable && !shareAvailable && !dynamicAvailable && !dedicatedAvailable {
 		return nil
 	}
 	return []mcptools.Tool{
@@ -94,7 +129,13 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 		shareAvailable := p.shareServiceCapabilityAvailable(ctx)
 		available := []any{}
 		for _, i := range items {
-			if !i.Enabled || i.Removed || !ready || (i.Package.ID != "web-search" && i.Package.ID != mediaServicePluginID && i.Package.ID != shareServicePluginID) {
+			if !i.Enabled || i.Removed || !ready {
+				continue
+			}
+			if builtInServicePlugin(i.Package.ID) && i.Package.ID != "web-search" && i.Package.ID != mediaServicePluginID && i.Package.ID != shareServicePluginID {
+				if tools := p.dedicatedPluginToolNames(ctx, i.Package.ID); len(tools) > 0 {
+					available = append(available, map[string]any{"plugin": i.Package.ID, "name": i.Package.Name, "access": "dedicated_tools", "tools": tools})
+				}
 				continue
 			}
 			if i.Package.ID == shareServicePluginID {
@@ -103,19 +144,28 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 				}
 				continue
 			}
-			caps, e := store.Capabilities(ctx, i.Package.ID)
-			if e != nil {
-				continue
-			}
 			accepted := []pluginhost.Capability{}
-			for _, cap := range caps {
-				allowed := i.Package.ID == "web-search" && p.serviceWebAllowed(cap.ID) || i.Package.ID == mediaServicePluginID && p.mediaServiceCapabilityAvailable(ctx, cap.ID)
-				if cap.Discoverable && cap.Implementation == "ready" && allowed && !cap.Async {
-					if i.Package.ID == mediaServicePluginID {
-						cap = mediaServiceCapabilityView(cap)
-					}
-					accepted = append(accepted, cap)
+			switch i.Package.ID {
+			case "web-search", mediaServicePluginID:
+				caps, e := store.Capabilities(ctx, i.Package.ID)
+				if e != nil {
+					continue
 				}
+				for _, cap := range caps {
+					allowed := i.Package.ID == "web-search" && p.serviceWebAllowed(cap.ID) || i.Package.ID == mediaServicePluginID && p.mediaServiceCapabilityAvailable(ctx, cap.ID)
+					if cap.Discoverable && cap.Implementation == "ready" && allowed && !cap.Async {
+						if i.Package.ID == mediaServicePluginID {
+							cap = mediaServiceCapabilityView(cap)
+						}
+						accepted = append(accepted, cap)
+					}
+				}
+			default:
+				caps, e := p.dynamicPluginCapabilities(ctx, i.Package.ID)
+				if e != nil {
+					continue
+				}
+				accepted = caps
 			}
 			if len(accepted) > 0 {
 				available = append(available, map[string]any{"plugin": i.Package.ID, "name": i.Package.Name, "runtime": h.Status(i.Package.ID), "capabilities": accepted})
@@ -136,7 +186,15 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 		if job.Plugin == mediaServicePluginID {
 			return "", errors.New("media_service_tasks_are_not_retained")
 		}
-		if e = policy.Check(ctx, job, pluginhost.Capability{}); e != nil {
+		var taskPolicy pluginruntime.CallPolicy = policy
+		if job.Plugin != "web-search" {
+			dynamic, policyErr := p.newDynamicPluginPolicy(ctx, job.Plugin, job.Tool, job.Context)
+			if policyErr != nil {
+				return "", policyErr
+			}
+			taskPolicy = dynamic
+		}
+		if e = taskPolicy.Check(ctx, job, pluginhost.Capability{}); e != nil {
 			return "", e
 		}
 		result = job
@@ -201,25 +259,33 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 			}
 		}
 		request := pluginruntime.CallRequest{Plugin: in.Plugin, Capability: in.Capability, Context: inv, Arguments: in.Arguments}
+		var invokePolicy pluginruntime.CallPolicy = policy
+		if in.Plugin != "web-search" {
+			dynamic, policyErr := p.newDynamicPluginPolicy(ctx, in.Plugin, in.Capability, inv)
+			if policyErr != nil {
+				return "", policyErr
+			}
+			invokePolicy = dynamic
+		}
 		// An already enabled plugin may be started after host restart. This never
 		// activates a disabled installation or changes an administrator grant.
-		if e = policy.Check(ctx, pluginhost.Job{Plugin: in.Plugin, Tool: in.Capability, Context: inv, Arguments: in.Arguments}, pluginhost.Capability{}); e != nil {
+		if e = invokePolicy.Check(ctx, pluginhost.Job{Plugin: in.Plugin, Tool: in.Capability, Context: inv, Arguments: in.Arguments}, pluginhost.Capability{}); e != nil {
 			return "", e
 		}
 		installed, e := store.Installed(ctx, in.Plugin)
 		if e != nil || !installed.Enabled || installed.Removed {
 			return "", errors.New("service plugin not enabled")
 		}
-		if h.Status(in.Plugin).State == "stopped" {
-			if e = h.Start(ctx, in.Plugin, installed.Revision); e != nil {
-				return "", e
-			}
+		if e = h.EnsureStarted(ctx, in.Plugin, installed.Revision); e != nil {
+			return "", e
 		}
-		out, e := h.Invoke(ctx, request, policy)
+		out, e := h.Invoke(ctx, request, invokePolicy)
 		if e != nil {
 			if out.Job.ID != "" {
+				// The runner discards a tool's result when it returns an error.
+				// Preserve the host-issued continuation in its safe error instead.
 				b, _ := json.Marshal(map[string]any{"task_id": out.Job.ID, "state": out.Job.State, "error": "service_call_not_completed", "instruction": "Read original service task; do not resubmit with a new key."})
-				return string(b), e
+				return string(b), &serviceTaskError{jobID: out.Job.ID, cause: e}
 			}
 			return "", e
 		}
@@ -240,6 +306,17 @@ func (p *permittedTools) callServicePlugin(ctx context.Context, name string, raw
 	}
 	b, err := json.Marshal(result)
 	return string(b), err
+}
+
+type serviceTaskError struct {
+	jobID string
+	cause error
+}
+
+func (e *serviceTaskError) Unwrap() error { return e.cause }
+func (e *serviceTaskError) Error() string { return "service_call_not_completed" }
+func (e *serviceTaskError) SafeToolFailure() (string, string) {
+	return e.Error(), "插件调用未完成。使用 service_plugin_task 查询原 task_id=" + e.jobID + "，保留原 request_key，先核对结果再决定下一步。"
 }
 
 type servicePluginPolicy struct {
@@ -438,7 +515,14 @@ func (p *permittedTools) validateServiceOutput(ctx context.Context, name, result
 	if e != nil {
 		return e
 	}
-	return (servicePluginPolicy{p: p}).Check(ctx, j, pluginhost.Capability{})
+	if j.Plugin == "web-search" {
+		return (servicePluginPolicy{p: p}).Check(ctx, j, pluginhost.Capability{})
+	}
+	dynamic, err := p.newDynamicPluginPolicy(ctx, j.Plugin, j.Tool, j.Context)
+	if err != nil {
+		return err
+	}
+	return dynamic.Check(ctx, j, pluginhost.Capability{})
 }
 
 // deepSeekConfiguration is intentionally separate from the generic public-web

@@ -2,6 +2,7 @@ package pluginruntime
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -111,6 +112,18 @@ type Status struct {
 	ErrorCode string `json:"error_code,omitempty"`
 }
 
+// EnsureStartedError has a stable, model-safe failure description. It never
+// contains plugin process output, paths, provider responses, or credentials.
+type EnsureStartedError struct {
+	Code    string
+	Message string
+}
+
+func (e *EnsureStartedError) Error() string { return e.Message }
+func (e *EnsureStartedError) SafeToolFailure() (string, string) {
+	return e.Code, e.Message
+}
+
 func NewController(store *pluginhost.Store, executor pluginhost.Executor) (*Controller, error) {
 	h, err := pluginhost.New(store.Account(), executor)
 	if err != nil {
@@ -176,50 +189,146 @@ func (c *Controller) Closed() bool {
 	return c.closed
 }
 
-func (c *Controller) Start(ctx context.Context, id string, revision int) (err error) {
-	plan, err := c.startPlan(ctx, id, revision)
+// Start is the administrator action. It may enable the requested root before
+// starting it. Dependencies must already be enabled.
+func (c *Controller) Start(ctx context.Context, id string, revision int) error {
+	return c.startGraph(ctx, id, revision, true, false)
+}
+
+// EnsureStarted starts an already enabled plugin and its already enabled
+// dependencies. It never changes administrator enable intent or dispatches a
+// tool. A fully current running graph returns immediately without waiting on
+// a nested invocation that happens to hold the same lifecycle reservation.
+func (c *Controller) EnsureStarted(ctx context.Context, id string, revision int) error {
+	if err := c.enabledRoot(ctx, id, revision); err != nil {
+		return ensureStartedFailure(err)
+	}
+	if c.host.Status(id).State == "running" {
+		err := c.loadedGraphCurrent(ctx, id)
+		if err == nil {
+			return nil
+		}
+		var dependency *DependencyError
+		if !errors.As(err, &dependency) || dependency.Code != "dependency_not_running" {
+			return ensureStartedFailure(err)
+		}
+	}
+	return ensureStartedFailure(c.startGraph(ctx, id, revision, false, true))
+}
+
+func (c *Controller) enabledRoot(ctx context.Context, id string, revision int) error {
+	root, err := c.store.Installed(ctx, id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return &DependencyError{Plugin: id, Dependency: id, Code: "dependency_missing"}
+		}
 		return err
 	}
-	if err = c.beginPlan(plan); err != nil {
-		return err
+	if root.Revision != revision {
+		return pluginhost.ErrRevision
 	}
-	operationErrors := map[string]error{}
-	defer func() {
-		for _, i := range plan {
-			if i.Package.ID == id {
-				c.end(id, err)
-			} else {
-				c.end(i.Package.ID, operationErrors[i.Package.ID])
-			}
-		}
-	}()
-	// Recheck every snapshot before starting even the first dependency.
-	for _, expected := range plan {
-		current, e := c.store.Installed(ctx, expected.Package.ID)
-		if e != nil || current.Revision != expected.Revision || current.Removed || (expected.Package.ID != id && !current.Enabled) {
-			return &DependencyError{Plugin: id, Dependency: expected.Package.ID, Code: "dependency_changed"}
-		}
+	if root.Removed {
+		return &DependencyError{Plugin: id, Dependency: id, Code: "dependency_removed"}
 	}
-	started := []string{}
-	for _, i := range plan {
-		wasRunning := c.host.Status(i.Package.ID).State == "running"
-		if err = c.startOne(ctx, i.Package.ID, i.Revision); err != nil {
-			operationErrors[i.Package.ID] = err
-			if len(plan) == 1 {
-				return err
-			}
-			return &DependencyError{Plugin: id, Dependency: i.Package.ID, Code: "dependency_start_failed", Started: started}
-		}
-		if !wasRunning {
-			started = append(started, i.Package.ID)
-		}
+	if !root.Enabled {
+		return &EnsureStartedError{Code: "plugin_not_enabled", Message: "插件尚未启用，不能自动启动"}
 	}
 	return nil
 }
 
+// startGraph is the single lifecycle execution path. Administrators use a
+// fail-fast reservation and may enable only the selected root. Automatic
+// recovery waits for an overlapping graph and requires every package to have
+// retained its enabled intent.
+func (c *Controller) startGraph(ctx context.Context, id string, revision int, enableRoot, wait bool) (err error) {
+	if !enableRoot {
+		if err = c.enabledRoot(ctx, id, revision); err != nil {
+			return err
+		}
+	}
+	plan, err := c.startPlan(ctx, id, revision)
+	if err != nil {
+		return err
+	}
+	if wait {
+		err = c.waitBeginPlan(ctx, plan)
+	} else {
+		err = c.beginPlan(plan)
+	}
+	if err != nil {
+		return err
+	}
+	operationErrors := map[string]error{}
+	defer func() {
+		for _, item := range plan {
+			if item.Package.ID == id {
+				c.end(id, err)
+			} else {
+				c.end(item.Package.ID, operationErrors[item.Package.ID])
+			}
+		}
+	}()
+	for _, expected := range plan {
+		current, readErr := c.store.Installed(ctx, expected.Package.ID)
+		if readErr != nil || current.Revision != expected.Revision || current.Removed || (!enableRoot && !current.Enabled) || (expected.Package.ID != id && !current.Enabled) {
+			return &DependencyError{Plugin: id, Dependency: expected.Package.ID, Code: "dependency_changed"}
+		}
+	}
+	started := []string{}
+	for _, item := range plan {
+		wasRunning := c.host.Status(item.Package.ID).State == "running"
+		canEnable := enableRoot && item.Package.ID == id
+		if err = c.startOne(ctx, item.Package.ID, item.Revision, canEnable); err != nil {
+			operationErrors[item.Package.ID] = err
+			if len(plan) == 1 {
+				return err
+			}
+			return &DependencyError{Plugin: id, Dependency: item.Package.ID, Code: "dependency_start_failed", Started: started}
+		}
+		if !wasRunning {
+			started = append(started, item.Package.ID)
+		}
+	}
+	return c.loadedGraphCurrent(ctx, id)
+}
+
+func ensureStartedFailure(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	var safe *EnsureStartedError
+	if errors.As(err, &safe) {
+		return safe
+	}
+	var dependency *DependencyError
+	if errors.As(err, &dependency) {
+		switch dependency.Code {
+		case "dependency_missing", "dependency_removed":
+			return &EnsureStartedError{Code: "plugin_dependency_missing", Message: "所需依赖插件未安装或已移除"}
+		case "dependency_disabled":
+			return &EnsureStartedError{Code: "plugin_dependency_not_enabled", Message: "所需依赖插件尚未启用"}
+		case "dependency_not_authorized":
+			return &EnsureStartedError{Code: "plugin_authorization_required", Message: "插件尚未获得所需授权"}
+		case "dependency_configuration":
+			return &EnsureStartedError{Code: "plugin_configuration_required", Message: "插件或其依赖尚未完成配置"}
+		case "dependency_changed", "dependency_restart_required":
+			return &EnsureStartedError{Code: "plugin_configuration_changed", Message: "插件配置或版本已变化，需要由管理页重新启动"}
+		case "dependency_cycle":
+			return &EnsureStartedError{Code: "plugin_dependency_invalid", Message: "插件依赖声明存在循环"}
+		case "dependency_start_failed":
+			return &EnsureStartedError{Code: "plugin_cold_start_failed", Message: "插件冷启动未完成，可检查插件状态后重试"}
+		}
+	}
+	if errors.Is(err, pluginhost.ErrRevision) {
+		return &EnsureStartedError{Code: "plugin_configuration_changed", Message: "插件配置或版本已变化，需要由管理页重新启动"}
+	}
+	return &EnsureStartedError{Code: "plugin_cold_start_failed", Message: "插件冷启动未完成，可检查插件状态后重试"}
+}
+
 // The caller owns lifecycle reservations for this plugin and its dependencies.
-func (c *Controller) startOne(ctx context.Context, id string, revision int) (err error) {
+// enable permits the administrative root action to create enabled intent. It
+// is false for dependencies and for automatic recovery.
+func (c *Controller) startOne(ctx context.Context, id string, revision int, enable bool) (err error) {
 	i, err := c.store.Installed(ctx, id)
 	if err != nil {
 		return err
@@ -227,16 +336,31 @@ func (c *Controller) startOne(ctx context.Context, id string, revision int) (err
 	if i.Revision != revision || i.Removed {
 		return pluginhost.ErrRevision
 	}
+	enabledByThisCall := false
+	if !i.Enabled {
+		if !enable {
+			return &EnsureStartedError{Code: "plugin_not_enabled", Message: "插件尚未启用，不能自动启动"}
+		}
+		i, err = c.store.SetEnabled(ctx, id, revision, true)
+		if err != nil {
+			return err
+		}
+		enabledByThisCall = true
+	}
 	state := c.host.Status(id)
 	if state.State == "running" {
 		return nil
 	}
+	if state.State == "failed" {
+		// This only clears the host registration. A failed session with an
+		// active call cannot be closed, so the host rejects the recovery.
+		if err = c.host.Disable(id); err != nil {
+			return err
+		}
+		state = c.host.Status(id)
+	}
 	if state.State != "stopped" {
 		return errors.New("stop failed or interrupted session before restarting")
-	}
-	i, err = c.store.SetEnabled(ctx, id, revision, true)
-	if err != nil {
-		return err
 	}
 	config, err := c.store.Configuration(ctx, id)
 	if err != nil {
@@ -248,16 +372,21 @@ func (c *Controller) startOne(ctx context.Context, id string, revision int) (err
 		err = c.host.Start(ctx, id)
 	}
 	if err != nil {
-		// Cleanup must survive cancellation of the initiating HTTP request.
-		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		// Cleanup only affects this attempted session. Automatic recovery keeps
+		// persisted intent, while an administrative enable rolls back its own
+		// reservation when startup never completed.
 		if c.host.Status(id).Registered {
 			if closeErr := c.host.Disable(id); closeErr != nil {
 				return errors.Join(err, closeErr)
 			}
 		}
-		_, releaseErr := c.store.SetEnabled(cleanup, id, i.Revision, false)
-		return errors.Join(err, releaseErr)
+		if enabledByThisCall {
+			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, releaseErr := c.store.SetEnabled(cleanup, id, i.Revision, false)
+			return errors.Join(err, releaseErr)
+		}
+		return err
 	}
 	c.mu.Lock()
 	c.loaded[id] = loadedPlugin{digest: i.Digest, revision: i.Revision, configRevision: strconv.Itoa(config.Revision), packageSnapshot: i.Package}

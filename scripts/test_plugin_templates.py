@@ -30,12 +30,18 @@ def stdio(command):
   except subprocess.TimeoutExpired:p.kill();p.wait()
   p.stdout.close();p.stderr.close()
 def main():
- stdio([sys.executable,"templates/plugins/python-stdio/main.py"])
+ # -B keeps the installable package tree free from generated __pycache__ files:
+ # package verification deliberately rejects every unindexed file.
+ stdio([sys.executable,"-B","templates/plugins/python-stdio/main.py"])
+ # Unlike the Go and HTTP examples, the Python stdio template is also a
+ # complete package fixture. Verify its manifest and file index before testing
+ # the other protocol-only templates.
+ subprocess.run(["go","run","./cmd/wechat-plugin","verify","templates/plugins/python-stdio"],cwd=ROOT,check=True)
  with tempfile.TemporaryDirectory(prefix="plugin-template-") as tmp:
   exe=Path(tmp)/("sample.exe" if sys.platform=="win32" else "sample")
   subprocess.run(["go","build","-o",str(exe),"./templates/plugins/go-stdio"],cwd=ROOT,check=True)
   stdio([str(exe)])
- p=subprocess.Popen([sys.executable,"templates/plugins/http-mcp/main.py"],cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding="utf-8")
+ p=subprocess.Popen([sys.executable,"-B","templates/plugins/http-mcp/main.py"],cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding="utf-8")
  try:
   url=json.loads(p.stdout.readline())["url"]
   def call(req):

@@ -145,10 +145,8 @@ func (p *permittedTools) controlMusicService(ctx context.Context, action string)
 	if err != nil {
 		return "", err
 	}
-	if c.Status("music").State == "stopped" {
-		if err = c.Start(ctx, "music", i.Revision); err != nil {
-			return "", errors.New("music_service_plugin_start_failed")
-		}
+	if err = c.EnsureStarted(ctx, "music", i.Revision); err != nil {
+		return "", err
 	}
 	call, err := c.Invoke(ctx, pluginruntime.CallRequest{Plugin: "music", Capability: musicServiceControlCapability, Context: policy.base.invocation, Arguments: policy.arguments}, policy)
 	if err != nil {

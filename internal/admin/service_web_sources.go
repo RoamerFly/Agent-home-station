@@ -115,6 +115,8 @@ func (s servicePluginPolicy) validatePublicWebRead(ctx context.Context, j plugin
 				allowed = u.Query().Encode() == (url.Values{"q": {term}, "format": {"rss"}}).Encode()
 			case "www.so.com/s":
 				allowed = u.Query().Encode() == (url.Values{"q": {term}}).Encode()
+			case "search.brave.com/search":
+				allowed = u.Query().Encode() == (url.Values{"q": {term}}).Encode()
 			}
 			break
 		}
@@ -137,6 +139,8 @@ func (s servicePluginPolicy) validatePublicWebRead(ctx context.Context, j plugin
 			if u.Host == "www.bing.com" && u.Path == "/search" {
 				allowed = u.Query().Encode() == (url.Values{"q": {query}, "format": {"rss"}}).Encode()
 			} else if u.Host == "www.so.com" && u.Path == "/s" {
+				allowed = u.Query().Encode() == (url.Values{"q": {query}}).Encode()
+			} else if u.Host == "search.brave.com" && u.Path == "/search" {
 				allowed = u.Query().Encode() == (url.Values{"q": {query}}).Encode()
 			}
 		}

@@ -65,10 +65,8 @@ func (p *permittedTools) prepareMusic(ctx context.Context, observedPath string, 
 	if err != nil {
 		return err
 	}
-	if c.Status("music").State == "stopped" {
-		if err = c.Start(ctx, "music", i.Revision); err != nil {
-			return err
-		}
+	if err = c.EnsureStarted(ctx, "music", i.Revision); err != nil {
+		return err
 	}
 	call, err := c.Invoke(ctx, pluginruntime.CallRequest{Plugin: "music", Capability: musicPreparationCapability, Context: base.invocation, Arguments: args}, policy)
 	if err != nil {

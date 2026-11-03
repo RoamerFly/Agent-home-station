@@ -4,7 +4,24 @@
 
 ## 调用与交付
 
-本地运行目标为 MCP stdio，远程支持 MCP HTTP 和旧 HTTP API 适配。宿主创建账号、会话、请求者、目的、来源版本和幂等键上下文；模型工具参数不能覆盖。插件不能发送微信或读取其他账号。素材仅通过宿主授予的引用和目录交付。
+本地可执行包当前只支持 MCP stdio。包清单可校验 `mcp-http` 和 `http-adapter` 声明，但通用执行器尚未实现它们的受控传输、端点批准与凭据代理；它们不能被标记为可调用或作为 MCP stdio 的替代。宿主创建账号、会话、请求者、目的、来源版本和幂等键上下文；模型工具参数不能覆盖。插件不能发送微信或读取其他账号。素材仅通过宿主授予的引用和目录交付。
+
+通用动态工具目录只公开受信所有者在**当前账号、当前会话**可调用的 `mcp-stdio` 能力：能力必须 `ready`、`discoverable:true`、非异步，且 `side_effect` 只能为 `read`、`compute` 或省略（纯计算）。零权限能力可直接进入目录。`network` 能力只有一种额外例外：权限必须精确为 `["network"]`，并且清单中只能有一条与该能力绑定的固定公开 HTTPS 路由；路由不得使用可配置端点、凭据、静态请求头或 Referer。插件只能在本次调用内经 `wechat/http_route` 提交一次该路由，`body` 必须与宿主已授权的 capability 参数完全同构；插件不能选择 URL、请求头、认证信息或替换 body。宿主保留调用方上下文、`max_bytes`、`timeout_seconds` 和取消边界，并在实际提交前原子保留；超时或结果未知也不会用同一 Job 再次提交。
+
+最小 network 声明与调用形状如下（地址仅为示例，必须替换为实际公开固定 HTTPS 接口）：
+
+```json
+// capabilities.json
+{"id":"public.lookup","implementation":"ready","discoverable":true,"async":false,"side_effect":"read","permissions":["network"],"input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]},"output_schema":{"type":"object"}}
+// plugin.json 的 http_routes
+{"id":"public-lookup","endpoint":"https://api.example.invalid/lookup","permission":"network","capabilities":["public.lookup"]}
+// 插件在本次 tools/call 中请求宿主服务
+{"method":"wechat/http_route","params":{"route":"public-lookup","body":{"query":"ocean"},"max_bytes":65536,"timeout_seconds":20}}
+```
+
+这不是任意联网、下载、认证接口或重试权限：`mcp-http`、`http-adapter`、带凭据/配置端点/请求头/Referer 的路由，以及 network 以外的 device、workspace、model、媒体和发送能力仍必须由专用宿主适配器实现。异步任务、写入、媒体成品、设备和工作区能力也必须由对应适配器验证来源、取消和结果交付；仅修改 capability 声明不会取得这些权限。
+
+Windows 本地 stdio 包始终经宿主受管的 LPAC broker 运行；Python 运行时、`pythonw.exe` 和 broker 脚本是部署提供的可信运行时，不由插件包、配置或模型参数选择。Linux 本地 stdio 包需要 `bwrap`。缺少这些宿主前提时，插件必须显示为不可执行，而不是退回到非隔离进程。
 
 异步结果区分 pending、running、completed、failed、cancelled、needs_review。重启保留插件版本、配置版本、请求约束、远端 ID 和原幂等键；结果未知先查询，不重提。完成生成不代表投递完成。命名声线必须绑定资源版本，不得默认替换。
 

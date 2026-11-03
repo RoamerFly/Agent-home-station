@@ -64,6 +64,8 @@ func failureSummary(err error) string {
 			return "没有匹配的公开搜索结果，可换关键词或来源"
 		case "search_no_relevant_results":
 			return "搜索返回了无关内容，备用来源也未取得相关结果；未把这些内容当作目标作品"
+		case "search_sources_unavailable":
+			return "本次公开作品检索的来源均暂时不可读。可稍后续查或改用已授权的其他来源；尚未确认作品是否存在"
 		case "redirect_limit":
 			return "目标跳转次数超过限制"
 		case "media_download_incomplete":

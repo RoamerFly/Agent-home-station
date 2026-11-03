@@ -117,10 +117,8 @@ func (m *Manager) planMobileWithPlugin(ctx context.Context, task mobile.Task, ob
 	if err != nil || !installed.Enabled || installed.Removed {
 		return mobile.Step{}, errors.New("device_planner_plugin_required")
 	}
-	if controller.Status(mobilePlannerPluginID).State == "stopped" {
-		if err := controller.Start(ctx, mobilePlannerPluginID, installed.Revision); err != nil {
-			return mobile.Step{}, errors.New("device_planner_plugin_required")
-		}
+	if err := controller.EnsureStarted(ctx, mobilePlannerPluginID, installed.Revision); err != nil {
+		return mobile.Step{}, err
 	}
 	call, err := controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: mobilePlannerPluginID, Capability: mobilePlannerCapability, Context: policy.invocation, Arguments: policy.arguments}, policy)
 	if err != nil {

@@ -861,10 +861,8 @@ func (s *mobileWorkflowService) invoke(ctx context.Context, op string, input map
 	if err != nil {
 		return nil, err
 	}
-	if controller.Status(mobileDevicePluginID).State == "stopped" {
-		if err = controller.Start(ctx, mobileDevicePluginID, installed.Revision); err != nil {
-			return nil, err
-		}
+	if err = controller.EnsureStarted(ctx, mobileDevicePluginID, installed.Revision); err != nil {
+		return nil, err
 	}
 	s.stateMu.Lock()
 	snapshot, _, err := s.load(true)

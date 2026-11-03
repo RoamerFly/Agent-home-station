@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "sections": [
+    {"id": "configuration", "title": "配置", "component": "configuration"},
+    {"id": "diagnostics", "title": "状态与日志", "component": "diagnostics"}
+  ]
+}

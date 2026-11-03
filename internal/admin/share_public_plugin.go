@@ -315,10 +315,8 @@ func (p *publicSharePolicy) resolve(ctx context.Context) (publicShareObservation
 	if err != nil {
 		return result, j, err
 	}
-	if h.Status(j.Plugin).State == "stopped" {
-		if err = h.Start(ctx, j.Plugin, i.Revision); err != nil {
-			return result, j, errors.New("share_plugin_start_failed")
-		}
+	if err = h.EnsureStarted(ctx, j.Plugin, i.Revision); err != nil {
+		return result, j, err
 	}
 	args, _ := json.Marshal(map[string]any{"url": p.requestedURL, "video_required": p.videoRequired})
 	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: args}, p)

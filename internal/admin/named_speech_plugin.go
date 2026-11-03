@@ -324,10 +324,8 @@ func (p *namedSpeechPluginPolicy) synthesize(ctx context.Context) (namedSpeechBr
 	if err != nil {
 		return namedSpeechBrokerResult{}, err
 	}
-	if c.Status("speech").State == "stopped" {
-		if err = c.Start(ctx, "speech", i.Revision); err != nil {
-			return namedSpeechBrokerResult{}, errors.New("named_speech_plugin_start_failed")
-		}
+	if err = c.EnsureStarted(ctx, "speech", i.Revision); err != nil {
+		return namedSpeechBrokerResult{}, err
 	}
 	call, err := c.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: p.arguments}, p)
 	if err != nil || call.Job.State != "completed" {

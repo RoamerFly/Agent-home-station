@@ -33,6 +33,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(r["fallback_used"])
         self.assertEqual([i["url"] for i in r["items"]], ["https://www.bilibili.com/video/BV0000000002/"])
 
+    def test_bilibili_search_uses_third_public_index_after_two_transport_failures(self):
+        calls = []
+        def get(url, *_):
+            calls.append(url)
+            if "api.bilibili.com" in url or "bing.com" in url or "so.com" in url:
+                return {"ok": False, "error": "http_status"}
+            self.assertIn("search.brave.com/search", url)
+            return response('<h3><a href="https://www.bilibili.com/video/BV0000000003/">歌手 歌名 原唱</a></h3>', url)
+        result = plugin.search({"source": "bilibili", "query": "歌手 歌名 原唱"}, get)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["fallback_used"])
+        self.assertEqual(result["source"], calls[-1])
+        self.assertEqual(result["items"][0]["url"], "https://www.bilibili.com/video/BV0000000003/")
+        self.assertEqual(len(calls), 4)
+
+    def test_all_public_search_sources_report_retryable_transport_failure(self):
+        result = plugin.search({"source": "bilibili", "query": "歌手 歌名"}, lambda *_: {"ok": False, "error": "http_status"})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "search_sources_unavailable")
+
     def test_bilibili_audio_page_uses_public_search_with_exact_source_and_cursor(self):
         args = {"query": "合成歌手 合成作品", "source": "bilibili", "offset": 20, "count": 45, "limit": 1}
         def get(url, *_):

@@ -23,6 +23,23 @@ func TestWebServiceCapabilityMapsAudioAliasToInstalledSearch(t *testing.T) {
 	}
 }
 
+func TestWebSearchAllowsOnlyDeclaredThirdPublicIndex(t *testing.T) {
+	_, p := trustedAgent(t)
+	args := json.RawMessage(`{"query":"歌手 歌名","source":"bilibili"}`)
+	policy := servicePluginPolicy{p: p}
+	job := pluginhost.Job{Tool: "web.search", Arguments: args}
+	allowed := "https://search.brave.com/search?q=%E6%AD%8C%E6%89%8B+%E6%AD%8C%E5%90%8D+site%3Abilibili.com%2Fvideo"
+	if err := policy.validatePublicWebRead(t.Context(), job, allowed, 2<<20, 20); err != nil {
+		t.Fatal("declared fallback index rejected", err)
+	}
+	if err := policy.validatePublicWebRead(t.Context(), job, "https://search.brave.com/search?q=changed", 2<<20, 20); err == nil {
+		t.Fatal("changed fallback query accepted")
+	}
+	if err := policy.validatePublicWebRead(t.Context(), job, "https://example.test/search?q=anything", 2<<20, 20); err == nil {
+		t.Fatal("unlisted public index accepted")
+	}
+}
+
 func installPublicWebFixture(t *testing.T, f *webFixture) (*pluginhost.Store, pluginhost.InstalledPackage) {
 	t.Helper()
 	s, err := f.manager.packageStore()

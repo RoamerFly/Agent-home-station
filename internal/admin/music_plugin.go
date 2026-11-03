@@ -378,10 +378,8 @@ func (p *musicPluginPolicy) generate(ctx context.Context) (musicPluginResult, er
 	if err != nil {
 		return musicPluginResult{}, err
 	}
-	if c.Status("music").State == "stopped" {
-		if err = c.Start(ctx, "music", i.Revision); err != nil {
-			return musicPluginResult{}, errors.New("music_plugin_start_failed")
-		}
+	if err = c.EnsureStarted(ctx, "music", i.Revision); err != nil {
+		return musicPluginResult{}, err
 	}
 	call, err := c.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: p.arguments}, p)
 	if err != nil || call.Job.State != "completed" {

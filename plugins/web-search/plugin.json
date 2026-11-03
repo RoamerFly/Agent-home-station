@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "web-search",
   "name": "联网检索",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -31,16 +31,16 @@
     }
   ],
   "files": {
-    "capabilities.json": "d71bf0f544d1e273d3da2c544ae8589ca186595d5f9d2114f5f2c8706dfa7193",
-    "CHANGELOG.md": "bde7691ec269846e78025bb87d79c478bfab7107e86f9e3010e353c7d6b1d2d9",
+    "capabilities.json": "36aaffa194b95f94b0f4db3ae24b8ccfa535653732d43113effe2af231868aa7",
+    "CHANGELOG.md": "9cdefb06fd3d96bba2066aa692a7afd1918df2c7966098bec0b0236a49cbec31",
     "config.schema.json": "80582050b4c236e84d0c6293e485d1aa08a6554eff9c391d036a695c0e17728f",
     "MIGRATION.md": "3696d2e8f707f42b4a81bfcc6a0a58e9141fcce6b56b323ff9ae0b57eeaf868e",
     "PERMISSIONS.md": "4b7313bae92ba57d9a8786fd3996a505c168308ae8c5c9debb62b3ac17ac334f",
-    "README.md": "b111c0b075d647a38e1a213ecf2b7fad4fb61e71c455be396b9ffdfd6a57db39",
-    "runtime/main.py": "dcc44b86ff0843d90050b742c536d2a98a2574f5c5facbbfd1f95157d756047d",
+    "README.md": "71c539d3034fc3f27f6b4fe5d616a9a3632b17435d986180c35e1175259103f8",
+    "runtime/main.py": "ce3102ae883d74f9ebc34664aef0349c0317276190ccc6c9289f8c58f4ad211c",
     "runtime/README.md": "71de7c1acc9eb5cfd5c8e14243cc18ddaeaf52bcbad119c66bea6207a9dffbe3",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
-    "tests/test_runtime.py": "2dc2cc79d4cf174988c83aeb9bc8171dd228a445fb22a4dc20828581874be090",
+    "tests/test_runtime.py": "49a1f7b15b30b3877982e32106f14962d16ee2d27576f50bed0ed1bb6105042c",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   }
 }

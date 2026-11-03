@@ -333,10 +333,8 @@ func (p *mediaAudioObservationPolicy) observe(ctx context.Context) (mediaAudioOb
 	if err != nil {
 		return mediaAudioObservation{}, err
 	}
-	if controller.Status(job.Plugin).State == "stopped" {
-		if err = controller.Start(ctx, job.Plugin, installed.Revision); err != nil {
-			return mediaAudioObservation{}, errors.New("media_audio_observation_start_failed")
-		}
+	if err = controller.EnsureStarted(ctx, job.Plugin, installed.Revision); err != nil {
+		return mediaAudioObservation{}, err
 	}
 	call, err := controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: p.arguments}, p)
 	if err != nil || call.Job.State != "completed" {

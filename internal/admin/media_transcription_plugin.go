@@ -444,10 +444,8 @@ func (p *mediaTranscriptionPolicy) transcribe(ctx context.Context) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if controller.Status(j.Plugin).State == "stopped" {
-		if err = controller.Start(ctx, j.Plugin, installed.Revision); err != nil {
-			return "", errors.New("media_plugin_start_failed")
-		}
+	if err = controller.EnsureStarted(ctx, j.Plugin, installed.Revision); err != nil {
+		return "", err
 	}
 	call, err := controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: p.arguments}, p)
 	if err != nil {

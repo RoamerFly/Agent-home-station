@@ -110,6 +110,9 @@ func (c *Controller) loadedGraphCurrent(ctx context.Context, root string) error 
 		if !ok || loaded.digest != i.Digest || loaded.revision != i.Revision || loaded.configRevision != strconv.Itoa(config.Revision) || !reflect.DeepEqual(loaded.packageSnapshot, i.Package) {
 			return &DependencyError{Plugin: root, Dependency: id, Code: "dependency_restart_required"}
 		}
+		if c.host.Status(id).State != "running" {
+			return &DependencyError{Plugin: root, Dependency: id, Code: "dependency_not_running"}
+		}
 		for _, dep := range i.Package.Dependencies {
 			if err := visit(dep.ID); err != nil {
 				return err
@@ -125,6 +128,10 @@ func (c *Controller) loadedGraphCurrent(ctx context.Context, root string) error 
 func (c *Controller) beginPlan(plan []pluginhost.InstalledPackage) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.beginPlanLocked(plan)
+}
+
+func (c *Controller) beginPlanLocked(plan []pluginhost.InstalledPackage) error {
 	if c.closed {
 		return errors.New("plugin controller closed")
 	}
@@ -137,4 +144,31 @@ func (c *Controller) beginPlan(plan []pluginhost.InstalledPackage) error {
 		c.busy[i.Package.ID] = true
 	}
 	return nil
+}
+
+// waitBeginPlan uses the same graph reservation as explicit administration,
+// but waits for an overlapping start to finish. It reserves nothing while it
+// waits, so cancellation cannot leave a plugin lifecycle lock behind.
+func (c *Controller) waitBeginPlan(ctx context.Context, plan []pluginhost.InstalledPackage) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.mu.Lock()
+		err := c.beginPlanLocked(plan)
+		changed := c.changed
+		c.mu.Unlock()
+		if err == nil {
+			return nil
+		}
+		var dependency *DependencyError
+		if !errors.As(err, &dependency) || dependency.Code != "dependency_busy" {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
 }

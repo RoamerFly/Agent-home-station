@@ -285,48 +285,60 @@ def public_search(args, get, bilibili_only=False):
         terms = [t for t in re.findall(r"[^\W_]+", query.casefold()) if t not in qualifiers]
         text = (item["title"] + " " + item["summary"]).casefold()
         return bool(terms) and all(t in text for t in terms)
-    url = "https://www.bing.com/search?" + urllib.parse.urlencode({"q": term, "format": "rss"})
-    page, failure = read_page(get, url, args)
-    items, seen = [], set()
-    source = url
-    if not failure:
-        body, _, source = page
-        try:
-            # ElementTree does not resolve external entities.
-            root = ET.fromstring(body)
-            for item in root.findall("./channel/item"):
-                try:
-                    link = public_url(clean(item.findtext("link", "")))
-                except ValueError:
-                    continue
-                if link in seen:
-                    continue
-                seen.add(link)
-                summary = PageText()
-                summary.feed(item.findtext("description", ""))
-                items.append({"url": link, "title": clean(item.findtext("title", "")), "summary": clean(" ".join(summary.parts))})
-        except ET.ParseError:
-            items = []
-    items = [item for item in items if matches(item)]
-    fallback = not items
-    if fallback:
-        secondary = "https://www.so.com/s?" + urllib.parse.urlencode({"q": term})
-        page, failure = read_page(get, secondary, args)
+    indexes = [
+        ("rss", "https://www.bing.com/search?" + urllib.parse.urlencode({"q": term, "format": "rss"})),
+        ("html", "https://www.so.com/s?" + urllib.parse.urlencode({"q": term})),
+        # This is a normal public index, not a mirror or a provider bypass.
+        # It is only used after the first two public indexes fail or have no
+        # matching candidates.
+        ("html", "https://search.brave.com/search?" + urllib.parse.urlencode({"q": term})),
+    ]
+    source, items, readable = indexes[0][1], [], False
+    selected = 0
+    for index, (format_name, url) in enumerate(indexes):
+        page, failure = read_page(get, url, args)
         if failure:
-            return failure
-        body, _, source = page
-        parser = SearchText()
-        parser.feed(body.decode("utf8", errors="replace"))
-        items = [item for item in parser.results if matches(item)]
+            continue
+        readable = True
+        body, _, final = page
+        candidates, seen = [], set()
+        if format_name == "rss":
+            try:
+                # ElementTree does not resolve external entities.
+                root = ET.fromstring(body)
+                for item in root.findall("./channel/item"):
+                    try:
+                        link = public_url(clean(item.findtext("link", "")))
+                    except ValueError:
+                        continue
+                    if link in seen:
+                        continue
+                    seen.add(link)
+                    summary = PageText()
+                    summary.feed(item.findtext("description", ""))
+                    candidates.append({"url": link, "title": clean(item.findtext("title", "")), "summary": clean(" ".join(summary.parts))})
+            except ET.ParseError:
+                candidates = []
+        else:
+            parser = SearchText()
+            parser.feed(body.decode("utf8", errors="replace"))
+            candidates = parser.results
+        candidates = [item for item in candidates if matches(item)]
+        if candidates:
+            source, items, selected = final, candidates, index
+            break
     if not items:
-        return {"ok": False, "error": "search_no_relevant_results"}
+        # A caller can back off/retry only when every permitted public index
+        # was unavailable. A successful empty query is actionable as a query
+        # refinement, not as a transport failure.
+        return {"ok": False, "error": "search_no_relevant_results" if readable else "search_sources_unavailable"}
     items = items[:count]
     offset, limit = integer(args, "offset", 0, 0), integer(args, "limit", 8, 1)
     end = min(len(items), offset + limit)
     if offset > len(items):
         raise ValueError("offset_outside_results")
     return {"ok": True, "backend": "bilibili" if bilibili_only else "public", "query": query, "source": source, "items": items[offset:end],
-            "fallback_used": fallback or bilibili_only,
+            "fallback_used": selected > 0 or bilibili_only,
             "requested_count": count, "effective_provider_count": len(items), "requested_limit": limit, "provider_items": len(items), "next_offset": end if end < len(items) else None,
             "provider_page_exhausted": end == len(items), "untrusted_external_content": True}
 
@@ -534,7 +546,7 @@ class Wire:
                     if not isinstance(self.configuration, dict):
                         raise ValueError("invalid_configuration")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.3.1"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.3.2"}}
                 elif method == "ping" and initialized:
                     pass
                 elif method == "tools/call" and initialized:

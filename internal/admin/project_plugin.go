@@ -644,10 +644,8 @@ func (p *permittedTools) callProjectPlugin(ctx context.Context, name string, raw
 	if err != nil || !ready {
 		return "", errors.New("project_plugin_runtime_unavailable")
 	}
-	if controller.Status(projectPluginID).State == "stopped" {
-		if err = controller.Start(ctx, projectPluginID, policy.installed.Revision); err != nil {
-			return "", err
-		}
+	if err = controller.EnsureStarted(ctx, projectPluginID, policy.installed.Revision); err != nil {
+		return "", err
 	}
 	call, err := controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: projectPluginID, Capability: projectPluginCapability(policy.tool.Permission), Context: policy.invocation, Arguments: policy.arguments}, policy)
 	if err != nil {

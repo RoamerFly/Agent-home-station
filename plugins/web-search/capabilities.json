@@ -4,7 +4,7 @@
     {
       "id": "web.search",
       "implementation": "ready",
-      "description": "按配置搜索公共索引或 DeepSeek 官方检索；默认请求6个候选，可指定候选数与返回页大小。请求参数不会被静默压缩，也不会自动切换后端。",
+      "description": "联网搜索公开网页或 B站作品候选。默认请求6个候选，可指定候选数与返回页大小。选择 bilibili 时先查 B站公开搜索，临时不可用或无匹配时依次改查独立公开索引并保留实际候选。请求参数不会被静默压缩，也不会切换管理员配置的通用后端。",
       "permissions": [
         "network"
       ],
@@ -56,7 +56,7 @@
     {
       "id": "web.read",
       "implementation": "ready",
-      "description": "读取公共网页正文，默认10000字符，可分页并校验内容哈希。",
+      "description": "联网读取公共网页正文，默认10000字符，可分页并校验内容哈希。音轨或视频下载请使用 web_media_download。",
       "permissions": [
         "network"
       ],

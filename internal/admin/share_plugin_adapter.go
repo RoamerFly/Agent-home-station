@@ -532,10 +532,8 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 	if err = p.Check(ctx, job, pluginhost.Capability{}); err != nil {
 		return source, err
 	}
-	if h.Status("share-reader").State == "stopped" {
-		if err = h.Start(ctx, "share-reader", i.Revision); err != nil {
-			return source, errors.New("share_plugin_start_failed")
-		}
+	if err = h.EnsureStarted(ctx, "share-reader", i.Revision); err != nil {
+		return source, err
 	}
 	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: raw}, p)
 	if err != nil {

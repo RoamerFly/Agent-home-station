@@ -279,10 +279,8 @@ func resolvePublicShareFacade(ctx context.Context, policy *publicSharePolicy, in
 	if err != nil {
 		return result, job, err
 	}
-	if h.Status(job.Plugin).State == "stopped" {
-		if err = h.Start(ctx, job.Plugin, installed.Revision); err != nil {
-			return result, job, errors.New("share_plugin_start_failed")
-		}
+	if err = h.EnsureStarted(ctx, job.Plugin, installed.Revision); err != nil {
+		return result, job, err
 	}
 	args, _ := json.Marshal(map[string]any{"url": policy.message.Link.URL, "video_required": *policy.message.AppMessageType == 4, "offset": in.Offset, "limit": in.Limit, "candidate_offset": in.CandidateOffset, "candidate_limit": in.CandidateLimit, "timeout_seconds": in.timeoutFor("share.resolve_public")})
 	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: args}, policy)

@@ -1,6 +1,6 @@
 # 联网检索
 
-独立 Python MCP stdio 服务，提供 `web.search`、`web.read` 和 `web.discover`。`search_backend=public` 使用 Bing RSS，失败或不相关时使用 360 公共搜索；`search_backend=deepseek` 只请求宿主声明的 DeepSeek 官方 `https://api.deepseek.com/v1/tools/search` 路由，使用宿主持有的 `search_key`。网页读取提取正文并支持字符分页和内容哈希校验。只需项目内 Python 标准库，不需要模型接口或额外依赖。
+独立 Python MCP stdio 服务，提供 `web.search`、`web.read` 和 `web.discover`。`search_backend=public` 依次使用 Bing RSS、360 与 Brave 公共搜索，只在前一来源不可用或没有相关候选时继续。B站音源搜索先用 B站公开搜索，再使用同一组独立公开索引。`search_backend=deepseek` 只请求宿主声明的 DeepSeek 官方 `https://api.deepseek.com/v1/tools/search` 路由，使用宿主持有的 `search_key`。网页读取提取正文并支持字符分页和内容哈希校验。只需项目内 Python 标准库，不需要模型接口或额外依赖。
 
 后端切换必须由管理员配置，插件和 Agent 参数均不能改写。DeepSeek 的既有请求结构为 `{"query":...,"count":...,"need_content":false}`；工具默认 `count=6`，显式候选数会原样交给服务商，不会静默压缩或退回公共索引。响应会报告 `backend`、`requested_count` 与 `effective_provider_count`；服务商若拒绝某个参数，会返回实际失败而不是被伪装成一般不可用。
 

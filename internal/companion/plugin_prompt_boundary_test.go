@@ -80,7 +80,72 @@ func TestNativeChitchatDoesNotLoadPluginProviderTutorials(t *testing.T) {
 					t.Errorf("core source/voice/delivery constraint missing: %q", core)
 				}
 			}
+			for _, instruction := range []string{"需要的能力未列出", "依据实际错误修正参数", "已取得的素材、任务和回执先查询或复用"} {
+				if !strings.Contains(system, instruction) {
+					t.Errorf("native discovery guidance missing: %q", instruction)
+				}
+			}
 		})
+	}
+}
+
+type guidedDiscoveryCatalog struct{ calls []string }
+
+func (*guidedDiscoveryCatalog) List(context.Context) ([]mcptools.Tool, error) {
+	return []mcptools.Tool{{Name: "web_audio_search", Description: "Search public audio sources by song title", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`)}}, nil
+}
+func (c *guidedDiscoveryCatalog) Call(_ context.Context, name string, _ json.RawMessage) (string, error) {
+	c.calls = append(c.calls, name)
+	return `{"items":[{"title":"synthetic result"}]}`, nil
+}
+
+type guidedDiscoveryModel struct {
+	t    *testing.T
+	step int
+}
+
+func (*guidedDiscoveryModel) Chat(context.Context, string, []map[string]string) (string, error) {
+	panic("native functions required")
+}
+func (m *guidedDiscoveryModel) ChatFunctions(_ context.Context, system string, _ []map[string]string, tools []mcptools.Tool) (string, error) {
+	m.step++
+	has := func(name string) bool {
+		for _, tool := range tools {
+			if tool.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	switch m.step {
+	case 1:
+		if !strings.Contains(system, nativeToolDiscoveryPolicy) || has("web_audio_search") {
+			m.t.Fatal("native turn exposed provider schema before discovery or omitted discovery policy")
+		}
+		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"audio search"}}`, nil
+	case 2:
+		if !has("web_audio_search") {
+			m.t.Fatal("discovered audio schema not exposed")
+		}
+		return `{"action":"tool","tool":"web_audio_search","arguments":{"query":"synthetic song"}}`, nil
+	default:
+		return `{"action":"reply","messages":["找到了"]}`, nil
+	}
+}
+
+func TestNativeDiscoveryGuidesSearchWithoutProviderTutorial(t *testing.T) {
+	model := &guidedDiscoveryModel{t: t}
+	catalog := &guidedDiscoveryCatalog{}
+	e, err := NewPreview(enabledConfig(), model, "base persona")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Tools, e.MaxToolCalls = catalog, 3
+	if _, err = e.Respond(context.Background(), Input{Mode: "direct", Text: "帮我找一首歌", Preview: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.calls) != 1 || catalog.calls[0] != "web_audio_search" {
+		t.Fatalf("discovery did not lead to one real search: %#v", catalog.calls)
 	}
 }
 

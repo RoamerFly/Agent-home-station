@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -258,6 +259,7 @@ func TestLiveBilibiliAudioAliasFromGroup(t *testing.T) {
 	}
 	f, p := trustedAgent(t)
 	const group = "example@chatroom"
+	f.manager.config.Companion.Enabled = true
 	f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: group, Mode: "mention"})
 	f.manager.config.Companion.Permissions.SendFile = true
 	p.SetTrace(companion.Input{Account: "test", Channel: "wechat", Thread: group, Sender: "example-member", TraceID: "audio-search", IsGroup: true})
@@ -298,8 +300,46 @@ func TestLiveBilibiliAudioAliasFromGroup(t *testing.T) {
 	if json.Unmarshal([]byte(raw), &result) != nil || result.Job.Result.Backend != "bilibili" || len(result.Job.Result.Items) == 0 {
 		t.Fatal("no verified Bilibili candidates")
 	}
+	t.Logf("public search backend=%s source=%s fallback=%t", result.Job.Result.Backend, result.Job.Result.Source, result.Job.Result.Fallback)
 	for _, item := range result.Job.Result.Items {
 		t.Logf("public candidate %s %s", item.Title, item.URL)
+	}
+	// This is intentionally opt-in: it talks only to public Bilibili endpoints
+	// from a temporary test account and retains the bytes in memory.  It does
+	// not stage a media asset, submit a WeChat send, call a model, or use a
+	// stored user link.  Keep the real transport result distinct from the
+	// synthetic runtime contract above: public pages can temporarily decline an
+	// anonymous progressive stream without changing the search implementation.
+	if os.Getenv("WECHAT_TEST_BILI_AUDIO") == "1" {
+		candidate := result.Job.Result.Items[0]
+		video, audioErr := mcptools.DownloadPublicVideoAudio(ctx, candidate.URL, 32<<20)
+		if audioErr != nil {
+			var webErr *mcptools.WebError
+			if errors.As(audioErr, &webErr) {
+				t.Fatalf("public audio probe unavailable: source=%s stage=%s code=%s http=%d", candidate.URL, webErr.Stage, webErr.Code, webErr.Status)
+			}
+			t.Fatalf("public audio probe unavailable: source=%s error=%v", candidate.URL, audioErr)
+		}
+		if len(video.Data) == 0 || video.DurationMS <= 0 || video.ContentType == "" || video.PageURL == "" {
+			t.Fatalf("public audio probe returned incomplete media: source=%s bytes=%d duration_ms=%d content_type=%q page=%q", candidate.URL, len(video.Data), video.DurationMS, video.ContentType, video.PageURL)
+		}
+		ffprobe, findErr := exec.LookPath("ffprobe")
+		if findErr != nil {
+			t.Fatalf("public audio probe read a container but ffprobe is unavailable for audio-stream verification: %v", findErr)
+		}
+		probe := exec.CommandContext(ctx, ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_type,codec_name", "-of", "json", "pipe:0")
+		probe.Stdin = bytes.NewReader(video.Data)
+		probeOut, probeErr := probe.Output()
+		var streams struct {
+			Streams []struct {
+				CodecType string `json:"codec_type"`
+				CodecName string `json:"codec_name"`
+			} `json:"streams"`
+		}
+		if probeErr != nil || json.Unmarshal(probeOut, &streams) != nil || len(streams.Streams) != 1 || streams.Streams[0].CodecType != "audio" || streams.Streams[0].CodecName == "" {
+			t.Fatalf("public audio probe container has no decodable audio stream: source=%s error=%v", candidate.URL, probeErr)
+		}
+		t.Logf("public audio probe source=%s title=%q page=%s bytes=%d duration_ms=%d content_type=%s audio_codec=%s", candidate.URL, candidate.Title, video.PageURL, len(video.Data), video.DurationMS, video.ContentType, streams.Streams[0].CodecName)
 	}
 	if shared := os.Getenv("WECHAT_TEST_BILI_SHARE"); shared != "" {
 		f.manager.native = &fakeTools{fakeNative: f.native}

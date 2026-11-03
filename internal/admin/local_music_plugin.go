@@ -673,10 +673,8 @@ func (p *localMusicPluginPolicy) invoke(ctx context.Context) ([]byte, string, in
 	if err != nil {
 		return nil, "", 0, err
 	}
-	if c.Status("music").State == "stopped" {
-		if err = c.Start(ctx, "music", i.Revision); err != nil {
-			return nil, "", 0, errors.New("music_local_plugin_start_failed")
-		}
+	if err = c.EnsureStarted(ctx, "music", i.Revision); err != nil {
+		return nil, "", 0, err
 	}
 	call, err := c.Invoke(ctx, pluginruntime.CallRequest{Plugin: "music", Capability: localMusicCapability, Context: p.invocation, Arguments: p.arguments}, p)
 	if err != nil {

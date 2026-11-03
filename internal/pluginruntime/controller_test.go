@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -228,5 +229,205 @@ func TestLiveInstalledControllerConfigurationAndRestart(t *testing.T) {
 	i, _ = s.Installed(ctx, i.Package.ID)
 	if i.Enabled || next.Status(i.Package.ID).State != "stopped" {
 		t.Fatal("stop not persisted")
+	}
+}
+
+type ensureSession struct {
+	invocationSession
+	alive  bool
+	closed *int
+}
+
+func (s *ensureSession) Alive() bool { return s.alive }
+func (s *ensureSession) Close() error {
+	if s.closed != nil {
+		*s.closed++
+	}
+	return nil
+}
+
+func TestEnsureStartedPreservesEnableIntentAndRecoversFailedSession(t *testing.T) {
+	store, installed := installedFixture(t)
+	starts, closed := 0, 0
+	controller, err := NewController(store, startFunc(func(context.Context, pluginhost.Package, pluginhost.Grant) (pluginhost.Session, error) {
+		starts++
+		if starts == 1 {
+			return &ensureSession{alive: false, closed: &closed}, nil
+		}
+		return &ensureSession{alive: true}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	if err = controller.EnsureStarted(t.Context(), installed.Package.ID, installed.Revision); err == nil {
+		t.Fatal("disabled plugin auto-started")
+	} else {
+		var safe interface{ SafeToolFailure() (string, string) }
+		if !errors.As(err, &safe) {
+			t.Fatalf("disabled start was not safe: %v", err)
+		}
+		code, _ := safe.SafeToolFailure()
+		if code != "plugin_not_enabled" {
+			t.Fatalf("disabled start code = %q", code)
+		}
+	}
+	current, err := store.Installed(t.Context(), installed.Package.ID)
+	if err != nil || current.Enabled || current.Revision != installed.Revision || starts != 0 {
+		t.Fatal("disabled ensure changed persisted state", current, starts, err)
+	}
+	current, err = store.SetEnabled(t.Context(), installed.Package.ID, current.Revision, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = controller.EnsureStarted(t.Context(), current.Package.ID, current.Revision); err == nil || controller.Status(current.Package.ID).State != "failed" {
+		t.Fatalf("first failed session was not retained for safe recovery: %v, %s", err, controller.Status(current.Package.ID).State)
+	}
+	beforeRecovery, err := store.Installed(t.Context(), current.Package.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = controller.EnsureStarted(t.Context(), beforeRecovery.Package.ID, beforeRecovery.Revision); err != nil {
+		t.Fatal(err)
+	}
+	afterRecovery, err := store.Installed(t.Context(), current.Package.ID)
+	if err != nil || !afterRecovery.Enabled || afterRecovery.Revision != beforeRecovery.Revision || starts != 2 || closed != 1 || controller.Status(current.Package.ID).State != "running" {
+		t.Fatalf("recovery changed enable intent or did not replace failed session: %+v starts=%d closed=%d status=%+v err=%v", afterRecovery, starts, closed, controller.Status(current.Package.ID), err)
+	}
+}
+
+func TestEnsureStartedWaitsForSharedDependencyWithoutDuplicateStart(t *testing.T) {
+	store, items := dependencyFixture(t, map[string][]string{"left": {"leaf"}, "right": {"leaf"}, "leaf": nil})
+	entered, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	starts := map[string]int{}
+	controller, err := NewController(store, startFunc(func(_ context.Context, p pluginhost.Package, _ pluginhost.Grant) (pluginhost.Session, error) {
+		mu.Lock()
+		starts[p.ID]++
+		mu.Unlock()
+		if p.ID == "leaf" {
+			close(entered)
+			<-release
+		}
+		return &invocationSession{call: func(pluginhost.Invocation, string, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		}}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	leftDone := make(chan error, 1)
+	go func() { leftDone <- controller.EnsureStarted(context.Background(), "left", items["left"].Revision) }()
+	<-entered
+	rightDone := make(chan error, 1)
+	go func() { rightDone <- controller.EnsureStarted(context.Background(), "right", items["right"].Revision) }()
+	select {
+	case err = <-rightDone:
+		t.Fatalf("overlapping graph did not wait: %v", err)
+	case <-time.After(80 * time.Millisecond):
+	}
+	close(release)
+	if err = <-leftDone; err != nil {
+		t.Fatal(err)
+	}
+	if err = <-rightDone; err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if starts["leaf"] != 1 || starts["left"] != 1 || starts["right"] != 1 {
+		t.Fatalf("shared startup duplicated a session: %#v", starts)
+	}
+}
+
+func TestEnsureStartedWaitCancellationDoesNotStartAnything(t *testing.T) {
+	store, installed := installedFixture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	starts := 0
+	controller, err := NewController(store, startFunc(func(context.Context, pluginhost.Package, pluginhost.Grant) (pluginhost.Session, error) {
+		starts++
+		close(entered)
+		<-release
+		return &invocationSession{call: func(pluginhost.Invocation, string, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		}}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	current, err := store.SetEnabled(t.Context(), installed.Package.ID, installed.Revision, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := make(chan error, 1)
+	go func() { first <- controller.EnsureStarted(context.Background(), current.Package.ID, current.Revision) }()
+	<-entered
+	ctx, cancel := context.WithCancel(context.Background())
+	second := make(chan error, 1)
+	go func() { second <- controller.EnsureStarted(ctx, current.Package.ID, current.Revision) }()
+	cancel()
+	if err = <-second; !errors.Is(err, context.Canceled) || starts != 1 {
+		t.Fatalf("cancelled ensure launched or changed error: %v starts=%d", err, starts)
+	}
+	close(release)
+	if err = <-first; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureStartedRunningGraphDoesNotWaitForInFlightReservation(t *testing.T) {
+	store, installed := installedFixture(t)
+	controller, err := NewController(store, startFunc(func(context.Context, pluginhost.Package, pluginhost.Grant) (pluginhost.Session, error) {
+		return &invocationSession{call: func(pluginhost.Invocation, string, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		}}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	if err = controller.Start(t.Context(), installed.Package.ID, installed.Revision); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.Installed(t.Context(), installed.Package.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = controller.begin(current.Package.ID); err != nil {
+		t.Fatal(err)
+	}
+	defer controller.end(current.Package.ID, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if err = controller.EnsureStarted(ctx, current.Package.ID, current.Revision); err != nil {
+		t.Fatalf("running graph waited for in-flight reservation: %v", err)
+	}
+}
+
+func TestEnsureStartedFailuresAreSafeAndKeepContextCancellation(t *testing.T) {
+	for _, input := range []struct {
+		err  error
+		code string
+	}{
+		{&DependencyError{Code: "dependency_missing"}, "plugin_dependency_missing"},
+		{&DependencyError{Code: "dependency_not_authorized"}, "plugin_authorization_required"},
+		{&DependencyError{Code: "dependency_configuration"}, "plugin_configuration_required"},
+		{&DependencyError{Code: "dependency_restart_required"}, "plugin_configuration_changed"},
+		{errors.New("private process output at C:/secret"), "plugin_cold_start_failed"},
+	} {
+		got := ensureStartedFailure(input.err)
+		var safe interface{ SafeToolFailure() (string, string) }
+		if !errors.As(got, &safe) {
+			t.Fatalf("failure %v is not safe", input.err)
+		}
+		code, message := safe.SafeToolFailure()
+		if code != input.code || message == "" || message == input.err.Error() {
+			t.Fatalf("failure mapping = %q %q for %v", code, message, input.err)
+		}
+	}
+	if got := ensureStartedFailure(context.Canceled); !errors.Is(got, context.Canceled) {
+		t.Fatalf("cancellation was flattened: %v", got)
 	}
 }

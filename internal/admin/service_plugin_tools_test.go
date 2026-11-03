@@ -2,7 +2,12 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +17,214 @@ import (
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
+
+func installDynamicServiceFixture(t *testing.T, f *webFixture, capability pluginhost.Capability, routes ...pluginhost.HTTPRoute) (*pluginhost.Store, *packageTestExecutor) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"config.schema.json": `{"type":"object","properties":{},"additionalProperties":false}`,
+		"ui.schema.json":     `{}`,
+		"capabilities.json":  `{"version":1,"capabilities":[` + syntheticJSONString(t, capability) + `]}`,
+		"README.md":          "Synthetic dynamic service fixture.\n",
+		"PERMISSIONS.md":     "No extra permissions.\n",
+		"MIGRATION.md":       "No migration.\n",
+		"CHANGELOG.md":       "Initial synthetic fixture.\n",
+		"runtime/main.py":    "# fixture runtime\n",
+	}
+	permissions := append([]string(nil), capability.Permissions...)
+	manifest := pluginhost.Package{SchemaVersion: 1, ID: "future-synthetic", Name: "Future synthetic", Version: "1.0.0", HostProtocol: pluginhost.Protocol, Status: "ready", Platforms: []string{runtime.GOOS}, Runtime: pluginhost.Runtime{Transport: "mcp-stdio", Entrypoint: "runtime/main.py"}, Permissions: permissions, HTTPRoutes: routes, Files: map[string]string{}}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte(body))
+		manifest.Files[name] = hex.EncodeToString(sum[:])
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "plugin.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := f.manager.packageStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := store.Prepare(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := store.Install(t.Context(), prepared.Token, prepared.Digest, permissions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SetEnabled(t.Context(), installed.Package.ID, installed.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	executor := &packageTestExecutor{}
+	controller, err := pluginruntime.NewController(store, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.manager.packageMu.Lock()
+	f.manager.packageRuntime, f.manager.packageRuntimeReady = controller, true
+	f.manager.packageMu.Unlock()
+	return store, executor
+}
+
+func syntheticJSONString(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestServicePluginCallDiscoversAndInvokesInstalledDynamicPlugin(t *testing.T) {
+	f, p := trustedAgent(t)
+	capability := pluginhost.Capability{
+		ID: "future.echo", Implementation: "ready", Description: "Synthetic installed computation", Discoverable: true, SideEffect: "compute",
+		InputSchema:  json.RawMessage(`{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`),
+		OutputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+	}
+	_, executor := installDynamicServiceFixture(t, f, capability)
+	ctx := context.Background()
+
+	if tools := p.servicePluginTools(); len(tools) != 3 {
+		t.Fatalf("dynamic installation did not expose common service entry: %d", len(tools))
+	}
+	listed, err := p.callServicePlugin(ctx, "service_plugins", json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(listed, `"future-synthetic"`) || !strings.Contains(listed, `"future.echo"`) {
+		t.Fatalf("dynamic package not discoverable: result=%s err=%v", listed, err)
+	}
+	result, err := p.Call(ctx, "service_plugin_call", json.RawMessage(`{"plugin":"future-synthetic","capability":"future.echo","arguments":{"value":"ok"},"request_key":"future-1"}`))
+	if err != nil {
+		t.Fatalf("dynamic package invocation failed: %v", err)
+	}
+	if executor.starts != 1 || executor.calls != 1 || !strings.Contains(result, `"completed"`) {
+		t.Fatalf("start=%d calls=%d result=%s; successful dispatch must invoke, not merely start", executor.starts, executor.calls, result)
+	}
+	if _, err = p.Call(ctx, "service_plugin_call", json.RawMessage(`{"plugin":"future-synthetic","capability":"not.declared","arguments":{},"request_key":"future-2"}`)); err == nil {
+		t.Fatal("undeclared dynamic capability reached runtime")
+	}
+
+	p.trace.Sender = "wxid_member"
+	if _, err = p.Call(ctx, "service_plugin_call", json.RawMessage(`{"plugin":"future-synthetic","capability":"future.echo","arguments":{"value":"no"},"request_key":"future-3"}`)); err == nil {
+		t.Fatal("untrusted group/member context invoked private dynamic package")
+	}
+}
+
+func TestDynamicPluginResultNormalizesMCPTextAndRejectsUnsafeClaims(t *testing.T) {
+	raw := json.RawMessage(`{"content":[{"type":"text","text":"{\"answer\":\"ok\"}"}],"isError":false}`)
+	payload, err := dynamicPluginResultPayload(raw)
+	if err != nil || string(payload) != `{"answer":"ok"}` {
+		t.Fatalf("MCP text result not normalized: %s %v", payload, err)
+	}
+	for _, invalid := range []json.RawMessage{
+		json.RawMessage(`{"content":[{"type":"text","text":"{}"},{"type":"text","text":"{}"}],"isError":false}`),
+		json.RawMessage(`{"content":[{"type":"text","text":"{}"}],"isError":true}`),
+		json.RawMessage(`{"content":[{"type":"image","text":"{}"}],"isError":false}`),
+	} {
+		if _, err := dynamicPluginResultPayload(invalid); err == nil {
+			t.Fatalf("unsafe MCP envelope accepted: %s", invalid)
+		}
+	}
+	if !dynamicResultClaimsHostDelivery(map[string]any{"asset_id": "forged"}) || dynamicResultClaimsHostDelivery(map[string]any{"answer": "safe"}) {
+		t.Fatal("host delivery claim filter changed")
+	}
+}
+
+type dynamicRouteExecutor struct {
+	request json.RawMessage
+	calls   int
+}
+
+func (e *dynamicRouteExecutor) Start(context.Context, pluginhost.Package, pluginhost.Grant) (pluginhost.Session, error) {
+	return e, nil
+}
+func (e *dynamicRouteExecutor) Health(context.Context) error { return nil }
+func (e *dynamicRouteExecutor) Close() error                 { return nil }
+func (e *dynamicRouteExecutor) Call(ctx context.Context, _ pluginhost.Invocation, _ string, _ json.RawMessage) (json.RawMessage, error) {
+	e.calls++
+	if _, err := pluginruntime.InvokeHostService(ctx, "wechat/http_route", e.request); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(`{"content":[{"type":"text","text":"{\"ok\":true}"}],"isError":false}`), nil
+}
+
+func TestDynamicNetworkPluginUsesOnlyFixedBoundPublicRoute(t *testing.T) {
+	f, p := trustedAgent(t)
+	capability := pluginhost.Capability{
+		ID: "future.public_read", Implementation: "ready", Description: "Synthetic public fixed route", Discoverable: true, SideEffect: "read", Permissions: []string{"network"},
+		InputSchema:  json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}`),
+		OutputSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`),
+	}
+	route := pluginhost.HTTPRoute{ID: "fixed-public", Endpoint: "https://public.example.test/read", Capabilities: []string{capability.ID}}
+	store, _ := installDynamicServiceFixture(t, f, capability, route)
+	executor := &dynamicRouteExecutor{request: json.RawMessage(`{"route":"fixed-public","body":{"query":"synthetic"},"max_bytes":262144,"timeout_seconds":30}`)}
+	controller, err := pluginruntime.NewController(store, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.manager.packageMu.Lock()
+	f.manager.packageRuntime, f.manager.packageRuntimeReady = controller, true
+	f.manager.packageMu.Unlock()
+
+	ctx := context.Background()
+	epoch, err := f.manager.memory.RecallEpoch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := pluginhost.Invocation{Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.trace.Sender, Purpose: "conversation service request", RequestKey: "network-one", EvidenceEpoch: epoch, Authorization: p.serviceAuthorization(), SourceVersions: map[string]int{}}
+	policy, err := p.newDynamicPluginPolicy(ctx, "future-synthetic", capability.ID, invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	posts := 0
+	policy.post = func(_ context.Context, endpoint string, headers map[string]string, body json.RawMessage, max int64, timeout time.Duration) (json.RawMessage, error) {
+		posts++
+		if endpoint != route.Endpoint || len(headers) != 0 || !sameJSON(body, json.RawMessage(`{"query":"synthetic"}`)) || max != 256<<10 || timeout != 30*time.Second {
+			t.Fatalf("fixed route changed: endpoint=%q headers=%v body=%s max=%d timeout=%s", endpoint, headers, body, max, timeout)
+		}
+		return json.RawMessage(`{"answer":"from fixed route"}`), nil
+	}
+	installed, err := store.Installed(ctx, "future-synthetic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = controller.EnsureStarted(ctx, installed.Package.ID, installed.Revision); err != nil {
+		t.Fatal(err)
+	}
+	request := pluginruntime.CallRequest{Plugin: installed.Package.ID, Capability: capability.ID, Context: invocation, Arguments: json.RawMessage(`{"query":"synthetic"}`)}
+	first, err := controller.Invoke(ctx, request, policy)
+	if err != nil || first.Job.State != "completed" || executor.calls != 1 || posts != 1 || string(first.Job.Result) != `{"ok":true}` {
+		t.Fatalf("fixed route call failed: job=%+v calls=%d posts=%d err=%v", first.Job, executor.calls, posts, err)
+	}
+	second, err := controller.Invoke(ctx, request, policy)
+	if err != nil || !second.Reused || executor.calls != 1 || posts != 1 {
+		t.Fatalf("idempotent route replayed: reused=%v calls=%d posts=%d err=%v", second.Reused, executor.calls, posts, err)
+	}
+	if _, err = policy.Service(ctx, first.Job, capability, "wechat/http_route", json.RawMessage(`{"route":"wrong","body":{"query":"synthetic"},"max_bytes":262144,"timeout_seconds":30}`)); err == nil || posts != 1 {
+		t.Fatal("wrong route reached transport")
+	}
+	if _, err = policy.Service(ctx, first.Job, capability, "wechat/http_route", json.RawMessage(`{"route":"fixed-public","body":{"query":"changed"},"max_bytes":262144,"timeout_seconds":30}`)); err == nil || posts != 1 {
+		t.Fatal("changed body reached transport")
+	}
+	if _, err = policy.Service(ctx, first.Job, capability, "wechat/http_route", executor.request); err == nil || posts != 1 {
+		t.Fatal("a second route callback was allowed after the original submission")
+	}
+	if _, err = store.SetEnabled(ctx, installed.Package.ID, installed.Revision, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = policy.Service(ctx, first.Job, capability, "wechat/http_route", executor.request); err == nil || posts != 1 {
+		t.Fatal("revoked route reached transport")
+	}
+}
 
 func deepSeekWebJob(t *testing.T) (*webFixture, *permittedTools, *pluginhost.Store, pluginhost.Job, pluginhost.Capability) {
 	t.Helper()

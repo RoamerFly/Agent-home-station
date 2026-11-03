@@ -756,10 +756,8 @@ func (policy *externalHTTPPolicy) invokePhase(ctx context.Context) ([]byte, []by
 	if err != nil || !ready {
 		return nil, nil, externalHTTPCheckpoint{}, errors.New("external_tools_runtime_unavailable")
 	}
-	if c.Status(externalHTTPPluginID).State == "stopped" {
-		if err = c.Start(ctx, externalHTTPPluginID, policy.installed.Revision); err != nil {
-			return nil, nil, externalHTTPCheckpoint{}, err
-		}
+	if err = c.EnsureStarted(ctx, externalHTTPPluginID, policy.installed.Revision); err != nil {
+		return nil, nil, externalHTTPCheckpoint{}, err
 	}
 	call, err := c.Invoke(ctx, pluginruntime.CallRequest{Plugin: externalHTTPPluginID, Capability: policy.capability(), Context: policy.invocation, Arguments: policy.arguments}, policy)
 	if err != nil {

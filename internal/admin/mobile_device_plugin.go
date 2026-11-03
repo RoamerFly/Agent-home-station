@@ -232,21 +232,8 @@ func (b *mobileDevicePluginBridge) Call(ctx context.Context, name string, reques
 	if err = b.mobilePluginCurrent(ctx, policy.task, policy.settings, policy.boundBinding, policy.invocation, policy.capability); err != nil {
 		return "", err
 	}
-	if b.controller.Status(mobileDevicePluginID).State == "stopped" {
-		if err = b.controller.Start(ctx, mobileDevicePluginID, b.installed.Revision); err != nil {
-			return "", errors.New("device_plugin_required")
-		}
-		// Start records an enabled-runtime reservation and can advance the
-		// installed revision. Refresh the immutable package snapshot before the
-		// first policy Check; otherwise the just-started legitimate callback
-		// would look like an unauthorized package replacement.
-		current, readErr := b.store.Installed(ctx, mobileDevicePluginID)
-		if readErr != nil || !current.Enabled || current.Removed || current.Digest != b.installed.Digest || current.Package.Version != b.installed.Package.Version || !reflect.DeepEqual(current.Permissions, b.installed.Permissions) {
-			return "", errors.New("device_plugin_version_changed")
-		}
-		b.mu.Lock()
-		b.installed = current
-		b.mu.Unlock()
+	if err = b.controller.EnsureStarted(ctx, mobileDevicePluginID, b.installed.Revision); err != nil {
+		return "", err
 	}
 	call, err := b.controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: mobileDevicePluginID, Capability: policy.capability, Context: policy.invocation, Arguments: policy.arguments}, policy)
 	if err != nil || call.Job.State != "completed" {

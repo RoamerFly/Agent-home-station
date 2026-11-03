@@ -380,10 +380,8 @@ func (p *speechPluginPolicy) synthesize(ctx context.Context) (speechPluginResult
 	if err != nil {
 		return speechPluginResult{}, err
 	}
-	if c.Status("speech").State == "stopped" {
-		if err = c.Start(ctx, "speech", i.Revision); err != nil {
-			return speechPluginResult{}, errors.New("speech_plugin_start_failed")
-		}
+	if err = c.EnsureStarted(ctx, "speech", i.Revision); err != nil {
+		return speechPluginResult{}, err
 	}
 	call, err := c.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: p.arguments}, p)
 	if err != nil {
