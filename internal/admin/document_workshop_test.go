@@ -151,6 +151,26 @@ func TestDocumentWorkshopNormalLPACArtifactFlow(t *testing.T) {
 	t.Setenv("WECHAT_PLUGIN_RUNTIME_CONFIG", string(options))
 	_, p, native, asset := artifactPipelineFixture(t)
 	installDocumentWorkshopFixture(t, p)
+	// This is the normal host path for a real synthetic Chinese image: the Go
+	// policy launches the fixed initial LPAC OCR process, hash-binds its TSV in
+	// metadata, then the MCP plugin consumes that observation. No Python child
+	// process is allowed to create Tesseract itself.
+	png, err := os.ReadFile(filepath.Join("..", "..", "temp", "document-runtime-native-qa", "input", "synthetic-chinese.png"))
+	if err != nil {
+		t.Fatalf("synthetic Chinese OCR fixture unavailable: %v", err)
+	}
+	imageAsset, err := p.manager.rememberAssetFormats(p.trace, assetOriginal{Data: png, MIME: "image/png", Filename: "synthetic-chinese.png"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspectRequest, _ := json.Marshal(map[string]any{"artifact_id": imageAsset.ID, "source_message_id": "synthetic-attachment", "include_layout": true})
+	inspectRaw, err := p.callAgent(context.Background(), "document_inspect", inspectRequest)
+	if err != nil {
+		t.Fatalf("normal LPAC image inspect failed: %v", err)
+	}
+	if !strings.Contains(inspectRaw, "host_initial_lpac_tesseract") || !strings.Contains(inspectRaw, "source_ocr") || strings.Contains(inspectRaw, `:\\`) {
+		t.Fatalf("normal LPAC OCR evidence missing or leaked path: %s", inspectRaw)
+	}
 	layout := map[string]any{"blocks": []any{
 		map[string]any{"kind": "heading", "level": 1, "text": "合成文档验收"},
 		map[string]any{"kind": "paragraph", "text": "此处验证真实 MCP、LPAC、可编辑 DOCX 和 PDF 投递准备。"},

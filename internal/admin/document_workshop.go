@@ -262,7 +262,19 @@ func (d *documentWorkshopPolicy) CallMetadata(ctx context.Context, job pluginhos
 		inputs = append(inputs, map[string]any{"artifact_id": artifact.AssetID, "path": artifact.InputPath, "mime_type": artifact.MIME, "sha256": artifact.SHA256})
 	}
 	inputRoot := filepath.Dir(d.materialized[0].InputPath)
-	meta, _ := json.Marshal(map[string]any{"inputs": inputs, "input_root": inputRoot, "output_dir": d.materialized[0].OutputDir, "output_root": d.materialized[0].OutputDir})
+	metadata := map[string]any{"inputs": inputs, "input_root": inputRoot, "output_dir": d.materialized[0].OutputDir, "output_root": d.materialized[0].OutputDir}
+	// Image OCR is a fixed initial LPAC process. Do this before launching the
+	// no-capability Python plugin, which is intentionally unable to create its
+	// own child process. The observation is hash-bound to this materialized
+	// input and runtime manifest; it never carries a host path.
+	observation, err := d.p.documentWorkshopOCR(ctx, d)
+	if err != nil {
+		return nil, err
+	}
+	if observation != nil {
+		metadata["ocr_observation"] = observation
+	}
+	meta, _ := json.Marshal(metadata)
 	return map[string]json.RawMessage{"wechat/document": meta}, nil
 }
 

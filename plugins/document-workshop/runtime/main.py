@@ -165,7 +165,7 @@ def call(name: str, arguments: dict, meta: dict) -> dict:
         input_root = document.get("input_root") if isinstance(document.get("input_root"), str) else str(path.parent)
         output = _output(document)
         output_root = document.get("output_root") if isinstance(document.get("output_root"), str) else str(output)
-        runtime = _runtime("inspect", {"input_root": input_root, "output_root": output_root, "input_path": str(path), "output_dir": str(output), "mime_type": mime_type, "pages": arguments.get("pages", []), "include_layout": bool(arguments.get("include_layout"))})
+        runtime = _runtime("inspect", {"input_root": input_root, "output_root": output_root, "input_path": str(path), "output_dir": str(output), "mime_type": mime_type, "pages": arguments.get("pages", []), "include_layout": bool(arguments.get("include_layout")), "host_ocr": document.get("ocr_observation")})
         if runtime.get("ok") is not True:
             raise DocumentError(runtime.get("code", "document_runtime_inspection_failed"))
         return {"ok": True, "summary": "document_inspected", "evidence": runtime, "outputs": []}

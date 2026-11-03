@@ -291,7 +291,9 @@ def _inspect_pdf(root: Path, source: Path, output_dir: Path, request: dict[str, 
 
 def _inspect_image(root: Path, source: Path, output_dir: Path, request: dict[str, Any]) -> dict[str, Any]:
     result = {"ok": True, "kind": "image", "page_count": 1, "pages": [1], "text": "", "scanned_or_no_extractable_text": True, "render_pages": [str(source)], "quality_failures": [], "continuation": {"complete": True, "remaining_pages": [], "next_start_page": None}}
-    result["ocr"] = _ocr_images(root, [source], [1], bool(request.get("include_layout")), output_dir)
+    result["ocr"] = _host_ocr(root, source, request.get("host_ocr"), bool(request.get("include_layout")), output_dir)
+    if result["ocr"] is None:
+        result["ocr"] = _ocr_images(root, [source], [1], bool(request.get("include_layout")), output_dir)
     result["source_ocr"] = result["ocr"].get("text", "")
     if result["ocr"].get("text"):
         result["text"] = result["ocr"]["text"]
@@ -303,6 +305,29 @@ def _inspect_image(root: Path, source: Path, output_dir: Path, request: dict[str
         result["quality_failures"].append(str(result["ocr"]["code"]))
         result["needs_clarification"] = True
     return result
+
+
+def _host_ocr(root: Path, source: Path, observation: Any, include_layout: bool, output_dir: Path) -> dict[str, Any] | None:
+    """Consume only a hash-bound TSV minted by the initial LPAC OCR broker."""
+    if observation is None:
+        return None
+    if not isinstance(observation, dict):
+        return {"available": False, "attempted": True, "code": "ocr_observation_invalid"}
+    tsv = observation.get("tsv")
+    manifest = root / "runtime-manifest.json"
+    if (not isinstance(tsv, str) or len(tsv.encode("utf-8")) > 2 * 1024 * 1024 or
+            observation.get("input_sha256") != _hash(source) or
+            observation.get("runtime_manifest_sha256") != _hash(manifest) or
+            observation.get("language") != "chi_sim+eng" or observation.get("psm") != 6):
+        return {"available": False, "attempted": True, "code": "ocr_observation_invalid"}
+    page = _parse_tsv(tsv.encode("utf-8"), 1)
+    page["psm"] = 6
+    page["source"] = "host_initial_lpac_tesseract"
+    if include_layout:
+        page["tables"] = _grid_table(root, source, page, output_dir)
+        page["visual_observation"] = {"available": False, "detail": "no vision observer configured; image regions are not inferred from OCR", "table_grid_available": bool(page["tables"]), "table_grid_detail": "grid detection needs the optional pure-Python image adapter when Pillow is unavailable"}
+    words = [word for block in page["blocks"] for line in block["lines"] for word in line["words"]]
+    return {"available": True, "attempted": True, "engine": "host_initial_lpac_tesseract", "pages": [page], "text": page["text"], "words": words}
 
 
 def _ocr_needs_clarification(ocr: dict[str, Any]) -> bool:
