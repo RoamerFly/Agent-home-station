@@ -155,7 +155,7 @@ func TestDocumentWorkshopNormalLPACArtifactFlow(t *testing.T) {
 	// policy launches the fixed initial LPAC OCR process, hash-binds its TSV in
 	// metadata, then the MCP plugin consumes that observation. No Python child
 	// process is allowed to create Tesseract itself.
-	png, err := os.ReadFile(filepath.Join("..", "..", "temp", "document-runtime-native-qa", "input", "synthetic-chinese.png"))
+	png, err := os.ReadFile(filepath.Join("testdata", "synthetic-document-ocr.png"))
 	if err != nil {
 		t.Fatalf("synthetic Chinese OCR fixture unavailable: %v", err)
 	}
