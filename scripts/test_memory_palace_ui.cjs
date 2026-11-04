@@ -52,6 +52,7 @@ function syntheticPage(scope, endpoint, view, cursor) {
     const page = await context.newPage();
     const errors = [];
     const writes = [];
+    const palaceScopes = [];
     let releaseOldScope;
     const oldScopeCanFinish = new Promise(resolve => { releaseOldScope = resolve; });
     let oldScopeStarted;
@@ -62,6 +63,8 @@ function syntheticPage(scope, endpoint, view, cursor) {
       const url = new URL(request.url());
       if (url.origin !== base) return route.abort();
       if (url.pathname === '/api/billing/balance') return route.fulfill({json: {}});
+      const palaceRequest = url.pathname.match(/^\/api\/companion\/memory\/([^/]+)\/(experiences|reflections)$/);
+      if (palaceRequest) palaceScopes.push(decodeURIComponent(palaceRequest[1]));
       const syntheticMatch = url.pathname.match(/^\/api\/companion\/memory\/(palace-race-old|palace-race-new)\/(experiences|reflections)$/);
       if (syntheticMatch) {
         const [, syntheticScope, endpoint] = syntheticMatch;
@@ -212,6 +215,58 @@ function syntheticPage(scope, endpoint, view, cursor) {
     assert.equal(await page.locator('#memory-palace-prev').isVisible(), false);
     await page.locator('#memory-palace-close').click();
     assert.equal(await palace.isHidden(), true);
+
+    // The conversation entry must use that conversation's exact scope, then
+    // return to the same selected transcript and reading position.
+    await page.locator('.main-nav[data-section="memory"]').click();
+    const conversation = page.locator('.conversation-open').first();
+    await conversation.waitFor();
+    await conversation.click();
+    const conversationTitle = await page.locator('#conversation-title').innerText();
+    await page.locator('#memory-content').locator('.conversation-message').first().waitFor();
+    const currentScope = await page.locator('.conversation-row[data-selected="true"]').getAttribute('data-scope-id');
+    assert.equal(currentScope, scope);
+    await page.locator('#memory-content').evaluate(el => {
+      el.style.height = '90px';
+      el.style.maxHeight = '90px';
+      el.style.overflowY = 'auto';
+      el.scrollTop = 60;
+    });
+    const feedBeforePalace = await page.locator('#memory-content').evaluate(el => el.scrollTop);
+    assert(feedBeforePalace > 0);
+    palaceScopes.length = 0;
+    await page.locator('#scope-palace-open').click();
+    await palace.waitFor({state: 'visible'});
+    await palace.locator('#memory-palace-graph [data-entry-id]').first().waitFor();
+    await palace.locator('#memory-palace-status').getByText(/第 1 页/).waitFor();
+    assert.equal(await page.locator('#memory-palace-title').innerText(), conversationTitle + ' · 记忆宫殿');
+    assert(palaceScopes.length > 0 && palaceScopes.every(id => id === currentScope));
+    const actualGraphNode = await palace.locator('#memory-palace-graph [data-entry-id]').first().getAttribute('data-entry-id');
+    if (shots) {
+      await page.evaluate(() => document.documentElement.dataset.theme = 'light');
+      await page.setViewportSize({width: 1280, height: 820});
+      await page.screenshot({path: path.join(shots, 'memory-palace-conversation-light.png')});
+      await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
+      await page.setViewportSize({width: 375, height: 812});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 2), false);
+      await page.screenshot({path: path.join(shots, 'memory-palace-conversation-narrow-dark.png')});
+      await page.setViewportSize({width: 1280, height: 820});
+    }
+
+    // An overview update belongs to its own selected scope and cannot replace
+    // a palace that was opened from the conversation reader.
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('wechat-life-journal:data', {
+      detail: {scope: 'palace-race-new', label: '不应进入当前会话', loading: false, ready: true}
+    })));
+    assert.equal(await page.locator('#memory-palace-title').innerText(), conversationTitle + ' · 记忆宫殿');
+    assert.equal(await palace.locator('#memory-palace-graph').getByText('新的会话记录不能被旧响应覆盖', {exact: true}).count(), 0);
+    assert.equal(await palace.locator('#memory-palace-graph [data-entry-id="' + actualGraphNode + '"]').count(), 1);
+    await page.locator('#memory-palace-close').click();
+    assert.equal(await palace.isHidden(), true);
+    assert.equal(await page.locator('#conversation-title').innerText(), conversationTitle);
+    assert.equal(await page.locator('.conversation-row[data-selected="true"]').getAttribute('data-scope-id'), currentScope);
+    assert.equal(await page.locator('#memory-content').evaluate(el => el.scrollTop), feedBeforePalace);
+    assert.equal(await page.locator('#memory-palace-close').innerText(), '收起');
     assert.deepEqual(writes, []);
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({
@@ -224,6 +279,7 @@ function syntheticPage(scope, endpoint, view, cursor) {
       staleScopeResponseIsolation: true,
       forwardAndBackwardPagination: true,
       desktopLightAndNarrowDark: true,
+      conversationEntryKeepsScopeAndReadingPosition: true,
       realWechatSends: 0
     }));
   } finally {

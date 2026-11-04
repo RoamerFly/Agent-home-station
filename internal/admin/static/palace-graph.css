@@ -17,6 +17,7 @@
 #overview:has(> #memory-palace:not([hidden])) .life-journal :is(.life-journal-scene,.life-journal-intro,.life-journal-grid,.life-journal-status,.life-journal-heading > div:first-child,#memory-palace-open) { display:none; }
 #overview:has(> #memory-palace:not([hidden])) .life-journal-actions { margin:0; }
 #memory-palace { flex:none; }
+#memory:has(> #memory-palace:not([hidden])) > :not(#memory-palace) { display:none; }
 #memory-palace .memory-palace-heading { border-bottom:1px solid var(--line);padding-bottom:16px; }
 #memory-palace .memory-palace-detail { align-self:start; }
 #memory-palace :is(.memory-palace-graph-wrap,.memory-palace-list) { max-height:min(61dvh,640px);overflow-y:auto; }

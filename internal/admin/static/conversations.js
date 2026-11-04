@@ -83,6 +83,7 @@
  function openConversation(item){
   view?.popup.close();const root=$('#memory-detail');root.hidden=false;
   const v={item,request:0,data:null,popup:null};
+  $('#scope-palace-open').disabled=!item.id;
   $('#conversation-title').textContent=item.label;$('#conversation-idle').hidden=true;
   $('#conversation-inspector').append(root);document.querySelector('.conversation-workspace').classList.add('has-selection');
   for(const row of document.querySelectorAll('.conversation-row'))row.dataset.selected=String(row.dataset.thread===item.thread);
@@ -113,6 +114,9 @@
  async function saveNote(){const v=view,note=$('#memory-note').value.trim();if(!v?.data||!note)return;const b=$('#save-memory-note');b.disabled=true;try{await api('/api/companion/memory/'+encodeURIComponent(v.item.id)+'/notes',{method:'POST',json:{text:note}});if(view!==v)return;$('#memory-note').value='';v.data.notes=[...(v.data.notes||[]),note];node($('#memory-notes'),'p',note,'memory-note');await window.WechatAdmin.refreshScopes()}catch(e){node($('#memory-notes'),'p',e.message,'form-error')}finally{b.disabled=false}}
  async function clear(){const v=view;if(!v?.data||!confirm('清除这个会话的活跃记忆和摘要？只读归档和微信聊天记录仍保留。'))return;const b=$('#clear-memory');b.disabled=true;try{await api('/api/companion/memory/'+encodeURIComponent(v.item.id)+'/clear',{method:'POST',json:{}});if(view===v)await loadView(v);await window.WechatAdmin.refreshScopes()}catch(e){node($('#memory-notes'),'p',e.message,'form-error')}finally{b.disabled=false}}
  $('#conversation-search').addEventListener('input',renderIndex);window.WechatRefresh.bind($('#conversation-refresh'),refresh);
+ $('#scope-palace-open').addEventListener('click',()=>{
+  if(view?.item.id)window.WechatPalace.openConversation(view.item.id,view.item.label);
+ });
  $('#context-summary-view').addEventListener('click',()=>{
   const data=view?.data;if(!data)return;
   const updated=data.summary_updated&&Date.parse(data.summary_updated)>0?new Date(data.summary_updated).toLocaleString():'';
@@ -120,7 +124,11 @@
   if(data.summary)renderSummary(popup.body,data);else node(popup.body,'p','这个会话还没有成功保存的压缩摘要。','hint');
  });
  $('#context-compress-now').addEventListener('click',()=>view&&compress(view.item));$('#memory-history').addEventListener('click',openHistory);window.WechatRefresh.bind($('#memory-refresh'),()=>view&&loadView(view));$('#memory-settings').addEventListener('click',manage);$('#save-memory-note').addEventListener('click',saveNote);$('#clear-memory').addEventListener('click',clear);
- window.addEventListener('wechat-admin:scopes',e=>{scopes=e.detail.scopes;renderIndex()});
+ window.addEventListener('wechat-admin:scopes',e=>{
+  scopes=e.detail.scopes;
+  if(view&&!scopes.some(item=>item.thread===view.item.thread&&item.id===view.item.id))view.popup.close();
+  renderIndex();
+ });
 
 
  window.addEventListener('wechat-admin:navigate',e=>{if(e.detail.section==='memory'){renderIndex();if(!scopes.length)window.WechatAdmin.refreshScopes()}});

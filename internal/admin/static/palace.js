@@ -18,6 +18,7 @@
     selected: ''
   };
   const text = x => typeof x === 'string' ? x.trim() : '';
+  let conversationOrigin = null;
   const root = () => $('#memory-palace'), graph = () => $('#memory-palace-graph'),
         list = () => $('#memory-palace-list'), detail = () => $('#memory-palace-detail'),
         status = () => $('#memory-palace-status');
@@ -258,15 +259,46 @@
     receive(window.WechatLifeJournal?.scope?.());
     if (!state.scope) render();
   }
+  function openConversation(scope, label) {
+    if (!scope || conversationOrigin) return;
+    const page = $('#memory');
+    conversationOrigin = {scroll: page.scrollTop, feed: $('#memory-content').scrollTop};
+    page.append(root());
+    $('#memory-palace-title').textContent = label + ' · 记忆宫殿';
+    $('#memory-palace-close').textContent = '返回会话';
+    root().hidden = false;
+    state.open = true;
+    state.category = '';
+    $('#memory-palace-kind').value = '';
+    clear();
+    state.scope = scope;
+    page.scrollTop = 0;
+    $('#memory-palace-close').focus({preventScroll: true});
+    load();
+  }
   function close() {
     state.open = false;
     root().hidden = true;
     clear();
+    if (conversationOrigin) {
+      $('#life-journal').after(root());
+      $('#memory-palace-title').textContent = '记忆宫殿';
+      $('#memory-palace-close').textContent = '收起';
+      $('#memory').scrollTop = conversationOrigin.scroll;
+      $('#memory-content').scrollTop = conversationOrigin.feed;
+      conversationOrigin = null;
+    }
   }
   document.addEventListener('DOMContentLoaded', () => {
+    window.WechatPalace = {openConversation};
+    window.WechatRefresh.register(root(), () => conversationOrigin && load());
     $('#memory-palace-map-toggle').addEventListener('click', () => mode('map'));
     $('#memory-palace-list-toggle').addEventListener('click', () => mode('list'));
-    $('#memory-palace-close').addEventListener('click', close);
+    $('#memory-palace-close').addEventListener('click', () => {
+      const opener = conversationOrigin ? $('#scope-palace-open') : $('#memory-palace-open');
+      close();
+      opener.focus({preventScroll: true});
+    });
     $('#memory-palace-person').addEventListener('change', e => selectPerson(e.target.value));
     $('#memory-palace-kind').addEventListener('change', e => {
       state.category = e.target.value;
@@ -276,11 +308,17 @@
     });
     $('#memory-palace-prev').addEventListener('click', () => load(state.back.at(-1), state.back.slice(0,-1)));
     $('#memory-palace-more').addEventListener('click', () => load(state.cursors, [...state.back, state.page]));
-    window.addEventListener('wechat-life-journal:data', e => receive(e.detail));
+    window.addEventListener('wechat-life-journal:data', e => { if (!conversationOrigin) receive(e.detail); });
+    window.addEventListener('wechat-admin:memory-selection', e => {
+      if (conversationOrigin && e.detail.id !== state.scope) {
+        window.WechatDialogs.closeAll();
+        close();
+      }
+    });
     window.addEventListener('wechat-life-journal:palace-open', open);
     window.addEventListener('wechat-admin:logout', close);
     window.addEventListener('wechat-admin:navigate', e => {
-      if (e.detail?.section !== 'overview') close();
+      if (state.open && e.detail?.section !== (conversationOrigin ? 'memory' : 'overview')) close();
     });
     mode('map');
   });
