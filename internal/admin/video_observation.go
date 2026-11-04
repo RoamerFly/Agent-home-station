@@ -103,7 +103,7 @@ func (a mediaUnderstanding) observeVideo(ctx context.Context, msg linuxnative.Me
 	rangeJSON, _ := json.Marshal(coverage)
 	parts := []string{header, "[video_read_coverage]" + string(rangeJSON), fmt.Sprintf("画面为均匀采样，音轨范围见video_read_coverage，二者独立：画面采样不表示音轨也未读完。这是供模型选取内容和决定补读的内部状态，不是发给群成员的回复。总结直接讲视频内容；已有充分正文时自然概括，不用复述读取限制。需要未覆盖的关键内容时调用video_inspect(action=info/frames/audio,message_id=%q)，音轨从next_start_seconds续读，帧按next_start_frame续读；未读内容不能补造。", msg.ID)}
 	if a.manager.Config().Companion.Permissions.Remember {
-		asset, err := a.manager.rememberAssetFormats(companion.Input{Channel: "wechat", Account: msg.AccountID, Thread: msg.ThreadID, TraceID: msg.ID, Sender: msg.SenderID, Text: "收到的视频原件", MessageTime: msg.CreatedAt}, assetOriginal{Data: data, MIME: "video/mp4", Filename: "收到的视频.mp4"}, nil)
+		asset, err := a.manager.rememberAssetFormats(companion.Input{Channel: "wechat", Account: msg.AccountID, Thread: msg.ThreadID, TraceID: msg.ID, Sender: msg.SenderID, Text: "收到的视频原件", MessageTime: msg.CreatedAt}, assetOriginal{InboundMessage: &msg, Data: data, MIME: "video/mp4", Filename: "收到的视频.mp4"}, nil)
 		if err == nil {
 			parts = append(parts, "[本会话视频原件asset_id="+asset.ID+"；可用video_inspect按需继续读取，无需重复下载]")
 		}

@@ -55,7 +55,7 @@ func (n *forwardNative) ToolSendStatus(context.Context, string) (linuxnative.Too
 
 func forwardFixture(t *testing.T) (*webFixture, *permittedTools, *forwardNative) {
 	f, p := trustedAgent(t)
-	n := &forwardNative{fakeTools: &fakeTools{fakeNative: f.native}, message: linuxnative.Message{ID: "file-message", AccountID: "test", ThreadID: "source@chatroom", Type: 49, Body: `<msg><appmsg><type>6</type><title>notes.txt</title><appattach><cdnattachurl>SECRET</cdnattachurl></appattach></appmsg></msg>`}}
+	n := &forwardNative{fakeTools: &fakeTools{fakeNative: f.native}, message: linuxnative.Message{ID: "file-message", CreatedAt: "2026-10-30T12:00:00Z", SenderID: "synthetic-sender", Direction: "incoming", AccountID: "test", ThreadID: "source@chatroom", Type: 49, Body: `<msg><appmsg><type>6</type><title>notes.txt</title><appattach><cdnattachurl>SECRET</cdnattachurl></appattach></appmsg></msg>`}}
 	f.manager.native = n
 	c := f.manager.agent.config()
 	c.CrossConversation = true

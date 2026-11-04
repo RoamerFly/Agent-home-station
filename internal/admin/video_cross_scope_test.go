@@ -13,9 +13,9 @@ import (
 func TestCrossConversationVideoUsesOriginalCacheAndExplicitDestinationScope(t *testing.T) {
 	f, p, n := forwardFixture(t)
 	f.manager.config.Behavior.ReadVideos = true
-	n.message = linuxnative.Message{ID: "cached-video", AccountID: "test", ThreadID: "source@chatroom", Type: 43}
-	trace := companion.Input{Channel: "wechat", Account: "test", Thread: "source@chatroom", TraceID: n.message.ID}
-	a, err := f.manager.rememberAssetFormats(trace, assetOriginal{Data: inspectionFixture(t), MIME: "video/mp4", Filename: "synthetic.mp4"}, nil)
+	n.message = linuxnative.Message{ID: "cached-video", CreatedAt: "2026-10-30T12:00:00Z", SenderID: "source-member", Direction: "incoming", AccountID: "test", ThreadID: "source@chatroom", Type: 43}
+	trace := companion.Input{Channel: "wechat", Account: "test", Thread: "source@chatroom", TraceID: n.message.ID, Sender: n.message.SenderID, MessageTime: n.message.CreatedAt}
+	a, err := f.manager.rememberAssetFormats(trace, assetOriginal{InboundMessage: &n.message, Data: inspectionFixture(t), MIME: "video/mp4", Filename: "synthetic.mp4"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,5 +80,44 @@ func TestOwnerDiagnosticsAreScopedPaginatedAndExcludeRawSecrets(t *testing.T) {
 	p.trace.Sender = "ordinary-member"
 	if _, err = p.Call(context.Background(), "agent_diagnostics", json.RawMessage(`{}`)); err == nil {
 		t.Fatal("member diagnostics")
+	}
+}
+
+func TestVideoRetryReusedLocatorResolvesCurrentShare(t *testing.T) {
+	f, p, n := forwardFixture(t)
+	f.manager.config.Behavior.ReadVideos = true
+	old := linuxnative.Message{ID: "reused-row", AccountID: "test", ThreadID: "source@chatroom", SenderID: "same-member", Direction: "incoming", Type: 43, CreatedAt: "2026-10-28T12:00:00Z", ServerID: "101"}
+	trace := companion.Input{Channel: "wechat", Account: old.AccountID, Thread: old.ThreadID, TraceID: old.ID, Sender: old.SenderID, MessageTime: old.CreatedAt}
+	cache := func(original *linuxnative.Message, data string) mediaAsset {
+		t.Helper()
+		item, err := f.manager.rememberAssetFormats(trace, assetOriginal{InboundMessage: original, Data: []byte(data), MIME: "video/mp4", Filename: "fixture.mp4"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	oldAsset := cache(&old, "old bytes")
+	n.message = old
+	subtype := 51
+	n.message.Type, n.message.AppMessageType = 49, &subtype
+	n.message.ServerID, n.message.CreatedAt = "202", "2026-11-04T06:24:04Z"
+	trace.MessageTime = n.message.CreatedAt
+	// A legacy or generated asset carrying even the current request's ID
+	// and timestamp is not evidence that its bytes came from this share.
+	cache(nil, "unverified bytes")
+	source := videoInspectionInput{Message: old.ID}
+	if b, _, err := p.inspectionSource(t.Context(), &source); err == nil || len(b) != 0 {
+		t.Fatalf("unavailable Channels source returned a substitute: %q, %v", b, err)
+	}
+	if _, err := p.inspectionTranscriptionMessage(t.Context(), videoInspectionInput{Asset: oldAsset.ID, SourceThread: old.ThreadID}); err == nil {
+		t.Fatal("old audio was attributed to the new message")
+	}
+	cache(&n.message, "actual share")
+	if b, _, err := p.inspectionSource(t.Context(), &source); err != nil || string(b) != "actual share" {
+		t.Fatal(string(b), err)
+	}
+	n.message.ServerID = "203"
+	if b, _, err := p.inspectionSource(t.Context(), &source); err == nil || len(b) != 0 {
+		t.Fatal("a different server message matched the same timestamp")
 	}
 }

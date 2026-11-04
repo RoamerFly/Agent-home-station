@@ -96,7 +96,7 @@ func TestIncomingFileEventAutomaticallyCachesOriginalWithVisionDisabled(t *testi
 	if err != nil || string(data) != "synthetic attachment bytes" {
 		t.Fatal("automatic cache differs from original", err)
 	}
-	inbox := filepath.Join(f.manager.privateWorkspaceFor(n.message.AccountID), "conversations", assets[0].Scope, "inbox", agentID(n.message.ID)[:24]+".txt")
+	inbox := filepath.Join(f.manager.privateWorkspaceFor(n.message.AccountID), "conversations", assets[0].Scope, "inbox", agentID(n.message.ID, assets[0].Hash)[:24]+".txt")
 	data, err = os.ReadFile(inbox)
 	sum := sha256.Sum256(data)
 	if err != nil || hex.EncodeToString(sum[:]) != assets[0].Hash {

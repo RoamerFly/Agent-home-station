@@ -196,7 +196,7 @@ func TestInspectionPluginAudioUsesCanonicalReceivedAssetSource(t *testing.T) {
 	f.manager.config.Behavior.ReadVideos = true
 	n.message = linuxnative.Message{ID: "canonical-video", AccountID: "test", ThreadID: "source@chatroom", SenderID: "source-member", ServerID: "video-server", CreatedAt: "2026-10-30T12:00:00Z", Direction: "incoming", Type: 43}
 	trace := companion.Input{Channel: "wechat", Account: "test", Thread: "source@chatroom", TraceID: n.message.ID, Sender: n.message.SenderID, MessageTime: n.message.CreatedAt}
-	asset, err := f.manager.rememberAssetFormats(trace, assetOriginal{Data: inspectionFixture(t), MIME: "video/mp4", Filename: "canonical.mp4"}, nil)
+	asset, err := f.manager.rememberAssetFormats(trace, assetOriginal{InboundMessage: &n.message, Data: inspectionFixture(t), MIME: "video/mp4", Filename: "canonical.mp4"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

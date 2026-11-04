@@ -23,10 +23,7 @@ import (
 )
 
 type assetOriginal struct {
-	// InboundMessageType is set only for an immutable original received from
-	// WeChat.  In particular, receiving a voice recording never means the
-	// sender agreed to use it as a voice-training sample.
-	InboundMessageType  int
+	InboundMessage      *linuxnative.Message
 	VoiceID             string
 	VoiceEngine         string
 	VoiceProfile        string
@@ -40,6 +37,7 @@ type assetOriginal struct {
 	Parent              *assetOriginal
 }
 type assetRequest struct {
+	SourceFingerprint  string    `json:"source_fingerprint,omitempty"`
 	MessageTime        string    `json:"message_time,omitempty"`
 	TraceID            string    `json:"trace_id,omitempty"`
 	RequesterID        string    `json:"requester_id,omitempty"`
@@ -140,47 +138,53 @@ func assetRequestFor(in companion.Input) assetRequest {
 	}
 	return assetRequest{MessageTime: in.MessageTime, TraceID: logText(trace, 256), RequesterID: logText(in.Sender, 256), RequesterName: logText(in.SenderName, 128), TaskID: logText(in.TaskID, 256), Text: logText(companion.UserRequestText(text), 320), At: time.Now().UTC()}
 }
+
+// A local message ID can be reused after WeChat history is restored.
+func inboundFingerprint(msg linuxnative.Message) string {
+	if msg.ID == "" || msg.SenderID == "" || (msg.CreatedAt == "" && msg.ServerID == "") {
+		return ""
+	}
+	return receivedSourceFingerprint(msg, "media.observe")
+}
+
+func (r assetRequest) key() [4]string {
+	return [4]string{r.TraceID, r.RequesterID, r.TaskID, r.SourceFingerprint}
+}
+
 func (a *mediaAsset) noteRequest(in companion.Input) {
+	a.noteOriginal(in, nil)
+}
+
+func (a *mediaAsset) noteOriginal(in companion.Input, msg *linuxnative.Message) {
 	r := assetRequestFor(in)
 	if r.TraceID == "" && r.RequesterID == "" && r.TaskID == "" {
 		return
+	}
+	if msg != nil && msg.ID == r.TraceID && msg.AccountID == in.Account && msg.ThreadID == in.Thread && msg.SenderID == r.RequesterID && msg.CreatedAt == r.MessageTime {
+		r.SourceMessageType = msg.Type
+		r.SourceFingerprint = inboundFingerprint(*msg)
 	}
 	if a.FirstRequest == nil {
 		first := r
 		a.FirstRequest = &first
 	}
-	for i := range a.Requests {
-		if a.Requests[i].TraceID == r.TraceID && a.Requests[i].RequesterID == r.RequesterID && a.Requests[i].TaskID == r.TaskID {
-			return // Repeated voice parts and format conversion keep one request.
+	for _, existing := range a.Requests {
+		if existing.key() == r.key() {
+			return
 		}
 	}
 	a.Requests = append(a.Requests, r)
 }
 
-// noteInboundRequest records the actual message kind alongside the existing
-// source identity.  Consent deliberately remains false: an explicit,
-// owner-authorized enrollment flow is the only code allowed to turn an
-// incoming voice recording into a training sample.
-func (a *mediaAsset) noteInboundRequest(in companion.Input, messageType int) {
-	if messageType == 0 {
-		return
-	}
-	a.noteRequest(in)
-	trace := in.OriginTraceID
-	if trace == "" {
-		trace = in.TraceID
-	}
-	if a.FirstRequest != nil && a.FirstRequest.TraceID == trace && a.FirstRequest.RequesterID == in.Sender && a.FirstRequest.TaskID == in.TaskID {
-		a.FirstRequest.SourceMessageType = messageType
-		a.FirstRequest.VoiceSampleConsent = false
-	}
-	for i := range a.Requests {
-		if a.Requests[i].TraceID == trace && a.Requests[i].RequesterID == in.Sender && a.Requests[i].TaskID == in.TaskID {
-			a.Requests[i].SourceMessageType = messageType
-			a.Requests[i].VoiceSampleConsent = false
-			return
+func (a mediaAsset) hasOriginal(fingerprint string) bool {
+	if fingerprint != "" {
+		for _, r := range a.Requests {
+			if r.SourceFingerprint == fingerprint {
+				return true
+			}
 		}
 	}
+	return false
 }
 func assetName(a assetOriginal) string {
 	if safeMediaFilename(a.Filename) {
@@ -301,10 +305,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		a.VoiceProfile = spec.VoiceProfile
 	}
 	a.ParentAssetID = parentID
-	a.noteRequest(in)
-	if original.InboundMessageType != 0 {
-		a.noteInboundRequest(in, original.InboundMessageType)
-	}
+	a.noteOriginal(in, original.InboundMessage)
 	if a.Formats == nil {
 		a.Formats = map[string]assetFormat{}
 	}

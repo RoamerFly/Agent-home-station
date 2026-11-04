@@ -125,7 +125,7 @@ func (a mediaUnderstanding) receiveFile(ctx context.Context, msg linuxnative.Mes
 		}
 	}
 	in := companion.Input{MessageTime: msg.CreatedAt, Channel: "wechat", Account: msg.AccountID, Thread: msg.ThreadID, Sender: msg.SenderID, TraceID: msg.ID, Text: "[文件] " + name}
-	asset, e := m.rememberStreamAsset(in, pending, name, typ, n)
+	asset, e := m.storeStreamAsset(in, pending, name, typ, n, &msg)
 	if e != nil {
 		return "", e
 	}
@@ -133,7 +133,7 @@ func (a mediaUnderstanding) receiveFile(ctx context.Context, msg linuxnative.Mes
 	if len(extension) > 16 {
 		extension = ".bin"
 	}
-	originalPath := filepath.Join(dir, agentID(msg.ID)[:24]+extension)
+	originalPath := filepath.Join(dir, agentID(msg.ID, asset.Hash)[:24]+extension)
 	src, e := m.openAsset(asset.Hash)
 	if e != nil {
 		return "", e
@@ -212,7 +212,7 @@ func (a mediaUnderstanding) rememberIncomingOriginal(ctx context.Context, msg li
 	}
 	name := kind + "-" + agentID(msg.ID)[:16] + ext
 	in := companion.Input{MessageTime: msg.CreatedAt, Channel: "wechat", Account: msg.AccountID, Thread: msg.ThreadID, Sender: msg.SenderID, TraceID: msg.ID, Text: "[收到" + map[string]string{"image": "图片", "voice": "语音"}[kind] + "原件]"}
-	asset, err := m.rememberAssetFormats(in, assetOriginal{InboundMessageType: msg.Type, Data: data, MIME: typ, Filename: name}, nil)
+	asset, err := m.rememberAssetFormats(in, assetOriginal{InboundMessage: &msg, Data: data, MIME: typ, Filename: name}, nil)
 	if err != nil {
 		return zero, nil, err
 	}
@@ -252,14 +252,13 @@ func (m *Manager) resolveInboundArtifact(ctx context.Context, in companion.Input
 	if err != nil {
 		return zero, linuxnative.Message{}, err
 	}
+	fingerprint := inboundFingerprint(msg)
 	for _, asset := range items {
 		if asset.Account != in.Account || asset.Scope != assetScope(in) || asset.Hash == "" {
 			continue
 		}
-		for _, request := range asset.Requests {
-			if request.TraceID == messageID && request.RequesterID == msg.SenderID {
-				return asset, msg, nil
-			}
+		if asset.hasOriginal(fingerprint) {
+			return asset, msg, nil
 		}
 	}
 	if msg.Type == 3 || msg.Type == 34 {
@@ -273,6 +272,10 @@ func (m *Manager) resolveInboundArtifact(ctx context.Context, in companion.Input
 	return zero, linuxnative.Message{}, errors.New("inbound_artifact_original_not_cached")
 }
 func (m *Manager) rememberStreamAsset(in companion.Input, file, name, typ string, n int64) (mediaAsset, error) {
+	return m.storeStreamAsset(in, file, name, typ, n, nil)
+}
+
+func (m *Manager) storeStreamAsset(in companion.Input, file, name, typ string, n int64, msg *linuxnative.Message) (mediaAsset, error) {
 	var zero mediaAsset
 	if in.Account != m.native.Account() || in.Thread == "" || n <= 0 || n > 512<<20 {
 		return zero, errors.New("incoming_file_scope_or_size_invalid")
@@ -322,13 +325,13 @@ func (m *Manager) rememberStreamAsset(in companion.Input, file, name, typ string
 			// Identical bytes can be received in several distinct messages. Keep
 			// every message identity so a later quoted/file-forward request can
 			// resolve the original without downloading or guessing again.
-			old.noteRequest(in)
+			old.noteOriginal(in, msg)
 			old.Updated = asset.Updated
 			items[i] = old
 			return old, m.saveAssets(items)
 		}
 	}
-	asset.noteRequest(in)
+	asset.noteOriginal(in, msg)
 	items = append(items, asset)
 	return asset, m.saveAssets(items)
 }

@@ -77,7 +77,7 @@ func (a mediaUnderstanding) understandSharedVideo(ctx context.Context, m linuxna
 			// this exact shared work. Keep its verified native source for reuse.
 			originalURL = m.Link.URL
 		}
-		asset, e := a.manager.rememberAssetFormats(in, assetOriginal{Data: video.Data, MIME: video.ContentType, URL: originalURL, Filename: "分享视频.mp4"}, nil)
+		asset, e := a.manager.rememberAssetFormats(in, assetOriginal{InboundMessage: &m, Data: video.Data, MIME: video.ContentType, URL: originalURL, Filename: "分享视频.mp4"}, nil)
 		if e == nil {
 			cache = "[已缓存本会话原视频素材：" + asset.ID + "，可按用户后续要求复用，尚未发送附件]\n"
 		} else {

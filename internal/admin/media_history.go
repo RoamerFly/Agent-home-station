@@ -88,12 +88,11 @@ func (m *Manager) recoverAssetHistoryPaths(items []mediaAsset) error {
 }
 
 func mergeAssetRequests(groups ...[]assetRequest) []assetRequest {
-	type key struct{ trace, sender, task string }
-	seen := map[key]bool{}
+	seen := map[[4]string]bool{}
 	out := []assetRequest{}
 	for _, group := range groups {
 		for _, r := range group {
-			k := key{r.TraceID, r.RequesterID, r.TaskID}
+			k := r.key()
 			if !seen[k] {
 				out = append(out, r)
 				seen[k] = true

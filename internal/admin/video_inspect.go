@@ -31,23 +31,24 @@ func (p *permittedTools) videoTools() []mcptools.Tool {
 }
 
 type videoInspectionInput struct {
-	SourceThread string  `json:"source_thread_id"`
-	Action       string  `json:"action"`
-	Asset        string  `json:"asset_id"`
-	Message      string  `json:"message_id"`
-	URL          string  `json:"url"`
-	Start        int     `json:"start_frame"`
-	PageSize     int     `json:"page_size"`
-	Step         int     `json:"step"`
-	AudioStart   float64 `json:"start_seconds"`
-	AudioLength  float64 `json:"duration_seconds"`
-	Question     string  `json:"question"`
-	Tokens       int     `json:"analysis_tokens"`
-	BatchSize    int     `json:"batch_size"`
-	MaxDimension int     `json:"max_dimension"`
-	Timeout      *int    `json:"timeout_seconds"`
-	AudioChunk   float64 `json:"audio_chunk_seconds"`
-	AudioTimeout *int    `json:"audio_timeout_seconds"`
+	sourceFingerprint string
+	SourceThread      string  `json:"source_thread_id"`
+	Action            string  `json:"action"`
+	Asset             string  `json:"asset_id"`
+	Message           string  `json:"message_id"`
+	URL               string  `json:"url"`
+	Start             int     `json:"start_frame"`
+	PageSize          int     `json:"page_size"`
+	Step              int     `json:"step"`
+	AudioStart        float64 `json:"start_seconds"`
+	AudioLength       float64 `json:"duration_seconds"`
+	Question          string  `json:"question"`
+	Tokens            int     `json:"analysis_tokens"`
+	BatchSize         int     `json:"batch_size"`
+	MaxDimension      int     `json:"max_dimension"`
+	Timeout           *int    `json:"timeout_seconds"`
+	AudioChunk        float64 `json:"audio_chunk_seconds"`
+	AudioTimeout      *int    `json:"audio_timeout_seconds"`
 }
 
 type videoMetadata struct {
@@ -148,7 +149,7 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 		if e != nil {
 			return nil, "", e
 		}
-		if msg.AccountID != p.trace.Account || explicitSource && msg.ThreadID != in.SourceThread || !p.inspectionThreadAllowed(msg.ThreadID) {
+		if msg.ID != in.Message || msg.AccountID != p.trace.Account || explicitSource && msg.ThreadID != in.SourceThread || !p.inspectionThreadAllowed(msg.ThreadID) {
 			return nil, "", toolInputError("消息不属于当前账号的已授权来源会话")
 		}
 		in.SourceThread = msg.ThreadID
@@ -161,16 +162,15 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 			return nil, "", cacheErr
 		}
 		sourceTrace.Thread = msg.ThreadID
+		in.sourceFingerprint = inboundFingerprint(msg)
 		for _, asset := range assets {
 			if asset.Account != p.trace.Account || asset.Scope != assetScope(sourceTrace) || !strings.HasPrefix(asset.MIME, "video/") || time.Since(asset.Updated) > time.Duration(m.Config().Companion.MemoryDays)*24*time.Hour {
 				continue
 			}
-			for _, request := range asset.Requests {
-				if request.TraceID == msg.ID {
-					data, err := m.cachedAssetData(asset)
-					if err == nil {
-						return data, msg.ID, nil
-					}
+			if asset.hasOriginal(in.sourceFingerprint) {
+				data, err := m.cachedAssetData(asset)
+				if err == nil {
+					return data, msg.ID, nil
 				}
 			}
 		}
@@ -453,19 +453,16 @@ func (p *permittedTools) inspectionTranscriptionMessage(ctx context.Context, in 
 			if asset.ID != in.Asset || asset.Account != p.trace.Account || asset.Scope != assetScope(companion.Input{Channel: "wechat", Account: p.trace.Account, Thread: in.SourceThread}) {
 				continue
 			}
-			if asset.FirstRequest != nil {
-				messageID = asset.FirstRequest.TraceID
-			} else {
-				ids := map[string]bool{}
-				for _, request := range asset.Requests {
-					if request.TraceID != "" {
-						ids[request.TraceID] = true
-					}
+			for _, r := range asset.Requests {
+				if r.SourceFingerprint == "" {
+					continue
 				}
-				if len(ids) == 1 {
-					for id := range ids {
-						messageID = id
-					}
+				current, err := p.manager.native.Message(ctx, r.TraceID)
+				if err == nil && current.ID == r.TraceID && current.AccountID == p.trace.Account && current.ThreadID == in.SourceThread && p.inspectionThreadAllowed(current.ThreadID) && current.Direction == "incoming" && (current.Type == 43 || current.Type == 49) && inboundFingerprint(current) == r.SourceFingerprint {
+					return current, nil
+				}
+				if ctx.Err() != nil {
+					return linuxnative.Message{}, ctx.Err()
 				}
 			}
 			break
@@ -480,6 +477,9 @@ func (p *permittedTools) inspectionTranscriptionMessage(ctx context.Context, in 
 	}
 	if message.AccountID == "" {
 		message.AccountID = p.manager.native.Account()
+	}
+	if in.sourceFingerprint != "" && inboundFingerprint(message) != in.sourceFingerprint {
+		return linuxnative.Message{}, errors.New("video_source_changed")
 	}
 	if message.ID != messageID || message.AccountID != p.trace.Account || message.ThreadID != in.SourceThread || !p.inspectionThreadAllowed(message.ThreadID) || message.Direction != "incoming" || (message.Type != 43 && message.Type != 49) {
 		return linuxnative.Message{}, errors.New("share_native_source_required")

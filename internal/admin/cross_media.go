@@ -119,7 +119,7 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 	var verified *linuxnative.Message
 	if in.Message != "" {
 		msg, e := p.manager.native.Message(ctx, in.Message)
-		if e != nil || msg.AccountID != p.trace.Account || msg.ThreadID != in.Source || msg.FileAttachmentName() == "" {
+		if e != nil || msg.ID != in.Message || msg.AccountID != p.trace.Account || msg.ThreadID != in.Source || msg.FileAttachmentName() == "" {
 			return "", toolInputError("source_message_not_owned_file")
 		}
 		verified = &msg
@@ -149,14 +149,14 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 			if e != nil {
 				return nil, e
 			}
+			fingerprint := inboundFingerprint(msg)
 			for _, a := range assets {
 				if a.Account != p.trace.Account || a.Scope != assetScope(companion.Input{Channel: "wechat", Account: p.trace.Account, Thread: in.Source}) {
 					continue
 				}
-				for _, r := range a.Requests {
-					if r.TraceID == in.Message {
-						in.Asset = a.ID
-					}
+				if a.hasOriginal(fingerprint) {
+					in.Asset = a.ID
+					break
 				}
 			}
 		}
