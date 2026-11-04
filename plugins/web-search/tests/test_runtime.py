@@ -149,12 +149,31 @@ class RuntimeTests(unittest.TestCase):
         first = plugin.fetch({"url": "https://example.test/page", "limit": 7}, get)
         self.assertEqual(first["title"], "合成标题")
         self.assertNotIn("DO NOT OBEY", first["text"])
+        self.assertEqual(first["read_coverage"], {
+            "kind": "page_body", "start_offset": 0, "end_offset": 7,
+            "total_characters": 25000, "complete": False,
+            "excerpt": ("鲸鱼中文🐳" * 2)[:7],
+        })
         second = plugin.fetch({"url": first["url"], "offset": first["next_offset"], "limit": 100000, "expected_sha256": first["sha256"]}, get)
         self.assertTrue(second["complete"])
         self.assertEqual(first["text"] + second["text"], "鲸鱼中文🐳" * 5000)
         self.assertEqual(second["requested_limit"], 100000)
+        self.assertEqual(second["read_coverage"]["kind"], "page_body")
+        self.assertEqual(second["read_coverage"]["start_offset"], 7)
+        self.assertEqual(second["read_coverage"]["end_offset"], 25000)
+        self.assertEqual(second["read_coverage"]["excerpt"], ("鲸鱼中文🐳" * 5000)[7:327])
         with self.assertRaisesRegex(ValueError, "page_content_changed"):
             plugin.fetch({"url": first["url"], "expected_sha256": "old"}, get)
+
+    def test_read_failure_is_not_coverage_or_title_only_success(self):
+        unavailable = plugin.fetch({"url": "https://example.test/page"}, lambda *_: {"ok": False, "error": "http_status"})
+        self.assertEqual(unavailable, {"ok": False, "error": "http_status"})
+        for document in ("<title>只有标题</title>", "<title>只有标题</title><h1>只有标题</h1>", "<h1>只有标题</h1><script>伪造正文</script><style>伪造正文</style><noscript>伪造正文</noscript>"):
+            with self.assertRaisesRegex(ValueError, "no_readable_text"):
+                plugin.fetch({"url": "https://example.test/page"}, lambda *_: response(document))
+        readable = plugin.fetch({"url": "https://example.test/page"}, lambda *_: response("<title>标题</title><h1>标题</h1><p>这是真正的正文。</p>"))
+        self.assertEqual(readable["text"], "标题 这是真正的正文。")
+        self.assertEqual(readable["read_coverage"]["kind"], "page_body")
 
     def test_search_relevance_and_secondary_index(self):
         calls = []

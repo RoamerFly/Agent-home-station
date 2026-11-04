@@ -292,6 +292,26 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		Query string `json:"query"`
 	}
 	_ = json.Unmarshal(args, &webArgs)
+	// The compatibility web_fetch alias and a direct service_plugin_call both
+	// reach the same installed web.read capability. Keep their provenance at one
+	// boundary so an Agent cannot bypass exploration evidence by choosing the
+	// generic name.
+	webReadName, webReadURL := "", webArgs.URL
+	if name == "web_fetch" {
+		webReadName = name
+	} else if name == "service_plugin_call" {
+		var service struct {
+			Plugin     string          `json:"plugin"`
+			Capability string          `json:"capability"`
+			Arguments  json.RawMessage `json:"arguments"`
+		}
+		var readArgs struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal(args, &service) == nil && service.Plugin == "web-search" && service.Capability == "web.read" && json.Unmarshal(service.Arguments, &readArgs) == nil {
+			webReadName, webReadURL = name, readArgs.URL
+		}
+	}
 	endpoint := ""
 	if u, e := url.Parse(webArgs.URL); e == nil && u.Host != "" {
 		u.User = nil
@@ -319,10 +339,18 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 				result += extra
 			}
 		}
-		if callErr == nil && p.trace.Surf && (name == "web_fetch" || name == "web_media_download") {
-			if err := p.manager.surfHistory.visit(p.trace, webArgs.URL); err != nil {
-				callErr = err
-				result = ""
+		if p.trace.Surf {
+			var historyErr error
+			switch {
+			case webReadName != "":
+				_, historyErr = p.manager.surfHistory.recordRead(p.trace, webReadName, webReadURL, result, callErr)
+			case name == "service_plugin_task":
+				historyErr = p.manager.surfHistory.recordReadTask(p.trace, result, callErr)
+			case name == "web_media_download":
+				_, historyErr = p.manager.surfHistory.recordRead(p.trace, name, webArgs.URL, result, callErr)
+			}
+			if historyErr != nil {
+				callErr, result = historyErr, ""
 			}
 		}
 		if callErr == nil && name == "web_media_download" && p.trace.Surf {

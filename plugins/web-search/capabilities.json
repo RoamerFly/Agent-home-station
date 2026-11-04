@@ -56,7 +56,7 @@
     {
       "id": "web.read",
       "implementation": "ready",
-      "description": "联网读取公共网页正文，默认10000字符，可分页并校验内容哈希。音轨或视频下载请使用 web_media_download。",
+      "description": "联网读取公共网页正文，默认10000字符，可分页并校验内容哈希。成功结果明确返回 read_coverage.page_body 的已读字符范围和有界摘录；标题、搜索摘要和读取失败均不代表读到正文。音轨或视频下载请使用 web_media_download。",
       "permissions": [
         "network"
       ],

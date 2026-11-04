@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
@@ -347,6 +348,18 @@ type serviceWebItem struct {
 	Summary string `json:"summary"`
 }
 
+// serviceWebReadCoverage is deliberately separate from page metadata. A
+// search title, a discovery summary, or a failed fetch must never look like a
+// page-body observation when the result is retained as an experience.
+type serviceWebReadCoverage struct {
+	Kind            string `json:"kind"`
+	StartOffset     int    `json:"start_offset"`
+	EndOffset       int    `json:"end_offset"`
+	TotalCharacters int    `json:"total_characters"`
+	Complete        bool   `json:"complete"`
+	Excerpt         string `json:"excerpt"`
+}
+
 type serviceWebResult struct {
 	OK                 bool                     `json:"ok"`
 	Backend            string                   `json:"backend"`
@@ -363,6 +376,7 @@ type serviceWebResult struct {
 	TotalCharacters    int                      `json:"total_characters"`
 	NextOffset         *int                     `json:"next_offset"`
 	Complete           bool                     `json:"complete"`
+	ReadCoverage       *serviceWebReadCoverage  `json:"read_coverage"`
 	Items              []serviceWebItem         `json:"items"`
 	ProviderItems      int                      `json:"provider_items"`
 	RequestedCount     int                      `json:"requested_count"`
@@ -716,8 +730,16 @@ func (s servicePluginPolicy) Validate(ctx context.Context, j pluginhost.Job, cap
 	if d.Decode(&result) != nil || !result.OK || !result.Untrusted {
 		return pluginruntime.VerifiedResult{}, errors.New("public content reading failed")
 	}
-	if j.Tool == "web.read" && !s.observed[result.URL] {
-		return pluginruntime.VerifiedResult{}, errors.New("plugin result source not observed")
+	if j.Tool == "web.read" {
+		if err := validateWebReadResult(j.Arguments, result, s.observed); err != nil {
+			// Jobs produced by the installed pre-0.3.4 runtime remain readable:
+			// their old result schema has no coverage proof. Keep their previous
+			// verified delivery semantics, but do not let the missing proof become
+			// a page-body experience in the new surf ledger.
+			if webReadCoverageRequired(j.Version) || validateLegacyWebReadResult(j.Arguments, result, s.observed) != nil {
+				return pluginruntime.VerifiedResult{}, err
+			}
+		}
 	}
 	if j.Tool == "web.discover" {
 		if err := s.p.validateWebDiscoveryResult(j.Arguments, result, s.observed); err != nil {
@@ -755,6 +777,91 @@ func (s servicePluginPolicy) Validate(ctx context.Context, j pluginhost.Job, cap
 		}
 	}
 	return pluginruntime.VerifiedResult{Result: append(json.RawMessage(nil), raw...)}, nil
+}
+
+func webReadCoverageRequired(version string) bool {
+	base := strings.SplitN(version, "-", 2)[0]
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return true
+	}
+	major, majorErr := strconv.Atoi(parts[0])
+	minor, minorErr := strconv.Atoi(parts[1])
+	patch, patchErr := strconv.Atoi(parts[2])
+	if majorErr != nil || minorErr != nil || patchErr != nil || major < 0 || minor < 0 || patch < 0 {
+		return true
+	}
+	return major > 0 || major == 0 && (minor > 3 || minor == 3 && patch >= 4)
+}
+
+type webReadArguments struct {
+	URL         string  `json:"url"`
+	Offset      *int    `json:"offset"`
+	Limit       *int    `json:"limit"`
+	ExpectedSHA *string `json:"expected_sha256"`
+	MaxBytes    *int64  `json:"max_bytes"`
+	Timeout     *int64  `json:"timeout_seconds"`
+}
+
+func parseWebReadArguments(raw json.RawMessage) (webReadArguments, error) {
+	var in webReadArguments
+	if strictServicePluginJSON(raw, &in) != nil || in.URL == "" || in.Offset != nil && *in.Offset < 0 || in.Limit != nil && *in.Limit < 1 || in.MaxBytes != nil && *in.MaxBytes < 1 || in.Timeout != nil && *in.Timeout < 1 {
+		return in, errors.New("web_read_arguments_invalid")
+	}
+	return in, nil
+}
+
+func validateLegacyWebReadResult(raw json.RawMessage, result serviceWebResult, observed map[string]bool) error {
+	in, err := parseWebReadArguments(raw)
+	if err != nil || result.ReadCoverage != nil || !observed[result.URL] || result.MetadataOnly || in.ExpectedSHA != nil && *in.ExpectedSHA != "" && result.SHA != *in.ExpectedSHA {
+		return errors.New("legacy_web_read_unverified")
+	}
+	return nil
+}
+
+func boundedWebReadExcerpt(text string) string {
+	runes := []rune(text)
+	if len(runes) > 320 {
+		runes = runes[:320]
+	}
+	return string(runes)
+}
+
+func validateWebReadResult(raw json.RawMessage, result serviceWebResult, observed map[string]bool) error {
+	in, err := parseWebReadArguments(raw)
+	if err != nil {
+		return err
+	}
+	offset, limit := 0, 10000
+	if in.Offset != nil {
+		offset = *in.Offset
+	}
+	if in.Limit != nil {
+		limit = *in.Limit
+	}
+	coverage := result.ReadCoverage
+	textCharacters := utf8.RuneCountInString(result.Text)
+	if result.TotalCharacters < offset {
+		return errors.New("web_read_coverage_unverified")
+	}
+	expectedCharacters := min(limit, result.TotalCharacters-offset)
+	if !observed[result.URL] || result.MetadataOnly || coverage == nil || coverage.Kind != "page_body" ||
+		result.Offset != offset || result.RequestedLimit != limit || result.ReturnedCharacters != textCharacters || textCharacters != expectedCharacters ||
+		coverage.StartOffset != offset || coverage.EndOffset != offset+textCharacters || coverage.TotalCharacters != result.TotalCharacters ||
+		coverage.Complete != result.Complete || coverage.Excerpt != boundedWebReadExcerpt(result.Text) ||
+		len(coverage.Excerpt) > 4*320 || !utf8.ValidString(coverage.Excerpt) || len(result.SHA) != 64 || in.ExpectedSHA != nil && *in.ExpectedSHA != "" && result.SHA != *in.ExpectedSHA {
+		return errors.New("web_read_coverage_unverified")
+	}
+	for _, r := range result.SHA {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return errors.New("web_read_coverage_unverified")
+		}
+	}
+	end := offset + textCharacters
+	if result.Complete != (end == result.TotalCharacters) || end < result.TotalCharacters && (result.NextOffset == nil || *result.NextOffset != end) || end == result.TotalCharacters && result.NextOffset != nil {
+		return errors.New("web_read_continuation_changed")
+	}
+	return nil
 }
 
 func (s servicePluginPolicy) validateDeepSeekResult(ctx context.Context, j pluginhost.Job, query string, count, offset, limit *int, result serviceWebResult) error {

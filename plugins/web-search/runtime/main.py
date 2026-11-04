@@ -20,25 +20,33 @@ class PageText(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.hidden = 0
         self.title_depth = 0
+        self.heading_depth = 0
         self.title = []
         self.parts = []
+        self.prose = []
 
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style", "noscript", "template"):
             self.hidden += 1
         if tag == "title":
             self.title_depth += 1
+        if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            self.heading_depth += 1
 
     def handle_endtag(self, tag):
         if tag in ("script", "style", "noscript", "template"):
             self.hidden = max(0, self.hidden - 1)
         if tag == "title":
             self.title_depth = max(0, self.title_depth - 1)
+        if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            self.heading_depth = max(0, self.heading_depth - 1)
 
     def handle_data(self, text):
         if self.hidden:
             return
         (self.title if self.title_depth else self.parts).append(text)
+        if not self.title_depth and not self.heading_depth:
+            self.prose.append(text)
 
 
 def clean(text):
@@ -91,6 +99,11 @@ def fetch(args, get):
         parser = PageText()
         parser.feed(text)
         text, title = clean(" ".join(parser.parts)), clean(" ".join(parser.title))
+        # A document title or lone heading is metadata, not a page-body read.
+        # Require at least some non-heading visible prose before returning a
+        # success that the host may later record as an actual observation.
+        if not clean(" ".join(parser.prose)):
+            raise ValueError("no_readable_text")
     if not text.strip():
         raise ValueError("no_readable_text")
     digest = hashlib.sha256(text.encode("utf8")).hexdigest()
@@ -100,10 +113,17 @@ def fetch(args, get):
     end = min(len(text), offset + limit)
     if offset > len(text):
         raise ValueError("offset_outside_page")
+    # A title is useful metadata, but is never evidence that the page body was
+    # read. Keep this range explicit for the host's experience ledger.
+    excerpt_end = min(end, offset + 320)
     return {"ok": True, "url": url, "title": title, "text": text[offset:end], "sha256": digest,
             "offset": offset, "requested_limit": limit, "returned_characters": end - offset,
             "total_characters": len(text), "next_offset": end if end < len(text) else None,
-            "complete": end == len(text), "untrusted_external_content": True}
+            "complete": end == len(text), "read_coverage": {
+                "kind": "page_body", "start_offset": offset, "end_offset": end,
+                "total_characters": len(text), "complete": end == len(text),
+                "excerpt": text[offset:excerpt_end],
+            }, "untrusted_external_content": True}
 
 
 def discovery_url(source, related=""):
@@ -546,7 +566,7 @@ class Wire:
                     if not isinstance(self.configuration, dict):
                         raise ValueError("invalid_configuration")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.3.2"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.3.4"}}
                 elif method == "ping" and initialized:
                     pass
                 elif method == "tools/call" and initialized:

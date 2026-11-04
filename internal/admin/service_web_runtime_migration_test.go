@@ -213,7 +213,13 @@ func TestLiveWebPublicMigrationIsolationContract(t *testing.T) {
 		t.Fatal("official web runtime startup failed", err)
 	}
 	p.hub = nil // a public alias must never reach the old Hub path.
+	synthetic := p.trace
+	synthetic.Text = "Synthetic exploration for the current account"
+	if err = f.manager.memory.Observe(synthetic, f.manager.Config().Companion, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	calls := 0
+	failFirstItemRead := true
 	p.webPageReader = func(_ context.Context, link string, maximum int64, timeout time.Duration) ([]byte, string, string, error) {
 		calls++
 		if strings.Contains(link, "bing.com/search") {
@@ -221,6 +227,13 @@ func TestLiveWebPublicMigrationIsolationContract(t *testing.T) {
 		}
 		if link == "https://example.test/article" {
 			return []byte(`<title>合成标题</title><script>not an instruction</script><p>合成正文</p>`), "text/html", link, nil
+		}
+		if link == "https://example.test/item" {
+			if failFirstItemRead {
+				failFirstItemRead = false
+				return nil, "", "", errors.New("synthetic offline")
+			}
+			return []byte(`<title>合成图片</title><p>岸边出现蓝色潮汐。</p>`), "text/html", link, nil
 		}
 		if link == "https://example.test/feed" {
 			return []byte(`<rss><channel><item><title>合成图片</title><link>https://example.test/item</link><description>合成简介</description><enclosure url="https://example.test/image.png" type="image/png"/></item></channel></rss>`), "application/xml", link, nil
@@ -249,6 +262,65 @@ func TestLiveWebPublicMigrationIsolationContract(t *testing.T) {
 	discovered, err = p.Call(t.Context(), "web_discover", json.RawMessage(`{}`))
 	if err != nil || calls != 3 || bytes.Contains([]byte(discovered), []byte(`"candidates":[{`)) {
 		t.Fatal("same plugin candidates duplicated or re-fetched", discovered, calls, err)
+	}
+	var continuation struct {
+		Reads []surfReadingExcerpt `json:"current_session_reading_excerpts"`
+	}
+	readAgain := func() []surfReadingExcerpt {
+		t.Helper()
+		result, err := p.Call(t.Context(), "web_discover", json.RawMessage(`{}`))
+		continuation.Reads = nil
+		if err != nil || json.Unmarshal([]byte(result), &continuation) != nil {
+			t.Fatalf("discovery continuation: %s %v", result, err)
+		}
+		return continuation.Reads
+	}
+	if got := readAgain(); len(got) != 0 {
+		t.Fatalf("metadata became a reading: %+v", got)
+	}
+	if _, err = p.Call(t.Context(), "web_fetch", json.RawMessage(`{"url":"https://example.test/item","limit":2}`)); err == nil || failFirstItemRead {
+		t.Fatalf("missing synthetic read failure: %v", err)
+	}
+	if got := readAgain(); len(got) != 0 {
+		t.Fatalf("failed request became a reading: %+v", got)
+	}
+	_, err = p.Call(t.Context(), "web_fetch", json.RawMessage(`{"url":"https://example.test/item","offset":4,"limit":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := readAgain()
+	if len(got) != 1 || got[0].Excerpt != "蓝色" || got[0].Start != 4 || got[0].End != 6 || got[0].Total != 9 || got[0].URL != "https://example.test/item" {
+		t.Fatalf("wrong reading range in model input: %+v", got)
+	}
+	decision := companion.Decision{Action: "reply", SurfItemID: got[0].CandidateID, Messages: []string{"读到了“蓝色”两个字。"}}
+	if checked, err := p.ReviewSurf(t.Context(), decision); err != nil || checked.Action != "reply" {
+		t.Fatalf("verified candidate did not pass the sharing check: %s %v", checked.Reason, err)
+	}
+	direct, err := p.Call(t.Context(), "service_plugin_call", json.RawMessage(`{"plugin":"web-search","capability":"web.read","arguments":{"url":"https://example.test/item","offset":6,"limit":2},"request_key":"synthetic-next-page"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = readAgain()
+	if len(got) != 2 || got[1].Excerpt != "潮汐" {
+		t.Fatalf("direct read did not continue the same article: %+v", got)
+	}
+	taskID := surfWebJobID(direct)
+	taskArgs, _ := json.Marshal(map[string]string{"task_id": taskID})
+	if _, err := p.Call(t.Context(), "service_plugin_task", taskArgs); err != nil {
+		t.Fatal(err)
+	}
+	if got := readAgain(); len(got) != 2 {
+		t.Fatalf("looking up the same job duplicated the reading: %+v", got)
+	}
+	if err = f.manager.memory.Clear(companion.ScopeID("wechat", p.trace.Account, p.trace.Thread)); err != nil {
+		t.Fatal(err)
+	}
+	// A cleared source cannot reappear from the exploration-history file.
+	if got := p.recentReadingExcerpts(t.Context(), f.manager.surfHistory.snapshot().Sessions[0]); len(got) != 0 {
+		t.Fatalf("forgotten context reappeared: %+v", got)
+	}
+	if checked, err := p.ReviewSurf(t.Context(), decision); err != nil || checked.Action != "silent" || checked.Reason != "surf_candidate_not_verified" {
+		t.Fatalf("stale job passed the sharing check: %s %v", checked.Reason, err)
 	}
 }
 

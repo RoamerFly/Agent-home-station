@@ -4,7 +4,7 @@
  const kinds={surf:'自主冲浪',chat_tool:'聊天需求',manual_tool:'手动测试'};
  const statuses={running:'执行中',succeeded:'成功',failed:'失败',accepted:'微信已接受',not_shared:'仅浏览，未分享',silent:'选择安静',reply:'准备分享',processing:'处理中',blocked:'被权限或预算阻止',waiting:'等待核对'};
  const surfReasons={surf_sources_unavailable:'所有本轮来源均不可用，未取得候选，并非角色不想分享',surf_no_novel_candidates:'本轮候选近期已浏览或分享过，等待新内容',surf_no_verified_source:'没有取得已核实内容，本轮不分享',surf_duplicate_source:'近期分享过相同来源，不重复发送',surf_duplicate_topic:'近期分享过相近主题，不重复推送',surf_candidate_not_selected:'没有选定具体候选，不分享',surf_candidate_not_verified:'候选尚未完成读取或媒体准备，不分享',model_chose_silence:'角色决定只浏览或收藏，不分享',autonomous_surf:'按随机计划开始浏览',tool_succeeded:'已取得实际结果',tool_started:'正在执行'};
- Object.assign(surfReasons,{owner_surf_share_accepted:'管理员补发已获微信接受',surf_forced_link_fallback:'按强制分享设置发送已读取内容的标题与来源链接',surf_forced_share_unfulfilled:'强制分享未完成：模型未给出可发送的已核实结果',surf_forced_share_failed:'强制分享未完成：未取得合适内容或工具受限',surf_bookmarked:'已收藏，暂不分享',surf_not_interested:'模型对本轮候选不感兴趣',surf_not_suitable:'模型判断不适合当前群',surf_browse_only:'已阅读，模型决定暂不分享',surf_candidates_only:'只查看了候选列表，未继续读取',surf_tool_failed:'工具执行失败，本轮未完成分享',surf_content_prepared:'内容已核实并准备，等待发送',surf_share_accepted:'微信已接受分享',tool_budget_exhausted:'本轮工具调用预算已用尽',tool_unavailable_or_budget_exhausted:'工具不可用或本轮预算已用尽'});
+ Object.assign(surfReasons,{owner_surf_share_accepted:'管理员补发已获微信接受',surf_forced_link_fallback:'按强制分享设置发送已读取内容的标题与来源链接',surf_forced_share_unfulfilled:'强制分享未完成：模型未给出可发送的已核实结果',surf_forced_share_failed:'强制分享未完成：未取得合适内容或工具受限',surf_bookmarked:'已收藏，暂不分享',surf_not_interested:'模型对本轮候选不感兴趣',surf_not_suitable:'模型判断不适合当前群',surf_browse_only:'本轮浏览结束，暂不分享',surf_candidates_only:'只查看了候选列表，未继续读取',surf_tool_failed:'工具执行失败，本轮未完成分享',surf_content_prepared:'内容已核实并准备，等待发送',surf_share_accepted:'微信已接受分享',tool_budget_exhausted:'本轮工具调用预算已用尽',tool_unavailable_or_budget_exhausted:'工具不可用或本轮预算已用尽'});
  const names={web_discover:'发现多源内容',web_search:'搜索网页',web_audio_search:'搜索音频文件',web_fetch:'读取网页',web_media_download:'下载媒体',surf_source:'读取内容源',surf_started:'开始自主冲浪',surf_review:'浏览结果',message_sent:'主动分享',character_decision:'分享决定'};
  const formatter=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
  function time(value){const date=new Date(value);if(!Number.isFinite(date.getTime()))return '—';const p=Object.fromEntries(formatter.formatToParts(date).map(x=>[x.type,x.value]));return `${p.year}-${p.month}-${p.day}-${p.hour}:${p.minute}:${p.second}`}
@@ -32,6 +32,17 @@
  function fillDiscovery(d){if(!d)return;discoveryConfig=structuredClone(d);const box=$('#surf-builtin-sources');box.replaceChildren();node(box,'legend','内容源');for(const source of d.sources.filter(x=>!x.id.startsWith('custom-'))){const label=node(box,'label',undefined,'surf-source-choice'),check=node(label,'input');check.type='checkbox';check.checked=source.enabled;check.dataset.source=source.id;node(label,'span',source.name+' · '+(formatNames[source.kind]||source.kind));check.addEventListener('change',dirty)}$('#surf-rss-sources').value=d.sources.filter(x=>x.id.startsWith('custom-')).map(x=>x.name+' | '+x.url+' | '+formatNames[x.kind]).join('\n')}
  function readDiscovery(){if(!discoveryConfig)throw new Error('内容发现设置尚未读取，请刷新后重试');const d=structuredClone(discoveryConfig);d.sources=d.sources.filter(x=>!x.id.startsWith('custom-')).map(x=>({...x,enabled:$('#surf-builtin-sources input[data-source="'+x.id+'"]').checked}));const formats={文字:'text',音乐:'voice',视频:'video',图片:'image'};for(const [i,line]of $('#surf-rss-sources').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean).entries()){const [name,url,kind]=line.split('|').map(x=>x.trim());let u;try{u=new URL(url)}catch{}if(!name||!u||!['http:','https:'].includes(u.protocol)||u.username||u.password||!formats[kind])throw new Error('订阅格式应为：名称 | 公开网址 | 文字／音乐／视频／图片');d.sources.push({id:'custom-'+i,name,url,type:'rss',kind:formats[kind],enabled:true})}if(d.sources.length>12||!d.sources.some(x=>x.enabled))throw new Error('最多12个内容源，至少启用一个');return d}
  const historyStates={failed:'读取、生成或发送失败',blocked:'分享被权限或预算阻止',browsing:'已发现候选',prepared:'已准备，等待发送',shared:'已分享',not_shared:'仅浏览，未分享',bookmarked:'已收藏'};
+ function renderObservation(row,observation,candidates){
+  const {state,offset=0,returned_characters:count,total_characters:total}=observation;
+  const label={read_failed:'读取失败',read_unverified:'读取范围未核实',legacy_unproven:'旧版工具未记录正文范围',media_prepared:'已准备媒体'};
+  let range=label[state]||'读取范围未核实';
+  if(state==='body_read'&&Number.isSafeInteger(offset)&&Number.isSafeInteger(count)&&Number.isSafeInteger(total)&&count>0&&offset>=0&&offset+count<=total){
+   range=`已读取正文第 ${offset+1}–${offset+count} 字（共 ${total} 字）`;
+  }
+  const item=candidates.find(c=>c.id&&c.id===observation.candidate_id);
+  const title=item?.title;
+  node(row,'p',title?title+' · '+range:range,'surf-observation');
+ }
  async function refreshHistory(){
   if(historyBusy||!window.WechatAdmin?.isAuthenticated())return;
   historyBusy=true;$('#surf-history-refresh').disabled=true;
@@ -46,8 +57,9 @@
     node(row,'summary',time(session.at)+' · '+(weightNames[session.mode]||session.mode)+' · '+(historyStates[session.state]||session.state)+' · '+(session.candidates||[]).length+'项');
     const reason=session.reason||(session.state==='bookmarked'?'surf_bookmarked':'');
     node(row,'p','本轮结果：'+(reason?(surfReasons[reason]||window.WechatLogReason?.(reason)||reason):'旧记录未保存细分原因，请结合读取轨迹和工具结果查看。'));
-    for(const item of session.candidates||[]){const p=node(row,'p'),a=node(p,'a',item.title);a.href=item.url;a.target='_blank';a.rel='noopener noreferrer';node(p,'small',' · '+item.source+' / '+(formatNames[item.kind]||item.kind)+(session.selected===item.id?' / 本轮选择':''))}
-    if(session.visited?.length)node(row,'p','继续读取／准备：'+session.visited.join(' · '));
+    for(const item of session.candidates||[]){const p=node(row,'p'),a=node(p,'a',item.title);a.href=item.url;a.target='_blank';a.rel='noopener noreferrer';node(p,'small',' · 发现候选 · '+item.source+' / '+(formatNames[item.kind]||item.kind)+(session.selected===item.id?' / 本轮选择':''))}
+    for(const observation of session.observations||[])renderObservation(row,observation,session.candidates||[]);
+    if(!session.observations?.length&&session.visited?.length)node(row,'p','旧记录未保存读取范围。','hint');
     for(const failure of session.failures||[])node(row,'p','内容源异常：'+failure,'form-error');
     for(const failure of session.tool_failures||[])node(row,'p','工具异常：'+failure,'form-error');
    }

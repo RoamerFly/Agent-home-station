@@ -508,7 +508,7 @@ func TestServiceResultForgetAndLiveRevocationApplyToRetainedPages(t *testing.T) 
 	if e != nil {
 		t.Fatal(e)
 	}
-	raw := json.RawMessage(`{"ok":true,"url":"https://example.test/page","text":"synthetic","untrusted_external_content":true}`)
+	raw := json.RawMessage(`{"ok":true,"url":"https://example.test/page","text":"synthetic","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","offset":0,"requested_limit":10000,"returned_characters":9,"total_characters":9,"next_offset":null,"complete":true,"read_coverage":{"kind":"page_body","start_offset":0,"end_offset":9,"total_characters":9,"complete":true,"excerpt":"synthetic"},"untrusted_external_content":true}`)
 	policy := servicePluginPolicy{p: p, observed: map[string]bool{"https://example.test/page": true}}
 	if _, e = policy.Validate(ctx, j, pluginhost.Capability{}, raw); e != nil {
 		t.Fatal(e)
