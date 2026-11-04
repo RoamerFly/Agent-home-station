@@ -251,7 +251,10 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 	}
 	m.mobile = m.newMobileService()
 	m.surf = surf
-	if assets, err := m.loadAssets(); err == nil {
+	// Only an explicitly present and valid catalogue can authoritatively remove
+	// derived media search records. A copied SQLite database may legitimately
+	// arrive before its media-assets manifest during recovery.
+	if assets, err := m.loadAssetsSnapshot(); err == nil && assets != nil {
 		if err = m.indexMemoryAssets(assets); err != nil {
 			return nil, err
 		}

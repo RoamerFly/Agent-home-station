@@ -120,8 +120,23 @@ func TestBackfillMediaMetadataKeepsReceiptChronologyAndScope(t *testing.T) {
 	s.Observe(in, c, stamp)
 	s.ObserveMedia(in, c, MediaMemory{Key: "voice", AssetID: "asset", Kind: "voice", State: "accepted"}, stamp)
 	id := ScopeID(in.Channel, in.Account, in.Thread)
-	if err := s.BackfillMediaMetadata(map[string]map[string]MediaMemory{id: {"asset": {URL: "https://example.org/source", CachedMIME: "audio/mp4", ParentAssetID: "parent"}}, ScopeID(in.Channel, in.Account, "other"): {"asset": {URL: "https://example.org/wrong"}}}); err != nil {
+	sources := map[string]map[string]MediaMemory{id: {"asset": {URL: "https://example.org/source", CachedMIME: "audio/mp4", ParentAssetID: "parent"}}, ScopeID(in.Channel, in.Account, "other"): {"asset": {URL: "https://example.org/wrong"}}}
+	before, err := s.DataEpoch(t.Context())
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err := s.BackfillMediaMetadata(sources); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.DataEpoch(t.Context())
+	if err != nil || after == before {
+		t.Fatal("first metadata update did not advance the snapshot", err)
+	}
+	if err := s.BackfillMediaMetadata(sources); err != nil {
+		t.Fatal(err)
+	}
+	if replay, err := s.DataEpoch(t.Context()); err != nil || replay != after {
+		t.Fatal("unchanged metadata invalidated pagination", err)
 	}
 	got := s.Context(in, c, time.Now()).Messages[1]
 	if got.Media.URL != "https://example.org/source" || got.Media.CachedMIME != "audio/mp4" || got.Media.ParentAssetID != "parent" || got.Media.State != "accepted" || !got.Time.Equal(stamp) {

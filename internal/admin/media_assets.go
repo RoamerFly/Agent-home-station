@@ -84,14 +84,22 @@ type mediaAsset struct {
 func assetScope(in companion.Input) string {
 	return companion.ScopeID(in.Channel, in.Account, in.Thread)
 }
-func (m *Manager) loadAssets() ([]mediaAsset, error) {
+
+// loadAssetsSnapshot distinguishes a verified catalogue from the absence of a
+// catalogue.  Startup synchronisation treats a verified [] as an instruction
+// to clear its derived document index, while a missing or malformed catalogue
+// cannot establish that no media exists and must leave the derived index alone.
+func (m *Manager) loadAssetsSnapshot() ([]mediaAsset, error) {
 	b, err := os.ReadFile(filepath.Join(m.dir, "media-assets.json"))
 	if errors.Is(err, os.ErrNotExist) {
-		return []mediaAsset{}, nil
+		return nil, nil
 	}
 	var items []mediaAsset
 	if err != nil || len(b) > 16<<20 || json.Unmarshal(b, &items) != nil {
 		return nil, errors.New("媒体素材索引无法读取")
+	}
+	if items == nil { // Older writers encoded an empty catalogue as null.
+		return nil, nil
 	}
 	if err := m.recoverAssetHistoryPaths(items); err != nil {
 		return nil, err
@@ -103,10 +111,18 @@ func (m *Manager) loadAssets() ([]mediaAsset, error) {
 	}
 	return items, nil
 }
+
+func (m *Manager) loadAssets() ([]mediaAsset, error) {
+	items, err := m.loadAssetsSnapshot()
+	if items == nil && err == nil {
+		return []mediaAsset{}, nil
+	}
+	return items, err
+}
 func (m *Manager) saveAssets(items []mediaAsset) error {
 	// History is committed first. An interrupted index replacement can retain
 	// extra verified associations, but must never erase an older association.
-	compact := append([]mediaAsset(nil), items...)
+	compact := append([]mediaAsset{}, items...)
 	for i := range compact {
 		if err := m.saveAssetHistory(&compact[i]); err != nil {
 			return err

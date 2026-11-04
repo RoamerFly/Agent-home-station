@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"errors"
 	"reflect"
 	"time"
 )
@@ -130,7 +131,11 @@ func (s *Store) BackfillMediaSources(sources map[string]map[string]string) error
 // BackfillMediaMetadata joins exact scoped IDs only. Unknown historical
 // requesters and missing original videos remain unknown rather than guessed.
 func (s *Store) BackfillMediaMetadata(sources map[string]map[string]MediaMemory) error {
-	return s.transaction(func(data *persisted) error {
+	// Starting a service with unchanged assets must preserve pagination cursors.
+	// A callback that returns before commit leaves the database epoch intact.
+	noUpdates := errors.New("media metadata already current")
+	err := s.transaction(func(data *persisted) error {
+		updated := false
 		for id, scope := range data.Scopes {
 			changed := false
 			for i := range scope.Messages {
@@ -161,11 +166,19 @@ func (s *Store) BackfillMediaMetadata(sources map[string]map[string]MediaMemory)
 				}
 			}
 			if changed {
+				updated = true
 				data.Scopes[id] = scope
 			}
 		}
+		if !updated {
+			return noUpdates
+		}
 		return nil
 	})
+	if err == noUpdates {
+		return nil
+	}
+	return err
 }
 
 // mediaBackfillSourceVisible protects a provenance upgrade from bypassing a
