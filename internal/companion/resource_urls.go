@@ -94,6 +94,15 @@ func currentMetadataOnly(turns []map[string]string) bool {
 			continue
 		}
 		for _, observation := range packet.Observations {
+			// A share is a transport type. Successful share readers prepend this
+			// envelope before publisher text, optionally after the asset receipt.
+			body := observation.Observation
+			if strings.HasPrefix(body, "[已缓存本会话原视频素材：") {
+				_, body, _ = strings.Cut(body, "\n")
+			}
+			if observation.State == "observed" && strings.HasPrefix(body, ObservedShareHeader+"\n") {
+				continue
+			}
 			if observation.Kind == "share" || observation.Kind == "card" || observation.State == "metadata_only" || strings.Contains(observation.Observation, "[收到分享卡片，仅依据卡片标题与简介，尚未观看视频") {
 				return true
 			}

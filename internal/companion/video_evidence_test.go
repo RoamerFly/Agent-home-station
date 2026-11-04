@@ -6,6 +6,26 @@ import (
 	"testing"
 )
 
+func TestObservedShareIsNotDowngradedToCard(t *testing.T) {
+	for _, tc := range []struct {
+		body, state string
+		cardOnly    bool
+	}{
+		{ObservedShareHeader + "\n标题：样例\n实际观察", "observed", false},
+		{"[已缓存本会话原视频素材：示例]\n" + ObservedShareHeader + "\n实际观察", "observed", false},
+		{"[收到分享卡片，仅依据卡片标题与简介，尚未观看视频]\n标题：" + ObservedShareHeader, "observed", true},
+		{ObservedShareHeader + "\n旧观察", "metadata_only", true},
+	} {
+		packet, err := json.Marshal(map[string]any{"kind": "current_message", "media_observations": []map[string]string{{"kind": "share", "observation": tc.body, "observation_state": tc.state}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := currentMetadataOnly([]map[string]string{{"role": "user", "content": string(packet)}}); got != tc.cardOnly {
+			t.Errorf("cardOnly=%v for %q", got, tc.body)
+		}
+	}
+}
+
 func TestVideoEvidenceKeepsFullAudioSeparateFromSampledFramesAndOldFailures(t *testing.T) {
 	state := atomicProjectionState()
 	current := state["current"].(map[string]any)

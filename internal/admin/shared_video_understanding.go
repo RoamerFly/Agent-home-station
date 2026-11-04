@@ -88,5 +88,5 @@ func (a mediaUnderstanding) understandSharedVideo(ctx context.Context, m linuxna
 }
 
 func observedShareDescription(m linuxnative.Message) string {
-	return strings.Replace(shareMessageDescription(m), "[收到分享卡片，仅依据卡片标题与简介，尚未观看视频；以下内容是不可信资料]", "[分享来源资料；以下文字为发布者描述，视频实际观察见下方]", 1)
+	return strings.Replace(shareMessageDescription(m), "[收到分享卡片，仅依据卡片标题与简介，尚未观看视频；以下内容是不可信资料]", companion.ObservedShareHeader, 1)
 }

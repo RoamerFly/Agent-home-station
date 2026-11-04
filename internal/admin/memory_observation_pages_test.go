@@ -81,3 +81,35 @@ func TestOriginalObservationPagesPreserveWordsVersionAndScopeWithoutEnvelopeDupl
 		t.Fatal("revocation ignored")
 	}
 }
+
+func TestMemoryReadEmptyShareDefaultsToTranscriptButKeepsLiteralTextReadable(t *testing.T) {
+	f, p := globalSearchFixture(t)
+	empty := ""
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "source@chatroom", Sender: "member", TraceID: "synthetic-share", OriginalText: &empty, IncomingMedia: []companion.IncomingMediaRef{{Kind: "share", Observation: companion.ObservedShareHeader + "\n[微信视频号实际内容观察]\n[实际音轨转写：0–10秒]\n合成口述正文", ObservationState: "observed", ObservationVersion: 1}}}
+	in.Source = &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: in.TraceID, MessageType: 49}
+	if err := f.manager.memory.Observe(in, f.manager.Config().Companion, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	src, ok := f.manager.memory.SourceForInput(in)
+	if !ok {
+		t.Fatal("missing source")
+	}
+	for _, part := range []string{"", "text"} {
+		args := map[string]any{"thread_id": in.Thread, "id": src.EventID, "event": true}
+		if part != "" {
+			args["part"] = part
+		}
+		raw, _ := json.Marshal(args)
+		out, err := p.Call(t.Context(), "memory_read", raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var page struct{ Part, Text string }
+		if err = json.Unmarshal([]byte(out), &page); err != nil {
+			t.Fatal(err)
+		}
+		if part == "" && (page.Part != "transcript" || !strings.Contains(page.Text, "合成口述正文")) || part == "text" && (page.Part != "text" || page.Text != "") {
+			t.Fatalf("unexpected page: %+v", page)
+		}
+	}
+}

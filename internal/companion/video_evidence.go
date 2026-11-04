@@ -2,6 +2,8 @@ package companion
 
 import "strings"
 
+const ObservedShareHeader = "[分享来源资料；以下文字为发布者描述，视频实际观察见下方]"
+
 // SavedVideoTranscript returns the existing transcript section without
 // re-summarizing or re-running ASR. False means this observation has no such
 // section, not that the underlying video has no audio.
