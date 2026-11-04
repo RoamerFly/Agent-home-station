@@ -123,6 +123,7 @@ type Manager struct {
 	mobile              deviceService
 	agent               *agentControl
 	surfHistory         *surfHistoryStore
+	surfInteractions    *surfInteractionStore
 	billing             *billingStore
 	assetMu             sync.Mutex
 	crossSendMu         sync.Mutex
@@ -278,6 +279,10 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 		}
 	}
 	m.surfHistory, err = newSurfHistory(dir)
+	if err != nil {
+		return nil, err
+	}
+	m.surfInteractions, err = newSurfInteractionStore(dir)
 	if err != nil {
 		return nil, err
 	}

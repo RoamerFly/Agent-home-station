@@ -15,14 +15,27 @@ import (
 )
 
 type surfSettings struct {
-	Discovery          *discoverySettings `json:"discovery"`
-	Enabled            bool               `json:"enabled"`
-	ForceShare         bool               `json:"force_share"`
-	IntervalMinutes    int                `json:"interval_minutes"`
-	IntervalMaxMinutes int                `json:"interval_max_minutes"`
-	MaxSessionsPerDay  int                `json:"max_sessions_per_day"`
-	Topics             []string           `json:"topics"`
-	Threads            []string           `json:"threads"`
+	Discovery *discoverySettings `json:"discovery"`
+	// InteractionGrants are explicit administrator approvals for a configured
+	// public source. Discovering or reading a source never implies permission to
+	// act there. The account is the current Manager account and is bound again
+	// in the request/receipt ledger.
+	InteractionGrants  []surfInteractionGrant `json:"interaction_grants,omitempty"`
+	Enabled            bool                   `json:"enabled"`
+	ForceShare         bool                   `json:"force_share"`
+	IntervalMinutes    int                    `json:"interval_minutes"`
+	IntervalMaxMinutes int                    `json:"interval_max_minutes"`
+	MaxSessionsPerDay  int                    `json:"max_sessions_per_day"`
+	Topics             []string               `json:"topics"`
+	Threads            []string               `json:"threads"`
+}
+
+type surfInteractionGrant struct {
+	SourceID        string   `json:"source_id"`
+	Platform        string   `json:"platform"`
+	PlatformAccount string   `json:"platform_account"`
+	Actions         []string `json:"actions"`
+	Enabled         bool     `json:"enabled"`
 }
 type surfState struct {
 	SettingsRevision int          `json:"settings_revision,omitempty"`
@@ -73,6 +86,37 @@ func validateSurf(s surfSettings) error {
 	for _, t := range s.Topics {
 		if strings.TrimSpace(t) == "" || len(t) > 200 {
 			return errors.New("每个冲浪兴趣需要 1–200 字节")
+		}
+	}
+	if len(s.InteractionGrants) > 12 {
+		return errors.New("互动授权数量过多")
+	}
+	granted := map[string]bool{}
+	for _, grant := range s.InteractionGrants {
+		if strings.TrimSpace(grant.SourceID) == "" || strings.TrimSpace(grant.Platform) == "" || strings.TrimSpace(grant.PlatformAccount) == "" || granted[grant.SourceID] || len(grant.Actions) == 0 || len(grant.Actions) > 4 {
+			return errors.New("请检查互动授权来源和动作")
+		}
+		granted[grant.SourceID] = true
+		actions := map[string]bool{}
+		for _, action := range grant.Actions {
+			if action != "comment" || actions[action] {
+				return errors.New("互动授权动作无效")
+			}
+			actions[action] = true
+		}
+	}
+	if len(s.InteractionGrants) > 0 {
+		if s.Discovery == nil {
+			return errors.New("互动授权需要配置内容源")
+		}
+		known := map[string]bool{}
+		for _, source := range s.Discovery.Sources {
+			known[source.ID] = true
+		}
+		for _, grant := range s.InteractionGrants {
+			if !known[grant.SourceID] {
+				return errors.New("互动授权引用了不存在的内容源")
+			}
 		}
 	}
 	return nil

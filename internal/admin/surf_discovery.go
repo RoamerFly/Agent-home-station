@@ -543,6 +543,10 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 		}
 		mcptools.ShuffleDiscovery(r.items)
 		for _, x := range r.items {
+			// The configured source, never an adapter-supplied display label,
+			// identifies the authority that discovered this candidate. Display
+			// labels may change, while interaction grants must not.
+			x.SourceID = r.source.ID
 			x.Source = surfPlatformName(r.source.Name, x.Source)
 			publicURL, ok := publicSearchURL(strings.TrimSpace(x.URL))
 			if !ok {
@@ -624,6 +628,15 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 		if previous := p.priorReadingExcerpts(ctx, session); len(previous) > 0 {
 			out["prior_authorized_reading_excerpts"] = previous
 			out["instruction"] = out["instruction"].(string) + " 既往摘录只记录此前在同一兴趣下实际读到的部分，当前候选的阅读进度单独核对。"
+		}
+		if comments := p.priorConfirmedInteractions(ctx, session); len(comments) > 0 {
+			out["prior_confirmed_interactions"] = comments
+		}
+		if len(p.surfInteractionTools()) > 0 {
+			out["public_interaction"] = map[string]any{"tool": "surf_interaction", "hint": "对已读的授权来源可选择评论；待确认的操作可用 status 查询。"}
+			if pending := p.pendingSurfInteractions(ctx); len(pending) > 0 {
+				out["pending_public_interactions"] = pending
+			}
 		}
 	}
 

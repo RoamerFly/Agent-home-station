@@ -16,7 +16,11 @@ type DiscoverySource struct {
 	Enabled bool   `json:"enabled"`
 }
 type DiscoveryItem struct {
-	ID         string `json:"id"`
+	ID string `json:"id"`
+	// SourceID is assigned by the host from the exact configured discovery
+	// source. Unlike Source, which is a human-facing provider label returned by
+	// adapters, it is stable authorization provenance for an interaction.
+	SourceID   string `json:"source_id,omitempty"`
 	Title      string `json:"title"`
 	Summary    string `json:"summary"`
 	URL        string `json:"url"`

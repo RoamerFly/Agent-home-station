@@ -41,6 +41,7 @@ func (p *permittedTools) capabilities() []capabilityAdapter {
 		{"bailian-speech", p.speechTools, namedTools("speech_synthesize", "music_generate"), p.callSpeech},
 		{"yue", p.yueTools, namedTools("music_rvc_start", "music_sampling_options", "music_local_start", "music_local_status", "music_local_resume", "music_reference_inspect", "music_lyrics_compare", "music_service_status"), p.callYuE},
 		{"run-output", p.outputTools, namedTools("tool_output_read"), p.readToolOutput},
+		{"surf-interaction", p.surfInteractionTools, namedTools("surf_interaction"), p.callSurfInteraction},
 	}
 }
 

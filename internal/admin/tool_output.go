@@ -220,7 +220,11 @@ func (p *permittedTools) surfGenerationAuthorization() string {
 	if !remember {
 		return ""
 	}
-	return agentID("surf-generation-v1", grant, strconv.Itoa(revision), interest)
+	base := agentID("surf-generation-v1", grant, strconv.Itoa(revision), interest)
+	if interactions := p.surfInteractionGenerationStamp(); interactions != "" {
+		return agentID("surf-generation-interaction-v1", base, interactions)
+	}
+	return base
 }
 
 // MemoryResultAuthorized is also used before reinjecting retained memory into

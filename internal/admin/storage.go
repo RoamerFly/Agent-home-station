@@ -74,10 +74,11 @@ type storageGroup struct {
 
 func (m *Manager) storageGroups() []storageGroup {
 	companion := filepath.Join(m.dir, "companion")
+	interactions := filepath.Join(m.dir, "surf-interactions.sqlite")
 	return []storageGroup{
 		{"memory", "活跃记忆", []string{filepath.Join(companion, "memory.json"), filepath.Join(companion, "memory.sqlite"), filepath.Join(companion, "memory.sqlite-wal"), filepath.Join(companion, "memory.sqlite-shm")}, []string{companion}},
 		{"logs", "活跃日志", []string{filepath.Join(m.dir, "activity.json"), filepath.Join(m.dir, "audit.json")}, []string{m.dir}},
-		{"index", "任务与素材索引", []string{filepath.Join(m.dir, "agent-state.json"), filepath.Join(m.dir, "tool-state.json"), filepath.Join(m.dir, "media-assets.json")}, []string{m.dir}},
+		{"index", "任务与素材索引", []string{filepath.Join(m.dir, "agent-state.json"), filepath.Join(m.dir, "tool-state.json"), filepath.Join(m.dir, "media-assets.json"), interactions, interactions + "-wal", interactions + "-shm"}, []string{m.dir}},
 		{"media", "保留的媒体原件", nil, []string{filepath.Join(m.dir, "media-assets")}},
 		{"archives", "只读归档", nil, []string{filepath.Join(m.dir, "archive"), filepath.Join(companion, "archive")}},
 		{"receipts", "历史发送回执索引", nil, []string{filepath.Join(m.dir, "send-ledger")}},

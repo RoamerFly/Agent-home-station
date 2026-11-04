@@ -82,25 +82,28 @@ func redactedMCP(c mcpSettings) mcpSettings {
 }
 
 type permittedTools struct {
-	privateSurfOrigin    *privateSurfOrigin
-	outboundReviewer     companion.LanguageModel
-	discoveryReader      func(context.Context, mcptools.DiscoverySource, string) ([]mcptools.DiscoveryItem, error)
-	webPageReader        func(context.Context, string, int64, time.Duration) ([]byte, string, string, error)
-	trace                companion.Input
-	hub                  *mcptools.Hub
-	settings             mcpSettings
-	mcpSourceHash        string
-	runtime              *plugins.Runtime
-	apiNames             map[string]bool
-	apiKinds             map[string]string
-	manager              *Manager
-	mediaMu              sync.Mutex
-	selectedVoiceID      string
-	selectedVoiceProfile string
-	media                map[string]companion.GeneratedMedia
-	mediaOrigin          map[string]string
-	songFollowups        []string
-	privateDiagnostics   bool
+	privateSurfOrigin *privateSurfOrigin
+	outboundReviewer  companion.LanguageModel
+	discoveryReader   func(context.Context, mcptools.DiscoverySource, string) ([]mcptools.DiscoveryItem, error)
+	webPageReader     func(context.Context, string, int64, time.Duration) ([]byte, string, string, error)
+	// surfInteractionAdapter is registered by the host only for an explicitly
+	// supported public platform.  It is intentionally nil in normal builds.
+	surfInteractionAdapter surfInteractionAdapter
+	trace                  companion.Input
+	hub                    *mcptools.Hub
+	settings               mcpSettings
+	mcpSourceHash          string
+	runtime                *plugins.Runtime
+	apiNames               map[string]bool
+	apiKinds               map[string]string
+	manager                *Manager
+	mediaMu                sync.Mutex
+	selectedVoiceID        string
+	selectedVoiceProfile   string
+	media                  map[string]companion.GeneratedMedia
+	mediaOrigin            map[string]string
+	songFollowups          []string
+	privateDiagnostics     bool
 	// Minted only after a trusted owner actually reads another conversation
 	// from a group. The final text is delivered to the owner privately while
 	// retaining the real source conversation for authorization checks.
@@ -131,9 +134,10 @@ func (p *permittedTools) ForkTools() companion.ToolAccess {
 	// Hub and plugin Runtime are immutable after construction. Mutable per-call
 	// trace/media state must never be shared between simultaneous conversations.
 	return &permittedTools{hub: p.hub, settings: p.settings, runtime: p.runtime, mcpSourceHash: p.mcpSourceHash,
-		privateSurfOrigin: p.privateSurfOrigin,
-		outboundReviewer:  p.outboundReviewer,
-		apiNames:          p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
+		privateSurfOrigin:      p.privateSurfOrigin,
+		surfInteractionAdapter: p.surfInteractionAdapter,
+		outboundReviewer:       p.outboundReviewer,
+		apiNames:               p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
 		discoveryReader: p.discoveryReader, webPageReader: p.webPageReader, media: map[string]companion.GeneratedMedia{}, mediaOrigin: map[string]string{}, crossSourceThreads: map[string]bool{}, crossSourceMessages: map[string][]string{}}
 }
 
@@ -157,6 +161,9 @@ func (p *permittedTools) enabled(name string) bool {
 	}
 	if name == "tool_output_read" {
 		return p.outputScope() != ""
+	}
+	if name == "surf_interaction" {
+		return len(p.surfInteractionTools()) > 0
 	}
 	if name == "voice_enroll" {
 		return p.enrollmentAllowed()

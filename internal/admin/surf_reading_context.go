@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/pluginhost"
@@ -19,20 +20,37 @@ func (p *permittedTools) validatedSurfReading(ctx context.Context, row surfObser
 	if !p.trace.Surf || row.State != "body_read" || row.CandidateID == "" || row.JobID == "" || row.ContentHash == "" {
 		return serviceWebResult{}, false
 	}
+	read, ok := p.authorizedSurfReadJob(ctx, row.JobID, row.URL, row.ContentHash)
+	if !ok {
+		return serviceWebResult{}, false
+	}
+	coverage := read.ReadCoverage
+	if coverage.StartOffset != row.Offset || coverage.EndOffset != row.Offset+row.ReturnedCharacters || coverage.TotalCharacters != row.TotalCharacters || coverage.Complete != row.Complete {
+		return serviceWebResult{}, false
+	}
+	return read, true
+}
+
+// Reading history and comment receipts both refer back to the same authorized
+// reader job. The job owns the body and its verified coverage.
+func (p *permittedTools) authorizedSurfReadJob(ctx context.Context, jobID, sourceURL, hash string) (serviceWebResult, bool) {
+	if !p.trace.Surf || jobID == "" || sourceURL == "" || hash == "" {
+		return serviceWebResult{}, false
+	}
 	store, err := p.manager.packageStore()
 	if err != nil {
 		return serviceWebResult{}, false
 	}
-	job, err := store.Job(ctx, row.JobID)
+	job, err := store.Job(ctx, jobID)
 	if err != nil || job.State != "completed" || job.Plugin != "web-search" || job.Tool != "web.read" || (servicePluginPolicy{p: p}).Check(ctx, job, pluginhost.Capability{}) != nil {
 		return serviceWebResult{}, false
 	}
 	var read serviceWebResult
-	if json.Unmarshal(job.Result, &read) != nil || !read.OK || !read.Untrusted || read.ReadCoverage == nil || canonicalSurfURL(read.URL) != row.URL || read.SHA != row.ContentHash {
+	if json.Unmarshal(job.Result, &read) != nil || !read.OK || !read.Untrusted || read.ReadCoverage == nil || canonicalSurfURL(read.URL) != sourceURL || read.SHA != hash {
 		return serviceWebResult{}, false
 	}
 	coverage := read.ReadCoverage
-	if coverage.Kind != "page_body" || coverage.Excerpt == "" || coverage.StartOffset != row.Offset || coverage.EndOffset != row.Offset+row.ReturnedCharacters || coverage.TotalCharacters != row.TotalCharacters || coverage.Complete != row.Complete {
+	if coverage.Kind != "page_body" || coverage.Excerpt == "" {
 		return serviceWebResult{}, false
 	}
 	return read, true
@@ -181,4 +199,45 @@ type surfReadingExcerpt struct {
 	End         int    `json:"end_offset_exclusive"`
 	Total       int    `json:"total_characters"`
 	companion.ObservationPart
+}
+
+type confirmedSurfComment struct {
+	Action          string    `json:"action"`
+	Platform        string    `json:"platform"`
+	PlatformAccount string    `json:"platform_account"`
+	CandidateID     string    `json:"candidate_id"`
+	URL             string    `json:"url"`
+	TextExcerpt     string    `json:"text_excerpt"`
+	ReceiptID       string    `json:"receipt_id"`
+	ConfirmedAt     time.Time `json:"confirmed_at"`
+}
+
+// Project receipts into exploration context on demand. Keeping a second copy
+// of a comment in free-text memory would bypass revocation and source changes.
+func (p *permittedTools) priorConfirmedInteractions(ctx context.Context, session surfSession) []confirmedSurfComment {
+	if p == nil || p.manager == nil || p.manager.surfInteractions == nil || !p.reusableSurfReadingScope(ctx, session) {
+		return nil
+	}
+	grant := p.surfInteractionGenerationStamp()
+	if grant == "" {
+		return nil
+	}
+	var comments []confirmedSurfComment
+	for _, row := range p.manager.surfInteractions.confirmed(session.Account, session.Thread, session.ScopeKey, session.InterestKey, 12) {
+		r := row.Request
+		if r.SessionID == session.ID || !p.surfInteractionGrantCurrent(r) {
+			continue
+		}
+		comments = append(comments, confirmedSurfComment{Action: r.Action, Platform: r.Platform,
+			PlatformAccount: r.PlatformAccount, CandidateID: r.CandidateID, URL: r.SourceURL,
+			TextExcerpt: logText(r.Text, 300), ReceiptID: row.ReceiptID, ConfirmedAt: row.ConfirmedAt})
+		if len(comments) == 3 {
+			break
+		}
+	}
+	if len(comments) > 0 && (grant != p.surfInteractionGenerationStamp() || !p.reusableSurfReadingScope(ctx, session)) {
+		return nil
+	}
+	slices.Reverse(comments)
+	return comments
 }
