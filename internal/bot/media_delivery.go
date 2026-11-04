@@ -1064,8 +1064,7 @@ func (w *Worker) pauseAmbiguousVoiceTraces(n mediaNative, m linuxnative.Message,
 	}
 }
 func (w *Worker) stopRequestedVoice(ctx context.Context, m linuxnative.Message) bool {
-	created, e := time.Parse(time.RFC3339, m.CreatedAt)
-	if e != nil || time.Since(created) > w.maxMessageAge() || created.After(time.Now().Add(30*time.Second)) {
+	if !w.messageInTime(m, time.Now()) {
 		return false
 	}
 	if w.runtime == nil || m.Type != 1 || !w.allowed[m.ThreadID] {

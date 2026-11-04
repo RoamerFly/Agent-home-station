@@ -20,6 +20,7 @@ type inboxItem struct {
 	OwnerModelReview bool                              `json:"owner_model_review,omitempty"`
 	ReceivedRecorded bool                              `json:"received_recorded,omitempty"`
 	AggregateUntil   time.Time                         `json:"aggregate_until,omitempty"`
+	CollectedAt      time.Time                         `json:"collected_at,omitempty"`
 	ToolStarted      bool                              `json:"tool_started,omitempty"`
 	Event            linuxnative.Event                 `json:"event"`
 	Phase            string                            `json:"phase"`
@@ -216,6 +217,28 @@ func (w *Worker) loadRuntime(server string) error {
 	}
 	return nil
 }
+
+// Fix a group turn's deadline when its first receipt arrives. Later receipts
+// share it; a steady conversation cannot postpone the decision indefinitely.
+func (w *Worker) collectionDeadline(thread string, at time.Time, window time.Duration) time.Time {
+	if window <= 0 {
+		return time.Time{}
+	}
+	if strings.HasSuffix(thread, "@chatroom") {
+		for i := len(w.runtime.Inbox) - 1; i >= 0; i-- {
+			prior := w.runtime.Inbox[i]
+			if prior.Event.Data.ThreadID != thread || prior.AggregateUntil.IsZero() {
+				continue
+			}
+			if prior.Phase == "received" && at.Before(prior.AggregateUntil) {
+				return prior.AggregateUntil
+			}
+			break
+		}
+	}
+	return at.Add(window)
+}
+
 func (w *Worker) drainInbox(ctx context.Context) error {
 	for i := range w.runtime.Inbox {
 		if w.draining() {
@@ -250,7 +273,7 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 			ids := map[string]bool{}
 			for j := i; j < len(w.runtime.Inbox); j++ {
 				next := &w.runtime.Inbox[j]
-				if next.Phase == "received" && !next.Backlog && !next.OwnerModelReview && !next.ToolStarted && next.Event.Data.ThreadID == thread && next.Event.Data.Direction == "incoming" && !next.Updated.After(item.AggregateUntil) && !time.Now().Before(next.RetryAfter) {
+				if next.Phase == "received" && !next.Backlog && !next.OwnerModelReview && !next.ToolStarted && next.Event.Data.ThreadID == thread && next.Event.Data.Direction == "incoming" && next.AggregateUntil.Equal(item.AggregateUntil) && !time.Now().Before(next.RetryAfter) {
 					ids[next.Event.Data.MessageID] = true
 				}
 			}
@@ -400,11 +423,14 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 						return errors.New("inbox full; no message cursor discarded")
 					}
 				}
-				w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Event: event, Phase: "received", Updated: time.Now().UTC()})
+				item := inboxItem{Event: event, Phase: "received", Updated: time.Now().UTC()}
 				if c, ok := w.model.(*companion.Engine); ok && c.Config.ConversationConfig().Enabled && !w.pendingConversationThread(event.Data.ThreadID) {
-					window := c.Config.ConversationConfig().AggregateMS
-					w.runtime.Inbox[len(w.runtime.Inbox)-1].AggregateUntil = time.Now().Add(time.Duration(window) * time.Millisecond)
+					item.AggregateUntil = w.collectionDeadline(event.Data.ThreadID, item.Updated, c.Config.ConversationConfig().CollectionWindow(event.Data.ThreadID))
+					if !item.AggregateUntil.IsZero() && strings.HasSuffix(event.Data.ThreadID, "@chatroom") {
+						item.CollectedAt = item.Updated
+					}
 				}
+				w.runtime.Inbox = append(w.runtime.Inbox, item)
 				if err = w.saveRuntime(); err != nil {
 					return err
 				}

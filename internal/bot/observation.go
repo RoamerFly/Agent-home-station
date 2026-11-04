@@ -27,7 +27,7 @@ func observationReason(err error) string {
 	if errors.As(err, &failure) {
 		code, _ = failure.SafeToolFailure()
 	}
-	for _, prefix := range []string{"plugin_", "media_", "incoming_", "shared_video_", "share_", "channels_", "video_", "source_identity_", "vision_", "asr_"} {
+	for _, prefix := range []string{"plugin_", "media_", "incoming_", "shared_video_", "share_", "channels_", "video_", "source_identity_", "vision_", "asr_", "sticker_"} {
 		if strings.HasPrefix(code, prefix) && len(code) <= 100 && strings.Trim(code, "abcdefghijklmnopqrstuvwxyz0123456789_") == "" {
 			return code
 		}

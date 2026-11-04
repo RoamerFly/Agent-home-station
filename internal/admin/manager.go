@@ -331,6 +331,10 @@ func cloneConfig(c Config) Config {
 	}
 	if c.Companion.Conversation != nil {
 		copy := *c.Companion.Conversation
+		if copy.GroupAggregateMS != nil {
+			ms := *copy.GroupAggregateMS
+			copy.GroupAggregateMS = &ms
+		}
 		c.Companion.Conversation = &copy
 	}
 	c.DirectIDs = append([]string{}, c.DirectIDs...)

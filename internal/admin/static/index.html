@@ -1162,7 +1162,10 @@
 </pre>
 </details>
 <article class="panel" id="permissions-panel">
-<h3>媒体与主动行为</h3>
+<h3>群聊与主动行为</h3>
+<label for="group-collection-seconds">群消息收集窗口（秒）</label>
+<input id="group-collection-seconds" type="number" min="0" step="0.001" required aria-describedby="group-collection-hint">
+<p id="group-collection-hint" class="hint">从第一条消息开始计时。0 秒立即处理；重新上线时，每个会话的未读消息一起处理。</p>
 <label class="switch-row">
 <span>主动问候</span>
 <input id="perm-proactive" type="checkbox">

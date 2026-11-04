@@ -17,6 +17,7 @@ var ErrWakeContext = errors.New("conversation wake context unavailable")
 type ConversationSettings struct {
 	Enabled            bool `json:"enabled"`
 	AggregateMS        int  `json:"aggregate_ms"`
+	GroupAggregateMS   *int `json:"group_aggregate_ms,omitempty"`
 	RecheckOnMessage   bool `json:"recheck_on_message"`
 	AllowWake          bool `json:"allow_wake"`
 	WakeMinSeconds     int  `json:"wake_min_seconds"`
@@ -33,9 +34,27 @@ func (c Config) ConversationConfig() ConversationSettings {
 	}
 	return *c.Conversation
 }
+
+// Online group turns have a separate collection window. Retain explicit legacy
+// tuning (including zero) while upgrading the former two-second default.
+func (c ConversationSettings) CollectionWindow(thread string) time.Duration {
+	ms := c.AggregateMS
+	if strings.HasSuffix(thread, "@chatroom") {
+		if c.GroupAggregateMS != nil {
+			ms = *c.GroupAggregateMS
+		} else if ms == 2000 {
+			ms = 20000
+		}
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 func validateConversation(c *ConversationSettings) error {
 	if c == nil {
 		return nil
+	}
+	if c.GroupAggregateMS != nil && (*c.GroupAggregateMS < 0 || int64(*c.GroupAggregateMS) > int64((time.Duration(1<<63-1))/time.Millisecond)) {
+		return errors.New("群消息收集时长无效")
 	}
 	if c.AggregateMS < 0 || c.AggregateMS > 5000 || c.WakeMinSeconds < 1 || c.WakeMaxSeconds < c.WakeMinSeconds || int64(c.WakeMaxSeconds) > int64((time.Duration(1<<63-1))/time.Second) || c.TaskTimeoutSeconds < 0 || int64(c.TaskTimeoutSeconds) > int64((time.Duration(1<<63-1))/time.Second) {
 		return errors.New("请检查消息聚合窗口与延时补充范围")

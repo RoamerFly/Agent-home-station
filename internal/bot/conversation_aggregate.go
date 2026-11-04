@@ -19,7 +19,7 @@ func (w *Worker) aggregateConversation(ctx context.Context, c *companion.Engine,
 	if current.SenderID == "" && strings.HasSuffix(current.ThreadID, "@chatroom") {
 		return
 	}
-	if w.runtime == nil || !settings.Enabled || settings.AggregateMS == 0 || current.Type != 1 {
+	if w.runtime == nil || !settings.Enabled || settings.CollectionWindow(current.ThreadID) == 0 || current.Type != 1 {
 		return
 	}
 	start, err := time.Parse(time.RFC3339, current.CreatedAt)
@@ -29,6 +29,10 @@ func (w *Worker) aggregateConversation(ctx context.Context, c *companion.Engine,
 	events := []companion.ConversationEvent{}
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
+		// Durable group receipts are collected by their shared deadline in drainInbox.
+		if strings.HasSuffix(current.ThreadID, "@chatroom") && !item.AggregateUntil.IsZero() {
+			continue
+		}
 		if item.OwnerModelReview || item.Phase != "received" || item.Event.Data.ThreadID != current.ThreadID || item.Event.Data.MessageID == current.ID || item.Event.Data.Direction != current.Direction {
 			continue
 		}
@@ -39,7 +43,7 @@ func (w *Worker) aggregateConversation(ctx context.Context, c *companion.Engine,
 			continue
 		}
 		stamp, err := time.Parse(time.RFC3339, m.CreatedAt)
-		if err != nil || stamp.Before(start) || stamp.Sub(start) > time.Duration(settings.AggregateMS)*time.Millisecond || len(events) >= 5 || strings.TrimSpace(m.Body) == "" || len(m.Body) > 4096 {
+		if err != nil || stamp.Before(start) || stamp.Sub(start) > settings.CollectionWindow(current.ThreadID) || len(events) >= 5 || strings.TrimSpace(m.Body) == "" || len(m.Body) > 4096 {
 			continue
 		}
 		if len(events) == 0 {

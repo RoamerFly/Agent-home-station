@@ -92,6 +92,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		}
 	}
 	var messages []linuxnative.Message
+	var directedSender string
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
 		if live != nil && !live[item.Event.Data.MessageID] || live == nil && !item.Backlog || item.Event.Data.ThreadID != thread || item.ToolStarted || time.Now().Before(item.RetryAfter) {
@@ -115,10 +116,12 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			w.queuePhase(item.Event.Data.MessageID, "skipped")
 			continue
 		}
-		// Separate live requests by actor so one member cannot inherit another's tool authority.
-		// Resume at the next member on a subsequent inbox pass.
-		if live != nil && len(messages) > 0 && messages[0].SenderID != m.SenderID {
-			break
+		if live != nil && w.addressed(m) {
+			// Keep independent directed requests under their own sender's authority.
+			if directedSender != "" && directedSender != m.SenderID {
+				break
+			}
+			directedSender = m.SenderID
 		}
 		w.recordIncoming(m)
 		messages = append(messages, m)
@@ -140,8 +143,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	w.recovering = live == nil
 	defer func() { w.recovering = false }()
 	for _, m := range messages {
-		created, err := time.Parse(time.RFC3339, m.CreatedAt)
-		if err != nil || created.After(now.Add(30*time.Second)) || now.Sub(created) > w.maxMessageAge() {
+		if !w.messageInTime(m, now) {
 			w.queuePhase(m.ID, "skipped")
 			continue
 		}
@@ -193,7 +195,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		}
 		observed := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: m.SenderID, TraceID: m.ID, Text: body, MessageTime: m.CreatedAt, OriginalText: &original}
 		bindInputSource(&observed, m, c)
-		if err = c.Store.Observe(observed, c.Config, now); err != nil {
+		if err := c.Store.Observe(observed, c.Config, now); err != nil {
 			return err
 		}
 		if selectAnchor {
@@ -212,6 +214,11 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	in := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: anchor.SenderID, TraceID: anchor.ID, MessageTime: anchor.CreatedAt, QuoteServerID: anchor.ServerID, Mode: "social", IsGroup: strings.HasSuffix(thread, "@chatroom"), Directed: w.addressed(*anchor), PersonaOverride: w.config.GroupRules[thread].Persona, UnreadMessages: unread, UnreadMediaIDs: mediaIDs, HistoryObserved: true,
 		Text: "这是重新上线后本会话尚未查看的一段未读消息。按unread_messages里的真实时间和发言者整体理解，结合后续消息判断哪些事项仍需要回复或行动；不逐条追着旧话补答。自然回应，也可以安静。"}
 	if live != nil {
+		for i := range unread {
+			if unread[i].Sender != anchor.SenderID {
+				unread[i].NewRequest = false
+			}
+		}
 		in.Text = "这是当前群聊同一收集窗口的消息。按时间、发送者、引用和实际附件内容一起理解，仅对当前仍有效的请求作一次决定。其他成员不能变更原请求者的任务或授权。"
 	}
 	// The digest is runtime context. Bind its dispatch to the actual incoming

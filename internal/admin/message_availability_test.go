@@ -209,9 +209,17 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 			ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 			defer cancel()
 			var settled, incomplete atomic.Bool
-			worker, err := bot.New(bot.Config{Channel: "wechat", StateDir: filepath.Join(f.dir, "availability-worker"), AllowedThreads: []string{msg.ThreadID}, PollInterval: time.Millisecond, Options: &options, Analyzer: mediaUnderstanding{manager: f.manager}, GroupRules: map[string]bot.GroupRule{msg.ThreadID: {Mode: "mention"}}, Record: func(record bot.Record) {
+			var report string
+			worker, err := bot.New(bot.Config{ObservationFailed: func(in companion.Input, reason string) error {
+				if in.TraceID != msg.ID || in.Thread != msg.ThreadID || report != "" {
+					t.Error("incorrect or duplicate private report")
+				}
+				report = reason
+				cancel()
+				return nil
+			}, Channel: "wechat", StateDir: filepath.Join(f.dir, "availability-worker"), AllowedThreads: []string{msg.ThreadID}, PollInterval: time.Millisecond, Options: &options, Analyzer: mediaUnderstanding{manager: f.manager}, GroupRules: map[string]bot.GroupRule{msg.ThreadID: {Mode: "mention"}}, Record: func(record bot.Record) {
 				f.manager.record(record)
-				if record.MessageID == msg.ID && record.Event == "media_observation_incomplete" {
+				if record.MessageID == msg.ID && record.Event == "group_input_read_failed" {
 					incomplete.Store(true)
 				}
 				if record.MessageID == msg.ID && record.Status == "silent" {
@@ -228,16 +236,24 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 			model.mu.Lock()
 			calls, packet, all := model.calls, model.packet, model.all
 			model.mu.Unlock()
-			if !settled.Load() || calls != 1 || packet == nil {
-				t.Fatal("message did not reach one synthetic decision", settled.Load(), calls, packet != nil)
-			}
 			isPlain := kind == "text" || kind == "quoted"
-			if incomplete.Load() != (!isPlain && kind != "file") {
-				t.Fatal("wrong observation state", incomplete.Load())
+			failed := !isPlain && kind != "file"
+			if failed {
+				if !incomplete.Load() || report == "" || settled.Load() || calls != 0 || packet != nil {
+					t.Fatalf("failed read incorrectly reached group: report=%q calls=%d", report, calls)
+				}
+			} else if incomplete.Load() || report != "" || !settled.Load() || calls != 1 || packet == nil {
+				t.Fatal("readable message did not reach one decision", calls)
 			}
-			needsDownload := n.file || kind == "sticker-unavailable"
-			if downloads := n.downloads.Load(); downloads != 0 && !needsDownload || needsDownload && downloads != 1 {
-				t.Fatal("wrong media/file dispatch", downloads)
+			wantDownloads := int32(0)
+			switch kind {
+			case "file", "sticker-unavailable":
+				wantDownloads = 1
+			case "file-unavailable":
+				wantDownloads = 2
+			}
+			if downloads := n.downloads.Load(); downloads != wantDownloads {
+				t.Fatal("wrong media/file dispatch", downloads, wantDownloads)
 			}
 			if n.quoteReads.Load() != 0 && kind != "quoted" || kind == "quoted" && n.quoteReads.Load() != 1 {
 				t.Fatal("wrong quote dispatch", n.quoteReads.Load())
@@ -248,19 +264,16 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 			if isPlain && packet["text"] != msg.Body {
 				t.Fatal("current user's literal was replaced", packet["text"])
 			}
-			if packet["request_actor_id"] != msg.SenderID || packet["thread"] != msg.ThreadID || packet["message_id"] != msg.ID {
+			if !failed && (packet["request_actor_id"] != msg.SenderID || packet["thread"] != msg.ThreadID || packet["message_id"] != msg.ID) {
 				t.Fatal("current request actor or conversation changed")
 			}
-			if !isPlain {
+			if kind == "file" {
 				media, ok := packet["media_observations"].([]any)
 				if !ok || len(media) != 1 {
 					t.Fatal("missing original media reference")
 				}
 				ref, ok := media[0].(map[string]any)
-				wantState := "incomplete"
-				if kind == "file" {
-					wantState = "observed"
-				}
+				wantState := "observed"
 				if !ok || ref["observation_state"] != wantState || ref["uploader_id"] != msg.SenderID {
 					t.Fatal("media availability or uploader identity changed", ref["observation_state"])
 				}
@@ -268,7 +281,7 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 					t.Fatal("unavailable media became evidence or uploader became voice speaker")
 				}
 			}
-			if kind == "sticker-unavailable" && !strings.Contains(all, "sticker_download_unavailable") {
+			if kind == "sticker-unavailable" && !strings.Contains(report, "sticker_download_unavailable") {
 				t.Fatal("sticker download failure became a successful observation")
 			}
 			if kind == "quoted" {

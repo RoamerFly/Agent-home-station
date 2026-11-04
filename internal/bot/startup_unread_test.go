@@ -164,6 +164,35 @@ func TestUnreadGroupReplyBindsDispatchToRealAnchor(t *testing.T) {
 	}
 }
 
+func TestGroupCollectionDeadlineIsFixedPerRoom(t *testing.T) {
+	w := &Worker{runtime: &runtimeState{}}
+	const room = "a@chatroom"
+	const window = 20 * time.Second
+	first := time.Now().UTC()
+	end := w.collectionDeadline(room, first, window)
+	w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Phase: "received", Event: fixtureEvent("1", "m", room, "incoming", "remote"), AggregateUntil: end})
+	if !end.Equal(first.Add(window)) || !w.collectionDeadline(room, end.Add(-time.Nanosecond), window).Equal(end) {
+		t.Fatal("later receipt shifted the group's original deadline")
+	}
+	if !w.collectionDeadline(room, end, window).Equal(end.Add(window)) || !w.collectionDeadline("b@chatroom", first.Add(time.Second), window).Equal(end.Add(time.Second)) {
+		t.Fatal("adjacent windows or distinct rooms overlapped")
+	}
+	if !w.collectionDeadline(room, first, 0).IsZero() {
+		t.Fatal("explicit zero delayed the decision")
+	}
+	w.config.MaxAge = 5 * time.Second
+	w.runtime.Inbox[0].CollectedAt = first
+	m := fixtureMessage("m", room, "hello", "incoming")
+	m.CreatedAt = first.Format(time.RFC3339Nano)
+	if !w.messageInTime(m, end) || w.messageInTime(m, end.Add(6*time.Second)) {
+		t.Fatal("only deliberate collection time should be excluded from message age")
+	}
+	m.CreatedAt = first.Add(-6 * time.Second).Format(time.RFC3339Nano)
+	if w.messageInTime(m, end) {
+		t.Fatal("collection made an already expired message eligible")
+	}
+}
+
 func TestLiveMixedGroupWindowReadsAllInputsBeforeDecision(t *testing.T) {
 	const room = "room@chatroom"
 	for _, permanent := range []bool{true, false} {
@@ -207,6 +236,9 @@ func TestLiveMixedGroupWindowReadsAllInputsBeforeDecision(t *testing.T) {
 				id := fmt.Sprintf("window-%d", i)
 				m := fixtureMessage(id, room, "本轮合成测试", "incoming")
 				m.Type, m.SenderID, m.CreatedAt = kind, "member", now.Add(time.Duration(i-5)*time.Second).Format(time.RFC3339)
+				if kind == 3 {
+					m.SenderID = "another-member"
+				}
 				source.messages[id] = m
 				w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Event: fixtureEvent(strconv.Itoa(i+1), id, room, "incoming", "remote"), Phase: "received", Updated: now.Add(-2 * time.Second), AggregateUntil: now.Add(-time.Second)})
 			}

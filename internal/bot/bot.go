@@ -456,8 +456,7 @@ func (w *Worker) promptWithSharePreference(message linuxnative.Message, now time
 	if !w.allowed[message.ThreadID] || message.Type != 1 || !utf8.ValidString(message.Body) || len(message.Body) > 4096 {
 		return "", false
 	}
-	created, err := time.Parse(time.RFC3339, message.CreatedAt)
-	if err != nil || now.Sub(created) > w.maxMessageAge() || created.After(now.Add(30*time.Second)) {
+	if !w.messageInTime(message, now) {
 		return "", false
 	}
 	text := strings.TrimSpace(message.Body)

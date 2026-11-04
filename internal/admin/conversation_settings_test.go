@@ -3,8 +3,38 @@ package admin
 import (
 	"encoding/json"
 	"testing"
+	"time"
 	"wechat-bot/internal/companion"
 )
+
+func TestGroupCollectionWindowRoundTrip(t *testing.T) {
+	f := setup(t)
+	f.login()
+	c := f.manager.Config().Config
+	c.Companion.Conversation = companion.ConversationDefaults()
+	const room = "room@chatroom"
+	if c.Companion.Conversation.CollectionWindow(room) != 20*time.Second {
+		t.Fatal("new group did not get the default window")
+	}
+	for _, ms := range []int{45000, 20000, 0, -1} {
+		c.Companion.Conversation.GroupAggregateMS = &ms
+		code, _, _ := f.request("POST", "/api/config", ConfigInput{Config: c}, true, true)
+		if ms < 0 {
+			if code != 400 {
+				t.Fatalf("invalid duration accepted: HTTP %d", code)
+			}
+			continue
+		}
+		loaded, err := loadConfig(f.dir)
+		if code != 200 || err != nil {
+			t.Fatalf("save %dms: HTTP %d, %v", ms, code, err)
+		}
+		s := loaded.Companion.ConversationConfig()
+		if s.CollectionWindow(room) != time.Duration(ms)*time.Millisecond || s.CollectionWindow("friend") != 2*time.Second {
+			t.Fatal("group and private collection windows should be independent")
+		}
+	}
+}
 
 func TestConversationSettingsPreserveExplicitFalseAndValidateWakeBounds(t *testing.T) {
 	f := setup(t)

@@ -114,8 +114,7 @@ func (w *Worker) skipReason(m linuxnative.Message, now time.Time) string {
 	if !utf8.ValidString(m.Body) || len(m.Body) > 4096 {
 		return "invalid_or_oversized_text"
 	}
-	created, err := time.Parse(time.RFC3339, m.CreatedAt)
-	if err != nil || now.Sub(created) > w.maxMessageAge() || created.After(now.Add(30*time.Second)) {
+	if !w.messageInTime(m, now) {
 		return "message_expired_or_invalid_time"
 	}
 	if strings.HasPrefix(strings.TrimSpace(m.Body), "[AI]") {

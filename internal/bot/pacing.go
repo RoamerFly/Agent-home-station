@@ -41,6 +41,32 @@ func (w *Worker) maxMessageAge() time.Duration {
 	}
 	return w.config.MaxAge
 }
+
+func (w *Worker) messageInTime(m linuxnative.Message, now time.Time) bool {
+	created, err := time.Parse(time.RFC3339, m.CreatedAt)
+	if err != nil || created.After(now.Add(30*time.Second)) {
+		return false
+	}
+	age, limit := now.Sub(created), w.maxMessageAge()
+	if age <= limit {
+		return true
+	}
+	// Exclude only the deliberate online collection wait. An old message on
+	// arrival, or one that sits unhandled long after the deadline, still expires.
+	if w.runtime != nil && strings.HasSuffix(m.ThreadID, "@chatroom") {
+		for i := range w.runtime.Inbox {
+			item := &w.runtime.Inbox[i]
+			if !item.Backlog && !item.CollectedAt.IsZero() && item.Event.Data.MessageID == m.ID && item.Event.Data.ThreadID == m.ThreadID {
+				end := item.AggregateUntil
+				if now.Before(end) {
+					end = now
+				}
+				return end.Sub(item.CollectedAt) >= age-limit
+			}
+		}
+	}
+	return false
+}
 func (w *Worker) replyDelay(c *companion.Engine) time.Duration {
 	if w.config.Options == nil || !w.config.Options.RandomDelay {
 		if c != nil {
