@@ -59,7 +59,7 @@
  const key=item=>item.id||item.time+'|'+item.event;
  Object.assign(events,{context_compression_started:'开始压缩上下文',context_compression_completed:'上下文压缩处理完成',context_compression_failed:'上下文压缩失败',tool_call_succeeded:'调用成功',tool_call_failed:'调用失败',plugin_output_ready:'媒体已准备',web_activity:'联网操作',context_compression_failed:'上下文压缩失败',eligible_message_received:'收到符合规则的消息',memory_saved:'记忆已保存',bot_started_history_skipped:'机器人已启动',reply_diagnosis_started:'开始手动诊断草稿',reply_diagnosis_completed:'手动诊断完成（未发送）',reply_diagnosis_failed:'手动诊断未完成（未发送）'});
  Object.assign(reasons,{manual_reply_diagnosis_failed:'手动诊断未完成；原草稿没有修改，也没有发送微信'});
- Object.assign(events,{backlog_message_grouped:'纳入本会话未读汇总',backlog_conversation_started:'统一查看本会话未读消息'});Object.assign(reasons,{offline_conversation_batch:'结合所有未读消息及原始时间综合判断，不逐条补答'});const roundStates={received:'已接收',running:'执行中',completed:'已完成',accepted:'微信已接受',checking_receipt:'Agent 自动查回执',waiting:'等待处理结果',waiting_receipt:'等待微信回执',retrying_tool:'等待工具重试',retrying_model:'等待模型重试',retrying_delivery:'等待微信重试',cancelling:'正在停止剩余部分',partially_cancelled:'部分已发送，其余已取消',partially_completed:'部分完成',failed:'执行失败',needs_review:'已停止，结果未确认',silent:'选择安静',skipped:'已跳过',blocked:'已阻止',stopped:'已停止'};
+ Object.assign(events,{backlog_message_grouped:'纳入本会话未读汇总',backlog_conversation_started:'统一查看本会话未读消息'});Object.assign(reasons,{offline_conversation_batch:'结合所有未读消息及原始时间综合判断，不逐条补答'});const roundStates={queued:'已排队',received:'已接收',running:'执行中',completed:'已完成',accepted:'微信已接受',checking_receipt:'Agent 自动查回执',waiting:'等待处理结果',waiting_receipt:'等待微信回执',retrying_tool:'等待工具重试',retrying_model:'等待模型重试',retrying_delivery:'等待微信重试',cancelling:'正在停止剩余部分',partially_cancelled:'部分已发送，其余已取消',partially_completed:'部分完成',failed:'执行失败',needs_review:'已停止，结果未确认',silent:'选择安静',skipped:'已跳过',blocked:'已阻止',stopped:'已停止'};
  const stageNames={receive:'接收',decision:'判断',tool:'工具',delivery:'发送',system:'运行'};
  Object.assign(reasons,{topic_concluded:'话题已经结束，本轮未发言',awaiting_participant:'在等对方回应，本轮未发言',nothing_to_add:'暂时没有新内容可补充',proactive_trigger:'查看是否适合主动发言',independent_conversation_wake:'按上次安排回来看一看',model_requested_later_reassessment:'已安排稍后再看',cross_conversation_result_private_delivery_handled:'结果已交给私聊投递',cross_conversation_private_route_unavailable:'无法定位私聊接收方',cross_conversation_media_requires_explicit_delivery:'跨会话附件需指定投递目标',private_diagnostic_only:'群内不公开运行诊断',unverified_model_response:'回复内容未能核实',tool_budget_exhausted:'工具调用次数已用尽'});
  let epoch=0,dateEpoch=0,dateItems=[],dateReady=false;
@@ -130,7 +130,7 @@
   for(const sent of round.sent)if(sent.content)node(overview,'span','发送：'+sent.content,'round-preview round-sent');
   if(!round.batchSize&&round.received.length>1)node(overview,'small','本轮含 '+round.received.length+' 条消息');
   const outcome=node(summary,'span',undefined,'round-outcome');node(outcome,'span',round.system?'运行记录':window.WechatRounds.groupLabels[round.group],'round-status');
-  node(outcome,'small',[round.tools?round.tools+' 次工具':'',round.duration>=1000?(round.duration/1000).toFixed(round.duration<10000?1:0)+' 秒':''].filter(Boolean).join(' / '));return card;
+  node(outcome,'small',[round.group==='done'&&round.status!=='completed'?roundStates[round.status]:'',round.tools?round.tools+' 次工具':'',round.duration>=1000?(round.duration/1000).toFixed(round.duration<10000?1:0)+' 秒':''].filter(Boolean).join(' / '));return card;
  }
  function openConversation(thread,title){const popup=window.WechatDialogs.open({title:(title||thread)+' · 执行回合'});const items=rounds().filter(x=>!x.system&&x.thread_id===thread);if(!items.length)node(popup.body,'p','当前活跃日志没有这个会话的执行记录。更早的步骤可在历史日志归档中查看。','empty');for(const round of items)roundRow(popup.body,round);return popup}
  function openSend(id,thread){const candidates=rounds().filter(x=>(!thread||x.thread_id===thread)&&x.entries.some(e=>e.send_id===id));if(candidates.length===1)return openRound(candidates[0]);const popup=window.WechatDialogs.open({title:'发送记录'});node(popup.body,'p','当前活跃日志没有唯一匹配的发送记录，可在历史日志归档中查看。','empty');return popup}
@@ -140,7 +140,7 @@
   const anchor=[...pane.children].find(el=>el.getBoundingClientRect().bottom>pane.getBoundingClientRect().top),anchorID=anchor?.dataset.roundId,offset=anchor?anchor.offsetTop-pane.scrollTop:0;
   pane.replaceChildren();const all=window.WechatRounds.project(dateReady?dateItems:state.items).filter(r=>dateKey(r.time)===$('#log-date').value),filtered=all.filter(matches);
   $('#log-count').textContent=filtered.length+' 个'+($('#log-view').value==='system'?'系统时段':'执行回合');
-  const counts={active:0,done:0,closed:0};for(const round of all)if(!round.system)counts[round.group]++;
+  const counts={pending:0,active:0,done:0};for(const round of all)if(!round.system)counts[round.group]++;
   for(const [group,count] of Object.entries(counts))$('#round-'+group).textContent=count;
   if(!filtered.length)node(pane,'p','这一天没有匹配的执行回合。','empty');for(const round of filtered)roundRow(pane,round);
   if(anchorID){const restored=[...pane.children].find(el=>el.dataset.roundId===anchorID);pane.scrollTop=restored?restored.offsetTop-offset:position}else pane.scrollTop=position;

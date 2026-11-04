@@ -2,14 +2,14 @@
 (() => {
  'use strict';
  const $=s=>document.querySelector(s),api=(...a)=>window.WechatAdmin.api(...a);
- const state={catalog:[],installed:[],builtins:[],runtimes:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,migrationVersion:0,hostRequest:null};
+ const state={catalog:[],installed:[],builtins:[],runtimes:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,hostRequest:null};
  const page=$('#plugins'),legacy=page.querySelector('.plugin-workspace'),guide=$('#plugin-guide');
  const el=(tag,text,klass)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(klass)n.className=klass;return n};
  const button=(text,action)=>{const b=el('button',text,'quiet');b.type='button';b.addEventListener('click',action);return b};
  const area=el('div',undefined,'package-workspace'),browser=el('aside',undefined,'panel package-browser'),editor=el('article',undefined,'panel package-editor');
  const list=el('div',undefined,'package-list'),status=el('p','选择服务查看配置、权限和任务。','hint');status.setAttribute('role','status');
  const refreshList=$('#plugins-refresh');
- const head=el('div',undefined,'section-heading');head.append(el('h3','能力目录'),button('迁移旧设置',openMigration),button('导入本机插件',importPackage));browser.append(head,list);editor.append(status);area.append(browser,editor);legacy.before(area);
+ const head=el('div',undefined,'section-heading');head.append(el('h3','能力目录'),button('通过 UI 新建插件',createPlugin),button('管理连接插件',()=>manageConnections()),button('导入本机插件',importPackage));browser.append(head,list);editor.append(status);area.append(browser,editor);legacy.before(area);
  // The legacy declaration editor remains mounted for compatibility, but all
  // provider-facing configuration now has one visible home: the package detail
  // or the dedicated Connection & MCP page.
@@ -46,7 +46,7 @@
  function capabilityCard(p,installed,klass='package-choice'){
   const card=button('',()=>choose(p.id));card.className=klass;card.setAttribute('aria-pressed',String(state.selected===p.id));
   card.append(el('strong',p.name),el('small',packageStatus(p.id,installed)));
-  const next=installed&&!installed.enabled?'配置后可按需启用。':state.runtimes[p.id]?.state==='failed'?'下一步：打开查看运行原因。':!installed&&p.status==='ready'?'下一步：导入或迁移后再配置。':!installed?'开发模板，尚不能运行。':'打开配置、权限和任务';
+  const next=installed&&!installed.enabled?'配置后可按需启用。':state.runtimes[p.id]?.state==='failed'?'下一步：打开查看运行原因。':!installed&&p.status==='ready'?'下一步：导入后再配置。':!installed?'开发模板，尚不能运行。':'打开配置、权限和任务';
   card.append(el('small',next,'hint'));
   return card;
  }
@@ -57,7 +57,7 @@
  }
  function renderOverview(all){
   if(state.selected)return;
-  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3','已安装能力'),el('p','选择一项能力即可查看真实安装、启用、运行、配置和任务状态。服务不会因浏览此页面而自动启动。','hint'));const actions=el('div',undefined,'package-overview-actions');actions.append(button('迁移旧设置',openMigration),button('导入本机插件',importPackage));intro.append(copy,actions);
+  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3','已安装能力'),el('p','选择一项能力即可查看真实安装、启用、运行、配置和任务状态。服务不会因浏览此页面而自动启动。','hint'));const actions=el('div',undefined,'package-overview-actions');actions.append(button('通过 UI 新建插件',createPlugin),button('管理连接插件',()=>manageConnections()),button('导入本机插件',importPackage));intro.append(copy,actions);
   const grid=el('div',undefined,'capability-overview-grid'),used=new Set();
   if(state.builtins.length){const group=el('section',undefined,'capability-overview-group');group.append(el('h4','内置通信'));for(const item of state.builtins)group.append(builtinCard(item,'capability-overview-card'));grid.append(group)}
   for(const [title,ids] of capabilityGroups){
@@ -69,10 +69,10 @@
    grid.append(group);
   }
   const other=[...all.values()].filter(p=>!used.has(p.id));if(other.length){const group=el('section',undefined,'capability-overview-group');group.append(el('h4','其他能力'));for(const p of other)group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id),'capability-overview-card'));grid.append(group)}
-  if(!grid.children.length)grid.append(el('p','暂无可用插件。可导入本机插件目录，或先查看迁移旧设置。','empty'));
+  if(!grid.children.length)grid.append(el('p','暂无可用插件。可通过向导创建连接插件或导入本机目录。','empty'));
   editor.replaceChildren(intro,grid);window.WechatSaveActions?.sync();
  }
- function dirty(value){state.dirty=value;if(value){state.editVersion++;state.migrationVersion++;for(const check of document.querySelectorAll('[data-migration-confirm]')){check.checked=false;const action=check.closest('.package-migration-step')?.querySelector('button.primary');if(action)action.disabled=true}}window.WechatAdmin.pluginPackageDirty=value}
+ function dirty(value){state.dirty=value;if(value)state.editVersion++;window.WechatAdmin.pluginPackageDirty=value}
  function discard(){return !state.dirty||confirm('有未保存的插件配置，确定放弃？')}
  function renderList(){
   area.classList.toggle('package-overview',!state.selected);list.replaceChildren();const all=allPackages(),used=new Set();
@@ -249,60 +249,59 @@
   }
   editor.scrollTop=0;area.scrollTop=0;window.WechatSaveActions?.sync();
  }
- function migrationReason(reason){
-  const labels={prepared_package_digest:'正在核对官方包摘要',plugin_package_not_ready:'插件包尚未完成迁移',tts_key:'缺少语音服务密钥',vision_key:'缺少视觉服务密钥',asr_key:'缺少语音识别服务密钥',yuanbao_cookie_or_assistant_cookie:'缺少分享读取登录信息'};
-  return labels[reason]||String(reason||'尚未满足迁移条件');
+ function manageConnections(id){
+  if(!discard())return;
+  if(state.dirty){dirty(false);if(state.detail)renderDetail(state.detail)}
+  area.hidden=true;legacy.hidden=false;
+  window.WechatPluginDeclarations.open(id);
+  window.WechatSaveActions?.sync();
  }
- function migrationCurrent(modal,account,version){return modal.alive()&&window.WechatAdmin?.isAuthenticated()&&account===(window.WechatAccountContext?.id||'')&&version===state.migrationVersion}
- function invalidateMigrationControls(box,message){
-  for(const input of box.querySelectorAll('input,button'))input.disabled=true;
-  box.append(el('p',message,'hint'));
- }
- function migrationPermissions(step){return Array.isArray(step.permissions)?step.permissions:[]}
- function migrationDigest(step){return String(step?.package?.expected_package_digest||'')}
- function renderMigrationStep(modal,box,account,version,step,afterApply){
-  const display=state.catalog.find(item=>item.id===step.plugin)?.name||step.plugin||'未命名插件';
-  const card=el('section',undefined,'package-migration-step'),title=el('div',undefined,'section-heading'),name=el('h3',display);card.style.cssText='display:grid;gap:12px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)';title.style.margin='0';name.style.margin='0';title.append(name);card.append(title);
-  const blocked=[...(step.required_missing||[])],preserved=[...(step.unmapped_legacy_fields||[])];
-  const sourceHash=String(step.apply_source_hash||''),digest=migrationDigest(step),permissions=migrationPermissions(step);
-  if(step.status!=='ready_for_administrator_review'||blocked.length||!sourceHash||!digest){
-   card.append(el('p','暂不能应用；旧功能继续保持原设置。','hint'));
-   const reasons=[...blocked];if(!sourceHash)reasons.push('apply_source_hash_missing');if(!digest)reasons.push('prepared_package_digest');
-   if(reasons.length){const list=el('ul');for(const reason of [...new Set(reasons)])list.append(el('li',migrationReason(reason)));card.append(list)}
-   if(preserved.length)card.append(el('p','其他设置保留原处：'+preserved.join('、')+'。','hint'));
-   box.append(card);return;
+ function createPlugin(){
+  if(!window.WechatAdmin.isAuthenticated())return;
+  const owner=account(),epoch=state.epoch;
+  const modal=window.WechatDialogs.open({title:'通过 UI 新建插件',subtitle:'连接已有的 HTTP 接口或 MCP 服务，无需准备压缩包。'});
+  const form=el('form',undefined,'package-fields'),heading=el('h3'),fields=el('div',undefined,'package-fields'),actions=el('div',undefined,'inline-actions'),error=el('p','','error');
+  error.setAttribute('role','alert');
+  const type=el('select'),id=el('input'),name=el('input'),endpoint=el('input'),detail=el('input'),param=el('input');
+  type.add(new Option('HTTP 工具（POST JSON）','http'));type.add(new Option('远程 MCP 服务','mcp'));
+  id.pattern='[A-Za-z][A-Za-z0-9_\\-]{0,63}';id.placeholder='my-tool';name.placeholder='例如：术语查询';
+  endpoint.type='url';endpoint.placeholder='https://…';detail.placeholder='说明 Agent 何时使用这个工具';param.value='text';
+  const field=(label,input)=>{const row=el('label',label);input.required=true;row.append(input);return row};
+  const back=button('上一步',()=>{step--;draw()}),next=el('button','下一步','primary');next.type='submit';
+  let step=0,busy=false;
+  const valid=()=>modal.alive()&&owner===account()&&epoch===state.epoch&&window.WechatAdmin.isAuthenticated();
+  function draw(){
+   const http=type.value==='http';fields.replaceChildren();error.textContent='';
+   heading.textContent=['1 / 3　插件信息','2 / 3　连接设置','3 / 3　核对并创建'][step];
+   back.hidden=step===0;next.textContent=step===2?'确认创建':'下一步';
+   if(step===0)fields.append(field('插件类型',type),field('显示名称',name),field('唯一标识',id));
+   if(step===1){
+    fields.append(field('服务地址',endpoint),field('用途说明',detail));
+    if(http){param.pattern='[A-Za-z][A-Za-z0-9_]{0,63}';fields.append(field('接口接收的文本参数名',param))}
+   }
+   if(step===2)fields.append(el('strong',name.value+' · '+id.value),el('p',(http?'HTTP POST':'MCP')+'　'+endpoint.value),el('p',detail.value),el('p',http?'请求字段：'+param.value:'由 MCP 服务声明可用工具'),el('p','创建后保持未启用，可在连接插件中编辑参数、鉴权和启用状态。','hint'));
   }
-  const summary=el('p','将迁移到当前账号，安装后保持未启用；不会启动服务或发送消息。','hint');summary.style.margin='0';card.append(summary);
-  if(preserved.length)card.append(el('p','其他设置保留原处：'+preserved.join('、')+'。','hint'));
-  const identity=el('dl',undefined,'package-migration-identity');identity.style.cssText='display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 12px;margin:0;align-items:baseline';
-  for(const [label,value] of [['账号',account],['来源摘要',sourceHash],['官方包摘要',digest]]){const term=el('dt',label),detail=el('dd',value);term.style.fontWeight='600';detail.style.cssText='margin:0;overflow-wrap:anywhere';identity.append(term,detail)}
-  card.append(identity);
-  const grants=el('div',undefined,'package-migration-grants');grants.style.cssText='display:grid;gap:6px';grants.append(el('strong','允许此插件使用'));
-  const choices=[];for(const permission of permissions){const row=el('label',undefined,'switch-row'),check=el('input');check.type='checkbox';check.checked=true;check.dataset.migrationPermission=permission;row.append(el('span',names[permission]||permission),check);grants.append(row);choices.push(check)}
-  if(!choices.length)grants.append(el('p','此步骤不请求额外权限。','hint'));card.append(grants);
-  const acknowledgement=el('label',undefined,'switch-row'),confirm=el('input'),apply=button('确认并应用迁移',async()=>{});confirm.type='checkbox';confirm.dataset.migrationConfirm='';acknowledgement.append(el('span','我已核对账号、来源摘要、官方包摘要与所选权限'),confirm);card.append(acknowledgement);apply.className='primary';apply.style.justifySelf='start';apply.disabled=true;
-  const refresh=()=>{confirm.checked=false;apply.disabled=true};for(const check of choices)check.addEventListener('change',refresh);confirm.addEventListener('change',()=>{apply.disabled=!confirm.checked});
-  apply.addEventListener('click',async()=>{
-   if(!migrationCurrent(modal,account,version)){invalidateMigrationControls(card,'账号、登录状态或未保存的插件配置已变化；请重新打开迁移预演。');return}
-   const selected=choices.filter(check=>check.checked).map(check=>check.dataset.migrationPermission);apply.disabled=true;
+  form.addEventListener('submit',async event=>{
+   event.preventDefault();if(busy||!valid())return;
+   if(step===0&&(!id.value.trim()||id.value.includes('__')||!name.value.trim())){error.textContent='请填写名称，并使用不含双下划线的有效标识。';return}
+   if(step===1){
+    let url;try{url=new URL(endpoint.value)}catch{error.textContent='请输入完整的服务地址。';return}
+    if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.hash||!detail.value.trim()){error.textContent='请输入 HTTP 或 HTTPS 服务地址和用途，凭据请在创建后单独配置。';return}
+   }
+   if(step<2){step++;draw();return}
+   const manifest={id:id.value.trim(),name:name.value.trim(),version:'1',description:detail.value.trim()};
+   if(type.value==='http'){
+    const key=param.value.trim();
+    manifest.tools=[{name:'call',description:manifest.description,method:'POST',url:endpoint.value.trim(),input_schema:{type:'object',properties:{[key]:{type:'string'}},required:[key]},body_template:{[key]:'{{arg.'+key+'}}'}}];
+   }else manifest.mcp={id:manifest.id,name:manifest.name,transport:'http',url:endpoint.value.trim()};
+   busy=true;back.disabled=next.disabled=true;
    try{
-    await api('/api/plugin-migrations/apply',{method:'POST',json:{account,plugin:step.plugin,apply_source_hash:sourceHash,prepared_package_digest:digest,permissions:selected,confirm:true}});
-    if(!migrationCurrent(modal,account,version))return;card.replaceChildren(el('h3',step.plugin),el('p','迁移已保存为未启用插件；请在插件详情中检查配置后手动启动。','hint'));await afterApply(step.plugin);
-   }catch(error){if(migrationCurrent(modal,account,version)){apply.disabled=false;card.append(el('p',error.message+'；未自动启用，刷新预演后可重试。','hint'))}}
+    await api('/api/plugins/install',{method:'POST',json:{manifest,enabled:false}});
+    if(valid()){modal.close();manageConnections(manifest.id)}
+   }catch(e){if(valid())error.textContent=e.message}
+   finally{busy=false;back.disabled=next.disabled=false}
   });
-  card.append(apply);box.append(card);
- }
- async function openMigration(){
-  if(!window.WechatAdmin?.isAuthenticated())return;showPackages();
-  const account=window.WechatAccountContext?.id||'',version=state.migrationVersion,modal=window.WechatDialogs.open({title:'迁移旧设置',subtitle:'先只读核对；每个插件需单独确认，迁移后保持未启用。'}),box=el('div'),loading=el('p','正在读取当前账号的迁移预演…','hint');modal.dialog.style.width='min(720px, calc(100vw - 40px))';modal.dialog.style.height='min(720px, calc(100dvh - 48px))';modal.dialog.style.maxHeight='calc(100dvh - 48px)';const heading=modal.dialog.querySelector('.dialog-heading');heading.style.cssText='flex-wrap:nowrap;padding:14px 16px 12px';heading.querySelector('div').style.minWidth='0';box.append(loading);modal.body.append(box);
-  try{
-   const preview=await api('/api/plugin-migrations/preview');if(!migrationCurrent(modal,account,version))return;box.replaceChildren();
-   const item=(preview.accounts||[]).find(row=>row.account===account);if(!item){box.append(el('p','当前账号不在迁移预演中；没有执行任何迁移。','hint'));return}
-   box.append(el('p','仅展示迁移所需的身份与摘要，不显示旧配置值或密钥。','hint'));
-   const afterApply=async id=>{await load();if(state.selected===id||!state.selected)await choose(id)};
-   for(const step of item.plugins||[])renderMigrationStep(modal,box,account,version,step,afterApply);
-   if(!(item.plugins||[]).length)box.append(el('p','没有可迁移的旧设置。','hint'));
-  }catch(error){if(migrationCurrent(modal,account,version)){box.replaceChildren(el('p',error.message+'；未执行迁移。','hint'))}}
+  actions.append(back,next);form.append(heading,fields,error,actions);modal.body.append(form);draw();
  }
  function importPackage(){
   const account=window.WechatAccountContext?.id||'',epoch=state.epoch;
@@ -324,6 +323,8 @@
    }catch(e){if(current())result.append(el('p',e.message,'error'))}finally{prepare.disabled=false;file.disabled=false;input.disabled=false}
   });modal.body.append(fileLabel,label,prepare,result);
  }
+ const returnButton=button('返回能力目录',()=>{if(window.WechatAdmin.pluginDirty&&!confirm('放弃未保存的连接设置？'))return;window.WechatPluginDeclarations.reset();showPackages();load()});
+ legacy.querySelector('.plugin-template-head').append(returnButton);
  $('#plugins-refresh').addEventListener('click',load);
  window.addEventListener('wechat-admin:navigate',e=>{if(e.detail?.section==='plugins')load()});
  window.WechatPluginPackages={
@@ -333,10 +334,7 @@
    if(id===state.selected&&state.detail){const scope=context(),next=await api('/api/plugin-packages/'+encodeURIComponent(id));if(current(scope)){state.detail=next;if(!state.dirty)renderDetail(next)}}else await choose(id);
    if(section&&owner===account()){const scope=context();requestAnimationFrame(()=>{if(current(scope))document.getElementById('plugin-section-'+section)?.scrollIntoView({block:'start',behavior:'auto'})})}
   },
-  // Reuse the existing read-only migration preview from capability entry points.
-  // It never installs, grants permissions, starts a runtime, or applies a step.
-  openMigration
  };
- window.addEventListener('wechat-admin:logout',()=>{state.epoch++;state.migrationVersion++;state.loaded=false;state.loadPromise=null;state.busy=false;state.selected='';state.detail=null;state.catalog=[];state.installed=[];state.runtimes={};state.retained.clear();state.hostRequest=null;dirty(false);list.replaceChildren();editor.replaceChildren(status);status.textContent='选择服务查看配置、权限和任务。'});
+ window.addEventListener('wechat-admin:logout',()=>{state.epoch++;state.loaded=false;state.loadPromise=null;state.busy=false;state.selected='';state.detail=null;state.catalog=[];state.installed=[];state.runtimes={};state.retained.clear();state.hostRequest=null;dirty(false);list.replaceChildren();editor.replaceChildren(status);status.textContent='选择服务查看配置、权限和任务。'});
  showPackages();
 })();

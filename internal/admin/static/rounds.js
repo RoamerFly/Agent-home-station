@@ -21,12 +21,12 @@
   // The filter describes the disposition of the round. The detailed status
   // stays available for receipts, failures and partial results.
   const statusGroups = {
-    active: ['received','running','retrying_tool','retrying_model','retrying_delivery','cancelling','waiting','waiting_receipt','checking_receipt'],
-    done: ['accepted','completed'],
-    closed: ['silent','skipped','blocked','stopped','failed','partially_completed','partially_cancelled','needs_review'],
+    pending: ['received','queued','retrying_tool','retrying_model','retrying_delivery','waiting','waiting_receipt'],
+    active: ['running','cancelling','checking_receipt'],
+    done: ['accepted','completed','silent','skipped','blocked','stopped','failed','partially_completed','partially_cancelled','needs_review'],
   };
   const groupByStatus = Object.fromEntries(Object.entries(statusGroups).flatMap(([group, states]) => states.map(state => [state,group])));
-  const groupLabels = {active:'进行中',done:'已完成',closed:'已结束'};
+  const groupLabels = {pending:'待处理',active:'进行中',done:'已完成'};
   // Derive the reader's timeline after grouping. Raw entries still drive
   // search, receipts and diagnostics, including records from older versions.
   function present(round) {
@@ -170,8 +170,8 @@
       else if (['unknown', 'waiting'].includes(item.status) && stage(item) === 'delivery') round.status = 'waiting';
       else if (['accepted', 'observed'].includes(item.status) && stage(item) === 'delivery') round.status = item.event === 'message_progress' ? 'running' : 'accepted';
       else if (item.category === 'error' && !item.tool) round.status = ['queued', 'processing', 'running'].includes(item.status) ? 'running' : 'failed';
-      else if (item.event === 'context_compression_completed' && item.status === 'completed' && ['running','received'].includes(round.status) && round.entries.some(e=>e.event==='context_compression_started')) round.status = 'completed';
-      else if (item.event === 'message_processed' && ['running','received'].includes(round.status)) round.status = 'completed';
+      else if (item.event === 'context_compression_completed' && item.status === 'completed' && ['running','received','queued'].includes(round.status) && round.entries.some(e=>e.event==='context_compression_started')) round.status = 'completed';
+      else if (item.event === 'message_processed' && ['running','received','queued'].includes(round.status)) round.status = 'completed';
       else if (partialCancellation(item)) round.status = 'partially_cancelled';
       else if (item.event === 'character_decision' && ['quiet_hours','no_reliable_context'].includes(item.reason)) round.status = 'skipped';
       else if (item.event === 'character_decision' && ['invalid_model_decision','invalid_tool_arguments','tool_unavailable_or_budget_exhausted','tool_budget_exhausted','unverified_model_response','media_unavailable_or_permission_denied'].includes(item.reason)) round.status = 'failed';
@@ -179,11 +179,12 @@
       else if (item.event === 'character_decision' && item.reason === 'cross_conversation_result_private_delivery_handled') round.status = 'completed';
       else if (['silent', 'skipped', 'blocked', 'stopped', 'cancelled'].includes(item.status)) round.status = item.status === 'cancelled' ? 'stopped' : item.status;
       else if (item.event === 'character_decision' && /silence|silent/.test(item.reason || '')) round.status = 'silent';
-      else if (['processing', 'running', 'queued', 'received'].includes(item.status)) round.status = item.status === 'received' && round.entries.length === 1 ? 'received' : 'running';
+      else if (['processing', 'running'].includes(item.status)) round.status = 'running';
+      else if (['queued','received'].includes(item.status) && ['queued','received'].includes(round.status)) round.status = item.status;
     }
     return [...groups.values()].map(round => {
       present(round);
-      round.group = groupByStatus[round.status] || 'closed';
+      round.group = groupByStatus[round.status] || 'pending';
       round.source ||= round.system ? '系统运行' : round.thread_id || '来源未知';
       round.source_kind ||= round.system ? 'system' : 'private';
       round.duration = Math.max(0, Date.parse(round.updated) - Date.parse(round.time));

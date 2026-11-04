@@ -7,14 +7,14 @@ const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fix
 
 test('status filters group terminal failures separately from unresolved receipts and active retries',()=>{
  const cases=[
-  ['message_received','received','received','','active'],
-  ['model_failed','error','failed','model_dns_failed','closed'],
-  ['character_decision','decision','silent','nothing_to_add','closed'],
-  ['task_delivery_updated','decision','partially_cancelled','','closed'],
-  ['task_delivery_updated','decision','partially_completed','','closed'],
-  ['task_delivery_updated','decision','waiting_tool_retry','','active'],
-  ['generation_paused','decision','needs_review','generation_evidence_changed','closed'],
-  ['send_failed','error','failed','send_outcome_unknown','closed'],
+  ['message_received','received','received','','pending'],
+  ['model_failed','error','failed','model_dns_failed','done'],
+  ['character_decision','decision','silent','nothing_to_add','done'],
+  ['task_delivery_updated','decision','partially_cancelled','','done'],
+  ['task_delivery_updated','decision','partially_completed','','done'],
+  ['task_delivery_updated','decision','waiting_tool_retry','','pending'],
+  ['generation_paused','decision','needs_review','generation_evidence_changed','done'],
+  ['send_failed','error','failed','send_outcome_unknown','done'],
   ['message_sent','sent','accepted','','done']
  ];
  for(const [event,category,status,reason,group] of cases){
@@ -22,7 +22,7 @@ test('status filters group terminal failures separately from unresolved receipts
   assert.equal(r.group,group,event);assert.equal(r.entries[0].status,status);
   if(status==='needs_review'||reason==='send_outcome_unknown'){
    const processed=entry(2,{event:'message_processed',category:'decision',status:'completed'});
-   assert.equal(project([...r.entries,processed])[0].group,'closed');
+   assert.equal(project([...r.entries,processed])[0].group,'done');
   }
  }
 });
