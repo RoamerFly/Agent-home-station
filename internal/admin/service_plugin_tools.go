@@ -472,7 +472,7 @@ func (p *permittedTools) serviceAuthorization() string {
 		return ""
 	}
 	a := p.manager.agent.config()
-	b, _ := json.Marshal([]any{p.trace.Account, p.trace.Channel, p.trace.Thread, p.serviceRequester(), p.trace.Surf, p.MemoryResultAuthorization(), a.Enabled, a.ExternalOwnerOnly, p.serviceWebAllowed("web.search"), p.serviceWebAllowed("web.read")})
+	b, _ := json.Marshal([]any{p.trace.Account, p.trace.Channel, p.trace.Thread, p.serviceRequester(), p.trace.Surf, p.memoryQueryAuthorization(), a.Enabled, a.ExternalOwnerOnly, p.serviceWebAllowed("web.search"), p.serviceWebAllowed("web.read")})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }

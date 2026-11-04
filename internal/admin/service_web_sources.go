@@ -46,21 +46,30 @@ func (p *permittedTools) webDiscoveryRequest(raw json.RawMessage) (mcptools.Disc
 	if in.Related != "" {
 		u, parseErr := url.Parse(in.Related)
 		_, public := publicSearchURL(in.Related)
-		if in.Source.Type != "bilibili" || !public || parseErr != nil || (u.Hostname() != "www.bilibili.com" && u.Hostname() != "bilibili.com") || !mcptools.IsPublicVideoPage(in.Related) || maxDepth < 1 {
+		if in.Source.Type != "bilibili" || !public || parseErr != nil || !relatedVideoPage(in.Related) || maxDepth < 1 {
 			return in.Source, "", errors.New("web_discovery_related_unavailable")
+		}
+		_, _, scope, interest, err := p.surfExplorationIdentity(context.Background(), p.trace.SurfTopic)
+		if err != nil {
+			return in.Source, "", err
 		}
 		store := p.manager.surfHistory
 		store.mu.Lock()
-		allowed := false
+		allowed, current := false, false
 		for _, session := range store.data.Sessions {
-			if session.ID == p.trace.TraceID && session.Thread == p.trace.Thread && session.Depth < maxDepth {
-				for _, candidate := range session.Candidates {
-					allowed = allowed || canonicalSurfURL(candidate.URL) == canonicalSurfURL(in.Related)
+			if session.ID == p.trace.TraceID && session.Thread == p.trace.Thread {
+				current = true
+				if session.ScopeKey == scope && session.InterestKey == interest && session.Depth < maxDepth {
+					for _, candidate := range session.Candidates {
+						allowed = allowed || canonicalSurfURL(candidate.URL) == canonicalSurfURL(in.Related)
+					}
 				}
+				break
 			}
 		}
-		for _, item := range store.data.Items {
-			allowed = allowed || (item.Bookmarked || item.Visits > 0) && canonicalSurfURL(item.Item.URL) == canonicalSurfURL(in.Related)
+		if !current {
+			seed := recentRelatedSurfURL(store.data.Sessions, p.trace.Thread, scope, interest)
+			allowed = seed != "" && canonicalSurfURL(seed) == canonicalSurfURL(in.Related)
 		}
 		store.mu.Unlock()
 		if !allowed {

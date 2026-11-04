@@ -16,6 +16,78 @@ func markSurfBodyRead(session *surfSession, item mcptools.DiscoveryItem) {
 	session.addObservation(surfObservation{CandidateID: item.ID, URL: item.URL, Tool: "web_fetch", State: "body_read", JobID: "job-" + item.ID, ContentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReturnedCharacters: 12, TotalCharacters: 12, Complete: true, At: time.Now().UTC()})
 }
 
+func TestRelatedExplorationStartsOnlyFromThisAuthorizedInterest(t *testing.T) {
+	const video = "https://www.bilibili.com/video/BV1425hzpEtn/"
+	candidate := mcptools.DiscoveryItem{ID: "music", URL: video}
+	bookmark := surfSession{Thread: "group", ScopeKey: "current", InterestKey: "music", State: "bookmarked", Selected: candidate.ID, Candidates: []mcptools.DiscoveryItem{candidate}}
+	seed := func(s surfSession) string {
+		return recentRelatedSurfURL([]surfSession{s}, "group", "current", "music")
+	}
+	if seed(bookmark) != video {
+		t.Fatal("missing bookmark from the same authorized interest")
+	}
+	read := bookmark
+	read.State, read.Selected = "not_shared", ""
+	read.Visited = []string{canonicalSurfURL(video)}
+	if seed(read) != video {
+		t.Fatal("missing previously visited video")
+	}
+	for _, change := range []func(*surfSession){
+		func(s *surfSession) { s.Thread = "other" },
+		func(s *surfSession) { s.ScopeKey = "before-forgetting" },
+		func(s *surfSession) { s.ScopeKey = "" },
+		func(s *surfSession) { s.InterestKey = "food" },
+		func(s *surfSession) { s.InterestKey = "" },
+		func(s *surfSession) { s.Reason = "surf_not_interested" },
+		func(s *surfSession) { s.Selected = "" },
+		func(s *surfSession) {
+			s.Candidates = []mcptools.DiscoveryItem{{ID: "music", URL: "https://b23.tv/abc"}}
+		},
+	} {
+		s := bookmark
+		change(&s)
+		if got := seed(s); got != "" {
+			t.Fatalf("ineligible session supplied a related link: %+v", s)
+		}
+	}
+}
+
+func TestWebDiscoveryAdapterCannotContinueAnotherConversationBookmark(t *testing.T) {
+	f, p := trustedAgent(t)
+	installPublicWebFixture(t, f)
+	configureSyntheticSurf(t, f, p)
+	f.manager.config.Companion.Permissions.Remember = true
+	p.trace.SurfTopic = "潮汐"
+	p.trace.Text = "合成的浏览回合"
+	if err := f.manager.memory.Observe(p.trace, f.manager.Config().Companion, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	source := mcptools.DiscoverySource{ID: "public", Name: "公开目录", Type: "bilibili", Kind: "video", URL: "https://api.bilibili.com/x/web-interface/popular", Enabled: true}
+	f.manager.surf.Settings.Discovery.Sources = []mcptools.DiscoverySource{source}
+	video := mcptools.DiscoveryItem{ID: "one", URL: "https://www.bilibili.com/video/BV1425hzpEtn/"}
+	args, _ := json.Marshal(webDiscoveryArguments{Source: source, Related: video.URL})
+	_, _, scope, interest, err := p.surfExplorationIdentity(t.Context(), p.trace.SurfTopic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := &f.manager.surfHistory.data
+	history.Items = []surfSeen{{Item: video, Bookmarked: true}}
+	history.Sessions = []surfSession{{ID: "previous", Thread: "another-room", ScopeKey: scope, InterestKey: interest, State: "bookmarked", Selected: video.ID, Candidates: []mcptools.DiscoveryItem{video}}}
+	if _, _, err := p.webDiscoveryRequest(args); err == nil {
+		t.Fatal("generic adapter authorized a global bookmark")
+	}
+	history.Sessions[0].Thread = p.trace.Thread
+	if _, got, err := p.webDiscoveryRequest(args); err != nil || got != "https://api.bilibili.com/x/web-interface/archive/related?bvid=BV1425hzpEtn" {
+		t.Fatal("same authorized interest could not continue", got, err)
+	}
+	if err := f.manager.memory.Clear(companion.ScopeID(p.trace.Channel, p.trace.Account, p.trace.Thread)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := p.webDiscoveryRequest(args); err == nil {
+		t.Fatal("forgotten bookmark was still authorized")
+	}
+}
+
 func TestDiscoveryPersistsDiverseCandidatesAndContinuesAfterOneSourceFails(t *testing.T) {
 	f := setup(t)
 	installPublicWebFixture(t, f)

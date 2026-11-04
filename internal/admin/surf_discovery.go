@@ -76,13 +76,22 @@ type surfSeen struct {
 	Shared     map[string]time.Time   `json:"shared,omitempty"`
 }
 type surfSession struct {
-	ID         string                   `json:"id"`
-	Thread     string                   `json:"thread"`
-	Mode       string                   `json:"mode"`
-	At         time.Time                `json:"at"`
-	Depth      int                      `json:"depth"`
-	Candidates []mcptools.DiscoveryItem `json:"candidates"`
-	Visited    []string                 `json:"visited"`
+	ID      string `json:"id"`
+	Account string `json:"account,omitempty"`
+	Thread  string `json:"thread"`
+	// AuthorizationEpoch is the recall epoch current when the host authorized
+	// a normal exploration. Private claim material is never persisted here. A
+	// later forget/correction changes it, so a context builder cannot mistake
+	// this old row for a current permission.
+	AuthorizationEpoch string                   `json:"authorization_epoch,omitempty"`
+	ScopeKey           string                   `json:"scope_key,omitempty"`
+	Interest           string                   `json:"interest,omitempty"`
+	InterestKey        string                   `json:"interest_key,omitempty"`
+	Mode               string                   `json:"mode"`
+	At                 time.Time                `json:"at"`
+	Depth              int                      `json:"depth"`
+	Candidates         []mcptools.DiscoveryItem `json:"candidates"`
+	Visited            []string                 `json:"visited"`
 	// Observations preserve the provenance of what this session actually learned
 	// about one public item. Candidates retain title/summary metadata; an
 	// observation never copies untrusted page text into surf-history.
@@ -92,13 +101,22 @@ type surfSession struct {
 	Selected     string            `json:"selected,omitempty"`
 	State        string            `json:"state"`
 	Reason       string            `json:"reason,omitempty"`
+	// StoppedAt is an explicit end-of-exploration event. State remains
+	// compatible with existing UI/history buckets (for example not_shared),
+	// while this field distinguishes a deliberate "not interested / enough for
+	// now" decision from a transport or source failure.
+	StoppedAt time.Time `json:"stopped_at,omitzero"`
 }
 
 // surfObservation is deliberately small, public and source-scoped. Page text
 // remains in the verified plugin job; a later context builder must revalidate
 // that job before it reads an excerpt back out.
 type surfObservation struct {
-	CandidateID        string    `json:"candidate_id,omitempty"`
+	CandidateID string `json:"candidate_id,omitempty"`
+	// Platform identifies where a candidate came from (the installed web
+	// reader, an isolated injected adapter, or a later adapter). It is
+	// display/selection metadata only and never authorizes a body read.
+	Platform           string    `json:"platform,omitempty"`
 	URL                string    `json:"url"`
 	Tool               string    `json:"tool"`
 	State              string    `json:"state"` // body_read, read_failed, read_unverified, legacy_unproven, media_prepared
@@ -305,6 +323,35 @@ func chooseDiscoveryMode(weights map[string]int) string {
 	return "recommendations"
 }
 
+func relatedVideoPage(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" {
+		return false
+	}
+	return (u.Hostname() == "www.bilibili.com" || u.Hostname() == "bilibili.com") && mcptools.IsPublicVideoPage(raw)
+}
+
+// Related discovery can start from an earlier bookmark or a visited video in
+// this authorized interest. Global seen counts are only for deduplication.
+func recentRelatedSurfURL(sessions []surfSession, thread, scopeKey, interestKey string) string {
+	if scopeKey == "" || interestKey == "" {
+		return ""
+	}
+	for _, session := range slices.Backward(sessions) {
+		if session.Thread != thread || session.ScopeKey != scopeKey || session.InterestKey != interestKey ||
+			session.Reason == "surf_not_interested" || session.Reason == "surf_not_suitable" {
+			continue
+		}
+		for _, candidate := range slices.Backward(session.Candidates) {
+			if candidate.ID != "" && relatedVideoPage(candidate.URL) &&
+				((session.State == "bookmarked" && session.Selected == candidate.ID) || slices.Contains(session.Visited, canonicalSurfURL(candidate.URL))) {
+				return candidate.URL
+			}
+		}
+	}
+	return ""
+}
+
 func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (string, error) {
 	if err := p.installedWebCapability(ctx, "web.discover"); err != nil {
 		return "", err
@@ -329,6 +376,10 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 		_ = json.Unmarshal(copyBytes, &cloned)
 		settings = &cloned
 	}
+	account, epoch, scopeKey, interestKey, scopeErr := p.surfExplorationIdentity(ctx, p.trace.SurfTopic)
+	if scopeErr != nil {
+		return "", scopeErr
+	}
 	store := p.manager.surfHistory
 	store.mu.Lock()
 	mode := chooseDiscoveryMode(settings.Weights)
@@ -336,10 +387,17 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 	var previous *surfSession
 	for i := range store.data.Sessions {
 		if store.data.Sessions[i].ID == p.trace.TraceID && store.data.Sessions[i].Thread == p.trace.Thread {
+			if store.data.Sessions[i].ScopeKey != scopeKey || store.data.Sessions[i].InterestKey != interestKey {
+				store.mu.Unlock()
+				return "", errors.New("探索授权或兴趣已变化，请开始新的浏览回合")
+			}
 			previous = &store.data.Sessions[i]
 			depth = previous.Depth
 		}
 	}
+	canReadRelated := slices.ContainsFunc(settings.Sources, func(source mcptools.DiscoverySource) bool {
+		return source.Enabled && source.Type == "bilibili"
+	})
 	if in.RelatedURL != "" {
 		valid := false
 		if previous != nil {
@@ -347,20 +405,18 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 				valid = valid || canonicalSurfURL(c.URL) == canonicalSurfURL(in.RelatedURL)
 			}
 		}
-		if !valid || depth >= settings.MaxDepth {
+		if !valid || !relatedVideoPage(in.RelatedURL) || !canReadRelated || depth >= settings.MaxDepth {
 			store.mu.Unlock()
-			return "", errors.New("关联探索仅限本次候选且不能超过深度预算")
+			return "", errors.New("请从本次候选中选择 BV 视频，启用哔哩哔哩来源并检查探索深度")
 		}
 		depth++
 		mode = "related"
 	}
 	if mode == "related" && in.RelatedURL == "" {
-		for i := len(store.data.Items) - 1; i >= 0; i-- {
-			x := store.data.Items[i]
-			if settings.MaxDepth > 0 && (x.Bookmarked || x.Visits > 0) && mcptools.IsPublicVideoPage(x.Item.URL) {
-				in.RelatedURL = x.Item.URL
+		if previous == nil && canReadRelated && settings.MaxDepth > 0 {
+			in.RelatedURL = recentRelatedSurfURL(store.data.Sessions, p.trace.Thread, scopeKey, interestKey)
+			if in.RelatedURL != "" {
 				depth = 1
-				break
 			}
 		}
 		if in.RelatedURL == "" {
@@ -453,17 +509,25 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
-	if p.privateSurfOrigin != nil {
-		if err := p.privateSurfOrigin.check(ctx, p.trace); err != nil {
-			return "", err
-		}
+	_, _, currentScope, currentInterest, scopeErr := p.surfExplorationIdentity(ctx, p.trace.SurfTopic)
+	if scopeErr != nil {
+		return "", scopeErr
+	}
+	if currentScope != scopeKey || currentInterest != interestKey {
+		return "", errors.New("读取期间探索授权或来源已变化，请开始新的浏览回合")
 	}
 	store.mu.Lock()
 	now := time.Now().UTC()
 	session := surfSession{ID: p.trace.TraceID, Thread: p.trace.Thread, Mode: mode, At: now, Depth: depth, State: "browsing", Candidates: []mcptools.DiscoveryItem{}, Visited: []string{}, Failures: []string{}}
+	session.Account, session.AuthorizationEpoch = account, epoch
+	session.Interest, session.ScopeKey, session.InterestKey = p.trace.SurfTopic, scopeKey, interestKey
 	index := -1
 	for i := range store.data.Sessions {
 		if store.data.Sessions[i].ID == session.ID && store.data.Sessions[i].Thread == session.Thread {
+			if store.data.Sessions[i].ScopeKey != scopeKey || store.data.Sessions[i].InterestKey != interestKey {
+				store.mu.Unlock()
+				return "", errors.New("探索授权或兴趣已变化，请开始新的浏览回合")
+			}
 			index = i
 			session.Candidates = append(session.Candidates, store.data.Sessions[i].Candidates...)
 			session.Visited = append(session.Visited, store.data.Sessions[i].Visited...)
@@ -479,6 +543,7 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 		}
 		mcptools.ShuffleDiscovery(r.items)
 		for _, x := range r.items {
+			x.Source = surfPlatformName(r.source.Name, x.Source)
 			publicURL, ok := publicSearchURL(strings.TrimSpace(x.URL))
 			if !ok {
 				// Custom/legacy discovery readers are not trusted to provide a
@@ -555,6 +620,13 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 		out["current_session_reading_excerpts"] = excerpts
 	}
 
+	if p.privateSurfOrigin == nil {
+		if previous := p.priorReadingExcerpts(ctx, session); len(previous) > 0 {
+			out["prior_authorized_reading_excerpts"] = previous
+			out["instruction"] = out["instruction"].(string) + " 既往摘录只记录此前在同一兴趣下实际读到的部分，当前候选的阅读进度单独核对。"
+		}
+	}
+
 	if p.privateSurfOrigin != nil {
 		out["instruction"] = "这是实际读取公开列表/订阅/目录得到的候选元数据，不代表观看或播放。当前仅供私人浏览，没有发送目标或发送权限。可用web_fetch分页读取候选正文、web_search核实具体疑问，或web_discover继续发现；不得下载、准备或发送素材，也不能读取会话记忆。最终silent；喜欢的候选可用surf_action=bookmark与surf_item_id收藏，其他候选可略过。"
 	}
@@ -572,6 +644,7 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 	if !p.trace.Surf {
 		return d, nil
 	}
+	currentAccount, currentEpoch, currentScope, currentInterest, scopeErr := p.surfExplorationIdentity(ctx, p.trace.SurfTopic)
 	s := p.manager.surfHistory
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -601,6 +674,18 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 			session.Selected = chosen.ID
 		}
 		return companion.Decision{Action: "silent", Reason: reason, SurfAction: d.SurfAction, SurfItemID: session.Selected}, s.saveLocked()
+	}
+	// A discovered item is public metadata, but a prepared read/media result
+	// may be followed by a send. Recheck the same host authorization and recall
+	// epoch used while assembling model context immediately before that boundary.
+	// Pre-scope persisted rows retain their existing conservative checks; they
+	// are never upgraded into scoped history. Every new scoped row must match.
+	scoped := session.Account != "" || session.ScopeKey != "" || session.AuthorizationEpoch != "" || session.InterestKey != ""
+	if scoped {
+		epochRequired := p.privateSurfOrigin == nil
+		if scopeErr != nil || session.Account == "" || session.ScopeKey == "" || epochRequired && session.AuthorizationEpoch == "" || session.Account != currentAccount || session.ScopeKey != currentScope || session.InterestKey != currentInterest || epochRequired && session.AuthorizationEpoch != currentEpoch {
+			return finishSilent("surf_authorization_changed", "blocked")
+		}
 	}
 	if d.Action == "silent" {
 		reason, state := d.Reason, "not_shared"
@@ -632,6 +717,9 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 					s.data.Items[i].Bookmarked = true
 				}
 			}
+		}
+		if surfExplorationStopped(reason) {
+			session.StoppedAt = time.Now().UTC()
 		}
 		return finishSilent(reason, state)
 	}
@@ -700,6 +788,15 @@ func (p *permittedTools) ReviewSurf(ctx context.Context, d companion.Decision) (
 		return companion.Decision{}, err
 	}
 	return d, nil
+}
+
+func surfExplorationStopped(reason string) bool {
+	switch reason {
+	case "surf_not_interested", "surf_not_suitable", "surf_browse_only", "surf_candidates_only", "surf_no_novel_candidates", "surf_no_verified_source", "surf_duplicate_source", "surf_duplicate_topic", "surf_bookmarked":
+		return true
+	default:
+		return false
+	}
 }
 
 // currentSurfBodyRead makes persisted provenance useful only while its source
@@ -891,9 +988,11 @@ func (s *surfHistoryStore) recordRead(in companion.Input, tool, rawURL, result s
 		}
 		url := canonicalSurfURL(rawURL)
 		candidateID := ""
+		platform := ""
 		for _, candidate := range session.Candidates {
 			if canonicalSurfURL(candidate.URL) == url || canonicalSurfURL(candidate.MediaURL) == url {
 				candidateID = candidate.ID
+				platform = candidate.Source
 				break
 			}
 		}
@@ -903,7 +1002,7 @@ func (s *surfHistoryStore) recordRead(in companion.Input, tool, rawURL, result s
 		if candidateID == "" {
 			return false, nil
 		}
-		row := surfObservation{CandidateID: candidateID, URL: url, Tool: tool, At: time.Now().UTC()}
+		row := surfObservation{CandidateID: candidateID, Platform: platform, URL: url, Tool: tool, At: time.Now().UTC()}
 		if callErr != nil {
 			row.JobID = surfWebJobID(result)
 			row.State, row.Failure = "read_failed", logText(mcptools.FailureDescription(callErr), 500)

@@ -101,7 +101,7 @@ func TestPrivateSurfOriginOnlyGrantsReadonlyHostBrowsing(t *testing.T) {
 }
 
 func TestPrivateSurfOriginRejectsTransferAndRevocation(t *testing.T) {
-	for _, change := range []string{"account", "trace", "thread", "sender", "source", "config_revision", "settings", "disabled", "drain", "quiet", "expiry", "execution_cancel"} {
+	for _, change := range []string{"account", "trace", "thread", "sender", "topic", "source", "config_revision", "settings", "disabled", "drain", "quiet", "expiry", "execution_cancel"} {
 		t.Run(change, func(t *testing.T) {
 			f, _, tools := privateSurfFixture(t)
 			p := tools.tools
@@ -117,6 +117,8 @@ func TestPrivateSurfOriginRejectsTransferAndRevocation(t *testing.T) {
 				p.trace.TraceID = "surf-another"
 			case "thread":
 				p.trace.Thread = "filehelper"
+			case "topic":
+				p.trace.SurfTopic = "another interest"
 			case "sender":
 				p.trace.Sender = "wxid_owner"
 			case "source":

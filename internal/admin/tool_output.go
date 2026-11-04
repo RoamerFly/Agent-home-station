@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 	"unicode/utf8"
 	"wechat-bot/internal/mcptools"
@@ -193,17 +194,49 @@ func (p *permittedTools) memoryQueryAuthorization() string {
 	return hex.EncodeToString(h[:])
 }
 
+// surfGenerationAuthorization binds autonomous browsing context to an actual
+// configured proactive target without granting the no-sender worker access to
+// memory_read/search. It is only used as generation evidence; the ordinary
+// memory query stamp above remains byte-for-byte unchanged for user turns.
+func (p *permittedTools) surfGenerationAuthorization() string {
+	if p == nil || p.manager == nil || p.manager.native == nil || p.manager.agent == nil || !p.trace.Surf || p.privateSurfOrigin != nil || p.trace.Sender != "" {
+		return ""
+	}
+	interest := normalizeSurfInterest(p.trace.SurfTopic)
+	if interest == "" {
+		return "" // Older queued turns never received cross-session excerpts.
+	}
+	// Use the same web grant as the original tool invocation. serviceAuthorization
+	// reads the member query stamp directly, so a surf generation stamp can
+	// never grant memory-tool access or change an existing web job's signature.
+	grant := p.serviceAuthorization()
+	if grant == "" {
+		return ""
+	}
+	p.manager.mu.Lock()
+	remember := p.manager.config.Companion.Permissions.Remember
+	revision := p.manager.surf.SettingsRevision
+	p.manager.mu.Unlock()
+	if !remember {
+		return ""
+	}
+	return agentID("surf-generation-v1", grant, strconv.Itoa(revision), interest)
+}
+
 // MemoryResultAuthorized is also used before reinjecting retained memory into
 // a model continuation. A missing stamp is legacy data, never a fresh grant.
 func (p *permittedTools) MemoryResultAuthorized(stamp string) bool {
-	return stamp != "" && stamp == p.memoryQueryAuthorization()
+	return stamp != "" && (stamp == p.memoryQueryAuthorization() || stamp == p.surfGenerationAuthorization())
 }
 
 // MemoryResultAuthorization lets the reply engine bind the same opaque,
 // effective-visibility snapshot to its final delivery evidence. It does not
 // relabel existing query results and is not exposed as a callable agent tool.
 func (p *permittedTools) MemoryResultAuthorization() string {
-	return p.memoryQueryAuthorization()
+	if stamp := p.memoryQueryAuthorization(); stamp != "" {
+		return stamp
+	}
+	return p.surfGenerationAuthorization()
 }
 
 func memoryOutputTool(name string) bool {

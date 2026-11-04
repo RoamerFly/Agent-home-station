@@ -319,7 +319,7 @@ func TestLiveWebPublicMigrationIsolationContract(t *testing.T) {
 	if got := p.recentReadingExcerpts(t.Context(), f.manager.surfHistory.snapshot().Sessions[0]); len(got) != 0 {
 		t.Fatalf("forgotten context reappeared: %+v", got)
 	}
-	if checked, err := p.ReviewSurf(t.Context(), decision); err != nil || checked.Action != "silent" || checked.Reason != "surf_candidate_not_verified" {
+	if checked, err := p.ReviewSurf(t.Context(), decision); err != nil || checked.Action != "silent" || checked.Reason != "surf_authorization_changed" {
 		t.Fatalf("stale job passed the sharing check: %s %v", checked.Reason, err)
 	}
 }

@@ -61,6 +61,7 @@ type Input struct {
 	QuoteServerID      string                  `json:"-"`
 	MessageTime        string                  `json:"message_time,omitempty"`
 	Surf               bool                    `json:"surf,omitempty"`
+	SurfTopic          string                  `json:"surf_topic,omitempty"`
 	SurfPreferredKind  string                  `json:"surf_preferred_kind,omitempty"`
 	SurfForceShare     bool                    `json:"surf_force_share,omitempty"`
 }

@@ -19,15 +19,15 @@ import (
 // This capability exists only inside a claim returned by the host scheduler.
 // No Input, task file, model argument or plugin result can reconstruct it.
 type privateSurfOrigin struct {
-	manager                                      *Manager
-	account, claim, configuration, trace, prompt string
-	revision                                     int
-	expires                                      time.Time
-	parent                                       context.Context
-	mu                                           sync.Mutex
-	execution                                    context.Context
-	bound                                        atomic.Bool
-	revoked                                      atomic.Bool
+	manager                                             *Manager
+	account, claim, configuration, trace, prompt, topic string
+	revision                                            int
+	expires                                             time.Time
+	parent                                              context.Context
+	mu                                                  sync.Mutex
+	execution                                           context.Context
+	bound                                               atomic.Bool
+	revoked                                             atomic.Bool
 }
 
 func (m *Manager) privateSurfConfigurationLocked() string {
@@ -56,7 +56,7 @@ func (m *Manager) privateSurfFactoryLocked(now time.Time, task *bot.SurfTask) (f
 	if account == "" {
 		return nil, errors.New("surf_account_unavailable")
 	}
-	origin := &privateSurfOrigin{manager: m, account: account, claim: hex.EncodeToString(nonce[:]), configuration: m.privateSurfConfigurationLocked(), revision: m.surf.SettingsRevision, expires: expires, prompt: task.Prompt()}
+	origin := &privateSurfOrigin{manager: m, account: account, claim: hex.EncodeToString(nonce[:]), configuration: m.privateSurfConfigurationLocked(), revision: m.surf.SettingsRevision, expires: expires, prompt: task.Prompt(), topic: task.Topic}
 	preferred := task.PreferredKind
 	var issued atomic.Bool
 	return func(ctx context.Context, trace string) (companion.ToolAccess, error) {
@@ -69,7 +69,7 @@ func (m *Manager) privateSurfFactoryLocked(now time.Time, task *bot.SurfTask) (f
 			return nil, err
 		}
 		p.privateSurfOrigin = origin
-		p.SetTrace(companion.Input{Channel: "host", Account: account, Thread: "host:surf:" + account, TraceID: trace, Text: origin.prompt, Mode: "direct", Surf: true, Preview: true, SurfPreferredKind: preferred})
+		p.SetTrace(companion.Input{Channel: "host", Account: account, Thread: "host:surf:" + account, TraceID: trace, Text: origin.prompt, Mode: "direct", Surf: true, Preview: true, SurfTopic: origin.topic, SurfPreferredKind: preferred})
 		if err := origin.check(ctx, p.trace); err != nil {
 			return nil, err
 		}
@@ -91,7 +91,7 @@ func (o *privateSurfOrigin) check(ctx context.Context, in companion.Input) error
 		o.revoked.Store(true)
 		return errors.New("surf_origin_expired_or_cancelled")
 	}
-	if in.Account != o.account || in.Channel != "host" || in.Thread != "host:surf:"+o.account || in.TraceID != o.trace || in.Text != o.prompt || in.Sender != "" || !in.Preview || !in.Surf || in.ReportOnly || in.Mode != "direct" || in.IsGroup || in.Directed || in.MustReply || in.SurfForceShare || in.TaskID != "" || in.Source != nil || in.QuotedSource != nil || in.ReplyContext != nil || in.OriginalText != nil || len(in.UnreadMessages) != 0 || len(in.IncomingMedia) != 0 || in.ConversationDelivery || in.BackgroundResult || in.SourceOnlyContext {
+	if in.Account != o.account || in.Channel != "host" || in.Thread != "host:surf:"+o.account || in.TraceID != o.trace || in.Text != o.prompt || in.SurfTopic != o.topic || in.Sender != "" || !in.Preview || !in.Surf || in.ReportOnly || in.Mode != "direct" || in.IsGroup || in.Directed || in.MustReply || in.SurfForceShare || in.TaskID != "" || in.Source != nil || in.QuotedSource != nil || in.ReplyContext != nil || in.OriginalText != nil || len(in.UnreadMessages) != 0 || len(in.IncomingMedia) != 0 || in.ConversationDelivery || in.BackgroundResult || in.SourceOnlyContext {
 		return errors.New("surf_origin_scope_changed")
 	}
 	m := o.manager

@@ -10,7 +10,7 @@ const history={
  items:[],
  sessions:[
   {id:'legacy',at:'2026-11-05T03:00:00Z',mode:'recommendations',state:'not_shared',reason:'surf_browse_only',candidates:[{id:'legacy-item',title:'旧记录',url:'https://content.example/legacy',source:'合成来源',kind:'text'}],visited:['https://content.example/legacy']},
-  {id:'ranges',at:'2026-11-05T04:00:00Z',mode:'related',state:'not_shared',reason:'surf_browse_only',candidates:[
+  {id:'ranges',interest:'潮汐摄影',at:'2026-11-05T04:00:00Z',mode:'related',state:'not_shared',reason:'surf_browse_only',candidates:[
    {id:'article',title:'正文候选',url:'https://content.example/article',source:'合成来源',kind:'text'},
    {id:'clip',title:'媒体候选',url:'https://content.example/clip',source:'合成来源',kind:'video'}
   ],observations:[
@@ -58,6 +58,7 @@ const history={
   await page.locator('#surf-history-list .surf-history-session').count().then(count=>assert.equal(count,2,'synthetic history sessions did not render'));
   await page.locator('#surf-history-list .surf-history-session').evaluateAll(rows=>rows.forEach(row=>{row.open=true}));
   const text=await page.locator('#surf-history-list').innerText();
+  assert.match(text,/潮汐摄影/,'show the host-selected interest for a new exploration');
   assert.match(text,/发现候选/,'candidate discovery must not claim body read');
   assert.match(text,/已读取正文第 21–40 字（共 90 字）/,'partial body range must display exact returned coverage');
   assert.match(text,/读取失败/,'failed read must remain distinct from an unverified read');
