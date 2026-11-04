@@ -17,6 +17,47 @@ type evidenceBlockingModel struct {
 	answer  string
 }
 
+func TestMoodWriteRejectsAChangeToAnotherSourceInTheModelContext(t *testing.T) {
+	store, cfg, in, scope, _ := observedReflectionFixture(t)
+	ctx := t.Context()
+	saveMood := func(ctx context.Context, feeling string) (ExperienceReflection, error) {
+		candidates, err := store.ListObservedExperienceReflectionCandidates(ctx, scope, 1)
+		if err != nil || len(candidates) != 1 {
+			t.Fatalf("expected one observed video, got %d, %v", len(candidates), err)
+		}
+		c := candidates[0]
+		return store.SaveExperienceReflection(ctx, ExperienceReflectionInput{
+			Scope: scope, SourceEventID: c.SourceEventID, SourceAssetID: c.SourceAssetID,
+			SourceEventRevision: c.SourceEventRevision, SourceObservationVersion: c.SourceObservationVersion,
+			SourceObservationHash: c.SourceObservationHash, Feeling: feeling,
+		})
+	}
+	prior, err := saveMood(ctx, "我有些惦记家人。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in = syntheticNativeInput(in, "second-video")
+	in.IncomingMedia[0].AssetID = "second-observed-asset"
+	in.IncomingMedia[0].Source = *in.Source
+	if err := store.Observe(in, cfg, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	epoch, err := store.RecallEpoch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := withGenerationEvidence(ctx, GenerationEvidence{RecallEpoch: epoch})
+	if _, err := store.ForgetExperienceReflection(ctx, scope, prior.ID, prior.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := saveMood(pending, "还惦记着先前的事。"); !errors.Is(err, ErrMemoryConflict) {
+		t.Fatalf("persisted a mood from the superseded context: %v", err)
+	}
+	if _, err := saveMood(ctx, "重新看过后觉得很温暖。"); err != nil {
+		t.Fatalf("fresh decision on the same surviving source: %v", err)
+	}
+}
+
 func (m *evidenceBlockingModel) Chat(ctx context.Context, _ string, _ []map[string]string) (string, error) {
 	evidence, _ := GenerationEvidenceFromContext(ctx)
 	select {

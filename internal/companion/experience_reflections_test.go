@@ -1,7 +1,9 @@
 package companion
 
 import (
+	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -207,7 +209,7 @@ func TestExperienceReflectionDoesNotResurrectForgottenRootOrSkipOlderVisiblePage
 		t.Fatal(firstCandidates, err)
 	}
 	first := firstCandidates[0]
-	older, err := store.SaveExperienceReflection(t.Context(), ExperienceReflectionInput{Scope: scope, SourceEventID: first.SourceEventID, SourceEventRevision: first.SourceEventRevision, SourceAssetID: first.SourceAssetID, SourceObservationVersion: first.SourceObservationVersion, SourceObservationHash: first.SourceObservationHash, Note: "我想再看这种沟通故事。", WantsToRevisit: true})
+	older, err := store.SaveExperienceReflection(t.Context(), ExperienceReflectionInput{Scope: scope, SourceEventID: first.SourceEventID, SourceEventRevision: first.SourceEventRevision, SourceAssetID: first.SourceAssetID, SourceObservationVersion: first.SourceObservationVersion, SourceObservationHash: first.SourceObservationHash, Feeling: "温暖", Note: "我想再看这种沟通故事。", WantsToRevisit: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,13 +231,21 @@ func TestExperienceReflectionDoesNotResurrectForgottenRootOrSkipOlderVisiblePage
 		t.Fatalf("candidates=%#v err=%v", candidates, err)
 	}
 	newer := candidates[0]
-	if _, err = store.SaveExperienceReflection(t.Context(), ExperienceReflectionInput{Scope: scope, SourceEventID: newer.SourceEventID, SourceEventRevision: newer.SourceEventRevision, SourceAssetID: newer.SourceAssetID, SourceObservationVersion: newer.SourceObservationVersion, SourceObservationHash: newer.SourceObservationHash, Note: "我想再看这个。", WantsToRevisit: true}); err != nil {
+	if _, err = store.SaveExperienceReflection(t.Context(), ExperienceReflectionInput{Scope: scope, SourceEventID: newer.SourceEventID, SourceEventRevision: newer.SourceEventRevision, SourceAssetID: newer.SourceAssetID, SourceObservationVersion: newer.SourceObservationVersion, SourceObservationHash: newer.SourceObservationHash, Feeling: "好奇", Note: "我想再看这个。", WantsToRevisit: true}); err != nil {
 		t.Fatal(err)
+	}
+	mood, err := store.RecentExperienceMood(t.Context(), scope, time.Now())
+	if err != nil || mood == nil || mood.Feeling != "好奇" {
+		t.Fatalf("latest mood=%v err=%v", mood, err)
 	}
 	// Simulate original-event revocation. The newest persisted reflection is
 	// stale, but pagination must keep scanning and still return the older one.
 	if _, err = store.db.Exec("UPDATE events SET suppressed=1 WHERE id=?", newer.SourceEventID); err != nil {
 		t.Fatal(err)
+	}
+	mood, err = store.RecentExperienceMood(t.Context(), scope, time.Now())
+	if err != nil || mood == nil || mood.Feeling != "温暖" {
+		t.Fatalf("withdrawn observation still influenced the fish: %v, %v", mood, err)
 	}
 	page, err := store.ListExperienceReflections(t.Context(), scope, ExperienceReflectionQuery{Limit: 1})
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID != older.ID {
@@ -246,5 +256,84 @@ func TestExperienceReflectionDoesNotResurrectForgottenRootOrSkipOlderVisiblePage
 	}
 	if _, err = store.SaveExperienceReflection(t.Context(), ExperienceReflectionInput{Scope: scope, SourceEventID: first.SourceEventID, SourceEventRevision: first.SourceEventRevision, SourceAssetID: first.SourceAssetID, SourceObservationVersion: first.SourceObservationVersion, SourceObservationHash: first.SourceObservationHash, Note: "忘记后不能复活。", WantsToRevisit: true}); !errors.Is(err, ErrMemoryConflict) {
 		t.Fatalf("forgotten root resurrected: %v", err)
+	}
+}
+
+func TestExperienceReflectionFeelingMoodSurvivesRestartAndCanBeCorrectedOrForgotten(t *testing.T) {
+	store, _, _, scope, _ := observedReflectionFixture(t)
+	candidates, err := store.ListObservedExperienceReflectionCandidates(t.Context(), scope, 1)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("candidates=%#v err=%v", candidates, err)
+	}
+	candidate := candidates[0]
+	reflection, err := store.SaveExperienceReflection(t.Context(), ExperienceReflectionInput{
+		Scope: scope, SourceEventID: candidate.SourceEventID, SourceEventRevision: candidate.SourceEventRevision,
+		SourceAssetID: candidate.SourceAssetID, SourceObservationVersion: candidate.SourceObservationVersion,
+		SourceObservationHash: candidate.SourceObservationHash, Feeling: "有点温暖", WantsToRevisit: false,
+	})
+	if err != nil || reflection.Note != "" || reflection.WantsToRevisit || reflection.Feeling != "有点温暖" {
+		t.Fatalf("feeling-only reflection=%#v err=%v", reflection, err)
+	}
+	// One verified observation yields one durable reflection. A feeling is not
+	// an invitation for the model to rediscover and repeatedly rewrite it.
+	if candidates, err = store.ListObservedExperienceReflectionCandidates(t.Context(), scope, 1); err != nil || len(candidates) != 0 {
+		t.Fatalf("feeling-only reflection re-entered candidate list=%#v err=%v", candidates, err)
+	}
+	interestPage, err := store.ListExperienceReflections(t.Context(), scope, ExperienceReflectionQuery{Limit: 1, InterestOnly: true})
+	if err != nil || len(interestPage.Items) != 0 {
+		t.Fatalf("feeling-only reflection leaked into interest list=%#v err=%v", interestPage, err)
+	}
+	mood, err := store.RecentExperienceMood(t.Context(), scope, reflection.Created.Add(5*time.Hour))
+	if err != nil || mood == nil || mood.Feeling != "有点温暖" || mood.Influence != "fresh" {
+		t.Fatalf("fresh mood=%#v err=%v", mood, err)
+	}
+
+	// The new content setter can change a feeling without fabricating a second
+	// experience. The legacy note editor remains an interest-only edit and
+	// therefore keeps the feeling intact.
+	corrected, err := store.SetExperienceReflectionContent(t.Context(), scope, reflection.ID, reflection.Revision, "", "有点期待")
+	if err != nil || corrected.Revision != reflection.Revision+1 || corrected.Created != reflection.Created || corrected.Feeling != "有点期待" || corrected.Note != "" || corrected.WantsToRevisit {
+		t.Fatalf("feeling correction=%#v err=%v", corrected, err)
+	}
+	interest, err := store.UpdateExperienceReflection(t.Context(), scope, corrected.ID, corrected.Revision, "也想再看同类内容")
+	if err != nil || !interest.WantsToRevisit || interest.Note == "" || interest.Feeling != "有点期待" {
+		t.Fatalf("legacy interest update lost feeling=%#v err=%v", interest, err)
+	}
+	if _, err = store.SetExperienceReflectionContent(t.Context(), scope, interest.ID, interest.Revision, "", ""); !errors.Is(err, ErrInvalidExperienceReflection) {
+		t.Fatalf("empty content accepted instead of requiring forget: %v", err)
+	}
+
+	// Make the original experience seven hours old in both the indexed column
+	// and its source payload, then reopen. Correcting content did not refresh
+	// Created, so restart must retain the fading—not fresh—classification.
+	aged := interest
+	aged.Created = time.Now().UTC().Add(-7 * time.Hour)
+	payload, err := json.Marshal(aged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.db.Exec("UPDATE experience_reflections SET created=?,payload=? WHERE id=?", memoryTime(aged.Created), payload, aged.ID); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(store.path)
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	mood, err = reopened.RecentExperienceMood(t.Context(), scope, aged.Created.Add(7*time.Hour))
+	if err != nil || mood == nil || mood.Feeling != "有点期待" || mood.Influence != "fading" {
+		t.Fatalf("reopened fading mood=%#v err=%v", mood, err)
+	}
+	forgotten, err := reopened.ForgetExperienceReflection(t.Context(), scope, interest.ID, interest.Revision)
+	if err != nil || forgotten.Status != "forgotten" {
+		t.Fatalf("forget mood reflection=%#v err=%v", forgotten, err)
+	}
+	mood, err = reopened.RecentExperienceMood(t.Context(), scope, aged.Created.Add(8*time.Hour))
+	if err != nil || mood != nil {
+		t.Fatalf("forgotten mood remained current=%#v err=%v", mood, err)
 	}
 }

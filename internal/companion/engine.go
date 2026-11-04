@@ -423,7 +423,7 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 		}
 		scope = NamedScope(scope, resolvedNames, c.Name)
 	}
-	reflectionCandidates, reflectionNotes := e.proactiveReflectionContext(ctx, input)
+	reflectionCandidates, reflectionNotes, experienceMood := e.proactiveReflectionContext(ctx, input, now)
 	if len(input.UnreadMessages) > 0 {
 		ids := map[string]bool{}
 		for _, m := range input.UnreadMessages {
@@ -470,10 +470,14 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	}
 	if len(reflectionCandidates) > 0 {
 		currentPayload["experience_reflection_candidates"] = reflectionCandidatePrompts(reflectionCandidates)
-		system += "\n本轮是自主评估。experience_reflection_candidates 是宿主已实际观察并核验的会话媒体，不是标题、转述或你的旧回答。若你自己确实想以后再看其中一项，可在最终 JSON 自愿加 experience_reflection：choice 填候选的整数序号，wants_to_revisit:true，note 写一句不超过1200字节、只基于该观察摘要的个人想法。它不发给群友，也不影响本轮 reply/silent；不想记录就完全省略。不能因标题、群友陈述或未经读取的内容创建该字段。"
+		system += "\nexperience_reflection_candidates 是本会话实际看过或听过的片段。你可以在最终 JSON 的 experience_reflection 中用 choice 选一段，feeling 写当时自己的感受；想以后再看时加 wants_to_revisit:true 和 note。两者可单独记录或都省略。只依据给出的观察，不发到群里。"
 	}
-	if len(reflectionNotes) > 0 {
-		currentPayload["experience_reflections"] = reflectionPrompts(reflectionNotes)
+	if prompts := reflectionPrompts(reflectionNotes); len(prompts) > 0 {
+		currentPayload["experience_reflections"] = prompts
+	}
+	if experienceMood != nil {
+		currentPayload["experience_mood"] = experienceMood
+		system += "\nexperience_mood 是你之前记录的感受。fresh 可影响你此刻想聊什么、探索或休息；fading 只作背景，优先眼前的新话题。它只描述你，你仍可选择安静。"
 	}
 	delete(currentPayload, "incoming_media")
 	if hints := recentReplyStyle(scope, input); len(hints) > 0 {

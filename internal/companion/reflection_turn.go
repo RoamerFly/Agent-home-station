@@ -2,7 +2,7 @@ package companion
 
 import (
 	"context"
-	"strings"
+	"time"
 )
 
 // ExperienceReflectionSelection is an optional, model-owned choice made at
@@ -14,6 +14,10 @@ type ExperienceReflectionSelection struct {
 	Choice         int    `json:"choice,omitempty"`
 	Note           string `json:"note,omitempty"`
 	WantsToRevisit bool   `json:"wants_to_revisit,omitempty"`
+	// Feeling is a short, self-described present mood. It is intentionally
+	// separate from a sourced interest: it may be saved on its own and expires
+	// from proactive context instead of turning into a permanent preference.
+	Feeling string `json:"feeling,omitempty"`
 }
 
 type experienceReflectionCandidatePrompt struct {
@@ -29,23 +33,27 @@ type experienceReflectionPrompt struct {
 	ObservedRange string `json:"observed_range,omitempty"`
 }
 
-func (e *Engine) proactiveReflectionContext(ctx context.Context, in Input) ([]ObservedExperienceReflectionCandidate, []ExperienceReflection) {
+func (e *Engine) proactiveReflectionContext(ctx context.Context, in Input, now time.Time) ([]ObservedExperienceReflectionCandidate, []ExperienceReflection, *ExperienceMood) {
 	if !eligibleExperienceReflectionTurn(in) || !e.Config.Permissions.Remember || e.Store == nil || e.Store.db == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	scope := ScopeID(in.Channel, in.Account, in.Thread)
 	candidates, err := e.Store.ListObservedExperienceReflectionCandidates(ctx, scope, 3)
 	if err != nil && e.ToolLog != nil {
 		e.ToolLog("experience_reflection_candidates_unavailable")
 	}
-	page, err := e.Store.ListExperienceReflections(ctx, scope, ExperienceReflectionQuery{Limit: 3})
+	page, err := e.Store.ListExperienceReflections(ctx, scope, ExperienceReflectionQuery{Limit: 3, InterestOnly: true})
 	if err != nil {
 		if e.ToolLog != nil {
 			e.ToolLog("experience_reflections_unavailable")
 		}
-		return candidates, nil
+		return candidates, nil, nil
 	}
-	return candidates, page.Items
+	mood, err := e.Store.RecentExperienceMood(ctx, scope, now.UTC())
+	if err != nil && e.ToolLog != nil {
+		e.ToolLog("experience_mood_unavailable")
+	}
+	return candidates, page.Items, mood
 }
 
 // eligibleExperienceReflectionTurn excludes continuations, recovery results
@@ -56,13 +64,6 @@ func (e *Engine) proactiveReflectionContext(ctx context.Context, in Input) ([]Ob
 func eligibleExperienceReflectionTurn(in Input) bool {
 	return in.Mode == "proactive" && !in.Surf && !in.Preview && in.TaskID == "" && !in.BackgroundResult && !in.ReportOnly &&
 		!in.HistoricalReview && len(in.UnreadMessages) == 0 && len(in.RecoveryToolResults) == 0 && in.RecoveryEvidence == nil && in.RecoveryPrivacy == nil
-}
-
-func reflectionCandidateVisible(selection *ExperienceReflectionSelection, candidates []ObservedExperienceReflectionCandidate) (ObservedExperienceReflectionCandidate, bool) {
-	if selection == nil || !selection.WantsToRevisit || strings.TrimSpace(selection.Note) == "" || len(selection.Note) > 1200 || selection.Choice < 1 || selection.Choice > len(candidates) {
-		return ObservedExperienceReflectionCandidate{}, false
-	}
-	return candidates[selection.Choice-1], true
 }
 
 func reflectionCandidatePrompts(candidates []ObservedExperienceReflectionCandidate) []experienceReflectionCandidatePrompt {
@@ -90,20 +91,22 @@ func reflectionPrompts(reflections []ExperienceReflection) []experienceReflectio
 // model turn.  The Store repeats exact scope, source and observation checks so
 // a stale or forgotten candidate cannot be revived here.
 func (e *Engine) saveProactiveReflection(ctx context.Context, in Input, candidates []ObservedExperienceReflectionCandidate, selection *ExperienceReflectionSelection) {
-	candidate, ok := reflectionCandidateVisible(selection, candidates)
-	if !ok {
+	if selection == nil || selection.Choice < 1 || selection.Choice > len(candidates) {
 		return
 	}
-	_, err := e.Store.SaveExperienceReflection(ctx, ExperienceReflectionInput{
+	candidate := candidates[selection.Choice-1]
+	input := ExperienceReflectionInput{
 		Scope:                    ScopeID(in.Channel, in.Account, in.Thread),
 		SourceEventID:            candidate.SourceEventID,
 		SourceEventRevision:      candidate.SourceEventRevision,
 		SourceAssetID:            candidate.SourceAssetID,
 		SourceObservationVersion: candidate.SourceObservationVersion,
 		SourceObservationHash:    candidate.SourceObservationHash,
-		Note:                     strings.TrimSpace(selection.Note),
-		WantsToRevisit:           true,
-	})
+		Feeling:                  selection.Feeling,
+		WantsToRevisit:           selection.WantsToRevisit,
+		Note:                     selection.Note,
+	}
+	_, err := e.Store.SaveExperienceReflection(ctx, input)
 	if err != nil && e.ToolLog != nil {
 		e.ToolLog("experience_reflection_not_saved")
 	}

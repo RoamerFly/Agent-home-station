@@ -44,6 +44,7 @@ type ExperienceReflectionInput struct {
 	ParentExperienceID       string `json:"parent_experience_id,omitempty"`
 	ParentExperienceVersion  int    `json:"parent_experience_version,omitempty"`
 	Note                     string `json:"note"`
+	Feeling                  string `json:"feeling,omitempty"`
 	WantsToRevisit           bool   `json:"wants_to_revisit"`
 }
 
@@ -81,6 +82,7 @@ type ExperienceReflection struct {
 	ParentExperienceID       string                      `json:"parent_experience_id,omitempty"`
 	ParentExperienceVersion  int                         `json:"parent_experience_version,omitempty"`
 	Note                     string                      `json:"note"`
+	Feeling                  string                      `json:"feeling,omitempty"`
 	WantsToRevisit           bool                        `json:"wants_to_revisit"`
 	Status                   string                      `json:"status"`
 	Revision                 int                         `json:"revision"`
@@ -91,8 +93,9 @@ type ExperienceReflection struct {
 }
 
 type ExperienceReflectionQuery struct {
-	Cursor string `json:"cursor,omitempty"`
-	Limit  int    `json:"limit,omitempty"`
+	Cursor       string `json:"cursor,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	InterestOnly bool   `json:"interest_only,omitempty"`
 }
 
 type ExperienceReflectionPage struct {
@@ -102,6 +105,20 @@ type ExperienceReflectionPage struct {
 	EffectiveLimit int                    `json:"effective_limit"`
 	Coverage       string                 `json:"coverage"`
 }
+
+// ExperienceMood is the sourced feeling that may influence the next model
+// decision. Influence is "fresh" for less than six hours and "fading" until
+// the feeling reaches twenty-four hours old. It intentionally has no source
+// text: the model only needs the compact, already-verified feeling.
+type ExperienceMood struct {
+	Feeling   string `json:"feeling"`
+	Influence string `json:"influence"`
+}
+
+const (
+	maxExperienceReflectionNote    = 1200
+	maxExperienceReflectionFeeling = 240
+)
 
 const reflectionCandidatesSQL = `WITH observed AS (
     SELECT e.scope,e.id,e.seq,e.revision,media.value AS attachment,
@@ -192,19 +209,31 @@ func experienceObservationHash(eventID string, revision int, media IncomingMedia
 func (s *Store) SaveExperienceReflection(ctx context.Context, in ExperienceReflectionInput) (ExperienceReflection, error) {
 	var out ExperienceReflection
 	in.Note = strings.TrimSpace(in.Note)
+	in.Feeling = strings.TrimSpace(in.Feeling)
 	if !validScopeID(in.Scope) || in.SourceEventID == "" || in.SourceAssetID == "" || in.SourceEventRevision < 1 || in.SourceObservationVersion < 1 || in.SourceObservationHash == "" ||
-		!in.WantsToRevisit || in.Note == "" || len(in.Note) > 1200 || in.ParentExperienceVersion < 0 || (in.ParentExperienceID == "") != (in.ParentExperienceVersion == 0) {
-		return out, fmt.Errorf("%w: sourced explicit revisit note required", ErrInvalidExperienceReflection)
+		!validExperienceReflectionContent(in.Note, in.Feeling, in.WantsToRevisit) || len(in.Note) > maxExperienceReflectionNote || len(in.Feeling) > maxExperienceReflectionFeeling || in.ParentExperienceVersion < 0 || (in.ParentExperienceID == "") != (in.ParentExperienceVersion == 0) {
+		return out, fmt.Errorf("%w: sourced explicit interest or feeling required", ErrInvalidExperienceReflection)
 	}
 	identity, _ := json.Marshal([]string{in.Scope, in.SourceEventID, in.SourceAssetID})
 	sum := sha256.Sum256(identity)
-	out = ExperienceReflection{ID: hex.EncodeToString(sum[:]), Scope: in.Scope, SourceEventID: in.SourceEventID, SourceEventRevision: in.SourceEventRevision, SourceAssetID: in.SourceAssetID, SourceObservationVersion: in.SourceObservationVersion, SourceObservationHash: in.SourceObservationHash, ParentExperienceID: in.ParentExperienceID, ParentExperienceVersion: in.ParentExperienceVersion, Note: in.Note, WantsToRevisit: true, Status: "active"}
+	out = ExperienceReflection{ID: hex.EncodeToString(sum[:]), Scope: in.Scope, SourceEventID: in.SourceEventID, SourceEventRevision: in.SourceEventRevision, SourceAssetID: in.SourceAssetID, SourceObservationVersion: in.SourceObservationVersion, SourceObservationHash: in.SourceObservationHash, ParentExperienceID: in.ParentExperienceID, ParentExperienceVersion: in.ParentExperienceVersion, Note: in.Note, Feeling: in.Feeling, WantsToRevisit: in.WantsToRevisit, Status: "active"}
 	now := time.Now().UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return out, err
 	}
 	defer tx.Rollback()
+	// A choice can also reflect a previous mood supplied to this generation.
+	// Its correction must win even when the newly selected video is unchanged.
+	if stamp, ok := GenerationEvidenceFromContext(ctx); ok {
+		var epoch string
+		if err := tx.QueryRowContext(ctx, selectRecallEpoch).Scan(&epoch); err != nil {
+			return out, err
+		}
+		if stamp.RecallEpoch != epoch {
+			return out, ErrMemoryConflict
+		}
+	}
 	candidate, err := observedExperienceReflectionCandidateFromRow(ctx, tx.QueryRowContext, in.Scope, in.SourceEventID, in.SourceAssetID)
 	if err != nil || candidate.SourceEventRevision != in.SourceEventRevision || candidate.SourceObservationVersion != in.SourceObservationVersion || candidate.SourceObservationHash != in.SourceObservationHash {
 		return out, ErrMemoryConflict
@@ -254,17 +283,42 @@ func (s *Store) SaveExperienceReflection(ctx context.Context, in ExperienceRefle
 }
 
 func (s *Store) UpdateExperienceReflection(ctx context.Context, scope, id string, expectedRevision int, note string) (ExperienceReflection, error) {
-	return s.mutateExperienceReflection(ctx, scope, id, expectedRevision, strings.TrimSpace(note), false)
+	// Compatibility entry point: historical callers edit the interest note
+	// only. A separately recorded feeling remains intact.
+	trimmed := strings.TrimSpace(note)
+	return s.mutateExperienceReflection(ctx, scope, id, expectedRevision, trimmed, nil, false)
+}
+
+// SetExperienceReflectionContent replaces the sourced reflection content as a
+// single optimistic edit. It is the explicit management path for correcting
+// or clearing a feeling. Passing both fields empty is invalid: use Forget to
+// revoke the experience instead.
+func (s *Store) SetExperienceReflectionContent(ctx context.Context, scope, id string, expectedRevision int, note, feeling string) (ExperienceReflection, error) {
+	note = strings.TrimSpace(note)
+	feeling = strings.TrimSpace(feeling)
+	return s.mutateExperienceReflection(ctx, scope, id, expectedRevision, note, &feeling, false)
 }
 
 func (s *Store) ForgetExperienceReflection(ctx context.Context, scope, id string, expectedRevision int) (ExperienceReflection, error) {
-	return s.mutateExperienceReflection(ctx, scope, id, expectedRevision, "", true)
+	return s.mutateExperienceReflection(ctx, scope, id, expectedRevision, "", nil, true)
 }
 
-func (s *Store) mutateExperienceReflection(ctx context.Context, scope, id string, expectedRevision int, note string, forget bool) (ExperienceReflection, error) {
+func validExperienceReflectionContent(note, feeling string, wantsToRevisit bool) bool {
+	if wantsToRevisit {
+		return note != ""
+	}
+	return note == "" && feeling != ""
+}
+
+func (s *Store) mutateExperienceReflection(ctx context.Context, scope, id string, expectedRevision int, note string, feeling *string, forget bool) (ExperienceReflection, error) {
 	var out ExperienceReflection
-	if !validScopeID(scope) || strings.TrimSpace(id) == "" || expectedRevision < 1 || !forget && (note == "" || len(note) > 1200) {
+	if !validScopeID(scope) || strings.TrimSpace(id) == "" || expectedRevision < 1 {
 		return out, fmt.Errorf("%w: invalid reflection update", ErrInvalidExperienceReflection)
+	}
+	if !forget {
+		if len(note) > maxExperienceReflectionNote || feeling != nil && len(*feeling) > maxExperienceReflectionFeeling || feeling == nil && note == "" {
+			return out, fmt.Errorf("%w: reflection content cannot be empty; forget it instead", ErrInvalidExperienceReflection)
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -294,6 +348,13 @@ func (s *Store) mutateExperienceReflection(ctx context.Context, scope, id string
 		out.Status = "forgotten"
 	} else {
 		out.Note = note
+		out.WantsToRevisit = note != ""
+		if feeling != nil {
+			out.Feeling = *feeling
+		}
+		if !validExperienceReflectionContent(out.Note, out.Feeling, out.WantsToRevisit) {
+			return out, fmt.Errorf("%w: reflection content cannot be empty; forget it instead", ErrInvalidExperienceReflection)
+		}
 	}
 	payload, err := json.Marshal(out)
 	if err != nil {
@@ -341,7 +402,13 @@ func (s *Store) ListExperienceReflections(ctx context.Context, scope string, q E
 	if err != nil {
 		return p, err
 	}
-	key, _ := json.Marshal([]string{scope, epoch, "experience_reflections_v1"})
+	keyFields := []string{scope, epoch, "experience_reflections_v1"}
+	where := "scope=? AND status='active'"
+	if q.InterestOnly {
+		keyFields = append(keyFields, "interest")
+		where += " AND json_extract(payload,'$.wants_to_revisit')=1"
+	}
+	key, _ := json.Marshal(keyFields)
 	hash := sha256.Sum256(key)
 	offset := 0
 	if q.Cursor != "" {
@@ -356,13 +423,14 @@ func (s *Store) ListExperienceReflections(ctx context.Context, scope string, q E
 		offset = cursor.Offset
 	}
 	nextOffset := offset
+	listSQL := "SELECT payload,revision,status FROM experience_reflections WHERE " + where + " ORDER BY updated DESC,id DESC LIMIT 1 OFFSET ?"
 	for {
 		// Do not allocate from client-controlled Limit. The connection is single
 		// threaded, so close this one-row cursor before source verification.
 		var raw []byte
 		var revision int
 		var status string
-		err = s.db.QueryRowContext(ctx, "SELECT payload,revision,status FROM experience_reflections WHERE scope=? AND status='active' ORDER BY updated DESC,id DESC LIMIT 1 OFFSET ?", scope, nextOffset).Scan(&raw, &revision, &status)
+		err = s.db.QueryRowContext(ctx, listSQL, scope, nextOffset).Scan(&raw, &revision, &status)
 		if errors.Is(err, sql.ErrNoRows) {
 			break
 		}
@@ -402,6 +470,56 @@ func (s *Store) ListExperienceReflections(ctx context.Context, scope string, q E
 		p.NextCursor = base64.RawURLEncoding.EncodeToString(body)
 	}
 	return p, nil
+}
+
+// RecentExperienceMood returns the newest still-verifiable feeling without
+// loading an interest page or treating an edit as a new experience. Feelings
+// influence the companion strongly for six continuous hours, fade until hour
+// twenty-four, then disappear from the current context while remaining as a
+// historical sourced reflection.
+func (s *Store) RecentExperienceMood(ctx context.Context, scope string, now time.Time) (*ExperienceMood, error) {
+	if !validScopeID(scope) {
+		return nil, fmt.Errorf("%w: invalid mood scope", ErrInvalidExperienceReflection)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	from := now.Add(-24 * time.Hour)
+	for offset := 0; ; offset++ {
+		var raw []byte
+		var revision int
+		var status string
+		err := s.db.QueryRowContext(ctx, `SELECT payload,revision,status FROM experience_reflections
+			WHERE scope=? AND status='active' AND created>? AND created<=?
+				AND instr(CAST(payload AS TEXT),'"feeling":')>0
+			ORDER BY created DESC,id DESC LIMIT 1 OFFSET ?`, scope, memoryTime(from), memoryTime(now), offset).Scan(&raw, &revision, &status)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		var reflection ExperienceReflection
+		if err = json.Unmarshal(raw, &reflection); err != nil {
+			return nil, err
+		}
+		reflection.Revision, reflection.Status = revision, status
+		if strings.TrimSpace(reflection.Feeling) == "" {
+			continue
+		}
+		if _, err = s.hydrateExperienceReflection(ctx, reflection); errors.Is(err, ErrMemoryConflict) || errors.Is(err, sql.ErrNoRows) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		age := now.Sub(reflection.Created)
+		influence := "fresh"
+		if age >= 6*time.Hour {
+			influence = "fading"
+		}
+		return &ExperienceMood{Feeling: reflection.Feeling, Influence: influence}, nil
+	}
 }
 
 func (s *Store) observedExperienceReflectionCandidate(ctx context.Context, scope, eventID, assetID string) (ObservedExperienceReflectionCandidate, error) {

@@ -6,6 +6,8 @@ import (
 	"errors"
 )
 
+const selectRecallEpoch = "SELECT COALESCE((SELECT value FROM meta WHERE key='recall_epoch'),'0')"
+
 // RecallEpoch changes when retained evidence may no longer be used as stated.
 // Independent incoming messages and accepted assistant replies do not change it.
 // DataEpoch remains the stricter snapshot/pagination consistency marker.
@@ -14,7 +16,7 @@ func (s *Store) RecallEpoch(ctx context.Context) (string, error) {
 		return "", errors.New("memory database closed")
 	}
 	var epoch string
-	err := s.db.QueryRowContext(ctx, "SELECT COALESCE((SELECT value FROM meta WHERE key='recall_epoch'),'0')").Scan(&epoch)
+	err := s.db.QueryRowContext(ctx, selectRecallEpoch).Scan(&epoch)
 	return epoch, err
 }
 

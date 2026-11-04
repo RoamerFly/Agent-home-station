@@ -60,6 +60,8 @@ func TestMemoryBrowserFixture(t *testing.T) {
 		t.Fatal(e)
 	}
 	seedVideoReflection(t, m, in)
+	seedVideoReflectionWith(t, m, in, "synthetic-interest-video", "这是我收集的蓝紫配色参考。", "synthetic-interest", "想找同样的蓝紫配色参考", "", true)
+	seedVideoReflectionWith(t, m, in, "synthetic-feeling-video", "这是我录下的安静海面。", "synthetic-feeling", "", "当时有点平静", false)
 	h, e := NewHandler(m, "synthetic-browser-password-2026", "")
 	if e != nil {
 		t.Fatal(e)

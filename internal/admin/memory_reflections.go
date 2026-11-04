@@ -54,6 +54,10 @@ func (s *Server) editMemoryReflection(w http.ResponseWriter, r *http.Request) {
 		Action   string `json:"action"`
 		Revision int    `json:"expected_revision"`
 		Note     string `json:"note"`
+		// Feeling stays a pointer so existing clients that only edit an
+		// interest note retain the old UpdateExperienceReflection behavior.
+		// A present but empty value deliberately clears the recorded feeling.
+		Feeling *string `json:"feeling"`
 	}
 	if !decode(w, r, &input) {
 		return
@@ -66,7 +70,11 @@ func (s *Server) editMemoryReflection(w http.ResponseWriter, r *http.Request) {
 	var item companion.ExperienceReflection
 	switch input.Action {
 	case "correct":
-		item, err = s.manager.memory.UpdateExperienceReflection(r.Context(), scope.ID, id, input.Revision, input.Note)
+		if input.Feeling == nil {
+			item, err = s.manager.memory.UpdateExperienceReflection(r.Context(), scope.ID, id, input.Revision, input.Note)
+		} else {
+			item, err = s.manager.memory.SetExperienceReflectionContent(r.Context(), scope.ID, id, input.Revision, input.Note, *input.Feeling)
+		}
 	case "forget":
 		item, err = s.manager.memory.ForgetExperienceReflection(r.Context(), scope.ID, id, input.Revision)
 	default:

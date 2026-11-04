@@ -131,6 +131,62 @@ func TestProactiveReflectionRejectsTitleOnlyAndPreview(t *testing.T) {
 	}
 }
 
+func TestProactiveFeelingIsSourcedTransientAndCorrectable(t *testing.T) {
+	store, _, incoming, scope, _ := observedReflectionFixture(t)
+	cfg := enabledConfig()
+	cfg.Permissions.Remember, cfg.Permissions.Proactive = true, true
+	model := &fakeModel{answer: `{"action":"silent","messages":[],"experience_reflection":{"choice":1,"feeling":"看完觉得很温暖。"}}`}
+	engine, err := New(cfg, store, model, "feeling test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proactive := Input{Channel: incoming.Channel, Account: incoming.Account, Thread: incoming.Thread, IsGroup: true, Mode: "proactive", TraceID: "feeling-one", Text: "一次获准的自主评估"}
+	if _, err = engine.Respond(t.Context(), proactive); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.ListExperienceReflections(t.Context(), scope, ExperienceReflectionQuery{Limit: 3})
+	if err != nil || len(page.Items) != 1 || page.Items[0].WantsToRevisit || page.Items[0].Note != "" || page.Items[0].Feeling != "看完觉得很温暖。" {
+		t.Fatalf("feeling-only reflection=%#v err=%v", page, err)
+	}
+
+	model.answer = `{"action":"silent","messages":[]}`
+	proactive.TraceID = "feeling-two"
+	if _, err = engine.Respond(t.Context(), proactive); err != nil {
+		t.Fatal(err)
+	}
+	if !turnsContain(model.turns, `"experience_mood"`) || !turnsContain(model.turns, "看完觉得很温暖。") || turnsContain(model.turns, `"experience_reflections"`) {
+		t.Fatalf("fresh mood was not isolated in next proactive input: %#v", model.turns)
+	}
+
+	updated, err := store.SetExperienceReflectionContent(t.Context(), scope, page.Items[0].ID, page.Items[0].Revision, "", "现在心情很平静。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proactive.TraceID = "feeling-three"
+	if _, err = engine.Respond(t.Context(), proactive); err != nil {
+		t.Fatal(err)
+	}
+	if !turnsContain(model.turns, "现在心情很平静。") || turnsContain(model.turns, "看完觉得很温暖。") {
+		t.Fatalf("corrected mood was not reflected in next proactive input: %#v", model.turns)
+	}
+
+	fading, err := store.RecentExperienceMood(t.Context(), scope, updated.Created.Add(7*time.Hour))
+	if err != nil || fading == nil || fading.Feeling != "现在心情很平静。" || fading.Influence != "fading" {
+		t.Fatalf("fading mood=%#v err=%v", fading, err)
+	}
+	expired, err := store.RecentExperienceMood(t.Context(), scope, updated.Created.Add(25*time.Hour))
+	if err != nil || expired != nil {
+		t.Fatalf("expired mood=%#v err=%v", expired, err)
+	}
+	ordinary := Input{Channel: incoming.Channel, Account: incoming.Account, Thread: incoming.Thread, IsGroup: true, Sender: incoming.Sender, Mode: "direct", TraceID: "ordinary-chat", Text: "晚上好"}
+	if _, err := engine.Respond(t.Context(), ordinary); err != nil {
+		t.Fatal(err)
+	}
+	if turnsContain(model.turns, "experience_mood") || turnsContain(model.turns, updated.Feeling) || model.calls != 4 {
+		t.Fatalf("ordinary chat received a mood or triggered extra calls: calls=%d", model.calls)
+	}
+}
+
 func turnsContain(turns []map[string]string, want string) bool {
 	for _, turn := range turns {
 		if strings.Contains(turn["content"], want) {

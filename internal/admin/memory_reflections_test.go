@@ -10,25 +10,38 @@ import (
 
 // Synthetic material shared by the authenticated HTTP and browser replays.
 func seedVideoReflection(t *testing.T, m *Manager, in companion.Input) companion.ExperienceReflection {
+	return seedVideoReflectionWith(t, m, in, "synthetic-wave-video", "这是我拍的海浪配色视频。", "synthetic-wave", "下次想继续看海边明信片的配色灵感", "看见深蓝的海面很放松", true)
+}
+
+func seedVideoReflectionWith(t *testing.T, m *Manager, in companion.Input, trace, text, assetID, note, feeling string, wantsToRevisit bool) companion.ExperienceReflection {
 	t.Helper()
 	at := time.Now().UTC()
-	in.Text, in.TraceID = "这是我拍的海浪配色视频。", "synthetic-wave-video"
+	in.Text, in.TraceID = text, trace
 	in.OriginalText = &in.Text
 	in.Source = &companion.SourceRef{InstanceID: "synthetic-video-reader", MessageID: in.TraceID, Account: in.Account, Thread: in.Thread, Sender: in.Sender, SenderName: in.SenderName, OccurredAt: at.Format(time.RFC3339Nano), Revision: 1}
 	excerpt := "海浪由深蓝过渡到浅紫"
-	in.IncomingMedia = []companion.IncomingMediaRef{{Source: *in.Source, Kind: "video", AssetID: "synthetic-wave", UploaderID: in.Sender, ObservationState: "verified", ObservationVersion: 1, Observation: excerpt, ObservationExcerpt: excerpt, ObservedRange: "12 秒视频，抽取 3 帧"}}
+	in.IncomingMedia = []companion.IncomingMediaRef{{Source: *in.Source, Kind: "video", AssetID: assetID, UploaderID: in.Sender, ObservationState: "verified", ObservationVersion: 1, Observation: excerpt, ObservationExcerpt: excerpt, ObservedRange: "12 秒视频，抽取 3 帧"}}
 	cfg := m.Config().Companion
 	cfg.Permissions.Remember = true
 	if err := m.memory.Observe(in, cfg, at); err != nil {
 		t.Fatal(err)
 	}
 	scope := companion.ScopeID(in.Channel, in.Account, in.Thread)
-	candidates, err := m.memory.ListObservedExperienceReflectionCandidates(t.Context(), scope, 3)
-	if err != nil || len(candidates) != 1 {
-		t.Fatalf("synthetic observed candidates: %v, %v", candidates, err)
+	candidates, err := m.memory.ListObservedExperienceReflectionCandidates(t.Context(), scope, 12)
+	if err != nil {
+		t.Fatalf("synthetic observed candidates: %v", err)
 	}
-	c := candidates[0]
-	item, err := m.memory.SaveExperienceReflection(t.Context(), companion.ExperienceReflectionInput{Scope: scope, SourceAssetID: c.SourceAssetID, SourceEventID: c.SourceEventID, SourceEventRevision: c.SourceEventRevision, SourceObservationVersion: c.SourceObservationVersion, SourceObservationHash: c.SourceObservationHash, Note: "下次想继续看海边明信片的配色灵感", WantsToRevisit: true})
+	var c companion.ObservedExperienceReflectionCandidate
+	for _, candidate := range candidates {
+		if candidate.SourceAssetID == assetID {
+			c = candidate
+			break
+		}
+	}
+	if c.SourceAssetID == "" {
+		t.Fatalf("missing synthetic observed candidate for %s: %v", assetID, candidates)
+	}
+	item, err := m.memory.SaveExperienceReflection(t.Context(), companion.ExperienceReflectionInput{Scope: scope, SourceAssetID: c.SourceAssetID, SourceEventID: c.SourceEventID, SourceEventRevision: c.SourceEventRevision, SourceObservationVersion: c.SourceObservationVersion, SourceObservationHash: c.SourceObservationHash, Note: note, Feeling: feeling, WantsToRevisit: wantsToRevisit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,8 +74,31 @@ func TestMemoryReflectionManagement(t *testing.T) {
 	if code, _, _ := f.request("POST", path+"/"+other.ID, edit, true, true); code != 404 {
 		t.Fatalf("cross-account edit: %d", code)
 	}
-	if code, data, _ := f.request("POST", path+"/"+item.ID, edit, true, true); code != 200 {
+	code, data, _ = f.request("POST", path+"/"+item.ID, edit, true, true)
+	if code != 200 {
 		t.Fatalf("correct: %d %s", code, data)
+	}
+	var legacy companion.ExperienceReflection
+	if json.Unmarshal(data, &legacy) != nil || legacy.Feeling != "看见深蓝的海面很放松" || legacy.Note != "我更想再看潮水的变化。" {
+		t.Fatalf("legacy interest-only edit should preserve feeling: %s", data)
+	}
+	content := map[string]any{"action": "correct", "expected_revision": legacy.Revision, "note": "我更想再看潮水的变化。", "feeling": "想继续待在海边一会儿。"}
+	code, data, _ = f.request("POST", path+"/"+item.ID, content, true, true)
+	if code != 200 {
+		t.Fatalf("content edit: %d %s", code, data)
+	}
+	var withFeeling companion.ExperienceReflection
+	if json.Unmarshal(data, &withFeeling) != nil || withFeeling.Feeling != "想继续待在海边一会儿。" {
+		t.Fatalf("content feeling: %s", data)
+	}
+	clearFeeling := map[string]any{"action": "correct", "expected_revision": withFeeling.Revision, "note": withFeeling.Note, "feeling": ""}
+	code, data, _ = f.request("POST", path+"/"+item.ID, clearFeeling, true, true)
+	if code != 200 {
+		t.Fatalf("clear feeling: %d %s", code, data)
+	}
+	var cleared companion.ExperienceReflection
+	if json.Unmarshal(data, &cleared) != nil || cleared.Feeling != "" || cleared.Note == "" {
+		t.Fatalf("cleared feeling: %s", data)
 	}
 	if code, _, _ := f.request("POST", path+"/"+item.ID, edit, true, true); code != 409 {
 		t.Fatalf("stale edit: %d", code)

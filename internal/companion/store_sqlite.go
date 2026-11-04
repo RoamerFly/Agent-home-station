@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS experience_reflections(
  status TEXT NOT NULL,revision INTEGER NOT NULL,created TEXT NOT NULL,updated TEXT NOT NULL,payload BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS experience_reflections_scope_updated ON experience_reflections(scope,status,updated,id);
 CREATE INDEX IF NOT EXISTS experience_reflections_source ON experience_reflections(scope,source_event_id);
+CREATE INDEX IF NOT EXISTS experience_reflections_recent_feeling ON experience_reflections(scope,created DESC,id DESC) WHERE status='active' AND instr(CAST(payload AS TEXT),'"feeling":')>0;
 CREATE TABLE IF NOT EXISTS experience_reflection_revisions(reflection_id TEXT,revision INTEGER,payload BLOB NOT NULL,PRIMARY KEY(reflection_id,revision));
 `
 
