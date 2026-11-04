@@ -46,7 +46,7 @@ async function reply(route,data){await route.fulfill({json:data})}
    window.WechatNames={display:(id,fallback)=>names[id]||fallback||'群成员'};
    window.WechatAdmin={api:async(p,o={})=>{const r=await fetch(p,{method:o.method||'GET',headers:{'Content-Type':'application/json'},body:o.json?JSON.stringify(o.json):undefined});if(!r.ok)throw Error('synthetic HTTP '+r.status);return r.json()},notice:()=>{}};
   },{names});
-  for(const file of ['refresh.js','rounds.js','dialogs.js','logs.js','memory.js','save-actions.js'])await page.addScriptTag({url:origin+'/assets/'+file});
+  for(const file of ['controls.js','refresh.js','rounds.js','dialogs.js','logs.js','memory.js','save-actions.js'])await page.addScriptTag({url:origin+'/assets/'+file});
   const topDialog=()=>page.locator('dialog[open]').last();
   const shot=async(name)=>page.screenshot({path:path.join(output,name+'.png')});
   const openRound=(message='synthetic-message')=>page.evaluate(id=>{
@@ -68,6 +68,13 @@ async function reply(route,data){await route.fulfill({json:data})}
    evidence.items[0].state=state;await openRound();await topDialog().getByRole('heading',{name:title,exact:true}).waitFor();await page.keyboard.press('Escape');
   }
   evidence.items[0].state='reviewed';
+  // Older snapshots can have an HTTP response without a stored attempt count.
+  evidence.items[0].review_failure={review_state:'initial_check_failed',stage:'model_decode',code:'legacy_fixture',request:{HTTPStatus:200,JSONValid:false}};
+  await openRound();
+  await topDialog().getByText('HTTP 200，JSON 校验未通过',{exact:true}).waitFor();
+  await topDialog().getByText('复核代码：legacy_fixture',{exact:true}).waitFor();
+  await page.keyboard.press('Escape');
+  delete evidence.items[0].review_failure;
   for(const viewport of [{width:1440,height:900},{width:375,height:812}])for(const theme of ['light','dark']){
    await page.setViewportSize(viewport);await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
    await openRound();
@@ -93,7 +100,7 @@ async function reply(route,data){await route.fulfill({json:data})}
   await page.evaluate(()=>window.WechatMemory.settings());await topDialog().getByLabel('保留天数',{exact:true}).fill('9');await topDialog().getByRole('button',{name:'保存记忆设置',exact:true}).click();await topDialog().getByText('已保存，后续维护与召回使用新设置。',{exact:true}).waitFor();assert.equal(writes.at(-1).body.settings.reply_audit.retention_days,9);await page.keyboard.press('Escape');
   await page.evaluate(()=>window.WechatMemory.open('synthetic-scope'));await topDialog().getByRole('button',{name:'更正',exact:true}).click();await topDialog().getByLabel('更正内容',{exact:true}).fill('合成更正内容');await topDialog().getByLabel('新来源事件编号',{exact:true}).fill('anchor');await topDialog().getByLabel('该来源中的精确原句',{exact:true}).fill(sources.anchor.text);await topDialog().getByRole('button',{name:'保存更正',exact:true}).click();await page.waitForFunction(()=>document.querySelector('dialog[open]')?.textContent.includes('合成更正内容'));assert.equal(writes.at(-1).body.expected_revision,2);
   assert.deepEqual(errors,[]);
-  const report={syntheticOnly:true,browser:browser.version(),platform:process.platform,syntheticHarness:true,realWechatSends:0,providerCalls:0,privateConfigReads:0,actualStaticComponents:['dialogs.js','logs.js','memory.js','save-actions.js'],results,checkerStatusLabels:true,executionEvidenceLink:true,sourceAddresseeAndVersion:true,settingsSaved:true,correctionVersionChecked:true,pageErrors:errors,requests,writes};
+  const report={syntheticOnly:true,browser:browser.version(),platform:process.platform,syntheticHarness:true,realWechatSends:0,providerCalls:0,privateConfigReads:0,actualStaticComponents:['controls.js','dialogs.js','logs.js','memory.js','save-actions.js'],results,checkerStatusLabels:true,executionEvidenceLink:true,sourceAddresseeAndVersion:true,settingsSaved:true,correctionVersionChecked:true,pageErrors:errors,requests,writes};
   await fs.writeFile(path.join(output,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
  }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -2,8 +2,8 @@
  'use strict';
  const $=s=>document.querySelector(s),api=(...args)=>window.WechatAdmin.api(...args),jobs=new Map();
  let scopes=window.WechatAdmin.getScopes(),view=null,epoch=0,indexSignature='';
- function node(parent,tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;parent.append(e);return e}
- function button(parent,text,fn,cls='quiet'){const b=node(parent,'button',text,cls);b.type='button';b.addEventListener('click',fn);return b}
+ const {element: node} = window.WechatControls;
+ const button = (parent, text, onClick, style = 'quiet') => window.WechatControls.button(parent, text, onClick, style);
  const time=value=>window.WechatActivity.time(value);
  function conversations(){return scopes.map(scope=>({...scope,label:scope.label||scope.thread,updated:scope.last_interaction})).sort((a,b)=>(Date.parse(b.updated)||0)-(Date.parse(a.updated)||0))}
  function renderIndex(){

@@ -66,10 +66,49 @@
  const dateKey=raw=>time(raw).slice(0,10);
  const today=()=>dateKey(new Date().toISOString());
  $('#log-date').value=today();
- function node(parent,tag,text,klass){const element=document.createElement(tag);if(text!==undefined)element.textContent=text;if(klass)element.className=klass;parent.append(element);return element}
+ const {element: node, button} = window.WechatControls;
  function label(item){const failure=reviewFailure(item);if(failure?.stage==='source_validation')return '发送前来源或对象校验未通过';const value=reasons[item.reason]||events[item.event];return value||'运行状态已更新'}
  function reviewFailure(item){const value=item.review_failure||item.reviewFailure;if(!value||typeof value!=='object')return null;return value}
- function reviewDetails(item){const failure=reviewFailure(item);if(!failure)return [];if(failure.stage==='source_validation')return ['校验代码：'+(failure.code||'未记录'),'说明：'+(failure.detail||'来源或对象未通过程序校验，未发送')];const state={initial_check_failed:'首次复核未完成',final_check_failed:'最终复核未完成',repair_check_failed:'修复后的复核未完成',review_rejected:'复核发现草稿与依据不符',final_check_rejected:'最终复核发现草稿与依据不符',repair_no_supported_reply:'修复后仍没有有依据的回复',evidence_changed:'复核前依据已变化'}[failure.review_state]||failure.review_state;const request=failure.request&&typeof failure.request==='object'?failure.request:{};const value=(lower,upper,fallback)=>request[lower]??request[upper]??fallback;const lines=[];if(state)lines.push('复核结果：'+state);if(failure.code)lines.push('复核代码：'+(reasons[failure.code]||failure.code));if(failure.stage){const stage=failure.stage.startsWith('model_')?failure.stage.slice(6):failure.stage;lines.push('发生阶段：'+(modelStages[stage]||failure.stage))}if(failure.detail)lines.push('说明：'+failure.detail);const attempts=value('attempts','Attempts',item.model_attempts),max=value('max_attempts','MaxAttempts',item.model_max_attempts),http=value('http_status','HTTPStatus',item.model_http_status),formatAttempt=value('format_attempt','FormatAttempt',item.model_format_attempt),maxFormat=value('max_format_attempts','MaxFormatAttempts',item.model_max_format_attempts),finish=value('finish_reason','FinishReason',item.model_finish_reason),bytes=value('content_bytes','ContentBytes',item.model_content_bytes),jsonValid=value('json_valid','JSONValid',item.model_json_valid);if(attempts)lines.push('请求：'+attempts+(max?'/'+max:'')+' 次'+(http?'，HTTP '+http:'')+(formatAttempt?'，格式校验轮次 '+formatAttempt+(maxFormat?'/'+maxFormat:'')+' 次':'')+(finish?'，结束：'+finish:'')+(bytes?'，返回 '+bytes+' 字节':'')+(jsonValid===false&&/^(?:model_)?(?:decode|review_protocol)$/.test(failure.stage||request.Stage||request.stage||'')?'，JSON 校验未通过':''));return lines}
+ function reviewDetails(item) {
+  const failure = reviewFailure(item);
+  if (!failure) return [];
+  const states = {
+   initial_check_failed:'首次复核未完成', final_check_failed:'最终复核未完成',
+   repair_check_failed:'修复后的复核未完成', review_rejected:'复核发现草稿与依据不符',
+   final_check_rejected:'最终复核发现草稿与依据不符', repair_no_supported_reply:'修复后仍没有有依据的回复',
+   evidence_changed:'复核前依据已变化', preflight_proof_invalid:'回复证明校验失败',
+   preflight_context_invalid:'回复上下文校验失败', preflight_binding_invalid:'来源绑定校验失败',
+   allowed_binding_invalid:'发送前绑定校验失败'
+  };
+  const parts = [];
+  if (failure.review_state) parts.push('复核结果：' + (states[failure.review_state] || failure.review_state));
+  if (failure.code) {
+   const reason = reasons[failure.code];
+   parts.push('复核代码：' + failure.code + (reason ? '（' + reason + '）' : ''));
+  }
+  if (failure.stage) parts.push('发生阶段：' + (modelStages[failure.stage.replace(/^model_/, '')] || failure.stage));
+  if (failure.detail) parts.push('说明：' + failure.detail);
+  else if (failure.stage === 'source_validation') parts.push('说明：来源或对象未通过程序校验，未发送');
+
+  const request = failure.request || {};
+  const value = (lower, upper, fallback) => request[lower] ?? request[upper] ?? item[fallback];
+  const attempts = value('attempts','Attempts','model_attempts');
+  const max = value('max_attempts','MaxAttempts','model_max_attempts');
+  const http = value('http_status','HTTPStatus','model_http_status');
+  const format = value('format_attempt','FormatAttempt','model_format_attempt');
+  const maxFormat = value('max_format_attempts','MaxFormatAttempts','model_max_format_attempts');
+  const finish = value('finish_reason','FinishReason','model_finish_reason');
+  const bytes = value('content_bytes','ContentBytes','model_content_bytes');
+  const info = [];
+  if (attempts) info.push('请求：' + attempts + (max ? '/' + max : '') + ' 次');
+  if (http) info.push('HTTP ' + http);
+  if (format) info.push('格式校验轮次 ' + format + (maxFormat ? '/' + maxFormat : '') + ' 次');
+  if (finish) info.push('结束：' + finish);
+  if (bytes) info.push('返回 ' + bytes + ' 字节');
+  if (value('json_valid','JSONValid','model_json_valid') === false && /^(?:model_)?(?:decode|review_protocol)$/.test(failure.stage || request.Stage || request.stage || '')) info.push('JSON 校验未通过');
+  if (info.length) parts.push(info.join('，'));
+  return parts;
+ }
  const toolPurposes={memory_search:'检索历史与长期记忆',memory_read:'读取原始记录或长期记忆',memory_remember:'保存有来源的记忆',memory_update:'更正或遗忘记忆',web_search:'搜索公开网页',web_fetch:'读取网页内容',web_discover:'发现公开内容',web_audio_search:'搜索公开音频',web_media_download:'下载公开媒体',wechat_read:'读取微信消息或群成员',wechat_conversations:'查询当前账号的会话',wechat_file_read:'读取收到的文件',wechat_send_text:'提交微信文字消息',wechat_send_media:'提交微信附件',wechat_forward_file:'转发已收到的文件',wechat_operation_status:'核对微信操作回执',wechat_delivery_status:'核对附件发送状态',wechat_delivery_retry:'继续核对并补发未确认附件',wechat_recall:'撤回指定的本人消息',server_read:'读取工作区文件',server_write:'创建工作区文件',server_edit:'修改工作区文件',server_list:'列出工作区文件',server_search:'搜索工作区文件',server_exec:'在隔离环境执行命令',server_process:'管理隔离环境中的进程',server_windows_process:'管理 Windows 隔离进程',workspace_read:'读取工作区笔记',workspace_write:'保存工作区笔记',workspace_search:'搜索工作区笔记',workspace_list:'列出工作区笔记',project_list:'列出登记的项目',project_read:'读取项目说明',agent_global_search:'搜索本账号资料',agent_task:'保存持续任务',agent_tasks:'读取持续任务',speech_synthesize:'合成语音',music_generate:'生成音乐',music_local_start:'启动本地音乐任务',music_local_status:'查询本地音乐任务',voice_library_list:'查询可用声线',voice_library_read:'读取声线资料',voice_library_prepare:'准备声线权重与参考文件',agent_clock:'读取服务器时间',agent_diagnostics:'读取当前账号诊断',agent_owner_report:'向账号主人私聊报告',agent_reminder:'保存提醒',server_status:'读取隔离环境状态',device_task_start:'启动手机观察任务',device_tasks:'查询手机观察任务',device_step:'执行手机观察步骤',device_task_cancel:'停止手机观察任务',tool_output_read:'读取工具保留的输出',video_inspect:'检查视频内容',music_local_resume:'继续本地音乐任务',music_lyrics_compare:'对照歌词',music_reference_inspect:'检查音乐参考',music_rvc_start:'启动声线转换任务',music_sampling_options:'查询音乐采样选项',music_service_start:'启动音乐服务',music_service_status:'检查音乐服务',plugin_job_status:'查询工具任务状态',plugin_job_cancel:'取消工具任务'};
  function toolPurpose(name){return toolPurposes[name]||(/^voice_library_/.test(name)?'管理声线库':/^music_/.test(name)?'处理音乐任务':/^media_/.test(name)?'读取或准备媒体':/^plugin_/.test(name)?'调用工具':/^wechat_/.test(name)?'执行微信操作':/^web_/.test(name)?'访问公开网络':/^server_/.test(name)?'操作隔离工作区':'执行工具')}
  function readable(parent,value,title){const holder=node(parent,'div',undefined,'round-readable');window.WechatDialogs.text(holder,value,{title,className:'round-body'})}
@@ -98,6 +137,31 @@
 
  let projectionSource=null,projected=[];
  function rounds(){if(projectionSource!==state.items){projected=window.WechatRounds.project(state.items);projectionSource=state.items}return projected}
+ async function diagnose(scope,a,status){const confirm=window.WechatDialogs.open({title:'手动诊断草稿',subtitle:'会使用当前模型并计入用量，只读取这条已保存草稿及仍有效的来源。不会发送微信、修改草稿或重试原任务。'}),result=node(confirm.body,'p','确认后开始诊断。','hint');const run=button(confirm.body,'开始诊断',async()=>{run.disabled=true;result.textContent='正在诊断…';try{const data=await window.WechatAdmin.api('/api/memory/'+scope+'/reply-audits/'+encodeURIComponent(a.id)+'/diagnose',{method:'POST',json:{}});if(!confirm.alive())return;const d=data.diagnosis||{},lines=[];if(d.action)lines.push('结论：'+({reply:'草稿可保留',silent:'建议不发送'}[d.action]||d.action));if(d.reason)lines.push('说明：'+d.reason);if(Array.isArray(d.messages)&&d.messages.length)lines.push('诊断后的草稿：'+d.messages.join('\n'));
+    result.textContent=lines.join('\n')||'诊断已完成；没有发送微信。';status.textContent='手动诊断完成，结果只在本窗口显示。'}catch(e){if(confirm.alive())result.textContent=e.message;status.textContent='手动诊断未完成；原草稿未修改，也没有发送微信。'}finally{run.disabled=false}});run.className='primary'}
+ function evidenceCard(parent,a,scope,status){const card=node(parent,'article',undefined,'conversation-summary');const state=({validated:'已完成本地来源与对象校验',reviewed:'旧版模型诊断已完成',checked:'旧版模型诊断已完成',repaired_and_checked:'旧版诊断后草稿已校验',blocked:'已停止未核实内容',failed:'处理未完成',silent:'选择安静',initial_check_failed:'旧版模型诊断未完成，草稿未发送',repair_check_failed:'旧版修复诊断未完成，草稿未发送',review_rejected:'旧版诊断未通过，草稿未发送',evidence_changed:'来源已变化，草稿已作废'})[a.state]||(/failed|invalid|rejected|no_supported/.test(a.state||'')?'核验未通过，已停止发送':'回复依据');node(card,'h3',state);node(card,'p',time(a.at),'hint');for(const detail of reviewDetails(a))node(card,'p',detail,'hint review-detail');const actions=node(card,'div',undefined,'dialog-actions');button(actions,'手动诊断草稿',()=>diagnose(scope,a,status));for(const c of a.contexts||[]){node(card,'p',c.target_ids?.length?'回复对象：'+c.target_ids.map(id=>window.WechatNames?.display(id,'群成员')||'群成员').join('、'):'面向当前会话');if(c.quote_required)node(card,'p','已要求引用原消息，避免接错话。','hint');if(c.risk_flags?.length)node(card,'p','已检查人物、来源或话题变化。','hint');const refs=[...new Set([c.anchor_event_id,...(c.source_event_ids||[]),...(c.media_source_ids||[])].filter(Boolean))];for(const id of refs)button(actions,'查看参考消息',()=>window.WechatMemory.source(scope,id));if(c.media_source_ids?.length)node(card,'p','参考了 '+c.media_source_ids.length+' 条已关联的媒体来源。','hint')}if(!(a.contexts||[]).length)node(card,'p','这次处理没有形成可发送的回复。','hint');return card}
+ async function appendReplyEvidence(parent,thread,message){
+  if(!thread||!message)return;
+  const section=node(parent,'section');section.hidden=true;
+  const params=new URLSearchParams({thread_id:thread,message_id:message,limit:'20'});
+  const list=node(section,'div'),status=node(section,'p','','hint');
+  const more=button(section,'查看更早的记录',load);more.hidden=true;
+  let offset=0;
+  async function load(){
+   more.disabled=true;
+   try{
+    params.set('offset',String(offset));
+    const data=await window.WechatAdmin.api('/api/reply-audits?'+params);
+    if(!section.isConnected)return;
+    for(const a of data.items||[])evidenceCard(list,a,data.scope,status);
+    offset=data.next_offset;more.hidden=!data.has_more;
+    status.textContent='';section.hidden=!list.childElementCount;
+   }catch(e){
+    if(section.isConnected&&e.status!==404){section.hidden=false;status.textContent='未能读取回复依据：'+e.message}
+   }finally{more.disabled=false}
+  }
+  await load();
+ }
  function fillRound(body,round){
   body.classList.add('round-detail');if(round.entries.some(x=>x.event==='agent_task_started'))node(body,'p','本轮由先前保存的任务恢复触发，使用原任务检查点和最新会话；不是新收到的一条微信消息。','hint');
   if(round.sent.length){const output=node(body,'div',undefined,'round-output');node(output,'h3','发送结果');for(const sent of round.sent){const accepted=['accepted','observed'].includes(sent.status);readable(output,sent.content,'完整发送内容');node(output,'small',accepted?'微信已接受':statuses[sent.status]||'待核对',accepted?'receipt-accepted':'receipt-pending')}}
@@ -112,7 +176,7 @@
    }else step(timeline,item);
   }
   if(round.timeline.length===0)node(body,'p','正在准备处理。','hint');
-  if(!round.system)window.WechatMemory?.appendReplyEvidence(body,round.thread_id,round.triggerMessageID);
+  if(!round.system)appendReplyEvidence(body,round.thread_id,round.triggerMessageID);
   if(round.hasDiagnostics){
    const details=node(body,'details');node(details,'summary','原始运行记录（'+round.entries.length+'）');
    details.addEventListener('toggle',()=>{if(!details.open||details.querySelector('ol'))return;const list=node(details,'ol',undefined,'round-timeline');for(const item of round.entries)step(list,item)});

@@ -3,7 +3,7 @@
  const $=s=>document.querySelector(s), state={selected:new Set(),rules:new Map(),directory:new Map(),busy:false};
  const reasons={ready:'可安排判断',not_selected:'未选择',character_disabled:'角色未开启',proactive_permission_denied:'主动问候权限未开启',text_reply_permission_denied:'文本回复未开启',quiet_hours:'安静时段',proactive_daily_budget:'今日总机会已用尽',target_daily_budget:'此目标今日机会已用尽',no_reliable_context:'等待积累可用记忆',context_expired:'上下文已过期',idle_wait:'等待旧版调度时间',scheduled_wait:'等待下次自主评估'};
  const api=(...a)=>window.WechatAdmin.api(...a);
- function el(parent,tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;parent.append(n);return n}
+ const {element: el} = window.WechatControls;
  function allowed(){const c=window.WechatAdmin?.getConfig()||{},list=new Map();for(const r of c.group_rules||[])list.set(r.id,{id:r.id,name:r.name||r.id,kind:'group'});if($('#private-enabled').checked)for(const id of $('#direct-ids').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean))list.set(id,{id,name:id,kind:'friend'});if($('#filehelper-enabled').checked)list.set('filehelper',{id:'filehelper',name:'文件传输助手',kind:'filehelper'});return list}
  function settings(){return {proactive_threads:[...state.selected],proactive_rules:[...state.selected].map(thread=>state.rules.get(thread)).filter(Boolean)}}
  function load(c){state.selected=new Set(c.proactive_threads||[]);state.rules=new Map((c.proactive_rules||[]).map(r=>[r.thread,{...r}]));render()}

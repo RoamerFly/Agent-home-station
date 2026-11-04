@@ -33,6 +33,7 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:
    window.WechatAdmin={isAuthenticated:()=>true,api:async(url,opt={})=>{
     const owner=window.WechatAccountContext.id,fixture=window.__accounts[owner],body=structuredClone(opt.json);window.__calls.push({url,method:opt.method||'GET',body,account:owner});
     if(window.__defer===url){window.__defer='';await new Promise((resolve,reject)=>{window.__pending={resolve,reject}})}
+    if(url==='/api/plugins')return {installed:[],templates:[]};
     if(url==='/api/plugin-packages')return {catalog:[],installed:fixture.data.state==='archive'?[]:[{package:{id:'mobile-control',name:'设备控制'},enabled:fixture.enabled}],runtimes:{},retained_ids:fixture.data.state==='archive'?['mobile-control']:[]};
     if(url==='/api/plugin-packages/mobile-control')return {installed:fixture.data.state==='archive'?undefined:{package:{id:'mobile-control',name:'设备控制'},enabled:fixture.enabled,revision:1},runtime:{state:fixture.enabled?'running':'stopped'},runtime_connected:true,ui_schema:{version:1,sections:structuredClone(window.__schema)},host_data:structuredClone(fixture.data)};
     if(url.endsWith('/runtime')){fixture.enabled=body.action==='start';return {}}
@@ -44,7 +45,7 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:
     throw new Error('unexpected synthetic API '+url);
    }};
   });
-  for(const script of ['console.js','plugin-packages.js','save-actions.js'])await page.addScriptTag({path:path.join(root,script)});
+  for(const script of ['refresh.js','dialogs.js','console.js','plugins.js','plugin-packages.js','save-actions.js'])await page.addScriptTag({path:path.join(root,script)});
   const open=async(section)=>{await page.evaluate(section=>window.WechatPluginPackages.open('mobile-control',section),section);await page.getByRole('heading',{name:'设备控制',exact:true}).waitFor()};
   const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const save=()=>page.locator('#top-save-actions').getByRole('button',{name:'保存设备设置',exact:true});
@@ -52,7 +53,7 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:
   const waitPending=()=>page.waitForFunction(()=>window.__pending!==null);
   const resolvePending=()=>page.evaluate(()=>{window.__pending.resolve();window.__pending=null});
   await open();await settle();
-  assert.equal(await page.locator('#plugins-refresh').evaluate(n=>n.closest('.package-browser')!==null),true);
+  assert.equal(await page.locator('#plugins-refresh').evaluate(n=>n.hasAttribute('data-refresh-source')),true);
   assert.equal(await page.locator('#plugin-guide').isVisible(),false);
   assert(await page.getByRole('button',{name:'开始任务',exact:true}).isDisabled(),'runtime disabled must block creation even when settings.enabled is true');await save().click();await page.getByText('设备设置已保存；工具运行状态未改变。',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>window.__accounts.one.enabled),false);assert.equal((await calls('/runtime')).length,0,'saving execution settings started the package');
   await page.getByRole('button',{name:'启动工具',exact:true}).click();await page.getByRole('button',{name:'停止工具',exact:true}).waitFor();
@@ -104,6 +105,6 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:
   await page.evaluate(()=>{window.__accounts.two.data={state:'archive',tasks:[{id:'old',goal:'已保留任务',state:'queued',device_id:'lab',artifacts:[]}],resources:{},diagnostics:{planner_available:false,planner_reason:'仅可查看历史或停止已有任务。'}};window.__schema=[{id:'tasks',title:'保留的设备任务',component:'tasks',binding:'host_data.tasks',action:'tasks.cancel'},window.__originalSchema[2],{...window.__originalSchema[3],action:''},window.__originalSchema[0]]});await open();await settle();
   assert.equal(await page.getByRole('button',{name:'保存设备设置',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'开始任务',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'启动工具',exact:true}).count(),0);assert(await page.getByRole('button',{name:'取消任务',exact:true}).isVisible());
   await page.evaluate(()=>{document.documentElement.dataset.theme='light'});await page.screenshot({path:path.join(output,'archive-light-1440.png'),fullPage:true});await page.getByRole('button',{name:'取消任务',exact:true}).click();await page.waitForFunction(()=>window.__accounts.two.data.tasks[0].state==='cancelled');
-  await page.getByRole('button',{name:'外部接口',exact:true}).click();assert(await page.locator('#plugin-guide').isVisible());assert.equal(await page.locator('#plugins-refresh').evaluate(n=>n.closest('.page-actions')!==null),true);await page.getByRole('button',{name:'服务工具',exact:true}).click();assert.equal(await page.locator('#plugin-guide').isVisible(),false);assert.deepEqual(errors,[]);assert.deepEqual(consoleErrors,[]);console.log(JSON.stringify({schemaOrderOmitTitle:true,exactBindings:true,nestedPlannerFlags:true,disabledRuntimeStart:true,saveInFlightDraft:true,accountIsolation:true,idempotencyRetry:true,archiveReadOnly:true,visualWidths:[375,1440],visualThemes:['light','dark'],screenshots:output,paidCalls:0,wechatSends:0}));
+  await page.getByRole('button',{name:'管理连接工具',exact:true}).click();assert(await page.locator('.plugin-workspace').isVisible());await page.getByRole('button',{name:'返回工具目录',exact:true}).click();assert(await page.locator('.package-browser').isVisible());assert.deepEqual(errors,[]);assert.deepEqual(consoleErrors,[]);console.log(JSON.stringify({schemaOrderOmitTitle:true,exactBindings:true,nestedPlannerFlags:true,disabledRuntimeStart:true,saveInFlightDraft:true,accountIsolation:true,idempotencyRetry:true,archiveReadOnly:true,visualWidths:[375,1440],visualThemes:['light','dark'],screenshots:output,paidCalls:0,wechatSends:0}));
  }catch(error){if(page)await page.screenshot({path:path.join(output,'failure.png'),fullPage:true}).catch(()=>{});console.error('Screenshots: '+output);throw error}finally{await browser.close()}
 })().catch(error=>{console.error(error);process.exitCode=1});

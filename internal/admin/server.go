@@ -192,6 +192,8 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			name = "workbench.css"
 		case "/assets/refresh.js":
 			name = "refresh.js"
+		case "/assets/controls.js":
+			name = "controls.js"
 		case "/assets/dialogs.js":
 			name = "dialogs.js"
 		case "/assets/memory.js":
