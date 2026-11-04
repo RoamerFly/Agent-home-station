@@ -2,13 +2,12 @@
 (() => {
  'use strict';
  const $=s=>document.querySelector(s),api=(...a)=>window.WechatAdmin.api(...a);
- const state={catalog:[],installed:[],connections:[],builtins:[],runtimes:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,hostRequest:null};
+ const state={catalog:[],installed:[],connections:[],builtins:[],runtimes:{},readiness:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,hostRequest:null};
  const page=$('#plugins'),legacy=page.querySelector('.plugin-workspace'),guide=$('#plugin-guide');
  const el=(tag,text,klass)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(klass)n.className=klass;return n};
  const button=(text,action)=>{const b=el('button',text,'quiet');b.type='button';if(text==='刷新任务')window.WechatRefresh.bind(b,action);else b.addEventListener('click',action);return b};
  const area=el('div',undefined,'package-workspace'),browser=el('aside',undefined,'panel package-browser'),editor=el('article',undefined,'panel package-editor');
  const list=el('div',undefined,'package-list'),status=el('p','选择服务查看配置、权限和任务。','hint');status.setAttribute('role','status');
- const refreshList=$('#plugins-refresh');
  const head=el('div',undefined,'section-heading');head.append(el('h3','浏览工具'),button('新建工具',createPlugin),button('管理连接工具',()=>manageConnections()),button('导入本机工具',importPackage));browser.append(head,list);editor.append(status);area.append(browser,editor);legacy.before(area);
  // The legacy declaration editor remains mounted for compatibility, but all
  // provider-facing configuration now has one visible home: the package detail
@@ -20,14 +19,19 @@
  const requestKey=()=>crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join('');
  const runtimeNames={running:'运行中',starting:'正在启动',stopping:'正在停止',failed:'异常',stopped:'已停止'};
  const names={'network':'访问网络','gpu':'使用 GPU','device':'控制设备','workspace.read':'读取授权工作区','workspace.write':'修改授权工作区','process.execute':'执行受控进程','artifact.read':'读取授权素材','artifact.write':'生成素材','model.invoke':'调用模型'};
- function packageStatus(id,installed){
-  if(!installed)return state.retained.has(id)?'已卸载 · 可查看保留任务':'未安装';
-  if(installed.removed)return '已移除 · 可查看保留任务';
-  const runtime=state.runtimes[id]?.state;
-  if(runtime==='running')return state.runtimes[id].auto_managed?'运行中 · 按需':'运行中 · 常驻';
-  if(runtime==='running'||runtime==='starting'||runtime==='stopping')return runtimeNames[runtime];
-  if(runtime==='failed')return '异常 · 请打开检查';
-  return installed.enabled?'按需待命':'已安装 · 未启用';
+ function packageSummary(p,installed,check,runtime){
+  if(installed?.removed||!installed&&state.retained.has(p.id))return ['已卸载','查看保留的任务'];
+  if(!installed)return ['未安装',p.status==='ready'?'导入工具后可配置':'开发模板，尚不能运行。'];
+  const missing=(check?.missing_required_fields||[]).map(field=>field.label||field.id);
+  const reason=(check?.reasons||[]).map(item=>item.message).filter(Boolean).join(' · ');
+  if(runtime?.state==='starting'||runtime?.state==='stopping')return [runtimeNames[runtime.state],'查看运行状态'];
+  if(runtime?.state==='running')return ['运行中',runtime.auto_managed?'按需运行，空闲后释放':'本次服务期间常驻'];
+  if(check?.state==='needs_configuration')return ['待配置',missing.length?'需要填写：'+missing.join('、'):reason||'检查已保存的配置'];
+  if(check?.state==='runtime_unavailable')return ['环境未就绪',reason||'检查本机执行环境'];
+  if(check?.state==='not_enableable')return ['无法启用',reason||'查看工具权限与声明'];
+  if(runtime?.state==='failed')return ['启动异常','查看运行状态或调整配置'];
+  if(!check||check.state!=='ready')return ['状态待核对',reason||'打开查看配置与启用状态'];
+  return installed.enabled?['按需待命','已启用，需要时启动']:['已停用','配置已齐，可按需启用'];
  }
  function allPackages(){
   const all=new Map(state.catalog.map(p=>[p.id,p]));
@@ -37,13 +41,16 @@
  }
  function capabilityCard(p,installed,klass='package-choice'){
   const card=button('',()=>choose(p.id));card.className=klass;card.setAttribute('aria-pressed',String(state.selected===p.id));
-  card.append(el('strong',p.id==='music'?p.name+'（RVC / YuE）':p.name),el('small',packageStatus(p.id,installed)));
-  const next=installed&&!installed.enabled?'配置后可按需启用。':state.runtimes[p.id]?.state==='failed'?'下一步：打开查看运行原因。':!installed&&p.status==='ready'?'下一步：导入后再配置。':!installed?'开发模板，尚不能运行。':'打开配置、权限和任务';
-  card.append(el('small',next,'hint'));
+  card.dataset.packageId=p.id;
+  const [label,hint]=packageSummary(p,installed,state.readiness[p.id],state.runtimes[p.id]);
+  const title=el('span',undefined,'package-card-title');
+  title.append(el('strong',p.id==='music'?p.name+'（RVC / YuE）':p.name),el('small',label,'package-state'));
+  card.append(title,el('small',hint,'hint'));
   return card;
  }
  function builtinCard(item,klass='package-choice'){
-  const card=el('div',undefined,klass+' builtin-capability');card.append(el('strong',item.name),el('small',item.state));
+  const card=button('',()=>window.WechatAdmin.nav('permissions'));card.className=klass+' builtin-capability';
+  const title=el('span',undefined,'package-card-title');title.append(el('strong',item.name),el('small',item.state,'package-state'));card.append(title);
   card.append(el('small',item.description,'hint'));card.append(el('small','授权范围：'+(item.permissions||[]).join('、'),'hint'));
   return card;
  }
@@ -51,24 +58,26 @@
   const cardClass=overview?'capability-overview-card':'package-choice';
   for(const builtin of [true,false]){
    const group=el('section',undefined,overview?'capability-overview-group':'package-group');
-   group.append(el('h4',builtin?'内置工具':'通用工具'));
-   if(builtin)for(const item of state.builtins)group.append(builtinCard(item,cardClass));
+   const title=el('div',undefined,'package-group-heading'),cards=el('div',undefined,'package-group-cards');
+   title.append(el('h4',builtin?'内置工具':'通用工具'));
+   if(builtin)for(const item of state.builtins)cards.append(builtinCard(item,cardClass));
    for(const p of all.values()){
     if((p.id==='web-search')!==builtin)continue;
-    group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id),cardClass));
+    cards.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id),cardClass));
    }
    if(!builtin)for(const item of state.connections){
     const card=button('',()=>manageConnections(item.id));card.className=cardClass;
     card.append(el('strong',item.manifest.name||item.id),el('small',(item.manifest.mcp?'MCP':'HTTP')+' · '+(item.enabled?'已启用':'未启用')));
-    group.append(card);
+    cards.append(card);
    }
-   if(!builtin&&overview){const connections=button('管理 HTTP 与 MCP',()=>window.WechatAdmin.nav('mcp'));connections.className='secondary capability-connections';group.append(connections)}
-   if(group.children.length>1)container.append(group);
+   if(!builtin&&overview){const connections=button('管理 HTTP 与 MCP',()=>window.WechatAdmin.nav('mcp'));connections.className='secondary capability-connections';title.append(connections)}
+   group.append(title,cards);
+   if(cards.childElementCount||title.childElementCount>1)container.append(group);
   }
  }
  function renderOverview(all){
   if(state.selected)return;
-  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3','工具目录'),el('p','选择一项能力即可查看真实安装、启用、运行、配置和任务状态。服务不会因浏览此页面而自动启动。','hint'));const actions=el('div',undefined,'package-overview-actions');actions.append(button('新建工具',createPlugin),button('管理连接工具',()=>manageConnections()),button('导入本机工具',importPackage));intro.append(copy,actions);
+  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3','工具目录'),el('p','点开工具查看配置与任务；微信收发权限可从内置工具卡片调整。','hint'));const actions=el('div',undefined,'package-overview-actions');actions.append(button('新建工具',createPlugin),button('管理连接工具',()=>manageConnections()),button('导入本机工具',importPackage));intro.append(copy,actions);
   const grid=el('div',undefined,'capability-overview-grid');
   renderGroups(grid,all,true);
   editor.replaceChildren(intro,grid);window.WechatSaveActions?.sync();
@@ -82,26 +91,37 @@
  }
  async function load(){
   if(!window.WechatAdmin?.isAuthenticated())return;if(state.loadPromise)return state.loadPromise;state.busy=true;const epoch=state.epoch,owner=account();
-  const pending=(async()=>{try{const [data,connections]=await Promise.all([api('/api/plugin-packages'),api('/api/plugins').catch(()=>null)]);if(epoch!==state.epoch||owner!==account())return;state.connections=connections?.installed||[];state.catalog=data.catalog||[];state.installed=data.installed||[];state.builtins=data.builtins||[];state.runtimes=data.runtimes||{};state.retained=new Set(data.retained_ids||[]);state.loaded=true;renderList()}
-  catch(e){if(epoch===state.epoch&&owner===account())status.textContent=e.message}})();state.loadPromise=pending;try{return await pending}finally{if(state.loadPromise===pending){state.busy=false;state.loadPromise=null}}
+  const pending=(async()=>{try{const [data,connections]=await Promise.all([api('/api/plugin-packages'),api('/api/plugins').catch(()=>null)]);if(epoch!==state.epoch||owner!==account())return;state.connections=connections?.installed||[];state.catalog=data.catalog||[];state.installed=data.installed||[];state.builtins=data.builtins||[];state.runtimes=data.runtimes||{};state.readiness=data.readiness||{};state.retained=new Set(data.retained_ids||[]);state.loaded=true;renderList()}
+  catch(e){if(epoch===state.epoch&&owner===account()){status.textContent='工具目录读取失败：'+e.message;if(!state.selected)editor.prepend(status)}}})();state.loadPromise=pending;try{return await pending}finally{if(state.loadPromise===pending){state.busy=false;state.loadPromise=null}}
+ }
+ function backToOverview(){
+  if(!discard())return;
+  state.epoch++;state.loadPromise=null;state.selected='';state.detail=null;dirty(false);
+  renderList();editor.scrollTop=0;area.scrollTop=0;load();
+ }
+ function detailHeading(name){
+  const heading=el('div',undefined,'section-heading');
+  heading.append(el('h3',name),button('返回工具概览',backToOverview));
+  return heading;
  }
  async function choose(id){
   if(id===state.selected&&state.detail)return;if(!discard())return;
-  const epoch=++state.epoch,owner=account();state.selected=id;state.detail=null;dirty(false);renderList();editor.replaceChildren(status);status.textContent='正在读取工具…';
+  const epoch=++state.epoch,owner=account();state.selected=id;state.detail=null;dirty(false);renderList();editor.replaceChildren(detailHeading(id),status);status.textContent='正在读取工具…';
   const installed=state.installed.find(x=>x.package.id===id),p=installed?.package||state.catalog.find(x=>x.id===id);
-  if(!installed&&!state.retained.has(id)){status.textContent=p?.status==='ready'?'此工具尚未安装。导入并确认权限后可配置。':'此开发模板尚不能运行。';editor.prepend(el('h3',p?.name||id));return}
+  if(!installed&&!state.retained.has(id)){status.textContent=p?.status==='ready'?'此工具尚未安装。导入并确认权限后可配置。':'此开发模板尚不能运行。';editor.replaceChildren(detailHeading(p?.name||id),status);return}
   try{const d=await api('/api/plugin-packages/'+encodeURIComponent(id));if(epoch!==state.epoch||owner!==account())return;state.detail=d;renderDetail(d)}catch(e){if(epoch===state.epoch&&owner===account())status.textContent=e.message}
  }
  function renderDetail(d){
   if(state.selected==='mobile-control'&&d.host_data){renderHostDetail(d);return}
-  const p=d.installed.package,heading=el('div',undefined,'section-heading'),runtime=d.runtime||{state:'stopped'};heading.append(el('h3',p.name));
+  const p=d.installed.package,heading=detailHeading(p.name),runtime=d.runtime||{state:'stopped'};
   if(!d.installed.removed)runtimeControls(heading,d);
   editor.replaceChildren(heading,status);status.textContent=d.runtime_connected?(runtimeNames[runtime.state]||'状态待核对')+(d.installed.enabled?'；停止后可修改配置。':'；保存配置后可启动。'):'执行环境未配置；可先保存配置，安装不会自动启动。';
+  if(d.readiness){const [label,hint]=packageSummary(p,d.installed,d.readiness,runtime);status.textContent=label+' · '+hint+(d.installed.enabled?'。停用后可修改配置。':'')}
   const permissions=el('p',(d.installed.permissions||[]).map(x=>names[x]||x).join('、')||'未授予额外权限','hint');editor.append(permissions);
   const form=el('form');form.id='package-config-form';const fields=el('div',undefined,'package-fields');
   const configured=new Set(d.configuration.configured_secrets||[]);
   for(const [name,spec] of Object.entries(d.schema.properties||{})){
-   const row=el('div',undefined,'package-field'),label=el('label',spec.title||name);row.append(label);let input;
+   const row=el('div',undefined,'package-field'),label=el('label',(spec.title||name)+(d.schema.required?.includes(name)?'（必填）':''));row.append(label);let input;
    if(spec.enum?.length){input=el('select');for(const v of spec.enum){const o=new Option(String(v),JSON.stringify(v));input.add(o)}}else{input=el('input');input.type=spec['x-secret']?'password':spec.type==='boolean'?'checkbox':['integer','number'].includes(spec.type)?'number':'text';if(spec.type==='integer')input.step='1';if(spec.minimum!=null)input.min=spec.minimum;if(spec.maximum!=null)input.max=spec.maximum;if(spec.maxLength!=null)input.maxLength=spec.maxLength}
    input.disabled=d.installed.enabled||d.installed.removed;input.id='package-field-'+name;label.htmlFor=input.id;input.dataset.configField=name;const value=d.configuration.values[name]??spec.default;
    if(spec['x-secret']){input.autocomplete='new-password';input.placeholder=configured.has(name)?'已配置，留空保留':'未配置'}else if(spec.enum?.length){input.value=value===undefined?'':JSON.stringify(value)}else if(spec.type==='boolean')input.checked=!!value;else input.value=value??'';
@@ -119,7 +139,7 @@
    const control=button(label,()=>{if(current(scope))runtimeAction(action)});
    control.title=tip;
    control.dataset[action==='enable_on_demand'?'pluginPolicyAction':'pluginRuntimeAction']=action;
-   control.disabled=action!=='stop'&&!d.runtime_connected;
+   control.disabled=action!=='stop'&&(!d.runtime_connected||Boolean(d.readiness&&d.readiness.state!=='ready'));
    heading.append(control);
   }
   if(!enabled||runtime.state==='running'&&!runtime.auto_managed)add(enabled?'恢复按需':'按需启用','enable_on_demand','任务需要时启动，空闲后释放');
@@ -132,7 +152,7 @@
   let failure='';
   try{await api('/api/plugin-packages/'+encodeURIComponent(id)+'/runtime',{method:'POST',json:{action,revision:state.detail.installed.revision}})}catch(e){failure=e.message}
   if(!current(scope))return;
-  try{const d=await api('/api/plugin-packages/'+encodeURIComponent(id));if(!current(scope))return;state.detail=d;const i=state.installed.findIndex(x=>x.package.id===id);if(i>=0)state.installed[i]=d.installed;state.runtimes[id]=d.runtime||{};renderList();if(editVersion!==state.editVersion||state.dirty){status.textContent=failure||'工具状态已更新；当前未保存的编辑已保留。';return}renderDetail(d);if(failure)status.textContent=failure}
+  try{const d=await api('/api/plugin-packages/'+encodeURIComponent(id));if(!current(scope))return;state.detail=d;const i=state.installed.findIndex(x=>x.package.id===id);if(i>=0)state.installed[i]=d.installed;state.runtimes[id]=d.runtime||{};state.readiness[id]=d.readiness;renderList();if(editVersion!==state.editVersion||state.dirty){status.textContent=failure||'工具状态已更新；当前未保存的编辑已保留。';return}renderDetail(d);if(failure)status.textContent=failure}
   catch(e){if(current(scope)){status.textContent=failure||e.message;controls.forEach(control=>{if(control.isConnected)control.disabled=false})}}
  }
  async function saveConfig(event){
@@ -141,7 +161,25 @@
   for(const input of form.querySelectorAll('[data-config-field]')){const name=input.dataset.configField,spec=d.schema.properties[name];if(spec['x-secret'])body.secrets[name]=input.value;else if(spec.enum?.length){if(input.value!=='')body.values[name]=JSON.parse(input.value)}else if(spec.type==='boolean')body.values[name]=input.checked;else if(['integer','number'].includes(spec.type)){if(input.value!=='')body.values[name]=Number(input.value)}else if(input.value!==''||!(d.installed.package.http_routes||[]).some(r=>r.optional&&r.endpoint_config===name))body.values[name]=input.value}
   for(const check of form.querySelectorAll('[data-clear-secret]:checked'))body.clear_secrets.push(check.dataset.clearSecret);
   const save=$('#package-config-save');save.disabled=true;
-  try{const result=await api('/api/plugin-packages/'+encodeURIComponent(id)+'/configuration',{method:'POST',json:body});if(!current(scope))return;state.detail.configuration=result;if(editVersion!==state.editVersion){status.textContent='已保存提交的配置，后续编辑尚未保存。';return}dirty(false);renderDetail(state.detail);status.textContent='工具配置已保存，未启动服务。'}catch(e){if(current(scope))status.textContent=e.message+'；当前编辑已保留。'}finally{if(save.isConnected)save.disabled=false}
+  try{
+   const result=await api('/api/plugin-packages/'+encodeURIComponent(id)+'/configuration',{method:'POST',json:body});
+   if(!current(scope))return;
+   state.detail.configuration=result;
+   // The submitted revision is saved, but a valid edit can still lack other required fields.
+   state.detail.readiness={state:'unknown'};state.readiness[id]=state.detail.readiness;renderList();
+   if(editVersion!==state.editVersion){status.textContent='已保存提交的配置，后续编辑尚未保存。';return}
+   dirty(false);
+   let refreshed;
+   try{refreshed=await api('/api/plugin-packages/'+encodeURIComponent(id))}catch{
+    if(current(scope)&&editVersion===state.editVersion){renderDetail(state.detail);status.textContent='配置已保存，暂时无法核对启用条件。请返回工具概览刷新。'}
+    return;
+   }
+   if(!current(scope)||editVersion!==state.editVersion)return;
+   state.detail=refreshed;state.readiness[id]=refreshed.readiness;renderList();renderDetail(refreshed);
+   if(!refreshed.readiness||refreshed.readiness.state==='ready')status.textContent='工具配置已保存，未启动服务。';
+   else status.textContent='配置已保存。'+status.textContent;
+  }catch(e){if(current(scope))status.textContent=e.message+'；当前编辑已保留。'}finally{if(save.isConnected)save.disabled=false}
+
  }
  let next=0;
  function jobDiagnostic(job){
@@ -162,7 +200,7 @@
  }
  function renderHostDetail(d){
   const scope=context(),data=d.host_data||{},diagnostics=data.diagnostics||{},archive=data.state==='archive',runtime=d.runtime||{state:'stopped'};
-  const heading=el('div',undefined,'section-heading');heading.append(el('h3',d.installed?.package?.name||'设备控制'));
+  const heading=detailHeading(d.installed?.package?.name||'设备控制');
   if(!archive&&d.installed&&!d.installed.removed){
    runtimeControls(heading,d);
   }
@@ -330,6 +368,6 @@
    if(section&&owner===account()){const scope=context();requestAnimationFrame(()=>{if(current(scope))document.getElementById('plugin-section-'+section)?.scrollIntoView({block:'start',behavior:'auto'})})}
   },
  };
- window.addEventListener('wechat-admin:logout',()=>{state.epoch++;state.loaded=false;state.loadPromise=null;state.busy=false;state.selected='';state.detail=null;state.catalog=[];state.installed=[];state.builtins=[];state.connections=[];state.runtimes={};state.retained.clear();state.hostRequest=null;dirty(false);list.replaceChildren();editor.replaceChildren(status);status.textContent='选择服务查看配置、权限和任务。'});
+ window.addEventListener('wechat-admin:logout',()=>{state.epoch++;state.loaded=false;state.loadPromise=null;state.busy=false;state.selected='';state.detail=null;state.catalog=[];state.installed=[];state.builtins=[];state.connections=[];state.runtimes={};state.readiness={};state.retained.clear();state.hostRequest=null;dirty(false);list.replaceChildren();editor.replaceChildren(status);status.textContent='选择服务查看配置、权限和任务。'});
  showPackages();
 })();

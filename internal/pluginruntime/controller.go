@@ -285,6 +285,14 @@ func (c *Controller) EnableOnDemand(ctx context.Context, id string, revision int
 	return nil
 }
 
+// CheckEnableOnDemand performs the same read-only admission planning used by
+// EnableOnDemand. It never reserves a lifecycle operation, changes enabled
+// intent, starts a process, or dispatches a plugin call.
+func (c *Controller) CheckEnableOnDemand(ctx context.Context, id string, revision int) error {
+	_, err := c.startPlan(ctx, id, revision)
+	return err
+}
+
 // Closed reports host shutdown without changing persisted administrator intent.
 func (c *Controller) Closed() bool {
 	c.mu.Lock()

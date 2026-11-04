@@ -23,7 +23,7 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),path=require('nod
     throw new Error('unexpected API '+url);
    }};
   });
-  for(const script of ['dialogs.js','plugin-packages.js','speech.js'])await page.addScriptTag({path:path.join(root,script)});
+  for(const script of ['refresh.js','dialogs.js','plugin-packages.js','speech.js'])await page.addScriptTag({path:path.join(root,script)});
   await page.evaluate(()=>window.WechatAdmin.nav('provider'));await page.locator('#speech-plugin-state').getByText('尚未安装，可在工具中心导入。',{exact:true}).waitFor();
   assert.equal(await page.locator('#speech-endpoint,#speech-key,#speech-asr-enabled,#speech-asr-backend,#speech-asr-local-model,#speech-asr-model,#speech-tts-enabled,#speech-tts-model,#speech-voice,#speech-instruction,#speech-music-enabled,#speech-music-model').count(),0,'removed generation and ASR controls remain editable');
   assert.equal(await page.getByText(/Fun-Music/).count(),0,'retired Fun-Music copy remains');

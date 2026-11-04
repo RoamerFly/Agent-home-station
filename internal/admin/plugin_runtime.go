@@ -142,26 +142,7 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 		if err != nil {
 			var dependency *pluginruntime.DependencyError
 			if errors.As(err, &dependency) {
-				message := "工具依赖尚未就绪：" + dependency.Dependency
-				switch dependency.Code {
-				case "dependency_missing", "dependency_removed":
-					message = "请先安装依赖工具：" + dependency.Dependency
-				case "dependency_disabled":
-					message = "请先启用依赖工具：" + dependency.Dependency
-				case "dependency_cycle":
-					message = "工具存在循环依赖，请检查工具声明：" + dependency.Dependency
-				case "dependency_configuration":
-					message = "请先完成工具配置：" + dependency.Dependency
-				case "dependency_not_authorized":
-					message = "工具尚未获得所需授权：" + dependency.Dependency
-				case "dependency_busy":
-					message = "关联工具正在执行操作，请稍后重试：" + dependency.Dependency
-				case "dependency_start_failed":
-					message = "工具启动失败：" + dependency.Dependency
-					if len(dependency.Started) > 0 {
-						message += "；已启动的依赖保持运行，可在工具详情查看。"
-					}
-				}
+				message := pluginDependencyMessage(dependency)
 				respond(w, 409, map[string]any{"error": message, "dependency": dependency})
 				return
 			}
@@ -180,4 +161,31 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 		}
 		respond(w, 200, map[string]any{"installed": i, "runtime": h.Status(id)})
 	}))
+}
+
+// pluginDependencyMessage is shared by lifecycle actions and readiness
+// preflight, so the same dependency condition tells an administrator the same
+// concrete next step. It contains only package identifiers and stable codes.
+func pluginDependencyMessage(dependency *pluginruntime.DependencyError) string {
+	message := "工具依赖尚未就绪：" + dependency.Dependency
+	switch dependency.Code {
+	case "dependency_missing", "dependency_removed":
+		message = "请先安装依赖工具：" + dependency.Dependency
+	case "dependency_disabled":
+		message = "请先启用依赖工具：" + dependency.Dependency
+	case "dependency_cycle":
+		message = "工具存在循环依赖，请检查工具声明：" + dependency.Dependency
+	case "dependency_configuration":
+		message = "请先完成工具配置：" + dependency.Dependency
+	case "dependency_not_authorized":
+		message = "工具尚未获得所需授权：" + dependency.Dependency
+	case "dependency_busy":
+		message = "关联工具正在执行操作，请稍后重试：" + dependency.Dependency
+	case "dependency_start_failed":
+		message = "工具启动失败：" + dependency.Dependency
+		if len(dependency.Started) > 0 {
+			message += "；已启动的依赖保持运行，可在工具详情查看。"
+		}
+	}
+	return message
 }
