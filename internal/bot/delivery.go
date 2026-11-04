@@ -210,6 +210,9 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 		}
 	}
 	for {
+		if !textReceiptMatches(status, d.Thread, d.ID) {
+			return w.waitDelivery(d, "receipt_identity_mismatch")
+		}
 		if status.ID != "" {
 			d.ID = status.ID
 		}
@@ -339,14 +342,23 @@ func (w *Worker) recordDeliveryWait(d *delivery, reason string) {
 
 // Prefer the known native job. A missing job can still be resolved by the
 // original idempotency key. Neither read creates a new send.
+func textReceiptMatches(status linuxnative.ToolStatus, thread, id string) bool {
+	return (status.ThreadID == "" || status.ThreadID == thread) && (status.Kind == "" || status.Kind == "text") && (id == "" || status.ID == "" || status.ID == id)
+}
 func lookupTextReceipt(ctx context.Context, n reliableNative, d *delivery) (linuxnative.ToolStatus, error) {
+	checked := func(status linuxnative.ToolStatus, err error) (linuxnative.ToolStatus, error) {
+		if err == nil && !textReceiptMatches(status, d.Thread, d.ID) {
+			return linuxnative.ToolStatus{}, errors.New("receipt_identity_mismatch")
+		}
+		return status, err
+	}
 	if d.ID != "" {
 		status, err := n.ToolSendStatus(ctx, d.ID)
 		if !errors.Is(err, linuxnative.ErrToolNotFound) {
-			return status, err
+			return checked(status, err)
 		}
 	}
-	return n.LookupSend(ctx, d.Key)
+	return checked(n.LookupSend(ctx, d.Key))
 }
 
 func (w *Worker) reconcileDeliveries(ctx context.Context) {
@@ -366,6 +378,12 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			status, err := lookupTextReceipt(readCtx, n, d)
 			cancel()
 			if err == nil && status.State == "accepted" {
+				if status.ID != "" {
+					d.ID = status.ID
+				}
+				if status.ServerID != "" {
+					d.ServerID = status.ServerID
+				}
 				w.acceptReconciled(d)
 				continue
 			}
@@ -432,7 +450,12 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			readCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 			old, e := n.LookupSend(readCtx, key)
 			cancel()
+			if e == nil && !textReceiptMatches(old, d.Thread, "") {
+				historyClear = false
+				break
+			}
 			if e == nil && old.State == "accepted" {
+				d.ServerID = old.ServerID
 				d.ID = old.ID
 				for i, oldKey := range d.PreviousKeys {
 					if oldKey == key && i < len(d.PreviousTexts) {
@@ -482,6 +505,12 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			continue
 		}
 		if err == nil && status.State == "accepted" {
+			if status.ID != "" {
+				d.ID = status.ID
+			}
+			if status.ServerID != "" {
+				d.ServerID = status.ServerID
+			}
 			if d.SubmittedText != "" {
 				d.Text = d.SubmittedText
 			}

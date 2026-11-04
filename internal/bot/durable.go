@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
@@ -240,6 +241,25 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 		case "received", "processing", "read_pending", "retrying_model":
 		default:
 			continue
+		}
+		// Group messages already collected during the same short window share
+		// one decision. Keep explicit reviews, active tasks and delayed retries
+		// on their own lifecycle, including their cancellation fast path.
+		thread := item.Event.Data.ThreadID
+		if w.generation != nil && item.Phase == "received" && !item.OwnerModelReview && !item.AggregateUntil.IsZero() && strings.HasSuffix(thread, "@chatroom") && !w.pendingConversationThread(thread) && w.generation.canGenerate() {
+			ids := map[string]bool{}
+			for j := i; j < len(w.runtime.Inbox); j++ {
+				next := &w.runtime.Inbox[j]
+				if next.Phase == "received" && !next.Backlog && !next.OwnerModelReview && !next.ToolStarted && next.Event.Data.ThreadID == thread && next.Event.Data.Direction == "incoming" && !next.Updated.After(item.AggregateUntil) && !time.Now().Before(next.RetryAfter) {
+					ids[next.Event.Data.MessageID] = true
+				}
+			}
+			if len(ids) > 1 && ids[item.Event.Data.MessageID] {
+				if err := w.processConversationBatch(ctx, thread, ids); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		item.Phase = "processing"
 		if err := w.saveRuntime(); err != nil {

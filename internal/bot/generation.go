@@ -366,49 +366,20 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 		var d companion.Decision
 		var err error
 		if len(in.UnreadMediaIDs) > 0 {
-			for _, id := range in.UnreadMediaIDs {
-				read, stop := context.WithTimeout(modelCtx, 3*time.Minute)
-				m, e := w.source.Message(read, id)
-				summary := ""
-				if e == nil && m.ThreadID == in.Thread {
-					summary, e = w.analyzeIncomingMedia(read, m)
-				}
-				stop()
-				if e != nil {
-					summary = failedObservation(e)
-				}
-				if modelCtx.Err() != nil {
-					err = modelCtx.Err()
-					break
-				}
-				for index := range in.UnreadMessages {
-					event := &in.UnreadMessages[index]
-					if event.MessageID == id {
-						old := event.Text
-						event.Text += "\n实际媒体观察（对话资料）：\n" + summary
-						updated := event.Text
-						err = s.call(modelCtx, func() error {
-							scope := companion.ScopeID(in.Channel, in.Account, in.Thread)
-							return fork.Store.ReplaceObservation(scope, id, old, updated)
-						})
-						break
-					}
-				}
-				if err != nil {
-					break
-				}
-			}
+			err = w.prepareBatchObservations(modelCtx, fork, &in)
 			if err == nil {
 				err = s.call(modelCtx, func() error { j.input = in; j.observationPending = false; return w.persistErr })
 			}
 		}
-		if analysis != nil {
+		if err == nil && analysis != nil {
 			readCtx, stop := context.WithTimeout(modelCtx, 3*time.Minute)
 			var summary string
 			incomplete := false
-			summary, err = w.analyzeIncomingMedia(readCtx, *analysis)
+			summary, err = w.readRequiredMedia(readCtx, *analysis)
 			stop()
-			if err != nil && modelCtx.Err() == nil {
+			if err != nil && in.IsGroup && !errors.Is(modelCtx.Err(), context.Canceled) {
+				err = &groupObservationFailure{reason: observationReason(err), messageID: analysis.ID}
+			} else if err != nil && modelCtx.Err() == nil {
 				incomplete = true
 				summary = failedObservation(err)
 				err = s.call(modelCtx, func() error {
@@ -561,6 +532,11 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 			reason = "new_voice_instruction"
 		}
 		w.activity(Record{Event: "generation_stopped", Category: "decision", ThreadID: r.input.Thread, MessageID: r.input.TraceID, Status: "stopped", Reason: reason, RelatedMessageID: r.job.cancelEvidence, DecisionNote: r.job.cancelNote})
+		return
+	}
+	var failed *groupObservationFailure
+	if errors.As(r.err, &failed) {
+		w.stopUnreadableTurn(r.input, failed)
 		return
 	}
 	for _, d := range w.runtime.Deliveries {

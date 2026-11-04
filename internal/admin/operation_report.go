@@ -313,7 +313,7 @@ func (m *Manager) queueOwnerDetail(in companion.Input, text string) error {
 		return nil
 	}
 	for _, owner := range m.agent.config().OwnerIDs {
-		if !permittedRecipient(m.Config().Config, owner) {
+		if strings.HasSuffix(owner, "@chatroom") || !permittedRecipient(m.Config().Config, owner) {
 			continue
 		}
 		id := agentID(in.Account, in.Thread, in.TraceID, "private-owner-detail")

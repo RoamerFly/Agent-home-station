@@ -32,6 +32,7 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
+	ObservationFailed   func(companion.Input, string) error
 	MediaRepairRequired func(companion.Input, string, string) error
 	MediaSeedSettled    func(string, string, linuxnative.ToolStatus) error
 	MediaSeedReceipt    func(string, string) (linuxnative.ToolStatus, bool)
@@ -334,12 +335,16 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation == nil && readMedia {
 			analysisCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-			summary, analysisErr := w.analyzeIncomingMedia(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
+			summary, analysisErr := w.readRequiredMedia(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
 			mediaObservationState = "observed"
 			cancel()
 			if analysisErr != nil {
 				mediaObservationState = "incomplete"
 				if ctx.Err() != nil {
+					return
+				}
+				if strings.HasSuffix(message.ThreadID, "@chatroom") {
+					w.stopUnreadableTurn(companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, TraceID: message.ID}, analysisErr)
 					return
 				}
 				summary = failedObservation(analysisErr)

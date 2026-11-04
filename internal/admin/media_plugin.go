@@ -434,6 +434,10 @@ func (m *Manager) mediaImageObservationReady(ctx context.Context) error {
 }
 
 func mediaObservationReason(err error) string {
+	var startup *pluginruntime.EnsureStartedError
+	if errors.As(err, &startup) {
+		return startup.Code
+	}
 	if err != nil && publicShareErrorCode.MatchString(err.Error()) && (strings.HasPrefix(err.Error(), "media_") || strings.HasPrefix(err.Error(), "share_")) {
 		return err.Error()
 	}

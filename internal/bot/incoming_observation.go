@@ -10,38 +10,11 @@ import (
 	"wechat-bot/internal/mcptools"
 )
 
-// A voice utterance needs transcription to know the request. A passive picture
-// or video can be observed on demand after the conversation decision.
+// Once a group turn is eligible, resolve its attachments before composing a
+// reply. Private conversations retain on-demand reading for passive media.
 func (w *Worker) readMediaBeforeDecision(m linuxnative.Message) bool {
-	if m.Type == 34 || m.FileAttachmentName() != "" {
-		return true
-	}
 	engine, ok := w.model.(*companion.Engine)
-	if !ok || engine.Tools == nil || w.generation == nil {
-		return true
-	}
-	if !w.considerPreferredShare(m) {
-		return false
-	}
-	notes, _ := engine.Store.Preferences(companion.ScopeID(w.config.Channel, w.source.Account(), m.ThreadID))
-	return defaultShareSummaryEnabled(notes)
-}
-
-// Group notes are free-form preferences, so a single “不” must not disable an
-// otherwise explicit default. For example, “总结不必太长，分享默认总结”
-// still requests an eager read. Only a direct opt-out of the default summary
-// behavior does so; conditional wording stays available to the model.
-func defaultShareSummaryEnabled(notes string) bool {
-	compact := strings.NewReplacer(" ", "", "　", "", "\n", "", "\r", "", "，", "", "。", "", "；", "", ",", "", ";", "").Replace(strings.ToLower(strings.TrimSpace(notes)))
-	if !strings.Contains(compact, "默认") || !(strings.Contains(compact, "总结") || strings.Contains(compact, "摘要")) || !(strings.Contains(compact, "分享") || strings.Contains(compact, "视频") || strings.Contains(compact, "视频号") || strings.Contains(compact, "快手")) {
-		return false
-	}
-	for _, disabled := range []string{"不要默认", "不默认", "别默认", "取消默认", "关闭默认", "停止默认", "默认不总结", "默认不要总结", "默认别总结", "默认不摘要", "默认不要摘要", "默认不发送", "默认不要发送", "默认别发送"} {
-		if strings.Contains(compact, disabled) {
-			return false
-		}
-	}
-	return true
+	return strings.HasSuffix(m.ThreadID, "@chatroom") || m.Type == 34 || m.FileAttachmentName() != "" || !ok || engine.Tools == nil || w.generation == nil
 }
 
 func incomingObservationTool() mcptools.Tool {

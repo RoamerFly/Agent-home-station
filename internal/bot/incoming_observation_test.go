@@ -19,27 +19,7 @@ func (a *countingObservationAnalyzer) Analyze(_ context.Context, m linuxnative.M
 	return "实际读取：" + m.ID, nil
 }
 
-func TestDefaultShareSummaryEnabledUsesExplicitOptOutOnly(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		notes string
-		want  bool
-	}{
-		{"enabled", "群收到视频号、快手等分享时，默认总结主要内容并发送。", true},
-		{"unrelated negation remains enabled", "总结不必太长；群收到分享时默认总结主要内容。", true},
-		{"direct opt out", "不要默认总结群里的分享内容。", false},
-		{"default negative", "群分享默认不总结。", false},
-		{"not a default", "群里可以聊聊视频分享。", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := defaultShareSummaryEnabled(tc.notes); got != tc.want {
-				t.Fatalf("defaultShareSummaryEnabled(%q) = %v, want %v", tc.notes, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestMediaReadTimingDefersOrdinaryGroupMediaButKeepsVoiceAndEnabledShare(t *testing.T) {
+func TestEligibleGroupTurnReadsMediaBeforeDecision(t *testing.T) {
 	w, e, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
 		return `{"action":"silent"}`, nil
 	}))
@@ -59,8 +39,8 @@ func TestMediaReadTimingDefersOrdinaryGroupMediaButKeepsVoiceAndEnabledShare(t *
 	for _, typ := range []int{3, 43} {
 		m := fixtureMessage("ordinary-"+string(rune('0'+typ)), room, "", "incoming")
 		m.Type = typ
-		if w.readMediaBeforeDecision(m) {
-			t.Fatalf("ordinary group media type %d was read before the model could decide", typ)
+		if !w.readMediaBeforeDecision(m) {
+			t.Fatalf("ordinary group media type %d was not read before the model decision", typ)
 		}
 	}
 	voice := fixtureMessage("voice", room, "", "incoming")
@@ -91,8 +71,8 @@ func TestMediaReadTimingDefersOrdinaryGroupMediaButKeepsVoiceAndEnabledShare(t *
 	if err := e.Store.SetPreferences(companion.ScopeID(seed.Channel, seed.Account, room), "不要默认总结群里的分享内容。", revision); err != nil {
 		t.Fatal(err)
 	}
-	if w.readMediaBeforeDecision(share) {
-		t.Fatal("explicit default-share opt-out was ignored")
+	if !w.readMediaBeforeDecision(share) {
+		t.Fatal("reading an eligible group turn must not depend on a default-summary preference")
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mediaspec"
+	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/transcript"
 )
 
@@ -174,6 +175,10 @@ func videoObservationCoverage(duration float64, times []float64, visual bool, au
 }
 
 func mediaTranscriptionHardFailure(err error) bool {
+	var startup *pluginruntime.EnsureStartedError
+	if errors.As(err, &startup) {
+		return true
+	}
 	if err == nil || err.Error() == "media_transcription_provider_failed" || mediaspec.IsNoSpeech(err) {
 		return false
 	}
@@ -181,6 +186,10 @@ func mediaTranscriptionHardFailure(err error) bool {
 }
 
 func mediaObservationHardFailure(err error) bool {
+	var startup *pluginruntime.EnsureStartedError
+	if errors.As(err, &startup) {
+		return true
+	}
 	if err == nil {
 		return false
 	}

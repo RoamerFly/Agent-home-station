@@ -363,11 +363,18 @@ func TestParentGroupPreferredChannelsSummaryCreatesSourceBoundPlanWithoutSending
 			options.RandomDelay, options.RecoverBacklog = false, false
 			ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 			defer cancel()
-			var planned atomic.Bool
+			var planned, reported atomic.Bool
 			var recordsMu sync.Mutex
 			var reasons []string
 			dir := filepath.Join(f.dir, "preferred-share-worker")
-			worker, err := bot.New(bot.Config{Channel: "wechat", StateDir: dir, AllowedThreads: []string{msg.ThreadID}, PollInterval: time.Millisecond, Options: &options, Analyzer: analyzer, GroupRules: map[string]bot.GroupRule{msg.ThreadID: {Mode: "mention"}}, Record: func(record bot.Record) {
+			worker, err := bot.New(bot.Config{ObservationFailed: func(in companion.Input, reason string) error {
+				if in.TraceID != msg.ID || in.Thread != msg.ThreadID || reason == "" {
+					t.Error("lost failure scope")
+				}
+				reported.Store(true)
+				cancel()
+				return nil
+			}, Channel: "wechat", StateDir: dir, AllowedThreads: []string{msg.ThreadID}, PollInterval: time.Millisecond, Options: &options, Analyzer: analyzer, GroupRules: map[string]bot.GroupRule{msg.ThreadID: {Mode: "mention"}}, Record: func(record bot.Record) {
 				recordsMu.Lock()
 				reasons = append(reasons, record.Event+":"+record.Reason)
 				recordsMu.Unlock()
@@ -383,8 +390,14 @@ func TestParentGroupPreferredChannelsSummaryCreatesSourceBoundPlanWithoutSending
 				t.Fatal(err)
 			}
 			model.mu.Lock()
-			packet, all := model.packet, model.all
+			packet := model.packet
 			model.mu.Unlock()
+			if !observed {
+				if !reported.Load() || planned.Load() || packet != nil || observerCalls != 1 {
+					t.Fatal("unreadable share reached group reply or lacked private report", reported.Load(), planned.Load(), observerCalls)
+				}
+				return
+			}
 			if !planned.Load() || observerCalls != 1 || packet == nil {
 				recordsMu.Lock()
 				defer recordsMu.Unlock()
@@ -400,9 +413,6 @@ func TestParentGroupPreferredChannelsSummaryCreatesSourceBoundPlanWithoutSending
 			observation, ok := media[0].(map[string]any)
 			if !ok || observation["result_available"] != observed {
 				t.Fatal("verified and unavailable observations were confused")
-			}
-			if !observed && !strings.Contains(all, "未取得内容前不能声称已看过") {
-				t.Fatal("unavailable observation lost its explicit truthfulness boundary")
 			}
 			var state struct {
 				Plans []struct {

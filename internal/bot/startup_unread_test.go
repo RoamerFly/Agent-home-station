@@ -3,9 +3,11 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -159,5 +161,77 @@ func TestUnreadGroupReplyBindsDispatchToRealAnchor(t *testing.T) {
 	w.reconcileUtterancePlans(t.Context())
 	if p.State != "accepted" || len(n.submissions) != 1 {
 		t.Fatal("group digest did not pass real dispatch admission", p.State, p.StopReason, len(n.submissions))
+	}
+}
+
+func TestLiveMixedGroupWindowReadsAllInputsBeforeDecision(t *testing.T) {
+	const room = "room@chatroom"
+	for _, permanent := range []bool{true, false} {
+		t.Run(fmt.Sprintf("permanent_%t", permanent), func(t *testing.T) {
+			var calls, videoReads, reports int
+			var current struct {
+				Unread []json.RawMessage `json:"unread_messages"`
+			}
+			w, c, n := backgroundWorker(t, generationModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
+				calls++
+				if err := json.Unmarshal([]byte(turns[len(turns)-1]["content"]), &current); err != nil {
+					t.Error(err)
+				}
+				return `{"action":"silent"}`, nil
+			}))
+			c.Config.Permissions.ObserveGroups, c.Config.Permissions.AutonomousGroups = true, true
+			w.config.GroupRules = map[string]GroupRule{room: {Mode: "social"}}
+			w.config.Options.ReadImages, w.config.Options.ReadVideos = true, true
+			w.config.Analyzer = sourceCheckingAnalyzer(func(_ context.Context, m linuxnative.Message) (string, error) {
+				if m.Type == 43 {
+					videoReads++
+					if permanent {
+						return "", errors.New("media_plugin_disabled")
+					}
+					if videoReads == 1 {
+						return "", errors.New("plugin_cold_start_failed")
+					}
+				}
+				return "verified-" + m.ID, nil
+			})
+			w.config.ObservationFailed = func(in companion.Input, reason string) error {
+				reports++
+				if in.Thread != room || !strings.Contains(reason, "media_plugin_disabled") {
+					t.Error("incorrect private diagnostic", in.Thread, reason)
+				}
+				return nil
+			}
+			source := &fakeSource{messages: map[string]linuxnative.Message{}}
+			now := time.Now()
+			for i, kind := range []int{1, 3, 43} {
+				id := fmt.Sprintf("window-%d", i)
+				m := fixtureMessage(id, room, "本轮合成测试", "incoming")
+				m.Type, m.SenderID, m.CreatedAt = kind, "member", now.Add(time.Duration(i-5)*time.Second).Format(time.RFC3339)
+				source.messages[id] = m
+				w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Event: fixtureEvent(strconv.Itoa(i+1), id, room, "incoming", "remote"), Phase: "received", Updated: now.Add(-2 * time.Second), AggregateUntil: now.Add(-time.Second)})
+			}
+			w.source = source
+			w.enableGenerations()
+			defer w.closeGenerations()
+			if err := w.drainInbox(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			pumpGeneration(t, w, func() bool { return w.generation.occupied() == 0 })
+			if permanent {
+				if calls != 0 || reports != 1 || videoReads != 1 || len(n.submissions) != 0 {
+					t.Fatal("failed input escaped to group or diagnostic missing", calls, reports, videoReads, len(n.submissions))
+				}
+				for _, it := range w.runtime.Inbox {
+					if it.Phase != "stopped" {
+						t.Fatal(it.Phase)
+					}
+				}
+				if err := w.drainInbox(t.Context()); err != nil || reports != 1 {
+					t.Fatal("failed turn replayed", err, reports)
+				}
+			} else if calls != 1 || reports != 0 || videoReads != 2 || len(current.Unread) != 3 || !strings.Contains(string(current.Unread[1]), "verified-window-1") || !strings.Contains(string(current.Unread[2]), "verified-window-2") {
+				t.Fatalf("mixed window not recovered in source order: calls=%d reports=%d video=%d items=%+v", calls, reports, videoReads, current.Unread)
+			}
+		})
 	}
 }

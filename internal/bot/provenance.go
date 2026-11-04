@@ -30,6 +30,9 @@ func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.En
 		}
 	}
 	kind := map[int]string{3: "image", 47: "sticker", 34: "voice", 43: "video", 49: "share"}[m.Type]
+	if m.FileAttachmentName() != "" {
+		kind = "file"
+	}
 	if kind != "" && !m.IsQuotedText() {
 		in.IncomingMedia = []companion.IncomingMediaRef{{Source: source, Kind: kind, UploaderID: m.SenderID, ObservationState: "pending", ObservationVersion: 1}}
 	}

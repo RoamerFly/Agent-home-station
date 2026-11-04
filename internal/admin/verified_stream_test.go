@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -156,5 +157,33 @@ func TestReceivedFilesPreserveOriginalTimesAndSeparateConversationProvenance(t *
 	}
 	if n.submits.Load() != 0 {
 		t.Fatal("receiving a file sent a message")
+	}
+}
+
+type syntheticVideoAttachment struct {
+	*forwardNative
+	data []byte
+}
+
+func (n *syntheticVideoAttachment) IncomingMedia(context.Context, string, int64) ([]byte, string, error) {
+	return n.data, "video/mp4", nil
+}
+
+func TestGroupVideoFileRequiresContentAfterAcquisition(t *testing.T) {
+	f, _, n := forwardFixture(t)
+	native := &syntheticVideoAttachment{n, inspectionFixture(t)}
+	f.manager.native = native
+	f.manager.config.Behavior.ReadVideos = true
+	kind := 6
+	n.message.AppMessageType = &kind
+	n.message.Body = ""
+	n.message.Attachments = []linuxnative.Attachment{{Kind: "file", Filename: "movie.mp4", State: "identified"}}
+	text, err := (mediaUnderstanding{manager: f.manager}).Analyze(t.Context(), n.message)
+	if err == nil || text != "" {
+		t.Fatal("file registration alone was treated as video understanding", text, err)
+	}
+	assets, err := f.manager.loadAssets()
+	if err != nil || len(assets) != 1 || assets[0].MIME != "video/mp4" || assets[0].Filename != "movie.mp4" {
+		t.Fatal("verified original unavailable for repair", assets, err)
 	}
 }

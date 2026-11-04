@@ -28,9 +28,12 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 			followupMessage = &m
 			if w.readMediaBeforeDecision(m) {
 				readCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-				summary, err := w.config.Analyzer.Analyze(readCtx, m)
+				summary, err := readMediaWithRecovery(readCtx, m, w.config.Analyzer.Analyze)
 				cancel()
 				if err != nil {
+					if in.IsGroup && ctx.Err() == nil {
+						return event, &groupObservationFailure{reason: observationReason(err), messageID: event.ID}
+					}
 					return event, err
 				}
 				followupObservation = summary

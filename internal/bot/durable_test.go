@@ -372,3 +372,25 @@ func TestConsecutiveOrdinaryMessagesCallModelWithoutAnyCooldown(t *testing.T) {
 		t.Fatal("review skipped model or forced a reply", model.calls, sender.calls)
 	}
 }
+
+func TestWrongConversationReceiptCannotSettleOrResend(t *testing.T) {
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
+	w := durableWorker(t, n)
+	_, err := w.sendText(t.Context(), companion.Input{Thread: "filehelper", TraceID: "source", Directed: true, Mode: "direct"}, 0, "合成回执测试")
+	if !errors.Is(err, sending.ErrOutcomeUnknown) {
+		t.Fatal(err)
+	}
+	d := w.runtime.Deliveries[0]
+	n.intents[d.Key] = linuxnative.ToolStatus{ID: d.ID, ThreadID: "other", Kind: "text", State: "accepted", ServerID: "wrong"}
+	d.Next = time.Time{}
+	w.reconcileDeliveries(t.Context())
+	if d.State == "accepted" || d.ServerID == "wrong" || !d.Next.After(time.Now()) || len(n.submissions) != 1 {
+		t.Fatalf("wrong receipt settled or resubmitted: %+v", d)
+	}
+	n.intents[d.Key] = linuxnative.ToolStatus{ID: d.ID, ThreadID: "filehelper", Kind: "text", State: "accepted", ServerID: "right"}
+	d.Next = time.Time{}
+	w.reconcileDeliveries(t.Context())
+	if d.State != "accepted" || d.ServerID != "right" || len(n.submissions) != 1 {
+		t.Fatal("late correct receipt lost", d)
+	}
+}
