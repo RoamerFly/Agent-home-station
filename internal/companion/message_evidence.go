@@ -398,7 +398,8 @@ func eventEvidenceTurn(ev MemoryEvent) Turn {
 
 func (e *Engine) refreshEvidenceRow(row map[string]any, ev MemoryEvent) {
 	t := eventEvidenceTurn(ev)
-	if masked, _ := row["personal_context_redacted"].(bool); masked {
+	masked, _ := row["personal_context_redacted"].(bool)
+	if masked {
 		t.Text = "[其他参与者的媒体或回复；未授权个人资料]"
 		t.IncomingMedia = nil
 		t.FullText = ""
@@ -417,7 +418,16 @@ func (e *Engine) refreshEvidenceRow(row map[string]any, ev MemoryEvent) {
 	// rather than retaining an old serialized MediaMemory after a tool/memory
 	// refresh.  Other evidence consumers keep their existing shape unless they
 	// were explicitly rendered as an attachment timeline row.
-	if _, wasAttachment := row["attachment_delivery"]; wasAttachment {
+	if masked {
+		// A refresh must never revive a media payload which grounding already
+		// hid because it belongs to another group participant.
+		delete(row, "media_delivery")
+		delete(row, "attachment_delivery")
+		delete(row, "attachment_only")
+		if ev.Role == "assistant" {
+			row["timeline_event"] = "assistant_message"
+		}
+	} else if _, wasAttachment := row["attachment_delivery"]; wasAttachment {
 		if ev.Media == nil {
 			delete(row, "attachment_delivery")
 			delete(row, "timeline_event")
@@ -433,6 +443,10 @@ func (e *Engine) refreshEvidenceRow(row map[string]any, ev MemoryEvent) {
 		}
 	}
 	row["revision"] = ev.Revision
+	// Refreshing an evidence row can reintroduce typed empty slices. Keep the
+	// refreshed packet as compact as its initial serialization, particularly on
+	// ordinary group turns with no media.
+	compactHistoryRow(row)
 }
 
 func (e *Engine) followupEvidence(turns []map[string]string, events []agentrun.Event) []map[string]any {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -66,7 +67,7 @@ func groundedHistory(scope Scope, in Input) []Turn {
 		if t.Role == "user" {
 			previous = t.Sender
 		}
-		unrelated := t.Role == "user" && !relevantSender(in, t.Sender)
+		unrelated := t.Role == "user" && groupHistoryRelation(in, *t) == "other_member_background"
 		if t.Role == "assistant" {
 			if t.ReplyContext != nil {
 				unrelated = true
@@ -90,6 +91,35 @@ func groundedHistory(scope Scope, in Input) []Turn {
 		}
 	}
 	return out
+}
+
+// Use one binding for history visibility, memory queries and the model's label.
+// Older quotes with only a sender remain distinguishable from an exact quote.
+func groupHistoryRelation(in Input, turn Turn) string {
+	if turn.Role != "user" {
+		return "assistant_or_tool_history"
+	}
+	if turn.Sender != "" && turn.Sender == in.Sender {
+		return "current_sender_history"
+	}
+	if ref := in.QuotedSource; ref != nil && (ref.Sender == "" || ref.Sender == turn.Sender) {
+		switch {
+		case ref.EventID != "":
+			if turn.EventID == ref.EventID || turn.Source != nil && turn.Source.EventID == ref.EventID {
+				return "quoted_message_evidence"
+			}
+		case ref.MessageID != "":
+			if sameTimelineMessage(turn, ref) {
+				return "quoted_message_evidence"
+			}
+		case ref.Sender != "":
+			return "legacy_quoted_sender_context"
+		}
+	}
+	if turn.Sender != "" && slices.Contains(in.Addressees, turn.Sender) {
+		return "addressed_member_evidence"
+	}
+	return "other_member_background"
 }
 
 func (e *Engine) groundingScope(in Input) Scope {

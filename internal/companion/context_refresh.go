@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-	"time"
 )
 
 // A memory tool can forget or correct an entry during a running Agent turn.
@@ -100,7 +99,8 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 				continue
 			}
 			kept := []map[string]any{}
-			used := 0
+			limits := e.memorySettings()
+			used, coreUsed := 0, 0
 			for _, row := range rows {
 				id, _ := row["id"].(string)
 				scope, _ := row["scope"].(string)
@@ -108,28 +108,20 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 				if err != nil {
 					continue
 				}
-				text := m.Detail
-				if m.Representation(time.Now()) != "detail" {
-					text = m.Summary
+				m.trimSearchPreview()
+				remaining := limits.RecallTokens - used
+				if m.Pinned {
+					remaining = min(remaining, limits.ContinuityTokens-coreUsed)
 				}
-				row["text"] = text
-				row["status"] = m.Status
-				row["version"] = m.Version
-				row["subject"] = m.Subject
-				row["assertions"] = m.Assertions
-				row["source_quotes"] = m.Sources
-				ids := []string{}
-				for _, src := range m.Sources {
-					ids = append(ids, src.EventID)
-				}
-				row["source_event_ids"] = ids
-				b, _ := json.Marshal(row)
-				cost := EstimateTokens(string(b))
-				if used+cost > e.memorySettings().RecallTokens {
+				updated, cost := recalledMemoryRow(&m, remaining)
+				if cost > remaining {
 					continue
 				}
+				if m.Pinned {
+					coreUsed += cost
+				}
 				used += cost
-				kept = append(kept, row)
+				kept = append(kept, updated)
 			}
 			packet["items"], _ = json.Marshal(kept)
 			packet["token_estimate"], _ = json.Marshal(used)
@@ -209,6 +201,10 @@ func (e *Engine) refreshMemoryPackets(ctx context.Context, turns []map[string]st
 					}
 				}
 				encoded, _ = json.Marshal(row)
+				// Unmarshal into a fresh map. Reusing packet would retain fields
+				// deliberately deleted by refreshEvidenceRow (for example a
+				// redacted member's former media observation).
+				packet = map[string]json.RawMessage{}
 				_ = json.Unmarshal(encoded, &packet)
 
 				changed = true

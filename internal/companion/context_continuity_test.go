@@ -120,6 +120,10 @@ func TestDirectRecallLongOldEvidenceLeavesRoomForCurrentAgreement(t *testing.T) 
 	if !strings.Contains(packet, m.ID) || !strings.Contains(packet, next.EventID) || !strings.Contains(packet, "周日画明信片") || strings.Contains(packet, "蓝色海浪") {
 		t.Fatalf("oversized historical evidence displaced current agreement: %s", packet)
 	}
+	afterTool := engine.refreshMemoryPackets(t.Context(), []map[string]string{{"role": "user", "content": packet}})
+	if len(afterTool) != 1 || !strings.Contains(afterTool[0]["content"], next.EventID) || strings.Contains(afterTool[0]["content"], "蓝色海浪") {
+		t.Fatal("tool continuation lost the current source or reintroduced the oversized old quote")
+	}
 }
 
 func TestDirectRecallShowsClosedCommitmentStateOnlyWhenLexicallyRelevant(t *testing.T) {

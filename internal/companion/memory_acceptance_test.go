@@ -181,6 +181,70 @@ func TestMemoryIncrementalBatchRestartBudgetAndInvalidSource(t *testing.T) {
 	}
 }
 
+func TestMemoryMaintenanceKeepsGroupEpisodeAsSourcedStatement(t *testing.T) {
+	s, c, in := memoryFixture(t)
+	in.Thread = "synthetic-room@chatroom"
+	in.TraceID = "wedding-wish"
+	in.Text = "今天参加了同事儿子的喜酒，盼我儿子以后也有这一天。"
+	id := ScopeID(in.Channel, in.Account, in.Thread)
+	if err := s.Observe(in, c, time.Now().Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	model := extractionFixture(func(_ context.Context, _ string, messages []map[string]string) (string, error) {
+		var payload struct {
+			Sources []MemoryEvent `json:"sources"`
+		}
+		if err := json.Unmarshal([]byte(messages[0]["content"]), &payload); err != nil {
+			t.Fatal(err)
+		}
+		ev := payload.Sources[0]
+		// Reproduce the unsafe condensation seen in production: the source
+		// expresses a future wish, while the model incorrectly says it happened.
+		out, _ := json.Marshal(map[string]any{"entries": []MemoryEntry{{
+			Subject: ev.Sender, Kind: "episode", Continuity: true, Detail: "儿子已经成家并办了喜酒",
+			Summary: "儿子婚礼", Keywords: []string{"婚礼", "成家"},
+			// The model only selected the subject fragment. Maintenance must
+			// recover the complete source sentence, including its future wish.
+			Sources: []MemorySource{{EventID: ev.ID, Quote: "我儿子"}},
+		}}})
+		return string(out), nil
+	})
+	engine, err := New(c, s, model, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.MaintainScope(t.Context(), id, true); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.SearchMemory(t.Context(), MemoryQuery{Scopes: []string{id}, Limit: 10})
+	if err != nil || len(p.Items) != 1 {
+		t.Fatalf("stored entries=%d err=%v", len(p.Items), err)
+	}
+	got := p.Items[0].Entry
+	want := "发言者陈述：今天参加了同事儿子的喜酒，盼我儿子以后也有这一天。"
+	if got.Subject != in.Sender || got.Continuity || got.Detail != want || got.Summary != want || len(got.Keywords) != 0 || len(got.Sources) != 1 || got.Sources[0].Quote != in.Text {
+		t.Fatalf("group episode lost source modality: %#v", got)
+	}
+}
+
+func TestGroupEpisodeSentenceRequiresUnambiguousCompleteSource(t *testing.T) {
+	text := "我参加了宴会。盼我儿子以后也有这一天。后来我们坐车回家。"
+	full := MemoryEvent{Text: text, Complete: true}
+	want := "盼我儿子以后也有这一天。"
+	if got, ok := completeSourceSentence(full, want); !ok || got != want {
+		t.Fatalf("quote ending with punctuation included a different event: %q", got)
+	}
+	for _, ev := range []MemoryEvent{
+		{Text: "我儿子。后来又聊到我儿子。", Complete: true},
+		{Text: "我儿子以后也有这一天。", TextBytes: len(text), Complete: true},
+		{Text: "前面说过。盼我儿子以后", TextBytes: len(text), Complete: true},
+	} {
+		if got, ok := completeSourceSentence(ev, "我儿子"); ok {
+			t.Fatalf("incomplete or ambiguous quote became an episode: %q", got)
+		}
+	}
+}
+
 func TestMemoryTimeBoundariesRevisionAndForgetting(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	id := ScopeID(in.Channel, in.Account, in.Thread)
@@ -373,6 +437,22 @@ func TestScheduledConversationRecallUsesNewestUserTopic(t *testing.T) {
 	e.memoryContext(t.Context(), in, Scope{})
 	if len(queries) != 0 {
 		t.Fatal("scheduler instructions used as a memory query")
+	}
+
+	in.Mode, in.Sender, in.Text, in.IsGroup = "social", "beta", "刚才那个呢？", true
+	in.QuotedSource = &SourceRef{MessageID: "postcard", Sender: "alpha"}
+	scope.Messages = []Turn{
+		{Role: "user", Sender: "alpha", TraceID: "postcard", Text: "明信片"},
+		{Role: "user", Sender: "alpha", TraceID: "dessert", Text: "栗子蛋糕"},
+	}
+	e.memoryContext(t.Context(), in, scope)
+	select {
+	case query := <-queries:
+		if !strings.Contains(query, "明信片") || strings.Contains(query, "栗子蛋糕") {
+			t.Fatalf("group recall expanded beyond the quoted message: %s", query)
+		}
+	default:
+		t.Fatal("missing group recall query")
 	}
 }
 

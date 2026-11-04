@@ -225,6 +225,9 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 			} else {
 				row := e.timelineEvidenceRow(scope.ID, t, history, max(512, c.MaxInputChars/4))
 				row["is_current_message_sender"] = t.Role == "user" && t.Sender == input.Sender
+				if input.IsGroup {
+					row["participant_relation"] = groupHistoryRelation(input, t)
+				}
 				if t.Role == "user" {
 					row["kind"] = "history_message"
 				} else {
@@ -264,10 +267,14 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 		}
 		row := e.timelineEvidenceRow(scope.ID, t, history, max(512, c.MaxInputChars/4))
 		row["is_current_message_sender"] = t.Role == "user" && t.Sender == input.Sender
+		if input.IsGroup {
+			row["participant_relation"] = groupHistoryRelation(input, t)
+		}
 		if t.DeviceObservation != nil {
 			row["device_observation"] = t.DeviceObservation
 			row["sent_to_wechat"] = false
 		}
+		delete(row, "scope") // carried by the enclosing conversation_context
 		compactHistoryRow(row)
 		b, _ := json.Marshal(row)
 		if size+len(b) > c.MaxInputChars || usedTokens+EstimateTokens(string(b)) > maxTokens {
@@ -691,7 +698,6 @@ func referencesPriorMedia(text string) bool {
 // Compact only redundant transport scaffolding. Identity, unknown actor values,
 // source versions, redaction and evidence state remain explicit.
 func compactHistoryRow(row map[string]any) {
-	delete(row, "scope") // already present on the enclosing conversation_context
 	for _, key := range []string{"source", "quoted_source", "reply_context"} {
 		b, _ := json.Marshal(row[key])
 		if string(b) == "null" {

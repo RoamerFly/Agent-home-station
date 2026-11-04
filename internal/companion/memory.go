@@ -789,16 +789,7 @@ func (s *Store) searchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 		if e = json.Unmarshal(b, &m); e != nil {
 			return p, e
 		}
-		m.DetailBytes = len(m.Detail)
-		m.DetailExcerpted = m.DetailBytes > 600
-		m.Detail = boundedText(m.Detail, 600)
-		m.SourceCount = len(m.Sources)
-		if len(m.Sources) > 3 {
-			m.Sources = m.Sources[len(m.Sources)-3:]
-		}
-		for i := range m.Sources {
-			m.Sources[i].Quote = boundedText(m.Sources[i].Quote, 256)
-		}
+		m.trimSearchPreview()
 		m.Status = status
 		m.Version = version
 		hit.Entry = &m
@@ -813,6 +804,19 @@ func (s *Store) searchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 	}
 	finishPage(&p, q, hash)
 	return p, nil
+}
+
+func (m *MemoryEntry) trimSearchPreview() {
+	m.DetailBytes = len(m.Detail)
+	m.DetailExcerpted = m.DetailBytes > 600
+	m.Detail = boundedText(m.Detail, 600)
+	m.SourceCount = len(m.Sources)
+	if len(m.Sources) > 3 {
+		m.Sources = m.Sources[len(m.Sources)-3:]
+	}
+	for i := range m.Sources {
+		m.Sources[i].Quote = boundedText(m.Sources[i].Quote, 256)
+	}
 }
 
 func finishPage(p *MemoryPage, q MemoryQuery, hash [32]byte) {
