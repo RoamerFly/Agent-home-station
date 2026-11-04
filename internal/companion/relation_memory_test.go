@@ -86,6 +86,19 @@ func TestAdminCorrectionIsIndependentAttributedSource(t *testing.T) {
 	if err != nil || replay.ID != saved.ID {
 		t.Fatal(replay, err)
 	}
+	view := ExperienceQuery{View: "relations", Person: "bob"}
+	page, err := s.ListSharedExperiences(t.Context(), m.Scope, view)
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != saved.ID || len(page.Items[0].Assertions) != 1 || page.Items[0].Assertions[0].State != "corrected" {
+		t.Fatalf("missing attributed correction: %+v, %v", page, err)
+	}
+	// The correction's own text is unchanged, but its quoted original is stale.
+	if _, err = s.db.Exec("UPDATE events SET revision=revision+1 WHERE id=?", ev.ID); err != nil {
+		t.Fatal(err)
+	}
+	page, err = s.ListSharedExperiences(t.Context(), m.Scope, view)
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("stale original still supports a corrected relationship: %+v, %v", page, err)
+	}
 }
 
 func TestRevisedRelationCanStillBeForgotten(t *testing.T) {
@@ -234,6 +247,12 @@ func TestRelationNegationTargetsPredicateNotWholeQuote(t *testing.T) {
 			_, err = s.SaveMemory(t.Context(), MemoryEntry{Scope: scope, Subject: a.Subject, Kind: "fact", Detail: tc.text, Sources: []MemorySource{{ev.ID, tc.text}}, Assertions: []MemoryAssertion{a}}, 0)
 			if (err == nil) != tc.valid {
 				t.Fatal("predicate polarity mismatch", tc, err)
+			}
+			if tc.valid && a.ObjectBasis == "literal" {
+				matches, err := s.ListSharedExperiences(t.Context(), scope, ExperienceQuery{View: "relations", Person: a.Object})
+				if err != nil || len(matches.Items) != 0 {
+					t.Fatalf("occupation value matched a person: %+v, %v", matches, err)
+				}
 			}
 		})
 	}

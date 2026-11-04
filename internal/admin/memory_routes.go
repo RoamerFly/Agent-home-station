@@ -103,6 +103,10 @@ func (s *Server) memoryRoutes(mux *http.ServeMux) {
 		case "unpin":
 			m.Pinned = false
 		case "correct":
+			if len(m.Assertions) > 0 && in.Assertions == nil {
+				fail(w, 400, "更正人物关系时请同时提供关系、陈述者和来源")
+				return
+			}
 			m.Detail = in.Detail
 			m.Summary = in.Detail
 			m.Sources = in.Sources

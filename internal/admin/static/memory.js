@@ -22,7 +22,8 @@
   }
  }
  const person=id=>window.WechatNames?.display(id,'群成员')||'群成员';
- function relations(parent,item){for(const a of item.assertions||[]){const row=el(parent,'div',undefined,'conversation-summary');const predicates={father:'父亲',mother:'母亲',spouse:'配偶',child:'子女',attribute:'相关信息',reports:'转述'};el(row,'strong',(a.subject_text||person(a.subject))+' · '+(a.negated?'不是':'')+(predicates[a.predicate]||'关系信息')+' · '+(a.object_text||person(a.object)));el(row,'p',({explicit:'明确陈述',reported:'他人转述',corrected:'已更正',uncertain:'尚未确定'})[a.state]||'待核对','hint');el(row,'p','陈述者：'+person(a.asserted_by),'hint')}}
+ function relationParticipant(item,assertion,side){const id=side==='object'?assertion.object:assertion.subject,known=(item.sources||[]).find(ref=>ref.sender===id);if(known)return known.sender_name||person(id);if(side==='object'&&assertion.object_basis==='literal')return assertion.object_text||id;if(side==='object'&&assertion.object_basis==='relative')return relationParticipant(item,assertion,'subject')+'的'+(assertion.object_text||assertion.predicate);if(side==='subject'&&assertion.subject_text&&!['我','你','您'].includes(assertion.subject_text))return assertion.subject_text;return person(id)}
+ function relations(parent,item){for(const a of item.assertions||[]){const row=el(parent,'div',undefined,'conversation-summary');const predicates={father:'父亲',mother:'母亲',spouse:'配偶',child:'子女',attribute:'相关信息',reports:'转述'};el(row,'strong',relationParticipant(item,a,'subject')+' · '+(a.negated?'不是':'')+(predicates[a.predicate]||'关系信息')+' · '+relationParticipant(item,a,'object'));el(row,'p',({explicit:'明确陈述',reported:'他人转述',corrected:'已更正',uncertain:'尚未确定'})[a.state]||'待核对','hint');const reporter=(item.sources||[]).find(ref=>ref.sender===a.asserted_by);el(row,'p','陈述者：'+(reporter?.sender_name||person(a.asserted_by)),'hint')}}
  async function source(scope,id){const p=window.WechatDialogs.open({title:'原始来源'}),status=el(p.body,'p','正在读取…','hint');try{const e=await api('/api/memory/'+scope+'/sources/'+encodeURIComponent(id));if(!p.alive())return;status.textContent=[e.sender_name||person(e.sender),window.WechatActivity?.time(e.at)||e.at,e.complete?'完整原文':'旧记录，完整性未知','版本 '+e.revision].join(' · ');if(e.addressees?.length)el(p.body,'p','对话对象：'+e.addressees.map(person).join('、'),'hint');for(const m of e.incoming_media||[])el(p.body,'p','媒体上传者：'+person(m.uploader_id)+' · '+(({verified:'已读取',observed:'已观察',failed:'未读成功',pending:'等待读取'})[m.observation_state]||'待核对'),'hint');el(p.body,'pre',e.text,'readable-full-text')}catch(e){if(p.alive())status.textContent=e.message}}
  function chooseCorrectionSource(scope,subject,onPick){
   const panel=window.WechatDialogs.open({title:'选择更正依据',subtitle:'从当前会话选择一条用来更正的原话。'});
@@ -66,37 +67,43 @@
   return state||(item.perspective==='source_statement'||item.perspective==='reported_statement'?'成员陈述':'聊过的事');
  }
  function experiencePanel(scope,onChanged,body){
-  const alive=()=>body.isConnected,status=el(body,'p','正在读取…','hint'),list=el(body,'div',undefined,'memory-experience-list');status.setAttribute('role','status');
-  let cursor='',busy=false,controller;
+  const alive=()=>body.isConnected,controls=el(body,'div',undefined,'memory-experience-controls'),viewLabel=el(controls,'label','查看'),viewPicker=el(viewLabel,'select'),personFilter=el(controls,'div','','hint'),status=el(body,'p','正在读取…','hint'),list=el(body,'div',undefined,'memory-experience-list');status.setAttribute('role','status');
+  const views=[['','共同经历'],['relations','人物关系'],['open_commitments','未完约定']];for(const [value,label]of views){const option=el(viewPicker,'option',label);option.value=value}
+  let cursor='',busy=false,controller,view='',personID='';
   const more=button(body,'加载更多经历',()=>load(false),'secondary');
   function changed(){onChanged?.();load(true)}
+  function viewName(){return ({relations:'人物关系',open_commitments:'未完约定'})[view]||'共同经历'}
+  function forget(item){const relationship=Array.isArray(item.assertions)&&item.assertions.length>0,confirm=window.WechatDialogs.open({title:relationship?'遗忘这条关系记录':'遗忘这段经历',subtitle:relationship?'会遗忘整条来源记忆及其中的全部关系，不能只移除其中一项。只读历史归档仍保留。':'这段经历不再用于自动召回；只读历史归档仍保留。'});button(confirm.body,'确认遗忘',async()=>{try{await api('/api/memory/'+encodeURIComponent(scope)+'/entries/'+encodeURIComponent(item.id),{method:'POST',json:{action:'forget',expected_revision:item.version}});confirm.close();changed()}catch(e){status.textContent=e.message}},'danger')}
+  function personButtons(actions,item){
+   const labelFor=id=>{const source=(item.sources||[]).find(ref=>ref.sender===id);if(source)return source.sender_name||person(id);for(const assertion of item.assertions||[]){if(assertion.subject===id)return relationParticipant(item,assertion,'subject');if(assertion.object===id)return relationParticipant(item,assertion,'object')}return person(id)};
+   const people=new Map();if(item.subject)people.set(item.subject,labelFor(item.subject));for(const assertion of item.assertions||[]){if(assertion.subject)people.set(assertion.subject,labelFor(assertion.subject));if(assertion.object&&assertion.object_basis!=='literal')people.set(assertion.object,labelFor(assertion.object));}
+   for(const [id,label]of people){const inspect=button(actions,'查看 '+label,()=>{personID=id;personFilter.textContent='正在查看 '+label+'；';const clear=button(personFilter,'查看全部',()=>{personID='';personFilter.replaceChildren();load(true)},'quiet');clear.type='button';load(true)},'quiet');inspect.dataset.personId=id}
+  }
+  function relationRows(parent,item){
+   const assertions=item.assertions||[];if(!assertions.length){el(parent,'p','这条记录没有可展示的结构化关系。','hint');return}
+   relations(parent,item);
+  }
   function render(item){
-   const row=el(list,'article',undefined,'conversation-summary memory-experience-item');el(row,'h3',experienceLabel(item));
-   window.WechatDialogs.text(row,item.detail||item.summary||'未命名经历',{title:'完整共同经历'});
-   if(item.summary&&item.summary!==item.detail)el(row,'p',item.summary,'hint');
-   const refs=item.sources,speakers=new Map();
-   for(const ref of refs){
-    if(ref.sender)speakers.set(ref.sender,ref.sender_name||person(ref.sender));
-   }
-   const meta=['发言者：'+([...speakers.values()].join('、')||'未知')];
-   if(item.subject&&!speakers.has(item.subject))meta.push('相关人物：'+person(item.subject));
-   if(item.updated)meta.push('更新于 '+window.WechatActivity.time(item.updated));
-   meta.push('第 '+item.version+' 版');
-   el(row,'p',meta.join(' · '),'hint');
-   const detail=String(item.detail||item.summary||'').replace(/^\s*(?:成员|发言者)陈述：\s*/,'').trim();for(const ref of refs)if(ref.quote&&detail!==String(ref.quote).trim())el(row,'blockquote',ref.quote);
+   const relationView=view==='relations',structured=Array.isArray(item.assertions)&&item.assertions.length>0,row=el(list,'article',undefined,'conversation-summary memory-experience-item');el(row,'h3',relationView?'人物关系':experienceLabel(item));
+   if(relationView)relationRows(row,item);else{window.WechatDialogs.text(row,item.detail||item.summary||'未命名经历',{title:'完整共同经历'});if(item.summary&&item.summary!==item.detail)el(row,'p',item.summary,'hint');if(structured)relations(row,item)}
+   const refs=item.sources||[],speakers=new Map();for(const ref of refs)if(ref.sender)speakers.set(ref.sender,ref.sender_name||person(ref.sender));
+   const meta=['发言者：'+([...speakers.values()].join('、')||'未知')];if(item.subject&&!speakers.has(item.subject))meta.push('相关人物：'+person(item.subject));if(item.updated)meta.push('更新于 '+window.WechatActivity.time(item.updated));meta.push('第 '+item.version+' 版');el(row,'p',meta.join(' · '),'hint');
+   if(!relationView){const detail=String(item.detail||item.summary||'').replace(/^\s*(?:成员|发言者)陈述：\s*/,'').trim();for(const ref of refs)if(ref.quote&&detail!==String(ref.quote).trim())el(row,'blockquote',ref.quote)}
    const actions=el(row,'div',undefined,'dialog-actions');for(const [index,ref] of refs.entries()){const label=refs.length>1?'查看来源 '+(index+1)+(ref.sender_name||ref.sender?'（'+(ref.sender_name||person(ref.sender))+'）':''):'查看来源';button(actions,label,()=>source(scope,ref.event_id));}
+   if(view==='relations'||view==='open_commitments')personButtons(actions,item);
    button(actions,'完整记忆与修订',async()=>{try{showMemoryDetail('记忆来源与版本',await api('/api/memory/'+encodeURIComponent(scope)+'/entries/'+encodeURIComponent(item.id)))}catch(e){status.textContent=e.message}});
-   const entry={...item,sources:refs};button(actions,'更正',()=>correct(scope,entry,changed,true));
-   button(actions,'遗忘',async()=>{const confirm=window.WechatDialogs.open({title:'遗忘这段经历',subtitle:'这段经历不再用于自动召回；只读历史归档仍保留。'});button(confirm.body,'确认遗忘',async()=>{try{await api('/api/memory/'+encodeURIComponent(scope)+'/entries/'+encodeURIComponent(item.id),{method:'POST',json:{action:'forget',expected_revision:item.version}});confirm.close();changed()}catch(e){status.textContent=e.message}})});
+   if(!structured){const entry={...item,sources:refs};button(actions,'更正',()=>correct(scope,entry,changed,true));}
+   button(actions,'遗忘',()=>forget(item));
   }
   async function load(reset){
    if(busy&&!reset)return;if(reset){controller?.abort();cursor='';list.replaceChildren()}busy=true;controller=new AbortController();const current=controller;more.disabled=true;body.setAttribute('aria-busy','true');
-   try{const params=new URLSearchParams({limit:'20'});if(cursor)params.set('cursor',cursor);const data=await api('/api/companion/memory/'+encodeURIComponent(scope)+'/experiences?'+params,{signal:current.signal});if(!alive()||controller!==current)return;
+   try{const params=new URLSearchParams({limit:'20'});if(view)params.set('view',view);if(personID)params.set('person',personID);if(cursor)params.set('cursor',cursor);const data=await api('/api/companion/memory/'+encodeURIComponent(scope)+'/experiences?'+params,{signal:current.signal});if(!alive()||controller!==current)return;
     const items=data.items||[];for(const item of items)render(item);cursor=data.next_cursor||'';more.hidden=!data.has_more;
-    status.textContent=items.length||list.children.length?'只显示有来源的共同经历。':'这个会话还没有可展示的共同经历。';
-    if(!list.children.length)el(list,'p','暂时没有共同经历。之后形成的约定和可核对经历会显示在这里。','empty');
+    status.textContent=items.length||list.children.length?'只显示有来源的'+viewName()+'。':'这个会话还没有可展示的'+viewName()+'。';
+    if(!list.children.length)el(list,'p',view==='relations'?'暂时没有可展示的人物关系。':view==='open_commitments'?'暂时没有未完约定。':'暂时没有共同经历。之后形成的约定和可核对经历会显示在这里。','empty');
    }catch(e){if(!current.signal.aborted&&alive())status.textContent=e.message}finally{if(controller===current){busy=false;more.disabled=false;body.removeAttribute('aria-busy')}}
   }
+  viewPicker.addEventListener('change',()=>{view=viewPicker.value;personID='';personFilter.replaceChildren();load(true)});
   return {load,dispose:()=>controller?.abort()};
  }
  function reflectionPanel(scope,onChanged,body){
@@ -138,7 +145,7 @@
    status.textContent=data.status.events+' 条来源，'+data.status.entries+' 条派生记忆，'+data.status.vectors+' 条向量。'+(data.page.degraded?'当前使用词法检索。':'')+' '+(data.status.jobs||[]).map(x=>({idle:'已整理',running:'整理中',pending:'待整理',failed:'整理失败，稍后重试',budget_wait:'已达到自动维护预算'}[x.state]||x.state)).join('；');
    for(const hit of data.page.items||[]){const row=el(list,'article',undefined,'conversation-summary');if(hit.event){el(row,'h3','原始消息');window.WechatDialogs.text(row,hit.event.text,{title:'原始消息预览'});el(row,'p',hit.event.at+' · '+hit.event.sender,'hint');button(row,'查看完整来源',()=>source(scope,hit.event.id));continue}
     const m=hit.entry;el(row,'h3',(names[m.kind]||m.kind)+' · '+memoryState(m)+(m.pinned?' · 已固定':''));window.WechatDialogs.text(row,m.detail,{title:'完整长期记忆'});el(row,'p',person(m.subject)+' · 版本 '+m.version+(m.inference?' · 尚未确定':'')+(m.manual?' · 主动笔记':''),'hint');relations(row,m);
-    const refreshAll=()=>{onChanged?.();load(true)},actions=el(row,'div',undefined,'dialog-actions');for(const ref of m.sources||[])button(actions,'查看来源',()=>source(scope,ref.event_id));button(actions,'完整记忆与修订',async()=>{try{showMemoryDetail('记忆来源与版本',await api('/api/memory/'+scope+'/entries/'+m.id))}catch(e){status.textContent=e.message}});button(actions,'更正',()=>correct(scope,m,refreshAll));
+    const refreshAll=()=>{onChanged?.();load(true)},actions=el(row,'div',undefined,'dialog-actions');for(const ref of m.sources||[])button(actions,'查看来源',()=>source(scope,ref.event_id));button(actions,'完整记忆与修订',async()=>{try{showMemoryDetail('记忆来源与版本',await api('/api/memory/'+scope+'/entries/'+m.id))}catch(e){status.textContent=e.message}});if(!(m.assertions||[]).length)button(actions,'更正',()=>correct(scope,m,refreshAll));
     for(const [action,label]of [[m.pinned?'unpin':'pin',m.pinned?'取消固定':'固定'],['forget','遗忘']])button(actions,label,async()=>{if(action==='forget'){const confirm=window.WechatDialogs.open({title:'遗忘这条记忆',subtitle:'该记忆及其来源不再用于自动召回；只读历史归档仍保留。'});button(confirm.body,'确认遗忘',async()=>{await change();confirm.close()})}else await change();async function change(){try{await api('/api/memory/'+scope+'/entries/'+m.id,{method:'POST',json:{action,expected_revision:m.version}});refreshAll()}catch(e){status.textContent=e.message}}});
    }cursor=data.page.next_cursor||'';more.hidden=!data.page.has_more;if(!list.children.length)el(list,'p','没有匹配记忆。自动整理完成后可在这里检查来源。','empty');
   }catch(e){if(!current.signal.aborted&&p.alive())status.textContent=e.message}finally{if(controller===current){busy=false;more.disabled=false;p.body.removeAttribute('aria-busy')}}}

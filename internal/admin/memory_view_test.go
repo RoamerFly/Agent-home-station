@@ -13,6 +13,79 @@ import (
 
 type memorySummaryModel struct{}
 
+func TestTextCorrectionCannotSilentlyEraseRelationship(t *testing.T) {
+	f := setup(t)
+	cfg := f.manager.Config().Companion
+	cfg.Permissions.Remember = true
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "garden@chatroom", IsGroup: true, TraceID: "visit", Sender: "member", Text: "我爸来看花。"}
+	scope := companion.ScopeID(in.Channel, in.Account, in.Thread)
+	if err := f.manager.memory.Observe(in, cfg, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	record, err := f.manager.memory.Read(scope, cfg, time.Now())
+	if err != nil || len(record.Messages) != 1 {
+		t.Fatalf("missing source: %v", err)
+	}
+	event, err := f.manager.memory.ReadEvent(t.Context(), []string{scope}, record.Messages[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := f.manager.memory.SaveMemory(t.Context(), companion.MemoryEntry{
+		Scope: scope, Subject: in.Sender, Kind: "fact", Detail: in.Text,
+		Sources: []companion.MemorySource{{EventID: event.ID, Quote: in.Text}},
+		Assertions: []companion.MemoryAssertion{{
+			Subject: in.Sender, Predicate: "father", Object: "relative:member:father", AssertedBy: in.Sender, State: "explicit",
+			SubjectBasis: "speaker", SubjectText: "我", ObjectBasis: "relative", ObjectText: "爸", PredicateText: "爸",
+			Sources: []companion.AssertionSource{{EventID: event.ID, EventRevision: event.Revision, Quote: in.Text}},
+		}},
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.login()
+	code, _, _ := f.request("POST", "/api/memory/"+scope+"/entries/"+entry.ID,
+		map[string]any{"action": "correct", "detail": "来看花", "expected_revision": entry.Version, "sources": entry.Sources}, true, true)
+	got, err := f.manager.memory.ReadMemory(t.Context(), []string{scope}, entry.ID)
+	if code != 400 || err != nil || got.Version != entry.Version || len(got.Assertions) != 1 {
+		t.Fatalf("text edit changed a relationship: status=%d, version=%d, err=%v", code, got.Version, err)
+	}
+}
+
+func TestExperienceViewsRequireCurrentAccountAndKnownView(t *testing.T) {
+	f := setup(t)
+	cfg := f.manager.Config().Companion
+	cfg.Permissions.Remember = true
+	for _, account := range []string{"test", "other-account"} {
+		in := companion.Input{Channel: "wechat", Account: account, Thread: "garden@chatroom", IsGroup: true, TraceID: "synthetic", Sender: "member", Text: "明天见。"}
+		if err := f.manager.memory.Observe(in, cfg, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := func(account string) string {
+		return "/api/companion/memory/" + companion.ScopeID("wechat", account, "garden@chatroom") + "/experiences"
+	}
+	for _, view := range []string{"relations", "open_commitments"} {
+		if code, _, _ := f.request("GET", path("test")+"?view="+view, nil, false, false); code != 401 {
+			t.Fatalf("anonymous %s: %d", view, code)
+		}
+	}
+	f.login()
+	if code, _, _ := f.request("GET", path("test")+"?view=unsupported", nil, false, false); code != 400 {
+		t.Fatalf("unknown view returned %d", code)
+	}
+	for _, view := range []string{"relations", "open_commitments"} {
+		query := "?view=" + view + "&person=member"
+		if code, _, _ := f.request("GET", path("other-account")+query, nil, false, false); code != 404 {
+			t.Fatalf("cross-account %s: %d", view, code)
+		}
+		code, body, _ := f.request("GET", path("test")+query, nil, false, false)
+		var page companion.SharedExperiencePage
+		if code != 200 || json.Unmarshal(body, &page) != nil || page.Items == nil || len(page.Items) != 0 {
+			t.Fatalf("unbound remark appeared as %s: %d %s", view, code, body)
+		}
+	}
+}
+
 func (memorySummaryModel) Chat(context.Context, string, []map[string]string) (string, error) {
 	return `{"version":1,"people":[],"topics":[],"current_focus":"synthetic summary","media":[],"pending_tasks":[],"preferences":[],"corrections":[]}`, nil
 }

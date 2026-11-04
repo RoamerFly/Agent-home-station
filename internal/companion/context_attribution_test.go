@@ -45,4 +45,12 @@ func TestRecalledRelationKeepsSpeakerAndSubjectAcrossToolRounds(t *testing.T) {
 	}
 	check(packet)
 	check(engine.refreshMemoryPackets(t.Context(), turns)[0]["content"])
+	relations, err := store.ListSharedExperiences(t.Context(), entry.Scope, ExperienceQuery{View: "relations", Person: "bob"})
+	if err != nil || len(relations.Items) != 1 || relations.Items[0].ID != saved.ID || len(relations.Items[0].Assertions) != 1 {
+		t.Fatalf("workbench did not return the recalled relation: %#v, %v", relations, err)
+	}
+	a := relations.Items[0].Assertions[0]
+	if a.AssertedBy != "alice" || a.Subject != "bob" || a.Object != "relative:bob:father" || a.State != "reported" || len(a.Sources) != 1 || a.Sources[0].EventRevision != source.Revision {
+		t.Fatalf("workbench lost chat attribution: %+v", a)
+	}
 }

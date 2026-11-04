@@ -55,8 +55,16 @@ func TestMemoryBrowserFixture(t *testing.T) {
 	observe("postcard-rescheduled", "改到周一一起画海边明信片。")
 	in.Sender, in.SenderName = "lin", "小林"
 	visit := observe("visiting-wedding", "今天参加同事家的喜酒，盼我儿子以后也有这一天。")
+	visitEvent, e := m.memory.ReadEvent(t.Context(), []string{id}, visit[0].EventID)
+	if e != nil {
+		t.Fatal(e)
+	}
 	statement := "发言者陈述：" + visit[0].Quote
-	if _, e = m.memory.SaveMemory(t.Context(), companion.MemoryEntry{Scope: id, Subject: in.Sender, Kind: "episode", Detail: statement, Summary: statement, Sources: visit}, 0); e != nil {
+	if _, e = m.memory.SaveMemory(t.Context(), companion.MemoryEntry{Scope: id, Subject: in.Sender, Kind: "episode", Detail: statement, Summary: statement, Sources: visit, Assertions: []companion.MemoryAssertion{{
+		Subject: in.Sender, Predicate: "child", Object: "relative:" + in.Sender + ":child", AssertedBy: in.Sender, State: "explicit",
+		SubjectBasis: "speaker", SubjectText: "我", ObjectBasis: "relative", ObjectText: "儿子", PredicateText: "儿子",
+		Sources: []companion.AssertionSource{{EventID: visitEvent.ID, EventRevision: visitEvent.Revision, Quote: "我儿子"}},
+	}}}, 0); e != nil {
 		t.Fatal(e)
 	}
 	seedVideoReflection(t, m, in)

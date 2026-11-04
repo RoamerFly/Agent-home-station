@@ -50,6 +50,10 @@ func TestSharedExperienceStoryUsesCurrentVersionsAndSourceVisibility(t *testing.
 		if got.ID != want.ID || got.Version != want.Version || got.Detail != want.Detail || len(got.Sources) != 2 || got.Sources[0].EventID != first.ID || got.Sources[1].EventID != second.ID {
 			t.Fatalf("experience projection detached from current source-backed version: %#v", got)
 		}
+		open, err := store.ListSharedExperiences(ctx, scope, ExperienceQuery{View: "open_commitments", Person: in.Sender})
+		if err != nil || len(open.Items) != 1 || open.Items[0].ID != got.ID || open.Items[0].Version != got.Version || open.Items[0].Detail != got.Detail {
+			t.Fatalf("open commitment diverged from the rescheduled experience: %#v, %v", open, err)
+		}
 	}
 	assertExperience(corrected)
 

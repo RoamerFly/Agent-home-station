@@ -116,8 +116,9 @@ func (s *Server) memoryExperiences(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "会话不存在")
 		return
 	}
-	q := companion.ExperienceQuery{Cursor: r.URL.Query().Get("cursor")}
-	if raw := r.URL.Query().Get("limit"); raw != "" {
+	params := r.URL.Query()
+	q := companion.ExperienceQuery{Cursor: params.Get("cursor"), View: params.Get("view"), Person: params.Get("person")}
+	if raw := params.Get("limit"); raw != "" {
 		q.Limit, err = strconv.Atoi(raw)
 		if err != nil || q.Limit < 1 || q.Limit == int(^uint(0)>>1) {
 			fail(w, 400, "分页条数无效")
@@ -126,12 +127,14 @@ func (s *Server) memoryExperiences(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := s.manager.memory.ListSharedExperiences(r.Context(), scope.ID, q)
 	if err != nil {
+		if errors.Is(err, companion.ErrInvalidExperienceQuery) {
+			fail(w, 400, "经历视图或筛选条件无效")
+			return
+		}
 		if errors.Is(err, companion.ErrMemoryConflict) {
 			fail(w, 409, "记忆已更新，请重新打开共同经历")
 			return
 		}
-		// Query syntax/range was already checked above. A remaining failure is
-		// a local store/read problem, not an invalid request from the UI.
 		fail(w, 500, "共同经历暂时不可读取")
 		return
 	}
