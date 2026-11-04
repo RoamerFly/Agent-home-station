@@ -22,6 +22,9 @@ func (p *permittedTools) synthesizeLibraryVoice(ctx context.Context, raw json.Ra
 }
 
 func (policy *namedSpeechPluginPolicy) stage(ctx context.Context) (string, error) {
+	if policy.targetID != "" {
+		return "", errors.New("rvc_reference_not_deliverable")
+	}
 	p := policy.p
 	result := policy.checkpoint.Result
 	data, err := policy.readAudio(ctx)

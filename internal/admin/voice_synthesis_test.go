@@ -113,7 +113,7 @@ func TestJointSpeechToolKeepsDefaultInstructionSeparateFromNamedTuning(t *testin
 
 func completeSyntheticNamedSpeech(t *testing.T) (*webFixture, *permittedTools, *namedSpeechPluginPolicy) {
 	t.Helper()
-	f, p, policy, job, cap := namedSpeechContractFixture(t)
+	f, p, policy, _, cap := namedSpeechContractFixture(t)
 	var err error
 	// Remember is part of the request authority. Mint a new request after
 	// enabling it so durable asset assertions do not alter an existing grant.
@@ -124,7 +124,13 @@ func completeSyntheticNamedSpeech(t *testing.T) (*webFixture, *permittedTools, *
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, _, err = policy.store.CreateJob(t.Context(), pluginhost.Job{Plugin: "speech", Tool: "speech.synthesize_named", Version: policy.packageVersion, PackageDigest: policy.packageDigest, ConfigRevision: strconv.Itoa(policy.configRevision), Context: policy.invocation, Arguments: policy.arguments})
+	completeNamedSpeechCheckpoint(t, policy, cap)
+	return f, p, policy
+}
+
+func completeNamedSpeechCheckpoint(t *testing.T, policy *namedSpeechPluginPolicy, cap pluginhost.Capability) {
+	t.Helper()
+	job, _, err := policy.store.CreateJob(t.Context(), pluginhost.Job{Plugin: "speech", Tool: "speech.synthesize_named", Version: policy.packageVersion, PackageDigest: policy.packageDigest, ConfigRevision: strconv.Itoa(policy.configRevision), Context: policy.invocation, Arguments: policy.arguments})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +152,6 @@ func completeSyntheticNamedSpeech(t *testing.T) (*webFixture, *permittedTools, *
 	if err != nil || calls != 1 {
 		t.Fatal("synthetic inference did not produce one completed checkpoint", err, calls)
 	}
-	return f, p, policy
 }
 
 func TestNamedVoiceCompletedCheckpointStagesActualWAVAndDurableVoiceIdentity(t *testing.T) {

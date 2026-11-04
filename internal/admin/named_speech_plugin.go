@@ -141,6 +141,7 @@ var (
 
 type namedSpeechPluginPolicy struct {
 	p                                            *permittedTools
+	targetID                                     string // Only for an internal RVC reference recording.
 	resource                                     namedSpeechResource
 	request                                      namedSpeechRequest
 	invocation                                   pluginhost.Invocation
@@ -160,6 +161,10 @@ type namedSpeechPluginPolicy struct {
 }
 
 func (p *permittedTools) newNamedSpeechPluginPolicy(ctx context.Context, raw json.RawMessage) (*namedSpeechPluginPolicy, error) {
+	return p.namedSpeechPolicy(ctx, raw, "")
+}
+
+func (p *permittedTools) namedSpeechPolicy(ctx context.Context, raw json.RawMessage, targetID string) (*namedSpeechPluginPolicy, error) {
 	in, err := decodeNamedSpeechRequest(raw)
 	if err != nil {
 		return nil, err
@@ -169,6 +174,9 @@ func (p *permittedTools) newNamedSpeechPluginPolicy(ctx context.Context, raw jso
 	}
 	resource, err := p.namedSpeechResource(ctx, in.VoiceID, in.Files)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.checkSpeechBinding(in.VoiceID, targetID); err != nil {
 		return nil, err
 	}
 	store, err := p.manager.packageStore()
@@ -226,7 +234,10 @@ func (p *permittedTools) newNamedSpeechPluginPolicy(ctx context.Context, raw jso
 	publicRequest, _ := json.Marshal(in)
 	grants, _ := json.Marshal(installed.Permissions)
 	inv := pluginhost.Invocation{Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.serviceRequester(), Purpose: "synthesize named registered speech", RequestKey: "named-speech-" + agentID(p.trace.Account, p.trace.Thread, p.serviceRequester(), p.trace.TaskID, p.trace.TraceID, string(publicRequest)), EvidenceEpoch: epoch, Authorization: auth, SourceVersions: sources}
-	return &namedSpeechPluginPolicy{p: p, resource: resource, request: in, invocation: inv, arguments: args, store: store, configRevision: cfg.Revision, packageDigest: installed.Digest, packageVersion: installed.Package.Version, manifestProof: proof, grantProof: string(grants)}, nil
+	if targetID != "" {
+		inv.RequestKey = "named-speech-" + agentID(inv.RequestKey, "rvc-reference", targetID)
+	}
+	return &namedSpeechPluginPolicy{p: p, targetID: targetID, resource: resource, request: in, invocation: inv, arguments: args, store: store, configRevision: cfg.Revision, packageDigest: installed.Digest, packageVersion: installed.Package.Version, manifestProof: proof, grantProof: string(grants)}, nil
 }
 
 func (p *namedSpeechPluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
@@ -288,6 +299,9 @@ func (p *namedSpeechPluginPolicy) Check(ctx context.Context, j pluginhost.Job, c
 	proof, ok, err := namedSpeechManifestResourceProof(ctx, p.p.executionContext().Public)
 	if err != nil || !ok || proof != p.manifestProof {
 		return errors.New("named_speech_registration_changed")
+	}
+	if err := p.p.checkSpeechBinding(p.request.VoiceID, p.targetID); err != nil {
+		return err
 	}
 	r, err := p.p.namedSpeechResource(ctx, p.request.VoiceID, p.request.Files)
 	if err != nil || r.Version != p.resource.Version {

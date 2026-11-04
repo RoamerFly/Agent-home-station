@@ -194,11 +194,14 @@ func namedSpeechSyntheticRunner(t *testing.T, p *namedSpeechPluginPolicy, calls 
 		}
 		output := namedSpeechArg(argv, "--output")
 		wav := syntheticNamedSpeechWAV()
+		if p.targetID != "" {
+			wav = syntheticReferenceWAV(t, 2)
+		}
 		if err := os.WriteFile(output, wav, 0600); err != nil {
 			t.Fatal(err)
 		}
 		report := namedSpeechRunnerResult{
-			Output: output, SampleRate: 8000, Seconds: float64(2) / 8000, SHA256: namedSpeechSHA(wav),
+			Output: output, SampleRate: 8000, Seconds: float64(len(wav)-44) / 16000, SHA256: namedSpeechSHA(wav),
 			Device: p.request.Device, Version: p.request.Version, GPT: namedSpeechArg(argv, "--gpt"), SoVITS: namedSpeechArg(argv, "--sovits"),
 			GPTSHA256: p.resource.GPT.Hash, SoVITSSHA256: p.resource.SoVITS.Hash, ReferenceSHA256: p.resource.Reference.Hash,
 			PromptSHA256: namedSpeechSHA([]byte("合成参考文本")), TextSHA256: namedSpeechSHA([]byte(p.request.Text)), WeChatSends: 0,

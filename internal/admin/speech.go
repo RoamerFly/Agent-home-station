@@ -195,6 +195,10 @@ func (p *permittedTools) speechTools() []mcptools.Tool {
 			input = "Input {text,instruction?,timeout_seconds?}."
 		}
 		description += " Returns prepared media IDs, not delivery; final reply.media_ids sends voice. Private voices require trusted owner; no substitution. Named file_ids selects exact weights/references; parameters adjusts inference without changing source identity. Named timeout defaults600, cloud180, adjustable; named device defaults cuda, cpu explicit. " + input
+		if p.enabled("music_rvc_start") {
+			schema = strings.Replace(schema, `"properties":{`, `"properties":{"rvc_target_id":{"type":"string","minLength":1,"description":"Final registered RVC voice ID for spoken text. The source recording is never sent."},`, 1)
+			description += " For a spoken request in an RVC character voice, pass rvc_target_id from voice_library_read. In this mode voice_id selects only the source TTS (required if cloud TTS is unavailable). Returns the conversion job for automatic follow-up."
+		}
 		out = append(out, agentTool("speech_synthesize", description, schema))
 	}
 	musicInstalled, musicErr := p.manager.installedServiceState(context.Background(), "music", "music")
@@ -218,11 +222,23 @@ func (p *permittedTools) preflightSpeechArgs(name string, args json.RawMessage) 
 	if err := json.Unmarshal(args, &selected); err != nil {
 		return toolInputError("speech_arguments_must_be_an_object")
 	}
+	base, target, err := splitRVCTarget(args)
+	if err != nil {
+		return err
+	}
 	if selected.VoiceID != "" {
-		if _, err := decodeNamedSpeechRequest(args); err != nil {
+		if _, err := decodeNamedSpeechRequest(base); err != nil {
 			return err
 		}
 	}
+	if target == "" {
+		voices, err := p.accessibleVoices()
+		if err != nil {
+			return err
+		}
+		return validateRequestedSpeechVoice(p.voiceRequestText(), selected.VoiceID, voices)
+	}
+
 	return nil
 }
 
@@ -234,6 +250,15 @@ func (p *permittedTools) callSpeech(ctx context.Context, name string, args json.
 	if err := p.preflightSpeechArgs(name, args); err != nil {
 		return "", err
 	}
+	if name == "speech_synthesize" {
+		base, target, err := splitRVCTarget(args)
+		if err != nil {
+			return "", err
+		}
+		if target != "" {
+			return p.speakWithRVC(ctx, base, target)
+		}
+	}
 	return p.privilegedCall(ctx, name, args, func() (any, error) {
 		result, err := p.generateSpeech(ctx, name, args)
 		if err != nil {
@@ -244,6 +269,13 @@ func (p *permittedTools) callSpeech(ctx context.Context, name string, args json.
 		return output, err
 	})
 }
+func (p *permittedTools) voiceRequestText() string {
+	if p.trace.RequestedText != "" {
+		return p.trace.RequestedText
+	}
+	return companion.UserRequestText(p.trace.Text)
+}
+
 func (p *permittedTools) generateSpeech(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	if name == "speech_synthesize" {
 		var selected struct {
@@ -256,11 +288,7 @@ func (p *permittedTools) generateSpeech(ctx context.Context, name string, args j
 		if err != nil {
 			return "", err
 		}
-		request := p.trace.RequestedText
-		if request == "" {
-			request = companion.UserRequestText(p.trace.Text)
-		}
-		if err = validateRequestedSpeechVoice(request, selected.VoiceID, voices); err != nil {
+		if err = validateRequestedSpeechVoice(p.voiceRequestText(), selected.VoiceID, voices); err != nil {
 			return "", err
 		}
 		if selected.VoiceID == "" {

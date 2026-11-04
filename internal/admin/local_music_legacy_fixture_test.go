@@ -18,7 +18,7 @@ import (
 // into an installed official package. Only the isolated process boundary is
 // simulated: Controller, call authority, HTTP, validation and private results
 // use the production path, and classification runs the installed Python code.
-func installLegacyLocalMusicPlugin(t *testing.T, m *Manager) {
+func installLegacyLocalMusicPlugin(t *testing.T, m *Manager) legacyLocalMusicExecutor {
 	t.Helper()
 	store, err := m.packageStore()
 	if err != nil {
@@ -56,13 +56,15 @@ func installLegacyLocalMusicPlugin(t *testing.T, m *Manager) {
 	if err != nil {
 		t.Fatal("official local music classifier requires Python", err)
 	}
-	controller, err := pluginruntime.NewController(store, legacyLocalMusicExecutor{python: python, module: filepath.Join(dir, "runtime", "local_music.py")})
+	executor := legacyLocalMusicExecutor{python: python, module: filepath.Join(dir, "runtime", "local_music.py")}
+	controller, err := pluginruntime.NewController(store, executor)
 	if err != nil {
 		t.Fatal(err)
 	}
 	m.packageMu.Lock()
 	m.packageRuntime, m.packageRuntimeReady = controller, true
 	m.packageMu.Unlock()
+	return executor
 }
 
 type legacyLocalMusicExecutor struct{ python, module string }

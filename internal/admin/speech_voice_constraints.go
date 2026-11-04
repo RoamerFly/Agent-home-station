@@ -8,20 +8,26 @@ import (
 
 // Library names are evidence for a missing explicit selection, never a reason
 // to pick weights automatically. The actual identity is always a voice ID.
+func voiceMentioned(request string, v voiceEntry) bool {
+	for _, name := range []string{v.Name, v.Role} {
+		if len([]rune(name)) >= 2 && regexp.MustCompile(`(?i)(^|[^a-z0-9_])`+regexp.QuoteMeta(name)+`($|[^a-z0-9_])`).MatchString(request) {
+			return true
+		}
+	}
+	return false
+}
+
 func validateRequestedSpeechVoice(request, voiceID string, voices []voiceEntry) error {
 	matched := false
 	selected := false
 	for _, v := range voices {
-		if len([]rune(v.Name)) < 2 {
-			continue
-		}
-		if regexp.MustCompile(`(?i)(^|[^a-z0-9_])` + regexp.QuoteMeta(v.Name) + `($|[^a-z0-9_])`).MatchString(request) {
+		if voiceMentioned(request, v) {
 			matched = true
 			selected = selected || v.ID == voiceID && voiceID != ""
 		}
 	}
 	if matched && !selected {
-		return &RuntimeFailure{Code: "named_voice_selection_required", Stage: "selection", Message: "请求指定了登记声线，需传匹配的voice_id；未提交默认声线替代", NotStarted: true, Continuation: "先voice_library_list/read确认对应说话声线，再用speech_synthesize传入voice_id"}
+		return &RuntimeFailure{Code: "named_voice_selection_required", Stage: "selection", Message: "请求指定了登记声线，需传匹配的voice_id；未提交默认声线替代", NotStarted: true, Continuation: "先用voice_library_list/read核对角色；GPT-SoVITS用voice_id，RVC朗读用rvc_target_id指定最终声线"}
 	}
 	return nil
 }

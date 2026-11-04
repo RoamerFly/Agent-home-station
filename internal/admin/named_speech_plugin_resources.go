@@ -150,9 +150,6 @@ func (p *permittedTools) namedSpeechResource(ctx context.Context, id string, fil
 	if !voice.Public && (!p.privileged() || !p.manager.agent.config().CrossConversation) {
 		return namedSpeechResource{}, toolInputError("private_voice_prepare_requires_owner_account_global_access")
 	}
-	if err := p.bindTaskSpeechVoice(voice.ID); err != nil {
-		return namedSpeechResource{}, err
-	}
 	wanted := map[string]bool{}
 	for _, file := range files {
 		if file == "" || wanted[file] {

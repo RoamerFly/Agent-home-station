@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -18,21 +17,29 @@ import (
 	"wechat-bot/internal/companion"
 )
 
-// Direct conversion consumes an actual cached recording. It never rewrites
-// lyrics or submits a YuE prompt. Delivery uses the existing durable song path.
+type rvcRequest struct {
+	Title        string   `json:"title"`
+	Reference    string   `json:"reference_asset_id"`
+	Start        *float64 `json:"reference_start_seconds"`
+	Seconds      *float64 `json:"reference_seconds"`
+	Kind         string   `json:"kind"`
+	VoiceProfile string   `json:"voice_profile_id"`
+	VoiceID      string   `json:"voice_id"`
+}
+
+// A cached recording and a private speech reference share the same conversion
+// and durable delivery path. Only the authorized reader supplies the bytes.
 func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage) (string, error) {
-	var in struct {
-		Title        string   `json:"title"`
-		Reference    string   `json:"reference_asset_id"`
-		Start        *float64 `json:"reference_start_seconds"`
-		Seconds      *float64 `json:"reference_seconds"`
-		Kind         string   `json:"kind"`
-		VoiceProfile string   `json:"voice_profile_id"`
-		VoiceID      string   `json:"voice_id"`
-	}
+	var in rvcRequest
 	if json.Unmarshal(raw, &in) != nil || songTitle(in.Title) == "" || in.Reference == "" {
 		return "", toolInputError("RVC翻唱需要具体title和本会话的原录音reference_asset_id")
 	}
+	return p.startRVCWithReference(ctx, in, func() (mediaAsset, []byte, error) {
+		return p.referenceAsset(in.Reference)
+	})
+}
+
+func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcRequest, readReference func() (mediaAsset, []byte, error)) (string, error) {
 	voices, voiceErr := p.accessibleVoices()
 	if voiceErr != nil {
 		return "", voiceErr
@@ -40,11 +47,7 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 	// A remembered/requested name is not a model selection. Require an actual
 	// registered identity when a known voice is named; never infer a new model
 	// from the song title and silently run the character's default weights.
-	request := p.trace.RequestedText
-	if request == "" {
-		request = companion.UserRequestText(p.trace.Text)
-	}
-	if err := validateRequestedRVCVoice(request+" "+in.Title, in.VoiceID, in.VoiceProfile, voices); err != nil {
+	if err := validateRequestedRVCVoice(p.voiceRequestText()+" "+in.Title, in.VoiceID, in.VoiceProfile, voices); err != nil {
 		return "", err
 	}
 	if in.VoiceID != "" {
@@ -101,10 +104,11 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 	if !p.musicKindPermitted(in.Kind) {
 		return "", toolInputError("翻唱发送格式未授权")
 	}
-	asset, data, err := p.referenceAsset(in.Reference)
+	asset, data, err := readReference()
 	if err != nil {
 		return "", err
 	}
+	in.Reference = asset.ID
 	duration, err := probeRVCAudioDuration(ctx, p.manager.dir, data)
 	if err != nil {
 		return "", err
@@ -253,11 +257,7 @@ func (p *permittedTools) prepareRVCRequest(ctx context.Context, health []byte, t
 func validateRequestedRVCVoice(request, voiceID, profileID string, voices []voiceEntry) error {
 	named := []voiceEntry{}
 	for _, v := range voices {
-		if len([]rune(v.Name)) < 2 {
-			continue
-		}
-		pattern := `(?i)(^|[^a-z0-9_])` + regexp.QuoteMeta(v.Name) + `($|[^a-z0-9_])`
-		if regexp.MustCompile(pattern).MatchString(request) {
+		if voiceMentioned(request, v) {
 			named = append(named, v)
 		}
 	}

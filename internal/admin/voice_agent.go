@@ -171,7 +171,8 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 				row["usage"] = "先project_read({id:gpt-sovits})读取登记的GPT-SoVITS项目、真实解释器和CLI。voice_library_prepare取得明确选定的GPT/SoVITS配对权重、参考音频及其转录；优先speech_synthesize(voice_id,text)。自定义命令在Windows使用server_windows_process(global=true,gpu=true)，Linux使用server_process(global=true,gpu=true)，工作目录选账号受管工作区；不需要访问源码仓库根目录。不因在群里发起而拒绝真实管理员，也不能只查看旧目录后宣称本机未安装。生成后核验实际音频再发送。"
 			}
 			if v.ProfileID != "" {
-				row["music_rvc_start"] = map[string]string{"voice_profile_id": v.ProfileID}
+				row["music_rvc_start"] = map[string]string{"voice_id": v.ID, "voice_profile_id": v.ProfileID}
+				row["spoken_text"] = map[string]string{"tool": "speech_synthesize", "rvc_target_id": v.ID, "usage": "朗读文字时直接传 text 和 rvc_target_id。voice_id 仅选择底稿 TTS；仅有本地语音时需选一个可用 GPT-SoVITS 底稿声线。底稿不投递。"}
 			}
 			return encode(row)
 		}
