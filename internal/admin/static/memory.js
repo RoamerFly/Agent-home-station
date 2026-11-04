@@ -4,10 +4,17 @@
  const {element: el, button} = window.WechatControls;
  function field(parent,label,value='',type='text'){const l=el(parent,'label',label),n=el(l,type==='textarea'?'textarea':'input');if(type!=='textarea')n.type=type;n.value=value;return n}
  const names={fact:'事实',preference:'偏好',episode:'事件',lesson:'经验'},states={active:'有效',conflicted:'待核实',superseded:'已更正',deleted:'已遗忘'};
+ function memoryState(item){
+  if(item.status==='active' && item.commitment_state){
+   const label={open:'约定待办',ended:'约定已结束',cancelled:'约定已取消'}[item.commitment_state];
+   if(label)return label;
+  }
+  return states[item.status]||item.status||'已保存';
+ }
  function showMemoryDetail(title,data){
   const p=window.WechatDialogs.open({title});
   if(data.detail){
-   for(const item of [data,...(data.revisions||[])]){const card=el(p.body,'article',undefined,'conversation-summary');el(card,'h3',(item===data?'当前内容':'此前内容')+' · 第 '+item.version+' 版');el(card,'p',item.detail,'round-body');el(card,'p',states[item.status]||'已保存','hint');for(const ref of item.sources||[])if(ref.quote)el(card,'blockquote',ref.quote)}
+   for(const item of [data,...(data.revisions||[])]){const card=el(p.body,'article',undefined,'conversation-summary');el(card,'h3',(item===data?'当前内容':'此前内容')+' · 第 '+item.version+' 版');el(card,'p',item.detail,'round-body');el(card,'p',memoryState(item),'hint');for(const ref of item.sources||[])if(ref.quote)el(card,'blockquote',ref.quote)}
   }else{
    el(p.body,'p',(data.events||0)+' 条来源 · '+(data.entries||0)+' 条长期记忆');
    const jobs=data.jobs||[];if(!jobs.length)el(p.body,'p','暂无需要整理的会话。','hint');
@@ -25,7 +32,7 @@
   async function load(reset){if(busy){controller?.abort()}busy=true;controller=new AbortController();const current=controller;if(reset){cursor='';list.replaceChildren()}more.disabled=true;p.body.setAttribute('aria-busy','true');try{const params=new URLSearchParams({query:q.value,originals:String(original.checked)});if(cursor)params.set('cursor',cursor);const data=await api('/api/memory/'+scope+'?'+params,{signal:current.signal});if(!p.alive()||controller!==current)return;
    status.textContent=data.status.events+' 条来源，'+data.status.entries+' 条派生记忆，'+data.status.vectors+' 条向量。'+(data.page.degraded?'当前使用词法检索。':'')+' '+(data.status.jobs||[]).map(x=>({idle:'已整理',running:'整理中',pending:'待整理',failed:'整理失败，稍后重试',budget_wait:'已达到自动维护预算'}[x.state]||x.state)).join('；');
    for(const hit of data.page.items||[]){const row=el(list,'article',undefined,'conversation-summary');if(hit.event){el(row,'h3','原始消息');window.WechatDialogs.text(row,hit.event.text,{title:'原始消息预览'});el(row,'p',hit.event.at+' · '+hit.event.sender,'hint');button(row,'查看完整来源',()=>source(scope,hit.event.id));continue}
-    const m=hit.entry;el(row,'h3',(names[m.kind]||m.kind)+' · '+(states[m.status]||m.status)+(m.pinned?' · 已固定':''));window.WechatDialogs.text(row,m.detail,{title:'完整长期记忆'});el(row,'p',person(m.subject)+' · 版本 '+m.version+(m.inference?' · 尚未确定':'')+(m.manual?' · 主动笔记':''),'hint');relations(row,m);
+    const m=hit.entry;el(row,'h3',(names[m.kind]||m.kind)+' · '+memoryState(m)+(m.pinned?' · 已固定':''));window.WechatDialogs.text(row,m.detail,{title:'完整长期记忆'});el(row,'p',person(m.subject)+' · 版本 '+m.version+(m.inference?' · 尚未确定':'')+(m.manual?' · 主动笔记':''),'hint');relations(row,m);
     const actions=el(row,'div',undefined,'dialog-actions');for(const ref of m.sources||[])button(actions,'查看来源',()=>source(scope,ref.event_id));button(actions,'完整记忆与修订',async()=>{try{showMemoryDetail('记忆来源与版本',await api('/api/memory/'+scope+'/entries/'+m.id))}catch(e){status.textContent=e.message}});button(actions,'更正',()=>correct(scope,m,()=>load(true)));
     for(const [action,label]of [[m.pinned?'unpin':'pin',m.pinned?'取消固定':'固定'],['forget','遗忘']])button(actions,label,async()=>{if(action==='forget'){const confirm=window.WechatDialogs.open({title:'遗忘这条记忆',subtitle:'该记忆及其来源不再用于自动召回；只读历史归档仍保留。'});button(confirm.body,'确认遗忘',async()=>{await change();confirm.close()})}else await change();async function change(){try{await api('/api/memory/'+scope+'/entries/'+m.id,{method:'POST',json:{action,expected_revision:m.version}});await load(true)}catch(e){status.textContent=e.message}}});
    }cursor=data.page.next_cursor||'';more.hidden=!data.page.has_more;if(!list.children.length)el(list,'p','没有匹配记忆。自动整理完成后可在这里检查来源。','empty');

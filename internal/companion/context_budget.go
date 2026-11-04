@@ -128,6 +128,17 @@ func (e *Engine) memoryContext(ctx context.Context, in Input, scope Scope) strin
 	coreBudget := e.memorySettings().ContinuityTokens
 	core, _ := e.Store.SearchMemory(ctx, MemoryQuery{Scopes: []string{id}, Query: query, EventYear: q.EventYear, Pinned: true, Limit: 16})
 	page.Items = append(core.Items, page.Items...)
+	// A follow-up need not repeat the words that occurred when an open shared
+	// plan was recorded. For a direct conversation, add only open commitments
+	// belonging to the current participant from this exact scope. SQL applies
+	// those filters before the page limit, rather than fetching arbitrary pinned
+	// material and hoping it survives a later Go-side filter. They still pass
+	// normal source, correction and forgetting filters; the model decides
+	// whether a commitment actually answers the natural-language request.
+	if !in.IsGroup && in.Sender != "" && !runtimeInput(in) && in.Mode != "proactive" {
+		continuity, _ := e.Store.SearchMemory(ctx, MemoryQuery{Scopes: []string{id}, Subject: in.Sender, EventYear: q.EventYear, Pinned: true, Continuity: true, CommitmentState: "open", Limit: 8})
+		page.Items = append(continuity.Items, page.Items...)
+	}
 	seen := map[string]bool{}
 	items := []map[string]any{}
 	for _, hit := range page.Items {
@@ -151,8 +162,20 @@ func (e *Engine) memoryContext(ctx context.Context, in Input, scope Scope) strin
 			refs = append(refs, src.EventID)
 		}
 		row := map[string]any{"source_quotes": m.Sources, "scope": m.Scope, "id": m.ID, "version": m.Version, "kind": m.Kind, "subject": m.Subject, "text": text, "status": m.Status, "inference": m.Inference, "source_event_ids": refs, "continuity": m.Continuity, "needs_review": m.Continuity && time.Since(m.LastMention) > 14*24*time.Hour, "representation": m.Representation(time.Now())}
+		if m.CommitmentState != "" {
+			row["commitment_state"] = m.CommitmentState
+		}
 		b, _ := json.Marshal(row)
 		cost := EstimateTokens(string(b))
+		if m.CommitmentState != "" && len(refs) > 1 && (used+cost > budget || m.Pinned && coreUsed+cost > coreBudget) {
+			// The revision and entry ID remain available for reading the whole
+			// chain. Earlier quotes must not crowd the current agreement out.
+			row["source_count"] = m.SourceCount
+			row["source_event_ids"] = refs[len(refs)-1:]
+			row["source_quotes"] = m.Sources[len(refs)-1:]
+			b, _ = json.Marshal(row)
+			cost = EstimateTokens(string(b))
+		}
 		if used+cost > budget {
 			continue
 		}

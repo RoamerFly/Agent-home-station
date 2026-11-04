@@ -25,26 +25,32 @@ type MemoryEntry struct {
 	DetailExcerpted bool              `json:"detail_excerpted,omitempty"`
 	SourceCount     int               `json:"source_count,omitempty"`
 	Continuity      bool              `json:"continuity,omitempty"`
-	MergeInto       string            `json:"merge_into,omitempty"`
-	ConflictsWith   []string          `json:"conflicts_with,omitempty"`
-	ID              string            `json:"id"`
-	Scope           string            `json:"scope"`
-	Subject         string            `json:"subject"`
-	Kind            string            `json:"kind"`
-	Detail          string            `json:"detail"`
-	Summary         string            `json:"summary"`
-	Keywords        []string          `json:"keywords"`
-	Sources         []MemorySource    `json:"sources"`
-	Status          string            `json:"status"`
-	Version         int               `json:"version"`
-	Pinned          bool              `json:"pinned"`
-	Inference       bool              `json:"inference"`
-	Manual          bool              `json:"manual"`
-	Supersedes      string            `json:"supersedes,omitempty"`
-	EventTime       string            `json:"event_time,omitempty"`
-	Created         time.Time         `json:"created"`
-	Updated         time.Time         `json:"updated"`
-	LastMention     time.Time         `json:"last_mention"`
+	CommitmentState string            `json:"commitment_state,omitempty"`
+	Corrects        string            `json:"corrects,omitempty"`
+	// CorrectsVersion is the revision observed by the extractor for Corrects.
+	// It makes delayed extraction candidates fail closed instead of overwriting
+	// a newer correction.
+	CorrectsVersion int            `json:"corrects_version,omitempty"`
+	MergeInto       string         `json:"merge_into,omitempty"`
+	ConflictsWith   []string       `json:"conflicts_with,omitempty"`
+	ID              string         `json:"id"`
+	Scope           string         `json:"scope"`
+	Subject         string         `json:"subject"`
+	Kind            string         `json:"kind"`
+	Detail          string         `json:"detail"`
+	Summary         string         `json:"summary"`
+	Keywords        []string       `json:"keywords"`
+	Sources         []MemorySource `json:"sources"`
+	Status          string         `json:"status"`
+	Version         int            `json:"version"`
+	Pinned          bool           `json:"pinned"`
+	Inference       bool           `json:"inference"`
+	Manual          bool           `json:"manual"`
+	Supersedes      string         `json:"supersedes,omitempty"`
+	EventTime       string         `json:"event_time,omitempty"`
+	Created         time.Time      `json:"created"`
+	Updated         time.Time      `json:"updated"`
+	LastMention     time.Time      `json:"last_mention"`
 }
 type MemoryHit struct {
 	Entry  *MemoryEntry `json:"entry,omitempty"`
@@ -84,6 +90,8 @@ type MemoryQuery struct {
 	TimeBasis       string    `json:"time_basis,omitempty"`
 	MinSimilarity   *float64  `json:"min_similarity,omitempty"`
 	Pinned          bool      `json:"pinned,omitempty"`
+	Continuity      bool      `json:"continuity,omitempty"`
+	CommitmentState string    `json:"commitment_state,omitempty"`
 	Scopes          []string  `json:"-"`
 	Query           string    `json:"query"`
 	Kind            string    `json:"kind,omitempty"`
@@ -251,6 +259,9 @@ func (s *Store) saveMemory(ctx context.Context, in MemoryEntry, expected int, ex
 		if e = json.Unmarshal(raw, &existing); e != nil {
 			return in, e
 		}
+		if existing.CommitmentState != "" {
+			return in, errors.New("commitments must be updated through SaveCommitment")
+		}
 		if existing.Subject != in.Subject || existing.Kind != in.Kind || !sameAssertions(existing.Assertions, in.Assertions) {
 			return in, errors.New("duplicate merge must preserve subject and kind")
 		}
@@ -384,6 +395,9 @@ func (s *Store) saveMemory(ctx context.Context, in MemoryEntry, expected int, ex
 		if e = json.Unmarshal(priorRaw, &prior); e != nil {
 			return in, e
 		}
+		if prior.CommitmentState != "" {
+			return in, errors.New("commitments must be corrected through SaveCommitment")
+		}
 		if prior.Subject != in.Subject || len(in.Sources) == 0 {
 			return in, errors.New("correction requires same subject and new source")
 		}
@@ -472,6 +486,10 @@ func (s *Store) saveMemory(ctx context.Context, in MemoryEntry, expected int, ex
 }
 
 func (s *Store) ReadMemory(ctx context.Context, scopes []string, id string) (MemoryEntry, error) {
+	return readMemory(ctx, s.db.QueryRowContext, scopes, id)
+}
+
+func readMemory(ctx context.Context, queryRow func(context.Context, string, ...any) *sql.Row, scopes []string, id string) (MemoryEntry, error) {
 	var m MemoryEntry
 	if len(scopes) == 0 {
 		return m, errors.New("memory scope required")
@@ -480,7 +498,7 @@ func (s *Store) ReadMemory(ctx context.Context, scopes []string, id string) (Mem
 	var raw []byte
 	var status string
 	var version int
-	e := s.db.QueryRowContext(ctx, "SELECT payload,status,version FROM memories WHERE id=? AND scope IN ("+placeholders(len(scopes))+") AND status IN ('active','conflicted') AND NOT EXISTS(SELECT 1 FROM memory_sources ms JOIN source_conflicts sc ON sc.event_id=ms.event_id WHERE ms.memory_id=memories.id) AND NOT EXISTS(SELECT 1 FROM memory_sources ms JOIN memory_blocks mb ON mb.event_id=ms.event_id AND mb.scope=memories.scope WHERE ms.memory_id=memories.id)"+reliableMemorySourcesSQL("memories"), a...).Scan(&raw, &status, &version)
+	e := queryRow(ctx, "SELECT payload,status,version FROM memories WHERE id=? AND scope IN ("+placeholders(len(scopes))+") AND status IN ('active','conflicted') AND NOT EXISTS(SELECT 1 FROM memory_sources ms JOIN source_conflicts sc ON sc.event_id=ms.event_id WHERE ms.memory_id=memories.id) AND NOT EXISTS(SELECT 1 FROM memory_sources ms JOIN memory_blocks mb ON mb.event_id=ms.event_id AND mb.scope=memories.scope WHERE ms.memory_id=memories.id)"+reliableMemorySourcesSQL("memories"), a...).Scan(&raw, &status, &version)
 	if e == nil {
 		e = json.Unmarshal(raw, &m)
 		m.Status = status
@@ -489,13 +507,31 @@ func (s *Store) ReadMemory(ctx context.Context, scopes []string, id string) (Mem
 	return m, e
 }
 
-func (s *Store) MemoryRevisions(ctx context.Context, scopes []string, id string) ([]MemoryEntry, error) {
-	if _, err := s.ReadMemory(ctx, scopes, id); err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, "SELECT payload FROM memory_revisions WHERE memory_id=? ORDER BY version DESC", id)
+// MemoryHistory reads the current account-scoped entry and its displayable past
+// versions at one snapshot. A corrected entry may cite completely different
+// messages, so access to it alone cannot authorize an old version's quotes.
+func (s *Store) MemoryHistory(ctx context.Context, scopes []string, id string) (MemoryEntry, []MemoryEntry, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, err
+		return MemoryEntry{}, nil, err
+	}
+	defer tx.Rollback()
+	current, err := readMemory(ctx, tx.QueryRowContext, scopes, id)
+	if err != nil {
+		return MemoryEntry{}, nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT r.payload FROM memory_revisions r WHERE r.memory_id=?
+		AND NOT EXISTS (
+			SELECT 1 FROM json_each(CAST(r.payload AS TEXT),'$.sources') ref
+			WHERE NOT EXISTS (
+				SELECT 1 FROM events e WHERE e.id=json_extract(ref.value,'$.event_id') AND e.scope=? AND e.suppressed=0
+				AND instr(e.text,json_extract(ref.value,'$.quote'))>0 AND memory_user_text_reliable(e.role,e.text,e.payload)=1
+				AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)
+				AND NOT EXISTS(SELECT 1 FROM source_conflicts c WHERE c.event_id=e.id)
+			)
+		) ORDER BY r.version DESC`, id, current.Scope)
+	if err != nil {
+		return MemoryEntry{}, nil, err
 	}
 	defer rows.Close()
 	out := []MemoryEntry{}
@@ -503,14 +539,14 @@ func (s *Store) MemoryRevisions(ctx context.Context, scopes []string, id string)
 		var raw []byte
 		var m MemoryEntry
 		if err = rows.Scan(&raw); err != nil {
-			return nil, err
+			return MemoryEntry{}, nil, err
 		}
 		if err = json.Unmarshal(raw, &m); err != nil {
-			return nil, err
+			return MemoryEntry{}, nil, err
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	return current, out, rows.Err()
 }
 func (s *Store) ReadEvent(ctx context.Context, scopes []string, id string) (MemoryEvent, error) {
 	var ev MemoryEvent
@@ -635,7 +671,7 @@ func (s *Store) searchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 	}
 	var maxUpdated string
 	_ = s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(updated),'') FROM memories").Scan(&maxUpdated)
-	key, _ := json.Marshal([]any{q.Scopes, q.Query, q.Kind, q.Subject, q.Since, q.Before, q.EventYear, q.TimeBasis, q.Originals, q.Space, q.Pinned, q.MinSimilarity, q.BeforeMessageID, q.MediaKind, q.Order, q.MetadataOnly, maxUpdated, version})
+	key, _ := json.Marshal([]any{q.Scopes, q.Query, q.Kind, q.Subject, q.Since, q.Before, q.EventYear, q.TimeBasis, q.Originals, q.Space, q.Pinned, q.Continuity, q.CommitmentState, q.MinSimilarity, q.BeforeMessageID, q.MediaKind, q.Order, q.MetadataOnly, maxUpdated, version})
 	hash := sha256.Sum256(key)
 	if q.Cursor != "" {
 		var c struct {
@@ -661,6 +697,24 @@ func (s *Store) searchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 	}
 	if q.Pinned {
 		where += " AND m.pinned=1"
+	}
+	if q.Continuity {
+		where += " AND json_extract(m.payload,'$.continuity')=1"
+	}
+	if q.CommitmentState != "" {
+		switch q.CommitmentState {
+		case "open", "ended", "cancelled":
+			where += " AND m.status='active' AND json_extract(m.payload,'$.commitment_state')=?"
+			args = append(args, q.CommitmentState)
+			if q.CommitmentState == "open" {
+				// An unresolved source conflict cannot be injected as a current
+				// agreement, even though conflicted memories remain searchable for
+				// diagnosis and explicit correction.
+				where += " AND m.status='active'"
+			}
+		default:
+			return p, errors.New("invalid commitment state")
+		}
 	}
 	if q.Kind != "" {
 		where += " AND m.kind=?"

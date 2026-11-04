@@ -84,6 +84,52 @@ func TestMemorySourcesCorrectionAndForgetting(t *testing.T) {
 	}
 }
 
+func TestMemoryHistoryHidesForgottenEvidenceFromEarlierVersion(t *testing.T) {
+	s, cfg, in := memoryFixture(t)
+	ctx := t.Context()
+	scope := ScopeID(in.Channel, in.Account, in.Thread)
+	rememberSource := func(trace, text string) []MemorySource {
+		t.Helper()
+		in.TraceID, in.Text = trace, text
+		if err := s.Observe(in, cfg, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		page, err := s.SearchMemory(ctx, MemoryQuery{Scopes: []string{scope}, Query: text, Originals: true})
+		if err != nil || len(page.Items) == 0 || page.Items[0].Event.Text != text {
+			t.Fatal("source fixture not found", err)
+		}
+		return []MemorySource{{page.Items[0].Event.ID, text}}
+	}
+	first := rememberSource("original", "想寄一张海边明信片")
+	mem, err := s.SaveMemory(ctx, MemoryEntry{Scope: scope, Subject: in.Sender, Kind: "episode", Detail: "先前约定", Sources: first}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem.Detail = "新的约定"
+	mem.Sources = rememberSource("correction", "改为寄出雪山画册")
+	mem, err = s.SaveMemory(ctx, mem, mem.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, prior, err := s.MemoryHistory(ctx, []string{scope}, mem.ID); err != nil || len(prior) != 1 || prior[0].Sources[0] != first[0] {
+		t.Fatal("visible original version missing", err)
+	}
+	// Forget the original event through another memory that cites it. Only
+	// the corrected version, which has independent evidence, remains readable.
+	other, err := s.SaveMemory(ctx, MemoryEntry{Scope: scope, Subject: in.Sender, Kind: "fact", Detail: "引用同一原句", Sources: first}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.Status = "deleted"
+	if _, err := s.SaveMemory(ctx, other, other.Version); err != nil {
+		t.Fatal(err)
+	}
+	current, prior, err := s.MemoryHistory(ctx, []string{scope}, mem.ID)
+	if err != nil || current.ID != mem.ID || len(prior) != 0 {
+		t.Fatal("forgotten history disclosed or independent correction lost", err)
+	}
+}
+
 func TestMemoryMigrationCompleteNewOriginalsAndBackup(t *testing.T) {
 	dir := t.TempDir()
 	id := ScopeID("wechat", "synthetic", "room")

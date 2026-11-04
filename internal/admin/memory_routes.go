@@ -1,7 +1,8 @@
 package admin
 
 import (
-	"encoding/json"
+	"database/sql"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,21 +16,19 @@ func (s *Server) memoryRoutes(mux *http.ServeMux) {
 			fail(w, 404, "会话不存在")
 			return
 		}
-		m, e := s.manager.memory.ReadMemory(r.Context(), []string{scope}, r.PathValue("id"))
-		if e != nil {
+		m, revisions, e := s.manager.memory.MemoryHistory(r.Context(), []string{scope}, r.PathValue("id"))
+		if errors.Is(e, sql.ErrNoRows) {
 			fail(w, 404, "记忆已不可用或已遗忘")
 			return
 		}
-		revisions, e := s.manager.memory.MemoryRevisions(r.Context(), []string{scope}, m.ID)
 		if e != nil {
 			fail(w, 500, "修订读取失败")
 			return
 		}
-		raw, _ := json.Marshal(m)
-		value := map[string]any{}
-		_ = json.Unmarshal(raw, &value)
-		value["revisions"] = revisions
-		respond(w, 200, value)
+		respond(w, 200, struct {
+			companion.MemoryEntry
+			Revisions []companion.MemoryEntry `json:"revisions"`
+		}{m, revisions})
 	}))
 	mux.HandleFunc("GET /api/memory/{scope}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("scope")
