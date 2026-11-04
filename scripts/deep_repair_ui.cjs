@@ -45,7 +45,7 @@ async function reply(route,data){await route.fulfill({json:data})}
    window.WechatNames={display:(id,fallback)=>names[id]||fallback||'群成员'};
    window.WechatAdmin={api:async(p,o={})=>{const r=await fetch(p,{method:o.method||'GET',headers:{'Content-Type':'application/json'},body:o.json?JSON.stringify(o.json):undefined});if(!r.ok)throw Error('synthetic HTTP '+r.status);return r.json()},notice:()=>{}};
   },{names});
-  for(const file of ['rounds.js','dialogs.js','logs.js','memory.js','save-actions.js'])await page.addScriptTag({url:origin+'/assets/'+file});
+  for(const file of ['refresh.js','rounds.js','dialogs.js','logs.js','memory.js','save-actions.js'])await page.addScriptTag({url:origin+'/assets/'+file});
   const topDialog=()=>page.locator('dialog[open]').last();
   const shot=async(name)=>page.screenshot({path:path.join(output,name+'.png')});
   await page.evaluate(()=>window.WechatActivity.openRound({source:'合成群',time:'2026-10-30T08:00:00Z',status:'accepted',system:false,thread_id:'synthetic@chatroom',received:[{message_id:'synthetic-message'}],sent:[],entries:[]}));

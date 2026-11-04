@@ -108,7 +108,7 @@
  });
  $('#agent-doc-select').addEventListener('change',()=>{const name=$('#agent-doc-select').value;if(name&&discardDraft())read(name);else $('#agent-doc-select').value=state.loadedName});
  $('#agent-doc-scope').addEventListener('change',()=>{if(!discardDraft()){$('#agent-doc-scope').value=state.scope;return}state.epoch++;state.scope=$('#agent-doc-scope').value;clear();refresh(false)});
- $('#agent-doc-refresh').addEventListener('click',()=>refresh(true));
+ window.WechatRefresh.bind($('#agent-doc-refresh'),()=>refresh(true));
  $('#agent-doc-new').addEventListener('click',()=>{if(!discardDraft())return;state.epoch++;clear();$('#agent-doc-select').value=''});
  for(const id of ['agent-doc-name','agent-doc-content'])$('#'+id).addEventListener('input',()=>{state.dirty=true;status('文档有未保存更改')});
  $('#agent-doc-save').addEventListener('click',async()=>{if(state.busy)return;const name=$('#agent-doc-name').value.trim();if(!name)return status('请填写 Markdown 文档名');const epoch=state.epoch,scope=state.scope,content=$('#agent-doc-content').value;state.busy=true;$('#agent-doc-save').disabled=true;try{const d=await api('/api/agent/workspace',{method:'POST',json:{scope,name,content,revision:name===state.loadedName?state.revision:''}});if(epoch!==state.epoch)return;state.loadedName=d.name;state.revision=d.revision;state.dirty=$('#agent-doc-content').value!==content||$('#agent-doc-name').value.trim()!==name;status(state.dirty?'保存期间还有新编辑，尚未保存':'文档已保存');await refresh(false)}catch(e){status(e.message+'；当前编辑内容已保留')}finally{state.busy=false;$('#agent-doc-save').disabled=false}});

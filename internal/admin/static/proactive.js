@@ -21,7 +21,9 @@
   if(!matches)el(box,'p',query?'没有匹配的已授权目标。':'暂无已授权目标，请先添加群聊或私信回复规则。','empty');
  }
  async function refresh(){if(state.busy||!window.WechatAdmin?.isAuthenticated())return;state.busy=true;$('#proactive-refresh').disabled=true;try{const data=await api('/api/companion/targets');state.directory=new Map((data.items||[]).map(x=>[x.id,x]));$('#proactive-state').textContent='今日已评估 '+data.today+' 次；不设每日硬额度，选择安静不会耗尽后续机会。';if(!$('#proactive-targets [aria-invalid="true"]')&&!$('#proactive-targets').contains(document.activeElement))render()}catch(e){$('#proactive-state').textContent='读取目标失败：'+e.message}finally{state.busy=false;$('#proactive-refresh').disabled=false}}
- $('#proactive-search').addEventListener('input',render);$('#proactive-refresh').addEventListener('click',refresh);
+
+ refresh=window.WechatRefresh.join(refresh);
+ $('#proactive-search').addEventListener('input',render);window.WechatRefresh.bind($('#proactive-refresh'),refresh);
  for(const id of ['private-enabled','filehelper-enabled','direct-ids'])$('#'+id).addEventListener('input',render);
  window.addEventListener('wechat-admin:config-changed',()=>{render();if($('#permissions').classList.contains('active-page'))refresh()});
  window.addEventListener('wechat-admin:navigate',e=>{if(e.detail?.section==='permissions')refresh()});

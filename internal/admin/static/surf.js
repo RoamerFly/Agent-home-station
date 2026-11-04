@@ -57,8 +57,12 @@
   }catch(e){$('#surf-history-state').textContent='读取失败：'+e.message}
   finally{historyBusy=false;$('#surf-history-refresh').disabled=false}
  }
- $('#surf-history-refresh').addEventListener('click',refreshHistory);$('#surf-history-panel').addEventListener('toggle',()=>{if($('#surf-history-panel').open)refreshHistory()});['surf-rss-sources'].forEach(id=>$('#'+id).addEventListener('input',dirty));
- $('#surf-save').addEventListener('click',save);$('#surf-refresh').addEventListener('click',refresh);$('#surf-new').addEventListener('click',()=>{state.items=state.pending||state.items;state.pending=null;$('#surf-new').hidden=true;render()});['surf-origin','surf-status'].forEach(id=>$('#'+id).addEventListener('change',render));$('#surf-search').addEventListener('input',render);['surf-enabled','surf-force-share','surf-topics'].forEach(id=>$('#'+id).addEventListener('input',dirty));$('#surf-target-search').addEventListener('input',renderTargets);$('#surf-target-refresh').addEventListener('click',refreshTargets);
+
+ refresh=window.WechatRefresh.join(refresh);
+ refreshTargets=window.WechatRefresh.join(refreshTargets);
+ refreshHistory=window.WechatRefresh.join(refreshHistory);
+ window.WechatRefresh.bind($('#surf-history-refresh'),refreshHistory);$('#surf-history-panel').addEventListener('toggle',()=>{if($('#surf-history-panel').open)refreshHistory()});['surf-rss-sources'].forEach(id=>$('#'+id).addEventListener('input',dirty));
+ $('#surf-save').addEventListener('click',save);window.WechatRefresh.bind($('#surf-refresh'),async()=>{await refresh();if(state.pending){state.items=state.pending;state.pending=null;$('#surf-new').hidden=true;render()}});['surf-origin','surf-status'].forEach(id=>$('#'+id).addEventListener('change',render));$('#surf-search').addEventListener('input',render);['surf-enabled','surf-force-share','surf-topics'].forEach(id=>$('#'+id).addEventListener('input',dirty));$('#surf-target-search').addEventListener('input',renderTargets);window.WechatRefresh.bind($('#surf-target-refresh'),refreshTargets);
  window.addEventListener('wechat-admin:navigate',event=>{if(state.timer){clearInterval(state.timer);state.timer=null}if(event.detail?.section==='surf'){refresh();refreshTargets();state.timer=setInterval(refresh,5000)}});
  window.addEventListener('wechat-admin:config-changed',()=>{if($('#surf').classList.contains('active-page')){refresh();refreshTargets()}});
  window.addEventListener('wechat-admin:logout',()=>{if(state.timer)clearInterval(state.timer);state.timer=null;state.items=[];state.pending=null;state.ready=false;state.dirty=false;state.selected.clear();state.allowed.clear();state.directory.clear();state.settings=null;discoveryConfig=null;$('#surf-history-list').replaceChildren();state.version++;$('#surf-list').replaceChildren();$('#surf-targets').replaceChildren();$('#surf-topics').value='';$('#surf-target-search').value='';$('#surf-target-state').textContent='';$('#surf-new').hidden=true});

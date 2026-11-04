@@ -4,20 +4,58 @@
   const size=n=>{n=Number(n)||0;return n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KiB':(n/1048576).toFixed(1)+' MiB'};
   const date=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?'时间未知':d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'-'+d.toLocaleTimeString('zh-CN',{hour12:false})};
   const paragraph=(text,cls='hint')=>{const p=document.createElement('p');p.textContent=text;p.className=cls;return p};
-  let generation=0,scanning=false,storageLoaded=false;
-  async function storage(){
-    if(scanning||!window.WechatAdmin.isAuthenticated())return;
-    const stamp=generation;scanning=true;$('#storage-refresh').disabled=true;$('#storage-state').textContent='正在扫描…';$('#storage-error').textContent='';
+  let generation=0,pending=null,storageLoaded=false;
+  function action(label,run){
+    const b=document.createElement('button');b.type='button';b.className='quiet';b.textContent=label;
+    b.addEventListener('click',async()=>{b.disabled=true;try{await run()}catch(e){$('#storage-error').textContent=e.message}finally{b.disabled=false}});return b;
+  }
+  function renderArea(area,data){
+    const row=document.createElement('article');row.className='storage-area';row.dataset.area=area.id;
+    const name=document.createElement('strong');name.textContent=area.name;row.append(name,paragraph(size(area.bytes)+' · '+area.files+' 个文件'));
+    if(area.incomplete)row.append(paragraph('未扫描完整，可展开存储位置查看。'));
+    if(area.skipped)row.append(paragraph('已跳过 '+area.skipped+' 个链接或特殊文件'));
+    const locations=area.locations||[];
+    if(locations.length){
+      const details=document.createElement('details'),label=document.createElement('summary');label.textContent='存储位置';details.append(label);
+      locations.forEach((path,index)=>{
+        const line=document.createElement('div'),code=document.createElement('code');line.className='storage-paths';code.textContent=path;line.append(code);
+        if(data.can_open_folder)line.append(action('打开文件夹',()=>api('/api/storage/open',{method:'POST',json:{area:area.id,index}})));
+        line.append(action('复制路径',async()=>{await navigator.clipboard.writeText(path);$('#storage-state').textContent='路径已复制'}));details.append(line);
+      });
+      row.append(details);
+    }
+    if(area.id==='logs'){
+      const used=(data.limits||[]).find(x=>x.name==='活跃日志')?.count||0;
+      if(used>200)row.append(action('归档较早的 '+(used-200)+' 条日志',async()=>{
+        const result=await api('/api/storage/archive-logs',{method:'POST',json:{}});
+        await storage();$('#storage-state').textContent='已归档 '+result.archived+' 条，最近 200 条保留在活跃日志中。';
+      }));
+    }
+    return row;
+  }
+  function storage(){
+    if(!pending)pending=scan().finally(()=>{pending=null});
+    return pending;
+  }
+  async function scan(){
+    if(!window.WechatAdmin.isAuthenticated())return;
+    const stamp=generation;$('#storage-refresh').disabled=true;$('#storage-state').textContent='正在扫描…';$('#storage-error').textContent='';
     try{
       const data=await api('/api/storage');if(stamp!==generation)return;
-      $('#storage-state').textContent='已统计 '+size(data.total_bytes);$('#storage-boundary').textContent=data.boundary;
-      const areas=$('#storage-areas');areas.replaceChildren();for(const a of data.areas||[])areas.append(paragraph(a.name+'：'+size(a.bytes)+' · '+a.files+' 个文件'+(a.skipped?' · 跳过 '+a.skipped+' 个链接或特殊文件':'')));
-      const limits=$('#storage-limits');limits.replaceChildren();for(const x of data.limits||[]){const row=document.createElement('div');row.className='storage-limit';row.append(paragraph(x.name+'：'+x.count+'/'+x.limit+(x.count>=x.limit*.8?' · 接近上限，请整理记录':'')));const meter=document.createElement('meter');meter.min=0;meter.max=x.limit;meter.value=x.count;meter.setAttribute('aria-label',x.name+'已用条数');row.append(meter);limits.append(row)}
+      $('#storage-state').textContent=(data.partial?'部分统计 ':'已统计 ')+size(data.total_bytes);$('#storage-boundary').textContent=data.boundary;
+      const areas=$('#storage-areas');
+      const expanded=new Set(Array.from(areas.querySelectorAll('details[open]'),item=>item.parentElement.dataset.area));
+      areas.replaceChildren(...(data.areas||[]).map(area=>{
+        const row=renderArea(area,data),details=row.querySelector('details');
+        if(details&&expanded.has(area.id))details.open=true;
+        return row;
+      }));
+      const limits=$('#storage-limits');limits.replaceChildren();for(const x of data.limits||[]){const row=document.createElement('div');row.className='storage-limit';row.append(paragraph(x.name+'：'+x.count+'/'+x.limit+(x.count>=x.limit*.8?' · 接近记录上限':'')));const meter=document.createElement('meter');meter.min=0;meter.max=x.limit;meter.value=x.count;meter.setAttribute('aria-label',x.name+'已用条数');row.append(meter);limits.append(row)}
       $('#storage-error').textContent=data.error||'';storageLoaded=true;
     }catch(e){if(stamp===generation){$('#storage-state').textContent='扫描未完成';$('#storage-error').textContent=e.message}}
-    finally{scanning=false;$('#storage-refresh').disabled=false}
+    finally{$('#storage-refresh').disabled=false}
   }
-  $('#storage-refresh').addEventListener('click',storage);
+  window.WechatRefresh.bind($('#storage-refresh'),storage);
   $('#storage-panel').addEventListener('toggle',()=>{if($('#storage-panel').open&&!storageLoaded)storage()});
 
 

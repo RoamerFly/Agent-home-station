@@ -15,7 +15,7 @@
   const number=v=>Number(v||0).toLocaleString('zh-CN');
   const money=costs=>Money.format(Money.total(costs));
   const stamp=raw=>{const d=new Date(raw);return !raw||Number.isNaN(d.valueOf())?'—':new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d).replace(' ','-')};
-  let latest=null,dirty=false,busy=false,balanceEpoch=0;
+  let latest=null,dirty=false,balanceEpoch=0;
   function render(data){
     latest=data;const today=data.today||{},total=data.total||{};
     $('#billing-today').textContent=number(Number(today.input_tokens||0)+Number(today.output_tokens||0));
@@ -36,11 +36,13 @@
     if(value.state==='ok'&&value.data){const balances=value.data.balance_infos||[];const sum=key=>Money.total(Object.fromEntries(balances.map(x=>[x.currency,Number(x[key])])));state.textContent=Money.format(sum('total_balance'));state.title=Money.hint;detail.textContent='赠送 '+Money.format(sum('granted_balance'))+' · 充值 '+Money.format(sum('topped_up_balance'))+(value.data.is_available?'':' · 额度不足')}
     else{state.textContent=value.state==='unsupported'?'暂不支持':value.state==='unconfigured'?'未配置':'查询失败';detail.textContent=value.reason||'请稍后刷新'}
   }catch(error){if(epoch===balanceEpoch){$('#billing-balance').textContent='查询失败';$('#billing-balance-detail').textContent=error.message}}}
-  async function refresh(withBalance=false){if(busy||!window.WechatAdmin?.isAuthenticated())return;busy=true;const button=$('#billing-refresh');button.disabled=true;try{render(await api('/api/billing'));if(withBalance)await refreshBalance();$('#billing-status').textContent='用量更新于 '+stamp(new Date().toISOString())+' · 费用为估算，余额来自当前服务商'}catch(error){$('#billing-status').textContent='费用暂时无法更新，请稍后刷新'}finally{button.disabled=false;busy=false}}
+  const readUsage=window.WechatRefresh.join(async()=>render(await api('/api/billing')));
+  refreshBalance=window.WechatRefresh.join(refreshBalance);
+  async function refresh(withBalance=false){if(!window.WechatAdmin?.isAuthenticated())return;const button=$('#billing-refresh');button.disabled=true;try{await readUsage();if(withBalance)await refreshBalance();$('#billing-status').textContent='用量更新于 '+stamp(new Date().toISOString())+' · 费用为估算，余额来自当前服务商'}catch(error){$('#billing-status').textContent='费用暂时无法更新，请稍后刷新'}finally{button.disabled=false}}
   $('#billing-price-form').addEventListener('input',()=>{dirty=true;$('#billing-price-state').textContent='单价有未保存的更改，点击保存后才用于后续请求。'});
   $('#billing-price-form').addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;if(!form.reportValidity())return;const button=$('#billing-save-prices');button.disabled=true;try{const result=await api('/api/billing/prices',{method:'POST',json:{active_id:form.dataset.activeId,currency:$('#billing-currency').value,input_per_million:Number($('#billing-price-input').value),cache_hit_per_million:Number($('#billing-price-cache').value),output_per_million:Number($('#billing-price-output').value)}});dirty=false;render(result);window.WechatAdmin.notice('单价已保存，仅用于后续请求的费用估算。')}catch(error){window.WechatAdmin.notice(error.message,true)}finally{button.disabled=false}});
   $('#billing-reset-prices').addEventListener('click',async()=>{try{const result=await api('/api/billing/prices',{method:'POST',json:{active_id:$('#billing-price-form').dataset.activeId,reset:true}});dirty=false;render(result);window.WechatAdmin.notice('已恢复参考单价。')}catch(error){window.WechatAdmin.notice(error.message,true)}});
-  $('#billing-refresh').addEventListener('click',()=>refresh(true));
+  window.WechatRefresh.bind($('#billing-refresh'),()=>refresh(true));
   window.addEventListener('wechat-admin:navigate',event=>{if(event.detail.section==='overview')refresh(true)});
   window.addEventListener('wechat-admin:logout',()=>{balanceEpoch++;dirty=false;latest=null;$('#billing-balance').textContent='—';$('#billing-models').replaceChildren()});
   setInterval(()=>{if(!document.hidden&&$('#overview').classList.contains('active-page'))refresh(false)},15000);

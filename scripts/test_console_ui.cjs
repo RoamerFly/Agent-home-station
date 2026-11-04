@@ -20,10 +20,17 @@ const log=(id,content,event='message_received')=>({id,time:dateKey+'T08:00:00Z',
   config.direct_ids=['synthetic-owner'];config.group_rules=[{id:scope.thread,name:'合成测试群',mode:'mention',prefix:'',persona:'',force_reply_when_mentioned:true}];
   Object.assign(config.companion,{name:'蓝色大肥鱼',persona:'友好、准确的工作伙伴。根据当前会话和核实来源回应。',style:'自然简洁，说明进度与结果。',appearance:'蓝色主题',relationship:'合成验收角色',proactive_threads:[],proactive_rules:[]});
   page=await context.newPage();const errors=[],writes=[],screens=process.env.WECHAT_ADMIN_UI_SCREENSHOTS;let documentText=prose,revision='synthetic-r1',preferences='',preferencesRevision=0;let packageRuntimeState='stopped',packageInstallRevision=1;let packageRevision=0,packageValues={endpoint:'https://provider.example/v1'};const packageInfo={id:'synthetic-service',name:'合成语音插件',version:'1.0.0',status:'ready',permissions:['network'],dependencies:[]},packageCatalog=[packageInfo,...[['speech','语音生成'],['music','音乐与换声'],['media-understanding','媒体理解'],['share-reader','分享内容读取'],['visual-generation','图像与视频生成'],['project-development','项目开发'],['mobile-control','手机控制'],['external-tools','外部工具连接']].map(([id,name])=>({id,name,version:'1.0.0',status:id==='visual-generation'?'template':'ready',permissions:[],dependencies:[]}))];const accountRows=[{id:'synthetic-account',name:'蓝色大肥鱼 · 合成账号',primary:true,native:{connection:'online'},bot:{state:'running'}},{id:'synthetic-second',name:'备用合成账号',label:'备用合成账号',native:{connection:'disconnected'},bot:{state:'disabled'}}];
+  let storageGate, storageCount=440, openedFolder;
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('**/*',async route=>{
    const request=route.request(),url=new URL(request.url());if(url.origin!==base)return route.abort();
    if(url.pathname.startsWith('/api/')){
+    if(url.pathname==='/api/storage'){
+      if(storageGate) await storageGate;
+      return route.fulfill({json:{total_bytes:512,can_open_folder:true,areas:[{id:'logs',name:'活跃日志',files:2,bytes:512,locations:['C:/synthetic/logs']}],limits:[{name:'活跃日志',count:storageCount,limit:1000}]}});
+    }
+    if(url.pathname==='/api/storage/open'){openedFolder=request.postDataJSON();return route.fulfill({json:{opened:true}})}
+    if(url.pathname==='/api/storage/archive-logs'){const archived=storageCount-200;storageCount=200;return route.fulfill({json:{archived}})}
     if(url.pathname==='/api/accounts')return route.fulfill({json:{items:accountRows,primary:'synthetic-account',supported:true}});
     if(url.pathname==='/api/accounts/synthetic-second/manage'){const body=request.postDataJSON();if(body.action==='purge')accountRows.splice(1,1);else accountRows[1].removed=body.action==='remove';return route.fulfill({json:{ok:true}})}
     if(url.pathname==='/api/billing')return route.fulfill({json:{started_at:'2026-10-30T00:00:00Z',active_id:'synthetic-model',active_model:'synthetic',priced:true,prices:{currency:'CNY',input_per_million:1,cache_hit_per_million:.02,output_per_million:4},today:{input_tokens:12000,output_tokens:3000,cache_hit_tokens:1000,estimated_costs:{CNY:.04}},total:{input_tokens:12000,output_tokens:3000,cache_hit_tokens:1000,estimated_costs:{CNY:1,USD:2}},models:[]}});
@@ -68,6 +75,21 @@ const log=(id,content,event='message_received')=>({id,time:dateKey+'T08:00:00Z',
    try{return route.fulfill({body:await fs.readFile(file),contentType:({'.html':'text/html','.css':'text/css','.js':'text/javascript','.png':'image/png','.json':'application/json'})[path.extname(file)]||'text/plain'})}catch{return route.continue()}
   });
   await page.goto(base);await page.locator('#overview.active-page').waitFor();assert.equal(await page.locator('.main-nav').count(),6);assert.deepEqual(await page.locator('.main-nav span').allTextContents(),['总览','会话','活动','插件','角色','设置']);
+  await page.evaluate(()=>window.WechatAdmin.nav('settings'));
+  const sidebarRefresh=page.getByRole('button',{name:'刷新当前页面',exact:true});
+  assert(await sidebarRefresh.evaluate(b=>b.parentElement.classList.contains('sidebar-bottom') && Math.abs(b.getBoundingClientRect().x+b.offsetWidth/2-(b.parentElement.getBoundingClientRect().x+b.parentElement.clientWidth/2))<2));
+  await page.locator('#storage-panel summary').first().click();
+  await page.getByText('已统计 512 B',{exact:true}).waitFor();
+  let finishScan;storageGate=new Promise(resolve=>{finishScan=resolve});
+  await sidebarRefresh.click();await page.getByText('正在扫描…',{exact:true}).waitFor();
+  assert.equal(await sidebarRefresh.getAttribute('aria-busy'),'true');assert(await sidebarRefresh.isDisabled());
+  assert(await sidebarRefresh.locator('svg').evaluate(e=>getComputedStyle(e).animationName==='sidebar-spin'));
+  finishScan();storageGate=null;await page.locator('#sidebar-refresh:not([aria-busy])').waitFor();
+  await page.locator('#storage-areas summary').click();await page.getByRole('button',{name:'打开文件夹'}).click();
+  assert.deepEqual(openedFolder,{area:'logs',index:0});
+  await page.getByRole('button',{name:'归档较早的 240 条日志'}).click();await page.getByText('已归档 240 条，最近 200 条保留在活跃日志中。').waitFor();
+  if(screens){await fs.mkdir(screens,{recursive:true});await page.screenshot({path:path.join(screens,'storage-sidebar.png')})}
+  await page.evaluate(()=>window.WechatAdmin.nav('overview'));
   // Mobile control is now rendered from the installed package detail, rather
   // than a permanent console page. Guard both the source and live navigation
   // so a stale standalone page/script cannot quietly return.
@@ -89,7 +111,7 @@ const log=(id,content,event='message_received')=>({id,time:dateKey+'T08:00:00Z',
   await page.evaluate(()=>window.WechatAdmin.nav('companion'));await page.locator('#companion-name').fill(config.companion.name+' · 测试');await page.locator('#save-companion').click();await page.getByText('配置已保存并应用。',{exact:true}).waitFor();
   const saved=writes.find(x=>x.path==='/api/config').body;assert.deepEqual(saved.behavior,config.behavior);assert.deepEqual(saved.group_rules,config.group_rules);
   await page.evaluate(()=>window.WechatAdmin.nav('memory'));await page.locator('.conversation-open').click();await page.locator('#memory-content .memory-message-body').waitFor();assert.equal(await page.locator('#memory-content .long-content-preview').textContent(),prose);
-  await page.locator('#memory-content .long-content').click();assert((await page.locator('dialog.console-dialog .readable-full-text').textContent()).includes('【正文末尾完整保留】'));await page.keyboard.press('Escape');await page.locator('#memory-refresh').click();await page.waitForTimeout(250);assert(await page.locator('#memory-content .long-content').isVisible());
+  await page.locator('#memory-content .long-content').click();assert((await page.locator('dialog.console-dialog .readable-full-text').textContent()).includes('【正文末尾完整保留】'));await page.keyboard.press('Escape');await page.locator('#sidebar-refresh').click();await page.waitForTimeout(250);assert(await page.locator('#memory-content .long-content').isVisible());
   await page.evaluate(()=>window.WechatMemory.showReplyEvidence({scope:'synthetic-room'}));const auditText=await page.locator('dialog.console-dialog').textContent();assert(auditText.includes('最终复核未完成'));assert(auditText.includes('HTTP 200'));assert(auditText.includes('格式校验轮次 2/2 次'));await page.keyboard.press('Escape');
   await page.evaluate(()=>window.WechatAdmin.nav('logs'));await page.waitForFunction(()=>document.querySelectorAll('.round-card').length===76);assert.equal(await page.locator('#log-date').inputValue(),dateKey);assert.equal(await page.locator('#log-more').count(),0);await page.locator('.round-summary').first().click();assert(await page.locator('dialog.console-dialog').isVisible());const roundText=await page.locator('dialog.console-dialog').textContent();assert(roundText.includes('调用工具 · 在隔离环境执行命令'));assert(roundText.includes('失败原因：合成执行器不可用'));assert(roundText.includes('会话根目录/output/result.txt'));assert(roundText.includes('首次复核未完成'));assert(roundText.includes('解析模型响应'));assert(roundText.includes('HTTP 200'));assert(roundText.includes('格式校验轮次 2/2 次'));assert(!roundText.includes('角色选择保持安静'));assert.equal(await page.locator('dialog .round-technical,dialog .raw-details').count(),0);
   assert.equal(await page.locator('dialog.console-dialog .technical-json:visible').count(),0,'raw code leaked into normal reading');
@@ -125,7 +147,7 @@ const log=(id,content,event='message_received')=>({id,time:dateKey+'T08:00:00Z',
   await page.getByRole('button',{name:'删除数据',exact:true}).click();await page.getByRole('button',{name:'同时删除数据',exact:true}).click();
   await page.locator('#removed-accounts').waitFor({state:'hidden'});assert.equal(accountRows.length,1);
 
-  await page.evaluate(()=>window.WechatAdmin.nav('overview'));await page.locator('#billing-refresh').click();
+  await page.evaluate(()=>window.WechatAdmin.nav('overview'));await page.locator('#sidebar-refresh').click();await page.locator('#sidebar-refresh:not([aria-busy])').waitFor();
   await page.locator('#billing-cost').getByText('14.32327 元',{exact:true}).waitFor();
   assert.equal(await page.locator('#billing-balance').textContent(),'80 元');
   assert(!/美元|人民币|USD/.test(await page.locator('.billing-panel').innerText()));

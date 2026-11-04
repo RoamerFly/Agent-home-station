@@ -122,3 +122,35 @@ func TestArchiveEndpointsAuthenticateAndScopeMemoryWithoutActionReplay(t *testin
 		t.Fatal("archive read created a send")
 	}
 }
+
+func TestStorageOrganizeArchivesOnceAndRetainsRecentLogs(t *testing.T) {
+	f := setup(t)
+	f.login()
+	path := "/api/storage/archive-logs"
+	if code, _, _ := f.request("POST", path, map[string]any{}, true, false); code != 403 {
+		t.Fatal(code)
+	}
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	f.manager.mu.Lock()
+	for i := 0; i < 350; i++ {
+		f.manager.journal = append(f.manager.journal, LogEntry{ID: fmt.Sprint(i), Time: stamp})
+	}
+	f.manager.mu.Unlock()
+	for _, want := range []int{150, 0} {
+		code, raw, _ := f.request("POST", path, map[string]any{}, true, true)
+		var result struct{ Archived int }
+		if code != 200 || json.Unmarshal(raw, &result) != nil || result.Archived != want {
+			t.Fatal(code, string(raw))
+		}
+	}
+	if len(f.manager.journal) != 200 || f.manager.journal[0].ID != "150" {
+		t.Fatal("recent window not retained")
+	}
+	items, _, err := f.manager.historyArchive().List("activity", activityScope(), "", 20)
+	if err != nil || len(items) != 2 {
+		t.Fatal(items, err)
+	}
+	if code, _, _ := f.request("POST", "/api/storage/open", map[string]any{"area": "../../private", "index": 0}, true, true); code != 403 {
+		t.Fatal("service allowed desktop open", code)
+	}
+}

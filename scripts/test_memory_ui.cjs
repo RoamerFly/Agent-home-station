@@ -9,7 +9,7 @@ const base=process.env.WECHAT_ADMIN_UI_BASE;assert(base&&new URL(base).hostname=
   const response=await context.request.post(base+'/api/login',{headers:{Origin:base},data:{password:'synthetic-browser-password-2026'}});assert(response.ok());
   const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(base+'/#memory');await page.locator('.conversation-open').first().click();
-  await page.getByRole('button',{name:'长期记忆与来源',exact:true}).click();
+  await page.getByRole('button',{name:'会话记忆',exact:true}).click();
   await page.locator('dialog[open]').getByRole('heading',{name:'偏好 · 有效',exact:true}).waitFor();
   await page.getByRole('button',{name:'查看来源',exact:true}).click();await page.locator('dialog[open]').last().locator('pre').filter({hasText:'我喜欢红茶，不喝咖啡。'}).waitFor();await page.keyboard.press('Escape');
   await page.getByRole('button',{name:'固定',exact:true}).click();await page.getByRole('button',{name:'取消固定',exact:true}).waitFor();

@@ -55,9 +55,11 @@
  window.WechatAccountContext={get id(){return selected},url};
  window.WechatNames={display,remember};
  function update(status){const item=rows.find(x=>x.id===selected);if(!item)return;item.native=status.native;item.bot=status.bot;if(status.account_name)item.name=item.label||status.account_name;render()}
+
+ refresh=window.WechatRefresh.join(refresh);
  window.WechatAccounts={load,refresh,name:()=>rows.find(x=>x.id===selected)?.name||'',render,update};
  document.addEventListener('DOMContentLoaded',()=>{
-  $('#account-select').addEventListener('change',event=>choose(event.target.value));$('#add-account').addEventListener('click',create);$('#refresh-accounts').addEventListener('click',refresh);
+  $('#account-select').addEventListener('change',event=>choose(event.target.value));$('#add-account').addEventListener('click',create);window.WechatRefresh.bind($('#refresh-accounts'),refresh);
  });
  window.addEventListener('wechat-admin:navigate',event=>{if(event.detail.section==='wechat')refresh()});
  window.addEventListener('wechat-admin:scopes',event=>{for(const item of event.detail.scopes||[])remember(item.thread,item.label)});

@@ -4,18 +4,25 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 	"wechat-bot/internal/historyarchive"
 )
 
 type storageArea struct {
-	Name    string `json:"name"`
-	Bytes   int64  `json:"bytes"`
-	Files   int    `json:"files"`
-	Skipped int    `json:"skipped"`
+	Incomplete bool     `json:"incomplete,omitempty"`
+	ID         string   `json:"id"`
+	Locations  []string `json:"locations"`
+	Name       string   `json:"name"`
+	Bytes      int64    `json:"bytes"`
+	Files      int      `json:"files"`
+	Skipped    int      `json:"skipped"`
 }
 
 func scanStorage(ctx context.Context, name string, paths ...string) (storageArea, error) {
@@ -60,27 +67,43 @@ func scanStorage(ctx context.Context, name string, paths ...string) (storageArea
 	return out, nil
 }
 
+type storageGroup struct {
+	id, name       string
+	files, folders []string
+}
+
+func (m *Manager) storageGroups() []storageGroup {
+	companion := filepath.Join(m.dir, "companion")
+	return []storageGroup{
+		{"memory", "活跃记忆", []string{filepath.Join(companion, "memory.json"), filepath.Join(companion, "memory.sqlite"), filepath.Join(companion, "memory.sqlite-wal"), filepath.Join(companion, "memory.sqlite-shm")}, []string{companion}},
+		{"logs", "活跃日志", []string{filepath.Join(m.dir, "activity.json"), filepath.Join(m.dir, "audit.json")}, []string{m.dir}},
+		{"index", "任务与素材索引", []string{filepath.Join(m.dir, "agent-state.json"), filepath.Join(m.dir, "tool-state.json"), filepath.Join(m.dir, "media-assets.json")}, []string{m.dir}},
+		{"media", "保留的媒体原件", nil, []string{filepath.Join(m.dir, "media-assets")}},
+		{"archives", "只读归档", nil, []string{filepath.Join(m.dir, "archive"), filepath.Join(companion, "archive")}},
+		{"receipts", "历史发送回执索引", nil, []string{filepath.Join(m.dir, "send-ledger")}},
+		{"inbox", "收件与交付状态", nil, []string{m.stateDir}},
+	}
+}
+func storageDesktop(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	return err == nil && net.ParseIP(host).IsLoopback() && runtime.GOOS == "windows" && len(os.Args) == 2 && os.Args[1] == "--desktop"
+}
 func (m *Manager) storageStatus(ctx context.Context) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	dirs := []struct {
-		name  string
-		paths []string
-	}{
-		{"活跃记忆", []string{filepath.Join(m.dir, "companion", "memory.json"), filepath.Join(m.dir, "companion", "memory.sqlite"), filepath.Join(m.dir, "companion", "memory.sqlite-wal"), filepath.Join(m.dir, "companion", "memory.sqlite-shm")}},
-		{"活跃日志", []string{filepath.Join(m.dir, "activity.json"), filepath.Join(m.dir, "audit.json")}},
-		{"任务与素材索引", []string{filepath.Join(m.dir, "agent-state.json"), filepath.Join(m.dir, "tool-state.json"), filepath.Join(m.dir, "media-assets.json")}},
-		{"保留的媒体原件", []string{filepath.Join(m.dir, "media-assets")}},
-		{"只读归档", []string{filepath.Join(m.dir, "archive"), filepath.Join(m.dir, "companion", "archive")}},
-		{"历史发送回执索引", []string{filepath.Join(m.dir, "send-ledger")}},
-		{"收件与交付状态", []string{m.stateDir}},
-	}
 	areas := []storageArea{}
 	var total int64
-	for _, dir := range dirs {
-		area, err := scanStorage(ctx, dir.name, dir.paths...)
+	partial := false
+	for _, dir := range m.storageGroups() {
+		paths := dir.files
+		if paths == nil {
+			paths = dir.folders
+		}
+		area, err := scanStorage(ctx, dir.name, paths...)
+		area.ID, area.Locations = dir.id, dir.folders
 		if err != nil {
-			return nil, err
+			area.Incomplete = true
+			partial = true
 		}
 		areas = append(areas, area)
 		total += area.Bytes
@@ -94,7 +117,7 @@ func (m *Manager) storageStatus(ctx context.Context) (map[string]any, error) {
 	m.mu.Lock()
 	journalCount, lastError := len(m.journal), m.storageError
 	m.mu.Unlock()
-	return map[string]any{"areas": areas, "total_bytes": total, "error": lastError, "limits": []map[string]any{{"name": "持续任务", "count": tasks, "limit": 500}, {"name": "操作幂等记录", "count": ops, "limit": 2000}, {"name": "网页发送记录", "count": sends, "limit": 1000}, {"name": "附件暂存记录", "count": uploads, "limit": 1000}, {"name": "活跃日志", "count": journalCount, "limit": 1000}}, "boundary": "仅统计管理端数据和收件状态，不含外部YuE环境、模型、微信原生库及其媒体。归档会增加总占用，不自动删除媒体原件。"}, nil
+	return map[string]any{"partial": partial, "areas": areas, "total_bytes": total, "error": lastError, "limits": []map[string]any{{"name": "持续任务", "count": tasks, "limit": 500}, {"name": "操作幂等记录", "count": ops, "limit": 2000}, {"name": "网页发送记录", "count": sends, "limit": 1000}, {"name": "附件暂存记录", "count": uploads, "limit": 1000}, {"name": "活跃日志", "count": journalCount, "limit": 1000}}, "boundary": "仅统计管理端数据和收件状态，不含外部YuE环境、模型、微信原生库及其媒体。归档会增加总占用，不自动删除媒体原件。"}, nil
 }
 func (s *Server) storageRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/storage", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +126,72 @@ func (s *Server) storageRoutes(mux *http.ServeMux) {
 			fail(w, 500, "容量扫描未完成，请检查目录权限和文件数量")
 			return
 		}
+		out["can_open_folder"] = storageDesktop(r)
 		respond(w, 200, out)
+	}))
+	mux.HandleFunc("POST /api/storage/open", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Area  string
+			Index int
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		if !storageDesktop(r) {
+			fail(w, 403, "请在本机桌面程序中打开目录")
+			return
+		}
+		for _, group := range s.manager.storageGroups() {
+			if group.id != in.Area || in.Index < 0 || in.Index >= len(group.folders) {
+				continue
+			}
+			path, err := filepath.Abs(group.folders[in.Index])
+			if err != nil {
+				fail(w, 400, "存储路径无效")
+				return
+			}
+			resolved, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				fail(w, 404, "目录尚未创建或无法访问")
+				return
+			}
+			info, err := os.Stat(resolved)
+			if err != nil || !info.IsDir() || !strings.EqualFold(filepath.Clean(resolved), path) {
+				fail(w, 409, "目录已变更，无法安全打开")
+				return
+			}
+			systemRoot := os.Getenv("SystemRoot")
+			if !filepath.IsAbs(systemRoot) {
+				fail(w, 500, "系统目录不可用")
+				return
+			}
+			cmd := exec.Command(filepath.Join(systemRoot, "explorer.exe"), path)
+			if err := cmd.Start(); err != nil {
+				fail(w, 500, "文件资源管理器未能启动")
+				return
+			}
+			go cmd.Wait()
+			respond(w, 200, map[string]bool{"opened": true})
+			return
+		}
+		fail(w, 400, "未知存储位置")
+	}))
+	mux.HandleFunc("POST /api/storage/archive-logs", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		var in struct{}
+		if !decode(w, r, &in) {
+			return
+		}
+		m := s.manager
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		count := max(len(m.journal)-200, 0)
+		if count > 0 {
+			if err := m.commitJournalArchive(m.journal[count:], m.journal[:count]); err != nil {
+				fail(w, 500, "日志归档失败，原记录已保留")
+				return
+			}
+		}
+		respond(w, 200, map[string]int{"archived": count})
 	}))
 	resolve := func(r *http.Request) (string, error) {
 		switch r.PathValue("kind") {

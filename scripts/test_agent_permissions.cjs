@@ -40,6 +40,7 @@ test('permission form projects account layout without persisting its preview as 
   };
   for (const id of ['agent-cross-conversation', 'agent-external-owner-only', 'agent-owner-all-threads']) node(id).type = 'checkbox';
   const window = {
+    WechatRefresh: {bind() {}},
     addEventListener(name, handler) { listeners.set(name, handler); },
     WechatAdmin: {
       isAuthenticated: () => true,

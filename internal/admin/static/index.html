@@ -159,6 +159,7 @@
 </button>
 </nav>
 <div class="sidebar-bottom">
+<button type="button" class="sidebar-refresh" id="sidebar-refresh" aria-label="刷新当前页面" title="刷新当前页面"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.3 8a7.5 7.5 0 0 1 12.4-2L20 9M4 15l2.3 3A7.5 7.5 0 0 0 18.7 16"/></svg><span>刷新</span></button>
 <button class="quiet" id="logout">退出登录</button>
 </div>
 </aside>
@@ -595,8 +596,8 @@
 <article class="panel">
 <h3>群聊规则</h3>
 <div class="inline-actions">
-<button class="secondary" data-catalog-sync="groups" type="button">刷新群聊</button>
-<button class="secondary" data-catalog-sync="contacts" type="button">刷新好友</button>
+<button class="secondary" data-catalog-sync="groups" type="button">同步微信群聊</button>
+<button class="secondary" data-catalog-sync="contacts" type="button">同步微信好友</button>
 <span class="hint" data-catalog-sync-status="" role="status"></span>
 </div>
 <div class="group-search">
@@ -996,9 +997,9 @@
 <article class="panel">
 <div aria-live="polite" class="hint" id="catalog-state">请选择类型后手动查询。</div>
 <div class="inline-actions">
-<button class="secondary" data-catalog-sync="groups" type="button">刷新群聊</button>
-<button class="secondary" data-catalog-sync="contacts" type="button">刷新好友</button>
-<button class="secondary" data-catalog-sync="members" hidden="" id="catalog-refresh-members" type="button">刷新当前群成员</button>
+<button class="secondary" data-catalog-sync="groups" type="button">同步微信群聊</button>
+<button class="secondary" data-catalog-sync="contacts" type="button">同步微信好友</button>
+<button class="secondary" data-catalog-sync="members" hidden="" id="catalog-refresh-members" type="button">同步当前群成员</button>
 <span class="hint" data-catalog-sync-status="" role="status"></span>
 </div>
 <div aria-live="polite" class="catalog-list" id="catalog-list"></div>
@@ -1074,7 +1075,7 @@
 <label class="sr-only" for="conversation-search">搜索会话</label>
 <input id="conversation-search" placeholder="搜索群聊或私信…" type="search">
 <button class="secondary" id="conversation-refresh" type="button">刷新</button>
-<button class="secondary" hidden="" id="conversation-new" type="button">有新进展</button>
+
 </div>
 <p class="hint" id="conversation-state" role="status"></p>
 <div hidden="" id="conversation-detail-parking">
@@ -1090,8 +1091,7 @@
 <button class="quiet" id="memory-settings" type="button">备注与管理</button>
 <span class="hint" id="context-compress-state" role="status"></span>
 <button type="button" class="quiet" id="conversation-send">发送消息</button>
-<button type="button" class="quiet" id="conversation-members">成员</button>
-<button type="button" class="quiet" id="conversation-rule">回复规则</button>
+
 </div>
 <p class="hint" id="memory-load-state" role="status"></p>
 <div class="conversation-feed" id="memory-content"></div>
@@ -1101,7 +1101,8 @@
 <textarea id="conversation-preferences" rows="4" maxlength="1300" placeholder="例如：本群收到视频号、快手等分享时，默认总结主要内容并发送；平时回答简短一些。"></textarea>
 <p class="hint">用文字描述这个群或私聊的习惯。仅在本会话生效；自动回应分享还需要已授权的群聊观察、自主接话和视频理解。</p>
 <div class="inline-actions"><button class="primary" id="save-conversation-preferences" type="button">保存会话偏好</button><span id="conversation-preferences-state" role="status"></span></div>
-<span id="memory-archive-mount"></span>
+<div class="inline-actions"><button type="button" class="quiet" id="conversation-members">成员</button>
+<button type="button" class="quiet" id="conversation-rule">回复规则</button><span id="memory-archive-mount"></span></div>
 <label for="memory-note">事实与关系备注</label>
 <div class="search-row">
 <input id="memory-note" maxlength="1000" placeholder="记录需要保留的事实或关系">
@@ -1389,7 +1390,7 @@
 <article class="panel">
 <div class="inline-actions">
 <span id="surf-count">0 条活动</span>
-<button class="secondary" hidden="" id="surf-new" type="button">有新活动，点击载入</button>
+<span class="hint" hidden id="surf-new" role="status">有新活动，可从侧栏刷新</span>
 </div>
 <p aria-live="polite" class="form-error" id="surf-error"></p>
 <div aria-label="真实上网活动" class="surf-list" id="surf-list"></div>
@@ -1451,7 +1452,7 @@
 <article class="log-workspace round-workspace">
 <div class="log-toolbar">
 <span id="log-count" role="status">正在读取…</span>
-<button class="secondary" hidden="" id="log-new" type="button">载入新进展</button>
+<span class="hint" hidden id="log-new" role="status"></span>
 <div class="log-toolbar-end">
 <label class="follow-control">
 <input id="log-follow-latest" type="checkbox">跟随最新</label>
@@ -1505,6 +1506,7 @@
 </section>
 </main>
 </div>
+<script defer src="/assets/refresh.js"></script>
 <script defer="" src="/assets/dialogs.js">
 </script>
 <script defer="" src="/assets/accounts.js">

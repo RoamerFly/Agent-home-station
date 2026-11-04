@@ -156,12 +156,12 @@
    if(items.length===state.items.length&&items.every((item,index)=>key(item)===key(state.items[index])))return;
    if(force===true||$('#log-follow-latest').checked){consume(items,force!==true);return}
    state.pending=items;const old=new Set(state.items.map(key)),changed=items.filter(item=>!old.has(key(item))),rounds=window.WechatRounds.project(changed);
-   $('#log-new').textContent=rounds.length?'有 '+rounds.length+' 组进展，点击载入':'执行记录已更新';$('#log-new').hidden=false;window.dispatchEvent(new Event('wechat-admin:activity-pending'));
+   $('#log-new').textContent=rounds.length?'有 '+rounds.length+' 组进展，可从侧栏刷新':'执行记录已更新';$('#log-new').hidden=false;window.dispatchEvent(new Event('wechat-admin:activity-pending'));
   }catch(error){if(stamp===epoch)$('#log-load-error').textContent='读取失败：'+error.message+'。当前内容已保留。'}finally{state.busy=false;$('#refresh-logs').disabled=false}
  }
  ['log-category','log-source','log-view','log-status'].forEach(id=>$('#'+id).addEventListener('change',render));
  let searchTimer;$('#log-search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{render()},150)});
- $('#log-new').addEventListener('click',()=>{if(state.pending)consume(state.pending)});
+
  async function loadDate(){
   const request=++dateEpoch,stamp=epoch,day=$('#log-date').value;if(!day)return;
   const progress=$('#log-date-progress');progress.textContent='正在读取当天记录…';
@@ -175,9 +175,11 @@
    after=result.next||'';progress.textContent=after?'正在补齐当天历史记录…':'';
   }while(after)}catch(error){if(request===dateEpoch&&stamp===epoch)progress.textContent='当天记录尚未读完，请点击刷新重试。'}
  }
+
+ refresh=window.WechatRefresh.join(refresh);
  $('#log-date').addEventListener('change',loadDate);
  $('#log-today').addEventListener('click',()=>{$('#log-date').value=today();loadDate()});
- $('#refresh-logs').addEventListener('click',loadDate);
+ window.WechatRefresh.bind($('#refresh-logs'),async()=>{await refresh();if(state.pending)consume(state.pending);await loadDate()});
  window.addEventListener('wechat-admin:navigate',event=>{if(event.detail.section==='logs')loadDate()});
  $('#log-follow-latest').addEventListener('change',()=>{if($('#log-follow-latest').checked&&state.pending)consume(state.pending,true)});
  window.addEventListener('wechat-admin:logs-refresh',()=>refresh());

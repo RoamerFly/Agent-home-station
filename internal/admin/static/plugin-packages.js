@@ -5,7 +5,7 @@
  const state={catalog:[],installed:[],builtins:[],runtimes:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,hostRequest:null};
  const page=$('#plugins'),legacy=page.querySelector('.plugin-workspace'),guide=$('#plugin-guide');
  const el=(tag,text,klass)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(klass)n.className=klass;return n};
- const button=(text,action)=>{const b=el('button',text,'quiet');b.type='button';b.addEventListener('click',action);return b};
+ const button=(text,action)=>{const b=el('button',text,'quiet');b.type='button';if(text==='刷新任务')window.WechatRefresh.bind(b,action);else b.addEventListener('click',action);return b};
  const area=el('div',undefined,'package-workspace'),browser=el('aside',undefined,'panel package-browser'),editor=el('article',undefined,'panel package-editor');
  const list=el('div',undefined,'package-list'),status=el('p','选择服务查看配置、权限和任务。','hint');status.setAttribute('role','status');
  const refreshList=$('#plugins-refresh');
@@ -325,7 +325,7 @@
  }
  const returnButton=button('返回能力目录',()=>{if(window.WechatAdmin.pluginDirty&&!confirm('放弃未保存的连接设置？'))return;window.WechatPluginDeclarations.reset();showPackages();load()});
  legacy.querySelector('.plugin-template-head').append(returnButton);
- $('#plugins-refresh').addEventListener('click',load);
+ window.WechatRefresh.bind($('#plugins-refresh'),load);
  window.addEventListener('wechat-admin:navigate',e=>{if(e.detail?.section==='plugins')load()});
  window.WechatPluginPackages={
   async open(id,section){

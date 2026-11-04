@@ -25,7 +25,9 @@
   try{const data=await window.WechatAdmin.api('/api/voice-library');if(stamp!==epoch)return;items=data.items||[];const select=$('voice-engine'),old=select.value;select.replaceChildren(new Option('全部模型',''));for(const name of new Set(items.map(x=>x.engine)))select.append(new Option(name,name));select.value=old;render()}
   catch(error){if(stamp===epoch)$('voice-state').textContent=error.message}finally{busy=false;$('voice-refresh').disabled=false}
  }
- $('voice-query').addEventListener('input',render);$('voice-engine').addEventListener('change',render);$('voice-refresh').addEventListener('click',refresh);
+
+ refresh=window.WechatRefresh.join(refresh);
+ $('voice-query').addEventListener('input',render);$('voice-engine').addEventListener('change',render);window.WechatRefresh.bind($('voice-refresh'),refresh);
  window.addEventListener('wechat-admin:navigate',e=>{if(e.detail.section==='voices')refresh()});
  window.addEventListener('wechat-admin:logout',()=>{epoch++;items=[];$('voice-list').replaceChildren();$('voice-query').value=''});
  document.addEventListener('play',e=>{if(e.target.tagName==='AUDIO')for(const a of document.querySelectorAll('audio'))if(a!==e.target)a.pause()},true);

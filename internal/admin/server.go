@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -189,6 +190,8 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			name = "flow-default.json"
 		case "/assets/workbench.css":
 			name = "workbench.css"
+		case "/assets/refresh.js":
+			name = "refresh.js"
 		case "/assets/dialogs.js":
 			name = "dialogs.js"
 		case "/assets/memory.js":
@@ -234,16 +237,16 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			http.NotFound(w, r)
 			return
 		}
-		switch name {
-		case "index.html":
+		switch filepath.Ext(name) {
+		case ".html":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		case "plugin-packages.js", "save-actions.js", "memory.js", "console.js", "voices.js", "accounts.js", "app.js", "theme.js", "tools.js", "catalog.js", "catalog-sync.js", "actions.js", "mcp.js", "plugins.js", "ui.js", "agent.js", "agent-workspace.js", "mobile.js", "speech.js", "dialogs.js", "conversations.js", "workbench.js", "flow-model.js", "rounds.js", "logs.js", "surf.js", "proactive.js", "billing.js", "storage.js", "channels.js":
+		case ".js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		case "flow-default.json":
+		case ".json":
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		case "whale-girl.png", "whale-girl-cutout.png":
+		case ".png":
 			w.Header().Set("Content-Type", "image/png")
-		case "app.css", "console.css", "workbench.css":
+		case ".css":
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		}
 		_, _ = w.Write(data)
