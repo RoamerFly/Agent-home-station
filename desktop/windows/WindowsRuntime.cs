@@ -92,6 +92,11 @@ namespace WechatAgent.Desktop {
         string[] NativeArgs(params string[] tail) {
             return new [] { "--json", "--server-config", Path.Combine(d.Root, "native-server.toml"), "--data-dir", d.Root, "--listen", new Uri(d.NativeUrl).Authority }.Concat(tail).ToArray();
         }
+        async Task FinishRemovedAccounts(CancellationToken cancel) {
+            if (!File.Exists(Path.Combine(d.Root, "admin", "accounts.json"))) return;
+            var result = await commands.Run(d.AdminExe, new [] { "desktop-clean-accounts", d.Root, d.Account }, cancel);
+            if (result.Code != 0) throw new InvalidOperationException("未能完成已删除账号的本机数据清理，请检查数据目录是否被占用后重试。");
+        }
         internal async Task Start(CancellationToken cancel) {
             VerifyBundle(d);
             if (AnyRunning) { CheckAlive(); return; }
@@ -122,6 +127,7 @@ namespace WechatAgent.Desktop {
             var programEnv = new Dictionary<string, string>();
             if (File.Exists(Path.Combine(media, "ffmpeg.exe")) && File.Exists(Path.Combine(media, "ffprobe.exe")))
                 programEnv["PATH"] = media + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+            await FinishRemovedAccounts(cancel);
             native = OwnedProcess.Start(d.NativeExe, NativeArgs("serve"), d.Workspace, programEnv, Path.Combine(d.Root, "logs", "native.log"), job);
             var deadline = DateTime.UtcNow.AddSeconds(90);
             while (true) {
@@ -202,6 +208,7 @@ namespace WechatAgent.Desktop {
                     await NativeRequest("/v1/daemon/shutdown", new { pid = native.ID, serverId = serverId, ownershipGeneration = generation });
                 }
                 await native.WaitStopped(); native.Dispose(); native = null;
+                await FinishRemovedAccounts(CancellationToken.None);
             }
             if (job != null) { job.Dispose(); job = null; }
         }

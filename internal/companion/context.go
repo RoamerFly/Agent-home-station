@@ -75,16 +75,44 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 	if end-start > 100 {
 		end = start + 100
 	}
-	selected := scope.Messages[start:end]
-	raw, _ := json.Marshal(e.summaryEvidence(scope.ID, selected))
-	if len(raw) > 50<<10 {
-		for len(raw) > 50<<10 && end > start+1 {
-			end--
-			selected = scope.Messages[start:end]
-			raw, _ = json.Marshal(e.summaryEvidence(scope.ID, selected))
-		}
+	epoch, err := e.Store.RecallEpoch(ctx)
+	if err != nil {
+		return false, err
 	}
-	request, _ := json.Marshal(map[string]any{"previous_summary": scope.Summary, "new_chronological_messages": e.summaryEvidence(scope.ID, selected)})
+	visible := e.Store.Context(in, e.Config, time.Now())
+	byID := make(map[string]Turn, len(visible.Messages))
+	for _, turn := range visible.Messages {
+		byID[turn.EventID] = turn
+	}
+	selected := make([]Turn, 0, end-start)
+	evidence := make([]map[string]any, 0, end-start)
+	size := 2
+	for i := start; i < end; i++ {
+		turn, ok := byID[scope.Messages[i].EventID]
+		if !ok || turn.EventID == "" {
+			continue
+		}
+		row := e.turnEvidenceFields(scope.ID, turn, max(512, settings.MaxInputChars/4))
+		raw, _ := json.Marshal(row)
+		if len(selected) > 0 && size+len(raw) > 50<<10 {
+			end = i
+			break
+		}
+		selected = append(selected, turn)
+		evidence = append(evidence, row)
+		size += len(raw) + 1
+	}
+	if len(selected) == 0 {
+		return false, nil
+	}
+	var previous contextSummary
+	var prior any = visible.Summary
+	if json.Unmarshal([]byte(visible.Summary), &previous) == nil && previous.Version == 1 {
+		compact := previous
+		compact.Sources = nil // Host-side provenance is verified again below.
+		prior = compact
+	}
+	request, _ := json.Marshal(map[string]any{"previous_summary": prior, "new_chronological_messages": evidence})
 	chat := e.model.Chat
 	if model, ok := e.model.(interface {
 		ChatCompression(context.Context, string, []map[string]string) (string, error)
@@ -96,8 +124,7 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 	if err != nil {
 		return false, err
 	}
-	var previous contextSummary
-	_ = json.Unmarshal([]byte(scope.Summary), &previous)
+
 	validateSummary := func(text string) (contextSummary, error) {
 		parsed, err := parseContextSummary(text, true)
 		if err != nil {
@@ -134,6 +161,13 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 	result = string(canonical)
 	expected := fingerprintTurns(scope.Messages[:end])
 	err = e.Store.scopeTransaction(scope.ID, func(data *persisted) error {
+		current, err := e.Store.RecallEpoch(ctx)
+		if err != nil {
+			return err
+		}
+		if current != epoch {
+			return ErrContextChanged
+		}
 		s, ok := data.Scopes[scope.ID]
 		if !ok || s.CompressedCount != scope.CompressedCount || len(s.Messages) < end || fingerprintTurns(s.Messages[:end]) != expected {
 			return ErrContextChanged

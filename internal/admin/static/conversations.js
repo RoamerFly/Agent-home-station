@@ -25,7 +25,7 @@
   $('#memory-panel').scrollTop=position;window.scrollTo({top:y,behavior:'instant'});
  }
  function syncCompression(){
-  renderIndex();if(!view)return;const job=jobs.get(view.item.id);$('#context-compress-now').disabled=!view.item.id||!!job?.pending;$('#context-compress-state').textContent=job?.text||'';
+  renderIndex();if(!view)return;$('#context-summary-view').disabled=!view.data;const job=jobs.get(view.item.id);$('#context-compress-now').disabled=!view.item.id||!!job?.pending;$('#context-compress-state').textContent=job?.text||'';
  }
  async function refresh(){const b=$('#conversation-refresh');b.disabled=true;try{await Promise.all([window.WechatAdmin.refreshScopes()]);renderIndex();$('#conversation-new').hidden=true}catch(e){$('#conversation-state').textContent=e.message}finally{b.disabled=false}}
  async function compress(item){
@@ -114,6 +114,12 @@
  async function clear(){const v=view;if(!v?.data||!confirm('清除这个会话的活跃记忆和摘要？只读归档和微信聊天记录仍保留。'))return;const b=$('#clear-memory');b.disabled=true;try{await api('/api/companion/memory/'+encodeURIComponent(v.item.id)+'/clear',{method:'POST',json:{}});if(view===v)await loadView(v);await window.WechatAdmin.refreshScopes()}catch(e){node($('#memory-notes'),'p',e.message,'form-error')}finally{b.disabled=false}}
  $('#conversation-search').addEventListener('input',renderIndex);$('#conversation-refresh').addEventListener('click',refresh);
  $('#conversation-new').addEventListener('click',async()=>{const current=view;await refresh();if(current&&view===current)loadView(current)});
+ $('#context-summary-view').addEventListener('click',()=>{
+  const data=view?.data;if(!data)return;
+  const updated=data.summary_updated&&Date.parse(data.summary_updated)>0?new Date(data.summary_updated).toLocaleString():'';
+  const popup=window.WechatDialogs.open({title:view.item.label+' · 压缩摘要',subtitle:data.summary&&updated?'最近成功压缩于 '+updated:''});
+  if(data.summary)renderSummary(popup.body,data);else node(popup.body,'p','这个会话还没有成功保存的压缩摘要。','hint');
+ });
  $('#context-compress-now').addEventListener('click',()=>view&&compress(view.item));$('#memory-history').addEventListener('click',openHistory);$('#memory-refresh').addEventListener('click',()=>view&&loadView(view));$('#memory-settings').addEventListener('click',manage);$('#save-memory-note').addEventListener('click',saveNote);$('#clear-memory').addEventListener('click',clear);
  window.addEventListener('wechat-admin:scopes',e=>{const old=JSON.stringify(scopes);scopes=e.detail.scopes;renderIndex();if(old!==JSON.stringify(scopes))$('#conversation-new').hidden=false});
 

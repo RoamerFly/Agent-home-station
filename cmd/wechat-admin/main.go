@@ -16,6 +16,14 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 4 && os.Args[1] == "desktop-clean-accounts" {
+		if err := admin.FinishNativeAccountPurges(os.Args[2], os.Args[3]); err != nil {
+			log.Print("未能清理已删除账号的原生数据：", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) == 3 && os.Args[1] == "desktop-busy" {
 		if err := printDesktopBusy(os.Args[2]); err != nil {
 			log.Print("wechat-admin: cannot verify native pending jobs")

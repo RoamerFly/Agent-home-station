@@ -27,8 +27,9 @@ const data={
    const filename=url.pathname==='/'?'index.html':url.pathname.split('/').pop(),file=path.join(__dirname,'../internal/admin/static',filename);
    try{return route.fulfill({body:await fs.readFile(file),contentType:({'.html':'text/html','.js':'text/javascript','.css':'text/css','.png':'image/png'})[path.extname(file)]||'text/plain'})}catch{return route.continue()}
   });
-  await page.goto(base+'/#memory');await page.locator('.conversation-row[data-scope-id="scope-a"]').waitFor();assert.equal(await page.locator('.main-nav').count(),5);
+  await page.goto(base+'/#memory');await page.locator('.conversation-row[data-scope-id="scope-a"]').waitFor();assert(await page.locator('.main-nav[data-section="memory"]').count());
   await page.locator('[data-scope-id="scope-a"] .conversation-open').click();await page.getByText('A 摘要',{exact:true}).waitFor();
+  await page.locator('#context-summary-view').click();const saved=page.getByRole('dialog',{name:'合成群 A · 压缩摘要'});await saved.getByText('A 摘要',{exact:true}).waitFor();await saved.locator('.dialog-close').click();
   assert.equal(historyReads,0);assert(!(await page.locator('#memory-content').textContent()).includes('旧消息'));
   assert.deepEqual(await page.locator('#memory-content .memory-message-body').allTextContents(),['A 最新','A 次新']);
   await page.locator('#memory-history').click();await page.getByText('仅历史弹窗可见的旧消息二',{exact:true}).waitFor();assert.equal(historyReads,1);assert.equal(await page.locator('dialog[open]').count(),1);
@@ -43,6 +44,11 @@ const data={
   assert((await page.locator('#memory-content').textContent()).includes('B 最新'));assert(!(await page.locator('#memory-content').textContent()).includes('A 摘要'));assert(await page.locator('#context-compress-now').isDisabled());
   data['scope-b']={...data['scope-b'],messages:[],summary:summary('B 压缩后的摘要'),summary_updated:'2026-10-27T04:00:01Z',history_count:3,compressed_count:2,retained_context_count:1};
   await pending.get('scope-b').fulfill({json:{compressed:true,scope_id:'scope-b'}});await page.getByText('B 压缩后的摘要',{exact:true}).waitFor();assert(await page.locator('#context-compress-now').isEnabled());assert.equal(await page.locator('#memory-content .memory-message').count(),0);
+  await page.locator('#context-compress-now').click();await page.waitForFunction(()=>document.querySelector('#context-compress-now').disabled);
+  for(let i=0;i<100&&compressions<3;i++)await page.waitForTimeout(20);assert.equal(compressions,3);
+  await pending.get('scope-b').fulfill({status:502,json:{error:'合成测试：模型摘要输出已截断'}});
+  await page.locator('#context-compress-state').getByText('合成测试：模型摘要输出已截断').waitFor();
+  await page.locator('#context-summary-view').click();const previous=page.getByRole('dialog',{name:'合成群 B · 压缩摘要'});await previous.getByText('B 压缩后的摘要',{exact:true}).waitFor();await previous.locator('.dialog-close').click();
   for(const width of [375,768,1440]){await page.setViewportSize({width,height:900});assert(!(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1)));assert(!(await page.locator('#conversation-inspector').evaluate(e=>e.scrollWidth>e.clientWidth+1)))}
   await fs.mkdir('research/evidence/conversation-workspace',{recursive:true});await page.screenshot({path:'research/evidence/conversation-workspace/dialog-light.png'});
   await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:'research/evidence/conversation-workspace/dialog-dark.png'});

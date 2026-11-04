@@ -96,7 +96,15 @@ namespace WechatAgent.Desktop {
                 if (choice == "ask") {
                     closeDialogOpen = true;
                     try {
-                        using (var dialog = new CloseChoiceDialog()) {
+                        bool dark = false;
+                        if (web != null && web.CoreWebView2 != null) {
+                            try {
+                                var theme = web.ExecuteScriptAsync("document.documentElement.dataset.theme");
+                                if (await Task.WhenAny(theme, Task.Delay(150)) == theme) dark = await theme == "\"dark\"";
+                            } catch (InvalidOperationException) { }
+                        }
+                        if (exitRequested || IsDisposed) return;
+                        using (var dialog = new CloseChoiceDialog(dark)) {
                             dialog.ShowDialog(this); choice = dialog.Choice;
                             if (choice == "cancel") return;
                             if (dialog.Remember) closeSettings.Save(choice);

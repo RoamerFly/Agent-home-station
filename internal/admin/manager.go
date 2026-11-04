@@ -95,7 +95,7 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
-	enrollment enrollmentRuntime
+	enrollment          enrollmentRuntime
 	packageMu           sync.Mutex
 	packages            *pluginhost.Store
 	packagesClosed      bool
@@ -455,16 +455,16 @@ func (m *Manager) stop() error {
 }
 func (m *Manager) Close() error {
 	m.enrollment.close()
-	m.packageMu.Lock()
-	m.packagesClosed = true
-	packages, packageRuntime := m.packages, m.packageRuntime
-	m.packageMu.Unlock()
 	// Stop task owners while their plugin sessions and private job store are
 	// still available to checkpoint cancellation and reap native child trees.
 	var mobileErr error
 	if m.mobile != nil {
 		mobileErr = m.mobile.Close()
 	}
+	m.packageMu.Lock()
+	m.packagesClosed = true
+	packages, packageRuntime := m.packages, m.packageRuntime
+	m.packageMu.Unlock()
 	cleanupErr := errors.Join(devicebroker.CleanupQuarantined(), adbserver.CleanupQuarantined())
 	var packageErr error
 	if packageRuntime != nil {

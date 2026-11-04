@@ -17,9 +17,11 @@ import (
 )
 
 type accountRecord struct {
-	ID      string `json:"id"`
-	Label   string `json:"label,omitempty"`
-	Removed bool   `json:"removed,omitempty"`
+	ID       string `json:"id"`
+	Label    string `json:"label,omitempty"`
+	Removed  bool   `json:"removed,omitempty"`
+	Deleting bool   `json:"deleting,omitempty"`
+	Purged   bool   `json:"purged,omitempty"`
 }
 type accountAccess struct {
 	mu      sync.RWMutex
@@ -33,11 +35,12 @@ type accountRuntime struct {
 	loadError string
 }
 type accountRegistry struct {
-	mu     sync.Mutex
-	root   *Server
-	items  map[string]*accountRuntime
-	order  []accountRecord
-	closed bool
+	lifecycle sync.Mutex
+	mu        sync.Mutex
+	root      *Server
+	items     map[string]*accountRuntime
+	order     []accountRecord
+	closed    bool
 }
 type accountFactory interface {
 	ForAccount(string) (*linuxnative.Sender, error)
@@ -170,6 +173,8 @@ func (a *accountRegistry) add(record accountRecord) (*accountRuntime, error) {
 }
 
 func (a *accountRegistry) close() {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
@@ -224,7 +229,7 @@ func (a *accountRegistry) routes(mux *http.ServeMux) {
 }
 
 // Keep a tombstone so native directory refresh cannot undo removal. Private
-// history and login material remain intact; a removed account cannot be routed.
+// history is retained only for restorable accounts.
 func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Action string `json:"action"`
@@ -238,46 +243,44 @@ func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "账号备注需要为单行文字，最多 256 字节")
 		return
 	}
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	if in.Action == "remove" || in.Action == "purge" {
+		a.removeAccount(w, r, in.Action == "purge")
+		return
+	}
+	id := r.PathValue("id")
+	snapshot := a.lookup(id)
+	if snapshot != nil && snapshot.access != nil {
+		snapshot.access.mu.Lock()
+		defer snapshot.access.mu.Unlock()
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	id := r.PathValue("id")
+
 	item := a.items[id]
 	if a.closed || a.root.manager.draining() {
 		fail(w, 409, "服务正在收尾，请稍后重试")
 		return
 	}
-	if item == nil {
-		fail(w, 404, "账号不存在")
+	if item == nil || item.record.Purged || item.record.Deleting {
+		fail(w, 404, "账号不存在或正在删除")
 		return
 	}
 	if id == a.root.manager.native.Account() {
 		fail(w, 409, "主账号是本机服务入口，可暂停 Agent 或退出微信登录，不能移除入口")
 		return
 	}
-	if item.access != nil {
-		item.access.mu.Lock()
-		defer item.access.mu.Unlock()
-	}
+
 	record := item.record
 	switch in.Action {
 	case "rename":
 		record.Label = in.Label
-	case "remove":
-		if item.manager != nil {
-			item.manager.op.Lock()
-			defer item.manager.op.Unlock()
-			if (item.manager.mobile != nil && item.manager.mobile.Busy()) || (item.manager.processes != nil && item.manager.processes.Busy()) || item.manager.managedServiceRegistry().Busy() {
-				fail(w, 409, "此账号仍有后台任务，请结束任务后再移除")
-				return
-			}
-			state := item.manager.BotStatus().State
-			if item.manager.Config().Enabled || (state != "disabled" && state != "error" && state != "") {
-				fail(w, 409, "请先暂停此账号的 Agent，等待处理结束后再移除")
-				return
-			}
-		}
-		record.Removed = true
 	case "restore":
+		if record.Removed && item.manager != nil {
+			fail(w, 409, "上次停止账号未完成，请重启服务后恢复")
+			return
+		}
 		if !record.Removed {
 			respond(w, 200, map[string]any{"id": id})
 			return
@@ -294,6 +297,7 @@ func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Open before committing restoration; keep it inaccessible until persistence.
+	oldItem := item
 	if in.Action == "restore" && item.manager == nil {
 		opened, err := a.open(record, false)
 		if err != nil {
@@ -308,6 +312,10 @@ func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 		err = writePrivate(filepath.Join(a.root.manager.dir, "accounts.json"), data)
 	}
 	if err != nil {
+		if item != oldItem {
+			a.items[id] = oldItem
+			item.manager.Close()
+		}
 		fail(w, 500, "账号目录保存失败，原记录保留")
 		return
 	}
@@ -347,6 +355,9 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	items := make([]*accountRuntime, 0, len(a.items))
 	for _, item := range a.items {
+		if item.record.Purged {
+			continue
+		}
 		copy := *item
 		items = append(items, &copy)
 	}
@@ -366,7 +377,7 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 		go func(i int, item *accountRuntime) {
 			defer wg.Done()
 			if item.record.Removed {
-				rows[i] = map[string]any{"id": item.record.ID, "name": item.record.Label, "label": item.record.Label, "removed": true}
+				rows[i] = map[string]any{"id": item.record.ID, "name": item.record.Label, "label": item.record.Label, "removed": true, "deleting": item.record.Deleting}
 				return
 			}
 			if item.manager == nil {

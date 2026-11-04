@@ -119,10 +119,23 @@ func (c *Client) ChatCompression(ctx context.Context, system string, messages []
 	}
 	copy := *c
 	copy.maxTokens = 4096
-	answer, err := copy.chat(ctx, system, messages, true)
+	structured := true
+	answer, err := copy.chat(ctx, system, messages, structured)
 	if d, ok := ErrorDiagnostics(err); ok && d.Code == "model_invalid_parameters" && c.compatible {
 		// Some compatible services do not implement response_format.
-		return copy.chat(ctx, system, messages, false)
+		structured = false
+		answer, err = copy.chat(ctx, system, messages, structured)
+	}
+	if d, ok := ErrorDiagnostics(err); ok && d.Code == "model_output_token_limit" && ctx.Err() == nil {
+		copy.maxTokens = 8192
+		answer, retryErr := copy.chat(ctx, system, messages, structured)
+		var failure *RequestError
+		if errors.As(retryErr, &failure) {
+			failure.Attempts += d.Attempts
+			failure.MaxAttempts += d.Attempts
+			failure.DurationMS += d.DurationMS
+		}
+		return answer, retryErr
 	}
 	return answer, err
 }

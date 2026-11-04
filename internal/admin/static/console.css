@@ -243,6 +243,10 @@ details.disclosure:not([open])>:not(summary) { display:none; }
 .voice-card details { border-top:1px solid var(--line); padding-top:10px; margin-top:12px; }
 .voice-card li { margin-bottom:10px; font-size:12px; }.voice-card ul { padding-left:18px; }
 /* Modal reading and editing surfaces. */
+.console-dialog.account-removal { inset:0; margin:auto; width:min(460px,calc(100vw - 24px)); height:fit-content; }
+.account-removal .dialog-body { padding:16px 22px 22px; }
+.account-removal .dialog-body p { margin:0 0 16px; }
+.account-removal .button-row { justify-content:flex-end; }
 .console-dialog { width:min(1120px,calc(100vw - 40px)); max-width:calc(100vw - 24px); height:min(840px,calc(100dvh - 48px)); max-height:calc(100dvh - 24px); padding:0; border:1px solid var(--line); border-radius:20px; color:var(--ink); background:var(--raised); box-shadow:0 24px 100px #0005; overflow:hidden; }
 .console-dialog[open] { display:flex; flex-direction:column; }
 .console-dialog:has(> .round-detail) { height:fit-content; width:min(960px,calc(100vw - 24px)); }

@@ -95,3 +95,41 @@ func TestMediaFocusBackfillIsScopedAndChronologyPreserved(t *testing.T) {
 		t.Fatal(turns)
 	}
 }
+
+func TestSQLiteLongTermMemoryAlsoAutoCompressesInChat(t *testing.T) {
+	cfg := enabledConfig()
+	cfg.Permissions.Remember = true
+	cfg.Context = &ContextSettings{true, 20, 5, 8000}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	in := Input{Channel: "wechat", Account: "fixture", Thread: "room", Mode: "direct", Sender: "user"}
+	for i := 0; i < 20; i++ {
+		in.TraceID = fmt.Sprint(i)
+		in.Text = in.TraceID
+		if err = store.Observe(in, cfg, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model := &compressionScript{chat: func(call int) string {
+		if call == 1 {
+			return repairedSummary
+		}
+		return `{"speak":false,"reason":"no_update"}`
+	}}
+	engine, err := New(cfg, store, model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !engine.memorySettings().Enabled {
+		t.Fatal("expected SQLite long-term memory enabled")
+	}
+	in = syntheticNativeInput(in, "auto-check")
+	engine.Respond(t.Context(), in)
+	scope, err := store.Read(ScopeID(in.Channel, in.Account, in.Thread), cfg, time.Now())
+	if err != nil || scope.CompressedCount == 0 || scope.Summary == "" {
+		t.Fatalf("automatic compression missing: count %d, model calls %d, err %v", scope.CompressedCount, model.calls, err)
+	}
+}

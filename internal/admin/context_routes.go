@@ -24,6 +24,10 @@ func (s *Server) contextRoutes(mux *http.ServeMux) {
 			return
 		}
 		cfg := s.manager.runtimeConfig()
+		if !cfg.Companion.Permissions.Remember {
+			fail(w, 409, "此账号已关闭记忆，开启后可压缩会话")
+			return
+		}
 		trace := "compression-" + randomToken()
 		s.manager.record(bot.Record{Event: "context_compression_started", Category: "tool", ThreadID: scope.Thread, MessageID: trace, Content: "手动压缩上下文", Status: "running", Origin: "manual"})
 		reject := func(err error) {

@@ -77,17 +77,44 @@ func TestAccountDirectoryWriteFailureKeepsRegistration(t *testing.T) {
 	}
 }
 
-func TestAccountRemovalRequiresPause(t *testing.T) {
+func TestAccountRemovalAutomaticallyPauses(t *testing.T) {
 	f, a := setupAccounts(t)
 	m := a.lookup("second").manager
 	m.mu.Lock()
 	m.config.Enabled = true
 	m.mu.Unlock()
-	defer func() { m.mu.Lock(); m.config.Enabled = false; m.mu.Unlock() }()
-	if code, _, _ := f.request("POST", "/api/accounts/second/manage", map[string]string{"action": "remove"}, true, true); code != 409 {
-		t.Fatalf("running account removal: %d", code)
+	if code, b, _ := f.request("POST", "/api/accounts/second/manage", map[string]string{"action": "remove"}, true, true); code != 200 {
+		t.Fatalf("remove: %d %s", code, b)
 	}
-	if a.lookup("second").record.Removed {
-		t.Fatal("running account removed")
+	if !a.lookup("second").record.Removed || m.Config().Enabled {
+		t.Fatal("Agent was not stopped")
+	}
+}
+
+func TestPurgeArchivedAccount(t *testing.T) {
+	f, a := setupAccounts(t)
+	m := a.lookup("second").manager
+	workspace := m.privateWorkspaceFor("second")
+	if err := os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"remove", "purge", "purge"} {
+		if code, b, _ := f.request("POST", "/api/accounts/second/manage", map[string]string{"action": action}, true, true); code != 200 {
+			t.Fatalf("%s: %d %s", action, code, b)
+		}
+	}
+	for _, path := range []string{workspace, m.dir, m.stateDir} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("retained %s: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(f.manager.dir); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := f.request("POST", "/api/accounts/second/manage", map[string]string{"action": "restore"}, true, true); code != 404 {
+		t.Fatal(code)
+	}
+	if _, _, _ = f.request("GET", "/api/accounts", nil, true, false); !a.lookup("second").record.Purged {
+		t.Fatal("purge not retained across refresh")
 	}
 }

@@ -393,13 +393,11 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	if reset, ok := e.Tools.(interface{ ResetMedia() }); ok {
 		reset.ResetMedia()
 	}
-	if !input.Preview && (!e.memorySettings().Enabled || e.Store.db == nil) {
-		compressed, compressionErr := e.CompressContext(ctx, input, false)
+	settings := c.ContextConfig()
+	if !input.Preview && settings.AutoCompress && len(scope.Messages) >= settings.CompressAfter {
+		_, compressionErr := e.CompressContext(ctx, input, false)
 		if compressionErr != nil && e.ToolLog != nil {
 			e.ToolLog("context_compression_failed")
-		}
-		if compressed {
-			scope = e.Store.Context(input, c, now)
 		}
 	}
 	// Observe/revision and our own pre-generation compression have committed.

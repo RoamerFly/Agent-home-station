@@ -88,6 +88,20 @@ namespace WechatAgent.Desktop {
             using (var recovered = new DesktopInstance(name)) Assert(recovered.IsOwner, "abandoned instance is recoverable");
         }
         static async Task FormTests(string root) {
+            using (var owner = new Form { Bounds = new Rectangle(80, 60, 800, 600), StartPosition = FormStartPosition.Manual })
+            using (var choice = new CloseChoiceDialog()) {
+                owner.Show();
+                choice.Shown += delegate {
+                    var b = owner.Bounds;
+                    var area = Screen.FromControl(owner).WorkingArea;
+                    int x = Math.Max(area.Left, Math.Min(area.Right-choice.Width, b.Left+(b.Width-choice.Width)/2));
+                    int y = Math.Max(area.Top, Math.Min(area.Bottom-choice.Height, b.Top+(b.Height-choice.Height)/2));
+                    Assert(choice.Location == new Point(x,y), "close choice centered on owner");
+                    choice.Close();
+                };
+                choice.ShowDialog(owner);
+                Assert(choice.Choice == "cancel", "dismissing close choice preserves services");
+            }
             using (var page = new SyntheticPageServer()) {
             for (int cycle = 0; cycle < 8; ++cycle) {
                 string workspace = Path.Combine(root, "window-" + cycle); Directory.CreateDirectory(workspace);
