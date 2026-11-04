@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -64,7 +65,14 @@ func cloneReplyContext(v *ReplyContext) *ReplyContext {
 	return &c
 }
 func cloneIncomingMedia(v []IncomingMediaRef) []IncomingMediaRef {
-	return append([]IncomingMediaRef(nil), v...)
+	if len(v) == 0 {
+		return nil
+	}
+	out := append([]IncomingMediaRef(nil), v...)
+	for i := range out {
+		out[i].ObservationParts = slices.Clone(v[i].ObservationParts)
+	}
+	return out
 }
 func cloneTurnProvenance(t *Turn) {
 	t.Source = cloneSource(t.Source)

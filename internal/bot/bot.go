@@ -70,6 +70,10 @@ type Config struct {
 type MediaObservationEvidence struct {
 	ObservedRange string
 	Excerpt       string
+	// Parts preserve which observer supplied each excerpt. Card metadata is
+	// deliberately represented separately from decoded page, image or audio
+	// content so consumers never turn a publisher claim into firsthand memory.
+	Parts []companion.ObservationPart
 }
 type GroupRule struct {
 	Mode, Prefix, Persona   string

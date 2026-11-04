@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -213,7 +214,7 @@ func (b *groundingTableBuilder) message(row map[string]any) error {
 		}
 		meta := map[string]any{}
 		for key, value := range observation {
-			if key != "observation" {
+			if key != "observation" && key != "observation_parts" {
 				meta[key] = value
 			}
 		}
@@ -222,6 +223,28 @@ func (b *groundingTableBuilder) message(row map[string]any) error {
 			identity = ""
 		}
 		text := groundingString(observation["observation"])
+		if parts := typedObservationParts(observation["observation_parts"]); len(parts) > 0 {
+			for _, part := range parts {
+				kind := groundingObservationPartKind(part.Kind)
+				if kind == "" || strings.TrimSpace(part.Excerpt) == "" {
+					continue
+				}
+				partMeta := map[string]any{}
+				for key, value := range meta {
+					partMeta[key] = value
+				}
+				partMeta["modality"], partMeta["observed_range"] = part.Kind, part.Range
+				if part.Kind == ObservationAudioTranscript {
+					partMeta["coverage_basis"] = "audio_observer"
+				}
+				if err := b.add(kind, part.Excerpt, b.refs([]string{mediaRef}), partMeta, identity+"\x00"+part.Kind+"\x00"+part.Range); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		// Legacy observations predate typed parts. Keep their historical parser,
+		// but never use it for a new typed record with metadata-only parts.
 		if parts := videoEvidenceParts(text); len(parts) > 0 {
 			for _, part := range parts {
 				partMeta := map[string]any{}
@@ -484,6 +507,39 @@ func groundingMaps(value any) []map[string]any {
 		}
 	}
 	return out
+}
+
+func typedObservationParts(value any) []ObservationPart {
+	if parts, ok := value.([]ObservationPart); ok {
+		return slices.Clone(parts)
+	}
+	if value == nil {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var parts []ObservationPart
+	if json.Unmarshal(raw, &parts) != nil {
+		return nil
+	}
+	return parts
+}
+
+func groundingObservationPartKind(kind string) string {
+	switch kind {
+	case ObservationPublisherDescription:
+		return "media_source_description"
+	case ObservationPageBody:
+		return "media_page_body"
+	case ObservationVisualFrames:
+		return "media_visual_observation"
+	case ObservationAudioTranscript:
+		return "media_transcript"
+	default:
+		return ""
+	}
 }
 func groundingStrings(value any) []string {
 	out := []string{}

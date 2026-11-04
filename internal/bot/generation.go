@@ -394,9 +394,20 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 					in.IncomingMedia[i].ObservationState = "observed"
 					in.IncomingMedia[i].ObservedRange = observationEvidence.ObservedRange
 					in.IncomingMedia[i].ObservationExcerpt = observationEvidence.Excerpt
+					in.IncomingMedia[i].ObservationParts = append([]companion.ObservationPart(nil), observationEvidence.Parts...)
 					if incomplete {
 						in.IncomingMedia[i].ObservationState = "incomplete"
 						in.IncomingMedia[i].ObservedRange = ""
+						// The actual read failed. Keep only card metadata so
+						// consumers can explain the source without mistaking a
+						// stale/partial body for firsthand observation.
+						parts := in.IncomingMedia[i].ObservationParts[:0]
+						for _, part := range observationEvidence.Parts {
+							if part.Kind == companion.ObservationPublisherDescription {
+								parts = append(parts, part)
+							}
+						}
+						in.IncomingMedia[i].ObservationParts = parts
 					}
 				}
 				if analysis.Type == 34 {

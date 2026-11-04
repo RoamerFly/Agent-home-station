@@ -156,7 +156,10 @@ func (a mediaUnderstanding) observeVideo(ctx context.Context, msg linuxnative.Me
 		}
 	}
 	if a.evidence != nil {
-		*a.evidence = trustedVideoEvidence(coverage, visual, formattedAudio)
+		publisher := append([]companion.ObservationPart(nil), a.evidence.Parts...)
+		observed := trustedVideoEvidence(coverage, visual, formattedAudio)
+		observed.Parts = append(publisher, observed.Parts...)
+		*a.evidence = observed
 	}
 	a.manager.record(bot.Record{Event: event, Category: "decision", ThreadID: msg.ThreadID, MessageID: msg.ID, Status: status, Reason: reason, Bytes: int64(len(data)), MediaCount: count, Origin: "media"})
 	return strings.Join(parts, "\n"), nil
@@ -175,16 +178,33 @@ func trustedVideoEvidence(coverage videoReadCoverage, visual, audio string) bot.
 		parts = append(parts, audioPart)
 	}
 	excerpts := []string{}
+	trustedParts := []companion.ObservationPart{}
 	if strings.TrimSpace(visual) != "" {
-		excerpts = append(excerpts, "画面："+strings.TrimSpace(visual))
+		body := strings.TrimSpace(visual)
+		excerpts = append(excerpts, "画面："+body)
+		if coverage.Visual == "sampled" && len(coverage.FrameTimes) > 0 {
+			times := make([]string, 0, len(coverage.FrameTimes))
+			for _, at := range coverage.FrameTimes {
+				times = append(times, formatSeconds(at)+"秒")
+			}
+			trustedParts = append(trustedParts, companion.ObservationPart{Kind: companion.ObservationVisualFrames, Range: "视频采样帧：" + strings.Join(times, "、"), Excerpt: body})
+		}
 	}
 	if strings.TrimSpace(audio) != "" {
-		excerpts = append(excerpts, "音轨："+strings.TrimSpace(audio))
+		body := strings.TrimSpace(audio)
+		excerpts = append(excerpts, "音轨："+body)
+		if coverage.Audio == "transcribed" && coverage.AudioEnd > 0 {
+			rangeLabel := "视频音轨 0–" + formatSeconds(coverage.AudioEnd) + "秒"
+			if coverage.AudioComplete {
+				rangeLabel += "（完整）"
+			}
+			trustedParts = append(trustedParts, companion.ObservationPart{Kind: companion.ObservationAudioTranscript, Range: rangeLabel, Excerpt: body})
+		}
 	}
 	if len(parts) == 1 || len(excerpts) == 0 {
 		return bot.MediaObservationEvidence{}
 	}
-	return bot.MediaObservationEvidence{ObservedRange: strings.Join(parts, "; "), Excerpt: strings.Join(excerpts, "\n")}
+	return bot.MediaObservationEvidence{ObservedRange: strings.Join(parts, "; "), Excerpt: strings.Join(excerpts, "\n"), Parts: trustedParts}
 }
 
 type videoReadCoverage struct {

@@ -87,13 +87,24 @@ func currentMetadataOnly(turns []map[string]string) bool {
 			Kind, Text   string
 			Observations []struct {
 				Kind, Observation string
-				State             string `json:"observation_state"`
+				State             string            `json:"observation_state"`
+				Parts             []ObservationPart `json:"observation_parts"`
 			} `json:"media_observations"`
 		}
 		if turns[i]["role"] != "user" || json.Unmarshal([]byte(turns[i]["content"]), &packet) != nil || packet.Kind != "current_message" {
 			continue
 		}
 		for _, observation := range packet.Observations {
+			if len(observation.Parts) > 0 {
+				if HasFirsthandObservation(observation.Parts) {
+					// Typed observations are authoritative; do not require the
+					// historical display envelope to recognise an actual read.
+					continue
+				}
+				if observation.State == "observed" {
+					return true
+				}
+			}
 			// A share is a transport type. Successful share readers prepend this
 			// envelope before publisher text, optionally after the asset receipt.
 			body := observation.Observation

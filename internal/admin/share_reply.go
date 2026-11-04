@@ -112,7 +112,7 @@ func (s *Server) replyShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	description, observationEvidence, err := (mediaUnderstanding{manager: m}).AnalyzeWithEvidence(ctx, message)
-	if err != nil || !hasActualShareObservation(description) {
+	if err != nil || !companion.HasFirsthandObservation(observationEvidence.Parts) {
 		finish("stopped", "shared_video_observation_unavailable")
 		fail(w, 422, "尚未取得分享实际内容，未发送仅凭标题的补充回复")
 		return
@@ -239,7 +239,7 @@ func bindManualShareInputWithEvidence(m *Manager, in *companion.Input, message l
 	in.HistoryObserved = true
 	in.BackgroundResult = true
 	in.OriginTraceID = message.ID
-	in.IncomingMedia = []companion.IncomingMediaRef{{Source: *ref, Kind: "share", UploaderID: message.SenderID, Observation: observation, ObservationExcerpt: evidence.Excerpt, ObservationState: "observed", ObservationVersion: 1, ObservedRange: evidence.ObservedRange}}
+	in.IncomingMedia = []companion.IncomingMediaRef{{Source: *ref, Kind: "share", UploaderID: message.SenderID, Observation: observation, ObservationExcerpt: evidence.Excerpt, ObservationState: "observed", ObservationVersion: 1, ObservedRange: evidence.ObservedRange, ObservationParts: append([]companion.ObservationPart(nil), evidence.Parts...)}}
 	return nil
 }
 

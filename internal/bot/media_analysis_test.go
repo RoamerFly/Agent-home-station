@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -38,9 +39,9 @@ func TestMediaEvidenceRequiresTypedHostResultAndPersistsItsExcerpt(t *testing.T)
 		t.Fatal("untyped card/user text gained read coverage", evidence, err)
 	}
 
-	trusted := MediaObservationEvidence{ObservedRange: "video 9.000s; sampled frames=2", Excerpt: "画面：两人走在海边"}
+	trusted := MediaObservationEvidence{ObservedRange: "video 9.000s; sampled frames=2", Excerpt: "画面：两人走在海边", Parts: []companion.ObservationPart{{Kind: companion.ObservationVisualFrames, Range: "视频采样帧：1秒、8秒", Excerpt: "两人走在海边"}}}
 	w.config.Analyzer = evidenceAnalyzer{text: "[host observation plus untrusted card]", evidence: trusted}
-	if text, evidence, err := w.readRequiredMediaWithEvidence(t.Context(), m); err != nil || text == "" || evidence != trusted {
+	if text, evidence, err := w.readRequiredMediaWithEvidence(t.Context(), m); err != nil || text == "" || !reflect.DeepEqual(evidence, trusted) {
 		t.Fatal("typed observer evidence was lost", text, evidence, err)
 	}
 
@@ -54,11 +55,11 @@ func TestMediaEvidenceRequiresTypedHostResultAndPersistsItsExcerpt(t *testing.T)
 	if !ok {
 		t.Fatal("missing persisted source")
 	}
-	if err := e.Store.CacheIncomingObservationWithCoverage(in.Channel, *ref, trusted.Excerpt, trusted.ObservedRange, trusted.Excerpt); err != nil {
+	if err := e.Store.CacheIncomingObservationWithCoverage(in.Channel, *ref, trusted.Excerpt, trusted.ObservedRange, trusted.Excerpt, trusted.Parts...); err != nil {
 		t.Fatal(err)
 	}
 	ev, err := e.Store.ReadEvent(t.Context(), []string{companion.ScopeID(in.Channel, in.Account, in.Thread)}, ref.EventID)
-	if err != nil || len(ev.IncomingMedia) != 1 || ev.IncomingMedia[0].ObservedRange != trusted.ObservedRange || ev.IncomingMedia[0].ObservationExcerpt != trusted.Excerpt {
+	if err != nil || len(ev.IncomingMedia) != 1 || ev.IncomingMedia[0].ObservedRange != trusted.ObservedRange || ev.IncomingMedia[0].ObservationExcerpt != trusted.Excerpt || len(ev.IncomingMedia[0].ObservationParts) != 1 || ev.IncomingMedia[0].ObservationParts[0] != trusted.Parts[0] {
 		t.Fatal("trusted coverage did not persist", ev, err)
 	}
 }

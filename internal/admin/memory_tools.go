@@ -13,6 +13,27 @@ import (
 
 type memoryRecordUnavailable struct{}
 
+func storedMediaTranscript(media companion.IncomingMediaRef) (string, bool) {
+	switch media.ObservationState {
+	case "observed", "verified", "complete", "completed", "succeeded", "":
+	default:
+		return "", false
+	}
+	if len(media.ObservationParts) == 0 {
+		// Metadata-only legacy cards can quote the old transcript heading.
+		if media.CardDescriptionOnly() {
+			return "", false
+		}
+		return companion.SavedVideoTranscript(media.Observation)
+	}
+	for _, part := range media.ObservationParts {
+		if part.Kind == companion.ObservationAudioTranscript && part.Firsthand() {
+			return part.Excerpt, true
+		}
+	}
+	return "", false
+}
+
 func (memoryRecordUnavailable) Error() string { return "memory_record_unavailable" }
 func (memoryRecordUnavailable) SafeToolFailure() (string, string) {
 	return "memory_record_unavailable", "当前授权范围内找不到这条记录，或记录已隔离、遗忘；请用memory_search返回的id读取。原生微信消息编号应使用wechat_read核对，不能据此断言聊天历史不存在"
@@ -160,7 +181,7 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 				if defaultShare {
 					part = "observation"
 				}
-				if text, ok := companion.SavedVideoTranscript(m.Observation); ok {
+				if text, ok := storedMediaTranscript(m); ok {
 					available = append(available, map[string]any{"part": "transcript", "media_index": i, "total_bytes": len(text), "state": m.ObservationState, "version": m.ObservationVersion})
 					if defaultShare {
 						part = "transcript"
@@ -174,7 +195,7 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 				body = ev.IncomingMedia[in.MediaIndex].Observation
 				if part == "transcript" {
 					var ok bool
-					body, ok = companion.SavedVideoTranscript(body)
+					body, ok = storedMediaTranscript(ev.IncomingMedia[in.MediaIndex])
 					if !ok {
 						return "", toolInputError("当前保存的观察没有音轨转写片段；可读observation或用video_inspect补读，不表示原视频没有声音")
 					}

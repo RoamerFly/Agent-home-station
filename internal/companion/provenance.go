@@ -31,9 +31,12 @@ type IncomingMediaRef struct {
 	// ObservationExcerpt contains only the host-produced visual/audio evidence.
 	// It never includes a share card's title, publisher description, or prompts.
 	ObservationExcerpt string `json:"observation_excerpt,omitempty"`
-	ObservationState   string `json:"observation_state"`
-	ObservationVersion int    `json:"observation_version,omitempty"`
-	ObservedRange      string `json:"observed_range,omitempty"`
+	// ObservationParts is typed host evidence. Consumers must not infer a
+	// modality from display text; old fields remain for historical records.
+	ObservationParts   []ObservationPart `json:"observation_parts,omitempty"`
+	ObservationState   string            `json:"observation_state"`
+	ObservationVersion int               `json:"observation_version,omitempty"`
+	ObservedRange      string            `json:"observed_range,omitempty"`
 }
 
 // ReplyContext belongs to one text bubble. Model-proposed IDs must be checked

@@ -318,7 +318,7 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 		}
 		before := event.Text
 		event.Text += "\n实际媒体观察（对话资料）：\n" + summary
-		if _, err := c.Store.UpdateObservationWithCoverage(companion.ScopeID(in.Channel, in.Account, in.Thread), id, before, event.Text, observationEvidence.ObservedRange, observationEvidence.Excerpt); err != nil {
+		if _, err := c.Store.UpdateObservationWithCoverage(companion.ScopeID(in.Channel, in.Account, in.Thread), id, before, event.Text, observationEvidence.ObservedRange, observationEvidence.Excerpt, observationEvidence.Parts...); err != nil {
 			return err
 		}
 	}

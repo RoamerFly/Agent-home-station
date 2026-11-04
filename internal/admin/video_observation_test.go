@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mediaspec"
 )
@@ -51,6 +52,9 @@ func TestTrustedVideoEvidenceDoesNotParsePublisherOrTranscriptMarkers(t *testing
 	}
 	if !strings.Contains(evidence.Excerpt, visual) || !strings.Contains(evidence.Excerpt, audio) {
 		t.Fatal("actual observer excerpt lost", evidence)
+	}
+	if len(evidence.Parts) != 2 || evidence.Parts[0].Kind != companion.ObservationVisualFrames || evidence.Parts[0].Range != "视频采样帧：4.000秒、20.000秒、44.000秒" || evidence.Parts[0].Excerpt != visual || evidence.Parts[1].Kind != companion.ObservationAudioTranscript || evidence.Parts[1].Excerpt != audio {
+		t.Fatal("actual modalities were not kept as typed evidence", evidence.Parts)
 	}
 }
 

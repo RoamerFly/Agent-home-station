@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 	"wechat-bot/internal/agentrun"
@@ -138,7 +139,28 @@ func literalTurn(t Turn) (string, string) {
 func observationEvidence(media []IncomingMediaRef) []map[string]any {
 	rows := []map[string]any{}
 	for _, m := range latestMediaObservations(media) {
-		rows = append(rows, map[string]any{"evidence_kind": "media_observation", "producer": "media_observer", "observation_author_id": nil, "uploader_id": m.UploaderID, "source": m.Source, "asset_id": m.AssetID, "kind": m.Kind, "observation": m.Observation, "observation_state": m.ObservationState, "observation_version": m.ObservationVersion, "result_available": observationAvailable(m), "observed_range": m.ObservedRange, "voice_speaker_id": nil, "voice_speaker_state": "unknown", "transcript_first_person_id": nil, "creator_id": nil, "owner_id": nil, "captured_at": nil})
+		observation := m.Observation
+		// Typed parts already carry the actual contents. Do not send the same
+		// long display transcript again; retain only machine-readable continuation
+		// directions (for example video_inspect paging) needed for a later read.
+		// Legacy records retain their aggregate observation unchanged.
+		continuation := ""
+		if len(m.ObservationParts) > 0 {
+			observation = ""
+			// Continuation is deliberately a fixed host instruction. Never scrape
+			// tool-looking text from a publisher/card body and present it as a
+			// trusted command. The retained source and asset identity are enough
+			// for the reader to query its own next position.
+			continuation = "需要补读时用当前素材 source/asset 先查询读取信息，再按返回的继续位置读取。"
+		}
+		row := map[string]any{"evidence_kind": "media_observation", "producer": "media_observer", "observation_author_id": nil, "uploader_id": m.UploaderID, "source": m.Source, "asset_id": m.AssetID, "kind": m.Kind, "observation": observation, "observation_state": m.ObservationState, "observation_version": m.ObservationVersion, "result_available": observationAvailable(m), "observed_range": m.ObservedRange, "voice_speaker_id": nil, "voice_speaker_state": "unknown", "transcript_first_person_id": nil, "creator_id": nil, "owner_id": nil, "captured_at": nil}
+		if len(m.ObservationParts) > 0 {
+			row["observation_parts"] = slices.Clone(m.ObservationParts)
+		}
+		if continuation != "" {
+			row["continuation_hint"] = continuation
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }

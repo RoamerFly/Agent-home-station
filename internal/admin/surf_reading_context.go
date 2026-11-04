@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"slices"
 
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/pluginhost"
 )
 
@@ -51,7 +52,11 @@ func (p *permittedTools) recentReadingExcerpts(ctx context.Context, session surf
 			continue
 		}
 		c := read.ReadCoverage
-		recent = append(recent, surfReadingExcerpt{row.CandidateID, row.URL, c.StartOffset, c.EndOffset, c.TotalCharacters, logText(c.Excerpt, 300)})
+		recent = append(recent, surfReadingExcerpt{
+			CandidateID: row.CandidateID, URL: row.URL,
+			Start: c.StartOffset, End: c.EndOffset, Total: c.TotalCharacters,
+			ObservationPart: companion.ObservationPart{Kind: companion.ObservationPageBody, Excerpt: logText(c.Excerpt, 300)},
+		})
 		if len(recent) == 3 {
 			break
 		}
@@ -66,5 +71,5 @@ type surfReadingExcerpt struct {
 	Start       int    `json:"start_offset"`
 	End         int    `json:"end_offset_exclusive"`
 	Total       int    `json:"total_characters"`
-	Excerpt     string `json:"external_text_excerpt"`
+	companion.ObservationPart
 }

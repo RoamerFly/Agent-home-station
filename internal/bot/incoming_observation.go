@@ -70,7 +70,13 @@ func (w *Worker) readTurnMedia(ctx context.Context, in companion.Input, args jso
 		}
 		for _, obs := range event.IncomingMedia {
 			if obs.Source.EventID == ref.EventID && obs.Source.Revision == ref.Revision && obs.ObservationState == "observed" && obs.Observation != "" {
-				return packObservation(ref, m.ID, obs.Observation), nil
+				// A saved card description is useful context but not a terminal
+				// share read. A later explicit tool call must still be allowed to
+				// start the authorized page/video reader and replace it with
+				// firsthand evidence. Old cards with an explicit metadata-only header can also be retried.
+				if m.Type != 49 || !obs.CardDescriptionOnly() {
+					return packObservation(ref, m.ID, obs.Observation, MediaObservationEvidence{ObservedRange: obs.ObservedRange, Excerpt: obs.ObservationExcerpt, Parts: obs.ObservationParts}), nil
+				}
 			}
 		}
 	}
@@ -79,13 +85,30 @@ func (w *Worker) readTurnMedia(ctx context.Context, in companion.Input, args jso
 		return "", err
 	}
 	if store != nil {
-		if err = store.CacheIncomingObservationWithCoverage(in.Channel, *ref, body, observationEvidence.ObservedRange, observationEvidence.Excerpt); err != nil {
+		if err = store.CacheIncomingObservationWithCoverage(in.Channel, *ref, body, observationEvidence.ObservedRange, observationEvidence.Excerpt, observationEvidence.Parts...); err != nil {
 			return "", err
 		}
 	}
-	return packObservation(ref, m.ID, body), nil
+	return packObservation(ref, m.ID, body, observationEvidence), nil
 }
-func packObservation(ref *companion.SourceRef, id, body string) string {
-	b, _ := json.Marshal(map[string]any{"source": ref, "source_message_id": id, "observation": body, "observation_state": "observed", "evidence_kind": "untrusted_media_observation"})
+
+// packObservation keeps legacy results unchanged. Typed results expose each
+// producer's actual text once, as a separately labelled part: publisher card
+// copy, sampled visual observation and ASR transcript must never blur together
+// in a synthetic display string.
+func packObservation(ref *companion.SourceRef, id, body string, result MediaObservationEvidence) string {
+	if len(result.Parts) == 0 {
+		b, _ := json.Marshal(map[string]any{"source": ref, "source_message_id": id, "observation": body, "observation_state": "observed", "evidence_kind": "untrusted_media_observation"})
+		return string(b)
+	}
+	state := "observed"
+	if !companion.HasFirsthandObservation(result.Parts) {
+		state = "card_only"
+	}
+	payload := map[string]any{"source": ref, "source_message_id": id, "observation_state": state, "evidence_kind": "typed_media_observation", "observation_parts": result.Parts}
+	if text := strings.TrimSpace(result.ObservedRange); text != "" {
+		payload["observed_range"] = text
+	}
+	b, _ := json.Marshal(payload)
 	return string(b)
 }

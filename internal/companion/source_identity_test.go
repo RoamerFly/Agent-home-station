@@ -293,3 +293,12 @@ func TestSourceReceivedAtIsFirstObservationAndTimeMustAgree(t *testing.T) {
 		t.Fatal("contradictory occurrence time accepted")
 	}
 }
+
+func TestCloneIncomingMediaDeepCopiesObservationParts(t *testing.T) {
+	original := []IncomingMediaRef{{ObservationParts: []ObservationPart{{Kind: ObservationVisualFrames, Range: "frame 1", Excerpt: "海面"}}}}
+	cloned := cloneIncomingMedia(original)
+	cloned[0].ObservationParts[0].Excerpt = "已修改"
+	if original[0].ObservationParts[0].Excerpt != "海面" {
+		t.Fatal("observation parts were shallow-copied")
+	}
+}

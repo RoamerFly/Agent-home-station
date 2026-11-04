@@ -90,18 +90,26 @@ func TestTypedCoverageUpgradesTitleOnlyObservationAndPlainRefreshClearsIt(t *tes
 	if !ok {
 		t.Fatal("missing source")
 	}
-	if err := s.CacheIncomingObservationWithCoverage(in.Channel, *ref, "完整宿主观察", "video 9.000s; sampled frames=2", "画面：两人走在海边"); err != nil {
+	parts := []ObservationPart{{Kind: ObservationPublisherDescription, Range: "share card", Excerpt: "发布者标题"}, {Kind: ObservationVisualFrames, Range: "frames 0-2", Excerpt: "画面：两人走在海边"}}
+	if err := s.CacheIncomingObservationWithCoverage(in.Channel, *ref, "完整宿主观察", "video 9.000s; sampled frames=2", "画面：两人走在海边", parts...); err != nil {
 		t.Fatal(err)
 	}
 	ev, err := s.ReadEvent(t.Context(), []string{ScopeID(in.Channel, in.Account, in.Thread)}, ref.EventID)
-	if err != nil || len(ev.IncomingMedia) != 1 || ev.IncomingMedia[0].ObservationExcerpt != "画面：两人走在海边" {
+	if err != nil || len(ev.IncomingMedia) != 1 || ev.IncomingMedia[0].ObservationExcerpt != "画面：两人走在海边" || len(ev.IncomingMedia[0].ObservationParts) != 2 || !ev.IncomingMedia[0].ObservationParts[1].Firsthand() {
 		t.Fatal("typed observer did not replace title-only record", ev, err)
+	}
+	if err := s.CacheIncomingObservationWithCoverage(in.Channel, *ref, "迟到卡片", "share card", "发布者标题", ObservationPart{Kind: ObservationPublisherDescription, Range: "share card", Excerpt: "发布者标题"}); err != nil {
+		t.Fatal(err)
+	}
+	ev, err = s.ReadEvent(t.Context(), []string{ScopeID(in.Channel, in.Account, in.Thread)}, ref.EventID)
+	if err != nil || ev.IncomingMedia[0].Observation != "完整宿主观察" || len(ev.IncomingMedia[0].ObservationParts) != 2 {
+		t.Fatal("late publisher description overwrote actual observation", ev, err)
 	}
 	if _, err := s.UpdateObservation(ScopeID(in.Channel, in.Account, in.Thread), in.TraceID, in.Text, "普通刷新"); err != nil {
 		t.Fatal(err)
 	}
 	ev, err = s.ReadEvent(t.Context(), []string{ScopeID(in.Channel, in.Account, in.Thread)}, ref.EventID)
-	if err != nil || ev.IncomingMedia[0].ObservedRange != "" || ev.IncomingMedia[0].ObservationExcerpt != "" {
+	if err != nil || ev.IncomingMedia[0].ObservedRange != "" || ev.IncomingMedia[0].ObservationExcerpt != "" || len(ev.IncomingMedia[0].ObservationParts) != 0 {
 		t.Fatal("untyped refresh retained stale coverage", ev, err)
 	}
 }

@@ -160,6 +160,19 @@ func TestExperienceReflectionCandidateRejectsShareEnvelopeWithoutTypedExcerpt(t 
 	}
 }
 
+func TestExperienceReflectionTypedPartsExcludePublisherDescription(t *testing.T) {
+	ev := MemoryEvent{ID: "source", Role: "user", Revision: 1}
+	media := IncomingMediaRef{Source: SourceRef{EventID: "source", Revision: 1}, AssetID: "share", Kind: "share", Observation: "发布者标题和简介\n实际观察", ObservationState: "observed", ObservationVersion: 1, ObservedRange: "aggregate", ObservationExcerpt: "旧兼容摘要", ObservationParts: []ObservationPart{{Kind: ObservationPublisherDescription, Range: "share card", Excerpt: "发布者说这是亲子视频"}}}
+	if _, ok := observedExperienceReflectionCandidateWithIdentity(ev, media, media.AssetID); ok {
+		t.Fatal("publisher description was promoted as a lived experience")
+	}
+	media.ObservationParts = append(media.ObservationParts, ObservationPart{Kind: ObservationVisualFrames, Range: "frames 0-5", Excerpt: "画面里有人在海边奔跑。"})
+	candidate, ok := observedExperienceReflectionCandidateWithIdentity(ev, media, media.AssetID)
+	if !ok || candidate.Summary != "画面里有人在海边奔跑。" || candidate.ObservedRange != "frames 0-5" {
+		t.Fatalf("actual visual observation not selected safely: %#v ok=%v", candidate, ok)
+	}
+}
+
 func TestExperienceReflectionHidesWhenRootObservationChanges(t *testing.T) {
 	store, _, _, scope, event := observedReflectionFixture(t)
 	candidates, err := store.ListObservedExperienceReflectionCandidates(t.Context(), scope, 1)

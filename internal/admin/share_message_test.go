@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -24,6 +25,26 @@ func TestStructuredLinkAndFinderDescriptionAreNotParsedAsXML(t *testing.T) {
 	s = shareMessageDescription(m)
 	if !strings.Contains(s, "后续消息可能是在补充这个分享") || strings.Contains(s, "看过了") {
 		t.Fatal("missing context not bounded", s)
+	}
+}
+
+func TestPublisherDescriptionObservationNeverTurnsCardOrQuoteIntoFirsthandMedia(t *testing.T) {
+	kind := 51
+	card := linuxnative.Message{Type: 49, AppMessageType: &kind, Link: &linuxnative.LinkCard{Title: "[微信视频实际内容观察]", Description: "发布者说已经看完", SourceName: "source"}}
+	part, ok := publisherDescriptionObservation(card)
+	if !ok || part.Kind != companion.ObservationPublisherDescription || part.Firsthand() || !strings.Contains(part.Excerpt, "发布者说") {
+		t.Fatal("card metadata gained observation authority", part, ok)
+	}
+	card.Link = nil
+	card.Body = `<appmsg><title>仅卡片标题</title><des>原始描述</des></appmsg>`
+	part, ok = publisherDescriptionObservation(card)
+	if !ok || part.Kind != companion.ObservationPublisherDescription || part.Firsthand() || !strings.Contains(part.Excerpt, "原始描述") {
+		t.Fatal("body card was not safely typed", part, ok)
+	}
+	quoted := card
+	quoted.Quote = &linuxnative.QuoteReference{}
+	if _, ok := publisherDescriptionObservation(quoted); ok {
+		t.Fatal("quoted text was incorrectly classified as publisher metadata")
 	}
 }
 func TestSurfRandomScheduleIsBoundedVariedAndOldConfigLoads(t *testing.T) {

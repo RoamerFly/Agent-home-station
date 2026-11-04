@@ -190,18 +190,52 @@ func reflectionMediaIdentity(ev MemoryEvent, index int) string {
 
 func observedExperienceReflectionCandidateWithIdentity(ev MemoryEvent, media IncomingMediaRef, sourceAssetID string) (ObservedExperienceReflectionCandidate, bool) {
 	if ev.Role != "user" || ev.ID == "" || ev.Revision < 1 || sourceAssetID == "" || media.Source.EventID != ev.ID || media.Source.Revision != ev.Revision ||
-		media.ObservationVersion < 1 || strings.TrimSpace(media.ObservedRange) == "" || strings.TrimSpace(media.ObservationExcerpt) == "" || !observationAvailable(media) {
+		media.ObservationVersion < 1 || !observationAvailable(media) {
+		return ObservedExperienceReflectionCandidate{}, false
+	}
+	excerpt, observedRange := reflectionObservationEvidence(media)
+	if observedRange == "" || excerpt == "" {
 		return ObservedExperienceReflectionCandidate{}, false
 	}
 	hash := experienceObservationHash(ev.ID, ev.Revision, media)
 	return ObservedExperienceReflectionCandidate{
 		SourceEventID: ev.ID, SourceEventRevision: ev.Revision, SourceAssetID: sourceAssetID, SourceObservationVersion: media.ObservationVersion,
-		SourceObservationHash: hash, Summary: boundedText(strings.TrimSpace(media.ObservationExcerpt), 600), MediaKind: media.Kind, ObservedRange: boundedText(strings.TrimSpace(media.ObservedRange), 256),
+		SourceObservationHash: hash, Summary: boundedText(excerpt, 600), MediaKind: media.Kind, ObservedRange: boundedText(observedRange, 256),
 	}, true
 }
 
+// reflectionObservationEvidence accepts typed new observations only when at
+// least one part is firsthand. Publisher/card text is deliberately excluded:
+// it can describe a video but is not an experience the fish had. Historical
+// observations without parts retain their existing explicitly supplied range
+// and excerpt; consumers must not reverse-engineer typed parts from prose.
+func reflectionObservationEvidence(media IncomingMediaRef) (string, string) {
+	if len(media.ObservationParts) == 0 {
+		return strings.TrimSpace(media.ObservationExcerpt), strings.TrimSpace(media.ObservedRange)
+	}
+	excerpts, ranges := make([]string, 0, len(media.ObservationParts)), make([]string, 0, len(media.ObservationParts))
+	for _, part := range media.ObservationParts {
+		if !part.Firsthand() {
+			continue
+		}
+		excerpts = append(excerpts, strings.TrimSpace(part.Excerpt))
+		if item := strings.TrimSpace(part.Range); item != "" {
+			ranges = append(ranges, item)
+		}
+	}
+	return strings.Join(excerpts, "\n"), strings.Join(ranges, "; ")
+}
+
 func experienceObservationHash(eventID string, revision int, media IncomingMediaRef) string {
-	raw := strings.Join([]string{eventID, fmt.Sprint(revision), media.AssetID, media.Kind, fmt.Sprint(media.ObservationVersion), media.ObservedRange, media.ObservationExcerpt}, "\x00")
+	fields := []string{eventID, fmt.Sprint(revision), media.AssetID, media.Kind, fmt.Sprint(media.ObservationVersion), media.ObservedRange, media.ObservationExcerpt}
+	// Keep existing reflection identity for legacy records. Typed observations
+	// need their parts in the hash so a changed modality cannot reuse an old
+	// experience selection.
+	if len(media.ObservationParts) > 0 {
+		parts, _ := json.Marshal(media.ObservationParts)
+		fields = append(fields, string(parts))
+	}
+	raw := strings.Join(fields, "\x00")
 	hash := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(hash[:])
 }

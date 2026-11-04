@@ -11,6 +11,21 @@ import (
 
 const syntheticMachineObservation = "观察机推断：去年拍的黄色自行车。"
 
+func TestTypedObservationUsesPartsWithoutRepeatingDisplayBody(t *testing.T) {
+	full := "[分享来源资料]发布者描述\n[微信视频实际内容观察]\n[实际音轨转写]这一长段原始转写不应在同一证据行重复。"
+	in := observationInput("")
+	in.IncomingMedia[0].Observation = full
+	in.IncomingMedia[0].ObservationParts = []ObservationPart{{Kind: ObservationPublisherDescription, Range: "card", Excerpt: "发布者描述"}, {Kind: ObservationAudioTranscript, Range: "0-3 seconds", Excerpt: "实际音轨的一小段。"}}
+	rows := inputObservations(in)
+	if len(rows) != 1 || rows[0]["observation"] != "" || rows[0]["continuation_hint"] == "" {
+		t.Fatalf("typed observation retained duplicate display body: %#v", rows)
+	}
+	parts := typedObservationParts(rows[0]["observation_parts"])
+	if len(parts) != 2 || parts[1].Excerpt != "实际音轨的一小段。" {
+		t.Fatalf("typed observation parts lost: %#v", rows)
+	}
+}
+
 type evidenceNativeModel struct{ fakeModel }
 
 func (m *evidenceNativeModel) ChatFunctions(ctx context.Context, system string, turns []map[string]string, _ []mcptools.Tool) (string, error) {

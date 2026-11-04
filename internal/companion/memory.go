@@ -88,6 +88,7 @@ func (ev *MemoryEvent) OmitMediaObservationText() {
 	for i := range ev.IncomingMedia {
 		ev.IncomingMedia[i].Observation = ""
 		ev.IncomingMedia[i].ObservationExcerpt = ""
+		ev.IncomingMedia[i].ObservationParts = nil
 	}
 }
 

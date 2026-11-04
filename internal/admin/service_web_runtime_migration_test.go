@@ -289,7 +289,7 @@ func TestLiveWebPublicMigrationIsolationContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readAgain()
-	if len(got) != 1 || got[0].Excerpt != "蓝色" || got[0].Start != 4 || got[0].End != 6 || got[0].Total != 9 || got[0].URL != "https://example.test/item" {
+	if len(got) != 1 || got[0].Kind != companion.ObservationPageBody || got[0].Excerpt != "蓝色" || got[0].Start != 4 || got[0].End != 6 || got[0].Total != 9 || got[0].URL != "https://example.test/item" {
 		t.Fatalf("wrong reading range in model input: %+v", got)
 	}
 	decision := companion.Decision{Action: "reply", SurfItemID: got[0].CandidateID, Messages: []string{"读到了“蓝色”两个字。"}}

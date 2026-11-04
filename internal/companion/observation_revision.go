@@ -2,6 +2,7 @@ package companion
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"time"
 )
@@ -91,17 +92,17 @@ func (s *Store) ReplaceObservation(scopeID, trace, before, after string) error {
 // UpdateObservationWithCoverage is the trusted-observer counterpart to
 // UpdateObservation.  Coverage is supplied by the host that actually decoded
 // the media; Store never derives it from arbitrary user-visible text.
-func (s *Store) UpdateObservationWithCoverage(scopeID, trace, before, after, observedRange, observedExcerpt string) (bool, error) {
-	return s.updateObservation(scopeID, trace, before, after, observedRange, observedExcerpt)
+func (s *Store) UpdateObservationWithCoverage(scopeID, trace, before, after, observedRange, observedExcerpt string, parts ...ObservationPart) (bool, error) {
+	return s.updateObservation(scopeID, trace, before, after, observedRange, observedExcerpt, parts)
 }
 
 // Report whether the optimistic replacement actually occurred. An archived or
 // concurrently changed turn is never silently reported as updated or re-added.
 func (s *Store) UpdateObservation(scopeID, trace, before, after string) (bool, error) {
-	return s.updateObservation(scopeID, trace, before, after, "", "")
+	return s.updateObservation(scopeID, trace, before, after, "", "", nil)
 }
 
-func (s *Store) updateObservation(scopeID, trace, before, after, observedRange, observedExcerpt string) (bool, error) {
+func (s *Store) updateObservation(scopeID, trace, before, after, observedRange, observedExcerpt string, parts []ObservationPart) (bool, error) {
 	changed := false
 	err := s.scopeTransaction(scopeID, func(data *persisted) error {
 		scope, ok := data.Scopes[scopeID]
@@ -111,6 +112,11 @@ func (s *Store) updateObservation(scopeID, trace, before, after, observedRange, 
 		for i := range scope.Messages {
 			turn := &scope.Messages[i]
 			if turn.Role == "user" && turn.TraceID == trace && turn.Text == before {
+				// A stale metadata refresh must not replace a just-completed
+				// firsthand observation between the caller's read and this write.
+				if len(parts) > 0 && !HasFirsthandObservation(parts) && len(turn.IncomingMedia) == 1 && HasFirsthandObservation(turn.IncomingMedia[0].ObservationParts) {
+					return nil
+				}
 				turn.Text = boundedInputMemory(after)
 				if turn.Source != nil && turn.HasOriginal {
 					// A refreshed model observation cannot rewrite the user's
@@ -125,9 +131,11 @@ func (s *Store) updateObservation(scopeID, trace, before, after, observedRange, 
 						// one observer's evidence across a multi-attachment event.
 						turn.IncomingMedia[j].ObservedRange = ""
 						turn.IncomingMedia[j].ObservationExcerpt = ""
-						if len(turn.IncomingMedia) == 1 && observedRange != "" {
+						turn.IncomingMedia[j].ObservationParts = nil
+						if len(turn.IncomingMedia) == 1 && (observedRange != "" || len(parts) > 0) {
 							turn.IncomingMedia[j].ObservedRange = observedRange
 							turn.IncomingMedia[j].ObservationExcerpt = observedExcerpt
+							turn.IncomingMedia[j].ObservationParts = slices.Clone(parts)
 						}
 					}
 				} else {
@@ -148,17 +156,17 @@ func (s *Store) updateObservation(scopeID, trace, before, after, observedRange, 
 // CacheIncomingObservation attaches a first successful on-demand read to its
 // exact retained source. It does not recreate an archived or forgotten turn.
 func (s *Store) CacheIncomingObservation(channel string, ref SourceRef, body string) error {
-	return s.cacheIncomingObservation(channel, ref, body, "", "")
+	return s.cacheIncomingObservation(channel, ref, body, "", "", nil)
 }
 
 // CacheIncomingObservationWithCoverage attaches a host-verified media range
 // alongside its observation.  It intentionally takes the range explicitly so
 // cached user/card text can never manufacture read coverage.
-func (s *Store) CacheIncomingObservationWithCoverage(channel string, ref SourceRef, body, observedRange, observedExcerpt string) error {
-	return s.cacheIncomingObservation(channel, ref, body, observedRange, observedExcerpt)
+func (s *Store) CacheIncomingObservationWithCoverage(channel string, ref SourceRef, body, observedRange, observedExcerpt string, parts ...ObservationPart) error {
+	return s.cacheIncomingObservation(channel, ref, body, observedRange, observedExcerpt, parts)
 }
 
-func (s *Store) cacheIncomingObservation(channel string, ref SourceRef, body, observedRange, observedExcerpt string) error {
+func (s *Store) cacheIncomingObservation(channel string, ref SourceRef, body, observedRange, observedExcerpt string, parts []ObservationPart) error {
 	// A parser can return whitespace when there was nothing usable to observe.
 	// Do not turn that into a successful, terminal observation: callers may
 	// still choose a more suitable reader later.  This check is deliberately
@@ -183,15 +191,19 @@ func (s *Store) cacheIncomingObservation(channel string, ref SourceRef, body, ob
 				if m.Source.EventID != ref.EventID || m.Source.Revision != ref.Revision {
 					continue
 				}
-				if m.ObservationState == "observed" && m.Observation != "" && observedRange == "" {
+				existingFirsthand := HasFirsthandObservation(m.ObservationParts) || (len(m.ObservationParts) == 0 && m.ObservedRange != "" && m.ObservationExcerpt != "")
+				incomingFirsthand := HasFirsthandObservation(parts) || (len(parts) == 0 && observedRange != "" && observedExcerpt != "")
+				// A late card/publisher cache must never erase a completed actual
+				// read. Repeating the same observer result is a no-op as well.
+				plainCache := observedRange == "" && len(parts) == 0
+				sameResult := m.Observation == body && m.ObservedRange == observedRange && m.ObservationExcerpt == observedExcerpt && slices.Equal(m.ObservationParts, parts)
+				if m.ObservationState == "observed" && m.Observation != "" && (plainCache || (existingFirsthand && !incomingFirsthand) || sameResult) {
 					return nil
 				}
 				m.Observation, m.ObservationState = body, "observed"
-				m.ObservedRange, m.ObservationExcerpt = "", ""
-				if observedRange != "" {
-					m.ObservedRange = observedRange
-					m.ObservationExcerpt = observedExcerpt
-				}
+				m.ObservedRange = observedRange
+				m.ObservationExcerpt = observedExcerpt
+				m.ObservationParts = slices.Clone(parts)
 				m.ObservationVersion++
 				t.FullObservation = body
 				data.Scopes[id] = scope
