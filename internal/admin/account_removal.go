@@ -85,6 +85,14 @@ func (a *accountRegistry) removeAccount(w http.ResponseWriter, r *http.Request, 
 		a.mu.Unlock()
 	}
 	if purge {
+		// A purge is irreversible for this account. Remove only its binding;
+		// the service-level fish identity and any other platform binding remain.
+		// Do this before deleting account storage so a registry failure cannot be
+		// reported as a successful purge.
+		if err = a.fish.unbind(id); err != nil {
+			fail(w, 500, "账号已停用，鱼身份解绑未完成："+err.Error())
+			return
+		}
 		if err = a.eraseAccountFiles(id); err != nil {
 			fail(w, 500, "账号已停用，删除未完成："+err.Error())
 			return

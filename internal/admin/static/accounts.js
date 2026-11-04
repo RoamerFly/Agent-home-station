@@ -1,7 +1,7 @@
 (() => {
  'use strict';
  const $=s=>document.querySelector(s),query=new URL(location.href).searchParams;
- let selected=query.get('account')||'',rows=[],busy=false,primary='',removed=[];
+ let selected=query.get('account')||'',rows=[],busy=false,primary='',removed=[],fishError='';
  const names=new Map([['filehelper','文件传输助手']]);
  function remember(id,...candidates){if(!id)return;const name=candidates.find(x=>typeof x==='string'&&x.trim()&&x!==id&&!/^wxid_|@chatroom$/.test(x));if(name)names.set(id,name.trim());}
  function display(id,fallback){return names.get(id)||fallback||id||'名称未同步';}
@@ -18,17 +18,31 @@
    const info=document.createElement('div');info.className='account-info';const title=document.createElement('strong');title.textContent=item.name+suffix;
    const status=document.createElement('span');status.className='account-status';status.textContent=(connections[item.native?.connection]||'状态未知')+' · '+(bots[item.bot?.state]||item.bot?.state||'Agent 已暂停');
    const detail=document.createElement('div');detail.className='account-note';if(item.label&&item.label!==item.name){const note=document.createElement('small');note.textContent='备注：'+item.label;detail.append(note)}
-   if(item.load_error){const error=document.createElement('span');error.className='error';error.textContent=item.load_error;info.append(error)}info.append(title,status,detail);const button=document.createElement('button');button.type='button';button.className='quiet';button.textContent=item.id===selected?'当前管理':'管理此账号';button.disabled=item.id===selected||!!item.load_error;button.addEventListener('click',()=>choose(item.id,'wechat'));const actions=document.createElement('div');actions.className='button-row';actions.append(button);if(!item.primary){actions.append(actionButton('修改备注',()=>rename(item)),actionButton('移除账号',()=>remove(item)))}row.append(info,actions);list.append(row);
+   if(item.load_error){const error=document.createElement('span');error.className='error';error.textContent=item.load_error;info.append(error)}
+   info.append(title,status,detail);
+   const actions=document.createElement('div');actions.className='button-row';
+   const selectAccount=actionButton(item.id===selected?'当前管理':'管理此账号',()=>choose(item.id,'wechat'));
+   selectAccount.disabled=item.id===selected||!!item.load_error;
+   actions.append(selectAccount);
+   if(!item.load_error&&!fishError){
+    const bound=Boolean(item.fish_id);
+    const binding=actionButton(bound?'解除绑定':'绑定大肥鱼',()=>manage(item,bound?'unbind_fish':'bind_fish'));
+    binding.title=bound?'解除此账号与大肥鱼的身份绑定':'让大肥鱼使用此账号作为一个平台身份';
+    if(bound)status.textContent+=' · 已绑定大肥鱼';
+    actions.append(binding);
+   }
+   if(!item.primary)actions.append(actionButton('修改备注',()=>rename(item)),actionButton('移除账号',()=>remove(item)));
+   row.append(info,actions);list.append(row);
   });
   const archive=$('#removed-accounts');archive.replaceChildren();archive.hidden=!removed.length;for(const item of removed){const row=document.createElement('div');row.className='button-row';const name=document.createElement('span');name.textContent=(item.label||'账号 '+item.id.slice(-6))+(item.deleting?' · 删除未完成':' · 已移除');row.append(name);if(!item.deleting)row.append(actionButton('恢复账号',()=>manage(item,'restore')));row.append(actionButton(item.deleting?'继续删除':'删除数据',()=>remove(item)));archive.append(row)}
   $('#account-current-name').textContent=active?.name||'微信账号';
   const metric=$('#account-state');if(metric&&active){metric.textContent=active.name;metric.title=active.id}
  }
  async function load(){
-  const data=await window.WechatAdmin.api('/api/accounts');primary=data.primary;removed=(data.items||[]).filter(x=>x.removed);rows=(data.items||[]).filter(x=>!x.removed);
+  const data=await window.WechatAdmin.api('/api/accounts');primary=data.primary;fishError=data.fish_error||'';removed=(data.items||[]).filter(x=>x.removed);rows=(data.items||[]).filter(x=>!x.removed);
   if(!selected)selected=data.primary;else if(!rows.some(x=>x.id===selected)){selected=data.primary;const target=new URL(location.href);target.searchParams.set('account',selected);history.replaceState(null,'',target.href);window.WechatAdmin.notice('原先选择的账号不存在，已切换到当前账号。')}
   $('#add-account').disabled=!data.supported;
-  $('#accounts-state').textContent=data.directory_error||`${rows.length} 个账号 · 各自独立处理会话`;
+  $('#accounts-state').textContent=[data.directory_error||`${rows.length} 个账号 · 各自独立处理会话`,fishError].filter(Boolean).join(' · ');
   render();return data;
  }
  async function refresh(){if(busy||!window.WechatAdmin?.isAuthenticated())return;busy=true;try{await load()}catch(error){window.WechatAdmin.notice(error.message,true)}finally{busy=false}}

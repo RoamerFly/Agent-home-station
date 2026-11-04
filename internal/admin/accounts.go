@@ -38,6 +38,7 @@ type accountRegistry struct {
 	lifecycle sync.Mutex
 	mu        sync.Mutex
 	root      *Server
+	fish      *fishIdentityRegistry
 	items     map[string]*accountRuntime
 	order     []accountRecord
 	closed    bool
@@ -53,7 +54,8 @@ func accountDirectory(id string) string {
 }
 
 func newAccountRegistry(root *Server) (*accountRegistry, error) {
-	a := &accountRegistry{root: root, items: map[string]*accountRuntime{}}
+	fish := newFishIdentityRegistry(root.manager.dir)
+	a := &accountRegistry{root: root, fish: fish, items: map[string]*accountRuntime{}}
 	primary := root.manager.native.Account()
 	a.items[primary] = &accountRuntime{record: accountRecord{ID: primary}, manager: root.manager}
 	data, err := os.ReadFile(filepath.Join(root.manager.dir, "accounts.json"))
@@ -267,7 +269,11 @@ func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "账号不存在或正在删除")
 		return
 	}
-	if id == a.root.manager.native.Account() {
+	if item.record.Removed && (in.Action == "bind_fish" || in.Action == "unbind_fish") {
+		fail(w, 404, "账号已移除，请先恢复后再管理鱼身份")
+		return
+	}
+	if id == a.root.manager.native.Account() && in.Action != "bind_fish" && in.Action != "unbind_fish" {
 		fail(w, 409, "主账号是本机服务入口，可暂停 Agent 或退出微信登录，不能移除入口")
 		return
 	}
@@ -276,6 +282,21 @@ func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 	switch in.Action {
 	case "rename":
 		record.Label = in.Label
+	case "bind_fish":
+		fishID, err := a.fish.bind(id)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		respond(w, 200, map[string]any{"id": id, "fish_id": fishID})
+		return
+	case "unbind_fish":
+		if err := a.fish.unbind(id); err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		respond(w, 200, map[string]any{"id": id, "fish_id": ""})
+		return
 	case "restore":
 		if record.Removed && item.manager != nil {
 			fail(w, 409, "上次停止账号未完成，请重启服务后恢复")
@@ -353,6 +374,16 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.mu.Lock()
+	// Snapshot bindings while the account set is locked. Manage operations take
+	// the same account-then-fish lock order, so a response cannot combine an
+	// earlier identity view with a later account registry view.
+	fishID, fishBindings, fishErr := a.fish.bindings()
+	if fishErr != nil {
+		// An unreadable identity registry must never be represented as a clean
+		// unbound state. Keep ordinary account status available, but make the
+		// identity fault explicit and reject every binding mutation.
+		fishID, fishBindings = "", map[string]bool{}
+	}
 	items := make([]*accountRuntime, 0, len(a.items))
 	for _, item := range a.items {
 		if item.record.Purged {
@@ -377,7 +408,7 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 		go func(i int, item *accountRuntime) {
 			defer wg.Done()
 			if item.record.Removed {
-				rows[i] = map[string]any{"id": item.record.ID, "name": item.record.Label, "label": item.record.Label, "removed": true, "deleting": item.record.Deleting}
+				rows[i] = map[string]any{"id": item.record.ID, "name": item.record.Label, "label": item.record.Label, "removed": true, "deleting": item.record.Deleting, "fish_id": ""}
 				return
 			}
 			if item.manager == nil {
@@ -385,7 +416,7 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 				if name == "" {
 					name = "配置异常的小号"
 				}
-				rows[i] = map[string]any{"id": item.record.ID, "name": name, "load_error": item.loadError, "native": linuxnative.Status{Connection: "unavailable"}, "bot": BotStatus{State: "error"}}
+				rows[i] = map[string]any{"id": item.record.ID, "name": name, "load_error": item.loadError, "native": linuxnative.Status{Connection: "unavailable"}, "bot": BotStatus{State: "error"}, "fish_id": fishIDForAccount(fishID, fishBindings, item.record.ID)}
 				return
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -411,11 +442,22 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 					name = "未登录的小号"
 				}
 			}
-			rows[i] = map[string]any{"id": item.record.ID, "name": name, "nickname": nickname, "label": item.record.Label, "primary": item.record.ID == primary, "native": native, "bot": item.manager.BotStatus()}
+			rows[i] = map[string]any{"id": item.record.ID, "name": name, "nickname": nickname, "label": item.record.Label, "primary": item.record.ID == primary, "native": native, "bot": item.manager.BotStatus(), "fish_id": fishIDForAccount(fishID, fishBindings, item.record.ID)}
 		}(i, item)
 	}
 	wg.Wait()
-	respond(w, 200, map[string]any{"items": rows, "primary": primary, "supported": supported, "directory_error": directoryError})
+	response := map[string]any{"items": rows, "primary": primary, "supported": supported, "directory_error": directoryError}
+	if fishErr != nil {
+		response["fish_error"] = fishErr.Error()
+	}
+	respond(w, 200, response)
+}
+
+func fishIDForAccount(fishID string, bindings map[string]bool, account string) string {
+	if bindings[account] {
+		return fishID
+	}
+	return ""
 }
 
 // selectAccount never falls back to primary for an unknown or conflicting ID.
