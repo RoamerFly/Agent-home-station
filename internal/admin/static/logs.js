@@ -101,7 +101,6 @@
  function fillRound(body,round){
   body.classList.add('round-detail');if(round.entries.some(x=>x.event==='agent_task_started'))node(body,'p','本轮由先前保存的任务恢复触发，使用原任务检查点和最新会话；不是新收到的一条微信消息。','hint');
   if(round.sent.length){const output=node(body,'div',undefined,'round-output');node(output,'h3','发送结果');for(const sent of round.sent){const accepted=['accepted','observed'].includes(sent.status);readable(output,sent.content,'完整发送内容');node(output,'small',accepted?'微信已接受':statuses[sent.status]||'待核对',accepted?'receipt-accepted':'receipt-pending')}}
-  if(!round.system&&round.thread_id){const actions=node(body,'div',undefined,'dialog-actions'),evidence=node(actions,'button','回复依据','secondary');evidence.type='button';evidence.addEventListener('click',()=>window.WechatMemory?.showReplyEvidence({thread:round.thread_id,message:round.received[0]?.message_id||round.entries.find(x=>x.message_id)?.message_id}))}
   const timeline=node(body,'ol',undefined,'round-timeline');
   for(const item of round.timeline){
    if(item.event==='unread_batch_summary'){
@@ -113,6 +112,7 @@
    }else step(timeline,item);
   }
   if(round.timeline.length===0)node(body,'p','正在准备处理。','hint');
+  if(!round.system)window.WechatMemory?.appendReplyEvidence(body,round.thread_id,round.triggerMessageID);
   if(round.hasDiagnostics){
    const details=node(body,'details');node(details,'summary','原始运行记录（'+round.entries.length+'）');
    details.addEventListener('toggle',()=>{if(!details.open||details.querySelector('ol'))return;const list=node(details,'ol',undefined,'round-timeline');for(const item of round.entries)step(list,item)});

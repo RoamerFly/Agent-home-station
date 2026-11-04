@@ -102,7 +102,7 @@
       }
       let round = groups.get(key);
       if (!round) {
-        round = { id: key, system: key.startsWith('system:'), time: item.time, updated: item.time, source: '', source_kind: '', thread_id: item.thread_id || '', sender: '', entries: [], received: [], sent: [], tools: 0, errors: 0, status: 'received' };
+        round = { id: key, triggerMessageID: key.startsWith('system:') ? '' : JSON.parse(key)[1], system: key.startsWith('system:'), time: item.time, updated: item.time, source: '', source_kind: '', thread_id: item.thread_id || '', sender: '', entries: [], received: [], sent: [], tools: 0, errors: 0, status: 'received' };
         groups.set(key, round);
       }
       round.entries.push(item); round.updated = item.time;

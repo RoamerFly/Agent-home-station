@@ -41,12 +41,33 @@
  async function diagnose(scope,a,status){const confirm=window.WechatDialogs.open({title:'手动诊断草稿',subtitle:'会使用当前模型并计入用量，只读取这条已保存草稿及仍有效的来源。不会发送微信、修改草稿或重试原任务。'}),result=el(confirm.body,'p','确认后开始诊断。','hint');const run=button(confirm.body,'开始诊断',async()=>{run.disabled=true;result.textContent='正在诊断…';try{const data=await api('/api/memory/'+scope+'/reply-audits/'+encodeURIComponent(a.id)+'/diagnose',{method:'POST',json:{}});if(!confirm.alive())return;const d=data.diagnosis||{},lines=[];if(d.action)lines.push('结论：'+({reply:'草稿可保留',silent:'建议不发送'}[d.action]||d.action));if(d.reason)lines.push('说明：'+d.reason);if(Array.isArray(d.messages)&&d.messages.length)lines.push('诊断后的草稿：'+d.messages.join('\n'));
     result.textContent=lines.join('\n')||'诊断已完成；没有发送微信。';status.textContent='手动诊断完成，结果只在本窗口显示。'}catch(e){if(confirm.alive())result.textContent=e.message;status.textContent='手动诊断未完成；原草稿未修改，也没有发送微信。'}finally{run.disabled=false}});run.className='primary'}
  function evidenceCard(parent,a,scope,status){const card=el(parent,'article',undefined,'conversation-summary');const state=({validated:'已完成本地来源与对象校验',reviewed:'旧版模型诊断已完成',checked:'旧版模型诊断已完成',repaired_and_checked:'旧版诊断后草稿已校验',blocked:'已停止未核实内容',failed:'处理未完成',silent:'选择安静',initial_check_failed:'旧版模型诊断未完成，草稿未发送',repair_check_failed:'旧版修复诊断未完成，草稿未发送',review_rejected:'旧版诊断未通过，草稿未发送',evidence_changed:'来源已变化，草稿已作废'})[a.state]||(/failed|invalid|rejected|no_supported/.test(a.state||'')?'核验未通过，已停止发送':'回复依据');el(card,'h3',state);el(card,'p',window.WechatActivity?.time(a.at)||a.at,'hint');reviewFailure(card,a);const actions=el(card,'div',undefined,'dialog-actions');button(actions,'手动诊断草稿',()=>diagnose(scope,a,status));for(const c of a.contexts||[]){el(card,'p',c.target_ids?.length?'回复对象：'+c.target_ids.map(person).join('、'):'面向当前会话');if(c.quote_required)el(card,'p','已要求引用原消息，避免接错话。','hint');if(c.risk_flags?.length)el(card,'p','已检查人物、来源或话题变化。','hint');const refs=[...new Set([c.anchor_event_id,...(c.source_event_ids||[]),...(c.media_source_ids||[])].filter(Boolean))];for(const id of refs)button(actions,'查看参考消息',()=>source(scope,id));if(c.media_source_ids?.length)el(card,'p','参考了 '+c.media_source_ids.length+' 条已关联的媒体来源。','hint')}if(!(a.contexts||[]).length)el(card,'p','这次处理没有形成可发送的回复。','hint');return card}
- async function showReplyEvidence(options){const p=window.WechatDialogs.open({title:'回复依据'}),status=el(p.body,'p','正在读取…','hint'),list=el(p.body,'div');let offset=0;const params=new URLSearchParams();if(options.thread)params.set('thread_id',options.thread);if(options.message)params.set('message_id',options.message);params.set('limit','20');const more=button(p.body,'继续查看',()=>load());more.hidden=true;async function load(){more.disabled=true;params.set('offset',String(offset));try{const data=await api(options.scope?'/api/memory/'+options.scope+'/reply-audits?'+params:'/api/reply-audits?'+params);if(!p.alive())return;status.textContent=data.items?.length?'每条回复按原消息、人物和素材来源核对。手动诊断是独立、只读操作，不会发送微信。':'暂未保留这条回复的依据，旧版本记录和已过期记录可能不可用。';for(const a of data.items||[])evidenceCard(list,a,data.scope||options.scope,status);offset=data.next_offset;more.hidden=!data.has_more}catch(e){if(p.alive())status.textContent=e.message}finally{more.disabled=false}}await load();return p}
+ async function appendReplyEvidence(parent,thread,message){
+  if(!thread||!message)return;
+  const section=el(parent,'section');section.hidden=true;
+  const params=new URLSearchParams({thread_id:thread,message_id:message,limit:'20'});
+  const list=el(section,'div'),status=el(section,'p','','hint');
+  const more=button(section,'查看更早的记录',load);more.hidden=true;
+  let offset=0;
+  async function load(){
+   more.disabled=true;
+   try{
+    params.set('offset',String(offset));
+    const data=await api('/api/reply-audits?'+params);
+    if(!section.isConnected)return;
+    for(const a of data.items||[])evidenceCard(list,a,data.scope,status);
+    offset=data.next_offset;more.hidden=!data.has_more;
+    status.textContent='';section.hidden=!list.childElementCount;
+   }catch(e){
+    if(section.isConnected&&e.status!==404){section.hidden=false;status.textContent='未能读取回复依据：'+e.message}
+   }finally{more.disabled=false}
+  }
+  await load();
+ }
  function correct(scope,m,reload){const p=window.WechatDialogs.open({title:'更正长期记忆'}),form=el(p.body,'form'),content=field(form,'更正内容',m.detail,'textarea'),id=field(form,'新来源事件编号'),quote=field(form,'该来源中的精确原句','','textarea'),status=el(form,'p','','hint');status.setAttribute('role','status');content.required=true;if(!m.manual){id.required=true;quote.required=true}
   const save=el(form,'button','保存更正','primary');save.type='submit';form.addEventListener('submit',async e=>{e.preventDefault();if(!form.reportValidity())return;save.disabled=true;try{await api('/api/memory/'+scope+'/entries/'+m.id,{method:'POST',json:{action:'correct',expected_revision:m.version,detail:content.value,sources:id.value?[{event_id:id.value.trim(),quote:quote.value}]:[]}});p.close();reload()}catch(e){status.textContent=e.message}finally{save.disabled=false}})
  }
  function open(scope){const p=window.WechatDialogs.open({title:'长期记忆与来源',subtitle:'检索当前会话；原文、自动提炼和推测分别显示。'}),form=el(p.body,'form'),q=field(form,'搜索内容'),original=field(form,'搜索原始消息','','checkbox'),status=el(p.body,'p','正在读取…','hint'),list=el(p.body,'div'),search=el(form,'button','搜索','primary');search.type='submit';status.setAttribute('role','status');let cursor='',busy=false,controller;
-  button(p.body,'查看回复依据',()=>showReplyEvidence({scope}));button(p.body,'重新整理与补建索引',async()=>{try{await api('/api/memory/'+scope+'/rebuild',{method:'POST',json:{}});status.textContent='已安排后台重建。可刷新查看进度；显式重建不受自动维护日预算限制。'}catch(e){status.textContent=e.message}});const more=button(p.body,'加载更多',()=>load(false));
+  button(p.body,'重新整理与补建索引',async()=>{try{await api('/api/memory/'+scope+'/rebuild',{method:'POST',json:{}});status.textContent='已安排后台重建。可刷新查看进度；显式重建不受自动维护日预算限制。'}catch(e){status.textContent=e.message}});const more=button(p.body,'加载更多',()=>load(false));
   async function load(reset){if(busy){controller?.abort()}busy=true;controller=new AbortController();const current=controller;if(reset){cursor='';list.replaceChildren()}more.disabled=true;p.body.setAttribute('aria-busy','true');try{const params=new URLSearchParams({query:q.value,originals:String(original.checked)});if(cursor)params.set('cursor',cursor);const data=await api('/api/memory/'+scope+'?'+params,{signal:current.signal});if(!p.alive()||controller!==current)return;
    status.textContent=data.status.events+' 条来源，'+data.status.entries+' 条派生记忆，'+data.status.vectors+' 条向量。'+(data.page.degraded?'当前使用词法检索。':'')+' '+(data.status.jobs||[]).map(x=>({idle:'已整理',running:'整理中',pending:'待整理',failed:'整理失败，稍后重试',budget_wait:'已达到自动维护预算'}[x.state]||x.state)).join('；');
    for(const hit of data.page.items||[]){const row=el(list,'article',undefined,'conversation-summary');if(hit.event){el(row,'h3','原始消息');window.WechatDialogs.text(row,hit.event.text,{title:'原始消息预览'});el(row,'p',hit.event.at+' · '+hit.event.sender,'hint');button(row,'查看完整来源',()=>source(scope,hit.event.id));continue}
@@ -68,5 +89,5 @@
  }catch(e){if(p.alive())status.textContent=e.message}}
  function mount(parent,scope){if(scope){button(parent,'会话记忆',()=>open(scope))}}
  const host=document.querySelector('#wechat');if(host){const card=el(host,'section',undefined,'card');el(card,'h2','记忆与上下文');el(card,'p','设置自动记忆，查看整理进度。','hint');button(card,'记忆设置',settings);button(card,'整理进度',async()=>{try{full('记忆整理进度',JSON.stringify(await api('/api/memory/status'),null,2))}catch(e){window.WechatAdmin.notice(e.message,true)}})}
- window.WechatMemory={mount,open,settings,showReplyEvidence};
+ window.WechatMemory={mount,open,settings,appendReplyEvidence};
 })();

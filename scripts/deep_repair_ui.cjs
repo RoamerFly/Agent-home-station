@@ -29,6 +29,7 @@ async function reply(route,data){await route.fulfill({json:data})}
      throw Error('unexpected synthetic write '+u.pathname);
     }
     if(u.pathname==='/api/memory/services')return reply(route,{settings,embedding:{},maintenance:{}});
+    if(u.pathname==='/api/reply-audits'&&u.searchParams.get('message_id')==='no-evidence')return reply(route,{scope,items:[],has_more:false,next_offset:0});
     if(u.pathname.endsWith('/reply-audits')||u.pathname==='/api/reply-audits')return reply(route,evidence);
     if(u.pathname.startsWith(`/api/memory/${scope}/sources/`))return reply(route,sources[u.pathname.split('/').pop()]);
     if(u.pathname===`/api/memory/${scope}`)return reply(route,{status:{events:2,entries:1,vectors:0,jobs:[]},page:{items:[{entry}],has_more:false,degraded:true}});
@@ -48,18 +49,29 @@ async function reply(route,data){await route.fulfill({json:data})}
   for(const file of ['refresh.js','rounds.js','dialogs.js','logs.js','memory.js','save-actions.js'])await page.addScriptTag({url:origin+'/assets/'+file});
   const topDialog=()=>page.locator('dialog[open]').last();
   const shot=async(name)=>page.screenshot({path:path.join(output,name+'.png')});
-  await page.evaluate(()=>window.WechatActivity.openRound({source:'合成群',time:'2026-10-30T08:00:00Z',status:'accepted',system:false,thread_id:'synthetic@chatroom',received:[{message_id:'synthetic-message'}],sent:[],entries:[]}));
-  await topDialog().getByRole('button',{name:'回复依据',exact:true}).click();await topDialog().getByRole('heading',{name:'已复核回复',exact:true}).waitFor();
+  const openRound=(message='synthetic-message')=>page.evaluate(id=>{
+   const [round]=window.WechatRounds.project([{event:'message_received',category:'received',content:'合成消息',message_id:id,thread_id:'synthetic@chatroom',time:'2026-10-30T08:00:00Z'}]);
+   window.WechatActivity.openRound(round);
+  },message);
+  await openRound();
+  await topDialog().getByRole('heading',{name:'旧版模型诊断已完成',exact:true}).waitFor();
+  assert.equal(await page.locator('dialog[open]').count(),1);
+  assert.equal(await topDialog().getByRole('button',{name:'回复依据',exact:true}).count(),0);
   assert(requests.some(r=>r.path==='/api/reply-audits'&&new URLSearchParams(r.search).get('message_id')==='synthetic-message'),'execution dialog must preserve trigger message');
-  await page.keyboard.press('Escape');await page.keyboard.press('Escape');
-  for(const [state,title] of [['checked','已核验回复'],['repaired_and_checked','修复后已核验'],['final_check_rejected','核验未通过，已停止发送'],['review_failed','核验未通过，已停止发送']]){
-   evidence.items[0].state=state;await page.evaluate(()=>window.WechatMemory.showReplyEvidence({scope:'synthetic-scope'}));await topDialog().getByRole('heading',{name:title,exact:true}).waitFor();await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  const emptyResponse=page.waitForResponse(r=>r.url().includes('message_id=no-evidence'));
+  await openRound('no-evidence');await emptyResponse;
+  await topDialog().getByText('合成消息',{exact:true}).waitFor();
+  assert.equal(await topDialog().locator('.conversation-summary:visible').count(),0);
+  await page.keyboard.press('Escape');
+  for(const [state,title] of [['checked','旧版模型诊断已完成'],['repaired_and_checked','旧版诊断后草稿已校验'],['final_check_rejected','核验未通过，已停止发送'],['review_failed','核验未通过，已停止发送']]){
+   evidence.items[0].state=state;await openRound();await topDialog().getByRole('heading',{name:title,exact:true}).waitFor();await page.keyboard.press('Escape');
   }
   evidence.items[0].state='reviewed';
   for(const viewport of [{width:1440,height:900},{width:375,height:812}])for(const theme of ['light','dark']){
    await page.setViewportSize(viewport);await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
-   await page.evaluate(()=>window.WechatMemory.showReplyEvidence({thread:'synthetic@chatroom',message:'synthetic-message'}));
-   await topDialog().getByRole('heading',{name:'已复核回复',exact:true}).waitFor();
+   await openRound();
+   await topDialog().getByRole('heading',{name:'旧版模型诊断已完成',exact:true}).waitFor();
    assert((await topDialog().textContent()).includes('回复对象：小甲'));
    assert.equal(await topDialog().getByRole('button',{name:'查看参考消息',exact:true}).count(),2,'media source must be readable');
    await shot(`evidence-${theme}-${viewport.width}`);
