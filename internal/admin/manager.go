@@ -114,6 +114,7 @@ type Manager struct {
 	workspaceDir        string
 	directoryMu         sync.Mutex
 	accounts            *accountRegistry
+	fish                *fishIdentityRegistry
 	canvasMu            sync.Mutex
 	friendsMu           sync.Mutex
 	friends             map[string]friendEntry
@@ -150,7 +151,13 @@ type Manager struct {
 	plugins             *pluginLedger
 }
 
+// NewManager constructs an independent root manager. Account registries use
+// newManager with their already-owned service fish registry before startup.
 func NewManager(dir, stateDir string, native Native) (*Manager, error) {
+	return newManager(dir, stateDir, native, nil)
+}
+
+func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry) (*Manager, error) {
 	if native == nil || dir == "" {
 		return nil, errors.New("missing admin runtime configuration")
 	}
@@ -167,6 +174,9 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, errors.New("管理目录不可用")
+	}
+	if fish == nil {
+		fish = newFishIdentityRegistry(dir)
 	}
 	c, err := loadConfig(dir)
 	if err != nil {
@@ -211,7 +221,7 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug}
+	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish}
 	externalConfiguration.openStore, externalConfiguration.owned = m.packageStore, false
 	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
 	if err != nil {

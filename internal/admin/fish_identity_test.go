@@ -199,13 +199,44 @@ func TestFishBindingDoesNotMergePrivateAdminWorkspace(t *testing.T) {
 }
 
 func TestFishPurgePreservesOtherBindingAndTombstoneCannotBind(t *testing.T) {
+	for _, scenario := range []string{"bound", "previously-unbound"} {
+		t.Run(scenario, func(t *testing.T) { testFishPurge(t, scenario == "previously-unbound") })
+	}
+}
+
+func testFishPurge(t *testing.T, previouslyUnbound bool) {
+	t.Setenv("WECHAT_WORKSPACE_ROOT", t.TempDir())
 	f, _ := setupAccounts(t)
 	fishID := fishManage(t, f, "test", "bind_fish", http.StatusOK)
 	if second := fishManage(t, f, "second", "bind_fish", http.StatusOK); second != fishID {
 		t.Fatalf("secondary fish mismatch: %q != %q", second, fishID)
 	}
+	private := fishPrivateRoot(f.manager.managedRoot(), fishID)
+	diary := func(account string) string {
+		return filepath.Join(private, fishAccountDir(account), "synthetic-owner", "diary.txt")
+	}
+	for _, account := range []string{"test", "second"} {
+		if err := os.MkdirAll(filepath.Dir(diary(account)), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(diary(account), []byte(account), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if previouslyUnbound {
+		fishManage(t, f, "second", "unbind_fish", http.StatusOK)
+	}
 	fishManage(t, f, "second", "remove", http.StatusOK)
+	if data, err := os.ReadFile(diary("second")); err != nil || string(data) != "second" {
+		t.Fatalf("remove lost archived diary: %v", err)
+	}
 	fishManage(t, f, "second", "purge", http.StatusOK)
+	if _, err := os.Stat(filepath.Join(private, fishAccountDir("second"))); !os.IsNotExist(err) {
+		t.Fatalf("purged private home still present: %v", err)
+	}
+	if data, err := os.ReadFile(diary("test")); err != nil || string(data) != "test" {
+		t.Fatalf("purge changed other account's diary: %v", err)
+	}
 	rows := fishAccountRows(t, f)
 	if rows["test"] != fishID || rows["second"] != "" {
 		t.Fatalf("purge changed remaining fish binding or disclosed tombstone: %#v", rows)

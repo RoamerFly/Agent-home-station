@@ -117,17 +117,31 @@ func packagedWindowsRuntimeRoots(w *agenthost.WindowsConfig) []string {
 // A global mount is requested for one tool invocation, never stored on a session.
 func (p *permittedTools) scopedHostConfig(raw json.RawMessage) (agenthost.Config, error) {
 	var in struct {
-		Global bool `json:"global"`
-		GPU    bool `json:"gpu"`
+		Global   bool `json:"global"`
+		GPU      bool `json:"gpu"`
+		FishHome bool `json:"fish_home"`
 	}
 	if json.Unmarshal(raw, &in) != nil {
 		return agenthost.Config{}, toolInputError("invalid execution scope")
+	}
+	if in.Global && in.FishHome {
+		return agenthost.Config{}, toolInputError("fish_home cannot be combined with global scope")
 	}
 	c, e := p.hostConfig()
 	if e != nil {
 		return c, e
 	}
 	c.Isolation.GPU = in.GPU
+	if in.FishHome {
+		home, _, err := p.boundFishHome()
+		if err != nil {
+			return c, toolInputError(err.Error())
+		}
+		// Do not expose the fish parent, conversation, account-private or public
+		// project writable roots. Retain only hostConfig's read-only dependencies.
+		c.Roots = []string{home}
+		return c, nil
+	}
 	if in.Global {
 		if !p.privileged() || !p.manager.agent.config().CrossConversation {
 			return c, toolInputError("account global workspace requires the trusted owner")

@@ -54,7 +54,11 @@ func accountDirectory(id string) string {
 }
 
 func newAccountRegistry(root *Server) (*accountRegistry, error) {
-	fish := newFishIdentityRegistry(root.manager.dir)
+	fish := root.manager.fish
+	if fish == nil {
+		fish = newFishIdentityRegistry(root.manager.dir)
+		root.manager.fish = fish
+	}
 	a := &accountRegistry{root: root, fish: fish, items: map[string]*accountRuntime{}}
 	primary := root.manager.native.Account()
 	a.items[primary] = &accountRuntime{record: accountRecord{ID: primary}, manager: root.manager}
@@ -130,7 +134,7 @@ func (a *accountRegistry) open(record accountRecord, initialize bool) (*accountR
 			return nil, err
 		}
 	}
-	m, err := NewManager(dir, filepath.Join(a.root.manager.stateDir, "accounts", accountDirectory(record.ID)), native)
+	m, err := newManager(dir, filepath.Join(a.root.manager.stateDir, "accounts", accountDirectory(record.ID)), native, a.fish)
 	if err != nil {
 		return nil, err
 	}

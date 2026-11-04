@@ -144,6 +144,7 @@ type agentTask struct {
 	ReportSourceThread string            `json:"report_source_thread,omitempty"`
 	OwnerRequested     bool              `json:"owner_requested,omitempty"`
 	ProcessID          string            `json:"process_id,omitempty"`
+	FishHomeID         string            `json:"fish_home_id,omitempty"`
 	DeviceTask         string            `json:"device_task,omitempty"`
 	MusicSpec          *songSpec         `json:"music_spec,omitempty"`
 	PluginJob          *pluginJobState   `json:"plugin_job,omitempty"`

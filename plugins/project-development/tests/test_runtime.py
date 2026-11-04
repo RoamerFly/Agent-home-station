@@ -78,6 +78,23 @@ class ProjectRuntimeTests(unittest.TestCase):
         self.assertEqual(calls, [{'tool': 'server_tools', 'operation': 'tool_index', 'arguments': args}])
         self.assertEqual(result['value'], {'tools': []})
 
+    def test_fish_home_contract_is_limited_to_file_and_process_tools(self):
+        supported = {'server_status', 'server_list', 'server_read', 'server_search', 'server_write', 'server_edit', 'server_exec', 'server_process', 'server_windows_process'}
+        for name, tool in runtime.TOOLS.items():
+            properties = tool['input_schema'].get('properties', {})
+            self.assertEqual('fish_home' in properties, name in supported, name)
+            if name not in supported:
+                continue
+            self.assertEqual(properties['fish_home']['type'], 'boolean')
+            if name == 'server_status':
+                self.assertIn('root 0 absolute path', properties['fish_home']['description'])
+                self.assertIn('never guess it', properties['fish_home']['description'])
+                continue
+            self.assertIn('persistent diary/tools home as root 0', properties['fish_home']['description'])
+            self.assertIn('replace writable roots', properties['fish_home']['description'])
+            self.assertIn('server_status(fish_home=true)', properties['fish_home']['description'])
+            self.assertIn('never crosses original conversation privacy', properties['fish_home']['description'])
+
 
 if __name__ == '__main__':
     unittest.main()

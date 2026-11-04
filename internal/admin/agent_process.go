@@ -26,6 +26,7 @@ func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.R
 	defer func() { callErr = localAgentError(callErr) }()
 	var in struct {
 		GPU                       bool `json:"gpu"`
+		FishHome                  bool `json:"fish_home"`
 		Action, ID, Path, Command string
 		Argv                      []string `json:"argv"`
 		Key                       string   `json:"request_key"`
@@ -35,6 +36,19 @@ func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.R
 		return "", errors.New("进程参数无效")
 	}
 	scope := p.processScope()
+	// Fish-home jobs live in a deliberately separate namespace.  A normal
+	// conversation scope must never see them, and the durable fish ID below is
+	// only a selector for this call -- boundFishHome rechecks the live owner,
+	// direct-origin and binding state on every operation.
+	fishHomeID := ""
+	if in.FishHome {
+		_, currentFishHomeID, fishHomeErr := p.boundFishHome()
+		if fishHomeErr != nil {
+			return "", fishHomeErr
+		}
+		fishHomeID = currentFishHomeID
+		scope = agentID(p.trace.Account, p.trace.Thread, p.trace.Sender, "fish_home", fishHomeID)
+	}
 	cfg, configErr := p.scopedHostConfig(raw)
 	if configErr != nil {
 		return "", &RuntimeFailure{Code: "execution_scope_unavailable", Stage: "scope", Message: "程序未启动：当前请求的执行范围不可用", NotStarted: true, EffectiveScope: scope, Continuation: "核对当前账号、会话及global授权后再调用server_status"}
@@ -54,7 +68,16 @@ func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.R
 		allowed := func() bool {
 			access := &permittedTools{manager: p.manager, trace: trace}
 			current, e := access.scopedHostConfig(raw)
-			return authorized != nil && authorized() && e == nil && access.workspaceExecutionAllowed() && current.Mode == "full" && slices.Equal(current.Roots, cfg.Roots)
+			if e != nil || !access.workspaceExecutionAllowed() || current.Mode != "full" || !slices.Equal(current.Roots, cfg.Roots) {
+				return false
+			}
+			if fishHomeID != "" {
+				_, currentFishID, fishErr := access.boundFishHome()
+				if fishErr != nil || currentFishID != fishHomeID {
+					return false
+				}
+			}
+			return authorized != nil && authorized()
 		}
 		toolName := "server_process"
 		if windows {
@@ -115,7 +138,7 @@ func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.R
 			if origin == "" {
 				origin = p.trace.TraceID
 			}
-			task := agentTask{OwnerRequested: p.privileged(), ParentID: p.trace.TaskID, ID: taskID, ProcessID: process.ID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "后台程序", RequestedText: request, Checkpoint: "等待真实程序结果，使用原进程编号查询，不重新运行命令", State: "waiting", Next: time.Now().Add(2 * time.Second), OriginTrace: origin, QuoteServerID: p.trace.QuoteServerID}
+			task := agentTask{OwnerRequested: p.privileged(), ParentID: p.trace.TaskID, ID: taskID, ProcessID: process.ID, FishHomeID: fishHomeID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "后台程序", RequestedText: request, Checkpoint: "等待真实程序结果，使用原进程编号查询，不重新运行命令", State: "waiting", Next: time.Now().Add(2 * time.Second), OriginTrace: origin, QuoteServerID: p.trace.QuoteServerID}
 			task.Constraints = p.taskConstraints("process", "", "", "")
 			if task.ParentID != "" {
 				task.RequestedText = ""
@@ -150,14 +173,32 @@ func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.R
 
 func (m *Manager) claimProcessTask(task agentTask, now time.Time) (*companion.Input, error) {
 	p := &permittedTools{manager: m, trace: companion.Input{Account: task.Account, Thread: task.Thread, Sender: task.Sender}}
+	scope := p.processScope()
+	if task.FishHomeID != "" {
+		// A persisted fish ID is deliberately insufficient. A restart may happen
+		// after unbinding, after owner revocation, or after a task was forged from
+		// stale state. Re-resolve against the current trusted direct owner before
+		// touching the process registry, and never try the old conversation scope.
+		_, currentFishID, fishErr := p.boundFishHome()
+		if fishErr != nil || currentFishID != task.FishHomeID {
+			task.State = "cancelled"
+			task.LastResult = "鱼屋绑定或主人私聊授权已变化，不读取旧进程内容"
+			_, err := m.agent.updateSnapshot(task)
+			return nil, err
+		}
+		scope = agentID(task.Account, task.Thread, task.Sender, "fish_home", task.FishHomeID)
+	}
 	if !p.workspaceExecutionAllowed() || task.OwnerRequested && !p.privileged() || m.agent.config().Host.Mode != "full" {
 		task.State = "cancelled"
 		task.LastResult = "执行权限已撤销，不交付旧进程内容"
 		_, err := m.agent.updateSnapshot(task)
 		return nil, err
 	}
-	process, err := m.processes.Status(p.processScope(), task.ProcessID, false)
-	if err != nil && p.privileged() {
+	process, err := m.processes.Status(scope, task.ProcessID, false)
+	// Pre-fish-home tasks retain their established compatibility fallback. It
+	// must never apply to a fish-home watcher because that would let a revoked
+	// binding inspect an old process namespace.
+	if err != nil && task.FishHomeID == "" && p.privileged() {
 		process, err = m.processes.Status(agentID(task.Account, task.Thread, task.Sender), task.ProcessID, false)
 	}
 	if err != nil {

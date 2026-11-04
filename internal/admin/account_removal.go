@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"wechat-bot/internal/workspacefs"
 )
 
 // Called with the lifecycle lock. Do not hold the directory lock across a
@@ -158,6 +160,26 @@ func (a *accountRegistry) eraseAccountFiles(id string) error {
 		}
 		if err != nil || json.Unmarshal(data, &identity) != nil || identity.Account != id || identity.Scope != digest {
 			return errors.New("私有工作区身份不匹配，已保留资料")
+		}
+	}
+	fishID, _, err := a.fish.bindings()
+	if err != nil {
+		return err
+	}
+	if fishID != "" {
+		parent := fishPrivateRoot(m.managedRoot(), fishID)
+		if _, err := os.Lstat(parent); err == nil {
+			private, err := workspacefs.EnsurePath(parent)
+			if err != nil {
+				return fmt.Errorf("打开鱼的私有目录失败：%w", err)
+			}
+			err = private.RemoveAll(fishAccountDir(id))
+			private.Close()
+			if err != nil {
+				return fmt.Errorf("清理此账号的鱼家目录失败：%w", err)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 	}
 	for _, target := range []struct{ base, parent, name string }{
