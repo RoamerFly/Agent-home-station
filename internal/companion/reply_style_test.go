@@ -2,9 +2,64 @@ package companion
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestGroupTurnSeesOwnStyleWithoutExtraModelReview(t *testing.T) {
+	c := enabledConfig()
+	c.Permissions.Remember = true
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	m := &fakeModel{answer: `{"action":"reply","messages":["祝你们早日如愿。"]}`}
+	e, err := New(c, s, m, "role")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := syntheticNativeInput(Input{Account: "a", Channel: "wechat", Thread: "room", Sender: "a1", IsGroup: true, Directed: true, Mode: "direct", Text: "我也期待有这么一天。"}, "first")
+	now := time.Now()
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	for k, text := range []string{"哈哈，跑得像风一样[得意]", "哈哈，跑得比以前还快[得意]"} {
+		if err := s.AcceptedDelivery(in, text, []string{"receipt1", "receipt2"}[k], c, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in = syntheticNativeInput(Input{Account: "a", Channel: "wechat", Thread: "room", Sender: "a1", IsGroup: true, Directed: true, Mode: "direct", Text: "希望如此。"}, "next")
+	d, err := e.Respond(t.Context(), in)
+	if err != nil || len(d.Messages) != 1 || m.calls != 1 || !strings.Contains(m.system, "期待、类比或假设") {
+		t.Fatalf("normal group reply %v, calls %d, err %v", d, m.calls, err)
+	}
+	if !strings.Contains(m.turns[len(m.turns)-1]["content"], `"recent_reply_style":["opening","expression","phrasing"]`) {
+		t.Fatal("missing scoped repetition signals")
+	}
+}
+
+func TestRecentReplyStyleUsesDistinctAcceptedBubbles(t *testing.T) {
+	group := Input{IsGroup: true}
+	first := Turn{Role: "assistant", DeliveryID: "a", Text: "哈哈，跑得像一阵风[得意]"}
+	second := Turn{Role: "assistant", DeliveryID: "b", Text: "哈哈，跑得比上回还快[得意]"}
+	scope := Scope{Messages: []Turn{first, second}}
+	if got := recentReplyStyle(scope, group); !slices.Equal(got, []string{"opening", "expression", "phrasing"}) {
+		t.Fatalf("paraphrased comparison missed: %v", got)
+	}
+	for _, other := range []Turn{first, {Role: "user", Text: second.Text}, {Role: "assistant", Text: second.Text}, {Role: "assistant", DeliveryID: "c", Text: second.Text, Media: &MediaMemory{Kind: "image"}}} {
+		if got := recentReplyStyle(Scope{Messages: []Turn{first, other}}, group); len(got) != 0 {
+			t.Fatalf("non-independent delivery counted: %v", got)
+		}
+	}
+	for _, in := range []Input{{}, {IsGroup: true, SourceOnlyContext: true}} {
+		if got := recentReplyStyle(scope, in); len(got) != 0 {
+			t.Fatalf("unexpected scope: %v", got)
+		}
+	}
+}
 
 func TestNaturalReplyGuidanceReachesNormalAndFailureModelWithoutRewriting(t *testing.T) {
 	// These are synthetic model outputs, not live-model quality evidence.
