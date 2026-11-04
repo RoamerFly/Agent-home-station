@@ -75,3 +75,33 @@ func TestCacheIncomingObservationKeepsOriginalAndNeverResurrectsForgottenTurn(t 
 		t.Fatalf("late parser resurrected forgotten turn: %#v", after.Messages)
 	}
 }
+
+func TestTypedCoverageUpgradesTitleOnlyObservationAndPlainRefreshClearsIt(t *testing.T) {
+	s, c, in := memoryFixture(t)
+	now := time.Now().UTC()
+	original := ""
+	in.Text, in.OriginalText, in.MessageTime = "收到分享", &original, now.Format(time.RFC3339)
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, Account: in.Account, Thread: in.Thread, Sender: in.Sender, MessageType: 49, OccurredAt: in.MessageTime, Revision: 1, Integrity: "observed"}
+	in.IncomingMedia = []IncomingMediaRef{{Source: *in.Source, Kind: "share", UploaderID: in.Sender, Observation: "标题：伪造视频", ObservationState: "observed", ObservationVersion: 1}}
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	ref, ok := s.SourceForInput(in)
+	if !ok {
+		t.Fatal("missing source")
+	}
+	if err := s.CacheIncomingObservationWithCoverage(in.Channel, *ref, "完整宿主观察", "video 9.000s; sampled frames=2", "画面：两人走在海边"); err != nil {
+		t.Fatal(err)
+	}
+	ev, err := s.ReadEvent(t.Context(), []string{ScopeID(in.Channel, in.Account, in.Thread)}, ref.EventID)
+	if err != nil || len(ev.IncomingMedia) != 1 || ev.IncomingMedia[0].ObservationExcerpt != "画面：两人走在海边" {
+		t.Fatal("typed observer did not replace title-only record", ev, err)
+	}
+	if _, err := s.UpdateObservation(ScopeID(in.Channel, in.Account, in.Thread), in.TraceID, in.Text, "普通刷新"); err != nil {
+		t.Fatal(err)
+	}
+	ev, err = s.ReadEvent(t.Context(), []string{ScopeID(in.Channel, in.Account, in.Thread)}, ref.EventID)
+	if err != nil || ev.IncomingMedia[0].ObservedRange != "" || ev.IncomingMedia[0].ObservationExcerpt != "" {
+		t.Fatal("untyped refresh retained stale coverage", ev, err)
+	}
+}

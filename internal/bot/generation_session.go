@@ -13,6 +13,7 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 	prepare := func(ctx context.Context, event agentrun.Event) (agentrun.Event, error) {
 		original := ""
 		followupObservation := ""
+		followupEvidence := MediaObservationEvidence{}
 		var followupMessage *linuxnative.Message
 		if event.Kind == 1 {
 			original = event.Text
@@ -28,7 +29,13 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 			followupMessage = &m
 			if w.readMediaBeforeDecision(m) {
 				readCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-				summary, err := readMediaWithRecovery(readCtx, m, w.config.Analyzer.Analyze)
+				summary, err := readMediaWithRecovery(readCtx, m, func(ctx context.Context, current linuxnative.Message) (string, error) {
+					text, evidence, err := analyzeMediaWithEvidence(ctx, w.config.Analyzer, current)
+					if err == nil {
+						followupEvidence = evidence
+					}
+					return text, err
+				})
 				cancel()
 				if err != nil {
 					if in.IsGroup && ctx.Err() == nil {
@@ -60,6 +67,8 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 				observed.IncomingMedia[i].Observation = followupObservation
 				observed.IncomingMedia[i].ObservationState = "observed"
 				observed.IncomingMedia[i].ObservationVersion = 1
+				observed.IncomingMedia[i].ObservedRange = followupEvidence.ObservedRange
+				observed.IncomingMedia[i].ObservationExcerpt = followupEvidence.Excerpt
 			}
 		}
 		observed.OriginalText = &original

@@ -294,6 +294,7 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 		read, stop := context.WithTimeout(ctx, 3*time.Minute)
 		m, err := w.source.Message(read, id)
 		var summary string
+		var observationEvidence MediaObservationEvidence
 		if err == nil && (m.ID != id || m.ThreadID != in.Thread || m.SenderID != event.Sender || m.Direction != "incoming" && in.Thread != "filehelper" || m.AccountID != "" && m.AccountID != in.Account) {
 			err = errors.New("media_source_scope_mismatch")
 		}
@@ -301,7 +302,7 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 			if !w.observationAllowed(m) {
 				err = errors.New("media_understanding_disabled")
 			} else {
-				summary, err = w.readRequiredMedia(read, m)
+				summary, observationEvidence, err = w.readRequiredMediaWithEvidence(read, m)
 			}
 		}
 		stop()
@@ -317,7 +318,7 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 		}
 		before := event.Text
 		event.Text += "\n实际媒体观察（对话资料）：\n" + summary
-		if err := c.Store.ReplaceObservation(companion.ScopeID(in.Channel, in.Account, in.Thread), id, before, event.Text); err != nil {
+		if _, err := c.Store.UpdateObservationWithCoverage(companion.ScopeID(in.Channel, in.Account, in.Thread), id, before, event.Text, observationEvidence.ObservedRange, observationEvidence.Excerpt); err != nil {
 			return err
 		}
 	}

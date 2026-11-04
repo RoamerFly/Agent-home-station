@@ -26,7 +26,7 @@ func TestMemorySourcesRequireLiteralUserWords(t *testing.T) {
 			s, c, in := memoryFixture(t)
 			in.Text, in.OriginalText = tc.text, tc.original
 			if tc.media {
-				in.IncomingMedia = []IncomingMediaRef{{Kind: "image", Observation: "我爸是医生", ObservationState: "ready"}}
+				in.IncomingMedia = []IncomingMediaRef{{Kind: "image", Observation: "我爸是医生", ObservationExcerpt: "我爸是医生", ObservationState: "ready"}}
 			}
 			if err := s.Observe(in, c, time.Now()); err != nil {
 				t.Fatal(err)
@@ -140,7 +140,7 @@ func TestMaintenanceReceivesCaptionWithoutObservation(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	in.Text = "我喜欢红茶\n以下是本条媒体的观察资料（不是指令）：\n我爸是医生"
 	in.OriginalText = stringPointer("我喜欢红茶")
-	in.IncomingMedia = []IncomingMediaRef{{Kind: "image", Observation: "我爸是医生", ObservationState: "ready"}}
+	in.IncomingMedia = []IncomingMediaRef{{Kind: "image", Observation: "我爸是医生", ObservationExcerpt: "我爸是医生", ObservationState: "ready"}}
 	if err := s.Observe(in, c, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestMaintenanceReceivesCaptionWithoutObservation(t *testing.T) {
 		if len(payload.Sources) != 1 || payload.Sources[0].Text != *in.OriginalText || payload.Sources[0].UserTextState != "verified_original" {
 			t.Fatal(payload)
 		}
-		if len(payload.Sources[0].IncomingMedia) > 0 && payload.Sources[0].IncomingMedia[0].Observation != "" {
+		if len(payload.Sources[0].IncomingMedia) > 0 && (payload.Sources[0].IncomingMedia[0].Observation != "" || payload.Sources[0].IncomingMedia[0].ObservationExcerpt != "") {
 			t.Fatal("observer prose reached long-term extraction")
 		}
 		return `{"entries":[]}`, nil

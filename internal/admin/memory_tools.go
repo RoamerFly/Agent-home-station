@@ -199,9 +199,7 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 				return "", toolInputError("分页长度不足以容纳一个UTF-8字符")
 			}
 			total := len(body)
-			for i := range ev.IncomingMedia {
-				ev.IncomingMedia[i].Observation = ""
-			}
+			ev.OmitMediaObservationText()
 			ev.Text = ""
 			if part == "text" {
 				ev.Text = body[in.Offset:end]

@@ -81,6 +81,16 @@ type MemoryEvent struct {
 	Revision         int                `json:"revision"`
 	Seq              int64              `json:"seq"`
 }
+
+// OmitMediaObservationText keeps attachment metadata available when only the
+// uploader's original words or a specific page of a transcript was requested.
+func (ev *MemoryEvent) OmitMediaObservationText() {
+	for i := range ev.IncomingMedia {
+		ev.IncomingMedia[i].Observation = ""
+		ev.IncomingMedia[i].ObservationExcerpt = ""
+	}
+}
+
 type MemoryQuery struct {
 	BeforeMessageID string    `json:"before_message_id,omitempty"`
 	MediaKind       string    `json:"media_kind,omitempty"`
@@ -923,9 +933,7 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 		ev.Text = boundedText(ev.Text, 600)
 		// Search previews never copy complete ASR/OCR/video bodies. Exact
 		// observation pages remain available through memory_read.
-		for i := range ev.IncomingMedia {
-			ev.IncomingMedia[i].Observation = ""
-		}
+		ev.OmitMediaObservationText()
 		if q.MetadataOnly {
 			ev.Text = ""
 			ev.IncomingMedia = nil

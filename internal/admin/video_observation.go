@@ -100,6 +100,10 @@ func (a mediaUnderstanding) observeVideo(ctx context.Context, msg linuxnative.Me
 		event = "channels_video_observed"
 	}
 	coverage := videoObservationCoverage(sample.Seconds, sample.Times, visual != "", audioSeconds, audio != "", mediaspec.IsNoSpeech(audioErr))
+	formattedAudio, formattedAudioMethod := "", ""
+	if audio != "" {
+		formattedAudio, formattedAudioMethod = transcript.Format(ctx, audio)
+	}
 	rangeJSON, _ := json.Marshal(coverage)
 	parts := []string{header, "[video_read_coverage]" + string(rangeJSON), fmt.Sprintf("画面为均匀采样，音轨范围见video_read_coverage，二者独立：画面采样不表示音轨也未读完。这是供模型选取内容和决定补读的内部状态，不是发给群成员的回复。总结直接讲视频内容；已有充分正文时自然概括，不用复述读取限制。需要未覆盖的关键内容时调用video_inspect(action=info/frames/audio,message_id=%q)，音轨从next_start_seconds续读，帧按next_start_frame续读；未读内容不能补造。", msg.ID)}
 	if a.manager.Config().Companion.Permissions.Remember {
@@ -126,7 +130,10 @@ func (a mediaUnderstanding) observeVideo(ctx context.Context, msg linuxnative.Me
 		if coverage.AudioComplete {
 			label = "音轨已覆盖视频时长，可据此概括口述内容"
 		}
-		formatted, method := transcript.Format(ctx, audio)
+		formatted, method := formattedAudio, formattedAudioMethod
+		if formatted == "" {
+			formatted, method = transcript.Format(ctx, audio)
+		}
 		formatLabel := "使用基础排版"
 		if method == "ct_punc_int8" {
 			formatLabel = "已用本地标点模型断句"
@@ -148,8 +155,36 @@ func (a mediaUnderstanding) observeVideo(ctx context.Context, msg linuxnative.Me
 			parts = append(parts, "[媒体理解工具未安装或未启用语音识别；本次仅依据画面观察，未读取声音内容。]")
 		}
 	}
+	if a.evidence != nil {
+		*a.evidence = trustedVideoEvidence(coverage, visual, formattedAudio)
+	}
 	a.manager.record(bot.Record{Event: event, Category: "decision", ThreadID: msg.ThreadID, MessageID: msg.ID, Status: status, Reason: reason, Bytes: int64(len(data)), MediaCount: count, Origin: "media"})
 	return strings.Join(parts, "\n"), nil
+}
+
+func trustedVideoEvidence(coverage videoReadCoverage, visual, audio string) bot.MediaObservationEvidence {
+	parts := []string{fmt.Sprintf("video %.3fs", coverage.Duration)}
+	if coverage.Visual == "sampled" && len(coverage.FrameTimes) > 0 && strings.TrimSpace(visual) != "" {
+		parts = append(parts, fmt.Sprintf("sampled frames=%d", len(coverage.FrameTimes)))
+	}
+	if coverage.Audio == "transcribed" && coverage.AudioEnd > 0 && strings.TrimSpace(audio) != "" {
+		audioPart := fmt.Sprintf("transcript 0-%.3fs", coverage.AudioEnd)
+		if coverage.AudioComplete {
+			audioPart += " (complete)"
+		}
+		parts = append(parts, audioPart)
+	}
+	excerpts := []string{}
+	if strings.TrimSpace(visual) != "" {
+		excerpts = append(excerpts, "画面："+strings.TrimSpace(visual))
+	}
+	if strings.TrimSpace(audio) != "" {
+		excerpts = append(excerpts, "音轨："+strings.TrimSpace(audio))
+	}
+	if len(parts) == 1 || len(excerpts) == 0 {
+		return bot.MediaObservationEvidence{}
+	}
+	return bot.MediaObservationEvidence{ObservedRange: strings.Join(parts, "; "), Excerpt: strings.Join(excerpts, "\n")}
 }
 
 type videoReadCoverage struct {

@@ -59,6 +59,7 @@ func TestMemoryBrowserFixture(t *testing.T) {
 	if _, e = m.memory.SaveMemory(t.Context(), companion.MemoryEntry{Scope: id, Subject: in.Sender, Kind: "episode", Detail: statement, Summary: statement, Sources: visit}, 0); e != nil {
 		t.Fatal(e)
 	}
+	seedVideoReflection(t, m, in)
 	h, e := NewHandler(m, "synthetic-browser-password-2026", "")
 	if e != nil {
 		t.Fatal(e)

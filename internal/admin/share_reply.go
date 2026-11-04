@@ -111,7 +111,7 @@ func (s *Server) replyShare(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "模型配置不可用")
 		return
 	}
-	description, err := (mediaUnderstanding{manager: m}).Analyze(ctx, message)
+	description, observationEvidence, err := (mediaUnderstanding{manager: m}).AnalyzeWithEvidence(ctx, message)
 	if err != nil || !hasActualShareObservation(description) {
 		finish("stopped", "shared_video_observation_unavailable")
 		fail(w, 422, "尚未取得分享实际内容，未发送仅凭标题的补充回复")
@@ -132,7 +132,7 @@ func (s *Server) replyShare(w http.ResponseWriter, r *http.Request) {
 	// This is a re-evaluation of a real saved upload, not a new user utterance
 	// with the same native ID. Never record the administrator wrapper as the
 	// original body or overwrite the original upload on a retry.
-	if err = bindManualShareInput(m, &input, message, description); err != nil {
+	if err = bindManualShareInputWithEvidence(m, &input, message, description, observationEvidence); err != nil {
 		finish("stopped", "share_reply_source_unavailable")
 		fail(w, 409, "原分享来源无法核验，未生成或发送")
 		return
@@ -224,6 +224,10 @@ func (s *Server) replyShare(w http.ResponseWriter, r *http.Request) {
 }
 
 func bindManualShareInput(m *Manager, in *companion.Input, message linuxnative.Message, observation string) error {
+	return bindManualShareInputWithEvidence(m, in, message, observation, bot.MediaObservationEvidence{})
+}
+
+func bindManualShareInputWithEvidence(m *Manager, in *companion.Input, message linuxnative.Message, observation string, evidence bot.MediaObservationEvidence) error {
 	empty := ""
 	lookup := companion.Input{Channel: "wechat", Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID, TraceID: message.ID, MessageTime: message.CreatedAt, Source: &companion.SourceRef{InstanceID: m.memory.SourceInstanceID(), MessageID: message.ID, ServerID: message.ServerID}}
 	ref, ok := m.memory.SourceForInput(lookup)
@@ -235,7 +239,7 @@ func bindManualShareInput(m *Manager, in *companion.Input, message linuxnative.M
 	in.HistoryObserved = true
 	in.BackgroundResult = true
 	in.OriginTraceID = message.ID
-	in.IncomingMedia = []companion.IncomingMediaRef{{Source: *ref, Kind: "share", UploaderID: message.SenderID, Observation: observation, ObservationState: "observed", ObservationVersion: 1}}
+	in.IncomingMedia = []companion.IncomingMediaRef{{Source: *ref, Kind: "share", UploaderID: message.SenderID, Observation: observation, ObservationExcerpt: evidence.Excerpt, ObservationState: "observed", ObservationVersion: 1, ObservedRange: evidence.ObservedRange}}
 	return nil
 }
 

@@ -12,7 +12,7 @@ func TestOriginalObservationPagesPreserveWordsVersionAndScopeWithoutEnvelopeDupl
 	f, p := globalSearchFixture(t)
 	body := "[微信视频实际内容观察]\n[画面观察：6帧]\n合成画面说明不应重复注入音轨页。\n[实际音轨转写：0–120秒]\n" + strings.Repeat("合成视频音轨中的完整原话。", 500)
 	empty := ""
-	in := companion.Input{Channel: "wechat", Account: "test", Thread: "source@chatroom", Sender: "member", TraceID: "synthetic-original-video", Text: "收到视频", OriginalText: &empty, IncomingMedia: []companion.IncomingMediaRef{{Kind: "video", UploaderID: "member", Observation: body, ObservationState: "observed", ObservationVersion: 1}}}
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "source@chatroom", Sender: "member", TraceID: "synthetic-original-video", Text: "收到视频", OriginalText: &empty, IncomingMedia: []companion.IncomingMediaRef{{Kind: "video", UploaderID: "member", Observation: body, ObservationExcerpt: "合成画面说明", ObservationState: "observed", ObservationVersion: 1}}}
 	in.Source = &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: in.TraceID, MessageType: 43}
 	if err := f.manager.memory.Observe(in, f.manager.Config().Companion, time.Now()); err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func TestOriginalObservationPagesPreserveWordsVersionAndScopeWithoutEnvelopeDupl
 		if json.Unmarshal([]byte(text), &value) != nil || value.Next <= offset || len(value.Parts) != 3 {
 			t.Fatal(text)
 		}
-		if len(value.Event.IncomingMedia) != 1 || value.Event.IncomingMedia[0].Observation != "" || value.Event.Text != "" {
+		if len(value.Event.IncomingMedia) != 1 || value.Event.IncomingMedia[0].Observation != "" || value.Event.IncomingMedia[0].ObservationExcerpt != "" || value.Event.Text != "" {
 			t.Fatal("body duplicated outside requested page")
 		}
 		joined += value.Text

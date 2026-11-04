@@ -41,7 +41,20 @@ func observationReason(err error) string {
 // This retry is strictly for reading. Delivery has its own durable receipt
 // reconciliation and must never enter this loop.
 func (w *Worker) readRequiredMedia(ctx context.Context, m linuxnative.Message) (string, error) {
-	return readMediaWithRecovery(ctx, m, w.analyzeIncomingMedia)
+	text, _, err := w.readRequiredMediaWithEvidence(ctx, m)
+	return text, err
+}
+
+func (w *Worker) readRequiredMediaWithEvidence(ctx context.Context, m linuxnative.Message) (string, MediaObservationEvidence, error) {
+	var evidence MediaObservationEvidence
+	text, err := readMediaWithRecovery(ctx, m, func(ctx context.Context, current linuxnative.Message) (string, error) {
+		text, result, err := w.analyzeIncomingMediaEvidence(ctx, current)
+		if err == nil {
+			evidence = result
+		}
+		return text, err
+	})
+	return text, evidence, err
 }
 
 func readMediaWithRecovery(ctx context.Context, m linuxnative.Message, analyze func(context.Context, linuxnative.Message) (string, error)) (string, error) {

@@ -259,9 +259,7 @@ func (e *Engine) extractMemoryBatch(ctx context.Context, id string, events []Mem
 			// Caption provenance may remain, but observer prose is not a second
 			// statement by the uploader and must not seed long-term user facts.
 			ev.IncomingMedia = cloneIncomingMedia(ev.IncomingMedia)
-			for i := range ev.IncomingMedia {
-				ev.IncomingMedia[i].Observation = ""
-			}
+			ev.OmitMediaObservationText()
 			ev.Media = nil
 			eligible = append(eligible, ev)
 		}

@@ -375,7 +375,8 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 			readCtx, stop := context.WithTimeout(modelCtx, 3*time.Minute)
 			var summary string
 			incomplete := false
-			summary, err = w.readRequiredMedia(readCtx, *analysis)
+			var observationEvidence MediaObservationEvidence
+			summary, observationEvidence, err = w.readRequiredMediaWithEvidence(readCtx, *analysis)
 			stop()
 			if err != nil && in.IsGroup && !errors.Is(modelCtx.Err(), context.Canceled) {
 				err = &groupObservationFailure{reason: observationReason(err), messageID: analysis.ID}
@@ -391,8 +392,11 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 				for i := range in.IncomingMedia {
 					in.IncomingMedia[i].Observation = summary
 					in.IncomingMedia[i].ObservationState = "observed"
+					in.IncomingMedia[i].ObservedRange = observationEvidence.ObservedRange
+					in.IncomingMedia[i].ObservationExcerpt = observationEvidence.Excerpt
 					if incomplete {
 						in.IncomingMedia[i].ObservationState = "incomplete"
+						in.IncomingMedia[i].ObservedRange = ""
 					}
 				}
 				if analysis.Type == 34 {

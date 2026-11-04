@@ -63,6 +63,14 @@ type Config struct {
 	GroupRules     map[string]GroupRule
 	Channel        string
 }
+
+// MediaObservationEvidence is supplied only by a trusted host observer that
+// actually decoded incoming media. It is intentionally separate from the text
+// returned to the model, because that text may include untrusted card fields.
+type MediaObservationEvidence struct {
+	ObservedRange string
+	Excerpt       string
+}
 type GroupRule struct {
 	Mode, Prefix, Persona   string
 	ForceReplyWhenMentioned bool
@@ -258,6 +266,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	quoteContext := ""
 	mediaObservationState := "pending"
+	mediaObservationEvidence := MediaObservationEvidence{}
 	if message.IsQuotedText() {
 		quoteContext = w.readQuoteContext(ctx, &message)
 	}
@@ -335,7 +344,8 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation == nil && readMedia {
 			analysisCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-			summary, analysisErr := w.readRequiredMedia(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
+			summary, observationEvidence, analysisErr := w.readRequiredMediaWithEvidence(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
+			mediaObservationEvidence = observationEvidence
 			mediaObservationState = "observed"
 			cancel()
 			if analysisErr != nil {
@@ -380,6 +390,10 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 			input.IncomingMedia[i].ObservationState = mediaObservationState
 			if mediaObservationState != "pending" {
 				input.IncomingMedia[i].Observation = prompt
+				if mediaObservationState == "observed" {
+					input.IncomingMedia[i].ObservedRange = mediaObservationEvidence.ObservedRange
+					input.IncomingMedia[i].ObservationExcerpt = mediaObservationEvidence.Excerpt
+				}
 			}
 		}
 		if message.Type == 49 && message.AppMessageType != nil {

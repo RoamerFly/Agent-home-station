@@ -74,12 +74,12 @@ func (w *Worker) readTurnMedia(ctx context.Context, in companion.Input, args jso
 			}
 		}
 	}
-	body, err := w.analyzeIncomingMedia(ctx, m)
+	body, observationEvidence, err := w.analyzeIncomingMediaEvidence(ctx, m)
 	if err != nil {
 		return "", err
 	}
 	if store != nil {
-		if err = store.CacheIncomingObservation(in.Channel, *ref, body); err != nil {
+		if err = store.CacheIncomingObservationWithCoverage(in.Channel, *ref, body, observationEvidence.ObservedRange, observationEvidence.Excerpt); err != nil {
 			return "", err
 		}
 	}

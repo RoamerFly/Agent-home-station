@@ -88,9 +88,20 @@ func (s *Store) ReplaceObservation(scopeID, trace, before, after string) error {
 	return err
 }
 
+// UpdateObservationWithCoverage is the trusted-observer counterpart to
+// UpdateObservation.  Coverage is supplied by the host that actually decoded
+// the media; Store never derives it from arbitrary user-visible text.
+func (s *Store) UpdateObservationWithCoverage(scopeID, trace, before, after, observedRange, observedExcerpt string) (bool, error) {
+	return s.updateObservation(scopeID, trace, before, after, observedRange, observedExcerpt)
+}
+
 // Report whether the optimistic replacement actually occurred. An archived or
 // concurrently changed turn is never silently reported as updated or re-added.
 func (s *Store) UpdateObservation(scopeID, trace, before, after string) (bool, error) {
+	return s.updateObservation(scopeID, trace, before, after, "", "")
+}
+
+func (s *Store) updateObservation(scopeID, trace, before, after, observedRange, observedExcerpt string) (bool, error) {
 	changed := false
 	err := s.scopeTransaction(scopeID, func(data *persisted) error {
 		scope, ok := data.Scopes[scopeID]
@@ -109,6 +120,15 @@ func (s *Store) UpdateObservation(scopeID, trace, before, after string) (bool, e
 						turn.IncomingMedia[j].Observation = after
 						turn.IncomingMedia[j].ObservationVersion++
 						turn.IncomingMedia[j].ObservationState = "observed"
+						// A generic refresh must not preserve stale coverage.  A
+						// one-message refresh has no media selector, so never copy
+						// one observer's evidence across a multi-attachment event.
+						turn.IncomingMedia[j].ObservedRange = ""
+						turn.IncomingMedia[j].ObservationExcerpt = ""
+						if len(turn.IncomingMedia) == 1 && observedRange != "" {
+							turn.IncomingMedia[j].ObservedRange = observedRange
+							turn.IncomingMedia[j].ObservationExcerpt = observedExcerpt
+						}
 					}
 				} else {
 					turn.FullText = UserRequestText(after)
@@ -128,6 +148,17 @@ func (s *Store) UpdateObservation(scopeID, trace, before, after string) (bool, e
 // CacheIncomingObservation attaches a first successful on-demand read to its
 // exact retained source. It does not recreate an archived or forgotten turn.
 func (s *Store) CacheIncomingObservation(channel string, ref SourceRef, body string) error {
+	return s.cacheIncomingObservation(channel, ref, body, "", "")
+}
+
+// CacheIncomingObservationWithCoverage attaches a host-verified media range
+// alongside its observation.  It intentionally takes the range explicitly so
+// cached user/card text can never manufacture read coverage.
+func (s *Store) CacheIncomingObservationWithCoverage(channel string, ref SourceRef, body, observedRange, observedExcerpt string) error {
+	return s.cacheIncomingObservation(channel, ref, body, observedRange, observedExcerpt)
+}
+
+func (s *Store) cacheIncomingObservation(channel string, ref SourceRef, body, observedRange, observedExcerpt string) error {
 	// A parser can return whitespace when there was nothing usable to observe.
 	// Do not turn that into a successful, terminal observation: callers may
 	// still choose a more suitable reader later.  This check is deliberately
@@ -152,10 +183,15 @@ func (s *Store) CacheIncomingObservation(channel string, ref SourceRef, body str
 				if m.Source.EventID != ref.EventID || m.Source.Revision != ref.Revision {
 					continue
 				}
-				if m.ObservationState == "observed" && m.Observation != "" {
+				if m.ObservationState == "observed" && m.Observation != "" && observedRange == "" {
 					return nil
 				}
 				m.Observation, m.ObservationState = body, "observed"
+				m.ObservedRange, m.ObservationExcerpt = "", ""
+				if observedRange != "" {
+					m.ObservedRange = observedRange
+					m.ObservationExcerpt = observedExcerpt
+				}
 				m.ObservationVersion++
 				t.FullObservation = body
 				data.Scopes[id] = scope

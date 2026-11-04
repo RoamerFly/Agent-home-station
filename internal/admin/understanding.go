@@ -24,7 +24,21 @@ func formatSeconds(v float64) string               { return strconv.FormatFloat(
 func parseVideoDuration(s string) (float64, error) { return mediadecode.ParseDuration(s) }
 
 type mediaUnderstanding struct {
-	manager *Manager
+	manager  *Manager
+	evidence *bot.MediaObservationEvidence
+}
+
+// AnalyzeWithEvidence is consumed by bot only as a typed host boundary. It
+// returns media coverage produced while decoding the local video, never a
+// coverage marker parsed back out of card text or a provider transcript.
+func (a mediaUnderstanding) AnalyzeWithEvidence(ctx context.Context, m linuxnative.Message) (string, bot.MediaObservationEvidence, error) {
+	evidence := bot.MediaObservationEvidence{}
+	a.evidence = &evidence
+	text, err := a.Analyze(ctx, m)
+	if err != nil {
+		return text, bot.MediaObservationEvidence{}, err
+	}
+	return text, evidence, nil
 }
 
 func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) (string, error) {

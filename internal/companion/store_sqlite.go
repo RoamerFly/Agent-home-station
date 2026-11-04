@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS events(
  suppressed INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1,payload BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS events_scope_seq ON events(scope,seq);
 CREATE INDEX IF NOT EXISTS events_scope_time ON events(scope,at,id);
+CREATE INDEX IF NOT EXISTS events_reflection_observable_v2 ON events(scope,seq DESC,id DESC) WHERE role='user' AND suppressed=0 AND instr(CAST(payload AS TEXT),'"observation_excerpt":')>0;
 CREATE TABLE IF NOT EXISTS observations(event_id TEXT,hash TEXT,text TEXT,PRIMARY KEY(event_id,hash));
 CREATE TABLE IF NOT EXISTS event_revisions(event_id TEXT,revision INTEGER,text TEXT,hash TEXT,PRIMARY KEY(event_id,revision));
 CREATE TABLE IF NOT EXISTS event_terms(term TEXT,event_id TEXT,scope TEXT,PRIMARY KEY(term,event_id));
@@ -50,6 +51,14 @@ CREATE TABLE IF NOT EXISTS search_documents(namespace TEXT,id TEXT,scope TEXT,ki
 CREATE INDEX IF NOT EXISTS search_documents_scope_time ON search_documents(scope,at,id);
 CREATE TABLE IF NOT EXISTS source_conflicts(scope TEXT,event_id TEXT,other_event_id TEXT,reason TEXT,PRIMARY KEY(scope,event_id,other_event_id));
 CREATE TABLE IF NOT EXISTS context_metrics(id INTEGER PRIMARY KEY,at TEXT,total INTEGER,bytes INTEGER,components TEXT,method TEXT);
+CREATE TABLE IF NOT EXISTS experience_reflections(
+ id TEXT PRIMARY KEY,scope TEXT NOT NULL,source_event_id TEXT NOT NULL,source_event_revision INTEGER NOT NULL,
+ source_observation_version INTEGER NOT NULL,source_observation_hash TEXT NOT NULL,
+ parent_experience_id TEXT NOT NULL DEFAULT '',parent_experience_version INTEGER NOT NULL DEFAULT 0,
+ status TEXT NOT NULL,revision INTEGER NOT NULL,created TEXT NOT NULL,updated TEXT NOT NULL,payload BLOB NOT NULL);
+CREATE INDEX IF NOT EXISTS experience_reflections_scope_updated ON experience_reflections(scope,status,updated,id);
+CREATE INDEX IF NOT EXISTS experience_reflections_source ON experience_reflections(scope,source_event_id);
+CREATE TABLE IF NOT EXISTS experience_reflection_revisions(reflection_id TEXT,revision INTEGER,payload BLOB NOT NULL,PRIMARY KEY(reflection_id,revision));
 `
 
 // Fixed-width UTC timestamps sort chronologically in SQLite TEXT indexes,
