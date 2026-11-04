@@ -191,6 +191,11 @@ func TestOpenCommitmentExperienceViewExcludesCancelledAndPaginates(t *testing.T)
 		in.TraceID, in.Text = trace, text
 		return commitmentEvent(t, store, cfg, in, at)
 	}
+	walk := create("past-walk", "昨天一起去散步了。", base.Add(-time.Minute))
+	episode, err := store.SaveMemory(ctx, MemoryEntry{Scope: scope, Subject: in.Sender, Kind: "episode", Detail: in.Text, Sources: []MemorySource{{EventID: walk.ID, Quote: in.Text}}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	first := create("open-one", "我明天发照片。", base)
 	one, err := store.SaveCommitment(ctx, MemoryEntry{Scope: scope, Subject: in.Sender, Detail: "明天发照片", Sources: []MemorySource{{EventID: first.ID, Quote: in.Text}}})
 	if err != nil {
@@ -241,5 +246,9 @@ func TestOpenCommitmentExperienceViewExcludesCancelledAndPaginates(t *testing.T)
 	page, err = store.ListSharedExperiences(ctx, scope, ExperienceQuery{View: "open_commitments", Person: in.Sender, Limit: 5})
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID != two.ID {
 		t.Fatalf("cancelled commitment leaked into open view=%#v err=%v", page, err)
+	}
+	episodes, err := store.ListSharedExperiences(ctx, scope, ExperienceQuery{View: "episodes", Limit: 1})
+	if err != nil || len(episodes.Items) != 1 || episodes.Items[0].ID != episode.ID || episodes.HasMore {
+		t.Fatalf("newer commitments crowded out the past experience: %#v, %v", episodes, err)
 	}
 }

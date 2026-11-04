@@ -362,6 +362,42 @@
 </section>
 <section aria-labelledby="overview-title" class="page active-page" id="overview">
 <h2 class="sr-only" id="overview-title">当前账号总览</h2>
+<section class="life-journal panel" id="life-journal" aria-labelledby="life-journal-title" aria-live="polite">
+<div class="life-journal-scene" aria-hidden="true">
+<img src="/assets/night-sea.webp" alt="">
+</div>
+<div class="life-journal-copy">
+<div class="section-heading life-journal-heading">
+<div>
+<p class="eyebrow">夜海中的生活手记</p>
+<h2 id="life-journal-title">她最近记下的相处</h2>
+</div>
+<div class="life-journal-actions">
+<label class="sr-only" for="life-journal-scope">选择会话</label>
+<select id="life-journal-scope" aria-label="选择会话" disabled>
+<option>正在读取会话…</option>
+</select>
+<button type="button" class="quiet" id="life-journal-open" disabled>查看会话手记</button>
+</div>
+</div>
+<p class="life-journal-intro" id="life-journal-intro">当前会话中，有来源的共同经历、兴趣与约定。</p>
+<div class="life-journal-grid">
+<article class="life-journal-card">
+<p class="life-journal-kicker">有依据的片段</p>
+<div id="life-journal-experiences"><p class="empty">正在读取共同经历…</p></div>
+</article>
+<article class="life-journal-card">
+<p class="life-journal-kicker">正在续办</p>
+<div id="life-journal-commitments"><p class="empty">正在读取未完约定…</p></div>
+</article>
+<article class="life-journal-card">
+<p class="life-journal-kicker">她的回想</p>
+<div id="life-journal-reflections"><p class="empty">正在读取兴趣与心情…</p></div>
+</article>
+</div>
+<p class="life-journal-status hint" id="life-journal-status" role="status"></p>
+</div>
+</section>
 <div class="metric-grid">
 <article class="metric">
 <span class="metric-label">微信连接</span>
@@ -1563,6 +1599,7 @@
 </script>
 <script defer="" src="/assets/plugin-packages.js"></script>
 <script defer src="/assets/memory.js"></script>
+<script defer src="/assets/life-journal.js"></script>
 <script defer src="/assets/save-actions.js"></script>
 </body>
 </html>

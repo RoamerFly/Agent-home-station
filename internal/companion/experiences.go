@@ -79,7 +79,7 @@ func (s *Store) ListSharedExperiences(ctx context.Context, scope string, q Exper
 		return p, ErrInvalidExperienceQuery
 	}
 	switch q.View {
-	case "", "relations", "open_commitments":
+	case "", "episodes", "relations", "open_commitments":
 	default:
 		return p, ErrInvalidExperienceQuery
 	}
@@ -144,6 +144,9 @@ func (s *Store) ListSharedExperiences(ctx context.Context, scope string, q Exper
 		where += ` AND m.kind='episode'
 			AND (COALESCE(json_extract(m.payload,'$.continuity'),0)=0
 				OR COALESCE(json_extract(m.payload,'$.commitment_state'),'') IN ('open','ended','cancelled'))`
+		if q.View == "episodes" {
+			where += ` AND COALESCE(json_extract(m.payload,'$.commitment_state'),'')=''`
+		}
 		if q.Person != "" {
 			where += " AND (m.subject=? OR " + relatedPerson + ")"
 			args = append(args, q.Person, q.Person, q.Person)

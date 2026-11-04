@@ -198,6 +198,10 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			name = "dialogs.js"
 		case "/assets/memory.js":
 			name = "memory.js"
+		case "/assets/life-journal.js":
+			name = "life-journal.js"
+		case "/assets/night-sea.webp":
+			name = "night-sea.webp"
 		case "/assets/conversations.js":
 			name = "conversations.js"
 		case "/assets/rounds.js":
@@ -248,6 +252,8 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		case ".png":
 			w.Header().Set("Content-Type", "image/png")
+		case ".webp":
+			w.Header().Set("Content-Type", "image/webp")
 		case ".css":
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		}

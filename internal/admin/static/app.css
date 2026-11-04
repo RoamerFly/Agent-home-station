@@ -38,6 +38,64 @@
 
 .activity-flow-attempted{color:var(--warn)}
 
+/* Keep the three overview streams compact without suppressing source links. */
+.life-journal-source {
+  margin-top:5px;padding:0;border:0;border-bottom:1px solid currentColor;
+  background:transparent;color:var(--accent);font-size:12px;
+}
+.life-journal-evidence { margin-top:7px; }
+.life-journal-quote,.life-journal-feeling { margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.55; }
+.life-journal-quote { padding-left:9px;border-left:2px solid var(--accent); }
+
+/* Overview journal: sourced memories remain scoped to the selected account and conversation. */
+.life-journal {
+  flex:none;position:relative;isolation:isolate;display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(220px,330px);gap:14px 20px;
+  overflow:hidden;margin-bottom:20px;background:linear-gradient(120deg,var(--surface),var(--raised));
+}
+.life-journal::after { content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,transparent 40%,color-mix(in srgb,var(--accent-soft) 48%,transparent));pointer-events:none; }
+.life-journal-scene { grid-column:2;grid-row:1;min-height:150px;overflow:hidden;border-radius:14px; }
+.life-journal-scene img { display:block;width:100%;height:100%;object-fit:cover;object-position:center;opacity:.82; }
+.life-journal-copy { display:contents;min-width:0; }
+.life-journal-heading { grid-column:1;grid-row:1;margin-bottom:0; }
+.life-journal-heading h2 { margin:0;font:500 clamp(22px,2.5vw,32px)/1.2 Georgia,"Noto Serif SC","Songti SC",serif;letter-spacing:-.035em; }
+.life-journal-heading .eyebrow { color:var(--accent);letter-spacing:.08em; }
+.life-journal-actions { display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
+.life-journal-actions select { width:min(240px,100%);min-height:38px;padding:7px 9px;font-size:13px; }
+.life-journal-actions .quiet { min-height:38px;padding:7px 9px; }
+.life-journal-intro { grid-column:1/-1;grid-row:2;margin:0;color:var(--muted);font-size:13px;line-height:1.7; }
+.life-journal-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;grid-column:1/-1;grid-row:3; }
+.life-journal-card { min-width:0;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--surface) 84%,transparent); }
+.life-journal-kicker { margin:0 0 8px;color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.08em; }
+.life-journal-entry { padding:10px 0;border-top:1px solid var(--line); }
+.life-journal-entry:first-child { padding-top:0;border-top:0; }
+.life-journal-entry strong,.life-journal-entry small { display:block;overflow-wrap:anywhere; }
+.life-journal-entry strong { font-size:14px;line-height:1.55; }
+.life-journal-entry small { margin-top:3px; }
+.life-journal-entry strong,.life-journal-quote { display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;-webkit-line-clamp:3; }
+.life-journal-card .empty { margin:0;min-height:44px;color:var(--muted);font-size:13px; }
+.life-journal-status { grid-column:1/-1;grid-row:4;min-height:20px;margin:0; }
+@media(max-width:900px) {
+  .life-journal { grid-template-columns:minmax(0,1fr) minmax(180px,.65fr); }
+  .life-journal-scene { min-height:210px; }
+  .life-journal-heading { align-items:flex-start;flex-wrap:wrap; }
+}
+@media(max-width:1050px) and (min-width:651px) {
+  .life-journal-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media(max-width:650px) {
+  .life-journal { display:block; }
+  .life-journal::after { background:linear-gradient(180deg,transparent 35%,var(--accent-soft)); }
+  .life-journal-scene { height:150px;min-height:0;margin:-20px -20px 18px;border-radius:0; }
+  .life-journal-copy { display:block; }
+  .life-journal-grid { grid-template-columns:1fr;margin-top:16px; }
+  .life-journal-status { margin-top:12px; }
+  .life-journal-heading { display:block; }
+  .life-journal-actions { margin-top:12px; }
+  .life-journal-actions select { flex:1; }
+  .life-journal-actions .quiet { flex:0 1 auto; }
+}
+
 .behavior-settings{grid-column:1/-1}.behavior-settings .field-grid>div{min-width:0}
 
 .surf-summary{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-bottom:16px;color:var(--muted);font-size:13px}.surf-settings>summary{cursor:pointer;font-weight:650;min-height:32px}.surf-settings{margin-bottom:16px}.surf-controls{display:grid;grid-template-columns:minmax(160px,1fr) minmax(140px,1fr) minmax(180px,2fr);gap:16px}.surf-controls label{margin-top:0}.surf-list{max-height:65vh;overflow:auto;overflow-anchor:none}.surf-activity{display:grid;grid-template-columns:170px minmax(0,1fr) 50px;gap:12px;padding:14px 0;border-bottom:1px solid var(--line);font-size:13px}.surf-activity time{color:var(--muted);white-space:nowrap;font-size:12px}.surf-flow{display:flex;flex-wrap:wrap;gap:5px 12px;min-width:0;align-items:baseline}.surf-flow>*{overflow-wrap:anywhere;max-width:100%}.surf-flow strong{color:var(--accent)}.surf-status{color:var(--muted)}.surf-status.error{color:var(--danger)}.surf-activity details p{overflow-wrap:anywhere}.surf-activity:has(details[open]){grid-template-columns:170px minmax(0,1fr)}.surf-activity details[open]{grid-column:1/-1}.surf-query{color:var(--ink)}@media(max-width:700px){.surf-controls{grid-template-columns:1fr}.surf-activity,.surf-activity:has(details[open]){grid-template-columns:minmax(0,1fr) 50px}.surf-activity time{grid-column:1/-1}.surf-summary{align-items:flex-start;flex-wrap:wrap}}
