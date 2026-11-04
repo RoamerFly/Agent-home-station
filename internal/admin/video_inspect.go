@@ -536,8 +536,8 @@ func (p *permittedTools) inspectPluginAudioRange(ctx context.Context, data []byt
 		if stop <= next {
 			return toolInputError("音轨读取未推进，已停止以保留可核对的起点")
 		}
-		text = transcript.Readable(text)
-		part := map[string]any{"start_seconds": next, "end_seconds": stop, "text": text, "text_format": "local_readability_v1", "recognized_words_preserved": true}
+		text, method := transcript.Format(ctx, text)
+		part := map[string]any{"start_seconds": next, "end_seconds": stop, "text": text, "text_format": method, "recognized_words_preserved": true}
 		if noSpeech {
 			part["state"] = "no_recognizable_speech"
 			part["provider_code"] = "ASR_RESPONSE_HAVE_NO_WORDS"

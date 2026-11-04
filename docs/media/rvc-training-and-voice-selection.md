@@ -12,7 +12,7 @@
 
 固定上游的静音切分中，每个短句的尾段写入曾放在外循环外，导致只保留最后一个短句。辅助脚本仅在有来源清单的私有副本中修正这个已知位置，记录 compatibility_patches；不修改公共上游源文件。合成测试验证多个短句都保留，全部波形必须拥有匹配的 F0 与 HuBERT 特征才生成训练清单。
 
-训练实现与额外依赖归音乐插件所有。使用 `project_read {"id":"rvc"}` 返回的 `training_entry` 和 `training_requirements`，确认 `training_owner`、安装目录和包哈希匹配后，安装进独立目录，保留 CUDA torch 和推理环境。固定 Matplotlib 3.9.4 兼容上游 RGB 画布接口。训练前验证 TensorBoard 和画布依赖，避免已加载大模型后才因日志依赖缺失退出。旧脚本仅作已登记安装包的校验转发，不回退执行仓库副本。
+训练实现与额外依赖归音乐工具所有。使用 `project_read {"id":"rvc"}` 返回的 `training_entry` 和 `training_requirements`，确认 `training_owner`、安装目录和包哈希匹配后，安装进独立目录，保留 CUDA torch 和推理环境。固定 Matplotlib 3.9.4 兼容上游 RGB 画布接口。训练前验证 TensorBoard 和画布依赖，避免已加载大模型后才因日志依赖缺失退出。旧脚本仅作已登记安装包的校验转发，不回退执行仓库副本。
 
 ```text
 <CUDA-Python> -m pip install --no-deps --target <private-training-libs> -r <training_requirements>

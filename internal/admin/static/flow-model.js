@@ -13,7 +13,7 @@
   ['persona','角色与关系','决策','violet','whale',['companion'],'人设、表达与相处方式'],
   ['model','模型与语音','决策','violet','tools',['provider'],'服务商、语言和语音'],
   ['agent','Agent决策','决策','violet','whale',['agent','companion'],'回复、工具、等待或安静'],
-  ['tools','工具与插件','行动','amber','tools',['plugins','mcp','mobile','permissions'],'联网、MCP、媒体与本机能力'],
+  ['tools','工具与工具','行动','amber','tools',['plugins','mcp','mobile','permissions'],'联网、MCP、媒体与本机能力'],
   ['feedback','工具结果反馈','行动','amber','tools',['logs','agent'],'成功、失败和下一步'],
   ['tasks','异步任务续办','行动','amber','logs',['agent','provider'],'后台进程、音乐生成与提醒'],
   ['plan','回复计划','交付','violet','chat',['agent','logs'],'组织内容并复核未发部分'],

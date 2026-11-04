@@ -46,7 +46,7 @@ flowchart TD
 
 ## 能力适配和上下文
 
-`internal/admin/capabilities.go` 集中注册 Agent/工作区/微信、手机、插件后台任务、百炼、YuE、工具输出读取模块。每个模块同时提供发现和调用处理。统一入口继续先核对实时权限和 JSON 参数，再交给模块；外部 MCP/API 插件继续使用原有运行时，不能直接安装 AstrBot Python 插件。
+`internal/admin/capabilities.go` 集中注册 Agent/工作区/微信、手机、工具后台任务、百炼、YuE、工具输出读取模块。每个模块同时提供发现和调用处理。统一入口继续先核对实时权限和 JSON 参数，再交给模块；外部 MCP/API 工具继续使用原有运行时，不能直接安装 AstrBot Python 插件。
 
 工具调用反馈增加 `execution.status`（succeeded/failed/blocked）、执行耗时、失败说明及大结果编号。原始业务结果仍在 `result` 中，提交任务、工具成功和微信接受各有各的证据；原生 function calling 的 `tool` 消息会保留这些字段。
 

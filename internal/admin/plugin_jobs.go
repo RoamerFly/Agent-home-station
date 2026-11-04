@@ -49,7 +49,7 @@ func pluginJobSummary(t agentTask) map[string]any {
 }
 func (p *permittedTools) startPluginJob(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	if !p.pluginTaskAllowed() {
-		return "", toolInputError("后台插件任务需要启用持续任务并选择已授权会话；预演不创建远端任务")
+		return "", toolInputError("后台工具任务需要启用持续任务并选择已授权会话；预演不创建远端任务")
 	}
 	var arg map[string]any
 	if len(args) == 0 {
@@ -58,7 +58,7 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 	decoder := json.NewDecoder(bytes.NewReader(args))
 	decoder.UseNumber()
 	if decoder.Decode(&arg) != nil || arg == nil || len(args) > 8192 {
-		return "", toolInputError("插件参数无效")
+		return "", toolInputError("工具参数无效")
 	}
 	canonical, _ := json.Marshal(arg)
 	pollOnly := p.externalPollOnly(name)
@@ -112,7 +112,7 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 	if err != nil {
 		return "", err
 	}
-	t := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "插件任务 · " + name, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, RequestedText: logText(companion.UserRequestText(p.trace.Text), 2000), State: "waiting", Next: time.Now().Add(time.Duration(interval) * time.Second), OwnerRequested: p.privileged(), PluginJob: &pluginJobState{PollState: pollState, Origin: &origin, LegacyConfigurationSHA256: legacyHash, Ticket: ticket, Deadline: time.Now().Add(time.Duration(deadline) * time.Second), IntervalSeconds: interval, MaxPolls: polls}}
+	t := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "工具任务 · " + name, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, RequestedText: logText(companion.UserRequestText(p.trace.Text), 2000), State: "waiting", Next: time.Now().Add(time.Duration(interval) * time.Second), OwnerRequested: p.privileged(), PluginJob: &pluginJobState{PollState: pollState, Origin: &origin, LegacyConfigurationSHA256: legacyHash, Ticket: ticket, Deadline: time.Now().Add(time.Duration(deadline) * time.Second), IntervalSeconds: interval, MaxPolls: polls}}
 	t.Constraints = (&permittedTools{manager: p.manager, trace: origin}).taskConstraints("external-job", "", "", "")
 	// Claim the task before the POST. The claim itself is scoped and atomic.
 	a := p.manager.agent
@@ -150,7 +150,7 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 	}
 	if callErr != nil {
 		t.State = "needs_review"
-		t.LastResult = "插件创建结果无法确认，未自动重试；请核对服务商记录"
+		t.LastResult = "工具创建结果无法确认，未自动重试；请核对服务商记录"
 	} else {
 		t.LastResult = "外部任务已领取，后台查询同一任务，不重新创建"
 	}
@@ -165,7 +165,7 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 				return string(b), nil
 			}
 		}
-		return "", toolInputError("插件任务状态已改变")
+		return "", toolInputError("工具任务状态已改变")
 	}
 	p.manager.record(bot.Record{Event: "plugin_job_submitted", Category: "tool", ThreadID: t.Thread, MessageID: t.OriginTrace, Tool: name, Status: t.State, Reason: "plugin_job_durable_claim", Content: t.LastResult, Origin: "agent"})
 	if callErr != nil {
@@ -179,7 +179,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		TaskID string `json:"task_id"`
 	}
 	if json.Unmarshal(args, &in) != nil || len(in.TaskID) > 128 {
-		return "", toolInputError("插件任务参数无效")
+		return "", toolInputError("工具任务参数无效")
 	}
 	var task *agentTask
 	for _, old := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
@@ -189,7 +189,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		}
 	}
 	if task == nil || task.Sender != p.trace.Sender && !p.privileged() {
-		return "", toolInputError("只能查询或取消本人在本会话发起的插件任务")
+		return "", toolInputError("只能查询或取消本人在本会话发起的工具任务")
 	}
 	if name == "plugin_job_cancel" {
 		out, err := p.manager.cancelPluginTask(ctx, *task)
@@ -224,7 +224,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		return "", toolInputError("任务已进入微信交付，请核对原回执，不重复暂存或发送")
 	}
 	if !p.enabled(task.PluginJob.Ticket.Tool) {
-		return "", toolInputError("原插件或媒体权限已关闭")
+		return "", toolInputError("原工具或媒体权限已关闭")
 	}
 	if task.PluginJob.PollState != nil {
 		bridge, _, e := p.manager.externalHTTPBridge()
@@ -241,7 +241,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 			return "", e
 		}
 		if current.Fingerprint != task.PluginJob.Ticket.Fingerprint {
-			return "", toolInputError("插件声明已改变，旧任务未交给新接口")
+			return "", toolInputError("工具声明已改变，旧任务未交给新接口")
 		}
 	}
 	output := task.PluginJob.Ticket.Output
@@ -310,13 +310,13 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 	}
 	p.SetTrace(trace)
 	if !p.enabled(job.Ticket.Tool) {
-		task.LastResult = "插件或任务权限已关闭，保留任务，不创建替代任务"
+		task.LastResult = "工具或任务权限已关闭，保留任务，不创建替代任务"
 		task.Next = now.Add(time.Minute)
 		_, err := m.agent.updateSnapshot(task)
 		return nil, err
 	}
 	if _, _, _, readyErr := m.externalPackageCapability(context.Background(), externalTaskCapability(task)); readyErr != nil {
-		task.LastResult = "外部任务插件未安装、停用或不可用；保留同一任务及原远端编号，不创建替代任务"
+		task.LastResult = "外部任务工具未安装、停用或不可用；保留同一任务及原远端编号，不创建替代任务"
 		task.Next = now.Add(time.Minute)
 		_, err := m.agent.updateSnapshot(task)
 		return nil, err
@@ -324,7 +324,7 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 	if job.Ticket.State == "waiting" {
 		if !now.Before(job.Deadline) || job.Polls >= job.MaxPolls {
 			task.State = "needs_review"
-			task.LastResult = "插件任务超过本地查询期限或次数，未自动重新生成；远端可能仍在运行"
+			task.LastResult = "工具任务超过本地查询期限或次数，未自动重新生成；远端可能仍在运行"
 			_, err := m.agent.updateSnapshot(task)
 			return nil, err
 		}
@@ -352,11 +352,11 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 		if pollErr != nil {
 			if errors.Is(pollErr, plugins.ErrJobConfigChanged) {
 				task.State = "needs_review"
-				task.LastResult = "插件声明已改变，旧任务未交给新接口；请核对原服务商任务"
+				task.LastResult = "工具声明已改变，旧任务未交给新接口；请核对原服务商任务"
 				_, err := m.agent.updateSnapshot(task)
 				return nil, err
 			}
-			task.LastResult = "插件任务状态暂时不可读，稍后查询同一任务，不重新创建"
+			task.LastResult = "工具任务状态暂时不可读，稍后查询同一任务，不重新创建"
 			task.Next = now.Add(time.Duration(job.IntervalSeconds) * time.Second)
 			_, err := m.agent.updateSnapshot(task)
 			return nil, err
@@ -369,11 +369,11 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 			return nil, err
 		}
 	}
-	task.LastResult = "插件结果已就绪，交回主模型处理"
+	task.LastResult = "工具结果已就绪，交回主模型处理"
 	if job.Ticket.State == "failed" {
 		job.Failure = true
 		job.Prepared = true
-		task.LastResult = "插件报告失败，交回主模型处理"
+		task.LastResult = "工具报告失败，交回主模型处理"
 	}
 	facts := map[string]any{"plugin_task": task.ID, "remote_state": job.Ticket.State, "failed": job.Failure}
 	in, err := m.claimTaskResult(task, now, facts, "调用plugin_job_status取得同一任务真实输出；不要重新调用创建工具。失败时根据具体反馈诊断并验证。")

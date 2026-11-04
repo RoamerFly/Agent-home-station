@@ -1,6 +1,6 @@
 # 迁移
 
-默认云端配置仍从旧 `speech-config.json` 单向导入：Endpoint 与固定 SpeechSynthesizer 路径形成 `tts_endpoint`，Key 进入宿主私密 `tts_key`，TTSModel、Voice、Instruction 分别映射为 `tts_model`、`default_voice`、`default_instruction`。旧配置预演与批准不自动启用插件。
+默认云端配置仍从旧 `speech-config.json` 单向导入：Endpoint 与固定 SpeechSynthesizer 路径形成 `tts_endpoint`，Key 进入宿主私密 `tts_key`，TTSModel、Voice、Instruction 分别映射为 `tts_model`、`default_voice`、`default_instruction`。旧配置预演与批准不自动启用工具。
 
 本地命名说话声线须显式选择 `local_profile_id=gpt-sovits`。宿主复用原受管 GPT-SoVITS 项目注册和声线库；不复制、改写或下载用户模型。云端和本地配置相互独立，本地可在无云端密钥时启用。空 local_profile_id 保持本地关闭，不能自动从旧目录推断启用。
 

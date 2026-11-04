@@ -50,7 +50,7 @@ type yueHealth struct {
 
 func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 	if !p.manager.localMusicPluginConfigured(ctx) {
-		return yueHealth{State: "migration_required", Message: "请安装、授权并配置音乐插件的本地桥接；旧版语音配置不再直接授权音乐请求"}
+		return yueHealth{State: "migration_required", Message: "请安装、授权并配置音乐工具的本地桥接；旧版语音配置不再直接授权音乐请求"}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

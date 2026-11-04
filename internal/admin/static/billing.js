@@ -23,7 +23,7 @@
     $('#billing-cost').textContent=money(total.estimated_costs);$('#billing-cost').title=Money.hint;
     $('#billing-cost-detail').textContent=`今日 ${money(today.estimated_costs)} · 累计 ${number(Number(total.input_tokens||0)+Number(total.output_tokens||0))} Token`;
     const missing=Number(total.requests||0)-Number(total.reported_requests||0);
-    $('#billing-coverage').textContent=`自 ${stamp(data.started_at)} 起统计模型请求，不含此前消耗或其他应用。联网与插件单独收费不计入估算。${missing?' '+number(missing)+' 次请求未返回用量，未按零消耗计入。':''}${total.unpriced_requests?' '+number(total.unpriced_requests)+' 次用量未配置单价。':''}`;
+    $('#billing-coverage').textContent=`自 ${stamp(data.started_at)} 起统计模型请求，不含此前消耗或其他应用。联网与工具单独收费不计入估算。${missing?' '+number(missing)+' 次请求未返回用量，未按零消耗计入。':''}${total.unpriced_requests?' '+number(total.unpriced_requests)+' 次用量未配置单价。':''}`;
     const table=$('#billing-models');table.replaceChildren();
     for(const item of data.models||[]){const row=document.createElement('tr'),usage=item.total||{},labels=['服务商 / 模型','输入 Token','输出 Token','缓存命中','估算费用'];for(const [index,value] of [item.provider+' / '+item.model,number(usage.input_tokens),number(usage.output_tokens),number(usage.cache_hit_tokens),money(usage.estimated_costs)].entries()){const cell=document.createElement('td');cell.textContent=value;cell.dataset.label=labels[index];row.append(cell)}table.append(row)}
     if(!table.children.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=5;cell.textContent='尚无调用记录，下一次真实模型请求后开始累计。';row.append(cell);table.append(row)}

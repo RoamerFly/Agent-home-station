@@ -45,7 +45,7 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),path=require('nod
   assert.equal(await page.locator('#package-field-tts_key').inputValue(),'','a cloud key was rendered from local-only configuration');
   assert.equal(await page.locator('#top-save-actions>#package-config-save').count(),1,'speech save is not in the shared top save area');
   await page.locator('#package-config-save').click();
-  await page.getByText('插件配置已保存，未启动服务。',{exact:true}).waitFor();
+  await page.getByText('工具配置已保存，未启动服务。',{exact:true}).waitFor();
   let saved=await page.evaluate(()=>window.lastSave);
   assert.equal(saved.values.local_profile_id,'gpt-sovits','local-only selection was not saved');
   assert.equal(saved.secrets.tts_key,'','local-only save fabricated a cloud credential');
@@ -80,7 +80,7 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),path=require('nod
   // A not-installed catalog entry is explanatory only: no configuration form,
   // lifecycle action or accidental install is presented.
   await page.evaluate(()=>{window.dispatchEvent(new Event('wechat-admin:logout'));window.available={catalog:[window.installed.package],installed:[],runtimes:{}};window.WechatAdmin.isAuthenticated=()=>true;window.WechatPluginPackages.open('speech')});
-  await page.getByText('此插件尚未安装。导入并确认权限后可配置。',{exact:true}).waitFor();
+  await page.getByText('此工具尚未安装。导入并确认权限后可配置。',{exact:true}).waitFor();
   assert.equal(await page.locator('#package-config-form,[data-plugin-runtime-action]').count(),0,'uninstalled speech state exposed editable or runnable controls');
   assert.equal(await page.evaluate(()=>window.calls.filter(call=>/\/(runtime|install|prepare)$|\/actions\//.test(call.url)).length),0,'synthetic UI audit changed runtime or installation state');
   assert.deepEqual(errors,[]);console.log(JSON.stringify({namedSpeechSchema:true,localOnlySave:true,cloudAndNamedCoexist:true,hostOnlyKeyRedacted:true,draftPreserved:true,topSave:true,uninstalledEmptyState:true,viewports:2,paidCalls:0,wechatSends:0}));

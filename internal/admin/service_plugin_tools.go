@@ -316,7 +316,7 @@ type serviceTaskError struct {
 func (e *serviceTaskError) Unwrap() error { return e.cause }
 func (e *serviceTaskError) Error() string { return "service_call_not_completed" }
 func (e *serviceTaskError) SafeToolFailure() (string, string) {
-	return e.Error(), "插件调用未完成。使用 service_plugin_task 查询原 task_id=" + e.jobID + "，保留原 request_key，先核对结果再决定下一步。"
+	return e.Error(), "工具调用未完成。使用 service_plugin_task 查询原 task_id=" + e.jobID + "，保留原 request_key，先核对结果再决定下一步。"
 }
 
 type servicePluginPolicy struct {

@@ -22,7 +22,7 @@
 
 `enroll.py --manifest <绝对manifest.json>` 是仅供宿主调用的私人声线作业协议：`prepare` 只核验受控 WAV 样本的哈希、时长及本地静音估计；`preview` 用参考音频合成未见文本，固定产出 `reference.wav` 与 `preview.wav`，不会登记已训练声线；`train` 必须有明确确认、固定 GPT/SoVITS/鉴别器底模哈希、有效人声时长和经版本化分析器确认的单说话人样本。训练可在同一作业目录恢复，`cancel` 会中断当前子进程并保留检查点。只有 `gpt.ckpt`、`sovits.pth` 和训练后 `preview.wav` 都被宿主再次核验后才可发布版本。`base_models/enrollment-v2.json` 是官方 v2 基础权重的固定 SHA-256 锁；`provision_enrollment_v2.py` 只安装与该锁匹配的公开原件。
 
-`voice_enroll` 是宿主面向已验证主人的专用适配：宿主先绑定微信身份、原始样本、同意/单说话人确认、私有作业目录与资源清单，才会运行本脚本。它不是 stdio 的通用 `speech.train` 工具；后者保持不可发现，避免普通插件调用绕过身份、素材范围、GPU 授权或声线注册校验。
+`voice_enroll` 是宿主面向已验证主人的专用适配：宿主先绑定微信身份、原始样本、同意/单说话人确认、私有作业目录与资源清单，才会运行本脚本。它不是 stdio 的通用 `speech.train` 工具；后者保持不可发现，避免普通工具调用绕过身份、素材范围、GPU 授权或声线注册校验。
 
 Windows 宿主启动该 runner 及其训练子进程时使用受控后台模式：解释器带 `-X utf8`，无交互 stdin，训练子进程使用 `CREATE_NO_WINDOW`。这样既避免本地路径中的中文被系统 GBK 误解，也不会弹出黑色控制台窗口。
 

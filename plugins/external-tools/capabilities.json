@@ -7,7 +7,7 @@
       "discoverable": true,
       "side_effect": "write",
       "permissions": ["network"],
-      "description": "只通过宿主受控桥执行一个已声明的同步 HTTP 调用；端点、凭据、来源绑定与结果暂存均不进入插件进程。",
+      "description": "只通过宿主受控桥执行一个已声明的同步 HTTP 调用；端点、凭据、来源绑定与结果暂存均不进入工具进程。",
       "input_schema": {"type":"object","properties":{"phase":{"type":"string","enum":["call"]},"tool":{"type":"string"},"arguments":{"type":"object"},"arguments_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"protocol":{"type":"object"}},"required":["phase","tool","arguments","arguments_sha256","protocol"],"additionalProperties":false},
       "output_schema": {"type":"object"}
     },
@@ -25,7 +25,7 @@
       "id":"external.mcp_request","implementation":"ready","discoverable":true,"side_effect":"read","permissions":["network"],"description":"固定外部 MCP 目录页或单次调用；宿主连接、来源和媒体引用保持权威校验。","input_schema":{"type":"object","properties":{},"additionalProperties":false},"output_schema":{"type":"object"}
     },
     {
-      "id":"external.poll_request","implementation":"ready","discoverable":true,"side_effect":"write","permissions":["network"],"description":"固定旧 Poll-without-Job 工具的单步创建或查询；宿主持久保存初始响应、参数、来源与轮询模板，插件不循环或休眠。","input_schema":{"type":"object","properties":{"phase":{"type":"string","enum":["start","query"]},"tool":{"type":"string"},"arguments":{"type":"object"},"arguments_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"ticket":{"type":"object"},"ticket_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"protocol":{"type":"object"}},"required":["phase","tool","arguments","arguments_sha256","ticket","ticket_sha256","protocol"],"additionalProperties":false},
+      "id":"external.poll_request","implementation":"ready","discoverable":true,"side_effect":"write","permissions":["network"],"description":"固定旧 Poll-without-Job 工具的单步创建或查询；宿主持久保存初始响应、参数、来源与轮询模板，工具不循环或休眠。","input_schema":{"type":"object","properties":{"phase":{"type":"string","enum":["start","query"]},"tool":{"type":"string"},"arguments":{"type":"object"},"arguments_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"ticket":{"type":"object"},"ticket_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"protocol":{"type":"object"}},"required":["phase","tool","arguments","arguments_sha256","ticket","ticket_sha256","protocol"],"additionalProperties":false},
       "output_schema":{"type":"object","properties":{"observation":{"type":"object"},"ticket":{"type":"object"},"output":{"type":"object"}},"required":["observation","ticket"],"additionalProperties":false}
     },
     {

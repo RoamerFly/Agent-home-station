@@ -302,7 +302,7 @@ func newAgentControl(dir string) (*agentControl, error) {
 		}
 		if t.PluginJob != nil && t.State != "cancelled" && t.PluginJob.Ticket.State == "submitting" {
 			t.State = "needs_review"
-			t.LastResult = "插件创建请求可能已经提交，尚无可核验远端任务编号；不会自动重新创建"
+			t.LastResult = "工具创建请求可能已经提交，尚无可核验远端任务编号；不会自动重新创建"
 			if t.PluginJob.PollState != nil {
 				t.LastResult = "旧轮询首次请求结果未知，保留原操作、参数和来源；不会重新提交创建请求"
 			}
@@ -847,7 +847,7 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 					return
 				}
 				if t.Delivery != nil || t.State == "cancelled" || t.PluginJob.Prepared || t.PluginJob.Ticket.State == "submitting" {
-					fail(w, 409, "此任务不可重新创建；请核对原插件任务与发送回执")
+					fail(w, 409, "此任务不可重新创建；请核对原工具任务与发送回执")
 					return
 				}
 			}

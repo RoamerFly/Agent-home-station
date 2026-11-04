@@ -898,16 +898,16 @@ func (s *Server) mcpRoutes(mux *http.ServeMux) {
 		}
 		runtime, pluginErr := plugins.New(m.plugins.installed())
 		if pluginErr != nil {
-			fail(w, 400, "插件配置无效")
+			fail(w, 400, "工具配置无效")
 			return
 		}
 		pluginServers, pluginErr := runtime.MCPServers()
 		if pluginErr != nil {
-			fail(w, 400, "插件 MCP 配置不完整")
+			fail(w, 400, "工具 MCP 配置不完整")
 			return
 		}
 		if _, pluginErr = mcptools.New(append(append([]mcptools.ServerConfig{}, input.Servers...), pluginServers...)); pluginErr != nil {
-			fail(w, 400, "MCP 服务与已启用插件的 ID 冲突或超过上限")
+			fail(w, 400, "MCP 服务与已启用工具的 ID 冲突或超过上限")
 			return
 		}
 		data, err := json.Marshal(input)

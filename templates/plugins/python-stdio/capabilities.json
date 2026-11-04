@@ -4,7 +4,7 @@
     {
       "id": "echo",
       "implementation": "ready",
-      "description": "返回调用方提供的文本，用于验证已安装第三方插件的发现、启动、授权和幂等调用链。不会联网、写文件、创建后台任务或发送微信消息。",
+      "description": "返回调用方提供的文本，用于验证已安装第三方工具的发现、启动、授权和幂等调用链。不会联网、写文件、创建后台任务或发送微信消息。",
       "permissions": [],
       "input_schema": {
         "type": "object",

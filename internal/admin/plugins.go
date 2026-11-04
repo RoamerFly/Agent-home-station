@@ -79,7 +79,7 @@ func (p *pluginLedger) save(item pluginEntry) error {
 	id := item.Manifest.ID
 	_, exists := p.items[id]
 	if !exists && len(p.items) >= 30 {
-		return errors.New("最多保存 30 个插件")
+		return errors.New("最多保存 30 个工具")
 	}
 	next := make(map[string]pluginEntry, len(p.items)+1)
 	for key, value := range p.items {
@@ -88,7 +88,7 @@ func (p *pluginLedger) save(item pluginEntry) error {
 	next[id] = clonePluginEntry(item)
 	b, err := json.Marshal(next)
 	if err != nil || len(b) > 2<<20 {
-		return errors.New("插件配置过大")
+		return errors.New("工具配置过大")
 	}
 	if err = p.repository.SaveConnections(context.Background(), next); err != nil {
 		return err
@@ -137,7 +137,7 @@ func (s *Server) pluginRoutes(mux *http.ServeMux) {
 		defer m.op.Unlock()
 		old, ok := m.plugins.get(r.PathValue("id"))
 		if !ok {
-			fail(w, 404, "插件不存在")
+			fail(w, 404, "工具不存在")
 			return
 		}
 		c := m.runtimeConfig()
@@ -156,7 +156,7 @@ func (s *Server) pluginRoutes(mux *http.ServeMux) {
 				fail(w, 409, "外部配置已变化，请重新加载后再保存")
 				return
 			}
-			fail(w, 500, "插件移除配置保存失败")
+			fail(w, 500, "工具移除配置保存失败")
 			return
 		}
 		m.log("plugin_disabled_and_removed")
@@ -179,11 +179,11 @@ func (s *Server) savePlugin(w http.ResponseWriter, r *http.Request, install bool
 	var entry pluginEntry
 	if install {
 		if input.Manifest == nil {
-			fail(w, 400, "缺少插件声明")
+			fail(w, 400, "缺少工具声明")
 			return
 		}
 		if old, ok := m.plugins.get(input.Manifest.ID); ok && !old.Removed {
-			fail(w, 409, "插件已存在，请从列表编辑")
+			fail(w, 409, "工具已存在，请从列表编辑")
 			return
 		}
 		entry.Manifest = *input.Manifest
@@ -191,12 +191,12 @@ func (s *Server) savePlugin(w http.ResponseWriter, r *http.Request, install bool
 		var ok bool
 		entry, ok = m.plugins.get(r.PathValue("id"))
 		if !ok {
-			fail(w, 404, "插件不存在")
+			fail(w, 404, "工具不存在")
 			return
 		}
 		if input.Manifest != nil {
 			if input.Manifest.ID != entry.Manifest.ID {
-				fail(w, 400, "修改时不能更换插件 ID")
+				fail(w, 400, "修改时不能更换工具 ID")
 				return
 			}
 			candidate := clonePluginEntry(pluginEntry{Installed: plugins.Installed{Manifest: *input.Manifest}}).Manifest
@@ -216,7 +216,7 @@ func (s *Server) savePlugin(w http.ResponseWriter, r *http.Request, install bool
 			oldB, _ := json.Marshal(entry.Manifest)
 			newB, _ := json.Marshal(candidate)
 			if string(oldB) != string(newB) && len(entry.Secrets) > 0 && len(input.Secrets) == 0 && !input.ClearSecrets {
-				fail(w, 400, "修改插件声明时，请重新填写服务商密钥，避免旧密钥用于新的接口")
+				fail(w, 400, "修改工具声明时，请重新填写服务商密钥，避免旧密钥用于新的接口")
 				return
 			}
 			entry.Manifest = candidate
@@ -238,7 +238,7 @@ func (s *Server) savePlugin(w http.ResponseWriter, r *http.Request, install bool
 		}
 	}
 	if err := plugins.Validate(entry.Manifest); err != nil {
-		fail(w, 400, "插件声明无效，请检查工具 schema、地址、方法与媒体配置")
+		fail(w, 400, "工具声明无效，请检查工具 schema、地址、方法与媒体配置")
 		return
 	}
 	entry.Enabled = input.Enabled && !install
@@ -252,20 +252,20 @@ func (s *Server) savePlugin(w http.ResponseWriter, r *http.Request, install bool
 	all = append(all, entry.Installed)
 	runtime, err := plugins.New(all)
 	if err != nil {
-		fail(w, 400, "插件配置无效，请检查必需密钥、工具冲突和数量上限")
+		fail(w, 400, "工具配置无效，请检查必需密钥、工具冲突和数量上限")
 		return
 	}
 	if entry.Enabled {
 		servers, serverErr := runtime.MCPServers()
 		if serverErr != nil {
-			fail(w, 400, "MCP 插件密钥或服务配置不完整")
+			fail(w, 400, "MCP 工具密钥或服务配置不完整")
 			return
 		}
 		m.mu.Lock()
 		configured := cloneMCP(m.mcp)
 		m.mu.Unlock()
 		if _, err = mcptools.New(append(configured.Servers, servers...)); err != nil {
-			fail(w, 400, "插件 MCP 与现有服务冲突或配置无效")
+			fail(w, 400, "工具 MCP 与现有服务冲突或配置无效")
 			return
 		}
 	}
@@ -283,7 +283,7 @@ func (s *Server) savePlugin(w http.ResponseWriter, r *http.Request, install bool
 			fail(w, 409, "外部配置已变化，请重新加载后再保存")
 			return
 		}
-		fail(w, 500, "插件配置保存失败")
+		fail(w, 500, "工具配置保存失败")
 		return
 	}
 	m.log("plugin_configuration_saved")

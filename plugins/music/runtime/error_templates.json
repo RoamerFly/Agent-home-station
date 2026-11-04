@@ -3,7 +3,7 @@
   "templates": {
     "yue_account_scope_mismatch": {
       "kind": "service",
-      "message": "音乐服务的任务目录属于另一个微信账号；请核对服务路由和账号工作目录。插件程序、模型与令牌可共用，私人任务及素材分别保存；原任务保留"
+      "message": "音乐服务的任务目录属于另一个微信账号；请核对服务路由和账号工作目录。工具程序、模型与令牌可共用，私人任务及素材分别保存；原任务保留"
     },
     "yue_bridge_auth_failed": {
       "kind": "service",

@@ -43,7 +43,7 @@ func (p *permittedTools) checkSpeechBinding(sourceID, targetID string) error {
 // sendable attachment is created for the intermediate recording.
 func (p *permittedTools) speakWithRVC(ctx context.Context, raw json.RawMessage, targetID string) (string, error) {
 	if !p.enabled("music_rvc_start") || !p.manager.Config().Companion.Permissions.SendVoice {
-		return "", toolInputError("朗读换声需要已授权的音乐换声插件和语音发送权限")
+		return "", toolInputError("朗读换声需要已授权的音乐换声工具和语音发送权限")
 	}
 	var in struct {
 		VoiceID string `json:"voice_id"`

@@ -45,7 +45,7 @@ func (p *permittedTools) documentTools() []mcptools.Tool {
 	if p.documentWorkshopAvailable(context.Background(), true) {
 		tools = append(tools,
 			agentTool("document_reconstruct", "把已检查的附件内容重建为可编辑 DOCX。先用 document_inspect 取得 layout，再提供原 artifact_id 与 layout；可用 title_font_size_pt 调整标题（8–48 磅）。宿主只在本任务输出目录制作新文件并登记为待发送附件。不会自动发送。Input {artifact_id,source_message_id?,layout,title?,title_font_size_pt?,images?,filename?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"layout":{"type":"object"},"title":{"type":"string","maxLength":256},"title_font_size_pt":{"type":"number","minimum":8,"maximum":48},"images":{"type":"array","items":{"type":"object"}},"filename":{"type":"string","maxLength":120}},"required":["artifact_id","layout"],"additionalProperties":false}`),
-			agentTool("document_export_pdf", "把当前会话中已授权、已登记的 DOCX 导出 PDF。输入为 artifact_id，运行环境由已安装文档插件自检；返回待发送的 PDF，不会自动发送。Input {artifact_id,source_message_id?,filename?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"filename":{"type":"string","maxLength":120}},"required":["artifact_id"],"additionalProperties":false}`),
+			agentTool("document_export_pdf", "把当前会话中已授权、已登记的 DOCX 导出 PDF。输入为 artifact_id，运行环境由已安装文档工具自检；返回待发送的 PDF，不会自动发送。Input {artifact_id,source_message_id?,filename?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"filename":{"type":"string","maxLength":120}},"required":["artifact_id"],"additionalProperties":false}`),
 		)
 	}
 	return tools

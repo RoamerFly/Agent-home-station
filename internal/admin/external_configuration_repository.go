@@ -176,7 +176,7 @@ func readLegacyExternalConfiguration(dir string) (externalConfigurationDocument,
 				return doc, "", errors.New("MCP 配置不可读，未自动覆盖")
 			}
 		} else if len(raw) > 2<<20 || json.Unmarshal(raw, &doc.Connections) != nil || doc.Connections == nil {
-			return doc, "", errors.New("插件配置不可读，未自动覆盖")
+			return doc, "", errors.New("工具配置不可读，未自动覆盖")
 		}
 	}
 	if err := validateExternalConfiguration(doc); err != nil {
@@ -200,7 +200,7 @@ func validateExternalConfiguration(doc externalConfigurationDocument) error {
 		}
 	}
 	if _, err := plugins.New(items); err != nil {
-		return errors.New("插件声明无效")
+		return errors.New("工具声明无效")
 	}
 	settings, _ := json.Marshal(doc.Settings)
 	connections, _ := json.Marshal(doc.Connections)

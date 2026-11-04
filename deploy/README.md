@@ -37,7 +37,7 @@ go build -o dist/wechat-admin ./cmd/wechat-admin
 
 Linux管理端使用环境变量配置：`WECHAT_ADMIN_DATA_DIR`、`WECHAT_ADMIN_LISTEN`、`WECHAT_NATIVE_URL`、`WECHAT_NATIVE_TOKEN_FILE`、`WECHAT_NATIVE_ACCOUNT`、`WECHAT_BOT_STATE_DIR`、`WECHAT_WORKSPACE_ROOT`。Windows本机启动器依赖WSL，不能作为Linux服务器的服务管理器。
 
-跨平台新机环境和按需插件安装路径见[镜像构建方案](../镜像构建方案.md)。本机启动器不会自动安装新机器的 WSL、原生微信程序或模型。
+跨平台新机环境和按需工具安装路径见[镜像构建方案](../镜像构建方案.md)。本机启动器不会自动安装新机器的 WSL、原生微信程序或模型。
 
 ## 容器草稿
 

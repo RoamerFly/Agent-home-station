@@ -283,7 +283,7 @@ func projectCheckoutResult(path string, installed pluginhost.InstalledPackage, s
 		"state": state, "path": path, "plugin_id": installed.Package.ID,
 		"version": installed.Package.Version, "digest": installed.Digest,
 		"source": "verified_installed_package", "editable": true,
-		"instruction": "此目录是当前会话私有工作副本；可用 server_read/server_edit 修改并自行验证。不会修改已安装插件、配置或凭据。相同插件摘要会复用已有副本，新版本会使用新的摘要目录。",
+		"instruction": "此目录是当前会话私有工作副本；可用 server_read/server_edit 修改并自行验证。不会修改已安装工具、配置或凭据。相同工具摘要会复用已有副本，新版本会使用新的摘要目录。",
 	}
 	if state == "created" {
 		result["files"], result["bytes"] = files, bytes

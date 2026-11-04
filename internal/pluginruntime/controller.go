@@ -334,7 +334,7 @@ func (c *Controller) enabledRoot(ctx context.Context, id string, revision int) e
 		return &DependencyError{Plugin: id, Dependency: id, Code: "dependency_removed"}
 	}
 	if !root.Enabled {
-		return &EnsureStartedError{Code: "plugin_not_enabled", Message: "插件尚未启用，不能自动启动"}
+		return &EnsureStartedError{Code: "plugin_not_enabled", Message: "工具尚未启用，不能自动启动"}
 	}
 	return nil
 }
@@ -411,25 +411,25 @@ func ensureStartedFailure(err error) error {
 	if errors.As(err, &dependency) {
 		switch dependency.Code {
 		case "dependency_missing", "dependency_removed":
-			return &EnsureStartedError{Code: "plugin_dependency_missing", Message: "所需依赖插件未安装或已移除"}
+			return &EnsureStartedError{Code: "plugin_dependency_missing", Message: "所需依赖工具未安装或已移除"}
 		case "dependency_disabled":
-			return &EnsureStartedError{Code: "plugin_dependency_not_enabled", Message: "所需依赖插件尚未启用"}
+			return &EnsureStartedError{Code: "plugin_dependency_not_enabled", Message: "所需依赖工具尚未启用"}
 		case "dependency_not_authorized":
-			return &EnsureStartedError{Code: "plugin_authorization_required", Message: "插件尚未获得所需授权"}
+			return &EnsureStartedError{Code: "plugin_authorization_required", Message: "工具尚未获得所需授权"}
 		case "dependency_configuration":
-			return &EnsureStartedError{Code: "plugin_configuration_required", Message: "插件或其依赖尚未完成配置"}
+			return &EnsureStartedError{Code: "plugin_configuration_required", Message: "工具或其依赖尚未完成配置"}
 		case "dependency_changed", "dependency_restart_required":
-			return &EnsureStartedError{Code: "plugin_configuration_changed", Message: "插件配置或版本已变化，需要由管理页重新启动"}
+			return &EnsureStartedError{Code: "plugin_configuration_changed", Message: "工具配置或版本已变化，需要由管理页重新启动"}
 		case "dependency_cycle":
-			return &EnsureStartedError{Code: "plugin_dependency_invalid", Message: "插件依赖声明存在循环"}
+			return &EnsureStartedError{Code: "plugin_dependency_invalid", Message: "工具依赖声明存在循环"}
 		case "dependency_start_failed":
-			return &EnsureStartedError{Code: "plugin_cold_start_failed", Message: "插件冷启动未完成，可检查插件状态后重试"}
+			return &EnsureStartedError{Code: "plugin_cold_start_failed", Message: "工具冷启动未完成，可检查工具状态后重试"}
 		}
 	}
 	if errors.Is(err, pluginhost.ErrRevision) {
-		return &EnsureStartedError{Code: "plugin_configuration_changed", Message: "插件配置或版本已变化，需要由管理页重新启动"}
+		return &EnsureStartedError{Code: "plugin_configuration_changed", Message: "工具配置或版本已变化，需要由管理页重新启动"}
 	}
-	return &EnsureStartedError{Code: "plugin_cold_start_failed", Message: "插件冷启动未完成，可检查插件状态后重试"}
+	return &EnsureStartedError{Code: "plugin_cold_start_failed", Message: "工具冷启动未完成，可检查工具状态后重试"}
 }
 
 // The caller owns lifecycle reservations for this plugin and its dependencies.
@@ -446,7 +446,7 @@ func (c *Controller) startOne(ctx context.Context, id string, revision int, enab
 	enabledByThisCall := false
 	if !i.Enabled {
 		if !enable {
-			return &EnsureStartedError{Code: "plugin_not_enabled", Message: "插件尚未启用，不能自动启动"}
+			return &EnsureStartedError{Code: "plugin_not_enabled", Message: "工具尚未启用，不能自动启动"}
 		}
 		i, err = c.store.SetEnabled(ctx, id, revision, true)
 		if err != nil {

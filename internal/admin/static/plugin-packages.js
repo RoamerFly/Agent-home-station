@@ -2,14 +2,14 @@
 (() => {
  'use strict';
  const $=s=>document.querySelector(s),api=(...a)=>window.WechatAdmin.api(...a);
- const state={catalog:[],installed:[],builtins:[],runtimes:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,hostRequest:null};
+ const state={catalog:[],installed:[],connections:[],builtins:[],runtimes:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,hostRequest:null};
  const page=$('#plugins'),legacy=page.querySelector('.plugin-workspace'),guide=$('#plugin-guide');
  const el=(tag,text,klass)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(klass)n.className=klass;return n};
  const button=(text,action)=>{const b=el('button',text,'quiet');b.type='button';if(text==='刷新任务')window.WechatRefresh.bind(b,action);else b.addEventListener('click',action);return b};
  const area=el('div',undefined,'package-workspace'),browser=el('aside',undefined,'panel package-browser'),editor=el('article',undefined,'panel package-editor');
  const list=el('div',undefined,'package-list'),status=el('p','选择服务查看配置、权限和任务。','hint');status.setAttribute('role','status');
  const refreshList=$('#plugins-refresh');
- const head=el('div',undefined,'section-heading');head.append(el('h3','能力目录'),button('通过 UI 新建插件',createPlugin),button('管理连接插件',()=>manageConnections()),button('导入本机插件',importPackage));browser.append(head,list);editor.append(status);area.append(browser,editor);legacy.before(area);
+ const head=el('div',undefined,'section-heading');head.append(el('h3','浏览工具'),button('新建工具',createPlugin),button('管理连接工具',()=>manageConnections()),button('导入本机工具',importPackage));browser.append(head,list);editor.append(status);area.append(browser,editor);legacy.before(area);
  // The legacy declaration editor remains mounted for compatibility, but all
  // provider-facing configuration now has one visible home: the package detail
  // or the dedicated Connection & MCP page.
@@ -20,14 +20,6 @@
  const requestKey=()=>crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join('');
  const runtimeNames={running:'运行中',starting:'正在启动',stopping:'正在停止',failed:'异常',stopped:'已停止'};
  const names={'network':'访问网络','gpu':'使用 GPU','device':'控制设备','workspace.read':'读取授权工作区','workspace.write':'修改授权工作区','process.execute':'执行受控进程','artifact.read':'读取授权素材','artifact.write':'生成素材','model.invoke':'调用模型'};
- const capabilityGroups=[
-  ['语音与音乐',['speech','music']],
-  ['媒体与分享',['media-understanding','share-reader','web-search']],
-  ['创作',['visual-generation']],
-  ['开发与设备',['project-development','mobile-control']],
-  ['连接',['external-tools']],
- ];
- const groupFor=id=>capabilityGroups.find(([,ids])=>ids.includes(id))?.[0]||'其他能力';
  function packageStatus(id,installed){
   if(!installed)return state.retained.has(id)?'已卸载 · 可查看保留任务':'未安装';
   if(installed.removed)return '已移除 · 可查看保留任务';
@@ -40,12 +32,12 @@
  function allPackages(){
   const all=new Map(state.catalog.map(p=>[p.id,p]));
   for(const item of state.installed)all.set(item.package.id,item.package);
-  for(const id of state.retained)if(!all.has(id))all.set(id,{id,name:id==='mobile-control'?'设备控制':'已保留插件',status:'retained'});
+  for(const id of state.retained)if(!all.has(id))all.set(id,{id,name:id==='mobile-control'?'设备控制':'已保留工具',status:'retained'});
   return all;
  }
  function capabilityCard(p,installed,klass='package-choice'){
   const card=button('',()=>choose(p.id));card.className=klass;card.setAttribute('aria-pressed',String(state.selected===p.id));
-  card.append(el('strong',p.name),el('small',packageStatus(p.id,installed)));
+  card.append(el('strong',p.id==='music'?p.name+'（RVC / YuE）':p.name),el('small',packageStatus(p.id,installed)));
   const next=installed&&!installed.enabled?'配置后可按需启用。':state.runtimes[p.id]?.state==='failed'?'下一步：打开查看运行原因。':!installed&&p.status==='ready'?'下一步：导入后再配置。':!installed?'开发模板，尚不能运行。':'打开配置、权限和任务';
   card.append(el('small',next,'hint'));
   return card;
@@ -55,46 +47,49 @@
   card.append(el('small',item.description,'hint'));card.append(el('small','授权范围：'+(item.permissions||[]).join('、'),'hint'));
   return card;
  }
+ function renderGroups(container,all,overview){
+  const cardClass=overview?'capability-overview-card':'package-choice';
+  for(const builtin of [true,false]){
+   const group=el('section',undefined,overview?'capability-overview-group':'package-group');
+   group.append(el('h4',builtin?'内置工具':'通用工具'));
+   if(builtin)for(const item of state.builtins)group.append(builtinCard(item,cardClass));
+   for(const p of all.values()){
+    if((p.id==='web-search')!==builtin)continue;
+    group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id),cardClass));
+   }
+   if(!builtin)for(const item of state.connections){
+    const card=button('',()=>manageConnections(item.id));card.className=cardClass;
+    card.append(el('strong',item.manifest.name||item.id),el('small',(item.manifest.mcp?'MCP':'HTTP')+' · '+(item.enabled?'已启用':'未启用')));
+    group.append(card);
+   }
+   if(!builtin&&overview){const connections=button('管理 HTTP 与 MCP',()=>window.WechatAdmin.nav('mcp'));connections.className='secondary capability-connections';group.append(connections)}
+   if(group.children.length>1)container.append(group);
+  }
+ }
  function renderOverview(all){
   if(state.selected)return;
-  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3','已安装能力'),el('p','选择一项能力即可查看真实安装、启用、运行、配置和任务状态。服务不会因浏览此页面而自动启动。','hint'));const actions=el('div',undefined,'package-overview-actions');actions.append(button('通过 UI 新建插件',createPlugin),button('管理连接插件',()=>manageConnections()),button('导入本机插件',importPackage));intro.append(copy,actions);
-  const grid=el('div',undefined,'capability-overview-grid'),used=new Set();
-  if(state.builtins.length){const group=el('section',undefined,'capability-overview-group');group.append(el('h4','内置通信'));for(const item of state.builtins)group.append(builtinCard(item,'capability-overview-card'));grid.append(group)}
-  for(const [title,ids] of capabilityGroups){
-   const items=ids.map(id=>[id,all.get(id)]).filter(([,p])=>p);
-   if(!items.length)continue;
-   const group=el('section',undefined,'capability-overview-group');group.append(el('h4',title));
-   for(const [,p] of items){used.add(p.id);group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id),'capability-overview-card'))}
-   if(title==='连接'){const connections=button('管理 HTTP 与 MCP',()=>window.WechatAdmin.nav('mcp'));connections.className='secondary capability-connections';group.append(connections)}
-   grid.append(group);
-  }
-  const other=[...all.values()].filter(p=>!used.has(p.id));if(other.length){const group=el('section',undefined,'capability-overview-group');group.append(el('h4','其他能力'));for(const p of other)group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id),'capability-overview-card'));grid.append(group)}
-  if(!grid.children.length)grid.append(el('p','暂无可用插件。可通过向导创建连接插件或导入本机目录。','empty'));
+  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3','工具目录'),el('p','选择一项能力即可查看真实安装、启用、运行、配置和任务状态。服务不会因浏览此页面而自动启动。','hint'));const actions=el('div',undefined,'package-overview-actions');actions.append(button('新建工具',createPlugin),button('管理连接工具',()=>manageConnections()),button('导入本机工具',importPackage));intro.append(copy,actions);
+  const grid=el('div',undefined,'capability-overview-grid');
+  renderGroups(grid,all,true);
   editor.replaceChildren(intro,grid);window.WechatSaveActions?.sync();
  }
  function dirty(value){state.dirty=value;if(value)state.editVersion++;window.WechatAdmin.pluginPackageDirty=value}
- function discard(){return !state.dirty||confirm('有未保存的插件配置，确定放弃？')}
+ function discard(){return !state.dirty||confirm('有未保存的工具配置，确定放弃？')}
  function renderList(){
-  area.classList.toggle('package-overview',!state.selected);list.replaceChildren();const all=allPackages(),used=new Set();
-  if(state.builtins.length){const group=el('section',undefined,'package-group');group.append(el('h4','内置通信'));for(const item of state.builtins)group.append(builtinCard(item));list.append(group)}
-  for(const [title,ids] of capabilityGroups){
-   const items=ids.map(id=>all.get(id)).filter(Boolean);if(!items.length)continue;for(const p of items)used.add(p.id);
-   const group=el('section',undefined,'package-group');group.append(el('h4',title));for(const p of items)group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id)));list.append(group);
-  }
-  const other=[...all.values()].filter(p=>!used.has(p.id));if(other.length){const group=el('section',undefined,'package-group');group.append(el('h4','其他能力'));for(const p of other)group.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id)));list.append(group)}
-  if(!all.size)list.append(el('p','暂无服务插件，可导入本机插件目录。','empty'));
+  area.classList.toggle('package-overview',!state.selected);list.replaceChildren();const all=allPackages();
+  renderGroups(list,all,false);
   renderOverview(all);
  }
  async function load(){
   if(!window.WechatAdmin?.isAuthenticated())return;if(state.loadPromise)return state.loadPromise;state.busy=true;const epoch=state.epoch,owner=account();
-  const pending=(async()=>{try{const data=await api('/api/plugin-packages');if(epoch!==state.epoch||owner!==account())return;state.catalog=data.catalog||[];state.installed=data.installed||[];state.builtins=data.builtins||[];state.runtimes=data.runtimes||{};state.retained=new Set(data.retained_ids||[]);state.loaded=true;renderList()}
+  const pending=(async()=>{try{const [data,connections]=await Promise.all([api('/api/plugin-packages'),api('/api/plugins').catch(()=>null)]);if(epoch!==state.epoch||owner!==account())return;state.connections=connections?.installed||[];state.catalog=data.catalog||[];state.installed=data.installed||[];state.builtins=data.builtins||[];state.runtimes=data.runtimes||{};state.retained=new Set(data.retained_ids||[]);state.loaded=true;renderList()}
   catch(e){if(epoch===state.epoch&&owner===account())status.textContent=e.message}})();state.loadPromise=pending;try{return await pending}finally{if(state.loadPromise===pending){state.busy=false;state.loadPromise=null}}
  }
  async function choose(id){
   if(id===state.selected&&state.detail)return;if(!discard())return;
-  const epoch=++state.epoch,owner=account();state.selected=id;state.detail=null;dirty(false);renderList();editor.replaceChildren(status);status.textContent='正在读取插件…';
+  const epoch=++state.epoch,owner=account();state.selected=id;state.detail=null;dirty(false);renderList();editor.replaceChildren(status);status.textContent='正在读取工具…';
   const installed=state.installed.find(x=>x.package.id===id),p=installed?.package||state.catalog.find(x=>x.id===id);
-  if(!installed&&!state.retained.has(id)){status.textContent=p?.status==='ready'?'此插件尚未安装。导入并确认权限后可配置。':'此开发模板尚不能运行。';editor.prepend(el('h3',p?.name||id));return}
+  if(!installed&&!state.retained.has(id)){status.textContent=p?.status==='ready'?'此工具尚未安装。导入并确认权限后可配置。':'此开发模板尚不能运行。';editor.prepend(el('h3',p?.name||id));return}
   try{const d=await api('/api/plugin-packages/'+encodeURIComponent(id));if(epoch!==state.epoch||owner!==account())return;state.detail=d;renderDetail(d)}catch(e){if(epoch===state.epoch&&owner===account())status.textContent=e.message}
  }
  function renderDetail(d){
@@ -114,7 +109,7 @@
    row.append(input);if(spec.description)row.append(el('small',spec.description,'hint'));fields.append(row);
    if(spec['x-secret']&&configured.has(name)){const clear=el('label',undefined,'package-secret-clear'),check=el('input');check.type='checkbox';check.disabled=d.installed.enabled||d.installed.removed;check.dataset.clearSecret=name;clear.append(check,el('span','清除此密钥'));row.append(clear)}
   }
-  const save=button('保存插件配置',()=>{});save.id='package-config-save';save.type='submit';save.className='primary';save.disabled=d.installed.enabled||d.installed.removed;form.append(fields,save);editor.append(form);
+  const save=button('保存工具配置',()=>{});save.id='package-config-save';save.type='submit';save.className='primary';save.disabled=d.installed.enabled||d.installed.removed;form.append(fields,save);editor.append(form);
   form.addEventListener('input',()=>dirty(true));form.addEventListener('submit',saveConfig);
   const taskHead=el('div',undefined,'section-heading');taskHead.append(el('h3','任务'),button('刷新任务',()=>loadJobs(true)));editor.append(taskHead);const tasks=el('div');tasks.id='package-jobs';editor.append(tasks);loadJobs(true);window.WechatSaveActions?.sync();
  }
@@ -128,16 +123,16 @@
    heading.append(control);
   }
   if(!enabled||runtime.state==='running'&&!runtime.auto_managed)add(enabled?'恢复按需':'按需启用','enable_on_demand','任务需要时启动，空闲后释放');
-  if(!enabled||runtime.state==='stopped'||runtime.auto_managed)add('启动插件','start','立即启动并保留至本次服务退出');
-  if(enabled)add('停止插件','stop','停止并停用，后续请求不会启动此插件');
+  if(!enabled||runtime.state==='stopped'||runtime.auto_managed)add('启动工具','start','立即启动并保留至本次服务退出');
+  if(enabled)add('停止工具','stop','停止并停用，后续请求不会启动此工具');
  }
  async function runtimeAction(action){
-  if(!state.detail)return;if(state.dirty){status.textContent='请先保存当前配置，再启动插件。';return}
+  if(!state.detail)return;if(state.dirty){status.textContent='请先保存当前配置，再启动工具。';return}
   const scope=context(),id=scope.id,editVersion=state.editVersion,controls=Array.from(editor.querySelectorAll('[data-plugin-runtime-action],[data-plugin-policy-action]')).filter(control=>!control.disabled);controls.forEach(control=>control.disabled=true);
   let failure='';
   try{await api('/api/plugin-packages/'+encodeURIComponent(id)+'/runtime',{method:'POST',json:{action,revision:state.detail.installed.revision}})}catch(e){failure=e.message}
   if(!current(scope))return;
-  try{const d=await api('/api/plugin-packages/'+encodeURIComponent(id));if(!current(scope))return;state.detail=d;const i=state.installed.findIndex(x=>x.package.id===id);if(i>=0)state.installed[i]=d.installed;state.runtimes[id]=d.runtime||{};renderList();if(editVersion!==state.editVersion||state.dirty){status.textContent=failure||'插件状态已更新；当前未保存的编辑已保留。';return}renderDetail(d);if(failure)status.textContent=failure}
+  try{const d=await api('/api/plugin-packages/'+encodeURIComponent(id));if(!current(scope))return;state.detail=d;const i=state.installed.findIndex(x=>x.package.id===id);if(i>=0)state.installed[i]=d.installed;state.runtimes[id]=d.runtime||{};renderList();if(editVersion!==state.editVersion||state.dirty){status.textContent=failure||'工具状态已更新；当前未保存的编辑已保留。';return}renderDetail(d);if(failure)status.textContent=failure}
   catch(e){if(current(scope)){status.textContent=failure||e.message;controls.forEach(control=>{if(control.isConnected)control.disabled=false})}}
  }
  async function saveConfig(event){
@@ -146,12 +141,12 @@
   for(const input of form.querySelectorAll('[data-config-field]')){const name=input.dataset.configField,spec=d.schema.properties[name];if(spec['x-secret'])body.secrets[name]=input.value;else if(spec.enum?.length){if(input.value!=='')body.values[name]=JSON.parse(input.value)}else if(spec.type==='boolean')body.values[name]=input.checked;else if(['integer','number'].includes(spec.type)){if(input.value!=='')body.values[name]=Number(input.value)}else if(input.value!==''||!(d.installed.package.http_routes||[]).some(r=>r.optional&&r.endpoint_config===name))body.values[name]=input.value}
   for(const check of form.querySelectorAll('[data-clear-secret]:checked'))body.clear_secrets.push(check.dataset.clearSecret);
   const save=$('#package-config-save');save.disabled=true;
-  try{const result=await api('/api/plugin-packages/'+encodeURIComponent(id)+'/configuration',{method:'POST',json:body});if(!current(scope))return;state.detail.configuration=result;if(editVersion!==state.editVersion){status.textContent='已保存提交的配置，后续编辑尚未保存。';return}dirty(false);renderDetail(state.detail);status.textContent='插件配置已保存，未启动服务。'}catch(e){if(current(scope))status.textContent=e.message+'；当前编辑已保留。'}finally{if(save.isConnected)save.disabled=false}
+  try{const result=await api('/api/plugin-packages/'+encodeURIComponent(id)+'/configuration',{method:'POST',json:body});if(!current(scope))return;state.detail.configuration=result;if(editVersion!==state.editVersion){status.textContent='已保存提交的配置，后续编辑尚未保存。';return}dirty(false);renderDetail(state.detail);status.textContent='工具配置已保存，未启动服务。'}catch(e){if(current(scope))status.textContent=e.message+'；当前编辑已保留。'}finally{if(save.isConnected)save.disabled=false}
  }
  let next=0;
  function jobDiagnostic(job){
   const stage=job?.diagnostic?.stage;
-  if(stage==='dispatch')return '调用插件未完成。';
+  if(stage==='dispatch')return '调用工具未完成。';
   if(stage==='authority')return '核对权限时未能继续执行。';
   if(stage==='validation')return '检查结果时未能通过核对。';
   if(stage==='result_mode')return '结果格式不符合此操作。';
@@ -162,7 +157,7 @@
   try{const page=await api('/api/plugin-packages/'+encodeURIComponent(id)+'/jobs?limit=30&after='+next);if(epoch!==state.epoch||!box.isConnected)return;box.querySelector('[data-more-jobs]')?.remove();next=page.next;
    const labels={pending:'待执行',submitting:'正在提交',running:'运行中',completed:'已完成',failed:'失败',cancelled:'已取消',needs_review:'需要核对'};
    for(const job of page.items||[]){const row=el('div',undefined,'package-job'),summary=el('div');summary.append(el('span',(labels[job.state]||job.state)+(job.cancel_requested&&job.state!=='cancelled'?' · 正在请求取消':'')));const diagnosis=jobDiagnostic(job);if(diagnosis)summary.append(el('small',diagnosis,'hint'));row.append(summary);if(!['completed','failed','cancelled'].includes(job.state)){const cancel=button('取消任务',async()=>{cancel.disabled=true;try{await api('/api/plugin-packages/'+encodeURIComponent(id)+'/jobs/'+encodeURIComponent(job.id)+'/cancel',{method:'POST',json:{revision:job.revision}});if(epoch===state.epoch)loadJobs(true)}catch(e){status.textContent=e.message;cancel.disabled=false}});cancel.disabled=job.cancel_requested;row.append(cancel)}box.append(row)}
-   if(!box.children.length)box.append(el('p','暂无插件任务。','hint'));if(page.has_more){const more=button('继续读取任务',()=>loadJobs(false));more.dataset.moreJobs='';box.append(more)}
+   if(!box.children.length)box.append(el('p','暂无工具任务。','hint'));if(page.has_more){const more=button('继续读取任务',()=>loadJobs(false));more.dataset.moreJobs='';box.append(more)}
   }catch(e){if(epoch===state.epoch)status.textContent=e.message}
  }
  function renderHostDetail(d){
@@ -171,11 +166,11 @@
   if(!archive&&d.installed&&!d.installed.removed){
    runtimeControls(heading,d);
   }
-  editor.replaceChildren(heading,status);status.textContent=archive?'此插件已卸载。原有设备任务和受保护素材仍可查看或停止，不会创建新任务。':!d.installed?.enabled?'插件未启动；保存设备设置后，可按需启用或手动启动插件。':runtimeNames[runtime.state]||'状态待核对';
+  editor.replaceChildren(heading,status);status.textContent=archive?'此工具已卸载。原有设备任务和受保护素材仍可查看或停止，不会创建新任务。':!d.installed?.enabled?'工具未启动；保存设备设置后，可按需启用或手动启动工具。':runtimeNames[runtime.state]||'状态待核对';
   const message=(text,error=false)=>{if(current(scope)){status.textContent=text;status.classList.toggle('form-error',error)}};
   status.classList.remove('form-error');
   const action=async(name,body={})=>{
-   if(!current(scope))throw new Error('账号或插件已变化，请重新打开插件。');
+   if(!current(scope))throw new Error('账号或工具已变化，请重新打开工具。');
    return api('/api/plugin-packages/'+encodeURIComponent(scope.id)+'/actions/'+encodeURIComponent(name),{method:'POST',json:body});
   };
   const reload=async()=>{
@@ -192,7 +187,7 @@
    seen.add(section.component);
    const panel=el('section',undefined,'panel package-host-'+section.component);panel.id='plugin-section-'+section.component;panel.dataset.hostComponent=section.component;panel.append(el('h3',section.title||section.component));editor.append(panel);
    if(section.component==='diagnostics'){
-    panel.append(el('p',archive?diagnostics.planner_reason||'仅可查看历史或停止已有任务。':diagnostics.planner_available===true?'设备规划插件已就绪。':diagnostics.planner_reason||'设备规划插件未就绪，暂不能新建任务。','hint'));
+    panel.append(el('p',archive?diagnostics.planner_reason||'仅可查看历史或停止已有任务。':diagnostics.planner_available===true?'设备规划工具已就绪。':diagnostics.planner_reason||'设备规划工具未就绪，暂不能新建任务。','hint'));
     if(!archive&&section.action==='devices.list'){
      const result=el('p','','hint'),discover=button('检查已授权设备',async()=>{discover.disabled=true;try{const devices=await action('devices.list');if(current(scope)&&result.isConnected)result.textContent=JSON.stringify(devices)}catch(error){message(error.message,true)}finally{if(current(scope)&&discover.isConnected)discover.disabled=false}});panel.append(discover,result);
     }
@@ -214,7 +209,7 @@
      const editVersion=state.editVersion,body={revision:state.detail.host_data.settings.revision,enabled:enabled.checked,devices:devices.value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),actions:[...form.querySelectorAll('[data-mobile-action]:checked')].map(x=>x.dataset.mobileAction),max_steps:Number(maxSteps.value),max_seconds:Number(maxSeconds.value)};save.disabled=true;
      try{const result=await action('settings.save',body);if(!current(scope))return;state.detail.host_data.settings=result;
       if(editVersion!==state.editVersion){message('已保存提交的设备设置，后续编辑尚未保存。');return}
-      dirty(false);await reload();if(!state.dirty)message('设备设置已保存；插件运行状态未改变。');
+      dirty(false);await reload();if(!state.dirty)message('设备设置已保存；工具运行状态未改变。');
      }catch(error){message(error.message+'；当前编辑已保留。',true)}finally{if(current(scope)&&save.isConnected)save.disabled=false}
     });panel.append(form);
    }
@@ -259,7 +254,7 @@
  function createPlugin(){
   if(!window.WechatAdmin.isAuthenticated())return;
   const owner=account(),epoch=state.epoch;
-  const modal=window.WechatDialogs.open({title:'通过 UI 新建插件',subtitle:'连接已有的 HTTP 接口或 MCP 服务，无需准备压缩包。'});
+  const modal=window.WechatDialogs.open({title:'新建工具',subtitle:'连接已有的 HTTP 接口或 MCP 服务，无需准备压缩包。'});
   const form=el('form',undefined,'package-fields'),heading=el('h3'),fields=el('div',undefined,'package-fields'),actions=el('div',undefined,'inline-actions'),error=el('p','','error');
   error.setAttribute('role','alert');
   const type=el('select'),id=el('input'),name=el('input'),endpoint=el('input'),detail=el('input'),param=el('input');
@@ -272,14 +267,14 @@
   const valid=()=>modal.alive()&&owner===account()&&epoch===state.epoch&&window.WechatAdmin.isAuthenticated();
   function draw(){
    const http=type.value==='http';fields.replaceChildren();error.textContent='';
-   heading.textContent=['1 / 3　插件信息','2 / 3　连接设置','3 / 3　核对并创建'][step];
+   heading.textContent=['1 / 3　工具信息','2 / 3　连接设置','3 / 3　核对并创建'][step];
    back.hidden=step===0;next.textContent=step===2?'确认创建':'下一步';
-   if(step===0)fields.append(field('插件类型',type),field('显示名称',name),field('唯一标识',id));
+   if(step===0)fields.append(field('工具类型',type),field('显示名称',name),field('唯一标识',id));
    if(step===1){
     fields.append(field('服务地址',endpoint),field('用途说明',detail));
     if(http){param.pattern='[A-Za-z][A-Za-z0-9_]{0,63}';fields.append(field('接口接收的文本参数名',param))}
    }
-   if(step===2)fields.append(el('strong',name.value+' · '+id.value),el('p',(http?'HTTP POST':'MCP')+'　'+endpoint.value),el('p',detail.value),el('p',http?'请求字段：'+param.value:'由 MCP 服务声明可用工具'),el('p','创建后保持未启用，可在连接插件中编辑参数、鉴权和启用状态。','hint'));
+   if(step===2)fields.append(el('strong',name.value+' · '+id.value),el('p',(http?'HTTP POST':'MCP')+'　'+endpoint.value),el('p',detail.value),el('p',http?'请求字段：'+param.value:'由 MCP 服务声明可用工具'),el('p','创建后保持未启用，可在连接工具中编辑参数、鉴权和启用状态。','hint'));
   }
   form.addEventListener('submit',async event=>{
    event.preventDefault();if(busy||!valid())return;
@@ -305,11 +300,11 @@
  }
  function importPackage(){
   const account=window.WechatAccountContext?.id||'',epoch=state.epoch;
-  const modal=window.WechatDialogs.open({title:'导入插件',subtitle:'选择 ZIP 文件或填写本机目录，检查后确认安装。'}),label=el('label','本机插件目录'),input=el('input'),fileLabel=el('label','插件 ZIP 文件'),file=el('input'),result=el('div');
+  const modal=window.WechatDialogs.open({title:'导入工具',subtitle:'选择 ZIP 文件或填写本机目录，检查后确认安装。'}),label=el('label','本机工具目录'),input=el('input'),fileLabel=el('label','工具 ZIP 文件'),file=el('input'),result=el('div');
   file.type='file';file.accept='.zip,application/zip';fileLabel.append(file);input.placeholder='未选择 ZIP 时，使用此目录';label.append(input);
   const current=()=>modal.alive()&&account===(window.WechatAccountContext?.id||'')&&epoch===state.epoch;
   const invalidate=()=>result.replaceChildren();file.addEventListener('change',invalidate);input.addEventListener('input',invalidate);
-  const prepare=button('检查插件',async()=>{
+  const prepare=button('检查工具',async()=>{
    prepare.disabled=true;file.disabled=true;input.disabled=true;result.replaceChildren();try{
     if(!current())return;const selected=file.files[0];
     if(selected&&selected.size>64*1024*1024)throw new Error('ZIP 超过 64 MiB，请将模型与运行环境作为独立资源安装。');
@@ -323,7 +318,7 @@
    }catch(e){if(current())result.append(el('p',e.message,'error'))}finally{prepare.disabled=false;file.disabled=false;input.disabled=false}
   });modal.body.append(fileLabel,label,prepare,result);
  }
- const returnButton=button('返回能力目录',()=>{if(window.WechatAdmin.pluginDirty&&!confirm('放弃未保存的连接设置？'))return;window.WechatPluginDeclarations.reset();showPackages();load()});
+ const returnButton=button('返回工具目录',()=>{if(window.WechatAdmin.pluginDirty&&!confirm('放弃未保存的连接设置？'))return;window.WechatPluginDeclarations.reset();showPackages();load()});
  legacy.querySelector('.plugin-template-head').append(returnButton);
  window.WechatRefresh.bind($('#plugins-refresh'),load);
  window.addEventListener('wechat-admin:navigate',e=>{if(e.detail?.section==='plugins')load()});
@@ -335,6 +330,6 @@
    if(section&&owner===account()){const scope=context();requestAnimationFrame(()=>{if(current(scope))document.getElementById('plugin-section-'+section)?.scrollIntoView({block:'start',behavior:'auto'})})}
   },
  };
- window.addEventListener('wechat-admin:logout',()=>{state.epoch++;state.loaded=false;state.loadPromise=null;state.busy=false;state.selected='';state.detail=null;state.catalog=[];state.installed=[];state.runtimes={};state.retained.clear();state.hostRequest=null;dirty(false);list.replaceChildren();editor.replaceChildren(status);status.textContent='选择服务查看配置、权限和任务。'});
+ window.addEventListener('wechat-admin:logout',()=>{state.epoch++;state.loaded=false;state.loadPromise=null;state.busy=false;state.selected='';state.detail=null;state.catalog=[];state.installed=[];state.builtins=[];state.connections=[];state.runtimes={};state.retained.clear();state.hostRequest=null;dirty(false);list.replaceChildren();editor.replaceChildren(status);status.textContent='选择服务查看配置、权限和任务。'});
  showPackages();
 })();

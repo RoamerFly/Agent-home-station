@@ -97,7 +97,7 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("POST /api/speech/test", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		if s.manager.draining() {
-			fail(w, 409, "管理端正在准备更新，请稍后测试语音插件")
+			fail(w, 409, "管理端正在准备更新，请稍后测试语音工具")
 			return
 		}
 		var in struct {
@@ -138,7 +138,7 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 			fail(w, 502, "测试音频格式验证失败")
 			return
 		}
-		text := "未配置语音识别插件，本次已验证音频格式"
+		text := "未配置语音识别工具，本次已验证音频格式"
 		if e = policy.checkCompleted(ctx); e != nil {
 			fail(w, 409, "语音测试授权或配置已变更，请重新测试")
 			return
@@ -160,7 +160,7 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 		}
 		if transcription != nil {
 			if e = transcription.checkCompleted(ctx); e != nil {
-				fail(w, 409, "识别插件授权或配置已变更，请重新测试")
+				fail(w, 409, "识别工具授权或配置已变更，请重新测试")
 				return
 			}
 		}

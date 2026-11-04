@@ -18,7 +18,7 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
    document.querySelector('#login-view').hidden=true;document.querySelector('#app-view').hidden=false;
    document.querySelectorAll('.page').forEach(p=>{p.hidden=p.id!=='plugins';p.classList.toggle('active-page',p.id==='plugins')});
    window.WechatAccountContext={id:'synthetic-one'};window.calls=[];
-   const pkg={id:'synthetic',name:'离线合成插件',version:'1.0',status:'ready',permissions:['network'],http_routes:[{endpoint:'https://provider.example/api/private/source/read',credential:'session'}]};
+   const pkg={id:'synthetic',name:'离线合成工具',version:'1.0',status:'ready',permissions:['network'],http_routes:[{endpoint:'https://provider.example/api/private/source/read',credential:'session'}]};
    window.WechatAdmin={isAuthenticated:()=>true,api:async(url,opt={})=>{
     calls.push({url,json:opt.json,kind:opt.headers?.['Content-Type'],file:opt.body?.name,size:opt.body?.size});
     if(url==='/api/plugin-packages')return {catalog:[pkg],installed:[]};
@@ -27,10 +27,10 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
     throw new Error('unexpected API '+url);
    }};
   });
-  for(const script of ['dialogs.js','plugin-packages.js'])await page.addScriptTag({path:path.join(root,script)});
-  const open=()=>page.getByRole('button',{name:'导入本机插件',exact:true}).click();
+  for(const script of ['refresh.js','dialogs.js','plugin-packages.js'])await page.addScriptTag({path:path.join(root,script)});
+  const open=()=>page.getByRole('button',{name:'导入本机工具',exact:true}).click();
   const upload=()=>page.locator('dialog.console-dialog input[type=file]').setInputFiles({name:'synthetic.zip',mimeType:'application/zip',buffer:Buffer.from('synthetic fixture; HTTP contract covered by Go ZIP test')});
-  await open();await upload();await page.getByRole('button',{name:'检查插件',exact:true}).click();
+  await open();await upload();await page.getByRole('button',{name:'检查工具',exact:true}).click();
   await page.getByRole('button',{name:'确认安装',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>calls.filter(c=>c.url.endsWith('/install')).length),0,'checking installed package');
   const submitted=await page.evaluate(()=>calls.find(c=>c.url.endsWith('/import')));assert.equal(submitted.kind,'application/zip');assert.equal(submitted.file,'synthetic.zip');assert(await page.getByText('https://provider.example/api/private/source/read',{exact:true}).isVisible());
@@ -44,9 +44,9 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
   const installed=await page.evaluate(()=>calls.find(c=>c.url.endsWith('/install')).json);assert.equal(installed.confirm,true);assert.deepEqual(installed.permissions,[]);
   // Changing the source removes the old confirmation; switching account can
   // never submit the previously prepared token under the new account.
-  await open();await upload();await page.getByRole('button',{name:'检查插件',exact:true}).click();await page.getByRole('button',{name:'确认安装',exact:true}).waitFor();
+  await open();await upload();await page.getByRole('button',{name:'检查工具',exact:true}).click();await page.getByRole('button',{name:'确认安装',exact:true}).waitFor();
   await page.getByPlaceholder('未选择 ZIP 时，使用此目录').fill('changed-source');assert.equal(await page.getByRole('button',{name:'确认安装',exact:true}).count(),0);
-  await page.getByRole('button',{name:'检查插件',exact:true}).click();await page.getByRole('button',{name:'确认安装',exact:true}).waitFor();
+  await page.getByRole('button',{name:'检查工具',exact:true}).click();await page.getByRole('button',{name:'确认安装',exact:true}).waitFor();
   await page.evaluate(()=>window.WechatAccountContext.id='synthetic-two');await page.getByRole('button',{name:'确认安装',exact:true}).click();
   assert.equal(await page.evaluate(()=>calls.filter(c=>c.url.endsWith('/install')).length),1,'cross-account confirmation submitted');
   assert.deepEqual(errors,[]);console.log(JSON.stringify({zipSelection:true,explicitApproval:true,permissionsRespected:true,changedSourceInvalidates:true,accountChangeDenied:true,themes:2,widths:[375,1440],paidCalls:0,wechatSends:0}));

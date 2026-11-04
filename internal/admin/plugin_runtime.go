@@ -121,7 +121,7 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 		}
 		h, _, err := s.manager.installedPluginRuntime()
 		if err != nil {
-			fail(w, 503, "插件执行环境未就绪")
+			fail(w, 503, "工具执行环境未就绪")
 			return
 		}
 		ctx := r.Context()
@@ -142,24 +142,24 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 		if err != nil {
 			var dependency *pluginruntime.DependencyError
 			if errors.As(err, &dependency) {
-				message := "插件依赖尚未就绪：" + dependency.Dependency
+				message := "工具依赖尚未就绪：" + dependency.Dependency
 				switch dependency.Code {
 				case "dependency_missing", "dependency_removed":
-					message = "请先安装依赖插件：" + dependency.Dependency
+					message = "请先安装依赖工具：" + dependency.Dependency
 				case "dependency_disabled":
-					message = "请先启用依赖插件：" + dependency.Dependency
+					message = "请先启用依赖工具：" + dependency.Dependency
 				case "dependency_cycle":
-					message = "插件存在循环依赖，请检查插件声明：" + dependency.Dependency
+					message = "工具存在循环依赖，请检查工具声明：" + dependency.Dependency
 				case "dependency_configuration":
-					message = "请先完成插件配置：" + dependency.Dependency
+					message = "请先完成工具配置：" + dependency.Dependency
 				case "dependency_not_authorized":
-					message = "插件尚未获得所需授权：" + dependency.Dependency
+					message = "工具尚未获得所需授权：" + dependency.Dependency
 				case "dependency_busy":
-					message = "关联插件正在执行操作，请稍后重试：" + dependency.Dependency
+					message = "关联工具正在执行操作，请稍后重试：" + dependency.Dependency
 				case "dependency_start_failed":
-					message = "插件启动失败：" + dependency.Dependency
+					message = "工具启动失败：" + dependency.Dependency
 					if len(dependency.Started) > 0 {
-						message += "；已启动的依赖保持运行，可在插件详情查看。"
+						message += "；已启动的依赖保持运行，可在工具详情查看。"
 					}
 				}
 				respond(w, 409, map[string]any{"error": message, "dependency": dependency})
@@ -170,12 +170,12 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 		}
 		store, err := s.manager.packageStore()
 		if err != nil {
-			fail(w, 503, "插件宿主正在关闭")
+			fail(w, 503, "工具宿主正在关闭")
 			return
 		}
 		i, err := store.Installed(r.Context(), id)
 		if err != nil {
-			fail(w, 409, "插件状态已变化，请刷新")
+			fail(w, 409, "工具状态已变化，请刷新")
 			return
 		}
 		respond(w, 200, map[string]any{"installed": i, "runtime": h.Status(id)})

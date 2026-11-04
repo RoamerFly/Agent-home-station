@@ -127,7 +127,7 @@ func TestNativeToolDiscoveryContinuesBeyondFirstEightMatches(t *testing.T) {
 	e, _ := NewPreview(enabledConfig(), model, "policy")
 	e.Tools = tools
 	e.MaxToolCalls = 6
-	if _, err := e.Respond(context.Background(), Input{Mode: "direct", Text: "核对能力目录", Preview: true}); err != nil || tools.calls != 1 {
+	if _, err := e.Respond(context.Background(), Input{Mode: "direct", Text: "核对工具目录", Preview: true}); err != nil || tools.calls != 1 {
 		t.Fatal(err, tools.calls)
 	}
 }

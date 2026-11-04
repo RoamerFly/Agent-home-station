@@ -43,7 +43,7 @@ func (p *permittedTools) validateMusicSampling(ctx context.Context, s musicSampl
 		}
 		var canonical any
 		if json.Unmarshal(encoded, &canonical) != nil || validateMusicDeclaredShape(canonical, schema) != nil {
-			return toolInputError("音乐参数不匹配已安装插件声明：" + name + "；请先调用music_sampling_options核对实际原生参数")
+			return toolInputError("音乐参数不匹配已安装工具声明：" + name + "；请先调用music_sampling_options核对实际原生参数")
 		}
 	}
 	return nil

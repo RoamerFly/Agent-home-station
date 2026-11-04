@@ -65,7 +65,7 @@ def mark_plugin_inference(manifest, entry):
         'inference_owner': 'plugin:speech',
         'runtime_status': 'registered_requires_installed_configured_speech_plugin',
         'execution': 'speech_synthesize via installed, enabled and configured speech plugin; registered entry is diagnostic only',
-        'usage': '已登记的公共 GPT-SoVITS 源码和基础模型可供显式授权的项目开发使用。命名语音生成使用已安装、启用并配置 local_profile_id=gpt-sovits 的 speech 插件，通过 speech_synthesize 显式选择 voice_id。entry 仅诊断，不能推理，也不是宿主信任执行来源；宿主只执行已验证的安装包 runner。手动项目开发需独立显式授权。不会自动发送微信。',
+        'usage': '已登记的公共 GPT-SoVITS 源码和基础模型可供显式授权的项目开发使用。命名语音生成使用已安装、启用并配置 local_profile_id=gpt-sovits 的 speech 工具，通过 speech_synthesize 显式选择 voice_id。entry 仅诊断，不能推理，也不是宿主信任执行来源；宿主只执行已验证的安装包 runner。手动项目开发需独立显式授权。不会自动发送微信。',
     })
     return manifest
 

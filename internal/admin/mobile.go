@@ -36,15 +36,15 @@ func mobileAvailabilityMessage(err error) string {
 	case "device_broker_runtime_registration_required":
 		return "手机原生执行器尚未完成隔离登记；已有设备和任务保留，当前不会执行实机操作。"
 	case "device_plugin_tools_unregistered":
-		return "尚未登记设备连接工具，请完成手机插件的运行环境设置。已有任务仍可查看或取消。"
+		return "尚未登记设备连接工具，请完成手机工具的运行环境设置。已有任务仍可查看或取消。"
 	case "device_plugin_deployment_unavailable":
-		return "手机插件运行环境不可用，请检查本机安装。已有任务仍可查看或取消。"
+		return "手机工具运行环境不可用，请检查本机安装。已有任务仍可查看或取消。"
 	case "device_plugin_broker_migration_required":
 		return "已登记的设备连接配置需要迁移到当前运行环境；请核对工具路径和账号存储目录，已有设备授权与任务保留。"
 	case "device_plugin_broker_unavailable":
 		return "设备连接代理暂时不可用，请检查本机运行环境；已有任务仍可查看或取消，不会重复提交未确认的设备操作。"
 	default:
-		return "开始新任务前，请在插件中心授权并启用手机插件的规划与设备代理；已有任务仍可查看或取消。"
+		return "开始新任务前，请在工具中心授权并启用手机工具的规划与设备代理；已有任务仍可查看或取消。"
 	}
 }
 
@@ -199,7 +199,7 @@ func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action
 		}
 		respond(w, 200, map[string]bool{"cancelled": true})
 	default:
-		fail(w, 404, "插件操作不可用")
+		fail(w, 404, "工具操作不可用")
 	}
 }
 

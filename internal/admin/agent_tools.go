@@ -517,7 +517,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				updated, err := m.cancelPluginTask(ctx, t)
 				return encode(updated, err)
 			}
-			return "", toolInputError("插件任务由其持久生命周期管理，请使用plugin_job_status或plugin_job_cancel；不改写为已完成")
+			return "", toolInputError("工具任务由其持久生命周期管理，请使用plugin_job_status或plugin_job_cancel；不改写为已完成")
 		}
 		if t.Reminder != nil {
 			return "", toolInputError("这是独立提醒任务；请用agent_reminder查询或取消，不能改写为其他程序任务")

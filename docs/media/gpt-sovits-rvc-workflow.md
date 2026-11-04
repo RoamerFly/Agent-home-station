@@ -36,7 +36,7 @@ flowchart LR
 ## 现有可调用入口
 
 - `project_read {"id":"gpt-sovits"}`：项目源码、专用 Linux CUDA 解释器、基础模型、`gpt_sovits_tts.py` 和上游 API。
-- `project_read {"id":"rvc"}`：当前 RVC 源码与实际环境；训练实现位于音乐插件，使用登记的 `training_entry`、`training_requirements` 与包哈希。旧 `scripts/rvc_train_trial.py` 仅校验并转发到登记的安装包；通过 `--help`/源码确认训练版本，不能假定旧版训练路径与新版 RVC 相同。
+- `project_read {"id":"rvc"}`：当前 RVC 源码与实际环境；训练实现位于音乐工具，使用登记的 `training_entry`、`training_requirements` 与包哈希。旧 `scripts/rvc_train_trial.py` 仅校验并转发到登记的安装包；通过 `--help`/源码确认训练版本，不能假定旧版训练路径与新版 RVC 相同。
 - `scripts/rvc_voice.py`：已有 RVC 模型转换明确的人声文件，支持 `--model --index --source --output --device cuda:0`，以及 semitones、index-rate、protect、分块和上下文参数。
 - `voice_library_list/read/prepare`：检索、权限核验和准备目标角色的真实文件。私人模型和训练产物留在当前账号 `voice-library` 与私有任务目录中；公共项目目录仅放通用源码和基础模型。
 

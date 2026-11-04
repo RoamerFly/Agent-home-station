@@ -30,12 +30,12 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),path=require('nod
     throw new Error('unexpected API '+url)
    }};
   });
-  for(const script of ['dialogs.js','plugins.js','plugin-packages.js'])await page.addScriptTag({path:path.join(root,script)});
+  for(const script of ['refresh.js','dialogs.js','plugins.js','plugin-packages.js'])await page.addScriptTag({path:path.join(root,script)});
   await page.evaluate(()=>window.dispatchEvent(new CustomEvent('wechat-admin:navigate',{detail:{section:'plugins'}})));
   for(const kind of ['http','mcp']){
-   await page.getByRole('button',{name:'通过 UI 新建插件',exact:true}).filter({visible:true}).click();
+   await page.getByRole('button',{name:'新建工具',exact:true}).filter({visible:true}).click();
    const dialog=page.locator('dialog[open]');
-   await dialog.getByLabel('插件类型').selectOption(kind);
+   await dialog.getByLabel('工具类型').selectOption(kind);
    await dialog.getByLabel('显示名称').fill('合成工具');
    await dialog.getByLabel('唯一标识').fill('demo-'+kind);
    await dialog.getByText('下一步',{exact:true}).click();
@@ -48,7 +48,7 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),path=require('nod
    await dialog.getByText('确认创建',{exact:true}).click();
    await page.waitForFunction(()=>!document.querySelector('dialog[open]'));
    assert.equal(await page.locator('#plugin-select').inputValue(),'demo-'+kind);
-   await page.getByRole('button',{name:'返回能力目录'}).click();
+   await page.getByRole('button',{name:'返回工具目录'}).click();
   }
   const requests=await page.evaluate(()=>calls.filter(c=>c.url==='/api/plugins/install').map(c=>c.json));
   assert.equal(requests.length,2);assert(requests.every(r=>r.enabled===false));

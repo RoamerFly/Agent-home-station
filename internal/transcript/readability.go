@@ -1,5 +1,5 @@
 // Package transcript provides lossless display formatting for ASR text. It
-// never corrects recognized words, assigns speakers, or invokes another model.
+// never corrects recognized words, assigns speakers, or sends audio to external services.
 package transcript
 
 import (

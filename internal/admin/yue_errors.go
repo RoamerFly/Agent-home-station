@@ -13,7 +13,7 @@ func (e *yueCallError) Error() string {
 	case "yue_bridge_auth_failed":
 		return "YuE桥接鉴权失败，请检查桥接令牌"
 	case "yue_account_scope_mismatch":
-		return "音乐服务的任务目录属于另一个微信账号；请核对服务路由和账号工作目录。插件程序、模型与令牌可共用，私人任务及素材分别保存；原任务保留"
+		return "音乐服务的任务目录属于另一个微信账号；请核对服务路由和账号工作目录。工具程序、模型与令牌可共用，私人任务及素材分别保存；原任务保留"
 	case "yue_backend_unavailable":
 		return "YuE桥接在线，ComfyUI生成后端不可用；本次未提交新任务"
 	case "yue_submission_unknown":

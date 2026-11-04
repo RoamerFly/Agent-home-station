@@ -22,7 +22,7 @@ func (p *permittedTools) reviewSongAudio(ctx context.Context, audio []byte, expe
 	}
 	check := origin.Check
 	if !p.manager.mediaAudioObservationConfigured(ctx) {
-		return map[string]any{"state": "unavailable", "reason": "未配置或启用音频观察插件；当前成品尚未经模型听感检查"}, check
+		return map[string]any{"state": "unavailable", "reason": "未配置或启用音频观察工具；当前成品尚未经模型听感检查"}, check
 	}
 	wav, windows, err := prepareSongAudioSamples(ctx, p.manager.dir, origin.audio)
 	if err != nil {

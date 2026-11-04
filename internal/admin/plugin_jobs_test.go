@@ -43,7 +43,7 @@ func newJobFixture(t *testing.T) *jobFixture {
 				<-j.pollBlock
 			}
 			if j.done.Load() {
-				w.Write([]byte(`{"state":"done","text":"后台插件真实完成输出"}`))
+				w.Write([]byte(`{"state":"done","text":"后台工具真实完成输出"}`))
 			} else {
 				w.Write([]byte(`{"state":"waiting"}`))
 			}
@@ -55,7 +55,7 @@ func newJobFixture(t *testing.T) *jobFixture {
 		}
 	}))
 	t.Cleanup(j.upstream.Close)
-	m := plugins.Manifest{ID: "demo", Name: "合成异步插件", Tools: []plugins.APITool{{Name: "create", Description: "Create synthetic async task", InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"],"additionalProperties":false}`), URL: j.upstream.URL + "/jobs", Method: "POST", BodyTemplate: json.RawMessage(`{"prompt":"{{arg.prompt}}"}`), TextPath: "text", Poll: &plugins.PollSpec{URL: j.upstream.URL + "/jobs/{{result.task_id}}", StatusPath: "state", DoneValues: []string{"done"}, FailedValues: []string{"failed"}, IntervalSeconds: 1}, Job: &plugins.JobSpec{IDPath: "task_id", Cancel: &plugins.CancelSpec{URL: j.upstream.URL + "/jobs/{{result.task_id}}/cancel"}}}}}
+	m := plugins.Manifest{ID: "demo", Name: "合成异步工具", Tools: []plugins.APITool{{Name: "create", Description: "Create synthetic async task", InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"],"additionalProperties":false}`), URL: j.upstream.URL + "/jobs", Method: "POST", BodyTemplate: json.RawMessage(`{"prompt":"{{arg.prompt}}"}`), TextPath: "text", Poll: &plugins.PollSpec{URL: j.upstream.URL + "/jobs/{{result.task_id}}", StatusPath: "state", DoneValues: []string{"done"}, FailedValues: []string{"failed"}, IntervalSeconds: 1}, Job: &plugins.JobSpec{IDPath: "task_id", Cancel: &plugins.CancelSpec{URL: j.upstream.URL + "/jobs/{{result.task_id}}/cancel"}}}}}
 	if err := j.f.manager.plugins.save(pluginEntry{Installed: plugins.Installed{Manifest: m, Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}

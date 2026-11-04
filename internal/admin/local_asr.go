@@ -14,27 +14,27 @@ import (
 func (m *Manager) localASRStatus() map[string]any {
 	state := map[string]any{
 		"available": false,
-		"message":   "本地语音识别尚未通过媒体理解插件登记",
+		"message":   "本地语音识别尚未通过媒体理解工具登记",
 	}
 	ctx := context.Background()
 	store, err := m.packageStore()
 	if err != nil {
-		state["message"] = "媒体插件存储不可用"
+		state["message"] = "媒体工具存储不可用"
 		return state
 	}
 	installed, err := store.Installed(ctx, localASRPluginID)
 	if err != nil || installed.Removed || !installed.Enabled {
-		state["message"] = "媒体理解插件未安装或未启用"
+		state["message"] = "媒体理解工具未安装或未启用"
 		return state
 	}
 	configuration, err := store.Configuration(ctx, localASRPluginID)
 	if err != nil {
-		state["message"] = "媒体理解插件配置不可读取"
+		state["message"] = "媒体理解工具配置不可读取"
 		return state
 	}
 	var backend string
 	if json.Unmarshal(configuration.Values["asr_backend"], &backend) != nil || backend != "local" {
-		state["message"] = "媒体理解插件当前未选择本地语音识别"
+		state["message"] = "媒体理解工具当前未选择本地语音识别"
 		return state
 	}
 	profile, ok := m.registeredLocalASRProfile(ctx, installed.Package, pluginhost.Grant{

@@ -86,10 +86,10 @@ SDK 许可为包内 Microsoft WebView2 SDK License，构建时同时输出 `WebV
 python -X utf8 scripts/install_local_asr.py --workspace <数据根>/managed-workspaces --archive <模型归档.tar.bz2>
 ```
 
-安装器在项目内准备 Python、固定版本的 NumPy/Sherpa SDK、模型、许可证、脚本与登记清单；SDK 中同样触发 SxS 的清单转换也记录原始/派生哈希。输入只存于当前账号私有 scratch，实际推理仍在 LPAC 中执行。覆盖旧的 Linux ASR 路径登记需明确添加 `--replace-registration`，旧登记会先备份。大型模型、SDK 和下载缓存不放入 Git，不随普通程序升级覆盖。Windows 音乐/CUDA 环境独立于普通 Agent，验收记录见 Windows 原生验证文档。后续插件可分别引用这些版本化资源目录，无需将运行环境塞进 EXE 或混入用户数据库。
+安装器在项目内准备 Python、固定版本的 NumPy/Sherpa SDK、模型、许可证、脚本与登记清单；SDK 中同样触发 SxS 的清单转换也记录原始/派生哈希。输入只存于当前账号私有 scratch，实际推理仍在 LPAC 中执行。覆盖旧的 Linux ASR 路径登记需明确添加 `--replace-registration`，旧登记会先备份。大型模型、SDK 和下载缓存不放入 Git，不随普通程序升级覆盖。Windows 音乐/CUDA 环境独立于普通 Agent，验收记录见 Windows 原生验证文档。后续工具可分别引用这些版本化资源目录，无需将运行环境塞进 EXE 或混入用户数据库。
 
 
-## Windows 音乐资源与插件边界
+## Windows 音乐资源与工具边界
 
 Windows 音乐控制脚本位于程序的 `runtimes/windows-music`；公共模型/源码与 Python 包放在数据根 `managed-workspaces/public_workspace`，个人声线和生成物留在账号私有目录。普通程序升级不替换这些大资源。基本程序便携包不包含个人声线或大型音乐模型；已有本机资源经过校验和显式登记后使用，无需 WSL。
 
@@ -97,7 +97,7 @@ Windows 音乐控制脚本位于程序的 `runtimes/windows-music`；公共模�
 
 经拥有者明确授权后，使用 `scripts/register_windows_music.py --help` 指定当前工作区、留存公共资源、管理数据和程序运行库，并加 `--authorize-registry-and-private-network`。该登记不启动模型、重放任务或发送微信。首次迁移修复明确资源树内部的 ACL 继承；已验证的迁移可显式使用 `--inheritance-already-verified`。原配置更改前在相应目录的 `.backups` 子目录留备份，不将备份作为活跃项目登记发现。
 
-在管理页启动已登记音乐服务，或由授权 Agent 调用 `music_service_start`，再检查实际就绪状态。仅音乐/GPU 后端具有注册表读取和私有网络能力，该能力可能访问局域网；公共模型只读、当前账号私有目录可写，控制凭据不在挂载内，普通 Agent 不获得相应能力。命名声线有独立固定参数执行入口，不能自动退回默认大肥鱼声线。后续插件可沿用资源清单、账号范围及受管生命周期，无需把环境放进 EXE 或混入记忆数据库。
+在管理页启动已登记音乐服务，或由授权 Agent 调用 `music_service_start`，再检查实际就绪状态。仅音乐/GPU 后端具有注册表读取和私有网络能力，该能力可能访问局域网；公共模型只读、当前账号私有目录可写，控制凭据不在挂载内，普通 Agent 不获得相应能力。命名声线有独立固定参数执行入口，不能自动退回默认大肥鱼声线。后续工具可沿用资源清单、账号范围及受管生命周期，无需把环境放进 EXE 或混入记忆数据库。
 
 
 ## 窗口生命周期与图标
@@ -106,7 +106,7 @@ Windows 音乐控制脚本位于程序的 `runtimes/windows-music`；公共模�
 
 `DesktopInstance` 在读取部署配置和创建任何 Form 前取得单例互斥锁。次实例只发送激活事件后退出；互斥锁由操作系统释放，异常退出后可以重新启动。服务仍按部署身份核验归属，不收养其他服务。
 
-项目图标为 gpt-image 生成的“聊天＋插件”抽象图形。原始透明 PNG 和多尺寸 ICO 位于 `desktop/windows/assets`；构建通过 `/win32icon` 嵌入 EXE，主窗口与托盘读取同一应用图标。`scripts/build_windows_icon.py` 从保留的 PNG 生成 16、20、24、32、40、48、64、96、128、256 像素 ICO，校验透明度及全部尺寸。
+项目图标为 gpt-image 生成的“聊天＋工具”抽象图形。原始透明 PNG 和多尺寸 ICO 位于 `desktop/windows/assets`；构建通过 `/win32icon` 嵌入 EXE，主窗口与托盘读取同一应用图标。`scripts/build_windows_icon.py` 从保留的 PNG 生成 16、20、24、32、40、48、64、96、128、256 像素 ICO，校验透明度及全部尺寸。
 
 `Build-Desktop.ps1 -Test` 除控制器测试外，通过 `WindowTestRunner` 在独立、不会切换到前台的 Windows Desktop 中运行真实 WinForms/WebView 生命周期测试，使用合成服务覆盖普通最小化、显式托盘、窗口句柄稳定、页面初始化期间退出、重复激活与异步关闭、12 个并发次实例及异常退出恢复，不发送微信消息。
 

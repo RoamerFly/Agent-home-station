@@ -43,12 +43,12 @@ func mobilePluginSettings(s mobile.Settings) mobilePluginSettingsView {
 func (s *Server) pluginHostActionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/plugin-packages/{id}/actions/{action}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		if r.PathValue("id") != mobileDevicePluginID {
-			fail(w, 404, "插件操作不可用")
+			fail(w, 404, "工具操作不可用")
 			return
 		}
 		store, err := s.manager.packageStore()
 		if err != nil {
-			fail(w, 500, "插件存储不可用")
+			fail(w, 500, "工具存储不可用")
 			return
 		}
 		installed, err := store.Installed(r.Context(), mobileDevicePluginID)
@@ -58,7 +58,7 @@ func (s *Server) pluginHostActionRoutes(mux *http.ServeMux) {
 				s.mobileHostAction(w, r, action)
 				return
 			}
-			fail(w, 409, "手机插件未安装；只能查看历史或停止已有任务")
+			fail(w, 409, "手机工具未安装；只能查看历史或停止已有任务")
 			return
 		}
 		if action == "settings.save" {
@@ -88,7 +88,7 @@ func (s *Server) pluginHostActionRoutes(mux *http.ServeMux) {
 			return
 		}
 		if action == "tasks.create" && (!installed.Enabled || s.manager.mobileDeviceReady(r.Context()) != nil) {
-			fail(w, 409, "手机插件尚未启用、授权或就绪")
+			fail(w, 409, "手机工具尚未启用、授权或就绪")
 			return
 		}
 		s.mobileHostAction(w, r, action)

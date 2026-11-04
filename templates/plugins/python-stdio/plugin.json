@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "example-echo",
   "name": "示例：同步文本回显",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "host_protocol": 1,
   "status": "ready",
   "platforms": ["windows-amd64", "linux-amd64"],
@@ -10,13 +10,13 @@
   "permissions": [],
   "dependencies": [],
   "files": {
-    "capabilities.json": "70fea3157e6aa3ce96cad723d72c6727f0a46825f266ab207c47120313a60251",
+    "capabilities.json": "293b4fa34093af7def193ed9bbd1bb85e3e929af4e73a2bad39a939866aeadb1",
     "CHANGELOG.md": "6180064b1db4b4b6f9323b59e3cff685b20081b7d473d33068f14652cb8938cd",
     "config.schema.json": "4f355aaabd61baab14303898f72d65b2df4624ffd7c3b3b28ded6ec33d2768be",
     "main.py": "054d4fe3dc31311c38900392535a116c99d6bb994d830c245d0f9d09a39aea8d",
-    "MIGRATION.md": "8848850dff3bd27fa33b43324033e5b842fa0a81794c50ea89ea8ee5b56754e6",
-    "PERMISSIONS.md": "8e950cb56848d6fd7786defd34dfb734716dd84d8dedc1805f67f63adf735071",
-    "README.md": "e51f8d83c28b2745f983ffc5fbae7e2a3dffb03763381a7008965afde6b48ef5",
+    "MIGRATION.md": "01675e5414d183513f9477645b678ecf37ea629aef609f29e62663568c876cc7",
+    "PERMISSIONS.md": "2c0ec772b21883287b15fd1788465e40391c7ea72c5699d58c7de206a9a18c0b",
+    "README.md": "7ffb9f163fce35a3bb65faf9995159730d36e5117096c5b1a3ee8a5881c2d79f",
     "ui.schema.json": "3d1cc880c7a0827c5e991665353b6e4ef450093cc4c30101e4462d2a125c0492"
   }
 }

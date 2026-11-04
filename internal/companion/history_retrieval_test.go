@@ -62,7 +62,7 @@ func TestNativeDiscoveryDoesNotDropToolsBeyondLegacyCatalogCapacity(t *testing.T
 	}
 	e.Tools = largeDiscoveryTools{}
 	e.MaxToolCalls = 2
-	d, err := e.Respond(t.Context(), Input{Preview: true, Mode: "direct", Text: "查看已安装能力"})
+	d, err := e.Respond(t.Context(), Input{Preview: true, Mode: "direct", Text: "查看工具目录"})
 	if err != nil || d.Action != "reply" || !m.found || m.steps != 2 {
 		t.Fatal("native discovery silently discarded a registered capability", d, err, m.found, m.steps)
 	}

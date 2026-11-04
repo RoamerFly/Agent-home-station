@@ -264,7 +264,7 @@ func TestLiveExternalJobInstalledLPACPreservesStartPollAndCompletedCancel(t *tes
 	}
 	j.done.Store(true)
 	ticket, err := j.f.manager.callExternalJobPhase(t.Context(), task, "poll", json.RawMessage(`{}`))
-	if err != nil || ticket.State != "completed" || ticket.Output.Text != "后台插件真实完成输出" || j.polls.Load() != 1 {
+	if err != nil || ticket.State != "completed" || ticket.Output.Text != "后台工具真实完成输出" || j.polls.Load() != 1 {
 		t.Fatal("isolated poll lost actual provider result", ticket, err)
 	}
 	task.PluginJob.Ticket = ticket

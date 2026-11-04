@@ -32,7 +32,7 @@ func observationReason(err error) string {
 			return code
 		}
 	}
-	if strings.Contains(code, "插件冷启动未完成") {
+	if strings.Contains(code, "冷启动未完成") {
 		return "plugin_cold_start_failed"
 	}
 	return "media_read_failed"

@@ -37,7 +37,7 @@ func TestLocalASRStatusRequiresInstalledConfiguredRegisteredPlugin(t *testing.T)
 		legacySpeechFixture.ASRLocalModel = "sensevoice-small-int8"
 		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
 	}
-	if status := f.manager.localASRStatus(); status["available"] != false || status["message"] != "媒体理解插件未安装或未启用" {
+	if status := f.manager.localASRStatus(); status["available"] != false || status["message"] != "媒体理解工具未安装或未启用" {
 		t.Fatal("legacy speech state was treated as local plugin readiness", status)
 	}
 

@@ -58,7 +58,7 @@
       "permissions": [
         "device"
       ],
-      "description": "通过宿主受控代理列出已登记设备；插件不自行扫描设备。",
+      "description": "通过宿主受控代理列出已登记设备；工具不自行扫描设备。",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -91,7 +91,7 @@
       "permissions": [
         "device"
       ],
-      "description": "通过宿主受控代理取得来源绑定的设备观察回执元数据；原始 PNG 不经过插件。",
+      "description": "通过宿主受控代理取得来源绑定的设备观察回执元数据；原始 PNG 不经过工具。",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -130,7 +130,7 @@
       "permissions": [
         "device"
       ],
-      "description": "通过宿主受控代理提交一次来源绑定动作；回执未知时不由插件重试。",
+      "description": "通过宿主受控代理提交一次来源绑定动作；回执未知时不由工具重试。",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -213,7 +213,7 @@
       "permissions": [
         "device"
       ],
-      "description": "通过宿主受控代理提交受限录屏；只返回元数据，录屏 bytes 不经过插件。",
+      "description": "通过宿主受控代理提交受限录屏；只返回元数据，录屏 bytes 不经过工具。",
       "input_schema": {
         "type": "object",
         "properties": {

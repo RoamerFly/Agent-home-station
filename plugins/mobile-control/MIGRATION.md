@@ -4,7 +4,7 @@
 
 规划进程先请求一次宿主绑定的屏幕描述，随后最多请求两次原生 `device_step` 格式输出。格式或本地动作校验失败时只增加一次修复提示；提供方错误直接返回。结果带回原任务、观察和来源版本，宿主仍须独立复核后才能交给设备 broker。
 
-旧 Go planner 已删除，没有静态编译或自动回退路径。新建任务须先安装并启用规划插件；模型设置和费用继续沿用宿主唯一配置，不复制密钥。已有任务仍可查看、取消和停止，未知结果不因迁移而重放。
+旧 Go planner 已删除，没有静态编译或自动回退路径。新建任务须先安装并启用规划工具；模型设置和费用继续沿用宿主唯一配置，不复制密钥。已有任务仍可查看、取消和停止，未知结果不因迁移而重放。
 
 桥接、设备队列和录屏素材链路暂时仍由主体的兼容服务负责，整体迁移尚未完成。官方规划包已通过 Windows 隔离进程与本地假模型契约测试；这不代表真实设备或真实模型质量验收。尚未执行生产账号迁移或更新生产程序，后续实际切换仍需隔离预演。
 
@@ -14,12 +14,12 @@
 
 0.3.1 配置与任务迁移由宿主私有 SQLite `plugin-host/plugins.sqlite` 的 `host_states` / `host_state_records` 管理。首次仅只读核验旧 Settings/Tasks JSON，保留原任务 ID、来源与哈希；中断的 `queued/running` 转为 `needs_review`，不重放未知操作。正式启用后只写 SQLite 差异记录并以 CAS 保护并发，不再与旧 JSON 双写。截图、录屏、操作 ledger 和原始媒体继续留在原 host-private mobile 路径，不迁出为外部 ledger。
 
-接受新 SQLite 写入后不自动回切旧 JSON 或旧版本；故障时暂停新的设备处理并由兼容路径修复记录。设备队列、录屏分析的具体调度实现和专用 UI 尚未整体迁出，不能将当前受控代理视为全部手机插件化完成。
+接受新 SQLite 写入后不自动回切旧 JSON 或旧版本；故障时暂停新的设备处理并由兼容路径修复记录。设备队列、录屏分析的具体调度实现和专用 UI 尚未整体迁出，不能将当前受控代理视为全部手机工具化完成。
 
 0.4.0 将管理页收敛为宿主渲染的声明式区域：执行设置与已登记连接、设备任务、任务素材和状态与说明。设置的唯一权威仍是宿主配置仓库，不向通用 `config.schema.json` 复制手机设置；页面只可调用已登记的 `settings.save`、`devices.list`、`tasks.create`、`tasks.cancel` 与 `tasks.stop`，不接受任意 bridge 命令或 ADB 参数。独立手机页面与脚本已删除；旧版空 binding/action 声明映射为组件固定默认值。新详情只保留已登记连接，连接档案的新增或替换仍依赖宿主管理员兼容路径，尚未完成声明式登记流程，不应宣称首次安装的全部手机配置流程已就绪。
 
 
-0.5.0 原生五项能力改为单一隔离进程内的高层 native 实现和固定 `wechat/device_io` 协议。旧整单 `wechat/device_request` 门面、第二个 native MCP 进程及 host-only RuntimeRegistration 已移除，不能用旧 raw command 启动路径回退。包内 bridge 只接收过滤后的 config 对象和私有 cwd，不把宿主路径伪装成插件路径。
+0.5.0 原生五项能力改为单一隔离进程内的高层 native 实现和固定 `wechat/device_io` 协议。旧整单 `wechat/device_request` 门面、第二个 native MCP 进程及 host-only RuntimeRegistration 已移除，不能用旧 raw command 启动路径回退。包内 bridge 只接收过滤后的 config 对象和私有 cwd，不把宿主路径伪装成工具路径。
 
 物理锁、设备 profile 与批准 ADB 哈希校验继续在宿主；只读检查不启动共享 server，实际调用才申请。原 `device-ledger.sqlite` 继续作为操作去重唯一账本，已提交和 unknown 结果保留原请求哈希，不自动重放。观察及录屏原文件保持原宿主目录，MCP 只交换有长度与 SHA-256 的不透明引用。读取素材支持原 offset / bytes，真实资源上限显式失败。
 
