@@ -75,6 +75,28 @@
 .life-journal-entry strong,.life-journal-quote { display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;-webkit-line-clamp:3; }
 .life-journal-card .empty { margin:0;min-height:44px;color:var(--muted);font-size:13px; }
 .life-journal-status { grid-column:1/-1;grid-row:4;min-height:20px;margin:0; }
+
+/* The memory palace shares its surfaces with the life journal. */
+.memory-palace { margin:0 0 20px; background:linear-gradient(135deg,color-mix(in srgb,var(--surface) 87%,var(--accent-soft)),var(--raised)); }
+.memory-palace-heading { display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:11px; }
+.memory-palace-heading h2 { margin:0;font:500 clamp(22px,2.5vw,32px)/1.2 Georgia,"Noto Serif SC","Songti SC",serif;letter-spacing:-.035em; }
+.memory-palace-heading .eyebrow { color:var(--accent);letter-spacing:.08em; }
+.memory-palace-actions { display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end; }
+.memory-palace-actions select { width:min(140px,100%);min-height:36px;padding:6px 8px;font-size:13px; }
+.memory-palace-actions .quiet { min-height:36px;padding:6px 9px;font-size:13px; }
+.memory-palace-actions .quiet.is-active { color:var(--accent);border-color:var(--accent);background:var(--accent-soft); }
+.memory-palace-intro { margin:0 0 16px;color:var(--muted);font-size:13px; }
+.memory-palace-body { display:grid;grid-template-columns:minmax(0,1.25fr) minmax(220px,.65fr);gap:16px;align-items:stretch; }
+.memory-palace-graph-wrap,.memory-palace-list { min-width:0;border:1px solid var(--line);border-radius:14px;background:color-mix(in srgb,var(--surface) 88%,transparent); }
+.memory-palace-graph { position:relative;min-height:308px;padding:20px;overflow:hidden; }
+.memory-palace-node,.memory-palace-row { min-width:0;border:1px solid var(--line);border-radius:10px;background:color-mix(in srgb,var(--surface) 95%,transparent);color:inherit;text-align:left;transition:border-color .18s ease,background .18s ease,transform .18s ease; }
+.memory-palace-node { min-height:68px;padding:9px 10px; }
+.memory-palace-node:hover,.memory-palace-node:focus-visible,.memory-palace-row:hover,.memory-palace-row:focus-visible,.memory-palace-node.is-selected,.memory-palace-row.is-selected { border-color:var(--accent);background:var(--accent-soft);outline:none; }
+.memory-palace-node small,.memory-palace-row small { display:block;color:var(--accent);font-size:11px; }.memory-palace-node strong,.memory-palace-row strong { display:-webkit-box;overflow:hidden;margin-top:3px;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:12px;line-height:1.35; }
+.memory-palace-list { display:grid;gap:8px;padding:12px;align-content:start; }.memory-palace-row { padding:10px 11px; }
+.memory-palace-detail { min-width:0;padding:17px 18px;border:1px solid var(--line);border-radius:14px;background:color-mix(in srgb,var(--surface) 91%,transparent); }.memory-palace-detail h3 { margin:4px 0 11px;font-size:17px;line-height:1.45; }.memory-palace-detail p { font-size:13px;line-height:1.65; }.memory-palace-detail-kind { margin:0;color:var(--accent);font-size:12px !important;font-weight:700; }.memory-palace-detail-label { margin:16px 0 7px;color:var(--muted);font-size:12px !important; }
+.memory-palace-source { display:block;width:100%;margin-top:7px;padding:8px 0;border:0;border-top:1px solid var(--line);background:transparent;color:inherit;text-align:left; }.memory-palace-source small { display:block;color:var(--accent);font-size:11px; }.memory-palace-source span { display:-webkit-box;overflow:hidden;margin-top:3px;-webkit-box-orient:vertical;-webkit-line-clamp:2;color:var(--muted);font-size:12px;line-height:1.45; }.memory-palace-source:hover span,.memory-palace-source:focus-visible span { color:var(--accent); }
+.memory-palace-footer { display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:12px; }.memory-palace-footer p { margin:0; }
 @media(max-width:900px) {
   .life-journal { grid-template-columns:minmax(0,1fr) minmax(180px,.65fr); }
   .life-journal-scene { min-height:210px; }
@@ -94,6 +116,7 @@
   .life-journal-actions { margin-top:12px; }
   .life-journal-actions select { flex:1; }
   .life-journal-actions .quiet { flex:0 1 auto; }
+  .memory-palace-heading { display:block; }.memory-palace-actions { justify-content:flex-start;margin-top:12px; }.memory-palace-body { grid-template-columns:1fr; }.memory-palace-graph { min-height:280px; }.memory-palace-footer { align-items:flex-start;flex-direction:column; }
 }
 
 .behavior-settings{grid-column:1/-1}.behavior-settings .field-grid>div{min-width:0}

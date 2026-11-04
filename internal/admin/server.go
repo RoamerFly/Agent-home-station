@@ -200,6 +200,12 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			name = "memory.js"
 		case "/assets/life-journal.js":
 			name = "life-journal.js"
+		case "/assets/palace.js":
+			name = "palace.js"
+		case "/assets/palace-graph.js":
+			name = "palace-graph.js"
+		case "/assets/palace-graph.css":
+			name = "palace-graph.css"
 		case "/assets/night-sea.webp":
 			name = "night-sea.webp"
 		case "/assets/conversations.js":

@@ -1,0 +1,28 @@
+/* The lines between the columns represent participants of the selected conversation's records. */
+.palace-chart {
+  display:grid;grid-template-columns:minmax(76px,.8fr) minmax(28px,.45fr) minmax(134px,1.7fr);
+  min-height:calc(var(--chart-rows) * 76px);
+}
+.palace-chart-column { display:grid;grid-auto-rows:1fr;align-items:center;min-width:0; }
+.palace-chart svg { width:100%;height:100%;overflow:visible;color:var(--accent); }
+.palace-chart path { fill:none;stroke:currentColor;opacity:.52;stroke-width:1.5; }
+.palace-chart-person { justify-self:end;max-width:100%;overflow-wrap:anywhere;text-align:center;padding:7px 10px;border-radius:22px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-weight:600; }
+.palace-chart-person[aria-pressed=true] { border-color:var(--accent);color:var(--accent); }
+.palace-chart .memory-palace-node { transform:none;min-height:50px;max-width:100%; }
+.palace-chart .memory-palace-node:focus-visible,.palace-chart-person:focus-visible { outline:2px solid var(--accent);outline-offset:2px; }
+
+/* Keep the conversation switch and shared refresh control available while the palace occupies the overview. */
+#overview:has(> #memory-palace:not([hidden])) > :not(#memory-palace,#life-journal,.sr-only) { display:none; }
+#overview:has(> #memory-palace:not([hidden])) .life-journal { display:block;margin:0;padding:10px 16px; }
+#overview:has(> #memory-palace:not([hidden])) .life-journal :is(.life-journal-scene,.life-journal-intro,.life-journal-grid,.life-journal-status,.life-journal-heading > div:first-child,#memory-palace-open) { display:none; }
+#overview:has(> #memory-palace:not([hidden])) .life-journal-actions { margin:0; }
+#memory-palace { flex:none; }
+#memory-palace .memory-palace-heading { border-bottom:1px solid var(--line);padding-bottom:16px; }
+#memory-palace .memory-palace-detail { align-self:start; }
+#memory-palace :is(.memory-palace-graph-wrap,.memory-palace-list) { max-height:min(61dvh,640px);overflow-y:auto; }
+#memory-palace .memory-palace-graph { min-height:0; }
+#memory-palace [hidden] { display:none; }
+@media(max-width:650px) {
+  #memory-palace :is(.memory-palace-graph-wrap,.memory-palace-list) { max-height:42dvh; }
+  #memory-palace .memory-palace-graph { padding:12px; }
+}

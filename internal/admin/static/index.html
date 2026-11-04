@@ -8,6 +8,7 @@
 <script src="/assets/theme.js">
 </script>
 <link href="/assets/app.css" rel="stylesheet">
+<link href="/assets/palace-graph.css" rel="stylesheet">
 <link href="/assets/workbench.css" rel="stylesheet">
 <link href="/assets/console.css" rel="stylesheet">
 </head>
@@ -378,6 +379,7 @@
 <option>正在读取会话…</option>
 </select>
 <button type="button" class="quiet" id="life-journal-open" disabled>查看会话手记</button>
+<button type="button" class="quiet" id="memory-palace-open" disabled>进入记忆宫殿</button>
 </div>
 </div>
 <p class="life-journal-intro" id="life-journal-intro">当前会话中，有来源的共同经历、兴趣与约定。</p>
@@ -397,6 +399,37 @@
 </div>
 <p class="life-journal-status hint" id="life-journal-status" role="status"></p>
 </div>
+</section>
+<section class="memory-palace panel" id="memory-palace" aria-labelledby="memory-palace-title" hidden>
+<header class="memory-palace-heading">
+<div>
+<p class="eyebrow">同一段相处的来源地图</p>
+<h2 id="memory-palace-title">记忆宫殿</h2>
+</div>
+<div class="memory-palace-actions">
+<select id="memory-palace-kind" aria-label="记忆类别"><option value="">全部记忆</option><option value="relations">人物关系</option><option value="episodes">经历</option><option value="open_commitments">未完约定</option><option value="reflections">兴趣与心情</option></select>
+<label class="sr-only" for="memory-palace-person">筛选人物</label>
+<select id="memory-palace-person" aria-label="筛选人物" disabled><option>全部人物</option></select>
+<button type="button" class="quiet is-active" id="memory-palace-map-toggle" aria-pressed="true">关系图</button>
+<button type="button" class="quiet" id="memory-palace-list-toggle" aria-pressed="false">列表</button>
+<button type="button" class="quiet" id="memory-palace-close">收起</button>
+</div>
+</header>
+<p class="memory-palace-intro">连线标出这段经历的主体、关系中的人物，或写下感受的大肥鱼。</p>
+<div class="memory-palace-body">
+<div class="memory-palace-graph-wrap" id="memory-palace-graph-wrap">
+<div class="memory-palace-graph" id="memory-palace-graph" aria-label="记忆关系图" role="list"></div>
+</div>
+<div class="memory-palace-list" id="memory-palace-list" role="list" hidden></div>
+<aside class="memory-palace-detail" id="memory-palace-detail" aria-live="polite">
+<p class="empty">选择一个片段，查看它的来源。</p>
+</aside>
+</div>
+<footer class="memory-palace-footer">
+<button type="button" class="quiet" id="memory-palace-prev" hidden>上一页</button>
+<button type="button" class="quiet" id="memory-palace-more" hidden>查看下一页</button>
+<p class="hint" id="memory-palace-status" role="status"></p>
+</footer>
 </section>
 <div class="metric-grid">
 <article class="metric">
@@ -1600,6 +1633,8 @@
 <script defer="" src="/assets/plugin-packages.js"></script>
 <script defer src="/assets/memory.js"></script>
 <script defer src="/assets/life-journal.js"></script>
+<script defer src="/assets/palace-graph.js"></script>
+<script defer src="/assets/palace.js"></script>
 <script defer src="/assets/save-actions.js"></script>
 </body>
 </html>

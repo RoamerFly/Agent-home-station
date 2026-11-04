@@ -1,7 +1,7 @@
 (() => {
  'use strict';
  const $ = selector => document.querySelector(selector);
- const state = {scopes: [], selected: '', controller: null, request: 0, loaded: false, navigated: false, loadPromise: null};
+ const state = {scopes: [], selected: '', controller: null, request: 0, loaded: false, navigated: false, loadPromise: null, palaceScope: {scope: '', label: '', ready: false}};
  const text = value => typeof value === 'string' ? value.trim() : '';
  const label = scope => text(scope.thread_name) || text(scope.label) || text(scope.thread) || text(scope.id) || '未命名会话';
  const time = value => window.WechatActivity?.time(value) || text(value);
@@ -11,6 +11,12 @@
  const commitments = () => $('#life-journal-commitments');
  const reflections = () => $('#life-journal-reflections');
  const status = () => $('#life-journal-status');
+ const palaceOpen = () => $('#memory-palace-open');
+
+ function publish(detail) {
+  state.palaceScope = detail;
+  window.dispatchEvent(new CustomEvent('wechat-life-journal:data', {detail}));
+ }
 
  function node(parent, tag, value, className) {
   const child = document.createElement(tag);
@@ -27,6 +33,7 @@
    select.append(new Option('暂无可查看的会话', ''));
    select.disabled = true;
    $('#life-journal-open').disabled = true;
+   palaceOpen().disabled = true;
    state.selected = '';
    return previous !== state.selected;
   }
@@ -35,6 +42,7 @@
   select.value = state.selected;
   select.disabled = false;
   $('#life-journal-open').disabled = false;
+  palaceOpen().disabled = false;
   return previous !== state.selected;
  }
  function renderCommitments(items) {
@@ -120,10 +128,14 @@
    empty(commitments(), '当前账号还没有可查看的会话。');
    empty(reflections(), '请先在会话中形成有来源的记录。');
    status().textContent = '生活手记只读取当前账号中的会话，不会合并其他账号资料。';
+   publish({scope: '', label: '', ready: true});
    return;
   }
   const controller = new AbortController(); state.controller = controller;
   loading(); status().textContent = '正在读取“'+label(scope)+'”的生活手记…';
+  // The palace receives only scope lifecycle information. It owns its own
+  // paginated reads and never keeps the overview's short preview in memory.
+  publish({scope: scope.id, label: label(scope), loading: true, ready: false});
   const base = '/api/companion/memory/'+encodeURIComponent(scope.id);
   try {
    const [feed, plans, notes] = await Promise.all([
@@ -135,6 +147,7 @@
    renderExperiences(Array.isArray(feed.items) ? feed.items : []);
    renderCommitments(Array.isArray(plans.items) ? plans.items : []);
    renderReflections(Array.isArray(notes.items) ? notes.items : []);
+   publish({scope: scope.id, label: label(scope), ready: true});
    status().textContent = '已更新。可在会话手记中查看完整来源、版本并更正或遗忘。';
   } catch (error) {
    if (controller.signal.aborted || request !== state.request) return;
@@ -142,6 +155,7 @@
    empty(experiences(), '未能读取共同经历。');
    empty(reflections(), '未能读取兴趣与心情。');
    status().textContent = '读取失败：'+(error.message || '请稍后重试')+'。';
+   publish({scope: scope.id, label: label(scope), error: true, ready: true});
   }
  }
  function load() {
@@ -160,6 +174,12 @@
   if (!active()) return;
   window.WechatMemory?.open(state.selected, () => load());
  }
+ function openPalace() {
+  const palace = $('#memory-palace');
+  palace.hidden = false;
+  $('#overview').scrollTop = 0;
+  window.dispatchEvent(new CustomEvent('wechat-life-journal:palace-open'));
+ }
  async function refresh() {
   // Refresh the authorized scope list first: a conversation that was empty
   // can acquire its first sourced record after the overview was opened.
@@ -169,8 +189,10 @@
   return state.loadPromise;
  }
  document.addEventListener('DOMContentLoaded', () => {
+  window.WechatLifeJournal = {scope: () => state.palaceScope, reload: load};
   scopeSelect().addEventListener('change', event => { state.selected = event.target.value; load(); });
   $('#life-journal-open').addEventListener('click', openMemory);
+  palaceOpen().addEventListener('click', openPalace);
   window.WechatRefresh?.register($('#life-journal'), refresh);
   window.addEventListener('wechat-admin:scopes', event => receiveScopes(event.detail?.scopes));
   window.addEventListener('wechat-admin:navigate', event => {
@@ -180,6 +202,8 @@
   window.addEventListener('wechat-admin:logout', () => {
    state.controller?.abort(); state.scopes = []; state.selected = ''; state.loaded = false; state.navigated = false; state.request++;
    renderScopes(); empty(experiences(), '登录后读取生活手记。'); empty(commitments(), '登录后读取生活手记。'); empty(reflections(), '登录后读取生活手记。'); status().textContent = '';
+   palaceOpen().disabled = true;
+   publish({scope: '', label: '', ready: true});
   });
  });
 })();
