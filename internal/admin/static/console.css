@@ -265,10 +265,19 @@ details.disclosure:not([open])>:not(summary) { display:none; }
 .dialog-heading h2 { font-size:19px; }.dialog-heading p { color:var(--muted); font-size:12px; }
 .dialog-body { padding:20px 24px; min-height:0; overflow:auto; scrollbar-gutter:stable; flex:1; }
 .dialog-close { flex-shrink:0; }
-.memory-settings-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 18px; }
-.memory-settings-form>label { margin:0; }
-.memory-settings-form>h3,.memory-settings-form>p { grid-column:1/-1; margin:4px 0 0; }
-@media(max-width:760px){.memory-settings-form{grid-template-columns:minmax(0,1fr)}}
+.console-dialog:has(.memory-settings-form) { width:min(720px,calc(100vw - 24px)); height:fit-content; }
+.dialog-body:has(> .memory-settings-form) { flex:0 1 auto; }
+.dialog-body:has(> .memory-settings-form) > [role=status]:empty { margin:0; }
+.memory-settings-form { display:grid; gap:12px; }
+.memory-settings-form > label { display:flex; align-items:center; justify-content:space-between; }
+.memory-settings-form > label,.memory-settings-form > p,.memory-settings-fields > label { margin:0; }
+.memory-settings-advanced { border-top:1px solid var(--line); padding-top:12px; }
+.memory-settings-advanced > summary { cursor:pointer; font-weight:600; }
+.memory-settings-advanced section { margin-top:18px; }
+.memory-settings-advanced h3 { margin:0 0 8px; }
+.memory-settings-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 18px; align-items:start; }
+.memory-settings-fields > button { justify-self:start; }
+@media(max-width:760px){.memory-settings-fields{grid-template-columns:minmax(0,1fr)}}
 .has-dialog { overflow:hidden; }
 /* Graph geometry is defined in workbench.css; surface styling stays here. */
 #workbench { overflow:hidden; }

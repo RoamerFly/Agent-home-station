@@ -62,6 +62,13 @@ func preserveMemoryKey(oldURL, newURL, oldKey, newKey string, clear bool) (strin
 	}
 	return oldKey, nil
 }
+func (m *Manager) saveMemoryServices(c memoryServices) error {
+	b, e := json.Marshal(c)
+	if e != nil {
+		return e
+	}
+	return writePrivate(filepath.Join(m.dir, "memory-services.json"), b)
+}
 func (s *Server) memoryServicesRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/memory/services", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		c, e := s.manager.loadMemoryServices()
@@ -110,12 +117,37 @@ func (s *Server) memoryServicesRoutes(mux *http.ServeMux) {
 			fail(w, 400, e.Error())
 			return
 		}
-		b, _ := json.Marshal(in.memoryServices)
-		if e = writePrivate(filepath.Join(m.dir, "memory-services.json"), b); e != nil {
+		if e = m.saveMemoryServices(in.memoryServices); e != nil {
 			fail(w, 500, e.Error())
 			return
 		}
 		respond(w, 200, memoryServicesView(in.memoryServices))
+	}))
+	mux.HandleFunc("POST /api/memory/services/automatic", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Enabled *bool `json:"enabled"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		if in.Enabled == nil {
+			fail(w, http.StatusBadRequest, "enabled is required")
+			return
+		}
+		m := s.manager
+		m.memoryServiceMu.Lock()
+		defer m.memoryServiceMu.Unlock()
+		current, e := m.loadMemoryServices()
+		if e != nil {
+			fail(w, http.StatusInternalServerError, e.Error())
+			return
+		}
+		current.Settings.Enabled = *in.Enabled
+		if e = m.saveMemoryServices(current); e != nil {
+			fail(w, http.StatusInternalServerError, e.Error())
+			return
+		}
+		respond(w, http.StatusOK, memoryServicesView(current))
 	}))
 	mux.HandleFunc("POST /api/memory/embedding/test", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		c, e := s.manager.loadMemoryServices()

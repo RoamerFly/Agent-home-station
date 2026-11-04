@@ -166,15 +166,104 @@
   }catch(e){if(!current.signal.aborted&&p.alive())status.textContent=e.message}finally{if(controller===current){busy=false;more.disabled=false;p.body.removeAttribute('aria-busy')}}}
   form.addEventListener('submit',e=>{e.preventDefault();load(true)});p.dialog.addEventListener('close',()=>{controller?.abort();experienceView.dispose();reflectionView.dispose()},{once:true})
  }
- async function settings(){const p=window.WechatDialogs.open({title:'记忆设置'}),status=el(p.body,'p','正在读取…','hint');status.setAttribute('role','status');try{const data=await api('/api/memory/services');if(!p.alive())return;status.textContent='自动整理使用配置的维护模型，留空时沿用聊天模型。向量服务配置后才启用语义召回。';const form=el(p.body,'form',undefined,'memory-settings-form'),s=data.settings,e=data.embedding,m=data.maintenance,inputs={};
-  const enabled=field(form,'启用自动记忆','','checkbox');enabled.checked=s.enabled;
-  for(const [key,label]of [['batch_messages','批量整理消息数'],['idle_seconds','空闲整理秒数'],['daily_tokens','自动维护每日 Token 预算（0 为不限额）'],['recent_tokens','近期对话自动注入 Token'],['recall_tokens','长期记忆自动注入 Token'],['continuity_tokens','固定与连续性额度'],['context_window_tokens','模型上下文窗口（0 为未设置）'],['output_reserve_tokens','输出预留 Token']]){inputs[key]=field(form,label,s[key],'number');inputs[key].min='0';inputs[key].required=true}
-  el(form,'h3','回复依据');const audit=s.reply_audit||{enabled:true,snapshots:true,retention_days:7},auditEnabled=field(form,'保留回复依据','','checkbox'),auditSnapshots=field(form,'故障或需要复核时保留脱敏快照','','checkbox'),auditDays=field(form,'保留天数',audit.retention_days,'number');auditEnabled.checked=audit.enabled;auditSnapshots.checked=audit.snapshots;auditDays.min='1';auditDays.required=true;
-  el(form,'h3','语义检索');const endpoint=field(form,'嵌入服务地址',e.base_url),model=field(form,'嵌入模型',e.model),revision=field(form,'嵌入模型版本',e.revision||''),dimensions=field(form,'指定维度（0 使用服务默认）',e.dimensions||0,'number'),key=field(form,data.embedding_key_configured?'嵌入密钥（已保存，留空保留）':'嵌入密钥','','password'),clearKey=field(form,'清除已保存嵌入密钥','','checkbox');
-  el(form,'h3','独立维护模型');const me=field(form,'维护服务地址',m.base_url),mm=field(form,'维护模型',m.model),mk=field(form,data.maintenance_key_configured?'维护密钥（已保存，留空保留）':'维护密钥','','password'),mc=field(form,'清除已保存维护密钥','','checkbox'),provider=el(el(form,'label','维护服务类型'),'select');for(const [value,label]of [['openai-compatible','OpenAI 兼容'],['deepseek','DeepSeek']]){const o=el(provider,'option',label);o.value=value}provider.value=m.provider||'openai-compatible';
-  const save=el(form,'button','保存记忆设置','primary');save.type='submit';form.addEventListener('submit',async event=>{event.preventDefault();if(!form.reportValidity())return;save.disabled=true;try{const options={...s,enabled:enabled.checked,reply_audit:{enabled:auditEnabled.checked,snapshots:auditSnapshots.checked,retention_days:Number(auditDays.value)}};for(const [k,input]of Object.entries(inputs))options[k]=Number(input.value);await api('/api/memory/services',{method:'POST',json:{settings:options,embedding:{base_url:endpoint.value.trim(),model:model.value.trim(),revision:revision.value.trim(),dimensions:Number(dimensions.value),api_key:key.value},maintenance:{base_url:me.value.trim(),model:mm.value.trim(),api_key:mk.value,provider:provider.value},clear_embedding_key:clearKey.checked,clear_maintenance_key:mc.checked}});key.value='';mk.value='';status.textContent='已保存，后续维护与召回使用新设置。'}catch(e){status.textContent=e.message}finally{save.disabled=false}});
-  button(p.body,'测试已保存的嵌入服务',async()=>{try{const result=await api('/api/memory/embedding/test',{method:'POST',json:{}});status.textContent='合成测试通过，维度 '+result.dimensions+'，'+(result.reported?'提供商报告':'未报告')+'用量。'}catch(e){status.textContent=e.message}})
- }catch(e){if(p.alive())status.textContent=e.message}}
+ async function settings(){
+  const p=window.WechatDialogs.open({title:'记忆设置'});
+  const status=el(p.body,'p','正在读取…','hint');
+  status.setAttribute('role','status');
+  try{
+   const data=await api('/api/memory/services');
+   if(p.alive()){status.textContent='';render(data)}
+  }catch(error){if(p.alive())status.textContent=error.message}
+
+  function render(data,expanded=false){
+   const form=el(p.body,'form',undefined,'memory-settings-form');
+   form.noValidate=true;
+   const {settings:s,embedding:e,maintenance:m}=data;
+   const enabled=field(form,'自动整理长期记忆','','checkbox');
+   enabled.checked=s.enabled;
+   el(form,'p','开启后，大肥鱼会在后台整理对话，聊天时也会自动想起相关的长期记忆。暂停后已有记忆仍可查看。','hint');
+   const advanced=el(form,'details',undefined,'memory-settings-advanced');
+   advanced.open=expanded;
+   el(advanced,'summary','高级设置');
+   function group(title,hint){
+    const section=el(advanced,'section');
+    el(section,'h3',title);
+    if(hint)el(section,'p',hint,'hint');
+    return el(section,'div',undefined,'memory-settings-fields');
+   }
+   const inputs={};
+   function numbers(parent,fields){
+    for(const [key,label,min=0] of fields){
+     const input=field(parent,label,s[key],'number');
+     input.min=String(min);input.required=true;inputs[key]=input;
+    }
+   }
+   numbers(group('整理节奏与预算'),[
+    ['batch_messages','批量整理消息数',1],['idle_seconds','空闲整理秒数'],['daily_tokens','自动维护每日 Token 预算（0 为不限额）']
+   ]);
+   numbers(group('聊天上下文'),[
+    ['recent_tokens','近期对话自动注入 Token',1],['recall_tokens','长期记忆自动注入 Token',1],
+    ['continuity_tokens','固定与连续性额度'],['context_window_tokens','模型上下文窗口（0 为未设置）'],['output_reserve_tokens','输出预留 Token']
+   ]);
+   const audit=s.reply_audit||{enabled:true,snapshots:true,retention_days:7};
+   const diagnostics=group('回复诊断','保留期只用于回复依据和脱敏快照。聊天原文和长期记忆单独保存。');
+   const auditEnabled=field(diagnostics,'保留回复依据','','checkbox');
+   const snapshots=field(diagnostics,'故障或需要复核时保留脱敏快照','','checkbox');
+   const days=field(diagnostics,'诊断记录保留天数',audit.retention_days,'number');
+   auditEnabled.checked=audit.enabled;snapshots.checked=audit.snapshots;days.min='1';days.required=true;
+
+   const semantic=group('语义检索','配置嵌入服务后，可按含义检索记忆。');
+   const endpoint=field(semantic,'嵌入服务地址',e.base_url),model=field(semantic,'嵌入模型',e.model);
+   const revision=field(semantic,'嵌入模型版本',e.revision||''),dimensions=field(semantic,'指定维度（0 使用服务默认）',e.dimensions||0,'number');
+   const key=field(semantic,data.embedding_key_configured?'嵌入密钥（已保存，留空保留）':'嵌入密钥','','password');
+   const clearKey=field(semantic,'清除已保存嵌入密钥','','checkbox');
+   button(semantic,'测试已保存的嵌入服务',async()=>{
+    try{
+     const result=await api('/api/memory/embedding/test',{method:'POST',json:{}});
+     status.textContent='合成测试通过，维度 '+result.dimensions+'，'+(result.reported?'提供商报告':'未报告')+'用量。';
+    }catch(error){status.textContent=error.message}
+   });
+
+   const maintenance=group('独立维护模型','服务地址和模型留空时，整理记忆沿用聊天模型。');
+   const me=field(maintenance,'维护服务地址',m.base_url),mm=field(maintenance,'维护模型',m.model);
+   const mk=field(maintenance,data.maintenance_key_configured?'维护密钥（已保存，留空保留）':'维护密钥','','password');
+   const mc=field(maintenance,'清除已保存维护密钥','','checkbox');
+   const provider=el(el(maintenance,'label','维护服务类型'),'select');
+   for(const [value,label] of [['openai-compatible','OpenAI 兼容'],['deepseek','DeepSeek']])el(provider,'option',label).value=value;
+   provider.value=m.provider||'openai-compatible';
+
+   function advancedValues(){
+    return Array.from(advanced.querySelectorAll('input,select'),n=>n.type==='checkbox'?n.checked:n.value);
+   }
+   const initial=advancedValues();
+   const save=el(form,'button','保存记忆设置','primary');save.type='submit';
+   form.addEventListener('submit',async event=>{
+    event.preventDefault();
+    if(save.disabled)return;
+    const edited=advancedValues().some((v,i)=>v!==initial[i]);
+    if(edited&&!form.checkValidity()){advanced.open=true;form.reportValidity();return}
+    let path='/api/memory/services/automatic',json={enabled:enabled.checked};
+    if(edited){
+     const options={...s,...json,reply_audit:{...audit,enabled:auditEnabled.checked,snapshots:snapshots.checked,retention_days:Number(days.value)}};
+     for(const [name,input] of Object.entries(inputs))options[name]=Number(input.value);
+     path='/api/memory/services';
+     json={settings:options,
+      embedding:{...e,base_url:endpoint.value.trim(),model:model.value.trim(),revision:revision.value.trim(),dimensions:Number(dimensions.value),api_key:key.value},
+      maintenance:{...m,base_url:me.value.trim(),model:mm.value.trim(),api_key:mk.value,provider:provider.value},
+      clear_embedding_key:clearKey.checked,clear_maintenance_key:mc.checked};
+    }
+    save.disabled=true;form.inert=true;
+    try{
+     const saved=await api(path,{method:'POST',json});
+     if(!p.alive())return;
+     const wasOpen=advanced.open;
+     save.remove();form.remove();render(saved,wasOpen);
+     status.textContent='已保存，后续维护与召回使用新设置。';
+    }catch(error){if(p.alive())status.textContent=error.message}
+    finally{form.inert=false;save.disabled=false}
+   });
+  }
+ }
  function mount(parent,scope,onChanged){if(scope)button(parent,'会话记忆',()=>open(scope,onChanged))}
  const host=document.querySelector('#wechat');if(host){const card=el(host,'section',undefined,'card');el(card,'h2','记忆与上下文');el(card,'p','设置自动记忆，查看整理进度。','hint');button(card,'记忆设置',settings);button(card,'整理进度',async()=>{try{showMemoryDetail('记忆整理进度',await api('/api/memory/status'))}catch(e){window.WechatAdmin.notice(e.message,true)}})}
  window.WechatMemory={mount,open,settings,source,showMemoryDetail,relationLabel,relationParticipant};
