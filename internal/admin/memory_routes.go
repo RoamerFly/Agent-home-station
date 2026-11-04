@@ -63,9 +63,26 @@ func (s *Server) memoryRoutes(mux *http.ServeMux) {
 			fail(w, 404, "会话不存在")
 			return
 		}
+		expectedRevision := 0
+		if values, present := r.URL.Query()["revision"]; present {
+			value, e := strconv.Atoi(values[0])
+			if e != nil || value < 1 || len(values) != 1 {
+				fail(w, 400, "来源版本无效")
+				return
+			}
+			expectedRevision = value
+		}
 		ev, e := s.manager.memory.ReadEvent(r.Context(), []string{scope}, r.PathValue("id"))
-		if e != nil {
+		if errors.Is(e, sql.ErrNoRows) {
 			fail(w, 404, "原始来源已不可用或已遗忘")
+			return
+		}
+		if e != nil {
+			fail(w, 500, "原始来源暂时无法读取")
+			return
+		}
+		if expectedRevision != 0 && ev.Revision != expectedRevision {
+			fail(w, 409, "原始来源已更新，请从当前记录重新读取")
 			return
 		}
 		respond(w, 200, ev)

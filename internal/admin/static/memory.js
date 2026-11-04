@@ -25,7 +25,21 @@
  function relationParticipant(item,assertion,side){const id=side==='object'?assertion.object:assertion.subject,known=(item.sources||[]).find(ref=>ref.sender===id);if(known)return known.sender_name||person(id);if(side==='object'&&assertion.object_basis==='literal')return assertion.object_text||id;if(side==='object'&&assertion.object_basis==='relative')return relationParticipant(item,assertion,'subject')+'的'+(assertion.object_text||assertion.predicate);if(side==='subject'&&assertion.subject_text&&!['我','你','您'].includes(assertion.subject_text))return assertion.subject_text;return person(id)}
  function relationLabel(item,a){const predicates={father:'父亲',mother:'母亲',spouse:'配偶',child:'子女',attribute:'相关信息',reports:'转述'};return relationParticipant(item,a,'subject')+' · '+(a.negated?'不是':'')+(predicates[a.predicate]||'关系信息')+' · '+relationParticipant(item,a,'object')}
  function relations(parent,item){for(const a of item.assertions||[]){const row=el(parent,'div',undefined,'conversation-summary');el(row,'strong',relationLabel(item,a));el(row,'p',({explicit:'明确陈述',reported:'他人转述',corrected:'已更正',uncertain:'尚未确定'})[a.state]||'待核对','hint');const reporter=(item.sources||[]).find(ref=>ref.sender===a.asserted_by);el(row,'p','陈述者：'+(reporter?.sender_name||person(a.asserted_by)),'hint')}}
- async function source(scope,id){const p=window.WechatDialogs.open({title:'原始来源'}),status=el(p.body,'p','正在读取…','hint');try{const e=await api('/api/memory/'+scope+'/sources/'+encodeURIComponent(id));if(!p.alive())return;status.textContent=[e.sender_name||person(e.sender),window.WechatActivity?.time(e.at)||e.at,e.complete?'完整原文':'旧记录，完整性未知','版本 '+e.revision].join(' · ');if(e.addressees?.length)el(p.body,'p','对话对象：'+e.addressees.map(person).join('、'),'hint');for(const m of e.incoming_media||[])el(p.body,'p','媒体上传者：'+person(m.uploader_id)+' · '+(({verified:'已读取',observed:'已观察',failed:'未读成功',pending:'等待读取'})[m.observation_state]||'待核对'),'hint');el(p.body,'pre',e.text,'readable-full-text')}catch(e){if(p.alive())status.textContent=e.message}}
+ async function source(scope,id,expectedRevision) {
+  const p=window.WechatDialogs.open({title:'原始来源'}),status=el(p.body,'p','正在读取…','hint');
+  try {
+   const suffix=expectedRevision>0?'?revision='+encodeURIComponent(expectedRevision):'';
+   const e=await api('/api/memory/'+encodeURIComponent(scope)+'/sources/'+encodeURIComponent(id)+suffix);
+   if(!p.alive())return;
+   if(expectedRevision>0 && e.revision!==expectedRevision){status.textContent='来源已更新，无法核对当时的原话。';return}
+   const meta=[e.sender_name||person(e.sender),window.WechatActivity?.time(e.at)||e.at,e.complete?'完整原文':'旧记录，完整性未知','版本 '+e.revision];
+   if(expectedRevision===0)meta.push('未记录当时版本，以下为当前原文');
+   status.textContent=meta.join(' · ');
+   if(e.addressees?.length)el(p.body,'p','对话对象：'+e.addressees.map(person).join('、'),'hint');
+   for(const m of e.incoming_media||[])el(p.body,'p','媒体上传者：'+person(m.uploader_id)+' · '+(({verified:'已读取',observed:'已观察',failed:'未读成功',pending:'等待读取'})[m.observation_state]||'待核对'),'hint');
+   el(p.body,'pre',e.text,'readable-full-text');
+  } catch(error){if(p.alive())status.textContent=error.message}
+ }
  function chooseCorrectionSource(scope,subject,onPick){
   const panel=window.WechatDialogs.open({title:'选择更正依据',subtitle:'从当前会话选择一条用来更正的原话。'});
   const form=el(panel.body,'form'),query=field(form,'搜索原话');

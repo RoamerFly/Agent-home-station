@@ -51,6 +51,54 @@ func TestTextCorrectionCannotSilentlyEraseRelationship(t *testing.T) {
 	}
 }
 
+func TestMemorySourceReadChecksScopeAndOptionalRevision(t *testing.T) {
+	f := setup(t)
+	cfg := f.manager.Config().Companion
+	cfg.Permissions.Remember = true
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "source@chatroom", IsGroup: true, TraceID: "source-message", Sender: "member", Text: "第一版来源"}
+	if err := f.manager.memory.Observe(in, cfg, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	scope := companion.ScopeID(in.Channel, in.Account, in.Thread)
+	record, err := f.manager.memory.Read(scope, cfg, time.Now())
+	if err != nil || len(record.Messages) != 1 {
+		t.Fatal(err)
+	}
+	event, err := f.manager.memory.ReadEvent(t.Context(), []string{scope}, record.Messages[0].EventID)
+	if err != nil || event.Revision < 1 {
+		t.Fatal(err)
+	}
+	f.login()
+	path := "/api/memory/" + scope + "/sources/" + event.ID
+	if code, body, _ := f.request("GET", path, nil, false, false); code != 200 || !bytes.Contains(body, []byte("第一版来源")) {
+		t.Fatalf("legacy source read: %d %s", code, body)
+	}
+	if code, _, _ := f.request("GET", path+"?revision="+fmt.Sprint(event.Revision), nil, false, false); code != 200 {
+		t.Fatalf("current source revision rejected: %d", code)
+	}
+	for _, revision := range []string{"", "0", "abc", "1&revision=2"} {
+		if code, _, _ := f.request("GET", path+"?revision="+revision, nil, false, false); code != 400 {
+			t.Fatalf("invalid source revision %q: %d", revision, code)
+		}
+	}
+	if code, body, _ := f.request("GET", path+"?revision="+fmt.Sprint(event.Revision+1), nil, false, false); code != 409 || bytes.Contains(body, []byte("第一版来源")) {
+		t.Fatalf("mismatched source revision exposed body: %d %s", code, body)
+	}
+	otherScope := companion.ScopeID("wechat", "other-account", "source@chatroom")
+	if code, _, _ := f.request("GET", "/api/memory/"+otherScope+"/sources/"+event.ID, nil, false, false); code != 404 {
+		t.Fatalf("cross-account source accessible: %d", code)
+	}
+	if code, _, _ := f.request("GET", "/api/memory/"+scope+"/sources/missing-event?revision=1", nil, false, false); code != 404 {
+		t.Fatalf("missing source admitted: %d", code)
+	}
+	if err := f.manager.memory.Clear(scope); err != nil {
+		t.Fatal(err)
+	}
+	if code, body, _ := f.request("GET", path+"?revision="+fmt.Sprint(event.Revision), nil, false, false); code != 404 || bytes.Contains(body, []byte(in.Text)) {
+		t.Fatalf("cleared source exposed: %d %s", code, body)
+	}
+}
+
 func TestExperienceViewsRequireCurrentAccountAndKnownView(t *testing.T) {
 	f := setup(t)
 	cfg := f.manager.Config().Companion

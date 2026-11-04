@@ -155,7 +155,7 @@
       if (source.revision) meta.push('来源版本 ' + source.revision);
       make(b, 'small', meta.join(' · '));
       make(b, 'span', quote ? '“' + quote + '”' : '查看原始记录');
-      b.addEventListener('click', () => window.WechatMemory?.source(state.scope, source.event_id));
+      b.addEventListener('click', () => window.WechatMemory?.source(state.scope, source.event_id, source.revision));
     });
   }
   function render() {

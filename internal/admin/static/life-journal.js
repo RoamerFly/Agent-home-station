@@ -73,7 +73,7 @@
   const button = node(row, 'button', '查看依据', 'life-journal-source');
   button.type = 'button';
   button.dataset.sourceId = source.event_id;
-  button.addEventListener('click', () => window.WechatMemory?.source(state.selected, source.event_id));
+  button.addEventListener('click', () => window.WechatMemory?.source(state.selected, source.event_id, source.revision));
  }
  function renderExperiences(items) {
   const parent = experiences(); parent.replaceChildren();
@@ -111,7 +111,7 @@
     if (text(source.observation_excerpt)) node(row, 'p', source.observation_excerpt, 'life-journal-quote');
     const button = node(row, 'button', '查看观察依据', 'life-journal-source');
     button.type = 'button'; button.dataset.sourceId = source.event_id;
-    button.addEventListener('click', () => window.WechatMemory?.source(state.selected, source.event_id));
+    button.addEventListener('click', () => window.WechatMemory?.source(state.selected, source.event_id, source.revision));
    }
   }
  }

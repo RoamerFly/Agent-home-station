@@ -139,9 +139,57 @@
  function rounds(){if(projectionSource!==state.items){projected=window.WechatRounds.project(state.items);projectionSource=state.items}return projected}
  async function diagnose(scope,a,status){const confirm=window.WechatDialogs.open({title:'手动诊断草稿',subtitle:'会使用当前模型并计入用量，只读取这条已保存草稿及仍有效的来源。不会发送微信、修改草稿或重试原任务。'}),result=node(confirm.body,'p','确认后开始诊断。','hint');const run=button(confirm.body,'开始诊断',async()=>{run.disabled=true;result.textContent='正在诊断…';try{const data=await window.WechatAdmin.api('/api/memory/'+scope+'/reply-audits/'+encodeURIComponent(a.id)+'/diagnose',{method:'POST',json:{}});if(!confirm.alive())return;const d=data.diagnosis||{},lines=[];if(d.action)lines.push('结论：'+({reply:'草稿可保留',silent:'建议不发送'}[d.action]||d.action));if(d.reason)lines.push('说明：'+d.reason);if(Array.isArray(d.messages)&&d.messages.length)lines.push('诊断后的草稿：'+d.messages.join('\n'));
     result.textContent=lines.join('\n')||'诊断已完成；没有发送微信。';status.textContent='手动诊断完成，结果只在本窗口显示。'}catch(e){if(confirm.alive())result.textContent=e.message;status.textContent='手动诊断未完成；原草稿未修改，也没有发送微信。'}finally{run.disabled=false}});run.className='primary'}
- function evidenceCard(parent,a,scope,status){const card=node(parent,'article',undefined,'conversation-summary');const state=({validated:'已完成本地来源与对象校验',reviewed:'旧版模型诊断已完成',checked:'旧版模型诊断已完成',repaired_and_checked:'旧版诊断后草稿已校验',blocked:'已停止未核实内容',failed:'处理未完成',silent:'选择安静',initial_check_failed:'旧版模型诊断未完成，草稿未发送',repair_check_failed:'旧版修复诊断未完成，草稿未发送',review_rejected:'旧版诊断未通过，草稿未发送',evidence_changed:'来源已变化，草稿已作废'})[a.state]||(/failed|invalid|rejected|no_supported/.test(a.state||'')?'核验未通过，已停止发送':'回复依据');node(card,'h3',state);node(card,'p',time(a.at),'hint');for(const detail of reviewDetails(a))node(card,'p',detail,'hint review-detail');const actions=node(card,'div',undefined,'dialog-actions');button(actions,'手动诊断草稿',()=>diagnose(scope,a,status));for(const c of a.contexts||[]){node(card,'p',c.target_ids?.length?'回复对象：'+c.target_ids.map(id=>window.WechatNames?.display(id,'群成员')||'群成员').join('、'):'面向当前会话');if(c.quote_required)node(card,'p','已要求引用原消息，避免接错话。','hint');if(c.risk_flags?.length)node(card,'p','已检查人物、来源或话题变化。','hint');const refs=[...new Set([c.anchor_event_id,...(c.source_event_ids||[]),...(c.media_source_ids||[])].filter(Boolean))];for(const id of refs)button(actions,'查看参考消息',()=>window.WechatMemory.source(scope,id));if(c.media_source_ids?.length)node(card,'p','参考了 '+c.media_source_ids.length+' 条已关联的媒体来源。','hint')}if(!(a.contexts||[]).length)node(card,'p','这次处理没有形成可发送的回复。','hint');return card}
+ const missingSources = '这次互动没有可核对的来源记录。';
+ function auditSources(audit, scope) {
+  const records = new Map();
+  const versions = new Map((audit.sources || []).filter(s => s.scope === scope).map(s => [s.event_id, s.revision]));
+  const referenced = new Set();
+  function add(id, revision, role) {
+   if (!id) return;
+   const key = JSON.stringify([id, revision]);
+   if (!records.has(key)) records.set(key, {id, revision, roles: new Set()});
+   records.get(key).roles.add(role);
+  }
+  for (const context of audit.contexts || []) {
+   const roles = new Map();
+   if (context.anchor_event_id) roles.set(context.anchor_event_id, '触发消息');
+   for (const id of context.media_source_ids || []) roles.set(id, id === context.anchor_event_id ? '触发消息及媒体来源' : '媒体来源');
+   for (const id of context.source_event_ids || []) if (!roles.has(id)) roles.set(id, '参考消息');
+   for (const [id, role] of roles) {
+    add(id, context.source_versions?.[id] || versions.get(id) || 0, role);
+    referenced.add(id);
+   }
+  }
+  for (const [id, revision] of versions) if (!referenced.has(id)) add(id, revision || 0, '上下文来源');
+  return Array.from(records.values());
+ }
+ function evidenceCard(parent,a,scope,status) {
+  const card=node(parent,'article',undefined,'conversation-summary');
+  const state=({validated:'已完成本地来源与对象校验',reviewed:'旧版模型诊断已完成',checked:'旧版模型诊断已完成',repaired_and_checked:'旧版诊断后草稿已校验',blocked:'已停止未核实内容',failed:'处理未完成',silent:'选择安静',initial_check_failed:'旧版模型诊断未完成，草稿未发送',repair_check_failed:'旧版修复诊断未完成，草稿未发送',review_rejected:'旧版诊断未通过，草稿未发送',evidence_changed:'来源已变化，草稿已作废'})[a.state]||(/failed|invalid|rejected|no_supported/.test(a.state||'')?'核验未通过，已停止发送':'回复依据');
+  node(card,'h3',state);node(card,'p',time(a.at),'hint');
+  for(const detail of reviewDetails(a))node(card,'p',detail,'hint review-detail');
+  for(const c of a.contexts||[]){
+   node(card,'p',c.target_ids?.length?'回复对象：'+c.target_ids.map(id=>window.WechatNames?.display(id,'群成员')||'群成员').join('、'):'面向当前会话');
+   if(c.quote_required)node(card,'p','已要求引用原消息，避免接错话。','hint');
+   if(c.risk_flags?.length)node(card,'p','已检查人物、来源或话题变化。','hint');
+  }
+  const actions=node(card,'div',undefined,'dialog-actions');
+  const sources=auditSources(a,scope);
+  if (!sources.length) node(card,'p',missingSources,'hint');
+  let remaining;
+  for (const [index,ref] of sources.entries()) {
+   if(index===4 && sources.length>5){
+    const details=node(card,'details');
+    node(details,'summary','其余 '+(sources.length-index)+' 条来源');
+    remaining=node(details,'div',undefined,'dialog-actions');
+   }
+   const label=Array.from(ref.roles).join('、')+' '+(index+1);
+   button(remaining||actions,label,()=>window.WechatMemory.source(scope,ref.id,ref.revision),'secondary reply-source-link');
+  }
+  button(actions,'手动诊断草稿',()=>diagnose(scope,a,status));
+ }
  async function appendReplyEvidence(parent,thread,message){
-  if(!thread||!message)return;
+  if(!thread||!message){node(parent,'p',missingSources,'hint');return}
   const section=node(parent,'section');section.hidden=true;
   const params=new URLSearchParams({thread_id:thread,message_id:message,limit:'20'});
   const list=node(section,'div'),status=node(section,'p','','hint');
@@ -155,9 +203,9 @@
     if(!section.isConnected)return;
     for(const a of data.items||[])evidenceCard(list,a,data.scope,status);
     offset=data.next_offset;more.hidden=!data.has_more;
-    status.textContent='';section.hidden=!list.childElementCount;
+    status.textContent=list.childElementCount?'':missingSources;section.hidden=false;
    }catch(e){
-    if(section.isConnected&&e.status!==404){section.hidden=false;status.textContent='未能读取回复依据：'+e.message}
+    if(section.isConnected){section.hidden=false;status.textContent=e.status===404?missingSources:'未能读取回复依据：'+e.message}
    }finally{more.disabled=false}
   }
   await load();
