@@ -59,6 +59,10 @@ if($Test){
  & $windowRunner $windowTests
  if($LASTEXITCODE -ne 0){throw 'Desktop window lifecycle tests failed.'}
 }
+# Incremental desktop updates need the matching plugin launch protocol too.
+$broker=Join-Path $OutputDirectory 'runtimes\windows-agent-host'
+New-Item -ItemType Directory -Force -Path $broker | Out-Null
+foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_host.pyw')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
 if($Portable){
  $resourceArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes');MediaDirectory=$MediaDirectory;DocumentPythonPackagesDirectory=$DocumentPythonPackagesDirectory;DocumentTesseractDirectory=$DocumentTesseractDirectory;DocumentFontsDirectory=$DocumentFontsDirectory}
  & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') @resourceArgs
@@ -68,9 +72,6 @@ if($Portable){
  if($GoSourcePatch){$nativeArgs.GoSourcePatch=$GoSourcePatch}
  & (Join-Path $PSScriptRoot 'Build-WindowsNative.ps1') @nativeArgs
  if($LASTEXITCODE -ne 0){throw 'Windows native build failed.'}
- $broker=Join-Path $OutputDirectory 'runtimes\windows-agent-host'
- New-Item -ItemType Directory -Force -Path $broker | Out-Null
- foreach($name in @('windows_agent_host.pyw','windows_plugin_host.pyw','windows_lpac.py')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
  $music=Join-Path $OutputDirectory 'runtimes\windows-music'
  New-Item -ItemType Directory -Force -Path $music | Out-Null
  Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.py' | Where-Object {$_.Name -notlike 'test_*'} | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $music}
