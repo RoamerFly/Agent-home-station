@@ -172,6 +172,13 @@ pre,.technical-json,.agent-task-row pre { white-space:pre-wrap; overflow-wrap:an
 .conversation-actions button { min-height:32px; padding:5px 9px; font-size:12px; }
 #conversation-close { display:none; }
 #memory-content { flex:1; min-height:0; overflow:auto; scrollbar-gutter:stable; padding:0 10px 0 0; }
+.memory-tabs { display:flex; gap:6px; align-items:center; margin:0 0 12px; border-bottom:1px solid var(--line); }
+.memory-tabs button { border:0; border-radius:0; background:transparent; padding:8px 10px; color:var(--muted); }
+.memory-tabs button[data-active="true"] { color:var(--accent); box-shadow:inset 0 -2px 0 var(--accent); }
+.memory-tab-panel[hidden] { display:none; }
+.memory-experience-list { display:grid; gap:10px; }
+.memory-experience-list .conversation-summary { margin:0; }
+.memory-experience-item blockquote { margin:10px 0 0; color:var(--muted); }
 .memory-message { padding:14px 0; margin:0; border:0; border-bottom:1px solid var(--line); background:transparent; display:block; }
 .memory-message-head { display:flex; gap:6px 10px; align-items:baseline; flex-wrap:wrap; margin-bottom:8px; }
 .memory-message-body,.round-body { display:block; white-space:pre-wrap; font-size:15px; line-height:1.75; }

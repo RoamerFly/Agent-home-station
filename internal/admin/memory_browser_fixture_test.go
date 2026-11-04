@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,16 +22,41 @@ func TestMemoryBrowserFixture(t *testing.T) {
 	}
 	defer m.Close()
 	m.config.Companion.Permissions.Remember = true
-	in := companion.Input{Channel: "wechat", Account: "test", Thread: "synthetic@chatroom", Sender: "alice", SenderName: "合成用户", TraceID: "source-1", Text: "我喜欢红茶，不喝咖啡。"}
-	if e = m.memory.Observe(in, m.config.Companion, time.Now()); e != nil {
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "synthetic@chatroom", IsGroup: true, Sender: "alice", SenderName: "合成用户"}
+	id := companion.ScopeID(in.Channel, in.Account, in.Thread)
+	at := time.Now().UTC().Add(-time.Hour)
+	observe := func(trace, words string) []companion.MemorySource {
+		t.Helper()
+		in.TraceID, in.Text = trace, words
+		at = at.Add(time.Minute)
+		if err := m.memory.Observe(in, m.config.Companion, at); err != nil {
+			t.Fatal(err)
+		}
+		scope, err := m.memory.Read(id, m.config.Companion, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, msg := range scope.Messages {
+			if msg.TraceID == trace && msg.EventID != "" {
+				return []companion.MemorySource{{EventID: msg.EventID, Quote: words}}
+			}
+		}
+		t.Fatalf("missing synthetic source %s", trace)
+		return nil
+	}
+	tea := observe("source-1", "我喜欢红茶，不喝咖啡。")
+	if _, e = m.memory.SaveMemory(t.Context(), companion.MemoryEntry{Scope: id, Subject: in.Sender, Kind: "preference", Detail: "喜欢红茶，不喝咖啡。", Sources: tea}, 0); e != nil {
 		t.Fatal(e)
 	}
-	id := companion.ScopeID("wechat", "test", in.Thread)
-	page, e := m.memory.SearchMemory(context.Background(), companion.MemoryQuery{Scopes: []string{id}, Originals: true})
-	if e != nil {
+	plan := observe("postcard", "我们约好周日一起画海边明信片。")
+	if _, e = m.memory.SaveCommitment(t.Context(), companion.MemoryEntry{Scope: id, Subject: in.Sender, CommitmentState: "open", Detail: "周日一起画海边明信片", Sources: plan}); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = m.memory.SaveMemory(context.Background(), companion.MemoryEntry{Scope: id, Subject: "alice", Kind: "preference", Detail: "喜欢红茶，不喝咖啡。", Sources: []companion.MemorySource{{EventID: page.Items[0].Event.ID, Quote: in.Text}}}, 0); e != nil {
+	observe("postcard-rescheduled", "改到周一一起画海边明信片。")
+	in.Sender, in.SenderName = "lin", "小林"
+	visit := observe("visiting-wedding", "今天参加同事家的喜酒，盼我儿子以后也有这一天。")
+	statement := "发言者陈述：" + visit[0].Quote
+	if _, e = m.memory.SaveMemory(t.Context(), companion.MemoryEntry{Scope: id, Subject: in.Sender, Kind: "episode", Detail: statement, Summary: statement, Sources: visit}, 0); e != nil {
 		t.Fatal(e)
 	}
 	h, e := NewHandler(m, "synthetic-browser-password-2026", "")

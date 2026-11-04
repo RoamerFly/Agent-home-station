@@ -111,7 +111,18 @@ func (s *Server) memoryRoutes(mux *http.ServeMux) {
 			fail(w, 400, "未知记忆操作")
 			return
 		}
-		m, e = s.manager.memory.SaveMemory(r.Context(), m, in.Version)
+		if in.Action == "correct" && m.CommitmentState != "" {
+			// Keep the original agreement source as well as the correction's
+			// source. SaveCommitment also enforces matching subject, scope and
+			// a newer cited event rather than silently replacing evidence.
+			m.ID = ""
+			m.Corrects = r.PathValue("id")
+			m.CorrectsVersion = in.Version
+			m.Pinned = false
+			m, e = s.manager.memory.SaveCommitment(r.Context(), m)
+		} else {
+			m, e = s.manager.memory.SaveMemory(r.Context(), m, in.Version)
+		}
 		if e != nil {
 			fail(w, 409, "保存失败，请核对来源与版本")
 			return

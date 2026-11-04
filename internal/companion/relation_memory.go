@@ -64,7 +64,21 @@ func memoryLiteralSource(role, text string, payload []byte) (string, string) {
 }
 
 func reliableMemorySourcesSQL(alias string) string {
-	return " AND NOT EXISTS(SELECT 1 FROM memory_sources reliable_ms JOIN events reliable_e ON reliable_e.id=reliable_ms.event_id WHERE reliable_ms.memory_id=" + alias + ".id AND memory_user_text_reliable(reliable_e.role,reliable_e.text,reliable_e.payload)=0)"
+	// Validate every quote in the serialized payload, rather than only the
+	// memory_sources index. A single event can support more than one exact
+	// quote, and old rows can retain an index entry after a source is suppressed
+	// or revised. Keeping this predicate shared makes recall, embeddings and the
+	// experience page fail closed before pagination.
+	// An edited quote can still explain why an entry is conflicted. Its
+	// source must remain visible, in scope, and reliably attributed.
+	return ` AND NOT EXISTS(
+		SELECT 1 FROM json_each(` + alias + `.payload,'$.sources') src
+		LEFT JOIN events e ON e.id=json_extract(src.value,'$.event_id')
+		WHERE e.id IS NULL OR e.scope!=` + alias + `.scope OR e.suppressed!=0
+		   OR memory_user_text_reliable(e.role,e.text,e.payload)=0
+		   OR (` + alias + `.status='active' AND
+		       (TRIM(COALESCE(json_extract(src.value,'$.quote'),''))=''
+		        OR INSTR(e.text,json_extract(src.value,'$.quote'))=0)))`
 }
 
 type AssertionSource struct {

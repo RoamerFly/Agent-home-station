@@ -201,6 +201,7 @@ func (s *Server) companionRoutes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("GET /api/companion/memory/{id}", s.protected(s.memoryDetail))
 	mux.HandleFunc("GET /api/companion/memory/{id}/history", s.protected(s.memoryHistory))
+	mux.HandleFunc("GET /api/companion/memory/{id}/experiences", s.protected(s.memoryExperiences))
 
 	mux.HandleFunc("POST /api/companion/memory/{id}/preferences", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

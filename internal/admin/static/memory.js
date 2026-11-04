@@ -24,20 +24,93 @@
  const person=id=>window.WechatNames?.display(id,'群成员')||'群成员';
  function relations(parent,item){for(const a of item.assertions||[]){const row=el(parent,'div',undefined,'conversation-summary');const predicates={father:'父亲',mother:'母亲',spouse:'配偶',child:'子女',attribute:'相关信息',reports:'转述'};el(row,'strong',(a.subject_text||person(a.subject))+' · '+(a.negated?'不是':'')+(predicates[a.predicate]||'关系信息')+' · '+(a.object_text||person(a.object)));el(row,'p',({explicit:'明确陈述',reported:'他人转述',corrected:'已更正',uncertain:'尚未确定'})[a.state]||'待核对','hint');el(row,'p','陈述者：'+person(a.asserted_by),'hint')}}
  async function source(scope,id){const p=window.WechatDialogs.open({title:'原始来源'}),status=el(p.body,'p','正在读取…','hint');try{const e=await api('/api/memory/'+scope+'/sources/'+encodeURIComponent(id));if(!p.alive())return;status.textContent=[e.sender_name||person(e.sender),window.WechatActivity?.time(e.at)||e.at,e.complete?'完整原文':'旧记录，完整性未知','版本 '+e.revision].join(' · ');if(e.addressees?.length)el(p.body,'p','对话对象：'+e.addressees.map(person).join('、'),'hint');for(const m of e.incoming_media||[])el(p.body,'p','媒体上传者：'+person(m.uploader_id)+' · '+(({verified:'已读取',observed:'已观察',failed:'未读成功',pending:'等待读取'})[m.observation_state]||'待核对'),'hint');el(p.body,'pre',e.text,'readable-full-text')}catch(e){if(p.alive())status.textContent=e.message}}
- function correct(scope,m,reload){const p=window.WechatDialogs.open({title:'更正长期记忆'}),form=el(p.body,'form'),content=field(form,'更正内容',m.detail,'textarea'),id=field(form,'新来源事件编号'),quote=field(form,'该来源中的精确原句','','textarea'),status=el(form,'p','','hint');status.setAttribute('role','status');content.required=true;if(!m.manual){id.required=true;quote.required=true}
+ function chooseCorrectionSource(scope,subject,onPick){
+  const panel=window.WechatDialogs.open({title:'选择更正依据',subtitle:'从当前会话选择一条用来更正的原话。'});
+  const form=el(panel.body,'form'),query=field(form,'搜索原话');
+  el(form,'button','搜索','primary').type='submit';
+  const status=el(panel.body,'p','','hint'),list=el(panel.body,'div');
+  status.setAttribute('role','status');
+  const more=button(panel.body,'加载更多',()=>load(false),'secondary');
+  let cursor='',controller;
+  async function load(reset){
+   if(reset){controller?.abort();cursor='';list.replaceChildren()}
+   const current=new AbortController();
+   controller=current;more.disabled=true;status.textContent='正在读取…';
+   const params=new URLSearchParams({query:query.value,originals:'true'});
+   if(subject)params.set('subject',subject);
+   if(cursor)params.set('cursor',cursor);
+   try{
+    const {page}=await api('/api/memory/'+encodeURIComponent(scope)+'?'+params,{signal:current.signal});
+    if(!panel.alive()||controller!==current)return;
+    for(const {event} of page.items){
+     if(event?.role!=='user'||!event.text||(subject&&event.sender!==subject))continue;
+     const row=el(list,'article',undefined,'conversation-summary');
+     window.WechatDialogs.text(row,event.text,{title:'完整原话'});
+     el(row,'p',[event.sender_name||person(event.sender),event.at].filter(Boolean).join(' · '),'hint');
+     button(row,'选用这条',()=>{onPick({event_id:event.id,quote:event.text});panel.close()});
+    }
+    cursor=page.next_cursor||'';more.hidden=!page.has_more;
+    status.textContent=list.childElementCount?'选择原话后可缩短引句。':cursor?'本页没有合适的原话，可继续查看。':'没有匹配的原话。';
+   }catch(error){if(!current.signal.aborted&&panel.alive())status.textContent=error.message}
+   finally{if(controller===current)more.disabled=false}
+  }
+  form.addEventListener('submit',event=>{event.preventDefault();load(true)});
+  panel.dialog.addEventListener('close',()=>controller?.abort(),{once:true});load(true);
+ }
+ function correct(scope,m,reload,selectSource=false){const p=window.WechatDialogs.open({title:'更正长期记忆'}),form=el(p.body,'form'),content=field(form,'更正内容',m.detail,'textarea'),sourceFields=selectSource?el(form,'div',undefined,'memory-correction-source'):form,id=field(sourceFields,selectSource?'来源事件编号':'新来源事件编号'),quote=field(sourceFields,'该来源中的精确原句','','textarea'),status=el(form,'p','','hint');status.setAttribute('role','status');content.required=true;if(!m.manual){id.required=true;quote.required=true}
+  if(selectSource){const picker=button(form,'从当前会话选择原话',()=>chooseCorrectionSource(scope,m.subject,source=>{id.value=source.event_id;quote.value=source.quote;status.textContent='已选取来源。请核对并按需要缩短精确引句。'}),'secondary');picker.type='button';const manual=el(form,'details',undefined,'disclosure');el(manual,'summary','手工填写来源编号（兼容）');manual.append(sourceFields)}
   const save=el(form,'button','保存更正','primary');save.type='submit';form.addEventListener('submit',async e=>{e.preventDefault();if(!form.reportValidity())return;save.disabled=true;try{await api('/api/memory/'+scope+'/entries/'+m.id,{method:'POST',json:{action:'correct',expected_revision:m.version,detail:content.value,sources:id.value?[{event_id:id.value.trim(),quote:quote.value}]:[]}});p.close();reload()}catch(e){status.textContent=e.message}finally{save.disabled=false}})
  }
- function open(scope){const p=window.WechatDialogs.open({title:'长期记忆与来源',subtitle:'检索当前会话；原文、自动提炼和推测分别显示。'}),form=el(p.body,'form'),q=field(form,'搜索内容'),original=field(form,'搜索原始消息','','checkbox'),status=el(p.body,'p','正在读取…','hint'),list=el(p.body,'div'),search=el(form,'button','搜索','primary');search.type='submit';status.setAttribute('role','status');let cursor='',busy=false,controller;
-  button(p.body,'重新整理与补建索引',async()=>{try{await api('/api/memory/'+scope+'/rebuild',{method:'POST',json:{}});status.textContent='已安排后台重建。可刷新查看进度；显式重建不受自动维护日预算限制。'}catch(e){status.textContent=e.message}});const more=button(p.body,'加载更多',()=>load(false));
+ function experienceLabel(item){
+  const state={open:'共同约定',ended:'已结束的约定',cancelled:'已取消约定'}[item.commitment_state];
+  return state||(item.perspective==='source_statement'||item.perspective==='reported_statement'?'成员陈述':'聊过的事');
+ }
+ function experiencePanel(scope,onChanged,body){
+  const alive=()=>body.isConnected,status=el(body,'p','正在读取…','hint'),list=el(body,'div',undefined,'memory-experience-list');status.setAttribute('role','status');
+  let cursor='',busy=false,controller;
+  const more=button(body,'加载更多经历',()=>load(false),'secondary');
+  function changed(){onChanged?.();load(true)}
+  function render(item){
+   const row=el(list,'article',undefined,'conversation-summary memory-experience-item');el(row,'h3',experienceLabel(item));
+   window.WechatDialogs.text(row,item.detail||item.summary||'未命名经历',{title:'完整共同经历'});
+   if(item.summary&&item.summary!==item.detail)el(row,'p',item.summary,'hint');
+   const refs=item.sources,speakers=new Map();
+   for(const ref of refs){
+    if(ref.sender)speakers.set(ref.sender,ref.sender_name||person(ref.sender));
+   }
+   const meta=['发言者：'+([...speakers.values()].join('、')||'未知')];
+   if(item.subject&&!speakers.has(item.subject))meta.push('相关人物：'+person(item.subject));
+   if(item.updated)meta.push('更新于 '+window.WechatActivity.time(item.updated));
+   meta.push('第 '+item.version+' 版');
+   el(row,'p',meta.join(' · '),'hint');
+   const detail=String(item.detail||item.summary||'').replace(/^\s*(?:成员|发言者)陈述：\s*/,'').trim();for(const ref of refs)if(ref.quote&&detail!==String(ref.quote).trim())el(row,'blockquote',ref.quote);
+   const actions=el(row,'div',undefined,'dialog-actions');for(const [index,ref] of refs.entries()){const label=refs.length>1?'查看来源 '+(index+1)+(ref.sender_name||ref.sender?'（'+(ref.sender_name||person(ref.sender))+'）':''):'查看来源';button(actions,label,()=>source(scope,ref.event_id));}
+   button(actions,'完整记忆与修订',async()=>{try{showMemoryDetail('记忆来源与版本',await api('/api/memory/'+encodeURIComponent(scope)+'/entries/'+encodeURIComponent(item.id)))}catch(e){status.textContent=e.message}});
+   const entry={...item,sources:refs};button(actions,'更正',()=>correct(scope,entry,changed,true));
+   button(actions,'遗忘',async()=>{const confirm=window.WechatDialogs.open({title:'遗忘这段经历',subtitle:'这段经历不再用于自动召回；只读历史归档仍保留。'});button(confirm.body,'确认遗忘',async()=>{try{await api('/api/memory/'+encodeURIComponent(scope)+'/entries/'+encodeURIComponent(item.id),{method:'POST',json:{action:'forget',expected_revision:item.version}});confirm.close();changed()}catch(e){status.textContent=e.message}})});
+  }
+  async function load(reset){
+   if(busy&&!reset)return;if(reset){controller?.abort();cursor='';list.replaceChildren()}busy=true;controller=new AbortController();const current=controller;more.disabled=true;body.setAttribute('aria-busy','true');
+   try{const params=new URLSearchParams({limit:'20'});if(cursor)params.set('cursor',cursor);const data=await api('/api/companion/memory/'+encodeURIComponent(scope)+'/experiences?'+params,{signal:current.signal});if(!alive()||controller!==current)return;
+    const items=data.items||[];for(const item of items)render(item);cursor=data.next_cursor||'';more.hidden=!data.has_more;
+    status.textContent=items.length||list.children.length?'只显示有来源的共同经历。':'这个会话还没有可展示的共同经历。';
+    if(!list.children.length)el(list,'p','暂时没有共同经历。之后形成的约定和可核对经历会显示在这里。','empty');
+   }catch(e){if(!current.signal.aborted&&alive())status.textContent=e.message}finally{if(controller===current){busy=false;more.disabled=false;body.removeAttribute('aria-busy')}}
+  }
+  return {load,dispose:()=>controller?.abort()};
+ }
+ function open(scope,onChanged){const p=window.WechatDialogs.open({title:'会话记忆',subtitle:'共同经历与全部记忆都保留来源；更正或遗忘会同步更新。'}),tabs=el(p.body,'div',undefined,'memory-tabs'),experiencePane=el(p.body,'section',undefined,'memory-tab-panel'),allPane=el(p.body,'section',undefined,'memory-tab-panel'),form=el(allPane,'form'),q=field(form,'搜索内容'),original=field(form,'搜索原始消息','','checkbox'),status=el(allPane,'p','正在读取…','hint'),list=el(allPane,'div'),search=el(form,'button','搜索','primary');search.type='submit';status.setAttribute('role','status');let cursor='',busy=false,controller;
+  const experienceView=experiencePanel(scope,onChanged,experiencePane),experienceTab=button(tabs,'共同经历',()=>select('experience'),'quiet'),allTab=button(tabs,'全部记忆',()=>select('all'),'quiet');function select(name){const experiences=name==='experience';experiencePane.hidden=!experiences;allPane.hidden=experiences;experienceTab.dataset.active=String(experiences);allTab.dataset.active=String(!experiences);experienceTab.setAttribute('aria-pressed',String(experiences));allTab.setAttribute('aria-pressed',String(!experiences));if(experiences)experienceView.load(true);else load(true)}select('experience');
+  button(allPane,'重新整理与补建索引',async()=>{try{await api('/api/memory/'+scope+'/rebuild',{method:'POST',json:{}});status.textContent='已安排后台重建。可刷新查看进度；显式重建不受自动维护日预算限制。'}catch(e){status.textContent=e.message}});const more=button(allPane,'加载更多',()=>load(false));
   async function load(reset){if(busy){controller?.abort()}busy=true;controller=new AbortController();const current=controller;if(reset){cursor='';list.replaceChildren()}more.disabled=true;p.body.setAttribute('aria-busy','true');try{const params=new URLSearchParams({query:q.value,originals:String(original.checked)});if(cursor)params.set('cursor',cursor);const data=await api('/api/memory/'+scope+'?'+params,{signal:current.signal});if(!p.alive()||controller!==current)return;
    status.textContent=data.status.events+' 条来源，'+data.status.entries+' 条派生记忆，'+data.status.vectors+' 条向量。'+(data.page.degraded?'当前使用词法检索。':'')+' '+(data.status.jobs||[]).map(x=>({idle:'已整理',running:'整理中',pending:'待整理',failed:'整理失败，稍后重试',budget_wait:'已达到自动维护预算'}[x.state]||x.state)).join('；');
    for(const hit of data.page.items||[]){const row=el(list,'article',undefined,'conversation-summary');if(hit.event){el(row,'h3','原始消息');window.WechatDialogs.text(row,hit.event.text,{title:'原始消息预览'});el(row,'p',hit.event.at+' · '+hit.event.sender,'hint');button(row,'查看完整来源',()=>source(scope,hit.event.id));continue}
     const m=hit.entry;el(row,'h3',(names[m.kind]||m.kind)+' · '+memoryState(m)+(m.pinned?' · 已固定':''));window.WechatDialogs.text(row,m.detail,{title:'完整长期记忆'});el(row,'p',person(m.subject)+' · 版本 '+m.version+(m.inference?' · 尚未确定':'')+(m.manual?' · 主动笔记':''),'hint');relations(row,m);
-    const actions=el(row,'div',undefined,'dialog-actions');for(const ref of m.sources||[])button(actions,'查看来源',()=>source(scope,ref.event_id));button(actions,'完整记忆与修订',async()=>{try{showMemoryDetail('记忆来源与版本',await api('/api/memory/'+scope+'/entries/'+m.id))}catch(e){status.textContent=e.message}});button(actions,'更正',()=>correct(scope,m,()=>load(true)));
-    for(const [action,label]of [[m.pinned?'unpin':'pin',m.pinned?'取消固定':'固定'],['forget','遗忘']])button(actions,label,async()=>{if(action==='forget'){const confirm=window.WechatDialogs.open({title:'遗忘这条记忆',subtitle:'该记忆及其来源不再用于自动召回；只读历史归档仍保留。'});button(confirm.body,'确认遗忘',async()=>{await change();confirm.close()})}else await change();async function change(){try{await api('/api/memory/'+scope+'/entries/'+m.id,{method:'POST',json:{action,expected_revision:m.version}});await load(true)}catch(e){status.textContent=e.message}}});
+    const refreshAll=()=>{onChanged?.();load(true)},actions=el(row,'div',undefined,'dialog-actions');for(const ref of m.sources||[])button(actions,'查看来源',()=>source(scope,ref.event_id));button(actions,'完整记忆与修订',async()=>{try{showMemoryDetail('记忆来源与版本',await api('/api/memory/'+scope+'/entries/'+m.id))}catch(e){status.textContent=e.message}});button(actions,'更正',()=>correct(scope,m,refreshAll));
+    for(const [action,label]of [[m.pinned?'unpin':'pin',m.pinned?'取消固定':'固定'],['forget','遗忘']])button(actions,label,async()=>{if(action==='forget'){const confirm=window.WechatDialogs.open({title:'遗忘这条记忆',subtitle:'该记忆及其来源不再用于自动召回；只读历史归档仍保留。'});button(confirm.body,'确认遗忘',async()=>{await change();confirm.close()})}else await change();async function change(){try{await api('/api/memory/'+scope+'/entries/'+m.id,{method:'POST',json:{action,expected_revision:m.version}});refreshAll()}catch(e){status.textContent=e.message}}});
    }cursor=data.page.next_cursor||'';more.hidden=!data.page.has_more;if(!list.children.length)el(list,'p','没有匹配记忆。自动整理完成后可在这里检查来源。','empty');
   }catch(e){if(!current.signal.aborted&&p.alive())status.textContent=e.message}finally{if(controller===current){busy=false;more.disabled=false;p.body.removeAttribute('aria-busy')}}}
-  form.addEventListener('submit',e=>{e.preventDefault();load(true)});p.dialog.addEventListener('close',()=>controller?.abort(),{once:true});load(true)
+  form.addEventListener('submit',e=>{e.preventDefault();load(true)});p.dialog.addEventListener('close',()=>{controller?.abort();experienceView.dispose()},{once:true})
  }
  async function settings(){const p=window.WechatDialogs.open({title:'记忆设置'}),status=el(p.body,'p','正在读取…','hint');status.setAttribute('role','status');try{const data=await api('/api/memory/services');if(!p.alive())return;status.textContent='自动整理使用配置的维护模型，留空时沿用聊天模型。向量服务配置后才启用语义召回。';const form=el(p.body,'form',undefined,'memory-settings-form'),s=data.settings,e=data.embedding,m=data.maintenance,inputs={};
   const enabled=field(form,'启用自动记忆','','checkbox');enabled.checked=s.enabled;
@@ -48,7 +121,7 @@
   const save=el(form,'button','保存记忆设置','primary');save.type='submit';form.addEventListener('submit',async event=>{event.preventDefault();if(!form.reportValidity())return;save.disabled=true;try{const options={...s,enabled:enabled.checked,reply_audit:{enabled:auditEnabled.checked,snapshots:auditSnapshots.checked,retention_days:Number(auditDays.value)}};for(const [k,input]of Object.entries(inputs))options[k]=Number(input.value);await api('/api/memory/services',{method:'POST',json:{settings:options,embedding:{base_url:endpoint.value.trim(),model:model.value.trim(),revision:revision.value.trim(),dimensions:Number(dimensions.value),api_key:key.value},maintenance:{base_url:me.value.trim(),model:mm.value.trim(),api_key:mk.value,provider:provider.value},clear_embedding_key:clearKey.checked,clear_maintenance_key:mc.checked}});key.value='';mk.value='';status.textContent='已保存，后续维护与召回使用新设置。'}catch(e){status.textContent=e.message}finally{save.disabled=false}});
   button(p.body,'测试已保存的嵌入服务',async()=>{try{const result=await api('/api/memory/embedding/test',{method:'POST',json:{}});status.textContent='合成测试通过，维度 '+result.dimensions+'，'+(result.reported?'提供商报告':'未报告')+'用量。'}catch(e){status.textContent=e.message}})
  }catch(e){if(p.alive())status.textContent=e.message}}
- function mount(parent,scope){if(scope){button(parent,'会话记忆',()=>open(scope))}}
+ function mount(parent,scope,onChanged){if(scope)button(parent,'会话记忆',()=>open(scope,onChanged))}
  const host=document.querySelector('#wechat');if(host){const card=el(host,'section',undefined,'card');el(card,'h2','记忆与上下文');el(card,'p','设置自动记忆，查看整理进度。','hint');button(card,'记忆设置',settings);button(card,'整理进度',async()=>{try{showMemoryDetail('记忆整理进度',await api('/api/memory/status'))}catch(e){window.WechatAdmin.notice(e.message,true)}})}
  window.WechatMemory={mount,open,settings,source};
 })();
