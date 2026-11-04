@@ -86,6 +86,18 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 		}
 		respond(w, 200, value)
 	}))
+	mux.HandleFunc("GET /api/mobile/overview", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		observer, ok := s.manager.mobileObservationService()
+		if !ok {
+			respond(w, 200, mobileOverview{Devices: []mobileDeviceOverview{}})
+			return
+		}
+		respond(w, 200, observer.Overview())
+	}))
+	mux.HandleFunc("POST /api/mobile/overview/{device}/observe", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.observe") }))
+	mux.HandleFunc("POST /api/mobile/overview/{device}/pause", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.pause") }))
+	mux.HandleFunc("POST /api/mobile/overview/{device}/takeover", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.takeover") }))
+	mux.HandleFunc("POST /api/mobile/overview/{device}/resume", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.resume") }))
 	mux.HandleFunc("POST /api/mobile/stop", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "tasks.stop") }))
 	mux.HandleFunc("POST /api/mobile/config", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "settings.save") }))
 	mux.HandleFunc("POST /api/mobile/tasks", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "tasks.create") }))
@@ -97,6 +109,7 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 			return
 		}
 		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(data)
 	}))
 	mux.HandleFunc("GET /api/mobile/tasks/{id}/recording/{artifact}", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +128,51 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 // legacy resource URLs and the mobile-control package's declarative UI.
 func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action string) {
 	switch action {
+	case "overview.observe", "overview.pause", "overview.takeover", "overview.resume":
+		var in struct {
+			DeviceID string `json:"device_id"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		if in.DeviceID == "" {
+			in.DeviceID = r.PathValue("device")
+		}
+		observer, ok := s.manager.mobileObservationService()
+		if !ok {
+			fail(w, 409, "手机观察功能暂不可用")
+			return
+		}
+		if in.DeviceID == "" {
+			fail(w, 400, "需要设备编号")
+			return
+		}
+		var result any
+		var err error
+		switch action {
+		case "overview.observe":
+			result, err = observer.ObserveOnce(r.Context(), in.DeviceID)
+		case "overview.pause":
+			result, err = observer.SetObservationPaused(in.DeviceID, true, false)
+		case "overview.takeover":
+			result, err = observer.SetObservationPaused(in.DeviceID, true, true)
+		case "overview.resume":
+			result, err = observer.SetObservationPaused(in.DeviceID, false, false)
+		}
+		if err != nil {
+			switch err.Error() {
+			case "device_observation_paused":
+				fail(w, 409, "设备已暂停或正在由你接管，请先恢复观察")
+			case "device_busy":
+				fail(w, 409, "设备正在执行已授权操作，请稍后观察")
+			case "device_not_authorized":
+				fail(w, 404, "设备未授权给当前手机工具")
+			default:
+				fail(w, 409, "设备连接或观察暂不可用；保留上次观察画面")
+			}
+			return
+		}
+		respond(w, 200, result)
 	case "devices.list":
 		var in struct{}
 		if !decode(w, r, &in) {

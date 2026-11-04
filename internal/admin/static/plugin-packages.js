@@ -190,6 +190,47 @@
   if(stage==='result_mode')return '结果格式不符合此操作。';
   return job?.state==='needs_review'?'结果需要核对；未自动重试。':'';
  }
+ function time(value,fallback='时间待核对'){
+  const instant=new Date(value||'');
+  return !Number.isFinite(instant.getTime())||instant.getTime()<0?fallback:new Intl.DateTimeFormat('zh-CN',{dateStyle:'medium',timeStyle:'medium'}).format(instant);
+ }
+ function phoneConnectionLabel(value,takeover){
+  if(takeover)return '已接管';
+  return ({connected:'已连接',disconnected:'未连接',paused:'已暂停',takeover:'已接管',unknown:'状态待核对'})[value]||'状态待核对';
+ }
+ function renderMobileObservation(panel,data,action,reload,current,archive,message){
+  if(!Object.prototype.hasOwnProperty.call(data,'overview'))return;
+  const overview=data.overview||{},devices=Array.isArray(overview.devices)?overview.devices:[];
+  const workbench=el('section',undefined,'mobile-observation-workbench');
+  workbench.append(el('h4','手机观察'));
+  const summary=el('p',devices.length?'连接状态来自最近一次检查，画面显示最近一次实际截图。':'尚未登记可观察的设备。请先在设备设置中授权设备。','hint');
+  workbench.append(summary);
+  if(!devices.length){panel.append(workbench);return;}
+  const list=el('div',undefined,'mobile-observation-list');
+  for(const device of devices){
+   const card=el('article',undefined,'mobile-observation-card'),head=el('div',undefined,'mobile-observation-head');
+   const title=el('div');title.append(el('strong',device.device_id||'未命名设备'),el('small',phoneConnectionLabel(device.connection_state,device.takeover),'mobile-observation-state'));
+   const checked=el('small','检查于 '+time(device.checked_at,'尚未检查'),'hint');head.append(title,checked);card.append(head);
+   const content=el('div',undefined,'mobile-observation-content'),visual=el('div',undefined,'mobile-observation-visual'),details=el('div',undefined,'mobile-observation-details');
+   details.append(el('p',device.current_app?'上次观察应用：'+device.current_app:'上次观察未取得应用信息','hint'));
+   if(device.screenshot_uri){
+    const image=el('img');image.className='mobile-observation-image';image.alt='此设备最近一次实际截图';image.loading='lazy';image.src=window.WechatAccountContext?.url?.(device.screenshot_uri)||device.screenshot_uri;visual.append(image);
+    visual.append(el('small','观察于 '+time(device.observed_at),'hint'));
+   }else visual.append(el('small','还没有可显示的实际截图。','hint'));
+   if(!archive){
+    const controls=el('div',undefined,'inline-actions mobile-observation-actions');
+    const invoke=(name,label)=>{const control=button(label,async()=>{control.disabled=true;try{await action(name,{device_id:device.device_id});await reload()}catch(error){const detail=error?.message||'观察操作未完成。';try{await reload()}catch{}message(detail,true)}finally{if(current()&&control.isConnected)control.disabled=false}});controls.append(control)};
+    if(device.connection_state==='paused'||device.takeover)invoke('overview.resume','恢复观察');
+    else invoke('overview.observe','观察一次');
+    if(device.connection_state!=='paused'&&!device.takeover)invoke('overview.pause','暂停观察');
+    if(!device.takeover)invoke('overview.takeover','接管设备');
+    details.append(controls);
+   }
+   content.append(details,visual);card.append(content);
+   list.append(card);
+  }
+  workbench.append(list);panel.append(workbench);
+ }
  async function loadJobs(reset){
   const id=state.selected,epoch=state.epoch,box=$('#package-jobs');if(!box)return;if(reset){next=0;box.replaceChildren()}
   try{const page=await api('/api/plugin-packages/'+encodeURIComponent(id)+'/jobs?limit=30&after='+next);if(epoch!==state.epoch||!box.isConnected)return;box.querySelector('[data-more-jobs]')?.remove();next=page.next;
@@ -254,6 +295,7 @@
    if(section.component==='tasks'){
     const controls=el('div',undefined,'inline-actions'),refresh=button('刷新任务',async()=>{try{await reload()}catch(error){message(error.message,true)}}),stop=button('停止全部任务',async()=>{stop.disabled=true;try{await action('tasks.stop');await reload()}catch(error){message(error.message,true)}finally{if(current(scope)&&stop.isConnected)stop.disabled=false}});
     stop.disabled=!(data.tasks||[]).some(task=>['queued','running'].includes(task.state));controls.append(refresh,stop);panel.append(controls);
+    renderMobileObservation(panel,data,action,reload,()=>current(scope),archive,message);
     if(!archive&&section.action==='tasks.create'){
      const form=el('form',undefined,'package-host-task-form'),grid=el('div',undefined,'field-grid'),select=el('select'),goal=el('textarea');select.required=goal.required=true;goal.rows=2;goal.maxLength=1000;goal.placeholder='查看当前页面，描述可见内容，不点击或修改设置';for(const id of data.settings?.devices||[])select.append(new Option(id,id));
      const previous=state.hostRequest;if(previous?.account===scope.account&&previous.id===scope.id){select.value=previous.payload.device_id;goal.value=previous.payload.goal}

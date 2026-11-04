@@ -54,7 +54,7 @@ func (s *Server) pluginHostActionRoutes(mux *http.ServeMux) {
 		installed, err := store.Installed(r.Context(), mobileDevicePluginID)
 		action := r.PathValue("action")
 		if err != nil || installed.Removed {
-			if action == "tasks.cancel" || action == "tasks.stop" {
+			if action == "tasks.cancel" || action == "tasks.stop" || action == "overview.pause" || action == "overview.takeover" || action == "overview.resume" {
 				s.mobileHostAction(w, r, action)
 				return
 			}
@@ -87,7 +87,7 @@ func (s *Server) pluginHostActionRoutes(mux *http.ServeMux) {
 			respond(w, 200, mobilePluginSettings(s.manager.mobile.Settings()))
 			return
 		}
-		if action == "tasks.create" && (!installed.Enabled || s.manager.mobileDeviceReady(r.Context()) != nil) {
+		if (action == "tasks.create" || action == "overview.observe") && (!installed.Enabled || s.manager.mobileDeviceReady(r.Context()) != nil) {
 			fail(w, 409, "手机工具尚未启用、授权或就绪")
 			return
 		}

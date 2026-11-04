@@ -56,7 +56,7 @@ func decodeMobileHostState(state pluginhost.HostState, account string) (mobile.R
 		return mobile.RepositorySnapshot{}, invalid
 	}
 	for key, record := range state.Records {
-		if key == "settings" || key == "manifest" || strings.HasPrefix(key, "workflow:") {
+		if key == "settings" || key == "manifest" || key == mobileObservationControlKey || strings.HasPrefix(key, "workflow:") {
 			continue
 		}
 		if !strings.HasPrefix(key, "task:") {
@@ -156,7 +156,7 @@ func (r *mobileRepository) Commit(ctx context.Context, revision int64, next mobi
 		}
 	}
 	for key := range r.current.Records {
-		if strings.HasPrefix(key, "workflow:") {
+		if key == mobileObservationControlKey || strings.HasPrefix(key, "workflow:") {
 			records[key] = r.current.Records[key]
 			continue
 		}

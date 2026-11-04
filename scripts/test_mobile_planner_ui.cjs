@@ -15,6 +15,7 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:
   const root=path.resolve('internal/admin/static'),mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.svg':'image/svg+xml'};
   await page.route('**/*',async route=>{
    const url=new URL(route.request().url());assert.equal(url.origin,'http://plugins.synthetic');
+   if(/^\/api\/mobile\/tasks\/[^/]+\/screenshot\/[^/]+$/.test(url.pathname))return route.fulfill({body:'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 640"><defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#172554"/><stop offset="1" stop-color="#6d28d9"/></linearGradient></defs><rect width="360" height="640" fill="url(#a)"/><text x="28" y="54" fill="white" font-size="18" font-family="sans-serif">Reader</text><rect x="24" y="92" width="312" height="118" rx="16" fill="#ffffff" fill-opacity=".16"/><rect x="24" y="232" width="312" height="188" rx="16" fill="#ffffff" fill-opacity=".10"/><text x="48" y="130" fill="white" font-size="24" font-family="sans-serif">合成设备画面</text><text x="48" y="165" fill="#dbeafe" font-size="15" font-family="sans-serif">只用于离线视觉验收</text></svg>',contentType:'image/svg+xml'});
    const name=url.pathname==='/'?'index.html':path.basename(url.pathname),file=path.join(root,name);
    if(!fsSync.existsSync(file))return route.fulfill({status:404,body:'not found',contentType:'text/plain'});
    let body=await fs.readFile(file);if(name==='index.html')body=Buffer.from(body.toString().replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,''));
@@ -26,9 +27,9 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:
    document.querySelectorAll('.page').forEach(node=>node.classList.toggle('active-page',node.id==='plugins'));
    document.querySelectorAll('[data-nav-group]').forEach(node=>node.hidden=node.dataset.navGroup!=='wechat');
    document.querySelector('#page-title').textContent='扩展与连接';document.querySelector('#account-select').replaceChildren(new Option('合成验收账号','one'));document.querySelector('#status-label').textContent='微信已登录';
-   window.WechatAccountContext={id:'one',url:path=>path};window.__calls=[];window.__defer='';window.__pending=null;window.__createFailure='';
+   window.WechatAccountContext={id:'one',url:path=>path};window.__calls=[];window.__defer='';window.__pending=null;window.__createFailure='';window.__observeFailure='';
    window.__schema=[{id:'configuration',title:'执行设置',component:'configuration',binding:'host_data.settings',action:'settings.save'},{id:'tasks',title:'设备任务',component:'tasks',binding:'host_data.tasks',action:'tasks.create'},{id:'resources',title:'任务素材',component:'resources',binding:'host_data.resources'},{id:'diagnostics',title:'状态与说明',component:'diagnostics',binding:'host_data.diagnostics',action:'devices.list'}];
-   const fixture=()=>({enabled:false,data:{state:'active',settings:{revision:1,enabled:true,devices:['lab'],actions:['tap'],max_steps:8,max_seconds:120,connection_profile_status:'已登记'},tasks:[{id:'queued',goal:'查看合成页面',state:'queued',device_id:'lab',artifacts:[]}],resources:{},diagnostics:{planner_available:false,planner_reason:'手机规划工具未安装，暂不能新建任务。'}}});
+   const fixture=()=>({enabled:false,data:{state:'active',settings:{revision:1,enabled:true,devices:['lab'],actions:['tap'],max_steps:8,max_seconds:120,connection_profile_status:'已登记'},tasks:[{id:'queued',goal:'查看合成页面',state:'queued',device_id:'lab',artifacts:[]}],resources:{},diagnostics:{planner_available:false,planner_reason:'手机规划工具未安装，暂不能新建任务。'},overview:{checked_at:'2026-11-05T06:00:00Z',devices:[{device_id:'lab',connection_state:'disconnected',checked_at:'2026-11-05T06:00:00Z',current_app:'com.example.reader',observed_at:'2026-11-05T05:58:00Z',task_id:'queued',observation_id:'frame-1',screenshot_uri:'/api/mobile/tasks/queued/screenshot/frame-1'}]}}});
    window.__accounts={one:fixture(),two:fixture()};window.__accounts.two.data.settings.devices=['account-two'];
    window.WechatAdmin={isAuthenticated:()=>true,api:async(url,opt={})=>{
     const owner=window.WechatAccountContext.id,fixture=window.__accounts[owner],body=structuredClone(opt.json);window.__calls.push({url,method:opt.method||'GET',body,account:owner});
@@ -41,6 +42,10 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:
     if(url.endsWith('/actions/tasks.create')){if(window.__createFailure){const kind=window.__createFailure;window.__createFailure='';if(kind==='unknown')return {};throw new Error('合成网络中断，提交状态未知')}const task={id:'created-'+window.__calls.length,goal:body.goal,state:'queued',device_id:body.device_id,artifacts:[]};fixture.data.tasks.push(task);return task}
     if(url.endsWith('/actions/tasks.cancel')){fixture.data.tasks.find(t=>t.id===body.id).state='cancelled';return {cancelled:true}}
     if(url.endsWith('/actions/tasks.stop')){fixture.data.tasks.forEach(t=>{if(['queued','running'].includes(t.state))t.state='stopped'});return {stopped:true}}
+    if(url.endsWith('/actions/overview.observe')){const device=fixture.data.overview.devices.find(d=>d.device_id===body.device_id);if(window.__observeFailure){device.connection_state='disconnected';const failure=window.__observeFailure;window.__observeFailure='';throw new Error(failure)}device.connection_state='connected';device.checked_at='2026-11-05T06:01:00Z';return {observed:true}}
+    if(url.endsWith('/actions/overview.pause')){const device=fixture.data.overview.devices.find(d=>d.device_id===body.device_id);device.connection_state='paused';device.paused=true;return {paused:true}}
+    if(url.endsWith('/actions/overview.takeover')){const device=fixture.data.overview.devices.find(d=>d.device_id===body.device_id);device.connection_state='paused';device.paused=true;device.takeover=true;return {taken_over:true}}
+    if(url.endsWith('/actions/overview.resume')){const device=fixture.data.overview.devices.find(d=>d.device_id===body.device_id);device.connection_state='unknown';device.paused=false;device.takeover=false;return {resumed:true}}
     if(url.endsWith('/actions/devices.list'))return [{id:'lab',state:'ready'}];
     throw new Error('unexpected synthetic API '+url);
    }};
@@ -55,6 +60,23 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:
   await open();await settle();
   assert.equal(await page.locator('#plugins-refresh').evaluate(n=>n.hasAttribute('data-refresh-source')),true);
   assert.equal(await page.locator('#plugin-guide').isVisible(),false);
+  assert.equal((await calls('/actions/overview.observe')).length,0,'opening or refreshing the page must not probe a device');
+  assert(await page.getByText('上次观察应用：com.example.reader',{exact:true}).isVisible());
+  assert(await page.getByText(/^观察于 /).isVisible());
+  await page.evaluate(()=>{const device=window.__accounts.one.data.overview.devices[0];device.checked_at='0001-01-01T00:00:00Z';device.observed_at='0001-01-01T00:00:00Z'});await open();
+  assert(await page.getByText('检查于 尚未检查',{exact:true}).isVisible());assert(await page.getByText('观察于 时间待核对',{exact:true}).isVisible());
+  await page.evaluate(()=>{const device=window.__accounts.one.data.overview.devices[0];device.checked_at='2026-11-05T06:00:00Z';device.observed_at='2026-11-05T05:58:00Z'});await open();
+  await page.evaluate(()=>{window.__observeFailure='桥接暂时不可用'});await page.getByRole('button',{name:'观察一次',exact:true}).click();await page.getByText('桥接暂时不可用',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>window.__accounts.one.data.overview.devices[0].connection_state),'disconnected','failed observation must refresh the visible connection state');
+  await page.getByRole('button',{name:'观察一次',exact:true}).click();await page.waitForFunction(()=>window.__accounts.one.data.overview.devices[0].connection_state==='connected');
+  assert.equal((await calls('/actions/overview.observe')).length,2,'only an explicit observation action may probe a device');
+  await page.getByRole('button',{name:'暂停观察',exact:true}).click();await page.waitForFunction(()=>window.__accounts.one.data.overview.devices[0].connection_state==='paused');
+  assert(await page.getByRole('button',{name:'恢复观察',exact:true}).isVisible());
+  assert.equal(await page.getByRole('button',{name:'观察一次',exact:true}).count(),0,'paused device must use an explicit recovery action');
+  await page.getByRole('button',{name:'恢复观察',exact:true}).click();await page.waitForFunction(()=>window.__accounts.one.data.overview.devices[0].connection_state==='unknown');
+  await page.getByRole('button',{name:'接管设备',exact:true}).click();await page.waitForFunction(()=>window.__accounts.one.data.overview.devices[0].takeover===true);
+  assert(await page.getByText('已接管',{exact:true}).isVisible());assert.equal(await page.getByRole('button',{name:'观察一次',exact:true}).count(),0,'takeover must suppress further observation');
+  await page.getByRole('button',{name:'恢复观察',exact:true}).click();await page.waitForFunction(()=>window.__accounts.one.data.overview.devices[0].takeover===false);
   assert(await page.getByRole('button',{name:'开始任务',exact:true}).isDisabled(),'runtime disabled must block creation even when settings.enabled is true');await save().click();await page.getByText('设备设置已保存；工具运行状态未改变。',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>window.__accounts.one.enabled),false);assert.equal((await calls('/runtime')).length,0,'saving execution settings started the package');
   await page.getByRole('button',{name:'启动工具',exact:true}).click();await page.getByRole('button',{name:'停止工具',exact:true}).waitFor();
   assert(await page.getByRole('button',{name:'开始任务',exact:true}).isDisabled(),'nested unavailable planner must block creation');
@@ -98,9 +120,15 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:
   await page.evaluate(()=>{document.querySelector('.package-editor').scrollTop=700;document.querySelector('.package-workspace').scrollTop=700});await open();await settle();assert.equal(await page.locator('.package-editor').evaluate(n=>n.scrollTop),0);
   for(const theme of ['light','dark'])for(const width of [375,1440]){
    await page.setViewportSize({width,height:900});await page.evaluate(value=>{document.documentElement.dataset.theme=value;scrollTo(0,0);document.querySelector('.content').scrollTop=0;document.querySelector('.package-editor').scrollTop=0;document.querySelector('.package-workspace').scrollTop=0},theme);await settle();
-   const layout=await page.evaluate(()=>({scrollWidth:document.documentElement.scrollWidth,top:document.querySelector('.topbar').getBoundingClientRect().top,save:document.querySelector('#top-save-actions').getBoundingClientRect().toJSON(),inline:document.querySelector('.package-host-form>.primary')!==null,overflow:[...document.querySelectorAll('.package-workspace,.package-editor,[data-host-component]')].map(n=>({name:n.className,width:n.clientWidth,scroll:n.scrollWidth})),buttons:[...document.querySelectorAll('#plugins button')].filter(n=>n.getClientRects().length).map(n=>({text:n.textContent,...n.getBoundingClientRect().toJSON()}))}));
+   const layout=await page.evaluate(()=>({scrollWidth:document.documentElement.scrollWidth,top:document.querySelector('.topbar').getBoundingClientRect().top,save:document.querySelector('#top-save-actions').getBoundingClientRect().toJSON(),inline:document.querySelector('.package-host-form>.primary')!==null,overflow:[...document.querySelectorAll('.package-workspace,.package-editor,[data-host-component],.mobile-observation-workbench,.mobile-observation-card,.mobile-observation-content')].map(n=>({name:n.className,width:n.clientWidth,scroll:n.scrollWidth})),buttons:[...document.querySelectorAll('#plugins button')].filter(n=>n.getClientRects().length).map(n=>({text:n.textContent,...n.getBoundingClientRect().toJSON()}))}));
    assert(layout.scrollWidth<=width+1,`horizontal document overflow ${theme}/${width}`);assert(layout.top>=0,'clipped page header');assert(layout.save.top>=0&&layout.save.right<=width+1,'top save offscreen');assert.equal(layout.inline,false);assert(layout.overflow.every(n=>n.scroll<=n.width+1),`nested horizontal overflow ${JSON.stringify(layout.overflow)}`);assert(layout.buttons.every(b=>b.left>=-1&&b.right<=width+1),`button overflow ${theme}/${width}: ${JSON.stringify(layout.buttons)}`);
    await page.screenshot({path:path.join(output,`active-${theme}-${width}.png`),fullPage:false});
+  }
+  // Inspect the actual observation card itself at desktop and narrow widths;
+  // neither rendering nor the top-level refresh may initiate a bridge probe.
+  for(const [theme,width] of [['light',1440],['dark',375]]){
+   await page.setViewportSize({width,height:1400});await page.evaluate(value=>{document.documentElement.dataset.theme=value;for(const selector of ['.package-editor','.package-workspace']){const node=document.querySelector(selector);node.style.maxHeight='none';node.style.overflow='visible'}},theme);await page.locator('.mobile-observation-workbench').scrollIntoViewIfNeeded();await settle();
+   await page.screenshot({path:path.join(output,`observation-${theme}-${width}.png`),fullPage:false});
   }
   await page.evaluate(()=>{window.__accounts.two.data={state:'archive',tasks:[{id:'old',goal:'已保留任务',state:'queued',device_id:'lab',artifacts:[]}],resources:{},diagnostics:{planner_available:false,planner_reason:'仅可查看历史或停止已有任务。'}};window.__schema=[{id:'tasks',title:'保留的设备任务',component:'tasks',binding:'host_data.tasks',action:'tasks.cancel'},window.__originalSchema[2],{...window.__originalSchema[3],action:''},window.__originalSchema[0]]});await open();await settle();
   assert.equal(await page.getByRole('button',{name:'保存设备设置',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'开始任务',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'启动工具',exact:true}).count(),0);assert(await page.getByRole('button',{name:'取消任务',exact:true}).isVisible());

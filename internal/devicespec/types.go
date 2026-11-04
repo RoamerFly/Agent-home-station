@@ -54,17 +54,21 @@ type Artifact struct {
 }
 type ArtifactAnalyzer func(context.Context, Task, Artifact, []byte) (summary, assetID string, err error)
 type Observation struct {
-	AllowedPackages []string          `json:"allowed_packages,omitempty"`
-	Browsers        []string          `json:"browsers,omitempty"`
-	WebHosts        []string          `json:"web_hosts,omitempty"`
-	ID              string            `json:"id"`
-	DeviceID        string            `json:"device_id"`
-	Package         string            `json:"package"`
-	Width           int               `json:"width"`
-	Height          int               `json:"height"`
-	Nodes           []json.RawMessage `json:"nodes"`
-	Raw             json.RawMessage   `json:"-"`
-	PNG             []byte            `json:"-"`
+	AllowedPackages []string `json:"allowed_packages,omitempty"`
+	Browsers        []string `json:"browsers,omitempty"`
+	WebHosts        []string `json:"web_hosts,omitempty"`
+	ID              string   `json:"id"`
+	DeviceID        string   `json:"device_id"`
+	Package         string   `json:"package"`
+	// CapturedAt is set by the host immediately after it has validated and
+	// durably stored the screenshot. It is deliberately not Task.Updated:
+	// workflow bookkeeping and restarts must never rewrite the observed time.
+	CapturedAt time.Time         `json:"captured_at,omitzero"`
+	Width      int               `json:"width"`
+	Height     int               `json:"height"`
+	Nodes      []json.RawMessage `json:"nodes"`
+	Raw        json.RawMessage   `json:"-"`
+	PNG        []byte            `json:"-"`
 }
 type Step struct {
 	Action    string         `json:"action"`

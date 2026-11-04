@@ -242,6 +242,21 @@ func (s *mobileWorkflowService) revoke() {
 func mobileWorkflowActive(task mobile.Task) bool {
 	return task.State == "queued" || task.State == "running"
 }
+
+// Clearing a workflow must stop it without erasing its last verified
+// observation. The screenshot is historical evidence for the task/UI, even
+// when a later owner pause or cancellation prevents any next effect.
+func mobileWorkflowClearedRecord(record mobileWorkflowRecord) json.RawMessage {
+	if !json.Valid(record.State) {
+		return json.RawMessage(`{"state":{}}`)
+	}
+	record.Claim, record.Fact = "", nil
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return json.RawMessage(`{"state":{}}`)
+	}
+	return raw
+}
 func mobileWorkflowCancelAllowed(caller, original mobile.Source) bool {
 	return caller.Admin && caller.Account == "" && caller.Thread == "" && caller.Sender == "" || caller.Account != "" && caller.Thread != "" && caller.Sender != "" && caller.Account == original.Account && caller.Thread == original.Thread && caller.Sender == original.Sender
 }
@@ -265,7 +280,7 @@ func (s *mobileWorkflowService) Save(settings mobile.Settings) error {
 		if mobileWorkflowActive(task) {
 			task.State, task.Reason, task.Updated = "cancelled", "device_permission_changed", time.Now().UTC()
 			puts[mobileTaskRecordKey(id)], _ = json.Marshal(task)
-			puts[mobileWorkflowKey(id)] = json.RawMessage(`{"state":{}}`)
+			puts[mobileWorkflowKey(id)] = mobileWorkflowClearedRecord(snapshot.records[id])
 		}
 	}
 	// Settings are protected host metadata. Revocation stops in-flight authority
@@ -301,7 +316,7 @@ func (s *mobileWorkflowService) Cancel(id string, source mobile.Source) error {
 		cancel()
 	}
 	s.mu.Unlock()
-	return s.commit(snapshot, store, map[string]json.RawMessage{mobileTaskRecordKey(id): raw, mobileWorkflowKey(id): json.RawMessage(`{"state":{}}`)})
+	return s.commit(snapshot, store, map[string]json.RawMessage{mobileTaskRecordKey(id): raw, mobileWorkflowKey(id): mobileWorkflowClearedRecord(snapshot.records[id])})
 }
 func (s *mobileWorkflowService) StopAll() error {
 	s.mu.Lock()
@@ -322,7 +337,7 @@ func (s *mobileWorkflowService) StopAll() error {
 		if mobileWorkflowActive(task) {
 			task.State, task.Reason, task.Updated = "cancelled", "device_cancelled_by_owner", time.Now().UTC()
 			puts[mobileTaskRecordKey(id)], _ = json.Marshal(task)
-			puts[mobileWorkflowKey(id)] = json.RawMessage(`{"state":{}}`)
+			puts[mobileWorkflowKey(id)] = mobileWorkflowClearedRecord(snapshot.records[id])
 		}
 	}
 	if len(puts) == 0 {
@@ -355,6 +370,9 @@ func (s *mobileWorkflowService) Start(source mobile.Source, device, goal string)
 	if !s.manager.mobileSourceAllowed(source) || source.MessageID == "" || len(source.MessageID) > 8192 {
 		return mobile.Task{}, errors.New("device_task_not_permitted")
 	}
+	if s.devicePaused(device) {
+		return mobile.Task{}, errors.New("device_observation_paused")
+	}
 	if err := s.recover(); err != nil {
 		return mobile.Task{}, err
 	}
@@ -381,14 +399,38 @@ func (s *mobileWorkflowService) recover() error {
 	if done {
 		return nil
 	}
-	snapshot, _, err := s.load(false)
+	s.stateMu.Lock()
+	snapshot, store, err := s.load(false)
 	if err != nil {
+		s.stateMu.Unlock()
 		return err
 	}
 	active := false
-	for _, task := range snapshot.tasks {
+	stale := map[string]json.RawMessage{}
+	for id, task := range snapshot.tasks {
+		if mobileWorkflowActive(task) && mobileObservationOnly(snapshot.records[id]) {
+			s.mu.Lock()
+			live := s.active[id] != nil
+			s.mu.Unlock()
+			if live {
+				// This is an in-process ObserveOnce, not a restart remnant.
+				continue
+			}
+			task.State, task.Reason, task.Updated = "cancelled", "device_observation_interrupted", time.Now().UTC()
+			stale[mobileTaskRecordKey(id)], _ = json.Marshal(task)
+			stale[mobileWorkflowKey(id)] = mobileWorkflowClearedRecord(snapshot.records[id])
+			continue
+		}
 		active = active || mobileWorkflowActive(task)
 	}
+	if len(stale) > 0 {
+		err = s.commit(snapshot, store, stale)
+		if err != nil {
+			s.stateMu.Unlock()
+			return err
+		}
+	}
+	s.stateMu.Unlock()
 	if active {
 		if _, err = s.invoke(context.Background(), "recover", map[string]any{}, nil); err != nil {
 			return err
@@ -398,6 +440,12 @@ func (s *mobileWorkflowService) recover() error {
 	s.recovered = true
 	s.mu.Unlock()
 	return nil
+}
+func mobileObservationOnly(record mobileWorkflowRecord) bool {
+	var state struct {
+		ObservationOnly bool `json:"observation_only"`
+	}
+	return json.Unmarshal(record.State, &state) == nil && state.ObservationOnly
 }
 func (s *mobileWorkflowService) Devices(ctx context.Context) (json.RawMessage, error) {
 	bridge, err := s.manager.newMobilePluginBridge(ctx, mobile.Task{Source: mobile.Source{Admin: true}}, s.Settings())
@@ -594,6 +642,14 @@ func (p *mobileWorkflowPolicy) prove(patch mobileWorkflowPatch) error {
 			var expected mobile.Task
 			_ = json.Unmarshal(p.input, &expected)
 			if p.op != "start" || id != expected.ID || next.ID != expected.ID || next.RequestHash != expected.RequestHash || next.Source != expected.Source || next.DeviceID != expected.DeviceID || next.Goal != expected.Goal || next.State != "queued" || next.Steps != 0 || !next.Created.Equal(p.now) || !next.Updated.Equal(p.now) || len(next.Events) != 0 || len(next.Artifacts) != 0 {
+				return denied
+			}
+			continue
+		}
+		if mobileObservationOnly(p.snapshot.records[id]) {
+			// These records are created by the host dashboard and are never
+			// mutable workflow state, even if a stale package returns them.
+			if !reflect.DeepEqual(old, next) {
 				return denied
 			}
 			continue
@@ -887,13 +943,27 @@ func (s *mobileWorkflowService) invoke(ctx context.Context, op string, input map
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	workflows := map[string]json.RawMessage{}
+	workflowTasks := map[string]mobile.Task{}
 	for id, record := range snapshot.records {
+		if mobileObservationOnly(record) {
+			// A dashboard observation is host-owned evidence, not an input to
+			// the package state machine (including recover).
+			continue
+		}
+		if task, ok := snapshot.tasks[id]; ok {
+			workflowTasks[id] = task
+		}
 		if len(record.State) > 0 {
 			workflows[id] = record.State
 		}
 	}
+	for id, task := range snapshot.tasks {
+		if _, recorded := snapshot.records[id]; !recorded {
+			workflowTasks[id] = task
+		}
+	}
 	rawInput, _ := json.Marshal(input)
-	arguments, _ := json.Marshal(map[string]any{"op": op, "snapshot": map[string]any{"settings": mobileWorkflowView(snapshot.settings), "tasks": snapshot.tasks, "workflows": workflows}, "input": input, "now": now.Format(time.RFC3339Nano), "nonce": randomToken(), "facts": func() any {
+	arguments, _ := json.Marshal(map[string]any{"op": op, "snapshot": map[string]any{"settings": mobileWorkflowView(snapshot.settings), "tasks": workflowTasks, "workflows": workflows}, "input": input, "now": now.Format(time.RFC3339Nano), "nonce": randomToken(), "facts": func() any {
 		if fact == nil {
 			return map[string]any{}
 		}
@@ -1016,7 +1086,7 @@ func (s *mobileWorkflowService) tick() {
 	}
 	ids := []string{}
 	for id, task := range snapshot.tasks {
-		if mobileWorkflowActive(task) {
+		if mobileWorkflowActive(task) && !mobileObservationOnly(snapshot.records[id]) {
 			ids = append(ids, id)
 		}
 	}
@@ -1092,15 +1162,19 @@ func (s *mobileWorkflowService) flowTick(id string, fact *mobileWorkflowFact) {
 	}()
 }
 func (s *mobileWorkflowService) dispatch(snapshot mobileWorkflowSnapshot, task mobile.Task, record mobileWorkflowRecord, effect mobileWorkflowEffect, deadline time.Time) {
-	if !s.manager.mobileSourceAllowed(task.Source) {
+	paused := s.devicePaused(task.DeviceID)
+	if !s.manager.mobileSourceAllowed(task.Source) || paused {
 		s.stateMu.Lock()
 		fresh, store, err := s.load(false)
 		if err == nil {
 			current, ok := fresh.tasks[task.ID]
 			if ok && current.RequestHash == task.RequestHash && mobileWorkflowActive(current) {
 				current.State, current.Reason, current.Updated = "stopped", "device_permission_changed", time.Now().UTC()
+				if paused {
+					current.State, current.Reason = "cancelled", "device_observation_paused"
+				}
 				raw, _ := json.Marshal(current)
-				_ = s.commit(fresh, store, map[string]json.RawMessage{mobileTaskRecordKey(task.ID): raw, mobileWorkflowKey(task.ID): json.RawMessage(`{"state":{}}`)})
+				_ = s.commit(fresh, store, map[string]json.RawMessage{mobileTaskRecordKey(task.ID): raw, mobileWorkflowKey(task.ID): mobileWorkflowClearedRecord(fresh.records[task.ID])})
 			}
 		}
 		s.stateMu.Unlock()
@@ -1209,6 +1283,11 @@ func (s *mobileWorkflowService) bridge(ctx context.Context, task mobile.Task, se
 	return bridge, nil
 }
 func (s *mobileWorkflowService) execute(ctx context.Context, task mobile.Task, settings mobile.Settings, effect mobileWorkflowEffect) (json.RawMessage, error) {
+	// Recheck immediately before every effect. A takeover which races a queued
+	// task must stop observe as well as device.act/record, not merely hide it.
+	if s.devicePaused(task.DeviceID) {
+		return nil, errors.New("device_observation_paused")
+	}
 	if err := s.manager.mobileDeviceCurrent(task, settings); err != nil {
 		return nil, err
 	}
@@ -1315,6 +1394,11 @@ func (s *mobileWorkflowService) captureObservation(raw []byte) (json.RawMessage,
 	}
 	value := map[string]any{}
 	_ = json.Unmarshal([]byte(result.Text), &value)
+	// A screenshot is a historical observation. Record the host-verified
+	// observation time once, next to the validated screenshot, rather than
+	// reusing task update timestamps which may change during recovery.
+	observation.CapturedAt = time.Now().UTC().Truncate(time.Microsecond)
+	value["captured_at"] = observation.CapturedAt
 	value["png_sha256"] = namedSpeechSHA(data)
 	return json.Marshal(value)
 }

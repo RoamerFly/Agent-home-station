@@ -99,7 +99,11 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		result["readiness"] = pluginReadiness(r.Context(), store, h, installed, connected)
 		if id == mobileDevicePluginID {
 			plannerErr := s.manager.mobileDeviceReady(r.Context())
-			result["host_data"] = map[string]any{"state": "active", "settings": mobilePluginSettings(s.manager.mobile.Settings()), "tasks": s.manager.mobile.List(nil), "resources": map[string]any{}, "diagnostics": map[string]any{"planner_available": plannerErr == nil, "planner_reason": mobileAvailabilityMessage(plannerErr)}}
+			overview := mobileOverview{Devices: []mobileDeviceOverview{}}
+			if observer, ok := s.manager.mobileObservationService(); ok {
+				overview = observer.Overview()
+			}
+			result["host_data"] = map[string]any{"state": "active", "settings": mobilePluginSettings(s.manager.mobile.Settings()), "tasks": s.manager.mobile.List(nil), "resources": map[string]any{}, "overview": overview, "diagnostics": map[string]any{"planner_available": plannerErr == nil, "planner_reason": mobileAvailabilityMessage(plannerErr)}}
 		}
 		respond(w, 200, result)
 	}))
@@ -336,6 +340,10 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 // the history/resource view and existing-task stop controls, never creation or
 // settings actions from the former package.
 func (s *Server) mobilePluginArchive() map[string]any {
+	overview := mobileOverview{Devices: []mobileDeviceOverview{}}
+	if observer, ok := s.manager.mobileObservationService(); ok {
+		overview = observer.Overview()
+	}
 	return map[string]any{
 		"archive": true,
 		"ui_schema": pluginhost.UISchema{Version: 1, Sections: []pluginhost.UISection{
@@ -344,7 +352,7 @@ func (s *Server) mobilePluginArchive() map[string]any {
 			{ID: "diagnostics", Title: "状态与说明", Component: "diagnostics", Binding: "host_data.diagnostics"},
 		}},
 		"host_data": map[string]any{
-			"state": "archive", "tasks_retained": true, "tasks": s.manager.mobile.List(nil), "resources": map[string]any{},
+			"state": "archive", "tasks_retained": true, "tasks": s.manager.mobile.List(nil), "resources": map[string]any{}, "overview": overview,
 			"diagnostics": map[string]any{"planner_available": false, "planner_reason": "手机工具未安装；只能查看历史或停止已有任务"},
 		},
 	}
