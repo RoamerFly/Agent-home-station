@@ -75,6 +75,10 @@ func (r JobRef) subfolder() string { return "station-" + r.ID }
 // SaveImage node to a private per-job output directory. The host supplies the
 // approval digest from its own registry and controls every input to the graph.
 func Prepare(raw []byte, approvedSHA256 string, ref JobRef) (Prepared, error) {
+	return prepareSaveWorkflow(raw, approvedSHA256, ref, "SaveImage", "image")
+}
+
+func prepareSaveWorkflow(raw []byte, approvedSHA256 string, ref JobRef, class, stem string) (Prepared, error) {
 	if len(raw) == 0 || len(raw) > maxJSONBytes {
 		return Prepared{}, errors.New("ComfyUI workflow size outside supported range")
 	}
@@ -89,10 +93,18 @@ func Prepare(raw []byte, approvedSHA256 string, ref JobRef) (Prepared, error) {
 	}
 	save, _ := graph[ref.SaveNode].(map[string]any)
 	inputs, _ := save["inputs"].(map[string]any)
-	if !ref.valid() || inputs == nil || save["class_type"] != "SaveImage" {
-		return Prepared{}, errors.New("approved ComfyUI output node must be SaveImage")
+	if !ref.valid() || inputs == nil || save["class_type"] != class {
+		return Prepared{}, fmt.Errorf("approved ComfyUI output node must be %s", class)
 	}
-	inputs["filename_prefix"] = ref.subfolder() + "/image"
+	if class == "SaveAudioAdvanced" {
+		if _, exists := inputs["audio"]; !exists {
+			return Prepared{}, errors.New("SaveAudioAdvanced audio input required")
+		}
+		// The API expects a scalar. ComfyUI expands it to a DynamicCombo
+		// dictionary before executing the Python node.
+		inputs["format"] = "flac"
+	}
+	inputs["filename_prefix"] = ref.subfolder() + "/" + stem
 	body, err := json.Marshal(map[string]any{
 		"prompt_id": ref.ID, "client_id": ref.ID, "prompt": graph,
 		"partial_execution_targets": []string{ref.SaveNode},
@@ -111,11 +123,48 @@ type Client struct {
 // NewClient connects directly to the host's verified, dedicated IPv4 loopback
 // process. Redirects and system proxies cannot change the destination.
 func NewClient(port uint16) (*Client, error) {
+	return newClient(port, nil)
+}
+
+// NewOwnedClient is for a ComfyUI process managed by this application. verify
+// must prove that the listener still belongs to that process. It is called at
+// construction time and immediately before and after every new TCP dial. An
+// already-established keep-alive connection remains bound to its original
+// peer; a replacement listener cannot be reached through it.
+func NewOwnedClient(port uint16, verify func() error) (*Client, error) {
+	if verify == nil {
+		return nil, errors.New("ComfyUI listener ownership verifier required")
+	}
+	if err := verify(); err != nil {
+		return nil, fmt.Errorf("verify ComfyUI listener ownership: %w", err)
+	}
+	return newClient(port, verify)
+}
+
+func newClient(port uint16, verify func() error) (*Client, error) {
 	if port == 0 {
 		return nil, errors.New("ComfyUI loopback port required")
 	}
+	dialer := &net.Dialer{Timeout: 3 * time.Second}
+	dial := dialer.DialContext
+	if verify != nil {
+		dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			if err := verify(); err != nil {
+				return nil, fmt.Errorf("verify ComfyUI listener ownership before dialing: %w", err)
+			}
+			conn, err := dialer.DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			if err := verify(); err != nil {
+				_ = conn.Close()
+				return nil, fmt.Errorf("verify ComfyUI listener ownership after dialing: %w", err)
+			}
+			return conn, nil
+		}
+	}
 	transport := &http.Transport{
-		DialContext:         (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
+		DialContext:         dial,
 		IdleConnTimeout:     30 * time.Second,
 		MaxIdleConnsPerHost: 2,
 	}
@@ -205,7 +254,7 @@ const (
 	Cancelled State = "cancelled"
 )
 
-type imageRef struct {
+type savedFile struct {
 	Filename  string `json:"filename"`
 	Subfolder string `json:"subfolder"`
 	Type      string `json:"type"`
@@ -214,16 +263,35 @@ type imageRef struct {
 type JobStatus struct {
 	State      State
 	ImageCount int
-	images     []imageRef
+	images     []savedFile
 }
 
 func (c *Client) Status(ctx context.Context, ref JobRef) (JobStatus, error) {
+	state, raw, err := c.readJob(ctx, ref)
+	if err != nil {
+		return JobStatus{}, err
+	}
+	var output struct {
+		Images []savedFile `json:"images"`
+	}
+	if len(raw) != 0 && json.Unmarshal(raw, &output) != nil {
+		return JobStatus{}, ErrProtocol
+	}
+	for _, image := range output.Images {
+		if image.Type != "output" || image.Subfolder != ref.subfolder() || !savedPNGName.MatchString(image.Filename) {
+			return JobStatus{}, ErrProtocol
+		}
+	}
+	return JobStatus{State: state, ImageCount: len(output.Images), images: output.Images}, nil
+}
+
+func (c *Client) readJob(ctx context.Context, ref JobRef) (State, json.RawMessage, error) {
 	if !ref.valid() {
-		return JobStatus{}, errors.New("invalid ComfyUI job reference")
+		return "", nil, errors.New("invalid ComfyUI job reference")
 	}
 	status, body, err := c.request(ctx, http.MethodGet, "/api/jobs/"+ref.ID, nil, maxJSONBytes)
 	if err != nil {
-		return JobStatus{}, err
+		return "", nil, err
 	}
 	var response struct {
 		ID        string `json:"id"`
@@ -236,36 +304,23 @@ func (c *Client) Status(ctx context.Context, ref JobRef) (JobStatus, error) {
 		Outputs map[string]json.RawMessage `json:"outputs"`
 	}
 	if json.Unmarshal(body, &response) != nil {
-		return JobStatus{}, ErrProtocol
+		return "", nil, ErrProtocol
 	}
 	if status == http.StatusNotFound && response.Error == "Job not found" && response.ID == "" {
-		return JobStatus{State: Unknown}, nil
+		return Unknown, nil, nil
 	}
 	if status != http.StatusOK || response.ID != ref.ID || response.Error != "" {
-		return JobStatus{}, ErrProtocol
+		return "", nil, ErrProtocol
 	}
 	switch response.State {
 	case Pending, Running, Failed, Cancelled:
-		return JobStatus{State: response.State}, nil
+		return response.State, nil, nil
 	case Completed:
 		if response.Execution.Completed && response.Execution.Status == "success" {
-			var output struct {
-				Images []imageRef `json:"images"`
-			}
-			if raw := response.Outputs[ref.SaveNode]; len(raw) != 0 {
-				if json.Unmarshal(raw, &output) != nil {
-					return JobStatus{}, ErrProtocol
-				}
-			}
-			for _, image := range output.Images {
-				if image.Type != "output" || image.Subfolder != ref.subfolder() || !savedPNGName.MatchString(image.Filename) {
-					return JobStatus{}, ErrProtocol
-				}
-			}
-			return JobStatus{State: Completed, ImageCount: len(output.Images), images: output.Images}, nil
+			return Completed, response.Outputs[ref.SaveNode], nil
 		}
 	}
-	return JobStatus{}, ErrProtocol
+	return "", nil, ErrProtocol
 }
 
 // Cancel returns whether the backend dispatched a targeted cancellation. A
@@ -325,6 +380,14 @@ func (c *Client) FetchPNG(ctx context.Context, ref JobRef, index int) (Image, er
 }
 
 func (c *Client) request(ctx context.Context, method, path string, body []byte, limit int64) (int, []byte, error) {
+	contentType := ""
+	if body != nil {
+		contentType = "application/json"
+	}
+	return c.requestWithContentType(ctx, method, path, body, contentType, limit)
+}
+
+func (c *Client) requestWithContentType(ctx context.Context, method, path string, body []byte, contentType string, limit int64) (int, []byte, error) {
 	var input io.Reader
 	if body != nil {
 		input = bytes.NewReader(body)
@@ -333,8 +396,8 @@ func (c *Client) request(ctx context.Context, method, path string, body []byte, 
 	if err != nil {
 		return 0, nil, err
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 		req.GetBody = nil
 	}
 	resp, err := c.http.Do(req)

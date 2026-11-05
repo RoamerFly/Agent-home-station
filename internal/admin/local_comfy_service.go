@@ -58,6 +58,14 @@ type localComfyClient interface {
 	MarkSettled(context.Context, comfyui.JobRef) error
 }
 
+type localComfyAudioClient interface {
+	localComfyClient
+	YuERequiredNodeSchemas(context.Context) (json.RawMessage, error)
+	UploadWAV(context.Context, comfyui.JobRef, []byte) (string, error)
+	AudioStatus(context.Context, comfyui.JobRef) (comfyui.AudioStatus, error)
+	FetchFLAC(context.Context, comfyui.JobRef) (comfyui.FLAC, error)
+}
+
 type localComfyBackend interface {
 	Info(context.Context, string) (localComfyDeployment, error)
 	// Use holds an owned service for the complete operation.  start=false is
@@ -182,13 +190,11 @@ func (s *localComfyService) Use(ctx context.Context, fish, binding string, start
 	if err != nil || localComfyBinding(current, currentManifest) != binding {
 		return errors.New("station_comfyui_deployment_changed")
 	}
-	client, err := comfyui.NewClient(uint16(registration.Port))
+	client, err := s.ownedClient(id, registration.Port)
 	if err != nil {
-		return errors.New("station_comfyui_client_unavailable")
-	}
-	if err := s.verifyOwnedListener(id, registration.Port); err != nil {
 		return err
 	}
+	defer client.CloseIdleConnections()
 	if err := client.CheckVersion(ctx, comfyui.ReferenceVersion); err != nil {
 		return errors.New("station_comfyui_owned_process_unhealthy")
 	}
@@ -298,12 +304,10 @@ func (s *localComfyService) waitHealthy(ctx context.Context, id string, port int
 	defer deadline.Stop()
 	for {
 		requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		client, err := comfyui.NewClient(uint16(port))
-		if err == nil {
-			err = s.verifyOwnedListener(id, port)
-		}
+		client, err := s.ownedClient(id, port)
 		if err == nil {
 			err = client.CheckVersion(requestCtx, comfyui.ReferenceVersion)
+			client.CloseIdleConnections()
 		}
 		cancel()
 		if err == nil {
@@ -319,15 +323,22 @@ func (s *localComfyService) waitHealthy(ctx context.Context, id string, port int
 	}
 }
 
-func (s *localComfyService) verifyOwnedListener(id string, port int) error {
+func (s *localComfyService) ownedClient(id string, port int) (*comfyui.Client, error) {
 	pid, ok := s.services.ProcessID(id)
 	if !ok {
-		return errLocalComfyNotRunning
+		return nil, errLocalComfyNotRunning
 	}
-	if err := localComfyListenerOwner(port, pid); err != nil {
-		return err
+	verify := func() error {
+		current, live := s.services.ProcessID(id)
+		if !live || current != pid {
+			return errLocalComfyNotRunning
+		}
+		return localComfyListenerOwner(port, pid)
 	}
-	return nil
+	if err := verify(); err != nil {
+		return nil, err
+	}
+	return comfyui.NewOwnedClient(uint16(port), verify)
 }
 
 func (s *localComfyService) loadRegistration(ctx context.Context) (localComfyRegistration, localComfyManifest, error) {
@@ -597,13 +608,37 @@ func (c *localComfyLeasedClient) Submit(ctx context.Context, prepared comfyui.Pr
 func (c *localComfyLeasedClient) Status(ctx context.Context, ref comfyui.JobRef) (comfyui.JobStatus, error) {
 	status, err := c.client.Status(ctx, ref)
 	if err == nil {
-		state := string(status.State)
-		if status.State == comfyui.Completed {
-			state = "ready"
-		}
-		_ = c.journal.recordJob(c.fish, c.binding, ref.ID, state)
+		c.observe(ref, status.State)
 	}
 	return status, err
+}
+
+func (c *localComfyLeasedClient) observe(ref comfyui.JobRef, remote comfyui.State) {
+	state := string(remote)
+	if remote == comfyui.Completed {
+		state = "ready"
+	}
+	_ = c.journal.recordJob(c.fish, c.binding, ref.ID, state)
+}
+
+func (c *localComfyLeasedClient) YuERequiredNodeSchemas(ctx context.Context) (json.RawMessage, error) {
+	return c.client.YuERequiredNodeSchemas(ctx)
+}
+
+func (c *localComfyLeasedClient) UploadWAV(ctx context.Context, ref comfyui.JobRef, wav []byte) (string, error) {
+	return c.client.UploadWAV(ctx, ref, wav)
+}
+
+func (c *localComfyLeasedClient) AudioStatus(ctx context.Context, ref comfyui.JobRef) (comfyui.AudioStatus, error) {
+	status, err := c.client.AudioStatus(ctx, ref)
+	if err == nil {
+		c.observe(ref, status.State)
+	}
+	return status, err
+}
+
+func (c *localComfyLeasedClient) FetchFLAC(ctx context.Context, ref comfyui.JobRef) (comfyui.FLAC, error) {
+	return c.client.FetchFLAC(ctx, ref)
 }
 
 func (c *localComfyLeasedClient) Cancel(ctx context.Context, ref comfyui.JobRef) (bool, error) {
