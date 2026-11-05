@@ -41,6 +41,19 @@
       }
     },
     {
+      "id": "contacts.read",
+      "implementation": "migration-pending",
+      "description": "独立 Windows 站点的本机主人通讯录查询及按连接授权的本地聊天读取",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
       "id": "groups.list",
       "implementation": "migration-pending",
       "description": "groups.list",

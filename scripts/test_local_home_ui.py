@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -274,13 +275,14 @@ def verify(binary, output):
 
                 worker_policy_pattern = status_pattern + "/policy"
                 worker_lifecycle_pattern = status_pattern + "/lifecycle"
-                worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "actions": []}
+                worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "contact_read": False, "actions": []}
 
                 def worker_view():
                     return {"connection": {"id": "synthetic-wechat", "login": "authenticated",
                         "runtime": "online", "worker": worker["state"], "configured_policy": {
                             "conversation_enabled": bool(worker["threads"]), "reply_threads": worker["threads"], "history_threads": worker["history_threads"],
-                            "attachment_threads": worker["attachment_threads"], "media_reply_threads": worker["media_reply_threads"]}}}
+                            "attachment_threads": worker["attachment_threads"], "media_reply_threads": worker["media_reply_threads"],
+                            "contact_read": worker["contact_read"]}}}
 
                 def read_worker(route):
                     fulfill_json(worker_view())(route)
@@ -291,6 +293,7 @@ def verify(binary, output):
                     worker["history_threads"] = route.request.post_data_json["history_threads"]
                     worker["attachment_threads"] = route.request.post_data_json["attachment_threads"]
                     worker["media_reply_threads"] = route.request.post_data_json["media_reply_threads"]
+                    worker["contact_read"] = route.request.post_data_json["contact_read"]
                     fulfill_json(worker_view())(route)
 
                 def set_worker(route):
@@ -305,6 +308,34 @@ def verify(binary, output):
                 page.route(status_pattern, status_route)
                 page.route(worker_policy_pattern, save_worker)
                 page.route(worker_lifecycle_pattern, set_worker)
+                contacts_pattern = status_pattern + "/contacts*"
+                contact_queries = []
+
+                def contact_directory(route):
+                    assert route.request.method == "GET"
+                    assert "/synthetic-wechat/contacts" in route.request.url
+                    query = parse_qs(urlparse(route.request.url).query, keep_blank_values=True)
+                    contact_queries.append(query)
+                    assert query["search"] == ["蓝"]
+                    if query["limit"] == ["500"]:
+                        assert "cursor" not in query
+                        fulfill_json({"items": [{"id": "wxid-synthetic-4", "display_name": "大页联系人"}], "has_more": False,
+                                      "effective_limit": 200, "limit_reason": "原生接口单页上限为 200 条，可用续读位置继续。",
+                                      "coverage": "已读取当前连接的本机通讯录快照"})(route)
+                        return
+                    assert query["limit"] == ["50"]
+                    if query.get("cursor") == ["synthetic-next"]:
+                        fulfill_json({"items": [{"id": "wxid-synthetic-3", "display_name": "蓝鲸"}], "has_more": False, "effective_limit": 50,
+                                      "coverage": "已读取 3 位匹配联系人"})(route)
+                    else:
+                        assert "cursor" not in query
+                        fulfill_json({"items": [{"id": "wxid-synthetic-1", "display_name": "蓝色大肥鱼"},
+                                                {"id": "wxid-synthetic-2", "display_name": "蓝朋友"}],
+                                      "next_cursor": "synthetic-next", "has_more": True,
+                                      "effective_limit": 50,
+                                      "coverage": "已读取前 2 位匹配联系人"})(route)
+
+                page.route(contacts_pattern, contact_directory)
                 page.locator("#apps-refresh").click()
                 page.get_by_text("Agent 未启动", exact=True).wait_for()
                 assert page.get_by_role("button", name="启动 Agent").is_disabled()
@@ -313,6 +344,7 @@ def verify(binary, output):
                 page.get_by_role("textbox", name="历史与成员读取会话 ID", exact=True).fill("synthetic-room@chatroom")
                 page.get_by_role("textbox", name="附件读取会话 ID").fill("synthetic-room@chatroom")
                 page.get_by_role("textbox", name="附件回复会话 ID").fill("synthetic-room@chatroom")
+                page.get_by_role("checkbox", name="允许大肥鱼在本地聊天中查阅此通讯录").check()
                 page.get_by_role("button", name="保存回复范围").click()
                 page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
                 page.get_by_role("button", name="启动 Agent").click()
@@ -326,7 +358,30 @@ def verify(binary, output):
                 assert page.get_by_role("textbox", name="附件读取会话 ID").input_value() == "synthetic-room@chatroom"
                 assert worker["media_reply_threads"] == ["synthetic-room@chatroom"]
                 assert page.get_by_role("textbox", name="附件回复会话 ID").input_value() == "synthetic-room@chatroom"
+                assert worker["contact_read"] is True
                 assert worker["actions"] == ["start", "stop"]
+                page.get_by_text("通讯录", exact=True).click()
+                page.get_by_role("textbox", name="搜索联系人", exact=True).fill("蓝")
+                page.get_by_role("button", name="查询联系人", exact=True).click()
+                page.get_by_text("蓝色大肥鱼 · wxid-synthetic-1", exact=True).wait_for()
+                page.get_by_text("已读取前 2 位匹配联系人 · 本页 2 条，每页最多 50 条", exact=True).wait_for()
+                page.get_by_role("textbox", name="搜索联系人", exact=True).fill("不应影响下一页")
+                page.get_by_role("spinbutton", name="联系人每页数量", exact=True).fill("99")
+                page.get_by_role("button", name="下一页", exact=True).click()
+                page.get_by_text("蓝鲸 · wxid-synthetic-3", exact=True).wait_for()
+                assert page.get_by_text("蓝色大肥鱼 · wxid-synthetic-1", exact=True).count() == 0
+                page.get_by_role("textbox", name="搜索联系人", exact=True).fill("蓝")
+                page.get_by_role("spinbutton", name="联系人每页数量", exact=True).fill("500")
+                page.get_by_role("button", name="查询联系人", exact=True).click()
+                page.get_by_text("大页联系人 · wxid-synthetic-4", exact=True).wait_for()
+                page.get_by_text("本页 1 条，每页最多 200 条 · 原生接口单页上限为 200 条，可用续读位置继续。", exact=False).wait_for()
+                assert len(contact_queries) == 3
+                page.set_viewport_size({"width": 375, "height": 780})
+                assert_no_horizontal_overflow(page, "WeChat contacts directory")
+                assert_worker_controls_fit(page)
+                page.screenshot(path=str(output / "apps-contacts-narrow.png"), full_page=True)
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.get_by_text("通讯录", exact=True).click()
                 share = {"installed": False, "enabled": False, "runtime_ready": True, "revision": 0, "configuration": {"revision": 0, "values": {}, "configured_secrets": []}}
                 def share_settings(route):
                     if route.request.method == "PUT":
@@ -503,6 +558,7 @@ def verify(binary, output):
                 page.unroute(receipts_pattern, receipt_records)
                 page.unroute(worker_policy_pattern, save_worker)
                 page.unroute(worker_lifecycle_pattern, set_worker)
+                page.unroute(contacts_pattern, contact_directory)
 
                 # An unavailable account read remains a visible, recoverable application state.
                 page.unroute(connection_base, setup_connections)
@@ -556,7 +612,7 @@ def verify(binary, output):
                 assert note.read_text(encoding="utf-8") == "a persistent companion home"
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "worker policy and lifecycle", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "worker policy and lifecycle", "WeChat contacts and independent grant", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 

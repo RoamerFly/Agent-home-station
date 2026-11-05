@@ -224,7 +224,7 @@
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
     toggle.disabled ||= status.worker === "stopping" || !running && !status.configured_policy?.conversation_enabled;
     buttons.append(toggle);
-    panel.append(buttons, deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
+    panel.append(buttons, contactDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
     if (apps.editWorker !== id) return panel;
     const field = document.createElement("textarea");
     field.rows = 3;
@@ -250,17 +250,96 @@
     mediaReplies.setAttribute("aria-label", "附件回复会话 ID");
     mediaReplies.value = apps.mediaReplyDrafts.get(id) ?? (status.configured_policy?.media_reply_threads || []).join("\n");
     mediaReplies.addEventListener("input", () => apps.mediaReplyDrafts.set(id, mediaReplies.value));
+    const contactRead = document.createElement("input");
+    contactRead.type = "checkbox";
+    contactRead.checked = Boolean(status.configured_policy?.contact_read);
+    contactRead.setAttribute("aria-label", "允许大肥鱼在本地聊天中查阅此通讯录");
+    const contactReadLabel = appElement("label", "", "switch-row");
+    const contactReadCopy = appElement("span");
+    contactReadCopy.append(appElement("strong", "允许大肥鱼在本地聊天中查阅此通讯录"),
+      appElement("small", "主人可在应用页直接查看。大肥鱼查询时，所读资料会提供给当前聊天模型。"));
+    contactReadLabel.append(contactRead, contactReadCopy);
     const save = appSetupButton("保存回复范围", () => {
       const reply_threads = field.value.split(/[\s，,]+/u).filter(Boolean);
       const history_threads = history.value.split(/[\s，,]+/u).filter(Boolean);
       const attachment_threads = attachments.value.split(/[\s，,]+/u).filter(Boolean);
       const media_reply_threads = mediaReplies.value.split(/[\s，,]+/u).filter(Boolean);
-      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, media_reply_threads });
+      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, media_reply_threads, contact_read: contactRead.checked });
     });
     panel.append(appElement("p", "每行一个会话 ID。群聊仅在被提及时回复。"), field,
       appElement("p", "历史消息与群成员须单独授权；大肥鱼仅能读取当前所在会话。"), history,
       appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments,
-      appElement("p", "附件回复须单独授权，只能把本会话的附件发回本会话。"), mediaReplies, save, workGrantControls(id));
+      appElement("p", "附件回复须单独授权，只能把本会话的附件发回本会话。"), mediaReplies,
+      contactReadLabel,
+      save, workGrantControls(id));
+    return panel;
+  }
+  function contactDirectoryControls(id) {
+    const panel = appElement("details", "", "identity-details contact-directory");
+    panel.append(appElement("summary", "通讯录"));
+    const form = appElement("form", "", "details-grid");
+    const search = document.createElement("input");
+    search.placeholder = "昵称或微信 ID";
+    search.setAttribute("aria-label", "搜索联系人");
+    const limit = document.createElement("input");
+    limit.type = "number";
+    limit.min = "1";
+    limit.step = "1";
+    limit.value = "50";
+    limit.required = true;
+    limit.setAttribute("aria-label", "联系人每页数量");
+    const searchLabel = appElement("label", "搜索联系人");
+    searchLabel.append(search);
+    const limitLabel = appElement("label", "每页数量");
+    limitLabel.append(limit);
+    form.append(searchLabel, limitLabel);
+    const actions = appElement("div", "", "app-worker-actions");
+    const query = appSetupButton("查询联系人");
+    query.type = "submit";
+    const next = appSetupButton("下一页", () => load(false));
+    next.disabled = true;
+    actions.append(query, next);
+    form.append(actions);
+    const note = appElement("small", "本页仅显示当前微信连接的联系人目录。");
+    const records = appElement("div", "", "work-records");
+    panel.append(form, note, records);
+    let cursor = "", hasNext = false, busy = false, appliedSearch = "", appliedLimit = 50;
+    async function load(reset) {
+      if (busy) return;
+      const searchValue = reset ? search.value.trim() : appliedSearch;
+      const limitValue = reset ? limit.valueAsNumber : appliedLimit;
+      if (!Number.isSafeInteger(limitValue) || limitValue < 1) {
+        appFeedback("每页数量须为正整数。", true);
+        return;
+      }
+      const requestCursor = reset ? "" : cursor;
+      busy = true;
+      query.disabled = next.disabled = true;
+      try {
+        const params = new URLSearchParams({ search: searchValue, limit: String(limitValue) });
+        if (requestCursor) params.set("cursor", requestCursor);
+        const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(id) + "/contacts?" + params.toString());
+        if (reset) { appliedSearch = searchValue; appliedLimit = limitValue; }
+        records.replaceChildren();
+        const items = result.items || [];
+        for (const item of items) {
+          records.append(appElement("div", (item.display_name || "未命名联系人") + " · " + item.id, "work-record"));
+        }
+        if (!records.children.length) records.append(appElement("small", "没有匹配的联系人。"));
+        cursor = result.next_cursor || "";
+        hasNext = Boolean(result.has_more && cursor);
+        next.disabled = !hasNext;
+        const effectiveLimit = Number.isInteger(result.effective_limit) && result.effective_limit > 0 ? result.effective_limit : limitValue;
+        note.textContent = (result.coverage || "已读取当前可见联系人。") + " · 本页 " + items.length + " 条，每页最多 " + effectiveLimit + " 条" + (result.limit_reason ? " · " + result.limit_reason : "");
+      } catch (error) {
+        appFeedback(error.message, true);
+      } finally {
+        busy = false;
+        query.disabled = false;
+        next.disabled = !hasNext;
+      }
+    }
+    form.addEventListener("submit", (event) => { event.preventDefault(); load(true); });
     return panel;
   }
   function stationToolControls(id, media) {

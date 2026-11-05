@@ -86,6 +86,7 @@ type localChatService struct {
 	cancel    context.CancelFunc
 	windows   *agenthost.WindowsConfig
 	processes *localProcessTools
+	wechat    *stationWechat
 	// Tests replace only the model transport, retaining the normal engine,
 	// source handling, SQLite and HTTP boundary.
 	modelFactory func() (companion.LanguageModel, error)
@@ -329,7 +330,7 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		defer client.CloseIdleConnections()
 	}
 	c := localConversationConfig(settings.Persona)
-	engine, err := companion.New(c, store, model, "你是大肥鱼，正在 Agent-home-station 软件中与本机主人交谈。当前没有接入任何应用；按本轮工具目录使用本地记忆和主人授权的家目录。软件界面展示已写入本地聊天记录的气泡，不代表微信发送或主人已经读过。不要声称已使用未提供的应用或执行能力。")
+	engine, err := companion.New(c, store, model, "你是大肥鱼，正在 Agent-home-station 软件中与本机主人交谈。按本轮工具目录和主人的授权使用本地记忆、家目录和已连接的应用。软件界面展示已写入本地聊天记录的气泡，不代表微信发送或主人已经读过。不要声称已使用未提供的应用或执行能力。")
 	if err != nil {
 		fail(w, 503, "本地聊天引擎未能准备，原始记录保留")
 		return

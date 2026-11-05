@@ -22,6 +22,7 @@
   "station_account_setup_source": "adapter/station_setup.go",
   "station_worker_transport_source": "adapter/station_worker.go",
   "station_history_source": "adapter/station_read.go",
+  "station_contacts_source": "adapter/station_contacts.go",
   "station_video_source": "adapter/station_video.go",
   "channels_payload_source": "adapter/channels_media.go"
 }

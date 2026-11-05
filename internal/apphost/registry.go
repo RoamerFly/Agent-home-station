@@ -46,6 +46,7 @@ type ConfiguredPolicy struct {
 	AttachmentThreads   []string `json:"attachment_threads,omitempty"`
 	MediaReplyThreads   []string `json:"media_reply_threads,omitempty"`
 	HistoryThreads      []string `json:"history_threads,omitempty"`
+	ContactRead         bool     `json:"contact_read,omitempty"`
 }
 
 type ConnectionStatus struct {
@@ -81,6 +82,7 @@ type ConnectionPolicyInput struct {
 	AttachmentThreads *[]string
 	MediaReplyThreads *[]string
 	HistoryThreads    *[]string
+	ContactRead       *bool
 }
 
 type Provider interface {

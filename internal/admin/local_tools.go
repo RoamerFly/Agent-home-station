@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
 )
@@ -22,6 +23,7 @@ type localToolSet struct {
 	traceID      string
 	inspectOnly  bool
 	store        *companion.Store
+	wechat       *stationWechat
 }
 
 // Local owner actions already pass the actual tool's grant checks. Reuse the
@@ -41,15 +43,22 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 		python = filepath.Join(filepath.Dir(h.windows.Pythonw), "python.exe")
 	}
 	h.mu.Unlock()
-	return &localToolSet{
+	tools := &localToolSet{
 		memory: newLocalMemoryTools(store, in), files: newLocalFileTools(access), process: process,
 		access: access, processError: err, python: python, traceID: in.TraceID,
 		store: store,
 	}
+	if in.Channel == "local" && in.Mode == "direct" && in.Directed && in.Thread == in.Sender && !in.Preview && !in.Surf && !in.ReportOnly {
+		tools.wechat = h.wechat
+	}
+	return tools
 }
 
 func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all := []mcptools.Tool{}
+	if t.wechat != nil && t.wechat.hasContactGrant() {
+		all = append(all, wechatapp.StationContactsTool())
+	}
 	if t.access.home.artifacts != nil {
 		all = append(all, agentTool("artifact_publish", "把家目录中已完成的文件登记为不可变成品快照。path 为家目录相对路径，expected_sha256 为实际文件哈希。返回 artifact_id，不会向应用发送。", `{"type":"object","properties":{"path":{"type":"string"},"expected_sha256":{"type":"string","minLength":64,"maxLength":64}},"required":["path","expected_sha256"],"additionalProperties":false}`))
 	}
@@ -70,6 +79,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if name == wechatapp.StationContactsToolName {
+		return t.readWechatContacts(ctx, raw)
+	}
 	if name == "artifact_publish" {
 		var in struct {
 			Path     string `json:"path"`
