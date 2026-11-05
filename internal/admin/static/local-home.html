@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Agent-home-station · 大肥鱼的家</title>
+  <link rel="stylesheet" href="/assets/local-home.css">
+</head>
+<body class="local-home-page">
+  <main class="home-shell">
+    <section class="home-panel" aria-labelledby="home-title">
+      <div class="home-visual" aria-hidden="true">
+        <img class="sea" src="/assets/night-sea.webp" alt="">
+        <div class="sea-wash"></div>
+        <div class="orbit orbit-one"></div>
+        <div class="orbit orbit-two"></div>
+        <img class="fish" src="/assets/whale-girl-cutout.png" alt="">
+        <p>DAFEIYU / HOME</p>
+      </div>
+
+      <div class="home-content">
+        <div class="eyebrow"><span class="pulse"></span>成长期 · 第一站</div>
+        <h1 id="home-title">给大肥鱼一个家</h1>
+        <p class="lead">她会在自己的空间里留下日记、作品和工具。这里由你掌管，身份与私密资料始终由软件隔离保管。</p>
+
+        <section id="login-view" class="access-card" aria-labelledby="login-title" hidden>
+          <div>
+            <p class="section-kicker">管理员验证</p>
+            <h2 id="login-title">先确认是你</h2>
+            <p>登录后才能准备、暂停或恢复大肥鱼的家。</p>
+          </div>
+          <form id="login-form" class="login-form">
+            <label for="login-password">管理密码</label>
+            <div class="input-row">
+              <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+              <button id="login-submit" class="button primary" type="submit">进入</button>
+            </div>
+          </form>
+        </section>
+
+        <section id="home-view" class="home-status" aria-live="polite" hidden>
+          <div class="status-head">
+            <div>
+              <p id="status-kicker" class="section-kicker">准备中</p>
+              <h2 id="status-title">为大肥鱼准备家</h2>
+            </div>
+            <span id="access-chip" class="access-chip">尚未授权</span>
+          </div>
+
+          <div id="home-details" class="details-grid" hidden>
+            <div class="detail-block">
+              <span>专属目录</span>
+              <code id="home-directory">正在读取…</code>
+            </div>
+            <div class="detail-pair">
+              <div><span>大肥鱼</span><strong id="fish-id">—</strong></div>
+              <div><span>主人</span><strong id="owner-id">—</strong></div>
+            </div>
+          </div>
+
+          <p id="stage-note" class="stage-note">准备好后，她可以在这里整理自己的作品与工具。软件内聊天即将接入。</p>
+          <div class="action-row">
+            <button id="initialize-button" class="button primary" type="button">为大肥鱼准备家</button>
+            <button id="access-button" class="button secondary" type="button" hidden></button>
+            <button id="logout-button" class="button quiet" type="button">退出登录</button>
+          </div>
+        </section>
+
+        <p id="page-message" class="page-message" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+  </main>
+  <script src="/assets/local-home.js"></script>
+</body>
+</html>

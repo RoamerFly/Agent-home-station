@@ -27,6 +27,16 @@ type fishIdentityRecord struct {
 	FishID         string               `json:"fish_id,omitempty"`
 	Bindings       []fishAccountBinding `json:"bindings"`
 	DeviceBindings []fishDeviceBinding  `json:"device_bindings,omitempty"`
+	LocalOwner     *fishLocalOwner      `json:"local_owner,omitempty"`
+}
+
+// fishLocalOwner is the stable local owner of this installation. It is
+// intentionally independent of a connected application account: removing or
+// logging out of WeChat must never erase the fish's own home or its grant.
+type fishLocalOwner struct {
+	ID         string `json:"id"`
+	Revision   uint64 `json:"revision"`
+	HomeAccess bool   `json:"home_access"`
 }
 
 // fishAccountBinding keeps the platform namespace in the durable key even
@@ -51,9 +61,17 @@ type fishDeviceBinding struct {
 const (
 	fishWechatPlatform          = "wechat"
 	fishIdentityVersionV1       = 1
-	fishIdentityCurrentVersion  = 2
+	fishIdentityVersionV2       = 2
+	fishIdentityCurrentVersion  = 3
 	fishDeviceBindingIDPrefix   = "fish-device-"
 	fishDeviceBindingTokenChars = 48
+	fishLocalOwnerIDPrefix      = "owner-"
+	fishLocalOwnerTokenChars    = 48
+)
+
+var (
+	errLocalHomeRevisionConflict = errors.New("本机家目录授权已变更，请刷新后再试")
+	errLocalHomeNotInitialized   = errors.New("本机鱼身份尚未初始化")
 )
 
 func newFishIdentityRegistry(dir string) *fishIdentityRegistry {
@@ -64,6 +82,20 @@ func newFishIdentityRegistry(dir string) *fishIdentityRegistry {
 }
 
 func (r *fishIdentityRegistry) read() (fishIdentityRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	release, err := lockFishIdentityRegistry(r.path + ".lock")
+	if err != nil {
+		return fishIdentityRecord{}, errors.New("鱼身份绑定正在被其他进程使用")
+	}
+	defer release()
+	return r.readHeld()
+}
+
+// readHeld deliberately does not acquire a lock. All callers must already
+// hold r.mu and the per-registry sidecar lock so a read-modify-write operation
+// cannot lose a concurrent application's update.
+func (r *fishIdentityRegistry) readHeld() (fishIdentityRecord, error) {
 	data, err := os.ReadFile(r.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return fishIdentityRecord{Version: fishIdentityCurrentVersion, Bindings: []fishAccountBinding{}, DeviceBindings: []fishDeviceBinding{}}, nil
@@ -87,6 +119,13 @@ func (r *fishIdentityRegistry) read() (fishIdentityRecord, error) {
 		if _, hasDeviceBindings := envelope["device_bindings"]; hasDeviceBindings {
 			return fishIdentityRecord{}, errors.New("鱼身份绑定无效，原文件未覆盖")
 		}
+		if _, hasLocalOwner := envelope["local_owner"]; hasLocalOwner {
+			return fishIdentityRecord{}, errors.New("鱼身份绑定无效，原文件未覆盖")
+		}
+	} else if version == fishIdentityVersionV2 {
+		if _, hasLocalOwner := envelope["local_owner"]; hasLocalOwner {
+			return fishIdentityRecord{}, errors.New("鱼身份绑定无效，原文件未覆盖")
+		}
 	} else if version != fishIdentityCurrentVersion {
 		return fishIdentityRecord{}, errors.New("鱼身份绑定无效，原文件未覆盖")
 	}
@@ -105,7 +144,7 @@ func (r *fishIdentityRegistry) read() (fishIdentityRecord, error) {
 	if record.Bindings == nil {
 		record.Bindings = []fishAccountBinding{}
 	}
-	if record.Version == fishIdentityCurrentVersion {
+	if record.Version >= fishIdentityVersionV2 {
 		seenDevices := map[string]bool{}
 		seenBindingIDs := map[string]bool{}
 		for _, binding := range record.DeviceBindings {
@@ -119,6 +158,9 @@ func (r *fishIdentityRegistry) read() (fishIdentityRecord, error) {
 	}
 	if record.DeviceBindings == nil {
 		record.DeviceBindings = []fishDeviceBinding{}
+	}
+	if record.Version == fishIdentityCurrentVersion && record.LocalOwner != nil && !validFishLocalOwner(*record.LocalOwner) {
+		return fishIdentityRecord{}, errors.New("本机鱼主人无效，原文件未覆盖")
 	}
 	return record, nil
 }
@@ -160,10 +202,35 @@ func validFishID(id string) bool {
 	return true
 }
 
+func validFishLocalOwner(owner fishLocalOwner) bool {
+	if owner.Revision == 0 || len(owner.ID) != len(fishLocalOwnerIDPrefix)+fishLocalOwnerTokenChars || !strings.HasPrefix(owner.ID, fishLocalOwnerIDPrefix) {
+		return false
+	}
+	for _, r := range owner.ID[len(fishLocalOwnerIDPrefix):] {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *fishIdentityRegistry) acquire() (func(), error) {
+	release, err := lockFishIdentityRegistry(r.path + ".lock")
+	if err != nil {
+		return nil, errors.New("鱼身份绑定正在被其他进程使用")
+	}
+	return release, nil
+}
+
 func (r *fishIdentityRegistry) bindings() (string, map[string]bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	record, err := r.read()
+	release, err := r.acquire()
+	if err != nil {
+		return "", nil, err
+	}
+	defer release()
+	record, err := r.readHeld()
 	if err != nil {
 		return "", nil, err
 	}
@@ -182,7 +249,12 @@ func (r *fishIdentityRegistry) bind(account string) (string, error) {
 	if !validID(account) {
 		return "", errors.New("账号标识无效")
 	}
-	record, err := r.read()
+	release, err := r.acquire()
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	record, err := r.readHeld()
 	if err != nil {
 		return "", err
 	}
@@ -212,7 +284,12 @@ func (r *fishIdentityRegistry) bind(account string) (string, error) {
 func (r *fishIdentityRegistry) unbind(account string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	record, err := r.read()
+	release, err := r.acquire()
+	if err != nil {
+		return err
+	}
+	defer release()
+	record, err := r.readHeld()
 	if err != nil {
 		return err
 	}
@@ -238,7 +315,12 @@ func (r *fishIdentityRegistry) unbind(account string) error {
 func (r *fishIdentityRegistry) bindDevice(account, deviceID string) (fishID, bindingID string, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	record, err := r.read()
+	release, err := r.acquire()
+	if err != nil {
+		return "", "", err
+	}
+	defer release()
+	record, err := r.readHeld()
 	if err != nil {
 		return "", "", err
 	}
@@ -272,7 +354,12 @@ func (r *fishIdentityRegistry) bindDevice(account, deviceID string) (fishID, bin
 func (r *fishIdentityRegistry) deviceBindings(account string) (fishID string, bindings []fishDeviceBinding, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	record, err := r.read()
+	release, err := r.acquire()
+	if err != nil {
+		return "", nil, err
+	}
+	defer release()
+	record, err := r.readHeld()
 	if err != nil {
 		return "", nil, err
 	}
@@ -292,7 +379,12 @@ func (r *fishIdentityRegistry) deviceBindings(account string) (fishID string, bi
 func (r *fishIdentityRegistry) unbindDevice(account, deviceID, expectedBindingID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	record, err := r.read()
+	release, err := r.acquire()
+	if err != nil {
+		return err
+	}
+	defer release()
+	record, err := r.readHeld()
 	if err != nil {
 		return err
 	}
@@ -313,8 +405,8 @@ func (r *fishIdentityRegistry) unbindDevice(account, deviceID, expectedBindingID
 }
 
 func (r *fishIdentityRegistry) write(record fishIdentityRecord) error {
-	// Any write is an intentional migration to v2. A read of an old v1 record
-	// never grants a device by itself.
+	// Any write is an intentional migration to v3. Reading an older record
+	// never creates or authorizes a local owner by itself.
 	record.Version = fishIdentityCurrentVersion
 	data, err := json.Marshal(record)
 	if err != nil {

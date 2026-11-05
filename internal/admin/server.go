@@ -29,6 +29,7 @@ type session struct {
 	Expires time.Time
 }
 type Server struct {
+	cookieName    string
 	authRoot      *Server
 	accounts      *accountRegistry
 	catalogMu     sync.Mutex
@@ -79,6 +80,7 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 	mux := http.NewServeMux()
 	if s.accounts != nil {
 		s.accounts.routes(mux)
+		s.localHomeRoutes(mux, manager.fish, manager.managedRoot(), manager.dir)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, map[string]bool{"ok": true}) })
 	mux.HandleFunc("POST /api/login", s.login)
@@ -156,6 +158,12 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 		switch name {
 		case "/":
 			name = "index.html"
+		case "/local-home":
+			name = "local-home.html"
+		case "/assets/local-home.js":
+			name = "local-home.js"
+		case "/assets/local-home.css":
+			name = "local-home.css"
 		case "/app.js", "/assets/app.js":
 			name = "app.js"
 		case "/assets/voices.js":
@@ -321,7 +329,7 @@ func (s *Server) session(r *http.Request) (string, session, bool) {
 	if s.authRoot != nil {
 		return s.authRoot.session(r)
 	}
-	cookie, err := r.Cookie("wechat_admin_session")
+	cookie, err := r.Cookie(s.sessionCookieName())
 	if err != nil {
 		return "", session{}, false
 	}
@@ -333,6 +341,15 @@ func (s *Server) session(r *http.Request) (string, session, bool) {
 		return "", session{}, false
 	}
 	return cookie.Value, value, true
+}
+func (s *Server) sessionCookieName() string {
+	if s.authRoot != nil {
+		return s.authRoot.sessionCookieName()
+	}
+	if s.cookieName != "" {
+		return s.cookieName
+	}
+	return "wechat_admin_session"
 }
 func (s *Server) protected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -395,7 +412,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessions[id] = session{csrf, time.Now().Add(8 * time.Hour)}
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "wechat_admin_session", Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil || strings.HasPrefix(s.origin, "https://"), MaxAge: 8 * 3600})
+	http.SetCookie(w, &http.Cookie{Name: s.sessionCookieName(), Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil || strings.HasPrefix(s.origin, "https://"), MaxAge: 8 * 3600})
 	respond(w, 200, map[string]any{"authenticated": true, "csrf": csrf})
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -403,7 +420,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	delete(s.sessions, id)
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "wechat_admin_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: s.sessionCookieName(), Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	respond(w, 200, map[string]bool{"ok": true})
 }
 func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
