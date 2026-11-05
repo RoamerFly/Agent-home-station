@@ -259,15 +259,17 @@ func (a stationAttachmentAccess) DownloadAttachment(ctx context.Context, thread,
 }
 
 type stationAttachmentTools struct {
-	native   *linuxnative.Sender
-	store    *companion.Store
-	dir      string
-	grants   map[string]time.Time
-	replies  map[string]time.Time
-	blocked  func() bool
-	trace    companion.Input
-	prepared map[string]companion.GeneratedMedia
-	work     *stationWorkAccess
+	native      *linuxnative.Sender
+	store       *companion.Store
+	dir         string
+	grants      map[string]time.Time
+	replies     map[string]time.Time
+	reads       map[string]time.Time
+	readCursors map[string]stationReadCursor
+	blocked     func() bool
+	trace       companion.Input
+	prepared    map[string]companion.GeneratedMedia
+	work        *stationWorkAccess
 }
 
 func (*stationAttachmentTools) AutonomousActions() bool { return true }
@@ -276,10 +278,13 @@ func (t *stationAttachmentTools) ForkTools() companion.ToolAccess {
 	copy := *t
 	copy.trace = companion.Input{}
 	copy.prepared = nil
+	copy.readCursors = nil
 	return &copy
 }
 
-func (t *stationAttachmentTools) SetTrace(in companion.Input) { t.trace, t.prepared = in, nil }
+func (t *stationAttachmentTools) SetTrace(in companion.Input) {
+	t.trace, t.prepared, t.readCursors = in, nil, nil
+}
 
 func (t *stationAttachmentTools) allowed() bool {
 	return t.scopeAllowed(t.trace, t.grants)
@@ -297,10 +302,16 @@ func (t *stationAttachmentTools) replyAllowed(in companion.Input) bool {
 }
 
 func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, error) {
-	if ctx.Err() != nil || !t.allowed() {
+	if ctx.Err() != nil {
 		return nil, nil
 	}
 	tools := []mcptools.Tool{}
+	if t.scopeAllowed(t.trace, t.reads) {
+		tools = append(tools, wechatapp.StationCatalogTool(), wechatapp.StationMessageTool())
+	}
+	if !t.allowed() {
+		return tools, nil
+	}
 	if stationAttachmentRef(t.trace.Source) || stationAttachmentRef(t.trace.QuotedSource) {
 		tools = append(tools, wechatapp.StationAttachmentTool())
 		if t.replyAllowed(t.trace) {
@@ -318,6 +329,12 @@ func stationAttachmentRef(ref *companion.SourceRef) bool {
 }
 
 func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if name == "wechat_read" {
+		return t.readHistory(ctx, raw)
+	}
+	if name == "wechat_message_read" {
+		return t.readMessage(ctx, raw)
+	}
 	if name == "wechat_work_reply" {
 		return t.workReply(ctx, raw)
 	}

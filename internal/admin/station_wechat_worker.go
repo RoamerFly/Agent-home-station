@@ -50,6 +50,7 @@ type stationWechatPolicy struct {
 	Grants           map[string]time.Time `json:"reply_grants"`
 	AttachmentGrants map[string]time.Time `json:"attachment_grants,omitempty"`
 	MediaReplyGrants map[string]time.Time `json:"media_reply_grants,omitempty"`
+	HistoryGrants    map[string]time.Time `json:"history_grants,omitempty"`
 }
 
 type stationWechatWorker struct {
@@ -232,6 +233,11 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 		}
 	}
+	for thread, granted := range policy.HistoryGrants {
+		if policy.Grants[thread].IsZero() || granted.IsZero() || granted.Before(policy.Grants[thread]) {
+			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
+		}
+	}
 	for thread, granted := range policy.MediaReplyGrants {
 		if policy.AttachmentGrants[thread].IsZero() || granted.IsZero() || granted.Before(policy.AttachmentGrants[thread]) {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
@@ -330,10 +336,14 @@ func (w *stationWechatWorker) policyView() *apphost.ConfiguredPolicy {
 		grants = append(grants, "media.read")
 	}
 	mediaReplies := slices.Sorted(maps.Keys(w.policy.MediaReplyGrants))
+	history := slices.Sorted(maps.Keys(w.policy.HistoryGrants))
+	if len(history) > 0 {
+		grants = append(grants, "messages.read", "members.read")
+	}
 	if len(mediaReplies) > 0 {
 		grants = append(grants, "send.image", "send.voice", "send.video", "send.file")
 	}
-	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, MediaReplyThreads: mediaReplies}
+	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, MediaReplyThreads: mediaReplies, HistoryThreads: history}
 }
 
 func (s *stationWechat) Inspect(ctx context.Context, id string) (apphost.ConnectionStatus, error) {
@@ -398,9 +408,14 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 	if err != nil {
 		return view, err
 	}
-	if !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) || !maps.Equal(mediaReplies, w.policy.MediaReplyGrants) {
+	history, err := stationScopedGrants(grants, w.policy.HistoryGrants, policy.HistoryThreads, now)
+	if err != nil {
+		return view, err
+	}
+	if !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) || !maps.Equal(mediaReplies, w.policy.MediaReplyGrants) || !maps.Equal(history, w.policy.HistoryGrants) {
 		next := w.policy
 		next.Grants, next.AttachmentGrants, next.MediaReplyGrants = grants, attachments, mediaReplies
+		next.HistoryGrants = history
 		// Require explicit resume after a scope change on an enabled worker.
 		next.Paused = next.Enabled
 		if err := w.changePolicy(next); err != nil {
@@ -557,11 +572,11 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 		return err
 	}
 	character.Names = native
-	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, blocked: run.block.Load}
+	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.block.Load}
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}
 	}
-	if len(policy.AttachmentGrants) != 0 {
+	if len(policy.AttachmentGrants) != 0 || len(policy.HistoryGrants) != 0 {
 		character.Tools = attachment
 	}
 	threads := make([]string, 0, len(policy.Grants))

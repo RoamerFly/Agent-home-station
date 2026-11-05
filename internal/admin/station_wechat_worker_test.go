@@ -218,6 +218,12 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	request(f, "PUT", path("other")+"/policy", map[string]any{"reply_threads": []string{"person-one"}}, true, 404)
 	policy(f, "one", "person-one")
 	policy(f, "two", "person-two")
+	request(f, "PUT", path("one")+"/policy", map[string]any{"reply_threads": []string{"person-one"}, "history_threads": []string{"foreign-thread"}}, true, 400)
+	request(f, "PUT", path("two")+"/policy", map[string]any{"reply_threads": []string{"person-two"}, "history_threads": []string{"person-two"}}, true, 200)
+	policy(f, "two", "person-two") // Old clients omitting the field retain the explicit grant.
+	if grants := state(f, "two")["configured_policy"].(map[string]any)["history_threads"].([]any); len(grants) != 1 || grants[0] != "person-two" {
+		t.Fatal("history authorization was not retained", grants)
+	}
 	settings := defaultLocalModelSettings()
 	settings.BaseURL = "https://127.0.0.1:1"
 	if _, err := h.chat.models.Save(LocalModelInput{LocalModelSettings: settings, APIKey: "synthetic-worker-model-not-real"}); err != nil {
@@ -262,6 +268,9 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	}
 	policy(f, "two")
 	waitState(f, "two", "paused")
+	if grants := state(f, "two")["configured_policy"].(map[string]any)["history_threads"]; grants != nil {
+		t.Fatal("reply revocation retained history access", grants)
+	}
 	lateAccepted.Store(true)
 	waitAppLifecycle(t, func() bool {
 		code, row := f.request("GET", path("two")+"/receipts/"+receiptKey, nil, false)

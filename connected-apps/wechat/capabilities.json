@@ -28,6 +28,19 @@
       }
     },
     {
+      "id": "members.read",
+      "implementation": "migration-pending",
+      "description": "当前授权群成员读取",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
       "id": "groups.list",
       "implementation": "migration-pending",
       "description": "groups.list",

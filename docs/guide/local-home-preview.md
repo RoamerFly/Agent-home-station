@@ -216,6 +216,14 @@ runtimes/windows-agent-host/windows_agent_host.pyw
 
 ## 验证与下一步
 
+### 独立连接读取聊天历史
+
+应用页展开连接的回复设置，在“历史与成员读取会话 ID”填写已授权回复的会话。保存后重新启动该连接的 Agent，新回合可以发现 `wechat_read` 和 `wechat_message_read`。留空则关闭；默认没有历史权限。API 使用 `PUT /api/apps/wechat/connections/{connection}/policy`，在 `reply_threads` 之外提交 `history_threads`。
+
+`wechat_read(kind=messages|members,search?,cursor?,limit?)` 仅查询当前会话。页大小按请求传给原生服务，不以默认 50 条限制能力；原生服务实际覆盖范围与下一页游标随结果返回。消息页按原时间正序，读取多页后须按原时间合并，不能把分页返回先后当作事件先后。游标只限当前回合、会话和查询，失效从首批重读。
+
+`wechat_message_read(message_id,offset?,length?,expected_sha256?)` 返回实际原文范围、身份、原时间、引用服务器编号和内容摘要。默认读取 4,000 字节，传输单页最多 65,536 字节；更大的请求明确返回实际长度和续读位置。续页须带上一页摘要，文本更改后从头读取。仅卡片资料、文件元数据和实际媒体观察分别标记；本阶尚未在独立连接接入视频内容解析。已知来源被遗忘或隔离后不能通过此工具重新读取。
+
 本轮以合成模型替换外部传输，走真实聊天引擎、HTTP 和 SQLite，核对历史、重试、重启、遗忘和取消。页面使用真实本机服务检查准备、设置、暂停和恢复；合成气泡渲染场景单独标注。没有新增付费模型调用、真实微信消息或生产数据迁移。
 
 ```powershell

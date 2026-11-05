@@ -50,7 +50,7 @@
     else window.clearTimeout(apps.loginTimer);
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "" };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "" };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -232,6 +232,12 @@
     field.setAttribute("aria-label", "回复会话 ID");
     field.value = apps.workerDrafts.get(id) ?? (status.configured_policy?.reply_threads || []).join("\n");
     field.addEventListener("input", () => apps.workerDrafts.set(id, field.value));
+    const history = document.createElement("textarea");
+    history.rows = 2;
+    history.placeholder = "可留空，或填写已允许回复的会话 ID";
+    history.setAttribute("aria-label", "历史与成员读取会话 ID");
+    history.value = apps.historyDrafts.get(id) ?? (status.configured_policy?.history_threads || []).join("\n");
+    history.addEventListener("input", () => apps.historyDrafts.set(id, history.value));
     const attachments = document.createElement("textarea");
     attachments.rows = 2;
     attachments.placeholder = "可留空，或填写上方已允许回复的会话 ID";
@@ -246,11 +252,13 @@
     mediaReplies.addEventListener("input", () => apps.mediaReplyDrafts.set(id, mediaReplies.value));
     const save = appSetupButton("保存回复范围", () => {
       const reply_threads = field.value.split(/[\s，,]+/u).filter(Boolean);
+      const history_threads = history.value.split(/[\s，,]+/u).filter(Boolean);
       const attachment_threads = attachments.value.split(/[\s，,]+/u).filter(Boolean);
       const media_reply_threads = mediaReplies.value.split(/[\s，,]+/u).filter(Boolean);
-      runWorkerAction(id, "PUT", "policy", { reply_threads, attachment_threads, media_reply_threads });
+      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, media_reply_threads });
     });
     panel.append(appElement("p", "每行一个会话 ID。群聊仅在被提及时回复。"), field,
+      appElement("p", "历史消息与群成员须单独授权；大肥鱼仅能读取当前所在会话。"), history,
       appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments,
       appElement("p", "附件回复须单独授权，只能把本会话的附件发回本会话。"), mediaReplies, save, workGrantControls(id));
     return panel;
@@ -441,6 +449,7 @@
       if (current !== apps) return;
       if (action === "policy") {
         current.workerDrafts.delete(id);
+        current.historyDrafts.delete(id);
         current.attachmentDrafts.delete(id);
         current.mediaReplyDrafts.delete(id);
         appFeedback(result.connection?.submissions_paused ? "回复范围已保存，Agent 已暂停。" : "回复范围已保存。");

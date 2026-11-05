@@ -45,6 +45,7 @@ type ConfiguredPolicy struct {
 	ReplyThreads        []string `json:"reply_threads,omitempty"`
 	AttachmentThreads   []string `json:"attachment_threads,omitempty"`
 	MediaReplyThreads   []string `json:"media_reply_threads,omitempty"`
+	HistoryThreads      []string `json:"history_threads,omitempty"`
 }
 
 type ConnectionStatus struct {
@@ -79,6 +80,7 @@ type ConnectionPolicyInput struct {
 	// A nil list leaves the old attachment grant on still-allowed threads.
 	AttachmentThreads *[]string
 	MediaReplyThreads *[]string
+	HistoryThreads    *[]string
 }
 
 type Provider interface {
