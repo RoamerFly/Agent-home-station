@@ -4,6 +4,7 @@ Repository: https://github.com/RoamerFly/Agent-home-station (private).
 
 - Follow the user's `github-project-dev-skill` when available at `C:/Users/浪客飞/.codex/skills/github-project-dev/SKILL.md`. Apply relevant server/web project rules; desktop installers, Tauri updating and signing are not requirements for this project.
 - Complete each authorized project update, run appropriate verification, then commit and push the task-related changes to this repository. Do not treat a local commit as a successful push. Report the commit and any unfinished validation or push failure.
+- Use Chinese commit messages for subsequent updates. Push every verified task update and report the destination branch and verified remote SHA; distinguish development-branch content from the default branch.
 - Inspect the current branch, remote history and user changes before editing. Never force-push, overwrite remote history, discard unrelated edits or bypass branch protection. For collaborative or multi-author work, use a feature branch and PR, and ensure checks pass before landing.
 - Preserve the active native WeChat login, private configuration, stored messages, models and generated media. Do not send real test messages without the user's authorization for that recipient and purpose.
 - Do not build/export Docker images or publish releases until the user requests that stage. Source-only checks and local executable builds are allowed.
