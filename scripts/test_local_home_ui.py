@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -58,15 +58,16 @@ def assert_no_horizontal_overflow(page, scene):
 
 
 def assert_worker_controls_fit(page):
-    assert page.evaluate("""() => {
+    clipped = page.evaluate("""() => {
         const panel = document.querySelector('.app-worker');
         const area = panel.getBoundingClientRect();
-        return [...panel.querySelectorAll('button, textarea, input')].every((node) => {
-            if (node.closest('details:not([open])')) return true;
+        return [...panel.querySelectorAll('button, textarea, input')].filter((node) => {
+            if (node.closest('details:not([open])')) return false;
             const bounds = node.getBoundingClientRect();
-            return bounds.left >= area.left - 1 && bounds.right <= area.right + 1;
-        });
-    }"""), "visible worker controls clipped inside their card"
+            return bounds.left < area.left - 1 || bounds.right > area.right + 1;
+        }).map((node) => node.getAttribute('aria-label') || node.textContent.trim());
+    }""")
+    assert not clipped, f"visible worker controls clipped inside their card: {clipped}"
 
 
 def app_connection_payload():
@@ -376,11 +377,84 @@ def verify(binary, output):
                 page.get_by_text("大页联系人 · wxid-synthetic-4", exact=True).wait_for()
                 page.get_by_text("本页 1 条，每页最多 200 条 · 原生接口单页上限为 200 条，可用续读位置继续。", exact=False).wait_for()
                 assert len(contact_queries) == 3
+
+                groups_pattern = re.compile(r".*/api/apps/wechat/connections/synthetic-wechat/groups(?:\?.*)?$")
+                group_notification_pattern = re.compile(r".*/api/apps/wechat/connections/synthetic-wechat/groups/.+/notification$")
+                group_actions_pattern = status_pattern + "/group-actions"
+                group_queries, group_actions, group_reads = [], [], {}
+                group_state = {"muted": False, "operation": None}
+
+                def group_directory(route):
+                    assert route.request.method == "GET"
+                    assert "/synthetic-wechat/groups" in route.request.url
+                    query = parse_qs(urlparse(route.request.url).query, keep_blank_values=True)
+                    group_queries.append(query)
+                    assert query["search"] == ["测试"]
+                    assert query["limit"] == ["50"]
+                    if query.get("cursor") == ["synthetic-groups-next"]:
+                        fulfill_json({"items": [{"id": "unknown-room@chatroom", "display_name": "未知状态群"}], "has_more": False,
+                                      "effective_limit": 50, "coverage": "已读取 2 个匹配群聊"})(route)
+                    else:
+                        assert "cursor" not in query
+                        fulfill_json({"items": [{"id": "synthetic-room@chatroom", "display_name": "合成测试群"}],
+                                      "next_cursor": "synthetic-groups-next", "has_more": True, "effective_limit": 50,
+                                      "coverage": "已读取前 1 个匹配群聊"})(route)
+
+                def group_notification(route):
+                    assert route.request.method == "GET"
+                    path = unquote(urlparse(route.request.url).path)
+                    group_id = path.split("/groups/", 1)[1].rsplit("/notification", 1)[0]
+                    group_reads[group_id] = group_reads.get(group_id, 0) + 1
+                    if group_id == "synthetic-room@chatroom":
+                        if group_reads[group_id] >= 2 and group_state["operation"]:
+                            group_state.update(muted=True, operation={"operation_id": "group-mute-1", "state": "succeeded", "lookup": "wechat-receipt"})
+                        fulfill_json({"muted": group_state["muted"], "can_change": True, "operation": group_state["operation"]})(route)
+                        return
+                    assert group_id == "unknown-room@chatroom"
+                    fulfill_json({"can_change": False, "coverage": "unavailable",
+                                  "operation": {"operation_id": "group-mute-unknown", "state": "submission_unknown", "lookup": "native-lookup"}})(route)
+
+                def group_action(route):
+                    assert route.request.method == "POST"
+                    assert route.request.headers.get("x-csrf-token")
+                    body = route.request.post_data_json
+                    assert body["group_id"] == "synthetic-room@chatroom"
+                    assert body["muted"] is True
+                    assert re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", body["request_key"])
+                    group_actions.append(body)
+                    group_state["operation"] = {"operation_id": "group-mute-1", "state": "submitted_pending", "lookup": "native-queued"}
+                    fulfill_json(group_state["operation"])(route)
+
+                page.route(groups_pattern, group_directory)
+                page.route(group_notification_pattern, group_notification)
+                page.route(group_actions_pattern, group_action)
+                page.get_by_text("群聊", exact=True).click()
+                page.get_by_role("textbox", name="搜索群聊", exact=True).fill("测试")
+                page.get_by_role("button", name="查询群聊", exact=True).click()
+                page.get_by_role("button", name="合成测试群 · synthetic-room@chatroom", exact=True).click()
+                page.get_by_text("当前为正常提醒", exact=True).wait_for()
+                page.get_by_role("button", name="设为免打扰", exact=True).click()
+                page.get_by_text("将“合成测试群”设为免打扰。", exact=True).wait_for()
+                page.get_by_role("button", name="确认提交", exact=True).click()
+                page.get_by_text("已提交，等待微信确认 · 操作 group-mute-1", exact=True).wait_for()
+                assert len(group_actions) == 1
+                page.get_by_role("button", name="刷新状态", exact=True).click()
+                page.get_by_text("当前为免打扰", exact=True).wait_for()
+                page.get_by_text("已确认完成 · 操作 group-mute-1", exact=True).wait_for()
+                assert len(group_actions) == 1
+                page.locator(".group-directory").get_by_role("button", name="下一页", exact=True).click()
+                page.get_by_role("button", name="未知状态群 · unknown-room@chatroom", exact=True).click()
+                page.get_by_text("当前免打扰状态未取得，可刷新后再决定。", exact=True).wait_for()
+                page.get_by_text("提交结果待核对 · 操作 group-mute-unknown", exact=True).wait_for()
+                assert page.get_by_role("button", name="设为免打扰", exact=True).count() == 0
+                page.get_by_text("当前连接不能修改这个群聊；仍可刷新查看已有操作回执。", exact=True).wait_for()
+                assert len(group_queries) == 2
                 page.set_viewport_size({"width": 375, "height": 780})
-                assert_no_horizontal_overflow(page, "WeChat contacts directory")
+                assert_no_horizontal_overflow(page, "WeChat group directory")
                 assert_worker_controls_fit(page)
-                page.screenshot(path=str(output / "apps-contacts-narrow.png"), full_page=True)
+                page.screenshot(path=str(output / "apps-groups-narrow.png"), full_page=True)
                 page.set_viewport_size({"width": 1280, "height": 800})
+                page.get_by_text("群聊", exact=True).click()
                 page.get_by_text("通讯录", exact=True).click()
                 share = {"installed": False, "enabled": False, "runtime_ready": True, "revision": 0, "configuration": {"revision": 0, "values": {}, "configured_secrets": []}}
                 def share_settings(route):

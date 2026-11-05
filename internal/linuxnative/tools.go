@@ -39,10 +39,11 @@ func safeThreadID(value string) bool {
 }
 
 type Capabilities struct {
-	MediaKinds        []string         `json:"mediaKinds"`
-	MediaSendMaxBytes map[string]int64 `json:"mediaSendMaxBytes"`
-	QuotedTextSend    bool             `json:"quotedTextSend"`
-	GroupMutations    []string         `json:"groupMutations"`
+	MediaKinds                []string         `json:"mediaKinds"`
+	MediaSendMaxBytes         map[string]int64 `json:"mediaSendMaxBytes"`
+	QuotedTextSend            bool             `json:"quotedTextSend"`
+	GroupMutations            []string         `json:"groupMutations"`
+	ThreadNotificationTargets []string         `json:"threadNotificationTargets"`
 }
 type UploadSource struct {
 	ID          string `json:"id"`

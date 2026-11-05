@@ -184,7 +184,9 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .app-worker-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .app-worker textarea { box-sizing: border-box; width: 100%; min-width: 0; }
 .app-worker > .button { justify-self: start; }
-.contact-directory input { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; }
+.contact-directory input, .group-directory input { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; }
+.group-directory, .group-directory .details-grid, .group-directory small { min-width: 0; overflow-wrap: anywhere; }
+.group-directory .button.group-directory-row { width: 100%; min-width: 0; max-width: 100%; justify-content: flex-start; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .work-register { margin-bottom: 14px; }
 .work-grant-panel { min-width: 0; }
 .work-grant-panel input { box-sizing: border-box; width: 100%; }
@@ -257,6 +259,8 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
   .app-layer { grid-template-columns: 4.5em minmax(0, 1fr); padding: 12px; }
   .app-layer > .button { grid-column: 2; width: auto; justify-self: start; }
   .app-layer .app-accounts .button { width: auto; max-width: 100%; }
+  .app-worker .identity-details, .app-worker .details-grid, .app-worker .work-records { min-width: 0; max-width: 100%; }
+  .app-worker .app-worker-actions .button, .app-worker .work-records .button { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 }
 
 @media (prefers-reduced-motion: reduce) {

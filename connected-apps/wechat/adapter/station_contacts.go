@@ -22,14 +22,20 @@ type StationContact struct {
 	DisplayName string `json:"display_name"`
 }
 
-// ProjectStationContacts keeps native profile locations and protocol fields in
+// ProjectStationDirectory keeps native profile locations and protocol fields in
 // the host. The native coverage object includes database paths and generations.
-func ProjectStationContacts(page linuxnative.CatalogPage) ([]StationContact, *bool, error) {
+func ProjectStationDirectory(page linuxnative.CatalogPage, groups bool) ([]StationContact, *bool, error) {
 	items := make([]StationContact, 0, len(page.Items))
 	seen := make(map[string]bool, len(page.Items))
 	for _, row := range page.Items {
 		id, _ := row["id"].(string)
 		username, _ := row["username"].(string)
+		if groups {
+			username, _ = row["roomId"].(string)
+			if username != id || !strings.HasSuffix(id, "@chatroom") {
+				return nil, nil, errors.New("wechat_group_identity_invalid")
+			}
+		}
 		if id == "" || len(id) > 256 || !utf8.ValidString(id) || strings.ContainsFunc(id, func(r rune) bool {
 			return unicode.IsControl(r) || unicode.IsSpace(r)
 		}) || username != "" && username != id || seen[id] {

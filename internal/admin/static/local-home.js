@@ -224,7 +224,7 @@
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
     toggle.disabled ||= status.worker === "stopping" || !running && !status.configured_policy?.conversation_enabled;
     buttons.append(toggle);
-    panel.append(buttons, contactDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
+    panel.append(buttons, contactDirectoryControls(id), groupDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
     if (apps.editWorker !== id) return panel;
     const field = document.createElement("textarea");
     field.rows = 3;
@@ -331,6 +331,179 @@
         next.disabled = !hasNext;
         const effectiveLimit = Number.isInteger(result.effective_limit) && result.effective_limit > 0 ? result.effective_limit : limitValue;
         note.textContent = (result.coverage || "已读取当前可见联系人。") + " · 本页 " + items.length + " 条，每页最多 " + effectiveLimit + " 条" + (result.limit_reason ? " · " + result.limit_reason : "");
+      } catch (error) {
+        appFeedback(error.message, true);
+      } finally {
+        busy = false;
+        query.disabled = false;
+        next.disabled = !hasNext;
+      }
+    }
+    form.addEventListener("submit", (event) => { event.preventDefault(); load(true); });
+    return panel;
+  }
+  function groupDirectoryControls(id) {
+    const panel = appElement("details", "", "identity-details group-directory");
+    panel.append(appElement("summary", "群聊"));
+    const form = appElement("form", "", "details-grid");
+    const search = document.createElement("input");
+    search.placeholder = "群名或群 ID";
+    search.setAttribute("aria-label", "搜索群聊");
+    const limit = document.createElement("input");
+    limit.type = "number";
+    limit.min = "1";
+    limit.step = "1";
+    limit.value = "50";
+    limit.required = true;
+    limit.setAttribute("aria-label", "群聊每页数量");
+    const searchLabel = appElement("label", "搜索群聊");
+    searchLabel.append(search);
+    const limitLabel = appElement("label", "每页数量");
+    limitLabel.append(limit);
+    form.append(searchLabel, limitLabel);
+    const actions = appElement("div", "", "app-worker-actions");
+    const query = appSetupButton("查询群聊");
+    query.type = "submit";
+    const next = appSetupButton("下一页", () => load(false));
+    next.disabled = true;
+    actions.append(query, next);
+    form.append(actions);
+    const note = appElement("small", "本页仅显示当前微信连接可管理的群聊。");
+    const records = appElement("div", "", "work-records");
+    const control = appElement("div", "", "details-grid");
+    control.hidden = true;
+    panel.append(form, note, records, control);
+    let cursor = "", hasNext = false, busy = false, appliedSearch = "", appliedLimit = 50;
+    let selected = null, notification = null, selectedAction = null, controlBusy = false, needsRefresh = false;
+    const base = "/api/apps/wechat/connections/" + encodeURIComponent(id);
+    function receiptLabel(operation) {
+      if (!operation || !operation.state) return "尚无操作记录";
+      if (["succeeded", "confirmed", "completed"].includes(operation.state)) return "已确认完成";
+      if (["submitted_pending", "pending", "running"].includes(operation.state)) return "已提交，等待微信确认";
+      if (["submission_unknown", "unknown"].includes(operation.state)) return "提交结果待核对";
+      if (["cancelled", "canceled"].includes(operation.state)) return "操作已取消";
+      if (["failed", "rejected"].includes(operation.state)) return "操作未完成";
+      return "状态待核对";
+    }
+    function isOutstanding(operation) {
+      return Boolean(operation && ["submitted_pending", "pending", "running", "submission_unknown", "unknown"].includes(operation.state));
+    }
+    function renderControl() {
+      control.replaceChildren();
+      if (!selected) { control.hidden = true; return; }
+      control.hidden = false;
+      control.append(appElement("strong", selected.display_name || "未命名群聊"), appElement("small", selected.id));
+      const mutedKnown = typeof notification?.muted === "boolean";
+      const coverage = notification?.coverage === "cached" ? "（来自本机缓存）" : "";
+      control.append(appElement("small", mutedKnown
+        ? (notification.muted ? "当前为免打扰" : "当前为正常提醒") + coverage
+        : "当前免打扰状态未取得，可刷新后再决定。"));
+      const operation = notification?.operation || null;
+      if (operation) control.append(appElement("small", receiptLabel(operation) + (operation.operation_id ? " · 操作 " + operation.operation_id : "")));
+      const refresh = appSetupButton(controlBusy ? "正在刷新…" : "刷新状态", () => loadNotification());
+      refresh.disabled ||= controlBusy;
+      control.append(refresh);
+      if (needsRefresh) {
+        control.append(appElement("small", "提交结果暂不可确认，请先刷新状态；不会自动重复提交。"));
+        return;
+      }
+      if (notification?.can_change !== true) {
+        control.append(appElement("small", "当前连接不能修改这个群聊；仍可刷新查看已有操作回执。"));
+        return;
+      }
+      if (isOutstanding(operation)) {
+        control.append(appElement("small", "这项群聊操作仍在核对中；刷新只查询状态，不会重复提交。"));
+        return;
+      }
+      const choices = appElement("div", "", "app-worker-actions");
+      const mute = appSetupButton("设为免打扰", () => { selectedAction = true; renderControl(); });
+      const unmute = appSetupButton("取消免打扰", () => { selectedAction = false; renderControl(); });
+      mute.disabled ||= controlBusy;
+      unmute.disabled ||= controlBusy;
+      choices.append(mute, unmute);
+      control.append(choices);
+      if (typeof selectedAction !== "boolean") return;
+      const confirmation = appElement("div", "", "app-worker-actions");
+      confirmation.append(appElement("small", `将“${selected.display_name || selected.id}”${selectedAction ? "设为免打扰" : "取消免打扰"}。`));
+      const confirm = appSetupButton("确认提交", () => submitAction());
+      const cancel = appSetupButton("取消", () => { selectedAction = null; renderControl(); });
+      confirm.disabled ||= controlBusy;
+      cancel.disabled ||= controlBusy;
+      confirmation.append(confirm, cancel);
+      control.append(confirmation);
+    }
+    async function loadNotification() {
+      if (!selected || controlBusy) return;
+      controlBusy = true;
+      renderControl();
+      try {
+        notification = await request(base + "/groups/" + encodeURIComponent(selected.id) + "/notification");
+        selectedAction = null;
+        needsRefresh = false;
+      } catch (error) {
+        appFeedback(error.message, true);
+      } finally {
+        controlBusy = false;
+        renderControl();
+      }
+    }
+    async function selectGroup(item) {
+      if (controlBusy) return;
+      selected = item;
+      notification = null;
+      selectedAction = null;
+      needsRefresh = false;
+      renderControl();
+      await loadNotification();
+    }
+    async function submitAction() {
+      if (!selected || typeof selectedAction !== "boolean" || controlBusy) return;
+      controlBusy = true;
+      renderControl();
+      try {
+        const receipt = await request(base + "/group-actions", { method: "POST", body: JSON.stringify({
+          group_id: selected.id, muted: selectedAction, request_key: crypto.randomUUID()
+        }) });
+        notification = { ...(notification || {}), operation: receipt };
+        selectedAction = null;
+      } catch (error) {
+        selectedAction = null;
+        needsRefresh = true;
+        appFeedback(error.message, true);
+      } finally {
+        controlBusy = false;
+        renderControl();
+      }
+    }
+    async function load(reset) {
+      if (busy) return;
+      const searchValue = reset ? search.value.trim() : appliedSearch;
+      const limitValue = reset ? limit.valueAsNumber : appliedLimit;
+      if (!Number.isSafeInteger(limitValue) || limitValue < 1) {
+        appFeedback("每页数量须为正整数。", true);
+        return;
+      }
+      const requestCursor = reset ? "" : cursor;
+      busy = true;
+      query.disabled = next.disabled = true;
+      try {
+        const params = new URLSearchParams({ search: searchValue, limit: String(limitValue) });
+        if (requestCursor) params.set("cursor", requestCursor);
+        const result = await request(base + "/groups?" + params.toString());
+        if (reset) { appliedSearch = searchValue; appliedLimit = limitValue; }
+        records.replaceChildren();
+        const items = result.items || [];
+        for (const item of items) {
+          const row = appSetupButton((item.display_name || "未命名群聊") + " · " + item.id, () => selectGroup(item));
+          row.classList.add("group-directory-row");
+          records.append(row);
+        }
+        if (!records.children.length) records.append(appElement("small", "没有匹配的群聊。"));
+        cursor = result.next_cursor || "";
+        hasNext = Boolean(result.has_more && cursor);
+        next.disabled = !hasNext;
+        const effectiveLimit = Number.isInteger(result.effective_limit) && result.effective_limit > 0 ? result.effective_limit : limitValue;
+        note.textContent = (result.coverage || "已读取当前可见群聊。") + " · 本页 " + items.length + " 条，每页最多 " + effectiveLimit + " 条" + (result.limit_reason ? " · " + result.limit_reason : "");
       } catch (error) {
         appFeedback(error.message, true);
       } finally {

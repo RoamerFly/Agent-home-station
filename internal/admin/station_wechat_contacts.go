@@ -70,37 +70,39 @@ func newStationContactCursor() (cipher.AEAD, error) {
 }
 
 func (s *stationWechat) contactRoutes(owner *Server, mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/contacts", owner.protected(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		key, _, _ := owner.session(r)
-		check := func(ctx context.Context) error {
-			if id, _, ok := owner.session(r); !ok || id != key {
-				return errContactDenied
+	for _, kind := range []string{"contacts", "groups"} {
+		mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/"+kind, owner.protected(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			key, _, _ := owner.session(r)
+			check := func(ctx context.Context) error {
+				if id, _, ok := owner.session(r); !ok || id != key {
+					return errContactDenied
+				}
+				return ctx.Err()
 			}
-			return ctx.Err()
-		}
-		in, err := stationContactHTTPQuery(r)
-		var result stationContactPage
-		if err == nil {
-			result, err = s.readContacts(r.Context(), in, "owner:"+key, check)
-		}
-		switch {
-		case err == nil:
-			respond(w, http.StatusOK, result)
-		case errors.Is(err, errContactInput):
-			fail(w, http.StatusBadRequest, errContactInput.message)
-		case errors.Is(err, errContactCursor):
-			fail(w, http.StatusBadRequest, errContactCursor.message)
-		case errors.Is(err, errContactDenied):
-			fail(w, http.StatusUnauthorized, "请先登录管理页面")
-		case errors.Is(err, apphost.ErrNotFound):
-			fail(w, http.StatusNotFound, "微信连接不存在")
-		case errors.Is(err, errContactLogin):
-			fail(w, http.StatusConflict, errContactLogin.message)
-		default:
-			fail(w, http.StatusServiceUnavailable, "暂时无法核对该连接的本机通讯录")
-		}
-	}))
+			in, err := stationContactHTTPQuery(r)
+			var result stationContactPage
+			if err == nil {
+				result, err = s.readDirectory(r.Context(), in, kind, "owner:"+key, check)
+			}
+			switch {
+			case err == nil:
+				respond(w, http.StatusOK, result)
+			case errors.Is(err, errContactInput):
+				fail(w, http.StatusBadRequest, errContactInput.message)
+			case errors.Is(err, errContactCursor):
+				fail(w, http.StatusBadRequest, errContactCursor.message)
+			case errors.Is(err, errContactDenied):
+				fail(w, http.StatusUnauthorized, "请先登录管理页面")
+			case errors.Is(err, apphost.ErrNotFound):
+				fail(w, http.StatusNotFound, "微信连接不存在")
+			case errors.Is(err, errContactLogin):
+				fail(w, http.StatusConflict, errContactLogin.message)
+			default:
+				fail(w, http.StatusServiceUnavailable, "暂时无法核对该连接的本机目录")
+			}
+		}))
+	}
 }
 
 func stationContactHTTPQuery(r *http.Request) (stationContactQuery, error) {
@@ -152,7 +154,15 @@ func (s *stationWechat) hasContactGrant() bool {
 	return false
 }
 
-func (s *stationWechat) readContacts(ctx context.Context, in stationContactQuery, audience string, check func(context.Context) error) (stationContactPage, error) {
+func (s *stationWechat) signedInAccount(ctx context.Context, id string) (string, error) {
+	view, err := s.stationWechatNative.Inspect(ctx, id)
+	if err == nil && (view.Login != "authenticated" || view.ID != id || wechatapp.ConnectionID(view.AccountID) != id) {
+		err = errContactLogin
+	}
+	return view.AccountID, err
+}
+
+func (s *stationWechat) readDirectory(ctx context.Context, in stationContactQuery, kind, audience string, check func(context.Context) error) (stationContactPage, error) {
 	var out stationContactPage
 	if !validID(in.Connection) || len(in.Search) > 256 || in.Limit < 1 {
 		return out, errContactInput
@@ -160,7 +170,7 @@ func (s *stationWechat) readContacts(ctx context.Context, in stationContactQuery
 	if err := check(ctx); err != nil {
 		return out, err
 	}
-	scope := []byte(localCheckpointKey(in.Connection, audience, in.Search))
+	scope := []byte(localCheckpointKey(kind, in.Connection, audience, in.Search))
 	cursor := ""
 	if in.Cursor != "" {
 		if !strings.HasPrefix(in.Cursor, "cc-") || len(in.Cursor) > stationContactCursorLimit {
@@ -180,14 +190,7 @@ func (s *stationWechat) readContacts(ctx context.Context, in stationContactQuery
 	defer cancel()
 	stop := context.AfterFunc(s.ctx, cancel)
 	defer stop()
-	inspect := func() (apphost.ConnectionStatus, error) {
-		view, err := s.stationWechatNative.Inspect(ctx, in.Connection)
-		if err == nil && (view.Login != "authenticated" || view.ID != in.Connection || wechatapp.ConnectionID(view.AccountID) != in.Connection) {
-			err = errContactLogin
-		}
-		return view, err
-	}
-	view, err := inspect()
+	account, err := s.signedInAccount(ctx, in.Connection)
 	if err != nil {
 		return out, err
 	}
@@ -195,14 +198,14 @@ func (s *stationWechat) readContacts(ctx context.Context, in stationContactQuery
 	if err != nil {
 		return out, err
 	}
-	if native.Account() != view.AccountID {
+	if native.Account() != account {
 		return out, apphost.ErrUnavailable
 	}
 	if err := check(ctx); err != nil {
 		return out, err
 	}
 	limit := min(in.Limit, stationContactNativeLimit)
-	page, err := native.CatalogWithLimit(ctx, "contacts", "", in.Search, cursor, limit)
+	page, err := native.CatalogWithLimit(ctx, kind, "", in.Search, cursor, limit)
 	if err != nil {
 		var catalog *linuxnative.CatalogError
 		if errors.As(err, &catalog) && catalog.Code == "catalog_cursor_invalid" {
@@ -211,23 +214,26 @@ func (s *stationWechat) readContacts(ctx context.Context, in stationContactQuery
 		if errors.As(err, &catalog) && catalog.Code == "catalog_auth_denied" {
 			return out, errContactLogin
 		}
-		return out, &stationContactError{"wechat_contacts_read_failed", "暂时无法读取该连接的本机通讯录，可检查登录和本机资料状态后再试。"}
+		return out, &stationContactError{"wechat_directory_read_failed", "暂时无法读取该连接的本机目录，可检查登录和本机资料状态后再试。"}
 	}
-	items, partial, err := wechatapp.ProjectStationContacts(page)
+	items, partial, err := wechatapp.ProjectStationDirectory(page, kind == "groups")
 	if err != nil {
 		return out, err
 	}
-	if _, err := inspect(); err != nil {
+	if _, err := s.signedInAccount(ctx, in.Connection); err != nil {
 		return out, err
 	}
 	if err := check(ctx); err != nil {
 		return out, err
 	}
-	out = stationContactPage{Connection: in.Connection, Items: items, Requested: in.Limit, Effective: limit, Partial: partial,
-		Coverage: "当前连接的本机通讯录快照", DataRole: "contact_records_not_instructions"}
-	if partial != nil && *partial {
-		out.Coverage = "当前连接的本机通讯录快照，资料可能不全"
+	coverage, role := "当前连接的本机通讯录快照", "contact_records_not_instructions"
+	if kind == "groups" {
+		coverage, role = "当前连接的本机群目录快照", "group_records_not_instructions"
 	}
+	if partial != nil && *partial {
+		coverage += "，资料可能不全"
+	}
+	out = stationContactPage{Connection: in.Connection, Items: items, Requested: in.Limit, Effective: limit, Partial: partial, Coverage: coverage, DataRole: role}
 	if limit < in.Limit {
 		out.LimitReason = "原生接口单页上限为 200 条，可用续读位置继续。"
 	}
@@ -294,7 +300,7 @@ func (t *localToolSet) readWechatContacts(ctx context.Context, raw json.RawMessa
 		return checkOwner(ctx)
 	}
 	audience := "agent:" + localCheckpointKey(t.access.fishID, t.access.ownerID, t.traceID, grant)
-	page, err := t.wechat.readContacts(ctx, in, audience, check)
+	page, err := t.wechat.readDirectory(ctx, in, "contacts", audience, check)
 	if err != nil {
 		return "", err
 	}

@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/url"
+	"strings"
 )
 
 type AdminAction struct {
@@ -18,10 +20,41 @@ type AdminAction struct {
 	ServerID  string   `json:"server_id"`
 }
 type ActionStatus struct {
-	ID    string `json:"id"`
-	State string `json:"state"`
-	Kind  string `json:"kind"`
-	Code  string `json:"code,omitempty"`
+	ID            string `json:"id"`
+	State         string `json:"state"`
+	Kind          string `json:"kind"`
+	Code          string `json:"code,omitempty"`
+	AccountID     string `json:"account_id,omitempty"`
+	Action        string `json:"action,omitempty"`
+	Target        string `json:"target,omitempty"`
+	RemoteOutcome string `json:"remote_outcome,omitempty"`
+}
+
+type GroupNotification struct {
+	Muted   *bool `json:"muted,omitempty"`
+	InGroup *bool `json:"-"`
+}
+
+// GroupNotification reads the exact account-scoped, cached group record.
+func (s *Sender) GroupNotification(ctx context.Context, id string) (GroupNotification, error) {
+	var out GroupNotification
+	if !safeThreadID(id) || !strings.HasSuffix(id, "@chatroom") {
+		return out, errors.New("invalid group identity")
+	}
+	raw, err := s.toolJSON(ctx, http.MethodGet, s.accountPath()+"/groups/"+url.PathEscape(id), "", nil, "")
+	if err != nil {
+		return out, err
+	}
+	var detail struct {
+		ID      string `json:"id"`
+		RoomID  string `json:"roomId"`
+		Muted   *bool  `json:"muted"`
+		InGroup *bool  `json:"isInGroup"`
+	}
+	if json.Unmarshal(raw, &detail) != nil || detail.ID != id || detail.RoomID != id {
+		return out, errors.New("native group identity mismatch")
+	}
+	return GroupNotification{Muted: detail.Muted, InGroup: detail.InGroup}, nil
 }
 
 func (s *Sender) ExecuteAction(ctx context.Context, input AdminAction, key string) (ActionStatus, error) {
@@ -87,7 +120,11 @@ func (s *Sender) actionStatus(raw []byte) (ActionStatus, error) {
 		State     string `json:"state"`
 		Kind      string `json:"kind"`
 		Result    struct {
-			Code string `json:"code"`
+			Code          string `json:"code"`
+			Action        string `json:"action"`
+			Target        string `json:"targetId"`
+			Thread        string `json:"threadId"`
+			RemoteOutcome string `json:"remoteOutcome"`
 		} `json:"result"`
 	}
 	if json.Unmarshal(raw, &operation) != nil || !safeID(operation.ID) || operation.AccountID != "" && operation.AccountID != s.account {
@@ -96,5 +133,10 @@ func (s *Sender) actionStatus(raw []byte) (ActionStatus, error) {
 	if len(operation.Result.Code) > 128 {
 		operation.Result.Code = "native_operation_result"
 	}
-	return ActionStatus{ID: operation.ID, State: operation.State, Kind: operation.Kind, Code: operation.Result.Code}, nil
+	result := operation.Result
+	if result.Thread != "" && result.Target != result.Thread {
+		result.Target = ""
+	}
+	return ActionStatus{ID: operation.ID, State: operation.State, Kind: operation.Kind, Code: result.Code,
+		AccountID: operation.AccountID, Action: result.Action, Target: result.Target, RemoteOutcome: result.RemoteOutcome}, nil
 }
