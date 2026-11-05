@@ -10,6 +10,37 @@ import (
 	"wechat-bot/internal/linuxnative"
 )
 
+func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limit int) (apphost.ReceiptPage, error) {
+	page := apphost.ReceiptPage{Items: []apphost.Receipt{}, Coverage: "current_worker_checkpoint"}
+	if after != "" && !validID(after) || limit < 1 {
+		return page, apphost.ErrNotFound
+	}
+	native, err := s.WorkerSender(ctx, id)
+	if err != nil {
+		return page, err
+	}
+	w, err := s.worker(id, false)
+	if err != nil {
+		return page, err
+	}
+	if w == nil {
+		return page, nil
+	}
+	rows, err := bot.ReadDeliveryEvidencePage(filepath.Join(w.dir, "queue"), native.Account(), after, limit)
+	if err != nil {
+		return page, apphost.ErrUnavailable
+	}
+	page.Snapshot, page.NextAfter = rows.Snapshot, rows.NextAfter
+	for _, key := range rows.Keys {
+		row := rows.Records[key]
+		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, native.Account()), ConversationID: row.Status.ThreadID,
+			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"}}
+		projectWechatReceipt(&receipt.DeliveryReceipt, row.Status)
+		page.Items = append(page.Items, receipt)
+	}
+	return page, nil
+}
+
 func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphost.Receipt, error) {
 	if !validID(key) {
 		return apphost.Receipt{}, apphost.ErrNotFound

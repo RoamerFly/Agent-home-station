@@ -253,6 +253,26 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	lifecycle(f, "two", "start", 409)
 	request(f, "GET", path("two")+"/receipts/"+receiptKey, nil, false, 200)
 	request(f, "GET", path("one")+"/receipts/"+receiptKey, nil, false, 404)
+	listed := request(f, "GET", path("two")+"/receipts?limit=1", nil, false, 200)
+	items, _ := listed["items"].([]any)
+	if len(items) != 1 || listed["coverage"] != "current_worker_checkpoint" || listed["snapshot"] == "" {
+		t.Fatal("missing scoped delivery list", listed)
+	}
+	item := items[0].(map[string]any)
+	if item["idempotency_key"] != receiptKey || item["conversation_id"] != "person-two" || item["lookup"] != "stored" {
+		t.Fatal("delivery list lost original task identity", listed)
+	}
+	request(f, "GET", path("two")+"/receipts?limit=0", nil, false, 400)
+	request(f, "GET", path("two")+"/receipts?after=../foreign", nil, false, 400)
+	request(f, "GET", path("two")+"/receipts?after="+receiptKey, nil, false, 200)
+	anonymous, err := http.Get(f.server.URL + path("two") + "/receipts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anonymous.Body.Close()
+	if anonymous.StatusCode != 401 {
+		t.Fatal("anonymous receipt listing", anonymous.StatusCode)
+	}
 	// Regranting the same thread requires a new request. The interrupted
 	// earlier message must not be regenerated using the new authorization.
 	policy(f, "one")

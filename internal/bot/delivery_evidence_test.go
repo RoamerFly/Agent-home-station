@@ -1,11 +1,67 @@
 package bot
 
 import (
+	"encoding/json"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"wechat-bot/internal/companion"
 )
+
+func TestDeliveryEvidencePagesAreScopedStableAndExcludeContent(t *testing.T) {
+	dir := t.TempDir()
+	input := companion.Input{Account: "fixture", Thread: "room@chatroom", Text: "private request"}
+	snapshot := runtimeState{Version: 1, Account: input.Account}
+	for _, key := range []string{"third", "first", "second"} {
+		snapshot.Deliveries = append(snapshot.Deliveries, &delivery{Key: key, State: "prepared", Thread: input.Thread,
+			Input: input, SubmittedText: "private outgoing text"})
+	}
+	path := filepath.Join(dir, "messages-v2.json")
+	if err := atomicState(path, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	first, err := ReadDeliveryEvidencePage(dir, input.Account, "", 2)
+	if err != nil || !reflect.DeepEqual(first.Keys, []string{"first", "second"}) || first.NextAfter != "second" || first.Snapshot == "" {
+		t.Fatal(first, err)
+	}
+	last, err := ReadDeliveryEvidencePage(dir, input.Account, first.NextAfter, 2)
+	if err != nil || !reflect.DeepEqual(last.Keys, []string{"third"}) || last.NextAfter != "" || last.Snapshot != first.Snapshot {
+		t.Fatal(last, err)
+	}
+	for _, row := range first.Records {
+		if row.Status.State != "unknown" {
+			t.Fatal("possible submission was reported unsent", row)
+		}
+	}
+	raw, _ := json.Marshal(first)
+	if strings.Contains(string(raw), "private") {
+		t.Fatal("checkpoint text leaked", string(raw))
+	}
+	if _, err := ReadDeliveryEvidencePage(dir, "foreign-account", "", 2); err == nil {
+		t.Fatal("foreign account checkpoint read")
+	}
+	if _, err := ReadDeliveryEvidencePage(dir, input.Account, "", 0); err == nil {
+		t.Fatal("invalid limit accepted")
+	}
+	all, err := ReadDeliveryEvidencePage(dir, input.Account, "", 1000)
+	if err != nil || len(all.Keys) != 3 || all.NextAfter != "" {
+		t.Fatal(all, err)
+	}
+	snapshot.Deliveries[0].State = "stopped"
+	if err := atomicState(path, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := ReadDeliveryEvidencePage(dir, input.Account, "", 2)
+	if err != nil || changed.Snapshot == first.Snapshot {
+		t.Fatal("snapshot change not identified", changed, err)
+	}
+	empty, err := ReadDeliveryEvidencePage(t.TempDir(), input.Account, "", 2)
+	if err != nil || len(empty.Keys) != 0 {
+		t.Fatal(empty, err)
+	}
+}
 
 func TestDeliveryEvidenceNeverAssignsEarlierReceiptToRetryKey(t *testing.T) {
 	dir := t.TempDir()

@@ -1,11 +1,14 @@
 package bot
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"wechat-bot/internal/linuxnative"
 )
@@ -19,6 +22,52 @@ type DeliveryEvidence struct {
 }
 
 const MaxDeliveryCheckpointBytes = 24 << 20
+
+// DeliveryEvidencePage contains only checkpoint metadata, never draft text or
+// media paths. Reading it cannot wake the worker or query a native send task.
+type DeliveryEvidencePage struct {
+	Keys                []string
+	Records             map[string]DeliveryEvidence
+	NextAfter, Snapshot string
+}
+
+func ReadDeliveryEvidencePage(dir, account, after string, limit int) (DeliveryEvidencePage, error) {
+	page := DeliveryEvidencePage{Keys: []string{}, Records: map[string]DeliveryEvidence{}}
+	if limit < 1 {
+		return page, errors.New("delivery page size must be positive")
+	}
+	f, err := os.Open(filepath.Join(dir, "messages-v2.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return page, nil
+	}
+	if err != nil {
+		return page, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, MaxDeliveryCheckpointBytes+1))
+	if err != nil {
+		return page, err
+	}
+	rows, err := decodeDeliveryEvidence(raw, account, nil)
+	if err != nil {
+		return page, err
+	}
+	page.Snapshot = fmt.Sprintf("%x", sha256.Sum256(raw))
+	for key := range rows {
+		if key > after {
+			page.Keys = append(page.Keys, key)
+		}
+	}
+	sort.Strings(page.Keys)
+	if len(page.Keys) > limit {
+		page.Keys = page.Keys[:limit]
+		page.NextAfter = page.Keys[len(page.Keys)-1]
+	}
+	for _, key := range page.Keys {
+		page.Records[key] = rows[key]
+	}
+	return page, nil
+}
 
 type deliveryCheckpointIdentity struct {
 	ID    string `json:"id"`

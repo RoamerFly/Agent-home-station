@@ -131,6 +131,10 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 
 「查看已有授权」可在重启后查看或撤销原授权。撤销会暂停该连接。重新授权使用新的请求编号，避免旧请求复活。家目录暂停期间不能交付作品，恢复后需重新授权。微信回执查询沿用原投递键。
 
+在微信连接下展开「投递记录」，查看当前工作器保存的文字与媒体投递状态。列表显示已接受、待核对及已取消的分段，未确认的在途分段不会提前算作取消。「核对回执」只查询原投递键或原生任务，不生成内容、不重新发送。当前列表不包含旧版导入的只读归档；归档回执仍可通过原编号接口查询。取消与显式续办的界面入口尚未接入，聊天中的停止请求继续使用现有队列。
+
+列表接口为 `GET /api/apps/wechat/connections/{connection}/receipts?limit=20&after=...`，要求本机主人登录。limit 为可调整的正整数；next_after 用于按投递编号继续查看。响应的 coverage 为 `current_worker_checkpoint`，snapshot 标识本次原子快照。翻页期间快照发生变化时，页面提示重新查看，避免混合两个版本。列表只返回投递元数据，不返回草稿正文、媒体路径或凭据，也不轮询原生服务；单条「核对回执」才查询平台任务。
+
 管理接口提供 `POST /api/local/artifacts`，参数为 path、request_key 和可选 expected_sha256；`GET /api/local/artifacts/{artifact}` 返回成品元数据。作品交付授权使用 `POST /api/apps/wechat/connections/{connection}/work-grants`，提供 artifact_id、thread_id、requester_id、request_key 和 enabled。`GET` 同路径列出授权，可用 limit、after 分页；`POST` 其下的 `{delivery}/revoke` 撤销原授权。接口均要求本机主人会话，写操作还需 CSRF。
 
 ### 在隔离副本预演旧版微信接入

@@ -224,7 +224,7 @@
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
     toggle.disabled ||= status.worker === "stopping" || !running && !status.configured_policy?.conversation_enabled;
     buttons.append(toggle);
-    panel.append(buttons);
+    panel.append(buttons, deliveryRecords(id));
     if (apps.editWorker !== id) return panel;
     const field = document.createElement("textarea");
     field.rows = 3;
@@ -314,6 +314,67 @@
       } catch (error) { appFeedback(error.message, true); list.disabled = false; }
     });
     panel.append(list, records);
+    return panel;
+  }
+  function deliveryRecords(id) {
+    const panel = appElement("details", "", "identity-details delivery-records");
+    panel.append(appElement("summary", "投递记录"));
+    const records = appElement("div", "", "work-records");
+    const note = appElement("small", "显示当前连接保存的投递状态。核对只查询原任务，不会重新发送。");
+    const base = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/receipts";
+    let after = "", snapshot = "", loading = false;
+    function describe(item) {
+      const labels = { accepted: "微信已接受", not_submitted: "待发送", submitted_pending: "等待微信回执", submission_unknown: "发送结果待核对", failed: "发送失败", cancelled: "已取消" };
+      const kinds = { text: "文字", voice: "语音", image: "图片", video: "视频", file: "文件" };
+      let status = labels[item.state] || "状态待核对";
+      const accepted = item.accepted_parts?.length || 0;
+      const pending = item.unconfirmed_parts?.filter((part) => part.state !== "cancelled").length || 0;
+      const cancelled = item.unconfirmed_parts?.filter((part) => part.state === "cancelled").length || 0;
+      if ((item.cancel_requested || item.state === "cancelled") && item.state !== "accepted") {
+        status = item.state === "cancelled" && !pending && !item.parts_incomplete ? "已取消" : "正在停止，等待回执";
+      }
+      const parts = [];
+      if (accepted) parts.push(`已接受 ${accepted} 段`);
+      if (pending) parts.push(`待核对 ${pending} 段`);
+      if (cancelled) parts.push(`已取消 ${cancelled} 段`);
+      if (item.parts_incomplete) parts.push("分段记录尚不完整");
+      return (kinds[item.kind] || "消息") + " · " + item.conversation_id + " · " + status + (parts.length ? "（" + parts.join("，") + "）" : "");
+    }
+    function append(item) {
+      const row = appElement("div", "", "work-record");
+      const text = appElement("small", describe(item));
+      const check = appSetupButton("核对回执", async () => {
+        check.disabled = true; check.textContent = "正在核对…";
+        try {
+          const result = await request(base + "/" + encodeURIComponent(item.idempotency_key));
+          text.textContent = describe(result);
+          if (result.lookup === "unavailable") text.textContent += " · 暂时无法连接，保留已知状态";
+        } catch (error) { appFeedback(error.message, true); }
+        finally { check.disabled = false; check.textContent = "核对回执"; }
+      });
+      row.append(text, check); records.append(row);
+    }
+    const more = appSetupButton("查看投递记录", async () => {
+      if (loading) return;
+      loading = true; more.disabled = true; more.textContent = "正在读取…";
+      try {
+        const result = await request(base + "?limit=20&after=" + encodeURIComponent(after));
+        if (after && snapshot !== (result.snapshot || "")) {
+          after = ""; snapshot = "";
+          note.textContent = "投递记录已更新，请重新查看。";
+          more.textContent = "重新查看";
+          return;
+        }
+        if (!after) records.replaceChildren();
+        for (const item of result.items || []) append(item);
+        if (!records.children.length) records.append(appElement("small", "此连接还没有当前投递记录。"));
+        snapshot = result.snapshot || ""; after = result.next_after || "";
+        note.textContent = "仅含当前连接队列保存的记录；旧版导入回执仍可按原编号查询。";
+        more.textContent = after ? "继续查看" : "重新查看";
+      } catch (error) { appFeedback(error.message, true); more.textContent = "重新查看"; }
+      finally { loading = false; more.disabled = false; }
+    });
+    panel.append(note, records, more);
     return panel;
   }
   $("#artifact-form").addEventListener("submit", async (event) => {

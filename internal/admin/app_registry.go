@@ -3,10 +3,13 @@ package admin
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"wechat-bot/internal/apphost"
 )
+
+var errReceiptPage = errors.New("invalid receipt page")
 
 func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 	s.appAccountSetupRoutes(mux, registry)
@@ -26,6 +29,8 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 			switch {
 			case errors.Is(err, apphost.ErrNotFound):
 				fail(w, http.StatusNotFound, "未找到可读取的应用连接或记录")
+			case errors.Is(err, errReceiptPage):
+				fail(w, http.StatusBadRequest, "页大小须为正整数，续读位置须使用上页返回的编号")
 			case err != nil:
 				fail(w, http.StatusServiceUnavailable, "暂时无法核对应用记录")
 			default:
@@ -54,6 +59,24 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 			return nil, apphost.ErrNotFound
 		}
 		return reader.ReadReceipt(r.Context(), r.PathValue("connection"), r.PathValue("key"))
+	})
+	handle("/api/apps/{app}/connections/{connection}/receipts", func(app apphost.Registration, r *http.Request) (any, error) {
+		reader, ok := app.Provider.(apphost.ReceiptLister)
+		if !ok {
+			return nil, apphost.ErrNotFound
+		}
+		limit, after := 20, r.URL.Query().Get("after")
+		if value := r.URL.Query().Get("limit"); value != "" {
+			var err error
+			limit, err = strconv.Atoi(value)
+			if err != nil || limit < 1 {
+				return nil, errReceiptPage
+			}
+		}
+		if after != "" && !validID(after) {
+			return nil, errReceiptPage
+		}
+		return reader.ListReceipts(r.Context(), r.PathValue("connection"), after, limit)
 	})
 	handle("/api/apps/{app}/connections/{connection}/operations/{operation}", func(app apphost.Registration, r *http.Request) (any, error) {
 		reader, ok := app.Provider.(apphost.ActionReader)

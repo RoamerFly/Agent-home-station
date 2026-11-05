@@ -78,6 +78,18 @@ type ReceiptReader interface {
 	ReadReceipt(ctx context.Context, connectionID, key string) (Receipt, error)
 }
 
+// ReceiptLister reads local delivery checkpoints; it never submits or retries.
+type ReceiptLister interface {
+	ListReceipts(ctx context.Context, connectionID, after string, limit int) (ReceiptPage, error)
+}
+
+type ReceiptPage struct {
+	Items     []Receipt `json:"items"`
+	NextAfter string    `json:"next_after,omitempty"`
+	Snapshot  string    `json:"snapshot,omitempty"`
+	Coverage  string    `json:"coverage"`
+}
+
 // ActionIntent is issued by the host at an existing authorization boundary.
 // It is persisted with the claim for audit, and does not authorize replay.
 type ActionIntent struct {
