@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ type localArtifact struct {
 	HomeRevision                           uint64
 	Source                                 *companion.SourceRef `json:",omitempty"`
 	Parent                                 *localArtifactLink   `json:",omitempty"`
+	ProjectTool                            string               `json:",omitempty"`
 }
 
 // localArtifactLink is host-minted provenance for a derived artifact. The
@@ -44,9 +46,13 @@ type localArtifactInput struct {
 	Expected string `json:"expected_sha256"`
 	Key      string `json:"request_key"`
 	parent   *localArtifactLink
+	project  string
 }
 
 func (a localArtifact) id() string {
+	if a.ProjectTool != "" {
+		return "work-" + localCheckpointKey(a.Fish, a.Owner, a.HomeRevision, a.Request, a.Source, a.Name, a.PathHash, a.Parent, a.ProjectTool)
+	}
 	if a.Parent != nil {
 		return "work-" + localCheckpointKey(a.Fish, a.Owner, a.HomeRevision, a.Request, a.Source, a.Name, a.PathHash, a.Parent)
 	}
@@ -88,23 +94,27 @@ func (s *localArtifactStore) access(a localArtifact) (*localWorkspaceAccess, boo
 func (s *localArtifactStore) accessWithParentCheck(a localArtifact, verifyParents context.Context) (*localWorkspaceAccess, bool) {
 	access := &localWorkspaceAccess{home: s.home, fishID: a.Fish, ownerID: a.Owner}
 	grant, err := access.resolve()
-	return access, err == nil && grant.FishID == a.Fish && grant.OwnerID == a.Owner && s.checkArtifactLineage(a, verifyParents)
+	return access, err == nil && grant.FishID == a.Fish && grant.OwnerID == a.Owner && s.checkArtifactLineage(a, verifyParents, false)
 }
 
 func (s *localArtifactStore) artifactLineageValid(a localArtifact) bool {
-	return s.checkArtifactLineage(a, nil)
+	return s.checkArtifactLineage(a, nil, false)
 }
 
 // The public read boundary also verifies parent bytes. Internal operation
 // fences recheck identity and source versions without rehashing large parents
 // for every write buffer.
-func (s *localArtifactStore) checkArtifactLineage(a localArtifact, verifyParents context.Context) bool {
+func (s *localArtifactStore) checkArtifactLineage(a localArtifact, verifyParents context.Context, staging bool) bool {
 	fish, owner := a.Fish, a.Owner
 	seen := map[string]bool{}
 	for {
 		if seen[a.ID] || a.Fish != fish || a.Owner != owner || !s.sourceValid(a) {
 			return false
 		}
+		if a.ProjectTool != "" && !staging && !s.projectArtifactCommitted(a) {
+			return false
+		}
+		staging = false
 		seen[a.ID] = true
 		if a.Parent == nil {
 			return true
@@ -125,6 +135,24 @@ func (s *localArtifactStore) checkArtifactLineage(a localArtifact, verifyParents
 			}
 		}
 	}
+}
+
+// A project may persist several immutable copies before it commits one job
+// result. Its unpublished copies are not downloadable or usable as inputs.
+func (s *localArtifactStore) projectArtifactCommitted(a localArtifact) bool {
+	if s.chat == nil || s.chat.projectTools == nil {
+		return false
+	}
+	host, err := s.chat.projectTools.forFish(a.Fish)
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	job, err := host.store.Job(ctx, a.Request)
+	return err == nil && job.Plugin == a.ProjectTool && job.State == "completed" && !job.CancelRequested &&
+		job.Context.Account == a.Fish && job.Context.Thread == a.Owner && job.Context.Requester == a.Owner &&
+		slices.Contains(job.Artifacts, a.ID)
 }
 
 func (s *localArtifactStore) read(id string) (localArtifact, error) {
@@ -213,10 +241,16 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 	if !safeMediaFilename(name) || len(name) > 255 || strings.ContainsAny(name, ":*?<>|") {
 		return localArtifact{}, errors.New("成品文件名无效")
 	}
-	a := localArtifact{Name: name, PathHash: localCheckpointKey(path), Fish: grant.FishID, Owner: grant.OwnerID, HomeRevision: grant.Revision, Request: in.Key, Source: source, Parent: in.parent}
+	a := localArtifact{Name: name, PathHash: localCheckpointKey(path), Fish: grant.FishID, Owner: grant.OwnerID, HomeRevision: grant.Revision, Request: in.Key, Source: source, Parent: in.parent, ProjectTool: in.project}
 	a.ID = a.id()
-	check := func() bool { return ctx.Err() == nil && access.current(grant) && s.artifactLineageValid(a) }
-	if cached, err := s.read(a.ID); err == nil {
+	check := func() bool {
+		return ctx.Err() == nil && access.current(grant) && s.checkArtifactLineage(a, nil, in.project != "")
+	}
+	read := s.read
+	if in.project != "" {
+		read = s.readRecord
+	}
+	if cached, err := read(a.ID); err == nil {
 		if in.Expected != "" && cached.SHA256 != in.Expected {
 			return localArtifact{}, errors.New("相同请求的成品内容已变更，请使用新请求登记")
 		}
@@ -287,7 +321,7 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 		return localArtifact{}, err
 	}
 	if err := access.withCurrentWriteGrant(grant, func() error { return root.Rename(stage, a.ID) }); err != nil {
-		cached, priorErr := s.read(a.ID)
+		cached, priorErr := read(a.ID)
 		if priorErr != nil || cached.SHA256 != a.SHA256 {
 			return localArtifact{}, err
 		}

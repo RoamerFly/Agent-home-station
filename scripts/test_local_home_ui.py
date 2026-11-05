@@ -2,6 +2,7 @@
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -293,6 +294,56 @@ def verify(binary, output):
                     page.screenshot(path=str(output / "project-tools-rvc-light.png"), full_page=True)
                     card.get_by_role("button", name="停用", exact=True).click()
                     page.get_by_text("RVC 换声已停用。", exact=True).wait_for()
+
+                comfy = next(tool for tool in context.request.get(origin + "/api/local/project-tools").json()["tools"]
+                             if tool["id"] == "comfyui")
+                if comfy["catalog_available"]:
+                    assert not comfy["runtime_ready"]
+                    # Only metadata preflight runs in this browser replay.
+                    runtime, models, workflows = (data.parent / f"synthetic-comfy-{key}" for key in ("runtime", "models", "workflows"))
+                    for path in (runtime / "ComfyUI", runtime / "frontend", models, workflows):
+                        path.mkdir(parents=True)
+                    python, entry = Path("python.exe"), Path("ComfyUI") / "main.py"
+                    pins = {}
+                    for path in (python, entry):
+                        payload = b"browser fixture, never launched"
+                        (runtime / path).write_bytes(payload)
+                        pins[str(path)] = hashlib.sha256(payload).hexdigest()
+                    manifest = data / "comfyui-manifest.json"
+                    manifest.write_text(json.dumps({
+                        "schema_version": 1, "policy": "station-comfyui-v1", "files": pins,
+                    }), encoding="utf-8")
+                    (data / "station-comfyui.json").write_text(json.dumps({
+                        "schema_version": 1, "enabled": True, "runtime": str(runtime), "python": str(python),
+                        "entry": str(entry), "frontend": "frontend", "manifest": str(manifest),
+                        "models": str(models), "workflows": str(workflows), "port": 21984, "device": "cpu",
+                    }), encoding="utf-8")
+                    page.locator("#chat-tab").click()
+                    page.get_by_role("tab", name="项目工具", exact=True).click()
+                    card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="ComfyUI 创作"))
+                    card.get_by_text("工作流未就绪", exact=True).wait_for()
+                    install = card.get_by_role("button", name="安装", exact=True)
+                    assert install.is_disabled()
+                    card.get_by_role("checkbox", name="确认任务成品写入与本机 GPU").check()
+                    install.click()
+                    page.get_by_text("ComfyUI 创作已安装。", exact=True).wait_for()
+                    assert card.get_by_role("button", name="启用", exact=True).is_disabled()
+                    graph = b'{"1":{"class_type":"EmptyImage","inputs":{"width":32,"height":24,"batch_size":1,"color":0}},"9":{"class_type":"SaveImage","inputs":{"images":["1",0]}}}'
+                    (workflows / "smoke.json").write_bytes(graph)
+                    (workflows / "registry.json").write_text(json.dumps({
+                        "schema_version": 1, "comfyui_version": "0.37.2", "workflows": [{
+                            "id": "smoke", "label": "离线图像样例", "graph": "smoke.json",
+                            "sha256": hashlib.sha256(graph).hexdigest(), "save_node": "9", "parameters": [],
+                        }],
+                    }, ensure_ascii=False), encoding="utf-8")
+                    page.locator("#project-tools-refresh").click()
+                    card.get_by_text("离线图像样例", exact=True).wait_for()
+                    card.get_by_role("button", name="启用", exact=True).click()
+                    page.get_by_text("ComfyUI 创作已启用。", exact=True).wait_for()
+                    card.get_by_text("已启用，等待任务", exact=True).wait_for()
+                    page.screenshot(path=str(output / "project-tools-comfyui-light.png"), full_page=True)
+                    card.get_by_role("button", name="停用", exact=True).click()
+                    page.get_by_text("ComfyUI 创作已停用。", exact=True).wait_for()
 
                 # The catalog and source checkout use the real local HTTP and CSRF path.
                 # A plain server executable may intentionally ship without application source;

@@ -134,6 +134,11 @@ func NewClient(port uint16) (*Client, error) {
 func (c *Client) CloseIdleConnections() { c.http.CloseIdleConnections() }
 
 func (c *Client) Check(ctx context.Context) error {
+	return c.CheckVersion(ctx, "")
+}
+
+// CheckVersion can require the exact version pinned by the host deployment.
+func (c *Client) CheckVersion(ctx context.Context, expected string) error {
 	status, body, err := c.request(ctx, http.MethodGet, "/system_stats", nil, maxJSONBytes)
 	if err != nil {
 		return err
@@ -148,6 +153,9 @@ func (c *Client) Check(ctx context.Context) error {
 	}
 	switch response.System.Version {
 	case ReferenceVersion, "0.44.0":
+		if expected != "" && response.System.Version != expected {
+			return fmt.Errorf("%w: installed ComfyUI version differs from the host pin", ErrProtocol)
+		}
 		return nil
 	default:
 		return fmt.Errorf("%w: expected audited ComfyUI protocol (0.37.2 or 0.44.0)", ErrProtocol)

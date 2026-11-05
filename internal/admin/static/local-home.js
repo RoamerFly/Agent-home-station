@@ -1519,6 +1519,17 @@
       if (tool.state === "failed") return ["本机后端异常", projectToolReason(tool) || "下次换声任务会重新检查本机后端。"];
       return ["已启用，等待任务", "收到明确的换声请求后，才会读取本次获准音频和所选声线。"];
     }
+    if (tool && tool.id === "comfyui") {
+      const workflows = comfyWorkflows(tool);
+      if (tool.reason === "comfyui_workflows_missing") return ["工作流未就绪", "请登记至少一个通过校验的工作流，再启用 ComfyUI。"];
+      if (!tool.runtime_ready) return ["ComfyUI 本机后端未就绪", projectToolReason(tool) || "尚未找到可启动的 ComfyUI 本机后端。"];
+      if (!tool.installed) return ["尚未安装", "安装后可在本地聊天中按任务调用已登记的图像工作流。"];
+      if (!workflows.length) return ["未登记工作流", projectToolReason(tool) || "请先在工具包中登记至少一个可用工作流；不会把空配置当作可用。"];
+      if (!tool.enabled) return ["已安装，未启用", "启用后可按需运行已登记的图像工作流。"];
+      if (tool.state === "running") return ["任务处理中", "正在按本次任务调用已登记工作流；成品写入完成后会回到待命。"];
+      if (tool.state === "failed") return ["ComfyUI 本机后端异常", projectToolReason(tool) || "下次图像任务会重新检查本机后端和工作流。"];
+      return ["已启用，等待任务", "本地聊天需要制作图像时会按需启动已登记的工作流。"];
+    }
     if (!tool.runtime_ready) return ["缺少本地运行环境", "工具尚不能启动；先补齐本机运行环境或依赖包。"];
     if (!tool.installed) return ["尚未安装", "安装后才会把工具放入大肥鱼的项目环境。"];
     if (!tool.enabled && tool.update_available) return ["已安装，可更新", "已发现随当前发行包提供的新版本；更新会保留已登记的本地成品。"];
@@ -1533,12 +1544,25 @@
       rvc_backend_not_configured: "尚未登记本机 RVC 后端或可用声线。",
       rvc_backend_unavailable: "本机 RVC 后端暂不可用，可检查本机运行环境后再试。",
       rvc_backend_start_failed: "RVC 后端启动失败，下一次换声任务会重新检查。",
-      rvc_voice_profiles_missing: "尚未登记可选声线，暂时不能发起换声任务。"
+      rvc_voice_profiles_missing: "尚未登记可选声线，暂时不能发起换声任务。",
+      comfyui_backend_missing: "当前发行包未找到 ComfyUI 本机后端。",
+      comfyui_backend_not_configured: "尚未登记可启动的 ComfyUI 本机后端。",
+      comfyui_backend_unavailable: "ComfyUI 本机后端暂不可用，可检查运行环境后再试。",
+      comfyui_backend_start_failed: "ComfyUI 后端启动失败，下一次图像任务会重新检查。",
+      comfyui_workflows_missing: "尚未登记可调用的 ComfyUI 工作流。",
+      comfyui_workflow_catalog_missing: "当前工具包没有可用的 ComfyUI 工作流清单。",
+      comfyui_workflow_invalid: "已登记的 ComfyUI 工作流无效，需要先修正工具配置。"
     };
     const code = typeof tool?.reason === "string" ? tool.reason.trim() : "";
     if (reasons[code]) return reasons[code];
     if (/^[\u4e00-\u9fff\u3002\uff0c\uff1a\uff1b\uff01\uff1f\u3001\sA-Za-z0-9_-]{1,120}$/.test(code) && /[\u4e00-\u9fff]/.test(code)) return code;
-    return code ? "本机 RVC 状态暂不可用，请查看工具配置后再试。" : "";
+    if (!code) return "";
+    if (tool?.id === "rvc") return "本机 RVC 状态暂不可用，请查看工具配置后再试。";
+    if (tool?.id === "comfyui") return "本机 ComfyUI 状态暂不可用，请检查本机后端和已登记工作流。";
+    return "本机工具状态暂不可用，请查看工具配置后再试。";
+  }
+  function comfyWorkflows(tool) {
+    return Array.isArray(tool?.workflows) ? tool.workflows.filter((workflow) => workflow && typeof workflow.id === "string" && workflow.id.trim() && typeof workflow.label === "string" && workflow.label.trim()) : [];
   }
   function renderRVCProfiles(tool) {
     const profiles = Array.isArray(tool.voice_profiles) ? tool.voice_profiles.filter((profile) => profile && typeof profile.label === "string" && profile.label.trim()) : [];
@@ -1556,6 +1580,29 @@
     });
     voices.append(list);
     return voices;
+  }
+  function renderComfyWorkflows(tool) {
+    const workflows = comfyWorkflows(tool);
+    const section = appElement("div", "", "project-tool-permissions project-tool-workflows");
+    section.append(appElement("strong", "已登记工作流"));
+    if (!workflows.length) {
+      section.append(appElement("span", "尚未登记工作流，工具不会把没有工作流的状态显示为可用。"));
+      return section;
+    }
+    section.append(appElement("span", "仅展示工作流名称；启用且本机后端就绪后，才会在获准的图像任务中调用。"));
+    const list = appElement("div", "", "project-tool-workflow-list");
+    workflows.forEach((workflow) => {
+      const item = appElement("span", workflow.label.trim(), "project-tool-workflow");
+      item.title = workflow.id.trim();
+      list.append(item);
+    });
+    section.append(list);
+    return section;
+  }
+  function projectToolApprovalCopy(tool) {
+    if (tool?.id === "rvc") return "确认任务素材读写与本机 GPU";
+    if (tool?.id === "comfyui") return "确认任务成品写入与本机 GPU";
+    return "确认本机素材读写";
   }
   function projectToolPDFNote(tool) {
     if (!tool || !tool.installed) return "安装后会检查 DOCX 导出 PDF 所需的本地环境。";
@@ -1597,6 +1644,11 @@
         permissions.append(appElement("strong", "换声任务"), appElement("span", "使用本次获准的音频和指定声线，可调用本机 GPU。通过核验的音频可从聊天下载。"));
         detail.append(permissions, renderRVCProfiles(tool));
       }
+      if (tool.id === "comfyui") {
+        const permissions = appElement("div", "", "project-tool-permissions");
+        permissions.append(appElement("strong", "图像任务"), appElement("span", "运行获准的工作流，使用本机计算资源并登记 PNG 成品。"));
+        detail.append(permissions, renderComfyWorkflows(tool));
+      }
       if (tool.id === "document-workshop") {
         const permissions = appElement("div", "", "project-tool-permissions");
         permissions.append(appElement("strong", "本次授权"), appElement("span", "本机素材读写限于授权的文档任务，成品保存在本机，可从聊天下载。联网和应用账号权限另行管理。"));
@@ -1607,9 +1659,10 @@
       }
       const controls = appElement("div", "", "project-tool-actions");
       const busy = current.applying === tool.id;
+      const canInstall = tool.runtime_ready || tool.id === "comfyui";
       if (!tool.installed) {
-        const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", tool.id === "rvc" ? "确认任务素材读写与本机 GPU" : "确认本机素材读写");
-        approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !tool.catalog_available || !tool.runtime_ready;
+        const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
+        approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !tool.catalog_available || !canInstall;
         approval.append(checkbox, copy);
         const install = appElement("button", busy ? "正在安装…" : "安装", "button compact primary");
         install.type = "button"; install.disabled = true;
@@ -1626,8 +1679,8 @@
           if (tool.enabled) {
             controls.append(appElement("span", "请先停用，再更新到新版本。", "project-tool-update-note"));
           } else {
-            const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", tool.id === "rvc" ? "确认任务素材读写与本机 GPU" : "确认本机素材读写");
-            approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !tool.runtime_ready;
+            const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
+            approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !canInstall;
             approval.append(checkbox, copy);
             const upgrade = appElement("button", busy ? "正在更新…" : "更新", "button compact secondary");
             upgrade.type = "button"; upgrade.disabled = true;

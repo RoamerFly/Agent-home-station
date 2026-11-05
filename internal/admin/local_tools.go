@@ -73,6 +73,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all = append(all, t.localDocumentTools(ctx)...)
 	all = append(all, t.localAudioTools(ctx)...)
 	all = append(all, t.localRVCTools(ctx)...)
+	all = append(all, t.localComfyTools(ctx)...)
 	var failures error
 	accesses := []companion.ToolAccess{t.memory, t.files}
 	if t.process != nil {
@@ -108,6 +109,8 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	switch name {
 	case localRVCVoicesTool, localRVCStartTool, localRVCJobTool:
 		return t.callLocalRVC(ctx, name, raw)
+	case localComfyListTool, localComfyStartTool, localComfyJobTool:
+		return t.callLocalComfy(ctx, name, raw)
 	}
 	if name == "artifact_publish" {
 		var in struct {

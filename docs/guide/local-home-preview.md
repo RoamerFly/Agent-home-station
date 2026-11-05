@@ -261,6 +261,55 @@ PDF 导出还需可用的文档运行时。构建时为上述命令同时提供 
 
 `python -B scripts/test_station_rvc_bridge.py` 可复跑合成桥接验收。指定 `AHS_STATION_RVC_CONTROL_ROOT` 可指向已打包控制脚本。真实模型推理和试听另行验收。
 
+### Windows ComfyUI 创作
+
+`Build-Desktop.ps1 -LocalStation -WithComfyUI` 打包项目工具声明。准备一份主人核验过的 Windows 便携 ComfyUI 0.37.2。运行时、模型和工作流目录由主人管理，须位于大肥鱼家目录和站点数据目录之外。可以复用现有安装的文件，站点启动自己的回环进程。选一个空闲端口，避免与原 ComfyUI 或 YuE 冲突。
+
+在站点 `-data` 目录内创建 `station-comfyui.json`。示例按常见便携安装布局填写，使用实际安装里的路径。
+
+```json
+{
+  "schema_version": 1,
+  "enabled": true,
+  "runtime": "D:\\StationComfy\\portable",
+  "python": "python_embeded\\python.exe",
+  "entry": "ComfyUI\\main.py",
+  "frontend": "python_embeded\\Lib\\site-packages\\comfyui_frontend_package\\static",
+  "manifest": "D:\\StationData\\comfyui-manifest.json",
+  "models": "D:\\StationComfy\\models",
+  "workflows": "D:\\StationComfy\\approved-workflows",
+  "port": 21984,
+  "idle_seconds": 300,
+  "device": "cpu"
+}
+```
+
+同一站点 `-data` 目录内的 `comfyui-manifest.json` 使用 `schema_version: 1`、`policy: "station-comfyui-v1"`，以及 `files` 对象。对象键为运行时内相对路径，值为对应文件 SHA-256 的小写十六进制。至少固定上述 Python 和 `main.py`，也可登记 `server.py` 等已核验文件。可用 PowerShell 的 `Get-FileHash -Algorithm SHA256` 取得摘要。该清单校验列出的文件，整个安装及模型仍应来自主人信任的来源。
+
+把主人批准的 API 格式工作流放到工作流目录。例如 `smoke.json` 使用一个 `EmptyImage` 节点和一个 `SaveImage` 节点。创建同目录的 `registry.json`，把示例摘要替换为原图文件的实际摘要。
+
+```json
+{
+  "schema_version": 1,
+  "comfyui_version": "0.37.2",
+  "workflows": [{
+    "id": "smoke",
+    "label": "离线图像样例",
+    "graph": "smoke.json",
+    "sha256": "替换为工作流文件的 64 位小写 SHA-256",
+    "save_node": "9",
+    "parameters": [{
+      "id": "width", "label": "宽度", "kind": "integer",
+      "minimum": 16, "maximum": 512, "node": "1", "input": "width"
+    }]
+  }]
+}
+```
+
+打开「项目工具 → ComfyUI 创作」，确认本机成品写入与 GPU 权限，安装并启用。可在聊天中说「运行离线图像样例，宽度 48，完成后保存 PNG」，之后可按原任务编号查询或取消。每个任务最多登记 16 张 PNG，参数越界时会提示。当前支持内置节点，按进程参数关闭自定义节点、API 节点及图像提示元数据。CPU 与 CUDA 由主人在部署登记中选择，CUDA 可指定 `cuda_device`。
+
+回执不明时只查原任务，原进程结束后 ComfyUI 的内存队列可能无法查回。此时宿主保留待核对任务记录，新的生成需要新的请求。已登记的成品可以继续下载。独立进程按需启动，处理及核对期间持有运行租约。正式换用 GPU 前需按本机安装单独验收。
+
 ### Windows 运行器
 
 可执行文件旁存在下列受管运行时布局时自动识别；没有安装运行器也能聊天及操作文件，启动程序会返回 `windows_runtime_not_configured`，不会退回不受限制的宿主命令行。
