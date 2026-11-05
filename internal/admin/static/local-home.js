@@ -256,6 +256,31 @@
     }
     function renderPlan(message = "") {
       const value = plan || {};
+      const cutover = value.cutover && typeof value.cutover === "object" ? value.cutover : null;
+      const cutoverCopy = {
+        legacy_host: {
+          stop_record_matched: "已记录正常停机",
+          pending: "尚未取得停机记录",
+          changed: "停机记录与当前快照不一致"
+        },
+        native_profile: {
+          import_receipt_matched: "导入记录与当前连接匹配",
+          pending: "尚未取得档案导入记录",
+          mismatch: "导入记录与当前连接不匹配"
+        },
+        target_login: {
+          online: "已登录且在线",
+          authenticated_offline: "已登录，当前离线",
+          signed_out: "尚未登录",
+          pending: "待核对"
+        }
+      };
+      const cutoverLines = cutover ? [
+        appElement("p", `旧宿主：${cutoverCopy.legacy_host[cutover.legacy_host] || "待核对"}`),
+        appElement("p", `原生档案：${cutoverCopy.native_profile[cutover.native_profile] || "待核对"}`),
+        appElement("p", `目标登录：${cutoverCopy.target_login[cutover.target_login] || "待核对"}`),
+        appElement("p", "身份确认：仍需主人确认实际微信身份")
+      ] : [appElement("p", "切换前置检查：旧记录未保存，仍需主人逐项核对")];
       result.replaceChildren(
         appElement("strong", value.applied ? "已保存的接入摘要" : "接入预演"),
         appElement("p", `账号：${value.account_id || "未知"}`),
@@ -264,6 +289,7 @@
         appElement("p", `可读回执：${Number(value.receipt_records || 0)}；待核对回执：${Number(value.unresolved_receipts || 0)}`),
         appElement("p", `原生资料集：${value.same_native_dataset ? "相同，可查询既有操作记录" : "不同或未知，不会覆盖当前资料"}`),
         appElement("p", `旧版状态：${value.legacy_enabled ? "已启用" : "未启用"}${value.legacy_paused ? "，已暂停" : ""}`),
+        ...cutoverLines,
         message ? appElement("small", message) : document.createTextNode("")
       );
       const confirm = actions.querySelector("[data-legacy-confirm]");

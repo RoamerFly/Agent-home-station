@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
@@ -19,6 +20,7 @@ import (
 func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	base := t.TempDir()
 	host, work, snapshot := filepath.Join(base, "host"), filepath.Join(base, "workspace"), filepath.Join(base, "snapshot")
+	legacyHost := filepath.Join(base, "old-host")
 	app := filepath.Join(host, "apps", "wechat")
 	native := filepath.Join(app, "native")
 	write := func(path string, data []byte) {
@@ -33,7 +35,23 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	j := func(v any) []byte { b, _ := json.Marshal(v); return b }
 	write(filepath.Join(native, "api-token"), []byte("synthetic-legacy-native-token"))
 	sourceConfig := filepath.Join(app, legacyImportSourceFile)
-	write(sourceConfig, j(legacyImportSource{Root: snapshot, Primary: "one", Stopped: true}))
+	source := legacyImportSource{Root: filepath.ToSlash(snapshot), LegacyHostRoot: filepath.ToSlash(legacyHost), Primary: "one", Stopped: true}
+	marker := legacyStopMarker{Version: 1, State: "stopped", Epoch: strings.Repeat("a", 32), AccountID: "one", DataRoot: legacyHost, NativeServerID: "old-dataset", At: time.Now().UTC().Add(-time.Minute)}
+	liveMarker := filepath.Join(legacyHost, legacyStopMarkerFile)
+	write(liveMarker, j(marker))
+	write(filepath.Join(snapshot, legacyStopMarkerFile), j(marker))
+	profile := filepath.Join(native, "accounts", "one", "profile")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(app, "native-import-"+wechatapp.ConnectionID("one")+".json")
+	receiptProfile := profile
+	if os.PathSeparator == '\\' {
+		receiptProfile = `\\?\` + profile
+	}
+	receiptJSON := j(map[string]string{"id": "one", "storageMode": "managed", "profilePath": receiptProfile})
+	write(receiptPath, receiptJSON)
+	write(sourceConfig, j(source))
 	const rawConfig = `{"enabled":true,"connection_paused":false,"api_key":"synthetic-do-not-copy-legacy-key","private_enabled":true,"private_all_friends":true,"direct_ids":["friend-one"],"filehelper_enabled":true,"group_rules":[{"id":"123@chatroom","mode":"mention"},{"id":"124@chatroom","mode":"all"}]}`
 	configPath := filepath.Join(snapshot, "admin", "config.json")
 	write(configPath, []byte(rawConfig))
@@ -50,6 +68,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	write(filepath.Join(snapshot, "bot-state", "accounts", accountDirectory("four"), "messages-v2.json"), []byte(sameQueue))
 
 	var sideEffects, receiptReads atomic.Int32
+	var loginOnline atomic.Bool
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer synthetic-legacy-native-token" {
 			t.Error("wrong daemon credential")
@@ -66,6 +85,14 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"pid": 9432, "dataDir": native, "serverId": "new-dataset", "ownershipGeneration": "synthetic-generation"})
 		case "/v1/accounts":
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]string{{"id": "one"}, {"id": "two"}, {"id": "three"}, {"id": "four"}, {"id": "five"}}})
+		case "/v1/accounts/one", "/v1/accounts/four", "/v1/accounts/five":
+			account := filepath.Base(r.URL.Path)
+			connection := "offline"
+			online := account == "one" && loginOnline.Load()
+			if online {
+				connection = "online"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": account, "storageMode": "managed", "authenticated": online, "connection": connection})
 		case "/v1/accounts/four/sends/job-pending":
 			receiptReads.Add(1)
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": "job-pending", "accountId": "four", "threadId": "filehelper", "kind": "text", "state": "accepted", "serverId": "69234"})
@@ -130,10 +157,32 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if detailFor("one")["legacy_import"] != "invalid" {
 		t.Fatal("invalid snapshot was advertised as available")
 	}
-	write(sourceConfig, j(legacyImportSource{Root: snapshot, Primary: "one", Stopped: true}))
+	write(sourceConfig, j(source))
 	req("POST", route("one")+"/lifecycle", map[string]string{"action": "start"}, true, 409)
 	req("POST", route("one")+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
+	assertCutover := func(plan map[string]any, host, profile, login string) {
+		t.Helper()
+		want := legacyCutover{LegacyHost: host, NativeProfile: profile, TargetLogin: login, TargetIdentity: "owner_check_pending"}
+		var got legacyCutover
+		if err := json.Unmarshal(j(plan["cutover"]), &got); err != nil || got != want {
+			t.Fatalf("cutover = %#v, want %#v (%v)", got, want, err)
+		}
+	}
 	plan := req("GET", planRoute("one"), nil, false, 200)
+	assertCutover(plan, "stop_record_matched", "import_receipt_matched", "signed_out")
+	if strings.Contains(string(j(plan)), "old-host") || strings.Contains(string(j(plan)), marker.Epoch) {
+		t.Fatal("cutover exposed private evidence")
+	}
+	starting := marker
+	starting.State, starting.Epoch = "starting", strings.Repeat("b", 32)
+	write(liveMarker, j(starting))
+	req("POST", planRoute("one"), planDigest(plan), true, 409)
+	assertCutover(req("GET", planRoute("one"), nil, false, 200), "changed", "import_receipt_matched", "signed_out")
+	write(liveMarker, j(marker))
+	write(receiptPath, j(map[string]string{"id": "four", "storageMode": "managed", "profilePath": profile}))
+	req("POST", planRoute("one"), planDigest(plan), true, 409)
+	assertCutover(req("GET", planRoute("one"), nil, false, 200), "stop_record_matched", "mismatch", "signed_out")
+	write(receiptPath, receiptJSON)
 	if plan["legacy_enabled"] != true || plan["same_native_dataset"] != false || plan["receipt_records"] != float64(2) || plan["unresolved_receipts"] != float64(1) ||
 		!bytes.Equal(j(plan["suggested_reply_threads"]), []byte(`["123@chatroom","filehelper","friend-one"]`)) || strings.Contains(string(j(plan)), "synthetic-do-not-copy") {
 		t.Fatal(plan)
@@ -193,9 +242,14 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	}
 	_, f = open()
 	f.login()
+	loginOnline.Store(true)
+	write(liveMarker, j(starting))
+	assertCutover(req("GET", planRoute("one"), nil, false, 200), "changed", "import_receipt_matched", "online")
+	assertCutover(req("POST", planRoute("one"), planDigest(plan), true, 200), "stop_record_matched", "import_receipt_matched", "signed_out")
 	if err := os.Remove(sourceConfig); err != nil {
 		t.Fatal(err)
 	}
+	assertCutover(req("GET", planRoute("one"), nil, false, 200), "pending", "import_receipt_matched", "online")
 	if detailFor("one")["legacy_import"] != "applied" || req("GET", planRoute("one"), nil, false, 200)["applied"] != true ||
 		req("POST", planRoute("one"), planDigest(plan), true, 200)["applied"] != true {
 		t.Fatal("saved migration report was not available after detaching the source")

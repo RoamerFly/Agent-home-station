@@ -17,18 +17,24 @@ type Status struct {
 	Authenticated     bool   `json:"authenticated"`
 	Connection        string `json:"connection"`
 	IncomingTransport string `json:"incoming_transport"`
+	AccountID         string `json:"-"`
+	StorageMode       string `json:"-"`
+	LoginObserved     bool   `json:"-"`
 }
 
 func (s *Sender) Status(ctx context.Context) (Status, error) {
 	var raw struct {
-		Authenticated bool   `json:"authenticated"`
+		Authenticated *bool  `json:"authenticated"`
+		ID            string `json:"id"`
+		StorageMode   string `json:"storageMode"`
 		Connection    string `json:"connection"`
 		Transport     string `json:"incomingTransport"`
 	}
 	if err := s.readJSON(ctx, s.accountPath(), &raw); err != nil {
 		return Status{Connection: "unavailable"}, err
 	}
-	return Status{raw.Authenticated, raw.Connection, raw.Transport}, nil
+	return Status{Authenticated: raw.Authenticated != nil && *raw.Authenticated, Connection: raw.Connection, IncomingTransport: raw.Transport,
+		AccountID: raw.ID, StorageMode: raw.StorageMode, LoginObserved: raw.Authenticated != nil}, nil
 }
 
 type Group struct {

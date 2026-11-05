@@ -157,7 +157,7 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 
 ### 在隔离副本预演旧版微信接入
 
-1. 正常排空并退出旧桌面服务，保留其原安装。将需要核对的旧宿主数据做成单独的停机快照，保存在本机私有目录。快照包含旧数据根下的 `admin/config.json`、可选的 `admin/accounts.json` 和各账号配置，以及 `bot-state`。新成长站数据根、鱼家工作空间、旧快照分别放置。
+1. 正常排空并退出旧桌面服务，保留其原安装。将需要核对的旧宿主数据做成单独的停机快照，保存在本机私有目录。快照包含旧数据根下的 `admin/config.json`、可选的 `admin/accounts.json` 和各账号配置，以及 `bot-state`。新成长站数据根、鱼家工作空间、旧快照分别放置。支持切换记录的旧桌面正常退出后会在旧数据根生成 `legacy-cutover-state.json`。把这份文件原样复制到快照根，保留原目录中的记录供预演比对。
 2. 在两个原生服务都已停止时，使用各自的 Windows `wx.exe` 走原生支持的档案导出和导入。保留旧账号的原始 ID，选择新原生目录 `data_root/apps/wechat/native`。导入时该编号须为空，已有同编号档案时先核对归属。使用导出档案路径，不直接复制保存了绝对路径的原生注册表。不要把导出档案放进大肥鱼家目录或 Git。
 
    ```powershell
@@ -166,6 +166,8 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
    & $newWx --json --data-dir $stationNativeRoot store list
    ```
 
+   如需在接入页面核对档案，把成功的 `store import` JSON 输出按 UTF-8（无 BOM）保存为新数据根下的 `apps/wechat/native-import-<连接 ID>.json`。以主人身份读取 `GET /api/apps/wechat/connections`，找到 `account_id` 匹配的记录，取该记录的 `id` 作为连接 ID。先把导入输出保存在本机私有目录，再在目标连接出现后按其编号命名。
+
    查看导出回执的完整性标记。默认流程只搬原生档案，目标登录仍需重新核对；先在预演中用合成或空账号。档案本身可能含官方客户端资料，应与原备份一样隔离保存。原生发送账本与宿主待处理任务有各自的来源，导出档案不自动包含它们。
 
 3. 在新数据根的 `apps/wechat/legacy-import-source.json` 写入下面的本机私有配置。主账号使用旧桌面部署配置的原账号 ID。次账号按旧账号登记表核对，已删除账号无法导入。
@@ -173,6 +175,7 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
    ```json
    {
      "snapshot_root": "E:/AgentHomePreview/private-legacy-snapshot",
+     "legacy_host_root": "E:/OldWeChat/private-data",
      "primary_account": "desktop",
      "snapshot_stopped": true
    }
@@ -181,7 +184,11 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 4. 启动独立桌面，以本机主人登录。在「应用 → 微信」的对应连接展开「从旧版接入」，先预演，核对账号、建议回复范围、需要人工核对的规则及旧回执计数，再确认接入。已有工作记录会提示冲突。快照发生变化时须重新预演。预演和确认接入也可分别通过 `GET` 与 `POST /api/apps/wechat/connections/{id}/legacy-import` 执行，写请求携带预演摘要 `digest` 和 `X-CSRF-Token`。
 5. 导入后账号保持暂停，旧权限显示为建议。主人确认实际登录身份后，再在「应用 → 微信」选择回复范围并启动。旧已提交记录可通过 `GET /api/apps/wechat/connections/{id}/receipts/{key}` 核对。不同原生数据集只显示旧快照记录；原生数据集一致时，可以按已知的原操作编号只读核对迟到结果。仍未确认的任务保留在旧快照中，需单独处理。旧消息正文、模型密钥、活跃队列和执行游标不进入新工作器。
 
-接入预演的停机条件来自所配置快照的声明。确认真实切换前，需要单独核对旧宿主已停止以及新连接实际登录的账号。
+预演与「查看接入摘要」都显示最新的切换前置检查：
+
+- **旧宿主**核对快照内的停机记录与原目录记录。支持该记录的旧桌面再次启动会使旧记录失效。`legacy_host_root` 为可选的原数据根，必须与快照及新宿主目录分开。没有记录时仍可保存预演摘要，停机继续标为待核对。由其他版本或外部程序启动的实例仍需主人单独排查。
+- **原生档案**核对导入回执、当前受管档案目录及目标连接的本机原生账号 ID。档案就绪时，登录仍可处于未登录或离线状态。
+- **目标登录与身份**区分未登录、已认证但未在线、在线和待核对。主人仍需在切换前确认实际登录的是同一个微信身份。保存摘要会保持暂停及空授权，不会切换服务。
 
 回退时先停独立桌面及其原生服务，再用原部署和原数据恢复旧服务。同一实际微信账号只交给一个运行中的宿主。保留预演副本用于核对；已经在新宿主产生的回复或操作须分别按实际回执核对。
 

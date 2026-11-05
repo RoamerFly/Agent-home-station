@@ -32,22 +32,24 @@ var (
 )
 
 type legacyImportSource struct {
-	Root    string `json:"snapshot_root"`
-	Primary string `json:"primary_account"`
-	Stopped bool   `json:"snapshot_stopped"`
+	Root           string `json:"snapshot_root"`
+	LegacyHostRoot string `json:"legacy_host_root,omitempty"`
+	Primary        string `json:"primary_account"`
+	Stopped        bool   `json:"snapshot_stopped"`
 }
 
 type legacyImportPlan struct {
-	Digest           string   `json:"digest"`
-	Account          string   `json:"account_id"`
-	LegacyEnabled    bool     `json:"legacy_enabled"`
-	LegacyPaused     bool     `json:"legacy_paused"`
-	SameDataset      bool     `json:"same_native_dataset"`
-	SuggestedThreads []string `json:"suggested_reply_threads"`
-	Omitted          []string `json:"requires_manual_review"`
-	Receipts         int      `json:"receipt_records"`
-	Unresolved       int      `json:"unresolved_receipts"`
-	Applied          bool     `json:"applied"`
+	Digest           string         `json:"digest"`
+	Account          string         `json:"account_id"`
+	LegacyEnabled    bool           `json:"legacy_enabled"`
+	LegacyPaused     bool           `json:"legacy_paused"`
+	SameDataset      bool           `json:"same_native_dataset"`
+	SuggestedThreads []string       `json:"suggested_reply_threads"`
+	Omitted          []string       `json:"requires_manual_review"`
+	Receipts         int            `json:"receipt_records"`
+	Unresolved       int            `json:"unresolved_receipts"`
+	Applied          bool           `json:"applied"`
+	Cutover          *legacyCutover `json:"cutover,omitempty"`
 }
 
 type legacyImportArchive struct {
@@ -145,6 +147,7 @@ func readLegacyImportFile(root *os.Root, name string, max int64) ([]byte, error)
 }
 
 func legacyImportOverlap(first, second string) bool {
+	first, second = cutoverPath(first), cutoverPath(second)
 	within := func(parent, child string) bool {
 		rel, err := filepath.Rel(parent, child)
 		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
@@ -163,7 +166,11 @@ func (s *stationWechat) openLegacyImport() (*os.Root, legacyImportSource, error)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, source, errLegacyImportNotConfigured
 	}
-	if err != nil || json.Unmarshal(raw, &source) != nil || !source.Stopped || !validID(source.Primary) ||
+	if err != nil || json.Unmarshal(raw, &source) != nil {
+		return nil, source, errLegacyImportInvalid
+	}
+	source.Root = cutoverPath(source.Root)
+	if !source.Stopped || !validID(source.Primary) ||
 		!filepath.IsAbs(source.Root) || filepath.Clean(source.Root) != source.Root ||
 		legacyImportOverlap(source.Root, s.dataDir) || legacyImportOverlap(source.Root, s.workspaceRoot) {
 		return nil, source, errLegacyImportInvalid
@@ -304,13 +311,16 @@ func (s *stationWechat) previewLegacyImport(ctx context.Context, id string) (leg
 		archive.Receipts[key] = receipt
 	}
 	archive.Plan.Receipts = len(archive.Receipts)
+	cutover, cutoverDigests := s.checkLegacyCutover(ctx, id, native, root, source, oldServer)
+	archive.Plan.Cutover = cutover
 	// A changed queue or cursor invalidates the preview, even if the visible
 	// receipt projection is unchanged. Credentials never enter this digest.
 	fingerprint, err := json.Marshal(struct {
 		Archive       legacyImportArchive
 		Binding       []string
 		Queue, Cursor [32]byte
-	}{archive, []string{source.Root, source.Primary, id, status.ServerID, s.installation}, sha256.Sum256(queue), sha256.Sum256(cursor)})
+		Cutover       [2][32]byte
+	}{archive, []string{source.Root, source.Primary, id, status.ServerID, status.OwnershipGeneration, s.installation}, sha256.Sum256(queue), sha256.Sum256(cursor), cutoverDigests})
 	if err != nil || len(fingerprint) > legacyImportArchiveLimit {
 		return legacyImportArchive{}, errLegacyImportInvalid
 	}
@@ -335,7 +345,7 @@ func readLegacyImportArchive(root *os.Root) (legacyImportArchive, error) {
 	return archive, nil
 }
 
-func (s *stationWechat) savedLegacyImport(ctx context.Context, id string) (legacyImportPlan, bool, error) {
+func (s *stationWechat) savedLegacyImport(ctx context.Context, id string, refreshCutover bool) (legacyImportPlan, bool, error) {
 	native, err := s.WorkerSender(ctx, id)
 	if err != nil {
 		return legacyImportPlan{}, false, err
@@ -354,6 +364,13 @@ func (s *stationWechat) savedLegacyImport(ctx context.Context, id string) (legac
 	}
 	if err != nil || archive.Plan.Account != native.Account() {
 		return legacyImportPlan{}, false, errLegacyImportInvalid
+	}
+	if refreshCutover {
+		snapshot, source, _ := s.openLegacyImport()
+		if snapshot != nil {
+			defer snapshot.Close()
+		}
+		archive.Plan.Cutover, _ = s.checkLegacyCutover(ctx, id, native, snapshot, source, archive.LegacyServer)
 	}
 	return archive.Plan, true, nil
 }
@@ -375,7 +392,7 @@ func writeLegacyStagedFile(root *os.Root, path string, value any) error {
 }
 
 func (s *stationWechat) applyLegacyImport(ctx context.Context, id, digest string) (legacyImportPlan, error) {
-	prior, found, err := s.savedLegacyImport(ctx, id)
+	prior, found, err := s.savedLegacyImport(ctx, id, false)
 	if err != nil {
 		return legacyImportPlan{}, err
 	}

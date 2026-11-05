@@ -13,7 +13,7 @@ func (s *stationWechat) legacyImportRoutes(server *Server, mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path, server.protected(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		id := r.PathValue("connection")
-		prior, found, err := s.savedLegacyImport(r.Context(), id)
+		prior, found, err := s.savedLegacyImport(r.Context(), id, true)
 		if err != nil {
 			legacyImportFailure(w, err)
 			return

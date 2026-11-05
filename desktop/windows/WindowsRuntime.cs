@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -23,7 +24,7 @@ namespace WechatAgent.Desktop {
         readonly HttpClient api = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(3) };
         OwnedProcess native, web;
         ProcessJob job;
-        string serverId, generation;
+        string serverId, generation, cutoverEpoch;
         internal WindowsRuntime(Deployment config, ICommandRunner runner) { d = config; commands = runner; }
         internal bool WebRunning { get { return web != null && web.Alive; } }
         internal bool AnyRunning { get { return WebRunning || native != null && native.Alive; } }
@@ -31,6 +32,39 @@ namespace WechatAgent.Desktop {
             if (value.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) value = @"\\" + value.Substring(8);
             else if (value.StartsWith(@"\\?\", StringComparison.Ordinal)) value = value.Substring(4);
             return Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar);
+        }
+        internal static string LegacyCutoverStatePath(string root) {
+            return Path.Combine(ComparablePath(root), "legacy-cutover-state.json");
+        }
+        // This marker is deliberately private to the old desktop data root.  It
+        // is evidence that this desktop, rather than an arbitrary process on the
+        // machine, cleanly stopped the owned legacy pair before a cutover.
+        internal static void WriteLegacyCutoverState(string root, string accountId, string state, string epoch, string nativeServerId) {
+            if (state != "starting" && state != "stopped") throw new ArgumentException("切换状态无效。", "state");
+            if (String.IsNullOrEmpty(accountId) || String.IsNullOrEmpty(epoch) || epoch.Length != 32 || !epoch.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+                throw new ArgumentException("切换标识无效。", "epoch");
+            var dataRoot = ComparablePath(root);
+            NoLinks(dataRoot);
+            var path = LegacyCutoverStatePath(dataRoot);
+            if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("旧桌面切换记录不能使用链接。");
+            var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            var text = Deployment.Json.Serialize(new {
+                version = 1, state = state, epoch = epoch, account_id = accountId,
+                data_root = dataRoot, native_server_id = nativeServerId ?? "",
+                at = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
+            });
+            try {
+                var bytes = new UTF8Encoding(false).GetBytes(text);
+                using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough)) {
+                    file.Write(bytes, 0, bytes.Length); file.Flush(true);
+                }
+                // Move and Replace are same-volume atomic operations.  A failed
+                // replacement is safer than accepting an ambiguous stop proof.
+                if (File.Exists(path)) File.Replace(temp, path, null); else File.Move(temp, path);
+            } finally {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
         }
         internal void CheckAlive() {
             if (native == null || !native.Alive || web == null || !web.Alive) throw new InvalidOperationException("Windows 服务提前退出，请查看 data/logs；没有重放发送或清空数据。");
@@ -156,6 +190,11 @@ namespace WechatAgent.Desktop {
             }
             job = new ProcessJob();
             serverId = generation = null;
+            // A new launch must invalidate any earlier stopped proof before the
+            // first owned child exists.  A failed or unadmitted startup therefore
+            // remains visibly "starting" and cannot be mistaken for a cutover.
+            cutoverEpoch = Guid.NewGuid().ToString("N");
+            WriteLegacyCutoverState(d.Root, d.Account, "starting", cutoverEpoch, "");
             var resources = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(d.NativeExe), ".."));
             var media = Path.Combine(resources, "windows-media");
             var programEnv = new Dictionary<string, string>();
@@ -229,8 +268,18 @@ namespace WechatAgent.Desktop {
             return pending;
         }
         internal async Task Stop() {
+            // "stopped" is only admissible when this runtime had both of its
+            // owned children alive and admitted, then stopped them gracefully.
+            // Do not produce cutover evidence for an incomplete startup, an
+            // already-dead child, a forced cleanup, or any failed shutdown.
+            bool gracefulWeb = false, gracefulNative = false;
+            var hadNative = native != null;
+            var stoppedServerId = serverId;
             if (web != null) {
-                if (web.Alive) await web.StopWeb(); else await web.WaitStopped();
+                if (web.Alive) {
+                    await web.StopWeb();
+                    gracefulWeb = web.ExitCode == 0;
+                } else await web.WaitStopped();
                 web.Dispose(); web = null;
             }
             if (native != null) {
@@ -240,11 +289,16 @@ namespace WechatAgent.Desktop {
                     native.StopUnadmitted();
                 } else if (native.Alive) {
                     await NativeRequest("/v1/daemon/shutdown", new { pid = native.ID, serverId = serverId, ownershipGeneration = generation });
+                    gracefulNative = true;
                 }
-                await native.WaitStopped(); native.Dispose(); native = null;
-                await FinishRemovedAccounts(CancellationToken.None);
+                await native.WaitStopped();
+                gracefulNative = gracefulNative && native.ExitCode == 0;
+                native.Dispose(); native = null;
             }
+            if (hadNative) await FinishRemovedAccounts(CancellationToken.None);
             if (job != null) { job.Dispose(); job = null; }
+            if (gracefulWeb && gracefulNative && !String.IsNullOrEmpty(cutoverEpoch))
+                WriteLegacyCutoverState(d.Root, d.Account, "stopped", cutoverEpoch, stoppedServerId);
         }
         public void Dispose() {
             api.Dispose();

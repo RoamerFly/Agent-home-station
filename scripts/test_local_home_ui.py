@@ -280,6 +280,19 @@ def verify(binary, output):
                 worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "contact_read": False, "actions": []}
                 legacy = {"availability": "available", "previews": 0, "posts": []}
 
+                def legacy_plan(applied=False):
+                    refreshed = legacy["availability"] == "applied" and legacy["previews"] >= 3
+                    cutover = ({"legacy_host": "changed", "native_profile": "pending", "target_login": "online",
+                                "target_identity": "owner_check_pending"} if refreshed else
+                               {"legacy_host": "stop_record_matched", "native_profile": "import_receipt_matched",
+                                "target_login": "signed_out", "target_identity": "owner_check_pending"})
+                    return {"digest": f"fixture-legacy-digest-{legacy['previews']}", "account_id": "fixture-account",
+                            "suggested_reply_threads": ["synthetic-room@chatroom"],
+                            "requires_manual_review": ["all_friends"],
+                            "receipt_records": 3, "unresolved_receipts": 1,
+                            "same_native_dataset": True, "legacy_enabled": True,
+                            "legacy_paused": True, "applied": applied, "cutover": cutover}
+
                 def worker_view():
                     connection = {"id": "synthetic-wechat", "login": "authenticated",
                         "runtime": "online", "worker": worker["state"], "configured_policy": {
@@ -321,12 +334,7 @@ def verify(binary, output):
                 def legacy_import(route):
                     if route.request.method == "GET":
                         legacy["previews"] += 1
-                        fulfill_json({"digest": f"fixture-legacy-digest-{legacy['previews']}", "account_id": "fixture-account",
-                                      "suggested_reply_threads": ["synthetic-room@chatroom"],
-                                      "requires_manual_review": ["all_friends"],
-                                      "receipt_records": 3, "unresolved_receipts": 1,
-                                      "same_native_dataset": True, "legacy_enabled": True,
-                                      "legacy_paused": True, "applied": legacy["availability"] == "applied"})(route)
+                        fulfill_json(legacy_plan(legacy["availability"] == "applied"))(route)
                         return
                     assert route.request.method == "POST"
                     legacy["posts"].append(route.request.post_data_json)
@@ -336,12 +344,7 @@ def verify(binary, output):
                         fulfill_json({"error": "stale legacy preview"}, status=409)(route)
                         return
                     legacy["availability"] = "applied"
-                    fulfill_json({"digest": f"fixture-legacy-digest-{legacy['previews']}", "account_id": "fixture-account",
-                                  "suggested_reply_threads": ["synthetic-room@chatroom"],
-                                  "requires_manual_review": ["all_friends"],
-                                  "receipt_records": 3, "unresolved_receipts": 1,
-                                  "same_native_dataset": True, "legacy_enabled": True,
-                                  "legacy_paused": True, "applied": True})(route)
+                    fulfill_json(legacy_plan(True))(route)
 
                 page.route(legacy_import_pattern, legacy_import)
                 contacts_pattern = status_pattern + "/contacts*"
@@ -381,6 +384,10 @@ def verify(binary, output):
                 page.get_by_text("账号：fixture-account", exact=True).wait_for()
                 page.get_by_text("建议回复范围：synthetic-room@chatroom", exact=True).wait_for()
                 page.get_by_text("仍需核对：旧版允许所有好友回复", exact=True).wait_for()
+                page.get_by_text("旧宿主：已记录正常停机", exact=True).wait_for()
+                page.get_by_text("原生档案：导入记录与当前连接匹配", exact=True).wait_for()
+                page.get_by_text("目标登录：尚未登录", exact=True).wait_for()
+                page.get_by_text("身份确认：仍需主人确认实际微信身份", exact=True).wait_for()
                 assert legacy["previews"] == 1 and not legacy["posts"] and not worker["actions"] and not worker["threads"], "preview must be read-only"
                 page.get_by_role("button", name="确认接入旧版摘要", exact=True).click()
                 page.get_by_text("旧版资料或当前状态已变化，请重新读取接入预演。", exact=True).wait_for()
@@ -391,6 +398,12 @@ def verify(binary, output):
                 assert legacy["previews"] == 2 and legacy["posts"] == [{"digest": "fixture-legacy-digest-1"}, {"digest": "fixture-legacy-digest-2"}]
                 assert not worker["actions"] and not worker["threads"], "legacy import must not mutate lifecycle or reply policy"
                 page.get_by_role("button", name="查看接入摘要", exact=True).wait_for()
+                page.get_by_role("button", name="查看接入摘要", exact=True).click()
+                page.get_by_text("旧宿主：停机记录与当前快照不一致", exact=True).wait_for()
+                page.get_by_text("原生档案：尚未取得档案导入记录", exact=True).wait_for()
+                page.get_by_text("目标登录：已登录且在线", exact=True).wait_for()
+                page.get_by_text("身份确认：仍需主人确认实际微信身份", exact=True).wait_for()
+                assert legacy["previews"] == 3 and len(legacy["posts"]) == 2, "cutover refresh must remain read-only"
                 page.get_by_role("button", name="设置回复范围").click()
                 page.get_by_role("textbox", name="回复会话 ID", exact=True).fill("filehelper\nsynthetic-room@chatroom")
                 page.get_by_role("textbox", name="历史与成员读取会话 ID", exact=True).fill("synthetic-room@chatroom")
