@@ -11,9 +11,11 @@ import (
 )
 
 var (
-	ErrNotFound    = errors.New("application or connection not found")
-	ErrUnavailable = errors.New("application registry unavailable")
-	stableID       = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+	ErrNotFound          = errors.New("application or connection not found")
+	ErrUnavailable       = errors.New("application registry unavailable")
+	ErrLifecycleConflict = errors.New("application lifecycle transition unavailable now")
+	ErrLifecycleNotReady = errors.New("application requires configuration before start")
+	stableID             = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 )
 
 type Application struct {
@@ -42,12 +44,24 @@ type ConfiguredPolicy struct {
 
 type ConnectionStatus struct {
 	Connection
-	Login            string            `json:"login"`
-	Runtime          string            `json:"runtime"`
-	Worker           string            `json:"worker"`
-	Policy           *ConfiguredPolicy `json:"configured_policy"`
-	CapabilityCheck  string            `json:"capability_check"`
-	SupportedActions []string          `json:"supported_actions"`
+	Login             string            `json:"login"`
+	Runtime           string            `json:"runtime"`
+	Worker            string            `json:"worker"`
+	SubmissionsPaused bool              `json:"submissions_paused"`
+	Policy            *ConfiguredPolicy `json:"configured_policy"`
+	CapabilityCheck   string            `json:"capability_check"`
+	SupportedActions  []string          `json:"supported_actions"`
+}
+
+type ConnectionLifecycle struct {
+	ConnectionRef
+	Worker            string `json:"worker"`
+	WorkerEnabled     bool   `json:"worker_enabled"`
+	SubmissionsPaused bool   `json:"submissions_paused"`
+}
+
+type LifecycleController interface {
+	SetConnectionRunning(ctx context.Context, connectionID string, running bool) (ConnectionLifecycle, error)
 }
 
 type Provider interface {

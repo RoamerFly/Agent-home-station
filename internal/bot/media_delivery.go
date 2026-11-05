@@ -522,6 +522,10 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		} else {
 			status, err = n.LookupSend(checkCtx, d.Key)
 			if errors.Is(err, linuxnative.ErrToolNotFound) {
+				if w.beforeSubmit(checkCtx) != nil {
+					cancel()
+					return
+				}
 				if !w.mediaAllowed(d) {
 					cancel()
 					w.cancelMedia(n, d, false, "media_permission_or_quiet_changed")
@@ -533,7 +537,12 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 					w.mediaRecord(d, "media_stopped", "error")
 					continue
 				}
-				if proofErr := w.validateMediaEvidence(checkCtx, d); proofErr != nil {
+				proofErr := w.validateMediaEvidence(checkCtx, d)
+				if w.beforeSubmit(checkCtx) != nil {
+					cancel()
+					return
+				}
+				if proofErr != nil {
 					cancel()
 					d.State, d.Reason = "needs_review", "media_source_proof_invalid"
 					w.mediaRecord(d, "media_stopped", "error")
@@ -643,6 +652,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 							w.mediaRecord(d, "media_stopped", "error")
 							continue
 						}
+						if w.beforeSubmit(ctx) != nil {
+							return
+						}
 						d.Retries++
 						d.State = "retry_submitting"
 						w.persistErr = w.saveRuntime()
@@ -706,6 +718,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				if gate := w.sendGate(d.Input.Thread); time.Now().Before(gate) {
 					d.Next = gate
 					continue
+				}
+				if w.beforeSubmit(ctx) != nil {
+					return
 				}
 				w.advanceSendGate(d.Input.Thread)
 				retryCtx, stop := context.WithTimeout(ctx, 30*time.Second)

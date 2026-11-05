@@ -30,7 +30,7 @@ func (p *permittedTools) submitWechatAction(ctx context.Context, tool string, ra
 		return "", toolInputError("账号状态正在更新，尚未提交操作")
 	}
 	defer m.op.Unlock()
-	if err := ctx.Err(); err != nil {
+	if err := m.checkWechatSubmission(ctx); err != nil {
 		return "", err
 	}
 	current := m.agent.config()

@@ -918,6 +918,7 @@ func (p *permittedTools) claimPrivilegedCall(ctx context.Context, name string, a
 	value, err := fn()
 	var inputFailure *agentLocalError
 	mediaInputRejected := name == "wechat_send_media" && errors.As(err, &inputFailure)
+	connectionPaused := errors.Is(err, errWechatConnectionPaused)
 	if err != nil {
 		value = map[string]any{"state": "needs_review", "reason": err.Error(), "instruction": "操作可能已经产生影响；请检查实际结果，不自动重复"}
 		if name == "server_process" || name == "server_windows_process" {
@@ -934,6 +935,9 @@ func (p *permittedTools) claimPrivilegedCall(ctx context.Context, name string, a
 			diagnostic := evidenceFailure.diagnostic()
 			value = map[string]any{"state": "needs_review", "reason": err.Error(), "code": diagnostic.Code, "stage": diagnostic.Stage, "not_started": diagnostic.NotStarted, "retryable": diagnostic.Retryable, "continuation": diagnostic.Continuation, "instruction": diagnostic.Continuation}
 		}
+		if connectionPaused {
+			value = map[string]any{"state": "paused", "code": "wechat_connection_paused", "not_started": true, "instruction": "该连接已暂停，尚未新增提交；恢复连接后可继续原操作。"}
+		}
 	}
 	b, _ := json.Marshal(value)
 	var result map[string]any
@@ -948,7 +952,7 @@ func (p *permittedTools) claimPrivilegedCall(ctx context.Context, name string, a
 	op.State = "completed"
 	if err != nil {
 		op.State = "needs_review"
-		if name == "server_process" || name == "server_windows_process" || mediaInputRejected {
+		if name == "server_process" || name == "server_windows_process" || mediaInputRejected || connectionPaused {
 			op.State = "rejected"
 		}
 	}

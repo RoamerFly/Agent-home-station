@@ -61,6 +61,42 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 		}
 		return reader.ReadAction(r.Context(), r.PathValue("connection"), r.PathValue("operation"))
 	})
+	mux.HandleFunc("POST /api/apps/{app}/connections/{connection}/lifecycle", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var input struct {
+			Action string `json:"action"`
+		}
+		if !decode(w, r, &input) {
+			return
+		}
+		if input.Action != "start" && input.Action != "stop" {
+			fail(w, http.StatusBadRequest, "请选择启动或停止应用连接")
+			return
+		}
+		app, ok := registry.Lookup(r.PathValue("app"))
+		if !ok {
+			fail(w, http.StatusNotFound, "应用未登记")
+			return
+		}
+		controller, ok := app.Provider.(apphost.LifecycleController)
+		if !ok {
+			fail(w, http.StatusNotImplemented, "应用未接入启停控制")
+			return
+		}
+		status, err := controller.SetConnectionRunning(r.Context(), r.PathValue("connection"), input.Action == "start")
+		switch {
+		case errors.Is(err, apphost.ErrNotFound):
+			fail(w, http.StatusNotFound, "应用连接不存在")
+		case errors.Is(err, apphost.ErrLifecycleConflict):
+			fail(w, http.StatusConflict, "连接正在收尾或主程序正在维护，请查询连接状态后再试")
+		case errors.Is(err, apphost.ErrLifecycleNotReady):
+			fail(w, http.StatusConflict, "请先完成模型配置并启用回复会话")
+		case err != nil:
+			fail(w, http.StatusServiceUnavailable, "暂时无法保存应用连接状态")
+		default:
+			respond(w, http.StatusOK, status)
+		}
+	}))
 }
 
 func isAppRegistryPath(path string) bool {

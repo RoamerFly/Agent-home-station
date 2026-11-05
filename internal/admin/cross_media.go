@@ -100,6 +100,9 @@ func (p *permittedTools) crossAllowed(source, target string) bool {
 	return p.privileged() && p.manager.agent.config().CrossConversation && p.manager.accountThreadKnown(source) && p.manager.accountThreadKnown(target)
 }
 func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := p.manager.checkWechatSubmission(ctx); err != nil {
+		return "", err
+	}
 	var in crossMediaInput
 	if json.Unmarshal(args, &in) != nil || in.Key == "" || len(in.Key) > 128 || (in.Asset == "") == (in.Message == "") || !contains([]string{"file", "voice", "video", "image"}, in.Kind) {
 		return "", toolInputError("provide one real asset_id or message_id, kind and stable request_key")
@@ -270,6 +273,9 @@ func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (s
 		}
 		id := p.operationID("wechat_send_media", args)
 		if err := p.validateCrossMediaOrigin(ctx, origin); err != nil {
+			return nil, err
+		}
+		if err := m.checkWechatSubmission(ctx); err != nil {
 			return nil, err
 		}
 		batch := crossMediaBatch{OriginInput: origin, Conversion: in.Conversion, RequestIdentity: identity, TaskID: p.trace.TaskID, ID: id, Account: p.trace.Account, Origin: p.trace.Thread, Source: in.Source, Target: in.Target, Sender: p.trace.Sender, Asset: in.Asset, Created: time.Now().UTC()}

@@ -96,6 +96,7 @@ func (w wechatCompatibility) Inspect(ctx context.Context, connectionID string) (
 	}
 	m := item.manager
 	result.Worker = m.BotStatus().State
+	result.SubmissionsPaused = m.connectionPaused()
 	result.Policy = configuredWechatPolicy(m)
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

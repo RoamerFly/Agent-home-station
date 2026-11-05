@@ -315,7 +315,9 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 	receiptCtx, cancelReceipts := context.WithTimeout(context.Background(), 3*time.Second)
 	m.importOwnerSurfReceipts(receiptCtx)
 	cancelReceipts()
-	if c.Enabled {
+	if c.ConnectionPaused {
+		m.setState("paused")
+	} else if c.Enabled {
 		m.start(c)
 	}
 	workspaceInitialized = true
@@ -388,6 +390,7 @@ func (m *Manager) saveLocked(input ConfigInput) (ConfigView, error) {
 	previous := cloneConfig(m.config)
 	m.mu.Unlock()
 	next := cloneConfig(input.Config)
+	next.ConnectionPaused = previous.ConnectionPaused
 	if next.Companion.Name == "" {
 		next.Companion = previous.Companion
 	}
@@ -437,6 +440,9 @@ func (m *Manager) saveLocked(input ConfigInput) (ConfigView, error) {
 func (m *Manager) Toggle(enabled bool) error {
 	m.op.Lock()
 	defer m.op.Unlock()
+	if enabled && m.connectionPaused() {
+		return errors.New("微信连接已暂停，请先从应用连接恢复")
+	}
 	if !enabled && m.mobile != nil {
 		if err := m.mobile.StopAll(); err != nil {
 			return err
@@ -472,6 +478,9 @@ func (m *Manager) stop() error {
 	m.cancel = nil
 	m.done = nil
 	m.status.State = "disabled"
+	if m.config.ConnectionPaused {
+		m.status.State = "paused"
+	}
 	m.mu.Unlock()
 	return nil
 }
@@ -536,6 +545,10 @@ func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {
 	}})
 }
 func (m *Manager) start(c Config) {
+	if c.ConnectionPaused {
+		m.setState("paused")
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	m.mu.Lock()
@@ -628,7 +641,7 @@ func (m *Manager) start(c Config) {
 		m.warmFriends(friendCtx)
 		cancelFriends()
 		c.friendIDs = m.cachedFriends()
-		worker, err := bot.New(bot.Config{ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
+		worker, err := bot.New(bot.Config{BeforeSubmit: m.checkWechatSubmission, ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
 		if err != nil {
 			m.setState("error")
 			m.log("bot_configuration_error")

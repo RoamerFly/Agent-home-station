@@ -89,11 +89,17 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 				if err := p.deliveryDelay(ctx); err != nil {
 					return nil, err
 				}
+				if err := p.manager.checkWechatSubmission(ctx); err != nil {
+					return nil, err
+				}
 				return reconciler.ReconcileMediaJob(ctx, in.Job)
 			}
 			return nil, errors.New("当前原生版本缺少聊天核对后恢复接口，需要修复服务；保存任务继续处理")
 		}
 		if err := p.deliveryDelay(ctx); err != nil {
+			return nil, err
+		}
+		if err := p.manager.checkWechatSubmission(ctx); err != nil {
 			return nil, err
 		}
 		return retry.RetryMediaJob(ctx, in.Job)

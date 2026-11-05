@@ -122,11 +122,17 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 		return sending.Receipt{}, errors.New("surf_share_permission_changed")
 	}
 	native, ok := w.sender.(reliableNative)
+	if w.beforeSubmit(ctx) != nil {
+		return sending.Receipt{}, errSubmissionDeferred
+	}
 	if !ok || w.runtime == nil {
 		var err error
 		input, text, err = w.prepareGroundedText(ctx, input, text)
 		if err != nil {
 			return sending.Receipt{}, replyAdmissionFailure(err)
+		}
+		if err := w.beforeSubmit(ctx); err != nil {
+			return sending.Receipt{}, err
 		}
 		return w.sender.SendText(ctx, sending.TextRequest{Recipient: input.Thread, Text: text})
 	}
@@ -147,6 +153,9 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 	var err error
 	input, text, err = w.prepareGroundedText(ctx, input, text)
 	if err != nil {
+		if w.beforeSubmit(ctx) != nil {
+			return sending.Receipt{}, errSubmissionDeferred
+		}
 		return sending.Receipt{}, replyAdmissionFailure(err)
 	}
 	d := &delivery{Trace: input.TraceID, Thread: input.Thread, Text: text, Bubble: bubble, Created: time.Now().UTC(), State: "prepared", Input: input}
@@ -180,7 +189,14 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 		if w.deliveryCancelled(d) {
 			return w.cancelledDelivery(d)
 		}
+		deferred := &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: errSubmissionDeferred.Error()}
+		if w.beforeSubmit(ctx) != nil {
+			return sending.Receipt{}, deferred
+		}
 		in, text, validationErr := w.prepareGroundedText(ctx, d.Input, d.Text)
+		if w.beforeSubmit(ctx) != nil {
+			return sending.Receipt{}, deferred
+		}
 		if validationErr != nil {
 			failure := replyAdmissionFailure(validationErr)
 			d.State, d.Reason = "stopped", sending.FailureReason(failure)

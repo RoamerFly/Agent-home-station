@@ -127,6 +127,12 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	switch name {
+	case "wechat_send_text", "wechat_send_media", "wechat_forward_file", "wechat_account_action", "wechat_recall", "wechat_delivery_retry":
+		if err := p.manager.checkWechatSubmission(ctx); err != nil {
+			return "", err
+		}
+	}
 	// Canonical JSON makes object property order irrelevant to operation identity.
 	var canonical any
 	if json.Unmarshal(args, &canonical) != nil {
@@ -626,7 +632,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				}
 				request.Quote = &linuxnative.ToolQuote{MessageID: ref.MessageID, ServerID: ref.ServerID}
 			}
-			status, err := native.Submit(ctx, request)
+			status, err := m.submitWechat(ctx, native, request)
 			if err == nil {
 				if status.State == "accepted" && status.ServerID != "" {
 					p.rememberAgentSend(in.Thread, in.Text, key)

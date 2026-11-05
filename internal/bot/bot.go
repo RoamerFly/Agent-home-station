@@ -32,6 +32,7 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
+	BeforeSubmit        func(context.Context) error
 	ObservationFailed   func(companion.Input, string) error
 	MediaRepairRequired func(companion.Input, string, string) error
 	MediaSeedSettled    func(string, string, linuxnative.ToolStatus) error
@@ -63,6 +64,15 @@ type Config struct {
 	GroupRules     map[string]GroupRule
 	Channel        string
 }
+
+func (w *Worker) beforeSubmit(ctx context.Context) error {
+	if w.config.BeforeSubmit != nil {
+		return w.config.BeforeSubmit(ctx)
+	}
+	return nil
+}
+
+var errSubmissionDeferred = errors.New("delivery_waiting_for_connection")
 
 // MediaObservationEvidence is supplied only by a trusted host observer that
 // actually decoded incoming media. It is intentionally separate from the text
@@ -819,6 +829,9 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			return
 		}
 		input = bound
+		if w.beforeSubmit(ctx) != nil {
+			return
+		}
 		w.markSending(input.TraceID)
 		if w.persistErr != nil {
 			return
@@ -871,6 +884,9 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			sourceID = media.ID
 		}
 		sender := w.sender.(mediaSender)
+		if w.beforeSubmit(ctx) != nil {
+			return
+		}
 		w.markSending(input.TraceID)
 		if w.persistErr != nil {
 			return

@@ -38,6 +38,7 @@ type Config struct {
 	ThinkingEnabled   bool             `json:"thinking_enabled"`
 	ReasoningEffort   string           `json:"reasoning_effort"`
 	Enabled           bool             `json:"enabled"`
+	ConnectionPaused  bool             `json:"connection_paused,omitempty"`
 	PrivateEnabled    bool             `json:"private_enabled"`
 	FilehelperEnabled bool             `json:"filehelper_enabled"`
 	DirectIDs         []string         `json:"direct_ids"`

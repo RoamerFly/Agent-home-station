@@ -193,6 +193,10 @@ func (s *Server) approveAction(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, p)
 		return
 	}
+	if m.connectionPaused() {
+		fail(w, 409, "微信连接已暂停，未提交操作")
+		return
+	}
 	if input.Confirm != p.ID {
 		fail(w, 400, "需要确认当前操作编号")
 		return

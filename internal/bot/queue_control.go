@@ -74,6 +74,9 @@ func (w *Worker) resumeMissingMedia(ctx context.Context, in companion.Input, old
 	if existing := w.resumedMediaExists(old); existing != nil {
 		return existing, ""
 	}
+	if w.beforeSubmit(ctx) != nil {
+		return nil, "media_resume_connection_paused"
+	}
 	key := "media-resume-" + messageHash(old.Key + "|" + in.TraceID)[:48]
 	resumeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	status, err := n.ResumeMissingMediaJob(resumeCtx, old.ID, key)
