@@ -468,6 +468,12 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 		if len(page.Items) >= 100 {
 			continue
 		}
+		// Consume all already-arrived interruptions before starting an explicit
+		// host continuation, just as with deferred media and captions below.
+		w.processHostMediaResume(ctx)
+		if w.persistErr != nil {
+			return w.persistErr
+		}
 		w.reviewActiveGenerations(ctx)
 		w.drainGenerations(ctx)
 		// Read new instructions before emitting deferred old captions. In

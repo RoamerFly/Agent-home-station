@@ -42,10 +42,18 @@ type MediaRef struct {
 type Receipt struct {
 	ConnectionRef
 	DeliveryReceipt
-	ConversationID string            `json:"conversation_id"`
-	Deliveries     []DeliveryReceipt `json:"deliveries,omitempty"`
-	SupersededBy   string            `json:"superseded_by,omitempty"`
-	ResumedFrom    string            `json:"resumed_from,omitempty"`
+	ConversationID string               `json:"conversation_id"`
+	Deliveries     []DeliveryReceipt    `json:"deliveries,omitempty"`
+	SupersededBy   string               `json:"superseded_by,omitempty"`
+	ResumedFrom    string               `json:"resumed_from,omitempty"`
+	Continuation   *ReceiptContinuation `json:"continuation,omitempty"`
+}
+
+type ReceiptContinuation struct {
+	State       string `json:"state"`
+	Message     string `json:"message"`
+	Code        string `json:"code,omitempty"`
+	DeliveryKey string `json:"delivery_key,omitempty"`
 }
 
 type DeliveryReceipt struct {

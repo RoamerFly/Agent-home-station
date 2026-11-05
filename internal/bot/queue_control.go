@@ -108,6 +108,9 @@ func (w *Worker) resumeMissingMedia(ctx context.Context, in companion.Input, old
 		return nil, "media_resume_original_identity_mismatch"
 	}
 	old.Status = current.WithVoiceReceipts()
+	if old.Status.State == "accepted" {
+		return nil, "media_resume_already_accepted"
+	}
 	if old.Status.State != "cancelled" || !resumableVoiceChunks(old) {
 		return nil, "media_resume_missing_requires_verified_terminal_chunks"
 	}

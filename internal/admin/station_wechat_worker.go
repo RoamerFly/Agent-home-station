@@ -577,6 +577,8 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 	worker, err := bot.New(bot.Config{
 		DeliveryCancelled:  station.deliveryCancelled,
 		WithDeliverySubmit: station.withDeliverySubmit,
+		NextMediaResume:    station.nextMediaResume,
+		MediaResumeResult:  station.mediaResumeResult,
 		StateDir:           filepath.Join(dir, "queue"), AllowedThreads: threads, GroupRules: rules,
 		Options: &options, Prefix: "/ai ",
 		Log: func(event string) {

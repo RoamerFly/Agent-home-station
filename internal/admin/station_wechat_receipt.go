@@ -34,17 +34,21 @@ func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limi
 	page.Snapshot, page.NextAfter = rows.Snapshot, rows.NextAfter
 	w.deliveryMu.Lock()
 	stops, err := w.readDeliveryStops()
+	controls, controlErr := w.readResumeControls()
 	w.deliveryMu.Unlock()
-	if err != nil {
+	if err != nil || controlErr != nil {
 		return page, apphost.ErrUnavailable
 	}
-	page.Snapshot = localCheckpointKey(rows.Snapshot, stops)
+	page.Snapshot = localCheckpointKey(rows.Snapshot, stops, controls)
 	for _, key := range rows.Keys {
 		row := rows.Records[key]
 		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, account), ConversationID: row.Status.ThreadID,
 			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"}}
 		projectWechatReceipt(&receipt.DeliveryReceipt, row.Status)
 		receipt.ResumedFrom = row.ResumedFrom
+		if control, exists := controls[key]; exists {
+			receipt.Continuation = resumeControlView(control)
+		}
 		_, cancelled := stops[deliveryStopID(companion.Input{Account: account, Thread: row.Status.ThreadID, TraceID: row.Trace})]
 		receipt.CancelRequested = receipt.CancelRequested || cancelled
 		page.Items = append(page.Items, receipt)
@@ -91,6 +95,15 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 		return apphost.Receipt{}, apphost.ErrUnavailable
 	}
 	result.CancelRequested = result.CancelRequested || cancelled
+	w.deliveryMu.Lock()
+	controls, err := w.readResumeControls()
+	w.deliveryMu.Unlock()
+	if err != nil {
+		return apphost.Receipt{}, apphost.ErrUnavailable
+	}
+	if control, exists := controls[key]; exists {
+		result.Continuation = resumeControlView(control)
+	}
 	return result, nil
 }
 

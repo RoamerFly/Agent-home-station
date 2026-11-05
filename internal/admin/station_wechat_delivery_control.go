@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -66,27 +65,9 @@ func deliveryStopID(in companion.Input) string {
 // deliveryMu serializes the journal commit with entry to a native submission.
 // It is separate from worker.mu: shutdown waits for the actor under worker.mu.
 func (w *stationWechatWorker) readDeliveryStops() (map[string]stationDeliveryStop, error) {
-	rows := map[string]stationDeliveryStop{}
-	root, err := workspacefs.OpenPath(w.dir)
+	rows, err := readStationControlJournal[stationDeliveryStop](w.dir, "delivery-stops.json")
 	if err != nil {
 		return nil, err
-	}
-	defer root.Close()
-	info, err := root.Lstat("delivery-stops.json")
-	if errors.Is(err, os.ErrNotExist) {
-		return rows, nil
-	}
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 2<<20 {
-		return nil, errors.New("delivery cancellation journal unavailable")
-	}
-	f, err := root.Open("delivery-stops.json")
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (2<<20)+1))
-	if err != nil || len(raw) > 2<<20 || json.Unmarshal(raw, &rows) != nil || rows == nil || len(rows) > 5000 {
-		return nil, errors.New("invalid delivery cancellation journal")
 	}
 	for key, row := range rows {
 		if row.Account == "" || row.Thread == "" || row.Trace == "" || row.Key == "" || row.At.IsZero() || key != deliveryStopID(companion.Input{Account: row.Account, Thread: row.Thread, TraceID: row.Trace}) {
@@ -114,6 +95,15 @@ func (w *stationWechatWorker) withDeliverySubmit(ctx context.Context, in compani
 	if _, cancelled := rows[deliveryStopID(in)]; cancelled {
 		return bot.ErrDeliveryCancelled
 	}
+	controls, err := w.readResumeControls()
+	if err != nil {
+		return err
+	}
+	for _, r := range controls {
+		if r.Trace == in.TraceID && r.State == "cancelled" {
+			return bot.ErrDeliveryCancelled
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -133,25 +123,12 @@ func (w *stationWechatWorker) saveDeliveryStop(stop stationDeliveryStop) error {
 		return errors.New("delivery cancellation journal full")
 	}
 	rows[id] = stop
-	raw, err := json.Marshal(rows)
-	if err != nil || len(raw) > 2<<20 {
-		return errors.New("delivery cancellation journal full")
-	}
-	root, err := workspacefs.OpenPath(w.dir)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	stage := ".stop-" + randomToken()
-	defer root.Remove(stage)
-	if err := writeLegacyStagedFile(root, stage, rows); err != nil {
-		return err
-	}
-	return root.Rename(stage, "delivery-stops.json")
+	return writeStationControlJournal(w.dir, "delivery-stops.json", rows)
 }
 
 func (s *stationWechat) deliveryControlRoutes(owner *Server, mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/receipts/{key}/cancel", owner.protected(s.cancelDelivery))
+	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/receipts/{key}/resume", owner.protected(s.requestDeliveryResume))
 }
 
 func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +153,10 @@ func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {
 	}
 	stop := stationDeliveryStop{Account: account, Thread: row.Status.ThreadID, Trace: row.Trace, Key: key, At: time.Now().UTC()}
 	err = worker.saveDeliveryStop(stop)
+	traces := map[string]bool{stop.Trace: true}
+	if err == nil {
+		traces, err = worker.cancelResumeControls(stop)
+	}
 	worker.deliveryMu.Unlock()
 	if err != nil {
 		fail(w, 503, "停止意图尚未保存，请重试")
@@ -193,7 +174,7 @@ func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {
 		if cancelCtx.Err() != nil {
 			break
 		}
-		if item.Trace != stop.Trace || item.Status.ThreadID != stop.Thread || item.Status.Kind == "text" || item.Status.State == "accepted" {
+		if !traces[item.Trace] || item.Status.ThreadID != stop.Thread || item.Status.Kind == "text" || item.Status.State == "accepted" {
 			continue
 		}
 		s.cancelNativeDelivery(cancelCtx, native, itemKey, item)

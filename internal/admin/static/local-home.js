@@ -50,7 +50,7 @@
     else window.clearTimeout(apps.loginTimer);
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), workDrafts: new Map(), editWorker: "" };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "" };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -338,7 +338,7 @@
       if (pending) parts.push(`待核对 ${pending} 段`);
       if (cancelled) parts.push(`已取消 ${cancelled} 段`);
       if (item.parts_incomplete) parts.push("分段记录尚不完整");
-      return (kinds[item.kind] || "消息") + (item.resumed_from ? "续发" : "") + " · " + item.conversation_id + " · " + status + (parts.length ? "（" + parts.join("，") + "）" : "");
+      return (kinds[item.kind] || "消息") + (item.resumed_from ? "续发" : "") + " · " + item.conversation_id + " · " + status + (parts.length ? "（" + parts.join("，") + "）" : "") + (item.continuation?.message ? " · " + item.continuation.message : "");
     }
     function append(item) {
       const row = appElement("div", "", "work-record");
@@ -348,23 +348,53 @@
         try {
           await request(base + "/" + encodeURIComponent(item.idempotency_key) + "/cancel", { method: "POST", body: "{}" });
           item.cancel_requested = true;
+          if (item.continuation) item.continuation = { ...item.continuation, state: "cancelled", message: "续办已停止" };
           text.textContent = describe(item);
+          updateActions();
           stop.textContent = "停止意图已保存";
         } catch (error) { appFeedback(error.message, true); stop.disabled = false; stop.textContent = "停止本回合投递"; }
       });
-      stop.disabled ||= item.cancel_requested || item.state === "cancelled";
+      const resume = appSetupButton("续发未发送片段", async () => {
+        resume.disabled = true; resume.textContent = "正在保存…";
+        const draftID = id + "|" + item.idempotency_key;
+        if (!apps.resumeDrafts.has(draftID)) apps.resumeDrafts.set(draftID, crypto.randomUUID());
+        try {
+          const result = await request(base + "/" + encodeURIComponent(item.idempotency_key) + "/resume", { method: "POST", body: JSON.stringify({ request_key: apps.resumeDrafts.get(draftID) }) });
+          item.continuation = result.continuation;
+          text.textContent = describe(item);
+          updateActions();
+        } catch (error) { appFeedback(error.message, true); updateActions(); }
+      });
+      function updateActions() {
+        const active = ["requested", "waiting_receipt", "tracking"].includes(item.continuation?.state);
+        stop.disabled = Boolean(!active && (item.cancel_requested || item.state === "cancelled"));
+        stop.textContent = active ? "停止续办" : "停止本回合投递";
+        resume.hidden = item.kind !== "voice" || !(item.cancel_requested || item.state === "cancelled");
+        resume.disabled = Boolean(item.continuation || item.state === "accepted" || item.state === "cancelled" && !item.operation_id);
+        resume.textContent = item.continuation ? "续办请求已保存" : "续发未发送片段";
+      }
       const check = appSetupButton("核对回执", async () => {
         check.disabled = true; check.textContent = "正在核对…";
         try {
           const result = await request(base + "/" + encodeURIComponent(item.idempotency_key));
           item = result;
           text.textContent = describe(result);
-          stop.disabled = Boolean(result.cancel_requested || result.state === "cancelled");
+          updateActions();
           if (result.lookup === "unavailable") text.textContent += " · 暂时无法连接，保留已知状态";
+          const nextKey = result.continuation?.delivery_key;
+          if (nextKey && nextKey !== result.idempotency_key) {
+            try {
+              const next = await request(base + "/" + encodeURIComponent(nextKey));
+              if (next.resumed_from === result.idempotency_key && next.conversation_id === result.conversation_id) {
+                text.textContent += " · 续发结果：" + describe(next);
+              }
+            } catch (_) { text.textContent += " · 续发回执暂不可读"; }
+          }
         } catch (error) { appFeedback(error.message, true); }
         finally { check.disabled = false; check.textContent = "核对回执"; }
       });
-      row.append(text, check, stop); records.append(row);
+      updateActions();
+      row.append(text, check, stop, resume); records.append(row);
     }
     const more = appSetupButton("查看投递记录", async () => {
       if (loading) return;

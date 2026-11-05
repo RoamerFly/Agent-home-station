@@ -36,6 +36,8 @@ type Config struct {
 	DeliveryCancelled func(companion.Input) (bool, error)
 	// WithDeliverySubmit serializes the final native submission with that fence.
 	WithDeliverySubmit  func(context.Context, companion.Input, func() error) error
+	NextMediaResume     func(time.Time) (*MediaResumeRequest, error)
+	MediaResumeResult   func(MediaResumeRequest, MediaResumeResult) error
 	BeforeSubmit        func(context.Context) error
 	ObservationFailed   func(companion.Input, string) error
 	MediaRepairRequired func(companion.Input, string, string) error

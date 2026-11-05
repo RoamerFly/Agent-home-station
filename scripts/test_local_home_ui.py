@@ -312,23 +312,38 @@ def verify(binary, output):
                 assert page.get_by_role("textbox", name="附件回复会话 ID").input_value() == "synthetic-room@chatroom"
                 assert worker["actions"] == ["start", "stop"]
                 # Reading delivery history and receipt checks must never post a send.
-                receipt_state = {"version": "first", "reads": 0, "checks": 0, "stops": 0}
+                receipt_state = {"version": "first", "reads": 0, "checks": 0, "stops": 0, "resumes": 0, "continuation": None}
                 receipts_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/receipts(?:[/?].*)?$")
                 pending_receipt = {"idempotency_key": "synthetic-send", "kind": "voice", "resumed_from": "synthetic-original",
                     "conversation_id": "synthetic-room@chatroom", "state": "submission_unknown",
-                    "lookup": "stored", "accepted_parts": [{"index": 0, "server_id": "101"}],
+                    "lookup": "stored", "operation_id": "synthetic-job", "accepted_parts": [{"index": 0, "server_id": "101"}],
                     "unconfirmed_parts": [{"index": 1, "state": "submitting"}, {"index": 2, "state": "cancelled"}]}
                 def receipt_records(route):
                     if route.request.url.endswith("/receipts/synthetic-send/cancel"):
                         assert route.request.method == "POST"
                         assert route.request.headers.get("x-csrf-token"), "stop lacked owner CSRF"
                         receipt_state["stops"] += 1
+                        if receipt_state["continuation"]:
+                            receipt_state["continuation"] = {"state": "cancelled", "message": "续办已停止"}
                         fulfill_json({"state": "cancellation_requested", "scope": "originating_turn"}, status=202)(route)
                         return
+                    if route.request.url.endswith("/receipts/synthetic-send/resume"):
+                        assert route.request.method == "POST"
+                        assert route.request.headers.get("x-csrf-token"), "resume lacked owner CSRF"
+                        assert route.request.post_data_json["request_key"]
+                        receipt_state["resumes"] += 1
+                        receipt_state["continuation"] = {"state": "requested", "message": "续办请求已保存"}
+                        fulfill_json({"continuation": receipt_state["continuation"]}, status=202)(route)
+                        return
                     assert route.request.method == "GET", "receipt view attempted a mutation"
+                    if route.request.url.endswith("/receipts/synthetic-continuation"):
+                        fulfill_json({"idempotency_key": "synthetic-continuation", "kind": "voice", "conversation_id": "synthetic-room@chatroom", "state": "accepted", "lookup": "platform", "resumed_from": "synthetic-send"})(route)
+                        return
                     if "/receipts/synthetic-send" in route.request.url:
                         receipt_state["checks"] += 1
-                        fulfill_json(dict(pending_receipt, state="cancelled", cancel_requested=True, lookup="platform"))(route)
+                        if receipt_state["continuation"] and receipt_state["continuation"]["state"] == "requested":
+                            receipt_state["continuation"] = {"state": "tracking", "message": "已建立续发任务", "delivery_key": "synthetic-continuation"}
+                        fulfill_json(dict(pending_receipt, state="cancelled", cancel_requested=True, lookup="platform", continuation=receipt_state["continuation"]))(route)
                     else:
                         receipt_state["reads"] += 1
                         if "after=synthetic-send" in route.request.url:
@@ -349,6 +364,14 @@ def verify(binary, output):
                 page.get_by_role("button", name="核对回执", exact=True).click()
                 page.get_by_text(re.compile("语音.*正在停止，等待回执.*已接受 1 段.*待核对 1 段.*已取消 1 段")).wait_for()
                 assert receipt_state["reads"] == 3 and receipt_state["checks"] == 1 and receipt_state["stops"] == 1
+                page.get_by_role("button", name="续发未发送片段", exact=True).click()
+                page.get_by_role("button", name="续办请求已保存", exact=True).wait_for()
+                assert page.get_by_role("button", name="续办请求已保存", exact=True).is_disabled()
+                page.get_by_role("button", name="核对回执", exact=True).click()
+                page.get_by_text(re.compile("语音.*续发结果：.*微信已接受")).wait_for()
+                page.get_by_role("button", name="停止续办", exact=True).click()
+                page.get_by_text(re.compile("语音.*续办已停止")).wait_for()
+                assert receipt_state["resumes"] == 1 and receipt_state["stops"] == 2
                 artifact_id = "work-" + "a" * 64
                 delivery_id = "export-" + "b" * 64
                 share_requests = []
