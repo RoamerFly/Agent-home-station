@@ -16,16 +16,17 @@ import (
 // Authentication is provided by the local owner's management session. No
 // Native, account Manager, device bridge or model is constructed by this path.
 type localHomeService struct {
-	identity *fishIdentityRegistry
-	root     string
-	dataDir  string
+	identity      *fishIdentityRegistry
+	root          string
+	dataDir       string
+	chatAvailable bool
 }
 
 // NewLocalHomeHandler provides the first application-independent station
 // surface. It deliberately does not mount the old WeChat management routes.
 // The existing identity file is reused when dir points to an existing station;
 // initialization never imports account data or revives application grants.
-func NewLocalHomeHandler(dir, workspaceRoot, password, origin string) (http.Handler, error) {
+func NewLocalHomeHandler(dir, workspaceRoot, password, origin string) (*LocalHomeHandler, error) {
 	if dir == "" || workspaceRoot == "" || !validPassword(password) {
 		return nil, errors.New("本地主人配置无效")
 	}
@@ -61,7 +62,11 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string) (http.Hand
 		_, value, _ := s.session(r)
 		respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": value.CSRF})
 	}))
-	s.localHomeRoutes(mux, newFishIdentityRegistry(dir), workspaceRoot, dir)
+	home := &localHomeService{identity: newFishIdentityRegistry(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true}
+	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
+	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
+	chat := newLocalChatService(home)
+	chat.routes(s, mux)
 	for route, asset := range map[string]string{
 		"/": "local-home.html", "/assets/local-home.js": "local-home.js", "/assets/local-home.css": "local-home.css",
 		"/assets/whale-girl-cutout.png": "whale-girl-cutout.png", "/assets/night-sea.webp": "night-sea.webp",
@@ -91,7 +96,7 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string) (http.Hand
 			_, _ = w.Write(data)
 		})
 	}
-	return mux, nil
+	return &LocalHomeHandler{Handler: mux, chat: chat}, nil
 }
 
 func (s *Server) localHomeRoutes(mux *http.ServeMux, identity *fishIdentityRegistry, root, dataDir string) {
@@ -142,7 +147,7 @@ func (h *localHomeService) ensureDirectory(record fishIdentityRecord) error {
 }
 
 func (h *localHomeService) response(w http.ResponseWriter, record fishIdentityRecord) {
-	result := map[string]any{"initialized": record.LocalOwner != nil, "home_access": false, "mode": "local"}
+	result := map[string]any{"initialized": record.LocalOwner != nil, "home_access": false, "mode": "local", "chat_available": h.chatAvailable}
 	if record.LocalOwner != nil {
 		result["fish_id"], result["owner_id"] = record.FishID, record.LocalOwner.ID
 		result["revision"], result["home_access"] = record.LocalOwner.Revision, record.LocalOwner.HomeAccess

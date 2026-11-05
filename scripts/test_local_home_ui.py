@@ -64,9 +64,27 @@ def verify(binary, output):
                 assert page.locator("#login-view").is_hidden(), "login card remained visible after login"
                 assert not (data / "fish-identity.json").exists(), "read created identity"
                 page.locator("#initialize-button").click()
-                page.locator("#home-details").wait_for(state="visible")
+                page.locator("#chat-view").wait_for(state="visible")
                 initial = context.request.get(origin + "/api/local/home").json()
                 assert initial["initialized"] and initial["home_access"]
+                assert initial.get("chat_available") is True
+                model = context.request.get(origin + "/api/local/model")
+                assert model.status == 200
+                model = model.json()
+                assert model["provider"] == "deepseek"
+                assert model["model"] == "deepseek-flash"
+                assert model["thinking_enabled"] is True
+                assert model["reasoning_effort"] == "low"
+                assert model["key_configured"] is False
+                page.locator("#chat-view").wait_for(state="visible")
+                page.get_by_text("先设置聊天模型", exact=True).wait_for()
+                assert page.locator("#chat-input").is_enabled(), "chat must remain available independently of workspace access"
+                page.locator("#settings-tab").click()
+                page.locator("#settings-view").wait_for(state="visible")
+                assert page.locator("#model-save").is_visible()
+                page.locator("#model-name").fill("synthetic-unsaved-draft")
+                assert page.get_by_text("测试模型连接", exact=True).count() == 0
+                page.locator("#chat-tab").click()
                 home = Path(initial["directory"])
                 assert home.is_relative_to(workspace)
                 assert not (data / "accounts.json").exists()
@@ -77,8 +95,12 @@ def verify(binary, output):
                 note = home / "diary" / "synthetic.md"
                 note.write_text("a persistent companion home", encoding="utf-8")
                 page.screenshot(path=str(output / "ready-light.png"), full_page=True)
-                page.locator("#access-button").click()
+                page.locator("#settings-tab").click()
+                page.locator("#settings-access-button").click()
                 page.get_by_text("工作空间已暂停", exact=True).wait_for()
+                assert page.locator("#model-name").input_value() == "synthetic-unsaved-draft", "workspace change replaced the model draft"
+                page.locator("#chat-tab").click()
+                assert page.locator("#chat-input").is_enabled(), "workspace pause must not disable local chat"
                 page.reload()
                 page.get_by_text("工作空间已暂停", exact=True).wait_for()
                 session = context.request.get(origin + "/api/session").json()
@@ -88,9 +110,10 @@ def verify(binary, output):
                 page.emulate_media(color_scheme="dark")
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "narrow overflow"
                 page.screenshot(path=str(output / "paused-dark-375.png"), full_page=True)
-                page.locator("#access-button").click()
+                page.locator("#settings-tab").click()
+                page.locator("#settings-access-button").click()
                 page.get_by_text("工作空间已授权", exact=True).wait_for()
-                page.locator("#logout-button").click()
+                page.locator("#settings-logout-button").click()
                 page.locator("#login-view").wait_for(state="visible")
                 assert context.request.get(origin + "/api/local/home").status == 401
                 stop(process)
@@ -98,7 +121,7 @@ def verify(binary, output):
                 page.goto(origin)
                 page.locator("#login-password").fill("synthetic-home-owner")
                 page.locator("#login-submit").click()
-                page.locator("#home-details").wait_for(state="visible")
+                page.locator("#chat-view").wait_for(state="visible")
                 latest = context.request.get(origin + "/api/local/home").json()
                 assert latest["fish_id"] == initial["fish_id"]
                 assert latest["owner_id"] == initial["owner_id"]

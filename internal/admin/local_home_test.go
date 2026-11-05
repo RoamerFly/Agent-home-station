@@ -14,12 +14,13 @@ import (
 )
 
 type localHomeFixture struct {
-	t      *testing.T
-	server *httptest.Server
-	client *http.Client
-	csrf   string
-	dir    string
-	root   string
+	t       *testing.T
+	server  *httptest.Server
+	client  *http.Client
+	csrf    string
+	dir     string
+	root    string
+	handler *LocalHomeHandler
 }
 
 func newLocalHomeFixture(t *testing.T, dir, root string) *localHomeFixture {
@@ -30,7 +31,8 @@ func newLocalHomeFixture(t *testing.T, dir, root string) *localHomeFixture {
 	}
 	server := httptest.NewServer(handler)
 	jar, _ := cookiejar.New(nil)
-	f := &localHomeFixture{t: t, server: server, client: &http.Client{Jar: jar}, dir: dir, root: root}
+	f := &localHomeFixture{t: t, server: server, client: &http.Client{Jar: jar}, dir: dir, root: root, handler: handler}
+	t.Cleanup(func() { _ = handler.Close() })
 	t.Cleanup(server.Close)
 	return f
 }

@@ -597,6 +597,9 @@ func location(name string) *time.Location {
 	return loc
 }
 func (e *Engine) policy(input Input) string {
+	if input.Channel == LocalChannel {
+		return e.localConversationPolicy()
+	}
 	c := e.Config
 	conversation := c.ConversationConfig()
 	planPolicy := "\n发言按语义组织：messages中的每一项是你决定此处按下发送键的一条完整短消息。可以只有一条，也可以在确有必要时自然补充多条；不要把长回答机械按句号切碎，不固定每次两三条。后续尚未发送的内容可能因新插话而被复核或取消。"

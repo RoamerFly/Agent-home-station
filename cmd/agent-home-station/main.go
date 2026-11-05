@@ -63,6 +63,7 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer handler.Close()
 
 	listener, err := net.Listen("tcp", cfg.listen)
 	if err != nil {
@@ -72,7 +73,7 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       60 * time.Second,
 	}
 	serveResult := make(chan error, 1)
