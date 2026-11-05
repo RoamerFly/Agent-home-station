@@ -25,6 +25,7 @@ type localHomeService struct {
 	chatAvailable bool
 	appCatalog    string
 	appInstallMu  sync.Mutex
+	artifacts     *localArtifactStore
 }
 
 // NewLocalHomeHandler provides the first application-independent station
@@ -79,6 +80,8 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
 	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
 	chat := newLocalChatService(home)
+	home.artifacts = &localArtifactStore{home: home, chat: chat}
+	home.artifacts.routes(s, mux)
 	handler := &LocalHomeHandler{Handler: mux, chat: chat, home: home}
 	if len(windows) > 0 && windows[0] != nil {
 		copy := *windows[0]
@@ -105,6 +108,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	if handler.wechat != nil {
 		handler.wechat.legacyImportRoutes(s, mux)
 		handler.wechat.attachmentRoutes(s, mux)
+		handler.wechat.artifactRoutes(s, mux)
 		handler.wechat.restore()
 	}
 	chat.routes(s, mux)

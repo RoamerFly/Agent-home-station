@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
@@ -51,6 +52,9 @@ func (t *stationAttachmentTools) prepareReply(ctx context.Context, raw json.RawM
 }
 
 func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.Input, kind, asset string) (string, error) {
+	if strings.HasPrefix(asset, "export-") {
+		return t.stageWork(ctx, in, kind, asset)
+	}
 	allowed := func() bool { return t.replyAllowed(in) }
 	if !allowed() || !stationAttachmentID(asset) {
 		return "", wechatapp.ErrAttachmentDenied

@@ -311,6 +311,38 @@ def verify(binary, output):
                 assert worker["media_reply_threads"] == ["synthetic-room@chatroom"]
                 assert page.get_by_role("textbox", name="附件回复会话 ID").input_value() == "synthetic-room@chatroom"
                 assert worker["actions"] == ["start", "stop"]
+                artifact_id = "work-" + "a" * 64
+                delivery_id = "export-" + "b" * 64
+                share_requests = []
+                def register_artifact(route):
+                    assert route.request.post_data_json["path"] == "作品/合成文档.pdf"
+                    fulfill_json({"artifact_id": artifact_id, "filename": "合成文档.pdf", "status": "registered"})(route)
+                def work_grants(route):
+                    if route.request.method == "POST":
+                        body = route.request.post_data_json
+                        assert body["artifact_id"] == artifact_id and body["thread_id"] == "synthetic-room@chatroom"
+                        assert body["requester_id"] == "synthetic-person" and body["enabled"] is True
+                        share_requests.append(body)
+                        fulfill_json({"delivery_id": delivery_id, "enabled": True})(route)
+                    else:
+                        fulfill_json({"items": [{"delivery_id": delivery_id, "thread_id": "synthetic-room@chatroom", "requester_id": "synthetic-person", "enabled": True}]})(route)
+                artifact_pattern = "**/api/local/artifacts"
+                grants_pattern = status_pattern + "/work-grants*"
+                page.route(artifact_pattern, register_artifact)
+                page.route(grants_pattern, work_grants)
+                page.get_by_text("登记家目录中的作品", exact=True).click()
+                page.get_by_label("成品文件", exact=True).fill("作品/合成文档.pdf")
+                page.get_by_role("button", name="登记作品", exact=True).click()
+                page.locator("#artifact-result").filter(has_text=artifact_id).wait_for()
+                page.get_by_text("授权作品交付", exact=True).click()
+                page.get_by_label("作品编号", exact=True).fill(artifact_id)
+                page.get_by_label("接收会话", exact=True).fill("synthetic-room@chatroom")
+                page.get_by_label("请求者", exact=True).fill("synthetic-person")
+                page.get_by_role("button", name="允许交付", exact=True).click()
+                page.locator("#apps-feedback").filter(has_text="作品交付已授权").wait_for()
+                page.get_by_role("button", name="查看已有授权", exact=True).click()
+                page.get_by_role("button", name="已列出全部", exact=True).wait_for()
+                assert len(share_requests) == 1
                 page.set_viewport_size({"width": 375, "height": 780})
                 assert_no_horizontal_overflow(page, "worker controls")
                 assert page.evaluate("""() => {
@@ -323,6 +355,8 @@ def verify(binary, output):
                 }"""), "worker editor clipped inside its card"
                 page.screenshot(path=str(output / "apps-worker-narrow.png"), full_page=True)
                 page.set_viewport_size({"width": 1280, "height": 800})
+                page.unroute(artifact_pattern, register_artifact)
+                page.unroute(grants_pattern, work_grants)
                 page.unroute(worker_policy_pattern, save_worker)
                 page.unroute(worker_lifecycle_pattern, set_worker)
 

@@ -21,6 +21,7 @@ type localToolSet struct {
 	run          *companion.LocalToolRun
 	traceID      string
 	inspectOnly  bool
+	store        *companion.Store
 }
 
 // Local owner actions already pass the actual tool's grant checks. Reuse the
@@ -43,11 +44,15 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 	return &localToolSet{
 		memory: newLocalMemoryTools(store, in), files: newLocalFileTools(access), process: process,
 		access: access, processError: err, python: python, traceID: in.TraceID,
+		store: store,
 	}
 }
 
 func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all := []mcptools.Tool{}
+	if t.access.home.artifacts != nil {
+		all = append(all, agentTool("artifact_publish", "把家目录中已完成的文件登记为不可变成品快照。path 为家目录相对路径，expected_sha256 为实际文件哈希。返回 artifact_id，不会向应用发送。", `{"type":"object","properties":{"path":{"type":"string"},"expected_sha256":{"type":"string","minLength":64,"maxLength":64}},"required":["path","expected_sha256"],"additionalProperties":false}`))
+	}
 	var failures error
 	accesses := []companion.ToolAccess{t.memory, t.files}
 	if t.process != nil {
@@ -65,6 +70,33 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if name == "artifact_publish" {
+		var in struct {
+			Path     string `json:"path"`
+			Expected string `json:"expected_sha256"`
+		}
+		if t.store == nil || t.access.home.artifacts == nil || strictLocalMemoryDecode(raw, &in) != nil {
+			return "", errors.New("成品登记参数无效")
+		}
+		if t.run != nil {
+			if err := t.run.CheckSource(ctx); err != nil {
+				return "", err
+			}
+		}
+		identity, err := t.access.resolve()
+		if err != nil {
+			return "", err
+		}
+		source, ok := t.store.SourceForInput(companion.Input{Channel: "local", Account: identity.FishID, Thread: identity.OwnerID, Sender: identity.OwnerID, TraceID: t.traceID})
+		if !ok {
+			return "", errors.New("本轮来源已变化，无法登记成品")
+		}
+		artifact, err := t.access.home.artifacts.publish(ctx, localArtifactInput{Path: in.Path, Expected: in.Expected, Key: t.traceID}, source)
+		if err != nil {
+			return "", err
+		}
+		return localProcessJSON(artifact.view())
+	}
 	if strings.HasPrefix(name, "memory_") {
 		return t.memory.Call(ctx, name, raw)
 	}

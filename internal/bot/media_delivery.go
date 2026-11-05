@@ -237,6 +237,9 @@ func (w *Worker) pendingMedia() bool {
 	return false
 }
 func (w *Worker) mediaAllowed(d *mediaDelivery) bool {
+	if w.config.AuthorizeMediaAsset != nil && !w.config.AuthorizeMediaAsset(d.Input, d.Kind, d.AssetID) {
+		return false
+	}
 	if w.config.AuthorizeMedia != nil && !w.config.AuthorizeMedia(d.Input) {
 		return false
 	}

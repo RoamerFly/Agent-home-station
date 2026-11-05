@@ -50,7 +50,7 @@
     else window.clearTimeout(apps.loginTimer);
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), editWorker: "" };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), workDrafts: new Map(), editWorker: "" };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -252,9 +252,80 @@
     });
     panel.append(appElement("p", "每行一个会话 ID。群聊仅在被提及时回复。"), field,
       appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments,
-      appElement("p", "附件回复须单独授权，只能把本会话的附件发回本会话。"), mediaReplies, save);
+      appElement("p", "附件回复须单独授权，只能把本会话的附件发回本会话。"), mediaReplies, save, workGrantControls(id));
     return panel;
   }
+  function workGrantControls(id) {
+    const panel = appElement("details", "", "identity-details work-grant-panel");
+    panel.append(appElement("summary", "授权作品交付"));
+    const form = appElement("form", "", "details-grid");
+    const draft = apps.workDrafts.get(id) || { artifact_id: "", thread_id: "", requester_id: "", request_key: crypto.randomUUID() };
+    apps.workDrafts.set(id, draft);
+    for (const [key, label, placeholder] of [["artifact_id", "作品编号", "登记作品后得到的 work- 编号"], ["thread_id", "接收会话", "已允许附件回复的会话 ID"], ["requester_id", "请求者", "该会话中请求作品的微信 ID"]]) {
+      const wrap = appElement("label", label, "details-grid");
+      const input = document.createElement("input");
+      input.value = draft[key]; input.required = true; input.placeholder = placeholder;
+      input.addEventListener("input", () => { draft[key] = input.value; });
+      wrap.append(input); form.append(wrap);
+    }
+    const actions = appElement("div", "", "app-worker-actions");
+    const grant = appElement("button", "允许交付", "button compact secondary");
+    grant.type = "submit";
+    const revoke = appSetupButton("撤销此授权", () => save(false));
+    actions.append(grant, revoke);
+    form.append(actions, appElement("small", "授权后，大肥鱼可应此人的请求发送该作品。撤销时会暂停此连接。"));
+    async function save(enabled) {
+      if (!form.reportValidity()) return;
+      grant.disabled = revoke.disabled = true;
+      try {
+        await request("/api/apps/wechat/connections/" + encodeURIComponent(id) + "/work-grants", { method: "POST", body: JSON.stringify({ ...draft, enabled }) });
+        appFeedback(enabled ? "作品交付已授权，可在指定会话向大肥鱼索取。" : "作品交付已撤销，连接已暂停。");
+        if (!enabled) { draft.request_key = crypto.randomUUID(); await loadApps(); }
+      } catch (error) { appFeedback(error.message, true); }
+      finally { grant.disabled = revoke.disabled = false; }
+    }
+    form.addEventListener("submit", (event) => { event.preventDefault(); save(true); });
+    panel.append(form);
+    const records = appElement("div", "", "work-records");
+    let after = "", loaded = false;
+    const list = appSetupButton("查看已有授权", async () => {
+      list.disabled = true;
+      try {
+        const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(id) + "/work-grants?limit=20&after=" + encodeURIComponent(after));
+        if (!loaded) records.replaceChildren();
+        for (const item of result.items || []) {
+          const row = appElement("div", "", "work-record");
+          const status = !item.enabled ? "已撤销" : item.usable === false ? "来源或范围已变化" : "已授权";
+          const text = appElement("small", (item.filename ? item.filename + " · " : "") + item.thread_id + " · " + item.requester_id + " · " + status);
+          const remove = appSetupButton("撤销", async () => {
+            remove.disabled = true;
+            try {
+              await request("/api/apps/wechat/connections/" + encodeURIComponent(id) + "/work-grants/" + encodeURIComponent(item.delivery_id) + "/revoke", { method: "POST", body: "{}" });
+              text.textContent = item.thread_id + " · 已撤销，连接已暂停";
+            } catch (error) { appFeedback(error.message, true); remove.disabled = false; }
+          });
+          remove.disabled = !item.enabled;
+          row.append(text, remove); records.append(row);
+        }
+        if (!records.children.length) records.append(appElement("small", "还没有作品交付授权。"));
+        after = result.next_after || ""; loaded = true;
+        list.textContent = after ? "继续查看" : "已列出全部";
+        list.disabled = !after;
+      } catch (error) { appFeedback(error.message, true); list.disabled = false; }
+    });
+    panel.append(list, records);
+    return panel;
+  }
+  $("#artifact-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button"), path = $("#artifact-path").value;
+    button.disabled = true;
+    try {
+      const artifact = await request("/api/local/artifacts", { method: "POST", body: JSON.stringify({ path, request_key: crypto.randomUUID() }) });
+      $("#artifact-result").textContent = artifact.filename + " 已登记，作品编号 " + artifact.artifact_id;
+    } catch (error) { $("#artifact-result").textContent = error.message; }
+    finally { button.disabled = false; }
+  });
   async function runWorkerAction(id, method, action, body) {
     const current = apps;
     if (current.setupBusy || current.loading) return;

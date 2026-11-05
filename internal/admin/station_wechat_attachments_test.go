@@ -41,6 +41,11 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	var corrupt, wrongAsset, changedSource, thumbnailOnly atomic.Bool
 	var blockContent atomic.Bool
 	var requestReady atomic.Bool
+	var workReady atomic.Bool
+	var workAt atomic.Value
+	workAt.Store("")
+	const workContent = "synthetic-work-artifact"
+	workHash := fmt.Sprintf("%x", sha256.Sum256([]byte(workContent)))
 	var requestAt atomic.Value
 	requestAt.Store("")
 	submitted := make(chan string, 2)
@@ -76,7 +81,17 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 				event.Data.MessageID, event.Data.ThreadID, event.Data.Direction = "request", "room@chatroom", "incoming"
 				page.Items, page.NextCursor = []linuxnative.Event{event}, "1"
 			}
+			if workReady.Load() && after == "1" {
+				event := linuxnative.Event{Cursor: "2", Kind: "message.committed"}
+				event.Data.MessageID, event.Data.ThreadID, event.Data.Direction = "work-request", "room@chatroom", "incoming"
+				page.Items, page.NextCursor = []linuxnative.Event{event}, "2"
+			}
 			out(page)
+		case "GET /v1/accounts/one/messages/work-request":
+			yes := true
+			m := linuxnative.Message{ID: "work-request", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1236", Type: 1, Direction: "incoming", Body: "@大肥鱼 把给我的作品发过来", CreatedAt: workAt.Load().(string)}
+			m.Mentions.State, m.Mentions.Self = "known", &yes
+			out(m)
 		case "GET /v1/accounts/one/messages/request":
 			yes, subtype := true, 57
 			m := linuxnative.Message{ID: "request", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1235",
@@ -131,6 +146,13 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 			}
 			data, err := io.ReadAll(file)
 			file.Close()
+			if header.Filename == "作品.txt" {
+				if err != nil || string(data) != workContent {
+					t.Error("uploaded mutable home file instead of private snapshot", err)
+				}
+				out(map[string]any{"id": "upload-work", "name": header.Filename, "byteLength": len(data), "sha256": workHash})
+				return
+			}
 			if err != nil || string(data) != content || header.Filename != "image.bin" {
 				t.Error("upload did not use verified original", err)
 			}
@@ -142,12 +164,14 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 		case "POST /v1/accounts/one/sends":
 			var body map[string]any
 			key := r.Header.Get("Idempotency-Key")
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || key == "" || body["sourceId"] != "upload-verified" || body["threadId"] != "room@chatroom" || body["kind"] != "image" {
+			err := json.NewDecoder(r.Body).Decode(&body)
+			validMedia := body["sourceId"] == "upload-verified" && body["kind"] == "image" || body["sourceId"] == "upload-work" && body["kind"] == "file"
+			if err != nil || key == "" || !validMedia || body["threadId"] != "room@chatroom" {
 				t.Error("unexpected native attachment submission", body, err)
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			out(map[string]any{"id": "synthetic-send", "accountId": "one", "threadId": "room@chatroom", "kind": "send", "sourceId": "upload-verified", "state": "accepted", "serverMessageId": "2311"})
+			out(map[string]any{"id": "synthetic-send-" + fmt.Sprint(body["kind"]), "accountId": "one", "threadId": "room@chatroom", "kind": "send", "sourceId": body["sourceId"], "state": "accepted", "serverMessageId": "2311"})
 			submitted <- key
 		default:
 			http.NotFound(w, r)
@@ -353,6 +377,56 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	if len(submitted) != 0 || uploads.Load() != 3 {
 		t.Fatal("worker repeated upload or submit", uploads.Load(), len(submitted))
 	}
+	identity := req("POST", "/api/local/home", map[string]string{"action": "initialize"}, true, 200)
+	workPath := filepath.Join(identity["directory"].(string), "作品.txt")
+	if err := os.WriteFile(workPath, []byte(workContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+	registered := req("POST", "/api/local/artifacts", map[string]string{"path": "作品.txt", "expected_sha256": workHash, "request_key": "register-work"}, true, 200)
+	if err := os.WriteFile(workPath, []byte("edited-after-registration"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	grantBody := map[string]any{"artifact_id": registered["artifact_id"], "thread_id": thread, "requester_id": "member", "request_key": "grant-work", "enabled": true}
+	req("POST", path+"/work-grants", grantBody, false, 403)
+	shared := req("POST", path+"/work-grants", grantBody, true, 200)
+	workID := shared["delivery_id"].(string)
+	listing := req("GET", path+"/work-grants?limit=1", nil, false, 200)
+	if len(listing["items"].([]any)) != 1 {
+		t.Fatal("saved disclosure not visible", listing)
+	}
+	workAccess := &stationWorkAccess{artifacts: handler.home.artifacts, dir: worker.dir, grants: tools.replies}
+	foreign := textTurn
+	foreign.Sender = "another-member"
+	if _, err := workAccess.authorized(foreign, workID); err == nil {
+		t.Fatal("another group member inherited private work disclosure")
+	}
+	handler.wechat.model = stationAttachmentReplyModel{mediaID: "reply-" + workID, workID: workID}
+	req("POST", path+"/lifecycle", map[string]string{"action": "start"}, true, 200)
+	waitAppLifecycle(t, func() bool {
+		return req("GET", path, nil, false, 200)["connection"].(map[string]any)["worker"] == "running"
+	})
+	workAt.Store(time.Now().UTC().Format(time.RFC3339Nano))
+	workReady.Store(true)
+	select {
+	case deliveryKey = <-submitted:
+	case <-time.After(35 * time.Second):
+		queue, _ := os.ReadFile(filepath.Join(worker.dir, "queue", "messages-v2.json"))
+		t.Fatalf("registered work not delivered: %s", queue)
+	}
+	waitAppLifecycle(t, func() bool {
+		code, result := f.request("GET", path+"/receipts/"+deliveryKey, nil, false)
+		return code == 200 && strings.Contains(fmt.Sprint(result), "2311")
+	})
+	grantBody["enabled"] = false
+	req("POST", path+"/work-grants/"+workID+"/revoke", map[string]any{}, true, 200)
+	if _, err := workAccess.authorized(textTurn, workID); err == nil {
+		t.Fatal("revoked work still visible")
+	}
+	grantBody["enabled"] = true
+	req("POST", path+"/work-grants", grantBody, true, 409)
+	if uploads.Load() != 4 || len(submitted) != 0 {
+		t.Fatal("work delivery duplicated", uploads.Load(), len(submitted))
+	}
 	policy(200)
 	get(path+contentRoute, 404)
 	policy(200, thread)
@@ -398,7 +472,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	}
 }
 
-type stationAttachmentReplyModel struct{ mediaID string }
+type stationAttachmentReplyModel struct{ mediaID, workID string }
 
 func (m stationAttachmentReplyModel) Chat(ctx context.Context, system string, history []map[string]string) (string, error) {
 	return m.ChatFunctions(ctx, system, history, nil)
@@ -411,9 +485,15 @@ func (m stationAttachmentReplyModel) ChatFunctions(_ context.Context, _ string, 
 		}
 	}
 	for _, tool := range tools {
+		if m.workID != "" && tool.Name == "wechat_work_reply" {
+			return fmt.Sprintf(`{"action":"tool","tool":"wechat_work_reply","arguments":{"action":"prepare","delivery_id":%q}}`, m.workID), nil
+		}
 		if tool.Name == "wechat_attachment_reply_prepare" {
 			return `{"action":"tool","tool":"wechat_attachment_reply_prepare","arguments":{"message_id":"msg"}}`, nil
 		}
+	}
+	if m.workID != "" {
+		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"wechat_work_reply"}}`, nil
 	}
 	return `{"action":"tool","tool":"discover_tools","arguments":{"query":"wechat_attachment_reply_prepare"}}`, nil
 }

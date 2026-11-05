@@ -125,6 +125,14 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 
 要让大肥鱼把本轮附件发回原会话，将该会话同时加入「附件读取会话 ID」和「附件回复会话 ID」，保存后启动该连接。在已授权会话中明确请求回复当前或引用的附件即可。`wechat_attachment_reply_prepare` 生成本轮可选编号，实际上传和发送在模型选用后由队列处理。语音沿用原生分段，停止请求保留已接受片段。按原提交键读取 `/api/apps/wechat/connections/{connection}/receipts/{key}` 可核对原任务。`media_reply_threads` 是独立的授权字段，显式提交空数组可撤销，撤销上级读取范围也会撤销相应的附件回复。
 
+在应用页展开「登记家目录中的作品」，填写成品相对路径即可得到作品编号。也可让大肥鱼在本地聊天中用 `artifact_publish(path, expected_sha256)` 登记。作品保存为宿主私有快照，家目录中的原文件后续可继续修改。
+
+在连接的回复范围编辑区展开「授权作品交付」，填写作品编号、已授权的接收会话和请求者微信 ID。保存后，该成员可在指定会话向大肥鱼索取作品。大肥鱼用 `wechat_work_reply(action=list)` 查看本人的授权，用返回的 `delivery_id` 准备文件回复。列表默认每页 20 项，可指定 limit 并按 next_after 继续。
+
+「查看已有授权」可在重启后查看或撤销原授权。撤销会暂停该连接。重新授权使用新的请求编号，避免旧请求复活。家目录暂停期间不能交付作品，恢复后需重新授权。微信回执查询沿用原投递键。
+
+管理接口提供 `POST /api/local/artifacts`，参数为 path、request_key 和可选 expected_sha256；`GET /api/local/artifacts/{artifact}` 返回成品元数据。作品交付授权使用 `POST /api/apps/wechat/connections/{connection}/work-grants`，提供 artifact_id、thread_id、requester_id、request_key 和 enabled。`GET` 同路径列出授权，可用 limit、after 分页；`POST` 其下的 `{delivery}/revoke` 撤销原授权。接口均要求本机主人会话，写操作还需 CSRF。
+
 ### 在隔离副本预演旧版微信接入
 
 1. 正常排空并退出旧桌面服务，保留其原安装。将需要核对的旧宿主数据做成单独的停机快照，保存在本机私有目录。快照包含旧数据根下的 `admin/config.json`、可选的 `admin/accounts.json` 和各账号配置，以及 `bot-state`。新成长站数据根、鱼家工作空间、旧快照分别放置。

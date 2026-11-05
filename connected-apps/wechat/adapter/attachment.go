@@ -121,3 +121,7 @@ func StationAttachmentTool() mcptools.Tool {
 func StationAttachmentReplyTool() mcptools.Tool {
 	return tool("wechat_attachment_reply_prepare", "为本会话的当前消息或核验引用准备原附件回复。只准备，尚未上传或发送。用返回的 media.id 放进最终 reply 的 media_ids。默认按原媒体类型发送；用户明确要原文件时用 format=file。", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"format":{"type":"string","enum":["original","file"]}},"required":["message_id"],"additionalProperties":false}`)
 }
+
+func StationWorkReplyTool() mcptools.Tool {
+	return tool("wechat_work_reply", "查看主人已授权给当前会话和请求者的作品，或准备一件作品作为文件回复。list 返回 delivery_id，用 next_after 继续分页；prepare 需填该编号。将 media.id 选入最终 media_ids 后才投递。", `{"type":"object","properties":{"action":{"type":"string","enum":["list","prepare"]},"delivery_id":{"type":"string"},"after":{"type":"string"},"limit":{"type":"integer","minimum":1,"default":20}},"required":["action"],"additionalProperties":false}`)
+}

@@ -267,7 +267,10 @@ type stationAttachmentTools struct {
 	blocked  func() bool
 	trace    companion.Input
 	prepared map[string]companion.GeneratedMedia
+	work     *stationWorkAccess
 }
+
+func (*stationAttachmentTools) AutonomousActions() bool { return true }
 
 func (t *stationAttachmentTools) ForkTools() companion.ToolAccess {
 	copy := *t
@@ -294,12 +297,18 @@ func (t *stationAttachmentTools) replyAllowed(in companion.Input) bool {
 }
 
 func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, error) {
-	if ctx.Err() != nil || !t.allowed() || !stationAttachmentRef(t.trace.Source) && !stationAttachmentRef(t.trace.QuotedSource) {
+	if ctx.Err() != nil || !t.allowed() {
 		return nil, nil
 	}
-	tools := []mcptools.Tool{wechatapp.StationAttachmentTool()}
-	if t.replyAllowed(t.trace) {
-		tools = append(tools, wechatapp.StationAttachmentReplyTool())
+	tools := []mcptools.Tool{}
+	if stationAttachmentRef(t.trace.Source) || stationAttachmentRef(t.trace.QuotedSource) {
+		tools = append(tools, wechatapp.StationAttachmentTool())
+		if t.replyAllowed(t.trace) {
+			tools = append(tools, wechatapp.StationAttachmentReplyTool())
+		}
+	}
+	if t.work != nil && t.replyAllowed(t.trace) {
+		tools = append(tools, wechatapp.StationWorkReplyTool())
 	}
 	return tools, nil
 }
@@ -309,6 +318,9 @@ func stationAttachmentRef(ref *companion.SourceRef) bool {
 }
 
 func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if name == "wechat_work_reply" {
+		return t.workReply(ctx, raw)
+	}
 	if name == "wechat_attachment_reply_prepare" {
 		return t.prepareReply(ctx, raw)
 	}

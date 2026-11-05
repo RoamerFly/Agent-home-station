@@ -103,6 +103,17 @@
                 <button id="apps-refresh" class="button compact secondary" type="button">刷新</button>
               </header>
               <p id="apps-feedback" class="apps-feedback" role="status"></p>
+              <details class="identity-details work-register">
+                <summary>登记家目录中的作品</summary>
+                <form id="artifact-form" class="details-grid">
+                  <label for="artifact-path">成品文件</label>
+                  <div class="input-row">
+                    <input id="artifact-path" placeholder="如 作品/讲解.pdf" required autocomplete="off">
+                    <button class="button compact secondary" type="submit">登记作品</button>
+                  </div>
+                  <p id="artifact-result" class="apps-feedback" role="status">保存成品快照后，可在微信连接中授权交付。</p>
+                </form>
+              </details>
               <div id="apps-list" class="apps-list" aria-busy="false"></div>
             </section>
 

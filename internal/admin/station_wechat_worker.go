@@ -41,6 +41,7 @@ type stationWechat struct {
 	workers                map[string]*stationWechatWorker
 	wg                     sync.WaitGroup
 	done                   chan struct{}
+	artifacts              *localArtifactStore
 }
 
 type stationWechatPolicy struct {
@@ -77,6 +78,7 @@ func bindStationWechat(registry apphost.Registry, chat *localChatService) (appho
 		dataDir: chat.home.dataDir, workspaceRoot: chat.home.root,
 		installation: entry.InstallationID, models: chat.models, model: stationWechatModel{chat.models},
 		ctx: ctx, cancel: cancel, workers: map[string]*stationWechatWorker{}, done: make(chan struct{}),
+		artifacts: chat.home.artifacts,
 	}
 	registrations := make([]apphost.Registration, 0, len(registry.Applications()))
 	for _, app := range registry.Applications() {
@@ -554,9 +556,11 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, di
 	}
 	character.Names = native
 	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, blocked: run.block.Load}
+	if s.artifacts != nil {
+		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}
+	}
 	if len(policy.AttachmentGrants) != 0 {
 		character.Tools = attachment
-		character.MaxToolCalls = 3
 	}
 	threads := make([]string, 0, len(policy.Grants))
 	rules := make(map[string]bot.GroupRule)
@@ -590,8 +594,9 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, di
 			when, err := time.Parse(time.RFC3339Nano, in.MessageTime)
 			return in.Account == native.Account() && !granted.IsZero() && err == nil && !when.Before(granted)
 		},
-		AuthorizeMedia:     attachment.replyAllowed,
-		PrepareMediaSource: attachment.stageReply,
+		AuthorizeMedia:      attachment.replyAllowed,
+		PrepareMediaSource:  attachment.stageReply,
+		AuthorizeMediaAsset: attachment.workAllowed,
 	}, native, character, native)
 	if err != nil {
 		return err
