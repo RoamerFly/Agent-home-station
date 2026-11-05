@@ -236,6 +236,26 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	if other := request(f, "GET", shareTwo, nil, false, 200); other["installed"] != false || other["configuration"] != nil {
 		t.Fatal("cross-connection share tool leaked", other)
 	}
+	mediaOne, mediaTwo := path("one")+"/media-understanding", path("two")+"/media-understanding"
+	request(f, "PUT", mediaOne, map[string]any{"action": "install", "grant_media": true}, false, 403)
+	request(f, "PUT", mediaOne, map[string]any{"action": "install", "grant_network": true}, true, 400)
+	media := request(f, "PUT", mediaOne, map[string]any{"action": "install", "grant_media": true}, true, 200)
+	if media["installed"] != true || media["enabled"] != false {
+		t.Fatal(media)
+	}
+	mediaRevision := media["revision"]
+	request(f, "PUT", mediaOne, map[string]any{"action": "configure", "revision": mediaRevision, "configuration": map[string]any{"values": map[string]any{"asr_backend": "local"}}}, true, 400)
+	configuredMedia := request(f, "PUT", mediaOne, map[string]any{"action": "configure", "revision": mediaRevision, "configuration": map[string]any{
+		"values":  map[string]string{"vision_model": "synthetic-vision", "vision_endpoint": "https://vision.example/chat/completions"},
+		"secrets": map[string]string{"vision_key": "synthetic-vision-test-value"},
+	}}, true, 200)
+	encodedMedia, _ := json.Marshal(configuredMedia)
+	if strings.Contains(string(encodedMedia), "synthetic-vision-test-value") || !strings.Contains(string(encodedMedia), "vision_key") {
+		t.Fatal("media settings did not redact credential", configuredMedia)
+	}
+	if other := request(f, "GET", mediaTwo, nil, false, 200); other["installed"] != false || other["configuration"] != nil {
+		t.Fatal("cross-connection media tool leaked", other)
+	}
 	request(f, "PUT", path("one")+"/policy", map[string]any{"reply_threads": []string{"person-one"}, "history_threads": []string{"foreign-thread"}}, true, 400)
 	request(f, "PUT", path("two")+"/policy", map[string]any{"reply_threads": []string{"person-two"}, "history_threads": []string{"person-two"}}, true, 200)
 	policy(f, "two", "person-two") // Old clients omitting the field retain the explicit grant.

@@ -38,6 +38,8 @@ type mediaObservation struct {
 type mediaPluginPolicy struct {
 	*receivedSharePolicy
 	manager                        *Manager
+	controller                     *pluginruntime.Controller
+	billing                        *billingStore
 	store                          *pluginhost.Store
 	invocationValue                pluginhost.Invocation
 	originCheck                    func(context.Context, pluginhost.Job, pluginhost.Capability) error
@@ -71,6 +73,14 @@ func (m *Manager) newMediaPluginPolicy(ctx context.Context, message linuxnative.
 }
 
 func (m *Manager) newMediaVisualPolicyForOrigin(ctx context.Context, store *pluginhost.Store, revision int, prompt string, images []deepseek.Image, tokens int) (*mediaPluginPolicy, error) {
+	p, err := newMediaVisualPolicy(ctx, store, revision, prompt, images, tokens)
+	if err == nil {
+		p.manager = m
+	}
+	return p, err
+}
+
+func newMediaVisualPolicy(ctx context.Context, store *pluginhost.Store, revision int, prompt string, images []deepseek.Image, tokens int) (*mediaPluginPolicy, error) {
 	if store == nil || revision < 1 || prompt == "" || !utf8.ValidString(prompt) || utf8.RuneCountInString(prompt) > 8192 || len(images) == 0 {
 		return nil, errors.New("media_observation_input_invalid")
 	}
@@ -82,7 +92,7 @@ func (m *Manager) newMediaVisualPolicyForOrigin(ctx context.Context, store *plug
 	if err != nil {
 		return nil, err
 	}
-	p := &mediaPluginPolicy{manager: m, store: store, packageDigest: installed.Digest, packageVersion: installed.Package.Version, prompt: prompt, configRevision: config.Revision, post: mcptools.PostPluginModel}
+	p := &mediaPluginPolicy{store: store, packageDigest: installed.Digest, packageVersion: installed.Package.Version, prompt: prompt, configRevision: config.Revision, post: mcptools.PostPluginModel}
 	json.Unmarshal(config.Values["vision_model"], &p.model)
 	json.Unmarshal(config.Values["vision_backend"], &p.backend)
 	json.Unmarshal(config.Values["thinking"], &p.thinking)
@@ -136,7 +146,8 @@ func (p *mediaPluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap plu
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if p.manager == nil || p.store == nil || p.originCheck == nil || j.Plugin != "media-understanding" || j.Tool != "media.observe" || cap.Async || p.invocationValue.Account == "" || p.invocationValue.Account != p.manager.native.Account() {
+	if p.store == nil || p.originCheck == nil || j.Plugin != "media-understanding" || j.Tool != "media.observe" || cap.Async || p.invocationValue.Account != p.store.Account() ||
+		(p.manager == nil && p.controller == nil) || (p.manager != nil && p.invocationValue.Account != p.manager.native.Account()) {
 		return errors.New("media_observation_authorization_changed")
 	}
 	want, _ := json.Marshal(p.invocation())
@@ -152,7 +163,8 @@ func (p *mediaPluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap plu
 		return errors.New("media_plugin_configuration_changed")
 	}
 	installed, err := p.store.Installed(ctx, j.Plugin)
-	if err != nil || !installed.Enabled || installed.Removed || installed.Digest != p.packageDigest || installed.Package.Version != p.packageVersion || !p.manager.mediaObservationConfigured(ctx) {
+	if err != nil || !installed.Enabled || installed.Removed || installed.Digest != p.packageDigest || installed.Package.Version != p.packageVersion ||
+		(p.manager != nil && !p.manager.mediaObservationConfigured(ctx)) {
 		return errors.New("media_plugin_version_changed")
 	}
 	if j.PackageDigest != "" {
@@ -258,7 +270,11 @@ func (p *mediaPluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 		usage.Model = p.model
 		usage.Purpose = "plugin_media_observation"
 		c := Config{Provider: p.backend, BaseURL: strings.TrimSuffix(endpoint, "/chat/completions"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}
-		if p.manager.billing == nil || p.manager.billing.record(c, usage) != nil {
+		billing := p.billing
+		if p.manager != nil {
+			billing = p.manager.billing
+		}
+		if billing == nil || billing.record(c, usage) != nil {
 			return nil, errors.New("media_usage_record_failed")
 		}
 		if err != nil {
@@ -355,9 +371,14 @@ func (p *mediaPluginPolicy) observe(ctx context.Context) (string, error) {
 	if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
 		return "", err
 	}
-	controller, ready, err := p.manager.installedPluginRuntime()
-	if err != nil || !ready {
-		return "", errors.New("media_plugin_runtime_unavailable")
+	controller := p.controller
+	if p.manager != nil {
+		var ready bool
+		var err error
+		controller, ready, err = p.manager.installedPluginRuntime()
+		if err != nil || !ready {
+			return "", errors.New("media_plugin_runtime_unavailable")
+		}
 	}
 	installed, err := p.store.Installed(ctx, j.Plugin)
 	if err != nil {

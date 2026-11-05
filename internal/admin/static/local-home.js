@@ -224,7 +224,7 @@
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
     toggle.disabled ||= status.worker === "stopping" || !running && !status.configured_policy?.conversation_enabled;
     buttons.append(toggle);
-    panel.append(buttons, deliveryRecords(id), shareReaderControls(id));
+    panel.append(buttons, deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
     if (apps.editWorker !== id) return panel;
     const field = document.createElement("textarea");
     field.rows = 3;
@@ -263,12 +263,20 @@
       appElement("p", "附件回复须单独授权，只能把本会话的附件发回本会话。"), mediaReplies, save, workGrantControls(id));
     return panel;
   }
-  function shareReaderControls(id) {
+  function stationToolControls(id, media) {
+    const name = media ? "媒体理解" : "视频号解析";
+    const tool = media ? "media-understanding" : "share-reader";
+    const fieldsSpec = media ? [
+      ["vision_endpoint", "视觉接口地址"], ["vision_model", "视觉模型"], ["vision_key", "视觉接口密钥", true],
+      ["asr_endpoint", "语音识别接口地址"], ["asr_model", "语音识别模型"], ["asr_key", "语音识别接口密钥", true]
+    ] : [
+      ["yuanbao_cookie", "元宝解析凭据", true], ["assistant_cookie", "视频号助手凭据", true], ["object_bridge_url", "本机对象桥接地址"]
+    ];
     const panel = appElement("details", "", "identity-details");
-    panel.append(appElement("summary", "视频号解析"));
+    panel.append(appElement("summary", name));
     const content = appElement("div", "", "details-grid");
     panel.append(content);
-    const path = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/share-reader";
+    const path = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/" + tool;
     let busy = false;
     async function load(body) {
       if (busy) return;
@@ -291,20 +299,22 @@
       const status = value.installed ? (value.enabled ? "已启用，按需运行" : "已停用") : "尚未安装";
       content.replaceChildren(appElement("small", value.runtime_ready ? status : `${status} · 缺少 Windows 隔离工具运行环境`));
       if (!value.installed) {
-        content.append(appElement("small", "授权后，只为当前微信连接解析原卡片。"),
-          appSetupButton("安装并授予受控联网权限", () => load({ action: "install", grant_network: true })));
+        const explanation = media ? "仅处理当前连接已授权的视频。实际帧或音轨通过宿主代理发送到配置的模型接口。" : "授权后，只为当前微信连接解析原卡片。";
+        const approval = media ? { grant_media: true } : { grant_network: true };
+        content.append(appElement("small", explanation),
+          appSetupButton(media ? "安装并授权媒体处理和模型调用" : "安装并授予受控联网权限", () => load({ action: "install", ...approval })));
         return;
       }
       const action = value.enabled ? "disable" : "enable";
-      content.append(appSetupButton(value.enabled ? "停用解析" : "启用解析", () => load({ action, revision: value.revision })));
+      content.append(appSetupButton((value.enabled ? "停用" : "启用") + (media ? "媒体理解" : "解析"), () => load({ action, revision: value.revision })));
       if (value.enabled) return;
+      if (media) content.append(appElement("small", "视觉与音轨转写分别配置。接口地址须为完整 HTTPS 地址。"));
       const configuration = value.configuration || {};
       const fields = new Map();
       const clear = new Map();
-      for (const [key, label] of [["yuanbao_cookie", "元宝解析凭据"], ["assistant_cookie", "视频号助手凭据"], ["object_bridge_url", "本机对象桥接地址"]]) {
+      for (const [key, label, secret] of fieldsSpec) {
         const wrap = appElement("label", label, "details-grid");
         const field = document.createElement("input");
-        const secret = key !== "object_bridge_url";
         field.type = secret ? "password" : "text";
         field.autocomplete = secret ? "new-password" : "off";
         field.value = secret ? "" : configuration.values?.[key] || "";
@@ -321,16 +331,24 @@
           content.append(clearLabel);
         }
       }
-      content.append(appSetupButton("保存解析设置", () => {
-        const bridge = fields.get("object_bridge_url").value.trim();
+      content.append(appSetupButton(media ? "保存媒体设置" : "保存解析设置", () => {
+        const values = {};
+        if (media) {
+          for (const key of ["vision_backend", "thinking", "reasoning_effort", "max_tokens"]) {
+            if (configuration.values?.[key] !== undefined) values[key] = configuration.values[key];
+          }
+        }
         const secrets = {};
         const clear_secrets = [];
-        for (const name of ["yuanbao_cookie", "assistant_cookie"]) {
-          if (clear.get(name)?.checked) clear_secrets.push(name);
-          else if (fields.get(name).value) secrets[name] = fields.get(name).value;
+        for (const [key, , secret] of fieldsSpec) {
+          const field = fields.get(key);
+          if (secret) {
+            if (clear.get(key)?.checked) clear_secrets.push(key);
+            else if (field.value) secrets[key] = field.value;
+          } else if (field.value.trim()) values[key] = field.value.trim();
         }
         load({ action: "configure", revision: value.revision, configuration: {
-          revision: configuration.revision || 0, values: bridge ? { object_bridge_url: bridge } : {}, secrets, clear_secrets
+          revision: configuration.revision || 0, values, secrets, clear_secrets
         } });
       }));
     }

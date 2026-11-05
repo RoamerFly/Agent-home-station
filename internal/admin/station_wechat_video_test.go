@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,7 +35,7 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 	}
 	root := t.TempDir()
 	sample := filepath.Join(root, "synthetic.mp4")
-	if output, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=64x48:r=5:d=1", "-c:v", "mpeg4", "-threads", "1", sample).CombinedOutput(); err != nil {
+	if output, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=64x48:r=5:d=1", "-f", "lavfi", "-i", "sine=f=800:r=16000:d=1", "-c:v", "mpeg4", "-c:a", "aac", "-shortest", "-threads", "1", sample).CombinedOutput(); err != nil {
 		t.Fatalf("synthetic video: %v %s", err, output)
 	}
 	data, err := os.ReadFile(sample)
@@ -266,6 +267,143 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 	deny("resolve-revoked", "")
 	if routes != 7 || fetches.Load() != before {
 		t.Fatal("revocation did not block later parsing and media requests", routes, fetches.Load(), before)
+	}
+	blocked.Store(false)
+	t.Run("LPAC_media_observation", func(t *testing.T) {
+		if os.Getenv("AHS_SHARE_TEST_RUNTIME_ROOT") == "" {
+			t.Skip("set AHS_SHARE_TEST_RUNTIME_ROOT to exercise the Windows LPAC media process")
+		}
+		value, err := call("card")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var acquired struct {
+			Asset string `json:"asset_id"`
+		}
+		if err := json.Unmarshal([]byte(value), &acquired); err != nil || acquired.Asset == "" {
+			t.Fatal(value, err)
+		}
+		testStationVideoObservation(t, tools, share, acquired.Asset, hash, &blocked)
+	})
+	if mutations.Load() != 0 || fetches.Load() != before || transfers.Load() != 1 {
+		t.Fatal("observation must reuse the verified original and never send", mutations.Load(), fetches.Load(), transfers.Load())
+	}
+}
+
+func testStationVideoObservation(t *testing.T, tools *stationAttachmentTools, host *stationShareHost, asset, hash string, blocked *atomic.Bool) {
+	const plugin = "media-understanding"
+	ctx := t.Context()
+	prepared, err := host.store.Prepare(ctx, filepath.Join("..", "..", "plugins", plugin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := host.store.Install(ctx, prepared.Token, prepared.Digest, []string{"artifact.read", "artifact.write", "model.invoke"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = host.store.SaveConfiguration(ctx, plugin, pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{
+		"vision_endpoint": json.RawMessage(`"https://provider.example/chat/completions"`),
+		"vision_model":    json.RawMessage(`"synthetic-vision"`),
+		"asr_endpoint":    json.RawMessage(`"https://provider.example/api/v1/services/aigc/multimodal-generation/generation"`),
+		"asr_model":       json.RawMessage(`"synthetic-asr"`),
+	}, Secrets: map[string]string{"vision_key": "synthetic-vision-key", "asr_key": "synthetic-asr-key"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vision, audio int
+	host.postModel = func(_ context.Context, endpoint string, headers map[string]string, body json.RawMessage, _ int64, _ time.Duration) (json.RawMessage, error) {
+		switch {
+		case strings.HasSuffix(endpoint, "/chat/completions"):
+			vision++
+			if headers["Authorization"] != "Bearer synthetic-vision-key" || !strings.Contains(string(body), "data:image/jpeg;base64,") || !strings.Contains(string(body), "synthetic-vision") || strings.Contains(string(body), asset) {
+				t.Error("vision route lost binding or disclosed the asset identifier")
+			}
+			if strings.Contains(string(body), "synthetic-revoke") {
+				blocked.Store(true)
+			}
+			if strings.Contains(string(body), "synthetic-length") {
+				return json.RawMessage(`{"choices":[{"finish_reason":"length","message":{"content":"Partial blue frame."}}]}`), nil
+			}
+			return json.RawMessage(`{"choices":[{"finish_reason":"stop","message":{"content":"The frames are blue."}}],"usage":{"prompt_tokens":3,"completion_tokens":5}}`), nil
+		case strings.HasSuffix(endpoint, "/generation"):
+			audio++
+			var req struct {
+				Input struct {
+					Messages []struct {
+						Content []struct {
+							Audio struct {
+								Data string `json:"data"`
+							} `json:"input_audio"`
+						}
+					}
+				}
+			}
+			if json.Unmarshal(body, &req) != nil || len(req.Input.Messages) != 1 || len(req.Input.Messages[0].Content) != 1 || headers["Authorization"] != "Bearer synthetic-asr-key" {
+				t.Error("ASR route lost the expected audio or credential")
+				return nil, errors.New("bad synthetic input")
+			}
+			encoded := strings.TrimPrefix(req.Input.Messages[0].Content[0].Audio.Data, "data:audio/wav;base64,")
+			wav, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil || !bytes.HasPrefix(wav, []byte("RIFF")) || len(wav) < 1000 {
+				t.Error("ASR payload was not actual PCM WAV")
+			}
+			if audio == 2 {
+				return json.RawMessage(`{"code":"ASR_RESPONSE_HAVE_NO_WORDS"}`), nil
+			}
+			return json.RawMessage(`{"output":{"text":"Synthetic line."}}`), nil
+		default:
+			return nil, errors.New("unexpected media route")
+		}
+	}
+	observe := func(message, id, args string) (map[string]any, error) {
+		raw, err := tools.Call(ctx, "wechat_video_observe", json.RawMessage(fmt.Sprintf(`{"message_id":%q,"asset_id":%q,%s}`, message, id, args)))
+		if err != nil {
+			if raw != "" {
+				t.Fatal("failed operation disclosed content")
+			}
+			return nil, err
+		}
+		var out map[string]any
+		if err := json.Unmarshal([]byte(raw), &out); err != nil || out["sha256"] != hash || out["asset_id"] != asset || strings.Contains(raw, "provider.example") || strings.Contains(raw, "synthetic-vision-key") {
+			t.Fatal(raw, err)
+		}
+		return out, nil
+	}
+	const first = `"mode":"frames","page_size":2`
+	if _, err := observe("card", asset, first); err == nil || err.Error() != "media_plugin_not_enabled" {
+		t.Fatal(err)
+	}
+	if err := host.controller.EnableOnDemand(ctx, plugin, item.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := observe("normal-video", asset, first); err == nil || vision != 0 {
+		t.Fatal("asset reuse across sources", err)
+	}
+	for range 2 {
+		out, err := observe("card", asset, first)
+		if err != nil || out["next_start_frame"] != float64(2) || out["coverage"] != "consecutive_frames" || vision != 1 {
+			t.Fatal(out, vision, err)
+		}
+		row := out["batches"].([]any)[0].(map[string]any)
+		times := row["timestamps_seconds"].([]any)
+		if len(times) != 2 || times[0] != float64(0) || times[1] != .2 || row["analysis"] != "The frames are blue." {
+			t.Fatal(row)
+		}
+	}
+	out, err := observe("card", asset, `"mode":"frames","start_frame":2,"step":2,"question":"synthetic-length"`)
+	if err != nil || out["coverage"] != "sampled_frames" || out["end_of_frame_selection"] != true || !strings.Contains(fmt.Sprint(out["batches"]), "不完整") {
+		t.Fatal(out, err)
+	}
+	out, err = observe("card", asset, `"mode":"audio","duration_seconds":0.5`)
+	if err != nil || out["transcription_state"] != "transcribed" || out["text"] != "Synthetic line." || out["next_start_seconds"] != .5 || out["audio_complete"] != false {
+		t.Fatal(out, err)
+	}
+	out, err = observe("card", asset, `"mode":"audio","start_seconds":0.5`)
+	if err != nil || out["transcription_state"] != "no_recognizable_speech" || out["text"] != nil || out["audio_complete"] != true || audio != 2 {
+		t.Fatal(out, audio, err)
+	}
+	if _, err = observe("card", asset, `"mode":"frames","question":"synthetic-revoke"`); err == nil || vision != 3 {
+		t.Fatal("in-flight revocation returned observation", vision, err)
 	}
 }
 

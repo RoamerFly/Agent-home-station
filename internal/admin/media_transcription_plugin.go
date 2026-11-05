@@ -42,6 +42,8 @@ type mediaTranscriptionPolicy struct {
 	// linuxnative.Message; they supply their own immutable invocation/checker.
 	*receivedSharePolicy
 	manager         *Manager
+	controller      *pluginruntime.Controller
+	billing         *billingStore
 	store           *pluginhost.Store
 	invocationValue pluginhost.Invocation
 	originCheck     func(context.Context, pluginhost.Job, pluginhost.Capability) error
@@ -133,6 +135,10 @@ func (m *Manager) newMediaTranscriptionPolicy(ctx context.Context, message linux
 // handling identical for every trusted origin. Origin proof itself is injected
 // by the caller and is rechecked at every host boundary in Check.
 func (m *Manager) newMediaTranscriptionPolicyForOrigin(ctx context.Context, store *pluginhost.Store, sourceRevision int, wav []byte) (*mediaTranscriptionPolicy, error) {
+	return newMediaTranscriptionPolicyForStore(ctx, m, store, sourceRevision, wav)
+}
+
+func newMediaTranscriptionPolicyForStore(ctx context.Context, m *Manager, store *pluginhost.Store, sourceRevision int, wav []byte) (*mediaTranscriptionPolicy, error) {
 	if store == nil || sourceRevision < 1 || len(wav) == 0 || len(wav) > 10<<20 || !bytes.HasPrefix(wav, []byte("RIFF")) || len(wav) < 12 || string(wav[8:12]) != "WAVE" {
 		return nil, errors.New("media_audio_format_invalid")
 	}
@@ -154,8 +160,11 @@ func (m *Manager) newMediaTranscriptionPolicyForOrigin(ctx context.Context, stor
 	copyWAV := append([]byte(nil), wav...)
 	sum := sha256.Sum256(copyWAV)
 	p := &mediaTranscriptionPolicy{manager: m, store: store, wav: copyWAV, ref: mediaAudioReference{Ref: "audio_0", SHA: hex.EncodeToString(sum[:]), Version: sourceRevision, MIME: "audio/wav"}, model: model, backend: backend, configRevision: cfg.Revision, post: mcptools.PostPluginModel}
-	p.runLocal = m.runRegisteredLocalASR
 	if backend == "local" {
+		if m == nil {
+			return nil, errors.New("local_asr_profile_unavailable")
+		}
+		p.runLocal = m.runRegisteredLocalASR
 		i, err := store.Installed(ctx, localASRPluginID)
 		if err != nil {
 			return nil, errors.New("local_asr_plugin_unavailable")
@@ -195,7 +204,7 @@ func (p *mediaTranscriptionPolicy) Check(ctx context.Context, j pluginhost.Job, 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if p.manager == nil || p.store == nil || p.originCheck == nil || p.invocationValue.Account == "" || p.invocationValue.Thread == "" || p.invocationValue.Requester == "" || p.invocationValue.Purpose == "" || p.invocationValue.RequestKey == "" || p.invocationValue.Authorization == "" || j.Plugin != "media-understanding" || j.Tool != "media.transcribe" || cap.Async {
+	if (p.manager == nil && (p.controller == nil || p.backend == "local")) || p.store == nil || p.originCheck == nil || p.invocationValue.Account != p.store.Account() || p.invocationValue.Thread == "" || p.invocationValue.Requester == "" || p.invocationValue.Purpose == "" || p.invocationValue.RequestKey == "" || p.invocationValue.Authorization == "" || j.Plugin != "media-understanding" || j.Tool != "media.transcribe" || cap.Async {
 		return errors.New("media_transcription_authorization_changed")
 	}
 	want, _ := json.Marshal(p.invocation())
@@ -305,7 +314,11 @@ func (p *mediaTranscriptionPolicy) Service(ctx context.Context, j pluginhost.Job
 		usage.Model = p.model
 		usage.Purpose = "plugin_media_transcription"
 		c := Config{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/aigc/multimodal-generation/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}
-		if p.manager.billing == nil || p.manager.billing.record(c, usage) != nil {
+		billing := p.billing
+		if p.manager != nil {
+			billing = p.manager.billing
+		}
+		if billing == nil || billing.record(c, usage) != nil {
 			return nil, errors.New("media_usage_record_failed")
 		}
 		if err != nil {
@@ -436,9 +449,14 @@ func (p *mediaTranscriptionPolicy) transcribe(ctx context.Context) (string, erro
 	if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
 		return "", err
 	}
-	controller, ready, err := p.manager.installedPluginRuntime()
-	if err != nil || !ready {
-		return "", errors.New("media_plugin_runtime_unavailable")
+	controller := p.controller
+	if p.manager != nil {
+		var ready bool
+		var err error
+		controller, ready, err = p.manager.installedPluginRuntime()
+		if err != nil || !ready {
+			return "", errors.New("media_plugin_runtime_unavailable")
+		}
 	}
 	installed, err := p.store.Installed(ctx, j.Plugin)
 	if err != nil {
@@ -474,14 +492,14 @@ func (p *mediaTranscriptionPolicy) transcribe(ctx context.Context) (string, erro
 	if json.Unmarshal(raw, &r) != nil {
 		return "", errors.New("media_plugin_result_invalid")
 	}
+	if err = p.checkCompleted(ctx); err != nil {
+		return "", err
+	}
 	if r.Status == "no_recognizable_speech" {
 		return "", &mediaspec.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
 	}
 	if r.Status != "transcribed" || r.Text == "" {
 		return "", errors.New("media_plugin_result_invalid")
-	}
-	if err = p.checkCompleted(ctx); err != nil {
-		return "", err
 	}
 	return r.Text, nil
 }

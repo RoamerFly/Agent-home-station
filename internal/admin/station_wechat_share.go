@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
@@ -26,6 +27,9 @@ type stationShareHost struct {
 	store      *pluginhost.Store
 	controller *pluginruntime.Controller
 	send       pluginruntime.RouteTransport
+	postModel  pluginruntime.RouteTransport
+	usageMu    sync.Mutex
+	usage      *billingStore
 }
 
 func (s *stationWechat) shareHost(w *stationWechatWorker, account string) (*stationShareHost, error) {

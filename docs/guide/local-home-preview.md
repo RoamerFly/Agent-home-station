@@ -224,9 +224,13 @@ runtimes/windows-agent-host/windows_agent_host.pyw
 
 `wechat_message_read(message_id,offset?,length?,expected_sha256?)` 返回实际原文范围、身份、原时间、引用服务器编号和内容摘要。默认读取 4,000 字节，传输单页最多 65,536 字节。更大的请求明确返回实际长度和续读位置。续页须带上一页摘要，文本更改后从头读取。已知来源被遗忘或隔离后，此工具拒绝重新读取。
 
-`wechat_video_read(message_id,max_bytes?,timeout_seconds?)` 需要附件读取权限，较早的消息还需历史读取权限。普通视频通过微信原生附件接口获取。视频号卡片优先使用原生直链，定位或下载失败可调用同一张卡片的分享解析。默认 50 MiB，可按需调整至 512 MiB 的传输上限。工具超时可配置，取零时继承上游取消。视频号下载服务另有 240 秒请求边界。结果报告素材 SHA-256、时长、帧数和尺寸。运行环境需要可用的 FFprobe。画面理解与音轨转写另行接入。
+`wechat_video_read(message_id,max_bytes?,timeout_seconds?)` 需要附件读取权限，较早的消息还需历史读取权限。普通视频通过微信原生附件接口获取。视频号卡片优先使用原生直链，定位或下载失败可调用同一张卡片的分享解析。默认 50 MiB，可按需调整至 512 MiB 的传输上限。工具超时可配置，取零时继承上游取消。视频号下载服务另有 240 秒请求边界。结果报告素材 SHA-256、时长、帧数和尺寸。
 
 需要视频号解析回退时，Windows 预览构建可带 `-WithShareReader` 暂存官方工具源码。运行目录同时需要 `runtimes/windows-python-cli` 和 `runtimes/windows-agent-host`，两者由现有 Windows 运行时准备流程提供。应用页展开当前微信连接的「视频号解析」，安装并授予受控联网权限，配置适用的解析凭据或本机对象桥接，再启用。已启用时先停用再修改配置。插件按需启动，默认空闲 5 分钟回收。已有解析配置需要主人在新连接内单独配置。
+
+需要读画面或音轨时，构建可加 `-WithMediaUnderstanding`，也可与 `-WithShareReader` 同时使用。除上述隔离工具运行时外，解码使用 FFmpeg 和 FFprobe。桌面会优先使用程序旁 `runtimes/windows-media` 中的两项组件。展开微信连接的「媒体理解」，安装并授权媒体处理和模型调用，再独立配置远程视觉接口或远程 ASR 接口。填写对应的 HTTPS 地址、模型和密钥，保存后启用。当前独立连接支持 OpenAI 兼容视觉接口和媒体理解工具声明的远程 ASR 协议。本地 ASR 资源登记尚未迁入。
+
+取得视频后，`wechat_video_observe(message_id,asset_id,mode,...)` 使用原返回的两个编号。画面模式 `mode=frames` 从 `start_frame` 起按 `step` 选择帧，返回实际索引与时间戳，从 `next_start_frame` 续读。步长为 1 时连续读取，视觉模型截断的批次会明确标记。音轨模式 `mode=audio` 从 `start_seconds` 起转写，按 `next_start_seconds` 续读。长区间按 PCM 传输上限分页，结果区分缺少音轨、该区间无音频、无可识别词和调用失败。模型只收到所选帧或 PCM 页，微信原件留在本机连接的私有目录。需要处理真实资料时，先确认该连接和所用模型服务的授权。
 
 本轮以合成模型替换外部传输，走真实聊天引擎、HTTP 和 SQLite，核对历史、重试、重启、遗忘和取消。页面使用真实本机服务检查准备、设置、暂停和恢复；合成气泡渲染场景单独标注。没有新增付费模型调用、真实微信消息或生产数据迁移。
 

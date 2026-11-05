@@ -2,6 +2,7 @@ package mediadecode
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
 	"os/exec"
@@ -53,6 +54,9 @@ func TestSampleProbeAndFrameExtractionPreserveEvidence(t *testing.T) {
 	path := filepath.Join(dir, "input.mp4")
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
+	}
+	if wav, seconds, err := ExtractAudioRange(ctx, path, filepath.Join(dir, "audio.wav"), 0, 1); !errors.Is(err, ErrNoAudioTrack) || len(wav) != 0 || seconds != 0 {
+		t.Fatalf("video without an audio stream: %d bytes, %v seconds, %v", len(wav), seconds, err)
 	}
 	meta, err := Probe(ctx, path)
 	if err != nil || meta.Frames != 24 || meta.Width != 96 || meta.Height != 64 {

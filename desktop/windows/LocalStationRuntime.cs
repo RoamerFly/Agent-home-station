@@ -136,7 +136,16 @@ namespace WechatAgent.Desktop {
                 }
                 var args = new List<string> { "--desktop", "--data", d.Root, "--workspace", d.StationWorkspace, "--listen", new Uri(d.Url).Authority };
                 if (d.LocalStationNative) { args.Add("--wechat-native-url"); args.Add(d.StationNativeUrl); args.Add("--wechat-native-pid"); args.Add(native.ID.ToString()); }
-                server = OwnedProcess.Start(d.StationExe, args.ToArray(), d.Workspace, new Dictionary<string, string>(), Path.Combine(d.Root, "logs", "station.log"), job);
+                var programEnv = new Dictionary<string, string>();
+                var media = Path.Combine(Path.GetDirectoryName(d.StationExe), "runtimes", "windows-media");
+                var ffmpeg = Path.Combine(media, "ffmpeg.exe");
+                var ffprobe = Path.Combine(media, "ffprobe.exe");
+                if (File.Exists(ffmpeg) && File.Exists(ffprobe)
+                    && ((File.GetAttributes(ffmpeg) | File.GetAttributes(ffprobe)) & FileAttributes.ReparsePoint) == 0) {
+                    WindowsRuntime.NoLinks(media);
+                    programEnv["PATH"] = media + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+                }
+                server = OwnedProcess.Start(d.StationExe, args.ToArray(), d.Workspace, programEnv, Path.Combine(d.Root, "logs", "station.log"), job);
             } catch (Exception error) {
                 startFailure = error;
             }

@@ -361,6 +361,45 @@ def verify(binary, output):
                 page.get_by_role("button", name="停用解析", exact=True).click()
                 page.get_by_text("已停用", exact=True).wait_for()
                 page.get_by_text("视频号解析", exact=True).click()
+                media = {"installed": False, "enabled": False, "runtime_ready": True, "revision": 0}
+
+                def media_settings(route):
+                    if route.request.method == "PUT":
+                        assert route.request.headers.get("x-csrf-token")
+                        body = route.request.post_data_json
+                        if body["action"] == "install":
+                            assert body["grant_media"] is True
+                            media.update(installed=True, revision=1)
+                        elif body["action"] == "configure":
+                            assert body["revision"] == media["revision"]
+                            config = body["configuration"]
+                            assert config["values"] == {"vision_endpoint": "https://vision.example/chat/completions", "vision_model": "synthetic-vision"}
+                            assert config["secrets"] == {"vision_key": "synthetic-media-browser-key"}
+                            media["configuration"] = {"revision": 1, "values": config["values"], "configured_secrets": ["vision_key"]}
+                        else:
+                            assert body["revision"] == media["revision"]
+                            media.update(enabled=body["action"] == "enable", revision=media["revision"] + 1)
+                    fulfill_json(media)(route)
+
+                page.route(status_pattern + "/media-understanding", media_settings)
+                page.get_by_text("媒体理解", exact=True).click()
+                page.get_by_role("button", name="安装并授权媒体处理和模型调用").click()
+                page.get_by_label("视觉接口地址", exact=True).fill("https://vision.example/chat/completions")
+                page.get_by_label("视觉模型", exact=True).fill("synthetic-vision")
+                page.get_by_label("视觉接口密钥", exact=True).fill("synthetic-media-browser-key")
+                page.get_by_role("button", name="保存媒体设置").click()
+                key_field = page.get_by_label("视觉接口密钥", exact=True).and_(page.get_by_placeholder("已配置，留空保留"))
+                key_field.wait_for()
+                assert key_field.input_value() == ""
+                page.set_viewport_size({"width": 375, "height": 780})
+                assert_no_horizontal_overflow(page, "media configuration")
+                assert_worker_controls_fit(page)
+                page.screenshot(path=str(output / "apps-media-understanding-narrow.png"), full_page=True)
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.get_by_role("button", name="启用媒体理解", exact=True).click()
+                page.get_by_role("button", name="停用媒体理解", exact=True).click()
+                page.get_by_role("button", name="启用媒体理解", exact=True).wait_for()
+                page.get_by_text("媒体理解", exact=True).click()
                 # Reading delivery history and receipt checks must never post a send.
                 receipt_state = {"version": "first", "reads": 0, "checks": 0, "stops": 0, "resumes": 0, "continuation": None}
                 receipts_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/receipts(?:[/?].*)?$")
@@ -517,7 +556,7 @@ def verify(binary, output):
                 assert note.read_text(encoding="utf-8") == "a persistent companion home"
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "worker policy and lifecycle", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "worker policy and lifecycle", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 

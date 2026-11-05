@@ -108,8 +108,9 @@ def _catalog(source, descriptor="plugin.json", selected=None):
     if not directories:
         raise StageError("source_catalog_empty")
     if selected is not None:
-        directories = [directory for directory in directories if directory.name == selected]
-        if not directories:
+        requested = {selected} if isinstance(selected, str) else set(selected)
+        directories = [directory for directory in directories if directory.name in requested]
+        if not directories or len(directories) != len(requested):
             raise StageError("requested_package_unavailable")
     packages = {}
     for directory in sorted(directories, key=lambda value: value.name):
@@ -359,7 +360,7 @@ def main(argv=None):
     parser.add_argument("--output", required=True, help="new catalog directory, for example OUTPUT/plugins")
     parser.add_argument("--update-existing", action="store_true", help="replace only verified indexed members in an existing catalog")
     parser.add_argument("--descriptor", choices=("plugin.json", "app.json"), default="plugin.json", help="package descriptor filename")
-    parser.add_argument("--package", help="stage only the named package")
+    parser.add_argument("--package", action="append", help="stage only the named packages (repeat for each)")
     args = parser.parse_args(argv)
     try:
         result = stage(args.source, args.output, update_existing=args.update_existing, descriptor=args.descriptor, selected=args.package)

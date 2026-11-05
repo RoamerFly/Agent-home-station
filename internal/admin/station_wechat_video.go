@@ -222,7 +222,7 @@ func (t *stationAttachmentTools) readVideo(ctx context.Context, raw json.RawMess
 	value := map[string]any{"asset_id": record.ID, "message_id": source.Message, "sender_id": source.Sender, "occurred_at": source.Occurred,
 		"bytes": record.Bytes, "mime": record.MIME, "sha256": record.SHA256, "variant": record.Variant, "requested_max_bytes": access.maxBytes,
 		"metadata": map[string]any{"duration_seconds": meta.Seconds, "total_frames": meta.Frames, "average_fps": meta.FPS, "width": meta.Width, "height": meta.Height},
-		"coverage": "original_and_metadata", "content_observed": false, "audio_transcribed": false, "content_analysis": "media_tool_host_pending"}
+		"coverage": "original_and_metadata", "content_observed": false, "audio_transcribed": false, "content_analysis_tool": "wechat_video_observe"}
 	result, err := json.Marshal(value)
 	return string(result), err
 }
