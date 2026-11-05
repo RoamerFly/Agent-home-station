@@ -466,7 +466,7 @@ func fishIDForAccount(fishID string, bindings map[string]bool, account string) s
 
 // selectAccount never falls back to primary for an unknown or conflicting ID.
 func (a *accountRegistry) selectAccount(w http.ResponseWriter, r *http.Request, primary http.Handler) {
-	if !strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/api/local/") || (r.URL.Path == "/api/accounts" || strings.HasPrefix(r.URL.Path, "/api/accounts/")) || r.URL.Path == "/api/login" || r.URL.Path == "/api/logout" || r.URL.Path == "/api/password" || r.URL.Path == "/api/session" {
+	if !strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/api/local/") || isAppRegistryPath(r.URL.Path) || (r.URL.Path == "/api/accounts" || strings.HasPrefix(r.URL.Path, "/api/accounts/")) || r.URL.Path == "/api/login" || r.URL.Path == "/api/logout" || r.URL.Path == "/api/password" || r.URL.Path == "/api/session" {
 		primary.ServeHTTP(w, r)
 		return
 	}

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -79,6 +80,12 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 	}
 	mux := http.NewServeMux()
 	if s.accounts != nil {
+		registry, err := apphost.New(wechatCompatibility{accounts: s.accounts}.registration())
+		if err != nil {
+			s.accounts.close()
+			return nil, err
+		}
+		s.appRoutes(mux, registry)
 		s.accounts.routes(mux)
 		s.localHomeRoutes(mux, manager.fish, manager.managedRoot(), manager.dir)
 	}

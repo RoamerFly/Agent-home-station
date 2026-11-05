@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -63,6 +64,7 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ..
 		_, value, _ := s.session(r)
 		respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": value.CSRF})
 	}))
+	s.appRoutes(mux, apphost.Registry{})
 	home := &localHomeService{identity: newFishIdentityRegistry(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true}
 	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
 	mux.HandleFunc("POST /api/local/home", s.protected(home.update))

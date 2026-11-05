@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"wechat-bot/internal/companion"
@@ -19,19 +20,28 @@ import (
 type multiNative struct {
 	fakeNative
 	endpoint, tokenFile string
+	directoryReads      atomic.Int32
+	primaryStatusReads  atomic.Int32
+	secondaryReads      atomic.Int32
 }
 
 func (n *multiNative) ForAccount(id string) (*linuxnative.Sender, error) {
 	return linuxnative.NewAdmin(linuxnative.Config{URL: n.endpoint, TokenFile: n.tokenFile, Account: id})
 }
 func (n *multiNative) Accounts(context.Context) ([]linuxnative.AccountInfo, error) {
+	n.directoryReads.Add(1)
 	return []linuxnative.AccountInfo{{ID: "test", Alias: "test"}, {ID: "second", Alias: "second-alias"}}, nil
 }
 func (n *multiNative) DisplayName(context.Context) (string, error) { return "主号昵称", nil }
 func (n *multiNative) Ready() bool                                 { return true }
+func (n *multiNative) Status(ctx context.Context) (linuxnative.Status, error) {
+	n.primaryStatusReads.Add(1)
+	return n.fakeNative.Status(ctx)
+}
 
 func setupAccounts(t *testing.T) (*webFixture, *accountRegistry) {
 	t.Helper()
+	native := &multiNative{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer synthetic-account-test-token" {
 			http.Error(w, "denied", 403)
@@ -48,7 +58,16 @@ func setupAccounts(t *testing.T) (*webFixture, *accountRegistry) {
 		case strings.HasSuffix(r.URL.Path, "/events"):
 			respond(w, 200, map[string]any{"items": []any{}, "nextCursor": "0"})
 		case r.URL.Path == "/v1/accounts/"+id:
+			if id == "second" {
+				native.secondaryReads.Add(1)
+			}
 			respond(w, 200, map[string]any{"id": id, "authenticated": true, "connection": "online"})
+		case r.URL.Path == "/v1/accounts/second/capabilities":
+			native.secondaryReads.Add(1)
+			respond(w, 200, linuxnative.Capabilities{
+				MediaKinds: []string{"voice", "video", "unrecognized"}, MediaSendMaxBytes: map[string]int64{"voice": 1 << 20},
+				QuotedTextSend: true, GroupMutations: []string{"recall", "unknown"},
+			})
 		case strings.HasSuffix(r.URL.Path, "/threads/filehelper/messages"):
 			respond(w, 200, map[string]any{"items": []map[string]any{{"id": "out", "threadId": "filehelper", "type": 1, "direction": "outgoing", "senderId": "wxid_" + id, "body": "synthetic"}}})
 		case strings.Contains(r.URL.Path, "/contacts/wxid_"):
@@ -69,7 +88,7 @@ func setupAccounts(t *testing.T) (*webFixture, *accountRegistry) {
 	dir := t.TempDir()
 	token := filepath.Join(dir, "token")
 	os.WriteFile(token, []byte("synthetic-account-test-token"), 0600)
-	native := &multiNative{endpoint: upstream.URL, tokenFile: token}
+	native.endpoint, native.tokenFile = upstream.URL, token
 	m, err := NewManager(filepath.Join(dir, "admin"), filepath.Join(dir, "inbox"), native)
 	if err != nil {
 		t.Fatal(err)

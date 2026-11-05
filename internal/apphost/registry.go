@@ -1,0 +1,97 @@
+// Package apphost describes the applications and connections registered by a
+// trusted station host. App packages and conversation tools cannot register
+// themselves through this interface.
+package apphost
+
+import (
+	"context"
+	"errors"
+	"regexp"
+	"sort"
+)
+
+var (
+	ErrNotFound    = errors.New("application or connection not found")
+	ErrUnavailable = errors.New("application registry unavailable")
+	stableID       = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+)
+
+type Application struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	InstallationID string `json:"installation_id"`
+	Registration   string `json:"registration"`
+}
+
+type Connection struct {
+	ID            string `json:"id"`
+	AccountID     string `json:"account_id"`
+	Label         string `json:"label,omitempty"`
+	Primary       bool   `json:"primary,omitempty"`
+	Configuration string `json:"configuration"`
+}
+
+// ConfiguredPolicy is the existing account policy, without owner/recipient IDs
+// or credentials. A caller still needs request- and target-specific admission.
+type ConfiguredPolicy struct {
+	WorkerEnabled       bool     `json:"worker_enabled"`
+	ConversationEnabled bool     `json:"conversation_enabled"`
+	ToolsEnabled        bool     `json:"tools_enabled"`
+	Grants              []string `json:"grants"`
+}
+
+type ConnectionStatus struct {
+	Connection
+	Login            string            `json:"login"`
+	Runtime          string            `json:"runtime"`
+	Worker           string            `json:"worker"`
+	Policy           *ConfiguredPolicy `json:"configured_policy"`
+	CapabilityCheck  string            `json:"capability_check"`
+	SupportedActions []string          `json:"supported_actions"`
+}
+
+type Provider interface {
+	Connections(context.Context) ([]Connection, error)
+	Inspect(context.Context, string) (ConnectionStatus, error)
+}
+
+type Registration struct {
+	Application
+	Provider Provider
+}
+
+// Registry is immutable after construction. Its zero value represents a host
+// with no registered applications.
+type Registry struct {
+	apps map[string]Registration
+}
+
+func New(registrations ...Registration) (Registry, error) {
+	r := Registry{apps: make(map[string]Registration, len(registrations))}
+	installations := map[string]bool{}
+	for _, entry := range registrations {
+		if !stableID.MatchString(entry.ID) || !stableID.MatchString(entry.InstallationID) || entry.Name == "" || entry.Registration == "" || entry.Provider == nil {
+			return Registry{}, errors.New("invalid application registration")
+		}
+		if _, exists := r.apps[entry.ID]; exists || installations[entry.InstallationID] {
+			return Registry{}, errors.New("duplicate application or installation")
+		}
+		r.apps[entry.ID] = entry
+		installations[entry.InstallationID] = true
+	}
+	return r, nil
+}
+
+func (r Registry) Applications() []Application {
+	result := make([]Application, 0, len(r.apps))
+	for _, entry := range r.apps {
+		result = append(result, entry.Application)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
+}
+
+func (r Registry) Lookup(id string) (Registration, bool) {
+	entry, exists := r.apps[id]
+	return entry, exists
+}
