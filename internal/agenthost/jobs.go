@@ -129,6 +129,23 @@ func (j *Jobs) List(scope string) []Process {
 	}
 	return out
 }
+
+// FindByKey is a scoped read of the authoritative job, including a job whose
+// start response was lost. It never submits or adopts work.
+func (j *Jobs) FindByKey(scope, key string) (Process, bool) {
+	if scope == "" || key == "" {
+		return Process{}, false
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, p := range j.items {
+		if p.Scope == scope && p.Key == key {
+			return processCopy(p), true
+		}
+	}
+	return Process{}, false
+}
+
 func (j *Jobs) Status(scope, id string, cancel bool) (Process, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()

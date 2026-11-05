@@ -93,7 +93,11 @@ func (t *localProcessTools) Call(ctx context.Context, name string, raw json.RawM
 	}
 	switch in.Action {
 	case "start":
-		return t.start(in)
+		grant, err := t.access.resolve()
+		if err != nil {
+			return "", err
+		}
+		return t.start(ctx, in, grant)
 	case "list":
 		return t.list()
 	case "status", "read":
@@ -105,15 +109,11 @@ func (t *localProcessTools) Call(ctx context.Context, name string, raw json.RawM
 	}
 }
 
-func (t *localProcessTools) start(in localProcessInput) (string, error) {
+func (t *localProcessTools) start(ctx context.Context, in localProcessInput, grant localWorkspaceGrant) (string, error) {
 	if strings.TrimSpace(in.Key) == "" || len(in.Key) > 128 || len(in.Argv) == 0 || strings.TrimSpace(in.Path) == "" {
 		return "", errors.New("启动程序需要path、argv和request_key")
 	}
-	grant, err := t.access.resolve()
-	if err != nil {
-		return "", err
-	}
-	if err = localProcessPath(grant.Directory, in.Path); err != nil {
+	if err := localProcessPath(grant.Directory, in.Path); err != nil {
 		return "", err
 	}
 	if t.cfg == nil || t.cfg.Validate() != nil {
@@ -128,6 +128,9 @@ func (t *localProcessTools) start(in localProcessInput) (string, error) {
 		return "", err
 	}
 	if err = localProcessArgv(cfg, in.Argv); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	value, err := t.jobs.StartWindowsArgv(cfg, localProcessScope(grant.FishID, grant.OwnerID), in.Key, in.Path, in.Argv, in.Seconds, func() bool {
@@ -166,6 +169,9 @@ func (t *localProcessTools) ownerScope() (string, error) {
 	record, err := t.access.home.identity.localIdentity()
 	if err != nil || !validFishID(record.FishID) || record.LocalOwner == nil || !validFishLocalOwner(*record.LocalOwner) {
 		return "", errors.New("本机鱼身份不可用")
+	}
+	if !t.access.matches(record.FishID, record.LocalOwner.ID) {
+		return "", errors.New("本机身份已变化，请重新开启会话")
 	}
 	return localProcessScope(record.FishID, record.LocalOwner.ID), nil
 }

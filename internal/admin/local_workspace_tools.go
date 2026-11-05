@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"wechat-bot/internal/agenthost"
-	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/workspacefs"
 )
@@ -28,7 +27,14 @@ type localWorkspaceGrant struct {
 // localWorkspaceAccess exposes the fish's own home only.  It deliberately has
 // no account, conversation, or platform identity: applications are connected
 // resources, not the owner of the fish's private working directory.
-type localWorkspaceAccess struct{ home *localHomeService }
+type localWorkspaceAccess struct {
+	home            *localHomeService
+	fishID, ownerID string
+}
+
+func (a *localWorkspaceAccess) matches(fishID, ownerID string) bool {
+	return (a.fishID == "" || a.fishID == fishID) && (a.ownerID == "" || a.ownerID == ownerID)
+}
 
 func (a *localWorkspaceAccess) resolve() (localWorkspaceGrant, error) {
 	if a == nil || a.home == nil || a.home.identity == nil {
@@ -40,6 +46,9 @@ func (a *localWorkspaceAccess) resolve() (localWorkspaceGrant, error) {
 	}
 	if record.LocalOwner == nil || !record.LocalOwner.HomeAccess || !validFishID(record.FishID) || !validFishLocalOwner(*record.LocalOwner) {
 		return localWorkspaceGrant{}, errors.New("本机家目录授权已暂停")
+	}
+	if !a.matches(record.FishID, record.LocalOwner.ID) {
+		return localWorkspaceGrant{}, errors.New("本机身份已变化，请重新开启会话")
 	}
 	if err := a.home.ensureDirectory(record); err != nil {
 		return localWorkspaceGrant{}, err
@@ -104,7 +113,7 @@ func (a *localWorkspaceAccess) withCurrentWriteGrant(grant localWorkspaceGrant, 
 
 type localWorkspaceFileTools struct{ access *localWorkspaceAccess }
 
-func newLocalFileTools(access *localWorkspaceAccess) companion.ToolAccess {
+func newLocalFileTools(access *localWorkspaceAccess) *localWorkspaceFileTools {
 	return &localWorkspaceFileTools{access: access}
 }
 
@@ -171,13 +180,18 @@ func (t *localWorkspaceFileTools) Call(ctx context.Context, name string, raw jso
 	if err != nil {
 		return "", err
 	}
-	if name != "server_status" && name != "server_list" && name != "server_read" && name != "server_search" && name != "server_write" && name != "server_edit" {
-		return "", fmt.Errorf("未知本机家目录文件工具: %s", name)
-	}
 	var in localWorkspaceFileInput
 	if err := strictLocalMemoryDecode(raw, &in); err != nil {
 		return "", errors.New("本机家目录文件参数无效")
 	}
+	return t.call(ctx, name, in, grant)
+}
+
+func (t *localWorkspaceFileTools) call(ctx context.Context, name string, in localWorkspaceFileInput, grant localWorkspaceGrant) (string, error) {
+	if name != "server_status" && name != "server_list" && name != "server_read" && name != "server_search" && name != "server_write" && name != "server_edit" {
+		return "", fmt.Errorf("未知本机家目录文件工具: %s", name)
+	}
+	var err error
 	path := ""
 	if name != "server_status" {
 		path, err = localWorkspacePath(grant, in.Path)
@@ -199,6 +213,9 @@ func (t *localWorkspaceFileTools) Call(ctx context.Context, name string, raw jso
 	var result any
 	if name == "server_write" || name == "server_edit" {
 		err = t.access.withCurrentWriteGrant(grant, func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			result, err = host.Call(ctx, name, encoded)
 			return err
 		})

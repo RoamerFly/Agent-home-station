@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/companion"
 )
 
 func TestLiveLocalHomeWindowsPersistentToolAndRevocation(t *testing.T) {
@@ -115,5 +117,85 @@ func TestLiveLocalHomeWindowsPersistentToolAndRevocation(t *testing.T) {
 	out, err := retained.Call(context.Background(), "server_windows_process", raw)
 	if err != nil || !strings.Contains(out, first.ID) || !strings.Contains(out, "completed") {
 		t.Fatal("restart lost finished job", out, err)
+	}
+}
+
+func TestLiveLocalChatRetryReusesWindowsJob(t *testing.T) {
+	file := os.Getenv("AHS_WINDOWS_RUNTIME_CONFIG")
+	if runtime.GOOS != "windows" || file == "" {
+		t.Skip("opt-in synthetic local chat LPAC integration")
+	}
+	f := localChatFixture(t)
+	windows, err := LocalWindowsRuntime("", f.dir, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.handler.chat.windows = windows
+	_, home := f.request("GET", "/api/local/home", nil, true)
+	dir := home["directory"].(string)
+	script := filepath.Join(dir, "Project Tools", "once.py")
+	if err := os.WriteFile(script, []byte("from pathlib import Path\nwith Path('runs.txt').open('a') as f: f.write('run\\n')\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	python := filepath.Join(filepath.Dir(windows.Pythonw), "python.exe")
+	call := func(key string) string {
+		return localToolCall(localProcessTool, map[string]any{
+			"action": "start", "path": dir, "argv": []string{python, script}, "request_key": key, "timeout_seconds": 20,
+		})
+	}
+	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		calls := 0
+		return localModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+			calls++
+			if calls == 1 {
+				return call("before-restart"), nil
+			}
+			return "", errors.New("synthetic model interruption")
+		}), nil
+	}
+	if code, out := localChatSend(f, "one-windows-job", "运行一次项目脚本"); code != 502 {
+		t.Fatalf("expected unfinished chat: %d %#v", code, out)
+	}
+	scope, err := f.handler.chat.processes.ownerScope()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job agenthost.Process
+	for deadline := time.Now().Add(25 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		jobs := f.handler.chat.processes.jobs.List(scope)
+		if len(jobs) != 1 {
+			t.Fatal("chat did not register exactly one job", jobs)
+		}
+		job = jobs[0]
+		if job.State != "running" {
+			break
+		}
+	}
+	if job.State != "completed" {
+		t.Fatalf("synthetic Windows job did not complete: %+v", job)
+	}
+	next := localRestartChat(t, f)
+	next.handler.chat.windows = windows
+	next.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		calls := 0
+		return localModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
+			calls++
+			history := localModelHistory(turns)
+			if !strings.Contains(history, job.ID) || !strings.Contains(history, "completed") {
+				t.Error("original completed job absent on retry")
+			}
+			if calls == 1 {
+				return call("after-restart"), nil
+			}
+			return `{"action":"reply","messages":["已核对原程序运行完成。"]}`, nil
+		}), nil
+	}
+	if code, out := localChatSend(next, "one-windows-job", "运行一次项目脚本"); code != 200 || out["status"] != "completed" {
+		t.Fatalf("retry failed: %d %#v", code, out)
+	}
+	jobs := next.handler.chat.processes.jobs.List(scope)
+	data, err := os.ReadFile(filepath.Join(dir, "runs.txt"))
+	if len(jobs) != 1 || jobs[0].ID != job.ID || err != nil || strings.TrimSpace(string(data)) != "run" {
+		t.Fatalf("retry did not reuse the original execution: %d jobs, output %q, error %v", len(jobs), data, err)
 	}
 }

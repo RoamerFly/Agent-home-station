@@ -298,6 +298,11 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "原消息未能写入本地记录，请先刷新核对")
 		return
 	}
+	run, err := store.OpenLocalToolRun(r.Context(), in, prior == nil)
+	if err != nil {
+		fail(w, 503, "工具检查点无法核验，未执行本轮工具")
+		return
+	}
 	settings, err := h.models.View()
 	if err != nil {
 		fail(w, 409, "本机模型配置不可读，原文件保留")
@@ -322,7 +327,10 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "本地聊天引擎未能准备，原始记录保留")
 		return
 	}
-	engine.Tools = h.tools(store, in)
+	tools := h.tools(store, in)
+	tools.run = run
+	tools.inspectOnly = !run.Tracked || len(run.Operations) > 0
+	engine.Tools = tools
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
 	stop := context.AfterFunc(h.ctx, cancel)

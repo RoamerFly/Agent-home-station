@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS events(
  suppressed INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1,payload BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS events_scope_seq ON events(scope,seq);
 CREATE INDEX IF NOT EXISTS events_scope_time ON events(scope,at,id);
+CREATE TABLE IF NOT EXISTS local_tool_checkpoints(
+ event_id TEXT NOT NULL,revision INTEGER NOT NULL,call_key TEXT NOT NULL,
+ tool TEXT NOT NULL,grant_key TEXT NOT NULL,target TEXT NOT NULL,result TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(event_id,revision,call_key));
 CREATE INDEX IF NOT EXISTS events_reflection_observable_v2 ON events(scope,seq DESC,id DESC) WHERE role='user' AND suppressed=0 AND instr(CAST(payload AS TEXT),'"observation_excerpt":')>0;
 CREATE TABLE IF NOT EXISTS observations(event_id TEXT,hash TEXT,text TEXT,PRIMARY KEY(event_id,hash));
 CREATE TABLE IF NOT EXISTS event_revisions(event_id TEXT,revision INTEGER,text TEXT,hash TEXT,PRIMARY KEY(event_id,revision));
