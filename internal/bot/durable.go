@@ -312,6 +312,10 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 	defer w.closeGenerations()
 	defer w.suspendMedia()
 	w.recoverFollowups()
+	w.applyDeliveryCancellations()
+	if w.persistErr != nil {
+		return w.persistErr
+	}
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
 		if item.ToolStarted && (item.Phase == "tool_running" || item.Phase == "processing" || item.Phase == "model_running") {
@@ -381,6 +385,10 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 	}
 	peekedInterruptions := map[string]bool{}
 	for ctx.Err() == nil {
+		w.applyDeliveryCancellations()
+		if w.persistErr != nil {
+			return w.persistErr
+		}
 		w.collectGenerations(ctx)
 		w.adoptMediaSeeds()
 		if w.draining() {

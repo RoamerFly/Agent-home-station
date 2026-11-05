@@ -621,7 +621,13 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 						cancel()
 						return
 					}
-					status, err = n.Submit(checkCtx, linuxnative.ToolSend{URL: d.URL, Title: d.Title, Description: d.Description, ThreadID: d.Input.Thread, Kind: d.Kind, SourceID: d.SourceID, IdempotencyKey: d.Key})
+					status, err = w.submitMedia(checkCtx, n, d)
+					if errors.Is(err, ErrDeliveryCancelled) {
+						d.State = "prepared" // Gate proves the native call was not entered.
+						w.cancelMedia(n, d, true, "media_cancelled_before_native_submission")
+						cancel()
+						continue
+					}
 				}
 			}
 		}

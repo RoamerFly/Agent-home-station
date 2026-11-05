@@ -3,39 +3,49 @@ package admin
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
 func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limit int) (apphost.ReceiptPage, error) {
 	page := apphost.ReceiptPage{Items: []apphost.Receipt{}, Coverage: "current_worker_checkpoint"}
-	if after != "" && !validID(after) || limit < 1 {
+	if !artifactID(id, "wechat-") || after != "" && !validID(after) || limit < 1 {
 		return page, apphost.ErrNotFound
 	}
-	native, err := s.WorkerSender(ctx, id)
-	if err != nil {
-		return page, err
+	w, account, err := s.deliveryCheckpoint(id)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, apphost.ErrNotFound) {
+		return page, nil
 	}
-	w, err := s.worker(id, false)
 	if err != nil {
 		return page, err
 	}
 	if w == nil {
 		return page, nil
 	}
-	rows, err := bot.ReadDeliveryEvidencePage(filepath.Join(w.dir, "queue"), native.Account(), after, limit)
+	rows, err := bot.ReadDeliveryEvidencePage(filepath.Join(w.dir, "queue"), account, after, limit)
 	if err != nil {
 		return page, apphost.ErrUnavailable
 	}
 	page.Snapshot, page.NextAfter = rows.Snapshot, rows.NextAfter
+	w.deliveryMu.Lock()
+	stops, err := w.readDeliveryStops()
+	w.deliveryMu.Unlock()
+	if err != nil {
+		return page, apphost.ErrUnavailable
+	}
+	page.Snapshot = localCheckpointKey(rows.Snapshot, stops)
 	for _, key := range rows.Keys {
 		row := rows.Records[key]
-		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, native.Account()), ConversationID: row.Status.ThreadID,
+		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, account), ConversationID: row.Status.ThreadID,
 			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"}}
 		projectWechatReceipt(&receipt.DeliveryReceipt, row.Status)
+		_, cancelled := stops[deliveryStopID(companion.Input{Account: account, Thread: row.Status.ThreadID, TraceID: row.Trace})]
+		receipt.CancelRequested = receipt.CancelRequested || cancelled
 		page.Items = append(page.Items, receipt)
 	}
 	return page, nil
@@ -74,6 +84,11 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 		reader = stationMediaReceiptReader{native, row.SourceID, row.Status.Kind}
 	}
 	queryWechatDelivery(ctx, reader, row.Status.ThreadID, row.SourceID, row.Status, row.StrictSource && row.Status.ID != "", &result.DeliveryReceipt)
+	cancelled, err := w.deliveryCancelled(companion.Input{Account: native.Account(), Thread: row.Status.ThreadID, TraceID: row.Trace})
+	if err != nil {
+		return apphost.Receipt{}, apphost.ErrUnavailable
+	}
+	result.CancelRequested = result.CancelRequested || cancelled
 	return result, nil
 }
 

@@ -35,6 +35,7 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	messages := map[string][]linuxnative.Message{}
 	sends := map[string][]string{}
 	submitKeys := map[string]string{}
+	twoSubmitted := make(chan struct{}, 1)
 	var foreignReads atomic.Int32
 	var replaced, lateAccepted atomic.Bool
 	var replacementTraffic atomic.Int32
@@ -105,6 +106,12 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 			thread, _ := body["threadId"].(string)
 			sends[account] = append(sends[account], thread)
 			submitKeys[account] = r.Header.Get("Idempotency-Key")
+			if account == "two" {
+				select {
+				case twoSubmitted <- struct{}{}:
+				default:
+				}
+			}
 			w.WriteHeader(202)
 			out(map[string]any{"id": "send-" + account, "accountId": account, "threadId": thread, "kind": "text", "state": "queued"})
 		case r.Method == http.MethodGet && strings.HasPrefix(path, "sends"):
@@ -224,11 +231,10 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	appendMessage("one", "person-one", "block-synthetic-first")
 	await(blockStarted)
 	appendMessage("two", "person-two", "synthetic-second")
-	waitAppLifecycle(t, func() bool {
-		nativeMu.Lock()
-		defer nativeMu.Unlock()
-		return len(sends["two"]) != 0
-	})
+	// A model result still passes the real reply delay and the worker poll.
+	// Await the actual submission barrier, using the processing-stage budget
+	// rather than the shorter connection-status polling budget.
+	await(twoSubmitted)
 	if row := lifecycle(f, "one", "stop", 200); row["worker"] != "paused" || row["submissions_paused"] != true {
 		t.Fatal(row)
 	}
@@ -242,6 +248,17 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	nativeMu.Unlock()
 	if receiptKey == "" {
 		t.Fatal("missing stable delivery key")
+	}
+	request(f, "POST", path("two")+"/receipts/"+receiptKey+"/cancel", map[string]any{}, false, 403)
+	request(f, "POST", path("one")+"/receipts/"+receiptKey+"/cancel", map[string]any{}, true, 404)
+	for range 2 {
+		stopped := request(f, "POST", path("two")+"/receipts/"+receiptKey+"/cancel", map[string]any{}, true, 202)
+		if stopped["state"] != "cancellation_requested" || stopped["scope"] != "originating_turn" {
+			t.Fatal(stopped)
+		}
+	}
+	if row := request(f, "GET", path("two")+"/receipts/"+receiptKey, nil, false, 200); row["cancel_requested"] != true || row["state"] == "cancelled" {
+		t.Fatal("in-flight text was treated as cancelled", row)
 	}
 	policy(f, "two")
 	waitState(f, "two", "paused")
@@ -290,7 +307,9 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	h2, f2 := reopen()
 	waitState(f2, "one", "running")
 	waitState(f2, "two", "paused")
-	request(f2, "GET", path("two")+"/receipts/"+receiptKey, nil, false, 200)
+	if row := request(f2, "GET", path("two")+"/receipts/"+receiptKey, nil, false, 200); row["cancel_requested"] != true || row["state"] != "accepted" {
+		t.Fatal("restart lost cancellation or late accepted receipt", row)
+	}
 	sender, err := h2.wechat.WorkerSender(t.Context(), wechatapp.ConnectionID("one"))
 	if err != nil {
 		t.Fatal(err)
@@ -298,6 +317,38 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	replaced.Store(true)
 	if _, err := sender.Status(t.Context()); err == nil {
 		t.Fatal("existing worker admitted an account request after daemon replacement")
+	}
+	// A native outage/replacement cannot prevent a local stop from being saved.
+	request(f2, "POST", path("two")+"/receipts/"+receiptKey+"/cancel", map[string]any{}, true, 202)
+	// Insert a new synthetic pending turn only after this worker was stopped.
+	pausedWorker, err := h2.wechat.worker(wechatapp.ConnectionID("two"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queuePath := filepath.Join(pausedWorker.dir, "queue", "messages-v2.json")
+	raw, err := os.ReadFile(queuePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot map[string]any
+	if json.Unmarshal(raw, &snapshot) != nil {
+		t.Fatal("synthetic queue unreadable")
+	}
+	snapshot["deliveries"] = append(snapshot["deliveries"].([]any), map[string]any{
+		"key": "offline-stop-target", "trace": "offline-origin", "thread": "person-two", "state": "prepared",
+		"input": map[string]any{"account": "two", "thread": "person-two", "trace_id": "offline-origin"},
+	})
+	raw, _ = json.Marshal(snapshot)
+	if err := os.WriteFile(queuePath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	request(f2, "POST", path("two")+"/receipts/offline-stop-target/cancel", map[string]any{}, true, 202)
+	stops, err := pausedWorker.readDeliveryStops()
+	if err != nil || len(stops) != 2 {
+		t.Fatal("new offline stop not persisted", stops, err)
+	}
+	if page := request(f2, "GET", path("two")+"/receipts", nil, false, 200); len(page["items"].([]any)) != 2 {
+		t.Fatal("offline local delivery history unavailable", page)
 	}
 	if err := h2.Close(); err != nil {
 		t.Fatal(err)

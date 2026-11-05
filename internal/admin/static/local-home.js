@@ -320,7 +320,7 @@
     const panel = appElement("details", "", "identity-details delivery-records");
     panel.append(appElement("summary", "投递记录"));
     const records = appElement("div", "", "work-records");
-    const note = appElement("small", "显示当前连接保存的投递状态。核对只查询原任务，不会重新发送。");
+    const note = appElement("small", "核对只查询原任务。停止作用于本回合的剩余投递，已接受的消息保留。");
     const base = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/receipts";
     let after = "", snapshot = "", loading = false;
     function describe(item) {
@@ -343,16 +343,28 @@
     function append(item) {
       const row = appElement("div", "", "work-record");
       const text = appElement("small", describe(item));
+      const stop = appSetupButton("停止本回合投递", async () => {
+        stop.disabled = true; stop.textContent = "正在停止…";
+        try {
+          await request(base + "/" + encodeURIComponent(item.idempotency_key) + "/cancel", { method: "POST", body: "{}" });
+          item.cancel_requested = true;
+          text.textContent = describe(item);
+          stop.textContent = "停止意图已保存";
+        } catch (error) { appFeedback(error.message, true); stop.disabled = false; stop.textContent = "停止本回合投递"; }
+      });
+      stop.disabled ||= item.cancel_requested || item.state === "cancelled";
       const check = appSetupButton("核对回执", async () => {
         check.disabled = true; check.textContent = "正在核对…";
         try {
           const result = await request(base + "/" + encodeURIComponent(item.idempotency_key));
+          item = result;
           text.textContent = describe(result);
+          stop.disabled = Boolean(result.cancel_requested || result.state === "cancelled");
           if (result.lookup === "unavailable") text.textContent += " · 暂时无法连接，保留已知状态";
         } catch (error) { appFeedback(error.message, true); }
         finally { check.disabled = false; check.textContent = "核对回执"; }
       });
-      row.append(text, check); records.append(row);
+      row.append(text, check, stop); records.append(row);
     }
     const more = appSetupButton("查看投递记录", async () => {
       if (loading) return;

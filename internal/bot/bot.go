@@ -32,6 +32,10 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
+	// DeliveryCancelled is a durable host fence for an originating turn.
+	DeliveryCancelled func(companion.Input) (bool, error)
+	// WithDeliverySubmit serializes the final native submission with that fence.
+	WithDeliverySubmit  func(context.Context, companion.Input, func() error) error
 	BeforeSubmit        func(context.Context) error
 	ObservationFailed   func(companion.Input, string) error
 	MediaRepairRequired func(companion.Input, string, string) error

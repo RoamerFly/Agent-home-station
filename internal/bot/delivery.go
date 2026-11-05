@@ -209,13 +209,22 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 			w.persistErr = w.saveRuntime()
 			return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_pacing"}
 		}
+		previousState, previousText := d.State, d.SubmittedText
 		d.State = "submitting"
 		d.SubmittedText = d.Text
 		w.advanceSendGate(d.Thread)
 		if e := w.saveRuntime(); e != nil {
 			return sending.Receipt{}, e
 		}
-		status, err = n.Submit(ctx, linuxnative.ToolSend{ThreadID: d.Thread, Kind: "text", Text: d.Text, IdempotencyKey: d.Key, Quote: d.Quote})
+		err = w.guardedDeliverySubmit(ctx, d.Input, func() error {
+			var sendErr error
+			status, sendErr = n.Submit(ctx, linuxnative.ToolSend{ThreadID: d.Thread, Kind: "text", Text: d.Text, IdempotencyKey: d.Key, Quote: d.Quote})
+			return sendErr
+		})
+		if errors.Is(err, ErrDeliveryCancelled) {
+			d.State, d.SubmittedText = previousState, previousText
+			return w.cancelledDelivery(d)
+		}
 		if err != nil {
 			if reason := linuxnative.QuoteAdmissionReason(err); reason != "" {
 				d.State, d.Reason = "stopped", reason

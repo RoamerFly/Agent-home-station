@@ -53,10 +53,11 @@ type stationWechatPolicy struct {
 }
 
 type stationWechatWorker struct {
-	mu     sync.Mutex
-	dir    string
-	policy stationWechatPolicy
-	run    *stationWechatRun
+	mu         sync.Mutex
+	deliveryMu sync.Mutex
+	dir        string
+	policy     stationWechatPolicy
+	run        *stationWechatRun
 }
 
 type stationWechatRun struct {
@@ -519,14 +520,15 @@ func (s *stationWechat) launch(w *stationWechatWorker, native *linuxnative.Sende
 		defer s.wg.Done()
 		defer close(run.done)
 		defer cancel()
-		if err := s.runWorker(ctx, run, w.dir, native, view.Persona, policy); err != nil && ctx.Err() == nil {
+		if err := s.runWorker(ctx, run, w, native, view.Persona, policy); err != nil && ctx.Err() == nil {
 			run.state.Store("error")
 		}
 	}()
 	return nil
 }
 
-func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, dir string, native *linuxnative.Sender, persona string, policy stationWechatPolicy) error {
+func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, station *stationWechatWorker, native *linuxnative.Sender, persona string, policy stationWechatPolicy) error {
+	dir := station.dir
 	for {
 		statusCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		status, err := native.Status(statusCtx)
@@ -573,7 +575,9 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, di
 	options := bot.DefaultOptions()
 	options.AcknowledgeTools, options.ReadImages, options.ReadVideos, options.RandomDelay = false, false, false, false
 	worker, err := bot.New(bot.Config{
-		StateDir: filepath.Join(dir, "queue"), AllowedThreads: threads, GroupRules: rules,
+		DeliveryCancelled:  station.deliveryCancelled,
+		WithDeliverySubmit: station.withDeliverySubmit,
+		StateDir:           filepath.Join(dir, "queue"), AllowedThreads: threads, GroupRules: rules,
 		Options: &options, Prefix: "/ai ",
 		Log: func(event string) {
 			if event == "bot_started_history_skipped" || event == "bot_resumed_saved_cursor" {
