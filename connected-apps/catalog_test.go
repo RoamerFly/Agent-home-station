@@ -39,6 +39,22 @@ func TestOfficialAppSource(t *testing.T) {
 	}
 }
 
+func TestBilibiliPublicSourceDeclaresOnlyVerifiedReads(t *testing.T) {
+	contract, err := Lookup("bilibili")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := pluginhost.VerifyDescriptor("bilibili", "app.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||
+		len(p.HTTPRoutes) != 1 || p.HTTPRoutes[0].Endpoint != "https://api.bilibili.com/x/web-interface/view" ||
+		!reflect.DeepEqual(p.HTTPRoutes[0].Capabilities, []string{"observation.title", "observation.body"}) {
+		t.Fatalf("unexpected Bilibili package capabilities: %v", p.HTTPRoutes)
+	}
+}
+
 type catalogReaderFunc func(context.Context, string, string, string, string) (linuxnative.CatalogPage, error)
 
 func (f catalogReaderFunc) Catalog(c context.Context, k, t, s, p string) (linuxnative.CatalogPage, error) {

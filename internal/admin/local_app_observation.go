@@ -118,8 +118,10 @@ func observationHTTPStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, apphost.ErrObservationForbidden):
 		return http.StatusForbidden
-	case errors.Is(err, apphost.ErrObservationNotFound):
+	case errors.Is(err, apphost.ErrObservationNotFound), errors.Is(err, apphost.ErrObservationContentUnavailable):
 		return http.StatusNotFound
+	case errors.Is(err, apphost.ErrObservationThrottled):
+		return http.StatusTooManyRequests
 	default:
 		return http.StatusServiceUnavailable
 	}

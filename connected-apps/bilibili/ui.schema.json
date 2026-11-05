@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "id": "public-observation",
+      "title": "公开资料读取",
+      "fields": ["enabled", "videos"],
+      "action": "owner-save-public-observation"
+    }
+  ]
+}

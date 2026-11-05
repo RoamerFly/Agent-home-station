@@ -108,9 +108,11 @@ type ObservationResult struct {
 }
 
 var (
-	ErrObservationInvalid   = errors.New("应用观察请求无效")
-	ErrObservationNotFound  = errors.New("未找到已接入的应用或账号")
-	ErrObservationForbidden = errors.New("当前应用账号未授权读取此内容")
+	ErrObservationInvalid            = errors.New("应用观察请求无效")
+	ErrObservationNotFound           = errors.New("未找到已接入的应用或账号")
+	ErrObservationForbidden          = errors.New("当前应用账号未授权读取此内容")
+	ErrObservationContentUnavailable = errors.New("平台暂时未提供这条内容，请核对编号或公开状态")
+	ErrObservationThrottled          = errors.New("平台限制了本次访问，请稍后重试")
 )
 
 type observationCheckpoint struct {
@@ -138,6 +140,14 @@ func NewObserver(registry Registry, dir string) *Observer {
 }
 
 func (o *Observer) Discover(ctx context.Context) []ObservationTarget {
+	return o.discover(ctx, false)
+}
+
+func (o *Observer) HasDiscoverable(ctx context.Context) bool {
+	return len(o.discover(ctx, true)) > 0
+}
+
+func (o *Observer) discover(ctx context.Context, firstOnly bool) []ObservationTarget {
 	if o == nil || ctx.Err() != nil {
 		return nil
 	}
@@ -165,10 +175,20 @@ func (o *Observer) Discover(ctx context.Context) []ObservationTarget {
 					continue
 				}
 				target.ConnectionRef = ConnectionRef{AppID: app.ID, InstallationID: app.InstallationID, ConnectionID: connection.ID, AccountID: connection.AccountID}
+				candidates := target.Fields
+				if len(candidates) == 0 {
+					candidates = []ObservationField{ObservationTitle, ObservationBody, ObservationComments, ObservationAudio, ObservationPlayback}
+				}
 				target.Fields = nil
-				for _, field := range []ObservationField{ObservationTitle, ObservationBody, ObservationComments, ObservationAudio, ObservationPlayback} {
+				for _, field := range candidates {
+					if !field.valid() || containsObservationField(target.Fields, field) {
+						continue
+					}
 					grant, grantErr := provider.ObservationGrant(ctx, ObservationAccess{ConnectionRef: target.ConnectionRef, ContentID: target.ContentID, Field: field})
 					if grantErr == nil && grant.Allowed && strings.TrimSpace(grant.Version) != "" {
+						if firstOnly {
+							return []ObservationTarget{target}
+						}
 						target.Fields = append(target.Fields, field)
 					}
 				}
@@ -234,6 +254,11 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err != nil {
 		if ctx.Err() != nil {
 			return ObservationResult{}, ctx.Err()
+		}
+		for _, known := range []error{ErrObservationContentUnavailable, ErrObservationThrottled, ErrObservationForbidden, ErrObservationInvalid} {
+			if errors.Is(err, known) {
+				return ObservationResult{}, known
+			}
 		}
 		return ObservationResult{}, errors.New("应用内容暂时无法读取")
 	}

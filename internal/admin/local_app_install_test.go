@@ -18,14 +18,17 @@ func localCatalogApplication(t *testing.T, f *localHomeFixture) map[string]any {
 		t.Fatal(code, catalog)
 	}
 	applications, ok := catalog["applications"].([]any)
-	if !ok || len(applications) != 1 {
+	if !ok {
 		t.Fatal("invalid catalog", catalog)
 	}
-	row, ok := applications[0].(map[string]any)
-	if !ok {
-		t.Fatal("invalid catalog row", catalog)
+	for _, item := range applications {
+		row, ok := item.(map[string]any)
+		if ok && row["id"] == "wechat" {
+			return row
+		}
 	}
-	return row
+	t.Fatal("WeChat catalog row missing", catalog)
+	return nil
 }
 
 func localAppInstallFixture(t *testing.T) (*localHomeFixture, map[string]any) {

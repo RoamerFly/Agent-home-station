@@ -101,6 +101,11 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 		}
 		chat.windows = &copy
 	}
+	registry, err = home.bindBundledBilibili(registry)
+	if err != nil {
+		return nil, err
+	}
+	home.bilibiliRoutes(s, mux, registry)
 	registry, handler.wechat, err = bindStationWechat(registry, chat)
 	if err != nil {
 		return nil, err

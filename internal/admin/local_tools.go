@@ -65,7 +65,7 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 
 func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all := []mcptools.Tool{}
-	if t.observations != nil && len(t.observations.Discover(ctx)) > 0 {
+	if t.observations.HasDiscoverable(ctx) {
 		all = append(all, localAppObservationTool())
 	}
 	if t.wechat != nil && t.wechat.hasContactGrant() {

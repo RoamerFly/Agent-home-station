@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "observation.title",
+      "implementation": "ready",
+      "description": "获取公开稿件的标题",
+      "permissions": ["network"],
+      "discoverable": true
+    },
+    {
+      "id": "observation.body",
+      "implementation": "ready",
+      "description": "获取投稿者填写的稿件简介",
+      "permissions": ["network"],
+      "discoverable": true
+    }
+  ]
+}

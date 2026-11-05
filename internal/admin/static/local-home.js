@@ -52,7 +52,7 @@
     if (view === "project-tools") loadProjectTools();
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "" };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "" };
   }
   function newProjectToolsView() { return { loading: false, applying: "", tools: [] }; }
   function appElement(tag, text, className = "") {
@@ -99,7 +99,9 @@
         note = "当前发行包未提供可用源码，本地聊天可继续使用。";
       } else if (listing.install_state === "not_installed") {
         title = "可安装";
-        note = state.home?.home_access ? `随包版本 ${listing.version}，安装后仍需单独接入账号。` : "请在模型设置中恢复工作空间授权。";
+        note = state.home?.home_access
+          ? `随包版本 ${listing.version}。${record.id === "bilibili" ? "源码副本可在家目录编辑，读取授权单独保存。" : "安装后可单独接入账号。"}`
+          : "请在模型设置中恢复工作空间授权。";
       } else if (listing.install_state === "unavailable") {
         title = "安装状态暂不可读";
         note = "请检查工作空间是否可用。";
@@ -1420,6 +1422,91 @@
     if (canSetup && connection !== null) row.append(appSetupButton("添加账号", () => runAppSetup()));
     return row;
   }
+  function parseBilibiliVideos(value) {
+    const unique = new Set();
+    const invalid = [];
+    for (const item of String(value || "").split(/[\s,，;；]+/).filter(Boolean)) {
+      const match = /^bv([0-9a-z]{10})$/i.exec(item);
+      if (!match) { invalid.push(item); continue; }
+      unique.add("BV" + match[1]);
+    }
+    return { videos: Array.from(unique), invalid };
+  }
+  function bilibiliPublicRow(record) {
+    if (record.id !== "bilibili" || !apps.registered?.some((item) => item.id === "bilibili")) return null;
+    const current = apps;
+    const row = appElement("div", "", "app-layer");
+    const detail = appElement("div", "");
+    const settings = apps.bilibiliPublic;
+    const draft = apps.bilibiliDraft || { revision: Number(settings?.revision || 0), enabled: Boolean(settings?.enabled), videos: Array.isArray(settings?.videos) ? settings.videos.join("\n") : "", dirty: false };
+    if (!apps.bilibiliDraft) apps.bilibiliDraft = draft;
+    detail.append(
+      appElement("strong", settings ? (settings.enabled ? `已授权 · ${settings.videos.length} 条稿件` : "读取未启用") : "读取设置暂不可用"),
+      appElement("p", "匿名读取已列出的 B 站视频标题和投稿者简介。")
+    );
+    if (apps.bilibiliError) detail.append(appElement("small", apps.bilibiliError));
+    const form = appElement("form", "", "details-grid");
+    const videos = document.createElement("textarea");
+    videos.rows = 3;
+    videos.placeholder = "每个 BV 号一行，也可用空格或逗号分隔";
+    videos.value = draft.videos;
+    videos.setAttribute("aria-label", "允许读取的视频 BV 号");
+    videos.addEventListener("input", () => { draft.videos = videos.value; draft.dirty = true; });
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.checked = draft.enabled;
+    enabled.addEventListener("change", () => { draft.enabled = enabled.checked; draft.dirty = true; });
+    const enabledLabel = appElement("label", "", "switch-row");
+    enabledLabel.append(enabled, appElement("span", "允许大肥鱼按需读取这些公开资料"));
+    const actions = appElement("div", "", "app-worker-actions");
+    const save = appElement("button", apps.bilibiliSaving ? "正在保存…" : "保存公开读取设置", "button compact secondary");
+    save.type = "submit";
+    save.disabled = !settings || apps.loading || apps.bilibiliSaving;
+    actions.append(save, appElement("small", "实际读取时才会向 B 站请求对应稿件。"));
+    form.append(appElement("label", "允许读取的视频 BV 号"), videos, enabledLabel, actions);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!settings || current !== apps || current.bilibiliSaving) return;
+      const parsed = parseBilibiliVideos(draft.videos);
+      if (parsed.invalid.length || parsed.videos.length > 100 || (draft.enabled && !parsed.videos.length)) {
+        const reason = parsed.invalid.length ? `BV 号格式不正确：${parsed.invalid.slice(0, 3).join("、")}` : parsed.videos.length > 100 ? "最多可保存 100 个 BV 号。" : "启用前请至少填写一个 BV 号。";
+        appFeedback(reason, true);
+        return;
+      }
+      apps.bilibiliSaving = true;
+      apps.bilibiliError = "";
+      renderApps();
+      try {
+        const value = await request("/api/local/apps/bilibili/public", { method: "PUT", body: JSON.stringify({ revision: Number(draft.revision || 0), enabled: Boolean(draft.enabled), videos: parsed.videos }) });
+        if (current !== apps) return;
+        if (!value || !Number.isFinite(Number(value.revision)) || !Array.isArray(value.videos)) throw new Error("公开读取设置返回格式无效，请刷新后重试。");
+        apps.bilibiliPublic = value;
+        apps.bilibiliDraft = { revision: Number(value.revision), enabled: Boolean(value.enabled), videos: value.videos.join("\n"), dirty: false };
+        appFeedback(value.enabled ? "公开读取已启用，大肥鱼可按需读取列出的 BV 号。" : "公开读取已关闭，已保留 BV 号列表。");
+      } catch (error) {
+        if (current !== apps) return;
+        if (appSessionExpired([{ status: "rejected", reason: error }])) return;
+        if (error.status === 409) {
+          const saved = await request("/api/local/apps/bilibili/public").catch(() => null);
+          if (current !== apps) return;
+          if (saved) {
+            apps.bilibiliPublic = saved;
+            draft.revision = saved.revision;
+          }
+          apps.bilibiliError = saved ? `设置已更新为${saved.enabled ? "启用" : "停用"}，已保存 BV 号 ${saved.videos.join("、") || "无"}。你的输入仍在表单中。` : "设置已变化，请刷新后重新核对。";
+        } else {
+          apps.bilibiliError = error.message;
+        }
+        appFeedback(apps.bilibiliError, true);
+      } finally {
+        current.bilibiliSaving = false;
+        if (current === apps) renderApps();
+      }
+    });
+    detail.append(form);
+    row.append(appElement("h5", "公开读取"), detail);
+    return row;
+  }
   function renderApps() {
     const list = $("#apps-list");
     list.setAttribute("aria-busy", String(apps.loading || Boolean(apps.installing)));
@@ -1440,7 +1527,8 @@
       const mark = appElement("span", Array.from(label)[0], "app-mark");
       mark.setAttribute("aria-hidden", "true");
       head.append(mark, appElement("h4", label));
-      card.append(head, appSourceRow(record, catalog.get(record.id)), appConnectionRow(record));
+      const layers = [head, appSourceRow(record, catalog.get(record.id)), record.id === "bilibili" ? bilibiliPublicRow(record) : appConnectionRow(record)].filter(Boolean);
+      card.append(...layers);
       return card;
     }));
   }
@@ -1460,6 +1548,13 @@
         ? connectionMap.get("wechat") : [];
       const statuses = await Promise.allSettled(nativeAccounts.map((account) => request(`/api/apps/wechat/connections/${encodeURIComponent(account.id)}`)));
       if (current !== apps || appSessionExpired(statuses)) return;
+      const hasBilibili = registered?.some((app) => app.id === "bilibili");
+      let bilibili = null;
+      if (hasBilibili) {
+        const result = await Promise.allSettled([request("/api/local/apps/bilibili/public")]);
+        if (current !== apps || appSessionExpired(result)) return;
+        bilibili = result[0];
+      }
       current.catalog = appRows(result[0], "applications");
       current.registered = registered;
       current.connections = connectionMap;
@@ -1468,6 +1563,19 @@
         const details = entry.status === "fulfilled" ? entry.value.connection : null;
         return [account.id, details?.id === account.id ? details : null];
       }));
+      if (bilibili?.status === "fulfilled") {
+        const value = bilibili.value;
+        current.bilibiliPublic = value;
+        current.bilibiliError = "";
+        if (!current.bilibiliDraft || !current.bilibiliDraft.dirty) current.bilibiliDraft = { revision: Number(value.revision || 0), enabled: Boolean(value.enabled), videos: Array.isArray(value.videos) ? value.videos.join("\n") : "", dirty: false };
+      } else if (hasBilibili) {
+        current.bilibiliPublic = null;
+        current.bilibiliError = bilibili?.reason?.message || "公开读取设置暂不可读。";
+      } else {
+        current.bilibiliPublic = null;
+        current.bilibiliDraft = null;
+        current.bilibiliError = "";
+      }
     } finally {
       if (current === apps) {
         current.loading = false;

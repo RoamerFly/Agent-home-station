@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "kind": "station-public-observer",
+  "host_entrypoint": "bilibili-public",
+  "connection_authority": "host",
+  "connection": "public",
+  "authentication": "anonymous",
+  "observation_fields": ["title", "body"]
+}

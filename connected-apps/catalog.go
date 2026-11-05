@@ -22,7 +22,7 @@ type Contract struct {
 }
 
 func Lookup(id string) (Contract, error) {
-	if id != "wechat" {
+	if id != "wechat" && id != "bilibili" {
 		return Contract{}, errors.New("应用不在本机发行目录中")
 	}
 	data, err := descriptors.ReadFile(id + "/app.json")

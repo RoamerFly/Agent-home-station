@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "id": "bilibili",
+  "name": "哔哩哔哩",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "application_protocol": 1,
+  "host_compatibility": ">=0.1.0 <1.0.0",
+  "status": "ready",
+  "platforms": [
+    "windows-amd64"
+  ],
+  "runtime": {
+    "transport": "http-adapter",
+    "entrypoint": "adapter/entry.json"
+  },
+  "permissions": [
+    "network"
+  ],
+  "capability_ids": [
+    "observation.title",
+    "observation.body"
+  ],
+  "http_routes": [
+    {
+      "id": "public-video-metadata",
+      "endpoint": "https://api.bilibili.com/x/web-interface/view",
+      "capabilities": [
+        "observation.title",
+        "observation.body"
+      ]
+    }
+  ],
+  "files": {
+    "adapter/entry.json": "2c177251981bacd0316a435cf5997369a163aaf3f6a63cca3d5dfc8d2d5ee237",
+    "adapter/public.go": "bf0bbe255584c329adbb7ec26f5b8b000359da8d5018060d8939c6018ffe6e55",
+    "adapter/public_test.go": "a0e5de06a2477732a3ca2d090face7b2fd7bf0e7e841fcdca71805ea57c12f64",
+    "capabilities.json": "5fcf8c3a46f9c245dd3575d116bf1453c50c75af69b9a68eec6456b86c343527",
+    "CHANGELOG.md": "480c8675dd2a8f164b35d2d43924c93d6d0c78bfdea3ea2109f39e921526b942",
+    "config.schema.json": "66786fd75b05affd43df365255af0a11d37e8df7f10a53d63fc64382296fb022",
+    "MIGRATION.md": "7f986a3bf69df65366bfd025dfd32368554f13279d18a6694c601f348de18a6f",
+    "PERMISSIONS.md": "c2752d6e2c0f013d389e53ebe6dfce416c158c23681b31d52ec1c26ec638c727",
+    "README.md": "4fd47a616d823d6ea421e7fa102104d2ff7028f50ea202ff396913796530d2f7",
+    "ui.schema.json": "8d4b92200a959306e185b69737a7205a8ae4a8100d4edcb68a3b1b808fe70754"
+  }
+}

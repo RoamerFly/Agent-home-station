@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	appcatalog "wechat-bot/connected-apps"
+	biliapp "wechat-bot/connected-apps/bilibili/adapter"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/workspacefs"
 )
@@ -25,22 +26,28 @@ func (h *localHomeService) configureAppCatalog() {
 func (h *localHomeService) appInstallRoutes(s *Server, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/local/apps/catalog", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		contract, err := appcatalog.Lookup("wechat")
-		if err != nil {
-			fail(w, http.StatusServiceUnavailable, err.Error())
-			return
+		rows := make([]map[string]any, 0, 2)
+		for _, id := range []string{"wechat", biliapp.ID} {
+			contract, _, sourceErr := h.verifyAppSource(id)
+			if contract.Package.ID == "" {
+				fail(w, http.StatusServiceUnavailable, "应用发行目录不可读")
+				return
+			}
+			installState, installedVersion := h.appInstallState(contract)
+			if id == biliapp.ID && sourceErr != nil && installState != "installed" && installState != "conflict" {
+				continue
+			}
+			row := map[string]any{
+				"id": id, "name": contract.Package.Name, "version": contract.Package.Version,
+				"digest": contract.Digest, "source_available": sourceErr == nil, "state": "source_only",
+				"install_state": installState,
+			}
+			if installedVersion != "" {
+				row["installed_version"] = installedVersion
+			}
+			rows = append(rows, row)
 		}
-		_, _, sourceErr := h.verifyAppSource("wechat")
-		installState, installedVersion := h.appInstallState(contract)
-		row := map[string]any{
-			"id": "wechat", "name": contract.Package.Name, "version": contract.Package.Version,
-			"digest": contract.Digest, "source_available": sourceErr == nil, "state": "source_only",
-			"install_state": installState,
-		}
-		if installedVersion != "" {
-			row["installed_version"] = installedVersion
-		}
-		respond(w, http.StatusOK, map[string]any{"applications": []any{row}})
+		respond(w, http.StatusOK, map[string]any{"applications": rows})
 	}))
 	mux.HandleFunc("POST /api/local/apps/{app}/install", s.protected(h.installAppSource))
 }
