@@ -259,35 +259,49 @@ func (a stationAttachmentAccess) DownloadAttachment(ctx context.Context, thread,
 }
 
 type stationAttachmentTools struct {
-	native  *linuxnative.Sender
-	store   *companion.Store
-	dir     string
-	grants  map[string]time.Time
-	blocked func() bool
-	trace   companion.Input
+	native   *linuxnative.Sender
+	store    *companion.Store
+	dir      string
+	grants   map[string]time.Time
+	replies  map[string]time.Time
+	blocked  func() bool
+	trace    companion.Input
+	prepared map[string]companion.GeneratedMedia
 }
 
 func (t *stationAttachmentTools) ForkTools() companion.ToolAccess {
 	copy := *t
 	copy.trace = companion.Input{}
+	copy.prepared = nil
 	return &copy
 }
 
-func (t *stationAttachmentTools) SetTrace(in companion.Input) { t.trace = in }
+func (t *stationAttachmentTools) SetTrace(in companion.Input) { t.trace, t.prepared = in, nil }
 
 func (t *stationAttachmentTools) allowed() bool {
-	in := t.trace
-	grant := t.grants[in.Thread]
+	return t.scopeAllowed(t.trace, t.grants)
+}
+
+func (t *stationAttachmentTools) scopeAllowed(in companion.Input, grants map[string]time.Time) bool {
+	grant := grants[in.Thread]
 	stamp, err := time.Parse(time.RFC3339Nano, in.MessageTime)
 	return !t.blocked() && !in.Preview && !in.Surf && !in.ReportOnly && in.Account == t.native.Account() &&
 		!grant.IsZero() && err == nil && !stamp.Before(grant)
+}
+
+func (t *stationAttachmentTools) replyAllowed(in companion.Input) bool {
+	return in.Mode == "direct" && in.Directed && !in.HistoricalReview && t.scopeAllowed(in, t.replies)
 }
 
 func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	if ctx.Err() != nil || !t.allowed() || !stationAttachmentRef(t.trace.Source) && !stationAttachmentRef(t.trace.QuotedSource) {
 		return nil, nil
 	}
-	return []mcptools.Tool{wechatapp.StationAttachmentTool()}, nil
+	tools := []mcptools.Tool{wechatapp.StationAttachmentTool()}
+	if t.replyAllowed(t.trace) {
+		tools = append(tools, wechatapp.StationAttachmentReplyTool())
+	}
+	return tools, nil
 }
 
 func stationAttachmentRef(ref *companion.SourceRef) bool {
@@ -295,25 +309,35 @@ func stationAttachmentRef(ref *companion.SourceRef) bool {
 }
 
 func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if name == "wechat_attachment_reply_prepare" {
+		return t.prepareReply(ctx, raw)
+	}
 	var in struct {
 		Message string `json:"message_id"`
 	}
 	if name != "wechat_file_read" || !t.allowed() || strictLocalMemoryDecode(raw, &in) != nil || in.Message == "" {
 		return "", wechatapp.ErrAttachmentDenied
 	}
-	ref := t.trace.Source
-	if in.Message != t.trace.TraceID {
-		ref = t.trace.QuotedSource
+	access, err := t.attachmentAccess(t.trace, in.Message, t.allowed)
+	if err != nil {
+		return "", err
 	}
-	if !stationAttachmentRef(ref) || ref.MessageID != in.Message {
-		return "", wechatapp.ErrAttachmentDenied
-	}
-	access := stationAttachmentAccess{native: t.native, dir: t.dir, thread: t.trace.Thread, message: in.Message,
-		grant: t.grants[t.trace.Thread], allowed: t.allowed, ref: ref, store: t.store}
 	result, err := wechatapp.ReadAttachment(ctx, raw, access)
 	if err != nil {
 		return "", err
 	}
 	data, err := json.Marshal(result)
 	return string(data), err
+}
+
+func (t *stationAttachmentTools) attachmentAccess(in companion.Input, message string, allowed func() bool) (stationAttachmentAccess, error) {
+	ref := in.Source
+	if message != in.TraceID {
+		ref = in.QuotedSource
+	}
+	if !stationAttachmentRef(ref) || ref.MessageID != message {
+		return stationAttachmentAccess{}, wechatapp.ErrAttachmentDenied
+	}
+	return stationAttachmentAccess{native: t.native, dir: t.dir, thread: in.Thread, message: message,
+		grant: t.grants[in.Thread], allowed: allowed, ref: ref, store: t.store}, nil
 }

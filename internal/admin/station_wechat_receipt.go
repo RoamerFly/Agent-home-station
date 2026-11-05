@@ -2,10 +2,12 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
+	"wechat-bot/internal/linuxnative"
 )
 
 func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphost.Receipt, error) {
@@ -36,6 +38,30 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 		ConversationID:  row.Status.ThreadID,
 		DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"},
 	}
-	queryWechatDelivery(ctx, native, row.Status.ThreadID, row.SourceID, row.Status, false, &result.DeliveryReceipt)
+	var reader any = native
+	if row.StrictSource {
+		reader = stationMediaReceiptReader{native, row.SourceID, row.Status.Kind}
+	}
+	queryWechatDelivery(ctx, reader, row.Status.ThreadID, row.SourceID, row.Status, row.StrictSource && row.Status.ID != "", &result.DeliveryReceipt)
 	return result, nil
+}
+
+type stationMediaReceiptReader struct {
+	native       *linuxnative.Sender
+	source, kind string
+}
+
+func (r stationMediaReceiptReader) validate(status linuxnative.ToolStatus, err error) (linuxnative.ToolStatus, error) {
+	if err == nil && (r.source == "" || status.SourceID != r.source || status.AccountID != r.native.Account() || status.Kind != "send" && status.Kind != r.kind) {
+		return linuxnative.ToolStatus{}, errors.New("station_media_receipt_identity_mismatch")
+	}
+	return status, err
+}
+
+func (r stationMediaReceiptReader) LookupSend(ctx context.Context, key string) (linuxnative.ToolStatus, error) {
+	return r.validate(r.native.LookupSend(ctx, key))
+}
+
+func (r stationMediaReceiptReader) ToolSendStatus(ctx context.Context, id string) (linuxnative.ToolStatus, error) {
+	return r.validate(r.native.ToolSendStatus(ctx, id))
 }

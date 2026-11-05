@@ -40,6 +40,8 @@ type Config struct {
 	BacklogSettled      func(string, string, []string, string)
 	AuthorizeThread     func(context.Context, string) (bool, error)
 	AuthorizeReply      func(companion.Input) bool
+	AuthorizeMedia      func(companion.Input) bool
+	PrepareMediaSource  func(context.Context, companion.Input, string, string) (string, error)
 	AgentTask           func(time.Time, func(string) bool) (*companion.Input, error)
 	AgentTaskDone       func(companion.Input, string)
 	AgentTaskRetry      func(companion.Input, time.Duration, string)
@@ -97,16 +99,17 @@ type GroupRule struct {
 	ForceReplyWhenMentioned bool
 }
 type Worker struct {
-	generation      *generationScheduler
-	runtime         *runtimeState
-	persistErr      error
-	recovering      bool
-	config          Config
-	source          Source
-	model           Model
-	sender          sending.Engine
-	allowed         map[string]bool
-	lastMaintenance time.Time
+	generation       *generationScheduler
+	mediaPreparation *mediaPreparation
+	runtime          *runtimeState
+	persistErr       error
+	recovering       bool
+	config           Config
+	source           Source
+	model            Model
+	sender           sending.Engine
+	allowed          map[string]bool
+	lastMaintenance  time.Time
 }
 
 func New(config Config, source Source, model Model, sender sending.Engine) (*Worker, error) {

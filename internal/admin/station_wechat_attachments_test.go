@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
 )
 
 func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
@@ -33,10 +36,19 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	}
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
 	occurred := time.Now().UTC().Add(time.Minute)
-	var transfers atomic.Int32
+	var transfers, uploads atomic.Int32
+	var wrongUpload atomic.Bool
 	var corrupt, wrongAsset, changedSource, thumbnailOnly atomic.Bool
 	var blockContent atomic.Bool
+	var requestReady atomic.Bool
+	var requestAt atomic.Value
+	requestAt.Store("")
+	submitted := make(chan string, 2)
 	contentStarted, releaseContent := make(chan struct{}, 1), make(chan struct{})
+	originalMessage := func(body string) linuxnative.Message {
+		return linuxnative.Message{ID: "msg", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1234",
+			Type: 3, Direction: "incoming", Body: body, CreatedAt: occurred.Format(time.RFC3339Nano)}
+	}
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+token {
 			w.WriteHeader(401)
@@ -55,8 +67,26 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 			if changedSource.Load() {
 				body += "-revision"
 			}
-			out(linuxnative.Message{ID: "msg", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1234",
-				Type: 3, Direction: "incoming", Body: body, CreatedAt: occurred.Format(time.RFC3339Nano)})
+			out(originalMessage(body))
+		case "GET /v1/accounts/one/events":
+			after := r.URL.Query().Get("after")
+			page := linuxnative.EventPage{NextCursor: after}
+			if requestReady.Load() && after == "0" {
+				event := linuxnative.Event{Cursor: "1", Kind: "message.committed"}
+				event.Data.MessageID, event.Data.ThreadID, event.Data.Direction = "request", "room@chatroom", "incoming"
+				page.Items, page.NextCursor = []linuxnative.Event{event}, "1"
+			}
+			out(page)
+		case "GET /v1/accounts/one/messages/request":
+			yes, subtype := true, 57
+			m := linuxnative.Message{ID: "request", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1235",
+				Type: 49, AppMessageType: &subtype, Quote: &linuxnative.QuoteReference{ServerID: "1234", Type: 3}, Direction: "incoming",
+				Body: "@大肥鱼 把引用图片发回这里", CreatedAt: requestAt.Load().(string)}
+			m.Mentions.State, m.Mentions.Self = "known", &yes
+			out(m)
+		case "GET /v1/accounts/one/messages/request/quote":
+			original := originalMessage(sourceBody)
+			out(linuxnative.QuoteResolution{AccountID: "one", ThreadID: "room@chatroom", MessageID: "request", State: "resolved", Message: &original})
 		case "GET /v1/accounts/one/messages/msg/media":
 			items := []map[string]any{{"accountId": "one", "messageId": "msg", "kind": "image", "variant": "thumbnail", "actualVariant": "thumbnail", "state": "available"}}
 			if !thumbnailOnly.Load() {
@@ -91,6 +121,34 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 				return
 			}
 			_, _ = io.WriteString(w, content)
+		case "POST /v1/accounts/one/uploads":
+			uploads.Add(1)
+			file, header, err := r.FormFile("file")
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			data, err := io.ReadAll(file)
+			file.Close()
+			if err != nil || string(data) != content || header.Filename != "image.bin" {
+				t.Error("upload did not use verified original", err)
+			}
+			digest := hash
+			if wrongUpload.Load() {
+				digest = "wrong"
+			}
+			out(map[string]any{"id": "upload-verified", "name": header.Filename, "byteLength": len(data), "sha256": digest})
+		case "POST /v1/accounts/one/sends":
+			var body map[string]any
+			key := r.Header.Get("Idempotency-Key")
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || key == "" || body["sourceId"] != "upload-verified" || body["threadId"] != "room@chatroom" || body["kind"] != "image" {
+				t.Error("unexpected native attachment submission", body, err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			out(map[string]any{"id": "synthetic-send", "accountId": "one", "threadId": "room@chatroom", "kind": "send", "sourceId": "upload-verified", "state": "accepted", "serverMessageId": "2311"})
+			submitted <- key
 		default:
 			http.NotFound(w, r)
 		}
@@ -147,6 +205,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	f.login()
 	req("POST", path+"/attachments", map[string]string{}, false, 403)
 	policy(400, "other-room")
+	req("PUT", path+"/policy", map[string]any{"reply_threads": []string{thread}, "media_reply_threads": []string{thread}}, true, 400)
 	policy(200)
 	acquire(404)
 	if transfers.Load() != 0 {
@@ -194,7 +253,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	memory, err := companion.NewStore(filepath.Join(base, "isolated-memory"))
+	memory, err := companion.NewStore(filepath.Join(worker.dir, "memory"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,6 +289,69 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	tools.SetTrace(textTurn)
 	if result, err := tools.Call(t.Context(), "wechat_file_read", json.RawMessage(`{"message_id":"msg"}`)); err != nil || !json.Valid([]byte(result)) {
 		t.Fatal("verified quoted media call failed", err)
+	}
+	req("PUT", path+"/policy", map[string]any{"reply_threads": []string{thread}, "media_reply_threads": []string{thread}}, true, 200)
+	worker.mu.Lock()
+	tools.replies = worker.policy.MediaReplyGrants
+	worker.mu.Unlock()
+	textTurn.Mode, textTurn.Directed = "direct", true
+	tools.SetTrace(textTurn)
+	prepared, err := tools.Call(t.Context(), "wechat_attachment_reply_prepare", json.RawMessage(`{"message_id":"msg"}`))
+	var responsePayload struct {
+		Media []companion.GeneratedMedia `json:"media"`
+	}
+	if err != nil || json.Unmarshal([]byte(prepared), &responsePayload) != nil || len(responsePayload.Media) != 1 || uploads.Load() != 0 {
+		t.Fatal("attachment preparation uploaded bytes or failed", prepared, err)
+	}
+	selection := responsePayload.Media[0]
+	if selected, ok := tools.Media(selection.ID); !ok || selected.AssetID != asset || selected.SourceID != "" || selected.Kind != "image" {
+		t.Fatal("unexpected prepared handle", selected)
+	}
+	if _, err := tools.stageReply(t.Context(), textTurn, "video", asset); err == nil || uploads.Load() != 0 {
+		t.Fatal("format substitution reached native upload")
+	}
+	wrongUpload.Store(true)
+	if _, err := tools.stageReply(t.Context(), textTurn, "image", asset); err == nil {
+		t.Fatal("wrong staged digest accepted")
+	}
+	wrongUpload.Store(false)
+	if source, err := tools.stageReply(t.Context(), textTurn, "image", asset); err != nil || source != "upload-verified" || uploads.Load() != 2 {
+		t.Fatal("verified native upload failed", source, err)
+	}
+	tools.SetTrace(in)
+	if _, ok := tools.Media(selection.ID); ok {
+		t.Fatal("prepared handle persisted into another turn")
+	}
+	if err := memory.Close(); err != nil {
+		t.Fatal(err)
+	}
+	settings := defaultLocalModelSettings()
+	settings.BaseURL = "https://127.0.0.1:1"
+	if _, err := handler.chat.models.Save(LocalModelInput{LocalModelSettings: settings, APIKey: "synthetic-offline-model"}); err != nil {
+		t.Fatal(err)
+	}
+	handler.wechat.model = stationAttachmentReplyModel{mediaID: selection.ID}
+	req("POST", path+"/lifecycle", map[string]string{"action": "start"}, true, 200)
+	waitAppLifecycle(t, func() bool {
+		row := req("GET", path, nil, false, 200)
+		return row["connection"].(map[string]any)["worker"] == "running"
+	})
+	requestAt.Store(time.Now().UTC().Format(time.RFC3339Nano))
+	requestReady.Store(true)
+	var deliveryKey string
+	select {
+	case deliveryKey = <-submitted:
+	case <-time.After(35 * time.Second): // The real group collection window is 20 seconds.
+		queue, _ := os.ReadFile(filepath.Join(worker.dir, "queue", "messages-v2.json"))
+		t.Fatalf("worker did not submit the verified quoted attachment: %s", queue)
+	}
+	waitAppLifecycle(t, func() bool {
+		code, receipt := f.request("GET", path+"/receipts/"+deliveryKey, nil, false)
+		return code == 200 && strings.Contains(fmt.Sprint(receipt), "2311")
+	})
+	req("POST", path+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
+	if len(submitted) != 0 || uploads.Load() != 3 {
+		t.Fatal("worker repeated upload or submit", uploads.Load(), len(submitted))
 	}
 	policy(200)
 	get(path+contentRoute, 404)
@@ -274,4 +396,24 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	if err != nil || len(entries) != 2 {
 		t.Fatal("revoked transfer left a staged or published copy", entries, err)
 	}
+}
+
+type stationAttachmentReplyModel struct{ mediaID string }
+
+func (m stationAttachmentReplyModel) Chat(ctx context.Context, system string, history []map[string]string) (string, error) {
+	return m.ChatFunctions(ctx, system, history, nil)
+}
+
+func (m stationAttachmentReplyModel) ChatFunctions(_ context.Context, _ string, history []map[string]string, tools []mcptools.Tool) (string, error) {
+	for _, turn := range history {
+		if strings.Contains(turn["content"], m.mediaID) {
+			return fmt.Sprintf(`{"action":"reply","messages":[],"media_ids":[%q]}`, m.mediaID), nil
+		}
+	}
+	for _, tool := range tools {
+		if tool.Name == "wechat_attachment_reply_prepare" {
+			return `{"action":"tool","tool":"wechat_attachment_reply_prepare","arguments":{"message_id":"msg"}}`, nil
+		}
+	}
+	return `{"action":"tool","tool":"discover_tools","arguments":{"query":"wechat_attachment_reply_prepare"}}`, nil
 }

@@ -123,6 +123,8 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 
 主人也可以使用已登录的管理会话调用 `POST /api/apps/wechat/connections/{connection}/attachments`，带上 CSRF 和 `thread_id`、`message_id`。使用返回的 `asset_id` 请求 `GET /api/apps/wechat/connections/{connection}/attachments/{asset}/content` 下载原件。每次取得均校验微信连接及原消息归属，下载内容需通过大小及 SHA-256 核验。单件上限为 512 MiB。此步骤验证原件取得；内容解析、媒体外发和真实账号的收取验证分开进行。
 
+要让大肥鱼把本轮附件发回原会话，将该会话同时加入「附件读取会话 ID」和「附件回复会话 ID」，保存后启动该连接。在已授权会话中明确请求回复当前或引用的附件即可。`wechat_attachment_reply_prepare` 生成本轮可选编号，实际上传和发送在模型选用后由队列处理。语音沿用原生分段，停止请求保留已接受片段。按原提交键读取 `/api/apps/wechat/connections/{connection}/receipts/{key}` 可核对原任务。`media_reply_threads` 是独立的授权字段，显式提交空数组可撤销，撤销上级读取范围也会撤销相应的附件回复。
+
 ### 在隔离副本预演旧版微信接入
 
 1. 正常排空并退出旧桌面服务，保留其原安装。将需要核对的旧宿主数据做成单独的停机快照，保存在本机私有目录。快照包含旧数据根下的 `admin/config.json`、可选的 `admin/accounts.json` 和各账号配置，以及 `bot-state`。新成长站数据根、鱼家工作空间、旧快照分别放置。

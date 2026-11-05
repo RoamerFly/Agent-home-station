@@ -50,7 +50,7 @@
     else window.clearTimeout(apps.loginTimer);
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), attachmentDrafts: new Map(), editWorker: "" };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), editWorker: "" };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -238,13 +238,21 @@
     attachments.setAttribute("aria-label", "附件读取会话 ID");
     attachments.value = apps.attachmentDrafts.get(id) ?? (status.configured_policy?.attachment_threads || []).join("\n");
     attachments.addEventListener("input", () => apps.attachmentDrafts.set(id, attachments.value));
+    const mediaReplies = document.createElement("textarea");
+    mediaReplies.rows = 2;
+    mediaReplies.placeholder = "可留空，或填入已允许读取附件的会话 ID";
+    mediaReplies.setAttribute("aria-label", "附件回复会话 ID");
+    mediaReplies.value = apps.mediaReplyDrafts.get(id) ?? (status.configured_policy?.media_reply_threads || []).join("\n");
+    mediaReplies.addEventListener("input", () => apps.mediaReplyDrafts.set(id, mediaReplies.value));
     const save = appSetupButton("保存回复范围", () => {
       const reply_threads = field.value.split(/[\s，,]+/u).filter(Boolean);
       const attachment_threads = attachments.value.split(/[\s，,]+/u).filter(Boolean);
-      runWorkerAction(id, "PUT", "policy", { reply_threads, attachment_threads });
+      const media_reply_threads = mediaReplies.value.split(/[\s，,]+/u).filter(Boolean);
+      runWorkerAction(id, "PUT", "policy", { reply_threads, attachment_threads, media_reply_threads });
     });
     panel.append(appElement("p", "每行一个会话 ID。群聊仅在被提及时回复。"), field,
-      appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments, save);
+      appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments,
+      appElement("p", "附件回复须单独授权，只能把本会话的附件发回本会话。"), mediaReplies, save);
     return panel;
   }
   async function runWorkerAction(id, method, action, body) {
@@ -260,6 +268,7 @@
       if (action === "policy") {
         current.workerDrafts.delete(id);
         current.attachmentDrafts.delete(id);
+        current.mediaReplyDrafts.delete(id);
         appFeedback(result.connection?.submissions_paused ? "回复范围已保存，Agent 已暂停。" : "回复范围已保存。");
       } else {
         appFeedback(body.action === "stop" ? "已暂停此账号的 Agent。" : "已启动此账号的 Agent，正在确认状态。");

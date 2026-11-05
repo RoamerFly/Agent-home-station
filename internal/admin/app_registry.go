@@ -71,8 +71,9 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 			return
 		}
 		var input struct {
-			Threads     *[]string `json:"reply_threads"`
-			Attachments *[]string `json:"attachment_threads"`
+			Threads      *[]string `json:"reply_threads"`
+			Attachments  *[]string `json:"attachment_threads"`
+			MediaReplies *[]string `json:"media_reply_threads"`
 		}
 		if !decode(w, r, &input) {
 			return
@@ -81,12 +82,12 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 			fail(w, http.StatusBadRequest, "请提供明确的回复会话列表")
 			return
 		}
-		view, err := writer.SetConnectionPolicy(r.Context(), r.PathValue("connection"), apphost.ConnectionPolicyInput{ReplyThreads: *input.Threads, AttachmentThreads: input.Attachments})
+		view, err := writer.SetConnectionPolicy(r.Context(), r.PathValue("connection"), apphost.ConnectionPolicyInput{ReplyThreads: *input.Threads, AttachmentThreads: input.Attachments, MediaReplyThreads: input.MediaReplies})
 		switch {
 		case errors.Is(err, apphost.ErrNotFound):
 			fail(w, http.StatusNotFound, "应用连接不存在")
 		case errors.Is(err, apphost.ErrInvalidConnectionPolicy):
-			fail(w, http.StatusBadRequest, "会话 ID 必须有效且不重复，最多 100 个。附件会话必须已选入回复范围")
+			fail(w, http.StatusBadRequest, "会话 ID 必须有效且不重复，最多 100 个。附件读取须在回复范围内，附件回复须在附件读取范围内")
 		case errors.Is(err, apphost.ErrLifecycleConflict):
 			fail(w, http.StatusConflict, "正在停止旧的回复任务，请稍后查询连接状态")
 		case err != nil:

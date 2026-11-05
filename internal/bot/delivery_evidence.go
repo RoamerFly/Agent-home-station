@@ -15,6 +15,7 @@ import (
 type DeliveryEvidence struct {
 	Trace, SourceID string
 	Status          linuxnative.ToolStatus
+	StrictSource    bool
 }
 
 const MaxDeliveryCheckpointBytes = 24 << 20
@@ -95,11 +96,12 @@ func decodeDeliveryEvidence(raw []byte, account string, keys []string) (map[stri
 		} `json:"deliveries"`
 		Media []*struct {
 			deliveryCheckpointIdentity
-			Kind          string                 `json:"kind"`
-			Reason        string                 `json:"reason"`
-			SourceID      string                 `json:"source_id"`
-			UserCancelled bool                   `json:"user_cancelled"`
-			Status        linuxnative.ToolStatus `json:"status"`
+			Kind           string                 `json:"kind"`
+			Reason         string                 `json:"reason"`
+			SourceID       string                 `json:"source_id"`
+			DeferredSource bool                   `json:"deferred_source"`
+			UserCancelled  bool                   `json:"user_cancelled"`
+			Status         linuxnative.ToolStatus `json:"status"`
 		} `json:"media"`
 	}
 	if len(raw) > MaxDeliveryCheckpointBytes || json.Unmarshal(raw, &snapshot) != nil || snapshot.Version != 1 || snapshot.Account != account || len(snapshot.Deliveries) > 3000 || len(snapshot.Media) > 1000 {
@@ -168,13 +170,13 @@ func decodeDeliveryEvidence(raw []byte, account string, keys []string) (map[stri
 			switch {
 			case d.State == "prepared":
 				status.State = "prepared"
-			case d.State == "stopped" && d.UserCancelled && d.Reason == "media_cancelled_before_native_submission":
+			case d.State == "stopped" && (d.DeferredSource && d.SourceID == "" || d.UserCancelled && d.Reason == "media_cancelled_before_native_submission"):
 				status.State = "cancelled"
 			default:
 				status.State = "unknown"
 			}
 		}
-		if err := add(d.Key, DeliveryEvidence{Trace: d.Trace, SourceID: d.SourceID, Status: status}); err != nil {
+		if err := add(d.Key, DeliveryEvidence{Trace: d.Trace, SourceID: d.SourceID, Status: status, StrictSource: d.DeferredSource}); err != nil {
 			return nil, err
 		}
 	}

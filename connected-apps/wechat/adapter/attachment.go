@@ -116,3 +116,8 @@ func ReadAttachment(ctx context.Context, raw json.RawMessage, host AttachmentHos
 func StationAttachmentTool() mcptools.Tool {
 	return tool("wechat_file_read", "取得本轮或已核验引用的微信文件、图片、语音、视频原件，返回素材编号与校验信息。不能把取得原件说成已看、已听、已转写或已发送。输入 message_id，引用时使用引用源的原消息编号。", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192}},"required":["message_id"],"additionalProperties":false}`)
 }
+
+// StationAttachmentReplyTool prepares a response using a verified inbound source.
+func StationAttachmentReplyTool() mcptools.Tool {
+	return tool("wechat_attachment_reply_prepare", "为本会话的当前消息或核验引用准备原附件回复。只准备，尚未上传或发送。用返回的 media.id 放进最终 reply 的 media_ids。默认按原媒体类型发送；用户明确要原文件时用 format=file。", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"format":{"type":"string","enum":["original","file"]}},"required":["message_id"],"additionalProperties":false}`)
+}
