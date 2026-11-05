@@ -2,9 +2,10 @@
   "use strict";
   const $ = (selector) => document.querySelector(selector);
   const state = { csrf: "", home: null, model: null, busy: false, chat: { items: [], nextCursor: "", hasMore: false, busy: false, loading: false, pending: new Map(), failed: new Map(), poll: 0 } };
-  const tabs = ["chat", "apps", "settings"];
+  const tabs = ["chat", "apps", "project-tools", "settings"];
   let activeView = "chat";
   let apps = newAppView();
+  let projectTools = newProjectToolsView();
   const loginView = $("#login-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
   const loginSubmit = $("#login-submit"), initializeButton = $("#initialize-button"), accessButton = $("#access-button"), logoutButton = $("#logout-button");
   const settingsAccessButton = $("#settings-access-button"), settingsLogoutButton = $("#settings-logout-button"), chatStream = $("#chat-stream");
@@ -48,10 +49,12 @@
     }
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
     else window.clearTimeout(apps.loginTimer);
+    if (view === "project-tools") loadProjectTools();
   }
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "" };
   }
+  function newProjectToolsView() { return { loading: false, applying: "", tools: [] }; }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
     node.textContent = text;
@@ -62,6 +65,11 @@
     const feedback = $("#apps-feedback");
     feedback.textContent = text;
     feedback.classList.toggle("is-warn", warn);
+  }
+  function projectToolsFeedback(text, warn = false) {
+    const feedback = $("#project-tools-feedback");
+    feedback.textContent = text || "";
+    feedback.classList.toggle("is-warn", Boolean(warn));
   }
   function appSessionExpired(results) {
     if (!results.some((result) => result.status === "rejected" && result.reason?.status === 401)) return false;
@@ -1501,12 +1509,103 @@
       }
     }
   }
+  function projectToolStatus(tool) {
+    if (!tool || !tool.installed && !tool.catalog_available) return ["未随当前发行包提供", "请安装包含此工具的 Windows 发行包。"];
+    if (!tool.runtime_ready) return ["缺少本地运行环境", "工具尚不能启动；先补齐本机运行环境或依赖包。"];
+    if (!tool.installed) return ["尚未安装", "安装后才会把工具放入大肥鱼的项目环境。"];
+    if (!tool.enabled) return ["已安装，未启用", "需要时启用；停用不会删除已生成的本地成品。"];
+    if (tool.state === "running") return ["已启动", "本地运行器空闲一段时间后会自动关闭。"];
+    if (tool.state === "failed") return ["运行异常", "下次有本地任务时会尝试重新启动。"];
+    return ["已启用，待命", "会在本地聊天实际需要时启动，不会取得网络或应用账号权限。"];
+  }
+  function renderProjectTools() {
+    const list = $("#project-tools-list"), current = projectTools;
+    list.setAttribute("aria-busy", String(current.loading || Boolean(current.applying)));
+    $("#project-tools-refresh").disabled = current.loading || Boolean(current.applying);
+    $("#project-tools-refresh").textContent = current.loading ? "刷新中…" : "刷新";
+    if (current.loading && !current.tools.length) {
+      list.replaceChildren(appElement("p", "正在读取项目工具…", "project-tools-empty"));
+      return;
+    }
+    if (!current.tools.length) {
+      list.replaceChildren(appElement("p", "当前没有可管理的项目工具。", "project-tools-empty"));
+      return;
+    }
+    list.replaceChildren(...current.tools.map((tool) => {
+      const card = appElement("article", "", "project-tool-record");
+      const [status, note] = projectToolStatus(tool);
+      const head = appElement("header", "", "project-tool-head");
+      const mark = appElement("div", "工", "project-tool-mark"), title = appElement("div", "");
+      mark.setAttribute("aria-hidden", "true");
+      title.append(appElement("h4", tool.name || tool.id || "项目工具"), appElement("p", status));
+      head.append(mark, title);
+      const detail = appElement("div", "", "project-tool-detail");
+      detail.append(appElement("p", note));
+      if (tool.id === "document-workshop") {
+        const permissions = appElement("div", "", "project-tool-permissions");
+        permissions.append(appElement("strong", "本次授权"), appElement("span", "本机素材读写限于授权的文档任务，成品保存在本机，可从聊天下载。联网和应用账号权限另行管理。"));
+        detail.append(permissions);
+      }
+      const controls = appElement("div", "", "project-tool-actions");
+      const busy = current.applying === tool.id;
+      if (!tool.installed) {
+        const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", "确认本机素材读写");
+        approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !tool.catalog_available || !tool.runtime_ready;
+        approval.append(checkbox, copy);
+        const install = appElement("button", busy ? "正在安装…" : "安装", "button compact primary");
+        install.type = "button"; install.disabled = true;
+        checkbox.addEventListener("change", () => { install.disabled = checkbox.disabled || !checkbox.checked; });
+        install.addEventListener("click", () => updateProjectTool(tool, "install", checkbox.checked));
+        controls.append(approval, install);
+      } else {
+        const action = tool.enabled ? "disable" : "enable";
+        const button = appElement("button", busy ? "正在更新…" : (tool.enabled ? "停用" : "启用"), tool.enabled ? "button compact secondary" : "button compact primary");
+        button.type = "button"; button.disabled = busy || (action === "enable" && !tool.runtime_ready);
+        button.addEventListener("click", () => updateProjectTool(tool, action, false));
+        controls.append(button);
+      }
+      detail.append(controls); card.append(head, detail); return card;
+    }));
+  }
+  async function loadProjectTools() {
+    const current = projectTools;
+    if (current.loading || !state.home?.initialized) return;
+    current.loading = true; renderProjectTools();
+    try {
+      const payload = await request("/api/local/project-tools");
+      if (current !== projectTools) return;
+      current.tools = Array.isArray(payload.tools) ? payload.tools.filter((tool) => tool && typeof tool.id === "string") : [];
+    } catch (error) {
+      if (current === projectTools) projectToolsFeedback(error.message, true);
+    } finally {
+      if (current === projectTools) { current.loading = false; renderProjectTools(); }
+    }
+  }
+  async function updateProjectTool(tool, action, approveArtifacts) {
+    const current = projectTools;
+    if (current.loading || current.applying || !tool || tool.id !== "document-workshop") return;
+    current.applying = tool.id; projectToolsFeedback(""); renderProjectTools();
+    try {
+      const result = await request("/api/local/project-tools/document-workshop", { method: "PUT", body: JSON.stringify({ action, revision: Number(tool.revision || 0), approve_artifacts: Boolean(approveArtifacts) }) });
+      if (current !== projectTools) return;
+      const updated = result && result.tool;
+      if (updated && typeof updated.id === "string") current.tools = current.tools.map((item) => item.id === updated.id ? updated : item);
+      projectToolsFeedback(action === "install" ? "文档工坊已安装。" : (action === "enable" ? "文档工坊已启用。" : "文档工坊已停用。"));
+    } catch (error) {
+      if (current === projectTools) projectToolsFeedback(error.message, true);
+    } finally {
+      if (current === projectTools) { current.applying = ""; renderProjectTools(); }
+    }
+  }
   function showLogin() {
     state.home = null; state.model = null; window.clearTimeout(state.chat.poll);
     window.clearTimeout(apps.loginTimer);
     apps = newAppView();
+    projectTools = newProjectToolsView();
     $("#apps-list").replaceChildren();
     appFeedback("");
+    $("#project-tools-list").replaceChildren();
+    projectToolsFeedback("");
     setActiveView("chat");
     document.body.classList.remove("is-home-ready");
     localWorkspace.hidden = true; homeView.hidden = true; loginView.hidden = false; $("#login-password").value = "";
@@ -1542,7 +1641,7 @@
     const home = await request("/api/local/home");
     showHome(home);
     if (home.initialized && home.chat_available !== false) {
-      await Promise.all([loadModel(state.model === null), loadChat(true), activeView === "apps" ? loadApps() : undefined]);
+      await Promise.all([loadModel(state.model === null), loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
     }
   }
   function setModelForm(model) {
@@ -1592,6 +1691,20 @@
     body.className = "bubble-text"; body.textContent = failure.text;
     bubble.append(meta, body); chatStream.append(bubble);
   }
+  function appendArtifactDownloads(bubble, text) {
+    const identifiers = new Set(String(text || "").match(/\bwork-[a-f0-9]{64}\b/g) || []);
+    if (!identifiers.size) return;
+    const downloads = appElement("div", "", "artifact-downloads");
+    for (const identifier of identifiers) {
+      const link = document.createElement("a");
+      link.className = "artifact-download";
+      link.textContent = "下载已登记成品";
+      link.href = "/api/local/artifacts/" + encodeURIComponent(identifier) + "/download";
+      link.setAttribute("download", "");
+      downloads.append(link);
+    }
+    bubble.append(downloads);
+  }
   function renderChat() {
     const previousScroll = chatStream.scrollTop;
     chatStream.replaceChildren();
@@ -1616,7 +1729,8 @@
       const meta = document.createElement("div"); meta.className = "bubble-meta"; meta.textContent = assistant ? "大肥鱼" : "你";
       const time = messageTime(item.time || item.created_at);
       if (time) { const timeNode = document.createElement("time"); timeNode.textContent = time; meta.append(timeNode); }
-      const body = document.createElement("p"); body.className = "bubble-text"; body.textContent = itemText(item); bubble.append(meta, body);
+      const text = itemText(item), body = document.createElement("p"); body.className = "bubble-text"; body.textContent = text; bubble.append(meta, body);
+      if (assistant) appendArtifactDownloads(bubble, text);
       if (!assistant && (state.chat.failed.has(item.request_id) || item.request_id === recoveryID)) {
         const failure = state.chat.failed.get(item.request_id) || { message: "未收到回复。" }, line = document.createElement("div"), detail = document.createElement("span"), retry = document.createElement("button");
         line.className = "bubble-failure"; detail.textContent = failure.message; retry.type = "button"; retry.className = "text-action"; retry.textContent = "重试";
@@ -1746,6 +1860,7 @@
     });
   }
   $("#apps-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
+  $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
   $("#load-older-button").addEventListener("click", () => loadChat(false));

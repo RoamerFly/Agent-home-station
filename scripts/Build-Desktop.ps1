@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -159,10 +159,11 @@ $archive=$cache+'.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDirectory | Out-Null
 # The zero-application preview deliberately has no optional tool catalog.  The
 # regular desktop package retains the catalog validation/staging contract.
-if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding){
+if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop){
  $catalogArgs=@('--source',(Join-Path $workspace 'plugins'),'--output',(Join-Path $OutputDirectory 'plugins'))
  if($LocalStation -and $WithShareReader){$catalogArgs+=@('--package','share-reader')}
  if($LocalStation -and $WithMediaUnderstanding){$catalogArgs+=@('--package','media-understanding')}
+ if($LocalStation -and $WithDocumentWorkshop){$catalogArgs+=@('--package','document-workshop')}
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') @catalogArgs
  if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
 }
@@ -234,6 +235,15 @@ if($Test){
 $broker=Join-Path $OutputDirectory 'runtimes\windows-agent-host'
 New-Item -ItemType Directory -Force -Path $broker | Out-Null
 foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_host.pyw')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
+# Document Workshop uses the same project-owned broker as every other local
+# tool.  A local-station preview only needs the hash-pinned Python CLI; do not
+# stage a document converter, media runtime, or other optional tool resources.
+# Portable bundles prepare that CLI through Prepare-WindowsResources.ps1 below,
+# so avoid repeating the integrity-checked preparation work.
+if($LocalStation -and $WithDocumentWorkshop -and -not $Portable){
+ & python -X utf8 (Join-Path $PSScriptRoot 'prepare_windows_python.py') --target (Join-Path $OutputDirectory 'runtimes\\windows-python-cli') --cache (Join-Path $workspace 'temp\\windows-runtime-downloads')
+ if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed for Document Workshop.'}
+}
 if($Portable){
  $resourceArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes');MediaDirectory=$MediaDirectory;DocumentPythonPackagesDirectory=$DocumentPythonPackagesDirectory;DocumentTesseractDirectory=$DocumentTesseractDirectory;DocumentFontsDirectory=$DocumentFontsDirectory}
  & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') @resourceArgs

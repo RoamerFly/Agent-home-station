@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -132,6 +133,12 @@ func (s *localArtifactStore) publish(ctx context.Context, in localArtifactInput,
 	if err != nil {
 		return localArtifact{}, err
 	}
+	return s.publishFile(ctx, in, source, access, grant, path, nil)
+}
+
+// publishFile copies an opened regular file into the same immutable artifact
+// store for both home files and host-validated project tool outputs.
+func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactInput, source *companion.SourceRef, access *localWorkspaceAccess, grant localWorkspaceGrant, path string, validate func(*os.File, int64) error) (localArtifact, error) {
 	name := filepath.Base(path)
 	if !safeMediaFilename(name) || len(name) > 255 || strings.ContainsAny(name, ":*?<>|") {
 		return localArtifact{}, errors.New("成品文件名无效")
@@ -165,6 +172,11 @@ func (s *localArtifactStore) publish(ctx context.Context, in localArtifactInput,
 	info, err := original.Stat()
 	if err != nil || info.Size() < 1 || info.Size() > stationAttachmentLimit {
 		return localArtifact{}, errors.New("成品大小须在 1 字节至 512 MiB 内")
+	}
+	if validate != nil {
+		if err := validate(original, info.Size()); err != nil {
+			return localArtifact{}, err
+		}
 	}
 	a.Bytes = info.Size()
 	if !check() {
@@ -245,5 +257,23 @@ func (s *localArtifactStore) routes(owner *Server, mux *http.ServeMux) {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		respond(w, 200, a.view())
+	}))
+	mux.HandleFunc("GET /api/local/artifacts/{artifact}/download", owner.protected(func(w http.ResponseWriter, r *http.Request) {
+		a, err := s.read(r.PathValue("artifact"))
+		if err != nil {
+			fail(w, 404, "成品不存在或来源已变化")
+			return
+		}
+		file, err := s.open(r.Context(), a, func() bool { _, allowed := s.access(a); return allowed })
+		if err != nil {
+			fail(w, 404, "成品不可读取或完整性校验未通过")
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": a.Name}))
+		http.ServeContent(w, r, a.Name, time.Time{}, file)
 	}))
 }

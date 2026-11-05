@@ -141,6 +141,9 @@ func (t *localToolSet) checkpointView(op companion.LocalToolCheckpoint, grant lo
 		view["state"] = "grant_changed"
 		return view
 	}
+	if op.Tool == localDocumentToolName {
+		return t.documentCheckpointView(op, grant)
+	}
 	view["path"] = op.Target
 	if op.Result != "" {
 		view["state"], view["previous_result"] = "recorded", json.RawMessage(op.Result)

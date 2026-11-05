@@ -60,6 +60,7 @@
               <div class="local-tab-list" role="tablist" aria-label="工作台页面">
                 <button id="chat-tab" class="local-tab is-active" type="button" role="tab" aria-controls="chat-view" aria-selected="true">聊天</button>
                 <button id="apps-tab" class="local-tab" type="button" role="tab" aria-controls="apps-view" aria-selected="false" tabindex="-1">应用</button>
+                <button id="project-tools-tab" class="local-tab" type="button" role="tab" aria-controls="project-tools-view" aria-selected="false" tabindex="-1">项目工具</button>
                 <button id="settings-tab" class="local-tab" type="button" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">模型设置</button>
               </div>
               <button id="local-logout-button" class="text-action" type="button">退出</button>
@@ -115,6 +116,18 @@
                 </form>
               </details>
               <div id="apps-list" class="apps-list" aria-busy="false"></div>
+            </section>
+
+            <section id="project-tools-view" class="project-tools-view" role="tabpanel" aria-labelledby="project-tools-tab" hidden>
+              <header class="chat-heading-row">
+                <div>
+                  <h3>项目工具</h3>
+                  <p>按需要启用大肥鱼家目录里的本地工具，不会接入应用账号。</p>
+                </div>
+                <button id="project-tools-refresh" class="button compact secondary" type="button">刷新</button>
+              </header>
+              <p id="project-tools-feedback" class="project-tools-feedback" role="status"></p>
+              <div id="project-tools-list" class="project-tools-list" aria-busy="false"></div>
             </section>
 
             <section id="settings-view" class="settings-view" role="tabpanel" aria-labelledby="settings-tab" hidden>

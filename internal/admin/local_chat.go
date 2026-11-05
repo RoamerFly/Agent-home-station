@@ -70,23 +70,24 @@ func (h *LocalHomeHandler) runtime(w http.ResponseWriter, _ *http.Request) {
 }
 
 type localChatService struct {
-	home      *localHomeService
-	models    *localModelStore
-	mu        sync.Mutex
-	turn      sync.Mutex
-	busy      atomic.Bool
-	store     *companion.Store
-	fishID    string
-	ownerID   string
-	closed    bool
-	stopping  atomic.Bool
-	closeOnce sync.Once
-	closeErr  error
-	ctx       context.Context
-	cancel    context.CancelFunc
-	windows   *agenthost.WindowsConfig
-	processes *localProcessTools
-	wechat    *stationWechat
+	home         *localHomeService
+	models       *localModelStore
+	mu           sync.Mutex
+	turn         sync.Mutex
+	busy         atomic.Bool
+	store        *companion.Store
+	fishID       string
+	ownerID      string
+	closed       bool
+	stopping     atomic.Bool
+	closeOnce    sync.Once
+	closeErr     error
+	ctx          context.Context
+	cancel       context.CancelFunc
+	windows      *agenthost.WindowsConfig
+	processes    *localProcessTools
+	projectTools *localProjectTools
+	wechat       *stationWechat
 	// Tests replace only the model transport, retaining the normal engine,
 	// source handling, SQLite and HTTP boundary.
 	modelFactory func() (companion.LanguageModel, error)
@@ -94,7 +95,8 @@ type localChatService struct {
 
 func newLocalChatService(home *localHomeService) *localChatService {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &localChatService{home: home, models: newLocalModelStore(home.dataDir), ctx: ctx, cancel: cancel}
+	return &localChatService{home: home, models: newLocalModelStore(home.dataDir), ctx: ctx, cancel: cancel,
+		projectTools: &localProjectTools{home: home, options: packagedWindowsToolOptions()}}
 }
 
 func (h *localChatService) beginShutdown() {
@@ -142,6 +144,9 @@ func (h *localChatService) closeContext(ctx context.Context) error {
 			// its durable record is closed. Do not replay any interrupted request.
 			if processes != nil {
 				h.closeErr = errors.Join(h.closeErr, processes.Close())
+			}
+			if h.projectTools != nil {
+				h.closeErr = errors.Join(h.closeErr, h.projectTools.close())
 			}
 			if store != nil {
 				h.closeErr = errors.Join(h.closeErr, store.Close())
@@ -330,7 +335,7 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		defer client.CloseIdleConnections()
 	}
 	c := localConversationConfig(settings.Persona)
-	engine, err := companion.New(c, store, model, "你是大肥鱼，正在 Agent-home-station 软件中与本机主人交谈。按本轮工具目录和主人的授权使用本地记忆、家目录和已连接的应用。软件界面展示已写入本地聊天记录的气泡，不代表微信发送或主人已经读过。不要声称已使用未提供的应用或执行能力。")
+	engine, err := companion.New(c, store, model, "你是大肥鱼，正在 Agent-home-station 软件中与本机主人交谈。按本轮工具目录和主人的授权使用本地记忆、家目录、已授权的项目工具和已连接的应用。生成本机成品后，把工具实际返回的 artifact_id 告诉主人，界面会显示下载入口。软件界面展示已写入本地聊天记录的气泡，不代表微信发送或主人已经读过。不要声称已使用未提供的应用或执行能力。")
 	if err != nil {
 		fail(w, 503, "本地聊天引擎未能准备，原始记录保留")
 		return

@@ -6,8 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/pluginruntime"
 )
 
 // LocalWindowsRuntime uses only the packaged broker layout. It does not search
@@ -58,4 +60,29 @@ func LocalWindowsRuntime(packageDir, privateDir, configFile string) (*agenthost.
 		}
 	}
 	return &cfg, nil
+}
+
+func packagedWindowsToolOptions() pluginruntime.Options {
+	exe, err := os.Executable()
+	if err != nil {
+		return pluginruntime.Options{}
+	}
+	base := filepath.Dir(exe)
+	python := filepath.Join(base, "runtimes", "windows-python-cli")
+	helper := filepath.Join(base, "runtimes", "windows-agent-host", "windows_plugin_host.pyw")
+	return pluginruntime.Options{Python: filepath.Join(python, "python.exe"), Pythonw: filepath.Join(python, "pythonw.exe"), WindowsHelper: helper, RuntimeRoots: []string{python}, CatalogDirectory: filepath.Join(base, "plugins")}
+}
+
+func windowsToolRuntimeReady(options pluginruntime.Options) bool {
+	for _, path := range []string{options.Python, options.Pythonw, options.WindowsHelper, filepath.Join(filepath.Dir(options.WindowsHelper), "windows_lpac.py")} {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			return false
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil || !strings.EqualFold(resolved, path) {
+			return false
+		}
+	}
+	return true
 }

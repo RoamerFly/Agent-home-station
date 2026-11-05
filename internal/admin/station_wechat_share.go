@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -56,7 +54,7 @@ func (s *stationWechat) shareHost(w *stationWechatWorker, account string) (*stat
 	}
 	options := s.shareOptions
 	var executor pluginhost.Executor
-	if stationShareRuntimeReady(options) {
+	if windowsToolRuntimeReady(options) {
 		executor = pluginruntime.InstalledExecutor(store, options)
 	}
 	controller, err := pluginruntime.NewController(store, executor)
@@ -67,31 +65,6 @@ func (s *stationWechat) shareHost(w *stationWechatWorker, account string) (*stat
 	controller.SetIdleTimeout(5 * time.Minute)
 	w.share = &stationShareHost{store: store, controller: controller, send: mcptools.PostPluginRoute}
 	return w.share, nil
-}
-
-func stationShareOptions() pluginruntime.Options {
-	exe, err := os.Executable()
-	if err != nil {
-		return pluginruntime.Options{}
-	}
-	base := filepath.Dir(exe)
-	python := filepath.Join(base, "runtimes", "windows-python-cli")
-	helper := filepath.Join(base, "runtimes", "windows-agent-host", "windows_plugin_host.pyw")
-	return pluginruntime.Options{Python: filepath.Join(python, "python.exe"), Pythonw: filepath.Join(python, "pythonw.exe"), WindowsHelper: helper, RuntimeRoots: []string{python}, CatalogDirectory: filepath.Join(base, "plugins")}
-}
-
-func stationShareRuntimeReady(options pluginruntime.Options) bool {
-	for _, path := range []string{options.Python, options.Pythonw, options.WindowsHelper, filepath.Join(filepath.Dir(options.WindowsHelper), "windows_lpac.py")} {
-		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() {
-			return false
-		}
-		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil || !strings.EqualFold(resolved, path) {
-			return false
-		}
-	}
-	return true
 }
 
 type stationSharePolicy struct {

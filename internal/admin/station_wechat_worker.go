@@ -87,7 +87,7 @@ func bindStationWechat(registry apphost.Registry, chat *localChatService) (appho
 		return registry, nil, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	shareOptions := stationShareOptions()
+	shareOptions := packagedWindowsToolOptions()
 	if pathWithin(chat.home.root, shareOptions.Pythonw) || pathWithin(chat.home.root, shareOptions.WindowsHelper) {
 		// Interpreter and isolation helper must be outside the editable fish home.
 		shareOptions.Python, shareOptions.Pythonw, shareOptions.WindowsHelper = "", "", ""

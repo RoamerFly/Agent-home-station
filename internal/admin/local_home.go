@@ -80,6 +80,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
 	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
 	chat := newLocalChatService(home)
+	chat.projectTools.routes(s, mux)
 	home.artifacts = &localArtifactStore{home: home, chat: chat}
 	home.artifacts.routes(s, mux)
 	handler := &LocalHomeHandler{Handler: mux, chat: chat, home: home}

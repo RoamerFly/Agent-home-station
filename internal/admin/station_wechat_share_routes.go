@@ -50,7 +50,7 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 		fail(w, 503, "工具宿主不可用")
 		return
 	}
-	view := map[string]any{"installed": false, "enabled": false, "runtime_ready": stationShareRuntimeReady(s.shareOptions)}
+	view := map[string]any{"installed": false, "enabled": false, "runtime_ready": windowsToolRuntimeReady(s.shareOptions)}
 	if worker == nil {
 		respond(w, 200, view)
 		return

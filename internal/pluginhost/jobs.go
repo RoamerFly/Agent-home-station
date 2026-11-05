@@ -95,6 +95,21 @@ func (s *Store) Job(ctx context.Context, id string) (Job, error) {
 	}
 	return job, nil
 }
+
+// JobByRequest reads the already persisted invocation without creating or
+// claiming a job. The caller still checks the requester's source and grant.
+func (s *Store) JobByRequest(ctx context.Context, plugin, thread, key string) (Job, error) {
+	var raw []byte
+	var job Job
+	if err := s.db.QueryRowContext(ctx, `SELECT record FROM jobs WHERE plugin=? AND thread=? AND request_key=?`, plugin, thread, key).Scan(&raw); err != nil {
+		return job, err
+	}
+	if err := json.Unmarshal(raw, &job); err != nil {
+		return Job{}, err
+	}
+	return job, nil
+}
+
 func (s *Store) mutateJob(ctx context.Context, id string, revision int, change func(*Job) error) (Job, error) {
 	return s.mutateJobPrivate(ctx, id, revision, nil, change)
 }
