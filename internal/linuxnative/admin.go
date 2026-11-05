@@ -96,9 +96,11 @@ type LoginOperation struct {
 var ErrLoginOutcomeUnknown = errors.New("login submission outcome unknown")
 
 type nativeOperation struct {
-	ID     string `json:"id"`
-	State  string `json:"state"`
-	Result struct {
+	AccountID string `json:"accountId"`
+	Kind      string `json:"kind"`
+	ID        string `json:"id"`
+	State     string `json:"state"`
+	Result    struct {
 		QRAvailable  bool            `json:"qrAvailable"`
 		QRGeneration int             `json:"qrGeneration"`
 		Code         json.RawMessage `json:"code"`
@@ -143,17 +145,24 @@ func (s *Sender) BeginLogin(ctx context.Context, key string) (LoginOperation, er
 	} else if status != 200 {
 		return LoginOperation{}, errors.New("native account unavailable")
 	}
-	body, _ := json.Marshal(map[string]any{"strategy": "qr", "forceQr": true, "allowQr": true, "timeoutSeconds": 300, "computerName": "WechatBot", "qrRefresh": map[string]any{"mode": "manual", "maxRefreshes": 0}})
-	response, err = s.do(ctx, http.MethodPost, s.accountPath()+"/auth/login", body, key)
+	return s.submitQR(ctx, key, "WechatBot", false)
+}
+
+func (s *Sender) submitQR(ctx context.Context, key, computerName string, verifyIdentity bool) (LoginOperation, error) {
+	body, _ := json.Marshal(map[string]any{"strategy": "qr", "forceQr": true, "allowQr": true, "timeoutSeconds": 300, "computerName": computerName, "qrRefresh": map[string]any{"mode": "manual", "maxRefreshes": 0}})
+	response, err := s.do(ctx, http.MethodPost, s.accountPath()+"/auth/login", body, key)
 	if err != nil {
 		return LoginOperation{}, ErrLoginOutcomeUnknown
 	}
 	defer response.Body.Close()
 	var op nativeOperation
+	if verifyIdentity && response.StatusCode == http.StatusConflict {
+		return LoginOperation{}, ErrAccountLoginBusy
+	}
 	if response.StatusCode != 202 {
 		return LoginOperation{}, errors.New("login operation unavailable")
 	}
-	if !decodeBounded(response.Body, &op) || !safeID(op.ID) {
+	if !decodeBounded(response.Body, &op) || !safeID(op.ID) || (verifyIdentity && (op.AccountID != s.account || op.Kind != "login")) {
 		return LoginOperation{}, ErrLoginOutcomeUnknown
 	}
 	return operationView(op), nil

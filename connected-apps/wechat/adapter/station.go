@@ -14,8 +14,7 @@ import (
 )
 
 // StationRegistration admits only the daemon launched for the station's
-// private WeChat directory. The provider serves owner reads through apphost.
-// Lifecycle mutations require a separate worker owner.
+// private WeChat directory. Account setup is owner-only; Agent workers are separate.
 func StationRegistration(ctx context.Context, endpoint string, pid int, stationData string) (apphost.Registration, error) {
 	nativeDir := filepath.Join(stationData, "apps", ID, "native")
 	root, err := workspacefs.OpenPath(nativeDir)
@@ -125,7 +124,7 @@ func (p *stationNativeProvider) Inspect(ctx context.Context, id string) (apphost
 			connectionState = "online"
 		case "offline", "disconnected":
 			connectionState = "offline"
-		case "starting", "connecting":
+		case "starting", "connecting", "reconnecting":
 			connectionState = "starting"
 		}
 		return apphost.ConnectionStatus{

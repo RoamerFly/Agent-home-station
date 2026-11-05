@@ -18,5 +18,6 @@
   "share_card_source": "adapter/share_card.go",
   "share_read_source": "adapter/share_read.go",
   "channels_protocol_source": "adapter/channels_protocol.go",
-  "station_native_source": "adapter/station.go"
+  "station_native_source": "adapter/station.go",
+  "station_account_setup_source": "adapter/station_setup.go"
 }

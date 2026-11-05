@@ -23,6 +23,7 @@ type Application struct {
 	Name           string `json:"name"`
 	InstallationID string `json:"installation_id"`
 	Registration   string `json:"registration"`
+	AccountSetup   bool   `json:"account_setup,omitempty"`
 }
 
 type Connection struct {
@@ -90,6 +91,7 @@ func New(registrations ...Registration) (Registry, error) {
 		if _, exists := r.apps[entry.ID]; exists || installations[entry.InstallationID] {
 			return Registry{}, errors.New("duplicate application or installation")
 		}
+		_, entry.AccountSetup = entry.Provider.(AccountSetup)
 		r.apps[entry.ID] = entry
 		installations[entry.InstallationID] = true
 	}

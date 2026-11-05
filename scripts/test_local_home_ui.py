@@ -1,6 +1,7 @@
 """Opt-in local home acceptance: synthetic data, real HTTP, zero model/WeChat calls."""
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -58,7 +59,7 @@ def assert_no_horizontal_overflow(page, scene):
 def app_connection_payload():
     """Synthetic registered application data for browser-only app status checks."""
     return {
-        "items": [{"id": "wechat", "name": "微信", "registration": "station-native"}],
+        "items": [{"id": "wechat", "name": "微信", "registration": "station-native", "account_setup": True}],
     }
 
 
@@ -200,8 +201,67 @@ def verify(binary, output):
                 page.get_by_text("已登录", exact=True).wait_for()
                 page.screenshot(path=str(output / "apps-connected-light.png"), full_page=True)
 
+                # Keep the same request key when the first response is lost,
+                # then display the exact operation generation returned by status.
+                connection_base = "**/api/apps/wechat/connections"
+                login_pattern = status_pattern + "/login"
+                operation_pattern = login_pattern + "/fixture-operation"
+                qr_pattern = operation_pattern + "/qr?generation=2"
+                requests = {"provision": [], "login": [], "qr": 0}
+                progress = {"provisioned": False, "state": "awaiting_scan"}
+
+                def setup_connections(route):
+                    if route.request.method == "POST":
+                        requests["provision"].append(route.request.post_data_json)
+                        progress["provisioned"] = True
+                        fulfill_json({"id": "synthetic-wechat", "account_id": "fixture"})(route)
+                    else:
+                        fulfill_json(wechat_connection_payload() if progress["provisioned"] else {"items": []})(route)
+
+                def setup_start(route):
+                    requests["login"].append(route.request.post_data_json)
+                    if len(requests["login"]) == 1:
+                        fulfill_json({"error": "暂时无法核对账号操作"}, status=503)(route)
+                    else:
+                        fulfill_json({"id": "fixture-operation", "state": "starting"})(route)
+
+                def setup_operation(route):
+                    state = progress["state"]
+                    fulfill_json({"id": "fixture-operation", "state": state, "qr_available": state == "awaiting_scan", "qr_generation": 2})(route)
+
+                def setup_qr(route):
+                    requests["qr"] += 1
+                    pixel = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=")
+                    route.fulfill(content_type="image/png", body=pixel)
+
+                page.unroute(connection_base, connections_route)
+                page.unroute(status_pattern, status_route)
+                status_route = fulfill_json({"connection": {"id": "synthetic-wechat", "login": "signed_out", "runtime": "offline"}})
+                page.route(connection_base, setup_connections)
+                page.route(status_pattern, status_route)
+                page.route(login_pattern, setup_start)
+                page.route(operation_pattern, setup_operation)
+                page.route(qr_pattern, setup_qr)
+                page.locator("#apps-refresh").click()
+                page.get_by_text("账号未接入", exact=True).wait_for()
+                page.get_by_role("button", name="添加账号").click()
+                page.get_by_role("button", name="扫码登录").click()
+                page.get_by_text("暂时无法核对账号操作", exact=True).wait_for()
+                page.get_by_role("button", name="扫码登录").click()
+                page.get_by_alt_text("微信登录二维码").wait_for()
+                assert requests["provision"] and requests["login"][0] == requests["login"][1]
+                page.wait_for_function("document.querySelector('.app-login img')?.naturalWidth > 0")
+                assert requests["qr"] == 1
+                page.screenshot(path=str(output / "apps-synthetic-qr-light.png"), full_page=True)
+                progress["state"] = "expired"
+                page.get_by_text("二维码已过期", exact=True).wait_for()
+                assert page.get_by_alt_text("微信登录二维码").count() == 0
+                page.unroute(login_pattern, setup_start)
+                page.unroute(operation_pattern, setup_operation)
+                page.unroute(qr_pattern, setup_qr)
+
                 # An unavailable account read remains a visible, recoverable application state.
-                page.unroute("**/api/apps/wechat/connections", connections_route)
+                page.unroute(connection_base, setup_connections)
                 unavailable_route = fulfill_json({"error": "synthetic connection unavailable"}, status=503)
                 page.route("**/api/apps/wechat/connections", unavailable_route)
                 page.locator("#apps-refresh").click()
@@ -252,7 +312,7 @@ def verify(binary, output):
                 assert note.read_text(encoding="utf-8") == "a persistent companion home"
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 

@@ -91,13 +91,34 @@ namespace WechatAgent.Desktop {
                                     Assert(denied.StatusCode == HttpStatusCode.Unauthorized, "native applications require owner login");
                                 client.DefaultRequestHeaders.Add("Origin", d.Url);
                                 using (var body = new StringContent(Deployment.Json.Serialize(new { password }), System.Text.Encoding.UTF8, "application/json"))
-                                using (var login = client.PostAsync(d.Url + "/api/login", body).GetAwaiter().GetResult())
+                                using (var login = client.PostAsync(d.Url + "/api/login", body).GetAwaiter().GetResult()) {
                                     Assert(login.IsSuccessStatusCode, "native-enabled station owner login");
+                                    var session = Deployment.Json.Deserialize<Dictionary<string, object>>(login.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+                                    client.DefaultRequestHeaders.Add("X-CSRF-Token", Deployment.Text(session, "csrf"));
+                                }
                                 var raw = client.GetStringAsync(d.Url + "/api/apps/wechat/connections").GetAwaiter().GetResult();
                                 var result = Deployment.Json.Deserialize<Dictionary<string, object>>(raw);
                                 var app = (Dictionary<string, object>)result["application"];
                                 Assert(Deployment.Text(app, "registration") == "station-native", "owned native provider registered");
-                                Assert(((IList)result["items"]).Count == 0, "isolated daemon did not create accounts");
+                                Assert(Convert.ToBoolean(app["account_setup"]), "owned native provider supports owner account setup");
+                                var items = (IList)result["items"];
+                                Assert(items.Count == (round == 0 ? 0 : 2), "isolated native profiles persist across restart");
+                                const string connections = "/api/apps/wechat/connections";
+                                var keys = new [] { "33333333333343338333333333333333", "44444444444444448444444444444444" };
+                                foreach (var key in keys) {
+                                    using (var payload = new StringContent(Deployment.Json.Serialize(new { request_id = key }), System.Text.Encoding.UTF8, "application/json"))
+                                    using (var created = client.PostAsync(d.Url + connections, payload).GetAwaiter().GetResult()) {
+                                        Assert(created.IsSuccessStatusCode, "station created or reused the exact native profile: " + (int)created.StatusCode);
+                                        var profile = Deployment.Json.Deserialize<Dictionary<string, object>>(created.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+                                        Assert(Deployment.Text(profile, "account_id") == "account-" + key, "provisioning returned the exact profile");
+                                        var inspect = client.GetStringAsync(d.Url + connections + "/" + Deployment.Text(profile, "id")).GetAwaiter().GetResult();
+                                        var view = Deployment.Json.Deserialize<Dictionary<string, object>>(inspect);
+                                        var connection = (Dictionary<string, object>)view["connection"];
+                                        Assert(Deployment.Text(connection, "login") == "signed_out" && Deployment.Text(connection, "worker") == "unavailable", "registration does not sign in or start a worker");
+                                    }
+                                }
+                                var list = Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(d.Url + connections).GetAwaiter().GetResult());
+                                Assert(((IList)list["items"]).Count == 2, "repeated requests did not create duplicate accounts");
                             }
                         } finally { runtime.Stop().GetAwaiter().GetResult(); }
                         Assert(!ProcessAlive(station) && !ProcessAlive(native), "both owned children exit after stop");
@@ -285,7 +306,7 @@ namespace WechatAgent.Desktop {
             if (args.Length == 1 && args[0] == "--synthetic-child") { Thread.Sleep(60000); return 0; }
             if (args.Length == 2 && args[0] == "--local-native-cycle") {
                 LocalNativeCycle(args[1]);
-                Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; zero native accounts, no login or send.");
+                Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; two synthetic native profiles persisted, no login or send.");
                 return 0;
             }
             if (args.Length == 2 && args[0] == "--local-cycle") {

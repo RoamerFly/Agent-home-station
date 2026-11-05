@@ -46,10 +46,11 @@
       tab.setAttribute("aria-selected", String(selected));
       tab.tabIndex = selected ? 0 : -1;
     }
-    if (view === "apps") loadApps();
+    if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
+    else window.clearTimeout(apps.loginTimer);
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map() };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0 };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -111,10 +112,106 @@
     }
     return row;
   }
+  function appSetupButton(text, action) {
+    const button = appElement("button", text, "button compact secondary");
+    button.type = "button";
+    button.disabled = apps.setupBusy || apps.loading;
+    button.addEventListener("click", action);
+    return button;
+  }
+  const appLoginLabels = {
+    starting: "正在生成二维码…", awaiting_scan: "请用微信扫描二维码",
+    awaiting_approval: "请在微信上确认登录", succeeded: "微信登录已确认",
+    expired: "二维码已过期", failed: "微信登录失败", cancelled: "微信登录已取消",
+    rejected: "微信登录未获确认", needs_login: "需要重新扫码", challenge_required: "请在手机上核对登录验证",
+    approval_required: "请在手机上核对登录验证", needs_review: "请在手机上核对登录验证", unknown: "微信登录状态暂不可读"
+  };
+  const pendingAppLogin = (op) => op && ["starting", "awaiting_scan", "awaiting_approval"].includes(op.state);
+  const appLoginPath = (id) => "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/login";
+  const newAppSetupKey = () => crypto.randomUUID().replaceAll("-", "");
+  const appSetupPost = (path, key) => request(path, { method: "POST", body: JSON.stringify({ request_id: key }) });
+
+  function renderAppLogin(id, op) {
+    const panel = appElement("div", "", "app-login");
+    panel.append(appElement("p", appLoginLabels[op.state] || appLoginLabels.unknown));
+    if (op.qr_available && op.state === "awaiting_scan") {
+      const image = document.createElement("img");
+      image.src = appLoginPath(id) + "/" + encodeURIComponent(op.id) + "/qr?generation=" + op.qr_generation;
+      image.alt = "微信登录二维码";
+      image.addEventListener("error", () => {
+        image.remove();
+        panel.append(appElement("p", "二维码暂不可读，可重新查看当前登录。"));
+      }, { once: true });
+      panel.append(image);
+    }
+    return panel;
+  }
+  function scheduleAppLogin(current, delay = 2200) {
+    window.clearTimeout(current.loginTimer);
+    const id = current.selectedLogin, entry = current.logins.get(id);
+    if (current !== apps || activeView !== "apps" || !pendingAppLogin(entry?.op)) return;
+    current.loginTimer = window.setTimeout(() => pollAppLogin(current, id, entry), delay);
+  }
+  async function pollAppLogin(current, id, entry) {
+    const before = entry.op;
+    try {
+      const op = await request(appLoginPath(id) + "/" + encodeURIComponent(before.id));
+      if (current !== apps || current.selectedLogin !== id || entry.op !== before || op.id !== before.id) return;
+      entry.op = op;
+      if (op.state !== before.state || op.qr_available !== before.qr_available || op.qr_generation !== before.qr_generation) renderApps();
+      if (op.state === "succeeded") await loadApps();
+    } catch (error) {
+      if (current !== apps || current.selectedLogin !== id || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      if (error.status === 404) {
+        entry.op = { ...before, state: "unknown", qr_available: false };
+        renderApps();
+      }
+      appFeedback("暂时无法读取微信登录状态，可稍后重新查看。", true);
+      scheduleAppLogin(current, 5000);
+      return;
+    }
+    scheduleAppLogin(current);
+  }
+  async function runAppSetup(id = "") {
+    const current = apps;
+    if (current.setupBusy || current.loading) return;
+    current.setupBusy = true;
+    if (id) current.selectedLogin = id;
+    appFeedback("");
+    renderApps();
+    try {
+      if (!id) {
+        current.provisionKey ||= newAppSetupKey();
+        await appSetupPost("/api/apps/wechat/connections", current.provisionKey);
+        current.provisionKey = "";
+        if (current !== apps) return;
+        appFeedback("账号已登记，可以扫码登录。");
+        await loadApps();
+      } else {
+        let entry = current.logins.get(id);
+        if (!entry || entry.op && !pendingAppLogin(entry.op)) {
+          entry = { key: newAppSetupKey(), op: null };
+          current.logins.set(id, entry);
+        }
+        if (entry.op) {
+          await pollAppLogin(current, id, entry);
+        } else {
+          entry.op = await appSetupPost(appLoginPath(id), entry.key);
+          scheduleAppLogin(current);
+        }
+      }
+    } catch (error) {
+      if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) appFeedback(error.message, true);
+    } finally {
+      current.setupBusy = false;
+      if (current === apps) renderApps();
+    }
+  }
   function appConnectionRow(record) {
     const row = appElement("div", "", "app-layer");
     const detail = appElement("div", "");
     const connection = apps.connections.get(record.id);
+    const canSetup = record.id === "wechat" && apps.registered?.some((app) => app.id === record.id && app.account_setup);
     if (!apps.registered || connection === null) {
       detail.append(appElement("strong", "账号状态暂不可读"), appElement("p", "可刷新后重查。"));
     } else if (!connection?.length) {
@@ -133,11 +230,18 @@
           const login = status?.login === "authenticated" ? "已登录" : status?.login === "signed_out" ? "未登录" : "登录状态暂不可读";
           item.append(appElement("small", login));
         }
+        const entry = apps.logins.get(account.id);
+        if (canSetup && status?.login === "signed_out" && status.runtime !== "starting" && entry?.op?.state !== "succeeded") {
+          const label = pendingAppLogin(entry?.op) ? "查看扫码" : "扫码登录";
+          item.append(appSetupButton(label, () => runAppSetup(account.id)));
+        }
+        if (apps.selectedLogin === account.id && entry?.op) item.append(renderAppLogin(account.id, entry.op));
         list.append(item);
       }
       detail.append(list);
     }
     row.append(appElement("h5", "账号连接"), detail);
+    if (canSetup && connection !== null) row.append(appSetupButton("添加账号", () => runAppSetup()));
     return row;
   }
   function renderApps() {
@@ -231,6 +335,7 @@
   }
   function showLogin() {
     state.home = null; state.model = null; window.clearTimeout(state.chat.poll);
+    window.clearTimeout(apps.loginTimer);
     apps = newAppView();
     $("#apps-list").replaceChildren();
     appFeedback("");

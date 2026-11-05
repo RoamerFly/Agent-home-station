@@ -180,6 +180,9 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .app-accounts { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
 .app-accounts li { display: flex; flex-wrap: wrap; gap: 3px 8px; min-width: 0; color: var(--ink); font-size: .86rem; overflow-wrap: anywhere; }
 .app-accounts small { color: var(--muted); }
+.app-accounts li { align-items: center; }
+.app-login { flex: 0 0 100%; }
+.app-login img { display: block; width: min(148px, 100%); aspect-ratio: 1; margin-top: 8px; background: white; object-fit: contain; border-radius: 6px; }
 .local-tab:focus-visible, .apps-view .button:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 
 .model-setup-note { display: grid; gap: 4px; padding: 13px 14px; border: 1px solid rgba(139, 103, 207, .27); border-radius: 13px; background: linear-gradient(100deg, rgba(93, 99, 217, .09), rgba(139, 103, 207, .08)); }

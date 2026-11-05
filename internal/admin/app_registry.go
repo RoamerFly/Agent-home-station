@@ -9,6 +9,7 @@ import (
 )
 
 func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
+	s.appAccountSetupRoutes(mux, registry)
 	mux.HandleFunc("GET /api/apps", s.protected(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		respond(w, http.StatusOK, map[string]any{"items": registry.Applications()})
