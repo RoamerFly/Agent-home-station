@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
+
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/linuxnative"
 )
@@ -66,7 +68,7 @@ func ownerActionIntent(p actionProposal) apphost.ActionIntent {
 }
 
 func matchesOwnWechatMessage(msg linuxnative.Message, account, thread, message string) bool {
-	return msg.AccountID == account && msg.ID == message && msg.ThreadID == thread && msg.Direction == "outgoing" && msg.ServerID != ""
+	return wechatapp.OwnMessage(msg, account, thread, message)
 }
 
 func matchesWechatAction(previous, latest linuxnative.ActionStatus) bool {

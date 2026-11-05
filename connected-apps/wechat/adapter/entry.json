@@ -7,5 +7,7 @@
   "runtime_migration": "pending",
   "tool_definitions_source": "adapter/tools.go",
   "read_source": "adapter/read.go",
-  "event_projection_source": "adapter/source.go"
+  "event_projection_source": "adapter/source.go",
+  "text_submission_source": "adapter/send_text.go",
+  "account_action_source": "adapter/actions.go"
 }

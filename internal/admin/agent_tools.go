@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -542,106 +541,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		return encode(map[string]any{"task": t, "background_requires": requirements, "storage_file": m.agent.dir + "/agent-state.json", "due_at": t.Next}, nil)
 	case "wechat_send_text":
-		var in struct {
-			Thread string `json:"thread_id"`
-			Text   string `json:"text"`
-			Key    string `json:"request_key"`
-		}
-		if json.Unmarshal(args, &in) != nil || !p.conversationReadAllowed(in.Thread) || strings.TrimSpace(in.Text) == "" || len(in.Text) > 3000 || in.Key == "" || len(in.Key) > 128 || !m.Config().Companion.Permissions.ReplyText {
-			return "", localAgentError(errors.New("发送目标、正文或request_key无效，或文字发送权限未开启；可发送到当前或其他已授权会话"))
-		}
-		native, ok := m.native.(nativeTools)
-		if !ok {
-			return "", toolInputError("后台不支持幂等发送")
-		}
-		return p.privilegedCall(ctx, name, args, func() (any, error) {
-			cfg := m.Config()
-			key := p.operationID(name, args)
-			if old, lookupErr := native.LookupSend(ctx, key); lookupErr == nil {
-				if old.ThreadID != in.Thread || old.ID == "" {
-					return nil, errors.New("outbound_receipt_identity_mismatch")
-				}
-				return old, nil
-			} else if !errors.Is(lookupErr, linuxnative.ErrToolNotFound) {
-				return nil, lookupErr
-			}
-			text, binding, err := p.prepareOutboundText(ctx, in.Thread, in.Text)
-			if err != nil {
-				return nil, err
-			}
-			if text == "" {
-				return map[string]any{"state": "not_sent", "reason": "grounding_review_no_supported_reply"}, nil
-			}
-			in.Text = text
-			if len(in.Text) > 3000 {
-				return nil, errors.New("reviewed_text_too_long")
-			}
-			if strings.HasSuffix(in.Thread, "@chatroom") && cfg.Companion.Quiet(time.Now()) {
-				return nil, errors.New("目标群处于安静时段")
-			}
-			if cfg.Behavior.RandomDelay {
-				delay := cfg.Behavior.DelayMinSeconds
-				if n := cfg.Behavior.DelayMaxSeconds - delay; n > 0 {
-					delay += rand.IntN(n + 1)
-				}
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(time.Duration(delay) * time.Second):
-				}
-			}
-			if err := m.memory.ClaimReply(cfg.Companion, time.Now()); err != nil {
-				return nil, err
-			}
-			if !p.privileged() || !p.conversationReadAllowed(in.Thread) || !m.Config().Companion.Permissions.ReplyText {
-				return nil, rejectOutboundEvidence(errors.New("outbound_destination_authorization_revoked"))
-			}
-			if err := p.validateOutboundText(ctx, in.Thread, binding, in.Text); err != nil {
-				return nil, err
-			}
-			request := linuxnative.ToolSend{ThreadID: in.Thread, Kind: "text", Text: in.Text, IdempotencyKey: key}
-			if binding.QuoteRequired && in.Thread == p.trace.Thread {
-				ref := p.outboundInput(in.Thread).Source
-				if p.trace.QuotedSource != nil && p.trace.QuotedSource.MessageID == binding.AnchorMessageID {
-					ref = p.trace.QuotedSource
-				}
-				if ref == nil || ref.ServerID == "" || ref.MessageID != binding.AnchorMessageID {
-					return nil, errors.New("outbound_quote_source_unavailable")
-				}
-				request.Quote = &linuxnative.ToolQuote{MessageID: ref.MessageID, ServerID: ref.ServerID}
-			}
-			status, err := m.submitWechat(ctx, native, request)
-			if err == nil {
-				if status.State == "accepted" && status.ServerID != "" {
-					p.rememberAgentSend(in.Thread, in.Text, key)
-				}
-				m.record(bot.Record{Event: "agent_cross_send", Category: "sent", ThreadID: in.Thread, Sender: p.trace.Sender, Content: in.Text, Status: status.State, SendID: status.ID, MessageID: p.trace.TraceID, Origin: "agent"})
-			}
-			return status, err
-		})
+		return wechatapp.SendText(ctx, args, &wechatTextHost{p: p, raw: args})
 	case "wechat_account_action":
-		var in linuxnative.AdminAction
-		settings := m.agent.config()
-		if json.Unmarshal(args, &in) != nil || !p.wechatActionAllowed(in, false, settings) || (in.Kind != "recall" && in.Kind != "mute" && !strings.HasSuffix(in.ThreadID, "@chatroom")) || len(in.Text) > 512 || len(in.Members) > 40 {
-			return "", toolInputError("账号动作未授权或参数无效")
-		}
-		if in.Kind == "add_members" || in.Kind == "remove_members" {
-			if len(in.Members) == 0 {
-				return "", toolInputError("成员不能为空")
-			}
-			for _, id := range in.Members {
-				if !validID(id) || strings.HasSuffix(id, "@chatroom") {
-					return "", toolInputError("成员ID无效")
-				}
-			}
-		}
-		if in.Kind == "recall" {
-			msg, err := m.native.Message(ctx, in.MessageID)
-			if err != nil || !matchesOwnWechatMessage(msg, p.trace.Account, in.ThreadID, in.MessageID) || msg.ServerID != in.ServerID {
-				return "", toolInputError("只能撤回当前目标中准确匹配的本人消息")
-			}
-		}
-		return p.submitWechatAction(ctx, name, args, in, agentID(p.trace.Account, p.trace.TraceID, name, string(args)), settings, false)
+		return wechatapp.AccountAction(ctx, args, &wechatActionHost{p: p, tool: name, raw: args})
 	}
 	return "", toolInputError("未知Agent工具")
 }
