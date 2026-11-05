@@ -14,7 +14,7 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
-[assembly: AssemblyTitle("蓝色大肥鱼桌面版")]
+[assembly: AssemblyTitle("Agent-home-station 桌面版")]
 [assembly: AssemblyVersion("1.1.0.0")]
 namespace WechatAgent.Desktop {
     internal static class Program {
@@ -39,7 +39,7 @@ namespace WechatAgent.Desktop {
                     var d = Deployment.Load(Deployment.FindWorkspace(args));
                     Run(d, instance);
                 }
-            } catch (Exception error) { MessageBox.Show(error.Message, "大肥鱼 Agent · 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            } catch (Exception error) { MessageBox.Show(error.Message, "Agent-home-station · 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
         internal static void RegisterDependencies() {
                 AppDomain.CurrentDomain.AssemblyResolve += delegate(object sender, ResolveEventArgs e) {

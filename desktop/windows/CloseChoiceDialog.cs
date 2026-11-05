@@ -18,7 +18,7 @@ namespace WechatAgent.Desktop {
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), ColumnCount = 1, RowCount = 4 };
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var heading = new Label { Text = "关闭蓝色大肥鱼", AutoSize = true, Font = new Font(Font.FontFamily, 15, FontStyle.Bold), Margin = new Padding(0, 0, 0, 12) };
+            var heading = new Label { Text = "关闭 Agent-home-station", AutoSize = true, Font = new Font(Font.FontFamily, 15, FontStyle.Bold), Margin = new Padding(0, 0, 0, 12) };
             var description = new Label { Text = "转入托盘后，Agent 会继续处理消息。退出程序会等待任务结束，并停止服务。", AutoSize = true, MaximumSize = new Size(450, 0), Margin = new Padding(0, 0, 0, 12) };
             remember.Text = "记住此选项(&R)"; remember.AccessibleName = "记住此选项"; remember.AutoSize = true; remember.Margin = new Padding(0, 0, 0, 16); remember.TabIndex = 0;
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Margin = Padding.Empty };

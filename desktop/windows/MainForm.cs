@@ -41,7 +41,7 @@ namespace WechatAgent.Desktop {
         internal MainForm(Deployment d, EventWaitHandle activation, ServiceController services, bool startOnShown) {
             deployment = d; activate = activation; controller = services;
             closeSettings = new CloseSettings(d.Workspace);
-            Text = "蓝色大肥鱼"; Size = new Size(1440, 980); MinimumSize = new Size(920, 640);
+            Text = "Agent-home-station"; Size = new Size(1440, 980); MinimumSize = new Size(920, 640);
             WindowState = FormWindowState.Maximized;
             StartPosition = FormStartPosition.CenterScreen; AutoScaleMode = AutoScaleMode.Dpi;
             DoubleBuffered = true;
@@ -52,7 +52,7 @@ namespace WechatAgent.Desktop {
             placeholder.Dock = DockStyle.Fill; placeholder.BackColor = Color.FromArgb(248, 250, 252);
             var center = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(36) };
             center.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); center.RowStyles.Add(new RowStyle(SizeType.AutoSize)); center.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
-            status.Text = "正在启动蓝色大肥鱼…"; status.Dock = DockStyle.Fill; status.TextAlign = ContentAlignment.BottomCenter; status.AutoSize = false;
+            status.Text = "正在启动 Agent-home-station…"; status.Dock = DockStyle.Fill; status.TextAlign = ContentAlignment.BottomCenter; status.AutoSize = false;
             var buttons = new FlowLayoutPanel { AutoSize = true, Anchor = AnchorStyles.Top, WrapContents = false, Margin = new Padding(0, 24, 0, 0) };
             retry.Text = "重新启动"; retry.AccessibleName = retry.Text; retry.AutoSize = true; retry.MinimumSize = new Size(120, 44); retry.Visible = false;
             cancel.Text = "取消退出"; cancel.AccessibleName = cancel.Text; cancel.AutoSize = true; cancel.MinimumSize = new Size(120, 44); cancel.Visible = false;
@@ -65,20 +65,20 @@ namespace WechatAgent.Desktop {
             startItem.Click += async delegate { await StartServices(); };
             stopItem.Click += async delegate { await StopServices(false); };
             exitItem.Click += async delegate { RequestExit(); if (!busy) await StopServices(true); };
-            var about = new ToolStripMenuItem("关于蓝色大肥鱼");
+            var about = new ToolStripMenuItem("关于 Agent-home-station");
             var closeMode = new ToolStripMenuItem("关闭窗口时");
             foreach (var value in new [] { new [] {"ask", "每次询问"}, new [] {"tray", "最小化到托盘运行"}, new [] {"exit", "退出并停止全部服务"} }) {
                 string behavior = value[0]; var item = new ToolStripMenuItem(value[1]) { Checked = closeSettings.Behavior == behavior };
                 item.Click += delegate {
                     try { closeSettings.Save(behavior); foreach (ToolStripMenuItem other in closeMode.DropDownItems) other.Checked = other == item; }
-                    catch (Exception error) { MessageBox.Show(this, "关闭方式未能保存，原设置保留。\n" + error.Message, "蓝色大肥鱼", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                    catch (Exception error) { MessageBox.Show(this, "关闭方式未能保存，原设置保留。\n" + error.Message, "Agent-home-station", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
                 };
                 closeMode.DropDownItems.Add(item);
             }
             closeMode.DropDownOpening += delegate { for (int i = 0; i < closeMode.DropDownItems.Count; i++) ((ToolStripMenuItem)closeMode.DropDownItems[i]).Checked = closeSettings.Behavior == new [] {"ask", "tray", "exit"}[i]; };
-            about.Click += delegate { MessageBox.Show("蓝色大肥鱼桌面版 1.1.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/wechat-agent\n反馈：https://github.com/RoamerFly/wechat-agent/issues\n\n最小化：保留任务栏窗口，继续运行\n关闭窗口：选择取消、托盘或退出，可记住选择\n选择退出：安全停止全部本实例服务并退出\n\n后端：" + (d.Windows ? "Windows 原生（Linux 微信协议标识）" : "WSL") + "\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于蓝色大肥鱼", MessageBoxButtons.OK, MessageBoxIcon.Information); };
+            about.Click += delegate { MessageBox.Show("Agent-home-station 桌面版 1.1.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/wechat-agent\n反馈：https://github.com/RoamerFly/wechat-agent/issues\n\n最小化：保留任务栏窗口，继续运行\n关闭窗口：选择取消、托盘或退出，可记住选择\n选择退出：安全停止全部本实例服务并退出\n\n后端：" + (d.Windows ? "Windows 原生（Linux 微信协议标识）" : "WSL") + "\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于 Agent-home-station", MessageBoxButtons.OK, MessageBoxIcon.Information); };
             menu.Items.AddRange(new ToolStripItem[] {show, hide, new ToolStripSeparator(), startItem, stopItem, new ToolStripSeparator(), closeMode, about, exitItem});
-            tray.Icon = Icon; tray.Text = "蓝色大肥鱼 · 正在启动"; tray.ContextMenuStrip = menu; tray.Visible = true;
+            tray.Icon = Icon; tray.Text = "Agent-home-station · 正在启动"; tray.ContextMenuStrip = menu; tray.Visible = true;
             tray.DoubleClick += delegate { RestoreWindow(); };
             retry.Click += async delegate { await StartServices(); };
             cancel.Click += delegate { if (!stoppingCommitted && operation != null) { exitRequested = false; operation.Cancel(); } };
@@ -110,7 +110,7 @@ namespace WechatAgent.Desktop {
                             if (dialog.Remember) closeSettings.Save(choice);
                         }
                     } catch (Exception error) {
-                        MessageBox.Show(this, "关闭方式未能保存，服务保持运行。\n" + error.Message, "蓝色大肥鱼", MessageBoxButtons.OK, MessageBoxIcon.Warning); return;
+                        MessageBox.Show(this, "关闭方式未能保存，服务保持运行。\n" + error.Message, "Agent-home-station", MessageBoxButtons.OK, MessageBoxIcon.Warning); return;
                     } finally { closeDialogOpen = false; }
                 }
                 if (choice == "tray") { ToTray(); return; }
@@ -131,7 +131,7 @@ namespace WechatAgent.Desktop {
             ++pageGeneration;
             if (busy) {
                 status.Text = "操作完成后将安全停止服务并退出…";
-                tray.Text = "蓝色大肥鱼 · 正在准备退出";
+                tray.Text = "Agent-home-station · 正在准备退出";
             }
         }
         internal void ToTray() {
@@ -171,11 +171,11 @@ namespace WechatAgent.Desktop {
         internal async Task StartServices() {
             if (busy || closeQueued || allowExit) return; SetBusy(true, false); operation = new CancellationTokenSource();
             try {
-                status.Text = "正在启动蓝色大肥鱼…"; tray.Text = "蓝色大肥鱼 · 正在启动";
+                status.Text = "正在启动 Agent-home-station…"; tray.Text = "Agent-home-station · 正在启动";
                 lifecycle.State("正在启动",status.Text);
                 await controller.Start(operation.Token);
                 if (!exitRequested) await ShowPage();
-                tray.Text = "蓝色大肥鱼 · 运行中";
+                tray.Text = "Agent-home-station · 运行中";
             } catch (Exception error) { if (!IsDisposed && !Disposing) Error(error); }
             finally { operation.Dispose(); operation = null; if (!IsDisposed && !Disposing) { SetBusy(false, false); if (web == null) retry.Visible = true; } }
             if (exitRequested) await StopServices(true);
@@ -187,14 +187,14 @@ namespace WechatAgent.Desktop {
             bool completedExit = false;
             try {
                 ++pageGeneration;placeholder.Visible=true;placeholder.BringToFront();
-                status.Text = "正在等待在途任务结束，随后停止全部服务…"; tray.Text = "蓝色大肥鱼 · 正在安全停止";
+                status.Text = "正在等待在途任务结束，随后停止全部服务…"; tray.Text = "Agent-home-station · 正在安全停止";
                 lifecycle.State(exiting?"正在安全退出":"正在停止服务",status.Text);
                 await controller.Stop(operation.Token);
                 ClosePage();lifecycle.State("已安全停止","登录、记忆与配置已保留。",false,true);
-                tray.Text = "蓝色大肥鱼 · 已停止";
+                tray.Text = "Agent-home-station · 已停止";
                 completedExit = exitRequested;
             } catch (OperationCanceledException) {
-                exitRequested = false; status.Text = "已取消退出，服务继续运行。"; tray.Text = "蓝色大肥鱼 · 运行中";
+                exitRequested = false; status.Text = "已取消退出，服务继续运行。"; tray.Text = "Agent-home-station · 运行中";
                 cancelled = true;
             } catch (Exception error) { exitRequested = false; Error(error); }
             finally {
@@ -257,7 +257,7 @@ namespace WechatAgent.Desktop {
         }
         bool Local(string url) { Uri uri; return Uri.TryCreate(url, UriKind.Absolute, out uri) && uri.GetLeftPart(UriPartial.Authority) == deployment.Url && uri.UserInfo == ""; }
         static bool Http(string url) { Uri uri; return Uri.TryCreate(url, UriKind.Absolute, out uri) && (uri.Scheme == "http" || uri.Scheme == "https"); }
-        void Error(Exception error) { if (IsDisposed || Disposing || allowExit) return; ClosePage(); status.Text = error.Message;lifecycle.State("操作未完成",error.Message,false); retry.Visible = true; tray.Text = "蓝色大肥鱼 · 需要处理"; RestoreWindow(); }
+        void Error(Exception error) { if (IsDisposed || Disposing || allowExit) return; ClosePage(); status.Text = error.Message;lifecycle.State("操作未完成",error.Message,false); retry.Visible = true; tray.Text = "Agent-home-station · 需要处理"; RestoreWindow(); }
         protected override void Dispose(bool disposing) {
             if (disposing) { ++pageGeneration; allowExit = true; timer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); if (web != null) { web.Dispose(); web = null; } controller.Dispose(); }
             base.Dispose(disposing);

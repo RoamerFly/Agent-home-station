@@ -1,7 +1,11 @@
-# 大肥鱼 · 微信 Agent
+# Agent-home-station
 
-大肥鱼把语言模型接入微信。它可以在授权的私聊或群聊中结合聊天记录回答问题，按需调用工具，并把结果发回对应会话。管理员通过桌面管理页配置账号、模型、群偏好和工具，查看每次执行及微信回执。
+一个属于 AI 伙伴的家。大肥鱼在这里与你对话，记住共同经历，管理自己的工作空间，并使用获准的工具探索和创作。
 
-内置工具包括微信收发和联网检索。通用工具按需安装，包括文档加工、语音合成、音乐与换声（YuE / RVC）、媒体理解及自定义工具。会话记忆和任务调度由主体提供。Windows 原生版可直接运行，基础收发无需 WSL。
+项目正在从微信 Agent 演进为“主体＋接入应用＋项目工具”：微信作为首个应用，提供聊天和文件收发；ComfyUI、RVC、YuE 等负责创作。后续应用可沿统一规范接入。
 
-[中文使用手册](handbook/index.md) · [在线教程](https://roamerfly.github.io/wechat-agent/) · [项目 Wiki](https://github.com/RoamerFly/wechat-agent/wiki) · [Windows 原生版源码](https://github.com/RoamerFly/wechat-agent/tree/codex/windows-native-backend)
+当前已有 Windows 桌面管理、原生微信连接、会话记忆、任务和工具管理。独立于微信的软件聊天框、应用注册和目录迁移正在重构，尚未全部上线。
+
+[使用手册](handbook/index.md) · [在线教程](https://roamerfly.github.io/wechat-agent/) · [Wiki](https://github.com/RoamerFly/wechat-agent/wiki) · [成长计划](docs/design/大肥鱼长期成长阶梯计划.md) · [应用接入规范](docs/design/应用接入与项目工具规范.md)
+
+项目已更名；现有 GitHub 地址、Go 模块和本机目录暂保留原标识，兼容既有安装与数据。

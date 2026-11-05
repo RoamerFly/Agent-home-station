@@ -1,4 +1,6 @@
-# 大肥鱼使用手册
+# Agent-home-station 使用手册
+
+项目已更名，伙伴角色仍叫大肥鱼。当前手册介绍已实现的微信与工具功能；应用化重构进度见[长期成长计划](https://github.com/RoamerFly/wechat-agent/blob/codex/windows-native-backend/docs/design/大肥鱼长期成长阶梯计划.md)。
 
 第一次使用，先完成一次授权私聊的文字回复，再安装需要的工具。这样遇到问题时，可以判断故障发生在微信连接、模型、加工工具还是投递阶段。
 
