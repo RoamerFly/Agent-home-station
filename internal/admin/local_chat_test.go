@@ -188,11 +188,63 @@ func TestLocalChatBusyAndShutdownDoNotReplay(t *testing.T) {
 
 func TestLocalChatNoConfigurationDoesNotCallModelOrLoseDraft(t *testing.T) {
 	f := localChatFixture(t)
-	if code, out := localChatSend(f, "unconfigured", "你好"); code != 503 {
+	if code, out := localChatSend(f, "unconfigured", "模型不可用时仍须保存的原文"); code != 503 {
 		t.Fatalf("missing configuration: %d %#v", code, out)
+	}
+	_, page := f.request("GET", "/api/local/chat", nil, true)
+	items, _ := page["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["role"] != "user" || items[0].(map[string]any)["text"] != "模型不可用时仍须保存的原文" {
+		t.Fatalf("unconfigured request was not retained: %#v", page)
 	}
 	code, out := f.request("GET", "/api/local/model", nil, true)
 	if code != 200 || out["key_configured"] != false || out["thinking_enabled"] != true || out["reasoning_effort"] != "low" {
 		t.Fatalf("model defaults: %d %#v", code, out)
+	}
+	// The same durable source event remains readable after a station restart;
+	// it is not an in-memory draft or a request that will be auto-replayed.
+	f.server.Close()
+	if err := f.handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restart := newLocalHomeFixture(t, f.dir, f.root)
+	restart.login()
+	_, page = restart.request("GET", "/api/local/chat", nil, true)
+	items, _ = page["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["text"] != "模型不可用时仍须保存的原文" {
+		t.Fatalf("restart lost unconfigured source: %#v", page)
+	}
+}
+
+func TestLocalChatCloseContextBoundsUncooperativeModel(t *testing.T) {
+	f := localChatFixture(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		return localModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+			close(started)
+			<-release // Deliberately ignores its context until the test releases it.
+			return "", context.Canceled
+		}), nil
+	}
+	finished := make(chan struct{})
+	go func() { defer close(finished); localChatSend(f, "stuck", "等待不可合作模型") }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("model did not start")
+	}
+	deadline, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	err := f.handler.CloseContext(deadline)
+	cancel()
+	if err == nil || !strings.Contains(err.Error(), "超过等待时限") {
+		t.Fatalf("unbounded close or wrong error: %v", err)
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("released model did not finish")
+	}
+	if err := f.handler.CloseContext(context.Background()); err != nil {
+		t.Fatalf("close could not finish after release: %v", err)
 	}
 }

@@ -20,27 +20,35 @@ namespace WechatAgent.Desktop {
     internal static class Program {
         static readonly object loaderGate = new object();
         static bool loaderConfigured;
+#if LOCAL_STATION
+        const bool LocalStationBuild = true;
+#else
+        const bool LocalStationBuild = false;
+#endif
         [DllImport("shell32.dll", CharSet=CharSet.Unicode)]
         static extern int SetCurrentProcessExplicitAppUserModelID(string identity);
         [STAThread]
         static void Main(string[] args) {
             if (args.Length == 1 && (args[0] == "--start-services" || args[0] == "--stop-services" || args[0] == "--exit-services")) {
-                Environment.ExitCode = DesktopInstance.RequestCommand(args[0].Substring(2)) ? 0 : 1;
+                Environment.ExitCode = DesktopInstance.RequestCommand(args[0].Substring(2), InstanceName()) ? 0 : 1;
                 return;
             }
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             try {
-                using (var instance = new DesktopInstance()) {
-                    // Admit before reading another copy's configuration or
-                    // constructing any form/WebView/service process.
+                // The binary family is the only authority for its control
+                // namespace.  Admit before reading configuration so a second
+                // instance cannot touch another instance's files or services.
+                using (var instance = new DesktopInstance(InstanceName())) {
                     if (!instance.IsOwner) { instance.ActivateOwner(); return; }
-                    SetCurrentProcessExplicitAppUserModelID("RoamerFly.WechatAgent.Desktop");
-                    RegisterDependencies();
                     var d = Deployment.Load(Deployment.FindWorkspace(args));
+                    if (d.LocalStation != LocalStationBuild) throw new InvalidOperationException(LocalStationBuild ? "AgentHomeStation 只能打开 local-station 本机成长站配置。" : "WechatAgent 不能打开 local-station 预览配置；请使用 AgentHomeStation.exe。");
+                    SetCurrentProcessExplicitAppUserModelID(LocalStationBuild ? "RoamerFly.AgentHomeStation.Local" : "RoamerFly.WechatAgent.Desktop");
+                    RegisterDependencies();
                     Run(d, instance);
                 }
             } catch (Exception error) { MessageBox.Show(error.Message, "Agent-home-station · 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
+        static string InstanceName() { return LocalStationBuild ? DesktopInstance.LocalStationName : DesktopInstance.Name; }
         internal static void RegisterDependencies() {
                 AppDomain.CurrentDomain.AssemblyResolve += delegate(object sender, ResolveEventArgs e) {
                     string name = new AssemblyName(e.Name).Name;

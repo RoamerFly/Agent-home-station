@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -198,6 +199,23 @@ namespace WechatAgent.Desktop {
                 Console.WriteLine("Native Windows failed-start recovery passed twice."); return 0;
             }
             if (args.Length == 1 && args[0] == "--synthetic-child") { Thread.Sleep(60000); return 0; }
+            if (args.Length == 2 && args[0] == "--local-cycle") {
+                var d = Deployment.LocalStationDefault(Path.GetFullPath(args[1]));
+                Assert(!File.Exists(Path.Combine(d.Workspace, "runtimes", "windows-x64", "wx.exe")), "local station validation must not require wx.exe");
+                var reserved = new TcpListener(IPAddress.Loopback, new Uri(d.Url).Port);
+                try {
+                    reserved.Start();
+                    using (var blocked = new ServiceController(d)) Reject(() => blocked.Start(CancellationToken.None)).GetAwaiter().GetResult();
+                } finally { reserved.Stop(); }
+                using (var c = new ServiceController(d)) {
+                    for (int i = 0; i < 2; i++) {
+                        c.Start(CancellationToken.None).GetAwaiter().GetResult();
+                        Assert(c.Healthy().GetAwaiter().GetResult(), "local station health after start");
+                        c.Stop(CancellationToken.None).GetAwaiter().GetResult();
+                    }
+                }
+                Console.WriteLine("LocalStation real service cycle passed twice; no WeChat/native process."); return 0;
+            }
             if (args.Length == 2 && args[0] == "--cycle") {
                 var config = Deployment.Load(args[1]);
                 if (!config.Windows) throw new Exception("cycle requires isolated Windows native deployment");

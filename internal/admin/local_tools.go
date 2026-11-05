@@ -28,7 +28,7 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) com
 	access := &localWorkspaceAccess{home: h.home}
 	h.mu.Lock()
 	var err error
-	if h.processes == nil && !h.closed {
+	if h.processes == nil && !h.closed && !h.stopping.Load() {
 		h.processes, err = newLocalProcessTools(access, h.home.dataDir, h.windows)
 	}
 	process := h.processes

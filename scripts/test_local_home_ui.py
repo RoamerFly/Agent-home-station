@@ -16,8 +16,8 @@ from playwright.sync_api import sync_playwright
 def start(binary, data, workspace):
     environment = dict(os.environ, AHS_ADMIN_PASSWORD="synthetic-home-owner")
     process = subprocess.Popen(
-        [str(binary), "-data", str(data), "-workspace", str(workspace), "-listen", "127.0.0.1:0"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+        [str(binary), "--desktop", "-data", str(data), "-workspace", str(workspace), "-listen", "127.0.0.1:0"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     lines = queue.Queue()
@@ -36,8 +36,16 @@ def start(binary, data, workspace):
 
 def stop(process):
     if process.poll() is None:
-        process.terminate()
-        process.wait(timeout=15)
+        try:
+            process.stdin.write(b"stop\n")
+            process.stdin.flush()
+            assert process.wait(timeout=15) == 0, "desktop service did not stop gracefully"
+        except BaseException:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=15)
+            raise
+    process.stdin.close()
     process.stdout.close()
     process.stderr.close()
 
@@ -56,6 +64,7 @@ def verify(binary, output):
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(origin)
+                assert context.request.get(origin + "/api/local/runtime").status == 401
                 page.locator("#login-view").wait_for(state="visible")
                 page.screenshot(path=str(output / "login-light.png"))
                 page.locator("#login-password").fill("synthetic-home-owner")
@@ -63,6 +72,9 @@ def verify(binary, output):
                 page.locator("#initialize-button").wait_for(state="visible")
                 assert page.locator("#login-view").is_hidden(), "login card remained visible after login"
                 assert not (data / "fish-identity.json").exists(), "read created identity"
+                runtime = context.request.get(origin + "/api/local/runtime").json()
+                assert runtime["kind"] == "local-station" and runtime["pid"] == process.pid
+                assert Path(runtime["data_directory"]).resolve() == data.resolve()
                 page.locator("#initialize-button").click()
                 page.locator("#chat-view").wait_for(state="visible")
                 initial = context.request.get(origin + "/api/local/home").json()

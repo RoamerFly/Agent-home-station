@@ -67,6 +67,12 @@ func (t *localProcessTools) Close() error {
 	return nil
 }
 
+func (t *localProcessTools) BeginShutdown() {
+	if t != nil && t.jobs != nil {
+		t.jobs.BeginShutdown()
+	}
+}
+
 func (t *localProcessTools) List(context.Context) ([]mcptools.Tool, error) {
 	return []mcptools.Tool{agentTool("server_windows_process", "Run, inspect, read or cancel a persistent Windows LPAC process in Dafeiyu's own home. Start accepts only an absolute executable argv and never falls back to the host shell. request_key is durable: reuse it only to query the same process.", `{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","read","cancel"]},"id":{"type":"string"},"path":{"type":"string"},"argv":{"type":"array","items":{"type":"string"},"minItems":1},"request_key":{"type":"string","minLength":1,"maxLength":128},"timeout_seconds":{"type":"integer","minimum":0}},"required":["action"],"additionalProperties":false}`)}, nil
 }

@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,9 +24,43 @@ import (
 type LocalHomeHandler struct {
 	http.Handler
 	chat *localChatService
+	home *localHomeService
 }
 
-func (h *LocalHomeHandler) Close() error { return h.chat.close() }
+// BeginShutdown is deliberately separate from Close.  It first makes the
+// station unavailable to new conversations and cancels an in-flight model
+// request, so HTTP shutdown does not spend its grace period waiting for a
+// model/tool call that can no longer produce a usable result.
+func (h *LocalHomeHandler) BeginShutdown() {
+	if h != nil && h.chat != nil {
+		h.chat.beginShutdown()
+	}
+}
+
+func (h *LocalHomeHandler) Close() error {
+	return h.CloseContext(context.Background())
+}
+
+// CloseContext is the bounded counterpart used by the desktop lifecycle.
+// BeginShutdown is always applied first; if an uncooperative model or runner
+// still owns the turn, the caller regains control at its explicit deadline and
+// a later CloseContext can finish the same close without replaying anything.
+func (h *LocalHomeHandler) CloseContext(ctx context.Context) error {
+	if h == nil || h.chat == nil {
+		return nil
+	}
+	h.BeginShutdown()
+	return h.chat.closeContext(ctx)
+}
+
+func (h *LocalHomeHandler) runtime(w http.ResponseWriter, _ *http.Request) {
+	if h == nil || h.home == nil {
+		fail(w, http.StatusServiceUnavailable, "本机成长站不可用")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	respond(w, http.StatusOK, map[string]any{"kind": "local-station", "pid": os.Getpid(), "data_directory": h.home.dataDir})
+}
 
 type localChatService struct {
 	home      *localHomeService
@@ -37,6 +72,9 @@ type localChatService struct {
 	fishID    string
 	ownerID   string
 	closed    bool
+	stopping  atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
 	ctx       context.Context
 	cancel    context.CancelFunc
 	windows   *agenthost.WindowsConfig
@@ -51,24 +89,70 @@ func newLocalChatService(home *localHomeService) *localChatService {
 	return &localChatService{home: home, models: newLocalModelStore(home.dataDir), ctx: ctx, cancel: cancel}
 }
 
-func (h *localChatService) close() error {
-	h.cancel()
-	h.turn.Lock()
-	defer h.turn.Unlock()
+func (h *localChatService) beginShutdown() {
+	if h == nil {
+		return
+	}
+	h.stopping.Store(true)
+	// Cancel is idempotent. It is intentionally outside turn/mu: Close must
+	// be able to interrupt the model that currently owns turn before waiting
+	// to close SQLite or process records.
+	if h.cancel != nil {
+		h.cancel()
+	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.closed = true
-	var err error
-	if h.processes != nil {
-		err = h.processes.Close()
+	processes := h.processes
+	h.mu.Unlock()
+	// Do not wait for child process bookkeeping here. Jobs closes admission and
+	// cancels existing child contexts while holding its own registry mutex.
+	if processes != nil {
+		processes.BeginShutdown()
 	}
-	if h.store != nil {
-		return errors.Join(err, h.store.Close())
+}
+
+func (h *localChatService) close() error {
+	return h.closeContext(context.Background())
+}
+
+func (h *localChatService) closeContext(ctx context.Context) error {
+	h.beginShutdown()
+	if h == nil {
+		return nil
 	}
-	return err
+	done := make(chan struct{})
+	go func() {
+		h.closeOnce.Do(func() {
+			// An active chat owns turn. Its context was cancelled above, so this
+			// wait cannot keep a desktop stop blocked on a provider timeout.
+			h.turn.Lock()
+			defer h.turn.Unlock()
+			h.mu.Lock()
+			h.closed = true
+			processes, store := h.processes, h.store
+			h.mu.Unlock()
+			// Jobs owns cancellation and waits for the isolated child result before
+			// its durable record is closed. Do not replay any interrupted request.
+			if processes != nil {
+				h.closeErr = errors.Join(h.closeErr, processes.Close())
+			}
+			if store != nil {
+				h.closeErr = errors.Join(h.closeErr, store.Close())
+			}
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+		return h.closeErr
+	case <-ctx.Done():
+		return fmt.Errorf("本机服务停止超过等待时限: %w", ctx.Err())
+	}
 }
 
 func (h *localChatService) conversation() (*companion.Store, companion.Input, error) {
+	if h == nil || h.stopping.Load() {
+		return nil, companion.Input{}, errors.New("本机服务正在停止")
+	}
 	record, err := h.home.identity.localIdentity()
 	if err != nil || record.LocalOwner == nil {
 		return nil, companion.Input{}, errors.New("请先准备本机身份；身份损坏时请保留原文件")
@@ -161,6 +245,10 @@ func localConversationConfig(persona string) companion.Config {
 }
 
 func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.stopping.Load() {
+		fail(w, http.StatusServiceUnavailable, "本机服务正在停止，未启动新的聊天或工具")
+		return
+	}
 	var request struct {
 		RequestID string `json:"request_id"`
 		Text      string `json:"text"`
@@ -197,6 +285,19 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]any{"request_id": request.RequestID, "messages": prior.Messages, "status": "completed", "reused": true})
 		return
 	}
+	in.Text, in.OriginalText, in.TraceID = request.Text, &request.Text, request.RequestID
+	in.MessageTime = time.Now().UTC().Format(time.RFC3339Nano)
+	if prior != nil {
+		in.MessageTime = prior.OccurredAt
+	}
+	in.Source = &companion.SourceRef{MessageID: request.RequestID}
+	// Save the actual user request before consulting model settings. This uses
+	// the normal event/source identity and makes an unavailable model a retryable
+	// unfinished turn rather than a lost message or a second event stream.
+	if err = store.Observe(in, localConversationConfig(""), time.Now().UTC()); err != nil {
+		fail(w, 503, "原消息未能写入本地记录，请先刷新核对")
+		return
+	}
 	settings, err := h.models.View()
 	if err != nil {
 		fail(w, 409, "本机模型配置不可读，原文件保留")
@@ -215,12 +316,6 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 	if client, ok := model.(interface{ CloseIdleConnections() }); ok {
 		defer client.CloseIdleConnections()
 	}
-	in.Text, in.OriginalText, in.TraceID = request.Text, &request.Text, request.RequestID
-	in.MessageTime = time.Now().UTC().Format(time.RFC3339Nano)
-	if prior != nil {
-		in.MessageTime = prior.OccurredAt
-	}
-	in.Source = &companion.SourceRef{MessageID: request.RequestID}
 	c := localConversationConfig(settings.Persona)
 	engine, err := companion.New(c, store, model, "你是大肥鱼，正在 Agent-home-station 软件中与本机主人交谈。当前没有接入任何应用；按本轮工具目录使用本地记忆和主人授权的家目录。软件界面展示已写入本地聊天记录的气泡，不代表微信发送或主人已经读过。不要声称已使用未提供的应用或执行能力。")
 	if err != nil {

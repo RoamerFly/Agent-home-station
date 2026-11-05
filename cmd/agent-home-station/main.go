@@ -30,6 +30,7 @@ type config struct {
 	workspaceRoot string
 	listen        string
 	runtimeFile   string
+	desktop       bool
 }
 
 func main() {
@@ -47,6 +48,13 @@ func main() {
 // separate from main so desktop integration can stop it using a context and
 // tests can validate the command without signals.
 func run(ctx context.Context, args []string, output io.Writer) error {
+	return runWithDesktopInput(ctx, args, output, os.Stdin)
+}
+
+// runWithDesktopInput keeps the desktop pipe injectable for lifecycle tests.
+// It deliberately ignores input unless --desktop was explicitly selected;
+// ordinary CLI callers can therefore inherit a closed stdin without exiting.
+func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, input io.Reader) error {
 	path, err := os.Executable()
 	if err != nil {
 		return errors.New("cannot determine executable location")
@@ -68,7 +76,11 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer handler.Close()
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = handler.CloseContext(closeCtx)
+	}()
 
 	listener, err := net.Listen("tcp", cfg.listen)
 	if err != nil {
@@ -85,6 +97,10 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	go func() { serveResult <- server.Serve(listener) }()
 
 	fmt.Fprintf(output, "Agent Home Station 已启动：%s\n工作空间：%s\n", listener.Addr().String(), cfg.workspaceRoot)
+	var desktop <-chan struct{}
+	if cfg.desktop {
+		desktop = desktopStop(input)
+	}
 	select {
 	case err := <-serveResult:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -92,17 +108,26 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 		}
 		return err
 	case <-ctx.Done():
+	case <-desktop:
 	}
 
+	// Cancel model/tool work before HTTP graceful shutdown. Otherwise a request
+	// that is already running can consume the entire HTTP timeout while the
+	// desktop waits to exit.
+	handler.BeginShutdown()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		return err
+	shutdownErr := server.Shutdown(shutdownCtx)
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	closeErr := handler.CloseContext(closeCtx)
+	closeCancel()
+	if shutdownErr != nil {
+		return errors.Join(shutdownErr, closeErr)
 	}
 	if err := <-serveResult; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+		return errors.Join(err, closeErr)
 	}
-	return nil
+	return closeErr
 }
 
 func parseConfig(args []string, executable string) (config, error) {
@@ -115,6 +140,7 @@ func parseConfig(args []string, executable string) (config, error) {
 	workspaceFlag := fs.String("workspace", "", "大肥鱼工作空间根目录（绝对路径）")
 	listenFlag := fs.String("listen", defaultListen, "仅本机监听地址")
 	runtimeFlag := fs.String("runtime-config", "", "可选 Windows 运行器配置文件绝对路径")
+	desktopFlag := fs.Bool("desktop", false, "由桌面程序持有的私有停止管道模式")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -149,7 +175,7 @@ func parseConfig(args []string, executable string) (config, error) {
 	if *runtimeFlag != "" && !filepath.IsAbs(*runtimeFlag) {
 		return config{}, errors.New("runtime configuration must be absolute")
 	}
-	return config{dataDir: dataDir, workspaceRoot: workspaceRoot, listen: listen, runtimeFile: *runtimeFlag}, nil
+	return config{dataDir: dataDir, workspaceRoot: workspaceRoot, listen: listen, runtimeFile: *runtimeFlag, desktop: *desktopFlag}, nil
 }
 
 // localListenAddress accepts only unambiguous loopback addresses. In

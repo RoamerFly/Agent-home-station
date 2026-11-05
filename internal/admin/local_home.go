@@ -67,6 +67,7 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ..
 	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
 	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
 	chat := newLocalChatService(home)
+	handler := &LocalHomeHandler{Handler: mux, chat: chat, home: home}
 	if len(windows) > 0 && windows[0] != nil {
 		copy := *windows[0]
 		copy.Spool = filepath.Join(dir, "local-execution-spool")
@@ -85,6 +86,10 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ..
 		chat.windows = &copy
 	}
 	chat.routes(s, mux)
+	// Desktop owns the inherited stop pipe. This authenticated endpoint only
+	// proves which local-station process it started; it is intentionally not a
+	// public stop surface and it never exposes application-account state.
+	mux.HandleFunc("GET /api/local/runtime", s.protected(handler.runtime))
 	for route, asset := range map[string]string{
 		"/": "local-home.html", "/assets/local-home.js": "local-home.js", "/assets/local-home.css": "local-home.css",
 		"/assets/whale-girl-cutout.png": "whale-girl-cutout.png", "/assets/night-sea.webp": "night-sea.webp",
@@ -114,7 +119,7 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ..
 			_, _ = w.Write(data)
 		})
 	}
-	return &LocalHomeHandler{Handler: mux, chat: chat}, nil
+	return handler, nil
 }
 
 func (s *Server) localHomeRoutes(mux *http.ServeMux, identity *fishIdentityRegistry, root, dataDir string) {

@@ -179,3 +179,16 @@ func TestLocalHomeCredentialBoundaryAndNoWeChatRoutes(t *testing.T) {
 		t.Fatal("home grant could contain host credentials")
 	}
 }
+
+func TestLocalHomeRuntimeIsAuthenticatedAndIdentifiesOnlyThisStation(t *testing.T) {
+	base := t.TempDir()
+	f := newLocalHomeFixture(t, filepath.Join(base, "private"), filepath.Join(base, "workspace"))
+	if code, _ := f.request("GET", "/api/local/runtime", nil, false); code != http.StatusUnauthorized {
+		t.Fatalf("runtime was public: %d", code)
+	}
+	f.login()
+	code, got := f.request("GET", "/api/local/runtime", nil, true)
+	if code != http.StatusOK || got["kind"] != "local-station" || int(got["pid"].(float64)) != os.Getpid() || got["data_directory"] != f.dir {
+		t.Fatalf("runtime identity: %d %#v", code, got)
+	}
+}

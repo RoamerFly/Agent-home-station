@@ -158,6 +158,53 @@ namespace WechatAgent.Desktop {
             }
             }
         }
+        static string FreeLocalUrl() {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            try {
+                listener.Start();
+                return "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port;
+            } finally { listener.Stop(); }
+        }
+        static bool LocalPortOpen(string url) {
+            try {
+                var uri = new Uri(url);
+                using (var client = new TcpClient()) {
+                    client.Connect(uri.Host, uri.Port);
+                    return true;
+                }
+            } catch (SocketException) { return false; }
+        }
+        // This intentionally uses the actual local-station executable rather
+        // than SyntheticPageServer.  It proves that the desktop owns only its
+        // own child, authenticates its private session and can close it again.
+        static async Task LocalStationFormTests(string package, string root) {
+            var d = Deployment.LocalStationDefault(Path.GetFullPath(package));
+            d.Root = Path.Combine(root, "station-data");
+            d.StationWorkspace = Path.Combine(d.Root, "managed-workspaces");
+            d.Url = FreeLocalUrl();
+            Assert(File.Exists(d.StationExe), "local station executable missing from preview package");
+            Assert(!File.Exists(Path.Combine(d.Workspace, "runtimes", "windows-x64", "wx.exe")), "local station window test must not require wx.exe");
+            new CloseSettings(d.Workspace).Save("exit");
+            using (var instance = new DesktopInstance(DesktopInstance.LocalStationName + ".window-test." + Guid.NewGuid().ToString("N")))
+            using (var form = new MainForm(d, instance)) {
+                Assert(instance.IsOwner, "local station window owns its isolated control name");
+                form.Show();
+                await Wait(() => form.Controls.OfType<WebView2>().Any(candidate => candidate.CoreWebView2 != null && candidate.Visible), "local station WebView did not initialize");
+                var view = form.Controls.OfType<WebView2>().Single();
+                bool localPage = false;
+                for (int i = 0; i < 150 && !localPage; ++i) {
+                    try {
+                        var result = await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#initialize-button, #chat-input'))");
+                        localPage = result == "true";
+                    } catch (InvalidOperationException) { }
+                    if (!localPage) await Task.Delay(100);
+                }
+                Assert(localPage, "local station management page did not expose initialize or chat UI");
+                form.Close();
+                await Wait(() => form.IsDisposed, "local station exit did not close its management window");
+                await Wait(() => !LocalPortOpen(d.Url), "local station exit left its owned service listening");
+            }
+        }
         [STAThread]
         static int Main(string[] args) {
             if (args.Length >= 2 && args[0].StartsWith("--instance-", StringComparison.Ordinal)) {
@@ -169,19 +216,25 @@ namespace WechatAgent.Desktop {
             Console.OutputEncoding = new System.Text.UTF8Encoding(false);
             Program.RegisterDependencies();
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+            string localStationPackage = args.Length == 2 && args[0] == "--local-station" ? Path.GetFullPath(args[1]) : null;
+            if (args.Length != 0 && localStationPackage == null) { Console.Error.WriteLine("参数：--local-station <预览包目录>"); return 2; }
             Exception failure = null;
             Application.ThreadException += delegate(object sender, ThreadExceptionEventArgs e) { failure = e.Exception; };
             string root = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "window-tests-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             using (var host = new Form { ShowInTaskbar = false, Opacity = 0, Location = new Point(-20000, -20000), StartPosition = FormStartPosition.Manual }) {
                 host.Shown += async delegate {
-                    try { LoadingSurfaceTests(root); await InstanceTests(root); await FormTests(root); }
+                    try {
+                        if (localStationPackage != null) await LocalStationFormTests(localStationPackage, root);
+                        else { LoadingSurfaceTests(root); await InstanceTests(root); await FormTests(root); }
+                    }
                     catch (Exception error) { failure = error; }
                     finally { host.Close(); }
                 };
                 Application.Run(host);
             }
             if (failure != null) { Console.Error.WriteLine(failure); return 1; }
-            Console.WriteLine("Desktop window lifecycle assertions passed: " + assertions + "; 8 real WinForms/WebView exit cycles, 12 simultaneous duplicate probes; synthetic services, no WeChat sends.");
+            if (localStationPackage != null) Console.WriteLine("LocalStation desktop window assertions passed: " + assertions + "; actual isolated local service, WebView page and owned-process shutdown; no WeChat/native process.");
+            else Console.WriteLine("Desktop window lifecycle assertions passed: " + assertions + "; 8 real WinForms/WebView exit cycles, 12 simultaneous duplicate probes; synthetic services, no WeChat sends.");
             return 0;
         }
     }
