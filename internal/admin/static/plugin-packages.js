@@ -204,6 +204,30 @@
   const actions=Array.isArray(device.authorized_actions)?device.authorized_actions.filter(Boolean):[];
   return '已登记应用：'+(apps.length?apps.join('、'):'无')+' · 已登记动作：'+(actions.length?actions.join('、'):'无');
  }
+ function observationGrants(device,fish,bindingID){
+  const grants=Array.isArray(device.observation_apps)?device.observation_apps:[];
+  return grants.filter(grant=>grant&&typeof grant.package==='string'&&grant.package.trim()&&String(grant.binding_id||'').trim()===bindingID&&(!grant.fish_id||String(grant.fish_id).trim()===fish));
+ }
+ function observationAppControls(device,fish,deviceFish,bindingID,action,reload,current,message){
+  const box=el('fieldset',undefined,'mobile-observation-apps'),legend=el('legend','应用观察授权'),apps=(Array.isArray(device.authorized_apps)?device.authorized_apps:[]).map(value=>String(value||'').trim()).filter(Boolean),actions=(Array.isArray(device.authorized_actions)?device.authorized_actions:[]).map(value=>String(value||'').trim()),grants=observationGrants(device,fish,bindingID),granted=new Set(grants.map(grant=>grant.package)),packages=[...new Set([...apps,...granted])],bound=Boolean(fish&&deviceFish===fish&&bindingID),recordsReadable=device.observation_apps_state!=='unavailable',canEnable=bound&&recordsReadable&&device.authorization_state==='ready'&&actions.includes('observe');
+  box.append(legend,el('small','仅设置授权，暂不自动查看手机；后续探索仅可读取当前应用画面，不包含点击、评论或发布。','hint'));
+  if(!bound)box.append(el('small','绑定大肥鱼设备后才能设置自主观察。','hint'));
+  else if(!recordsReadable)box.append(el('small','授权记录暂无法读取，暂不能更改。','hint'));
+  else if(!granted.size&&!packages.length)box.append(el('small','当前没有已登记应用可设置。','hint'));
+  else if(!canEnable)box.append(el('small',device.authorization_state==='ready'?'当前技术授权未允许观察，暂不能新增授权。':'尚未读取授权范围，暂不能新增授权。','hint'));
+  if(!packages.length)return box;
+  const list=el('div',undefined,'mobile-observation-app-list');
+  for(const pkg of packages){
+   const grant=grants.find(item=>item.package===pkg),enabled=Boolean(grant),available=canEnable&&apps.includes(pkg)&&grant?.available!==false,label=el('label',undefined,'mobile-observation-app'),toggle=document.createElement('input'),copy=el('span',pkg+' · 允许自主观察');
+   toggle.type='checkbox';toggle.checked=enabled;toggle.disabled=!bound||!recordsReadable||(!enabled&&!canEnable);
+   toggle.addEventListener('change',async()=>{
+    const next=toggle.checked;toggle.disabled=true;
+    try{const result=await action('overview.observation-apps',{device_id:device.device_id,binding_id:bindingID,package:pkg,enabled:next});await reload();if(current()&&result?.warning)message(result.warning)}catch(error){toggle.checked=enabled;const detail=error?.message||'应用观察授权未更新。';try{await reload()}catch{}message(detail,true)}finally{if(current()&&toggle.isConnected)toggle.disabled=!bound||!recordsReadable||(!toggle.checked&&!canEnable)}
+   });
+   label.append(toggle,copy);if(!available)label.append(el('small','暂不可用','mobile-observation-app-state'));list.append(label);
+  }
+  box.append(list);return box;
+ }
  function renderMobileObservation(panel,data,action,reload,current,archive,message){
   if(!Object.prototype.hasOwnProperty.call(data,'overview'))return;
   const overview=data.overview||{},devices=Array.isArray(overview.devices)?overview.devices:[];
@@ -246,6 +270,7 @@
     }else if(deviceFish===fish)identity.append(el('small','绑定信息待核对。','hint'));
     else identity.append(el('small','已绑定其他身份。','hint'));
     details.append(identity);
+    details.append(observationAppControls(device,fish,deviceFish,bindingID,action,reload,current,message));
    }
    content.append(details,visual);card.append(content);
    list.append(card);

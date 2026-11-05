@@ -97,6 +97,7 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/mobile/overview/{device}/observe", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.observe") }))
 	mux.HandleFunc("POST /api/mobile/overview/{device}/bind", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.bind") }))
 	mux.HandleFunc("POST /api/mobile/overview/{device}/unbind", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.unbind") }))
+	mux.HandleFunc("POST /api/mobile/overview/{device}/observation-apps", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.observation-apps") }))
 	mux.HandleFunc("POST /api/mobile/overview/{device}/pause", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.pause") }))
 	mux.HandleFunc("POST /api/mobile/overview/{device}/takeover", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.takeover") }))
 	mux.HandleFunc("POST /api/mobile/overview/{device}/resume", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.resume") }))
@@ -130,10 +131,12 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 // legacy resource URLs and the mobile-control package's declarative UI.
 func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action string) {
 	switch action {
-	case "overview.observe", "overview.bind", "overview.unbind", "overview.pause", "overview.takeover", "overview.resume":
+	case "overview.observe", "overview.bind", "overview.unbind", "overview.observation-apps", "overview.pause", "overview.takeover", "overview.resume":
 		var in struct {
 			DeviceID  string `json:"device_id"`
 			BindingID string `json:"binding_id"`
+			Package   string `json:"package"`
+			Enabled   *bool  `json:"enabled"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -187,6 +190,12 @@ func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action
 					return
 				}
 			}
+		case "overview.observation-apps":
+			if in.Enabled == nil {
+				fail(w, 400, "需要明确指定是否允许只读观察")
+				return
+			}
+			result, err = observer.SetObservationAppGrant(in.DeviceID, in.BindingID, in.Package, *in.Enabled)
 		case "overview.pause":
 			result, err = observer.SetObservationPaused(in.DeviceID, true, false)
 		case "overview.takeover":
@@ -195,14 +204,37 @@ func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action
 			result, err = observer.SetObservationPaused(in.DeviceID, false, false)
 		}
 		if err != nil {
-			if action == "overview.bind" || action == "overview.unbind" {
+			if action == "overview.bind" || action == "overview.unbind" || action == "overview.observation-apps" {
+				if action == "overview.observation-apps" {
+					switch err.Error() {
+					case "device_repository_invalid":
+						fail(w, 500, "只读观察授权记录无法读取；未改变授权")
+						return
+					case "device_observation_app_not_allowed":
+						fail(w, 409, "该应用未获当前设备的只读观察权限")
+						return
+					case "device_observation_app_grant_invalid":
+						fail(w, 400, "需要当前设备绑定和有效应用包名")
+						return
+					case "device_not_authorized":
+						fail(w, 404, "设备未授权给当前手机工具")
+						return
+					case "device_fish_binding_changed", "device_fish_binding_required", "device_fish_identity_unavailable":
+						fail(w, 409, "鱼设备绑定已变更或暂不可用，请刷新后再试")
+						return
+					}
+				}
 				switch err.Error() {
 				case "device_fish_identity_unavailable":
 					fail(w, 409, "鱼身份资料暂不可用，未改变设备授权")
 				case "账号未绑定到鱼身份":
 					fail(w, 409, "请先将当前微信账号绑定给大肥鱼")
 				default:
-					fail(w, 409, "鱼设备绑定已变更或暂不可用，请刷新后再试")
+					if action == "overview.observation-apps" {
+						fail(w, 500, "只读观察授权记录未能保存；请检查本地存储后重试")
+					} else {
+						fail(w, 409, "鱼设备绑定已变更或暂不可用，请刷新后再试")
+					}
 				}
 				return
 			}

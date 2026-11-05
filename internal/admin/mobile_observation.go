@@ -31,21 +31,23 @@ type mobileObservationDeviceControl struct {
 // mobileDeviceOverview deliberately describes a last verified observation;
 // CurrentApp is not a live foreground-app claim.
 type mobileDeviceOverview struct {
-	DeviceID           string    `json:"device_id"`
-	FishID             string    `json:"fish_id,omitempty"`
-	BindingID          string    `json:"binding_id,omitempty"`
-	AuthorizedApps     []string  `json:"authorized_apps"`
-	AuthorizedActions  []string  `json:"authorized_actions"`
-	AuthorizationState string    `json:"authorization_state"`
-	ConnectionState    string    `json:"connection_state"`
-	CheckedAt          time.Time `json:"checked_at,omitempty"`
-	CurrentApp         string    `json:"current_app,omitempty"`
-	ObservedAt         time.Time `json:"observed_at,omitempty"`
-	TaskID             string    `json:"task_id,omitempty"`
-	ObservationID      string    `json:"observation_id,omitempty"`
-	ScreenshotURI      string    `json:"screenshot_uri,omitempty"`
-	Paused             bool      `json:"paused"`
-	Takeover           bool      `json:"takeover"`
+	DeviceID             string                          `json:"device_id"`
+	FishID               string                          `json:"fish_id,omitempty"`
+	BindingID            string                          `json:"binding_id,omitempty"`
+	AuthorizedApps       []string                        `json:"authorized_apps"`
+	AuthorizedActions    []string                        `json:"authorized_actions"`
+	AuthorizationState   string                          `json:"authorization_state"`
+	ObservationApps      []mobileObservationAppGrantView `json:"observation_apps"`
+	ObservationAppsState string                          `json:"observation_apps_state"`
+	ConnectionState      string                          `json:"connection_state"`
+	CheckedAt            time.Time                       `json:"checked_at,omitempty"`
+	CurrentApp           string                          `json:"current_app,omitempty"`
+	ObservedAt           time.Time                       `json:"observed_at,omitempty"`
+	TaskID               string                          `json:"task_id,omitempty"`
+	ObservationID        string                          `json:"observation_id,omitempty"`
+	ScreenshotURI        string                          `json:"screenshot_uri,omitempty"`
+	Paused               bool                            `json:"paused"`
+	Takeover             bool                            `json:"takeover"`
 }
 
 type mobileOverview struct {
@@ -92,12 +94,16 @@ func (s *mobileWorkflowService) Overview() mobileOverview {
 		return mobileOverview{Devices: []mobileDeviceOverview{}}
 	}
 	grants := s.manager.mobileDeviceGrantSummary(snapshot.settings)
+	appGrants, appGrantErr := s.observationAppGrants(snapshot)
 	overview := mobileOverview{Devices: make([]mobileDeviceOverview, 0, len(snapshot.settings.Devices))}
 	if fishID, _, fishBound, fishErr := s.manager.mobileAccountDeviceBinding(""); fishErr == nil && fishBound {
 		overview.FishID = fishID
 	}
 	for _, deviceID := range snapshot.settings.Devices {
-		entry := mobileDeviceOverview{DeviceID: deviceID, ConnectionState: "unknown", AuthorizedApps: []string{}, AuthorizedActions: []string{}, AuthorizationState: "unavailable"}
+		entry := mobileDeviceOverview{DeviceID: deviceID, ConnectionState: "unknown", AuthorizedApps: []string{}, AuthorizedActions: []string{}, AuthorizationState: "unavailable", ObservationApps: []mobileObservationAppGrantView{}, ObservationAppsState: "ready"}
+		if appGrantErr != nil {
+			entry.ObservationAppsState = "unavailable"
+		}
 		if grant, ok := grants[deviceID]; ok {
 			entry.AuthorizedApps = grant.Packages
 			entry.AuthorizedActions = grant.Actions
@@ -105,6 +111,14 @@ func (s *mobileWorkflowService) Overview() mobileOverview {
 		}
 		if fishID, bindingID, fishBound, fishErr := s.manager.mobileAccountDeviceBinding(deviceID); fishErr == nil && fishBound && bindingID != "" {
 			entry.FishID, entry.BindingID = fishID, bindingID
+			if appGrantErr == nil {
+				for _, grant := range currentObservationAppGrants(appGrants, deviceID, fishID, bindingID) {
+					entry.ObservationApps = append(entry.ObservationApps, mobileObservationAppGrantView{
+						GrantID: grant.GrantID, FishID: grant.FishID, DeviceID: grant.DeviceID, BindingID: grant.BindingID, Package: grant.Package,
+						Available: mobileObservationAppAllowed(entry, grant.Package),
+					})
+				}
+			}
 		}
 		state := control.Devices[deviceID]
 		entry.Paused, entry.Takeover, entry.CheckedAt = state.Paused, state.Takeover, state.CheckedAt
@@ -401,6 +415,7 @@ type mobileObservationService interface {
 	Overview() mobileOverview
 	ObserveOnce(context.Context, string) (mobileDeviceOverview, error)
 	SetObservationPaused(string, bool, bool) (mobileOverview, error)
+	SetObservationAppGrant(string, string, string, bool) (mobileOverview, error)
 }
 
 func (m *Manager) mobileObservationService() (mobileObservationService, bool) {
