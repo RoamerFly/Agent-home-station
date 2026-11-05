@@ -279,6 +279,7 @@ def verify(binary, output):
                 worker_lifecycle_pattern = status_pattern + "/lifecycle"
                 worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "contact_read": False, "actions": []}
                 legacy = {"availability": "available", "previews": 0, "posts": []}
+                legacy_memory = {"requests": []}
 
                 def legacy_plan(applied=False):
                     refreshed = legacy["availability"] == "applied" and legacy["previews"] >= 3
@@ -347,6 +348,29 @@ def verify(binary, output):
                     fulfill_json(legacy_plan(True))(route)
 
                 page.route(legacy_import_pattern, legacy_import)
+                legacy_memory_pattern = legacy_import_pattern + "/memory*"
+
+                def legacy_memory_report(route):
+                    assert route.request.method == "GET"
+                    query = parse_qs(urlparse(route.request.url).query, keep_blank_values=True)
+                    after = query.get("after", [""])[0]
+                    legacy_memory["requests"].append(after)
+                    if after == "fixture-memory-next":
+                        fulfill_json({"status": "ready", "matched_scopes": 2, "unmapped_scopes": 1, "foreign_scopes": 0,
+                                      "conversations": [{"thread_id": "synthetic-room-older@chatroom", "event_count": 4,
+                                                         "withheld_events": 1, "memory_count": 1, "has_summary": False,
+                                                         "history_granted": False}]})(route)
+                        return
+                    if len([item for item in legacy_memory["requests"] if not item]) > 1:
+                        fulfill_json({"status": "snapshot_incomplete", "matched_scopes": 2, "unmapped_scopes": 1,
+                                      "foreign_scopes": 0, "conversations": []})(route)
+                        return
+                    fulfill_json({"status": "ready", "matched_scopes": 2, "unmapped_scopes": 1, "foreign_scopes": 0,
+                                  "conversations": [{"thread_id": "synthetic-room@chatroom", "event_count": 12,
+                                                     "withheld_events": 2, "memory_count": 3, "has_summary": True,
+                                                     "history_granted": True}], "next_after": "fixture-memory-next"})(route)
+
+                page.route(legacy_memory_pattern, legacy_memory_report)
                 contacts_pattern = status_pattern + "/contacts*"
                 contact_queries = []
 
@@ -388,7 +412,18 @@ def verify(binary, output):
                 page.get_by_text("原生档案：导入记录与当前连接匹配", exact=True).wait_for()
                 page.get_by_text("目标登录：尚未登录", exact=True).wait_for()
                 page.get_by_text("身份确认：仍需主人确认实际微信身份", exact=True).wait_for()
-                assert legacy["previews"] == 1 and not legacy["posts"] and not worker["actions"] and not worker["threads"], "preview must be read-only"
+                assert legacy["previews"] == 1 and not legacy["posts"] and not legacy_memory["requests"] and not worker["actions"] and not worker["threads"], "preview must be read-only"
+                page.get_by_role("button", name="核对旧会话记忆", exact=True).click()
+                page.get_by_text("旧会话记忆可核对", exact=True).wait_for()
+                page.get_by_text("匹配范围：2；未映射范围：1；外部范围：0", exact=True).wait_for()
+                page.get_by_text("会话：synthetic-room@chatroom；来源候选：12；已排除：2；记忆：3；摘要：有；当前目标历史授权：已授权", exact=True).wait_for()
+                page.get_by_text("历史授权仅表示当前目标连接的读取权限，不代表可读取旧版资料。", exact=True).wait_for()
+                page.get_by_role("button", name="读取下一页会话", exact=True).click()
+                page.get_by_text("会话：synthetic-room-older@chatroom；来源候选：4；已排除：1；记忆：1；摘要：无；当前目标历史授权：未授权", exact=True).wait_for()
+                assert legacy_memory["requests"] == ["", "fixture-memory-next"] and not legacy["posts"], "memory check must be read-only"
+                page.get_by_role("button", name="核对旧会话记忆", exact=True).click()
+                page.get_by_text("旧会话快照不完整，请使用正常关闭后的一致副本", exact=True).wait_for()
+                assert legacy_memory["requests"] == ["", "fixture-memory-next", ""] and not legacy["posts"], "unavailable memory state must remain read-only"
                 page.get_by_role("button", name="确认接入旧版摘要", exact=True).click()
                 page.get_by_text("旧版资料或当前状态已变化，请重新读取接入预演。", exact=True).wait_for()
                 assert page.get_by_role("button", name="确认接入旧版摘要", exact=True).count() == 0, "stale preview requires a fresh read"
@@ -871,7 +906,7 @@ def verify(binary, output):
                 assert note.read_text(encoding="utf-8") == "a persistent companion home"
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "legacy import preview confirm and stale retry", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group management receipts", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "legacy import preview confirm and stale retry", "legacy memory inventory and pagination", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group management receipts", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 

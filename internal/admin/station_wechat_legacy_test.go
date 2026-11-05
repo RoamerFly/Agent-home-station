@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/companion"
 )
 
 func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
@@ -133,8 +135,90 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		}
 		return body
 	}
+	memoryRoute := func(account string) string { return planRoute(account) + "/memory" }
 	req("GET", planRoute("one"), nil, false, 401)
+	req("GET", memoryRoute("one"), nil, false, 401)
 	f.login()
+	req("GET", memoryRoute("two"), nil, false, 404)
+	req("GET", memoryRoute("unknown"), nil, false, 404)
+	if report := req("GET", memoryRoute("three"), nil, false, 200); report["status"] != "missing" {
+		t.Fatal("secondary account fell back to primary memory", report)
+	}
+	legacyMemoryDir := filepath.Join(snapshot, "admin", "companion")
+	write(filepath.Join(legacyMemoryDir, "memory.json"), []byte("{}"))
+	if report := req("GET", memoryRoute("one"), nil, false, 200); report["status"] != "unsupported" || report["backend"] != "legacy_json" {
+		t.Fatal("legacy JSON treated as a completed audit", report)
+	}
+	memory, err := companion.NewStore(legacyMemoryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := companion.Defaults()
+	cfg.Permissions.Remember = true
+	now := time.Now().UTC()
+	for _, in := range []companion.Input{
+		{Channel: "wechat", Account: "one", Thread: "123@chatroom", TraceID: "chat", Sender: "synthetic-sender", Text: "synthetic-private-body", Source: &companion.SourceRef{Integrity: "verified"}},
+		{Channel: "wechat", Account: "one", Thread: "filehelper", TraceID: "helper", Sender: "synthetic-sender", Text: "synthetic-private-body", Source: &companion.SourceRef{Integrity: "verified"}},
+		{Channel: "wechat", Account: "other", Thread: "foreign-private-thread", TraceID: "foreign", Sender: "synthetic-sender", Text: "synthetic-private-body", Source: &companion.SourceRef{Integrity: "verified"}},
+	} {
+		in.MessageTime = now.Format(time.RFC3339Nano)
+		if err := memory.Observe(in, cfg, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := memory.Clear(companion.ScopeID("wechat", "one", "filehelper")); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(legacyMemoryDir, "memory.sqlite")
+	dbBefore, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A mistakenly staged primary database cannot expose its scope IDs under a secondary account.
+	secondaryMemory := filepath.Join(snapshot, "admin", "accounts", accountDirectory("three"), "companion", "memory.sqlite")
+	write(secondaryMemory, dbBefore)
+	if report := req("GET", memoryRoute("three"), nil, false, 200); report["status"] != "ready" ||
+		report["matched_scopes"] != float64(0) || report["foreign_scopes"] != float64(3) || len(report["conversations"].([]any)) != 0 {
+		t.Fatal("wrong-account snapshot disclosed conversations", report)
+	}
+	write(dbPath+"-wal", []byte("synthetic WAL not a standalone snapshot"))
+	if report := req("GET", memoryRoute("one"), nil, false, 200); report["status"] != "snapshot_incomplete" {
+		t.Fatal("WAL-bearing snapshot treated as standalone", report)
+	}
+	if err := os.Remove(dbPath + "-wal"); err != nil {
+		t.Fatal(err)
+	}
+	req("GET", memoryRoute("one")+"?limit=201", nil, false, 400)
+	req("GET", memoryRoute("one")+"?after=bad", nil, false, 400)
+	audit := req("GET", memoryRoute("one")+"?limit=1", nil, false, 200)
+	if audit["status"] != "ready" || audit["backend"] != "sqlite" || audit["matched_scopes"] != float64(2) || audit["foreign_scopes"] != float64(1) {
+		t.Fatal(audit)
+	}
+	first := audit["conversations"].([]any)[0].(map[string]any)
+	if first["thread_id"] != "123@chatroom" || first["event_count"] != float64(1) || first["history_granted"] != false {
+		t.Fatal(first)
+	}
+	for _, private := range []string{"synthetic-private-body", "synthetic-sender", "foreign-private-thread", "memory.sqlite"} {
+		if strings.Contains(string(j(audit)), private) {
+			t.Fatal("memory preview exposed private data", private)
+		}
+	}
+	cursor := url.QueryEscape(audit["next_after"].(string))
+	second := req("GET", memoryRoute("one")+"?after="+cursor, nil, false, 200)["conversations"].([]any)[0].(map[string]any)
+	if second["thread_id"] != "filehelper" || second["event_count"] != float64(0) || second["withheld_events"] != float64(1) {
+		t.Fatal(second)
+	}
+	if data, err := os.ReadFile(dbPath); err != nil || !bytes.Equal(dbBefore, data) {
+		t.Fatal("read-only preview changed the source database", err)
+	}
+	for _, sidecar := range []string{"-wal", "-shm", "-journal"} {
+		if _, err := os.Stat(dbPath + sidecar); !os.IsNotExist(err) {
+			t.Fatal("read-only preview created a sidecar", sidecar, err)
+		}
+	}
 	req("GET", planRoute("unknown"), nil, false, 404)
 	req("GET", planRoute("two"), nil, false, 404)
 	req("GET", planRoute("three"), nil, false, 422)
@@ -236,6 +320,14 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		if err != nil || string(data) != expected {
 			t.Fatal("migration changed the snapshot", err)
 		}
+	}
+	req("PUT", route("one")+"/policy", map[string]any{
+		"reply_threads": []string{"123@chatroom"}, "history_threads": []string{"123@chatroom"},
+	}, true, 200)
+	req("GET", memoryRoute("one")+"?after="+cursor, nil, false, 409)
+	audit = req("GET", memoryRoute("one")+"?limit=1", nil, false, 200)
+	if row := audit["conversations"].([]any)[0].(map[string]any); row["history_granted"] != true {
+		t.Fatal("preview did not show configured target authorization", row)
 	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)

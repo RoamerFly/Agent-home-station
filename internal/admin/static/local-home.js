@@ -225,7 +225,9 @@
     let plan = null, loading = false;
     const note = appElement("small", stateCopy[availability] || "旧版接入状态暂不可读。");
     const result = appElement("div", "");
+    const memoryResult = appElement("div", "", "legacy-memory-result");
     const actions = appElement("div", "", "app-worker-actions");
+    const legacyImportURL = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import";
     const preview = appSetupButton(availability === "applied" ? "查看接入摘要" : "查看接入预演", async () => {
       if (loading) return;
       loading = true;
@@ -233,7 +235,7 @@
       preview.disabled = true;
       result.replaceChildren(appElement("small", "正在读取旧版接入信息…"));
       try {
-        plan = await request("/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import");
+        plan = await request(legacyImportURL);
         renderPlan();
       } catch (error) {
         plan = null;
@@ -320,8 +322,45 @@
       apply.dataset.legacyConfirm = "true";
       actions.append(apply);
     }
+    function renderMemoryReport(value) {
+      const statusCopy = {
+        ready: "旧会话记忆可核对",
+        missing: "未找到可核对的旧会话记忆",
+        snapshot_incomplete: "旧会话快照不完整，请使用正常关闭后的一致副本",
+        unsupported: "当前旧资料格式不支持会话记忆核对",
+        unavailable: "旧会话记忆暂不可读"
+      };
+      const conversations = Array.isArray(value?.conversations) ? value.conversations : [];
+      const rows = conversations.map((conversation) => appElement("p",
+        `会话：${conversation.thread_id || "未知"}；来源候选：${Number(conversation.event_count || 0)}；已排除：${Number(conversation.withheld_events || 0)}；记忆：${Number(conversation.memory_count || 0)}；摘要：${conversation.has_summary ? "有" : "无"}；当前目标历史授权：${conversation.history_granted ? "已授权" : "未授权"}`));
+      const next = typeof value?.next_after === "string" && value.next_after ? appSetupButton("读取下一页会话", () => readLegacyMemory(value.next_after)) : null;
+      memoryResult.replaceChildren(
+        appElement("strong", statusCopy[value?.status] || "旧会话记忆状态待核对"),
+        value?.status === "ready" ? appElement("p", `匹配范围：${Number(value?.matched_scopes || 0)}；未映射范围：${Number(value?.unmapped_scopes || 0)}；外部范围：${Number(value?.foreign_scopes || 0)}`) : document.createTextNode(""),
+        appElement("small", "历史授权仅表示当前目标连接的读取权限，不代表可读取旧版资料。"),
+        ...rows,
+        next || document.createTextNode("")
+      );
+    }
+    let memoryLoading = false;
+    async function readLegacyMemory(after = "") {
+      if (memoryLoading) return;
+      memoryLoading = true;
+      memoryResult.replaceChildren(appElement("small", "正在核对旧会话记忆…"));
+      try {
+        const suffix = after ? "?after=" + encodeURIComponent(after) : "";
+        renderMemoryReport(await request(legacyImportURL + "/memory" + suffix));
+      } catch (error) {
+        memoryResult.replaceChildren(appElement("small", error.message));
+      } finally {
+        memoryLoading = false;
+      }
+    }
+    if (["available", "applied", "conflict"].includes(availability)) {
+      actions.append(appSetupButton("核对旧会话记忆", () => readLegacyMemory()));
+    }
     actions.append(preview);
-    body.append(note, actions, result);
+    body.append(note, actions, result, memoryResult);
     panel.append(body);
     return panel;
   }

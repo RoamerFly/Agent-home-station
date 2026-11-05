@@ -9,6 +9,7 @@ import (
 )
 
 func (s *stationWechat) legacyImportRoutes(server *Server, mux *http.ServeMux) {
+	s.legacyMemoryRoute(server, mux)
 	const path = "/api/apps/wechat/connections/{connection}/legacy-import"
 	mux.HandleFunc("GET "+path, server.protected(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
