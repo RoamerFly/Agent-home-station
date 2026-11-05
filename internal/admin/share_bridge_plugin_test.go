@@ -87,7 +87,7 @@ func TestChannelsBridgeUsesInstalledPluginConfigAndLoopbackOnly(t *testing.T) {
 		t.Fatalf("unexpected bridge result: %s", result)
 	}
 	p.binding.mu.Lock()
-	resolved := p.binding.resolved
+	resolved := p.binding.route.Resolved
 	p.binding.mu.Unlock()
 	if resolved == nil || resolved.MediaURL != "https://video.example.test/object.mp4" || resolved.ObjectID != "12345" {
 		t.Fatalf("host did not retain verified bridge source: %#v", resolved)
@@ -186,7 +186,7 @@ func TestChannelsBridgeRechecksNativeSourceAfterTransport(t *testing.T) {
 		t.Fatal("changed native source accepted after bridge response")
 	}
 	p.binding.mu.Lock()
-	resolved := p.binding.resolved
+	resolved := p.binding.route.Resolved
 	p.binding.mu.Unlock()
 	if resolved != nil {
 		t.Fatalf("stale bridge result was retained: %#v", resolved)

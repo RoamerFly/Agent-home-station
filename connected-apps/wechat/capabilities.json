@@ -238,7 +238,7 @@
     {
       "id": "share.read",
       "implementation": "migration-pending",
-      "description": "share.read",
+      "description": "核验并读取原微信分享。已迁入兼容适配器，实际读取依赖宿主的分享读取和媒体能力；独立运行接入待迁移。",
       "permissions": [],
       "discoverable": false,
       "input_schema": {

@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"time"
 
-	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/sharespec"
 )
@@ -80,7 +79,7 @@ func (p *receivedSharePolicy) channelsBridge(ctx context.Context, j pluginhost.J
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
-	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF || in.ObjectID != p.binding.object || in.NonceID != p.binding.nonce {
+	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF {
 		return nil, errors.New("share_bridge_source_mismatch")
 	}
 	base, configured, err := p.configuredChannelsBridge(ctx)
@@ -103,15 +102,13 @@ func (p *receivedSharePolicy) channelsBridge(ctx context.Context, j pluginhost.J
 	}
 	// Reserve the one source-bound bridge read before opening the connection.
 	// Unlike the credential route state machine this path has only one request,
-	// so a failed/in-flight phase is sufficient to prevent a compromised plugin
-	// session from replaying the same backend read concurrently or afterward.
+	// so an in-flight phase prevents replay even if the network call fails.
 	p.binding.mu.Lock()
-	if p.binding.phase != "channels-bridge" {
-		p.binding.mu.Unlock()
-		return nil, errors.New("share_bridge_already_consumed")
-	}
-	p.binding.phase = "failed"
+	err = p.binding.route.BeginBridge(in.ObjectID, in.NonceID)
 	p.binding.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	timeout := time.Duration(actualTimeout) * time.Second
 	q := url.Values{"object_id": {in.ObjectID}, "nonce_id": {in.NonceID}}
 	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/api/channels/feed/profile?"+q.Encode(), nil)
@@ -138,9 +135,10 @@ func (p *receivedSharePolicy) channelsBridge(ctx context.Context, j pluginhost.J
 		return nil, err
 	}
 	p.binding.mu.Lock()
-	p.binding.share = base
-	p.binding.resolved = &linuxnative.ChannelsSource{AccountID: p.binding.account, ThreadID: p.binding.thread, MessageID: p.binding.message, ObjectID: video.ObjectID, MediaURL: video.URL, DecodeKey: video.DecodeKey, Title: video.Title, Author: video.Author, State: "available"}
-	p.binding.phase = "complete"
+	err = p.binding.route.CompleteBridge(base, video)
 	p.binding.mu.Unlock()
+	if err != nil {
+		return nil, errors.New("share_bridge_response_invalid")
+	}
 	return json.Marshal(map[string]any{"source_url": base, "feed": json.RawMessage(body)})
 }

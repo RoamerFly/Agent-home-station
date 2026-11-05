@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
@@ -202,8 +203,8 @@ func TestShareBindingOnlyOriginalSourceAndObservedChain(t *testing.T) {
 	if _, err := b.Call(t.Context(), s, j, cap, routeEnvelope("channels-feed", feedBody, previewURL), check, send); err == nil {
 		t.Fatal("completed POST replayed")
 	}
-	if calls != 2 || b.phase != "complete" {
-		t.Fatal(calls, b.phase)
+	if calls != 2 || b.route.Phase != "complete" {
+		t.Fatal(calls, b.route.Phase)
 	}
 }
 func TestShareBindingFailureOrRevocationCannotResumeWithOtherSource(t *testing.T) {
@@ -249,7 +250,7 @@ func TestShareBindingRejectsScopeRevisionAndFeedObjectConflict(t *testing.T) {
 			t.Fatal("scope mismatch accepted")
 		}
 	}
-	if err := b.accept("channels-feed", json.RawMessage(`{"errCode":0,"data":{"feedInfo":{"objectId":"999"}}}`)); err == nil {
+	if err := b.route.Accept("channels-feed", json.RawMessage(`{"errCode":0,"data":{"feedInfo":{"objectId":"999"}}}`)); err == nil {
 		t.Fatal("other work accepted")
 	}
 }
@@ -271,7 +272,7 @@ func TestShareBindingModernFeedRequiresNativeObjectAndExactObservedExport(t *tes
 			if mode == "other_source" {
 				play += "-foreign-source"
 			}
-			if err := binding.accept("channels-parse", json.RawMessage(`{"code":0,"data":{"playable_url":"`+play+`"}}`)); err != nil {
+			if err := binding.route.Accept("channels-parse", json.RawMessage(`{"code":0,"data":{"playable_url":"`+play+`"}}`)); err != nil {
 				t.Fatal(err)
 			}
 			var feed map[string]any
@@ -289,7 +290,7 @@ func TestShareBindingModernFeedRequiresNativeObjectAndExactObservedExport(t *tes
 			case "wrong_export":
 				data["sceneInfo"] = map[string]any{"dynamicExportId": "export/foreign"}
 			case "unbound_object":
-				binding.object = ""
+				binding.route.Object = ""
 			case "explicit_wrong":
 				info["objectId"] = "999"
 			case "explicit_null":
@@ -298,17 +299,17 @@ func TestShareBindingModernFeedRequiresNativeObjectAndExactObservedExport(t *tes
 				info["decodeKey"] = "not-a-key"
 			}
 			raw, _ := json.Marshal(feed)
-			err := binding.accept("channels-feed", raw)
+			err := binding.route.Accept("channels-feed", raw)
 			if mode != "valid" && mode != "metadata_changed" {
-				if err == nil || binding.resolved != nil {
+				if err == nil || binding.route.Resolved != nil {
 					t.Fatal("unproven identity or key accepted", mode)
 				}
 				return
 			}
-			if err != nil || binding.resolved.ObjectID != "12345" || binding.resolved.DecodeKey != "" {
+			if err != nil || binding.route.Resolved.ObjectID != "12345" || binding.route.Resolved.DecodeKey != "" {
 				t.Fatal("bound native identity or absent key changed", err)
 			}
-			if mode == "metadata_changed" && (native.Title != "Earlier card description" || native.Author != "Earlier display name" || binding.resolved.Title != "Synthetic video" || binding.resolved.Author != "Synthetic author") {
+			if mode == "metadata_changed" && (native.Title != "Earlier card description" || native.Author != "Earlier display name" || binding.route.Resolved.Title != "Synthetic video" || binding.route.Resolved.Author != "Synthetic author") {
 				t.Fatal("native card and feed descriptions were conflated")
 			}
 			var result map[string]any
@@ -438,7 +439,7 @@ func TestShareBindingResultRechecksScopeAndRevocation(t *testing.T) {
 			t.Fatal("revoked result released", calls, err)
 		}
 	}
-	b.phase = "channels-feed"
+	b.route.Phase = "channels-feed"
 	if _, _, err := b.ValidateResult(t.Context(), j, json.RawMessage(verifiedShareResult), func(context.Context) error { return nil }); err == nil {
 		t.Fatal("incomplete chain released result")
 	}
@@ -454,8 +455,8 @@ func TestShareBindingRejectsMalformedFeedBeforePluginResult(t *testing.T) {
 		{`https://media.example/video?token=synthetic-private`, ``},
 		{`https://media.example/video?token=synthetic-private`, `https://user:password@media.example/video`},
 	} {
-		b := &shareRouteBinding{object: "12345"}
-		if err := b.accept("channels-feed", json.RawMessage(strings.Replace(verifiedFeed, replacement.old, replacement.next, 1))); err == nil || b.resolved != nil {
+		b := &shareRouteBinding{route: wechatapp.ChannelsRoute{Object: "12345"}}
+		if err := b.route.Accept("channels-feed", json.RawMessage(strings.Replace(verifiedFeed, replacement.old, replacement.next, 1))); err == nil || b.route.Resolved != nil {
 			t.Fatal("malformed host response yielded media proof", replacement.next)
 		}
 	}

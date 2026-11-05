@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
@@ -182,28 +184,10 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 			b, _, e := reader.IncomingMedia(ctx, msg.ID, 64<<20)
 			return b, msg.ID, e
 		}
-		if msg.Type == 49 && msg.AppMessageType != nil && *msg.AppMessageType == 51 {
-			reader, ok := m.native.(channelsReader)
-			if !ok {
-				return nil, "", errors.New("channels_source_backend_missing")
-			}
-			source, e := reader.ChannelsMedia(ctx, msg.ID)
-			if e != nil {
-				return nil, "", e
-			}
-			if source.ThreadID != msg.ThreadID || source.AccountID != msg.AccountID || source.MessageID != msg.ID {
-				return nil, "", errors.New("channels_source_scope_mismatch")
-			}
-			a := mediaUnderstanding{manager: m}
-			b, _, e := a.readChannelsVideo(ctx, source)
-			if e != nil {
-				source, e = m.resolveReceivedChannels(ctx, msg, source)
-				if e != nil {
-					return nil, "", e
-				}
-				b, _, e = a.readChannelsVideo(ctx, source)
-			}
-			return b, msg.ID, e
+		if wechatapp.IsChannelsShare(msg) {
+			actorCtx := withSourceActor(ctx, p, agentID("video-inspect-channels", p.trace.TaskID, p.trace.TraceID, msg.ID), msg.ThreadID)
+			video, err := (mediaUnderstanding{manager: m}).acquireChannelsVideo(actorCtx, msg)
+			return video.data, msg.ID, err
 		}
 		if msg.Link == nil || msg.Link.URL == "" {
 			return nil, "", toolInputError("该消息没有可读取的视频来源")

@@ -14,5 +14,8 @@
   "media_request_source": "adapter/media_request.go",
   "forward_source": "adapter/forward.go",
   "delivery_source": "adapter/delivery.go",
-  "operation_source": "adapter/operation.go"
+  "operation_source": "adapter/operation.go",
+  "share_card_source": "adapter/share_card.go",
+  "share_read_source": "adapter/share_read.go",
+  "channels_protocol_source": "adapter/channels_protocol.go"
 }
