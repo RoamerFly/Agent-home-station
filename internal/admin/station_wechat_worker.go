@@ -49,14 +49,15 @@ type stationWechat struct {
 }
 
 type stationWechatPolicy struct {
-	Enabled          bool                 `json:"enabled"`
-	Paused           bool                 `json:"paused"`
-	Grants           map[string]time.Time `json:"reply_grants"`
-	AttachmentGrants map[string]time.Time `json:"attachment_grants,omitempty"`
-	MediaReplyGrants map[string]time.Time `json:"media_reply_grants,omitempty"`
-	HistoryGrants    map[string]time.Time `json:"history_grants,omitempty"`
-	ContactGrant     time.Time            `json:"contact_grant,omitzero"`
-	GroupMuteGrants  map[string]time.Time `json:"group_mute_grants,omitempty"`
+	Enabled          bool                              `json:"enabled"`
+	Paused           bool                              `json:"paused"`
+	Grants           map[string]time.Time              `json:"reply_grants"`
+	AttachmentGrants map[string]time.Time              `json:"attachment_grants,omitempty"`
+	MediaReplyGrants map[string]time.Time              `json:"media_reply_grants,omitempty"`
+	HistoryGrants    map[string]time.Time              `json:"history_grants,omitempty"`
+	ContactGrant     time.Time                         `json:"contact_grant,omitzero"`
+	GroupMuteGrants  map[string]time.Time              `json:"group_mute_grants,omitempty"`
+	GroupRules       map[string]stationWechatGroupRule `json:"group_rules,omitempty"`
 }
 
 const stationWechatPolicyLimit = 128 << 10
@@ -254,7 +255,7 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, stationWechatPolicyLimit+1))
 	var policy stationWechatPolicy
-	if err != nil || len(data) > stationWechatPolicyLimit || json.Unmarshal(data, &policy) != nil || len(policy.Grants) > 100 || len(policy.GroupMuteGrants) > 100 {
+	if err != nil || len(data) > stationWechatPolicyLimit || json.Unmarshal(data, &policy) != nil || len(policy.Grants) > 100 || len(policy.GroupMuteGrants) > 100 || len(policy.GroupRules) > 100 {
 		return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 	}
 	for thread, granted := range policy.Grants {
@@ -279,6 +280,11 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 	}
 	for group, granted := range policy.GroupMuteGrants {
 		if !validStationGroup(group) || granted.IsZero() {
+			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
+		}
+	}
+	for thread, rule := range policy.GroupRules {
+		if !validStationGroupRule(thread, rule, policy.Grants, policy.AttachmentGrants) {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 		}
 	}
@@ -393,7 +399,12 @@ func (w *stationWechatWorker) policyView() *apphost.ConfiguredPolicy {
 	if len(groupMute) > 0 {
 		grants = append(grants, "account.mute")
 	}
-	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0 || contactRead || len(groupMute) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, MediaReplyThreads: mediaReplies, HistoryThreads: history, ContactRead: contactRead, GroupMuteThreads: groupMute}
+	groupRules := make([]apphost.ConnectionGroupRule, 0, len(w.policy.GroupRules))
+	for _, thread := range slices.Sorted(maps.Keys(w.policy.GroupRules)) {
+		rule := w.policy.GroupRules[thread]
+		groupRules = append(groupRules, apphost.ConnectionGroupRule{ThreadID: thread, Note: rule.Note, SummarizeShares: !rule.SummarizeSince.IsZero()})
+	}
+	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0 || contactRead || len(groupMute) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, MediaReplyThreads: mediaReplies, HistoryThreads: history, ContactRead: contactRead, GroupMuteThreads: groupMute, GroupRules: groupRules}
 }
 
 func (s *stationWechat) Inspect(ctx context.Context, id string) (apphost.ConnectionStatus, error) {
@@ -463,7 +474,12 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 	if err != nil {
 		return view, err
 	}
+	groupRules, err := stationGroupRules(w.policy.GroupRules, policy.GroupRules, grants, attachments, now)
+	if err != nil {
+		return view, err
+	}
 	next := w.policy
+	next.GroupRules = groupRules
 	if policy.GroupMuteThreads != nil {
 		requested := *policy.GroupMuteThreads
 		if len(requested) > 100 {
@@ -488,7 +504,7 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 			next.ContactGrant = now
 		}
 	}
-	workerScopeChanged := !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) || !maps.Equal(mediaReplies, w.policy.MediaReplyGrants) || !maps.Equal(history, w.policy.HistoryGrants)
+	workerScopeChanged := !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) || !maps.Equal(mediaReplies, w.policy.MediaReplyGrants) || !maps.Equal(history, w.policy.HistoryGrants) || !maps.Equal(groupRules, w.policy.GroupRules)
 	if workerScopeChanged {
 		next.Grants, next.AttachmentGrants, next.MediaReplyGrants, next.HistoryGrants = grants, attachments, mediaReplies, history
 		// Require explicit resume after a scope change on an enabled worker.
@@ -657,6 +673,12 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 		return err
 	}
 	character.Names = native
+	character.ConversationPreference = func(in companion.Input) (string, bool) {
+		if run.block.Load() || in.Preview || in.Channel != "wechat" || in.Account != native.Account() || !validStationGroup(in.Thread) || policy.Grants[in.Thread].IsZero() {
+			return "", false
+		}
+		return policy.GroupRules[in.Thread].Note, true
+	}
 	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.block.Load}
 	attachment.shareHost = func() (*stationShareHost, error) { return s.shareHost(station, native.Account()) }
 	if s.artifacts != nil {
@@ -682,6 +704,15 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 		MediaResumeResult:  station.mediaResumeResult,
 		StateDir:           filepath.Join(dir, "queue"), AllowedThreads: threads, GroupRules: rules,
 		Options: &options, Prefix: "/ai ",
+		PreferredGroupShare: func(m linuxnative.Message) bool {
+			return !run.block.Load() && policy.groupShareCandidate(native.Account(), m)
+		},
+		ReadPreferredGroupShare: func(ctx context.Context, in companion.Input, m linuxnative.Message) (string, bot.MediaObservationEvidence, error) {
+			if run.block.Load() || !policy.groupShareCandidate(native.Account(), m) {
+				return "", bot.MediaObservationEvidence{}, errors.New("share_group_policy_changed")
+			}
+			return attachment.readGroupShareEvidence(ctx, in, m)
+		},
 		Log: func(event string) {
 			if event == "bot_started_history_skipped" || event == "bot_resumed_saved_cursor" {
 				run.state.Store("running")
@@ -697,6 +728,9 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 			return !run.block.Load() && !policy.Grants[thread].IsZero(), ctx.Err()
 		},
 		AuthorizeReply: func(in companion.Input) bool {
+			if in.GroupShareSummary && !policy.groupShareAllowed(in.Thread, in.MessageTime) {
+				return false
+			}
 			granted := policy.Grants[in.Thread]
 			when, err := time.Parse(time.RFC3339Nano, in.MessageTime)
 			return in.Account == native.Account() && !granted.IsZero() && err == nil && !when.Before(granted)

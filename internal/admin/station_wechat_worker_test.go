@@ -258,6 +258,27 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	}
 	request(f, "PUT", path("one")+"/policy", map[string]any{"reply_threads": []string{"person-one"}, "history_threads": []string{"foreign-thread"}}, true, 400)
 	request(f, "PUT", path("two")+"/policy", map[string]any{"reply_threads": []string{"person-two"}, "history_threads": []string{"person-two"}}, true, 200)
+	const room = "fixture-room@chatroom"
+	group := map[string]any{"thread_id": room, "note": "synthetic group preference", "summarize_shares": true}
+	groupInput := map[string]any{"reply_threads": []string{"person-one", room}, "group_rules": []any{group}}
+	request(f, "PUT", path("one")+"/policy", groupInput, true, 400)
+	groupInput["attachment_threads"] = []string{room}
+	request(f, "PUT", path("one")+"/policy", groupInput, false, 403)
+	request(f, "PUT", path("one")+"/policy", groupInput, true, 200)
+	policy(f, "one", "person-one", room)
+	oneRules := state(f, "one")["configured_policy"].(map[string]any)["group_rules"].([]any)
+	if len(oneRules) != 1 || oneRules[0].(map[string]any)["summarize_shares"] != true || oneRules[0].(map[string]any)["note"] != "synthetic group preference" ||
+		state(f, "two")["configured_policy"].(map[string]any)["group_rules"] != nil {
+		t.Fatal("group settings were lost or shared between accounts", oneRules)
+	}
+	request(f, "PUT", path("one")+"/policy", map[string]any{"reply_threads": []string{"person-one", room}, "attachment_threads": []string{}}, true, 200)
+	if rule := state(f, "one")["configured_policy"].(map[string]any)["group_rules"].([]any)[0].(map[string]any); rule["summarize_shares"] != false || rule["note"] != "synthetic group preference" {
+		t.Fatal("attachment revocation retained summary authorization or erased note", rule)
+	}
+	policy(f, "one", "person-one")
+	if rules := state(f, "one")["configured_policy"].(map[string]any)["group_rules"]; rules != nil {
+		t.Fatal("reply revocation retained group settings", rules)
+	}
 	policy(f, "two", "person-two") // Old clients omitting the field retain the explicit grant.
 	if grants := state(f, "two")["configured_policy"].(map[string]any)["history_threads"].([]any); len(grants) != 1 || grants[0] != "person-two" {
 		t.Fatal("history authorization was not retained", grants)

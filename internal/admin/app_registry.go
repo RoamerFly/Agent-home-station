@@ -94,12 +94,13 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 			return
 		}
 		var input struct {
-			Threads      *[]string `json:"reply_threads"`
-			Attachments  *[]string `json:"attachment_threads"`
-			MediaReplies *[]string `json:"media_reply_threads"`
-			History      *[]string `json:"history_threads"`
-			ContactRead  *bool     `json:"contact_read"`
-			GroupMute    *[]string `json:"group_mute_threads"`
+			Threads      *[]string                      `json:"reply_threads"`
+			Attachments  *[]string                      `json:"attachment_threads"`
+			MediaReplies *[]string                      `json:"media_reply_threads"`
+			History      *[]string                      `json:"history_threads"`
+			ContactRead  *bool                          `json:"contact_read"`
+			GroupMute    *[]string                      `json:"group_mute_threads"`
+			GroupRules   *[]apphost.ConnectionGroupRule `json:"group_rules"`
 		}
 		if !decode(w, r, &input) {
 			return
@@ -108,12 +109,12 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 			fail(w, http.StatusBadRequest, "请提供明确的回复会话列表")
 			return
 		}
-		view, err := writer.SetConnectionPolicy(r.Context(), r.PathValue("connection"), apphost.ConnectionPolicyInput{ReplyThreads: *input.Threads, AttachmentThreads: input.Attachments, MediaReplyThreads: input.MediaReplies, HistoryThreads: input.History, ContactRead: input.ContactRead, GroupMuteThreads: input.GroupMute})
+		view, err := writer.SetConnectionPolicy(r.Context(), r.PathValue("connection"), apphost.ConnectionPolicyInput{ReplyThreads: *input.Threads, AttachmentThreads: input.Attachments, MediaReplyThreads: input.MediaReplies, HistoryThreads: input.History, ContactRead: input.ContactRead, GroupMuteThreads: input.GroupMute, GroupRules: input.GroupRules})
 		switch {
 		case errors.Is(err, apphost.ErrNotFound):
 			fail(w, http.StatusNotFound, "应用连接不存在")
 		case errors.Is(err, apphost.ErrInvalidConnectionPolicy):
-			fail(w, http.StatusBadRequest, "每类会话 ID 须有效且不重复，最多 100 个。群免打扰只接受群 ID。历史和附件读取须在回复范围内，附件回复须在附件读取范围内")
+			fail(w, http.StatusBadRequest, "每类会话 ID 须有效且不重复，最多 100 个。群免打扰只接受群 ID。历史和附件读取须在回复范围内，附件回复须在附件读取范围内。群规则须属于已授权群，备注最多 4000 字节，自动总结需要该群的附件读取授权")
 		case errors.Is(err, apphost.ErrLifecycleConflict):
 			fail(w, http.StatusConflict, "正在停止旧的回复任务，请稍后查询连接状态")
 		case err != nil:

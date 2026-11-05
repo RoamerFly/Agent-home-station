@@ -371,7 +371,38 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 				err = s.call(modelCtx, func() error { j.input = in; j.observationPending = false; return w.persistErr })
 			}
 		}
-		if err == nil && analysis != nil {
+		if err == nil && in.GroupShareSummary {
+			share := analysis
+			if share == nil {
+				readCtx, stop := context.WithTimeout(modelCtx, 10*time.Second)
+				m, readErr := w.source.Message(readCtx, in.TraceID)
+				stop()
+				if readErr != nil || m.ID != in.TraceID || m.ThreadID != in.Thread || m.Direction != "incoming" {
+					if readErr != nil {
+						err = readErr
+					} else {
+						err = errors.New("share_group_source_unavailable")
+					}
+				} else {
+					share = &m
+				}
+			}
+			if err == nil {
+				err = w.readPreparedPreferredGroupShare(modelCtx, fork, &in, *share)
+			}
+			if err != nil && in.IsGroup && !errors.Is(modelCtx.Err(), context.Canceled) {
+				err = &groupObservationFailure{reason: observationReason(err), messageID: in.TraceID}
+			}
+			if err == nil {
+				err = s.call(modelCtx, func() error {
+					w.activity(Record{Event: "preferred_group_share_observed", Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID, Reason: "host_authorized_share_observed", Status: "processing"})
+					j.input = in
+					j.observationPending = false
+					return w.persistErr
+				})
+			}
+		}
+		if err == nil && analysis != nil && !in.GroupShareSummary {
 			readCtx, stop := context.WithTimeout(modelCtx, 3*time.Minute)
 			var summary string
 			incomplete := false

@@ -35,19 +35,27 @@ type Connection struct {
 	Configuration string `json:"configuration"`
 }
 
+// ConnectionGroupRule configures one already-authorized conversation.
+type ConnectionGroupRule struct {
+	ThreadID        string `json:"thread_id"`
+	Note            string `json:"note"`
+	SummarizeShares bool   `json:"summarize_shares"`
+}
+
 // ConfiguredPolicy is the existing account policy, without owner/recipient IDs
 // or credentials. A caller still needs request- and target-specific admission.
 type ConfiguredPolicy struct {
-	WorkerEnabled       bool     `json:"worker_enabled"`
-	ConversationEnabled bool     `json:"conversation_enabled"`
-	ToolsEnabled        bool     `json:"tools_enabled"`
-	Grants              []string `json:"grants"`
-	ReplyThreads        []string `json:"reply_threads,omitempty"`
-	AttachmentThreads   []string `json:"attachment_threads,omitempty"`
-	MediaReplyThreads   []string `json:"media_reply_threads,omitempty"`
-	HistoryThreads      []string `json:"history_threads,omitempty"`
-	ContactRead         bool     `json:"contact_read,omitempty"`
-	GroupMuteThreads    []string `json:"group_mute_threads,omitempty"`
+	WorkerEnabled       bool                  `json:"worker_enabled"`
+	ConversationEnabled bool                  `json:"conversation_enabled"`
+	ToolsEnabled        bool                  `json:"tools_enabled"`
+	Grants              []string              `json:"grants"`
+	ReplyThreads        []string              `json:"reply_threads,omitempty"`
+	AttachmentThreads   []string              `json:"attachment_threads,omitempty"`
+	MediaReplyThreads   []string              `json:"media_reply_threads,omitempty"`
+	HistoryThreads      []string              `json:"history_threads,omitempty"`
+	ContactRead         bool                  `json:"contact_read,omitempty"`
+	GroupMuteThreads    []string              `json:"group_mute_threads,omitempty"`
+	GroupRules          []ConnectionGroupRule `json:"group_rules,omitempty"`
 }
 
 type ConnectionStatus struct {
@@ -86,6 +94,7 @@ type ConnectionPolicyInput struct {
 	HistoryThreads    *[]string
 	ContactRead       *bool
 	GroupMuteThreads  *[]string
+	GroupRules        *[]ConnectionGroupRule
 }
 
 type Provider interface {

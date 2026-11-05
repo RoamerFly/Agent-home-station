@@ -136,7 +136,7 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 	defer memory.Close()
 	fetch := func(_ context.Context, url string, limit int64) ([]byte, string, error) {
 		fetches.Add(1)
-		if !strings.HasPrefix(url, locator+"&case=") || limit != 10<<20 {
+		if !strings.HasPrefix(url, locator+"&case=") || limit != 10<<20 && (url != locator+"&case=card" || limit != 50<<20) {
 			t.Errorf("unexpected locator or budget: %d", limit)
 		}
 		switch strings.TrimPrefix(url, locator+"&case=") {
@@ -269,6 +269,7 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 		t.Fatal("revocation did not block later parsing and media requests", routes, fetches.Load(), before)
 	}
 	blocked.Store(false)
+	expectedAutomaticFetches := int32(0)
 	t.Run("LPAC_media_observation", func(t *testing.T) {
 		if os.Getenv("AHS_SHARE_TEST_RUNTIME_ROOT") == "" {
 			t.Skip("set AHS_SHARE_TEST_RUNTIME_ROOT to exercise the Windows LPAC media process")
@@ -283,10 +284,13 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 		if err := json.Unmarshal([]byte(value), &acquired); err != nil || acquired.Asset == "" {
 			t.Fatal(value, err)
 		}
+		// The automatic turn uses an earlier attachment grant for this
+		// fixture. It gets one separately scoped cached original.
+		expectedAutomaticFetches = 1
 		testStationVideoObservation(t, tools, share, acquired.Asset, hash, &blocked)
 	})
-	if mutations.Load() != 0 || fetches.Load() != before || transfers.Load() != 1 {
-		t.Fatal("observation must reuse the verified original and never send", mutations.Load(), fetches.Load(), transfers.Load())
+	if mutations.Load() != 0 || fetches.Load() != before+expectedAutomaticFetches || transfers.Load() != 1 {
+		t.Fatal("unexpected original fetch or send during observation", mutations.Load(), fetches.Load(), transfers.Load())
 	}
 }
 
@@ -402,6 +406,43 @@ func testStationVideoObservation(t *testing.T, tools *stationAttachmentTools, ho
 	if err != nil || out["transcription_state"] != "no_recognizable_speech" || out["text"] != nil || out["audio_complete"] != true || audio != 2 {
 		t.Fatal(out, audio, err)
 	}
+
+	t.Run("automatic_group_share_uses_original_and_verified_transcript", func(t *testing.T) {
+		card, err := tools.native.Message(t.Context(), "card")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stamp, err := time.Parse(time.RFC3339Nano, card.CreatedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		copy := *tools
+		copy.grants = map[string]time.Time{card.ThreadID: stamp.Add(-time.Minute)}
+		source := &companion.SourceRef{Account: card.AccountID, Thread: card.ThreadID, Sender: card.SenderID,
+			MessageID: card.ID, ServerID: card.ServerID, MessageType: card.Type, OccurredAt: card.CreatedAt,
+			InstanceID: copy.store.SourceInstanceID(), BodyHash: fmt.Sprintf("%x", sha256.Sum256([]byte(card.Body))), Revision: 1}
+		original := ""
+		in := companion.Input{Channel: "wechat", Account: card.AccountID, Thread: card.ThreadID, Sender: card.SenderID, TraceID: card.ID,
+			Source: source, OriginalText: &original, Text: "synthetic media placeholder", MessageTime: card.CreatedAt, Mode: "direct", IsGroup: true, GroupShareSummary: true,
+			IncomingMedia: []companion.IncomingMediaRef{{Source: *source, Kind: "share", UploaderID: card.SenderID}}}
+		config := companion.Defaults()
+		config.Permissions.Remember = true
+		if err := copy.store.Observe(in, config, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		beforeAudio, beforeVision := audio, vision
+		summary, evidence, err := copy.readGroupShareEvidence(t.Context(), in, card)
+		if err != nil || !strings.Contains(summary, "Synthetic line.") || strings.Contains(summary, "Synthetic title") ||
+			len(evidence.Parts) != 1 || evidence.Parts[0].Kind != companion.ObservationAudioTranscript ||
+			audio != beforeAudio+1 || vision != beforeVision {
+			t.Fatalf("summary %q, evidence %#v, audio %d, vision %d: %v", summary, evidence, audio-beforeAudio, vision-beforeVision, err)
+		}
+		changed := card
+		changed.Body += " altered"
+		if result, _, err := copy.readGroupShareEvidence(t.Context(), in, changed); result != "" || err == nil || audio != beforeAudio+1 {
+			t.Fatalf("changed source reached the observer: %q, %v", result, err)
+		}
+	})
 	if _, err = observe("card", asset, `"mode":"frames","question":"synthetic-revoke"`); err == nil || vision != 3 {
 		t.Fatal("in-flight revocation returned observation", vision, err)
 	}

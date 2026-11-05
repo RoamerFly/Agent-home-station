@@ -50,7 +50,7 @@
     else window.clearTimeout(apps.loginTimer);
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "" };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "" };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -503,18 +503,70 @@
     groupMutes.setAttribute("aria-label", "Agent 免打扰群 ID");
     groupMutes.value = apps.groupMuteDrafts.get(id) ?? (status.configured_policy?.group_mute_threads || []).join("\n");
     groupMutes.addEventListener("input", () => apps.groupMuteDrafts.set(id, groupMutes.value));
+    const groupRules = appElement("div", "", "group-rule-settings");
+    const configuredRules = new Map((status.configured_policy?.group_rules || [])
+      .filter((rule) => rule && typeof rule.thread_id === "string")
+      .map((rule) => [rule.thread_id, { note: String(rule.note || ""), summarize_shares: Boolean(rule.summarize_shares) }]));
+    const readGroupRule = (threadID) => apps.groupRuleDrafts.get(id)?.get(threadID) || configuredRules.get(threadID) || { note: "", summarize_shares: false };
+    const updateGroupRule = (threadID, patch) => {
+      let drafts = apps.groupRuleDrafts.get(id);
+      if (!drafts) {
+        drafts = new Map(configuredRules);
+        apps.groupRuleDrafts.set(id, drafts);
+      }
+      drafts.set(threadID, { ...readGroupRule(threadID), ...patch });
+    };
+    const replyGroups = () => field.value.split(/[\s，,]+/u).filter((threadID) => threadID.endsWith("@chatroom"));
+    const renderGroupRules = () => {
+      const groups = replyGroups();
+      groupRules.replaceChildren(appElement("strong", "群聊偏好"));
+      if (!groups.length) {
+        groupRules.append(appElement("small", "在回复范围中加入群聊后，可为该群写备注或开启分享总结。"));
+        return;
+      }
+      for (const threadID of groups) {
+        const value = readGroupRule(threadID);
+        const row = appElement("div", "", "group-rule-row");
+        const note = document.createElement("input");
+        note.value = value.note;
+        note.placeholder = "本群偏好（可选）";
+        note.setAttribute("aria-label", threadID + " 群聊备注");
+        note.addEventListener("input", () => updateGroupRule(threadID, { note: note.value }));
+        const summarize = document.createElement("input");
+        summarize.type = "checkbox";
+        summarize.checked = value.summarize_shares;
+        summarize.disabled = !attachmentThreadIDs().includes(threadID);
+        summarize.setAttribute("aria-label", threadID + " 自动总结视频号分享");
+        summarize.addEventListener("change", () => updateGroupRule(threadID, { summarize_shares: summarize.checked }));
+        const summarizeLabel = appElement("label", "", "switch-row");
+        summarizeLabel.append(summarize, appElement("span", "收到视频号分享时自动总结"));
+        row.append(appElement("small", threadID), note, summarizeLabel);
+        if (summarize.disabled) row.append(appElement("small", "需先在“附件读取会话”中授权本群读取视频号；不会自动开启。"));
+        groupRules.append(row);
+      }
+    };
+    const attachmentThreadIDs = () => attachments.value.split(/[\s，,]+/u).filter(Boolean);
+    field.addEventListener("input", renderGroupRules);
+    attachments.addEventListener("input", renderGroupRules);
+    renderGroupRules();
     const save = appSetupButton("保存回复范围", () => {
       const reply_threads = field.value.split(/[\s，,]+/u).filter(Boolean);
       const history_threads = history.value.split(/[\s，,]+/u).filter(Boolean);
-      const attachment_threads = attachments.value.split(/[\s，,]+/u).filter(Boolean);
-      const media_reply_threads = mediaReplies.value.split(/[\s，,]+/u).filter(Boolean);
+      const attachment_threads = attachmentThreadIDs();
+      const revokedAttachmentThreads = new Set((status.configured_policy?.attachment_threads || []).filter((threadID) => !attachment_threads.includes(threadID)));
+      const media_reply_threads = mediaReplies.value.split(/[\s，,]+/u).filter((threadID) => threadID && !revokedAttachmentThreads.has(threadID));
       const group_mute_threads = groupMutes.value.split(/[\s，,]+/u).filter(Boolean);
-      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, media_reply_threads, contact_read: contactRead.checked, group_mute_threads });
+      const group_rules = reply_threads.filter((threadID) => threadID.endsWith("@chatroom")).map((thread_id) => {
+        const rule = readGroupRule(thread_id);
+        return { thread_id, note: rule.note.trim(), summarize_shares: Boolean(rule.summarize_shares) && attachment_threads.includes(thread_id) };
+      });
+      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, media_reply_threads, contact_read: contactRead.checked, group_mute_threads, group_rules });
     });
-    panel.append(appElement("p", "每行一个会话 ID。群聊仅在被提及时回复。"), field,
+    panel.append(appElement("p", "每行一个会话 ID。群聊默认在被提及时回复。"), field,
       appElement("p", "历史消息与群成员须单独授权；大肥鱼仅能读取当前所在会话。"), history,
       appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments,
-      appElement("p", "附件回复须单独授权，只能把本会话的附件发回本会话。"), mediaReplies,
+      groupRules,
+      appElement("p", "附件回复须单独授权，只能把附件发回原会话。撤销附件读取时同时撤销附件回复。"), mediaReplies,
       contactReadLabel,
       appElement("p", "仅允许大肥鱼在本地聊天中设置这些群的免打扰或取消免打扰；微信群聊与私聊中的 Agent 不会获得此项权限。"), groupMutes,
       save, workGrantControls(id));
@@ -1304,6 +1356,7 @@
         current.attachmentDrafts.delete(id);
         current.mediaReplyDrafts.delete(id);
         current.groupMuteDrafts.delete(id);
+        current.groupRuleDrafts.delete(id);
         appFeedback(result.connection?.submissions_paused ? "回复范围已保存，Agent 已暂停。" : "回复范围已保存。");
       } else {
         appFeedback(body.action === "stop" ? "已暂停此账号的 Agent。" : "已启动此账号的 Agent，正在确认状态。");

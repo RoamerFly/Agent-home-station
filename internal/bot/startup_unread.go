@@ -139,6 +139,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	now := time.Now()
 	unread := []companion.ConversationEvent{}
 	mediaIDs := []string{}
+	preferredShares := map[string]bool{}
 	var anchor *linuxnative.Message
 	var anchorInput companion.Input
 	var allIDs []string
@@ -173,7 +174,9 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 				working.Body = w.config.Prefix + working.Body
 			}
 		}
-		_, eligible := w.promptWithSharePreference(working, now, w.considerPreferredShare(m))
+		preferredShare := w.preferredGroupShare(m)
+		hostedPreferred := preferredShare && w.config.PreferredGroupShare != nil && w.config.ReadPreferredGroupShare != nil
+		_, eligible := w.promptWithSharePreference(working, now, preferredShare)
 		w.noticeConversationMessage(m, eligible)
 		if stoppedVoice := w.stopRequestedVoice(ctx, working); stoppedVoice {
 			if replacesVoice(working.Body) {
@@ -192,7 +195,10 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			anchor = &copy
 		}
 		allIDs = append(allIDs, m.ID)
-		if isMedia && w.readMediaBeforeDecision(m) && (strings.HasSuffix(thread, "@chatroom") || eligible && w.observationAllowed(m) && w.config.Analyzer != nil) {
+		if hostedPreferred {
+			preferredShares[m.ID] = true
+		}
+		if isMedia && !hostedPreferred && w.readMediaBeforeDecision(m) && (strings.HasSuffix(thread, "@chatroom") || eligible && w.observationAllowed(m) && w.config.Analyzer != nil) {
 			mediaIDs = append(mediaIDs, m.ID)
 		}
 		observed := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: m.SenderID, TraceID: m.ID, Text: body, MessageTime: m.CreatedAt, OriginalText: &original}
@@ -215,7 +221,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	// Use a real source message for routing/authorization. Other speakers remain
 	// contextual data, never aliases for the anchor's authenticated sender.
 	in := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: anchor.SenderID, TraceID: anchor.ID, MessageTime: anchor.CreatedAt, QuoteServerID: anchor.ServerID, Mode: "social", IsGroup: strings.HasSuffix(thread, "@chatroom"), Directed: w.addressed(*anchor), PersonaOverride: w.config.GroupRules[thread].Persona, UnreadMessages: unread, UnreadMediaIDs: mediaIDs, HistoryObserved: true,
-		Text: "这是重新上线后本会话尚未查看的一段未读消息。按unread_messages里的真实时间和发言者整体理解，结合后续消息判断哪些事项仍需要回复或行动；不逐条追着旧话补答。自然回应，也可以安静。"}
+		Text: "这是重新上线后本会话尚未查看的一段未读消息。按unread_messages里的真实时间和发言者整体理解，结合后续消息判断哪些事项仍需要回复或行动；不逐条追着旧话补答。自然回应，也可以安静。", GroupShareSummary: preferredShares[anchor.ID]}
 	if live != nil {
 		for i := range unread {
 			if unread[i].Sender != anchor.SenderID {
@@ -227,6 +233,8 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	// The digest is runtime context. Bind its dispatch to the actual incoming
 	// message, without treating the digest as the anchor author's literal words.
 	in.Source, in.QuotedSource = anchorInput.Source, anchorInput.QuotedSource
+	in.IncomingMedia = append([]companion.IncomingMediaRef(nil), anchorInput.IncomingMedia...)
+	in.HistoryObserved = true
 	if c.Config.Permissions.Remember {
 		if source, ok := c.Store.SourceForInput(anchorInput); ok {
 			in.Source = source
@@ -234,6 +242,18 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	}
 	if !in.IsGroup || in.Directed {
 		in.Mode = "direct"
+	}
+	if in.GroupShareSummary {
+		// This mode is host-authorized but not a fabricated @ mention. The
+		// durable marker is preserved through model retry/restart and is
+		// rechecked by the host before delivery.
+		if !w.addressed(*anchor) {
+			in.Mode, in.Directed, in.MustReply = "direct", false, false
+		}
+		if err := w.persistPreferredGroupShareSource(c, &in); err != nil {
+			w.stopUnreadableTurn(in, err)
+			return w.persistErr
+		}
 	}
 	if in.Directed && anchor.Mentions.Self != nil && *anchor.Mentions.Self {
 		in.MustReply = w.config.GroupRules[thread].ForceReplyWhenMentioned
@@ -267,6 +287,12 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	if w.generation != nil {
 		w.startGeneration(ctx, c, in, nil)
 	} else {
+		if in.GroupShareSummary {
+			if err := w.readPreparedPreferredGroupShare(ctx, c, &in, *anchor); err != nil {
+				w.stopUnreadableTurn(in, err)
+				return w.persistErr
+			}
+		}
 		if err := w.prepareBatchObservations(ctx, c, &in); err != nil {
 			var failure *groupObservationFailure
 			if errors.As(err, &failure) {

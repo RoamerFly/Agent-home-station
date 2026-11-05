@@ -277,7 +277,7 @@ def verify(binary, output):
 
                 worker_policy_pattern = status_pattern + "/policy"
                 worker_lifecycle_pattern = status_pattern + "/lifecycle"
-                worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "contact_read": False, "actions": []}
+                worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "group_rules": [], "contact_read": False, "actions": [], "policy_payloads": []}
                 legacy = {"availability": "available", "previews": 0, "posts": []}
                 legacy_memory = {"requests": []}
                 legacy_memory_selection = {"gets": [], "posts": []}
@@ -301,6 +301,7 @@ def verify(binary, output):
                             "conversation_enabled": bool(worker["threads"]), "reply_threads": worker["threads"], "history_threads": worker["history_threads"],
                             "attachment_threads": worker["attachment_threads"], "media_reply_threads": worker["media_reply_threads"],
                             "group_mute_threads": worker["group_mute_threads"],
+                            "group_rules": worker["group_rules"],
                             "contact_read": worker["contact_read"]}}
                     if legacy["availability"]:
                         connection["legacy_import"] = legacy["availability"]
@@ -311,12 +312,16 @@ def verify(binary, output):
 
                 def save_worker(route):
                     assert route.request.method == "PUT"
-                    worker["threads"] = route.request.post_data_json["reply_threads"]
-                    worker["history_threads"] = route.request.post_data_json["history_threads"]
-                    worker["attachment_threads"] = route.request.post_data_json["attachment_threads"]
-                    worker["media_reply_threads"] = route.request.post_data_json["media_reply_threads"]
-                    worker["group_mute_threads"] = route.request.post_data_json["group_mute_threads"]
-                    worker["contact_read"] = route.request.post_data_json["contact_read"]
+                    body = route.request.post_data_json
+                    assert set(body["media_reply_threads"]) <= set(body["attachment_threads"]), "media reply cannot survive attachment-read revocation"
+                    worker["policy_payloads"].append(body)
+                    worker["threads"] = body["reply_threads"]
+                    worker["history_threads"] = body["history_threads"]
+                    worker["attachment_threads"] = body["attachment_threads"]
+                    worker["media_reply_threads"] = body["media_reply_threads"]
+                    worker["group_mute_threads"] = body["group_mute_threads"]
+                    worker["group_rules"] = body.get("group_rules", [])
+                    worker["contact_read"] = body["contact_read"]
                     fulfill_json(worker_view())(route)
 
                 def set_worker(route):
@@ -491,7 +496,17 @@ def verify(binary, output):
                 page.get_by_role("button", name="设置回复范围").click()
                 page.get_by_role("textbox", name="回复会话 ID", exact=True).fill("filehelper\nsynthetic-room@chatroom")
                 page.get_by_role("textbox", name="历史与成员读取会话 ID", exact=True).fill("synthetic-room@chatroom")
+                summary_share = page.get_by_role("checkbox", name="synthetic-room@chatroom 自动总结视频号分享", exact=True)
+                assert summary_share.is_disabled(), "share summaries require a same-group attachment-read grant"
                 page.get_by_role("textbox", name="附件读取会话 ID").fill("synthetic-room@chatroom")
+                summary_share = page.get_by_role("checkbox", name="synthetic-room@chatroom 自动总结视频号分享", exact=True)
+                assert summary_share.is_enabled(), "attachment-read grant should unlock only this group's summary switch"
+                page.get_by_role("textbox", name="synthetic-room@chatroom 群聊备注", exact=True).fill("收到分享时先总结重点")
+                page.locator("#apps-refresh").click()
+                page.locator("#apps-list[aria-busy='true']").wait_for()
+                page.locator("#apps-list[aria-busy='false']").wait_for()
+                expect(page.get_by_role("textbox", name="synthetic-room@chatroom 群聊备注", exact=True)).to_have_value("收到分享时先总结重点")
+                page.get_by_role("checkbox", name="synthetic-room@chatroom 自动总结视频号分享", exact=True).check()
                 page.get_by_role("textbox", name="附件回复会话 ID").fill("synthetic-room@chatroom")
                 page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).fill("synthetic-mute@chatroom")
                 page.get_by_role("checkbox", name="允许大肥鱼在本地聊天中查阅此通讯录").check()
@@ -505,6 +520,8 @@ def verify(binary, output):
                 assert worker["history_threads"] == ["synthetic-room@chatroom"]
                 assert page.get_by_role("textbox", name="历史与成员读取会话 ID", exact=True).input_value() == "synthetic-room@chatroom"
                 assert worker["attachment_threads"] == ["synthetic-room@chatroom"]
+                assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True}]
+                assert worker["policy_payloads"][-1]["group_rules"] == worker["group_rules"], "group settings must use the local policy route only"
                 assert page.get_by_role("textbox", name="附件读取会话 ID").input_value() == "synthetic-room@chatroom"
                 assert worker["media_reply_threads"] == ["synthetic-room@chatroom"]
                 assert page.get_by_role("textbox", name="附件回复会话 ID").input_value() == "synthetic-room@chatroom"
@@ -512,6 +529,12 @@ def verify(binary, output):
                 assert page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).input_value() == "synthetic-mute@chatroom"
                 assert worker["contact_read"] is True
                 assert worker["actions"] == ["start", "stop"]
+                page.get_by_role("textbox", name="附件读取会话 ID").fill("")
+                assert page.get_by_role("checkbox", name="synthetic-room@chatroom 自动总结视频号分享", exact=True).is_disabled()
+                page.get_by_role("button", name="保存回复范围").click()
+                page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
+                assert worker["attachment_threads"] == [] and worker["media_reply_threads"] == []
+                assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": False}]
                 page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).fill("")
                 page.get_by_role("button", name="保存回复范围").click()
                 page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
