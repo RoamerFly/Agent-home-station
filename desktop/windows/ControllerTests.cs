@@ -68,6 +68,32 @@ namespace WechatAgent.Desktop {
             }
         }
 
+        static void LocalLegacyAdoption(HttpClient client, Deployment deployment, string account, string profileUrl) {
+            var source = deployment.Root + "-legacy-copy";
+            WindowsRuntime.PrivateDirectory(source);
+            Directory.CreateDirectory(Path.Combine(source, "admin"));
+            Directory.CreateDirectory(Path.Combine(source, "bot-state"));
+            File.WriteAllText(Path.Combine(source, "admin", "config.json"),
+                Deployment.Json.Serialize(new { enabled = true, filehelper_enabled = true }));
+            var queue = Path.Combine(source, "bot-state", "messages-v2.json");
+            var checkpoint = Deployment.Json.Serialize(new {
+                version = 1, server = "legacy-synthetic-dataset", account,
+                deliveries = new [] { new { key = "legacy-rehearsal-receipt", id = "legacy-native-job", thread = "filehelper",
+                    state = "accepted", server_id = "87111", input = new { account, thread = "filehelper" } } }
+            });
+            File.WriteAllText(queue, checkpoint);
+            File.WriteAllText(Path.Combine(Path.GetDirectoryName(deployment.StationNativeRoot), "legacy-import-source.json"),
+                Deployment.Json.Serialize(new { snapshot_root = source, primary_account = account, snapshot_stopped = true }));
+            var url = profileUrl + "/legacy-import";
+            var preview = Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(url).GetAwaiter().GetResult());
+            Assert(!Convert.ToBoolean(preview["same_native_dataset"]) && Convert.ToInt32(preview["receipt_records"]) == 1, "legacy preview detected the old data set");
+            var result = StationJSON(client, HttpMethod.Post, url, new { digest = Deployment.Text(preview, "digest") });
+            Assert(Convert.ToBoolean(result["applied"]), "legacy receipt and paused worker imported");
+            var receipt = Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(profileUrl + "/receipts/legacy-rehearsal-receipt").GetAwaiter().GetResult());
+            Assert(Deployment.Text(receipt, "state") == "accepted" && Deployment.Text(receipt, "lookup") == "legacy_snapshot", "retained historical receipt scoped to the imported account");
+            Assert(File.ReadAllText(queue) == checkpoint, "old snapshot remains unchanged");
+        }
+
         static void LocalNativeCycle(string packageDirectory) {
             const string password = "synthetic-local-native-cycle";
             var priorPassword = Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD");
@@ -140,6 +166,7 @@ namespace WechatAgent.Desktop {
                                 var list = Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(d.Url + connections).GetAwaiter().GetResult());
                                 Assert(((IList)list["items"]).Count == 2, "repeated requests did not create duplicate accounts");
                                 if (round == 0) {
+                                    LocalLegacyAdoption(client, d, "account-" + keys[0], profiles[0]);
                                     var settings = Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(d.Url + "/api/local/model").GetAwaiter().GetResult());
                                     settings["api_key"] = "synthetic-controller-worker-key";
                                     settings["base_url"] = "https://127.0.0.1:1";
@@ -339,7 +366,7 @@ namespace WechatAgent.Desktop {
             if (args.Length == 1 && args[0] == "--synthetic-child") { Thread.Sleep(60000); return 0; }
             if (args.Length == 2 && args[0] == "--local-native-cycle") {
                 LocalNativeCycle(args[1]);
-                Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; two synthetic profiles and independent worker states persisted, no login or send.");
+                Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; synthetic legacy receipt, profiles and independent worker states verified, no login or send.");
                 return 0;
             }
             if (args.Length == 2 && args[0] == "--local-cycle") {

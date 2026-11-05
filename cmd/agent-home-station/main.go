@@ -205,9 +205,9 @@ func parseConfig(args []string, executable string) (config, error) {
 		if err != nil || port == 0 || strconv.FormatUint(port, 10) == adminPort {
 			return config{}, errors.New("微信原生服务端口不可用或与管理端口相同")
 		}
-		nativeRoot := filepath.Join(dataDir, "apps", wechatapp.ID, "native")
-		if pathsOverlap(nativeRoot, workspaceRoot) {
-			return config{}, errors.New("微信原生私有目录不能与工作空间重叠")
+		appRoot := filepath.Join(dataDir, "apps", wechatapp.ID)
+		if pathsOverlap(appRoot, workspaceRoot) {
+			return config{}, errors.New("微信应用私有目录不能与工作空间重叠")
 		}
 	}
 	return config{

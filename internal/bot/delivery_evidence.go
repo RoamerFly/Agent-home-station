@@ -17,6 +17,8 @@ type DeliveryEvidence struct {
 	Status          linuxnative.ToolStatus
 }
 
+const MaxDeliveryCheckpointBytes = 24 << 20
+
 type deliveryCheckpointIdentity struct {
 	ID    string `json:"id"`
 	Key   string `json:"key"`
@@ -41,8 +43,44 @@ func ReadDeliveryEvidence(dir, account string, keys []string) (map[string]Delive
 		return nil, err
 	}
 	defer f.Close()
-	const maxQueue = 24 << 20
-	raw, err := io.ReadAll(io.LimitReader(f, maxQueue+1))
+	raw, err := io.ReadAll(io.LimitReader(f, MaxDeliveryCheckpointBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	return decodeDeliveryEvidence(raw, account, keys)
+}
+
+// LegacyDeliveryEvidence projects a stopped queue without installing any
+// replayable state. The account must match both the queue and its optional
+// cursor checkpoint. Its server ID is retained as historical provenance.
+func LegacyDeliveryEvidence(raw, cursor []byte, account string) (server string, records map[string]DeliveryEvidence, err error) {
+	if len(raw) == 0 && len(cursor) == 0 {
+		return "", nil, nil
+	}
+	var head struct {
+		Version int
+		Server  string
+		Account string
+	}
+	if len(raw) > 0 && (len(raw) > MaxDeliveryCheckpointBytes || json.Unmarshal(raw, &head) != nil || head.Version != 1 || head.Server == "" || head.Account != account) {
+		return "", nil, errors.New("legacy queue identity mismatch")
+	}
+	if len(cursor) > 0 {
+		var c checkpoint
+		if len(cursor) > 128<<10 || json.Unmarshal(cursor, &c) != nil || c.Version != 1 || c.ServerID == "" || c.Account != account || head.Server != "" && head.Server != c.ServerID {
+			return "", nil, errors.New("legacy cursor identity mismatch")
+		}
+		head.Server = c.ServerID
+	}
+	if len(raw) == 0 {
+		return head.Server, nil, nil
+	}
+	items, err := decodeDeliveryEvidence(raw, account, nil)
+	return head.Server, items, err
+}
+
+func decodeDeliveryEvidence(raw []byte, account string, keys []string) (map[string]DeliveryEvidence, error) {
+	out := make(map[string]DeliveryEvidence, len(keys))
 	var snapshot struct {
 		Version    int    `json:"version"`
 		Account    string `json:"account"`
@@ -64,13 +102,14 @@ func ReadDeliveryEvidence(dir, account string, keys []string) (map[string]Delive
 			Status        linuxnative.ToolStatus `json:"status"`
 		} `json:"media"`
 	}
-	if err != nil || len(raw) > maxQueue || json.Unmarshal(raw, &snapshot) != nil || snapshot.Version != 1 || snapshot.Account != account {
+	if len(raw) > MaxDeliveryCheckpointBytes || json.Unmarshal(raw, &snapshot) != nil || snapshot.Version != 1 || snapshot.Account != account || len(snapshot.Deliveries) > 3000 || len(snapshot.Media) > 1000 {
 		return nil, errors.New("invalid delivery checkpoint identity")
 	}
 	wanted := make(map[string]bool, len(keys))
 	for _, key := range keys {
 		wanted[key] = true
 	}
+	hasKey := func(key string) bool { return key != "" && (keys == nil || wanted[key]) }
 	add := func(key string, row DeliveryEvidence) error {
 		if _, duplicate := out[key]; duplicate || row.Status.ThreadID == "" {
 			return errors.New("ambiguous delivery checkpoint identity")
@@ -83,13 +122,16 @@ func ReadDeliveryEvidence(dir, account string, keys []string) (map[string]Delive
 			continue
 		}
 		for _, key := range d.PreviousKeys {
-			if wanted[key] && d.Input.Account == account && d.Input.Thread == d.Thread {
+			if hasKey(key) {
+				if d.Input.Account != account || d.Input.Thread != d.Thread {
+					return nil, errors.New("previous text delivery checkpoint scope mismatch")
+				}
 				if err := add(key, DeliveryEvidence{Trace: d.Trace, Status: linuxnative.ToolStatus{Kind: "text", ThreadID: d.Thread, State: "unknown", CancelRequested: d.Cancelled}}); err != nil {
 					return nil, err
 				}
 			}
 		}
-		if !wanted[d.Key] {
+		if !hasKey(d.Key) {
 			continue
 		}
 		if d.Input.Account != account || d.Input.Thread != d.Thread {
@@ -112,7 +154,7 @@ func ReadDeliveryEvidence(dir, account string, keys []string) (map[string]Delive
 		}
 	}
 	for _, d := range snapshot.Media {
-		if d == nil || !wanted[d.Key] {
+		if d == nil || !hasKey(d.Key) {
 			continue
 		}
 		status := d.Status

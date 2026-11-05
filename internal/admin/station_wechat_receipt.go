@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 
-	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 )
@@ -30,10 +29,10 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 	}
 	row, found := evidence[key]
 	if !found {
-		return apphost.Receipt{}, apphost.ErrNotFound
+		return s.readLegacyReceipt(ctx, id, key, native, w.dir)
 	}
 	result := apphost.Receipt{
-		ConnectionRef:   apphost.ConnectionRef{AppID: wechatapp.ID, InstallationID: s.installation, ConnectionID: id, AccountID: native.Account()},
+		ConnectionRef:   s.connectionRef(id, native.Account()),
 		ConversationID:  row.Status.ThreadID,
 		DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"},
 	}

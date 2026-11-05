@@ -29,15 +29,16 @@ type stationWechatNative interface {
 
 type stationWechat struct {
 	stationWechatNative
-	root, installation string
-	models             *localModelStore
-	model              companion.LanguageModel
-	ctx                context.Context
-	cancel             context.CancelFunc
-	mu                 sync.Mutex
-	workers            map[string]*stationWechatWorker
-	wg                 sync.WaitGroup
-	done               chan struct{}
+	root, installation     string
+	dataDir, workspaceRoot string
+	models                 *localModelStore
+	model                  companion.LanguageModel
+	ctx                    context.Context
+	cancel                 context.CancelFunc
+	mu                     sync.Mutex
+	workers                map[string]*stationWechatWorker
+	wg                     sync.WaitGroup
+	done                   chan struct{}
 }
 
 type stationWechatPolicy struct {
@@ -69,6 +70,7 @@ func bindStationWechat(registry apphost.Registry, chat *localChatService) (appho
 	ctx, cancel := context.WithCancel(context.Background())
 	host := &stationWechat{
 		stationWechatNative: native, root: filepath.Join(chat.home.dataDir, "apps", wechatapp.ID, "workers"),
+		dataDir: chat.home.dataDir, workspaceRoot: chat.home.root,
 		installation: entry.InstallationID, models: chat.models, model: stationWechatModel{chat.models},
 		ctx: ctx, cancel: cancel, workers: map[string]*stationWechatWorker{}, done: make(chan struct{}),
 	}
@@ -432,7 +434,7 @@ func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, run
 		}
 	}
 	return apphost.ConnectionLifecycle{
-		ConnectionRef: apphost.ConnectionRef{AppID: wechatapp.ID, InstallationID: s.installation, ConnectionID: id, AccountID: native.Account()},
+		ConnectionRef: s.connectionRef(id, native.Account()),
 		Worker:        w.state(), WorkerEnabled: w.policy.Enabled, SubmissionsPaused: w.policy.Paused,
 	}, nil
 }

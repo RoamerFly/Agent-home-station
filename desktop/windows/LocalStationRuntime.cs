@@ -30,8 +30,9 @@ namespace WechatAgent.Desktop {
         }
         void ValidateNativeLayout() {
             var nativeRoot = d.StationNativeRoot;
-            if (Contains(d.StationWorkspace, nativeRoot) || Contains(nativeRoot, d.StationWorkspace))
-                throw new InvalidOperationException("本机成长站工作区不能与微信原生数据目录重叠。请在配置中设置独立 workspace_root。");
+            var appRoot = Path.GetDirectoryName(nativeRoot);
+            if (Contains(d.StationWorkspace, appRoot) || Contains(appRoot, d.StationWorkspace))
+                throw new InvalidOperationException("本机成长站工作区不能与微信应用私有目录重叠。请在配置中设置独立 workspace_root。");
             // Old desktop native deployments have this exact root layout; a
             // station must never reinterpret it as its own private state.
             if (File.Exists(Path.Combine(d.Root, "api-token")) && Directory.Exists(Path.Combine(d.Root, "admin")))
