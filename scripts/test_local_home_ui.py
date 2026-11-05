@@ -56,6 +56,18 @@ def assert_no_horizontal_overflow(page, scene):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{scene}: narrow overflow"
 
 
+def assert_worker_controls_fit(page):
+    assert page.evaluate("""() => {
+        const panel = document.querySelector('.app-worker');
+        const area = panel.getBoundingClientRect();
+        return [...panel.querySelectorAll('button, textarea, input')].every((node) => {
+            if (node.closest('details:not([open])')) return true;
+            const bounds = node.getBoundingClientRect();
+            return bounds.left >= area.left - 1 && bounds.right <= area.right + 1;
+        });
+    }"""), "visible worker controls clipped inside their card"
+
+
 def app_connection_payload():
     """Synthetic registered application data for browser-only app status checks."""
     return {
@@ -315,6 +327,40 @@ def verify(binary, output):
                 assert worker["media_reply_threads"] == ["synthetic-room@chatroom"]
                 assert page.get_by_role("textbox", name="附件回复会话 ID").input_value() == "synthetic-room@chatroom"
                 assert worker["actions"] == ["start", "stop"]
+                share = {"installed": False, "enabled": False, "runtime_ready": True, "revision": 0, "configuration": {"revision": 0, "values": {}, "configured_secrets": []}}
+                def share_settings(route):
+                    if route.request.method == "PUT":
+                        assert route.request.headers.get("x-csrf-token")
+                        body = route.request.post_data_json
+                        if body["action"] == "install":
+                            assert body["grant_network"] is True
+                            share.update(installed=True, revision=1)
+                        else:
+                            assert body["revision"] == share["revision"]
+                            if body["action"] == "configure":
+                                config = body["configuration"]
+                                assert config["secrets"] == {"yuanbao_cookie": "synthetic-browser-credential"}
+                                share["configuration"] = {"revision": 1, "values": config["values"], "configured_secrets": ["yuanbao_cookie"]}
+                            else:
+                                share.update(enabled=body["action"] == "enable", revision=share["revision"] + 1)
+                    fulfill_json(share)(route)
+                page.route(status_pattern + "/share-reader", share_settings)
+                page.get_by_text("视频号解析", exact=True).click()
+                page.get_by_role("button", name="安装并授予受控联网权限").click()
+                page.get_by_label("元宝解析凭据", exact=True).fill("synthetic-browser-credential")
+                page.get_by_role("button", name="保存解析设置").click()
+                page.get_by_placeholder("已配置，留空保留").wait_for()
+                assert page.get_by_label("元宝解析凭据", exact=True).input_value() == ""
+                page.set_viewport_size({"width": 375, "height": 780})
+                assert_no_horizontal_overflow(page, "share reader configuration")
+                assert_worker_controls_fit(page)
+                page.screenshot(path=str(output / "apps-share-reader-narrow.png"), full_page=True)
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.get_by_role("button", name="启用解析", exact=True).click()
+                page.get_by_text("已启用，按需运行", exact=True).wait_for()
+                page.get_by_role("button", name="停用解析", exact=True).click()
+                page.get_by_text("已停用", exact=True).wait_for()
+                page.get_by_text("视频号解析", exact=True).click()
                 # Reading delivery history and receipt checks must never post a send.
                 receipt_state = {"version": "first", "reads": 0, "checks": 0, "stops": 0, "resumes": 0, "continuation": None}
                 receipts_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/receipts(?:[/?].*)?$")
@@ -410,14 +456,7 @@ def verify(binary, output):
                 assert len(share_requests) == 1
                 page.set_viewport_size({"width": 375, "height": 780})
                 assert_no_horizontal_overflow(page, "worker controls")
-                assert page.evaluate("""() => {
-                    const panel = document.querySelector('.app-worker');
-                    const area = panel.getBoundingClientRect();
-                    return [...panel.querySelectorAll('button, textarea')].every((node) => {
-                        const bounds = node.getBoundingClientRect();
-                        return bounds.left >= area.left - 1 && bounds.right <= area.right + 1;
-                    });
-                }"""), "worker editor clipped inside its card"
+                assert_worker_controls_fit(page)
                 page.screenshot(path=str(output / "apps-worker-narrow.png"), full_page=True)
                 page.set_viewport_size({"width": 1280, "height": 800})
                 page.unroute(artifact_pattern, register_artifact)

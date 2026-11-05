@@ -37,16 +37,18 @@ type stationAttachmentRecord struct {
 }
 
 type stationAttachmentAccess struct {
-	native               *linuxnative.Sender
-	dir, thread, message string
-	grant                time.Time
-	allowed              func() bool
-	ref                  *companion.SourceRef
-	store                *companion.Store
-	history              bool
-	videoOnly            bool
-	fetchVideo           stationVideoFetch
-	maxBytes             int64
+	native                  *linuxnative.Sender
+	dir, thread, message    string
+	grant                   time.Time
+	allowed                 func() bool
+	ref                     *companion.SourceRef
+	store                   *companion.Store
+	history                 bool
+	videoOnly               bool
+	fetchVideo              stationVideoFetch
+	shareHost               func() (*stationShareHost, error)
+	requester, requestTrace string
+	maxBytes                int64
 }
 
 func (a stationAttachmentAccess) CurrentThread() string                  { return a.thread }
@@ -308,6 +310,7 @@ type stationAttachmentTools struct {
 	prepared    map[string]companion.GeneratedMedia
 	work        *stationWorkAccess
 	fetchVideo  stationVideoFetch
+	shareHost   func() (*stationShareHost, error)
 }
 
 func (*stationAttachmentTools) AutonomousActions() bool { return true }

@@ -218,6 +218,24 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	request(f, "PUT", path("other")+"/policy", map[string]any{"reply_threads": []string{"person-one"}}, true, 404)
 	policy(f, "one", "person-one")
 	policy(f, "two", "person-two")
+	shareOne, shareTwo := path("one")+"/share-reader", path("two")+"/share-reader"
+	h.wechat.shareOptions.CatalogDirectory = filepath.Join("..", "..", "plugins")
+	request(f, "PUT", shareOne, map[string]any{"action": "install", "grant_network": true}, false, 403)
+	request(f, "PUT", shareOne, map[string]any{"action": "install"}, true, 400)
+	installedShare := request(f, "PUT", shareOne, map[string]any{"action": "install", "grant_network": true}, true, 200)
+	if installedShare["installed"] != true || installedShare["enabled"] != false {
+		t.Fatal(installedShare)
+	}
+	shareRev := installedShare["revision"]
+	request(f, "PUT", shareOne, map[string]any{"action": "configure", "revision": shareRev, "configuration": map[string]any{"values": map[string]any{"object_bridge_url": "http://192.0.2.1:1234"}}}, true, 400)
+	configuredShare := request(f, "PUT", shareOne, map[string]any{"action": "configure", "revision": shareRev, "configuration": map[string]any{"secrets": map[string]string{"yuanbao_cookie": "synthetic-fixture-cookie"}}}, true, 200)
+	encodedShare, _ := json.Marshal(configuredShare)
+	if strings.Contains(string(encodedShare), "synthetic-fixture-cookie") || !strings.Contains(string(encodedShare), "yuanbao_cookie") {
+		t.Fatal("share settings did not redact credential", configuredShare)
+	}
+	if other := request(f, "GET", shareTwo, nil, false, 200); other["installed"] != false || other["configuration"] != nil {
+		t.Fatal("cross-connection share tool leaked", other)
+	}
 	request(f, "PUT", path("one")+"/policy", map[string]any{"reply_threads": []string{"person-one"}, "history_threads": []string{"foreign-thread"}}, true, 400)
 	request(f, "PUT", path("two")+"/policy", map[string]any{"reply_threads": []string{"person-two"}, "history_threads": []string{"person-two"}}, true, 200)
 	policy(f, "two", "person-two") // Old clients omitting the field retain the explicit grant.

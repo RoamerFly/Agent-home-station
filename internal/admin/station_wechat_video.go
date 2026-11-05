@@ -52,8 +52,39 @@ func (a stationAttachmentAccess) downloadChannelsVideo(ctx context.Context, orig
 	if channelsVideoBinding(message, source) != original.Binding || !a.Allowed(ctx, original.Thread) {
 		return linuxnative.VerifiedIncomingMedia{}, wechatapp.ErrAttachmentDenied
 	}
+	result, directErr := a.fetchChannelsVideo(ctx, original, source, limit, file)
+	var stage *stationVideoError
+	if !errors.As(directErr, &stage) || ctx.Err() != nil || !a.Allowed(ctx, original.Thread) || a.shareHost == nil || source.ObjectID == "" {
+		return result, directErr
+	}
+	switch stage.code {
+	case "channels_media_locator_missing", "channels_video_download_failed", "channels_decode_key_invalid", "wechat_video_probe_failed", "channels_http_status":
+	default:
+		return result, directErr
+	}
+	host, err := a.shareHost()
+	if err != nil {
+		return result, videoReadError("share_reader_store_unavailable", "打开当前连接的工具宿主")
+	}
+	resolved, err := host.resolve(ctx, a, original, message, source)
+	if err != nil {
+		return result, err
+	}
+	if err = file.Truncate(0); err != nil {
+		return result, err
+	}
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		return result, err
+	}
+	return a.fetchChannelsVideo(ctx, original, resolved, limit, file)
+}
+
+func (a stationAttachmentAccess) fetchChannelsVideo(ctx context.Context, original stationAttachmentSource, source linuxnative.ChannelsSource, limit int64, file *os.File) (linuxnative.VerifiedIncomingMedia, error) {
+	if !a.Allowed(ctx, original.Thread) {
+		return linuxnative.VerifiedIncomingMedia{}, wechatapp.ErrAttachmentDenied
+	}
 	if source.State != "available" || source.MediaURL == "" {
-		return linuxnative.VerifiedIncomingMedia{}, videoReadError("share_reader_tool_host_pending", "分享解析工具未接入独立宿主")
+		return linuxnative.VerifiedIncomingMedia{}, videoReadError("channels_media_locator_missing", "定位视频号原件")
 	}
 	fetch := a.fetchVideo
 	if fetch == nil {
@@ -146,6 +177,7 @@ func (t *stationAttachmentTools) readVideo(ctx context.Context, raw json.RawMess
 	if err != nil {
 		return "", err
 	}
+	access.shareHost, access.requester, access.requestTrace = t.shareHost, t.trace.Sender, t.trace.TraceID
 	access.maxBytes = 50 << 20
 	if in.Max != nil {
 		access.maxBytes = *in.Max

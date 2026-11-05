@@ -224,7 +224,7 @@
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
     toggle.disabled ||= status.worker === "stopping" || !running && !status.configured_policy?.conversation_enabled;
     buttons.append(toggle);
-    panel.append(buttons, deliveryRecords(id));
+    panel.append(buttons, deliveryRecords(id), shareReaderControls(id));
     if (apps.editWorker !== id) return panel;
     const field = document.createElement("textarea");
     field.rows = 3;
@@ -261,6 +261,80 @@
       appElement("p", "历史消息与群成员须单独授权；大肥鱼仅能读取当前所在会话。"), history,
       appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments,
       appElement("p", "附件回复须单独授权，只能把本会话的附件发回本会话。"), mediaReplies, save, workGrantControls(id));
+    return panel;
+  }
+  function shareReaderControls(id) {
+    const panel = appElement("details", "", "identity-details");
+    panel.append(appElement("summary", "视频号解析"));
+    const content = appElement("div", "", "details-grid");
+    panel.append(content);
+    const path = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/share-reader";
+    let busy = false;
+    async function load(body) {
+      if (busy) return;
+      busy = true;
+      content.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+      try {
+        const value = await request(path, body ? { method: "PUT", body: JSON.stringify(body) } : undefined);
+        render(value);
+      } catch (error) {
+        content.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+        let errorRow = content.querySelector(".share-reader-error");
+        if (!errorRow) {
+          errorRow = appElement("small", "", "share-reader-error");
+          content.append(errorRow);
+        }
+        errorRow.textContent = error.message;
+      } finally { busy = false; }
+    }
+    function render(value) {
+      const status = value.installed ? (value.enabled ? "已启用，按需运行" : "已停用") : "尚未安装";
+      content.replaceChildren(appElement("small", value.runtime_ready ? status : `${status} · 缺少 Windows 隔离工具运行环境`));
+      if (!value.installed) {
+        content.append(appElement("small", "授权后，只为当前微信连接解析原卡片。"),
+          appSetupButton("安装并授予受控联网权限", () => load({ action: "install", grant_network: true })));
+        return;
+      }
+      const action = value.enabled ? "disable" : "enable";
+      content.append(appSetupButton(value.enabled ? "停用解析" : "启用解析", () => load({ action, revision: value.revision })));
+      if (value.enabled) return;
+      const configuration = value.configuration || {};
+      const fields = new Map();
+      const clear = new Map();
+      for (const [key, label] of [["yuanbao_cookie", "元宝解析凭据"], ["assistant_cookie", "视频号助手凭据"], ["object_bridge_url", "本机对象桥接地址"]]) {
+        const wrap = appElement("label", label, "details-grid");
+        const field = document.createElement("input");
+        const secret = key !== "object_bridge_url";
+        field.type = secret ? "password" : "text";
+        field.autocomplete = secret ? "new-password" : "off";
+        field.value = secret ? "" : configuration.values?.[key] || "";
+        field.placeholder = secret && configuration.configured_secrets?.includes(key) ? "已配置，留空保留" : "可留空";
+        fields.set(key, field);
+        wrap.append(field);
+        content.append(wrap);
+        if (secret && configuration.configured_secrets?.includes(key)) {
+          const clearLabel = appElement("label", "清除已保存的" + label);
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          clear.set(key, checkbox);
+          clearLabel.prepend(checkbox);
+          content.append(clearLabel);
+        }
+      }
+      content.append(appSetupButton("保存解析设置", () => {
+        const bridge = fields.get("object_bridge_url").value.trim();
+        const secrets = {};
+        const clear_secrets = [];
+        for (const name of ["yuanbao_cookie", "assistant_cookie"]) {
+          if (clear.get(name)?.checked) clear_secrets.push(name);
+          else if (fields.get(name).value) secrets[name] = fields.get(name).value;
+        }
+        load({ action: "configure", revision: value.revision, configuration: {
+          revision: configuration.revision || 0, values: bridge ? { object_bridge_url: bridge } : {}, secrets, clear_secrets
+        } });
+      }));
+    }
+    panel.addEventListener("toggle", () => { if (panel.open) load(); });
     return panel;
   }
   function workGrantControls(id) {

@@ -40,6 +40,22 @@ def reindex(package):
 
 
 class StagePluginCatalogTests(unittest.TestCase):
+    def test_selected_package_stages_only_verified_members(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "plugins"
+            selected = write_package(source, "share-reader")
+            write_package(source, "unrelated-tool")
+            output = root / "bundle"
+            result = stage_plugin_catalog.stage(source, output, selected="share-reader")
+            self.assertEqual(result["packages"], ["share-reader"])
+            self.assertEqual(sorted(path.name for path in output.iterdir()), ["share-reader"])
+            self.assertTrue(stage_plugin_catalog.stage(source, output, selected="share-reader")["idempotent"])
+            (selected / "runtime" / "main.py").write_bytes(b"modified")
+            with self.assertRaisesRegex(stage_plugin_catalog.StageError, "plugin_manifest_hash_mismatch"):
+                stage_plugin_catalog.stage(source, root / "tampered", selected="share-reader")
+            self.assertFalse((root / "tampered").exists())
+
     def test_rejects_source_output_overlap_before_source_changes(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -90,7 +90,7 @@ def _read_package(directory, descriptor="plugin.json"):
     return sorted(expected)
 
 
-def _catalog(source, descriptor="plugin.json"):
+def _catalog(source, descriptor="plugin.json", selected=None):
     if _reparse(source) or not source.is_dir():
         raise StageError("source_catalog_unavailable")
     entries = list(source.iterdir())
@@ -107,6 +107,10 @@ def _catalog(source, descriptor="plugin.json"):
             raise StageError("source_catalog_contains_non_package")
     if not directories:
         raise StageError("source_catalog_empty")
+    if selected is not None:
+        directories = [directory for directory in directories if directory.name == selected]
+        if not directories:
+            raise StageError("requested_package_unavailable")
     packages = {}
     for directory in sorted(directories, key=lambda value: value.name):
         packages[directory.name] = _read_package(directory, descriptor)
@@ -315,7 +319,7 @@ def _overlaps(source, output):
             return False
 
 
-def stage(source, output, update_existing=False, descriptor="plugin.json"):
+def stage(source, output, update_existing=False, descriptor="plugin.json", selected=None):
     """Validate source catalog then create it once, or prove existing equality."""
     if descriptor not in {"plugin.json", "app.json"}:
         raise StageError("unsupported_package_descriptor")
@@ -330,7 +334,7 @@ def stage(source, output, update_existing=False, descriptor="plugin.json"):
     # invocation. Reject all equal/ancestor relations before mkdir/copyfile.
     if _overlaps(source, output):
         raise StageError("source_output_overlap")
-    packages = _catalog(source, descriptor)
+    packages = _catalog(source, descriptor, selected)
     if output.exists():
         if _reparse(output) or not output.is_dir():
             raise StageError("output_requires_fresh_directory")
@@ -355,9 +359,10 @@ def main(argv=None):
     parser.add_argument("--output", required=True, help="new catalog directory, for example OUTPUT/plugins")
     parser.add_argument("--update-existing", action="store_true", help="replace only verified indexed members in an existing catalog")
     parser.add_argument("--descriptor", choices=("plugin.json", "app.json"), default="plugin.json", help="package descriptor filename")
+    parser.add_argument("--package", help="stage only the named package")
     args = parser.parse_args(argv)
     try:
-        result = stage(args.source, args.output, update_existing=args.update_existing, descriptor=args.descriptor)
+        result = stage(args.source, args.output, update_existing=args.update_existing, descriptor=args.descriptor, selected=args.package)
     except StageError as error:
         print(str(error), file=sys.stderr)
         return 1

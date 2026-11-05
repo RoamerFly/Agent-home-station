@@ -20,6 +20,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -42,6 +43,7 @@ type stationWechat struct {
 	wg                     sync.WaitGroup
 	done                   chan struct{}
 	artifacts              *localArtifactStore
+	shareOptions           pluginruntime.Options
 }
 
 type stationWechatPolicy struct {
@@ -56,6 +58,8 @@ type stationWechatPolicy struct {
 type stationWechatWorker struct {
 	mu         sync.Mutex
 	deliveryMu sync.Mutex
+	shareMu    sync.Mutex
+	share      *stationShareHost
 	dir        string
 	policy     stationWechatPolicy
 	run        *stationWechatRun
@@ -75,12 +79,17 @@ func bindStationWechat(registry apphost.Registry, chat *localChatService) (appho
 		return registry, nil, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	shareOptions := stationShareOptions()
+	if pathWithin(chat.home.root, shareOptions.Pythonw) || pathWithin(chat.home.root, shareOptions.WindowsHelper) {
+		// Interpreter and isolation helper must be outside the editable fish home.
+		shareOptions.Python, shareOptions.Pythonw, shareOptions.WindowsHelper = "", "", ""
+	}
 	host := &stationWechat{
 		stationWechatNative: native, root: filepath.Join(chat.home.dataDir, "apps", wechatapp.ID, "workers"),
 		dataDir: chat.home.dataDir, workspaceRoot: chat.home.root,
 		installation: entry.InstallationID, models: chat.models, model: stationWechatModel{chat.models},
 		ctx: ctx, cancel: cancel, workers: map[string]*stationWechatWorker{}, done: make(chan struct{}),
-		artifacts: chat.home.artifacts,
+		artifacts: chat.home.artifacts, shareOptions: shareOptions,
 	}
 	registrations := make([]apphost.Registration, 0, len(registry.Applications()))
 	for _, app := range registry.Applications() {
@@ -127,7 +136,20 @@ func (s *stationWechat) beginShutdown() {
 	defer s.mu.Unlock()
 	if s.ctx.Err() == nil {
 		s.cancel()
-		go func() { s.wg.Wait(); close(s.done) }()
+		go func() {
+			s.wg.Wait()
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			for _, worker := range s.workers {
+				worker.shareMu.Lock()
+				if worker.share != nil {
+					_ = worker.share.controller.Close()
+					_ = worker.share.store.Close()
+				}
+				worker.shareMu.Unlock()
+			}
+			close(s.done)
+		}()
 	}
 }
 
@@ -573,6 +595,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 	}
 	character.Names = native
 	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.block.Load}
+	attachment.shareHost = func() (*stationShareHost, error) { return s.shareHost(station, native.Account()) }
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}
 	}

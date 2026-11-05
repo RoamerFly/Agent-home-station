@@ -20,7 +20,11 @@ import (
 // installed. The host, not plugin arguments, selects the configured endpoint;
 // a verified source_url is returned only after the bounded bridge read.
 func (p *receivedSharePolicy) configuredChannelsBridge(ctx context.Context) (string, bool, error) {
-	configuration, err := p.store.ConfigurationForExecution(ctx, "share-reader")
+	return configuredChannelsBridge(ctx, p.store)
+}
+
+func configuredChannelsBridge(ctx context.Context, store *pluginhost.Store) (string, bool, error) {
+	configuration, err := store.ConfigurationForExecution(ctx, shareServicePluginID)
 	if err != nil {
 		return "", false, errors.New("share_bridge_configuration_unavailable")
 	}
@@ -69,7 +73,11 @@ func (p *receivedSharePolicy) channelsBridge(ctx context.Context, j pluginhost.J
 	if p.binding == nil || p.message.AppMessageType == nil || *p.message.AppMessageType != 51 {
 		return nil, errors.New("share_bridge_unavailable")
 	}
-	if err := p.Check(ctx, j, cap); err != nil {
+	return callBoundChannelsBridge(ctx, p.store, p.binding, j, raw, func(ctx context.Context) error { return p.Check(ctx, j, cap) })
+}
+
+func callBoundChannelsBridge(ctx context.Context, store *pluginhost.Store, binding *shareRouteBinding, j pluginhost.Job, raw json.RawMessage, check func(context.Context) error) (json.RawMessage, error) {
+	if err := check(ctx); err != nil {
 		return nil, err
 	}
 	var in struct {
@@ -82,7 +90,7 @@ func (p *receivedSharePolicy) channelsBridge(ctx context.Context, j pluginhost.J
 	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF {
 		return nil, errors.New("share_bridge_source_mismatch")
 	}
-	base, configured, err := p.configuredChannelsBridge(ctx)
+	base, configured, err := configuredChannelsBridge(ctx, store)
 	if err != nil || !configured {
 		return nil, errors.New("share_bridge_unavailable")
 	}
@@ -103,9 +111,9 @@ func (p *receivedSharePolicy) channelsBridge(ctx context.Context, j pluginhost.J
 	// Reserve the one source-bound bridge read before opening the connection.
 	// Unlike the credential route state machine this path has only one request,
 	// so an in-flight phase prevents replay even if the network call fails.
-	p.binding.mu.Lock()
-	err = p.binding.route.BeginBridge(in.ObjectID, in.NonceID)
-	p.binding.mu.Unlock()
+	binding.mu.Lock()
+	err = binding.route.BeginBridge(in.ObjectID, in.NonceID)
+	binding.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -131,12 +139,12 @@ func (p *receivedSharePolicy) channelsBridge(ctx context.Context, j pluginhost.J
 	if err != nil {
 		return nil, errors.New("share_bridge_response_invalid")
 	}
-	if err = p.Check(ctx, j, cap); err != nil {
+	if err = check(ctx); err != nil {
 		return nil, err
 	}
-	p.binding.mu.Lock()
-	err = p.binding.route.CompleteBridge(base, video)
-	p.binding.mu.Unlock()
+	binding.mu.Lock()
+	err = binding.route.CompleteBridge(base, video)
+	binding.mu.Unlock()
 	if err != nil {
 		return nil, errors.New("share_bridge_response_invalid")
 	}
