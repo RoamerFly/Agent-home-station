@@ -292,7 +292,7 @@ func (t *localToolSet) comfyCheckpointView(op companion.LocalToolCheckpoint, g l
 	view := map[string]any{"tool": op.Tool, "state": "needs_review", "recovered": true}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if t.projectTools == nil || t.run.CheckSource(ctx) != nil {
+	if t.projectTools == nil || t.run == nil || t.run.CheckSource(ctx) != nil {
 		return view
 	}
 	host, err := t.projectTools.forFish(g.FishID)

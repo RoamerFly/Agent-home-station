@@ -22,11 +22,31 @@ const (
 	localTTSCapability = "station-speech.synthesize"
 	localTTSVoicesTool = "project_speech_voices"
 	localTTSStartTool  = "project_speech_synthesize"
+	localTTSJobTool    = "project_speech_job"
 	localTTSWAVLimit   = 32 << 20
 	localTTSTextLimit  = 12000
+	// localTTSPriorPackageDigest is the immutable station-speech 0.1.0
+	// manifest shipped before durable origin references were added.  Keep this
+	// deliberately finite: accepting any leftover package directory would make
+	// a stale or injected snapshot a read authority.
+	localTTSPriorPackageDigest = "d4337f14c1c218f92a7af4d7c870fd5e71abc9b6fec9e243ecdaffd733602e3b"
 )
 
 var localTTSGrants = []string{"artifact.write", "gpu"}
+
+// localTTSJobInput deliberately stores only the durable identity of a
+// synthesis request.  In particular, the text is represented by its digest:
+// a later status query must never turn the jobs store into a transcript API.
+type localTTSJobInput struct {
+	Origin       *companion.SourceRef `json:"origin"`
+	Trace        string               `json:"trace"`
+	VoiceID      string               `json:"voice_id"`
+	VoiceVersion string               `json:"voice_version"`
+	Binding      string               `json:"binding"`
+	Speed        float64              `json:"speed"`
+	TextSHA256   string               `json:"text_sha256"`
+	TextLanguage string               `json:"text_language"`
+}
 
 func localTTSSetupReason(err error) string {
 	if err == nil {
@@ -47,7 +67,7 @@ func localTTSSetupReason(err error) string {
 }
 
 func (t *localToolSet) localTTSTools(ctx context.Context) []mcptools.Tool {
-	if t.projectTools == nil || t.projectTools.tts == nil || t.run == nil || !t.run.Tracked {
+	if t.projectTools == nil || t.run == nil || !t.run.Tracked {
 		return nil
 	}
 	grant, err := t.access.resolve()
@@ -59,9 +79,6 @@ func (t *localToolSet) localTTSTools(ctx context.Context) []mcptools.Tool {
 		return nil
 	}
 	if _, err := installedLocalProject(ctx, host, localProjectOperation{pkg: localTTSPackage, capability: localTTSCapability}); err != nil {
-		return nil
-	}
-	if info, err := t.projectTools.tts.Info(ctx, grant.FishID); err != nil || len(info.Voices) == 0 {
 		return nil
 	}
 	caps, err := host.store.Capabilities(ctx, localTTSPackage)
@@ -79,8 +96,21 @@ func (t *localToolSet) localTTSTools(ctx context.Context) []mcptools.Tool {
 			name = localTTSVoicesTool
 		case localTTSCapability:
 			name = localTTSStartTool
+		case "station-speech.job":
+			name = localTTSJobTool
 		}
-		if name != "" {
+		// A job action is an intentionally small recovery/control surface.  It
+		// remains discoverable when the runner or a voice registration is down,
+		// so a later conversation can stop or inspect a durable old request.
+		if name == localTTSJobTool {
+			tools = append(tools, mcptools.Tool{Name: name, Description: cap.Description, InputSchema: cap.InputSchema})
+			continue
+		}
+		if t.projectTools.tts == nil {
+			continue
+		}
+		info, infoErr := t.projectTools.tts.Info(ctx, grant.FishID)
+		if infoErr == nil && len(info.Voices) != 0 && name != "" {
 			tools = append(tools, mcptools.Tool{Name: name, Description: cap.Description, InputSchema: cap.InputSchema})
 		}
 	}
@@ -89,7 +119,7 @@ func (t *localToolSet) localTTSTools(ctx context.Context) []mcptools.Tool {
 
 func (t *localToolSet) callLocalTTS(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	s := t.projectTools
-	if s == nil || s.tts == nil || t.run == nil || !t.run.Tracked || t.run.CheckSource(ctx) != nil {
+	if s == nil || t.run == nil || !t.run.Tracked || t.run.CheckSource(ctx) != nil {
 		return "", errors.New("当前对话没有本机语音合成授权")
 	}
 	grant, err := t.access.resolve()
@@ -103,6 +133,12 @@ func (t *localToolSet) callLocalTTS(ctx context.Context, name string, raw json.R
 	installed, err := installedLocalProject(ctx, host, localProjectOperation{pkg: localTTSPackage, capability: localTTSCapability})
 	if err != nil {
 		return "", err
+	}
+	if name == localTTSJobTool {
+		return t.localTTSJobAction(ctx, s, host, grant, installed, raw)
+	}
+	if s.tts == nil {
+		return "", errors.New("请在项目工具核对本机语音后端和获准声线")
 	}
 	info, err := s.tts.Info(ctx, grant.FishID)
 	if err != nil || info.Binding == "" {
@@ -173,7 +209,15 @@ func (t *localToolSet) runLocalTTS(ctx context.Context, s *localProjectTools, ho
 	defer s.update.Unlock()
 	save, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	if jobCtx.Err() != nil || !t.access.current(grant) || t.run.CheckSource(jobCtx) != nil {
+	// A control turn may have advanced the durable job revision while the local
+	// process was finishing.  Read it after taking the same lock used by cancel
+	// so an old completion CAS cannot publish a result after cancellation.
+	if current, currentErr := host.store.Job(save, job.ID); currentErr == nil {
+		job = current
+	} else {
+		return job, currentErr
+	}
+	if job.CancelRequested || jobCtx.Err() != nil || !t.access.current(grant) || t.run.CheckSource(jobCtx) != nil {
 		return host.store.FinishJob(save, job.ID, job.Revision, "cancelled", nil)
 	}
 	if err != nil {
@@ -199,7 +243,12 @@ func (t *localToolSet) runLocalTTS(ctx context.Context, s *localProjectTools, ho
 		return host.store.FailJob(save, job.ID, job.Revision, json.RawMessage(`{"reason":"local_speech_invalid_wav"}`))
 	}
 	artifact, err := t.publishLocalTTS(jobCtx, grant, source, job.ID, result.WAV)
-	if jobCtx.Err() != nil || !t.access.current(grant) || t.run.CheckSource(jobCtx) != nil {
+	if current, currentErr := host.store.Job(save, job.ID); currentErr == nil {
+		job = current
+	} else {
+		return job, currentErr
+	}
+	if job.CancelRequested || jobCtx.Err() != nil || !t.access.current(grant) || t.run.CheckSource(jobCtx) != nil {
 		return host.store.FinishJob(save, job.ID, job.Revision, "cancelled", nil)
 	}
 	if err != nil {
@@ -230,8 +279,8 @@ func (t *localToolSet) claimLocalTTS(ctx context.Context, s *localProjectTools, 
 	if err := pluginhost.Authorize(current.Package, pluginhost.Grant{Account: grant.FishID, Plugin: localTTSPackage, Version: current.Package.Version, Permissions: current.Permissions}, call, localTTSGrants); err != nil {
 		return empty, nil, nil, err
 	}
-	arguments, err := json.Marshal(map[string]any{"voice_id": selected.ID, "voice_version": selected.Version, "binding": binding,
-		"speed": *request.Speed, "text_sha256": namedSpeechSHA([]byte(request.Text)), "text_language": request.Language})
+	arguments, err := json.Marshal(localTTSJobInput{Origin: source, Trace: t.traceID, VoiceID: selected.ID, VoiceVersion: selected.Version,
+		Binding: binding, Speed: *request.Speed, TextSHA256: namedSpeechSHA([]byte(request.Text)), TextLanguage: request.Language})
 	if err != nil {
 		return empty, nil, nil, err
 	}
@@ -246,11 +295,15 @@ func (t *localToolSet) claimLocalTTS(ctx context.Context, s *localProjectTools, 
 	}
 	jobCtx, stop := context.WithCancel(ctx)
 	s.ttsCancel = stop
+	s.ttsJobID = job.ID
 	finished := s.markActive(localTTSPackage)
 	return job, jobCtx, func() {
 		stop()
 		s.update.Lock()
-		s.ttsCancel = nil
+		if s.ttsJobID == job.ID {
+			s.ttsCancel = nil
+			s.ttsJobID = ""
+		}
 		finished()
 		s.update.Unlock()
 	}, nil
@@ -289,11 +342,155 @@ func (t *localToolSet) ttsResult(ctx context.Context, job pluginhost.Job) map[st
 	return view
 }
 
+// localTTSJobAction is deliberately recovery-only.  The station speech runner
+// has no durable remote task identity: after the original process exits there
+// is nothing truthful to resume or replay.  A later turn may inspect the
+// durable host record or cancel its remaining work, but it can never cause a
+// second synthesis from the stored text digest.
+func (t *localToolSet) localTTSJobAction(ctx context.Context, s *localProjectTools, host *localProjectToolHost, grant localWorkspaceGrant, installed pluginhost.InstalledPackage, raw json.RawMessage) (string, error) {
+	var in struct {
+		ID     string `json:"job_id"`
+		Action string `json:"action"`
+	}
+	if strictLocalMemoryDecode(raw, &in) != nil || !validLocalRVCHex(in.ID, 64) || (in.Action != "status" && in.Action != "cancel") {
+		return "", errors.New("请提供原本机语音任务编号及 status 或 cancel 操作")
+	}
+	job, err := host.store.Job(ctx, in.ID)
+	if err != nil || job.Plugin != localTTSPackage || job.Tool != localTTSCapability ||
+		job.Context.Account != grant.FishID || job.Context.Requester != grant.OwnerID || job.Context.Thread != grant.OwnerID ||
+		job.Context.Authorization != localCheckpointKey(grant) {
+		return "", errors.New("本机语音任务不存在或原授权已变化")
+	}
+	legacy, err := localTTSJobPackage(host, installed, job)
+	if err != nil || pluginhost.Authorize(legacy.Package, pluginhost.Grant{Account: grant.FishID, Plugin: localTTSPackage, Version: legacy.Package.Version, Permissions: legacy.Permissions}, job.Context, localTTSGrants) != nil {
+		return "", errors.New("本机语音任务不存在或原版本、授权已变化")
+	}
+	var args localTTSJobInput
+	if json.Unmarshal(job.Arguments, &args) != nil || !localTTSJobInputValid(args) {
+		return "", errors.New("本机语音任务记录无效")
+	}
+	// Status may expose an output artifact and its verification receipt; retain
+	// the original source boundary even for a completed historical job.  Cancel
+	// is intentionally a narrow control operation and remains possible after a
+	// source was forgotten so that old work cannot come back to life.
+	if in.Action == "status" && t.localTTSJobSourceValid(ctx, grant, args, job) == nil {
+		if job.Recovery() == "terminal" {
+			return localProcessJSON(t.ttsResult(ctx, job))
+		}
+		return localProcessJSON(t.ttsJobView(job))
+	} else if in.Action == "status" {
+		return "", errors.New("本机语音原请求或来源已变化")
+	}
+	if job.Recovery() == "terminal" {
+		return localProcessJSON(ttsCancelView(job))
+	}
+	// Serialize the durable cancel request with the finishing path.  This makes
+	// a completed WAV impossible to publish between the request and waking the
+	// one-shot process.
+	s.update.Lock()
+	defer s.update.Unlock()
+	if !job.CancelRequested {
+		job, err = host.store.RequestJobCancel(ctx, job.ID, job.Revision)
+		if err != nil {
+			return "", err
+		}
+	}
+	if s.ttsJobID == job.ID && s.ttsCancel != nil {
+		s.ttsCancel()
+	} else {
+		// A restart cannot resume a one-shot local process.  Once cancellation
+		// was durably admitted, close the orphaned job rather than leaving an
+		// endlessly "submitting" task that could later be mistaken for replayable.
+		job, err = host.store.FinishJob(ctx, job.ID, job.Revision, "cancelled", nil)
+		if err != nil {
+			return "", err
+		}
+	}
+	return localProcessJSON(ttsCancelView(job))
+}
+
+// localTTSJobPackage accepts the immutable manifest snapshot recorded by an
+// old job after a package upgrade.  It never accepts an arbitrary digest: the
+// private package store must still contain and verify the exact snapshot, and
+// the currently granted permissions must continue to cover the old operation.
+func localTTSJobPackage(host *localProjectToolHost, current pluginhost.InstalledPackage, job pluginhost.Job) (pluginhost.InstalledPackage, error) {
+	if job.PackageDigest == current.Digest && job.Version == current.Package.Version {
+		return current, nil
+	}
+	if job.PackageDigest != localTTSPriorPackageDigest || job.Version != "0.1.0" {
+		return pluginhost.InstalledPackage{}, errors.New("speech job package snapshot unsupported")
+	}
+	dir, err := host.store.PackageDirectory(job.PackageDigest)
+	if err != nil {
+		return pluginhost.InstalledPackage{}, err
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "plugin.json"))
+	if err != nil || namedSpeechSHA(raw) != job.PackageDigest {
+		return pluginhost.InstalledPackage{}, errors.New("speech job package manifest changed")
+	}
+	pkg, err := pluginhost.Verify(dir)
+	if err != nil || pkg.ID != localTTSPackage || pkg.Version != job.Version || pkg.Status != "ready" {
+		return pluginhost.InstalledPackage{}, errors.New("speech job package snapshot unavailable")
+	}
+	return pluginhost.InstalledPackage{Package: pkg, Digest: job.PackageDigest, Permissions: current.Permissions, Revision: current.Revision}, nil
+}
+
+func localTTSJobInputValid(args localTTSJobInput) bool {
+	// Origin/Trace were added in 0.1.1.  Legacy completed jobs may still be
+	// inspected through their committed artifact provenance, but never resumed.
+	return localTTSVoiceIDPattern.MatchString(args.VoiceID) && validLocalRVCHex(args.VoiceVersion, 64) &&
+		validLocalRVCHex(args.Binding, 64) && validLocalRVCHex(args.TextSHA256, 64) && args.Speed > 0 && (args.TextLanguage == "" || localTTSLanguageAllowed(args.TextLanguage))
+}
+
+func (t *localToolSet) localTTSJobSourceValid(ctx context.Context, grant localWorkspaceGrant, args localTTSJobInput, job pluginhost.Job) error {
+	if t.run == nil || t.run.CheckSource(ctx) != nil || !t.access.current(grant) {
+		return errors.New("speech job source unavailable")
+	}
+	if args.Origin != nil && args.Trace != "" && job.Context.SourceVersions[args.Origin.EventID] == args.Origin.Revision &&
+		t.access.home.artifacts.sourceValid(localArtifact{Fish: grant.FishID, Owner: grant.OwnerID, Request: args.Trace, Source: args.Origin}) {
+		return nil
+	}
+	// Jobs made before 0.1.1 did not persist Origin and Trace.  A completed
+	// job is still readable only if its committed artifact supplies a matching
+	// original source version, belongs to this owner, and passes the normal
+	// source-validity check.  Pending legacy work never gains a replay path.
+	if job.Recovery() == "terminal" && job.State == "completed" && len(job.Artifacts) == 1 {
+		artifact, err := t.access.home.artifacts.readRecord(job.Artifacts[0])
+		if err == nil && artifact.Request == job.ID && artifact.Fish == grant.FishID && artifact.Owner == grant.OwnerID && artifact.ProjectTool == localTTSPackage && artifact.Source != nil &&
+			job.Context.SourceVersions[artifact.Source.EventID] == artifact.Source.Revision && t.access.home.artifacts.sourceValid(artifact) {
+			return nil
+		}
+	}
+	return errors.New("speech job source unavailable")
+}
+
+func (t *localToolSet) ttsJobView(job pluginhost.Job) map[string]any {
+	view := t.ttsResult(context.Background(), job)
+	if job.Recovery() != "terminal" && job.State == "submitting" {
+		view["state"], view["reason"] = "needs_review", "original_worker_not_queryable"
+	}
+	if job.CancelRequested && job.Recovery() != "terminal" {
+		view["state"] = "cancelling"
+	}
+	return view
+}
+
+// Cancellation returns no artifact, source, text digest, or receipt.  This is
+// safe even after forgetting the initiating message and avoids treating a
+// cancellation request as a read authorization.
+func ttsCancelView(job pluginhost.Job) map[string]any {
+	state := job.State
+	if job.CancelRequested && job.Recovery() != "terminal" {
+		state = "cancelling"
+	}
+	return map[string]any{"job_id": job.ID, "state": state}
+}
+
 func (t *localToolSet) ttsCheckpointView(op companion.LocalToolCheckpoint, grant localWorkspaceGrant) map[string]any {
 	view := map[string]any{"tool": op.Tool, "state": "needs_review", "recovered": true}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if t.projectTools == nil || t.run.CheckSource(ctx) != nil || !t.access.current(grant) {
+	if t.projectTools == nil || t.run == nil || t.run.CheckSource(ctx) != nil || !t.access.current(grant) {
 		return view
 	}
 	host, err := t.projectTools.forFish(grant.FishID)
@@ -302,6 +499,10 @@ func (t *localToolSet) ttsCheckpointView(op companion.LocalToolCheckpoint, grant
 	}
 	job, err := host.store.JobByRequest(ctx, localTTSPackage, grant.OwnerID, op.Key)
 	if err != nil || job.Tool != localTTSCapability || job.Context.Authorization != op.Grant || job.Context.Account != grant.FishID || job.Context.Requester != grant.OwnerID {
+		return view
+	}
+	var args localTTSJobInput
+	if json.Unmarshal(job.Arguments, &args) != nil || t.localTTSJobSourceValid(ctx, grant, args, job) != nil {
 		return view
 	}
 	view = t.ttsResult(ctx, job)

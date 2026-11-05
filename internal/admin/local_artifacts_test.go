@@ -114,3 +114,77 @@ func TestLocalArtifactsPublishThroughChatAndRetainVerifiedSnapshot(t *testing.T)
 		t.Fatal("forgotten source remained publishable")
 	}
 }
+
+func TestLocalArtifactPublishRecoveryReadsOriginalAndRejectsNewSnapshot(t *testing.T) {
+	f := localChatFixture(t)
+	_, home := f.request("GET", "/api/local/home", nil, false)
+	works := filepath.Join(home["directory"].(string), "works")
+	for _, name := range []string{"first.txt", "extra.txt"} {
+		if err := os.WriteFile(filepath.Join(works, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hash := sha256Hex([]byte("first.txt"))
+	publish := localToolCall(localArtifactPublishTool, map[string]string{"path": "works/first.txt", "expected_sha256": hash})
+	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		calls := 0
+		return localModelFunc(func(_ context.Context, _ string, messages []map[string]string) (string, error) {
+			calls++
+			switch calls {
+			case 1:
+				return localToolCall(localArtifactPublishTool, map[string]string{"path": "works/first.txt", "expected_sha256": strings.Repeat("0", 64)}), nil
+			case 2:
+				if !strings.Contains(localModelHistory(messages), "not_published") {
+					t.Error("wrong digest should be a known rejection")
+				}
+				return publish, nil
+			default:
+				return "", fmt.Errorf("synthetic interruption after artifact publication")
+			}
+		}), nil
+	}
+	if code, _ := localChatSend(f, "resume-publish", "登记首份成品"); code != 502 {
+		t.Fatalf("expected a failed model response after tool execution: %d", code)
+	}
+	artifacts := filepath.Join(f.dir, "artifacts")
+	before, err := os.ReadDir(artifacts)
+	if err != nil || len(before) != 1 || !artifactID(before[0].Name(), "work-") {
+		t.Fatalf("initial artifact missing: %v %v", before, err)
+	}
+	if err := os.Remove(filepath.Join(works, "first.txt")); err != nil {
+		t.Fatal(err)
+	}
+	artifact := before[0].Name()
+	f = localRestartChat(t, f)
+	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		calls := 0
+		return localModelFunc(func(_ context.Context, _ string, messages []map[string]string) (string, error) {
+			calls++
+			history := localModelHistory(messages)
+			switch calls {
+			case 1:
+				if !strings.Contains(history, "tool_recovery") || !strings.Contains(history, artifact) {
+					t.Error("restart did not supply the original artifact receipt")
+				}
+				return publish, nil
+			case 2:
+				if !strings.Contains(history, `"recovered":true`) || !strings.Contains(history, hash) {
+					t.Error("repeating the same operation did not recover the original artifact")
+				}
+				return localToolCall(localArtifactPublishTool, map[string]string{"path": "works/extra.txt", "expected_sha256": sha256Hex([]byte("extra.txt"))}), nil
+			default:
+				if !strings.Contains(history, "新增写入和启动需要主人发起新请求") {
+					t.Error("resume attempted an unrelated artifact publication")
+				}
+				return `{"action":"reply","messages":["已找到原成品。"]}`, nil
+			}
+		}), nil
+	}
+	if code, out := localChatSend(f, "resume-publish", "登记首份成品"); code != 200 {
+		t.Fatalf("resume: %d %#v", code, out)
+	}
+	after, err := os.ReadDir(artifacts)
+	if err != nil || len(after) != 1 || after[0].Name() != artifact || string(localArtifactDownload(t, f, artifact)) != "first.txt" {
+		t.Fatalf("resume changed the immutable snapshot: %v %v", after, err)
+	}
+}

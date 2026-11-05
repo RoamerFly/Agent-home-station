@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/pluginhost"
 )
 
 type syntheticLocalTTS struct {
@@ -168,5 +169,60 @@ func TestLocalSpeechDisableCancelsAndWithholdsLateWAV(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("disabling did not cancel the speech context")
+	}
+}
+
+func TestLocalSpeechJobStatusAndCancelAfterRestartNeverReplays(t *testing.T) {
+	f, backend := newLocalTTSFixture(t)
+	var observed string
+	args := map[string]any{"voice_id": backend.voice.ID, "text": "A synthetic test.", "speed": 0.8, "text_language": "en"}
+	installLocalTTSModel(f, localTTSStartTool, args, &observed)
+	if code, out := localChatSend(f, "speech-job-original", "先合成一段本机语音"); code != http.StatusOK || out["status"] != "completed" {
+		t.Fatalf("speech setup: %d %#v", code, out)
+	}
+	_, input, err := f.handler.chat.conversation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := f.handler.chat.projectTools.forFish(input.Account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := host.store.Jobs(context.Background(), localTTSPackage, 0, 5)
+	if err != nil || len(jobs.Items) != 1 {
+		t.Fatalf("speech history: %v %#v", err, jobs)
+	}
+	original := jobs.Items[0]
+	// Construct a claimed durable record as if the one-shot worker stopped with
+	// the desktop.  Its arguments contain no text, and status must not start the
+	// backend after restart.
+	pendingContext := original.Context
+	pendingContext.RequestKey = strings.Repeat("9", 64)
+	pending, created, err := host.store.CreateJob(context.Background(), pluginhost.Job{Plugin: localTTSPackage, Version: original.Version,
+		PackageDigest: original.PackageDigest, ConfigRevision: original.ConfigRevision, Context: pendingContext, Tool: localTTSCapability, Arguments: original.Arguments})
+	if err != nil || !created {
+		t.Fatalf("create synthetic pending speech job: %v created=%v", err, created)
+	}
+	pending, err = host.store.ClaimJob(context.Background(), pending.ID, pending.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := localRestartChat(t, f)
+	before := backend.calls.Load()
+	installLocalTTSModel(next, localTTSJobTool, map[string]any{"job_id": pending.ID, "action": "status"}, &observed)
+	if code, out := localChatSend(next, "speech-job-status", "查一下刚才语音任务的状态"); code != http.StatusOK || out["status"] != "completed" || !strings.Contains(observed, "original_worker_not_queryable") || backend.calls.Load() != before {
+		t.Fatalf("restart status replayed or hid durable state: %d %#v calls=%d observed=%s", code, out, backend.calls.Load(), observed)
+	}
+	installLocalTTSModel(next, localTTSJobTool, map[string]any{"job_id": pending.ID, "action": "cancel"}, &observed)
+	if code, out := localChatSend(next, "speech-job-cancel", "取消刚才的语音任务"); code != http.StatusOK || out["status"] != "completed" || strings.Contains(observed, "work-") || backend.calls.Load() != before {
+		t.Fatalf("restart cancellation leaked or replayed speech: %d %#v calls=%d observed=%s", code, out, backend.calls.Load(), observed)
+	}
+	nextHost, err := next.handler.chat.projectTools.forFish(input.Account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished, err := nextHost.store.Job(context.Background(), pending.ID)
+	if err != nil || finished.State != "cancelled" || len(finished.Artifacts) != 0 {
+		t.Fatalf("orphaned speech job did not become a safe terminal cancellation: %#v err=%v", finished, err)
 	}
 }

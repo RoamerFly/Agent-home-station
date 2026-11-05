@@ -49,6 +49,8 @@ type localArtifactInput struct {
 	project  string
 }
 
+var errLocalArtifactDigestMismatch = errors.New("成品内容与指定的 SHA-256 不一致")
+
 func (a localArtifact) id() string {
 	if a.ProjectTool != "" {
 		return "work-" + localCheckpointKey(a.Fish, a.Owner, a.HomeRevision, a.Request, a.Source, a.Name, a.PathHash, a.Parent, a.ProjectTool)
@@ -234,15 +236,23 @@ func (s *localArtifactStore) publish(ctx context.Context, in localArtifactInput,
 	return s.publishFile(ctx, in, source, access, grant, path, nil)
 }
 
-// publishFile copies an opened regular file into the same immutable artifact
-// store for both home files and host-validated project tool outputs.
-func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactInput, source *companion.SourceRef, access *localWorkspaceAccess, grant localWorkspaceGrant, path string, validate func(*os.File, int64) error) (localArtifact, error) {
+func localArtifactIdentity(in localArtifactInput, source *companion.SourceRef, grant localWorkspaceGrant, path string) (localArtifact, error) {
 	name := filepath.Base(path)
 	if !safeMediaFilename(name) || len(name) > 255 || strings.ContainsAny(name, ":*?<>|") {
 		return localArtifact{}, errors.New("成品文件名无效")
 	}
 	a := localArtifact{Name: name, PathHash: localCheckpointKey(path), Fish: grant.FishID, Owner: grant.OwnerID, HomeRevision: grant.Revision, Request: in.Key, Source: source, Parent: in.parent, ProjectTool: in.project}
 	a.ID = a.id()
+	return a, nil
+}
+
+// publishFile copies an opened regular file into the same immutable artifact
+// store for both home files and host-validated project tool outputs.
+func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactInput, source *companion.SourceRef, access *localWorkspaceAccess, grant localWorkspaceGrant, path string, validate func(*os.File, int64) error) (localArtifact, error) {
+	a, err := localArtifactIdentity(in, source, grant, path)
+	if err != nil {
+		return localArtifact{}, err
+	}
 	check := func() bool {
 		return ctx.Err() == nil && access.current(grant) && s.checkArtifactLineage(a, nil, in.project != "")
 	}
@@ -252,7 +262,7 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 	}
 	if cached, err := read(a.ID); err == nil {
 		if in.Expected != "" && cached.SHA256 != in.Expected {
-			return localArtifact{}, errors.New("相同请求的成品内容已变更，请使用新请求登记")
+			return localArtifact{}, errLocalArtifactDigestMismatch
 		}
 		file, err := s.open(ctx, cached, check)
 		if err != nil {
@@ -268,7 +278,7 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 		return localArtifact{}, err
 	}
 	defer parent.Close()
-	original, err := workspacefs.OpenRegular(parent, name)
+	original, err := workspacefs.OpenRegular(parent, a.Name)
 	if err != nil {
 		return localArtifact{}, err
 	}
@@ -312,8 +322,11 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 	err = errors.Join(err, file.Close())
 	digest := hex.EncodeToString(hash.Sum(nil))
 	after, statErr := original.Stat()
-	if err != nil || statErr != nil || after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) || n != a.Bytes || in.Expected != "" && digest != in.Expected || !check() {
+	if err != nil || statErr != nil || after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) || n != a.Bytes || !check() {
 		return localArtifact{}, errors.New("成品快照未通过内容或来源校验")
+	}
+	if in.Expected != "" && digest != in.Expected {
+		return localArtifact{}, errLocalArtifactDigestMismatch
 	}
 	a.SHA256 = digest
 	a.ID = a.id()

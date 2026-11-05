@@ -217,3 +217,110 @@ func TestLiveLocalProjectAudioPreparesRegisteredWAVThroughChat(t *testing.T) {
 		t.Fatal("disabling tool changed immutable WAV")
 	}
 }
+
+// TestLiveLocalProjectAudioRecoversOutputAfterReplyFailure proves that the
+// durable project-tool checkpoint, rather than another LPAC invocation,
+// supplies an already registered WAV when the model fails after the tool has
+// completed but before it can produce its final chat reply.
+func TestLiveLocalProjectAudioRecoversOutputAfterReplyFailure(t *testing.T) {
+	if runtime.GOOS != "windows" || os.Getenv("AHS_LOCAL_PROJECT_AUDIO_LPAC_TEST") != "1" {
+		t.Skip("set AHS_LOCAL_PROJECT_AUDIO_LPAC_TEST=1 on Windows for audio LPAC acceptance")
+	}
+	options := localProjectToolWindowsOptionsFor(t, localAudioPackage)
+	base := t.TempDir()
+	f := newLocalHomeFixture(t, filepath.Join(base, "host"), filepath.Join(base, "workspace"))
+	f.handler.chat.projectTools.options = options
+	f.login()
+	if code, out := f.request("POST", "/api/local/home", map[string]string{"action": "initialize"}, true); code != http.StatusOK {
+		t.Fatalf("initialize: %d %#v", code, out)
+	}
+
+	const route = "/api/local/project-tools/audio-workshop"
+	if code, out := f.request("PUT", route, map[string]any{"action": "install", "approve_artifacts": true}, true); code != http.StatusOK {
+		t.Fatalf("install audio tool: %d %#v", code, out)
+	}
+	if code, out := f.request("PUT", route, map[string]any{"action": "enable", "revision": localProjectToolRevision(t, localProjectToolByID(t, f, localAudioPackage))}, true); code != http.StatusOK {
+		t.Fatalf("enable audio tool: %d %#v", code, out)
+	}
+
+	_, home := f.request("GET", "/api/local/home", nil, true)
+	source := testStereoWAV(t, 8000, 8000)
+	path := filepath.Join(home["directory"].(string), "Project Tools", "checkpoint-source.wav")
+	if err := os.WriteFile(path, source, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(source)
+	_, registered := f.request("POST", "/api/local/artifacts", map[string]string{
+		"path": "Project Tools/checkpoint-source.wav", "expected_sha256": hex.EncodeToString(sum[:]), "request_key": "audio-checkpoint-source",
+	}, true)
+	inputID, _ := registered["artifact_id"].(string)
+	if !artifactID(inputID, "work-") {
+		t.Fatalf("source not registered: %#v", registered)
+	}
+
+	args := map[string]any{"artifact_id": inputID, "filename": "checkpoint-mono.wav", "start_seconds": 0.25, "duration_seconds": 0.5, "channels": "mono"}
+	const retryKey, retryText = "audio-checkpoint-recovery", "截取并登记音频，随后告诉我结果"
+	interruptedOutput := ""
+	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		round := 0
+		return localModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
+			round++
+			if round == 1 {
+				return localToolCall(localAudioToolName, args), nil
+			}
+			for _, candidate := range projectArtifactIDs(turns) {
+				if candidate != inputID {
+					interruptedOutput = candidate
+				}
+			}
+			return "", context.Canceled
+		}), nil
+	}
+	if code, out := localChatSend(f, retryKey, retryText); code != http.StatusBadGateway || !artifactID(interruptedOutput, "work-") {
+		t.Fatalf("expected post-output model interruption: %d %#v output=%q", code, out, interruptedOutput)
+	}
+	firstHost := f.handler.chat.projectTools.host
+	firstJobs, err := firstHost.store.Jobs(t.Context(), localAudioPackage, 0, 10)
+	if err != nil || len(firstJobs.Items) != 1 || firstJobs.Items[0].State != "completed" {
+		t.Fatalf("audio invocation was not durably completed: jobs=%#v err=%v", firstJobs, err)
+	}
+	firstJobID := firstJobs.Items[0].ID
+	if code, view := f.request("GET", "/api/local/artifacts/"+interruptedOutput, nil, true); code != http.StatusOK || view["filename"] != "checkpoint-mono.wav" || view["input_artifact_id"] != inputID || view["input_sha256"] != hex.EncodeToString(sum[:]) {
+		t.Fatalf("interrupted audio provenance: %d %#v", code, view)
+	}
+
+	// This models a desktop/service restart after the result is durable but
+	// before the final natural-language reply commits. The retry repeats the
+	// original tool call; it must read the registered output through the
+	// checkpoint rather than launch another audio process.
+	next := localRestartChat(t, f)
+	next.handler.chat.projectTools.options = options
+	next.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		round := 0
+		return localModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
+			round++
+			if round == 1 {
+				return localToolCall(localAudioToolName, args), nil
+			}
+			history := localModelHistory(turns)
+			if !strings.Contains(history, `"recovered":true`) || !strings.Contains(history, interruptedOutput) || !strings.Contains(history, inputID) {
+				t.Error("audio retry did not receive the recovered original result")
+			}
+			return `{"action":"reply","messages":["已恢复已登记的音频成品。"]}`, nil
+		}), nil
+	}
+	if code, out := localChatSend(next, retryKey, retryText); code != http.StatusOK || out["status"] != "completed" {
+		t.Fatalf("recovered audio reply failed: %d %#v", code, out)
+	}
+	secondHost := next.handler.chat.projectTools.host
+	secondJobs, err := secondHost.store.Jobs(t.Context(), localAudioPackage, 0, 10)
+	if err != nil || len(secondJobs.Items) != 1 || secondJobs.Items[0].ID != firstJobID || secondJobs.Items[0].State != "completed" {
+		t.Fatalf("retry submitted duplicate audio work: jobs=%#v err=%v", secondJobs, err)
+	}
+	if code, view := next.request("GET", "/api/local/artifacts/"+interruptedOutput, nil, true); code != http.StatusOK || view["input_artifact_id"] != inputID || view["input_sha256"] != hex.EncodeToString(sum[:]) {
+		t.Fatalf("recovered audio lost parent provenance: %d %#v", code, view)
+	}
+	if host := next.handler.chat.projectTools.host; host.controller.Status(localAudioPackage).State != "stopped" {
+		t.Fatalf("checkpoint recovery started the audio runtime: %#v", host.controller.Status(localAudioPackage))
+	}
+}

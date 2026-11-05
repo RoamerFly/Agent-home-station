@@ -34,6 +34,7 @@ type localProjectTools struct {
 	yue       localYuEBackend
 	tts       localTTSBackend
 	ttsCancel context.CancelFunc // protected by update
+	ttsJobID  string             // protected by update
 }
 
 type localProjectToolHost struct {

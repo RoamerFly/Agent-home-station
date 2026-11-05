@@ -133,7 +133,7 @@ func TestOfficialContracts(t *testing.T) {
 						}
 					}
 					if d.Name() == "station-speech" {
-						want = map[string]bool{"station-speech.voices": true, "station-speech.synthesize": true}
+						want = map[string]bool{"station-speech.voices": true, "station-speech.synthesize": true, "station-speech.job": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.write" || p.Permissions[1] != "gpu" {
 							t.Fatal("station speech package must declare only artifact write and explicit GPU permissions")
 						}
@@ -316,6 +316,10 @@ func TestOfficialContracts(t *testing.T) {
 								case "station-speech.synthesize":
 									if len(schema.Properties) != 4 || schema.Properties["voice_id"] == nil || schema.Properties["text"] == nil || schema.Properties["speed"] == nil || schema.Properties["text_language"] == nil || len(schema.Required) != 2 || schema.Required[0] != "voice_id" || schema.Required[1] != "text" {
 										t.Fatal("station speech synthesis must require only voice_id and text, with optional speed and text_language")
+									}
+								case "station-speech.job":
+									if len(schema.Properties) != 2 || schema.Properties["job_id"] == nil || schema.Properties["action"] == nil || len(schema.Required) != 2 || schema.Required[0] != "job_id" || schema.Required[1] != "action" {
+										t.Fatal("station speech recovery must require only job_id and action")
 									}
 								}
 							}

@@ -13,6 +13,7 @@ import (
 )
 
 const localProcessTool = "server_windows_process"
+const localArtifactPublishTool = "artifact_publish"
 
 // Hash only typed, normalized arguments. No command or file content is copied
 // into the journal. The key is also usable as a Jobs lookup key after a crash.
@@ -82,6 +83,92 @@ func (t *localToolSet) startCheckpointed(ctx context.Context, in localProcessInp
 	})
 }
 
+func (t *localToolSet) artifactSource(grant localWorkspaceGrant) (*companion.SourceRef, bool) {
+	return t.store.SourceForInput(companion.Input{Channel: "local", Account: grant.FishID, Thread: grant.OwnerID, Sender: grant.OwnerID, TraceID: t.traceID})
+}
+
+func (t *localToolSet) publishCheckpointed(ctx context.Context, raw json.RawMessage) (string, error) {
+	var in struct {
+		Path     string `json:"path"`
+		Expected string `json:"expected_sha256"`
+	}
+	if t.run == nil || t.store == nil || t.access.home.artifacts == nil {
+		return "", errors.New("本轮没有成品登记授权")
+	}
+	if strictLocalMemoryDecode(raw, &in) != nil {
+		return "", argumentError("$", "请提供 path 和 expected_sha256")
+	}
+	if !artifactID("sha-"+in.Expected, "sha-") {
+		return "", argumentError("$.expected_sha256", "请提供文件的 64 位小写 SHA-256")
+	}
+	grant, err := t.access.resolve()
+	if err != nil {
+		return "", err
+	}
+	path, err := localWorkspacePath(grant, in.Path)
+	if err != nil {
+		return "", argumentError("$.path", "请提供家目录内的成品文件路径")
+	}
+	source, ok := t.artifactSource(grant)
+	if !ok || t.run.CheckSource(ctx) != nil {
+		return "", errors.New("本轮来源已变化，无法登记成品")
+	}
+	target, _ := filepath.Rel(grant.Directory, path)
+	path = filepath.Join(grant.Directory, target)
+	op := companion.LocalToolCheckpoint{Key: localCheckpointKey(localArtifactPublishTool, path, in.Expected),
+		Tool: localArtifactPublishTool, Grant: localCheckpointKey(grant), Target: target}
+	return t.dispatchCheckpointed(ctx, op, grant, func() (string, string, error) {
+		artifact, err := t.access.home.artifacts.publishFile(ctx, localArtifactInput{Expected: in.Expected, Key: t.traceID}, source, t.access, grant, path, nil)
+		if errors.Is(err, errLocalArtifactDigestMismatch) {
+			result, encodeErr := localProcessJSON(map[string]any{"state": "not_published", "reason": errLocalArtifactDigestMismatch.Error()})
+			return result, "hash_mismatch", encodeErr
+		}
+		if err != nil {
+			return "", "", err
+		}
+		result, err := localProcessJSON(artifact.view())
+		return result, "registered", err
+	})
+}
+
+func (t *localToolSet) artifactCheckpointView(op companion.LocalToolCheckpoint, grant localWorkspaceGrant) map[string]any {
+	view := map[string]any{"tool": op.Tool, "state": "needs_review", "recovered": true}
+	if t.run == nil || t.store == nil || t.access.home.artifacts == nil {
+		return view
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	path, err := localWorkspacePath(grant, op.Target)
+	if err != nil || t.run.CheckSource(ctx) != nil || !t.access.current(grant) {
+		return view
+	}
+	if op.Result == "hash_mismatch" {
+		view["state"], view["reason"] = "not_published", errLocalArtifactDigestMismatch.Error()
+		return view
+	}
+	source, ok := t.artifactSource(grant)
+	if !ok {
+		return view
+	}
+	identity, err := localArtifactIdentity(localArtifactInput{Key: t.traceID}, source, grant, path)
+	if err != nil {
+		return view
+	}
+	store := t.access.home.artifacts
+	artifact, err := store.read(identity.ID)
+	if err != nil || localCheckpointKey(op.Tool, path, artifact.SHA256) != op.Key {
+		return view
+	}
+	file, err := store.open(ctx, artifact, func() bool { return t.access.current(grant) && store.artifactLineageValid(artifact) })
+	if err != nil {
+		return view
+	}
+	_ = file.Close()
+	view = artifact.view()
+	view["tool"], view["state"], view["recovered"] = op.Tool, "recorded", true
+	return view
+}
+
 func (t *localToolSet) dispatchCheckpointed(ctx context.Context, op companion.LocalToolCheckpoint, grant localWorkspaceGrant, call func() (result, checkpoint string, err error)) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -140,6 +227,9 @@ func (t *localToolSet) checkpointView(op companion.LocalToolCheckpoint, grant lo
 	if grant.Directory == "" || op.Grant != localCheckpointKey(grant) {
 		view["state"] = "grant_changed"
 		return view
+	}
+	if op.Tool == localArtifactPublishTool {
+		return t.artifactCheckpointView(op, grant)
 	}
 	if op.Tool == localRVCStartTool || op.Tool == localRVCJobTool {
 		return t.rvcCheckpointView(op, grant)

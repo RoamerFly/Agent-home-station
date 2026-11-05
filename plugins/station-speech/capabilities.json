@@ -21,6 +21,17 @@
       "discoverable": true,
       "async": false,
       "side_effect": "artifact"
+    },
+    {
+      "id": "station-speech.job",
+      "implementation": "ready",
+      "description": "查询或取消已有的本机语音合成任务。查询只显示仍可由原请求来源核验的结果；取消不会重新合成或返回音频。",
+      "permissions": ["artifact.write", "gpu"],
+      "input_schema": {"type": "object", "properties": {"job_id": {"type": "string", "description": "宿主返回的本机语音任务编号。"}, "action": {"type": "string", "enum": ["status", "cancel"]}}, "required": ["job_id", "action"], "additionalProperties": false},
+      "output_schema": {"type": "object"},
+      "discoverable": true,
+      "async": false,
+      "side_effect": "read"
     }
   ]
 }
