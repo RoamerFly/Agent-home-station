@@ -22,6 +22,14 @@ import (
 
 const mediaListenBatchSeconds = 90
 
+// errMediaListenNoDecodableTail is deliberately narrower than a clipping
+// failure.  Some lossy containers report a fractional duration beyond their
+// final decodable PCM sample.  It is returned only after FFmpeg successfully
+// decodes that tiny final interval and proves that it contains no samples.
+// Callers must still verify that this is the final sub-second tail after prior
+// progress before treating it as an audio endpoint.
+var errMediaListenNoDecodableTail = errors.New("media_listen_no_decodable_tail")
+
 type mediaListenCoverage struct {
 	RequestedOffset  int     `json:"requested_offset_seconds"`
 	RequestedSeconds int     `json:"requested_seconds"`
@@ -152,6 +160,9 @@ func mediaListenAssetClipper(ctx context.Context, root string, data []byte) (flo
 		out := filepath.Join(dir, "clip-"+strconv.Itoa(start)+"-"+strconv.Itoa(seconds)+".wav")
 		args := []string{"-v", "error", "-nostdin", "-y", "-protocol_whitelist", "file", "-i", source, "-ss", strconv.Itoa(start), "-t", strconv.FormatFloat(wanted, 'f', -1, 64), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", out}
 		if exec.CommandContext(ctx, "ffmpeg", args...).Run() != nil {
+			if wanted < 1 && mediaListenDecodedWindowHasNoSamples(ctx, source, start, wanted) {
+				return nil, 0, errMediaListenNoDecodableTail
+			}
 			return nil, 0, errors.New("media_listen_clip_failed")
 		}
 		wav, err := os.ReadFile(out)
@@ -159,12 +170,105 @@ func mediaListenAssetClipper(ctx context.Context, root string, data []byte) (flo
 			return nil, 0, errors.New("media_listen_clip_invalid")
 		}
 		covered, err := wavDuration(wav)
-		if err != nil || covered <= 0 || covered > wanted+.1 {
+		if err != nil || covered <= 0 {
+			if wanted < 1 && mediaListenDecodedWindowHasNoSamples(ctx, source, start, wanted) {
+				return nil, 0, errMediaListenNoDecodableTail
+			}
+			return nil, 0, errors.New("media_listen_clip_duration_invalid")
+		}
+		if covered > wanted+.1 {
 			return nil, 0, errors.New("media_listen_clip_duration_invalid")
 		}
 		return wav, covered, nil
 	}
 	return duration, clipper, cleanup, nil
+}
+
+// mediaListenDecodedWindowHasNoSamples separates a genuinely empty compressed
+// tail from a failed file clip.  It intentionally runs only after the normal
+// bounded clip failed and only for a sub-second tail.  The probe writes a WAV
+// to a seekable private file: FFmpeg's pipe output uses unknown RIFF/data
+// lengths, which cannot prove that it contains zero samples.  Command, file,
+// or format failures remain ordinary clipping failures.
+func mediaListenDecodedWindowHasNoSamples(ctx context.Context, source string, start int, seconds float64) bool {
+	if start < 0 || seconds <= 0 || seconds >= 1 {
+		return false
+	}
+	probe, err := os.CreateTemp(filepath.Dir(source), "media-listen-tail-*.wav")
+	if err != nil {
+		return false
+	}
+	probePath := probe.Name()
+	if probe.Close() != nil {
+		_ = os.Remove(probePath)
+		return false
+	}
+	defer os.Remove(probePath)
+	args := []string{"-v", "error", "-nostdin", "-y", "-protocol_whitelist", "file", "-i", source, "-ss", strconv.Itoa(start), "-t", strconv.FormatFloat(seconds, 'f', -1, 64), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", probePath}
+	if exec.CommandContext(ctx, "ffmpeg", args...).Run() != nil {
+		return false
+	}
+	wav, err := os.ReadFile(probePath)
+	if err != nil || len(wav) > 128<<10 {
+		return false
+	}
+	return mediaListenIsEmptyDecodedWAV(wav)
+}
+
+// mediaListenIsEmptyDecodedWAV accepts only the exact PCM WAV shape emitted by
+// mediaListenDecodedWindowHasNoSamples.  wavDuration intentionally rejects
+// zero-length data, which is correct for usable clips but must not turn every
+// malformed clip into an end-of-audio signal.  Here an empty data chunk is
+// evidence of EOF only when the complete RIFF container and requested PCM
+// format are valid.
+func mediaListenIsEmptyDecodedWAV(wav []byte) bool {
+	const (
+		decodedRate      = 16000
+		decodedByteRate  = decodedRate * 2
+		decodedBlockSize = 2
+	)
+	if len(wav) < 44 || string(wav[:4]) != "RIFF" || string(wav[8:12]) != "WAVE" || int64(binary.LittleEndian.Uint32(wav[4:8]))+8 != int64(len(wav)) {
+		return false
+	}
+	seenFormat, seenData := false, false
+	for at := 12; at < len(wav); {
+		if at+8 > len(wav) {
+			return false
+		}
+		name := string(wav[at : at+4])
+		size := int64(binary.LittleEndian.Uint32(wav[at+4 : at+8]))
+		at += 8
+		if size < 0 || size > int64(len(wav)-at) {
+			return false
+		}
+		end := at + int(size)
+		switch name {
+		case "fmt ":
+			if seenFormat || size < 16 ||
+				binary.LittleEndian.Uint16(wav[at:at+2]) != 1 ||
+				binary.LittleEndian.Uint16(wav[at+2:at+4]) != 1 ||
+				binary.LittleEndian.Uint32(wav[at+4:at+8]) != decodedRate ||
+				binary.LittleEndian.Uint32(wav[at+8:at+12]) != decodedByteRate ||
+				binary.LittleEndian.Uint16(wav[at+12:at+14]) != decodedBlockSize ||
+				binary.LittleEndian.Uint16(wav[at+14:at+16]) != 16 {
+				return false
+			}
+			seenFormat = true
+		case "data":
+			if seenData || !seenFormat || size != 0 {
+				return false
+			}
+			seenData = true
+		}
+		at = end
+		if size&1 == 1 {
+			if at >= len(wav) {
+				return false
+			}
+			at++
+		}
+	}
+	return seenFormat && seenData
 }
 
 func mediaListenBatchLength(end float64, start int) int {
@@ -268,6 +372,18 @@ func (p *permittedTools) listenAudioBatchesFromSource(ctx context.Context, durat
 		if clipErr != nil {
 			if err := checkExposable(); err != nil {
 				return nil, err
+			}
+			// FFmpeg/container duration metadata can include a fractional tail
+			// after the final decodable sample (notably with lossy audio).  Do
+			// not hide arbitrary clipping errors near the end: only the clipper's
+			// explicit no-samples sentinel, a final sub-second tail, and already
+			// completed work establish this as the audio endpoint.
+			remaining := duration - float64(start)
+			if errors.Is(clipErr, errMediaListenNoDecodableTail) && end == duration && remaining > 0 && remaining < 1 && coverage.ProcessedSeconds > 0 {
+				if float64(in.OffsetSeconds)+float64(seconds) > duration {
+					coverage.Reason = "audio_ended_before_requested_range"
+				}
+				return map[string]any{"operation": "listen", "status": status, "observations": texts, "batches": batches, "coverage": coverage}, nil
 			}
 			next := start
 			coverage.NextStartSeconds, coverage.Reason = &next, "audio_clip_failed"

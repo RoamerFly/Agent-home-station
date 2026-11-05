@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Tests import versioned tool sources. Bytecode would add undeclared files to
+  # signed package directories before the Go package-integrity checks run.
+  PYTHONDONTWRITEBYTECODE: '1'
+
 jobs:
   windows-desktop:
     runs-on: windows-latest

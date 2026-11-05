@@ -28,6 +28,11 @@ func TestLiveNativeWindowsTool(t *testing.T) {
 	}
 	f, p := trustedAgent(t)
 	defer f.manager.processes.Close()
+	// trustedAgent deliberately has no optional project capability. This test
+	// exercises the isolated Windows process implementation, so install the
+	// synthetic project package explicitly instead of weakening discovery or
+	// production authorization.
+	installProjectPluginTestRuntime(t, p)
 	c := f.manager.agent.config()
 	c.Enabled, c.TasksEnabled, c.Host.Mode = true, true, "full"
 	c.Host.Windows = &windows

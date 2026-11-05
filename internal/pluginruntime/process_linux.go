@@ -49,7 +49,16 @@ func isolatedCommand(s LaunchSpec, argv []string) (*exec.Cmd, func(), error) {
 	return cmd, noop, nil
 }
 func terminate(cmd *exec.Cmd) {
-	if cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	// Sandboxed commands create a dedicated process group, so kill the complete
+	// group first. Direct protocol children used by the transport (and any
+	// future trusted launcher that does not opt into Setpgid) do not have that
+	// group. In that case ESRCH means only that the group does not exist, not
+	// that the known child has exited; use exec's process handle to terminate
+	// that exact child and still let Close wait for cmd.Wait confirmation.
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); errors.Is(err, syscall.ESRCH) {
+		_ = cmd.Process.Kill()
 	}
 }

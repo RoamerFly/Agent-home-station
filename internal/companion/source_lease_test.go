@@ -2,10 +2,12 @@ package companion
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -39,9 +41,20 @@ func TestMemoryLeaseChild(t *testing.T) {
 	if dir == "" {
 		return
 	}
+	mode := os.Getenv("WECHAT_MEMORY_LEASE_CHILD_MODE")
+	if mode == "lease-shared" || mode == "lease-exclusive" {
+		lease, e := lockMemoryAccess(filepath.Join(dir, ".lease-only.lock"), mode == "lease-exclusive")
+		if e != nil {
+			os.Exit(9)
+		}
+		if e = lease.Close(); e != nil {
+			os.Exit(10)
+		}
+		os.Exit(0)
+	}
 	var s *Store
 	var e error
-	if os.Getenv("WECHAT_MEMORY_LEASE_CHILD_MODE") == "offline" {
+	if mode == "offline" {
 		s, e = NewOfflineStore(dir)
 	} else {
 		s, e = NewStore(dir)
@@ -53,6 +66,38 @@ func TestMemoryLeaseChild(t *testing.T) {
 		os.Exit(10)
 	}
 	os.Exit(0)
+}
+
+func TestMemoryAccessLeaseCrossProcess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".lease-only.lock")
+	shared, e := lockMemoryAccess(path, false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if code := leaseChild(t, dir, "lease-shared"); code != 0 {
+		t.Fatal("shared lease rejected another shared holder", code)
+	}
+	if code := leaseChild(t, dir, "lease-exclusive"); code != 9 {
+		t.Fatal("exclusive lease admitted while shared lease held", code)
+	}
+	if e = shared.Close(); e != nil {
+		t.Fatal(e)
+	}
+
+	exclusive, e := lockMemoryAccess(path, true)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if code := leaseChild(t, dir, "lease-shared"); code != 9 {
+		t.Fatal("shared lease admitted while exclusive lease held", code)
+	}
+	if e = exclusive.Close(); e != nil {
+		t.Fatal(e)
+	}
+	if code := leaseChild(t, dir, "lease-exclusive"); code != 0 {
+		t.Fatal("exclusive lease was not released", code)
+	}
 }
 func leaseChild(t *testing.T, dir, mode string) int {
 	t.Helper()
@@ -85,6 +130,15 @@ func TestMemoryMaintenanceLeaseRejectsOnlineProcesses(t *testing.T) {
 	live.Close()
 	maintenance, e := NewOfflineStore(dir)
 	if e != nil {
+		if runtime.GOOS == "linux" && (errors.Is(e, syscall.EACCES) || errors.Is(e, syscall.EPERM)) {
+			t.Logf("procfs denied a same-user descriptor read; offline maintenance safely refused: %v", e)
+			if reopened, reopenErr := NewStore(dir); reopenErr != nil {
+				t.Fatalf("offline refusal left its lease held: %v", reopenErr)
+			} else if closeErr := reopened.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			return
+		}
 		t.Fatal(e)
 	}
 	if code := leaseChild(t, dir, "live"); code != 9 {

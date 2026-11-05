@@ -41,6 +41,35 @@ func listenSyntheticWAVDuration(seconds float64) []byte {
 	return wav
 }
 
+func TestMediaListenIsEmptyDecodedWAVRequiresValidZeroDataPCM(t *testing.T) {
+	empty := listenSyntheticWAVDuration(0)
+	if !mediaListenIsEmptyDecodedWAV(empty) {
+		t.Fatal("valid zero-data decoded WAV was not recognized")
+	}
+
+	withSamples := listenSyntheticWAVDuration(.1)
+	if mediaListenIsEmptyDecodedWAV(withSamples) {
+		t.Fatal("decoded WAV containing samples was treated as EOF")
+	}
+
+	for name, malformed := range map[string][]byte{
+		"not_wav":         []byte("not a wav"),
+		"bad_riff_length": append([]byte(nil), empty[:len(empty)-1]...),
+		"missing_data":    append([]byte(nil), empty[:36]...),
+		"wrong_pcm_parameters": func() []byte {
+			b := append([]byte(nil), empty...)
+			binary.LittleEndian.PutUint16(b[34:36], 8)
+			return b
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if mediaListenIsEmptyDecodedWAV(malformed) {
+				t.Fatal("malformed decoded WAV was treated as EOF")
+			}
+		})
+	}
+}
+
 func TestMediaListenArgumentsBindExactlyOneOrigin(t *testing.T) {
 	for _, raw := range []string{
 		`{"source_message_id":"voice","asset_id":"asset"}`,

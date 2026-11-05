@@ -156,6 +156,9 @@ func TestSessionRejectsBrokenFramesAndNoReplay(t *testing.T) {
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
+			if tool == "block" && s.cmd.ProcessState == nil {
+				t.Fatal("blocking direct protocol child was not confirmed terminated")
+			}
 		})
 	}
 }
