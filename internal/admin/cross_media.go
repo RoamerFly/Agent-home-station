@@ -682,6 +682,9 @@ func (m *Manager) readCrossBatch(id string) (crossMediaBatch, error) {
 	}
 	file := filepath.Join(m.dir, "cross-media", id+".json")
 	stat, e := os.Lstat(file)
+	if errors.Is(e, os.ErrNotExist) {
+		return batch, e
+	}
 	if e != nil || !stat.Mode().IsRegular() {
 		return batch, errors.New("cross_media_journal_unavailable")
 	}

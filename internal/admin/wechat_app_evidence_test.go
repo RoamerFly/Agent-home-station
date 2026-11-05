@@ -220,7 +220,7 @@ func TestApplicationReceiptQueriesOnlyOriginalKeyAndPreservesAcceptedEvidence(t 
 func TestApplicationReceiptRetainsAcceptedPartsWhenRemainingSendIsCancelled(t *testing.T) {
 	part := linuxnative.VoiceChunkStatus{Index: 0, State: "accepted", HasReceipt: true, ServerID: "111"}
 	status := linuxnative.ToolStatus{ID: "same-job", State: "needs_review", ServerID: "111", VoiceChunks: []linuxnative.VoiceChunkStatus{part}}
-	var result apphost.Receipt
+	var result apphost.DeliveryReceipt
 	projectWechatReceipt(&result, status)
 	if result.State != "submission_unknown" || result.ServerID != "" || len(result.AcceptedParts) != 1 {
 		t.Fatal("one accepted part was mistaken for a complete delivery", result)

@@ -41,21 +41,31 @@ type MediaRef struct {
 
 type Receipt struct {
 	ConnectionRef
-	ConversationID string        `json:"conversation_id"`
-	IdempotencyKey string        `json:"idempotency_key"`
-	OperationID    string        `json:"operation_id,omitempty"`
-	Kind           string        `json:"kind"`
-	State          string        `json:"state"`
-	Lookup         string        `json:"lookup"`
-	PlatformState  string        `json:"platform_state,omitempty"`
-	PlatformCode   string        `json:"platform_code,omitempty"`
-	ServerID       string        `json:"server_id,omitempty"`
-	AcceptedParts  []ReceiptPart `json:"accepted_parts,omitempty"`
+	DeliveryReceipt
+	ConversationID string            `json:"conversation_id"`
+	Deliveries     []DeliveryReceipt `json:"deliveries,omitempty"`
+	SupersededBy   string            `json:"superseded_by,omitempty"`
+}
+
+type DeliveryReceipt struct {
+	IdempotencyKey   string        `json:"idempotency_key,omitempty"`
+	OperationID      string        `json:"operation_id,omitempty"`
+	Kind             string        `json:"kind"`
+	State            string        `json:"state"`
+	Lookup           string        `json:"lookup"`
+	PlatformState    string        `json:"platform_state,omitempty"`
+	PlatformCode     string        `json:"platform_code,omitempty"`
+	ServerID         string        `json:"server_id,omitempty"`
+	AcceptedParts    []ReceiptPart `json:"accepted_parts,omitempty"`
+	UnconfirmedParts []ReceiptPart `json:"unconfirmed_parts,omitempty"`
+	PartsIncomplete  bool          `json:"parts_incomplete,omitempty"`
+	CancelRequested  bool          `json:"cancel_requested,omitempty"`
 }
 
 type ReceiptPart struct {
 	Index    int    `json:"index"`
-	ServerID string `json:"server_id"`
+	ServerID string `json:"server_id,omitempty"`
+	State    string `json:"state,omitempty"`
 }
 
 // EventReader exposes existing sources through an exact app connection.

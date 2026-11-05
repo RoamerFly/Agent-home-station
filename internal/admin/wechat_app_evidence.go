@@ -118,43 +118,70 @@ func (w wechatCompatibility) ReadReceipt(ctx context.Context, connection, key st
 		return apphost.Receipt{}, err
 	}
 	if !exists {
-		return apphost.Receipt{}, apphost.ErrNotFound
+		return m.readAgentDelivery(ctx, key)
 	}
 	result := apphost.Receipt{
 		ConnectionRef: wechatConnectionRef(item.record.ID), ConversationID: record.Thread,
-		IdempotencyKey: record.Key, Kind: record.Kind, Lookup: "stored",
+		DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: record.Key, Kind: record.Kind, Lookup: "stored"},
 	}
-	projectWechatReceipt(&result, record.Status)
-	if record.archived || result.State == "accepted" {
-		return result, nil
+	if record.archived {
+		projectWechatReceipt(&result.DeliveryReceipt, record.Status)
+	} else {
+		m.queryWechatDelivery(ctx, record.Thread, record.Status.SourceID, record.Status, false, &result.DeliveryReceipt)
 	}
-	reader, ok := m.native.(wechatReceiptReader)
-	if !ok {
+	return result, nil
+}
+
+func (m *Manager) queryWechatDelivery(ctx context.Context, thread, source string, stored linuxnative.ToolStatus, byJob bool, result *apphost.DeliveryReceipt) {
+	projectWechatReceipt(result, stored)
+	if result.State == "accepted" || (result.State == "not_submitted" && stored.ID == "") {
+		return
+	}
+	if err := ctx.Err(); err != nil {
 		result.Lookup = "unavailable"
-		return result, nil
+		return
+	}
+	var lookup func(context.Context, string) (linuxnative.ToolStatus, error)
+	key := result.IdempotencyKey
+	if byJob {
+		key = stored.ID
+		if reader, ok := m.native.(interface {
+			ToolSendStatus(context.Context, string) (linuxnative.ToolStatus, error)
+		}); ok {
+			lookup = reader.ToolSendStatus
+		}
+	} else if reader, ok := m.native.(wechatReceiptReader); ok {
+		lookup = reader.LookupSend
+	}
+	if key == "" {
+		return
+	}
+	if lookup == nil {
+		result.Lookup = "unavailable"
+		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	status, err := reader.LookupSend(ctx, record.Key)
+	status, err := lookup(ctx, key)
 	switch {
 	case errors.Is(err, linuxnative.ErrToolNotFound):
 		result.Lookup = "not_found"
 	case err != nil:
 		result.Lookup = "unavailable"
-	case !validID(status.ID) || status.ThreadID != record.Thread || (status.Kind != "" && status.Kind != record.Kind) ||
-		(record.Status.ID != "" && status.ID != record.Status.ID):
+	case !validID(status.ID) || status.ThreadID != thread || (status.Kind != "" && status.Kind != "send" && status.Kind != result.Kind) ||
+		(stored.ID != "" && status.ID != stored.ID) || (source != "" && status.SourceID != "" && status.SourceID != source):
 		result.Lookup = "identity_mismatch"
 	default:
 		result.Lookup = "platform"
-		projectWechatReceipt(&result, status)
+		projectWechatReceipt(result, status)
 	}
-	return result, nil
 }
 
 var wechatResultCode = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_.-]{0,127}$`)
 
-func projectWechatReceipt(out *apphost.Receipt, status linuxnative.ToolStatus) {
+func projectWechatReceipt(out *apphost.DeliveryReceipt, status linuxnative.ToolStatus) {
 	out.State, out.OperationID = "submission_unknown", status.ID
+	out.CancelRequested = out.CancelRequested || status.CancelRequested
 	out.PlatformState, out.PlatformCode, out.ServerID = "", "", ""
 	if wechatResultCode.MatchString(status.State) {
 		out.PlatformState = status.State
@@ -169,6 +196,8 @@ func projectWechatReceipt(out *apphost.Receipt, status linuxnative.ToolStatus) {
 		accepted[part.Index] = part.ServerID
 	}
 	partsComplete := !status.VoicePartsIncomplete && (len(status.VoiceChunks) > 0 || len(accepted) == 0)
+	out.UnconfirmedParts = nil
+	out.PartsIncomplete = status.VoicePartsIncomplete
 	seen := map[int]bool{}
 	for _, chunk := range status.VoiceChunks {
 		if seen[chunk.Index] {
@@ -178,6 +207,14 @@ func projectWechatReceipt(out *apphost.Receipt, status linuxnative.ToolStatus) {
 		seen[chunk.Index] = true
 		if chunk.State != "accepted" || !chunk.HasReceipt || !wechatServerReceiptID(chunk.ServerID) {
 			partsComplete = false
+			if accepted[chunk.Index] == "" {
+				partState := "unknown"
+				switch chunk.State {
+				case "prepared", "submitting", "rejected", "needs_review", "cancelled":
+					partState = chunk.State
+				}
+				out.UnconfirmedParts = append(out.UnconfirmedParts, apphost.ReceiptPart{Index: chunk.Index, State: partState})
+			}
 			continue
 		}
 		if previous, exists := accepted[chunk.Index]; exists {
