@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      verify_linux:
+        description: '显式恢复 Linux 检查（当前优先 Windows）'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -84,6 +89,8 @@ jobs:
           key: windows-native-rust1931-${{ hashFiles('components/native-client/source-manifest.json') }}
 
   verify:
+    # Linux is deferred by the owner; keep the full suite available explicitly.
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_linux
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

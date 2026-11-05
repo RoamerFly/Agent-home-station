@@ -181,13 +181,22 @@ func TestSpeechDefaultPluginDoesNotDependOnLegacyTTSFlagOrKey(t *testing.T) {
 
 func TestSpeechDefaultMigrationPreservesNamedLibrarySelection(t *testing.T) {
 	f, p, policy, _, _ := namedSpeechContractFixture(t)
+	// This is a migration-routing test, not a runtime-start test.  Pin the
+	// installed runtime to unavailable so Linux hosts with bwrap do not try to
+	// execute the deliberately synthetic GPT-SoVITS interpreter and turn the
+	// expected boundary into a cold-start failure.
+	runtime, err := pluginruntime.NewController(policy.store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.manager.packageRuntime, f.manager.packageRuntimeReady = runtime, false
 	voice := policy.resource.Voice
 	setLegacyDefaultSpeechFixture(t, f.manager)
 	if !hasDefaultSpeechTool(p) {
 		t.Fatal("installed local voice capability incorrectly required default cloud configuration")
 	}
 	assertSpeechVoiceSelectionSchema(t, p, true)
-	_, err := p.generateSpeech(t.Context(), "speech_synthesize", json.RawMessage(`{"voice_id":"missing","text":"synthetic"}`))
+	_, err = p.generateSpeech(t.Context(), "speech_synthesize", json.RawMessage(`{"voice_id":"missing","text":"synthetic"}`))
 	if err == nil || !strings.Contains(err.Error(), "voice_not_found_or_not_authorized") {
 		t.Fatal("missing named voice fell back", err)
 	}

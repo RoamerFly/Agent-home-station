@@ -11,6 +11,7 @@ import (
 	"testing"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	catalog "wechat-bot/plugins"
 )
 
 func TestPluginPackageUpgradeReportsRequiredConfigurationMigration(t *testing.T) {
@@ -101,6 +102,10 @@ func readySpeechFixture(t *testing.T) string {
 
 func TestPluginPackageAdminApprovalAndAccountIsolation(t *testing.T) {
 	f, accounts := setupAccounts(t)
+	official, err := catalog.List()
+	if err != nil {
+		t.Fatal(err)
+	}
 	source := readySpeechFixture(t)
 	input := map[string]any{"directory": source}
 	if code, _, _ := f.request("POST", "/api/plugin-packages/prepare", input, true, false); code != 403 {
@@ -131,8 +136,23 @@ func TestPluginPackageAdminApprovalAndAccountIsolation(t *testing.T) {
 		Catalog   []pluginhost.Package          `json:"catalog"`
 		Connected bool                          `json:"runtime_connected"`
 	}
-	if code != 200 || json.Unmarshal(b, &result) != nil || len(result.Installed) != 1 || len(result.Catalog) != 10 || result.Connected {
-		t.Fatalf("invalid catalogue response %d", code)
+	if code != 200 {
+		t.Fatalf("catalogue response status=%d", code)
+	}
+	if err := json.Unmarshal(b, &result); err != nil {
+		t.Fatalf("decode catalogue response: %v", err)
+	}
+	catalogMatches := len(result.Catalog) == len(official)
+	if catalogMatches {
+		for i := range official {
+			if result.Catalog[i].ID != official[i].ID {
+				catalogMatches = false
+				break
+			}
+		}
+	}
+	if len(result.Installed) != 1 || !catalogMatches {
+		t.Fatalf("invalid catalogue response: installed=%d catalog=%d want=%d", len(result.Installed), len(result.Catalog), len(official))
 	}
 	if result.Installed[0].Enabled || accounts.lookup("second").manager.Config().Enabled {
 		t.Fatal("install activated runtime")

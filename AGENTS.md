@@ -2,7 +2,7 @@
 
 Repository: https://github.com/RoamerFly/Agent-home-station (private).
 
-- Follow the user's `github-project-dev-skill` when available at `C:/Users/浪客飞/.codex/skills/github-project-dev/SKILL.md`. Apply relevant server/web project rules; desktop installers, Tauri updating and signing are not requirements for this project.
+- Current owner override: prioritize Windows implementation and verification; defer Linux/macOS work and temporarily do not apply `github-project-dev-skill`. Keep the other repository, privacy and verification rules below.
 - Complete each authorized project update, run appropriate verification, then commit and push the task-related changes to this repository. Do not treat a local commit as a successful push. Report the commit and any unfinished validation or push failure.
 - Use Chinese commit messages for subsequent updates. Push every verified task update and report the destination branch and verified remote SHA; distinguish development-branch content from the default branch.
 - Inspect the current branch, remote history and user changes before editing. Never force-push, overwrite remote history, discard unrelated edits or bypass branch protection. For collaborative or multi-author work, use a feature branch and PR, and ensure checks pass before landing.

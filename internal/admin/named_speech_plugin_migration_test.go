@@ -104,6 +104,7 @@ func TestNamedSpeechMigrationProofChangeInvalidatesApproval(t *testing.T) {
 	if err = os.WriteFile(python, []byte("synthetic managed interpreter changed"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	resources := migrationRegistrationSnapshot(t, public)
 	second, err := f.manager.pluginMigrationPreview(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -116,10 +117,23 @@ func TestNamedSpeechMigrationProofChangeInvalidatesApproval(t *testing.T) {
 		t.Fatal("stale named speech approval was applied")
 	}
 	assertMigrationStoreAbsent(t, f.manager)
-	// Keep this assertion independent from path contents in the public preview.
+	// The registered manifest intentionally contains paths beneath the public
+	// workspace. Previewing it must neither rewrite those public files nor
+	// expose their paths through the derived resource proof.
 	sum := sha256.Sum256([]byte("synthetic managed interpreter changed"))
-	if hex.EncodeToString(sum[:]) == after.ResourceProof.VersionSHA256 || resourcesContainPath(t, public, f.dir) {
-		t.Fatal("resource proof became a raw file hash or public resources escaped")
+	proofJSON, err := json.Marshal(after.ResourceProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privatePathJSON, _ := json.Marshal(f.dir)
+	publicPathJSON, _ := json.Marshal(public)
+	privatePath := strings.Trim(string(privatePathJSON), `"`)
+	publicPath := strings.Trim(string(publicPathJSON), `"`)
+	if hex.EncodeToString(sum[:]) == after.ResourceProof.VersionSHA256 || strings.Contains(string(proofJSON), privatePath) || strings.Contains(string(proofJSON), publicPath) {
+		t.Fatal("resource proof became a raw file hash or exposed public resource paths")
+	}
+	if got := migrationRegistrationSnapshot(t, public); !equalStringMap(resources, got) {
+		t.Fatal("proof refresh rewrote public registration")
 	}
 }
 
@@ -175,26 +189,4 @@ func equalStringMap(left, right map[string]string) bool {
 		}
 	}
 	return true
-}
-
-func resourcesContainPath(t *testing.T, public, forbidden string) bool {
-	t.Helper()
-	contains := false
-	if err := filepath.WalkDir(public, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		contains = contains || strings.Contains(string(raw), forbidden)
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return contains
 }
