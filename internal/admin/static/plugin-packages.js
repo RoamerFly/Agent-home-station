@@ -198,6 +198,12 @@
   if(takeover)return '已接管';
   return ({connected:'已连接',disconnected:'未连接',paused:'已暂停',takeover:'已接管',unknown:'状态待核对'})[value]||'状态待核对';
  }
+ function registeredRange(device){
+  if(device.authorization_state!=='ready')return '尚未读取授权范围。';
+  const apps=Array.isArray(device.authorized_apps)?device.authorized_apps.filter(Boolean):[];
+  const actions=Array.isArray(device.authorized_actions)?device.authorized_actions.filter(Boolean):[];
+  return '已登记应用：'+(apps.length?apps.join('、'):'无')+' · 已登记动作：'+(actions.length?actions.join('、'):'无');
+ }
  function renderMobileObservation(panel,data,action,reload,current,archive,message){
   if(!Object.prototype.hasOwnProperty.call(data,'overview'))return;
   const overview=data.overview||{},devices=Array.isArray(overview.devices)?overview.devices:[];
@@ -209,22 +215,37 @@
   const list=el('div',undefined,'mobile-observation-list');
   for(const device of devices){
    const card=el('article',undefined,'mobile-observation-card'),head=el('div',undefined,'mobile-observation-head');
+   const fish=typeof overview.fish_id==='string'?overview.fish_id.trim():'',deviceFish=typeof device.fish_id==='string'?device.fish_id.trim():'',bindingID=typeof device.binding_id==='string'?device.binding_id.trim():'';
    const title=el('div');title.append(el('strong',device.device_id||'未命名设备'),el('small',phoneConnectionLabel(device.connection_state,device.takeover),'mobile-observation-state'));
    const checked=el('small','检查于 '+time(device.checked_at,'尚未检查'),'hint');head.append(title,checked);card.append(head);
-   const content=el('div',undefined,'mobile-observation-content'),visual=el('div',undefined,'mobile-observation-visual'),details=el('div',undefined,'mobile-observation-details');
-   details.append(el('p',device.current_app?'上次观察应用：'+device.current_app:'上次观察未取得应用信息','hint'));
+   const content=el('div',undefined,'mobile-observation-content'),visual=el('div',undefined,'mobile-observation-visual'),details=el('div',undefined,'mobile-observation-details'),meta=el('div',undefined,'mobile-observation-meta');
+   meta.append(el('p',device.current_app?'上次观察应用：'+device.current_app:'上次观察未取得应用信息','hint'),el('p',registeredRange(device),'hint'));details.append(meta);
    if(device.screenshot_uri){
     const image=el('img');image.className='mobile-observation-image';image.alt='此设备最近一次实际截图';image.loading='lazy';image.src=window.WechatAccountContext?.url?.(device.screenshot_uri)||device.screenshot_uri;visual.append(image);
     visual.append(el('small','观察于 '+time(device.observed_at),'hint'));
    }else visual.append(el('small','还没有可显示的实际截图。','hint'));
    if(!archive){
     const controls=el('div',undefined,'inline-actions mobile-observation-actions');
-    const invoke=(name,label)=>{const control=button(label,async()=>{control.disabled=true;try{await action(name,{device_id:device.device_id});await reload()}catch(error){const detail=error?.message||'观察操作未完成。';try{await reload()}catch{}message(detail,true)}finally{if(current()&&control.isConnected)control.disabled=false}});controls.append(control)};
+    const invoke=(name,label,disabled=false)=>{const control=button(label,async()=>{control.disabled=true;try{await action(name,{device_id:device.device_id});await reload()}catch(error){const detail=error?.message||'观察操作未完成。';try{await reload()}catch{}message(detail,true)}finally{if(current()&&control.isConnected)control.disabled=false}});control.disabled=disabled;controls.append(control)};
     if(device.connection_state==='paused'||device.takeover)invoke('overview.resume','恢复观察');
-    else invoke('overview.observe','观察一次');
+    else invoke('overview.observe','观察一次',Boolean(fish&&!deviceFish));
     if(device.connection_state!=='paused'&&!device.takeover)invoke('overview.pause','暂停观察');
     if(!device.takeover)invoke('overview.takeover','接管设备');
     details.append(controls);
+    const identity=el('div',undefined,'mobile-observation-identity');
+    if(!fish)identity.append(el('small','请先在微信账号绑定身份，再为设备归属大肥鱼。','hint'));
+    else if(!deviceFish){
+     identity.append(el('small','先绑定设备后才能观察或启动任务。','hint'));
+     const bind=button('设为大肥鱼的设备',async()=>{bind.disabled=true;try{await action('overview.bind',{device_id:device.device_id});await reload()}catch(error){const detail=error?.message||'设备绑定未完成。';try{await reload()}catch{}message(detail,true)}finally{if(current()&&bind.isConnected)bind.disabled=false}});
+     identity.append(bind);
+    }else if(deviceFish===fish&&bindingID){
+     identity.append(el('small','已绑定大肥鱼','mobile-observation-bound'));
+     const unbind=button('解除绑定',()=>{
+      const popup=window.WechatDialogs.open({title:'解除设备绑定',subtitle:device.device_id||'未命名设备'}),copy=el('p','解除后会暂停此设备的后续任务，已保存的任务和观察历史仍会保留。','hint'),actions=el('div',undefined,'button-row'),cancel=button('取消',()=>popup.close()),confirm=button('确认解除',async()=>{confirm.disabled=true;cancel.disabled=true;try{const result=await action('overview.unbind',{device_id:device.device_id,binding_id:bindingID});if(current())popup.close();await reload();if(current()&&result?.warning)message(result.warning)}catch(error){message((error?.message||'解除绑定未完成。'),true);confirm.disabled=false;cancel.disabled=false}});confirm.className='danger-text';actions.append(cancel,confirm);popup.body.append(copy,actions);
+     });identity.append(unbind);
+    }else if(deviceFish===fish)identity.append(el('small','绑定信息待核对。','hint'));
+    else identity.append(el('small','已绑定其他身份。','hint'));
+    details.append(identity);
    }
    content.append(details,visual);card.append(content);
    list.append(card);

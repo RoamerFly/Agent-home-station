@@ -225,7 +225,10 @@ func resolve(ctx context.Context, options Options) (resolved, error) {
 		return resolved{}, ErrNeedsMigration
 	}
 	if options.inspectOnly {
-		return resolved{}, nil
+		// Inspection intentionally ends before creating protected state or
+		// acquiring ADB, but it retains the filtered public profile for
+		// InspectIOGrant. Callers expose only package/action aliases from it.
+		return resolved{profile: filtered}, nil
 	}
 	// Do not alter the ACL/mode of the historical account state directory.
 	// Instead, create one protected leaf for the broker-derived profile.

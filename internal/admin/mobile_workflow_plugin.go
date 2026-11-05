@@ -370,18 +370,32 @@ func (s *mobileWorkflowService) Start(source mobile.Source, device, goal string)
 	if !s.manager.mobileSourceAllowed(source) || source.MessageID == "" || len(source.MessageID) > 8192 {
 		return mobile.Task{}, errors.New("device_task_not_permitted")
 	}
+	fishID, bindingID, fishBound, err := s.manager.mobileAccountDeviceBinding(device)
+	if err != nil {
+		return mobile.Task{}, err
+	}
+	if fishBound && bindingID == "" {
+		return mobile.Task{}, errors.New("device_fish_binding_required")
+	}
 	if s.devicePaused(device) {
 		return mobile.Task{}, errors.New("device_observation_paused")
 	}
 	if err := s.recover(); err != nil {
 		return mobile.Task{}, err
 	}
-	requestHash := namedSpeechSHA(mustJSON([]any{source, device, goal}))
+	hashParts := []any{source, device, goal}
+	if fishBound {
+		// Preserve legacy owner-task idempotency exactly.  A fish-bound task
+		// deliberately includes the revocable binding token so a rebind can
+		// never reuse an old operation's idempotency identity.
+		hashParts = append(hashParts, fishID, bindingID)
+	}
+	requestHash := namedSpeechSHA(mustJSON(hashParts))
 	id := "device-" + randomToken()
 	if len(id) > 128 {
 		id = id[:128]
 	}
-	raw, err := s.invoke(context.Background(), "start", map[string]any{"id": id, "device_id": device, "goal": goal, "source": source, "request_hash": requestHash}, nil)
+	raw, err := s.invoke(context.Background(), "start", map[string]any{"id": id, "device_id": device, "fish_id": fishID, "device_binding_id": bindingID, "goal": goal, "source": source, "request_hash": requestHash}, nil)
 	if err != nil {
 		return mobile.Task{}, err
 	}
@@ -408,6 +422,14 @@ func (s *mobileWorkflowService) recover() error {
 	active := false
 	stale := map[string]json.RawMessage{}
 	for id, task := range snapshot.tasks {
+		if mobileWorkflowActive(task) {
+			if bindingErr := s.manager.mobileTaskBindingCurrent(task); bindingErr != nil {
+				task.State, task.Reason, task.Updated = "stopped", "device_fish_binding_changed", time.Now().UTC()
+				stale[mobileTaskRecordKey(id)], _ = json.Marshal(task)
+				stale[mobileWorkflowKey(id)] = mobileWorkflowClearedRecord(snapshot.records[id])
+				continue
+			}
+		}
 		if mobileWorkflowActive(task) && mobileObservationOnly(snapshot.records[id]) {
 			s.mu.Lock()
 			live := s.active[id] != nil
@@ -583,6 +605,12 @@ func (p *mobileWorkflowPolicy) Check(ctx context.Context, job pluginhost.Job, ca
 	if err = pluginhost.Authorize(installed.Package, pluginhost.Grant{Account: p.invocation.Account, Plugin: mobileDevicePluginID, Version: installed.Package.Version, Permissions: installed.Permissions}, p.invocation, []string{"device", "model.invoke"}); err != nil {
 		return err
 	}
+	if p.op == "start" {
+		var proposed mobile.Task
+		if json.Unmarshal(p.input, &proposed) != nil || p.service.manager.mobileTaskBindingCurrent(proposed) != nil {
+			return errors.New("device_fish_binding_changed")
+		}
+	}
 	current, err := p.store.ReadHostState(ctx, mobileDevicePluginID, mobileStateNamespace)
 	if err != nil || current.Revision != p.snapshot.host.Revision || current.SourceHash != p.snapshot.host.SourceHash {
 		return errors.New("device_workflow_state_changed")
@@ -606,6 +634,9 @@ func (p *mobileWorkflowPolicy) Validate(ctx context.Context, job pluginhost.Job,
 	if err := p.prove(patch); err != nil {
 		return pluginruntime.VerifiedResult{}, err
 	}
+	if err := p.bindingPatchCurrent(patch); err != nil {
+		return pluginruntime.VerifiedResult{}, err
+	}
 	if len(raw) > 8<<20 {
 		return pluginruntime.VerifiedResult{}, errors.New("device_workflow_result_limit")
 	}
@@ -622,6 +653,22 @@ func (p *mobileWorkflowPolicy) Validate(ctx context.Context, job pluginhost.Job,
 	}
 	checkpoint, _ := json.Marshal(mobileWorkflowCheckpoint{JobID: job.ID, SHA256: namedSpeechSHA(raw), Bytes: int64(len(raw))})
 	return pluginruntime.VerifiedResult{Result: json.RawMessage(`{"host_verified":true,"wechat_sends":0}`), Private: checkpoint}, nil
+}
+
+// bindingPatchCurrent is checked after package execution and again immediately
+// before commit.  A fish/account or device unlink while planning therefore
+// cannot turn a late result into a completed task. Cleanup operations remain
+// allowed to retire already-revoked tasks.
+func (p *mobileWorkflowPolicy) bindingPatchCurrent(patch mobileWorkflowPatch) error {
+	if p.op == "cancel" || p.op == "stop" || p.op == "recover" || p.op == "save" {
+		return nil
+	}
+	for _, task := range patch.Tasks {
+		if err := p.service.manager.mobileTaskBindingCurrent(task); err != nil {
+			return errors.New("device_fish_binding_changed")
+		}
+	}
+	return nil
 }
 func (p *mobileWorkflowPolicy) prove(patch mobileWorkflowPatch) error {
 	denied := errors.New("device_workflow_result_changed")
@@ -641,7 +688,7 @@ func (p *mobileWorkflowPolicy) prove(patch mobileWorkflowPatch) error {
 		if !exists {
 			var expected mobile.Task
 			_ = json.Unmarshal(p.input, &expected)
-			if p.op != "start" || id != expected.ID || next.ID != expected.ID || next.RequestHash != expected.RequestHash || next.Source != expected.Source || next.DeviceID != expected.DeviceID || next.Goal != expected.Goal || next.State != "queued" || next.Steps != 0 || !next.Created.Equal(p.now) || !next.Updated.Equal(p.now) || len(next.Events) != 0 || len(next.Artifacts) != 0 {
+			if p.op != "start" || id != expected.ID || next.ID != expected.ID || next.RequestHash != expected.RequestHash || next.Source != expected.Source || next.DeviceID != expected.DeviceID || next.FishID != expected.FishID || next.DeviceBindingID != expected.DeviceBindingID || next.Goal != expected.Goal || next.State != "queued" || next.Steps != 0 || !next.Created.Equal(p.now) || !next.Updated.Equal(p.now) || len(next.Events) != 0 || len(next.Artifacts) != 0 {
 				return denied
 			}
 			continue
@@ -654,7 +701,7 @@ func (p *mobileWorkflowPolicy) prove(patch mobileWorkflowPatch) error {
 			}
 			continue
 		}
-		if id != next.ID || old.ID != next.ID || old.RequestHash != next.RequestHash || old.Source != next.Source || old.DeviceID != next.DeviceID || old.Goal != next.Goal || !old.Created.Equal(next.Created) || next.Steps < old.Steps || next.Steps > old.Steps+1 {
+		if id != next.ID || old.ID != next.ID || old.RequestHash != next.RequestHash || old.Source != next.Source || old.DeviceID != next.DeviceID || old.FishID != next.FishID || old.DeviceBindingID != next.DeviceBindingID || old.Goal != next.Goal || !old.Created.Equal(next.Created) || next.Steps < old.Steps || next.Steps > old.Steps+1 {
 			return denied
 		}
 		if !contains([]string{"queued", "running", "completed", "cancelled", "failed", "stopped", "needs_review"}, next.State) {
@@ -1015,8 +1062,15 @@ func (s *mobileWorkflowService) invoke(ctx context.Context, op string, input map
 	if err = policy.prove(patch); err != nil {
 		return nil, err
 	}
+	if err = policy.bindingPatchCurrent(patch); err != nil {
+		return nil, err
+	}
 	s.stateMu.Lock()
 	if err = policy.Check(ctx, call.Job, pluginhost.Capability{}); err != nil {
+		s.stateMu.Unlock()
+		return nil, err
+	}
+	if err = policy.bindingPatchCurrent(patch); err != nil {
 		s.stateMu.Unlock()
 		return nil, err
 	}
@@ -1082,6 +1136,26 @@ func (s *mobileWorkflowService) tick() {
 	snapshot, store, err := s.load(false)
 	s.stateMu.Unlock()
 	if err != nil || store == nil {
+		return
+	}
+	// A fish/device unlink can happen while a model is planning.  Retire its
+	// durable task before it can be selected for another workflow transition.
+	invalid := map[string]json.RawMessage{}
+	for id, task := range snapshot.tasks {
+		if !mobileWorkflowActive(task) || mobileObservationOnly(snapshot.records[id]) || s.manager.mobileTaskBindingCurrent(task) == nil {
+			continue
+		}
+		task.State, task.Reason, task.Updated = "stopped", "device_fish_binding_changed", time.Now().UTC()
+		invalid[mobileTaskRecordKey(id)], _ = json.Marshal(task)
+		invalid[mobileWorkflowKey(id)] = mobileWorkflowClearedRecord(snapshot.records[id])
+	}
+	if len(invalid) > 0 {
+		s.stateMu.Lock()
+		fresh, freshStore, loadErr := s.load(false)
+		if loadErr == nil && fresh.host.Revision == snapshot.host.Revision {
+			_ = s.commit(fresh, freshStore, invalid)
+		}
+		s.stateMu.Unlock()
 		return
 	}
 	ids := []string{}
@@ -1249,6 +1323,12 @@ func (s *mobileWorkflowService) finishFact(id, token string, fact mobileWorkflow
 	current, ok := snapshot.tasks[id]
 	record := snapshot.records[id]
 	if !ok || !reflect.DeepEqual(current, task) || !reflect.DeepEqual(snapshot.settings, settings) || record.Claim != token || !mobileWorkflowActive(current) {
+		return
+	}
+	if s.manager.mobileTaskBindingCurrent(current) != nil {
+		current.State, current.Reason, current.Updated = "stopped", "device_fish_binding_changed", time.Now().UTC()
+		raw, _ := json.Marshal(current)
+		_ = s.commit(snapshot, store, map[string]json.RawMessage{mobileTaskRecordKey(id): raw, mobileWorkflowKey(id): mobileWorkflowClearedRecord(record)})
 		return
 	}
 	record.Fact = &fact

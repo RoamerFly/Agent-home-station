@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "mobile-control",
   "name": "手机控制",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -20,7 +20,7 @@
   "dependencies": [],
   "files": {
     "capabilities.json": "4d0e5c23a0f17b41ad381a02d46af6919a816c0fba86f89c62aeec79b783cd4e",
-    "CHANGELOG.md": "5741ac1fa8222dc1907b129a754209d85d557df72a08d6f6e57ba335c3157f3c",
+    "CHANGELOG.md": "b7823a1affc4e9929f61fa6bf73e833996f93abb00513fb5a4c259d2b641f97c",
     "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
     "MIGRATION.md": "6a5c3819ffcc7b1d5db9d1ddd267457ded790a7ce32e6ec74af1e11cfe2a25f7",
     "PERMISSIONS.md": "b7075cc457d9164c5f4ac82bc004ee72ecebd2595b9b81547b0055a60a71fb57",
@@ -37,7 +37,7 @@
     "ui.schema.json": "6c2afafab4ed9003403369ff58c9f415617b2b2b491156f81b6241b5310e3ec7",
     "runtime/native.py": "6b12c8816c4f01a3a1a1a643729e42d532e5be017dbc2f11cc3f3ab7e9a67ed1",
     "tests/test_native.py": "72a2b26f40136b58783d5dd6ee107ed65ccebd7b8b4db9d28c33e40037faf4df",
-    "runtime/workflow.py": "16691463e464acd51a494b22c50c73b9882cce70bd1458b87f08614870a593eb",
+    "runtime/workflow.py": "d54b8a0e925be2da5a50ddc22b6dc857b9b7a3c113b79df052fe2ed3633572e9",
     "tests/test_workflow.py": "e81789b8d226f8093fa0849f3f6488ef5a860eaed8675817d2775c2e30833ed8",
     "dev/legacy-sdk/artifact.go": "05db828157630fafbff1e94de2ecc628b4f72d72d3ef59f4e6c81247903c06c9",
     "dev/legacy-sdk/artifact_test.go": "df123ea02b699f7dc8987d078aa86673306a4fb9b13172174903f0e582a5d10e",

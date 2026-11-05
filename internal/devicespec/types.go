@@ -23,20 +23,25 @@ type Event struct {
 	Summary string    `json:"summary,omitempty"`
 }
 type Task struct {
-	Artifacts     []Artifact `json:"artifacts,omitempty"`
-	RequestHash   string     `json:"request_hash"`
-	ID            string     `json:"id"`
-	DeviceID      string     `json:"device_id"`
-	Goal          string     `json:"goal"`
-	State         string     `json:"state"`
-	Source        Source     `json:"source"`
-	Steps         int        `json:"steps"`
-	ObservationID string     `json:"observation_id,omitempty"`
-	Result        string     `json:"result,omitempty"`
-	Reason        string     `json:"reason,omitempty"`
-	Created       time.Time  `json:"created"`
-	Updated       time.Time  `json:"updated"`
-	Events        []Event    `json:"events"`
+	Artifacts   []Artifact `json:"artifacts,omitempty"`
+	RequestHash string     `json:"request_hash"`
+	ID          string     `json:"id"`
+	DeviceID    string     `json:"device_id"`
+	// FishID and DeviceBindingID bind a task to the fish identity and to one
+	// explicit, revocable phone association.  They are deliberately optional
+	// so pre-identity owner tasks retain their historical control semantics.
+	FishID          string    `json:"fish_id,omitempty"`
+	DeviceBindingID string    `json:"device_binding_id,omitempty"`
+	Goal            string    `json:"goal"`
+	State           string    `json:"state"`
+	Source          Source    `json:"source"`
+	Steps           int       `json:"steps"`
+	ObservationID   string    `json:"observation_id,omitempty"`
+	Result          string    `json:"result,omitempty"`
+	Reason          string    `json:"reason,omitempty"`
+	Created         time.Time `json:"created"`
+	Updated         time.Time `json:"updated"`
+	Events          []Event   `json:"events"`
 }
 type Artifact struct {
 	ID               string `json:"id"`

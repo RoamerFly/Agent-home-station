@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/devicebroker"
+	mobile "wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginruntime"
 )
 
@@ -58,6 +59,14 @@ func TestMobileObservationOnceInstalledRuntime(t *testing.T) {
 	if _, err = store.SetEnabled(t.Context(), installed.Package.ID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
+	fishID, err := f.manager.fish.bind(f.manager.native.Account())
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundFishID, bindingID, err := f.manager.fish.bindDevice(f.manager.native.Account(), "synthetic")
+	if err != nil || boundFishID != fishID || bindingID == "" {
+		t.Fatalf("bind fish device fish=%q binding=%q err=%v", boundFishID, bindingID, err)
+	}
 	controller, err := pluginruntime.NewController(store, pluginruntime.InstalledExecutor(store, options))
 	if err != nil {
 		t.Fatal(err)
@@ -98,6 +107,13 @@ func TestMobileObservationOnceInstalledRuntime(t *testing.T) {
 		return devicebroker.OpenIO(ctx, option)
 	}
 	t.Cleanup(func() { openMobileDeviceBroker = previous })
+	started, err := service.Start(mobile.Source{Admin: true, MessageID: "fish-bound-start"}, "synthetic", "查看授权设备")
+	if err != nil || started.FishID != fishID || started.DeviceBindingID != bindingID {
+		t.Fatalf("fish-bound start task=%#v err=%v", started, err)
+	}
+	if err = service.StopAll(); err != nil {
+		t.Fatal(err)
+	}
 	view, err := service.ObserveOnce(t.Context(), "synthetic")
 	if err != nil {
 		jobs, _ := store.Jobs(t.Context(), mobileDevicePluginID, 0, 20)
@@ -106,6 +122,9 @@ func TestMobileObservationOnceInstalledRuntime(t *testing.T) {
 	}
 	if calls == 0 || server.acquisitions == 0 || view.ObservedAt.IsZero() || view.CurrentApp != "com.example.home" || view.TaskID == "" || view.ScreenshotURI == "" {
 		t.Fatalf("view=%#v calls=%d leases=%d", view, calls, server.acquisitions)
+	}
+	if observed, ok := service.Get(view.TaskID); !ok || observed.FishID != fishID || observed.DeviceBindingID != bindingID {
+		t.Fatalf("observation task did not retain fish binding task=%#v found=%t", observed, ok)
 	}
 	data, err := service.Screenshot(view.TaskID, view.ObservationID)
 	if err != nil || !bytes.Equal(data, pngData.Bytes()) {

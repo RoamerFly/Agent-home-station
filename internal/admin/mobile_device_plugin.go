@@ -195,8 +195,59 @@ func (m *Manager) mobileDeviceCurrent(task mobile.Task, settings mobile.Settings
 		return nil
 	}
 	currentTask, ok := m.mobile.Get(task.ID)
-	if !ok || (currentTask.State != "queued" && currentTask.State != "running") || currentTask.ID != task.ID || currentTask.RequestHash != task.RequestHash || currentTask.DeviceID != task.DeviceID || currentTask.Goal != task.Goal || currentTask.Steps != task.Steps || currentTask.ObservationID != task.ObservationID || !reflect.DeepEqual(currentTask.Source, task.Source) || !m.mobileSourceAllowed(currentTask.Source) {
+	if !ok || (currentTask.State != "queued" && currentTask.State != "running") || currentTask.ID != task.ID || currentTask.RequestHash != task.RequestHash || currentTask.DeviceID != task.DeviceID || currentTask.FishID != task.FishID || currentTask.DeviceBindingID != task.DeviceBindingID || currentTask.Goal != task.Goal || currentTask.Steps != task.Steps || currentTask.ObservationID != task.ObservationID || !reflect.DeepEqual(currentTask.Source, task.Source) || !m.mobileSourceAllowed(currentTask.Source) {
 		return errors.New("device_plugin_authorization_changed")
+	}
+	if err := m.mobileTaskBindingCurrent(currentTask); err != nil {
+		return err
+	}
+	return nil
+}
+
+// mobileAccountDeviceBinding returns an explicit fish/device binding only when
+// this account has already joined the durable fish identity.  Accounts that
+// predate that identity deliberately keep their owner-operated device path;
+// they are not silently granted autonomous phone access.
+func (m *Manager) mobileAccountDeviceBinding(deviceID string) (fishID, bindingID string, fishBound bool, err error) {
+	if m == nil || m.fish == nil {
+		return "", "", false, nil
+	}
+	fishID, accounts, err := m.fish.bindings()
+	if err != nil {
+		return "", "", false, errors.New("device_fish_identity_unavailable")
+	}
+	account := m.native.Account()
+	if !accounts[account] {
+		return "", "", false, nil
+	}
+	boundID, bindings, err := m.fish.deviceBindings(account)
+	if err != nil || boundID != fishID {
+		return "", "", true, errors.New("device_fish_identity_unavailable")
+	}
+	for _, binding := range bindings {
+		if binding.DeviceID == deviceID {
+			return fishID, binding.BindingID, true, nil
+		}
+	}
+	return fishID, "", true, nil
+}
+
+// mobileTaskBindingCurrent is the revocation fence shared by every durable
+// task path.  A rebind mints a new token, so a result from an old task cannot
+// become valid again merely because the same device alias is bound later.
+func (m *Manager) mobileTaskBindingCurrent(task mobile.Task) error {
+	fishID, bindingID, fishBound, err := m.mobileAccountDeviceBinding(task.DeviceID)
+	if err != nil {
+		return err
+	}
+	if !fishBound {
+		if task.FishID != "" || task.DeviceBindingID != "" {
+			return errors.New("device_fish_binding_changed")
+		}
+		return nil
+	}
+	if task.FishID == "" || task.DeviceBindingID == "" || task.FishID != fishID || task.DeviceBindingID != bindingID {
+		return errors.New("device_fish_binding_changed")
 	}
 	return nil
 }
@@ -363,7 +414,7 @@ func mobileDeviceCapability(name string, request map[string]any) (string, error)
 }
 
 func (b *mobileDevicePluginBridge) sourceVersion(task mobile.Task, settings mobile.Settings, binding, capability string, raw json.RawMessage, sequence uint64) string {
-	payload, _ := json.Marshal([]any{task.ID, task.Source, task.RequestHash, task.Goal, task.DeviceID, task.Steps, task.ObservationID, settings.Revision, b.installed.Digest, binding, capability, raw, sequence})
+	payload, _ := json.Marshal([]any{task.ID, task.Source, task.RequestHash, task.Goal, task.DeviceID, task.FishID, task.DeviceBindingID, task.Steps, task.ObservationID, settings.Revision, b.installed.Digest, binding, capability, raw, sequence})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }

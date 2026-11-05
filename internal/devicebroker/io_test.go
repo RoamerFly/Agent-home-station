@@ -105,8 +105,30 @@ func TestIOInspectionDoesNotAcquireOrCreatePrivateState(t *testing.T) {
 	o, p, _, _ := mockIOOptions(t)
 	server := &countingADBServer{}
 	o.ADBServer = server
+	o.Runner = func(context.Context, string, []string, int64, time.Duration) ([]byte, error) {
+		t.Fatal("inspection called the native device runner")
+		return nil, errors.New("unexpected device I/O")
+	}
 	if err := InspectIOOptions(t.Context(), o); err != nil {
 		t.Fatal(err)
+	}
+	o.Actions = []string{"tap"}
+	grants, err := InspectIOGrant(t.Context(), o)
+	if err != nil || len(grants) != 1 {
+		t.Fatalf("grant inspection = %#v, %v", grants, err)
+	}
+	grant := grants[0]
+	if grant.DeviceID != "allowed" || strings.Join(grant.Packages, ",") != "com.example.browser" || strings.Join(grant.Actions, ",") != "observe,tap" {
+		t.Fatalf("grant does not reflect the effective host scope: %#v", grant)
+	}
+	public, err := json.Marshal(grants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"emulator-5554", p.adb, p.storage, "serial", "web_hosts", "browsers"} {
+		if bytes.Contains(public, []byte(private)) {
+			t.Fatalf("grant display exposed private connection information: %q", private)
+		}
 	}
 	if server.calls != 0 {
 		t.Fatal("readiness started ADB")

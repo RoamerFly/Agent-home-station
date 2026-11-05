@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"wechat-bot/internal/devicebroker"
 	mobile "wechat-bot/internal/devicespec"
 )
 
@@ -30,19 +31,25 @@ type mobileObservationDeviceControl struct {
 // mobileDeviceOverview deliberately describes a last verified observation;
 // CurrentApp is not a live foreground-app claim.
 type mobileDeviceOverview struct {
-	DeviceID        string    `json:"device_id"`
-	ConnectionState string    `json:"connection_state"`
-	CheckedAt       time.Time `json:"checked_at,omitempty"`
-	CurrentApp      string    `json:"current_app,omitempty"`
-	ObservedAt      time.Time `json:"observed_at,omitempty"`
-	TaskID          string    `json:"task_id,omitempty"`
-	ObservationID   string    `json:"observation_id,omitempty"`
-	ScreenshotURI   string    `json:"screenshot_uri,omitempty"`
-	Paused          bool      `json:"paused"`
-	Takeover        bool      `json:"takeover"`
+	DeviceID           string    `json:"device_id"`
+	FishID             string    `json:"fish_id,omitempty"`
+	BindingID          string    `json:"binding_id,omitempty"`
+	AuthorizedApps     []string  `json:"authorized_apps"`
+	AuthorizedActions  []string  `json:"authorized_actions"`
+	AuthorizationState string    `json:"authorization_state"`
+	ConnectionState    string    `json:"connection_state"`
+	CheckedAt          time.Time `json:"checked_at,omitempty"`
+	CurrentApp         string    `json:"current_app,omitempty"`
+	ObservedAt         time.Time `json:"observed_at,omitempty"`
+	TaskID             string    `json:"task_id,omitempty"`
+	ObservationID      string    `json:"observation_id,omitempty"`
+	ScreenshotURI      string    `json:"screenshot_uri,omitempty"`
+	Paused             bool      `json:"paused"`
+	Takeover           bool      `json:"takeover"`
 }
 
 type mobileOverview struct {
+	FishID    string                 `json:"fish_id,omitempty"`
 	CheckedAt time.Time              `json:"checked_at,omitempty"`
 	Devices   []mobileDeviceOverview `json:"devices"`
 }
@@ -84,9 +91,21 @@ func (s *mobileWorkflowService) Overview() mobileOverview {
 	if controlErr != nil {
 		return mobileOverview{Devices: []mobileDeviceOverview{}}
 	}
+	grants := s.manager.mobileDeviceGrantSummary(snapshot.settings)
 	overview := mobileOverview{Devices: make([]mobileDeviceOverview, 0, len(snapshot.settings.Devices))}
+	if fishID, _, fishBound, fishErr := s.manager.mobileAccountDeviceBinding(""); fishErr == nil && fishBound {
+		overview.FishID = fishID
+	}
 	for _, deviceID := range snapshot.settings.Devices {
-		entry := mobileDeviceOverview{DeviceID: deviceID, ConnectionState: "unknown"}
+		entry := mobileDeviceOverview{DeviceID: deviceID, ConnectionState: "unknown", AuthorizedApps: []string{}, AuthorizedActions: []string{}, AuthorizationState: "unavailable"}
+		if grant, ok := grants[deviceID]; ok {
+			entry.AuthorizedApps = grant.Packages
+			entry.AuthorizedActions = grant.Actions
+			entry.AuthorizationState = "ready"
+		}
+		if fishID, bindingID, fishBound, fishErr := s.manager.mobileAccountDeviceBinding(deviceID); fishErr == nil && fishBound && bindingID != "" {
+			entry.FishID, entry.BindingID = fishID, bindingID
+		}
 		state := control.Devices[deviceID]
 		entry.Paused, entry.Takeover, entry.CheckedAt = state.Paused, state.Takeover, state.CheckedAt
 		if state.Paused {
@@ -114,6 +133,37 @@ func (s *mobileWorkflowService) Overview() mobileOverview {
 	return overview
 }
 
+// mobileDeviceGrantSummary only parses the existing allowlisted device
+// profile. It never opens ADB or a broker, so rendering an overview cannot
+// wake the phone or acquire its lease.
+func (m *Manager) mobileDeviceGrantSummary(settings mobile.Settings) map[string]devicebroker.IOGrant {
+	result := map[string]devicebroker.IOGrant{}
+	store, err := m.packageStore()
+	if err != nil {
+		return result
+	}
+	installed, err := store.Installed(context.Background(), mobileDevicePluginID)
+	if err != nil || installed.Removed {
+		return result
+	}
+	deployment, err := runtimeDeploymentOptions()
+	if err != nil {
+		return result
+	}
+	options, err := m.mobileDeviceIOOptions(store, installed, deployment, settings)
+	if err != nil {
+		return result
+	}
+	grants, err := devicebroker.InspectIOGrant(context.Background(), options)
+	if err != nil {
+		return result
+	}
+	for _, grant := range grants {
+		result[grant.DeviceID] = grant
+	}
+	return result
+}
+
 func mobileObservationFromRecord(record mobileWorkflowRecord, wanted string) (mobile.Observation, bool) {
 	var state struct {
 		Observation mobile.Observation `json:"observation"`
@@ -137,6 +187,13 @@ func mobileObservationFromRecord(record mobileWorkflowRecord, wanted string) (mo
 func (s *mobileWorkflowService) ObserveOnce(ctx context.Context, deviceID string) (mobileDeviceOverview, error) {
 	if deviceID == "" {
 		return mobileDeviceOverview{}, errors.New("device_not_authorized")
+	}
+	fishID, bindingID, fishBound, err := s.manager.mobileAccountDeviceBinding(deviceID)
+	if err != nil {
+		return mobileDeviceOverview{}, err
+	}
+	if fishBound && bindingID == "" {
+		return mobileDeviceOverview{}, errors.New("device_fish_binding_required")
 	}
 	observationTaskID := "device-observe-" + randomToken()
 	observeCtx, cancel := context.WithCancel(ctx)
@@ -162,7 +219,7 @@ func (s *mobileWorkflowService) ObserveOnce(ctx context.Context, deviceID string
 	// validates exact task identity through mobilePluginCurrent; using an
 	// ephemeral task would bypass that guard.
 	queuedAt := time.Now().UTC().Truncate(time.Microsecond)
-	task := mobile.Task{ID: observationTaskID, RequestHash: namedSpeechSHA(mustJSON([]string{"observe", deviceID, observationTaskID})), DeviceID: deviceID, Goal: "只读查看设备当前画面", State: "running", Source: mobile.Source{Admin: true}, Created: queuedAt, Updated: queuedAt}
+	task := mobile.Task{ID: observationTaskID, RequestHash: namedSpeechSHA(mustJSON([]string{"observe", deviceID, observationTaskID, fishID, bindingID})), DeviceID: deviceID, FishID: fishID, DeviceBindingID: bindingID, Goal: "只读查看设备当前画面", State: "running", Source: mobile.Source{Admin: true}, Created: queuedAt, Updated: queuedAt}
 	taskRaw, _ := json.Marshal(task)
 	recordRaw, _ := json.Marshal(mobileWorkflowRecord{State: json.RawMessage(`{"observation_only":true}`)})
 	s.mu.Lock()
@@ -216,6 +273,8 @@ func (s *mobileWorkflowService) ObserveOnce(ctx context.Context, deviceID string
 						err = controlErr
 					} else if observeCtx.Err() != nil {
 						err = errors.New("device_observation_cancelled")
+					} else if bindingErr := s.manager.mobileTaskBindingCurrent(task); bindingErr != nil {
+						err = bindingErr
 					} else if current, ok := fresh.tasks[observationTaskID]; !ok || current.State != "running" || current.RequestHash != task.RequestHash || current.DeviceID != task.DeviceID || current.ObservationID != "" {
 						err = errors.New("device_observation_cancelled")
 					} else if fresh.settings.Revision != snapshot.settings.Revision || control.Devices[deviceID].Paused {
@@ -300,7 +359,14 @@ func (s *mobileWorkflowService) SetObservationPaused(deviceID string, paused, ta
 		return mobileOverview{}, controlErr
 	}
 	entry := control.Devices[deviceID]
-	entry.Paused, entry.Takeover = paused, paused && takeover
+	if paused {
+		entry.Paused = true
+		// A normal pause must never silently clear an existing owner takeover.
+		// Only the explicit resume path below is allowed to relinquish it.
+		entry.Takeover = entry.Takeover || takeover
+	} else {
+		entry.Paused, entry.Takeover = false, false
+	}
 	control.Devices[deviceID] = entry
 	controlRaw, _ := json.Marshal(control)
 	puts := map[string]json.RawMessage{mobileObservationControlKey: controlRaw}

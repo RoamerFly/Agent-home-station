@@ -54,7 +54,7 @@ func (s *Server) pluginHostActionRoutes(mux *http.ServeMux) {
 		installed, err := store.Installed(r.Context(), mobileDevicePluginID)
 		action := r.PathValue("action")
 		if err != nil || installed.Removed {
-			if action == "tasks.cancel" || action == "tasks.stop" || action == "overview.pause" || action == "overview.takeover" || action == "overview.resume" {
+			if action == "tasks.cancel" || action == "tasks.stop" || action == "overview.bind" || action == "overview.unbind" || action == "overview.pause" || action == "overview.takeover" || action == "overview.resume" {
 				s.mobileHostAction(w, r, action)
 				return
 			}

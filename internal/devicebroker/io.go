@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -48,6 +49,16 @@ type IOCall interface {
 	Close() error
 }
 
+// IOGrant is the deliberately narrow, display-safe portion of a registered
+// device profile.  It never exposes a serial, host path, ADB endpoint or any
+// credential.  The host uses it to explain the existing effective scope; it
+// is not a second authorization system.
+type IOGrant struct {
+	DeviceID string   `json:"device_id"`
+	Packages []string `json:"packages"`
+	Actions  []string `json:"actions"`
+}
+
 // InspectIOOptions reads the same profile/path/ADB allowlists as OpenIO. It
 // creates no directories, starts no child and never acquires the ADB server.
 func InspectIOOptions(ctx context.Context, o Options) error {
@@ -57,6 +68,30 @@ func InspectIOOptions(ctx context.Context, o Options) error {
 	}
 	_, err := resolve(ctx, o)
 	return err
+}
+
+// InspectIOGrant reads the already registered profile and returns only its
+// public app/action allowlist.  Like InspectIOOptions it does not create
+// directories, launch a child process, acquire ADB, or contact a device.
+func InspectIOGrant(ctx context.Context, o Options) ([]IOGrant, error) {
+	o.inspectOnly = true
+	if _, err := pluginhost.Verify(o.PackageDirectory); err != nil {
+		return nil, ErrNeedsMigration
+	}
+	r, err := resolve(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	grants := make([]IOGrant, 0, len(r.profile.Devices))
+	for id, device := range r.profile.Devices {
+		grants = append(grants, IOGrant{
+			DeviceID: id,
+			Packages: append([]string(nil), device.Packages...),
+			Actions:  append([]string(nil), device.Actions...),
+		})
+	}
+	sort.Slice(grants, func(i, j int) bool { return grants[i].DeviceID < grants[j].DeviceID })
+	return grants, nil
 }
 
 type ioBroker struct {

@@ -224,7 +224,14 @@ def transition(request):
             fail('device_queue_limit')
         if not ID.fullmatch(supplied.get('id', '')) or not isinstance(supplied.get('goal'), str) or not 0 < len(supplied['goal'].encode('utf8')) <= 3000:
             fail('device_task_input_limit')
+        fish_id, binding_id = supplied.get('fish_id', ''), supplied.get('device_binding_id', '')
+        if not isinstance(fish_id, str) or not isinstance(binding_id, str) or bool(fish_id) != bool(binding_id):
+            fail('device_task_identity_invalid')
         task = {'id':supplied['id'], 'device_id':supplied['device_id'], 'goal':supplied['goal'], 'source':supplied['source'], 'request_hash':supplied['request_hash'], 'state':'queued', 'created':now, 'updated':now, 'steps':0, 'events':[]}
+        if fish_id:
+            # Host-generated immutable identity fields are preserved verbatim.
+            # The host policy validates their real format and current binding.
+            task['fish_id'], task['device_binding_id'] = fish_id, binding_id
         changed[task['id']], metadata[task['id']], result = task, {'phase':'observe', 'iteration':0}, task
     elif operation in ('cancel', 'stop', 'recover'):
         for identifier, task in tasks.items():

@@ -95,6 +95,8 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 		respond(w, 200, observer.Overview())
 	}))
 	mux.HandleFunc("POST /api/mobile/overview/{device}/observe", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.observe") }))
+	mux.HandleFunc("POST /api/mobile/overview/{device}/bind", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.bind") }))
+	mux.HandleFunc("POST /api/mobile/overview/{device}/unbind", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.unbind") }))
 	mux.HandleFunc("POST /api/mobile/overview/{device}/pause", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.pause") }))
 	mux.HandleFunc("POST /api/mobile/overview/{device}/takeover", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.takeover") }))
 	mux.HandleFunc("POST /api/mobile/overview/{device}/resume", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "overview.resume") }))
@@ -128,9 +130,10 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 // legacy resource URLs and the mobile-control package's declarative UI.
 func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action string) {
 	switch action {
-	case "overview.observe", "overview.pause", "overview.takeover", "overview.resume":
+	case "overview.observe", "overview.bind", "overview.unbind", "overview.pause", "overview.takeover", "overview.resume":
 		var in struct {
-			DeviceID string `json:"device_id"`
+			DeviceID  string `json:"device_id"`
+			BindingID string `json:"binding_id"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -152,6 +155,38 @@ func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action
 		switch action {
 		case "overview.observe":
 			result, err = observer.ObserveOnce(r.Context(), in.DeviceID)
+		case "overview.bind":
+			if !contains(s.manager.mobile.Settings().Devices, in.DeviceID) {
+				fail(w, 404, "设备未授权给当前手机工具")
+				return
+			}
+			if s.manager.fish == nil {
+				err = errors.New("device_fish_identity_unavailable")
+			} else {
+				_, _, err = s.manager.fish.bindDevice(s.manager.native.Account(), in.DeviceID)
+			}
+			if err == nil {
+				result = observer.Overview()
+			}
+		case "overview.unbind":
+			if in.BindingID == "" {
+				fail(w, 409, "鱼设备绑定已变更，请刷新后再试")
+				return
+			}
+			if s.manager.fish == nil {
+				err = errors.New("device_fish_identity_unavailable")
+			} else {
+				err = s.manager.fish.unbindDevice(s.manager.native.Account(), in.DeviceID, in.BindingID)
+			}
+			if err == nil {
+				// Revocation is persisted first.  Pausing immediately cancels any
+				// remaining device queue while retaining the last verified frame.
+				result, err = observer.SetObservationPaused(in.DeviceID, true, false)
+				if err != nil {
+					respond(w, http.StatusAccepted, map[string]any{"unbound": true, "overview": observer.Overview(), "warning": "设备绑定已解除；停止任务记录待更新"})
+					return
+				}
+			}
 		case "overview.pause":
 			result, err = observer.SetObservationPaused(in.DeviceID, true, false)
 		case "overview.takeover":
@@ -160,6 +195,17 @@ func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action
 			result, err = observer.SetObservationPaused(in.DeviceID, false, false)
 		}
 		if err != nil {
+			if action == "overview.bind" || action == "overview.unbind" {
+				switch err.Error() {
+				case "device_fish_identity_unavailable":
+					fail(w, 409, "鱼身份资料暂不可用，未改变设备授权")
+				case "账号未绑定到鱼身份":
+					fail(w, 409, "请先将当前微信账号绑定给大肥鱼")
+				default:
+					fail(w, 409, "鱼设备绑定已变更或暂不可用，请刷新后再试")
+				}
+				return
+			}
 			switch err.Error() {
 			case "device_observation_paused":
 				fail(w, 409, "设备已暂停或正在由你接管，请先恢复观察")
@@ -167,6 +213,10 @@ func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action
 				fail(w, 409, "设备正在执行已授权操作，请稍后观察")
 			case "device_not_authorized":
 				fail(w, 404, "设备未授权给当前手机工具")
+			case "device_fish_binding_required":
+				fail(w, 409, "请先将该设备绑定给大肥鱼")
+			case "device_fish_binding_changed", "device_fish_identity_unavailable":
+				fail(w, 409, "鱼设备绑定已变更或暂不可用，请刷新后再试")
 			default:
 				fail(w, 409, "设备连接或观察暂不可用；保留上次观察画面")
 			}
