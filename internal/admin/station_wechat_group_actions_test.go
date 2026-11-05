@@ -33,9 +33,13 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	const lostGroup = "room-lost@chatroom"
 	const agentGroup = "room-agent@chatroom"
 	const racingGroup = "room-race@chatroom"
+	const renameGroup = "room-rename@chatroom"
 	var submissions, receiptReads atomic.Int32
 	var ready, wrongTarget, nativeOffline atomic.Bool
-	var unsupported atomic.Bool
+	var unsupported, renameUnsupported, renameVisible atomic.Bool
+	var renameSubmissions, renameLookups atomic.Int32
+	var renameKey atomic.Value
+	var renameReceiptMode atomic.Int32
 	preflight, resumePreflight := make(chan struct{}, 1), make(chan struct{})
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out := func(value any) { _ = json.NewEncoder(w).Encode(value) }
@@ -61,7 +65,11 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 			if !unsupported.Load() {
 				targets = append(targets, "group")
 			}
-			out(map[string]any{"threadNotificationTargets": targets})
+			mutations := []string{}
+			if !renameUnsupported.Load() {
+				mutations = append(mutations, "rename")
+			}
+			out(map[string]any{"threadNotificationTargets": targets, "groupMutations": mutations})
 		case "GET /v1/accounts/one/groups":
 			if q := r.URL.Query(); q.Get("limit") != "200" || q.Get("search") != "测试" {
 				t.Error("incorrect native directory query", q)
@@ -81,7 +89,13 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 				out(map[string]any{"id": racingGroup, "roomId": racingGroup, "isInGroup": true})
 			case <-r.Context().Done():
 			}
-		case "GET /v1/accounts/two/groups/" + group:
+		case "GET /v1/accounts/one/groups/" + renameGroup:
+			name := "合成旧群名"
+			if renameVisible.Load() {
+				name = "合成新群名"
+			}
+			out(map[string]any{"id": renameGroup, "roomId": renameGroup, "name": name, "isInGroup": true, "announcement": "synthetic-private-announcement"})
+		case "GET /v1/accounts/two/groups/" + group, "GET /v1/accounts/two/groups/" + renameGroup:
 			w.WriteHeader(404)
 		case "PUT /v1/accounts/one/threads/" + group + "/notifications":
 			var in struct{ Muted *bool }
@@ -102,6 +116,35 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 			receipt := syntheticStationMuteReceipt("queued", "not_attempted", agentGroup)
 			receipt["id"] = "native-agent"
 			out(receipt)
+		case "PATCH /v1/accounts/one/groups/" + renameGroup:
+			var body struct{ Name string }
+			key := r.Header.Get("Idempotency-Key")
+			if json.NewDecoder(r.Body).Decode(&body) != nil || body.Name != "合成新群名" || !strings.HasPrefix(key, "station-rename-") {
+				t.Error("rename did not carry the exact name and host idempotency key")
+			}
+			renameKey.Store(key)
+			renameSubmissions.Add(1)
+			// Native recorded the operation, but the submit response was lost.
+			w.WriteHeader(503)
+		case "GET /v1/accounts/one/group-mutations/by-idempotency-key":
+			key, _ := renameKey.Load().(string)
+			if key == "" || r.URL.Query().Get("key") != key {
+				w.WriteHeader(404)
+				return
+			}
+			renameLookups.Add(1)
+			out(syntheticStationRenameReceipt("queued", "not_attempted", renameGroup, "rename"))
+		case "GET /v1/accounts/one/operations/native-rename":
+			switch renameReceiptMode.Load() {
+			case 0:
+				out(syntheticStationRenameReceipt("succeeded", "accepted", lostGroup, "rename"))
+			case 1:
+				out(syntheticStationRenameReceipt("succeeded", "accepted", renameGroup, "my_name"))
+			case 2:
+				out(syntheticStationRenameReceipt("succeeded", "unknown", renameGroup, "rename"))
+			default:
+				out(syntheticStationRenameReceipt("succeeded", "accepted", renameGroup, "rename"))
+			}
 		case "GET /v1/accounts/one/operations/native-agent":
 			receipt := syntheticStationMuteReceipt("succeeded", "accepted", agentGroup)
 			receipt["id"] = "native-agent"
@@ -214,6 +257,66 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	if submissions.Load() != 3 || receiptReads.Load() != 2 {
 		t.Fatal("duplicate submission or unexpected lookup", submissions.Load(), receiptReads.Load())
 	}
+	renameProfile := one + "/groups/" + renameGroup + "/profile"
+	var renameOperation string
+	t.Run("OwnerRename", func(t *testing.T) {
+		rename := func(key, name string) map[string]any {
+			return map[string]any{"action": "rename", "group_id": renameGroup, "request_key": key, "name": name}
+		}
+		renameUnsupported.Store(true)
+		raw, _ := json.Marshal(request("GET", renameProfile, nil, false, 200))
+		if strings.Contains(string(raw), "synthetic-private-announcement") || !strings.Contains(string(raw), "合成旧群名") {
+			t.Fatal("profile missing the cached name or exposing unrelated fields", string(raw))
+		}
+		if r := request("GET", renameProfile, nil, false, 200); r["can_rename"] != false {
+			t.Fatal("unsupported rename capability displayed", r)
+		}
+		request("POST", path, rename("rename-first", "合成新群名"), true, 409)
+		renameUnsupported.Store(false)
+		request("POST", path, rename("rename-first", "合成新群名"), false, 403)
+		request("POST", two+"/group-actions", rename("rename-first", "合成新群名"), true, 404)
+		for _, name := range []string{" ", "新\n名称", strings.Repeat("鱼", 171)} {
+			request("POST", path, rename("rename-first", name), true, 400)
+		}
+		if r := request("GET", renameProfile, nil, false, 200); r["can_rename"] != true || r["operation"] != nil {
+			t.Fatal("rename profile before submit", r)
+		}
+		if renameSubmissions.Load() != 0 {
+			t.Fatal("denied rename reached native")
+		}
+		first := request("POST", path, rename("rename-first", "合成新群名"), true, 202)
+		renameOperation = first["operation_id"].(string)
+		if first["state"] != "submission_unknown" || first["platform_operation_id"] != nil {
+			t.Fatal("missing response claimed as confirmation", first)
+		}
+		request("POST", path, rename("rename-first", "合成新群名"), true, 202)
+		request("POST", path, rename("rename-first", "另一个群名"), true, 409)
+		request("POST", path, rename("rename-replacement", "合成新群名"), true, 409)
+		request("GET", two+"/operations/"+renameOperation, nil, false, 404)
+		if r := request("GET", renameProfile, nil, false, 200); r["can_rename"] != false ||
+			r["operation"].(map[string]any)["state"] != "submitted_pending" {
+			t.Fatal("key lookup did not recover the queued operation", r)
+		}
+		for mode := int32(0); mode <= 2; mode++ {
+			renameReceiptMode.Store(mode)
+			r := request("GET", one+"/operations/"+renameOperation, nil, false, 200)
+			if r["state"] != "submitted_pending" || r["lookup"] != "identity_mismatch" {
+				t.Fatal("mismatched receipt accepted", r)
+			}
+		}
+		renameReceiptMode.Store(3)
+		if r := request("GET", renameProfile, nil, false, 200); r["operation"].(map[string]any)["state"] != "succeeded" ||
+			r["name"] != "合成旧群名" {
+			t.Fatal("cached name was conflated with the platform receipt", r)
+		}
+		renameVisible.Store(true)
+		if r := request("GET", renameProfile, nil, false, 200); r["name"] != "合成新群名" || r["can_rename"] != true {
+			t.Fatal("new cached name was not reported", r)
+		}
+		if renameSubmissions.Load() != 1 || renameLookups.Load() != 1 {
+			t.Fatal("rename was resubmitted or durable lookup binding lost", renameSubmissions.Load(), renameLookups.Load())
+		}
+	})
 	t.Run("AgentGrant", func(t *testing.T) {
 		connection := wechatapp.ConnectionID("one")
 		other := wechatapp.ConnectionID("two")
@@ -326,6 +429,9 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	if r := request("GET", one+"/operations/"+operation, nil, false, 200); r["state"] != "succeeded" || r["lookup"] != "stored" {
 		t.Fatal("confirmed receipt lost after restart", r)
 	}
+	if r := request("GET", one+"/operations/"+renameOperation, nil, false, 200); r["action"] != "rename" || r["state"] != "succeeded" || r["lookup"] != "stored" {
+		t.Fatal("confirmed rename lost after restart", r)
+	}
 	if r := request("GET", one+"/groups/"+lostGroup+"/notification", nil, false, 200); r["operation"].(map[string]any)["state"] != "submission_unknown" || r["can_change"] != false {
 		t.Fatal("offline recovery lost unknown reservation", r)
 	}
@@ -334,4 +440,9 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 func syntheticStationMuteReceipt(state, outcome, target string) map[string]any {
 	return map[string]any{"id": "native-mute", "accountId": "one", "kind": "group_mutation", "state": state,
 		"result": map[string]string{"action": "mute", "threadId": target, "targetId": target, "remoteOutcome": outcome}}
+}
+
+func syntheticStationRenameReceipt(state, outcome, target, action string) map[string]any {
+	return map[string]any{"id": "native-rename", "accountId": "one", "kind": "group_mutation", "state": state,
+		"result": map[string]string{"action": action, "groupId": target, "targetId": target, "remoteOutcome": outcome}}
 }

@@ -33,10 +33,10 @@ func OwnMessage(msg linuxnative.Message, account, thread, message string) bool {
 	return msg.AccountID == account && msg.ID == message && msg.ThreadID == thread && msg.Direction == "outgoing" && msg.ServerID != ""
 }
 
-// MatchGroupMuteReceipt accepts only evidence from this account's exact
+// MatchGroupActionReceipt accepts only evidence from this account's exact
 // operation and group. Native success also requires a remote acceptance.
-func MatchGroupMuteReceipt(status linuxnative.ActionStatus, account, group, operation string) bool {
-	return status.AccountID == account && status.Kind == "group_mutation" && status.Action == "mute" &&
+func MatchGroupActionReceipt(status linuxnative.ActionStatus, account, action, group, operation string) bool {
+	return status.AccountID == account && status.Kind == "group_mutation" && status.Action == action &&
 		status.Target == group && status.ID != "" && (operation == "" || operation == status.ID) &&
 		(status.State != "succeeded" || status.RemoteOutcome == "accepted")
 }

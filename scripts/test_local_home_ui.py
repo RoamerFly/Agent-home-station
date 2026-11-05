@@ -391,9 +391,10 @@ def verify(binary, output):
 
                 groups_pattern = re.compile(r".*/api/apps/wechat/connections/synthetic-wechat/groups(?:\?.*)?$")
                 group_notification_pattern = re.compile(r".*/api/apps/wechat/connections/synthetic-wechat/groups/.+/notification$")
+                group_profile_pattern = re.compile(r".*/api/apps/wechat/connections/synthetic-wechat/groups/.+/profile$")
                 group_actions_pattern = status_pattern + "/group-actions"
-                group_queries, group_actions, group_reads = [], [], {}
-                group_state = {"muted": False, "operation": None}
+                group_queries, group_actions, group_reads, profile_reads = [], [], {}, {}
+                group_state = {"muted": False, "operation": None, "name": "合成测试群", "rename_operation": None}
 
                 def group_directory(route):
                     assert route.request.method == "GET"
@@ -425,19 +426,39 @@ def verify(binary, output):
                     fulfill_json({"can_change": False, "coverage": "unavailable",
                                   "operation": {"operation_id": "group-mute-unknown", "state": "submission_unknown", "lookup": "native-lookup"}})(route)
 
+                def group_profile(route):
+                    assert route.request.method == "GET"
+                    path = unquote(urlparse(route.request.url).path)
+                    group_id = path.split("/groups/", 1)[1].rsplit("/profile", 1)[0]
+                    profile_reads[group_id] = profile_reads.get(group_id, 0) + 1
+                    if group_id == "synthetic-room@chatroom":
+                        if profile_reads[group_id] >= 2 and group_state["rename_operation"]:
+                            group_state.update(name="新的合成群名", rename_operation={"operation_id": "group-rename-1", "state": "succeeded", "lookup": "wechat-receipt"})
+                        fulfill_json({"name": group_state["name"], "can_rename": True, "coverage": "cached", "operation": group_state["rename_operation"]})(route)
+                        return
+                    assert group_id == "unknown-room@chatroom"
+                    fulfill_json({"can_rename": False, "coverage": "unavailable",
+                                  "operation": {"operation_id": "group-rename-unknown", "state": "submission_unknown", "lookup": "native-lookup"}})(route)
+
                 def group_action(route):
                     assert route.request.method == "POST"
                     assert route.request.headers.get("x-csrf-token")
                     body = route.request.post_data_json
                     assert body["group_id"] == "synthetic-room@chatroom"
-                    assert body["muted"] is True
                     assert re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", body["request_key"])
                     group_actions.append(body)
+                    if body.get("action") == "rename":
+                        assert body == {"action": "rename", "group_id": "synthetic-room@chatroom", "name": "新的合成群名", "request_key": body["request_key"]}
+                        group_state["rename_operation"] = {"operation_id": "group-rename-1", "state": "submitted_pending", "lookup": "native-queued"}
+                        fulfill_json(group_state["rename_operation"])(route)
+                        return
+                    assert body["muted"] is True
                     group_state["operation"] = {"operation_id": "group-mute-1", "state": "submitted_pending", "lookup": "native-queued"}
                     fulfill_json(group_state["operation"])(route)
 
                 page.route(groups_pattern, group_directory)
                 page.route(group_notification_pattern, group_notification)
+                page.route(group_profile_pattern, group_profile)
                 page.route(group_actions_pattern, group_action)
                 page.get_by_text("群聊", exact=True).click()
                 page.get_by_role("textbox", name="搜索群聊", exact=True).fill("测试")
@@ -453,12 +474,26 @@ def verify(binary, output):
                 page.get_by_text("当前为免打扰", exact=True).wait_for()
                 page.get_by_text("已确认完成 · 操作 group-mute-1", exact=True).wait_for()
                 assert len(group_actions) == 1
+                page.get_by_text("群名称", exact=True).wait_for()
+                page.get_by_role("button", name="修改群名称", exact=True).click()
+                page.get_by_role("textbox", name="新的群名称", exact=True).fill("新的合成群名")
+                page.get_by_text("将“合成测试群”改为“新的合成群名”。", exact=True).wait_for()
+                page.get_by_role("button", name="确认改名", exact=True).click()
+                page.get_by_text("已提交，等待微信确认 · 操作 group-rename-1", exact=True).wait_for()
+                assert len(group_actions) == 2
+                page.get_by_role("button", name="刷新群资料", exact=True).click()
+                page.get_by_text("新的合成群名（来自本机缓存）", exact=True).wait_for()
+                page.get_by_text("已确认完成 · 操作 group-rename-1", exact=True).wait_for()
+                assert len(group_actions) == 2
                 page.locator(".group-directory").get_by_role("button", name="下一页", exact=True).click()
                 page.get_by_role("button", name="未知状态群 · unknown-room@chatroom", exact=True).click()
                 page.get_by_text("当前免打扰状态未取得，可刷新后再决定。", exact=True).wait_for()
                 page.get_by_text("提交结果待核对 · 操作 group-mute-unknown", exact=True).wait_for()
                 assert page.get_by_role("button", name="设为免打扰", exact=True).count() == 0
-                page.get_by_text("当前连接不能修改这个群聊；仍可刷新查看已有操作回执。", exact=True).wait_for()
+                page.get_by_text("当前连接不能修改这个群的免打扰；仍可刷新查看已有操作回执。", exact=True).wait_for()
+                page.get_by_text("提交结果待核对 · 操作 group-rename-unknown", exact=True).wait_for()
+                assert page.get_by_role("button", name="修改群名称", exact=True).count() == 0
+                page.get_by_text("这次改名仍在核对中；刷新只查询原操作，不会重复提交。", exact=True).wait_for()
                 assert len(group_queries) == 2
                 page.set_viewport_size({"width": 375, "height": 780})
                 assert_no_horizontal_overflow(page, "WeChat group directory")
@@ -697,7 +732,7 @@ def verify(binary, output):
                 assert note.read_text(encoding="utf-8") == "a persistent companion home"
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "worker policy and lifecycle", "WeChat contacts and independent grant", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group rename receipt", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 

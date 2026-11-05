@@ -7,24 +7,28 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/linuxnative"
 )
 
-var errStationMutePending = errors.New("previous mute outcome pending")
-var errStationMuteTarget = errors.New("group target is not verified")
-var errStationMuteUnsupported = errors.New("group notification mutation is not advertised")
+var errStationGroupActionPending = errors.New("previous group action outcome pending")
+var errStationGroupActionTarget = errors.New("group target is not verified")
+var errStationGroupActionUnsupported = errors.New("group action is not advertised")
 var errStationMuteGrant = &stationContactError{"wechat_group_mute_not_authorized", "本地聊天没有该连接和群的免打扰授权，或本轮授权已变更。"}
 
-type stationMuteInput struct {
-	Group string `json:"group_id"`
-	Muted *bool  `json:"muted"`
-	Key   string `json:"request_key"`
+type stationGroupActionInput struct {
+	Action string `json:"action"`
+	Name   string `json:"name"`
+	Group  string `json:"group_id"`
+	Muted  *bool  `json:"muted"`
+	Key    string `json:"request_key"`
 }
 
-type stationMuteAuthority struct {
+type stationGroupActionAuthority struct {
 	requester string
 	trace     string
 	grant     time.Time
@@ -37,15 +41,28 @@ func validStationGroup(id string) bool {
 
 func (s *stationWechat) groupActionRoutes(owner *Server, mux *http.ServeMux, identity *fishIdentityRegistry) {
 	const base = "/api/apps/wechat/connections/{connection}"
-	mux.HandleFunc("GET "+base+"/groups/{group}/notification", owner.protected(s.stationGroupNotification))
+	mux.HandleFunc("GET "+base+"/groups/{group}/notification", owner.protected(s.stationGroupDetails("mute")))
+	mux.HandleFunc("GET "+base+"/groups/{group}/profile", owner.protected(s.stationGroupDetails("rename")))
 	mux.HandleFunc("POST "+base+"/group-actions", owner.protected(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		var in stationMuteInput
+		var in stationGroupActionInput
 		if !decode(w, r, &in) {
 			return
 		}
-		if !validStationGroup(in.Group) || in.Muted == nil || !validID(in.Key) || !artifactID(r.PathValue("connection"), "wechat-") {
-			fail(w, http.StatusBadRequest, "请提供连接、群、免打扰状态和请求编号")
+		action := linuxnative.AdminAction{Kind: in.Action, ThreadID: in.Group, Text: in.Name}
+		if action.Kind == "" {
+			action.Kind = "mute"
+		}
+		if !validStationGroup(in.Group) || !validID(in.Key) || !artifactID(r.PathValue("connection"), "wechat-") {
+			fail(w, http.StatusBadRequest, "请提供有效的连接、群 ID 和请求编号")
+			return
+		}
+		switch {
+		case action.Kind == "mute" && in.Muted != nil && in.Name == "":
+			action.Muted = *in.Muted
+		case action.Kind == "rename" && in.Muted == nil && validStationGroupName(in.Name):
+		default:
+			fail(w, http.StatusBadRequest, "请提供有效的群操作。新群名称须非空、最多 512 UTF-8 字节，且不能含控制字符")
 			return
 		}
 		record, err := identity.localIdentity()
@@ -57,20 +74,20 @@ func (s *stationWechat) groupActionRoutes(owner *Server, mux *http.ServeMux, ide
 		defer cancel()
 		stop := context.AfterFunc(s.ctx, cancel)
 		defer stop()
-		authority := stationMuteAuthority{requester: record.LocalOwner.ID, active: func(context.Context) bool {
+		authority := stationGroupActionAuthority{requester: record.LocalOwner.ID, active: func(context.Context) bool {
 			_, _, ok := owner.session(r)
 			current, err := identity.localIdentity()
 			return ok && err == nil && current.FishID == record.FishID && current.LocalOwner != nil && current.LocalOwner.ID == record.LocalOwner.ID
 		}}
-		out, err := s.submitStationMute(ctx, r.PathValue("connection"), in, authority)
+		out, err := s.submitStationGroupAction(ctx, r.PathValue("connection"), action, in.Key, authority)
 		switch {
 		case err == nil:
 			respond(w, http.StatusAccepted, out)
-		case errors.Is(err, errStationMutePending):
+		case errors.Is(err, errStationGroupActionPending):
 			fail(w, http.StatusConflict, "此群已有结果待核对的操作，请先查询原操作")
-		case errors.Is(err, errStationMuteUnsupported):
-			fail(w, http.StatusConflict, "当前微信后台未声明群免打扰能力")
-		case errors.Is(err, errStationMuteTarget), errors.Is(err, linuxnative.ErrToolNotFound), errors.Is(err, apphost.ErrNotFound):
+		case errors.Is(err, errStationGroupActionUnsupported):
+			fail(w, http.StatusConflict, "当前微信后台未声明此群操作")
+		case errors.Is(err, errStationGroupActionTarget), errors.Is(err, linuxnative.ErrToolNotFound), errors.Is(err, apphost.ErrNotFound):
 			fail(w, http.StatusNotFound, "未能在该连接核对所选群")
 		case errors.Is(err, apphost.ErrLifecycleConflict), errors.Is(err, errContactLogin):
 			fail(w, http.StatusConflict, "连接已暂停、未登录或请求内容变化，未提交操作")
@@ -91,14 +108,14 @@ func (w *stationWechatWorker) actionLedgerLocked() (*actionLedger, error) {
 	return w.actions, nil
 }
 
-func (s *stationWechat) findStationMute(l *actionLedger, connection, id, group string) (actionProposal, bool) {
+func (s *stationWechat) findStationGroupAction(l *actionLedger, connection, id, group, kind string) (actionProposal, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var latest actionProposal
 	for _, p := range l.items {
 		if p.AppAction == nil || p.AppAction.ConnectionRef != s.connectionRef(connection, p.Account) ||
-			wechatapp.ConnectionID(p.Account) != connection || p.Request.Kind != "mute" ||
-			p.AppAction.Action != "mute" || p.AppAction.Target != p.Request.ThreadID || p.AppAction.IdempotencyKey != p.ID {
+			wechatapp.ConnectionID(p.Account) != connection || !stationGroupActionKind(p.Request.Kind) || kind != "" && p.Request.Kind != kind ||
+			p.AppAction.Action != p.Request.Kind || p.AppAction.Target != p.Request.ThreadID || p.AppAction.IdempotencyKey != p.ID {
 			continue
 		}
 		if id != "" && p.ID == id {
@@ -111,7 +128,7 @@ func (s *stationWechat) findStationMute(l *actionLedger, connection, id, group s
 	return latest, latest.ID != ""
 }
 
-func (s *stationWechat) submitStationMute(ctx context.Context, connection string, in stationMuteInput, authority stationMuteAuthority) (apphost.ActionReceipt, error) {
+func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection string, action linuxnative.AdminAction, requestKey string, authority stationGroupActionAuthority) (apphost.ActionReceipt, error) {
 	var out apphost.ActionReceipt
 	account, err := s.signedInAccount(ctx, connection)
 	if err != nil {
@@ -128,32 +145,39 @@ func (s *stationWechat) submitStationMute(ctx context.Context, connection string
 	if err != nil {
 		return out, err
 	}
-	if !slices.Contains(caps.ThreadNotificationTargets, "group") {
-		return out, errStationMuteUnsupported
+	if !stationGroupActionSupported(caps, action.Kind) {
+		return out, errStationGroupActionUnsupported
 	}
-	group, err := native.GroupNotification(ctx, in.Group)
+	group, err := native.GroupProfile(ctx, action.ThreadID)
 	if err != nil {
 		return out, err
 	}
 	if group.InGroup != nil && !*group.InGroup {
-		return out, errStationMuteTarget
+		return out, errStationGroupActionTarget
 	}
-	if _, err := s.signedInAccount(ctx, connection); err != nil {
+	current, err := s.signedInAccount(ctx, connection)
+	if err != nil {
 		return out, err
+	}
+	if current != account {
+		return out, errStationGroupActionTarget
 	}
 	w, err := s.worker(connection, true)
 	if err != nil {
 		return out, err
 	}
-	key := localCheckpointKey(connection, authority.requester, in.Key)
+	key := localCheckpointKey(connection, authority.requester, requestKey)
 	if authority.trace != "" {
-		key = localCheckpointKey(connection, authority.requester, "local_chat", authority.trace, in.Group)
+		key = localCheckpointKey(connection, authority.requester, "local_chat", authority.trace, action.ThreadID)
 	}
-	p := actionProposal{ID: "station-mute-" + key, Account: account, State: "unknown",
-		Request: linuxnative.AdminAction{Kind: "mute", ThreadID: in.Group, Muted: *in.Muted}}
-	intent := apphost.ActionIntent{ConnectionRef: s.connectionRef(connection, account), Action: "mute",
-		RequesterID: authority.requester, Source: "local_admin", SourceRequestID: p.ID, Target: in.Group,
-		Purpose: "owner_approved_group_notification", GrantVersion: "owner_approval:" + p.ID, IdempotencyKey: p.ID}
+	p := actionProposal{ID: "station-" + action.Kind + "-" + key, Account: account, State: "unknown", Request: action}
+	purpose := "owner_approved_group_notification"
+	if action.Kind == "rename" {
+		purpose = "owner_approved_group_rename"
+	}
+	intent := apphost.ActionIntent{ConnectionRef: s.connectionRef(connection, account), Action: action.Kind,
+		RequesterID: authority.requester, Source: "local_admin", SourceRequestID: p.ID, Target: action.ThreadID,
+		Purpose: purpose, GrantVersion: "owner_approval:" + p.ID, IdempotencyKey: p.ID}
 	if authority.trace != "" {
 		intent.Source, intent.SourceRequestID = "local_chat", authority.trace
 		intent.Purpose = "agent_group_notification"
@@ -165,7 +189,7 @@ func (s *stationWechat) submitStationMute(ctx context.Context, connection string
 		w.mu.Unlock()
 		return out, apphost.ErrLifecycleConflict
 	}
-	if authority.trace != "" && (authority.grant.IsZero() || !w.policy.GroupMuteGrants[in.Group].Equal(authority.grant)) {
+	if authority.trace != "" && (action.Kind != "mute" || authority.grant.IsZero() || !w.policy.GroupMuteGrants[action.ThreadID].Equal(authority.grant)) {
 		w.mu.Unlock()
 		return out, errStationMuteGrant
 	}
@@ -174,21 +198,21 @@ func (s *stationWechat) submitStationMute(ctx context.Context, connection string
 		w.mu.Unlock()
 		return out, err
 	}
-	if previous, ok := s.findStationMute(ledger, connection, p.ID, ""); ok {
+	if previous, ok := s.findStationGroupAction(ledger, connection, p.ID, "", action.Kind); ok {
 		w.mu.Unlock()
-		if previous.Request.ThreadID != in.Group || previous.Request.Muted != *in.Muted {
+		if previous.Request.ThreadID != action.ThreadID || previous.Request.Muted != action.Muted || previous.Request.Text != action.Text {
 			return out, apphost.ErrLifecycleConflict
 		}
-		return stationMuteReceipt(previous), nil
+		return stationGroupActionReceipt(previous), nil
 	}
 	if w.policy.Paused {
 		w.mu.Unlock()
 		return out, apphost.ErrLifecycleConflict
 	}
-	previous, ok := s.findStationMute(ledger, connection, "", in.Group)
-	if ok && !stationMuteFinal(previous.State) {
+	previous, ok := s.findStationGroupAction(ledger, connection, "", action.ThreadID, action.Kind)
+	if ok && !stationGroupActionFinal(previous.State) {
 		w.mu.Unlock()
-		return out, errStationMutePending
+		return out, errStationGroupActionPending
 	}
 	p.Created = time.Now().UTC()
 	if ok && !p.Created.After(previous.Created) {
@@ -202,29 +226,33 @@ func (s *stationWechat) submitStationMute(ctx context.Context, connection string
 	// Reservation is durable and unique before handing the action to native.
 	// A lost response leaves the original reservation for read-only inspection.
 	status, err := native.ExecuteAction(ctx, p.Request, intent.IdempotencyKey)
-	if err != nil || !wechatapp.MatchGroupMuteReceipt(status, p.Account, p.Request.ThreadID, "") {
-		return stationMuteReceipt(p), nil
+	if err != nil || !wechatapp.MatchGroupActionReceipt(status, p.Account, action.Kind, action.ThreadID, "") {
+		return stationGroupActionReceipt(p), nil
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, prior := range ledger.list(p.Account) {
-		if prior.ID != p.ID && prior.Result.ID == status.ID {
-			return stationMuteReceipt(p), nil
-		}
-	}
-	p.Result, p.State = status, status.State
-	if err := ledger.save(p); err != nil {
-		return out, err
-	}
-	return stationMuteReceipt(p), nil
+	return ledger.recordStationGroupReceipt(p, status)
 }
 
-func stationMuteFinal(state string) bool {
+func validStationGroupName(name string) bool {
+	return utf8.ValidString(name) && len(name) <= 512 && strings.TrimSpace(name) != "" && strings.IndexFunc(name, unicode.IsControl) < 0
+}
+
+func stationGroupActionKind(kind string) bool {
+	return kind == "mute" || kind == "rename"
+}
+
+func stationGroupActionSupported(caps linuxnative.Capabilities, kind string) bool {
+	if kind == "mute" {
+		return slices.Contains(caps.ThreadNotificationTargets, "group")
+	}
+	return kind == "rename" && slices.Contains(caps.GroupMutations, "rename")
+}
+
+func stationGroupActionFinal(state string) bool {
 	return state == "succeeded" || state == "failed" || state == "rejected" || state == "cancelled"
 }
 
-func stationMuteReceipt(p actionProposal) apphost.ActionReceipt {
-	out := apphost.ActionReceipt{ConnectionRef: p.AppAction.ConnectionRef, OperationID: p.ID, Action: "mute",
+func stationGroupActionReceipt(p actionProposal) apphost.ActionReceipt {
+	out := apphost.ActionReceipt{ConnectionRef: p.AppAction.ConnectionRef, OperationID: p.ID, Action: p.Request.Kind,
 		Target: p.Request.ThreadID, State: "submission_unknown", Lookup: "stored"}
 	if p.Result.ID != "" {
 		projectAccountAction(&out, p.Result)
@@ -232,9 +260,9 @@ func stationMuteReceipt(p actionProposal) apphost.ActionReceipt {
 	return out
 }
 
-func (s *stationWechat) lookupStationMute(ctx context.Context, ledger *actionLedger, p actionProposal) apphost.ActionReceipt {
-	out := stationMuteReceipt(p)
-	if p.Result.ID == "" || stationMuteFinal(p.State) {
+func (s *stationWechat) lookupStationGroupAction(ctx context.Context, ledger *actionLedger, p actionProposal) apphost.ActionReceipt {
+	out := stationGroupActionReceipt(p)
+	if stationGroupActionFinal(p.State) {
 		return out
 	}
 	native, err := s.WorkerSender(ctx, p.AppAction.ConnectionID)
@@ -242,30 +270,62 @@ func (s *stationWechat) lookupStationMute(ctx context.Context, ledger *actionLed
 		out.Lookup = "unavailable"
 		return out
 	}
-	status, err := native.InspectAction(ctx, p.Result.ID)
+	var status linuxnative.ActionStatus
+	if p.Result.ID == "" {
+		status, err = native.InspectGroupActionKey(ctx, p.AppAction.IdempotencyKey)
+		if errors.Is(err, linuxnative.ErrToolNotFound) {
+			return out
+		}
+	} else {
+		status, err = native.InspectAction(ctx, p.Result.ID)
+	}
 	if err != nil {
 		out.Lookup = "unavailable"
 		return out
 	}
-	if !wechatapp.MatchGroupMuteReceipt(status, p.Account, p.Request.ThreadID, p.Result.ID) {
+	if !wechatapp.MatchGroupActionReceipt(status, p.Account, p.Request.Kind, p.Request.ThreadID, p.Result.ID) {
 		out.Lookup = "identity_mismatch"
 		return out
 	}
-	// Persist only terminal progress here. Concurrent GETs cannot replace a
-	// confirmed receipt with an older queued response.
-	if stationMuteFinal(status.State) {
-		p.Result, p.State = status, status.State
-		if err := ledger.save(p); err != nil {
-			out.Lookup = "unavailable"
-			return out
+	out, err = ledger.recordStationGroupReceipt(p, status)
+	if err != nil {
+		out.Lookup = "unavailable"
+	}
+	return out
+}
+
+func (l *actionLedger) recordStationGroupReceipt(p actionProposal, status linuxnative.ActionStatus) (apphost.ActionReceipt, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	current := l.items[p.ID]
+	out := stationGroupActionReceipt(current)
+	if stationGroupActionFinal(current.State) {
+		return out, nil
+	}
+	if current.Result.ID != "" && current.Result.ID != status.ID {
+		out.Lookup = "identity_mismatch"
+		return out, nil
+	}
+	for id, prior := range l.items {
+		if id != p.ID && prior.Account == p.Account && prior.Result.ID == status.ID {
+			out.Lookup = "identity_mismatch"
+			return out, nil
+		}
+	}
+	// Keep the first verified native operation ID and terminal results durable.
+	// Concurrent reads cannot replace a terminal receipt with older progress.
+	if current.Result.ID == "" || stationGroupActionFinal(status.State) {
+		current.Result, current.State = status, status.State
+		if err := l.saveLocked(current); err != nil {
+			return out, err
 		}
 	}
 	out.Lookup = "platform"
 	projectAccountAction(&out, status)
-	return out
+	return out, nil
 }
 
-func (s *stationWechat) stationMuteLedger(connection string) (*actionLedger, bool, error) {
+func (s *stationWechat) stationGroupActionLedger(connection string) (*actionLedger, bool, error) {
 	if !artifactID(connection, "wechat-") {
 		return nil, false, apphost.ErrNotFound
 	}
@@ -280,30 +340,36 @@ func (s *stationWechat) stationMuteLedger(connection string) (*actionLedger, boo
 }
 
 func (s *stationWechat) ReadAction(ctx context.Context, connection, id string) (apphost.ActionReceipt, error) {
-	ledger, _, err := s.stationMuteLedger(connection)
+	ledger, _, err := s.stationGroupActionLedger(connection)
 	if err != nil {
 		return apphost.ActionReceipt{}, err
 	}
 	if ledger == nil || !validID(id) {
 		return apphost.ActionReceipt{}, apphost.ErrNotFound
 	}
-	p, ok := s.findStationMute(ledger, connection, id, "")
+	p, ok := s.findStationGroupAction(ledger, connection, id, "", "")
 	if !ok {
 		return apphost.ActionReceipt{}, apphost.ErrNotFound
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	return s.lookupStationMute(ctx, ledger, p), nil
+	return s.lookupStationGroupAction(ctx, ledger, p), nil
 }
 
-func (s *stationWechat) stationGroupNotification(w http.ResponseWriter, r *http.Request) {
+func (s *stationWechat) stationGroupDetails(kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.readStationGroupDetails(w, r, kind)
+	}
+}
+
+func (s *stationWechat) readStationGroupDetails(w http.ResponseWriter, r *http.Request, kind string) {
 	w.Header().Set("Cache-Control", "no-store")
 	id, group := r.PathValue("connection"), r.PathValue("group")
 	if !validStationGroup(group) || !artifactID(id, "wechat-") {
 		fail(w, http.StatusBadRequest, "连接或群编号无效")
 		return
 	}
-	ledger, paused, err := s.stationMuteLedger(id)
+	ledger, paused, err := s.stationGroupActionLedger(id)
 	if err != nil {
 		fail(w, http.StatusServiceUnavailable, "暂时无法核对该群操作记录")
 		return
@@ -312,11 +378,15 @@ func (s *stationWechat) stationGroupNotification(w http.ResponseWriter, r *http.
 	defer cancel()
 	result := map[string]any{}
 	pending := false
+	available := "can_change"
+	if kind == "rename" {
+		available = "can_rename"
+	}
 	if ledger != nil {
-		if p, ok := s.findStationMute(ledger, id, "", group); ok {
-			receipt := s.lookupStationMute(ctx, ledger, p)
+		if p, ok := s.findStationGroupAction(ledger, id, "", group, kind); ok {
+			receipt := s.lookupStationGroupAction(ctx, ledger, p)
 			result["operation"] = receipt
-			pending = !stationMuteFinal(receipt.State)
+			pending = !stationGroupActionFinal(receipt.State)
 		}
 	}
 	account, err := s.signedInAccount(ctx, id)
@@ -324,18 +394,21 @@ func (s *stationWechat) stationGroupNotification(w http.ResponseWriter, r *http.
 		var native *linuxnative.Sender
 		native, err = s.WorkerSender(ctx, id)
 		if err == nil && native.Account() == account {
-			var state linuxnative.GroupNotification
-			state, err = native.GroupNotification(ctx, group)
+			var state linuxnative.GroupProfile
+			state, err = native.GroupProfile(ctx, group)
 			if err == nil {
-				if state.Muted != nil {
+				if kind == "mute" && state.Muted != nil {
 					result["muted"] = *state.Muted
+				}
+				if kind == "rename" && state.Name != "" {
+					result["name"] = state.Name
 				}
 				canChange := !paused && !pending && (state.InGroup == nil || *state.InGroup)
 				if canChange {
 					caps, err := native.Capabilities(ctx)
-					canChange = err == nil && slices.Contains(caps.ThreadNotificationTargets, "group")
+					canChange = err == nil && stationGroupActionSupported(caps, kind)
 				}
-				result["can_change"] = canChange
+				result[available] = canChange
 				result["coverage"] = "cached"
 				respond(w, http.StatusOK, result)
 				return
@@ -343,7 +416,7 @@ func (s *stationWechat) stationGroupNotification(w http.ResponseWriter, r *http.
 		}
 	}
 	if result["operation"] != nil {
-		result["can_change"], result["coverage"] = false, "unavailable"
+		result[available], result["coverage"] = false, "unavailable"
 		respond(w, http.StatusOK, result)
 		return
 	}
@@ -351,5 +424,5 @@ func (s *stationWechat) stationGroupNotification(w http.ResponseWriter, r *http.
 		fail(w, http.StatusNotFound, "未能在该连接核对所选群")
 		return
 	}
-	fail(w, http.StatusServiceUnavailable, "暂时无法核对所选群的免打扰状态")
+	fail(w, http.StatusServiceUnavailable, "暂时无法核对所选群资料")
 }

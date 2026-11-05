@@ -50,6 +50,10 @@ func newActionLedger(dir string) (*actionLedger, error) {
 func (l *actionLedger) save(p actionProposal) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.saveLocked(p)
+}
+
+func (l *actionLedger) saveLocked(p actionProposal) error {
 	if len(l.items) >= 1000 {
 		if _, ok := l.items[p.ID]; !ok {
 			return errors.New("人工操作记录已达上限")

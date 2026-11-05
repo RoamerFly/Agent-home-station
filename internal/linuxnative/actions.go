@@ -30,14 +30,15 @@ type ActionStatus struct {
 	RemoteOutcome string `json:"remote_outcome,omitempty"`
 }
 
-type GroupNotification struct {
+type GroupProfile struct {
+	Name    string
 	Muted   *bool `json:"muted,omitempty"`
 	InGroup *bool `json:"-"`
 }
 
-// GroupNotification reads the exact account-scoped, cached group record.
-func (s *Sender) GroupNotification(ctx context.Context, id string) (GroupNotification, error) {
-	var out GroupNotification
+// GroupProfile reads the exact account-scoped, cached group record.
+func (s *Sender) GroupProfile(ctx context.Context, id string) (GroupProfile, error) {
+	var out GroupProfile
 	if !safeThreadID(id) || !strings.HasSuffix(id, "@chatroom") {
 		return out, errors.New("invalid group identity")
 	}
@@ -48,13 +49,14 @@ func (s *Sender) GroupNotification(ctx context.Context, id string) (GroupNotific
 	var detail struct {
 		ID      string `json:"id"`
 		RoomID  string `json:"roomId"`
+		Name    string `json:"name"`
 		Muted   *bool  `json:"muted"`
 		InGroup *bool  `json:"isInGroup"`
 	}
 	if json.Unmarshal(raw, &detail) != nil || detail.ID != id || detail.RoomID != id {
 		return out, errors.New("native group identity mismatch")
 	}
-	return GroupNotification{Muted: detail.Muted, InGroup: detail.InGroup}, nil
+	return GroupProfile{Name: detail.Name, Muted: detail.Muted, InGroup: detail.InGroup}, nil
 }
 
 func (s *Sender) ExecuteAction(ctx context.Context, input AdminAction, key string) (ActionStatus, error) {
@@ -113,6 +115,20 @@ func (s *Sender) InspectAction(ctx context.Context, id string) (ActionStatus, er
 	}
 	return s.actionStatus(raw)
 }
+
+// InspectGroupActionKey reads a native reservation without submitting it again.
+func (s *Sender) InspectGroupActionKey(ctx context.Context, key string) (ActionStatus, error) {
+	if !safeID(key) {
+		return ActionStatus{}, errors.New("invalid action key")
+	}
+	query := url.Values{"key": {key}}
+	raw, err := s.toolJSON(ctx, http.MethodGet, s.accountPath()+"/group-mutations/by-idempotency-key?"+query.Encode(), "", nil, "")
+	if err != nil {
+		return ActionStatus{}, err
+	}
+	return s.actionStatus(raw)
+}
+
 func (s *Sender) actionStatus(raw []byte) (ActionStatus, error) {
 	var operation struct {
 		ID        string `json:"id"`
@@ -124,6 +140,7 @@ func (s *Sender) actionStatus(raw []byte) (ActionStatus, error) {
 			Action        string `json:"action"`
 			Target        string `json:"targetId"`
 			Thread        string `json:"threadId"`
+			Group         string `json:"groupId"`
 			RemoteOutcome string `json:"remoteOutcome"`
 		} `json:"result"`
 	}
@@ -134,7 +151,7 @@ func (s *Sender) actionStatus(raw []byte) (ActionStatus, error) {
 		operation.Result.Code = "native_operation_result"
 	}
 	result := operation.Result
-	if result.Thread != "" && result.Target != result.Thread {
+	if result.Thread != "" && result.Target != result.Thread || result.Group != "" && result.Target != result.Group {
 		result.Target = ""
 	}
 	return ActionStatus{ID: operation.ID, State: operation.State, Kind: operation.Kind, Code: result.Code,

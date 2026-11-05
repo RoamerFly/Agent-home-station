@@ -92,19 +92,19 @@ func (t *localToolSet) localWechatGroupMute(ctx context.Context, raw json.RawMes
 	var receipt apphost.ActionReceipt
 	var err error
 	if in.Action == "status" {
-		ledger, _, readErr := t.wechat.stationMuteLedger(in.Connection)
+		ledger, _, readErr := t.wechat.stationGroupActionLedger(in.Connection)
 		if readErr != nil {
 			return "", stationMuteToolFailure(readErr)
 		}
 		receipt.State = "not_submitted"
 		if ledger != nil {
-			if previous, ok := t.wechat.findStationMute(ledger, in.Connection, "", in.Group); ok {
-				receipt = t.wechat.lookupStationMute(ctx, ledger, previous)
+			if previous, ok := t.wechat.findStationGroupAction(ledger, in.Connection, "", in.Group, "mute"); ok {
+				receipt = t.wechat.lookupStationGroupAction(ctx, ledger, previous)
 			}
 		}
 	} else {
-		receipt, err = t.wechat.submitStationMute(ctx, in.Connection, stationMuteInput{Group: in.Group, Muted: in.Muted},
-			stationMuteAuthority{requester: t.access.ownerID, trace: t.traceID, grant: grant, active: func(ctx context.Context) bool {
+		receipt, err = t.wechat.submitStationGroupAction(ctx, in.Connection, linuxnative.AdminAction{Kind: "mute", ThreadID: in.Group, Muted: *in.Muted}, "",
+			stationGroupActionAuthority{requester: t.access.ownerID, trace: t.traceID, grant: grant, active: func(ctx context.Context) bool {
 				return t.checkWechatOwner(ctx) == nil
 			}})
 		if err != nil {
@@ -121,11 +121,11 @@ func stationMuteToolFailure(err error) error {
 	switch {
 	case errors.Is(err, errStationMuteGrant):
 		return errStationMuteGrant
-	case errors.Is(err, errStationMutePending):
+	case errors.Is(err, errStationGroupActionPending):
 		return &stationContactError{"wechat_group_mute_pending", "该群已有结果待核对的操作，请查询原操作状态。"}
-	case errors.Is(err, errStationMuteUnsupported):
+	case errors.Is(err, errStationGroupActionUnsupported):
 		return &stationContactError{"wechat_group_mute_unsupported", "当前微信后台未声明群免打扰能力。"}
-	case errors.Is(err, errStationMuteTarget), errors.Is(err, linuxnative.ErrToolNotFound), errors.Is(err, apphost.ErrNotFound):
+	case errors.Is(err, errStationGroupActionTarget), errors.Is(err, linuxnative.ErrToolNotFound), errors.Is(err, apphost.ErrNotFound):
 		return &stationContactError{"wechat_group_mute_target_invalid", "未能在该连接核对所选群。"}
 	case errors.Is(err, apphost.ErrLifecycleConflict), errors.Is(err, errContactLogin):
 		return &stationContactError{"wechat_group_mute_conflict", "连接已暂停、未登录或本轮已改变目标状态，请查询原操作。"}

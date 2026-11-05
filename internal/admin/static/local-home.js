@@ -382,7 +382,7 @@
     control.hidden = true;
     panel.append(form, note, records, control);
     let cursor = "", hasNext = false, busy = false, appliedSearch = "", appliedLimit = 50;
-    let selected = null, notification = null, selectedAction = null, controlBusy = false, needsRefresh = false;
+    let selected = null, notification = null, profile = null, selectedAction = null, renameDraft = null, controlBusy = false, needsRefresh = false, renameNeedsRefresh = false;
     const base = "/api/apps/wechat/connections/" + encodeURIComponent(id);
     function receiptLabel(operation) {
       if (!operation || !operation.state) return "尚无操作记录";
@@ -412,33 +412,69 @@
       refresh.disabled ||= controlBusy;
       control.append(refresh);
       if (needsRefresh) {
-        control.append(appElement("small", "提交结果暂不可确认，请先刷新状态；不会自动重复提交。"));
-        return;
+        control.append(appElement("small", "免打扰操作暂不可确认，请先刷新状态；不会自动重复提交。"));
+      } else if (notification?.can_change !== true) {
+        control.append(appElement("small", "当前连接不能修改这个群的免打扰；仍可刷新查看已有操作回执。"));
+      } else if (isOutstanding(operation)) {
+        control.append(appElement("small", "这项免打扰操作仍在核对中；刷新只查询状态，不会重复提交。"));
+      } else {
+        const choices = appElement("div", "", "app-worker-actions");
+        const mute = appSetupButton("设为免打扰", () => { selectedAction = true; renderControl(); });
+        const unmute = appSetupButton("取消免打扰", () => { selectedAction = false; renderControl(); });
+        mute.disabled ||= controlBusy;
+        unmute.disabled ||= controlBusy;
+        choices.append(mute, unmute);
+        control.append(choices);
+        if (typeof selectedAction === "boolean") {
+          const confirmation = appElement("div", "", "app-worker-actions");
+          confirmation.append(appElement("small", `将“${selected.display_name || selected.id}”${selectedAction ? "设为免打扰" : "取消免打扰"}。`));
+          const confirm = appSetupButton("确认提交", () => submitAction());
+          const cancel = appSetupButton("取消", () => { selectedAction = null; renderControl(); });
+          confirm.disabled ||= controlBusy;
+          cancel.disabled ||= controlBusy;
+          confirmation.append(confirm, cancel);
+          control.append(confirmation);
+        }
       }
-      if (notification?.can_change !== true) {
-        control.append(appElement("small", "当前连接不能修改这个群聊；仍可刷新查看已有操作回执。"));
-        return;
+      const renameOperation = profile?.operation || null;
+      if (!profile || !(profile.can_rename === true || renameOperation)) return;
+      const renameSection = appElement("div", "", "details-grid");
+      const name = typeof profile.name === "string" ? profile.name : "";
+      renameSection.append(appElement("strong", "群名称"), appElement("small", (name || "群名称尚未取得") + (name && profile.coverage === "cached" ? "（来自本机缓存）" : "")));
+      if (renameOperation) renameSection.append(appElement("small", receiptLabel(renameOperation) + (renameOperation.operation_id ? " · 操作 " + renameOperation.operation_id : "")));
+      const refreshProfile = appSetupButton(controlBusy ? "正在刷新…" : "刷新群资料", () => loadProfile());
+      refreshProfile.disabled ||= controlBusy;
+      renameSection.append(refreshProfile);
+      if (renameNeedsRefresh) {
+        renameSection.append(appElement("small", "改名结果暂不可确认，请先刷新群资料；不会自动重复提交。"));
+      } else if (isOutstanding(renameOperation)) {
+        renameSection.append(appElement("small", "这次改名仍在核对中；刷新只查询原操作，不会重复提交。"));
+      } else if (profile?.can_rename === true) {
+        const startRename = appSetupButton("修改群名称", () => { renameDraft = name; renderControl(); });
+        startRename.disabled ||= controlBusy;
+        renameSection.append(startRename);
+        if (renameDraft !== null) {
+          const input = document.createElement("input");
+          input.value = renameDraft;
+          input.setAttribute("aria-label", "新的群名称");
+          const confirmation = appElement("div", "", "app-worker-actions");
+          const confirmationCopy = appElement("small", `将“${selected.display_name || selected.id}”改为“${renameDraft || "新名称"}”。`);
+          input.addEventListener("input", () => {
+            renameDraft = input.value;
+            confirmationCopy.textContent = `将“${selected.display_name || selected.id}”改为“${renameDraft || "新名称"}”。`;
+          });
+          confirmation.append(input, confirmationCopy);
+          const confirm = appSetupButton("确认改名", () => submitRename());
+          const cancel = appSetupButton("取消改名", () => { renameDraft = null; renderControl(); });
+          confirm.disabled ||= controlBusy;
+          cancel.disabled ||= controlBusy;
+          confirmation.append(confirm, cancel);
+          renameSection.append(confirmation);
+        }
+      } else {
+        renameSection.append(appElement("small", "当前连接不能修改这个群名称；仍可刷新查看已有操作回执。"));
       }
-      if (isOutstanding(operation)) {
-        control.append(appElement("small", "这项群聊操作仍在核对中；刷新只查询状态，不会重复提交。"));
-        return;
-      }
-      const choices = appElement("div", "", "app-worker-actions");
-      const mute = appSetupButton("设为免打扰", () => { selectedAction = true; renderControl(); });
-      const unmute = appSetupButton("取消免打扰", () => { selectedAction = false; renderControl(); });
-      mute.disabled ||= controlBusy;
-      unmute.disabled ||= controlBusy;
-      choices.append(mute, unmute);
-      control.append(choices);
-      if (typeof selectedAction !== "boolean") return;
-      const confirmation = appElement("div", "", "app-worker-actions");
-      confirmation.append(appElement("small", `将“${selected.display_name || selected.id}”${selectedAction ? "设为免打扰" : "取消免打扰"}。`));
-      const confirm = appSetupButton("确认提交", () => submitAction());
-      const cancel = appSetupButton("取消", () => { selectedAction = null; renderControl(); });
-      confirm.disabled ||= controlBusy;
-      cancel.disabled ||= controlBusy;
-      confirmation.append(confirm, cancel);
-      control.append(confirmation);
+      control.append(renameSection);
     }
     async function loadNotification() {
       if (!selected || controlBusy) return;
@@ -455,14 +491,33 @@
         renderControl();
       }
     }
+    async function loadProfile() {
+      if (!selected || controlBusy) return;
+      controlBusy = true;
+      renderControl();
+      try {
+        profile = await request(base + "/groups/" + encodeURIComponent(selected.id) + "/profile");
+        renameDraft = null;
+        renameNeedsRefresh = false;
+      } catch (error) {
+        appFeedback(error.message, true);
+      } finally {
+        controlBusy = false;
+        renderControl();
+      }
+    }
     async function selectGroup(item) {
       if (controlBusy) return;
       selected = item;
       notification = null;
+      profile = null;
       selectedAction = null;
+      renameDraft = null;
       needsRefresh = false;
+      renameNeedsRefresh = false;
       renderControl();
       await loadNotification();
+      await loadProfile();
     }
     async function submitAction() {
       if (!selected || typeof selectedAction !== "boolean" || controlBusy) return;
@@ -477,6 +532,30 @@
       } catch (error) {
         selectedAction = null;
         needsRefresh = true;
+        appFeedback(error.message, true);
+      } finally {
+        controlBusy = false;
+        renderControl();
+      }
+    }
+    async function submitRename() {
+      if (!selected || controlBusy) return;
+      const name = renameDraft || "";
+      if (!name.trim() || new TextEncoder().encode(name).length > 512 || /\p{Cc}/u.test(name)) {
+        appFeedback("新群名称须非空、最多 512 UTF-8 字节，且不能含控制字符。", true);
+        return;
+      }
+      controlBusy = true;
+      renderControl();
+      try {
+        const receipt = await request(base + "/group-actions", { method: "POST", body: JSON.stringify({
+          action: "rename", group_id: selected.id, name, request_key: crypto.randomUUID()
+        }) });
+        profile = { ...(profile || {}), operation: receipt };
+        renameDraft = null;
+      } catch (error) {
+        renameDraft = null;
+        renameNeedsRefresh = true;
         appFeedback(error.message, true);
       } finally {
         controlBusy = false;
