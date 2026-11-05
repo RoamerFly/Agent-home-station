@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -139,6 +139,7 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
 }
 
 if($WithWeChatRuntime -and -not $LocalStation){throw 'WithWeChatRuntime is only valid with -LocalStation.'}
+if($WithRVCBackend -and -not $LocalStation){throw 'WithRVCBackend is only valid with -LocalStation.'}
 if($WithWeChatRuntime){$WithWeChatApp=$true}
 # A document converter is intentionally opt-in.  The three existing source
 # directory arguments are the opt-in contract: when absent, a LocalStation
@@ -245,13 +246,45 @@ if($Test){
 $broker=Join-Path $OutputDirectory 'runtimes\windows-agent-host'
 New-Item -ItemType Directory -Force -Path $broker | Out-Null
 foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_host.pyw')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
+if($WithRVCBackend){
+ $control=Join-Path $OutputDirectory 'runtimes\windows-station-rvc'
+ $files=[ordered]@{}
+ foreach($name in @('managed_music_runner.py','music_account_scope.py','process_window.py','rvc_backend.py','rvc_cover.py',
+                    'rvc_pitch.py','rvc_profiles.py','rvc_recovery.py','rvc_voice.py','rvc_windows.py','singing_config.py',
+                    'singing_voice.py','station_rvc.py','windows_lpac.py','yue_bridge.py','yue_recovery.py','yue_sampling.py')){
+  $files[$name]=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+ }
+ $manifest=([ordered]@{schema_version=1;platform='windows-x64';policy='station-rvc-v1';files=$files}|ConvertTo-Json -Depth 4)
+ Assert-NoReparsePointAncestor $control
+ $manifestPath=Join-Path $control 'runtime-manifest.json'
+ if(Test-Path -LiteralPath $control){
+  Assert-NoReparsePointAncestor $manifestPath
+  if(-not(Test-Path -LiteralPath $manifestPath -PathType Leaf) -or [IO.File]::ReadAllText($manifestPath) -cne $manifest){
+   throw 'Existing standalone RVC control package differs; use a fresh output directory.'
+  }
+  if(@(Get-ChildItem -LiteralPath $control -Force).Count -ne ($files.Count+1)){throw 'Unexpected files in the standalone RVC control package.'}
+  foreach($name in $files.Keys){
+   $staged=Join-Path $control $name
+   Assert-NoReparsePointAncestor $staged
+   if((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLowerInvariant() -ne $files[$name]){throw 'Standalone RVC control integrity check failed.'}
+  }
+ }else{
+  New-Item -ItemType Directory -Path $control | Out-Null
+  foreach($name in $files.Keys){
+   $staged=Join-Path $control $name
+   Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $staged
+   if((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLowerInvariant() -ne $files[$name]){throw 'Standalone RVC source changed during staging.'}
+  }
+  [IO.File]::WriteAllText($manifestPath,$manifest,[Text.UTF8Encoding]::new($false))
+ }
+}
 # Document Workshop uses the same project-owned broker as every other local
 # tool.  A normal LocalStation preview only needs the hash-pinned Python CLI;
 # it deliberately carries no PDF/OCR dependencies.  Supplying the existing
 # reviewed package and font source directories explicitly stages the bounded
 # native PDF runtime beside that CLI.  Portable bundles use the shared resource
 # preparer below, so avoid repeating either integrity-checked operation here.
-if($LocalStation -and ($WithDocumentWorkshop -or $WithAudioWorkshop) -and -not $Portable){
+if($LocalStation -and ($WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend) -and -not $Portable){
  $runtimeRoot=Join-Path $OutputDirectory 'runtimes'
  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_windows_python.py') --target (Join-Path $runtimeRoot 'windows-python-cli') --cache (Join-Path $workspace 'temp\\windows-runtime-downloads')
  if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed for the selected project tools.'}
