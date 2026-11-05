@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "platform": "windows-amd64",
+  "components": [
+    {
+      "id": "native-client",
+      "state": "legacy-host",
+      "build_entrypoint": "scripts/Build-WindowsNative.ps1"
+    },
+    {
+      "id": "wechat-manager",
+      "state": "legacy-host",
+      "build_entrypoint": "cmd/wechat-admin"
+    }
+  ],
+  "private_data": "host-owned"
+}

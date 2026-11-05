@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "kind": "host-compatibility",
+  "host_entrypoint": "wechat-compatibility",
+  "identity_source": "adapter/identity.go",
+  "connection_authority": "host",
+  "runtime_migration": "pending"
+}

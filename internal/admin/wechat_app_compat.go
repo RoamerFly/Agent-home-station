@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 )
 
@@ -13,20 +14,15 @@ type wechatCompatibility struct {
 	accounts *accountRegistry
 }
 
-const (
-	wechatAppID          = "wechat"
-	wechatInstallationID = "wechat-legacy"
-)
-
 func (w wechatCompatibility) registration() apphost.Registration {
 	return apphost.Registration{
-		Application: apphost.Application{ID: wechatAppID, Name: "微信", InstallationID: wechatInstallationID, Registration: "legacy"},
+		Application: wechatapp.Application(),
 		Provider:    w,
 	}
 }
 
 func wechatConnectionID(accountID string) string {
-	return "wechat-" + accountDirectory(accountID)
+	return wechatapp.ConnectionID(accountID)
 }
 
 func (w wechatCompatibility) connection(item *accountRuntime) apphost.Connection {

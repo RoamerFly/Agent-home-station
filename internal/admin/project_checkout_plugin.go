@@ -102,7 +102,7 @@ func (r checkoutContextReader) Read(p []byte) (int, error) {
 }
 
 func copyCheckedPluginFile(ctx context.Context, source, stage *os.Root, name, want string, total *int64) error {
-	if name != "plugin.json" && !pluginCheckoutSafePath(name) {
+	if !pluginCheckoutSafePath(name) {
 		return errors.New("plugin_checkout_source_path_invalid")
 	}
 	input, err := workspacefs.OpenRegular(source, filepath.FromSlash(name))

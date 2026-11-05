@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
@@ -22,6 +23,8 @@ type localHomeService struct {
 	root          string
 	dataDir       string
 	chatAvailable bool
+	appCatalog    string
+	appInstallMu  sync.Mutex
 }
 
 // NewLocalHomeHandler provides the first application-independent station
@@ -66,6 +69,8 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ..
 	}))
 	s.appRoutes(mux, apphost.Registry{})
 	home := &localHomeService{identity: newFishIdentityRegistry(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true}
+	home.configureAppCatalog()
+	home.appInstallRoutes(s, mux)
 	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
 	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
 	chat := newLocalChatService(home)
@@ -126,6 +131,8 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ..
 
 func (s *Server) localHomeRoutes(mux *http.ServeMux, identity *fishIdentityRegistry, root, dataDir string) {
 	home := &localHomeService{identity: identity, root: root, dataDir: dataDir}
+	home.configureAppCatalog()
+	home.appInstallRoutes(s, mux)
 	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
 	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
 }

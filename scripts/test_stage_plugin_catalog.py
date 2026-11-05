@@ -209,12 +209,39 @@ class StagePluginCatalogTests(unittest.TestCase):
                 with self.assertRaisesRegex(stage_plugin_catalog.StageError, "plugin_links_forbidden"):
                     stage_plugin_catalog.stage(source, root / "out")
 
-    def test_real_official_catalog_stages_nine_packages_without_host_go_files(self):
+    def test_application_descriptor_uses_same_integrity_and_update_contract(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source, output = root / "apps", root / "out"
+            source.mkdir()
+            package = write_package(source, name="wechat")
+            (package / "plugin.json").rename(package / "app.json")
+            first = stage_plugin_catalog.stage(source, output, descriptor="app.json")
+            self.assertEqual(first["packages"], ["wechat"])
+            self.assertFalse((output / "wechat" / "plugin.json").exists())
+            self.assertTrue(stage_plugin_catalog.stage(source, output, descriptor="app.json")["idempotent"])
+            member = package / "runtime" / "main.py"
+            member.write_bytes(b"print('updated')\n")
+            with self.assertRaisesRegex(stage_plugin_catalog.StageError, "hash_mismatch"):
+                stage_plugin_catalog.stage(source, output, True, descriptor="app.json")
+            manifest = package / "app.json"
+            data = json.loads(manifest.read_text(encoding="utf8"))
+            data["files"]["runtime/main.py"] = hashlib.sha256(member.read_bytes()).hexdigest()
+            manifest.write_text(json.dumps(data), encoding="utf8")
+            updated = stage_plugin_catalog.stage(source, output, True, descriptor="app.json")
+            self.assertTrue(updated["updated"])
+            self.assertEqual((output / "wechat" / "runtime" / "main.py").read_bytes(), member.read_bytes())
+            self.assertTrue(stage_plugin_catalog.stage(source, output, True, descriptor="app.json")["idempotent"])
+
+    def test_real_official_catalog_stages_packages_without_host_go_files(self):
         source = SCRIPT.parents[1] / "plugins"
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "plugins"
             result = stage_plugin_catalog.stage(source, output)
-            self.assertEqual(len(result["packages"]), 9)
+            self.assertEqual(set(result["packages"]), {
+                "document-workshop", "external-tools", "media-understanding", "mobile-control", "music",
+                "project-development", "share-reader", "speech", "visual-generation", "web-search",
+            })
             self.assertFalse((output / "catalog.go").exists())
             self.assertFalse((output / "catalog_test.go").exists())
             for package in result["packages"]:

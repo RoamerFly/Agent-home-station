@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 # Keep project-local SDK/model caches outside `go test ./...` discovery.
@@ -23,6 +23,11 @@ New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDir
 if(-not $LocalStation){
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'plugins') --output (Join-Path $OutputDirectory 'plugins')
  if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
+}
+# Adding application source does not connect an account or enable its runtime.
+if((-not $LocalStation) -or $WithWeChatApp){
+ & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'connected-apps') --output (Join-Path $OutputDirectory 'connected-apps') --descriptor app.json
+ if($LASTEXITCODE -ne 0){throw 'Application source staging failed; use a fresh output directory.'}
 }
 if(-not(Test-Path -LiteralPath $archive)){
  Invoke-WebRequest -Uri ('https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/'+$version+'/microsoft.web.webview2.'+$version+'.nupkg') -OutFile $archive

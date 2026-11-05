@@ -8,14 +8,14 @@ import (
 	"strconv"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
 func wechatConnectionRef(account string) apphost.ConnectionRef {
-	return apphost.ConnectionRef{AppID: wechatAppID, InstallationID: wechatInstallationID,
-		ConnectionID: wechatConnectionID(account), AccountID: account}
+	return wechatapp.ConnectionRef(account)
 }
 
 func (w wechatCompatibility) ReadEvent(ctx context.Context, connection, thread, message string) (apphost.Event, error) {
