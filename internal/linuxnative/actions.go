@@ -28,6 +28,9 @@ type ActionStatus struct {
 	Action        string `json:"action,omitempty"`
 	Target        string `json:"target,omitempty"`
 	RemoteOutcome string `json:"remote_outcome,omitempty"`
+	ThreadID      string `json:"thread_id,omitempty"`
+	MessageID     string `json:"message_id,omitempty"`
+	ServerID      string `json:"server_id,omitempty"`
 }
 
 type GroupProfile struct {
@@ -138,12 +141,15 @@ func (s *Sender) actionStatus(raw []byte) (ActionStatus, error) {
 		State     string `json:"state"`
 		Kind      string `json:"kind"`
 		Result    struct {
-			Code          string `json:"code"`
-			Action        string `json:"action"`
-			Target        string `json:"targetId"`
-			Thread        string `json:"threadId"`
-			Group         string `json:"groupId"`
-			RemoteOutcome string `json:"remoteOutcome"`
+			Code          string          `json:"code"`
+			Action        string          `json:"action"`
+			Target        string          `json:"targetId"`
+			Thread        string          `json:"threadId"`
+			Group         string          `json:"groupId"`
+			Message       json.RawMessage `json:"messageId"`
+			Server        json.RawMessage `json:"serverId"`
+			Status        json.RawMessage `json:"status"`
+			RemoteOutcome string          `json:"remoteOutcome"`
 		} `json:"result"`
 	}
 	if json.Unmarshal(raw, &operation) != nil || !safeID(operation.ID) || operation.AccountID != "" && operation.AccountID != s.account {
@@ -153,9 +159,21 @@ func (s *Sender) actionStatus(raw []byte) (ActionStatus, error) {
 		operation.Result.Code = "native_operation_result"
 	}
 	result := operation.Result
+	var messageID, serverID string
+	if operation.Kind == "message_recall" {
+		_ = json.Unmarshal(result.Message, &messageID)
+		_ = json.Unmarshal(result.Server, &serverID)
+		if result.Code == "" {
+			var status string
+			if json.Unmarshal(result.Status, &status) == nil && len(status) <= 128 {
+				result.Code = status
+			}
+		}
+	}
 	if result.Thread != "" && result.Target != result.Thread || result.Group != "" && result.Target != result.Group {
 		result.Target = ""
 	}
 	return ActionStatus{ID: operation.ID, State: operation.State, Kind: operation.Kind, Code: result.Code,
-		AccountID: operation.AccountID, Action: result.Action, Target: result.Target, RemoteOutcome: result.RemoteOutcome}, nil
+		AccountID: operation.AccountID, Action: result.Action, Target: result.Target, RemoteOutcome: result.RemoteOutcome,
+		ThreadID: result.Thread, MessageID: messageID, ServerID: serverID}, nil
 }

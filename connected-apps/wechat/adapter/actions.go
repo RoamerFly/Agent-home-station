@@ -41,6 +41,14 @@ func MatchGroupActionReceipt(status linuxnative.ActionStatus, account, action, g
 		(status.State != "succeeded" || status.RemoteOutcome == "accepted")
 }
 
+// MatchRecallReceipt requires the same original outgoing message and remote confirmation.
+func MatchRecallReceipt(status linuxnative.ActionStatus, account string, request linuxnative.AdminAction, operation string) bool {
+	return status.AccountID == account && status.Kind == "message_recall" && status.ID != "" &&
+		(operation == "" || status.ID == operation) && status.ThreadID == request.ThreadID &&
+		status.MessageID == request.MessageID && status.ServerID == request.ServerID &&
+		(status.State != "succeeded" || status.RemoteOutcome == "accepted" || status.RemoteOutcome == "confirmed")
+}
+
 func AccountAction(ctx context.Context, raw json.RawMessage, host ActionHost) (string, error) {
 	var action linuxnative.AdminAction
 	if json.Unmarshal(raw, &action) != nil ||

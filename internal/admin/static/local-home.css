@@ -193,6 +193,11 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 #artifact-result { overflow-wrap: anywhere; }
 .work-records { display: grid; gap: 6px; }
 .work-record { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.delivery-records .work-records { grid-template-columns: minmax(0, 1fr); }
+.delivery-records .work-record { min-width: 0; }
+.delivery-recall { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 1 100%; min-width: 0; max-width: 100%; }
+.delivery-recall:empty { display: none; }
+.delivery-recall select { min-width: 0; max-width: 100%; }
 .app-login { flex: 0 0 100%; }
 .app-login img { display: block; width: min(148px, 100%); aspect-ratio: 1; margin-top: 8px; background: white; object-fit: contain; border-radius: 6px; }
 .local-tab:focus-visible, .apps-view .button:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }

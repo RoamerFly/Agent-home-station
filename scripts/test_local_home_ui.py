@@ -61,8 +61,8 @@ def assert_worker_controls_fit(page):
     clipped = page.evaluate("""() => {
         const panel = document.querySelector('.app-worker');
         const area = panel.getBoundingClientRect();
-        return [...panel.querySelectorAll('button, textarea, input')].filter((node) => {
-            if (node.closest('details:not([open])')) return false;
+        return [...panel.querySelectorAll('button, textarea, input, .delivery-recall select')].filter((node) => {
+            if (!node.getClientRects().length || node.closest('details:not([open])')) return false;
             const bounds = node.getBoundingClientRect();
             return bounds.left < area.left - 1 || bounds.right > area.right + 1;
         }).map((node) => node.getAttribute('aria-label') || node.textContent.trim());
@@ -601,13 +601,44 @@ def verify(binary, output):
                 page.get_by_role("button", name="启用媒体理解", exact=True).wait_for()
                 page.get_by_text("媒体理解", exact=True).click()
                 # Reading delivery history and receipt checks must never post a send.
-                receipt_state = {"version": "first", "reads": 0, "checks": 0, "stops": 0, "resumes": 0, "continuation": None}
+                receipt_state = {"version": "first", "reads": 0, "checks": 0, "stops": 0, "resumes": 0, "continuation": None,
+                                 "recall_queries": [], "recall_posts": []}
                 receipts_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/receipts(?:[/?].*)?$")
                 pending_receipt = {"idempotency_key": "synthetic-send", "kind": "voice", "resumed_from": "synthetic-original",
                     "conversation_id": "synthetic-room@chatroom", "state": "submission_unknown",
-                    "lookup": "stored", "operation_id": "synthetic-job", "accepted_parts": [{"index": 0, "server_id": "101"}],
-                    "unconfirmed_parts": [{"index": 1, "state": "submitting"}, {"index": 2, "state": "cancelled"}]}
+                    "lookup": "stored", "operation_id": "synthetic-job", "accepted_parts": [{"index": 0, "server_id": "101"}, {"index": 1, "server_id": "102"}],
+                    "unconfirmed_parts": [{"index": 2, "state": "submitting"}, {"index": 3, "state": "cancelled"}]}
+                accepted_receipt = {"idempotency_key": "synthetic-direct", "kind": "file", "conversation_id": "synthetic-direct@chatroom",
+                    "state": "accepted", "server_id": "201", "lookup": "platform"}
                 def receipt_records(route):
+                    parsed = urlparse(route.request.url)
+                    if "/recall" in parsed.path:
+                        params = parse_qs(parsed.query)
+                        server_id = params.get("server_id", [""])[0]
+                        cursor = params.get("cursor", [""])[0]
+                        if route.request.method == "POST":
+                            assert parsed.path.endswith("/receipts/synthetic-send/recall")
+                            assert route.request.headers.get("x-csrf-token"), "recall lacked owner CSRF"
+                            body = route.request.post_data_json
+                            assert body == {"server_id": "102", "message_id": "msg_voice_part"}, "recall must target only the selected accepted part"
+                            receipt_state["recall_posts"].append(body)
+                            fulfill_json({"operation_id": "recall-102", "state": "submitted_pending", "action": "recall"}, status=202)(route)
+                            return
+                        assert route.request.method == "GET", "recall lookup must be read-only before confirmation"
+                        receipt_state["recall_queries"].append((parsed.path, server_id, cursor))
+                        if parsed.path.endswith("/receipts/synthetic-send/recall") and server_id == "102":
+                            if cursor == "part-102-next":
+                                fulfill_json({"message_id": "msg_voice_part"})(route)
+                            elif any(post["server_id"] == "102" for post in receipt_state["recall_posts"]):
+                                fulfill_json({"operation": {"operation_id": "recall-102", "state": "submitted_pending"}})(route)
+                            else:
+                                fulfill_json({"next_cursor": "part-102-next"})(route)
+                            return
+                        if parsed.path.endswith("/receipts/synthetic-direct/recall") and server_id == "201":
+                            fulfill_json({"operation": {"operation_id": "recall-201", "state": "unknown"}})(route)
+                            return
+                        fulfill_json({})(route)
+                        return
                     if route.request.url.endswith("/receipts/synthetic-send/cancel"):
                         assert route.request.method == "POST"
                         assert route.request.headers.get("x-csrf-token"), "stop lacked owner CSRF"
@@ -637,7 +668,7 @@ def verify(binary, output):
                         receipt_state["reads"] += 1
                         if "after=synthetic-send" in route.request.url:
                             receipt_state["version"] = "changed"
-                        fulfill_json({"items": [pending_receipt], "snapshot": receipt_state["version"],
+                        fulfill_json({"items": [pending_receipt, accepted_receipt], "snapshot": receipt_state["version"],
                             "next_after": "synthetic-send" if receipt_state["version"] == "first" else "",
                             "coverage": "current_worker_checkpoint"})(route)
                 page.route(receipts_pattern, receipt_records)
@@ -647,18 +678,39 @@ def verify(binary, output):
                 page.get_by_role("button", name="继续查看", exact=True).click()
                 page.get_by_text("投递记录已更新，请重新查看。", exact=True).wait_for()
                 page.get_by_role("button", name="重新查看", exact=True).click()
-                page.get_by_role("button", name="停止本回合投递", exact=True).click()
-                page.get_by_role("button", name="停止意图已保存", exact=True).wait_for()
-                assert page.get_by_role("button", name="停止意图已保存", exact=True).is_disabled()
-                page.get_by_role("button", name="核对回执", exact=True).click()
-                page.get_by_text(re.compile("语音.*正在停止，等待回执.*已接受 1 段.*待核对 1 段.*已取消 1 段")).wait_for()
+                # A delivery can be recalled only after its server receipt is located. For multipart sends,
+                # choose exactly one accepted part, never submit a bulk recall.
+                multipart_row = page.locator(".work-record").filter(has_text="synthetic-room@chatroom")
+                part_picker = multipart_row.get_by_label("选择要撤回的已确认消息", exact=True)
+                part_picker.select_option("102")
+                multipart_row.get_by_role("button", name="定位可撤回消息", exact=True).click()
+                page.get_by_role("button", name="继续查找", exact=True).wait_for()
+                assert not receipt_state["recall_posts"], "read-only lookup must not recall a message"
+                page.get_by_role("button", name="继续查找", exact=True).click()
+                page.get_by_role("button", name="确认撤回", exact=True).wait_for()
+                page.get_by_role("button", name="确认撤回", exact=True).click()
+                page.get_by_role("button", name="核对撤回状态", exact=True).wait_for()
+                assert receipt_state["recall_posts"] == [{"server_id": "102", "message_id": "msg_voice_part"}]
+                # Pending and unknown operations remain read-only lookup states; neither may create a duplicate POST.
+                page.get_by_role("button", name="核对撤回状态", exact=True).click()
+                direct_row = page.locator(".work-record").filter(has_text="synthetic-direct@chatroom")
+                direct_row.get_by_role("button", name="定位可撤回消息", exact=True).click()
+                direct_row.get_by_role("button", name="核对撤回状态", exact=True).wait_for()
+                assert len(receipt_state["recall_posts"]) == 1
+                assert any(path.endswith("/receipts/synthetic-send/recall") and server == "102" for path, server, _ in receipt_state["recall_queries"])
+                assert any(path.endswith("/receipts/synthetic-direct/recall") and server == "201" for path, server, _ in receipt_state["recall_queries"])
+                multipart_row.get_by_role("button", name="停止本回合投递", exact=True).click()
+                multipart_row.get_by_role("button", name="停止意图已保存", exact=True).wait_for()
+                assert multipart_row.get_by_role("button", name="停止意图已保存", exact=True).is_disabled()
+                multipart_row.get_by_role("button", name="核对回执", exact=True).click()
+                page.get_by_text(re.compile("语音.*正在停止，等待回执.*已接受 2 段.*待核对 1 段.*已取消 1 段")).wait_for()
                 assert receipt_state["reads"] == 3 and receipt_state["checks"] == 1 and receipt_state["stops"] == 1
                 page.get_by_role("button", name="续发未发送片段", exact=True).click()
                 page.get_by_role("button", name="续办请求已保存", exact=True).wait_for()
                 assert page.get_by_role("button", name="续办请求已保存", exact=True).is_disabled()
-                page.get_by_role("button", name="核对回执", exact=True).click()
+                multipart_row.get_by_role("button", name="核对回执", exact=True).click()
                 page.get_by_text(re.compile("语音.*续发结果：.*微信已接受")).wait_for()
-                page.get_by_role("button", name="停止续办", exact=True).click()
+                multipart_row.get_by_role("button", name="停止续办", exact=True).click()
                 page.get_by_text(re.compile("语音.*续办已停止")).wait_for()
                 assert receipt_state["resumes"] == 1 and receipt_state["stops"] == 2
                 artifact_id = "work-" + "a" * 64

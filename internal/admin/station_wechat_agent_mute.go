@@ -92,14 +92,14 @@ func (t *localToolSet) localWechatGroupMute(ctx context.Context, raw json.RawMes
 	var receipt apphost.ActionReceipt
 	var err error
 	if in.Action == "status" {
-		ledger, _, readErr := t.wechat.stationGroupActionLedger(in.Connection)
+		ledger, _, readErr := t.wechat.stationActionLedger(in.Connection)
 		if readErr != nil {
 			return "", stationMuteToolFailure(readErr)
 		}
 		receipt.State = "not_submitted"
 		if ledger != nil {
-			if previous, ok := t.wechat.findStationGroupAction(ledger, in.Connection, "", in.Group, "mute"); ok {
-				receipt = t.wechat.lookupStationGroupAction(ctx, ledger, previous)
+			if previous, ok := t.wechat.findStationAction(ledger, in.Connection, "", in.Group, "mute"); ok {
+				receipt = t.wechat.lookupStationAction(ctx, ledger, previous)
 			}
 		}
 	} else {

@@ -837,6 +837,131 @@
     function append(item) {
       const row = appElement("div", "", "work-record");
       const text = appElement("small", describe(item));
+      const recall = appElement("div", "", "delivery-recall");
+      const recallState = { serverID: "", cursor: "", messageID: "", operation: null, submitting: false, lookingUp: false, checked: false };
+      function acceptedServers(receipt) {
+        const seen = new Set();
+        const add = (serverID, label) => {
+          const value = String(serverID || "").trim();
+          if (!value || seen.has(value)) return;
+          seen.add(value);
+          servers.push({ value, label });
+        };
+        const servers = [];
+        for (const part of receipt.accepted_parts || []) add(part.server_id, `已接受第 ${(Number(part.index) || 0) + 1} 段`);
+        if (receipt.state === "accepted") add(receipt.server_id, "已接受消息");
+        return servers;
+      }
+      function operationText(operation) {
+        if (!operation) return "";
+        const labels = { succeeded: "撤回已完成", failed: "撤回失败", rejected: "撤回被拒绝", cancelled: "撤回已取消", submitted_pending: "撤回请求已提交，等待微信核对", waiting_receipt: "撤回请求已提交，等待微信核对", tracking: "正在核对撤回结果", unknown: "撤回结果待核对", submission_unknown: "撤回结果待核对" };
+        return labels[operation.state] || "撤回状态待核对";
+      }
+      function operationFinal(operation) {
+        return ["succeeded", "failed", "rejected", "cancelled"].includes(operation?.state);
+      }
+      function operationNeedsLookup(operation) {
+        return ["submitted_pending", "waiting_receipt", "tracking", "unknown", "submission_unknown"].includes(operation?.state);
+      }
+      function resultOperation(result) {
+        return result?.operation || (result?.operation_id ? result : null);
+      }
+      async function lookupRecall(cursor = "") {
+        const serverID = recallState.serverID;
+        const query = new URLSearchParams({ server_id: serverID });
+        if (cursor) query.set("cursor", cursor);
+        recallState.lookingUp = true;
+        renderRecall();
+        try {
+          const result = await request(base + "/" + encodeURIComponent(item.idempotency_key) + "/recall?" + query.toString());
+          // A selector change must never attach an old part's lookup result to a new part.
+          if (serverID !== recallState.serverID) return result;
+          recallState.checked = true;
+          recallState.cursor = result.next_cursor || "";
+          recallState.messageID = result.message_id || "";
+          const operation = resultOperation(result);
+          if (operation) recallState.operation = operation;
+          return result;
+        } finally {
+          if (serverID === recallState.serverID) {
+            recallState.lookingUp = false;
+            renderRecall();
+          }
+        }
+      }
+      function renderRecall() {
+        recall.replaceChildren();
+        const servers = acceptedServers(item);
+        if (!servers.length) return;
+        if (!servers.some((server) => server.value === recallState.serverID)) {
+          recallState.serverID = servers[0].value;
+          recallState.cursor = ""; recallState.messageID = ""; recallState.operation = null; recallState.submitting = false; recallState.lookingUp = false; recallState.checked = false;
+        }
+        const selected = servers.find((server) => server.value === recallState.serverID);
+        if (servers.length > 1) {
+          const select = document.createElement("select");
+          select.setAttribute("aria-label", "选择要撤回的已确认消息");
+          for (const server of servers) {
+            const option = document.createElement("option"); option.value = server.value; option.textContent = server.label; option.selected = server.value === recallState.serverID;
+            select.append(option);
+          }
+          select.disabled = recallState.submitting || recallState.lookingUp;
+          select.addEventListener("change", () => {
+            recallState.serverID = select.value; recallState.cursor = ""; recallState.messageID = ""; recallState.operation = null; recallState.submitting = false; recallState.lookingUp = false; recallState.checked = false;
+            renderRecall();
+          });
+          recall.append(select);
+        } else {
+          recall.append(appElement("small", selected.label));
+        }
+        const blocked = operationNeedsLookup(recallState.operation) || recallState.submitting;
+        if (recallState.operation) recall.append(appElement("small", operationText(recallState.operation)));
+        if (recallState.lookingUp) {
+          recall.append(appElement("small", "正在核对撤回记录"));
+        } else if (operationFinal(recallState.operation)) {
+          // A terminal receipt is authoritative. Never offer a second POST that could
+          // turn a failed, rejected, or cancelled recall into an accidental retry.
+        } else if (recallState.messageID && !blocked && !recallState.submitting) {
+          const confirm = appSetupButton("确认撤回", async () => {
+            const serverID = recallState.serverID, messageID = recallState.messageID;
+            recallState.submitting = true; renderRecall();
+            try {
+              const posted = await request(base + "/" + encodeURIComponent(item.idempotency_key) + "/recall", { method: "POST", body: JSON.stringify({ server_id: serverID, message_id: messageID }) });
+              if (serverID !== recallState.serverID) return;
+              recallState.operation = resultOperation(posted) || { state: "submission_unknown" };
+            } catch (error) {
+              if (serverID !== recallState.serverID) return;
+              recallState.operation = { state: "submission_unknown" };
+              appFeedback(error.message, true);
+            }
+            try {
+              await lookupRecall();
+            } catch (error) {
+              if (serverID === recallState.serverID) appFeedback(error.message, true);
+            } finally {
+              if (serverID === recallState.serverID) {
+                recallState.submitting = false;
+                renderRecall();
+              }
+            }
+          });
+          recall.append(confirm);
+        } else if (recallState.cursor && !blocked) {
+          const moreRecall = appSetupButton("继续查找", async () => {
+            moreRecall.disabled = true; moreRecall.textContent = "正在查找…";
+            try { await lookupRecall(recallState.cursor); } catch (error) { appFeedback(error.message, true); renderRecall(); }
+          });
+          recall.append(moreRecall);
+        } else if (!recallState.checked || blocked) {
+          const locate = appSetupButton(blocked ? "核对撤回状态" : "定位可撤回消息", async () => {
+            locate.disabled = true; locate.textContent = "正在核对…";
+            try { await lookupRecall(); } catch (error) { appFeedback(error.message, true); renderRecall(); }
+          });
+          recall.append(locate);
+        } else {
+          recall.append(appElement("small", "没有找到可撤回的本人消息"));
+        }
+      }
       const stop = appSetupButton("停止本回合投递", async () => {
         stop.disabled = true; stop.textContent = "正在停止…";
         try {
@@ -874,6 +999,7 @@
           item = result;
           text.textContent = describe(result);
           updateActions();
+          renderRecall();
           if (result.lookup === "unavailable") text.textContent += " · 暂时无法连接，保留已知状态";
           const nextKey = result.continuation?.delivery_key;
           if (nextKey && nextKey !== result.idempotency_key) {
@@ -888,7 +1014,8 @@
         finally { check.disabled = false; check.textContent = "核对回执"; }
       });
       updateActions();
-      row.append(text, check, stop, resume); records.append(row);
+      renderRecall();
+      row.append(text, check, stop, resume, recall); records.append(row);
     }
     const more = appSetupButton("查看投递记录", async () => {
       if (loading) return;

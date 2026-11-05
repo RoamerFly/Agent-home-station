@@ -109,6 +109,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 		chat.wechat = handler.wechat
 		handler.wechat.contactRoutes(s, mux)
 		handler.wechat.groupActionRoutes(s, mux, home.identity)
+		handler.wechat.recallRoutes(s, mux, home.identity)
 		handler.wechat.legacyImportRoutes(s, mux)
 		handler.wechat.attachmentRoutes(s, mux)
 		handler.wechat.shareRoutes(s, mux)
