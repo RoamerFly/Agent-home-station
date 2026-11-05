@@ -6,7 +6,14 @@ import (
 	"strings"
 
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
 )
+
+const StationGroupMuteToolName = "wechat_group_mute"
+
+func StationGroupMuteTool() mcptools.Tool {
+	return tool(StationGroupMuteToolName, "Manage notifications for groups specifically authorized by the owner on this local WeChat connection. In the owner's local chat, use action=list to find authorized connection and group IDs. Use action=set with connection_id, group_id and muted=true or false only when carrying out the owner's request. Use action=status with those two IDs to check the most recent operation without resubmitting. The host binds the request key. Pending and unknown receipts are not success. No message is sent.", `{"type":"object","properties":{"action":{"type":"string","enum":["list","set","status"]},"connection_id":{"type":"string","maxLength":128},"group_id":{"type":"string","maxLength":128},"muted":{"type":"boolean"}},"required":["action"],"additionalProperties":false}`)
+}
 
 // ActionSubmission is bound by the host to the original request and policy
 // revision. Calling it must recheck that grant and use the existing ledger.

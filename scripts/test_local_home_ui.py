@@ -13,7 +13,7 @@ import tempfile
 import threading
 from urllib.parse import parse_qs, unquote, urlparse
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 
 def start(binary, data, workspace):
@@ -276,13 +276,14 @@ def verify(binary, output):
 
                 worker_policy_pattern = status_pattern + "/policy"
                 worker_lifecycle_pattern = status_pattern + "/lifecycle"
-                worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "contact_read": False, "actions": []}
+                worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "contact_read": False, "actions": []}
 
                 def worker_view():
                     return {"connection": {"id": "synthetic-wechat", "login": "authenticated",
                         "runtime": "online", "worker": worker["state"], "configured_policy": {
                             "conversation_enabled": bool(worker["threads"]), "reply_threads": worker["threads"], "history_threads": worker["history_threads"],
                             "attachment_threads": worker["attachment_threads"], "media_reply_threads": worker["media_reply_threads"],
+                            "group_mute_threads": worker["group_mute_threads"],
                             "contact_read": worker["contact_read"]}}}
 
                 def read_worker(route):
@@ -294,6 +295,7 @@ def verify(binary, output):
                     worker["history_threads"] = route.request.post_data_json["history_threads"]
                     worker["attachment_threads"] = route.request.post_data_json["attachment_threads"]
                     worker["media_reply_threads"] = route.request.post_data_json["media_reply_threads"]
+                    worker["group_mute_threads"] = route.request.post_data_json["group_mute_threads"]
                     worker["contact_read"] = route.request.post_data_json["contact_read"]
                     fulfill_json(worker_view())(route)
 
@@ -345,6 +347,7 @@ def verify(binary, output):
                 page.get_by_role("textbox", name="历史与成员读取会话 ID", exact=True).fill("synthetic-room@chatroom")
                 page.get_by_role("textbox", name="附件读取会话 ID").fill("synthetic-room@chatroom")
                 page.get_by_role("textbox", name="附件回复会话 ID").fill("synthetic-room@chatroom")
+                page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).fill("synthetic-mute@chatroom")
                 page.get_by_role("checkbox", name="允许大肥鱼在本地聊天中查阅此通讯录").check()
                 page.get_by_role("button", name="保存回复范围").click()
                 page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
@@ -359,8 +362,16 @@ def verify(binary, output):
                 assert page.get_by_role("textbox", name="附件读取会话 ID").input_value() == "synthetic-room@chatroom"
                 assert worker["media_reply_threads"] == ["synthetic-room@chatroom"]
                 assert page.get_by_role("textbox", name="附件回复会话 ID").input_value() == "synthetic-room@chatroom"
+                assert worker["group_mute_threads"] == ["synthetic-mute@chatroom"]
+                assert page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).input_value() == "synthetic-mute@chatroom"
                 assert worker["contact_read"] is True
                 assert worker["actions"] == ["start", "stop"]
+                page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).fill("")
+                page.get_by_role("button", name="保存回复范围").click()
+                page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
+                assert worker["group_mute_threads"] == []
+                expect(page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True)).to_have_value("")
+                assert page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).input_value() == ""
                 page.get_by_text("通讯录", exact=True).click()
                 page.get_by_role("textbox", name="搜索联系人", exact=True).fill("蓝")
                 page.get_by_role("button", name="查询联系人", exact=True).click()

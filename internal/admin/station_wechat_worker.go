@@ -56,7 +56,10 @@ type stationWechatPolicy struct {
 	MediaReplyGrants map[string]time.Time `json:"media_reply_grants,omitempty"`
 	HistoryGrants    map[string]time.Time `json:"history_grants,omitempty"`
 	ContactGrant     time.Time            `json:"contact_grant,omitzero"`
+	GroupMuteGrants  map[string]time.Time `json:"group_mute_grants,omitempty"`
 }
+
+const stationWechatPolicyLimit = 128 << 10
 
 type stationWechatWorker struct {
 	mu         sync.Mutex
@@ -249,10 +252,9 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 		return stationWechatPolicy{}, err
 	}
 	defer file.Close()
-	const maxPolicyBytes = 32 << 10
-	data, err := io.ReadAll(io.LimitReader(file, maxPolicyBytes+1))
+	data, err := io.ReadAll(io.LimitReader(file, stationWechatPolicyLimit+1))
 	var policy stationWechatPolicy
-	if err != nil || len(data) > maxPolicyBytes || json.Unmarshal(data, &policy) != nil || len(policy.Grants) > 100 {
+	if err != nil || len(data) > stationWechatPolicyLimit || json.Unmarshal(data, &policy) != nil || len(policy.Grants) > 100 || len(policy.GroupMuteGrants) > 100 {
 		return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 	}
 	for thread, granted := range policy.Grants {
@@ -275,6 +277,11 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 		}
 	}
+	for group, granted := range policy.GroupMuteGrants {
+		if !validStationGroup(group) || granted.IsZero() {
+			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
+		}
+	}
 	return policy, nil
 }
 
@@ -282,6 +289,9 @@ func (w *stationWechatWorker) save(policy stationWechatPolicy) error {
 	data, err := json.Marshal(policy)
 	if err != nil {
 		return err
+	}
+	if len(data) > stationWechatPolicyLimit {
+		return apphost.ErrInvalidConnectionPolicy
 	}
 	root, err := workspacefs.OpenPath(w.dir)
 	if err != nil {
@@ -379,7 +389,11 @@ func (w *stationWechatWorker) policyView() *apphost.ConfiguredPolicy {
 	if contactRead {
 		grants = append(grants, "contacts.read")
 	}
-	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0 || contactRead, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, MediaReplyThreads: mediaReplies, HistoryThreads: history, ContactRead: contactRead}
+	groupMute := slices.Sorted(maps.Keys(w.policy.GroupMuteGrants))
+	if len(groupMute) > 0 {
+		grants = append(grants, "account.mute")
+	}
+	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0 || contactRead || len(groupMute) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, MediaReplyThreads: mediaReplies, HistoryThreads: history, ContactRead: contactRead, GroupMuteThreads: groupMute}
 }
 
 func (s *stationWechat) Inspect(ctx context.Context, id string) (apphost.ConnectionStatus, error) {
@@ -449,6 +463,23 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 		return view, err
 	}
 	next := w.policy
+	if policy.GroupMuteThreads != nil {
+		requested := *policy.GroupMuteThreads
+		if len(requested) > 100 {
+			return view, apphost.ErrInvalidConnectionPolicy
+		}
+		next.GroupMuteGrants = make(map[string]time.Time, len(requested))
+		for _, group := range requested {
+			if !validStationGroup(group) || !next.GroupMuteGrants[group].IsZero() {
+				return view, apphost.ErrInvalidConnectionPolicy
+			}
+			grant := w.policy.GroupMuteGrants[group]
+			if grant.IsZero() {
+				grant = now
+			}
+			next.GroupMuteGrants[group] = grant
+		}
+	}
 	if policy.ContactRead != nil {
 		if !*policy.ContactRead {
 			next.ContactGrant = time.Time{}
@@ -467,7 +498,7 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 		if err := w.stop(ctx); err != nil {
 			return view, err
 		}
-	} else if next.ContactGrant != w.policy.ContactGrant {
+	} else if next.ContactGrant != w.policy.ContactGrant || !maps.Equal(next.GroupMuteGrants, w.policy.GroupMuteGrants) {
 		if err := w.save(next); err != nil {
 			return view, err
 		}

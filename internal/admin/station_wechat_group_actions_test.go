@@ -1,7 +1,9 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -10,9 +12,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/companion"
 )
 
 func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
@@ -27,9 +31,12 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	}
 	const group = "room-one@chatroom"
 	const lostGroup = "room-lost@chatroom"
+	const agentGroup = "room-agent@chatroom"
+	const racingGroup = "room-race@chatroom"
 	var submissions, receiptReads atomic.Int32
 	var ready, wrongTarget, nativeOffline atomic.Bool
 	var unsupported atomic.Bool
+	preflight, resumePreflight := make(chan struct{}, 1), make(chan struct{})
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out := func(value any) { _ = json.NewEncoder(w).Encode(value) }
 		if r.Header.Get("Authorization") != "Bearer synthetic-group-fixture" {
@@ -65,6 +72,15 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 			out(map[string]any{"id": group, "roomId": group, "muted": ready.Load(), "isInGroup": true})
 		case "GET /v1/accounts/one/groups/" + lostGroup:
 			out(map[string]any{"id": lostGroup, "roomId": lostGroup})
+		case "GET /v1/accounts/one/groups/" + agentGroup:
+			out(map[string]any{"id": agentGroup, "roomId": agentGroup, "isInGroup": true})
+		case "GET /v1/accounts/one/groups/" + racingGroup:
+			preflight <- struct{}{}
+			select {
+			case <-resumePreflight:
+				out(map[string]any{"id": racingGroup, "roomId": racingGroup, "isInGroup": true})
+			case <-r.Context().Done():
+			}
 		case "GET /v1/accounts/two/groups/" + group:
 			w.WriteHeader(404)
 		case "PUT /v1/accounts/one/threads/" + group + "/notifications":
@@ -81,6 +97,15 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 		case "PUT /v1/accounts/one/threads/" + lostGroup + "/notifications":
 			submissions.Add(1)
 			w.WriteHeader(503)
+		case "PUT /v1/accounts/one/threads/" + agentGroup + "/notifications":
+			submissions.Add(1)
+			receipt := syntheticStationMuteReceipt("queued", "not_attempted", agentGroup)
+			receipt["id"] = "native-agent"
+			out(receipt)
+		case "GET /v1/accounts/one/operations/native-agent":
+			receipt := syntheticStationMuteReceipt("succeeded", "accepted", agentGroup)
+			receipt["id"] = "native-agent"
+			out(receipt)
 		case "GET /v1/accounts/one/operations/native-mute":
 			receiptReads.Add(1)
 			target := group
@@ -186,11 +211,111 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	}
 	request("POST", path, mute(lostGroup, "lost", true), true, 202)
 	request("POST", path, mute(lostGroup, "lost-new-key", false), true, 409)
-	request("POST", one+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
-	request("POST", path, mute(group, "paused-new-key", false), true, 409)
 	if submissions.Load() != 3 || receiptReads.Load() != 2 {
 		t.Fatal("duplicate submission or unexpected lookup", submissions.Load(), receiptReads.Load())
 	}
+	t.Run("AgentGrant", func(t *testing.T) {
+		connection := wechatapp.ConnectionID("one")
+		other := wechatapp.ConnectionID("two")
+		grant := func(groups ...string) {
+			result := request("PUT", one+"/policy", map[string]any{"reply_threads": []string{}, "group_mute_threads": append([]string{}, groups...)}, true, 200)
+			policy := result["connection"].(map[string]any)["configured_policy"].(map[string]any)
+			rows, _ := policy["group_mute_threads"].([]any)
+			if len(rows) != len(groups) {
+				t.Fatal(policy)
+			}
+		}
+		request("PUT", one+"/policy", map[string]any{"reply_threads": []string{}, "group_mute_threads": []string{"private-chat"}}, true, 400)
+		newRun := func(trace string) *localToolSet {
+			t.Helper()
+			store, in, err := f.handler.chat.conversation()
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			in.TraceID, in.Text, in.MessageTime = trace, "synthetic mute request", now.Format(time.RFC3339Nano)
+			in.OriginalText = &in.Text
+			if err := store.Observe(in, localConversationConfig(""), now); err != nil {
+				t.Fatal(err)
+			}
+			run, err := store.OpenLocalToolRun(t.Context(), in, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tools := f.handler.chat.tools(store, in)
+			tools.run = run
+			return tools
+		}
+		set := func(connection, group string) map[string]any {
+			return map[string]any{"action": "set", "connection_id": connection, "group_id": group, "muted": true}
+		}
+		call := func(tools *localToolSet, args map[string]any) error {
+			raw, _ := json.Marshal(args)
+			_, err := tools.Call(t.Context(), wechatapp.StationGroupMuteToolName, raw)
+			return err
+		}
+		before := newRun("agent-before-grant")
+		if err := call(before, set(connection, agentGroup)); !errors.Is(err, errStationMuteGrant) {
+			t.Fatal("mute allowed by default", err)
+		}
+		grant(agentGroup, racingGroup)
+		fresh := newRun("agent-fresh-direct")
+		for _, args := range []map[string]any{set(other, agentGroup), set(connection, group)} {
+			if err := call(fresh, args); !errors.Is(err, errStationMuteGrant) {
+				t.Fatal("scope escaped", err)
+			}
+		}
+		if err := call(before, set(connection, agentGroup)); !errors.Is(err, errStationMuteGrant) {
+			t.Fatal("grant authorized an earlier request", err)
+		}
+		f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+			step := 0
+			return localModelFunc(func(_ context.Context, _ string, history []map[string]string) (string, error) {
+				step++
+				last := localModelHistory(history)
+				switch step {
+				case 1:
+					return localToolCall(wechatapp.StationGroupMuteToolName, map[string]any{"action": "list"}), nil
+				case 2:
+					if !strings.Contains(last, agentGroup) || strings.Contains(last, other) {
+						t.Error("model did not receive exact authorized scopes")
+					}
+					return localToolCall(wechatapp.StationGroupMuteToolName, set(connection, agentGroup)), nil
+				case 3, 4:
+					if !strings.Contains(last, "submitted_pending") {
+						t.Error("expected queued receipt")
+					}
+					if step == 3 {
+						return localToolCall(wechatapp.StationGroupMuteToolName, set(connection, agentGroup)), nil
+					}
+					return localToolCall(wechatapp.StationGroupMuteToolName, map[string]any{"action": "status", "connection_id": connection, "group_id": agentGroup}), nil
+				default:
+					if !strings.Contains(last, "succeeded") || strings.Contains(last, "native-agent") {
+						t.Error("model did not receive the projected accepted result")
+					}
+					return `{"action":"reply","messages":["合成测试操作已确认。"]}`, nil
+				}
+			}), nil
+		}
+		if code, body := localChatSend(f, "agent-mute-chat", "请给获准的合成测试群开启免打扰"); code != 200 || body["status"] != "completed" || submissions.Load() != 4 {
+			t.Fatal("normal owner chat did not complete exactly one submission", code, body, submissions.Load())
+		}
+		result := make(chan error, 1)
+		go func() { result <- call(fresh, set(connection, racingGroup)) }()
+		select {
+		case <-preflight:
+		case <-time.After(5 * time.Second):
+			t.Fatal("expected native preflight")
+		}
+		grant()
+		grant(agentGroup, racingGroup)
+		close(resumePreflight)
+		if err := <-result; !errors.Is(err, errStationMuteGrant) || submissions.Load() != 4 {
+			t.Fatal("revoked and regranted scope allowed the old request", err, submissions.Load())
+		}
+	})
+	request("POST", one+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
+	request("POST", path, mute(group, "paused-new-key", false), true, 409)
 	f.server.Close()
 	if err := f.handler.Close(); err != nil {
 		t.Fatal(err)

@@ -50,7 +50,7 @@
     else window.clearTimeout(apps.loginTimer);
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "" };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "" };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -259,18 +259,26 @@
     contactReadCopy.append(appElement("strong", "允许大肥鱼在本地聊天中查阅此通讯录"),
       appElement("small", "主人可在应用页直接查看。大肥鱼查询时，所读资料会提供给当前聊天模型。"));
     contactReadLabel.append(contactRead, contactReadCopy);
+    const groupMutes = document.createElement("textarea");
+    groupMutes.rows = 2;
+    groupMutes.placeholder = "每行一个群 ID；留空会撤销授权";
+    groupMutes.setAttribute("aria-label", "Agent 免打扰群 ID");
+    groupMutes.value = apps.groupMuteDrafts.get(id) ?? (status.configured_policy?.group_mute_threads || []).join("\n");
+    groupMutes.addEventListener("input", () => apps.groupMuteDrafts.set(id, groupMutes.value));
     const save = appSetupButton("保存回复范围", () => {
       const reply_threads = field.value.split(/[\s，,]+/u).filter(Boolean);
       const history_threads = history.value.split(/[\s，,]+/u).filter(Boolean);
       const attachment_threads = attachments.value.split(/[\s，,]+/u).filter(Boolean);
       const media_reply_threads = mediaReplies.value.split(/[\s，,]+/u).filter(Boolean);
-      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, media_reply_threads, contact_read: contactRead.checked });
+      const group_mute_threads = groupMutes.value.split(/[\s，,]+/u).filter(Boolean);
+      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, media_reply_threads, contact_read: contactRead.checked, group_mute_threads });
     });
     panel.append(appElement("p", "每行一个会话 ID。群聊仅在被提及时回复。"), field,
       appElement("p", "历史消息与群成员须单独授权；大肥鱼仅能读取当前所在会话。"), history,
       appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments,
       appElement("p", "附件回复须单独授权，只能把本会话的附件发回本会话。"), mediaReplies,
       contactReadLabel,
+      appElement("p", "仅允许大肥鱼在本地聊天中设置这些群的免打扰或取消免打扰；微信群聊与私聊中的 Agent 不会获得此项权限。"), groupMutes,
       save, workGrantControls(id));
     return panel;
   }
@@ -796,6 +804,7 @@
         current.historyDrafts.delete(id);
         current.attachmentDrafts.delete(id);
         current.mediaReplyDrafts.delete(id);
+        current.groupMuteDrafts.delete(id);
         appFeedback(result.connection?.submissions_paused ? "回复范围已保存，Agent 已暂停。" : "回复范围已保存。");
       } else {
         appFeedback(body.action === "stop" ? "已暂停此账号的 Agent。" : "已启动此账号的 Agent，正在确认状态。");

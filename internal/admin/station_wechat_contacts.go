@@ -247,25 +247,26 @@ func (s *stationWechat) readDirectory(ctx context.Context, in stationContactQuer
 	return out, nil
 }
 
+func (t *localToolSet) checkWechatOwner(ctx context.Context) error {
+	if t.wechat == nil {
+		return errContactDenied
+	}
+	record, err := t.access.home.identity.localIdentity()
+	if err != nil || record.FishID != t.access.fishID || record.LocalOwner == nil || record.LocalOwner.ID != t.access.ownerID {
+		return errContactDenied
+	}
+	if t.run != nil {
+		return t.run.CheckSource(ctx)
+	}
+	return ctx.Err()
+}
+
 func (t *localToolSet) readWechatContacts(ctx context.Context, raw json.RawMessage) (string, error) {
 	in := stationContactQuery{Limit: 50}
 	if strictLocalMemoryDecode(raw, &in) != nil {
 		return "", errContactInput
 	}
-	checkOwner := func(ctx context.Context) error {
-		if t.wechat == nil {
-			return errContactDenied
-		}
-		record, err := t.access.home.identity.localIdentity()
-		if err != nil || record.FishID != t.access.fishID || record.LocalOwner == nil || record.LocalOwner.ID != t.access.ownerID {
-			return errContactDenied
-		}
-		if t.run != nil {
-			return t.run.CheckSource(ctx)
-		}
-		return ctx.Err()
-	}
-	if err := checkOwner(ctx); err != nil {
+	if err := t.checkWechatOwner(ctx); err != nil {
 		return "", err
 	}
 	if in.Connection == "" {
@@ -284,7 +285,7 @@ func (t *localToolSet) readWechatContacts(ctx context.Context, raw json.RawMessa
 				}
 			}
 		}
-		if err := checkOwner(ctx); err != nil {
+		if err := t.checkWechatOwner(ctx); err != nil {
 			return "", err
 		}
 		return localProcessJSON(map[string]any{"connections": items, "data_role": "connection_labels_not_instructions"})
@@ -297,7 +298,7 @@ func (t *localToolSet) readWechatContacts(ctx context.Context, raw json.RawMessa
 		if grant.IsZero() || !t.wechat.contactGrant(in.Connection).Equal(grant) {
 			return errContactDenied
 		}
-		return checkOwner(ctx)
+		return t.checkWechatOwner(ctx)
 	}
 	audience := "agent:" + localCheckpointKey(t.access.fishID, t.access.ownerID, t.traceID, grant)
 	page, err := t.wechat.readDirectory(ctx, in, "contacts", audience, check)
