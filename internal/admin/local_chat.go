@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 )
@@ -88,6 +89,7 @@ type localChatService struct {
 	processes    *localProcessTools
 	projectTools *localProjectTools
 	wechat       *stationWechat
+	observations *apphost.Observer
 	// Tests replace only the model transport, retaining the normal engine,
 	// source handling, SQLite and HTTP boundary.
 	modelFactory func() (companion.LanguageModel, error)
@@ -198,6 +200,7 @@ func (h *localChatService) routes(s *Server, mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/local/chat", s.protected(h.send))
 	mux.HandleFunc("GET /api/local/model", s.protected(h.modelView))
 	mux.HandleFunc("PUT /api/local/model", s.protected(h.modelSave))
+	h.appObservationRoutes(s, mux)
 }
 
 func (h *localChatService) modelView(w http.ResponseWriter, r *http.Request) {
@@ -392,6 +395,10 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 			fail(w, 409, "对话来源已更正或遗忘，本次结果未写入聊天")
 			return
 		}
+	}
+	if err = tools.checkAppObservations(ctx); err != nil {
+		fail(w, 409, "应用读取授权已变化，本次回复未写入聊天")
+		return
 	}
 	if err = store.AcceptLocalConversation(ctx, in, decision.Messages, c, time.Now().UTC()); err != nil {
 		fail(w, 503, "回复未能写入本地记录，请先刷新核对，原消息保留")
