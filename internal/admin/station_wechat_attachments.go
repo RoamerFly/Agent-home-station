@@ -298,19 +298,20 @@ func (a stationAttachmentAccess) DownloadAttachment(ctx context.Context, thread,
 }
 
 type stationAttachmentTools struct {
-	native      *linuxnative.Sender
-	store       *companion.Store
-	dir         string
-	grants      map[string]time.Time
-	replies     map[string]time.Time
-	reads       map[string]time.Time
-	readCursors map[string]stationReadCursor
-	blocked     func() bool
-	trace       companion.Input
-	prepared    map[string]companion.GeneratedMedia
-	work        *stationWorkAccess
-	fetchVideo  stationVideoFetch
-	shareHost   func() (*stationShareHost, error)
+	native            *linuxnative.Sender
+	store             *companion.Store
+	dir               string
+	grants            map[string]time.Time
+	replies           map[string]time.Time
+	reads             map[string]time.Time
+	readCursors       map[string]stationReadCursor
+	legacyReadCursors map[string]stationLegacyReadCursor
+	blocked           func() bool
+	trace             companion.Input
+	prepared          map[string]companion.GeneratedMedia
+	work              *stationWorkAccess
+	fetchVideo        stationVideoFetch
+	shareHost         func() (*stationShareHost, error)
 }
 
 func (*stationAttachmentTools) AutonomousActions() bool { return true }
@@ -320,11 +321,12 @@ func (t *stationAttachmentTools) ForkTools() companion.ToolAccess {
 	copy.trace = companion.Input{}
 	copy.prepared = nil
 	copy.readCursors = nil
+	copy.legacyReadCursors = nil
 	return &copy
 }
 
 func (t *stationAttachmentTools) SetTrace(in companion.Input) {
-	t.trace, t.prepared, t.readCursors = in, nil, nil
+	t.trace, t.prepared, t.readCursors, t.legacyReadCursors = in, nil, nil, nil
 }
 
 func (t *stationAttachmentTools) allowed() bool {
@@ -349,6 +351,9 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	tools := []mcptools.Tool{}
 	if t.scopeAllowed(t.trace, t.reads) {
 		tools = append(tools, wechatapp.StationCatalogTool(), wechatapp.StationMessageTool())
+		if t.legacyMemoryAvailable(ctx) {
+			tools = append(tools, wechatapp.StationLegacyMemoryTool())
+		}
 	}
 	if !t.allowed() {
 		return tools, nil
@@ -388,6 +393,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == "wechat_message_read" {
 		return t.readMessage(ctx, raw)
+	}
+	if name == "wechat_read_legacy" {
+		return t.readLegacyMemory(ctx, raw)
 	}
 	if name == "wechat_work_reply" {
 		return t.workReply(ctx, raw)

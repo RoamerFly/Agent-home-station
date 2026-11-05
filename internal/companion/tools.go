@@ -126,7 +126,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			// Keep an ordinary turn small.  History retrieval and reading retained
 			// outputs are the only common primitives; all execution, project and
 			// diagnostic capabilities are deliberately discovered on demand.
-			if t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || !localHost && historyNeed != nil && t.Name == "wechat_read" {
+			if t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
 				activeTools = append(activeTools, t)
 			}
 		}
@@ -960,7 +960,7 @@ func deliveryFeedbackTool(name string) bool {
 // separate idempotency and delivery rules.
 func isReadOnlyRecoveryTool(name string) bool {
 	switch name {
-	case "memory_search", "memory_read", "wechat_read", "video_inspect", "web_search", "web_audio_search", "web_fetch", "media_recent", "project_list", "project_read", "tool_output_read", "discover_tools", "plugin_job_status", "music_local_status", "agent_task_status", "agent_tasks":
+	case "memory_search", "memory_read", "wechat_read", "wechat_read_legacy", "video_inspect", "web_search", "web_audio_search", "web_fetch", "media_recent", "project_list", "project_read", "tool_output_read", "discover_tools", "plugin_job_status", "music_local_status", "agent_task_status", "agent_tasks":
 		return true
 	}
 	return false

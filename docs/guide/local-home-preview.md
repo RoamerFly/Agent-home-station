@@ -196,6 +196,12 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 
 接口为主人会话下的 `GET /api/apps/wechat/connections/{connection}/legacy-import/memory`。默认每页 30 条，可设 `limit=1..200`。用返回的 `next_after` 作为下一页的 `after`。副本或目标授权变化导致游标失效时，从第一页重新核对。
 
+**接续选定会话。** 先保存旧版接入摘要，核对旧端的停机记录和目标原生档案导入回执，确认目标微信在线，再为该会话单独授权历史读取。暂停连接并等待 Agent 退出后，打开「核对旧会话记忆」，为相应会话预演接续。预演只显示数量。确认实际微信身份相同后才提交。来源、授权或原生服务实例变化时重新预演。目标会话已有新记忆时提示冲突，其他会话可分别核对。
+
+接续只保存来源与版本能核对的原始陈述和仍有有效引用的旧记忆。资料保存在目标连接的宿主私有目录。恢复 Agent 后，大肥鱼可以在这个会话中按需调用 `wechat_read_legacy`，旧资料会带上来源与版本。撤销历史授权后无法继续读这份资料，重新授权也不会恢复旧授权下的接续记录。原有实时记忆、发送账本与待办继续由各自的存储管理。
+
+会话预演和确认使用 `GET` 与 `POST /api/apps/wechat/connections/{connection}/legacy-import/memory/{thread}`。确认提交 `digest` 和 `same_identity: true`，并带管理会话的 CSRF 请求头。
+
 回退时先停独立桌面及其原生服务，再用原部署和原数据恢复旧服务。同一实际微信账号只交给一个运行中的宿主。保留预演副本用于核对；已经在新宿主产生的回复或操作须分别按实际回执核对。
 
 ### 文件与自编工具

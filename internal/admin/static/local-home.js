@@ -211,7 +211,7 @@
     disabled: "Agent 未启动", needs_setup: "Agent 待配置", waiting_login: "Agent 等待登录",
     running: "Agent 运行中", stopping: "Agent 正在停止", paused: "Agent 已暂停", error: "Agent 运行异常"
   };
-  function legacyImportControls(id, availability) {
+  function legacyImportControls(id, availability, connection = {}) {
     if (!availability) return null;
     const panel = appElement("details", "", "identity-details legacy-import");
     panel.append(appElement("summary", "从旧版接入"));
@@ -322,6 +322,77 @@
       apply.dataset.legacyConfirm = "true";
       actions.append(apply);
     }
+    function currentImportPrerequisites() {
+      const policy = connection.configured_policy || {};
+      const worker = appWorkerLabels[connection.worker] || "Agent 状态待核对";
+      const history = Array.isArray(policy.history_threads) ? policy.history_threads.length : 0;
+      return `当前 Agent：${worker}；已配置历史读取会话：${history} 个。`;
+    }
+    function renderMemorySelection(thread, panel, value) {
+      const statusCopy = {
+        ready: "可接续此会话",
+        applied: "此会话已接续",
+        not_ready: "暂不能接续此会话",
+        conflict: "此会话接续存在冲突",
+        empty: "此会话没有可接续的内容"
+      };
+      const status = value && typeof value.status === "string" ? value.status : "";
+      const lines = [
+        appElement("strong", statusCopy[status] || "接续状态待核对"),
+        appElement("small", `来源事件：${Number(value?.event_count || 0)}；可接续记忆：${Number(value?.memory_count || 0)}`),
+        appElement("small", currentImportPrerequisites())
+      ];
+      if (value?.reason) lines.push(appElement("small", `说明：${value.reason}`));
+      if (status !== "ready") {
+        panel.replaceChildren(...lines);
+        return;
+      }
+      if (!value.digest) {
+        lines.push(appElement("small", "本次预演缺少校验标识，请重新读取后再试。"));
+        panel.replaceChildren(...lines);
+        return;
+      }
+      const confirmID = `legacy-memory-confirm-${String(thread).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+      const confirmation = document.createElement("input");
+      confirmation.type = "checkbox";
+      confirmation.id = confirmID;
+      const label = document.createElement("label");
+      label.htmlFor = confirmID;
+      label.textContent = "我已确认旧资料和当前目标是同一个实际微信账号";
+      const apply = appSetupButton("确认接续此会话", async () => {
+        apply.disabled = true;
+        try {
+          const applied = await request(legacyImportURL + "/memory/" + encodeURIComponent(thread), {
+            method: "POST", body: JSON.stringify({ digest: value.digest, same_identity: true })
+          });
+          renderMemorySelection(thread, panel, applied);
+        } catch (error) {
+          if (error.status === 409) {
+            panel.replaceChildren(
+              appElement("small", "旧资料或当前目标已变化，请重新预演此会话。"),
+              appSetupButton("重新预演此会话", () => readMemorySelection(thread, panel))
+            );
+          } else {
+            lines.push(appElement("small", error.message));
+            panel.replaceChildren(...lines);
+          }
+        }
+      });
+      apply.disabled = true;
+      confirmation.addEventListener("change", () => { apply.disabled = !confirmation.checked; });
+      const confirmRow = appElement("div", "", "legacy-memory-confirm");
+      confirmRow.append(confirmation, label, apply);
+      lines.push(confirmRow);
+      panel.replaceChildren(...lines);
+    }
+    async function readMemorySelection(thread, panel) {
+      panel.replaceChildren(appElement("small", "正在预演接续此会话…"));
+      try {
+        renderMemorySelection(thread, panel, await request(legacyImportURL + "/memory/" + encodeURIComponent(thread)));
+      } catch (error) {
+        panel.replaceChildren(appElement("small", error.message));
+      }
+    }
     function renderMemoryReport(value) {
       const statusCopy = {
         ready: "旧会话记忆可核对",
@@ -331,8 +402,19 @@
         unavailable: "旧会话记忆暂不可读"
       };
       const conversations = Array.isArray(value?.conversations) ? value.conversations : [];
-      const rows = conversations.map((conversation) => appElement("p",
-        `会话：${conversation.thread_id || "未知"}；来源候选：${Number(conversation.event_count || 0)}；已排除：${Number(conversation.withheld_events || 0)}；记忆：${Number(conversation.memory_count || 0)}；摘要：${conversation.has_summary ? "有" : "无"}；当前目标历史授权：${conversation.history_granted ? "已授权" : "未授权"}`));
+      const rows = conversations.map((conversation) => {
+        const row = appElement("div", "", "legacy-memory-scope");
+        const thread = typeof conversation.thread_id === "string" ? conversation.thread_id : "";
+        row.append(appElement("p",
+          `会话：${thread || "未知"}；来源候选：${Number(conversation.event_count || 0)}；已排除：${Number(conversation.withheld_events || 0)}；记忆：${Number(conversation.memory_count || 0)}；摘要：${conversation.has_summary ? "有" : "无"}；当前目标历史授权：${conversation.history_granted ? "已授权" : "未授权"}`));
+        if (conversation.history_granted && thread) {
+          const selection = appElement("div", "", "legacy-memory-selection");
+          row.append(appSetupButton("预演接续此会话", () => readMemorySelection(thread, selection)), selection);
+        } else {
+          row.append(appElement("small", "接续此会话前，请先在当前连接中授权历史读取。"));
+        }
+        return row;
+      });
       const next = typeof value?.next_after === "string" && value.next_after ? appSetupButton("读取下一页会话", () => readLegacyMemory(value.next_after)) : null;
       memoryResult.replaceChildren(
         appElement("strong", statusCopy[value?.status] || "旧会话记忆状态待核对"),
@@ -377,7 +459,7 @@
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
     toggle.disabled ||= status.worker === "stopping" || !running && !status.configured_policy?.conversation_enabled;
     buttons.append(toggle);
-    const legacyImport = legacyImportControls(id, status.legacy_import);
+    const legacyImport = legacyImportControls(id, status.legacy_import, status);
     panel.append(buttons);
     if (legacyImport) panel.append(legacyImport);
     panel.append(contactDirectoryControls(id), groupDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));

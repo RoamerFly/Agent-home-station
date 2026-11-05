@@ -63,38 +63,11 @@ func LegacyMemoryInventory(ctx context.Context, file *os.File, account string) (
 	if file == nil || strings.TrimSpace(account) == "" {
 		return LegacyMemoryInventoryResult{}, ErrLegacyMemoryUnsupported
 	}
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
-		return LegacyMemoryInventoryResult{}, ErrLegacyMemoryUnsupported
-	}
-
-	vfsName, registered, err := vfs.New(legacyMemorySnapshotFS{file: file, info: info})
+	db, closeSnapshot, err := openLegacyMemorySnapshot(ctx, file)
 	if err != nil {
-		return LegacyMemoryInventoryResult{}, ErrLegacyMemoryUnsupported
+		return LegacyMemoryInventoryResult{}, err
 	}
-	defer registered.Close()
-
-	db, err := sql.Open("sqlite", "file:memory.sqlite?mode=ro&immutable=1&vfs="+vfsName)
-	if err != nil {
-		return LegacyMemoryInventoryResult{}, ErrLegacyMemoryUnsupported
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	if _, err := db.ExecContext(ctx, "PRAGMA temp_store=MEMORY"); err != nil {
-		return LegacyMemoryInventoryResult{}, legacyInventoryError(ctx, err)
-	}
-	if _, err := db.ExecContext(ctx, "PRAGMA trusted_schema=OFF"); err != nil {
-		return LegacyMemoryInventoryResult{}, legacyInventoryError(ctx, err)
-	}
-
-	var schema string
-	if err := db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='schema'").Scan(&schema); err != nil {
-		return LegacyMemoryInventoryResult{}, legacyInventoryError(ctx, err)
-	}
-	if schema != "1" && schema != "2" {
-		return LegacyMemoryInventoryResult{}, ErrLegacyMemoryUnsupported
-	}
+	defer closeSnapshot()
 
 	rows, err := db.QueryContext(ctx, `SELECT id,
 		json_extract(payload,'$.id'),
@@ -167,6 +140,53 @@ func LegacyMemoryInventory(ctx context.Context, file *os.File, account string) (
 		})
 	}
 	return result, nil
+}
+
+// openLegacyMemorySnapshot exposes exactly the supplied open file to SQLite.
+// It deliberately has no path parameter, so a legacy database cannot follow
+// journals, sidecars, or host-private paths. Callers must close the returned
+// cleanup function before releasing file.
+func openLegacyMemorySnapshot(ctx context.Context, file *os.File) (*sql.DB, func(), error) {
+	if file == nil {
+		return nil, nil, ErrLegacyMemoryUnsupported
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		return nil, nil, ErrLegacyMemoryUnsupported
+	}
+	vfsName, registered, err := vfs.New(legacyMemorySnapshotFS{file: file, info: info})
+	if err != nil {
+		return nil, nil, ErrLegacyMemoryUnsupported
+	}
+	db, err := sql.Open("sqlite", "file:memory.sqlite?mode=ro&immutable=1&vfs="+vfsName)
+	if err != nil {
+		registered.Close()
+		return nil, nil, ErrLegacyMemoryUnsupported
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	cleanup := func() {
+		_ = db.Close()
+		_ = registered.Close()
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA temp_store=MEMORY"); err != nil {
+		cleanup()
+		return nil, nil, legacyInventoryError(ctx, err)
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA trusted_schema=OFF"); err != nil {
+		cleanup()
+		return nil, nil, legacyInventoryError(ctx, err)
+	}
+	var schema string
+	if err := db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='schema'").Scan(&schema); err != nil {
+		cleanup()
+		return nil, nil, legacyInventoryError(ctx, err)
+	}
+	if schema != "1" && schema != "2" {
+		cleanup()
+		return nil, nil, ErrLegacyMemoryUnsupported
+	}
+	return db, cleanup, nil
 }
 
 // A source payload produced by newer stores identifies its account/thread. Old

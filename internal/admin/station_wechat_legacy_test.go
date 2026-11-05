@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mcptools"
 )
 
 func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
@@ -157,9 +159,9 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	cfg.Permissions.Remember = true
 	now := time.Now().UTC()
 	for _, in := range []companion.Input{
-		{Channel: "wechat", Account: "one", Thread: "123@chatroom", TraceID: "chat", Sender: "synthetic-sender", Text: "synthetic-private-body", Source: &companion.SourceRef{Integrity: "verified"}},
-		{Channel: "wechat", Account: "one", Thread: "filehelper", TraceID: "helper", Sender: "synthetic-sender", Text: "synthetic-private-body", Source: &companion.SourceRef{Integrity: "verified"}},
-		{Channel: "wechat", Account: "other", Thread: "foreign-private-thread", TraceID: "foreign", Sender: "synthetic-sender", Text: "synthetic-private-body", Source: &companion.SourceRef{Integrity: "verified"}},
+		{Channel: "wechat", Account: "one", Thread: "123@chatroom", TraceID: "chat", Sender: "synthetic-sender", Text: "synthetic-private-body", Source: &companion.SourceRef{Integrity: "observed", MessageType: 1, ServerID: "synthetic-native-original"}},
+		{Channel: "wechat", Account: "one", Thread: "filehelper", TraceID: "helper", Sender: "synthetic-sender", Text: "synthetic-private-body", Source: &companion.SourceRef{Integrity: "observed", MessageType: 1, ServerID: "synthetic-native-original"}},
+		{Channel: "wechat", Account: "other", Thread: "foreign-private-thread", TraceID: "foreign", Sender: "synthetic-sender", Text: "synthetic-private-body", Source: &companion.SourceRef{Integrity: "observed", MessageType: 1, ServerID: "synthetic-native-original"}},
 	} {
 		in.MessageTime = now.Format(time.RFC3339Nano)
 		if err := memory.Observe(in, cfg, now); err != nil {
@@ -321,20 +323,157 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 			t.Fatal("migration changed the snapshot", err)
 		}
 	}
-	req("PUT", route("one")+"/policy", map[string]any{
-		"reply_threads": []string{"123@chatroom"}, "history_threads": []string{"123@chatroom"},
-	}, true, 200)
+	selectedRoute := memoryRoute("one") + "/123@chatroom"
+	otherRoute := memoryRoute("one") + "/filehelper"
+	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "not_ready" {
+		t.Fatal("selected history was not explicitly authorized", row)
+	}
+	setHistory := func(threads ...string) {
+		req("PUT", route("one")+"/policy", map[string]any{
+			"reply_threads":   []string{"123@chatroom", "filehelper"},
+			"history_threads": threads,
+		}, true, 200)
+	}
+	setHistory("123@chatroom", "filehelper")
 	req("GET", memoryRoute("one")+"?after="+cursor, nil, false, 409)
 	audit = req("GET", memoryRoute("one")+"?limit=1", nil, false, 200)
 	if row := audit["conversations"].([]any)[0].(map[string]any); row["history_granted"] != true {
 		t.Fatal("preview did not show configured target authorization", row)
 	}
+	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "not_ready" {
+		t.Fatal("signed-out target passed cutover", row)
+	}
+	loginOnline.Store(true)
+	selected := req("GET", selectedRoute, nil, false, 200)
+	if selected["status"] != "ready" || selected["event_count"] != float64(1) || bytes.Contains(j(selected), []byte("synthetic-private-body")) {
+		t.Fatal("selected scope preview was wrong or leaked content", selected)
+	}
+	if row := req("GET", otherRoute, nil, false, 200); row["status"] != "empty" {
+		t.Fatal("cleared old scope was treated as importable", row)
+	}
+	bundlePath := filepath.Join(target, stationLegacyMemoryFile("one", "123@chatroom"))
+	if _, err := os.Stat(bundlePath); !os.IsNotExist(err) {
+		t.Fatal("read-only scope preview created a bundle", err)
+	}
+	postMemory := func(plan map[string]any, sameIdentity bool) map[string]any {
+		return map[string]any{"digest": plan["digest"], "same_identity": sameIdentity}
+	}
+	req("POST", selectedRoute, postMemory(selected, true), false, 403)
+	req("POST", selectedRoute, postMemory(selected, false), true, 400)
+	setHistory("filehelper")
+	req("POST", selectedRoute, postMemory(selected, true), true, 409)
+	setHistory("123@chatroom", "filehelper")
+	req("POST", selectedRoute, postMemory(selected, true), true, 409)
+	selected = req("GET", selectedRoute, nil, false, 200)
+
+	targetMemory, err := companion.NewStore(filepath.Join(target, "memory"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := targetMemory.Observe(companion.Input{Channel: "wechat", Account: "one", Thread: "filehelper", Sender: "synthetic-target", TraceID: "target-local-message", Text: "existing target history"}, cfg, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := targetMemory.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if row := req("GET", otherRoute, nil, false, 200); row["status"] != "conflict" {
+		t.Fatal("existing target scope was not protected", row)
+	}
+	write(liveMarker, j(starting))
+	req("POST", selectedRoute, postMemory(selected, true), true, 409)
+	write(liveMarker, j(marker))
+	oldMemory, err := companion.NewStore(legacyMemoryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oldMemory.Observe(companion.Input{Channel: "wechat", Account: "one", Thread: "123@chatroom", Sender: "synthetic-sender",
+		TraceID: "added-after-preview", Text: "synthetic newer original", MessageTime: now.Format(time.RFC3339Nano),
+		Source: &companion.SourceRef{Integrity: "observed", MessageType: 1, ServerID: "synthetic-second-original"}}, cfg, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := oldMemory.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req("POST", selectedRoute, postMemory(selected, true), true, 409)
+	selected = req("GET", selectedRoute, nil, false, 200)
+	if selected["status"] != "ready" || selected["event_count"] != float64(2) {
+		t.Fatal("updated source was not reprojected", selected)
+	}
+	confirmed := req("POST", selectedRoute, postMemory(selected, true), true, 200)
+	if confirmed["status"] != "applied" || confirmed["event_count"] != float64(2) || bytes.Contains(j(confirmed), []byte("synthetic-private-body")) {
+		t.Fatal("unexpected apply result", confirmed)
+	}
+	rawBundle, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req("POST", selectedRoute, postMemory(selected, true), true, 200)
+	if data, err := os.ReadFile(bundlePath); err != nil || !bytes.Equal(rawBundle, data) {
+		t.Fatal("idempotent apply changed the saved bundle", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, stationLegacyMemoryFile("one", "filehelper"))); !os.IsNotExist(err) {
+		t.Fatal("apply wrote a second conversation", err)
+	}
+	var bundle stationLegacyMemory
+	if err := json.Unmarshal(rawBundle, &bundle); err != nil || bundle.Account != "one" || bundle.Thread != "123@chatroom" || len(bundle.Selection.Events) != 2 {
+		t.Fatal("saved bundle scope mismatch", err)
+	}
+	if _, err := readStationLegacyMemory(target, "one", "123@chatroom", bundle.Grant); err != nil {
+		t.Fatal("current grant could not open the selected bundle", err)
+	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, f = open()
+	h, f = open()
 	f.login()
-	loginOnline.Store(true)
+	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "applied" {
+		t.Fatal("applied scope was not restored after restart", row)
+	}
+	activeNative, err := h.wechat.WorkerSender(t.Context(), wechatapp.ConnectionID("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveMemory, err := companion.NewStore(filepath.Join(target, "memory"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer liveMemory.Close()
+	tools := &stationAttachmentTools{dir: target, native: activeNative, store: liveMemory, blocked: func() bool { return false },
+		reads: map[string]time.Time{"123@chatroom": bundle.Grant}}
+	trace := companion.Input{Channel: "wechat", Account: "one", Thread: "123@chatroom", Sender: "synthetic-sender",
+		TraceID: "after-import", Text: "synthetic new question", MessageTime: bundle.Grant.Add(time.Second).Format(time.RFC3339Nano)}
+	tools.SetTrace(trace)
+	stamp := tools.MemoryResultAuthorization()
+	if stamp == "" || !tools.MemoryResultAuthorized(stamp) || !tools.EphemeralToolResult("wechat_read_legacy") {
+		t.Fatal("imported evidence was not bound to the live history grant")
+	}
+	list, err := tools.List(t.Context())
+	if err != nil || !slices.ContainsFunc(list, func(tool mcptools.Tool) bool { return tool.Name == "wechat_read_legacy" }) {
+		t.Fatal("ordinary tool discovery did not expose the current authorized scope", err)
+	}
+	call := json.RawMessage(`{"kind":"events","max_bytes":1000}`)
+	if raw, err := tools.Call(t.Context(), "wechat_read_legacy", call); err != nil ||
+		!strings.Contains(raw, "synthetic-private-body") || strings.Contains(raw, "foreign-private-thread") {
+		t.Fatal("ordinary tool access to imported evidence was incorrect", err)
+	}
+	if err := liveMemory.Observe(trace, cfg, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := liveMemory.Clear(companion.ScopeID("wechat", "one", trace.Thread)); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := tools.Call(t.Context(), "wechat_read_legacy", call); err == nil || raw != "" {
+		t.Fatal("scope clear did not block never-observed imported sources")
+	}
+	if tools.MemoryResultAuthorized(stamp) {
+		t.Fatal("a queued reply can still use the cleared evidence authority")
+	}
+	setHistory("filehelper")
+	req("POST", selectedRoute, postMemory(selected, true), true, 409)
+	setHistory("123@chatroom", "filehelper")
+	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "conflict" {
+		t.Fatal("regrant reactivated the bundle from the old grant", row)
+	}
 	write(liveMarker, j(starting))
 	assertCutover(req("GET", planRoute("one"), nil, false, 200), "changed", "import_receipt_matched", "online")
 	assertCutover(req("POST", planRoute("one"), planDigest(plan), true, 200), "stop_record_matched", "import_receipt_matched", "signed_out")

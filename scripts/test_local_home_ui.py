@@ -280,6 +280,7 @@ def verify(binary, output):
                 worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "contact_read": False, "actions": []}
                 legacy = {"availability": "available", "previews": 0, "posts": []}
                 legacy_memory = {"requests": []}
+                legacy_memory_selection = {"gets": [], "posts": []}
 
                 def legacy_plan(applied=False):
                     refreshed = legacy["availability"] == "applied" and legacy["previews"] >= 3
@@ -351,6 +352,30 @@ def verify(binary, output):
                 legacy_memory_pattern = legacy_import_pattern + "/memory*"
 
                 def legacy_memory_report(route):
+                    path = urlparse(route.request.url).path
+                    selected_prefix = "/memory/"
+                    if selected_prefix in path:
+                        thread = unquote(path.split(selected_prefix, 1)[1])
+                        assert thread == "synthetic-room@chatroom"
+                        if route.request.method == "GET":
+                            legacy_memory_selection["gets"].append(thread)
+                            digest = "fixture-memory-selection-v2" if len(legacy_memory_selection["gets"]) > 1 else "fixture-memory-selection-v1"
+                            fulfill_json({"status": "ready", "digest": digest, "event_count": 12,
+                                          "memory_count": 3, "reason": "当前 Agent 已暂停，接续不会自动启动"})(route)
+                            return
+                        assert route.request.method == "POST"
+                        assert route.request.headers.get("x-csrf-token"), "memory continuation lacks owner CSRF"
+                        payload = route.request.post_data_json
+                        legacy_memory_selection["posts"].append(payload)
+                        assert payload.get("same_identity") is True
+                        if len(legacy_memory_selection["posts"]) == 1:
+                            assert payload == {"digest": "fixture-memory-selection-v1", "same_identity": True}
+                            fulfill_json({"error": "stale memory preview"}, status=409)(route)
+                            return
+                        assert payload == {"digest": "fixture-memory-selection-v2", "same_identity": True}
+                        fulfill_json({"status": "applied", "event_count": 12, "memory_count": 3,
+                                      "reason": "已接续到当前账号的记忆库"})(route)
+                        return
                     assert route.request.method == "GET"
                     query = parse_qs(urlparse(route.request.url).query, keep_blank_values=True)
                     after = query.get("after", [""])[0]
@@ -371,6 +396,10 @@ def verify(binary, output):
                                                      "history_granted": True}], "next_after": "fixture-memory-next"})(route)
 
                 page.route(legacy_memory_pattern, legacy_memory_report)
+                # Register the per-conversation route after the inventory route.
+                # Playwright runs matching handlers in reverse registration order,
+                # so this keeps a selected scope out of the paged inventory handler.
+                page.route(legacy_import_pattern + "/memory/*", legacy_memory_report)
                 contacts_pattern = status_pattern + "/contacts*"
                 contact_queries = []
 
@@ -418,6 +447,26 @@ def verify(binary, output):
                 page.get_by_text("匹配范围：2；未映射范围：1；外部范围：0", exact=True).wait_for()
                 page.get_by_text("会话：synthetic-room@chatroom；来源候选：12；已排除：2；记忆：3；摘要：有；当前目标历史授权：已授权", exact=True).wait_for()
                 page.get_by_text("历史授权仅表示当前目标连接的读取权限，不代表可读取旧版资料。", exact=True).wait_for()
+                page.get_by_role("button", name="预演接续此会话", exact=True).click()
+                page.get_by_text("可接续此会话", exact=True).wait_for()
+                page.get_by_text("来源事件：12；可接续记忆：3", exact=True).wait_for()
+                page.get_by_text("当前 Agent：Agent 未启动；已配置历史读取会话：0 个。", exact=True).wait_for()
+                page.get_by_text("说明：当前 Agent 已暂停，接续不会自动启动", exact=True).wait_for()
+                memory_apply = page.get_by_role("button", name="确认接续此会话", exact=True)
+                assert memory_apply.is_disabled(), "memory continuation requires explicit identity confirmation"
+                assert not legacy_memory_selection["posts"], "memory preview must not write before confirmation"
+                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
+                memory_apply.click()
+                page.get_by_text("旧资料或当前目标已变化，请重新预演此会话。", exact=True).wait_for()
+                assert legacy_memory_selection["posts"] == [{"digest": "fixture-memory-selection-v1", "same_identity": True}]
+                page.get_by_role("button", name="重新预演此会话", exact=True).click()
+                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
+                page.get_by_role("button", name="确认接续此会话", exact=True).click()
+                page.get_by_text("此会话已接续", exact=True).wait_for()
+                assert legacy_memory_selection["posts"] == [
+                    {"digest": "fixture-memory-selection-v1", "same_identity": True},
+                    {"digest": "fixture-memory-selection-v2", "same_identity": True}
+                ], "memory continuation must reread after stale confirmation"
                 page.get_by_role("button", name="读取下一页会话", exact=True).click()
                 page.get_by_text("会话：synthetic-room-older@chatroom；来源候选：4；已排除：1；记忆：1；摘要：无；当前目标历史授权：未授权", exact=True).wait_for()
                 assert legacy_memory["requests"] == ["", "fixture-memory-next"] and not legacy["posts"], "memory check must be read-only"
