@@ -216,6 +216,8 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .project-tool-permissions { display: grid; gap: 3px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 11px; background: rgba(93, 99, 217, .045); }
 .project-tool-permissions strong { font-size: .83rem; }
 .project-tool-permissions span { color: var(--muted); font-size: .79rem; line-height: 1.5; }
+.project-tool-voice-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 8rem; overflow: auto; }
+.project-tool-voice { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid rgba(93, 99, 217, .18); border-radius: 999px; color: var(--accent-deep); font-size: .76rem; font-weight: 700; background: var(--surface-solid); }
 .project-tool-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
 .project-tool-approval { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: .82rem; font-weight: 700; cursor: pointer; }
 .project-tool-approval input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }

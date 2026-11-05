@@ -96,7 +96,7 @@ type localChatService struct {
 func newLocalChatService(home *localHomeService) *localChatService {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &localChatService{home: home, models: newLocalModelStore(home.dataDir), ctx: ctx, cancel: cancel,
-		projectTools: &localProjectTools{home: home, options: packagedWindowsToolOptions()}}
+		projectTools: &localProjectTools{home: home, options: packagedWindowsToolOptions(), rvc: newLocalRVCService(home.dataDir, home.root)}}
 }
 
 func (h *localChatService) beginShutdown() {

@@ -37,6 +37,7 @@ CAPABILITIES = {
     "mobile-control": {"device.plan": (True, {"model.invoke"}), "device.list": (True, {"device"}), "device.observe": (True, {"device"}), "device.act": (True, {"device"}), "device.record": (True, {"device"}), "device.read_artifact": (True, {"device"}), "device.workflow": (True, {"device", "model.invoke"})},
     "music": {"music.generate": (True, {"model.invoke"}), "music.bridge_request": (True, {"network"}), "music.service_control": (True, {"network"}), "music.prepare": (True, {"network"}), "music.cover": (False, set()), "music.train": (False, set())},
     "project-development": {"project.workspace_read": (True, {"workspace.read"}), "project.workspace_write": (True, {"workspace.write"}), "project.workspace_execute": (True, {"process.execute"})},
+    "rvc": {"rvc.convert": (True, {"artifact.read", "artifact.write", "gpu"})},
     "share-reader": {"share.read": (False, set()), "share.resolve_public": (True, {"network"}), "share.resolve_channels": (True, {"network"})},
     "speech": {"speech.synthesize": (True, {"model.invoke"}), "speech.synthesize_named": (True, {"artifact.read", "model.invoke"}), "speech.voices": (False, set()), "speech.train": (False, set())},
     "visual-generation": {"visual.generate": (False, {"network", "artifact.write"})},

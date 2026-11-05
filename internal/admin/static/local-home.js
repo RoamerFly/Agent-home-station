@@ -1511,6 +1511,14 @@
   }
   function projectToolStatus(tool) {
     if (!tool || !tool.installed && !tool.catalog_available) return ["未随当前发行包提供", "请安装包含此工具的 Windows 发行包。"];
+    if (tool && tool.id === "rvc") {
+      if (!tool.runtime_ready) return ["本机后端未就绪", projectToolReason(tool) || "RVC 换声后端尚不能启动；请先补齐本机运行环境。"];
+      if (!tool.installed) return ["尚未安装", "安装后可在本地聊天中，对获准音频选择已登记声线进行换声。"];
+      if (!tool.enabled) return ["已安装，未启用", "启用后仅在实际换声任务中按需启动，不会自动处理或发送音频。"];
+      if (tool.state === "running") return ["任务处理中", "可在本地聊天中按原任务编号核对进度。"];
+      if (tool.state === "failed") return ["本机后端异常", projectToolReason(tool) || "下次换声任务会重新检查本机后端。"];
+      return ["已启用，等待任务", "收到明确的换声请求后，才会读取本次获准音频和所选声线。"];
+    }
     if (!tool.runtime_ready) return ["缺少本地运行环境", "工具尚不能启动；先补齐本机运行环境或依赖包。"];
     if (!tool.installed) return ["尚未安装", "安装后才会把工具放入大肥鱼的项目环境。"];
     if (!tool.enabled && tool.update_available) return ["已安装，可更新", "已发现随当前发行包提供的新版本；更新会保留已登记的本地成品。"];
@@ -1518,6 +1526,36 @@
     if (tool.state === "running") return ["已启动", tool.id === "audio-workshop" ? "本次音频处理结束后关闭运行器。" : "本地运行器空闲一段时间后会自动关闭。"];
     if (tool.state === "failed") return ["运行异常", "下次有本地任务时会尝试重新启动。"];
     return ["已启用，待命", "会在本地聊天实际需要时启动，不会取得网络或应用账号权限。"];
+  }
+  function projectToolReason(tool) {
+    const reasons = {
+      rvc_backend_missing: "当前发行包未找到 RVC 后端。",
+      rvc_backend_not_configured: "尚未登记本机 RVC 后端或可用声线。",
+      rvc_backend_unavailable: "本机 RVC 后端暂不可用，可检查本机运行环境后再试。",
+      rvc_backend_start_failed: "RVC 后端启动失败，下一次换声任务会重新检查。",
+      rvc_voice_profiles_missing: "尚未登记可选声线，暂时不能发起换声任务。"
+    };
+    const code = typeof tool?.reason === "string" ? tool.reason.trim() : "";
+    if (reasons[code]) return reasons[code];
+    if (/^[\u4e00-\u9fff\u3002\uff0c\uff1a\uff1b\uff01\uff1f\u3001\sA-Za-z0-9_-]{1,120}$/.test(code) && /[\u4e00-\u9fff]/.test(code)) return code;
+    return code ? "本机 RVC 状态暂不可用，请查看工具配置后再试。" : "";
+  }
+  function renderRVCProfiles(tool) {
+    const profiles = Array.isArray(tool.voice_profiles) ? tool.voice_profiles.filter((profile) => profile && typeof profile.label === "string" && profile.label.trim()) : [];
+    const voices = appElement("div", "", "project-tool-permissions project-tool-voices");
+    voices.append(appElement("strong", "可选声线"));
+    if (!profiles.length) {
+      voices.append(appElement("span", "尚未登记声线。登记完成后，大肥鱼可在聊天任务中选择对应声线。"));
+      return voices;
+    }
+    const list = appElement("div", "", "project-tool-voice-list");
+    profiles.forEach((profile) => {
+      const label = appElement("span", profile.label.trim(), "project-tool-voice");
+      if (typeof profile.id === "string") label.title = profile.id;
+      list.append(label);
+    });
+    voices.append(list);
+    return voices;
   }
   function projectToolPDFNote(tool) {
     if (!tool || !tool.installed) return "安装后会检查 DOCX 导出 PDF 所需的本地环境。";
@@ -1554,6 +1592,11 @@
         scope.append(appElement("strong", "音频处理"), appElement("span", "截取本机 WAV 成品，可转单声道，输出 16 位 WAV。每次仅访问获准的输入和任务输出。"));
         detail.append(scope);
       }
+      if (tool.id === "rvc") {
+        const permissions = appElement("div", "", "project-tool-permissions");
+        permissions.append(appElement("strong", "换声任务"), appElement("span", "使用本次获准的音频和指定声线，可调用本机 GPU。通过核验的音频可从聊天下载。"));
+        detail.append(permissions, renderRVCProfiles(tool));
+      }
       if (tool.id === "document-workshop") {
         const permissions = appElement("div", "", "project-tool-permissions");
         permissions.append(appElement("strong", "本次授权"), appElement("span", "本机素材读写限于授权的文档任务，成品保存在本机，可从聊天下载。联网和应用账号权限另行管理。"));
@@ -1565,7 +1608,7 @@
       const controls = appElement("div", "", "project-tool-actions");
       const busy = current.applying === tool.id;
       if (!tool.installed) {
-        const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", "确认本机素材读写");
+        const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", tool.id === "rvc" ? "确认任务素材读写与本机 GPU" : "确认本机素材读写");
         approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !tool.catalog_available || !tool.runtime_ready;
         approval.append(checkbox, copy);
         const install = appElement("button", busy ? "正在安装…" : "安装", "button compact primary");
@@ -1583,7 +1626,7 @@
           if (tool.enabled) {
             controls.append(appElement("span", "请先停用，再更新到新版本。", "project-tool-update-note"));
           } else {
-            const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", "确认本机素材读写");
+            const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", tool.id === "rvc" ? "确认任务素材读写与本机 GPU" : "确认本机素材读写");
             approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !tool.runtime_ready;
             approval.append(checkbox, copy);
             const upgrade = appElement("button", busy ? "正在更新…" : "更新", "button compact secondary");

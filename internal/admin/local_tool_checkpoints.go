@@ -141,6 +141,9 @@ func (t *localToolSet) checkpointView(op companion.LocalToolCheckpoint, grant lo
 		view["state"] = "grant_changed"
 		return view
 	}
+	if op.Tool == localRVCStartTool || op.Tool == localRVCJobTool {
+		return t.rvcCheckpointView(op, grant)
+	}
 	if projectOperation(op.Tool).capability != "" {
 		return t.projectCheckpointView(op, grant)
 	}

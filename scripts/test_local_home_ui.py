@@ -261,6 +261,39 @@ def verify(binary, output):
                     audio.get_by_role("button", name="停用", exact=True).click()
                     page.get_by_text("音频工坊已停用。", exact=True).wait_for()
 
+                rvc = next(tool for tool in context.request.get(origin + "/api/local/project-tools").json()["tools"]
+                           if tool["id"] == "rvc")
+                if rvc["catalog_available"]:
+                    # Exercise the real install/enable endpoint. These are
+                    # registration placeholders, and no conversion is started.
+                    assert not rvc["runtime_ready"]
+                    rvc_root = data.parent / "synthetic-rvc-resources"
+                    media = data.parent / "synthetic-rvc-media"
+                    for path in (rvc_root / "public_workspace", rvc_root / "pri_workspace", media):
+                        path.mkdir(parents=True)
+                    for executable in ("ffmpeg.exe", "ffprobe.exe"):
+                        (media / executable).touch()
+                    (data / "station-rvc.json").write_text(json.dumps({
+                        "schema_version": 1, "enabled": True, "workspace": str(rvc_root),
+                        "media": str(media), "port": 21981,
+                        "profiles": [{"id": "private-synthetic", "label": "合成试听声线"}],
+                    }, ensure_ascii=False), encoding="utf-8")
+                    page.locator("#chat-tab").click()
+                    page.get_by_role("tab", name="项目工具", exact=True).click()
+                    card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="RVC 换声"))
+                    card.get_by_text("合成试听声线", exact=True).wait_for()
+                    install = card.get_by_role("button", name="安装", exact=True)
+                    assert install.is_disabled()
+                    card.get_by_role("checkbox", name="确认任务素材读写与本机 GPU").check()
+                    install.click()
+                    page.get_by_text("RVC 换声已安装。", exact=True).wait_for()
+                    card.get_by_role("button", name="启用", exact=True).click()
+                    page.get_by_text("RVC 换声已启用。", exact=True).wait_for()
+                    card.get_by_text("已启用，等待任务", exact=True).wait_for()
+                    page.screenshot(path=str(output / "project-tools-rvc-light.png"), full_page=True)
+                    card.get_by_role("button", name="停用", exact=True).click()
+                    page.get_by_text("RVC 换声已停用。", exact=True).wait_for()
+
                 # The catalog and source checkout use the real local HTTP and CSRF path.
                 # A plain server executable may intentionally ship without application source;
                 # in that case this primary replay still verifies the useful empty-source state.

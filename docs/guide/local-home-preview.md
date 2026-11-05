@@ -236,13 +236,30 @@ PDF 导出还需可用的文档运行时。构建时为上述命令同时提供 
 
 在「项目工具」确认本机素材读写授权，安装并启用「音频工坊」。把大肥鱼家目录内的 PCM WAV 登记为成品后，可在本地聊天说「把这个成品从第 12 秒开始截取 8 秒，转成单声道」。聊天收到新成品编号后可直接下载。结果报告实际起点、时长和是否读到末尾。工具保留原采样率，输出 16 位 PCM WAV，输入及输出每份最大 512 MiB。长音频可指定起点与时长分段处理。
 
-### 独立 RVC 后端预览
+### 独立 RVC 换声
 
-开发验收可运行 `./scripts/Build-Desktop.ps1 -LocalStation -WithRVCBackend -Test -OutputDirectory ./temp/local-station-rvc`。构建放入独立控制脚本、摘要清单和受管 Python。RVC 推理依赖、模型和索引需按许可另行准备。此预览的「项目工具」尚未提供 RVC 安装或发起换声的入口。
+用 `./scripts/Build-Desktop.ps1 -LocalStation -WithRVCBackend -Test -OutputDirectory ./temp/local-station-rvc` 构建预览。它包含项目工具声明、独立控制脚本及受管 Python。推理依赖、上游 RVC、分离模型缓存、声线权重和索引需由主人按许可准备。文件和模型留在本机。
 
-后端以本机大肥鱼身份绑定独立的资源目录和作业账本。控制令牌放在资源目录和桌面包控制目录之外，监听地址固定为回环。具名声线需先登记，再显式选择；状态查询使用原请求键或原作业编号。重启后任务等待核对，只有明确续办才可使用原输入与原声线。运行中的取消先返回「正在取消」，进程终止后才记录取消。
+在传给本地服务的 `-data` 目录中创建 `station-rvc.json`。以下是示例，目录须替换成已核验的本机资源。回环端口应留给本机 RVC。
 
-本机合成回放可用 `python -B scripts/test_station_rvc_bridge.py`。指定 `AHS_STATION_RVC_CONTROL_ROOT` 可用已打包的控制脚本复跑。合成回放验证接口、账本和成品字节；实际模型推理与试听单独验收。
+```json
+{
+  "schema_version": 1,
+  "enabled": true,
+  "workspace": "D:\\StationRVC\\resources",
+  "media": "D:\\StationRVC\\windows-media",
+  "port": 6198,
+  "profiles": [{"id": "private-example", "label": "本机试听声线"}]
+}
+```
+
+`workspace` 与宿主数据、大肥鱼可编辑目录分开，包含 `public_workspace` 和 `pri_workspace`。前者提供已核验的 Windows 运行时、RVC 项目及适用的公共模型；`media` 提供 `ffmpeg.exe` 和 `ffprobe.exe`。私人声线登记在 `pri_workspace/<fish_id 的 SHA-256>/voice-library/manifests/<声线 ID>.json`，清单指向本私人声线库内的配置。声线配置记录模型和索引的实际 SHA-256，并绑定所属运行时。现有微信私有声线需要单独核准后登记，保留原模型和原配置。回环令牌由宿主管理。
+
+打开「项目工具 → RVC 换声」，确认任务素材读写与本机 GPU 权限后安装、启用。把一份 PCM16 WAV 登记为本机成品，在聊天中指定该成品和声线，例如「把这个成品用本机试听声线换声」。单段最多 600 秒及 25 MiB。需要先截取时可用音频工坊。
+
+提交后聊天会获得任务编号。通过同一编号可查进度、取消或明确续办。完成的音频经源文件、声线、实际设备、时长和摘要核对后登记为可下载成品。提交回执未知时，宿主用原请求键查询。重启后保留原任务及进度，续办沿用原素材和原声线。
+
+`python -B scripts/test_station_rvc_bridge.py` 可复跑合成桥接验收。指定 `AHS_STATION_RVC_CONTROL_ROOT` 可指向已打包控制脚本。真实模型推理和试听另行验收。
 
 ### Windows 运行器
 

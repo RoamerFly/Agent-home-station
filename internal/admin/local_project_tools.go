@@ -29,6 +29,7 @@ type localProjectTools struct {
 	host    *localProjectToolHost
 	closed  bool
 	active  map[string]int
+	rvc     localRVCBackend
 }
 
 type localProjectToolHost struct {
@@ -37,16 +38,18 @@ type localProjectToolHost struct {
 }
 
 type localProjectToolView struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	CatalogAvailable bool   `json:"catalog_available"`
-	RuntimeReady     bool   `json:"runtime_ready"`
-	PDFReady         bool   `json:"pdf_ready"`
-	UpdateAvailable  bool   `json:"update_available"`
-	Installed        bool   `json:"installed"`
-	Enabled          bool   `json:"enabled"`
-	Revision         int    `json:"revision"`
-	State            string `json:"state"`
+	ID               string          `json:"id"`
+	Name             string          `json:"name"`
+	CatalogAvailable bool            `json:"catalog_available"`
+	RuntimeReady     bool            `json:"runtime_ready"`
+	PDFReady         bool            `json:"pdf_ready"`
+	UpdateAvailable  bool            `json:"update_available"`
+	Installed        bool            `json:"installed"`
+	Enabled          bool            `json:"enabled"`
+	Revision         int             `json:"revision"`
+	State            string          `json:"state"`
+	Reason           string          `json:"reason,omitempty"`
+	VoiceProfiles    []localRVCVoice `json:"voice_profiles,omitempty"`
 }
 
 func (s *localProjectTools) runtimeReady() bool {
@@ -126,10 +129,16 @@ func (s *localProjectTools) close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
-	if s.host == nil {
-		return nil
+	var err error
+	if s.rvc != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		err = s.rvc.Close(ctx)
+		cancel()
 	}
-	err := errors.Join(s.host.controller.Close(), s.host.store.Close())
+	if s.host == nil {
+		return err
+	}
+	err = errors.Join(err, s.host.controller.Close(), s.host.store.Close())
 	s.host = nil
 	return err
 }
@@ -137,6 +146,7 @@ func (s *localProjectTools) close() error {
 var localProjectPackages = []struct{ ID, Name string }{
 	{documentWorkshopPluginID, "文档工坊"},
 	{localAudioPackage, "音频工坊"},
+	{localRVCPackage, "RVC 换声"},
 }
 
 func (s *localProjectTools) markActive(id string) func() {
@@ -161,9 +171,23 @@ func (s *localProjectTools) isActive(id string) bool {
 
 func (s *localProjectTools) projectView(ctx context.Context, host *localProjectToolHost, id, name string) (localProjectToolView, error) {
 	view := localProjectToolView{ID: id, Name: name, RuntimeReady: s.runtimeReady(), State: "not_installed"}
+	var rvcBusy bool
 	if s.options.CatalogDirectory != "" {
 		info, err := os.Lstat(filepath.Join(s.options.CatalogDirectory, view.ID, "plugin.json"))
 		view.CatalogAvailable = err == nil && info.Mode().IsRegular()
+	}
+	if id == localRVCPackage {
+		view.RuntimeReady = false
+		if host != nil && s.rvc != nil {
+			info, err := s.rvc.Info(ctx, host.store.Account())
+			view.RuntimeReady, view.VoiceProfiles = err == nil && len(info.Profiles) != 0, info.Profiles
+			rvcBusy = err == nil && info.Busy
+			if err != nil {
+				view.Reason = localRVCSetupReason(err)
+			} else if !view.RuntimeReady {
+				view.Reason = "尚未登记获准使用的 RVC 声线。"
+			}
+		}
 	}
 	if host == nil {
 		return view, nil
@@ -187,7 +211,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		view.State = "disabled"
 	case !view.RuntimeReady:
 		view.State = "runtime_missing"
-	case s.isActive(id):
+	case rvcBusy || s.isActive(id):
 		view.State = "running"
 	default:
 		view.State = host.controller.Status(view.ID).State
@@ -246,10 +270,14 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if (in.Action == "install" || in.Action == "upgrade") && !in.ApproveArtifacts {
+		if id == localRVCPackage {
+			fail(w, 400, "安装 RVC 需要主人确认素材读写与本机计算权限")
+			return
+		}
 		fail(w, 400, "安装需要主人明确授予本机成品读写权限")
 		return
 	}
-	if in.Action == "enable" && !s.runtimeReady() {
+	if in.Action == "enable" && id != localRVCPackage && !s.runtimeReady() {
 		fail(w, 409, "Windows 项目工具运行器缺失")
 		return
 	}
@@ -297,14 +325,40 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 				fail(w, 409, "项目工具发行源缺失或摘要不匹配")
 				return
 			}
-			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, []string{"artifact.read", "artifact.write"})
+			grants := []string{"artifact.read", "artifact.write"}
+			if id == localRVCPackage {
+				grants = localRVCGrants
+			}
+			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, grants)
 		}
 	} else {
 		if err != nil || current.Removed || current.Revision != in.Revision {
 			fail(w, 409, "项目工具版本已变化，请刷新后重试")
 			return
 		}
-		if in.Action == "enable" {
+		if id == localRVCPackage {
+			if in.Action == "enable" {
+				if s.rvc == nil {
+					fail(w, 409, "当前发行包未提供 RVC 后端")
+					return
+				}
+				info, checkErr := s.rvc.Info(ctx, record.FishID)
+				if checkErr != nil || len(info.Profiles) == 0 {
+					fail(w, 409, localRVCSetupReason(checkErr))
+					return
+				}
+			}
+			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
+			if err == nil && in.Action == "disable" && s.rvc != nil {
+				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
+				err = s.rvc.Stop(stopCtx)
+				cancel()
+				if err != nil {
+					fail(w, 503, "RVC 已停用，新任务已拦截，正在核对后端退出。")
+					return
+				}
+			}
+		} else if in.Action == "enable" {
 			err = host.controller.EnableOnDemand(ctx, id, current.Revision)
 		} else {
 			err = host.controller.Stop(ctx, id, current.Revision)

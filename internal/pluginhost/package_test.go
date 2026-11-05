@@ -53,8 +53,8 @@ func TestOfficialContracts(t *testing.T) {
 		}
 	}
 	dirs = folders
-	if len(dirs) != 11 {
-		t.Fatalf("expected 11 capability packages, got %d", len(dirs))
+	if len(dirs) != 12 {
+		t.Fatalf("expected 12 capability packages, got %d", len(dirs))
 	}
 	for _, d := range dirs {
 		t.Run(d.Name(), func(t *testing.T) {
@@ -62,8 +62,12 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" {
-				if p.Status != "ready" || p.Runtime.Transport != "mcp-stdio" || p.Runtime.Entrypoint != "runtime/main.py" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" || d.Name() == "rvc" {
+				transport, entrypoint := "mcp-stdio", "runtime/main.py"
+				if d.Name() == "rvc" {
+					transport, entrypoint = "http-adapter", "runtime/managed-service.json"
+				}
+				if p.Status != "ready" || p.Runtime.Transport != transport || p.Runtime.Entrypoint != entrypoint {
 					t.Fatal("web runtime not connected")
 				}
 				if d.Name() != "web-search" {
@@ -108,6 +112,12 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"audio.prepare": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" {
 							t.Fatal("audio workshop must use only artifact read/write permissions")
+						}
+					}
+					if d.Name() == "rvc" {
+						want = map[string]bool{"rvc.convert": true}
+						if len(p.Permissions) != 3 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" || p.Permissions[2] != "gpu" {
+							t.Fatal("rvc package must declare only artifact read/write and explicit GPU permissions")
 						}
 					}
 					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))
@@ -176,6 +186,18 @@ func TestOfficialContracts(t *testing.T) {
 							}
 							if d.Name() == "media-understanding" && (cap.Async || len(cap.Permissions) != 2 || cap.Permissions[0] != "artifact.read" || cap.Permissions[1] != "model.invoke") {
 								t.Fatal("media capability must remain synchronous and use only artifact/model proxies", cap.ID)
+							}
+							if d.Name() == "rvc" && (!cap.Async || cap.SideEffect != "artifact" || len(cap.Permissions) != 3 || cap.Permissions[0] != "artifact.read" || cap.Permissions[1] != "artifact.write" || cap.Permissions[2] != "gpu") {
+								t.Fatal("rvc conversion must remain asynchronous and use only artifact/GPU host authorities", cap.ID)
+							}
+							if d.Name() == "rvc" {
+								var schema struct {
+									Properties map[string]json.RawMessage `json:"properties"`
+									Required   []string                   `json:"required"`
+								}
+								if err := json.Unmarshal(cap.InputSchema, &schema); err != nil || len(schema.Properties) != 3 || schema.Properties["artifact_id"] == nil || schema.Properties["voice_profile_id"] == nil || schema.Properties["title"] == nil || len(schema.Required) != 2 || schema.Required[0] != "artifact_id" || schema.Required[1] != "voice_profile_id" {
+									t.Fatal("rvc conversion must require only artifact_id and voice_profile_id, with optional title")
+								}
 							}
 							delete(want, cap.ID)
 						} else if cap.Implementation != "migration-pending" || cap.Discoverable {

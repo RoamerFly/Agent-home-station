@@ -19,6 +19,7 @@ import rvc_profiles
 import yue_recovery
 import station_rvc
 import io
+import tempfile
 import wave
 from urllib.parse import parse_qs, urlsplit
 from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
@@ -178,26 +179,55 @@ def prepare_song_graph(workflow_dir,body,jid,input_dir,template=None):
     graph['10']['inputs']['filename_prefix']='wechat-agent/'+jid
     return graph
 
+def station_ready_file(value,nonce,token_path,scope):
+    from managed_music_runner import canonical
+    if not re.fullmatch(r'[a-f0-9]{64}',nonce or ''):
+        raise ValueError('station_rvc_ready_nonce_invalid')
+    path=Path(value)
+    if not path.is_absolute() or path.name!=scope+'-'+nonce+'.json':
+        raise ValueError('station_rvc_ready_path_invalid')
+    parent=canonical(path.parent)
+    if parent!=token_path.parent/'station-rvc-ready':
+        raise ValueError('station_rvc_ready_path_invalid')
+    return parent/path.name
+
+def signal_station_ready(path,nonce,port,scope):
+    fd,temporary=tempfile.mkstemp(dir=path.parent,prefix='.station-rvc-ready-')
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as file:
+            json.dump({'nonce':nonce,'port':port,'scope':scope,'pid':os.getpid()},file)
+            file.flush()
+            os.fsync(file.fileno())
+        os.link(temporary,path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');p.add_argument('--singing-voice-config');p.add_argument('--managed-public');p.add_argument('--managed-private');p.add_argument('--comfy-socket');p.add_argument('--comfy-input')
     p.add_argument('--rvc-only',action='store_true')
     p.add_argument('--station-fish')
     p.add_argument('--desktop',action='store_true')
+    p.add_argument('--ready-file')
+    p.add_argument('--ready-nonce')
     args=p.parse_args()
     station=args.rvc_only
-    if station != bool(args.station_fish) or args.desktop and not station:
+    if (station != bool(args.station_fish) or args.desktop and not station or
+            bool(args.ready_file) != bool(args.ready_nonce) or args.ready_file and not station):
         p.error('station_rvc_scope_required')
     project=Path(args.project).resolve()
     workflow_dir=Path(args.workflow_dir).resolve() if args.workflow_dir else project/'workflows_api'
     sandbox=None;bound_account='';scope_header=ACCOUNT_HEADER
     token_path=Path(args.token_file)
     stopping=threading.Event()
+    ready_path=None
     if station:
         if args.bind!='127.0.0.1' or args.workflow_dir or args.comfy_socket or args.comfy_input or args.singing_voice_config:
             p.error('station_rvc_requires_isolated_loopback_and_explicit_profiles')
         public,private,state,token_path,bound_account=station_rvc.bind_scope(args.station_fish,args.managed_public,args.managed_private,args.state,args.token_file)
         if token_path.is_relative_to(Path(__file__).resolve().parent):
             p.error('station_rvc_token_inside_control_package')
+        if args.ready_file:
+            ready_path=station_ready_file(args.ready_file,args.ready_nonce,token_path,bound_account)
         sandbox={'public':str(public),'private':str(private)}
         scope_header=station_rvc.HEADER
         input_dir=None
@@ -627,9 +657,12 @@ def main():
                     return self.reply(400,{'error':'station_rvc_request_key_required'})
                 if not body.get('voice_profile_id'):
                     return self.reply(400,{'error':'station_rvc_profile_required'})
+                pin=body.get('profile_config_sha256')
+                if not isinstance(pin,str) or not re.fullmatch(r'[a-f0-9]{64}',pin):
+                    return self.reply(400,{'error':'station_rvc_profile_pin_required'})
                 if not isinstance(details['reference_source_sha256'],str) or not re.fullmatch(r'[a-f0-9]{64}',details['reference_source_sha256']):
                     return self.reply(400,{'error':'station_rvc_source_hash_required'})
-                if set(body)-{'title','reference_base64','reference_start_seconds','reference_seconds','reference_pretrimmed','reference_source_sha256','voice_profile_id'}:
+                if set(body)-{'title','reference_base64','reference_start_seconds','reference_seconds','reference_pretrimmed','reference_source_sha256','voice_profile_id','profile_config_sha256'}:
                     return self.reply(400,{'error':'station_rvc_unknown_request_field'})
                 try:
                     with wave.open(io.BytesIO(base64.b64decode(body['reference_base64'],validate=True)),'rb') as wav:
@@ -645,6 +678,8 @@ def main():
             try:_,voice=selected_rvc_profile(body)
             except Exception:return self.reply(503,{'error':'rvc_profile_unavailable'})
             if not voice or voice['engine']!='rvc':return self.reply(503,{'error':'rvc_profile_required'})
+            if station and voice.get('config_sha256')!=pin:
+                return self.reply(409,{'error':'station_rvc_profile_changed'})
             with lock:
                 duplicate=self.rvc_duplicate(key,fingerprint)
                 if duplicate:return self.reply(*duplicate)
@@ -670,14 +705,16 @@ def main():
             return self.reply(202,{'id':jid,'state':'queued','engine':'rvc','reference_used':True,'singing_voice_profile':voice['profile'],'voice_profile_id':body.get('voice_profile_id','')})
     # Windows/WSL access: token required on every endpoint. No remote code/API.
     server=ThreadingHTTPServer((args.bind,args.port),Handler)
-    if args.desktop:
-        def control():
-            for line in sys.stdin:
-                if line.strip()=='stop':break
-            stopping.set()
-            server.shutdown()
-        threading.Thread(target=control,daemon=True).start()
     try:
+        if ready_path:
+            signal_station_ready(ready_path,args.ready_nonce,server.server_port,bound_account)
+        if args.desktop:
+            def control():
+                for line in sys.stdin:
+                    if line.strip()=='stop':break
+                stopping.set()
+                server.shutdown()
+            threading.Thread(target=control,daemon=True).start()
         server.serve_forever()
     finally:
         server.server_close()

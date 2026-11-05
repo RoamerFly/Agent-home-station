@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import secrets
 import socket
 import subprocess
 import sys
@@ -63,11 +64,12 @@ class StationRVCBridgeTests(unittest.TestCase):
         # This deliberately sits outside both managed mounts *and* their
         # common workspace parent.  The station binder rejects a token that a
         # tool running in the workspace could traverse to.
-        token_root = self.root.parent / "station-rvc-control-tokens"
-        token_root.mkdir(exist_ok=True)
-        self.token_file = token_root / (self.root.name + ".token")
-        self.token_file.touch()
-        self.addCleanup(self.token_file.unlink, missing_ok=True)
+        control = tempfile.TemporaryDirectory(prefix="station-rvc-control-")
+        self.addCleanup(control.cleanup)
+        token_root = Path(control.name).resolve()
+        self.token_file = token_root / "token"
+        self.ready_root = token_root / "station-rvc-ready"
+        self.ready_root.mkdir()
         self.token_file.write_text(TOKEN, encoding="utf-8")
         self.counter = self.root / "conversion-count"
         self.wav = pcm_wav_bytes()
@@ -156,6 +158,8 @@ yue_bridge.main()
 
     def start(self, desktop=False):
         port = self.free_port()
+        nonce = secrets.token_hex(32)
+        ready_file = self.ready_root / f"{FISH_HASH}-{nonce}.json"
         env = dict(
             os.environ,
             PYTHONDONTWRITEBYTECODE="1",
@@ -169,6 +173,7 @@ yue_bridge.main()
                 "--managed-public", str(self.public),
                 "--managed-private", str(self.private),
                 "--token-file", str(self.token_file), "--port", str(port),
+                "--ready-file", str(ready_file), "--ready-nonce", nonce,
         ]
         if desktop:
             command.append("--desktop")
@@ -179,6 +184,9 @@ yue_bridge.main()
         )
         self.children.append(child)
         base = f"http://127.0.0.1:{port}"
+        self.wait_for(ready_file.is_file, child)
+        ready = json.loads(ready_file.read_text(encoding="utf-8"))
+        self.assertEqual(ready, {"nonce": nonce, "port": port, "scope": FISH_HASH, "pid": child.pid})
         self.wait_for(lambda: self.request(base, "/health")[0] == 200, child)
         return child, base
 
@@ -235,6 +243,7 @@ yue_bridge.main()
         }
         if profile:
             value["voice_profile_id"] = "private-test"
+            value["profile_config_sha256"] = "3" * 64
         return value
 
     def test_station_rvc_http_scope_profile_idempotency_and_restart(self):
@@ -269,6 +278,9 @@ yue_bridge.main()
         status, missing, _, _ = self.request(base, "/rvc-jobs", "POST", self.body(profile=False), key="c" * 64)
         self.assertGreaterEqual(status, 400)
         self.assertIn("profile", missing.get("error", ""))
+        wrong_pin = dict(self.body(), profile_config_sha256="4" * 64)
+        status, error, _, _ = self.request(base, "/rvc-jobs", "POST", wrong_pin, key="d" * 64)
+        self.assertEqual((status, error.get("error")), (409, "station_rvc_profile_changed"))
 
         status, created, _, _ = self.request(base, "/rvc-jobs", "POST", self.body(), key=REQUEST_KEY)
         self.assertIn(status, (200, 202))
