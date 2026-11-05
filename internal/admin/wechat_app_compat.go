@@ -13,9 +13,14 @@ type wechatCompatibility struct {
 	accounts *accountRegistry
 }
 
+const (
+	wechatAppID          = "wechat"
+	wechatInstallationID = "wechat-legacy"
+)
+
 func (w wechatCompatibility) registration() apphost.Registration {
 	return apphost.Registration{
-		Application: apphost.Application{ID: "wechat", Name: "微信", InstallationID: "wechat-legacy", Registration: "legacy"},
+		Application: apphost.Application{ID: wechatAppID, Name: "微信", InstallationID: wechatInstallationID, Registration: "legacy"},
 		Provider:    w,
 	}
 }

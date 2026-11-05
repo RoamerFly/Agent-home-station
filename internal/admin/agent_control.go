@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/plugins"
@@ -186,13 +187,14 @@ type agentTask struct {
 	RecoveryPrivacy  *companion.RecoveryPrivacyBinding `json:"model_recovery_privacy,omitempty"`
 }
 type agentOperation struct {
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-	ID        string          `json:"id"`
-	Tool      string          `json:"tool"`
-	Thread    string          `json:"thread"`
-	State     string          `json:"state"`
-	Result    string          `json:"result"`
-	At        time.Time       `json:"at"`
+	AppAction *apphost.ActionIntent `json:"app_action,omitempty"`
+	Arguments json.RawMessage       `json:"arguments,omitempty"`
+	ID        string                `json:"id"`
+	Tool      string                `json:"tool"`
+	Thread    string                `json:"thread"`
+	State     string                `json:"state"`
+	Result    string                `json:"result"`
+	At        time.Time             `json:"at"`
 }
 type agentData struct {
 	Tasks      map[string]agentTask      `json:"tasks"`
@@ -886,6 +888,10 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 // privilegedCall durably claims side effects. Interrupted/unknown operations
 // are never repeated automatically, including after restart or model retries.
 func (p *permittedTools) privilegedCall(ctx context.Context, name string, args json.RawMessage, fn func() (any, error)) (string, error) {
+	return p.claimPrivilegedCall(ctx, name, args, nil, fn)
+}
+
+func (p *permittedTools) claimPrivilegedCall(ctx context.Context, name string, args json.RawMessage, intent *apphost.ActionIntent, fn func() (any, error)) (string, error) {
 	a := p.manager.agent
 	id := p.operationID(name, args)
 	a.mu.Lock()
@@ -899,7 +905,7 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 		}
 		return old.Result, nil
 	}
-	op := agentOperation{Arguments: args, ID: id, Tool: name, Thread: p.trace.Thread, State: "running", Result: `{"state":"unknown","instruction":"已领取执行，勿重复提交；请核查实际结果"}`, At: time.Now().UTC()}
+	op := agentOperation{AppAction: intent, Arguments: args, ID: id, Tool: name, Thread: p.trace.Thread, State: "running", At: time.Now().UTC()}
 	claimed, _ := json.Marshal(map[string]string{"operation_id": id, "state": "unknown", "instruction": "已领取执行，勿重复提交；请核查实际结果"})
 	op.Result = string(claimed)
 	a.data.Operations[id] = op
@@ -917,7 +923,7 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 		if name == "server_process" || name == "server_windows_process" {
 			value = map[string]any{"state": "rejected", "reason": err.Error(), "instruction": "程序未启动；检查路径、参数和本机执行环境后可更正再试，不属于结果不确定"}
 		}
-		if strings.HasPrefix(name, "wechat_") {
+		if strings.HasPrefix(name, "wechat_") && intent == nil {
 			value = map[string]any{"state": "waiting", "reason": err.Error(), "instruction": "读取目标会话真实记录和原发送任务，依据反馈继续排查并修复。新的一次补发尝试可用新request_key，保留原job_id；已接受部分不重发。需要退避时agent_task保存waiting检查点，不能只说明失败便结束。"}
 		}
 		if mediaInputRejected {

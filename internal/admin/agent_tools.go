@@ -63,7 +63,9 @@ func (p *permittedTools) agentTools() []mcptools.Tool {
 	if !p.privileged() {
 		return tools
 	}
-	tools = append(tools, agentTool("wechat_recall", "Recall an exact OWN outgoing WeChat message after reading its real message_id from this account. Owner can act across this account's conversations from private chat or group. Server ID is resolved/verified internally. Never deletes other people's messages or claims success from queued status. Platform recall expiry/errors are returned. Does not create a test message. Input {message_id,request_key,thread_id?}.", `{"type":"object","properties":{"message_id":{"type":"string"},"request_key":{"type":"string"},"thread_id":{"type":"string"}},"required":["message_id","request_key"],"additionalProperties":false}`))
+	if contains(c.AccountActions, "recall") {
+		tools = append(tools, agentTool("wechat_recall", "Recall an exact OWN outgoing WeChat message after reading its real message_id from this account. Owner can act across this account's conversations from private chat or group. Server ID is resolved/verified internally. Never deletes other people's messages or claims success from queued status. Platform recall expiry/errors are returned. Does not create a test message. Input {message_id,request_key,thread_id?}.", `{"type":"object","properties":{"message_id":{"type":"string"},"request_key":{"type":"string"},"thread_id":{"type":"string"}},"required":["message_id","request_key"],"additionalProperties":false}`))
+	}
 	tools = append(tools, agentTool("agent_owner_report", "Privately report a technical diagnostic to the real owner of THIS account, even when the request originated in a group. Does not post in the group or grant extra privileges. Use once per new result, not repeated reminders. Input {text:string}.", `{"type":"object","properties":{"text":{"type":"string","minLength":1}},"required":["text"],"additionalProperties":false}`))
 	tools = append(tools, agentTool("wechat_conversations", "Trusted owner only: list THIS account's known conversations, including groups with automatic replies disabled. Names/IDs come from account configuration, stored account memory and native directories, not tool arguments. Returns items, next_offset, has_more and unavailable_sources; partial directory failures do not hide stored conversations. refresh defaults true; false pages cached results without native refresh. limit defaults50, not a total ceiling. query filters known names/IDs before paging. This does not enable automatic replies or grant other members access. Input {query?:string,offset?:integer,limit?:integer,refresh?:boolean}.", `{"type":"object","properties":{"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"refresh":{"type":"boolean"},"query":{"type":"string"}},"additionalProperties":false}`))
 	tools = append(tools, agentTool("wechat_operation_status", "Inspect an operation_id previously returned to THIS conversation, without replaying it. For a queued send/action this reads the native receipt. Input {operation_id:string}.", `{"type":"object","properties":{"operation_id":{"type":"string"}},"required":["operation_id"],"additionalProperties":false}`))
@@ -295,12 +297,13 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if !ok || op.Thread != p.trace.Thread {
 			return "", toolInputError("只能查询本会话发起的操作")
 		}
+		if op.AppAction != nil && (op.AppAction.ConnectionRef != wechatConnectionRef(m.native.Account()) || op.AppAction.RequesterID != p.trace.Sender) {
+			return "", toolInputError("操作回执不属于当前请求者")
+		}
 		if op.Tool == "wechat_send_media" {
 			return p.crossMediaStatus(ctx, op.ID)
 		}
-		var previous struct {
-			ID string `json:"id"`
-		}
+		var previous linuxnative.ActionStatus
 		_ = json.Unmarshal([]byte(op.Result), &previous)
 		if previous.ID == "" {
 			return op.Result, nil
@@ -348,6 +351,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			status, err := native.InspectAction(ctx, previous.ID)
 			if err != nil {
 				return "", err
+			}
+			if !matchesWechatAction(previous, status) {
+				return "", toolInputError("账号动作回执与原任务不匹配")
 			}
 			value = status
 		} else {
@@ -631,7 +637,8 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		})
 	case "wechat_account_action":
 		var in linuxnative.AdminAction
-		if json.Unmarshal(args, &in) != nil || !contains(m.agent.config().AccountActions, in.Kind) || !permittedRecipient(m.Config().Config, in.ThreadID) || (in.Kind != "recall" && in.Kind != "mute" && !strings.HasSuffix(in.ThreadID, "@chatroom")) || len(in.Text) > 512 || len(in.Members) > 40 {
+		settings := m.agent.config()
+		if json.Unmarshal(args, &in) != nil || !p.wechatActionAllowed(in, false, settings) || (in.Kind != "recall" && in.Kind != "mute" && !strings.HasSuffix(in.ThreadID, "@chatroom")) || len(in.Text) > 512 || len(in.Members) > 40 {
 			return "", toolInputError("账号动作未授权或参数无效")
 		}
 		if in.Kind == "add_members" || in.Kind == "remove_members" {
@@ -646,17 +653,11 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		if in.Kind == "recall" {
 			msg, err := m.native.Message(ctx, in.MessageID)
-			if err != nil || msg.ThreadID != in.ThreadID || msg.Direction != "outgoing" || msg.ServerID == "" || msg.ServerID != in.ServerID {
+			if err != nil || !matchesOwnWechatMessage(msg, p.trace.Account, in.ThreadID, in.MessageID) || msg.ServerID != in.ServerID {
 				return "", toolInputError("只能撤回当前目标中准确匹配的本人消息")
 			}
 		}
-		native, ok := m.native.(nativeActions)
-		if !ok {
-			return "", toolInputError("后台不支持账号动作")
-		}
-		return p.privilegedCall(ctx, name, args, func() (any, error) {
-			return native.ExecuteAction(ctx, in, agentID(p.trace.Account, p.trace.TraceID, name, string(args)))
-		})
+		return p.submitWechatAction(ctx, name, args, in, agentID(p.trace.Account, p.trace.TraceID, name, string(args)), settings, false)
 	}
 	return "", toolInputError("未知Agent工具")
 }

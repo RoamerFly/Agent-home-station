@@ -67,3 +67,34 @@ type EventReader interface {
 type ReceiptReader interface {
 	ReadReceipt(ctx context.Context, connectionID, key string) (Receipt, error)
 }
+
+// ActionIntent is issued by the host at an existing authorization boundary.
+// It is persisted with the claim for audit, and does not authorize replay.
+type ActionIntent struct {
+	ConnectionRef
+	Action          string `json:"action"`
+	RequesterID     string `json:"requester_id"`
+	Source          string `json:"source"`
+	SourceThread    string `json:"source_thread,omitempty"`
+	SourceRequestID string `json:"source_request_id"`
+	Target          string `json:"target,omitempty"`
+	Purpose         string `json:"purpose"`
+	GrantVersion    string `json:"grant_version"`
+	IdempotencyKey  string `json:"idempotency_key"`
+}
+
+type ActionReceipt struct {
+	ConnectionRef
+	OperationID         string `json:"operation_id"`
+	Action              string `json:"action"`
+	Target              string `json:"target,omitempty"`
+	State               string `json:"state"`
+	Lookup              string `json:"lookup"`
+	PlatformOperationID string `json:"platform_operation_id,omitempty"`
+	PlatformState       string `json:"platform_state,omitempty"`
+	PlatformCode        string `json:"platform_code,omitempty"`
+}
+
+type ActionReader interface {
+	ReadAction(ctx context.Context, connectionID, operationID string) (ActionReceipt, error)
+}

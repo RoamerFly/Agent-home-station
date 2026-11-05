@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -20,13 +21,14 @@ type nativeActions interface {
 	InspectAction(context.Context, string) (linuxnative.ActionStatus, error)
 }
 type actionProposal struct {
-	ID      string                   `json:"id"`
-	Account string                   `json:"account"`
-	Request linuxnative.AdminAction  `json:"request"`
-	Summary string                   `json:"summary"`
-	State   string                   `json:"state"`
-	Created time.Time                `json:"created"`
-	Result  linuxnative.ActionStatus `json:"result"`
+	AppAction *apphost.ActionIntent    `json:"app_action,omitempty"`
+	ID        string                   `json:"id"`
+	Account   string                   `json:"account"`
+	Request   linuxnative.AdminAction  `json:"request"`
+	Summary   string                   `json:"summary"`
+	State     string                   `json:"state"`
+	Created   time.Time                `json:"created"`
+	Result    linuxnative.ActionStatus `json:"result"`
 }
 type actionLedger struct {
 	mu    sync.Mutex
@@ -154,7 +156,7 @@ func (s *Server) prepareAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.Kind == "recall" {
 		msg, err := m.native.Message(r.Context(), input.MessageID)
-		if err != nil || msg.ThreadID != input.ThreadID || msg.Direction != "outgoing" || msg.ServerID == "" || msg.ServerID != input.ServerID {
+		if err != nil || !matchesOwnWechatMessage(msg, m.native.Account(), input.ThreadID, input.MessageID) || msg.ServerID != input.ServerID {
 			fail(w, 400, "只能撤回所选会话中具有准确服务端编号的本人消息")
 			return
 		}
@@ -210,14 +212,23 @@ func (s *Server) approveAction(w http.ResponseWriter, r *http.Request) {
 		fail(w, 501, "后台操作不可用")
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if p.Request.Kind == "recall" {
+		msg, err := m.native.Message(ctx, p.Request.MessageID)
+		if err != nil || !matchesOwnWechatMessage(msg, p.Account, p.Request.ThreadID, p.Request.MessageID) || msg.ServerID != p.Request.ServerID {
+			fail(w, 409, "原撤回目标已变化，尚未提交")
+			return
+		}
+	}
+	intent := ownerActionIntent(p)
+	p.AppAction = &intent
 	p.State = "unknown"
 	if err := m.actions.save(p); err != nil {
 		fail(w, 500, "无法保存操作领取记录，未执行")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	status, err := native.ExecuteAction(ctx, p.Request, p.ID)
+	status, err := native.ExecuteAction(ctx, p.Request, intent.IdempotencyKey)
 	if err == nil {
 		p.Result = status
 		p.State = status.State
@@ -269,7 +280,7 @@ func (s *Server) inspectAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status, err := native.InspectAction(r.Context(), p.Result.ID)
-		if err != nil {
+		if err != nil || !matchesWechatAction(p.Result, status) {
 			fail(w, 502, "操作查询失败，不要重复执行")
 			return
 		}

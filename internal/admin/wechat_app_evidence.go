@@ -13,10 +13,9 @@ import (
 	"wechat-bot/internal/linuxnative"
 )
 
-func (w wechatCompatibility) connectionRef(item accountRuntime) apphost.ConnectionRef {
-	app := w.registration().Application
-	return apphost.ConnectionRef{AppID: app.ID, InstallationID: app.InstallationID,
-		ConnectionID: wechatConnectionID(item.record.ID), AccountID: item.record.ID}
+func wechatConnectionRef(account string) apphost.ConnectionRef {
+	return apphost.ConnectionRef{AppID: wechatAppID, InstallationID: wechatInstallationID,
+		ConnectionID: wechatConnectionID(account), AccountID: account}
 }
 
 func (w wechatCompatibility) ReadEvent(ctx context.Context, connection, thread, message string) (apphost.Event, error) {
@@ -48,7 +47,7 @@ func (w wechatCompatibility) ReadEvent(ctx context.Context, connection, thread, 
 	}
 	src := ev.Source
 	out := apphost.Event{
-		ConnectionRef: w.connectionRef(item), EventRef: appEventRef(ev),
+		ConnectionRef: wechatConnectionRef(item.record.ID), EventRef: appEventRef(ev),
 		ConversationID: thread, DatasetID: src.InstanceID, MessageType: src.MessageType, OccurredAt: src.OccurredAt,
 		ReceivedAt: src.ReceivedAt, StoredSequence: ev.Seq, SourceSequence: src.Sequence,
 		AddresseeIDs: ev.Addressees, ReadScope: "source_metadata",
@@ -122,7 +121,7 @@ func (w wechatCompatibility) ReadReceipt(ctx context.Context, connection, key st
 		return apphost.Receipt{}, apphost.ErrNotFound
 	}
 	result := apphost.Receipt{
-		ConnectionRef: w.connectionRef(item), ConversationID: record.Thread,
+		ConnectionRef: wechatConnectionRef(item.record.ID), ConversationID: record.Thread,
 		IdempotencyKey: record.Key, Kind: record.Kind, Lookup: "stored",
 	}
 	projectWechatReceipt(&result, record.Status)

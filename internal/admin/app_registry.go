@@ -54,6 +54,13 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 		}
 		return reader.ReadReceipt(r.Context(), r.PathValue("connection"), r.PathValue("key"))
 	})
+	handle("/api/apps/{app}/connections/{connection}/operations/{operation}", func(app apphost.Registration, r *http.Request) (any, error) {
+		reader, ok := app.Provider.(apphost.ActionReader)
+		if !ok {
+			return nil, apphost.ErrNotFound
+		}
+		return reader.ReadAction(r.Context(), r.PathValue("connection"), r.PathValue("operation"))
+	})
 }
 
 func isAppRegistryPath(path string) bool {
