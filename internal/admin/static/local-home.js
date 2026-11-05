@@ -2,6 +2,9 @@
   "use strict";
   const $ = (selector) => document.querySelector(selector);
   const state = { csrf: "", home: null, model: null, busy: false, chat: { items: [], nextCursor: "", hasMore: false, busy: false, loading: false, pending: new Map(), failed: new Map(), poll: 0 } };
+  const tabs = ["chat", "apps", "settings"];
+  let activeView = "chat";
+  let apps = newAppView();
   const loginView = $("#login-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
   const loginSubmit = $("#login-submit"), initializeButton = $("#initialize-button"), accessButton = $("#access-button"), logoutButton = $("#logout-button");
   const settingsAccessButton = $("#settings-access-button"), settingsLogoutButton = $("#settings-logout-button"), chatStream = $("#chat-stream");
@@ -35,13 +38,186 @@
   }
   function chatConfigured() { return Boolean(state.model && state.model.key_configured); }
   function setActiveView(view) {
-    const chat = view !== "settings";
-    $("#chat-view").hidden = !chat; $("#settings-view").hidden = chat;
-    $("#chat-tab").classList.toggle("is-active", chat); $("#settings-tab").classList.toggle("is-active", !chat);
-    $("#chat-tab").setAttribute("aria-selected", String(chat)); $("#settings-tab").setAttribute("aria-selected", String(!chat));
+    activeView = view;
+    for (const name of tabs) {
+      const tab = $(`#${name}-tab`), selected = name === view;
+      $(`#${name}-view`).hidden = !selected;
+      tab.classList.toggle("is-active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
+    if (view === "apps") loadApps();
+  }
+  function newAppView() {
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map() };
+  }
+  function appElement(tag, text, className = "") {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+  function appFeedback(text, warn = false) {
+    const feedback = $("#apps-feedback");
+    feedback.textContent = text;
+    feedback.classList.toggle("is-warn", warn);
+  }
+  function appSessionExpired(results) {
+    if (!results.some((result) => result.status === "rejected" && result.reason?.status === 401)) return false;
+    state.csrf = "";
+    showLogin();
+    showMessage("登录状态已失效，请重新验证。", "warn");
+    return true;
+  }
+  function appRows(result, key) {
+    if (result.status !== "fulfilled" || !Array.isArray(result.value[key])) return null;
+    return result.value[key].filter((item) => item && typeof item.id === "string" && item.id);
+  }
+  function appSourceRow(record, listing) {
+    const row = appElement("div", "", "app-layer");
+    const detail = appElement("div", "");
+    let title = "源码状态未知", note = "刷新后可重新检查。";
+    if (listing) {
+      const version = listing.installed_version || listing.version;
+      if (listing.install_state === "installed") {
+        title = "源码已安装";
+        note = version ? `本地版本 ${version}，可在家目录的 Connected Apps 中编辑。` : "可在家目录的 Connected Apps 中编辑。";
+      } else if (listing.install_state === "conflict") {
+        title = "应用目录待整理";
+        note = listing.installed_version ? `已有版本 ${listing.installed_version}，请先保留现有修改。` : "家目录已有同名内容，请先保留并整理该目录。";
+      } else if (!listing.source_available) {
+        title = "未提供源码";
+        note = "当前发行包未提供可用源码，本地聊天可继续使用。";
+      } else if (listing.install_state === "not_installed") {
+        title = "可安装";
+        note = state.home?.home_access ? `随包版本 ${listing.version}，安装后仍需单独接入账号。` : "请在模型设置中恢复工作空间授权。";
+      } else if (listing.install_state === "unavailable") {
+        title = "安装状态暂不可读";
+        note = "请检查工作空间是否可用。";
+      }
+    } else if (apps.catalog) {
+      title = "未提供源码";
+      note = "当前发行包没有此应用的源码。";
+    }
+    detail.append(appElement("strong", title), appElement("p", note));
+    row.append(appElement("h5", "应用源码"), detail);
+    if (title === "可安装" && state.home?.home_access) {
+      const busy = apps.installing === record.id;
+      const button = appElement("button", busy ? "正在安装…" : "安装源码", "button compact primary");
+      button.type = "button";
+      button.disabled = Boolean(apps.installing) || apps.loading;
+      button.addEventListener("click", () => installApp(listing));
+      row.append(button);
+    }
+    return row;
+  }
+  function appConnectionRow(record) {
+    const row = appElement("div", "", "app-layer");
+    const detail = appElement("div", "");
+    const connection = apps.connections.get(record.id);
+    if (!apps.registered || connection === null) {
+      detail.append(appElement("strong", "账号状态暂不可读"), appElement("p", "可刷新后重查。"));
+    } else if (!connection?.length) {
+      detail.append(appElement("strong", "账号未接入"), appElement("p", "账号接入后会显示在这里。"));
+    } else {
+      detail.append(appElement("strong", `已有 ${connection.length} 个账号连接`));
+      const list = appElement("ul", "", "app-accounts");
+      for (const [index, account] of connection.entries()) {
+        const item = appElement("li", "");
+        item.append(appElement("span", account.label || `账号 ${index + 1}`));
+        if (account.primary) item.append(appElement("small", "主连接"));
+        list.append(item);
+      }
+      detail.append(list);
+    }
+    row.append(appElement("h5", "账号连接"), detail);
+    return row;
+  }
+  function renderApps() {
+    const list = $("#apps-list");
+    list.setAttribute("aria-busy", String(apps.loading || Boolean(apps.installing)));
+    $("#apps-refresh").disabled = apps.loading || Boolean(apps.installing);
+    $("#apps-refresh").textContent = apps.loading ? "刷新中…" : "刷新";
+    const catalog = new Map((apps.catalog || []).map((row) => [row.id, row]));
+    const records = new Map((apps.registered || []).map((row) => [row.id, row]));
+    for (const row of catalog.values()) records.set(row.id, row);
+    if (!records.size) {
+      const text = apps.loading ? "正在读取应用…" : apps.catalog && apps.registered ? "还没有可管理的应用。" : "暂时无法读取应用，可刷新后重查。";
+      list.replaceChildren(appElement("p", text, "apps-empty"));
+      return;
+    }
+    list.replaceChildren(...Array.from(records.values(), (record) => {
+      const card = appElement("article", "", "app-record");
+      const head = appElement("header", "", "app-record-head");
+      const label = record.name || record.id;
+      const mark = appElement("span", Array.from(label)[0], "app-mark");
+      mark.setAttribute("aria-hidden", "true");
+      head.append(mark, appElement("h4", label));
+      card.append(head, appSourceRow(record, catalog.get(record.id)), appConnectionRow(record));
+      return card;
+    }));
+  }
+  async function loadApps() {
+    const current = apps;
+    if (current.loading || !state.home?.initialized) return;
+    current.loading = true;
+    renderApps();
+    try {
+      const result = await Promise.allSettled([request("/api/local/apps/catalog"), request("/api/apps")]);
+      if (current !== apps || appSessionExpired(result)) return;
+      const registered = appRows(result[1], "items");
+      const connections = await Promise.allSettled((registered || []).map((row) => request(`/api/apps/${encodeURIComponent(row.id)}/connections`)));
+      if (current !== apps || appSessionExpired(connections)) return;
+      current.catalog = appRows(result[0], "applications");
+      current.registered = registered;
+      current.connections = new Map((registered || []).map((row, index) => [row.id, appRows(connections[index], "items")]));
+    } finally {
+      if (current === apps) {
+        current.loading = false;
+        renderApps();
+      }
+    }
+  }
+  async function installApp(listing) {
+    const current = apps;
+    if (current.loading || current.installing || !state.home?.home_access) return;
+    current.installing = listing.id;
+    appFeedback("");
+    renderApps();
+    try {
+      const result = await request(`/api/local/apps/${encodeURIComponent(listing.id)}/install`, {
+        method: "POST", body: JSON.stringify({ digest: listing.digest, revision: state.home.revision })
+      });
+      if (current !== apps) return;
+      appFeedback(result.result === "existing" ? "源码已在家目录中。" : "源码已安装到家目录。");
+      await loadApps();
+    } catch (error) {
+      if (current !== apps) return;
+      if (error.status === 401 || error.status === 403) {
+        state.csrf = "";
+        showLogin();
+        showMessage("登录状态已失效，请重新验证。", "warn");
+      } else {
+        appFeedback(error.message, true);
+        if (error.status === 409) {
+          const home = await request("/api/local/home").catch(() => null);
+          if (home && current === apps) showHome(home);
+          if (current === apps) await loadApps();
+        }
+      }
+    } finally {
+      if (current === apps) {
+        current.installing = "";
+        renderApps();
+      }
+    }
   }
   function showLogin() {
     state.home = null; state.model = null; window.clearTimeout(state.chat.poll);
+    apps = newAppView();
+    $("#apps-list").replaceChildren();
+    appFeedback("");
+    setActiveView("chat");
     document.body.classList.remove("is-home-ready");
     localWorkspace.hidden = true; homeView.hidden = true; loginView.hidden = false; $("#login-password").value = "";
   }
@@ -75,7 +251,9 @@
   async function loadHome() {
     const home = await request("/api/local/home");
     showHome(home);
-    if (home.initialized && home.chat_available !== false) await Promise.all([loadModel(state.model === null), loadChat(true)]);
+    if (home.initialized && home.chat_available !== false) {
+      await Promise.all([loadModel(state.model === null), loadChat(true), activeView === "apps" ? loadApps() : undefined]);
+    }
   }
   function setModelForm(model) {
     const source = model || {};
@@ -264,7 +442,20 @@
   accessButton.addEventListener("click", () => saveHome(state.home && state.home.home_access ? "pause" : "authorize"));
   settingsAccessButton.addEventListener("click", () => saveHome(state.home && state.home.home_access ? "pause" : "authorize"));
   logoutButton.addEventListener("click", logout); settingsLogoutButton.addEventListener("click", logout); $("#local-logout-button").addEventListener("click", logout);
-  $("#chat-tab").addEventListener("click", () => setActiveView("chat")); $("#settings-tab").addEventListener("click", () => setActiveView("settings"));
+  for (const [index, name] of tabs.entries()) {
+    const tab = $(`#${name}-tab`);
+    tab.addEventListener("click", () => { showMessage(""); setActiveView(name); });
+    tab.addEventListener("keydown", (event) => {
+      const positions = { ArrowLeft: (index + tabs.length - 1) % tabs.length, ArrowRight: (index + 1) % tabs.length, Home: 0, End: tabs.length - 1 };
+      if (!Object.hasOwn(positions, event.key)) return;
+      event.preventDefault();
+      const selected = tabs[positions[event.key]];
+      showMessage("");
+      setActiveView(selected);
+      $(`#${selected}-tab`).focus();
+    });
+  }
+  $("#apps-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
   $("#load-older-button").addEventListener("click", () => loadChat(false));

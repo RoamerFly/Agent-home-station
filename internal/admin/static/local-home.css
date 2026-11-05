@@ -149,17 +149,39 @@ body.is-home-ready .home-status { margin-top: 0; }
 
 .local-workspace { display: grid; gap: 18px; margin-top: 2px; }
 .local-tabs { display: flex; align-items: center; gap: 4px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+.local-tab-list { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .local-tab, .text-action { border: 0; background: transparent; color: var(--muted); font-weight: 750; }
 .local-tab { padding: 8px 12px; border-radius: 9px; }
 .local-tab.is-active { color: var(--accent-deep); background: var(--accent-soft); }
 .text-action { padding: 7px 8px; border-radius: 8px; font-size: .86rem; }
 .text-action:hover, .text-action:focus-visible { color: var(--accent-deep); background: var(--accent-soft); outline: none; }
 .local-tabs .text-action { margin-left: auto; }
-.chat-view, .settings-view { display: grid; gap: 14px; min-width: 0; }
+.chat-view, .settings-view, .apps-view { display: grid; gap: 14px; min-width: 0; }
 .chat-heading-row, .settings-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .chat-heading-row p, .settings-heading-row p { margin: 5px 0 0; color: var(--muted); font-size: .88rem; line-height: 1.55; }
 .button.compact { min-height: 35px; padding: 0 11px; border-radius: 10px; font-size: .84rem; white-space: nowrap; }
+/* App source and account connection are separate rows of the same record. */
+.apps-list { display: grid; gap: 12px; min-width: 0; }
+.apps-feedback, .apps-empty { margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.55; }
+.apps-feedback:empty { display: none; }
+.apps-feedback.is-warn { color: var(--ink); }
+.apps-empty { padding: 18px; border: 1px dashed var(--line); border-radius: 14px; }
+.app-record { overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--surface-solid); }
+.app-record-head { display: flex; align-items: center; gap: 11px; padding: 13px 16px; border-bottom: 1px solid var(--line); background: var(--accent-soft); }
+.app-record-head h4 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.app-mark { display: grid; flex: 0 0 32px; width: 32px; height: 32px; place-items: center; border: 1px solid var(--line); border-radius: 9px; color: var(--accent-deep); font-weight: 800; background: var(--surface-solid); }
+.app-layer { display: grid; grid-template-columns: 5em minmax(0, 1fr) auto; align-items: start; gap: 8px 12px; padding: 13px 16px; }
+.app-layer + .app-layer { border-top: 1px solid var(--line); }
+.app-layer h5 { margin: 0; padding-top: 2px; color: var(--muted); font-size: .83rem; font-weight: 700; }
+.app-layer p { margin: 4px 0 0; color: var(--muted); font-size: .82rem; line-height: 1.55; overflow-wrap: anywhere; }
+.app-layer strong { font-size: .9rem; overflow-wrap: anywhere; }
+.app-layer .button { align-self: center; }
+.app-accounts { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.app-accounts li { display: flex; flex-wrap: wrap; gap: 3px 8px; min-width: 0; color: var(--ink); font-size: .86rem; overflow-wrap: anywhere; }
+.app-accounts small { color: var(--muted); }
+.local-tab:focus-visible, .apps-view .button:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+
 .model-setup-note { display: grid; gap: 4px; padding: 13px 14px; border: 1px solid rgba(139, 103, 207, .27); border-radius: 13px; background: linear-gradient(100deg, rgba(93, 99, 217, .09), rgba(139, 103, 207, .08)); }
 .model-setup-note strong { font-size: .91rem; }
 .model-setup-note span { color: var(--muted); font-size: .84rem; }
@@ -217,7 +239,10 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
   .field-grid { grid-template-columns: 1fr; }
   .chat-heading-row { align-items: stretch; flex-direction: column; }
   .chat-heading-row .button { width: auto; align-self: flex-start; }
+  .apps-view .chat-heading-row { flex-direction: row; align-items: flex-start; }
   .chat-bubble { max-width: 94%; }
+  .app-layer { grid-template-columns: 4.5em minmax(0, 1fr); padding: 12px; }
+  .app-layer .button { grid-column: 2; width: auto; justify-self: start; }
 }
 
 @media (prefers-reduced-motion: reduce) {

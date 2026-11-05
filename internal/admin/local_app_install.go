@@ -3,6 +3,7 @@ package admin
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -23,18 +24,98 @@ func (h *localHomeService) configureAppCatalog() {
 
 func (h *localHomeService) appInstallRoutes(s *Server, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/local/apps/catalog", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		contract, err := appcatalog.Lookup("wechat")
 		if err != nil {
 			fail(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
-		_, _, err = h.verifyAppSource("wechat")
-		respond(w, http.StatusOK, map[string]any{"applications": []any{map[string]any{
+		_, _, sourceErr := h.verifyAppSource("wechat")
+		installState, installedVersion := h.appInstallState(contract)
+		row := map[string]any{
 			"id": "wechat", "name": contract.Package.Name, "version": contract.Package.Version,
-			"digest": contract.Digest, "source_available": err == nil, "state": "source_only",
-		}}})
+			"digest": contract.Digest, "source_available": sourceErr == nil, "state": "source_only",
+			"install_state": installState,
+		}
+		if installedVersion != "" {
+			row["installed_version"] = installedVersion
+		}
+		respond(w, http.StatusOK, map[string]any{"applications": []any{row}})
 	}))
 	mux.HandleFunc("POST /api/local/apps/{app}/install", s.protected(h.installAppSource))
+}
+
+// appInstallState reports the checked-out source separately from the bundled
+// source.  A normal checkout is deliberately editable: only its descriptor is
+// immutable.  In particular, workspace files may change without making the
+// application look untrusted or inviting an automatic overwrite.
+func (h *localHomeService) appInstallState(contract appcatalog.Contract) (state, version string) {
+	record, err := h.identity.localIdentity()
+	if err != nil || record.LocalOwner == nil || !validFishID(record.FishID) {
+		return "unavailable", ""
+	}
+	homePath, err := h.directory(record)
+	if err != nil {
+		return "unavailable", ""
+	}
+	// A paused home remains observable by its authenticated owner.  The POST
+	// path still requires HomeAccess, but hiding the existing checkout here
+	// would make a pause appear as data loss.
+	home, err := workspacefs.OpenPath(homePath)
+	if err != nil {
+		return "unavailable", ""
+	}
+	defer home.Close()
+	parent, err := workspacefs.OpenExistingDirectory(home, "Connected Apps")
+	if errors.Is(err, os.ErrNotExist) {
+		return "not_installed", ""
+	}
+	if err != nil {
+		return "conflict", ""
+	}
+	defer parent.Close()
+	installed, err := workspacefs.OpenExistingDirectory(parent, contract.Package.ID)
+	if errors.Is(err, os.ErrNotExist) {
+		return "not_installed", ""
+	}
+	if err != nil {
+		return "conflict", ""
+	}
+	defer installed.Close()
+	digest, descriptor, err := installedAppDescriptor(installed)
+	if err != nil || descriptor.ID != contract.Package.ID {
+		return "conflict", ""
+	}
+	version = descriptor.Version
+	if digest != contract.Digest {
+		return "conflict", version
+	}
+	return "installed", version
+}
+
+// installedAppDescriptor performs the only inspection needed for an editable
+// checkout.  os.Root plus OpenRegular prevents a foreign link from being read;
+// it intentionally does not walk workspace files owned by the companion.
+func installedAppDescriptor(root *os.Root) (string, pluginhost.Package, error) {
+	var descriptor pluginhost.Package
+	info, err := root.Lstat("app.json")
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", descriptor, errors.New("应用安装声明不可读")
+	}
+	file, err := workspacefs.OpenRegular(root, "app.json")
+	if err != nil {
+		return "", descriptor, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	if err != nil || len(data) > 1<<20 {
+		return "", descriptor, errors.New("应用安装声明不可读")
+	}
+	if err := json.Unmarshal(data, &descriptor); err != nil || descriptor.ID == "" || descriptor.Version == "" {
+		return "", descriptor, errors.New("应用安装声明无效")
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:]), descriptor, nil
 }
 
 func appDescriptorDigest(root *os.Root) (string, error) {
@@ -63,7 +144,7 @@ func (h *localHomeService) verifyAppSource(id string) (appcatalog.Contract, stri
 	if _, err := pluginhost.VerifyDescriptor(directory, "app.json"); err != nil {
 		return contract, "", errors.New("应用发行源未通过完整性校验")
 	}
-	root, err := workspacefs.EnsurePath(directory)
+	root, err := workspacefs.OpenPath(directory)
 	if err != nil {
 		return contract, "", err
 	}

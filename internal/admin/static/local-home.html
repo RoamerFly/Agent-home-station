@@ -55,14 +55,17 @@
             <button id="logout-button" class="button quiet" type="button">退出登录</button>
           </div>
 
-          <section id="local-workspace" class="local-workspace" hidden aria-label="大肥鱼本地聊天">
+          <section id="local-workspace" class="local-workspace" hidden aria-label="大肥鱼工作台">
             <nav class="local-tabs" aria-label="本地功能">
-              <button id="chat-tab" class="local-tab is-active" type="button" aria-controls="chat-view" aria-selected="true">聊天</button>
-              <button id="settings-tab" class="local-tab" type="button" aria-controls="settings-view" aria-selected="false">模型设置</button>
+              <div class="local-tab-list" role="tablist" aria-label="工作台页面">
+                <button id="chat-tab" class="local-tab is-active" type="button" role="tab" aria-controls="chat-view" aria-selected="true">聊天</button>
+                <button id="apps-tab" class="local-tab" type="button" role="tab" aria-controls="apps-view" aria-selected="false" tabindex="-1">应用</button>
+                <button id="settings-tab" class="local-tab" type="button" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">模型设置</button>
+              </div>
               <button id="local-logout-button" class="text-action" type="button">退出</button>
             </nav>
 
-            <section id="chat-view" class="chat-view" aria-labelledby="chat-heading">
+            <section id="chat-view" class="chat-view" role="tabpanel" aria-labelledby="chat-tab">
               <div class="chat-heading-row">
                 <div>
                   <h3 id="chat-heading">和大肥鱼聊聊</h3>
@@ -91,7 +94,19 @@
               </form>
             </section>
 
-            <section id="settings-view" class="settings-view" aria-labelledby="settings-heading" hidden>
+            <section id="apps-view" class="apps-view" role="tabpanel" aria-labelledby="apps-tab" hidden>
+              <header class="chat-heading-row">
+                <div>
+                  <h3>应用</h3>
+                  <p>在这里准备应用源码，查看已接入的账号。</p>
+                </div>
+                <button id="apps-refresh" class="button compact secondary" type="button">刷新</button>
+              </header>
+              <p id="apps-feedback" class="apps-feedback" role="status"></p>
+              <div id="apps-list" class="apps-list" aria-busy="false"></div>
+            </section>
+
+            <section id="settings-view" class="settings-view" role="tabpanel" aria-labelledby="settings-tab" hidden>
               <div class="settings-heading-row">
                 <div>
                   <h3 id="settings-heading">聊天模型</h3>

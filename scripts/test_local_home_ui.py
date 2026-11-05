@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -48,6 +49,61 @@ def stop(process):
     process.stdin.close()
     process.stdout.close()
     process.stderr.close()
+
+
+def assert_no_horizontal_overflow(page, scene):
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{scene}: narrow overflow"
+
+
+def app_connection_payload():
+    """Synthetic registered application data for browser-only app status checks."""
+    return {
+        "items": [{"id": "wechat", "name": "微信", "registration": "synthetic"}],
+    }
+
+
+def wechat_connection_payload():
+    return {
+        "items": [{"id": "synthetic-wechat", "label": "合成微信账号", "primary": True}],
+    }
+
+
+def fulfill_json(payload, status=200):
+    def handler(route):
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(payload, ensure_ascii=False))
+
+    return handler
+
+
+def verify_missing_source(binary, output):
+    """A copied executable has no sibling connected-apps directory, by design."""
+    with tempfile.TemporaryDirectory(prefix="synthetic-bare-station-", dir=output) as directory:
+        directory = Path(directory).resolve()
+        bare = directory / "bare" / binary.name
+        bare.parent.mkdir()
+        shutil.copy2(binary, bare)
+        process, origin = start(bare, directory / "host", directory / "workspace")
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(channel="msedge", headless=True)
+                context = browser.new_context(viewport={"width": 1280, "height": 800}, color_scheme="light")
+                page = context.new_page()
+                page.goto(origin)
+                page.locator("#login-password").fill("synthetic-home-owner")
+                page.locator("#login-submit").click()
+                page.locator("#initialize-button").click()
+                page.locator("#chat-view").wait_for(state="visible")
+                page.locator("#chat-tab").focus()
+                page.keyboard.press("ArrowRight")
+                page.locator("#apps-view").wait_for(state="visible")
+                assert page.evaluate("document.activeElement.id") == "apps-tab", "tab keyboard navigation"
+                page.locator("#apps-list[aria-busy='false']").wait_for()
+                page.get_by_text("未提供源码", exact=True).wait_for()
+                assert page.get_by_role("button", name="安装源码").count() == 0
+                page.screenshot(path=str(output / "apps-no-source-light.png"), full_page=True)
+                browser.close()
+        finally:
+            stop(process)
 
 
 def verify(binary, output):
@@ -106,6 +162,52 @@ def verify(binary, output):
                     assert (home / name).is_dir(), name
                 note = home / "diary" / "synthetic.md"
                 note.write_text("a persistent companion home", encoding="utf-8")
+
+                # The catalog and source checkout use the real local HTTP and CSRF path.
+                # A plain server executable may intentionally ship without application source;
+                # in that case this primary replay still verifies the useful empty-source state.
+                page.locator("#chat-tab").focus()
+                page.keyboard.press("ArrowRight")
+                page.locator("#apps-view").wait_for(state="visible")
+                assert page.evaluate("document.activeElement.id") == "apps-tab", "tab keyboard navigation"
+                page.locator("#apps-list[aria-busy='false']").wait_for()
+                source_state = page.locator("#apps-list").inner_text()
+                catalog = context.request.get(origin + "/api/local/apps/catalog").json()["applications"]
+                assert len(catalog) == 1 and catalog[0]["id"] == "wechat"
+                source_available = catalog[0]["source_available"]
+                if source_available:
+                    assert "可安装" in source_state, source_state
+                    page.get_by_role("button", name="安装源码").click()
+                    page.get_by_text("源码已安装", exact=True).wait_for()
+                    page.locator("#apps-feedback").get_by_text(re.compile("源码已.*家目录")).wait_for()
+                    assert (home / "Connected Apps" / "wechat" / "app.json").is_file(), "installed application source"
+                else:
+                    assert "未提供源码" in source_state, source_state
+                    assert page.get_by_role("button", name="安装源码").count() == 0
+
+                # Application-account HTTP calls are intentionally routed in the browser only:
+                # no login material, native connector, or actual WeChat request is involved.
+                apps_route = fulfill_json(app_connection_payload())
+                connections_route = fulfill_json(wechat_connection_payload())
+                page.route("**/api/apps", apps_route)
+                page.route("**/api/apps/wechat/connections", connections_route)
+                page.locator("#apps-refresh").click()
+                page.get_by_text("账号连接", exact=True).wait_for()
+                page.get_by_text("合成微信账号", exact=True).wait_for()
+                page.screenshot(path=str(output / "apps-connected-light.png"), full_page=True)
+
+                # An unavailable account read remains a visible, recoverable application state.
+                page.unroute("**/api/apps/wechat/connections", connections_route)
+                unavailable_route = fulfill_json({"error": "synthetic connection unavailable"}, status=503)
+                page.route("**/api/apps/wechat/connections", unavailable_route)
+                page.locator("#apps-refresh").click()
+                page.get_by_text("账号状态暂不可读", exact=True).wait_for()
+                page.unroute("**/api/apps/wechat/connections", unavailable_route)
+                page.unroute("**/api/apps", apps_route)
+
+                page.locator("#settings-tab").click()
+                assert page.locator("#model-name").input_value() == "synthetic-unsaved-draft", "application state replaced the model draft"
+                page.locator("#chat-tab").click()
                 page.screenshot(path=str(output / "ready-light.png"), full_page=True)
                 page.locator("#settings-tab").click()
                 page.locator("#settings-access-button").click()
@@ -120,8 +222,12 @@ def verify(binary, output):
                 assert stale.status == 409, "stale revision revived grant"
                 page.set_viewport_size({"width": 375, "height": 812})
                 page.emulate_media(color_scheme="dark")
-                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "narrow overflow"
+                assert_no_horizontal_overflow(page, "settings")
                 page.screenshot(path=str(output / "paused-dark-375.png"), full_page=True)
+                page.get_by_role("tab", name="应用").click()
+                page.locator("#apps-view").wait_for(state="visible")
+                assert_no_horizontal_overflow(page, "apps")
+                page.screenshot(path=str(output / "apps-dark-375.png"), full_page=True)
                 page.locator("#settings-tab").click()
                 page.locator("#settings-access-button").click()
                 page.get_by_text("工作空间已授权", exact=True).wait_for()
@@ -141,7 +247,7 @@ def verify(binary, output):
                 assert note.read_text(encoding="utf-8") == "a persistent companion home"
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 
@@ -150,5 +256,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--bare-binary", type=Path, help="optional executable without a sibling connected-apps directory")
     args = parser.parse_args()
     verify(args.binary.resolve(), args.output.resolve())
+    verify_missing_source((args.bare_binary or args.binary).resolve(), args.output.resolve())

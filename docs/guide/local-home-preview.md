@@ -1,8 +1,8 @@
-# Windows 独立聊天与家目录 · 5.B.4
+# Windows 独立桌面预览
 
 独立入口可以在没有微信账号、原生端、ADB 或模型运行环境的安装中启动。主人完成本机身份准备、保存模型连接后，即可在软件页面与同一条大肥鱼聊天。它复用现有聊天引擎和 SQLite 记忆内核，不把本机主人伪装成微信账号。
 
-这是开发预览，尚未替换正在使用的正式微信程序。独立入口可在 Windows 桌面窗口中运行，也可单独启动本地 HTTP 服务。Agent 已能在自己的家目录读写文件、保存工具；配置受管 Windows 运行器后可隔离执行程序。应用接入仍在后续阶段。
+这是开发预览，尚未替换正在使用的正式微信程序。独立入口可在 Windows 桌面窗口中运行，也可单独启动本地 HTTP 服务。Agent 已能在自己的家目录读写文件、保存工具；配置受管 Windows 运行器后可隔离执行程序。应用页已能安装随包源码并查看宿主登记的账号连接，独立主体的微信登录和启停接入仍在后续阶段。
 
 ## Windows 桌面预览
 
@@ -12,7 +12,7 @@
 ./scripts/Build-Desktop.ps1 -LocalStation -OutputDirectory temp/local-station-preview
 ```
 
-双击输出目录里的 `AgentHomeStation.exe`，窗口显示本机聊天与设置页面。此构建不要求微信原生程序、ADB、Python、GPU 环境或任何应用账号，也不拷贝原来的私有配置。Windows 仍需 WebView2 Runtime；构建需要源码开发环境。
+双击输出目录里的 `AgentHomeStation.exe`，窗口显示本机聊天、应用和设置页面。此构建不要求微信原生程序、ADB、Python、GPU 环境或任何应用账号，也不拷贝原来的私有配置。Windows 仍需 WebView2 Runtime；构建需要源码开发环境。
 
 验收使用另一个独立输出目录，加上 `-Test` 会生成合成测试资料和测试程序，不应将这份测试资料当作自己的日常安装。该模式包含两轮真实服务启停，以及私有桌面的实际 WebView 加载与退出，不向用户任务栏弹出测试窗口。
 
@@ -53,7 +53,7 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 
 该示例建立的是隔离测试安装，不表示原来的大肥鱼已经迁移。真实安装的身份、配置和消息尚未自动搬动。
 
-进入后先准备家目录，再在“设置”保存 API 服务商、HTTPS 地址、模型名称和 Key。默认使用 `deepseek-flash`、开启思考、强度 `low`。设置保存本身不测试连接、不调用模型，只有你发送消息后才请求服务。OpenAI 兼容接口是否支持思考以提供商协议为准；当前适配器只向 DeepSeek 发送这套思考参数。
+进入后先准备家目录，再在「模型设置」保存 API 服务商、HTTPS 地址、模型名称和 Key。默认使用 `deepseek-flash`、开启思考、强度 `low`。设置保存本身不测试连接、不调用模型，只有你发送消息后才请求服务。OpenAI 兼容接口是否支持思考以提供商协议为准；当前适配器只向 DeepSeek 发送这套思考参数。
 
 密钥只保存在宿主的 `local-model.json`，页面只显示是否已配置，留空保留原值，显式勾选才清除。该文件独立于旧微信模型设置，既不复制旧 Key，也不修改旧账号。保存使用版本条件；发生冲突时保留编辑草稿，先核对最新配置再保存。
 
@@ -84,7 +84,19 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
   Connected Apps/
 ```
 
-聊天与家目录执行授权是独立的。暂停工作空间不会禁止主人继续聊天；此步的授权仍未挂到旧微信 Agent 的文件执行路径上。`Connected Apps` 目前是空目录，不代表微信已迁入。
+聊天与家目录执行授权是独立的。暂停工作空间不会禁止主人继续聊天；此步的授权仍未挂到旧微信 Agent 的文件执行路径上。`Connected Apps` 初始为空，通过应用页安装后会出现相应源码目录。
+
+### 应用
+
+在独立预览中准备好家目录，打开「应用」。要试装微信源码，构建时加 `-WithWeChatApp`：
+
+```powershell
+./scripts/Build-Desktop.ps1 -LocalStation -WithWeChatApp -OutputDirectory temp/local-station-with-wechat
+```
+
+在微信一栏选择「安装源码」。发行源核验通过后，文件复制到家目录的 `Connected Apps/wechat`。源码可编辑，重复安装同一版不会覆盖工作文件；检测到同名目录或不同版本时，应用页会提示保留已有内容后再整理。暂停工作空间期间可查看安装结果，恢复授权后可安装。
+
+「账号连接」单独读取当前宿主的登记。独立预览可以显示「源码已安装」和「账号未接入」；实际登录与运行组件接入另行交付。普通预览包未随附微信源码时，仍可使用本地聊天。
 
 ### 文件与自编工具
 
@@ -129,4 +141,4 @@ python -B scripts/test_local_home_ui.py `
   --output temp/local-home/browser
 ```
 
-回放需要 Python Playwright 和 Edge，测试目录及截图不进入 Git。5.B.3 的真实 Windows LPAC 验证使用隔离合成文件：创建并执行 Python 工具、生成作品、拒绝读取宿主私有测试文件、相同编号不重复启动、暂停后取消进程，重启仍可查原记录。没有调用付费模型或微信。自动长期记忆整理、进程完成续办及正式桌面集成尚未交付，后续继续分步连接，再进入应用注册与微信迁移。
+回放需要 Python Playwright 和 Edge，测试目录及截图不进入 Git。5.B.3 的真实 Windows LPAC 验证使用隔离合成文件：创建并执行 Python 工具、生成作品、拒绝读取宿主私有测试文件、相同编号不重复启动、暂停后取消进程，重启仍可查原记录。没有调用付费模型或微信。应用页的安装与账号状态使用真实本机 HTTP 和合成账号回放验收。后续继续接入微信登录与启停；自动长期记忆整理和进程完成续办也有各自的后续阶段。

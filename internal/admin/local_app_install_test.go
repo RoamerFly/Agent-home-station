@@ -11,6 +11,23 @@ import (
 	"wechat-bot/internal/pluginhost"
 )
 
+func localCatalogApplication(t *testing.T, f *localHomeFixture) map[string]any {
+	t.Helper()
+	code, catalog := f.request("GET", "/api/local/apps/catalog", nil, false)
+	if code != http.StatusOK {
+		t.Fatal(code, catalog)
+	}
+	applications, ok := catalog["applications"].([]any)
+	if !ok || len(applications) != 1 {
+		t.Fatal("invalid catalog", catalog)
+	}
+	row, ok := applications[0].(map[string]any)
+	if !ok {
+		t.Fatal("invalid catalog row", catalog)
+	}
+	return row
+}
+
 func localAppInstallFixture(t *testing.T) (*localHomeFixture, map[string]any) {
 	t.Helper()
 	base := t.TempDir()
@@ -30,12 +47,8 @@ func localAppInstallFixture(t *testing.T) (*localHomeFixture, map[string]any) {
 
 func TestLocalAppSourceInstallPreservesEditsAndDoesNotConnect(t *testing.T) {
 	f, home := localAppInstallFixture(t)
-	code, catalog := f.request("GET", "/api/local/apps/catalog", nil, false)
-	if code != 200 {
-		t.Fatal(code, catalog)
-	}
-	row := catalog["applications"].([]any)[0].(map[string]any)
-	if row["source_available"] != true || row["state"] != "source_only" {
+	row := localCatalogApplication(t, f)
+	if row["source_available"] != true || row["state"] != "source_only" || row["install_state"] != "not_installed" {
 		t.Fatal(row)
 	}
 	in := map[string]any{"digest": row["digest"], "revision": home["revision"]}
@@ -50,6 +63,10 @@ func TestLocalAppSourceInstallPreservesEditsAndDoesNotConnect(t *testing.T) {
 	if _, err := pluginhost.VerifyDescriptor(want, "app.json"); err != nil {
 		t.Fatal("installed bundle invalid", err)
 	}
+	row = localCatalogApplication(t, f)
+	if row["install_state"] != "installed" || row["installed_version"] != "0.1.4" {
+		t.Fatal("installed state missing", row)
+	}
 	marker := filepath.Join(want, "workspace", "my-tool.txt")
 	if err := os.WriteFile(marker, []byte("persistent owner edits"), 0600); err != nil {
 		t.Fatal(err)
@@ -60,6 +77,10 @@ func TestLocalAppSourceInstallPreservesEditsAndDoesNotConnect(t *testing.T) {
 	if data, err := os.ReadFile(marker); err != nil || string(data) != "persistent owner edits" {
 		t.Fatal("retry overwrote owner edits", err)
 	}
+	row = localCatalogApplication(t, f)
+	if row["install_state"] != "installed" || row["installed_version"] != "0.1.4" {
+		t.Fatal("workspace edit changed installed state", row)
+	}
 	if code, out := f.request("GET", "/api/apps", nil, false); code != 200 || len(out["items"].([]any)) != 0 {
 		t.Fatal("source install invented a connection", code, out)
 	}
@@ -67,14 +88,102 @@ func TestLocalAppSourceInstallPreservesEditsAndDoesNotConnect(t *testing.T) {
 	f2 := newLocalHomeFixture(t, f.dir, f.root)
 	f2.handler.home.appCatalog = f.handler.home.appCatalog
 	f2.login()
+	row = localCatalogApplication(t, f2)
+	if row["install_state"] != "installed" || row["installed_version"] != "0.1.4" {
+		t.Fatal("installation did not survive restart", row)
+	}
 	if code, out := f2.request("POST", "/api/local/apps/wechat/install", in, true); code != 200 || out["result"] != "existing" {
 		t.Fatal("source installation did not survive restart", code, out)
 	}
 	if err := os.WriteFile(filepath.Join(want, "app.json"), []byte("different owner version"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	row = localCatalogApplication(t, f2)
+	if row["install_state"] != "conflict" {
+		t.Fatal("foreign descriptor not flagged", row)
+	}
 	if code, out := f2.request("POST", "/api/local/apps/wechat/install", in, true); code != 409 {
 		t.Fatal("different working version was overwritten", code, out)
+	}
+}
+
+func TestLocalAppCatalogPreservesInstalledStateWithoutSourceAndWhilePaused(t *testing.T) {
+	f, home := localAppInstallFixture(t)
+	row := localCatalogApplication(t, f)
+	in := map[string]any{"digest": row["digest"], "revision": home["revision"]}
+	if code, out := f.request("POST", "/api/local/apps/wechat/install", in, true); code != http.StatusOK {
+		t.Fatal(code, out)
+	}
+	// The bundled release is optional after installation.  The owner can still
+	// see the checked-out version instead of treating it as disappeared.
+	f.handler.home.appCatalog = t.TempDir()
+	row = localCatalogApplication(t, f)
+	if row["source_available"] != false || row["install_state"] != "installed" || row["installed_version"] != "0.1.4" {
+		t.Fatal("missing source hid installed application", row)
+	}
+	if code, out := f.request("POST", "/api/local/home", map[string]any{"action": "pause", "revision": home["revision"]}, true); code != http.StatusOK {
+		t.Fatal(code, out)
+	}
+	row = localCatalogApplication(t, f)
+	if row["install_state"] != "installed" || row["installed_version"] != "0.1.4" {
+		t.Fatal("paused home hid installed application", row)
+	}
+}
+
+func TestLocalAppCatalogReportsUnavailableSourceWithoutInventingInstall(t *testing.T) {
+	f, _ := localAppInstallFixture(t)
+	f.handler.home.appCatalog = t.TempDir()
+	row := localCatalogApplication(t, f)
+	if row["source_available"] != false || row["install_state"] != "not_installed" {
+		t.Fatal("missing source changed local installation state", row)
+	}
+	if _, ok := row["installed_version"]; ok {
+		t.Fatal("uninstalled application reported a version", row)
+	}
+}
+
+func TestLocalAppCatalogDoesNotRecreateMissingHomeOnRead(t *testing.T) {
+	f, home := localAppInstallFixture(t)
+	directory := home["directory"].(string)
+	if err := os.RemoveAll(directory); err != nil {
+		t.Fatal(err)
+	}
+	row := localCatalogApplication(t, f)
+	if row["install_state"] != "unavailable" {
+		t.Fatal("missing home was not reported unavailable", row)
+	}
+	if _, err := os.Stat(directory); !os.IsNotExist(err) {
+		t.Fatal("catalog read recreated missing home", err)
+	}
+}
+
+func TestLocalAppCatalogFlagsForeignAndLinkedDirectories(t *testing.T) {
+	f, home := localAppInstallFixture(t)
+	directory := filepath.Join(home["directory"].(string), "Connected Apps")
+	foreign := filepath.Join(directory, "wechat")
+	if err := os.MkdirAll(foreign, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(foreign, "app.json"), []byte(`{"id":"other","version":"9.9.9"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	row := localCatalogApplication(t, f)
+	if row["install_state"] != "conflict" {
+		t.Fatal("foreign application not flagged", row)
+	}
+	if err := os.RemoveAll(foreign); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "outside")
+	if err := os.MkdirAll(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, foreign); err != nil {
+		t.Skipf("symbolic links unavailable for this Windows test account: %v", err)
+	}
+	row = localCatalogApplication(t, f)
+	if row["install_state"] != "conflict" {
+		t.Fatal("linked application not flagged", row)
 	}
 }
 
