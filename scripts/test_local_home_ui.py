@@ -262,12 +262,13 @@ def verify(binary, output):
 
                 worker_policy_pattern = status_pattern + "/policy"
                 worker_lifecycle_pattern = status_pattern + "/lifecycle"
-                worker = {"state": "disabled", "threads": [], "actions": []}
+                worker = {"state": "disabled", "threads": [], "attachment_threads": [], "actions": []}
 
                 def worker_view():
                     return {"connection": {"id": "synthetic-wechat", "login": "authenticated",
                         "runtime": "online", "worker": worker["state"], "configured_policy": {
-                            "conversation_enabled": bool(worker["threads"]), "reply_threads": worker["threads"]}}}
+                            "conversation_enabled": bool(worker["threads"]), "reply_threads": worker["threads"],
+                            "attachment_threads": worker["attachment_threads"]}}}
 
                 def read_worker(route):
                     fulfill_json(worker_view())(route)
@@ -275,6 +276,7 @@ def verify(binary, output):
                 def save_worker(route):
                     assert route.request.method == "PUT"
                     worker["threads"] = route.request.post_data_json["reply_threads"]
+                    worker["attachment_threads"] = route.request.post_data_json["attachment_threads"]
                     fulfill_json(worker_view())(route)
 
                 def set_worker(route):
@@ -294,6 +296,7 @@ def verify(binary, output):
                 assert page.get_by_role("button", name="启动 Agent").is_disabled()
                 page.get_by_role("button", name="设置回复范围").click()
                 page.get_by_role("textbox", name="回复会话 ID").fill("filehelper\nsynthetic-room@chatroom")
+                page.get_by_role("textbox", name="附件读取会话 ID").fill("synthetic-room@chatroom")
                 page.get_by_role("button", name="保存回复范围").click()
                 page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
                 page.get_by_role("button", name="启动 Agent").click()
@@ -301,6 +304,8 @@ def verify(binary, output):
                 page.get_by_role("button", name="暂停 Agent").click()
                 page.get_by_text("Agent 已暂停", exact=True).wait_for()
                 assert worker["threads"] == ["filehelper", "synthetic-room@chatroom"]
+                assert worker["attachment_threads"] == ["synthetic-room@chatroom"]
+                assert page.get_by_role("textbox", name="附件读取会话 ID").input_value() == "synthetic-room@chatroom"
                 assert worker["actions"] == ["start", "stop"]
                 page.set_viewport_size({"width": 375, "height": 780})
                 assert_no_horizontal_overflow(page, "worker controls")

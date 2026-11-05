@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+
+	"wechat-bot/internal/mcptools"
 )
 
 // ErrAttachmentDenied is intentionally indistinguishable from a missing
@@ -11,9 +13,7 @@ import (
 // conversation may not read a source.
 var ErrAttachmentDenied = errors.New("attachment source is not authorized")
 
-// ErrAttachmentNotCached means that the source was verified, is an ordinary
-// file attachment, and its original has not been retained yet.  It is never a
-// signal to download an image, voice note, or arbitrary message.
+// ErrAttachmentNotCached means the host verified the attachment source but has not retained its original yet.
 var ErrAttachmentNotCached = errors.New("attachment original is not cached")
 
 // Attachment is the deliberately small preview returned to an application.
@@ -24,6 +24,9 @@ type Attachment struct {
 	Filename  string
 	MIME      string
 	Bytes     int64
+	Kind      string
+	SHA256    string
+	Variant   string
 }
 
 // AttachmentHost keeps authorization, source resolution, native transfer and
@@ -90,10 +93,26 @@ func ReadAttachment(ctx context.Context, raw json.RawMessage, host AttachmentHos
 	if !host.Allowed(ctx, in.Thread) {
 		return nil, ErrAttachmentDenied
 	}
-	return map[string]any{
+	result := map[string]any{
 		"asset_id": attachment.AssetID, "message_id": attachment.MessageID,
 		"filename": attachment.Filename, "mime": attachment.MIME,
 		"bytes": attachment.Bytes, "status": "original_available",
 		"instruction": "已取得经核验的原件；可交给当前会话的已授权处理能力，或按用户要求准备发送。不要猜测本机路径、文件内容或投递结果。",
-	}, nil
+	}
+	if attachment.Kind != "" {
+		result["kind"] = attachment.Kind
+		result["sha256"] = attachment.SHA256
+		result["variant"] = attachment.Variant
+		result["instruction"] = "已核验微信提供的完整附件文件。这里只返回素材编号、实际版本和校验信息；尚未读取内容或投递。"
+		if attachment.Variant == "normal" || attachment.Variant == "standard" {
+			result["status"] = "source_available"
+		}
+	}
+	return result, nil
+}
+
+// StationAttachmentTool exposes only originals attached to the current turn
+// or its verified quote. It cannot access another conversation or send media.
+func StationAttachmentTool() mcptools.Tool {
+	return tool("wechat_file_read", "取得本轮或已核验引用的微信文件、图片、语音、视频原件，返回素材编号与校验信息。不能把取得原件说成已看、已听、已转写或已发送。输入 message_id，引用时使用引用源的原消息编号。", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192}},"required":["message_id"],"additionalProperties":false}`)
 }

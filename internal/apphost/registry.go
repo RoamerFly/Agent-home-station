@@ -43,6 +43,7 @@ type ConfiguredPolicy struct {
 	ToolsEnabled        bool     `json:"tools_enabled"`
 	Grants              []string `json:"grants"`
 	ReplyThreads        []string `json:"reply_threads,omitempty"`
+	AttachmentThreads   []string `json:"attachment_threads,omitempty"`
 }
 
 type ConnectionStatus struct {
@@ -67,9 +68,15 @@ type LifecycleController interface {
 	SetConnectionRunning(ctx context.Context, connectionID string, running bool) (ConnectionLifecycle, error)
 }
 
-// ConnectionPolicyWriter saves an explicit owner-selected reply allowlist.
+// ConnectionPolicyWriter saves explicitly selected conversation capabilities.
 type ConnectionPolicyWriter interface {
-	SetConnectionReplyThreads(ctx context.Context, connectionID string, threads []string) (ConnectionStatus, error)
+	SetConnectionPolicy(ctx context.Context, connectionID string, policy ConnectionPolicyInput) (ConnectionStatus, error)
+}
+
+type ConnectionPolicyInput struct {
+	ReplyThreads []string
+	// A nil list leaves the old attachment grant on still-allowed threads.
+	AttachmentThreads *[]string
 }
 
 type Provider interface {

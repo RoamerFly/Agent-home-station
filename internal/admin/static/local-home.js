@@ -50,7 +50,7 @@
     else window.clearTimeout(apps.loginTimer);
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), editWorker: "" };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), attachmentDrafts: new Map(), editWorker: "" };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -232,11 +232,19 @@
     field.setAttribute("aria-label", "回复会话 ID");
     field.value = apps.workerDrafts.get(id) ?? (status.configured_policy?.reply_threads || []).join("\n");
     field.addEventListener("input", () => apps.workerDrafts.set(id, field.value));
+    const attachments = document.createElement("textarea");
+    attachments.rows = 2;
+    attachments.placeholder = "可留空，或填写上方已允许回复的会话 ID";
+    attachments.setAttribute("aria-label", "附件读取会话 ID");
+    attachments.value = apps.attachmentDrafts.get(id) ?? (status.configured_policy?.attachment_threads || []).join("\n");
+    attachments.addEventListener("input", () => apps.attachmentDrafts.set(id, attachments.value));
     const save = appSetupButton("保存回复范围", () => {
       const reply_threads = field.value.split(/[\s，,]+/u).filter(Boolean);
-      runWorkerAction(id, "PUT", "policy", { reply_threads });
+      const attachment_threads = attachments.value.split(/[\s，,]+/u).filter(Boolean);
+      runWorkerAction(id, "PUT", "policy", { reply_threads, attachment_threads });
     });
-    panel.append(appElement("p", "每行一个会话 ID。群聊仅在被提及时回复；清空并保存可撤销全部范围。"), field, save);
+    panel.append(appElement("p", "每行一个会话 ID。群聊仅在被提及时回复。"), field,
+      appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments, save);
     return panel;
   }
   async function runWorkerAction(id, method, action, body) {
@@ -251,6 +259,7 @@
       if (current !== apps) return;
       if (action === "policy") {
         current.workerDrafts.delete(id);
+        current.attachmentDrafts.delete(id);
         appFeedback(result.connection?.submissions_paused ? "回复范围已保存，Agent 已暂停。" : "回复范围已保存。");
       } else {
         appFeedback(body.action === "stop" ? "已暂停此账号的 Agent。" : "已启动此账号的 Agent，正在确认状态。");

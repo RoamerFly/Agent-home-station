@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -42,9 +44,10 @@ type stationWechat struct {
 }
 
 type stationWechatPolicy struct {
-	Enabled bool                 `json:"enabled"`
-	Paused  bool                 `json:"paused"`
-	Grants  map[string]time.Time `json:"reply_grants"`
+	Enabled          bool                 `json:"enabled"`
+	Paused           bool                 `json:"paused"`
+	Grants           map[string]time.Time `json:"reply_grants"`
+	AttachmentGrants map[string]time.Time `json:"attachment_grants,omitempty"`
 }
 
 type stationWechatWorker struct {
@@ -98,6 +101,20 @@ func (m stationWechatModel) Chat(ctx context.Context, system string, history []m
 		return "", err
 	}
 	return model.Chat(ctx, system, history)
+}
+
+func (m stationWechatModel) ChatFunctions(ctx context.Context, system string, history []map[string]string, tools []mcptools.Tool) (string, error) {
+	model, err := m.store.Client()
+	if err != nil {
+		return "", err
+	}
+	native, ok := model.(interface {
+		ChatFunctions(context.Context, string, []map[string]string, []mcptools.Tool) (string, error)
+	})
+	if !ok {
+		return "", errors.New("station_model_functions_unavailable")
+	}
+	return native.ChatFunctions(ctx, system, history, tools)
 }
 
 func (s *stationWechat) beginShutdown() {
@@ -206,6 +223,11 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 		}
 	}
+	for thread, granted := range policy.AttachmentGrants {
+		if policy.Grants[thread].IsZero() || granted.IsZero() || granted.Before(policy.Grants[thread]) {
+			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
+		}
+	}
 	return policy, nil
 }
 
@@ -294,7 +316,11 @@ func (w *stationWechatWorker) policyView() *apphost.ConfiguredPolicy {
 	if len(threads) != 0 {
 		grants = append(grants, "send.text")
 	}
-	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, Grants: grants, ReplyThreads: threads}
+	attachments := slices.Sorted(maps.Keys(w.policy.AttachmentGrants))
+	if len(attachments) > 0 {
+		grants = append(grants, "media.read")
+	}
+	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments}
 }
 
 func (s *stationWechat) Inspect(ctx context.Context, id string) (apphost.ConnectionStatus, error) {
@@ -318,17 +344,17 @@ func (s *stationWechat) Inspect(ctx context.Context, id string) (apphost.Connect
 	return view, nil
 }
 
-func (s *stationWechat) SetConnectionReplyThreads(ctx context.Context, id string, threads []string) (apphost.ConnectionStatus, error) {
+func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, policy apphost.ConnectionPolicyInput) (apphost.ConnectionStatus, error) {
+	threads := policy.ReplyThreads
 	if len(threads) > 100 {
 		return apphost.ConnectionStatus{}, apphost.ErrInvalidConnectionPolicy
 	}
 	grants := make(map[string]time.Time, len(threads))
-	now := time.Now().UTC()
 	for _, thread := range threads {
-		if !validID(thread) || !grants[thread].IsZero() {
+		if _, duplicate := grants[thread]; !validID(thread) || duplicate {
 			return apphost.ConnectionStatus{}, apphost.ErrInvalidConnectionPolicy
 		}
-		grants[thread] = now
+		grants[thread] = time.Time{}
 	}
 	view, err := s.stationWechatNative.Inspect(ctx, id)
 	if err != nil {
@@ -343,14 +369,35 @@ func (s *stationWechat) SetConnectionReplyThreads(ctx context.Context, id string
 	if s.ctx.Err() != nil || ctx.Err() != nil {
 		return view, apphost.ErrLifecycleConflict
 	}
+	now := time.Now().UTC()
 	for thread := range grants {
 		if previous, ok := w.policy.Grants[thread]; ok {
 			grants[thread] = previous
+		} else {
+			grants[thread] = now
 		}
 	}
-	if !equalWechatGrants(grants, w.policy.Grants) {
+	attachments := map[string]time.Time{}
+	if policy.AttachmentThreads != nil {
+		for _, thread := range *policy.AttachmentThreads {
+			if grants[thread].IsZero() || !attachments[thread].IsZero() {
+				return view, apphost.ErrInvalidConnectionPolicy
+			}
+			attachments[thread] = now
+			if previous, ok := w.policy.AttachmentGrants[thread]; ok {
+				attachments[thread] = previous
+			}
+		}
+	} else {
+		for thread, previous := range w.policy.AttachmentGrants {
+			if !grants[thread].IsZero() {
+				attachments[thread] = previous
+			}
+		}
+	}
+	if !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) {
 		next := w.policy
-		next.Grants = grants
+		next.Grants, next.AttachmentGrants = grants, attachments
 		// Require explicit resume after a scope change on an enabled worker.
 		next.Paused = next.Enabled
 		if err := w.changePolicy(next); err != nil {
@@ -363,18 +410,6 @@ func (s *stationWechat) SetConnectionReplyThreads(ctx context.Context, id string
 	view.Configuration, view.Worker = "worker-configured", w.state()
 	view.SubmissionsPaused, view.Policy = w.policy.Paused, w.policyView()
 	return view, nil
-}
-
-func equalWechatGrants(a, b map[string]time.Time) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for thread := range a {
-		if _, ok := b[thread]; !ok {
-			return false
-		}
-	}
-	return true
 }
 
 func (w *stationWechatWorker) changePolicy(next stationWechatPolicy) error {
@@ -493,6 +528,10 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, di
 		return err
 	}
 	character.Names = native
+	if len(policy.AttachmentGrants) != 0 {
+		character.Tools = &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, blocked: run.block.Load}
+		character.MaxToolCalls = 3
+	}
 	threads := make([]string, 0, len(policy.Grants))
 	rules := make(map[string]bot.GroupRule)
 	for thread := range policy.Grants {
