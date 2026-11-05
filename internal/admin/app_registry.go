@@ -24,9 +24,9 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 			result, err := query(app, r)
 			switch {
 			case errors.Is(err, apphost.ErrNotFound):
-				fail(w, http.StatusNotFound, "应用连接不存在")
+				fail(w, http.StatusNotFound, "未找到可读取的应用连接或记录")
 			case err != nil:
-				fail(w, http.StatusServiceUnavailable, "应用登记暂不可用")
+				fail(w, http.StatusServiceUnavailable, "暂时无法核对应用记录")
 			default:
 				respond(w, http.StatusOK, result)
 			}
@@ -39,6 +39,20 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 	handle("/api/apps/{app}/connections/{connection}", func(app apphost.Registration, r *http.Request) (any, error) {
 		status, err := app.Provider.Inspect(r.Context(), r.PathValue("connection"))
 		return map[string]any{"application": app.Application, "connection": status}, err
+	})
+	handle("/api/apps/{app}/connections/{connection}/events/{message}", func(app apphost.Registration, r *http.Request) (any, error) {
+		reader, ok := app.Provider.(apphost.EventReader)
+		if !ok {
+			return nil, apphost.ErrNotFound
+		}
+		return reader.ReadEvent(r.Context(), r.PathValue("connection"), r.URL.Query().Get("conversation"), r.PathValue("message"))
+	})
+	handle("/api/apps/{app}/connections/{connection}/receipts/{key}", func(app apphost.Registration, r *http.Request) (any, error) {
+		reader, ok := app.Provider.(apphost.ReceiptReader)
+		if !ok {
+			return nil, apphost.ErrNotFound
+		}
+		return reader.ReadReceipt(r.Context(), r.PathValue("connection"), r.PathValue("key"))
 	})
 }
 

@@ -41,10 +41,18 @@ func (n *multiNative) Status(ctx context.Context) (linuxnative.Status, error) {
 
 func setupAccounts(t *testing.T) (*webFixture, *accountRegistry) {
 	t.Helper()
+	return setupAccountsWithNativeRoutes(t, nil)
+}
+
+func setupAccountsWithNativeRoutes(t *testing.T, handle func(http.ResponseWriter, *http.Request) bool) (*webFixture, *accountRegistry) {
+	t.Helper()
 	native := &multiNative{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer synthetic-account-test-token" {
 			http.Error(w, "denied", 403)
+			return
+		}
+		if handle != nil && handle(w, r) {
 			return
 		}
 		parts := strings.Split(r.URL.Path, "/")

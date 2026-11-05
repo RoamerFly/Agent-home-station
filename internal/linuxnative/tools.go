@@ -78,6 +78,7 @@ type ToolStatus struct {
 	ThreadID             string             `json:"thread_id"`
 	ServerID             string             `json:"server_id"`
 	Reason               string             `json:"reason"`
+	ErrorCode            string             `json:"error_code,omitempty"`
 	VoicePartsIncomplete bool               `json:"voice_parts_incomplete,omitempty"`
 	VoiceChunks          []VoiceChunkStatus `json:"voice_chunks,omitempty"`
 	VoiceFailureStage    string             `json:"voice_failure_stage,omitempty"`
@@ -303,6 +304,9 @@ func (s *Sender) decodeToolStatus(raw []byte) (ToolStatus, error) {
 		value.Reason = "native_job_failed"
 	}
 	status := ToolStatus{ID: value.ID, State: value.State, Phase: value.Phase, Kind: value.Kind, ThreadID: value.ThreadID, ServerID: value.ServerID, Reason: value.Reason}
+	if len(value.ErrorCode) <= 128 {
+		status.ErrorCode = value.ErrorCode
+	}
 	status.CreatedAt = value.CreatedAt
 	if value.SourceID != "" && !safeID(value.SourceID) {
 		return ToolStatus{}, errors.New("invalid media source identity")

@@ -93,6 +93,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	}
 	var messages []linuxnative.Message
 	var directedSender string
+	sequences := map[string]int64{}
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
 		if live != nil && !live[item.Event.Data.MessageID] || live == nil && !item.Backlog || item.Event.Data.ThreadID != thread || item.ToolStarted || time.Now().Before(item.RetryAfter) {
@@ -125,6 +126,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		}
 		w.recordIncoming(m)
 		messages = append(messages, m)
+		sequences[m.ID] = sourceSequence(item.Event)
 	}
 	if len(messages) == 0 {
 		return w.persistErr
@@ -195,6 +197,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		}
 		observed := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: m.SenderID, TraceID: m.ID, Text: body, MessageTime: m.CreatedAt, OriginalText: &original}
 		bindInputSource(&observed, m, c)
+		observed.Source.Sequence = sequences[m.ID]
 		if err := c.Store.Observe(observed, c.Config, now); err != nil {
 			return err
 		}

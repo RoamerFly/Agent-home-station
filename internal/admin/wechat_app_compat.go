@@ -77,18 +77,11 @@ func (w wechatCompatibility) lookup(connectionID string) (accountRuntime, error)
 }
 
 func (w wechatCompatibility) Inspect(ctx context.Context, connectionID string) (apphost.ConnectionStatus, error) {
-	item, err := w.lookup(connectionID)
+	item, release, err := w.acquire(connectionID)
 	if err != nil {
 		return apphost.ConnectionStatus{}, err
 	}
-	// Match legacy account routing's exclusion against removal and logout.
-	if item.access != nil {
-		item.access.mu.RLock()
-		defer item.access.mu.RUnlock()
-		if item.access.removed {
-			return apphost.ConnectionStatus{}, apphost.ErrNotFound
-		}
-	}
+	defer release()
 	result := apphost.ConnectionStatus{
 		Connection: w.connection(&item), Login: "unknown", Runtime: "unavailable", Worker: "unavailable",
 		CapabilityCheck: "not_checked", SupportedActions: []string{},
@@ -150,6 +143,23 @@ func (w wechatCompatibility) Inspect(ctx context.Context, connectionID string) (
 		}
 	}
 	return result, nil
+}
+
+// Match legacy account routing's exclusion against removal and logout.
+func (w wechatCompatibility) acquire(connectionID string) (accountRuntime, func(), error) {
+	item, err := w.lookup(connectionID)
+	if err != nil {
+		return accountRuntime{}, nil, err
+	}
+	if item.access == nil {
+		return item, func() {}, nil
+	}
+	item.access.mu.RLock()
+	if item.access.removed {
+		item.access.mu.RUnlock()
+		return accountRuntime{}, nil, apphost.ErrNotFound
+	}
+	return item, item.access.mu.RUnlock, nil
 }
 
 func configuredWechatPolicy(m *Manager) *apphost.ConfiguredPolicy {

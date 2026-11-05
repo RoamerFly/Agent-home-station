@@ -390,6 +390,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		input.OriginalText = &original
 		bindInputSource(&input, message, character)
+		input.Source.Sequence = sourceSequence(event)
 		for i := range input.IncomingMedia {
 			input.IncomingMedia[i].ObservationState = mediaObservationState
 			if mediaObservationState != "pending" {

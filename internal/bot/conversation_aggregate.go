@@ -52,15 +52,17 @@ func (w *Worker) aggregateConversation(ctx context.Context, c *companion.Engine,
 				return
 			}
 		}
-		peer := *input
-		peer.TraceID = m.ID
-		peer.Text = m.Body
-		peer.OriginalText = &m.Body
+		peer := companion.Input{
+			Channel: input.Channel, Account: input.Account, Thread: m.ThreadID, Sender: m.SenderID,
+			TraceID: m.ID, Text: m.Body, OriginalText: &m.Body, MessageTime: m.CreatedAt,
+		}
+		bindInputSource(&peer, m, c)
+		peer.Source.Sequence = sourceSequence(item.Event)
 		if err = c.Store.Observe(peer, c.Config, stamp); err != nil {
 			w.persistErr = err
 			return
 		}
-		events = append(events, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: m.Body, At: m.CreatedAt, NewRequest: true})
+		events = append(events, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: m.Body, At: m.CreatedAt, NewRequest: true, Source: peer.Source})
 		item.Phase = "aggregated"
 		item.Updated = time.Now().UTC()
 		w.activity(Record{Event: "message_received", Category: "received", ThreadID: m.ThreadID, Sender: m.SenderID, MessageID: m.ID, Content: m.Body, Status: "received", Origin: "wechat"})
