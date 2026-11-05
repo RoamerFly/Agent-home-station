@@ -33,44 +33,36 @@ func (w wechatCompatibility) ReadEvent(ctx context.Context, connection, thread, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	allowed, err := m.authorizeConversation(ctx, thread)
-	if err != nil {
-		return apphost.Event{}, err
-	}
-	if !allowed {
-		return apphost.Event{}, apphost.ErrNotFound
-	}
-	scope := companion.ScopeID("wechat", item.record.ID, thread)
-	ev, err := readWechatSource(ctx, m.memory, scope, item.record.ID, thread, message)
-	if err != nil {
-		return apphost.Event{}, err
-	}
-	src := ev.Source
-	out := apphost.Event{
-		ConnectionRef: wechatConnectionRef(item.record.ID), EventRef: appEventRef(ev),
-		ConversationID: thread, DatasetID: src.InstanceID, MessageType: src.MessageType, OccurredAt: src.OccurredAt,
-		ReceivedAt: src.ReceivedAt, StoredSequence: ev.Seq, SourceSequence: src.Sequence,
-		AddresseeIDs: ev.Addressees, ReadScope: "source_metadata",
-	}
-	if q := ev.QuotedSource; q != nil && q.Account == src.Account && q.Thread == src.Thread && q.InstanceID == src.InstanceID {
-		quoted, err := readWechatSource(ctx, m.memory, scope, src.Account, thread, q.MessageID)
-		if err != nil && !errors.Is(err, apphost.ErrNotFound) {
-			return apphost.Event{}, err
-		}
-		if err == nil && q.ServerID != "" && q.ServerID == quoted.Source.ServerID && q.Sender == quoted.Sender &&
-			q.Revision == quoted.Source.Revision && (q.EventID == "" || q.EventID == quoted.ID) {
-			ref := appEventRef(quoted)
-			out.Quote = &ref
-		}
-	}
-	for _, media := range ev.IncomingMedia {
-		if media.Source.EventID == ev.ID && media.Source.Revision == src.Revision {
-			out.Media = append(out.Media, apphost.MediaRef{AssetID: media.AssetID, Kind: media.Kind})
-		}
-	}
-	return out, nil
+	return wechatapp.ReadEvent(ctx, item.record.ID, thread, message, m.authorizeConversation,
+		func(ctx context.Context, sourceThread, sourceMessage string) (wechatapp.SourceRecord, error) {
+			if sourceThread != thread {
+				return wechatapp.SourceRecord{}, apphost.ErrNotFound
+			}
+			scope := companion.ScopeID(wechatapp.ID, item.record.ID, thread)
+			ev, err := readWechatSource(ctx, m.memory, scope, item.record.ID, thread, sourceMessage)
+			if err != nil {
+				return wechatapp.SourceRecord{}, err
+			}
+			record := wechatapp.SourceRecord{Source: *wechatSourceMetadata(ev.Source), StoredSequence: ev.Seq, AddresseeIDs: ev.Addressees, QuotedSource: wechatSourceMetadata(ev.QuotedSource)}
+			for _, media := range ev.IncomingMedia {
+				record.Media = append(record.Media, wechatapp.SourceMedia{EventID: media.Source.EventID, Revision: media.Source.Revision, AssetID: media.AssetID, Kind: media.Kind})
+			}
+			return record, nil
+		})
 }
 
+func wechatSourceMetadata(src *companion.SourceRef) *wechatapp.SourceMetadata {
+	if src == nil {
+		return nil
+	}
+	return &wechatapp.SourceMetadata{EventID: src.EventID, InstanceID: src.InstanceID, Account: src.Account,
+		Thread: src.Thread, MessageID: src.MessageID, ServerID: src.ServerID, Sender: src.Sender,
+		OccurredAt: src.OccurredAt, ReceivedAt: src.ReceivedAt, Revision: src.Revision,
+		MessageType: src.MessageType, Sequence: src.Sequence}
+}
+
+// Storage, forgetting and source-version checks remain host authority. The
+// application receives metadata from a reader already bound to this account.
 func readWechatSource(ctx context.Context, store *companion.Store, scope, account, thread, message string) (companion.MemoryEvent, error) {
 	id, err := store.OriginalEventID(ctx, scope, message)
 	var ev companion.MemoryEvent
@@ -89,11 +81,6 @@ func readWechatSource(ctx context.Context, store *companion.Store, scope, accoun
 		return companion.MemoryEvent{}, apphost.ErrNotFound
 	}
 	return ev, nil
-}
-
-func appEventRef(ev companion.MemoryEvent) apphost.EventRef {
-	return apphost.EventRef{EventID: ev.ID, MessageID: ev.Source.MessageID, ServerID: ev.Source.ServerID,
-		SenderID: ev.Sender, Revision: ev.Source.Revision}
 }
 
 type wechatReceiptReader interface {

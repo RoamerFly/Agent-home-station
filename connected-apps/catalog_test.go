@@ -1,10 +1,17 @@
 package catalog
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"reflect"
+
 	"path/filepath"
 	"testing"
 
 	wechat "wechat-bot/connected-apps/wechat/adapter"
+	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
 )
 
@@ -29,5 +36,147 @@ func TestOfficialAppSource(t *testing.T) {
 	}
 	if wechat.ConnectionRef("synthetic-account").InstallationID != "wechat-legacy" {
 		t.Fatal("legacy installation changed")
+	}
+}
+
+type catalogReaderFunc func(context.Context, string, string, string, string) (linuxnative.CatalogPage, error)
+
+func (f catalogReaderFunc) Catalog(c context.Context, k, t, s, p string) (linuxnative.CatalogPage, error) {
+	return f(c, k, t, s, p)
+}
+
+func TestWeChatApplicationToolPolicyAndProtocol(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		policy             wechat.Policy
+		count              int
+		read, send, recall bool
+	}{
+		{"member", wechat.Policy{}, 2, false, false, false},
+		{"member-read", wechat.Policy{ReadConversations: true}, 3, true, false, false},
+		{"owner", wechat.Policy{Owner: true, ReadConversations: true}, 6, true, false, false},
+		{"owner-cross", wechat.Policy{Owner: true, ReadConversations: true, CrossConversation: true}, 9, true, true, false},
+		{"owner-recall", wechat.Policy{Owner: true, ReadConversations: true, CrossConversation: true, AccountActions: []string{"recall"}}, 11, true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := wechat.Tools(tc.policy)
+			names := map[string]bool{}
+			for _, tool := range tools {
+				if names[tool.Name] || !wechat.ToolName(tool.Name) || !json.Valid(tool.InputSchema) {
+					t.Fatal("invalid/duplicate tool", tool.Name)
+				}
+				names[tool.Name] = true
+			}
+			if len(tools) != tc.count || names["wechat_read"] != tc.read || names["wechat_send_text"] != tc.send || names["wechat_recall"] != tc.recall {
+				t.Fatal(names)
+			}
+		})
+	}
+	if wechat.ToolName("wechat_unknown") || wechat.ToolName("server_list") || wechat.SubmissionTool("wechat_read") || !wechat.SubmissionTool("wechat_send_text") {
+		t.Fatal("invalid tool dispatch boundary")
+	}
+}
+
+func TestWeChatApplicationReadPreservesCursorAndTypedErrors(t *testing.T) {
+	calls := 0
+	allowed := true
+	read := catalogReaderFunc(func(ctx context.Context, kind, thread, search, cursor string) (linuxnative.CatalogPage, error) {
+		calls++
+		if kind != "messages" || thread != "room" || search != "" || cursor != "opaque-page" {
+			t.Fatal("read arguments changed")
+		}
+		next := "exact-next-page"
+		return linuxnative.CatalogPage{Items: []map[string]any{{"id": "message-1", "threadId": "room"}}, NextCursor: &next, Coverage: map[string]any{"partial": true}}, nil
+	})
+	auth := func(thread string) bool { return allowed && thread == "room" }
+	result, err := wechat.ReadCatalog(t.Context(), read, "room", json.RawMessage(`{"kind":"messages","cursor":"opaque-page"}`), auth)
+	if err != nil || calls != 1 || result.Thread != "room" || *result.Page.NextCursor != "exact-next-page" {
+		t.Fatal(result, err)
+	}
+	if _, err := wechat.ReadCatalog(t.Context(), read, "room", json.RawMessage(`{"kind":"messages","thread_id":"other"}`), auth); !errors.Is(err, wechat.ErrReadDenied) || calls != 1 {
+		t.Fatal("unauthorized native read", err, calls)
+	}
+	typed := &linuxnative.CatalogError{Code: "catalog_cursor_invalid"}
+	failing := catalogReaderFunc(func(context.Context, string, string, string, string) (linuxnative.CatalogPage, error) {
+		return linuxnative.CatalogPage{}, typed
+	})
+	if _, err := wechat.ReadCatalog(t.Context(), failing, "room", json.RawMessage(`{"kind":"messages"}`), auth); err != typed {
+		t.Fatal("typed diagnostic lost", err)
+	}
+	revoked := catalogReaderFunc(func(context.Context, string, string, string, string) (linuxnative.CatalogPage, error) {
+		allowed = false
+		return linuxnative.CatalogPage{Items: []map[string]any{{"id": "late"}}}, nil
+	})
+	if out, err := wechat.ReadCatalog(t.Context(), revoked, "room", json.RawMessage(`{"kind":"messages"}`), auth); !errors.Is(err, wechat.ErrReadDenied) || len(out.Page.Items) > 0 {
+		t.Fatal("late revoked page escaped", out, err)
+	}
+	allowed = true
+	mismatched := catalogReaderFunc(func(context.Context, string, string, string, string) (linuxnative.CatalogPage, error) {
+		return linuxnative.CatalogPage{Items: []map[string]any{{"threadId": "other"}}}, nil
+	})
+	if _, err := wechat.ReadCatalog(t.Context(), mismatched, "room", json.RawMessage(`{"kind":"messages"}`), auth); err == nil {
+		t.Fatal("wrong conversation page escaped")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := wechat.ReadCatalog(ctx, read, "room", json.RawMessage(`{"kind":"messages"}`), auth); !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatal("cancelled read ran", err, calls)
+	}
+}
+
+func TestWeChatApplicationSourceKeepsExactQuoteMediaAndScope(t *testing.T) {
+	src := wechat.SourceMetadata{EventID: "event-1", InstanceID: "dataset-1", Account: "account-1", Thread: "room", MessageID: "message-1", ServerID: "101", Sender: "user-1", Revision: 2, Sequence: 12}
+	quote := src
+	quote.EventID = "event-2"
+	quote.MessageID = "message-2"
+	quote.ServerID = "102"
+	quote.Sender = "user-2"
+	record := wechat.SourceRecord{Source: src, StoredSequence: 23, AddresseeIDs: []string{"user-2"}, QuotedSource: &quote, Media: []wechat.SourceMedia{
+		{EventID: src.EventID, Revision: 2, AssetID: "image-exact", Kind: "image"},
+		{EventID: src.EventID, Revision: 1, AssetID: "image-old", Kind: "image"},
+		{EventID: "other", Revision: 2, AssetID: "image-foreign", Kind: "image"},
+	}}
+	allowed := true
+	quoteMissing := false
+	read := func(ctx context.Context, thread, message string) (wechat.SourceRecord, error) {
+		if thread != "room" {
+			t.Fatal("cross-scope source query")
+		}
+		if message == src.MessageID {
+			return record, nil
+		}
+		if quoteMissing {
+			return wechat.SourceRecord{}, apphost.ErrNotFound
+		}
+		return wechat.SourceRecord{Source: quote}, nil
+	}
+	auth := func(context.Context, string) (bool, error) { return allowed, nil }
+	out, err := wechat.ReadEvent(t.Context(), src.Account, src.Thread, src.MessageID, auth, read)
+	if err != nil || out.ConnectionRef != wechat.ConnectionRef(src.Account) || out.Quote == nil || out.Quote.MessageID != quote.MessageID || out.StoredSequence != 23 || out.SourceSequence != 12 || !reflect.DeepEqual(out.Media, []apphost.MediaRef{{AssetID: "image-exact", Kind: "image"}}) {
+		t.Fatal(out, err)
+	}
+	quoteMissing = true
+	if out, err := wechat.ReadEvent(t.Context(), src.Account, src.Thread, src.MessageID, auth, read); err != nil || out.Quote != nil {
+		t.Fatal("forgotten quote revived", out, err)
+	}
+	if _, err := wechat.ReadEvent(t.Context(), "account-2", src.Thread, src.MessageID, auth, read); !errors.Is(err, apphost.ErrNotFound) {
+		t.Fatal("cross-account source exposed", err)
+	}
+	late := func(ctx context.Context, thread, message string) (wechat.SourceRecord, error) {
+		allowed = false
+		return record, nil
+	}
+	if out, err := wechat.ReadEvent(t.Context(), src.Account, src.Thread, src.MessageID, auth, late); !errors.Is(err, apphost.ErrNotFound) || out.EventID != "" {
+		t.Fatal("revoked source returned", out, err)
+	}
+	allowed = true
+	reads := 0
+	lateQuote := func(ctx context.Context, thread, message string) (wechat.SourceRecord, error) {
+		reads++
+		allowed = false
+		return record, nil
+	}
+	if _, err := wechat.ReadEvent(t.Context(), src.Account, src.Thread, src.MessageID, auth, lateQuote); !errors.Is(err, apphost.ErrNotFound) || reads != 1 {
+		t.Fatal("quote source was read after revocation", reads, err)
 	}
 }

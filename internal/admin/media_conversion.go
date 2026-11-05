@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"math"
 	"time"
+
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 )
 
 // Zero duration means the remainder, zero segment/timeout select defaults.
@@ -60,14 +62,4 @@ func (c *voiceConversion) formatKey() string {
 
 func sameVoiceConversion(a, b *voiceConversion) bool { return a.formatKey() == b.formatKey() }
 
-const voiceConversionSchema = `{"type":"object","description":"Voice conversion from retained original. start_seconds default0; duration_seconds default0 means remainder; segment_seconds default60, actual WeChat maximum60. timeout_seconds default90, adjustable execution budget. File preserves original and does not accept conversion.","properties":{"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","minimum":0},"segment_seconds":{"type":"number","exclusiveMinimum":0,"maximum":60},"timeout_seconds":{"type":"number","exclusiveMinimum":0}},"additionalProperties":false}`
-
-func withVoiceConversion(schema string) string {
-	var v map[string]any
-	_ = json.Unmarshal([]byte(schema), &v)
-	var conversion any
-	_ = json.Unmarshal([]byte(voiceConversionSchema), &conversion)
-	v["properties"].(map[string]any)["conversion"] = conversion
-	b, _ := json.Marshal(v)
-	return string(b)
-}
+func withVoiceConversion(schema string) string { return wechatapp.WithVoiceConversion(schema) }

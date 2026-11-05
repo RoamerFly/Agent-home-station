@@ -4,5 +4,8 @@
   "host_entrypoint": "wechat-compatibility",
   "identity_source": "adapter/identity.go",
   "connection_authority": "host",
-  "runtime_migration": "pending"
+  "runtime_migration": "pending",
+  "tool_definitions_source": "adapter/tools.go",
+  "read_source": "adapter/read.go",
+  "event_projection_source": "adapter/source.go"
 }
