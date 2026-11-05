@@ -205,6 +205,46 @@ func legacyImportAccountPaths(root *os.Root, primary, account string) (config, q
 	return filepath.Join("admin", "accounts", digest, "config.json"), filepath.Join("bot-state", "accounts", digest), nil
 }
 
+// legacyImportState is an entry-point hint. The full archive, account and
+// digest checks run on the explicit preview or apply request.
+func (s *stationWechat) legacyImportState(account string, worker *stationWechatWorker) string {
+	if worker != nil {
+		destination, err := workspacefs.OpenPath(worker.dir)
+		if err != nil {
+			return "invalid"
+		}
+		info, err := destination.Lstat(legacyImportArchiveFile)
+		_ = destination.Close()
+		if err == nil {
+			if !info.Mode().IsRegular() || info.Size() > legacyImportArchiveLimit {
+				return "invalid"
+			}
+			return "applied"
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "invalid"
+		}
+	}
+	root, source, err := s.openLegacyImport()
+	if errors.Is(err, errLegacyImportNotConfigured) {
+		return ""
+	}
+	if err != nil {
+		return "invalid"
+	}
+	defer root.Close()
+	if _, _, err := legacyImportAccountPaths(root, source.Primary, account); err != nil {
+		if errors.Is(err, apphost.ErrNotFound) {
+			return ""
+		}
+		return "invalid"
+	}
+	if worker != nil {
+		return "conflict"
+	}
+	return "available"
+}
+
 func (s *stationWechat) previewLegacyImport(ctx context.Context, id string) (legacyImportArchive, error) {
 	native, err := s.WorkerSender(ctx, id)
 	if err != nil {

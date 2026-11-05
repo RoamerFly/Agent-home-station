@@ -111,16 +111,28 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	req("GET", planRoute("unknown"), nil, false, 404)
 	req("GET", planRoute("two"), nil, false, 404)
 	req("GET", planRoute("three"), nil, false, 422)
+	detailFor := func(account string) map[string]any {
+		return req("GET", route(account), nil, false, 200)["connection"].(map[string]any)
+	}
+	if detailFor("one")["legacy_import"] != "available" || detailFor("two")["legacy_import"] != nil {
+		t.Fatal("legacy entry must be scoped to the staged account")
+	}
 	five := req("GET", planRoute("five"), nil, false, 200)
 	req("PUT", route("five")+"/policy", map[string]any{"reply_threads": []string{"existing-target-thread"}}, true, 200)
 	req("POST", planRoute("five"), planDigest(five), true, 409)
-	existing := req("GET", route("five"), nil, false, 200)["connection"].(map[string]any)
-	if !bytes.Equal(j(existing["configured_policy"].(map[string]any)["reply_threads"]), []byte(`["existing-target-thread"]`)) {
+	req("GET", planRoute("five"), nil, false, 409)
+	existing := detailFor("five")
+	if existing["legacy_import"] != "conflict" || !bytes.Equal(j(existing["configured_policy"].(map[string]any)["reply_threads"]), []byte(`["existing-target-thread"]`)) {
 		t.Fatal("import modified the existing target policy", existing)
 	}
 	write(sourceConfig, j(legacyImportSource{Root: host, Primary: "one", Stopped: true}))
 	req("GET", planRoute("one"), nil, false, 422)
+	if detailFor("one")["legacy_import"] != "invalid" {
+		t.Fatal("invalid snapshot was advertised as available")
+	}
 	write(sourceConfig, j(legacyImportSource{Root: snapshot, Primary: "one", Stopped: true}))
+	req("POST", route("one")+"/lifecycle", map[string]string{"action": "start"}, true, 409)
+	req("POST", route("one")+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
 	plan := req("GET", planRoute("one"), nil, false, 200)
 	if plan["legacy_enabled"] != true || plan["same_native_dataset"] != false || plan["receipt_records"] != float64(2) || plan["unresolved_receipts"] != float64(1) ||
 		!bytes.Equal(j(plan["suggested_reply_threads"]), []byte(`["123@chatroom","filehelper","friend-one"]`)) || strings.Contains(string(j(plan)), "synthetic-do-not-copy") {
@@ -138,7 +150,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal(applied)
 	}
 	detail := req("GET", route("one"), nil, false, 200)["connection"].(map[string]any)
-	if detail["worker"] != "paused" || detail["configured_policy"].(map[string]any)["conversation_enabled"] != false {
+	if detail["legacy_import"] != "applied" || detail["worker"] != "paused" || detail["configured_policy"].(map[string]any)["conversation_enabled"] != false {
 		t.Fatal(detail)
 	}
 	req("POST", route("one")+"/lifecycle", map[string]string{"action": "start"}, true, 409)
@@ -184,7 +196,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if err := os.Remove(sourceConfig); err != nil {
 		t.Fatal(err)
 	}
-	if req("GET", planRoute("one"), nil, false, 200)["applied"] != true ||
+	if detailFor("one")["legacy_import"] != "applied" || req("GET", planRoute("one"), nil, false, 200)["applied"] != true ||
 		req("POST", planRoute("one"), planDigest(plan), true, 200)["applied"] != true {
 		t.Fatal("saved migration report was not available after detaching the source")
 	}

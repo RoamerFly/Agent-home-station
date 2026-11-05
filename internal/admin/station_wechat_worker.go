@@ -405,6 +405,7 @@ func (s *stationWechat) Inspect(ctx context.Context, id string) (apphost.Connect
 	if err != nil {
 		return view, err
 	}
+	view.LegacyImport = s.legacyImportState(view.AccountID, w)
 	if w == nil {
 		view.Worker = "disabled"
 		view.Policy = (&stationWechatWorker{}).policyView()
@@ -550,9 +551,15 @@ func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, run
 	if err != nil {
 		return apphost.ConnectionLifecycle{}, err
 	}
-	w, err := s.worker(id, true)
+	w, err := s.worker(id, false)
 	if err != nil {
 		return apphost.ConnectionLifecycle{}, err
+	}
+	if w == nil {
+		if running {
+			return apphost.ConnectionLifecycle{}, apphost.ErrLifecycleNotReady
+		}
+		return apphost.ConnectionLifecycle{ConnectionRef: s.connectionRef(id, native.Account()), Worker: "disabled"}, nil
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()

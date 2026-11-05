@@ -22,6 +22,15 @@ func (s *stationWechat) legacyImportRoutes(server *Server, mux *http.ServeMux) {
 			respond(w, http.StatusOK, prior)
 			return
 		}
+		target, err := s.worker(id, false)
+		if err != nil {
+			legacyImportFailure(w, err)
+			return
+		}
+		if target != nil {
+			legacyImportFailure(w, errLegacyImportConflict)
+			return
+		}
 		archive, err := s.previewLegacyImport(r.Context(), id)
 		if err != nil {
 			legacyImportFailure(w, err)

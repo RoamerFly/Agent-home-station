@@ -59,6 +59,7 @@ type ConnectionStatus struct {
 	Policy            *ConfiguredPolicy `json:"configured_policy"`
 	CapabilityCheck   string            `json:"capability_check"`
 	SupportedActions  []string          `json:"supported_actions"`
+	LegacyImport      string            `json:"legacy_import,omitempty"`
 }
 
 type ConnectionLifecycle struct {

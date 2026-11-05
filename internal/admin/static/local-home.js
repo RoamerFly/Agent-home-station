@@ -211,6 +211,94 @@
     disabled: "Agent 未启动", needs_setup: "Agent 待配置", waiting_login: "Agent 等待登录",
     running: "Agent 运行中", stopping: "Agent 正在停止", paused: "Agent 已暂停", error: "Agent 运行异常"
   };
+  function legacyImportControls(id, availability) {
+    if (!availability) return null;
+    const panel = appElement("details", "", "identity-details legacy-import");
+    panel.append(appElement("summary", "从旧版接入"));
+    const body = appElement("div", "", "details-grid");
+    const stateCopy = {
+      available: "发现此账号的旧版隔离资料。先查看预演，确认后才会保存接入摘要。",
+      conflict: "此账号已有新的工作记录，旧版资料不能覆盖接入。",
+      applied: "旧版接入摘要已保存，可随时查看。",
+      invalid: "旧版隔离资料无法通过身份或路径核验，不能接入。"
+    };
+    let plan = null, loading = false;
+    const note = appElement("small", stateCopy[availability] || "旧版接入状态暂不可读。");
+    const result = appElement("div", "");
+    const actions = appElement("div", "", "app-worker-actions");
+    const preview = appSetupButton(availability === "applied" ? "查看接入摘要" : "查看接入预演", async () => {
+      if (loading) return;
+      loading = true;
+      actions.querySelector("[data-legacy-confirm]")?.remove();
+      preview.disabled = true;
+      result.replaceChildren(appElement("small", "正在读取旧版接入信息…"));
+      try {
+        plan = await request("/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import");
+        renderPlan();
+      } catch (error) {
+        plan = null;
+        actions.querySelector("[data-legacy-confirm]")?.remove();
+        result.replaceChildren(appElement("small", error.message));
+      } finally {
+        loading = false;
+        preview.disabled = false;
+      }
+    });
+    function list(label, values) {
+      const reviewCopy = {
+        legacy_text_reply_disabled: "旧版文本回复未开启",
+        custom_filehelper_prefix: "旧版文件传输助手使用了自定义前缀",
+        all_friends: "旧版允许所有好友回复",
+        group_rule: "旧版包含群聊规则"
+      };
+      const items = (Array.isArray(values) ? values : []).filter(Boolean).map((item) => reviewCopy[item] || item);
+      return appElement("p", `${label}：${items.length ? items.join("、") : "无"}`);
+    }
+    function renderPlan(message = "") {
+      const value = plan || {};
+      result.replaceChildren(
+        appElement("strong", value.applied ? "已保存的接入摘要" : "接入预演"),
+        appElement("p", `账号：${value.account_id || "未知"}`),
+        list("建议回复范围", value.suggested_reply_threads),
+        list("仍需核对", value.requires_manual_review),
+        appElement("p", `可读回执：${Number(value.receipt_records || 0)}；待核对回执：${Number(value.unresolved_receipts || 0)}`),
+        appElement("p", `原生资料集：${value.same_native_dataset ? "相同，可查询既有操作记录" : "不同或未知，不会覆盖当前资料"}`),
+        appElement("p", `旧版状态：${value.legacy_enabled ? "已启用" : "未启用"}${value.legacy_paused ? "，已暂停" : ""}`),
+        message ? appElement("small", message) : document.createTextNode("")
+      );
+      const confirm = actions.querySelector("[data-legacy-confirm]");
+      if (confirm) confirm.remove();
+      if (availability !== "available" || value.applied || !value.digest) return;
+      const apply = appSetupButton("确认接入旧版摘要", async () => {
+        if (loading) return;
+        loading = true;
+        apply.disabled = true;
+        try {
+          plan = await request("/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import", {
+            method: "POST", body: JSON.stringify({ digest: value.digest })
+          });
+          note.textContent = "旧版接入摘要已保存，可随时查看。";
+          preview.textContent = "查看接入摘要";
+          renderPlan("旧版摘要已保存；没有启动 Agent，也没有修改回复范围。");
+        } catch (error) {
+          if (error.status === 409) {
+            plan = null;
+            apply.remove();
+            result.replaceChildren(appElement("small", "旧版资料或当前状态已变化，请重新读取接入预演。"));
+          } else result.replaceChildren(appElement("small", error.message));
+        } finally {
+          loading = false;
+          apply.disabled = false;
+        }
+      });
+      apply.dataset.legacyConfirm = "true";
+      actions.append(apply);
+    }
+    actions.append(preview);
+    body.append(note, actions, result);
+    panel.append(body);
+    return panel;
+  }
   function appWorkerControls(id, status) {
     const panel = appElement("div", "", "app-worker");
     const buttons = appElement("div", "", "app-worker-actions");
@@ -224,7 +312,10 @@
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
     toggle.disabled ||= status.worker === "stopping" || !running && !status.configured_policy?.conversation_enabled;
     buttons.append(toggle);
-    panel.append(buttons, contactDirectoryControls(id), groupDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
+    const legacyImport = legacyImportControls(id, status.legacy_import);
+    panel.append(buttons);
+    if (legacyImport) panel.append(legacyImport);
+    panel.append(contactDirectoryControls(id), groupDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
     if (apps.editWorker !== id) return panel;
     const field = document.createElement("textarea");
     field.rows = 3;

@@ -213,6 +213,7 @@ def verify(binary, output):
                 page.get_by_text("账号连接", exact=True).wait_for()
                 page.get_by_text("合成微信账号", exact=True).wait_for()
                 page.get_by_text("已登录", exact=True).wait_for()
+                assert page.get_by_text("从旧版接入", exact=True).count() == 0, "legacy import stays hidden without an account flag"
                 page.screenshot(path=str(output / "apps-connected-light.png"), full_page=True)
 
                 # Keep the same request key when the first response is lost,
@@ -277,14 +278,18 @@ def verify(binary, output):
                 worker_policy_pattern = status_pattern + "/policy"
                 worker_lifecycle_pattern = status_pattern + "/lifecycle"
                 worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "contact_read": False, "actions": []}
+                legacy = {"availability": "available", "previews": 0, "posts": []}
 
                 def worker_view():
-                    return {"connection": {"id": "synthetic-wechat", "login": "authenticated",
+                    connection = {"id": "synthetic-wechat", "login": "authenticated",
                         "runtime": "online", "worker": worker["state"], "configured_policy": {
                             "conversation_enabled": bool(worker["threads"]), "reply_threads": worker["threads"], "history_threads": worker["history_threads"],
                             "attachment_threads": worker["attachment_threads"], "media_reply_threads": worker["media_reply_threads"],
                             "group_mute_threads": worker["group_mute_threads"],
-                            "contact_read": worker["contact_read"]}}}
+                            "contact_read": worker["contact_read"]}}
+                    if legacy["availability"]:
+                        connection["legacy_import"] = legacy["availability"]
+                    return {"connection": connection}
 
                 def read_worker(route):
                     fulfill_json(worker_view())(route)
@@ -311,6 +316,34 @@ def verify(binary, output):
                 page.route(status_pattern, status_route)
                 page.route(worker_policy_pattern, save_worker)
                 page.route(worker_lifecycle_pattern, set_worker)
+                legacy_import_pattern = status_pattern + "/legacy-import"
+
+                def legacy_import(route):
+                    if route.request.method == "GET":
+                        legacy["previews"] += 1
+                        fulfill_json({"digest": f"fixture-legacy-digest-{legacy['previews']}", "account_id": "fixture-account",
+                                      "suggested_reply_threads": ["synthetic-room@chatroom"],
+                                      "requires_manual_review": ["all_friends"],
+                                      "receipt_records": 3, "unresolved_receipts": 1,
+                                      "same_native_dataset": True, "legacy_enabled": True,
+                                      "legacy_paused": True, "applied": legacy["availability"] == "applied"})(route)
+                        return
+                    assert route.request.method == "POST"
+                    legacy["posts"].append(route.request.post_data_json)
+                    assert route.request.headers.get("x-csrf-token"), "legacy import lacks owner CSRF"
+                    assert route.request.post_data_json == {"digest": f"fixture-legacy-digest-{legacy['previews']}"}
+                    if len(legacy["posts"]) == 1:
+                        fulfill_json({"error": "stale legacy preview"}, status=409)(route)
+                        return
+                    legacy["availability"] = "applied"
+                    fulfill_json({"digest": f"fixture-legacy-digest-{legacy['previews']}", "account_id": "fixture-account",
+                                  "suggested_reply_threads": ["synthetic-room@chatroom"],
+                                  "requires_manual_review": ["all_friends"],
+                                  "receipt_records": 3, "unresolved_receipts": 1,
+                                  "same_native_dataset": True, "legacy_enabled": True,
+                                  "legacy_paused": True, "applied": True})(route)
+
+                page.route(legacy_import_pattern, legacy_import)
                 contacts_pattern = status_pattern + "/contacts*"
                 contact_queries = []
 
@@ -342,6 +375,22 @@ def verify(binary, output):
                 page.locator("#apps-refresh").click()
                 page.get_by_text("Agent 未启动", exact=True).wait_for()
                 assert page.get_by_role("button", name="启动 Agent").is_disabled()
+                page.get_by_text("从旧版接入", exact=True).click()
+                page.get_by_role("button", name="查看接入预演", exact=True).click()
+                page.get_by_text("接入预演", exact=True).wait_for()
+                page.get_by_text("账号：fixture-account", exact=True).wait_for()
+                page.get_by_text("建议回复范围：synthetic-room@chatroom", exact=True).wait_for()
+                page.get_by_text("仍需核对：旧版允许所有好友回复", exact=True).wait_for()
+                assert legacy["previews"] == 1 and not legacy["posts"] and not worker["actions"] and not worker["threads"], "preview must be read-only"
+                page.get_by_role("button", name="确认接入旧版摘要", exact=True).click()
+                page.get_by_text("旧版资料或当前状态已变化，请重新读取接入预演。", exact=True).wait_for()
+                assert page.get_by_role("button", name="确认接入旧版摘要", exact=True).count() == 0, "stale preview requires a fresh read"
+                page.get_by_role("button", name="查看接入预演", exact=True).click()
+                page.get_by_role("button", name="确认接入旧版摘要", exact=True).click()
+                page.get_by_text("旧版摘要已保存；没有启动 Agent，也没有修改回复范围。", exact=True).wait_for()
+                assert legacy["previews"] == 2 and legacy["posts"] == [{"digest": "fixture-legacy-digest-1"}, {"digest": "fixture-legacy-digest-2"}]
+                assert not worker["actions"] and not worker["threads"], "legacy import must not mutate lifecycle or reply policy"
+                page.get_by_role("button", name="查看接入摘要", exact=True).wait_for()
                 page.get_by_role("button", name="设置回复范围").click()
                 page.get_by_role("textbox", name="回复会话 ID", exact=True).fill("filehelper\nsynthetic-room@chatroom")
                 page.get_by_role("textbox", name="历史与成员读取会话 ID", exact=True).fill("synthetic-room@chatroom")
@@ -809,7 +858,7 @@ def verify(binary, output):
                 assert note.read_text(encoding="utf-8") == "a persistent companion home"
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group management receipts", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "legacy import preview confirm and stale retry", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group management receipts", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 
