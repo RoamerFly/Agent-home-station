@@ -14,7 +14,7 @@
 构建机准备 Git、与 `go.mod` 匹配的 Go、Python 3.13、Rust 1.93.1、MSVC C++ 工具链、Windows SDK、原生 Perl，以及含真实 `ffmpeg.exe` 和 `ffprobe.exe` 的媒体分发目录。首次构建需要能访问所固定的上游依赖。安装程序的快捷入口或包管理器 shim 无法代替媒体二进制。
 
 ```powershell
-git clone --branch codex/windows-native-backend https://github.com/RoamerFly/Agent-home-station.git
+git clone --branch main https://github.com/RoamerFly/Agent-home-station.git
 cd wechat-agent
 # 将路径改成你的媒体分发目录；选择一个新的输出目录。
 .\scripts\Build-Desktop.ps1 -Portable -Test -MediaDirectory 'C:\tools\ffmpeg\bin' -OutputDirectory 'dist\first-portable'

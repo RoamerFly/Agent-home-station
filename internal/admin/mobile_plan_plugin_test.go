@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"wechat-bot/internal/deepseek"
-	"wechat-bot/internal/mcptools"
 	mobile "wechat-bot/internal/devicespec"
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )

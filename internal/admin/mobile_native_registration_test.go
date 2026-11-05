@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"wechat-bot/internal/mcptools"
 	mobile "wechat-bot/internal/devicespec"
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginruntime"
 )
 

@@ -15,7 +15,9 @@ import (
 
 type templateEchoPolicy struct{}
 
-func (templateEchoPolicy) Check(context.Context, pluginhost.Job, pluginhost.Capability) error { return nil }
+func (templateEchoPolicy) Check(context.Context, pluginhost.Job, pluginhost.Capability) error {
+	return nil
+}
 func (templateEchoPolicy) Validate(_ context.Context, _ pluginhost.Job, _ pluginhost.Capability, raw json.RawMessage) (VerifiedResult, error) {
 	return VerifiedResult{Result: append(json.RawMessage(nil), raw...)}, nil
 }
@@ -82,7 +84,9 @@ func TestTemplatePythonPackageWindowsLPACContract(t *testing.T) {
 		} `json:"content"`
 		IsError bool `json:"isError"`
 	}
-	var result struct{ Text string `json:"text"` }
+	var result struct {
+		Text string `json:"text"`
+	}
 	if json.Unmarshal(first.Job.Result, &envelope) != nil || envelope.IsError || len(envelope.Content) != 1 || envelope.Content[0].Type != "text" || json.Unmarshal([]byte(envelope.Content[0].Text), &result) != nil || result.Text != "模板隔离回显" {
 		t.Fatalf("wrong isolated template result: %s", first.Job.Result)
 	}
