@@ -314,7 +314,7 @@ def verify(binary, output):
                 # Reading delivery history and receipt checks must never post a send.
                 receipt_state = {"version": "first", "reads": 0, "checks": 0, "stops": 0}
                 receipts_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/receipts(?:[/?].*)?$")
-                pending_receipt = {"idempotency_key": "synthetic-send", "kind": "voice",
+                pending_receipt = {"idempotency_key": "synthetic-send", "kind": "voice", "resumed_from": "synthetic-original",
                     "conversation_id": "synthetic-room@chatroom", "state": "submission_unknown",
                     "lookup": "stored", "accepted_parts": [{"index": 0, "server_id": "101"}],
                     "unconfirmed_parts": [{"index": 1, "state": "submitting"}, {"index": 2, "state": "cancelled"}]}
@@ -339,7 +339,7 @@ def verify(binary, output):
                 page.route(receipts_pattern, receipt_records)
                 page.get_by_text("投递记录", exact=True).click()
                 page.get_by_role("button", name="查看投递记录", exact=True).click()
-                page.get_by_text(re.compile("语音.*发送结果待核对")).wait_for()
+                page.get_by_text(re.compile("语音续发.*发送结果待核对")).wait_for()
                 page.get_by_role("button", name="继续查看", exact=True).click()
                 page.get_by_text("投递记录已更新，请重新查看。", exact=True).wait_for()
                 page.get_by_role("button", name="重新查看", exact=True).click()

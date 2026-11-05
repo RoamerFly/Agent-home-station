@@ -338,7 +338,7 @@
       if (pending) parts.push(`待核对 ${pending} 段`);
       if (cancelled) parts.push(`已取消 ${cancelled} 段`);
       if (item.parts_incomplete) parts.push("分段记录尚不完整");
-      return (kinds[item.kind] || "消息") + " · " + item.conversation_id + " · " + status + (parts.length ? "（" + parts.join("，") + "）" : "");
+      return (kinds[item.kind] || "消息") + (item.resumed_from ? "续发" : "") + " · " + item.conversation_id + " · " + status + (parts.length ? "（" + parts.join("，") + "）" : "");
     }
     function append(item) {
       const row = appElement("div", "", "work-record");

@@ -44,6 +44,7 @@ func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limi
 		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, account), ConversationID: row.Status.ThreadID,
 			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"}}
 		projectWechatReceipt(&receipt.DeliveryReceipt, row.Status)
+		receipt.ResumedFrom = row.ResumedFrom
 		_, cancelled := stops[deliveryStopID(companion.Input{Account: account, Thread: row.Status.ThreadID, TraceID: row.Trace})]
 		receipt.CancelRequested = receipt.CancelRequested || cancelled
 		page.Items = append(page.Items, receipt)
@@ -75,13 +76,14 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 		return s.readLegacyReceipt(ctx, id, key, native, w.dir)
 	}
 	result := apphost.Receipt{
+		ResumedFrom:     row.ResumedFrom,
 		ConnectionRef:   s.connectionRef(id, native.Account()),
 		ConversationID:  row.Status.ThreadID,
 		DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"},
 	}
 	var reader any = native
-	if row.StrictSource {
-		reader = stationMediaReceiptReader{native, row.SourceID, row.Status.Kind}
+	if row.StrictSource || row.ResumeOriginID != "" {
+		reader = stationMediaReceiptReader{native: native, source: row.SourceID, kind: row.Status.Kind, origin: row.ResumeOriginID}
 	}
 	queryWechatDelivery(ctx, reader, row.Status.ThreadID, row.SourceID, row.Status, row.StrictSource && row.Status.ID != "", &result.DeliveryReceipt)
 	cancelled, err := w.deliveryCancelled(companion.Input{Account: native.Account(), Thread: row.Status.ThreadID, TraceID: row.Trace})
@@ -93,12 +95,12 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 }
 
 type stationMediaReceiptReader struct {
-	native       *linuxnative.Sender
-	source, kind string
+	native               *linuxnative.Sender
+	source, kind, origin string
 }
 
 func (r stationMediaReceiptReader) validate(status linuxnative.ToolStatus, err error) (linuxnative.ToolStatus, error) {
-	if err == nil && (r.source == "" || status.SourceID != r.source || status.AccountID != r.native.Account() || status.Kind != "send" && status.Kind != r.kind) {
+	if err == nil && (r.source == "" || status.SourceID != r.source || status.AccountID != r.native.Account() || status.Kind != "send" && status.Kind != r.kind || r.origin != "" && status.ID == r.origin) {
 		return linuxnative.ToolStatus{}, errors.New("station_media_receipt_identity_mismatch")
 	}
 	return status, err

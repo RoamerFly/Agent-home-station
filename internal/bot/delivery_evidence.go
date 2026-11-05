@@ -17,11 +17,17 @@ import (
 // checkpoint. It excludes message content and cannot schedule or recover work.
 type DeliveryEvidence struct {
 	Trace, SourceID string
+	ResumedFrom     string
+	ResumeOriginID  string
 	Status          linuxnative.ToolStatus
 	StrictSource    bool
 }
 
 const MaxDeliveryCheckpointBytes = 24 << 20
+
+// Version 2 adds checkpointed resume-only intents. Older workers reject it,
+// rather than treating an unfamiliar resume state as an ordinary full send.
+func SupportedDeliveryCheckpointVersion(version int) bool { return version == 1 || version == 2 }
 
 // DeliveryEvidencePage contains only checkpoint metadata, never draft text or
 // media paths. Reading it cannot wake the worker or query a native send task.
@@ -112,7 +118,7 @@ func LegacyDeliveryEvidence(raw, cursor []byte, account string) (server string, 
 		Server  string
 		Account string
 	}
-	if len(raw) > 0 && (len(raw) > MaxDeliveryCheckpointBytes || json.Unmarshal(raw, &head) != nil || head.Version != 1 || head.Server == "" || head.Account != account) {
+	if len(raw) > 0 && (len(raw) > MaxDeliveryCheckpointBytes || json.Unmarshal(raw, &head) != nil || !SupportedDeliveryCheckpointVersion(head.Version) || head.Server == "" || head.Account != account) {
 		return "", nil, errors.New("legacy queue identity mismatch")
 	}
 	if len(cursor) > 0 {
@@ -149,11 +155,13 @@ func decodeDeliveryEvidence(raw []byte, account string, keys []string) (map[stri
 			Reason         string                 `json:"reason"`
 			SourceID       string                 `json:"source_id"`
 			DeferredSource bool                   `json:"deferred_source"`
+			ResumedFrom    string                 `json:"resumed_from"`
+			ResumeOriginID string                 `json:"resume_origin_id"`
 			UserCancelled  bool                   `json:"user_cancelled"`
 			Status         linuxnative.ToolStatus `json:"status"`
 		} `json:"media"`
 	}
-	if len(raw) > MaxDeliveryCheckpointBytes || json.Unmarshal(raw, &snapshot) != nil || snapshot.Version != 1 || snapshot.Account != account || len(snapshot.Deliveries) > 3000 || len(snapshot.Media) > 1000 {
+	if len(raw) > MaxDeliveryCheckpointBytes || json.Unmarshal(raw, &snapshot) != nil || !SupportedDeliveryCheckpointVersion(snapshot.Version) || snapshot.Account != account || len(snapshot.Deliveries) > 3000 || len(snapshot.Media) > 1000 {
 		return nil, errors.New("invalid delivery checkpoint identity")
 	}
 	wanted := make(map[string]bool, len(keys))
@@ -217,7 +225,7 @@ func decodeDeliveryEvidence(raw []byte, account string, keys []string) (map[stri
 		status.CancelRequested = status.CancelRequested || d.UserCancelled
 		if status.State == "" {
 			switch {
-			case d.State == "prepared":
+			case d.State == "prepared" || d.State == "resume_prepared":
 				status.State = "prepared"
 			case d.State == "stopped" && (d.DeferredSource && d.SourceID == "" || d.UserCancelled && d.Reason == "media_cancelled_before_native_submission"):
 				status.State = "cancelled"
@@ -225,7 +233,7 @@ func decodeDeliveryEvidence(raw []byte, account string, keys []string) (map[stri
 				status.State = "unknown"
 			}
 		}
-		if err := add(d.Key, DeliveryEvidence{Trace: d.Trace, SourceID: d.SourceID, Status: status, StrictSource: d.DeferredSource}); err != nil {
+		if err := add(d.Key, DeliveryEvidence{Trace: d.Trace, SourceID: d.SourceID, Status: status, StrictSource: d.DeferredSource, ResumedFrom: d.ResumedFrom, ResumeOriginID: d.ResumeOriginID}); err != nil {
 			return nil, err
 		}
 	}

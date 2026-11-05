@@ -132,7 +132,7 @@ func (w *Worker) loadRuntime(server string) error {
 	if e != nil && !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
-	if e == nil && (len(b) > 24<<20 || json.Unmarshal(b, &s) != nil || s.Version != 1 || s.Server != server || s.Account != w.source.Account()) {
+	if e == nil && (len(b) > 24<<20 || json.Unmarshal(b, &s) != nil || !SupportedDeliveryCheckpointVersion(s.Version) || s.Server != server || s.Account != w.source.Account()) {
 		return errors.New("persistent queue corrupt or account mismatch")
 	}
 	if len(s.Inbox) > 5000 || len(s.Deliveries) > 3000 || len(s.Media) > 1000 || len(s.MediaReplies) > 1000 {
@@ -165,6 +165,9 @@ func (w *Worker) loadRuntime(server string) error {
 			return errors.New("persistent media invalid")
 		}
 		media.Input.TraceID = media.Trace
+		if media.ResumeOriginID != "" {
+			s.Version = 2
+		}
 		restoreOriginInputTrace(media.OriginInput)
 		if media.State != "checking_receipt" && awaitingMediaReceipt(media) && media.ReconcileAfter.IsZero() && media.Next.After(time.Now()) {
 			// Legacy queues used one deadline for both reads and writes. Keep

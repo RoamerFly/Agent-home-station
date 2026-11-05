@@ -94,3 +94,24 @@ func TestDeliveryEvidenceNeverAssignsEarlierReceiptToRetryKey(t *testing.T) {
 		t.Fatal("duplicate attempt identity was resolved arbitrarily")
 	}
 }
+
+func TestDeliveryEvidenceRetainsContinuationIdentity(t *testing.T) {
+	dir := t.TempDir()
+	in := companion.Input{Account: "fixture", Thread: "room"}
+	snapshot := runtimeState{Version: 1, Account: in.Account, Media: []*mediaDelivery{{Key: "new-key", Trace: "new-request", Input: in, Kind: "voice", ResumedFrom: "old-key", ResumeOriginID: "old-job", State: "resume_prepared"}}}
+	if err := atomicState(filepath.Join(dir, "messages-v2.json"), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := ReadDeliveryEvidence(dir, in.Account, []string{"new-key"})
+	if err != nil || rows["new-key"].ResumedFrom != "old-key" || rows["new-key"].ResumeOriginID != "old-job" || rows["new-key"].Status.State != "prepared" {
+		t.Fatal(rows, err)
+	}
+	snapshot.Media[0].State = "resume_submitting"
+	if err := atomicState(filepath.Join(dir, "messages-v2.json"), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = ReadDeliveryEvidence(dir, in.Account, []string{"new-key"})
+	if err != nil || rows["new-key"].Status.State != "unknown" {
+		t.Fatal("possible continuation reported unsubmitted", rows, err)
+	}
+}

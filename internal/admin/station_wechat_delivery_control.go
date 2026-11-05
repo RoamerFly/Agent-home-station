@@ -53,7 +53,7 @@ func (s *stationWechat) deliveryCheckpoint(id string) (*stationWechatWorker, str
 		Version int
 		Account string
 	}
-	if json.NewDecoder(io.LimitReader(f, bot.MaxDeliveryCheckpointBytes+1)).Decode(&identity) != nil || identity.Version != 1 || identity.Account == "" || wechatapp.ConnectionID(identity.Account) != id {
+	if json.NewDecoder(io.LimitReader(f, bot.MaxDeliveryCheckpointBytes+1)).Decode(&identity) != nil || !bot.SupportedDeliveryCheckpointVersion(identity.Version) || identity.Account == "" || wechatapp.ConnectionID(identity.Account) != id {
 		return nil, "", apphost.ErrUnavailable
 	}
 	return w, identity.Account, nil
@@ -215,6 +215,9 @@ func (s *stationWechat) cancelNativeDelivery(ctx context.Context, native *linuxn
 		status, err = native.LookupSend(ctx, key)
 	}
 	if err != nil || status.ID == "" || row.Status.ID != "" && status.ID != row.Status.ID || status.ThreadID != row.Status.ThreadID || status.State == "accepted" {
+		return
+	}
+	if row.ResumeOriginID != "" && status.ID == row.ResumeOriginID {
 		return
 	}
 	if row.StrictSource && (status.SourceID == "" || status.SourceID != row.SourceID || status.AccountID != native.Account() || status.Kind != "send" && status.Kind != row.Status.Kind) {

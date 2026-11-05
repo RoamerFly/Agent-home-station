@@ -42,6 +42,7 @@ type mediaDelivery struct {
 	CancelledAt        time.Time              `json:"cancelled_at,omitempty"`
 	StateVersion       int                    `json:"state_version,omitempty"`
 	ResumedFrom        string                 `json:"resumed_from,omitempty"`
+	ResumeOriginID     string                 `json:"resume_origin_id,omitempty"`
 	OriginInput        *companion.Input       `json:"origin_input,omitempty"`
 	VoiceProfile       string                 `json:"voice_profile_id,omitempty"`
 	VoiceID            string                 `json:"voice_id,omitempty"`
@@ -89,6 +90,9 @@ func (d *mediaDelivery) terminal() bool {
 }
 
 func (d *mediaDelivery) matchesNative(s linuxnative.ToolStatus) bool {
+	if d.ResumeOriginID != "" && (s.ID == d.ResumeOriginID || s.SourceID != d.SourceID) {
+		return false
+	}
 	if s.ID == "" || d.ID != "" && d.ID != s.ID || s.ThreadID != d.Input.Thread || s.SourceID != "" && s.SourceID != d.SourceID {
 		return false
 	}
@@ -280,7 +284,7 @@ func (w *Worker) mediaTraceCancelled(trace string) bool {
 }
 
 func (w *Worker) retryUncertainMedia(d *mediaDelivery) bool {
-	return !d.DeferredSource && w.config.Options.RetryUncertain
+	return d.ResumedFrom == "" && !d.DeferredSource && w.config.Options.RetryUncertain
 }
 
 func (w *Worker) mediaRetryDelay() int {
@@ -448,6 +452,18 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 		}
 		if d.Paused || d.terminal() || time.Now().Before(d.Next) {
+			continue
+		}
+		if d.ResumedFrom != "" && d.ID == "" && !d.UserCancelled {
+			if d.State == "resume_prepared" {
+				if resumeNative, ok := w.sender.(resumeMissingMediaNative); ok {
+					w.submitMissingMedia(ctx, resumeNative, d)
+				}
+			} else {
+				// An uncertain continuation is read by its NEW key. It must never
+				// fall through to Submit, which would send the full original source.
+				w.checkMediaReceipt(ctx, n, d)
+			}
 			continue
 		}
 		// A user cancellation is a one-way delivery fence.  In particular, a
@@ -985,7 +1001,7 @@ func (w *Worker) cancelMedia(n mediaNative, d *mediaDelivery, user bool, reason 
 		// written but before the native job id reached us.  Do not assume it
 		// was never submitted: discover the original idempotency key and stop
 		// that native job before marking this delivery terminal.
-		if d.State == "submitting" || d.State == "queued" || d.State == "running" || d.State == "waiting" || d.State == "checking_receipt" {
+		if d.State == "submitting" || d.State == "resume_submitting" || d.State == "queued" || d.State == "running" || d.State == "waiting" || d.State == "checking_receipt" {
 			lookupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			status, err := n.LookupSend(lookupCtx, d.Key)
 			cancel()

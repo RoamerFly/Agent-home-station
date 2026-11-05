@@ -137,6 +137,12 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 
 停止接口为 `POST /api/apps/wechat/connections/{connection}/receipts/{key}/cancel`，要求本机主人登录和 CSRF。成功保存返回 202 和 `cancellation_requested`，不表示所有在途片段已经取消。日志位于该连接宿主私有目录的 `delivery-stops.json`，不应手动删除以恢复投递。原生暂时不可用时，停止意图继续保留，由工作器补查原任务；已暂停的工作器会在下次启动时先消费停止记录。
 
+聊天工具 `wechat_queue_control(action=resume, trace_id=原回合编号)` 可在有新明确续发指令时续办已取消的分段语音。此路径先重新读取原生回执，只接受完整、连续的分段清单，且已接受片段在前、未提交片段在后。原任务未取消、仍有在途片段、清单不全、来源或权限变化时，返回具体边界，不重新发送。主人管理页的续办按钮尚未接入，此处是现有聊天工具的队列实现。
+
+续办使用独立的新投递键，并在调用原生「只续发缺失部分」接口前保存。程序在提交前重启，可在再次核对原回执后继续首次提交；已经进入调用而响应丢失时，只按新键核对，查不到也不会改走普通发送或重发原音频。重复续办同一原任务会返回已有续办记录。投递列表中的「语音续发」及接口 `resumed_from` 保留原键关联；原任务的停止记录和已接受分段继续保留。
+
+第一次保存此类续办意图时，当前工作器队列的内部版本升级为 2；原文件名仍是 `messages-v2.json`。新版兼容内部版本 1 和 2，旧版工作器会拒绝版本 2，避免将续办状态当成完整发送。启用新版续办后，不要让旧程序接管该队列；故障时保留数据，由兼容版本查询或修复。
+
 列表接口为 `GET /api/apps/wechat/connections/{connection}/receipts?limit=20&after=...`，要求本机主人登录。limit 为可调整的正整数；next_after 用于按投递编号继续查看。响应的 coverage 为 `current_worker_checkpoint`，snapshot 标识本次原子快照。翻页期间快照发生变化时，页面提示重新查看，避免混合两个版本。列表只返回投递元数据，不返回草稿正文、媒体路径或凭据，也不轮询原生服务；单条「核对回执」才查询平台任务。
 
 管理接口提供 `POST /api/local/artifacts`，参数为 path、request_key 和可选 expected_sha256；`GET /api/local/artifacts/{artifact}` 返回成品元数据。作品交付授权使用 `POST /api/apps/wechat/connections/{connection}/work-grants`，提供 artifact_id、thread_id、requester_id、request_key 和 enabled。`GET` 同路径列出授权，可用 limit、after 分页；`POST` 其下的 `{delivery}/revoke` 撤销原授权。接口均要求本机主人会话，写操作还需 CSRF。

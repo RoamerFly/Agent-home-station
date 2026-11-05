@@ -255,7 +255,7 @@ func (s *stationWechat) previewLegacyImport(ctx context.Context, id string) (leg
 		if !validID(key) || !validID(row.Status.ThreadID) || row.Status.ID != "" && !validID(row.Status.ID) {
 			return legacyImportArchive{}, errLegacyImportInvalid
 		}
-		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, account), ConversationID: row.Status.ThreadID,
+		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, account), ConversationID: row.Status.ThreadID, ResumedFrom: row.ResumedFrom,
 			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "legacy_snapshot"}}
 		projectWechatReceipt(&receipt.DeliveryReceipt, row.Status)
 		if receipt.State == "submission_unknown" || receipt.State == "submitted_pending" {

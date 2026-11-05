@@ -45,6 +45,7 @@ type Receipt struct {
 	ConversationID string            `json:"conversation_id"`
 	Deliveries     []DeliveryReceipt `json:"deliveries,omitempty"`
 	SupersededBy   string            `json:"superseded_by,omitempty"`
+	ResumedFrom    string            `json:"resumed_from,omitempty"`
 }
 
 type DeliveryReceipt struct {
