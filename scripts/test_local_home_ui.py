@@ -90,11 +90,12 @@ def fulfill_json(payload, status=200):
     return handler
 
 
-def project_tool_payload(installed=False, enabled=False, revision=1, state="idle"):
+def project_tool_payload(installed=False, enabled=False, revision=1, state="idle", pdf_ready=False, update_available=False):
     return {"tools": [{
         "id": "document-workshop", "name": "文档工坊", "catalog_available": True,
         "runtime_ready": True, "installed": installed, "enabled": enabled,
-        "revision": revision, "state": state,
+        "revision": revision, "state": state, "pdf_ready": pdf_ready,
+        "update_available": update_available,
     }]}
 
 
@@ -188,8 +189,9 @@ def verify(binary, output):
 
                 # The project-tool endpoint is a browser-only route fixture. It
                 # validates explicit artifact approval and exercises install,
-                # enable and disable without starting a real tool process.
-                tool_state = {"installed": False, "enabled": False, "revision": 1, "state": "idle"}
+                # enable, disable, and an artifact-preserving update without
+                # starting a real tool process.
+                tool_state = {"installed": False, "enabled": False, "revision": 1, "state": "idle", "pdf_ready": False, "update_available": False}
                 project_tools_pattern = re.compile(r".*/api/local/project-tools(?:/document-workshop)?$")
 
                 def project_tools_route(route):
@@ -208,7 +210,11 @@ def verify(binary, output):
                         tool_state.update(enabled=True, revision=3, state="idle")
                     elif body["action"] == "disable":
                         assert body["approve_artifacts"] is False
-                        tool_state.update(enabled=False, revision=4, state="idle")
+                        tool_state.update(enabled=False, revision=4, state="idle", update_available=True)
+                    elif body["action"] == "upgrade":
+                        assert tool_state["enabled"] is False
+                        assert body["approve_artifacts"] is True
+                        tool_state.update(revision=5, state="idle", pdf_ready=True, update_available=False)
                     else:
                         raise AssertionError("unexpected project-tool action")
                     route.fulfill(content_type="application/json", body=json.dumps({"tool": project_tool_payload(**tool_state)["tools"][0]}, ensure_ascii=False))
@@ -227,6 +233,13 @@ def verify(binary, output):
                 page.get_by_text("已启用，待命", exact=True).wait_for()
                 page.get_by_role("button", name="停用", exact=True).click()
                 page.get_by_text("文档工坊已停用。", exact=True).wait_for()
+                page.get_by_text("已安装，可更新", exact=True).wait_for()
+                upgrade = page.get_by_role("button", name="更新", exact=True)
+                assert upgrade.is_disabled(), "artifact confirmation must gate project-tool update"
+                page.get_by_role("checkbox", name="确认本机素材读写", exact=True).check()
+                upgrade.click()
+                page.get_by_text("文档工坊已更新。", exact=True).wait_for()
+                page.get_by_text("PDF 导出环境已就绪。", exact=True).wait_for()
                 page.screenshot(path=str(output / "project-tools-light.png"), full_page=True)
                 page.unroute(project_tools_pattern, project_tools_route)
 
@@ -1048,7 +1061,7 @@ def verify(binary, output):
                 page.unroute(chat_pattern, synthetic_chat)
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "project tool install enable disable", "artifact download link", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "legacy import preview confirm and stale retry", "legacy memory inventory and pagination", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group management receipts", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "project tool install enable disable upgrade", "artifact download link", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "legacy import preview confirm and stale retry", "legacy memory inventory and pagination", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group management receipts", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 

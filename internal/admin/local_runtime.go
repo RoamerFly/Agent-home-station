@@ -70,7 +70,7 @@ func packagedWindowsToolOptions() pluginruntime.Options {
 	base := filepath.Dir(exe)
 	python := filepath.Join(base, "runtimes", "windows-python-cli")
 	helper := filepath.Join(base, "runtimes", "windows-agent-host", "windows_plugin_host.pyw")
-	return pluginruntime.Options{Python: filepath.Join(python, "python.exe"), Pythonw: filepath.Join(python, "pythonw.exe"), WindowsHelper: helper, RuntimeRoots: []string{python}, CatalogDirectory: filepath.Join(base, "plugins")}
+	return pluginruntime.Options{Python: filepath.Join(python, "python.exe"), Pythonw: filepath.Join(python, "pythonw.exe"), WindowsHelper: helper, RuntimeRoots: []string{python}, CatalogDirectory: filepath.Join(base, "plugins"), DocumentRuntimeRoot: filepath.Join(base, "runtimes", "document-workshop")}
 }
 
 func windowsToolRuntimeReady(options pluginruntime.Options) bool {

@@ -161,7 +161,16 @@ def call(name: str, arguments: dict, meta: dict) -> dict:
         path, item = _input(document, arguments)
         mime_type = str(item.get("mime_type", ""))
         if path.suffix.lower() == ".docx":
-            return {"ok": True, "summary": "document_inspected", "evidence": inspect(path, mime_type, arguments.get("pages"), bool(arguments.get("include_layout"))), "outputs": []}
+            return {"ok": True, "summary": "document_inspected", "evidence": inspect(
+                path,
+                mime_type,
+                arguments.get("pages"),
+                bool(arguments.get("include_layout")),
+                arguments.get("text_offset"),
+                arguments.get("text_limit"),
+                arguments.get("start_block"),
+                arguments.get("block_limit"),
+            ), "outputs": []}
         input_root = document.get("input_root") if isinstance(document.get("input_root"), str) else str(path.parent)
         output = _output(document)
         output_root = document.get("output_root") if isinstance(document.get("output_root"), str) else str(output)

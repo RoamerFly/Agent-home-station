@@ -29,15 +29,27 @@ type localArtifact struct {
 	Bytes                                  int64
 	HomeRevision                           uint64
 	Source                                 *companion.SourceRef `json:",omitempty"`
+	Parent                                 *localArtifactLink   `json:",omitempty"`
+}
+
+// localArtifactLink is host-minted provenance for a derived artifact. The
+// source is rechecked on later reads, including when its request is forgotten.
+type localArtifactLink struct {
+	ID     string `json:"artifact_id"`
+	SHA256 string `json:"sha256"`
 }
 
 type localArtifactInput struct {
 	Path     string `json:"path"`
 	Expected string `json:"expected_sha256"`
 	Key      string `json:"request_key"`
+	parent   *localArtifactLink
 }
 
 func (a localArtifact) id() string {
+	if a.Parent != nil {
+		return "work-" + localCheckpointKey(a.Fish, a.Owner, a.HomeRevision, a.Request, a.Source, a.Name, a.PathHash, a.Parent)
+	}
 	return "work-" + localCheckpointKey(a.Fish, a.Owner, a.HomeRevision, a.Request, a.Source, a.Name, a.PathHash)
 }
 
@@ -48,7 +60,11 @@ func artifactID(id, prefix string) bool {
 }
 
 func (a localArtifact) view() map[string]any {
-	return map[string]any{"artifact_id": a.ID, "filename": a.Name, "sha256": a.SHA256, "bytes": a.Bytes, "status": "registered"}
+	view := map[string]any{"artifact_id": a.ID, "filename": a.Name, "sha256": a.SHA256, "bytes": a.Bytes, "status": "registered"}
+	if a.Parent != nil {
+		view["input_artifact_id"], view["input_sha256"] = a.Parent.ID, a.Parent.SHA256
+	}
+	return view
 }
 
 func (s *localArtifactStore) sourceValid(a localArtifact) bool {
@@ -66,12 +82,69 @@ func (s *localArtifactStore) sourceValid(a localArtifact) bool {
 }
 
 func (s *localArtifactStore) access(a localArtifact) (*localWorkspaceAccess, bool) {
+	return s.accessWithParentCheck(a, nil)
+}
+
+func (s *localArtifactStore) accessWithParentCheck(a localArtifact, verifyParents context.Context) (*localWorkspaceAccess, bool) {
 	access := &localWorkspaceAccess{home: s.home, fishID: a.Fish, ownerID: a.Owner}
 	grant, err := access.resolve()
-	return access, err == nil && grant.FishID == a.Fish && grant.OwnerID == a.Owner && s.sourceValid(a)
+	return access, err == nil && grant.FishID == a.Fish && grant.OwnerID == a.Owner && s.checkArtifactLineage(a, verifyParents)
+}
+
+func (s *localArtifactStore) artifactLineageValid(a localArtifact) bool {
+	return s.checkArtifactLineage(a, nil)
+}
+
+// The public read boundary also verifies parent bytes. Internal operation
+// fences recheck identity and source versions without rehashing large parents
+// for every write buffer.
+func (s *localArtifactStore) checkArtifactLineage(a localArtifact, verifyParents context.Context) bool {
+	fish, owner := a.Fish, a.Owner
+	seen := map[string]bool{}
+	for {
+		if seen[a.ID] || a.Fish != fish || a.Owner != owner || !s.sourceValid(a) {
+			return false
+		}
+		seen[a.ID] = true
+		if a.Parent == nil {
+			return true
+		}
+		link := a.Parent
+		var err error
+		a, err = s.readRecord(link.ID)
+		if err != nil || a.SHA256 != link.SHA256 {
+			return false
+		}
+		if verifyParents != nil {
+			if a.Fish != fish || a.Owner != owner || !s.sourceValid(a) {
+				return false
+			}
+			file, err := s.open(verifyParents, a, func() bool { return s.sourceValid(a) })
+			if err != nil || file.Close() != nil {
+				return false
+			}
+		}
+	}
 }
 
 func (s *localArtifactStore) read(id string) (localArtifact, error) {
+	a, err := s.readRecord(id)
+	if err != nil {
+		return a, err
+	}
+	var verifyParents context.Context
+	if a.Parent != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		verifyParents = ctx
+	}
+	if _, ok := s.accessWithParentCheck(a, verifyParents); !ok {
+		return localArtifact{}, errors.New("artifact_source_or_home_changed")
+	}
+	return a, nil
+}
+
+func (s *localArtifactStore) readRecord(id string) (localArtifact, error) {
 	var a localArtifact
 	if !artifactID(id, "work-") {
 		return a, errors.New("invalid_artifact_id")
@@ -87,11 +160,8 @@ func (s *localArtifactStore) read(id string) (localArtifact, error) {
 	}
 	defer file.Close()
 	raw, err := io.ReadAll(io.LimitReader(file, 32<<10))
-	if err != nil || len(raw) >= 32<<10 || json.Unmarshal(raw, &a) != nil || a.ID != id || a.id() != id || a.Bytes < 1 || a.Bytes > stationAttachmentLimit || !safeMediaFilename(a.Name) {
+	if err != nil || len(raw) >= 32<<10 || json.Unmarshal(raw, &a) != nil || a.ID != id || a.id() != id || a.Bytes < 1 || a.Bytes > stationAttachmentLimit || !safeMediaFilename(a.Name) || !artifactID("sha-"+a.SHA256, "sha-") {
 		return localArtifact{}, errors.New("artifact_record_invalid")
-	}
-	if _, ok := s.access(a); !ok {
-		return localArtifact{}, errors.New("artifact_source_or_home_changed")
 	}
 	return a, nil
 }
@@ -107,7 +177,7 @@ func (s *localArtifactStore) open(ctx context.Context, a localArtifact, allowed 
 		return nil, err
 	}
 	hash := sha256.New()
-	n, err := io.Copy(attachmentGrantWriter{allow: func() bool { return ctx.Err() == nil && allowed() }, out: hash}, io.LimitReader(file, a.Bytes+1))
+	n, err := io.CopyBuffer(attachmentGrantWriter{allow: func() bool { return ctx.Err() == nil && allowed() }, out: hash}, io.LimitReader(file, a.Bytes+1), make([]byte, min(a.Bytes+1, 1<<20)))
 	if err != nil || n != a.Bytes || hex.EncodeToString(hash.Sum(nil)) != a.SHA256 || !allowed() {
 		file.Close()
 		return nil, errors.New("artifact_integrity_or_authorization_changed")
@@ -143,9 +213,9 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 	if !safeMediaFilename(name) || len(name) > 255 || strings.ContainsAny(name, ":*?<>|") {
 		return localArtifact{}, errors.New("成品文件名无效")
 	}
-	a := localArtifact{Name: name, PathHash: localCheckpointKey(path), Fish: grant.FishID, Owner: grant.OwnerID, HomeRevision: grant.Revision, Request: in.Key, Source: source}
+	a := localArtifact{Name: name, PathHash: localCheckpointKey(path), Fish: grant.FishID, Owner: grant.OwnerID, HomeRevision: grant.Revision, Request: in.Key, Source: source, Parent: in.parent}
 	a.ID = a.id()
-	check := func() bool { return ctx.Err() == nil && access.current(grant) && s.sourceValid(a) }
+	check := func() bool { return ctx.Err() == nil && access.current(grant) && s.artifactLineageValid(a) }
 	if cached, err := s.read(a.ID); err == nil {
 		if in.Expected != "" && cached.SHA256 != in.Expected {
 			return localArtifact{}, errors.New("相同请求的成品内容已变更，请使用新请求登记")

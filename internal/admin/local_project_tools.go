@@ -3,12 +3,15 @@ package admin
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"wechat-bot/internal/pluginhost"
@@ -20,12 +23,13 @@ import (
 const localProjectToolIdle = 5 * time.Minute
 
 type localProjectTools struct {
-	home    *localHomeService
-	options pluginruntime.Options
-	mu      sync.Mutex
-	update  sync.Mutex
-	host    *localProjectToolHost
-	closed  bool
+	home               *localHomeService
+	options            pluginruntime.Options
+	mu                 sync.Mutex
+	update             sync.Mutex
+	host               *localProjectToolHost
+	closed             bool
+	documentReadActive atomic.Bool
 }
 
 type localProjectToolHost struct {
@@ -38,6 +42,8 @@ type localProjectToolView struct {
 	Name             string `json:"name"`
 	CatalogAvailable bool   `json:"catalog_available"`
 	RuntimeReady     bool   `json:"runtime_ready"`
+	PDFReady         bool   `json:"pdf_ready"`
+	UpdateAvailable  bool   `json:"update_available"`
 	Installed        bool   `json:"installed"`
 	Enabled          bool   `json:"enabled"`
 	Revision         int    `json:"revision"`
@@ -46,6 +52,37 @@ type localProjectToolView struct {
 
 func (s *localProjectTools) runtimeReady() bool {
 	return runtime.GOOS == "windows" && windowsToolRuntimeReady(s.options)
+}
+
+func (s *localProjectTools) pdfRuntimeReady() bool {
+	if !s.runtimeReady() || s.options.DocumentRuntimeRoot == "" {
+		return false
+	}
+	root, err := workspacefs.OpenPath(s.options.DocumentRuntimeRoot)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	file, err := workspacefs.OpenRegular(root, "runtime-manifest.json")
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	var manifest struct {
+		Version    int    `json:"schema_version"`
+		Platform   string `json:"platform"`
+		Policy     string `json:"policy"`
+		Components struct {
+			ReportLab string `json:"reportlab"`
+			PDF       string `json:"pypdf"`
+			Font      bool   `json:"embeddable_ttf"`
+		} `json:"components"`
+	}
+	const limit = 1 << 20
+	raw, err := io.ReadAll(io.LimitReader(file, limit+1))
+	return err == nil && len(raw) <= limit && json.Unmarshal(raw, &manifest) == nil && manifest.Version == 2 &&
+		manifest.Platform == "windows-x64" && manifest.Policy == "reportlab-offline-pypdf-reviewed-sources-v1" &&
+		manifest.Components.ReportLab == "4.4.9-offline-patch-v1" && manifest.Components.PDF == "6.21.4" && manifest.Components.Font
 }
 
 func (s *localProjectTools) forFish(fish string) (*localProjectToolHost, error) {
@@ -72,7 +109,9 @@ func (s *localProjectTools) forFish(fish string) (*localProjectToolHost, error) 
 	if err != nil {
 		return nil, err
 	}
-	controller, err := pluginruntime.NewController(store, pluginruntime.InstalledExecutor(store, s.options))
+	options := s.options
+	options.DocumentRuntimeRoot = ""
+	controller, err := pluginruntime.NewController(store, pluginruntime.InstalledExecutor(store, options))
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -113,11 +152,19 @@ func (s *localProjectTools) documentView(ctx context.Context, host *localProject
 		return view, err
 	}
 	view.Installed, view.Enabled, view.Revision = true, item.Enabled, item.Revision
+	contract, err := catalog.ContractFor(documentWorkshopPluginID)
+	if err != nil {
+		return view, err
+	}
+	view.UpdateAvailable = view.CatalogAvailable && item.Digest != contract.ManifestSHA256
+	view.PDFReady = item.Digest == contract.ManifestSHA256 && s.pdfRuntimeReady()
 	switch {
 	case !item.Enabled:
 		view.State = "disabled"
 	case !view.RuntimeReady:
 		view.State = "runtime_missing"
+	case s.documentReadActive.Load():
+		view.State = "running"
 	default:
 		view.State = host.controller.Status(view.ID).State
 		if view.State == "stopped" {
@@ -162,11 +209,11 @@ func (s *localProjectTools) changeDocumentTool(w http.ResponseWriter, r *http.Re
 	if !decode(w, r, &in) {
 		return
 	}
-	if in.Action != "install" && in.Action != "enable" && in.Action != "disable" {
+	if in.Action != "install" && in.Action != "upgrade" && in.Action != "enable" && in.Action != "disable" {
 		fail(w, 400, "未知的项目工具操作")
 		return
 	}
-	if in.Action == "install" && !in.ApproveArtifacts {
+	if (in.Action == "install" || in.Action == "upgrade") && !in.ApproveArtifacts {
 		fail(w, 400, "安装需要主人明确授予本机成品读写权限")
 		return
 	}
@@ -190,13 +237,26 @@ func (s *localProjectTools) changeDocumentTool(w http.ResponseWriter, r *http.Re
 	}
 	const id = documentWorkshopPluginID
 	current, err := host.store.Installed(ctx, id)
-	if in.Action == "install" {
+	if in.Action == "install" || in.Action == "upgrade" {
+		missing := errors.Is(err, sql.ErrNoRows) || err == nil && current.Removed
+		if in.Action == "upgrade" && (err != nil || current.Removed || current.Enabled || current.Revision != in.Revision) {
+			fail(w, 409, "请先停用文档工坊并刷新版本，再确认更新")
+			return
+		}
+		if err != nil && !missing {
+			fail(w, 503, "项目工具安装状态不可读")
+			return
+		}
 		contract, contractErr := catalog.ContractFor(id)
 		if contractErr != nil {
 			fail(w, 503, "官方工具声明不可读")
 			return
 		}
-		if errors.Is(err, sql.ErrNoRows) || err == nil && current.Removed {
+		if in.Action == "install" && !missing && current.Digest != contract.ManifestSHA256 {
+			fail(w, 409, "已安装版本需要单独升级")
+			return
+		}
+		if missing || current.Digest != contract.ManifestSHA256 {
 			if s.options.CatalogDirectory == "" {
 				fail(w, 409, "当前发行包未提供文档工坊")
 				return
@@ -207,9 +267,6 @@ func (s *localProjectTools) changeDocumentTool(w http.ResponseWriter, r *http.Re
 				return
 			}
 			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, []string{"artifact.read", "artifact.write"})
-		} else if err == nil && current.Digest != contract.ManifestSHA256 {
-			fail(w, 409, "已安装版本需要单独升级")
-			return
 		}
 	} else {
 		if err != nil || current.Removed || current.Revision != in.Revision {

@@ -141,7 +141,7 @@ func (t *localToolSet) checkpointView(op companion.LocalToolCheckpoint, grant lo
 		view["state"] = "grant_changed"
 		return view
 	}
-	if op.Tool == localDocumentToolName {
+	if documentToolCapability(op.Tool) != "" {
 		return t.documentCheckpointView(op, grant)
 	}
 	view["path"] = op.Target

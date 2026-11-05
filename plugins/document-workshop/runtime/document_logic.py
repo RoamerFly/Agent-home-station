@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import mimetypes
 from pathlib import Path
 import re
@@ -21,6 +22,16 @@ MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_TEXT = 250_000
 MAX_DOCX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 MAX_DOCX_MEMBERS = 2_000
+MAX_LAYOUT_BLOCKS = 500
+MAX_LAYOUT_TEXT = 120_000
+MAX_LAYOUT_TABLE_ROWS = 200
+MAX_LAYOUT_CELLS_PER_ROW = 64
+MAX_LAYOUT_CELL_TEXT = 20_000
+DEFAULT_TEXT_LIMIT = 4_000
+MAX_TEXT_LIMIT = 100_000
+DEFAULT_BLOCK_LIMIT = 20
+MAX_BLOCK_LIMIT = 100
+MAX_LAYOUT_RESPONSE_BYTES = 512 * 1024
 WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
@@ -48,22 +59,9 @@ def text_content(path: Path) -> str:
     """Extract editable text only; raises a stable code for unknown formats."""
     suffix = path.suffix.lower()
     if suffix == ".docx":
-        try:
-            with zipfile.ZipFile(path) as zf:
-                _verify_docx_container(zf)
-                raw = zf.read("word/document.xml")
-        except (OSError, KeyError, zipfile.BadZipFile):
-            raise DocumentError("document_docx_invalid")
-        try:
-            root = ET.fromstring(raw)
-        except ET.ParseError:
-            raise DocumentError("document_docx_invalid")
-        paragraphs = []
-        for p in root.findall(".//{%s}p" % WORD_NS):
-            value = "".join(t.text or "" for t in p.findall(".//{%s}t" % WORD_NS))
-            if value:
-                paragraphs.append(value)
-        return "\n".join(paragraphs)[:MAX_TEXT]
+        # The container itself has a verified uncompressed-size limit. Do not
+        # silently cut editable source text here; MCP inspection paginates it.
+        return _whole_docx_text(path)
     if suffix == ".pdf":
         raw = path.read_bytes()
         if not raw.startswith(b"%PDF-"):
@@ -72,6 +70,172 @@ def text_content(path: Path) -> str:
         # A byte-level fallback would misreport compressed/CJK text as facts.
         return ""
     raise DocumentError("document_text_extraction_unsupported")
+
+
+def _docx_paragraph_text(node: ET.Element) -> str:
+    """Return the editable text represented by one Word paragraph node."""
+    return "".join(part.text or "" for part in node.findall(".//{%s}t" % WORD_NS))
+
+
+def _docx_style(node: ET.Element) -> str:
+    properties = node.find("{%s}pPr" % WORD_NS)
+    style = properties.find("{%s}pStyle" % WORD_NS) if properties is not None else None
+    return (style.get("{%s}val" % WORD_NS) if style is not None else "") or ""
+
+
+def _docx_block_for_paragraph(node: ET.Element) -> dict | None:
+    text = _docx_paragraph_text(node)
+    if not text:
+        return None
+    style = _docx_style(node)
+    normalised = style.casefold().replace(" ", "")
+    if normalised == "title":
+        return {"kind": "title", "text": text}
+    heading = re.fullmatch(r"heading([1-9])", normalised)
+    if heading:
+        return {"kind": "heading", "level": int(heading.group(1)), "text": text}
+    return {"kind": "paragraph", "text": text}
+
+
+def _docx_block_for_table(node: ET.Element) -> dict | None:
+    rows = []
+    for row in node.findall("{%s}tr" % WORD_NS):
+        cells = []
+        for cell in row.findall("{%s}tc" % WORD_NS):
+            # A cell may contain multiple paragraphs. Keep their editable text
+            # together rather than inventing a visual cell position.
+            value = "\n".join(
+                value for value in (_docx_paragraph_text(paragraph) for paragraph in cell.findall("{%s}p" % WORD_NS))
+                if value
+            )
+            cells.append(value)
+        if cells:
+            rows.append(cells)
+    return {"kind": "table", "rows": rows} if rows else None
+
+
+def _docx_flow_layout(path: Path) -> dict:
+    """Read actual Word flow blocks, with explicit bounds and coverage.
+
+    OOXML DOCX has flowing content rather than a stable page model: pagination
+    depends on fonts and the renderer.  This deliberately reports only editable
+    paragraph/title/heading/table blocks, in body order, and never claims a
+    page slice before conversion to PDF.
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            _verify_docx_container(zf)
+            raw = zf.read("word/document.xml")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        raise DocumentError("document_docx_invalid")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        raise DocumentError("document_docx_invalid")
+    body = root.find("{%s}body" % WORD_NS)
+    if body is None:
+        raise DocumentError("document_docx_invalid")
+
+    blocks = []
+    for node in body:
+        if node.tag == "{%s}p" % WORD_NS:
+            block = _docx_block_for_paragraph(node)
+        elif node.tag == "{%s}tbl" % WORD_NS:
+            block = _docx_block_for_table(node)
+        else:
+            continue
+        if block is None:
+            continue
+        blocks.append(block)
+    return {"blocks": blocks}
+
+
+def _whole_docx_text(path: Path) -> str:
+    """Return the complete editable DOCX text for inspection pagination."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            _verify_docx_container(zf)
+            raw = zf.read("word/document.xml")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        raise DocumentError("document_docx_invalid")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        raise DocumentError("document_docx_invalid")
+    paragraphs = []
+    for paragraph in root.findall(".//{%s}p" % WORD_NS):
+        value = _docx_paragraph_text(paragraph)
+        if value:
+            paragraphs.append(value)
+    return "\n".join(paragraphs)
+
+
+def _nonnegative_int(value, default: int, maximum: int, code: str) -> int:
+    if value is None:
+        return default
+    if type(value) is not int or value < 0 or value > maximum:
+        raise DocumentError(code)
+    return value
+
+
+def _layout_block_issue(block: dict) -> str | None:
+    if block["kind"] == "table":
+        rows = block["rows"]
+        if len(rows) > MAX_LAYOUT_TABLE_ROWS or any(len(row) > MAX_LAYOUT_CELLS_PER_ROW for row in rows):
+            return "table_shape_limit"
+        if any(len(cell) > MAX_LAYOUT_CELL_TEXT for row in rows for cell in row):
+            return "table_cell_text_limit"
+    elif len(block["text"]) > MAX_LAYOUT_CELL_TEXT:
+        return "block_text_limit"
+    return None
+
+
+def _paginate_docx_layout(path: Path, start_block=None, block_limit=None) -> dict:
+    flow = _docx_flow_layout(path)["blocks"]
+    start = _nonnegative_int(start_block, 0, len(flow), "document_start_block_invalid")
+    limit = _nonnegative_int(block_limit, DEFAULT_BLOCK_LIMIT, MAX_BLOCK_LIMIT, "document_block_limit_invalid")
+    if limit == 0:
+        raise DocumentError("document_block_limit_invalid")
+    selected = []
+    selected_bytes = 0
+    unavailable = []
+    index = start
+    while index < len(flow) and len(selected) < limit:
+        block = flow[index]
+        issue = _layout_block_issue(block)
+        block_bytes = len(json.dumps(block, ensure_ascii=False, separators=(",", ":")).encode("utf8"))
+        if issue or block_bytes > MAX_LAYOUT_RESPONSE_BYTES:
+            unavailable.append({"index": index, "reason": issue or "block_response_limit"})
+            index += 1
+            break
+        if selected_bytes + block_bytes > MAX_LAYOUT_RESPONSE_BYTES:
+            break
+        selected.append(block)
+        selected_bytes += block_bytes
+        index += 1
+    eof = index >= len(flow)
+    coverage = {
+        "kind": "docx_flow",
+        "page_scoped": False,
+        "start_block": start,
+        "block_limit": limit,
+        "returned_blocks": len(selected),
+        "total_editable_blocks": len(flow),
+        "returned_utf8_bytes": selected_bytes,
+        "eof": eof,
+        "limits": {
+            "block_limit": MAX_BLOCK_LIMIT,
+            "response_utf8_bytes": MAX_LAYOUT_RESPONSE_BYTES,
+            "table_rows": MAX_LAYOUT_TABLE_ROWS,
+            "table_cells_per_row": MAX_LAYOUT_CELLS_PER_ROW,
+            "table_cell_characters": MAX_LAYOUT_CELL_TEXT,
+        },
+    }
+    if not eof:
+        coverage["next_start_block"] = index
+    if unavailable:
+        coverage["unavailable_blocks"] = unavailable
+    return {"blocks": selected, "coverage": coverage}
 
 
 def _verify_docx_container(zf: zipfile.ZipFile) -> None:
@@ -102,7 +266,7 @@ def png_size(path: Path):
     return struct.unpack(">II", raw[16:24])
 
 
-def inspect(path: Path, mime_type: str = "", pages=None, include_layout=False) -> dict:
+def inspect(path: Path, mime_type: str = "", pages=None, include_layout=False, text_offset=None, text_limit=None, start_block=None, block_limit=None) -> dict:
     suffix = path.suffix.lower()
     result = {
         "kind": {".docx": "docx", ".pdf": "pdf"}.get(suffix, "image" if mime_type.startswith("image/") else "unknown"),
@@ -113,13 +277,37 @@ def inspect(path: Path, mime_type: str = "", pages=None, include_layout=False) -
     if result["bytes"] > MAX_FILE_BYTES:
         raise DocumentError("document_too_large")
     if suffix == ".docx":
-        text = text_content(path)
-        result.update({"text": text, "text_characters": len(text), "needs_clarification": False})
+        # DOCX stores a continuous flow.  Stable pages are known only after a
+        # particular renderer lays it out, so accepting this parameter here
+        # would falsely imply that a page range was honored.
+        if pages:
+            raise DocumentError("document_docx_page_selection_unsupported")
+        offset = _nonnegative_int(text_offset, 0, MAX_DOCX_UNCOMPRESSED_BYTES, "document_text_offset_invalid")
+        limit = _nonnegative_int(text_limit, DEFAULT_TEXT_LIMIT, MAX_TEXT_LIMIT, "document_text_limit_invalid")
+        if limit == 0:
+            raise DocumentError("document_text_limit_invalid")
+        whole_text = _whole_docx_text(path)
+        if offset > len(whole_text):
+            raise DocumentError("document_text_offset_invalid")
+        text = whole_text[offset:offset + limit]
+        result.update({
+            "text": text,
+            "text_characters": len(text),
+            "text_total_characters": len(whole_text),
+            "text_offset": offset,
+            "text_limit": limit,
+            "text_eof": offset + len(text) >= len(whole_text),
+            "needs_clarification": False,
+        })
+        if not result["text_eof"]:
+            result["next_text_offset"] = offset + len(text)
         with zipfile.ZipFile(path) as zf:
             _verify_docx_container(zf)
             names = zf.namelist()
         result["embedded_images"] = sum(name.startswith("word/media/") for name in names)
         result["editable"] = True
+        if include_layout:
+            result["layout"] = _paginate_docx_layout(path, start_block, block_limit)
         return result
     if suffix == ".pdf":
         raw = path.read_bytes()
@@ -186,12 +374,14 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
         if not isinstance(block, dict) or set(block) - {"kind", "text", "rows", "level", "image_index", "caption", "font_size_pt"}:
             raise DocumentError("document_layout_invalid")
         kind = block.get("kind")
-        if kind in ("paragraph", "heading"):
+        if kind in ("paragraph", "heading", "title"):
             text = block.get("text")
             if not isinstance(text, str) or len(text) > 20_000:
                 raise DocumentError("document_layout_invalid")
             level = block.get("level", 1)
-            style = "Heading%d" % level if kind == "heading" and type(level) is int and 1 <= level <= 9 else ""
+            if kind == "heading" and (type(level) is not int or not 1 <= level <= 9):
+                raise DocumentError("document_layout_invalid")
+            style = "Title" if kind == "title" else "Heading%d" % level if kind == "heading" else ""
             size = block.get("font_size_pt")
             if size is not None and (type(size) not in (int, float) or not 8 <= size <= 48):
                 raise DocumentError("document_font_size_invalid")

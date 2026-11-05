@@ -70,9 +70,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	if t.access.home.artifacts != nil {
 		all = append(all, agentTool("artifact_publish", "把家目录中已完成的文件登记为不可变成品快照。path 为家目录相对路径，expected_sha256 为实际文件哈希。返回 artifact_id，不会向应用发送。", `{"type":"object","properties":{"path":{"type":"string"},"expected_sha256":{"type":"string","minLength":64,"maxLength":64}},"required":["path","expected_sha256"],"additionalProperties":false}`))
 	}
-	if t.documentToolAvailable(ctx) {
-		all = append(all, localDocumentTool())
-	}
+	all = append(all, t.localDocumentTools(ctx)...)
 	var failures error
 	accesses := []companion.ToolAccess{t.memory, t.files}
 	if t.process != nil {
@@ -98,6 +96,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if name == localDocumentToolName {
 		return t.createLocalDocument(ctx, raw)
+	}
+	if name == localDocumentInspectTool || name == localDocumentExportTool {
+		return t.useLocalDocumentArtifact(ctx, name, raw)
 	}
 	if name == "artifact_publish" {
 		var in struct {

@@ -1513,10 +1513,18 @@
     if (!tool || !tool.installed && !tool.catalog_available) return ["未随当前发行包提供", "请安装包含此工具的 Windows 发行包。"];
     if (!tool.runtime_ready) return ["缺少本地运行环境", "工具尚不能启动；先补齐本机运行环境或依赖包。"];
     if (!tool.installed) return ["尚未安装", "安装后才会把工具放入大肥鱼的项目环境。"];
+    if (!tool.enabled && tool.update_available) return ["已安装，可更新", "已发现随当前发行包提供的新版本；更新会保留已登记的本地成品。"];
     if (!tool.enabled) return ["已安装，未启用", "需要时启用；停用不会删除已生成的本地成品。"];
     if (tool.state === "running") return ["已启动", "本地运行器空闲一段时间后会自动关闭。"];
     if (tool.state === "failed") return ["运行异常", "下次有本地任务时会尝试重新启动。"];
     return ["已启用，待命", "会在本地聊天实际需要时启动，不会取得网络或应用账号权限。"];
+  }
+  function projectToolPDFNote(tool) {
+    if (!tool || !tool.installed) return "安装后会检查 DOCX 导出 PDF 所需的本地环境。";
+    if (!tool.runtime_ready) return "本地运行环境未就绪，暂不能导出 PDF。";
+    if (tool.pdf_ready === true) return "PDF 导出环境已就绪。";
+    if (tool.update_available) return "当前版本尚未准备 PDF 导出环境；停用后更新工具即可检查新版本。";
+    return "当前版本尚未确认 PDF 导出环境；DOCX 仍可创建，导出 PDF 前会再次检查。";
   }
   function renderProjectTools() {
     const list = $("#project-tools-list"), current = projectTools;
@@ -1544,7 +1552,10 @@
       if (tool.id === "document-workshop") {
         const permissions = appElement("div", "", "project-tool-permissions");
         permissions.append(appElement("strong", "本次授权"), appElement("span", "本机素材读写限于授权的文档任务，成品保存在本机，可从聊天下载。联网和应用账号权限另行管理。"));
+        const pdf = appElement("div", "", "project-tool-permissions");
+        pdf.append(appElement("strong", "PDF 导出"), appElement("span", projectToolPDFNote(tool)));
         detail.append(permissions);
+        detail.append(pdf);
       }
       const controls = appElement("div", "", "project-tool-actions");
       const busy = current.applying === tool.id;
@@ -1559,10 +1570,24 @@
         controls.append(approval, install);
       } else {
         const action = tool.enabled ? "disable" : "enable";
-        const button = appElement("button", busy ? "正在更新…" : (tool.enabled ? "停用" : "启用"), tool.enabled ? "button compact secondary" : "button compact primary");
+        const button = appElement("button", busy ? "正在处理…" : (tool.enabled ? "停用" : "启用"), tool.enabled ? "button compact secondary" : "button compact primary");
         button.type = "button"; button.disabled = busy || (action === "enable" && !tool.runtime_ready);
         button.addEventListener("click", () => updateProjectTool(tool, action, false));
         controls.append(button);
+        if (tool.update_available) {
+          if (tool.enabled) {
+            controls.append(appElement("span", "请先停用，再更新到新版本。", "project-tool-update-note"));
+          } else {
+            const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", "确认本机素材读写");
+            approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !tool.runtime_ready;
+            approval.append(checkbox, copy);
+            const upgrade = appElement("button", busy ? "正在更新…" : "更新", "button compact secondary");
+            upgrade.type = "button"; upgrade.disabled = true;
+            checkbox.addEventListener("change", () => { upgrade.disabled = checkbox.disabled || !checkbox.checked; });
+            upgrade.addEventListener("click", () => updateProjectTool(tool, "upgrade", checkbox.checked));
+            controls.append(approval, upgrade);
+          }
+        }
       }
       detail.append(controls); card.append(head, detail); return card;
     }));
@@ -1590,7 +1615,7 @@
       if (current !== projectTools) return;
       const updated = result && result.tool;
       if (updated && typeof updated.id === "string") current.tools = current.tools.map((item) => item.id === updated.id ? updated : item);
-      projectToolsFeedback(action === "install" ? "文档工坊已安装。" : (action === "enable" ? "文档工坊已启用。" : "文档工坊已停用。"));
+      projectToolsFeedback(action === "install" ? "文档工坊已安装。" : (action === "enable" ? "文档工坊已启用。" : (action === "upgrade" ? "文档工坊已更新。" : "文档工坊已停用。")));
     } catch (error) {
       if (current === projectTools) projectToolsFeedback(error.message, true);
     } finally {

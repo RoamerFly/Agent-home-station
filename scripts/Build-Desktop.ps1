@@ -140,6 +140,15 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
 
 if($WithWeChatRuntime -and -not $LocalStation){throw 'WithWeChatRuntime is only valid with -LocalStation.'}
 if($WithWeChatRuntime){$WithWeChatApp=$true}
+# A document converter is intentionally opt-in.  The three existing source
+# directory arguments are the opt-in contract: when absent, a LocalStation
+# document workshop remains able to create DOCX files but carries no PDF/OCR
+# runtime.  Do not accept a partial set of sources.  The regular desktop
+# catalog contains every official tool, while a LocalStation catalog is opt-in;
+# therefore only the latter must explicitly select document-workshop.
+$hasDocumentRuntimeInput=[bool]($DocumentPythonPackagesDirectory -or $DocumentFontsDirectory -or $DocumentTesseractDirectory)
+if($LocalStation -and $hasDocumentRuntimeInput -and -not $WithDocumentWorkshop){throw 'Native document runtime sources require -WithDocumentWorkshop for a LocalStation package.'}
+if($hasDocumentRuntimeInput -and (-not $DocumentPythonPackagesDirectory -or -not $DocumentFontsDirectory)){throw 'Native document runtime requires both DocumentPythonPackagesDirectory and DocumentFontsDirectory.'}
 # Keep project-local SDK/model caches outside `go test ./...` discovery.
 # Nested build snapshots retain their own go.mod; never replace an existing one.
 foreach($artifactName in @('temp','dist')){
@@ -236,13 +245,21 @@ $broker=Join-Path $OutputDirectory 'runtimes\windows-agent-host'
 New-Item -ItemType Directory -Force -Path $broker | Out-Null
 foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_host.pyw')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
 # Document Workshop uses the same project-owned broker as every other local
-# tool.  A local-station preview only needs the hash-pinned Python CLI; do not
-# stage a document converter, media runtime, or other optional tool resources.
-# Portable bundles prepare that CLI through Prepare-WindowsResources.ps1 below,
-# so avoid repeating the integrity-checked preparation work.
+# tool.  A normal LocalStation preview only needs the hash-pinned Python CLI;
+# it deliberately carries no PDF/OCR dependencies.  Supplying the existing
+# reviewed package and font source directories explicitly stages the bounded
+# native PDF runtime beside that CLI.  Portable bundles use the shared resource
+# preparer below, so avoid repeating either integrity-checked operation here.
 if($LocalStation -and $WithDocumentWorkshop -and -not $Portable){
- & python -X utf8 (Join-Path $PSScriptRoot 'prepare_windows_python.py') --target (Join-Path $OutputDirectory 'runtimes\\windows-python-cli') --cache (Join-Path $workspace 'temp\\windows-runtime-downloads')
+ $runtimeRoot=Join-Path $OutputDirectory 'runtimes'
+ & python -X utf8 (Join-Path $PSScriptRoot 'prepare_windows_python.py') --target (Join-Path $runtimeRoot 'windows-python-cli') --cache (Join-Path $workspace 'temp\\windows-runtime-downloads')
  if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed for Document Workshop.'}
+ if($hasDocumentRuntimeInput){
+  $documentArgs=@('--target',(Join-Path $runtimeRoot 'document-workshop'),'--python-packages-source',$DocumentPythonPackagesDirectory,'--fonts-source',$DocumentFontsDirectory)
+  if($DocumentTesseractDirectory){$documentArgs+=@('--tesseract-source',$DocumentTesseractDirectory)}
+  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_document_runtime.py') @documentArgs
+  if($LASTEXITCODE -ne 0){throw 'Project-local native document runtime preparation failed.'}
+ }
 }
 if($Portable){
  $resourceArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes');MediaDirectory=$MediaDirectory;DocumentPythonPackagesDirectory=$DocumentPythonPackagesDirectory;DocumentTesseractDirectory=$DocumentTesseractDirectory;DocumentFontsDirectory=$DocumentFontsDirectory}
