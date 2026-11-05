@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "media.observe",
+      "implementation": "ready",
+      "description": "观察宿主已核验的入站图片或贴纸，仅报告实际提供画面；模型调用经宿主代理。视频帧继续由主体的自动处理与 video_inspect 续读路径负责。",
+      "permissions": [
+        "artifact.read",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "thinking": {
+            "type": "boolean"
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "enum": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        },
+        "required": [
+          "images"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true
+    },
+    {
+      "id": "media.transcribe",
+      "implementation": "ready",
+      "description": "识别宿主已核验的入站语音 WAV，返回实际转写与来源；可选远程模型路由或宿主登记的本地 ASR，二者都不接收路径、字节或命令参数。视频音轨继续由主体的自动处理与 video_inspect 续读路径负责。",
+      "permissions": [
+        "artifact.read",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "audio": {
+            "type": "object"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "audio"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true
+    },
+    {
+      "id": "media.listen",
+      "implementation": "ready",
+      "description": "观察宿主已核验的 WAV 音频内容，仅报告模型对实际提供音频的观察；不等同人工试听、声纹识别或身份确认。",
+      "permissions": [
+        "artifact.read",
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "audio": {
+            "type": "object"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "audio",
+          "prompt"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true
+    }
+  ]
+}

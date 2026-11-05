@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/linuxnative"
 )
 
 func trustedAgent(t *testing.T) (*webFixture, *permittedTools) {
@@ -31,10 +32,81 @@ func trustedAgent(t *testing.T) (*webFixture, *permittedTools) {
 		t.Fatal(err)
 	}
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "turn-1", Mode: "direct"})
+	effective, e := p.hostConfig()
+	if e != nil {
+		t.Fatal(e)
+	}
+	c = f.manager.agent.config()
+	c.Host.Roots = effective.Roots
+	if e = f.manager.agent.save(c); e != nil {
+		t.Fatal(e)
+	}
 	return f, p
+}
+
+func TestMusicContinuationWithoutInstalledPluginNeedsReview(t *testing.T) {
+	f, p := trustedAgent(t)
+	f.manager.mu.Lock()
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.Permissions.SendFile = true
+	f.manager.mu.Unlock()
+	settings := f.manager.agent.config()
+	settings.Enabled, settings.TasksEnabled = true, true
+	if err := f.manager.agent.save(settings); err != nil {
+		t.Fatal(err)
+	}
+	// A populated retired setting must not revive the legacy transport.
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = "http://127.0.0.1:9000"
+		legacySpeechFixture.YuEToken = "synthetic-retired-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
+	task := agentTask{ID: "legacy-music-continuation", Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, State: "waiting", Next: time.Now().Add(-time.Second), MusicJob: "original-music-job"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	in, err := f.manager.claimAgentTask(time.Now(), func(string) bool { return false })
+	if err != nil || in != nil {
+		t.Fatal("uninstalled music plugin resumed legacy job", in, err)
+	}
+	stored := f.manager.agent.list(task.Account, task.Thread)
+	if len(stored) != 1 || stored[0].State != "needs_review" || stored[0].MusicJob != task.MusicJob || stored[0].LastResult != "music_local_plugin_migration_required" {
+		t.Fatal("legacy continuation was not retained for review", stored)
+	}
+}
+
+func TestMusicContinuationWithUnreadyPluginNeedsReviewWithoutResubmission(t *testing.T) {
+	f, p := trustedAgent(t)
+	f.manager.mu.Lock()
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.Permissions.SendFile = true
+	f.manager.mu.Unlock()
+	settings := f.manager.agent.config()
+	settings.Enabled, settings.TasksEnabled = true, true
+	if err := f.manager.agent.save(settings); err != nil {
+		t.Fatal(err)
+	}
+	// This official package is enabled for cloud generation but deliberately
+	// lacks the local bridge connection needed to continue this existing job.
+	installMusicPluginFixture(t, f, []string{"model.invoke"}, true)
+	task := agentTask{ID: "unready-music-continuation", Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, State: "waiting", Next: time.Now().Add(-time.Second), MusicJob: "original-music-job"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	in, err := f.manager.claimAgentTask(time.Now(), func(string) bool { return false })
+	if err != nil || in != nil {
+		t.Fatal("unready music plugin submitted or resumed legacy job", in, err)
+	}
+	stored := f.manager.agent.list(task.Account, task.Thread)
+	if len(stored) != 1 || stored[0].State != "needs_review" || stored[0].MusicJob != task.MusicJob || stored[0].LastResult != "music_local_plugin_configuration_required" {
+		t.Fatal("unready continuation was not retained for review", stored)
+	}
 }
 func TestAgentPrivilegeChecksAtDiscoveryAndExecution(t *testing.T) {
 	_, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	if !p.agentToolEnabled("server_write") {
 		t.Fatal("owner lacks tool")
 	}
@@ -52,6 +124,7 @@ func TestAgentPrivilegeChecksAtDiscoveryAndExecution(t *testing.T) {
 
 func TestOwnerAllAllowedThreadsStillChecksSenderAndRecipient(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	c := f.manager.agent.config()
 	c.PrivilegedThreads = []string{"*"}
 	if err := c.validate(); err != nil {
@@ -72,7 +145,7 @@ func TestOwnerAllAllowedThreadsStillChecksSenderAndRecipient(t *testing.T) {
 	}
 	args, _ := json.Marshal(map[string]string{"path": filepath.Join(c.Host.Roots[0], "must-not-exist.txt"), "content": "forbidden"})
 	for _, input := range []companion.Input{
-		{Account: "test", Thread: "new_group@chatroom", Sender: "wxid_imposter"},
+
 		{Account: "test", Thread: "not_allowed@chatroom", Sender: "wxid_owner"},
 		{Account: "test", Sender: "wxid_owner"},
 		{Account: "other", Thread: "new_group@chatroom", Sender: "wxid_owner"},
@@ -87,12 +160,22 @@ func TestOwnerAllAllowedThreadsStillChecksSenderAndRecipient(t *testing.T) {
 			t.Fatalf("untrusted context executed host: %+v", input)
 		}
 	}
+	p.SetTrace(companion.Input{Account: "test", Thread: "new_group@chatroom", Sender: "wxid_member"})
+	if !p.agentToolEnabled("server_write") {
+		t.Fatal("member lacks isolated session file access")
+	}
+	if p.agentToolEnabled("wechat_conversations") || p.agentToolEnabled("agent_global_search") {
+		t.Fatal("member acquired owner tools")
+	}
+	if _, err := p.Call(context.Background(), "server_write", args); err == nil {
+		t.Fatal("member accessed account-wide directory")
+	}
 	if _, err := os.Stat(filepath.Join(c.Host.Roots[0], "must-not-exist.txt")); !os.IsNotExist(err) {
 		t.Fatal("unauthorized write reached filesystem", err)
 	}
 	for _, mutate := range []func(*agentSettings){
 		func(s *agentSettings) { s.OwnerIDs = []string{"*"} },
-		func(s *agentSettings) { s.OwnerIDs = nil },
+		func(s *agentSettings) { s.OwnerIDs = nil; s.CrossConversation = true },
 		func(s *agentSettings) { s.PrivilegedThreads = []string{"*", "wxid_owner"} },
 	} {
 		invalid := c
@@ -105,6 +188,7 @@ func TestOwnerAllAllowedThreadsStillChecksSenderAndRecipient(t *testing.T) {
 
 func TestExternalPluginOwnerRestrictionCannotBeBypassed(t *testing.T) {
 	f, p := trustedAgent(t)
+	installPublicWebFixture(t, f)
 	c := f.manager.agent.config()
 	c.ExternalOwnerOnly = true
 	if err := f.manager.agent.save(c); err != nil {
@@ -124,6 +208,7 @@ func TestExternalPluginOwnerRestrictionCannotBeBypassed(t *testing.T) {
 }
 func TestAgentHostOperationDeduplicatedAcrossRestart(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	path := filepath.Join(f.manager.agent.config().Host.Roots[0], "once.txt")
 	b, _ := json.Marshal(map[string]string{"path": path, "content": "once"})
 	first, err := p.Call(context.Background(), "server_write", b)
@@ -148,17 +233,22 @@ func TestAgentHostOperationDeduplicatedAcrossRestart(t *testing.T) {
 		t.Fatal("bad file")
 	}
 	// A claimed operation with no result must remain unknown, never executed.
+	// Use an unresolved request: the installed Controller correctly retains
+	// the verified private result of the completed request checked above.
+	unknownPath := filepath.Join(filepath.Dir(path), "unknown-must-not-run.txt")
+	b, _ = json.Marshal(map[string]string{"path": unknownPath, "content": "must not execute"})
 	id := agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, "server_write", string(b))
 	next.mu.Lock()
-	op := next.data.Operations[id]
-	op.Result = `{"state":"unknown"}`
-	op.State = "running"
+	op := agentOperation{ID: id, Tool: "server_write", Thread: p.trace.Thread, Arguments: b, Result: `{"state":"unknown"}`, State: "running", At: time.Now()}
 	next.data.Operations[id] = op
 	next.persist()
 	next.mu.Unlock()
 	result, err := p.Call(context.Background(), "server_write", b)
 	if err != nil || !strings.Contains(result, "unknown") {
 		t.Fatal(result, err)
+	}
+	if _, err := os.Stat(unknownPath); !os.IsNotExist(err) {
+		t.Fatal("unknown operation executed", err)
 	}
 }
 func TestAgentSettingsAPIAuthenticationAndOptimisticSave(t *testing.T) {
@@ -179,14 +269,22 @@ func TestAgentSettingsAPIAuthenticationAndOptimisticSave(t *testing.T) {
 	}
 	c = f.manager.agent.config()
 	c.Host.Mode = "full"
-	if code, _, _ := f.request("POST", "/api/agent/config", c, true, true); code != 400 {
-		t.Fatal("unbound full mode", code)
+	if code, _, _ := f.request("POST", "/api/agent/config", c, true, true); code != 200 {
+		t.Fatal("isolated conversation execution needs no owner escalation", code)
 	}
 }
 
+type crossTextNative struct{ *fakeTools }
+
+func (n *crossTextNative) LookupSend(ctx context.Context, key string) (linuxnative.ToolStatus, error) {
+	if n.submits.Load() == 0 {
+		return linuxnative.ToolStatus{}, linuxnative.ErrToolNotFound
+	}
+	return n.fakeTools.LookupSend(ctx, key)
+}
 func TestAgentCrossSendReceiptInspectionAndMemory(t *testing.T) {
 	f, p := trustedAgent(t)
-	native := &fakeTools{fakeNative: f.native}
+	native := &crossTextNative{&fakeTools{fakeNative: f.native}}
 	f.manager.native = native
 	c := f.manager.agent.config()
 	c.CrossConversation = true
@@ -197,6 +295,7 @@ func TestAgentCrossSendReceiptInspectionAndMemory(t *testing.T) {
 	f.manager.config.Behavior.RandomDelay = false
 	f.manager.config.Companion.Permissions.Remember = true
 	f.manager.mu.Unlock()
+	observeOutboundSource(t, f, p, "请向文件传输助手发送：来自已授权测试的消息")
 	args := json.RawMessage(`{"thread_id":"filehelper","text":"来自已授权测试的消息","request_key":"one-send"}`)
 	result, err := p.Call(context.Background(), "wechat_send_text", args)
 	if err != nil {
@@ -275,9 +374,28 @@ func TestAgentTaskScopedPersistenceRecoveryAndQuietBudget(t *testing.T) {
 	f.manager.config = cfg.Config
 	f.manager.mu.Unlock()
 	task.State = "waiting"
-	task.OwnerRequested = false // Legacy proactive tasks retain quiet-hour/budget behavior.
+	task.OwnerRequested = false
 	task.Next = now.Add(-time.Minute)
-	f.manager.agent.task(task)
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	ownerTask, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if !ok || !ownerTask.OwnerRequested {
+		t.Fatal("saved owner authorization was downgraded", ownerTask)
+	}
+	// Keep the original requested task intact but parked. Quiet-hour behavior
+	// belongs to a genuinely separate legacy autonomous task, not a downgrade
+	// of the authenticated owner's persisted request.
+	ownerTask.State = "needs_review"
+	if err := f.manager.agent.task(ownerTask); err != nil {
+		t.Fatal(err)
+	}
+	task.ID += "-legacy-proactive"
+	task.Constraints = nil
+	task.OwnerRequested = false
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
 	if result, err := f.manager.claimAgentTask(now, func(string) bool { return false }); err != nil || result != nil {
 		t.Fatal("quiet task ran", result, err)
 	}
@@ -306,7 +424,7 @@ func TestAgentTaskScopedPersistenceRecoveryAndQuietBudget(t *testing.T) {
 		t.Fatal("running task reclaimed", again, err)
 	}
 	f.manager.finishAgentTask(*claimed, "silent")
-	if tasks := f.manager.agent.list("test", "wxid_owner"); tasks[0].State != "needs_review" {
-		t.Fatal("uncheckpointed task repeated", tasks)
+	if settled, ok := f.manager.agent.lookupTask(claimed.TaskID, "test", "wxid_owner"); !ok || settled.State != "stopped" || f.manager.agentTaskActive(*claimed) {
+		t.Fatal("silent uncheckpointed task left active", settled)
 	}
 }

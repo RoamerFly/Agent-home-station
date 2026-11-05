@@ -1,0 +1,4086 @@
+{
+  "version": "deep-repair-v1",
+  "purpose": "behavior regression; not evidence of real-model quality",
+  "cases": [
+    {
+      "id": "people-00-0",
+      "group": "people",
+      "behavior": "father-addressed",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "people-00-1",
+      "group": "people",
+      "behavior": "father-addressed",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "people-00-2",
+      "group": "people",
+      "behavior": "father-addressed",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "people-00-3",
+      "group": "people",
+      "behavior": "father-addressed",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "people-00-4",
+      "group": "people",
+      "behavior": "father-addressed",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "people-01-0",
+      "group": "people",
+      "behavior": "father-ambiguous",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-01-1",
+      "group": "people",
+      "behavior": "father-ambiguous",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-01-2",
+      "group": "people",
+      "behavior": "father-ambiguous",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-01-3",
+      "group": "people",
+      "behavior": "father-ambiguous",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-01-4",
+      "group": "people",
+      "behavior": "father-ambiguous",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-02-0",
+      "group": "people",
+      "behavior": "same-name",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-02-1",
+      "group": "people",
+      "behavior": "same-name",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-02-2",
+      "group": "people",
+      "behavior": "same-name",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-02-3",
+      "group": "people",
+      "behavior": "same-name",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-02-4",
+      "group": "people",
+      "behavior": "same-name",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-03-0",
+      "group": "people",
+      "behavior": "renamed",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-03-1",
+      "group": "people",
+      "behavior": "renamed",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-03-2",
+      "group": "people",
+      "behavior": "renamed",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-03-3",
+      "group": "people",
+      "behavior": "renamed",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-03-4",
+      "group": "people",
+      "behavior": "renamed",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-04-0",
+      "group": "people",
+      "behavior": "third-party-report",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-04-1",
+      "group": "people",
+      "behavior": "third-party-report",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-04-2",
+      "group": "people",
+      "behavior": "third-party-report",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-04-3",
+      "group": "people",
+      "behavior": "third-party-report",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-04-4",
+      "group": "people",
+      "behavior": "third-party-report",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-05-0",
+      "group": "people",
+      "behavior": "unsupported-emotion",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-05-1",
+      "group": "people",
+      "behavior": "unsupported-emotion",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-05-2",
+      "group": "people",
+      "behavior": "unsupported-emotion",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-05-3",
+      "group": "people",
+      "behavior": "unsupported-emotion",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-05-4",
+      "group": "people",
+      "behavior": "unsupported-emotion",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-06-0",
+      "group": "people",
+      "behavior": "assistant-not-source",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-06-1",
+      "group": "people",
+      "behavior": "assistant-not-source",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-06-2",
+      "group": "people",
+      "behavior": "assistant-not-source",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-06-3",
+      "group": "people",
+      "behavior": "assistant-not-source",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-06-4",
+      "group": "people",
+      "behavior": "assistant-not-source",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-07-0",
+      "group": "people",
+      "behavior": "quoted-other-person",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-07-1",
+      "group": "people",
+      "behavior": "quoted-other-person",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-07-2",
+      "group": "people",
+      "behavior": "quoted-other-person",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-07-3",
+      "group": "people",
+      "behavior": "quoted-other-person",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "people-07-4",
+      "group": "people",
+      "behavior": "quoted-other-person",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "你爸刚视频，刚挂掉",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-00-0",
+      "group": "media",
+      "behavior": "meal-then-goodnight",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-00-1",
+      "group": "media",
+      "behavior": "meal-then-goodnight",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-00-2",
+      "group": "media",
+      "behavior": "meal-then-goodnight",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-00-3",
+      "group": "media",
+      "behavior": "meal-then-goodnight",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-00-4",
+      "group": "media",
+      "behavior": "meal-then-goodnight",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-01-0",
+      "group": "media",
+      "behavior": "same-caption-two-uploads",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-01-1",
+      "group": "media",
+      "behavior": "same-caption-two-uploads",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-01-2",
+      "group": "media",
+      "behavior": "same-caption-two-uploads",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-01-3",
+      "group": "media",
+      "behavior": "same-caption-two-uploads",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-01-4",
+      "group": "media",
+      "behavior": "same-caption-two-uploads",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-02-0",
+      "group": "media",
+      "behavior": "photo-not-ownership",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-02-1",
+      "group": "media",
+      "behavior": "photo-not-ownership",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-02-2",
+      "group": "media",
+      "behavior": "photo-not-ownership",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-02-3",
+      "group": "media",
+      "behavior": "photo-not-ownership",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-02-4",
+      "group": "media",
+      "behavior": "photo-not-ownership",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-03-0",
+      "group": "media",
+      "behavior": "late-observation",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-03-1",
+      "group": "media",
+      "behavior": "late-observation",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-03-2",
+      "group": "media",
+      "behavior": "late-observation",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-03-3",
+      "group": "media",
+      "behavior": "late-observation",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-03-4",
+      "group": "media",
+      "behavior": "late-observation",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-04-0",
+      "group": "media",
+      "behavior": "quoted-old-image",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-04-1",
+      "group": "media",
+      "behavior": "quoted-old-image",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-04-2",
+      "group": "media",
+      "behavior": "quoted-old-image",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-04-3",
+      "group": "media",
+      "behavior": "quoted-old-image",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-04-4",
+      "group": "media",
+      "behavior": "quoted-old-image",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-05-0",
+      "group": "media",
+      "behavior": "failed-observation",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-05-1",
+      "group": "media",
+      "behavior": "failed-observation",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-05-2",
+      "group": "media",
+      "behavior": "failed-observation",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-05-3",
+      "group": "media",
+      "behavior": "failed-observation",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-05-4",
+      "group": "media",
+      "behavior": "failed-observation",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-06-0",
+      "group": "media",
+      "behavior": "video-range",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-06-1",
+      "group": "media",
+      "behavior": "video-range",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-06-2",
+      "group": "media",
+      "behavior": "video-range",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-06-3",
+      "group": "media",
+      "behavior": "video-range",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-06-4",
+      "group": "media",
+      "behavior": "video-range",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-07-0",
+      "group": "media",
+      "behavior": "voice-uploader",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-07-1",
+      "group": "media",
+      "behavior": "voice-uploader",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-07-2",
+      "group": "media",
+      "behavior": "voice-uploader",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-07-3",
+      "group": "media",
+      "behavior": "voice-uploader",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "media-07-4",
+      "group": "media",
+      "behavior": "voice-uploader",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "晚安咯",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-00-0",
+      "group": "conversation",
+      "behavior": "other-speaker-source",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-00-1",
+      "group": "conversation",
+      "behavior": "other-speaker-source",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-00-2",
+      "group": "conversation",
+      "behavior": "other-speaker-source",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-00-3",
+      "group": "conversation",
+      "behavior": "other-speaker-source",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-00-4",
+      "group": "conversation",
+      "behavior": "other-speaker-source",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-01-0",
+      "group": "conversation",
+      "behavior": "same-speaker-source",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "conversation-01-1",
+      "group": "conversation",
+      "behavior": "same-speaker-source",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "conversation-01-2",
+      "group": "conversation",
+      "behavior": "same-speaker-source",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "conversation-01-3",
+      "group": "conversation",
+      "behavior": "same-speaker-source",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "conversation-01-4",
+      "group": "conversation",
+      "behavior": "same-speaker-source",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "conversation-02-0",
+      "group": "conversation",
+      "behavior": "explicit-quote",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "conversation-02-1",
+      "group": "conversation",
+      "behavior": "explicit-quote",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "conversation-02-2",
+      "group": "conversation",
+      "behavior": "explicit-quote",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "conversation-02-3",
+      "group": "conversation",
+      "behavior": "explicit-quote",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "conversation-02-4",
+      "group": "conversation",
+      "behavior": "explicit-quote",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": true
+    },
+    {
+      "id": "conversation-03-0",
+      "group": "conversation",
+      "behavior": "unrelated-mention",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-03-1",
+      "group": "conversation",
+      "behavior": "unrelated-mention",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-03-2",
+      "group": "conversation",
+      "behavior": "unrelated-mention",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-03-3",
+      "group": "conversation",
+      "behavior": "unrelated-mention",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-03-4",
+      "group": "conversation",
+      "behavior": "unrelated-mention",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-04-0",
+      "group": "conversation",
+      "behavior": "cross-thread-source",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-04-1",
+      "group": "conversation",
+      "behavior": "cross-thread-source",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-04-2",
+      "group": "conversation",
+      "behavior": "cross-thread-source",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-04-3",
+      "group": "conversation",
+      "behavior": "cross-thread-source",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-04-4",
+      "group": "conversation",
+      "behavior": "cross-thread-source",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-05-0",
+      "group": "conversation",
+      "behavior": "cross-account-source",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-05-1",
+      "group": "conversation",
+      "behavior": "cross-account-source",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-05-2",
+      "group": "conversation",
+      "behavior": "cross-account-source",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-05-3",
+      "group": "conversation",
+      "behavior": "cross-account-source",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-05-4",
+      "group": "conversation",
+      "behavior": "cross-account-source",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-06-0",
+      "group": "conversation",
+      "behavior": "assistant-source",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-06-1",
+      "group": "conversation",
+      "behavior": "assistant-source",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-06-2",
+      "group": "conversation",
+      "behavior": "assistant-source",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-06-3",
+      "group": "conversation",
+      "behavior": "assistant-source",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-06-4",
+      "group": "conversation",
+      "behavior": "assistant-source",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-07-0",
+      "group": "conversation",
+      "behavior": "missing-anchor",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-07-1",
+      "group": "conversation",
+      "behavior": "missing-anchor",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-07-2",
+      "group": "conversation",
+      "behavior": "missing-anchor",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-07-3",
+      "group": "conversation",
+      "behavior": "missing-anchor",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "conversation-07-4",
+      "group": "conversation",
+      "behavior": "missing-anchor",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-00-0",
+      "group": "restart",
+      "behavior": "sender-stable",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-00-1",
+      "group": "restart",
+      "behavior": "sender-stable",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-00-2",
+      "group": "restart",
+      "behavior": "sender-stable",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-00-3",
+      "group": "restart",
+      "behavior": "sender-stable",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-00-4",
+      "group": "restart",
+      "behavior": "sender-stable",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-01-0",
+      "group": "restart",
+      "behavior": "quoted-source-stable",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-01-1",
+      "group": "restart",
+      "behavior": "quoted-source-stable",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-01-2",
+      "group": "restart",
+      "behavior": "quoted-source-stable",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-01-3",
+      "group": "restart",
+      "behavior": "quoted-source-stable",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-01-4",
+      "group": "restart",
+      "behavior": "quoted-source-stable",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-02-0",
+      "group": "restart",
+      "behavior": "incoming-media-stable",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-02-1",
+      "group": "restart",
+      "behavior": "incoming-media-stable",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-02-2",
+      "group": "restart",
+      "behavior": "incoming-media-stable",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-02-3",
+      "group": "restart",
+      "behavior": "incoming-media-stable",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-02-4",
+      "group": "restart",
+      "behavior": "incoming-media-stable",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-03-0",
+      "group": "restart",
+      "behavior": "reply-target-stable",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-03-1",
+      "group": "restart",
+      "behavior": "reply-target-stable",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-03-2",
+      "group": "restart",
+      "behavior": "reply-target-stable",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-03-3",
+      "group": "restart",
+      "behavior": "reply-target-stable",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-03-4",
+      "group": "restart",
+      "behavior": "reply-target-stable",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-04-0",
+      "group": "restart",
+      "behavior": "occurred-time-stable",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-04-1",
+      "group": "restart",
+      "behavior": "occurred-time-stable",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-04-2",
+      "group": "restart",
+      "behavior": "occurred-time-stable",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-04-3",
+      "group": "restart",
+      "behavior": "occurred-time-stable",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-04-4",
+      "group": "restart",
+      "behavior": "occurred-time-stable",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-05-0",
+      "group": "restart",
+      "behavior": "event-id-stable",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-05-1",
+      "group": "restart",
+      "behavior": "event-id-stable",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-05-2",
+      "group": "restart",
+      "behavior": "event-id-stable",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-05-3",
+      "group": "restart",
+      "behavior": "event-id-stable",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-05-4",
+      "group": "restart",
+      "behavior": "event-id-stable",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-06-0",
+      "group": "restart",
+      "behavior": "duplicate-idempotent",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-06-1",
+      "group": "restart",
+      "behavior": "duplicate-idempotent",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-06-2",
+      "group": "restart",
+      "behavior": "duplicate-idempotent",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-06-3",
+      "group": "restart",
+      "behavior": "duplicate-idempotent",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-06-4",
+      "group": "restart",
+      "behavior": "duplicate-idempotent",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-07-0",
+      "group": "restart",
+      "behavior": "name-not-identity",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-07-1",
+      "group": "restart",
+      "behavior": "name-not-identity",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-07-2",
+      "group": "restart",
+      "behavior": "name-not-identity",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-07-3",
+      "group": "restart",
+      "behavior": "name-not-identity",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "restart-07-4",
+      "group": "restart",
+      "behavior": "name-not-identity",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-00-0",
+      "group": "memory",
+      "behavior": "correct",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-00-1",
+      "group": "memory",
+      "behavior": "correct",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-00-2",
+      "group": "memory",
+      "behavior": "correct",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-00-3",
+      "group": "memory",
+      "behavior": "correct",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-00-4",
+      "group": "memory",
+      "behavior": "correct",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-01-0",
+      "group": "memory",
+      "behavior": "forget",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-01-1",
+      "group": "memory",
+      "behavior": "forget",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-01-2",
+      "group": "memory",
+      "behavior": "forget",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-01-3",
+      "group": "memory",
+      "behavior": "forget",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-01-4",
+      "group": "memory",
+      "behavior": "forget",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-02-0",
+      "group": "memory",
+      "behavior": "other-subject-rejected",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-02-1",
+      "group": "memory",
+      "behavior": "other-subject-rejected",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-02-2",
+      "group": "memory",
+      "behavior": "other-subject-rejected",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-02-3",
+      "group": "memory",
+      "behavior": "other-subject-rejected",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-02-4",
+      "group": "memory",
+      "behavior": "other-subject-rejected",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-03-0",
+      "group": "memory",
+      "behavior": "missing-source-rejected",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-03-1",
+      "group": "memory",
+      "behavior": "missing-source-rejected",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-03-2",
+      "group": "memory",
+      "behavior": "missing-source-rejected",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-03-3",
+      "group": "memory",
+      "behavior": "missing-source-rejected",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-03-4",
+      "group": "memory",
+      "behavior": "missing-source-rejected",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-04-0",
+      "group": "memory",
+      "behavior": "wrong-quote-rejected",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-04-1",
+      "group": "memory",
+      "behavior": "wrong-quote-rejected",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-04-2",
+      "group": "memory",
+      "behavior": "wrong-quote-rejected",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-04-3",
+      "group": "memory",
+      "behavior": "wrong-quote-rejected",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-04-4",
+      "group": "memory",
+      "behavior": "wrong-quote-rejected",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-05-0",
+      "group": "memory",
+      "behavior": "scope-isolated",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-05-1",
+      "group": "memory",
+      "behavior": "scope-isolated",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-05-2",
+      "group": "memory",
+      "behavior": "scope-isolated",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-05-3",
+      "group": "memory",
+      "behavior": "scope-isolated",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-05-4",
+      "group": "memory",
+      "behavior": "scope-isolated",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-06-0",
+      "group": "memory",
+      "behavior": "revision-conflict",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-06-1",
+      "group": "memory",
+      "behavior": "revision-conflict",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-06-2",
+      "group": "memory",
+      "behavior": "revision-conflict",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-06-3",
+      "group": "memory",
+      "behavior": "revision-conflict",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-06-4",
+      "group": "memory",
+      "behavior": "revision-conflict",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-07-0",
+      "group": "memory",
+      "behavior": "pinned-forget",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-07-1",
+      "group": "memory",
+      "behavior": "pinned-forget",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-07-2",
+      "group": "memory",
+      "behavior": "pinned-forget",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-07-3",
+      "group": "memory",
+      "behavior": "pinned-forget",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "memory-07-4",
+      "group": "memory",
+      "behavior": "pinned-forget",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-00-0",
+      "group": "identity",
+      "behavior": "namespace-distinct",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-00-1",
+      "group": "identity",
+      "behavior": "namespace-distinct",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-00-2",
+      "group": "identity",
+      "behavior": "namespace-distinct",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-00-3",
+      "group": "identity",
+      "behavior": "namespace-distinct",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-00-4",
+      "group": "identity",
+      "behavior": "namespace-distinct",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-01-0",
+      "group": "identity",
+      "behavior": "server-collision",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-01-1",
+      "group": "identity",
+      "behavior": "server-collision",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-01-2",
+      "group": "identity",
+      "behavior": "server-collision",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-01-3",
+      "group": "identity",
+      "behavior": "server-collision",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-01-4",
+      "group": "identity",
+      "behavior": "server-collision",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-02-0",
+      "group": "identity",
+      "behavior": "time-collision",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-02-1",
+      "group": "identity",
+      "behavior": "time-collision",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-02-2",
+      "group": "identity",
+      "behavior": "time-collision",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-02-3",
+      "group": "identity",
+      "behavior": "time-collision",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-02-4",
+      "group": "identity",
+      "behavior": "time-collision",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-03-0",
+      "group": "identity",
+      "behavior": "sender-collision",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-03-1",
+      "group": "identity",
+      "behavior": "sender-collision",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-03-2",
+      "group": "identity",
+      "behavior": "sender-collision",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-03-3",
+      "group": "identity",
+      "behavior": "sender-collision",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-03-4",
+      "group": "identity",
+      "behavior": "sender-collision",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-04-0",
+      "group": "identity",
+      "behavior": "body-collision",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-04-1",
+      "group": "identity",
+      "behavior": "body-collision",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-04-2",
+      "group": "identity",
+      "behavior": "body-collision",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-04-3",
+      "group": "identity",
+      "behavior": "body-collision",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-04-4",
+      "group": "identity",
+      "behavior": "body-collision",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-05-0",
+      "group": "identity",
+      "behavior": "explicit-revision",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-05-1",
+      "group": "identity",
+      "behavior": "explicit-revision",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-05-2",
+      "group": "identity",
+      "behavior": "explicit-revision",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-05-3",
+      "group": "identity",
+      "behavior": "explicit-revision",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-05-4",
+      "group": "identity",
+      "behavior": "explicit-revision",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-06-0",
+      "group": "identity",
+      "behavior": "late-independent",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-06-1",
+      "group": "identity",
+      "behavior": "late-independent",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-06-2",
+      "group": "identity",
+      "behavior": "late-independent",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-06-3",
+      "group": "identity",
+      "behavior": "late-independent",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-06-4",
+      "group": "identity",
+      "behavior": "late-independent",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-07-0",
+      "group": "identity",
+      "behavior": "duplicate-idempotent",
+      "permutation": 0,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-07-1",
+      "group": "identity",
+      "behavior": "duplicate-idempotent",
+      "permutation": 1,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-07-2",
+      "group": "identity",
+      "behavior": "duplicate-idempotent",
+      "permutation": 2,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "小林",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-07-3",
+      "group": "identity",
+      "behavior": "duplicate-idempotent",
+      "permutation": 3,
+      "actor": "member-beta",
+      "other": "member-alpha",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    },
+    {
+      "id": "identity-07-4",
+      "group": "identity",
+      "behavior": "duplicate-idempotent",
+      "permutation": 4,
+      "actor": "member-alpha",
+      "other": "member-beta",
+      "display_name": "同学",
+      "request": "请结合来源回答当前问题",
+      "forbidden_transfer": [
+        "盒饭",
+        "汤洒键盘",
+        "心里有点空",
+        "站那儿"
+      ],
+      "must_respond": false
+    }
+  ]
+}

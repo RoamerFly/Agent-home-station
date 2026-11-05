@@ -11,7 +11,7 @@ wechat-bot/
 ├─ scripts/             启动/桥接/同步/检查脚本
 ├─ components/          关联项目源码和来源清单
 ├─ docs/
-│  ├─ guide/            使用、功能、插件、目录
+│  ├─ guide/            使用、功能、工具、目录
 │  ├─ agent/            Agent、工具、权限与生命周期
 │  ├─ delivery/         发送、回执、补发
 │  ├─ media/            语音、音乐、视频与分享

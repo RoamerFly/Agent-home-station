@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
-from mobile_bridge import Bridge, BridgeError, ui_nodes, public_browser_url
+from mobile_bridge import Bridge, BridgeError, adb_server_version_probe, ui_nodes, public_browser_url
 from unittest.mock import patch
 
 PNG = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\rIHDR' + struct.pack('>II', 480, 800) + b'synthetic'
@@ -19,6 +20,7 @@ class Runner:
     def __init__(self):
         self.calls = []
         self.fail_action = False
+        self.fail_all = False
         self.png = PNG
         self.xml = XML
         self.package = 'com.example.app'
@@ -26,7 +28,10 @@ class Runner:
 
     def __call__(self, command, **kwargs):
         self.calls.append(command)
-        args = command[3:]
+        self.last_kwargs = kwargs
+        if self.fail_all:
+            raise OSError("synthetic disconnected device")
+        args = command[7:]
         data = b''
         if args == ['get-state']:
             data = b'device\n'
@@ -41,6 +46,32 @@ class Runner:
         return subprocess.CompletedProcess(command, 0, data, b'private stderr never forwarded')
 
 
+class ProbeSocket:
+    def __init__(self, payload, chunk_size=None):
+        self.payload = bytearray(payload)
+        self.chunk_size = chunk_size
+        self.sent = b''
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *unused):
+        return False
+
+    def settimeout(self, unused):
+        pass
+
+    def sendall(self, data):
+        self.sent += data
+
+    def recv(self, length):
+        if self.chunk_size is not None:
+            length = min(length, self.chunk_size)
+        data = bytes(self.payload[:length])
+        del self.payload[:length]
+        return data
+
+
 class BridgeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -49,11 +80,18 @@ class BridgeTests(unittest.TestCase):
         self.adb = self.root / 'adb'
         self.adb.write_bytes(b'synthetic')
         self.config = self.root / 'config.json'
-        self.cfg = {'adb': str(self.adb), 'devices': {'lab': {'serial': 'emulator-5580', 'enabled': True,
+        self.cfg = {'adb': str(self.adb), 'adb_host': '127.0.0.1', 'adb_port': 5037, 'devices': {'lab': {'serial': 'emulator-5580', 'enabled': True,
                     'packages': ['com.example.app'], 'actions': ['observe', 'tap', 'launch', 'home', 'swipe', 'text']}}}
         self.save_config()
         self.runner = Runner()
-        self.bridge = Bridge(self.config, self.root / 'state', self.runner)
+        self.probe_calls = 0
+
+        def probe():
+            self.probe_calls += 1
+            return 41
+
+        self.probe = probe
+        self.bridge = Bridge(self.config, self.root / 'state', self.runner, self.probe)
 
     def save_config(self):
         self.config.write_text(json.dumps(self.cfg), encoding='utf8')
@@ -62,7 +100,7 @@ class BridgeTests(unittest.TestCase):
         return dict(device_id='lab', action='tap', request_key='one', observation_id=observation['id'], x=20, y=30)
 
     def action_calls(self):
-        return [x for x in self.runner.calls if x[3:6] == ['shell', 'input', 'tap']]
+        return [x for x in self.runner.calls if x[7:10] == ['shell', 'input', 'tap']]
 
     def test_recording_real_bytes_chunking_scope_and_no_replay(self):
         self.cfg['devices']['lab']['actions'].append('capture')
@@ -76,7 +114,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(meta['sha256'], hashlib.sha256(MP4).hexdigest())
         repeated = self.bridge.action(request)
         self.assertEqual(repeated['result']['artifact']['id'], meta['id'])
-        self.assertEqual(len([c for c in self.runner.calls if c[3:5] == ['shell', 'screenrecord']]), 1)
+        self.assertEqual(len([c for c in self.runner.calls if c[7:9] == ['shell', 'screenrecord']]), 1)
         import base64
         actual = b''
         while len(actual) < meta['bytes']:
@@ -88,6 +126,54 @@ class BridgeTests(unittest.TestCase):
             self.bridge.read_artifact(dict(device_id='lab', artifact_id=meta['id'], request_key='other', offset=0))
         with self.assertRaises(BridgeError):
             self.bridge.read_artifact(dict(device_id='lab', artifact_id='../config', request_key='recording', offset=0))
+
+    def test_fixed_host_endpoint_never_inherits_or_launches_daemon(self):
+        with patch.dict('mobile_bridge.os.environ', {'ADB_SERVER_SOCKET':'tcp:localhost:9999', 'ANDROID_ADB_SERVER_ADDRESS':'localhost', 'ANDROID_ADB_SERVER_PORT':'9999', 'ANDROID_SERIAL':'other'}, clear=False):
+            self.bridge.list_devices()
+        command = self.runner.calls[-1]
+        self.assertEqual(command[1:7], ['-H', '127.0.0.1', '-P', '5037', '-s', 'emulator-5580'])
+        self.assertFalse(any(item in {'start-server', 'kill-server', 'server'} for item in command))
+        for key in ('ADB_SERVER_SOCKET', 'ANDROID_ADB_SERVER_ADDRESS', 'ANDROID_ADB_SERVER_PORT', 'ANDROID_SERIAL'):
+            self.assertNotIn(key, self.runner.last_kwargs['env'])
+        self.cfg['adb_host'] = 'localhost'
+        self.save_config()
+        with self.assertRaisesRegex(BridgeError, 'configuration_invalid'):
+            self.bridge.list_devices()
+        self.cfg['adb_host'] = '127.0.0.1'
+        self.cfg['adb_port'] = 5038
+        self.save_config()
+        with self.assertRaisesRegex(BridgeError, 'configuration_invalid'):
+            self.bridge.list_devices()
+
+    def test_read_only_server_probe_requires_protocol_41_before_running_adb(self):
+        valid = ProbeSocket(b'OKAY00040029', chunk_size=1)
+        with patch('mobile_bridge.socket.create_connection', return_value=valid) as connect:
+            self.assertEqual(adb_server_version_probe(), 41)
+        self.assertEqual(connect.call_args.args[0], ('127.0.0.1', 5037))
+        self.assertEqual(valid.sent, b'000chost:version')
+
+        for payload, code in ((b'FAIL0004oops', 'handshake_invalid'), (b'OKAY0004', 'handshake_invalid'), (b'OKAY00040028', 'incompatible'), (b'OKAY0041', 'handshake_invalid')):
+            with self.subTest(payload=payload), patch('mobile_bridge.socket.create_connection', return_value=ProbeSocket(payload)):
+                with self.assertRaisesRegex(BridgeError, code):
+                    adb_server_version_probe()
+        with patch('mobile_bridge.socket.create_connection', side_effect=OSError('synthetic missing listener')):
+            with self.assertRaisesRegex(BridgeError, 'adb_server_unavailable'):
+                adb_server_version_probe()
+
+        before = len(self.runner.calls)
+        unavailable = Bridge(self.config, self.root / 'unavailable', self.runner,
+                             lambda: (_ for _ in ()).throw(BridgeError('device_adb_server_unavailable')))
+        with self.assertRaisesRegex(BridgeError, 'adb_server_unavailable'):
+            unavailable.observe('lab')
+        self.assertEqual(len(self.runner.calls), before)
+
+    def test_incompatible_server_blocks_action_before_running_adb(self):
+        observation, _ = self.bridge.observe('lab')
+        before = len(self.runner.calls)
+        incompatible = Bridge(self.config, self.root / 'state', self.runner, lambda: 40)
+        with self.assertRaisesRegex(BridgeError, 'adb_server_incompatible'):
+            incompatible.action(self.request(observation))
+        self.assertEqual(len(self.runner.calls), before)
 
     def test_recording_invalid_media_never_marked_submitted(self):
         self.cfg['devices']['lab']['actions'].append('capture')
@@ -135,6 +221,30 @@ class BridgeTests(unittest.TestCase):
             self.bridge.action(request)
         self.assertEqual(len(self.action_calls()), 1)
 
+    def test_disconnected_device_is_offline_and_cannot_be_observed(self):
+        self.runner.fail_all = True
+        self.assertEqual(self.bridge.list_devices()["devices"][0]["state"], "offline")
+        with self.assertRaisesRegex(BridgeError, "device_command_unavailable"):
+            self.bridge.observe("lab")
+
+    def test_plugin_source_and_legacy_entry_share_the_stdio_protocol(self):
+        requests = "\n".join(json.dumps(item) for item in [
+            {"jsonrpc":"2.0","id":"init","method":"initialize","params":{}},
+            {"jsonrpc":"2.0","id":"tools","method":"tools/list","params":{}},
+        ]) + "\n"
+        plugin_source = Path(__file__).parents[1] / "plugins" / "mobile-control" / "runtime" / "bridge.py"
+        legacy_entry = Path(__file__).with_name("mobile_bridge.py")
+        for entry in (plugin_source, legacy_entry):
+            with self.subTest(entry=entry.name):
+                result = subprocess.run(
+                    [sys.executable, "-B", str(entry), "--config", str(self.config), "--storage", str(self.root / (entry.stem + "-state"))],
+                    input=requests, text=True, capture_output=True, cwd=self.root, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                replies = [json.loads(line) for line in result.stdout.splitlines()]
+                self.assertEqual(replies[0]["result"]["serverInfo"]["name"], "whale-mobile-bridge")
+                self.assertEqual([tool["name"] for tool in replies[1]["result"]["tools"]], ["devices", "observe", "act", "read_artifact"])
+
     def test_changed_same_app_controls_force_reobservation(self):
         observation, _ = self.bridge.observe('lab')
         self.runner.png = PNG + b'changed'
@@ -165,7 +275,7 @@ class BridgeTests(unittest.TestCase):
             self.bridge.action(self.request(observation))
 
     def test_device_lease_applies_across_process_instances(self):
-        second = Bridge(self.config, self.root / 'state', self.runner)
+        second = Bridge(self.config, self.root / 'state', self.runner, self.probe)
         with self.bridge.lease('lab'):
             with self.assertRaisesRegex(BridgeError, 'device_busy'):
                 second.observe('lab')

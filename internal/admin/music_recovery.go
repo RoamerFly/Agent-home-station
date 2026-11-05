@@ -2,10 +2,18 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
+	"wechat-bot/internal/companion"
 )
+
+type recoveredMusicRecipe struct {
+	Title      string `json:"title"`
+	SourceHash string `json:"reference_source_sha256"`
+	songSpec
+}
 
 // Recovery reads the actual incoming message, preserving its recipient and scope.
 // A deterministic task and the existing effect ledger prevent double generation.
@@ -36,7 +44,7 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ac := m.agent.config()
-	if !ac.Enabled || !ac.TasksEnabled || !m.speechConfig().YuEEnabled {
+	if !ac.Enabled || !ac.TasksEnabled || !m.localMusicPluginConfigured(r.Context()) {
 		fail(w, 409, "请先开启Agent持续任务和本地歌曲生成")
 		return
 	}
@@ -71,6 +79,18 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := agentTask{ID: id, Account: m.native.Account(), Thread: msg.ThreadID, Sender: msg.SenderID, Title: "补办歌曲请求", RequestedText: msg.Body, Checkpoint: msg.Body, State: "pending", Next: time.Now(), OriginTrace: msg.ID, QuoteServerID: msg.ServerID, RecoveryMessageID: msg.ID}
+	// A recovery round has a new trace. Bind it to the exact native event so
+	// group tools and the delivery worker can verify the original requester.
+	origin := companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, TraceID: msg.ID, MessageTime: msg.CreatedAt, Source: &companion.SourceRef{InstanceID: m.memory.SourceInstanceID(), MessageID: msg.ID, ServerID: msg.ServerID}}
+	access := &permittedTools{manager: m, trace: origin}
+	t.OwnerRequested = access.privileged()
+	if source, ok := m.memory.SourceForInput(origin); ok {
+		access.trace.Source = source
+		t.Constraints = access.taskConstraints("music_recovery", "", "", "")
+	} else if strings.HasSuffix(t.Thread, "@chatroom") && m.Config().Companion.Permissions.Remember {
+		fail(w, 409, "无法核对该群歌曲请求的当前来源，请检查原消息是否已更正或遗忘")
+		return
+	}
 	if in.PreparedJob != "" {
 		if !validID(in.PreparedJob) || !m.Config().Companion.Permissions.SendVoice {
 			fail(w, 400, "准备任务编号无效或未允许语音")
@@ -82,29 +102,52 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		p := &permittedTools{manager: m}
-		b, _, err := p.yueRequest(r.Context(), "GET", "/jobs/"+in.PreparedJob, nil, "")
+		p := &permittedTools{manager: m, trace: companion.Input{Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, TraceID: t.OriginTrace}}
+		ctx := withLocalMusicRecovery(r.Context(), t, in.PreparedJob)
+		b, _, err := p.yueRequest(ctx, "GET", "/jobs/"+in.PreparedJob, nil, "")
 		var job struct {
-			ID            string `json:"id"`
-			State         string `json:"state"`
-			ReferenceUsed bool   `json:"reference_used"`
-			Recipe        struct {
-				Title      string `json:"title"`
-				SourceHash string `json:"reference_source_sha256"`
-				songSpec
-			} `json:"recipe"`
+			ID            string               `json:"id"`
+			State         string               `json:"state"`
+			ReferenceUsed bool                 `json:"reference_used"`
+			Recipe        recoveredMusicRecipe `json:"recipe"`
 		}
-		if err != nil || json.Unmarshal(b, &job) != nil || job.ID != in.PreparedJob || job.State != "completed" || songTitle(job.Recipe.Title) == "" || job.Recipe.Lyrics == "" && job.Recipe.Engine != "rvc" || (job.Recipe.Mode != "original" && job.Recipe.Mode != "cover") || job.Recipe.Mode == "cover" && (!job.ReferenceUsed || len(job.Recipe.ReferenceHash) != 64) {
+		if err != nil || json.Unmarshal(b, &job) != nil || job.ID != in.PreparedJob {
+			fail(w, 409, "需要已完成且保存真实配方的YuE或RVC歌曲；不会把未知文件当翻唱")
+			return
+		}
+		var recovered struct {
+			ID     string               `json:"id"`
+			Title  string               `json:"title"`
+			Recipe recoveredMusicRecipe `json:"recipe"`
+		}
+		err = p.prepareMusic(ctx, "/jobs/"+in.PreparedJob, map[string]any{"action": "recover_recipe", "id": in.PreparedJob, "status": job}, &recovered, func() error {
+			// The package can normalize the provider's source hash, but cannot
+			// invent a recipe, choose another voice/source, or adopt another job.
+			if recovered.ID != in.PreparedJob || recovered.Title != job.Recipe.Title || songTitle(recovered.Title) == "" {
+				return errors.New("music_recovery_identity_changed")
+			}
+			expected := job.Recipe
+			if recovered.Recipe.ReferenceHash != expected.ReferenceHash {
+				if len(expected.SourceHash) != 64 || strings.Trim(expected.SourceHash, "0123456789abcdef") != "" || recovered.Recipe.ReferenceHash != expected.SourceHash {
+					return errors.New("music_recovery_source_changed")
+				}
+				expected.ReferenceHash = recovered.Recipe.ReferenceHash
+			}
+			a, _ := json.Marshal(expected)
+			b, _ := json.Marshal(recovered.Recipe)
+			if !sameJSON(a, b) {
+				return errors.New("music_recovery_recipe_changed")
+			}
+			return nil
+		})
+		if err != nil {
 			fail(w, 409, "需要已完成且保存真实配方的YuE或RVC歌曲；不会把未知文件当翻唱")
 			return
 		}
 		t.MusicJob = in.PreparedJob
-		t.MusicTitle = songTitle(job.Recipe.Title)
+		t.MusicTitle = songTitle(recovered.Title)
 		t.MusicKind = "voice"
-		t.MusicSpec = &job.Recipe.songSpec
-		if len(job.Recipe.SourceHash) == 64 {
-			t.MusicSpec.ReferenceHash = job.Recipe.SourceHash
-		}
+		t.MusicSpec = &recovered.Recipe.songSpec
 		t.MusicDeadline = time.Now().Add(30 * time.Minute)
 		t.State = "waiting"
 		t.Checkpoint = "管理员已准备完成歌曲，补发原请求；只查询并交付，不重新生成或转换"

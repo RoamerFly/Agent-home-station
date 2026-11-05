@@ -69,7 +69,7 @@ func TestLiveOwnerReadsRealProjectGuidesAndReportsServiceHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.manager.speech = speech
+	writeLegacySpeechMigrationFixture(t, f.manager, speech)
 	guide, err := os.ReadFile(filepath.Join(root, "admin/agent-workspace/shared/project-yue.md"))
 	if err != nil {
 		t.Fatal(err)

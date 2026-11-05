@@ -1,0 +1,16 @@
+Microsoft Visual C++ Runtime
+
+App-local DLLs are copied only from the Microsoft.VC*.CRT redistributable
+directory of the licensed Visual Studio build tools, never from System32 or
+debug_nonredist. The runtime remains Microsoft software under its applicable
+license, separate from the project and upstream client licenses.
+
+Runtime license:
+https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/
+Distributable Code for Visual Studio 2022:
+https://visualstudio.microsoft.com/license-terms/vs2022-redistribution/
+Deployment reference:
+https://learn.microsoft.com/en-us/cpp/windows/determining-which-dlls-to-redistribute
+
+App-local deployment requires maintaining these files with program updates.
+The Windows Universal CRT remains an operating-system component.

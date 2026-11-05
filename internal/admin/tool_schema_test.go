@@ -14,6 +14,7 @@ import (
 
 func TestBuiltinSchemasRejectWrongShapesBeforeAnyAction(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	c := f.manager.agent.config()
 	c.Host.Mode = "full"
 	c.CrossConversation = true
@@ -22,12 +23,17 @@ func TestBuiltinSchemasRejectWrongShapesBeforeAnyAction(t *testing.T) {
 	if e := f.manager.agent.save(c); e != nil {
 		t.Fatal(e)
 	}
-	f.manager.speech.Key = "synthetic-local-fixture"
-	f.manager.speech.TTSEnabled = true
-	f.manager.speech.MusicEnabled = true
-	f.manager.speech.YuEEnabled = true
-	f.manager.speech.YuEEndpoint = "http://127.0.0.1:1"
-	f.manager.speech.YuEToken = "synthetic-local-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.Key = "synthetic-local-fixture"
+		legacySpeechFixture.TTSEnabled = true
+		legacySpeechFixture.MusicEnabled = true
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = "http://127.0.0.1:1"
+		legacySpeechFixture.YuEToken = "synthetic-local-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
+	installLegacyLocalMusicPlugin(t, f.manager)
 	mobile := f.manager.mobile.Settings()
 	mobile.Enabled = true
 	mobile.Bridge.Command = "synthetic-not-executed-device"
@@ -60,6 +66,7 @@ func TestBuiltinSchemasRejectWrongShapesBeforeAnyAction(t *testing.T) {
 }
 func TestToolArgumentCompatibilityNeverChangesMeaning(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	c := f.manager.agent.config()
 	c.Host.Mode = "full"
 	f.manager.agent.save(c)
@@ -88,7 +95,8 @@ func TestExternalMCPArgumentTypesAndNamesAreNotRewritten(t *testing.T) {
 }
 
 func TestCapabilityCatalogKeepsLocalToolsWhenExternalServerFails(t *testing.T) {
-	f, _ := trustedAgent(t)
+	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
 	defer server.Close()
 	f.manager.mcp.Servers = []mcptools.ServerConfig{{ID: "broken", Transport: "http", URL: server.URL, Enabled: true, TimeoutSeconds: 1}}
@@ -101,6 +109,7 @@ func TestCapabilityCatalogKeepsLocalToolsWhenExternalServerFails(t *testing.T) {
 
 func TestRejectedProcessCanRetryAfterEnvironmentIsRepaired(t *testing.T) {
 	f, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	c := f.manager.agent.config()
 	c.Host.Mode = "full"
 	if e := f.manager.agent.save(c); e != nil {

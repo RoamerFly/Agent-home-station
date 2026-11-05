@@ -5,16 +5,17 @@ It reads private files only for comparison; none of those values are emitted.
 """
 import argparse
 import fnmatch
+import hashlib
 import io
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 DENIED_DIRS = {
-    "secrets", "temp", "tmp", "dist", ".agents", ".codex", ".playwright-cli",
+    "cross-media", "incoming-transfers", "pri_workspace", "public_workspace", "secrets", "temp", "tmp", "dist", ".agents", ".codex", ".playwright-cli",
     "node_modules", "__pycache__", ".venv", "venv", "media-assets", "bot-state", "archive", "send-ledger", "tool-outputs", "state", "accounts",
 }
 DENIED_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".pem", ".key", ".p12", ".pfx", ".pyc", ".log"}
@@ -24,6 +25,35 @@ PATTERNS = [
     ("private_key", re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")),
     ("credential_url", re.compile(rb"https?://[A-Za-z0-9._%+-]+:[A-Za-z0-9._%+-]+@")),
 ]
+
+
+def package_findings(index):
+    """Check the bytes that will be cloned, not Windows working-tree newlines."""
+    failures = []
+    for manifest, raw in index.items():
+        if not re.fullmatch(r"plugins/[^/]+/plugin\.json", manifest):
+            continue
+        root = manifest.rsplit("/", 1)[0] + "/"
+        try:
+            document = json.loads(raw)
+            files = document["files"]
+            if not isinstance(files, dict) or not files:
+                raise ValueError()
+        except (ValueError, KeyError, TypeError):
+            failures.append({"path": manifest, "reason": "invalid_package_manifest"})
+            continue
+        for name, digest in files.items():
+            path = PurePosixPath(name)
+            if path.is_absolute() or ".." in path.parts or "\\" in name or ":" in name or str(path) != name or name == "plugin.json":
+                failures.append({"path": manifest, "reason": "invalid_package_member"})
+                continue
+            content = index.get(root + name)
+            if content is None or not isinstance(digest, str) or hashlib.sha256(content).hexdigest() != digest:
+                failures.append({"path": root + name, "reason": "indexed_package_digest_mismatch"})
+        for name in index:
+            if name.startswith(root) and name != manifest and name[len(root):] not in files:
+                failures.append({"path": name, "reason": "unindexed_package_member"})
+    return failures
 
 
 def private_values(private_root):
@@ -114,6 +144,7 @@ def main():
                 failures.append({"path": path, "reason": label})
         if any(value in data for value in secrets):
             failures.append({"path": path, "reason": "matches_active_private_credential"})
+    failures.extend(package_findings({path: objects[oid] for mode, oid, stage, path in entries if mode != "160000" and stage == "0"}))
     print(json.dumps({"tracked_files": count, "tracked_bytes": total, "private_values_checked": len(secrets), "findings": failures}, ensure_ascii=False, indent=2))
     return bool(failures)
 

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "id": "configuration",
+      "title": "云端与本地配置（分别启用）",
+      "component": "configuration"
+    },
+    {
+      "id": "tasks",
+      "title": "任务",
+      "component": "tasks"
+    },
+    {
+      "id": "resources",
+      "title": "资源",
+      "component": "resources"
+    },
+    {
+      "id": "diagnostics",
+      "title": "状态与日志",
+      "component": "diagnostics"
+    }
+  ]
+}

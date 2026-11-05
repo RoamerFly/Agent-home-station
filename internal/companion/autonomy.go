@@ -4,8 +4,31 @@ import (
 	"context"
 	"crypto/rand"
 	"math/big"
+	"strings"
 	"time"
 )
+
+// RecordStatus distinguishes a choice not to speak from a failed or skipped
+// operation without changing the decision used by the sending machinery.
+func (d Decision) RecordStatus() string {
+	if d.Action != "silent" && d.Action != "wait" {
+		return d.Action
+	}
+	if d.ReviewFailure != nil || strings.HasPrefix(d.Reason, "grounding_") || strings.Contains(d.Reason, "invalid") {
+		return "failed"
+	}
+	switch d.Reason {
+	case "tool_task_deadline_exceeded", "tool_budget_exhausted", "tool_unavailable_or_budget_exhausted", "unverified_model_response", "media_unavailable_or_permission_denied":
+		return "failed"
+	case "quiet_hours", "no_reliable_context":
+		return "skipped"
+	case "private_diagnostic_only", "cross_conversation_private_route_unavailable", "cross_conversation_media_requires_explicit_delivery":
+		return "blocked"
+	case "cross_conversation_result_private_delivery_handled":
+		return "completed"
+	}
+	return d.Action
+}
 
 // Statistics describe model outcomes, not sending allowances. Accepted runs
 // require an actual accepted-delivery commit; a reply decision is not delivery.
@@ -14,6 +37,7 @@ type AutonomyStats struct {
 	Silent            int    `json:"silent"`
 	ReplyPlans        int    `json:"reply_plans"`
 	Failed            int    `json:"failed"`
+	Skipped           int    `json:"skipped,omitempty"`
 	Accepted          int    `json:"accepted"`
 	LastOutcomeTrace  string `json:"last_outcome_trace,omitempty"`
 	LastAcceptedTrace string `json:"last_accepted_trace,omitempty"`
@@ -43,7 +67,7 @@ func (s *Store) ProactiveOutcome(in Input, action, reason string, c Config, now 
 	if in.Preview || in.Mode != "proactive" {
 		return nil
 	}
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(in.Channel, in.Account, in.Thread), func(data *persisted) error {
 		id := ScopeID(in.Channel, in.Account, in.Thread)
 		scope, ok := data.Scopes[id]
 		if !ok {
@@ -53,14 +77,15 @@ func (s *Store) ProactiveOutcome(in Input, action, reason string, c Config, now 
 		if in.TraceID != "" && stats.LastOutcomeTrace == in.TraceID {
 			return nil
 		}
-		if reason == "invalid_model_decision" || reason == "invalid_tool_arguments" || reason == "tool_budget_exhausted" || reason == "tool_unavailable_or_budget_exhausted" {
-			action = "failed"
-		}
 		switch action {
 		case "reply":
 			stats.ReplyPlans++
 		case "silent", "wait":
 			stats.Silent++
+		case "skipped", "blocked":
+			stats.Skipped++
+		case "completed":
+			// Private routing owns the separate delivery and its receipt.
 		default:
 			stats.Failed++
 		}

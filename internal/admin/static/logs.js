@@ -2,15 +2,18 @@
  'use strict';const $=s=>document.querySelector(s),state={items:[],pending:null,busy:false,ready:false};
  const categories={received:'接收消息',sent:'发送消息',decision:'处理决定',tool:'工具调用',error:'异常与失败',system:'系统运行'};
  const stickerEvents={sticker_observation_unavailable:'表情包已接收，画面暂不可读'};
+ Object.assign(stickerEvents,{cross_media_recovery_blocked:'跨会话附件记录未通过校验，保留原记录待检查',cross_media_receipt_restored:'已按持久回执恢复附件投递状态'});
+ Object.assign(stickerEvents,{asr_backend_fallback:'本地识别执行失败，按配置切换百炼',local_asr_failed:'本地音频识别执行异常'});
  Object.assign(stickerEvents,{shared_video_read_started:'正在打开原分享读取实际内容',shared_video_observation_unavailable:'分享实际内容未读取完成',shared_video_cache_unavailable:'实际内容已读取，原视频缓存未完成'});
- const events={message_queued:'消息已持久化排队',message_processed:'消息处理完成',media_understood:'媒体理解完成',delivery_waiting:'等待延迟核对',delivery_retry:'按退避策略补发',delivery_stopped:'停止补发',delivery_review:'模型复核补发文字',message_interrupted_after_send:'发送期间重启，待核查',message_received:'收到消息',message_sent:'发送消息',message_skipped:'未触发回复',message_processing:'正在处理',character_decision:'角色处理结果',model_failed:'模型调用失败',send_failed:'发送失败或结果不确定',manual_send_submitted:'手动发送已提交',manual_send_status:'手动发送状态更新',provider_configuration_error:'模型服务配置异常',configuration_saved:'配置已保存',bot_starting:'机器人正在启动',bot_resumed_saved_cursor:'机器人已恢复处理进度',reply_server_accepted:'微信已接受回复',character_silent:'旧版静默事件（未记录细分原因）'};
+ const events={message_queued:'消息已持久化排队',message_processed:'消息处理完成',media_understood:'媒体理解完成',delivery_waiting:'Agent 自动核对发送回执',tool_progress_receipt_waiting:'等待核对进度消息回执',delivery_retry:'按退避策略补发',delivery_stopped:'停止补发',delivery_review:'模型复核补发文字',message_interrupted_after_send:'发送期间重启，待核查',message_received:'收到消息',message_sent:'发送消息',message_skipped:'未触发回复',message_processing:'正在处理',character_decision:'角色处理结果',model_failed:'模型调用失败',send_failed:'消息未完成发送',manual_send_submitted:'手动发送已提交',manual_send_status:'手动发送状态更新',provider_configuration_error:'模型服务配置异常',configuration_saved:'配置已保存',bot_starting:'机器人正在启动',bot_resumed_saved_cursor:'机器人已恢复处理进度',reply_server_accepted:'微信已接受回复',character_silent:'旧版静默事件（未记录细分原因）'};
  Object.assign(events,stickerEvents,{reminder_scheduled:'已保存定时提醒',contact_check_pending:'联系人目录暂不可用，等待核对',agent_permissions_saved:'Agent 权限已更新',agent_task_started:'持续任务开始',agent_task_saved:'任务检查点已保存',agent_operation:'账号或服务器操作',agent_cross_send:'Agent 跨会话发送',generation_started:'后台任务开始',generation_revised:'模型取消过时任务',generation_stopped:'后台任务已停止'});
  Object.assign(events,{utterance_plan_queued:'文字发言已排队',utterance_plan_paused:'新插话暂停未发文字',utterance_plan_revised:'模型复核文字计划',utterance_plan_stopped:'文字计划已停止',utterance_review_failed:'文字计划复核失败',message_aggregated:'已合并短消息处理',conversation_wake_scheduled:'已安排延时重新评估',conversation_wake_started:'开始延时重新评估',conversation_wake_stopped:'延时补充已取消'});
- const reasons={explicit_member_request:'已保存本人的提醒请求',explicit_reminder_accepted:'定时提醒已被微信接受',contact_directory_unavailable:'联系人目录暂不可用，稍后自动核对',conversation_not_allowed:'会话不在回复白名单中',non_text_message:'不是当前可处理的文字消息',invalid_or_oversized_text:'正文编码或长度不符合要求',message_expired_or_invalid_time:'消息超过处理时限或时间无效',ai_label_loop_prevention:'跳过 AI 标签消息，避免循环',social_permission_denied:'未授权群聊观察或自主接话',not_a_verified_mention:'没有识别到真正 @ 本账号',group_prefix_not_matched_or_empty:'群聊前缀不匹配或正文为空',private_prefix_not_matched_or_empty:'私信触发前缀不匹配或正文为空',empty_prompt:'去掉 @ 后正文为空',cooldown:'旧版会话冷却跳过（现已移除）',proactive_trigger:'主动触发',trigger_matched:'触发条件已满足',model_chose_silence:'角色选择保持安静',invalid_model_decision:'模型返回的决策格式无效，未发送',tool_unavailable_or_budget_exhausted:'工具不可用或调用次数已用尽',invalid_tool_arguments:'工具参数格式无效',hourly_reply_budget:'每小时回复预算已用尽',hourly_decision_budget:'旧版判断次数限制（现已移除）',decision_state_persistence_failed:'判断状态未能保存，已停止本条处理',quiet_hours:'处于安静时段',proactive_permission_denied:'主动问候权限未开启',text_reply_permission_denied:'发送权限不足',media_unavailable_or_permission_denied:'生成媒体不可用或没有发送权限',not_retried:'没有自动重发，请先检查实际收件情况'};
+ const reasons={operation_reported_privately:'处理失败，已另行通知管理员',source_identity_conflict_or_unavailable:'消息来源身份冲突，未生成回复',explicit_member_request:'已保存本人的提醒请求',explicit_reminder_accepted:'定时提醒已被微信接受',contact_directory_unavailable:'联系人目录暂不可用，稍后自动核对',conversation_not_allowed:'会话不在回复白名单中',non_text_message:'不是当前可处理的文字消息',invalid_or_oversized_text:'正文编码或长度不符合要求',message_expired_or_invalid_time:'消息超过处理时限或时间无效',ai_label_loop_prevention:'跳过 AI 标签消息，避免循环',social_permission_denied:'未授权群聊观察或自主接话',not_a_verified_mention:'没有识别到真正 @ 本账号',group_prefix_not_matched_or_empty:'群聊前缀不匹配或正文为空',private_prefix_not_matched_or_empty:'私信触发前缀不匹配或正文为空',empty_prompt:'去掉 @ 后正文为空',cooldown:'旧版会话冷却跳过（现已移除）',proactive_trigger:'主动触发',trigger_matched:'触发条件已满足',model_chose_silence:'角色选择保持安静',grounding_check_failed:'回复复核未完成，草稿未发送',grounding_check_rejected:'回复复核未通过，草稿未发送',grounding_context_invalidated:'复核前依据已变化，草稿已作废',grounding_check_stopped_unverified_reply:'回复复核未完成，草稿未发送',invalid_model_decision:'模型返回的决策格式无效，未发送',tool_unavailable_or_budget_exhausted:'工具不可用或调用次数已用尽',invalid_tool_arguments:'工具参数格式无效',hourly_reply_budget:'每小时回复预算已用尽',hourly_decision_budget:'旧版判断次数限制（现已移除）',decision_state_persistence_failed:'判断状态未能保存，已停止本条处理',quiet_hours:'处于安静时段',proactive_permission_denied:'主动问候权限未开启',text_reply_permission_denied:'发送权限不足',media_unavailable_or_permission_denied:'生成媒体不可用或没有发送权限',not_retried:'没有自动重发，请先检查实际收件情况'};
+ Object.assign(reasons,{legacy_reply_source_not_proven:'未提交微信：回复依据与原消息不一致',legacy_reply_source_unavailable:'未提交微信：原消息已不可用',legacy_reply_source_changed:'未提交微信：原消息已变更',previous_receipt_unverified:'正在退避等待核对先前的发送回执',delivery_receipt_unverified:'微信接收结果待确认，将按原操作编号核对',receipt_lookup_failed:'回执暂时查不到，已安排下次核对'});
  Object.assign(reasons,{channels_share_identity_missing:'微信未返回此作品的可验证链接；可能作品不可访问，不能据此判断具体原因。',channels_share_identity_mismatch:'微信返回的作品身份与原卡片不一致，已停止读取。',channels_share_lookup_rejected:'微信拒绝了当前作品链接查询。',channels_share_response_invalid:'微信作品链接响应格式无效。',channels_share_link_invalid:'微信未返回有效的官方作品链接。',channels_object_id_missing:'原卡片没有可查询的数字作品 ID。',channels_received_card_required:'只能查询本账号收到的视频号卡片。',persistent_task_continuation:'恢复已保存任务，结合最新上下文继续判断',persistent_checkpoint_saved:'已持久保存任务进度和下一步',durable_operation_no_replay:'操作已记录；重复调用不会重新执行',semantic_message_plan:'已生成语义消息计划，等待逐条发送',new_context_before_unsent_text:'有新插话，复核未发送部分',plan_continue:'模型决定继续旧补充',plan_cancel:'模型取消旧的未发内容',plan_replace:'模型改写未发补充',plan_delay:'模型暂缓旧补充',semantic_plan_bubble_accepted:'这条语义消息已由微信接受',short_messages_same_speaker:'同一发言者的短消息合并为一轮处理，原消息身份保留',utterance_permission_quiet_or_expired:'因权限、安静时段或计划过时停止未发文字',pending_plan_review_invalid_or_unavailable:'复核模型暂不可用或格式无效，尚未发送旧尾部',model_requested_later_reassessment:'模型安排稍后重新判断，不保证发言',independent_conversation_wake:'按此前计划独立重新评估当前会话',new_reply_before_wake:'已收到新回复，取消等待补充',wake_permission_budget_or_context:'延时补充权限、目标预算或上下文不再满足',media_processing_failed:'附件在发送前处理失败，未自动重发',unsupported_media:'附件格式不受支持，未自动重发',media_encoder_unavailable:'媒体编码器不可用，未自动重发',voice_duration_limit:'音频超过时长限制，未自动重发',media_service_rejected:'微信拒绝了附件，未自动重发',auth_required:'微信登录需要重新验证',submission_outcome_unknown:'原生发送未取得可验证回执；结果不确定，未自动重发',receipt_wait_timeout:'等待发送回执超时；结果不确定，未自动重发',receipt_lookup_failed:'读取发送回执失败；结果不确定，未自动重发',send_outcome_unknown:'发送结果不确定，未自动重发',wechat_rejected:'微信拒绝了本次消息，未自动重发',service_rejected:'微信服务拒绝了本次消息，未自动重发',wechat_not_ready:'微信登录或发送连接未就绪',transport_unavailable:'原生发送连接不可用，未自动重发'});
  Object.assign(reasons,{background_generation:'后台生成与工具执行中，继续接收消息',new_voice_instruction:'收到新的语音或文件要求，停止旧任务',model_cancelled_superseded_task:'模型根据新上下文取消旧任务，后续请求另行处理',generation_review_unavailable:'新上下文复核两次失败，停止旧任务避免过时回复',progress_receipt_pending:'执行前回应暂未确认回执，继续核对同一发送，不重复提交'});
- Object.assign(reasons,{processed_without_reply:'本条已处理，未发送回复',reply_budget_or_quiet_hours:'回复预算或安静时段阻止发送',decision_cooldown:'旧版角色判断冷却（现已移除）',durable_inbox:'已持久化排队，等待逐条判断',message_read_pending:'正文暂时无法读取，30 秒后继续读取',media_understanding_disabled:'此类媒体理解已关闭',incoming_media_download_failed:'收到的附件下载失败',vision_provider_failed_check_model:'视觉模型调用失败，请检查模型的图片输入能力',media_analysis_ready:'已取得图片观察或视频摘要',delivery_reconciliation_pending:'已安排延迟核对回执与同步记录',delayed_retry_after_two_sync_checks:'两次同步核对未见送达，按随机退避策略继续补发',delivery_retry_limit_or_disabled:'旧版策略停止了补发（一次上限或时限）；需重新恢复该条发送',delivery_retry_disabled:'自动补发已关闭，保留未确认记录',delivery_random_backoff:'发送结果未确认，已安排随机退避核对与补发',delivery_pacing:'等待会话内两条消息的发送间隔',delivery_model_continue:'模型决定沿用原补充，重新核对回执后补发',delivery_model_replace:'模型已结合失败情况和最新对话改写补发内容',delivery_model_delay:'模型决定暂缓补发，保留待办',delivery_model_cancel:'模型判断旧补充已过时或已撤销，停止补发',delivery_review_unavailable:'补发复核暂未完成，退避后重新交给模型',delivery_confirmed_by_receipt_or_sync:'已由微信回执或同步记录确认',interrupted_media_or_legacy_send_check_receipt:'发送期间重启，保留待核查，不重复提交媒体'});
- Object.assign(events,{model_retry:'模型请求准备补试',model_recovered:'模型请求已恢复',provider_test_failed:'模型连接测试失败'});
+ Object.assign(reasons,{processed_without_reply:'本条已处理，未发送回复',reply_budget_or_quiet_hours:'回复预算或安静时段阻止发送',decision_cooldown:'旧版角色判断冷却（现已移除）',durable_inbox:'已持久化排队，等待逐条判断',message_read_pending:'正文暂时无法读取，30 秒后继续读取',media_understanding_disabled:'此类媒体理解已关闭',incoming_media_download_failed:'收到的附件下载失败',vision_provider_failed_check_model:'视觉模型调用失败，请检查模型的图片输入能力',media_analysis_ready:'已取得图片观察或视频摘要',delivery_reconciliation_pending:'已安排延迟核对回执与同步记录',delayed_retry_after_two_sync_checks:'两次同步核对未见送达，按随机退避策略继续补发',delivery_retry_limit_or_disabled:'旧版策略停止了补发（一次上限或时限）；需重新恢复该条发送',delivery_retry_disabled:'自动补发已关闭，保留未确认记录',delivery_random_backoff:'发送结果未确认，已安排随机退避核对与补发',delivery_pacing:'等待会话内两条消息的发送间隔',delivery_model_continue:'模型决定沿用原补充，重新核对回执后补发',delivery_model_replace:'模型已结合失败情况和最新对话改写补发内容',delivery_model_delay:'模型决定暂缓补发，保留待办',delivery_model_cancel:'模型判断旧补充已过时或已撤销，停止补发',delivery_review_unavailable:'补发复核暂未完成，退避后重新交给模型',delivery_confirmed_by_receipt_or_sync:'已由微信回执或同步记录确认',interrupted_media_or_legacy_send_check_receipt:'发送期间重启，缺少可查询的原投递记录；已停止，不重复提交媒体'});
+ Object.assign(events,{model_retry:'模型请求准备补试',model_recovered:'模型请求已恢复',provider_test_failed:'模型连接测试失败',model_grounding_format_repair:'回复复核格式校验中',model_grounding_format_recovered:'回复复核格式已通过',model_grounding_validation_failed:'回复复核协议校验未通过'});
  Object.assign(events,{model_context_prepared:'模型上下文已准备',character_model_or_memory_failed:'角色处理出现异常，原因见对应消息详情',eligible_message_received:'收到符合会话规则的消息',voice_transcribed:'微信语音转写完成'});
  Object.assign(events,{music_generation_queued:'已提交本地音乐生成并安排后续交付',music_generation_finished:'本地音乐任务已结束，准备交付结果'});
  Object.assign(events,{mcp_tool_call_succeeded:'工具调用成功',mcp_tool_call_failed:'工具调用失败',plugin_output_ready:'附件已准备好'});
@@ -25,9 +28,12 @@
  Object.assign(reasons,{automatic_music_followup_registered:'已保存音乐任务，完成后继续回复原会话',music_result_ready_for_delivery:'已取得生成任务状态，进入结果交付',music_execution_not_started:'未成功完成音乐执行，已告知用户结果'});
  Object.assign(reasons,{model_output_token_limit:'模型输出达到 Token 上限，内容被截断',model_content_filtered:'模型服务停止了本次内容生成',model_tool_call_count_invalid:'模型工具调用数量超过支持范围',model_tool_arguments_too_large:'工具参数超过长度限制',model_tool_arguments_invalid:'模型返回的工具参数格式无效'});
  Object.assign(reasons,{'model request unavailable':'旧记录：模型请求连接失败，未记录细分原因','model response too large':'旧记录：模型响应读取失败或超过大小限制'});
- Object.assign(reasons,{direct_question_review:'检测到可能面向角色的问题，交给模型判断',model_network_unavailable:'模型网络连接不可用，已按策略尝试恢复',model_network_timeout:'模型网络连接或响应超时',model_connection_closed:'模型连接提前关闭',model_dns_failed:'模型服务域名解析失败',model_tls_validation_failed:'模型服务证书验证失败',model_authentication_failed:'模型鉴权失败，请检查服务商 Key',model_insufficient_balance:'模型账户额度不足',model_invalid_parameters:'模型请求参数不受支持',model_endpoint_or_model_missing:'模型服务路径或模型不存在',model_rate_limited:'模型服务限流',model_service_unavailable:'模型服务暂时不可用',model_upstream_timeout:'模型服务处理超时',model_http_rejected:'模型服务拒绝请求',model_invalid_request:'模型请求无法创建',model_invalid_response:'模型返回格式无效',model_response_too_large:'模型响应超过大小限制',model_response_incomplete:'模型响应未完整生成',model_response_empty:'模型返回空内容',model_redirect_denied:'模型地址返回跳转，已阻止转发凭据',model_request_cancelled:'模型请求已取消',model_deadline_exceeded:'模型请求超过本次处理时限'});
- Object.assign(reasons,{media_receipt_reconciliation_pending:'原任务回执不确定，正在随机退避持续核对；已接受分段不重发',transport_unavailable:'原生发送连接暂时异常，正在核查原任务状态'});
- const modelDetails=item=>{if(!item.model_attempts)return '';const stages={connection_or_headers:'连接或等待响应头',response_body:'读取响应正文',http_status:'服务端状态',decode:'解析模型响应',retry_wait:'补试等待'};return ' / 模型请求 '+item.model_attempts+(item.model_max_attempts?'/'+item.model_max_attempts:'')+' 次'+(item.model_http_status?' / 最近异常 HTTP '+item.model_http_status:'')+(item.model_stage?' / 最近异常阶段 '+(stages[item.model_stage]||item.model_stage):'')+(item.duration_ms?' / 累计 '+(item.duration_ms/1000).toFixed(1)+' 秒':'')+(item.model_retry_delay_ms?' / 补试间隔 '+(item.model_retry_delay_ms/1000).toFixed(1)+' 秒':'')};
+ Object.assign(reasons,{memory_record_unavailable:'当前范围内没有可读取的记录，请核对来源编号',video_audio_source_unverified:'原消息与保存的来源不匹配，音轨识别被阻断',video_audio_plugin_result_unavailable:'音轨识别任务或结果未能核验',video_audio_backend_unavailable:'音轨识别工具、配置或运行资源不可用',model_input_transport_limit:'模型输入超过本地传输限制，尚未调用 API',memory_revision_or_cursor_changed:'记忆版本或分页快照已变化，需要重新查询',history_materials_not_inspected:'尚未读取请求的历史材料，本次任务未完成',original_history_anchor_unavailable:'原消息锚点不存在、已隔离或不在当前授权范围',direct_question_review:'检测到可能面向角色的问题，交给模型判断',model_network_unavailable:'模型网络连接不可用，已按策略尝试恢复',model_network_timeout:'模型网络连接或响应超时',model_connection_closed:'模型连接提前关闭',model_dns_failed:'模型服务域名解析失败',model_tls_validation_failed:'模型服务证书验证失败',model_authentication_failed:'模型鉴权失败，请检查服务商 Key',model_insufficient_balance:'模型账户额度不足',model_invalid_parameters:'模型请求参数不受支持',model_endpoint_or_model_missing:'模型服务路径或模型不存在',model_rate_limited:'模型服务限流',model_service_unavailable:'模型服务暂时不可用',model_upstream_timeout:'模型服务处理超时',model_http_rejected:'模型服务拒绝请求',model_invalid_request:'模型请求无法创建',model_invalid_response:'模型返回格式无效',model_review_protocol_invalid:'回复复核结果格式错误（不是模型选择安静）',model_reply_text_too_long:'模型回复超过单条文字发送长度，未截断或拆分发送',legacy_reply_source_changed:'发送前核对到原消息来源或正文版本不一致，尚未提交微信',legacy_reply_native_source_unavailable:'发送前暂时无法重读原消息，尚未提交微信',reply_admission_failed:'发送前校验未通过，尚未提交微信',delivery_review_requires_single_message:'该次投递只接受一条完整文字，未自动合并或拆分',model_output_token_limit:'模型输出达到 Token 上限，返回被截断',model_content_filtered:'模型服务停止了本次内容生成',model_response_too_large:'模型响应超过大小限制',model_response_incomplete:'模型响应未完整生成',model_response_empty:'模型返回空内容',model_redirect_denied:'模型地址返回跳转，已阻止转发凭据',model_request_cancelled:'模型请求已取消',model_deadline_exceeded:'模型请求超过本次处理时限'});
+ Object.assign(reasons,{media_readonly_receipt_pending:'Agent 将按原投递编号继续查回执，不重发',media_receipt_reconciliation_pending:'原任务回执不确定，正在随机退避持续核对；已接受分段不重发',transport_unavailable:'原生发送连接暂时异常，正在核查原任务状态'});
+ Object.assign(reasons,{share_plugin_disabled:'分享读取工具已停用',share_plugin_store_unavailable:'分享工具记录暂不可读',share_plugin_runtime_unavailable:'分享工具运行环境未就绪',share_plugin_start_failed:'分享工具启动失败',share_plugin_resolution_incomplete:'分享解析未完成，请检查原任务',share_plugin_resolution_needs_review:'分享解析结果待核对，未重复提交',share_plugin_handoff_unavailable:'原分享的媒体信息暂不可恢复',share_plugin_handoff_invalid:'分享媒体信息未通过校验',share_request_authorization_changed:'分享读取权限已变化',share_source_changed:'原分享已变更或被遗忘',share_native_source_changed:'微信原消息内容已变化',share_persisted_source_unavailable:'原分享来源尚未核实',share_native_source_unavailable:'微信原消息暂不可读',share_native_shortlink_required:'需要原分享的作品链接',share_native_shortlink_unavailable:'微信原分享链接暂不可读',share_native_shortlink_invalid:'微信原分享链接未通过校验'});
+ Object.assign(reasons,{grounding_review_protocol_invalid:'复核返回不符合协议，草稿未发送',grounding_review_provider_failed:'复核模型调用失败，草稿未发送'});
+ const modelStages={input_validation:'本地输入校验（调用前）',connection_or_headers:'连接或等待响应头',response_body:'读取响应正文',http_status:'服务端状态',decode:'解析模型响应',retry_wait:'补试等待',review_protocol:'回复复核格式检查',source_validation:'回复对象与来源校验',grounding_review:'来源与隐私复核'};
+ const modelDetails=item=>{if(!item.model_attempts)return '';const failed=item.status==='failed'||item.category==='error'||!!item.reason;return ' / 模型请求 '+item.model_attempts+(item.model_max_attempts?'/'+item.model_max_attempts:'')+' 次'+(item.model_http_status?(failed?' / 最近异常 HTTP ':' / HTTP ')+item.model_http_status:'')+(item.model_stage?(failed?' / 最近异常阶段 ':' / 当前阶段 ')+(modelStages[item.model_stage]||item.model_stage):'')+(item.duration_ms?' / 累计 '+(item.duration_ms/1000).toFixed(1)+' 秒':'')+(item.model_retry_delay_ms?' / 补试间隔 '+(item.model_retry_delay_ms/1000).toFixed(1)+' 秒':'')};
  Object.assign(events,{message_progress:'执行前回应已被微信接受',tool_task_interrupted:'工具任务在重启时中断',tool_task_timeout:'工具任务超过处理时限',tool_task_finished_without_result:'工具任务已停止，补充结果说明'});
  Object.assign(reasons,{tool_progress_accepted:'执行前回应已发送，任务继续',tool_task_no_final_after_progress:'已回应接下任务，本次未交付结果，发送结束说明',tool_task_interrupted_not_replayed:'工具任务已中断，未自动重放可能有副作用的调用',tool_task_deadline_exceeded:'工具任务超过处理时限，已停止并反馈',tool_progress_not_retried:'执行前回应回执不确定，未重发'});
  Object.assign(reasons,{sticker_download_unavailable:'表情包附件暂未取得，保留接收记录，不猜测画面',sticker_decode_unavailable:'表情包格式或动画画面暂时无法解码，保留接收记录'});
@@ -38,58 +44,205 @@
  window.WechatLogReason=reason=>reasons[reason]||reason;
  Object.assign(reasons,{social_relevance_insufficient:'群友正在闲聊，未确认需要角色参与，保持安静',media_superseded_by_new_request:'用户已换歌或更改请求，停止旧语音与迟到的介绍，不自动续发',manual_share_reread:'管理员手动重新读取分享，准备引用原卡片回复',unsupported_quote_type:'原生服务不支持引用该消息类型，尚未发送',usage_record_save_failed:'模型用量记录保存失败，部分消耗可能未计入'});
  Object.assign(events,{model_decision_repair:'正在纠正模型返回格式',model_decision_recovered:'模型返回格式已纠正',model_decision_failed:'模型返回格式纠正失败'});
- Object.assign(reasons,{decision_json_invalid:'模型JSON不完整或字段类型错误，正在请求格式纠正',decision_action_invalid:'模型返回未知处理动作，正在纠正',decision_reply_empty:'模型选择回复但没有内容，正在纠正',decision_bubbles_exceeded:'模型回复条数超过配置，正在纠正',decision_media_count_exceeded:'模型附件数超过上限，正在纠正',decision_message_invalid:'模型消息为空或超过长度，正在纠正',decision_silence_has_output:'模型静默动作与回复内容冲突，正在纠正',decision_tool_unknown:'模型选择了未提供的工具，未执行，正在纠正',decision_tool_arguments_invalid:'模型工具参数不是有效对象，未执行，正在纠正',decision_format_recovered:'模型已返回有效决策，继续当前请求',decision_failure_reported:'格式纠正失败，已向对方说明本次未完成'});
+ Object.assign(reasons,{decision_json_invalid:'模型JSON不完整或字段类型错误，正在请求格式纠正',decision_action_invalid:'模型返回未知处理动作，正在纠正',decision_reply_empty:'模型选择回复但没有内容，正在纠正',decision_bubbles_exceeded:'旧版回复条数限制（现已移除）',decision_media_count_exceeded:'模型附件数超过上限，正在纠正',decision_message_invalid:'模型消息为空或超过长度，正在纠正',decision_silence_has_output:'模型静默动作与回复内容冲突，正在纠正',decision_tool_unknown:'模型选择了未提供的工具，未执行，正在纠正',decision_tool_arguments_invalid:'模型工具参数不是有效对象，未执行，正在纠正',decision_format_recovered:'模型已返回有效决策，继续当前请求',decision_failure_reported:'格式纠正失败，已向对方说明本次未完成'});
  Object.assign(reasons,{surf_sources_unavailable:'本轮所有内容源不可用，没有候选，不是正常选择安静',surf_no_novel_candidates:'没有新的候选内容，不重复分享',media_accepted_then_caption:'附件已由微信接受，再发送说明',surf_duplicate_source:'近期已经分享过同一来源，这次保持安静',surf_duplicate_topic:'近期已分享过相近主题，换网址也不重复推送',surf_candidate_not_selected:'尚未选定本轮候选，不分享',surf_candidate_not_verified:'所选候选尚未完成读取或媒体准备，不分享',surf_no_discovery_session:'本轮未取得内容发现记录，不分享',surf_no_verified_source:'没有取得可核实的具体来源，不分享',media_not_confirmed_no_success_caption:'附件未确认成功或已取消，不发送成功说明'});
- Object.assign(reasons,{surf_forced_share_failed:'强制分享未完成：未取得合适内容或工具受限',surf_forced_share_unfulfilled:'强制分享未完成：未取得可发送的已核实内容',owner_surf_share_accepted:'管理员补发已获微信接受',surf_forced_link_fallback:'按强制分享设置发送已读取内容的标题与来源链接',surf_bookmarked:'已收藏，暂不分享',surf_not_interested:'模型对本轮候选不感兴趣',surf_not_suitable:'模型判断不适合当前群',surf_browse_only:'已阅读，模型决定暂不分享',surf_candidates_only:'只查看了候选列表，未继续读取',surf_tool_failed:'工具执行失败，本轮未完成分享',surf_content_prepared:'内容已核实并准备，等待发送',surf_share_accepted:'微信已接受分享',tool_budget_exhausted:'本轮工具调用预算已用尽',tool_unavailable_or_budget_exhausted:'工具不可用或本轮预算已用尽'});
- const statuses={interrupted:'处理已中断',recovered:'模型请求已恢复',accepted:'微信已接受',observed:'已同步到微信消息',received:'已接收',queued:'已排队',running:'处理中',processing:'处理中',waiting:'等待核对',retrying:'补发中',unknown:'结果不确定',needs_review:'需核查',failed:'失败',cancelled:'已取消',silent:'未回复',blocked:'被规则阻止',skipped:'已跳过'};
+ Object.assign(reasons,{surf_forced_share_failed:'强制分享未完成：未取得合适内容或工具受限',surf_forced_share_unfulfilled:'强制分享未完成：未取得可发送的已核实内容',owner_surf_share_accepted:'管理员补发已获微信接受',surf_forced_link_fallback:'按强制分享设置发送已读取内容的标题与来源链接',surf_bookmarked:'已收藏，暂不分享',surf_not_interested:'模型对本轮候选不感兴趣',surf_not_suitable:'模型判断不适合当前群',surf_browse_only:'已阅读，模型决定暂不分享',surf_candidates_only:'只查看了候选列表，未继续读取',surf_authorization_changed:'探索权限或记忆来源已变化，本次分享已停止',surf_tool_failed:'工具执行失败，本轮未完成分享',surf_content_prepared:'内容已核实并准备，等待发送',surf_share_accepted:'微信已接受分享',tool_budget_exhausted:'本轮工具调用预算已用尽',tool_unavailable_or_budget_exhausted:'工具不可用或本轮预算已用尽'});
+ const statuses={interrupted:'处理已中断',recovered:'模型请求已恢复',accepted:'微信已接受',observed:'已同步到微信消息',received:'已接收',queued:'已排队',running:'处理中',processing:'处理中',checking_receipt:'Agent 自动查回执',waiting:'等待处理结果',waiting_receipt:'等待微信回执',receipt_pending:'等待微信回执',retrying:'补发中',retrying_tool:'等待工具重试',waiting_tool_retry:'等待工具重试',retrying_model:'等待模型重试',waiting_model_retry:'等待模型重试',retrying_delivery:'等待微信重试',waiting_delivery_retry:'等待微信重试',cancelling:'正在停止剩余部分',stopping:'正在停止剩余部分',partially_cancelled:'部分已发送，其余已取消',partial_cancelled:'部分已发送，其余已取消',partially_completed:'部分完成',partial_completed:'部分完成',partial:'部分完成',partial_failed:'部分完成，仍需处理失败部分',unknown:'结果不确定',needs_review:'结果未确认',failed:'失败',cancelled:'已取消',silent:'未回复',blocked:'被规则阻止',skipped:'已跳过'};
+ Object.assign(events,{bot_runtime_failed:'Agent 已停止',delivery_memory_identity_recovered:'已恢复已发送回复的记忆'});
+ Object.assign(reasons,{delivery_memory_conflict:'已发送回复与旧记忆编号冲突，原记录保留，请检查更新。',accepted_receipt_memory_identity:'按本次发送回执补记回复，旧记忆保留，没有重新发送。',bot_event_read_failed:'微信事件读取暂不可用，请检查连接后重新启动。',bot_state_already_owned:'另一个 Agent 正在使用这些数据。',bot_saved_state_unavailable:'处理进度暂不可用，原始数据保留，请检查存储。',bot_state_processing_failed:'Agent 恢复处理时发生错误，原始数据保留。'});
+ Object.assign(events,{video_audio_no_words:'音轨已读取，没有识别出可转写的词',voice_no_words:'语音已读取，没有识别出可转写的词',video_audio_observation_failed:'音轨识别调用未完成'});
+ Object.assign(reasons,{ASR_RESPONSE_HAVE_NO_WORDS:'识别服务没有返回可转写的词，可能为音乐、环境声或不清晰人声',video_visual_audio_no_words:'画面已读取，音轨没有识别出可转写的词',video_audio_no_words_visual_unavailable:'音轨已读取且未识别出可转写的词，画面理解未完成'});
+ Object.assign(statuses,{no_recognizable_speech:'未识别出可转写的词'});
  const formatter=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
  function time(raw){const date=new Date(raw);if(!Number.isFinite(date.getTime()))return '时间未知';const p=Object.fromEntries(formatter.formatToParts(date).map(x=>[x.type,x.value]));return p.year+'-'+p.month+'-'+p.day+'-'+p.hour+':'+p.minute+':'+p.second}
 
  const key=item=>item.id||item.time+'|'+item.event;
- Object.assign(events,{context_compression_started:'开始压缩上下文',context_compression_completed:'上下文压缩处理完成',context_compression_failed:'上下文压缩失败',tool_call_succeeded:'调用成功',tool_call_failed:'调用失败',plugin_output_ready:'媒体已准备',web_activity:'联网操作',context_compression_failed:'上下文压缩失败',eligible_message_received:'收到符合规则的消息',memory_saved:'记忆已保存',bot_started_history_skipped:'机器人已启动'});
- Object.assign(events,{backlog_message_grouped:'纳入本会话未读汇总',backlog_conversation_started:'统一查看本会话未读消息'});Object.assign(reasons,{offline_conversation_batch:'结合所有未读消息及原始时间综合判断，不逐条补答'});const roundStates={received:'已接收',running:'执行中',completed:'已完成',accepted:'已发送',waiting:'等待核对',failed:'需处理',silent:'选择安静',skipped:'已跳过',blocked:'已阻止',stopped:'已停止'};
+ Object.assign(events,{context_compression_started:'开始压缩上下文',context_compression_completed:'上下文压缩处理完成',context_compression_failed:'上下文压缩失败',tool_call_succeeded:'调用成功',tool_call_failed:'调用失败',plugin_output_ready:'媒体已准备',web_activity:'联网操作',context_compression_failed:'上下文压缩失败',eligible_message_received:'收到符合规则的消息',memory_saved:'记忆已保存',bot_started_history_skipped:'机器人已启动',reply_diagnosis_started:'开始手动诊断草稿',reply_diagnosis_completed:'手动诊断完成（未发送）',reply_diagnosis_failed:'手动诊断未完成（未发送）'});
+ Object.assign(reasons,{manual_reply_diagnosis_failed:'手动诊断未完成；原草稿没有修改，也没有发送微信'});
+ Object.assign(events,{group_input_read_failed:'附件读取失败，本轮群回复已停止',private_failure_report_unavailable:'主人私聊故障报告未能排队',conversation_batch_started:'合并处理本轮群消息',backlog_message_grouped:'纳入本会话未读汇总',backlog_conversation_started:'统一查看本会话未读消息'});Object.assign(reasons,{offline_conversation_batch:'结合所有未读消息及原始时间综合判断，不逐条补答'});const roundStates={queued:'已排队',received:'已接收',running:'执行中',completed:'已完成',accepted:'微信已接受',checking_receipt:'Agent 自动查回执',waiting:'等待处理结果',waiting_receipt:'等待微信回执',retrying_tool:'等待工具重试',retrying_model:'等待模型重试',retrying_delivery:'等待微信重试',cancelling:'正在停止剩余部分',partially_cancelled:'部分已发送，其余已取消',partially_completed:'部分完成',failed:'执行失败',needs_review:'已停止，结果未确认',silent:'选择安静',skipped:'已跳过',blocked:'已阻止',stopped:'已停止'};
  const stageNames={receive:'接收',decision:'判断',tool:'工具',delivery:'发送',system:'运行'};
- let limit=60,epoch=0;
- function node(parent,tag,text,klass){const element=document.createElement(tag);if(text!==undefined)element.textContent=text;if(klass)element.className=klass;parent.append(element);return element}
- function label(item){return reasons[item.reason]||events[item.event]||item.reason||item.event||'运行事件'}
+ Object.assign(reasons,{topic_concluded:'话题已经结束，本轮未发言',awaiting_participant:'在等对方回应，本轮未发言',nothing_to_add:'暂时没有新内容可补充',proactive_trigger:'查看是否适合主动发言',independent_conversation_wake:'按上次安排回来看一看',model_requested_later_reassessment:'已安排稍后再看',cross_conversation_result_private_delivery_handled:'结果已交给私聊投递',cross_conversation_private_route_unavailable:'无法定位私聊接收方',cross_conversation_media_requires_explicit_delivery:'跨会话附件需指定投递目标',private_diagnostic_only:'群内不公开运行诊断',unverified_model_response:'回复内容未能核实',tool_budget_exhausted:'工具调用次数已用尽'});
+ let epoch=0,dateEpoch=0,dateItems=[],dateReady=false;
+ const dateKey=raw=>time(raw).slice(0,10);
+ const today=()=>dateKey(new Date().toISOString());
+ $('#log-date').value=today();
+ const {element: node, button} = window.WechatControls;
+ function label(item){const failure=reviewFailure(item);if(failure?.stage==='source_validation')return '发送前来源或对象校验未通过';const value=reasons[item.reason]||events[item.event];return value||'运行状态已更新'}
+ function reviewFailure(item){const value=item.review_failure||item.reviewFailure;if(!value||typeof value!=='object')return null;return value}
+ function reviewDetails(item) {
+  const failure = reviewFailure(item);
+  if (!failure) return [];
+  const states = {
+   initial_check_failed:'首次复核未完成', final_check_failed:'最终复核未完成',
+   repair_check_failed:'修复后的复核未完成', review_rejected:'复核发现草稿与依据不符',
+   final_check_rejected:'最终复核发现草稿与依据不符', repair_no_supported_reply:'修复后仍没有有依据的回复',
+   evidence_changed:'复核前依据已变化', preflight_proof_invalid:'回复证明校验失败',
+   preflight_context_invalid:'回复上下文校验失败', preflight_binding_invalid:'来源绑定校验失败',
+   allowed_binding_invalid:'发送前绑定校验失败'
+  };
+  const parts = [];
+  if (failure.review_state) parts.push('复核结果：' + (states[failure.review_state] || failure.review_state));
+  if (failure.code) {
+   const reason = reasons[failure.code];
+   parts.push('复核代码：' + failure.code + (reason ? '（' + reason + '）' : ''));
+  }
+  if (failure.stage) parts.push('发生阶段：' + (modelStages[failure.stage.replace(/^model_/, '')] || failure.stage));
+  if (failure.detail) parts.push('说明：' + failure.detail);
+  else if (failure.stage === 'source_validation') parts.push('说明：来源或对象未通过程序校验，未发送');
+
+  const request = failure.request || {};
+  const value = (lower, upper, fallback) => request[lower] ?? request[upper] ?? item[fallback];
+  const attempts = value('attempts','Attempts','model_attempts');
+  const max = value('max_attempts','MaxAttempts','model_max_attempts');
+  const http = value('http_status','HTTPStatus','model_http_status');
+  const format = value('format_attempt','FormatAttempt','model_format_attempt');
+  const maxFormat = value('max_format_attempts','MaxFormatAttempts','model_max_format_attempts');
+  const finish = value('finish_reason','FinishReason','model_finish_reason');
+  const bytes = value('content_bytes','ContentBytes','model_content_bytes');
+  const info = [];
+  if (attempts) info.push('请求：' + attempts + (max ? '/' + max : '') + ' 次');
+  if (http) info.push('HTTP ' + http);
+  if (format) info.push('格式校验轮次 ' + format + (maxFormat ? '/' + maxFormat : '') + ' 次');
+  if (finish) info.push('结束：' + finish);
+  if (bytes) info.push('返回 ' + bytes + ' 字节');
+  if (value('json_valid','JSONValid','model_json_valid') === false && /^(?:model_)?(?:decode|review_protocol)$/.test(failure.stage || request.Stage || request.stage || '')) info.push('JSON 校验未通过');
+  if (info.length) parts.push(info.join('，'));
+  return parts;
+ }
+ const toolPurposes={memory_search:'检索历史与长期记忆',memory_read:'读取原始记录或长期记忆',memory_remember:'保存有来源的记忆',memory_update:'更正或遗忘记忆',web_search:'搜索公开网页',web_fetch:'读取网页内容',web_discover:'发现公开内容',web_audio_search:'搜索公开音频',web_media_download:'下载公开媒体',wechat_read:'读取微信消息或群成员',wechat_conversations:'查询当前账号的会话',wechat_file_read:'读取收到的文件',wechat_send_text:'提交微信文字消息',wechat_send_media:'提交微信附件',wechat_forward_file:'转发已收到的文件',wechat_operation_status:'核对微信操作回执',wechat_delivery_status:'核对附件发送状态',wechat_delivery_retry:'继续核对并补发未确认附件',wechat_recall:'撤回指定的本人消息',server_read:'读取工作区文件',server_write:'创建工作区文件',server_edit:'修改工作区文件',server_list:'列出工作区文件',server_search:'搜索工作区文件',server_exec:'在隔离环境执行命令',server_process:'管理隔离环境中的进程',server_windows_process:'管理 Windows 隔离进程',workspace_read:'读取工作区笔记',workspace_write:'保存工作区笔记',workspace_search:'搜索工作区笔记',workspace_list:'列出工作区笔记',project_list:'列出登记的项目',project_read:'读取项目说明',agent_global_search:'搜索本账号资料',agent_task:'保存持续任务',agent_tasks:'读取持续任务',speech_synthesize:'合成语音',music_generate:'生成音乐',music_local_start:'启动本地音乐任务',music_local_status:'查询本地音乐任务',voice_library_list:'查询可用声线',voice_library_read:'读取声线资料',voice_library_prepare:'准备声线权重与参考文件',agent_clock:'读取服务器时间',agent_diagnostics:'读取当前账号诊断',agent_owner_report:'向账号主人私聊报告',agent_reminder:'保存提醒',server_status:'读取隔离环境状态',device_task_start:'启动手机观察任务',device_tasks:'查询手机观察任务',device_step:'执行手机观察步骤',device_task_cancel:'停止手机观察任务',tool_output_read:'读取工具保留的输出',video_inspect:'检查视频内容',music_local_resume:'继续本地音乐任务',music_lyrics_compare:'对照歌词',music_reference_inspect:'检查音乐参考',music_rvc_start:'启动声线转换任务',music_sampling_options:'查询音乐采样选项',music_service_start:'启动音乐服务',music_service_status:'检查音乐服务',plugin_job_status:'查询工具任务状态',plugin_job_cancel:'取消工具任务'};
+ function toolPurpose(name){return toolPurposes[name]||(/^voice_library_/.test(name)?'管理声线库':/^music_/.test(name)?'处理音乐任务':/^media_/.test(name)?'读取或准备媒体':/^plugin_/.test(name)?'调用工具':/^wechat_/.test(name)?'执行微信操作':/^web_/.test(name)?'访问公开网络':/^server_/.test(name)?'操作隔离工作区':'执行工具')}
+ function readable(parent,value,title){const holder=node(parent,'div',undefined,'round-readable');window.WechatDialogs.text(holder,value,{title,className:'round-body'})}
  function matches(round){
   const category=$('#log-category').value,source=$('#log-source').value,query=$('#log-search').value.trim().toLocaleLowerCase(),view=$('#log-view').value,status=$('#log-status').value;
-  return (view==='all'||(view==='system')===round.system)&&(category==='all'||round.categories.includes(category))&&(source==='all'||round.source_kind===source)&&(status==='all'||round.status===status)&&(!query||[round.search,...round.entries.map(label)].join(' ').toLocaleLowerCase().includes(query));
+  return (view==='all'||(view==='system')===round.system)&&(category==='all'||round.categories.includes(category))&&(source==='all'||round.source_kind===source)&&(status==='all'||round.group===status)&&(!query||[round.search,roundStates[round.status],window.WechatRounds.groupLabels[round.group],...round.entries.map(label)].join(' ').toLocaleLowerCase().includes(query));
  }
  function step(parent,item){
   const li=node(parent,'li',undefined,'round-step');li.dataset.stage=window.WechatRounds.stage(item);
   node(li,'span',stageNames[li.dataset.stage],'round-stage');
   const content=node(li,'div',undefined,'round-step-content');
-  node(content,'strong',item.tool?item.tool+' · '+label(item):label(item));
-  if(item.reason){const reason=reasons[item.reason]||item.reason;if(reason!==label(item))node(content,'p',reason,'hint')}
-  if(item.message_time)node(content,'small','原消息时间：'+time(item.message_time),'hint');if(item.content&&item.content!==item.tool)node(content,'p',item.content,'round-body');
+  const tool=!!item.tool;
+  node(content,'strong',tool?'调用工具 · '+toolPurpose(item.tool):label(item));
+  if(tool){node(content,'p',item.status==='failed'||item.category==='error'?'结果：失败':'结果：'+(item.status==='running'?'执行中':'成功'),'tool-result '+(item.status==='failed'||item.category==='error'?'form-error':'receipt-accepted'));if(item.status==='failed'||item.category==='error')node(content,'p','失败原因：'+(reasons[item.reason]||item.reason||'未记录具体原因'),'hint');if(item.effect)node(content,'p','产生影响：'+item.effect,'tool-effect')}
+  else if(item.reason){const reason=reasons[item.reason];if(reason&&reason!==label(item))node(content,'p',reason,'hint')}
+  for(const detail of reviewDetails(item))node(content,'p',detail,'hint review-detail');
+  if(item.event==='plugin_output_ready'&&item.media_count)node(content,'p','已准备 '+item.media_count+' 个附件，尚未发送微信。','tool-effect');
+  if(item.message_time)node(content,'small','原消息时间：'+time(item.message_time),'hint');if(item.content&&item.content!==item.tool)readable(content,item.content,'完整执行内容');
   if(item.sender)node(content,'small',window.WechatNames.display(item.sender,item.sender_name||item.sender),'hint');if(item.query)node(content,'p',item.query,'hint');
   const target=window.WechatRounds.activityTarget(item);if(target){const a=node(content,target.kind==='service'?'span':'a',target.label,'round-url');if(target.href){a.href=target.href;a.target='_blank';a.rel='noreferrer noopener'}else a.title=target.detail}
-  const diagnostics=[item.decision_note,modelDetails(item),toolDetails(item),item.retry_at?'下次核对 '+time(item.retry_at):'',item.retry_attempts?'已补发 '+item.retry_attempts+' 次':''].filter(Boolean).join(' ');
-  if(diagnostics)node(content,'p',diagnostics,'hint');
-  const technical=node(content,'button','技术信息','quiet round-technical');technical.type='button';technical.addEventListener('click',()=>{const popup=window.WechatDialogs.open({title:'事件技术信息'});node(popup.body,'pre',JSON.stringify({event:item.event,status:item.status,message_id:item.message_id,related_message_id:item.related_message_id,sender:item.sender,send_id:item.send_id,call_id:item.call_id,reason:item.reason},null,2),'technical-json')});
+
+  if(item.retry_at)node(content,'p',(item.event==='conversation_wake_scheduled'?'下次评估：':'下次核对：')+time(item.retry_at),'hint');
+  if(item.decision_note)node(content,'p',item.decision_note,'hint');
   const clock=node(li,'time',time(item.time),'round-step-time');clock.dateTime=item.time;
  }
 
  let projectionSource=null,projected=[];
  function rounds(){if(projectionSource!==state.items){projected=window.WechatRounds.project(state.items);projectionSource=state.items}return projected}
+ async function diagnose(scope,a,status){const confirm=window.WechatDialogs.open({title:'手动诊断草稿',subtitle:'会使用当前模型并计入用量，只读取这条已保存草稿及仍有效的来源。不会发送微信、修改草稿或重试原任务。'}),result=node(confirm.body,'p','确认后开始诊断。','hint');const run=button(confirm.body,'开始诊断',async()=>{run.disabled=true;result.textContent='正在诊断…';try{const data=await window.WechatAdmin.api('/api/memory/'+scope+'/reply-audits/'+encodeURIComponent(a.id)+'/diagnose',{method:'POST',json:{}});if(!confirm.alive())return;const d=data.diagnosis||{},lines=[];if(d.action)lines.push('结论：'+({reply:'草稿可保留',silent:'建议不发送'}[d.action]||d.action));if(d.reason)lines.push('说明：'+d.reason);if(Array.isArray(d.messages)&&d.messages.length)lines.push('诊断后的草稿：'+d.messages.join('\n'));
+    result.textContent=lines.join('\n')||'诊断已完成；没有发送微信。';status.textContent='手动诊断完成，结果只在本窗口显示。'}catch(e){if(confirm.alive())result.textContent=e.message;status.textContent='手动诊断未完成；原草稿未修改，也没有发送微信。'}finally{run.disabled=false}});run.className='primary'}
+ const missingSources = '这次互动没有可核对的来源记录。';
+ function auditSources(audit, scope) {
+  const records = new Map();
+  const versions = new Map((audit.sources || []).filter(s => s.scope === scope).map(s => [s.event_id, s.revision]));
+  const referenced = new Set();
+  function add(id, revision, role) {
+   if (!id) return;
+   const key = JSON.stringify([id, revision]);
+   if (!records.has(key)) records.set(key, {id, revision, roles: new Set()});
+   records.get(key).roles.add(role);
+  }
+  for (const context of audit.contexts || []) {
+   const roles = new Map();
+   if (context.anchor_event_id) roles.set(context.anchor_event_id, '触发消息');
+   for (const id of context.media_source_ids || []) roles.set(id, id === context.anchor_event_id ? '触发消息及媒体来源' : '媒体来源');
+   for (const id of context.source_event_ids || []) if (!roles.has(id)) roles.set(id, '参考消息');
+   for (const [id, role] of roles) {
+    add(id, context.source_versions?.[id] || versions.get(id) || 0, role);
+    referenced.add(id);
+   }
+  }
+  for (const [id, revision] of versions) if (!referenced.has(id)) add(id, revision || 0, '上下文来源');
+  return Array.from(records.values());
+ }
+ function evidenceCard(parent,a,scope,status) {
+  const card=node(parent,'article',undefined,'conversation-summary');
+  const state=({validated:'已完成本地来源与对象校验',reviewed:'旧版模型诊断已完成',checked:'旧版模型诊断已完成',repaired_and_checked:'旧版诊断后草稿已校验',blocked:'已停止未核实内容',failed:'处理未完成',silent:'选择安静',initial_check_failed:'旧版模型诊断未完成，草稿未发送',repair_check_failed:'旧版修复诊断未完成，草稿未发送',review_rejected:'旧版诊断未通过，草稿未发送',evidence_changed:'来源已变化，草稿已作废'})[a.state]||(/failed|invalid|rejected|no_supported/.test(a.state||'')?'核验未通过，已停止发送':'回复依据');
+  node(card,'h3',state);node(card,'p',time(a.at),'hint');
+  for(const detail of reviewDetails(a))node(card,'p',detail,'hint review-detail');
+  for(const c of a.contexts||[]){
+   node(card,'p',c.target_ids?.length?'回复对象：'+c.target_ids.map(id=>window.WechatNames?.display(id,'群成员')||'群成员').join('、'):'面向当前会话');
+   if(c.quote_required)node(card,'p','已要求引用原消息，避免接错话。','hint');
+   if(c.risk_flags?.length)node(card,'p','已检查人物、来源或话题变化。','hint');
+  }
+  const actions=node(card,'div',undefined,'dialog-actions');
+  const sources=auditSources(a,scope);
+  if (!sources.length) node(card,'p',missingSources,'hint');
+  let remaining;
+  for (const [index,ref] of sources.entries()) {
+   if(index===4 && sources.length>5){
+    const details=node(card,'details');
+    node(details,'summary','其余 '+(sources.length-index)+' 条来源');
+    remaining=node(details,'div',undefined,'dialog-actions');
+   }
+   const label=Array.from(ref.roles).join('、')+' '+(index+1);
+   button(remaining||actions,label,()=>window.WechatMemory.source(scope,ref.id,ref.revision),'secondary reply-source-link');
+  }
+  button(actions,'手动诊断草稿',()=>diagnose(scope,a,status));
+ }
+ async function appendReplyEvidence(parent,thread,message){
+  if(!thread||!message){node(parent,'p',missingSources,'hint');return}
+  const section=node(parent,'section');section.hidden=true;
+  const params=new URLSearchParams({thread_id:thread,message_id:message,limit:'20'});
+  const list=node(section,'div'),status=node(section,'p','','hint');
+  const more=button(section,'查看更早的记录',load);more.hidden=true;
+  let offset=0;
+  async function load(){
+   more.disabled=true;
+   try{
+    params.set('offset',String(offset));
+    const data=await window.WechatAdmin.api('/api/reply-audits?'+params);
+    if(!section.isConnected)return;
+    for(const a of data.items||[])evidenceCard(list,a,data.scope,status);
+    offset=data.next_offset;more.hidden=!data.has_more;
+    status.textContent=list.childElementCount?'':missingSources;section.hidden=false;
+   }catch(e){
+    if(section.isConnected){section.hidden=false;status.textContent=e.status===404?missingSources:'未能读取回复依据：'+e.message}
+   }finally{more.disabled=false}
+  }
+  await load();
+ }
  function fillRound(body,round){
   body.classList.add('round-detail');if(round.entries.some(x=>x.event==='agent_task_started'))node(body,'p','本轮由先前保存的任务恢复触发，使用原任务检查点和最新会话；不是新收到的一条微信消息。','hint');
-  if(round.sent.length){const output=node(body,'div',undefined,'round-output');node(output,'h3','发送结果');for(const sent of round.sent){const accepted=['accepted','observed'].includes(sent.status);const text=node(output,'p',sent.content);node(text,'small',accepted?'微信已接受':statuses[sent.status]||'待核对',accepted?'receipt-accepted':'receipt-pending')}}
-  node(body,'p','处理步骤按发生时间排列。','hint');const timeline=node(body,'ol',undefined,'round-timeline');for(const item of round.entries)step(timeline,item);
+  if(round.sent.length){const output=node(body,'div',undefined,'round-output');node(output,'h3','发送结果');for(const sent of round.sent){const accepted=['accepted','observed'].includes(sent.status);readable(output,sent.content,'完整发送内容');node(output,'small',accepted?'微信已接受':statuses[sent.status]||'待核对',accepted?'receipt-accepted':'receipt-pending')}}
+  const timeline=node(body,'ol',undefined,'round-timeline');
+  for(const item of round.timeline){
+   if(item.event==='unread_batch_summary'){
+    const li=node(timeline,'li',undefined,'round-step');node(li,'span','接收','round-stage');
+    const group=node(li,'div',undefined,'round-step-content');
+    node(group,'strong','合并处理 '+round.batchSize+' 条未读消息');
+    const messages=round.batchMessages;
+    if(messages.length){const details=node(group,'details');node(details,'summary','查看收到的消息（'+messages.length+'）');details.addEventListener('toggle',()=>{if(!details.open||details.querySelector('ol'))return;const list=node(details,'ol',undefined,'round-timeline');for(const message of messages)step(list,message)})}
+   }else step(timeline,item);
+  }
+  if(round.timeline.length===0)node(body,'p','正在准备处理。','hint');
+  if(!round.system)appendReplyEvidence(body,round.thread_id,round.triggerMessageID);
+  if(round.hasDiagnostics){
+   const details=node(body,'details');node(details,'summary','原始运行记录（'+round.entries.length+'）');
+   details.addEventListener('toggle',()=>{if(!details.open||details.querySelector('ol'))return;const list=node(details,'ol',undefined,'round-timeline');for(const item of round.entries)step(list,item)});
+  }
  }
  function openRound(round){const popup=window.WechatDialogs.open({title:round.source+' · 执行过程',subtitle:time(round.time)+' · '+(roundStates[round.status]||round.status)});fillRound(popup.body,round);return popup}
  function roundRow(parent,round){
   const card=node(parent,'article',undefined,'round-card');card.dataset.roundId=round.id;card.dataset.status=round.status;
-  const summary=node(card,'button',undefined,'round-summary');summary.type='button';summary.setAttribute('aria-haspopup','dialog');summary.addEventListener('click',()=>openRound(round));
+  const summary=node(card,'button',undefined,'round-summary');summary.type='button';summary.setAttribute('aria-label','查看'+window.WechatNames.display(round.thread_id,round.source)+'的完整执行回合');summary.addEventListener('click',()=>openRound(round));
   const clock=node(summary,'time',time(round.time),'round-time');clock.dateTime=round.time;
   const overview=node(summary,'span',undefined,'round-overview'),head=node(overview,'span',undefined,'round-head');
   const source=node(head,'strong',window.WechatNames.display(round.thread_id,round.source),'round-source');source.title=round.thread_id||'';const resumed=round.entries.some(x=>x.event==='agent_task_started'),backlog=round.entries.some(x=>x.event==='backlog_conversation_started');node(head,'span',round.system?'系统':backlog?'未读汇总':resumed?'任务续办':round.source_kind==='group'?'群聊':'私聊','round-kind');
-  const preview=round.received[0]?.content||(round.proactive?'自主发起':round.entries.find(x=>x.content)?.content)||label(round.entries[0]);
+  const preview=activitySummary(round)||round.received.map(x=>x.content).filter(Boolean).join('\n\n')||round.timeline.find(x=>x.content)?.content||label(round.entries[0]);
   node(overview,'span',preview,'round-preview');
-  if(round.received.length>1)node(overview,'small','本轮含 '+round.received.length+' 条消息');
-  const outcome=node(summary,'span',undefined,'round-outcome');node(outcome,'span',round.system?'运行记录':roundStates[round.status]||round.status,'round-status');
-  node(outcome,'small',round.entries.length+' 个步骤'+(round.tools?' / '+round.tools+' 次工具':'')+(round.duration>=1000?' / '+(round.duration/1000).toFixed(round.duration<10000?1:0)+' 秒':''));return card;
+  for(const sent of round.sent)if(sent.content)node(overview,'span','发送：'+sent.content,'round-preview round-sent');
+  if(!round.batchSize&&round.received.length>1)node(overview,'small','本轮含 '+round.received.length+' 条消息');
+  const outcome=node(summary,'span',undefined,'round-outcome');node(outcome,'span',round.system?'运行记录':window.WechatRounds.groupLabels[round.group],'round-status');
+  node(outcome,'small',[round.group==='done'&&round.status!=='completed'?roundStates[round.status]:'',round.tools?round.tools+' 次工具':'',round.duration>=1000?(round.duration/1000).toFixed(round.duration<10000?1:0)+' 秒':''].filter(Boolean).join(' / '));return card;
  }
  function openConversation(thread,title){const popup=window.WechatDialogs.open({title:(title||thread)+' · 执行回合'});const items=rounds().filter(x=>!x.system&&x.thread_id===thread);if(!items.length)node(popup.body,'p','当前活跃日志没有这个会话的执行记录。更早的步骤可在历史日志归档中查看。','empty');for(const round of items)roundRow(popup.body,round);return popup}
  function openSend(id,thread){const candidates=rounds().filter(x=>(!thread||x.thread_id===thread)&&x.entries.some(e=>e.send_id===id));if(candidates.length===1)return openRound(candidates[0]);const popup=window.WechatDialogs.open({title:'发送记录'});node(popup.body,'p','当前活跃日志没有唯一匹配的发送记录，可在历史日志归档中查看。','empty');return popup}
@@ -97,13 +250,14 @@
  function render(){
   const pane=$('#log-list'),position=pane.scrollTop,pageY=window.scrollY;
   const anchor=[...pane.children].find(el=>el.getBoundingClientRect().bottom>pane.getBoundingClientRect().top),anchorID=anchor?.dataset.roundId,offset=anchor?anchor.offsetTop-pane.scrollTop:0;
-  pane.replaceChildren();const all=rounds(),filtered=all.filter(matches);
+  pane.replaceChildren();const all=window.WechatRounds.project(dateReady?dateItems:state.items).filter(r=>dateKey(r.time)===$('#log-date').value),filtered=all.filter(matches);
   $('#log-count').textContent=filtered.length+' 个'+($('#log-view').value==='system'?'系统时段':'执行回合');
-  $('#round-total').textContent=all.filter(x=>!x.system).length;$('#round-waiting').textContent=all.filter(x=>!x.system&&['running','waiting','received'].includes(x.status)).length;$('#round-errors').textContent=all.filter(x=>!x.system&&x.status==='failed').length;$('#round-silent').textContent=all.filter(x=>!x.system&&x.status==='silent').length;
-  $('#log-more').hidden=filtered.length<=limit;if(!filtered.length)node(pane,'p','没有匹配的执行记录，试试调整筛选。','empty');for(const round of filtered.slice(0,limit))roundRow(pane,round);
-  if(anchorID){const restored=[...pane.children].find(el=>el.dataset.roundId===anchorID);pane.scrollTop=restored?restored.offsetTop-offset:position}else pane.scrollTop=position;window.scrollTo({top:pageY,behavior:'instant'});
+  const counts={pending:0,active:0,done:0};for(const round of all)if(!round.system)counts[round.group]++;
+  for(const [group,count] of Object.entries(counts))$('#round-'+group).textContent=count;
+  if(!filtered.length)node(pane,'p','这一天没有匹配的执行回合。','empty');for(const round of filtered)roundRow(pane,round);
+  if(anchorID){const restored=[...pane.children].find(el=>el.dataset.roundId===anchorID);pane.scrollTop=restored?restored.offsetTop-offset:position}else pane.scrollTop=position;
  }
- function consume(items,latest=false){for(const item of items){window.WechatNames?.remember(item.thread_id,item.source);window.WechatNames?.remember(item.sender,item.sender_name)}state.items=items;state.pending=null;$('#log-new').hidden=true;render();window.dispatchEvent(new CustomEvent('wechat-admin:activity-updated',{detail:{rounds:rounds()}}));if(latest)$('#log-list').scrollTop=0}
+ function consume(items,latest=false){for(const item of items){window.WechatNames?.remember(item.thread_id,item.source);window.WechatNames?.remember(item.sender,item.sender_name)}state.items=items;if(dateReady&&$('#log-date').value===today()){const merged=new Map(dateItems.map(x=>[key(x),x]));for(const x of items)if(dateKey(x.time)===today())merged.set(key(x),x);dateItems=[...merged.values()]}state.pending=null;$('#log-new').hidden=true;render();window.dispatchEvent(new CustomEvent('wechat-admin:activity-updated',{detail:{rounds:rounds()}}));if(latest)$('#log-list').scrollTop=0}
  async function refresh(force=false){
   if(!window.WechatAdmin?.isAuthenticated()||state.busy)return;
   state.busy=true;const stamp=epoch;$('#refresh-logs').disabled=true;
@@ -114,15 +268,39 @@
    if(items.length===state.items.length&&items.every((item,index)=>key(item)===key(state.items[index])))return;
    if(force===true||$('#log-follow-latest').checked){consume(items,force!==true);return}
    state.pending=items;const old=new Set(state.items.map(key)),changed=items.filter(item=>!old.has(key(item))),rounds=window.WechatRounds.project(changed);
-   $('#log-new').textContent=rounds.length?'有 '+rounds.length+' 组进展，点击载入':'执行记录已更新';$('#log-new').hidden=false;window.dispatchEvent(new Event('wechat-admin:activity-pending'));
+   $('#log-new').textContent=rounds.length?'有 '+rounds.length+' 组进展，可从侧栏刷新':'执行记录已更新';$('#log-new').hidden=false;window.dispatchEvent(new Event('wechat-admin:activity-pending'));
   }catch(error){if(stamp===epoch)$('#log-load-error').textContent='读取失败：'+error.message+'。当前内容已保留。'}finally{state.busy=false;$('#refresh-logs').disabled=false}
  }
- ['log-category','log-source','log-view','log-status'].forEach(id=>$('#'+id).addEventListener('change',()=>{limit=60;render()}));
- let searchTimer;$('#log-search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{limit=60;render()},150)});
- $('#log-new').addEventListener('click',()=>{if(state.pending)consume(state.pending)});
- $('#log-more').addEventListener('click',()=>{limit+=60;render()});
+ ['log-category','log-source','log-view','log-status'].forEach(id=>$('#'+id).addEventListener('change',render));
+ let searchTimer;$('#log-search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{render()},150)});
+
+ async function loadDate(){
+  const request=++dateEpoch,stamp=epoch,day=$('#log-date').value;if(!day)return;
+  const progress=$('#log-date-progress');progress.textContent='正在读取当天记录…';
+  let after='',items=[],batches=0;dateReady=false;dateItems=[];render();
+  try{do{
+   const q=new URLSearchParams({date:day});if(after)q.set('after',after);
+   const result=await window.WechatAdmin.api('/api/logs?'+q);
+   if(request!==dateEpoch||stamp!==epoch)return;
+   items.push(...(result.items||[]));batches+=result.archive_batches||0;
+   const seen=new Set();dateItems=items.filter(x=>{const id=key(x);if(seen.has(id))return false;seen.add(id);return true});dateReady=true;render();
+   after=result.next||'';progress.textContent=after?'正在补齐当天历史记录…':'';
+  }while(after)}catch(error){if(request===dateEpoch&&stamp===epoch)progress.textContent='当天记录尚未读完，请点击刷新重试。'}
+ }
+
+ refresh=window.WechatRefresh.join(refresh);
+ $('#log-date').addEventListener('change',loadDate);
+ $('#log-today').addEventListener('click',()=>{$('#log-date').value=today();loadDate()});
+ window.WechatRefresh.bind($('#refresh-logs'),async()=>{await refresh();if(state.pending)consume(state.pending);await loadDate()});
+ window.addEventListener('wechat-admin:navigate',event=>{if(event.detail.section==='logs')loadDate()});
  $('#log-follow-latest').addEventListener('change',()=>{if($('#log-follow-latest').checked&&state.pending)consume(state.pending,true)});
  window.addEventListener('wechat-admin:logs-refresh',()=>refresh());
- window.WechatActivity={rounds,openRound,openConversation,openSend,roundForMessage,time,status:round=>roundStates[round.status]||round.status,refresh:()=>refresh(true),loadPending:()=>{if(state.pending)consume(state.pending)}};
- window.addEventListener('wechat-admin:logout',()=>{epoch++;state.items=[];state.pending=null;state.ready=false;$('#log-list').replaceChildren();$('#log-search').value='';$('#log-new').hidden=true});
+ function activitySummary(round){
+  if(round.batchSize)return '合并处理 '+round.batchSize+' 条未读消息';
+  if(!round.proactive)return '';
+  const decision=round.timeline.findLast(e=>e.event==='character_decision');
+  return decision&&round.status==='silent'?'自主评估 · '+label(decision):'自主发言评估';
+ }
+ window.WechatActivity={rounds,openRound,openConversation,openSend,roundForMessage,time,activitySummary,status:round=>round.system?'运行记录':window.WechatRounds.groupLabels[round.group],refresh:()=>refresh(true),loadPending:()=>{if(state.pending)consume(state.pending)}};
+ window.addEventListener('wechat-admin:logout',()=>{epoch++;dateEpoch++;dateReady=false;dateItems=[];$('#log-date').value=today();state.items=[];state.pending=null;state.ready=false;$('#log-list').replaceChildren();$('#log-search').value='';$('#log-new').hidden=true});
 })();

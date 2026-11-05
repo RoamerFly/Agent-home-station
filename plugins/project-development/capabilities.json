@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "project.workspace_read",
+      "implementation": "ready",
+      "description": "Host-bound authorized project workspace read",
+      "permissions": [
+        "workspace.read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tool",
+          "arguments"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true
+    },
+    {
+      "id": "project.workspace_write",
+      "implementation": "ready",
+      "description": "Host-bound authorized project workspace write",
+      "permissions": [
+        "workspace.write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tool",
+          "arguments"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true
+    },
+    {
+      "id": "project.workspace_execute",
+      "implementation": "ready",
+      "description": "Host-bound authorized project workspace execute",
+      "permissions": [
+        "process.execute"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tool",
+          "arguments"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true
+    }
+  ]
+}

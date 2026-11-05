@@ -30,6 +30,8 @@ func TestProcessHistoryConcurrencyAndDurationHaveNoQuota(t *testing.T) {
 		j.items[fmt.Sprint("running-", i)] = &Process{State: "running"}
 	}
 	c := Defaults()
+	requireLinuxSandbox(t)
+	c.Isolation = &Isolation{}
 	c.Mode = "full"
 	c.Roots = []string{root}
 	cmd := "printf ok"

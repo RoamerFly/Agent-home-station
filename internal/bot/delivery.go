@@ -19,32 +19,115 @@ type reliableNative interface {
 	Catalog(context.Context, string, string, string, string) (linuxnative.CatalogPage, error)
 }
 type delivery struct {
-	Trace            string                 `json:"trace"`
-	Thread           string                 `json:"thread"`
-	Text             string                 `json:"text"`
-	Bubble           int                    `json:"bubble"`
-	Key              string                 `json:"key"`
-	ID               string                 `json:"id"`
-	State            string                 `json:"state"`
-	Attempts         int                    `json:"attempts"`
-	Checks           int                    `json:"checks"`
-	Created          time.Time              `json:"created"`
-	Next             time.Time              `json:"next"`
-	Quote            *linuxnative.ToolQuote `json:"quote,omitempty"`
-	Input            companion.Input        `json:"input"`
-	Reason           string                 `json:"reason"`
-	PreviousKeys     []string               `json:"previous_keys,omitempty"`
-	UncertainRounds  int                    `json:"uncertain_rounds,omitempty"`
-	PreviousTexts    []string               `json:"previous_texts,omitempty"`
-	RetryReviewReady bool                   `json:"retry_review_ready,omitempty"`
-	SubmittedText    string                 `json:"submitted_text,omitempty"`
+	ReviewEvidence *companion.GenerationEvidence `json:"review_evidence,omitempty"`
+	Trace          string                        `json:"trace"`
+	Thread         string                        `json:"thread"`
+	Text           string                        `json:"text"`
+	Bubble         int                           `json:"bubble"`
+	Key            string                        `json:"key"`
+	ID             string                        `json:"id"`
+	ServerID       string                        `json:"server_id,omitempty"`
+	// AcceptedAt is populated only from an outgoing message record observed in
+	// the native catalogue. Tool submission time is not a delivery receipt.
+	AcceptedAt      string                 `json:"accepted_at,omitempty"`
+	State           string                 `json:"state"`
+	Attempts        int                    `json:"attempts"`
+	Checks          int                    `json:"checks"`
+	Created         time.Time              `json:"created"`
+	Next            time.Time              `json:"next"`
+	Quote           *linuxnative.ToolQuote `json:"quote,omitempty"`
+	Input           companion.Input        `json:"input"`
+	Reason          string                 `json:"reason"`
+	PreviousKeys    []string               `json:"previous_keys,omitempty"`
+	UncertainRounds int                    `json:"uncertain_rounds,omitempty"`
+	PreviousTexts   []string               `json:"previous_texts,omitempty"`
+	SubmittedText   string                 `json:"submitted_text,omitempty"`
+	// Cancelled means the originating task was withdrawn after this delivery
+	// might already have reached WeChat.  It deliberately keeps the record in
+	// reconciliation mode: we may read the old idempotency key, but must never
+	// create a replacement text intent.
+	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 func (w *Worker) markSending(trace string) { w.queuePhase(trace, "sending") }
 
+// deliveryMemoryKey uses only an identity returned by the native sender. It
+// deliberately does not fall back to a request trace, text hash or plan slot:
+// one request may yield multiple equal text bubbles, while a recovered native
+// receipt must map to exactly one remembered bubble.
+func deliveryMemoryKey(d *delivery) string {
+	if d == nil {
+		return ""
+	}
+	if d.ID != "" {
+		return "native:" + d.ID
+	}
+	if d.ServerID != "" {
+		return "server:" + d.ServerID
+	}
+	return ""
+}
+
+// legacyReceiptMemoryKey is the exact deterministic identity produced by the
+// previous receipt-recovery implementation. It is available only while the
+// current durable delivery still proves all of its inputs; it must never be
+// substituted with a plan slot, request trace, or text-derived value.
+func legacyReceiptMemoryKey(d *delivery) string {
+	if d == nil || d.ID == "" || d.Key == "" || d.Created.IsZero() {
+		return ""
+	}
+	return "delivery-" + messageHash(d.Key+"|"+d.ID+"|"+d.Created.UTC().Format(time.RFC3339Nano))
+}
+
+// acceptTextMemory writes the actual accepted outgoing bubble. Native
+// deliveries use their receipt identity so restart/reconciliation is
+// idempotent; non-native transports retain the legacy append-only behavior
+// because no reliable receipt identity exists to deduplicate against.
+func deliveryAcceptedTime(d *delivery, fallback time.Time) time.Time {
+	if d != nil && d.AcceptedAt != "" {
+		if at, err := time.Parse(time.RFC3339Nano, d.AcceptedAt); err == nil {
+			return at
+		}
+		if at, err := time.Parse(time.RFC3339, d.AcceptedAt); err == nil {
+			return at
+		}
+	}
+	return fallback
+}
+
+func (w *Worker) acceptTextMemory(c *companion.Engine, input companion.Input, bubble int, text string) error {
+	return w.acceptTextMemoryAt(c, input, bubble, text, time.Now())
+}
+
+func (w *Worker) acceptTextMemoryAt(c *companion.Engine, input companion.Input, bubble int, text string, fallback time.Time) error {
+	if w.runtime != nil {
+		for _, d := range w.runtime.Deliveries {
+			if d.Thread != input.Thread || d.Trace != input.TraceID || d.Bubble != bubble || d.State != "accepted" {
+				continue
+			}
+			if d.Text != text {
+				return companion.ErrDeliveryMemoryConflict
+			}
+			if key := deliveryMemoryKey(d); key != "" {
+				return c.Store.AcceptedDeliveryWithLegacyReceipt(input, text, key, legacyReceiptMemoryKey(d), c.Config, deliveryAcceptedTime(d, fallback))
+			}
+			break
+		}
+	}
+	return c.Store.Accepted(input, text, c.Config, fallback)
+}
+
 func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int, text string) (sending.Receipt, error) {
+	if w.surfOrigin(input) && w.config.SurfAllowed != nil && !w.config.SurfAllowed(input.Thread) {
+		return sending.Receipt{}, errors.New("surf_share_permission_changed")
+	}
 	native, ok := w.sender.(reliableNative)
 	if !ok || w.runtime == nil {
+		var err error
+		input, text, err = w.prepareGroundedText(ctx, input, text)
+		if err != nil {
+			return sending.Receipt{}, replyAdmissionFailure(err)
+		}
 		return w.sender.SendText(ctx, sending.TextRequest{Recipient: input.Thread, Text: text})
 	}
 	if len(w.runtime.Deliveries) >= 3000 {
@@ -61,9 +144,14 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 			return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_reconciliation_pending", IntentID: old.ID}
 		}
 	}
+	var err error
+	input, text, err = w.prepareGroundedText(ctx, input, text)
+	if err != nil {
+		return sending.Receipt{}, replyAdmissionFailure(err)
+	}
 	d := &delivery{Trace: input.TraceID, Thread: input.Thread, Text: text, Bubble: bubble, Created: time.Now().UTC(), State: "prepared", Input: input}
 	d.Key = "bot-" + messageHash(input.Thread + "|" + input.TraceID + fmt.Sprint(bubble))[:48]
-	if (w.config.Options.QuoteReplies && input.Directed || input.QuoteSharedMessage) && input.QuoteServerID != "" && input.TraceID != "" {
+	if (w.config.Options.QuoteReplies && input.Directed || input.QuoteSharedMessage || input.ReplyContext != nil && input.ReplyContext.QuoteRequired) && input.QuoteServerID != "" && input.TraceID != "" {
 		d.Quote = replyQuote(input)
 	}
 	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
@@ -77,6 +165,9 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 	return w.submitDelivery(ctx, native, d, false)
 }
 func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delivery, lookupFirst bool) (sending.Receipt, error) {
+	if d.ReviewEvidence != nil {
+		ctx = companion.WithStoredGenerationEvidence(ctx, *d.ReviewEvidence)
+	}
 	status := linuxnative.ToolStatus{}
 	var err error
 	if lookupFirst {
@@ -86,6 +177,17 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 		}
 	}
 	if !lookupFirst || errors.Is(err, linuxnative.ErrToolNotFound) {
+		if w.deliveryCancelled(d) {
+			return w.cancelledDelivery(d)
+		}
+		in, text, validationErr := w.prepareGroundedText(ctx, d.Input, d.Text)
+		if validationErr != nil {
+			failure := replyAdmissionFailure(validationErr)
+			d.State, d.Reason = "stopped", sending.FailureReason(failure)
+			w.persistErr = w.saveRuntime()
+			return sending.Receipt{}, failure
+		}
+		d.Input, d.Text = in, text
 		if gate := w.sendGate(d.Thread); time.Now().Before(gate) {
 			d.State, d.Next, d.Reason = "prepared", gate, "delivery_pacing"
 			w.persistErr = w.saveRuntime()
@@ -107,8 +209,16 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 			return w.waitDelivery(d, "send_outcome_unknown")
 		}
 	}
-	d.ID = status.ID
 	for {
+		if !textReceiptMatches(status, d.Thread, d.ID) {
+			return w.waitDelivery(d, "receipt_identity_mismatch")
+		}
+		if status.ID != "" {
+			d.ID = status.ID
+		}
+		if status.ServerID != "" {
+			d.ServerID = status.ServerID
+		}
 		d.State = status.State
 		d.Reason = status.Reason
 		if e := w.saveRuntime(); e != nil {
@@ -146,16 +256,45 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 }
 func (w *Worker) waitDelivery(d *delivery, reason string) (sending.Receipt, error) {
 	d.State = "waiting"
+	d.Checks = 0
+	w.deferReceiptLookup(d, reason)
+	if w.persistErr != nil {
+		return sending.Receipt{}, w.persistErr
+	}
+	return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_reconciliation_pending", IntentID: d.ID}
+}
+
+// Record the sampled deadline once per inconclusive observation. Restarts and
+// plan pacing ticks must not sample again before this deadline expires.
+func (w *Worker) deferReceiptLookup(d *delivery, reason string) {
 	d.Reason = reason
 	d.UncertainRounds++
-	d.RetryReviewReady = false
-	d.Checks = 0
 	d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds))
-	if err := w.saveRuntime(); err != nil {
-		w.persistErr = err
-		return sending.Receipt{}, err
+	w.persistErr = w.saveRuntime()
+	if w.persistErr == nil {
+		w.recordDeliveryWait(d, reason)
 	}
-	w.recordDeliveryWait(d, "delivery_random_backoff")
+}
+
+func (w *Worker) deliveryCancelled(d *delivery) bool {
+	return d.Cancelled || !w.taskActive(d.Input)
+}
+
+// cancelledDelivery prevents a not-yet-submitted draft from leaving the
+// process.  Once a native intent exists, retain only the immutable key and
+// evidence so reconciliation can account for a late receipt; it is never a
+// permission to send a replacement message.
+func (w *Worker) cancelledDelivery(d *delivery) (sending.Receipt, error) {
+	d.Cancelled = true
+	d.Reason = "task_cancelled_before_delivery"
+	if d.ID == "" && d.SubmittedText == "" && len(d.PreviousKeys) == 0 {
+		d.State = "stopped"
+	} else {
+		d.State = "cancelled_reconciling"
+		d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds+1))
+	}
+	w.persistErr = w.saveRuntime()
+	w.activity(Record{Event: "delivery_stopped", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Reason: d.Reason, Status: d.State, SendID: d.ID})
 	return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_reconciliation_pending", IntentID: d.ID}
 }
 
@@ -163,6 +302,9 @@ func (w *Worker) waitDelivery(d *delivery, reason string) (sending.Receipt, erro
 // original incoming message, not the ID of the background task that completed.
 func replyQuote(in companion.Input) *linuxnative.ToolQuote {
 	id := in.OriginTraceID
+	if in.ReplyContext != nil && in.ReplyContext.AnchorMessageID != "" {
+		id = in.ReplyContext.AnchorMessageID
+	}
 	if id == "" {
 		id = in.TraceID
 	}
@@ -190,8 +332,35 @@ func deliveryBackoff(baseSeconds, round int) time.Duration {
 func DeliveryRetryBackoff(round int) time.Duration { return deliveryBackoff(120, round) }
 
 func (w *Worker) recordDeliveryWait(d *delivery, reason string) {
-	w.activity(Record{Event: "delivery_waiting", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, SendID: d.ID, Reason: reason, Status: "waiting", RetryAttempts: d.Attempts, RetryAt: d.Next.Format(time.RFC3339)})
+	event := "delivery_waiting"
+	if d.Bubble < 0 {
+		// A late acknowledgement for progress does not reopen the parent turn.
+		event = "tool_progress_receipt_waiting"
+	}
+	w.activity(Record{Event: event, Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, SendID: d.ID, Reason: reason, Status: "waiting", RetryAttempts: d.Attempts, RetryAt: d.Next.Format(time.RFC3339)})
 }
+
+// Prefer the known native job. A missing job can still be resolved by the
+// original idempotency key. Neither read creates a new send.
+func textReceiptMatches(status linuxnative.ToolStatus, thread, id string) bool {
+	return (status.ThreadID == "" || status.ThreadID == thread) && (status.Kind == "" || status.Kind == "text") && (id == "" || status.ID == "" || status.ID == id)
+}
+func lookupTextReceipt(ctx context.Context, n reliableNative, d *delivery) (linuxnative.ToolStatus, error) {
+	checked := func(status linuxnative.ToolStatus, err error) (linuxnative.ToolStatus, error) {
+		if err == nil && !textReceiptMatches(status, d.Thread, d.ID) {
+			return linuxnative.ToolStatus{}, errors.New("receipt_identity_mismatch")
+		}
+		return status, err
+	}
+	if d.ID != "" {
+		status, err := n.ToolSendStatus(ctx, d.ID)
+		if !errors.Is(err, linuxnative.ErrToolNotFound) {
+			return checked(status, err)
+		}
+	}
+	return checked(n.LookupSend(ctx, d.Key))
+}
+
 func (w *Worker) reconcileDeliveries(ctx context.Context) {
 	n, ok := w.sender.(reliableNative)
 	if !ok {
@@ -206,9 +375,15 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		}
 		if d.Bubble < 0 {
 			readCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-			status, err := n.LookupSend(readCtx, d.Key)
+			status, err := lookupTextReceipt(readCtx, n, d)
 			cancel()
 			if err == nil && status.State == "accepted" {
+				if status.ID != "" {
+					d.ID = status.ID
+				}
+				if status.ServerID != "" {
+					d.ServerID = status.ServerID
+				}
 				w.acceptReconciled(d)
 				continue
 			}
@@ -223,8 +398,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 				continue
 			}
 			if time.Since(d.Created) < 15*time.Minute && (time.Since(d.Created) < 5*time.Minute || scanErr != nil || !complete) {
-				d.Next = time.Now().Add(30 * time.Second)
-				w.persistErr = w.saveRuntime()
+				w.deferReceiptLookup(d, "receipt_lookup_failed")
 				continue
 			}
 			d.State = "stopped"
@@ -232,7 +406,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 			continue
 		}
-		if d.State == "prepared" {
+		if d.State == "prepared" && !d.Cancelled {
 			superseded := false
 			for _, p := range w.runtime.Plans {
 				if p.Input.Thread == d.Thread && p.Input.TraceID == d.Trace && p.Slot == d.Bubble && len(p.Updates) > 0 {
@@ -259,6 +433,16 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		if c, ok := w.model.(*companion.Engine); ok && (!c.Config.Permissions.ReplyText || c.Config.Quiet(time.Now()) && d.Input.Mode != "direct") {
 			continue
 		}
+		if w.deliveryCancelled(d) {
+			// A withdrawn text may have crossed the process boundary already.
+			// Keep looking up that exact intent below, but never enter a submit
+			// branch or generate a new idempotency key.
+			d.Cancelled = true
+			if d.State != "cancelled_reconciling" {
+				d.State, d.Reason = "cancelled_reconciling", "task_cancelled_before_delivery"
+				w.activity(Record{Event: "delivery_stopped", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Reason: d.Reason, Status: d.State, SendID: d.ID})
+			}
+		}
 		// Any earlier attempt may receive a late receipt. Never create a fresh
 		// intent until every previous key has been checked successfully.
 		historyClear := true
@@ -266,7 +450,12 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			readCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 			old, e := n.LookupSend(readCtx, key)
 			cancel()
+			if e == nil && !textReceiptMatches(old, d.Thread, "") {
+				historyClear = false
+				break
+			}
 			if e == nil && old.State == "accepted" {
+				d.ServerID = old.ServerID
 				d.ID = old.ID
 				for i, oldKey := range d.PreviousKeys {
 					if oldKey == key && i < len(d.PreviousTexts) {
@@ -285,12 +474,15 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		}
 		if !historyClear {
 			if d.State != "accepted" {
-				d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds))
-				w.persistErr = w.saveRuntime()
+				w.deferReceiptLookup(d, "previous_receipt_unverified")
 			}
 			continue
 		}
 		if d.State == "prepared" || d.State == "submitting" {
+			if d.Cancelled {
+				_, _ = w.cancelledDelivery(d)
+				continue
+			}
 			if d.Attempts > 0 && !w.config.Options.RetryUncertain {
 				d.Next = time.Now().Add(time.Minute)
 				w.persistErr = w.saveRuntime()
@@ -305,7 +497,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			continue
 		}
 		readCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		status, err := n.LookupSend(readCtx, d.Key)
+		status, err := lookupTextReceipt(readCtx, n, d)
 		cancel()
 		if err == nil && (status.State == "queued" || status.State == "sending" || status.State == "submitting" || status.State == "running") {
 			d.Next = time.Now().Add(15 * time.Second)
@@ -313,6 +505,12 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			continue
 		}
 		if err == nil && status.State == "accepted" {
+			if status.ID != "" {
+				d.ID = status.ID
+			}
+			if status.ServerID != "" {
+				d.ServerID = status.ServerID
+			}
 			if d.SubmittedText != "" {
 				d.Text = d.SubmittedText
 			}
@@ -325,7 +523,8 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 			continue
 		}
-		if err == nil && status.State == "failed" && status.Retryable {
+		confirmedRetryable := err == nil && status.State == "failed" && status.Retryable
+		if confirmedRetryable {
 			d.Reason = status.Reason
 		}
 		// Healthy catalog scans are mandatory; an unavailable read is never
@@ -336,8 +535,20 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			continue
 		}
 		if err != nil && !errors.Is(err, linuxnative.ErrToolNotFound) || scanErr != nil || !complete || !w.sender.Ready() {
-			d.Next = time.Now().Add(30 * time.Second)
-			w.persistErr = w.saveRuntime()
+			w.deferReceiptLookup(d, "receipt_lookup_failed")
+			continue
+		}
+		if d.Cancelled {
+			// Cancellation changes the recovery rule, not the evidence: keep
+			// checking the original key for a late receipt, but do not resend.
+			w.deferReceiptLookup(d, "delivery_receipt_unverified")
+			continue
+		}
+		if !confirmedRetryable {
+			// An absent, unreadable or otherwise unknown idempotency key is never
+			// proof that WeChat did not receive the text.  Preserve the original
+			// draft and evidence, and retry only the lookup on a randomized delay.
+			w.deferReceiptLookup(d, "delivery_receipt_unverified")
 			continue
 		}
 		if !w.config.Options.RetryUncertain {
@@ -346,27 +557,19 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 			continue
 		}
-		d.Checks++
-		d.Next = time.Now().Add(15 * time.Second)
-		if w.persistErr = w.saveRuntime(); w.persistErr != nil {
-			return
-		}
-		if d.Checks < 2 {
-			continue
-		}
 		if !w.taskActive(d.Input) {
-			d.State, d.Reason = "stopped", "task_cancelled_before_delivery"
-			w.persistErr = w.saveRuntime()
+			_, _ = w.cancelledDelivery(d)
 			continue
 		}
-		if !d.RetryReviewReady {
-			if c, ok := w.model.(*companion.Engine); ok {
-				w.reviewUncertainDelivery(ctx, c, d)
-				continue // Read the inbox and late receipts again before submitting.
-			}
+		if w.surfOrigin(d.Input) && w.config.SurfAllowed != nil && !w.config.SurfAllowed(d.Thread) {
+			d.State, d.Reason = "stopped", "surf_share_permission_changed"
+			w.persistErr = w.saveRuntime()
+			w.activity(Record{Event: "delivery_stopped", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Reason: d.Reason, Status: "stopped", Origin: "surf"})
+			continue
 		}
-		// Absence in local memory is not proof of non-delivery. The owner's
-		// explicit retry policy permits another intent after two healthy scans.
+		// A fresh idempotency key is allowed only after the native service has
+		// explicitly reported a terminal *retryable* failure.  Unknown outcomes
+		// remain lookup-only and never invoke another model review.
 		d.Attempts++
 		d.Checks = 0
 		{
@@ -383,12 +586,13 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			d.Key = fmt.Sprintf("%s-retry%d", base, d.Attempts)
 		}
 		d.ID = ""
+		d.ServerID = ""
 		d.SubmittedText = ""
 		d.State = "prepared"
 		if w.persistErr = w.saveRuntime(); w.persistErr != nil {
 			return
 		}
-		w.activity(Record{Event: "delivery_retry", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, Reason: "delayed_retry_after_two_sync_checks", Status: "retrying", SendID: d.ID, RetryAttempts: d.Attempts})
+		w.activity(Record{Event: "delivery_retry", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, Reason: "confirmed_retryable_native_failure", Status: "retrying", SendID: d.ID, RetryAttempts: d.Attempts})
 		sendCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		_, err = w.submitDelivery(sendCtx, n, d, true)
 		cancel()
@@ -414,12 +618,7 @@ func (w *Worker) acceptReconciled(d *delivery) {
 				return
 			}
 		}
-		var err error
-		if d.Bubble < 0 {
-			err = c.Store.AcceptedDelivery(d.Input, d.Text, "progress-"+d.Trace, c.Config, time.Now())
-		} else {
-			err = c.Accepted(d.Input, d.Text)
-		}
+		err := w.acceptTextMemory(c, d.Input, d.Bubble, d.Text)
 		if err != nil {
 			w.config.Log("memory_save_failed_after_accepted_reply")
 		}
@@ -451,6 +650,8 @@ func (w *Worker) observedDelivery(ctx context.Context, n reliableNative, d *deli
 			}
 			if mString(m, "direction") == "outgoing" && matched && mString(m, "serverId") != "" {
 				d.Text = body
+				d.ServerID = mString(m, "serverId")
+				d.AcceptedAt = mString(m, "createdAt")
 				return true, true, nil
 			}
 		}

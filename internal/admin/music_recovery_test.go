@@ -12,14 +12,43 @@ import (
 	"wechat-bot/internal/linuxnative"
 )
 
-type recoverSongNative struct{ *fakeNative }
+type recoverSongNative struct {
+	*fakeNative
+	createdAt string
+}
 
 func (n *recoverSongNative) Message(_ context.Context, id string) (linuxnative.Message, error) {
-	return linuxnative.Message{ID: id, ThreadID: "filehelper", SenderID: "synthetic-owner", Direction: "incoming", Body: "唱个生日歌", CreatedAt: time.Now().Format(time.RFC3339)}, nil
+	return linuxnative.Message{ID: id, ThreadID: "filehelper", SenderID: "synthetic-owner", Direction: "incoming", Body: "唱个生日歌", CreatedAt: n.createdAt}, nil
 }
+
+func TestGroupMusicRecoveryBindsOriginalSourceAcrossNewTrace(t *testing.T) {
+	f, _, _ := localMusicPluginFixture(t, "http://127.0.0.1:6188")
+	at := time.Now().UTC()
+	msg := linuxnative.Message{ID: "request", ServerID: "777", ThreadID: "test@chatroom", SenderID: "owner", Direction: "incoming", Type: 1, Body: "唱一首歌", CreatedAt: at.Format(time.RFC3339Nano)}
+	f.manager.native = &localMusicRecoveryNative{fakeNative: f.native, message: msg}
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: msg.ThreadID, Mode: "mention"})
+	f.login()
+	body := map[string]string{"message_id": msg.ID}
+	if code, _, _ := f.request("POST", "/api/agent/recover-music-message", body, true, true); code != 409 {
+		t.Fatalf("unbound group request status %d", code)
+	}
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: msg.ThreadID, Sender: msg.SenderID, TraceID: msg.ID, Text: msg.Body, MessageTime: msg.CreatedAt, Source: &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: msg.ID, ServerID: msg.ServerID}}
+	if err := f.manager.memory.Observe(in, f.manager.Config().Companion, at); err != nil {
+		t.Fatal(err)
+	}
+	if code, res, _ := f.request("POST", "/api/agent/recover-music-message", body, true, true); code != 201 {
+		t.Fatalf("recovery status %d: %s", code, res)
+	}
+	claimed, err := f.manager.claimAgentTask(at.Add(time.Minute), func(string) bool { return false })
+	if err != nil || claimed == nil || claimed.TraceID == msg.ID || claimed.Source == nil || claimed.Source.MessageID != msg.ID || claimed.Source.EventID == "" || claimed.Source.ServerID != msg.ServerID {
+		t.Fatalf("recovery lost source: %+v %v", claimed, err)
+	}
+}
+
 func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 	f := setup(t)
-	f.manager.native = &recoverSongNative{f.native}
+	f.manager.native = &recoverSongNative{fakeNative: f.native, createdAt: time.Now().Format(time.RFC3339)}
 	f.manager.config.Companion.Permissions.SendVoice = true
 	reads := 0
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,9 +63,14 @@ func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"id": "prepared-song", "state": "completed", "reference_used": true, "recipe": map[string]any{"title": "生日快乐", "mode": "cover", "lyrics": "synthetic original words", "style": "source style", "duration_seconds": 60, "reference_sha256": strings.Repeat("a", 64)}})
 	}))
 	defer u.Close()
-	f.manager.speech.YuEEnabled = true
-	f.manager.speech.YuEEndpoint = u.URL
-	f.manager.speech.YuEToken = "synthetic"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = u.URL
+		legacySpeechFixture.YuEToken = "synthetic"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
+	installLegacyLocalMusicPlugin(t, f.manager)
 	f.login()
 	body := map[string]string{"message_id": "birthday-request", "prepared_job_id": "prepared-song"}
 	code, b, _ := f.request("POST", "/api/agent/recover-music-message", body, true, true)
@@ -55,7 +89,7 @@ func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 		t.Fatal(first, second)
 	}
 	p, _, _ := f.manager.toolAccess()
-	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper"})
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "synthetic-owner"})
 	if _, err := p.callYuE(context.Background(), "music_local_status", json.RawMessage(`{"job_id":"prepared-song"}`)); err != nil {
 		t.Fatal("adopted scoped task could not read its output", err)
 	}
@@ -67,9 +101,13 @@ func TestPreparedSongRecoveryUsesCompletedYuERecipeOnce(t *testing.T) {
 
 func TestExplicitCorrectedTakePreservesOldDeliveryAndIsIdempotent(t *testing.T) {
 	f := setup(t)
-	f.manager.native = &recoverSongNative{f.native}
+	f.manager.native = &recoverSongNative{fakeNative: f.native, createdAt: time.Now().Format(time.RFC3339)}
 	f.manager.config.Companion.Permissions.SendVoice = true
-	f.manager.speech.YuEEnabled = true
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	old := agentTask{ID: "old-task", Account: "test", Thread: "filehelper", Sender: "synthetic-owner", OriginTrace: "birthday-request", MusicJob: "old-take", State: "completed"}
 	if err := f.manager.agent.task(old); err != nil {
 		t.Fatal(err)
@@ -83,7 +121,12 @@ func TestExplicitCorrectedTakePreservesOldDeliveryAndIsIdempotent(t *testing.T) 
 		json.NewEncoder(w).Encode(map[string]any{"id": "corrected-take", "state": "completed", "reference_used": true, "recipe": map[string]any{"title": "生日快乐", "mode": "cover", "lyrics": "synthetic words", "reference_sha256": strings.Repeat("b", 64), "duration_seconds": 180}})
 	}))
 	defer u.Close()
-	f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = u.URL, "synthetic"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = u.URL, "synthetic"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
+	installLegacyLocalMusicPlugin(t, f.manager)
 	f.login()
 	body := map[string]any{"message_id": "birthday-request", "prepared_job_id": "corrected-take", "redeliver_prepared": true}
 	for i := 0; i < 2; i++ {

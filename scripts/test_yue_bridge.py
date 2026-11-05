@@ -11,6 +11,17 @@ from yue_bridge import prepare_song_graph, song_options, singing_profile, conver
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
 class SongWorkflowTests(unittest.TestCase):
+    def test_managed_conversion_uses_helper_inside_public_mount(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);output=root/'output.wav';expected={'config_sha256':'synthetic','python':'/usr/bin/python3'}
+            sandbox={'public':str(root/'public_workspace'),'private':str(root/'pri_workspace/account')}
+            def complete(*args,**kwargs):output.write_bytes(b'synthetic wav'+b'\0'*50)
+            with patch('yue_bridge.singing_profile',return_value=expected),patch('managed_music_runner.run',side_effect=complete) as run:
+                self.assertEqual(convert_singing_voice('config',expected,root/'source.wav',output,sandbox),output)
+                argv=run.call_args.args[3]
+                self.assertEqual(Path(argv[1]),root/'public_workspace/projects/agent-tools/singing_voice.py')
+                self.assertTrue(run.call_args.kwargs['gpu'])
+
     def test_native_is_default_and_never_reads_or_requires_rvc_resources(self):
         with patch('yue_bridge.singing_profile',side_effect=RuntimeError('broken RVC')) as profile:
             self.assertIsNone(requested_singing_profile({},'missing-config'))
@@ -61,6 +72,16 @@ class SongWorkflowTests(unittest.TestCase):
         self.assertEqual(a['33:36']['inputs']['value'],generation_style(body))
         self.assertEqual(a['33:37']['inputs']['value'],body['lyrics'])
         self.assertEqual(a['33:25']['inputs']['max_duration'],10)
+
+    def test_recovery_uses_persisted_workflow_instead_of_changed_project_file(self):
+        body=self.body()
+        template=json.loads((WORKFLOWS/'audio_yue2_text_to_music.json').read_text())
+        template['33:8']['inputs']['steps']=57
+        with tempfile.TemporaryDirectory() as tmp:
+            graph=prepare_song_graph(Path(tmp)/'missing-workflows',body,'synthetic',Path(tmp),template=template)
+        self.assertEqual(graph['33:8']['inputs']['steps'],57)
+        self.assertEqual(graph['33:34']['inputs']['seed'],0)
+        self.assertNotIn('synthetic',json.dumps(template))
 
     def test_cover_uses_reference_modes_seed_and_unmodified_words(self):
         for mode in ('melody','full'):

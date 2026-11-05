@@ -11,10 +11,9 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-	"wechat-bot/internal/bot"
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/sharespec"
 )
 
 type channelsSettings struct {
@@ -58,7 +57,7 @@ func channelTitle(s string) string {
 		return -1
 	}, s)
 }
-func matchChannelsVideo(source linuxnative.ChannelsSource, msg linuxnative.Message, video channels.ResolvedVideo) bool {
+func matchChannelsVideo(source linuxnative.ChannelsSource, msg linuxnative.Message, video sharespec.ResolvedVideo) bool {
 	if source.ObjectID != "" && video.ObjectID != "" {
 		return source.ObjectID == video.ObjectID
 	}
@@ -75,7 +74,7 @@ func matchChannelsVideo(source linuxnative.ChannelsSource, msg linuxnative.Messa
 	return utf8.RuneCountInString(title) >= 8 && title == channelTitle(video.Title) && author != "" && channelTitle(author) == channelTitle(video.Author)
 }
 
-func matchNativeChannelsVideo(source linuxnative.ChannelsSource, video channels.ResolvedVideo, nativeBound bool) bool {
+func matchNativeChannelsVideo(source linuxnative.ChannelsSource, video sharespec.ResolvedVideo, nativeBound bool) bool {
 	// The native RPC verifies the exact numeric ID before returning its short URL.
 	// Preview responses may omit the ID, or carry updated/empty title metadata.
 	// That must not discard a known identity; an explicit conflicting ID still fails.
@@ -86,102 +85,23 @@ func (m *Manager) resolveReceivedChannels(ctx context.Context, msg linuxnative.M
 	if source.AccountID != m.native.Account() || source.ThreadID != msg.ThreadID || source.MessageID != msg.ID || msg.Direction != "incoming" {
 		return source, errors.New("channels_source_scope_mismatch")
 	}
-	c, e := loadChannelsSettings(m.dir)
-	if e != nil {
-		return source, e
-	}
-	if !c.Enabled {
-		return source, errors.New("channels_authorized_resolver_disabled")
-	}
-	resolver := channels.NewResolver()
-	autoLink, autoReason := "", ""
-	nativeBound := false
-	if native, ok := m.native.(interface {
-		ChannelsShareURL(context.Context, string, string, string) (string, error)
-	}); ok && source.ObjectID != "" && channels.ValidCookie(c.Cookie) {
-		link, err := native.ChannelsShareURL(ctx, msg.ID, msg.ThreadID, source.ObjectID)
-		if err == nil {
-			autoLink, err = channels.ShareURL(link)
-			nativeBound = err == nil
-		}
+	if installed, err := m.installedShareState(ctx); installed {
 		if err != nil {
-			autoReason = "channels_native_share_unavailable"
-			switch err.Error() {
-			case "channels_share_identity_missing", "channels_share_identity_mismatch", "channels_share_lookup_rejected", "channels_share_response_invalid", "channels_share_link_invalid", "channels_object_id_missing", "channels_received_card_required":
-				autoReason = err.Error()
-			}
+			return source, err
 		}
+		return m.resolveInstalledChannels(ctx, msg, source)
 	}
-	if autoLink == "" && c.AssistantCookie != "" && source.ObjectID != "" && source.ObjectNonceID != "" && strings.HasPrefix(source.ObjectID, "export/") {
-		var err error
-		autoLink, err = resolver.ObjectShareURL(ctx, source.ObjectID, source.ObjectNonceID, c.AssistantCookie)
-		if err != nil {
-			autoReason = err.Error()
-		}
-	}
-	if c.ObjectBridge != "" && source.ObjectID != "" {
-		video, bridgeErr := channels.ResolveObject(ctx, c.ObjectBridge, source.ObjectID, source.ObjectNonceID)
-		if bridgeErr == nil {
-			source.MediaURL, source.DecodeKey, source.State = video.URL, video.DecodeKey, "available"
-			return source, nil
-		}
-		if c.Cookie == "" {
-			return source, bridgeErr
-		}
-	}
-	bindings, e := loadChannelsBindings(m.dir)
-	if e != nil {
-		return source, e
-	}
-	link := ""
-	if msg.Link != nil {
-		link = msg.Link.URL
-	}
-	b, ok := bindings[channelBindingID(source.AccountID, source.ThreadID, msg.ID)]
-	if !ok && source.ObjectID != "" {
-		b, ok = bindings[channelBindingID(source.AccountID, source.ThreadID, "object:"+source.ObjectID)]
-	}
-	if ok {
-		if b.Account != source.AccountID || b.Thread != source.ThreadID || (b.MessageID != msg.ID && (b.ObjectID == "" || b.ObjectID != source.ObjectID)) {
-			return source, errors.New("channels_binding_scope_mismatch")
-		}
-		link = b.URL
-	}
-	fallbackLink := link
-	if autoLink != "" {
-		link = autoLink
-	}
-	if link == "" {
-		if autoReason != "" {
-			return source, errors.New(autoReason)
-		}
-		return source, errors.New("channels_share_link_required")
-	}
-	if !channels.ValidCookie(c.Cookie) {
-		return source, errors.New("channels_yuanbao_cookie_missing")
-	}
-	video, e := resolver.Resolve(ctx, link, c.Cookie)
-	usedAutomatic := autoLink != "" && link == autoLink
-	if e != nil && usedAutomatic && fallbackLink != "" && fallbackLink != autoLink {
-		video, e = resolver.Resolve(ctx, fallbackLink, c.Cookie)
-		usedAutomatic = false
-		nativeBound = false
-	}
-	if e != nil {
-		return source, e
-	}
-	matched := matchChannelsVideo(source, msg, video) || matchNativeChannelsVideo(source, video, nativeBound)
-	if !matched {
-		return source, errors.New("channels_resolved_video_mismatch")
-	}
-	if usedAutomatic {
-		m.record(bot.Record{Event: "channels_source_resolved", Category: "decision", ThreadID: msg.ThreadID, MessageID: msg.ID, Status: "resolved", Reason: "channels_automatic_shortlink", Origin: "media"})
-	}
-	source.MediaURL, source.DecodeKey, source.State = video.URL, video.DecodeKey, "available"
-	return source, nil
+	// Do not revive the legacy resolver, object bridge, or its credentialed
+	// network routes when the installed share-reader is absent. Card metadata
+	// and explicitly saved bindings remain read-only archive/UI data; only the
+	// installed package may turn them into a resolved media locator.
+	return source, errors.New("share_plugin_migration_required")
 }
-func channelsSettingsView(c channelsSettings) map[string]any {
-	return map[string]any{"enabled": c.Enabled, "cookie_configured": c.Cookie != "", "assistant_cookie_configured": c.AssistantCookie != "", "object_bridge_url": c.ObjectBridge}
+func channelsSettingsMigrationView(c channelsSettings) map[string]any {
+	return map[string]any{
+		"migration_required":           true,
+		"legacy_configuration_present": c.Enabled || c.Cookie != "" || c.ObjectBridge != "" || c.AssistantCookie != "",
+	}
 }
 func (s *Server) channelsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/channels/settings", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -190,63 +110,10 @@ func (s *Server) channelsRoutes(mux *http.ServeMux) {
 			fail(w, 500, "视频号授权配置不可读")
 			return
 		}
-		respond(w, 200, channelsSettingsView(c))
+		respond(w, 200, channelsSettingsMigrationView(c))
 	}))
 	mux.HandleFunc("POST /api/channels/settings", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		var in struct {
-			channelsSettings
-			Clear          bool `json:"clear_cookie"`
-			ClearAssistant bool `json:"clear_assistant_cookie"`
-		}
-		if !decode(w, r, &in) {
-			return
-		}
-		m := s.manager
-		m.op.Lock()
-		defer m.op.Unlock()
-		old, e := loadChannelsSettings(m.dir)
-		if e != nil {
-			fail(w, 500, "视频号授权配置不可读")
-			return
-		}
-		in.Cookie = strings.TrimSpace(in.Cookie)
-		if in.Cookie == "" && !in.Clear {
-			in.Cookie = old.Cookie
-		}
-		in.AssistantCookie = strings.TrimSpace(in.AssistantCookie)
-		if in.AssistantCookie == "" && !in.ClearAssistant {
-			in.AssistantCookie = old.AssistantCookie
-		}
-		if in.ClearAssistant {
-			in.AssistantCookie = ""
-		}
-		if in.AssistantCookie != "" && !channels.ValidCookie(in.AssistantCookie) {
-			fail(w, 400, "视频号助手 Cookie 需要为完整单行请求头值")
-			return
-		}
-		if in.Clear {
-			in.Cookie = ""
-			in.AssistantCookie = ""
-			in.Enabled = false
-		}
-		if in.ObjectBridge != "" {
-			normalized, e := channels.ObjectBridgeURL(in.ObjectBridge)
-			if e != nil {
-				fail(w, 400, "作品ID桥接地址须为本机 http://127.0.0.1:端口")
-				return
-			}
-			in.ObjectBridge = normalized
-		}
-		if in.Cookie != "" && !channels.ValidCookie(in.Cookie) || in.Enabled && in.Cookie == "" && in.ObjectBridge == "" {
-			fail(w, 400, "请填写完整的元宝 Cookie 请求头值（单行），不要填写 API Key")
-			return
-		}
-		b, _ := json.Marshal(in.channelsSettings)
-		if writePrivate(filepath.Join(m.dir, "channels-config.json"), b) != nil {
-			fail(w, 500, "保存失败")
-			return
-		}
-		respond(w, 200, channelsSettingsView(in.channelsSettings))
+		fail(w, http.StatusConflict, "channels_legacy_configuration_migration_required")
 	}))
 	mux.HandleFunc("GET /api/channels/cards", s.protected(s.channelsCards))
 	mux.HandleFunc("POST /api/channels/bind", s.protected(s.bindChannelsCard))
@@ -267,14 +134,9 @@ func (s *Server) channelsRoutes(mux *http.ServeMux) {
 			fail(w, 403, "请先开启视频理解权限")
 			return
 		}
-		provider, e := s.manager.makeModel(s.manager.runtimeConfig())
-		if e != nil {
-			fail(w, 400, "请先配置理解模型")
-			return
-		}
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 		defer cancel()
-		text, e := (mediaUnderstanding{manager: s.manager, provider: provider}).understandChannels(ctx, msg)
+		text, e := (mediaUnderstanding{manager: s.manager}).understandChannels(ctx, msg)
 		if e != nil {
 			respond(w, 200, map[string]any{"observed": false, "reason": e.Error(), "wechat_sends": 0})
 			return
@@ -353,7 +215,7 @@ func (s *Server) bindChannelsCard(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	link, e := channels.ShareURL(in.URL)
+	link, e := sharespec.ShareURL(in.URL)
 	if e != nil {
 		fail(w, 400, "请填写这条视频的 https://weixin.qq.com/sph/ 分享链接")
 		return

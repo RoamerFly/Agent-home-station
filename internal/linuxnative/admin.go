@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -224,4 +225,59 @@ func NewAdmin(config Config) (*Sender, error) {
 	}
 	s.client.Timeout = 30 * time.Second
 	return s, nil
+}
+
+// EndAccountSession addresses only this profile. A never-enrolled profile
+// returns 404 on the profile lookup, with no login operation to cancel.
+func (s *Sender) EndAccountSession(ctx context.Context, forget bool, primary string) error {
+	response, err := s.do(ctx, http.MethodGet, s.accountPath(), nil, "")
+	if err != nil {
+		return err
+	}
+	var profile struct{ ID, Alias string }
+	verified := response.StatusCode == 200 && decodeBounded(response.Body, &profile)
+	response.Body.Close()
+	if response.StatusCode == 404 {
+		return nil
+	}
+	if !verified || profile.ID != s.account || strings.EqualFold(profile.Alias, primary) || strings.EqualFold(profile.ID, primary) {
+		return errors.New("无法核对微信账号状态")
+	}
+	actions := []string{"logout"}
+	if forget {
+		actions = append(actions, "forget-credentials")
+	}
+	for _, action := range actions {
+		var body []byte
+		if action == "forget-credentials" {
+			body = []byte(`{"confirm":true}`)
+		}
+		response, err = s.do(ctx, http.MethodPost, s.accountPath()+"/"+action, body, randomKey())
+		if err != nil {
+			return err
+		}
+		var op nativeOperation
+		valid := response.StatusCode == 202 && decodeBounded(response.Body, &op) && safeID(op.ID)
+		response.Body.Close()
+		if !valid {
+			return errors.New("原生服务未接受退出或清理登录资料的请求")
+		}
+		state := op.State
+		for state == "queued" || state == "submitting" || state == "running" {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(200 * time.Millisecond):
+			}
+			status, err := s.LoginStatus(ctx, op.ID)
+			if err != nil {
+				return err
+			}
+			state = status.State
+		}
+		if state != "succeeded" {
+			return errors.New("原生服务未确认操作完成")
+		}
+	}
+	return nil
 }

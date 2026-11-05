@@ -10,22 +10,52 @@ import (
 )
 
 func (p *permittedTools) callProcess(ctx context.Context, raw json.RawMessage) (string, error) {
-	return p.callProcessPlatform(ctx, raw, false)
+	return p.callProjectPlugin(ctx, "server_process", raw)
 }
-func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMessage, windows bool) (result string, callErr error) {
+func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMessage, windows bool) (string, error) {
+	name := "server_process"
+	if windows {
+		name = "server_windows_process"
+	}
+	return p.callProjectPlugin(ctx, name, raw)
+}
+
+// The host retains durable process identity, sandbox admission, cancellation
+// and original actor follow-up. This is reached only through the bound broker.
+func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.RawMessage, windows bool, authorized func() bool) (result string, callErr error) {
 	defer func() { callErr = localAgentError(callErr) }()
 	var in struct {
+		GPU                       bool `json:"gpu"`
+		FishHome                  bool `json:"fish_home"`
 		Action, ID, Path, Command string
-		Key                       string `json:"request_key"`
-		Seconds                   int    `json:"timeout_seconds"`
+		Argv                      []string `json:"argv"`
+		Key                       string   `json:"request_key"`
+		Seconds                   int      `json:"timeout_seconds"`
 	}
 	if json.Unmarshal(raw, &in) != nil {
 		return "", errors.New("进程参数无效")
 	}
-	scope := agentID(p.trace.Account, p.trace.Thread, p.trace.Sender)
-	cfg := p.manager.agent.config().Host
-	if !p.privileged() || cfg.Mode != "full" {
-		return "", errors.New("后台程序执行未授权")
+	scope := p.processScope()
+	// Fish-home jobs live in a deliberately separate namespace.  A normal
+	// conversation scope must never see them, and the durable fish ID below is
+	// only a selector for this call -- boundFishHome rechecks the live owner,
+	// direct-origin and binding state on every operation.
+	fishHomeID := ""
+	if in.FishHome {
+		_, currentFishHomeID, fishHomeErr := p.boundFishHome()
+		if fishHomeErr != nil {
+			return "", fishHomeErr
+		}
+		fishHomeID = currentFishHomeID
+		scope = agentID(p.trace.Account, p.trace.Thread, p.trace.Sender, "fish_home", fishHomeID)
+	}
+	cfg, configErr := p.scopedHostConfig(raw)
+	if configErr != nil {
+		return "", &RuntimeFailure{Code: "execution_scope_unavailable", Stage: "scope", Message: "程序未启动：当前请求的执行范围不可用", NotStarted: true, EffectiveScope: scope, Continuation: "核对当前账号、会话及global授权后再调用server_status"}
+	}
+	cfg.Isolation.GPU = in.GPU
+	if !p.workspaceExecutionAllowed() || cfg.Mode != "full" {
+		return "", &RuntimeFailure{Code: "execution_permission_denied", Stage: "authorization", Message: "后台程序执行未授权", NotStarted: true, EffectiveScope: scope, Continuation: "核对当前真实请求者和执行权限；不得重用其他账号或会话的授权"}
 	}
 	var value any
 	var e error
@@ -37,19 +67,49 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 		trace := p.trace
 		allowed := func() bool {
 			access := &permittedTools{manager: p.manager, trace: trace}
-			current := p.manager.agent.config().Host
-			return access.privileged() && current.Mode == "full" && slices.Equal(current.Roots, cfg.Roots)
+			current, e := access.scopedHostConfig(raw)
+			if e != nil || !access.workspaceExecutionAllowed() || current.Mode != "full" || !slices.Equal(current.Roots, cfg.Roots) {
+				return false
+			}
+			if fishHomeID != "" {
+				_, currentFishID, fishErr := access.boundFishHome()
+				if fishErr != nil || currentFishID != fishHomeID {
+					return false
+				}
+			}
+			return authorized != nil && authorized()
 		}
 		toolName := "server_process"
 		if windows {
 			toolName = "server_windows_process"
 		}
-		result, err := p.privilegedCall(ctx, toolName, raw, func() (any, error) {
+		run := func() (any, error) {
+			var value any
+			var startErr error
 			if windows {
-				return p.manager.processes.StartWindows(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
+				if len(in.Argv) > 0 {
+					value, startErr = p.manager.processes.StartWindowsArgv(cfg, scope, in.Key, in.Path, in.Argv, in.Seconds, allowed)
+				} else {
+					value, startErr = p.manager.processes.StartWindows(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
+				}
+			} else {
+				value, startErr = p.manager.processes.Start(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
 			}
-			return p.manager.processes.Start(cfg, scope, in.Key, in.Path, in.Command, in.Seconds, allowed)
-		})
+			if startErr != nil {
+				return nil, processAdmissionFailure(startErr.Error(), scope)
+			}
+			return value, nil
+		}
+		var result string
+		var err error
+		if p.privileged() {
+			result, err = p.privilegedCall(ctx, toolName, raw, run)
+		} else {
+			v, e := run()
+			err = e
+			b, _ := json.Marshal(v)
+			result = string(b)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -59,7 +119,7 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 			Reason string `json:"reason"`
 		}
 		if json.Unmarshal([]byte(result), &process) == nil && process.State == "rejected" {
-			return "", toolInputError("程序未启动：" + process.Reason + "；更正后可再次尝试")
+			return "", processAdmissionFailure(process.Reason, scope)
 		}
 		if json.Unmarshal([]byte(result), &process) != nil || process.ID == "" {
 			return result, nil
@@ -78,7 +138,8 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 			if origin == "" {
 				origin = p.trace.TraceID
 			}
-			task := agentTask{ParentID: p.trace.TaskID, ID: taskID, ProcessID: process.ID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "后台程序", RequestedText: request, Checkpoint: "等待真实程序结果，使用原进程编号查询，不重新运行命令", State: "waiting", Next: time.Now().Add(2 * time.Second), OriginTrace: origin, QuoteServerID: p.trace.QuoteServerID}
+			task := agentTask{OwnerRequested: p.privileged(), ParentID: p.trace.TaskID, ID: taskID, ProcessID: process.ID, FishHomeID: fishHomeID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "后台程序", RequestedText: request, Checkpoint: "等待真实程序结果，使用原进程编号查询，不重新运行命令", State: "waiting", Next: time.Now().Add(2 * time.Second), OriginTrace: origin, QuoteServerID: p.trace.QuoteServerID}
+			task.Constraints = p.taskConstraints("process", "", "", "")
 			if task.ParentID != "" {
 				task.RequestedText = ""
 				task.Goal = "读取该程序真实结果并通知父任务；不是重新执行原始用户请求"
@@ -112,13 +173,34 @@ func (p *permittedTools) callProcessPlatform(ctx context.Context, raw json.RawMe
 
 func (m *Manager) claimProcessTask(task agentTask, now time.Time) (*companion.Input, error) {
 	p := &permittedTools{manager: m, trace: companion.Input{Account: task.Account, Thread: task.Thread, Sender: task.Sender}}
-	if !p.privileged() || m.agent.config().Host.Mode != "full" {
+	scope := p.processScope()
+	if task.FishHomeID != "" {
+		// A persisted fish ID is deliberately insufficient. A restart may happen
+		// after unbinding, after owner revocation, or after a task was forged from
+		// stale state. Re-resolve against the current trusted direct owner before
+		// touching the process registry, and never try the old conversation scope.
+		_, currentFishID, fishErr := p.boundFishHome()
+		if fishErr != nil || currentFishID != task.FishHomeID {
+			task.State = "cancelled"
+			task.LastResult = "鱼屋绑定或主人私聊授权已变化，不读取旧进程内容"
+			_, err := m.agent.updateSnapshot(task)
+			return nil, err
+		}
+		scope = agentID(task.Account, task.Thread, task.Sender, "fish_home", task.FishHomeID)
+	}
+	if !p.workspaceExecutionAllowed() || task.OwnerRequested && !p.privileged() || m.agent.config().Host.Mode != "full" {
 		task.State = "cancelled"
 		task.LastResult = "执行权限已撤销，不交付旧进程内容"
 		_, err := m.agent.updateSnapshot(task)
 		return nil, err
 	}
-	process, err := m.processes.Status(agentID(task.Account, task.Thread, task.Sender), task.ProcessID, false)
+	process, err := m.processes.Status(scope, task.ProcessID, false)
+	// Pre-fish-home tasks retain their established compatibility fallback. It
+	// must never apply to a fish-home watcher because that would let a revoked
+	// binding inspect an old process namespace.
+	if err != nil && task.FishHomeID == "" && p.privileged() {
+		process, err = m.processes.Status(agentID(task.Account, task.Thread, task.Sender), task.ProcessID, false)
+	}
 	if err != nil {
 		task.State = "needs_review"
 		task.LastResult = "原进程记录不可核验，不重复执行"
@@ -175,4 +257,11 @@ func (m *Manager) claimProcessTask(task agentTask, now time.Time) (*companion.In
 		a.mu.Unlock()
 	}
 	return m.claimTaskResult(task, now, process, "读取原进程结果，自行决定检查文件、修复、运行验证、保存经验或回复。interrupted表示应核查，不自动重放。")
+}
+
+func (p *permittedTools) processScope() string {
+	if p.privileged() {
+		return agentID(p.trace.Account, p.trace.Thread, p.trace.Sender)
+	}
+	return agentID(p.trace.Account, p.trace.Thread, p.trace.Sender, "conversation")
 }

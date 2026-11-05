@@ -1,0 +1,33 @@
+# Optional GPU runtime. Models and private input/output are external mounts.
+# Build context music-wheels contains verified Linux CUDA wheels. The Python
+# image is imported from a verified standalone distribution, preserving Unix
+# symlinks even when this build is driven by Docker Desktop on Windows.
+ARG MUSIC_BUILD_IMAGE=mirror.gcr.io/library/rust:1.93.1-bookworm@sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31
+ARG MUSIC_RUNTIME_IMAGE=wechat-agent-runtime:0.35.0
+ARG MUSIC_DEPENDENCIES_IMAGE=dependencies
+ARG PYTHON_IMAGE=wechat-managed-python:3.10.20
+FROM ${PYTHON_IMAGE} AS python-runtime
+FROM ${MUSIC_BUILD_IMAGE} AS dependencies
+COPY --from=python-runtime / /usr/local/music-python/
+RUN /usr/local/music-python/bin/python3.10 -m venv /usr/local/music-env
+ENV PATH=/usr/local/music-env/bin:$PATH PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3.10 -m pip install 'pip<24.1' 'setuptools<70' wheel
+RUN --mount=from=music-wheels,target=/wheels,ro \
+    python3.10 -m pip install --no-index --find-links=/wheels torch==2.6.0 torchaudio==2.6.0
+COPY deploy/docker/music-requirements.txt /tmp/music-requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3.10 -m pip install --retries 3 --timeout 60 -r /tmp/music-requirements.txt
+
+FROM ${MUSIC_DEPENDENCIES_IMAGE} AS resolved-dependencies
+FROM ${MUSIC_RUNTIME_IMAGE}
+COPY --from=resolved-dependencies /usr/local/music-python /usr/local/music-python
+COPY --from=resolved-dependencies /usr/local/music-env /usr/local/music-env
+COPY scripts/ /usr/local/lib/wechat-music/
+COPY components/yue2/app/workflows_api/ /usr/local/lib/wechat-music/workflows/
+ENV PATH=/usr/local/music-env/bin:$PATH \
+    PYTHONPATH=/usr/local/lib/wechat-music \
+    PYTHONDONTWRITEBYTECODE=1
+USER 10001:10001
+HEALTHCHECK --interval=30s --timeout=6s --start-period=120s CMD ["/usr/local/music-env/bin/python3.10", "/usr/local/lib/wechat-music/docker_music_service.py", "--healthcheck"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/music-env/bin/python3.10", "/usr/local/lib/wechat-music/docker_music_service.py"]

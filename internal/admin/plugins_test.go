@@ -58,6 +58,8 @@ func TestPluginLifecycleAndGeneratedVoice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	access.SetTrace(companion.Input{Channel: "wechat", Account: f.manager.native.Account(), Thread: "filehelper", Sender: "synthetic-requester", TraceID: "synthetic-plugin-voice"})
+	installExternalHTTPTestRuntime(t, access)
 	result, err := access.Call(context.Background(), "voice__speak", json.RawMessage(`{"text":"hello"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -99,6 +101,16 @@ func TestPluginLifecycleAndGeneratedVoice(t *testing.T) {
 	if len(f.manager.plugins.installed()) != 0 {
 		t.Fatal("removed plugin remained active")
 	}
+	if code, body, _ := f.request("GET", "/api/plugins", nil, true, false); code != 200 || !bytes.Contains(body, []byte(`"removed":[`)) || bytes.Contains(body, []byte("private-plugin-key")) {
+		t.Fatal("removed list unavailable or leaked secrets")
+	}
+	if code, _, _ := f.request("POST", "/api/plugins/voice", map[string]bool{"enabled": false}, true, true); code != 200 {
+		t.Fatal("restore", code)
+	}
+	entry, _ = f.manager.plugins.get("voice")
+	if entry.Removed || entry.Enabled || entry.Secrets["KEY"] != "private-plugin-key" {
+		t.Fatal("restore lost credentials or enabled plugin")
+	}
 }
 
 func TestMCPConfigCannotConflictWithEnabledPlugin(t *testing.T) {
@@ -119,7 +131,7 @@ func TestMCPConfigCannotConflictWithEnabledPlugin(t *testing.T) {
 }
 
 func TestInlineMCPAudioStagedAndPermissionCheckedBeforeCalling(t *testing.T) {
-	f := setup(t)
+	f, origin := trustedAgent(t)
 	f.manager.native = &fakeTools{fakeNative: f.native}
 	var generated atomic.Int32
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +161,9 @@ func TestInlineMCPAudioStagedAndPermissionCheckedBeforeCalling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	access.SetTrace(origin.trace)
+	installExternalMCPTestRuntime(t, access)
+	defer access.hub.Close()
 	output, err := access.Call(context.Background(), "mcpvoice__sing", json.RawMessage(`{}`))
 	if err != nil || !bytes.Contains([]byte(output), []byte("source-one")) {
 		t.Fatal("MCP audio not staged", output, err)

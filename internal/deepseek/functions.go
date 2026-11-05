@@ -37,7 +37,11 @@ func (c *Client) ChatFunctions(ctx context.Context, system string, turns []map[s
 				if len(result.Execution) > 0 {
 					result.Result = turns[i+1]["content"]
 				}
-				messages = append(messages, map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": id, "type": "function", "function": map[string]string{"name": call.Tool, "arguments": string(call.Arguments)}}}}, map[string]any{"role": "tool", "tool_call_id": id, "content": result.Result})
+				assistant := map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": id, "type": "function", "function": map[string]string{"name": call.Tool, "arguments": string(call.Arguments)}}}}
+				if c.thinkingEnabled {
+					assistant["reasoning_content"] = replayThinking(ctx, t)
+				}
+				messages = append(messages, assistant, map[string]any{"role": "tool", "tool_call_id": id, "content": result.Result})
 				total += len(result.Result)
 				i++
 				continue
@@ -46,7 +50,11 @@ func (c *Client) ChatFunctions(ctx context.Context, system string, turns []map[s
 		if t["role"] != "user" && t["role"] != "assistant" {
 			return "", errors.New("invalid transcript role")
 		}
-		messages = append(messages, map[string]any{"role": t["role"], "content": text})
+		message := map[string]any{"role": t["role"], "content": text}
+		if c.thinkingEnabled && t["role"] == "assistant" {
+			message["reasoning_content"] = replayThinking(ctx, t)
+		}
+		messages = append(messages, message)
 	}
 	if total > 256<<10 || len(messages) > 120 {
 		return "", errors.New("tool transcript exceeds input bound")
@@ -63,6 +71,10 @@ func (c *Client) ChatFunctions(ctx context.Context, system string, turns []map[s
 	}
 	if !c.compatible {
 		body["thinking"] = map[string]string{"type": "disabled"}
+		if c.thinkingEnabled {
+			body["thinking"] = map[string]string{"type": "enabled"}
+			body["reasoning_effort"] = c.reasoningEffort
+		}
 	}
 	data, _ := json.Marshal(body)
 	return c.request(ctx, data)

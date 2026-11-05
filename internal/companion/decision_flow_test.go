@@ -13,6 +13,9 @@ func TestBurstOfNormalMessagesAllReachModel(t *testing.T) {
 	c.Permissions.ObserveGroups = true
 	c.Permissions.AutonomousGroups = true
 	store, _ := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	model := &fakeModel{answer: `{"action":"silent","messages":[]}`}
 	e, err := New(c, store, model, "test")
 	if err != nil {

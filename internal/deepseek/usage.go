@@ -9,6 +9,8 @@ import (
 // Each HTTP attempt is observed, including billed responses later rejected by
 // decision validation. Missing usage is unknown, not zero-token consumption.
 type Usage struct {
+	Model    string    `json:"model,omitempty"` // Actual model requested for this HTTP attempt.
+	Purpose  string    `json:"purpose,omitempty"`
 	Time     time.Time `json:"time"`
 	Reported bool      `json:"reported"`
 	Input    int64     `json:"input"`
@@ -48,3 +50,7 @@ func parseUsage(body []byte, stamp time.Time) Usage {
 	u.CacheHit = hit
 	return u
 }
+
+// ReportedUsage decodes transport evidence for a host-owned plugin model call.
+// Plugin output is not a billing source. Missing/invalid counts remain unknown.
+func ReportedUsage(body []byte, stamp time.Time) Usage { return parseUsage(body, stamp) }

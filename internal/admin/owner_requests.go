@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -75,6 +76,13 @@ func (s *Server) ownerRequestRoutes(mux *http.ServeMux) {
 			fail(w, 503, "工具目录读取失败")
 			return
 		}
-		respond(w, 200, map[string]any{"tools": catalog, "partial": e != nil, "autonomous": p.AutonomousActions(), "host": m.agent.config().Host, "identity": "management service OS user; Windows interop uses the current Windows user"})
+		host, err := p.scopedHostConfig(json.RawMessage(`{}`))
+		if err != nil {
+			fail(w, 503, "当前账号的受管工作区不可用")
+			return
+		}
+		// Match actual calls rather than legacy roots or private transport data.
+		view := map[string]any{"mode": host.Mode, "roots": host.Roots, "timeout_seconds": host.TimeoutSeconds, "output_bytes": host.OutputBytes, "isolation": host.Isolation, "windows_hidden_executor": host.Windows != nil}
+		respond(w, 200, map[string]any{"tools": catalog, "partial": e != nil, "autonomous": p.AutonomousActions(), "host": view, "workspace": p.executionContext(), "isolation_required": true, "identity": "system-isolated account/session workspace process"})
 	}))
 }

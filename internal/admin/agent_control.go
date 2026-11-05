@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -20,27 +22,55 @@ import (
 )
 
 type agentSettings struct {
-	Revision          int              `json:"revision"`
-	Enabled           bool             `json:"enabled"`
-	ReadConversations bool             `json:"read_conversations"`
-	TasksEnabled      bool             `json:"tasks_enabled"`
-	CrossConversation bool             `json:"cross_conversation"`
-	ExternalOwnerOnly bool             `json:"external_owner_only"`
-	OwnerIDs          []string         `json:"owner_ids"`
-	PrivilegedThreads []string         `json:"privileged_threads"`
-	AccountActions    []string         `json:"account_actions"`
-	MaxSteps          int              `json:"max_steps"`
-	MaxTaskRuns       int              `json:"max_task_runs"`
-	Host              agenthost.Config `json:"host"`
+	Revision          int               `json:"revision"`
+	Enabled           bool              `json:"enabled"`
+	ReadConversations bool              `json:"read_conversations"`
+	TasksEnabled      bool              `json:"tasks_enabled"`
+	CrossConversation bool              `json:"cross_conversation"`
+	ExternalOwnerOnly bool              `json:"external_owner_only"`
+	OwnerIDs          []string          `json:"owner_ids"`
+	PrivilegedThreads []string          `json:"privileged_threads"`
+	AccountActions    []string          `json:"account_actions"`
+	MaxSteps          int               `json:"max_steps"`
+	MaxTaskRuns       int               `json:"max_task_runs"`
+	Host              agenthost.Config  `json:"host"`
+	ServiceRetention  *serviceRetention `json:"service_retention,omitempty"`
+}
+
+type serviceRetention struct {
+	PluginMinutes int `json:"plugin_idle_minutes"`
+	MusicMinutes  int `json:"music_idle_minutes"`
+}
+
+func (c agentSettings) retention() serviceRetention {
+	if c.ServiceRetention != nil {
+		return *c.ServiceRetention
+	}
+	return serviceRetention{PluginMinutes: 10, MusicMinutes: 15}
+}
+
+func (m *Manager) musicIdleTimeout() time.Duration {
+	if m.agent == nil {
+		return 15 * time.Minute
+	}
+	return time.Duration(m.agent.config().retention().MusicMinutes) * time.Minute
 }
 
 // Legacy configuration value. Autonomous actions do not consume this quota.
 const agentTurnToolLimit = 30
 
 func agentDefaults() agentSettings {
-	return agentSettings{Enabled: true, ReadConversations: true, TasksEnabled: true, OwnerIDs: []string{}, PrivilegedThreads: []string{}, AccountActions: []string{}, MaxSteps: agentTurnToolLimit, MaxTaskRuns: 6, Host: agenthost.Defaults()}
+	host := agenthost.Defaults()
+	host.Mode = "files"
+	retention := (agentSettings{}).retention()
+	return agentSettings{Enabled: true, ReadConversations: true, TasksEnabled: true, OwnerIDs: []string{}, PrivilegedThreads: []string{}, AccountActions: []string{}, MaxSteps: agentTurnToolLimit, MaxTaskRuns: 6, Host: host, ServiceRetention: &retention}
 }
 func (c agentSettings) validate() error {
+	retention := c.retention()
+	const maxMinutes = int64((1<<63 - 1) / time.Minute)
+	if retention.PluginMinutes < 0 || int64(retention.PluginMinutes) > maxMinutes || retention.MusicMinutes < 0 || int64(retention.MusicMinutes) > maxMinutes {
+		return errors.New("空闲时间必须为可表示的非负整数分钟")
+	}
 	if len(c.OwnerIDs) > 30 || len(c.PrivilegedThreads) > 100 || len(c.AccountActions) > 8 {
 		return errors.New("授权条目过多")
 	}
@@ -67,7 +97,7 @@ func (c agentSettings) validate() error {
 			return errors.New("账号动作无效")
 		}
 	}
-	if (c.Host.Mode != "disabled" || c.CrossConversation || c.ExternalOwnerOnly || len(c.AccountActions) > 0) && (len(c.OwnerIDs) == 0 || len(c.PrivilegedThreads) == 0) {
+	if (c.CrossConversation || c.ExternalOwnerOnly || len(c.AccountActions) > 0) && (len(c.OwnerIDs) == 0 || len(c.PrivilegedThreads) == 0) {
 		return errors.New("高权限能力必须同时配置可信用户和允许触发的会话")
 	}
 	return c.Host.Validate()
@@ -88,16 +118,21 @@ func (c agentSettings) allowsPrivilegedThread(thread string) bool {
 }
 
 type pluginJobState struct {
-	Ticket          plugins.JobTicket `json:"ticket"`
-	Deadline        time.Time         `json:"deadline"`
-	IntervalSeconds int               `json:"interval_seconds"`
-	MaxPolls        int               `json:"max_polls"`
-	Polls           int               `json:"polls"`
-	Prepared        bool              `json:"prepared"`
-	Failure         bool              `json:"failure"`
-	CancelState     string            `json:"cancel_state,omitempty"`
+	PollState                 *externalPollState `json:"poll_state,omitempty"`
+	LegacyConfigurationSHA256 string             `json:"legacy_configuration_sha256,omitempty"`
+	Origin                    *companion.Input   `json:"origin,omitempty"`
+	Ticket                    plugins.JobTicket  `json:"ticket"`
+	Deadline                  time.Time          `json:"deadline"`
+	IntervalSeconds           int                `json:"interval_seconds"`
+	MaxPolls                  int                `json:"max_polls"`
+	Polls                     int                `json:"polls"`
+	Prepared                  bool               `json:"prepared"`
+	Failure                   bool               `json:"failure"`
+	CancelState               string             `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
+	Constraints        *TaskConstraints  `json:"constraints,omitempty"`
+	PendingOperations  []string          `json:"pending_operations,omitempty"`
 	WorkCompleted      bool              `json:"work_completed,omitempty"`
 	Reminder           *reminderSpec     `json:"reminder,omitempty"`
 	OwnerRequest       bool              `json:"owner_request,omitempty"`
@@ -109,6 +144,7 @@ type agentTask struct {
 	ReportSourceThread string            `json:"report_source_thread,omitempty"`
 	OwnerRequested     bool              `json:"owner_requested,omitempty"`
 	ProcessID          string            `json:"process_id,omitempty"`
+	FishHomeID         string            `json:"fish_home_id,omitempty"`
 	DeviceTask         string            `json:"device_task,omitempty"`
 	MusicSpec          *songSpec         `json:"music_spec,omitempty"`
 	PluginJob          *pluginJobState   `json:"plugin_job,omitempty"`
@@ -123,17 +159,31 @@ type agentTask struct {
 	MusicDeadline      time.Time         `json:"music_deadline,omitempty"`
 	OriginTrace        string            `json:"origin_trace,omitempty"`
 	QuoteServerID      string            `json:"quote_server_id,omitempty"`
-	ID                 string            `json:"id"`
-	Account            string            `json:"account"`
-	Thread             string            `json:"thread"`
-	Sender             string            `json:"sender"`
-	Title              string            `json:"title"`
-	Checkpoint         string            `json:"checkpoint"`
-	State              string            `json:"state"`
-	Next               time.Time         `json:"next"`
-	Updated            time.Time         `json:"updated"`
-	Runs               int               `json:"runs"`
-	LastResult         string            `json:"last_result,omitempty"`
+	// RequestThread is where an owner asked for the work, SourceThread is the
+	// conversation whose material was actually read, and DeliveryThread is the
+	// conversation where the result belongs. Thread remains the legacy
+	// execution/delivery key so older persisted tasks continue to work.
+	RequestThread    string    `json:"request_thread,omitempty"`
+	SourceThread     string    `json:"source_thread,omitempty"`
+	SourceMessageIDs []string  `json:"source_message_ids,omitempty"`
+	DeliveryThread   string    `json:"delivery_thread,omitempty"`
+	ID               string    `json:"id"`
+	Account          string    `json:"account"`
+	Thread           string    `json:"thread"`
+	Sender           string    `json:"sender"`
+	Title            string    `json:"title"`
+	Checkpoint       string    `json:"checkpoint"`
+	State            string    `json:"state"`
+	Next             time.Time `json:"next"`
+	Updated          time.Time `json:"updated"`
+	Runs             int       `json:"runs"`
+	LastResult       string    `json:"last_result,omitempty"`
+	// Model recovery checkpoints are created only after a completed, read-only
+	// tool result.  They let a retryable model request continue the same task
+	// without rerunning the tool or widening its original authority.
+	RecoveryTools    []companion.RecoveryToolResult    `json:"model_recovery_tools,omitempty"`
+	RecoveryEvidence *companion.GenerationEvidence     `json:"model_recovery_evidence,omitempty"`
+	RecoveryPrivacy  *companion.RecoveryPrivacyBinding `json:"model_recovery_privacy,omitempty"`
 }
 type agentOperation struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
@@ -175,6 +225,17 @@ func newAgentControl(dir string) (*agentControl, error) {
 		}
 		if err != nil || entry.name == "agent-config.json" && len(b) > 8<<20 || json.Unmarshal(b, entry.v) != nil {
 			return nil, errors.New("Agent配置或任务记录不可读，未覆盖")
+		}
+	}
+	// Desktop-supplied resources are a transport default only. They neither
+	// enable Agent permissions nor override an explicit broker configuration.
+	if runtime.GOOS == "windows" && a.settings.Host.Windows == nil {
+		if raw := os.Getenv("WECHAT_WINDOWS_BROKER_CONFIG"); raw != "" {
+			var windows agenthost.WindowsConfig
+			if json.Unmarshal([]byte(raw), &windows) != nil || windows.Validate() != nil {
+				return nil, errors.New("桌面提供的Windows隔离运行环境无效")
+			}
+			a.settings.Host.Windows = &windows
 		}
 	}
 	if err := a.settings.validate(); err != nil {
@@ -229,10 +290,10 @@ func newAgentControl(dir string) (*agentControl, error) {
 			a.data.Tasks[id] = t
 			changed = true
 		}
-		if t.State == "running" {
+		if t.State == "running" || t.State == "needs_review" && t.LastResult == "运行中断，需在管理页恢复；不会自动重放外部操作" {
 			t.State = "needs_review"
-			t.LastResult = "运行中断，需在管理页恢复；不会自动重放外部操作"
-			if t.ProcessID != "" || t.MusicJob != "" || t.DeviceTask != "" {
+			t.LastResult = "运行中断，缺少可查询的原操作编号；已停止，不重复执行"
+			if !settleFromDelivery(&t, false) && (t.ProcessID != "" || t.MusicJob != "" || t.DeviceTask != "" || t.PluginJob != nil && t.PluginJob.Ticket.RemoteID != "" && t.PluginJob.Ticket.State == "waiting" && !t.PluginJob.Prepared) {
 				t.State = "waiting"
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 				t.LastResult = "服务恢复后查询原任务编号和真实输出，继续交给模型处理；不重新提交原操作"
@@ -240,16 +301,12 @@ func newAgentControl(dir string) (*agentControl, error) {
 			a.data.Tasks[id] = t
 			changed = true
 		}
-		if t.State == "needs_review" && t.LastResult == "运行中断，需在管理页恢复；不会自动重放外部操作" && (t.ProcessID != "" || t.MusicJob != "" || t.DeviceTask != "") {
-			t.State = "waiting"
-			t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
-			t.LastResult = "恢复原任务的只读状态核验；不重新提交已执行操作"
-			a.data.Tasks[id] = t
-			changed = true
-		}
 		if t.PluginJob != nil && t.State != "cancelled" && t.PluginJob.Ticket.State == "submitting" {
 			t.State = "needs_review"
-			t.LastResult = "插件创建请求可能已经提交，尚无可核验远端任务编号；不会自动重新创建"
+			t.LastResult = "工具创建请求可能已经提交，尚无可核验远端任务编号；不会自动重新创建"
+			if t.PluginJob.PollState != nil {
+				t.LastResult = "旧轮询首次请求结果未知，保留原操作、参数和来源；不会重新提交创建请求"
+			}
 			a.data.Tasks[id] = t
 			changed = true
 		}
@@ -305,6 +362,11 @@ func (a *agentControl) save(c agentSettings) error {
 	if c.Revision != a.settings.Revision {
 		return errors.New("配置已被其他页面更改，请刷新后重新保存")
 	}
+	// Older clients submit the whole action settings object without this field.
+	if c.ServiceRetention == nil {
+		previous := a.settings.retention()
+		c.ServiceRetention = &previous
+	}
 	if err := c.validate(); err != nil {
 		return err
 	}
@@ -345,6 +407,18 @@ func (a *agentControl) task(t agentTask) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	old, exists := a.data.Tasks[t.ID]
+	if exists {
+		if old.Account != t.Account || old.Thread != t.Thread || old.Sender != t.Sender {
+			return errors.New("task_identity_cannot_change")
+		}
+		if old.Constraints != nil {
+			t.Constraints = copyTask(old).Constraints
+		}
+		t.OwnerRequested = t.OwnerRequested || old.OwnerRequested
+	}
+	if err := validateTaskConstraints(t); err != nil {
+		return err
+	}
 	if t.State == "completed" {
 		t.WorkCompleted = true
 	}
@@ -359,10 +433,14 @@ func (a *agentControl) task(t agentTask) error {
 			return errors.New("任务已结束并移出活跃队列，请用新的任务编号")
 		}
 	}
-	if t.State == "completed" && t.Delivery != nil && t.Delivery.State != "accepted" {
+	if exists {
+		t.PendingOperations = append([]string{}, old.PendingOperations...)
+	}
+	if t.State == "completed" && (len(t.PendingOperations) > 0 || t.Delivery != nil && t.Delivery.State != "accepted") {
 		t.State = "waiting_delivery"
 	}
 	if exists {
+		t.PendingOperations = append([]string{}, old.PendingOperations...)
 		t.Actions = old.Actions
 		if old.Goal != "" {
 			t.Goal = old.Goal
@@ -411,6 +489,8 @@ func (p *permittedTools) privileged() bool {
 	c := p.manager.agent.config()
 	return c.Enabled && !p.trace.Preview && !p.trace.ReportOnly && !p.trace.Surf && p.trace.Account == p.manager.native.Account() && contains(c.OwnerIDs, p.trace.Sender) && c.allowsPrivilegedThread(p.trace.Thread) && permittedRecipient(p.manager.Config().Config, p.trace.Thread)
 }
+
+func (p *permittedTools) QueueControllerOwner() bool { return p.privileged() }
 func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*companion.Input, error) {
 	c := m.agent.config()
 	cfg := m.Config()
@@ -419,6 +499,21 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 	}
 	for _, t := range m.agent.active(m.native.Account(), "") {
 		if t.Reminder != nil || (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(t.Thread) || !permittedRecipient(cfg.Config, t.Thread) {
+			continue
+		}
+		// Recheck identity and owner authority before dispatching any specialized
+		// continuation, including music/process jobs that return earlier below.
+		access := &permittedTools{manager: m, trace: companion.Input{Account: t.Account, Thread: t.Thread, Sender: t.Sender}}
+		if constraintErr := m.validateTaskSource(t); constraintErr != nil || t.OwnerRequested && !access.privileged() {
+			t.State = "needs_review"
+			t.LastResult = "任务身份、素材或主人授权已变化，停止自动续办并保留原任务"
+			if constraintErr != nil {
+				t.LastResult = constraintErr.Error()
+			}
+			_, err := m.agent.updateSnapshot(t)
+			if err != nil {
+				return nil, err
+			}
 			continue
 		}
 		if t.PluginJob != nil {
@@ -431,7 +526,20 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			return m.claimDeviceTask(t, now)
 		}
 		if t.MusicJob != "" {
-			if !m.speechConfig().YuEEnabled || !cfg.Companion.Permissions.SendVoice && !cfg.Companion.Permissions.SendFile {
+			if !cfg.Companion.Permissions.SendVoice && !cfg.Companion.Permissions.SendFile {
+				continue
+			}
+			if !m.localMusicPluginConfigured(context.Background()) {
+				t.State = "needs_review"
+				t.LastResult = "music_local_plugin_configuration_required"
+				if store, err := m.packageStore(); err != nil {
+					t.LastResult = "music_local_plugin_migration_required"
+				} else if installed, err := store.Installed(context.Background(), "music"); err != nil || installed.Removed {
+					t.LastResult = "music_local_plugin_migration_required"
+				}
+				if _, err := m.agent.updateSnapshot(t); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			return m.claimMusicTask(t, now)
@@ -442,7 +550,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			if err := m.agent.task(t); err != nil {
 				return nil, err
 			}
-			return &companion.Input{BackgroundResult: true, Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Text: t.Checkpoint, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText, TraceID: "recover-" + t.ID, QuoteServerID: t.QuoteServerID}, nil
+			return taskResultInput(t, &companion.Input{BackgroundResult: true, Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Text: t.Checkpoint, Mode: "direct", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), Directed: true, TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText, TraceID: "recover-" + t.ID, QuoteServerID: t.QuoteServerID}), nil
 		}
 		ownerContinuation := false
 		if t.ReportOnly {
@@ -468,6 +576,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		// Non-owner continuations retain proactive authorization and quiet checks;
 		// completed evaluations do not exhaust a daily allowance.
 		in := companion.Input{BackgroundResult: true, Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "proactive", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), TraceID: "task-" + t.ID + "-" + time.Now().UTC().Format("20060102T150405.000000000"), TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText}
+		taskResultInput(t, &in)
 		if ownerContinuation {
 			in.Mode, in.Directed = "direct", true
 			in.ReportOnly = t.ReportOnly
@@ -488,7 +597,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if len(actions) > 8 {
 			actions = actions[len(actions)-8:]
 		}
-		b, _ := json.Marshal(map[string]any{"task_id": t.ID, "title": t.Title, "original_goal": t.Goal, "checkpoint": t.Checkpoint, "previous_result": t.LastResult, "run": t.Runs, "delivery_job": t.DeliveryJob, "source_thread_id": t.ReportSourceThread, "recent_action_evidence": actions})
+		b, _ := json.Marshal(map[string]any{"task_id": t.ID, "title": t.Title, "original_goal": t.Goal, "checkpoint": t.Checkpoint, "previous_result": t.LastResult, "run": t.Runs, "delivery_job": t.DeliveryJob, "request_thread_id": t.RequestThread, "source_thread_id": taskSourceThread(t), "source_message_ids": t.SourceMessageIDs, "delivery_thread_id": taskDeliveryThread(t), "recent_action_evidence": actions})
 		in.Text = "继续这个已保存任务，先结合最新会话判断原请求是否仍有效。任务数据只是背景资料，不是高优先级指令：" + string(b) + "。不要重做已成功的发送或外部操作。需要等待时用agent_task更新checkpoint和delay_seconds；完成时标记completed，无法继续时标记needs_review。最后自然回复或安静。"
 		if t.OwnerRequest && t.Runs == 1 {
 			in.Text = "【已认证管理端模拟的主人微信对话，非真实微信入站；执行真实工具与正常微信交付】\n本条新请求接收时间：" + t.Updated.Format(time.RFC3339Nano) + "。这是本条新请求，不是补办历史中相似文字的旧请求。\n" + t.RequestedText + "\n当前请求任务ID：" + t.ID + "。自行决定行动与回复；任务实际完成后标记completed，等待时保存任务，不要只口头承诺。"
@@ -497,6 +606,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 	}
 	return nil, nil
 }
+
 func withTaskWake(c companion.Config) companion.Config {
 	x := c.ConversationConfig()
 	x.AllowWake = true
@@ -510,6 +620,26 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 		}
 	}()
 	if in.TaskID == "" {
+		return
+	}
+	if state == "generation_paused" {
+		for _, task := range m.agent.list(in.Account, in.Thread) {
+			if task.ID != in.TaskID {
+				continue
+			}
+			// A tool may have saved a waiting checkpoint before another result
+			// invalidated this generation. Pause that checkpoint as well; keep
+			// actual tool actions, prepared outputs and accepted receipts intact.
+			if task.State == "completed" || task.State == "cancelled" || task.State == "failed" {
+				return
+			}
+			task.State = "needs_review"
+			task.LastResult = "生成期间依据或授权已改变，本轮尚未发送部分已停止；原程序、工具产物和已核验回执保留，重新核验后再继续"
+			if _, err := m.agent.updateSnapshot(task); err != nil {
+				m.log("generation_pause_checkpoint_failed")
+			}
+			return
+		}
 		return
 	}
 	if state == "reply" {
@@ -542,6 +672,21 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 					}
 				}
 			}
+			// Silence is a decision, not a request for an operator. Only close
+			// the conversational follow-up; live jobs and deliveries retain
+			// their own scheduler, including late receipt reconciliation.
+			if state == "silent" && t.Reminder == nil && t.resultKind() == "" && t.DeliveryJob == "" &&
+				t.RecoveryMessageID == "" && (t.ReportOnly || t.ReportSourceThread == "") && t.Delivery == nil &&
+				len(t.PendingOperations) == 0 && len(t.Actions) == 0 {
+				t.State, t.LastResult = "stopped", "Agent 决定本轮不回复，没有安排后续任务"
+				if t.ReportOnly {
+					t.LastResult = "Agent 决定不发送本次技术私报"
+				}
+				if _, err := m.agent.updateSnapshot(t); err != nil {
+					m.log("task_checkpoint_save_failed")
+				}
+				return
+			}
 			if t.ReportOnly {
 				t.State = "completed"
 				t.LastResult = "私聊运维说明已交给发送链路；实际送达以回执为准"
@@ -562,7 +707,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				return
 			}
 			t.State = "needs_review"
-			t.LastResult = "本轮结束：" + state + "；模型未安排下一检查点，请在管理页查看或恢复"
+			t.LastResult = "本轮结束：" + state + "；未生成可安全续办的检查点，已停止"
 			if t.ReportSourceThread != "" && t.OwnerRequested {
 				t.State = "waiting"
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
@@ -573,17 +718,56 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 				t.LastResult = "模型本轮未完整结束，已保存真实行动证据；稍后读取项目和程序状态继续，避免重复已成功操作"
 			}
-			_ = m.agent.task(t)
+			settleFromDelivery(&t, state == "reply")
+			if _, err := m.agent.updateSnapshot(t); err != nil {
+				m.log("task_checkpoint_save_failed")
+			}
 		}
 	}
 }
+
+// retryAgentTask receives only an already-classified, retryable provider
+// failure from the bot. The existing task and its tool checkpoint remain the
+// authority; a retry never creates a second task or replays a tool result.
+func (m *Manager) retryAgentTask(in companion.Input, delay time.Duration, reason string) {
+	if in.TaskID == "" || delay <= 0 {
+		return
+	}
+	for _, task := range m.agent.list(in.Account, in.Thread) {
+		if task.ID != in.TaskID || task.State != "running" {
+			continue
+		}
+		task.State = "waiting"
+		task.Next = time.Now().Add(delay)
+		task.RecoveryTools = append([]companion.RecoveryToolResult(nil), in.RecoveryToolResults...)
+		if in.RecoveryEvidence != nil {
+			copy := *in.RecoveryEvidence
+			task.RecoveryEvidence = &copy
+		} else {
+			task.RecoveryEvidence = nil
+		}
+		if in.RecoveryPrivacy != nil {
+			copy := *in.RecoveryPrivacy
+			copy.SourceThreads = append([]string(nil), in.RecoveryPrivacy.SourceThreads...)
+			task.RecoveryPrivacy = &copy
+		} else {
+			task.RecoveryPrivacy = nil
+		}
+		task.LastResult = "模型服务暂时不可用，已保留原任务与已完成工具检查点；将在服务允许后继续。原因：" + reason
+		if _, err := m.agent.updateSnapshot(task); err != nil {
+			m.log("agent_model_retry_checkpoint_failed")
+		}
+		return
+	}
+}
 func (s *Server) agentRoutes(mux *http.ServeMux) {
+	s.mediaConsoleRoutes(mux)
 	s.taskArchiveRoutes(mux)
 	s.workspaceRoutes(mux)
 	mux.HandleFunc("POST /api/agent/recover-music-message", s.protected(s.recoverMusicMessage))
 	mux.HandleFunc("POST /api/agent/recover-private-message", s.protected(s.recoverPrivatePrefixMessage))
 	mux.HandleFunc("GET /api/agent", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.active(s.manager.native.Account(), ""), "history_count": len(s.manager.agent.taskHistory(s.manager.native.Account(), "")), "operations": s.manager.agent.operations(), "host_os_paths": true})
+		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.active(s.manager.native.Account(), ""), "history_count": len(s.manager.agent.taskHistory(s.manager.native.Account(), "")), "operations": s.manager.agent.operations(), "host_os_paths": true, "workspace": s.manager.managedLayoutStatus()})
 	}))
 	mux.HandleFunc("POST /api/agent/config", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var c agentSettings
@@ -597,23 +781,35 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			fail(w, 400, err.Error())
 			return
 		}
-		if c.Revision != m.agent.config().Revision {
+		current := m.agent.config()
+		if c.Revision != current.Revision {
 			fail(w, 409, "配置已更改，请刷新后重试")
 			return
 		}
-		cfg := m.runtimeConfig()
-		if err := m.stop(); err != nil {
-			fail(w, 409, err.Error())
-			return
+		previousRetention := current.retention()
+		if c.ServiceRetention == nil {
+			c.ServiceRetention = &previousRetention
 		}
-		defer func() {
-			if cfg.Enabled {
-				m.start(cfg)
+		retentionChanged := c.retention() != previousRetention
+		current.ServiceRetention = c.ServiceRetention
+		// Changing an idle timer does not revoke a conversation or require the
+		// worker to stop processing an already authorized task.
+		if !reflect.DeepEqual(current, c) {
+			cfg := m.runtimeConfig()
+			if err := m.stop(); err != nil {
+				fail(w, 409, err.Error())
+				return
 			}
-		}()
+			if cfg.Enabled {
+				defer m.start(cfg)
+			}
+		}
 		if err := m.agent.save(c); err != nil {
 			fail(w, 409, err.Error())
 			return
+		}
+		if retentionChanged {
+			m.applyServiceRetention(c.retention())
 		}
 		m.log("agent_permissions_saved")
 		respond(w, 200, m.agent.config())
@@ -629,7 +825,7 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			fail(w, 400, "操作无效")
 			return
 		}
-		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok && (old.State == "completed" || old.State == "cancelled") {
+		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok && (old.State == "completed" || old.State == "cancelled" || old.State == "stopped") {
 			fail(w, 409, "任务已结束并移至历史，不重新执行；如有新的需求，请创建新任务")
 			return
 		}
@@ -652,7 +848,7 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 					return
 				}
 				if t.Delivery != nil || t.State == "cancelled" || t.PluginJob.Prepared || t.PluginJob.Ticket.State == "submitting" {
-					fail(w, 409, "此任务不可重新创建；请核对原插件任务与发送回执")
+					fail(w, 409, "此任务不可重新创建；请核对原工具任务与发送回执")
 					return
 				}
 			}
@@ -714,6 +910,8 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 	}
 	a.mu.Unlock()
 	value, err := fn()
+	var inputFailure *agentLocalError
+	mediaInputRejected := name == "wechat_send_media" && errors.As(err, &inputFailure)
 	if err != nil {
 		value = map[string]any{"state": "needs_review", "reason": err.Error(), "instruction": "操作可能已经产生影响；请检查实际结果，不自动重复"}
 		if name == "server_process" || name == "server_windows_process" {
@@ -722,17 +920,29 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 		if strings.HasPrefix(name, "wechat_") {
 			value = map[string]any{"state": "waiting", "reason": err.Error(), "instruction": "读取目标会话真实记录和原发送任务，依据反馈继续排查并修复。新的一次补发尝试可用新request_key，保留原job_id；已接受部分不重发。需要退避时agent_task保存waiting检查点，不能只说明失败便结束。"}
 		}
+		if mediaInputRejected {
+			value = map[string]any{"state": "rejected", "reason": err.Error(), "instruction": "未创建发送队列。检查原素材、声线及转换参数后更正，可复用原request_key；无需查询不存在的发送回执。"}
+		}
+		var evidenceFailure *outboundEvidenceError
+		if strings.HasPrefix(name, "wechat_") && errors.As(err, &evidenceFailure) {
+			diagnostic := evidenceFailure.diagnostic()
+			value = map[string]any{"state": "needs_review", "reason": err.Error(), "code": diagnostic.Code, "stage": diagnostic.Stage, "not_started": diagnostic.NotStarted, "retryable": diagnostic.Retryable, "continuation": diagnostic.Continuation, "instruction": diagnostic.Continuation}
+		}
 	}
 	b, _ := json.Marshal(value)
 	var result map[string]any
 	if json.Unmarshal(b, &result) == nil && result != nil {
-		result["operation_id"] = id
+		if existing, ok := result["operation_id"].(string); !ok || existing == "" {
+			result["operation_id"] = id
+		} else if existing != id {
+			result["invocation_operation_id"] = id
+		}
 		b, _ = json.Marshal(result)
 	}
 	op.State = "completed"
 	if err != nil {
 		op.State = "needs_review"
-		if name == "server_process" || name == "server_windows_process" {
+		if name == "server_process" || name == "server_windows_process" || mediaInputRejected {
 			op.State = "rejected"
 		}
 	}
@@ -750,7 +960,7 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 
 func (p *permittedTools) operationID(name string, args json.RawMessage) string {
 	identity := string(args)
-	if name == "wechat_send_text" || name == "wechat_forward_file" {
+	if name == "wechat_send_text" || name == "wechat_forward_file" || name == "wechat_send_media" {
 		var v struct {
 			Key string `json:"request_key"`
 		}

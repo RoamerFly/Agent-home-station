@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -14,8 +15,109 @@ type quotedTestSource struct {
 	resolution linuxnative.QuoteResolution
 }
 
+type quotedLiteralModel struct{ current map[string]any }
+
+func requestActorFromPacket(packet map[string]any) string {
+	for _, key := range []string{"request_actor_id", "message_sender_id", "speaker_id"} {
+		if value, exists := packet[key]; exists {
+			actor, _ := value.(string)
+			return actor
+		}
+	}
+	return ""
+}
+
+func (m *quotedLiteralModel) Chat(_ context.Context, _ string, turns []map[string]string) (string, error) {
+	for _, turn := range turns {
+		var row map[string]any
+		if json.Unmarshal([]byte(turn["content"]), &row) == nil && row["kind"] == "current_message" {
+			m.current = row
+		}
+	}
+	return `{"action":"silent","messages":[]}`, nil
+}
+
+func TestNativeQuotedTextPreservesOwnLiteralAndSeparateQuotedAuthor(t *testing.T) {
+	w, _, c, _ := mediaWorker(t)
+	model := &quotedLiteralModel{}
+	engine, err := companion.New(c.Config, c.Store, model, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.model = engine
+	engine.Config.QuietStart, engine.Config.QuietEnd = "00:00", "00:00"
+	w.config.Channel = "wechat"
+	records := []Record{}
+	w.config.Record = func(r Record) { records = append(records, r) }
+	w.config.GroupRules = map[string]GroupRule{"room@chatroom": {Mode: "social"}}
+	engine.Config.Permissions.ObserveGroups = true
+	engine.Config.Permissions.AutonomousGroups = true
+	type57 := 57
+	m := fixtureMessage("new-native-quote", "room@chatroom", "  这是我自己的新更正  ", "incoming")
+	literal := strings.TrimSpace(m.Body)
+	canonical := m
+	canonical.Body = literal
+	m.SenderID = "quoting-member"
+	m.ServerID = "888"
+	m.Type = 49
+	m.AppMessageType = &type57
+	m.Quote = &linuxnative.QuoteReference{ServerID: "777", Type: 1}
+	original := fixtureMessage("referenced-user-message", m.ThreadID, "另一位成员的原话", "incoming")
+	original.SenderID = "quoted-member"
+	original.ServerID = "777"
+	w.source = &quotedTestSource{fakeSource: &fakeSource{messages: map[string]linuxnative.Message{m.ID: m}}, resolution: linuxnative.QuoteResolution{AccountID: "test", MessageID: m.ID, ThreadID: m.ThreadID, State: "resolved", Message: &original}}
+	w.handle(context.Background(), fixtureEvent("1", m.ID, m.ThreadID, "incoming", "wechat"))
+	if w.persistErr != nil {
+		t.Fatal(w.persistErr)
+	}
+	if model.current == nil || model.current["text"] != literal || requestActorFromPacket(model.current) != m.SenderID {
+		t.Fatal("first context lost current quoted text", model.current, records)
+	}
+	q, ok := model.current["quoted_source"].(map[string]any)
+	if !ok || q["sender"] != original.SenderID || q["message_id"] != original.ID {
+		t.Fatal("first context lost separate quote author", model.current)
+	}
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: m.ThreadID}
+	scope := c.Store.Context(in, c.Config, time.Now())
+	for _, turn := range scope.Messages {
+		if turn.TraceID == m.ID {
+			ev, err := c.Store.ReadEvent(context.Background(), []string{scope.ID}, turn.EventID)
+			if err != nil || ev.Text != literal || ev.Sender != m.SenderID || turn.QuotedSource == nil || turn.QuotedSource.Sender != original.SenderID || turn.Source == nil || turn.Source.MessageType != 49 || turn.Source.ServerID != m.ServerID || turn.Source.BodyHash != messageSource(canonical).BodyHash {
+				t.Fatal("quoted literal/source projection wrong", ev, turn, err)
+			}
+			return
+		}
+	}
+	t.Fatal("quoted user event not stored")
+}
+
 func (s *quotedTestSource) QuotedMessage(context.Context, string) (linuxnative.QuoteResolution, error) {
 	return s.resolution, nil
+}
+
+func TestQuotedVoiceSenderIsNotPresentedAsVoiceSpeaker(t *testing.T) {
+	w, _, _, _ := mediaWorker(t)
+	current := fixtureMessage("quoting-event", "room@chatroom", "这是转发的语音", "incoming")
+	current.SenderID = "quoting-member"
+	current.Quote = &linuxnative.QuoteReference{ServerID: "voice-server", Type: 34}
+	voice := fixtureMessage("voice-event", current.ThreadID, "转写中的我", "incoming")
+	voice.SenderID, voice.ServerID, voice.Type = "uploading-member", "voice-server", 34
+	w.source = &quotedTestSource{fakeSource: &fakeSource{}, resolution: linuxnative.QuoteResolution{AccountID: "test", MessageID: current.ID, ThreadID: current.ThreadID, State: "resolved", Message: &voice}}
+	body := w.readQuoteContext(context.Background(), &current)
+	start := strings.Index(body, "{")
+	var packet map[string]any
+	if start < 0 || json.Unmarshal([]byte(body[start:]), &packet) != nil {
+		t.Fatal("missing quote packet", body)
+	}
+	if packet["request_actor_id"] != current.SenderID || packet["message_sender_id"] != voice.SenderID || packet["quoted_message_sender_id"] != voice.SenderID || packet["voice_speaker_id"] != nil || packet["voice_speaker_state"] != "unknown" {
+		t.Fatal("quote sender/voice roles were conflated", packet)
+	}
+	if _, exists := packet["speaker_id"]; exists {
+		t.Fatal("voice uploader became a literal speaker", packet)
+	}
+	if packet["text"] != "[语音]" {
+		t.Fatal("unverified quoted transcript became user wording", packet)
+	}
 }
 
 func TestQuotedReplyKeepsUserTextAndVerifiedBotReferenceWithoutFakeMention(t *testing.T) {
@@ -67,7 +169,7 @@ func TestQuotedShareRetainsExactSourceWithoutNeedingCachedAsset(t *testing.T) {
 	// its exact source; a same-title recent card must not replace this one.
 	w.runtime.Media = nil
 	raw = w.readQuoteContext(context.Background(), &m)
-	if !strings.Contains(raw, `"source_url":"https://www.bilibili.com/video/BV1425hzpEtn/?p=2"`) {
+	if !strings.Contains(raw, `"source_url":"https://www.bilibili.com/video/BV1425hzpEtn/?p=2"`) || !strings.Contains(raw, `"message_id":"original-card"`) || !strings.Contains(raw, `"server_id":"777"`) {
 		t.Fatal(raw)
 	}
 	for _, bad := range []string{"javascript:alert(1)", "https://user:password@example.org/video", "file:///private/movie"} {

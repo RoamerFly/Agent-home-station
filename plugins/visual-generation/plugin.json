@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "id": "visual-generation",
+  "name": "图像与视频生成",
+  "version": "0.1.1",
+  "host_protocol": 1,
+  "status": "migration-pending",
+  "platforms": [
+    "windows-amd64",
+    "linux-amd64"
+  ],
+  "runtime": {
+    "transport": "unbound"
+  },
+  "permissions": [
+    "network",
+    "artifact.write"
+  ],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "e8c78d58a88dcb679342d55e0730c7976d6bbd59aaeb5c06b0754a5a8b8cd6da",
+    "CHANGELOG.md": "0688abebe9b7a3826ee5def33287290c20cd363bdf25bda9f1aaef7a7219920b",
+    "config.schema.json": "95693d311a4827fcd7ab4d1ed7a6f590568841010f9999fe7761e7c810cb753f",
+    "MIGRATION.md": "067cb8194e9694c1dba969c2cc8cc6ec4f170d1b9b628d19e8d6d5aa30c99c9f",
+    "PERMISSIONS.md": "387af5d759e3985687567925a297962b40057cb2c97167934e8265d8ec20901e",
+    "README.md": "3a9ca5dbec39df8de166d7e30242c5436209fa30fda42755e7ed0f270786e23f",
+    "runtime/README.md": "072ef9ce9b7fb7c06975dd7b9cf762a920d23d7aa16fdf9b08beb759d81a5c1a",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
+  }
+}

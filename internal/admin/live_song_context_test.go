@@ -49,7 +49,11 @@ func TestLiveNamedSongContextChoosesFemaleCoverDespiteOldMaleHistory(t *testing.
 		w.Write([]byte(`{"id":"synthetic-female-cover","state":"queued"}`))
 	}))
 	defer u.Close()
-	f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, u.URL, "synthetic-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, u.URL, "synthetic-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	p, _, _ := f.manager.toolAccess()
 	tools := &coverLiveTools{p: p, transcript: "[Verse]\n合成验证歌词\n[Chorus]\n晚风轻轻吹"}
 	provider, err := f.manager.makeModel(cfg)

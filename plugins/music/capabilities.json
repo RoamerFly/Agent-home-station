@@ -1,0 +1,300 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "music.generate",
+      "implementation": "ready",
+      "description": "通过宿主绑定的云端接口提交歌曲生成；只返回未经下载或投递验证的提供商音频 URL。",
+      "permissions": [
+        "model.invoke"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "lyrics": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "external_request"
+    },
+    {
+      "id": "music.bridge_request",
+      "implementation": "ready",
+      "description": "宿主内部本地 YuE/RVC 服务协议：校验固定路由并分类实际HTTP错误；所有正文、音频、凭据和任务授权保留在宿主，不直接向Agent开放任意HTTP。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "POST"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "body_ref": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "const": "request_0"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "bytes"
+            ],
+            "additionalProperties": false
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "method",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          },
+          "mime": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "body_ref": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "const": "reply_0"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "bytes"
+            ],
+            "additionalProperties": false
+          },
+          "json": {},
+          "normalized_error": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "service",
+                  "input"
+                ]
+              },
+              "code": {
+                "type": "string"
+              },
+              "provider_code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "status",
+          "mime",
+          "body_ref"
+        ],
+        "additionalProperties": false
+      },
+      "discoverable": true,
+      "side_effect": "external_request"
+    },
+    {
+      "id": "music.service_control",
+      "implementation": "ready",
+      "description": "宿主内部已登记本地音乐服务的启动、所有权状态和停止；每次验证所有者或当前管理员会话，不接受命令或路径。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "start",
+              "status",
+              "stop"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "local_service_control"
+    },
+    {
+      "id": "music.prepare",
+      "implementation": "ready",
+      "description": "宿主内部纯音乐准备：解释RVC桥接协议、原任务恢复配方与生成风格；只接受已绑定观测与音频引用，不读取音频、凭据或路径，不发送请求。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "style",
+              "rvc_request",
+              "resume_plan",
+              "resume_result",
+              "recover_recipe"
+            ]
+          },
+          "style": {
+            "type": "string"
+          },
+          "gender": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "voice_profile_id": {
+            "type": "string"
+          },
+          "reference_sha256": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "health": {
+            "type": "object"
+          },
+          "audio_ref": {
+            "type": "object"
+          },
+          "status": {
+            "type": "object"
+          },
+          "reference_start_seconds": {
+            "type": "number"
+          },
+          "reference_seconds": {
+            "type": "number"
+          },
+          "restart_missing": {
+            "type": "boolean"
+          },
+          "restart_failed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "none"
+    },
+    {
+      "id": "music.cover",
+      "implementation": "migration-pending",
+      "description": "歌曲、翻唱、RVC 与 GPU 服务",
+      "permissions": [],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "music.train",
+      "implementation": "migration-pending",
+      "description": "歌曲、翻唱、RVC 与 GPU 服务",
+      "permissions": [],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/plugins"
 )
 
@@ -22,7 +24,7 @@ func (m *Manager) agentTaskActive(in companion.Input) bool {
 		return true
 	}
 	if t, ok := m.agent.lookupTask(in.TaskID, in.Account, in.Thread); ok {
-		return t.State != "cancelled"
+		return t.State != "cancelled" && t.State != "stopped"
 	}
 	return false
 }
@@ -47,17 +49,20 @@ func pluginJobSummary(t agentTask) map[string]any {
 }
 func (p *permittedTools) startPluginJob(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	if !p.pluginTaskAllowed() {
-		return "", toolInputError("后台插件任务需要启用持续任务并选择已授权会话；预演不创建远端任务")
+		return "", toolInputError("后台工具任务需要启用持续任务并选择已授权会话；预演不创建远端任务")
 	}
 	var arg map[string]any
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	if json.Unmarshal(args, &arg) != nil || arg == nil || len(args) > 8192 {
-		return "", toolInputError("插件参数无效")
+	decoder := json.NewDecoder(bytes.NewReader(args))
+	decoder.UseNumber()
+	if decoder.Decode(&arg) != nil || arg == nil || len(args) > 8192 {
+		return "", toolInputError("工具参数无效")
 	}
 	canonical, _ := json.Marshal(arg)
-	if err := p.runtime.CheckJobArgs(name, canonical); err != nil {
+	pollOnly := p.externalPollOnly(name)
+	if err := p.runtime.CheckJobArgs(name, canonical); !pollOnly && err != nil {
 		return "", err
 	}
 	id := "plugin-" + agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, name)[:48]
@@ -67,12 +72,48 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 			return string(b), nil
 		}
 	}
-	ticket, err := p.runtime.NewJobTicket(name)
+	bridge, legacyHash, err := p.manager.externalHTTPBridge()
 	if err != nil {
 		return "", err
 	}
-	interval, deadline, polls := p.runtime.JobLimits(name)
-	t := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "插件任务 · " + name, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, RequestedText: logText(companion.UserRequestText(p.trace.Text), 2000), State: "waiting", Next: time.Now().Add(time.Duration(interval) * time.Second), PluginJob: &pluginJobState{Ticket: ticket, Deadline: time.Now().Add(time.Duration(deadline) * time.Second), IntervalSeconds: interval, MaxPolls: polls}}
+	capability := externalJobCapability
+	var ticket plugins.JobTicket
+	var interval, deadline, polls int
+	var pollState *externalPollState
+	if pollOnly {
+		capability = externalPollCapability
+		protocol, e := bridge.PollProtocol(name)
+		if e != nil {
+			return "", e
+		}
+		ticket = plugins.JobTicket{Tool: name, Fingerprint: protocol.Tool.Fingerprint, State: "submitting"}
+		var timeout int
+		interval, polls, timeout, err = bridge.PollLimits(name)
+		if err != nil {
+			return "", err
+		}
+		deadline = timeout + polls*(interval+timeout)
+		pollState = &externalPollState{Arguments: append(json.RawMessage(nil), canonical...)}
+	} else {
+		ticket, err = p.runtime.NewJobTicket(name)
+		if err != nil {
+			return "", err
+		}
+		interval, deadline, polls = p.runtime.JobLimits(name)
+		protocol, e := bridge.JobProtocol(name)
+		if e != nil || protocol.Tool.Fingerprint != ticket.Fingerprint {
+			return "", plugins.ErrJobConfigChanged
+		}
+	}
+	if _, _, _, err = p.manager.externalPackageCapability(ctx, capability); err != nil {
+		return "", err
+	}
+	origin, err := cloneProjectPluginTrace(p.trace)
+	if err != nil {
+		return "", err
+	}
+	t := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "工具任务 · " + name, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, RequestedText: logText(companion.UserRequestText(p.trace.Text), 2000), State: "waiting", Next: time.Now().Add(time.Duration(interval) * time.Second), OwnerRequested: p.privileged(), PluginJob: &pluginJobState{PollState: pollState, Origin: &origin, LegacyConfigurationSHA256: legacyHash, Ticket: ticket, Deadline: time.Now().Add(time.Duration(deadline) * time.Second), IntervalSeconds: interval, MaxPolls: polls}}
+	t.Constraints = (&permittedTools{manager: p.manager, trace: origin}).taskConstraints("external-job", "", "", "")
 	// Claim the task before the POST. The claim itself is scoped and atomic.
 	a := p.manager.agent
 	a.mu.Lock()
@@ -92,15 +133,24 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 	a.mu.Unlock()
 	// The in-memory ledger must own a distinct copy from the network caller.
 	t = copyTask(t)
-	created, callErr := p.runtime.StartJob(ctx, ticket, canonical)
+	var created plugins.JobTicket
+	var callErr error
+	if pollOnly {
+		created, t.PluginJob.PollState.Initial, callErr = p.manager.callExternalPollPhase(ctx, t, "start")
+	} else {
+		created, callErr = p.manager.callExternalJobPhase(ctx, t, "start", canonical)
+	}
 	if callErr != nil && created.RemoteID != "" {
 		created.State = "waiting"
 		callErr = nil
 	}
 	t.PluginJob.Ticket = created
+	if pollOnly && callErr == nil {
+		t.Next = time.Now().Add(time.Duration(interval) * time.Second)
+	}
 	if callErr != nil {
 		t.State = "needs_review"
-		t.LastResult = "插件创建结果无法确认，未自动重试；请核对服务商记录"
+		t.LastResult = "工具创建结果无法确认，未自动重试；请核对服务商记录"
 	} else {
 		t.LastResult = "外部任务已领取，后台查询同一任务，不重新创建"
 	}
@@ -115,7 +165,7 @@ func (p *permittedTools) startPluginJob(ctx context.Context, name string, args j
 				return string(b), nil
 			}
 		}
-		return "", toolInputError("插件任务状态已改变")
+		return "", toolInputError("工具任务状态已改变")
 	}
 	p.manager.record(bot.Record{Event: "plugin_job_submitted", Category: "tool", ThreadID: t.Thread, MessageID: t.OriginTrace, Tool: name, Status: t.State, Reason: "plugin_job_durable_claim", Content: t.LastResult, Origin: "agent"})
 	if callErr != nil {
@@ -129,7 +179,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		TaskID string `json:"task_id"`
 	}
 	if json.Unmarshal(args, &in) != nil || len(in.TaskID) > 128 {
-		return "", toolInputError("插件任务参数无效")
+		return "", toolInputError("工具任务参数无效")
 	}
 	var task *agentTask
 	for _, old := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
@@ -139,7 +189,7 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		}
 	}
 	if task == nil || task.Sender != p.trace.Sender && !p.privileged() {
-		return "", toolInputError("只能查询或取消本人在本会话发起的插件任务")
+		return "", toolInputError("只能查询或取消本人在本会话发起的工具任务")
 	}
 	if name == "plugin_job_cancel" {
 		out, err := p.manager.cancelPluginTask(ctx, *task)
@@ -157,21 +207,55 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 		b, _ := json.Marshal(pluginJobSummary(*task))
 		return string(b), nil
 	}
+	if task.PluginJob.LegacyConfigurationSHA256 == "" || task.PluginJob.Origin == nil {
+		return "", toolInputError("legacy_configuration_or_source_proof_missing")
+	}
+	if _, _, _, err := p.manager.externalPackageCapability(ctx, externalTaskCapability(*task)); err != nil {
+		return "", err
+	}
+	_, configurationHash, err := p.manager.externalHTTPBridge()
+	if err != nil || configurationHash != task.PluginJob.LegacyConfigurationSHA256 {
+		return "", plugins.ErrJobConfigChanged
+	}
+	if err = p.manager.validateTaskSource(*task); err != nil {
+		return "", err
+	}
 	if task.Delivery != nil || task.PluginJob.Prepared {
 		return "", toolInputError("任务已进入微信交付，请核对原回执，不重复暂存或发送")
 	}
 	if !p.enabled(task.PluginJob.Ticket.Tool) {
-		return "", toolInputError("原插件或媒体权限已关闭")
+		return "", toolInputError("原工具或媒体权限已关闭")
 	}
-	if _, err := p.runtime.NewJobTicket(task.PluginJob.Ticket.Tool); err != nil {
-		return "", err
+	if task.PluginJob.PollState != nil {
+		bridge, _, e := p.manager.externalHTTPBridge()
+		if e != nil {
+			return "", e
+		}
+		current, e := bridge.PollProtocol(task.PluginJob.Ticket.Tool)
+		if e != nil || current.Tool.Fingerprint != task.PluginJob.Ticket.Fingerprint {
+			return "", plugins.ErrJobConfigChanged
+		}
+	} else {
+		current, e := p.runtime.NewJobTicket(task.PluginJob.Ticket.Tool)
+		if e != nil {
+			return "", e
+		}
+		if current.Fingerprint != task.PluginJob.Ticket.Fingerprint {
+			return "", toolInputError("工具声明已改变，旧任务未交给新接口")
+		}
 	}
-	// Validate the original manifest fingerprint before accessing cached output.
-	current, _ := p.runtime.NewJobTicket(task.PluginJob.Ticket.Tool)
-	if current.Fingerprint != task.PluginJob.Ticket.Fingerprint {
-		return "", toolInputError("插件声明已改变，旧任务未交给新接口")
+	output := task.PluginJob.Ticket.Output
+	if task.PluginJob.PollState != nil {
+		var readPolicy *externalHTTPPolicy
+		output, readPolicy, err = p.manager.externalPollCachedOutput(ctx, *task)
+		if err != nil {
+			return "", err
+		}
+		ctx = withOutputAuthority(ctx, func(check context.Context) error {
+			return readPolicy.Check(check, pluginhost.Job{Plugin: externalHTTPPluginID, Tool: externalPollCapability, Context: readPolicy.invocation, Arguments: readPolicy.arguments}, pluginhost.Capability{})
+		})
 	}
-	result, err := p.stageOutput(ctx, task.PluginJob.Ticket.Output)
+	result, err := p.stageOutput(ctx, output)
 	if err != nil {
 		return "", err
 	}
@@ -200,14 +284,19 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Input, error) {
 	task = copyTask(task)
 	job := task.PluginJob
+	if job.LegacyConfigurationSHA256 == "" || job.Origin == nil {
+		task.State = "needs_review"
+		task.LastResult = "legacy_configuration_proof_missing：保留原任务及远端编号，缺少可验证的原配置或来源，已停止续办，不重提或改绑"
+		if job.LegacyConfigurationSHA256 != "" {
+			task.LastResult = "legacy_source_proof_missing：原来源证明不可追溯，保留原任务待核验，不推断新的来源授权"
+		}
+		_, err := m.agent.updateSnapshot(task)
+		return nil, err
+	}
 	if job.Ticket.State == "submitting" {
 		task.State = "needs_review"
 		task.LastResult = "创建结果未知，不自动重新创建"
 		_, err := m.agent.updateSnapshot(task)
-		return nil, err
-	}
-	runtime, err := m.pluginRuntime()
-	if err != nil {
 		return nil, err
 	}
 	p, _, err := m.toolAccess()
@@ -215,9 +304,19 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 		return nil, err
 	}
 	defer p.hub.Close()
-	p.SetTrace(companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender})
+	trace, traceErr := m.externalJobTrace(task)
+	if traceErr != nil {
+		return nil, traceErr
+	}
+	p.SetTrace(trace)
 	if !p.enabled(job.Ticket.Tool) {
-		task.LastResult = "插件或任务权限已关闭，保留任务，不创建替代任务"
+		task.LastResult = "工具或任务权限已关闭，保留任务，不创建替代任务"
+		task.Next = now.Add(time.Minute)
+		_, err := m.agent.updateSnapshot(task)
+		return nil, err
+	}
+	if _, _, _, readyErr := m.externalPackageCapability(context.Background(), externalTaskCapability(task)); readyErr != nil {
+		task.LastResult = "外部任务工具未安装、停用或不可用；保留同一任务及原远端编号，不创建替代任务"
 		task.Next = now.Add(time.Minute)
 		_, err := m.agent.updateSnapshot(task)
 		return nil, err
@@ -225,22 +324,39 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 	if job.Ticket.State == "waiting" {
 		if !now.Before(job.Deadline) || job.Polls >= job.MaxPolls {
 			task.State = "needs_review"
-			task.LastResult = "插件任务超过本地查询期限或次数，未自动重新生成；远端可能仍在运行"
+			task.LastResult = "工具任务超过本地查询期限或次数，未自动重新生成；远端可能仍在运行"
 			_, err := m.agent.updateSnapshot(task)
 			return nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		ticket, pollErr := runtime.PollJob(ctx, job.Ticket)
+		timeout := 4
+		if job.PollState != nil {
+			bridge, _, e := m.externalHTTPBridge()
+			if e != nil {
+				return nil, e
+			}
+			_, _, timeout, e = bridge.PollLimits(job.Ticket.Tool)
+			if e != nil {
+				return nil, e
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+		var ticket plugins.JobTicket
+		var pollErr error
+		if job.PollState != nil {
+			ticket, _, pollErr = m.callExternalPollPhase(ctx, task, "query")
+		} else {
+			ticket, pollErr = m.callExternalJobPhase(ctx, task, "poll", json.RawMessage(`{}`))
+		}
 		cancel()
 		job.Polls++
 		if pollErr != nil {
 			if errors.Is(pollErr, plugins.ErrJobConfigChanged) {
 				task.State = "needs_review"
-				task.LastResult = "插件声明已改变，旧任务未交给新接口；请核对原服务商任务"
+				task.LastResult = "工具声明已改变，旧任务未交给新接口；请核对原服务商任务"
 				_, err := m.agent.updateSnapshot(task)
 				return nil, err
 			}
-			task.LastResult = "插件任务状态暂时不可读，稍后查询同一任务，不重新创建"
+			task.LastResult = "工具任务状态暂时不可读，稍后查询同一任务，不重新创建"
 			task.Next = now.Add(time.Duration(job.IntervalSeconds) * time.Second)
 			_, err := m.agent.updateSnapshot(task)
 			return nil, err
@@ -253,16 +369,22 @@ func (m *Manager) claimPluginTask(task agentTask, now time.Time) (*companion.Inp
 			return nil, err
 		}
 	}
-	task.LastResult = "插件结果已就绪，交回主模型处理"
+	task.LastResult = "工具结果已就绪，交回主模型处理"
 	if job.Ticket.State == "failed" {
 		job.Failure = true
 		job.Prepared = true
-		task.LastResult = "插件报告失败，交回主模型处理"
+		task.LastResult = "工具报告失败，交回主模型处理"
 	}
 	facts := map[string]any{"plugin_task": task.ID, "remote_state": job.Ticket.State, "failed": job.Failure}
 	in, err := m.claimTaskResult(task, now, facts, "调用plugin_job_status取得同一任务真实输出；不要重新调用创建工具。失败时根据具体反馈诊断并验证。")
 	if err != nil || in == nil {
 		return nil, err
+	}
+	// Preserve the original named-voice expectations on the continuation. They
+	// remain evidence requirements, never claims that an external API met them.
+	if job.Origin != nil {
+		in.ExpectedVoiceID = job.Origin.ExpectedVoiceID
+		in.ExpectedVoiceProfile = job.Origin.ExpectedVoiceProfile
 	}
 	m.record(bot.Record{Event: "plugin_job_result_ready", Category: "tool", ThreadID: task.Thread, MessageID: task.OriginTrace, Tool: job.Ticket.Tool, Status: job.Ticket.State, Reason: "plugin_job_same_task_result", Origin: "agent"})
 	return in, nil
@@ -275,6 +397,10 @@ func (m *Manager) cancelPluginTask(ctx context.Context, task agentTask) (agentTa
 	task.State = "cancelled"
 	task.LastResult = "已停止本地跟进和后续交付；正在核对远端取消能力"
 	task.PluginJob.CancelState = "claimed"
+	if task.PluginJob.PollState != nil {
+		task.PluginJob.CancelState = "local_only"
+		task.LastResult = "已停止本地查询及后续交付；此声明没有远端取消端点，不代表远端已停止"
+	}
 	a := m.agent
 	a.mu.Lock()
 	current, ok := a.data.Tasks[task.ID]
@@ -298,12 +424,12 @@ func (m *Manager) cancelPluginTask(ctx context.Context, task agentTask) (agentTa
 		return task, err
 	}
 	a.mu.Unlock()
-	runtime, err := m.pluginRuntime()
-	if err == nil {
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err = runtime.CancelJob(ctx, task.PluginJob.Ticket)
-		cancel()
+	if task.PluginJob.PollState != nil {
+		return task, nil
 	}
+	bound, cancel := context.WithTimeout(ctx, 10*time.Second)
+	_, err := m.callExternalJobPhase(bound, task, "cancel", json.RawMessage(`{}`))
+	cancel()
 	task.PluginJob.CancelState = "requested"
 	task.LastResult = "已停止本地交付，远端已接受取消请求；不代表远端已确认终止"
 	if err != nil {

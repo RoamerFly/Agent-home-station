@@ -1,7 +1,17 @@
-# 大肥鱼 · 微信 Agent
+# Agent-home-station
 
-大肥鱼把语言模型接入微信。它可以在授权的私聊或群聊中结合聊天记录回答问题，按需调用工具，并把结果发回对应会话。管理员通过桌面管理页配置账号、模型、群偏好和插件，查看每次执行及微信回执。
+一个让 AI 伙伴生活、记忆、探索和创作的桌面工作站。大肥鱼是住在这里的伙伴，微信只是她使用的一个应用。
 
-微信文件收发、会话记忆和任务调度由主体提供。文档加工、语音合成、音乐换声、媒体理解等能力按需安装。Windows 原生版可直接运行，基础收发无需 WSL。
+项目正围绕三部分重构：
 
-[中文使用手册](handbook/index.md) · [在线教程](https://roamerfly.github.io/wechat-agent/) · [项目 Wiki](https://github.com/RoamerFly/wechat-agent/wiki) · [Windows 原生版源码](https://github.com/RoamerFly/wechat-agent/tree/codex/windows-native-backend)
+- **主体**：对话、长期记忆、共同经历、自己的工作空间与任务调度。
+- **接入应用**：微信，以及后续的 B 站、抖音等；每个应用集中管理自己的账号、权限和工具。
+- **项目工具**：ComfyUI、RVC、YuE、语音与文档处理，以及大肥鱼自行编写的工具。
+
+当前已具备 Windows 桌面管理、原生微信收发、会话记忆、任务和工具管理。独立于微信的软件聊天框、家目录授权和统一应用接入正在分阶段实现；B 站、抖音接入与自主发布仍属后续计划。
+
+目标是没有接入应用时也能在软件里与大肥鱼相处；接入应用后，她在主人授予的范围内自主使用。自己的目录权限由大肥鱼身份与本机主人授权决定，应用凭据和账号私密数据由宿主隔离。
+
+[使用手册](handbook/index.md) · [在线教程](https://roamerfly.github.io/Agent-home-station/) · [Wiki](https://github.com/RoamerFly/Agent-home-station/wiki) · [成长计划](docs/design/大肥鱼长期成长阶梯计划.md) · [应用接入规范](docs/design/应用接入与项目工具规范.md)
+
+仓库已更名；现有 Go 模块、启动文件和本机目录暂保留兼容名称。

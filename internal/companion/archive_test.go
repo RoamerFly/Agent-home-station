@@ -10,6 +10,9 @@ import (
 func TestMemoryRetentionArchivesTextAndMediaWithoutReloadingModelContext(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +55,9 @@ func TestMemoryRetentionArchivesTextAndMediaWithoutReloadingModelContext(t *test
 		t.Fatal("text/media association lost")
 	}
 	s, err = NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +72,9 @@ func TestMemoryRetentionArchivesTextAndMediaWithoutReloadingModelContext(t *test
 func TestMemoryArchiveFailureLeavesOriginalState(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := Defaults()
 	c.Permissions.Remember = true
 	c.MemoryMessages = 1
@@ -96,6 +105,9 @@ func TestMemoryArchiveFailureLeavesOriginalState(t *testing.T) {
 }
 func TestClearActiveMemoryAlsoClearsCompressedSummary(t *testing.T) {
 	s, _ := NewStore(t.TempDir())
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := Defaults()
 	in := Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "synthetic"}
 	now := time.Now()

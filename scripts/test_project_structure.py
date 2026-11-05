@@ -13,11 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class StructureTests(unittest.TestCase):
     def test_markdown_targets_survive_relocation(self):
-        skipped = {".git", ".agents", "temp", "secrets", "dist", ".playwright-cli"}
+        skipped = {"public_workspace", "pri_workspace", ".git", ".agents", "temp", "secrets", "dist", ".playwright-cli"}
         missing = []
-        for file in ROOT.rglob("*.md"):
-            if skipped.intersection(file.relative_to(ROOT).parts):
-                continue
+        markdown=[]
+        for directory, dirs, names in os.walk(ROOT):
+            dirs[:]=[name for name in dirs if name not in skipped]
+            markdown.extend(Path(directory)/name for name in names if name.endswith(".md"))
+        for file in markdown:
             for target in re.findall(r"\]\(([^)]+)\)", file.read_text(encoding="utf-8-sig", errors="replace")):
                 target = target.strip("<>").split("#", 1)[0]
                 if not target or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target) or target.startswith("/"):

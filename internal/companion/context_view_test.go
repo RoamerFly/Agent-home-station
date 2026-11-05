@@ -29,6 +29,9 @@ func TestCompressionRunsIndependentlyPerScopeAndKeepsModelTail(t *testing.T) {
 	cfg.Permissions.Remember = true
 	cfg.Context = &ContextSettings{true, 20, 5, 8000}
 	store, _ := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	inputs := []Input{{Channel: "wechat", Account: "fixture", Thread: "one"}, {Channel: "wechat", Account: "fixture", Thread: "two"}}
 	for _, in := range inputs {
 		for i := 0; i < 25; i++ {

@@ -1,0 +1,368 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "device.plan",
+      "implementation": "ready",
+      "discoverable": true,
+      "side_effect": "read",
+      "permissions": [
+        "model.invoke"
+      ],
+      "description": "根据宿主已绑定的单次设备观察规划一个本地校验后的下一步；不观察、操作、录屏或发送。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "observation_id": {
+            "type": "string"
+          },
+          "source_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "task": {
+            "type": "object"
+          },
+          "observation": {
+            "type": "object"
+          },
+          "allowed_actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "task_id",
+          "observation_id",
+          "source_version",
+          "task",
+          "observation",
+          "allowed_actions"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "device.list",
+      "implementation": "ready",
+      "discoverable": true,
+      "side_effect": "read",
+      "permissions": [
+        "device"
+      ],
+      "description": "通过宿主受控代理列出已登记设备；工具不自行扫描设备。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "request": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "source_version",
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "device.observe",
+      "implementation": "ready",
+      "discoverable": true,
+      "side_effect": "read",
+      "permissions": [
+        "device"
+      ],
+      "description": "通过宿主受控代理取得来源绑定的设备观察回执元数据；原始 PNG 不经过工具。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "request": {
+            "type": "object",
+            "properties": {
+              "device_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "device_id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "source_version",
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "device.act",
+      "implementation": "ready",
+      "discoverable": true,
+      "side_effect": "write",
+      "permissions": [
+        "device"
+      ],
+      "description": "通过宿主受控代理提交一次来源绑定动作；回执未知时不由工具重试。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "request": {
+            "type": "object",
+            "properties": {
+              "device_id": {
+                "type": "string"
+              },
+              "observation_id": {
+                "type": "string"
+              },
+              "request_key": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string"
+              },
+              "x": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "y": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "x2": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "y2": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "duration_ms": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 1500
+              },
+              "package": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string",
+                "maxLength": 8192
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "device_id",
+              "observation_id",
+              "request_key",
+              "action"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "source_version",
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "device.record",
+      "implementation": "ready",
+      "discoverable": true,
+      "side_effect": "write",
+      "permissions": [
+        "device"
+      ],
+      "description": "通过宿主受控代理提交受限录屏；只返回元数据，录屏 bytes 不经过工具。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "request": {
+            "type": "object",
+            "properties": {
+              "device_id": {
+                "type": "string"
+              },
+              "observation_id": {
+                "type": "string"
+              },
+              "request_key": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "capture"
+                ]
+              },
+              "seconds": {
+                "type": "integer",
+                "minimum": 2,
+                "maximum": 12
+              }
+            },
+            "required": [
+              "device_id",
+              "observation_id",
+              "request_key",
+              "action",
+              "seconds"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "source_version",
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "device.read_artifact",
+      "implementation": "ready",
+      "discoverable": true,
+      "side_effect": "read",
+      "permissions": [
+        "device"
+      ],
+      "description": "通过宿主受控代理读取已登记录屏的受限回执元数据；分块 bytes 保持宿主私有。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "request": {
+            "type": "object",
+            "properties": {
+              "device_id": {
+                "type": "string"
+              },
+              "artifact_id": {
+                "type": "string"
+              },
+              "request_key": {
+                "type": "string"
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2097152
+              }
+            },
+            "required": [
+              "device_id",
+              "artifact_id",
+              "request_key",
+              "offset"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "source_version",
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "device.workflow",
+      "implementation": "ready",
+      "discoverable": true,
+      "side_effect": "write",
+      "permissions": [
+        "device",
+        "model.invoke"
+      ],
+      "description": "纯队列、检查点与单步工作流状态转换；每个实际设备或模型效果由后续独立已安装调用完成。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string"
+          },
+          "snapshot": {
+            "type": "object"
+          },
+          "input": {
+            "type": "object"
+          },
+          "now": {
+            "type": "string"
+          },
+          "nonce": {
+            "type": "string"
+          },
+          "facts": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "op",
+          "snapshot",
+          "input",
+          "now",
+          "nonce",
+          "facts"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    }
+  ]
+}

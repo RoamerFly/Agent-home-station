@@ -53,6 +53,10 @@ func setupAccounts(t *testing.T) (*webFixture, *accountRegistry) {
 			respond(w, 200, map[string]any{"items": []map[string]any{{"id": "out", "threadId": "filehelper", "type": 1, "direction": "outgoing", "senderId": "wxid_" + id, "body": "synthetic"}}})
 		case strings.Contains(r.URL.Path, "/contacts/wxid_"):
 			respond(w, 200, map[string]any{"id": "wxid_" + id, "nickname": "小号昵称"})
+		case r.Method == "POST" && id == "second" && (strings.HasSuffix(r.URL.Path, "/logout") || strings.HasSuffix(r.URL.Path, "/forget-credentials")):
+			respond(w, 202, map[string]string{"id": "end-session", "state": "queued"})
+		case r.URL.Path == "/v1/accounts/second/operations/end-session":
+			respond(w, 200, map[string]string{"id": "end-session", "state": "succeeded"})
 		case strings.HasSuffix(r.URL.Path, "/auth/login"):
 			respond(w, 202, map[string]any{"id": "shared-operation", "state": "awaiting_scan", "result": map[string]any{"qrAvailable": true, "qrGeneration": 1}})
 		case strings.HasSuffix(r.URL.Path, "/operations/shared-operation/qr"):

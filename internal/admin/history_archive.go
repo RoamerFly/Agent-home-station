@@ -41,6 +41,11 @@ func (m *Manager) pruneJournal(now time.Time) error {
 	if len(dropped) == 0 {
 		return nil
 	}
+	return m.commitJournalArchive(retained, dropped)
+}
+
+// The caller holds m.mu while archiving and committing the new active window.
+func (m *Manager) commitJournalArchive(retained, dropped []LogEntry) error {
 	for start := 0; start < len(dropped); start += 128 {
 		if _, err := m.historyArchive().Put("activity", activityScope(), dropped[start:min(start+128, len(dropped))]); err != nil {
 			return errors.New("日志归档失败，原活跃记录保留")

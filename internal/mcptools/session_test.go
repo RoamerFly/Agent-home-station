@@ -49,7 +49,7 @@ func TestPersistentMCPChild(t *testing.T) {
 
 func TestScopedStdioCancellationClosesSessionAndDoesNotInheritProviderEnvironment(t *testing.T) {
 	t.Setenv("WECHAT_MCP_AMBIENT_SECRET", "sensitive-fixture")
-	h, err := New([]ServerConfig{{ID: "fixture", Enabled: true, Transport: "stdio", Command: os.Args[0], Args: []string{"-test.run=^TestPersistentMCPChild$"}, Env: map[string]string{"WECHAT_MCP_SESSION_CHILD": "1"}}})
+	h, err := New([]ServerConfig{{ID: "fixture", Enabled: true, Transport: "stdio", Command: os.Args[0], Args: []string{"-test.run=^TestPersistentMCPChild$"}, Env: map[string]string{"WECHAT_MCP_SESSION_CHILD": "1"}}}, WithStdioLauncher(syntheticStdioLauncher))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestScopedStdioCancellationClosesSessionAndDoesNotInheritProviderEnvironmen
 }
 
 func TestScopedMCPSessionPersistsAndIsolatesConversations(t *testing.T) {
-	hub, err := New([]ServerConfig{{ID: "fixture", Enabled: true, Transport: "stdio", Command: os.Args[0], Args: []string{"-test.run=^TestPersistentMCPChild$"}, Env: map[string]string{"WECHAT_MCP_SESSION_CHILD": "1"}}})
+	hub, err := New([]ServerConfig{{ID: "fixture", Enabled: true, Transport: "stdio", Command: os.Args[0], Args: []string{"-test.run=^TestPersistentMCPChild$"}, Env: map[string]string{"WECHAT_MCP_SESSION_CHILD": "1"}}}, WithStdioLauncher(syntheticStdioLauncher))
 	if err != nil {
 		t.Fatal(err)
 	}

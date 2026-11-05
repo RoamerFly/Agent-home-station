@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "id": "configuration",
+      "title": "执行设置与已登记连接",
+      "component": "configuration",
+      "binding": "host_data.settings",
+      "action": "settings.save"
+    },
+    {
+      "id": "tasks",
+      "title": "设备任务",
+      "component": "tasks",
+      "binding": "host_data.tasks",
+      "action": "tasks.create"
+    },
+    {
+      "id": "resources",
+      "title": "任务素材",
+      "component": "resources",
+      "binding": "host_data.resources"
+    },
+    {
+      "id": "diagnostics",
+      "title": "状态与说明",
+      "component": "diagnostics",
+      "binding": "host_data.diagnostics",
+      "action": "devices.list"
+    }
+  ]
+}

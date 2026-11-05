@@ -3,7 +3,9 @@ package admin
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,65 @@ import (
 	"testing"
 	"wechat-bot/internal/companion"
 )
+
+func TestPublicAudioSixtySecondPartsPreserveActualTailWithoutPadding(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("FFmpeg unavailable")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("FFprobe unavailable")
+	}
+	for _, tc := range []struct {
+		seconds int
+		want    []int
+	}{{60, []int{60}}, {61, []int{60, 1}}, {120, []int{60, 60}}, {140, []int{60, 60, 20}}} {
+		t.Run(strconv.Itoa(tc.seconds), func(t *testing.T) {
+			pcm := make([]byte, tc.seconds*16000*2)
+			for i := 0; i < len(pcm)/2; i++ {
+				binary.LittleEndian.PutUint16(pcm[i*2:], uint16(int16(math.Sin(float64(i)*440*2*math.Pi/16000)*5000)))
+			}
+			var input bytes.Buffer
+			input.WriteString("RIFF")
+			binary.Write(&input, binary.LittleEndian, uint32(len(pcm)+36))
+			input.WriteString("WAVEfmt ")
+			binary.Write(&input, binary.LittleEndian, uint32(16))
+			binary.Write(&input, binary.LittleEndian, uint16(1))
+			binary.Write(&input, binary.LittleEndian, uint16(1))
+			binary.Write(&input, binary.LittleEndian, uint32(16000))
+			binary.Write(&input, binary.LittleEndian, uint32(32000))
+			binary.Write(&input, binary.LittleEndian, uint16(2))
+			binary.Write(&input, binary.LittleEndian, uint16(16))
+			input.WriteString("data")
+			binary.Write(&input, binary.LittleEndian, uint32(len(pcm)))
+			input.Write(pcm)
+			out, err := preparePublicAudio(context.Background(), t.TempDir(), input.Bytes())
+			if err != nil || len(out.Media) != len(tc.want) {
+				t.Fatal(len(out.Media), err)
+			}
+			for i, m := range out.Media {
+				frames := 0
+				signal := false
+				for pos := 12; pos+8 <= len(m.Data); {
+					n := int(binary.LittleEndian.Uint32(m.Data[pos+4:]))
+					start := pos + 8
+					if start+n > len(m.Data) {
+						t.Fatal("invalid WAV chunk")
+					}
+					if string(m.Data[pos:pos+4]) == "data" {
+						frames = n / 2
+						for j := start; j < start+n; j++ {
+							signal = signal || m.Data[j] != 0
+						}
+					}
+					pos = start + n + (n & 1)
+				}
+				if frames != tc.want[i]*16000 || !signal {
+					t.Fatal("padded, empty or truncated part", i, frames, tc.want[i])
+				}
+			}
+		})
+	}
+}
 
 func TestPublicVideoAudioExtractionProducesReusableAudioOnlyFile(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
@@ -64,7 +125,10 @@ func TestMusicPreviewRetainsCompleteOriginalForFileReuse(t *testing.T) {
 		t.Skip("FFprobe runtime unavailable")
 	}
 	f := setup(t)
-	f.manager.native = &fakeTools{fakeNative: f.native}
+	// This fixture holds a complete 70-second PCM file, so declare a backend
+	// that supports it rather than the generic 2 KiB upload mock.
+	native := &streamingFileNative{fakeTools: &fakeTools{fakeNative: f.native}}
+	f.manager.native = native
 	f.manager.config.Companion.Permissions.Remember = true
 	file := filepath.Join(t.TempDir(), "original.wav")
 	if out, err := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000", "-t", "70", "-c:a", "pcm_s16le", file).CombinedOutput(); err != nil {
@@ -106,12 +170,12 @@ func TestMusicPreviewRetainsCompleteOriginalForFileReuse(t *testing.T) {
 	if err != nil || len(assets) != 1 {
 		t.Fatal(err)
 	}
-	cached, err := os.ReadFile(filepath.Join(f.dir, "media-assets", assets[0].Hash))
+	cached, err := os.ReadFile(f.manager.assetPath(assets[0].Hash))
 	if err != nil || !bytes.Equal(cached, full) || len(cached) <= len(preview.Media[0].Data) {
 		t.Fatal("original replaced by preview", err)
 	}
 	result, err = access.reuseAsset(context.Background(), prepared.Media[0].AssetID, "file")
-	if err != nil || !strings.Contains(result, `"kind":"file"`) || !strings.Contains(result, `"network_downloads":0`) {
+	if err != nil || !strings.Contains(result, `"kind":"file"`) || !strings.Contains(result, `"network_downloads":0`) || native.bytes != int64(len(full)) {
 		t.Fatal(err, result)
 	}
 }

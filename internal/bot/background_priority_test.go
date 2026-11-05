@@ -31,7 +31,7 @@ func TestBackgroundReasoningYieldsToNewPrivateQuestionWithoutLosingInbox(t *test
 		done = state
 	}
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "process-result", TaskID: "saved-process", Mode: "direct", Text: "Inspect original process output"}
-	w.startGeneration(context.Background(), c, in, nil)
+	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
 	<-entered
 	w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Event: fixtureEvent("2", "status-question", "filehelper", "incoming", "remote"), Phase: "processing"})
 	message := fixtureMessage("status-question", "filehelper", "好了吗", "incoming")
@@ -54,7 +54,7 @@ func TestBackgroundReasoningYieldsToNewPrivateQuestionWithoutLosingInbox(t *test
 	question.TaskID = ""
 	question.TraceID = "status-question"
 	question.Text = "好了吗"
-	w.startGeneration(context.Background(), c, question, nil)
+	w.startSyntheticGeneration(t, context.Background(), c, question, nil)
 	pumpGeneration(t, w, func() bool { return len(w.generation.jobs) == 0 })
 	if len(w.runtime.Plans) != 1 || w.runtime.Plans[0].Messages[0] != "我核对了原任务结果" || calls.Load() != 2 {
 		t.Fatal("new foreground question never reached its own model decision", w.runtime.Plans)
@@ -95,7 +95,7 @@ func TestBackgroundYieldWaitsForActualToolBoundaryWithoutReplay(t *testing.T) {
 	done := ""
 	w.config.AgentTaskDone = func(_ companion.Input, state string) { done = state }
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "old-task", TaskID: "saved-task", Mode: "direct", Text: "saved repair"}
-	w.startGeneration(context.Background(), c, in, nil)
+	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
 	pumpGeneration(t, w, func() bool {
 		select {
 		case <-b.entered:
@@ -144,6 +144,7 @@ func TestDirectedBackgroundTaskMaySendModelAuthoredProgress(t *testing.T) {
 			w.config.Options.RandomDelay = false
 			w.config.Options.AcknowledgeTools = true
 			in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "progress", TaskID: "saved-task", Mode: "direct", Text: "continue original request"}
+			in = observeSyntheticMediaRequest(t, w, c, in)
 			if !background {
 				sent, err := w.toolProgress(c, in)(context.Background(), "我去核对一下刚才的结果～")
 				if err != nil || !sent {

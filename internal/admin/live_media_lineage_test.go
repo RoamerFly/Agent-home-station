@@ -53,7 +53,7 @@ func TestLiveModelResolvesRequesterAndQuotedVideoParent(t *testing.T) {
 		alice := companion.Input{Channel: "isolated", Account: "test", Thread: "synthetic-room@chatroom", Sender: "alice", SenderName: "小甲", TraceID: "alice-request", Text: "给我一首轻快的音乐", Mode: "direct", Directed: true, IsGroup: true}
 		f.manager.memory.Observe(alice, cfgCopy, time.Now().Add(-3*time.Minute))
 		parts := []stagedUpload{{UploadSource: linuxnative.UploadSource{ID: "alice-1"}, Kind: "voice"}, {UploadSource: linuxnative.UploadSource{ID: "alice-2"}, Kind: "voice"}}
-		a, err := f.manager.rememberAssetFormats(alice, assetOriginal{Data: []byte("synthetic full audio"), MIME: "audio/mpeg", Filename: "晚风音乐.mp3"}, parts)
+		a, err := f.manager.rememberAssetFormats(alice, assetOriginal{VoiceComplete: true, Data: []byte("synthetic full audio"), MIME: "audio/mpeg", Filename: "晚风音乐.mp3"}, parts)
 		if err != nil {
 			t.Fatal(err)
 		}

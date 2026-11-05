@@ -69,6 +69,12 @@ func TestLongRetryAfterIsRespectedAndCancellationStopsBackoff(t *testing.T) {
 		if err == nil || calls != 1 {
 			t.Fatal(err, calls)
 		}
+		if !cancelDuringWait {
+			d, ok := ErrorDiagnostics(err)
+			if !ok || d.RetryDelayMS < int64((120*time.Second).Milliseconds()) || !d.Retryable {
+				t.Fatal("long provider retry-after was not retained for durable recovery", d)
+			}
+		}
 		if cancelDuringWait && !errors.Is(err, context.Canceled) {
 			t.Fatal("cancellation identity lost", err)
 		}

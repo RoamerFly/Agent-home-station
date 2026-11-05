@@ -47,7 +47,7 @@ func (w *Worker) toolProgress(character *companion.Engine, input companion.Input
 			w.activity(Record{Event: "tool_progress_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: body, Reason: sending.FailureReason(err), Status: status, Origin: "bot"})
 			return false, nil
 		}
-		if err = character.Accepted(input, body); err != nil {
+		if err = w.acceptTextMemory(character, input, -1, body); err != nil {
 			return false, err
 		}
 		w.activity(Record{Event: "message_progress", Category: "sent", ThreadID: input.Thread, MessageID: input.TraceID, Content: body, Reason: "tool_progress_accepted", Status: "accepted", Origin: "bot"})

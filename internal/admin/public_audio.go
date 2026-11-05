@@ -30,7 +30,15 @@ func defaultAudioPreview(request string) int {
 	return 0
 }
 func preparePublicAudioPreview(ctx context.Context, dir string, data []byte, preview int) (plugins.Output, error) {
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	conversion := (&voiceConversion{DurationSeconds: float64(preview)}).effective()
+	return preparePublicAudioRange(ctx, dir, data, conversion)
+}
+func preparePublicAudioRange(ctx context.Context, dir string, data []byte, conversion voiceConversion) (plugins.Output, error) {
+	conversion = conversion.effective()
+	if err := conversion.validate("voice"); err != nil {
+		return plugins.Output{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(conversion.TimeoutSeconds*float64(time.Second)))
 	defer cancel()
 	tmp, err := os.MkdirTemp(dir, "public-audio-")
 	if err != nil {
@@ -53,23 +61,31 @@ func preparePublicAudioPreview(ctx context.Context, dir string, data []byte, pre
 	}
 	_ = json.Unmarshal(b, &probe)
 	seconds, err := strconv.ParseFloat(probe.Format.Duration, 64)
-	if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > 900 {
+	if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 {
 		return plugins.Output{}, &mcptools.WebError{Code: "audio_duration_limit"}
 	}
-	sendingSeconds := seconds
-	if preview > 0 && sendingSeconds > float64(preview) {
-		sendingSeconds = float64(preview)
+	if conversion.StartSeconds >= seconds {
+		return plugins.Output{}, toolInputError("start_seconds is outside the actual recording")
 	}
-	chunks := int(math.Ceil(sendingSeconds / 300))
-	output := plugins.Output{Text: fmt.Sprintf("真实音频已下载并转换，时长约 %.1f 秒，将由微信后台分为最多 60 秒一条的语音（约 %d 条）。尚未发送。", seconds, int(math.Ceil(seconds/60)))}
-	if sendingSeconds < seconds {
-		output.Text = fmt.Sprintf("原音频约 %.1f 秒；按要求准备 %.0f 秒试听，原音频完整保留，用户后续要文件可直接复用。不要主动询问文件。尚未发送。", seconds, sendingSeconds)
+	sendingSeconds := seconds - conversion.StartSeconds
+	if conversion.DurationSeconds > sendingSeconds+0.01 {
+		return plugins.Output{}, toolInputError("requested duration exceeds remaining recording; inspect actual duration and adjust")
 	}
+	if conversion.DurationSeconds > 0 {
+		sendingSeconds = math.Min(sendingSeconds, conversion.DurationSeconds)
+	}
+	count := math.Ceil(sendingSeconds / conversion.SegmentSeconds)
+	if count >= float64(int(^uint(0)>>1)) {
+		return plugins.Output{}, toolInputError("requested segment count exceeds platform index range")
+	}
+	chunks := int(count)
+	output := plugins.Output{Text: fmt.Sprintf("已从缓存原音频 %.3f 秒处准备 %.3f 秒，按每段最多 %.3f 秒分为 %d 条语音；尚未发送。", conversion.StartSeconds, sendingSeconds, conversion.SegmentSeconds, chunks)}
+	output.Text += "原音频完整保留，后续要原文件可直接复用。"
 	for i := 0; i < chunks; i++ {
 		filename := fmt.Sprintf("audio-part-%d-of-%d.wav", i+1, chunks)
 		dest := filepath.Join(tmp, filename)
-		length := math.Min(300, sendingSeconds-float64(i*300))
-		cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-protocol_whitelist", "file", "-format_whitelist", "wav,mp3,flac,ogg,aac,mov,matroska,webm", "-threads", "1", "-ss", strconv.Itoa(i*300), "-i", input, "-vn", "-ac", "1", "-ar", "16000", "-t", formatSeconds(length), "-c:a", "pcm_s16le", "-f", "wav", dest)
+		length := math.Min(conversion.SegmentSeconds, sendingSeconds-float64(i)*conversion.SegmentSeconds)
+		cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-protocol_whitelist", "file", "-format_whitelist", "wav,mp3,flac,ogg,aac,mov,matroska,webm", "-threads", "1", "-ss", formatSeconds(conversion.StartSeconds+float64(i)*conversion.SegmentSeconds), "-i", input, "-vn", "-ac", "1", "-ar", "16000", "-t", formatSeconds(length), "-c:a", "pcm_s16le", "-f", "wav", dest)
 		if err = cmd.Run(); err != nil {
 			if ctx.Err() != nil {
 				return plugins.Output{}, ctx.Err()
@@ -86,7 +102,7 @@ func preparePublicAudioPreview(ctx context.Context, dir string, data []byte, pre
 }
 
 func safeMediaFilename(name string) bool {
-	return name != "" && len(name) <= 128 && !strings.ContainsAny(name, "/\\\x00\r\n")
+	return name != "" && len(name) <= 512 && !strings.ContainsAny(name, "/\\\x00\r\n")
 }
 
 func extractPublicAudioFile(ctx context.Context, dir string, data []byte) ([]byte, error) {

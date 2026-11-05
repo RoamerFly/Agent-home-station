@@ -3,6 +3,7 @@
 package agentworkspace
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -13,11 +14,18 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+	"wechat-bot/internal/workspacefs"
 )
 
 type Store struct {
-	root string
-	mu   sync.Mutex
+	root             string
+	ResolveDirectory func(string) (string, error)
+	// BoundaryRoot is assigned by the service, never by note/tool content.
+	BoundaryRoot string
+	boundary     *os.Root
+	boundaryPath string
+	closed       bool
+	mu           sync.Mutex
 }
 type Document struct {
 	Name     string `json:"name"`
@@ -28,10 +36,28 @@ type Document struct {
 var ErrConflict = errors.New("文档已被其他操作修改，请重新读取后合并；没有覆盖")
 
 func Open(root string) (*Store, error) {
-	if e := os.MkdirAll(root, 0700); e != nil {
+	abs, e := filepath.Abs(root)
+	if e != nil {
 		return nil, e
 	}
-	return &Store{root: root}, nil
+	dir, e := workspacefs.EnsurePath(abs)
+	if e != nil {
+		return nil, e
+	}
+	dir.Close()
+	return &Store{root: abs, BoundaryRoot: abs}, nil
+}
+
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	if s.boundary != nil {
+		err := s.boundary.Close()
+		s.boundary = nil
+		return err
+	}
+	return nil
 }
 func validScope(s string) bool {
 	return s == "shared" || len(s) == 64 && strings.Trim(s, "0123456789abcdef") == ""
@@ -40,18 +66,39 @@ func validName(s string) bool {
 	return len(s) > 3 && len(s) <= 100 && strings.HasSuffix(s, ".md") && !strings.ContainsAny(s, "/\\:\x00") && s != "..md"
 }
 func (s *Store) directory(scope string) (*os.Root, string, error) {
+	if s.closed {
+		return nil, "", os.ErrClosed
+	}
 	if !validScope(scope) {
 		return nil, "", errors.New("工作区范围无效")
 	}
 	path := filepath.Join(s.root, scope)
-	if e := os.Mkdir(path, 0700); e != nil && !os.IsExist(e) {
+	if s.ResolveDirectory != nil {
+		var e error
+		path, e = s.ResolveDirectory(scope)
+		if e != nil {
+			return nil, "", e
+		}
+	}
+	base := s.BoundaryRoot
+	if base == "" {
+		base = s.root
+	}
+	if s.boundary == nil || s.boundaryPath != base {
+		root, e := workspacefs.EnsurePath(base)
+		if e != nil {
+			return nil, "", e
+		}
+		if s.boundary != nil {
+			s.boundary.Close()
+		}
+		s.boundary, s.boundaryPath = root, base
+	}
+	rel, e := filepath.Rel(base, path)
+	if e != nil {
 		return nil, "", e
 	}
-	stat, e := os.Lstat(path)
-	if e != nil || !stat.IsDir() || stat.Mode()&os.ModeSymlink != 0 {
-		return nil, "", errors.New("工作区目录不可用")
-	}
-	root, e := os.OpenRoot(path)
+	root, e := workspacefs.EnsureDirectory(s.boundary, rel)
 	return root, path, e
 }
 func revision(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -60,7 +107,7 @@ func read(root *os.Root, name string) (Document, error) {
 	if !validName(name) {
 		return d, errors.New("文档名须为单个 Markdown 文件名")
 	}
-	f, e := root.Open(name)
+	f, e := workspacefs.OpenRegular(root, name)
 	if os.IsNotExist(e) {
 		return d, nil
 	}
@@ -101,7 +148,7 @@ func (s *Store) List(scope, query string) ([]Document, error) {
 		return nil, e
 	}
 	defer root.Close()
-	f, e := root.Open(".")
+	f, e := workspacefs.OpenDirectory(root, ".")
 	if e != nil {
 		return nil, e
 	}
@@ -135,7 +182,7 @@ func (s *Store) Write(scope, name, content, expected string) (Document, error) {
 	if !utf8.ValidString(content) || len(content) > 65536 {
 		return Document{}, errors.New("文档须为不超过64KiB的UTF-8文本")
 	}
-	root, path, e := s.directory(scope)
+	root, _, e := s.directory(scope)
 	if e != nil {
 		return Document{}, e
 	}
@@ -147,11 +194,16 @@ func (s *Store) Write(scope, name, content, expected string) (Document, error) {
 	if old.Revision != expected {
 		return old, ErrConflict
 	}
-	f, e := os.CreateTemp(path, ".document-*")
+	nonce := make([]byte, 16)
+	if _, e = rand.Read(nonce); e != nil {
+		return Document{}, e
+	}
+	pending := ".document-" + hex.EncodeToString(nonce)
+	f, e := root.OpenFile(pending, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
 		return old, e
 	}
-	defer os.Remove(f.Name())
+	defer root.Remove(pending)
 	e = f.Chmod(0600)
 	if e == nil {
 		_, e = f.WriteString(content)
@@ -166,7 +218,7 @@ func (s *Store) Write(scope, name, content, expected string) (Document, error) {
 	if closeErr != nil {
 		return old, closeErr
 	}
-	if e = os.Rename(f.Name(), filepath.Join(path, name)); e != nil {
+	if e = root.Rename(pending, name); e != nil {
 		return old, e
 	}
 	return Document{Name: name, Content: content, Revision: revision([]byte(content))}, nil

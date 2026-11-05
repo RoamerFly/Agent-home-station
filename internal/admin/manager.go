@@ -11,14 +11,16 @@ import (
 	"sync"
 	"time"
 
+	"wechat-bot/internal/adbserver"
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/agentworkspace"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/devicebroker"
 	"wechat-bot/internal/linuxnative"
-	"wechat-bot/internal/mobile"
+	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/sending"
 )
 
@@ -39,45 +41,53 @@ type sendingRequest = sending.TextRequest
 type sendingReceipt = sending.Receipt
 
 type LogEntry struct {
-	MessageTime       string `json:"message_time,omitempty"`
-	SenderName        string `json:"sender_name,omitempty"`
-	RelatedMessageID  string `json:"related_message_id,omitempty"`
-	DecisionNote      string `json:"decision_note,omitempty"`
-	RetryAttempts     int    `json:"retry_attempts,omitempty"`
-	RetryAt           string `json:"retry_at,omitempty"`
-	ToolCacheHit      bool   `json:"tool_cache_hit,omitempty"`
-	ToolRequests      int    `json:"tool_requests,omitempty"`
-	ToolRetries       int    `json:"tool_retries,omitempty"`
-	ToolHTTPStatus    int    `json:"tool_http_status,omitempty"`
-	ToolCode          string `json:"tool_code,omitempty"`
-	ToolStage         string `json:"tool_stage,omitempty"`
-	ModelHTTPStatus   int    `json:"model_http_status,omitempty"`
-	ModelAttempts     int    `json:"model_attempts,omitempty"`
-	ModelMaxAttempts  int    `json:"model_max_attempts,omitempty"`
-	ModelStage        string `json:"model_stage,omitempty"`
-	ModelRetryDelayMS int64  `json:"model_retry_delay_ms,omitempty"`
-	CallID            string `json:"call_id,omitempty"`
-	Tool              string `json:"tool,omitempty"`
-	TargetURL         string `json:"target_url,omitempty"`
-	Query             string `json:"query,omitempty"`
-	DurationMS        int64  `json:"duration_ms,omitempty"`
-	Bytes             int64  `json:"bytes,omitempty"`
-	MediaCount        int    `json:"media_count,omitempty"`
-	SendID            string `json:"send_id,omitempty"`
-	SchemaVersion     int    `json:"schema_version,omitempty"`
-	ID                string `json:"id,omitempty"`
-	Time              string `json:"time"`
-	Event             string `json:"event"`
-	Category          string `json:"category,omitempty"`
-	ThreadID          string `json:"thread_id,omitempty"`
-	SourceKind        string `json:"source_kind,omitempty"`
-	Source            string `json:"source,omitempty"`
-	Sender            string `json:"sender,omitempty"`
-	Content           string `json:"content,omitempty"`
-	Reason            string `json:"reason,omitempty"`
-	Status            string `json:"status,omitempty"`
-	MessageID         string `json:"message_id,omitempty"`
-	Origin            string `json:"origin,omitempty"`
+	MessageTime            string                   `json:"message_time,omitempty"`
+	SenderName             string                   `json:"sender_name,omitempty"`
+	RelatedMessageID       string                   `json:"related_message_id,omitempty"`
+	DecisionNote           string                   `json:"decision_note,omitempty"`
+	RetryAttempts          int                      `json:"retry_attempts,omitempty"`
+	RetryAt                string                   `json:"retry_at,omitempty"`
+	ToolCacheHit           bool                     `json:"tool_cache_hit,omitempty"`
+	ToolRequests           int                      `json:"tool_requests,omitempty"`
+	ToolRetries            int                      `json:"tool_retries,omitempty"`
+	ToolHTTPStatus         int                      `json:"tool_http_status,omitempty"`
+	ToolCode               string                   `json:"tool_code,omitempty"`
+	ToolStage              string                   `json:"tool_stage,omitempty"`
+	ModelHTTPStatus        int                      `json:"model_http_status,omitempty"`
+	ModelAttempts          int                      `json:"model_attempts,omitempty"`
+	ModelMaxAttempts       int                      `json:"model_max_attempts,omitempty"`
+	ModelStage             string                   `json:"model_stage,omitempty"`
+	ModelRetryDelayMS      int64                    `json:"model_retry_delay_ms,omitempty"`
+	ModelFinishReason      string                   `json:"model_finish_reason,omitempty"`
+	ModelContentBytes      int                      `json:"model_content_bytes,omitempty"`
+	ModelJSONValid         bool                     `json:"model_json_valid,omitempty"`
+	ModelFormatAttempt     int                      `json:"model_format_attempt,omitempty"`
+	ModelMaxFormatAttempts int                      `json:"model_max_format_attempts,omitempty"`
+	ModelProtocolCode      string                   `json:"model_protocol_code,omitempty"`
+	ReviewFailure          *companion.ReviewFailure `json:"review_failure,omitempty"`
+	CallID                 string                   `json:"call_id,omitempty"`
+	Tool                   string                   `json:"tool,omitempty"`
+	Effect                 string                   `json:"effect,omitempty"`
+	TargetURL              string                   `json:"target_url,omitempty"`
+	Query                  string                   `json:"query,omitempty"`
+	DurationMS             int64                    `json:"duration_ms,omitempty"`
+	Bytes                  int64                    `json:"bytes,omitempty"`
+	MediaCount             int                      `json:"media_count,omitempty"`
+	SendID                 string                   `json:"send_id,omitempty"`
+	SchemaVersion          int                      `json:"schema_version,omitempty"`
+	ID                     string                   `json:"id,omitempty"`
+	Time                   string                   `json:"time"`
+	Event                  string                   `json:"event"`
+	Category               string                   `json:"category,omitempty"`
+	ThreadID               string                   `json:"thread_id,omitempty"`
+	SourceKind             string                   `json:"source_kind,omitempty"`
+	Source                 string                   `json:"source,omitempty"`
+	Sender                 string                   `json:"sender,omitempty"`
+	Content                string                   `json:"content,omitempty"`
+	Reason                 string                   `json:"reason,omitempty"`
+	Status                 string                   `json:"status,omitempty"`
+	MessageID              string                   `json:"message_id,omitempty"`
+	Origin                 string                   `json:"origin,omitempty"`
 }
 
 type BotStatus struct {
@@ -85,49 +95,89 @@ type BotStatus struct {
 	LastEvent string `json:"last_event"`
 }
 type Manager struct {
-	accounts     *accountRegistry
-	canvasMu     sync.Mutex
-	friendsMu    sync.Mutex
-	friends      map[string]friendEntry
-	workspace    *agentworkspace.Store
-	processes    *agenthost.Jobs
-	mobile       *mobile.Control
-	speech       bailian.Config
-	agent        *agentControl
-	surfHistory  *surfHistoryStore
-	billing      *billingStore
-	assetMu      sync.Mutex
-	storageError string
-	drainTicket  string
-	drainExpires time.Time
-	drainTimer   *time.Timer
-	mediaSeeds   []bot.MediaSeed
-	surf         surfState
-	dir          string
-	stateDir     string
-	native       Native
-	op           sync.Mutex
-	mu           sync.Mutex
-	config       Config
-	status       BotStatus
-	logs         []LogEntry
-	journal      []LogEntry
-	logSequence  uint64
-	cancel       context.CancelFunc
-	done         chan struct{}
-	memory       *companion.Store
-	tools        *toolStore
-	actions      *actionLedger
-	mcp          mcpSettings
-	plugins      *pluginLedger
+	enrollment          enrollmentRuntime
+	packageMu           sync.Mutex
+	packages            *pluginhost.Store
+	packagesClosed      bool
+	packageRuntime      *pluginruntime.Controller
+	packageRuntimeReady bool
+	managedServices     *pluginruntime.ManagedServices
+	managedServicesOnce sync.Once
+	musicIdleMu         sync.Mutex
+	musicIdleTimer      *time.Timer
+	musicIdleGeneration uint64
+	memoryRunnerMu      sync.Mutex
+	memoryRunnerWG      sync.WaitGroup
+	memoryRunners       map[string]context.CancelFunc
+	memoryRunnersClosed bool
+	memoryServiceMu     sync.Mutex
+	workspaceDir        string
+	directoryMu         sync.Mutex
+	accounts            *accountRegistry
+	fish                *fishIdentityRegistry
+	canvasMu            sync.Mutex
+	friendsMu           sync.Mutex
+	friends             map[string]friendEntry
+	workspace           *agentworkspace.Store
+	processes           *agenthost.Jobs
+	mobile              deviceService
+	agent               *agentControl
+	surfHistory         *surfHistoryStore
+	surfInteractions    *surfInteractionStore
+	billing             *billingStore
+	assetMu             sync.Mutex
+	crossSendMu         sync.Mutex
+	storageError        string
+	drainTicket         string
+	drainExpires        time.Time
+	drainTimer          *time.Timer
+	mediaSeeds          []bot.MediaSeed
+	surf                surfState
+	dir                 string
+	stateDir            string
+	native              Native
+	op                  sync.Mutex
+	mu                  sync.Mutex
+	config              Config
+	status              BotStatus
+	logs                []LogEntry
+	journal             []LogEntry
+	logSequence         uint64
+	cancel              context.CancelFunc
+	done                chan struct{}
+	memory              *companion.Store
+	tools               *toolStore
+	actions             *actionLedger
+	mcp                 mcpSettings
+	plugins             *pluginLedger
 }
 
+// NewManager constructs an independent root manager. Account registries use
+// newManager with their already-owned service fish registry before startup.
 func NewManager(dir, stateDir string, native Native) (*Manager, error) {
+	return newManager(dir, stateDir, native, nil)
+}
+
+func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry) (*Manager, error) {
 	if native == nil || dir == "" {
 		return nil, errors.New("missing admin runtime configuration")
 	}
+	var err error
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if stateDir != "" {
+		stateDir, err = filepath.Abs(stateDir)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, errors.New("管理目录不可用")
+	}
+	if fish == nil {
+		fish = newFishIdentityRegistry(dir)
 	}
 	c, err := loadConfig(dir)
 	if err != nil {
@@ -137,6 +187,12 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	memoryInitialized := false
+	defer func() {
+		if !memoryInitialized {
+			memory.Close()
+		}
+	}()
 	tools, err := newToolStore(dir)
 	if err != nil {
 		return nil, err
@@ -145,14 +201,12 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	mcp, err := loadMCP(dir)
+	externalConfiguration, err := newExternalConfigurationRepository(dir, native.Account())
 	if err != nil {
 		return nil, err
 	}
-	plug, err := newPluginLedger(dir)
-	if err != nil {
-		return nil, err
-	}
+	mcp := externalConfiguration.snapshot().Settings
+	plug := newPluginLedgerForRepository(externalConfiguration)
 	if stateDir == "" {
 		stateDir = filepath.Join(dir, "bot-state")
 	}
@@ -164,47 +218,71 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if surfErr != nil {
 		return nil, surfErr
 	}
-	speech, err := loadSpeech(dir)
-	if err != nil {
-		return nil, err
-	}
 	agent, err := newAgentControl(dir)
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{speech: speech, agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug}
+	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish}
+	externalConfiguration.openStore, externalConfiguration.owned = m.packageStore, false
 	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
 	if err != nil {
 		return nil, err
 	}
+	workspaceInitialized := false
+	defer func() {
+		if !workspaceInitialized {
+			m.workspace.Close()
+		}
+	}()
 	m.processes, err = agenthost.OpenJobs(filepath.Join(dir, "agent-processes"))
 	if err != nil {
+		return nil, err
+	}
+	if err = m.configureWorkspaceDirectory(); err != nil {
+		m.processes.Close()
+		return nil, err
+	}
+	if err = m.configureManagedNotes(); err != nil {
+		m.processes.Close()
 		return nil, err
 	}
 	if err = m.initializeWorkspace(); err != nil {
 		m.processes.Close()
 		return nil, err
 	}
-	m.mobile, err = mobile.Open(filepath.Join(dir, "mobile"), m.planMobile)
-	if err != nil {
-		return nil, err
-	}
+	m.mobile = m.newMobileService()
 	m.surf = surf
-	if assets, err := m.loadAssets(); err == nil {
+	// Only an explicitly present and valid catalogue can authoritatively remove
+	// derived media search records. A copied SQLite database may legitimately
+	// arrive before its media-assets manifest during recovery.
+	if assets, err := m.loadAssetsSnapshot(); err == nil && assets != nil {
+		if err = m.indexMemoryAssets(assets); err != nil {
+			return nil, err
+		}
 		sources := map[string]map[string]companion.MediaMemory{}
 		for _, a := range assets {
 			if a.Account == native.Account() {
 				if sources[a.Scope] == nil {
 					sources[a.Scope] = map[string]companion.MediaMemory{}
 				}
-				sources[a.Scope][a.ID] = companion.MediaMemory{URL: a.URL, CachedMIME: a.MIME, ParentAssetID: a.ParentAssetID}
+				source := companion.MediaMemory{URL: a.URL, CachedMIME: a.MIME, ParentAssetID: a.ParentAssetID}
+				if a.FirstRequest != nil {
+					source.RequestTraceID, source.RequesterID = a.FirstRequest.TraceID, a.FirstRequest.RequesterID
+				}
+				sources[a.Scope][a.ID] = source
 			}
 		}
+		// Startup owns this account's operation ledger until NewManager returns.
+		joinLegacySpeechScripts(native.Account(), agent.data.Operations, sources)
 		if err = memory.BackfillMediaMetadata(sources); err != nil {
 			return nil, err
 		}
 	}
 	m.surfHistory, err = newSurfHistory(dir)
+	if err != nil {
+		return nil, err
+	}
+	m.surfInteractions, err = newSurfInteractionStore(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -224,17 +302,30 @@ func NewManager(dir, stateDir string, native Native) (*Manager, error) {
 	if err := m.loadJournal(); err != nil {
 		return nil, err
 	}
+	// Recovery diagnostics must append to the loaded journal, never overwrite
+	// existing history while manager construction is still in progress.
+	if err = m.restoreCrossMedia(); err != nil {
+		m.processes.Close()
+		m.mobile.Close()
+		return nil, err
+	}
 	if err := m.surfHistory.importAccepted(m.journal); err != nil {
 		return nil, err
 	}
 	receiptCtx, cancelReceipts := context.WithTimeout(context.Background(), 3*time.Second)
 	m.importOwnerSurfReceipts(receiptCtx)
 	cancelReceipts()
-	m.mobile.OnFinished(m.deviceFinished)
-	m.mobile.SetAuthorizer(m.mobileSourceAllowed)
-	m.mobile.SetArtifactAnalyzer(m.analyzeDeviceArtifact)
 	if c.Enabled {
 		m.start(c)
+	}
+	workspaceInitialized = true
+	memoryInitialized = true
+	if pending, e := m.memory.PendingRebuilds(context.Background()); e == nil {
+		for _, id := range pending {
+			if _, e = m.memoryScope(id); e == nil {
+				_ = m.startMemoryRebuild(id)
+			}
+		}
 	}
 	return m, nil
 }
@@ -248,12 +339,20 @@ func (m *Manager) Config() ConfigView {
 	return c.view()
 }
 func cloneConfig(c Config) Config {
+	if c.Companion.Grounding != nil {
+		copy := *c.Companion.Grounding
+		c.Companion.Grounding = &copy
+	}
 	if c.Companion.Context != nil {
 		copy := *c.Companion.Context
 		c.Companion.Context = &copy
 	}
 	if c.Companion.Conversation != nil {
 		copy := *c.Companion.Conversation
+		if copy.GroupAggregateMS != nil {
+			ms := *copy.GroupAggregateMS
+			copy.GroupAggregateMS = &ms
+		}
 		c.Companion.Conversation = &copy
 	}
 	c.DirectIDs = append([]string{}, c.DirectIDs...)
@@ -377,6 +476,27 @@ func (m *Manager) stop() error {
 	return nil
 }
 func (m *Manager) Close() error {
+	m.enrollment.close()
+	// Stop task owners while their plugin sessions and private job store are
+	// still available to checkpoint cancellation and reap native child trees.
+	var mobileErr error
+	if m.mobile != nil {
+		mobileErr = m.mobile.Close()
+	}
+	m.packageMu.Lock()
+	m.packagesClosed = true
+	packages, packageRuntime := m.packages, m.packageRuntime
+	m.packageMu.Unlock()
+	cleanupErr := errors.Join(devicebroker.CleanupQuarantined(), adbserver.CleanupQuarantined())
+	var packageErr error
+	if packageRuntime != nil {
+		packageErr = packageRuntime.Close()
+	}
+	if packages != nil && packageErr == nil {
+		packageErr = packages.Close()
+	}
+	m.closeWindowsMusic()
+	m.closeMemoryRunners()
 	if m.accounts != nil {
 		m.accounts.close()
 	}
@@ -385,10 +505,14 @@ func (m *Manager) Close() error {
 	if m.processes != nil {
 		m.processes.Close()
 	}
-	if m.mobile != nil {
-		_ = m.mobile.Close()
+	err := errors.Join(mobileErr, cleanupErr, packageErr, m.stop())
+	if m.workspace != nil {
+		err = errors.Join(err, m.workspace.Close())
 	}
-	return m.stop()
+	if m.memory != nil {
+		err = errors.Join(err, m.memory.Close())
+	}
+	return err
 }
 func (m *Manager) setState(state string) { m.mu.Lock(); m.status.State = state; m.mu.Unlock() }
 func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {
@@ -400,10 +524,10 @@ func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {
 		return nil, err
 	}
 	toolTokens := c.MaxTokens
-	if c.Companion.Enabled && m.agent != nil && m.agent.config().Enabled {
+	if !c.ThinkingEnabled && c.Companion.Enabled && m.agent != nil && m.agent.config().Enabled {
 		toolTokens = 4096
 	}
-	return deepseek.New(deepseek.Config{BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: toolTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
+	return deepseek.New(deepseek.Config{ThinkingEnabled: &c.ThinkingEnabled, ReasoningEffort: c.ReasoningEffort, BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: toolTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
 		if m.billing != nil {
 			if err := m.billing.record(c, u); err != nil {
 				m.log("usage_record_save_failed")
@@ -448,13 +572,34 @@ func (m *Manager) start(c Config) {
 		}
 		var model bot.Model = provider
 		if c.Companion.Enabled {
-			character, err := companion.New(c.Companion, m.memory, provider, c.SystemPrompt)
+			character, err := companion.New(c.sharedCompanion(), m.memory, provider, c.SystemPrompt)
 			if err != nil {
 				m.setState("error")
 				m.log("character_configuration_error")
 				return
 			}
 			character.Images = m.tools.imageAssets(m.native.Account())
+			character.MemoryEmbedding = func() companion.EmbeddingConfig {
+				cfg, e := m.loadMemoryServices()
+				if e != nil {
+					return companion.EmbeddingConfig{}
+				}
+				return cfg.Embedding
+			}
+			character.MemoryOptions = func() companion.MemorySettings {
+				cfg, e := m.loadMemoryServices()
+				if e != nil {
+					return companion.MemorySettings{}
+				}
+				return cfg.Settings
+			}
+			character.ReplyAuditOptions = func() companion.ReplyAuditSettings {
+				cfg, e := m.loadMemoryServices()
+				if e != nil {
+					return companion.ReplyAuditSettings{Enabled: false, RetentionDays: 7}
+				}
+				return cfg.Settings.AuditConfig()
+			}
 			if names, ok := m.native.(companion.NameLookup); ok {
 				character.Names = names
 			}
@@ -483,13 +628,19 @@ func (m *Manager) start(c Config) {
 		m.warmFriends(friendCtx)
 		cancelFriends()
 		c.friendIDs = m.cachedFriends()
-		worker, err := bot.New(bot.Config{BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, ReportFailure: m.queueOperationReport, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m, provider: provider}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
+		worker, err := bot.New(bot.Config{ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
 		if err != nil {
 			m.setState("error")
 			m.log("bot_configuration_error")
 			return
 		}
 		reminderCtx, cancelReminders := context.WithCancel(ctx)
+		if character, ok := model.(*companion.Engine); ok {
+			memoryCtx, cancelMemory := context.WithCancel(ctx)
+			memoryDone := make(chan struct{})
+			go func() { defer close(memoryDone); m.runMemoryMaintenance(memoryCtx, character) }()
+			defer func() { cancelMemory(); <-memoryDone }()
+		}
 		reminderDone := make(chan struct{})
 		go func() { defer close(reminderDone); m.runReminders(reminderCtx) }()
 		defer func() { cancelReminders(); <-reminderDone }()
@@ -505,6 +656,8 @@ func (m *Manager) start(c Config) {
 		if err != nil {
 			m.setState("error")
 			m.log("bot_stopped_check_connection_or_checkpoint")
+			m.log(botFailureReason(err))
+			m.record(bot.Record{Event: "bot_runtime_failed", Category: "error", Origin: "system", Status: "failed", Reason: botFailureReason(err)})
 		}
 	}()
 }

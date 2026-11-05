@@ -9,13 +9,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/companion"
 )
 
 // Parameters are attached to the generated asset, not a global most-recent song.
 // They describe what was submitted, not a guarantee that the singer followed it.
 type songSpec struct {
+	VoiceID          string        `json:"voice_id,omitempty"`
+	VoiceProfile     string        `json:"voice_profile_id,omitempty"`
 	Engine           string        `json:"engine,omitempty"`
 	Sampling         musicSampling `json:"sampling,omitempty"`
 	PlanningMode     string        `json:"planning_mode,omitempty"`
@@ -100,10 +101,6 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 		out["lyrics_evidence_id"], out["lyrics"] = e.ID, e.Text
 	}
 	if input.Transcribe {
-		c := p.manager.speechConfig()
-		if !c.ASREnabled {
-			return "", errors.New("歌词转写需要已配置并启用语音识别；不能自行编歌词冒充原词")
-		}
 		seconds := input.Seconds
 		if seconds == 0 {
 			seconds = 60
@@ -112,12 +109,19 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 		if err != nil {
 			return "", err
 		}
-		text, err := bailian.New(c).Transcribe(ctx, wav)
+		policy, err := p.newReferenceTranscriptionPolicy(ctx, a, wav, input.Offset, seconds)
+		if err != nil {
+			return "", err
+		}
+		text, err := policy.transcribe(ctx)
 		if err != nil {
 			return "", err
 		}
 		out["transcript"], out["offset_seconds"], out["window_seconds"] = text, input.Offset, seconds
 		out["reference_window_candidate"] = map[string]any{"reference_start_seconds": input.Offset, "reference_seconds": seconds, "instruction": "这是本次实际识别的区间；核对是否为目标歌曲演唱，ASR候选不等于音质或人声质量认证"}
+		if err = policy.checkCompleted(ctx); err != nil {
+			return "", err
+		}
 		e, err := p.saveLyricEvidence(a, text, "asr_candidate", input.Offset, seconds)
 		if err != nil {
 			return "", err

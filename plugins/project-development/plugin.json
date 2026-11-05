@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "id": "project-development",
+  "name": "项目开发",
+  "version": "0.2.3",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": [
+    "windows-amd64",
+    "linux-amd64"
+  ],
+  "runtime": {
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
+  },
+  "permissions": [
+    "workspace.read",
+    "workspace.write",
+    "process.execute"
+  ],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "2ff57ad4a7b42dd4387e511c71b1aa7df3e902ceb2875313401bbe8f934ae4f2",
+    "CHANGELOG.md": "5dcca305eaa1218a46a44a2ffb885cddd8fb7accb28eae84f8501bd961493fb8",
+    "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
+    "MIGRATION.md": "a9698146401788f895142b6f876e13591d36edc35a1e085de1d8afdae577fce8",
+    "PERMISSIONS.md": "6a4e61ba6e016f6b80bdaff848378ad2b9ee87bea5460103abf84edea25d7a6f",
+    "README.md": "b63e7c731e65784f30f9a847d638b0c088ac8af259015f3863abab812ea0b3d9",
+    "runtime/catalog.json": "97b801bc8716cfa4264159aaf6342468f675717e1dc9672ab5db7ac00f16e8fd",
+    "runtime/main.py": "e5935a65b4a4a7791293ceaef7034cc37dece213106dd252613f347ef745ac73",
+    "runtime/README.md": "56b2d7d64a80427ada4cb7367140600605b3e9a3f68d447f5ec6949aa4d69b73",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "tests/test_runtime.py": "555f89c07f5ebfe0ba1ae3bccaedfe5273426a1d7d9786c50fb0ee78951b6df4",
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
+    "dev/repair-acceptance/README.md": "e8b7a2fa7de6ba6eabcb735191d1e0208cd246a52205b784302dfe072dd11ac6",
+    "dev/repair-acceptance/repair_acceptance.go.in": "b12965f57d75b506ad7352aaf33c39f055fa9b5b73f7f17e7207356a89e7879c",
+    "dev/repair-acceptance/repair_acceptance_test.go.in": "5ffb4e1768439d3b9e1e986ceab9928b696eb185df1a5e845aa354d2b7ec9483",
+    "dev/repair-acceptance/repair_execution.go.in": "4e9ecee887738699f09a751a9f2807aaf938b0078e36d9ad11349897fcfa99f3",
+    "dev/repair-acceptance/repair_execution_test.go.in": "ec9af6a64c1c657397233c58893f5b00dc9de5ddfa34d7b87a1aa17950ab4e37",
+    "dev/repair-acceptance/repair_file_flags_linux.go.in": "22b272295ca94ee73805359a6f9585bdd7ce6a22d78677c4a6c0c26431d1260a",
+    "dev/repair-acceptance/repair_file_flags_other.go.in": "53da68db4ba6aef300ba68304271699e31affd160725e13c96f2cafc0d876940",
+    "dev/repair-acceptance/repair_file_linux_test.go.in": "18d532bcb94143744829d8ce48b795fe7901874c020c74173308d3c733b1f288",
+    "dev/repair-acceptance/run_contract.py": "75ac0edb7bacbba4b36a12d8629fc6df9684c2f33691d3b6f9c03d4b82721fb9"
+  }
+}

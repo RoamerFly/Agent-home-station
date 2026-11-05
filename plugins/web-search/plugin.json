@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "id": "web-search",
+  "name": "联网检索",
+  "version": "0.3.4",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": [
+    "windows-amd64",
+    "linux-amd64"
+  ],
+  "runtime": {
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
+  },
+  "permissions": [
+    "network"
+  ],
+  "dependencies": [],
+  "http_routes": [
+    {
+      "id": "deepseek-search",
+      "endpoint": "https://api.deepseek.com/v1/tools/search",
+      "permission": "network",
+      "capabilities": [
+        "web.search"
+      ],
+      "credential": "search_key",
+      "credential_header": "Authorization",
+      "credential_prefix": "Bearer "
+    }
+  ],
+  "files": {
+    "capabilities.json": "4807693f8975eea11aa8ea8ffcda8424410bd9cf48b0f0d0e92cfceeb972c268",
+    "CHANGELOG.md": "01f857ad17bacec85f6550b519e6b94d3faef688242306e57fc16eb3088cdb06",
+    "config.schema.json": "80582050b4c236e84d0c6293e485d1aa08a6554eff9c391d036a695c0e17728f",
+    "MIGRATION.md": "5c4eafc26d4544ceb5e34417d1102412200e741a6fb5ab3a0327e2671df33be1",
+    "PERMISSIONS.md": "b94e7f7ab566aa56c95ff81b376335bf4774d7cee2dc1d1e1391962d8098e55a",
+    "README.md": "68daef6fe822eed6bbb971a640ba1a0eae1eda3aa41e6499e64f3999e62fcb2a",
+    "runtime/main.py": "3529c9bda4c9b3eb485828b0605f365365cfcd6cff73c33e0887798ae9745ee9",
+    "runtime/README.md": "71de7c1acc9eb5cfd5c8e14243cc18ddaeaf52bcbad119c66bea6207a9dffbe3",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "tests/test_runtime.py": "8f5e88333088284dcd782d86085337a0949cbefaf1bdbcaba742a286a3b071c6",
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
+  }
+}

@@ -2,6 +2,8 @@
 Run inside Ubuntu-New as fly. Does not build or export a Docker image.
 """
 from pathlib import Path
+import argparse
+import math
 import hashlib
 import http.cookiejar
 import json
@@ -14,8 +16,17 @@ import urllib.request
 import urllib.error
 import sys
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--drain-timeout-seconds',type=float,default=15,
+                    help='Wait for in-flight work; 0 waits until drained, preserving cancellation and lease renewal')
+args=parser.parse_args()
+if args.drain_timeout_seconds<0 or not math.isfinite(args.drain_timeout_seconds):
+    parser.error('drain timeout must be finite and nonnegative')
+
 workspace = Path(__file__).resolve().parents[1]
-root = Path("/home/fly/.local/share/wechat-bot-native-research-20261024")
+deployment_file = workspace / "secrets/local-deployment.json"
+deployment = json.loads(deployment_file.read_text(encoding="utf-8-sig")) if deployment_file.exists() else {}
+root = Path(deployment.get("data_root", "/home/fly/.local/share/wechat-bot-native-research-20261024"))
 assert root.is_dir() and root.stat().st_uid == os.getuid() and not root.stat().st_mode & 0o077
 binary = root / "bin/wechat-admin"
 source = workspace / "dist/linux-amd64/wechat-admin"
@@ -65,14 +76,17 @@ else:
     from urllib.parse import quote
     # A busy voice can legitimately need minutes. Do not pause all new chats
     # for that duration merely to update the UI; release and try another time.
-    for attempt in range(15):
+    deadline=time.monotonic()+args.drain_timeout_seconds if args.drain_timeout_seconds else None
+    attempt=0
+    while True:
         if request("/api/runtime/drain?ticket=" + quote(ticket))["ready"]:
             break
+        if deadline is not None and time.monotonic()>=deadline:
+            raise RuntimeError("Busy worker: update deferred after requested wait; incoming processing resumed, no executable replaced")
         if attempt % 30 == 0:
             print("Waiting for current work to finish before updating (no cancellation).", flush=True)
+        attempt+=1
         time.sleep(1)
-    else:
-        raise RuntimeError("Busy worker: update deferred after 15 seconds; incoming processing resumed, no executable replaced")
 assert hashlib.sha256(config.read_bytes()).hexdigest() == before, "Configuration changed while preparing update; aborted"
 old = hashlib.sha256(binary.read_bytes()).hexdigest()
 backup = root / "bin" / ("wechat-admin.previous-" + old[:12])
@@ -86,20 +100,54 @@ with tempfile.NamedTemporaryFile(dir=binary.parent, delete=False) as target:
     target.flush()
     os.fsync(target.fileno())
 pending.replace(binary)
+# Workspace mounts contain projects and private session files, never this
+# control-plane directory. Persist the explicit root across normal restarts.
+dropin=Path.home()/".config/systemd/user/wechat-bot-web.service.d/managed-workspace.conf"
+dropin.parent.mkdir(parents=True,exist_ok=True)
+value=str(workspace)
+assert "\n" not in value and '"' not in value
+text='[Service]\nEnvironment="WECHAT_WORKSPACE_ROOT='+value+'"\n'
+if not dropin.exists() or dropin.read_text()!=text:
+    dropin.write_text(text)
+    subprocess.run(["systemctl","--user","daemon-reload"],check=True)
 subprocess.run(["systemctl", "--user", "restart", "wechat-bot-web.service"], check=True)
-for attempt in range(20):
+from local_web_recovery import recover_startup
+
+def healthy():
     try:
-        response = urllib.request.build_opener(urllib.request.ProxyHandler({})).open("http://127.0.0.1:8081/healthz", timeout=2)
-        if response.status == 200:
-            break
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(base + "/healthz", timeout=2) as response:
+            return response.status == 200
     except OSError:
-        time.sleep(0.5)
-else:
-    raise RuntimeError("Updated web service did not become healthy; previous binary is retained")
+        return False
+
+def service_state():
+    status = subprocess.run(["systemctl", "--user", "show", "wechat-bot-web.service",
+                             "--property=ActiveState,SubState,ExecMainStatus"],
+                            capture_output=True, text=True, timeout=10)
+    return dict(line.split("=", 1) for line in status.stdout.splitlines() if "=" in line) if status.returncode == 0 else {}
+
+updated_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+result = recover_startup(binary, backup, updated_hash, healthy, service_state,
+    lambda: subprocess.run(["systemctl", "--user", "stop", "wechat-bot-web.service"], check=True, timeout=30),
+    lambda: subprocess.run(["systemctl", "--user", "start", "wechat-bot-web.service"], check=True, timeout=30))
+if result == "restored":
+    raise RuntimeError("New executable failed startup; verified previous web executable restored and healthy; native/config preserved")
+if result != "ready":
+    raise RuntimeError("Web readiness not confirmed: " + result + "; inspect the same service; no retry or further restart performed")
 assert hashlib.sha256(config.read_bytes()).hexdigest() == before, "Existing configuration changed unexpectedly"
 for unit in ["wechat-bot-web.service", "wechat-bot-native.service"]:
     subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], check=True)
 print("Updated local web on 127.0.0.1:8081; web/native healthy, existing config unchanged, native session not restarted. No Docker export.")
+
+# Correct only our exact old built-in deployment note, not owner instructions.
+sys.path.insert(0, str(workspace / "scripts"))
+from local_project_guides import refresh_execution_notes
+try:
+    changed_guides = refresh_execution_notes(workspace, deployment.get("backend"))
+    if changed_guides:
+        print(f"Refreshed {changed_guides} obsolete built-in project execution notes for local WSL.")
+except (OSError, ValueError) as exc:
+    print(f"Project guide migration deferred: {type(exc).__name__}; running service preserved.")
 
 # Retain a bounded rollback set only AFTER the new executable is healthy.
 # This helper checks canonical paths, ELF headers and full name/hash bindings;

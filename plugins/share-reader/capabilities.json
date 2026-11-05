@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "share.read",
+      "implementation": "migration-pending",
+      "description": "未来的综合分享读取占位能力；当前不请求运行时权限，解析能力请使用已就绪的具体工具。",
+      "permissions": [],
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false
+    },
+    {
+      "id": "share.resolve_public",
+      "implementation": "ready",
+      "discoverable": true,
+      "description": "解析已核验的公开分享正文与精确作品播放地址。媒体地址只供宿主受控交接，不代表观看视频、素材已下载或能够发送。",
+      "permissions": [
+        "network"
+      ],
+      "side_effect": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "video_required": {
+            "type": "boolean",
+            "default": false
+          },
+          "expected_sha256": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "default": 14000,
+            "minimum": 1
+          },
+          "candidate_offset": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0
+          },
+          "candidate_limit": {
+            "type": "integer",
+            "default": 20,
+            "minimum": 1
+          },
+          "max_bytes": {
+            "type": "integer",
+            "default": 2097152,
+            "minimum": 1,
+            "maximum": 4194304,
+            "description": "宿主管道帧的响应体上限，不是视频下载上限。视频原件交接另行处理。"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "default": 30,
+            "minimum": 1
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "share.resolve_channels",
+      "implementation": "ready",
+      "discoverable": true,
+      "permissions": [
+        "network"
+      ],
+      "side_effect": "read",
+      "description": "解析已核验的视频号短链、export 或宿主绑定对象，仅返回供宿主受控交接的媒体位置，不代表视频已观察、下载或发送。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "export_id": {
+            "type": "string"
+          },
+          "nonce_id": {
+            "type": "string"
+          },
+          "expected_object_id": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string",
+            "description": "仅宿主在已绑定的视频号来源使用本地对象桥接时注入；不能由 Agent 自行选择对象。"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 25
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "id": "share-reader",
+  "name": "分享内容读取",
+  "version": "0.1.8",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": [
+    "windows-amd64",
+    "linux-amd64"
+  ],
+  "runtime": {
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
+  },
+  "permissions": [
+    "network"
+  ],
+  "files": {
+    "capabilities.json": "f619e1cb01b53347622069f8ca1569e9b09c8f13315d033fc6a3cea0e1c37f35",
+    "CHANGELOG.md": "a455bc11a810a8db748b6a38688cfd4537e9a009429179fe0558fc0cccb06264",
+    "config.schema.json": "71dbe374fb3b65652f9605d1bdca4da5be8c3f3ce1f1c1aee6af464aa891bdff",
+    "dev/README.md": "efee0c05ff71b089e1aa9824e5c76929434cac6fc370eaad58989be6b8262829",
+    "dev/legacy-sdk/isaac.go": "53663e64e748a2cc21f21ec7eb3eafda2ae1a3526603cc1a606842d089bd46ec",
+    "dev/legacy-sdk/LICENSE.upstream": "a622f6997fbf5e87ab4b6e8bc12b8227e2e79e0fd148acdbffc6049dda9c2027",
+    "dev/legacy-sdk/object_bridge.go": "13249157c03118c5a3ee47ee64691f2501d1ea14f35586ab29e4c565d42fcbf0",
+    "dev/legacy-sdk/resolver.go": "c7ad5dd686bdd87452d08986833dec679ed7b9b17a9421ab2061499b4bb68af5",
+    "dev/legacy-sdk/resolver_test.go": "d88027c73aac887d64b5c09591a25de0dd30635436d6e9b6279ca278e1960fc7",
+    "dev/legacy-sdk/video.go": "198d17e65b677bb50f5d37510a5d60b7a1d790221f9061a59968e611d66ec4d7",
+    "dev/legacy-sdk/video_test.go": "54cf6ce207d6064acbfadf07b95f50e3196da464722ffda681e73d754e118bab",
+    "MIGRATION.md": "ca87455b211c4af8553e2cdb22d3bc01dfcbdbb9a9fb284adfebafdcd1f99143",
+    "PERMISSIONS.md": "3ab4d67c7ffe2dca733c4be621f303d85d08bea843d8933134c50a5be4f28d46",
+    "README.md": "724428c8b2ff73b516bf54e54a8507702a5b49013f7afd1369f3464d06b2a86a",
+    "runtime/channels.py": "419fb1d0965e7cf86b23d390876a8794603a622b33824c01101af9f92bcf7ab9",
+    "runtime/main.py": "eef30d6fcc1a3bc9e6631f939b8211557076895ab639075deb44880b65822613",
+    "runtime/public_share.py": "08601664777ffc155e1bdae0dc3030fa7a029e0b2da8b25b027b1d48c0204823",
+    "runtime/README.md": "8c49f18909707d6801191a2c75e6d48d8338ce6848f495907339ccdfae90a6f7",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "tests/test_channels.py": "fe70aceb6aee451b4db4c52cdc501b595e3688afa6cffd17487a83992f8d6ef2",
+    "tests/test_public_share.py": "7e15cd4aa71c11b494ba625aaf848b5226d3370f72e096333775d04686bd8a36",
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
+    "tests/test_bilibili.py": "1dec0cfcdb73232617e85765313a7e8ebd13e883849580ab258b0f6e3a2bc441"
+  },
+  "http_routes": [
+    {
+      "id": "channels-parse",
+      "endpoint": "https://yuanbao.tencent.com/api/weixin/get_parse_result",
+      "capabilities": [
+        "share.resolve_channels"
+      ],
+      "credential": "yuanbao_cookie",
+      "credential_header": "Cookie",
+      "headers": {
+        "Origin": "https://yuanbao.tencent.com",
+        "Referer": "https://yuanbao.tencent.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"
+      }
+    },
+    {
+      "id": "channels-feed",
+      "endpoint": "https://channels.weixin.qq.com/finder-preview/api/feed/get_feed_info",
+      "capabilities": [
+        "share.resolve_channels"
+      ],
+      "headers": {
+        "Origin": "https://channels.weixin.qq.com",
+        "Referer": "https://channels.weixin.qq.com/finder-preview/"
+      },
+      "referer_path_prefix": "/finder-preview/"
+    },
+    {
+      "id": "channels-shortlink",
+      "endpoint": "https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/post/get_object_short_link",
+      "capabilities": [
+        "share.resolve_channels"
+      ],
+      "credential": "assistant_cookie",
+      "credential_header": "Cookie",
+      "headers": {
+        "Origin": "https://channels.weixin.qq.com",
+        "Referer": "https://channels.weixin.qq.com/platform/post/list"
+      }
+    }
+  ]
+}

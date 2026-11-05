@@ -29,6 +29,8 @@ func TestBackgroundProcessStreamsIsScopedAndDoesNotReplay(t *testing.T) {
 	}
 	defer j.Close()
 	c := Defaults()
+	requireLinuxSandbox(t)
+	c.Isolation = &Isolation{}
 	c.Mode = "full"
 	c.Roots = []string{root}
 	cmd := "printf 'started\\n'; sleep .2; printf 'done'"
@@ -92,6 +94,8 @@ func TestBackgroundPermissionRevocationCancelsWithoutReplay(t *testing.T) {
 	j, _ := OpenJobs(filepath.Join(root, "jobs"))
 	defer j.Close()
 	c := Defaults()
+	requireLinuxSandbox(t)
+	c.Isolation = &Isolation{}
 	c.Mode = "full"
 	c.Roots = []string{root}
 	var allow atomic.Bool

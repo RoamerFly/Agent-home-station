@@ -22,9 +22,14 @@ func TestYuEFailureAuditRetainsFixedCauseWithoutUpstreamSecrets(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); w.Write([]byte(tc.body)) }))
 			defer upstream.Close()
 			f := setup(t)
-			f.manager.speech.YuEEnabled = true
-			f.manager.speech.YuEEndpoint = upstream.URL
-			f.manager.speech.YuEToken = "private-fixture-token"
+			{
+				legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+				legacySpeechFixture.YuEEnabled = true
+				legacySpeechFixture.YuEEndpoint = upstream.URL
+				legacySpeechFixture.YuEToken = "private-fixture-token"
+				writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+			}
+			installLegacyLocalMusicPlugin(t, f.manager)
 			p, _, _ := f.manager.toolAccess()
 			p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "failure-audit"})
 			_, err := p.Call(context.Background(), "music_local_start", json.RawMessage(`{"title":"晚风归家","style":"gentle pop","lyrics":"[verse]\n晚风伴我归家","kind":"voice"}`))

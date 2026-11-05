@@ -30,6 +30,9 @@ func TestLiveStructuredContextCompressionWithoutWechatSend(t *testing.T) {
 	cfg.Permissions.Remember = true
 	cfg.Context = &companion.ContextSettings{AutoCompress: true, CompressAfter: 20, RecentMessages: 5, MaxInputChars: 8000}
 	s, _ := companion.NewStore(t.TempDir())
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	in := companion.Input{Channel: "wechat", Account: "synthetic", Thread: "summary-test", Sender: "owner"}
 	for i := 0; i < 25; i++ {
 		in.TraceID = fmt.Sprint(i)

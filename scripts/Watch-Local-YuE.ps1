@@ -1,6 +1,13 @@
 param([string]$Project='E:\freetime\AI_Sing\yue2-261011\yue2-261011\app')
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
+$localConfig=Join-Path $workspace 'secrets\local-deployment.json'
+if(Test-Path -LiteralPath $localConfig -PathType Leaf){
+ $local=Get-Content -LiteralPath $localConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+ # The managed WSL service has its own process supervisor and private IPC.
+ # Do not revive a second legacy Windows bridge by checking its TCP ports.
+ if($local.backend -eq 'wsl' -and $local.music_service){exit 0}
+}
 $sha=[Security.Cryptography.SHA256]::Create()
 $identity=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($workspace.ToLowerInvariant())))).Replace('-','').Substring(0,20)
 $sha.Dispose()

@@ -7,6 +7,22 @@ import (
 	"wechat-bot/internal/companion"
 )
 
+func TestSurfDoesNotCreateNewShareWhilePreviousDeliveryNeedsHandling(t *testing.T) {
+	w, _, _, in := mediaWorker(t)
+	in.Surf = true
+	w.runtime.Media = append(w.runtime.Media, &mediaDelivery{Input: in, State: "waiting"})
+	claims := 0
+	w.config.SurfTask = func(time.Time) (*SurfTask, error) { claims++; return nil, nil }
+	if w.tickSurf(context.Background()) || claims != 0 {
+		t.Fatal("claimed new surf while old delivery pending", claims)
+	}
+	w.runtime.Media[0].State = "accepted"
+	w.tickSurf(context.Background())
+	if claims != 1 {
+		t.Fatal("surf not resumed after settlement", claims)
+	}
+}
+
 type quietBoundaryModel struct{ cancelled bool }
 
 func (m *quietBoundaryModel) Chat(ctx context.Context, _ string, _ []map[string]string) (string, error) {
@@ -21,6 +37,9 @@ func TestSurfInProgressStopsAtQuietBoundaryWithoutSending(t *testing.T) {
 	c.QuietStart = "00:00"
 	c.QuietEnd = "00:00"
 	store, _ := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	model := &quietBoundaryModel{}
 	engine, _ := companion.New(c, store, model, "test")
 	sender := &fakeSender{}

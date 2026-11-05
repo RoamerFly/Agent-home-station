@@ -11,6 +11,8 @@ import (
 )
 
 type mediaReply struct {
+	ReplyContexts    []companion.ReplyContext      `json:"reply_contexts,omitempty"`
+	Paused           bool                          `json:"paused,omitempty"`
 	WakeReason       string                        `json:"wake_reason,omitempty"`
 	WakeAfterSeconds int                           `json:"wake_after_seconds,omitempty"`
 	WaitForReply     bool                          `json:"wait_for_reply,omitempty"`
@@ -31,6 +33,9 @@ func (r *mediaReply) terminal() bool {
 }
 
 func (w *Worker) deferMediaReply(in companion.Input, messages []string, expected int, followup ...companion.Decision) bool {
+	if w.mediaTraceCancelled(in.TraceID) {
+		return true
+	}
 	for _, r := range w.runtime.MediaReplies {
 		if r.Trace == in.TraceID && r.Input.Thread == in.Thread {
 			return true
@@ -50,6 +55,7 @@ func (w *Worker) deferMediaReply(in companion.Input, messages []string, expected
 	}
 	r := &mediaReply{Trace: in.TraceID, Input: in, Messages: append([]string(nil), messages...), Expected: expected, State: "waiting_delivery", Created: time.Now().UTC()}
 	if len(followup) > 0 {
+		r.ReplyContexts = append([]companion.ReplyContext(nil), followup[0].ReplyContexts...)
 		r.WakeAfterSeconds, r.WaitForReply, r.WakeReason = followup[0].WakeAfterSeconds, followup[0].WaitForReply, followup[0].WakeReason
 	}
 	if in.QuoteServerID != "" && in.TraceID != "" && (in.QuoteSharedMessage || in.Directed && w.config.Options.QuoteReplies) {
@@ -68,7 +74,7 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
 		}
-		if r.terminal() {
+		if r.Paused || r.terminal() {
 			continue
 		}
 		total, accepted := 0, 0
@@ -101,13 +107,10 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 				in.QuoteServerID = r.Quote.ServerID
 			}
 			messages := append([]string(nil), r.Messages...)
-			for i := range messages {
-				messages[i] = deliveredCaption(messages[i])
-			}
 			// The handoff and text plan are persisted together. The attachment
 			// keeps its own receipt/cancellation state; only the caption is replanned.
 			r.State = "queued_plan"
-			w.queueUtteranceFrom(c, in, companion.Decision{Messages: messages, WakeAfterSeconds: r.WakeAfterSeconds, WaitForReply: r.WaitForReply, WakeReason: r.WakeReason}, r.Index, true, r.Updates)
+			w.queueUtteranceFrom(c, in, companion.Decision{Messages: messages, ReplyContexts: r.ReplyContexts, WakeAfterSeconds: r.WakeAfterSeconds, WaitForReply: r.WaitForReply, WakeReason: r.WakeReason}, r.Index, true, r.Updates)
 			w.refreshMediaParent(r.Trace)
 			continue
 		}
@@ -121,10 +124,14 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		}
 		in := r.Input
 		in.TraceID = r.Trace
+		if r.Index < len(r.ReplyContexts) {
+			rc := r.ReplyContexts[r.Index]
+			in.ReplyContext = &rc
+		}
 		if r.Quote != nil {
 			in.QuoteServerID = r.Quote.ServerID
 		}
-		text := deliveredCaption(strings.TrimSpace(r.Messages[r.Index]))
+		text := strings.TrimSpace(r.Messages[r.Index])
 		if c.Config.ShowAILabel && !strings.HasPrefix(text, "[AI]") {
 			text = "[AI] " + text
 		}
@@ -145,7 +152,7 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 			continue
 		}
-		if err = c.Accepted(in, text); err != nil {
+		if err = w.acceptTextMemory(c, in, r.Index, text); err != nil {
 			w.persistErr = err
 			return
 		}
@@ -160,13 +167,4 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		w.persistErr = w.saveRuntime()
 		w.refreshMediaParent(r.Trace)
 	}
-}
-
-func deliveredCaption(text string) string {
-	for _, negative := range []string{"不能", "无法", "没法", "没有"} {
-		if strings.Contains(text, negative) {
-			return text
-		}
-	}
-	return strings.NewReplacer("分几段发给你", "已经分段发给你了", "分几段发你", "已经分段发给你了", "分段发你", "已经分段发给你了", "接下来发给你", "已经发给你了", "这就发给你", "已经发给你了").Replace(text)
 }

@@ -5,15 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"wechat-bot/internal/bailian"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -54,27 +53,20 @@ func TestExplicitFramePageAndBatchExceedOldDefaults(t *testing.T) {
 	}
 }
 
-func TestExplicitAudioRangeAndChunkAreNotClampedTo180Seconds(t *testing.T) {
+func TestPluginAudioExtractionRangeIsNotClampedTo180Seconds(t *testing.T) {
 	data := observationFixture(t, "240")
-	f, p := trustedAgent(t)
-	defer p.hub.Close()
+	f := setup(t)
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	a := mediaUnderstanding{manager: f.manager}
+	text, seconds, err := a.videoAudioRangeTimedWith(context.Background(), data, 0, 240, 60, func(_ context.Context, wav []byte) (string, error) {
 		calls++
-		json.NewEncoder(w).Encode(map[string]any{"output": map[string]string{"text": "synthetic transcription"}})
-	}))
-	defer server.Close()
-	f.manager.speech = bailian.Defaults()
-	f.manager.speech.Endpoint, f.manager.speech.Key = server.URL, "synthetic-test-key"
-	out := map[string]any{}
-	e := p.inspectAudioRange(context.Background(), data, videoInspectionInput{AudioLength: 240, AudioChunk: 200}, 240, 300, out)
-	if e != nil || calls != 2 || out["end_seconds"].(float64) < 239.9 || !out["requested_range_complete"].(bool) || out["video_audio_complete"].(bool) || out["effective_audio_chunk_seconds"] != float64(200) {
-		t.Fatal("audio request was shortened", calls, out, e)
-	}
-	out = map[string]any{}
-	e = p.inspectAudioRange(context.Background(), data, videoInspectionInput{AudioLength: 240, AudioChunk: 600}, 240, 300, out)
-	if e != nil || out["end_seconds"].(float64) < 239.9 || out["audio_chunk_adjustment_reason"] == nil {
-		t.Fatal("transport split lost requested range or explanation", out, e)
+		if len(wav) < 44 || string(wav[:4]) != "RIFF" {
+			t.Fatal("plugin would receive invalid extracted WAV")
+		}
+		return "synthetic transcription", nil
+	})
+	if err != nil || calls != 1 || text != "synthetic transcription" || seconds < 239.9 || seconds > 240.1 {
+		t.Fatal("plugin extraction range was shortened", calls, text, seconds, err)
 	}
 }
 
@@ -145,6 +137,15 @@ func TestVideoInspectionUsesScopedCacheAndAdvertisesContinuation(t *testing.T) {
 	if e != nil || json.Unmarshal([]byte(value), &out) != nil || out.Metadata.Frames != 24 {
 		t.Fatal(value, e)
 	}
+	// Omitted action must pass the advertised schema and execute the safe
+	// metadata default, not fail before reaching the tool on its first call.
+	value, e = p.Call(context.Background(), "video_inspect", json.RawMessage(fmt.Sprintf(`{"asset_id":%q}`, a.ID)))
+	if e != nil || !strings.Contains(value, `"action":"info"`) || !strings.Contains(value, `"total_frames":24`) {
+		t.Fatal("default info call failed", value, e)
+	}
+	if _, e = p.Call(context.Background(), "video_inspect", json.RawMessage(fmt.Sprintf(`{"action":"guess","asset_id":%q}`, a.ID))); e == nil {
+		t.Fatal("explicit invalid action accepted")
+	}
 	p.trace.Thread = "filehelper"
 	if _, e = p.Call(context.Background(), "video_inspect", raw); e == nil {
 		t.Fatal("cross-conversation video exposed")
@@ -152,5 +153,65 @@ func TestVideoInspectionUsesScopedCacheAndAdvertisesContinuation(t *testing.T) {
 	f.manager.config.Behavior.ReadVideos = false
 	if p.enabled("video_inspect") {
 		t.Fatal("closed video permission ignored")
+	}
+}
+
+// Frame inspection is a visual-media operation.  A chat-model key must never
+// revive the removed direct VisionWithBudget path when the media package is not
+// installed and authorized.
+func TestVideoInspectionFramesRequireInstalledMediaPlugin(t *testing.T) {
+	f, p := trustedAgent(t)
+	defer p.hub.Close()
+	f.manager.config.Behavior.ReadVideos = true
+	f.manager.config.Companion.Permissions.Remember = true
+	f.manager.config.APIKey = "would-have-enabled-the-legacy-chat-model"
+	asset, err := f.manager.rememberAssetFormats(p.trace, assetOriginal{Data: inspectionFixture(t), MIME: "video/mp4", Filename: "plugin-only.mp4"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plugin-only.mp4")
+	if err = os.WriteFile(path, inspectionFixture(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = p.inspectVideoFrameRange(t.Context(), path, dir, videoInspectionInput{SourceThread: p.trace.Thread, Start: 0, Step: 1, BatchSize: 1, MaxDimension: 96, Tokens: 128}, 1, 24, asset.ID, inspectionFixture(t))
+	if err == nil || !strings.Contains(err.Error(), "media_plugin_migration_required") {
+		t.Fatalf("frame inspection used a legacy model path or hid the package boundary: %v", err)
+	}
+}
+
+func TestVideoInspectionPublicURLRequiresInstalledSharePlugin(t *testing.T) {
+	f, p := trustedAgent(t)
+	defer p.hub.Close()
+	f.manager.config.Behavior.ReadVideos = true
+	p.settings.Enabled, p.settings.WebFetchEnabled = true, true
+	in := videoInspectionInput{URL: "https://public.example/video"}
+	if _, _, err := p.inspectionSource(t.Context(), &in); err == nil || !strings.Contains(err.Error(), "share_plugin_migration_required") {
+		t.Fatal("public URL used a retired network reader", err)
+	}
+}
+
+func TestInspectionPluginAudioUsesCanonicalReceivedAssetSource(t *testing.T) {
+	f, p, n := forwardFixture(t)
+	f.manager.config.Behavior.ReadVideos = true
+	n.message = linuxnative.Message{ID: "canonical-video", AccountID: "test", ThreadID: "source@chatroom", SenderID: "source-member", ServerID: "video-server", CreatedAt: "2026-10-30T12:00:00Z", Direction: "incoming", Type: 43}
+	trace := companion.Input{Channel: "wechat", Account: "test", Thread: "source@chatroom", TraceID: n.message.ID, Sender: n.message.SenderID, MessageTime: n.message.CreatedAt}
+	asset, err := f.manager.rememberAssetFormats(trace, assetOriginal{InboundMessage: &n.message, Data: inspectionFixture(t), MIME: "video/mp4", Filename: "canonical.mp4"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := p.inspectionTranscriptionMessage(context.Background(), videoInspectionInput{Asset: asset.ID, SourceThread: "source@chatroom"})
+	if err != nil || message.ID != n.message.ID || message.ThreadID != "source@chatroom" {
+		t.Fatalf("message=%+v err=%v", message, err)
+	}
+	// An asset is not enough if its original native source is no longer a
+	// received video/share. The adapter must not manufacture a new source.
+	n.message.Direction = "outgoing"
+	if _, err = p.inspectionTranscriptionMessage(context.Background(), videoInspectionInput{Asset: asset.ID, SourceThread: "source@chatroom"}); err == nil {
+		t.Fatal("outgoing source accepted for plugin ASR")
+	}
+	n.message.Direction = "incoming"
+	if _, err = p.inspectionTranscriptionMessage(context.Background(), videoInspectionInput{Asset: asset.ID}); err == nil {
+		t.Fatal("missing canonical source scope accepted")
 	}
 }

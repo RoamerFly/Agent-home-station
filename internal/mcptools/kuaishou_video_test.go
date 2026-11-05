@@ -1,10 +1,40 @@
 package mcptools
 
 import (
+	"context"
 	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestKuaishouAcceptsFileBudgetWithoutUnsupportedPageError(t *testing.T) {
+	const id = "3xsynthetic12345"
+	page := `window.__APOLLO_STATE__={"defaultClient":{"VisionVideoDetailPhoto:3xsynthetic12345":{"id":"3xsynthetic12345","caption":"synthetic","duration":155100,"photoUrl":"https://synthetic.djvod.ndcimgs.com/video.mp4"}}}`
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(page))
+	}))
+	defer srv.Close()
+	transport := &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}}
+	defer transport.CloseIdleConnections()
+	ctx := context.WithValue(context.Background(), publicSessionKey{}, &publicReadSession{Transport: transport})
+	video, err := DownloadPublicVideoPage(ctx, "http://v.m.chenzhongtech.com/fw/photo/"+id, 512<<20)
+	if err != nil || !video.LinkOnly || video.DurationMS != 155100 || requests != 1 {
+		t.Fatal("file capacity rejected before actual metadata read", video, err, requests)
+	}
+	for _, budget := range []int64{0, -1, MaxPublicMediaBytes + 1} {
+		_, err = DownloadPublicVideoPage(ctx, "http://v.m.chenzhongtech.com/fw/photo/"+id, budget)
+		if err == nil || err.Error() != "media_limit_invalid" || requests != 1 {
+			t.Fatal("invalid budget misreported as unsupported page or performed request", err, requests)
+		}
+	}
+}
 
 func TestKuaishouUsesExactReceivedPhotoAndBoundedReferences(t *testing.T) {
 	id := "3xsynthetic12345"
@@ -40,5 +70,35 @@ func TestKuaishouPageIdentityRejectsAmbiguousAndForeignShares(t *testing.T) {
 		if kuaishouPhotoID(bad) != "" {
 			t.Fatal("unsafe or ambiguous page accepted", bad)
 		}
+	}
+}
+
+func TestKuaishouNewCDNAndExactPhotoBackupURLs(t *testing.T) {
+	id := "3xsynthetic12345"
+	primary := "https://synthetic.djvod.ndcimgs.com/video.mp4?synthetic=1"
+	backup := "https://synthetic.kwaicdn.com/video.mp4?synthetic=2"
+	makePage := func(direct string, backups []string) []byte {
+		data, _ := json.Marshal(map[string]any{"defaultClient": map[string]any{
+			"VisionVideoDetailPhoto:" + id: map[string]any{"id": id, "caption": "synthetic", "duration": 155100, "photoUrl": direct,
+				"manifest": map[string]any{"adaptationSet": []any{map[string]any{"representation": []any{
+					map[string]any{"url": direct, "backupUrl": map[string]any{"type": "json", "json": backups}},
+				}}}}},
+			"VisionVideoDetailPhoto:unrelated": map[string]any{"id": "unrelated", "photoUrl": "https://other.kwaicdn.com/not-this-video.mp4"},
+		}})
+		return append([]byte("window.__APOLLO_STATE__="), data...)
+	}
+	_, urls, err := parseKuaishouPhoto(makePage(primary, []string{backup, primary}), id)
+	if err != nil || len(urls) != 2 || urls[0] != primary || urls[1] != backup {
+		t.Fatal("valid primary/backup missing or duplicated", urls, err)
+	}
+	for _, unsafe := range []string{"https://synthetic.djvod.ndcimgs.com.evil.invalid/video.mp4", "https://unrelated.ndcimgs.com/video.mp4", "http://synthetic.djvod.ndcimgs.com/video.mp4", "https://user@synthetic.djvod.ndcimgs.com/video.mp4", "https://synthetic.djvod.ndcimgs.com:444/video.mp4", "https://127.0.0.1/video.mp4"} {
+		_, got, e := parseKuaishouPhoto(makePage(unsafe, []string{unsafe}), id)
+		if e == nil || len(got) != 0 {
+			t.Fatal("unsafe primary/backup accepted", unsafe, got, e)
+		}
+	}
+	_, urls, err = parseKuaishouPhoto(makePage("https://unavailable.invalid/no.mp4", []string{backup}), id)
+	if err != nil || len(urls) != 1 || urls[0] != backup {
+		t.Fatal("valid backup lost when primary is unavailable", urls, err)
 	}
 }

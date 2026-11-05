@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,103 +9,158 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
-	"wechat-bot/internal/bailian"
+	"unicode/utf8"
 	"wechat-bot/internal/bot"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mediaspec"
 
 	"wechat-bot/internal/mcptools"
-	"wechat-bot/internal/plugins"
 )
 
-func loadSpeech(dir string) (bailian.Config, error) {
-	c := bailian.Defaults()
+// loadSpeech is retained for explicit migration and opt-in compatibility tests.
+// Runtime readiness and startup must use installed plugin configuration instead.
+func loadSpeech(dir string) (mediaspec.Config, error) {
+	c, _, err := loadSpeechMigrationSource(dir)
+	return c, err
+}
+
+// Return the digest of the same bytes that were parsed, so a migration proposal
+// cannot bind a newly changed file to an old in-memory configuration.
+func loadSpeechMigrationSource(dir string) (mediaspec.Config, string, error) {
+	c := mediaspec.Defaults()
 	b, e := os.ReadFile(filepath.Join(dir, "speech-config.json"))
 	if errors.Is(e, os.ErrNotExist) {
-		return c, nil
+		return c, migrationBytesHash([]byte("missing")), nil
 	}
 	if e != nil || len(b) > 16000 || json.Unmarshal(b, &c) != nil {
-		return c, errors.New("语音配置不可读")
+		return c, "", errors.New("语音配置不可读")
 	}
-	return c, c.Validate()
-}
-func (m *Manager) speechConfig() bailian.Config { m.mu.Lock(); defer m.mu.Unlock(); return m.speech }
-func speechView(c bailian.Config) map[string]any {
-	configured := c.Key != ""
-	c.Key = ""
-	c.YuEToken = ""
-	return map[string]any{"settings": c, "key_configured": configured}
+	return c, migrationBytesHash(b), c.Validate()
 }
 func (s *Server) speechRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/speech/yue-health", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, (&permittedTools{manager: s.manager}).probeYuE(r.Context()))
+	mux.HandleFunc("GET /api/speech/music-service", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		result, err := (&permittedTools{manager: s.manager}).controlMusicService(s.speechPluginTestContext(r), "status")
+		if err != nil {
+			fail(w, 409, err.Error())
+			return
+		}
+		var value any
+		_ = json.Unmarshal([]byte(result), &value)
+		respond(w, 200, value)
 	}))
-	mux.HandleFunc("GET /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, speechView(s.manager.speechConfig())) }))
+	mux.HandleFunc("POST /api/speech/music-service/start", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if runtime.GOOS != "windows" {
+			fail(w, 400, "此入口用于已登记的Windows音乐后端")
+			return
+		}
+		result, err := (&permittedTools{manager: s.manager}).controlMusicService(s.speechPluginTestContext(r), "start")
+		if err != nil {
+			fail(w, 409, err.Error())
+			return
+		}
+		var value any
+		_ = json.Unmarshal([]byte(result), &value)
+		respond(w, 200, value)
+	}))
+	mux.HandleFunc("POST /api/speech/music-service/stop", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if runtime.GOOS != "windows" {
+			fail(w, 400, "此入口用于已登记的Windows音乐后端")
+			return
+		}
+		result, err := (&permittedTools{manager: s.manager}).controlMusicService(s.speechPluginTestContext(r), "stop")
+		if err != nil {
+			fail(w, 409, err.Error())
+			return
+		}
+		var value any
+		_ = json.Unmarshal([]byte(result), &value)
+		respond(w, 200, value)
+	}))
+	mux.HandleFunc("GET /api/speech/asr-health", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		respond(w, 200, s.manager.localASRStatus())
+	}))
+	mux.HandleFunc("GET /api/speech/yue-health", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		respond(w, 200, (&permittedTools{manager: s.manager}).probeYuE(s.speechPluginTestContext(r)))
+	}))
+	// The former speech-config.json is retained solely for the explicit plugin
+	// migration. Runtime configuration belongs to the installed capability
+	// packages; this compatibility endpoint must not become a second writer.
+	mux.HandleFunc("GET /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		respond(w, 200, map[string]any{"migration_required": true})
+	}))
 	mux.HandleFunc("POST /api/speech", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		var c bailian.Config
-		if !decode(w, r, &c) {
-			return
-		}
-		m := s.manager
-		m.op.Lock()
-		defer m.op.Unlock()
-		old := m.speechConfig()
-		if c.Key == "" {
-			if c.Endpoint != old.Endpoint && old.Key != "" {
-				fail(w, 400, "变更地域时请重新填写该地域密钥")
-				return
-			}
-			c.Key = old.Key
-		}
-		if c.YuEToken == "" && c.YuEEndpoint == old.YuEEndpoint {
-			c.YuEToken = old.YuEToken
-		}
-		if e := c.Validate(); e != nil {
-			fail(w, 400, e.Error())
-			return
-		}
-		b, _ := json.Marshal(c)
-		if e := writePrivate(filepath.Join(m.dir, "speech-config.json"), b); e != nil {
-			fail(w, 500, e.Error())
-			return
-		}
-		m.mu.Lock()
-		m.speech = c
-		m.mu.Unlock()
-		m.log("speech_configuration_saved")
-		respond(w, 200, speechView(c))
+		fail(w, http.StatusConflict, "speech_legacy_configuration_migration_required")
 	}))
 	mux.HandleFunc("POST /api/speech/test", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if s.manager.draining() {
+			fail(w, 409, "管理端正在准备更新，请稍后测试语音工具")
+			return
+		}
 		var in struct {
 			Text string `json:"text"`
 		}
 		if !decode(w, r, &in) {
 			return
 		}
-		c := s.manager.speechConfig()
-		ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
-		defer cancel()
-		u, e := bailian.New(c).Synthesize(ctx, in.Text, "")
-		if e != nil {
-			fail(w, 502, e.Error())
+		if strings.TrimSpace(in.Text) == "" || utf8.RuneCountInString(in.Text) > 2000 || strings.ContainsRune(in.Text, 0) {
+			fail(w, 400, "合成文字须为1–2000字符")
 			return
 		}
-		data, _, e := mcptools.GetPublicMedia(ctx, u, 8<<20)
+		ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
+		defer cancel()
+		ctx = s.speechPluginTestContext(r.WithContext(ctx))
+		policy, e := s.manager.newAdminSpeechPluginPolicy(ctx, in.Text)
+		var result speechPluginResult
+		if e == nil {
+			result, e = policy.synthesize(ctx)
+		}
+		if e != nil {
+			status := http.StatusBadGateway
+			if strings.HasPrefix(e.Error(), "speech_plugin_") && !strings.Contains(e.Error(), "synthesis_needs_review") {
+				status = http.StatusConflict
+			}
+			fail(w, status, e.Error())
+			return
+		}
+		data, _, e := policy.readAudio(ctx, result.URL, 8<<20, mcptools.GetPublicMedia)
 		if e != nil {
 			fail(w, 502, "测试音频下载失败")
 			return
 		}
-		text := "未启用语音识别"
-		if c.ASREnabled {
-			wav, e := normalizeSpeech(ctx, s.manager.dir, data)
+		// A provider URL and a successful download do not prove valid speech.
+		// Always decode the result, even when optional transcription is disabled.
+		wav, e := normalizeSpeech(ctx, s.manager.dir, data)
+		if e != nil {
+			fail(w, 502, "测试音频格式验证失败")
+			return
+		}
+		text := "未配置语音识别工具，本次已验证音频格式"
+		if e = policy.checkCompleted(ctx); e != nil {
+			fail(w, 409, "语音测试授权或配置已变更，请重新测试")
+			return
+		}
+		var transcription *mediaTranscriptionPolicy
+		if s.manager.mediaTranscriptionConfigured(ctx) {
+			transcription, e = s.manager.newAdminMediaTranscriptionPolicy(ctx, policy, wav)
+			if e == nil {
+				text, e = transcription.transcribe(ctx)
+			}
 			if e != nil {
 				fail(w, 502, e.Error())
 				return
 			}
-			text, e = bailian.New(c).Transcribe(ctx, wav)
-			if e != nil {
-				fail(w, 502, e.Error())
+		}
+		if e = policy.checkCompleted(ctx); e != nil {
+			fail(w, 409, "语音测试授权或配置已变更，请重新测试")
+			return
+		}
+		if transcription != nil {
+			if e = transcription.checkCompleted(ctx); e != nil {
+				fail(w, 409, "识别工具授权或配置已变更，请重新测试")
 				return
 			}
 		}
@@ -112,21 +168,97 @@ func (s *Server) speechRoutes(mux *http.ServeMux) {
 	}))
 }
 func (p *permittedTools) speechTools() []mcptools.Tool {
-	c := p.manager.speechConfig()
-	if c.Key == "" {
-		return nil
-	}
 	out := []mcptools.Tool{}
 	permissions := p.manager.Config().Companion.Permissions
-	if c.TTSEnabled && permissions.SendVoice {
-		out = append(out, agentTool("speech_synthesize", "Create your spoken voice from text using the configured Alibaba TTS voice; this is speech, not singing. Returns prepared media IDs; final reply.media_ids sends them as WeChat voice. Input {text:string,instruction?:string}.", `{"type":"object","properties":{"text":{"type":"string"},"instruction":{"type":"string"}},"required":["text"],"additionalProperties":false}`))
+	installed, stateErr := p.manager.installedServiceState(context.Background(), "speech", "speech")
+	// Both default and named synthesis require their own installed capability;
+	// the general workspace permission alone cannot enable a legacy fallback.
+	defaultSpeechReady := stateErr == nil && installed && p.manager.speechPluginConfigured(context.Background())
+	namedSpeechReady := p.workspaceExecutionAllowed() && p.manager.agent.config().Host.Mode == "full" && p.manager.namedSpeechPluginConfigured(context.Background())
+	if permissions.SendVoice && (defaultSpeechReady || namedSpeechReady) {
+		description := "Synthesize actual spoken audio through the installed speech plugin. Omit voice_id for the configured default; select an authorized NAMED voice with voice_library_list/read then pass voice_id."
+		// A named voice is a local GPT-SoVITS request, not a cloud-TTS voice.
+		// Keep the route in one discoverable tool, but make the incompatible
+		// cloud-only instruction field explicitly invalid when voice_id is set.
+		// This prevents an Agent from being told that a named voice supports an
+		// option which the strict local plugin must reject before dispatch.
+		schema := `{"type":"object","properties":{"text":{"type":"string","minLength":1},"voice_id":{"type":"string","description":"Registered named local voice. When present, omit instruction."},"instruction":{"type":"string","description":"Default cloud voice only. Do not send this field with voice_id."},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1,"description":"Optional registered resource selectors for the named voice."},"parameters":{"type":"object","description":"Named GPT-SoVITS tuning only. Use speed_factor below 1 for slower speech (for example 0.8); do not use instruction, speed, or rate as a substitute.","properties":{"speed_factor":{"type":"number","exclusiveMinimum":0,"description":"Speech speed multiplier; lower is slower."},"sample_steps":{"type":"integer","minimum":1},"text_lang":{"type":"string"},"prompt_lang":{"type":"string"},"seed":{"type":"integer"}},"additionalProperties":true},"device":{"type":"string","pattern":"^(cpu|cuda(:[0-9]+)?)$","description":"Named voice only; defaults to cuda."},"version":{"type":"string","enum":["v1","v2","v2Pro","v2ProPlus","v3","v4","v5dev","v5turbo"],"description":"Named voice only; defaults to v2."},"timeout_seconds":{"type":"number","exclusiveMinimum":0}},"required":["text"],"allOf":[{"if":{"required":["voice_id"]},"then":{"not":{"required":["instruction"]}}}],"additionalProperties":false}`
+		input := "Input {text,voice_id?,instruction?,file_ids?,parameters?,device?,version?,timeout_seconds?}."
+		if !defaultSpeechReady {
+			description = "Synthesize actual spoken audio through the installed named local speech capability. First voice_library_list/read and supply the matching voice_id. It supports text, voice_id, optional file_ids/parameters/device/version/timeout_seconds; it does not support instruction. For slower speech use parameters.speed_factor (for example 0.8). Default cloud speech is unavailable."
+			schema = `{"type":"object","properties":{"text":{"type":"string","minLength":1},"voice_id":{"type":"string","minLength":1},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1,"description":"Optional registered resource selectors for this voice."},"parameters":{"type":"object","description":"GPT-SoVITS tuning. Use speed_factor below 1 for slower speech (for example 0.8). Do not send instruction, speed, or rate.","properties":{"speed_factor":{"type":"number","exclusiveMinimum":0,"description":"Speech speed multiplier; lower is slower."},"sample_steps":{"type":"integer","minimum":1},"text_lang":{"type":"string"},"prompt_lang":{"type":"string"},"seed":{"type":"integer"}},"additionalProperties":true},"device":{"type":"string","pattern":"^(cpu|cuda(:[0-9]+)?)$","description":"Defaults to cuda."},"version":{"type":"string","enum":["v1","v2","v2Pro","v2ProPlus","v3","v4","v5dev","v5turbo"],"description":"Defaults to v2."},"timeout_seconds":{"type":"number","exclusiveMinimum":0,"description":"Defaults to 600."}},"required":["text","voice_id"],"additionalProperties":false}`
+			input = "Input {text,voice_id,file_ids?,parameters?,device?,version?,timeout_seconds?}; named voices do not accept instruction."
+		}
+		if !namedSpeechReady {
+			description = "Synthesize actual spoken audio with the installed default speech capability. Named local speech is unavailable; never substitute this voice for a requested named voice."
+			schema = `{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":2000},"instruction":{"type":"string","maxLength":1500},"timeout_seconds":{"type":"integer","minimum":1}},"required":["text"],"additionalProperties":false}`
+			input = "Input {text,instruction?,timeout_seconds?}."
+		}
+		description += " Returns prepared media IDs, not delivery; final reply.media_ids sends voice. Private voices require trusted owner; no substitution. Named file_ids selects exact weights/references; parameters adjusts inference without changing source identity. Named timeout defaults600, cloud180, adjustable; named device defaults cuda, cpu explicit. " + input
+		if p.enabled("music_rvc_start") {
+			schema = strings.Replace(schema, `"properties":{`, `"properties":{"rvc_target_id":{"type":"string","minLength":1,"description":"Final registered RVC voice ID for spoken text. The source recording is never sent."},`, 1)
+			description += " For a spoken request in an RVC character voice, pass rvc_target_id from voice_library_read. In this mode voice_id selects only the source TTS (required if cloud TTS is unavailable). Returns the conversion job for automatic follow-up."
+		}
+		out = append(out, agentTool("speech_synthesize", description, schema))
 	}
-	if c.MusicEnabled && (permissions.SendVoice || permissions.SendFile) {
-		out = append(out, agentTool("music_generate", "Generate an original complete song with vocals using Alibaba Fun-Music. Requires provider access. Does NOT reproduce an existing recording or accept reference audio. Default: COMPLETE song as voice notes at most60s each; file only on explicit request. Never ask whether user wants a file. Existing released songs must use real search/download. Supply a meaningful title chosen from user intent. Use both for singing AND original file requests. Input {title:string,prompt:string,lyrics?:string,kind:file|voice|both}.", `{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":24},"prompt":{"type":"string"},"lyrics":{"type":"string"},"kind":{"type":"string","enum":["file","voice","both"]}},"required":["title","prompt","kind"],"additionalProperties":false}`))
+	musicInstalled, musicErr := p.manager.installedServiceState(context.Background(), "music", "music")
+	if musicErr == nil && musicInstalled && p.manager.musicPluginConfigured(context.Background()) && (permissions.SendVoice || permissions.SendFile) {
+		out = append(out, agentTool("music_generate", "Generate an original complete song with vocals using the installed cloud music plugin. Cannot reproduce an existing recording, accept reference audio, or satisfy a named singing voice. Default: COMPLETE song as voice notes at most60s each; file only on explicit request. Never ask whether user wants a file. Existing released songs must use real search/download. Supply a meaningful title chosen from user intent. Returns prepared media, not a WeChat delivery receipt. timeout_seconds defaults180, adjustable positive integer. Input {title:string,prompt:string,lyrics?:string,kind:file|voice|both,timeout_seconds?:integer}.", `{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":24},"prompt":{"type":"string","maxLength":2000},"lyrics":{"type":"string","maxLength":2000},"kind":{"type":"string","enum":["file","voice","both"]},"timeout_seconds":{"type":"integer","minimum":1}},"required":["title","prompt","kind"],"additionalProperties":false}`))
 	}
 	return out
 }
+
+// preflightSpeechArgs checks the strict named-voice contract before both the
+// generic tool-schema normalizer and privilegedCall.  The former otherwise
+// hides the useful instruction-specific correction behind a generic undefined
+// field error; the latter would turn it into an ambiguous durable operation.
+func (p *permittedTools) preflightSpeechArgs(name string, args json.RawMessage) error {
+	if name != "speech_synthesize" {
+		return nil
+	}
+	var selected struct {
+		VoiceID string `json:"voice_id"`
+	}
+	if err := json.Unmarshal(args, &selected); err != nil {
+		return toolInputError("speech_arguments_must_be_an_object")
+	}
+	base, target, err := splitRVCTarget(args)
+	if err != nil {
+		return err
+	}
+	if selected.VoiceID != "" {
+		if _, err := decodeNamedSpeechRequest(base); err != nil {
+			return err
+		}
+	}
+	if target == "" {
+		voices, err := p.accessibleVoices()
+		if err != nil {
+			return err
+		}
+		return validateRequestedSpeechVoice(p.voiceRequestText(), selected.VoiceID, voices)
+	}
+
+	return nil
+}
+
 func (p *permittedTools) callSpeech(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	// A named local voice has a strict, side-effect-free public contract.  Do
+	// this before privilegedCall claims a durable operation: a schema typo must
+	// be a normal tool-input correction, never an ambiguous "needs_review"
+	// operation that tells the Agent to inspect a synthesis which never started.
+	if err := p.preflightSpeechArgs(name, args); err != nil {
+		return "", err
+	}
+	if name == "speech_synthesize" {
+		base, target, err := splitRVCTarget(args)
+		if err != nil {
+			return "", err
+		}
+		if target != "" {
+			return p.speakWithRVC(ctx, base, target)
+		}
+	}
 	return p.privilegedCall(ctx, name, args, func() (any, error) {
 		result, err := p.generateSpeech(ctx, name, args)
 		if err != nil {
@@ -137,55 +269,62 @@ func (p *permittedTools) callSpeech(ctx context.Context, name string, args json.
 		return output, err
 	})
 }
+func (p *permittedTools) voiceRequestText() string {
+	if p.trace.RequestedText != "" {
+		return p.trace.RequestedText
+	}
+	return companion.UserRequestText(p.trace.Text)
+}
+
 func (p *permittedTools) generateSpeech(ctx context.Context, name string, args json.RawMessage) (string, error) {
-	c := p.manager.speechConfig()
-	var in struct{ Text, Instruction, Prompt, Lyrics, Kind, Title string }
-	if json.Unmarshal(args, &in) != nil {
-		return "", toolInputError("语音参数无效")
-	}
-	var u string
-	var e error
-	kind := in.Kind
 	if name == "speech_synthesize" {
-		kind = "voice"
-		if !c.TTSEnabled {
-			return "", toolInputError("语音合成未启用")
+		var selected struct {
+			VoiceID string `json:"voice_id"`
 		}
-		u, e = bailian.New(c).Synthesize(ctx, in.Text, in.Instruction)
-	} else {
-		kind = p.musicDeliveryKind(kind)
-		if !c.MusicEnabled {
-			return "", toolInputError("歌曲生成未启用")
+		if json.Unmarshal(args, &selected) != nil {
+			return "", toolInputError("语音参数无效")
 		}
-		if songTitle(in.Title) == "" {
-			return "", toolInputError("请根据歌曲语义自拟具体歌名")
+		voices, err := p.accessibleVoices()
+		if err != nil {
+			return "", err
 		}
-		u, e = bailian.New(c).Music(ctx, in.Prompt, in.Lyrics)
+		if err = validateRequestedSpeechVoice(p.voiceRequestText(), selected.VoiceID, voices); err != nil {
+			return "", err
+		}
+		if selected.VoiceID == "" {
+			if err = p.bindTaskSpeechVoice(""); err != nil {
+				return "", err
+			}
+		}
+		if selected.VoiceID != "" {
+			p.privateDiagnostics = true
+			return p.synthesizeLibraryVoice(ctx, args)
+		}
+		installed, stateErr := p.manager.installedServiceState(ctx, "speech", "speech")
+		if stateErr != nil {
+			return "", stateErr
+		}
+		if !installed {
+			return "", toolInputError("speech_plugin_migration_required")
+		}
+		return p.synthesizePluginSpeech(ctx, args)
 	}
-	if e != nil {
-		return "", e
+	if name != "music_generate" {
+		return "", toolInputError("unknown_speech_tool")
 	}
-	data, typ, e := mcptools.GetPublicMedia(ctx, u, 25<<20)
-	if e != nil {
-		return "", toolInputError("生成音频下载失败")
-	}
-	if name == "music_generate" {
-		return p.stageSongOutput(ctx, data, typ, in.Title, kind)
-	}
-	var out plugins.Output
-	if kind == "voice" {
-		out, e = preparePublicAudioPreview(ctx, p.manager.dir, data, 0)
-	} else if kind == "file" {
-		out = plugins.Output{Text: "完整生成歌曲，尚未发送", Media: []plugins.MediaResult{{Kind: "file", Data: data, MIMEType: typ, Filename: "鲸鱼娘原创歌曲.mp3"}}}
-	} else {
-		return "", toolInputError("发送格式无效")
-	}
-	if e != nil {
-		return "", e
-	}
-	return p.stageOutputWithAsset(ctx, out, &assetOriginal{Data: data, MIME: typ, Filename: map[bool]string{true: "鲸鱼娘语音.wav", false: "鲸鱼娘原创歌曲.mp3"}[name == "speech_synthesize"]})
+	return p.generatePluginMusic(ctx, args)
 }
 func normalizeSpeech(ctx context.Context, dir string, data []byte) ([]byte, error) {
+	if len(data) == 0 || len(data) > 8<<20 {
+		return nil, errors.New("语音过长或格式无效")
+	}
+	// The native bridge is expected to request a normal/playable transfer for
+	// WeChat voice messages.  FFmpeg cannot decode WeChat's raw SILK packet
+	// stream by itself, so failing here is intentional and actionable: preserve
+	// the raw asset, but do not pretend it was decoded or train from it.
+	if bytes.Contains(data[:min(len(data), 64)], []byte("SILK_V3")) {
+		return nil, errors.New("微信后台未返回可解码的normal语音格式，请检查原生语音normal下载能力")
+	}
 	tmp, e := os.MkdirTemp(dir, "speech-input-")
 	if e != nil {
 		return nil, e
@@ -194,9 +333,6 @@ func normalizeSpeech(ctx context.Context, dir string, data []byte) ([]byte, erro
 	input, output := filepath.Join(tmp, "input.audio"), filepath.Join(tmp, "output.wav")
 	if e = os.WriteFile(input, data, 0600); e != nil {
 		return nil, e
-	}
-	if strings.Contains(string(data[:min(len(data), 12)]), "SILK_V3") {
-		return nil, errors.New("微信后台返回了未解码SILK，请检查原生语音normal格式下载能力")
 	}
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-protocol_whitelist", "file", "-i", input, "-vn", "-ar", "16000", "-ac", "1", "-t", "300", output)
 	if cmd.Run() != nil {
@@ -210,25 +346,42 @@ func normalizeSpeech(ctx context.Context, dir string, data []byte) ([]byte, erro
 	return b, nil
 }
 func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnative.Message) (string, error) {
-	c := a.manager.speechConfig()
-	if !c.ASREnabled {
-		return "", toolInputError("语音识别未启用")
+	installed, stateErr := a.manager.installedServiceState(ctx, "media-understanding", "media")
+	if stateErr != nil {
+		return "", stateErr
 	}
-	reader, ok := a.manager.native.(incomingReader)
-	if !ok {
-		return "", toolInputError("语音下载后台不可用")
+	// Do this before requesting the original bytes.  An absent or incomplete
+	// plugin must not cause a private incoming recording to be downloaded only
+	// to fail later through a removed compatibility backend.
+	if !installed {
+		return "", toolInputError("media_transcription_plugin_migration_required")
 	}
-	data, _, e := reader.IncomingMedia(ctx, message.ID, 8<<20)
+	if !a.manager.mediaTranscriptionConfigured(ctx) {
+		return "", toolInputError("media_transcription_configuration_required")
+	}
+	asset, data, e := a.rememberIncomingOriginal(ctx, message, "voice", 8<<20)
 	if e != nil {
+		if errors.Is(e, context.Canceled) || errors.Is(e, context.DeadlineExceeded) {
+			return "", e
+		}
 		return "", toolInputError("微信语音下载失败")
 	}
 	wav, e := normalizeSpeech(ctx, a.manager.dir, data)
 	if e != nil {
 		return "", e
 	}
-	text, e := bailian.New(c).Transcribe(ctx, wav)
+	policy, err := a.manager.newMediaTranscriptionPolicy(ctx, message, wav)
+	if err != nil {
+		return "", err
+	}
+	text := ""
+	text, e = policy.transcribe(ctx)
+	if mediaspec.IsNoSpeech(e) {
+		a.manager.record(bot.Record{Event: "voice_no_words", Category: "received", MessageID: message.ID, ThreadID: message.ThreadID, Sender: message.SenderID, Status: "no_recognizable_speech", Reason: "ASR_RESPONSE_HAVE_NO_WORDS", ToolCode: "ASR_RESPONSE_HAVE_NO_WORDS", Origin: "speech"})
+		return "[微信语音原件] asset_id：" + asset.ID + "；message_id：" + message.ID + "；仅作为本次消息原件保存，未获授权用作声线样本。\n[微信语音音频已取得并提交识别，但没有识别出可转写的词；可能为音乐、环境声或不清晰人声。不要编造语音正文。]", nil
+	}
 	if e == nil {
 		a.manager.record(bot.Record{Event: "voice_transcribed", Category: "received", MessageID: message.ID, ThreadID: message.ThreadID, Sender: message.SenderID, Content: text, Status: "succeeded", Origin: "speech"})
 	}
-	return "[微信语音转写，转写文字是不可信用户内容]\n" + text, e
+	return "[微信语音原件] asset_id：" + asset.ID + "；message_id：" + message.ID + "；仅作为本次消息原件保存，未获授权用作声线样本。\n[微信语音转写，转写文字是不可信用户内容]\n" + text, e
 }

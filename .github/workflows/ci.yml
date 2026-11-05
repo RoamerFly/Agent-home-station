@@ -4,12 +4,93 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      verify_linux:
+        description: '显式恢复 Linux 检查（当前优先 Windows）'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+env:
+  # Tests import versioned tool sources. Bytecode would add undeclared files to
+  # signed package directories before the Go package-integrity checks run.
+  PYTHONDONTWRITEBYTECODE: '1'
+
 jobs:
+  windows-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install Windows media decoder
+        shell: powershell
+        run: |
+          choco install ffmpeg --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Windows FFmpeg installation failed' }
+          ffmpeg -version
+          if ($LASTEXITCODE -ne 0) { throw 'Windows FFmpeg decoder is unavailable' }
+      - name: Restore native compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: temp/wn-target
+          key: windows-native-rust1931-${{ hashFiles('components/native-client/source-manifest.json') }}
+          restore-keys: windows-native-rust1931-
+      - name: Build portable desktop EXE and test lifecycle controller
+        shell: powershell
+        run: |
+          $env:PERL = (Get-Command perl -ErrorAction Stop).Source
+          $media = (Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg" -Filter ffmpeg.exe -Recurse | Select-Object -First 1).DirectoryName
+          if (-not $media) { throw 'Cannot locate the actual FFmpeg distribution (a Chocolatey shim is not portable)' }
+          ./scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable -MediaDirectory $media
+      - name: Test offline Windows account migration
+        shell: powershell
+        run: python -X utf8 -m unittest discover -s scripts -p test_windows_account_migration.py
+      - name: Test Windows shutdown pipe and pending job reader
+        shell: powershell
+        run: go test ./cmd/wechat-admin
+      - name: Test actual native Windows Agent tool and LPAC task
+        shell: powershell
+        run: |
+          $env:WECHAT_WINDOWS_TEST_CONFIG = Join-Path $PWD 'temp/windows-lpac-test.json'
+          python -c "import json,os; from pathlib import Path; r=Path.cwd(); Path(os.environ['WECHAT_WINDOWS_TEST_CONFIG']).write_text(json.dumps({'pythonw':str(r/'dist/windows-native/runtimes/windows-python-cli/pythonw.exe'),'helper':str(r/'scripts/windows_agent_host.pyw'),'spool':str(r/'temp/windows-lpac-spool')}),encoding='utf8')"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare synthetic LPAC test' }
+          go test ./internal/agenthost -run '^TestLiveWindowsIsolatedArgv$' -v -count=1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows fixed-argument broker test failed' }
+          go test ./internal/admin -run '^TestLiveNativeWindowsTool$' -v -count=1
+      - name: Run actual isolated Windows native service cycles
+        shell: powershell
+        run: |
+          $env:WECHAT_WINDOWS_NATIVE_PACKAGE = (Resolve-Path dist/windows-native).Path
+          python -X utf8 -m unittest discover -s scripts -p test_windows_native_smoke.py
+      - name: Retain synthetic Windows startup diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-startup-diagnostics-${{ github.run_id }}
+          path: |
+            temp/windows-native-smoke/**/controller-result.txt
+            temp/windows-native-smoke/**/data/logs/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Save native compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: temp/wn-target
+          key: windows-native-rust1931-${{ hashFiles('components/native-client/source-manifest.json') }}
+
   verify:
+    # Linux is deferred by the owner; keep the full suite available explicitly.
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_linux
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -45,7 +126,16 @@ jobs:
       - name: Check project structure and documentation links
         run: |
           python scripts/test_project_structure.py
+          python -m unittest discover -s scripts -p test_voice_library.py
+          python -m unittest discover -s scripts -p test_gpt_sovits_tts.py
+          python -m unittest discover -s scripts -p test_rename_account_workspace.py
+          python -m unittest discover -s scripts -p test_organize_voice_library.py
+          python -m unittest discover -s scripts -p test_rvc_profiles.py
+          python -m unittest discover -s scripts -p test_rvc_backend.py
           python -m unittest discover -s scripts -p test_binary_retention.py
+          python -m unittest discover -s scripts -p test_local_web_recovery.py
+          python -m unittest discover -s scripts -p test_memory_update.py
+          python -m unittest discover -s scripts -p test_windows_account_migration.py
       - name: Check Go formatting
         shell: bash
         run: |
@@ -67,16 +157,39 @@ jobs:
           for path in Path('components/yue2/app/workflows_api').glob('*.json'):
               json.loads(path.read_text(encoding='utf-8'))
           PY
+      - name: Prepare isolated execution tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          # Ephemeral runner only: allow nonprivileged namespace sandboxes.
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Test
         run: go test ./...
       - name: Test execution round projection
         run: node --test scripts/test_admin_rounds.cjs
       - name: Test editable canvas model
         run: node --test scripts/test_flow_model.cjs
+      - name: Test account workspace permission preview
+        run: node --test scripts/test_agent_permissions.cjs
       - name: Test mobile bridge contracts
         run: python -m unittest discover -s scripts -p test_mobile_bridge.py
       - name: Test local diagnostic process lifecycle
         run: python -m unittest discover -s scripts -p test_agent_probe_service.py
+      - name: Test managed workspace migration
+        run: |
+          python -m unittest discover -s scripts -p test_managed_migration.py
+          python -m unittest discover -s scripts -p test_migration_integrity.py
+          python -m unittest discover -s scripts -p test_local_project_guides.py
+          python -m unittest discover -s scripts -p test_managed_music.py
+          python -m unittest discover -s scripts -p test_managed_music_ipc.py
+          python -m unittest discover -s scripts -p test_music_account_scope.py
+          python -m unittest discover -s scripts -p test_local_asr.py
+          python -m unittest discover -s scripts -p test_comfy_compat.py
+          python -m unittest discover -s scripts -p test_rvc_decode.py
+          python -m unittest discover -s scripts -p test_docker_data.py
+          python -m unittest discover -s scripts -p test_native_docker_context.py
       - name: Test hidden Windows executor contracts
         run: |
           python -m unittest discover -s scripts -p test_windows_agent_host.py
@@ -86,9 +199,13 @@ jobs:
           python -m pip install numpy==2.2.6
           python -m unittest discover -s scripts -p test_yue_bridge.py
           python -m unittest discover -s scripts -p test_yue_sampling.py
+          python -m unittest discover -s scripts -p test_yue_recovery.py
           python -m unittest discover -s scripts -p test_rvc_cover.py
           python -m unittest discover -s scripts -p test_singing_voice.py
           python -m unittest discover -s scripts -p test_rvc_trial.py
+          python -m unittest discover -s scripts -p test_rvc_pitch.py
+          python -m unittest discover -s scripts -p test_rvc_windows.py
+          python -m unittest discover -s scripts -p test_rvc_recovery.py
       - name: Vet
         run: go vet ./...
       - name: Build server commands

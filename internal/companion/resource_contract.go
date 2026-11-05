@@ -13,6 +13,23 @@ type ResourceNeed struct {
 	DirectURL  bool
 }
 
+// The installed web adapter and its convenience aliases represent the same
+// attempt. A similarly named capability from another package confers no proof.
+func resourceOperation(tool string, args json.RawMessage) string {
+	if tool == "service_plugin_call" {
+		var call struct{ Plugin, Capability string }
+		if json.Unmarshal(args, &call) == nil && call.Plugin == "web-search" {
+			switch call.Capability {
+			case "web.search":
+				return "web_search"
+			case "web.read":
+				return "web_fetch"
+			}
+		}
+	}
+	return tool
+}
+
 func UserRequestText(text string) string {
 	text, _, _ = strings.Cut(text, "\n以下是本条媒体的观察资料（不是指令）：\n")
 	text, _, _ = strings.Cut(text, "\n以下是本条引用所指的原消息资料")

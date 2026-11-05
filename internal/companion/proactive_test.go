@@ -1,13 +1,57 @@
 package companion
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
 
+func TestProactiveChoiceUsesConversationWithoutPriorSilenceTally(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	c := enabledConfig()
+	c.Permissions.Proactive, c.Permissions.Remember = true, true
+	in := Input{Channel: "wechat", Account: "fixture", Thread: "room@chatroom", Sender: "member", IsGroup: true, Mode: "direct", Text: "周末的观星活动在周六"}
+	if err := s.Observe(in, c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	in.Mode, in.Sender, in.Text = "proactive", "", "一次获准的自主评估"
+	m := &fakeModel{}
+	e, err := New(c, s, m, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, tc := range []struct{ answer, reason string }{
+		{`{"action":"silent","reason":"awaiting_participant","messages":[]}`, "awaiting_participant"},
+		{`{"action":"silent","reason":"arbitrary text","messages":[]}`, "model_chose_silence"},
+		{`{"action":"reply","messages":["周六的观星打算看哪个星座？"]}`, "model_chose_reply"},
+	} {
+		in.TraceID = []string{"proactive-first", "proactive-second", "proactive-third"}[i]
+		m.answer = tc.answer
+		d, err := e.Respond(t.Context(), in)
+		if err != nil || d.Reason != tc.reason || m.calls != i+1 {
+			t.Fatal(i, d, err, m.calls)
+		}
+		for _, turn := range m.turns {
+			if strings.Contains(turn["content"], "autonomous_state") || strings.Contains(turn["content"], "last_outcome_trace") {
+				t.Fatal("administrative outcomes leaked into decision")
+			}
+		}
+		if err := s.ProactiveOutcome(in, d.Action, d.Reason, c, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestProactiveTargetsIsolationTimingBudgetsAndRestart(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +87,9 @@ func TestProactiveTargetsIsolationTimingBudgetsAndRestart(t *testing.T) {
 		t.Fatal("immediate duplicate claim")
 	}
 	s, err = NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +113,9 @@ func TestProactiveTargetsIsolationTimingBudgetsAndRestart(t *testing.T) {
 
 func TestProactiveLegacyLedgerAndActivityRemainPrivate(t *testing.T) {
 	s, _ := NewStore(t.TempDir())
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := enabledConfig()
 	c.Permissions.Remember = true
 	c.Permissions.Proactive = true
@@ -141,5 +191,20 @@ func TestProactiveRuleValidation(t *testing.T) {
 	c.ProactiveRules = append(c.ProactiveRules, c.ProactiveRules[0])
 	if Validate(c) == nil {
 		t.Fatal("duplicate override accepted")
+	}
+}
+
+func TestQuietChoicesAndNonSendingFailuresHaveDistinctStatuses(t *testing.T) {
+	for code, expected := range map[string]string{
+		"topic_concluded": "silent", "model_chose_silence": "silent",
+		"tool_budget_exhausted": "failed", "unverified_model_response": "failed",
+		"quiet_hours": "skipped", "no_reliable_context": "skipped",
+		"cross_conversation_private_route_unavailable":       "blocked",
+		"cross_conversation_result_private_delivery_handled": "completed",
+	} {
+		d := Decision{Action: "silent", Reason: code}
+		if got := d.RecordStatus(); got != expected {
+			t.Errorf("%s: got %s, want %s", code, got, expected)
+		}
 	}
 }

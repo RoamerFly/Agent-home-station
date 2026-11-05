@@ -64,6 +64,8 @@ func failureSummary(err error) string {
 			return "没有匹配的公开搜索结果，可换关键词或来源"
 		case "search_no_relevant_results":
 			return "搜索返回了无关内容，备用来源也未取得相关结果；未把这些内容当作目标作品"
+		case "search_sources_unavailable":
+			return "本次公开作品检索的来源均暂时不可读。可稍后续查或改用已授权的其他来源；尚未确认作品是否存在"
 		case "redirect_limit":
 			return "目标跳转次数超过限制"
 		case "media_download_incomplete":
@@ -87,6 +89,8 @@ func failureSummary(err error) string {
 			return "这是需要鉴权的服务接口，不是内容网页。搜索请使用web_search；读取网页请传搜索结果的真实内容网址，不要重复访问搜索API地址"
 		case "response_too_large":
 			return "下载内容超过当前类型的大小上限"
+		case "media_limit_invalid":
+			return "媒体读取容量参数无效；需在1字节至512 MiB之间，按实际文件大小和资源选择"
 		case "no_readable_text":
 			return "网页没有可提取的正文；可能依赖 JavaScript 或本身是媒体链接"
 		case "not_text":
@@ -103,6 +107,10 @@ func failureSummary(err error) string {
 			return "分享返回的内容类型暂不支持读取；未按标题生成回复"
 		case "video_page_metadata_unavailable":
 			return "未取得视频页面的有效播放资料；可能是页面结构变化、验证页或已下架"
+		case "generation_evidence_changed":
+			return "本轮消息依据或工具授权已变化，联网请求未发出"
+		case "bilibili_search_unavailable":
+			return "B站搜索未返回可用结果，可改用网页搜索或直接读取已有 BV 分享链接"
 		case "video_public_playback_unavailable":
 			return "该视频未提供可直接使用的免登录公开播放文件，未尝试账号或付费访问"
 		case "video_progressive_unavailable":

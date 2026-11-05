@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -14,21 +15,35 @@ import (
 )
 
 type surfSettings struct {
-	Discovery          *discoverySettings `json:"discovery"`
-	Enabled            bool               `json:"enabled"`
-	ForceShare         bool               `json:"force_share"`
-	IntervalMinutes    int                `json:"interval_minutes"`
-	IntervalMaxMinutes int                `json:"interval_max_minutes"`
-	MaxSessionsPerDay  int                `json:"max_sessions_per_day"`
-	Topics             []string           `json:"topics"`
-	Threads            []string           `json:"threads"`
+	Discovery *discoverySettings `json:"discovery"`
+	// InteractionGrants are explicit administrator approvals for a configured
+	// public source. Discovering or reading a source never implies permission to
+	// act there. The account is the current Manager account and is bound again
+	// in the request/receipt ledger.
+	InteractionGrants  []surfInteractionGrant `json:"interaction_grants,omitempty"`
+	Enabled            bool                   `json:"enabled"`
+	ForceShare         bool                   `json:"force_share"`
+	IntervalMinutes    int                    `json:"interval_minutes"`
+	IntervalMaxMinutes int                    `json:"interval_max_minutes"`
+	MaxSessionsPerDay  int                    `json:"max_sessions_per_day"`
+	Topics             []string               `json:"topics"`
+	Threads            []string               `json:"threads"`
+}
+
+type surfInteractionGrant struct {
+	SourceID        string   `json:"source_id"`
+	Platform        string   `json:"platform"`
+	PlatformAccount string   `json:"platform_account"`
+	Actions         []string `json:"actions"`
+	Enabled         bool     `json:"enabled"`
 }
 type surfState struct {
-	Settings   surfSettings `json:"settings"`
-	Next       time.Time    `json:"next"`
-	Day        string       `json:"day"`
-	Sessions   int          `json:"sessions"`
-	TopicIndex int          `json:"topic_index"`
+	SettingsRevision int          `json:"settings_revision,omitempty"`
+	Settings         surfSettings `json:"settings"`
+	Next             time.Time    `json:"next"`
+	Day              string       `json:"day"`
+	Sessions         int          `json:"sessions"`
+	TopicIndex       int          `json:"topic_index"`
 }
 
 func surfDefaults() surfState {
@@ -56,7 +71,7 @@ func loadSurf(dir string) (surfState, error) {
 	if s.Settings.IntervalMaxMinutes == 0 {
 		s.Settings.IntervalMaxMinutes = min(1440, s.Settings.IntervalMinutes*2)
 	}
-	if validateSurf(s.Settings) != nil {
+	if s.SettingsRevision < 0 || validateSurf(s.Settings) != nil {
 		return s, errors.New("网上冲浪配置不可读")
 	}
 	return s, nil
@@ -73,6 +88,37 @@ func validateSurf(s surfSettings) error {
 			return errors.New("每个冲浪兴趣需要 1–200 字节")
 		}
 	}
+	if len(s.InteractionGrants) > 12 {
+		return errors.New("互动授权数量过多")
+	}
+	granted := map[string]bool{}
+	for _, grant := range s.InteractionGrants {
+		if strings.TrimSpace(grant.SourceID) == "" || strings.TrimSpace(grant.Platform) == "" || strings.TrimSpace(grant.PlatformAccount) == "" || granted[grant.SourceID] || len(grant.Actions) == 0 || len(grant.Actions) > 4 {
+			return errors.New("请检查互动授权来源和动作")
+		}
+		granted[grant.SourceID] = true
+		actions := map[string]bool{}
+		for _, action := range grant.Actions {
+			if action != "comment" || actions[action] {
+				return errors.New("互动授权动作无效")
+			}
+			actions[action] = true
+		}
+	}
+	if len(s.InteractionGrants) > 0 {
+		if s.Discovery == nil {
+			return errors.New("互动授权需要配置内容源")
+		}
+		known := map[string]bool{}
+		for _, source := range s.Discovery.Sources {
+			known[source.ID] = true
+		}
+		for _, grant := range s.InteractionGrants {
+			if !known[grant.SourceID] {
+				return errors.New("互动授权引用了不存在的内容源")
+			}
+		}
+	}
 	return nil
 }
 func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
@@ -81,6 +127,20 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 	s := m.surf
 	if !s.Settings.Enabled || !m.config.Companion.Enabled || !m.mcp.Enabled || !m.mcp.WebFetchEnabled || m.config.Companion.Quiet(now) || now.Before(s.Next) {
 		return nil, nil
+	}
+	_, holdErr := os.Lstat(m.memoryUpdateHoldPath())
+	if m.drainTicket != "" || !errors.Is(holdErr, os.ErrNotExist) {
+		return nil, errors.New("web_host_draining")
+	}
+	if err := (&permittedTools{manager: m}).installedWebCapability(context.Background(), "web.discover"); err != nil {
+		return nil, err
+	}
+	thread := ""
+	if m.agent != nil && m.agent.config().Enabled && m.config.Companion.Permissions.Proactive && m.config.Companion.Permissions.ReplyText && len(s.Settings.Threads) > 0 {
+		candidate := s.Settings.Threads[s.TopicIndex%len(s.Settings.Threads)]
+		if permittedRecipient(m.config, candidate) {
+			thread = candidate
+		}
 	}
 	loc, e := time.LoadLocation(m.config.Companion.Timezone)
 	if e != nil {
@@ -122,19 +182,20 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 		return nil, e
 	}
 	preferred := formats[choice.Int64()]
-	thread := ""
-	if m.config.Companion.Permissions.Proactive && m.config.Companion.Permissions.ReplyText && len(s.Settings.Threads) > 0 {
-		candidate := s.Settings.Threads[(s.TopicIndex-1)%len(s.Settings.Threads)]
-		if permittedRecipient(m.config, candidate) {
-			thread = candidate
+	task := &bot.SurfTask{Topic: topic, Thread: thread, PreferredKind: preferred, ForceShare: thread != "" && s.Settings.ForceShare, QuietDeadline: m.config.Companion.QuietDeadline(now)}
+	if thread == "" {
+		factory, err := m.privateSurfFactoryLocked(now, task)
+		if err != nil {
+			return nil, err
 		}
+		task.PrivateBrowseTools = factory
 	}
 	b, _ := json.Marshal(s)
 	if e = writePrivate(filepath.Join(m.dir, "surf.json"), b); e != nil {
 		return nil, e
 	}
 	m.surf = s
-	return &bot.SurfTask{Topic: topic, Thread: thread, PreferredKind: preferred, ForceShare: s.Settings.ForceShare, QuietDeadline: m.config.Companion.QuietDeadline(now)}, nil
+	return task, nil
 }
 
 func (m *Manager) surfAllowed(thread string) bool {
@@ -172,7 +233,12 @@ func (s *Server) surfRoutes(mux *http.ServeMux) {
 				items = append(items, item)
 			}
 		}
-		respond(w, 200, map[string]any{"settings": state.Settings, "next": state.Next, "sessions": sessions, "day": state.Day, "items": items, "share_permission": config.Companion.Permissions.Proactive && config.Companion.Permissions.ReplyText, "allowed_threads": config.allowed(), "quiet_now": config.Companion.Quiet(now), "quiet_start": config.Companion.QuietStart, "quiet_end": config.Companion.QuietEnd, "timezone": config.Companion.Timezone})
+		readyErr := (&permittedTools{manager: m}).installedWebCapability(r.Context(), "web.discover")
+		reason := ""
+		if readyErr != nil {
+			reason = readyErr.Error()
+		}
+		respond(w, 200, map[string]any{"settings": state.Settings, "next": state.Next, "sessions": sessions, "day": state.Day, "items": items, "execution_ready": reason == "", "execution_reason": reason, "share_permission": config.Companion.Permissions.Proactive && config.Companion.Permissions.ReplyText, "allowed_threads": config.allowed(), "quiet_now": config.Companion.Quiet(now), "quiet_start": config.Companion.QuietStart, "quiet_end": config.Companion.QuietEnd, "timezone": config.Companion.Timezone})
 	}))
 	mux.HandleFunc("POST /api/surf", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input surfSettings
@@ -209,6 +275,7 @@ func (s *Server) surfRoutes(mux *http.ServeMux) {
 		}
 		state := m.surf
 		state.Settings = input
+		state.SettingsRevision++
 		delay, err := surfRandomDelay(input)
 		if err != nil {
 			fail(w, 500, "随机调度暂时不可用")

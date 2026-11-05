@@ -44,13 +44,13 @@
       const items=Array.isArray(result.items)?result.items:[];
       state.items=more?state.items.concat(items):items;state.nextCursor=result.next_cursor||null;setCoverage(result.coverage);renderItems();
       if(state.items.length)stateText('已显示 '+state.items.length+' 条'+labels[kind]+'。'+(state.nextCursor?'可继续加载更多。':''));
-      else if(kind==='members')stateText(search?'未找到匹配的成员。可调整搜索，或刷新当前群成员资料。':'本地尚未同步这个群的成员名单，请点击“刷新当前群成员”；这不表示群里没有成员。');
+      else if(kind==='members')stateText(search?'未找到匹配的成员。可调整搜索，或同步当前群成员资料。':'本地尚未同步这个群的成员名单，请点击“同步当前群成员”；这不表示群里没有成员。');
       else stateText('没有符合条件的'+labels[kind]+'。');
     }catch(error){
       if(revision!==state.revision)return;
       // Keep a successfully loaded page on a later-page error.
       if(!more){state.items=[];renderItems()}
-      stateText(timedOut?'目录查询超时，已停止等待。可以重新查询，或刷新当前群成员资料。':'查询目录失败：'+error.message);
+      stateText(timedOut?'目录查询超时，已停止等待。可以重新查询，或同步当前群成员资料。':'查询目录失败：'+error.message);
     }finally{
       clearTimeout(timer);
       if(revision===state.revision){state.busy=false;state.controller=null;$('#catalog-list').setAttribute('aria-busy','false');updateControls()}
@@ -62,11 +62,12 @@
     $('#catalog-kind').addEventListener('change',()=>changed('请选择条件后手动查询。'));
     $('#catalog-thread').addEventListener('change',event=>{state.thread=event.target.value;changed('会话已切换，请查询当前会话。')});
     $('#catalog-search').addEventListener('input',()=>changed('搜索条件已更改，请重新查询。'));
-    $('#catalog-query').addEventListener('click',()=>query(false));$('#catalog-more').addEventListener('click',()=>query(true));
+    window.WechatRefresh.register($('#catalog-list'),()=>{if(!needsThread(state.kind)||state.thread)return query(false)});$('#catalog-query').addEventListener('click',()=>query(false));$('#catalog-more').addEventListener('click',()=>query(true));
     $('#catalog-search').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();query(false)}});
     updateControls();loadRecipients();
   }
   window.addEventListener('wechat-admin:catalog-synced',event=>{if(state.initialized){loadRecipients();if(!needsThread(state.kind)||event.detail?.kind==='members'&&event.detail.thread===state.thread&&state.kind==='members')query(false)}});
   window.addEventListener('wechat-admin:logout',()=>{cancelQuery();state.recipientsRevision++;state.items=[];state.recipients=[];state.nextCursor=null;state.thread='';stateText('请选择类型后手动查询。');renderItems();updateControls()});
   window.addEventListener('wechat-admin:navigate',event=>{if(event.detail?.section==='catalog')initialize();else if(state.busy)changed('查询已停止，返回后可重新查询。')});
+  window.addEventListener('wechat-admin:catalog-target',async event=>{initialize();await loadRecipients();state.thread=event.detail.thread;state.kind=state.thread.endsWith('@chatroom')?'members':'friends';$('#catalog-kind').value=state.kind;$('#catalog-thread').value=state.thread;updateControls();query(false)});
 })();

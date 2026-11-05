@@ -1,0 +1,40 @@
+# Pin the CUDA ABI; do not resolve a second multi-GB Torch distribution.
+torch==2.6.0
+torchaudio==2.6.0
+torchvision==0.21.0
+numpy==1.26.4
+fairseq==0.12.2
+hydra-core==1.0.7
+omegaconf==2.0.6
+faiss-cpu==1.7.4
+librosa==0.10.2.post1
+numba==0.59.1
+pyworld==0.3.5
+torchcrepe==0.0.23
+soundfile==0.13.1
+scipy==1.13.1
+av>=17,<18
+ffmpeg-python==0.2.0
+praat-parselmouth==0.4.6
+requests>=2.32,<3
+torchsde==0.2.6
+einops>=0.8,<1
+transformers>=4.50.3,<5
+tokenizers>=0.21,<0.23
+sentencepiece>=0.2,<0.3
+safetensors>=0.5,<1
+aiohttp>=3.11.8,<4
+yarl>=1.18,<2
+PyYAML>=6,<7
+Pillow>=11,<12
+tqdm>=4.67,<5
+psutil>=6,<8
+alembic>=1.15,<2
+SQLAlchemy>=2,<3
+simpleeval>=1,<2
+blake3>=1,<2
+comfy-kitchen==0.2.35
+comfy-aimdo==0.5.5
+comfyui-frontend-package==1.52.7
+# The worker uses repository API workflows, not the downloadable template
+# gallery or embedded documentation media (hundreds of MB, no inference use).

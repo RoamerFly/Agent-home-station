@@ -21,6 +21,10 @@ func TestCompressionOutputBudgetDoesNotChangeNormalReplies(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&body)
 		budgets = append(budgets, body.MaxTokens)
 		jsonModes = append(jsonModes, body.Format["type"] == "json_object")
+		if body.MaxTokens == 4096 {
+			w.Write([]byte(`{"choices":[{"message":{"content":"partial"},"finish_reason":"length"}]}`))
+			return
+		}
 		w.Write([]byte(`{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}]}`))
 	}))
 	defer server.Close()
@@ -35,7 +39,7 @@ func TestCompressionOutputBudgetDoesNotChangeNormalReplies(t *testing.T) {
 	client.Chat(context.Background(), "chat policy", turns)
 	client.ChatCompression(context.Background(), "summary policy", turns)
 	client.Chat(context.Background(), "chat policy", turns)
-	if len(budgets) != 3 || budgets[0] != 768 || budgets[1] != 4096 || budgets[2] != 768 || jsonModes[0] || !jsonModes[1] || jsonModes[2] {
+	if len(budgets) != 4 || budgets[0] != 768 || budgets[1] != 4096 || budgets[2] != 8192 || budgets[3] != 768 || jsonModes[0] || !jsonModes[1] || !jsonModes[2] || jsonModes[3] {
 		t.Fatal("shared reply budget changed", budgets, jsonModes)
 	}
 }

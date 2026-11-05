@@ -17,21 +17,31 @@ import (
 )
 
 type accountRecord struct {
-	ID    string `json:"id"`
-	Label string `json:"label,omitempty"`
+	ID       string `json:"id"`
+	Label    string `json:"label,omitempty"`
+	Removed  bool   `json:"removed,omitempty"`
+	Deleting bool   `json:"deleting,omitempty"`
+	Purged   bool   `json:"purged,omitempty"`
+}
+type accountAccess struct {
+	mu      sync.RWMutex
+	removed bool
 }
 type accountRuntime struct {
+	access    *accountAccess
 	record    accountRecord
 	manager   *Manager
 	handler   http.Handler
 	loadError string
 }
 type accountRegistry struct {
-	mu     sync.Mutex
-	root   *Server
-	items  map[string]*accountRuntime
-	order  []accountRecord
-	closed bool
+	lifecycle sync.Mutex
+	mu        sync.Mutex
+	root      *Server
+	fish      *fishIdentityRegistry
+	items     map[string]*accountRuntime
+	order     []accountRecord
+	closed    bool
 }
 type accountFactory interface {
 	ForAccount(string) (*linuxnative.Sender, error)
@@ -44,7 +54,12 @@ func accountDirectory(id string) string {
 }
 
 func newAccountRegistry(root *Server) (*accountRegistry, error) {
-	a := &accountRegistry{root: root, items: map[string]*accountRuntime{}}
+	fish := root.manager.fish
+	if fish == nil {
+		fish = newFishIdentityRegistry(root.manager.dir)
+		root.manager.fish = fish
+	}
+	a := &accountRegistry{root: root, fish: fish, items: map[string]*accountRuntime{}}
 	primary := root.manager.native.Account()
 	a.items[primary] = &accountRuntime{record: accountRecord{ID: primary}, manager: root.manager}
 	data, err := os.ReadFile(filepath.Join(root.manager.dir, "accounts.json"))
@@ -59,6 +74,10 @@ func newAccountRegistry(root *Server) (*accountRegistry, error) {
 			if !validID(record.ID) || record.ID == primary || a.items[record.ID] != nil {
 				a.close()
 				return nil, errors.New("账号目录身份重复或无效")
+			}
+			if record.Removed {
+				a.items[record.ID] = &accountRuntime{record: record}
+				continue
 			}
 			if _, err := a.open(record, false); err != nil {
 				// A damaged secondary configuration must not take the existing
@@ -115,7 +134,7 @@ func (a *accountRegistry) open(record accountRecord, initialize bool) (*accountR
 			return nil, err
 		}
 	}
-	m, err := NewManager(dir, filepath.Join(a.root.manager.stateDir, "accounts", accountDirectory(record.ID)), native)
+	m, err := newManager(dir, filepath.Join(a.root.manager.stateDir, "accounts", accountDirectory(record.ID)), native, a.fish)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +143,7 @@ func (a *accountRegistry) open(record accountRecord, initialize bool) (*accountR
 		m.Close()
 		return nil, err
 	}
-	item := &accountRuntime{record: record, manager: m, handler: h}
+	item := &accountRuntime{record: record, manager: m, handler: h, access: &accountAccess{}}
 	a.items[record.ID] = item
 	return item, nil
 }
@@ -160,6 +179,8 @@ func (a *accountRegistry) add(record accountRecord) (*accountRuntime, error) {
 }
 
 func (a *accountRegistry) close() {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
@@ -180,11 +201,17 @@ func (a *accountRegistry) close() {
 func (a *accountRegistry) lookup(id string) *accountRuntime {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.items[id]
+	item := a.items[id]
+	if item == nil {
+		return nil
+	}
+	copy := *item
+	return &copy
 }
 
 func (a *accountRegistry) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/accounts", a.root.protected(a.list))
+	mux.HandleFunc("POST /api/accounts/{id}/manage", a.root.protected(a.manage))
 	mux.HandleFunc("POST /api/accounts", a.root.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Label string `json:"label"`
@@ -205,6 +232,126 @@ func (a *accountRegistry) routes(mux *http.ServeMux) {
 		}
 		respond(w, 201, map[string]any{"id": item.record.ID, "name": in.Label, "created": true})
 	}))
+}
+
+// Keep a tombstone so native directory refresh cannot undo removal. Private
+// history is retained only for restorable accounts.
+func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Action string `json:"action"`
+		Label  string `json:"label"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.Label = strings.TrimSpace(in.Label)
+	if len(in.Label) > 256 || strings.ContainsAny(in.Label, "\x00\r\n") {
+		fail(w, 400, "账号备注需要为单行文字，最多 256 字节")
+		return
+	}
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	if in.Action == "remove" || in.Action == "purge" {
+		a.removeAccount(w, r, in.Action == "purge")
+		return
+	}
+	id := r.PathValue("id")
+	snapshot := a.lookup(id)
+	if snapshot != nil && snapshot.access != nil {
+		snapshot.access.mu.Lock()
+		defer snapshot.access.mu.Unlock()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	item := a.items[id]
+	if a.closed || a.root.manager.draining() {
+		fail(w, 409, "服务正在收尾，请稍后重试")
+		return
+	}
+	if item == nil || item.record.Purged || item.record.Deleting {
+		fail(w, 404, "账号不存在或正在删除")
+		return
+	}
+	if item.record.Removed && (in.Action == "bind_fish" || in.Action == "unbind_fish") {
+		fail(w, 404, "账号已移除，请先恢复后再管理鱼身份")
+		return
+	}
+	if id == a.root.manager.native.Account() && in.Action != "bind_fish" && in.Action != "unbind_fish" {
+		fail(w, 409, "主账号是本机服务入口，可暂停 Agent 或退出微信登录，不能移除入口")
+		return
+	}
+
+	record := item.record
+	switch in.Action {
+	case "rename":
+		record.Label = in.Label
+	case "bind_fish":
+		fishID, err := a.fish.bind(id)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		respond(w, 200, map[string]any{"id": id, "fish_id": fishID})
+		return
+	case "unbind_fish":
+		if err := a.fish.unbind(id); err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		respond(w, 200, map[string]any{"id": id, "fish_id": ""})
+		return
+	case "restore":
+		if record.Removed && item.manager != nil {
+			fail(w, 409, "上次停止账号未完成，请重启服务后恢复")
+			return
+		}
+		if !record.Removed {
+			respond(w, 200, map[string]any{"id": id})
+			return
+		}
+		record.Removed = false
+	default:
+		fail(w, 400, "不支持的账号操作")
+		return
+	}
+	next := append([]accountRecord{}, a.order...)
+	for i := range next {
+		if next[i].ID == id {
+			next[i] = record
+		}
+	}
+	// Open before committing restoration; keep it inaccessible until persistence.
+	oldItem := item
+	if in.Action == "restore" && item.manager == nil {
+		opened, err := a.open(record, false)
+		if err != nil {
+			fail(w, 409, "账号配置未能恢复，原资料仍保留")
+			return
+		}
+		opened.record = item.record
+		item = opened
+	}
+	data, err := json.Marshal(next)
+	if err == nil {
+		err = writePrivate(filepath.Join(a.root.manager.dir, "accounts.json"), data)
+	}
+	if err != nil {
+		if item != oldItem {
+			a.items[id] = oldItem
+			item.manager.Close()
+		}
+		fail(w, 500, "账号目录保存失败，原记录保留")
+		return
+	}
+	copy := *item
+	copy.record = record
+	if copy.access != nil {
+		copy.access.removed = record.Removed
+	}
+	a.items[id] = &copy
+	a.order = next
+	respond(w, 200, map[string]any{"id": id, "removed": record.Removed, "label": record.Label, "history_preserved": true})
 }
 
 func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
@@ -231,9 +378,23 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.mu.Lock()
+	// Snapshot bindings while the account set is locked. Manage operations take
+	// the same account-then-fish lock order, so a response cannot combine an
+	// earlier identity view with a later account registry view.
+	fishID, fishBindings, fishErr := a.fish.bindings()
+	if fishErr != nil {
+		// An unreadable identity registry must never be represented as a clean
+		// unbound state. Keep ordinary account status available, but make the
+		// identity fault explicit and reject every binding mutation.
+		fishID, fishBindings = "", map[string]bool{}
+	}
 	items := make([]*accountRuntime, 0, len(a.items))
 	for _, item := range a.items {
-		items = append(items, item)
+		if item.record.Purged {
+			continue
+		}
+		copy := *item
+		items = append(items, &copy)
 	}
 	a.mu.Unlock()
 	primary := a.root.manager.native.Account()
@@ -250,12 +411,16 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(i int, item *accountRuntime) {
 			defer wg.Done()
+			if item.record.Removed {
+				rows[i] = map[string]any{"id": item.record.ID, "name": item.record.Label, "label": item.record.Label, "removed": true, "deleting": item.record.Deleting, "fish_id": ""}
+				return
+			}
 			if item.manager == nil {
 				name := item.record.Label
 				if name == "" {
 					name = "配置异常的小号"
 				}
-				rows[i] = map[string]any{"id": item.record.ID, "name": name, "load_error": item.loadError, "native": linuxnative.Status{Connection: "unavailable"}, "bot": BotStatus{State: "error"}}
+				rows[i] = map[string]any{"id": item.record.ID, "name": name, "load_error": item.loadError, "native": linuxnative.Status{Connection: "unavailable"}, "bot": BotStatus{State: "error"}, "fish_id": fishIDForAccount(fishID, fishBindings, item.record.ID)}
 				return
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -271,7 +436,7 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 			}); ok {
 				nickname, _ = resolver.DisplayName(ctx)
 			}
-			if nickname != "" {
+			if nickname != "" && item.record.Label == "" {
 				name = nickname
 			}
 			if name == "" {
@@ -281,16 +446,27 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 					name = "未登录的小号"
 				}
 			}
-			rows[i] = map[string]any{"id": item.record.ID, "name": name, "nickname": nickname, "label": item.record.Label, "primary": item.record.ID == primary, "native": native, "bot": item.manager.BotStatus()}
+			rows[i] = map[string]any{"id": item.record.ID, "name": name, "nickname": nickname, "label": item.record.Label, "primary": item.record.ID == primary, "native": native, "bot": item.manager.BotStatus(), "fish_id": fishIDForAccount(fishID, fishBindings, item.record.ID)}
 		}(i, item)
 	}
 	wg.Wait()
-	respond(w, 200, map[string]any{"items": rows, "primary": primary, "supported": supported, "directory_error": directoryError})
+	response := map[string]any{"items": rows, "primary": primary, "supported": supported, "directory_error": directoryError}
+	if fishErr != nil {
+		response["fish_error"] = fishErr.Error()
+	}
+	respond(w, 200, response)
+}
+
+func fishIDForAccount(fishID string, bindings map[string]bool, account string) string {
+	if bindings[account] {
+		return fishID
+	}
+	return ""
 }
 
 // selectAccount never falls back to primary for an unknown or conflicting ID.
 func (a *accountRegistry) selectAccount(w http.ResponseWriter, r *http.Request, primary http.Handler) {
-	if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/accounts" || r.URL.Path == "/api/login" || r.URL.Path == "/api/logout" || r.URL.Path == "/api/password" || r.URL.Path == "/api/session" {
+	if !strings.HasPrefix(r.URL.Path, "/api/") || (r.URL.Path == "/api/accounts" || strings.HasPrefix(r.URL.Path, "/api/accounts/")) || r.URL.Path == "/api/login" || r.URL.Path == "/api/logout" || r.URL.Path == "/api/password" || r.URL.Path == "/api/session" {
 		primary.ServeHTTP(w, r)
 		return
 	}
@@ -311,13 +487,21 @@ func (a *accountRegistry) selectAccount(w http.ResponseWriter, r *http.Request, 
 		id = a.root.manager.native.Account()
 	}
 	item := a.lookup(id)
-	if item == nil {
+	if item == nil || item.record.Removed {
 		fail(w, 404, "账号不存在，请从账号列表重新选择")
 		return
 	}
 	if item.manager == nil {
 		fail(w, 503, item.loadError)
 		return
+	}
+	if item.access != nil {
+		item.access.mu.RLock()
+		defer item.access.mu.RUnlock()
+		if item.access.removed {
+			fail(w, 404, "账号已移除，请重新选择")
+			return
+		}
 	}
 	w.Header().Set("X-Wechat-Account", id)
 	if item.handler == nil {

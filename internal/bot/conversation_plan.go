@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 	"wechat-bot/internal/companion"
@@ -12,6 +11,9 @@ import (
 )
 
 type utterancePlan struct {
+	ReviewEvidence   *companion.GenerationEvidence `json:"review_evidence,omitempty"`
+	ReplyContexts    []companion.ReplyContext      `json:"reply_contexts,omitempty"`
+	Paused           bool                          `json:"paused,omitempty"`
 	WakeReason       string                        `json:"wake_reason,omitempty"`
 	StopReason       string                        `json:"stop_reason,omitempty"`
 	MediaCaption     bool                          `json:"media_caption,omitempty"`
@@ -83,6 +85,7 @@ func (w *Worker) queueUtteranceFrom(c *companion.Engine, in companion.Input, d c
 	now := time.Now().UTC()
 	p := &utterancePlan{WakeReason: d.WakeReason, ID: "utterance-" + messageHash(in.Thread + "|" + in.TraceID)[:32], Input: in, Messages: append([]string{}, d.Messages...), Sent: []string{}, State: "queued", Next: now.Add(w.replyDelay(c)), Created: now, WakeAfterSeconds: d.WakeAfterSeconds, WaitForReply: d.WaitForReply}
 	p.MediaCaption = mediaCaption
+	p.ReplyContexts = append([]companion.ReplyContext(nil), d.ReplyContexts...)
 	p.Index, p.Slot = start, start
 	p.Sent = append([]string{}, d.Messages[:start]...)
 	p.Updates = append([]companion.ConversationEvent(nil), updates...)
@@ -120,6 +123,10 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 			if r.terminal() || r.Input.Thread != m.ThreadID || r.Trace == m.ID {
 				continue
 			}
+			if !messageAffectsInput(r.Input, m) {
+				r.Input.QuoteSharedMessage = true
+				continue
+			}
 			seen := false
 			for _, e := range r.Updates {
 				seen = seen || e.MessageID == m.ID
@@ -127,7 +134,7 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 			if seen {
 				continue
 			}
-			r.Updates = append(r.Updates, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: m.Body, At: m.CreatedAt, NewRequest: eligible})
+			r.Updates = append(r.Updates, conversationEvent(m, eligible))
 			if len(r.Updates) > 8 {
 				r.Updates = r.Updates[len(r.Updates)-8:]
 			}
@@ -143,6 +150,13 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 		if p.terminal() || p.Input.Thread != m.ThreadID || p.Input.TraceID == m.ID {
 			continue
 		}
+		if !messageAffectsInput(p.Input, m) {
+			p.Input.QuoteSharedMessage = true
+			if p.Input.QuoteServerID != "" {
+				p.Quote = replyQuote(p.Input)
+			}
+			continue
+		}
 		if !c.Config.ConversationConfig().RecheckOnMessage {
 			continue
 		}
@@ -153,7 +167,7 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 		if seen {
 			continue
 		}
-		p.Updates = append(p.Updates, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: m.Body, At: m.CreatedAt, NewRequest: eligible})
+		p.Updates = append(p.Updates, conversationEvent(m, eligible))
 		if len(p.Updates) > 8 {
 			p.Updates = p.Updates[len(p.Updates)-8:]
 		}
@@ -171,8 +185,31 @@ func (w *Worker) planDelivery(p *utterancePlan) *delivery {
 	return nil
 }
 func (w *Worker) acceptPlanBubble(c *companion.Engine, p *utterancePlan, text string) {
-	key := fmt.Sprintf("%s-%d", p.ID, p.Slot)
-	if err := c.Store.AcceptedDelivery(p.Input, text, key, c.Config, time.Now()); err != nil {
+	in := p.Input
+	if p.Index < len(p.ReplyContexts) {
+		rc := p.ReplyContexts[p.Index]
+		in.ReplyContext = &rc
+	}
+	if d := w.planDelivery(p); d != nil && d.State == "accepted" && d.Input.ReplyContext != nil {
+		in.ReplyContext = d.Input.ReplyContext
+	}
+	var err error
+	if _, native := w.sender.(reliableNative); native {
+		// A durable plan that went through the native sender must be tied to
+		// its confirmed receipt.  Do not substitute a plan/index-derived key:
+		// that can collide with imported history and is not proof of delivery.
+		d := w.planDelivery(p)
+		if d == nil || d.State != "accepted" || deliveryMemoryKey(d) == "" {
+			err = companion.ErrDeliveryIdentityRequired
+		} else if d.Text != text {
+			err = companion.ErrDeliveryMemoryConflict
+		} else {
+			err = w.acceptTextMemoryAt(c, in, p.Slot, text, deliveryAcceptedTime(d, time.Now()))
+		}
+	} else {
+		err = c.Accepted(in, text)
+	}
+	if err != nil {
 		w.persistErr = err
 		return
 	}
@@ -216,42 +253,15 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
 		}
-		if p.terminal() || visited[p.Input.Thread] || !p.InboxChecked {
+		if p.Paused || p.terminal() || visited[p.Input.Thread] || !p.InboxChecked {
 			continue
 		}
 		visited[p.Input.Thread] = true
 		// An already submitted bubble is reconciled independently, never replaced
 		// or assumed absent because a new human message arrived.
 		if d := w.planDelivery(p); d != nil {
-			if d.State != "accepted" && d.State != "stopped" && !time.Now().Before(p.Next) {
-				if n, ok := w.sender.(reliableNative); ok {
-					pollCtx, cancel := context.WithTimeout(ctx, time.Second)
-					var status linuxnative.ToolStatus
-					var err error
-					if d.ID != "" {
-						status, err = n.ToolSendStatus(pollCtx, d.ID)
-					} else {
-						status, err = n.LookupSend(pollCtx, d.Key)
-					}
-					cancel()
-					p.Next = time.Now().Add(2 * time.Second)
-					if err == nil && status.ThreadID == d.Thread {
-						if status.State == "accepted" {
-							d.State = "accepted"
-							if d.SubmittedText != "" {
-								d.Text = d.SubmittedText
-							}
-							w.advanceSendGate(d.Thread)
-							d.ID = status.ID
-							w.persistErr = w.saveRuntime()
-						} else if status.State == "failed" && !status.Retryable || status.State == "cancelled" {
-							d.State = "stopped"
-							d.Reason = status.Reason
-							w.persistErr = w.saveRuntime()
-						}
-					}
-				}
-			}
+			// The delivery reconciler owns the persisted receipt deadline. Plans
+			// only consume its outcome, even if their pacing timer expires first.
 			if d.State == "accepted" {
 				w.acceptPlanBubble(c, p, d.Text)
 			} else if d.State == "stopped" {
@@ -282,7 +292,7 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 				continue
 			}
 			reviewCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			d, err := c.ReviewPending(w.modelContext(reviewCtx, p.Input.Thread, p.Input.TraceID), p.Input, p.Sent, p.Messages[p.Index:], p.Updates)
+			d, err := w.reviewPlan(w.modelContext(reviewCtx, p.Input.Thread, p.Input.TraceID), c, p)
 			cancel()
 			w.applyPlanReview(p, d, err)
 			continue
@@ -295,6 +305,10 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 			text = "[AI] " + text
 		}
 		in := p.Input
+		if p.Index < len(p.ReplyContexts) {
+			rc := p.ReplyContexts[p.Index]
+			in.ReplyContext = &rc
+		}
 		if p.Quote != nil {
 			in.QuoteServerID = p.Quote.ServerID
 		}
@@ -304,6 +318,9 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 			return
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if p.ReviewEvidence != nil {
+			sendCtx = companion.WithStoredGenerationEvidence(sendCtx, *p.ReviewEvidence)
+		}
 		_, err := w.sendText(sendCtx, in, p.Slot, text)
 		cancel()
 		if err == nil {
@@ -313,7 +330,7 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 			p.Next = time.Now().Add(time.Second)
 			w.persistErr = w.saveRuntime()
 		} else {
-			p.State = "stopped"
+			p.State, p.StopReason = "stopped", sending.FailureReason(err)
 			w.persistErr = w.saveRuntime()
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, Content: text, Status: "failed", Reason: sending.FailureReason(err)})
 		}

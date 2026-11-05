@@ -5,6 +5,7 @@ Supported engines are pinned Seed-VC and an explicitly trained/pinned RVC voice.
 Weights remain in the managed cache; inference never retrains a speaker model.
 """
 from process_window import no_console_options
+from singing_config import load_singing_config
 import argparse
 import gc
 import hashlib
@@ -29,6 +30,7 @@ def validate_singing_config(config):
         protect=config.get('protect',.33)
         if isinstance(backing,bool) or not isinstance(backing,int) or not -12<=backing<=12 or (shift-backing)%12 or isinstance(protect,bool) or not isinstance(protect,(int,float)) or not 0<=protect<=.5:raise ValueError('incompatible_singing_key')
         if config.get('precision','auto') not in ('auto','float32'):raise ValueError('invalid_rvc_precision')
+        if config.get('rvc_device','auto') not in ('auto','cpu','cuda:0'):raise ValueError('invalid_rvc_device')
     elif engine=='seed-vc':
         steps,cfg=config.get('diffusion_steps',30),config.get('inference_cfg_rate',.7)
         if isinstance(steps,bool) or not isinstance(steps,int) or not 10<=steps<=100 or isinstance(cfg,bool) or not isinstance(cfg,(int,float)) or not 0<=cfg<=1:raise ValueError('invalid_seed_parameters')
@@ -77,7 +79,7 @@ def main():
     p.add_argument('--source', required=True)
     p.add_argument('--output', required=True)
     args = p.parse_args()
-    config = json.loads(Path(args.config).read_text(encoding='utf-8-sig'))
+    config = load_singing_config(args.config)
     started=time.monotonic();engine=validate_singing_config(config);timings={}
     home = Path(config['runtime']).resolve()
     repo = home/'seed-vc'
@@ -137,7 +139,7 @@ def main():
     timings['separate_vocals']=time.monotonic()-separation_started
     if engine=='rvc':
         conversion_started=time.monotonic();converted_path=work/'rvc-vocals.wav'
-        subprocess.run([config['rvc_python'],str(Path(__file__).with_name('rvc_voice.py').resolve()),'--project',config['rvc_project'],'--model',config['rvc_model'],'--index',config['rvc_index'],'--source',str(work/'vocals.wav'),'--output',str(converted_path),'--index-rate',str(config.get('index_rate',.35)),'--semitones',str(config.get('semitones',0)),'--protect',str(config.get('protect',.33)),'--precision',config.get('precision','auto')],check=True,timeout=1800,**no_console_options())
+        subprocess.run([config['rvc_python'],str(Path(__file__).with_name('rvc_voice.py').resolve()),'--project',config['rvc_project'],'--model',config['rvc_model'],'--index',config['rvc_index'],'--source',str(work/'vocals.wav'),'--output',str(converted_path),'--index-rate',str(config.get('index_rate',.35)),'--semitones',str(config.get('semitones',0)),'--protect',str(config.get('protect',.33)),'--precision',config.get('precision','auto'),'--device',config.get('rvc_device','auto')],check=True,timeout=1800,**no_console_options())
         timings['rvc_load_and_convert']=time.monotonic()-conversion_started
         resampled=work/'rvc-vocals-44k.wav'
         subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-i',str(converted_path),'-ac','1','-ar',str(rate),str(resampled)],check=True,timeout=90,**no_console_options())
@@ -147,7 +149,8 @@ def main():
         mixed=mix_converted(original,vocals,converted,backing)
         sf.write(output,mixed,rate,subtype='PCM_16')
         timings['total']=time.monotonic()-started
-        output.with_suffix('.voice.json').write_text(json.dumps({'profile':config['profile'],'engine':'RVC','model_sha256':config['rvc_model_sha256'],'index_rate':config.get('index_rate',.35),'semitones':config.get('semitones',0),'accompaniment_semitones':config.get('accompaniment_semitones',0),'protect':config.get('protect',.33),'precision':config.get('precision','auto'),'duration_seconds':len(mixed)/rate,'timings_seconds':timings,'bailian_calls':0},indent=2),encoding='utf-8')
+        conversion_metadata=json.loads(converted_path.with_suffix('.rvc.json').read_text(encoding='utf-8'))
+        output.with_suffix('.voice.json').write_text(json.dumps({'profile':config['profile'],'engine':'RVC','model_sha256':config['rvc_model_sha256'],'index_sha256':config['rvc_index_sha256'],'requested_device':config.get('rvc_device','auto'),'rvc_device':conversion_metadata['device'],'separation_device':device,'index_rate':config.get('index_rate',.35),'semitones':config.get('semitones',0),'accompaniment_semitones':config.get('accompaniment_semitones',0),'protect':config.get('protect',.33),'precision':conversion_metadata['precision'],'duration_seconds':len(mixed)/rate,'timings_seconds':timings,'bailian_calls':0},indent=2),encoding='utf-8')
         print('RVC singing conversion complete; seconds',round(timings['total'],2),'; no messages sent.',flush=True)
         return
     # Import after configuring all caches. Upstream's helper uses a relative

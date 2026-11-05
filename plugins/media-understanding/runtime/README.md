@@ -1,0 +1,7 @@
+# 运行时
+
+`main.py` 是 Python 标准库 MCP stdio 入口，`observation.py` 负责入站图片/贴纸观察的请求和结果解析。运行时不读取宿主文件、不直接联网、不接收模型密钥；通过获准调用内的 `wechat/model_request` 使用宿主模型代理。图片引用必须由生产来源策略校验后替换字节。
+
+`local_asr.py` 已迁入本目录，作为 SenseVoice CPU 推理的唯一源码；兼容安装器会将它部署到既有已登记模型的固定入口。选择本地识别时，配置中的 `local_asr_profile_id` 必须与初始化阶段由宿主签发的 profile 完全一致，`main.py` 才会向 `wechat/local_transcription` 交付带哈希和版本的 WAV 引用。宿主验证引用、将音频物化到私有目录，并在隔离环境中以登记的解释器、SDK、模型、词表和 VAD 受控运行本文件；运行时从不接收这些路径、字节或任意命令。
+
+`audio_observation.py` 只构造带来源绑定 WAV 引用的 `audio-review` 请求，并解析宿主已规范化的 OpenAI chat-completion 结果；它不直接联网、下载音频、读取文件、识别声纹或确认身份。视频抽帧、视频解码和音轨分页仍不属于本包；它们继续通过主体自动处理和 `video_inspect` 续读。正式包仅开放已声明的图片/贴纸观察、入站语音转写与音频内容观察。

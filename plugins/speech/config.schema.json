@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "tts_endpoint": {
+      "type": "string",
+      "title": "云端语音接口地址",
+      "description": "完整 HTTPS SpeechSynthesizer 地址；仅宿主会向此固定接口发送密钥。"
+    },
+    "tts_key": {
+      "type": "string",
+      "title": "云端语音接口密钥",
+      "x-secret": true,
+      "x-host-only": true
+    },
+    "tts_model": {
+      "type": "string",
+      "title": "语音模型",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "default_voice": {
+      "type": "string",
+      "title": "默认说话声线",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "default_instruction": {
+      "type": "string",
+      "title": "默认表达要求",
+      "maxLength": 1500
+    },
+    "local_profile_id": {
+      "type": "string",
+      "title": "本地命名说话声线运行配置",
+      "description": "填 gpt-sovits 使用已登记的受管 GPT-SoVITS 项目；空值关闭本地能力。不下载或替换声线模型。",
+      "enum": [
+        "",
+        "gpt-sovits"
+      ],
+      "default": ""
+    }
+  },
+  "additionalProperties": false
+}

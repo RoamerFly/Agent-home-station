@@ -1,0 +1,33 @@
+name: wechat-agent
+services:
+  agent:
+    image: ${WECHAT_AGENT_IMAGE:-wechat-agent:local}
+    restart: unless-stopped
+    ports:
+      - "${WECHAT_WEB_BIND:-127.0.0.1}:${WECHAT_WEB_PORT:-8081}:8080"
+    environment:
+      WECHAT_NATIVE_ACCOUNT: ${WECHAT_NATIVE_ACCOUNT:-background-test}
+      WECHAT_ADMIN_ORIGIN: ${WECHAT_ADMIN_ORIGIN:-}
+    volumes:
+      - agent-data:/data
+      - ../../public_workspace:/workspace/public_workspace
+      - ../../pri_workspace:/workspace/pri_workspace
+    tmpfs:
+      - /scratch:uid=10001,gid=10001,mode=0700
+      - /tmp:mode=1777
+    read_only: true
+    cap_drop: [ALL]
+    # Nested user/mount namespaces are required by the nonprivileged bwrap
+    # executor. No Docker socket, host PID/network or privileged container.
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:unconfined
+      - apparmor:unconfined
+    pids_limit: 512
+    stop_grace_period: 90s
+    networks: [agent]
+networks:
+  agent:
+volumes:
+  agent-data:
+    name: ${WECHAT_DATA_VOLUME:-wechat-agent-data}

@@ -35,6 +35,9 @@ func TestLiveGoal1ProactiveGroupAndFriend(t *testing.T) {
 	config.ProactiveMaxPerDay = 2
 	config.ProactiveRules = []companion.ProactiveRule{{Thread: config.ProactiveThreads[0], IdleMinutes: 5, MaxPerDay: 1}, {Thread: config.ProactiveThreads[1], IdleMinutes: 10, MaxPerDay: 1}}
 	store, err := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

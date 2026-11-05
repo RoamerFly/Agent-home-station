@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"wechat-bot/internal/channels"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediadecode"
 )
 
 func TestLiveChannelsActualObservationWithoutWechatSend(t *testing.T) {
@@ -59,13 +59,12 @@ func TestLiveChannelsActualObservationWithoutWechatSend(t *testing.T) {
 	f.manager.config = c
 	f.manager.config.Behavior.ReadVideos = true
 	f.manager.native = sender
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if err != nil {
 		t.Fatal("speech config unavailable")
-	}
-	provider, err := f.manager.makeModel(c)
-	if err != nil {
-		t.Fatal("provider unavailable")
 	}
 	if os.Getenv("WECHAT_CHANNELS_DIAGNOSTIC") == "1" {
 		source, sourceErr := sender.ChannelsMedia(ctx, id)
@@ -80,7 +79,7 @@ func TestLiveChannelsActualObservationWithoutWechatSend(t *testing.T) {
 				os.MkdirAll(dir, 0700)
 				os.WriteFile(filepath.Join(dir, "channels-transfer-original.bin"), data, 0600)
 				if key, e := strconv.ParseUint(source.DecodeKey, 10, 64); e == nil {
-					channels.DecodePrefix(data, key)
+					mediadecode.DecodeChannelsPrefix(data, key)
 				}
 				diagnostic["decoded_prefix"] = hex.EncodeToString(data[:min(16, len(data))])
 				os.WriteFile(filepath.Join(dir, "channels-transfer-decoded.bin"), data, 0600)
@@ -97,7 +96,7 @@ func TestLiveChannelsActualObservationWithoutWechatSend(t *testing.T) {
 		encoded, _ := json.MarshalIndent(diagnostic, "", "  ")
 		os.WriteFile(filepath.Join(workspace, "research/evidence/channels-transfer-diagnostic.json"), encoded, 0600)
 	}
-	observation, err := (mediaUnderstanding{manager: f.manager, provider: provider}).Analyze(ctx, msg)
+	observation, err := (mediaUnderstanding{manager: f.manager}).Analyze(ctx, msg)
 	visualObserved := strings.Contains(observation, "[微信视频号实际内容观察") && strings.Contains(observation, "[画面观察")
 	report := map[string]any{"wechat_sends": 0, "original_card_read": true, "actual_video_observed": visualObserved, "actual_audio_transcribed": strings.Contains(observation, "[实际音轨转写"), "observation": observation}
 	if err != nil {

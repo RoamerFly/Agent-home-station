@@ -159,10 +159,36 @@ func TestPartialDeliveryCreatesOneOwnerRecoveryCheckpoint(t *testing.T) {
 	}
 }
 
+func TestAgentOwnsReceiptOnlyCheckpointUntilLateReceipt(t *testing.T) {
+	f, p := trustedAgent(t)
+	task := agentTask{ID: "synthetic", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", State: "running"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	in := p.trace
+	in.TaskID = task.ID
+	result := bot.TaskDelivery{Trace: "original", State: "checking_receipt", Expected: 1, TotalParts: 3, AcceptedParts: 1}
+	if err := f.manager.updateAgentDelivery(in, result); err != nil {
+		t.Fatal(err)
+	}
+	items := f.manager.agent.active(in.Account, in.Thread)
+	if len(items) != 1 || items[0].State != "waiting_delivery" || items[0].Delivery.AcceptedParts != 1 {
+		t.Fatal("query created a new task", items)
+	}
+	result.State, result.Accepted, result.AcceptedParts = "accepted", 1, 3
+	if err := f.manager.updateAgentDelivery(in, result); err != nil {
+		t.Fatal(err)
+	}
+	if task, ok := f.manager.agent.lookupTask(in.TaskID, in.Account, in.Thread); !ok || task.State != "completed" {
+		t.Fatal(task.State)
+	}
+}
+
 func TestGroupDeliveryReportsGoToOwnerPrivateWithoutMemberEscalation(t *testing.T) {
 	for _, sender := range []string{"wxid_owner", "wxid_member"} {
 		t.Run(sender, func(t *testing.T) {
 			f, p := trustedAgent(t)
+			installProjectPluginTestRuntime(t, p)
 			f.manager.mu.Lock()
 			f.manager.config.Companion.Enabled = true
 			f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: "source@chatroom", Name: "来源群", Mode: "mention"})
@@ -224,11 +250,12 @@ func TestMusicServiceHealthIsReadOnlyAndNeverSubmitsGeneration(t *testing.T) {
 	}))
 	defer backend.Close()
 	f := setup(t)
-	c := f.manager.speech
+	c := readLegacySpeechTestConfig(t, f.manager)
 	c.YuEEnabled = true
 	c.YuEEndpoint = backend.URL
 	c.YuEToken = "synthetic-token"
-	f.manager.speech = c
+	writeLegacySpeechMigrationFixture(t, f.manager, c)
+	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, err := f.manager.toolAccess()
 	if err != nil {
 		t.Fatal(err)

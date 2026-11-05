@@ -12,6 +12,9 @@ import (
 func TestMediaRequestAssociationSurvivesRecoveryWithoutLosingOrigin(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := enabledConfig()
 	c.Permissions.Remember = true
 	in := Input{Channel: "wechat", Account: "test", Thread: "room", Sender: "alice", SenderName: "小甲", TraceID: "delivery", OriginTraceID: "original", TaskID: "task-1"}
@@ -23,6 +26,9 @@ func TestMediaRequestAssociationSurvivesRecoveryWithoutLosingOrigin(t *testing.T
 		t.Fatal(err)
 	}
 	s, err := NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +110,9 @@ func TestPreparedBundleDoesNotForceAReplyWhenModelChoosesSilence(t *testing.T) {
 func TestBackfillMediaMetadataKeepsReceiptChronologyAndScope(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := NewStore(dir)
+	if opened := s; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	c := enabledConfig()
 	c.Permissions.Remember = true
 	in := Input{Channel: "wechat", Account: "test", Thread: "one", TraceID: "request"}
@@ -111,12 +120,113 @@ func TestBackfillMediaMetadataKeepsReceiptChronologyAndScope(t *testing.T) {
 	s.Observe(in, c, stamp)
 	s.ObserveMedia(in, c, MediaMemory{Key: "voice", AssetID: "asset", Kind: "voice", State: "accepted"}, stamp)
 	id := ScopeID(in.Channel, in.Account, in.Thread)
-	if err := s.BackfillMediaMetadata(map[string]map[string]MediaMemory{id: {"asset": {URL: "https://example.org/source", CachedMIME: "audio/mp4", ParentAssetID: "parent"}}, ScopeID(in.Channel, in.Account, "other"): {"asset": {URL: "https://example.org/wrong"}}}); err != nil {
+	sources := map[string]map[string]MediaMemory{id: {"asset": {URL: "https://example.org/source", CachedMIME: "audio/mp4", ParentAssetID: "parent"}}, ScopeID(in.Channel, in.Account, "other"): {"asset": {URL: "https://example.org/wrong"}}}
+	before, err := s.DataEpoch(t.Context())
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err := s.BackfillMediaMetadata(sources); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.DataEpoch(t.Context())
+	if err != nil || after == before {
+		t.Fatal("first metadata update did not advance the snapshot", err)
+	}
+	if err := s.BackfillMediaMetadata(sources); err != nil {
+		t.Fatal(err)
+	}
+	if replay, err := s.DataEpoch(t.Context()); err != nil || replay != after {
+		t.Fatal("unchanged metadata invalidated pagination", err)
 	}
 	got := s.Context(in, c, time.Now()).Messages[1]
 	if got.Media.URL != "https://example.org/source" || got.Media.CachedMIME != "audio/mp4" || got.Media.ParentAssetID != "parent" || got.Media.State != "accepted" || !got.Time.Equal(stamp) {
 		t.Fatal(got)
+	}
+}
+
+func TestSynthesisScriptBackfillRequiresExactVisibleRequesterAndRedactsAfterForget(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	c := enabledConfig()
+	c.Permissions.Remember = true
+	now := time.Now().UTC()
+	original := "把 cloth 和 fabric 念出来"
+	in := Input{Channel: "wechat", Account: "test", Thread: "room", Sender: "alice", TraceID: "request", Text: original, OriginalText: &original, Source: &SourceRef{MessageID: "native-request", ServerID: "server-request", Sender: "alice"}}
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ObserveMedia(in, c, MediaMemory{Key: "voice", AssetID: "asset", Kind: "voice", State: "accepted"}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	id := ScopeID(in.Channel, in.Account, in.Thread)
+	meta := MediaMemory{SynthesisText: "cloth。fabric。", SynthesisTextKnown: true, RequestTraceID: "request", RequesterID: "alice"}
+	if err := s.BackfillMediaMetadata(map[string]map[string]MediaMemory{id: {"asset": meta}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := s.Context(in, c, now.Add(2*time.Second))
+	if len(ctx.Messages) != 2 || ctx.Messages[1].Media == nil || !ctx.Messages[1].Media.SynthesisTextKnown || ctx.Messages[1].Media.SynthesisText != meta.SynthesisText {
+		t.Fatal(ctx.Messages)
+	}
+	searchCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	page, err := s.SearchMemory(searchCtx, MemoryQuery{Scopes: []string{id}, Originals: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range page.Items {
+		if item.Event != nil && item.Event.Media != nil {
+			found = true
+			if item.Event.Media.SynthesisText != "" {
+				t.Fatal("listing original messages expanded the script")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("accepted voice is missing from original message search")
+	}
+	if _, err := s.db.Exec("INSERT INTO memory_blocks(scope,event_id) VALUES(?,?)", id, ctx.Messages[0].EventID); err != nil {
+		t.Fatal(err)
+	}
+	ctx = s.Context(in, c, now.Add(3*time.Second))
+	if len(ctx.Messages) != 1 || ctx.Messages[0].Media == nil || ctx.Messages[0].Media.SynthesisTextKnown || ctx.Messages[0].Media.SynthesisText != "" || ctx.Messages[0].Media.State != "accepted" {
+		t.Fatal(ctx.Messages)
+	}
+	// A direct memory_read of the outgoing attachment must obey the same
+	// source gate; it cannot bypass Context's redacted copy.
+	ev, err := s.ReadEvent(t.Context(), []string{id}, ctx.Messages[0].EventID)
+	if err != nil || ev.Media == nil || ev.Media.SynthesisTextKnown || ev.Media.SynthesisText != "" {
+		t.Fatal("memory_read exposed forgotten script", err, ev.Media)
+	}
+}
+
+func TestSynthesisScriptBackfillRejectsTraceFromDifferentRequester(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	c := enabledConfig()
+	c.Permissions.Remember = true
+	now := time.Now().UTC()
+	original := "念这个"
+	in := Input{Channel: "wechat", Account: "test", Thread: "room", Sender: "alice", TraceID: "shared-trace", Text: original, OriginalText: &original, Source: &SourceRef{MessageID: "native-a", ServerID: "server-a", Sender: "alice"}}
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ObserveMedia(in, c, MediaMemory{Key: "voice", AssetID: "asset", Kind: "voice", State: "accepted"}, now); err != nil {
+		t.Fatal(err)
+	}
+	id := ScopeID(in.Channel, in.Account, in.Thread)
+	if err := s.BackfillMediaMetadata(map[string]map[string]MediaMemory{id: {"asset": {SynthesisText: "不应绑定", SynthesisTextKnown: true, RequestTraceID: in.TraceID, RequesterID: "bob"}}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := s.Context(in, c, now.Add(time.Second))
+	if ctx.Messages[1].Media.SynthesisTextKnown || ctx.Messages[1].Media.SynthesisText != "" {
+		t.Fatal("foreign requester script joined", ctx.Messages[1].Media)
 	}
 }
 

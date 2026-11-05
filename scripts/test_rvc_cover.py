@@ -18,7 +18,7 @@ class DirectCoverTests(unittest.TestCase):
             self.assertEqual(source.read_bytes(),b'synthetic vocal recording')
             output.write_bytes(b'RIFF synthetic converted audio')
         with tempfile.TemporaryDirectory() as tmp,patch('rvc_cover.subprocess.check_output',return_value=b'140.02'):
-            result=rvc_cover.convert(body,Path(tmp),'synthetic','profile.json',{'engine':'rvc'},conversion)
+            result=rvc_cover.convert(body,Path(tmp),'a'*32,'profile.json',{'engine':'rvc'},conversion)
         self.assertEqual(len(calls),1)
         self.assertEqual(result['requested_seconds'],140)
         self.assertEqual(result['duration_seconds'],140.02)
@@ -34,7 +34,7 @@ class DirectCoverTests(unittest.TestCase):
         def conversion(config,profile,source,output):output.write_bytes(b'synthetic')
         with tempfile.TemporaryDirectory() as tmp,patch('rvc_cover.subprocess.check_output',return_value=b'25'):
             with self.assertRaisesRegex(ValueError,'rvc_duration_mismatch'):
-                rvc_cover.convert(self.body(),Path(tmp),'synthetic','profile.json',{'engine':'rvc'},conversion)
+                rvc_cover.convert(self.body(),Path(tmp),'a'*32,'profile.json',{'engine':'rvc'},conversion)
 
     def test_invalid_source_and_wrong_engine_reject_before_conversion(self):
         body=self.body()

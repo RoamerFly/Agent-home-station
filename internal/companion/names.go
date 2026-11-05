@@ -98,7 +98,7 @@ func (s *Store) UpdateNames(input Input, c Config, names map[string]identity.Nam
 	if !needs {
 		return nil
 	}
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(input.Channel, input.Account, input.Thread), func(data *persisted) error {
 		scope, ok := data.Scopes[id]
 		if !ok {
 			return nil

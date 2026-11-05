@@ -92,6 +92,7 @@ func TestMediaLineageRetainsVideoParentAndRequestAcrossFormatReuse(t *testing.T)
 type capturedVoiceNative struct {
 	*fakeTools
 	voice []byte
+	parts [][]byte
 }
 
 func (n *capturedVoiceNative) Upload(ctx context.Context, name, mime string, r io.Reader, size int64) (linuxnative.UploadSource, error) {
@@ -100,6 +101,7 @@ func (n *capturedVoiceNative) Upload(ctx context.Context, name, mime string, r i
 		return linuxnative.UploadSource{}, err
 	}
 	n.voice = data
+	n.parts = append(n.parts, data)
 	return linuxnative.UploadSource{ID: "rebuilt-source", Filename: name, ContentType: mime, ByteLength: int64(len(data))}, nil
 }
 
@@ -141,13 +143,20 @@ func TestLegacyVoiceIndexRebuildsFullCachedAudioInsteadOfLastPart(t *testing.T) 
 	if len(native.voice) == 0 {
 		t.Fatal("old partial source reused without rebuilding")
 	}
-	if err := os.WriteFile(file, native.voice, 0600); err != nil {
-		t.Fatal(err)
+	seconds := float64(0)
+	for _, part := range native.parts {
+		if err := os.WriteFile(file, part, 0600); err != nil {
+			t.Fatal(err)
+		}
+		probe, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file).Output()
+		length, _ := strconv.ParseFloat(strings.TrimSpace(string(probe)), 64)
+		if err != nil || length <= 0 || length > 60.001 {
+			t.Fatal("invalid voice segment", length, err)
+		}
+		seconds += length
 	}
-	probe, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file).Output()
-	seconds, _ := strconv.ParseFloat(strings.TrimSpace(string(probe)), 64)
-	if err != nil || seconds < 69.9 || seconds > 70.1 {
-		t.Fatal("legacy source truncated", seconds, err)
+	if seconds < 69.9 || seconds > 70.1 || len(native.parts) != 2 {
+		t.Fatal("legacy source truncated or reordered", seconds, len(native.parts))
 	}
 	if native.submits.Load() != 0 {
 		t.Fatal("rebuilding sent WeChat")
@@ -157,7 +166,7 @@ func TestLegacyVoiceIndexRebuildsFullCachedAudioInsteadOfLastPart(t *testing.T) 
 func TestReuseWholeVoiceBundleAfterRecreationAndNewPreparation(t *testing.T) {
 	f := setup(t)
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "first", Sender: "alice"}
-	original := assetOriginal{Data: []byte("synthetic full original song"), MIME: "audio/mpeg", Filename: "完整歌曲.mp3"}
+	original := assetOriginal{VoiceComplete: true, Data: []byte("synthetic full original song"), MIME: "audio/mpeg", Filename: "完整歌曲.mp3"}
 	parts := []stagedUpload{}
 	for _, id := range []string{"part-1", "part-2", "part-3"} {
 		parts = append(parts, stagedUpload{UploadSource: linuxnative.UploadSource{ID: id}, Kind: "voice"})

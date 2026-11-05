@@ -11,21 +11,24 @@ import (
 // Record is the locally retained activity requested by the account owner.
 // It never contains model reasoning, credentials, or native session material.
 type Record struct {
-	MessageTime                                                                           string
-	RelatedMessageID, DecisionNote                                                        string
-	RetryAttempts                                                                         int
-	RetryAt                                                                               string
-	ToolCacheHit                                                                          bool
-	ToolRequests, ToolRetries, ToolHTTPStatus                                             int
-	ToolCode, ToolStage                                                                   string
-	ModelHTTPStatus, ModelAttempts, ModelMaxAttempts                                      int
-	ModelStage                                                                            string
-	ModelRetryDelayMS                                                                     int64
-	CallID                                                                                string
-	Tool, TargetURL, Query                                                                string
-	DurationMS, Bytes                                                                     int64
-	MediaCount                                                                            int
-	Event, Category, ThreadID, Sender, Content, Reason, Status, MessageID, Origin, SendID string
+	MessageTime                                                                                                     string
+	RelatedMessageID, DecisionNote                                                                                  string
+	RetryAttempts                                                                                                   int
+	RetryAt                                                                                                         string
+	ToolCacheHit                                                                                                    bool
+	ToolRequests, ToolRetries, ToolHTTPStatus                                                                       int
+	ToolCode, ToolStage                                                                                             string
+	ModelHTTPStatus, ModelAttempts, ModelMaxAttempts, ModelContentBytes, ModelFormatAttempt, ModelMaxFormatAttempts int
+	ModelStage                                                                                                      string
+	ModelFinishReason, ModelProtocolCode                                                                            string
+	ModelJSONValid                                                                                                  bool
+	ModelRetryDelayMS                                                                                               int64
+	CallID                                                                                                          string
+	Tool, TargetURL, Query, Effect                                                                                  string
+	DurationMS, Bytes                                                                                               int64
+	MediaCount                                                                                                      int
+	Event, Category, ThreadID, Sender, Content, Reason, Status, MessageID, Origin, SendID                           string
+	ReviewFailure                                                                                                   *companion.ReviewFailure
 }
 
 func (w *Worker) activity(record Record) {
@@ -84,6 +87,9 @@ func messageSummary(m linuxnative.Message) string {
 		case 43:
 			return "[收到视频]"
 		case 49:
+			if name := m.FileAttachmentName(); name != "" {
+				return "[文件] " + name
+			}
 			return "[收到分享卡片/视频号]"
 		}
 		return "[非文字消息]"
@@ -108,8 +114,7 @@ func (w *Worker) skipReason(m linuxnative.Message, now time.Time) string {
 	if !utf8.ValidString(m.Body) || len(m.Body) > 4096 {
 		return "invalid_or_oversized_text"
 	}
-	created, err := time.Parse(time.RFC3339, m.CreatedAt)
-	if err != nil || now.Sub(created) > w.maxMessageAge() || created.After(now.Add(30*time.Second)) {
+	if !w.messageInTime(m, now) {
 		return "message_expired_or_invalid_time"
 	}
 	if strings.HasPrefix(strings.TrimSpace(m.Body), "[AI]") {

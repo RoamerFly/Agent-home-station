@@ -5,6 +5,67 @@ const { project, stage, activityTarget } = require('../internal/admin/static/rou
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
 
+test('status filters group terminal failures separately from unresolved receipts and active retries',()=>{
+ const cases=[
+  ['message_received','received','received','','pending'],
+  ['model_failed','error','failed','model_dns_failed','done'],
+  ['character_decision','decision','silent','nothing_to_add','done'],
+  ['task_delivery_updated','decision','partially_cancelled','','done'],
+  ['task_delivery_updated','decision','partially_completed','','done'],
+  ['task_delivery_updated','decision','waiting_tool_retry','','pending'],
+  ['generation_paused','decision','needs_review','generation_evidence_changed','done'],
+  ['send_failed','error','failed','send_outcome_unknown','done'],
+  ['message_sent','sent','accepted','','done']
+ ];
+ for(const [event,category,status,reason,group] of cases){
+  const r=project([entry(1,{event,category,status,reason})])[0];
+  assert.equal(r.group,group,event);assert.equal(r.entries[0].status,status);
+  if(status==='needs_review'||reason==='send_outcome_unknown'){
+   const processed=entry(2,{event:'message_processed',category:'decision',status:'completed'});
+   assert.equal(project([...r.entries,processed])[0].group,'done');
+  }
+ }
+});
+
+test('only an actual receipt check is shown as Agent work until the receipt arrives',()=>{
+ const wait=entry(1,{event:'media_waiting',category:'decision',status:'checking_receipt'});
+ const update=entry(2,{event:'task_delivery_updated',category:'decision',status:'waiting_delivery',reason:'task_delivery_checking_receipt'});
+ const end=entry(3,{event:'message_processed',category:'decision',status:'completed'});
+ const receipt=entry(4,{event:'message_sent',category:'sent',status:'accepted'});
+ assert.equal(project([wait,update,end])[0].status,'checking_receipt');
+ assert.equal(project([wait,update,end])[0].group,'active');
+ assert.equal(project([wait,update,end,receipt])[0].group,'done');
+ assert.equal(project([entry(1,{event:'delivery_waiting',category:'decision',status:'waiting',retry_at:at(12)}),entry(2,{event:'send_failed',category:'error',status:'failed',reason:'receipt_wait_timeout'})])[0].status,'checking_receipt');
+});
+test('a 25-message unread batch retains all evidence but has a single timeline entry before the actual failure',()=>{
+ const items=[];
+ for(let i=0;i<25;i++) items.push(entry(i,{message_id:'m'+i,event:'message_received',category:'received',content:'合成消息'}));
+ for(let i=0;i<24;i++) items.push(entry(25+i,{message_id:'m'+i,related_message_id:'m24',event:'backlog_message_grouped',category:'decision'}));
+ for(const [event,category] of [['backlog_conversation_started','decision'],['generation_started','decision'],['model_context_prepared','decision'],['send_failed','error']])
+  items.push(entry(items.length,{message_id:'m24',event,category}));
+ const [round]=project(items);
+ assert.equal(round.batchSize,25);assert.equal(round.batchMessages.length,25);
+ assert.deepEqual(round.timeline.map(x=>x.event),['unread_batch_summary','send_failed']);
+ assert.equal(round.entries.length,items.length);assert.equal(round.status,'failed');assert.equal(round.hasDiagnostics,true);
+});
+
+test('one autonomous decision is visible, with its scheduled follow-up and raw context available',()=>{
+ const [r]=project(['conversation_wake_started','generation_started','model_context_prepared','proactive_evaluated','conversation_wake_scheduled','character_decision'].map((event,i)=>entry(i,{event,category:'decision',...(['proactive_evaluated','character_decision'].includes(event)?{reason:'awaiting_participant',status:'silent'}:{})})));
+ assert.deepEqual(r.timeline.map(x=>x.event),['conversation_wake_started','conversation_wake_scheduled','character_decision']);
+ assert.equal(r.status,'silent');assert.equal(r.proactive,true);assert.equal(r.entries.length,6);
+ const [failure]=project([entry(1,{event:'model_context_prepared',category:'error',status:'failed'})]);
+ assert.equal(failure.timeline.length,1);assert.equal(failure.status,'failed');
+});
+
+test('no recognized speech remains an observation outcome rather than a failed turn',()=>{
+ const rows=project([
+  entry(1,{event:'message_received',category:'received'}),
+  entry(2,{event:'video_audio_no_words',category:'decision',status:'no_recognizable_speech',tool_http_status:400,tool_code:'ASR_RESPONSE_HAVE_NO_WORDS'}),
+  entry(3,{event:'channels_video_observed',category:'decision',status:'observed',reason:'video_visual_audio_no_words'})
+ ]);
+ assert.equal(rows.length,1);assert.equal(rows[0].errors,0);assert.notEqual(rows[0].status,'failed');
+});
+
 test('authenticated API endpoints are labels; real content remains navigable', () => {
   const api = activityTarget({target_url:'https://api.deepseek.com/v1/tools/search'});
   assert.equal(api.kind, 'service'); assert.equal(api.href, undefined);
@@ -93,4 +154,35 @@ test('ambiguous send IDs cannot attach unscoped records to an unrelated round', 
     entry(3, { send_id: 'collision' }), entry(4, { message_id: '', thread_id: '', send_id: 'collision' }),
   ]);
   assert.equal(rows.filter(x => x.system).length, 1);
+});
+test('task delivery outcome settles the round without mistaking a progress reply for audio delivery', () => {
+  const received=entry(1,{event:'message_received',category:'received',content:'用指定声音讲解视频',status:'received'});
+  const progress=entry(2,{event:'message_progress',category:'sent',content:'正在处理',status:'accepted'});
+  const working=entry(3,{event:'task_delivery_updated',category:'decision',status:'waiting_delivery',reason:'task_delivery_needs_review'});
+  const settled=entry(4,{event:'task_delivery_updated',category:'decision',status:'completed',reason:'task_delivery_accepted'});
+  assert.equal(project([received,progress,working])[0].status,'waiting');
+  assert.equal(project([received,progress,working,settled])[0].status,'completed');
+  assert.equal(project([received,progress,entry(4,{event:'task_delivery_updated',category:'decision',status:'failed'})])[0].status,'failed');
+});
+
+test('private error-report delivery cannot turn failed share into silence or completion', () => {
+  const rows = [
+    entry(1,{event:'message_received',category:'received',status:'received'}),
+    entry(2,{event:'model_failed',category:'error',status:'failed',reason:'source_identity_conflict_or_unavailable'}),
+    entry(3,{event:'character_decision',category:'decision',status:'silent',reason:'operation_reported_privately'}),
+    entry(4,{event:'task_delivery_updated',category:'decision',status:'completed',reason:'task_delivery_accepted'}),
+  ];
+  assert.equal(project(rows.slice(0,3))[0].status,'failed');
+  assert.equal(project(rows)[0].status,'failed');
+  assert.equal(project([...rows,entry(5,{event:'generation_started',category:'decision',status:'processing'}),entry(6,{event:'character_decision',category:'decision',status:'silent',reason:'model_chose_silence'})])[0].status,'silent');
+});
+
+test('a fail-closed grounding review remains a failed round, never model silence', () => {
+  const rows = project([
+    entry(1, { event: 'message_received', category: 'received', status: 'received', content: '请总结分享' }),
+    entry(2, { event: 'character_decision', category: 'decision', status: 'silent', reason: 'grounding_check_failed', review_failure: { code: 'model_invalid_response', stage: 'decode', review_state: 'initial_check_failed' } }),
+    entry(3, { event: 'message_processed', category: 'decision', status: 'completed' }),
+  ]);
+  assert.equal(rows[0].status, 'failed');
+  assert.equal(rows[0].errors, 0, 'legacy records may not have category=error, but must retain failed status');
 });

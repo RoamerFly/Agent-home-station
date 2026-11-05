@@ -44,11 +44,14 @@ func TestProgressFollowsModelChoicePrecedesToolAndNeverLeaksIntoPreview(t *testi
 		tools := &orderedTool{order: &order}
 		model := &sequenceModel{answers: []string{`{"action":"tool","tool":"web_search","progress":"收到，我找找～","arguments":{"query":"song artist"}}`, `{"action":"reply","messages":["这个是真实链接 https://example.org/real.mp3"]}`}}
 		store, _ := NewStore(t.TempDir())
+		if opened := store; opened != nil {
+			t.Cleanup(func() { _ = opened.Close() })
+		}
 		e, _ := New(enabledConfig(), store, model, "role")
 		e.Tools = tools
 		e.MaxToolCalls = 2
 		ctx := WithProgress(context.Background(), func(context.Context, string) (bool, error) { order = append(order, "progress"); return true, nil })
-		d, err := e.Respond(ctx, Input{Channel: "test", Account: "a", Thread: "friend", Mode: "direct", Text: "查一下这首歌的来源", Preview: preview})
+		d, err := e.Respond(ctx, syntheticNativeInput(Input{Channel: "test", Account: "a", Thread: "friend", Mode: "direct", Text: "查一下这首歌的来源", Preview: preview}, "progress-native"))
 		if err != nil || d.Action != "reply" || tools.calls != 1 {
 			t.Fatal(d, err)
 		}
@@ -68,6 +71,9 @@ func TestSavedTaskProgressReachesHandlerAndMissingProgressStaysEmpty(t *testing.
 		call, _ := json.Marshal(map[string]any{"action": "tool", "tool": "web_search", "progress": progress, "arguments": map[string]string{"query": "public topic"}})
 		model := &sequenceModel{answers: []string{string(call), `{"action":"silent","messages":[]}`}}
 		store, _ := NewStore(t.TempDir())
+		if opened := store; opened != nil {
+			t.Cleanup(func() { _ = opened.Close() })
+		}
 		e, _ := New(enabledConfig(), store, model, "role")
 		e.Tools = tools
 		e.MaxToolCalls = 2
@@ -131,13 +137,16 @@ func TestSemanticMediaIntentPrecedesToolsAndIsSuppressedInPreview(t *testing.T) 
 		tools := &orderedTool{order: &order}
 		model := &sequenceModel{answers: []string{`{"action":"tool","delivery_intent":"file","tool":"web_search","arguments":{"query":"song source"}}`, `{"action":"reply","delivery_intent":"file","messages":["这个是真实链接 https://example.org/real.mp3"]}`}}
 		store, _ := NewStore(t.TempDir())
+		if opened := store; opened != nil {
+			t.Cleanup(func() { _ = opened.Close() })
+		}
 		e, _ := New(enabledConfig(), store, model, "role")
 		e.Tools, e.MaxToolCalls = tools, 2
 		ctx := WithMediaIntent(context.Background(), func(_ context.Context, intent string) error {
 			order = append(order, "intent:"+intent)
 			return nil
 		})
-		d, err := e.Respond(ctx, Input{Channel: "test", Account: "a", Thread: "friend", Mode: "direct", Text: "还是原版吧", Preview: preview})
+		d, err := e.Respond(ctx, syntheticNativeInput(Input{Channel: "test", Account: "a", Thread: "friend", Mode: "direct", Text: "还是原版吧", Preview: preview}, "intent-native"))
 		want := "intent:file,tool:web_search"
 		if preview {
 			want = "tool:web_search"

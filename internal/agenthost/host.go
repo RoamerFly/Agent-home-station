@@ -1,6 +1,6 @@
 // Package agenthost supplies explicitly configured local-host capabilities.
-// File operations use os.Root; full command mode runs as the service OS user,
-// and is deliberately not presented as a sandbox.
+// File operations use os.Root; commands and descendants require a system
+// sandbox with server-derived mounts and no unrestricted host fallback.
 package agenthost
 
 import (
@@ -16,9 +16,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"wechat-bot/internal/workspacefs"
 )
 
 type Config struct {
+	Isolation      *Isolation     `json:"isolation,omitempty"`
 	Windows        *WindowsConfig `json:"windows,omitempty"`
 	Mode           string         `json:"mode"` // disabled, read, files, full
 	Roots          []string       `json:"roots"`
@@ -53,15 +55,19 @@ func (c Config) Validate() error {
 }
 
 type Input struct {
-	Path     string `json:"path"`
-	Content  string `json:"content"`
-	Command  string `json:"command"`
-	Expected string `json:"expected_sha256"`
-	Old      string `json:"old_text"`
-	New      string `json:"new_text"`
-	Offset   int    `json:"offset"`
-	Limit    int    `json:"limit"`
-	Length   int    `json:"length"`
+	Path           string    `json:"path"`
+	Content        string    `json:"content"`
+	Command        string    `json:"command"`
+	Expected       string    `json:"expected_sha256"`
+	Old            string    `json:"old_text"`
+	New            string    `json:"new_text"`
+	Offset         int       `json:"offset"`
+	Limit          int       `json:"limit"`
+	Length         int       `json:"length"`
+	Cursor         string    `json:"cursor,omitempty"`
+	MaxFiles       *int      `json:"max_files,omitempty"`
+	TimeoutSeconds *float64  `json:"timeout_seconds,omitempty"`
+	ExcludeDirs    *[]string `json:"exclude_dirs,omitempty"`
 }
 type Host struct{ Config Config }
 
@@ -97,7 +103,13 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		return nil, err
 	}
 	if tool == "server_status" {
-		return map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "roots": h.Config.Roots, "mode": h.Config.Mode, "windows_hidden_executor": h.Config.Windows != nil, "command_identity": "management service OS user; no automatic sudo"}, nil
+		devices := []string{}
+		for _, path := range []string{"/dev/dxg", "/dev/nvidia0"} {
+			if info, e := os.Stat(path); e == nil && info.Mode()&os.ModeDevice != 0 {
+				devices = append(devices, path)
+			}
+		}
+		return map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "roots": h.Config.Roots, "mode": h.Config.Mode, "windows_hidden_executor": h.Config.Windows != nil, "command_identity": "system-isolated workspace process; no host fallback", "isolation_required": true, "gpu_devices_available": devices, "gpu_mounted": h.Config.Isolation != nil && h.Config.Isolation.GPU, "gpu_instruction": "GPU is available to sandbox commands via gpu=true on server_exec/server_process. Use the registered CUDA runtime. cuda=False without that mount or in a CPU-only torch environment does not describe the host hardware."}, nil
 	}
 	if runtime.GOOS != "windows" && len(in.Path) >= 3 && in.Path[1] == ':' {
 		normalized, e := WindowsLocalPath(in.Path)
@@ -109,14 +121,18 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		}
 		in.Path = normalized
 	}
-	root, rel, err := h.rooted(in.Path)
+	fileHost := h
+	if (tool == "server_read" || tool == "server_list" || tool == "server_search") && h.Config.Isolation != nil {
+		fileHost.Config.Roots = append(append([]string{}, h.Config.Roots...), h.Config.Isolation.ReadOnly...)
+	}
+	root, rel, err := fileHost.rooted(in.Path)
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
 	switch tool {
 	case "server_list":
-		f, err := root.Open(rel)
+		f, err := workspacefs.OpenDirectory(root, rel)
 		if err != nil {
 			return nil, errors.New("目录无法读取")
 		}
@@ -150,7 +166,7 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		}
 		return map[string]any{"items": items, "truncated": next < len(entries), "complete": next == len(entries), "next_offset": next, "total": len(entries)}, nil
 	case "server_read":
-		f, err := root.Open(rel)
+		f, err := workspacefs.OpenRegular(root, rel)
 		if err != nil {
 			return nil, errors.New("文件无法读取或越过目录边界")
 		}
@@ -203,7 +219,7 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		if strings.TrimSpace(in.Command) == "" || len(in.Command) > 8000 || strings.ContainsRune(in.Command, 0) {
 			return nil, errors.New("命令为空或过长")
 		}
-		f, err := root.Open(rel)
+		f, err := workspacefs.OpenDirectory(root, rel)
 		if err != nil {
 			return nil, errors.New("执行目录不存在或越过边界")
 		}
@@ -214,7 +230,10 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		}
 		bounded, cancel := context.WithTimeout(ctx, time.Duration(h.Config.TimeoutSeconds)*time.Second)
 		defer cancel()
-		cmd := hostCommand(bounded, in.Path, in.Command)
+		cmd, err := isolatedCommand(bounded, h.Config, in.Path, in.Command)
+		if err != nil {
+			return nil, err
+		}
 		output := &limitedOutput{limit: h.Config.OutputBytes}
 		cmd.Stdout = output
 		cmd.Stderr = output

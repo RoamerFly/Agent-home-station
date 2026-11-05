@@ -13,6 +13,14 @@ func (m *Manager) memoryLabel(ctx context.Context, thread string) string {
 		return "文件传输助手"
 	}
 	label := thread
+	m.directoryMu.Lock()
+	index, indexErr := m.readConversationIndex()
+	m.directoryMu.Unlock()
+	if indexErr == nil {
+		if name := identity.Clean(index.Names[thread]); name != "" {
+			label = name
+		}
+	}
 	for _, rule := range m.Config().GroupRules {
 		if rule.ID == thread && rule.Name != "" {
 			label = rule.Name

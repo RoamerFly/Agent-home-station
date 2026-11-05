@@ -53,7 +53,7 @@ func (s *Server) catalogSyncRoutes(mux *http.ServeMux) {
 			return
 		}
 		if in.Kind == "members" {
-			if !strings.HasSuffix(in.Thread, "@chatroom") || !permittedRecipient(s.manager.Config().Config, in.Thread) {
+			if !strings.HasSuffix(in.Thread, "@chatroom") || !s.consoleConversationAllowed(in.Thread) {
 				fail(w, 403, "请先选择已授权的群聊")
 				return
 			}

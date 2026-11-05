@@ -35,18 +35,16 @@ func TestAutonomousWakeSurvivesQuietRestartAndRechainsBeyondDefaults(t *testing.
 			t.Fatal(err)
 		}
 	}
-	if !w.tickConversationWake(context.Background()) || model.calls != 1 || len(w.runtime.Wakes) != 2 || w.runtime.Wakes[0].State != "completed" {
+	if !w.tickConversationWake(context.Background()) || model.calls != 1 || len(w.runtime.Wakes) != 1 || w.runtime.Wakes[0].State != "completed" {
 		t.Fatal("wake did not continue", model.calls, w.runtime.Wakes)
-	}
-	next := w.runtime.Wakes[1]
-	if next.Purpose != "晚些看看大家讨论的新歌" || time.Until(next.Due) < 149*time.Minute {
-		t.Fatal(next)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(model.turns[len(model.turns)-1]["content"]), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["speaker_id"] != "" || !strings.Contains(payload["text"].(string), "关注最近提到的新歌") {
+	runtimeContext, _ := payload["runtime_context"].(map[string]any)
+	runtimeText, _ := runtimeContext["text"].(string)
+	if requestActorFromPacket(payload) != "" || payload["text"] != "" || !strings.Contains(runtimeText, "关注最近提到的新歌") || runtimeContext["can_support_user_facts"] != false {
 		t.Fatal("plan lost or old owner identity inherited", payload)
 	}
 }
@@ -69,6 +67,42 @@ func TestWaitForReplyIgnoresOtherGroupMembers(t *testing.T) {
 	w.noticeConversationMessage(other, true)
 	if w.runtime.Wakes[0].State != "stopped" {
 		t.Fatal("original participant reply not observed")
+	}
+}
+
+func TestWakeWaitsForOriginalReceiptAndNeverRunsCancelledTask(t *testing.T) {
+	model := &planReviewModel{answer: `{"action":"silent","messages":[]}`}
+	w, c, _, in := planWorker(t, model)
+	c.Config.Conversation.AllowWake = true
+	c.Config.Permissions.Proactive = true
+	c.Config.ProactiveThreads = []string{in.Thread}
+	w.scheduleConversationWake(c, in, 1, false, "等原回复回执")
+	if len(w.runtime.Wakes) != 1 {
+		t.Fatal("wake not scheduled")
+	}
+	w.runtime.Wakes[0].Due = time.Now().Add(-time.Second)
+	w.runtime.Deliveries = append(w.runtime.Deliveries, &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, State: "waiting", Key: "original-key"})
+	if w.wakeAwaitingReceipt("other-thread", in.TraceID) {
+		t.Fatal("same trace in another thread incorrectly blocks wake")
+	}
+	if w.tickConversationWake(context.Background()) || w.runtime.Wakes[0].State != "waiting" || model.calls != 0 {
+		t.Fatal("wake compensated for an unresolved original receipt", w.runtime.Wakes[0], model.calls)
+	}
+
+	// Once a durable task has been cancelled, neither an old persisted wake nor
+	// a new model decision may revive it.  It is deliberately distinct from an
+	// unrelated new group message, which remains ordinary context.
+	in.TaskID = "cancelled-task"
+	w.config.AgentTaskActive = func(companion.Input) bool { return false }
+	w.scheduleConversationWake(c, in, 1, false, "不应重新开始")
+	if len(w.runtime.Wakes) != 1 {
+		t.Fatal("cancelled task scheduled a new wake")
+	}
+	w.runtime.Wakes[0].Input = in
+	w.runtime.Wakes[0].Due = time.Now().Add(-time.Second)
+	w.runtime.Deliveries = nil
+	if w.tickConversationWake(context.Background()) || w.runtime.Wakes[0].State != "stopped" || model.calls != 0 {
+		t.Fatal("cancelled task wake was revived", w.runtime.Wakes[0], model.calls)
 	}
 }
 

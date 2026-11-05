@@ -1,0 +1,8 @@
+# Optional Comfy modules imported by the registered local YuE revision.
+# Use with the pinned Torch/CUDA base environment, not the system Python.
+pydantic>=2,<3
+pydantic-settings>=2,<3
+kornia>=0.7.1,<1
+spandrel>=0.4,<1
+PyOpenGL>=3.1.8,<4
+comfy-angle

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -27,6 +28,7 @@ func memoryDetailView(scope companion.Scope) map[string]any {
 	return map[string]any{
 		"id": scope.ID, "channel": scope.Channel, "thread": scope.Thread,
 		"messages": newestMemory(scope.Messages[folded:]), "notes": scope.Notes,
+		"preferences": scope.Preferences, "preferences_revision": scope.PreferencesRevision,
 		"summary": scope.Summary, "summary_updated": scope.SummaryUpdated,
 		"compressed_count": scope.CompressedCount, "history_count": folded,
 		"retained_context_count": max(0, folded-scope.CompressedCount),
@@ -103,4 +105,38 @@ func (s *Server) memoryHistory(w http.ResponseWriter, r *http.Request) {
 		next = &end
 	}
 	respond(w, 200, map[string]any{"messages": page.Messages, "total": folded, "compressed_count": scope.CompressedCount, "retained_context_count": max(0, folded-scope.CompressedCount), "next_offset": next, "revision": revision, "read_only": true})
+}
+
+// memoryExperiences is the relationship-workbench view. It deliberately
+// exposes only the current account's conversation selected by memoryScope;
+// edits continue through the established memory entry endpoints.
+func (s *Server) memoryExperiences(w http.ResponseWriter, r *http.Request) {
+	scope, err := s.manager.memoryScope(r.PathValue("id"))
+	if err != nil {
+		fail(w, 404, "会话不存在")
+		return
+	}
+	params := r.URL.Query()
+	q := companion.ExperienceQuery{Cursor: params.Get("cursor"), View: params.Get("view"), Person: params.Get("person")}
+	if raw := params.Get("limit"); raw != "" {
+		q.Limit, err = strconv.Atoi(raw)
+		if err != nil || q.Limit < 1 || q.Limit == int(^uint(0)>>1) {
+			fail(w, 400, "分页条数无效")
+			return
+		}
+	}
+	page, err := s.manager.memory.ListSharedExperiences(r.Context(), scope.ID, q)
+	if err != nil {
+		if errors.Is(err, companion.ErrInvalidExperienceQuery) {
+			fail(w, 400, "经历视图或筛选条件无效")
+			return
+		}
+		if errors.Is(err, companion.ErrMemoryConflict) {
+			fail(w, 409, "记忆已更新，请重新打开共同经历")
+			return
+		}
+		fail(w, 500, "共同经历暂时不可读取")
+		return
+	}
+	respond(w, 200, page)
 }

@@ -18,6 +18,8 @@ func TestUsageLedgerCachesCostOnceAndPreservesOldPriceAfterRestart(t *testing.T)
 	}
 	c := defaults()
 	c.APIKey = "private-key-not-in-ledger"
+	// A pre-upgrade external-currency price must survive later CNY pricing.
+	s.data.Prices[billingIdentity(c)] = tokenPrices{Currency: "USD", Input: .15, CacheHit: .003, Output: .6}
 	u := deepseek.Usage{Time: time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC), Reported: true, Input: 100, Output: 20, CacheHit: 60}
 	if err = s.record(c, u); err != nil {
 		t.Fatal(err)
@@ -88,6 +90,9 @@ func TestReferencePricePeakAndWeekendAndUnknownModel(t *testing.T) {
 	weekend, _ := referencePrices(c, weekday.AddDate(0, 0, -1))
 	if !ok || p.Input != 2*weekend.Input {
 		t.Fatal(p, weekend)
+	}
+	if p.Currency != "CNY" || weekend.Input != 1 || weekend.CacheHit != .02 || weekend.Output != 4 {
+		t.Fatal("published yuan reference prices missing", p, weekend)
 	}
 	c.Model = "unverified-model"
 	if _, ok = referencePrices(c, weekday); ok {

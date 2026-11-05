@@ -20,7 +20,7 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 	if in.Thread == "" {
 		in.Thread = p.trace.Thread
 	}
-	if in.Thread != p.trace.Thread && (!p.privileged() || !p.manager.agent.config().CrossConversation || !permittedRecipient(p.manager.Config().Config, in.Thread)) {
+	if !p.conversationReadAllowed(in.Thread) {
 		return "", toolInputError("未授权跨会话核对发送任务")
 	}
 	native, ok := p.manager.native.(nativeTools)
@@ -34,6 +34,10 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 	if status.ID != in.Job || status.ThreadID != in.Thread {
 		return "", toolInputError("发送任务不属于当前会话")
 	}
+	// A verified delivery record is cross-conversation evidence. It may route a
+	// later natural-language result to the requesting owner, but never changes
+	// the actual delivery target or grants send authority.
+	p.routeCrossConversationThread(in.Thread)
 	if name == "wechat_delivery_status" {
 		b, _ := json.Marshal(status)
 		var result map[string]any
@@ -73,7 +77,7 @@ func (p *permittedTools) callDelivery(ctx context.Context, name string, args jso
 		return "", toolInputError("原生后台不支持原任务续传")
 	}
 	return p.privilegedCall(ctx, name, args, func() (any, error) {
-		if !p.privileged() || !permittedRecipient(p.manager.Config().Config, in.Thread) {
+		if !p.privileged() || !p.conversationReadAllowed(in.Thread) {
 			return nil, errors.New("发送授权已撤销")
 		}
 		// The normal native flag no longer permanently blocks reconciliation.

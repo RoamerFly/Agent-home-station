@@ -3,11 +3,71 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"wechat-bot/internal/companion"
-	"wechat-bot/internal/mobile"
+	mobile "wechat-bot/internal/devicespec"
 )
+
+func TestMobileStorageFailureDoesNotPreventChatManagerStartup(t *testing.T) {
+	dir := t.TempDir()
+	legacyDir := filepath.Join(dir, "mobile")
+	broken := []byte(`{"enabled":`)
+	writeLegacyMobileState(t, legacyDir, broken, []byte(`{}`))
+	m, err := NewManager(dir, "", &fakeNative{})
+	if err != nil {
+		t.Fatal("optional device state prevented chat startup", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	if m.mobile.InitializationError() == nil {
+		t.Fatal("corrupt device state must remain unavailable")
+	}
+	after, err := os.ReadFile(filepath.Join(legacyDir, "settings.json"))
+	if err != nil || string(after) != string(broken) {
+		t.Fatal("optional device state was overwritten", err)
+	}
+	if m.Config().Model == "" || m.memory == nil {
+		t.Fatal("core chat configuration or memory unavailable")
+	}
+}
+
+func TestMobileStorageFailureIsReportedWithoutPrivateContents(t *testing.T) {
+	f := setup(t)
+	privateFixture := []byte(`{"private_path":"synthetic-do-not-expose",`)
+	writeLegacyMobileState(t, filepath.Join(f.dir, "mobile"), privateFixture, []byte(`{}`))
+	f.login()
+	status, body, _ := f.request("GET", "/api/mobile", nil, false, false)
+	if status != 503 || strings.Contains(string(body), "synthetic-do-not-expose") {
+		t.Fatal("device error not safely reported", status, string(body))
+	}
+	status, _, _ = f.request("GET", "/api/config", nil, false, false)
+	if status != 200 {
+		t.Fatal("optional device failure broke core configuration", status)
+	}
+}
+
+func TestMobileStorageFailureDoesNotPreventAgentPause(t *testing.T) {
+	f := setup(t)
+	broken := []byte(`{"enabled":`)
+	legacyDir := filepath.Join(f.dir, "mobile")
+	writeLegacyMobileState(t, legacyDir, broken, []byte(`{}`))
+	f.manager.mu.Lock()
+	f.manager.config.Enabled = true
+	f.manager.mu.Unlock()
+	if err := f.manager.Toggle(false); err != nil {
+		t.Fatal("unopened optional device state prevented Agent pause", err)
+	}
+	if f.manager.Config().Enabled {
+		t.Fatal("Agent remained enabled")
+	}
+	after, err := os.ReadFile(filepath.Join(legacyDir, "settings.json"))
+	if err != nil || string(after) != string(broken) {
+		t.Fatal("pause changed unread device state", err)
+	}
+}
 
 func TestMobileRoutesRequireAuthenticationAndCSRF(t *testing.T) {
 	f := setup(t)
@@ -37,26 +97,60 @@ func TestMobileRoutesRequireAuthenticationAndCSRF(t *testing.T) {
 	if status, _, _ := f.request("POST", "/api/mobile/tasks", map[string]string{"request_key": "safe", "device_id": "lab", "goal": "view"}, true, true); status != 409 {
 		t.Fatal("disabled start", status)
 	}
-	if status, _, _ := f.request("GET", "/assets/mobile.js", nil, false, false); status != 200 {
+	if status, _, _ := f.request("GET", "/assets/plugin-packages.js", nil, false, false); status != 200 {
 		t.Fatal("asset", status)
+	}
+	if status, _, _ := f.request("GET", "/assets/mobile.js", nil, false, false); status != 404 {
+		t.Fatal("removed asset", status)
+	}
+}
+
+func TestMobileMissingPlannerDoesNotQueueTaskOrConstructModel(t *testing.T) {
+	f := setup(t)
+	f.login()
+	settings := f.manager.mobile.Settings()
+	settings.Enabled = true
+	settings.Devices = []string{"lab"}
+	settings.Bridge.Command = "synthetic-must-not-be-executed"
+	if err := f.manager.mobile.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	status, body, _ := f.request("GET", "/api/mobile", nil, false, false)
+	var view struct {
+		PlannerAvailable bool   `json:"planner_available"`
+		PlannerReason    string `json:"planner_reason"`
+	}
+	if status != 200 || json.Unmarshal(body, &view) != nil || view.PlannerAvailable || view.PlannerReason == "" {
+		t.Fatal("missing planner not represented in management view", status, string(body))
+	}
+	status, _, _ = f.request("POST", "/api/mobile/tasks", map[string]string{"request_key": "planner-required", "device_id": "lab", "goal": "仅查看合成页面"}, true, true)
+	if status != 409 || len(f.manager.mobile.List(nil)) != 0 {
+		t.Fatal("missing planner queued or executed a device task", status)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "provider-key")); !os.IsNotExist(err) {
+		t.Fatal("missing planner constructed a model", err)
+	}
+	status, _, _ = f.request("POST", "/api/mobile/stop", struct{}{}, true, true)
+	if status != 200 {
+		t.Fatal("missing planner prevented stopping existing work", status)
 	}
 }
 
 func TestDeviceRecordingParametersAndSourceMemory(t *testing.T) {
-	o := mobile.Observation{AllowedPackages: []string{"test.browser"}, Browsers: []string{"test.browser"}}
-	if validDeviceStep(mobile.Step{Action: "capture"}, o) {
+	o := mobile.Observation{AllowedPackages: []string{"test.browser"}, Browsers: []string{"test.browser"}, WebHosts: []string{"example.com"}}
+	if mobile.ValidStep(mobile.Step{Action: "capture"}, o) {
 		t.Fatal("record duration omitted")
 	}
-	if !validDeviceStep(mobile.Step{Action: "capture", Arguments: map[string]any{"seconds": float64(4)}}, o) {
+	if !mobile.ValidStep(mobile.Step{Action: "capture", Arguments: map[string]any{"seconds": float64(4)}}, o) {
 		t.Fatal("explicit recording duration rejected")
 	}
-	if validDeviceStep(mobile.Step{Action: "open_url"}, o) {
+	if mobile.ValidStep(mobile.Step{Action: "open_url"}, o) {
 		t.Fatal("missing browser/url accepted")
 	}
-	if validDeviceStep(mobile.Step{Action: "open_url", Arguments: map[string]any{"package": "other.browser", "url": "https://example.com"}}, o) {
+	if mobile.ValidStep(mobile.Step{Action: "open_url", Arguments: map[string]any{"package": "other.browser", "url": "https://example.com"}}, o) {
 		t.Fatal("unlisted browser accepted")
 	}
-	if !validDeviceStep(mobile.Step{Action: "open_url", Arguments: map[string]any{"package": "test.browser", "url": "https://example.com"}}, o) {
+	if !mobile.ValidStep(mobile.Step{Action: "open_url", Arguments: map[string]any{"package": "test.browser", "url": "https://example.com"}}, o) {
 		t.Fatal("valid browser rejected")
 	}
 	f := setup(t)

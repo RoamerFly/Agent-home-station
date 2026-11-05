@@ -131,7 +131,11 @@ func TestLiveModelUsesQuotedOriginalForCoverAndRecoversFixedSeedRecipe(t *testin
 			json.NewDecoder(r.Body).Decode(&body)
 			w.Write([]byte(`{"id":"synthetic-cover-job","state":"queued"}`))
 		}))
-		f.manager.speech.YuEEnabled, f.manager.speech.YuEEndpoint, f.manager.speech.YuEToken = true, u.URL, "synthetic-token"
+		{
+			legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+			legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, u.URL, "synthetic-token"
+			writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+		}
 		p, _, _ := f.manager.toolAccess()
 		observed := &coverLiveTools{p: p}
 		if scenario == "quoted_needs_transcription" {

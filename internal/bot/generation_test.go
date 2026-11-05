@@ -38,7 +38,17 @@ func (f generationModelFunc) Chat(ctx context.Context, s string, m []map[string]
 func backgroundWorker(t *testing.T, model companion.LanguageModel) (*Worker, *companion.Engine, *acceptingProgressNative) {
 	t.Helper()
 	w, c, n, _ := planWorker(t, &planReviewModel{})
-	engine, err := companion.New(c.Config, c.Store, model, "test")
+	// Background fixtures supply their own originals and sender identities;
+	// do not reuse planWorker's unrelated message with ID "original".
+	store, err := companion.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err = store.Observe(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "background-fixture-source", Text: "合成历史：下次继续聊天。"}, c.Config, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := companion.New(c.Config, store, model, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +56,56 @@ func backgroundWorker(t *testing.T, model companion.LanguageModel) (*Worker, *co
 	w.model = engine
 	w.config.PollInterval = time.Millisecond
 	return w, engine, n
+}
+
+// Direct scheduler tests bypass the native inbox adapter. Supply the same
+// authenticated message metadata that adapter records, rather than testing
+// transport with anonymous, untimed drafts no real sender could produce.
+func (w *Worker) startSyntheticGeneration(t *testing.T, ctx context.Context, e *companion.Engine, in companion.Input, analysis *linuxnative.Message) {
+	t.Helper()
+	if in.Sender == "" && in.Mode != "proactive" && !in.Surf {
+		in.Sender = "synthetic-requester"
+	}
+	if in.Sender != "" && in.Mode != "proactive" && !in.Surf {
+		m := fixtureMessage(in.TraceID, in.Thread, in.Text, "incoming")
+		m.SenderID = in.Sender
+		if analysis != nil {
+			m = *analysis
+			if m.AccountID == "" {
+				m.AccountID = in.Account
+			}
+			if m.ThreadID == "" {
+				m.ThreadID = in.Thread
+			}
+			if m.SenderID == "" {
+				m.SenderID = in.Sender
+			}
+			if m.CreatedAt == "" {
+				m.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+			}
+			analysis = &m
+		}
+		if m.ServerID == "" {
+			m.ServerID = "synthetic-native-" + m.ID
+		}
+		if in.Source == nil || in.Source.Thread != in.Thread || in.Source.MessageID != in.TraceID {
+			bindInputSource(&in, m, e)
+		}
+		if in.MessageTime == "" {
+			in.MessageTime = m.CreatedAt
+		}
+		if in.OriginalText == nil {
+			original := m.Body
+			if m.Type != 1 {
+				original = ""
+			}
+			in.OriginalText = &original
+		}
+		if err := e.Store.Observe(in, e.Config, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.startGeneration(ctx, e, in, analysis)
 }
 func pumpGeneration(t *testing.T, w *Worker, done func() bool) {
 	t.Helper()
@@ -78,11 +138,13 @@ func TestDurableInboxContinuesWhileAnotherConversationModelWaits(t *testing.T) {
 		return `{"action":"reply","messages":["independent-result"]}`, nil
 	})
 	w, _, n := backgroundWorker(t, model)
-	s := &fakeSource{events: []linuxnative.Event{fixtureEvent("1", "slow", "filehelper", "incoming", "remote")}, messages: map[string]linuxnative.Message{
-		"slow":      fixtureMessage("slow", "filehelper", "/ai slow-request", "incoming"),
-		"friend":    fixtureMessage("friend", "friend", "/ai independent-request", "incoming"),
-		"interrupt": fixtureMessage("interrupt", "filehelper", "/ai 先不用讲了", "incoming"),
-	}}
+	slow := fixtureMessage("slow", "filehelper", "/ai slow-request", "incoming")
+	slow.SenderID = "person"
+	friend := fixtureMessage("friend", "friend", "/ai independent-request", "incoming")
+	friend.SenderID = "friend-person"
+	interrupt := fixtureMessage("interrupt", "filehelper", "/ai 先不用讲了", "incoming")
+	interrupt.SenderID = "person"
+	s := &fakeSource{events: []linuxnative.Event{fixtureEvent("1", "slow", "filehelper", "incoming", "remote")}, messages: map[string]linuxnative.Message{"slow": slow, "friend": friend, "interrupt": interrupt}}
 	added := false
 	s.onPage = func(string) {
 		select {
@@ -125,8 +187,8 @@ func TestDurableInboxContinuesWhileAnotherConversationModelWaits(t *testing.T) {
 		t.Fatal("interruption not retained during generation")
 	}
 	for _, item := range w.runtime.Inbox {
-		if item.Event.Data.MessageID == "interrupt" && item.Phase != "received" {
-			t.Fatal("deferred request was marked completed", item)
+		if item.Event.Data.MessageID == "interrupt" && item.Phase != "received" && item.Phase != "following" {
+			t.Fatal("deferred same-requester update was marked completed", item)
 		}
 	}
 }
@@ -159,7 +221,7 @@ func TestNewFileInstructionCancelsInFlightVoiceDownloadWithoutPublishingItsResul
 	defer cancel()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "song", Mode: "direct", Directed: true, Text: "听这个 https://example.org/song.mp3"}
 	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "song", "filehelper", "incoming", "remote"), Phase: "processing"}}
-	w.startGeneration(ctx, c, in, nil)
+	w.startSyntheticGeneration(t, ctx, c, in, nil)
 	pumpGeneration(t, w, func() bool {
 		select {
 		case <-tools.entered:
@@ -172,6 +234,7 @@ func TestNewFileInstructionCancelsInFlightVoiceDownloadWithoutPublishingItsResul
 		t.Fatal("tool side effect was not marked before execution")
 	}
 	stop := fixtureMessage("file-request", "filehelper", "/ai 改发文件，不用发语音", "incoming")
+	stop.SenderID = "synthetic-requester"
 	w.noticeConversationMessage(stop, true)
 	if !w.deferBusyGeneration(ctx, stop) {
 		t.Fatal("old work was not deferred")
@@ -206,8 +269,11 @@ func TestSlowPlanReviewAllowsAnotherThreadAndDiscardsObsoleteReview(t *testing.T
 	w.enableGenerations()
 	defer w.closeGenerations()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "old", Mode: "direct", Text: "聊一聊"}
+	in = observeSyntheticMediaRequest(t, w, c, in)
 	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"old pending"}})
-	w.noticeConversationMessage(fixtureMessage("update-one", "filehelper", "简单说", "incoming"), true)
+	updateOne := fixtureMessage("update-one", "filehelper", "简单说", "incoming")
+	updateOne.SenderID = in.Sender
+	w.noticeConversationMessage(updateOne, true)
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
 	select {
@@ -218,13 +284,16 @@ func TestSlowPlanReviewAllowsAnotherThreadAndDiscardsObsoleteReview(t *testing.T
 	other := in
 	other.Thread = "friend"
 	other.TraceID = "other"
+	other = observeSyntheticMediaRequest(t, w, c, other)
 	w.queueUtterancePlan(c, other, companion.Decision{Messages: []string{"independent text"}})
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
 	if len(n.submissions) != 1 || n.submissions[0].ThreadID != "friend" {
 		t.Fatal("review blocked another conversation")
 	}
-	w.noticeConversationMessage(fixtureMessage("update-two", "filehelper", "先别说了", "incoming"), true)
+	updateTwo := fixtureMessage("update-two", "filehelper", "先别说了", "incoming")
+	updateTwo.SenderID = in.Sender
+	w.noticeConversationMessage(updateTwo, true)
 	close(release)
 	pumpGeneration(t, w, func() bool { return len(w.generation.reviews) == 0 })
 	p := w.runtime.Plans[0]
@@ -253,13 +322,17 @@ func TestModelCanCancelAnInFlightTaskFromNewContextWithoutStopKeywords(t *testin
 	w.enableGenerations()
 	defer w.closeGenerations()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "search", Mode: "direct", Text: "帮我整理一些资料"}
-	w.startGeneration(context.Background(), c, in, nil)
+	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
+	// Exercise the compatibility review path for a task without a live session.
+	w.generation.jobs[in.Thread].session = nil
 	select {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("model did not start")
 	}
-	w.noticeConversationMessage(fixtureMessage("changed", "filehelper", "我已经找到答案了，咱们聊点别的吧", "incoming"), true)
+	changed := fixtureMessage("changed", "filehelper", "我已经找到答案了，咱们聊点别的吧", "incoming")
+	changed.SenderID = "synthetic-requester"
+	w.noticeConversationMessage(changed, true)
 	w.reviewActiveGenerations(context.Background())
 	pumpGeneration(t, w, func() bool { return len(w.generation.jobs) == 0 })
 	if len(n.submissions) != 0 || len(w.runtime.Plans) != 0 {
@@ -278,7 +351,9 @@ func TestCompletedGenerationIsHeldUntilFreshInboxAndInterruptionReview(t *testin
 	w.enableGenerations()
 	defer w.closeGenerations()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "ready", Mode: "direct", Text: "旧请求"}
-	w.startGeneration(context.Background(), c, in, nil)
+	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
+	// A saved/sessionless task must still use the existing interruption review.
+	w.generation.jobs[in.Thread].session = nil
 	deadline := time.Now().Add(time.Second)
 	for len(w.generation.ready) == 0 && time.Now().Before(deadline) {
 		w.waitGeneration(context.Background(), time.Millisecond)
@@ -286,7 +361,9 @@ func TestCompletedGenerationIsHeldUntilFreshInboxAndInterruptionReview(t *testin
 	if len(w.generation.ready) != 1 || len(w.runtime.Plans) != 0 {
 		t.Fatal("result published ahead of fresh inbox scan")
 	}
-	w.noticeConversationMessage(fixtureMessage("updated", "filehelper", "那个问题已经解决了", "incoming"), true)
+	updated := fixtureMessage("updated", "filehelper", "那个问题已经解决了", "incoming")
+	updated.SenderID = "synthetic-requester"
+	w.noticeConversationMessage(updated, true)
 	w.reviewActiveGenerations(context.Background())
 	pumpGeneration(t, w, func() bool { return len(w.generation.jobs) == 0 })
 	if len(n.submissions) != 0 || len(w.runtime.Plans) != 0 {
@@ -295,10 +372,11 @@ func TestCompletedGenerationIsHeldUntilFreshInboxAndInterruptionReview(t *testin
 }
 
 func TestMediaCaptionJoinsInterruptiblePlanOnlyAfterAttachmentReceipt(t *testing.T) {
-	w, _, n := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) { return `{"action":"cancel"}`, nil }))
+	w, c, n := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) { return `{"action":"cancel"}`, nil }))
 	w.enableGenerations()
 	defer w.closeGenerations()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "media", Mode: "direct", Text: "发这首歌"}
+	in = observeSyntheticMediaRequest(t, w, c, in)
 	w.deferMediaReply(in, []string{"找到这首歌了", "要原音频文件吗？"}, 1)
 	w.runtime.Media = []*mediaDelivery{{Trace: in.TraceID, Input: in, Kind: "voice", State: "running"}, {Trace: "independent-file", Input: in, Kind: "file", State: "running"}}
 	w.reconcileMediaReplies(context.Background())
@@ -310,7 +388,9 @@ func TestMediaCaptionJoinsInterruptiblePlanOnlyAfterAttachmentReceipt(t *testing
 	if len(w.runtime.Plans) != 1 || !w.runtime.Plans[0].MediaCaption || len(n.submissions) != 0 {
 		t.Fatal("caption did not join semantic queue")
 	}
-	w.noticeConversationMessage(fixtureMessage("new-file", "filehelper", "不用介绍了，直接给我原文件吧", "incoming"), true)
+	update := fixtureMessage("new-file", "filehelper", "不用介绍了，直接给我原文件吧", "incoming")
+	update.SenderID = in.Sender
+	w.noticeConversationMessage(update, true)
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
 	pumpGeneration(t, w, func() bool { return len(w.generation.reviews) == 0 })
@@ -373,7 +453,7 @@ func TestAsyncSurfKeepsExplicitQuietDeadlineWithoutImmediateCancellation(t *test
 	w.enableGenerations()
 	defer w.closeGenerations()
 	w.config.SurfTask = func(time.Time) (*SurfTask, error) {
-		return &SurfTask{Thread: "filehelper", Topic: "海洋", QuietDeadline: time.Now().Add(50 * time.Millisecond)}, nil
+		return &SurfTask{Thread: "filehelper", Topic: "海洋", QuietDeadline: time.Now().Add(500 * time.Millisecond)}, nil
 	}
 	if !w.tickSurf(context.Background()) {
 		t.Fatal("surf did not start")
@@ -427,7 +507,7 @@ func TestMediaCaptionCannotCancelUnreadObservation(t *testing.T) {
 	w.enableGenerations()
 	defer w.closeGenerations()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "image", Mode: "direct", Text: "收到了一张图片"}
-	w.startGeneration(context.Background(), c, in, &linuxnative.Message{ID: "image", Type: 3})
+	w.startSyntheticGeneration(t, context.Background(), c, in, &linuxnative.Message{ID: "image", Type: 3})
 	<-a.started
 	caption := fixtureMessage("caption", "filehelper", "早餐", "incoming")
 	caption.SenderID = "person"
@@ -494,7 +574,7 @@ func TestMediaUnderstandingDoesNotBlockAnotherConversation(t *testing.T) {
 	w.enableGenerations()
 	defer w.closeGenerations()
 	in := companion.Input{Thread: "filehelper", TraceID: "image", Mode: "direct", Text: "看图片"}
-	w.startGeneration(context.Background(), c, in, &linuxnative.Message{ID: "image", Type: 3})
+	w.startSyntheticGeneration(t, context.Background(), c, in, &linuxnative.Message{ID: "image", Type: 3})
 	select {
 	case <-a.started:
 	case <-time.After(time.Second):
@@ -503,7 +583,7 @@ func TestMediaUnderstandingDoesNotBlockAnotherConversation(t *testing.T) {
 	other := in
 	other.Thread = "friend"
 	other.TraceID = "friend"
-	w.startGeneration(context.Background(), c, other, nil)
+	w.startSyntheticGeneration(t, context.Background(), c, other, nil)
 	pumpGeneration(t, w, func() bool { return w.generation.jobs["friend"] == nil })
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
@@ -528,7 +608,7 @@ func TestBackgroundProgressHasReceiptAndPreservesModelFinalSilence(t *testing.T)
 	defer w.closeGenerations()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "progress", Mode: "direct", Text: "查一下这个来源"}
 	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "progress", "filehelper", "incoming", "remote"), Phase: "processing"}}
-	w.startGeneration(context.Background(), c, in, nil)
+	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
 	pumpGeneration(t, w, func() bool { return len(w.generation.jobs) == 0 })
 	if toolCalls.Load() != 2 || len(n.submissions) != 1 || !strings.HasSuffix(n.submissions[0].Text, "收到，我看看～") {
 		t.Fatal("progress missing, duplicated, or tool not continued", n.submissions)
@@ -628,7 +708,8 @@ func TestOldResultWaitsForStopRequestOnNextInboxPage(t *testing.T) {
 		}
 		return `{"action":"silent"}`, nil
 	}))
-	in := companion.Input{Thread: "filehelper", TraceID: "old-result", Mode: "direct", Text: "旧请求"}
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "old-result", Mode: "direct", Text: "旧请求"}
+	in = observeSyntheticMediaRequest(t, w, c, in)
 	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"不该抢先发出的旧内容"}})
 	s := &pagedGenerationSource{fakeSource{messages: map[string]linuxnative.Message{}}}
 	for i := 1; i <= 100; i++ {
@@ -638,8 +719,13 @@ func TestOldResultWaitsForStopRequestOnNextInboxPage(t *testing.T) {
 	}
 	s.events = append(s.events, fixtureEvent("101", "stop", "filehelper", "incoming", "remote"))
 	s.messages["stop"] = fixtureMessage("stop", "filehelper", "/ai 不用再说了", "incoming")
+	stop := s.messages["stop"]
+	stop.SenderID = in.Sender
+	s.messages["stop"] = stop
 	w.source = s
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The first page requires 100 durable writes. End on the cancellation
+	// event below, with a watchdog independent of normal disk latency.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	w.config.Record = func(r Record) {
 		if r.Event == "utterance_plan_revised" && r.Reason == "plan_cancel" {
@@ -648,6 +734,9 @@ func TestOldResultWaitsForStopRequestOnNextInboxPage(t *testing.T) {
 	}
 	if err := w.runDurable(ctx, filepath.Join(w.config.StateDir, "checkpoint.json"), checkpoint{Version: 1, ServerID: "server-1", Account: "test", Cursor: "0"}); err != nil {
 		t.Fatal(err)
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatal("worker never processed the queued stop on the second page")
 	}
 	if len(n.submissions) != 0 || w.runtime.Plans[0].State != "stopped" {
 		t.Fatal("page-one scan sent old result before queued stop on page two", n.submissions)
@@ -694,12 +783,15 @@ func TestPendingPlanDelayAndContinueRetainUnsentContentWithoutBlockingOtherThrea
 			}))
 			w.enableGenerations()
 			defer w.closeGenerations()
-			in := companion.Input{Thread: "filehelper", TraceID: "old", Mode: "direct", Text: "旧话题"}
+			in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "old", Mode: "direct", Text: "旧话题"}
+			in = observeSyntheticMediaRequest(t, w, c, in)
 			if err := c.Store.Observe(in, c.Config, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 			w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"需要保留的未发内容"}})
-			w.noticeConversationMessage(fixtureMessage("update", "filehelper", "稍等一下再说", "incoming"), true)
+			update := fixtureMessage("update", "filehelper", "稍等一下再说", "incoming")
+			update.SenderID = in.Sender
+			w.noticeConversationMessage(update, true)
 			readyPlans(w)
 			w.reconcileUtterancePlans(context.Background())
 			pumpGeneration(t, w, func() bool { return len(w.generation.reviews) == 0 })
@@ -716,9 +808,7 @@ func TestPendingPlanDelayAndContinueRetainUnsentContentWithoutBlockingOtherThrea
 			other := in
 			other.Thread = "friend"
 			other.TraceID = "other"
-			if err := c.Store.Observe(other, c.Config, time.Now()); err != nil {
-				t.Fatal(err)
-			}
+			other = observeSyntheticMediaRequest(t, w, c, other)
 			w.queueUtterancePlan(c, other, companion.Decision{Messages: []string{"独立会话"}})
 			w.runtime.Plans[1].InboxChecked = true
 			w.reconcileUtterancePlans(context.Background())

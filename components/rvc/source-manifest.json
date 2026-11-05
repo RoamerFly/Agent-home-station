@@ -1,8 +1,46 @@
 {
   "upstream": "https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI",
   "license": "MIT",
-  "local_distribution": "RVC1006Nvidia",
+  "source_revision": "81eed5e8f68b6bed1789f682fe78cdd324495afc",
+  "latest_tag_baseline": "2.3.260718",
+  "source_date": "2026-08-04",
+  "verified_on": "2026-10-29",
   "source_files_sha256": {
+    "infer/vc/modules.py": "7b2e12f56c2b2462d7944d8eda470796ffd4aec50f784c3f6f5169133eaae89b",
+    "infer/vc/pipeline.py": "df8ccd98ca7f81e38934a0af93cc63b4f79764dc47d932f05914c566e876522a",
+    "infer/cli.py": "8e321cd606bfa1f4756685db897e90df2278e77d3e58869bc83d4735ff7b7387",
+    "infer/hubert.py": "bbfba54d1d83eae3fb634b2909f8f6bf41e6ffe436200ec246867c5c93ebba26",
+    "infer/rmvpe.py": "074171aec63e4b68f04d8691c62af50a1d99b9bc6dc56c4d6749fad4ba64853a",
+    "LICENSE": "bec61ed1eb9a3748644ddbc50303aa6978e14eeaba46822e59a006c722b52585"
+  },
+  "models": {
+    "model_repo": "lj1995/VoiceConversionWebUI",
+    "revision": "e6d0c1a17da07c33557852f9dfa2bd44cc75737d",
+    "files": [
+      {
+        "file": "hubert_base/config.json",
+        "sha256": "0346950779dfb7f9316fa74ed846e2b8a22a08eedfdc5387b73f327cb1a4a7cf",
+        "bytes": 1492
+      },
+      {
+        "file": "hubert_base/preprocessor_config.json",
+        "sha256": "7c1976a680fb7acc757cd36fb08eef878fa36c70b4c9d2d595df9c608bbbbf0e",
+        "bytes": 225
+      },
+      {
+        "file": "hubert_base/pytorch_model.bin",
+        "sha256": "cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5",
+        "bytes": 189206711
+      },
+      {
+        "file": "rmvpe/rmvpe.pt",
+        "sha256": "6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193",
+        "bytes": 181184272
+      }
+    ]
+  },
+  "previous_distribution": "RVC1006Nvidia",
+  "previous_source_files_sha256": {
     "infer/modules/train/train.py": "0ef61147eedcc003ae3f2e78263494be81286c48d013556cc18c561b9142e288",
     "infer/modules/train/preprocess.py": "989688c01e916cdd6bebab09b06f2ec98e0783368f31e685671f29b675eb656e",
     "infer/modules/train/extract_feature_print.py": "4c4d937554096535b95c4199c13e46bf92a44889d7df1d28af8b28b103484b6e",
@@ -10,6 +48,14 @@
     "infer/modules/vc/pipeline.py": "ab2318d595ba6a219b1d8d6f8d29ca4fbf3a7f6f11462b8db226f71b8b2b3d41",
     "LICENSE": "bec61ed1eb9a3748644ddbc50303aa6978e14eeaba46822e59a006c722b52585"
   },
-  "private_runtime": "separate Python 3.9.13 executable and standard library; existing distribution packages reused without modifying the original",
+  "upstream_documented_python": "3.12",
+  "verified_local_runtime": "Managed Linux CPython 3.10.20 / Torch 2.6.0+cu124 / Transformers 4.57.6; CLI adapter only. Standalone Windows GUI not validated.",
+  "validation": {
+    "isolated_manbo_vocal_conversion_seconds": 4,
+    "authenticated_broker_manbo_pipeline_seconds": 4,
+    "preserved_original_duration": true,
+    "wechat_sends_in_upgrade_probes": 0,
+    "subjective_voice_quality": "not assessed"
+  },
   "training_boundary": "C voice distilled from synthetic Bailian speech; experimental, not real singing training data"
 }

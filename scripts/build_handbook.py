@@ -6,8 +6,8 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1] / "handbook"
 CHAPTERS = ("index", "installation", "first-chat", "conversations", "artifacts", "plugins", "operations")
-WIKI = "https://github.com/RoamerFly/wechat-agent/wiki/"
-REPO = "https://github.com/RoamerFly/wechat-agent"
+WIKI = "https://github.com/RoamerFly/Agent-home-station/wiki/"
+REPO = "https://github.com/RoamerFly/Agent-home-station"
 STYLE = """
 :root{color-scheme:light dark;font:17px/1.75 system-ui,sans-serif}
 body{max-width:72rem;margin:auto;padding:1.5rem;color:CanvasText;background:Canvas}
@@ -54,8 +54,8 @@ def build(target, output):
                       + f'>{escape(data[0])}</a>' for other, data in chapters.items())
         html = (f'<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
                 f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-                f'<title>{escape(title)} · 微信 Agent</title><style>{STYLE}</style>'
-                f'<header>大肥鱼 · 微信 Agent　<a href="{REPO}">GitHub</a></header>'
+                f'<title>{escape(title)} · Agent-home-station</title><style>{STYLE}</style>'
+                f'<header>Agent-home-station　<a href="{REPO}">GitHub</a></header>'
                 f'<main><nav aria-label="手册目录">{nav}</nav><article>{content}</article></main></html>')
         (output / (slug + ".html")).write_text(html, encoding="utf-8")
     if target == "wiki":

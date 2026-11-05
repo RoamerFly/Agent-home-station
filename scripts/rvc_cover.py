@@ -21,9 +21,12 @@ def recipe(body):
         raise ValueError('rvc_invalid_window')
     if body.get('reference_pretrimmed') is not True:
         raise ValueError('rvc_prepared_reference_required')
-    return {'engine':'rvc','mode':'cover','title':body['title'],'duration_seconds':math.ceil(seconds),'reference_sha256':hashlib.sha256(data).hexdigest(),
+    details={'engine':'rvc','mode':'cover','title':body['title'],'duration_seconds':math.ceil(seconds),'reference_sha256':hashlib.sha256(data).hexdigest(),
             'reference_source_sha256':body.get('reference_source_sha256'),'reference_start_seconds':start,'reference_seconds':seconds,
             'singing_voice':'character','lyrics_source':'original_audio','melody_source':'original_audio','accompaniment_source':'original_audio'}
+    if body.get('voice_profile_id'):
+        details['voice_profile_id']=body['voice_profile_id']
+    return details
 
 
 def convert(body,state,jid,config,profile,convert_voice):
@@ -31,8 +34,8 @@ def convert(body,state,jid,config,profile,convert_voice):
         raise ValueError('rvc_profile_required')
     details=recipe(body)
     state=Path(state)
-    source=state/(jid+'-source.audio')
-    source.write_bytes(base64.b64decode(body['reference_base64'],validate=True))
+    from rvc_recovery import persist_reference
+    source=persist_reference(state,jid,body)
     output=state/(jid+'-rvc.wav')
     # The caller-supplied converter verifies the pinned profile hash again.
     convert_voice(config,profile,source,output)

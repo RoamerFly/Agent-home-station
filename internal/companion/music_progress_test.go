@@ -36,6 +36,9 @@ func TestNativeMusicHasAcknowledgementBeforeGenerationAfterToolDiscovery(t *test
 	for _, task := range []bool{false, true} {
 		cfg := enabledConfig()
 		store, _ := NewStore(t.TempDir())
+		if opened := store; opened != nil {
+			t.Cleanup(func() { _ = opened.Close() })
+		}
 		engine, _ := New(cfg, store, &nativeMusicProgressModel{}, "global")
 		acks := 0
 		calls := 0
@@ -48,6 +51,7 @@ func TestNativeMusicHasAcknowledgementBeforeGenerationAfterToolDiscovery(t *test
 		}}
 		engine.MaxToolCalls = 4
 		in := Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", Mode: "direct", TraceID: "one", Text: "可以，忧郁风格吧"}
+		in = syntheticNativeInput(in, "one")
 		if task {
 			in.TaskID = "continuation"
 		}

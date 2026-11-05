@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "templates": {
+    "yue_account_scope_mismatch": {
+      "kind": "service",
+      "message": "音乐服务的任务目录属于另一个微信账号；请核对服务路由和账号工作目录。工具程序、模型与令牌可共用，私人任务及素材分别保存；原任务保留"
+    },
+    "yue_bridge_auth_failed": {
+      "kind": "service",
+      "message": "YuE桥接鉴权失败，请检查桥接令牌"
+    },
+    "yue_backend_unavailable": {
+      "kind": "service",
+      "message": "YuE桥接在线，ComfyUI生成后端不可用；本次未提交新任务"
+    },
+    "yue_job_not_found": {
+      "kind": "service",
+      "message": "YuE桥接没有这个任务编号；请查询本会话原任务，不把素材编号当生成任务编号"
+    },
+    "yue_request_rejected": {
+      "kind": "service",
+      "message": "YuE拒绝请求或任务结果尚未可用，请核对原任务状态"
+    },
+    "rvc_recovery_failed": {
+      "kind": "input",
+      "message": "原RVC任务恢复校验失败：{provider_code}；检查原文件、配方及声线配置，不新建重复歌曲"
+    },
+    "yue_recovery_restart_missing_required": {
+      "kind": "input",
+      "message": "YuE后端队列与历史中均未找到原生成任务；原配方和素材仍在。需要继续原需求时，以同一个job_id调用music_local_resume并设置restart_missing=true，按保存的工作流重算"
+    },
+    "yue_recovery_retry_failed_required": {
+      "kind": "input",
+      "message": "YuE原后端任务已确认执行失败；先读取并修复实际错误，再用同一个job_id调用music_local_resume并设置restart_failed=true，按保存的工作流重算。旧失败记录保留"
+    },
+    "yue_recovery_failed": {
+      "kind": "input",
+      "message": "原YuE任务恢复核对失败：{provider_code}；读取原任务状态，核对保存的请求、参考音频、工作流及声线配置"
+    },
+    "yue_native_parameters_invalid": {
+      "kind": "input",
+      "message": "YuE原生参数校验失败：{provider_code}；请查询music_sampling_options后调整"
+    },
+    "rvc_service_not_ready": {
+      "kind": "input",
+      "message": "RVC服务未就绪：{provider_code}；请检查原任务和本机角色模型，不改为YuE冒充原曲翻唱"
+    },
+    "music_recovery_unavailable": {
+      "kind": "input",
+      "message": "原音乐任务恢复时未能核对生成后端或调度器；先检查music_service_status和本机桥接日志，原任务保留。连接失败不代表后端任务已丢失"
+    }
+  }
+}

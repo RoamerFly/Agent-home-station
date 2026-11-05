@@ -7,6 +7,35 @@ import (
 	"wechat-bot/internal/companion"
 )
 
+// The delivery worker owns these checkpoints. Never schedule a fresh
+// generation to find out whether the original side effect succeeded.
+func settleFromDelivery(t *agentTask, roundReplied bool) bool {
+	if t.Delivery != nil {
+		switch t.Delivery.State {
+		case "failed", "partial_failed":
+			t.State, t.LastResult = "failed", "原投递已结束，保留已接受部分，不重发"
+			return true
+		case "needs_review":
+			t.State, t.LastResult = "needs_review", "原投递结果尚未确定；保留原记录，不重新执行"
+			return true
+		case "accepted":
+			if len(t.PendingOperations) == 0 {
+				if t.WorkCompleted || roundReplied {
+					t.State, t.WorkCompleted, t.LastResult = "completed", true, "原投递已由微信接受"
+				} else {
+					t.State, t.LastResult = "needs_review", "原投递已由微信接受；没有其余工作完成的记录，已停止续办"
+				}
+				return true
+			}
+		}
+	}
+	if t.Delivery == nil && len(t.PendingOperations) == 0 {
+		return false
+	}
+	t.State, t.LastResult = "waiting_delivery", "Agent 将按原投递记录核对结果，不重做已执行操作"
+	return true
+}
+
 func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDelivery) error {
 	defer func() {
 		if err := m.agent.retireSettled(); err != nil {
@@ -60,7 +89,10 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 			}
 		case "needs_review":
 			task.State = "needs_review"
-			task.LastResult += "；存在未确认回执，请核对原发送任务"
+			task.LastResult += "；无法确认剩余部分，保留原发送记录"
+		case "checking_receipt":
+			task.State = "waiting_delivery"
+			task.LastResult += "；Agent 将自动查询原发送回执，不重复提交"
 		}
 		saved, err := m.agent.updateSnapshot(task)
 		if err != nil || !saved {

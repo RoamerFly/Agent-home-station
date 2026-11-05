@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "id": "media-understanding",
+  "name": "媒体理解",
+  "version": "0.2.1",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": [
+    "windows-amd64",
+    "linux-amd64"
+  ],
+  "runtime": {
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
+  },
+  "permissions": [
+    "artifact.read",
+    "artifact.write",
+    "model.invoke"
+  ],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "997c74851d75c5a2fa912ce7ae224dfcad487ea7edfa6a18dcf5cb65f7a58f10",
+    "CHANGELOG.md": "8d017f47486b3eace43e93653eae1b52ed5590883f43260491de5b6864a5e28a",
+    "config.schema.json": "18662b73192efefeb967698e770145a633952467cd9cd9308400a2ca05f70b73",
+    "MIGRATION.md": "91d0f681f5640aa97058b9485fdfefbcaa816bf6852ff9b17be152ffcdb6805d",
+    "PERMISSIONS.md": "c6414678a4d24a50aa8a4babf8906bb90c2591dd7ff3e4d1eda50458658077e0",
+    "README.md": "d50f5de3c1c948257ecabe7e2a2bb75d43c0151f522399163ead8098e08ae2c3",
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
+    "runtime/main.py": "2b2f32c052c0b5584dc97a01aef3554b577cf5510ef27799310307bb22e919c1",
+    "runtime/observation.py": "a6b14e8dcec5647d09a9ea4d805af596c3b6c9fa9486c130a5a64999542797df",
+    "runtime/audio_observation.py": "3c61c7e29a2746e503877a1f80b3ece0b06757f74dc72da730d7f41958fb0f18",
+    "runtime/local_asr.py": "0f450db04bd023769ae812a8d8d3582ce30f3552effb20b0c094be4a0f071ed0",
+    "runtime/README.md": "59d431dc918a5b21801d3ed396b01c44ca3863fe202c172ed3791e26919048d3",
+    "tests/test_configuration.py": "a2ececc04f51e9016e9a647ca2ce022c70d6199b15170306ad744ae47c857f4e",
+    "tests/test_audio_observation.py": "f7b6b84d4df3aeede2ed15a56e7cc42731193475b330c24bed411d3f05ba7efc",
+    "tests/test_observation.py": "0a0c4c1485dc2e3a3b39c7850da9e627380c7b688f214327dfc693476bc006b8",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "runtime/transcription.py": "c75d783e7d3dd9e83e1348b972f4320bd02424e592bea297a74b0406ad0f0dab",
+    "tests/test_transcription.py": "b0f84f66faf976cfff2007dd3ace5b8952aeb294646a4fb8514cbb63f80920fb"
+  },
+  "http_routes": [
+    {
+      "id": "vision",
+      "endpoint_config": "vision_endpoint",
+      "optional": true,
+      "permission": "model.invoke",
+      "capabilities": [
+        "media.observe"
+      ],
+      "credential": "vision_key",
+      "credential_header": "Authorization",
+      "credential_prefix": "Bearer "
+    },
+    {
+      "id": "transcription",
+      "endpoint_config": "asr_endpoint",
+      "optional": true,
+      "permission": "model.invoke",
+      "capabilities": [
+        "media.transcribe"
+      ],
+      "credential": "asr_key",
+      "credential_header": "Authorization",
+      "credential_prefix": "Bearer "
+    },
+    {
+      "id": "audio-review",
+      "endpoint_config": "audio_review_endpoint",
+      "optional": true,
+      "permission": "model.invoke",
+      "capabilities": [
+        "media.listen"
+      ],
+      "credential": "audio_review_key",
+      "credential_header": "Authorization",
+      "credential_prefix": "Bearer "
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "music_endpoint": {
+      "type": "string",
+      "title": "云端歌曲生成接口地址",
+      "description": "完整 HTTPS 歌曲生成接口；仅宿主会向此固定接口发送密钥。"
+    },
+    "music_key": {
+      "type": "string",
+      "title": "云端歌曲生成接口密钥",
+      "x-secret": true,
+      "x-host-only": true
+    },
+    "music_model": {
+      "type": "string",
+      "title": "歌曲生成模型",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "local_endpoint": {
+      "type": "string",
+      "title": "本地音乐服务地址",
+      "description": "管理员批准的受管 YuE/RVC 服务根地址；仅宿主连接，不自动启动服务。云端配置相互独立。"
+    },
+    "local_token": {
+      "type": "string",
+      "title": "本地音乐服务令牌",
+      "x-secret": true,
+      "x-host-only": true
+    }
+  },
+  "additionalProperties": false
+}

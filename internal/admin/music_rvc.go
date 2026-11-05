@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -15,18 +17,61 @@ import (
 	"wechat-bot/internal/companion"
 )
 
-// Direct conversion consumes an actual cached recording. It never rewrites
-// lyrics or submits a YuE prompt. Delivery uses the existing durable song path.
+type rvcRequest struct {
+	Title        string   `json:"title"`
+	Reference    string   `json:"reference_asset_id"`
+	Start        *float64 `json:"reference_start_seconds"`
+	Seconds      *float64 `json:"reference_seconds"`
+	Kind         string   `json:"kind"`
+	VoiceProfile string   `json:"voice_profile_id"`
+	VoiceID      string   `json:"voice_id"`
+}
+
+// A cached recording and a private speech reference share the same conversion
+// and durable delivery path. Only the authorized reader supplies the bytes.
 func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage) (string, error) {
-	var in struct {
-		Title     string   `json:"title"`
-		Reference string   `json:"reference_asset_id"`
-		Start     *float64 `json:"reference_start_seconds"`
-		Seconds   *float64 `json:"reference_seconds"`
-		Kind      string   `json:"kind"`
-	}
+	var in rvcRequest
 	if json.Unmarshal(raw, &in) != nil || songTitle(in.Title) == "" || in.Reference == "" {
 		return "", toolInputError("RVC翻唱需要具体title和本会话的原录音reference_asset_id")
+	}
+	return p.startRVCWithReference(ctx, in, func() (mediaAsset, []byte, error) {
+		return p.referenceAsset(in.Reference)
+	})
+}
+
+func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcRequest, readReference func() (mediaAsset, []byte, error)) (string, error) {
+	voices, voiceErr := p.accessibleVoices()
+	if voiceErr != nil {
+		return "", voiceErr
+	}
+	// A remembered/requested name is not a model selection. Require an actual
+	// registered identity when a known voice is named; never infer a new model
+	// from the song title and silently run the character's default weights.
+	if err := validateRequestedRVCVoice(p.voiceRequestText()+" "+in.Title, in.VoiceID, in.VoiceProfile, voices); err != nil {
+		return "", err
+	}
+	if in.VoiceID != "" {
+		voices, e := p.accessibleVoices()
+		if e != nil {
+			return "", e
+		}
+		found := false
+		for _, v := range voices {
+			if v.ID != in.VoiceID {
+				continue
+			}
+			found = true
+			if !strings.Contains(strings.ToLower(v.Engine), "rvc") || v.ProfileID == "" {
+				return "", toolInputError("selected_voice_engine_not_rvc: " + v.Engine + "；已能访问声线，但需对应的歌声转换模型，未提交默认声线替代")
+			}
+			if in.VoiceProfile != "" && in.VoiceProfile != v.ProfileID {
+				return "", toolInputError("voice_id_profile_mismatch")
+			}
+			in.VoiceProfile = v.ProfileID
+		}
+		if !found {
+			return "", toolInputError("selected_voice_not_found_or_not_authorized")
+		}
 	}
 	if p.trace.TaskID != "" {
 		for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
@@ -35,15 +80,35 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 			}
 		}
 	}
+	if in.VoiceProfile != "" {
+		if strings.HasPrefix(in.VoiceProfile, "private-") && !p.privileged() {
+			return "", toolInputError("private_voice_requires_verified_owner")
+		}
+		voices, e := p.accessibleVoices()
+		if e != nil {
+			return "", e
+		}
+		known := false
+		for _, v := range voices {
+			known = known || v.ProfileID == in.VoiceProfile && strings.Contains(strings.ToLower(v.Engine), "rvc")
+		}
+		if !known {
+			return "", toolInputError("voice_profile_not_registered_use_voice_library_list_and_read")
+		}
+	}
+	if err := p.bindSelectedVoice(in.VoiceID, in.VoiceProfile); err != nil {
+		return "", err
+	}
 	in.Title = songTitle(in.Title)
 	in.Kind = p.musicDeliveryKind(in.Kind)
 	if !p.musicKindPermitted(in.Kind) {
 		return "", toolInputError("翻唱发送格式未授权")
 	}
-	asset, data, err := p.referenceAsset(in.Reference)
+	asset, data, err := readReference()
 	if err != nil {
 		return "", err
 	}
+	in.Reference = asset.ID
 	duration, err := probeRVCAudioDuration(ctx, p.manager.dir, data)
 	if err != nil {
 		return "", err
@@ -64,18 +129,29 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 		return "", err
 	}
 	health, _, err := p.yueRequest(ctx, "GET", "/rvc-health", nil, "")
+	if _, code := safeToolFailure(err); code == "yue_bridge_unavailable" && runtime.GOOS == "windows" && p.privileged() && p.manager.windowsMusicRegistered() {
+		// Nothing has been submitted yet. Start the registered backend and
+		// wait for readiness before issuing exactly one conversion request.
+		if _, startErr := p.controlMusicService(ctx, "start"); startErr != nil {
+			// The start path has the actionable reason, such as a missing
+			// registered runtime or a health timeout. Do not hide it behind the
+			// stale initial connection error.
+			return "", startErr
+		}
+		health, _, err = p.yueRequest(ctx, "GET", "/rvc-health", nil, "")
+	}
 	if err != nil {
 		return "", err
 	}
-	var ready struct {
-		Ready   bool `json:"ready"`
-		Version int  `json:"bridge_version"`
+	body, err := p.prepareRVCRequest(ctx, health, in.Title, in.VoiceProfile, asset.Hash, start, seconds, clip)
+	if err != nil {
+		return "", err
 	}
-	if json.Unmarshal(health, &ready) != nil || !ready.Ready || ready.Version < 9 {
-		return "", toolInputError("本地RVC角色模型尚未就绪；需桥接v9和有效角色模型，不改走YuE重新作曲")
+	operationData := map[string]any{"title": in.Title, "reference_asset_id": in.Reference, "reference_sha256": asset.Hash, "reference_start_seconds": start, "reference_seconds": seconds, "kind": in.Kind, "engine": "rvc"}
+	if in.VoiceProfile != "" {
+		operationData["voice_profile_id"] = in.VoiceProfile
 	}
-	body := map[string]any{"title": in.Title, "reference_base64": base64.StdEncoding.EncodeToString(clip), "reference_source_sha256": asset.Hash, "reference_start_seconds": start, "reference_seconds": seconds, "reference_pretrimmed": true}
-	operation, _ := json.Marshal(map[string]any{"title": in.Title, "reference_asset_id": in.Reference, "reference_sha256": asset.Hash, "reference_start_seconds": start, "reference_seconds": seconds, "kind": in.Kind, "engine": "rvc"})
+	operation, _ := json.Marshal(operationData)
 	result, err := p.privilegedCall(ctx, "music_rvc_start", operation, func() (any, error) {
 		data, _, e := p.yueRequest(ctx, "POST", "/rvc-jobs", body, p.operationID("music_rvc_start", operation))
 		if e != nil {
@@ -105,17 +181,95 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 		found = found || task.ID == taskID
 	}
 	if !found {
-		spec := &songSpec{Engine: "rvc", Mode: "cover", SingingVoice: "character", VocalGender: "female", Duration: int(math.Ceil(actual)), Reference: asset.ID, ReferenceHash: asset.Hash, ReferenceStart: start, ReferenceSeconds: seconds, Style: "RVC原曲人声换声；保留原词、旋律、节奏与伴奏"}
-		task := agentTask{ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, MusicSpec: spec, MusicTitle: in.Title, MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, Title: "RVC翻唱 · " + in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "查询原RVC任务结果，不重写歌词、不重生成旋律、不重复转换", State: "waiting", Next: time.Now().Add(20 * time.Second)}
+		spec := &songSpec{VoiceID: in.VoiceID, VoiceProfile: in.VoiceProfile, Engine: "rvc", Mode: "cover", SingingVoice: "character", VocalGender: "female", Duration: int(math.Ceil(actual)), Reference: asset.ID, ReferenceHash: asset.Hash, ReferenceStart: start, ReferenceSeconds: seconds, Style: "RVC原曲人声换声；保留原词、旋律、节奏与伴奏"}
+		task := agentTask{ParentID: p.trace.TaskID, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, MusicSpec: spec, MusicTitle: in.Title, MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, Title: "RVC翻唱 · " + in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "查询原RVC任务结果，不重写歌词、不重生成旋律、不重复转换", State: "waiting", Next: time.Now().Add(20 * time.Second)}
+		task.OwnerRequested = p.privileged()
+		task.Constraints = p.taskConstraints("rvc_cover", in.VoiceID, in.VoiceProfile, in.Reference)
 		if err := p.manager.agent.task(task); err != nil {
 			return "", err
 		}
 		p.manager.record(bot.Record{Event: "music_generation_queued", Category: "tool", ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: "music_rvc_start", Content: in.Title, Status: "waiting", Reason: "rvc_direct_conversion_followup_registered", Origin: "agent"})
 	}
-	job["task_id"], job["automatic_followup"], job["engine"] = taskID, true, "rvc"
+	job["task_id"], job["automatic_followup"], job["engine"], job["voice_profile_id"] = taskID, true, "rvc", in.VoiceProfile
 	job["instruction"] = "已提交原录音直接换声，分离人声→RVC→混回原伴奏；没有调用YuE作曲。完成后查询music_local_status取得完整附件并按当前需求发送；以实际音频检验音色，不重复提交。"
 	output, _ := json.Marshal(job)
 	return string(output), nil
+}
+
+// The package owns bridge negotiation and request construction. Only the host
+// can materialize this exact audio reference, and it rejects any change to the
+// authorized title, selected voice, source hash or requested recording range.
+func (p *permittedTools) prepareRVCRequest(ctx context.Context, health []byte, title, profile, sourceHash string, start, seconds float64, clip []byte) (any, error) {
+	var observed map[string]json.RawMessage
+	if json.Unmarshal(health, &observed) != nil {
+		return nil, toolInputError("rvc_health_invalid")
+	}
+	safeHealth := map[string]json.RawMessage{}
+	for _, name := range []string{"ready", "bridge_version", "voice_profiles", "private_voice_profiles"} {
+		if value, ok := observed[name]; ok {
+			safeHealth[name] = value
+		}
+	}
+	ref := localMusicBodyRef{Ref: "reference_0", SHA256: namedSpeechSHA(clip), Bytes: int64(len(clip))}
+	var prepared struct {
+		Method string `json:"method"`
+		Path   string `json:"path"`
+		Body   struct {
+			Title     string          `json:"title"`
+			Reference json.RawMessage `json:"reference_base64"`
+			Hash      string          `json:"reference_source_sha256"`
+			Start     float64         `json:"reference_start_seconds"`
+			Seconds   float64         `json:"reference_seconds"`
+			Precut    bool            `json:"reference_pretrimmed"`
+			Profile   string          `json:"voice_profile_id,omitempty"`
+		} `json:"body"`
+	}
+	input := map[string]any{"action": "rvc_request", "health": safeHealth, "title": title, "voice_profile_id": profile, "reference_sha256": sourceHash, "reference_start_seconds": start, "reference_seconds": seconds, "audio_ref": ref}
+	err := p.prepareMusic(ctx, "/rvc-health", input, &prepared, func() error {
+		var reference struct {
+			Ref localMusicBodyRef `json:"$music_ref"`
+		}
+		b := prepared.Body
+		if prepared.Method != "POST" || prepared.Path != "/rvc-jobs" {
+			return errors.New("music_preparation_route_changed")
+		}
+		if b.Title != title || b.Profile != profile {
+			return errors.New("music_preparation_voice_or_title_changed")
+		}
+		if b.Hash != sourceHash {
+			return errors.New("music_preparation_source_changed")
+		}
+		if b.Start != start || b.Seconds != seconds || !b.Precut {
+			return errors.New("music_preparation_range_changed")
+		}
+		if musicStrictJSON(b.Reference, &reference) != nil || reference.Ref != ref {
+			return errors.New("music_preparation_audio_reference_changed")
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	prepared.Body.Reference, _ = json.Marshal(base64.StdEncoding.EncodeToString(clip))
+	return prepared.Body, nil
+}
+
+func validateRequestedRVCVoice(request, voiceID, profileID string, voices []voiceEntry) error {
+	named := []voiceEntry{}
+	for _, v := range voices {
+		if voiceMentioned(request, v) {
+			named = append(named, v)
+		}
+	}
+	if len(named) == 0 {
+		return nil
+	}
+	for _, v := range named {
+		if voiceID != "" && voiceID == v.ID || profileID != "" && profileID == v.ProfileID {
+			return nil
+		}
+	}
+	return toolInputError("named_voice_requires_matching_selection: 请求或标题指定了登记声线，请先voice_library_list/read，再传匹配的voice_id或voice_profile_id；没有兼容歌声模型时先准备模型，不提交默认声线冒充")
 }
 
 func probeRVCAudioDuration(ctx context.Context, root string, data []byte) (float64, error) {

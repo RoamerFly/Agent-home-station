@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -216,13 +217,16 @@ func (w *Worker) noticeGenerationMessage(m linuxnative.Message, eligible bool) {
 		}
 		return
 	}
+	if !messageAffectsInput(j.input, m) {
+		return
+	}
 	w.offerGenerationFollowup(j, m, eligible)
 	for _, e := range j.updates {
 		if e.MessageID == m.ID {
 			return
 		}
 	}
-	j.updates = append(j.updates, companion.ConversationEvent{MessageID: m.ID, Sender: m.SenderID, Text: messageSummary(m), At: m.CreatedAt, NewRequest: eligible})
+	j.updates = append(j.updates, conversationEvent(m, eligible))
 	if len(j.updates) > 8 {
 		j.updates = j.updates[len(j.updates)-8:]
 	}
@@ -253,6 +257,26 @@ func (w *Worker) deferBusyGeneration(ctx context.Context, m linuxnative.Message)
 
 func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input companion.Input, analysis *linuxnative.Message, deadlineOverride ...time.Time) {
 	input = w.withAutonomyPlans(input)
+	input = w.restoreGenerationCheckpoint(input)
+	if input.RecoveryEvidence != nil {
+		scoped, err := c.ForEvidenceInput(input)
+		if err == nil {
+			err = scoped.ValidateGenerationEvidence(ctx, *input.RecoveryEvidence)
+		}
+		if err != nil {
+			w.modelFailed(input.Thread, input.TraceID, err)
+			w.queuePhase(input.TraceID, "needs_review")
+			return
+		}
+	}
+	if !c.Config.Permissions.Remember && input.Sender != "" && input.Mode != "proactive" {
+		verified, err := w.verifyEphemeralSource(ctx, input)
+		if err != nil {
+			w.modelFailed(input.Thread, input.TraceID, err)
+			return
+		}
+		input = verified
+	}
 	s := w.generation
 	if s.jobs[input.Thread] != nil || !s.canGenerate() {
 		return
@@ -260,6 +284,11 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 	fork, err := c.Fork()
 	if err != nil {
 		w.modelFailed(input.Thread, input.TraceID, err)
+		return
+	}
+	if input.RecoveryBlocked || !recoveryPrivacySupported(fork.Tools, input) {
+		w.activity(Record{Event: "model_recovery_blocked", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "needs_review", Reason: "cross_conversation_checkpoint_requires_fresh_authorization"})
+		w.queuePhase(input.TraceID, "needs_review")
 		return
 	}
 	jobCtx, cancel := c.Config.TaskContext(ctx)
@@ -277,6 +306,20 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 		parentCancel := cancel
 		jobCtx, cancel = bounded, func() { stop(); parentCancel() }
 	}
+	if input.Preview && input.Surf {
+		if scoped, ok := fork.Tools.(interface {
+			BindSurfBrowseContext(context.Context) (context.Context, context.CancelFunc, error)
+		}); ok {
+			bounded, stop, err := scoped.BindSurfBrowseContext(jobCtx)
+			if err != nil {
+				cancel()
+				w.modelFailed(input.Thread, input.TraceID, err)
+				return
+			}
+			parentCancel := cancel
+			jobCtx, cancel = bounded, func() { stop(); parentCancel() }
+		}
+	}
 	j := &generationJob{input: input, engine: fork, cancel: cancel, quietDeadline: quietDeadline, observationPending: analysis != nil || len(input.UnreadMediaIDs) > 0}
 	if !input.Surf && input.Mode != "proactive" && input.TaskID == "" && input.Sender != "" && input.Account != "" && input.TraceID != "" {
 		j.session = w.liveSession(s, j)
@@ -292,6 +335,9 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 		fork.Tools = &generationTools{inner: fork.Tools, scheduler: s, worker: w, job: j}
 	}
 	modelCtx := w.generationContext(jobCtx, input)
+	if input.RecoveryEvidence != nil {
+		modelCtx = companion.WithStoredGenerationEvidence(modelCtx, *input.RecoveryEvidence)
+	}
 	if j.session != nil {
 		modelCtx = agentrun.WithSession(modelCtx, j.session)
 	}
@@ -320,49 +366,21 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 		var d companion.Decision
 		var err error
 		if len(in.UnreadMediaIDs) > 0 {
-			for _, id := range in.UnreadMediaIDs {
-				read, stop := context.WithTimeout(modelCtx, 3*time.Minute)
-				m, e := w.source.Message(read, id)
-				summary := ""
-				if e == nil && m.ThreadID == in.Thread {
-					summary, e = w.config.Analyzer.Analyze(read, m)
-				}
-				stop()
-				if e != nil {
-					summary = failedObservation(e)
-				}
-				if modelCtx.Err() != nil {
-					err = modelCtx.Err()
-					break
-				}
-				for index := range in.UnreadMessages {
-					event := &in.UnreadMessages[index]
-					if event.MessageID == id {
-						old := event.Text
-						event.Text += "\n实际媒体观察（对话资料）：\n" + summary
-						updated := event.Text
-						err = s.call(modelCtx, func() error {
-							scope := companion.ScopeID(in.Channel, in.Account, in.Thread)
-							return fork.Store.ReplaceObservation(scope, id, old, updated)
-						})
-						break
-					}
-				}
-				if err != nil {
-					break
-				}
-			}
+			err = w.prepareBatchObservations(modelCtx, fork, &in)
 			if err == nil {
 				err = s.call(modelCtx, func() error { j.input = in; j.observationPending = false; return w.persistErr })
 			}
 		}
-		if analysis != nil {
+		if err == nil && analysis != nil {
 			readCtx, stop := context.WithTimeout(modelCtx, 3*time.Minute)
 			var summary string
 			incomplete := false
-			summary, err = w.config.Analyzer.Analyze(readCtx, *analysis)
+			var observationEvidence MediaObservationEvidence
+			summary, observationEvidence, err = w.readRequiredMediaWithEvidence(readCtx, *analysis)
 			stop()
-			if err != nil && modelCtx.Err() == nil {
+			if err != nil && in.IsGroup && !errors.Is(modelCtx.Err(), context.Canceled) {
+				err = &groupObservationFailure{reason: observationReason(err), messageID: analysis.ID}
+			} else if err != nil && modelCtx.Err() == nil {
 				incomplete = true
 				summary = failedObservation(err)
 				err = s.call(modelCtx, func() error {
@@ -371,6 +389,27 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 				})
 			}
 			if err == nil {
+				for i := range in.IncomingMedia {
+					in.IncomingMedia[i].Observation = summary
+					in.IncomingMedia[i].ObservationState = "observed"
+					in.IncomingMedia[i].ObservedRange = observationEvidence.ObservedRange
+					in.IncomingMedia[i].ObservationExcerpt = observationEvidence.Excerpt
+					in.IncomingMedia[i].ObservationParts = append([]companion.ObservationPart(nil), observationEvidence.Parts...)
+					if incomplete {
+						in.IncomingMedia[i].ObservationState = "incomplete"
+						in.IncomingMedia[i].ObservedRange = ""
+						// The actual read failed. Keep only card metadata so
+						// consumers can explain the source without mistaking a
+						// stale/partial body for firsthand observation.
+						parts := in.IncomingMedia[i].ObservationParts[:0]
+						for _, part := range observationEvidence.Parts {
+							if part.Kind == companion.ObservationPublisherDescription {
+								parts = append(parts, part)
+							}
+						}
+						in.IncomingMedia[i].ObservationParts = parts
+					}
+				}
 				if analysis.Type == 34 {
 					in.Text = summary
 				} else {
@@ -415,12 +454,7 @@ func (w *Worker) generationContext(ctx context.Context, input companion.Input) c
 		record(Record{ThreadID: input.Thread, MessageID: input.TraceID, Event: event, Category: "system", Reason: d.Code, Status: status, ModelAttempts: d.Attempt, ModelMaxAttempts: 2, ModelStage: "decision_format", Origin: "model"})
 	})
 	return deepseek.WithRequestObserver(ctx, func(event string, d deepseek.Diagnostics) {
-		r := modelRecord(input.Thread, input.TraceID, d)
-		r.Event, r.Category, r.Reason, r.Status = event, "system", d.Code, "retrying"
-		if event == "model_recovered" {
-			r.Status = "recovered"
-		}
-		record(r)
+		record(modelEventRecord(input.Thread, input.TraceID, event, d))
 	})
 }
 func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
@@ -444,8 +478,34 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		s.ready = append(s.ready, r)
 		return
 	}
+	// A completed provider retry budget can still leave a transient error (for
+	// example a long Retry-After). Persist the original turn before deciding
+	// completion, and never rerun after a tool boundary where a side effect may
+	// already have happened. Plugin/task checkpoints remain the recovery source
+	// for those effectful runs.
+	recoveryInput := r.input
+	recoveryInput.RecoveryToolResults = append([]companion.RecoveryToolResult(nil), r.job.input.RecoveryToolResults...)
+	if r.job.input.RecoveryEvidence != nil {
+		copy := *r.job.input.RecoveryEvidence
+		recoveryInput.RecoveryEvidence = &copy
+	}
+	if r.job.input.RecoveryPrivacy != nil {
+		copy := *r.job.input.RecoveryPrivacy
+		copy.SourceThreads = append([]string(nil), r.job.input.RecoveryPrivacy.SourceThreads...)
+		recoveryInput.RecoveryPrivacy = &copy
+	}
+	if !r.job.cancelled && w.scheduleModelContinuation(recoveryInput, r.err, r.job.toolStarted) {
+		delete(s.jobs, r.input.Thread)
+		w.settleGenerationFollowups(r.job, false)
+		return
+	}
 	if r.input.TaskID != "" && w.config.AgentTaskDone != nil {
-		defer w.config.AgentTaskDone(r.input, r.decision.Action)
+		state := r.decision.Action
+		var changed *companion.GenerationEvidenceChangedError
+		if errors.As(r.err, &changed) {
+			state = "generation_paused"
+		}
+		defer w.config.AgentTaskDone(r.input, state)
 	}
 	delete(s.jobs, r.input.Thread)
 	w.settleGenerationFollowups(r.job, r.err == nil && !r.job.cancelled && w.taskActive(r.input))
@@ -489,6 +549,11 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		w.activity(Record{Event: "generation_stopped", Category: "decision", ThreadID: r.input.Thread, MessageID: r.input.TraceID, Status: "stopped", Reason: reason, RelatedMessageID: r.job.cancelEvidence, DecisionNote: r.job.cancelNote})
 		return
 	}
+	var failed *groupObservationFailure
+	if errors.As(r.err, &failed) {
+		w.stopUnreadableTurn(r.input, failed)
+		return
+	}
 	for _, d := range w.runtime.Deliveries {
 		if d.Trace == r.input.TraceID && d.Bubble < 0 && d.State == "accepted" {
 			r.progressDelivered = true
@@ -528,14 +593,86 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 // Delegation preserves attachment/review capabilities while marking tool work
 // durably before entering network/plugin code. No automatic effectful replay.
 type generationTools struct {
-	inner     companion.ToolAccess
-	scheduler *generationScheduler
-	worker    *Worker
-	job       *generationJob
+	followupMedia []companion.ConversationEvent // consumed by this run, never supplied by the model
+	inner         companion.ToolAccess
+	scheduler     *generationScheduler
+	worker        *Worker
+	job           *generationJob
+}
+
+// Capture and recheck the same authority that the actual tool invocation uses.
+func (t *generationTools) MemoryResultAuthorization() string {
+	if scoped, ok := t.inner.(interface{ MemoryResultAuthorization() string }); ok {
+		return scoped.MemoryResultAuthorization()
+	}
+	return ""
+}
+func (t *generationTools) MemoryResultAuthorized(stamp string) bool {
+	if scoped, ok := t.inner.(interface{ MemoryResultAuthorized(string) bool }); ok {
+		return stamp != "" && scoped.MemoryResultAuthorized(stamp)
+	}
+	return false
+}
+
+func (t *generationTools) ForkTools() companion.ToolAccess {
+	factory, ok := t.inner.(interface{ ForkTools() companion.ToolAccess })
+	if !ok {
+		return nil
+	}
+	return &generationTools{inner: factory.ForkTools(), scheduler: t.scheduler, worker: t.worker, job: t.job}
+}
+
+func (t *generationTools) NeedsPrivateReplyReview() bool {
+	if p, ok := t.inner.(companion.GroupReplyPrivacy); ok {
+		return p.NeedsPrivateReplyReview()
+	}
+	return false
+}
+func (t *generationTools) ReportPrivateDiagnostic(ctx context.Context, text string) error {
+	if p, ok := t.inner.(companion.GroupReplyPrivacy); ok {
+		return p.ReportPrivateDiagnostic(ctx, text)
+	}
+	return errors.New("private_diagnostic_route_unavailable")
+}
+
+// Cross-conversation results are routed by the authenticated host, not by the
+// model.  Keep this narrow capability when the production generation wrapper
+// is installed; otherwise the admin adapter's private route would only work
+// in direct unit tests and a group run could fall back to the source group.
+func (t *generationTools) PrivateReplyTarget() string {
+	if p, ok := t.inner.(interface{ PrivateReplyTarget() string }); ok {
+		return p.PrivateReplyTarget()
+	}
+	return ""
+}
+
+func (t *generationTools) PrivateReplyRequired() bool {
+	if p, ok := t.inner.(interface{ PrivateReplyRequired() bool }); ok {
+		return p.PrivateReplyRequired()
+	}
+	return false
+}
+
+func (t *generationTools) RoutePrivateReply(ctx context.Context, messages []string) error {
+	if p, ok := t.inner.(interface {
+		RoutePrivateReply(context.Context, []string) error
+	}); ok {
+		return p.RoutePrivateReply(ctx, messages)
+	}
+	return errors.New("cross_conversation_private_route_unavailable")
 }
 
 func (t *generationTools) List(ctx context.Context) ([]mcptools.Tool, error) {
-	return t.inner.List(ctx)
+	tools, err := t.inner.List(ctx)
+	in := t.job.input
+	if !in.Preview && !in.Surf && !in.ReportOnly && t.worker.config.Analyzer != nil {
+		tools = append(tools, incomingObservationTool())
+	}
+	_, hasMedia := t.worker.sender.(mediaNative)
+	if hasMedia && in.Sender != "" && !in.Preview && !in.ReportOnly && !in.Surf {
+		tools = append(tools, queueTool())
+	}
+	return tools, err
 }
 func (t *generationTools) AutonomousActions() bool {
 	if p, ok := t.inner.(interface{ AutonomousActions() bool }); ok {
@@ -549,6 +686,12 @@ func (t *generationTools) ContextPrepared(report companion.ContextReport) {
 	}
 }
 func (t *generationTools) ObserveFollowups(events []agentrun.Event) {
+	for _, ev := range events {
+		if ev.Kind != 1 && ev.Thread == t.job.input.Thread && ev.Sender == t.job.input.Sender {
+			t.followupMedia = append(t.followupMedia, companion.ConversationEvent{MessageID: ev.ID})
+		}
+	}
+
 	if p, ok := t.inner.(interface{ ObserveFollowups([]agentrun.Event) }); ok {
 		p.ObserveFollowups(events)
 	}
@@ -568,6 +711,17 @@ func (t *generationTools) RetainToolOutput(ctx context.Context, name, result str
 	return "", nil
 }
 func (t *generationTools) Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	key := generationToolCallKey(name, args)
+	for _, checkpoint := range t.job.input.RecoveryToolResults {
+		if checkpoint.CallKey == key {
+			// A retry after a model-only fault must not recreate the same external
+			// action. Return the original bounded observation/result instead.
+			return checkpoint.Result, nil
+		}
+	}
+	if name == "wechat_queue_control" && (t.job.input.Sender == "" || t.job.input.Preview || t.job.input.ReportOnly || t.job.input.Surf) {
+		return "", errors.New("queue_scope_not_authorized")
+	}
 	if err := t.scheduler.call(ctx, func() error {
 		if t.job.yieldRequested {
 			t.job.cancel()
@@ -590,7 +744,21 @@ func (t *generationTools) Call(ctx context.Context, name string, args json.RawMe
 	}); err != nil {
 		return "", err
 	}
-	result, err := t.inner.Call(ctx, name, args)
+	var result string
+	var err error
+	if name == "incoming_media_read" {
+		in := t.job.input
+		in.UnreadMessages = append(append([]companion.ConversationEvent(nil), in.UnreadMessages...), t.followupMedia...)
+		result, err = t.worker.readTurnMedia(ctx, in, args)
+	} else if name == "wechat_queue_control" {
+		owner := false
+		if control, ok := t.inner.(interface{ QueueControllerOwner() bool }); ok {
+			owner = control.QueueControllerOwner()
+		}
+		err = t.scheduler.call(ctx, func() error { var e error; result, e = t.worker.controlQueue(ctx, t.job.input, owner, args); return e })
+	} else {
+		result, err = t.inner.Call(ctx, name, args)
+	}
 	// Finish the current tool and its durable effect ledger before cancelling
 	// reasoning. Do not cancel a running command merely to answer a new chat.
 	_ = t.scheduler.call(ctx, func() error {
@@ -600,6 +768,21 @@ func (t *generationTools) Call(ctx context.Context, name string, args json.RawMe
 		}
 		return nil
 	})
+	if err == nil && name != "discover_tools" && name != "tool_output_read" {
+		resultID, _ := t.RetainToolOutput(ctx, name, result)
+		evidence, hasEvidence := companion.GenerationEvidenceFromContext(ctx)
+		var privacy *companion.RecoveryPrivacyBinding
+		if provider, ok := t.inner.(interface {
+			RecoveryPrivacyBinding() *companion.RecoveryPrivacyBinding
+		}); ok {
+			privacy = provider.RecoveryPrivacyBinding()
+		}
+		if checkpointErr := t.scheduler.call(ctx, func() error {
+			return t.worker.appendGenerationCheckpoint(t.job, name, args, result, resultID, evidence, hasEvidence, privacy)
+		}); checkpointErr != nil {
+			return "", checkpointErr
+		}
+	}
 	return result, err
 }
 func (t *generationTools) AgentContext(ctx context.Context) string {
@@ -612,6 +795,15 @@ func (t *generationTools) SetTrace(in companion.Input) {
 	if x, ok := t.inner.(interface{ SetTrace(companion.Input) }); ok {
 		x.SetTrace(in)
 	}
+}
+func (t *generationTools) RecoveryRouteValid() error {
+	if x, ok := t.inner.(interface{ RecoveryRouteValid() error }); ok {
+		return x.RecoveryRouteValid()
+	}
+	if t.job.input.RecoveryPrivacy != nil && t.job.input.RecoveryPrivacy.Required {
+		return errors.New("cross_conversation_recovery_route_unavailable")
+	}
+	return nil
 }
 func (t *generationTools) ResetMedia() {
 	if x, ok := t.inner.(interface{ ResetMedia() }); ok {
@@ -684,7 +876,7 @@ func (w *Worker) generationProgress(ctx context.Context, s *generationScheduler,
 			return nil
 		}
 		sent = true
-		if e = c.Store.AcceptedDelivery(in, body, "progress-"+in.TraceID, c.Config, time.Now()); e != nil {
+		if e = w.acceptTextMemory(c, in, -1, body); e != nil {
 			return e
 		}
 		w.activity(Record{Event: "message_progress", Category: "sent", ThreadID: in.Thread, MessageID: in.TraceID, Content: body, Status: "accepted", Reason: "tool_progress_accepted", Origin: "bot"})

@@ -7,6 +7,18 @@ import (
 
 // FileAttachmentName extracts only a file title, never the CDN URL or key.
 func (m Message) FileAttachmentName() string {
+	// A known native subtype takes precedence over embedded XML. Retain XML
+	// fallback for older projections that did not expose appMessageType.
+	if m.Type != 49 || m.AppMessageType != nil && *m.AppMessageType != 6 {
+		return ""
+	}
+	if m.Type == 49 && m.AppMessageType != nil && *m.AppMessageType == 6 {
+		for _, a := range m.Attachments {
+			if a.Kind == "file" && a.Filename != "" {
+				return a.Filename
+			}
+		}
+	}
 	if m.Type != 49 || len(m.Body) > 256<<10 {
 		return ""
 	}

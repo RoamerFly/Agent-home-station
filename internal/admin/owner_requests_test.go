@@ -95,7 +95,7 @@ func TestClockAndTaskFileExposeActualDueTime(t *testing.T) {
 
 func TestOwnerCanSendToCurrentPrivateThreadWithoutReplay(t *testing.T) {
 	f, p := trustedAgent(t)
-	native := &fakeTools{fakeNative: f.native}
+	native := &crossTextNative{&fakeTools{fakeNative: f.native}}
 	f.manager.native = native
 	c := f.manager.agent.config()
 	c.CrossConversation = true
@@ -103,6 +103,7 @@ func TestOwnerCanSendToCurrentPrivateThreadWithoutReplay(t *testing.T) {
 		t.Fatal(e)
 	}
 	f.manager.config.Behavior.RandomDelay = false
+	observeOutboundSource(t, f, p, "请在当前私聊发一句你好")
 	args := json.RawMessage(`{"thread_id":"wxid_owner","text":"你好","request_key":"scheduled-greeting"}`)
 	for i := 0; i < 2; i++ {
 		if result, e := p.Call(t.Context(), "wechat_send_text", args); e != nil || !strings.Contains(result, "operation_id") {

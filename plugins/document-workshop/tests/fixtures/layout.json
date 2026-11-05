@@ -1,0 +1,8 @@
+{
+  "blocks": [
+    {"kind": "heading", "level": 1, "text": "合成课程通知"},
+    {"kind": "paragraph", "text": "这是安全合成的正文，用于验证可编辑 Word 文本。"},
+    {"kind": "table", "rows": [["日期", "内容"], ["2026-11-03", "文档转换验收"]]},
+    {"kind": "paragraph", "text": "请保留这一段以验证导出后的文字。"}
+  ]
+}

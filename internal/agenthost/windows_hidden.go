@@ -14,13 +14,16 @@ import (
 	"time"
 )
 
-// The WSL adapter starts a GUI-subsystem pythonw executable. Its PowerShell
-// child uses CREATE_NO_WINDOW; no console/terminal is created for either.
+// The Windows adapter uses a hidden Python broker and an LPAC CMD child.
+// Child tokens and process jobs enforce workspace isolation without a console.
 type WindowsConfig struct {
 	Pythonw string `json:"pythonw"`
 	Helper  string `json:"helper"`
 	Spool   string `json:"spool"`
 	Shell   string `json:"shell,omitempty"`
+	// Host-only path to the account's owner-approved music registration. It is
+	// never accepted from Agent/configuration JSON and adds no general mount.
+	MusicRegistration string `json:"-"`
 }
 
 func (c WindowsConfig) Validate() error {
@@ -31,6 +34,9 @@ func (c WindowsConfig) Validate() error {
 	}
 	if !strings.EqualFold(filepath.Base(c.Pythonw), "pythonw.exe") {
 		return errors.New("隐藏Windows执行必须使用pythonw.exe，不能使用控制台python.exe")
+	}
+	if c.MusicRegistration != "" && (!filepath.IsAbs(c.MusicRegistration) || filepath.Clean(c.MusicRegistration) != c.MusicRegistration || strings.ContainsRune(c.MusicRegistration, 0)) {
+		return errors.New("Windows音乐登记需宿主绝对规范路径")
 	}
 	return nil
 }
@@ -72,6 +78,18 @@ type windowsExitError struct{ code int }
 
 func (e *windowsExitError) Error() string { return fmt.Sprintf("Windows命令退出码%d", e.code) }
 func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string, out io.Writer) error {
+	return runWindowsRequest(ctx, cfg, id, path, command, nil, out)
+}
+
+// Fixed broker argv never passes through CMD or PowerShell quoting.
+func runWindowsRequest(ctx context.Context, cfg Config, id, path, command string, argv []string, out io.Writer) error {
+	return runWindowsPolicyRequest(ctx, cfg, id, path, command, argv, "", nil, out, nil)
+}
+
+func runWindowsPolicyRequest(ctx context.Context, cfg Config, id, path, command string, argv []string, policy string, environment map[string]string, out io.Writer, diagnostic io.Writer) error {
+	if cfg.Isolation == nil {
+		return errors.New("sandbox_required")
+	}
 	w := cfg.Windows
 	if w == nil {
 		return errors.New("Windows桥接未配置")
@@ -81,13 +99,8 @@ func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string,
 			return errors.New("Windows隐藏执行器或脚本不存在；程序未启动")
 		}
 	}
-	// Both project working directory and the private transport directory must
-	// be inside the explicitly configured host roots.
-	root, _, e := (Host{cfg}).rooted(w.Spool)
-	if e != nil {
-		return e
-	}
-	root.Close()
+	// Spool is control-plane data and intentionally outside Agent mounts.
+	var e error
 	if e = os.MkdirAll(w.Spool, 0700); e != nil {
 		return errors.New("Windows桥接暂存目录不可写")
 	}
@@ -106,9 +119,40 @@ func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string,
 	}
 	shell := w.Shell
 	if shell == "" {
-		shell = `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+		shell = `C:\Windows\System32\cmd.exe`
 	}
-	b, _ := json.Marshal(map[string]any{"cwd": winDir, "command": command, "shell": shell})
+	mounts := []string{}
+	readonly := []string{}
+	for _, base := range cfg.Roots {
+		v, err := windowsPath(base)
+		if err != nil {
+			return err
+		}
+		mounts = append(mounts, v)
+	}
+	for _, base := range cfg.Isolation.ReadOnly {
+		v, err := windowsPath(base)
+		if err != nil {
+			return err
+		}
+		readonly = append(readonly, v)
+	}
+	registration := ""
+	if w.MusicRegistration != "" {
+		registration, e = windowsPath(w.MusicRegistration)
+		if e != nil {
+			return e
+		}
+	}
+	requestDocument := map[string]any{"cwd": winDir, "command": command, "argv": argv, "shell": shell, "sandbox": true, "roots": mounts, "read_only": readonly, "music_policy": policy, "environment": environment, "music_registration": registration, "gpu_authorized": cfg.Isolation.GPU}
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline).Seconds()
+		if remaining <= 0 {
+			return context.DeadlineExceeded
+		}
+		requestDocument["timeout_seconds"] = remaining
+	}
+	b, _ := json.Marshal(requestDocument)
 	if e = os.WriteFile(request, b, 0600); e != nil {
 		return e
 	}
@@ -119,12 +163,25 @@ func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string,
 	cmd := exec.CommandContext(context.Background(), w.Pythonw, helperWin, requestWin)
 	configureProcess(cmd)
 	if e = cmd.Start(); e != nil {
-		return fmt.Errorf("Windows隐藏执行器启动失败，请核对pythonw.exe及WSL互操作：%w", e)
+		return fmt.Errorf("Windows隐藏执行器启动失败，请核对受管pythonw.exe和本机执行环境：%w", e)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	resultFile := filepath.Join(dir, "result.json")
 	outputFile := filepath.Join(dir, "output.log")
+	// Only the trusted music caller can request a bounded private copy of the
+	// child's stderr. Generic Agent output never receives runtime diagnostics.
+	readDiagnostic := func() {
+		if diagnostic == nil {
+			return
+		}
+		f, e := os.Open(filepath.Join(dir, "stderr.log"))
+		if e != nil {
+			return
+		}
+		defer f.Close()
+		_, _ = io.CopyN(diagnostic, f, 64<<10)
+	}
 	var offset int64
 	readOutput := func() {
 		f, e := os.Open(outputFile)
@@ -146,6 +203,10 @@ func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string,
 	for {
 		readOutput()
 		if b, e := os.ReadFile(resultFile); e == nil {
+			// The child can flush its last bytes between the first read and
+			// publication of result.json. Do not lose a structured response tail.
+			readOutput()
+			readDiagnostic()
 			var result struct {
 				ExitCode int    `json:"exit_code"`
 				Error    string `json:"error"`

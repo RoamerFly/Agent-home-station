@@ -1,0 +1,25 @@
+# One worker per account. The worker sees this account's files only; public
+# programs/models are read-only. No GPU dependency is imposed on the web image.
+services:
+  music:
+    image: ${WECHAT_MUSIC_IMAGE:-wechat-music:local}
+    restart: unless-stopped
+    gpus: all
+    environment:
+      MUSIC_PRIVATE_WORKSPACE: /workspace/pri_workspace/${WECHAT_ACCOUNT_DIRECTORY:?Set the current account hash}
+    volumes:
+      - ../../public_workspace:/workspace/public_workspace:ro
+      - ../../pri_workspace/${WECHAT_ACCOUNT_DIRECTORY}:/workspace/pri_workspace/${WECHAT_ACCOUNT_DIRECTORY}
+      - ../../secrets/yue-bridge-token.txt:/run/secrets/yue-token:ro
+    tmpfs:
+      - /run/music:uid=10001,gid=10001,mode=0700
+      - /tmp:mode=1777
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:unconfined
+      - apparmor:unconfined
+    pids_limit: 256
+    stop_grace_period: 60s
+    networks: [agent]

@@ -31,7 +31,10 @@ func TestLiveStyleConfirmationStartsYuEAndReturnsCompletedSong(t *testing.T) {
 	f.manager.config.Companion.QuietStart = "00:00"
 	f.manager.config.Companion.QuietEnd = "00:00"
 	f.manager.native = &fakeTools{fakeNative: f.native}
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +165,10 @@ func TestLiveCompletedMusicContinuationSelectsStagedMedia(t *testing.T) {
 	f.manager.config.Companion.QuietEnd = "00:00"
 	f.manager.config.Companion.Permissions.Remember = true
 	f.manager.native = &fakeTools{fakeNative: f.native}
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

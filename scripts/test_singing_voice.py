@@ -30,6 +30,12 @@ class SingingMixTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'precision'):validate_singing_config(config)
             config['precision']='float32'
             self.assertEqual(validate_singing_config(config),'rvc')
+            for device in ('auto','cpu','cuda:0'):
+                config['rvc_device']=device
+                self.assertEqual(validate_singing_config(config),'rvc')
+            config['rvc_device']='cuda:1'
+            with self.assertRaisesRegex(ValueError,'invalid_rvc_device'):validate_singing_config(config)
+            config['rvc_device']='auto'
             config['index_rate']=.35;index.write_bytes(b'changed index')
             with self.assertRaisesRegex(ValueError,'resource_changed'):validate_singing_config(config)
 

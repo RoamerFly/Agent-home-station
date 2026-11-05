@@ -3,6 +3,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -31,19 +32,25 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
-	BacklogSettled    func(string, string, []string, string)
-	AuthorizeThread   func(context.Context, string) (bool, error)
-	ReportFailure     func(companion.Input, string) error
-	AgentTask         func(time.Time, func(string) bool) (*companion.Input, error)
-	AgentTaskDone     func(companion.Input, string)
-	AgentTaskDelivery func(companion.Input, TaskDelivery) error
-	AgentTaskActive   func(companion.Input) bool
-	Draining          func() bool
-	MediaSeeds        func() []MediaSeed
-	SurfAllowed       func(string) bool
-	SurfTask          func(time.Time) (*SurfTask, error)
-	Options           *Options
-	Analyzer          interface {
+	ObservationFailed   func(companion.Input, string) error
+	MediaRepairRequired func(companion.Input, string, string) error
+	MediaSeedSettled    func(string, string, linuxnative.ToolStatus) error
+	MediaSeedReceipt    func(string, string) (linuxnative.ToolStatus, bool)
+	BacklogSettled      func(string, string, []string, string)
+	AuthorizeThread     func(context.Context, string) (bool, error)
+	AgentTask           func(time.Time, func(string) bool) (*companion.Input, error)
+	AgentTaskDone       func(companion.Input, string)
+	AgentTaskRetry      func(companion.Input, time.Duration, string)
+	AgentTaskDelivery   func(companion.Input, TaskDelivery) error
+	AgentTaskActive     func(companion.Input) bool
+	Draining            func() bool
+	MediaSeedAllowed    func(MediaSeed) bool
+	MediaSeedKnown      func(MediaSeed) bool
+	MediaSeeds          func() []MediaSeed
+	SurfAllowed         func(string) bool
+	SurfTask            func(time.Time) (*SurfTask, error)
+	Options             *Options
+	Analyzer            interface {
 		Analyze(context.Context, linuxnative.Message) (string, error)
 	}
 	StateDir       string
@@ -55,6 +62,18 @@ type Config struct {
 	Record         func(Record)
 	GroupRules     map[string]GroupRule
 	Channel        string
+}
+
+// MediaObservationEvidence is supplied only by a trusted host observer that
+// actually decoded incoming media. It is intentionally separate from the text
+// returned to the model, because that text may include untrusted card fields.
+type MediaObservationEvidence struct {
+	ObservedRange string
+	Excerpt       string
+	// Parts preserve which observer supplied each excerpt. Card metadata is
+	// deliberately represented separately from decoded page, image or audio
+	// content so consumers never turn a publisher claim into firsthand memory.
+	Parts []companion.ObservationPart
 }
 type GroupRule struct {
 	Mode, Prefix, Persona   string
@@ -250,6 +269,8 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		return
 	}
 	quoteContext := ""
+	mediaObservationState := "pending"
+	mediaObservationEvidence := MediaObservationEvidence{}
 	if message.IsQuotedText() {
 		quoteContext = w.readQuoteContext(ctx, &message)
 	}
@@ -268,13 +289,16 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 			working.Body = "收到了一段视频，请结合内容决定是否回应。"
 		}
 		if message.Type == 49 {
-			working.Body = "收到了一条分享卡片，请结合介绍决定是否回应。"
+			working.Body = "收到了一条分享，结合会话偏好判断是否读取内容并回复。"
+			if message.FileAttachmentName() != "" {
+				working.Body = "收到一个文件，请结合原件及前后聊天决定是否回应。"
+			}
 		}
 		if !strings.HasSuffix(message.ThreadID, "@chatroom") {
 			working.Body = w.config.Prefix + working.Body
 		}
 	}
-	prompt, eligible := w.prompt(working, time.Now())
+	prompt, eligible := w.promptWithSharePreference(working, time.Now(), w.considerPreferredShare(message))
 	noticed := message
 	if message.IsQuotedText() {
 		noticed = working
@@ -284,9 +308,19 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if w.persistErr != nil {
 		return
 	}
-	if w.stopRequestedVoice(ctx, working) {
-		if !eligible {
+	if stoppedVoice := w.stopRequestedVoice(ctx, working); stoppedVoice {
+		// A plain stop is a local queue operation, never a model turn.  A
+		// replacement such as “不是这首，换成…” is allowed through so the same
+		// message can create its new, separately traced request after the old
+		// delivery has already been made ineligible.
+		if !replacesVoice(working.Body) {
 			return
+		}
+		// The same unmentioned group message can explicitly replace a song.
+		// It has already proved ownership by stopping exactly one prior trace,
+		// so promote only this replacement instruction into a fresh turn.
+		if !eligible {
+			eligible, prompt = true, working.Body
 		}
 	}
 	if !eligible {
@@ -306,17 +340,25 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		processingReason = "direct_question_review"
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
+	readMedia := isMedia && w.readMediaBeforeDecision(message)
 	if isMedia && w.config.Options != nil && w.config.Analyzer != nil {
-		if (message.Type == 3 || message.Type == 47) && !w.config.Options.ReadImages || message.Type != 3 && message.Type != 47 && message.Type != 34 && !w.config.Options.ReadVideos {
+		if !w.observationAllowed(message) {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
 			return
 		}
-		if w.generation == nil {
+		if w.generation == nil && readMedia {
 			analysisCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-			summary, analysisErr := w.config.Analyzer.Analyze(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
+			summary, observationEvidence, analysisErr := w.readRequiredMediaWithEvidence(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
+			mediaObservationEvidence = observationEvidence
+			mediaObservationState = "observed"
 			cancel()
 			if analysisErr != nil {
+				mediaObservationState = "incomplete"
 				if ctx.Err() != nil {
+					return
+				}
+				if strings.HasSuffix(message.ThreadID, "@chatroom") {
+					w.stopUnreadableTurn(companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, TraceID: message.ID}, analysisErr)
 					return
 				}
 				summary = failedObservation(analysisErr)
@@ -334,10 +376,30 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	if character, ok := w.model.(*companion.Engine); ok {
 		mode := "direct"
-		if w.config.GroupRules[message.ThreadID].Mode == "social" && !w.addressed(message) {
+		if (w.config.GroupRules[message.ThreadID].Mode == "social" || w.considerPreferredShare(message)) && !w.addressed(message) {
 			mode = "social"
 		}
 		input := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, Text: prompt, Mode: mode, IsGroup: strings.HasSuffix(message.ThreadID, "@chatroom"), Directed: !strings.HasSuffix(message.ThreadID, "@chatroom") || w.addressed(message), ReviewRequired: reviewQuestion, HistoricalReview: w.ownerModelReview(message.ID), PersonaOverride: w.config.GroupRules[message.ThreadID].Persona, TraceID: message.ID, QuoteServerID: message.ServerID, MessageTime: message.CreatedAt, MustReply: mode == "direct" && message.Mentions.Self != nil && *message.Mentions.Self && w.config.GroupRules[message.ThreadID].ForceReplyWhenMentioned}
+		original := ""
+		if message.Type == 1 {
+			original = message.Body
+		} else if message.IsQuotedText() {
+			// Native type 49/57 already exposes the user's new text in Body.
+			// Preserve it separately from the verified quoted source packet.
+			original = working.Body
+		}
+		input.OriginalText = &original
+		bindInputSource(&input, message, character)
+		for i := range input.IncomingMedia {
+			input.IncomingMedia[i].ObservationState = mediaObservationState
+			if mediaObservationState != "pending" {
+				input.IncomingMedia[i].Observation = prompt
+				if mediaObservationState == "observed" {
+					input.IncomingMedia[i].ObservedRange = mediaObservationEvidence.ObservedRange
+					input.IncomingMedia[i].ObservationExcerpt = mediaObservationEvidence.Excerpt
+				}
+			}
+		}
 		if message.Type == 49 && message.AppMessageType != nil {
 			switch *message.AppMessageType {
 			case 3, 4, 5, 6, 51:
@@ -350,7 +412,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation != nil {
 			var analysis *linuxnative.Message
-			if isMedia && w.config.Analyzer != nil {
+			if readMedia && w.config.Analyzer != nil {
 				copy := message
 				analysis = &copy
 			}
@@ -377,11 +439,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		return
 	}
 	if len(text) > 4096 {
-		limit := 4096 - len("\n…")
-		for !utf8.ValidString(text[:limit]) {
-			limit--
-		}
-		text = text[:limit] + "\n…"
+		w.config.Log("model_reply_text_too_long")
+		w.activity(Record{Event: "model_failed", Category: "error", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "model_reply_text_too_long", Status: "failed"})
+		return
 	}
 	w.markSending(message.ID)
 	if w.persistErr != nil {
@@ -408,11 +468,13 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 }
 
 func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, bool) {
+	return w.promptWithSharePreference(message, now, false)
+}
+func (w *Worker) promptWithSharePreference(message linuxnative.Message, now time.Time, preferredShare bool) (string, bool) {
 	if !w.allowed[message.ThreadID] || message.Type != 1 || !utf8.ValidString(message.Body) || len(message.Body) > 4096 {
 		return "", false
 	}
-	created, err := time.Parse(time.RFC3339, message.CreatedAt)
-	if err != nil || now.Sub(created) > w.maxMessageAge() || created.After(now.Add(30*time.Second)) {
+	if !w.messageInTime(message, now) {
 		return "", false
 	}
 	text := strings.TrimSpace(message.Body)
@@ -430,7 +492,7 @@ func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, boo
 				return "", false
 			}
 		}
-		if rule.Mode != "all" && rule.Mode != "social" && !w.addressed(message) {
+		if rule.Mode != "all" && rule.Mode != "social" && !preferredShare && !w.addressed(message) {
 			return "", false
 		}
 		// Display names are not trusted as evidence of a mention. Remove only
@@ -441,6 +503,10 @@ func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, boo
 				break
 			}
 			text = strings.TrimSpace(text[i:])
+		}
+		if preferredShare {
+			// Considering a share does not manufacture a mention or a user command.
+			return text, text != ""
 		}
 		if rule.Prefix != "" {
 			if !strings.HasPrefix(text, rule.Prefix) {
@@ -467,11 +533,28 @@ func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, boo
 	return text, text != ""
 }
 
-func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engine, input companion.Input) {
+func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engine, input companion.Input) string {
+	if input.RecoveryBlocked || !recoveryPrivacySupported(character.Tools, input) {
+		// Persistent task continuations can run without the background
+		// generation scheduler. Do the same fail-closed check here so a
+		// cross-conversation checkpoint never reaches Engine.Respond after the
+		// host adapter has reset its private route.
+		w.activity(Record{Event: "model_recovery_blocked", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "needs_review", Reason: "cross_conversation_checkpoint_requires_fresh_authorization"})
+		w.queuePhase(input.TraceID, "needs_review")
+		return "generation_paused"
+	}
 	input = w.withAutonomyPlans(input)
+	if !character.Config.Permissions.Remember && input.Sender != "" && input.Mode != "proactive" {
+		verified, err := w.verifyEphemeralSource(ctx, input)
+		if err != nil {
+			w.modelFailed(input.Thread, input.TraceID, err)
+			return ""
+		}
+		input = verified
+	}
 	if w.generation != nil {
 		w.startGeneration(ctx, character, input, nil)
-		return
+		return ""
 	}
 	modelCtx, cancel := character.Config.TaskContext(ctx)
 	modelCtx = companion.WithMediaIntent(modelCtx, func(ctx context.Context, intent string) error {
@@ -494,12 +577,47 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 	decision, err := character.Respond(w.modelContext(modelCtx, input.Thread, input.TraceID), input)
 	processingErr := modelCtx.Err()
 	cancel()
+	if w.scheduleModelContinuation(input, err, toolStarted) {
+		return "retrying_model"
+	}
 	w.finishCharacter(ctx, character, input, decision, err, processingErr, toolStarted, progressDelivered)
+	var changed *companion.GenerationEvidenceChangedError
+	if errors.As(err, &changed) {
+		return "generation_paused"
+	}
+	return ""
 }
 
 func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engine, input companion.Input, decision companion.Decision, err, processingErr error, toolStarted, progressDelivered bool) {
+	ctx = companion.WithDecisionGenerationEvidence(ctx, decision)
+	var changed *companion.GenerationEvidenceChangedError
+	if errors.As(err, &changed) {
+		if !w.taskActive(input) {
+			w.activity(Record{Event: "agent_task_cancelled", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "stopped", Reason: "task_cancelled_before_delivery"})
+			return
+		}
+		note, _ := json.Marshal(struct {
+			Continuation   string   `json:"continuation"`
+			CompletedTools []string `json:"completed_tools"`
+		}{changed.Continuation, changed.CompletedTools})
+		w.activity(Record{Event: "generation_paused", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "needs_review", Reason: "generation_evidence_changed", ModelStage: changed.Stage, DecisionNote: string(note), Origin: "agent"})
+		w.queuePhase(input.TraceID, "needs_review")
+		return
+	}
+	if err == nil {
+		if input.ExpectedVoiceID != "" && decision.ExpectedVoiceID != "" && input.ExpectedVoiceID != decision.ExpectedVoiceID || input.ExpectedVoiceProfile != "" && decision.ExpectedVoiceProfile != "" && input.ExpectedVoiceProfile != decision.ExpectedVoiceProfile {
+			err = errors.New("named_voice_task_binding_changed")
+		} else {
+			if input.ExpectedVoiceID == "" {
+				input.ExpectedVoiceID = decision.ExpectedVoiceID
+			}
+			if input.ExpectedVoiceProfile == "" {
+				input.ExpectedVoiceProfile = decision.ExpectedVoiceProfile
+			}
+		}
+	}
 	if input.Mode == "proactive" && !input.Preview {
-		action, reason := decision.Action, decision.Reason
+		action, reason := decision.RecordStatus(), decision.Reason
 		if err != nil {
 			action, reason = "failed", "model_or_observation_failed"
 		}
@@ -521,7 +639,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		switch decision.Reason {
 		case "invalid_model_decision", "invalid_tool_arguments", "tool_unavailable_or_budget_exhausted", "tool_budget_exhausted":
 			w.activity(Record{Event: "model_decision_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Reason: decision.Reason, Status: "failed", Origin: "model"})
-			decision = companion.Decision{Action: "silent", Reason: "decision_failure_reported"}
+			decision.Action = "failed"
 		}
 	}
 	if err != nil && toolStarted && processingErr != nil && ctx.Err() == nil {
@@ -533,24 +651,14 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			w.modelFailed(input.Thread, input.TraceID, err)
 		}
 		status, category := "silent", "decision"
-		if err != nil || decision.Reason == "decision_failure_reported" || decision.Reason == "tool_task_deadline_exceeded" {
+		if err != nil || decision.Action == "failed" || decision.Reason == "tool_task_deadline_exceeded" {
 			status, category = "failed", "error"
 		}
 		w.activity(Record{Event: "tool_task_finished_without_result", Category: category, ThreadID: input.Thread, MessageID: input.TraceID, Reason: "tool_task_no_final_after_progress", Status: status})
 		// A model-selected silent outcome remains silent. Errors are recorded
 		// and can be handed to the model through the existing recovery task.
 	}
-	if w.config.ReportFailure != nil && !input.ReportOnly && (input.IsGroup || input.Mode == "direct") && (decision.Reason == "decision_failure_reported" || decision.Reason == "tool_task_deadline_exceeded" || decision.Reason == "tool_task_no_final_after_progress" || err != nil && ctx.Err() == nil) {
-		reason := decision.Reason
-		if err != nil {
-			reason = "model_generation_failed"
-		}
-		if reportErr := w.config.ReportFailure(input, reason); reportErr != nil {
-			w.config.Log("private_operation_report_save_failed")
-		}
-		decision = companion.Decision{Action: "silent", Reason: "operation_reported_privately"}
-		err = nil
-	}
+
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -559,14 +667,27 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		w.modelFailed(input.Thread, input.TraceID, err)
 		return
 	}
+	if coverage := decision.HistoryCoverage; coverage != nil {
+		status, reason := "completed", "history_read_completed"
+		if coverage.Failed > 0 || coverage.Attempted < coverage.Selected {
+			status, reason = "partial", "history_read_partial"
+		}
+		note, marshalErr := json.Marshal(coverage)
+		if marshalErr == nil {
+			w.activity(Record{Event: "history_read_coverage", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: status, Reason: reason, DecisionNote: string(note), Origin: "agent"})
+		}
+	}
 	if decision.Action != "reply" {
 		w.scheduleConversationWake(character, input, decision.WakeAfterSeconds, decision.WaitForReply, decision.WakeReason)
 		category := "decision"
-		if strings.Contains(decision.Reason, "invalid") {
+		status := decision.RecordStatus()
+		if status == "failed" {
 			category = "error"
 		}
-		w.activity(Record{Event: "character_decision", Category: category, ThreadID: input.Thread, MessageID: input.TraceID, Reason: decision.Reason, Status: decision.Action})
-		if strings.Contains(decision.Reason, "budget") {
+		w.activity(Record{Event: "character_decision", Category: category, ThreadID: input.Thread, MessageID: input.TraceID, Reason: decision.Reason, Status: status, ReviewFailure: decision.ReviewFailure})
+		if decision.ReviewFailure != nil {
+			w.config.Log("character_review_failed")
+		} else if strings.Contains(decision.Reason, "budget") {
 			w.config.Log("character_budget_limited")
 		} else if decision.Action == "blocked" {
 			w.config.Log("character_permission_denied")
@@ -633,6 +754,12 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		}
 	}
 	for bubble, body := range decision.Messages {
+		if bubble < len(decision.ReplyContexts) {
+			rc := decision.ReplyContexts[bubble]
+			input.ReplyContext = &rc
+		} else {
+			input.ReplyContext = nil
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -667,7 +794,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		}
 		w.config.Log("reply_server_accepted")
 		w.activity(Record{Event: "message_sent", Category: "sent", ThreadID: input.Thread, MessageID: input.TraceID, Content: text, Origin: "bot", Status: "accepted"})
-		if err := character.Accepted(input, text); err != nil {
+		if err := w.acceptTextMemory(character, input, bubble, text); err != nil {
 			w.config.Log("memory_save_failed_after_accepted_reply")
 			return
 		}
@@ -685,6 +812,12 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		if ctx.Err() != nil || input.Mode != "direct" && character.Config.Quiet(time.Now()) {
 			return
 		}
+		bound, proofErr := w.prepareMediaEvidence(ctx, input)
+		if proofErr != nil {
+			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Reason: "media_source_proof_invalid", Status: "stopped"})
+			return
+		}
+		input = bound
 		w.markSending(input.TraceID)
 		if w.persistErr != nil {
 			return
@@ -726,6 +859,12 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		if w.queueMedia(ctx, character, input, media) {
 			continue
 		}
+		bound, proofErr := w.prepareMediaEvidence(ctx, input)
+		if proofErr != nil {
+			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Reason: "media_source_proof_invalid", Status: "stopped"})
+			return
+		}
+		input = bound
 		sourceID := media.SourceID
 		if sourceID == "" {
 			sourceID = media.ID

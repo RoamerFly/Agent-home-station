@@ -48,7 +48,7 @@ func TestStdioCancellationClosesInheritedOutputPipe(t *testing.T) {
 		}
 	}()
 	var result json.RawMessage
-	err := stdioRequest(ctx, ServerConfig{Command: os.Args[0], Args: []string{"-test.run=^TestInheritedMCPPipeProcess$"}, Env: map[string]string{"WECHAT_MCP_PIPE_PARENT": "1", "WECHAT_MCP_PIPE_PID": path}}, "tools/list", map[string]any{}, &result)
+	err := stdioRequest(ctx, ServerConfig{Command: os.Args[0], Args: []string{"-test.run=^TestInheritedMCPPipeProcess$"}, Env: map[string]string{"WECHAT_MCP_PIPE_PARENT": "1", "WECHAT_MCP_PIPE_PID": path}}, "tools/list", map[string]any{}, &result, syntheticStdioLauncher)
 	data, readErr := os.ReadFile(path)
 	if readErr == nil {
 		pid, _ := strconv.Atoi(string(data))

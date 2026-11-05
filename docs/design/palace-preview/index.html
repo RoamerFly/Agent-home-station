@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>大肥鱼 · 合成故事设计预览</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <main id="main" class="shell">
+    <header class="masthead">
+      <a class="wordmark" href="#main" data-mode="journal" aria-label="大肥鱼，返回首页"><span aria-hidden="true">≈</span> 大肥鱼</a>
+      <div class="mode-switch" role="group" aria-label="查看方式">
+        <button class="mode-button is-active" type="button" data-mode="journal" aria-pressed="true">生活首页</button>
+        <button class="mode-button" type="button" data-mode="palace" aria-pressed="false">记忆宫殿</button>
+      </div>
+      <button class="scene-button" type="button" aria-pressed="false" title="切换为潮汐观测站画面">场景：夜海手记</button>
+    </header>
+
+    <section class="journal scene-journal" data-view="journal" aria-labelledby="journal-title">
+      <div class="journal-intro">
+        <p class="preview-label">合成故事 · 设计预览</p><p class="date-line">十一月 · 周五夜里</p>
+        <h1 id="journal-title">等退潮，<br>去看潮间带。</h1>
+        <p class="lede">小林发来的海浪视频里，礁石在退潮时露出了水面。我想多看看那些小水洼。</p>
+        <button class="quiet-action" type="button" data-mode="palace">打开记忆宫殿 <span aria-hidden="true">↓</span></button>
+      </div>
+      <figure class="hero-image">
+        <img src="night-sea.webp" alt="夜晚的海面与远处微光" data-journal-src="night-sea.webp" data-palace-src="tide-atlas.webp">
+        <figcaption>场景插画 · 夜海手记</figcaption>
+      </figure>
+      <article class="story-card" aria-label="今天的手记">
+        <div class="card-rule" aria-hidden="true"></div>
+        <p class="card-kicker">和小林的约定</p>
+        <p class="story-copy">小林约我周六一起画海边明信片。次日，我们把日子改成了周日。</p>
+        <div class="amendment"><span class="amendment-label">后来改过</span><span>周六</span><strong>周日</strong></div>
+        <p class="story-copy interest">这件事已经约好。去看潮间带还只是我的一个念头。</p>
+        <footer><span>周五修订 · 第 2 版</span><button class="source-link" type="button" data-mode="palace" data-node="revision">查看改期原话</button></footer>
+      </article>
+
+    </section>
+
+    <section class="palace" data-view="palace" hidden aria-labelledby="palace-title">
+      <div class="palace-heading">
+        <div>
+          <p class="preview-label">合成故事 · 设计预览</p><p class="date-line">一段对话 · 4 个可回看的片段</p>
+          <h1 id="palace-title">明信片与<br>潮间带。</h1>
+        </div>
+        <div class="palace-key" aria-label="图例"><i class="key-dot is-plan"></i>约定 <i class="key-dot is-change"></i>修订 <i class="key-dot is-read"></i>已读后的兴趣</div>
+      </div>
+      <div class="palace-grid">
+        <div class="map-panel" aria-label="记忆关系图">
+          <svg class="tide-map" viewBox="0 0 720 432" role="group" aria-labelledby="map-title map-desc">
+            <title id="map-title">一段海边明信片约定的关系图</title>
+            <desc id="map-desc">小林提出周六画海边明信片，随后日期改成周日。读完海浪消息后，对潮间带产生兴趣。</desc>
+            <path class="contour" d="M40 300C160 215 195 352 314 263S471 158 665 220" />
+            <path class="contour contour-faint" d="M65 355C190 270 273 410 397 302S572 244 690 302" />
+            <path class="thread" d="M172 125C272 150 310 196 352 226" />
+            <path class="thread thread-interest" d="M570 146C580 204 594 253 608 300" />
+            <g class="map-node selected" tabindex="0" role="button" aria-label="选择 小林的约定" data-node="plan"><circle cx="172" cy="125" r="48"/><circle class="node-core" cx="172" cy="125" r="8"/><text x="172" y="205">小林的约定</text><text class="map-meta" x="172" y="226">周六</text></g>
+            <g class="map-node" tabindex="0" role="button" aria-label="选择 时间修订" data-node="revision"><circle cx="352" cy="226" r="48"/><path class="revision-mark" d="M338 226h29m-15-14 15 14-15 14"/><text x="352" y="307">时间修订</text><text class="map-meta" x="352" y="328">周日</text></g>
+            <g class="map-node" tabindex="0" role="button" aria-label="选择 海浪观察" data-node="wave"><circle cx="570" cy="146" r="48"/><path class="wave-mark" d="M548 146c8-12 16 12 25 0s16 12 25 0"/><text x="570" y="226">海浪观察</text><text class="map-meta" x="570" y="247">实际看过</text></g>
+            <g class="map-node" tabindex="0" role="button" aria-label="选择 潮间带兴趣" data-node="interest"><circle cx="608" cy="300" r="48"/><path class="interest-mark" d="M608 281v38m-19-19h38"/><text x="608" y="380">潮间带</text><text class="map-meta" x="608" y="401">想再看看</text></g>
+          </svg>
+          <p class="map-instruction">选择圆点，看看每一段话来自哪里。</p>
+        </div>
+        <aside class="evidence-panel" aria-live="polite">
+          <p class="evidence-type" id="evidence-type">约定</p>
+          <h2 id="evidence-title">周六一起画海边明信片</h2>
+          <p id="evidence-body">小林先提出了这件事。周五已经改期。现在约好的是周日。</p>
+          <div class="source-stack" id="source-stack"></div>
+          <button class="list-toggle" type="button" aria-expanded="false" aria-controls="source-list">以列表查看所有片段 <span aria-hidden="true">↓</span></button>
+          <ol class="source-list" id="source-list" hidden></ol>
+        </aside>
+      </div>
+    </section>
+  </main>
+  <script src="script.js"></script>
+</body>
+</html>

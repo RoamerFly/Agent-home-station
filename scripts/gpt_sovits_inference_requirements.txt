@@ -1,0 +1,29 @@
+# Inference overlay on the managed CUDA music runtime; no training/UI stack.
+torch==2.6.0
+torchaudio==2.6.0
+numpy<2
+transformers>=4.51,<4.53
+peft<0.18
+pytorch-lightning>=2.4
+torchmetrics<=1.5
+x_transformers
+rotary_embedding_torch
+cn2an
+pypinyin
+jieba_fast
+jieba
+split-lang
+fast_langdetect>=0.3.1
+g2p_en
+pyopenjtalk>=0.4.1
+ToJyutping
+g2pk2
+ko_pron
+opencc-python-reimplemented
+python_mecab_ko; sys_platform != 'win32'
+wordsegment
+sentencepiece
+ffmpeg-python
+librosa==0.10.2
+matplotlib
+onnxruntime

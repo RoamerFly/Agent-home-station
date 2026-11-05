@@ -1,17 +1,13 @@
 package admin
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"io"
 	"math"
-	"net/http"
-	"strings"
 	"time"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
@@ -19,82 +15,29 @@ import (
 )
 
 func (p *permittedTools) yueTools() []mcptools.Tool {
-	c := p.manager.speechConfig()
 	if p.manager.agent == nil || !p.manager.agent.config().Enabled || !p.manager.agent.config().TasksEnabled {
 		return nil
 	}
-	if !c.YuEEnabled || c.YuEEndpoint == "" || c.YuEToken == "" || p.trace.Preview || p.trace.Account != p.manager.native.Account() || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) {
+	if !p.manager.localMusicPluginConfigured(context.Background()) || p.trace.Preview || p.trace.Account != p.manager.native.Account() || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) {
 		return nil
 	}
 	perms := p.manager.Config().Companion.Permissions
 	if !perms.SendVoice && !perms.SendFile {
 		return nil
 	}
-	return []mcptools.Tool{
-		agentTool("music_rvc_start", "Default for covering an existing song: preserve the original recording melody, lyrics, timing and accompaniment; locally separate vocals, convert to the configured character RVC voice and mix back. No YuE generation, no ASR/rewritten lyrics required. First find and cache the correct vocal recording in THIS conversation. reference_start_seconds/reference_seconds select a passage; omit both for the full actual recording (single processing window up to600s; longer songs use explicit windows). Default complete voice notes; file/both only if requested. Real job_id has durable follow-up via music_local_status. A submission is not listening or delivery verification.", `{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":24},"reference_asset_id":{"type":"string"},"reference_start_seconds":{"type":"number","minimum":0},"reference_seconds":{"type":"number","exclusiveMinimum":0,"maximum":600},"kind":{"type":"string","enum":["voice","file","both"]}},"required":["title","reference_asset_id"],"additionalProperties":false}`),
-		agentTool("music_sampling_options", "Read live native YuE semantic, ABC score and diffusion sampling parameters: meanings, actual backend limits/enums, workflow defaults. Read this before tuning music_local_start.sampling or original planning_mode; defaults are not capability ceilings. No song created. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
-		agentTool("music_service_status", "Read actual YuE bridge and generation backend health without creating or retrying a song. Use this for local health; web_fetch is public-only. When offline, trusted owners can read shared project-yue.md and project startup docs, then use permitted server tools on the correct OS. Report diagnosis separately from verified repair. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
-		agentTool("music_lyrics_compare", "Compare one actual ASR lyrics window with a version found on the web. First web_search for song/title/artist lyrics and web_fetch plausible versions; then supply asset_id, lyrics_evidence_id of ORIGINAL ASR, candidate_url and candidate_lyrics copied from that page. Reads the page with permitted web_fetch to verify real text. Aligns the corresponding passage, not the whole song. Only >=88% match and <=12%/12 edits permits minor correction, returning a new lyrics_evidence_id and exact lyrics. Large differences reject this version; compare another. Does not certify artist/version or human accuracy. Never replace uncertain ASR with invented text.", `{"type":"object","properties":{"asset_id":{"type":"string"},"lyrics_evidence_id":{"type":"string"},"candidate_url":{"type":"string","maxLength":2048},"candidate_lyrics":{"type":"string","maxLength":6000}},"required":["asset_id","lyrics_evidence_id","candidate_url","candidate_lyrics"],"additionalProperties":false}`),
-		agentTool("music_local_start", "Start local YuE ORIGINAL or SIMILAR-song resynthesis and durable follow-up. Existing-song direct covers default to music_rvc_start; only use YuE reference resynthesis when the user wants a similar/new take or explicitly chooses YuE. Default native female; character/RVC only if explicitly requested. When the user explicitly wants YuE reference resynthesis, use cover with this conversation actual reference_asset_id, lyrics and lyrics_evidence_ids from music_reference_inspect/music_lyrics_compare. Keep original melody, rhythm, phrasing and lyrics; follow the music policy supplied in context. On reroll reuse the previously verified recording unless the user changes version; source choice and lyric/score alignment matter more than adding style prose. reference_mode=melody by default (full also available). reference_start_seconds and reference_seconds select the source passage; explicit0 retains intro. Supply words matching that exact passage, preserve musical line breaks/sections, never blindly concatenate overlapping ASR windows. duration_seconds10..600 default60 is a generation ceiling. min_duration_seconds defaults90% of target, explicit0 allows preview; do not pad/stretch. text_guidance_scale0..100 controls native style/lyrics CFG (cover2, original1); stronger is not necessarily more faithful. seed fixes a take; omit for new take. Default complete voice notes<=60s; both only if requested. Result job_id is submission evidence, not audio quality or delivery. Query music_local_status for actual duration and sampled listening; media_reuse resends exact originals.", extendMusicSamplingSchema(`{"type":"object","properties":{"singing_voice":{"type":"string","enum":["native","character"]},"vocal_gender":{"type":"string","enum":["female","male"]},"vocal_gender_request":{"type":"string","description":"Exact current-user quote explicitly requesting male singing, required for male"},"title":{"type":"string","minLength":1,"maxLength":24},"mode":{"type":"string","enum":["original","cover"]},"style":{"type":"string"},"lyrics":{"type":"string"},"seed":{"type":"integer","minimum":0,"maximum":2147483647},"reference_mode":{"type":"string","enum":["melody","full"]},"reference_start_seconds":{"type":"number","minimum":0},"reference_seconds":{"type":"number","exclusiveMinimum":0,"maximum":600},"duration_seconds":{"type":"integer","minimum":10,"maximum":600},"text_guidance_scale":{"type":"number","minimum":0,"maximum":100},"min_duration_seconds":{"type":"number","minimum":0},"kind":{"type":"string","enum":["voice","file","both"]},"reference_asset_id":{"type":"string"},"lyrics_evidence_ids":{"type":"array","items":{"type":"string"}}},"required":["title","style","lyrics"],"additionalProperties":false}`)),
-		agentTool("music_reference_inspect", "Inspect exact cached audio from THIS conversation before covering, rerolling or recovering a take. Returns submitted style/lyrics/seed when this is a known generated song. Optional transcribe=true calls configured ASR for <=60 seconds at offset_seconds; candidate transcript is uncertain, not guaranteed lyrics. Pass lyrics_evidence_ids to inspect combined timing/order/duplicate boundaries BEFORE generating; coarse ASR equality is not word-to-note alignment. Returns lyrics_evidence_id; pass it in music_local_start.lyrics_evidence_ids and copy the transcript exactly (section labels allowed). supplied_lyrics may register words literally provided in the current user message, never invented words. Default original-recording covers use music_rvc_start, preserving the source without rewriting lyrics. YuE reference resynthesis is for a similar/new rendition or explicit YuE request, and then uses verified lyrics and source style. Use the exact quoted asset over another newer take. If only an original recording is available, listen/transcribe rather than inventing lyrics; if user demands unchanged accompaniment explain that YuE resynthesizes. Input {asset_id,transcribe?,offset_seconds?,seconds?}.", `{"type":"object","properties":{"asset_id":{"type":"string"},"transcribe":{"type":"boolean"},"offset_seconds":{"type":"integer","minimum":0,"maximum":600},"seconds":{"type":"integer","minimum":1,"maximum":60},"lyrics_evidence_ids":{"type":"array","items":{"type":"string"}},"supplied_lyrics":{"type":"string","maxLength":6000}},"required":["asset_id"],"additionalProperties":false}`),
-		agentTool("music_local_status", "Read a local job owned by THIS conversation. Completed audio defaults to COMPLETE voice notes (each at most60 seconds), not a preview or file. User can request original file later via media_reuse. Never ask whether a file is wanted. Put real media[].id in final media_ids. No resubmission. Input {job_id:string,kind?:voice|file}.", `{"type":"object","properties":{"job_id":{"type":"string"},"kind":{"type":"string","enum":["file","voice","both"]}},"required":["job_id"],"additionalProperties":false}`),
+	tools, err := p.manager.musicToolCatalog(context.Background())
+	if err != nil {
+		return nil
 	}
+	return tools
 }
 func (p *permittedTools) yueRequest(ctx context.Context, method, path string, body any, key string) ([]byte, string, error) {
-	c := p.manager.speechConfig()
-	var r io.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		r = bytes.NewReader(b)
+	policy, err := p.newLocalMusicPluginPolicy(ctx, method, path, body, key)
+	if err != nil {
+		return nil, "", err
 	}
-	req, e := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.YuEEndpoint, "/")+path, r)
-	if e != nil {
-		return nil, "", e
-	}
-	req.GetBody = nil
-	req.Header.Set("Authorization", "Bearer "+c.YuEToken)
-	req.Header.Set("Content-Type", "application/json")
-	if key != "" {
-		req.Header.Set("Idempotency-Key", key)
-	}
-	client := &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}
-	defer client.CloseIdleConnections()
-	response, e := client.Do(req)
-	if e != nil {
-		return nil, "", yueError("yue_bridge_unavailable")
-	}
-	defer response.Body.Close()
-	data, e := io.ReadAll(io.LimitReader(response.Body, (64<<20)+1))
-	if e != nil || len(data) > 64<<20 {
-		return nil, "", yueError("yue_response_limit")
-	}
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		if response.StatusCode == 400 {
-			var detail struct {
-				Error string `json:"error"`
-			}
-			if json.Unmarshal(data, &detail) == nil && (strings.HasPrefix(detail.Error, "rvc_") || strings.HasPrefix(detail.Error, "sampling_") || strings.HasPrefix(detail.Error, "invalid_sampling_") || detail.Error == "invalid_planning_mode" || detail.Error == "score_sampling_requires_active_planning") {
-				return nil, "", toolInputError("YuE原生参数校验失败：" + detail.Error + "；请查询music_sampling_options后调整")
-			}
-		}
-		if response.StatusCode == 401 || response.StatusCode == 403 {
-			return nil, "", yueError("yue_bridge_auth_failed")
-		}
-		if response.StatusCode == 503 {
-			var detail struct {
-				Error string `json:"error"`
-			}
-			if json.Unmarshal(data, &detail) == nil && strings.HasPrefix(detail.Error, "rvc_") {
-				return nil, "", toolInputError("RVC服务未就绪：" + detail.Error + "；请检查原任务和本机角色模型，不改为YuE冒充原曲翻唱")
-			}
-			return nil, "", yueError("yue_backend_unavailable")
-		}
-		if response.StatusCode == 404 {
-			return nil, "", yueError("yue_job_not_found")
-		}
-		return nil, "", yueError("yue_request_rejected")
-	}
-	return data, response.Header.Get("Content-Type"), nil
+	data, mime, _, err := policy.invoke(ctx)
+	return data, mime, err
 }
 
 type yueHealth struct {
@@ -106,17 +49,16 @@ type yueHealth struct {
 }
 
 func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
-	c := p.manager.speechConfig()
-	if !c.YuEEnabled {
-		return yueHealth{State: "disabled", Message: "本地YuE未启用"}
-	}
-	if c.YuEEndpoint == "" || c.YuEToken == "" {
-		return yueHealth{State: "unconfigured", Message: "YuE桥接地址或令牌尚未配置"}
+	if !p.manager.localMusicPluginConfigured(ctx) {
+		return yueHealth{State: "migration_required", Message: "请安装、授权并配置音乐工具的本地桥接；旧版语音配置不再直接授权音乐请求"}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	b, _, err := p.yueRequest(ctx, "GET", "/health", nil, "")
 	if err != nil {
+		if _, code := safeToolFailure(err); code == "yue_account_scope_mismatch" {
+			return yueHealth{State: "account_scope_mismatch", Message: err.Error()}
+		}
 		if _, code := safeToolFailure(err); code == "yue_bridge_auth_failed" {
 			return yueHealth{State: "bridge_auth_failed", Message: err.Error()}
 		}
@@ -172,6 +114,8 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		Title, Style, Lyrics string
 		Reference            string `json:"reference_asset_id"`
 		ID                   string `json:"job_id"`
+		RestartMissing       bool   `json:"restart_missing"`
+		RestartFailed        bool   `json:"restart_failed"`
 		Kind                 string
 	}
 	if json.Unmarshal(raw, &in) != nil {
@@ -184,11 +128,8 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		return p.compareMusicLyrics(ctx, raw)
 	}
 	if name == "music_local_start" {
-		if err := in.Sampling.validate(); err != nil {
+		if err := p.validateMusicSampling(ctx, in.Sampling, in.PlanningMode); err != nil {
 			return "", err
-		}
-		if in.PlanningMode != "" && in.PlanningMode != "off" && in.PlanningMode != "melody" && in.PlanningMode != "full" {
-			return "", toolInputError("planning_mode参数无效")
 		}
 		if p.trace.TaskID != "" {
 			for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
@@ -212,7 +153,6 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		if in.VocalGender != "female" && in.VocalGender != "male" {
 			return "", toolInputError("演唱性别应为female或male")
 		}
-		in.Style = normalizeSingingStyle(in.Style, in.VocalGender)
 		in.Kind = p.musicDeliveryKind(in.Kind)
 		if in.Duration == 0 {
 			in.Duration = 60
@@ -244,7 +184,14 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		if err := validateSingingRequest(requestText, in.Mode, in.VocalGender, in.VocalGenderRequest); err != nil {
 			return "", err
 		}
-		in.Style = singingGenerationStyle(in.Style, in.VocalGender, in.Mode)
+		preparedStyle, err := p.prepareSingingStyle(ctx, in.Style, in.VocalGender, in.Mode)
+		if err != nil {
+			return "", err
+		}
+		in.Style = preparedStyle
+		if in.Style == "" {
+			return "", toolInputError("请提供有效音乐风格")
+		}
 		if in.Mode == "cover" && in.Reference == "" {
 			return "", toolInputError("翻唱必须提供本会话真实原音频reference_asset_id；先读取引用素材或下载原曲，不能改编歌词冒充原曲")
 		}
@@ -344,6 +291,9 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			return "", toolInputError("当前YuE桥接尚不支持文本引导和实际时长验收；请升级到v7，避免把短成品当成完整歌曲；本次未提交生成")
 		}
 		if !health.Ready {
+			if health.State == "account_scope_mismatch" {
+				return "", yueError("yue_account_scope_mismatch")
+			}
 			if health.State == "backend_unavailable" {
 				return "", yueError("yue_backend_unavailable")
 			}
@@ -392,7 +342,9 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			found = found || old.ID == taskID
 		}
 		if !found {
-			task := agentTask{MusicSpec: spec, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: map[bool]string{true: "参考翻唱 · ", false: "原创歌曲 · "}[in.Mode == "cover"] + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "歌曲任务已提交，等待真实结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
+			task := agentTask{ParentID: p.trace.TaskID, MusicSpec: spec, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: map[bool]string{true: "参考翻唱 · ", false: "原创歌曲 · "}[in.Mode == "cover"] + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "歌曲任务已提交，等待真实结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
+			task.OwnerRequested = p.privileged()
+			task.Constraints = p.taskConstraints("music", "", spec.VoiceProfile, spec.Reference)
 			if len(task.Title) > 200 {
 				task.Title = "原创歌曲生成"
 			}
@@ -455,13 +407,34 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 	if !authorized {
 		return "", yueError("yue_job_scope_denied")
 	}
+	var parentChild *agentTask
+	if p.trace.TaskID != "" {
+		if parent, ok := p.manager.agent.lookupTask(p.trace.TaskID, p.trace.Account, p.trace.Thread); ok && parent.MusicJob != in.ID {
+			if children := p.linkedMusicChildren(parent, in.ID); len(children) == 1 {
+				child := copyTask(children[0])
+				parentChild = &child
+				if name == "music_local_resume" {
+					return "", toolInputError("该换声任务由子任务持续处理；父任务只能读取状态，恢复、取消和交付会由子任务继续")
+				}
+			}
+		}
+	}
 	data, _, e := p.yueRequest(ctx, "GET", "/jobs/"+in.ID, nil, "")
 	if e != nil {
 		return "", e
 	}
 	var status map[string]any
-	_ = json.Unmarshal(data, &status)
+	if json.Unmarshal(data, &status) != nil || name == "music_local_resume" && status["id"] != in.ID {
+		return "", toolInputError("原音乐任务身份或状态响应无效")
+	}
+	if name == "music_local_resume" {
+		return p.resumeMusicCompute(ctx, in.ID, status, in.RestartMissing, in.RestartFailed)
+	}
 	if status["state"] != "completed" {
+		if (status["engine"] == "rvc" || status["engine"] == "yue") && (status["state"] == "failed" || status["state"] == "needs_review") {
+			status["recovery_tool"] = "music_local_resume"
+			status["recovery_instruction"] = "先核查实际失败原因，再用music_local_resume继续原job_id；YuE优先接回已提交任务，后端确认丢失时可选择restart_missing，已确认执行失败且修复原因后可选择restart_failed，均沿用原配方和歌曲编号。恢复不会自行发送微信。"
+		}
 		if status["state"] == "queued" || status["state"] == "running" {
 			for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
 				if task.MusicJob == in.ID && (task.State == "waiting" || task.State == "running" || task.State == "pending") {
@@ -469,6 +442,26 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 					status["job_id"] = in.ID
 				}
 			}
+		}
+		data, _ = json.Marshal(status)
+		return string(data), nil
+	}
+	if parentChild != nil {
+		// A completed status is still only metadata when read by the parent
+		// that arranged this conversion. The child owns audio retrieval,
+		// staging and the idempotent delivery continuation.
+		status["job_id"] = in.ID
+		status["child_task_id"] = parentChild.ID
+		switch parentChild.State {
+		case "waiting", "running", "pending", "waiting_delivery":
+			status["automatic_followup"] = true
+			status["instruction"] = "换声子任务会继续核验成品并交付。当前父任务只读取状态，不读取附件、不恢复计算、不重复发送。"
+		case "needs_review":
+			status["automatic_followup"] = false
+			status["instruction"] = "换声子任务已暂停等待处理。当前父任务只返回状态，不读取附件、不恢复计算、不重复发送。"
+		default:
+			status["automatic_followup"] = false
+			status["instruction"] = "换声子任务已结束。当前父任务只返回状态，不读取附件、不恢复计算、不重复发送。"
 		}
 		data, _ = json.Marshal(status)
 		return string(data), nil
@@ -490,9 +483,31 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			break
 		}
 	}
+	if err := validateMusicVoiceEvidence(status, spec); err != nil {
+		return "", err
+	}
 	var listening map[string]any
+	var listeningAuthority func(context.Context) error
 	if spec != nil && spec.VocalGender != "" {
-		listening = p.reviewSongAudio(ctx, audio, spec.VocalGender)
+		listening, listeningAuthority = p.reviewSongAudio(ctx, audio, spec.VocalGender, in.ID, spec, in.Kind)
+	} else {
+		origin, err := p.newMusicAudioOrigin(ctx, audio, "", in.ID, spec, in.Kind)
+		if err != nil {
+			return "", err
+		}
+		listeningAuthority = origin.Check
+	}
+	if listeningAuthority != nil {
+		if err := listeningAuthority(ctx); err != nil {
+			return "", err
+		}
+		previousAuthority := ctx
+		ctx = withOutputAuthority(ctx, func(current context.Context) error {
+			if err := checkOutputAuthority(previousAuthority); err != nil {
+				return err
+			}
+			return listeningAuthority(current)
+		})
 	}
 	result, e := p.stageSongOutputSpec(ctx, audio, typ, title, in.Kind, spec)
 	if e == nil {
@@ -520,7 +535,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 // Poll read-only state before invoking the model; never resubmit generation.
 func (m *Manager) claimMusicTask(task agentTask, now time.Time) (*companion.Input, error) {
 	previousResult := task.LastResult
-	p := &permittedTools{manager: m}
+	p := &permittedTools{manager: m, trace: *taskResultInput(task, &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender, TraceID: task.OriginTrace, TaskID: task.ID})}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	data, _, err := p.yueRequest(ctx, "GET", "/jobs/"+task.MusicJob, nil, "")
@@ -557,7 +572,7 @@ func (m *Manager) claimMusicTask(task agentTask, now time.Time) (*companion.Inpu
 	if status.State != "completed" {
 		task.MusicFailure = true
 		task.MusicPrepared = true
-		next = "任务已终止，根据真实原因检查服务或参数并验证；保留原任务和音频，不把未达要求成品说成完整。"
+		next = "任务已终止，根据真实原因检查服务或参数并验证；保留原任务和音频，不把未达要求成品说成完整。原RVC任务修复后可用music_local_resume继续同一个job_id，不能新建重复歌曲；YuE任务先核查原后端执行记录。"
 	}
 	facts := map[string]any{"music_job": task.MusicJob, "title": task.Title, "state": status.State, "reason": status.Reason, "actual_seconds": status.Duration, "requested_seconds": status.Requested}
 	in, err := m.claimTaskResult(task, now, facts, next)

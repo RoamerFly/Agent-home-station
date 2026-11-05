@@ -43,6 +43,15 @@ func TestShareObservationUsesPrivateConfigAndCannotCrossScopeOrSend(t *testing.T
 	if code != 502 || strings.Contains(string(b), f.manager.config.APIKey) {
 		t.Fatal(code, string(b))
 	}
+	// A native original absent from the active memory window is still checked
+	// and read. The blocked synthetic URL fails at observation, not a fake
+	// missing-memory gate, and does not insert a historical turn.
+	if code, _, _ := f.request("POST", path, map[string]string{"message_id": "pruned-original"}, true, true); code != 502 {
+		t.Fatal("native reread blocked by live-memory retention", code)
+	}
+	if got := f.manager.memory.Context(in, f.manager.config.Companion, time.Now()); len(got.Messages) != 1 {
+		t.Fatal("reread inserted an old message", len(got.Messages))
+	}
 	n.thread = "different@chatroom"
 	if code, _, _ := f.request("POST", path, body, true, true); code != 400 {
 		t.Fatal("cross-scope observation allowed", code)

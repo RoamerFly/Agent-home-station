@@ -10,8 +10,76 @@ import (
 	"time"
 )
 
+func TestRetainedMemoryPageInvalidatedAfterSourceChange(t *testing.T) {
+	_, p := trustedAgent(t)
+	p.manager.mu.Lock()
+	p.manager.config.Companion.Permissions.Remember = true
+	p.manager.mu.Unlock()
+	ctx := t.Context()
+	epoch, err := p.manager.memory.DataEpoch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.stampMemoryQuery(ctx, epoch, p.memoryQueryAuthorization(), map[string]any{"text": strings.Repeat("synthetic private memory ", 500)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := p.RetainToolOutput(ctx, "memory_read", result)
+	if err != nil || id == "" {
+		t.Fatal(id, err)
+	}
+	in := p.trace
+	in.Text = "new source revision"
+	in.TraceID = "synthetic-change"
+	c := p.manager.Config().Companion
+	c.Permissions.Remember = true
+	if err = p.manager.memory.Observe(in, c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.readToolOutput(ctx, "", json.RawMessage(`{"result_id":"`+id+`"}`))
+	if err == nil || !strings.Contains(err.Error(), "memory_result_invalidated") {
+		t.Fatal("stale private page remained readable", err)
+	}
+}
+
+func TestMemoryResultCannotBeRestampedAfterConcurrentChange(t *testing.T) {
+	_, p := trustedAgent(t)
+	p.manager.mu.Lock()
+	p.manager.config.Companion.Permissions.Remember = true
+	p.manager.mu.Unlock()
+	ctx := t.Context()
+	epoch, err := p.manager.memory.DataEpoch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldResult, err := p.stampMemoryQuery(ctx, epoch, p.memoryQueryAuthorization(), map[string]any{"text": "synthetic old source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := p.trace
+	in.Text = "different source"
+	in.TraceID = "synthetic-race"
+	c := p.manager.Config().Companion
+	c.Permissions.Remember = true
+	if err = p.manager.memory.Observe(in, c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.stampMemoryQuery(ctx, epoch, p.memoryQueryAuthorization(), map[string]any{"text": "synthetic old source"}); err == nil {
+		t.Fatal("read crossing a source change was stamped as current")
+	}
+	for _, name := range []string{"memory_read", "memory_search", "agent_global_search"} {
+		if id, err := p.RetainToolOutput(ctx, name, oldResult); err == nil || id != "" {
+			t.Fatalf("%s relabelled stale query: %s %v", name, id, err)
+		}
+		if id, err := p.RetainToolOutput(ctx, name, `{"text":"unstamped legacy source"}`); err == nil || id != "" {
+			t.Fatalf("%s retained unstamped source: %s %v", name, id, err)
+		}
+	}
+}
+
 func TestToolOutputPaginationIsIsolatedByVerifiedSpeakerAndConversation(t *testing.T) {
 	_, p := trustedAgent(t)
+	installProjectPluginTestRuntime(t, p)
 	ctx := context.Background()
 	full := strings.Repeat("中文结果\n", 3000)
 	id, err := p.RetainToolOutput(ctx, "server_read", full)

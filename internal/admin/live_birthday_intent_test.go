@@ -42,9 +42,13 @@ func TestLiveBirthdayMeansExistingSungSongAndUnrelatedChatDoesNotCancel(t *testi
 		w.Write([]byte(`{"id":"birthday-model-fixture","state":"queued"}`))
 	}))
 	defer u.Close()
-	f.manager.speech.YuEEnabled = true
-	f.manager.speech.YuEEndpoint = u.URL
-	f.manager.speech.YuEToken = "synthetic"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = u.URL
+		legacySpeechFixture.YuEToken = "synthetic"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
 	p, _, _ := f.manager.toolAccess()
 	observed := &coverLiveTools{p: p, transcript: "祝你生日快乐\n祝你生日快乐\n祝你生日快乐\n祝你生日快乐"}
 	provider, err := f.manager.makeModel(cfg)

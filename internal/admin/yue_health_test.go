@@ -27,9 +27,14 @@ func TestOfflineYuEPreflightDoesNotClaimOrCreateGeneration(t *testing.T) {
 			}))
 			defer server.Close()
 			f := setup(t)
-			f.manager.speech.YuEEnabled = true
-			f.manager.speech.YuEEndpoint = server.URL
-			f.manager.speech.YuEToken = "fixture-token"
+			{
+				legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+				legacySpeechFixture.YuEEnabled = true
+				legacySpeechFixture.YuEEndpoint = server.URL
+				legacySpeechFixture.YuEToken = "fixture-token"
+				writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+			}
+			installLegacyLocalMusicPlugin(t, f.manager)
 			p, _, _ := f.manager.toolAccess()
 			p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "offline-request"})
 			_, err := p.callYuE(context.Background(), "music_local_start", json.RawMessage(`{"title":"晚风归家","style":"warm female pop","lyrics":"[verse]\n迎着晚风回家","duration_seconds":60,"kind":"voice"}`))
@@ -50,9 +55,14 @@ func TestUnknownYuESubmissionDoesNotReportToolSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 	f := setup(t)
-	f.manager.speech.YuEEnabled = true
-	f.manager.speech.YuEEndpoint = server.URL
-	f.manager.speech.YuEToken = "fixture-token"
+	{
+		legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+		legacySpeechFixture.YuEEnabled = true
+		legacySpeechFixture.YuEEndpoint = server.URL
+		legacySpeechFixture.YuEToken = "fixture-token"
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	}
+	installLegacyLocalMusicPlugin(t, f.manager)
 	p, _, _ := f.manager.toolAccess()
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "unknown-request"})
 	_, err := p.callYuE(context.Background(), "music_local_start", json.RawMessage(`{"title":"晚风归家","style":"warm female pop","lyrics":"[verse]\n迎着晚风回家","kind":"voice"}`))
@@ -68,7 +78,7 @@ func TestYuEHealthRequiresAdminAndNeverLeaksToken(t *testing.T) {
 	}
 	f.login()
 	code, b, _ := f.request("GET", "/api/speech/yue-health", nil, true, true)
-	if code != 200 || !strings.Contains(string(b), "disabled") || strings.Contains(string(b), "yue_token") {
+	if code != 200 || !strings.Contains(string(b), "migration_required") || strings.Contains(string(b), "yue_token") {
 		t.Fatal(code, string(b))
 	}
 }

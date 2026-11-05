@@ -39,7 +39,10 @@ func TestChannelsObservationHonorsReadPermissionAndScope(t *testing.T) {
 	n.source.ThreadID = msg.ThreadID
 	n.source.State = "unavailable"
 	text, err = a.Analyze(context.Background(), msg)
-	if err == nil || !strings.Contains(text, "channels_media_locator_missing") || !strings.Contains(text, "不能声称已观看") {
+	if err == nil || !strings.Contains(text, "shared_video_read_failed") || !strings.Contains(text, "现有资料为卡片信息") {
 		t.Fatal("missing locator fabricated observation", err, text)
+	}
+	if _, err := a.understandChannels(context.Background(), msg); err == nil || err.Error() != "share_plugin_migration_required" {
+		t.Fatal("missing plugin entered legacy resolver path", err)
 	}
 }

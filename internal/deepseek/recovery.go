@@ -15,17 +15,25 @@ import (
 	"time"
 )
 
-// Diagnostics contains fixed codes and numbers only. Upstream bodies, URLs,
+// Diagnostics contains fixed codes, bounded finish reasons and numbers only. Upstream bodies, URLs,
 // headers, prompts, keys and underlying error strings never enter this type.
 type Diagnostics struct {
-	Code         string
-	Stage        string
-	HTTPStatus   int
-	Attempts     int
-	MaxAttempts  int
-	DurationMS   int64
-	RetryDelayMS int64
-	Retryable    bool
+	Code              string
+	Stage             string
+	HTTPStatus        int
+	Attempts          int
+	MaxAttempts       int
+	DurationMS        int64
+	RetryDelayMS      int64
+	Retryable         bool
+	FinishReason      string
+	ContentBytes      int
+	InputBytes        int
+	InputByteLimit    int
+	JSONValid         bool
+	FormatAttempt     int
+	MaxFormatAttempts int
+	ProtocolCode      string
 }
 
 type RequestError struct {
@@ -53,13 +61,15 @@ func UserMessage(err error) string {
 		return "模型调用失败，请检查服务商配置"
 	}
 	messages := map[string]string{
-		"model_output_token_limit": "模型输出达到Token上限，内容被截断", "model_content_filtered": "模型服务停止了本次内容生成", "model_tool_call_count_invalid": "模型返回了不受支持的工具调用数量", "model_tool_arguments_too_large": "模型工具参数超过长度限制", "model_tool_arguments_invalid": "模型返回的工具参数格式无效",
+		"model_input_transport_limit": "模型请求超过本地传输大小限制，尚未发送到 API",
+		"model_output_token_limit":    "模型输出达到Token上限，内容被截断", "model_content_filtered": "模型服务停止了本次内容生成", "model_tool_call_count_invalid": "模型返回了不受支持的工具调用数量", "model_tool_arguments_too_large": "模型工具参数超过长度限制", "model_tool_arguments_invalid": "模型返回的工具参数格式无效",
 		"model_network_unavailable": "模型网络连接不可用", "model_network_timeout": "模型连接或响应超时", "model_connection_closed": "模型连接提前关闭",
 		"model_dns_failed": "模型服务域名解析失败", "model_tls_validation_failed": "模型服务证书验证失败", "model_authentication_failed": "模型鉴权失败，请检查 Key",
 		"model_insufficient_balance": "模型账户额度不足", "model_invalid_parameters": "模型请求参数不受支持", "model_endpoint_or_model_missing": "服务地址或模型不存在",
 		"model_rate_limited": "模型服务限流", "model_service_unavailable": "模型服务暂时不可用", "model_upstream_timeout": "模型服务处理超时",
 		"model_redirect_denied": "模型地址返回跳转，未转发凭据", "model_request_cancelled": "模型请求已取消", "model_deadline_exceeded": "本次模型处理超时",
 		"model_response_too_large": "模型响应超过大小限制", "model_invalid_response": "模型返回格式无效", "model_response_incomplete": "模型响应未完整生成", "model_response_empty": "模型返回空内容",
+		"model_review_protocol_invalid": "回复复核结果格式错误，尚未完成检查；不是模型选择安静",
 	}
 	message := messages[d.Code]
 	if message == "" {
@@ -71,10 +81,15 @@ func UserMessage(err error) string {
 	if d.Attempts > 0 {
 		message += fmt.Sprintf("；已尝试 %d 次", d.Attempts)
 	}
+	if d.InputByteLimit > 0 {
+		message += fmt.Sprintf("；输入 %d 字节，限制 %d 字节，请分页或拆分处理", d.InputBytes, d.InputByteLimit)
+	}
 	return message
 }
 
 type requestObserverKey struct{}
+type requestAttemptKey struct{}
+type groundingFormatAttemptKey struct{}
 
 // WithRequestObserver scopes retry/recovery events to one conversation. The
 // callback is not stored on the shared client, so simultaneous previews cannot
@@ -163,7 +178,7 @@ func (c *Client) request(ctx context.Context, body []byte) (string, error) {
 	start := time.Now()
 	const attempts = 2
 	for attempt := 1; attempt <= attempts; attempt++ {
-		answer, failure := c.requestOnce(ctx, body)
+		answer, failure := c.requestOnce(context.WithValue(ctx, requestAttemptKey{}, attempt), body)
 		if failure == nil {
 			if attempt > 1 {
 				observeRequest(ctx, "model_recovered", Diagnostics{Attempts: attempt, MaxAttempts: attempts, DurationMS: time.Since(start).Milliseconds()})
@@ -181,6 +196,11 @@ func (c *Client) request(ctx context.Context, body []byte) (string, error) {
 		if failure.retryAfter > delay {
 			delay = failure.retryAfter
 		}
+		// The worker may persist this failure and resume it later rather than
+		// blocking a conversation for a provider-directed long wait.  Keep the
+		// requested delay in the safe diagnostic even when this process does not
+		// perform the second HTTP attempt.
+		failure.RetryDelayMS = delay.Milliseconds()
 		// Respect a long Retry-After without tying up the conversation worker.
 		if delay > 30*time.Second {
 			return "", failure
@@ -188,7 +208,6 @@ func (c *Client) request(ctx context.Context, body []byte) (string, error) {
 		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= delay {
 			return "", failure
 		}
-		failure.RetryDelayMS = delay.Milliseconds()
 		observeRequest(ctx, "model_retry", failure.Diagnostics)
 		wait := time.NewTimer(delay)
 		select {

@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "web.search",
+      "implementation": "ready",
+      "description": "联网搜索公开网页或 B站作品候选。默认请求6个候选，可指定候选数与返回页大小。选择 bilibili 时先查 B站公开搜索，临时不可用或无匹配时依次改查独立公开索引并保留实际候选。请求参数不会被静默压缩，也不会切换管理员配置的通用后端。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "enum": ["bilibili"],
+            "description": "选择 bilibili 可直接按作品或歌手搜索 B 站视频。省略时使用配置的通用搜索后端。"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4194304
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "read"
+    },
+    {
+      "id": "web.read",
+      "implementation": "ready",
+      "description": "联网读取公共网页正文，默认10000字符，可分页并校验内容哈希。成功结果明确返回 read_coverage.page_body 的已读字符范围和有界摘录；标题、搜索摘要和读取失败均不代表读到正文。音轨或视频下载请使用 web_media_download。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4194304
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expected_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "read"
+    },
+    {
+      "id": "web.discover",
+      "implementation": "ready",
+      "description": "读取宿主已授权的公开订阅、社区、图片或音频目录并解析候选元数据；不代表观看、播放或发送。默认每页40条，可指定offset/limit继续。",
+      "permissions": [
+        "network"
+      ],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "rss",
+                  "bilibili",
+                  "bing_images",
+                  "audio_catalog"
+                ]
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "voice",
+                  "image",
+                  "video"
+                ]
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "type",
+              "url",
+              "kind",
+              "enabled"
+            ],
+            "additionalProperties": false
+          },
+          "related_url": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": true,
+      "side_effect": "read"
+    }
+  ]
+}

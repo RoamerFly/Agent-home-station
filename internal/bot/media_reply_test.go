@@ -54,7 +54,7 @@ func TestCancelledOrUncertainMediaNeverSendsSuccessCaption(t *testing.T) {
 	}
 }
 
-func TestDeliveredMusicCaptionNoLongerPromisesFutureSend(t *testing.T) {
+func TestDeliveredMusicCaptionPreservesModelWording(t *testing.T) {
 	w, n, c, in := mediaWorker(t)
 	in.QuoteSharedMessage = true
 	in.QuoteServerID = "77"
@@ -70,16 +70,16 @@ func TestDeliveredMusicCaptionNoLongerPromisesFutureSend(t *testing.T) {
 	w.reconcileMediaReplies(context.Background())
 	w.runtime.MediaReplies[0].Next = time.Now().Add(-time.Second)
 	w.reconcileMediaReplies(context.Background())
-	if n.calls != 1 {
-		t.Fatal("accepted caption not sent")
+	if n.calls != 1 || len(n.requests) != 1 || !strings.Contains(n.requests[0].Text, "找到一首轻快的 Cloud Dancer，分几段发你～") {
+		t.Fatal("accepted caption changed before send", n.calls, n.requests)
 	}
 	scope := c.Store.Context(in, c.Config, time.Now())
 	found := false
 	for _, turn := range scope.Messages {
 		if turn.Role == "assistant" && turn.Media == nil {
 			found = true
-			if strings.Contains(turn.Text, "分几段发你") {
-				t.Fatal("completed delivery still promised future send")
+			if !strings.Contains(turn.Text, "分几段发你") {
+				t.Fatal("completed delivery changed the model caption", turn.Text)
 			}
 		}
 	}
@@ -100,7 +100,9 @@ func TestNewInboxInstructionIsReadBeforeOldReadyCaption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	pages := 0
-	w.source = &fakeSource{events: []linuxnative.Event{fixtureEvent("1", "new-song", "filehelper", "incoming", "live")}, messages: map[string]linuxnative.Message{"new-song": fixtureMessage("new-song", "filehelper", "重新找一首，traveling light", "incoming")}, onPage: func(string) {
+	message := fixtureMessage("new-song", "filehelper", "重新找一首，traveling light", "incoming")
+	message.SenderID = in.Sender
+	w.source = &fakeSource{events: []linuxnative.Event{fixtureEvent("1", "new-song", "filehelper", "incoming", "live")}, messages: map[string]linuxnative.Message{"new-song": message}, onPage: func(string) {
 		pages++
 		if pages > 1 {
 			cancel()

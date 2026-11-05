@@ -1,0 +1,104 @@
+{
+  "type": "object",
+  "properties": {
+    "vision_endpoint": {
+      "type": "string",
+      "title": "视觉接口地址",
+      "description": "完整 HTTPS chat/completions 地址；密钥仅发送到此处。"
+    },
+    "vision_key": {
+      "type": "string",
+      "title": "视觉接口密钥",
+      "x-secret": true,
+      "x-host-only": true
+    },
+    "vision_model": {
+      "type": "string",
+      "title": "视觉模型",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "vision_backend": {
+      "type": "string",
+      "title": "接口协议",
+      "enum": [
+        "openai-compatible",
+        "deepseek"
+      ],
+      "default": "openai-compatible"
+    },
+    "max_tokens": {
+      "type": "integer",
+      "title": "默认输出额度",
+      "minimum": 1,
+      "default": 768
+    },
+    "thinking": {
+      "type": "boolean",
+      "title": "思考模式",
+      "default": false
+    },
+    "reasoning_effort": {
+      "type": "string",
+      "title": "思考强度",
+      "enum": [
+        "low",
+        "high",
+        "max"
+      ],
+      "default": "low"
+    },
+    "asr_endpoint": {
+      "type": "string",
+      "title": "语音识别接口地址",
+      "description": "可选。完整 HTTPS 语音识别接口地址；未配置时不影响视觉观察。"
+    },
+    "asr_key": {
+      "type": "string",
+      "title": "语音识别接口密钥",
+      "x-secret": true,
+      "x-host-only": true
+    },
+    "asr_model": {
+      "type": "string",
+      "title": "语音识别模型",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "asr_backend": {
+      "type": "string",
+      "title": "语音识别方式",
+      "description": "远程接口使用下方模型配置；本地识别仅使用宿主已登记的受控运行环境。",
+      "enum": [
+        "remote",
+        "local"
+      ],
+      "default": "remote"
+    },
+    "local_asr_profile_id": {
+      "type": "string",
+      "title": "本地识别资源配置文件",
+      "description": "选择本机已登记的本地 ASR 资源配置文件；仅在“本地识别”时使用。",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "audio_review_endpoint": {
+      "type": "string",
+      "title": "音频内容观察接口地址",
+      "description": "可选。完整 HTTPS 音频理解接口地址；未配置时不影响图片观察和语音转写。"
+    },
+    "audio_review_key": {
+      "type": "string",
+      "title": "音频内容观察接口密钥",
+      "x-secret": true,
+      "x-host-only": true
+    },
+    "audio_review_model": {
+      "type": "string",
+      "title": "音频内容观察模型",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  },
+  "additionalProperties": false
+}

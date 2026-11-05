@@ -85,6 +85,27 @@ func TestQuoteAdmissionFailureHasSafeCodeWithoutLeakingNativeBody(t *testing.T) 
 	}
 }
 
+func TestResumeMissingMediaUsesFreshIdempotencyKeyAndNewJob(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/v1/accounts/test/tools/media/old-job/resume-missing" || r.Header.Get("Idempotency-Key") != "fresh-resume-key" {
+			t.Fatalf("bad resume route or idempotency key: %s %s %q", r.Method, r.URL.Path, r.Header.Get("Idempotency-Key"))
+		}
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["idempotencyKey"] != "fresh-resume-key" {
+			t.Fatal("missing resume key", body)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		write(w, `{"id":"new-job","accountId":"test","threadId":"filehelper","sourceId":"source-one","state":"queued","phase":"voice"}`)
+	}))
+	defer server.Close()
+	s := testSender(t, server.URL)
+	status, err := s.ResumeMissingMediaJob(context.Background(), "old-job", "fresh-resume-key")
+	if err != nil || status.ID != "new-job" || status.ThreadID != "filehelper" || status.SourceID != "source-one" || status.State != "queued" {
+		t.Fatal(status, err)
+	}
+}
+
 func TestVoiceStatusPreservesPacingAndReceiptEvidenceWithoutPrivateDetails(t *testing.T) {
 	s := &Sender{account: "test"}
 	status, err := s.decodeToolStatus([]byte(`{"id":"job-voice","accountId":"test","state":"running","phase":"pacing","result":{"private":"must not expose","voiceFailureStage":"voice_upload_exchange_outcome_unknown","chunks":[{"index":0,"state":"accepted","durationMs":40124,"pacingMs":0,"submittedAtMs":123,"acceptedAtMs":456,"serverMessageId":"18446744073709551615"},{"index":1,"state":"prepared","durationMs":40124,"pacingMs":41999,"serverMessageId":null},{"index":9,"state":"accepted","durationMs":1,"pacingMs":0}]}}`))
@@ -140,6 +161,46 @@ func TestFullMusicStatusRetainsAllVoiceChunksBeyondFive(t *testing.T) {
 
 type textReader struct{ value []byte }
 
+type zeroUploadReader struct{}
+
+func (zeroUploadReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
+
+func TestOriginalFileUploadStreamsBeyondLegacy64MiBLimit(t *testing.T) {
+	const size int64 = 65 << 20
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		form, err := r.MultipartReader()
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
+		part, err := form.NextPart()
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
+		n, err := io.Copy(io.Discard, part)
+		if err != nil || n != size {
+			t.Error(n, err)
+		}
+		if _, err = form.NextPart(); err != io.EOF {
+			t.Error(err)
+		}
+		w.WriteHeader(201)
+		write(w, `{"id":"large-original-file"}`)
+	}))
+	defer server.Close()
+	sender := testSender(t, server.URL)
+	upload, err := sender.Upload(context.Background(), "original.flac", "audio/flac", io.LimitReader(zeroUploadReader{}, size), size)
+	if err != nil || upload.ByteLength != size {
+		t.Fatal(upload, err)
+	}
+	if _, err = sender.Upload(context.Background(), "too-large.bin", "application/octet-stream", zeroUploadReader{}, 512<<20+1); err == nil {
+		t.Fatal("protocol size bound ignored")
+	}
+}
+
 func (r *textReader) Read(b []byte) (int, error) {
 	if len(r.value) == 0 {
 		return 0, io.EOF
@@ -147,4 +208,12 @@ func (r *textReader) Read(b []byte) (int, error) {
 	n := copy(b, r.value)
 	r.value = r.value[n:]
 	return n, nil
+}
+
+func TestPartialCancellationCannotBecomeCompleteReceipt(t *testing.T) {
+	s := &Sender{account: "a"}
+	status, err := s.decodeToolStatus([]byte(`{"id":"job","accountId":"a","state":"cancelled","cancelRequested":true,"result":{"chunks":[{"index":0,"state":"accepted","durationMs":1000,"serverMessageId":"22"},{"index":1,"state":"submitting","durationMs":1000},{"index":2,"state":"cancelled","durationMs":1000}]}}`))
+	if err != nil || len(status.VoiceChunks) != 3 || status.VoiceChunks[2].State != "cancelled" || status.WithVoiceReceipts().State == "accepted" {
+		t.Fatal(status, err)
+	}
 }

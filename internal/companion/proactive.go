@@ -84,7 +84,7 @@ func (s *Store) ProactiveState(channel, account, thread string, c Config, now ti
 // TouchActivity records only scheduling metadata. Ordinary messages that do not
 // trigger a reply update activity without postponing autonomous evaluations.
 func (s *Store) TouchActivity(input Input, now time.Time) error {
-	return s.transaction(func(data *persisted) error {
+	return s.scopeTransaction(ScopeID(input.Channel, input.Account, input.Thread), func(data *persisted) error {
 		id := ScopeID(input.Channel, input.Account, input.Thread)
 		scope, exists := data.Scopes[id]
 		if !exists {

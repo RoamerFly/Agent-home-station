@@ -3,26 +3,12 @@ package mcptools
 import (
 	"context"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 	"time"
 )
-
-func TestPublicFetchDoesNotMistakeAuthenticatedSearchAPIForContentPage(t *testing.T) {
-	requests := 0
-	ctx := WithWebObserver(context.Background(), func(WebAttempt) { requests++ })
-	_, err := webFetch(ctx, json.RawMessage(`{"url":"https://api.deepseek.com/v1/tools/search"}`))
-	var web *WebError
-	if !errors.As(err, &web) || web.Code != "authenticated_service_endpoint" || requests != 0 || !strings.Contains(FailureDescription(err), "web_search") {
-		t.Fatal("service URL was fetched as a public page", err, requests)
-	}
-	if !strings.Contains(FailureDescription(&WebError{Code: "http_status", Status: 401}), "身份认证") {
-		t.Fatal("authentication failure was mislabeled as a search/network outage")
-	}
-}
 
 func TestPublicGETRecoveryIsBoundedAndReportsSafeStages(t *testing.T) {
 	for _, failure := range []error{io.ErrUnexpectedEOF, &WebError{Code: "http_status", Status: 503, Stage: "http_status"}} {
@@ -60,7 +46,7 @@ func TestPublicGETRecoveryIsBoundedAndReportsSafeStages(t *testing.T) {
 	}
 }
 
-func TestPublicGETRetryWaitCancellationAndCatalogWaitDoNotHang(t *testing.T) {
+func TestPublicGETRetryWaitCancellationDoesNotHang(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	calls := 0
 	_, _, _, _, err := recoverPublicRead(ctx, func(context.Context) ([]byte, string, string, rangeHeaders, error) {
@@ -70,25 +56,5 @@ func TestPublicGETRetryWaitCancellationAndCatalogWaitDoNotHang(t *testing.T) {
 	var web *WebError
 	if calls != 1 || !errors.As(err, &web) || web.Code != "request_cancelled" || web.Stage != "retry_wait" {
 		t.Fatal(calls, err)
-	}
-	musicCatalogCache.Lock()
-	oldBody, oldGenres, oldAt, oldLoading := musicCatalogCache.Body, musicCatalogCache.Genres, musicCatalogCache.At, musicCatalogCache.Loading
-	musicCatalogCache.Body = nil
-	musicCatalogCache.Loading = make(chan struct{})
-	musicCatalogCache.Unlock()
-	defer func() {
-		musicCatalogCache.Lock()
-		musicCatalogCache.Body = oldBody
-		musicCatalogCache.Genres = oldGenres
-		musicCatalogCache.At = oldAt
-		musicCatalogCache.Loading = oldLoading
-		musicCatalogCache.Unlock()
-	}()
-	ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	_, err = incompetechAudio(ctx, "Happy Alley")
-	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
-		t.Fatal("catalog wait ignored caller cancellation", err)
 	}
 }

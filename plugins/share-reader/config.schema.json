@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "yuanbao_cookie": {
+      "type": "string",
+      "title": "元宝视频号解析凭据",
+      "x-secret": true,
+      "x-host-only": true,
+      "maxLength": 16384,
+      "description": "仅宿主持有，发送到清单中指定的对应平台接口；不交给工具进程。"
+    },
+    "assistant_cookie": {
+      "type": "string",
+      "title": "视频号助手凭据",
+      "x-secret": true,
+      "x-host-only": true,
+      "maxLength": 16384,
+      "description": "仅宿主持有，发送到清单中指定的对应平台接口；不交给工具进程。"
+    },
+    "object_bridge_url": {
+      "type": "string",
+      "title": "视频号本地对象桥接地址",
+      "maxLength": 512,
+      "description": "可选。管理员配置的本机环回 HTTP 服务地址；宿主仅接受合法环回端点，并通过受控 channels_bridge 回调调用。该地址不是凭据，工具进程不会直接请求它。"
+    }
+  },
+  "additionalProperties": false
+}

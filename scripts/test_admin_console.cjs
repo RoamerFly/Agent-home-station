@@ -47,7 +47,7 @@ entries.push({id:'sys1',time:at(0),event:'bot_starting',category:'system'},{id:'
   entries.push({...entries[0],id:'new-1',message_id:'new-message',time:at(500),content:'新的测试消息'});
   await page.evaluate(()=>window.dispatchEvent(new Event('wechat-admin:logs-refresh')));await page.locator('#log-new').waitFor({state:'visible'});
   assert.equal(await pane.evaluate(el=>el.scrollTop),before,'poll moved scroll');
-  await page.locator('#log-new').click();assert(Math.abs(await pane.evaluate(el=>el.scrollTop)-before)<130,'load did not preserve reading anchor');
+  await page.locator('#sidebar-refresh').click();assert(Math.abs(await pane.evaluate(el=>el.scrollTop)-before)<130,'load did not preserve reading anchor');
   assert.equal(await page.locator('.round-step').count(),0,'closed dialogs leaked steps into the list');
   await page.locator('#log-search').fill('workspace_read');await page.waitForTimeout(200);assert.equal(await page.locator('#log-count').textContent(),'90 个执行回合');
   await page.locator('#log-search').fill('');await page.waitForTimeout(200);

@@ -23,7 +23,7 @@ func (w *Worker) publishTaskDelivery(trace string) {
 	}
 	var input companion.Input
 	result := TaskDelivery{Trace: trace, State: "waiting_delivery"}
-	failed, unknown, pendingCaption := false, false, false
+	failed, unknown, checking, pendingCaption := false, false, false, false
 	for _, d := range w.runtime.Media {
 		if d.Trace != trace || d.Input.TaskID == "" {
 			continue
@@ -35,6 +35,7 @@ func (w *Worker) publishTaskDelivery(trace string) {
 		}
 		failed = failed || d.State == "stopped" || d.UserCancelled
 		unknown = unknown || d.State == "needs_review"
+		checking = checking || d.State == "checking_receipt"
 		if d.State == "waiting" && (d.Status.State == "needs_review" || d.Status.State == "unknown") && d.Checks >= 2 {
 			unknown = true
 			result.PendingJob, result.FailureReason = d.ID, d.Status.Reason
@@ -75,6 +76,8 @@ func (w *Worker) publishTaskDelivery(trace string) {
 	switch {
 	case unknown:
 		result.State = "needs_review"
+	case checking:
+		result.State = "checking_receipt"
 	case failed && result.Accepted > 0:
 		result.State = "partial_failed"
 	case failed:

@@ -10,11 +10,14 @@
 
 - [能力和验收边界](guide/FEATURES.md)
 - [大肥鱼：朋友式人设、好友私聊与成员提醒](guide/friendly-persona-friends-reminders.md)
-- [API / MCP 插件配置与开发](guide/PLUGINS.md)
+- [API / MCP 工具配置与开发](guide/PLUGINS.md)
 - [使用大肥鱼](guide/USER-GUIDE.md)
 
 ## Agent运行与权限
 
+- [大肥鱼长期成长阶梯计划与实施进度](design/大肥鱼长期成长阶梯计划.md)
+- [Agent-home-station 应用接入与项目工具规范](design/应用接入与项目工具规范.md)
+- [账号独立 Agent、受管工作区与跨会话附件](agent/managed-workspaces.md)
 - [离线未读汇总与任务收尾](agent/unread-conversations-and-task-history.md)
 - [上下文传递与歌曲策略](agent/context-and-song-policy.md)
 
@@ -75,3 +78,5 @@
 
 - [QQ／微信 AI Agent 自主网上冲浪：多源内容发现、兴趣漫游与智能分享方案](design/QQ微信_Agent自主冲浪多源探索与内容分享方案.md)
 - [QQ／微信 AI 真人式聊天：多段消息与自主连续发言实现机制](design/QQ微信_AI真人多段消息与自主发言机制.md)
+
+- [跨平台运行与镜像构建方案](../镜像构建方案.md)：当前本机优先、连接器/工具拆分、新机环境与后续镜像更新。

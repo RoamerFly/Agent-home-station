@@ -1,0 +1,126 @@
+"""Offline contract tests. No models, networks, WeChat or real user files."""
+import json
+import base64
+import binascii
+from pathlib import Path
+import sys
+import zlib
+
+sys.dont_write_bytecode = True  # Keep the signed package free of generated modules.
+import tempfile
+import unittest
+from unittest.mock import patch
+import zipfile
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "runtime"))
+import document_logic as logic
+import main
+from reportlab_image import EmbeddedImageError, decode_png
+
+
+class DocumentWorkshopTests(unittest.TestCase):
+    def fixture(self):
+        return json.loads((ROOT / "tests" / "fixtures" / "layout.json").read_text(encoding="utf8"))
+
+    def test_pure_png_decoder_reads_rgb_without_pillow(self):
+        def chunk(kind, value):
+            return len(value).to_bytes(4, "big") + kind + value + binascii.crc32(kind + value).to_bytes(4, "big")
+
+        # 2×1 RGB PNG, filter=0, written with stdlib only.
+        png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", (2).to_bytes(4, "big") + (1).to_bytes(4, "big") + b"\x08\x02\x00\x00\x00")
+               + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00\x00\xff\x00")) + chunk(b"IEND", b""))
+        image = decode_png(png)
+        self.assertEqual((image["width"], image["height"], image["mode"]), (2, 1, "RGB"))
+        self.assertEqual(image["data"], b"\xff\x00\x00\x00\xff\x00")
+        with self.assertRaises(EmbeddedImageError):
+            decode_png(b"not an image")
+
+    def test_reconstruct_is_editable_docx_and_preserves_text_and_table(self):
+        with tempfile.TemporaryDirectory() as raw:
+            product = logic.reconstruct(self.fixture(), Path(raw), "notice.docx", "文档验收")
+            path = Path(product["path"])
+            self.assertTrue(zipfile.is_zipfile(path))
+            self.assertIn("word/document.xml", zipfile.ZipFile(path).namelist())
+            text = logic.text_content(path)
+            self.assertIn("合成课程通知", text)
+            self.assertIn("2026-11-03", text)
+            verified = logic.basic_verify(path, ["课程通知", "文档转换验收"])
+            self.assertTrue(verified["ok"])
+            self.assertTrue(verified["editable"])
+
+    def test_unknown_or_scan_pdf_is_not_claimed_as_readable(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "scan.pdf"
+            path.write_bytes(b"%PDF-1.4\n1 0 obj<</Type /Page>>endobj\n%%EOF\n")
+            view = logic.inspect(path, "application/pdf")
+            self.assertTrue(view["scanned_or_no_extractable_text"])
+            self.assertTrue(view["needs_clarification"])
+            self.assertIn("document_runtime_inspection_required", view["quality_failures"])
+
+    def test_docx_macro_and_external_relationships_are_rejected_before_text_read(self):
+        with tempfile.TemporaryDirectory() as raw:
+            for name, member, content, code in (
+                ("macro.docx", "word/vbaProject.bin", b"not-code", "document_macro_not_allowed"),
+                ("external.docx", "word/_rels/document.xml.rels", b'<Relationships><Relationship TargetMode="External" Target="https://example.invalid"/></Relationships>', "document_external_link_not_allowed"),
+            ):
+                path = Path(raw) / name
+                with zipfile.ZipFile(path, "w") as archive:
+                    archive.writestr("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>')
+                    archive.writestr(member, content)
+                with self.assertRaises(logic.DocumentError) as error:
+                    logic.text_content(path)
+                self.assertEqual(str(error.exception), code)
+
+    def test_mcp_refuses_raw_path_and_only_accepts_host_bound_artifact(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            product = logic.reconstruct(self.fixture(), root, "allowed.docx")
+            meta = {"wechat/context": {"account": "a", "thread": "t", "requester": "u", "purpose": "document", "request_key": "k"},
+                    "wechat/document": {"input_root": str(root), "output_root": str(root / "output"), "output_dir": str(root / "output"),
+                                         "inputs": [{"artifact_id": "asset-safe", "path": product["path"], "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}]}}
+            with self.assertRaises(logic.DocumentError) as blocked:
+                main.call("document.verify", {"artifact": {"path": product["path"]}}, meta)
+            self.assertEqual(str(blocked.exception), "document_artifact_required")
+            good = main.call("document.verify", {"artifact_id": "asset-safe", "expected_text": ["合成课程通知"]}, meta)
+            self.assertTrue(good["ok"])
+            made = main.call("document.reconstruct", {"layout": self.fixture(), "filename": "new.docx"}, meta)
+            self.assertTrue(made["ok"])
+            self.assertEqual(made["outputs"][0]["role"], "editable_source")
+
+    def test_layout_rejects_unknown_blocks(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaises(logic.DocumentError) as error:
+                logic.reconstruct({"blocks": [{"kind": "shell", "text": "ignored"}]}, Path(raw))
+            self.assertEqual(str(error.exception), "document_layout_invalid")
+
+    def test_export_reports_converter_unavailable_instead_of_fabricating_pdf(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            product = logic.reconstruct(self.fixture(), root, "source.docx")
+            meta = {"wechat/context": {"account": "a", "thread": "t", "requester": "u", "purpose": "document", "request_key": "k"},
+                    "wechat/document": {"input_root": str(root), "output_root": str(root / "output"), "output_dir": str(root / "output"),
+                                         "inputs": [{"artifact_id": "asset-docx", "path": product["path"], "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}]}}
+            # The normal runtime may be provisioned on an integration machine.
+            # Isolate this contract: an unavailable converter must surface its
+            # actual failure and never manufacture a PDF-shaped result.
+            with patch.object(main, "_runtime", return_value={"ok": False, "code": "document_converter_unavailable"}):
+                with self.assertRaises(logic.DocumentError) as error:
+                    main.call("document.export_pdf", {"artifact": {"artifact_id": "asset-docx"}}, meta)
+            self.assertEqual(str(error.exception), "document_converter_unavailable")
+
+    def test_reconstruct_embeds_authorized_image_as_docx_media(self):
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL1cQAAAABJRU5ErkJggg==")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            image = root / "picture.png"
+            image.write_bytes(png)
+            layout = {"blocks": [{"kind": "paragraph", "text": "插图如下"}, {"kind": "image", "image_index": 0, "caption": "合成插图"}]}
+            product = logic.reconstruct(layout, root, images=[image])
+            with zipfile.ZipFile(product["path"]) as archive:
+                self.assertIn("word/media/image1.png", archive.namelist())
+                self.assertIn("word/_rels/document.xml.rels", archive.namelist())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,7 +41,7 @@ func TestHelperMCPProcess(t *testing.T) {
 
 func TestStdioListAndCallRespectAllowlist(t *testing.T) {
 	cfg := ServerConfig{ID: "local", Transport: "stdio", Command: os.Args[0], Args: []string{"-test.run=TestHelperMCPProcess"}, Env: map[string]string{"GO_WANT_MCP_HELPER": "1"}, Enabled: true, Tools: []string{"echo"}}
-	h, err := New([]ServerConfig{cfg})
+	h, err := New([]ServerConfig{cfg}, WithStdioLauncher(syntheticStdioLauncher))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +49,7 @@ func TestStdioListAndCallRespectAllowlist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hasTool(ts, "web_search") || !hasTool(ts, "local__echo") || hasTool(ts, "local__hidden") {
+	if hasTool(ts, "web_search") || !hasTool(ts, "local__echo") || hasTool(ts, "local__hidden") {
 		t.Fatalf("unexpected tools: %#v", ts)
 	}
 	out, err := h.Call(context.Background(), "local__echo", json.RawMessage(`{"v":1}`))
@@ -128,26 +127,12 @@ func TestPublicFetchBlocksLoopbackAndCredentials(t *testing.T) {
 	for _, raw := range []string{"http://127.0.0.1/", "http://user:pass@example.com/", "file:///etc/passwd", "https://example.com/#fragment"} {
 		if err := validPublicURL(raw); err == nil {
 			if strings.Contains(raw, "127.0.0.1") {
-				_, _, err = publicGet(context.Background(), raw)
+				_, _, _, err = publicRead(context.Background(), raw, maxBody)
 			}
 			if err == nil {
 				t.Fatalf("accepted unsafe URL %s", raw)
 			}
 		}
-	}
-}
-
-func TestWebFetchStripsMarkupAndCapsOutput(t *testing.T) {
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "<html><title>Page title</title><style>nope</style><script>bad()</script><body>Hello <b>world</b></body></html>")
-	}))
-	defer s.Close()
-	// httptest is loopback, deliberately rejected by the production safe dialer.
-	if _, err := webFetch(context.Background(), json.RawMessage(`{"url":"`+s.URL+`"}`)); err == nil {
-		t.Fatal("loopback fetch must be rejected")
-	}
-	if got := cleanText("a &amp; <b>b</b>"); got != "a & <b>b</b>" {
-		t.Fatal(got)
 	}
 }
 
@@ -158,29 +143,12 @@ func TestExtractHTMLTextStripsActiveContent(t *testing.T) {
 	}
 }
 
-func TestWebFetchURLLimitReturnsError(t *testing.T) {
-	_, err := webFetch(context.Background(), json.RawMessage(`{"url":"https://example.com/`+strings.Repeat("x", 2049)+`"}`))
-	if err == nil {
-		t.Fatal("oversize URL accepted")
-	}
-}
-
 func TestPublicMediaLimitIsBounded(t *testing.T) {
 	if _, _, err := GetPublicMedia(context.Background(), "https://example.com/", 0); err == nil {
 		t.Fatal("zero media cap accepted")
 	}
-	if _, _, err := GetPublicMedia(context.Background(), "https://example.com/", 65<<20); err == nil {
+	if _, _, err := GetPublicMedia(context.Background(), "https://example.com/", MaxPublicMediaBytes+1); err == nil {
 		t.Fatal("large media cap accepted")
-	}
-}
-
-func TestLiveBingSearchWhenEnabled(t *testing.T) {
-	if os.Getenv("LIVE_WEB_TEST") != "1" {
-		t.Skip("set LIVE_WEB_TEST=1 to exercise the authorized public web search")
-	}
-	out, err := webSearch(context.Background(), json.RawMessage(`{"query":"Model Context Protocol"}`))
-	if err != nil || !strings.Contains(out, "http") {
-		t.Fatalf("search = %q, %v", out, err)
 	}
 }
 

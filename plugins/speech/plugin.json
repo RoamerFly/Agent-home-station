@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "id": "speech",
+  "name": "语音生成",
+  "version": "0.3.1",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": [
+    "windows-amd64",
+    "linux-amd64"
+  ],
+  "runtime": {
+    "transport": "mcp-stdio",
+    "entrypoint": "runtime/main.py"
+  },
+  "permissions": [
+    "artifact.read",
+    "model.invoke"
+  ],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "e60b2397feb44406d1f0947394d086867d3eae925bc69b2dac3984eb8e50264e",
+    "CHANGELOG.md": "ca6419b2c485d681c96f6d019a8bb7ecb34e4b27e12f69d8761e7dc3a29d1a35",
+    "config.schema.json": "bd72c9a2eab30357b83e26bfd39ab679103f46285fbd23e0cf50eb2ad8ad55a5",
+    "MIGRATION.md": "31d9e07df23eb44f48e629c4f50eb16f3d568863eb4bc3fb650b7e6017bf21e4",
+    "PERMISSIONS.md": "cbec88956a9eaa9b9793829f720554882bebecf26e04377d55c3f941532292d3",
+    "README.md": "f92b579286b1c2999b31290919d7c7b1fb92085cda17d4655aba9d222f7d88d3",
+    "runtime/cloud_tts.py": "821318e57932d2c75c7368ecdec44149b0684beb2e7175b2ea4ad39de1cb2e52",
+    "runtime/enroll.py": "561a87e0faf22f4f26d5d64b865797afa5485ef026c4ea2392f680e4f1ef5e1c",
+    "runtime/gpt_sovits.py": "d9fa7f1449c225f247abc982d66f3ece2ec2b18c93540d1a03c3630a74266e6d",
+    "runtime/main.py": "efd243ae4e4ee5fa25c87ebe1b0aeef424fd40b24c6fac574b4d1ebd05bda1ad",
+    "runtime/named_voice.py": "5a53e87be20fa4ae0cbaea38eb7c89dce86ff5585530fd4e559923ebfca23555",
+    "runtime/provision_enrollment_v2.py": "8cf2406ca0ee9c2e2d2d455d6cb79a175bf30e37e3672ca0113529bb8bf5d85c",
+    "runtime/README.md": "3ade290adceec09b1b22d20f34c494b0c80fe39c12da86ae1ad7c7573e70d9ca",
+    "base_models/enrollment-v2.json": "3602c939d4c742fe7c0674bdb7be8a093e36171ca4cd99575e72dc2a150944ec",
+    "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
+    "tests/test_cloud_tts.py": "6c17889c9652060c9ebe3e1dcb993b49b9d96502cddc066b59901241bad9a8f3",
+    "tests/test_named_voice.py": "1aef6669ef2a5a4bda43c664aa71c837ab1b6a75052e16ec57d6220a77f22fa8",
+    "tests/test_enroll.py": "26574d299d3ebb9f8749bedb28acea478394cf2b4f1ce2f6bd685d4dacaac493",
+    "ui.schema.json": "897a018b01ecd8ec11d6c9b8ac02e067c442916d061410ffb7459658ff338300",
+    "dev/legacy-sdk/client.go": "4dcd019791ccda44ca685a61b9471ff5295d9d242bac849d2eee77b88ad42192",
+    "dev/legacy-sdk/client_test.go": "9329dfb6bfc5809b113633fa724430836447068d43ae1c2008593cbec4fa787a",
+    "dev/legacy-sdk/README.md": "766fee63d74a9ad7172891bf63469f46cffc1af3e534760c68641a14f5fedff6",
+    "dev/legacy-sdk/voice_clone.go": "342ef66859d72d460a464a4d181f1c52232dba37cd0936189fcf892f7e2c0ea6",
+    "dev/legacy-sdk/voice_clone_test.go": "6dbe8b53eb7fc33776d11957766bbbe435f2670de5649830822c6153fc73a452",
+    "dev/legacy-sdk/voice_design.go": "fc46e408785dd620f4726ea46d42c4b6cb1472b5c3a0abec47831f36b25c058b",
+    "dev/legacy-sdk/voice_design_test.go": "89e626620580c6670cc9d348d8658ff743c97573e5ae4379c1d8c961f61dd1f0",
+    "dev/legacy-sdk/audition/live_voice_clone_test.go.in": "d13822f6f5224d5ed4de47125134f897aaeb410202a83e79bdb8f9edfa33be00",
+    "dev/legacy-sdk/audition/live_voice_design_test.go.in": "4c47659adc3c7d3a231b9b090f0eff2a8f927dee1a07774c51824a91a84ac7a0",
+    "dev/legacy-sdk/audition/run_audition.py": "8fb02a8c892fd462cb0372192c3a35e5e19471c441ee18d5c6caf83ab28225d3",
+    "runtime/training-requirements.txt": "00693e9a87adc67be979af91033d1d1257b8c0999e94797c549a8d1bdea79f02",
+    "runtime/training_shims/gradio/__init__.py": "6cb0e611f9764a6f93b0524a6f70d7db322489eb51174ef883d308604d21362a"
+  },
+  "http_routes": [
+    {
+      "id": "synthesize",
+      "endpoint_config": "tts_endpoint",
+      "permission": "model.invoke",
+      "capabilities": [
+        "speech.synthesize"
+      ],
+      "credential": "tts_key",
+      "credential_header": "Authorization",
+      "credential_prefix": "Bearer ",
+      "optional": true
+    }
+  ]
+}

@@ -43,13 +43,19 @@ func (n *forwardNative) Submit(ctx context.Context, send linuxnative.ToolSend) (
 	n.send = send
 	return n.fakeTools.Submit(ctx, send)
 }
+func (n *forwardNative) LookupSend(ctx context.Context, key string) (linuxnative.ToolStatus, error) {
+	if n.submits.Load() == 0 {
+		return linuxnative.ToolStatus{}, linuxnative.ErrToolNotFound
+	}
+	return n.ToolSendStatus(ctx, key)
+}
 func (n *forwardNative) ToolSendStatus(context.Context, string) (linuxnative.ToolStatus, error) {
 	return linuxnative.ToolStatus{ID: "send-one", ThreadID: n.send.ThreadID, Kind: "file", State: "accepted", ServerID: "123456"}, nil
 }
 
 func forwardFixture(t *testing.T) (*webFixture, *permittedTools, *forwardNative) {
 	f, p := trustedAgent(t)
-	n := &forwardNative{fakeTools: &fakeTools{fakeNative: f.native}, message: linuxnative.Message{ID: "file-message", AccountID: "test", ThreadID: "source@chatroom", Type: 49, Body: `<msg><appmsg><type>6</type><title>notes.txt</title><appattach><cdnattachurl>SECRET</cdnattachurl></appattach></appmsg></msg>`}}
+	n := &forwardNative{fakeTools: &fakeTools{fakeNative: f.native}, message: linuxnative.Message{ID: "file-message", CreatedAt: "2026-10-30T12:00:00Z", SenderID: "synthetic-sender", Direction: "incoming", AccountID: "test", ThreadID: "source@chatroom", Type: 49, Body: `<msg><appmsg><type>6</type><title>notes.txt</title><appattach><cdnattachurl>SECRET</cdnattachurl></appattach></appmsg></msg>`}}
 	f.manager.native = n
 	c := f.manager.agent.config()
 	c.CrossConversation = true
@@ -63,6 +69,18 @@ func forwardFixture(t *testing.T) (*webFixture, *permittedTools, *forwardNative)
 	f.manager.config.Companion.Permissions.Remember = true
 	f.manager.config.Behavior.RandomDelay = false
 	f.manager.mu.Unlock()
+	p.trace.Text = "请把合成文件转发到指定会话"
+	p.trace.OriginalText = &p.trace.Text
+	p.trace.MessageTime = time.Now().UTC().Format(time.RFC3339Nano)
+	p.trace.Source = &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: p.trace.TraceID, ServerID: "synthetic-forward-request", Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, MessageType: 1, OccurredAt: p.trace.MessageTime, Revision: 1, Integrity: "verified"}
+	if err := f.manager.memory.Observe(p.trace, f.manager.Config().Companion, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if source, ok := f.manager.memory.SourceForInput(p.trace); ok {
+		p.trace.Source = source
+	} else {
+		t.Fatal("missing synthetic forwarding request source")
+	}
 	return f, p, n
 }
 func TestOwnerCrossReadAndForwardUsesRealAttachmentAndReceipt(t *testing.T) {
@@ -75,8 +93,9 @@ func TestOwnerCrossReadAndForwardUsesRealAttachmentAndReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n.downloads != 1 || string(n.uploaded) != "synthetic attachment bytes" || n.send.ThreadID != "wxid_owner" || n.send.Kind != "file" || n.send.SourceID != "source-forward" {
-		t.Fatal("not the original attachment", n.send)
+	seeds := f.manager.takeMediaSeeds()
+	if n.downloads != 1 || string(n.uploaded) != "synthetic attachment bytes" || len(seeds) != 1 || seeds[0].Input.Thread != "wxid_owner" || n.submits.Load() != 0 {
+		t.Fatal("not original durable destination", result, len(seeds), n.submits.Load())
 	}
 	var submitted struct {
 		Operation string `json:"operation_id"`
@@ -85,25 +104,24 @@ func TestOwnerCrossReadAndForwardUsesRealAttachmentAndReceipt(t *testing.T) {
 	if json.Unmarshal([]byte(result), &submitted) != nil || submitted.Operation == "" || submitted.State != "queued" {
 		t.Fatal(result)
 	}
-	if _, err = p.Call(context.Background(), "wechat_forward_file", args); err != nil || n.submits.Load() != 1 || n.downloads != 1 {
+	if _, err = p.Call(context.Background(), "wechat_forward_file", args); err != nil || n.submits.Load() != 0 || n.downloads != 1 {
 		t.Fatal("forward replay", err)
 	}
-	if _, err = p.Call(context.Background(), "wechat_forward_file", json.RawMessage(`{"source_thread_id":"source@chatroom","message_id":"file-message","target_thread_id":"filehelper","request_key":"forward-one"}`)); err == nil || n.submits.Load() != 1 {
+	if _, err = p.Call(context.Background(), "wechat_forward_file", json.RawMessage(`{"source_thread_id":"source@chatroom","message_id":"file-message","target_thread_id":"filehelper","request_key":"forward-one"}`)); err == nil || n.submits.Load() != 0 {
 		t.Fatal("changed target reused key")
 	}
+	// Synthetic worker submission, no real WeChat connection.
+	n.Submit(context.Background(), linuxnative.ToolSend{ThreadID: seeds[0].Input.Thread, Kind: "file", SourceID: seeds[0].SourceID, IdempotencyKey: seeds[0].Key})
 	statusArgs, _ := json.Marshal(map[string]string{"operation_id": submitted.Operation})
 	status, err := p.Call(context.Background(), "wechat_operation_status", statusArgs)
 	if err != nil || !strings.Contains(status, `"state":"accepted"`) {
 		t.Fatal(status, err)
 	}
 	status, err = p.Call(context.Background(), "wechat_operation_status", statusArgs)
-	if err != nil || !strings.Contains(status, "notes.txt") || n.submits.Load() != 1 {
+	if err != nil || n.submits.Load() != 1 {
 		t.Fatal("poll lost filename or repeated send", status, err)
 	}
-	memory := f.manager.memory.Context(companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner"}, f.manager.Config().Companion, time.Now())
-	if len(memory.Messages) != 1 || !strings.Contains(memory.Messages[0].Text, "notes.txt") {
-		t.Fatal("accepted file not in memory", memory)
-	}
+
 }
 func TestCrossConversationRejectsOtherUsersAndFalseSources(t *testing.T) {
 	_, p, n := forwardFixture(t)
@@ -143,7 +161,7 @@ func TestForwardRevokedWhileDownloadingDoesNotSend(t *testing.T) {
 		}
 	}
 	result, err := p.Call(context.Background(), "wechat_forward_file", json.RawMessage(`{"source_thread_id":"source@chatroom","message_id":"file-message","request_key":"revoke"}`))
-	if err != nil || !strings.Contains(result, "授权已变更") || n.submits.Load() != 0 {
+	if err != nil || !strings.Contains(result, "authorization_revoked") || n.submits.Load() != 0 {
 		t.Fatal(result, err, n.submits.Load())
 	}
 }

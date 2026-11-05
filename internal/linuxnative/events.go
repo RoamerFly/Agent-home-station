@@ -29,7 +29,17 @@ type EventPage struct {
 	NextCursor string  `json:"nextCursor"`
 }
 
+type Attachment struct {
+	Kind      string `json:"kind"`
+	Filename  string `json:"filename"`
+	Bytes     int64  `json:"bytes,omitempty"`
+	State     string `json:"state"`
+	MessageID string `json:"messageId,omitempty"`
+}
+
 type Message struct {
+	ResolvedQuote  *Message        `json:"-"`
+	Attachments    []Attachment    `json:"media,omitempty"`
 	ReplyToSelf    bool            `json:"-"`
 	Quote          *QuoteReference `json:"quote,omitempty"`
 	AppMessageType *int            `json:"appMessageType,omitempty"`
@@ -44,8 +54,9 @@ type Message struct {
 	Body           string          `json:"body"`
 	CreatedAt      string          `json:"createdAt"`
 	Mentions       struct {
-		State string `json:"state"`
-		Self  *bool  `json:"self"`
+		State string   `json:"state"`
+		Self  *bool    `json:"self"`
+		IDs   []string `json:"ids,omitempty"`
 	} `json:"mentions"`
 }
 type QuoteReference struct {

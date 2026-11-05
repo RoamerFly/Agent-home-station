@@ -22,6 +22,9 @@ func TestSecondPersonQuestionsRequestJudgementWithoutInventingMentions(t *testin
 	c.Permissions.ObserveGroups = true
 	c.Permissions.AutonomousGroups = true
 	store, _ := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	model := &fakeModel{answer: `{"action":"silent","messages":[]}`}
 	e, err := New(c, store, model, "test")
 	if err != nil {
@@ -54,6 +57,9 @@ func TestEveryMessageJudgedWhileSendBudgetPermissionsAndQuietHoursRemain(t *test
 	c.Permissions.AutonomousGroups = true
 	c.MaxRepliesPerHour = 1
 	store, _ := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	model := &fakeModel{answer: `{"action":"silent","messages":[]}`}
 	e, _ := New(c, store, model, "test")
 	input := Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Mode: "social", Text: "你目前有哪些工具", ReviewRequired: true}

@@ -23,6 +23,8 @@ type Config struct {
 	BaseURL, KeyFile, Model string
 	SystemPrompt            string
 	MaxTokens               int
+	ThinkingEnabled         *bool
+	ReasoningEffort         string
 	ToolMaxTokens           int
 	Compatible              bool
 	OnUsage                 func(Usage)
@@ -33,6 +35,11 @@ type Client struct {
 	maxTokens            int
 	toolMaxTokens        int
 	compatible           bool
+	responseLimitBytes   int64
+	thinkingConfigured   bool
+	thinkingEnabled      bool
+	reasoningEffort      string
+	rejectToolCalls      bool
 	http                 *http.Client
 	onUsage              func(Usage)
 }
@@ -53,11 +60,17 @@ func New(config Config) (*Client, error) {
 	if config.ToolMaxTokens == 0 {
 		config.ToolMaxTokens = config.MaxTokens
 	}
-	if config.ToolMaxTokens < 64 || config.ToolMaxTokens > 4096 {
+	if config.ToolMaxTokens < 64 || config.ToolMaxTokens > 393216 {
 		return nil, errors.New("invalid tool output limit")
 	}
-	if len(config.SystemPrompt) > 16384 || !utf8.ValidString(config.SystemPrompt) || config.MaxTokens < 64 || config.MaxTokens > 4096 {
+	if len(config.SystemPrompt) > 16384 || !utf8.ValidString(config.SystemPrompt) || config.MaxTokens < 64 || config.MaxTokens > 393216 {
 		return nil, errors.New("invalid model role or output limit")
+	}
+	if config.ReasoningEffort == "" {
+		config.ReasoningEffort = "low"
+	}
+	if config.ReasoningEffort != "low" && config.ReasoningEffort != "high" && config.ReasoningEffort != "max" {
+		return nil, errors.New("invalid reasoning effort")
 	}
 	u, err := url.Parse(config.BaseURL)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -77,7 +90,8 @@ func New(config Config) (*Client, error) {
 		return nil, errors.New("invalid DeepSeek key file")
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/chat/completions"
-	return &Client{endpoint: u.String(), key: key, model: config.Model, systemPrompt: config.SystemPrompt, maxTokens: config.MaxTokens, toolMaxTokens: config.ToolMaxTokens, compatible: config.Compatible, onUsage: config.OnUsage, http: &http.Client{
+	enabled := config.ThinkingEnabled != nil && *config.ThinkingEnabled
+	return &Client{thinkingConfigured: config.ThinkingEnabled != nil, thinkingEnabled: enabled, reasoningEffort: config.ReasoningEffort, endpoint: u.String(), key: key, model: config.Model, systemPrompt: config.SystemPrompt, maxTokens: config.MaxTokens, toolMaxTokens: config.ToolMaxTokens, compatible: config.Compatible, onUsage: config.OnUsage, http: &http.Client{
 		Timeout:       90 * time.Second,
 		Transport:     &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 8, MaxIdleConnsPerHost: 2},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") },
@@ -100,17 +114,48 @@ func (c *Client) Chat(ctx context.Context, system string, messages []map[string]
 // ChatCompression has its own output budget; a short conversational reply
 // limit must not truncate the structured memory summary.
 func (c *Client) ChatCompression(ctx context.Context, system string, messages []map[string]string) (string, error) {
+	if ctx.Value(purposeKey{}) == nil {
+		ctx = WithPurpose(ctx, "compression")
+	}
 	copy := *c
 	copy.maxTokens = 4096
-	answer, err := copy.chat(ctx, system, messages, true)
+	structured := true
+	answer, err := copy.chat(ctx, system, messages, structured)
 	if d, ok := ErrorDiagnostics(err); ok && d.Code == "model_invalid_parameters" && c.compatible {
 		// Some compatible services do not implement response_format.
-		return copy.chat(ctx, system, messages, false)
+		structured = false
+		answer, err = copy.chat(ctx, system, messages, structured)
+	}
+	if d, ok := ErrorDiagnostics(err); ok && d.Code == "model_output_token_limit" && ctx.Err() == nil {
+		copy.maxTokens = 8192
+		answer, retryErr := copy.chat(ctx, system, messages, structured)
+		var failure *RequestError
+		if errors.As(retryErr, &failure) {
+			failure.Attempts += d.Attempts
+			failure.MaxAttempts += d.Attempts
+			failure.DurationMS += d.DurationMS
+		}
+		return answer, retryErr
 	}
 	return answer, err
 }
 
 func (c *Client) chat(ctx context.Context, system string, messages []map[string]string, structured bool) (string, error) {
+	return c.chatWithGrounding(ctx, system, messages, structured, nil)
+}
+
+func (c *Client) chatWithGrounding(ctx context.Context, system string, messages []map[string]string, structured bool, grounding *GroundingOptions) (string, error) {
+	messageLimit, totalLimit := 96<<10, 192<<10
+	if grounding != nil {
+		// Structured evidence is one message, unlike paginated tool history.
+		// This is a transport guard, not a claim about any model's token window.
+		messageLimit, totalLimit = 1<<20, 2<<20
+	}
+	sizeFailure := func(size, limit int) error {
+		err := requestFailure("model_input_transport_limit", "input_validation", 0, false)
+		err.InputBytes, err.InputByteLimit = size, limit
+		return err
+	}
 	if strings.TrimSpace(system) == "" || len(system) > 96<<10 || !utf8.ValidString(system) || len(messages) == 0 || len(messages) > 101 {
 		return "", errors.New("invalid conversation")
 	}
@@ -118,28 +163,40 @@ func (c *Client) chat(ctx context.Context, system string, messages []map[string]
 	total := len(system)
 	for _, message := range messages {
 		role, text := message["role"], message["content"]
-		if (role != "user" && role != "assistant") || text == "" || len(text) > 96<<10 || !utf8.ValidString(text) {
+		if (role != "user" && role != "assistant") || text == "" || !utf8.ValidString(text) {
 			return "", errors.New("invalid conversation turn")
+		}
+		if len(text) > messageLimit {
+			return "", sizeFailure(len(text), messageLimit)
 		}
 		total += len(text)
 		all = append(all, map[string]string{"role": role, "content": text})
 	}
-	if total > 192<<10 {
-		return "", errors.New("conversation exceeds input bound")
+	if total > totalLimit {
+		return "", sizeFailure(total, totalLimit)
 	}
 	input := struct {
-		Model          string              `json:"model"`
-		Messages       []map[string]string `json:"messages"`
-		Stream         bool                `json:"stream"`
-		MaxTokens      int                 `json:"max_tokens"`
-		Thinking       map[string]string   `json:"thinking,omitempty"`
-		ResponseFormat map[string]string   `json:"response_format,omitempty"`
-	}{c.model, all, false, c.maxTokens, nil, nil}
+		Model           string              `json:"model"`
+		Messages        []map[string]string `json:"messages"`
+		Stream          bool                `json:"stream"`
+		MaxTokens       int                 `json:"max_tokens"`
+		Thinking        map[string]string   `json:"thinking,omitempty"`
+		ReasoningEffort string              `json:"reasoning_effort,omitempty"`
+		ResponseFormat  map[string]string   `json:"response_format,omitempty"`
+	}{Model: c.model, Messages: all, MaxTokens: c.maxTokens}
 	if structured || strings.Contains(system, "【可自主使用的工具】") {
 		input.ResponseFormat = map[string]string{"type": "json_object"}
 	}
 	if !c.compatible {
 		input.Thinking = map[string]string{"type": "disabled"}
+		if c.thinkingEnabled {
+			input.Thinking["type"] = "enabled"
+			input.ReasoningEffort = c.reasoningEffort
+		}
+		if grounding != nil && !c.thinkingConfigured {
+			input.Thinking = map[string]string{"type": "enabled"}
+			input.ReasoningEffort = grounding.ReasoningEffort
+		}
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -147,11 +204,50 @@ func (c *Client) chat(ctx context.Context, system string, messages []map[string]
 	}
 	return c.request(ctx, body)
 }
-func (c *Client) requestOnce(ctx context.Context, body []byte) (string, *RequestError) {
+func (c *Client) requestOnce(ctx context.Context, body []byte) (answer string, failure *RequestError) {
 	usage := Usage{Time: time.Now().UTC()}
+	metadata := Diagnostics{}
 	defer func() {
+		if failure != nil {
+			failure.FinishReason, failure.ContentBytes, failure.JSONValid = metadata.FinishReason, metadata.ContentBytes, metadata.JSONValid
+			failure.FormatAttempt, _ = ctx.Value(groundingFormatAttemptKey{}).(int)
+			if failure.FormatAttempt != 0 {
+				failure.MaxFormatAttempts = 2
+			}
+		}
+		if c.rejectToolCalls {
+			metadata.Stage = "decode"
+			metadata.Attempts, _ = ctx.Value(requestAttemptKey{}).(int)
+			if metadata.Attempts == 0 {
+				metadata.Attempts = 1
+			}
+			metadata.MaxAttempts = 2
+			metadata.FormatAttempt, _ = ctx.Value(groundingFormatAttemptKey{}).(int)
+			metadata.MaxFormatAttempts = 2
+			metadata.DurationMS = time.Since(usage.Time).Milliseconds()
+			if failure != nil {
+				metadata.Code, metadata.Stage, metadata.Retryable = failure.Code, failure.Stage, failure.Retryable
+			} else if !metadata.JSONValid {
+				metadata.Code = "model_invalid_response"
+			}
+			observeRequest(ctx, "model_grounding_response", metadata)
+		}
+		usage.Model = c.model
+		usage.Purpose, _ = ctx.Value(purposeKey{}).(string)
+		if usage.Purpose == "" {
+			usage.Purpose = "conversation"
+		}
+		if observer, ok := ctx.Value(usageObserverKey{}).(func(Usage)); ok {
+			observer(usage)
+		}
 		if c.onUsage != nil {
 			c.onUsage(usage)
+		}
+	}()
+	var transientReasoning string
+	defer func() {
+		if failure == nil && !c.rejectToolCalls {
+			rememberThinking(ctx, answer, transientReasoning)
 		}
 	}()
 	var err error
@@ -170,18 +266,26 @@ func (c *Client) requestOnce(ctx context.Context, body []byte) (string, *Request
 		return "", transportFailure(ctx, err, "connection_or_headers")
 	}
 	defer response.Body.Close()
+	metadata.HTTPStatus = response.StatusCode
 	if response.StatusCode != http.StatusOK {
 		failure := statusFailure(response.StatusCode)
 		failure.retryAfter = retryAfter(response.Header.Get("Retry-After"), time.Now())
 		return "", failure
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, (256<<10)+1))
+	limit := c.responseLimitBytes
+	if limit == 0 {
+		limit = 256 << 10
+		if c.thinkingEnabled {
+			limit = 16 << 20
+		}
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
 		failure := transportFailure(ctx, err, "response_body")
 		failure.HTTPStatus = response.StatusCode
 		return "", failure
 	}
-	if len(data) > 256<<10 {
+	if int64(len(data)) > limit {
 		return "", requestFailure("model_response_too_large", "response_body", 200, false)
 	}
 	usage = parseUsage(data, usage.Time)
@@ -189,6 +293,7 @@ func (c *Client) requestOnce(ctx context.Context, body []byte) (string, *Request
 		Choices []struct {
 			Message struct {
 				Content   string `json:"content"`
+				Reasoning string `json:"reasoning_content"`
 				ToolCalls []struct {
 					Function struct {
 						Name      string `json:"name"`
@@ -203,6 +308,13 @@ func (c *Client) requestOnce(ctx context.Context, body []byte) (string, *Request
 		return "", requestFailure("model_invalid_response", "decode", 200, false)
 	}
 	choice := result.Choices[0]
+	transientReasoning = choice.Message.Reasoning
+	metadata.FinishReason = safeFinishReason(choice.FinishReason)
+	metadata.ContentBytes = len(choice.Message.Content)
+	metadata.JSONValid = json.Valid(bytes.TrimSpace([]byte(choice.Message.Content)))
+	if c.rejectToolCalls && (choice.FinishReason == "tool_calls" || len(choice.Message.ToolCalls) != 0) {
+		return "", requestFailure("model_invalid_response", "decode", 200, false)
+	}
 	if choice.FinishReason == "tool_calls" {
 		if len(choice.Message.ToolCalls) == 0 || len(choice.Message.ToolCalls) > 8 {
 			return "", requestFailure("model_tool_call_count_invalid", "decode", 200, false)
@@ -223,6 +335,9 @@ func (c *Client) requestOnce(ctx context.Context, body []byte) (string, *Request
 			}
 			out, _ := json.Marshal(value)
 			calls = append(calls, out)
+			if c.thinkingEnabled && len(choice.Message.ToolCalls) > 1 {
+				rememberThinking(ctx, string(out), transientReasoning)
+			}
 		}
 		if len(calls) == 1 {
 			return string(calls[0]), nil
@@ -242,9 +357,18 @@ func (c *Client) requestOnce(ctx context.Context, body []byte) (string, *Request
 	if choice.FinishReason != "stop" {
 		return "", requestFailure("model_response_incomplete", "decode", 200, false)
 	}
-	answer := strings.TrimSpace(result.Choices[0].Message.Content)
+	answer = strings.TrimSpace(result.Choices[0].Message.Content)
 	if answer == "" || !utf8.ValidString(answer) {
 		return "", requestFailure("model_response_empty", "decode", 200, answer == "")
 	}
 	return answer, nil
+}
+
+func safeFinishReason(reason string) string {
+	switch reason {
+	case "stop", "length", "content_filter", "tool_calls":
+		return reason
+	default:
+		return "unknown"
+	}
 }

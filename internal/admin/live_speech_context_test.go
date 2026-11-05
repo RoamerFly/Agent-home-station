@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"wechat-bot/internal/bailian"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
@@ -45,7 +44,10 @@ func TestLiveCompletedYuESongStagesOriginalFile(t *testing.T) {
 	job := evidence.Job
 	f := setup(t)
 	f.manager.config.Companion.Permissions.Remember = true
-	f.manager.speech, err = loadSpeech(filepath.Join(root, "admin"))
+	legacySpeechSource, err := loadSpeech(filepath.Join(root, "admin"))
+	if err == nil {
+		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechSource)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +117,9 @@ func TestLiveNativeFunctionsResolveRecentOriginalVideo(t *testing.T) {
 	cfg.Permissions.Remember = true
 	cfg.Permissions.SendFile = true
 	store, _ := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "test-room", Sender: "same-user", Mode: "direct", TraceID: "old", Text: "忠县高铁站什么时候运营"}
 	store.Observe(in, cfg, time.Now().Add(-2*time.Hour))
 	in.TraceID = "latest"
@@ -146,9 +151,11 @@ func TestLiveBailianSpeechRoundTrip(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	// Complete ASR isolation preflight before the billable TTS round trip.
+	asr := prepareLiveASRPlugin(t, c)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	u, e := bailian.New(c).Synthesize(ctx, "你好呀，蓝色大肥鱼今天很开心。", "")
+	u, e := livePluginSynthesize(t, ctx, c, "你好呀，蓝色大肥鱼今天很开心。", "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -156,11 +163,7 @@ func TestLiveBailianSpeechRoundTrip(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	wav, e := normalizeSpeech(ctx, t.TempDir(), audio)
-	if e != nil {
-		t.Fatal(e)
-	}
-	text, e := bailian.New(c).Transcribe(ctx, wav)
+	text, e := asr.transcribe(ctx, audio, "speech-roundtrip-audio")
 	report := map[string]any{"tts_model": c.TTSModel, "asr_model": c.ASRModel, "tts_bytes": len(audio), "asr_text": text, "wechat_sends": 0}
 	b, _ := json.MarshalIndent(report, "", "  ")
 	os.WriteFile(filepath.Join(workspace, "research/evidence/bailian-go-roundtrip.json"), b, 0600)
@@ -183,7 +186,7 @@ func TestLiveModelSynthesizesAndPreparesWechatVoice(t *testing.T) {
 		t.Fatal(e)
 	}
 	f := setup(t)
-	f.manager.speech = speech
+	writeLegacySpeechMigrationFixture(t, f.manager, speech)
 	f.manager.native = &fakeTools{fakeNative: f.native}
 	f.manager.mu.Lock()
 	f.manager.mcp.Enabled = false
@@ -239,6 +242,9 @@ func TestLiveStructuredContextCompression(t *testing.T) {
 	c.Permissions.Remember = true
 	c.Context = &companion.ContextSettings{AutoCompress: true, CompressAfter: 20, RecentMessages: 5, MaxInputChars: 8000}
 	store, _ := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "summary-test", Sender: "person-one"}
 	for i := 0; i < 25; i++ {
 		in.TraceID = time.Now().Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)

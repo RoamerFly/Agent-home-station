@@ -6,24 +6,29 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
 type inboxItem struct {
-	Backlog          bool              `json:"backlog,omitempty"`
-	BacklogParent    string            `json:"backlog_parent,omitempty"`
-	FollowupParent   string            `json:"followup_parent,omitempty"`
-	FollowupConsumed bool              `json:"followup_consumed,omitempty"`
-	OwnerModelReview bool              `json:"owner_model_review,omitempty"`
-	ReceivedRecorded bool              `json:"received_recorded,omitempty"`
-	AggregateUntil   time.Time         `json:"aggregate_until,omitempty"`
-	ToolStarted      bool              `json:"tool_started,omitempty"`
-	Event            linuxnative.Event `json:"event"`
-	Phase            string            `json:"phase"`
-	Updated          time.Time         `json:"updated"`
-	RetryAfter       time.Time         `json:"retry_after,omitempty"`
+	Backlog          bool                              `json:"backlog,omitempty"`
+	BacklogParent    string                            `json:"backlog_parent,omitempty"`
+	FollowupParent   string                            `json:"followup_parent,omitempty"`
+	FollowupConsumed bool                              `json:"followup_consumed,omitempty"`
+	OwnerModelReview bool                              `json:"owner_model_review,omitempty"`
+	ReceivedRecorded bool                              `json:"received_recorded,omitempty"`
+	AggregateUntil   time.Time                         `json:"aggregate_until,omitempty"`
+	CollectedAt      time.Time                         `json:"collected_at,omitempty"`
+	ToolStarted      bool                              `json:"tool_started,omitempty"`
+	Event            linuxnative.Event                 `json:"event"`
+	Phase            string                            `json:"phase"`
+	Updated          time.Time                         `json:"updated"`
+	RetryAfter       time.Time                         `json:"retry_after,omitempty"`
+	RecoveryTools    []companion.RecoveryToolResult    `json:"recovery_tools,omitempty"`
+	RecoveryEvidence *companion.GenerationEvidence     `json:"recovery_evidence,omitempty"`
+	RecoveryPrivacy  *companion.RecoveryPrivacyBinding `json:"recovery_privacy,omitempty"`
 }
 
 func (w *Worker) ownerModelReview(id string) bool {
@@ -134,13 +139,42 @@ func (w *Worker) loadRuntime(server string) error {
 		return errors.New("persistent queue exceeds bound")
 	}
 	w.runtime = &s
+	// Preserve autonomous-surf provenance across legacy wake chains on restart.
+	for _, p := range s.Plans {
+		if p != nil && w.surfOrigin(p.Input) {
+			p.Input.Surf = true
+		}
+	}
+	for _, d := range s.Media {
+		if d != nil && w.surfOrigin(d.Input) {
+			d.Input.Surf = true
+		}
+	}
+	for _, r := range s.MediaReplies {
+		if r != nil && w.surfOrigin(r.Input) {
+			r.Input.Surf = true
+		}
+	}
+	for _, d := range s.Deliveries {
+		if d != nil && w.surfOrigin(d.Input) {
+			d.Input.Surf = true
+		}
+	}
 	for _, media := range s.Media {
 		if media == nil {
 			return errors.New("persistent media invalid")
 		}
-		if w.config.Options != nil && w.config.Options.RetryUncertain && !media.UserCancelled && media.State == "needs_review" && media.Reason == "media_receipt_unverified_native_retry_denied" {
-			media.State, media.Reason = "waiting", "media_receipt_reconciliation_pending"
-			media.Next = time.Now() // Read-only reconciliation may resume immediately.
+		media.Input.TraceID = media.Trace
+		restoreOriginInputTrace(media.OriginInput)
+		if media.State != "checking_receipt" && awaitingMediaReceipt(media) && media.ReconcileAfter.IsZero() && media.Next.After(time.Now()) {
+			// Legacy queues used one deadline for both reads and writes. Keep
+			// their retry backoff, but discover late receipts immediately.
+			media.ReconcileAfter, media.Next = media.Next, time.Now()
+		}
+		if !media.UserCancelled && !media.Paused && media.State == "needs_review" && (media.ID != "" || media.Key != "") &&
+			(media.Reason == "media_receipt_unverified_native_retry_denied" || media.Reason == "media_status_unavailable_after_deadline") {
+			media.State, media.Reason = "checking_receipt", "media_readonly_receipt_pending"
+			media.Next = time.Now()
 		}
 	}
 	for _, d := range s.Deliveries {
@@ -183,6 +217,28 @@ func (w *Worker) loadRuntime(server string) error {
 	}
 	return nil
 }
+
+// Fix a group turn's deadline when its first receipt arrives. Later receipts
+// share it; a steady conversation cannot postpone the decision indefinitely.
+func (w *Worker) collectionDeadline(thread string, at time.Time, window time.Duration) time.Time {
+	if window <= 0 {
+		return time.Time{}
+	}
+	if strings.HasSuffix(thread, "@chatroom") {
+		for i := len(w.runtime.Inbox) - 1; i >= 0; i-- {
+			prior := w.runtime.Inbox[i]
+			if prior.Event.Data.ThreadID != thread || prior.AggregateUntil.IsZero() {
+				continue
+			}
+			if prior.Phase == "received" && at.Before(prior.AggregateUntil) {
+				return prior.AggregateUntil
+			}
+			break
+		}
+	}
+	return at.Add(window)
+}
+
 func (w *Worker) drainInbox(ctx context.Context) error {
 	for i := range w.runtime.Inbox {
 		if w.draining() {
@@ -192,7 +248,7 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 			return nil
 		}
 		item := &w.runtime.Inbox[i]
-		if item.Backlog && (item.Phase == "received" || item.Phase == "read_pending" || item.Phase == "backlog_grouped") {
+		if item.Backlog && !item.OwnerModelReview && (item.Phase == "received" || item.Phase == "read_pending" || item.Phase == "backlog_grouped") {
 			if err := w.processUnreadConversation(ctx, item.Event.Data.ThreadID); err != nil {
 				return err
 			}
@@ -205,9 +261,28 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 			continue
 		}
 		switch item.Phase {
-		case "received", "processing", "read_pending":
+		case "received", "processing", "read_pending", "retrying_model":
 		default:
 			continue
+		}
+		// Group messages already collected during the same short window share
+		// one decision. Keep explicit reviews, active tasks and delayed retries
+		// on their own lifecycle, including their cancellation fast path.
+		thread := item.Event.Data.ThreadID
+		if w.generation != nil && item.Phase == "received" && !item.OwnerModelReview && !item.AggregateUntil.IsZero() && strings.HasSuffix(thread, "@chatroom") && !w.pendingConversationThread(thread) && w.generation.canGenerate() {
+			ids := map[string]bool{}
+			for j := i; j < len(w.runtime.Inbox); j++ {
+				next := &w.runtime.Inbox[j]
+				if next.Phase == "received" && !next.Backlog && !next.OwnerModelReview && !next.ToolStarted && next.Event.Data.ThreadID == thread && next.Event.Data.Direction == "incoming" && next.AggregateUntil.Equal(item.AggregateUntil) && !time.Now().Before(next.RetryAfter) {
+					ids[next.Event.Data.MessageID] = true
+				}
+			}
+			if len(ids) > 1 && ids[item.Event.Data.MessageID] {
+				if err := w.processConversationBatch(ctx, thread, ids); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		item.Phase = "processing"
 		if err := w.saveRuntime(); err != nil {
@@ -348,11 +423,14 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 						return errors.New("inbox full; no message cursor discarded")
 					}
 				}
-				w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Event: event, Phase: "received", Updated: time.Now().UTC()})
+				item := inboxItem{Event: event, Phase: "received", Updated: time.Now().UTC()}
 				if c, ok := w.model.(*companion.Engine); ok && c.Config.ConversationConfig().Enabled && !w.pendingConversationThread(event.Data.ThreadID) {
-					window := c.Config.ConversationConfig().AggregateMS
-					w.runtime.Inbox[len(w.runtime.Inbox)-1].AggregateUntil = time.Now().Add(time.Duration(window) * time.Millisecond)
+					item.AggregateUntil = w.collectionDeadline(event.Data.ThreadID, item.Updated, c.Config.ConversationConfig().CollectionWindow(event.Data.ThreadID))
+					if !item.AggregateUntil.IsZero() && strings.HasSuffix(event.Data.ThreadID, "@chatroom") {
+						item.CollectedAt = item.Updated
+					}
 				}
+				w.runtime.Inbox = append(w.runtime.Inbox, item)
 				if err = w.saveRuntime(); err != nil {
 					return err
 				}
@@ -433,7 +511,13 @@ func (w *Worker) peekVoiceInterruptions(ctx context.Context, cursor string, seen
 			continue
 		}
 		seen[event.Data.MessageID] = true
-		w.stopRequestedVoice(readCtx, message)
+		stoppedVoice := w.stopRequestedVoice(readCtx, message)
+		if stoppedVoice && !replacesVoice(message.Body) {
+			// Do not append a plain cancellation to an active generation.  The
+			// stop has already been durably applied; a replacement is the only
+			// interruption which needs to continue into normal intent handling.
+			continue
+		}
 		if w.generation != nil {
 			working := quotedPlainBody(message)
 			if _, eligible := w.prompt(working, time.Now()); eligible {

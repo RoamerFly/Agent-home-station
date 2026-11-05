@@ -51,6 +51,16 @@ func ReadPublicShare(ctx context.Context, raw string, limit int64, videoRequired
 	if !strings.Contains(typ, "html") && !strings.HasPrefix(typ, "text/") {
 		return out, &WebError{Code: "share_content_unsupported"}
 	}
+
+	// Short links may resolve to a supported video page. Read that exact work
+	// through its adapter instead of mistaking the app landing page for content.
+	if IsPublicVideoPage(final) {
+		video, err := DownloadPublicVideoObservation(ctx, final, limit)
+		if err != nil {
+			return PublicShare{}, err
+		}
+		return PublicShare{Kind: "video", PageURL: video.PageURL, Title: video.Title, ContentType: video.ContentType, Data: video.Data}, nil
+	}
 	title, body, media := parseSharedHTML(data, final)
 	out.Title = title
 	for _, candidate := range media[:min(2, len(media))] {

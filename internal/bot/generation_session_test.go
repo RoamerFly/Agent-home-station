@@ -37,8 +37,14 @@ func TestLiveFollowupBecomesOneDecisionAndOneDurableCompletion(t *testing.T) {
 	defer w.closeGenerations()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "original", Mode: "direct", Text: "帮我总结"}
 	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "original", "filehelper", "incoming", "remote"), Phase: "processing"}, {Event: fixtureEvent("2", "followup", "filehelper", "incoming", "remote"), Phase: "processing"}}
-	w.startGeneration(context.Background(), c, in, nil)
-	<-started
+	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
+	select {
+	case <-started:
+	case early := <-w.generation.results:
+		t.Fatalf("generation returned before invoking model: %v %+v", early.err, early.decision)
+	case <-time.After(3 * time.Second):
+		t.Fatal("generation did not reach model")
+	}
 	m := fixtureMessage("followup", "filehelper", "只总结重点", "incoming")
 	m.SenderID = "person"
 	w.noticeConversationMessage(m, true)
@@ -63,6 +69,48 @@ func TestLiveFollowupBecomesOneDecisionAndOneDurableCompletion(t *testing.T) {
 	w.recoverFollowups()
 	if w.runtime.Inbox[1].Phase != "completed" {
 		t.Fatal("completed event replayed after restart")
+	}
+}
+
+func TestLiveSessionCancellationSuppressesStaleReply(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	calls := 0
+	w, e, n := backgroundWorker(t, generationModelFunc(func(ctx context.Context, _ string, turns []map[string]string) (string, error) {
+		calls++
+		if calls == 1 {
+			close(started)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			return `{"action":"reply","messages":["obsolete result"]}`, nil
+		}
+		if !strings.Contains(turns[len(turns)-1]["content"], "current_followup") {
+			t.Error("cancellation was not a live supplement")
+		}
+		return `{"action":"silent","reason":"requester_cancelled"}`, nil
+	}))
+	w.enableGenerations()
+	defer w.closeGenerations()
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "live-original", Mode: "direct", Text: "合成原请求"}
+	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", in.TraceID, in.Thread, "incoming", "remote"), Phase: "processing"}, {Event: fixtureEvent("2", "live-cancel", in.Thread, "incoming", "remote"), Phase: "received"}}
+	w.startSyntheticGeneration(t, context.Background(), e, in, nil)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("model not started")
+	}
+	cancelMessage := fixtureMessage("live-cancel", in.Thread, "不用继续了，取消这次请求", "incoming")
+	cancelMessage.SenderID = in.Sender
+	w.noticeConversationMessage(cancelMessage, true)
+	if w.generation.jobs[in.Thread].session == nil {
+		t.Fatal("test did not exercise live session")
+	}
+	close(release)
+	pumpGeneration(t, w, func() bool { return len(w.generation.jobs) == 0 })
+	if calls != 2 || len(n.submissions) != 0 || len(w.runtime.Plans) != 0 || !w.runtime.Inbox[1].FollowupConsumed || w.runtime.Inbox[1].Phase != "completed" {
+		t.Fatal("cancelled live turn published stale content or replayed", calls, len(n.submissions), w.runtime.Inbox)
 	}
 }
 
@@ -101,7 +149,7 @@ func TestLiveMediaFollowupReadsAttachmentAndKeepsRawXMLAwayFromModel(t *testing.
 	defer w.closeGenerations()
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "look", Mode: "direct", Text: "帮我看看这个"}
 	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "look", "filehelper", "incoming", "remote"), Phase: "processing"}, {Event: fixtureEvent("2", m.ID, "filehelper", "incoming", "remote"), Phase: "processing"}}
-	w.startGeneration(context.Background(), c, in, nil)
+	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
 	<-started
 	w.noticeConversationMessage(m, true)
 	if w.runtime.Inbox[1].Phase != "following" {

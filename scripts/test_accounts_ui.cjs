@@ -14,6 +14,7 @@ assert(['127.0.0.1','localhost','[::1]'].includes(new URL(base).hostname));
   const config=await(await context.request.get(base+'/api/config')).json();
   const page=await context.newPage(),errors=[],requests=[],writes=[];page.on('pageerror',e=>errors.push(e.message));
   const accounts=[{id:'synthetic-primary',name:'蓝色大肥鱼',primary:true,native:{connection:'online'},bot:{state:'running'}},{id:'synthetic-second',name:'测试小鲸鱼',native:{connection:'online'},bot:{state:'running'}}];
+  let fishError='';
   await page.route('**/*',async route=>{
    const req=route.request(),url=new URL(req.url());if(url.origin!==base)return route.abort();
    if(url.pathname.startsWith('/api/')){
@@ -22,7 +23,13 @@ assert(['127.0.0.1','localhost','[::1]'].includes(new URL(base).hostname));
     if(url.pathname==='/api/session')return route.fulfill({json:{authenticated:true,csrf:'synthetic-csrf'}});
     if(url.pathname==='/api/accounts'){
      if(req.method()==='POST'){accounts.push({id:'synthetic-added',name:'未登录的小号',native:{connection:'disconnected'},bot:{state:'disabled'}});return route.fulfill({status:201,json:{id:'synthetic-added'}})}
-     return route.fulfill({json:{items:accounts,primary:accounts[0].id,supported:true}});
+     return route.fulfill({json:{items:accounts,primary:accounts[0].id,supported:true,fish_error:fishError}});
+    }
+    if(url.pathname==='/api/accounts/synthetic-second/manage' && req.method()==='POST'){
+     const action=req.postDataJSON().action;
+     assert(['bind_fish','unbind_fish'].includes(action));
+     accounts[1].fish_id=action==='bind_fish'?'fish-synthetic':'';
+     return route.fulfill({json:{id:accounts[1].id,fish_id:accounts[1].fish_id}});
     }
     if(url.pathname==='/api/status')return route.fulfill({json:{account,account_name:accounts.find(x=>x.id===account)?.name,native:{authenticated:true,connection:'online'},bot:{state:'running'},key_configured:true}});
     if(url.pathname==='/api/config')return route.fulfill({json:{...config,group_rules:[{id:'synthetic-room@chatroom',name:'合成测试群',mode:'social'}]}});
@@ -30,7 +37,7 @@ assert(['127.0.0.1','localhost','[::1]'].includes(new URL(base).hostname));
     if(url.pathname==='/api/wechat/login')return route.fulfill({json:{id:'synthetic-operation',state:'awaiting_scan',qr_available:true,qr_generation:1}});
     if(url.pathname==='/api/wechat/login/synthetic-operation')return route.fulfill({json:{id:'synthetic-operation',state:'awaiting_scan',qr_available:true,qr_generation:1}});
     if(url.pathname.endsWith('/qr'))return route.fulfill({body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==','base64'),contentType:'image/png'});
-    if(url.pathname==='/api/logs')return route.fulfill({json:{items:[{id:'fixture-log',time:'2026-10-28T08:00:00+08:00',event:'message_received',category:'received',source:'合成测试群',source_kind:'group',thread_id:'synthetic-room@chatroom',sender:'wxid_fixture',sender_name:'合成好友',message_id:'fixture-message',content:'合成消息',status:'received'}]}});
+    if(url.pathname==='/api/logs')return route.fulfill({json:{items:[{id:'fixture-log',time:new Date().toISOString(),event:'message_received',category:'received',source:'合成测试群',source_kind:'group',thread_id:'synthetic-room@chatroom',sender:'wxid_fixture',sender_name:'合成好友',message_id:'fixture-message',content:'合成消息',status:'received'}]}});
     if(req.method()!=='GET')return route.fulfill({status:403,json:{error:'真实写入已被测试阻止'}});
     return route.fulfill({json:{items:[]}});
    }
@@ -40,16 +47,33 @@ assert(['127.0.0.1','localhost','[::1]'].includes(new URL(base).hostname));
   await page.goto(base+'/#wechat');await page.locator('.account-row').first().waitFor();
   assert.equal(await page.locator('.account-row').count(),2);
   assert.equal(await page.locator('#account-select').inputValue(),'synthetic-primary');
-  await page.locator('#account-select').selectOption('synthetic-second');
+  const second=page.locator('.account-row').filter({hasText:'测试小鲸鱼'});
+  fishError='鱼身份绑定不可读';
+  await page.evaluate(()=>window.WechatAccounts.load());
+  assert.equal(await page.locator('.account-row').count(),2);
+  assert.equal(await page.getByRole('button',{name:'绑定大肥鱼'}).count(),0);
+  assert((await page.locator('#accounts-state').textContent()).includes(fishError));
+  fishError='';
+  await page.evaluate(()=>window.WechatAccounts.load());
+  await second.getByRole('button',{name:'绑定大肥鱼'}).click();
+  await second.getByText('已绑定大肥鱼',{exact:false}).waitFor();
+  await second.getByRole('button',{name:'解除绑定'}).click();
+  await second.getByRole('button',{name:'绑定大肥鱼'}).waitFor();
+  assert.equal(await page.locator('#account-select').inputValue(),'synthetic-primary');
+  await page.locator('#account-select').selectOption('synthetic-second',{force:true});
   await page.waitForFunction(()=>document.querySelector('#account-select')?.value==='synthetic-second'&&document.querySelector('#account-current-name')?.textContent==='测试小鲸鱼');
   assert(new URL(page.url()).searchParams.get('account')==='synthetic-second');
   await page.locator('#start-login').click();await page.locator('#qr-box').waitFor({state:'visible'});
   assert(new URL(await page.locator('#qr-image').getAttribute('src'),base).searchParams.get('account')==='synthetic-second');
   assert(requests.filter(x=>['/api/config','/api/status'].includes(x.path)).some(x=>x.account==='synthetic-second'));
-  for(const theme of ['light','dark'])for(const width of [1440,768,390]){
-   await page.setViewportSize({width,height:1000});await page.locator('.topbar [data-theme-value="'+theme+'"]').click();
-   assert(!(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1)),`${theme}/${width} overflow`);
-   for(const selector of ['#account-list','#start-login']){const box=await page.locator(selector).boundingBox();assert(box&&box.width>0)}
+  for(const theme of ['light','dark']){
+   await page.setViewportSize({width:1440,height:1000});
+   await page.locator('.sidebar [data-theme-value="'+theme+'"]').click();
+   for(const width of [1440,768,390]){
+    await page.setViewportSize({width,height:1000});
+    assert(!(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1)),`${theme}/${width} overflow`);
+    for(const selector of ['#account-list','#start-login']){const box=await page.locator(selector).boundingBox();assert(box&&box.width>0)}
+   }
   }
   await page.setViewportSize({width:1440,height:1000});
   await page.evaluate(()=>window.WechatAdmin.nav('logs'));await page.locator('.round-source').waitFor();
@@ -58,8 +82,8 @@ assert(['127.0.0.1','localhost','[::1]'].includes(new URL(base).hostname));
   await page.waitForFunction(()=>document.querySelector('#account-select')?.value==='synthetic-added');
   assert.equal(await page.locator('.account-row').count(),3);
   assert.deepEqual(errors,[]);
-  assert(writes.every(x=>x==='/api/accounts'||x==='/api/wechat/login'));
+  assert(writes.every(x=>['/api/accounts','/api/wechat/login','/api/accounts/synthetic-second/manage'].includes(x)));
   const screenshot=process.env.WECHAT_ADMIN_UI_SCREENSHOT;if(screenshot)await page.screenshot({path:screenshot,fullPage:true});
-  console.log(JSON.stringify({accountSwitch:true,scopedHeaders:true,scopedQR:true,syntheticAdd:true,nicknameFirst:true,lightDarkResponsive:true,pageErrors:errors,realWechatSends:0}));
+  console.log(JSON.stringify({accountSwitch:true,scopedHeaders:true,scopedQR:true,syntheticAdd:true,fishBinding:true,fishErrorVisible:true,nicknameFirst:true,lightDarkResponsive:true,pageErrors:errors,realWechatSends:0}));
  }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});

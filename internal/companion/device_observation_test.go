@@ -8,6 +8,9 @@ import (
 
 func TestDeviceObservationIsNotASentReply(t *testing.T) {
 	store, err := NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

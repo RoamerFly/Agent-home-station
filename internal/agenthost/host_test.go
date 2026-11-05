@@ -57,6 +57,8 @@ func TestHostFilePermissionsAndRootBoundary(t *testing.T) {
 func TestHostFullCommandBoundsAndNoCredentialEnv(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "must-not-forward")
 	c := Defaults()
+	requireLinuxSandbox(t)
+	c.Isolation = &Isolation{}
 	c.Mode = "full"
 	c.Roots = []string{t.TempDir()}
 	h := Host{c}
@@ -78,6 +80,8 @@ func TestHostCancellation(t *testing.T) {
 		t.Skip("Linux process group check")
 	}
 	c := Defaults()
+	requireLinuxSandbox(t)
+	c.Isolation = &Isolation{}
 	c.Mode = "full"
 	c.Roots = []string{t.TempDir()}
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)

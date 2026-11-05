@@ -27,6 +27,9 @@ func TestDirectInvalidDecisionRecordsFailureWithoutInventingReply(t *testing.T) 
 	c.QuietStart = "00:00"
 	c.QuietEnd = "00:00"
 	store, e := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -92,6 +95,9 @@ func TestGeneratedVoiceOnlyAndUnknownNotRetried(t *testing.T) {
 	config.ReplyMinMS = 0
 	config.ReplyMaxMS = 0
 	store, err := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +112,7 @@ func TestGeneratedVoiceOnlyAndUnknownNotRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "sing", Mode: "direct"}
+	input = observeSyntheticMediaRequest(t, worker, engine, input)
 	worker.respondCharacter(context.Background(), engine, input)
 	if sender.media != 1 || sender.calls != 0 {
 		t.Fatal("unexpected media sends", sender.media, sender.calls)
@@ -139,6 +146,9 @@ func TestCharacterImageUnknownIsNotRetried(t *testing.T) {
 	c.QuietStart = "00:00"
 	c.QuietEnd = "00:00"
 	store, err := companion.NewStore(t.TempDir())
+	if opened := store; opened != nil {
+		t.Cleanup(func() { _ = opened.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,12 +162,13 @@ func TestCharacterImageUnknownIsNotRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker.respondCharacter(context.Background(), engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "image", Mode: "direct"})
+	input := observeSyntheticMediaRequest(t, worker, engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "image", Mode: "direct"})
+	worker.respondCharacter(context.Background(), engine, input)
 	if sender.images != 1 || sender.calls != 0 {
 		t.Fatal("image-only action resent or sent extra text", sender.images, sender.calls)
 	}
 	engine.Config.Permissions.SendImage = false
-	worker.respondCharacter(context.Background(), engine, companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Text: "image", Mode: "direct"})
+	worker.respondCharacter(context.Background(), engine, input)
 	if sender.images != 1 {
 		t.Fatal("revoked image permission ignored")
 	}

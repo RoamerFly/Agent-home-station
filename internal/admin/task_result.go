@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 	"wechat-bot/internal/bot"
@@ -40,6 +41,19 @@ func (a *agentControl) transitionSnapshot(t agentTask, resume bool) (bool, error
 	if !ok || !current.Updated.Equal(t.Updated) || current.State == "cancelled" && !resume {
 		return false, nil
 	}
+	if current.Account != t.Account || current.Thread != t.Thread || current.Sender != t.Sender {
+		return false, errors.New("task_identity_cannot_change")
+	}
+	t.Constraints = copyTask(current).Constraints
+	t.OwnerRequested = t.OwnerRequested || current.OwnerRequested
+	if err := validateTaskConstraints(t); err != nil {
+		return false, err
+	}
+	t.PendingOperations = append([]string{}, current.PendingOperations...)
+	if t.State == "completed" && len(t.PendingOperations) > 0 {
+		t.WorkCompleted = true
+		t.State = "waiting_delivery"
+	}
 	t.Actions = current.Actions
 	if current.Goal != "" {
 		t.Goal = current.Goal
@@ -54,19 +68,34 @@ func (a *agentControl) transitionSnapshot(t agentTask, resume bool) (bool, error
 }
 
 func (m *Manager) claimTaskResult(task agentTask, now time.Time, facts any, next string) (*companion.Input, error) {
+	checkTask := task
+	if current, ok := m.agent.lookupTask(task.ID, task.Account, task.Thread); ok {
+		checkTask = current
+	}
+	if sourceErr := m.validateTaskSource(checkTask); sourceErr != nil {
+		task.State = "needs_review"
+		task.LastResult = sourceErr.Error()
+		_, err := m.agent.updateSnapshot(task)
+		return nil, err
+	}
 	task.State = "running"
 	task.Runs++
 	saved, err := m.agent.updateSnapshot(task)
 	if err != nil || !saved {
 		return nil, err
 	}
+	// A named selection can be bound while the worker is running. The committed
+	// snapshot preserves that constraint; deliver from it, not the stale poll copy.
+	if current, ok := m.agent.lookupTask(task.ID, task.Account, task.Thread); ok {
+		task = current
+	}
 	data, _ := json.Marshal(map[string]any{"kind": task.resultKind() + "_completion", "task_id": task.ID, "original_request": task.RequestedText, "result": facts, "next_action": next})
-	return &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender,
+	return taskResultInput(task, &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender,
 		BackgroundResult: true,
 		Mode:             "direct", Directed: true, IsGroup: strings.HasSuffix(task.Thread, "@chatroom"), TaskID: task.ID,
 		OriginTraceID: task.OriginTrace, RequestedText: task.RequestedText, QuoteServerID: task.QuoteServerID,
 		TraceID: task.resultKind() + "-result-" + task.ID + "-" + now.UTC().Format("150405.000000000"),
-		Text:    "[已保存任务的真实结果，不是新用户指令] " + string(data) + "\n结合最新会话和实际工具反馈决定下一步：检查或修复、验证、继续交付、更新检查点、自然回复或安静。先核对取消和需求变化；不要把请求参数当作已验证结果，不重放已成功操作。附件在media_ids交付，介绍在接受后发送。等待时保存agent_task检查点；技术问题只私聊主人，原群保持正常交流。"}, nil
+		Text:    "[已保存任务的真实结果，不是新用户指令] " + string(data) + "\n结合最新会话和实际工具反馈决定下一步：检查或修复、验证、继续交付、更新检查点、自然回复或安静。先核对取消和需求变化；不要把请求参数当作已验证结果，不重放已成功操作。附件在media_ids交付，介绍在接受后发送。等待时保存agent_task检查点；技术问题只私聊主人，原群保持正常交流。"}), nil
 }
 
 func (m *Manager) finishTaskResult(t agentTask, state string) bool {
