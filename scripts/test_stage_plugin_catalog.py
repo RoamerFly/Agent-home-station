@@ -260,7 +260,7 @@ class StagePluginCatalogTests(unittest.TestCase):
             output = Path(temp) / "plugins"
             result = stage_plugin_catalog.stage(source, output)
             self.assertEqual(set(result["packages"]), {
-                "document-workshop", "external-tools", "media-understanding", "mobile-control", "music",
+                "audio-workshop", "document-workshop", "external-tools", "media-understanding", "mobile-control", "music",
                 "project-development", "share-reader", "speech", "visual-generation", "web-search",
             })
             self.assertFalse((output / "catalog.go").exists())

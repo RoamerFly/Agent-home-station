@@ -243,6 +243,24 @@ def verify(binary, output):
                 page.screenshot(path=str(output / "project-tools-light.png"), full_page=True)
                 page.unroute(project_tools_pattern, project_tools_route)
 
+                audio_catalog = next(tool for tool in context.request.get(origin + "/api/local/project-tools").json()["tools"]
+                                     if tool["id"] == "audio-workshop")
+                if audio_catalog["catalog_available"] and audio_catalog["runtime_ready"]:
+                    page.locator("#chat-tab").click()
+                    page.get_by_role("tab", name="项目工具", exact=True).click()
+                    audio = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="音频工坊"))
+                    install = audio.get_by_role("button", name="安装", exact=True)
+                    install.wait_for()
+                    assert install.is_disabled()
+                    audio.get_by_role("checkbox", name="确认本机素材读写").check()
+                    install.click()
+                    page.get_by_text("音频工坊已安装。", exact=True).wait_for()
+                    audio.get_by_role("button", name="启用", exact=True).click()
+                    page.get_by_text("音频工坊已启用。", exact=True).wait_for()
+                    page.screenshot(path=str(output / "project-tools-audio-light.png"), full_page=True)
+                    audio.get_by_role("button", name="停用", exact=True).click()
+                    page.get_by_text("音频工坊已停用。", exact=True).wait_for()
+
                 # The catalog and source checkout use the real local HTTP and CSRF path.
                 # A plain server executable may intentionally ship without application source;
                 # in that case this primary replay still verifies the useful empty-source state.

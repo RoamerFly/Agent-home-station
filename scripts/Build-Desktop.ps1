@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -168,11 +168,12 @@ $archive=$cache+'.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDirectory | Out-Null
 # The zero-application preview deliberately has no optional tool catalog.  The
 # regular desktop package retains the catalog validation/staging contract.
-if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop){
+if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop){
  $catalogArgs=@('--source',(Join-Path $workspace 'plugins'),'--output',(Join-Path $OutputDirectory 'plugins'))
  if($LocalStation -and $WithShareReader){$catalogArgs+=@('--package','share-reader')}
  if($LocalStation -and $WithMediaUnderstanding){$catalogArgs+=@('--package','media-understanding')}
  if($LocalStation -and $WithDocumentWorkshop){$catalogArgs+=@('--package','document-workshop')}
+ if($LocalStation -and $WithAudioWorkshop){$catalogArgs+=@('--package','audio-workshop')}
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') @catalogArgs
  if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
 }
@@ -250,10 +251,10 @@ foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_ho
 # reviewed package and font source directories explicitly stages the bounded
 # native PDF runtime beside that CLI.  Portable bundles use the shared resource
 # preparer below, so avoid repeating either integrity-checked operation here.
-if($LocalStation -and $WithDocumentWorkshop -and -not $Portable){
+if($LocalStation -and ($WithDocumentWorkshop -or $WithAudioWorkshop) -and -not $Portable){
  $runtimeRoot=Join-Path $OutputDirectory 'runtimes'
  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_windows_python.py') --target (Join-Path $runtimeRoot 'windows-python-cli') --cache (Join-Path $workspace 'temp\\windows-runtime-downloads')
- if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed for Document Workshop.'}
+ if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed for the selected project tools.'}
  if($hasDocumentRuntimeInput){
   $documentArgs=@('--target',(Join-Path $runtimeRoot 'document-workshop'),'--python-packages-source',$DocumentPythonPackagesDirectory,'--fonts-source',$DocumentFontsDirectory)
   if($DocumentTesseractDirectory){$documentArgs+=@('--tesseract-source',$DocumentTesseractDirectory)}

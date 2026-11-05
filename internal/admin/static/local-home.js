@@ -1515,7 +1515,7 @@
     if (!tool.installed) return ["尚未安装", "安装后才会把工具放入大肥鱼的项目环境。"];
     if (!tool.enabled && tool.update_available) return ["已安装，可更新", "已发现随当前发行包提供的新版本；更新会保留已登记的本地成品。"];
     if (!tool.enabled) return ["已安装，未启用", "需要时启用；停用不会删除已生成的本地成品。"];
-    if (tool.state === "running") return ["已启动", "本地运行器空闲一段时间后会自动关闭。"];
+    if (tool.state === "running") return ["已启动", tool.id === "audio-workshop" ? "本次音频处理结束后关闭运行器。" : "本地运行器空闲一段时间后会自动关闭。"];
     if (tool.state === "failed") return ["运行异常", "下次有本地任务时会尝试重新启动。"];
     return ["已启用，待命", "会在本地聊天实际需要时启动，不会取得网络或应用账号权限。"];
   }
@@ -1549,6 +1549,11 @@
       head.append(mark, title);
       const detail = appElement("div", "", "project-tool-detail");
       detail.append(appElement("p", note));
+      if (tool.id === "audio-workshop") {
+        const scope = appElement("div", "", "project-tool-permissions");
+        scope.append(appElement("strong", "音频处理"), appElement("span", "截取本机 WAV 成品，可转单声道，输出 16 位 WAV。每次仅访问获准的输入和任务输出。"));
+        detail.append(scope);
+      }
       if (tool.id === "document-workshop") {
         const permissions = appElement("div", "", "project-tool-permissions");
         permissions.append(appElement("strong", "本次授权"), appElement("span", "本机素材读写限于授权的文档任务，成品保存在本机，可从聊天下载。联网和应用账号权限另行管理。"));
@@ -1608,14 +1613,15 @@
   }
   async function updateProjectTool(tool, action, approveArtifacts) {
     const current = projectTools;
-    if (current.loading || current.applying || !tool || tool.id !== "document-workshop") return;
+    if (current.loading || current.applying || !tool || !/^[a-z0-9-]+$/.test(tool.id)) return;
     current.applying = tool.id; projectToolsFeedback(""); renderProjectTools();
     try {
-      const result = await request("/api/local/project-tools/document-workshop", { method: "PUT", body: JSON.stringify({ action, revision: Number(tool.revision || 0), approve_artifacts: Boolean(approveArtifacts) }) });
+      const result = await request("/api/local/project-tools/" + encodeURIComponent(tool.id), { method: "PUT", body: JSON.stringify({ action, revision: Number(tool.revision || 0), approve_artifacts: Boolean(approveArtifacts) }) });
       if (current !== projectTools) return;
       const updated = result && result.tool;
       if (updated && typeof updated.id === "string") current.tools = current.tools.map((item) => item.id === updated.id ? updated : item);
-      projectToolsFeedback(action === "install" ? "文档工坊已安装。" : (action === "enable" ? "文档工坊已启用。" : (action === "upgrade" ? "文档工坊已更新。" : "文档工坊已停用。")));
+      const statuses = { install: "已安装", enable: "已启用", upgrade: "已更新", disable: "已停用" };
+      projectToolsFeedback((tool.name || tool.id) + statuses[action] + "。");
     } catch (error) {
       if (current === projectTools) projectToolsFeedback(error.message, true);
     } finally {

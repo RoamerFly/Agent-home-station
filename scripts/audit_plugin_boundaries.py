@@ -30,6 +30,8 @@ SERVICE_MARKERS = {
 # Reviewed semantic contracts, not a source/commit baseline. A new ID needs
 # explicit authority/readiness review. False means a future capability stays hidden.
 CAPABILITIES = {
+    "audio-workshop": {"audio.prepare": (True, {"artifact.read", "artifact.write"})},
+    "document-workshop": {"document.inspect": (True, {"artifact.read"}), "document.reconstruct": (True, {"artifact.read", "artifact.write"}), "document.export_pdf": (True, {"artifact.read", "artifact.write"}), "document.verify": (True, {"artifact.read", "artifact.write"})},
     "external-tools": {"external.http_request": (True, {"network"}), "external.job_request": (True, {"network"}), "external.mcp_request": (True, {"network"}), "external.poll_request": (True, {"network"}), "external.discover": (False, {"network"}), "external.call": (False, {"network"})},
     "media-understanding": {"media.observe": (True, {"artifact.read", "model.invoke"}), "media.transcribe": (True, {"artifact.read", "model.invoke"}), "media.listen": (True, {"artifact.read", "model.invoke"})},
     "mobile-control": {"device.plan": (True, {"model.invoke"}), "device.list": (True, {"device"}), "device.observe": (True, {"device"}), "device.act": (True, {"device"}), "device.record": (True, {"device"}), "device.read_artifact": (True, {"device"}), "device.workflow": (True, {"device", "model.invoke"})},

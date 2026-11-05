@@ -230,6 +230,12 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 
 PDF 导出还需可用的文档运行时。构建时为上述命令同时提供 `-DocumentPythonPackagesDirectory` 与 `-DocumentFontsDirectory`，分别指向经过审核的纯 Python 依赖和可分发字体目录。「项目工具」会显示 PDF 导出是否就绪。已有旧版文档工坊时，先停用，再确认原有本机素材权限并更新，然后重新启用。当前本地文档入口覆盖已登记 DOCX 的检查、生成和基础版式导出。OCR 与 PDF 页面视觉比对仍需独立接入和验证。
 
+### 音频工坊
+
+用 `./scripts/Build-Desktop.ps1 -LocalStation -WithAudioWorkshop -Test -OutputDirectory ./temp/local-station-audio` 构建 Windows 音频预览，也可以与 `-WithDocumentWorkshop` 一起使用。音频工坊使用项目内受管 Python，独立于微信、GPU 和在线服务。
+
+在「项目工具」确认本机素材读写授权，安装并启用「音频工坊」。把大肥鱼家目录内的 PCM WAV 登记为成品后，可在本地聊天说「把这个成品从第 12 秒开始截取 8 秒，转成单声道」。聊天收到新成品编号后可直接下载。结果报告实际起点、时长和是否读到末尾。工具保留原采样率，输出 16 位 PCM WAV，输入及输出每份最大 512 MiB。长音频可指定起点与时长分段处理。
+
 ### Windows 运行器
 
 可执行文件旁存在下列受管运行时布局时自动识别；没有安装运行器也能聊天及操作文件，启动程序会返回 `windows_runtime_not_configured`，不会退回不受限制的宿主命令行。

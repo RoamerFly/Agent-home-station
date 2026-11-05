@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"wechat-bot/internal/pluginhost"
@@ -23,13 +22,13 @@ import (
 const localProjectToolIdle = 5 * time.Minute
 
 type localProjectTools struct {
-	home               *localHomeService
-	options            pluginruntime.Options
-	mu                 sync.Mutex
-	update             sync.Mutex
-	host               *localProjectToolHost
-	closed             bool
-	documentReadActive atomic.Bool
+	home    *localHomeService
+	options pluginruntime.Options
+	mu      sync.Mutex
+	update  sync.Mutex
+	host    *localProjectToolHost
+	closed  bool
+	active  map[string]int
 }
 
 type localProjectToolHost struct {
@@ -135,8 +134,33 @@ func (s *localProjectTools) close() error {
 	return err
 }
 
-func (s *localProjectTools) documentView(ctx context.Context, host *localProjectToolHost) (localProjectToolView, error) {
-	view := localProjectToolView{ID: documentWorkshopPluginID, Name: "文档工坊", RuntimeReady: s.runtimeReady(), State: "not_installed"}
+var localProjectPackages = []struct{ ID, Name string }{
+	{documentWorkshopPluginID, "文档工坊"},
+	{localAudioPackage, "音频工坊"},
+}
+
+func (s *localProjectTools) markActive(id string) func() {
+	s.mu.Lock()
+	if s.active == nil {
+		s.active = make(map[string]int)
+	}
+	s.active[id]++
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		s.active[id]--
+		s.mu.Unlock()
+	}
+}
+
+func (s *localProjectTools) isActive(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active[id] > 0
+}
+
+func (s *localProjectTools) projectView(ctx context.Context, host *localProjectToolHost, id, name string) (localProjectToolView, error) {
+	view := localProjectToolView{ID: id, Name: name, RuntimeReady: s.runtimeReady(), State: "not_installed"}
 	if s.options.CatalogDirectory != "" {
 		info, err := os.Lstat(filepath.Join(s.options.CatalogDirectory, view.ID, "plugin.json"))
 		view.CatalogAvailable = err == nil && info.Mode().IsRegular()
@@ -152,18 +176,18 @@ func (s *localProjectTools) documentView(ctx context.Context, host *localProject
 		return view, err
 	}
 	view.Installed, view.Enabled, view.Revision = true, item.Enabled, item.Revision
-	contract, err := catalog.ContractFor(documentWorkshopPluginID)
+	contract, err := catalog.ContractFor(id)
 	if err != nil {
 		return view, err
 	}
 	view.UpdateAvailable = view.CatalogAvailable && item.Digest != contract.ManifestSHA256
-	view.PDFReady = item.Digest == contract.ManifestSHA256 && s.pdfRuntimeReady()
+	view.PDFReady = id == documentWorkshopPluginID && item.Digest == contract.ManifestSHA256 && s.pdfRuntimeReady()
 	switch {
 	case !item.Enabled:
 		view.State = "disabled"
 	case !view.RuntimeReady:
 		view.State = "runtime_missing"
-	case s.documentReadActive.Load():
+	case s.isActive(id):
 		view.State = "running"
 	default:
 		view.State = host.controller.Status(view.ID).State
@@ -189,18 +213,26 @@ func (s *localProjectTools) routes(owner *Server, mux *http.ServeMux) {
 				return
 			}
 		}
-		view, err := s.documentView(r.Context(), host)
-		if err != nil {
-			fail(w, 503, "项目工具安装状态不可读")
-			return
+		views := make([]localProjectToolView, 0, len(localProjectPackages))
+		for _, pkg := range localProjectPackages {
+			view, err := s.projectView(r.Context(), host, pkg.ID, pkg.Name)
+			if err != nil {
+				fail(w, 503, "项目工具安装状态不可读")
+				return
+			}
+			views = append(views, view)
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		respond(w, 200, map[string]any{"tools": []localProjectToolView{view}})
+		respond(w, 200, map[string]any{"tools": views})
 	}))
-	mux.HandleFunc("PUT /api/local/project-tools/document-workshop", owner.protected(s.changeDocumentTool))
+	for _, pkg := range localProjectPackages {
+		mux.HandleFunc("PUT /api/local/project-tools/"+pkg.ID, owner.protected(func(w http.ResponseWriter, r *http.Request) {
+			s.changeProjectTool(w, r, pkg.ID, pkg.Name)
+		}))
+	}
 }
 
-func (s *localProjectTools) changeDocumentTool(w http.ResponseWriter, r *http.Request) {
+func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Request, id, name string) {
 	var in struct {
 		Action           string `json:"action"`
 		Revision         int    `json:"revision"`
@@ -235,12 +267,11 @@ func (s *localProjectTools) changeDocumentTool(w http.ResponseWriter, r *http.Re
 		fail(w, 503, "项目工具安装状态不可读")
 		return
 	}
-	const id = documentWorkshopPluginID
 	current, err := host.store.Installed(ctx, id)
 	if in.Action == "install" || in.Action == "upgrade" {
 		missing := errors.Is(err, sql.ErrNoRows) || err == nil && current.Removed
 		if in.Action == "upgrade" && (err != nil || current.Removed || current.Enabled || current.Revision != in.Revision) {
-			fail(w, 409, "请先停用文档工坊并刷新版本，再确认更新")
+			fail(w, 409, "请先停用该工具并刷新版本，再确认更新")
 			return
 		}
 		if err != nil && !missing {
@@ -258,12 +289,12 @@ func (s *localProjectTools) changeDocumentTool(w http.ResponseWriter, r *http.Re
 		}
 		if missing || current.Digest != contract.ManifestSHA256 {
 			if s.options.CatalogDirectory == "" {
-				fail(w, 409, "当前发行包未提供文档工坊")
+				fail(w, 409, "当前发行包未提供该项目工具")
 				return
 			}
 			prepared, prepareErr := host.store.Prepare(ctx, filepath.Join(s.options.CatalogDirectory, id))
 			if prepareErr != nil || prepared.Package.ID != id || prepared.Digest != contract.ManifestSHA256 {
-				fail(w, 409, "文档工坊发行源缺失或摘要不匹配")
+				fail(w, 409, "项目工具发行源缺失或摘要不匹配")
 				return
 			}
 			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, []string{"artifact.read", "artifact.write"})
@@ -283,7 +314,7 @@ func (s *localProjectTools) changeDocumentTool(w http.ResponseWriter, r *http.Re
 		fail(w, 409, "项目工具设置未保存，请核对版本、依赖和运行中的任务")
 		return
 	}
-	view, err := s.documentView(ctx, host)
+	view, err := s.projectView(ctx, host, id, name)
 	if err != nil {
 		fail(w, 503, "项目工具状态暂不可读")
 		return

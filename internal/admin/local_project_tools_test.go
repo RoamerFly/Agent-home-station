@@ -24,6 +24,11 @@ import (
 // of the packaged/isolated Windows path, not a host-Python fallback.
 func localProjectToolWindowsOptions(t *testing.T) pluginruntime.Options {
 	t.Helper()
+	return localProjectToolWindowsOptionsFor(t, documentWorkshopPluginID)
+}
+
+func localProjectToolWindowsOptionsFor(t *testing.T, plugin string) pluginruntime.Options {
+	t.Helper()
 	runtimeRoot := strings.TrimSpace(os.Getenv("AHS_LOCAL_PROJECT_TOOL_RUNTIME_ROOT"))
 	if runtimeRoot == "" {
 		t.Fatal("set AHS_LOCAL_PROJECT_TOOL_RUNTIME_ROOT to the Windows preview runtimes directory")
@@ -48,12 +53,15 @@ func localProjectToolWindowsOptions(t *testing.T) pluginruntime.Options {
 		DocumentRuntimeRoot: filepath.Join(runtimeRoot, "document-workshop"),
 		CatalogDirectory:    catalog,
 	}
-	for _, path := range []string{
+	required := []string{
 		options.Python, options.Pythonw, options.WindowsHelper,
 		filepath.Join(filepath.Dir(options.WindowsHelper), "windows_lpac.py"),
-		filepath.Join(options.DocumentRuntimeRoot, "runtime-manifest.json"),
-		filepath.Join(options.CatalogDirectory, documentWorkshopPluginID, "plugin.json"),
-	} {
+		filepath.Join(options.CatalogDirectory, plugin, "plugin.json"),
+	}
+	if plugin == documentWorkshopPluginID {
+		required = append(required, filepath.Join(options.DocumentRuntimeRoot, "runtime-manifest.json"))
+	}
+	for _, path := range required {
 		if info, statErr := os.Stat(path); statErr != nil || !info.Mode().IsRegular() {
 			t.Fatalf("Windows project-tool runtime unavailable: %s (%v)", path, statErr)
 		}
@@ -63,19 +71,26 @@ func localProjectToolWindowsOptions(t *testing.T) pluginruntime.Options {
 
 func localProjectToolsView(t *testing.T, f *localHomeFixture) map[string]any {
 	t.Helper()
+	return localProjectToolByID(t, f, documentWorkshopPluginID)
+}
+
+func localProjectToolByID(t *testing.T, f *localHomeFixture, id string) map[string]any {
+	t.Helper()
 	code, page := f.request("GET", "/api/local/project-tools", nil, true)
 	if code != http.StatusOK {
 		t.Fatalf("project tools list: %d %#v", code, page)
 	}
 	tools, ok := page["tools"].([]any)
-	if !ok || len(tools) != 1 {
+	if !ok {
 		t.Fatalf("unexpected project tool list: %#v", page)
 	}
-	tool, ok := tools[0].(map[string]any)
-	if !ok || tool["id"] != documentWorkshopPluginID {
-		t.Fatalf("document workshop missing: %#v", page)
+	for _, value := range tools {
+		if tool, ok := value.(map[string]any); ok && tool["id"] == id {
+			return tool
+		}
 	}
-	return tool
+	t.Fatalf("project tool %q missing: %#v", id, page)
+	return nil
 }
 
 func localProjectToolRevision(t *testing.T, tool map[string]any) int {

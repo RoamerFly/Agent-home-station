@@ -53,8 +53,8 @@ func TestOfficialContracts(t *testing.T) {
 		}
 	}
 	dirs = folders
-	if len(dirs) != 10 {
-		t.Fatalf("expected 10 capability packages, got %d", len(dirs))
+	if len(dirs) != 11 {
+		t.Fatalf("expected 11 capability packages, got %d", len(dirs))
 	}
 	for _, d := range dirs {
 		t.Run(d.Name(), func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" {
 				if p.Status != "ready" || p.Runtime.Transport != "mcp-stdio" || p.Runtime.Entrypoint != "runtime/main.py" {
 					t.Fatal("web runtime not connected")
 				}
@@ -102,6 +102,12 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"document.inspect": true, "document.reconstruct": true, "document.export_pdf": true, "document.verify": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" {
 							t.Fatal("document workshop must use only artifact read/write permissions")
+						}
+					}
+					if d.Name() == "audio-workshop" {
+						want = map[string]bool{"audio.prepare": true}
+						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" {
+							t.Fatal("audio workshop must use only artifact read/write permissions")
 						}
 					}
 					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))
