@@ -3,12 +3,10 @@ package admin
 import (
 	"context"
 	"errors"
-	"strconv"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
-	"wechat-bot/internal/mediadecode"
 )
 
 type channelsReader = wechatapp.ChannelsReader
@@ -67,12 +65,8 @@ func (a mediaUnderstanding) readChannelsVideo(ctx context.Context, source linuxn
 	if err != nil {
 		return nil, sample, errors.New("channels_video_download_failed")
 	}
-	if source.DecodeKey != "" {
-		key, e := strconv.ParseUint(source.DecodeKey, 10, 64)
-		if e != nil {
-			return nil, sample, errors.New("channels_decode_key_invalid")
-		}
-		mediadecode.DecodeChannelsPrefix(data, key)
+	if err := wechatapp.DecodeChannelsPayload(data, source.DecodeKey); err != nil {
+		return nil, sample, err
 	}
 	sample, err = sampleVideo(ctx, a.manager.dir, data)
 	if err != nil && (sample.Seconds == 0 || ctx.Err() != nil) {

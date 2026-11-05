@@ -107,7 +107,12 @@ func Sample(ctx context.Context, dir string, data []byte) (SampleResult, error) 
 // Probe inspects the first video stream using the existing local-only protocol.
 func Probe(ctx context.Context, path string) (Metadata, error) {
 	var result Metadata
-	raw, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-select_streams", "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames,avg_frame_rate,width,height:format=duration", "-of", "json", path).Output()
+	command := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-select_streams", "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames,avg_frame_rate,width,height:format=duration", "-of", "json", path)
+	hideDecoderWindow(command)
+	raw, err := command.Output()
+	if errors.Is(err, exec.ErrNotFound) {
+		return result, errors.New("video_analysis_decoder_unavailable")
+	}
 	var info struct {
 		Streams []struct {
 			Count  string `json:"nb_read_frames"`
