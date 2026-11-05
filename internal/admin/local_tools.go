@@ -75,6 +75,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all = append(all, t.localRVCTools(ctx)...)
 	all = append(all, t.localComfyTools(ctx)...)
 	all = append(all, t.localYuETools(ctx)...)
+	all = append(all, t.localTTSTools(ctx)...)
 	var failures error
 	accesses := []companion.ToolAccess{t.memory, t.files}
 	if t.process != nil {
@@ -114,6 +115,8 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 		return t.callLocalComfy(ctx, name, raw)
 	case localYuEStartTool, localYuEJobTool:
 		return t.callLocalYuE(ctx, name, raw)
+	case localTTSVoicesTool, localTTSStartTool:
+		return t.callLocalTTS(ctx, name, raw)
 	}
 	if name == "artifact_publish" {
 		var in struct {

@@ -364,6 +364,24 @@ def verify(binary, output):
                     assert card.get_by_role("button", name="启用", exact=True).is_disabled()
                     page.screenshot(path=str(output / "project-tools-yue-light.png"), full_page=True)
 
+                station_speech = next((tool for tool in context.request.get(origin + "/api/local/project-tools").json()["tools"]
+                                       if tool["id"] == "station-speech"), None)
+                if station_speech and station_speech["catalog_available"]:
+                    # The official package can be installed before a private
+                    # local backend and voice inventory are registered.
+                    assert not station_speech["runtime_ready"]
+                    page.locator("#chat-tab").click()
+                    page.get_by_role("tab", name="项目工具", exact=True).click()
+                    card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="本机语音"))
+                    card.get_by_text("本机语音后端未就绪", exact=True).wait_for()
+                    install = card.get_by_role("button", name="安装", exact=True)
+                    assert install.is_disabled()
+                    card.get_by_role("checkbox", name="确认本机语音成品写入与 GPU").check()
+                    install.click()
+                    page.get_by_text("本机语音已安装。", exact=True).wait_for()
+                    assert card.get_by_role("button", name="启用", exact=True).is_disabled()
+                    page.screenshot(path=str(output / "project-tools-station-speech-light.png"), full_page=True)
+
                 # The catalog and source checkout use the real local HTTP and CSRF path.
                 # A plain server executable may intentionally ship without application source;
                 # in that case this primary replay still verifies the useful empty-source state.

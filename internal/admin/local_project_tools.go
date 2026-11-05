@@ -22,16 +22,18 @@ import (
 const localProjectToolIdle = 5 * time.Minute
 
 type localProjectTools struct {
-	home    *localHomeService
-	options pluginruntime.Options
-	mu      sync.Mutex
-	update  sync.Mutex
-	host    *localProjectToolHost
-	closed  bool
-	active  map[string]int
-	rvc     localRVCBackend
-	comfy   localComfyBackend
-	yue     localYuEBackend
+	home      *localHomeService
+	options   pluginruntime.Options
+	mu        sync.Mutex
+	update    sync.Mutex
+	host      *localProjectToolHost
+	closed    bool
+	active    map[string]int
+	rvc       localRVCBackend
+	comfy     localComfyBackend
+	yue       localYuEBackend
+	tts       localTTSBackend
+	ttsCancel context.CancelFunc // protected by update
 }
 
 type localProjectToolHost struct {
@@ -52,6 +54,7 @@ type localProjectToolView struct {
 	State            string                   `json:"state"`
 	Reason           string                   `json:"reason,omitempty"`
 	VoiceProfiles    []localRVCVoice          `json:"voice_profiles,omitempty"`
+	SpeechVoices     []localTTSVoice          `json:"speech_voices,omitempty"`
 	Workflows        []localComfyWorkflowView `json:"workflows,omitempty"`
 }
 
@@ -162,6 +165,7 @@ var localProjectPackages = []struct{ ID, Name string }{
 	{localRVCPackage, "RVC 换声"},
 	{localComfyPackage, "ComfyUI 创作"},
 	{localYuEPackage, "YuE 作曲"},
+	{localTTSPackage, "本机语音"},
 }
 
 func (s *localProjectTools) markActive(id string) func() {
@@ -225,6 +229,18 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			info, err := s.yue.Info(ctx, host.store.Account())
 			if err == nil {
 				view.RuntimeReady, backendBusy, view.Reason = true, info.Busy, ""
+			}
+		}
+	}
+	if id == localTTSPackage {
+		view.RuntimeReady = false
+		view.Reason = "station_speech_backend_not_configured"
+		if host != nil && s.tts != nil {
+			info, err := s.tts.Info(ctx, host.store.Account())
+			if err == nil && len(info.Voices) > 0 {
+				view.RuntimeReady, view.Reason, view.SpeechVoices = true, "", info.Voices
+			} else {
+				view.Reason = localTTSSetupReason(err)
 			}
 		}
 	}
@@ -313,14 +329,14 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			fail(w, 400, "安装 ComfyUI 需要主人确认本机成品写入与计算权限")
 			return
 		}
-		if id == localRVCPackage || id == localYuEPackage {
+		if id == localRVCPackage || id == localYuEPackage || id == localTTSPackage {
 			fail(w, 400, "安装需要主人确认任务素材读写与本机计算权限")
 			return
 		}
 		fail(w, 400, "安装需要主人明确授予本机成品读写权限")
 		return
 	}
-	if in.Action == "enable" && id != localRVCPackage && id != localComfyPackage && id != localYuEPackage && !s.runtimeReady() {
+	if in.Action == "enable" && id != localRVCPackage && id != localComfyPackage && id != localYuEPackage && id != localTTSPackage && !s.runtimeReady() {
 		fail(w, 409, "Windows 项目工具运行器缺失")
 		return
 	}
@@ -378,6 +394,9 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			if id == localYuEPackage {
 				grants = localYuEGrants
 			}
+			if id == localTTSPackage {
+				grants = localTTSGrants
+			}
 			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, grants)
 		}
 	} else {
@@ -385,7 +404,22 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			fail(w, 409, "项目工具版本已变化，请刷新后重试")
 			return
 		}
-		if id == localYuEPackage {
+		if id == localTTSPackage {
+			if in.Action == "enable" {
+				if s.tts == nil {
+					fail(w, 409, "本机语音后端未登记")
+					return
+				}
+				if info, checkErr := s.tts.Info(ctx, record.FishID); checkErr != nil || len(info.Voices) == 0 {
+					fail(w, 409, localTTSSetupReason(checkErr))
+					return
+				}
+			}
+			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
+			if err == nil && in.Action == "disable" && s.ttsCancel != nil {
+				s.ttsCancel()
+			}
+		} else if id == localYuEPackage {
 			if in.Action == "enable" {
 				if s.yue == nil {
 					fail(w, 409, "本机 YuE 后端未登记")

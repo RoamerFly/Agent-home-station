@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -138,10 +138,45 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
  Write-Output ('Staged verified WeChat native runtime: '+$destination+' ('+$files.Count+' files; no account data or management executable).')
 }
 
+function Stage-LocalStationSpeechRunner([string]$PackageDirectory){
+ # Keep the trusted repository runner as the only source.  This package is a
+ # preview pin for the registered backend, not a bundled Python environment,
+ # model, voice profile or executable adapter.
+ $source=Join-Path $workspace 'plugins\speech\runtime\gpt_sovits.py'
+ if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw 'The trusted local speech runner is missing from plugins/speech/runtime.'}
+ Assert-NoReparsePointAncestor $source
+ $hash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLower()
+ $runtimeRoot=Join-Path $PackageDirectory 'runtimes'
+ $destination=Join-Path $runtimeRoot 'windows-station-speech'
+ $manifestPath=Join-Path $destination 'runtime-manifest.json'
+ Assert-NoReparsePointAncestor $PackageDirectory
+ New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+ Assert-NoReparsePointAncestor $runtimeRoot
+ $files=[ordered]@{'gpt_sovits.py'=$hash}
+ $manifest=([ordered]@{schema_version=1;platform='windows-x64';policy='station-speech-runner-v1';source='plugins/speech/runtime/gpt_sovits.py';files=$files}|ConvertTo-Json -Depth 4)
+ if(Test-Path -LiteralPath $destination){
+  Assert-NoReparsePointAncestor $destination
+  if(-not(Test-Path -LiteralPath $manifestPath -PathType Leaf) -or [IO.File]::ReadAllText($manifestPath) -cne $manifest){throw 'Existing station speech runner differs; use a fresh output directory.'}
+  $entries=@(Get-ChildItem -LiteralPath $destination -Force)
+  if($entries.Count -ne 2 -or $entries | Where-Object {$_.PSIsContainer -or ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)}){throw 'Existing station speech runner has unexpected files.'}
+  $staged=Join-Path $destination 'gpt_sovits.py'
+  if(-not(Test-Path -LiteralPath $staged -PathType Leaf) -or (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLower() -ne $hash){throw 'Existing station speech runner integrity check failed.'}
+  Write-Output ('Verified existing station speech runner: '+$staged+' (SHA-256 '+$hash+').')
+  return
+ }
+ New-Item -ItemType Directory -Path $destination | Out-Null
+ $staged=Join-Path $destination 'gpt_sovits.py'
+ Copy-Item -LiteralPath $source -Destination $staged
+ if((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLower() -ne $hash){throw 'Station speech runner source changed during staging.'}
+ [IO.File]::WriteAllText($manifestPath,$manifest,[Text.UTF8Encoding]::new($false))
+ Write-Output ('Staged trusted station speech runner: '+$staged+' (SHA-256 '+$hash+'). Backend registration must use this explicit absolute path and digest.')
+}
+
 if($WithWeChatRuntime -and -not $LocalStation){throw 'WithWeChatRuntime is only valid with -LocalStation.'}
 if($WithRVCBackend -and -not $LocalStation){throw 'WithRVCBackend is only valid with -LocalStation.'}
 if($WithComfyUI -and -not $LocalStation){throw 'WithComfyUI is only valid with -LocalStation.'}
 if($WithYuE -and -not $LocalStation){throw 'WithYuE is only valid with -LocalStation.'}
+if($WithStationSpeech -and -not $LocalStation){throw 'WithStationSpeech is only valid with -LocalStation.'}
 if($WithWeChatRuntime){$WithWeChatApp=$true}
 # A document converter is intentionally opt-in.  The three existing source
 # directory arguments are the opt-in contract: when absent, a LocalStation
@@ -171,7 +206,7 @@ $archive=$cache+'.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDirectory | Out-Null
 # The zero-application preview deliberately has no optional tool catalog.  The
 # regular desktop package retains the catalog validation/staging contract.
-if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE){
+if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech){
  $catalogArgs=@('--source',(Join-Path $workspace 'plugins'),'--output',(Join-Path $OutputDirectory 'plugins'))
  if($LocalStation -and $WithShareReader){$catalogArgs+=@('--package','share-reader')}
  if($LocalStation -and $WithMediaUnderstanding){$catalogArgs+=@('--package','media-understanding')}
@@ -180,6 +215,7 @@ if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $Wi
  if($LocalStation -and $WithRVCBackend){$catalogArgs+=@('--package','rvc')}
  if($LocalStation -and $WithComfyUI){$catalogArgs+=@('--package','comfyui')}
  if($LocalStation -and $WithYuE){$catalogArgs+=@('--package','yue')}
+ if($LocalStation -and $WithStationSpeech){$catalogArgs+=@('--package','station-speech')}
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') @catalogArgs
  if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
 }
@@ -215,6 +251,7 @@ if($LocalStation){
  finally { Pop-Location }
  if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
  if($WithWeChatRuntime){Stage-LocalStationWeChatRuntime -SourceDirectory $WeChatRuntimeDirectory -PackageDirectory $OutputDirectory}
+ if($WithStationSpeech){Stage-LocalStationSpeechRunner -PackageDirectory $OutputDirectory}
 }
 Copy-Item -LiteralPath (Join-Path $cache 'LICENSE.txt') -Destination (Join-Path $OutputDirectory 'WebView2-LICENSE.txt')
 if($Test){
@@ -289,7 +326,7 @@ if($WithRVCBackend){
 # reviewed package and font source directories explicitly stages the bounded
 # native PDF runtime beside that CLI.  Portable bundles use the shared resource
 # preparer below, so avoid repeating either integrity-checked operation here.
-if($LocalStation -and ($WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend) -and -not $Portable){
+if($LocalStation -and ($WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithStationSpeech) -and -not $Portable){
  $runtimeRoot=Join-Path $OutputDirectory 'runtimes'
  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_windows_python.py') --target (Join-Path $runtimeRoot 'windows-python-cli') --cache (Join-Path $workspace 'temp\\windows-runtime-downloads')
  if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed for the selected project tools.'}

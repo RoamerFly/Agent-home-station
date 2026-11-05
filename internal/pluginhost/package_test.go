@@ -53,8 +53,8 @@ func TestOfficialContracts(t *testing.T) {
 		}
 	}
 	dirs = folders
-	if len(dirs) != 14 {
-		t.Fatalf("expected 14 capability packages, got %d", len(dirs))
+	if len(dirs) != 15 {
+		t.Fatalf("expected 15 capability packages, got %d", len(dirs))
 	}
 	for _, d := range dirs {
 		t.Run(d.Name(), func(t *testing.T) {
@@ -62,9 +62,9 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" || d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" || d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" {
 				transport, entrypoint := "mcp-stdio", "runtime/main.py"
-				if d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" {
+				if d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" {
 					transport, entrypoint = "http-adapter", "runtime/managed-service.json"
 				}
 				if p.Status != "ready" || p.Runtime.Transport != transport || p.Runtime.Entrypoint != entrypoint {
@@ -130,6 +130,12 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"yue.generate": true, "yue.job": true}
 						if len(p.Permissions) != 3 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" || p.Permissions[2] != "gpu" {
 							t.Fatal("YuE package must declare only artifact read/write and explicit GPU permissions")
+						}
+					}
+					if d.Name() == "station-speech" {
+						want = map[string]bool{"station-speech.voices": true, "station-speech.synthesize": true}
+						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.write" || p.Permissions[1] != "gpu" {
+							t.Fatal("station speech package must declare only artifact write and explicit GPU permissions")
 						}
 					}
 					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))
@@ -227,6 +233,17 @@ func TestOfficialContracts(t *testing.T) {
 									}
 								}
 							}
+							if d.Name() == "station-speech" {
+								wantPermissions := []string{"artifact.write", "gpu"}
+								if cap.Async || len(cap.Permissions) != len(wantPermissions) {
+									t.Fatal("station speech capability must wait within the original local chat turn", cap.ID)
+								}
+								for i, permission := range wantPermissions {
+									if cap.Permissions[i] != permission {
+										t.Fatal("station speech capability permission changed", cap.ID, cap.Permissions)
+									}
+								}
+							}
 							if d.Name() == "rvc" {
 								var schema struct {
 									Properties map[string]json.RawMessage `json:"properties"`
@@ -280,6 +297,25 @@ func TestOfficialContracts(t *testing.T) {
 								case "yue.job":
 									if len(schema.Properties) != 2 || schema.Properties["job_id"] == nil || schema.Properties["action"] == nil || len(schema.Required) != 2 || schema.Required[0] != "job_id" || schema.Required[1] != "action" {
 										t.Fatal("YuE job must require only job_id and action")
+									}
+								}
+							}
+							if d.Name() == "station-speech" {
+								var schema struct {
+									Properties map[string]json.RawMessage `json:"properties"`
+									Required   []string                   `json:"required"`
+								}
+								if err := json.Unmarshal(cap.InputSchema, &schema); err != nil {
+									t.Fatal(err)
+								}
+								switch cap.ID {
+								case "station-speech.voices":
+									if len(schema.Properties) != 0 || len(schema.Required) != 0 {
+										t.Fatal("station speech voice inventory must take no arguments")
+									}
+								case "station-speech.synthesize":
+									if len(schema.Properties) != 4 || schema.Properties["voice_id"] == nil || schema.Properties["text"] == nil || schema.Properties["speed"] == nil || schema.Properties["text_language"] == nil || len(schema.Required) != 2 || schema.Required[0] != "voice_id" || schema.Required[1] != "text" {
+										t.Fatal("station speech synthesis must require only voice_id and text, with optional speed and text_language")
 									}
 								}
 							}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "station-speech",
+  "name": "本机语音",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": ["windows-amd64"],
+  "runtime": {"transport": "http-adapter", "entrypoint": "runtime/managed-service.json"},
+  "permissions": ["artifact.write", "gpu"],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "2760d5928b6a14b8912395c1929d757a59fab8bafa815513043158f9e4aabd3c",
+    "CHANGELOG.md": "55e838042b5a3c7ffc340c3ae2c916ef07e9993308ccb635d95e74f871da41ab",
+    "config.schema.json": "ccf99a88820549afe51215fd75032c812a02c7b26365d9d292cb02ba211aa80b",
+    "MIGRATION.md": "34836eb368a7722a9bbb510f2d39cf12dc230caba0180165a38e1f989dc54ed4",
+    "PERMISSIONS.md": "b41d1d1da1a3131c2b566d78c1d14a9e3d04e67420e48e4517f0901140355211",
+    "README.md": "4c1e7191159388b071c1b0a79901bc6e7fed8ce43b4928e61070975ed37d1209",
+    "runtime/managed-service.json": "b61b780b1e5fd67d6e9e93e81f0d97ed7283aacc7508f3bf4070acad523eeec2",
+    "ui.schema.json": "6677fe276ccb10ad78b8b2647f6342c0aeed3a974f0429cccea45176a4f391de"
+  }
+}

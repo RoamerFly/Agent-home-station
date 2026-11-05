@@ -340,6 +340,47 @@ PDF 导出还需可用的文档运行时。构建时为上述命令同时提供 
 
 在「项目工具 → YuE 作曲」确认权限、安装并启用。原创任务使用风格、歌词和时长。参考音频任务使用已核验的 PCM16 WAV 成品编号，单份参考文件最多 25 MiB，可先用音频工坊转换。任务账本保存生效配方、参考来源、工作流摘要和原任务编号。提交结果未知时按原任务核对，取消先写入账本，迟到结果不会登记为成品。只有完整解码并通过时长核验的 FLAC 才进入可下载成品。指定某条唱歌声线需要另行运行已获授权的 RVC 任务。
 
+### Windows 本地语音合成
+
+使用 `Build-Desktop.ps1 -LocalStation -WithStationSpeech` 构建带「本机语音」项目工具的 Windows 预览。该选项准备隐藏执行所需的受管 Python CLI，并提供可登记的 `runtimes/windows-station-speech/gpt_sovits.py`。主人另行准备 GPT-SoVITS 项目、推理用 Python 及其依赖、基础模型、解码组件和获准的说话声线。把部署登记 `station-speech.json` 放在站点 `-data` 私有目录。资源路径使用绝对路径，运行环境与私有声线文件放在站点数据和大肥鱼家目录之外。
+
+下面是登记示例，使用实际路径和每个文件的 64 位小写 SHA-256。`media` 目录须含 `ffmpeg.exe` 与 `ffprobe.exe`，`nltk_data` 指向准备好的本地语料目录。有独立 Python 依赖目录时，可用 `packages` 登记其绝对路径。当前运行器使用 GPT-SoVITS v2 声线。
+
+```json
+{
+  "schema_version": 1,
+  "enabled": true,
+  "project": "E:\\Speech\\GPT-SoVITS",
+  "python": "E:\\Speech\\Python\\python.exe",
+  "base_models": "E:\\Speech\\BaseModels",
+  "runner": "E:\\AgentHomePreview\\runtimes\\windows-station-speech\\gpt_sovits.py",
+  "runner_sha256": "填写实际 SHA-256",
+  "media": "E:\\Speech\\Media",
+  "nltk_data": "E:\\Speech\\NLTK",
+  "device": "cpu",
+  "voices": [{
+    "id": "voice-example",
+    "label": "示例声线",
+    "gpt": "E:\\PrivateVoices\\Example\\voice.ckpt",
+    "gpt_sha256": "填写实际 SHA-256",
+    "sovits": "E:\\PrivateVoices\\Example\\voice.pth",
+    "sovits_sha256": "填写实际 SHA-256",
+    "reference": "E:\\PrivateVoices\\Example\\sample.wav",
+    "reference_sha256": "填写实际 SHA-256",
+    "prompt": "E:\\PrivateVoices\\Example\\sample.txt",
+    "prompt_sha256": "填写实际 SHA-256",
+    "prompt_language": "all_zh",
+    "text_language": "auto"
+  }]
+}
+```
+
+每条声线使用稳定编号，绑定 GPT 权重、SoVITS 权重、参考音频和参考转写的实际 SHA-256，并设置参考语言与合成语言。可用 `Get-FileHash -Algorithm SHA256` 核对文件。复用原有说话声线时，填入原权重、参考音频及同一条声线编号。独立登记不会改动原微信声线。模型与录音由主人保留，工具只向本地聊天返回声线编号、名称、版本和语速范围。
+
+在「项目工具 → 本机语音」确认本机计算与成品写入权限，安装并启用。之后可以在软件聊天中说「用我的说话声线慢读 cloth 和 fabric，给我音频」。大肥鱼可先查询精确声线编号，再合成正文。`speed` 默认 `1`，`0.8` 表示将调速参数设为正常的 0.8 倍，实际允许范围由所选声线给出。`text_language` 留空时采用该声线的登记值。单次正文上限为 12,000 UTF-8 字节，执行时间还受本地聊天回合剩余时间约束。长文本可分为多个请求。
+
+合成按请求启动一次隐藏的离线隔离进程，停用工具或取消聊天请求会中断执行。通过声线版本、WAV 文件和任务回执核验后，成品可在软件聊天中下载。提交后进程意外中断、结果无法核对时，原请求保留待核对记录。工具不会替换声线，也不向任何应用发消息。
+
 ### Windows 运行器
 
 可执行文件旁存在下列受管运行时布局时自动识别；没有安装运行器也能聊天及操作文件，启动程序会返回 `windows_runtime_not_configured`，不会退回不受限制的宿主命令行。

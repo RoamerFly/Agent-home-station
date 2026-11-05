@@ -66,6 +66,33 @@ class MusicBrokerPolicyTests(unittest.TestCase):
                 self.assertIn(error, result["error"])
                 self.assertEqual(result["exit_code"], -1)
 
+    def test_offline_speech_policy_is_direct_only_and_never_requests_music_network_policy(self):
+        import tempfile
+        from unittest.mock import patch
+
+        class Child:
+            pid = 1
+            returncode = 0
+            def poll(self): return 0
+
+        run = runpy.run_path(str(Path(__file__).with_name("windows_agent_host.pyw")))["run"]
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            request = base / "request.json"
+            request.write_text(json.dumps({
+                "sandbox": True, "cwd": str(base), "roots": [str(base)], "read_only": [],
+                "argv": [str(base / "trusted-python.exe"), "-c", "print('speech')"], "command": "",
+                "music_policy": "registry-read-offline-speech-v1",
+                "environment": {"NLTK_DATA": str(base / "nltk"), "WECHAT_WINDOWS_SPEECH_RUNTIME": "1"},
+            }), encoding="utf8")
+            with patch("windows_lpac.launch", return_value=Child()) as launch:
+                run(request)
+            result = json.loads(request.with_name("result.json").read_text(encoding="utf8"))
+            self.assertEqual(result["exit_code"], 0, result)
+            self.assertFalse(launch.call_args.kwargs["music_runtime"])
+            self.assertTrue(launch.call_args.kwargs["speech_runtime"])
+            self.assertEqual(launch.call_args.kwargs["environment"]["WECHAT_WINDOWS_SPEECH_RUNTIME"], "1")
+
 
 @unittest.skipUnless(os.name == "nt" and os.environ.get("WECHAT_WINDOWS_MUSIC_TEST_PYTHON"), "opt-in managed Windows Python")
 class WindowsMusicTests(unittest.TestCase):
