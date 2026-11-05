@@ -62,6 +62,38 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 		}
 		return reader.ReadAction(r.Context(), r.PathValue("connection"), r.PathValue("operation"))
 	})
+	mux.HandleFunc("PUT /api/apps/{app}/connections/{connection}/policy", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		app, ok := registry.Lookup(r.PathValue("app"))
+		writer, supported := app.Provider.(apphost.ConnectionPolicyWriter)
+		if !ok || !supported {
+			fail(w, http.StatusNotFound, "应用未提供回复范围设置")
+			return
+		}
+		var input struct {
+			Threads *[]string `json:"reply_threads"`
+		}
+		if !decode(w, r, &input) {
+			return
+		}
+		if input.Threads == nil {
+			fail(w, http.StatusBadRequest, "请提供明确的回复会话列表")
+			return
+		}
+		view, err := writer.SetConnectionReplyThreads(r.Context(), r.PathValue("connection"), *input.Threads)
+		switch {
+		case errors.Is(err, apphost.ErrNotFound):
+			fail(w, http.StatusNotFound, "应用连接不存在")
+		case errors.Is(err, apphost.ErrInvalidConnectionPolicy):
+			fail(w, http.StatusBadRequest, "会话 ID 必须有效且不重复，最多 100 个")
+		case errors.Is(err, apphost.ErrLifecycleConflict):
+			fail(w, http.StatusConflict, "正在停止旧的回复任务，请稍后查询连接状态")
+		case err != nil:
+			fail(w, http.StatusServiceUnavailable, "暂时无法保存回复范围")
+		default:
+			respond(w, http.StatusOK, map[string]any{"connection": view})
+		}
+	}))
 	mux.HandleFunc("POST /api/apps/{app}/connections/{connection}/lifecycle", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		var input struct {

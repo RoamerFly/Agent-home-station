@@ -11,11 +11,12 @@ import (
 )
 
 var (
-	ErrNotFound          = errors.New("application or connection not found")
-	ErrUnavailable       = errors.New("application registry unavailable")
-	ErrLifecycleConflict = errors.New("application lifecycle transition unavailable now")
-	ErrLifecycleNotReady = errors.New("application requires configuration before start")
-	stableID             = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+	ErrNotFound                = errors.New("application or connection not found")
+	ErrUnavailable             = errors.New("application registry unavailable")
+	ErrLifecycleConflict       = errors.New("application lifecycle transition unavailable now")
+	ErrInvalidConnectionPolicy = errors.New("invalid connection reply policy")
+	ErrLifecycleNotReady       = errors.New("application requires configuration before start")
+	stableID                   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 )
 
 type Application struct {
@@ -41,6 +42,7 @@ type ConfiguredPolicy struct {
 	ConversationEnabled bool     `json:"conversation_enabled"`
 	ToolsEnabled        bool     `json:"tools_enabled"`
 	Grants              []string `json:"grants"`
+	ReplyThreads        []string `json:"reply_threads,omitempty"`
 }
 
 type ConnectionStatus struct {
@@ -63,6 +65,11 @@ type ConnectionLifecycle struct {
 
 type LifecycleController interface {
 	SetConnectionRunning(ctx context.Context, connectionID string, running bool) (ConnectionLifecycle, error)
+}
+
+// ConnectionPolicyWriter saves an explicit owner-selected reply allowlist.
+type ConnectionPolicyWriter interface {
+	SetConnectionReplyThreads(ctx context.Context, connectionID string, threads []string) (ConnectionStatus, error)
 }
 
 type Provider interface {

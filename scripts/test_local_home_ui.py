@@ -260,6 +260,63 @@ def verify(binary, output):
                 page.unroute(operation_pattern, setup_operation)
                 page.unroute(qr_pattern, setup_qr)
 
+                worker_policy_pattern = status_pattern + "/policy"
+                worker_lifecycle_pattern = status_pattern + "/lifecycle"
+                worker = {"state": "disabled", "threads": [], "actions": []}
+
+                def worker_view():
+                    return {"connection": {"id": "synthetic-wechat", "login": "authenticated",
+                        "runtime": "online", "worker": worker["state"], "configured_policy": {
+                            "conversation_enabled": bool(worker["threads"]), "reply_threads": worker["threads"]}}}
+
+                def read_worker(route):
+                    fulfill_json(worker_view())(route)
+
+                def save_worker(route):
+                    assert route.request.method == "PUT"
+                    worker["threads"] = route.request.post_data_json["reply_threads"]
+                    fulfill_json(worker_view())(route)
+
+                def set_worker(route):
+                    assert route.request.method == "POST"
+                    action = route.request.post_data_json["action"]
+                    worker["actions"].append(action)
+                    worker["state"] = "running" if action == "start" else "paused"
+                    fulfill_json({"worker": worker["state"]})(route)
+
+                page.unroute(status_pattern, status_route)
+                status_route = read_worker
+                page.route(status_pattern, status_route)
+                page.route(worker_policy_pattern, save_worker)
+                page.route(worker_lifecycle_pattern, set_worker)
+                page.locator("#apps-refresh").click()
+                page.get_by_text("Agent 未启动", exact=True).wait_for()
+                assert page.get_by_role("button", name="启动 Agent").is_disabled()
+                page.get_by_role("button", name="设置回复范围").click()
+                page.get_by_role("textbox", name="回复会话 ID").fill("filehelper\nsynthetic-room@chatroom")
+                page.get_by_role("button", name="保存回复范围").click()
+                page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
+                page.get_by_role("button", name="启动 Agent").click()
+                page.get_by_text("Agent 运行中", exact=True).wait_for()
+                page.get_by_role("button", name="暂停 Agent").click()
+                page.get_by_text("Agent 已暂停", exact=True).wait_for()
+                assert worker["threads"] == ["filehelper", "synthetic-room@chatroom"]
+                assert worker["actions"] == ["start", "stop"]
+                page.set_viewport_size({"width": 375, "height": 780})
+                assert_no_horizontal_overflow(page, "worker controls")
+                assert page.evaluate("""() => {
+                    const panel = document.querySelector('.app-worker');
+                    const area = panel.getBoundingClientRect();
+                    return [...panel.querySelectorAll('button, textarea')].every((node) => {
+                        const bounds = node.getBoundingClientRect();
+                        return bounds.left >= area.left - 1 && bounds.right <= area.right + 1;
+                    });
+                }"""), "worker editor clipped inside its card"
+                page.screenshot(path=str(output / "apps-worker-narrow.png"), full_page=True)
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.unroute(worker_policy_pattern, save_worker)
+                page.unroute(worker_lifecycle_pattern, set_worker)
+
                 # An unavailable account read remains a visible, recoverable application state.
                 page.unroute(connection_base, setup_connections)
                 unavailable_route = fulfill_json({"error": "synthetic connection unavailable"}, status=503)
@@ -312,7 +369,7 @@ def verify(binary, output):
                 assert note.read_text(encoding="utf-8") == "a persistent companion home"
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "worker policy and lifecycle", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 

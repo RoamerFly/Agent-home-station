@@ -39,6 +39,7 @@ type Config struct {
 	MediaSeedReceipt    func(string, string) (linuxnative.ToolStatus, bool)
 	BacklogSettled      func(string, string, []string, string)
 	AuthorizeThread     func(context.Context, string) (bool, error)
+	AuthorizeReply      func(companion.Input) bool
 	AgentTask           func(time.Time, func(string) bool) (*companion.Input, error)
 	AgentTaskDone       func(companion.Input, string)
 	AgentTaskRetry      func(companion.Input, time.Duration, string)
@@ -70,6 +71,12 @@ func (w *Worker) beforeSubmit(ctx context.Context) error {
 		return w.config.BeforeSubmit(ctx)
 	}
 	return nil
+}
+
+func (w *Worker) authorizedMessage(message linuxnative.Message) bool {
+	return w.config.AuthorizeReply == nil || w.config.AuthorizeReply(companion.Input{
+		Account: message.AccountID, Thread: message.ThreadID, MessageTime: message.CreatedAt,
+	})
 }
 
 var errSubmissionDeferred = errors.New("delivery_waiting_for_connection")
@@ -251,6 +258,10 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		return
 	}
 	if message.ThreadID != event.Data.ThreadID || message.Direction != event.Data.Direction {
+		return
+	}
+	if !w.authorizedMessage(message) {
+		w.queuePhase(message.ID, "skipped")
 		return
 	}
 	// Historical reviews are processed in order. A later recovered message

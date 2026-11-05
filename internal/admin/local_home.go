@@ -73,7 +73,6 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 		_, value, _ := s.session(r)
 		respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": value.CSRF})
 	}))
-	s.appRoutes(mux, registry)
 	home := &localHomeService{identity: newFishIdentityRegistry(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true}
 	home.configureAppCatalog()
 	home.appInstallRoutes(s, mux)
@@ -97,6 +96,14 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 			}
 		}
 		chat.windows = &copy
+	}
+	registry, handler.wechat, err = bindStationWechat(registry, chat)
+	if err != nil {
+		return nil, err
+	}
+	s.appRoutes(mux, registry)
+	if handler.wechat != nil {
+		handler.wechat.restore()
 	}
 	chat.routes(s, mux)
 	// Desktop owns the inherited stop pipe. This authenticated endpoint only

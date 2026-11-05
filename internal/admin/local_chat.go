@@ -19,12 +19,12 @@ import (
 	"wechat-bot/internal/deepseek"
 )
 
-// LocalHomeHandler owns only the local station's resources. Closing it never
-// stops an application account or the old management service.
+// LocalHomeHandler owns the local chat and this station's app workers.
 type LocalHomeHandler struct {
 	http.Handler
-	chat *localChatService
-	home *localHomeService
+	chat   *localChatService
+	home   *localHomeService
+	wechat *stationWechat
 }
 
 // BeginShutdown is deliberately separate from Close.  It first makes the
@@ -34,6 +34,9 @@ type LocalHomeHandler struct {
 func (h *LocalHomeHandler) BeginShutdown() {
 	if h != nil && h.chat != nil {
 		h.chat.beginShutdown()
+		if h.wechat != nil {
+			h.wechat.beginShutdown()
+		}
 	}
 }
 
@@ -50,7 +53,11 @@ func (h *LocalHomeHandler) CloseContext(ctx context.Context) error {
 		return nil
 	}
 	h.BeginShutdown()
-	return h.chat.closeContext(ctx)
+	err := h.chat.closeContext(ctx)
+	if h.wechat != nil {
+		err = errors.Join(err, h.wechat.closeContext(ctx))
+	}
+	return err
 }
 
 func (h *LocalHomeHandler) runtime(w http.ResponseWriter, _ *http.Request) {

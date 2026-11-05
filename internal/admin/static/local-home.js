@@ -50,7 +50,7 @@
     else window.clearTimeout(apps.loginTimer);
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0 };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), editWorker: "" };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -207,6 +207,65 @@
       if (current === apps) renderApps();
     }
   }
+  const appWorkerLabels = {
+    disabled: "Agent 未启动", needs_setup: "Agent 待配置", waiting_login: "Agent 等待登录",
+    running: "Agent 运行中", stopping: "Agent 正在停止", paused: "Agent 已暂停", error: "Agent 运行异常"
+  };
+  function appWorkerControls(id, status) {
+    const panel = appElement("div", "", "app-worker");
+    const buttons = appElement("div", "", "app-worker-actions");
+    const running = ["running", "waiting_login", "stopping"].includes(status.worker);
+    const edit = appSetupButton(apps.editWorker === id ? "收起回复范围" : "设置回复范围", () => {
+      apps.editWorker = apps.editWorker === id ? "" : id;
+      renderApps();
+    });
+    buttons.append(appElement("small", appWorkerLabels[status.worker]), edit);
+    const toggle = appSetupButton(running ? "暂停 Agent" : "启动 Agent",
+      () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
+    toggle.disabled ||= status.worker === "stopping" || !running && !status.configured_policy?.conversation_enabled;
+    buttons.append(toggle);
+    panel.append(buttons);
+    if (apps.editWorker !== id) return panel;
+    const field = document.createElement("textarea");
+    field.rows = 3;
+    field.placeholder = "filehelper，或微信用户 / 群 ID";
+    field.setAttribute("aria-label", "回复会话 ID");
+    field.value = apps.workerDrafts.get(id) ?? (status.configured_policy?.reply_threads || []).join("\n");
+    field.addEventListener("input", () => apps.workerDrafts.set(id, field.value));
+    const save = appSetupButton("保存回复范围", () => {
+      const reply_threads = field.value.split(/[\s，,]+/u).filter(Boolean);
+      runWorkerAction(id, "PUT", "policy", { reply_threads });
+    });
+    panel.append(appElement("p", "每行一个会话 ID。群聊仅在被提及时回复；清空并保存可撤销全部范围。"), field, save);
+    return panel;
+  }
+  async function runWorkerAction(id, method, action, body) {
+    const current = apps;
+    if (current.setupBusy || current.loading) return;
+    current.setupBusy = true;
+    appFeedback("");
+    renderApps();
+    try {
+      const path = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/" + action;
+      const result = await request(path, { method, body: JSON.stringify(body) });
+      if (current !== apps) return;
+      if (action === "policy") {
+        current.workerDrafts.delete(id);
+        appFeedback(result.connection?.submissions_paused ? "回复范围已保存，Agent 已暂停。" : "回复范围已保存。");
+      } else {
+        appFeedback(body.action === "stop" ? "已暂停此账号的 Agent。" : "已启动此账号的 Agent，正在确认状态。");
+      }
+      await loadApps();
+    } catch (error) {
+      if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) {
+        appFeedback(error.message, true);
+        if (error.status === 409) await loadApps();
+      }
+    } finally {
+      current.setupBusy = false;
+      if (current === apps) renderApps();
+    }
+  }
   function appConnectionRow(record) {
     const row = appElement("div", "", "app-layer");
     const detail = appElement("div", "");
@@ -235,7 +294,10 @@
           const label = pendingAppLogin(entry?.op) ? "查看扫码" : "扫码登录";
           item.append(appSetupButton(label, () => runAppSetup(account.id)));
         }
-        if (apps.selectedLogin === account.id && entry?.op) item.append(renderAppLogin(account.id, entry.op));
+        if (apps.selectedLogin === account.id && entry?.op && (status?.login !== "authenticated" || entry.op.state === "succeeded")) {
+          item.append(renderAppLogin(account.id, entry.op));
+        }
+        if (canSetup && status && appWorkerLabels[status.worker]) item.append(appWorkerControls(account.id, status));
         list.append(item);
       }
       detail.append(list);

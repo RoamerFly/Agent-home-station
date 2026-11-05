@@ -58,6 +58,16 @@ namespace WechatAgent.Desktop {
             catch (ArgumentException) { return false; }
         }
 
+        static Dictionary<string, object> StationJSON(HttpClient client, HttpMethod method, string url, object payload) {
+            using (var request = new HttpRequestMessage(method, url)) {
+                request.Content = new StringContent(Deployment.Json.Serialize(payload), System.Text.Encoding.UTF8, "application/json");
+                using (var response = client.SendAsync(request).GetAwaiter().GetResult()) {
+                    Assert(response.IsSuccessStatusCode, "station request failed: " + method + " " + new Uri(url).AbsolutePath + " " + (int)response.StatusCode);
+                    return Deployment.Json.Deserialize<Dictionary<string, object>>(response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+                }
+            }
+        }
+
         static void LocalNativeCycle(string packageDirectory) {
             const string password = "synthetic-local-native-cycle";
             var priorPassword = Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD");
@@ -105,20 +115,43 @@ namespace WechatAgent.Desktop {
                                 Assert(items.Count == (round == 0 ? 0 : 2), "isolated native profiles persist across restart");
                                 const string connections = "/api/apps/wechat/connections";
                                 var keys = new [] { "33333333333343338333333333333333", "44444444444444448444444444444444" };
+                                var profiles = new List<string>();
                                 foreach (var key in keys) {
                                     using (var payload = new StringContent(Deployment.Json.Serialize(new { request_id = key }), System.Text.Encoding.UTF8, "application/json"))
                                     using (var created = client.PostAsync(d.Url + connections, payload).GetAwaiter().GetResult()) {
                                         Assert(created.IsSuccessStatusCode, "station created or reused the exact native profile: " + (int)created.StatusCode);
                                         var profile = Deployment.Json.Deserialize<Dictionary<string, object>>(created.Content.ReadAsStringAsync().GetAwaiter().GetResult());
                                         Assert(Deployment.Text(profile, "account_id") == "account-" + key, "provisioning returned the exact profile");
-                                        var inspect = client.GetStringAsync(d.Url + connections + "/" + Deployment.Text(profile, "id")).GetAwaiter().GetResult();
-                                        var view = Deployment.Json.Deserialize<Dictionary<string, object>>(inspect);
-                                        var connection = (Dictionary<string, object>)view["connection"];
-                                        Assert(Deployment.Text(connection, "login") == "signed_out" && Deployment.Text(connection, "worker") == "unavailable", "registration does not sign in or start a worker");
+                                        var profileUrl = d.Url + connections + "/" + Deployment.Text(profile, "id");
+                                        profiles.Add(profileUrl);
+                                        var worker = round == 0 ? "disabled" : profiles.Count == 1 ? "paused" : "waiting_login";
+                                        Dictionary<string, object> connection;
+                                        var workerDeadline = DateTime.UtcNow.AddSeconds(5);
+                                        do {
+                                            var inspect = client.GetStringAsync(profileUrl).GetAwaiter().GetResult();
+                                            var view = Deployment.Json.Deserialize<Dictionary<string, object>>(inspect);
+                                            connection = (Dictionary<string, object>)view["connection"];
+                                            if (Deployment.Text(connection, "worker") == worker) break;
+                                            Thread.Sleep(100);
+                                        } while (DateTime.UtcNow < workerDeadline);
+                                        Assert(Deployment.Text(connection, "login") == "signed_out" && Deployment.Text(connection, "worker") == worker, "native login remains separate from persisted worker state");
                                     }
                                 }
                                 var list = Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(d.Url + connections).GetAwaiter().GetResult());
                                 Assert(((IList)list["items"]).Count == 2, "repeated requests did not create duplicate accounts");
+                                if (round == 0) {
+                                    var settings = Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(d.Url + "/api/local/model").GetAwaiter().GetResult());
+                                    settings["api_key"] = "synthetic-controller-worker-key";
+                                    settings["base_url"] = "https://127.0.0.1:1";
+                                    StationJSON(client, HttpMethod.Put, d.Url + "/api/local/model", settings);
+                                    foreach (var profileUrl in profiles) {
+                                        StationJSON(client, HttpMethod.Put, profileUrl + "/policy", new { reply_threads = new [] { "filehelper" } });
+                                        var started = StationJSON(client, HttpMethod.Post, profileUrl + "/lifecycle", new { action = "start" });
+                                        Assert(Deployment.Text(started, "worker") == "waiting_login", "new worker waits for its own account login");
+                                    }
+                                    var stopped = StationJSON(client, HttpMethod.Post, profiles[0] + "/lifecycle", new { action = "stop" });
+                                    Assert(Deployment.Text(stopped, "worker") == "paused", "pausing one worker preserves the other worker state");
+                                }
                             }
                         } finally { runtime.Stop().GetAwaiter().GetResult(); }
                         Assert(!ProcessAlive(station) && !ProcessAlive(native), "both owned children exit after stop");
@@ -306,7 +339,7 @@ namespace WechatAgent.Desktop {
             if (args.Length == 1 && args[0] == "--synthetic-child") { Thread.Sleep(60000); return 0; }
             if (args.Length == 2 && args[0] == "--local-native-cycle") {
                 LocalNativeCycle(args[1]);
-                Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; two synthetic native profiles persisted, no login or send.");
+                Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; two synthetic profiles and independent worker states persisted, no login or send.");
                 return 0;
             }
             if (args.Length == 2 && args[0] == "--local-cycle") {

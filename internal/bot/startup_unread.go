@@ -113,7 +113,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			w.queuePhase(item.Event.Data.MessageID, "read_pending")
 			return w.persistErr
 		}
-		if m.AccountID != "" && m.AccountID != w.source.Account() || m.ThreadID != thread || m.ID != item.Event.Data.MessageID || m.Direction != item.Event.Data.Direction {
+		if m.AccountID != "" && m.AccountID != w.source.Account() || m.ThreadID != thread || m.ID != item.Event.Data.MessageID || m.Direction != item.Event.Data.Direction || !w.authorizedMessage(m) {
 			w.queuePhase(item.Event.Data.MessageID, "skipped")
 			continue
 		}

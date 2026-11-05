@@ -439,7 +439,15 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 				continue
 			}
 		}
-		if !w.allowed[d.Thread] {
+		if w.config.AuthorizeReply != nil && !w.config.AuthorizeReply(d.Input) {
+			if d.State != "cancelled_reconciling" {
+				_, _ = w.cancelledDelivery(d)
+				if w.persistErr != nil {
+					return
+				}
+				continue
+			}
+		} else if !w.allowed[d.Thread] {
 			d.State = "stopped"
 			d.Reason = "conversation_not_allowed"
 			w.activity(Record{Event: "delivery_stopped", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Reason: "conversation_not_allowed", Status: "blocked", SendID: d.ID})
@@ -537,6 +545,10 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			d.State = "stopped"
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, Reason: status.Reason, Status: "failed", SendID: d.ID})
 			w.persistErr = w.saveRuntime()
+			continue
+		}
+		if d.Cancelled && w.config.AuthorizeReply != nil && !w.config.AuthorizeReply(d.Input) {
+			w.deferReceiptLookup(d, "revoked_delivery_receipt_unverified")
 			continue
 		}
 		confirmedRetryable := err == nil && status.State == "failed" && status.Retryable

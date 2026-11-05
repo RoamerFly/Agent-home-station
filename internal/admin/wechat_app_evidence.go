@@ -120,6 +120,10 @@ func (w wechatCompatibility) ReadReceipt(ctx context.Context, connection, key st
 }
 
 func (m *Manager) queryWechatDelivery(ctx context.Context, thread, source string, stored linuxnative.ToolStatus, byJob bool, result *apphost.DeliveryReceipt) {
+	queryWechatDelivery(ctx, m.native, thread, source, stored, byJob, result)
+}
+
+func queryWechatDelivery(ctx context.Context, native any, thread, source string, stored linuxnative.ToolStatus, byJob bool, result *apphost.DeliveryReceipt) {
 	projectWechatReceipt(result, stored)
 	if result.State == "accepted" || (result.State == "not_submitted" && stored.ID == "") {
 		return
@@ -132,12 +136,12 @@ func (m *Manager) queryWechatDelivery(ctx context.Context, thread, source string
 	key := result.IdempotencyKey
 	if byJob {
 		key = stored.ID
-		if reader, ok := m.native.(interface {
+		if reader, ok := native.(interface {
 			ToolSendStatus(context.Context, string) (linuxnative.ToolStatus, error)
 		}); ok {
 			lookup = reader.ToolSendStatus
 		}
-	} else if reader, ok := m.native.(wechatReceiptReader); ok {
+	} else if reader, ok := native.(wechatReceiptReader); ok {
 		lookup = reader.LookupSend
 	}
 	if key == "" {

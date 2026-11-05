@@ -19,5 +19,6 @@
   "share_read_source": "adapter/share_read.go",
   "channels_protocol_source": "adapter/channels_protocol.go",
   "station_native_source": "adapter/station.go",
-  "station_account_setup_source": "adapter/station_setup.go"
+  "station_account_setup_source": "adapter/station_setup.go",
+  "station_worker_transport_source": "adapter/station_worker.go"
 }

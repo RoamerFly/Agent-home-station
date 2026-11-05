@@ -39,7 +39,7 @@ func (w *Worker) aggregateConversation(ctx context.Context, c *companion.Engine,
 		readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		m, err := w.source.Message(readCtx, item.Event.Data.MessageID)
 		cancel()
-		if err != nil || m.ID != item.Event.Data.MessageID || m.ThreadID != current.ThreadID || m.Direction != current.Direction || m.SenderID != current.SenderID || m.Type != 1 {
+		if err != nil || m.ID != item.Event.Data.MessageID || m.ThreadID != current.ThreadID || m.Direction != current.Direction || m.SenderID != current.SenderID || m.Type != 1 || !w.authorizedMessage(m) {
 			continue
 		}
 		stamp, err := time.Parse(time.RFC3339, m.CreatedAt)
