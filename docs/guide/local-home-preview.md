@@ -310,6 +310,36 @@ PDF 导出还需可用的文档运行时。构建时为上述命令同时提供 
 
 回执不明时只查原任务，原进程结束后 ComfyUI 的内存队列可能无法查回。此时宿主保留待核对任务记录，新的生成需要新的请求。已登记的成品可以继续下载。独立进程按需启动，处理及核对期间持有运行租约。正式换用 GPU 前需按本机安装单独验收。
 
+### Windows YuE 作曲
+
+构建时使用 `Build-Desktop.ps1 -LocalStation -WithYuE` 暂存官方项目工具。构建包内含工具声明。便携运行时、模型、FFmpeg 和工作流由主人准备，并存放在家目录和站点数据目录之外。YuE 使用单独的本机端口和进程，可和 ComfyUI 图像工具分别启停。
+
+在站点 `-data` 目录创建 `station-yue.json`，按实际安装填写以下字段。
+
+```json
+{
+  "schema_version": 1,
+  "enabled": true,
+  "runtime": "E:\\AgentRuntimes\\YuE-Comfy",
+  "python": "python_embeded/python.exe",
+  "entry": "ComfyUI/main.py",
+  "frontend": "python_embeded/Lib/site-packages/comfyui_frontend_package/static",
+  "manifest": "E:\\StationData\\yue-manifest.json",
+  "models": "E:\\AgentModels\\YuE",
+  "workflows": "E:\\AgentRuntimes\\YuE-Workflows",
+  "workflow_pins": {"original": "填写实际 SHA-256", "cover": "填写实际 SHA-256"},
+  "ffmpeg": "E:\\AgentRuntimes\\Media\\ffmpeg.exe",
+  "ffmpeg_sha256": "填写实际 SHA-256",
+  "port": 8191,
+  "idle_seconds": 1200,
+  "device": "cpu"
+}
+```
+
+运行器使用 ComfyUI 0.37.2。`python`、`entry`、`frontend` 是相对于 `runtime` 的路径，其中 `frontend` 指向现有静态前端目录。清单使用 `schema_version` 为 `1`、`policy` 为 `station-yue-v1` 和 `files` 对象，至少登记解释器及入口文件的相对路径和实际 SHA-256。`workflows` 中放入主人批准的两个 API 工作流原件 `audio_yue2_text_to_music.json` 和 `audio_yue2_music_cover.json`，依次填入 `original`、`cover` 的摘要。使用 `Get-FileHash -Algorithm SHA256` 取得 64 位十六进制摘要并转为小写。选择 `device` 为 `cuda` 时可设置 `cuda_device`，首次使用应分别验证 GPU、权重和输出。
+
+在「项目工具 → YuE 作曲」确认权限、安装并启用。原创任务使用风格、歌词和时长。参考音频任务使用已核验的 PCM16 WAV 成品编号，单份参考文件最多 25 MiB，可先用音频工坊转换。任务账本保存生效配方、参考来源、工作流摘要和原任务编号。提交结果未知时按原任务核对，取消先写入账本，迟到结果不会登记为成品。只有完整解码并通过时长核验的 FLAC 才进入可下载成品。指定某条唱歌声线需要另行运行已获授权的 RVC 任务。
+
 ### Windows 运行器
 
 可执行文件旁存在下列受管运行时布局时自动识别；没有安装运行器也能聊天及操作文件，启动程序会返回 `windows_runtime_not_configured`，不会退回不受限制的宿主命令行。

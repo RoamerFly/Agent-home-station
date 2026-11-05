@@ -119,6 +119,29 @@ type localComfyService struct {
 	gens   map[string]uint64
 }
 
+// localComfyManagedSpec is the shared, host-owned process lifecycle used by
+// the image and YuE deployments.  A capability-specific wrapper is allowed to
+// validate its own immutable registration, but it must not duplicate listener
+// admission, owner verification, idle management or process shutdown.
+type localComfyManagedSpec struct {
+	Owner       string
+	ID          string
+	Binding     string
+	Port        int
+	Python      string
+	Entry       string
+	Frontend    string
+	Arguments   []string
+	Environment []string
+	LogPath     string
+	PendingPath string
+	StopTimeout time.Duration
+	Check       func(context.Context) error
+	PortError   string
+	StartError  string
+	Timeout     time.Duration
+}
+
 func newLocalComfyService(dataDir, workspace string) localComfyBackend {
 	return newLocalComfyServiceAt(dataDir, workspace)
 }
@@ -253,34 +276,46 @@ func (s *localComfyService) start(ctx context.Context, fish, expectedBinding str
 		}
 		return nil
 	}
-	spec := pluginruntime.ManagedServiceSpec{
-		OwnerPlugin:     localComfyServiceOwner,
-		Binding:         expectedBinding,
-		Executable:      python,
-		Arguments:       arguments,
-		Directory:       filepath.Dir(entry),
-		Environment:     localComfyEnvironment(registration, private),
-		LogPath:         filepath.Join(logDir, localComfyFishHash(fish)+".log"),
-		PendingJobsPath: filepath.Join(private, "jobs.json"),
-		// Native ComfyUI has no stdin shutdown protocol. Keep this short so the
-		// managed owner kills exactly its direct Python child before callers'
-		// normal shutdown context expires; the desktop parent Job Object still
-		// owns any descendant at application exit.
-		StopTimeout: 2 * time.Second,
-		Check:       check,
+	return s.startManaged(ctx, localComfyManagedSpec{
+		Owner: localComfyServiceOwner, ID: localComfyServiceID(fish), Binding: expectedBinding, Port: registration.Port,
+		Python: python, Entry: entry, Frontend: frontend, Arguments: arguments, Environment: localComfyEnvironment(registration, private),
+		LogPath: filepath.Join(logDir, localComfyFishHash(fish)+".log"), PendingPath: filepath.Join(private, "jobs.json"),
+		StopTimeout: 2 * time.Second, Check: check, PortError: "station_comfyui_port_occupied_no_adoption", StartError: "station_comfyui_start_failed_check_private_log", Timeout: 45 * time.Second,
+	})
+}
+
+func (s *localComfyService) startManaged(ctx context.Context, managed localComfyManagedSpec) error {
+	if managed.Owner == "" || managed.ID == "" || managed.Binding == "" || managed.Port < 1024 || managed.Port > 65535 || !localComfySafeRegular(managed.Python) || !localComfySafeRegular(managed.Entry) || !localComfyServiceSafeDirectory(managed.Frontend) || managed.Check == nil {
+		return errors.New("station_comfyui_managed_spec_invalid")
+	}
+	if managed.PortError == "" {
+		managed.PortError = "station_comfyui_port_occupied_no_adoption"
+	}
+	if managed.StartError == "" {
+		managed.StartError = "station_comfyui_start_failed_check_private_log"
+	}
+	if managed.StopTimeout <= 0 {
+		managed.StopTimeout = 2 * time.Second
+	}
+	if managed.Timeout <= 0 {
+		managed.Timeout = 45 * time.Second
 	}
 	launched := false
-	_, err = s.services.Start(ctx, localComfyServiceID(fish), spec, func(admitCtx context.Context, launch func() error) error {
-		listener, listenErr := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(registration.Port))
+	_, err := s.services.Start(ctx, managed.ID, pluginruntime.ManagedServiceSpec{
+		OwnerPlugin: managed.Owner, Binding: managed.Binding, Executable: managed.Python, Arguments: managed.Arguments,
+		Directory: filepath.Dir(managed.Entry), Environment: managed.Environment, LogPath: managed.LogPath, PendingJobsPath: managed.PendingPath,
+		StopTimeout: managed.StopTimeout, Check: managed.Check,
+	}, func(admitCtx context.Context, launch func() error) error {
+		listener, listenErr := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(managed.Port))
 		if listenErr != nil {
-			return errors.New("station_comfyui_port_occupied_no_adoption")
+			return errors.New(managed.PortError)
 		}
 		_ = listener.Close()
-		if err := check(admitCtx); err != nil {
+		if err := managed.Check(admitCtx); err != nil {
 			return err
 		}
 		if err := launch(); err != nil {
-			return errors.New("station_comfyui_start_failed_check_private_log")
+			return errors.New(managed.StartError)
 		}
 		launched = true
 		return nil
@@ -289,9 +324,9 @@ func (s *localComfyService) start(ctx context.Context, fish, expectedBinding str
 		return err
 	}
 	if launched {
-		if err := s.waitHealthy(ctx, localComfyServiceID(fish), registration.Port); err != nil {
+		if err := s.waitHealthyFor(ctx, managed.ID, managed.Port, managed.Timeout); err != nil {
 			stopCtx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
-			_ = s.services.Stop(stopCtx, localComfyServiceID(fish))
+			_ = s.services.Stop(stopCtx, managed.ID)
 			cancel()
 			return err
 		}
@@ -300,7 +335,11 @@ func (s *localComfyService) start(ctx context.Context, fish, expectedBinding str
 }
 
 func (s *localComfyService) waitHealthy(ctx context.Context, id string, port int) error {
-	deadline := time.NewTimer(45 * time.Second)
+	return s.waitHealthyFor(ctx, id, port, 45*time.Second)
+}
+
+func (s *localComfyService) waitHealthyFor(ctx context.Context, id string, port int, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	for {
 		requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -584,9 +623,16 @@ func (s *localComfyService) cancelAllIdle() {
 // alive; only an explicit terminal status permits idle reclamation.
 type localComfyLeasedClient struct {
 	client  *comfyui.Client
-	journal *localComfyService
+	journal localComfyJobJournal
 	fish    string
 	binding string
+}
+
+// Both controlled ComfyUI deployments use the same submission/settlement
+// lease. The registration verifier differs, but a submitted or uncertain job
+// must keep either process warm until the host has durably settled it.
+type localComfyJobJournal interface {
+	recordJob(string, string, string, string) error
 }
 
 func (c *localComfyLeasedClient) Check(ctx context.Context) error { return c.client.Check(ctx) }

@@ -99,6 +99,7 @@ func newLocalChatService(home *localHomeService) *localChatService {
 		projectTools: &localProjectTools{
 			home: home, options: packagedWindowsToolOptions(),
 			rvc: newLocalRVCService(home.dataDir, home.root), comfy: newLocalComfyService(home.dataDir, home.root),
+			yue: newLocalYuEService(home.dataDir, home.root),
 		}}
 }
 

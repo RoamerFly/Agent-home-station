@@ -102,13 +102,13 @@ func (c *Client) FetchFLAC(ctx context.Context, ref JobRef) (FLAC, error) {
 // retaining its field name. Ref-derived names and an empty subfolder prevent
 // callers from selecting arbitrary input paths.
 func (c *Client) UploadWAV(ctx context.Context, ref JobRef, wav []byte) (string, error) {
-	if !ref.valid() {
-		return "", errors.New("invalid ComfyUI job reference")
+	filename, err := ReferenceWAVName(ref)
+	if err != nil {
+		return "", err
 	}
 	if len(wav) < 12 || len(wav) > maxWAVBytes || !bytes.Equal(wav[:4], []byte("RIFF")) || !bytes.Equal(wav[8:12], []byte("WAVE")) {
 		return "", errors.New("reference must be a bounded RIFF/WAVE file")
 	}
-	filename := "station-" + ref.ID + ".wav"
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	part, err := writer.CreateFormFile("image", filename)
@@ -137,6 +137,15 @@ func (c *Client) UploadWAV(ctx context.Context, ref JobRef, wav []byte) (string,
 		return "", fmt.Errorf("%w: reference WAV upload receipt did not match managed input", ErrProtocol)
 	}
 	return filename, nil
+}
+
+// ReferenceWAVName lets the host bind a prepared recipe to the same name the
+// upload protocol uses, before it claims the job or writes any backend input.
+func ReferenceWAVName(ref JobRef) (string, error) {
+	if !ref.valid() {
+		return "", errors.New("invalid ComfyUI job reference")
+	}
+	return "station-" + ref.ID + ".wav", nil
 }
 
 // YuERequiredNodeSchemas fetches only the three node schemas permitted to

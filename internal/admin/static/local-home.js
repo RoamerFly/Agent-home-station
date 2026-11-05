@@ -1530,6 +1530,14 @@
       if (tool.state === "failed") return ["ComfyUI 本机后端异常", projectToolReason(tool) || "下次图像任务会重新检查本机后端和工作流。"];
       return ["已启用，等待任务", "本地聊天需要制作图像时会按需启动已登记的工作流。"];
     }
+    if (tool && tool.id === "yue") {
+      if (!tool.runtime_ready) return ["YuE 本机后端未就绪", projectToolReason(tool) || "尚未登记可启动的官方 YuE 本机后端。"];
+      if (!tool.installed) return ["尚未安装", "安装后可在本地聊天中按任务创作原创或翻唱音乐。"];
+      if (!tool.enabled) return ["已安装，未启用", "启用后会在明确的作曲任务中按需启动，不会自行生成或发送音乐。"];
+      if (tool.state === "running") return ["任务处理中", "正在按本次任务调用官方 YuE 本机后端；成品核验后会回到待命。"];
+      if (tool.state === "failed") return ["YuE 本机后端异常", projectToolReason(tool) || "下次作曲任务会重新检查本机后端。"];
+      return ["已启用，等待任务", "本地聊天需要原创或翻唱音乐时会按需启动已登记的 YuE 后端。"];
+    }
     if (!tool.runtime_ready) return ["缺少本地运行环境", "工具尚不能启动；先补齐本机运行环境或依赖包。"];
     if (!tool.installed) return ["尚未安装", "安装后才会把工具放入大肥鱼的项目环境。"];
     if (!tool.enabled && tool.update_available) return ["已安装，可更新", "已发现随当前发行包提供的新版本；更新会保留已登记的本地成品。"];
@@ -1551,7 +1559,11 @@
       comfyui_backend_start_failed: "ComfyUI 后端启动失败，下一次图像任务会重新检查。",
       comfyui_workflows_missing: "尚未登记可调用的 ComfyUI 工作流。",
       comfyui_workflow_catalog_missing: "当前工具包没有可用的 ComfyUI 工作流清单。",
-      comfyui_workflow_invalid: "已登记的 ComfyUI 工作流无效，需要先修正工具配置。"
+      comfyui_workflow_invalid: "已登记的 ComfyUI 工作流无效，需要先修正工具配置。",
+      yue_backend_missing: "当前发行包未找到 YuE 本机后端适配。",
+      yue_backend_not_configured: "尚未登记可启动的官方 YuE 本机后端。",
+      yue_backend_unavailable: "YuE 本机后端暂不可用，可检查本机运行环境后再试。",
+      yue_backend_start_failed: "YuE 后端启动失败，下一次作曲任务会重新检查。"
     };
     const code = typeof tool?.reason === "string" ? tool.reason.trim() : "";
     if (reasons[code]) return reasons[code];
@@ -1559,6 +1571,7 @@
     if (!code) return "";
     if (tool?.id === "rvc") return "本机 RVC 状态暂不可用，请查看工具配置后再试。";
     if (tool?.id === "comfyui") return "本机 ComfyUI 状态暂不可用，请检查本机后端和已登记工作流。";
+    if (tool?.id === "yue") return "本机 YuE 状态暂不可用，请检查已登记的官方本机后端。";
     return "本机工具状态暂不可用，请查看工具配置后再试。";
   }
   function comfyWorkflows(tool) {
@@ -1599,9 +1612,20 @@
     section.append(list);
     return section;
   }
+  function renderYuEBackend(tool) {
+    const section = appElement("div", "", "project-tool-permissions project-tool-workflows");
+    section.append(appElement("strong", "作曲后端"));
+    if (!tool.runtime_ready) {
+      section.append(appElement("span", "工具包可以先安装；管理员登记并核验官方 YuE 本机后端后才可启用。"));
+      return section;
+    }
+    section.append(appElement("span", "仅使用宿主登记的官方本机后端。模型、模板和运行环境不会随发行包复制。"));
+    return section;
+  }
   function projectToolApprovalCopy(tool) {
     if (tool?.id === "rvc") return "确认任务素材读写与本机 GPU";
     if (tool?.id === "comfyui") return "确认任务成品写入与本机 GPU";
+    if (tool?.id === "yue") return "确认任务素材读写与本机 GPU";
     return "确认本机素材读写";
   }
   function projectToolPDFNote(tool) {
@@ -1649,6 +1673,11 @@
         permissions.append(appElement("strong", "图像任务"), appElement("span", "运行获准的工作流，使用本机计算资源并登记 PNG 成品。"));
         detail.append(permissions, renderComfyWorkflows(tool));
       }
+      if (tool.id === "yue") {
+        const permissions = appElement("div", "", "project-tool-permissions");
+        permissions.append(appElement("strong", "作曲任务"), appElement("span", "仅读取本次获准的参考素材，使用本机 GPU，核验后登记音乐成品。不会自动发送。"));
+        detail.append(permissions, renderYuEBackend(tool));
+      }
       if (tool.id === "document-workshop") {
         const permissions = appElement("div", "", "project-tool-permissions");
         permissions.append(appElement("strong", "本次授权"), appElement("span", "本机素材读写限于授权的文档任务，成品保存在本机，可从聊天下载。联网和应用账号权限另行管理。"));
@@ -1659,7 +1688,7 @@
       }
       const controls = appElement("div", "", "project-tool-actions");
       const busy = current.applying === tool.id;
-      const canInstall = tool.runtime_ready || tool.id === "comfyui";
+      const canInstall = tool.runtime_ready || tool.id === "comfyui" || tool.id === "yue";
       if (!tool.installed) {
         const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
         approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !tool.catalog_available || !canInstall;

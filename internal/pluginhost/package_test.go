@@ -53,8 +53,8 @@ func TestOfficialContracts(t *testing.T) {
 		}
 	}
 	dirs = folders
-	if len(dirs) != 13 {
-		t.Fatalf("expected 13 capability packages, got %d", len(dirs))
+	if len(dirs) != 14 {
+		t.Fatalf("expected 14 capability packages, got %d", len(dirs))
 	}
 	for _, d := range dirs {
 		t.Run(d.Name(), func(t *testing.T) {
@@ -62,9 +62,9 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" || d.Name() == "rvc" || d.Name() == "comfyui" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" || d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" {
 				transport, entrypoint := "mcp-stdio", "runtime/main.py"
-				if d.Name() == "rvc" || d.Name() == "comfyui" {
+				if d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" {
 					transport, entrypoint = "http-adapter", "runtime/managed-service.json"
 				}
 				if p.Status != "ready" || p.Runtime.Transport != transport || p.Runtime.Entrypoint != entrypoint {
@@ -124,6 +124,12 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"comfyui.workflows": true, "comfyui.run": true, "comfyui.job": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.write" || p.Permissions[1] != "gpu" {
 							t.Fatal("comfyui package must declare only artifact write and explicit GPU permissions")
+						}
+					}
+					if d.Name() == "yue" {
+						want = map[string]bool{"yue.generate": true, "yue.job": true}
+						if len(p.Permissions) != 3 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" || p.Permissions[2] != "gpu" {
+							t.Fatal("YuE package must declare only artifact read/write and explicit GPU permissions")
 						}
 					}
 					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))
@@ -210,6 +216,17 @@ func TestOfficialContracts(t *testing.T) {
 									}
 								}
 							}
+							if d.Name() == "yue" {
+								wantPermissions := []string{"artifact.read", "artifact.write", "gpu"}
+								if (cap.ID == "yue.generate") != cap.Async || len(cap.Permissions) != len(wantPermissions) {
+									t.Fatal("YuE capability must retain its scoped asynchronous contract", cap.ID)
+								}
+								for i, permission := range wantPermissions {
+									if cap.Permissions[i] != permission {
+										t.Fatal("YuE capability permission changed", cap.ID, cap.Permissions)
+									}
+								}
+							}
 							if d.Name() == "rvc" {
 								var schema struct {
 									Properties map[string]json.RawMessage `json:"properties"`
@@ -239,6 +256,30 @@ func TestOfficialContracts(t *testing.T) {
 								case "comfyui.job":
 									if len(schema.Properties) != 2 || schema.Properties["job_id"] == nil || schema.Properties["action"] == nil || len(schema.Required) != 2 || schema.Required[0] != "job_id" || schema.Required[1] != "action" {
 										t.Fatal("comfyui job must require only job_id and action")
+									}
+								}
+							}
+							if d.Name() == "yue" {
+								var schema struct {
+									Properties map[string]json.RawMessage `json:"properties"`
+									Required   []string                   `json:"required"`
+								}
+								if err := json.Unmarshal(cap.InputSchema, &schema); err != nil {
+									t.Fatal(err)
+								}
+								switch cap.ID {
+								case "yue.generate":
+									for _, name := range []string{"mode", "style", "lyrics", "duration_seconds", "min_duration_seconds", "text_guidance_scale", "seed", "vocal_gender", "planning_mode", "reference_mode", "sampling", "reference_artifact_id"} {
+										if schema.Properties[name] == nil {
+											t.Fatal("YuE generate missing input", name)
+										}
+									}
+									if len(schema.Required) != 4 || schema.Required[0] != "mode" || schema.Required[1] != "style" || schema.Required[2] != "lyrics" || schema.Required[3] != "duration_seconds" {
+										t.Fatal("YuE generate must require mode/style/lyrics/duration_seconds")
+									}
+								case "yue.job":
+									if len(schema.Properties) != 2 || schema.Properties["job_id"] == nil || schema.Properties["action"] == nil || len(schema.Required) != 2 || schema.Required[0] != "job_id" || schema.Required[1] != "action" {
+										t.Fatal("YuE job must require only job_id and action")
 									}
 								}
 							}

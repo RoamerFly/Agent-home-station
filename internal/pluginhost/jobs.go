@@ -168,11 +168,21 @@ func (s *Store) mutateJobPrivate(ctx context.Context, id string, revision int, p
 	return job, tx.Commit()
 }
 func (s *Store) ClaimJob(ctx context.Context, id string, revision int) (Job, error) {
+	return s.ClaimJobWithSubmission(ctx, id, revision, nil)
+}
+
+// ClaimJobWithSubmission commits host-verified effective parameters before
+// any backend submission. The request fingerprint remains the original intent.
+func (s *Store) ClaimJobWithSubmission(ctx context.Context, id string, revision int, submission json.RawMessage) (Job, error) {
+	if len(submission) > 1<<20 || len(submission) != 0 && !json.Valid(submission) {
+		return Job{}, errors.New("invalid submission checkpoint")
+	}
 	return s.mutateJob(ctx, id, revision, func(j *Job) error {
 		if j.State != "pending" || j.CancelRequested {
 			return errors.New("job already claimed or cancelled")
 		}
 		j.State = "submitting"
+		j.Submission = append(json.RawMessage(nil), submission...)
 		return nil
 	})
 }
@@ -205,6 +215,29 @@ func (s *Store) RequestJobCancel(ctx context.Context, id string, revision int) (
 		if j.State == "pending" {
 			j.State = "cancelled"
 		}
+		return nil
+	})
+}
+
+// FailJobPreparation closes work that the host verified was never claimed for
+// submission. The revision check prevents replacing a concurrent claim.
+func (s *Store) FailJobPreparation(ctx context.Context, id string, revision int, stage JobFailureStage) (Job, error) {
+	code := "backend_preparation_failed"
+	switch stage {
+	case JobFailureDispatch:
+	case JobFailureAuthority:
+		code = "source_authorization_changed"
+	case JobFailureValidation:
+		code = "recipe_validation_failed"
+	default:
+		return Job{}, errors.New("invalid job preparation stage")
+	}
+	return s.mutateJob(ctx, id, revision, func(j *Job) error {
+		if j.State != "pending" {
+			return errors.New("job already claimed")
+		}
+		j.State = "failed"
+		j.Diagnostic = &JobDiagnostic{Stage: stage, Code: code}
 		return nil
 	})
 }

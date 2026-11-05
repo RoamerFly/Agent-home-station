@@ -31,6 +31,7 @@ type localProjectTools struct {
 	active  map[string]int
 	rvc     localRVCBackend
 	comfy   localComfyBackend
+	yue     localYuEBackend
 }
 
 type localProjectToolHost struct {
@@ -142,6 +143,11 @@ func (s *localProjectTools) close() error {
 		err = errors.Join(err, s.comfy.Close(ctx))
 		cancel()
 	}
+	if s.yue != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		err = errors.Join(err, s.yue.Close(ctx))
+		cancel()
+	}
 	if s.host == nil {
 		return err
 	}
@@ -155,6 +161,7 @@ var localProjectPackages = []struct{ ID, Name string }{
 	{localAudioPackage, "音频工坊"},
 	{localRVCPackage, "RVC 换声"},
 	{localComfyPackage, "ComfyUI 创作"},
+	{localYuEPackage, "YuE 作曲"},
 }
 
 func (s *localProjectTools) markActive(id string) func() {
@@ -208,6 +215,16 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 				view.Reason = "comfyui_workflows_missing"
 			} else if err != nil {
 				view.Reason = "comfyui_backend_not_configured"
+			}
+		}
+	}
+	if id == localYuEPackage {
+		view.RuntimeReady = false
+		view.Reason = "yue_backend_not_configured"
+		if host != nil && s.yue != nil {
+			info, err := s.yue.Info(ctx, host.store.Account())
+			if err == nil {
+				view.RuntimeReady, backendBusy, view.Reason = true, info.Busy, ""
 			}
 		}
 	}
@@ -296,14 +313,14 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			fail(w, 400, "安装 ComfyUI 需要主人确认本机成品写入与计算权限")
 			return
 		}
-		if id == localRVCPackage {
-			fail(w, 400, "安装 RVC 需要主人确认素材读写与本机计算权限")
+		if id == localRVCPackage || id == localYuEPackage {
+			fail(w, 400, "安装需要主人确认任务素材读写与本机计算权限")
 			return
 		}
 		fail(w, 400, "安装需要主人明确授予本机成品读写权限")
 		return
 	}
-	if in.Action == "enable" && id != localRVCPackage && id != localComfyPackage && !s.runtimeReady() {
+	if in.Action == "enable" && id != localRVCPackage && id != localComfyPackage && id != localYuEPackage && !s.runtimeReady() {
 		fail(w, 409, "Windows 项目工具运行器缺失")
 		return
 	}
@@ -358,6 +375,9 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			if id == localComfyPackage {
 				grants = localComfyGrants
 			}
+			if id == localYuEPackage {
+				grants = localYuEGrants
+			}
 			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, grants)
 		}
 	} else {
@@ -365,7 +385,28 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			fail(w, 409, "项目工具版本已变化，请刷新后重试")
 			return
 		}
-		if id == localComfyPackage {
+		if id == localYuEPackage {
+			if in.Action == "enable" {
+				if s.yue == nil {
+					fail(w, 409, "本机 YuE 后端未登记")
+					return
+				}
+				if _, err := s.yue.Info(ctx, record.FishID); err != nil {
+					fail(w, 409, "请核对本机 YuE 部署、工作流和 FFmpeg 登记")
+					return
+				}
+			}
+			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
+			if err == nil && in.Action == "disable" && s.yue != nil {
+				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
+				err = s.yue.Stop(stopCtx)
+				cancel()
+				if err != nil {
+					fail(w, 503, "YuE 已停用，后端退出尚待核对")
+					return
+				}
+			}
+		} else if id == localComfyPackage {
 			if in.Action == "enable" {
 				if _, _, checkErr := s.comfySetup(ctx, record.FishID); checkErr != nil {
 					fail(w, 409, checkErr.Error())

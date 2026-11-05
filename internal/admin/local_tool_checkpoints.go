@@ -147,6 +147,9 @@ func (t *localToolSet) checkpointView(op companion.LocalToolCheckpoint, grant lo
 	if op.Tool == localComfyStartTool {
 		return t.comfyCheckpointView(op, grant)
 	}
+	if op.Tool == localYuEStartTool {
+		return t.yueCheckpointView(op, grant)
+	}
 	if projectOperation(op.Tool).capability != "" {
 		return t.projectCheckpointView(op, grant)
 	}
