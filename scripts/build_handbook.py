@@ -6,8 +6,8 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1] / "handbook"
 CHAPTERS = ("index", "installation", "first-chat", "conversations", "artifacts", "plugins", "operations")
-WIKI = "https://github.com/RoamerFly/wechat-agent/wiki/"
-REPO = "https://github.com/RoamerFly/wechat-agent"
+WIKI = "https://github.com/RoamerFly/Agent-home-station/wiki/"
+REPO = "https://github.com/RoamerFly/Agent-home-station"
 STYLE = """
 :root{color-scheme:light dark;font:17px/1.75 system-ui,sans-serif}
 body{max-width:72rem;margin:auto;padding:1.5rem;color:CanvasText;background:Canvas}

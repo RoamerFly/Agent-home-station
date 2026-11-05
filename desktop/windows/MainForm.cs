@@ -76,7 +76,7 @@ namespace WechatAgent.Desktop {
                 closeMode.DropDownItems.Add(item);
             }
             closeMode.DropDownOpening += delegate { for (int i = 0; i < closeMode.DropDownItems.Count; i++) ((ToolStripMenuItem)closeMode.DropDownItems[i]).Checked = closeSettings.Behavior == new [] {"ask", "tray", "exit"}[i]; };
-            about.Click += delegate { MessageBox.Show("Agent-home-station 桌面版 1.1.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/wechat-agent\n反馈：https://github.com/RoamerFly/wechat-agent/issues\n\n最小化：保留任务栏窗口，继续运行\n关闭窗口：选择取消、托盘或退出，可记住选择\n选择退出：安全停止全部本实例服务并退出\n\n后端：" + (d.Windows ? "Windows 原生（Linux 微信协议标识）" : "WSL") + "\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于 Agent-home-station", MessageBoxButtons.OK, MessageBoxIcon.Information); };
+            about.Click += delegate { MessageBox.Show("Agent-home-station 桌面版 1.1.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/Agent-home-station\n反馈：https://github.com/RoamerFly/Agent-home-station/issues\n\n最小化：保留任务栏窗口，继续运行\n关闭窗口：选择取消、托盘或退出，可记住选择\n选择退出：安全停止全部本实例服务并退出\n\n后端：" + (d.Windows ? "Windows 原生（Linux 微信协议标识）" : "WSL") + "\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于 Agent-home-station", MessageBoxButtons.OK, MessageBoxIcon.Information); };
             menu.Items.AddRange(new ToolStripItem[] {show, hide, new ToolStripSeparator(), startItem, stopItem, new ToolStripSeparator(), closeMode, about, exitItem});
             tray.Icon = Icon; tray.Text = "Agent-home-station · 正在启动"; tray.ContextMenuStrip = menu; tray.Visible = true;
             tray.DoubleClick += delegate { RestoreWindow(); };

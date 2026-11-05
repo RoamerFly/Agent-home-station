@@ -42,7 +42,7 @@
 | `config.schema.json`、`ui.schema.json` | 配置字段与宿主展示方式；凭据作为密钥字段处理 |
 | `runtime/`、`tests/` | 最小运行实现和不依赖真实账号的合成测试 |
 
-从一个只读操作开始，用模板 README 的命令验证协议及错误响应，再通过管理页导入。如果修改过包内文件，更新声明中的摘要后重新准备安装。加工工具接收宿主授权的素材并返回成品，由宿主校验、登记并投递。测试取消或重启时，检查同一个任务编号，避免重新提交有副作用的任务。[可运行模板](https://github.com/RoamerFly/wechat-agent/tree/89b0bfa/templates/plugins) · [宿主协议](https://github.com/RoamerFly/wechat-agent/blob/89b0bfa/docs/plugins/PROTOCOL.md)
+从一个只读操作开始，用模板 README 的命令验证协议及错误响应，再通过管理页导入。如果修改过包内文件，更新声明中的摘要后重新准备安装。加工工具接收宿主授权的素材并返回成品，由宿主校验、登记并投递。测试取消或重启时，检查同一个任务编号，避免重新提交有副作用的任务。[可运行模板](https://github.com/RoamerFly/Agent-home-station/tree/89b0bfa/templates/plugins) · [宿主协议](https://github.com/RoamerFly/Agent-home-station/blob/89b0bfa/docs/plugins/PROTOCOL.md)
 
 
 ## 视频音轨的本地断句

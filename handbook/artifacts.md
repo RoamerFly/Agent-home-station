@@ -13,7 +13,7 @@
 3. **Word 可以编辑。** 标题和正文是文字，表格是单元格。导出器从这份 DOCX 生成 PDF，支持标题、段落、简单表格及受支持的嵌图编码。正式 Windows 沙箱使用 Python 离线导出，不弹出办公软件确认窗口。复杂排版、加密文件及需要整页渲染的扫描 PDF 以实际能力提示为准。
 4. **只交付指定格式。** Word 和 PDF 分别有素材编号。查看发往原群的附件是否为 PDF、投递是否已被微信接受。需要修改时，引用任务说“把标题改为 20 磅，再发 PDF”；要编辑源文件时再要求发送 Word。
 
-已有 DOCX 可直接作为导出输入。已有文字型 PDF 可检查页数和提取文本。收到“文件尚未取得”先查下载；收到“缺少文档运行环境”先查工具依赖。这两种故障的解决方法不同。[文档工坊的格式与依赖](https://github.com/RoamerFly/wechat-agent/blob/89b0bfa/plugins/document-workshop/README.md)
+已有 DOCX 可直接作为导出输入。已有文字型 PDF 可检查页数和提取文本。收到“文件尚未取得”先查下载；收到“缺少文档运行环境”先查工具依赖。这两种故障的解决方法不同。[文档工坊的格式与依赖](https://github.com/RoamerFly/Agent-home-station/blob/89b0bfa/plugins/document-workshop/README.md)
 
 ## 用自己的录音建立私人说话声线
 

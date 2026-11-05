@@ -32,8 +32,8 @@ COPY --chmod=755 scripts/web-entrypoint.sh /usr/local/bin/wechat-web
 COPY --from=native /usr/local/bin/wx /usr/local/bin/wx
 COPY --from=go-build /out/wechat-admin /usr/local/bin/wechat-admin
 ARG VERSION=0.35.0
-LABEL org.opencontainers.image.title="大肥鱼 WeChat Agent" \
-      org.opencontainers.image.source="https://github.com/RoamerFly/wechat-agent" \
+LABEL org.opencontainers.image.title="Agent-home-station" \
+      org.opencontainers.image.source="https://github.com/RoamerFly/Agent-home-station" \
       org.opencontainers.image.version="${VERSION}"
 ENV HOME=/data TMPDIR=/scratch \
     WECHAT_WORKSPACE_ROOT=/workspace \

@@ -11,4 +11,4 @@ python scripts/build_handbook.py wiki temp/handbook-wiki
 python -m http.server 8000 --bind 127.0.0.1 --directory temp/handbook-site
 ```
 
-访问 http://127.0.0.1:8000/ ，检查导航、表格与代码块。更新线上教程时，分别检出项目的 `gh-pages` 分支和 `https://github.com/RoamerFly/wechat-agent.wiki.git`，将对应的输出目录参数换为检出目录，审阅差异后正常提交并推送。Pages 的发布源为 `gh-pages` 根目录。Wiki 首次使用时需先在 GitHub 创建首页。生成器只写指定的手册文件；如删除或改名章节，请同时检查并清理原来的发布文件。
+访问 http://127.0.0.1:8000/ ，检查导航、表格与代码块。更新线上教程时，分别检出项目的 `gh-pages` 分支和 `https://github.com/RoamerFly/Agent-home-station.wiki.git`，将对应的输出目录参数换为检出目录，审阅差异后正常提交并推送。Pages 的发布源为 `gh-pages` 根目录。Wiki 首次使用时需先在 GitHub 创建首页。生成器只写指定的手册文件；如删除或改名章节，请同时检查并清理原来的发布文件。

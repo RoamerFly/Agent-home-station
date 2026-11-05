@@ -29,5 +29,5 @@ Python CLI 是为隔离命令构建的无 GUI 派生环境，不是通用桌面 
 {"backend":"windows-native","data_root":"data","account":"desktop","admin_url":"http://127.0.0.1:8081","native_url":"http://127.0.0.1:6174"}
 
 开发者：RoamerFly
-项目：https://github.com/RoamerFly/wechat-agent
-反馈：https://github.com/RoamerFly/wechat-agent/issues
+项目：https://github.com/RoamerFly/Agent-home-station
+反馈：https://github.com/RoamerFly/Agent-home-station/issues

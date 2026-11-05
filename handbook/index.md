@@ -1,6 +1,6 @@
 # Agent-home-station 使用手册
 
-项目已更名，伙伴角色仍叫大肥鱼。当前手册介绍已实现的微信与工具功能；应用化重构进度见[长期成长计划](https://github.com/RoamerFly/wechat-agent/blob/codex/windows-native-backend/docs/design/大肥鱼长期成长阶梯计划.md)。
+项目已更名，伙伴角色仍叫大肥鱼。当前手册介绍已实现的微信与工具功能；应用化重构进度见[长期成长计划](https://github.com/RoamerFly/Agent-home-station/blob/codex/windows-native-backend/docs/design/大肥鱼长期成长阶梯计划.md)。
 
 第一次使用，先完成一次授权私聊的文字回复，再安装需要的工具。这样遇到问题时，可以判断故障发生在微信连接、模型、加工工具还是投递阶段。
 
@@ -15,6 +15,6 @@
 
 ## 适用版本
 
-本手册以 Windows 原生开发分支的 `89b0bfa` 为功能基准。使用较早版本时，可能看不到文档工坊或私人声线入口。源码、便携程序、已安装工具和本机模型分别更新；查看仓库中的功能说明后，还要在自己的管理页检查安装状态。[对应源码](https://github.com/RoamerFly/wechat-agent/tree/89b0bfaae7cec1b2bac45cce56df1f0f13296bdb)
+本手册以 Windows 原生开发分支的 `89b0bfa` 为功能基准。使用较早版本时，可能看不到文档工坊或私人声线入口。源码、便携程序、已安装工具和本机模型分别更新；查看仓库中的功能说明后，还要在自己的管理页检查安装状态。[对应源码](https://github.com/RoamerFly/Agent-home-station/tree/89b0bfaae7cec1b2bac45cce56df1f0f13296bdb)
 
-在线教程适合按顺序阅读。维护时可从 [GitHub Wiki](https://github.com/RoamerFly/wechat-agent/wiki) 按问题查找同一套内容。
+在线教程适合按顺序阅读。维护时可从 [GitHub Wiki](https://github.com/RoamerFly/Agent-home-station/wiki) 按问题查找同一套内容。

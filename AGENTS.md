@@ -1,6 +1,6 @@
 # Project development and repository workflow
 
-Repository: https://github.com/RoamerFly/wechat-agent (private).
+Repository: https://github.com/RoamerFly/Agent-home-station (private).
 
 - Follow the user's `github-project-dev-skill` when available at `C:/Users/浪客飞/.codex/skills/github-project-dev/SKILL.md`. Apply relevant server/web project rules; desktop installers, Tauri updating and signing are not requirements for this project.
 - Complete each authorized project update, run appropriate verification, then commit and push the task-related changes to this repository. Do not treat a local commit as a successful push. Report the commit and any unfinished validation or push failure.
