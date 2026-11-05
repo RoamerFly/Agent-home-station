@@ -2,7 +2,7 @@
 
 独立入口可以在没有微信账号、原生端、ADB 或模型运行环境的安装中启动。主人完成本机身份准备、保存模型连接后，即可在软件页面与同一条大肥鱼聊天。它复用现有聊天引擎和 SQLite 记忆内核，不把本机主人伪装成微信账号。
 
-这是开发预览，尚未替换正在使用的正式微信程序。独立入口可在 Windows 桌面窗口中运行，也可单独启动本地 HTTP 服务。Agent 已能在自己的家目录读写文件、保存工具；配置受管 Windows 运行器后可隔离执行程序。应用页已能安装随包源码并查看宿主登记的账号连接，独立主体的微信登录和启停接入仍在后续阶段。
+这是开发预览，尚未替换正在使用的正式微信程序。独立入口可在 Windows 桌面窗口中运行，也可单独启动本地 HTTP 服务。Agent 已能在自己的家目录读写文件、保存工具；配置受管 Windows 运行器后可隔离执行程序。应用页可安装随包源码；选择独立原生预览后可只读查询该实例的账号和登录状态。账号登记、扫码与 Agent 启停仍在后续阶段。
 
 ## Windows 桌面预览
 
@@ -96,7 +96,28 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 
 在微信一栏选择「安装源码」。发行源核验通过后，文件复制到家目录的 `Connected Apps/wechat`。源码可编辑，重复安装同一版不会覆盖工作文件；检测到同名目录或不同版本时，应用页会提示保留已有内容后再整理。暂停工作空间期间可查看安装结果，恢复授权后可安装。
 
-「账号连接」单独读取当前宿主的登记。独立预览可以显示「源码已安装」和「账号未接入」；实际登录与运行组件接入另行交付。普通预览包未随附微信源码时，仍可使用本地聊天。
+「账号连接」单独读取当前宿主的登记。普通预览包未随附微信源码时，仍可使用本地聊天。
+
+### 可选的微信原生预览
+
+用此前构建并核验过的 Windows x64 运行组件制作单独预览包。构建器同时加入应用发行源码：
+
+```powershell
+./scripts/Build-Desktop.ps1 -LocalStation -WithWeChatRuntime `
+  -WeChatRuntimeDirectory temp/verified-native/runtimes/windows-x64 `
+  -OutputDirectory temp/local-station-native-preview
+```
+
+只在新预览包自己的 `secrets/local-deployment.json` 中加入 `wechat_native_url`。它与管理端口必须不同：
+
+```json
+{
+  "backend": "local-station",
+  "wechat_native_url": "http://127.0.0.1:6184"
+}
+```
+
+桌面核对随包运行文件后启动本实例的微信原生进程。私有目录固定为本机预览数据根下的 `apps/wechat/native`；工作空间中的 `Connected Apps/wechat` 仍只存可编辑发行源。应用页显示进程就绪、已登记账号和登录状态。新预览实例初次启动没有账号，扫码、账号工作进程启停和既有账号迁移仍待接入。
 
 ### 文件与自编工具
 

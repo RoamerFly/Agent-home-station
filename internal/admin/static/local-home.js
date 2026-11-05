@@ -49,7 +49,7 @@
     if (view === "apps") loadApps();
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map() };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map() };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -118,7 +118,9 @@
     if (!apps.registered || connection === null) {
       detail.append(appElement("strong", "账号状态暂不可读"), appElement("p", "可刷新后重查。"));
     } else if (!connection?.length) {
-      detail.append(appElement("strong", "账号未接入"), appElement("p", "账号接入后会显示在这里。"));
+      const nativeReady = apps.registered.some((app) => app.id === record.id && app.registration === "station-native");
+      detail.append(appElement("strong", "账号未接入"),
+        appElement("p", nativeReady ? "原生服务已就绪，暂无已登记账号。" : "账号接入后会显示在这里。"));
     } else {
       detail.append(appElement("strong", `已有 ${connection.length} 个账号连接`));
       const list = appElement("ul", "", "app-accounts");
@@ -126,6 +128,11 @@
         const item = appElement("li", "");
         item.append(appElement("span", account.label || `账号 ${index + 1}`));
         if (account.primary) item.append(appElement("small", "主连接"));
+        const status = apps.accountStatuses.get(account.id);
+        if (apps.accountStatuses.has(account.id)) {
+          const login = status?.login === "authenticated" ? "已登录" : status?.login === "signed_out" ? "未登录" : "登录状态暂不可读";
+          item.append(appElement("small", login));
+        }
         list.append(item);
       }
       detail.append(list);
@@ -168,9 +175,19 @@
       const registered = appRows(result[1], "items");
       const connections = await Promise.allSettled((registered || []).map((row) => request(`/api/apps/${encodeURIComponent(row.id)}/connections`)));
       if (current !== apps || appSessionExpired(connections)) return;
+      const connectionMap = new Map((registered || []).map((row, index) => [row.id, appRows(connections[index], "items")]));
+      const nativeAccounts = connectionMap.get("wechat") && registered.some((app) => app.id === "wechat" && app.registration === "station-native")
+        ? connectionMap.get("wechat") : [];
+      const statuses = await Promise.allSettled(nativeAccounts.map((account) => request(`/api/apps/wechat/connections/${encodeURIComponent(account.id)}`)));
+      if (current !== apps || appSessionExpired(statuses)) return;
       current.catalog = appRows(result[0], "applications");
       current.registered = registered;
-      current.connections = new Map((registered || []).map((row, index) => [row.id, appRows(connections[index], "items")]));
+      current.connections = connectionMap;
+      current.accountStatuses = new Map(nativeAccounts.map((account, index) => {
+        const entry = statuses[index];
+        const details = entry.status === "fulfilled" ? entry.value.connection : null;
+        return [account.id, details?.id === account.id ? details : null];
+      }));
     } finally {
       if (current === apps) {
         current.loading = false;

@@ -1,6 +1,6 @@
 // Command agent-home-station starts the local, application-independent home
-// station for 大肥鱼. It deliberately has no dependency on a WeChat account,
-// native bridge, or model service.
+// station for 大肥鱼. No WeChat account, native bridge or model service is
+// required. A desktop-owned native service can be admitted explicitly.
 package main
 
 import (
@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,17 +21,21 @@ import (
 	"syscall"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/admin"
+	"wechat-bot/internal/apphost"
 )
 
 const defaultListen = "127.0.0.1:8082"
 
 type config struct {
-	dataDir       string
-	workspaceRoot string
-	listen        string
-	runtimeFile   string
-	desktop       bool
+	dataDir         string
+	workspaceRoot   string
+	listen          string
+	runtimeFile     string
+	desktop         bool
+	wechatNativeURL string
+	wechatNativePID int
 }
 
 func main() {
@@ -72,7 +77,18 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	if err != nil {
 		return err
 	}
-	handler, err := admin.NewLocalHomeHandler(cfg.dataDir, cfg.workspaceRoot, password, "", windows)
+	var registry apphost.Registry
+	if cfg.wechatNativeURL != "" {
+		registration, attachErr := wechatapp.StationRegistration(ctx, cfg.wechatNativeURL, cfg.wechatNativePID, cfg.dataDir)
+		if attachErr != nil {
+			return attachErr
+		}
+		registry, err = apphost.New(registration)
+		if err != nil {
+			return err
+		}
+	}
+	handler, err := admin.NewLocalHomeHandlerWithApps(cfg.dataDir, cfg.workspaceRoot, password, "", registry, windows)
 	if err != nil {
 		return err
 	}
@@ -141,6 +157,8 @@ func parseConfig(args []string, executable string) (config, error) {
 	listenFlag := fs.String("listen", defaultListen, "仅本机监听地址")
 	runtimeFlag := fs.String("runtime-config", "", "可选 Windows 运行器配置文件绝对路径")
 	desktopFlag := fs.Bool("desktop", false, "由桌面程序持有的私有停止管道模式")
+	wechatNativeURL := fs.String("wechat-native-url", "", "桌面持有的微信原生服务地址")
+	wechatNativePID := fs.Int("wechat-native-pid", 0, "桌面持有的微信原生服务进程编号")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -175,7 +193,35 @@ func parseConfig(args []string, executable string) (config, error) {
 	if *runtimeFlag != "" && !filepath.IsAbs(*runtimeFlag) {
 		return config{}, errors.New("runtime configuration must be absolute")
 	}
-	return config{dataDir: dataDir, workspaceRoot: workspaceRoot, listen: listen, runtimeFile: *runtimeFlag, desktop: *desktopFlag}, nil
+	if *wechatNativeURL != "" || *wechatNativePID != 0 {
+		endpoint, err := url.Parse(*wechatNativeURL)
+		if err != nil || !*desktopFlag || *wechatNativePID <= 0 || endpoint.Scheme != "http" ||
+			endpoint.Hostname() != "127.0.0.1" || endpoint.User != nil || endpoint.Path != "" ||
+			endpoint.ForceQuery || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return config{}, errors.New("微信原生服务要求桌面持有的本机地址和进程编号")
+		}
+		port, err := strconv.ParseUint(endpoint.Port(), 10, 16)
+		_, adminPort, _ := net.SplitHostPort(listen)
+		if err != nil || port == 0 || strconv.FormatUint(port, 10) == adminPort {
+			return config{}, errors.New("微信原生服务端口不可用或与管理端口相同")
+		}
+		nativeRoot := filepath.Join(dataDir, "apps", wechatapp.ID, "native")
+		if pathsOverlap(nativeRoot, workspaceRoot) {
+			return config{}, errors.New("微信原生私有目录不能与工作空间重叠")
+		}
+	}
+	return config{
+		dataDir: dataDir, workspaceRoot: workspaceRoot, listen: listen, runtimeFile: *runtimeFlag, desktop: *desktopFlag,
+		wechatNativeURL: *wechatNativeURL, wechatNativePID: *wechatNativePID,
+	}, nil
+}
+
+func pathsOverlap(first, second string) bool {
+	within := func(parent, child string) bool {
+		rel, err := filepath.Rel(parent, child)
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+	}
+	return within(first, second) || within(second, first)
 }
 
 // localListenAddress accepts only unambiguous loopback addresses. In

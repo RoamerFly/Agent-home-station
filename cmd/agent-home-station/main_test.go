@@ -44,3 +44,24 @@ func TestLocalListenAddress(t *testing.T) {
 		}
 	}
 }
+
+func TestDesktopWechatAdmissionRequiresSeparatePrivateRoot(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "agent-home-station.exe")
+	both := []string{"--desktop", "--wechat-native-url", "http://127.0.0.1:18808", "--wechat-native-pid", "42"}
+	cfg, err := parseConfig(both, exe)
+	if err != nil || cfg.wechatNativePID != 42 || cfg.wechatNativeURL != "http://127.0.0.1:18808" {
+		t.Fatal(cfg, err)
+	}
+	for _, args := range [][]string{
+		both[1:],
+		both[:3],
+		{"--desktop", "--wechat-native-url", "http://localhost:18808", "--wechat-native-pid", "42"},
+		{"--desktop", "--wechat-native-url", "http://127.0.0.1:0", "--wechat-native-pid", "42"},
+		{"--desktop", "--wechat-native-url", "http://127.0.0.1:8082", "--wechat-native-pid", "42"},
+		append(append([]string(nil), both...), "--workspace", filepath.Join(cfg.dataDir, "apps")),
+	} {
+		if _, err := parseConfig(args, exe); err == nil {
+			t.Fatal("unsafe daemon admission", args)
+		}
+	}
+}

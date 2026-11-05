@@ -1,6 +1,145 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
+
+function Get-RelativeRuntimePath([string]$Root,[string]$Path){
+ $rootPath=[IO.Path]::GetFullPath($Root).TrimEnd('\','/')
+ $fullPath=[IO.Path]::GetFullPath($Path)
+ if(-not $fullPath.StartsWith($rootPath+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'Runtime source file escaped the selected directory.'}
+ return $fullPath.Substring($rootPath.Length+1).Replace('\','/')
+}
+
+function Assert-NoReparsePointAncestor([string]$Path){
+ $candidate=[IO.Path]::GetFullPath($Path)
+ while(-not(Test-Path -LiteralPath $candidate)){
+  $parent=Split-Path -Path $candidate -Parent
+  if(-not $parent -or $parent -eq $candidate){throw 'Cannot locate a physical parent directory for the runtime output.'}
+  $candidate=$parent
+ }
+ while($candidate){
+  $item=Get-Item -LiteralPath $candidate -Force
+  if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'The runtime output path contains a reparse-point ancestor and cannot be used.'}
+  $parent=Split-Path -Path $candidate -Parent
+  if(-not $parent -or $parent -eq $candidate){break}
+  $candidate=$parent
+ }
+}
+
+function Test-LocalStationRuntimeIdentical([string]$Existing,[System.Collections.IDictionary]$ExpectedFiles,[string]$ExpectedNativeHash){
+ if(-not(Test-Path -LiteralPath $Existing -PathType Container)){return $false}
+ Assert-NoReparsePointAncestor $Existing
+ $manifestPath=Join-Path $Existing 'windows-native-manifest.json'
+ if(-not(Test-Path -LiteralPath $manifestPath -PathType Leaf)){return $false}
+ Assert-NoReparsePointAncestor $manifestPath
+ try {$manifest=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json} catch {return $false}
+ if($manifest.schema_version -ne 1 -or $manifest.platform -ne 'windows-x64' -or -not $manifest.local_station_runtime -or $manifest.native_sha256 -ne $ExpectedNativeHash){return $false}
+ $actual=@{}
+ foreach($file in @(Get-ChildItem -LiteralPath $Existing -Force)){
+  if($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)){return $false}
+  $relative=Get-RelativeRuntimePath $Existing $file.FullName
+  if($relative -eq 'windows-native-manifest.json'){continue}
+  $actual[$relative]=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower()
+ }
+ if($actual.Count -ne $ExpectedFiles.Count){return $false}
+ foreach($entry in $ExpectedFiles.GetEnumerator()){
+  if(-not $actual.ContainsKey($entry.Key) -or $actual[$entry.Key] -ne $entry.Value){return $false}
+  $manifestFile=$manifest.files.PSObject.Properties[$entry.Key]
+  if($null -eq $manifestFile -or $manifestFile.Value -ne $entry.Value){return $false}
+ }
+ return $true
+}
+
+function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$PackageDirectory){
+ if(-not $SourceDirectory){throw 'WithWeChatRuntime requires -WeChatRuntimeDirectory. Select only a previously verified windows-x64 runtime directory.'}
+ $source=[IO.Path]::GetFullPath($SourceDirectory)
+ if(-not(Test-Path -LiteralPath $source -PathType Container)){throw 'The selected WeChat runtime directory does not exist.'}
+ Assert-NoReparsePointAncestor $source
+ $entries=Get-ChildItem -LiteralPath $source -Force
+ if($entries | Where-Object {$_.Attributes -band [IO.FileAttributes]::ReparsePoint}){throw 'The selected WeChat runtime contains a reparse point and cannot be staged.'}
+ # A historical Windows release can contain the separate punctuation Python
+ # environment.  That is an optional processing tool, not a wx.exe runtime;
+ # copying it would silently pull an unrelated model and Python packages into
+ # the lightweight station.  Stage only the native-client root files.
+ if($entries | Where-Object {$_.PSIsContainer -and $_.Name -ne 'punctuation'}){throw 'The selected WeChat runtime contains an unexpected subdirectory.'}
+ $files=@($entries | Where-Object {-not $_.PSIsContainer})
+ $manifestPath=Join-Path $source 'windows-native-manifest.json'
+ if(-not(Test-Path -LiteralPath $manifestPath -PathType Leaf)){throw 'The selected WeChat runtime has no windows-native-manifest.json.'}
+ try {$sourceManifest=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json} catch {throw 'The selected WeChat runtime manifest is not valid JSON.'}
+ if($sourceManifest.schema_version -ne 1 -or $sourceManifest.platform -ne 'windows-x64'){throw 'The selected WeChat runtime manifest is not a Windows x64 native bundle.'}
+ $wxSource=Join-Path $source 'wx.exe'
+ if(-not(Test-Path -LiteralPath $wxSource -PathType Leaf)){throw 'The selected WeChat runtime has no wx.exe.'}
+ $wxHash=(Get-FileHash -LiteralPath $wxSource -Algorithm SHA256).Hash.ToLower()
+ if([string]::IsNullOrWhiteSpace($sourceManifest.native_sha256) -or $sourceManifest.native_sha256.ToLower() -ne $wxHash){throw 'The selected WeChat runtime wx.exe does not match its manifest hash.'}
+
+ $required=@('wx.exe','vcruntime140.dll','MSVC-REDISTRIBUTABLE-NOTICE.txt','agent-wechat-LICENSE.txt')
+ $sourceNames=@($files | ForEach-Object {Get-RelativeRuntimePath $source $_.FullName})
+ foreach($name in $required){if($sourceNames -notcontains $name){throw ('The selected WeChat runtime is incomplete: missing '+$name+'.')}}
+ foreach($file in $files){
+  $relative=Get-RelativeRuntimePath $source $file.FullName
+  # The legacy native package includes the old management server.  It is not
+  # a LocalStation dependency and must never be copied into this bundle.
+  if($relative -in @('windows-native-manifest.json','wechat-admin.exe')){continue}
+  $allowed=($relative -eq 'wx.exe') -or ($relative -match '(?i)\.dll$') -or ($relative -match '(?i)(license|notice).*\.txt$')
+  if(-not $allowed){throw ('The selected WeChat runtime contains a file that is not a native dependency or notice: '+$relative)}
+ }
+
+ $runtimeRoot=Join-Path $PackageDirectory 'runtimes'
+ $destination=Join-Path $runtimeRoot 'windows-x64'
+ Assert-NoReparsePointAncestor $PackageDirectory
+ New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+ Assert-NoReparsePointAncestor $runtimeRoot
+ $staging=$destination+'.staging-'+[Guid]::NewGuid().ToString('N')
+ New-Item -ItemType Directory -Force -Path $staging | Out-Null
+ $stagingCreated=$true
+ try {
+  $hashes=[ordered]@{}
+  foreach($file in $files){
+   $relative=Get-RelativeRuntimePath $source $file.FullName
+   if($relative -in @('windows-native-manifest.json','wechat-admin.exe')){continue}
+   $target=Join-Path $staging $relative.Replace('/','\')
+   New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
+   Copy-Item -LiteralPath $file.FullName -Destination $target
+   $sourceHash=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower()
+   $targetHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLower()
+   if($sourceHash -ne $targetHash){throw ('WeChat runtime copy hash mismatch: '+$relative)}
+   $hashes[$relative]=$targetHash
+  }
+  if($hashes['wx.exe'] -ne $wxHash){throw 'The staged wx.exe hash is not the validated native hash.'}
+  $record=[ordered]@{
+   schema_version=1
+   platform='windows-x64'
+   local_station_runtime=$true
+   native_source=$sourceManifest.native_source
+   native_commit=$sourceManifest.native_commit
+   native_patch_sha256=$sourceManifest.native_patch_sha256
+   native_license_commit=$sourceManifest.native_license_commit
+   native_sha256=$wxHash
+   files=$hashes
+   live_login_verified=$false
+   live_delivery_verified=$false
+  }
+  [IO.File]::WriteAllText((Join-Path $staging 'windows-native-manifest.json'),($record | ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
+  if((Get-FileHash -LiteralPath (Join-Path $staging 'wx.exe') -Algorithm SHA256).Hash.ToLower() -ne $wxHash){throw 'The staged wx.exe failed its final hash validation.'}
+  if(Test-Path -LiteralPath $destination){
+   if(Test-LocalStationRuntimeIdentical -Existing $destination -ExpectedFiles $hashes -ExpectedNativeHash $wxHash){
+    Write-Output ('Verified existing WeChat native runtime: '+$destination+'; it was not replaced.')
+    return
+   }
+   throw 'The package already contains a different WeChat runtime. Choose a fresh output directory; an existing runtime is never replaced.'
+  }
+  # Directory.Move refuses an already-created destination.  This prevents a
+  # concurrent process from making Move-Item nest the staged directory into a
+  # raced target after we performed the identical-bundle check above.
+  [IO.Directory]::Move($staging,$destination)
+  $stagingCreated=$false
+ } finally {
+  if($stagingCreated -and (Test-Path -LiteralPath $staging)){Remove-Item -LiteralPath $staging -Recurse -Force}
+ }
+ Write-Output ('Staged verified WeChat native runtime: '+$destination+' ('+$files.Count+' files; no account data or management executable).')
+}
+
+if($WithWeChatRuntime -and -not $LocalStation){throw 'WithWeChatRuntime is only valid with -LocalStation.'}
+if($WithWeChatRuntime){$WithWeChatApp=$true}
 # Keep project-local SDK/model caches outside `go test ./...` discovery.
 # Nested build snapshots retain their own go.mod; never replace an existing one.
 foreach($artifactName in @('temp','dist')){
@@ -55,6 +194,7 @@ if($LocalStation){
  try { & go build -trimpath -o $station './cmd/agent-home-station' }
  finally { Pop-Location }
  if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
+ if($WithWeChatRuntime){Stage-LocalStationWeChatRuntime -SourceDirectory $WeChatRuntimeDirectory -PackageDirectory $OutputDirectory}
 }
 Copy-Item -LiteralPath (Join-Path $cache 'LICENSE.txt') -Destination (Join-Path $OutputDirectory 'WebView2-LICENSE.txt')
 if($Test){
@@ -66,6 +206,10 @@ if($Test){
  if($LocalStation){
   & $tests --local-cycle $OutputDirectory
   if($LASTEXITCODE -ne 0){throw 'LocalStation real process cycle failed.'}
+  if($WithWeChatRuntime){
+   & $tests --local-native-cycle $OutputDirectory
+   if($LASTEXITCODE -ne 0){throw 'LocalStation owned WeChat native cycle failed.'}
+  }
  }
  $windowTests=Join-Path $OutputDirectory 'DesktopWindowTests.exe'
  $windowArguments=@('/target:exe','/main:WechatAgent.Desktop.WindowTests',('/out:'+$windowTests))

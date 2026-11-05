@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -44,9 +45,72 @@ namespace WechatAgent.Desktop {
     internal static class ControllerTests {
         static int count;
         static void Assert(bool condition, string reason) { if (!condition) throw new Exception(reason); count++; }
+
+        static string CycleUrl() {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            try { return "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port; }
+            finally { listener.Stop(); }
+        }
+
+        static bool ProcessAlive(int pid) {
+            try { using (var process = Process.GetProcessById(pid)) return !process.HasExited; }
+            catch (ArgumentException) { return false; }
+        }
+
+        static void LocalNativeCycle(string packageDirectory) {
+            const string password = "synthetic-local-native-cycle";
+            var priorPassword = Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD");
+            var d = Deployment.LocalStationDefault(Path.GetFullPath(packageDirectory));
+            d.Root = Path.Combine(d.Root, "native-cycle-test-" + Guid.NewGuid().ToString("N"));
+            d.StationWorkspace = Path.Combine(d.Root, "managed-workspaces");
+            d.Url = CycleUrl();
+            do { d.StationNativeUrl = CycleUrl(); } while (d.Url == d.StationNativeUrl);
+            Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", password);
+            try {
+                using (var runtime = new LocalStationRuntime(d)) {
+                    for (int round = 0; round < 2; round++) {
+                        runtime.Start(CancellationToken.None).GetAwaiter().GetResult();
+                        var station = runtime.PID;
+                        var native = runtime.NativePID;
+                        try {
+                            Assert(station > 0 && native > 0 && station != native, "station and wx are distinct owned children");
+                            using (var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })) {
+                                client.Timeout = TimeSpan.FromSeconds(3);
+                                var ready = false;
+                                var deadline = DateTime.UtcNow.AddSeconds(20);
+                                do {
+                                    runtime.CheckAlive();
+                                    try {
+                                        using (var health = client.GetAsync(d.Url + "/healthz").GetAwaiter().GetResult()) ready = health.IsSuccessStatusCode;
+                                    } catch (HttpRequestException) { }
+                                    if (!ready) Thread.Sleep(100);
+                                } while (!ready && DateTime.UtcNow < deadline);
+                                Assert(ready, "native-enabled station is ready");
+                                using (var denied = client.GetAsync(d.Url + "/api/apps").GetAwaiter().GetResult())
+                                    Assert(denied.StatusCode == HttpStatusCode.Unauthorized, "native applications require owner login");
+                                client.DefaultRequestHeaders.Add("Origin", d.Url);
+                                using (var body = new StringContent(Deployment.Json.Serialize(new { password }), System.Text.Encoding.UTF8, "application/json"))
+                                using (var login = client.PostAsync(d.Url + "/api/login", body).GetAwaiter().GetResult())
+                                    Assert(login.IsSuccessStatusCode, "native-enabled station owner login");
+                                var raw = client.GetStringAsync(d.Url + "/api/apps/wechat/connections").GetAwaiter().GetResult();
+                                var result = Deployment.Json.Deserialize<Dictionary<string, object>>(raw);
+                                var app = (Dictionary<string, object>)result["application"];
+                                Assert(Deployment.Text(app, "registration") == "station-native", "owned native provider registered");
+                                Assert(((IList)result["items"]).Count == 0, "isolated daemon did not create accounts");
+                            }
+                        } finally { runtime.Stop().GetAwaiter().GetResult(); }
+                        Assert(!ProcessAlive(station) && !ProcessAlive(native), "both owned children exit after stop");
+                    }
+                }
+            } finally { Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", priorPassword); }
+        }
+
         static Deployment Config() { return new Deployment { Workspace = @"E:\synthetic workspace", Distro = "Synthetic", User = "synthetic", Root = "/home/synthetic/data", Account = "synthetic", Music = "wechat-agent-music.service" }; }
         static async Task Reject(Func<Task> action) { bool failed = false; try { await action(); } catch (Exception) { failed = true; } Assert(failed, "Expected refusal"); }
         static async Task Tests() {
+            Assert(Deployment.LocalUrl("http://127.0.0.1:8081/") == "http://127.0.0.1:8081", "legacy loopback URL accepts a trailing slash");
+            Assert(Deployment.LocalUrl("http://127.0.0.1:80", true) == "http://127.0.0.1:80", "station native URL retains the explicit default HTTP port");
             var controlName = "Local\\WechatAgent.Tests." + Guid.NewGuid().ToString("N");
             using (var instance = new DesktopInstance(controlName)) {
                 Assert(DesktopInstance.RequestCommand("stop-services", controlName) && instance.StopRequested.WaitOne(0), "local stop command reaches owner");
@@ -107,6 +171,18 @@ namespace WechatAgent.Desktop {
                 File.WriteAllText(path, File.ReadAllText(path).Replace("unrelated.service", "wechat-agent-music.service"));
                 Assert(Deployment.Load(root).Workspace == Path.GetFullPath(root), "workspace relocation");
             } finally { Directory.Delete(root, true); }
+            root = Path.Combine(Path.GetTempPath(), "desktop local station " + Guid.NewGuid()); Directory.CreateDirectory(Path.Combine(root, "secrets"));
+            try {
+                var config = Path.Combine(root, "secrets", "local-deployment.json");
+                File.WriteAllText(config, "{\"backend\":\"local-station\",\"admin_url\":\"http://127.0.0.1:18082\",\"wechat_native_url\":\"http://127.0.0.1:18174\"}");
+                var local = Deployment.Load(root);
+                Assert(local.LocalStationNative && local.StationNativeUrl.EndsWith(":18174") && local.StationNativeExe == Path.Combine(root, "runtimes", "windows-x64", "wx.exe"), "local station native runtime is explicit and package local");
+                Assert(local.StationNativeRoot == Path.Combine(root, "data", "station", "apps", "wechat", "native"), "local station native data is private and separate");
+                File.WriteAllText(config, "{\"backend\":\"local-station\",\"admin_url\":\"http://127.0.0.1:18082\",\"wechat_native_url\":\"http://127.0.0.1:18082\"}");
+                await Reject(() => { Deployment.Load(root); return Task.FromResult(0); });
+                File.WriteAllText(config, "{\"backend\":\"local-station\",\"native_url\":\"http://127.0.0.1:18174\"}");
+                await Reject(() => { Deployment.Load(root); return Task.FromResult(0); });
+            } finally { Directory.Delete(root, true); }
             root = Path.Combine(Path.GetTempPath(), "desktop windows native " + Guid.NewGuid()); Directory.CreateDirectory(root);
             try {
                 var privateDir = Path.Combine(root, "private ownership");
@@ -144,6 +220,14 @@ namespace WechatAgent.Desktop {
                 string hash; using (var sha = System.Security.Cryptography.SHA256.Create()) hash = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(d.NativeExe))).Replace("-", "");
                 File.WriteAllText(Path.Combine(Path.GetDirectoryName(d.NativeExe), "windows-native-manifest.json"), "{\"native_sha256\":\"" + hash + "\",\"admin_sha256\":\"" + hash + "\"}");
                 WindowsRuntime.VerifyBundle(d); Assert(true, "bundle checksums match");
+                var stationRuntime = Path.Combine(root, "station runtime"); Directory.CreateDirectory(stationRuntime);
+                var stationWx = Path.Combine(stationRuntime, "wx.exe"); File.WriteAllText(stationWx, "station native executable");
+                string stationHash; using (var sha = System.Security.Cryptography.SHA256.Create()) stationHash = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(stationWx))).Replace("-", "");
+                File.WriteAllText(Path.Combine(stationRuntime, "windows-native-manifest.json"), "{\"local_station_runtime\":true,\"native_sha256\":\"" + stationHash + "\",\"files\":{\"wx.exe\":\"" + stationHash + "\"}}");
+                WindowsRuntime.VerifyNativeBundle(stationWx, true); Assert(true, "station native runtime requires and verifies its isolated file manifest");
+                File.WriteAllText(Path.Combine(stationRuntime, "unlisted.dll"), "unexpected");
+                await Reject(() => { WindowsRuntime.VerifyNativeBundle(stationWx, true); return Task.FromResult(0); });
+                Directory.Delete(stationRuntime, true);
                 var resource = Path.Combine(root, "runtimes", "windows-python-cli"); Directory.CreateDirectory(resource);
                 File.WriteAllText(Path.Combine(resource, "python.exe"), "synthetic executable");
                 File.WriteAllText(Path.Combine(resource, "runtime-manifest.json"), "{\"files\":{\"python.exe\":\"" + hash + "\"}}");
@@ -199,9 +283,16 @@ namespace WechatAgent.Desktop {
                 Console.WriteLine("Native Windows failed-start recovery passed twice."); return 0;
             }
             if (args.Length == 1 && args[0] == "--synthetic-child") { Thread.Sleep(60000); return 0; }
+            if (args.Length == 2 && args[0] == "--local-native-cycle") {
+                LocalNativeCycle(args[1]);
+                Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; zero native accounts, no login or send.");
+                return 0;
+            }
             if (args.Length == 2 && args[0] == "--local-cycle") {
                 var d = Deployment.LocalStationDefault(Path.GetFullPath(args[1]));
-                Assert(!File.Exists(Path.Combine(d.Workspace, "runtimes", "windows-x64", "wx.exe")), "local station validation must not require wx.exe");
+                // A package may carry a wx runtime for an owner to opt into,
+                // but the zero-app station path must not start or require it.
+                Assert(!d.LocalStationNative, "default local station leaves wx opt-in disabled");
                 var reserved = new TcpListener(IPAddress.Loopback, new Uri(d.Url).Port);
                 try {
                     reserved.Start();
@@ -214,7 +305,7 @@ namespace WechatAgent.Desktop {
                         c.Stop(CancellationToken.None).GetAwaiter().GetResult();
                     }
                 }
-                Console.WriteLine("LocalStation real service cycle passed twice; no WeChat/native process."); return 0;
+                Console.WriteLine("LocalStation real service cycle passed twice; wx opt-in remained disabled."); return 0;
             }
             if (args.Length == 2 && args[0] == "--cycle") {
                 var config = Deployment.Load(args[1]);

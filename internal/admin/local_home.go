@@ -32,6 +32,12 @@ type localHomeService struct {
 // The existing identity file is reused when dir points to an existing station;
 // initialization never imports account data or revives application grants.
 func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ...*agenthost.WindowsConfig) (*LocalHomeHandler, error) {
+	return NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin, apphost.Registry{}, windows...)
+}
+
+// NewLocalHomeHandlerWithApps attaches registrations already verified by the
+// station host. Applications cannot register themselves through the HTTP API.
+func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, registry apphost.Registry, windows ...*agenthost.WindowsConfig) (*LocalHomeHandler, error) {
 	if dir == "" || workspaceRoot == "" || !validPassword(password) {
 		return nil, errors.New("本地主人配置无效")
 	}
@@ -67,7 +73,7 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ..
 		_, value, _ := s.session(r)
 		respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": value.CSRF})
 	}))
-	s.appRoutes(mux, apphost.Registry{})
+	s.appRoutes(mux, registry)
 	home := &localHomeService{identity: newFishIdentityRegistry(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true}
 	home.configureAppCatalog()
 	home.appInstallRoutes(s, mux)

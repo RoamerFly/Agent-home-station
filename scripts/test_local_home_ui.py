@@ -58,7 +58,7 @@ def assert_no_horizontal_overflow(page, scene):
 def app_connection_payload():
     """Synthetic registered application data for browser-only app status checks."""
     return {
-        "items": [{"id": "wechat", "name": "微信", "registration": "synthetic"}],
+        "items": [{"id": "wechat", "name": "微信", "registration": "station-native"}],
     }
 
 
@@ -191,9 +191,13 @@ def verify(binary, output):
                 connections_route = fulfill_json(wechat_connection_payload())
                 page.route("**/api/apps", apps_route)
                 page.route("**/api/apps/wechat/connections", connections_route)
+                status_pattern = "**/api/apps/wechat/connections/synthetic-wechat"
+                status_route = fulfill_json({"connection": {"id": "synthetic-wechat", "login": "authenticated"}})
+                page.route(status_pattern, status_route)
                 page.locator("#apps-refresh").click()
                 page.get_by_text("账号连接", exact=True).wait_for()
                 page.get_by_text("合成微信账号", exact=True).wait_for()
+                page.get_by_text("已登录", exact=True).wait_for()
                 page.screenshot(path=str(output / "apps-connected-light.png"), full_page=True)
 
                 # An unavailable account read remains a visible, recoverable application state.
@@ -204,6 +208,7 @@ def verify(binary, output):
                 page.get_by_text("账号状态暂不可读", exact=True).wait_for()
                 page.unroute("**/api/apps/wechat/connections", unavailable_route)
                 page.unroute("**/api/apps", apps_route)
+                page.unroute(status_pattern, status_route)
 
                 page.locator("#settings-tab").click()
                 assert page.locator("#model-name").input_value() == "synthetic-unsaved-draft", "application state replaced the model draft"

@@ -183,7 +183,9 @@ namespace WechatAgent.Desktop {
             d.StationWorkspace = Path.Combine(d.Root, "managed-workspaces");
             d.Url = FreeLocalUrl();
             Assert(File.Exists(d.StationExe), "local station executable missing from preview package");
-            Assert(!File.Exists(Path.Combine(d.Workspace, "runtimes", "windows-x64", "wx.exe")), "local station window test must not require wx.exe");
+            // A station package can carry the optional native WeChat runtime.
+            // Its presence alone must never start it or make it required.
+            Assert(!d.LocalStationNative, "default local station leaves wx opt-in disabled");
             new CloseSettings(d.Workspace).Save("exit");
             using (var instance = new DesktopInstance(DesktopInstance.LocalStationName + ".window-test." + Guid.NewGuid().ToString("N")))
             using (var form = new MainForm(d, instance)) {

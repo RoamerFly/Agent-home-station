@@ -55,14 +55,48 @@ namespace WechatAgent.Desktop {
             acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
             if (!exists) Directory.CreateDirectory(path, acl); else Directory.SetAccessControl(path, acl);
         }
-        internal static void VerifyBundle(Deployment config) {
-            var dir = Path.GetDirectoryName(config.NativeExe); NoLinks(dir); NoLinks(config.Root);
-            var manifest = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(dir, "windows-native-manifest.json"), Encoding.UTF8));
-            foreach (var item in new [] { new [] { config.NativeExe, "native_sha256" }, new [] { config.AdminExe, "admin_sha256" } }) {
-                if ((File.GetAttributes(item[0]) & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("运行文件不能使用链接。");
-                using (var stream = File.OpenRead(item[0])) using (var sha = SHA256.Create())
-                    if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), Deployment.Text(manifest, item[1]), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Windows 运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
+        internal static void VerifyNativeBundle(string nativeExe, bool stationRuntime = false) {
+            var dir = Path.GetDirectoryName(nativeExe); NoLinks(dir);
+            var manifestPath = Path.Combine(dir, "windows-native-manifest.json");
+            if ((File.GetAttributes(manifestPath) & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("运行清单不能使用链接。");
+            var manifest = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(manifestPath, Encoding.UTF8));
+            if ((File.GetAttributes(nativeExe) & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("运行文件不能使用链接。");
+            using (var stream = File.OpenRead(nativeExe)) using (var sha = SHA256.Create())
+                if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), Deployment.Text(manifest, "native_sha256"), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Windows 运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
+            // The station package deliberately omits wechat-admin.exe.  Its
+            // manifest still enumerates every bundled native dependency, so extra
+            // files cannot silently enter the verified runtime directory.
+            object listed; var hasFiles = manifest.TryGetValue("files", out listed) && listed is Dictionary<string, object>;
+            if (stationRuntime && (!hasFiles || !manifest.ContainsKey("local_station_runtime") || !Convert.ToBoolean(manifest["local_station_runtime"]))) throw new InvalidOperationException("本机成长站微信运行包清单不完整或来源不匹配。");
+            if (hasFiles) {
+                var files = (Dictionary<string, object>)listed;
+                if (files.Count == 0) throw new InvalidOperationException("Windows 原生运行文件清单为空。");
+                var nativeListed = false;
+                foreach (var entry in files) {
+                    if (stationRuntime && (entry.Key != Path.GetFileName(entry.Key) || entry.Key.IndexOf(':') >= 0)) throw new InvalidOperationException("本机成长站微信运行包只能登记同级文件。");
+                    var target = Path.GetFullPath(Path.Combine(dir, entry.Key));
+                    if (!target.StartsWith(Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Windows 原生运行文件清单包含越界路径。");
+                    NoLinks(target);
+                    if (stationRuntime && (File.GetAttributes(target) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0) throw new InvalidOperationException("本机成长站微信运行包不能包含链接或目录。");
+                    using (var stream = File.OpenRead(target)) using (var sha = SHA256.Create())
+                        if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), Convert.ToString(entry.Value), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Windows 原生运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
+                    if (String.Equals(target, Path.GetFullPath(nativeExe), StringComparison.OrdinalIgnoreCase)) nativeListed = true;
+                }
+                if (stationRuntime && !nativeListed) throw new InvalidOperationException("本机成长站微信运行包未登记 wx.exe。");
+                if (stationRuntime) foreach (var path in Directory.GetFileSystemEntries(dir)) {
+                    var name = Path.GetFileName(path);
+                    if (name != "windows-native-manifest.json" && !files.ContainsKey(name)) throw new InvalidOperationException("本机成长站微信运行包包含未登记的文件或目录。");
+                }
             }
+        }
+        internal static void VerifyBundle(Deployment config) {
+            var dir = Path.GetDirectoryName(config.NativeExe); NoLinks(config.Root);
+            VerifyNativeBundle(config.NativeExe);
+            var manifest = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(dir, "windows-native-manifest.json"), Encoding.UTF8));
+            var admin = config.AdminExe;
+            if ((File.GetAttributes(admin) & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("运行文件不能使用链接。");
+            using (var stream = File.OpenRead(admin)) using (var sha = SHA256.Create())
+                if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), Deployment.Text(manifest, "admin_sha256"), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Windows 运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
             var resources = Path.GetFullPath(Path.Combine(dir, ".."));
             foreach (var name in new [] { "windows-python-cli", "windows-media", "windows-music" }) {
                 var folder = Path.Combine(resources, name);
@@ -83,7 +117,7 @@ namespace WechatAgent.Desktop {
                     if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), Convert.ToString(entry.Value), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("项目内运行环境校验失败；请修复该环境，用户资料已保留。");
             }
         }
-        static void FreePort(string url) {
+        internal static void FreePort(string url) {
             var uri = new Uri(url); var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, uri.Port);
             try { listener.Server.ExclusiveAddressUse = true; listener.Start(); }
             catch (System.Net.Sockets.SocketException) { throw new InvalidOperationException("本机端口 " + uri.Port + " 已占用；拒绝接管或结束其他服务。"); }
@@ -232,9 +266,10 @@ namespace WechatAgent.Desktop {
             output = Pump(child.StandardOutput); error = Pump(child.StandardError);
         }
         async Task Pump(StreamReader stream) { string line; while ((line = await stream.ReadLineAsync()) != null) lock (gate) { log.WriteLine(DateTime.UtcNow.ToString("o") + " " + line); log.Flush(); } }
-        internal static OwnedProcess Start(string exe, string[] args, string workspace, Dictionary<string, string> environment, string logPath, ProcessJob job) {
+        internal static OwnedProcess Start(string exe, string[] args, string workspace, Dictionary<string, string> environment, string logPath, ProcessJob job, bool clearStationSecrets = false) {
             var info = HiddenRunner.Info(exe, args); info.WorkingDirectory = workspace;
             foreach (var name in info.EnvironmentVariables.Keys.Cast<string>().Where(x => x.StartsWith("WECHAT_", StringComparison.OrdinalIgnoreCase) || x.StartsWith("XDG_", StringComparison.OrdinalIgnoreCase)).ToArray()) info.EnvironmentVariables.Remove(name);
+            if (clearStationSecrets) foreach (var name in info.EnvironmentVariables.Keys.Cast<string>().Where(x => x.StartsWith("AHS_", StringComparison.OrdinalIgnoreCase)).ToArray()) info.EnvironmentVariables.Remove(name);
             if (environment != null) foreach (var pair in environment) info.EnvironmentVariables[pair.Key] = pair.Value;
             var log = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.Read));
             var child = new Process { StartInfo = info };

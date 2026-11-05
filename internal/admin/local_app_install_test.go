@@ -48,6 +48,7 @@ func localAppInstallFixture(t *testing.T) (*localHomeFixture, map[string]any) {
 func TestLocalAppSourceInstallPreservesEditsAndDoesNotConnect(t *testing.T) {
 	f, home := localAppInstallFixture(t)
 	row := localCatalogApplication(t, f)
+	version := row["version"]
 	if row["source_available"] != true || row["state"] != "source_only" || row["install_state"] != "not_installed" {
 		t.Fatal(row)
 	}
@@ -64,7 +65,7 @@ func TestLocalAppSourceInstallPreservesEditsAndDoesNotConnect(t *testing.T) {
 		t.Fatal("installed bundle invalid", err)
 	}
 	row = localCatalogApplication(t, f)
-	if row["install_state"] != "installed" || row["installed_version"] != "0.1.4" {
+	if row["install_state"] != "installed" || row["installed_version"] != version {
 		t.Fatal("installed state missing", row)
 	}
 	marker := filepath.Join(want, "workspace", "my-tool.txt")
@@ -78,7 +79,7 @@ func TestLocalAppSourceInstallPreservesEditsAndDoesNotConnect(t *testing.T) {
 		t.Fatal("retry overwrote owner edits", err)
 	}
 	row = localCatalogApplication(t, f)
-	if row["install_state"] != "installed" || row["installed_version"] != "0.1.4" {
+	if row["install_state"] != "installed" || row["installed_version"] != version {
 		t.Fatal("workspace edit changed installed state", row)
 	}
 	if code, out := f.request("GET", "/api/apps", nil, false); code != 200 || len(out["items"].([]any)) != 0 {
@@ -89,7 +90,7 @@ func TestLocalAppSourceInstallPreservesEditsAndDoesNotConnect(t *testing.T) {
 	f2.handler.home.appCatalog = f.handler.home.appCatalog
 	f2.login()
 	row = localCatalogApplication(t, f2)
-	if row["install_state"] != "installed" || row["installed_version"] != "0.1.4" {
+	if row["install_state"] != "installed" || row["installed_version"] != version {
 		t.Fatal("installation did not survive restart", row)
 	}
 	if code, out := f2.request("POST", "/api/local/apps/wechat/install", in, true); code != 200 || out["result"] != "existing" {
@@ -110,6 +111,7 @@ func TestLocalAppSourceInstallPreservesEditsAndDoesNotConnect(t *testing.T) {
 func TestLocalAppCatalogPreservesInstalledStateWithoutSourceAndWhilePaused(t *testing.T) {
 	f, home := localAppInstallFixture(t)
 	row := localCatalogApplication(t, f)
+	version := row["version"]
 	in := map[string]any{"digest": row["digest"], "revision": home["revision"]}
 	if code, out := f.request("POST", "/api/local/apps/wechat/install", in, true); code != http.StatusOK {
 		t.Fatal(code, out)
@@ -118,14 +120,14 @@ func TestLocalAppCatalogPreservesInstalledStateWithoutSourceAndWhilePaused(t *te
 	// see the checked-out version instead of treating it as disappeared.
 	f.handler.home.appCatalog = t.TempDir()
 	row = localCatalogApplication(t, f)
-	if row["source_available"] != false || row["install_state"] != "installed" || row["installed_version"] != "0.1.4" {
+	if row["source_available"] != false || row["install_state"] != "installed" || row["installed_version"] != version {
 		t.Fatal("missing source hid installed application", row)
 	}
 	if code, out := f.request("POST", "/api/local/home", map[string]any{"action": "pause", "revision": home["revision"]}, true); code != http.StatusOK {
 		t.Fatal(code, out)
 	}
 	row = localCatalogApplication(t, f)
-	if row["install_state"] != "installed" || row["installed_version"] != "0.1.4" {
+	if row["install_state"] != "installed" || row["installed_version"] != version {
 		t.Fatal("paused home hid installed application", row)
 	}
 }

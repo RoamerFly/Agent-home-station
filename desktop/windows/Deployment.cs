@@ -16,9 +16,13 @@ namespace WechatAgent.Desktop {
     internal sealed class Deployment {
         internal string Workspace, Distro, User, Root, Account, Music;
         internal string Backend = "wsl", NativeUrl = "http://127.0.0.1:6174";
-        internal string NativeExe, AdminExe, StationExe, StationWorkspace;
+        internal string NativeExe, AdminExe, StationExe, StationWorkspace, StationNativeExe, StationNativeUrl;
         internal bool Windows { get { return Backend == "windows-native"; } }
         internal bool LocalStation { get { return Backend == "local-station"; } }
+        // The local station starts no WeChat-native runtime unless the owner
+        // explicitly opts in through wechat_native_url.
+        internal bool LocalStationNative { get { return LocalStation && StationNativeUrl != ""; } }
+        internal string StationNativeRoot { get { return Path.Combine(Root, "apps", "wechat", "native"); } }
         internal string Url = "http://127.0.0.1:8081";
         internal static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 };
         internal static Deployment Load(string workspace) {
@@ -35,7 +39,11 @@ namespace WechatAgent.Desktop {
                 }
                 if (Text(data, "workspace_root") != "") local.StationWorkspace = Path.GetFullPath(Path.Combine(workspace, Text(data, "workspace_root")));
                 if (Text(data, "admin_url") != "") local.Url = LocalUrl(Text(data, "admin_url"));
-                if (Text(data, "native_url") != "" || Text(data, "account") != "" || Text(data, "music_service") != "") throw new InvalidOperationException("本机成长站配置不能包含微信或音乐服务参数。");
+                if (Text(data, "wechat_native_url") != "") local.StationNativeUrl = LocalUrl(Text(data, "wechat_native_url"), true);
+                // native_url belonged to the retired all-in-one desktop
+                // configuration. Do not silently reinterpret it, otherwise a
+                // station can accidentally attach to an unrelated daemon.
+                if (Text(data, "native_url") != "" || Text(data, "account") != "" || Text(data, "music_service") != "" || (local.LocalStationNative && new Uri(local.StationNativeUrl).Port == new Uri(local.Url).Port)) throw new InvalidOperationException("本机成长站配置无效：微信原生服务必须使用独立的 wechat_native_url，且不能包含账号或音乐服务参数。");
                 return local;
             }
             if (Text(data, "backend") == "windows-native") {
@@ -59,17 +67,17 @@ namespace WechatAgent.Desktop {
             if (d.Music != "" && !Regex.IsMatch(d.Music, @"\Awechat-agent-music(?:-[a-f0-9]+)?\.service\z")) throw new InvalidOperationException("受管音乐服务名称无效。");
             return d;
         }
-        internal static string LocalUrl(string value) {
+        internal static string LocalUrl(string value, bool explicitPort = false) {
             Uri uri;
-            if (!Uri.TryCreate(value, UriKind.Absolute, out uri) || uri.Scheme != "http" || uri.Host != "127.0.0.1" || uri.UserInfo != "" || uri.AbsolutePath != "/" || uri.Query != "" || uri.Fragment != "") throw new InvalidOperationException("本机服务地址必须使用 http://127.0.0.1:端口。");
-            return uri.GetLeftPart(UriPartial.Authority);
+            if (!Uri.TryCreate(value, UriKind.Absolute, out uri) || uri.Scheme != "http" || uri.Host != "127.0.0.1" || uri.UserInfo != "" || uri.AbsolutePath != "/" || uri.Query != "" || uri.Fragment != "" || (explicitPort && !Regex.IsMatch(value, @"\Ahttp://127\.0\.0\.1:[1-9][0-9]*\z"))) throw new InvalidOperationException("本机服务地址必须使用 http://127.0.0.1:端口。");
+            return explicitPort ? value : uri.GetLeftPart(UriPartial.Authority);
         }
         internal static Deployment WindowsDefault(string workspace) {
             return new Deployment { Workspace = workspace, Backend = "windows-native", Root = Path.Combine(workspace, "data"), Account = "desktop", Music = "", NativeExe = Path.Combine(workspace, "runtimes", "windows-x64", "wx.exe"), AdminExe = Path.Combine(workspace, "runtimes", "windows-x64", "wechat-admin.exe") };
         }
         internal static Deployment LocalStationDefault(string workspace) {
             var data = Path.Combine(workspace, "data", "station");
-            return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "managed-workspaces"), StationExe = Path.Combine(workspace, "agent-home-station-server.exe"), Account = "", Music = "", Url = "http://127.0.0.1:8082", NativeUrl = "" };
+            return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "managed-workspaces"), StationExe = Path.Combine(workspace, "agent-home-station-server.exe"), StationNativeExe = Path.Combine(workspace, "runtimes", "windows-x64", "wx.exe"), Account = "", Music = "", Url = "http://127.0.0.1:8082", NativeUrl = "", StationNativeUrl = "" };
         }
         internal static string Text(Dictionary<string, object> data, string key) { object value; return data.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : ""; }
         internal string Identity { get { using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(Workspace.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant()))).Replace("-", "").Substring(0, 16); } }
