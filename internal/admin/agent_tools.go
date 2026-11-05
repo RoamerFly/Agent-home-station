@@ -10,7 +10,6 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
-	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -192,47 +191,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		return encode(map[string]any{"state": "queued_private_report", "instruction": "技术报告已安排给主人私聊；群里只自然简短回应结果，不再复述技术内容。"}, nil)
 	case "wechat_file_read":
-		var in struct {
-			Message string `json:"message_id"`
-			Thread  string `json:"thread_id"`
-		}
-		if json.Unmarshal(args, &in) != nil {
-			return "", toolInputError("invalid attachment request")
-		}
-		if in.Thread == "" {
-			in.Thread = p.trace.Thread
-		}
-		if !p.conversationReadAllowed(in.Thread) {
-			return "", toolInputError("attachment conversation denied")
-		}
-		// This built-in transport path intentionally does not depend on media
-		// observation/ASR plugins.  resolveInboundArtifact verifies account,
-		// conversation, direction and same-sender/explicit-quote binding, then
-		// returns a retained original or obtains an un-cached image/voice.
-		// Ordinary file attachments retain the same binding and use the native
-		// streaming receiver only when their original is not yet cached.
-		trace := p.trace
-		trace.Thread = in.Thread
-		asset, msg, e := m.resolveInboundArtifact(ctx, trace, in.Message)
-		if e != nil && strings.Contains(e.Error(), "inbound_artifact_original_not_cached") {
-			message, readErr := m.native.Message(ctx, in.Message)
-			if readErr != nil || message.AccountID != trace.Account || message.ThreadID != trace.Thread || message.FileAttachmentName() == "" {
-				return "", toolInputError("source is not an authorized attachment message")
-			}
-			if _, readErr = (mediaUnderstanding{manager: m}).receiveFile(ctx, message, message.FileAttachmentName()); readErr != nil {
-				return "", readErr
-			}
-			asset, msg, e = m.resolveInboundArtifact(ctx, trace, in.Message)
-		}
-		if e != nil {
-			return "", toolInputError("source attachment unavailable: " + e.Error())
-		}
-		p.routeCrossConversationThread(in.Thread)
-		return encode(map[string]any{
-			"asset_id": asset.ID, "message_id": msg.ID, "filename": asset.Filename,
-			"mime": asset.MIME, "bytes": asset.Bytes, "status": "original_available",
-			"instruction": "已取得经核验的原件；可交给当前会话的已授权处理能力，或按用户要求准备发送。不要猜测本机路径、文件内容或投递结果。",
-		}, nil)
+		return p.readWechatAttachment(ctx, args)
 	case "agent_reminder":
 		return p.callReminder(ctx, args)
 	case "agent_clock":
@@ -268,100 +227,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	case "wechat_conversations":
 		return p.listAccountConversations(ctx, args)
 	case "wechat_operation_status":
-		var in struct {
-			ID string `json:"operation_id"`
-		}
-		if json.Unmarshal(args, &in) != nil {
-			return "", toolInputError("操作编号无效")
-		}
-		m.agent.mu.Lock()
-		op, ok := m.agent.data.Operations[in.ID]
-		m.agent.mu.Unlock()
-		if !ok || op.Thread != p.trace.Thread {
-			return "", toolInputError("只能查询本会话发起的操作")
-		}
-		if op.AppAction != nil && (op.AppAction.ConnectionRef != wechatConnectionRef(m.native.Account()) || op.AppAction.RequesterID != p.trace.Sender) {
-			return "", toolInputError("操作回执不属于当前请求者")
-		}
-		if op.Tool == "wechat_send_media" {
-			return p.crossMediaStatus(ctx, op.ID)
-		}
-		var previous linuxnative.ActionStatus
-		_ = json.Unmarshal([]byte(op.Result), &previous)
-		if previous.ID == "" {
-			return op.Result, nil
-		}
-		var value any
-		if op.Tool == "wechat_send_text" || op.Tool == "wechat_forward_file" {
-			native, ok := m.native.(nativeTools)
-			if !ok {
-				return "", toolInputError("后台不支持回执读取")
-			}
-			status, err := native.ToolSendStatus(ctx, previous.ID)
-			if err != nil {
-				return "", err
-			}
-			var original struct {
-				Thread string `json:"thread_id"`
-				Text   string `json:"text"`
-			}
-			_ = json.Unmarshal(op.Arguments, &original)
-			if op.Tool == "wechat_forward_file" {
-				original.Thread, original.Text = forwardReceiptDescription(op, p.trace.Thread)
-			}
-			if status.ThreadID != original.Thread || !p.conversationReadAllowed(original.Thread) {
-				return "", toolInputError("回执目标不匹配或授权已取消")
-			}
-			if op.Tool == "wechat_forward_file" {
-				var staged struct {
-					Source string `json:"source_id"`
-				}
-				_ = json.Unmarshal([]byte(op.Result), &staged)
-				if staged.Source != "" && status.SourceID != "" && staged.Source != status.SourceID {
-					return "", toolInputError("原文件转发回执来源不匹配")
-				}
-				status.Kind = "file" // Native job kind may be "send", not the media kind.
-			}
-			if status.State == "accepted" && status.ServerID != "" {
-				p.rememberAgentSend(original.Thread, original.Text, op.ID)
-			}
-			value = status
-		} else if op.Tool == "wechat_account_action" || op.Tool == "wechat_recall" {
-			native, ok := m.native.(nativeActions)
-			if !ok {
-				return "", toolInputError("后台不支持动作查询")
-			}
-			status, err := native.InspectAction(ctx, previous.ID)
-			if err != nil {
-				return "", err
-			}
-			if !matchesWechatAction(previous, status) {
-				return "", toolInputError("账号动作回执与原任务不匹配")
-			}
-			value = status
-		} else {
-			return op.Result, nil
-		}
-		b, _ := json.Marshal(value)
-		var result map[string]any
-		_ = json.Unmarshal(b, &result)
-		if op.Tool == "wechat_forward_file" {
-			var metadata map[string]any
-			_ = json.Unmarshal([]byte(op.Result), &metadata)
-			for _, field := range []string{"filename", "source_thread_id", "source_message_id"} {
-				if v, ok := metadata[field]; ok {
-					result[field] = v
-				}
-			}
-		}
-		result["operation_id"] = op.ID
-		b, _ = json.Marshal(result)
-		op.Result = string(b)
-		m.agent.mu.Lock()
-		m.agent.data.Operations[op.ID] = op
-		err := m.agent.persist()
-		m.agent.mu.Unlock()
-		return op.Result, err
+		return p.callWechatOperation(ctx, args)
 	case "agent_tasks":
 		tasks := m.agent.active(p.trace.Account, p.trace.Thread)
 		visible := tasks[:0]

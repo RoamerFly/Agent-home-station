@@ -9,6 +9,14 @@ import (
 	"wechat-bot/internal/linuxnative"
 )
 
+// OriginalTextBodyUnverified is preserved when polling a recovered receipt.
+func OriginalTextBodyUnverified(result string) bool {
+	var metadata struct {
+		Unverified bool `json:"original_body_unverified"`
+	}
+	return json.Unmarshal([]byte(result), &metadata) == nil && metadata.Unverified
+}
+
 type TextSender interface {
 	LookupSend(context.Context, string) (linuxnative.ToolStatus, error)
 	Submit(context.Context, linuxnative.ToolSend) (linuxnative.ToolStatus, error)
@@ -59,7 +67,10 @@ func SendText(ctx context.Context, raw json.RawMessage, host TextHost) (string, 
 			if old.ThreadID != in.Thread || old.ID == "" {
 				return nil, errors.New("outbound_receipt_identity_mismatch")
 			}
-			return old, nil
+			return struct {
+				linuxnative.ToolStatus
+				BodyUnverified bool `json:"original_body_unverified"`
+			}{old, true}, nil
 		}
 		if !errors.Is(err, linuxnative.ErrToolNotFound) {
 			return nil, err

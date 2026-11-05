@@ -85,11 +85,18 @@ func (n recoveredTextNative) LookupSend(context.Context, string) (linuxnative.To
 	return n.status, nil
 }
 
+func (n recoveredTextNative) ToolSendStatus(context.Context, string) (linuxnative.ToolStatus, error) {
+	return n.status, nil
+}
+
 func TestWechatExecutionHostRecoversReceiptWithoutInventingLostBody(t *testing.T) {
 	f, p := trustedAgent(t)
 	defer p.hub.Close()
 	n := recoveredTextNative{fakeTools: &fakeTools{fakeNative: f.native}, status: linuxnative.ToolStatus{ID: "original-platform-job", ThreadID: "wxid_owner", Kind: "text", State: "accepted", ServerID: "123"}}
 	f.manager.native = n
+	f.manager.mu.Lock()
+	f.manager.config.Companion.Permissions.Remember = true
+	f.manager.mu.Unlock()
 	settings := f.manager.agent.config()
 	settings.CrossConversation = true
 	if err := f.manager.agent.save(settings); err != nil {
@@ -103,6 +110,16 @@ func TestWechatExecutionHostRecoversReceiptWithoutInventingLostBody(t *testing.T
 	operations := f.manager.agent.operations()
 	if len(operations) != 1 || !strings.Contains(operations[0].Result, "original-platform-job") {
 		t.Fatal("receipt not persisted", operations)
+	}
+	statusArgs, err := json.Marshal(map[string]string{"operation_id": operations[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		polled, err := p.Call(t.Context(), "wechat_operation_status", statusArgs)
+		if err != nil || !strings.Contains(polled, `"original_body_unverified":true`) {
+			t.Fatal("poll dropped the original receipt evidence boundary", polled, err)
+		}
 	}
 	found := false
 	for _, row := range f.manager.Logs() {
