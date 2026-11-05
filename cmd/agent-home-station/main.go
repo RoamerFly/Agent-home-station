@@ -29,6 +29,7 @@ type config struct {
 	dataDir       string
 	workspaceRoot string
 	listen        string
+	runtimeFile   string
 }
 
 func main() {
@@ -59,7 +60,11 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	handler, err := admin.NewLocalHomeHandler(cfg.dataDir, cfg.workspaceRoot, password, "")
+	windows, err := admin.LocalWindowsRuntime(filepath.Dir(path), cfg.dataDir, cfg.runtimeFile)
+	if err != nil {
+		return err
+	}
+	handler, err := admin.NewLocalHomeHandler(cfg.dataDir, cfg.workspaceRoot, password, "", windows)
 	if err != nil {
 		return err
 	}
@@ -109,6 +114,7 @@ func parseConfig(args []string, executable string) (config, error) {
 	dataFlag := fs.String("data", "", "本机身份与设置目录（绝对路径）")
 	workspaceFlag := fs.String("workspace", "", "大肥鱼工作空间根目录（绝对路径）")
 	listenFlag := fs.String("listen", defaultListen, "仅本机监听地址")
+	runtimeFlag := fs.String("runtime-config", "", "可选 Windows 运行器配置文件绝对路径")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -140,7 +146,10 @@ func parseConfig(args []string, executable string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	return config{dataDir: dataDir, workspaceRoot: workspaceRoot, listen: listen}, nil
+	if *runtimeFlag != "" && !filepath.IsAbs(*runtimeFlag) {
+		return config{}, errors.New("runtime configuration must be absolute")
+	}
+	return config{dataDir: dataDir, workspaceRoot: workspaceRoot, listen: listen, runtimeFile: *runtimeFlag}, nil
 }
 
 // localListenAddress accepts only unambiguous loopback addresses. In

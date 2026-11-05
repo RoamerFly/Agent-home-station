@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 )
@@ -27,17 +28,19 @@ type LocalHomeHandler struct {
 func (h *LocalHomeHandler) Close() error { return h.chat.close() }
 
 type localChatService struct {
-	home    *localHomeService
-	models  *localModelStore
-	mu      sync.Mutex
-	turn    sync.Mutex
-	busy    atomic.Bool
-	store   *companion.Store
-	fishID  string
-	ownerID string
-	closed  bool
-	ctx     context.Context
-	cancel  context.CancelFunc
+	home      *localHomeService
+	models    *localModelStore
+	mu        sync.Mutex
+	turn      sync.Mutex
+	busy      atomic.Bool
+	store     *companion.Store
+	fishID    string
+	ownerID   string
+	closed    bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	windows   *agenthost.WindowsConfig
+	processes *localProcessTools
 	// Tests replace only the model transport, retaining the normal engine,
 	// source handling, SQLite and HTTP boundary.
 	modelFactory func() (companion.LanguageModel, error)
@@ -55,10 +58,14 @@ func (h *localChatService) close() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.closed = true
-	if h.store != nil {
-		return h.store.Close()
+	var err error
+	if h.processes != nil {
+		err = h.processes.Close()
 	}
-	return nil
+	if h.store != nil {
+		return errors.Join(err, h.store.Close())
+	}
+	return err
 }
 
 func (h *localChatService) conversation() (*companion.Store, companion.Input, error) {
@@ -215,12 +222,12 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Source = &companion.SourceRef{MessageID: request.RequestID}
 	c := localConversationConfig(settings.Persona)
-	engine, err := companion.New(c, store, model, "你是大肥鱼，正在 Agent-home-station 软件中与本机主人交谈。当前没有接入任何应用；本轮只可聊天并读取已提供的本地记忆工具。软件界面展示已写入本地聊天记录的气泡，不代表微信发送或主人已经读过。不要声称已使用未提供的应用、文件或执行能力。")
+	engine, err := companion.New(c, store, model, "你是大肥鱼，正在 Agent-home-station 软件中与本机主人交谈。当前没有接入任何应用；按本轮工具目录使用本地记忆和主人授权的家目录。软件界面展示已写入本地聊天记录的气泡，不代表微信发送或主人已经读过。不要声称已使用未提供的应用或执行能力。")
 	if err != nil {
 		fail(w, 503, "本地聊天引擎未能准备，原始记录保留")
 		return
 	}
-	engine.Tools = newLocalMemoryTools(store, in)
+	engine.Tools = h.tools(store, in)
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
 	stop := context.AfterFunc(h.ctx, cancel)

@@ -52,9 +52,11 @@
     $("#status-kicker").textContent = initialized ? "本地相处" : "准备中";
     $("#status-title").textContent = initialized ? "大肥鱼在家" : "为大肥鱼准备家";
     $("#stage-note").textContent = !initialized
-      ? "准备好后，就能先在这里和她聊天；文件与工具会在以后按授权接入。"
+      ? "准备家目录后，就能和她聊天，并让她整理自己的文件与工具。"
       : chatAvailable
-        ? "聊天始终可用；工作空间授权只影响她之后使用文件与工具的范围。"
+        ? enabled
+          ? "她可以整理家目录中的文件、项目与工具；程序执行需要已配置的 Windows 运行器。"
+          : "聊天始终可用；工作空间已暂停，文件操作与新程序启动已停止。"
         : "本地聊天请从独立 Agent-home-station 服务进入。";
     initializeButton.hidden = initialized; $("#setup-actions").hidden = initialized && chatAvailable; localWorkspace.hidden = !initialized || !chatAvailable;
     document.body.classList.toggle("is-home-ready", initialized && chatAvailable);

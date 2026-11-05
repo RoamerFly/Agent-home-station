@@ -1,8 +1,8 @@
-# Windows 独立聊天与家目录 · 5.B.2
+# Windows 独立聊天与家目录 · 5.B.3
 
 独立入口可以在没有微信账号、原生端、ADB 或模型运行环境的安装中启动。主人完成本机身份准备、保存模型连接后，即可在软件页面与同一条大肥鱼聊天。它复用现有聊天引擎和 SQLite 记忆内核，不把本机主人伪装成微信账号。
 
-这是开发预览服务，目前尚未替换正式桌面启动器；Agent 的家目录文件读写、程序执行和应用接入将在后续小步连接。
+这是开发预览服务，目前尚未替换正式桌面启动器。Agent 已能在自己的家目录读写文件、保存工具；配置受管 Windows 运行器后可隔离执行程序。应用接入仍在后续阶段。
 
 ## 启动与配置
 
@@ -56,6 +56,35 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 
 聊天与家目录执行授权是独立的。暂停工作空间不会禁止主人继续聊天；此步的授权仍未挂到旧微信 Agent 的文件执行路径上。`Connected Apps` 目前是空目录，不代表微信已迁入。
 
+### 文件与自编工具
+
+模型可按需发现 `server_list/read/search/write/edit`，在上述家目录内读取、搜索、新建和修改文件。相对路径以家目录为根，绝对路径也必须在家目录内。新建不会覆盖已有文件；修改需要先读取，再提交内容哈希和要替换的唯一片段。文件与 `Project Tools` 下的自编工具跨重启保留。
+
+`server_windows_process` 提供启动、列表、状态、输出和取消。启动使用绝对可执行文件路径、参数数组、家目录内工作目录及稳定的 `request_key`；同编号不会重复启动。进程完成与聊天回复是两种状态，目前要由模型在本轮查询，或由后续请求按原编号续查，尚未接入完成后主动唤醒模型的调度器。重启时未确认完成的进程标为中断，不盲目重放。
+
+暂停工作空间会拒绝新的文件操作和程序启动，并取消仍在运行的程序；已有进程记录仍可查询和取消。写文件与暂停共用身份锁，已开始的一次原子文件操作可以先完成。运行程序的撤权检查约每秒一次，不表示暂停能撤回它此前已经写好的文件。
+
+### Windows 运行器
+
+可执行文件旁存在下列受管运行时布局时自动识别；没有安装运行器也能聊天及操作文件，启动程序会返回 `windows_runtime_not_configured`，不会退回不受限制的宿主命令行。
+
+```text
+runtimes/windows-python-cli/pythonw.exe
+runtimes/windows-python-cli/python.exe
+runtimes/windows-agent-host/windows_agent_host.pyw
+```
+
+开发预览可用 `-runtime-config` 指向绝对路径 JSON：
+
+```json
+{
+  "pythonw": "E:\\AgentHomePreview\\runtimes\\windows-python-cli\\pythonw.exe",
+  "helper": "E:\\AgentHomePreview\\runtimes\\windows-agent-host\\windows_agent_host.pyw"
+}
+```
+
+解释器和隔离代理必须在 Agent 可修改的工作空间之外。执行使用现有 Windows LPAC 代理，仅挂载鱼家目录为可写目录；受管运行时目录为只读。配置、密钥、进程控制和暂存文件位于宿主私有目录，不作为 Agent 的可读写目录。运行器无效或隔离失败时明确失败，不自动改成宿主直接执行。
+
 旧管理端的 `/local-home` 使用原身份注册表和管理登录，只提供身份与家目录准备，并明确引导进入独立服务聊天。不要同时运行旧版和新版程序写同一份真实身份文件。
 
 新代码读取 v1/v2 身份文件时不自动初始化；写操作升级为 v3并保留原绑定。新版进程在 Windows 通过文件锁串行更新，锁文件不跟随最终重解析点，持锁期间不可替换。旧程序不理解 v3，不能在新记录写入后直接切回旧版继续写入；应停下相关服务，由兼容版本修复。
@@ -70,4 +99,4 @@ python -B scripts/test_local_home_ui.py `
   --output temp/local-home/browser
 ```
 
-回放需要 Python Playwright 和 Edge，测试目录及截图不进入 Git。下一步 5.B.3 将本机主人授权接入 Agent 的文件读写、持久工具和 Windows 隔离执行，随后继续应用注册与微信迁移。
+回放需要 Python Playwright 和 Edge，测试目录及截图不进入 Git。5.B.3 的真实 Windows LPAC 验证使用隔离合成文件：创建并执行 Python 工具、生成作品、拒绝读取宿主私有测试文件、相同编号不重复启动、暂停后取消进程，重启仍可查原记录。没有调用付费模型或微信。自动长期记忆整理、进程完成续办及正式桌面集成尚未交付，后续继续分步连接，再进入应用注册与微信迁移。

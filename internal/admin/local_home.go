@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -26,7 +27,7 @@ type localHomeService struct {
 // surface. It deliberately does not mount the old WeChat management routes.
 // The existing identity file is reused when dir points to an existing station;
 // initialization never imports account data or revives application grants.
-func NewLocalHomeHandler(dir, workspaceRoot, password, origin string) (*LocalHomeHandler, error) {
+func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ...*agenthost.WindowsConfig) (*LocalHomeHandler, error) {
 	if dir == "" || workspaceRoot == "" || !validPassword(password) {
 		return nil, errors.New("本地主人配置无效")
 	}
@@ -66,6 +67,23 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string) (*LocalHom
 	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
 	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
 	chat := newLocalChatService(home)
+	if len(windows) > 0 && windows[0] != nil {
+		copy := *windows[0]
+		copy.Spool = filepath.Join(dir, "local-execution-spool")
+		if err := copy.Validate(); err != nil {
+			return nil, errors.New("本机 Windows 运行器配置无效")
+		}
+		for _, path := range []string{copy.Pythonw, copy.Helper} {
+			rel, err := filepath.Rel(workspaceRoot, path)
+			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				return nil, errors.New("宿主运行器不能放在大肥鱼可修改的工作空间")
+			}
+			if resolved, err := filepath.EvalSymlinks(path); err == nil && filepath.Clean(resolved) != filepath.Clean(path) {
+				return nil, errors.New("宿主运行器路径不能经过链接")
+			}
+		}
+		chat.windows = &copy
+	}
 	chat.routes(s, mux)
 	for route, asset := range map[string]string{
 		"/": "local-home.html", "/assets/local-home.js": "local-home.js", "/assets/local-home.css": "local-home.css",
