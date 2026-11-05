@@ -21,11 +21,11 @@ var errStationGroupActionUnsupported = errors.New("group action is not advertise
 var errStationMuteGrant = &stationContactError{"wechat_group_mute_not_authorized", "本地聊天没有该连接和群的免打扰授权，或本轮授权已变更。"}
 
 type stationGroupActionInput struct {
-	Action string `json:"action"`
-	Name   string `json:"name"`
-	Group  string `json:"group_id"`
-	Muted  *bool  `json:"muted"`
-	Key    string `json:"request_key"`
+	Action string  `json:"action"`
+	Name   *string `json:"name"`
+	Group  string  `json:"group_id"`
+	Muted  *bool   `json:"muted"`
+	Key    string  `json:"request_key"`
 }
 
 type stationGroupActionAuthority struct {
@@ -42,14 +42,14 @@ func validStationGroup(id string) bool {
 func (s *stationWechat) groupActionRoutes(owner *Server, mux *http.ServeMux, identity *fishIdentityRegistry) {
 	const base = "/api/apps/wechat/connections/{connection}"
 	mux.HandleFunc("GET "+base+"/groups/{group}/notification", owner.protected(s.stationGroupDetails("mute")))
-	mux.HandleFunc("GET "+base+"/groups/{group}/profile", owner.protected(s.stationGroupDetails("rename")))
+	mux.HandleFunc("GET "+base+"/groups/{group}/profile", owner.protected(s.stationGroupDetails("rename", "my_name")))
 	mux.HandleFunc("POST "+base+"/group-actions", owner.protected(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		var in stationGroupActionInput
 		if !decode(w, r, &in) {
 			return
 		}
-		action := linuxnative.AdminAction{Kind: in.Action, ThreadID: in.Group, Text: in.Name}
+		action := linuxnative.AdminAction{Kind: in.Action, ThreadID: in.Group}
 		if action.Kind == "" {
 			action.Kind = "mute"
 		}
@@ -58,11 +58,13 @@ func (s *stationWechat) groupActionRoutes(owner *Server, mux *http.ServeMux, ide
 			return
 		}
 		switch {
-		case action.Kind == "mute" && in.Muted != nil && in.Name == "":
+		case action.Kind == "mute" && in.Muted != nil && (in.Name == nil || *in.Name == ""):
 			action.Muted = *in.Muted
-		case action.Kind == "rename" && in.Muted == nil && validStationGroupName(in.Name):
+		case (action.Kind == "rename" || action.Kind == "my_name") && in.Muted == nil &&
+			in.Name != nil && validStationGroupName(*in.Name, action.Kind == "my_name"):
+			action.Text = *in.Name
 		default:
-			fail(w, http.StatusBadRequest, "请提供有效的群操作。新群名称须非空、最多 512 UTF-8 字节，且不能含控制字符")
+			fail(w, http.StatusBadRequest, "请提供有效的群操作。群名称须非空，本人群昵称可明确提交空字符串。名称最多 512 UTF-8 字节，且不能含控制字符")
 			return
 		}
 		record, err := identity.localIdentity()
@@ -172,8 +174,11 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 	}
 	p := actionProposal{ID: "station-" + action.Kind + "-" + key, Account: account, State: "unknown", Request: action}
 	purpose := "owner_approved_group_notification"
-	if action.Kind == "rename" {
+	switch action.Kind {
+	case "rename":
 		purpose = "owner_approved_group_rename"
+	case "my_name":
+		purpose = "owner_approved_group_my_name"
 	}
 	intent := apphost.ActionIntent{ConnectionRef: s.connectionRef(connection, account), Action: action.Kind,
 		RequesterID: authority.requester, Source: "local_admin", SourceRequestID: p.ID, Target: action.ThreadID,
@@ -232,19 +237,19 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 	return ledger.recordStationGroupReceipt(p, status)
 }
 
-func validStationGroupName(name string) bool {
-	return utf8.ValidString(name) && len(name) <= 512 && strings.TrimSpace(name) != "" && strings.IndexFunc(name, unicode.IsControl) < 0
+func validStationGroupName(name string, allowEmpty bool) bool {
+	return utf8.ValidString(name) && len(name) <= 512 && (allowEmpty || strings.TrimSpace(name) != "") && strings.IndexFunc(name, unicode.IsControl) < 0
 }
 
 func stationGroupActionKind(kind string) bool {
-	return kind == "mute" || kind == "rename"
+	return kind == "mute" || kind == "rename" || kind == "my_name"
 }
 
 func stationGroupActionSupported(caps linuxnative.Capabilities, kind string) bool {
 	if kind == "mute" {
 		return slices.Contains(caps.ThreadNotificationTargets, "group")
 	}
-	return kind == "rename" && slices.Contains(caps.GroupMutations, "rename")
+	return stationGroupActionKind(kind) && slices.Contains(caps.GroupMutations, kind)
 }
 
 func stationGroupActionFinal(state string) bool {
@@ -356,13 +361,28 @@ func (s *stationWechat) ReadAction(ctx context.Context, connection, id string) (
 	return s.lookupStationGroupAction(ctx, ledger, p), nil
 }
 
-func (s *stationWechat) stationGroupDetails(kind string) http.HandlerFunc {
+type stationGroupDetailFields struct {
+	action, available, operation string
+}
+
+func (s *stationWechat) stationGroupDetails(kinds ...string) http.HandlerFunc {
+	fields := make([]stationGroupDetailFields, 0, len(kinds))
+	for _, kind := range kinds {
+		f := stationGroupDetailFields{action: kind, available: "can_change", operation: "operation"}
+		switch kind {
+		case "rename":
+			f.available = "can_rename"
+		case "my_name":
+			f.available, f.operation = "can_set_my_name", "my_name_operation"
+		}
+		fields = append(fields, f)
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		s.readStationGroupDetails(w, r, kind)
+		s.readStationGroupDetails(w, r, fields)
 	}
 }
 
-func (s *stationWechat) readStationGroupDetails(w http.ResponseWriter, r *http.Request, kind string) {
+func (s *stationWechat) readStationGroupDetails(w http.ResponseWriter, r *http.Request, fields []stationGroupDetailFields) {
 	w.Header().Set("Cache-Control", "no-store")
 	id, group := r.PathValue("connection"), r.PathValue("group")
 	if !validStationGroup(group) || !artifactID(id, "wechat-") {
@@ -377,18 +397,20 @@ func (s *stationWechat) readStationGroupDetails(w http.ResponseWriter, r *http.R
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	result := map[string]any{}
-	pending := false
-	available := "can_change"
-	if kind == "rename" {
-		available = "can_rename"
-	}
-	if ledger != nil {
-		if p, ok := s.findStationGroupAction(ledger, id, "", group, kind); ok {
-			receipt := s.lookupStationGroupAction(ctx, ledger, p)
-			result["operation"] = receipt
-			pending = !stationGroupActionFinal(receipt.State)
+	hasReceipt := false
+	for _, field := range fields {
+		result[field.available] = false
+		if ledger == nil {
+			continue
+		}
+		if p, ok := s.findStationGroupAction(ledger, id, "", group, field.action); ok {
+			lookupCtx, cancelLookup := context.WithTimeout(ctx, 3*time.Second)
+			result[field.operation] = s.lookupStationGroupAction(lookupCtx, ledger, p)
+			cancelLookup()
+			hasReceipt = true
 		}
 	}
+
 	account, err := s.signedInAccount(ctx, id)
 	if err == nil {
 		var native *linuxnative.Sender
@@ -397,26 +419,39 @@ func (s *stationWechat) readStationGroupDetails(w http.ResponseWriter, r *http.R
 			var state linuxnative.GroupProfile
 			state, err = native.GroupProfile(ctx, group)
 			if err == nil {
-				if kind == "mute" && state.Muted != nil {
-					result["muted"] = *state.Muted
-				}
-				if kind == "rename" && state.Name != "" {
-					result["name"] = state.Name
-				}
-				canChange := !paused && !pending && (state.InGroup == nil || *state.InGroup)
+				var caps linuxnative.Capabilities
+				canChange := !paused && (state.InGroup == nil || *state.InGroup)
 				if canChange {
-					caps, err := native.Capabilities(ctx)
-					canChange = err == nil && stationGroupActionSupported(caps, kind)
+					caps, err = native.Capabilities(ctx)
+					canChange = err == nil
 				}
-				result[available] = canChange
+				for _, field := range fields {
+					receipt, _ := result[field.operation].(apphost.ActionReceipt)
+					pending := receipt.OperationID != "" && !stationGroupActionFinal(receipt.State)
+					result[field.available] = canChange && !pending && stationGroupActionSupported(caps, field.action)
+					switch field.action {
+					case "mute":
+						if state.Muted != nil {
+							result["muted"] = *state.Muted
+						}
+					case "rename":
+						if state.Name != "" {
+							result["name"] = state.Name
+						}
+					case "my_name":
+						if state.MyDisplayName != nil {
+							result["my_display_name"] = *state.MyDisplayName
+						}
+					}
+				}
 				result["coverage"] = "cached"
 				respond(w, http.StatusOK, result)
 				return
 			}
 		}
 	}
-	if result["operation"] != nil {
-		result[available], result["coverage"] = false, "unavailable"
+	if hasReceipt {
+		result["coverage"] = "unavailable"
 		respond(w, http.StatusOK, result)
 		return
 	}

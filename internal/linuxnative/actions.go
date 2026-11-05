@@ -31,9 +31,10 @@ type ActionStatus struct {
 }
 
 type GroupProfile struct {
-	Name    string
-	Muted   *bool `json:"muted,omitempty"`
-	InGroup *bool `json:"-"`
+	Name          string
+	MyDisplayName *string
+	Muted         *bool `json:"muted,omitempty"`
+	InGroup       *bool `json:"-"`
 }
 
 // GroupProfile reads the exact account-scoped, cached group record.
@@ -47,16 +48,17 @@ func (s *Sender) GroupProfile(ctx context.Context, id string) (GroupProfile, err
 		return out, err
 	}
 	var detail struct {
-		ID      string `json:"id"`
-		RoomID  string `json:"roomId"`
-		Name    string `json:"name"`
-		Muted   *bool  `json:"muted"`
-		InGroup *bool  `json:"isInGroup"`
+		ID            string  `json:"id"`
+		RoomID        string  `json:"roomId"`
+		Name          string  `json:"name"`
+		MyDisplayName *string `json:"myDisplayName"`
+		Muted         *bool   `json:"muted"`
+		InGroup       *bool   `json:"isInGroup"`
 	}
 	if json.Unmarshal(raw, &detail) != nil || detail.ID != id || detail.RoomID != id {
 		return out, errors.New("native group identity mismatch")
 	}
-	return GroupProfile{Name: detail.Name, Muted: detail.Muted, InGroup: detail.InGroup}, nil
+	return GroupProfile{Name: detail.Name, MyDisplayName: detail.MyDisplayName, Muted: detail.Muted, InGroup: detail.InGroup}, nil
 }
 
 func (s *Sender) ExecuteAction(ctx context.Context, input AdminAction, key string) (ActionStatus, error) {

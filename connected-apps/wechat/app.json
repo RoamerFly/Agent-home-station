@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "wechat",
   "name": "微信",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -39,10 +39,10 @@
     "share.read"
   ],
   "files": {
-    "CHANGELOG.md": "77c5093b5a03ad465130bca224ff2e097418591bf2bad85f0b524b0adf952f86",
+    "CHANGELOG.md": "a7c3c182bf38cb7b222c3544bb881c7224962328f6cd029d7fcbcebd40747891",
     "MIGRATION.md": "49d0953820d91607820dfe1a79cfefc8f23d9a5c5d2b6294aae4d1d993cc1e49",
-    "PERMISSIONS.md": "391d50458ad92d9eca7ada177478029be9b989ca40b18c3b66268bc0d0c0a4d1",
-    "README.md": "6166b51741342d4de81437e4a323a28702ee1709097be50b36e8488a3816e9eb",
+    "PERMISSIONS.md": "a1bd475b249569d3799cba95f2f3b00e1cf740b5ec9179bb27660a95e8fad6d6",
+    "README.md": "1689f607c14ecdde02e809ec3e4332c527476da12b5cdce1c2a979fa34f5de82",
     "adapter/actions.go": "c6de23b222268fa49c27540c3ab0c23d44bd86476ae4b3199004fe27bde9be64",
     "adapter/attachment.go": "7703de43ec7c671d66834d48a8d92f9fa1ad7dc7b0aa66d240c64b7704d2922d",
     "adapter/channels_media.go": "7f1d33f2665bbfbd88b15867fe6e82f41fea49d76043b821882706e2c94bd7ea",

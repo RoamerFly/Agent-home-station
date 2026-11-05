@@ -382,7 +382,7 @@
     control.hidden = true;
     panel.append(form, note, records, control);
     let cursor = "", hasNext = false, busy = false, appliedSearch = "", appliedLimit = 50;
-    let selected = null, notification = null, profile = null, selectedAction = null, renameDraft = null, controlBusy = false, needsRefresh = false, renameNeedsRefresh = false;
+    let selected = null, notification = null, profile = null, selectedAction = null, renameDraft = null, myNameDraft = null, controlBusy = false, needsRefresh = false, renameNeedsRefresh = false, myNameNeedsRefresh = false;
     const base = "/api/apps/wechat/connections/" + encodeURIComponent(id);
     function receiptLabel(operation) {
       if (!operation || !operation.state) return "尚无操作记录";
@@ -437,44 +437,71 @@
         }
       }
       const renameOperation = profile?.operation || null;
-      if (!profile || !(profile.can_rename === true || renameOperation)) return;
-      const renameSection = appElement("div", "", "details-grid");
-      const name = typeof profile.name === "string" ? profile.name : "";
-      renameSection.append(appElement("strong", "群名称"), appElement("small", (name || "群名称尚未取得") + (name && profile.coverage === "cached" ? "（来自本机缓存）" : "")));
-      if (renameOperation) renameSection.append(appElement("small", receiptLabel(renameOperation) + (renameOperation.operation_id ? " · 操作 " + renameOperation.operation_id : "")));
+      const myNameOperation = profile?.my_name_operation || null;
+      if (!profile || !(profile.can_rename === true || renameOperation || profile.can_set_my_name === true || myNameOperation)) return;
+      const profileSection = appElement("div", "", "details-grid");
       const refreshProfile = appSetupButton(controlBusy ? "正在刷新…" : "刷新群资料", () => loadProfile());
       refreshProfile.disabled ||= controlBusy;
-      renameSection.append(refreshProfile);
-      if (renameNeedsRefresh) {
-        renameSection.append(appElement("small", "改名结果暂不可确认，请先刷新群资料；不会自动重复提交。"));
-      } else if (isOutstanding(renameOperation)) {
-        renameSection.append(appElement("small", "这次改名仍在核对中；刷新只查询原操作，不会重复提交。"));
-      } else if (profile?.can_rename === true) {
-        const startRename = appSetupButton("修改群名称", () => { renameDraft = name; renderControl(); });
-        startRename.disabled ||= controlBusy;
-        renameSection.append(startRename);
-        if (renameDraft !== null) {
-          const input = document.createElement("input");
-          input.value = renameDraft;
-          input.setAttribute("aria-label", "新的群名称");
-          const confirmation = appElement("div", "", "app-worker-actions");
-          const confirmationCopy = appElement("small", `将“${selected.display_name || selected.id}”改为“${renameDraft || "新名称"}”。`);
-          input.addEventListener("input", () => {
-            renameDraft = input.value;
-            confirmationCopy.textContent = `将“${selected.display_name || selected.id}”改为“${renameDraft || "新名称"}”。`;
-          });
-          confirmation.append(input, confirmationCopy);
-          const confirm = appSetupButton("确认改名", () => submitRename());
-          const cancel = appSetupButton("取消改名", () => { renameDraft = null; renderControl(); });
-          confirm.disabled ||= controlBusy;
-          cancel.disabled ||= controlBusy;
-          confirmation.append(confirm, cancel);
-          renameSection.append(confirmation);
+      profileSection.append(refreshProfile);
+      function appendTextAction(options) {
+        const section = appElement("div", "", "details-grid");
+        section.append(appElement("strong", options.title), appElement("small", options.currentLabel));
+        if (options.operation) section.append(appElement("small", receiptLabel(options.operation) + (options.operation.operation_id ? " · 操作 " + options.operation.operation_id : "")));
+        if (options.needsRefresh()) {
+          section.append(appElement("small", options.retryMessage));
+        } else if (isOutstanding(options.operation)) {
+          section.append(appElement("small", options.pendingMessage));
+        } else if (options.canChange === true) {
+          const start = appSetupButton(options.startLabel, () => { options.setDraft(options.currentValue); renderControl(); });
+          start.disabled ||= controlBusy;
+          section.append(start);
+          if (options.draft() !== null) {
+            const input = document.createElement("input");
+            input.value = options.draft();
+            input.setAttribute("aria-label", options.inputLabel);
+            const confirmation = appElement("div", "", "app-worker-actions");
+            const confirmationCopy = appElement("small", options.confirmation(input.value));
+            input.addEventListener("input", () => {
+              options.setDraft(input.value);
+              confirmationCopy.textContent = options.confirmation(input.value);
+            });
+            confirmation.append(input, confirmationCopy);
+            const confirm = appSetupButton(options.confirmLabel, () => options.submit());
+            const cancel = appSetupButton(options.cancelLabel, () => { options.setDraft(null); renderControl(); });
+            confirm.disabled ||= controlBusy;
+            cancel.disabled ||= controlBusy;
+            confirmation.append(confirm, cancel);
+            section.append(confirmation);
+          }
+        } else {
+          section.append(appElement("small", options.unavailableMessage));
         }
-      } else {
-        renameSection.append(appElement("small", "当前连接不能修改这个群名称；仍可刷新查看已有操作回执。"));
+        profileSection.append(section);
       }
-      control.append(renameSection);
+      const name = typeof profile.name === "string" ? profile.name : "";
+      appendTextAction({
+        title: "群名称", currentValue: name,
+        currentLabel: (name || "群名称尚未取得") + (name && profile.coverage === "cached" ? "（来自本机缓存）" : ""),
+        operation: renameOperation, canChange: profile.can_rename, draft: () => renameDraft, setDraft: (value) => { renameDraft = value; },
+        needsRefresh: () => renameNeedsRefresh, retryMessage: "改名结果暂不可确认，请先刷新群资料；不会自动重复提交。",
+        pendingMessage: "这次改名仍在核对中；刷新只查询原操作，不会重复提交。",
+        startLabel: "修改群名称", inputLabel: "新的群名称", confirmLabel: "确认改名", cancelLabel: "取消改名",
+        confirmation: (value) => `将“${selected.display_name || selected.id}”改为“${value || "新名称"}”。`,
+        unavailableMessage: "当前连接不能修改这个群名称；仍可刷新查看已有操作回执。", submit: () => submitRename()
+      });
+      const hasMyName = Object.prototype.hasOwnProperty.call(profile, "my_display_name");
+      const myName = typeof profile.my_display_name === "string" ? profile.my_display_name : "";
+      appendTextAction({
+        title: "我的群昵称", currentValue: myName,
+        currentLabel: hasMyName ? ((myName || "未设置") + (profile.coverage === "cached" ? "（来自本机缓存）" : "")) : "群昵称尚未取得",
+        operation: myNameOperation, canChange: profile.can_set_my_name, draft: () => myNameDraft, setDraft: (value) => { myNameDraft = value; },
+        needsRefresh: () => myNameNeedsRefresh, retryMessage: "群昵称修改结果暂不可确认，请先刷新群资料；不会自动重复提交。",
+        pendingMessage: "这次群昵称修改仍在核对中；刷新只查询原操作，不会重复提交。",
+        startLabel: "修改我的群昵称", inputLabel: "新的群昵称", confirmLabel: "确认修改昵称", cancelLabel: "取消修改昵称",
+        confirmation: (value) => value === "" ? `将“${selected.display_name || selected.id}”中的我的群昵称清空。` : `将“${selected.display_name || selected.id}”中的我的群昵称改为“${value}”。`,
+        unavailableMessage: "当前连接不能修改我的群昵称；仍可刷新查看已有操作回执。", submit: () => submitMyName()
+      });
+      control.append(profileSection);
     }
     async function loadNotification() {
       if (!selected || controlBusy) return;
@@ -499,6 +526,8 @@
         profile = await request(base + "/groups/" + encodeURIComponent(selected.id) + "/profile");
         renameDraft = null;
         renameNeedsRefresh = false;
+        myNameDraft = null;
+        myNameNeedsRefresh = false;
       } catch (error) {
         appFeedback(error.message, true);
       } finally {
@@ -513,8 +542,10 @@
       profile = null;
       selectedAction = null;
       renameDraft = null;
+      myNameDraft = null;
       needsRefresh = false;
       renameNeedsRefresh = false;
+      myNameNeedsRefresh = false;
       renderControl();
       await loadNotification();
       await loadProfile();
@@ -556,6 +587,30 @@
       } catch (error) {
         renameDraft = null;
         renameNeedsRefresh = true;
+        appFeedback(error.message, true);
+      } finally {
+        controlBusy = false;
+        renderControl();
+      }
+    }
+    async function submitMyName() {
+      if (!selected || controlBusy) return;
+      const name = myNameDraft === null ? "" : myNameDraft;
+      if (new TextEncoder().encode(name).length > 512 || /\p{Cc}/u.test(name)) {
+        appFeedback("群昵称最多 512 UTF-8 字节，且不能含控制字符。", true);
+        return;
+      }
+      controlBusy = true;
+      renderControl();
+      try {
+        const receipt = await request(base + "/group-actions", { method: "POST", body: JSON.stringify({
+          action: "my_name", group_id: selected.id, name, request_key: crypto.randomUUID()
+        }) });
+        profile = { ...(profile || {}), my_name_operation: receipt };
+        myNameDraft = null;
+      } catch (error) {
+        myNameDraft = null;
+        myNameNeedsRefresh = true;
         appFeedback(error.message, true);
       } finally {
         controlBusy = false;

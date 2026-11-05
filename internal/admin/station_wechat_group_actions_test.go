@@ -40,6 +40,9 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	var renameSubmissions, renameLookups atomic.Int32
 	var renameKey atomic.Value
 	var renameReceiptMode atomic.Int32
+	var nicknameUnsupported, nicknameReceiptReady atomic.Bool
+	var nicknameSubmissions, nicknameCache atomic.Int32
+	var nicknameKey atomic.Value
 	preflight, resumePreflight := make(chan struct{}, 1), make(chan struct{})
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out := func(value any) { _ = json.NewEncoder(w).Encode(value) }
@@ -69,6 +72,9 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 			if !renameUnsupported.Load() {
 				mutations = append(mutations, "rename")
 			}
+			if !nicknameUnsupported.Load() {
+				mutations = append(mutations, "my_name")
+			}
 			out(map[string]any{"threadNotificationTargets": targets, "groupMutations": mutations})
 		case "GET /v1/accounts/one/groups":
 			if q := r.URL.Query(); q.Get("limit") != "200" || q.Get("search") != "测试" {
@@ -94,7 +100,14 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 			if renameVisible.Load() {
 				name = "合成新群名"
 			}
-			out(map[string]any{"id": renameGroup, "roomId": renameGroup, "name": name, "isInGroup": true, "announcement": "synthetic-private-announcement"})
+			profile := map[string]any{"id": renameGroup, "roomId": renameGroup, "name": name, "isInGroup": true, "announcement": "synthetic-private-announcement"}
+			switch nicknameCache.Load() {
+			case 1:
+				profile["myDisplayName"] = " 合成群昵称 "
+			case 2:
+				profile["myDisplayName"] = ""
+			}
+			out(profile)
 		case "GET /v1/accounts/two/groups/" + group, "GET /v1/accounts/two/groups/" + renameGroup:
 			w.WriteHeader(404)
 		case "PUT /v1/accounts/one/threads/" + group + "/notifications":
@@ -126,7 +139,40 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 			renameSubmissions.Add(1)
 			// Native recorded the operation, but the submit response was lost.
 			w.WriteHeader(503)
+		case "PUT /v1/accounts/one/groups/" + renameGroup + "/my-name":
+			var body map[string]string
+			key := r.Header.Get("Idempotency-Key")
+			if json.NewDecoder(r.Body).Decode(&body) != nil || len(body) != 1 || !strings.HasPrefix(key, "station-my_name-") {
+				t.Error("nickname submission must carry only the display name and its bound key")
+			}
+			displayName, present := body["displayName"]
+			switch nicknameSubmissions.Add(1) {
+			case 1:
+				if !present || displayName != " 合成群昵称 " {
+					t.Error("nickname text was changed", body)
+				}
+				nicknameKey.Store(key)
+				w.WriteHeader(503)
+			case 2:
+				if !present || displayName != "" {
+					t.Error("clear must submit an explicit empty nickname", body)
+				}
+				out(syntheticStationNicknameReceipt("native-nickname-clear", "succeeded", "accepted", renameGroup))
+			default:
+				t.Error("unexpected duplicate nickname submit")
+			}
+		case "GET /v1/accounts/one/operations/native-nickname-set":
+			receipt := syntheticStationNicknameReceipt("native-nickname-set", "succeeded", "accepted", renameGroup)
+			if !nicknameReceiptReady.Load() {
+				receipt["result"].(map[string]string)["action"] = "rename"
+			}
+			out(receipt)
 		case "GET /v1/accounts/one/group-mutations/by-idempotency-key":
+			keyParam := r.URL.Query().Get("key")
+			if key, _ := nicknameKey.Load().(string); key != "" && key == keyParam {
+				out(syntheticStationNicknameReceipt("native-nickname-set", "queued", "not_attempted", renameGroup))
+				return
+			}
 			key, _ := renameKey.Load().(string)
 			if key == "" || r.URL.Query().Get("key") != key {
 				w.WriteHeader(404)
@@ -317,6 +363,72 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 			t.Fatal("rename was resubmitted or durable lookup binding lost", renameSubmissions.Load(), renameLookups.Load())
 		}
 	})
+	var clearedNicknameOperation string
+	t.Run("OwnerGroupNickname", func(t *testing.T) {
+		input := func(key, name string) map[string]any {
+			return map[string]any{"action": "my_name", "group_id": renameGroup, "request_key": key, "name": name}
+		}
+		nicknameUnsupported.Store(true)
+		if r := request("GET", renameProfile, nil, false, 200); r["can_set_my_name"] != false || r["can_rename"] != true {
+			t.Fatal("nickname capability must be independently declared", r)
+		}
+		request("POST", path, input("nickname-set", " 合成群昵称 "), true, 409)
+		nicknameUnsupported.Store(false)
+		request("POST", path, input("nickname-set", " 合成群昵称 "), false, 403)
+		request("POST", two+"/group-actions", input("nickname-set", " 合成群昵称 "), true, 404)
+		for _, extra := range []map[string]any{
+			{"name": nil}, {"name": "bad\nname"}, {"name": strings.Repeat("鱼", 171)}, {"member_id": "other"},
+		} {
+			invalid := input("invalid", "合成群昵称")
+			for k, v := range extra {
+				invalid[k] = v
+			}
+			request("POST", path, invalid, true, 400)
+		}
+		missing := input("missing-name", "")
+		delete(missing, "name")
+		request("POST", path, missing, true, 400)
+		if nicknameSubmissions.Load() != 0 {
+			t.Fatal("nickname validation did not stop native execution")
+		}
+		first := request("POST", path, input("nickname-set", " 合成群昵称 "), true, 202)
+		if first["state"] != "submission_unknown" || first["action"] != "my_name" {
+			t.Fatal("lost nickname response reported as known", first)
+		}
+		request("POST", path, input("nickname-set", " 合成群昵称 "), true, 202)
+		request("POST", path, input("nickname-set", ""), true, 409)
+		request("POST", path, input("nickname-new-key", ""), true, 409)
+		request("GET", two+"/operations/"+first["operation_id"].(string), nil, false, 404)
+		r := request("GET", renameProfile, nil, false, 200)
+		if r["my_name_operation"].(map[string]any)["state"] != "submitted_pending" ||
+			r["can_set_my_name"] != false || r["can_rename"] != true ||
+			r["operation"].(map[string]any)["operation_id"] != renameOperation {
+			t.Fatal("original nickname receipt was not recovered independently", r)
+		}
+		if _, present := r["my_display_name"]; present {
+			t.Fatal("missing cache was displayed as an empty nickname", r)
+		}
+		r = request("GET", one+"/operations/"+first["operation_id"].(string), nil, false, 200)
+		if r["state"] != "submitted_pending" || r["lookup"] != "identity_mismatch" {
+			t.Fatal("group-rename receipt satisfied nickname lookup", r)
+		}
+		nicknameReceiptReady.Store(true)
+		nicknameCache.Store(1)
+		r = request("GET", renameProfile, nil, false, 200)
+		if r["my_display_name"] != " 合成群昵称 " || r["my_name_operation"].(map[string]any)["state"] != "succeeded" {
+			t.Fatal("verified nickname and cached readback missing", r)
+		}
+		clear := request("POST", path, input("nickname-clear", ""), true, 202)
+		clearedNicknameOperation = clear["operation_id"].(string)
+		if clear["state"] != "succeeded" {
+			t.Fatal("explicit clear failed", clear)
+		}
+		nicknameCache.Store(2)
+		r = request("GET", renameProfile, nil, false, 200)
+		if r["my_display_name"] != "" || r["name"] != "合成新群名" || nicknameSubmissions.Load() != 2 {
+			t.Fatal("cached cleared nickname, rename or submit count incorrect", r)
+		}
+	})
 	t.Run("AgentGrant", func(t *testing.T) {
 		connection := wechatapp.ConnectionID("one")
 		other := wechatapp.ConnectionID("two")
@@ -432,6 +544,9 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	if r := request("GET", one+"/operations/"+renameOperation, nil, false, 200); r["action"] != "rename" || r["state"] != "succeeded" || r["lookup"] != "stored" {
 		t.Fatal("confirmed rename lost after restart", r)
 	}
+	if r := request("GET", one+"/operations/"+clearedNicknameOperation, nil, false, 200); r["action"] != "my_name" || r["state"] != "succeeded" || r["lookup"] != "stored" {
+		t.Fatal("nickname confirmation lost after restart", r)
+	}
 	if r := request("GET", one+"/groups/"+lostGroup+"/notification", nil, false, 200); r["operation"].(map[string]any)["state"] != "submission_unknown" || r["can_change"] != false {
 		t.Fatal("offline recovery lost unknown reservation", r)
 	}
@@ -445,4 +560,10 @@ func syntheticStationMuteReceipt(state, outcome, target string) map[string]any {
 func syntheticStationRenameReceipt(state, outcome, target, action string) map[string]any {
 	return map[string]any{"id": "native-rename", "accountId": "one", "kind": "group_mutation", "state": state,
 		"result": map[string]string{"action": action, "groupId": target, "targetId": target, "remoteOutcome": outcome}}
+}
+
+func syntheticStationNicknameReceipt(id, state, outcome, target string) map[string]any {
+	receipt := syntheticStationRenameReceipt(state, outcome, target, "my_name")
+	receipt["id"] = id
+	return receipt
 }
