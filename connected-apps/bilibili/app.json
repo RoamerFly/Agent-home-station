@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "bilibili",
   "name": "哔哩哔哩",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -25,7 +25,8 @@
     "observation.comments",
     "observation.audio",
     "publication.video",
-    "authorization.verify"
+    "authorization.verify",
+    "authorization.oauth"
   ],
   "browser_routes": [
     {
@@ -99,6 +100,20 @@
       "capabilities": [
         "authorization.verify"
       ]
+    },
+    {
+      "id": "publication-oauth-exchange",
+      "endpoint": "https://api.bilibili.com/x/account-oauth2/v1/token",
+      "capabilities": [
+        "authorization.oauth"
+      ]
+    },
+    {
+      "id": "publication-oauth-refresh",
+      "endpoint": "https://api.bilibili.com/x/account-oauth2/v1/refresh_token",
+      "capabilities": [
+        "authorization.oauth"
+      ]
     }
   ],
   "files": {
@@ -109,26 +124,30 @@
     "adapter/entry.json": "7f7e5b8a490bef3982b87bc1412c9c5fe67de4ad1e8e2c5d0ac27b147f798909",
     "adapter/open_account.go": "31fb6c98a0e6572e14146f70ab69473030c7dc2ce575ab538edcf44277ed424b",
     "adapter/open_account_test.go": "2db309db0854c632fd43ac6e1de37d02e8ed9fbf4f5787295ea2b93744060b41",
+    "adapter/open_oauth.go": "d0fdf27beda0c5408994828a10ab8676a412da0883e4a66fc66305d3a37ed7e6",
+    "adapter/open_oauth_test.go": "7fa56a2f1c76ed7ab3d947619357d7101fb17e1f373d0d7c187024bfc0ee3dc1",
     "adapter/open_publication.go": "593c50c664b0f219637c73e6bb73cfdf42886bd15ef18bddb8ca4cf9e642a0aa",
     "adapter/open_publication_test.go": "d63fb696af9191230aeb72b2462feb8bf51b602107c54de27aa89dedb0020b31",
     "adapter/open_upload.go": "3d63f95e2b432cab56d80d5580f6db463737c2216d63fa06fe82dbfbc2abf59e",
     "adapter/open_upload_test.go": "704d3becefefd3179acf7774bffae3690406dddf32c66d18a9aa250c6130086a",
     "adapter/page_test.go": "1bf2e1575226eacf51ad8ceed033846b9e2e5ed77682337970c734d86d9f11da",
     "adapter/playback_test.go": "20768b695c6935d2b40ad0c81467808ffaaa18f5b592bc1e263c235e500846b0",
-    "adapter/public.go": "b5f2d514f4357228b6c2d9de30e110a7e45a00a07db2f594b25a87494f9f178a",
+    "adapter/public.go": "5d2621d5fef85dd39ae2670a75956057c10ed0624875e7a63d3edc90234a0a1a",
     "adapter/public_test.go": "481b07def1bf94b5ba9de8897e909eab6ff6044f977fb428b85b4ac9da70f725",
-    "adapter/publication_enrollment.go": "ee31e2ee6f18849bfcff2fa6b12b79d062c58c34c24d82370416aca81a867d3b",
+    "adapter/publication_enrollment.go": "1ab4cc2f711001ad61d437372aa5bac801e86c0f7af5af9517565571a875432d",
     "adapter/publication_enrollment_test.go": "80f359e83c9d4229473107fbe9375d1a7316b9c5796753f8fbff86aaf27e0bc4",
-    "adapter/publication_grant.go": "e5f0fdf5f40fea3e5f252319c3ccb62d633dc27b2434249f97700fb353f1f730",
+    "adapter/publication_grant.go": "a4c64f480cbe717a94298345f6468350b6c0877afb7479d10f70dc6505c41f47",
     "adapter/publication_grant_test.go": "4b7b027f1811580ac12b178cbf8fa9506698e2c456e8284b4d80076374c37cd6",
+    "adapter/publication_oauth.go": "11bf05345aeff3f3bf47f27c3220bb526384c5eb1251a5b41887d60607933ba0",
+    "adapter/publication_oauth_test.go": "4f46ac2d2fe8dae0b7f71a94a337c91cc95ffa9236bbc581070bc379569c89d4",
     "adapter/publication_workflow.go": "aec1d89156552d3cd2177c034a0b833ad62a0fcf7917e98a6ea8dd1a4405bb89",
     "adapter/publication_workflow_test.go": "1e123836e8a309f090f4abb64c1276a295b38951eab1136d6e18b85e91b53727",
-    "capabilities.json": "67e6d036906933bee692f0ece1ea5714079e54526fbfda3de3dcf186edbeeeb3",
-    "CHANGELOG.md": "5d2152f5579a02f2486599609205e2f851b4ac3402b138b6df25969f58ed7774",
+    "capabilities.json": "c2c10e9ebc07fba7539b9813a4134ff37a0bd41ff8eac29a9772f2f382b01b0a",
+    "CHANGELOG.md": "cecb2296db2b47f7664d68fa0f4e3cdae56d92d6a8eb7ca5d46f52c585688d58",
     "config.schema.json": "0589e38914100cd9e5c47ea97c5081ae6644d6aae19a64fb88805cdd69b91949",
     "MIGRATION.md": "2cf666b2a072bf68487218197cf414d2ae2e4570175ed0ca1e645a1b39319943",
-    "PERMISSIONS.md": "eeb871a4762e2c37f1b8221633f3d25daa68b41a1de1ef4b46c22f2d141f5569",
-    "README.md": "843a8818201481f91ff6db38c8779f6e454a733567adbb9c42538383f66b2f58",
+    "PERMISSIONS.md": "4b87221be998f9a77c293b3c611108d510171f52067c71f9f7eae90088577290",
+    "README.md": "d37eb98bc4c5504165a675167d591c116c70db90c9c642380f941dee18cd9f99",
     "ui.schema.json": "0dfd7ce73d6b49d5b75fc33d7211169ea5af92f96e80a816a1e23b9f4153e44e"
   }
 }

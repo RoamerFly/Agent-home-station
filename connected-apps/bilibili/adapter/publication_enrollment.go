@@ -22,11 +22,13 @@ const unconfiguredPublicationRevision = "unconfigured"
 // PublicationAuthorizationView is owner-facing. Raw OpenID and credentials
 // are never returned by this interface.
 type PublicationAuthorizationView struct {
-	Revision  string `json:"revision"`
-	State     string `json:"state"`
-	Verified  bool   `json:"verified"`
-	Enabled   bool   `json:"enabled"`
-	ExpiresAt string `json:"expires_at,omitempty"`
+	Revision         string `json:"revision"`
+	State            string `json:"state"`
+	Verified         bool   `json:"verified"`
+	Enabled          bool   `json:"enabled"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
+	RefreshAvailable bool   `json:"refresh_available"`
+	RefreshPending   bool   `json:"refresh_pending"`
 }
 
 type PublicationAuthorizationInput struct {
@@ -58,6 +60,7 @@ func (p *PublicApp) publicationAuthorizationView(value loadedPublicationSettings
 	_, _ = mac.Write([]byte(value.version))
 	view := PublicationAuthorizationView{
 		Revision: hex.EncodeToString(mac.Sum(nil)), Verified: value.SchemaVersion == 2, Enabled: value.Enabled, ExpiresAt: value.ExpiresAt,
+		RefreshAvailable: value.RefreshToken != "" && time.Now().Before(value.expiresAt), RefreshPending: value.RefreshPending,
 	}
 	switch {
 	case !value.Enabled:
@@ -99,36 +102,45 @@ func (p *PublicApp) SavePublicationAuthorization(ctx context.Context, in Publica
 	default:
 		return view, ErrInvalid
 	}
+	saved, err := p.commitPublicationAuthorization(ctx, current.version, next)
+	if err != nil {
+		return view, err
+	}
+	return p.publicationAuthorizationView(saved), nil
+}
+
+func (p *PublicApp) commitPublicationAuthorization(ctx context.Context, expected string, next publicationSettings) (loadedPublicationSettings, error) {
+	var err error
 	if next.SchemaVersion == 2 {
 		next.PolicyNonce, err = openUploadNonce()
 		if err != nil {
-			return view, ErrPublicationAuthorizationVerify
+			return loadedPublicationSettings{}, ErrPublicationAuthorizationVerify
 		}
 	}
 	expiry, err := validatePublicationSettings(&next)
 	if err != nil {
-		return view, err
+		return loadedPublicationSettings{}, err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return view, err
+		return loadedPublicationSettings{}, err
 	}
 	latest, readErr := p.loadPublicationSettingsLocked()
 	if readErr != nil && !errors.Is(readErr, errPublicationUnconfigured) {
-		return view, readErr
+		return loadedPublicationSettings{}, readErr
 	}
-	if latest.version != current.version {
-		return p.publicationAuthorizationView(latest), ErrPublicationAuthorizationConflict
+	if latest.version != expected {
+		return loadedPublicationSettings{}, ErrPublicationAuthorizationConflict
 	}
 	if err := p.savePrivateJSON(publicationSettingsName, next); err != nil {
-		return view, err
+		return loadedPublicationSettings{}, err
 	}
 	raw, _ := json.Marshal(next)
 	digest := sha256.Sum256(raw)
-	return p.publicationAuthorizationView(loadedPublicationSettings{
+	return loadedPublicationSettings{
 		publicationSettings: next, expiresAt: expiry, version: "bilibili-publication-" + hex.EncodeToString(digest[:]),
-	}), nil
+	}, nil
 }
 
 func (p *PublicApp) verifyPublicationAuthorization(ctx context.Context, current publicationSettings, in PublicationAuthorizationInput) (publicationSettings, error) {
@@ -167,6 +179,7 @@ func (p *PublicApp) verifyPublicationAuthorization(ctx context.Context, current 
 	next.SchemaVersion, next.Enabled = 2, *in.Enabled
 	next.ClientID, next.AppSecret, next.AccessToken = in.ClientID, in.AppSecret, in.AccessToken
 	next.ExpiresAt, next.VerifiedOpenID = expiry.UTC().Format(time.RFC3339), openID
+	next.RefreshToken, next.RefreshPending = "", false
 	if current.SchemaVersion == 0 {
 		next.AccountID = publicationReadIdentity(next)
 	}

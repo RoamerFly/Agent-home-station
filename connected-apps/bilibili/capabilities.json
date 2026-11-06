@@ -76,6 +76,13 @@
       "permissions": ["network"],
       "discoverable": false,
       "requires_owner_setting": "publication-settings.json"
+    },
+    {
+      "id": "authorization.oauth",
+      "implementation": "ready",
+      "description": "本机主人发起的网页授权码兑换及刷新令牌单次轮换",
+      "permissions": ["network"],
+      "discoverable": false
     }
   ]
 }

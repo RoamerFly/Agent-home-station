@@ -57,11 +57,16 @@ def verify(binary, output):
                 }
                 paused_upload = []
                 authorization_writes = []
+                oauth_writes = []
+                oauth_authorization = None
                 local_expiry = "2030-01-01T08:00"
                 expected_expiry = page.evaluate("(value) => new Date(value).toISOString()", local_expiry)
 
                 def publication_authorization(route):
                     if route.request.method == "GET":
+                        if oauth_authorization is not None:
+                            fulfill_json(oauth_authorization)(route)
+                            return
                         route.continue_()
                         return
                     body = route.request.post_data_json
@@ -75,6 +80,37 @@ def verify(binary, output):
                     authorization_writes.append(body)
                     fulfill_json({"revision": "synthetic-authorization-revision", "state": "ready", "verified": True,
                                   "enabled": True, "expires_at": "2030-01-01T00:00:00Z"})(route)
+
+                def publication_oauth(route):
+                    nonlocal oauth_authorization
+                    body = route.request.post_data_json
+                    assert route.request.headers.get("x-csrf-token"), "CSRF header missing"
+                    oauth_writes.append(body)
+                    if body["action"] == "begin":
+                        assert set(body) == {"action", "revision", "client_id", "app_secret", "redirect_uri", "enabled"}
+                        assert body["revision"] == "unconfigured"
+                        assert body["client_id"] == "synthetic-oauth-app"
+                        assert body["app_secret"] == "synthetic-oauth-secret"
+                        assert body["redirect_uri"] == "https://localhost.example.test/bilibili/callback"
+                        assert body["enabled"] is True
+                        fulfill_json({"authorize_url": "https://account.bilibili.com/pc/account-pc/auth/oauth?state=synthetic",
+                                      "expires_at": "2030-01-01T00:10:00Z"})(route)
+                    elif body["action"] == "complete":
+                        assert set(body) == {"action", "callback_url"}
+                        assert body["callback_url"] == "https://localhost.example.test/bilibili/callback?code=transient&state=synthetic"
+                        oauth_authorization = {"revision": "synthetic-oauth-complete", "state": "ready", "verified": True,
+                                               "enabled": True, "expires_at": "2030-02-01T00:00:00Z", "refresh_available": True,
+                                               "refresh_pending": False}
+                        fulfill_json(oauth_authorization)(route)
+                    elif body["action"] == "refresh":
+                        assert set(body) == {"action", "revision"}
+                        assert body["revision"] == "synthetic-oauth-complete"
+                        oauth_authorization = {"revision": "synthetic-oauth-refreshed", "state": "ready", "verified": True,
+                                               "enabled": True, "expires_at": "2030-03-01T00:00:00Z", "refresh_available": False,
+                                               "refresh_pending": True}
+                        fulfill_json({"error": "续期结果未确认，请重新网页授权"}, 502)(route)
+                    else:
+                        raise AssertionError(f"unexpected OAuth action {body['action']}")
 
                 def publications(route):
                     request = route.request
@@ -114,6 +150,7 @@ def verify(binary, output):
 
                 page.route(re.compile(r".*/api/local/publications(?:\?.*)?$"), publications)
                 page.route(re.compile(r".*/api/local/apps/bilibili/publication-authorization$"), publication_authorization)
+                page.route(re.compile(r".*/api/local/apps/bilibili/publication-oauth$"), publication_oauth)
                 page.locator("#apps-tab").click()
                 panel = page.locator("#bilibili-publication")
                 expect(panel.get_by_text("尚未登记发布授权", exact=True)).to_be_visible()
@@ -129,8 +166,30 @@ def verify(binary, output):
                     authorization.get_by_role("button", name="核验并登记").click()
                 assert len(authorization_writes) == 1
                 expect(page.locator("#apps-list[aria-busy='false']")).to_be_visible()
+                expect(panel.get_by_text("尚未登记发布授权", exact=True)).to_be_visible()
                 expect(panel.get_by_text("暂无 B 站发布任务。", exact=True)).to_be_visible()
                 expect(panel.get_by_role("button", name="提交投稿")).to_have_count(0)
+                oauth = panel.locator(".publication-oauth")
+                oauth.locator("summary").click()
+                oauth.get_by_label("OAuth Client ID").fill("synthetic-oauth-app")
+                oauth.get_by_label("OAuth App Secret").fill("synthetic-oauth-secret")
+                oauth.get_by_label("回调地址", exact=True).fill("https://localhost.example.test/bilibili/callback")
+                oauth.get_by_label("完成授权后启用发布授权").check()
+                with page.expect_response(lambda r: r.url.endswith("/publication-oauth") and r.request.method == "POST"):
+                    oauth.get_by_role("button", name="生成授权链接").click()
+                oauth_link = oauth.get_by_role("link", name="在浏览器中打开 B 站授权")
+                expect(oauth_link).to_have_attribute("href", re.compile(r"^https://account\.bilibili\.com/pc/account-pc/auth/oauth"))
+                expect(oauth_link).to_have_attribute("rel", "noopener noreferrer")
+                oauth.screenshot(path=str(output / "bilibili-oauth-light.png"))
+                oauth.get_by_label("完整回调地址").fill("https://localhost.example.test/bilibili/callback?code=transient&state=synthetic")
+                with page.expect_response(lambda r: r.url.endswith("/publication-oauth") and r.request.method == "POST"):
+                    oauth.get_by_role("button", name="完成网页授权").click()
+                expect(panel.get_by_role("button", name="手动续期")).to_be_enabled()
+                with page.expect_response(lambda r: r.url.endswith("/publication-oauth") and r.request.method == "POST"):
+                    panel.get_by_role("button", name="手动续期").click()
+                expect(panel.get_by_text("续期结果未确认", exact=True)).to_be_visible()
+                assert [write["action"] for write in oauth_writes] == ["begin", "complete", "refresh"]
+                oauth_authorization = None
                 settings = root / "host" / "apps" / "bilibili" / "publication-settings.json"
                 settings.parent.mkdir(parents=True, exist_ok=True)
                 settings.write_text(json.dumps({
@@ -179,13 +238,17 @@ def verify(binary, output):
                     const {left, right} = panel.getBoundingClientRect();
                     return Array.from(panel.querySelectorAll('button, progress')).every(node => {
                         const rect = node.getBoundingClientRect();
-                        return rect.left >= left && rect.right <= right;
+                        return !node.getClientRects().length || (rect.left >= left && rect.right <= right);
                     });
                 }"""), "controls clipped by application card"
                 panel.screenshot(path=str(output / "bilibili-publication-dark-390.png"))
                 authorization.locator("summary").click()
                 assert_no_horizontal_overflow(page, "B 站授权登记")
                 authorization.screenshot(path=str(output / "bilibili-authorization-dark-390.png"))
+                authorization.locator("summary").click()
+                oauth.locator("summary").click()
+                assert_no_horizontal_overflow(page, "B 站网页授权")
+                oauth.screenshot(path=str(output / "bilibili-oauth-dark-390.png"))
                 assert not errors, errors
                 assert writes == [("draft", "submit"), ("upload", "resume"), ("upload", "cancel"),
                                   ("unknown", "status"), ("unknown", "cancel"), ("accepted", "status")], writes

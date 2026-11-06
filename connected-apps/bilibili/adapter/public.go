@@ -85,6 +85,8 @@ type PublicApp struct {
 	publicationClient        func(OpenCredentials) (publicationTransport, error)
 	verifyPublicationAccount func(context.Context, OpenCredentials) (string, error)
 	publicationUIKey         [32]byte
+	publicationOAuth         publicationOAuthTransport
+	publicationOAuthAttempt  *publicationOAuthAttempt
 	mu                       sync.Mutex
 	readGrant                context.Context
 	cancelReads              context.CancelFunc

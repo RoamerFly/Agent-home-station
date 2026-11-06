@@ -48,6 +48,8 @@ type publicationSettings struct {
 	VerifiedCredentials string `json:"verified_credentials,omitempty"`
 	LegacyCredentials   string `json:"legacy_credentials,omitempty"`
 	PolicyNonce         string `json:"policy_nonce,omitempty"`
+	RefreshToken        string `json:"refresh_token,omitempty"`
+	RefreshPending      bool   `json:"refresh_pending,omitempty"`
 }
 
 type loadedPublicationSettings struct {
@@ -86,7 +88,7 @@ func (p *PublicApp) publicationAccess(ref apphost.ConnectionRef) (publicationSet
 	if !publicationRefMatches(ref, settings) {
 		return settings, apphost.PublicationGrant{Allowed: false}, nil
 	}
-	if !settings.Enabled || !time.Now().UTC().Before(loaded.expiresAt) {
+	if !settings.Enabled || settings.RefreshPending || !time.Now().UTC().Before(loaded.expiresAt) {
 		return settings, apphost.PublicationGrant{Allowed: false, Version: loaded.version}, nil
 	}
 	return settings, apphost.PublicationGrant{Allowed: true, Version: loaded.version}, nil
@@ -105,6 +107,8 @@ func (p *PublicApp) publicationConnection() (apphost.Connection, bool) {
 	switch {
 	case !loaded.Enabled:
 		connection.Configuration = "disabled"
+	case loaded.RefreshPending:
+		connection.Configuration = "refresh-pending"
 	case !time.Now().UTC().Before(loaded.expiresAt):
 		connection.Configuration = "expired"
 	default:
@@ -130,6 +134,8 @@ func (p *PublicApp) inspectPublication(ctx context.Context) (apphost.ConnectionS
 		status.CapabilityCheck = "publication_disabled"
 	} else if connection.Configuration == "expired" {
 		status.CapabilityCheck = "publication_credentials_expired"
+	} else if connection.Configuration == "refresh-pending" {
+		status.CapabilityCheck = "publication_refresh_unconfirmed"
 	}
 	return status, nil
 }
@@ -201,7 +207,7 @@ func validPublicationSettingsShape(raw []byte) bool {
 			return false
 		}
 	}
-	for _, key := range []string{"part_bytes", "verified_openid", "verified_credentials", "legacy_credentials", "policy_nonce"} {
+	for _, key := range []string{"part_bytes", "verified_openid", "verified_credentials", "legacy_credentials", "policy_nonce", "refresh_token", "refresh_pending"} {
 		if value, ok := object[key]; ok && string(value) == "null" {
 			return false
 		}
@@ -215,12 +221,16 @@ func validatePublicationSettings(settings *publicationSettings) (time.Time, erro
 	}
 	switch settings.SchemaVersion {
 	case 1:
-		if settings.VerifiedOpenID != "" || settings.VerifiedCredentials != "" || settings.LegacyCredentials != "" || settings.PolicyNonce != "" {
+		if settings.VerifiedOpenID != "" || settings.VerifiedCredentials != "" || settings.LegacyCredentials != "" || settings.PolicyNonce != "" ||
+			settings.RefreshToken != "" || settings.RefreshPending {
 			return time.Time{}, ErrInvalid
 		}
 	case 2:
 		if !safePublicationIdentity(settings.VerifiedOpenID) || settings.VerifiedCredentials != verifiedPublicationProof(*settings) ||
 			!isPublicationDigest(settings.PolicyNonce, 16) || (settings.LegacyCredentials != "" && !isPublicationDigest(settings.LegacyCredentials, 32)) {
+			return time.Time{}, ErrInvalid
+		}
+		if settings.RefreshToken != "" && (settings.RefreshPending || !safeHeaderValue(settings.RefreshToken, 4096)) {
 			return time.Time{}, ErrInvalid
 		}
 	default:

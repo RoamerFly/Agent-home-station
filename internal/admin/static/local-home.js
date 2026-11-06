@@ -53,6 +53,7 @@
   }
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
+      bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() { return { loading: false, applying: "", tools: [] }; }
@@ -1723,6 +1724,7 @@
     return publicationStages[task.progress?.stage] || normal;
   }
   function publicationAuthorizationSummary(authorization) {
+    if (authorization?.refresh_pending) return ["续期结果未确认", "重新网页授权后可恢复投稿。"];
     const states = {
       unconfigured: ["尚未登记发布授权", "登记开放平台凭据后，宿主会向 B 站核对账号。"],
       legacy: ["旧版发布授权待升级", "请先用现有凭据核验账号，再更换令牌。"],
@@ -1735,6 +1737,123 @@
   function validPublicationAuthorization(value) {
     return value && typeof value.revision === "string" && ["unconfigured", "legacy", "ready", "disabled", "expired"].includes(value.state) &&
       typeof value.verified === "boolean" && typeof value.enabled === "boolean";
+  }
+  function bilibiliAuthorizeURL(value) {
+    if (typeof value !== "string") return "";
+    try {
+      const url = new URL(value);
+      return url.origin === "https://account.bilibili.com" && !url.username && !url.password && !url.hash &&
+        url.pathname === "/pc/account-pc/auth/oauth" ? url.href : "";
+    } catch (_) { return ""; }
+  }
+  function publicationOAuthNote(authorization) {
+    if (authorization?.refresh_available) return "当前授权有效，可按需手动续期。";
+    return "填写开放平台已登记的回调地址，并在 B 站勾选账号查询和视频投稿权限。";
+  }
+  function bilibiliOAuthForm(current) {
+    const authorization = current.bilibiliAuthorization;
+    const flow = current.bilibiliOAuth;
+    const panel = appElement("details", "", "publication-oauth");
+    panel.append(appElement("summary", "网页授权"));
+    const form = appElement("form", "", "publication-oauth-form");
+    const note = appElement("p", publicationOAuthNote(authorization), "publication-authorization-note");
+    const clientID = document.createElement("input");
+    clientID.name = "client_id"; clientID.autocomplete = "off"; clientID.required = true; clientID.placeholder = "B 站 Client ID"; clientID.setAttribute("aria-label", "OAuth Client ID");
+    const appSecret = document.createElement("input");
+    appSecret.name = "app_secret"; appSecret.type = "password"; appSecret.autocomplete = "new-password"; appSecret.required = true; appSecret.placeholder = "App Secret"; appSecret.setAttribute("aria-label", "OAuth App Secret");
+    const redirectURI = document.createElement("input");
+    redirectURI.name = "redirect_uri"; redirectURI.type = "url"; redirectURI.autocomplete = "off"; redirectURI.required = true; redirectURI.placeholder = "https://…/callback"; redirectURI.setAttribute("aria-label", "回调地址");
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox"; enabled.name = "enabled"; enabled.checked = Boolean(authorization?.enabled);
+    const enabledLabel = appElement("label", "", "switch-row");
+    enabledLabel.append(enabled, appElement("span", "完成授权后启用发布授权"));
+    const begin = appElement("button", flow.saving ? "正在生成…" : "生成授权链接", "button compact secondary");
+    begin.type = "submit"; begin.disabled = !authorization || flow.saving;
+    const actions = appElement("div", "", "app-worker-actions"); actions.append(begin);
+    for (const [field, label] of [[clientID, "Client ID"], [appSecret, "App Secret"], [redirectURI, "回调地址"]]) {
+      field.id = `bilibili-oauth-${field.name}`;
+      const labelNode = appElement("label", label); labelNode.htmlFor = field.id; form.append(labelNode, field);
+    }
+    form.append(note, enabledLabel, actions);
+    const callback = document.createElement("input");
+    callback.type = "url"; callback.autocomplete = "off"; callback.required = true; callback.placeholder = "粘贴浏览器返回的完整回调地址"; callback.setAttribute("aria-label", "完整回调地址");
+    const complete = appElement("button", "完成网页授权", "button compact primary"); complete.type = "button";
+    const callbackActions = appElement("div", "", "app-worker-actions"); callbackActions.append(complete);
+    const callbackBlock = appElement("div", "", "publication-oauth-callback");
+    const link = appElement("a", "在浏览器中打开 B 站授权", "button compact quiet");
+    link.target = "_blank"; link.rel = "noopener noreferrer";
+    const copy = appElement("button", "复制授权链接", "button compact quiet"); copy.type = "button";
+    copy.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(flow.authorizeURL); appFeedback("授权链接已复制，可粘贴到浏览器打开。"); }
+      catch (_) { appFeedback("无法自动复制，请使用上方链接或手动复制。", true); }
+    });
+    const expiration = appElement("p", "", "publication-reference");
+    const showCallback = () => {
+      callbackBlock.hidden = !flow.authorizeURL;
+      callback.disabled = callbackBlock.hidden;
+      if (!flow.authorizeURL) return;
+      link.href = flow.authorizeURL;
+      expiration.textContent = `授权链接有效至：${new Date(flow.expiresAt).toLocaleString()}`;
+    };
+    callbackBlock.append(appElement("p", "在浏览器完成授权后，把地址栏中的完整回跳地址粘贴到这里。"), expiration, link, copy, callback, callbackActions);
+    showCallback();
+    form.append(callbackBlock);
+    panel.append(form);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!authorization || current !== apps || flow.saving) return;
+      const credentials = { client_id: clientID.value, app_secret: appSecret.value, redirect_uri: redirectURI.value, enabled: enabled.checked };
+      clientID.value = appSecret.value = redirectURI.value = "";
+      flow.authorizeURL = flow.expiresAt = callback.value = "";
+      showCallback();
+      flow.saving = true; begin.disabled = true;
+      try {
+        const value = await request("/api/local/apps/bilibili/publication-oauth", { method: "POST", body: JSON.stringify({ action: "begin", revision: authorization.revision, ...credentials }) });
+        if (current !== apps) return;
+        const authorizeURL = bilibiliAuthorizeURL(value.authorize_url);
+        if (!authorizeURL || !Number.isFinite(Date.parse(value.expires_at))) throw new Error("授权链接返回格式无效，请重新生成。");
+        flow.authorizeURL = authorizeURL; flow.expiresAt = value.expires_at;
+        showCallback();
+        callback.focus();
+      } catch (error) { if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) { current.bilibiliAuthorizationError = error.message; appFeedback(error.message, true); } }
+      finally { flow.saving = false; begin.disabled = false; }
+    });
+    complete.addEventListener("click", async () => {
+      if (!flow.authorizeURL || current !== apps || flow.saving || !callback.reportValidity()) return;
+      const callbackURL = callback.value; callback.value = ""; flow.saving = true; complete.disabled = true;
+      try {
+        const value = await request("/api/local/apps/bilibili/publication-oauth", { method: "POST", body: JSON.stringify({ action: "complete", callback_url: callbackURL }) });
+        if (current !== apps) return;
+        if (!validPublicationAuthorization(value)) throw new Error("发布授权状态返回格式无效，请刷新后重试。");
+        current.bilibiliAuthorization = value; flow.authorizeURL = flow.expiresAt = ""; flow.saving = false;
+        appFeedback(value.enabled ? "网页授权已完成并启用。" : "网页授权已完成，但目前未启用。"); await loadApps();
+      } catch (error) { if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) { current.bilibiliAuthorizationError = error.message; appFeedback(error.message, true); } }
+      finally { callback.value = ""; flow.saving = false; complete.disabled = false; }
+    });
+    callback.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); complete.click(); }
+    });
+    return panel;
+  }
+  function publicationRefreshButton(current, authorization) {
+    if (!authorization?.refresh_available || authorization.refresh_pending) return null;
+    const button = appElement("button", current.bilibiliAuthorizationSaving ? "正在续期…" : "手动续期", "button compact quiet"); button.type = "button"; button.disabled = current.loading || current.bilibiliAuthorizationSaving;
+    button.addEventListener("click", async () => {
+      if (current !== apps || current.loading || current.bilibiliAuthorizationSaving) return;
+      current.bilibiliAuthorizationSaving = true; updatePublicationRow(current);
+      try {
+        const value = await request("/api/local/apps/bilibili/publication-oauth", { method: "POST", body: JSON.stringify({ action: "refresh", revision: authorization.revision }) });
+        if (!validPublicationAuthorization(value)) throw new Error("发布授权状态返回格式无效，请刷新后重试。");
+        current.bilibiliAuthorization = value; appFeedback(value.refresh_pending ? "续期不可用，需要重新网页授权。" : "发布授权已手动续期。"); await loadApps();
+      } catch (error) {
+        if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          appFeedback(error.message, true);
+          await loadApps();
+        }
+      }
+      finally { current.bilibiliAuthorizationSaving = false; if (current === apps) updatePublicationRow(current); }
+    });
+    return button;
   }
   function bilibiliAuthorizationForm(current) {
     const authorization = current.bilibiliAuthorization;
@@ -1871,7 +1990,11 @@
       if (Number.isFinite(expiry.getTime())) detail.append(appElement("p", `凭据到期：${expiry.toLocaleString()}`, "publication-reference"));
     }
     if (current.bilibiliAuthorizationError) detail.append(appElement("p", current.bilibiliAuthorizationError, "publication-feedback is-warn"));
+    if (authorization?.refresh_pending) detail.append(appElement("p", "登录状态需要重新网页授权；不会自动重试刷新。", "publication-feedback is-warn"));
+    detail.append(bilibiliOAuthForm(current));
     detail.append(bilibiliAuthorizationForm(current));
+    const refresh = publicationRefreshButton(current, authorization);
+    if (refresh) detail.append(refresh);
     const disable = publicationDisableButton(current, authorization);
     if (disable) detail.append(disable);
     const taskPanel = appElement("div", "", "publication-tasks");
@@ -1967,7 +2090,7 @@
     const focusedPage = row.contains(active) ? active.dataset.page : "";
     let next = bilibiliPublicationRow(current);
     if (!next) return;
-    if (row.querySelector(".publication-authorization[open]")) {
+    if (row.querySelector(".publication-authorization[open], .publication-oauth[open]")) {
       // Refresh tasks without touching the open credential form.
       row.querySelector(".publication-tasks").replaceWith(next.querySelector(".publication-tasks"));
       row.setAttribute("aria-busy", next.getAttribute("aria-busy"));

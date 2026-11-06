@@ -49,7 +49,7 @@ func TestBilibiliSourceSeparatesPublicReadsAndPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||
-		len(p.HTTPRoutes) != 9 || p.HTTPRoutes[0].Endpoint != "https://api.bilibili.com/x/web-interface/view" ||
+		len(p.HTTPRoutes) != 11 || p.HTTPRoutes[0].Endpoint != "https://api.bilibili.com/x/web-interface/view" ||
 		!reflect.DeepEqual(p.HTTPRoutes[0].Capabilities, []string{"observation.title", "observation.body"}) ||
 		p.HTTPRoutes[1].Endpoint != "https://api.bilibili.com/x/player/playurl" ||
 		!reflect.DeepEqual(p.HTTPRoutes[1].Capabilities, []string{"observation.playback", "observation.audio"}) ||
@@ -73,6 +73,12 @@ func TestBilibiliSourceSeparatesPublicReadsAndPublication(t *testing.T) {
 	account := p.HTTPRoutes[8]
 	if account.Endpoint != "https://member.bilibili.com/arcopen/fn/user/account/info" || !reflect.DeepEqual(account.Capabilities, []string{"authorization.verify"}) {
 		t.Fatalf("account verification route was mixed with observation or posting: %#v", account)
+	}
+	for i, endpoint := range []string{"https://api.bilibili.com/x/account-oauth2/v1/token", "https://api.bilibili.com/x/account-oauth2/v1/refresh_token"} {
+		route := p.HTTPRoutes[9+i]
+		if route.Endpoint != endpoint || !reflect.DeepEqual(route.Capabilities, []string{"authorization.oauth"}) {
+			t.Fatalf("unexpected OAuth route: %#v", route)
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,7 @@ func TestLocalBilibiliPublicationAuthorizationIsOwnerOnlyAndSecretFree(t *testin
 	}
 	f := newLocalAppObservationFixtureWithHandler(t, handler, data, home)
 	const route = "/api/local/apps/bilibili/publication-authorization"
+	const oauth = "/api/local/apps/bilibili/publication-oauth"
 	if code, _ := f.request(http.MethodGet, route, nil, false); code != 401 {
 		t.Fatalf("unprotected publication settings: %d", code)
 	}
@@ -38,6 +40,22 @@ func TestLocalBilibiliPublicationAuthorizationIsOwnerOnlyAndSecretFree(t *testin
 	}
 	if code, view := f.request(http.MethodGet, route, nil, false); code != 200 || view["state"] != "unconfigured" {
 		t.Fatalf("new installation unexpectedly configured: %d %#v", code, view)
+	}
+	begin := map[string]any{"action": "begin", "revision": "unconfigured", "client_id": "fixture-client",
+		"app_secret": "fixture-private-secret", "redirect_uri": "https://callbacks.example.test/bilibili", "enabled": true}
+	if code, _ := f.request(http.MethodPost, oauth, begin, false); code != 403 {
+		t.Fatalf("OAuth begin bypassed CSRF: %d", code)
+	}
+	code, attempt := f.request(http.MethodPost, oauth, begin, true)
+	link, err := url.Parse(fmt.Sprint(attempt["authorize_url"]))
+	if code != 200 || err != nil || link.Host != "account.bilibili.com" || link.Query().Get("state") == "" ||
+		strings.Contains(fmt.Sprint(attempt), "fixture-private-secret") {
+		t.Fatalf("unsafe OAuth start: %d %#v", code, attempt)
+	}
+	callback := begin["redirect_uri"].(string) + "?" + url.Values{"code": {"never-send"}, "state": {link.Query().Get("state")}}.Encode()
+	f.login() // A newly authenticated session cannot consume the old attempt.
+	if code, _ := f.request(http.MethodPost, oauth, map[string]string{"action": "complete", "callback_url": callback}, true); code != 400 {
+		t.Fatalf("different session consumed the callback: %d", code)
 	}
 	if err := os.MkdirAll(appDir, 0o700); err != nil {
 		t.Fatal(err)

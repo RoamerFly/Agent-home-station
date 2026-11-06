@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"time"
@@ -122,4 +124,50 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 	})
 	mux.HandleFunc("GET /api/local/apps/bilibili/publication-authorization", authorization)
 	mux.HandleFunc("POST /api/local/apps/bilibili/publication-authorization", authorization)
+	mux.HandleFunc("POST /api/local/apps/bilibili/publication-oauth", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		record, err := h.identity.localIdentity()
+		sessionID, _, authenticated := s.session(r)
+		if err != nil || record.LocalOwner == nil || !authenticated {
+			fail(w, http.StatusConflict, "请先准备本机主人身份并登录")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		var input biliapp.PublicationOAuthInput
+		if !decode(w, r, &input) {
+			return
+		}
+		// The opaque key ties the pending attempt to this local owner and
+		// authenticated management session without storing the session cookie.
+		binding := sha256.Sum256([]byte(record.FishID + "\x00" + record.LocalOwner.ID + "\x00" + sessionID))
+		ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+		defer cancel()
+		result, err := bili.PublicationOAuth(ctx, hex.EncodeToString(binding[:]), input)
+		switch {
+		case errors.Is(err, biliapp.ErrPublicationAuthorizationConflict):
+			fail(w, http.StatusConflict, "发布授权已变化，请刷新后重新开始")
+		case errors.Is(err, biliapp.ErrPublicationAuthorizationLegacy):
+			fail(w, http.StatusConflict, "请先用旧版原凭据核验账号，再进行网页授权")
+		case errors.Is(err, biliapp.ErrPublicationAuthorizationIdentity):
+			fail(w, http.StatusConflict, "网页授权与已绑定的 B 站应用或账号不符")
+		case errors.Is(err, biliapp.ErrPublicationOAuthCallback):
+			fail(w, http.StatusBadRequest, "回跳地址与本次授权不匹配、已用过或已过期")
+		case errors.Is(err, biliapp.ErrPublicationOAuthScope):
+			fail(w, http.StatusForbidden, "请在 B 站确认已授权 USER_INFO 和 ARC_BASE")
+		case errors.Is(err, biliapp.ErrPublicationOAuthRefreshUnavailable):
+			fail(w, http.StatusConflict, "当前凭据无法续期，请重新网页授权")
+		case errors.Is(err, biliapp.ErrPublicationOAuthRefresh):
+			fail(w, http.StatusBadGateway, "续期结果未确认，请重新网页授权")
+		case errors.Is(err, biliapp.ErrPublicationOAuthExchange):
+			fail(w, http.StatusBadGateway, "B 站授权码兑换失败，请重新发起网页授权")
+		case errors.Is(err, biliapp.ErrPublicationAuthorizationVerify):
+			fail(w, http.StatusBadGateway, "B 站账号核验失败，请重新发起网页授权")
+		case errors.Is(err, biliapp.ErrInvalid):
+			fail(w, http.StatusBadRequest, "请核对授权操作、已登记回调地址及应用凭据")
+		case err != nil:
+			fail(w, http.StatusServiceUnavailable, "B 站网页授权暂不可用，请刷新后核对状态")
+		default:
+			respond(w, http.StatusOK, result)
+		}
+	}))
 }

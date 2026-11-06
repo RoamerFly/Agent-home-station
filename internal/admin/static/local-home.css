@@ -198,6 +198,13 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .publication-authorization-form input:not([type="checkbox"]) { box-sizing: border-box; width: 100%; min-width: 0; }
 .publication-authorization-form > label { color: var(--muted); font-size: .78rem; font-weight: 700; }
 .publication-authorization-note { margin-top: 0 !important; }
+.publication-oauth { margin-top: 10px; border-left: 3px solid var(--accent); border-radius: 7px; background: color-mix(in srgb, var(--accent-soft) 38%, transparent); }
+.publication-oauth > summary { padding: 8px 10px 8px 8px; color: var(--accent-deep); font-size: .83rem; font-weight: 700; cursor: pointer; }
+.publication-oauth-form { display: grid; gap: 7px; padding: 2px 10px 10px 8px; border-top: 1px solid var(--line); }
+.publication-oauth-form input:not([type="checkbox"]) { box-sizing: border-box; width: 100%; min-width: 0; }
+.publication-oauth-form > label { color: var(--muted); font-size: .78rem; font-weight: 700; }
+.publication-oauth-callback { display: grid; gap: 7px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.publication-oauth-callback > .button { justify-self: start; }
 .app-accounts { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
 .app-accounts li { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; min-width: 0; color: var(--ink); font-size: .86rem; overflow-wrap: anywhere; }
 .app-accounts small { color: var(--muted); }
