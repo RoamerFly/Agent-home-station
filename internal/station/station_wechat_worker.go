@@ -66,6 +66,12 @@ type stationWechatPolicy struct {
 	// Persist the reply-policy import claim independently. This prevents a
 	// replay from restoring an old trigger or persona after an owner edit.
 	LegacyGroupReplyImports map[string]string `json:"legacy_group_reply_imports,omitempty"`
+	// Imported workers require a local old-host/native-profile attestation
+	// before they may start or submit any automated reply.
+	LegacyActivation *legacyActivation `json:"legacy_activation,omitempty"`
+	// Older imports may only have the archive digest. It is still sufficient to
+	// require the same activation gate until the connection is explicitly bound.
+	LegacyArchiveDigest string `json:"legacy_archive_digest,omitempty"`
 }
 
 const stationWechatPolicyLimit = 128 << 10
@@ -79,6 +85,11 @@ type stationWechatWorker struct {
 	policy     stationWechatPolicy
 	actions    *wechatapp.ActionLedger
 	run        *stationWechatRun
+	// cutoverBlocked records a failed automatic preflight for older imported
+	// archives that predate LegacyArchiveDigest. It is intentionally transient:
+	// the archive evidence remains the authority and an explicit successful
+	// activation clears this display state.
+	cutoverBlocked atomic.Bool
 }
 
 type stationWechatRun struct {
@@ -185,7 +196,13 @@ func (s *stationWechat) restoreWorker(id string) {
 	defer cancel()
 	native, err := s.WorkerSender(ctx, id)
 	if err == nil {
-		_ = s.launch(w, native)
+		guard, guardErr := s.legacyActivationGuard(ctx, id, native, w)
+		if guardErr != nil {
+			w.cutoverBlocked.Store(true)
+			return
+		}
+		w.cutoverBlocked.Store(false)
+		_ = s.launch(w, native, guard)
 	}
 }
 
@@ -236,6 +253,9 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 	data, err := io.ReadAll(io.LimitReader(file, stationWechatPolicyLimit+1))
 	var policy stationWechatPolicy
 	if err != nil || len(data) > stationWechatPolicyLimit || json.Unmarshal(data, &policy) != nil || len(policy.Grants) > 100 || len(policy.GroupMuteGrants) > 100 || len(policy.GroupRules) > 100 {
+		return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
+	}
+	if policy.LegacyActivation != nil && !policy.LegacyActivation.valid() || policy.LegacyArchiveDigest != "" && !legacyMemoryDigestValid(policy.LegacyArchiveDigest) {
 		return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 	}
 	for thread, granted := range policy.Grants {
@@ -335,6 +355,12 @@ func (w *stationWechatWorker) state() string {
 	switch {
 	case w.policy.Paused:
 		return "paused"
+	case w.cutoverBlocked.Load():
+		return "cutover_blocked"
+	case w.policy.Enabled && (w.policy.LegacyActivation != nil || w.policy.LegacyArchiveDigest != ""):
+		// Automatic restore deliberately leaves imported connections dormant when
+		// their old-host evidence cannot be verified.
+		return "cutover_blocked"
 	case w.policy.Enabled:
 		return "needs_setup"
 	default:
@@ -582,6 +608,19 @@ func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, run
 		if modelErr != nil || len(w.policy.Grants) == 0 {
 			return apphost.ConnectionLifecycle{}, apphost.ErrLifecycleNotReady
 		}
+		// Check evidence before unpausing, and also for an idempotent start
+		// against a worker whose old host might have restarted meanwhile.
+		guard, guardErr := s.legacyActivationGuard(ctx, id, native, w)
+		if guardErr != nil {
+			w.cutoverBlocked.Store(true)
+			if w.run != nil {
+				w.run.block.Store(true)
+				w.run.state.Store("cutover_blocked")
+				w.run.cancel()
+			}
+			return apphost.ConnectionLifecycle{}, guardErr
+		}
+		w.cutoverBlocked.Store(false)
 		if state := w.state(); state != "running" && state != "waiting_login" {
 			if err := w.stop(ctx); err != nil {
 				return apphost.ConnectionLifecycle{}, err
@@ -591,7 +630,7 @@ func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, run
 			if err := w.save(next); err != nil {
 				return apphost.ConnectionLifecycle{}, err
 			}
-			if err := s.launch(w, native); err != nil {
+			if err := s.launch(w, native, guard); err != nil {
 				return apphost.ConnectionLifecycle{}, err
 			}
 		}
@@ -611,7 +650,7 @@ func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, run
 	}, nil
 }
 
-func (s *stationWechat) launch(w *stationWechatWorker, native *linuxnative.Sender) error {
+func (s *stationWechat) launch(w *stationWechatWorker, native *linuxnative.Sender, activationGuard func() bool) error {
 	persona, err := s.modelPersona()
 	if err != nil || len(w.policy.Grants) == 0 {
 		return apphost.ErrLifecycleNotReady
@@ -631,14 +670,29 @@ func (s *stationWechat) launch(w *stationWechatWorker, native *linuxnative.Sende
 		defer s.wg.Done()
 		defer close(run.done)
 		defer cancel()
-		if err := s.runWorker(ctx, run, w, native, persona, policy); err != nil && ctx.Err() == nil {
+		if err := s.runWorker(ctx, run, w, native, persona, policy, activationGuard); err != nil && ctx.Err() == nil {
 			run.state.Store("error")
 		}
 	}()
 	return nil
 }
 
-func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, station *stationWechatWorker, native *linuxnative.Sender, persona string, policy stationWechatPolicy) error {
+func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, station *stationWechatWorker, native *linuxnative.Sender, persona string, policy stationWechatPolicy, activationGuard func() bool) error {
+	activationAllowed := func() error {
+		if activationGuard == nil || activationGuard() {
+			return nil
+		}
+		// A local marker/profile can become invalid after an explicit start.
+		// Stop only future automated work; accepted receipts stay untouched.
+		run.state.Store("cutover_blocked")
+		station.cutoverBlocked.Store(true)
+		run.block.Store(true)
+		run.cancel()
+		return apphost.ErrLifecycleCutover
+	}
+	if err := activationAllowed(); err != nil {
+		return err
+	}
 	dir := station.dir
 	for {
 		statusCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -652,6 +706,9 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 			return ctx.Err()
 		case <-time.After(2 * time.Second):
 		}
+	}
+	if err := activationAllowed(); err != nil {
+		return err
 	}
 	memory, err := companion.NewStore(filepath.Join(dir, "memory"))
 	if err != nil {
@@ -692,12 +749,25 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 	}
 	options := bot.DefaultOptions()
 	options.AcknowledgeTools, options.ReadImages, options.ReadVideos, options.RandomDelay = false, false, false, false
+	var source bot.Source = native
+	if activationGuard != nil {
+		source = legacyActivationSource{Sender: native, check: activationAllowed}
+	}
 	worker, err := bot.New(bot.Config{
-		DeliveryCancelled:  station.deliveryCancelled,
-		WithDeliverySubmit: station.withDeliverySubmit,
-		NextMediaResume:    station.nextMediaResume,
-		MediaResumeResult:  station.mediaResumeResult,
-		StateDir:           filepath.Join(dir, "queue"), AllowedThreads: threads, GroupRules: rules,
+		DeliveryCancelled: station.deliveryCancelled,
+		WithDeliverySubmit: func(ctx context.Context, in companion.Input, submit func() error) error {
+			// Re-check inside the existing delivery serialization immediately
+			// before the native handoff. This closes a queue-to-send race.
+			return station.withDeliverySubmit(ctx, in, func() error {
+				if err := activationAllowed(); err != nil {
+					return err
+				}
+				return submit()
+			})
+		},
+		NextMediaResume:   station.nextMediaResume,
+		MediaResumeResult: station.mediaResumeResult,
+		StateDir:          filepath.Join(dir, "queue"), AllowedThreads: threads, GroupRules: rules,
 		Options: &options, Prefix: "/ai ",
 		PreferredGroupShare: func(m linuxnative.Message) bool {
 			return !run.block.Load() && policy.groupShareCandidate(native.Account(), m)
@@ -717,9 +787,15 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 			if run.block.Load() {
 				return apphost.ErrLifecycleConflict
 			}
+			if err := activationAllowed(); err != nil {
+				return err
+			}
 			return ctx.Err()
 		},
 		AuthorizeThread: func(ctx context.Context, thread string) (bool, error) {
+			if err := activationAllowed(); err != nil {
+				return false, err
+			}
 			return !run.block.Load() && !policy.Grants[thread].IsZero(), ctx.Err()
 		},
 		AuthorizeReply: func(in companion.Input) bool {
@@ -739,7 +815,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 		AuthorizeMedia:      attachment.replyAllowed,
 		PrepareMediaSource:  attachment.stageReply,
 		AuthorizeMediaAsset: attachment.workAllowed,
-	}, native, character, native)
+	}, source, character, native)
 	if err != nil {
 		return err
 	}

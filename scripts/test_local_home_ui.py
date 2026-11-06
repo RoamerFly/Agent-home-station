@@ -495,6 +495,7 @@ def verify(binary, output):
                 worker_lifecycle_pattern = status_pattern + "/lifecycle"
                 worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "group_rules": [], "contact_read": False, "actions": [], "policy_payloads": []}
                 legacy = {"availability": "available", "previews": 0, "posts": [], "source_removed": False}
+                legacy_activation = {"gets": 0, "posts": []}
                 legacy_memory = {"requests": []}
                 legacy_memory_selection = {"gets": [], "posts": []}
                 legacy_group_rule = {"gets": [], "posts": []}
@@ -577,6 +578,41 @@ def verify(binary, output):
                     fulfill_json(legacy_plan(True))(route)
 
                 page.route(legacy_import_pattern, legacy_import)
+                legacy_activation_pattern = legacy_import_pattern + "/activation"
+
+                def legacy_activation_route(route):
+                    if route.request.method == "GET":
+                        legacy_activation["gets"] += 1
+                        if legacy_activation["gets"] >= 3:
+                            fulfill_json({"status": "blocked", "reason": "旧宿主停机记录已变化，请先重新导入后再启用",
+                                          "legacy_host": "changed", "native_profile": "import_receipt_matched",
+                                          "target_login": "online", "target_identity": "owner_check_pending",
+                                          "reply_count": 1, "pending_receipts": 2, "model_ready": True})(route)
+                            return
+                        digest = "fixture-activation-v2" if legacy_activation["gets"] >= 2 else "fixture-activation-v1"
+                        fulfill_json({"status": "ready", "digest": digest, "legacy_host": "stop_record_matched",
+                                      "native_profile": "import_receipt_matched", "target_login": "online",
+                                      "target_identity": "owner_check_pending", "reply_count": 1,
+                                      "pending_receipts": 2, "model_ready": True})(route)
+                        return
+                    assert route.request.method == "POST"
+                    assert route.request.headers.get("x-csrf-token"), "activation confirmation lacks owner CSRF"
+                    payload = route.request.post_data_json
+                    legacy_activation["posts"].append(payload)
+                    assert payload["same_identity"] is True
+                    assert set(payload) == {"digest", "same_identity", "reviewed_receipts"}
+                    if len(legacy_activation["posts"]) == 1:
+                        assert payload == {"digest": "fixture-activation-v1", "same_identity": True, "reviewed_receipts": True}
+                        fulfill_json({"error": "stale activation check"}, status=409)(route)
+                        return
+                    assert payload == {"digest": "fixture-activation-v2", "same_identity": True, "reviewed_receipts": True}
+                    fulfill_json({"status": "confirmed", "legacy_host": "stop_record_matched",
+                                  "native_profile": "import_receipt_matched", "target_login": "online",
+                                  "target_identity": "owner_confirmed", "reply_count": 1,
+                                  "pending_receipts": 2, "model_ready": True})(route)
+
+                # Register after the import handler: Playwright resolves routes in reverse order.
+                page.route(legacy_activation_pattern, legacy_activation_route)
                 legacy_receipts_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/legacy-import/receipts(?:/[^/?]+)?(?:\?.*)?$")
                 long_legacy_key = "legacy-accepted-" + "a" * 110
 
@@ -811,6 +847,32 @@ def verify(binary, output):
                 page.get_by_text("目标登录：已登录且在线", exact=True).wait_for()
                 page.get_by_text("身份确认：仍需主人确认实际微信身份", exact=True).wait_for()
                 assert legacy["previews"] == 3 and len(legacy["posts"]) == 2, "cutover refresh must remain read-only"
+                page.get_by_role("button", name="核对启用条件", exact=True).click()
+                page.get_by_text("可以确认启用条件", exact=True).wait_for()
+                page.get_by_text("已授权回复会话：1；待核对旧回执：2", exact=True).wait_for()
+                activation_apply = page.get_by_role("button", name="记录启用核对", exact=True)
+                assert activation_apply.is_disabled() and not legacy_activation["posts"], "activation must remain read-only before both owner acknowledgements"
+                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
+                assert activation_apply.is_disabled(), "unresolved old delivery receipts require explicit acknowledgement"
+                page.get_by_label("我已核对 2 条待确认旧回执", exact=True).check()
+                activation_apply.click()
+                page.get_by_text("旧版资料或当前连接已变化，请重新核对启用条件。", exact=True).wait_for()
+                assert legacy_activation["posts"] == [{"digest": "fixture-activation-v1", "same_identity": True, "reviewed_receipts": True}]
+                page.get_by_role("button", name="重新核对启用条件", exact=True).click()
+                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
+                page.get_by_label("我已核对 2 条待确认旧回执", exact=True).check()
+                page.get_by_role("button", name="记录启用核对", exact=True).click()
+                page.get_by_text("启用条件已记录", exact=True).wait_for()
+                page.get_by_text("启用条件已记录。仍需由主人单独启动 Agent。", exact=True).wait_for()
+                assert legacy_activation["posts"] == [
+                    {"digest": "fixture-activation-v1", "same_identity": True, "reviewed_receipts": True},
+                    {"digest": "fixture-activation-v2", "same_identity": True, "reviewed_receipts": True}
+                ], "activation confirmation must post only its explicit checks"
+                assert not worker["actions"] and not worker["threads"], "confirmation must not start Agent or mutate reply policy"
+                page.get_by_role("button", name="重新核对启用条件", exact=True).click()
+                page.get_by_text("暂不能启用", exact=True).wait_for()
+                page.get_by_text("说明：旧宿主停机记录已变化，请先重新导入后再启用", exact=True).wait_for()
+                assert len(legacy_activation["posts"]) == 2, "blocked activation state must not send a confirmation"
                 # Delivery records remain usable from the imported snapshot after the old source is removed.
                 page.get_by_role("button", name="查看旧版投递回执", exact=True).click()
                 page.get_by_text("快照内回执：4；待核对：2", exact=True).wait_for()
@@ -903,6 +965,12 @@ def verify(binary, output):
                 assert page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).input_value() == "synthetic-mute@chatroom"
                 assert worker["contact_read"] is True
                 assert worker["actions"] == ["start", "stop"]
+                worker["state"] = "cutover_blocked"
+                page.locator("#apps-refresh").click()
+                page.get_by_text("等待完成启用核对", exact=True).wait_for()
+                page.get_by_role("button", name="暂停 Agent", exact=True).click()
+                page.get_by_text("Agent 已暂停", exact=True).wait_for()
+                assert worker["actions"] == ["start", "stop", "stop"], "cutover block must still let the owner stop back to a paused preflight"
                 page.get_by_role("textbox", name="附件读取会话 ID").fill("")
                 assert page.get_by_role("checkbox", name="synthetic-room@chatroom 自动总结视频号分享", exact=True).is_disabled()
                 page.get_by_role("button", name="保存回复范围").click()

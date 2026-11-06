@@ -91,6 +91,10 @@ namespace WechatAgent.Desktop {
                     if (nativeServerId == "" || nativeGeneration == "") throw new InvalidOperationException("微信原生服务缺少归属信息，拒绝接管。");
                     return;
                 } catch (HttpRequestException) { } catch (TaskCanceledException) { } catch (FileNotFoundException) { }
+                // The owned daemon can still be writing its newly created token.
+                catch (IOException error) {
+                    if (error.HResult != unchecked((int)0x80070020) && error.HResult != unchecked((int)0x80070021)) throw;
+                }
                 if (DateTime.UtcNow > deadline) throw new InvalidOperationException("本机成长站微信原生服务未就绪，请检查 data/station/logs/wechat-native.log。");
                 await Task.Delay(300, cancel);
             }

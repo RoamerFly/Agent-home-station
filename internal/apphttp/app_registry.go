@@ -153,6 +153,8 @@ func Register(mux *http.ServeMux, auth *websession.Store, registry apphost.Regis
 		switch {
 		case errors.Is(err, apphost.ErrNotFound):
 			websession.Fail(w, http.StatusNotFound, "应用连接不存在")
+		case errors.Is(err, apphost.ErrLifecycleCutover):
+			websession.Fail(w, http.StatusConflict, "旧环境停用或本机微信档案尚未核对，暂不能启动；请在迁移记录中完成核对后再试")
 		case errors.Is(err, apphost.ErrLifecycleConflict):
 			websession.Fail(w, http.StatusConflict, "连接正在收尾或主程序正在维护，请查询连接状态后再试")
 		case errors.Is(err, apphost.ErrLifecycleNotReady):

@@ -87,7 +87,7 @@ func (s *stationWechat) legacyHostEvidence(snapshot *os.Root, source legacyImpor
 	return "stop_record_matched", sha256.Sum256(current)
 }
 
-func (s *stationWechat) nativeImportEvidence(id, account string, status linuxnative.Status) (string, [32]byte) {
+func (s *stationWechat) nativeImportReceipt(id, account string) (string, [32]byte) {
 	var noDigest [32]byte
 	root, err := workspacefs.OpenPath(filepath.Dir(s.root))
 	if err != nil {
@@ -114,21 +114,36 @@ func (s *stationWechat) nativeImportEvidence(id, account string, status linuxnat
 		return "mismatch", digest
 	}
 	dir.Close()
+	return "import_receipt_matched", digest
+}
+
+func (s *stationWechat) nativeImportEvidence(id, account string, status linuxnative.Status) (string, [32]byte) {
+	profile, digest := s.nativeImportReceipt(id, account)
+	if profile != "import_receipt_matched" {
+		return profile, digest
+	}
 	if status.AccountID == "" || status.StorageMode == "" {
 		return "pending", digest
 	}
 	if status.AccountID != account || status.StorageMode != "managed" {
 		return "mismatch", digest
 	}
-	return "import_receipt_matched", digest
+	return profile, digest
 }
 
 func (s *stationWechat) checkLegacyCutover(ctx context.Context, id string, native *linuxnative.Sender, snapshot *os.Root, source legacyImportSource, oldServer string) (*legacyCutover, [2][32]byte) {
 	legacy, marker := s.legacyHostEvidence(snapshot, source, oldServer)
 	status, _ := native.Status(ctx)
 	profile, receipt := s.nativeImportEvidence(id, native.Account(), status)
+	login := targetLoginState(status, native.Account())
+	return &legacyCutover{
+		LegacyHost: legacy, NativeProfile: profile, TargetLogin: login, TargetIdentity: "owner_check_pending",
+	}, [2][32]byte{marker, receipt}
+}
+
+func targetLoginState(status linuxnative.Status, account string) string {
 	login := "pending"
-	if status.AccountID == native.Account() && status.LoginObserved {
+	if status.AccountID == account && status.LoginObserved {
 		switch {
 		case !status.Authenticated:
 			login = "signed_out"
@@ -138,7 +153,5 @@ func (s *stationWechat) checkLegacyCutover(ctx context.Context, id string, nativ
 			login = "authenticated_offline"
 		}
 	}
-	return &legacyCutover{
-		LegacyHost: legacy, NativeProfile: profile, TargetLogin: login, TargetIdentity: "owner_check_pending",
-	}, [2][32]byte{marker, receipt}
+	return login
 }

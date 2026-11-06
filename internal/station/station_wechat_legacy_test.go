@@ -18,6 +18,7 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -74,7 +75,8 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	sameQueue := strings.ReplaceAll(strings.ReplaceAll(rawQueue, `"account":"one"`, `"account":"four"`), "old-dataset", "new-dataset")
 	write(filepath.Join(snapshot, "bot-state", "accounts", wechatapp.AccountDirectory("four"), "messages-v2.json"), []byte(sameQueue))
 
-	var sideEffects, receiptReads atomic.Int32
+	var sideEffects, receiptReads, eventReads atomic.Int32
+	var pushAfterInvalid atomic.Bool
 	var daemonOffline atomic.Bool
 	var loginOnline atomic.Bool
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +110,17 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		case "/v1/accounts/four/sends/job-pending":
 			receiptReads.Add(1)
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": "job-pending", "accountId": "four", "threadId": "filehelper", "kind": "text", "state": "accepted", "serverId": "69234"})
+		case "/v1/accounts/one/events":
+			eventReads.Add(1)
+			page := linuxnative.EventPage{Items: []linuxnative.Event{}, NextCursor: "0"}
+			if r.URL.Query().Get("after") == "1" {
+				page.NextCursor = "1"
+			} else if pushAfterInvalid.Load() {
+				event := linuxnative.Event{Cursor: "1", Kind: "message.committed"}
+				event.Data.MessageID, event.Data.ThreadID, event.Data.Direction = "must-not-read", "filehelper", "incoming"
+				page.Items, page.NextCursor = []linuxnative.Event{event}, "1"
+			}
+			_ = json.NewEncoder(w).Encode(page)
 		default:
 			t.Error("import contacted an unexpected native endpoint", r.URL.Path)
 			w.WriteHeader(404)
@@ -138,6 +151,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	route := func(id string) string { return "/api/apps/wechat/connections/" + wechatapp.ConnectionID(id) }
 	planRoute := func(id string) string { return route(id) + "/legacy-import" }
 	legacyReceiptRoute := func(id string) string { return planRoute(id) + "/receipts" }
+	activationRoute := planRoute("one") + "/activation"
 	req := func(method, path string, input any, csrf bool, want int) map[string]any {
 		t.Helper()
 		code, body := f.request(method, path, input, csrf)
@@ -150,6 +164,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	ruleRoute := func(account, thread string) string { return planRoute(account) + "/groups/" + thread + "/rule" }
 	req("GET", planRoute("one"), nil, false, 401)
 	req("GET", legacyReceiptRoute("one"), nil, false, 401)
+	req("GET", activationRoute, nil, false, 401)
 	req("GET", memoryRoute("one"), nil, false, 401)
 	req("GET", memoryRoute("one")+"/123@chatroom/preference", nil, false, 401)
 	req("GET", ruleRoute("one", "124@chatroom"), nil, false, 401)
@@ -694,13 +709,45 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "conflict" {
 		t.Fatal("regrant reactivated the bundle from the old grant", row)
 	}
+	start := map[string]string{"action": "start"}
+	req("POST", route("one")+"/lifecycle", start, true, 409)
+	if eventReads.Load() != 0 {
+		t.Fatal("an unconfirmed worker read native events")
+	}
+	activation := req("GET", activationRoute, nil, false, 200)
+	if activation["status"] != "ready" || activation["pending_receipts"] != float64(2) || activation["model_ready"] != true ||
+		bytes.Contains(j(activation), []byte("old-host")) || bytes.Contains(j(activation), []byte(marker.Epoch)) {
+		t.Fatal("activation preview was incomplete or exposed private evidence", activation)
+	}
+	confirm := map[string]any{"digest": activation["digest"], "same_identity": true, "reviewed_receipts": true}
+	req("POST", activationRoute, confirm, false, 403)
+	req("POST", activationRoute, map[string]any{"digest": activation["digest"]}, true, 400)
+	req("POST", activationRoute, map[string]any{"digest": activation["digest"], "same_identity": true}, true, 409)
+	write(queuePath, []byte(rawQueue+"\n"))
+	req("POST", activationRoute, confirm, true, 409)
+	write(queuePath, []byte(rawQueue))
 	write(liveMarker, j(starting))
 	assertCutover(req("GET", planRoute("one"), nil, false, 200), "changed", "import_receipt_matched", "online")
+	req("POST", activationRoute, confirm, true, 409)
+	req("POST", route("one")+"/lifecycle", start, true, 409)
+	write(liveMarker, j(marker))
+	if activated := req("POST", activationRoute, confirm, true, 200); activated["status"] != "confirmed" || activated["target_identity"] != "owner_confirmed" {
+		t.Fatal("owner confirmation did not persist the exact cutover", activated)
+	}
+	if eventReads.Load() != 0 || detailFor("one")["worker"] != "paused" {
+		t.Fatal("confirming the cutover started the worker")
+	}
+	write(receiptPath, append(bytes.Clone(receiptJSON), '\n'))
+	req("POST", route("one")+"/lifecycle", start, true, 409)
+	write(receiptPath, receiptJSON)
 	assertCutover(req("POST", planRoute("one"), planDigest(plan), true, 200), "stop_record_matched", "import_receipt_matched", "signed_out")
 	if err := os.Remove(sourceConfig); err != nil {
 		t.Fatal(err)
 	}
 	assertCutover(req("GET", planRoute("one"), nil, false, 200), "pending", "import_receipt_matched", "online")
+	if row := req("GET", activationRoute, nil, false, 200); row["status"] != "confirmed" {
+		t.Fatal("detaching the copied snapshot discarded saved activation", row)
+	}
 	if detailFor("one")["legacy_import"] != "applied" || req("GET", planRoute("one"), nil, false, 200)["applied"] != true ||
 		req("POST", planRoute("one"), planDigest(plan), true, 200)["applied"] != true {
 		t.Fatal("saved migration report was not available after detaching the source")
@@ -711,6 +758,26 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		sideEffects.Load() != 0 || receiptReads.Load() != 2 {
 		t.Fatal("migration was not durable or triggered native side effects")
 	}
+	req("POST", route("one")+"/lifecycle", start, true, 200)
+	waitAppLifecycle(t, func() bool { return detailFor("one")["worker"] == "running" })
+	write(liveMarker, j(starting))
+	pushAfterInvalid.Store(true)
+	waitAppLifecycle(t, func() bool { return detailFor("one")["worker"] == "cutover_blocked" })
+	if sideEffects.Load() != 0 {
+		t.Fatal("invalidated worker reached native submission")
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readsBefore := eventReads.Load()
+	h, f = open()
+	f.login()
+	waitAppLifecycle(t, func() bool { return detailFor("one")["worker"] == "cutover_blocked" })
+	req("POST", route("one")+"/lifecycle", start, true, 409)
+	if eventReads.Load() != readsBefore || sideEffects.Load() != 0 {
+		t.Fatal("restart resumed the invalidated legacy worker")
+	}
+	req("POST", route("one")+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
 }
 
 func planDigest(plan map[string]any) map[string]any { return map[string]any{"digest": plan["digest"]} }

@@ -11,9 +11,14 @@ import (
 )
 
 var (
-	ErrNotFound                = errors.New("application or connection not found")
-	ErrUnavailable             = errors.New("application registry unavailable")
-	ErrLifecycleConflict       = errors.New("application lifecycle transition unavailable now")
+	ErrNotFound          = errors.New("application or connection not found")
+	ErrUnavailable       = errors.New("application registry unavailable")
+	ErrLifecycleConflict = errors.New("application lifecycle transition unavailable now")
+	// ErrLifecycleCutover means an imported application connection has not
+	// supplied (or no longer satisfies) its local old-host stop attestation.
+	// It is distinct from a transient lifecycle conflict: retrying cannot safely
+	// activate the imported worker until the local evidence is repaired.
+	ErrLifecycleCutover        = errors.New("application lifecycle cutover attestation required")
 	ErrInvalidConnectionPolicy = errors.New("invalid connection reply policy")
 	ErrLifecycleNotReady       = errors.New("application requires configuration before start")
 	stableID                   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)

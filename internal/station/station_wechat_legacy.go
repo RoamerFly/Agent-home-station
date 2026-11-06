@@ -59,6 +59,7 @@ type legacyImportArchive struct {
 	Receipts     map[string]apphost.Receipt `json:"receipts"`
 	// Native source identifiers are private lookup evidence, never part of a receipt response.
 	ReceiptSources map[string]string `json:"receipt_sources,omitempty"`
+	SourceRevision string            `json:"source_revision,omitempty"`
 }
 
 type legacyImportPolicy struct {
@@ -305,10 +306,12 @@ func (s *stationWechat) previewLegacyImport(ctx context.Context, id string) (leg
 		return legacyImportArchive{}, errLegacyImportInvalid
 	}
 	suggested, omitted := legacySuggestedThreads(policy)
+	queueHash, cursorHash := sha256.Sum256(queue), sha256.Sum256(cursor)
 	archive := legacyImportArchive{
 		Version: 1, LegacyServer: oldServer, Receipts: map[string]apphost.Receipt{},
 		Plan: legacyImportPlan{Account: account, LegacyEnabled: policy.Enabled, LegacyPaused: policy.ConnectionPaused,
 			SameDataset: oldServer != "" && oldServer == status.ServerID, SuggestedThreads: suggested, Omitted: omitted},
+		SourceRevision: localCheckpointKey(policy, queueHash, cursorHash),
 	}
 	for key, row := range evidence {
 		if !identity.ValidPathID(key) || !identity.ValidPathID(row.Status.ThreadID) || row.Status.ID != "" && !identity.ValidPathID(row.Status.ID) {
@@ -338,7 +341,7 @@ func (s *stationWechat) previewLegacyImport(ctx context.Context, id string) (leg
 		Binding       []string
 		Queue, Cursor [32]byte
 		Cutover       [2][32]byte
-	}{archive, []string{source.Root, source.Primary, id, status.ServerID, status.OwnershipGeneration, s.installation}, sha256.Sum256(queue), sha256.Sum256(cursor), cutoverDigests})
+	}{archive, []string{source.Root, source.Primary, id, status.ServerID, status.OwnershipGeneration, s.installation}, queueHash, cursorHash, cutoverDigests})
 	if err != nil || len(fingerprint) > legacyImportArchiveLimit {
 		return legacyImportArchive{}, errLegacyImportInvalid
 	}
@@ -464,7 +467,7 @@ func (s *stationWechat) applyLegacyImport(ctx context.Context, id, digest string
 	}()
 	// An imported policy is dormant. A later owner policy save explicitly
 	// grants the confirmed account new permissions; old scopes are suggestions.
-	policy := stationWechatPolicy{Enabled: archive.Plan.LegacyEnabled, Paused: true, Grants: map[string]time.Time{}}
+	policy := stationWechatPolicy{Enabled: archive.Plan.LegacyEnabled, Paused: true, Grants: map[string]time.Time{}, LegacyArchiveDigest: archive.Plan.Digest}
 	if err := writeLegacyStagedFile(root, policyPath, policy); err != nil {
 		return legacyImportPlan{}, err
 	}

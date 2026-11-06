@@ -175,9 +175,14 @@ namespace WechatAgent.Desktop {
                                     StationJSON(client, HttpMethod.Put, d.Url + "/api/local/model", settings);
                                     foreach (var profileUrl in profiles) {
                                         StationJSON(client, HttpMethod.Put, profileUrl + "/policy", new { reply_threads = new [] { "filehelper" } });
-                                        var started = StationJSON(client, HttpMethod.Post, profileUrl + "/lifecycle", new { action = "start" });
-                                        Assert(Deployment.Text(started, "worker") == "waiting_login", "new worker waits for its own account login");
                                     }
+                                    var activation = Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(profiles[0] + "/legacy-import/activation").GetAwaiter().GetResult());
+                                    Assert(Deployment.Text(activation, "status") == "blocked", "signed-out legacy worker has no cutover proof");
+                                    using (var payload = new StringContent("{\"action\":\"start\"}", System.Text.Encoding.UTF8, "application/json"))
+                                    using (var refused = client.PostAsync(profiles[0] + "/lifecycle", payload).GetAwaiter().GetResult())
+                                        Assert(refused.StatusCode == HttpStatusCode.Conflict, "imported worker cannot bypass the cutover check");
+                                    var started = StationJSON(client, HttpMethod.Post, profiles[1] + "/lifecycle", new { action = "start" });
+                                    Assert(Deployment.Text(started, "worker") == "waiting_login", "unrelated worker waits for its own login");
                                     var stopped = StationJSON(client, HttpMethod.Post, profiles[0] + "/lifecycle", new { action = "stop" });
                                     Assert(Deployment.Text(stopped, "worker") == "paused", "pausing one worker preserves the other worker state");
                                 }

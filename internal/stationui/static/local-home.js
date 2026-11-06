@@ -226,7 +226,8 @@
   }
   const appWorkerLabels = {
     disabled: "Agent 未启动", needs_setup: "Agent 待配置", waiting_login: "Agent 等待登录",
-    running: "Agent 运行中", stopping: "Agent 正在停止", paused: "Agent 已暂停", error: "Agent 运行异常"
+    running: "Agent 运行中", stopping: "Agent 正在停止", paused: "Agent 已暂停", error: "Agent 运行异常",
+    cutover_blocked: "等待完成启用核对"
   };
   function legacyImportControls(id, availability, connection = {}) {
     if (!availability) return null;
@@ -244,6 +245,7 @@
     const result = appElement("div", "");
     const memoryResult = appElement("div", "", "legacy-memory-result");
     const receiptResult = appElement("div", "", "legacy-receipt-list");
+    const activationResult = appElement("div", "", "legacy-memory-result legacy-activation-result");
     const actions = appElement("div", "", "app-worker-actions");
     const legacyImportURL = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import";
     const preview = appSetupButton(availability === "applied" ? "查看接入摘要" : "查看接入预演", async () => {
@@ -254,6 +256,7 @@
       result.replaceChildren(appElement("small", "正在读取旧版接入信息…"));
       try {
         plan = await request(legacyImportURL);
+        activation = null;
         renderPlan();
       } catch (error) {
         plan = null;
@@ -312,8 +315,13 @@
         ...cutoverLines,
         message ? appElement("small", message) : document.createTextNode("")
       );
-      if (value.applied) renderLegacyReceipts();
-      else receiptResult.replaceChildren();
+      if (value.applied) {
+        renderLegacyReceipts();
+        renderActivation();
+      } else {
+        receiptResult.replaceChildren();
+        activationResult.replaceChildren();
+      }
       const confirm = actions.querySelector("[data-legacy-confirm]");
       if (confirm) confirm.remove();
       if (availability !== "available" || value.applied || !value.digest) return;
@@ -465,6 +473,120 @@
         }
       } finally {
         legacyReceiptLoading = false;
+      }
+    }
+    let activation = null, activationLoading = false;
+    function activationLines(value) {
+      const stateCopy = {
+        ready: "可以确认启用条件",
+        blocked: "暂不能启用",
+        confirmed: "启用条件已记录"
+      };
+      const legacyHost = {
+        stop_record_matched: "已记录正常停机",
+        pending: "尚未取得停机记录",
+        changed: "停机记录与当前快照不一致"
+      };
+      const nativeProfile = {
+        import_receipt_matched: "导入记录与当前连接匹配",
+        pending: "尚未取得档案导入记录",
+        mismatch: "导入记录与当前连接不匹配"
+      };
+      const targetLogin = {
+        online: "已登录且在线",
+        authenticated_offline: "已登录，当前离线",
+        signed_out: "尚未登录",
+        pending: "待核对"
+      };
+      const targetIdentity = {
+        owner_confirmed: "主人已确认",
+        owner_check_pending: "待主人确认"
+      };
+      return [
+        appElement("strong", stateCopy[value?.status] || "启用条件待核对"),
+        appElement("small", `旧宿主：${legacyHost[value?.legacy_host] || "待核对"}`),
+        appElement("small", `原生档案：${nativeProfile[value?.native_profile] || "待核对"}`),
+        appElement("small", `目标登录：${targetLogin[value?.target_login] || "待核对"}`),
+        appElement("small", `目标身份：${targetIdentity[value?.target_identity] || "待主人确认"}`),
+        appElement("small", `已授权回复会话：${Number(value?.reply_count || 0)}；待核对旧回执：${Number(value?.pending_receipts || 0)}`),
+        appElement("small", `模型：${value?.model_ready ? "已配置" : "尚未配置"}`)
+      ];
+    }
+    function renderActivation(message = "") {
+      if (!activation) {
+        activationResult.replaceChildren(
+          appElement("strong", "启用前核对"),
+          appElement("small", "核对旧版停机、当前连接和待处理回执；记录确认不会启动 Agent。"),
+          appSetupButton("核对启用条件", () => readActivation())
+        );
+        return;
+      }
+      const value = activation;
+      const lines = activationLines(value);
+      if (value?.reason) lines.push(appElement("small", `说明：${value.reason}`));
+      if (value?.status === "ready" && value?.digest) {
+        const sameIdentity = document.createElement("input");
+        sameIdentity.type = "checkbox";
+        const sameIdentityLabel = document.createElement("label");
+        sameIdentityLabel.append(sameIdentity, document.createTextNode("我已确认旧资料和当前目标是同一个实际微信账号"));
+        const pendingReceipts = Number(value.pending_receipts || 0);
+        const reviewedReceipts = document.createElement("input");
+        reviewedReceipts.type = "checkbox";
+        const reviewedReceiptsLabel = document.createElement("label");
+        reviewedReceiptsLabel.append(reviewedReceipts, document.createTextNode(`我已核对 ${pendingReceipts} 条待确认旧回执`));
+        const apply = appSetupButton("记录启用核对", async () => {
+          apply.disabled = true;
+          try {
+            activation = await request(legacyImportURL + "/activation", {
+              method: "POST", body: JSON.stringify({
+                digest: value.digest,
+                same_identity: true,
+                reviewed_receipts: pendingReceipts === 0 || reviewedReceipts.checked
+              })
+            });
+            renderActivation("启用条件已记录。仍需由主人单独启动 Agent。");
+          } catch (error) {
+            if (error.status === 409) {
+              activation = null;
+              activationResult.replaceChildren(
+                appElement("small", "旧版资料或当前连接已变化，请重新核对启用条件。"),
+                appSetupButton("重新核对启用条件", () => readActivation())
+              );
+            } else {
+              lines.push(appElement("small", error.message));
+              activationResult.replaceChildren(...lines);
+            }
+          }
+        });
+        apply.disabled = true;
+        const sync = () => { apply.disabled = !sameIdentity.checked || (pendingReceipts > 0 && !reviewedReceipts.checked); };
+        sameIdentity.addEventListener("change", sync);
+        reviewedReceipts.addEventListener("change", sync);
+        const confirm = appElement("div", "", "legacy-memory-confirm");
+        confirm.append(sameIdentityLabel);
+        if (pendingReceipts > 0) confirm.append(reviewedReceiptsLabel);
+        confirm.append(apply);
+        lines.push(confirm);
+      }
+      if (value?.status === "confirmed" || message) lines.push(appElement("small", message || "启用条件已记录。仍需由主人单独启动 Agent。"));
+      if (["blocked", "confirmed"].includes(value?.status)) lines.push(appSetupButton("重新核对启用条件", () => readActivation()));
+      activationResult.replaceChildren(...lines);
+    }
+    async function readActivation() {
+      if (activationLoading) return;
+      activationLoading = true;
+      activationResult.replaceChildren(appElement("small", "正在核对启用条件…"));
+      try {
+        activation = await request(legacyImportURL + "/activation");
+        renderActivation();
+      } catch (error) {
+        activation = null;
+        activationResult.replaceChildren(
+          appElement("small", error.message),
+          appSetupButton("重新核对启用条件", () => readActivation())
+        );
+      } finally {
+        activationLoading = false;
       }
     }
     function currentImportPrerequisites() {
@@ -628,14 +750,14 @@
       actions.append(appSetupButton("核对旧会话记忆", () => readLegacyMemory()));
     }
     actions.append(preview);
-    body.append(note, actions, result, receiptResult, memoryResult);
+    body.append(note, actions, result, activationResult, receiptResult, memoryResult);
     panel.append(body);
     return panel;
   }
   function appWorkerControls(id, status) {
     const panel = appElement("div", "", "app-worker");
     const buttons = appElement("div", "", "app-worker-actions");
-    const running = ["running", "waiting_login", "stopping"].includes(status.worker);
+    const running = ["running", "waiting_login", "stopping", "cutover_blocked"].includes(status.worker);
     const edit = appSetupButton(apps.editWorker === id ? "收起回复范围" : "设置回复范围", () => {
       apps.editWorker = apps.editWorker === id ? "" : id;
       renderApps();
