@@ -494,10 +494,11 @@ def verify(binary, output):
                 worker_policy_pattern = status_pattern + "/policy"
                 worker_lifecycle_pattern = status_pattern + "/lifecycle"
                 worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "group_rules": [], "contact_read": False, "actions": [], "policy_payloads": []}
-                legacy = {"availability": "available", "previews": 0, "posts": []}
+                legacy = {"availability": "available", "previews": 0, "posts": [], "source_removed": False}
                 legacy_memory = {"requests": []}
                 legacy_memory_selection = {"gets": [], "posts": []}
                 legacy_group_rule = {"gets": [], "posts": []}
+                legacy_receipts = {"pages": [], "lookups": [], "filters": []}
 
                 def legacy_plan(applied=False):
                     refreshed = legacy["availability"] == "applied" and legacy["previews"] >= 3
@@ -572,9 +573,68 @@ def verify(binary, output):
                         fulfill_json({"error": "stale legacy preview"}, status=409)(route)
                         return
                     legacy["availability"] = "applied"
+                    legacy["source_removed"] = True
                     fulfill_json(legacy_plan(True))(route)
 
                 page.route(legacy_import_pattern, legacy_import)
+                legacy_receipts_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/legacy-import/receipts(?:/[^/?]+)?(?:\?.*)?$")
+                long_legacy_key = "legacy-accepted-" + "a" * 110
+
+                def legacy_receipt_records(route):
+                    assert route.request.method == "GET", "legacy receipt inspection must stay read-only"
+                    assert legacy["availability"] == "applied" and legacy["source_removed"], "legacy snapshot must remain readable after source removal"
+                    parsed = urlparse(route.request.url)
+                    path = parsed.path
+                    if path.endswith("/legacy-import/receipts"):
+                        query = parse_qs(parsed.query, keep_blank_values=True)
+                        assert query.get("limit") == ["20"]
+                        after = query.get("after", [""])[0]
+                        pending_only = query.get("pending", [""])[0] == "1"
+                        legacy_receipts["pages"].append(after)
+                        legacy_receipts["filters"].append(pending_only)
+                        if pending_only:
+                            fulfill_json({"items": [{"idempotency_key": "legacy-unknown", "conversation_id": "synthetic-room@chatroom",
+                                                     "kind": "text", "state": "submission_unknown", "lookup": "legacy_snapshot",
+                                                     "operation_id": "legacy-operation-unknown"}], "snapshot": "fixture-legacy-receipts-v1",
+                                          "coverage": "legacy_snapshot", "pending_count": 2, "receipt_count": 4})(route)
+                            return
+                        if after == "fixture-legacy-stale":
+                            fulfill_json({"error": "stale legacy receipt snapshot"}, status=409)(route)
+                            return
+                        if after == "fixture-legacy-next":
+                            fulfill_json({"items": [{"idempotency_key": "legacy-complete", "conversation_id": "synthetic-room@chatroom",
+                                                         "kind": "text", "state": "accepted", "lookup": "legacy_snapshot",
+                                                         "server_id": "legacy-server-3"}], "snapshot": "fixture-legacy-receipts-v2",
+                                          "coverage": "legacy_snapshot", "pending_count": 2, "receipt_count": 4})(route)
+                            return
+                        next_after = "fixture-legacy-stale" if legacy_receipts["pages"].count("") == 1 else "fixture-legacy-next"
+                        fulfill_json({"items": [
+                            {"idempotency_key": "legacy-pending", "conversation_id": "synthetic-room@chatroom",
+                             "kind": "voice", "state": "submitted_pending", "lookup": "legacy_snapshot",
+                             "operation_id": "legacy-operation-1", "accepted_parts": [{"index": 0, "server_id": "legacy-server-1"}],
+                             "unconfirmed_parts": [{"index": 1, "state": "submitted_pending"}], "parts_incomplete": True},
+                            {"idempotency_key": long_legacy_key, "conversation_id": "synthetic-direct@chatroom",
+                             "kind": "file", "state": "accepted", "lookup": "legacy_snapshot", "server_id": "legacy-server-2"},
+                            {"idempotency_key": "legacy-unknown", "conversation_id": "synthetic-room@chatroom",
+                             "kind": "text", "state": "submission_unknown", "lookup": "legacy_snapshot",
+                             "operation_id": "legacy-operation-unknown"}
+                        ], "next_after": next_after, "snapshot": "fixture-legacy-receipts-v1",
+                                      "coverage": "legacy_snapshot", "pending_count": 2, "receipt_count": 4})(route)
+                        return
+                    key = unquote(path.rsplit("/", 1)[-1])
+                    legacy_receipts["lookups"].append(key)
+                    assert key in {"legacy-pending", "legacy-unknown"}
+                    if key == "legacy-unknown":
+                        fulfill_json({"idempotency_key": "legacy-unknown", "conversation_id": "synthetic-room@chatroom",
+                                      "kind": "text", "state": "submission_unknown", "lookup": "not_found",
+                                      "operation_id": "legacy-operation-unknown"})(route)
+                        return
+                    fulfill_json({"idempotency_key": "legacy-pending", "conversation_id": "synthetic-room@chatroom",
+                                  "kind": "voice", "state": "accepted", "lookup": "platform", "operation_id": "legacy-operation-1",
+                                  "server_id": "legacy-server-4", "accepted_parts": [{"index": 0, "server_id": "legacy-server-1"},
+                                                                                          {"index": 1, "server_id": "legacy-server-4"}]})(route)
+
+                page.route(legacy_receipts_pattern, legacy_receipt_records)
                 legacy_group_rule_pattern = legacy_import_pattern + "/groups/*/rule"
 
                 def legacy_group_rule_import(route):
@@ -751,6 +811,31 @@ def verify(binary, output):
                 page.get_by_text("目标登录：已登录且在线", exact=True).wait_for()
                 page.get_by_text("身份确认：仍需主人确认实际微信身份", exact=True).wait_for()
                 assert legacy["previews"] == 3 and len(legacy["posts"]) == 2, "cutover refresh must remain read-only"
+                # Delivery records remain usable from the imported snapshot after the old source is removed.
+                page.get_by_role("button", name="查看旧版投递回执", exact=True).click()
+                page.get_by_text("快照内回执：4；待核对：2", exact=True).wait_for()
+                assert page.get_by_text("状态来源：旧版保存的快照，尚未从当前微信查询", exact=True).count() == 3
+                page.set_viewport_size({"width": 375, "height": 800})
+                long_receipt = page.locator(".legacy-receipt-row").filter(has_text=long_legacy_key)
+                expect(long_receipt).to_be_visible()
+                assert long_receipt.evaluate("row => row.scrollWidth <= row.clientWidth + 1"), "long legacy receipt ID must wrap inside the narrow card"
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.locator(".legacy-memory-scope").filter(has=page.get_by_text("投递编号 legacy-pending", exact=True)).get_by_role("button", name="核对原操作", exact=True).click()
+                page.get_by_text("状态来源：已从当前微信平台查询", exact=True).wait_for()
+                page.locator(".legacy-memory-scope").filter(has=page.get_by_text("投递编号 legacy-unknown", exact=True)).get_by_role("button", name="核对原操作", exact=True).click()
+                page.get_by_text("状态来源：已查询当前原生记录，未找到旧操作；不推断是否送达", exact=True).wait_for()
+                page.get_by_text("文字 · 发送结果待核对", exact=True).wait_for()
+                assert legacy_receipts["lookups"] == ["legacy-pending", "legacy-unknown"], "legacy receipt lookup must only read the original operation"
+                page.get_by_role("button", name="读取下一页旧回执", exact=True).click()
+                page.get_by_text("旧版回执快照已变化，请从第一页重新读取。", exact=True).wait_for()
+                page.get_by_role("button", name="从第一页重新读取", exact=True).click()
+                page.get_by_role("button", name="读取下一页旧回执", exact=True).click()
+                page.get_by_text("会话：synthetic-room@chatroom", exact=True).wait_for()
+                assert legacy_receipts["pages"] == ["", "fixture-legacy-stale", "", "fixture-legacy-next"], "stale legacy cursor must restart from the first page"
+                page.get_by_label("只看待核对", exact=True).check()
+                page.get_by_text("快照内回执：4；待核对：2", exact=True).wait_for()
+                assert page.locator(".legacy-memory-scope").filter(has_text="发送结果待核对").count() == 1, "pending filter must only retain unresolved legacy receipts"
+                assert legacy_receipts["filters"][-1] is True and legacy_receipts["pages"][-1] == "", "pending filter must restart at the first legacy receipt page"
                 page.get_by_role("button", name="核对旧会话记忆", exact=True).click()
                 page.get_by_role("button", name="核对旧群备注", exact=True).click()
                 page.get_by_text(note_text, exact=True).wait_for()
@@ -802,6 +887,7 @@ def verify(binary, output):
                 assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True,
                                                    "reply_settings": {"mode": "all", "prefix": "!fish ", "persona": "旧版群角色 <原样显示>",
                                                                       "force_reply_when_mentioned": True}}]
+                page.locator("#apps-list[aria-busy='false']").wait_for()
                 page.get_by_text("触发方式与角色（可选）", exact=True).click()
                 assert page.get_by_role("combobox", name="synthetic-room@chatroom 群聊触发方式", exact=True).input_value() == "all"
                 assert page.get_by_role("textbox", name="synthetic-room@chatroom 群聊触发前缀", exact=True).input_value() == "!fish "

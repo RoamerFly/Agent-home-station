@@ -79,7 +79,7 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 	}
 	row, found := evidence[key]
 	if !found {
-		return s.readLegacyReceipt(ctx, id, key, native, w.dir)
+		return s.readLegacyReceipt(ctx, id, key, native)
 	}
 	result := apphost.Receipt{
 		ResumedFrom:     row.ResumedFrom,

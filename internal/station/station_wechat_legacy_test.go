@@ -67,7 +67,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	write(filepath.Join(snapshot, "admin", "accounts", wechatapp.AccountDirectory("four"), "config.json"), []byte(rawConfig))
 	write(filepath.Join(snapshot, "admin", "accounts", wechatapp.AccountDirectory("five"), "config.json"), []byte(rawConfig))
 	queuePath := filepath.Join(snapshot, "bot-state", "messages-v2.json")
-	const rawQueue = `{"version":1,"server":"old-dataset","account":"one","inbox":[{"phase":"received"}],"deliveries":[{"key":"legacy-accepted","id":"job-accepted","thread":"filehelper","state":"accepted","server_id":"69123","text":"do-not-import-old-body","input":{"account":"one","thread":"filehelper"}},{"key":"legacy-pending","id":"job-pending","thread":"filehelper","state":"waiting","text":"do-not-import-old-draft","input":{"account":"one","thread":"filehelper"}}]}`
+	const rawQueue = `{"version":1,"server":"old-dataset","account":"one","inbox":[{"phase":"received"}],"deliveries":[{"key":"legacy-accepted","id":"job-accepted","thread":"filehelper","state":"accepted","server_id":"69123","text":"do-not-import-old-body","input":{"account":"one","thread":"filehelper"}},{"key":"legacy-operation-unknown","id":"","thread":"filehelper","state":"waiting","text":"do-not-import-old-unknown","input":{"account":"one","thread":"filehelper"}},{"key":"legacy-pending","id":"job-pending","thread":"filehelper","state":"waiting","text":"do-not-import-old-draft","input":{"account":"one","thread":"filehelper"}}]}`
 	write(queuePath, []byte(rawQueue))
 	write(filepath.Join(snapshot, "bot-state", "checkpoint.json"), []byte(`{"version":1,"server_id":"old-dataset","account":"one","cursor":"62"}`))
 	write(filepath.Join(snapshot, "bot-state", "accounts", wechatapp.AccountDirectory("three"), "messages-v2.json"), []byte(strings.ReplaceAll(rawQueue, `"account":"one"`, `"account":"two"`)))
@@ -75,6 +75,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	write(filepath.Join(snapshot, "bot-state", "accounts", wechatapp.AccountDirectory("four"), "messages-v2.json"), []byte(sameQueue))
 
 	var sideEffects, receiptReads atomic.Int32
+	var daemonOffline atomic.Bool
 	var loginOnline atomic.Bool
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer synthetic-legacy-native-token" {
@@ -85,6 +86,10 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		if r.Method != http.MethodGet {
 			sideEffects.Add(1)
 			w.WriteHeader(400)
+			return
+		}
+		if daemonOffline.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		switch r.URL.Path {
@@ -132,6 +137,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	h, f := open()
 	route := func(id string) string { return "/api/apps/wechat/connections/" + wechatapp.ConnectionID(id) }
 	planRoute := func(id string) string { return route(id) + "/legacy-import" }
+	legacyReceiptRoute := func(id string) string { return planRoute(id) + "/receipts" }
 	req := func(method, path string, input any, csrf bool, want int) map[string]any {
 		t.Helper()
 		code, body := f.request(method, path, input, csrf)
@@ -143,6 +149,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	memoryRoute := func(account string) string { return planRoute(account) + "/memory" }
 	ruleRoute := func(account, thread string) string { return planRoute(account) + "/groups/" + thread + "/rule" }
 	req("GET", planRoute("one"), nil, false, 401)
+	req("GET", legacyReceiptRoute("one"), nil, false, 401)
 	req("GET", memoryRoute("one"), nil, false, 401)
 	req("GET", memoryRoute("one")+"/123@chatroom/preference", nil, false, 401)
 	req("GET", ruleRoute("one", "124@chatroom"), nil, false, 401)
@@ -280,7 +287,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	req("POST", planRoute("one"), planDigest(plan), true, 409)
 	assertCutover(req("GET", planRoute("one"), nil, false, 200), "stop_record_matched", "mismatch", "signed_out")
 	write(receiptPath, receiptJSON)
-	if plan["legacy_enabled"] != true || plan["same_native_dataset"] != false || plan["receipt_records"] != float64(2) || plan["unresolved_receipts"] != float64(1) ||
+	if plan["legacy_enabled"] != true || plan["same_native_dataset"] != false || plan["receipt_records"] != float64(3) || plan["unresolved_receipts"] != float64(2) ||
 		!bytes.Equal(j(plan["suggested_reply_threads"]), []byte(`["123@chatroom","filehelper","friend-one"]`)) || strings.Contains(string(j(plan)), "synthetic-do-not-copy") {
 		t.Fatal(plan)
 	}
@@ -308,13 +315,85 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if pending["state"] != "submission_unknown" || pending["lookup"] != "legacy_snapshot" || receiptReads.Load() != 0 {
 		t.Fatal(pending)
 	}
+	// The legacy archive is an independent, local snapshot. Listing it never
+	// reaches the native client, and its cursor is scoped to both the imported
+	// connection and the selected filter.
+	req("GET", legacyReceiptRoute("one")+"?limit=0", nil, false, 400)
+	req("GET", legacyReceiptRoute("one")+"?limit=201", nil, false, 400)
+	req("GET", legacyReceiptRoute("one")+"?after=not-a-cursor", nil, false, 400)
+	legacyPage := req("GET", legacyReceiptRoute("one")+"?limit=2", nil, false, 200)
+	if legacyPage["coverage"] != "legacy_snapshot" || legacyPage["receipt_count"] != float64(3) || legacyPage["pending_count"] != float64(2) || legacyPage["snapshot"] == nil {
+		t.Fatal("legacy receipt page omitted snapshot metadata", legacyPage)
+	}
+	legacyItems, ok := legacyPage["items"].([]any)
+	if !ok || len(legacyItems) != 2 {
+		t.Fatal("legacy receipt page did not paginate", legacyPage)
+	}
+	firstLegacy := legacyItems[0].(map[string]any)
+	if firstLegacy["idempotency_key"] != "legacy-accepted" || firstLegacy["state"] != "accepted" || firstLegacy["lookup"] != "legacy_snapshot" {
+		t.Fatal("terminal receipt was not preserved as an archive snapshot", firstLegacy)
+	}
+	if unknown := legacyItems[1].(map[string]any); unknown["idempotency_key"] != "legacy-operation-unknown" || unknown["state"] != "submission_unknown" || unknown["lookup"] != "legacy_snapshot" {
+		t.Fatal("old retry key was not retained as a pending archive snapshot", unknown)
+	}
+	legacyCursor, ok := legacyPage["next_after"].(string)
+	if !ok || legacyCursor == "" {
+		t.Fatal("legacy receipt cursor missing", legacyPage)
+	}
+	req("GET", legacyReceiptRoute("one")+"?after="+url.QueryEscape(legacyCursor)+"&pending=1", nil, false, 409)
+	legacySecond := req("GET", legacyReceiptRoute("one")+"?limit=2&after="+url.QueryEscape(legacyCursor), nil, false, 200)
+	secondItems := legacySecond["items"].([]any)
+	if len(secondItems) != 1 || secondItems[0].(map[string]any)["idempotency_key"] != "legacy-pending" || secondItems[0].(map[string]any)["state"] != "submission_unknown" || legacySecond["next_after"] != nil {
+		t.Fatal("legacy receipt pagination did not retain unresolved snapshot", legacySecond)
+	}
+	pendingOnly := req("GET", legacyReceiptRoute("one")+"?pending=1", nil, false, 200)
+	if pendingOnly["receipt_count"] != float64(3) || pendingOnly["pending_count"] != float64(2) || len(pendingOnly["items"].([]any)) != 2 || pendingOnly["items"].([]any)[0].(map[string]any)["idempotency_key"] != "legacy-operation-unknown" {
+		t.Fatal("pending legacy receipt filter was not local and stable", pendingOnly)
+	}
+	if unresolved := req("GET", legacyReceiptRoute("one")+"/legacy-operation-unknown", nil, false, 200); unresolved["state"] != "submission_unknown" || unresolved["lookup"] != "legacy_operation_unknown" {
+		t.Fatal("archive record without its original operation was not retained locally", unresolved)
+	}
+	if mismatched := req("GET", legacyReceiptRoute("one")+"/legacy-pending", nil, false, 200); mismatched["state"] != "submission_unknown" || mismatched["lookup"] != "legacy_dataset_mismatch" || receiptReads.Load() != 0 {
+		t.Fatal("foreign native dataset changed an imported receipt", mismatched)
+	}
+	daemonOffline.Store(true)
+	if offline := req("GET", legacyReceiptRoute("one")+"/legacy-pending", nil, false, 200); offline["state"] != "submission_unknown" || offline["lookup"] != "legacy_native_unavailable" || receiptReads.Load() != 0 {
+		t.Fatal("native outage changed the imported receipt", offline)
+	}
+	daemonOffline.Store(false)
+	if receiptReads.Load() != 0 || sideEffects.Load() != 0 {
+		t.Fatal("legacy receipt list replayed an old delivery", receiptReads.Load(), sideEffects.Load())
+	}
 	four := req("GET", planRoute("four"), nil, false, 200)
 	if four["same_native_dataset"] != true {
 		t.Fatal(four)
 	}
 	req("POST", planRoute("four"), planDigest(four), true, 200)
+	// A valid cursor from another imported connection is stale for this archive,
+	// rather than a license to enumerate a different account's old receipts.
+	req("GET", legacyReceiptRoute("four")+"?after="+url.QueryEscape(legacyCursor), nil, false, 409)
 	if recovered := req("GET", route("four")+"/receipts/legacy-pending", nil, false, 200); recovered["lookup"] != "platform" || recovered["server_id"] != "69234" {
 		t.Fatal(recovered)
+	}
+	// A current checkpoint can hold the same key with a different native job.
+	// The dedicated archive path must still resolve only the old operation.
+	currentFour := filepath.Join(app, "workers", wechatapp.ConnectionID("four"), "queue", "messages-v2.json")
+	write(currentFour, []byte(`{"version":1,"server":"new-dataset","account":"four","deliveries":[{"key":"legacy-pending","id":"current-job","thread":"filehelper","state":"accepted","server_id":"70000","input":{"account":"four","thread":"filehelper"}}]}`))
+	if current := req("GET", route("four")+"/receipts/legacy-pending", nil, false, 200); current["lookup"] != "stored" || current["operation_id"] != "current-job" || current["server_id"] != "70000" {
+		t.Fatal("current receipt lookup did not use its own checkpoint", current)
+	}
+	if archivePending := req("GET", legacyReceiptRoute("four")+"/legacy-pending", nil, false, 200); archivePending["lookup"] != "platform" || archivePending["server_id"] != "69234" {
+		t.Fatal("matching legacy operation did not use the bounded lookup", archivePending)
+	}
+	if archiveAccepted := req("GET", legacyReceiptRoute("four")+"/legacy-accepted", nil, false, 200); archiveAccepted["lookup"] != "legacy_snapshot" || archiveAccepted["state"] != "accepted" {
+		t.Fatal("terminal legacy receipt consulted the native queue", archiveAccepted)
+	}
+	if receiptReads.Load() != 2 || sideEffects.Load() != 0 {
+		t.Fatal("legacy receipt lookup ran an unexpected operation", receiptReads.Load(), sideEffects.Load())
+	}
+	unknownCode, unknown := f.request("GET", legacyReceiptRoute("four")+"/missing-legacy-operation", nil, false)
+	if unknownCode != http.StatusNotFound || receiptReads.Load() != 2 {
+		t.Fatal("unknown legacy key was not contained by the archive guard", unknownCode, unknown)
 	}
 	req("GET", route("three")+"/receipts/legacy-accepted", nil, false, 404)
 	target := filepath.Join(app, "workers", wechatapp.ConnectionID("one"))
@@ -627,8 +706,9 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal("saved migration report was not available after detaching the source")
 	}
 	if req("GET", route("one")+"/receipts/legacy-accepted", nil, false, 200)["state"] != "accepted" ||
+		req("GET", legacyReceiptRoute("one")+"?limit=200", nil, false, 200)["receipt_count"] != float64(3) ||
 		req("GET", route("one"), nil, false, 200)["connection"].(map[string]any)["worker"] != "paused" ||
-		sideEffects.Load() != 0 || receiptReads.Load() != 1 {
+		sideEffects.Load() != 0 || receiptReads.Load() != 2 {
 		t.Fatal("migration was not durable or triggered native side effects")
 	}
 }

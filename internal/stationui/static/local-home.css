@@ -304,6 +304,10 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .identity-details { padding-top: 5px; border-top: 1px solid var(--line); }
 .identity-details summary { padding: 13px 0; cursor: pointer; color: var(--muted); font-size: .87rem; font-weight: 750; }
 .identity-details .details-grid { padding-bottom: 4px; }
+.legacy-receipt-list, .legacy-receipt-row { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.legacy-receipt-list:empty { display: none; }
+.legacy-receipt-row { padding: 8px 0; border-top: 1px solid var(--line); }
+.legacy-receipt-list .button { justify-self: start; }
 .group-rule-advanced { margin-top: 2px; border-top: 1px solid var(--line); }
 .group-rule-advanced summary { padding: 9px 0; cursor: pointer; color: var(--muted); font-size: .8rem; font-weight: 750; }
 .group-rule-advanced .details-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding: 2px 0 7px; }

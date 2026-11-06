@@ -17,7 +17,6 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/identity"
-	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -58,6 +57,8 @@ type legacyImportArchive struct {
 	Plan         legacyImportPlan           `json:"plan"`
 	LegacyServer string                     `json:"legacy_server"`
 	Receipts     map[string]apphost.Receipt `json:"receipts"`
+	// Native source identifiers are private lookup evidence, never part of a receipt response.
+	ReceiptSources map[string]string `json:"receipt_sources,omitempty"`
 }
 
 type legacyImportPolicy struct {
@@ -316,10 +317,16 @@ func (s *stationWechat) previewLegacyImport(ctx context.Context, id string) (leg
 		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, account), ConversationID: row.Status.ThreadID, ResumedFrom: row.ResumedFrom,
 			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "legacy_snapshot"}}
 		wechatapp.ProjectDeliveryReceipt(&receipt.DeliveryReceipt, row.Status)
-		if receipt.State == "submission_unknown" || receipt.State == "submitted_pending" {
+		if legacyReceiptPending(receipt) {
 			archive.Plan.Unresolved++
 		}
 		archive.Receipts[key] = receipt
+		if identity.ValidPathID(row.SourceID) {
+			if archive.ReceiptSources == nil {
+				archive.ReceiptSources = make(map[string]string)
+			}
+			archive.ReceiptSources[key] = row.SourceID
+		}
 	}
 	archive.Plan.Receipts = len(archive.Receipts)
 	cutover, cutoverDigests := s.checkLegacyCutover(ctx, id, native, root, source, oldServer)
@@ -471,38 +478,4 @@ func (s *stationWechat) applyLegacyImport(ctx context.Context, id, digest string
 		return legacyImportPlan{}, errLegacyImportConflict
 	}
 	return archive.Plan, nil
-}
-
-func (s *stationWechat) readLegacyReceipt(ctx context.Context, id, key string, native *linuxnative.Sender, dir string) (apphost.Receipt, error) {
-	root, err := workspacefs.OpenPath(dir)
-	if err != nil {
-		return apphost.Receipt{}, apphost.ErrUnavailable
-	}
-	defer root.Close()
-	archive, err := readLegacyImportArchive(root)
-	if errors.Is(err, os.ErrNotExist) {
-		return apphost.Receipt{}, apphost.ErrNotFound
-	}
-	if err != nil || archive.Plan.Account != native.Account() {
-		return apphost.Receipt{}, apphost.ErrUnavailable
-	}
-	receipt, found := archive.Receipts[key]
-	if !found {
-		return apphost.Receipt{}, apphost.ErrNotFound
-	}
-	if receipt.ConnectionRef != s.connectionRef(id, native.Account()) || receipt.IdempotencyKey != key {
-		return apphost.Receipt{}, apphost.ErrUnavailable
-	}
-	if archive.LegacyServer == "" || receipt.OperationID == "" || receipt.State != "submission_unknown" && receipt.State != "submitted_pending" {
-		return receipt, nil
-	}
-	status, err := native.DaemonStatus(ctx)
-	if err != nil || status.ServerID != archive.LegacyServer {
-		return receipt, nil
-	}
-	// Only the original known native operation can resolve an imported
-	// unknown receipt. Never run the old draft or search a different dataset.
-	stored := linuxnative.ToolStatus{ID: receipt.OperationID, Kind: receipt.Kind, ThreadID: receipt.ConversationID, State: receipt.PlatformState}
-	wechatapp.LookupDeliveryReceipt(ctx, native, receipt.ConversationID, "", stored, true, &receipt.DeliveryReceipt)
-	return receipt, nil
 }

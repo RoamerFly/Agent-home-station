@@ -243,6 +243,7 @@
     const note = appElement("small", stateCopy[availability] || "旧版接入状态暂不可读。");
     const result = appElement("div", "");
     const memoryResult = appElement("div", "", "legacy-memory-result");
+    const receiptResult = appElement("div", "", "legacy-receipt-list");
     const actions = appElement("div", "", "app-worker-actions");
     const legacyImportURL = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import";
     const preview = appSetupButton(availability === "applied" ? "查看接入摘要" : "查看接入预演", async () => {
@@ -311,6 +312,8 @@
         ...cutoverLines,
         message ? appElement("small", message) : document.createTextNode("")
       );
+      if (value.applied) renderLegacyReceipts();
+      else receiptResult.replaceChildren();
       const confirm = actions.querySelector("[data-legacy-confirm]");
       if (confirm) confirm.remove();
       if (availability !== "available" || value.applied || !value.digest) return;
@@ -339,6 +342,130 @@
       });
       apply.dataset.legacyConfirm = "true";
       actions.append(apply);
+    }
+    function legacyReceiptState(item) {
+      const states = {
+        accepted: "微信已接受",
+        completed: "已完成",
+        submitted_pending: "等待微信回执",
+        submission_unknown: "发送结果待核对",
+        not_submitted: "尚未提交",
+        failed: "发送失败",
+        cancelled: "已取消"
+      };
+      return states[item?.state] || "状态待核对";
+    }
+    function legacyReceiptLookup(item) {
+      const lookups = {
+        legacy_snapshot: "旧版保存的快照，尚未从当前微信查询",
+        platform: "已从当前微信平台查询",
+        not_found: "已查询当前原生记录，未找到旧操作；不推断是否送达",
+        unavailable: "当前无法查询平台状态",
+        identity_mismatch: "当前账号与旧资料身份不匹配",
+        legacy_native_unavailable: "旧版原生资料不可用",
+        legacy_dataset_mismatch: "旧资料集与当前连接不匹配",
+        legacy_operation_unknown: "旧版未保留可查询的操作标识"
+      };
+      return lookups[item?.lookup] || "查询来源待核对";
+    }
+    function legacyReceiptNeedsLookup(item) {
+      return Boolean(item?.parts_incomplete || ["submitted_pending", "submission_unknown"].includes(item?.state));
+    }
+    let legacyReceiptPage = null, legacyReceiptLoading = false, legacyReceiptPendingOnly = false;
+    function legacyReceiptURL(after = "") {
+      const params = new URLSearchParams({ limit: "20" });
+      if (after) params.set("after", after);
+      if (legacyReceiptPendingOnly) params.set("pending", "1");
+      return legacyImportURL + "/receipts?" + params.toString();
+    }
+    function renderLegacyReceipts(message = "") {
+      const page = legacyReceiptPage;
+      if (!page) {
+        receiptResult.replaceChildren(
+          appElement("strong", "旧版投递回执"),
+          appElement("small", "只读查看旧版保存的投递快照；不会重新发送、取消或重试。"),
+          appSetupButton("查看旧版投递回执", () => readLegacyReceipts())
+        );
+        return;
+      }
+      const items = Array.isArray(page.items) ? page.items : [];
+      const kinds = { text: "文字", voice: "语音", image: "图片", video: "视频", file: "文件" };
+      const rows = items.map((item) => {
+        const row = appElement("div", "", "legacy-memory-scope legacy-receipt-row");
+        const key = typeof item?.idempotency_key === "string" ? item.idempotency_key : "";
+        row.append(
+          appElement("strong", `${kinds[item?.kind] || "投递"} · ${legacyReceiptState(item)}`),
+          appElement("small", `会话：${item?.conversation_id || "未知"}`),
+          appElement("small", `状态来源：${legacyReceiptLookup(item)}`)
+        );
+        if (key) row.append(appElement("small", `投递编号 ${key}`));
+        const parts = [];
+        if (Array.isArray(item?.accepted_parts) && item.accepted_parts.length) parts.push(`已接受 ${item.accepted_parts.length} 段`);
+        if (Array.isArray(item?.unconfirmed_parts) && item.unconfirmed_parts.length) parts.push(`待核对 ${item.unconfirmed_parts.length} 段`);
+        if (item?.parts_incomplete) parts.push("分段记录不完整");
+        if (item?.cancel_requested) parts.push("已请求停止后续投递");
+        if (parts.length) row.append(appElement("small", parts.join("；")));
+        if (legacyReceiptNeedsLookup(item) && key) {
+          const lookup = appSetupButton("核对原操作", async () => {
+            lookup.disabled = true;
+            try {
+              const receipt = await request(legacyImportURL + "/receipts/" + encodeURIComponent(key));
+              const index = Array.isArray(legacyReceiptPage?.items) ? legacyReceiptPage.items.indexOf(item) : -1;
+              if (index < 0 || !receipt || typeof receipt !== "object") return;
+              legacyReceiptPage.items[index] = receipt;
+              renderLegacyReceipts("已重新读取这条旧版回执；未成功查询时仍保留旧快照状态。 ");
+            } catch (error) {
+              row.append(appElement("small", error.message));
+            } finally {
+              lookup.disabled = false;
+            }
+          });
+          row.append(appElement("small", "只查询当前原生端保存的同一操作；不会重新发送，也不从未找到的结果推断是否送达。"), lookup);
+        }
+        return row;
+      });
+      const next = typeof page.next_after === "string" && page.next_after
+        ? appSetupButton("读取下一页旧回执", () => readLegacyReceipts(page.next_after)) : null;
+      const pendingOnly = document.createElement("input");
+      pendingOnly.type = "checkbox";
+      pendingOnly.checked = legacyReceiptPendingOnly;
+      const pendingLabel = document.createElement("label");
+      pendingLabel.append(pendingOnly, document.createTextNode("只看待核对"));
+      pendingOnly.addEventListener("change", () => {
+        legacyReceiptPendingOnly = pendingOnly.checked;
+        legacyReceiptPage = null;
+        readLegacyReceipts();
+      });
+      receiptResult.replaceChildren(
+        appElement("strong", "旧版投递回执"),
+        appElement("p", `快照内回执：${Number(page.receipt_count || items.length)}；待核对：${Number(page.pending_count || 0)}`),
+        appElement("small", page.coverage === "legacy_snapshot" ? "这些记录来自旧版快照；平台查询结果会单独显示。" : "回执覆盖范围待核对。"),
+        pendingLabel,
+        ...rows,
+        message ? appElement("small", message.trim()) : document.createTextNode(""),
+        next || document.createTextNode("")
+      );
+    }
+    async function readLegacyReceipts(after = "") {
+      if (legacyReceiptLoading) return;
+      legacyReceiptLoading = true;
+      receiptResult.replaceChildren(appElement("small", "正在读取旧版投递回执…"));
+      try {
+        legacyReceiptPage = await request(legacyReceiptURL(after));
+        renderLegacyReceipts();
+      } catch (error) {
+        if (error.status === 409 && after) {
+          legacyReceiptPage = null;
+          receiptResult.replaceChildren(
+            appElement("small", "旧版回执快照已变化，请从第一页重新读取。"),
+            appSetupButton("从第一页重新读取", () => readLegacyReceipts())
+          );
+        } else {
+          receiptResult.replaceChildren(appElement("small", error.message));
+        }
+      } finally {
+        legacyReceiptLoading = false;
+      }
     }
     function currentImportPrerequisites() {
       const policy = connection.configured_policy || {};
@@ -501,7 +628,7 @@
       actions.append(appSetupButton("核对旧会话记忆", () => readLegacyMemory()));
     }
     actions.append(preview);
-    body.append(note, actions, result, memoryResult);
+    body.append(note, actions, result, receiptResult, memoryResult);
     panel.append(body);
     return panel;
   }
