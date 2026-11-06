@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "observation.search",
+      "implementation": "ready",
+      "description": "从抖音官方接口分页读取获准关键词的公开视频搜索结果",
+      "permissions": [
+        "network"
+      ],
+      "discoverable": true,
+      "requires_owner_setting": "enabled"
+    }
+  ]
+}

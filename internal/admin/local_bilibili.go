@@ -3,29 +3,10 @@ package admin
 import (
 	"errors"
 	"net/http"
-	"path/filepath"
 
 	biliapp "wechat-bot/connected-apps/bilibili/adapter"
 	"wechat-bot/internal/apphost"
 )
-
-func (h *localHomeService) bindBundledBilibili(registry apphost.Registry) (apphost.Registry, error) {
-	if _, registered := registry.Lookup(biliapp.ID); registered {
-		return registry, nil
-	}
-	if _, _, err := h.verifyAppSource(biliapp.ID); err != nil {
-		return registry, nil
-	}
-	bili := biliapp.New(filepath.Join(h.dataDir, "apps", biliapp.ID))
-	version, transcribe := h.localBilibiliAudioCallbacks()
-	bili.SetAudioTranscriber(version, transcribe)
-	entries := make([]apphost.Registration, 0, len(registry.Applications())+1)
-	for _, app := range registry.Applications() {
-		entry, _ := registry.Lookup(app.ID)
-		entries = append(entries, entry)
-	}
-	return apphost.New(append(entries, bili.Registration())...)
-}
 
 func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registry apphost.Registry) {
 	entry, ok := registry.Lookup(biliapp.ID)

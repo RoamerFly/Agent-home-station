@@ -30,10 +30,11 @@ const (
 	ObservationAudio    ObservationField = "audio"
 	ObservationPlayback ObservationField = "playback"
 	ObservationPageText ObservationField = "page_text"
+	ObservationSearch   ObservationField = "search"
 )
 
 func (f ObservationField) valid() bool {
-	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback || f == ObservationPageText
+	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch
 }
 
 type ObservationTarget struct {
@@ -65,6 +66,7 @@ type ObservationChunk struct {
 	Position    int    `json:"position"`
 	Text        string `json:"text"`
 	SourceID    string `json:"source_id,omitempty"`
+	SourceURL   string `json:"source_url,omitempty"`
 	PublishedAt string `json:"published_at,omitempty"`
 }
 type PlaybackInterval struct {
@@ -121,6 +123,7 @@ type ObservationInput struct {
 	ContentID    string           `json:"content_id"`
 	Field        ObservationField `json:"field"`
 	Limit        int              `json:"limit,omitempty"`
+	Refresh      bool             `json:"refresh,omitempty"`
 }
 type ObservationResult struct {
 	ConnectionRef
@@ -155,6 +158,9 @@ var (
 	ErrObservationAudioDecode           = errors.New("公开媒体的音轨解码失败，可从原位置重试")
 	ErrObservationAudioTranscription    = errors.New("本地语音识别失败，可检查工具配置后从原位置重试")
 	ErrObservationAudioSourceChanged    = errors.New("平台返回的媒体与上一页不同，需重新开启当前读取授权后从头读取")
+	ErrObservationSearchPageSize        = errors.New("抖音搜索每页支持 1–50 条，续读请省略 limit 或沿用首页条数")
+	ErrObservationCredentialExpired     = errors.New("抖音应用令牌无效或已过期，请由主人更新本机配置")
+	ErrObservationCapabilityDenied      = errors.New("抖音开放平台未授予当前应用搜索能力，请核对应用权限")
 )
 
 type observationCheckpoint struct {
@@ -240,7 +246,7 @@ func (o *Observer) discover(ctx context.Context, firstOnly bool) []ObservationTa
 				if len(target.Fields) == 0 {
 					continue
 				}
-				if !containsObservationField(target.Fields, ObservationTitle) {
+				if !containsObservationField(target.Fields, ObservationTitle) && !containsObservationField(target.Fields, ObservationSearch) {
 					target.Label = ""
 				}
 				result = append(result, target)
@@ -272,7 +278,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := ctx.Err(); err != nil {
 		return ObservationResult{}, err
 	}
-	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 {
+	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch {
 		return ObservationResult{}, ErrObservationInvalid
 	}
 	o.mu.Lock()
@@ -286,7 +292,11 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 		playbackLimit = in.Limit
 	}
 	key := observationKey(ref, in.ContentID, in.Field, grant.Version, playbackLimit)
-	checkpoint, existed, err := o.load(key)
+	var checkpoint observationCheckpoint
+	var existed bool
+	if !in.Refresh {
+		checkpoint, existed, err = o.load(key)
+	}
 	if err != nil {
 		return ObservationResult{}, errors.New("应用观察进度不可用")
 	}
@@ -310,6 +320,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 			ErrObservationPlaybackSize, ErrObservationUpstreamUnavailable, ErrObservationCommentPageSize,
 			ErrObservationAudioUnavailable, ErrObservationAudioMediaUnavailable, ErrObservationAudioLimit,
 			ErrObservationAudioDecode, ErrObservationAudioTranscription, ErrObservationAudioSourceChanged,
+			ErrObservationSearchPageSize, ErrObservationCredentialExpired, ErrObservationCapabilityDenied,
 		} {
 			if errors.Is(err, known) {
 				return ObservationResult{}, known
@@ -490,8 +501,10 @@ func (o *Observer) authorize(ctx context.Context, in ObservationInput) (Observat
 	}
 	ref := ConnectionRef{AppID: entry.ID, InstallationID: entry.InstallationID, ConnectionID: connection.ID, AccountID: connection.AccountID}
 	grant, err := provider.ObservationGrant(ctx, ObservationAccess{ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field})
-	if errors.Is(err, ErrObservationAudioUnavailable) {
-		return nil, ConnectionRef{}, ObservationGrant{}, ErrObservationAudioUnavailable
+	for _, known := range []error{ErrObservationAudioUnavailable, ErrObservationCredentialExpired, ErrObservationCapabilityDenied} {
+		if errors.Is(err, known) {
+			return nil, ConnectionRef{}, ObservationGrant{}, known
+		}
 	}
 	if err != nil || !grant.Allowed || strings.TrimSpace(grant.Version) == "" {
 		return nil, ConnectionRef{}, ObservationGrant{}, ErrObservationForbidden

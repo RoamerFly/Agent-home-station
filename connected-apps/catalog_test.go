@@ -200,3 +200,27 @@ func TestWeChatApplicationSourceKeepsExactQuoteMediaAndScope(t *testing.T) {
 		t.Fatal("quote source was read after revocation", reads, err)
 	}
 }
+
+func TestDouyinSourceDeclaresOnlyOfficialVideoSearch(t *testing.T) {
+	contract, err := Lookup("douyin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := pluginhost.VerifyDescriptor("douyin", "app.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var browser struct {
+		Routes []json.RawMessage `json:"browser_routes"`
+	}
+	raw, err := descriptors.ReadFile("douyin/app.json")
+	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 0 {
+		t.Fatalf("Douyin descriptor unexpectedly includes a browser route: %v", err)
+	}
+	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||
+		len(p.HTTPRoutes) != 1 ||
+		p.HTTPRoutes[0].Endpoint != "https://open.douyin.com/dy_open_api/v1/search/video/" ||
+		!reflect.DeepEqual(p.HTTPRoutes[0].Capabilities, []string{"observation.search"}) {
+		t.Fatalf("unexpected Douyin application routes: %+v", p.HTTPRoutes)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 
 	"wechat-bot/internal/pluginhost"
 )
@@ -21,8 +22,10 @@ type Contract struct {
 	Digest  string
 }
 
+func IDs() []string { return []string{"wechat", "bilibili", "douyin"} }
+
 func Lookup(id string) (Contract, error) {
-	if id != "wechat" && id != "bilibili" {
+	if !slices.Contains(IDs(), id) {
 		return Contract{}, errors.New("应用不在本机发行目录中")
 	}
 	data, err := descriptors.ReadFile(id + "/app.json")

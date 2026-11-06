@@ -164,3 +164,29 @@ func TestObservationAudioProofBindsWindowAndSource(t *testing.T) {
 		t.Fatalf("verified retry=%+v error=%v", result, err)
 	}
 }
+
+func TestObservationSearchRefreshRestartsOnlyOnRequest(t *testing.T) {
+	f := &observationFixture{allowed: true, version: "v1", pages: map[string]ObservationPage{
+		"":     {Chunks: []ObservationChunk{{Text: "first"}}, Coverage: "first page", NextCursor: "next"},
+		"next": {Chunks: []ObservationChunk{{Text: "last"}}, Coverage: "last page", Complete: true},
+	}}
+	observer := NewObserver(observerFixtureRegistry(t, f), t.TempDir())
+	input := ObservationInput{AppID: "offline", ConnectionID: "account", ContentID: "post", Field: ObservationSearch}
+	if page, err := observer.Read(t.Context(), input); err != nil || page.Resumed || page.Complete {
+		t.Fatalf("initial search = %+v, %v", page, err)
+	}
+	if page, err := observer.Read(t.Context(), input); err != nil || !page.Resumed || !page.Complete {
+		t.Fatalf("continued search = %+v, %v", page, err)
+	}
+	if page, err := observer.Read(t.Context(), input); err != nil || !page.Cached {
+		t.Fatalf("finished search = %+v, %v", page, err)
+	}
+	input.Refresh = true
+	if page, err := observer.Read(t.Context(), input); err != nil || page.Resumed || page.Cached || page.Complete || page.Chunks[0].Text != "first" {
+		t.Fatalf("refreshed search = %+v, %v", page, err)
+	}
+	input.Field = ObservationComments
+	if _, err := observer.Read(t.Context(), input); !errors.Is(err, ErrObservationInvalid) {
+		t.Fatalf("refresh on another field = %v", err)
+	}
+}

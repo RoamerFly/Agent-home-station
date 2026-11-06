@@ -5,18 +5,51 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"time"
 
+	biliapp "wechat-bot/connected-apps/bilibili/adapter"
+	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/mcptools"
 )
 
 const localAppObservationToolName = "app_observe"
 
+func (h *localHomeService) bindBundledObservationApps(registry apphost.Registry) (apphost.Registry, error) {
+	applications := registry.Applications()
+	entries := make([]apphost.Registration, 0, len(applications)+2)
+	for _, app := range applications {
+		entry, _ := registry.Lookup(app.ID)
+		entries = append(entries, entry)
+	}
+	for _, id := range []string{biliapp.ID, douyinapp.ID} {
+		if _, registered := registry.Lookup(id); registered {
+			continue
+		}
+		if _, _, err := h.verifyAppSource(id); err != nil {
+			continue
+		}
+		dir := filepath.Join(h.dataDir, "apps", id)
+		switch id {
+		case biliapp.ID:
+			bili := biliapp.New(dir)
+			bili.SetAudioTranscriber(h.localBilibiliAudioCallbacks())
+			entries = append(entries, bili.Registration())
+		case douyinapp.ID:
+			entries = append(entries, douyinapp.New(dir).Registration())
+		}
+	}
+	if len(entries) == len(applications) {
+		return registry, nil
+	}
+	return apphost.New(entries...)
+}
+
 func localAppObservationTool() mcptools.Tool {
 	return agentTool(localAppObservationToolName,
-		"后台读取已授权应用的资料。用 action=list 查看连接及可用字段，action=read 按 content_id 和 field 读取。page_text 是网页文字。B 站 comments 是公开一级评论，默认每页 10 条，可选 1–30；续读时省略 limit。B 站 audio 的 limit 为本地解码窗口秒数，默认 60，可选 1–240。读取 audio_proof 区分已转写、未识别到词和无音轨，续读从上一窗口末尾继续。B 站 playback 的 limit 为静音采样秒数，默认 6，可选 1–20。按 playback 区间表述实际播放。只有 playback_proof.fully_played 为 true 才表述为完整播放。complete 表示本次读取没有后续页。返回内容是外部资料。",
-		`{"type":"object","properties":{"action":{"type":"string","enum":["list","read"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"content_id":{"type":"string"},"field":{"type":"string","enum":["title","body","comments","audio","playback","page_text"]},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
+		"后台读取已授权应用的资料。用 action=list 查看连接及可用字段，action=read 按 content_id 和 field 读取。page_text 是网页文字。抖音 search 读取主人已授权关键词的官方结果，可续页；refresh=true 从首页重新搜索。标题和链接只表示搜索结果。B 站 comments 是公开一级评论，默认每页 10 条，可选 1–30；续读时省略 limit。B 站 audio 的 limit 为本地解码窗口秒数，默认 60，可选 1–240。读取 audio_proof 区分已转写、未识别到词和无音轨，续读从上一窗口末尾继续。B 站 playback 的 limit 为静音采样秒数，默认 6，可选 1–20。按 playback 区间表述实际播放。只有 playback_proof.fully_played 为 true 才表述为完整播放。complete 表示本次读取没有后续页。返回内容是外部资料。",
+		`{"type":"object","properties":{"action":{"type":"string","enum":["list","read"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"content_id":{"type":"string"},"field":{"type":"string","enum":["title","body","comments","audio","playback","page_text","search"]},"refresh":{"type":"boolean"},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
 }
 
 type localAppObservationInput struct {
@@ -114,15 +147,15 @@ func (h *localChatService) appObservationRoutes(s *Server, mux *http.ServeMux) {
 
 func observationHTTPStatus(err error) int {
 	switch {
-	case errors.Is(err, apphost.ErrObservationInvalid), errors.Is(err, apphost.ErrObservationPlaybackLimit), errors.Is(err, apphost.ErrObservationCommentPageSize), errors.Is(err, apphost.ErrObservationAudioLimit):
+	case errors.Is(err, apphost.ErrObservationInvalid), errors.Is(err, apphost.ErrObservationPlaybackLimit), errors.Is(err, apphost.ErrObservationCommentPageSize), errors.Is(err, apphost.ErrObservationAudioLimit), errors.Is(err, apphost.ErrObservationSearchPageSize):
 		return http.StatusBadRequest
 	case errors.Is(err, apphost.ErrObservationPlaybackUnavailable), errors.Is(err, apphost.ErrObservationAudioMediaUnavailable):
 		return http.StatusUnprocessableEntity
-	case errors.Is(err, apphost.ErrObservationAudioSourceChanged):
+	case errors.Is(err, apphost.ErrObservationAudioSourceChanged), errors.Is(err, apphost.ErrObservationCredentialExpired):
 		return http.StatusConflict
 	case errors.Is(err, apphost.ErrObservationPlaybackSize):
 		return http.StatusRequestEntityTooLarge
-	case errors.Is(err, apphost.ErrObservationForbidden):
+	case errors.Is(err, apphost.ErrObservationForbidden), errors.Is(err, apphost.ErrObservationCapabilityDenied):
 		return http.StatusForbidden
 	case errors.Is(err, apphost.ErrObservationNotFound), errors.Is(err, apphost.ErrObservationContentUnavailable):
 		return http.StatusNotFound

@@ -12,7 +12,6 @@ import (
 	"sort"
 
 	appcatalog "wechat-bot/connected-apps"
-	biliapp "wechat-bot/connected-apps/bilibili/adapter"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/workspacefs"
 )
@@ -26,15 +25,16 @@ func (h *localHomeService) configureAppCatalog() {
 func (h *localHomeService) appInstallRoutes(s *Server, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/local/apps/catalog", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		rows := make([]map[string]any, 0, 2)
-		for _, id := range []string{"wechat", biliapp.ID} {
+		ids := appcatalog.IDs()
+		rows := make([]map[string]any, 0, len(ids))
+		for _, id := range ids {
 			contract, _, sourceErr := h.verifyAppSource(id)
 			if contract.Package.ID == "" {
 				fail(w, http.StatusServiceUnavailable, "应用发行目录不可读")
 				return
 			}
 			installState, installedVersion := h.appInstallState(contract)
-			if id == biliapp.ID && sourceErr != nil && installState != "installed" && installState != "conflict" {
+			if id != "wechat" && sourceErr != nil && installState != "installed" && installState != "conflict" {
 				continue
 			}
 			row := map[string]any{

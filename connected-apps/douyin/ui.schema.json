@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "id": "official-search",
+      "title": "官方视频搜索",
+      "fields": [
+        "enabled",
+        "keywords"
+      ],
+      "action": "owner-provision-private-config"
+    }
+  ]
+}

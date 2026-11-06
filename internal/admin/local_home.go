@@ -105,7 +105,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 		chat.windows = &copy
 		home.windows = &copy
 	}
-	registry, err = home.bindBundledBilibili(registry)
+	registry, err = home.bindBundledObservationApps(registry)
 	if err != nil {
 		return nil, err
 	}

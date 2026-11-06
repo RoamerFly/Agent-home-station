@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "id": "douyin",
+  "name": "抖音",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "application_protocol": 1,
+  "host_compatibility": ">=0.1.0 <1.0.0",
+  "status": "ready",
+  "platforms": [
+    "windows-amd64"
+  ],
+  "runtime": {
+    "transport": "http-adapter",
+    "entrypoint": "adapter/entry.json"
+  },
+  "permissions": [
+    "network"
+  ],
+  "capability_ids": [
+    "observation.search"
+  ],
+  "http_routes": [
+    {
+      "id": "official-public-video-search",
+      "endpoint": "https://open.douyin.com/dy_open_api/v1/search/video/",
+      "capabilities": [
+        "observation.search"
+      ]
+    }
+  ],
+  "files": {
+    "adapter/entry.json": "37a560df457a7ba0b2fcede7b6a5302daf88d7f5299eac01c7a27fe96d14fcd9",
+    "adapter/search.go": "5d4c34a79e5a9a66f7e040ebee54bc46ce19a5d54ba74ce6f79c9a3c6b3d9d48",
+    "adapter/search_test.go": "ee8d41b4d3708da0a576c7f37da3cdbdc08fb32c9d1fcc8c1b0ce02519bbdfcd",
+    "capabilities.json": "a42e62796002e03f2f5664e6afe094de2e71dcf6e4ae420b9783cb6ae9fd4527",
+    "CHANGELOG.md": "93e94a7b4ec1bf61d8d4ec407fec00adf0284772d06a429a471a22779b9c4bd6",
+    "config.schema.json": "957e5f63650b5e2f6008865c36abc4d2a71d68a68bd1987f4f3e930a018a0831",
+    "MIGRATION.md": "0a66f5c8be41ea284e6ba5d23d9eee8020e61045840488396419e4661f0baab2",
+    "PERMISSIONS.md": "f08b3ca8af2fe2e3c0c9abeaf281398f2c167a2cc931c19d0f738c1ddb425d4b",
+    "README.md": "3d76a19b18e22092136805cf545597831df2a3eba5f04758dca0471e755a1b25",
+    "ui.schema.json": "ca5722c8ae281c143e76b85d6cd5f461a8317f453bf2c2f168fb37a9c3ec768b"
+  }
+}

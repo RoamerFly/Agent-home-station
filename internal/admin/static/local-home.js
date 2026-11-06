@@ -100,7 +100,7 @@
       } else if (listing.install_state === "not_installed") {
         title = "可安装";
         note = state.home?.home_access
-          ? `随包版本 ${listing.version}。${record.id === "bilibili" ? "源码副本可在家目录编辑，读取授权单独保存。" : "安装后可单独接入账号。"}`
+          ? `随包版本 ${listing.version}。${["bilibili", "douyin"].includes(record.id) ? "源码副本可在家目录编辑，读取授权单独保存。" : "安装后可单独接入账号。"}`
           : "请在模型设置中恢复工作空间授权。";
       } else if (listing.install_state === "unavailable") {
         title = "安装状态暂不可读";
@@ -1422,6 +1422,23 @@
     if (canSetup && connection !== null) row.append(appSetupButton("添加账号", () => runAppSetup()));
     return row;
   }
+  function douyinSearchRow(record) {
+    if (!apps.registered?.some((item) => item.id === record.id)) return null;
+    const row = appElement("div", "", "app-layer");
+    const detail = appElement("div", "");
+    const configuration = apps.connections.get(record.id)?.[0]?.configuration;
+    const states = {
+      ready: ["官方搜索已配置", "可在聊天中读取获准关键词的搜索结果，实际访问取决于平台授权。"],
+      unconfigured: ["尚未配置官方搜索", "由主人在站点私有目录登记应用令牌、有效期和允许的关键词。"],
+      disabled: ["官方搜索已停用", "主人可在站点私有配置中启用。"],
+      expired: ["应用令牌已过期", "请由主人更新站点私有配置中的应用令牌和有效期。"],
+      invalid: ["官方搜索配置无效", "请核对站点私有配置的字段和格式。"],
+    };
+    const [title, help] = states[configuration] || ["搜索状态暂不可读", "可刷新后重查。"];
+    detail.append(appElement("strong", title), appElement("p", help));
+    row.append(detail);
+    return row;
+  }
   function parseBilibiliVideos(value) {
     const unique = new Set();
     const invalid = [];
@@ -1596,7 +1613,7 @@
       const mark = appElement("span", Array.from(label)[0], "app-mark");
       mark.setAttribute("aria-hidden", "true");
       head.append(mark, appElement("h4", label));
-      const layers = [head, appSourceRow(record, catalog.get(record.id)), record.id === "bilibili" ? bilibiliPublicRow(record) : appConnectionRow(record)].filter(Boolean);
+      const layers = [head, appSourceRow(record, catalog.get(record.id)), record.id === "bilibili" ? bilibiliPublicRow(record) : record.id === "douyin" ? douyinSearchRow(record) : appConnectionRow(record)].filter(Boolean);
       card.append(...layers);
       return card;
     }));

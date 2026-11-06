@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [switch]$WithBilibiliApp)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -178,6 +178,7 @@ if($WithComfyUI -and -not $LocalStation){throw 'WithComfyUI is only valid with -
 if($WithYuE -and -not $LocalStation){throw 'WithYuE is only valid with -LocalStation.'}
 if($WithStationSpeech -and -not $LocalStation){throw 'WithStationSpeech is only valid with -LocalStation.'}
 if($WithBilibiliApp -and -not $LocalStation){throw 'WithBilibiliApp is only valid with -LocalStation.'}
+if($WithDouyinApp -and -not $LocalStation){throw 'WithDouyinApp is only valid with -LocalStation.'}
 if($WithWeChatRuntime){$WithWeChatApp=$true}
 # A document converter is intentionally opt-in.  The three existing source
 # directory arguments are the opt-in contract: when absent, a LocalStation
@@ -224,6 +225,7 @@ if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $Wi
 $appPackages=@()
 if((-not $LocalStation) -or $WithWeChatApp){$appPackages+=@('--package','wechat')}
 if($WithBilibiliApp){$appPackages+=@('--package','bilibili')}
+if($WithDouyinApp){$appPackages+=@('--package','douyin')}
 if($appPackages.Count){
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'connected-apps') --output (Join-Path $OutputDirectory 'connected-apps') --descriptor app.json @appPackages
  if($LASTEXITCODE -ne 0){throw 'Application source staging failed; use a fresh output directory.'}

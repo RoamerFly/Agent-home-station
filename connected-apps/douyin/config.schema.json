@@ -1,0 +1,50 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "enabled",
+    "client_token",
+    "expires_at",
+    "device_id",
+    "keywords"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "client_token": {
+      "type": "string",
+      "x-secret": true,
+      "x-host-only": true,
+      "pattern": "^clt\\.[A-Za-z0-9_-]{1,512}$"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "x-host-only": true
+    },
+    "device_id": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "x-host-only": true
+    },
+    "keywords": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "maxItems": 50
+    }
+  }
+}
