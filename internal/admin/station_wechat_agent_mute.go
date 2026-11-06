@@ -98,7 +98,7 @@ func (t *localToolSet) localWechatGroupMute(ctx context.Context, raw json.RawMes
 		}
 		receipt.State = "not_submitted"
 		if ledger != nil {
-			if previous, ok := t.wechat.findStationAction(ledger, in.Connection, "", in.Group, "mute"); ok {
+			if previous, ok := ledger.FindConnected(t.wechat.installation, in.Connection, "", in.Group, "mute"); ok {
 				receipt = t.wechat.lookupStationAction(ctx, ledger, previous)
 			}
 		}

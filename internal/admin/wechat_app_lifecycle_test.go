@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/linuxnative"
@@ -56,7 +57,7 @@ func TestApplicationConnectionStopKeepsLoginReceiptsAndOriginalQueue(t *testing.
 	}
 	draft := linuxnative.AdminAction{Kind: "rename", ThreadID: "room@chatroom", Text: "synthetic change"}
 	code, body, _ := f.request("POST", "/api/actions/prepare?account=second", draft, true, true)
-	var proposal actionProposal
+	var proposal wechatapp.ActionProposal
 	if code != http.StatusCreated || json.Unmarshal(body, &proposal) != nil || proposal.ID == "" {
 		t.Fatalf("draft unavailable: %d %s", code, body)
 	}

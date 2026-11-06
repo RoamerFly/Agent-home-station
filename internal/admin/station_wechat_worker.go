@@ -70,7 +70,7 @@ type stationWechatWorker struct {
 	share      *stationShareHost
 	dir        string
 	policy     stationWechatPolicy
-	actions    *actionLedger
+	actions    *wechatapp.ActionLedger
 	run        *stationWechatRun
 }
 

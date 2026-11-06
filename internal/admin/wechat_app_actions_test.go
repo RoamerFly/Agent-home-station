@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/linuxnative"
 )
@@ -83,7 +84,7 @@ func TestApplicationActionReadsExactConnectionAndKeepsCancelledDrafts(t *testing
 		t.Helper()
 		in := linuxnative.AdminAction{Kind: "rename", ThreadID: "room@chatroom", Text: "synthetic new name"}
 		code, body, _ := f.request("POST", "/api/actions/prepare?account=second", in, true, true)
-		var v actionProposal
+		var v wechatapp.ActionProposal
 		if code != http.StatusCreated || json.Unmarshal(body, &v) != nil || v.AppAction != nil || v.ID == "" {
 			t.Fatalf("draft not prepared: %d %s", code, body)
 		}
@@ -138,7 +139,7 @@ func TestApplicationActionReadsExactConnectionAndKeepsCancelledDrafts(t *testing
 		t.Fatal("revocation prevented cancelling a pending draft", code)
 	}
 	read(draft, "cancelled", "stored")
-	saved, ok := m.actions.read(submitted, "second")
+	saved, ok := m.actions.Read(submitted, "second")
 	if !ok || saved.AppAction == nil || *saved.AppAction != ownerActionIntent(saved) || submits.Load() != 2 || probes.Load() != 2 {
 		t.Fatal("scope or operation count changed", saved.AppAction, submits.Load(), probes.Load())
 	}

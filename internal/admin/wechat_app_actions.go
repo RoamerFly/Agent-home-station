@@ -59,7 +59,7 @@ func (p *permittedTools) submitWechatAction(ctx context.Context, tool string, ra
 	})
 }
 
-func ownerActionIntent(p actionProposal) apphost.ActionIntent {
+func ownerActionIntent(p wechatapp.ActionProposal) apphost.ActionIntent {
 	return apphost.ActionIntent{
 		ConnectionRef: wechatConnectionRef(p.Account), Action: p.Request.Kind, RequesterID: "station_owner",
 		Source: "local_admin", SourceRequestID: p.ID, Target: p.Request.ThreadID,
@@ -90,7 +90,7 @@ func (w wechatCompatibility) ReadAction(ctx context.Context, connection, id stri
 	}
 	out := apphost.ActionReceipt{ConnectionRef: wechatConnectionRef(item.record.ID), OperationID: id, State: "submission_unknown", Lookup: "stored"}
 	var status linuxnative.ActionStatus
-	if proposal, ok := m.actions.read(id, item.record.ID); ok {
+	if proposal, ok := m.actions.Read(id, item.record.ID); ok {
 		out.Action, out.Target = proposal.Request.Kind, proposal.Request.ThreadID
 		switch proposal.State {
 		case "awaiting_approval", "expired":

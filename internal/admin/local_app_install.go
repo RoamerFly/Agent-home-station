@@ -13,6 +13,7 @@ import (
 
 	appcatalog "wechat-bot/connected-apps"
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/packagecheckout"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/workspacefs"
 
@@ -210,7 +211,7 @@ func (h *localHomeService) installAppSource(w http.ResponseWriter, r *http.Reque
 		respond(w, http.StatusOK, map[string]any{"id": id, "digest": contract.Digest, "result": state,
 			"state": "source_only", "connected": false, "directory": filepath.Join(homePath, "Connected Apps", id)})
 	}
-	if exists, err := checkoutExistingPluginDirectory(parent, id); err != nil {
+	if exists, err := packagecheckout.ExistingDirectory(parent, id); err != nil {
 		fail(w, http.StatusConflict, err.Error())
 		return
 	} else if exists {
@@ -234,7 +235,7 @@ func (h *localHomeService) installAppSource(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer source.Close()
-	stageName, stage, err := newCheckoutStage(parent)
+	stageName, stage, err := packagecheckout.NewStage(parent)
 	if err != nil {
 		fail(w, http.StatusConflict, err.Error())
 		return
@@ -246,7 +247,7 @@ func (h *localHomeService) installAppSource(w http.ResponseWriter, r *http.Reque
 		}
 	}()
 	total := int64(0)
-	err = copyCheckedPluginFile(r.Context(), source, stage, "app.json", contract.Digest, &total)
+	err = packagecheckout.CopyCheckedFile(r.Context(), source, stage, "app.json", contract.Digest, &total)
 	names := make([]string, 0, len(contract.Package.Files))
 	for name := range contract.Package.Files {
 		names = append(names, name)
@@ -256,7 +257,7 @@ func (h *localHomeService) installAppSource(w http.ResponseWriter, r *http.Reque
 		if err != nil {
 			break
 		}
-		err = copyCheckedPluginFile(r.Context(), source, stage, name, contract.Package.Files[name], &total)
+		err = packagecheckout.CopyCheckedFile(r.Context(), source, stage, name, contract.Package.Files[name], &total)
 	}
 	if err == nil {
 		err = stage.Close()

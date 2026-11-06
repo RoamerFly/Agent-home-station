@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/agentworkspace"
 	"wechat-bot/internal/billing"
@@ -151,7 +152,7 @@ type Manager struct {
 	done                chan struct{}
 	memory              *companion.Store
 	tools               *toolStore
-	actions             *actionLedger
+	actions             *wechatapp.ActionLedger
 	mcp                 mcpSettings
 	plugins             *pluginLedger
 }
@@ -211,7 +212,7 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 	if err != nil {
 		return nil, err
 	}
-	actions, err := newActionLedger(dir)
+	actions, err := wechatapp.OpenActionLedger(dir)
 	if err != nil {
 		return nil, err
 	}

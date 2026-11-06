@@ -2,17 +2,12 @@ package admin
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
-	"wechat-bot/internal/apphost"
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -20,87 +15,10 @@ type nativeActions interface {
 	ExecuteAction(context.Context, linuxnative.AdminAction, string) (linuxnative.ActionStatus, error)
 	InspectAction(context.Context, string) (linuxnative.ActionStatus, error)
 }
-type actionProposal struct {
-	AppAction *apphost.ActionIntent    `json:"app_action,omitempty"`
-	ID        string                   `json:"id"`
-	Account   string                   `json:"account"`
-	Request   linuxnative.AdminAction  `json:"request"`
-	Summary   string                   `json:"summary"`
-	State     string                   `json:"state"`
-	Created   time.Time                `json:"created"`
-	Result    linuxnative.ActionStatus `json:"result"`
-}
-type actionLedger struct {
-	mu    sync.Mutex
-	path  string
-	items map[string]actionProposal
-}
-
-func newActionLedger(dir string) (*actionLedger, error) {
-	ledger := &actionLedger{path: filepath.Join(dir, "action-proposals.json"), items: map[string]actionProposal{}}
-	b, err := os.ReadFile(ledger.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return ledger, nil
-	}
-	if err != nil || len(b) > 2<<20 || json.Unmarshal(b, &ledger.items) != nil || ledger.items == nil || len(ledger.items) > 1000 {
-		return nil, errors.New("人工操作记录不可用")
-	}
-	return ledger, nil
-}
-func (l *actionLedger) save(p actionProposal) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.saveLocked(p)
-}
-
-func (l *actionLedger) saveLocked(p actionProposal) error {
-	if len(l.items) >= 1000 {
-		if _, ok := l.items[p.ID]; !ok {
-			return errors.New("人工操作记录已达上限")
-		}
-	}
-	old, exists := l.items[p.ID]
-	l.items[p.ID] = p
-	b, err := json.Marshal(l.items)
-	if err != nil || len(b) > 2<<20 {
-		if exists {
-			l.items[p.ID] = old
-		} else {
-			delete(l.items, p.ID)
-		}
-		return errors.New("人工操作记录过大")
-	}
-	if err = writePrivate(l.path, b); err != nil {
-		if exists {
-			l.items[p.ID] = old
-		} else {
-			delete(l.items, p.ID)
-		}
-		return err
-	}
-	return nil
-}
-func (l *actionLedger) read(id, account string) (actionProposal, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	p, ok := l.items[id]
-	return p, ok && p.Account == account
-}
-func (l *actionLedger) list(account string) []actionProposal {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := []actionProposal{}
-	for _, p := range l.items {
-		if p.Account == account {
-			out = append(out, p)
-		}
-	}
-	return out
-}
 
 func (s *Server) actionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/actions", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, map[string]any{"items": s.manager.actions.list(s.manager.native.Account())})
+		respond(w, 200, map[string]any{"items": s.manager.actions.List(s.manager.native.Account())})
 	}))
 	mux.HandleFunc("POST /api/actions/prepare", s.protected(s.prepareAction))
 	mux.HandleFunc("POST /api/actions/{id}/approve", s.protected(s.approveAction))
@@ -170,8 +88,8 @@ func (s *Server) prepareAction(w http.ResponseWriter, r *http.Request) {
 	if input.Kind == "create" {
 		summary = label + " · " + input.Text
 	}
-	proposal := actionProposal{ID: id, Account: m.native.Account(), Request: input, Summary: summary, State: "awaiting_approval", Created: time.Now().UTC()}
-	if err := m.actions.save(proposal); err != nil {
+	proposal := wechatapp.ActionProposal{ID: id, Account: m.native.Account(), Request: input, Summary: summary, State: "awaiting_approval", Created: time.Now().UTC()}
+	if err := m.actions.Save(proposal); err != nil {
 		fail(w, 500, err.Error())
 		return
 	}
@@ -188,7 +106,7 @@ func (s *Server) approveAction(w http.ResponseWriter, r *http.Request) {
 	m := s.manager
 	m.op.Lock()
 	defer m.op.Unlock()
-	p, ok := m.actions.read(r.PathValue("id"), m.native.Account())
+	p, ok := m.actions.Read(r.PathValue("id"), m.native.Account())
 	if !ok {
 		fail(w, 404, "未找到待审批操作")
 		return
@@ -207,7 +125,7 @@ func (s *Server) approveAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if time.Since(p.Created) > 15*time.Minute {
 		p.State = "expired"
-		_ = m.actions.save(p)
+		_ = m.actions.Save(p)
 		fail(w, 409, "审批已过期，请重新准备")
 		return
 	}
@@ -232,7 +150,7 @@ func (s *Server) approveAction(w http.ResponseWriter, r *http.Request) {
 	intent := ownerActionIntent(p)
 	p.AppAction = &intent
 	p.State = "unknown"
-	if err := m.actions.save(p); err != nil {
+	if err := m.actions.Save(p); err != nil {
 		fail(w, 500, "无法保存操作领取记录，未执行")
 		return
 	}
@@ -241,7 +159,7 @@ func (s *Server) approveAction(w http.ResponseWriter, r *http.Request) {
 		p.Result = status
 		p.State = status.State
 	}
-	if saveErr := m.actions.save(p); saveErr != nil {
+	if saveErr := m.actions.Save(p); saveErr != nil {
 		fail(w, 500, "操作可能已提交，记录保存失败；不要重复审批")
 		return
 	}
@@ -256,7 +174,7 @@ func (s *Server) cancelAction(w http.ResponseWriter, r *http.Request) {
 	m := s.manager
 	m.op.Lock()
 	defer m.op.Unlock()
-	p, ok := m.actions.read(r.PathValue("id"), m.native.Account())
+	p, ok := m.actions.Read(r.PathValue("id"), m.native.Account())
 	if !ok {
 		fail(w, 404, "未找到操作")
 		return
@@ -266,7 +184,7 @@ func (s *Server) cancelAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.State = "cancelled"
-	if err := m.actions.save(p); err != nil {
+	if err := m.actions.Save(p); err != nil {
 		fail(w, 500, err.Error())
 		return
 	}
@@ -276,7 +194,7 @@ func (s *Server) inspectAction(w http.ResponseWriter, r *http.Request) {
 	m := s.manager
 	m.op.Lock()
 	defer m.op.Unlock()
-	p, ok := m.actions.read(r.PathValue("id"), m.native.Account())
+	p, ok := m.actions.Read(r.PathValue("id"), m.native.Account())
 	if !ok {
 		fail(w, 404, "未找到操作")
 		return
@@ -294,7 +212,7 @@ func (s *Server) inspectAction(w http.ResponseWriter, r *http.Request) {
 		}
 		p.Result = status
 		p.State = status.State
-		if err = m.actions.save(p); err != nil {
+		if err = m.actions.Save(p); err != nil {
 			fail(w, 500, err.Error())
 			return
 		}

@@ -43,6 +43,8 @@
     "MIGRATION.md": "e3cd9975333c241ff761183bd80d76c9eb825b05bb4e04b6a093dbfae952f2d0",
     "PERMISSIONS.md": "f0051811869c5bc613f145452a4593a55514cde2cb05752094b288734333e319",
     "README.md": "2c5c6620bdfce69c3f9969c544598ac0b291acd1f9bacd216e09432a071235a9",
+    "adapter/action_ledger.go": "528cf4e1b0bca36697fadc6203e2dac4f644ceb1bcc0f71d2f0cb00a70f19d72",
+    "adapter/action_ledger_test.go": "ad49694c382509f0534396aa46f4942e43fa6560f5178a7e1ff629432a637056",
     "adapter/actions.go": "c9c45aed46fbde10817205b301caf7cbf62d6c05fc8dfe632608063b03f00df7",
     "adapter/attachment.go": "7703de43ec7c671d66834d48a8d92f9fa1ad7dc7b0aa66d240c64b7704d2922d",
     "adapter/channels_media.go": "7f1d33f2665bbfbd88b15867fe6e82f41fea49d76043b821882706e2c94bd7ea",

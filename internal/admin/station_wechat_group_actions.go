@@ -102,39 +102,15 @@ func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.Ser
 	}))
 }
 
-func (w *stationWechatWorker) actionLedgerLocked() (*actionLedger, error) {
+func (w *stationWechatWorker) actionLedgerLocked() (*wechatapp.ActionLedger, error) {
 	if w.actions == nil {
-		ledger, err := newActionLedger(w.dir)
+		ledger, err := wechatapp.OpenActionLedger(w.dir)
 		if err != nil {
 			return nil, err
 		}
 		w.actions = ledger
 	}
 	return w.actions, nil
-}
-
-func (s *stationWechat) findStationAction(l *actionLedger, connection, id, group, kind string) (actionProposal, bool) {
-	if l == nil {
-		return actionProposal{}, false
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	var latest actionProposal
-	for _, p := range l.items {
-		if p.AppAction == nil || p.AppAction.ConnectionRef != s.connectionRef(connection, p.Account) ||
-			wechatapp.ConnectionID(p.Account) != connection ||
-			!(stationGroupActionKind(p.Request.Kind) || id != "" && p.Request.Kind == "recall") || kind != "" && p.Request.Kind != kind ||
-			p.AppAction.Action != p.Request.Kind || p.AppAction.Target != p.Request.ThreadID || p.AppAction.IdempotencyKey != p.ID {
-			continue
-		}
-		if id != "" && p.ID == id {
-			return p, true
-		}
-		if id == "" && p.Request.ThreadID == group && (latest.ID == "" || p.Created.After(latest.Created)) {
-			latest = p
-		}
-	}
-	return latest, latest.ID != ""
 }
 
 func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection string, action linuxnative.AdminAction, requestKey string, authority stationGroupActionAuthority) (apphost.ActionReceipt, error) {
@@ -179,7 +155,7 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 	if authority.trace != "" {
 		key = localCheckpointKey(connection, authority.requester, "local_chat", authority.trace, action.ThreadID)
 	}
-	p := actionProposal{ID: "station-" + action.Kind + "-" + key, Account: account, State: "unknown", Request: action}
+	p := wechatapp.ActionProposal{ID: "station-" + action.Kind + "-" + key, Account: account, State: "unknown", Request: action}
 	purpose := "owner_approved_group_notification"
 	switch action.Kind {
 	case "rename":
@@ -210,19 +186,19 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 		w.mu.Unlock()
 		return out, err
 	}
-	if previous, ok := s.findStationAction(ledger, connection, p.ID, "", action.Kind); ok {
+	if previous, ok := ledger.FindConnected(s.installation, connection, p.ID, "", action.Kind); ok {
 		w.mu.Unlock()
 		if previous.Request.ThreadID != action.ThreadID || previous.Request.Muted != action.Muted || previous.Request.Text != action.Text {
 			return out, apphost.ErrLifecycleConflict
 		}
-		return stationActionReceipt(previous), nil
+		return previous.Receipt(), nil
 	}
 	if w.policy.Paused {
 		w.mu.Unlock()
 		return out, apphost.ErrLifecycleConflict
 	}
-	previous, ok := s.findStationAction(ledger, connection, "", action.ThreadID, action.Kind)
-	if ok && !stationActionFinal(previous.State) {
+	previous, ok := ledger.FindConnected(s.installation, connection, "", action.ThreadID, action.Kind)
+	if ok && !wechatapp.IsFinalActionState(previous.State) {
 		w.mu.Unlock()
 		return out, errStationGroupActionPending
 	}
@@ -230,7 +206,7 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 	if ok && !p.Created.After(previous.Created) {
 		p.Created = previous.Created.Add(time.Nanosecond)
 	}
-	err = ledger.save(p)
+	err = ledger.Save(p)
 	w.mu.Unlock()
 	if err != nil {
 		return out, err
@@ -238,43 +214,26 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 	// Reservation is durable and unique before handing the action to native.
 	// A lost response leaves the original reservation for read-only inspection.
 	status, err := native.ExecuteAction(ctx, p.Request, intent.IdempotencyKey)
-	if err != nil || !matchesStationActionReceipt(p, status) {
-		return stationActionReceipt(p), nil
+	if err != nil || !p.MatchesReceipt(status) {
+		return p.Receipt(), nil
 	}
-	return ledger.recordStationActionReceipt(p, status)
+	return ledger.RecordConnectedReceipt(p, status)
 }
 
 func validStationGroupName(name string, allowEmpty bool) bool {
 	return utf8.ValidString(name) && len(name) <= 512 && (allowEmpty || strings.TrimSpace(name) != "") && strings.IndexFunc(name, unicode.IsControl) < 0
 }
 
-func stationGroupActionKind(kind string) bool {
-	return kind == "mute" || kind == "rename" || kind == "my_name"
-}
-
 func stationGroupActionSupported(caps linuxnative.Capabilities, kind string) bool {
 	if kind == "mute" {
 		return slices.Contains(caps.ThreadNotificationTargets, "group")
 	}
-	return stationGroupActionKind(kind) && slices.Contains(caps.GroupMutations, kind)
+	return wechatapp.IsManagedGroupAction(kind) && slices.Contains(caps.GroupMutations, kind)
 }
 
-func stationActionFinal(state string) bool {
-	return state == "succeeded" || state == "failed" || state == "rejected" || state == "cancelled"
-}
-
-func stationActionReceipt(p actionProposal) apphost.ActionReceipt {
-	out := apphost.ActionReceipt{ConnectionRef: p.AppAction.ConnectionRef, OperationID: p.ID, Action: p.Request.Kind,
-		Target: p.Request.ThreadID, State: "submission_unknown", Lookup: "stored"}
-	if p.Result.ID != "" {
-		wechatapp.ProjectActionReceipt(&out, p.Result)
-	}
-	return out
-}
-
-func (s *stationWechat) lookupStationAction(ctx context.Context, ledger *actionLedger, p actionProposal) apphost.ActionReceipt {
-	out := stationActionReceipt(p)
-	if stationActionFinal(p.State) || p.Request.Kind == "recall" && p.Result.ID == "" {
+func (s *stationWechat) lookupStationAction(ctx context.Context, ledger *wechatapp.ActionLedger, p wechatapp.ActionProposal) apphost.ActionReceipt {
+	out := p.Receipt()
+	if wechatapp.IsFinalActionState(p.State) || p.Request.Kind == "recall" && p.Result.ID == "" {
 		return out
 	}
 	native, err := s.WorkerSender(ctx, p.AppAction.ConnectionID)
@@ -295,56 +254,18 @@ func (s *stationWechat) lookupStationAction(ctx context.Context, ledger *actionL
 		out.Lookup = "unavailable"
 		return out
 	}
-	if !matchesStationActionReceipt(p, status) {
+	if !p.MatchesReceipt(status) {
 		out.Lookup = "identity_mismatch"
 		return out
 	}
-	out, err = ledger.recordStationActionReceipt(p, status)
+	out, err = ledger.RecordConnectedReceipt(p, status)
 	if err != nil {
 		out.Lookup = "unavailable"
 	}
 	return out
 }
 
-func matchesStationActionReceipt(p actionProposal, status linuxnative.ActionStatus) bool {
-	if p.Request.Kind == "recall" {
-		return wechatapp.MatchRecallReceipt(status, p.Account, p.Request, p.Result.ID)
-	}
-	return wechatapp.MatchGroupActionReceipt(status, p.Account, p.Request.Kind, p.Request.ThreadID, p.Result.ID)
-}
-
-func (l *actionLedger) recordStationActionReceipt(p actionProposal, status linuxnative.ActionStatus) (apphost.ActionReceipt, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	current := l.items[p.ID]
-	out := stationActionReceipt(current)
-	if stationActionFinal(current.State) {
-		return out, nil
-	}
-	if current.Result.ID != "" && current.Result.ID != status.ID {
-		out.Lookup = "identity_mismatch"
-		return out, nil
-	}
-	for id, prior := range l.items {
-		if id != p.ID && prior.Account == p.Account && prior.Result.ID == status.ID {
-			out.Lookup = "identity_mismatch"
-			return out, nil
-		}
-	}
-	// Keep the first verified native operation ID and terminal results durable.
-	// Concurrent reads cannot replace a terminal receipt with older progress.
-	if current.Result.ID == "" || stationActionFinal(status.State) {
-		current.Result, current.State = status, status.State
-		if err := l.saveLocked(current); err != nil {
-			return out, err
-		}
-	}
-	out.Lookup = "platform"
-	wechatapp.ProjectActionReceipt(&out, status)
-	return out, nil
-}
-
-func (s *stationWechat) stationActionLedger(connection string) (*actionLedger, bool, error) {
+func (s *stationWechat) stationActionLedger(connection string) (*wechatapp.ActionLedger, bool, error) {
 	if !artifactID(connection, "wechat-") {
 		return nil, false, apphost.ErrNotFound
 	}
@@ -366,7 +287,7 @@ func (s *stationWechat) ReadAction(ctx context.Context, connection, id string) (
 	if ledger == nil || !validID(id) {
 		return apphost.ActionReceipt{}, apphost.ErrNotFound
 	}
-	p, ok := s.findStationAction(ledger, connection, id, "", "")
+	p, ok := ledger.FindConnected(s.installation, connection, id, "", "")
 	if !ok {
 		return apphost.ActionReceipt{}, apphost.ErrNotFound
 	}
@@ -417,7 +338,7 @@ func (s *stationWechat) readStationGroupDetails(w http.ResponseWriter, r *http.R
 		if ledger == nil {
 			continue
 		}
-		if p, ok := s.findStationAction(ledger, id, "", group, field.action); ok {
+		if p, ok := ledger.FindConnected(s.installation, id, "", group, field.action); ok {
 			lookupCtx, cancelLookup := context.WithTimeout(ctx, 3*time.Second)
 			result[field.operation] = s.lookupStationAction(lookupCtx, ledger, p)
 			cancelLookup()
@@ -441,7 +362,7 @@ func (s *stationWechat) readStationGroupDetails(w http.ResponseWriter, r *http.R
 				}
 				for _, field := range fields {
 					receipt, _ := result[field.operation].(apphost.ActionReceipt)
-					pending := receipt.OperationID != "" && !stationActionFinal(receipt.State)
+					pending := receipt.OperationID != "" && !wechatapp.IsFinalActionState(receipt.State)
 					result[field.available] = canChange && !pending && stationGroupActionSupported(caps, field.action)
 					switch field.action {
 					case "mute":

@@ -193,7 +193,7 @@ func (s *stationWechat) readStationRecall(ctx context.Context, id string, source
 	if err != nil {
 		return view, err
 	}
-	if p, ok := s.findStationAction(ledger, id, source.operationID(id), "", "recall"); ok {
+	if p, ok := ledger.FindConnected(s.installation, id, source.operationID(id), "", "recall"); ok {
 		result := s.lookupStationAction(ctx, ledger, p)
 		view.Operation = &result
 		return view, nil
@@ -260,11 +260,11 @@ func (s *stationWechat) submitStationRecall(ctx context.Context, id string, sour
 		return out, err
 	}
 	prior := func() (apphost.ActionReceipt, bool, error) {
-		if p, ok := s.findStationAction(ledger, id, operationID, "", "recall"); ok {
+		if p, ok := ledger.FindConnected(s.installation, id, operationID, "", "recall"); ok {
 			if p.Request.MessageID != messageID || p.Request.ServerID != source.serverID || p.Request.ThreadID != source.thread {
 				return out, true, apphost.ErrLifecycleConflict
 			}
-			return stationActionReceipt(p), true, nil
+			return p.Receipt(), true, nil
 		}
 		return out, false, nil
 	}
@@ -290,7 +290,7 @@ func (s *stationWechat) submitStationRecall(ctx context.Context, id string, sour
 	intent := apphost.ActionIntent{ConnectionRef: s.connectionRef(id, source.account), Action: request.Kind,
 		RequesterID: owner, Source: "local_admin", SourceThread: source.thread, SourceRequestID: source.deliveryKey,
 		Target: source.thread, Purpose: "owner_approved_outgoing_recall", GrantVersion: "owner_approval:" + operationID, IdempotencyKey: operationID}
-	p := actionProposal{ID: operationID, Account: source.account, Request: request, State: "unknown", Created: time.Now().UTC(), AppAction: &intent}
+	p := wechatapp.ActionProposal{ID: operationID, Account: source.account, Request: request, State: "unknown", Created: time.Now().UTC(), AppAction: &intent}
 	w.mu.Lock()
 	if ctx.Err() != nil || !active() {
 		w.mu.Unlock()
@@ -304,14 +304,14 @@ func (s *stationWechat) submitStationRecall(ctx context.Context, id string, sour
 		w.mu.Unlock()
 		return out, apphost.ErrLifecycleConflict
 	}
-	err = ledger.save(p)
+	err = ledger.Save(p)
 	w.mu.Unlock()
 	if err != nil {
 		return out, err
 	}
 	status, err := native.ExecuteAction(ctx, p.Request, operationID)
-	if err != nil || !matchesStationActionReceipt(p, status) {
-		return stationActionReceipt(p), nil
+	if err != nil || !p.MatchesReceipt(status) {
+		return p.Receipt(), nil
 	}
-	return ledger.recordStationActionReceipt(p, status)
+	return ledger.RecordConnectedReceipt(p, status)
 }
