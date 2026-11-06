@@ -100,6 +100,16 @@ def project_tool_payload(installed=False, enabled=False, revision=1, state="idle
     }]}
 
 
+def assert_station_without_device_controls(context, page, origin):
+    project_tools = context.request.get(origin + "/api/local/project-tools")
+    assert project_tools.status == 200
+    assert "mobile-control" not in {item["id"] for item in project_tools.json()["tools"]}
+    assert context.request.get(origin + "/api/mobile").status == 404
+    assert context.request.get(origin + "/api/plugin-packages/mobile-control").status == 404
+    assert page.get_by_text("手机探索", exact=True).count() == 0
+    assert page.get_by_text("设备控制", exact=True).count() == 0
+
+
 def verify_missing_source(binary, output):
     """A copied executable has no sibling connected-apps directory, by design."""
     with tempfile.TemporaryDirectory(prefix="synthetic-bare-station-", dir=output) as directory:
@@ -118,6 +128,7 @@ def verify_missing_source(binary, output):
                 page.locator("#login-submit").click()
                 page.locator("#initialize-button").click()
                 page.locator("#chat-view").wait_for(state="visible")
+                assert_station_without_device_controls(context, page, origin)
                 page.locator("#chat-tab").focus()
                 page.keyboard.press("ArrowRight")
                 page.locator("#apps-view").wait_for(state="visible")
@@ -158,6 +169,7 @@ def verify(binary, output):
                 assert Path(runtime["data_directory"]).resolve() == data.resolve()
                 page.locator("#initialize-button").click()
                 page.locator("#chat-view").wait_for(state="visible")
+                assert_station_without_device_controls(context, page, origin)
                 initial = context.request.get(origin + "/api/local/home").json()
                 assert initial["initialized"] and initial["home_access"]
                 assert initial.get("chat_available") is True

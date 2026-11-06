@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -40,6 +41,27 @@ def reindex(package):
 
 
 class StagePluginCatalogTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows desktop build")
+    def test_windows_desktop_rejects_retired_phone_files_without_overwriting(self):
+        script = SCRIPT.with_name("Build-Desktop.ps1")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for member in ("plugins/mobile-control/old.marker", "runtimes/windows-music/mobile_bridge.py"):
+                with self.subTest(member=member):
+                    output = root / Path(member).name
+                    marker = output / member
+                    marker.parent.mkdir(parents=True)
+                    marker.write_bytes(b"synthetic previous output")
+                    result = subprocess.run(
+                        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                         "-File", str(script), "-LocalStation", "-OutputDirectory", str(output)],
+                        capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=30,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b"Output contains retired mobile components", result.stderr)
+                    self.assertEqual(marker.read_bytes(), b"synthetic previous output")
+                    self.assertFalse((output / "AgentHomeStation.exe").exists())
+
     def test_selected_package_stages_only_verified_members(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -260,7 +282,7 @@ class StagePluginCatalogTests(unittest.TestCase):
             output = Path(temp) / "plugins"
             result = stage_plugin_catalog.stage(source, output)
             self.assertEqual(set(result["packages"]), {
-                "audio-workshop", "comfyui", "document-workshop", "external-tools", "media-understanding", "mobile-control", "music",
+                "audio-workshop", "comfyui", "document-workshop", "external-tools", "media-understanding", "mobile-control", "music", "obs-preview",
                 "project-development", "rvc", "share-reader", "speech", "station-speech", "visual-generation", "web-search", "yue",
             })
             self.assertFalse((output / "catalog.go").exists())

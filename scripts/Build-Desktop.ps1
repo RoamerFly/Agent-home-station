@@ -185,7 +185,7 @@ if($WithWeChatRuntime){$WithWeChatApp=$true}
 # directory arguments are the opt-in contract: when absent, a LocalStation
 # document workshop remains able to create DOCX files but carries no PDF/OCR
 # runtime.  Do not accept a partial set of sources.  The regular desktop
-# catalog contains every official tool, while a LocalStation catalog is opt-in;
+# catalog contains the supported tools, while a LocalStation catalog is opt-in;
 # therefore only the latter must explicitly select document-workshop.
 $hasDocumentRuntimeInput=[bool]($DocumentPythonPackagesDirectory -or $DocumentFontsDirectory -or $DocumentTesseractDirectory)
 if($LocalStation -and $hasDocumentRuntimeInput -and -not $WithDocumentWorkshop){throw 'Native document runtime sources require -WithDocumentWorkshop for a LocalStation package.'}
@@ -202,6 +202,13 @@ foreach($artifactName in @('temp','dist')){
 }
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace ($(if($LocalStation){'dist\local-station-preview'}else{'dist\windows-desktop'}))}
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
+# Rebuilding is not a migration or a request to delete previous output.
+foreach($relative in @('plugins\mobile-control','runtimes\windows-music\mobile_bridge.py')){
+ $obsolete=Join-Path $OutputDirectory $relative
+ if(Get-Item -LiteralPath $obsolete -Force -ErrorAction SilentlyContinue){
+  throw 'Output contains retired mobile components; build into a fresh directory.'
+ }
+}
 $version='1.0.3537.50'
 $expectedHash='5EA526BBD728ADDA0DA4D31219267E96460494A427E4894C4E09D9F320F4B9AA'
 $cache=Join-Path $workspace ('temp\desktop-deps\webview2-'+$version)
@@ -210,7 +217,13 @@ New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDir
 # The zero-application preview deliberately has no optional tool catalog.  The
 # regular desktop package retains the catalog validation/staging contract.
 if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech -or $WithOBSPreview){
- $catalogArgs=@('--source',(Join-Path $workspace 'plugins'),'--output',(Join-Path $OutputDirectory 'plugins'))
+ $pluginSource=Join-Path $workspace 'plugins'
+ $catalogArgs=@('--source',$pluginSource,'--output',(Join-Path $OutputDirectory 'plugins'))
+ if(-not $LocalStation){
+  $supported=@(Get-ChildItem -LiteralPath $pluginSource -Directory | Where-Object Name -ne 'mobile-control')
+  if(-not $supported.Count){throw 'No supported tools found for the Windows desktop catalog.'}
+  foreach($package in $supported){$catalogArgs+=@('--package',$package.Name)}
+ }
  if($LocalStation -and $WithShareReader){$catalogArgs+=@('--package','share-reader')}
  if($LocalStation -and $WithMediaUnderstanding){$catalogArgs+=@('--package','media-understanding')}
  if($LocalStation -and $WithDocumentWorkshop){$catalogArgs+=@('--package','document-workshop')}
@@ -368,7 +381,7 @@ if($Portable){
  if($LASTEXITCODE -ne 0){throw 'Windows native build failed.'}
  $music=Join-Path $OutputDirectory 'runtimes\windows-music'
  New-Item -ItemType Directory -Force -Path $music | Out-Null
- Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.py' | Where-Object {$_.Name -notlike 'test_*'} | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $music}
+ Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.py' | Where-Object {$_.Name -notlike 'test_*' -and $_.Name -ne 'mobile_bridge.py'} | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $music}
  foreach($name in @('gpt_sovits_windows_requirements.txt')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $music}
  Copy-Item -LiteralPath (Join-Path $workspace 'components\yue2\app\workflows_api') -Destination (Join-Path $music 'workflows') -Recurse -Force
  $musicFiles=@{}
