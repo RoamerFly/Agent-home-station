@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/stationbrowser"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -62,13 +64,14 @@ type SearchView struct {
 // settings is local owner policy. Its JSON shape is intentionally small and
 // fixed: the client token is an application credential, not a user account.
 type settings struct {
-	SchemaVersion      int      `json:"schema_version"`
-	Enabled            bool     `json:"enabled"`
-	ClientToken        string   `json:"client_token"`
-	ExpiresAt          string   `json:"expires_at"`
-	DeviceID           string   `json:"device_id"`
-	Keywords           []string `json:"keywords"`
-	FollowPublicVideos bool     `json:"follow_public_videos,omitempty"`
+	SchemaVersion        int      `json:"schema_version"`
+	Enabled              bool     `json:"enabled"`
+	ClientToken          string   `json:"client_token"`
+	ExpiresAt            string   `json:"expires_at"`
+	DeviceID             string   `json:"device_id"`
+	Keywords             []string `json:"keywords"`
+	FollowPublicVideos   bool     `json:"follow_public_videos,omitempty"`
+	SamplePublicPlayback bool     `json:"sample_public_playback,omitempty"`
 }
 
 type loadedSettings struct {
@@ -85,6 +88,7 @@ type SearchApp struct {
 	mu               sync.Mutex
 	accountMu        sync.Mutex
 	accountPending   *accountAttempt
+	samplePlayer     func(context.Context, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
 }
 
 // New constructs the adapter. The supplied directory is owned by the station
@@ -92,6 +96,7 @@ type SearchApp struct {
 func New(privateDirectory string) *SearchApp {
 	return &SearchApp{
 		privateDirectory: privateDirectory,
+		samplePlayer:     stationbrowser.New(filepath.Join(privateDirectory, "browser-profiles", "official-player")).SampleDouyinPlayer,
 		now:              time.Now,
 		client: &http.Client{
 			Timeout:       requestTimeout,
@@ -222,7 +227,7 @@ func (p *SearchApp) ObservationGrant(ctx context.Context, access apphost.Observa
 	if !p.nowUTC().Before(loaded.expiresAt) {
 		return apphost.ObservationGrant{}, apphost.ErrObservationCredentialExpired
 	}
-	return apphost.ObservationGrant{Allowed: true, Version: loaded.version}, nil
+	return apphost.ObservationGrant{Allowed: true, Version: loaded.version, Fresh: access.Field == apphost.ObservationPlayback}, nil
 }
 
 func (p *SearchApp) ReadObservation(ctx context.Context, request apphost.ObservationRequest) (apphost.ObservationPage, error) {
@@ -232,8 +237,11 @@ func (p *SearchApp) ReadObservation(ctx context.Context, request apphost.Observa
 	if request.ConnectionID == ownVideoConnectionID {
 		return p.readOwnVideo(ctx, request)
 	}
-	if request.Field == apphost.ObservationPlayerEntry {
+	switch request.Field {
+	case apphost.ObservationPlayerEntry:
 		return p.readPlayerEntry(ctx, request)
+	case apphost.ObservationPlayback:
+		return p.readPlayerPlayback(ctx, request)
 	}
 	if request.Field != apphost.ObservationSearch || request.Limit < 0 {
 		return apphost.ObservationPage{}, apphost.ErrObservationInvalid
@@ -293,8 +301,11 @@ func (p *SearchApp) allowed(loaded loadedSettings, access apphost.ObservationAcc
 	if !loaded.Enabled || access.AppID != ID || access.InstallationID != installationID || access.ConnectionID != connectionID || access.AccountID != accountID {
 		return false
 	}
-	if access.Field == apphost.ObservationPlayerEntry {
+	switch access.Field {
+	case apphost.ObservationPlayerEntry:
 		return playerFollowupVideo(loaded, access.ContentID) != ""
+	case apphost.ObservationPlayback:
+		return loaded.SamplePublicPlayback && playerFollowupVideo(loaded, access.ContentID) != ""
 	}
 	if access.Field != apphost.ObservationSearch {
 		return false
@@ -353,7 +364,7 @@ func (p *SearchApp) load() (loadedSettings, error) {
 }
 
 func validateSettings(s settings) (time.Time, error) {
-	if s.SchemaVersion != 1 || !clientToken.MatchString(s.ClientToken) || !decimalID.MatchString(s.DeviceID) || len(s.Keywords) == 0 || len(s.Keywords) > 50 {
+	if s.SchemaVersion != 1 || !clientToken.MatchString(s.ClientToken) || !decimalID.MatchString(s.DeviceID) || len(s.Keywords) == 0 || len(s.Keywords) > 50 || s.SamplePublicPlayback && !s.FollowPublicVideos {
 		return time.Time{}, ErrInvalid
 	}
 	if deviceID, err := strconv.ParseInt(s.DeviceID, 10, 64); err != nil || deviceID <= 0 {

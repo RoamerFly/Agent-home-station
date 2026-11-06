@@ -40,6 +40,16 @@
       ],
       "discoverable": true,
       "requires_owner_setting": "follow_public_videos"
+    },
+    {
+      "id": "observation.playback",
+      "implementation": "ready",
+      "description": "通过独立 Edge 静音采样已核对的公开作品，记录实际播放区间",
+      "permissions": [
+        "network"
+      ],
+      "discoverable": true,
+      "requires_owner_setting": "sample_public_playback"
     }
   ]
 }

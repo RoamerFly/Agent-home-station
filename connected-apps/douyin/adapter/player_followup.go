@@ -62,8 +62,13 @@ func (p *SearchApp) readPlayerEntry(ctx context.Context, request apphost.Observa
 	if title == "" {
 		title = "抖音作品 " + videoID
 	}
+	chunk := apphost.ObservationChunk{Text: title, SourceID: videoID, SourceURL: entry.URL}
+	if policy.SamplePublicPlayback {
+		chunk.FollowUpContentID = request.ContentID
+		chunk.FollowUpField = apphost.ObservationPlayback
+	}
 	return apphost.ObservationPage{
-		Chunks:   []apphost.ObservationChunk{{Text: title, SourceID: videoID, SourceURL: entry.URL}},
+		Chunks:   []apphost.ObservationChunk{chunk},
 		Coverage: "已核对抖音官方播放器入口，尚未播放或读取音视频",
 		Complete: true,
 	}, nil

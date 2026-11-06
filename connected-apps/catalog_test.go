@@ -240,11 +240,18 @@ func TestDouyinSourceDeclaresOnlyOfficialReadAndAccountRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	var browser struct {
-		Routes []json.RawMessage `json:"browser_routes"`
+		Routes []struct {
+			Capability  string `json:"capability"`
+			URLTemplate string `json:"url_template"`
+			OwnerOptIn  string `json:"owner_opt_in"`
+		} `json:"browser_routes"`
 	}
 	raw, err := descriptors.ReadFile("douyin/app.json")
-	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 0 {
-		t.Fatalf("Douyin descriptor unexpectedly includes a browser route: %v", err)
+	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 1 ||
+		browser.Routes[0].Capability != "observation.playback" ||
+		browser.Routes[0].URLTemplate != "https://open.douyin.com/player/video?autoplay=0&vid={video_id}" ||
+		browser.Routes[0].OwnerOptIn != "sample_public_playback" {
+		t.Fatalf("invalid isolated Douyin player declaration: %v", err)
 	}
 	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||
 		len(p.HTTPRoutes) != 5 ||

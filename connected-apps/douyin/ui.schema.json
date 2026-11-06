@@ -13,7 +13,8 @@
       "fields": [
         "enabled",
         "keywords",
-        "follow_public_videos"
+        "follow_public_videos",
+        "sample_public_playback"
       ],
       "action": "owner-provision-private-config"
     },

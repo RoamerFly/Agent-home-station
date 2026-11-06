@@ -30,28 +30,56 @@ func trustedEdge() (string, error) {
 }
 
 func openCDP(ctx context.Context, profile string) (*cdpSession, error) {
-	if e := ctx.Err(); e != nil {
+	edge, profile, e := cdpLaunchInputs(ctx, profile)
+	if e != nil {
 		return nil, e
+	}
+	return startEdgePipe(ctx, edge, profile, "", nil)
+}
+
+// openRestrictedCDP starts a separate, ephemeral Edge profile whose only
+// network egress is the per-session CONNECT proxy. It is intentionally not a
+// replacement for openCDP: callers must opt in with an explicit host policy.
+func openRestrictedCDP(ctx context.Context, profile string, allowHost func(string) bool) (*cdpSession, error) {
+	edge, profile, e := cdpLaunchInputs(ctx, profile)
+	if e != nil {
+		return nil, e
+	}
+	proxy, e := openPlayerProxy(ctx, allowHost)
+	if e != nil {
+		return nil, e
+	}
+	session, e := startEdgePipe(ctx, edge, profile, proxy.address(), proxy.Close)
+	if e != nil {
+		_ = proxy.Close()
+		return nil, e
+	}
+	return session, nil
+}
+
+func cdpLaunchInputs(ctx context.Context, profile string) (string, string, error) {
+	if e := ctx.Err(); e != nil {
+		return "", "", e
 	}
 	edge, e := trustedEdge()
 	if e != nil {
-		return nil, e
+		return "", "", e
 	}
 	profile, e = filepath.Abs(profile)
 	if e != nil {
-		return nil, e
+		return "", "", e
 	}
 	if filepath.Clean(profile) != profile {
-		return nil, fmt.Errorf("%w: invalid private profile", errCDPProtocol)
+		return "", "", fmt.Errorf("%w: invalid private profile", errCDPProtocol)
 	}
 	r, e := workspacefs.EnsurePath(profile)
 	if e != nil {
-		return nil, fmt.Errorf("%w: private profile: %v", errCDPProtocol, e)
+		return "", "", fmt.Errorf("%w: private profile: %v", errCDPProtocol, e)
 	}
 	_ = r.Close()
-	return startEdgePipe(ctx, edge, profile)
+	return edge, profile, nil
 }
-func startEdgePipe(ctx context.Context, edge, profile string) (*cdpSession, error) {
+func startEdgePipe(ctx context.Context, edge, profile, proxyAddress string, onClose func() error) (*cdpSession, error) {
 	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), InheritHandle: 1}
 	var browserRead, hostWrite, hostRead, browserWrite windows.Handle
 	if e := windows.CreatePipe(&browserRead, &hostWrite, sa, 0); e != nil {
@@ -103,7 +131,17 @@ func startEdgePipe(ctx context.Context, edge, profile string) (*cdpSession, erro
 		_ = windows.CloseHandle(hostRead)
 		return nil, e
 	}
-	args := []string{edge, "--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-extensions", "--metrics-recording-only", "--remote-debugging-pipe", fmt.Sprintf("--remote-debugging-io-pipes=%d,%d", browserRead, browserWrite), "--user-data-dir=" + profile, "about:blank"}
+	args := []string{edge, "--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-extensions", "--metrics-recording-only", "--remote-debugging-pipe", fmt.Sprintf("--remote-debugging-io-pipes=%d,%d", browserRead, browserWrite), "--user-data-dir=" + profile}
+	if proxyAddress != "" {
+		args = append(args,
+			"--proxy-server=http://"+proxyAddress,
+			"--proxy-bypass-list=<-loopback>",
+			"--disable-quic",
+			"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+			"--webrtc-ip-handling-policy=disable_non_proxied_udp",
+		)
+	}
+	args = append(args, "about:blank")
 	cmd, e := windows.UTF16PtrFromString(joinWindowsArgs(args))
 	if e != nil {
 		return nil, closeStart(job, hostWrite, hostRead, e)
@@ -144,6 +182,9 @@ func startEdgePipe(ctx context.Context, edge, profile string) (*cdpSession, erro
 	in := os.NewFile(uintptr(hostWrite), "edge-cdp-in")
 	out := os.NewFile(uintptr(hostRead), "edge-cdp-out")
 	session := newCDPSession(in, out, func() error {
+		if onClose != nil {
+			_ = onClose()
+		}
 		_ = windows.TerminateJobObject(job, 1)
 		_, _ = windows.WaitForSingleObject(pi.Process, 2000)
 		_ = windows.CloseHandle(pi.Process)

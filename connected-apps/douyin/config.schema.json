@@ -50,6 +50,35 @@
       "type": "boolean",
       "default": false,
       "description": "允许按已授权搜索结果核对公开作品的官方播放器入口"
+    },
+    "sample_public_playback": {
+      "type": "boolean",
+      "default": false,
+      "description": "另行允许从已授权播放器入口开始静音采样"
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "sample_public_playback"
+        ],
+        "properties": {
+          "sample_public_playback": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "follow_public_videos"
+        ],
+        "properties": {
+          "follow_public_videos": {
+            "const": true
+          }
+        }
+      }
+    }
+  ]
 }

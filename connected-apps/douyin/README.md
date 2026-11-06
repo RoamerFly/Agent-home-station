@@ -40,6 +40,12 @@ Windows 本地成长站可选择随包提供抖音应用。
 
 宿主会用官方匿名接口重新核对这个作品的播放器入口。作品变为非公开后会返回平台状态。播放器入口和标题只提供来源，播放、画面和音轨是独立观察。省略开关时仅搜索。[官方播放器接口](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/iframe-player/get-iframe-by-video)
 
+## 后台静音播放采样
+
+确认要允许大肥鱼播放公开作品时，可在同一份搜索配置同时开启 follow_public_videos 和 sample_public_playback。播放器入口返回 playback 跟进编号后，通过 app_observe 使用同一 search 连接、field=playback 和该编号采样。limit 默认 6 秒，可选 1–20 秒。应用在隔离 Edge 中打开已核验的官方播放器，没有前台浏览器页面。每次只记录实际已播放区间，不读取画面或转写音轨。
+
+平台播放器改变接口、作品变为非公开或播放未推进时，区分返回失败、无实际进度或有进度。当前以 Windows 和已核验的官方播放器请求范围为准，后续平台版本仍需实测。
+
 ## 已授权本人作品
 
 在抖音开放平台为应用申请用户投稿任务能力，由作品所属账号授权 `posting.behavior`。将同一次 OAuth 授权返回的用户令牌、账号编号和到期时间写到站点私有数据目录下的 `apps/douyin/own-videos-settings.json`。在 `video_ids` 填写主人允许查询的明文作品编号。下面是格式示例。[官方作品查询](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/posting-task/video-basic-info)
