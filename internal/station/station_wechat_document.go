@@ -3,11 +3,14 @@ package station
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
@@ -56,33 +59,45 @@ func (t *stationAttachmentTools) documentRefs() []*companion.SourceRef {
 	return refs
 }
 
+func (t *stationAttachmentTools) documentAccess(ctx context.Context, message string) (stationAttachmentAccess, error) {
+	for _, ref := range t.documentRefs() {
+		if ref.MessageID == message {
+			request := t.trace
+			request.TraceID, request.Source = message, ref
+			return t.attachmentAccess(request, message, t.allowed)
+		}
+	}
+	m, visible, err := t.historyMessage(ctx, message)
+	requestAt, requestErr := time.Parse(time.RFC3339Nano, t.trace.MessageTime)
+	fileAt, fileErr := time.Parse(time.RFC3339Nano, m.CreatedAt)
+	if err != nil || !visible || requestErr != nil || fileErr != nil || fileAt.After(requestAt) ||
+		m.Direction != "incoming" || m.SenderID != t.trace.Sender || stationDocumentExtension(m.FileAttachmentName()) == "" {
+		return stationAttachmentAccess{}, wechatapp.ErrAttachmentDenied
+	}
+	ref := &companion.SourceRef{Account: m.AccountID, Thread: m.ThreadID, MessageID: m.ID, Sender: m.SenderID,
+		ServerID: m.ServerID, OccurredAt: m.CreatedAt, MessageType: m.Type, BodyHash: fmt.Sprintf("%x", sha256.Sum256([]byte(m.Body)))}
+	return stationAttachmentAccess{native: t.native, dir: t.dir, thread: m.ThreadID, message: m.ID,
+		grant: t.grants[m.ThreadID], store: t.store, ref: ref, history: true,
+		allowed: func() bool { return t.allowed() && t.scopeAllowed(t.trace, t.reads) }}, nil
+}
+
 func (t *stationAttachmentTools) inspectDocument(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
 		Message string `json:"message_id"`
 		Page    *int   `json:"page"`
 		Offset  int    `json:"text_offset"`
 		Limit   *int   `json:"text_limit"`
+		Hash    string `json:"expected_sha256"`
 	}
 	if !t.allowed() || t.documents.available == nil || t.documents.inspect == nil {
 		return "", wechatapp.ErrAttachmentDenied
 	}
 	if strictLocalMemoryDecode(raw, &args) != nil || args.Message == "" || len(args.Message) > 8192 || args.Offset < 0 ||
-		args.Page != nil && *args.Page < 1 || args.Limit != nil && (*args.Limit < 1 || *args.Limit > 100000) {
+		args.Page != nil && *args.Page < 1 || args.Limit != nil && (*args.Limit < 1 || *args.Limit > 100000) ||
+		args.Hash != "" && !artifactID("sha-"+args.Hash, "sha-") {
 		return "", mcptools.ArgumentError("$", "需要原消息编号，页码从 1 开始，正文偏移非负，每批可读取 1–100000 个字符")
 	}
-	var selected *companion.SourceRef
-	for _, ref := range t.documentRefs() {
-		if ref.MessageID == args.Message {
-			selected = ref
-			break
-		}
-	}
-	if selected == nil {
-		return "", wechatapp.ErrAttachmentDenied
-	}
-	request := t.trace
-	request.TraceID, request.Source = args.Message, selected
-	access, err := t.attachmentAccess(request, args.Message, t.allowed)
+	access, err := t.documentAccess(ctx, args.Message)
 	if err != nil {
 		return "", err
 	}
@@ -96,12 +111,14 @@ func (t *stationAttachmentTools) inspectDocument(ctx context.Context, raw json.R
 		return "", err
 	}
 	sourceInput := companion.Input{Channel: "wechat", Account: source.Account, Thread: source.Thread, Sender: source.Sender,
-		TraceID: source.Message, MessageTime: source.Occurred, Source: selected}
-	stored, ok := t.store.SourceForInput(sourceInput)
-	if !ok {
+		TraceID: source.Message, MessageTime: source.Occurred, Source: access.ref}
+	var versions map[string]int
+	if stored, ok := t.store.SourceForInput(sourceInput); ok {
+		access.ref = stored
+		versions = map[string]int{stored.EventID: stored.Revision}
+	} else if !access.history || !t.store.LegacyHistoryAllowed(source.Account, source.Thread) {
 		return "", wechatapp.ErrAttachmentDenied
 	}
-	access.ref = stored
 	ext := stationDocumentExtension(source.Filename)
 	if source.Kind != "file" || ext == "" {
 		return "", mcptools.ArgumentError("$.message_id", "此工具读取已关联的 Word（.docx）或 PDF 附件")
@@ -127,6 +144,9 @@ func (t *stationAttachmentTools) inspectDocument(ctx context.Context, raw json.R
 		return "", err
 	}
 	defer file.Close()
+	if args.Hash != "" && record.SHA256 != args.Hash {
+		return "", errors.New("文档原件摘要已变化，请从第一页或正文开头重新读取")
+	}
 	if record.Bytes > stationDocumentLimit {
 		return "", errors.New("文档原件超过文档工坊的 128 MiB 输入上限")
 	}
@@ -137,7 +157,7 @@ func (t *stationAttachmentTools) inspectDocument(ctx context.Context, raw json.R
 		return "", err
 	}
 	in := stationDocumentInput{record: record, file: file, extension: ext, epoch: epoch, requester: t.trace.Sender, trace: t.trace.TraceID,
-		versions: map[string]int{stored.EventID: stored.Revision}, offset: args.Offset, limit: 4000, check: check}
+		versions: versions, offset: args.Offset, limit: 4000, check: check}
 	if ext == ".pdf" {
 		in.page = 1
 		if args.Page != nil {

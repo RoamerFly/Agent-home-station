@@ -85,15 +85,28 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 	}
 	messages := map[string]linuxnative.Message{
 		"doc": makeMessage("doc", requester, "fixture.docx"), "other": makeMessage("other", "another-member", "fixture.docx"),
-		"pdf": makeMessage("pdf", "another-member", "fixture.pdf"),
+		"pdf": makeMessage("pdf", "another-member", "fixture.pdf"), "unseen": makeMessage("unseen", requester, "fixture.docx"),
+		"own-pdf": makeMessage("own-pdf", requester, "fixture.pdf"),
 	}
-	fixtures := map[string][]byte{"doc": syntheticStationDOCX(t), "pdf": syntheticStationPDF()}
-	mimes := map[string]string{"doc": localDOCXMIME, "pdf": "application/pdf"}
+	foreign := makeMessage("foreign", requester, "fixture.docx")
+	foreign.ThreadID = "different@chatroom"
+	messages[foreign.ID] = foreign
+	future := makeMessage("future", requester, "fixture.docx")
+	future.CreatedAt = now.Add(2 * time.Minute).Format(time.RFC3339)
+	messages[future.ID] = future
+	docx := syntheticStationDOCX(t)
+	pdf := syntheticStationPDF()
+	fixtures := map[string][]byte{"doc": docx, "unseen": docx, "pdf": pdf, "own-pdf": pdf}
+	mimes := map[string]string{"doc": localDOCXMIME, "unseen": localDOCXMIME, "pdf": "application/pdf", "own-pdf": "application/pdf"}
 	var transfers atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		write := func(value any) { _ = json.NewEncoder(w).Encode(value) }
 		if r.URL.Path == "/v1/status" {
 			write(map[string]any{"pid": 1234, "dataDir": root, "serverId": "document-fixture", "ownershipGeneration": "fixture"})
+			return
+		}
+		if r.URL.Path == "/v1/accounts/one/threads/"+thread+"/messages" {
+			write(map[string]any{"items": []linuxnative.Message{messages["doc"], messages["other"], messages["unseen"]}})
 			return
 		}
 		if suffix, ok := strings.CutPrefix(r.URL.Path, "/v1/accounts/one/messages/"); ok {
@@ -154,6 +167,9 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		grants: map[string]time.Time{thread: now.Add(-time.Minute)}}
 	refs := map[string]*companion.SourceRef{}
 	for id, message := range messages {
+		if id == "unseen" || id == "foreign" || id == "future" {
+			continue
+		}
 		ref := &companion.SourceRef{Account: account, Thread: thread, Sender: message.SenderID, MessageID: id, ServerID: id,
 			MessageType: 49, OccurredAt: message.CreatedAt, BodyHash: fmt.Sprintf("%x", sha256.Sum256([]byte(message.Body))), Revision: 1,
 			InstanceID: memory.SourceInstanceID()}
@@ -197,6 +213,55 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 			t.Fatalf("quoted PDF parsing: %s, %v", out, err)
 		}
 	}
+	// The user sends the instruction in another turn with no quote. The
+	// history lookup can now locate the same sender's file by message ID.
+	current.TraceID, current.MessageTime = "later-request", now.Add(time.Minute).Format(time.RFC3339)
+	current.UnreadMessages, current.QuotedSource = nil, nil
+	tools.SetTrace(current)
+	deny := func(id string) {
+		t.Helper()
+		if _, err := call(fmt.Sprintf(`{"message_id":%q,"text_limit":2}`, id)); !errors.Is(err, wechatapp.ErrAttachmentDenied) {
+			t.Fatalf("historical source %s should be denied: %v", id, err)
+		}
+	}
+	deny("doc")
+	tools.reads = map[string]time.Time{thread: now.Add(-time.Minute)}
+	list, err = tools.List(t.Context())
+	if err != nil || !slices.ContainsFunc(list, func(tool mcptools.Tool) bool { return tool.Name == "wechat_document_inspect" }) {
+		t.Fatalf("historical document tool missing: %v %v", list, err)
+	}
+	catalog, err := tools.Call(t.Context(), "wechat_read", json.RawMessage(`{"kind":"messages","search":"fixture.docx"}`))
+	if err != nil || !strings.Contains(catalog, `"message_id":"doc"`) || !strings.Contains(catalog, `"read_scope":"file_metadata_only"`) {
+		t.Fatalf("could not find historical attachment: %s, %v", catalog, err)
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256(docx))
+	for _, id := range []string{"doc", "unseen"} {
+		out, err := call(fmt.Sprintf(`{"message_id":%q,"text_limit":2,"expected_sha256":%q}`, id, digest))
+		if err != nil || !strings.Contains(out, `"text":"合成"`) {
+			t.Fatalf("historical document reading: %s, %v", out, err)
+		}
+	}
+	if out, err := call(fmt.Sprintf(`{"message_id":"doc","text_limit":2,"expected_sha256":%q}`, strings.Repeat("0", 64))); err == nil || out != "" {
+		t.Fatalf("changed document digest was accepted: %s %v", out, err)
+	}
+	if withPDF {
+		out, err := call(fmt.Sprintf(`{"message_id":"doc","text_offset":2,"text_limit":2,"expected_sha256":%q}`, digest))
+		if err != nil || !strings.Contains(out, `"text":"正文"`) {
+			t.Fatalf("historical DOCX continuation: %s, %v", out, err)
+		}
+		out, err = call(`{"message_id":"own-pdf","text_limit":9}`)
+		if err != nil || !strings.Contains(out, `"text":"Synthetic"`) || !strings.Contains(out, `"next_text_offset":9`) {
+			t.Fatalf("historical PDF parsing: %s, %v", out, err)
+		}
+	}
+	for _, id := range []string{"other", "foreign", "future"} {
+		deny(id)
+	}
+	if err := memory.Clear(companion.ScopeID("wechat", account, thread)); err != nil {
+		t.Fatal(err)
+	}
+	deny("doc")
+	deny("unseen")
 	blocked = true
 	if _, err := call(`{"message_id":"doc"}`); !errors.Is(err, wechatapp.ErrAttachmentDenied) {
 		t.Fatalf("revoked grant accepted: %v", err)

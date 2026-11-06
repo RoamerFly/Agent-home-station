@@ -388,7 +388,7 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	if (stationImageRef(t.trace.Source) || stationImageRef(t.trace.QuotedSource)) && t.imageObservationAvailable(ctx, t.trace.Account) {
 		tools = append(tools, wechatapp.StationImageObservationTool())
 	}
-	if t.documents.available != nil && len(t.documentRefs()) != 0 && t.documents.available(ctx, "") {
+	if t.documents.available != nil && t.documents.inspect != nil && (len(t.documentRefs()) != 0 || t.historyAllowed(ctx)) && t.documents.available(ctx, "") {
 		tools = append(tools, wechatapp.StationDocumentInspectionTool())
 	}
 	if stationAttachmentRef(t.trace.Source) || stationAttachmentRef(t.trace.QuotedSource) {
