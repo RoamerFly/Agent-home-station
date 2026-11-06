@@ -4,7 +4,13 @@
     {
       "id": "public-observation",
       "title": "公开资料读取",
-      "fields": ["enabled", "videos", "browser_enabled", "playback_enabled"],
+      "fields": [
+        "enabled",
+        "videos",
+        "comments_enabled",
+        "browser_enabled",
+        "playback_enabled"
+      ],
       "action": "owner-save-public-observation"
     }
   ]

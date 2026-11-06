@@ -5,21 +5,27 @@
       "id": "observation.title",
       "implementation": "ready",
       "description": "获取公开稿件的标题",
-      "permissions": ["network"],
+      "permissions": [
+        "network"
+      ],
       "discoverable": true
     },
     {
       "id": "observation.body",
       "implementation": "ready",
       "description": "获取投稿者填写的稿件简介",
-      "permissions": ["network"],
+      "permissions": [
+        "network"
+      ],
       "discoverable": true
     },
     {
       "id": "observation.page-text",
       "implementation": "ready",
       "description": "在独立无头 Edge 中读取获准 BV 页面上的标题和简介",
-      "permissions": ["network"],
+      "permissions": [
+        "network"
+      ],
       "discoverable": true,
       "requires_owner_setting": "browser_enabled"
     },
@@ -27,9 +33,21 @@
       "id": "observation.playback",
       "implementation": "ready",
       "description": "在独立 Edge 中对公开单段媒体静音采样并返回实际播放区间",
-      "permissions": ["network"],
+      "permissions": [
+        "network"
+      ],
       "discoverable": true,
       "requires_owner_setting": "playback_enabled"
+    },
+    {
+      "id": "observation.comments",
+      "implementation": "ready",
+      "description": "分页读取获准 BV 的公开一级评论文字及来源",
+      "permissions": [
+        "network"
+      ],
+      "discoverable": true,
+      "requires_owner_setting": "comments_enabled"
     }
   ]
 }

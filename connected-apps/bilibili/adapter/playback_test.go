@@ -19,7 +19,7 @@ func enablePlayback(t *testing.T, app *PublicApp) Settings {
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings, err = app.Save(settings.Revision, true, []string{fixtureBV}, true, true)
+	settings, err = app.Save(settings.Revision, Settings{Enabled: true, Videos: []string{fixtureBV}, BrowserEnabled: true, PlaybackEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestPlaybackRequiresItsOwnOwnerGrantAndAdvertisesOnlyWhenReady(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = app.Save(initial.Revision, true, []string{fixtureBV}, true, false); err != nil {
+	if _, err = app.Save(initial.Revision, Settings{Enabled: true, Videos: []string{fixtureBV}, BrowserEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	request := observation(apphost.ObservationPlayback, fixtureBV)
@@ -44,7 +44,7 @@ func TestPlaybackRequiresItsOwnOwnerGrantAndAdvertisesOnlyWhenReady(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = app.Save(current.Revision, true, []string{fixtureBV}, true, true); err != nil {
+	if _, err = app.Save(current.Revision, Settings{Enabled: true, Videos: []string{fixtureBV}, BrowserEnabled: true, PlaybackEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	targets, err := app.ObservationTargets(t.Context(), connectionID)
@@ -136,7 +136,7 @@ func TestPlaybackRevocationCancelsBeforeLateSampleIsReturned(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("playback sample did not start")
 	}
-	if _, err := app.Save(saved.Revision, true, []string{fixtureBV}, true, false); err != nil {
+	if _, err := app.Save(saved.Revision, Settings{Enabled: true, Videos: []string{fixtureBV}, BrowserEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	select {

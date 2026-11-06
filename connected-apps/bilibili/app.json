@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "bilibili",
   "name": "哔哩哔哩",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -21,7 +21,8 @@
     "observation.title",
     "observation.body",
     "observation.page-text",
-    "observation.playback"
+    "observation.playback",
+    "observation.comments"
   ],
   "browser_routes": [
     {
@@ -45,20 +46,29 @@
       "capabilities": [
         "observation.playback"
       ]
+    },
+    {
+      "id": "public-video-comments",
+      "endpoint": "https://api.bilibili.com/x/v2/reply/main",
+      "capabilities": [
+        "observation.comments"
+      ]
     }
   ],
   "files": {
-    "adapter/entry.json": "69d271e68732a5b3f1ddb399afb73765cbad7f8cd7c47f175b09ca947bd19f2d",
-    "adapter/page_test.go": "45926e348496c648e2beedfcbf3a7069f6734600163536a6850386e5d9010552",
-    "adapter/playback_test.go": "28acd95aea92208a2ede68640645d2bfbccedc794f6e59747ca55ce5357d7a4d",
-    "adapter/public.go": "bc350563b1cb1759d377e7b4dacf3d2dbcd8df889886cacce2c03c1d64f4d26b",
-    "adapter/public_test.go": "d90139219dbaa509eaf4dd4fec345c76dd7ec7058c0a25333fca5988a13d76aa",
-    "capabilities.json": "9e77d80fa72d5a44b9cebf5b158c018c856b70dc9398a01b8f2fb2cf38a882a2",
-    "CHANGELOG.md": "e0603e5b2053ef5d50c4050f6ec2cf53e94d7d685a9aa8155822f18bafbc10d4",
-    "config.schema.json": "98e7ff16ee38034d2d3cf2b9723fbeeef89e132bb50c330ed8ed44197539d655",
-    "MIGRATION.md": "e730baa6e205806f2c376bc225561424281e0e923c726a518ae9579b97ab68af",
-    "PERMISSIONS.md": "6b29d525382b8564ab724ebc6dba7e4b7640f7ba070af9f56885ccadf3300017",
-    "README.md": "0cdec518f5d687a2287768ffa757494b041016e7a2cfd07207ef9fdbec4d3c1c",
-    "ui.schema.json": "b2f4cdfd012e0e6d4f19ed5eb3031eac07a153884b5b6b043b46f3f32f0d9f06"
+    "adapter/comments.go": "a5cec8c47d813af444963cb64fe12a99ee1c3d10c8e1088fd8276c02feb27de6",
+    "adapter/comments_test.go": "55bc5ffd22574bf2d5734c339b1d0abdc8bebb64cfb1f0c9507c09df401adcfb",
+    "adapter/entry.json": "a058a1a78c5d6a53073bc0b5008937c4f334d94e8ce56a25b879f1520d476e9f",
+    "adapter/page_test.go": "1bf2e1575226eacf51ad8ceed033846b9e2e5ed77682337970c734d86d9f11da",
+    "adapter/playback_test.go": "e63863ad43c0a8f4332dcc07767838ca00a2754d4c50bb05bbe384dd601d4a5c",
+    "adapter/public.go": "8afe8af7009cbdcf566583f9405438d01f202c176fd502953f535d5e0bc01145",
+    "adapter/public_test.go": "481b07def1bf94b5ba9de8897e909eab6ff6044f977fb428b85b4ac9da70f725",
+    "capabilities.json": "2e81dbb351569f4e177e80323e9c57e6956f6104c517f519a824225133cfc2ca",
+    "CHANGELOG.md": "f1f2d29a77ff9fdcf953eb78f53928b666dcb9ffabb92fbd492cf84352fb0f9a",
+    "config.schema.json": "72119275020c5b5887a95ec0a086d9e0ed36d9323fba8be4c5937e23e2c9e66e",
+    "MIGRATION.md": "49690549e941114d801c19153eee863cbb42f4bdb4aa8a05c478a009dfe78561",
+    "PERMISSIONS.md": "fc7468ec0b905a315d24568eba1f2e2861af656019c9039375e8b22417afcf44",
+    "README.md": "38422cd7057bbe44789e417a0de985c44f796b8bdea982020222524e2533353e",
+    "ui.schema.json": "ad3c073e91ae5d2765d91f7b5370632c6be164221a5297a99c3dbc0ca19e9c9b"
   }
 }

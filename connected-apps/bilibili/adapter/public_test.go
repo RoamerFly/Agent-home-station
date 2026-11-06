@@ -34,7 +34,7 @@ func saveAllowed(t *testing.T, app *PublicApp) Settings {
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings, err = app.Save(settings.Revision, true, []string{fixtureBV}, false, false)
+	settings, err = app.Save(settings.Revision, Settings{Enabled: true, Videos: []string{fixtureBV}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestPolicyRevocationAndRestartStopFutureReads(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("first permitted read did not run exactly once")
 	}
-	if _, err := app.Save(settings.Revision, false, nil, false, false); err != nil {
+	if _, err := app.Save(settings.Revision, Settings{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := app.ReadObservation(t.Context(), observation(apphost.ObservationTitle, fixtureBV)); !errors.Is(err, apphost.ErrObservationForbidden) {
@@ -138,18 +138,18 @@ func TestSaveStrictCanonicalCASAndDuplicateRules(t *testing.T) {
 		t.Fatalf("unexpected initial settings: %#v, %v", initial, err)
 	}
 	for _, videos := range [][]string{{"bv1GJ411x7h7"}, {fixtureBV, fixtureBV}, {"BV1GJ411x7h7x"}, {"BV1GJ411x7h"}} {
-		if _, err := app.Save(initial.Revision, true, videos, false, false); !errors.Is(err, ErrInvalid) {
+		if _, err := app.Save(initial.Revision, Settings{Enabled: true, Videos: videos}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("Save(%q) error = %v, want ErrInvalid", videos, err)
 		}
 	}
-	if _, err := app.Save(initial.Revision, true, nil, false, false); !errors.Is(err, ErrInvalid) {
+	if _, err := app.Save(initial.Revision, Settings{Enabled: true}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("enabled empty allowlist error = %v, want ErrInvalid", err)
 	}
-	next, err := app.Save(initial.Revision, false, nil, false, false)
+	next, err := app.Save(initial.Revision, Settings{})
 	if err != nil || next.Revision != 2 || next.Videos == nil {
 		t.Fatalf("unexpected disabled save: %#v, %v", next, err)
 	}
-	if current, err := app.Save(initial.Revision, false, nil, false, false); !errors.Is(err, ErrConflict) || current.Revision != next.Revision {
+	if current, err := app.Save(initial.Revision, Settings{}); !errors.Is(err, ErrConflict) || current.Revision != next.Revision {
 		t.Fatalf("CAS conflict = %#v, %v", current, err)
 	}
 }

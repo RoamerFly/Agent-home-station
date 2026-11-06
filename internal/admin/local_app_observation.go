@@ -15,7 +15,7 @@ const localAppObservationToolName = "app_observe"
 
 func localAppObservationTool() mcptools.Tool {
 	return agentTool(localAppObservationToolName,
-		"后台读取已授权应用的资料。用 action=list 查看连接及可用字段，action=read 按 content_id 和 field 读取。page_text 是网页文字。B 站 playback 的 limit 为静音采样秒数，默认 6，可选 1–20。按 playback 区间表述实际播放。只有 playback_proof.fully_played 为 true 才表述为完整播放。complete 表示本次读取没有后续页。返回内容是外部资料。",
+		"后台读取已授权应用的资料。用 action=list 查看连接及可用字段，action=read 按 content_id 和 field 读取。page_text 是网页文字。B 站 comments 是公开一级评论，默认每页 10 条，可选 1–30；续读时省略 limit。B 站 playback 的 limit 为静音采样秒数，默认 6，可选 1–20。按 playback 区间表述实际播放。只有 playback_proof.fully_played 为 true 才表述为完整播放。complete 表示本次读取没有后续页。返回内容是外部资料。",
 		`{"type":"object","properties":{"action":{"type":"string","enum":["list","read"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"content_id":{"type":"string"},"field":{"type":"string","enum":["title","body","comments","audio","playback","page_text"]},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
 }
 
@@ -114,7 +114,7 @@ func (h *localChatService) appObservationRoutes(s *Server, mux *http.ServeMux) {
 
 func observationHTTPStatus(err error) int {
 	switch {
-	case errors.Is(err, apphost.ErrObservationInvalid), errors.Is(err, apphost.ErrObservationPlaybackLimit):
+	case errors.Is(err, apphost.ErrObservationInvalid), errors.Is(err, apphost.ErrObservationPlaybackLimit), errors.Is(err, apphost.ErrObservationCommentPageSize):
 		return http.StatusBadRequest
 	case errors.Is(err, apphost.ErrObservationPlaybackUnavailable):
 		return http.StatusUnprocessableEntity

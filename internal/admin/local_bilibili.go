@@ -48,6 +48,7 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 				Videos          []string `json:"videos"`
 				BrowserEnabled  bool     `json:"browser_enabled"`
 				PlaybackEnabled bool     `json:"playback_enabled"`
+				CommentsEnabled bool     `json:"comments_enabled"`
 			}
 			if !decode(w, r, &in) {
 				return
@@ -64,7 +65,14 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 				fail(w, http.StatusBadRequest, "启用播放采样前，请先开启独立浏览器")
 				return
 			}
-			view, err = bili.Save(*in.Revision, *in.Enabled, in.Videos, in.BrowserEnabled, in.PlaybackEnabled)
+			if in.CommentsEnabled && !*in.Enabled {
+				fail(w, http.StatusBadRequest, "启用评论读取前，请先开启公开读取并填写 BV 号")
+				return
+			}
+			view, err = bili.Save(*in.Revision, biliapp.Settings{
+				Enabled: *in.Enabled, Videos: in.Videos, BrowserEnabled: in.BrowserEnabled,
+				PlaybackEnabled: in.PlaybackEnabled, CommentsEnabled: in.CommentsEnabled,
+			})
 		}
 		switch {
 		case errors.Is(err, biliapp.ErrConflict):

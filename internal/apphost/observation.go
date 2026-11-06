@@ -62,8 +62,10 @@ type ObservationRequest struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 type ObservationChunk struct {
-	Position int    `json:"position"`
-	Text     string `json:"text"`
+	Position    int    `json:"position"`
+	Text        string `json:"text"`
+	SourceID    string `json:"source_id,omitempty"`
+	PublishedAt string `json:"published_at,omitempty"`
 }
 type PlaybackInterval struct {
 	StartSeconds float64 `json:"start_seconds"`
@@ -131,7 +133,8 @@ var (
 	ErrObservationPlaybackUnavailable = errors.New("未取得可播放的公开单段媒体，请核对公开状态、格式及媒体大小")
 	ErrObservationPlaybackLimit       = errors.New("本次播放采样支持 1–20 秒，省略时使用 6 秒")
 	ErrObservationPlaybackSize        = errors.New("这条媒体超过当前 32 MiB 的读取上限，可选择体积更小的公开稿件")
-	ErrObservationUpstreamUnavailable = errors.New("平台媒体请求暂时无法完成，可稍后重试")
+	ErrObservationUpstreamUnavailable = errors.New("平台请求暂时无法完成，可稍后重试")
+	ErrObservationCommentPageSize     = errors.New("B 站公开评论每页支持 1–30 条，续读时请省略 limit 或沿用首页条数")
 )
 
 type observationCheckpoint struct {
@@ -283,7 +286,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 		for _, known := range []error{
 			ErrObservationContentUnavailable, ErrObservationThrottled, ErrObservationForbidden, ErrObservationInvalid,
 			ErrObservationBrowserUnavailable, ErrObservationPlaybackUnavailable, ErrObservationPlaybackLimit,
-			ErrObservationPlaybackSize, ErrObservationUpstreamUnavailable,
+			ErrObservationPlaybackSize, ErrObservationUpstreamUnavailable, ErrObservationCommentPageSize,
 		} {
 			if errors.Is(err, known) {
 				return ObservationResult{}, known

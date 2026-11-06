@@ -49,10 +49,12 @@ func TestBilibiliPublicSourceDeclaresOnlyVerifiedReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||
-		len(p.HTTPRoutes) != 2 || p.HTTPRoutes[0].Endpoint != "https://api.bilibili.com/x/web-interface/view" ||
+		len(p.HTTPRoutes) != 3 || p.HTTPRoutes[0].Endpoint != "https://api.bilibili.com/x/web-interface/view" ||
 		!reflect.DeepEqual(p.HTTPRoutes[0].Capabilities, []string{"observation.title", "observation.body"}) ||
 		p.HTTPRoutes[1].Endpoint != "https://api.bilibili.com/x/player/playurl" ||
-		!reflect.DeepEqual(p.HTTPRoutes[1].Capabilities, []string{"observation.playback"}) {
+		!reflect.DeepEqual(p.HTTPRoutes[1].Capabilities, []string{"observation.playback"}) ||
+		p.HTTPRoutes[2].Endpoint != "https://api.bilibili.com/x/v2/reply/main" ||
+		!reflect.DeepEqual(p.HTTPRoutes[2].Capabilities, []string{"observation.comments"}) {
 		t.Fatalf("unexpected Bilibili package capabilities: %v", p.HTTPRoutes)
 	}
 }

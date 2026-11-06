@@ -5,5 +5,11 @@
   "connection_authority": "host",
   "connection": "public",
   "authentication": "anonymous",
-  "observation_fields": ["title", "body", "page_text", "playback"]
+  "observation_fields": [
+    "title",
+    "body",
+    "page_text",
+    "playback",
+    "comments"
+  ]
 }

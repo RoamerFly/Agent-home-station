@@ -1,5 +1,5 @@
 // Package adapter exposes owner-approved anonymous Bilibili metadata and
-// public page text. The host controls the BV scope and browser permission.
+// public observations. The host controls the BV scope and each permission.
 package adapter
 
 import (
@@ -64,6 +64,7 @@ type Settings struct {
 	Videos          []string `json:"videos"`
 	BrowserEnabled  bool     `json:"browser_enabled"`
 	PlaybackEnabled bool     `json:"playback_enabled"`
+	CommentsEnabled bool     `json:"comments_enabled"`
 }
 
 // PublicApp implements the apphost provider and observation provider for an
@@ -77,8 +78,8 @@ type PublicApp struct {
 	samplePlayback   func(context.Context, []byte, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
 	browserAvailable func() bool
 	mu               sync.Mutex
-	browserGrant     context.Context
-	cancelBrowser    context.CancelFunc
+	readGrant        context.Context
+	cancelReads      context.CancelFunc
 }
 
 // New creates a public Bilibili application with private local policy storage.
@@ -92,8 +93,8 @@ func New(privateDirectory string) *PublicApp {
 		resolvePlayback:  mcptools.GetPublicBilibiliVideo,
 		samplePlayback:   reader.SamplePlayback,
 		browserAvailable: stationbrowser.Available,
-		browserGrant:     grant,
-		cancelBrowser:    cancel,
+		readGrant:        grant,
+		cancelReads:      cancel,
 		client: &http.Client{
 			Timeout: requestTimeout,
 			Jar:     nil,
@@ -134,15 +135,15 @@ func (p *PublicApp) View() (Settings, error) {
 // Save writes an owner allowlist with compare-and-swap semantics. It never
 // probes video IDs: saving must work while offline and must not leak browsing
 // intentions to a provider.
-func (p *PublicApp) Save(expected uint64, enabled bool, videos []string, browserEnabled, playbackEnabled bool) (Settings, error) {
+func (p *PublicApp) Save(expected uint64, next Settings) (Settings, error) {
 	if p == nil {
 		return Settings{}, ErrInvalid
 	}
-	cleaned, err := normalizeVideos(enabled, videos)
+	cleaned, err := normalizeVideos(next.Enabled, next.Videos)
 	if err != nil {
 		return Settings{}, err
 	}
-	if browserEnabled && !enabled || playbackEnabled && (!enabled || !browserEnabled) {
+	if !next.validPermissions() {
 		return Settings{}, ErrInvalid
 	}
 	p.mu.Lock()
@@ -154,18 +155,18 @@ func (p *PublicApp) Save(expected uint64, enabled bool, videos []string, browser
 	if expected != current.Revision {
 		return current, ErrConflict
 	}
-	if browserEnabled && !p.BrowserAvailable() {
+	if next.BrowserEnabled && !p.BrowserAvailable() {
 		return current, apphost.ErrObservationBrowserUnavailable
 	}
-	next := Settings{Revision: current.Revision + 1, Enabled: enabled, Videos: cleaned, BrowserEnabled: browserEnabled, PlaybackEnabled: playbackEnabled}
+	next.Revision, next.Videos = current.Revision+1, cleaned
 	if next.Revision == 0 { // defensive overflow handling
 		return Settings{}, ErrInvalid
 	}
 	if err := p.saveLocked(next); err != nil {
 		return Settings{}, err
 	}
-	p.cancelBrowser()
-	p.browserGrant, p.cancelBrowser = context.WithCancel(context.Background())
+	p.cancelReads()
+	p.readGrant, p.cancelReads = context.WithCancel(context.Background())
 	return cloneSettings(next), nil
 }
 
@@ -200,6 +201,9 @@ func (p *PublicApp) Inspect(ctx context.Context, id string) (apphost.ConnectionS
 		worker = "ready"
 		capability = "ready"
 		actions = []string{"content.observe"}
+		if settings.CommentsEnabled {
+			actions = append(actions, "comments.observe")
+		}
 		if settings.BrowserEnabled && p.BrowserAvailable() {
 			actions = append(actions, "page.observe")
 			if settings.PlaybackEnabled {
@@ -231,6 +235,9 @@ func (p *PublicApp) ObservationTargets(ctx context.Context, id string) ([]apphos
 	}
 	result := make([]apphost.ObservationTarget, 0, len(settings.Videos))
 	fields := []apphost.ObservationField{apphost.ObservationTitle, apphost.ObservationBody}
+	if settings.CommentsEnabled {
+		fields = append(fields, apphost.ObservationComments)
+	}
 	if settings.BrowserEnabled && p.BrowserAvailable() {
 		fields = append(fields, apphost.ObservationPageText)
 		if settings.PlaybackEnabled {
@@ -268,7 +275,7 @@ func (p *PublicApp) ReadObservation(ctx context.Context, request apphost.Observa
 	if err := ctx.Err(); err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	if strings.TrimSpace(request.Cursor) != "" || request.Limit < 0 {
+	if request.Limit < 0 || (request.Field != apphost.ObservationComments && request.Cursor != "") {
 		return apphost.ObservationPage{}, apphost.ErrObservationInvalid
 	}
 	settings, err := p.View()
@@ -283,6 +290,9 @@ func (p *PublicApp) ReadObservation(ctx context.Context, request apphost.Observa
 	}
 	if request.Field == apphost.ObservationPlayback {
 		return p.readPlaybackObservation(ctx, request.ObservationAccess, settings.Revision, request.Limit)
+	}
+	if request.Field == apphost.ObservationComments {
+		return p.readComments(ctx, request, settings.Revision)
 	}
 	data, err := p.fetch(ctx, request.ContentID)
 	if err != nil {
@@ -311,6 +321,10 @@ func (p *PublicApp) allowed(settings Settings, access apphost.ObservationAccess)
 	}
 	switch access.Field {
 	case apphost.ObservationTitle, apphost.ObservationBody:
+	case apphost.ObservationComments:
+		if !settings.CommentsEnabled {
+			return false
+		}
 	case apphost.ObservationPageText:
 		if !settings.BrowserEnabled {
 			return false
@@ -334,7 +348,7 @@ func (p *PublicApp) readBrowserObservation(ctx context.Context, access apphost.O
 	if !p.BrowserAvailable() {
 		return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
 	}
-	readCtx, authorize, closeScope := p.browserReadScope(ctx, access, revision)
+	readCtx, authorize, closeScope := p.observationReadScope(ctx, access, revision)
 	defer closeScope()
 	if err := authorize(); err != nil {
 		return apphost.ObservationPage{}, err
@@ -360,9 +374,9 @@ func (p *PublicApp) readBrowserObservation(ctx context.Context, access apphost.O
 	}, nil
 }
 
-func (p *PublicApp) browserReadScope(ctx context.Context, access apphost.ObservationAccess, revision uint64) (context.Context, func() error, func()) {
+func (p *PublicApp) observationReadScope(ctx context.Context, access apphost.ObservationAccess, revision uint64) (context.Context, func() error, func()) {
 	p.mu.Lock()
-	grant := p.browserGrant
+	grant := p.readGrant
 	p.mu.Unlock()
 	readCtx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(grant, cancel)
@@ -396,7 +410,7 @@ func (p *PublicApp) readPlaybackObservation(ctx context.Context, access apphost.
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	readCtx, authorize, closeScope := p.browserReadScope(ctx, access, revision)
+	readCtx, authorize, closeScope := p.observationReadScope(ctx, access, revision)
 	defer closeScope()
 	if err := authorize(); err != nil {
 		return apphost.ObservationPage{}, err
@@ -484,69 +498,83 @@ type metadataResponse struct {
 	Code *int `json:"code"`
 	Data struct {
 		BVID  string `json:"bvid"`
+		AID   int64  `json:"aid"`
 		Title string `json:"title"`
 		Desc  string `json:"desc"`
 	} `json:"data"`
 }
 
 type publicMetadata struct {
+	AID         int64
 	Title       string
 	Description string
 }
 
 func (p *PublicApp) fetch(ctx context.Context, bvid string) (publicMetadata, error) {
-	if err := ctx.Err(); err != nil {
+	var decoded metadataResponse
+	if err := p.fetchJSON(ctx, metadataEndpoint, url.Values{"bvid": {bvid}}, &decoded); err != nil {
 		return publicMetadata{}, err
 	}
-	client := p.client
-	if client == nil {
-		return publicMetadata{}, apphost.ErrUnavailable
+	if err := publicResponseCode(decoded.Code); err != nil {
+		return publicMetadata{}, err
+	}
+	if decoded.Data.BVID != bvid {
+		return publicMetadata{}, apphost.ErrObservationContentUnavailable
+	}
+	return publicMetadata{AID: decoded.Data.AID, Title: decoded.Data.Title, Description: decoded.Data.Desc}, nil
+}
+
+func (p *PublicApp) fetchJSON(ctx context.Context, endpoint string, query url.Values, destination any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.client == nil {
+		return apphost.ErrObservationUpstreamUnavailable
 	}
 	readCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	endpoint, _ := url.Parse(metadataEndpoint)
-	query := endpoint.Query()
-	query.Set("bvid", bvid)
-	endpoint.RawQuery = query.Encode()
-	req, err := http.NewRequestWithContext(readCtx, http.MethodGet, endpoint.String(), nil)
+	req, err := http.NewRequestWithContext(readCtx, http.MethodGet, endpoint+"?"+query.Encode(), nil)
 	if err != nil {
-		return publicMetadata{}, apphost.ErrUnavailable
+		return apphost.ErrObservationUpstreamUnavailable
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "Agent-home-station/1.0 public-metadata")
-	response, err := client.Do(req)
+	response, err := p.client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return publicMetadata{}, ctx.Err()
+			return ctx.Err()
 		}
-		return publicMetadata{}, apphost.ErrUnavailable
+		return apphost.ErrObservationUpstreamUnavailable
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusPreconditionFailed || response.StatusCode == http.StatusTooManyRequests {
-		return publicMetadata{}, apphost.ErrObservationThrottled
+	switch response.StatusCode {
+	case http.StatusPreconditionFailed, http.StatusTooManyRequests:
+		return apphost.ErrObservationThrottled
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		return apphost.ErrObservationContentUnavailable
+	case http.StatusOK:
+	default:
+		return apphost.ErrObservationUpstreamUnavailable
 	}
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusBadRequest {
-		return publicMetadata{}, apphost.ErrObservationContentUnavailable
+	encoded, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	if err != nil || len(encoded) > maxResponseBytes || json.Unmarshal(encoded, destination) != nil {
+		return apphost.ErrObservationUpstreamUnavailable
 	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return publicMetadata{}, apphost.ErrUnavailable
+	return nil
+}
+
+func publicResponseCode(code *int) error {
+	if code != nil && (*code == -412 || *code == -352 || *code == -429) {
+		return apphost.ErrObservationThrottled
 	}
-	body := io.LimitReader(response.Body, maxResponseBytes+1)
-	encoded, err := io.ReadAll(body)
-	if err != nil || len(encoded) > maxResponseBytes {
-		return publicMetadata{}, apphost.ErrUnavailable
+	if code == nil || *code != 0 {
+		return apphost.ErrObservationContentUnavailable
 	}
-	var decoded metadataResponse
-	if json.Unmarshal(encoded, &decoded) != nil {
-		return publicMetadata{}, apphost.ErrUnavailable
-	}
-	if decoded.Code != nil && (*decoded.Code == -412 || *decoded.Code == -352) {
-		return publicMetadata{}, apphost.ErrObservationThrottled
-	}
-	if decoded.Code == nil || *decoded.Code != 0 || decoded.Data.BVID != bvid {
-		return publicMetadata{}, apphost.ErrObservationContentUnavailable
-	}
-	return publicMetadata{Title: decoded.Data.Title, Description: decoded.Data.Desc}, nil
+	return nil
+}
+
+func (s Settings) validPermissions() bool {
+	return (s.Enabled || !s.BrowserEnabled && !s.CommentsEnabled) && (!s.PlaybackEnabled || s.BrowserEnabled)
 }
 
 func normalizeVideos(enabled bool, videos []string) ([]string, error) {
@@ -593,7 +621,7 @@ func (p *PublicApp) loadLocked() (Settings, error) {
 		return Settings{}, apphost.ErrUnavailable
 	}
 	var settings Settings
-	if json.Unmarshal(encoded, &settings) != nil || settings.Revision == 0 || settings.BrowserEnabled && !settings.Enabled || settings.PlaybackEnabled && (!settings.Enabled || !settings.BrowserEnabled) {
+	if json.Unmarshal(encoded, &settings) != nil || settings.Revision == 0 || !settings.validPermissions() {
 		return Settings{}, apphost.ErrUnavailable
 	}
 	videos, err := normalizeVideos(settings.Enabled, settings.Videos)
