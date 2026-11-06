@@ -13,9 +13,22 @@ type messageAnalyzer interface {
 	Analyze(context.Context, linuxnative.Message) (string, error)
 }
 
+type ScopedMediaAnalyzer interface {
+	messageAnalyzer
+	HandlesType(int) bool
+	SupportsMedia(context.Context, linuxnative.Message) bool
+}
+
+func (w *Worker) hasScopedMedia(m linuxnative.Message) bool {
+	return w.config.ScopedAnalyzer != nil && w.config.ScopedAnalyzer.HandlesType(m.Type)
+}
+
 func (w *Worker) mediaAnalyzer(ctx context.Context, m linuxnative.Message) messageAnalyzer {
-	if m.Type == 34 && w.config.VoiceAnalyzer != nil && w.config.VoiceAnalyzer.SupportsVoice(ctx, m) {
-		return w.config.VoiceAnalyzer
+	if w.hasScopedMedia(m) {
+		if w.config.ScopedAnalyzer.SupportsMedia(ctx, m) {
+			return w.config.ScopedAnalyzer
+		}
+		return nil
 	}
 	return w.config.Analyzer
 }

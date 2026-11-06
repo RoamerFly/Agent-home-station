@@ -291,6 +291,7 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	groupInput := map[string]any{"reply_threads": []string{"person-one", room}, "group_rules": []any{group}}
 	request(f, "PUT", path("one")+"/policy", groupInput, true, 400)
 	groupInput["attachment_threads"] = []string{room}
+	groupInput["auto_observe_images"] = true
 	request(f, "PUT", path("one")+"/policy", groupInput, false, 403)
 	request(f, "PUT", path("one")+"/policy", groupInput, true, 200)
 	policy(f, "one", "person-one", room)
@@ -299,9 +300,15 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 		state(f, "two")["configured_policy"].(map[string]any)["group_rules"] != nil {
 		t.Fatal("group settings were lost or shared between accounts", oneRules)
 	}
+	if state(f, "one")["configured_policy"].(map[string]any)["auto_observe_images"] != true || state(f, "two")["configured_policy"].(map[string]any)["auto_observe_images"] != nil {
+		t.Fatal("automatic image permission was lost or shared between connections")
+	}
 	request(f, "PUT", path("one")+"/policy", map[string]any{"reply_threads": []string{"person-one", room}, "attachment_threads": []string{}}, true, 200)
 	if rule := state(f, "one")["configured_policy"].(map[string]any)["group_rules"].([]any)[0].(map[string]any); rule["summarize_shares"] != false || rule["note"] != "synthetic group preference" {
 		t.Fatal("attachment revocation retained summary authorization or erased note", rule)
+	}
+	if state(f, "one")["configured_policy"].(map[string]any)["auto_observe_images"] != nil {
+		t.Fatal("automatic image processing retained permission after removing all attachment grants")
 	}
 	policy(f, "one", "person-one")
 	if rules := state(f, "one")["configured_policy"].(map[string]any)["group_rules"]; rules != nil {

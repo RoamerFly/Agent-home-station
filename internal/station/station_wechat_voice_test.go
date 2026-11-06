@@ -229,9 +229,9 @@ func TestStationWechatVoiceTranscriptionUsesVerifiedPlayableVoice(t *testing.T) 
 	if !ok {
 		t.Fatal("stored voice source unavailable")
 	}
-	observer := stationVoiceObserver{tools: tools}
+	observer := stationMediaObserver{tools: tools}
 	message := messages["voice-normal"]
-	if !observer.SupportsVoice(t.Context(), message) {
+	if !observer.SupportsMedia(t.Context(), message) {
 		t.Fatal("authorized voice observer not available")
 	}
 	ctx := companion.WithMediaSource(t.Context(), *resolved)

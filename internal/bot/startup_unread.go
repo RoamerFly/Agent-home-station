@@ -199,7 +199,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			preferredShares[m.ID] = true
 		}
 		canAnalyze := isMedia && w.mediaAnalyzer(ctx, m) != nil
-		needsGroupRead := strings.HasSuffix(thread, "@chatroom") && (m.Type != 34 || w.config.VoiceAnalyzer == nil || canAnalyze)
+		needsGroupRead := strings.HasSuffix(thread, "@chatroom") && (!w.hasScopedMedia(m) || canAnalyze)
 		if isMedia && !hostedPreferred && w.readMediaBeforeDecision(m) && (needsGroupRead || eligible && w.observationAllowed(m) && canAnalyze) {
 			mediaIDs = append(mediaIDs, m.ID)
 		}

@@ -26,11 +26,20 @@ type stationVoiceInput struct {
 	Timeout  int     `json:"timeout_seconds"`
 }
 
-type stationVoiceObserver struct{ tools *stationAttachmentTools }
+type stationMediaObserver struct {
+	tools      *stationAttachmentTools
+	imageSince time.Time
+}
 
-func (a stationVoiceObserver) SupportsVoice(ctx context.Context, m linuxnative.Message) bool {
-	if m.Type != 34 || m.Direction != "incoming" || !a.tools.scopeAllowed(companion.Input{Account: m.AccountID, Thread: m.ThreadID, MessageTime: m.CreatedAt}, a.tools.grants) || a.tools.shareHost == nil {
+func (a stationMediaObserver) HandlesType(kind int) bool { return kind == 3 || kind == 34 }
+
+func (a stationMediaObserver) SupportsMedia(ctx context.Context, m linuxnative.Message) bool {
+	if !a.HandlesType(m.Type) || m.Direction != "incoming" || !a.tools.scopeAllowed(companion.Input{Account: m.AccountID, Thread: m.ThreadID, MessageTime: m.CreatedAt}, a.tools.grants) || a.tools.shareHost == nil {
 		return false
+	}
+	if m.Type == 3 {
+		at, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
+		return err == nil && !a.imageSince.IsZero() && !at.Before(a.imageSince) && a.tools.imageObservationAvailable(ctx, m.AccountID)
 	}
 	host, err := a.tools.shareHost()
 	if err != nil || host.store.Account() != m.AccountID {
@@ -45,18 +54,28 @@ func (a stationVoiceObserver) SupportsVoice(ctx context.Context, m linuxnative.M
 	return err == nil && backend == "local"
 }
 
-func (a stationVoiceObserver) Analyze(ctx context.Context, m linuxnative.Message) (string, error) {
+func (a stationMediaObserver) Analyze(ctx context.Context, m linuxnative.Message) (string, error) {
 	text, _, err := a.AnalyzeWithEvidence(ctx, m)
 	return text, err
 }
 
-func (a stationVoiceObserver) AnalyzeWithEvidence(ctx context.Context, m linuxnative.Message) (string, bot.MediaObservationEvidence, error) {
+func (a stationMediaObserver) AnalyzeWithEvidence(ctx context.Context, m linuxnative.Message) (string, bot.MediaObservationEvidence, error) {
 	ref, ok := companion.MediaSourceFromContext(ctx)
-	if !ok || ref.MessageType != 34 || ref.MessageID != m.ID || ref.Account != m.AccountID || ref.Thread != m.ThreadID || ref.Sender != m.SenderID {
+	if !ok || !a.HandlesType(ref.MessageType) || ref.MessageType != m.Type || ref.MessageID != m.ID || ref.Account != m.AccountID || ref.Thread != m.ThreadID || ref.Sender != m.SenderID {
 		return "", bot.MediaObservationEvidence{}, wechatapp.ErrAttachmentDenied
 	}
 	t := *a.tools
 	t.trace = companion.Input{Channel: "wechat", Account: ref.Account, Thread: ref.Thread, Sender: ref.Sender, TraceID: ref.MessageID, MessageTime: ref.OccurredAt, Source: &ref}
+	if m.Type == 3 {
+		if !a.SupportsMedia(ctx, m) {
+			return "", bot.MediaObservationEvidence{}, wechatapp.ErrAttachmentDenied
+		}
+		observed, err := t.readImageObservation(ctx, stationImageInput{Message: m.ID})
+		if err != nil {
+			return "", bot.MediaObservationEvidence{}, err
+		}
+		return observed.Observation, bot.MediaObservationEvidence{ObservedRange: observed.Coverage, Excerpt: observed.Observation, Parts: []companion.ObservationPart{{Kind: companion.ObservationVisualFrames, Range: observed.Coverage, Excerpt: observed.Observation}}}, nil
+	}
 	out, err := t.transcribeVoice(ctx, stationVoiceInput{Message: ref.MessageID, Duration: 90, Timeout: 180})
 	if err != nil {
 		return "", bot.MediaObservationEvidence{}, err
@@ -131,16 +150,8 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		current, err := access.source(ctx, source.Thread, source.Message)
-		recall, recallErr := t.store.RecallEpoch(ctx)
-		if err != nil || current != source || recallErr != nil || recall != epoch {
-			return wechatapp.ErrAttachmentDenied
-		}
-		if ref := access.ref; ref.EventID != "" {
-			in := companion.Input{Channel: "wechat", Account: source.Account, Thread: source.Thread, Sender: source.Sender, TraceID: source.Message, MessageTime: source.Occurred, Source: ref}
-			if current, ok := t.store.SourceForInput(in); !ok || current.Revision != ref.Revision || current.BodyHash != ref.BodyHash {
-				return wechatapp.ErrAttachmentDenied
-			}
+		if err := access.confirmObservationSource(ctx, source, epoch); err != nil {
+			return err
 		}
 		p, pErr := host.store.Installed(ctx, localasr.PluginID)
 		c, cErr := host.store.Configuration(ctx, localasr.PluginID)

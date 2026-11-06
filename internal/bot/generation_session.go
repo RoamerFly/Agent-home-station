@@ -34,7 +34,7 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 					var text string
 					var evidence MediaObservationEvidence
 					var err error
-					if current.Type == 34 && w.config.VoiceAnalyzer != nil {
+					if w.hasScopedMedia(current) {
 						text, evidence, err = w.analyzeIncomingMediaEvidence(ctx, current)
 					} else {
 						text, evidence, err = analyzeMediaWithEvidence(ctx, w.config.Analyzer, current)

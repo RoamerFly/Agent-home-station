@@ -493,7 +493,7 @@ def verify(binary, output):
 
                 worker_policy_pattern = status_pattern + "/policy"
                 worker_lifecycle_pattern = status_pattern + "/lifecycle"
-                worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "group_rules": [], "contact_read": False, "actions": [], "policy_payloads": []}
+                worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "group_rules": [], "contact_read": False, "auto_observe_images": False, "actions": [], "policy_payloads": []}
                 legacy = {"availability": "available", "previews": 0, "posts": [], "source_removed": False}
                 legacy_activation = {"gets": 0, "posts": []}
                 legacy_rollback = {"gets": [], "posts": [], "audit_gets": 0, "audits": []}
@@ -523,7 +523,7 @@ def verify(binary, output):
                             "attachment_threads": worker["attachment_threads"], "media_reply_threads": worker["media_reply_threads"],
                             "group_mute_threads": worker["group_mute_threads"],
                             "group_rules": worker["group_rules"],
-                            "contact_read": worker["contact_read"]}}
+                            "contact_read": worker["contact_read"], "auto_observe_images": worker["auto_observe_images"]}}
                     if legacy["availability"]:
                         connection["legacy_import"] = legacy["availability"]
                     return {"connection": connection}
@@ -539,6 +539,7 @@ def verify(binary, output):
                     worker["threads"] = body["reply_threads"]
                     worker["history_threads"] = body["history_threads"]
                     worker["attachment_threads"] = body["attachment_threads"]
+                    worker["auto_observe_images"] = body["auto_observe_images"]
                     worker["media_reply_threads"] = body["media_reply_threads"]
                     worker["group_mute_threads"] = body["group_mute_threads"]
                     worker["group_rules"] = [
@@ -1078,6 +1079,8 @@ def verify(binary, output):
                 assert page.get_by_role("combobox", name="synthetic-room@chatroom 群聊触发方式", exact=True).input_value() == "all"
                 assert page.get_by_role("textbox", name="synthetic-room@chatroom 群聊触发前缀", exact=True).input_value() == "!fish "
                 page.get_by_role("button", name="恢复默认触发方式", exact=True).click()
+                expect(page.get_by_role("checkbox", name="自动读图", exact=True)).not_to_be_checked()
+                page.get_by_role("checkbox", name="自动读图", exact=True).check()
                 page.get_by_role("button", name="保存回复范围").click()
                 page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
                 assert worker["policy_payloads"][-1]["group_rules"][0]["reply_settings"] == {"mode": "mention"}
@@ -1088,6 +1091,7 @@ def verify(binary, output):
                 assert worker["group_mute_threads"] == ["synthetic-mute@chatroom"]
                 assert page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).input_value() == "synthetic-mute@chatroom"
                 assert worker["contact_read"] is True
+                assert worker["auto_observe_images"] is True
                 assert worker["actions"] == ["start", "stop"]
                 worker["state"] = "cutover_blocked"
                 page.locator("#apps-refresh").click()
@@ -1097,9 +1101,12 @@ def verify(binary, output):
                 assert worker["actions"] == ["start", "stop", "stop"], "cutover block must still let the owner stop back to a paused preflight"
                 page.get_by_role("textbox", name="附件读取会话 ID").fill("")
                 assert page.get_by_role("checkbox", name="synthetic-room@chatroom 自动总结视频号分享", exact=True).is_disabled()
-                page.get_by_role("button", name="保存回复范围").click()
+                expect(page.get_by_role("checkbox", name="自动读图", exact=True)).to_be_disabled()
+                with page.expect_response(lambda response: response.request.method == "PUT" and response.url.endswith("/policy")):
+                    page.get_by_role("button", name="保存回复范围").click()
                 page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
                 assert worker["attachment_threads"] == [] and worker["media_reply_threads"] == []
+                assert worker["auto_observe_images"] is False
                 assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": False}]
                 page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).fill("")
                 with page.expect_response(lambda response: response.request.method == "PUT" and response.url.endswith("/policy")):

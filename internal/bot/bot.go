@@ -74,12 +74,8 @@ type Config struct {
 	Analyzer                interface {
 		Analyze(context.Context, linuxnative.Message) (string, error)
 	}
-	// VoiceAnalyzer allows a host to enable speech input independently of
-	// image, video and share handling.
-	VoiceAnalyzer interface {
-		Analyze(context.Context, linuxnative.Message) (string, error)
-		SupportsVoice(context.Context, linuxnative.Message) bool
-	}
+	// ScopedAnalyzer handles only the inbound media types selected by the host.
+	ScopedAnalyzer ScopedMediaAnalyzer
 	StateDir       string
 	AllowedThreads []string
 	Prefix         string

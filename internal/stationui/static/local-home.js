@@ -53,7 +53,7 @@
     if (view === "project-tools") loadProjectTools();
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", douyinAuthorization: null, douyinAuthorizationError: "", douyinAuthorizationSaving: "",
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", douyinAuthorization: null, douyinAuthorizationError: "", douyinAuthorizationSaving: "",
       douyinOAuth: { saving: false, completing: false, state: "" }, bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false },
@@ -1014,6 +1014,15 @@
     attachments.setAttribute("aria-label", "附件读取会话 ID");
     attachments.value = apps.attachmentDrafts.get(id) ?? (status.configured_policy?.attachment_threads || []).join("\n");
     attachments.addEventListener("input", () => apps.attachmentDrafts.set(id, attachments.value));
+    const autoImages = document.createElement("input");
+    autoImages.type = "checkbox";
+    autoImages.checked = apps.autoImagesDrafts.get(id) ?? (status.configured_policy?.auto_observe_images === true);
+    autoImages.setAttribute("aria-label", "自动读图");
+    autoImages.addEventListener("change", () => apps.autoImagesDrafts.set(id, autoImages.checked));
+    const autoImagesLabel = appElement("label", "", "switch-row");
+    const autoImagesCopy = appElement("span");
+    autoImagesCopy.append(appElement("strong", "自动读图"), appElement("small", "把获准会话中符合回复条件的新图片交给此连接配置的视觉服务。"));
+    autoImagesLabel.append(autoImages, autoImagesCopy);
     const mediaReplies = document.createElement("textarea");
     mediaReplies.rows = 2;
     mediaReplies.placeholder = "可留空，或填入已允许读取附件的会话 ID";
@@ -1224,9 +1233,12 @@
       }
     };
     const attachmentThreadIDs = () => attachments.value.split(/[\s，,]+/u).filter(Boolean);
+    const syncImageOption = () => { autoImages.disabled = attachmentThreadIDs().length === 0; };
     field.addEventListener("input", renderGroupRules);
     attachments.addEventListener("input", renderGroupRules);
+    attachments.addEventListener("input", syncImageOption);
     renderGroupRules();
+    syncImageOption();
     const save = appSetupButton("保存回复范围", () => {
       const reply_threads = field.value.split(/[\s，,]+/u).filter(Boolean);
       const history_threads = history.value.split(/[\s，,]+/u).filter(Boolean);
@@ -1240,11 +1252,11 @@
         if (rule.reply_settings !== undefined) payload.reply_settings = rule.reply_settings;
         return payload;
       });
-      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, media_reply_threads, contact_read: contactRead.checked, group_mute_threads, group_rules });
+      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, auto_observe_images: attachment_threads.length > 0 && autoImages.checked, media_reply_threads, contact_read: contactRead.checked, group_mute_threads, group_rules });
     });
     panel.append(appElement("p", "每行一个会话 ID。群聊默认在被提及时回复。"), field,
       appElement("p", "历史消息与群成员须单独授权；大肥鱼仅能读取当前所在会话。"), history,
-      appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments,
+      appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments, autoImagesLabel,
       groupRules,
       appElement("p", "附件回复须单独授权，只能把附件发回原会话。撤销附件读取时同时撤销附件回复。"), mediaReplies,
       contactReadLabel,
@@ -2058,6 +2070,7 @@
         current.workerDrafts.delete(id);
         current.historyDrafts.delete(id);
         current.attachmentDrafts.delete(id);
+        current.autoImagesDrafts.delete(id);
         current.mediaReplyDrafts.delete(id);
         current.groupMuteDrafts.delete(id);
         current.groupRuleDrafts.delete(id);
