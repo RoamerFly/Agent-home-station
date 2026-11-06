@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -82,6 +83,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	var pushAfterInvalid atomic.Bool
 	var daemonOffline atomic.Bool
 	var loginOnline atomic.Bool
+	var settledDelivery atomic.Bool
 	writeStarted, allowWriteFinish := make(chan struct{}), make(chan struct{})
 	var holdAuditLookup atomic.Bool
 	auditLookupStarted, allowAuditLookup := make(chan struct{}), make(chan struct{})
@@ -144,7 +146,11 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 					return
 				}
 			}
-			_ = json.NewEncoder(w).Encode(map[string]string{"id": "job-active", "accountId": "one", "threadId": "filehelper", "kind": "text", "state": "running"})
+			status := map[string]string{"id": "job-active", "accountId": "one", "threadId": "filehelper", "kind": "text", "state": "running"}
+			if settledDelivery.Load() {
+				status["state"], status["serverId"] = "accepted", "91235"
+			}
+			_ = json.NewEncoder(w).Encode(status)
 		case "/v1/accounts/one/events":
 			eventReads.Add(1)
 			page := linuxnative.EventPage{Items: []linuxnative.Event{}, NextCursor: "0"}
@@ -1005,6 +1011,108 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	}
 	if saved, err := os.ReadFile(claimPath); err != nil || !bytes.Equal(saved, claimBytes) {
 		t.Fatal("rollback audit removed or changed the claim", err)
+	}
+	if runtime.GOOS != "windows" {
+		return
+	}
+	settledDelivery.Store(true)
+	settled := req("POST", auditRoute, map[string]any{}, true, 200)
+	if settled["active_count"] != float64(0) || settled["unknown_count"] != float64(2) || settled["desktop_bound"] != true {
+		t.Fatal("release fixture did not reach a settled state", settled)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stopPath := filepath.Join(host, stationNativeStopFile)
+	stop := stationNativeStop{Version: 1, State: "stopped", Epoch: strings.Repeat("c", 32), DataRoot: host,
+		NativeServerID: "new-dataset", NativeOwnershipGeneration: "synthetic-generation", At: time.Now().UTC()}
+	write(stopPath, j(stop))
+	stationLease := filepath.Join(host, stationNativeRunLockFile)
+	write(stationLease, []byte{0})
+	intentPath := filepath.Join(host, stationNativeReleaseFile)
+	releaseReq := LegacyWechatReleaseRequest{DataDir: host, ConnectionID: wechatapp.ConnectionID("one"), AuditDigest: settled["digest"].(string)}
+	release := func() (LegacyWechatReleaseResult, error) { return ReleaseLegacyWechat(t.Context(), releaseReq) }
+	rejected := func(message string) {
+		t.Helper()
+		if _, err := release(); err == nil || !strings.Contains(err.Error(), message) {
+			t.Fatalf("expected release error containing %q, got %v", message, err)
+		}
+	}
+	rejected("结果未知")
+	releaseReq.AcceptUnknown = true
+	releaseReq.AuditDigest = savedAudit["digest"].(string)
+	rejected("还有在途")
+	releaseReq.AuditDigest = settled["digest"].(string)
+	for _, lease := range []string{stationLease, filepath.Join(legacyHost, legacyCutoverLockFile)} {
+		unlock, err := hostfile.TryLock(lease)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, releaseErr := release()
+		unlock()
+		if releaseErr == nil || !strings.Contains(releaseErr.Error(), "仍在使用") {
+			t.Fatal("release bypassed a held desktop lease", releaseErr)
+		}
+	}
+	preview, err := release()
+	if err != nil || preview.State != "ready" || preview.Unknown != 2 || preview.NativeFenced || !legacyMemoryDigestValid(preview.ApplyDigest) {
+		t.Fatal("unexpected offline release preview", preview, err)
+	}
+	if _, err := os.Lstat(intentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("preview wrote a release intent", err)
+	}
+	releaseReq.ApplyDigest = preview.ApplyDigest
+	changedStop := stop
+	changedStop.Epoch = strings.Repeat("d", 32)
+	write(stopPath, j(changedStop))
+	rejected("停机记录不匹配")
+	write(stopPath, j(stop))
+	write(newQueuePath, []byte(newQueue+"\n"))
+	rejected("本地投递或群操作记录发生变化")
+	write(newQueuePath, []byte(newQueue))
+	releaseReq.ApplyDigest = strings.Repeat("f", 64)
+	rejected("令牌已变化")
+	if _, err := os.Lstat(intentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("rejected apply wrote a release intent", err)
+	}
+	releaseReq.ApplyDigest = preview.ApplyDigest
+	if done, err := release(); err != nil || done.State != "released" || !done.NativeFenced {
+		t.Fatal("first offline release failed", done, err)
+	}
+	// Re-create the interruption point between fencing and claim archival.
+	archivedPath := filepath.Join(legacyHost, "legacy-cutover-released-"+preview.ApplyDigest+".json")
+	if err := os.Rename(archivedPath, claimPath); err != nil {
+		t.Fatal(err)
+	}
+	releaseReq.ApplyDigest = ""
+	if pending, err := release(); err != nil || pending.State != "resume_required" || !pending.NativeFenced || pending.ApplyDigest != preview.ApplyDigest {
+		t.Fatal("interrupted release lost its original token", pending, err)
+	}
+	releaseReq.ApplyDigest = preview.ApplyDigest
+	for range 2 {
+		if done, err := release(); err != nil || done.State != "released" || !done.NativeFenced || done.ApplyDigest != preview.ApplyDigest {
+			t.Fatal("release or idempotent repeat failed", done, err)
+		}
+	}
+	if _, err := os.Lstat(claimPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("old startup claim is still active", err)
+	}
+	if archived, err := os.ReadFile(archivedPath); err != nil || !bytes.Equal(archived, claimBytes) {
+		t.Fatal("release did not preserve original claim evidence", err)
+	}
+	if fenced, err := NewLocalHomeHandlerWithApps(host, work, "synthetic-local-password", "", registry); err == nil || !strings.Contains(err.Error(), "微信原生启动已禁用") {
+		if fenced != nil {
+			_ = fenced.Close()
+		}
+		t.Fatal("released root still admitted the native app", err)
+	}
+	if localOnly, err := NewLocalHomeHandlerWithApps(host, work, "synthetic-local-password", "", apphost.Registry{}); err != nil {
+		t.Fatal("release fence blocked local chat", err)
+	} else if err := localOnly.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if guardedWrites.Load() != 2 || sideEffects.Load() != 0 {
+		t.Fatal("offline release made a native write", guardedWrites.Load(), sideEffects.Load())
 	}
 }
 

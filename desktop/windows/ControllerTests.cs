@@ -230,6 +230,15 @@ namespace WechatAgent.Desktop {
                     Reject(() => forced.Stop()).GetAwaiter().GetResult();
                     Assert(File.ReadAllText(markerPath) == startingBytes, "forced station exit leaves no usable stopped proof");
                 }
+                var stopProofBeforeRelease = File.ReadAllText(Path.Combine(d.Root, "station-native-stop.json"));
+                var releaseIntent = Path.Combine(d.Root, "station-native-release.json");
+                File.WriteAllText(releaseIntent, Deployment.Json.Serialize(new { version = 1, state = "released" }));
+                using (var released = new LocalStationRuntime(d)) {
+                    Reject(() => released.Start(CancellationToken.None)).GetAwaiter().GetResult();
+                    Assert(released.PID == 0 && released.NativePID == 0, "offline release intent refuses native startup before either child exists");
+                }
+                Assert(File.Exists(releaseIntent), "offline release intent is never cleared by a refused native startup");
+                Assert(File.ReadAllText(Path.Combine(d.Root, "station-native-stop.json")) == stopProofBeforeRelease, "offline release intent cannot overwrite the existing stop proof");
             } finally { Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", priorPassword); }
         }
 

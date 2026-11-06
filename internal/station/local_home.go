@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/fishidentity"
@@ -75,7 +76,13 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	if err != nil {
 		return nil, errors.New("本机私有配置目录不可用")
 	}
-	if err = root.Close(); err != nil {
+	var fenceErr error
+	if entry, ok := registry.Lookup(wechatapp.ID); ok && entry.Registration == "station-native" {
+		if _, err := root.Lstat(stationNativeReleaseFile); !errors.Is(err, os.ErrNotExist) {
+			fenceErr = errors.New("微信原生启动已禁用或无法核对解除交接记录")
+		}
+	}
+	if err = errors.Join(fenceErr, root.Close()); err != nil {
 		return nil, err
 	}
 	var runner *agenthost.WindowsConfig

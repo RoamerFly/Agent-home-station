@@ -55,6 +55,24 @@ namespace WechatAgent.Desktop {
             WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "apps", "wechat"));
             WindowsRuntime.PrivateDirectory(nativeRoot);
         }
+        void RejectOfflineNativeRelease() {
+            var marker = Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-release.json");
+            try {
+                var attributes = File.GetAttributes(marker);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException("本机成长站离线放行记录不能使用链接，拒绝启动微信原生服务。");
+                throw new InvalidOperationException("此数据目录已记录离线放行意图，拒绝重新启动微信原生服务。请先由当前管理站核对并处理放行记录。");
+            } catch (FileNotFoundException) {
+                // No durable release intent: the lock holder may continue its
+                // own start sequence.
+            } catch (DirectoryNotFoundException error) {
+                throw new InvalidOperationException("无法安全核对离线放行记录，拒绝启动微信原生服务。", error);
+            } catch (UnauthorizedAccessException error) {
+                throw new InvalidOperationException("无法安全读取离线放行记录，拒绝启动微信原生服务。", error);
+            } catch (IOException error) {
+                throw new InvalidOperationException("无法安全读取离线放行记录，拒绝启动微信原生服务。", error);
+            }
+        }
         void BeginNativeRun() {
             var path = Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-run.lock");
             NoLinkedFile(path);
@@ -62,6 +80,11 @@ namespace WechatAgent.Desktop {
             try {
                 try { gate.Lock(0, 1); }
                 catch (IOException) { throw new InvalidOperationException("此本机成长站数据目录正在由另一个桌面实例使用（station-native-run.lock）。"); }
+                // The Go station writes this durable intent before releasing
+                // the old native claim.  Hold the same gate before checking so
+                // a restarted desktop cannot erase the stop proof or create a
+                // child in the release window.
+                RejectOfflineNativeRelease();
                 nativeRunGate = gate;
             } catch { gate.Dispose(); throw; }
         }

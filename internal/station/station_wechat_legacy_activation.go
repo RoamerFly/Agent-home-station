@@ -293,7 +293,7 @@ func (s *stationWechat) legacyHandover(a legacyActivation, check handoverCheck) 
 		marker.AccountID != a.Connection.AccountID || !sameCutoverPath(marker.DataRoot, a.OldRoot) {
 		return "旧桌面不支持互斥交接，请用支持交接的版本正常停止并更新快照"
 	}
-	key := localCheckpointKey("legacy-cutover-claim-v1", a.ArchiveDigest, a.Connection, a.StopDigest, a.ProfileDigest, a.TargetDataset)
+	key := legacyHandoverKey(a)
 	raw, err = readLegacyImportFile(root, legacyCutoverClaimFile, 512)
 	if err == nil {
 		var saved string
@@ -316,6 +316,10 @@ func (s *stationWechat) legacyHandover(a legacyActivation, check handoverCheck) 
 		}
 	}
 	return ""
+}
+
+func legacyHandoverKey(a legacyActivation) string {
+	return localCheckpointKey("legacy-cutover-claim-v1", a.ArchiveDigest, a.Connection, a.StopDigest, a.ProfileDigest, a.TargetDataset)
 }
 
 func hexDigest(data []byte) string {

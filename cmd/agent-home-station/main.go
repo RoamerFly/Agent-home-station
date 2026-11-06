@@ -52,9 +52,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
-		// This path handles only local configuration and listener errors, never
-		// provider responses or credential values. Keep the actual failure useful.
-		log.Printf("Agent-home-station 无法启动：%v", err)
+		// Errors returned here describe local operations, without provider
+		// responses or credential values.
+		log.Printf("Agent-home-station 执行失败：%v", err)
 		os.Exit(1)
 	}
 }
@@ -75,6 +75,9 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	}
 	if len(args) > 0 && args[0] == "legacy-rvc" {
 		return runLegacyRVC(ctx, args[1:], output)
+	}
+	if len(args) > 0 && args[0] == "legacy-wechat-release" {
+		return runLegacyWechatRelease(ctx, args[1:], output)
 	}
 	path, err := os.Executable()
 	if err != nil {
