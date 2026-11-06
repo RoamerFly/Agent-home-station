@@ -129,6 +129,7 @@ func TestOpenUploadProtocolFailuresNeverRetryOrExposeProviderText(t *testing.T) 
 		kind       string
 	}{
 		{"missing-code", `{}`, 200, ErrOpenUploadResponse, ""},
+		{"duplicate-code", `{"code":127001,"code":0}`, 200, ErrOpenUploadResponse, ""},
 		{"null-code", `{"code":null}`, 200, ErrOpenUploadResponse, ""},
 		{"string-code", `{"code":"0"}`, 200, ErrOpenUploadResponse, ""},
 		{"malformed", `{`, 200, ErrOpenUploadResponse, ""},

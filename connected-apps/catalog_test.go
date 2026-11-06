@@ -39,7 +39,7 @@ func TestOfficialAppSource(t *testing.T) {
 	}
 }
 
-func TestBilibiliPublicSourceDeclaresOnlyVerifiedReads(t *testing.T) {
+func TestBilibiliSourceSeparatesPublicReadsAndPublication(t *testing.T) {
 	contract, err := Lookup("bilibili")
 	if err != nil {
 		t.Fatal(err)
@@ -49,13 +49,26 @@ func TestBilibiliPublicSourceDeclaresOnlyVerifiedReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||
-		len(p.HTTPRoutes) != 3 || p.HTTPRoutes[0].Endpoint != "https://api.bilibili.com/x/web-interface/view" ||
+		len(p.HTTPRoutes) != 8 || p.HTTPRoutes[0].Endpoint != "https://api.bilibili.com/x/web-interface/view" ||
 		!reflect.DeepEqual(p.HTTPRoutes[0].Capabilities, []string{"observation.title", "observation.body"}) ||
 		p.HTTPRoutes[1].Endpoint != "https://api.bilibili.com/x/player/playurl" ||
 		!reflect.DeepEqual(p.HTTPRoutes[1].Capabilities, []string{"observation.playback", "observation.audio"}) ||
 		p.HTTPRoutes[2].Endpoint != "https://api.bilibili.com/x/v2/reply/main" ||
 		!reflect.DeepEqual(p.HTTPRoutes[2].Capabilities, []string{"observation.comments"}) {
 		t.Fatalf("unexpected Bilibili package capabilities: %v", p.HTTPRoutes)
+	}
+	wantEndpoints := []string{
+		"https://member.bilibili.com/arcopen/fn/archive/video/init",
+		"https://openupos.bilivideo.com/video/v2/part/upload",
+		"https://member.bilibili.com/arcopen/fn/archive/video/complete",
+		"https://member.bilibili.com/arcopen/fn/archive/add-by-utoken",
+		"https://member.bilibili.com/arcopen/fn/archive/view",
+	}
+	for i, endpoint := range wantEndpoints {
+		route := p.HTTPRoutes[3+i]
+		if route.Endpoint != endpoint || !reflect.DeepEqual(route.Capabilities, []string{"publication.video"}) {
+			t.Fatalf("unexpected publication route: %#v", route)
+		}
 	}
 }
 

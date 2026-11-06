@@ -80,9 +80,12 @@ type PublicApp struct {
 	browserAvailable func() bool
 	audioVersion     func(context.Context) (string, error)
 	transcribeAudio  func(context.Context, []byte, func() error) (string, error)
-	mu               sync.Mutex
-	readGrant        context.Context
-	cancelReads      context.CancelFunc
+	// publicationClient is test-only injection for the publication workflow.
+	// Production leaves it nil and constructs the direct Open API client.
+	publicationClient func(OpenCredentials) (publicationTransport, error)
+	mu                sync.Mutex
+	readGrant         context.Context
+	cancelReads       context.CancelFunc
 }
 
 // New creates a public Bilibili application with private local policy storage.
@@ -180,14 +183,23 @@ func (p *PublicApp) Connections(ctx context.Context) ([]apphost.Connection, erro
 	if _, err := p.View(); err != nil {
 		return nil, apphost.ErrUnavailable
 	}
-	return []apphost.Connection{{
+	connections := []apphost.Connection{{
 		ID: connectionID, AccountID: accountID, Label: "B站公开资料（匿名）", Primary: true, Configuration: "owner-allowlist",
-	}}, nil
+	}}
+	// Publication is deliberately opt-in.  A missing local credential file must
+	// not turn the anonymous public reader into a configured publisher.
+	if publication, configured := p.publicationConnection(); configured {
+		connections = append(connections, publication)
+	}
+	return connections, nil
 }
 
 func (p *PublicApp) Inspect(ctx context.Context, id string) (apphost.ConnectionStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return apphost.ConnectionStatus{}, err
+	}
+	if id == publicationConnectionID {
+		return p.inspectPublication(ctx)
 	}
 	if id != connectionID {
 		return apphost.ConnectionStatus{}, apphost.ErrNotFound

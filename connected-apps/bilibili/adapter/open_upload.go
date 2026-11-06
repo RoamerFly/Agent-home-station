@@ -22,12 +22,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"wechat-bot/internal/strictjson"
 )
 
 const (
 	openUploadInitURL     = "https://member.bilibili.com/arcopen/fn/archive/video/init"
 	openUploadPartURL     = "https://openupos.bilivideo.com/video/v2/part/upload"
 	openUploadCompleteURL = "https://member.bilibili.com/arcopen/fn/archive/video/complete"
+	openArchivePostURL    = "https://member.bilibili.com/arcopen/fn/archive/add-by-utoken"
+	openArchiveViewURL    = "https://member.bilibili.com/arcopen/fn/archive/view"
 
 	openUploadResponseLimit = 1 << 20
 	openUploadTimeout       = 2 * time.Minute
@@ -183,7 +187,14 @@ func (c *OpenUploadClient) Complete(ctx context.Context, uploadToken string) err
 }
 
 func (c *OpenUploadClient) signedCall(ctx context.Context, endpoint string, query url.Values, body []byte) (json.RawMessage, error) {
+	return c.signedRequest(ctx, http.MethodPost, endpoint, query, body)
+}
+
+func (c *OpenUploadClient) signedRequest(ctx context.Context, method, endpoint string, query url.Values, body []byte) (json.RawMessage, error) {
 	if c == nil || c.client == nil || c.now == nil || c.nonce == nil {
+		return nil, ErrOpenUploadInvalid
+	}
+	if endpoint == openUploadPartURL || (endpoint == openArchiveViewURL && (method != http.MethodGet || len(body) != 0)) || (endpoint != openArchiveViewURL && method != http.MethodPost) {
 		return nil, ErrOpenUploadInvalid
 	}
 	u, err := fixedOpenUploadURL(endpoint)
@@ -206,7 +217,7 @@ func (c *OpenUploadClient) signedCall(ctx context.Context, endpoint string, quer
 		"x-bili-signature-version": "2.0",
 		"x-bili-timestamp":         strconv.FormatInt(c.now().Unix(), 10),
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, requestError(ctx)
 	}
@@ -228,6 +239,9 @@ func (c *OpenUploadClient) doJSON(req *http.Request) (json.RawMessage, error) {
 	var envelope struct {
 		Code *int            `json:"code"`
 		Data json.RawMessage `json:"data"`
+	}
+	if _, err := strictjson.Decode(body); err != nil {
+		return nil, ErrOpenUploadResponse
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Code == nil {
 		return nil, ErrOpenUploadResponse
@@ -270,7 +284,7 @@ func (c *OpenUploadClient) doResponseRaw(req *http.Request) ([]byte, error) {
 }
 
 func fixedOpenUploadURL(raw string) (*url.URL, error) {
-	if raw != openUploadInitURL && raw != openUploadPartURL && raw != openUploadCompleteURL {
+	if raw != openUploadInitURL && raw != openUploadPartURL && raw != openUploadCompleteURL && raw != openArchivePostURL && raw != openArchiveViewURL {
 		return nil, ErrOpenUploadInvalid
 	}
 	u, err := url.Parse(raw)
@@ -278,7 +292,7 @@ func fixedOpenUploadURL(raw string) (*url.URL, error) {
 		return nil, ErrOpenUploadInvalid
 	}
 	switch raw {
-	case openUploadInitURL, openUploadCompleteURL:
+	case openUploadInitURL, openUploadCompleteURL, openArchivePostURL, openArchiveViewURL:
 		if u.Host != "member.bilibili.com" || u.Path == "" {
 			return nil, ErrOpenUploadInvalid
 		}

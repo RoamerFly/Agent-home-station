@@ -5,6 +5,11 @@
   "connection_authority": "host",
   "connection": "public",
   "authentication": "anonymous",
+  "publication": {
+    "connection": "publish",
+    "authentication": "owner-registered OAuth",
+    "private_settings": "publication-settings.json"
+  },
   "observation_fields": [
     "title",
     "body",

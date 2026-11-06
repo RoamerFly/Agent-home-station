@@ -46,6 +46,7 @@ type PublicationDraft struct {
 	Body      string                `json:"body"`
 	Project   *PublicationArtifact  `json:"project,omitempty"`
 	Artifacts []PublicationArtifact `json:"artifacts,omitempty"`
+	Options   json.RawMessage       `json:"platform_options,omitempty"`
 	Origin    json.RawMessage       `json:"origin"`
 }
 
@@ -64,25 +65,49 @@ type PublicationReference struct {
 }
 
 type PublicationRequest struct {
-	Reference    PublicationReference                                              `json:"reference"`
-	Draft        PublicationDraft                                                  `json:"draft"`
-	OpenArtifact func(context.Context, PublicationArtifact) (io.ReadCloser, error) `json:"-"`
+	Reference      PublicationReference                                              `json:"reference"`
+	Draft          PublicationDraft                                                  `json:"draft"`
+	OpenArtifact   func(context.Context, PublicationArtifact) (io.ReadCloser, error) `json:"-"`
+	CheckActive    func(context.Context) error                                       `json:"-"`
+	Checkpoint     json.RawMessage                                                   `json:"-"`
+	GrantVersion   string                                                            `json:"-"`
+	SaveCheckpoint func(context.Context, json.RawMessage) error                      `json:"-"`
 }
 
 type PublicationReceipt struct {
 	Reference PublicationReference `json:"reference"`
 	// State is one of unknown, accepted, published, failed, cancelled.
-	State string `json:"state"`
+	State    string               `json:"state"`
+	Progress *PublicationProgress `json:"progress,omitempty"`
+}
+
+type PublicationProgress struct {
+	Stage          string `json:"stage"`
+	ConfirmedParts int64  `json:"confirmed_parts"`
+	TotalParts     int64  `json:"total_parts"`
 }
 
 // PublicationProvider is optional on an application adapter.  Grant is
 // checked only before a new submit. Query and cancel remain possible after a
 // later revocation so the host can account for an earlier submission safely.
 type PublicationProvider interface {
-	PublicationGrant(context.Context, ConnectionRef) (PublicationGrant, error)
+	publicationAuthorizer
 	SubmitPublication(context.Context, PublicationRequest) (PublicationReceipt, error)
 	QueryPublication(context.Context, PublicationReference) (PublicationReceipt, error)
 	CancelPublication(context.Context, PublicationReference) (PublicationReceipt, error)
+}
+
+type publicationAuthorizer interface {
+	PublicationGrant(context.Context, ConnectionRef) (PublicationGrant, error)
+}
+
+// CheckpointedPublicationProvider can resume only the original workflow. Status
+// and cancellation may reconcile receipts, but must never upload or post.
+type CheckpointedPublicationProvider interface {
+	publicationAuthorizer
+	ValidatePublicationDraft(PublicationDraft) error
+	ContinuePublication(context.Context, PublicationRequest) (PublicationReceipt, error)
+	ReconcilePublication(context.Context, PublicationReference, json.RawMessage, bool) (PublicationReceipt, error)
 }
 
 type publicationRecord struct {
@@ -94,15 +119,16 @@ type publicationRecord struct {
 // omits publication text, provenance and artifact names/hashes so a status
 // query cannot re-inject forgotten content into a later conversation.
 type PublicationView struct {
-	JobID           string        `json:"job_id"`
-	State           string        `json:"state"`
-	CancelRequested bool          `json:"cancel_requested"`
-	Target          ConnectionRef `json:"target"`
-	ProjectID       string        `json:"project_id,omitempty"`
-	ArtifactIDs     []string      `json:"artifact_ids,omitempty"`
-	ManifestSHA256  string        `json:"manifest_sha256"`
-	RemoteID        string        `json:"remote_id,omitempty"`
-	Diagnostic      string        `json:"diagnostic,omitempty"`
+	JobID           string               `json:"job_id"`
+	State           string               `json:"state"`
+	CancelRequested bool                 `json:"cancel_requested"`
+	Target          ConnectionRef        `json:"target"`
+	ProjectID       string               `json:"project_id,omitempty"`
+	ArtifactIDs     []string             `json:"artifact_ids,omitempty"`
+	ManifestSHA256  string               `json:"manifest_sha256"`
+	RemoteID        string               `json:"remote_id,omitempty"`
+	Diagnostic      string               `json:"diagnostic,omitempty"`
+	Progress        *PublicationProgress `json:"progress,omitempty"`
 }
 
 type PublicationPage struct {
@@ -149,7 +175,8 @@ func (p *Publisher) Discover(ctx context.Context) []ConnectionRef {
 	found := make([]ConnectionRef, 0)
 	for _, app := range p.registry.Applications() {
 		entry, _ := p.registry.Lookup(app.ID)
-		if _, ok := entry.Provider.(PublicationProvider); !ok {
+		provider, ok := publicationAdapter(entry.Provider)
+		if !ok {
 			continue
 		}
 		connections, err := entry.Provider.Connections(ctx)
@@ -158,7 +185,7 @@ func (p *Publisher) Discover(ctx context.Context) []ConnectionRef {
 		}
 		for _, connection := range connections {
 			ref := ConnectionRef{AppID: app.ID, InstallationID: app.InstallationID, ConnectionID: connection.ID, AccountID: connection.AccountID}
-			grant, err := entry.Provider.(PublicationProvider).PublicationGrant(ctx, ref)
+			grant, err := provider.PublicationGrant(ctx, ref)
 			if err == nil && grant.Allowed && grant.Version != "" {
 				found = append(found, ref)
 			}
@@ -177,6 +204,13 @@ func (p *Publisher) Draft(ctx context.Context, actor pluginhost.Invocation, draf
 	appID, version, digest, revision, err := p.draftContract(ctx, draft.Target)
 	if err != nil {
 		return PublicationView{}, err
+	}
+	if entry, ok := p.registry.Lookup(draft.Target.AppID); ok {
+		if workflow, ok := entry.Provider.(CheckpointedPublicationProvider); ok {
+			if err := workflow.ValidatePublicationDraft(draft); err != nil {
+				return PublicationView{}, err
+			}
+		}
 	}
 	record := publicationRecord{Draft: cloneDraft(draft)}
 	record.Manifest = publicationManifest(record.Draft)
@@ -216,6 +250,8 @@ func (p *Publisher) Action(ctx context.Context, actor pluginhost.Invocation, job
 		return p.status(ctx, job, record)
 	case "submit":
 		return p.submit(ctx, job, record)
+	case "resume":
+		return p.resume(ctx, job, record)
 	case "cancel":
 		return p.cancel(ctx, job, record)
 	default:
@@ -302,23 +338,36 @@ func (p *Publisher) submit(ctx context.Context, job pluginhost.Job, record publi
 		}
 		return viewFor(fresh, record), ErrPublicationInvalidDraft
 	}
+	return p.continueSubmission(ctx, claimed, record, provider)
+}
+
+func (p *Publisher) continueSubmission(ctx context.Context, claimed pluginhost.Job, record publicationRecord, provider publicationAuthorizer) (PublicationView, error) {
 	providerDraft := cloneDraft(record.Draft)
 	providerDraft.Origin, providerDraft.Project = nil, nil
 	var active atomic.Bool
 	active.Store(true)
-	request := PublicationRequest{Reference: referenceFor(claimed, record), Draft: providerDraft, OpenArtifact: p.openAllowed(ctx, &active, claimed.ID, record)}
-	receipt, err := provider.SubmitPublication(ctx, request)
-	active.Store(false)
+	defer active.Store(false)
+	request := PublicationRequest{Reference: referenceFor(claimed, record), Draft: providerDraft, GrantVersion: claimed.ConfigRevision, OpenArtifact: p.openAllowed(ctx, &active, claimed.ID, record)}
+	var receipt PublicationReceipt
+	var err error
+	if workflow, ok := provider.(CheckpointedPublicationProvider); ok {
+		receipt, err = p.runCheckpointed(ctx, claimed, record, &active, workflow, request)
+	} else {
+		receipt, err = provider.(PublicationProvider).SubmitPublication(ctx, request)
+	}
 	if err != nil {
 		// A transport/provider failure is an unknown result. Do not expose its
 		// body and never turn it into another Submit automatically.
+		if current, readErr := p.store.Job(ctx, claimed.ID); readErr == nil {
+			claimed = current
+		}
 		return viewFor(claimed, record), nil
 	}
 	settled, err := p.settle(ctx, claimed, record, receipt)
 	if err != nil {
 		return viewFor(claimed, record), ErrPublicationReceipt
 	}
-	return viewFor(settled, record), nil
+	return viewWithProgress(settled, record, receipt), nil
 }
 
 func (p *Publisher) status(ctx context.Context, job pluginhost.Job, record publicationRecord) (PublicationView, error) {
@@ -329,7 +378,7 @@ func (p *Publisher) status(ctx context.Context, job pluginhost.Job, record publi
 	if err != nil {
 		return viewFor(job, record), ErrPublicationUnavailable
 	}
-	receipt, err := provider.QueryPublication(ctx, referenceFor(job, record))
+	receipt, err := p.reconcile(ctx, job, record, provider, false)
 	if err != nil {
 		return viewFor(job, record), nil
 	}
@@ -337,7 +386,7 @@ func (p *Publisher) status(ctx context.Context, job pluginhost.Job, record publi
 	if err != nil {
 		return viewFor(job, record), ErrPublicationReceipt
 	}
-	return viewFor(settled, record), nil
+	return viewWithProgress(settled, record, receipt), nil
 }
 
 func (p *Publisher) cancel(ctx context.Context, job pluginhost.Job, record publicationRecord) (PublicationView, error) {
@@ -370,7 +419,7 @@ func (p *Publisher) cancel(ctx context.Context, job pluginhost.Job, record publi
 		return viewFor(requested, record), ErrPublicationUnavailable
 	}
 	// Query first so an already published work never receives a cancel call.
-	if receipt, queryErr := provider.QueryPublication(ctx, referenceFor(requested, record)); queryErr == nil {
+	if receipt, queryErr := p.reconcile(ctx, requested, record, provider, false); queryErr == nil {
 		known, err := p.settle(ctx, requested, record, receipt)
 		if err != nil {
 			return viewFor(requested, record), ErrPublicationReceipt
@@ -382,7 +431,7 @@ func (p *Publisher) cancel(ctx context.Context, job pluginhost.Job, record publi
 	}
 	// Cancellation is for pending work only. A late receipt can still prove
 	// that the platform published it before cancellation took effect.
-	receipt, callErr := provider.CancelPublication(ctx, referenceFor(requested, record))
+	receipt, callErr := p.reconcile(ctx, requested, record, provider, true)
 	if callErr == nil {
 		if settled, settleErr := p.settle(ctx, requested, record, receipt); settleErr == nil {
 			requested = settled
@@ -391,7 +440,7 @@ func (p *Publisher) cancel(ctx context.Context, job pluginhost.Job, record publi
 	if requested.Recovery() == "terminal" {
 		return viewFor(requested, record), nil
 	}
-	receipt, err = provider.QueryPublication(ctx, referenceFor(requested, record))
+	receipt, err = p.reconcile(ctx, requested, record, provider, false)
 	if err != nil {
 		return viewFor(requested, record), nil
 	}
@@ -407,7 +456,7 @@ func (p *Publisher) settle(ctx context.Context, job pluginhost.Job, record publi
 		return job, ErrPublicationReceipt
 	}
 	if receipt.State == "unknown" {
-		return job, nil
+		return p.store.Job(ctx, job.ID)
 	}
 	// A known receipt may race cancellation. Re-read and apply it with the
 	// newest revision; this never issues another provider Submit. A late
@@ -423,6 +472,16 @@ func (p *Publisher) settle(ctx context.Context, job pluginhost.Job, record publi
 		}
 		if current.Recovery() == "terminal" {
 			return current, nil
+		}
+		if receipt.State == "cancelled" && receipt.Reference.RemoteID == "" {
+			if !current.CancelRequested || current.RemoteID != "" {
+				return current, ErrPublicationReceipt
+			}
+			stopped, stopErr := p.store.FinishJob(ctx, current.ID, current.Revision, "cancelled", nil)
+			if errors.Is(stopErr, pluginhost.ErrRevision) {
+				continue
+			}
+			return stopped, stopErr
 		}
 		if current.RemoteID == "" {
 			ack, err := p.store.AcknowledgeJob(ctx, current.ID, current.Revision, receipt.Reference.RemoteID)
@@ -457,12 +516,12 @@ func (p *Publisher) settle(ctx context.Context, job pluginhost.Job, record publi
 	return job, ErrPublicationConflict
 }
 
-func (p *Publisher) providerFor(ctx context.Context, target ConnectionRef) (Registration, PublicationProvider, error) {
+func (p *Publisher) providerFor(ctx context.Context, target ConnectionRef) (Registration, publicationAuthorizer, error) {
 	entry, ok := p.registry.Lookup(target.AppID)
 	if !ok || entry.InstallationID != target.InstallationID {
 		return Registration{}, nil, ErrPublicationUnavailable
 	}
-	provider, ok := entry.Provider.(PublicationProvider)
+	provider, ok := publicationAdapter(entry.Provider)
 	if !ok {
 		return Registration{}, nil, ErrPublicationUnavailable
 	}
@@ -561,8 +620,9 @@ func publicationManifest(draft PublicationDraft) string {
 		Body      string                `json:"body"`
 		Project   *PublicationArtifact  `json:"project,omitempty"`
 		Artifacts []PublicationArtifact `json:"artifacts,omitempty"`
+		Options   json.RawMessage       `json:"platform_options,omitempty"`
 		Origin    json.RawMessage       `json:"origin"`
-	}{draft.Target, draft.Title, draft.Body, draft.Project, draft.Artifacts, origin})
+	}{draft.Target, draft.Title, draft.Body, draft.Project, draft.Artifacts, canonicalJSON(draft.Options), origin})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }
@@ -584,6 +644,9 @@ func publicationFromJob(job pluginhost.Job) (publicationRecord, error) {
 
 func validDraft(draft PublicationDraft) bool {
 	if len(draft.Title) > 16<<10 || len(draft.Body) > 128<<10 || len(draft.Origin) == 0 || !json.Valid(draft.Origin) || !jsonObject(draft.Origin) {
+		return false
+	}
+	if len(draft.Options) != 0 && (isLocal(draft.Target) || len(draft.Options) > 16<<10 || !jsonObject(draft.Options)) {
 		return false
 	}
 	if !isLocal(draft.Target) && (draft.Target.AppID == "" || draft.Target.ConnectionID == "" || draft.Target.InstallationID == "" || draft.Target.AccountID == "") {
@@ -618,10 +681,26 @@ func validReceipt(job pluginhost.Job, record publicationRecord, receipt Publicat
 	if receipt.Reference.TaskID != job.ID || receipt.Reference.Target != record.Draft.Target || receipt.Reference.ManifestSHA256 != record.Manifest || !validReceiptState(receipt.State) || !validRemoteID(receipt.Reference.RemoteID) {
 		return false
 	}
-	if receipt.State != "unknown" && receipt.Reference.RemoteID == "" {
+	if receipt.State != "unknown" && receipt.State != "cancelled" && receipt.Reference.RemoteID == "" {
 		return false
 	}
+	if progress := receipt.Progress; progress != nil {
+		if progress.ConfirmedParts < 0 || progress.TotalParts < progress.ConfirmedParts {
+			return false
+		}
+		switch progress.Stage {
+		case "initializing", "uploading", "merging", "merged", "posting", "accepted":
+		default:
+			return false
+		}
+	}
 	return true
+}
+
+func viewWithProgress(job pluginhost.Job, record publicationRecord, receipt PublicationReceipt) PublicationView {
+	view := viewFor(job, record)
+	view.Progress = receipt.Progress
+	return view
 }
 
 func validReceiptState(state string) bool {

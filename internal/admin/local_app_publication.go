@@ -17,21 +17,22 @@ import (
 const localPublicationToolName = "app_publish"
 
 func localPublicationTool() mcptools.Tool {
-	return agentTool(localPublicationToolName, "管理创作草稿与应用发布。targets 列已授权发布的应用连接。draft 用已登记 artifact_ids 保存草稿，project_artifact_id 可保留可编辑源。不选应用时仅保存在本机。submit 使用原 job_id 发布到草稿绑定的目标，status 查询原回执，cancel 停止尚未提交的部分。提交结果未知时先 status，不能另建任务重发。list 按 app_id 查看原任务，未指定为 local。安装应用不等于获得发布授权。",
-		`{"type":"object","properties":{"action":{"type":"string","enum":["targets","draft","list","submit","status","cancel"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"project_artifact_id":{"type":"string"},"artifact_ids":{"type":"array","items":{"type":"string"}},"job_id":{"type":"string"},"after":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
+	return agentTool(localPublicationToolName, "管理创作草稿与应用发布。targets 列已授权的应用连接。draft 保存已登记 artifact_ids，可选 project_artifact_id 保留可编辑源。不选应用时保存在本机。B站发布连接 publish 接受单个视频，title 和 body 分别是标题和简介，platform_options 提供分区编号、标签、原创或转载。submit 使用原 job_id 提交，status 查询原进度与回执，resume 仅续办原任务未确认分片，cancel 停止剩余操作。投稿结果未知时查询原任务，不能另建任务重发。list 按 app_id 查看，默认 local。",
+		`{"type":"object","properties":{"action":{"type":"string","enum":["targets","draft","list","submit","resume","status","cancel"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"project_artifact_id":{"type":"string"},"artifact_ids":{"type":"array","items":{"type":"string"}},"platform_options":{"type":"object","properties":{"category_id":{"type":"integer","minimum":1},"tags":{"type":"array","items":{"type":"string"}},"copyright":{"type":"integer","enum":[1,2],"description":"1 为原创，2 为转载"},"no_reprint":{"type":"boolean"},"source":{"type":"string","description":"转载出处"}},"required":["category_id","tags","copyright"],"additionalProperties":false},"job_id":{"type":"string"},"after":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
 }
 
 type localPublicationInput struct {
-	Action       string   `json:"action"`
-	AppID        string   `json:"app_id"`
-	ConnectionID string   `json:"connection_id"`
-	Title        string   `json:"title"`
-	Body         string   `json:"body"`
-	ProjectID    string   `json:"project_artifact_id"`
-	ArtifactIDs  []string `json:"artifact_ids"`
-	JobID        string   `json:"job_id"`
-	After        int64    `json:"after"`
-	Limit        int      `json:"limit"`
+	Action       string          `json:"action"`
+	AppID        string          `json:"app_id"`
+	ConnectionID string          `json:"connection_id"`
+	Title        string          `json:"title"`
+	Body         string          `json:"body"`
+	ProjectID    string          `json:"project_artifact_id"`
+	ArtifactIDs  []string        `json:"artifact_ids"`
+	Options      json.RawMessage `json:"platform_options"`
+	JobID        string          `json:"job_id"`
+	After        int64           `json:"after"`
+	Limit        int             `json:"limit"`
 }
 
 func (h *localChatService) publicationHost() (*apphost.Publisher, pluginhost.Invocation, error) {
@@ -74,11 +75,11 @@ func (t *localToolSet) callPublication(ctx context.Context, raw json.RawMessage)
 			in.Limit = 20
 		}
 		out, err = publisher.List(ctx, actor, in.AppID, in.After, in.Limit)
-	case "status", "cancel", "submit":
-		if !artifactID("sha-"+in.JobID, "sha-") || in.AppID != "" || in.ConnectionID != "" || in.ProjectID != "" || len(in.ArtifactIDs) != 0 || in.Title != "" || in.Body != "" {
+	case "status", "cancel", "submit", "resume":
+		if !artifactID("sha-"+in.JobID, "sha-") || in.AppID != "" || in.ConnectionID != "" || in.ProjectID != "" || len(in.ArtifactIDs) != 0 || len(in.Options) != 0 || in.Title != "" || in.Body != "" {
 			return "", errors.New("请只提供原发布任务编号及操作。目标和成品以该任务记录为准")
 		}
-		if in.Action == "submit" && t.inspectOnly {
+		if (in.Action == "submit" || in.Action == "resume") && t.inspectOnly {
 			return "", errors.New("续办请先查询原 job_id，不能新增发布提交")
 		}
 		out, err = publisher.Action(ctx, actor, in.JobID, in.Action)
@@ -105,7 +106,7 @@ func (t *localToolSet) callPublication(ctx context.Context, raw json.RawMessage)
 			}
 		}
 		encodedOrigin, _ := json.Marshal(origin)
-		draft := apphost.PublicationDraft{Title: in.Title, Body: in.Body, Origin: encodedOrigin}
+		draft := apphost.PublicationDraft{Title: in.Title, Body: in.Body, Options: in.Options, Origin: encodedOrigin}
 		if in.AppID != "" || in.ConnectionID != "" {
 			draft.Target, err = publisher.ResolveTarget(ctx, in.AppID, in.ConnectionID)
 			if err != nil {
@@ -190,7 +191,7 @@ func (h *localChatService) publicationRoutes(s *Server, mux *http.ServeMux) {
 			if !decode(w, r, &in) {
 				return
 			}
-			if !artifactID("sha-"+in.JobID, "sha-") || (in.Action != "submit" && in.Action != "status" && in.Action != "cancel") {
+			if !artifactID("sha-"+in.JobID, "sha-") || (in.Action != "submit" && in.Action != "resume" && in.Action != "status" && in.Action != "cancel") {
 				fail(w, http.StatusBadRequest, "请提供原发布任务编号，并选择发布、查询或取消")
 				return
 			}

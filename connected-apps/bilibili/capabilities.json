@@ -58,6 +58,16 @@
       ],
       "discoverable": true,
       "requires_owner_setting": "audio_enabled"
+    },
+    {
+      "id": "publication.video",
+      "implementation": "ready",
+      "description": "独立发布授权下上传单个 MP4，按原任务编号继续分片并查询稿件状态",
+      "permissions": [
+        "network"
+      ],
+      "discoverable": true,
+      "requires_owner_setting": "publication-settings.json"
     }
   ]
 }
