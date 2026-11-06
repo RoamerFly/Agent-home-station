@@ -190,3 +190,50 @@ func TestObservationSearchRefreshRestartsOnlyOnRequest(t *testing.T) {
 		t.Fatalf("refresh on another field = %v", err)
 	}
 }
+
+func TestOwnVideoObservationAlwaysReadsCurrentState(t *testing.T) {
+	proof := OwnVideoProof{VideoID: "post", StatusCode: 4, State: "reviewing", ObservedAt: "2026-11-06T00:00:00Z"}
+	f := &observationFixture{allowed: true, version: "v1", pages: map[string]ObservationPage{
+		"": {OwnVideoProof: &proof, Coverage: "synthetic status", Complete: true},
+	}}
+	dir := t.TempDir()
+	input := ObservationInput{AppID: "offline", ConnectionID: "account", ContentID: "post", Field: ObservationOwnVideo}
+	first, err := NewObserver(observerFixtureRegistry(t, f), dir).Read(t.Context(), input)
+	if err != nil || first.OwnVideoProof == nil || first.OwnVideoProof.State != "reviewing" || first.Cached || len(first.Chunks) != 0 {
+		t.Fatalf("reviewing result = %+v, %v", first, err)
+	}
+	public := OwnVideoProof{VideoID: "post", StatusCode: 5, State: "public", ObservedAt: "2026-11-06T00:01:00Z"}
+	f.pages[""] = ObservationPage{OwnVideoProof: &public, Chunks: []ObservationChunk{{Text: "public title", SourceID: "post"}}, Coverage: "synthetic status", Complete: true}
+	observer := NewObserver(observerFixtureRegistry(t, f), dir)
+	result, err := observer.Read(t.Context(), input)
+	if err != nil || result.Cached || result.OwnVideoProof == nil || result.OwnVideoProof.State != "public" || len(result.Chunks) != 1 {
+		t.Fatalf("new state after restart = %+v, %v", result, err)
+	}
+	if first.OwnVideoProof.State != "reviewing" || len(f.cursors) != 2 {
+		t.Fatalf("prior observation changed or skipped new request: first=%+v cursors=%v", first, f.cursors)
+	}
+	f.allowed = false
+	if err := observer.Check(t.Context(), result); !errors.Is(err, ErrObservationForbidden) {
+		t.Fatalf("revoked work status was usable: %v", err)
+	}
+}
+
+func TestOwnVideoObservationRejectsUnboundProofAndPrivateMetadata(t *testing.T) {
+	proof := &OwnVideoProof{VideoID: "other", StatusCode: 4, State: "reviewing", ObservedAt: "2026-11-06T00:00:00Z"}
+	page := ObservationPage{OwnVideoProof: proof, Coverage: "synthetic status", Complete: true}
+	f := &observationFixture{allowed: true, version: "v1", pages: map[string]ObservationPage{"": page}}
+	observer := NewObserver(observerFixtureRegistry(t, f), t.TempDir())
+	in := ObservationInput{AppID: "offline", ConnectionID: "account", ContentID: "post", Field: ObservationOwnVideo}
+	if _, err := observer.Read(t.Context(), in); err == nil {
+		t.Fatal("status of another video was accepted")
+	}
+	proof.VideoID = "post"
+	page.Chunks = []ObservationChunk{{Text: "private title", SourceID: "post"}}
+	f.pages[""] = page
+	if _, err := observer.Read(t.Context(), in); err == nil {
+		t.Fatal("unpublished title was accepted")
+	}
+	if err := validateObservationPage(ObservationSearch, ObservationPage{OwnVideoProof: proof, Complete: true}); err == nil {
+		t.Fatal("own-video evidence was accepted in a search result")
+	}
+}

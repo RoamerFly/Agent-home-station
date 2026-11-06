@@ -1,12 +1,20 @@
 {
   "version": 1,
-  "kind": "station-official-search-observer",
+  "kind": "station-official-read-observer",
   "host_entrypoint": "douyin-search",
   "connection": "search",
   "connection_authority": "host",
   "authentication": "host-only-app-client-token",
   "scope": "aweme.dy.video_search",
   "observation_fields": [
-    "search"
-  ]
+    "search",
+    "own_video"
+  ],
+  "own_video": {
+    "connection": "own-videos",
+    "authentication": "host-only-user-access-token",
+    "scope": "posting.behavior",
+    "method": "POST",
+    "config": "own-video.schema.json"
+  }
 }

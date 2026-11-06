@@ -9,6 +9,15 @@
         "keywords"
       ],
       "action": "owner-provision-private-config"
+    },
+    {
+      "id": "official-own-video",
+      "title": "本人作品状态",
+      "fields": [
+        "enabled",
+        "video_ids"
+      ],
+      "action": "owner-provision-private-config"
     }
   ]
 }

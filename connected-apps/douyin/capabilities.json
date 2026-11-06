@@ -10,6 +10,16 @@
       ],
       "discoverable": true,
       "requires_owner_setting": "enabled"
+    },
+    {
+      "id": "observation.own-video",
+      "implementation": "ready",
+      "description": "按用户授权查询本人作品在平台的当前状态",
+      "permissions": [
+        "network"
+      ],
+      "discoverable": true,
+      "requires_owner_setting": "enabled"
     }
   ]
 }

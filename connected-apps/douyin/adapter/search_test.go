@@ -183,7 +183,7 @@ func TestSearchConnectionStatesRemainVisible(t *testing.T) {
 	directory := t.TempDir()
 	app := New(directory)
 	connections, err := app.Connections(context.Background())
-	if err != nil || len(connections) != 1 || connections[0].ID != connectionID || connections[0].Configuration != "unconfigured" {
+	if err != nil || len(connections) != 2 || connections[0].ID != connectionID || connections[0].Configuration != "unconfigured" {
 		t.Fatalf("unconfigured connection = %#v, %v", connections, err)
 	}
 	value := validSettings()

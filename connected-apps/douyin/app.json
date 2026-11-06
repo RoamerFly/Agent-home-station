@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "douyin",
   "name": "抖音",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -18,7 +18,8 @@
     "network"
   ],
   "capability_ids": [
-    "observation.search"
+    "observation.search",
+    "observation.own-video"
   ],
   "http_routes": [
     {
@@ -27,18 +28,28 @@
       "capabilities": [
         "observation.search"
       ]
+    },
+    {
+      "id": "official-own-video-basic-info",
+      "endpoint": "https://open.douyin.com/api/douyin/v1/video/video_basic_info/",
+      "capabilities": [
+        "observation.own-video"
+      ]
     }
   ],
   "files": {
-    "adapter/entry.json": "37a560df457a7ba0b2fcede7b6a5302daf88d7f5299eac01c7a27fe96d14fcd9",
-    "adapter/search.go": "5d4c34a79e5a9a66f7e040ebee54bc46ce19a5d54ba74ce6f79c9a3c6b3d9d48",
-    "adapter/search_test.go": "ee8d41b4d3708da0a576c7f37da3cdbdc08fb32c9d1fcc8c1b0ce02519bbdfcd",
-    "capabilities.json": "a42e62796002e03f2f5664e6afe094de2e71dcf6e4ae420b9783cb6ae9fd4527",
-    "CHANGELOG.md": "93e94a7b4ec1bf61d8d4ec407fec00adf0284772d06a429a471a22779b9c4bd6",
+    "adapter/entry.json": "9bbbac2bcb6be8f0137d7c8e4cf67c8e9b87e1bca63adc6065b03dd2d88ebd55",
+    "adapter/own_video.go": "b7c78e821feeac2bfe206d9649ef516f6adb297b11b33a84b98420f80f8ed1f4",
+    "adapter/own_video_test.go": "b977506aa9e11b9e8c250e078404b834d717ea88e4aa761823cfc45aa9cd502e",
+    "adapter/search.go": "ff56fd74d6f7b00964f853a3d1d146d6986e173f096452434742f26c544e1690",
+    "adapter/search_test.go": "99165c49dede572664907097c9964f055d2977fa9f98c01eb542ff801e6783cc",
+    "capabilities.json": "83e8df7cd8a9ce4da35e282143b6157b5dba12d12fa0b7fa67133a80b67d6a02",
+    "CHANGELOG.md": "b67427f565a8b4d2c80c62515e6ad2abdbd1881763f2d6e6bf6bafb2cb6ed8a9",
     "config.schema.json": "957e5f63650b5e2f6008865c36abc4d2a71d68a68bd1987f4f3e930a018a0831",
-    "MIGRATION.md": "0a66f5c8be41ea284e6ba5d23d9eee8020e61045840488396419e4661f0baab2",
-    "PERMISSIONS.md": "f08b3ca8af2fe2e3c0c9abeaf281398f2c167a2cc931c19d0f738c1ddb425d4b",
-    "README.md": "3d76a19b18e22092136805cf545597831df2a3eba5f04758dca0471e755a1b25",
-    "ui.schema.json": "ca5722c8ae281c143e76b85d6cd5f461a8317f453bf2c2f168fb37a9c3ec768b"
+    "MIGRATION.md": "fb7829f9db959ed7fda1c4ab621693f4124f34871af1f182fa72529e0d9b4ce1",
+    "own-video.schema.json": "c7da49685c9183986a7296c8ebd4597277429df802d2136449fc91a540f1cde2",
+    "PERMISSIONS.md": "d5bbd04228c8c097cd9d38333d618f17acc017c57f451294a53ed5083f07ea57",
+    "README.md": "f6f7691f9063633737725fc5c6e698d77a438fca40ea4b64ac0a098b031ad0db",
+    "ui.schema.json": "35633d4a820231f9fe696051811bc8661b304531b60dba0d5dd326c46b4ff554"
   }
 }

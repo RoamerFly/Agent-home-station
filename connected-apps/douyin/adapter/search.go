@@ -1,4 +1,4 @@
-// Package adapter exposes the owner-approved Douyin video-search capability.
+// Package adapter exposes owner-approved Douyin search and own-video reads.
 // It is deliberately a read-only client for the documented open-platform API:
 // credentials never leave the request header and discovered results never
 // become media, cover, ASR, or page-text observations.
@@ -79,7 +79,7 @@ type loadedSettings struct {
 	version   string
 }
 
-// SearchApp implements a single official, owner-approved search connection.
+// SearchApp implements independently authorized official read connections.
 // It performs no local writes and accepts no redirects or cookies.
 type SearchApp struct {
 	privateDirectory string
@@ -89,7 +89,7 @@ type SearchApp struct {
 }
 
 // New constructs the adapter. The supplied directory is owned by the station
-// and is used solely to read search-settings.json through workspacefs.
+// and is used solely to read owner-local settings through workspacefs.
 func New(privateDirectory string) *SearchApp {
 	return &SearchApp{
 		privateDirectory: privateDirectory,
@@ -105,7 +105,7 @@ func New(privateDirectory string) *SearchApp {
 
 func (p *SearchApp) Registration() apphost.Registration {
 	return apphost.Registration{Application: apphost.Application{
-		ID: ID, Name: "抖音官方视频搜索", InstallationID: installationID, Registration: "official-search-v1",
+		ID: ID, Name: "抖音", InstallationID: installationID, Registration: "official-read-v1",
 	}, Provider: p}
 }
 
@@ -134,30 +134,32 @@ func (p *SearchApp) Connections(ctx context.Context) ([]apphost.Connection, erro
 	}
 	// A static connection lets the UI show configuration and expiry problems
 	// without treating a not-yet-configured app as absent.
-	return []apphost.Connection{{
-		ID: connectionID, AccountID: accountID, Label: "抖音官方视频搜索", Primary: true, Configuration: p.connectionState(),
-	}}, nil
+	return []apphost.Connection{p.searchConnection(), p.ownVideoConnection()}, nil
+}
+
+func (p *SearchApp) searchConnection() apphost.Connection {
+	return apphost.Connection{ID: connectionID, AccountID: accountID, Label: "抖音官方视频搜索", Primary: true, Configuration: p.connectionState()}
 }
 
 func (p *SearchApp) Inspect(ctx context.Context, id string) (apphost.ConnectionStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return apphost.ConnectionStatus{}, err
 	}
-	if id != connectionID {
+	var connection apphost.Connection
+	var action string
+	switch id {
+	case connectionID:
+		connection, action = p.searchConnection(), "content.search"
+	case ownVideoConnectionID:
+		connection, action = p.ownVideoConnection(), "content.own-video"
+	default:
 		return apphost.ConnectionStatus{}, apphost.ErrNotFound
 	}
-	connection := apphost.Connection{ID: connectionID, AccountID: accountID, Label: "抖音官方视频搜索", Primary: true, Configuration: p.connectionState()}
-	view, err := p.View()
-	if err != nil {
-		// The static connection remains visible, but capability must not claim it
-		// can execute with malformed or missing policy.
-		state := connection.Configuration
-		return apphost.ConnectionStatus{Connection: connection, Login: state, Runtime: "local", Worker: "disabled", CapabilityCheck: state}, nil
-	}
-	status := apphost.ConnectionStatus{Connection: connection, Runtime: "local", Worker: "disabled", Login: view.Status, CapabilityCheck: view.Status}
-	if view.Status == "ready" {
+	state := connection.Configuration
+	status := apphost.ConnectionStatus{Connection: connection, Runtime: "local", Worker: "disabled", Login: state, CapabilityCheck: state}
+	if state == "ready" {
 		status.Worker = "ready"
-		status.SupportedActions = []string{"content.search"}
+		status.SupportedActions = []string{action}
 	}
 	return status, nil
 }
@@ -180,6 +182,9 @@ func (p *SearchApp) ObservationTargets(ctx context.Context, id string) ([]apphos
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if id == ownVideoConnectionID {
+		return p.ownVideoTargets(ctx)
+	}
 	if id != connectionID {
 		return nil, apphost.ErrNotFound
 	}
@@ -201,6 +206,9 @@ func (p *SearchApp) ObservationGrant(ctx context.Context, access apphost.Observa
 	if err := ctx.Err(); err != nil {
 		return apphost.ObservationGrant{}, err
 	}
+	if access.ConnectionID == ownVideoConnectionID {
+		return p.ownVideoGrant(ctx, access)
+	}
 	loaded, err := p.load()
 	if err != nil {
 		return apphost.ObservationGrant{Allowed: false}, nil
@@ -217,6 +225,9 @@ func (p *SearchApp) ObservationGrant(ctx context.Context, access apphost.Observa
 func (p *SearchApp) ReadObservation(ctx context.Context, request apphost.ObservationRequest) (apphost.ObservationPage, error) {
 	if err := ctx.Err(); err != nil {
 		return apphost.ObservationPage{}, err
+	}
+	if request.ConnectionID == ownVideoConnectionID {
+		return p.readOwnVideo(ctx, request)
 	}
 	if request.Field != apphost.ObservationSearch || request.Limit < 0 {
 		return apphost.ObservationPage{}, apphost.ErrObservationInvalid

@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"wechat-bot/internal/workspacefs"
 )
@@ -31,10 +32,11 @@ const (
 	ObservationPlayback ObservationField = "playback"
 	ObservationPageText ObservationField = "page_text"
 	ObservationSearch   ObservationField = "search"
+	ObservationOwnVideo ObservationField = "own_video"
 )
 
 func (f ObservationField) valid() bool {
-	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch
+	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch || f == ObservationOwnVideo
 }
 
 type ObservationTarget struct {
@@ -97,6 +99,16 @@ type AudioProof struct {
 	MediaDurationSeconds float64 `json:"media_duration_seconds"`
 }
 
+// OwnVideoProof records the official status of an exact account-owned video
+// at a specific observation time. It carries no posting or delivery receipt.
+type OwnVideoProof struct {
+	VideoID    string `json:"video_id"`
+	StatusCode int    `json:"status_code"`
+	State      string `json:"state"`
+	ObservedAt string `json:"observed_at"`
+	CreatedAt  string `json:"created_at,omitempty"`
+}
+
 // ObservationPage has evidence for only the requested field. A provider must
 // return a new opaque cursor until that field is complete.
 type ObservationPage struct {
@@ -104,6 +116,7 @@ type ObservationPage struct {
 	Playback      []PlaybackInterval `json:"playback,omitempty"`
 	PlaybackProof *PlaybackProof     `json:"playback_proof,omitempty"`
 	AudioProof    *AudioProof        `json:"audio_proof,omitempty"`
+	OwnVideoProof *OwnVideoProof     `json:"own_video_proof,omitempty"`
 	Coverage      string             `json:"coverage"`
 	Complete      bool               `json:"complete"`
 	NextCursor    string             `json:"-"`
@@ -134,6 +147,7 @@ type ObservationResult struct {
 	Playback      []PlaybackInterval `json:"playback,omitempty"`
 	PlaybackProof *PlaybackProof     `json:"playback_proof,omitempty"`
 	AudioProof    *AudioProof        `json:"audio_proof,omitempty"`
+	OwnVideoProof *OwnVideoProof     `json:"own_video_proof,omitempty"`
 	Coverage      string             `json:"coverage"`
 	Complete      bool               `json:"complete"`
 	Cached        bool               `json:"cached"`
@@ -159,8 +173,8 @@ var (
 	ErrObservationAudioTranscription    = errors.New("本地语音识别失败，可检查工具配置后从原位置重试")
 	ErrObservationAudioSourceChanged    = errors.New("平台返回的媒体与上一页不同，需重新开启当前读取授权后从头读取")
 	ErrObservationSearchPageSize        = errors.New("抖音搜索每页支持 1–50 条，续读请省略 limit 或沿用首页条数")
-	ErrObservationCredentialExpired     = errors.New("抖音应用令牌无效或已过期，请由主人更新本机配置")
-	ErrObservationCapabilityDenied      = errors.New("抖音开放平台未授予当前应用搜索能力，请核对应用权限")
+	ErrObservationCredentialExpired     = errors.New("抖音令牌无效或已过期，请由主人更新本机配置")
+	ErrObservationCapabilityDenied      = errors.New("当前连接缺少所需的抖音开放平台权限，请核对授权")
 )
 
 type observationCheckpoint struct {
@@ -294,7 +308,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	key := observationKey(ref, in.ContentID, in.Field, grant.Version, playbackLimit)
 	var checkpoint observationCheckpoint
 	var existed bool
-	if !in.Refresh {
+	if !in.Refresh && in.Field != ObservationOwnVideo {
 		checkpoint, existed, err = o.load(key)
 	}
 	if err != nil {
@@ -355,6 +369,15 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := o.Check(ctx, ObservationResult{ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field, GrantVersion: grant.Version}); err != nil {
 		return ObservationResult{}, err
 	}
+	// An observed review state can change immediately. Return a fresh proof
+	// to the caller without persisting an old status in the page cache.
+	if in.Field == ObservationOwnVideo {
+		if page.OwnVideoProof.VideoID != in.ContentID {
+			return ObservationResult{}, errors.New("作品状态与请求编号不一致")
+		}
+		return ObservationResult{ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field, GrantVersion: grant.Version,
+			Chunks: page.Chunks, OwnVideoProof: page.OwnVideoProof, Coverage: page.Coverage, Complete: true}, nil
+	}
 	checkpoint = observationCheckpoint{
 		ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field, GrantVersion: grant.Version,
 		Cursor: page.NextCursor, Chunks: append([]ObservationChunk(nil), page.Chunks...), Playback: append([]PlaybackInterval(nil), page.Playback...),
@@ -391,6 +414,11 @@ func (o *Observer) Check(ctx context.Context, result ObservationResult) error {
 }
 
 func validateObservationPage(field ObservationField, page ObservationPage) error {
+	if field == ObservationOwnVideo || page.OwnVideoProof != nil {
+		if field != ObservationOwnVideo || !validOwnVideoProof(page) {
+			return errors.New("应用返回了不一致的本人作品状态")
+		}
+	}
 	if page.AudioProof != nil {
 		if field != ObservationAudio || !validAudioProof(*page.AudioProof, page.Complete, len(page.Chunks)) {
 			return errors.New("应用内容返回了不一致的音轨证据")
@@ -431,6 +459,32 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 		position = chunk.Position
 	}
 	return nil
+}
+
+func validOwnVideoProof(page ObservationPage) bool {
+	proof := page.OwnVideoProof
+	if proof == nil || strings.TrimSpace(proof.VideoID) == "" || !page.Complete || page.NextCursor != "" {
+		return false
+	}
+	observed, err := time.Parse(time.RFC3339, proof.ObservedAt)
+	if err != nil || observed.IsZero() {
+		return false
+	}
+	switch proof.State {
+	case "public":
+		if proof.CreatedAt != "" {
+			created, err := time.Parse(time.RFC3339, proof.CreatedAt)
+			if err != nil || created.IsZero() {
+				return false
+			}
+		}
+		return len(page.Chunks) <= 1 && (len(page.Chunks) == 0 ||
+			(page.Chunks[0].SourceID == proof.VideoID && page.Chunks[0].SourceURL == "" && page.Chunks[0].PublishedAt == ""))
+	case "not_public", "reviewing", "unknown":
+		return len(page.Chunks) == 0 && proof.CreatedAt == ""
+	default:
+		return false
+	}
 }
 
 func validAudioProof(proof AudioProof, complete bool, chunks int) bool {
