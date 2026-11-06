@@ -12,7 +12,8 @@
       "title": "官方视频搜索",
       "fields": [
         "enabled",
-        "keywords"
+        "keywords",
+        "follow_public_videos"
       ],
       "action": "owner-provision-private-config"
     },

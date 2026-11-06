@@ -29,13 +29,16 @@ Windows 本地成长站可选择随包提供抖音应用。
   "client_token": "<抖音开放平台应用令牌>",
   "expires_at": "2030-01-01T00:00:00+08:00",
   "device_id": "1",
+  "follow_public_videos": true,
   "keywords": ["城市公共交通"]
 }
 ```
 
 管理页「应用 → 抖音」显示本机设置状态。通过本地聊天的 `app_observe(action=list)` 获取关键词及其编号，再以 `field=search` 读取。默认每页 10 条，可选 1–50 条。续读时省略 `limit`，重新搜索时传 `refresh=true`。同一关键词的查询游标由宿主保存。
 
-结果只表示官方搜索中返回的候选作品。标题、编号、发布时间和可核对的链接可用于继续选题。画面、音轨、播放和账号内容各自需要后续的独立接入。
+结果表示官方搜索中返回的候选作品。主人可选填 follow_public_videos=true，允许跟进来源链接与作品编号相符的结果。带 follow_up_content_id 的条目可使用同一个 search 连接，将该值作为 content_id、field 设为 player_entry。只传本次结果的编号，无需手写 URL 或填写 limit。
+
+宿主会用官方匿名接口重新核对这个作品的播放器入口。作品变为非公开后会返回平台状态。播放器入口和标题只提供来源，播放、画面和音轨是独立观察。省略开关时仅搜索。[官方播放器接口](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/iframe-player/get-iframe-by-video)
 
 ## 已授权本人作品
 

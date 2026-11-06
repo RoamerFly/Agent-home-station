@@ -25,18 +25,19 @@ import (
 type ObservationField string
 
 const (
-	ObservationTitle    ObservationField = "title"
-	ObservationBody     ObservationField = "body"
-	ObservationComments ObservationField = "comments"
-	ObservationAudio    ObservationField = "audio"
-	ObservationPlayback ObservationField = "playback"
-	ObservationPageText ObservationField = "page_text"
-	ObservationSearch   ObservationField = "search"
-	ObservationOwnVideo ObservationField = "own_video"
+	ObservationTitle       ObservationField = "title"
+	ObservationBody        ObservationField = "body"
+	ObservationComments    ObservationField = "comments"
+	ObservationAudio       ObservationField = "audio"
+	ObservationPlayback    ObservationField = "playback"
+	ObservationPageText    ObservationField = "page_text"
+	ObservationSearch      ObservationField = "search"
+	ObservationOwnVideo    ObservationField = "own_video"
+	ObservationPlayerEntry ObservationField = "player_entry"
 )
 
 func (f ObservationField) valid() bool {
-	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch || f == ObservationOwnVideo
+	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch || f == ObservationOwnVideo || f == ObservationPlayerEntry
 }
 
 type ObservationTarget struct {
@@ -65,11 +66,13 @@ type ObservationRequest struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 type ObservationChunk struct {
-	Position    int    `json:"position"`
-	Text        string `json:"text"`
-	SourceID    string `json:"source_id,omitempty"`
-	SourceURL   string `json:"source_url,omitempty"`
-	PublishedAt string `json:"published_at,omitempty"`
+	Position          int              `json:"position"`
+	Text              string           `json:"text"`
+	SourceID          string           `json:"source_id,omitempty"`
+	SourceURL         string           `json:"source_url,omitempty"`
+	PublishedAt       string           `json:"published_at,omitempty"`
+	FollowUpContentID string           `json:"follow_up_content_id,omitempty"`
+	FollowUpField     ObservationField `json:"follow_up_field,omitempty"`
 }
 type PlaybackInterval struct {
 	StartSeconds float64 `json:"start_seconds"`
@@ -308,7 +311,8 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	key := observationKey(ref, in.ContentID, in.Field, grant.Version, playbackLimit)
 	var checkpoint observationCheckpoint
 	var existed bool
-	if !in.Refresh && in.Field != ObservationOwnVideo {
+	fresh := in.Field == ObservationOwnVideo || in.Field == ObservationPlayerEntry
+	if !in.Refresh && !fresh {
 		checkpoint, existed, err = o.load(key)
 	}
 	if err != nil {
@@ -369,10 +373,9 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := o.Check(ctx, ObservationResult{ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field, GrantVersion: grant.Version}); err != nil {
 		return ObservationResult{}, err
 	}
-	// An observed review state can change immediately. Return a fresh proof
-	// to the caller without persisting an old status in the page cache.
-	if in.Field == ObservationOwnVideo {
-		if page.OwnVideoProof.VideoID != in.ContentID {
+	// Review state and player availability can change. Always check upstream.
+	if fresh {
+		if in.Field == ObservationOwnVideo && page.OwnVideoProof.VideoID != in.ContentID {
 			return ObservationResult{}, errors.New("作品状态与请求编号不一致")
 		}
 		return ObservationResult{ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field, GrantVersion: grant.Version,
@@ -451,8 +454,16 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 	if len(page.Playback) != 0 || page.PlaybackProof != nil {
 		return errors.New("应用内容返回了不匹配的观察字段")
 	}
+	if field == ObservationPlayerEntry && (!page.Complete || page.NextCursor != "" || len(page.Chunks) != 1 || page.Chunks[0].SourceID == "" || page.Chunks[0].SourceURL == "") {
+		return errors.New("应用未返回可核对的播放器入口")
+	}
 	position := -1
 	for _, chunk := range page.Chunks {
+		if chunk.FollowUpContentID != "" || chunk.FollowUpField != "" {
+			if field != ObservationSearch || chunk.FollowUpField != ObservationPlayerEntry || chunk.SourceID == "" || strings.TrimSpace(chunk.FollowUpContentID) == "" || len(chunk.FollowUpContentID) > 256 {
+				return errors.New("应用内容返回了无效的后续读取编号")
+			}
+		}
 		if strings.TrimSpace(chunk.Text) == "" || chunk.Position <= position {
 			return errors.New("应用内容返回了无效的观察片段")
 		}

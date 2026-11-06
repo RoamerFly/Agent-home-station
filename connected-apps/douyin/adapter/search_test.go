@@ -101,6 +101,11 @@ func TestSearchUsesExactOfficialCredentialScopeAndStablePaging(t *testing.T) {
 	if first.Complete || first.NextCursor == "" || len(first.Chunks) != 2 || first.Chunks[0].SourceID != "7001" || first.Chunks[0].PublishedAt == "" || first.Chunks[0].SourceURL != "https://www.douyin.com/video/7001" || first.Chunks[1].SourceURL != "" || first.Chunks[1].PublishedAt != "" {
 		t.Fatalf("unexpected first page: %#v", first)
 	}
+	for _, chunk := range first.Chunks {
+		if chunk.FollowUpField != "" || chunk.FollowUpContentID != "" {
+			t.Fatal("legacy settings exposed a player follow-up without authorization")
+		}
+	}
 	if bytes.Contains([]byte(first.NextCursor), []byte("亲子教育")) || bytes.Contains([]byte(first.NextCursor), []byte("clt.test-token-only")) {
 		t.Fatalf("cursor leaks owner keyword or token: %q", first.NextCursor)
 	}

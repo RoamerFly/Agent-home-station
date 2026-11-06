@@ -30,6 +30,16 @@
       ],
       "discoverable": false,
       "requires_owner_setting": "explicit-owner-oauth"
+    },
+    {
+      "id": "observation.player-entry",
+      "implementation": "ready",
+      "description": "按已授权搜索结果匿名核对抖音官方播放器入口",
+      "permissions": [
+        "network"
+      ],
+      "discoverable": true,
+      "requires_owner_setting": "follow_public_videos"
     }
   ]
 }

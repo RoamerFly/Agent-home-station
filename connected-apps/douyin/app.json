@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "douyin",
   "name": "抖音",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -20,7 +20,8 @@
   "capability_ids": [
     "observation.search",
     "observation.own-video",
-    "account.authorization"
+    "account.authorization",
+    "observation.player-entry"
   ],
   "http_routes": [
     {
@@ -50,6 +51,13 @@
       "capabilities": [
         "account.authorization"
       ]
+    },
+    {
+      "id": "official-public-video-player",
+      "endpoint": "https://open.douyin.com/api/douyin/v1/video/get_iframe_by_video",
+      "capabilities": [
+        "observation.player-entry"
+      ]
     }
   ],
   "files": {
@@ -57,18 +65,22 @@
     "adapter/account_test.go": "60340e09fe16f16200c0f78c5da5e2526cf35724ad0c5c95ed154c75f256bb05",
     "adapter/account_wire.go": "fbbf436668feb95368f710321a8c2511eac8921c675a7921c8bc72604cb27226",
     "adapter/account_wire_test.go": "2bc468a8142436f62f40ecd8b00fc68d05f41c7a46da9658ea89b8cb94b54167",
-    "adapter/entry.json": "3aee33dbabf82a7408c2cda4e9ee4b2e3ec0eda7871ca97340f66135dd3bb074",
+    "adapter/entry.json": "a5f91cf1e4a7bcab2bf14f7da59235b52792031589667528c8919c9328ef8760",
     "adapter/own_video.go": "b7c78e821feeac2bfe206d9649ef516f6adb297b11b33a84b98420f80f8ed1f4",
     "adapter/own_video_test.go": "b977506aa9e11b9e8c250e078404b834d717ea88e4aa761823cfc45aa9cd502e",
-    "adapter/search.go": "bd391f087e8eef29ab9f1d90acdda629e122b36275b4b1cdb48aab5a0f62d328",
-    "adapter/search_test.go": "d436b34110932be586ac4986ba774a4ce2ad0fada93d74980b4483410eaecf06",
-    "capabilities.json": "e87a2d0db27bdcbccc8bec927d0fdccfe261e6a52c1bdf072001670b454c9afb",
-    "CHANGELOG.md": "b82a785fb8c6dcd96a1db62a369dacceacff6943e4012cd9fc0cdeb728560aa3",
-    "config.schema.json": "957e5f63650b5e2f6008865c36abc4d2a71d68a68bd1987f4f3e930a018a0831",
-    "MIGRATION.md": "c884626c85ba06b9948061f3b404b4892c0b3094409fbbc0e57dd8d1ba5a1df1",
+    "adapter/player.go": "d0939abc8978339096d22de822e1df1c9721f54f7837bdfc52e0dd1a4ed6d71d",
+    "adapter/player_followup.go": "1114a85d4858984b68296a855067f5f11f7cc9e0e199ed45a1fff801d48d4e76",
+    "adapter/player_followup_test.go": "dd377ac52a2071b3cee2748b34ce611c7d4776f450fdbbff4fe33ae82fb207da",
+    "adapter/player_test.go": "5719a46470fd2386068b610be47197308291bbf6336bc9cb8c3ebdea13f8f5cb",
+    "adapter/search.go": "b182f26ff9d71d7bf82674931287389977d9b449e7b8c643c7b5550b96eabc29",
+    "adapter/search_test.go": "d51f4a877ebfb761e6a4aa47225717b7341cfa65c18792622f7904975ad552a9",
+    "capabilities.json": "a8a982737cae54ce218470ad8c589ee39cdb4e237324f0f46850e9cb6a197251",
+    "CHANGELOG.md": "673b43e15fac0c248549faec49aa05d78efa37dcc410841a782c36ceb7079151",
+    "config.schema.json": "9b4a2e2f5153df24e7fec36ebbb888cf1357de7ac7200150537ad8ad20ef490b",
+    "MIGRATION.md": "feaca75be8bd43d49bcc450da5365ac9171d2e69c34b2966f4780ccc6a1c8ba3",
     "own-video.schema.json": "c7da49685c9183986a7296c8ebd4597277429df802d2136449fc91a540f1cde2",
-    "PERMISSIONS.md": "872cdaec44e993cf9c8ff3fd9f6a228738b0785a78b3a16e3a545a7d00952103",
-    "README.md": "fa3b2aa737ba2b355add98732f7a629ed9f7e594d9fc100917ab49166c527397",
-    "ui.schema.json": "529dd265df16b07fe686a78687276f22d5d5d85cd30cf622348433cd95da3b37"
+    "PERMISSIONS.md": "b08231bcb5fbc8aa9b8aaf0099dd8759401b2869d6b9d38857e4ce2fe64c65d6",
+    "README.md": "0b46afb624fd2fb371ef62051580375f007a799100dec1b882193d6ed74df238",
+    "ui.schema.json": "971995f2520286b662ee8abfb83a002f6ea2af58563aaf1e7804d4e2b1e36a07"
   }
 }

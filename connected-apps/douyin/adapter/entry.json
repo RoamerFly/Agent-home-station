@@ -8,7 +8,8 @@
   "scope": "aweme.dy.video_search",
   "observation_fields": [
     "search",
-    "own_video"
+    "own_video",
+    "player_entry"
   ],
   "own_video": {
     "connection": "own-videos",
@@ -22,5 +23,11 @@
     "authentication": "host-only-user-oauth",
     "scope": "user_info",
     "owner_action": "web-authorization"
+  },
+  "player_entry": {
+    "connection": "search",
+    "authentication": "anonymous",
+    "source": "verified-search-result",
+    "owner_setting": "follow_public_videos"
   }
 }

@@ -62,12 +62,13 @@ type SearchView struct {
 // settings is local owner policy. Its JSON shape is intentionally small and
 // fixed: the client token is an application credential, not a user account.
 type settings struct {
-	SchemaVersion int      `json:"schema_version"`
-	Enabled       bool     `json:"enabled"`
-	ClientToken   string   `json:"client_token"`
-	ExpiresAt     string   `json:"expires_at"`
-	DeviceID      string   `json:"device_id"`
-	Keywords      []string `json:"keywords"`
+	SchemaVersion      int      `json:"schema_version"`
+	Enabled            bool     `json:"enabled"`
+	ClientToken        string   `json:"client_token"`
+	ExpiresAt          string   `json:"expires_at"`
+	DeviceID           string   `json:"device_id"`
+	Keywords           []string `json:"keywords"`
+	FollowPublicVideos bool     `json:"follow_public_videos,omitempty"`
 }
 
 type loadedSettings struct {
@@ -231,6 +232,9 @@ func (p *SearchApp) ReadObservation(ctx context.Context, request apphost.Observa
 	if request.ConnectionID == ownVideoConnectionID {
 		return p.readOwnVideo(ctx, request)
 	}
+	if request.Field == apphost.ObservationPlayerEntry {
+		return p.readPlayerEntry(ctx, request)
+	}
 	if request.Field != apphost.ObservationSearch || request.Limit < 0 {
 		return apphost.ObservationPage{}, apphost.ErrObservationInvalid
 	}
@@ -260,7 +264,18 @@ func (p *SearchApp) ReadObservation(ctx context.Context, request apphost.Observa
 	if err := p.authorize(loaded, request.ObservationAccess); err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	return buildPage(response, cursor)
+	page, err := buildPage(response, cursor)
+	if err != nil || !loaded.FollowPublicVideos {
+		return page, err
+	}
+	for i := range page.Chunks {
+		chunk := &page.Chunks[i]
+		if chunk.SourceURL != "" {
+			chunk.FollowUpField = apphost.ObservationPlayerEntry
+			chunk.FollowUpContentID = playerFollowupID(loaded, cursor.ContentID, chunk.SourceID)
+		}
+	}
+	return page, nil
 }
 
 func (p *SearchApp) authorize(previous loadedSettings, access apphost.ObservationAccess) error {
@@ -275,7 +290,13 @@ func (p *SearchApp) authorize(previous loadedSettings, access apphost.Observatio
 }
 
 func (p *SearchApp) allowed(loaded loadedSettings, access apphost.ObservationAccess) bool {
-	if !loaded.Enabled || access.AppID != ID || access.InstallationID != installationID || access.ConnectionID != connectionID || access.AccountID != accountID || access.Field != apphost.ObservationSearch {
+	if !loaded.Enabled || access.AppID != ID || access.InstallationID != installationID || access.ConnectionID != connectionID || access.AccountID != accountID {
+		return false
+	}
+	if access.Field == apphost.ObservationPlayerEntry {
+		return playerFollowupVideo(loaded, access.ContentID) != ""
+	}
+	if access.Field != apphost.ObservationSearch {
 		return false
 	}
 	for _, keyword := range loaded.Keywords {
