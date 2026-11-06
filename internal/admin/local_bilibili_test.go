@@ -36,13 +36,17 @@ func TestLocalBilibiliOwnerAuthorizationAndRestart(t *testing.T) {
 		t.Fatalf("initialize local owner: %d", code)
 	}
 	code, defaults := f.request(http.MethodGet, policy, nil, false)
-	if code != 200 || defaults["enabled"] != false || defaults["browser_enabled"] != false {
+	if code != 200 || defaults["enabled"] != false || defaults["browser_enabled"] != false || defaults["playback_enabled"] != false {
 		t.Fatalf("new connection was already authorized: %d %#v", code, defaults)
 	}
 	if _, ok := defaults["browser_available"].(bool); !ok {
 		t.Fatalf("browser availability was missing: %#v", defaults)
 	}
 	settings := map[string]any{"revision": defaults["revision"], "enabled": true, "videos": []string{video}}
+	unscopedPlayback := map[string]any{"revision": defaults["revision"], "enabled": true, "videos": []string{video}, "playback_enabled": true}
+	if code, _ := f.request(http.MethodPut, policy, unscopedPlayback, true); code != 400 {
+		t.Fatalf("playback enabled without browser authorization: %d", code)
+	}
 	if code, _ := f.request(http.MethodPut, policy, settings, false); code != 403 {
 		t.Fatalf("authorization changed without CSRF: %d", code)
 	}

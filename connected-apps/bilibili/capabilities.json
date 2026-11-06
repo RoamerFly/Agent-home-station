@@ -22,6 +22,14 @@
       "permissions": ["network"],
       "discoverable": true,
       "requires_owner_setting": "browser_enabled"
+    },
+    {
+      "id": "observation.playback",
+      "implementation": "ready",
+      "description": "在独立 Edge 中对公开单段媒体静音采样并返回实际播放区间",
+      "permissions": ["network"],
+      "discoverable": true,
+      "requires_owner_setting": "playback_enabled"
     }
   ]
 }

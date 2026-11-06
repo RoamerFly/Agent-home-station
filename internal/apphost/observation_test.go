@@ -83,3 +83,42 @@ func TestObserverRejectsNoProgress(t *testing.T) {
 		t.Fatal("accepted a partial page without continuation")
 	}
 }
+
+func TestObserverPlaybackProofSeparatesCoverageAndSampleCache(t *testing.T) {
+	f := &observationFixture{allowed: true, version: "v1", pages: map[string]ObservationPage{}}
+	observer := NewObserver(observerFixtureRegistry(t, f), t.TempDir())
+	read := func(seconds int) (ObservationResult, error) {
+		return observer.Read(t.Context(), ObservationInput{AppID: "offline", ConnectionID: "account", ContentID: "post", Field: ObservationPlayback, Limit: seconds})
+	}
+	setPage := func(seconds int, ended bool, ranges ...PlaybackInterval) {
+		f.pages[""] = ObservationPage{
+			Coverage: "synthetic playback", Complete: true, Playback: ranges,
+			PlaybackProof: &PlaybackProof{RequestedSeconds: seconds, MediaDurationSeconds: 3, Ready: true, Ended: ended, Paused: true, FullyPlayed: true},
+		}
+	}
+	setPage(1, false, PlaybackInterval{0, 1})
+	first, err := read(1)
+	if err != nil || first.PlaybackProof == nil || first.PlaybackProof.FullyPlayed || !first.Complete {
+		t.Fatalf("completed sample falsely claimed full playback: %#v %v", first, err)
+	}
+	if cached, err := read(1); err != nil || !cached.Cached || cached.PlaybackProof.FullyPlayed {
+		t.Fatalf("exact cache lost sampled evidence: %#v %v", cached, err)
+	}
+	setPage(2, true, PlaybackInterval{0, 1}, PlaybackInterval{2, 3})
+	gap, err := read(2)
+	if err != nil || gap.Cached || gap.PlaybackProof == nil || gap.PlaybackProof.FullyPlayed {
+		t.Fatalf("a new sample with a coverage gap was treated as full: %#v %v", gap, err)
+	}
+	setPage(3, true, PlaybackInterval{0, 3})
+	full, err := read(3)
+	if err != nil || full.Cached || full.PlaybackProof == nil || !full.PlaybackProof.FullyPlayed {
+		t.Fatalf("a verified full interval was lost: %#v %v", full, err)
+	}
+	setPage(4, false)
+	for attempt := 0; attempt < 2; attempt++ {
+		ready, err := read(4)
+		if err != nil || ready.Cached || ready.PlaybackProof == nil || !ready.PlaybackProof.Ready || ready.PlaybackProof.FullyPlayed || len(ready.Playback) != 0 {
+			t.Fatalf("readiness was cached or turned into playback: %#v %v", ready, err)
+		}
+	}
+}

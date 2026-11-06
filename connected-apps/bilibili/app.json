@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "bilibili",
   "name": "哔哩哔哩",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -20,7 +20,8 @@
   "capability_ids": [
     "observation.title",
     "observation.body",
-    "observation.page-text"
+    "observation.page-text",
+    "observation.playback"
   ],
   "browser_routes": [
     {
@@ -37,19 +38,27 @@
         "observation.title",
         "observation.body"
       ]
+    },
+    {
+      "id": "public-video-playback",
+      "endpoint": "https://api.bilibili.com/x/player/playurl",
+      "capabilities": [
+        "observation.playback"
+      ]
     }
   ],
   "files": {
-    "adapter/entry.json": "57069c0383ef151048d49f1def7eec9763fa2f175be98ee34bbdcf3360a79fc3",
-    "adapter/page_test.go": "0a0ff3de98fd45fc58e25e7e3a11e193112ca44fe77faa9ad046aafb5568ebbf",
-    "adapter/public.go": "8c8754047595a8fdc2468455cf122ca55370eacc686160b076b90d8394925334",
-    "adapter/public_test.go": "ed2db00ebc3f419a7e76aca0eb9457edd335857e73ad2c5b4a92f22d04c39932",
-    "capabilities.json": "4dfa9768466eedceb8644e3a4986ce14542495a306ea4e498ab81f0715672f8a",
-    "CHANGELOG.md": "2bf4ca3db01dac2e6f626cf2da9fdb6eb69263481812dd8995f1460e1b7ffb94",
-    "config.schema.json": "78217ab4b5d6bbffb645420c451e1374adf2f0c9330789668709a425f8c74e2e",
-    "MIGRATION.md": "15ea22bce861807e783a96ce956c712e7832418912b37a510742b25f15d1ae2e",
-    "PERMISSIONS.md": "ebb3952800dbc1d3436c2eaea899217a092291c7b14a644bf53c74de9b107557",
-    "README.md": "bf0fd8c89ca3da3fcfccd5a5288f34787b45287676ad56079265d251a87b2aea",
-    "ui.schema.json": "a8f7d8f6dd6350e733cf0b9676ef152ac393f59944cc201d10319131f7d0edaa"
+    "adapter/entry.json": "69d271e68732a5b3f1ddb399afb73765cbad7f8cd7c47f175b09ca947bd19f2d",
+    "adapter/page_test.go": "45926e348496c648e2beedfcbf3a7069f6734600163536a6850386e5d9010552",
+    "adapter/playback_test.go": "28acd95aea92208a2ede68640645d2bfbccedc794f6e59747ca55ce5357d7a4d",
+    "adapter/public.go": "bc350563b1cb1759d377e7b4dacf3d2dbcd8df889886cacce2c03c1d64f4d26b",
+    "adapter/public_test.go": "d90139219dbaa509eaf4dd4fec345c76dd7ec7058c0a25333fca5988a13d76aa",
+    "capabilities.json": "9e77d80fa72d5a44b9cebf5b158c018c856b70dc9398a01b8f2fb2cf38a882a2",
+    "CHANGELOG.md": "e0603e5b2053ef5d50c4050f6ec2cf53e94d7d685a9aa8155822f18bafbc10d4",
+    "config.schema.json": "98e7ff16ee38034d2d3cf2b9723fbeeef89e132bb50c330ed8ed44197539d655",
+    "MIGRATION.md": "e730baa6e205806f2c376bc225561424281e0e923c726a518ae9579b97ab68af",
+    "PERMISSIONS.md": "6b29d525382b8564ab724ebc6dba7e4b7640f7ba070af9f56885ccadf3300017",
+    "README.md": "0cdec518f5d687a2287768ffa757494b041016e7a2cfd07207ef9fdbec4d3c1c",
+    "ui.schema.json": "b2f4cdfd012e0e6d4f19ed5eb3031eac07a153884b5b6b043b46f3f32f0d9f06"
   }
 }

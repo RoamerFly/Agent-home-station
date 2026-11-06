@@ -6,4 +6,6 @@ Windows 本地成长站可随包提供此应用。在「应用 → 哔哩哔哩 
 
 需要读取页面时，可另行开启「使用独立浏览器读取页面文本」。本机 Edge 可用时，大肥鱼可调用 `app_observe(field=page_text)` 读取获准 BV 页面的标题和可用简介。这个页面文字入口和匿名稿件接口分别标注来源。
 
+进一步开启播放授权后，可用 `app_observe(field=playback)` 从开头采样公开单段 MP4。当前媒体上限为 32 MiB。默认静音采样 6 秒，可用 `limit` 选 1–20 秒。结果包含 Edge 核实的已播放区间及就绪、暂停和结束状态。只有已结束且实际区间覆盖整段，才会返回完整播放。
+
 Windows 隔离验证包使用 `scripts/Build-Desktop.ps1 -LocalStation -WithBilibiliApp` 构建。家目录的源码副本便于检查和编辑，主程序使用随包校验过的适配器。

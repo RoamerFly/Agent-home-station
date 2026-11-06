@@ -70,14 +70,26 @@ type PlaybackInterval struct {
 	EndSeconds   float64 `json:"end_seconds"`
 }
 
+// PlaybackProof describes a bounded browser sample. FullyPlayed is derived
+// by the host from the ended event and continuous browser-reported ranges.
+type PlaybackProof struct {
+	RequestedSeconds     int     `json:"requested_seconds"`
+	MediaDurationSeconds float64 `json:"media_duration_seconds,omitempty"`
+	Ready                bool    `json:"ready"`
+	Ended                bool    `json:"ended"`
+	Paused               bool    `json:"paused"`
+	FullyPlayed          bool    `json:"fully_played"`
+}
+
 // ObservationPage has evidence for only the requested field. A provider must
 // return a new opaque cursor until that field is complete.
 type ObservationPage struct {
-	Chunks     []ObservationChunk `json:"chunks,omitempty"`
-	Playback   []PlaybackInterval `json:"playback,omitempty"`
-	Coverage   string             `json:"coverage"`
-	Complete   bool               `json:"complete"`
-	NextCursor string             `json:"-"`
+	Chunks        []ObservationChunk `json:"chunks,omitempty"`
+	Playback      []PlaybackInterval `json:"playback,omitempty"`
+	PlaybackProof *PlaybackProof     `json:"playback_proof,omitempty"`
+	Coverage      string             `json:"coverage"`
+	Complete      bool               `json:"complete"`
+	NextCursor    string             `json:"-"`
 }
 
 // ObservationProvider is an optional read-only capability for a registered
@@ -97,36 +109,43 @@ type ObservationInput struct {
 }
 type ObservationResult struct {
 	ConnectionRef
-	ContentID    string             `json:"content_id"`
-	Field        ObservationField   `json:"field"`
-	GrantVersion string             `json:"-"`
-	Chunks       []ObservationChunk `json:"chunks,omitempty"`
-	Playback     []PlaybackInterval `json:"playback,omitempty"`
-	Coverage     string             `json:"coverage"`
-	Complete     bool               `json:"complete"`
-	Cached       bool               `json:"cached"`
-	Resumed      bool               `json:"resumed"`
+	ContentID     string             `json:"content_id"`
+	Field         ObservationField   `json:"field"`
+	GrantVersion  string             `json:"-"`
+	Chunks        []ObservationChunk `json:"chunks,omitempty"`
+	Playback      []PlaybackInterval `json:"playback,omitempty"`
+	PlaybackProof *PlaybackProof     `json:"playback_proof,omitempty"`
+	Coverage      string             `json:"coverage"`
+	Complete      bool               `json:"complete"`
+	Cached        bool               `json:"cached"`
+	Resumed       bool               `json:"resumed"`
 }
 
 var (
-	ErrObservationInvalid            = errors.New("应用观察请求无效")
-	ErrObservationNotFound           = errors.New("未找到已接入的应用或账号")
-	ErrObservationForbidden          = errors.New("当前应用账号未授权读取此内容")
-	ErrObservationContentUnavailable = errors.New("平台暂时未提供这条内容，请核对编号或公开状态")
-	ErrObservationThrottled          = errors.New("平台限制了本次访问，请稍后重试")
-	ErrObservationBrowserUnavailable = errors.New("独立浏览器暂不可用，请检查本机 Microsoft Edge 与应用授权")
+	ErrObservationInvalid             = errors.New("应用观察请求无效")
+	ErrObservationNotFound            = errors.New("未找到已接入的应用或账号")
+	ErrObservationForbidden           = errors.New("当前应用账号未授权读取此内容")
+	ErrObservationContentUnavailable  = errors.New("平台暂时未提供这条内容，请核对编号或公开状态")
+	ErrObservationThrottled           = errors.New("平台限制了本次访问，请稍后重试")
+	ErrObservationBrowserUnavailable  = errors.New("独立浏览器暂不可用，请检查本机 Microsoft Edge 与应用授权")
+	ErrObservationPlaybackUnavailable = errors.New("未取得可播放的公开单段媒体，请核对公开状态、格式及媒体大小")
+	ErrObservationPlaybackLimit       = errors.New("本次播放采样支持 1–20 秒，省略时使用 6 秒")
+	ErrObservationPlaybackSize        = errors.New("这条媒体超过当前 32 MiB 的读取上限，可选择体积更小的公开稿件")
+	ErrObservationUpstreamUnavailable = errors.New("平台媒体请求暂时无法完成，可稍后重试")
 )
 
 type observationCheckpoint struct {
 	ConnectionRef
-	ContentID    string
-	Field        ObservationField
-	GrantVersion string
-	Cursor       string
-	Chunks       []ObservationChunk
-	Playback     []PlaybackInterval
-	Coverage     string
-	Complete     bool
+	ContentID     string
+	Field         ObservationField
+	GrantVersion  string
+	Cursor        string
+	Chunks        []ObservationChunk
+	Playback      []PlaybackInterval
+	PlaybackProof *PlaybackProof
+	PlaybackLimit int
+	Coverage      string
+	Complete      bool
 }
 
 // Observer persists opaque cursors in the supplied private host directory. It
@@ -238,12 +257,16 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err != nil {
 		return ObservationResult{}, err
 	}
-	key := observationKey(ref, in.ContentID, in.Field, grant.Version)
+	playbackLimit := 0
+	if in.Field == ObservationPlayback {
+		playbackLimit = in.Limit
+	}
+	key := observationKey(ref, in.ContentID, in.Field, grant.Version, playbackLimit)
 	checkpoint, existed, err := o.load(key)
 	if err != nil {
 		return ObservationResult{}, errors.New("应用观察进度不可用")
 	}
-	if existed && !checkpoint.matches(ref, in.ContentID, in.Field, grant.Version) {
+	if existed && (!checkpoint.matches(ref, in.ContentID, in.Field, grant.Version) || checkpoint.PlaybackLimit != playbackLimit) {
 		return ObservationResult{}, errors.New("应用观察进度与当前授权不一致")
 	}
 	if checkpoint.Complete {
@@ -257,7 +280,11 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 		if ctx.Err() != nil {
 			return ObservationResult{}, ctx.Err()
 		}
-		for _, known := range []error{ErrObservationContentUnavailable, ErrObservationThrottled, ErrObservationForbidden, ErrObservationInvalid, ErrObservationBrowserUnavailable} {
+		for _, known := range []error{
+			ErrObservationContentUnavailable, ErrObservationThrottled, ErrObservationForbidden, ErrObservationInvalid,
+			ErrObservationBrowserUnavailable, ErrObservationPlaybackUnavailable, ErrObservationPlaybackLimit,
+			ErrObservationPlaybackSize, ErrObservationUpstreamUnavailable,
+		} {
 			if errors.Is(err, known) {
 				return ObservationResult{}, known
 			}
@@ -266,6 +293,9 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	}
 	if err := validateObservationPage(in.Field, page); err != nil {
 		return ObservationResult{}, err
+	}
+	if playbackLimit > 0 && page.PlaybackProof != nil && page.PlaybackProof.RequestedSeconds != playbackLimit {
+		return ObservationResult{}, errors.New("播放证据与请求的采样时间不一致")
 	}
 	if strings.TrimSpace(page.Coverage) == "" || (!page.Complete && (page.NextCursor == "" || page.NextCursor == checkpoint.Cursor)) {
 		return ObservationResult{}, errors.New("应用内容未返回可继续的观察进度")
@@ -276,9 +306,17 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := o.Check(ctx, ObservationResult{ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field, GrantVersion: grant.Version}); err != nil {
 		return ObservationResult{}, err
 	}
-	checkpoint = observationCheckpoint{ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field, GrantVersion: grant.Version, Cursor: page.NextCursor, Chunks: append([]ObservationChunk(nil), page.Chunks...), Playback: append([]PlaybackInterval(nil), page.Playback...), Coverage: page.Coverage, Complete: page.Complete}
+	checkpoint = observationCheckpoint{
+		ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field, GrantVersion: grant.Version,
+		Cursor: page.NextCursor, Chunks: append([]ObservationChunk(nil), page.Chunks...), Playback: append([]PlaybackInterval(nil), page.Playback...),
+		PlaybackProof: verifiedPlaybackProof(page), PlaybackLimit: playbackLimit, Coverage: page.Coverage, Complete: page.Complete,
+	}
 	if checkpoint.Complete {
 		checkpoint.Cursor = ""
+	}
+	if checkpoint.PlaybackProof != nil && checkpoint.Complete && len(checkpoint.Playback) == 0 {
+		// Report readiness or a stall without letting it hide later evidence.
+		return checkpoint.result(false, false), nil
 	}
 	if err := o.save(key, checkpoint); err != nil {
 		return ObservationResult{}, errors.New("应用观察进度无法保存")
@@ -313,9 +351,22 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 				return errors.New("应用内容返回了无效的播放进度")
 			}
 		}
+		if proof := page.PlaybackProof; proof != nil {
+			if proof.RequestedSeconds <= 0 || math.IsNaN(proof.MediaDurationSeconds) || math.IsInf(proof.MediaDurationSeconds, 0) ||
+				proof.MediaDurationSeconds < 0 || !proof.Ready && (proof.Ended || len(page.Playback) > 0) {
+				return errors.New("应用返回了不一致的播放状态")
+			}
+			var previousEnd float64
+			for _, progress := range page.Playback {
+				if progress.StartSeconds < previousEnd || proof.MediaDurationSeconds > 0 && progress.EndSeconds > proof.MediaDurationSeconds+0.05 {
+					return errors.New("已播放区间与媒体时间轴不一致")
+				}
+				previousEnd = progress.EndSeconds
+			}
+		}
 		return nil
 	}
-	if len(page.Playback) != 0 {
+	if len(page.Playback) != 0 || page.PlaybackProof != nil {
 		return errors.New("应用内容返回了不匹配的观察字段")
 	}
 	position := -1
@@ -326,6 +377,16 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 		position = chunk.Position
 	}
 	return nil
+}
+
+func verifiedPlaybackProof(page ObservationPage) *PlaybackProof {
+	if page.PlaybackProof == nil {
+		return nil
+	}
+	proof := *page.PlaybackProof
+	proof.FullyPlayed = proof.Ready && proof.Ended && proof.Paused && proof.MediaDurationSeconds > 0 &&
+		len(page.Playback) == 1 && page.Playback[0].StartSeconds == 0 && page.Playback[0].EndSeconds >= proof.MediaDurationSeconds
+	return &proof
 }
 
 func (o *Observer) authorize(ctx context.Context, in ObservationInput) (ObservationProvider, ConnectionRef, ObservationGrant, error) {
@@ -421,17 +482,18 @@ func (o *Observer) save(key string, checkpoint observationCheckpoint) error {
 	}
 	return nil
 }
-func observationKey(ref ConnectionRef, content string, field ObservationField, version string) string {
+func observationKey(ref ConnectionRef, content string, field ObservationField, version string, playbackLimit int) string {
 	encoded, _ := json.Marshal(struct {
 		App, Installation, Connection, Account, Content string
 		Field                                           ObservationField
 		Version                                         string
-	}{ref.AppID, ref.InstallationID, ref.ConnectionID, ref.AccountID, content, field, version})
+		PlaybackLimit                                   int `json:"playback_limit,omitempty"`
+	}{ref.AppID, ref.InstallationID, ref.ConnectionID, ref.AccountID, content, field, version, playbackLimit})
 	sum := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", sum[:])
 }
 func (c observationCheckpoint) result(cached, resumed bool) ObservationResult {
-	return ObservationResult{ConnectionRef: c.ConnectionRef, ContentID: c.ContentID, Field: c.Field, GrantVersion: c.GrantVersion, Chunks: append([]ObservationChunk(nil), c.Chunks...), Playback: append([]PlaybackInterval(nil), c.Playback...), Coverage: c.Coverage, Complete: c.Complete, Cached: cached, Resumed: resumed}
+	return ObservationResult{ConnectionRef: c.ConnectionRef, ContentID: c.ContentID, Field: c.Field, GrantVersion: c.GrantVersion, Chunks: append([]ObservationChunk(nil), c.Chunks...), Playback: append([]PlaybackInterval(nil), c.Playback...), PlaybackProof: c.PlaybackProof, Coverage: c.Coverage, Complete: c.Complete, Cached: cached, Resumed: resumed}
 }
 
 func (c observationCheckpoint) matches(ref ConnectionRef, contentID string, field ObservationField, version string) bool {

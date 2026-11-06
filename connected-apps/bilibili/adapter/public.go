@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/stationbrowser"
 	"wechat-bot/internal/workspacefs"
 )
@@ -33,9 +35,13 @@ const (
 	accountID      = "anonymous"
 	settingsName   = "bilibili-public-settings.json"
 
-	metadataEndpoint = "https://api.bilibili.com/x/web-interface/view"
-	requestTimeout   = 12 * time.Second
-	maxResponseBytes = 1 << 20
+	metadataEndpoint      = "https://api.bilibili.com/x/web-interface/view"
+	requestTimeout        = 12 * time.Second
+	maxResponseBytes      = 1 << 20
+	maxPlaybackBytes      = 32 << 20
+	defaultPlaybackSample = 6 * time.Second
+	minPlaybackSample     = 1 * time.Second
+	maxPlaybackSample     = 20 * time.Second
 )
 
 var (
@@ -53,10 +59,11 @@ var (
 // Settings is owner-controlled local policy. Videos is an exact, ordered
 // allowlist; it is deliberately the only discovery source for this adapter.
 type Settings struct {
-	Revision       uint64   `json:"revision"`
-	Enabled        bool     `json:"enabled"`
-	Videos         []string `json:"videos"`
-	BrowserEnabled bool     `json:"browser_enabled"`
+	Revision        uint64   `json:"revision"`
+	Enabled         bool     `json:"enabled"`
+	Videos          []string `json:"videos"`
+	BrowserEnabled  bool     `json:"browser_enabled"`
+	PlaybackEnabled bool     `json:"playback_enabled"`
 }
 
 // PublicApp implements the apphost provider and observation provider for an
@@ -66,6 +73,8 @@ type PublicApp struct {
 	privateDirectory string
 	client           *http.Client
 	readPage         func(context.Context, string, func() error) (stationbrowser.Page, error)
+	resolvePlayback  func(context.Context, string, int64) (mcptools.PublicVideo, error)
+	samplePlayback   func(context.Context, []byte, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
 	browserAvailable func() bool
 	mu               sync.Mutex
 	browserGrant     context.Context
@@ -80,6 +89,8 @@ func New(privateDirectory string) *PublicApp {
 	return &PublicApp{
 		privateDirectory: privateDirectory,
 		readPage:         reader.Read,
+		resolvePlayback:  mcptools.GetPublicBilibiliVideo,
+		samplePlayback:   reader.SamplePlayback,
 		browserAvailable: stationbrowser.Available,
 		browserGrant:     grant,
 		cancelBrowser:    cancel,
@@ -123,7 +134,7 @@ func (p *PublicApp) View() (Settings, error) {
 // Save writes an owner allowlist with compare-and-swap semantics. It never
 // probes video IDs: saving must work while offline and must not leak browsing
 // intentions to a provider.
-func (p *PublicApp) Save(expected uint64, enabled bool, videos []string, browserEnabled bool) (Settings, error) {
+func (p *PublicApp) Save(expected uint64, enabled bool, videos []string, browserEnabled, playbackEnabled bool) (Settings, error) {
 	if p == nil {
 		return Settings{}, ErrInvalid
 	}
@@ -131,7 +142,7 @@ func (p *PublicApp) Save(expected uint64, enabled bool, videos []string, browser
 	if err != nil {
 		return Settings{}, err
 	}
-	if browserEnabled && !enabled {
+	if browserEnabled && !enabled || playbackEnabled && (!enabled || !browserEnabled) {
 		return Settings{}, ErrInvalid
 	}
 	p.mu.Lock()
@@ -146,7 +157,7 @@ func (p *PublicApp) Save(expected uint64, enabled bool, videos []string, browser
 	if browserEnabled && !p.BrowserAvailable() {
 		return current, apphost.ErrObservationBrowserUnavailable
 	}
-	next := Settings{Revision: current.Revision + 1, Enabled: enabled, Videos: cleaned, BrowserEnabled: browserEnabled}
+	next := Settings{Revision: current.Revision + 1, Enabled: enabled, Videos: cleaned, BrowserEnabled: browserEnabled, PlaybackEnabled: playbackEnabled}
 	if next.Revision == 0 { // defensive overflow handling
 		return Settings{}, ErrInvalid
 	}
@@ -191,6 +202,9 @@ func (p *PublicApp) Inspect(ctx context.Context, id string) (apphost.ConnectionS
 		actions = []string{"content.observe"}
 		if settings.BrowserEnabled && p.BrowserAvailable() {
 			actions = append(actions, "page.observe")
+			if settings.PlaybackEnabled {
+				actions = append(actions, "playback.observe")
+			}
 		}
 	}
 	return apphost.ConnectionStatus{
@@ -219,6 +233,9 @@ func (p *PublicApp) ObservationTargets(ctx context.Context, id string) ([]apphos
 	fields := []apphost.ObservationField{apphost.ObservationTitle, apphost.ObservationBody}
 	if settings.BrowserEnabled && p.BrowserAvailable() {
 		fields = append(fields, apphost.ObservationPageText)
+		if settings.PlaybackEnabled {
+			fields = append(fields, apphost.ObservationPlayback)
+		}
 	}
 	for _, video := range settings.Videos {
 		result = append(result, apphost.ObservationTarget{
@@ -264,6 +281,9 @@ func (p *PublicApp) ReadObservation(ctx context.Context, request apphost.Observa
 	if request.Field == apphost.ObservationPageText {
 		return p.readBrowserObservation(ctx, request.ObservationAccess, settings.Revision)
 	}
+	if request.Field == apphost.ObservationPlayback {
+		return p.readPlaybackObservation(ctx, request.ObservationAccess, settings.Revision, request.Limit)
+	}
 	data, err := p.fetch(ctx, request.ContentID)
 	if err != nil {
 		return apphost.ObservationPage{}, err
@@ -295,6 +315,10 @@ func (p *PublicApp) allowed(settings Settings, access apphost.ObservationAccess)
 		if !settings.BrowserEnabled {
 			return false
 		}
+	case apphost.ObservationPlayback:
+		if !settings.BrowserEnabled || !settings.PlaybackEnabled {
+			return false
+		}
 	default:
 		return false
 	}
@@ -310,26 +334,8 @@ func (p *PublicApp) readBrowserObservation(ctx context.Context, access apphost.O
 	if !p.BrowserAvailable() {
 		return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
 	}
-	p.mu.Lock()
-	grant := p.browserGrant
-	p.mu.Unlock()
-	readCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stop := context.AfterFunc(grant, cancel)
-	defer stop()
-	authorize := func() error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		current, err := p.View()
-		if err != nil {
-			return apphost.ErrUnavailable
-		}
-		if grant.Err() != nil || current.Revision != revision || !p.allowed(current, access) {
-			return apphost.ErrObservationForbidden
-		}
-		return nil
-	}
+	readCtx, authorize, closeScope := p.browserReadScope(ctx, access, revision)
+	defer closeScope()
 	if err := authorize(); err != nil {
 		return apphost.ObservationPage{}, err
 	}
@@ -352,6 +358,126 @@ func (p *PublicApp) readBrowserObservation(ctx context.Context, access apphost.O
 		Coverage: "独立 Edge 页面：标题与可取得的简介",
 		Complete: true,
 	}, nil
+}
+
+func (p *PublicApp) browserReadScope(ctx context.Context, access apphost.ObservationAccess, revision uint64) (context.Context, func() error, func()) {
+	p.mu.Lock()
+	grant := p.browserGrant
+	p.mu.Unlock()
+	readCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(grant, cancel)
+	authorize := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		current, err := p.View()
+		if err != nil {
+			return apphost.ErrUnavailable
+		}
+		if grant.Err() != nil || current.Revision != revision || !p.allowed(current, access) {
+			return apphost.ErrObservationForbidden
+		}
+		return nil
+	}
+	return readCtx, authorize, func() {
+		stop()
+		cancel()
+	}
+}
+
+// readPlaybackObservation measures a bounded interval in a fresh, private
+// Edge instance. The adapter passes media bytes only. It never gives the
+// browser a provider URL, and never persists or returns the CDN URL.
+func (p *PublicApp) readPlaybackObservation(ctx context.Context, access apphost.ObservationAccess, revision uint64, limit int) (apphost.ObservationPage, error) {
+	if !p.BrowserAvailable() || p.resolvePlayback == nil || p.samplePlayback == nil {
+		return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
+	}
+	sample, err := playbackSampleLimit(limit)
+	if err != nil {
+		return apphost.ObservationPage{}, err
+	}
+	readCtx, authorize, closeScope := p.browserReadScope(ctx, access, revision)
+	defer closeScope()
+	if err := authorize(); err != nil {
+		return apphost.ObservationPage{}, err
+	}
+	media, err := p.resolvePlayback(readCtx, access.ContentID, maxPlaybackBytes)
+	if authErr := authorize(); authErr != nil {
+		return apphost.ObservationPage{}, authErr
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return apphost.ObservationPage{}, ctx.Err()
+		}
+		return apphost.ObservationPage{}, classifyPlaybackError(err)
+	}
+	if len(media.Data) > maxPlaybackBytes {
+		return apphost.ObservationPage{}, apphost.ErrObservationPlaybackSize
+	}
+	if media.LinkOnly || len(media.Data) == 0 || media.DurationMS <= 0 || media.ContentType == "" {
+		return apphost.ObservationPage{}, apphost.ErrObservationPlaybackUnavailable
+	}
+	result, err := p.samplePlayback(readCtx, media.Data, media.ContentType, sample, authorize)
+	if authErr := authorize(); authErr != nil {
+		return apphost.ObservationPage{}, authErr
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return apphost.ObservationPage{}, ctx.Err()
+		}
+		if errors.Is(err, apphost.ErrObservationForbidden) {
+			return apphost.ObservationPage{}, err
+		}
+		if errors.Is(err, stationbrowser.ErrBrowserUnavailable) {
+			return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
+		}
+		return apphost.ObservationPage{}, apphost.ErrObservationPlaybackUnavailable
+	}
+	intervals := make([]apphost.PlaybackInterval, 0, len(result.Intervals))
+	for _, interval := range result.Intervals {
+		intervals = append(intervals, apphost.PlaybackInterval{StartSeconds: interval.StartSeconds, EndSeconds: interval.EndSeconds})
+	}
+	return apphost.ObservationPage{
+		Playback: intervals,
+		PlaybackProof: &apphost.PlaybackProof{
+			RequestedSeconds:     int(sample / time.Second),
+			MediaDurationSeconds: result.DurationSeconds,
+			Ready:                result.Ready,
+			Ended:                result.Ended,
+			Paused:               result.Paused,
+		},
+		Coverage: "独立 Edge 实际播放采样",
+		Complete: true,
+	}, nil
+}
+
+func playbackSampleLimit(limit int) (time.Duration, error) {
+	if limit == 0 {
+		return defaultPlaybackSample, nil
+	}
+	if limit < int(minPlaybackSample/time.Second) || limit > int(maxPlaybackSample/time.Second) {
+		return 0, apphost.ErrObservationPlaybackLimit
+	}
+	return time.Duration(limit) * time.Second, nil
+}
+
+func classifyPlaybackError(err error) error {
+	var web *mcptools.WebError
+	if errors.As(err, &web) {
+		switch {
+		case web.Status == http.StatusTooManyRequests || web.Status == http.StatusPreconditionFailed:
+			return apphost.ErrObservationThrottled
+		case web.Code == "response_too_large":
+			return apphost.ErrObservationPlaybackSize
+		case web.Status >= http.StatusInternalServerError || web.Code == "network_timeout" || web.Code == "network_unavailable" || web.Code == "network_closed" || web.Code == "dns_failed" || web.Code == "tls_failed":
+			return apphost.ErrObservationUpstreamUnavailable
+		}
+	}
+	var network net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &network) && network.Timeout() {
+		return apphost.ErrObservationUpstreamUnavailable
+	}
+	return apphost.ErrObservationPlaybackUnavailable
 }
 
 type metadataResponse struct {
@@ -467,7 +593,7 @@ func (p *PublicApp) loadLocked() (Settings, error) {
 		return Settings{}, apphost.ErrUnavailable
 	}
 	var settings Settings
-	if json.Unmarshal(encoded, &settings) != nil || settings.Revision == 0 || settings.BrowserEnabled && !settings.Enabled {
+	if json.Unmarshal(encoded, &settings) != nil || settings.Revision == 0 || settings.BrowserEnabled && !settings.Enabled || settings.PlaybackEnabled && (!settings.Enabled || !settings.BrowserEnabled) {
 		return Settings{}, apphost.ErrUnavailable
 	}
 	videos, err := normalizeVideos(settings.Enabled, settings.Videos)

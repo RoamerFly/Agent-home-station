@@ -1438,12 +1438,14 @@
     const row = appElement("div", "", "app-layer");
     const detail = appElement("div", "");
     const settings = apps.bilibiliPublic;
-    const draft = apps.bilibiliDraft || { revision: Number(settings?.revision || 0), enabled: Boolean(settings?.enabled), browserEnabled: Boolean(settings?.browser_enabled), videos: Array.isArray(settings?.videos) ? settings.videos.join("\n") : "", dirty: false };
+    const draft = apps.bilibiliDraft || { revision: Number(settings?.revision || 0), enabled: Boolean(settings?.enabled), browserEnabled: Boolean(settings?.browser_enabled), playbackEnabled: Boolean(settings?.playback_enabled), videos: Array.isArray(settings?.videos) ? settings.videos.join("\n") : "", dirty: false };
     if (!apps.bilibiliDraft) apps.bilibiliDraft = draft;
     const browserAvailable = settings?.browser_available === true;
     const browserActive = Boolean(settings?.enabled && settings?.browser_enabled);
+    const playbackAvailable = typeof settings?.playback_available === "boolean" ? settings.playback_available : browserAvailable;
+    const playbackActive = Boolean(settings?.enabled && settings?.browser_enabled && settings?.playback_enabled);
     detail.append(
-      appElement("strong", settings ? (settings.enabled ? `已授权 · ${settings.videos.length} 条稿件${browserActive ? " · 独立浏览器已启用" : ""}` : "读取未启用") : "读取设置暂不可用"),
+      appElement("strong", settings ? (settings.enabled ? `已授权 · ${settings.videos.length} 条稿件${browserActive ? " · 独立浏览器已启用" : ""}${playbackActive ? " · 播放验证已启用" : ""}` : "读取未启用") : "读取设置暂不可用"),
       appElement("p", "匿名读取已列出的 B 站视频标题和投稿者简介。独立浏览器可读取获准页面的文字。")
     );
     if (apps.bilibiliError) detail.append(appElement("small", apps.bilibiliError));
@@ -1461,37 +1463,50 @@
     browser.type = "checkbox";
     browser.checked = draft.browserEnabled;
     browser.setAttribute("aria-label", "使用独立浏览器读取页面文本");
-    const syncBrowserToggle = () => {
+    const playback = document.createElement("input");
+    playback.type = "checkbox";
+    playback.checked = draft.playbackEnabled;
+    playback.setAttribute("aria-label", "允许独立浏览器验证视频播放");
+    const syncGrantToggles = () => {
       if (!draft.enabled) {
         draft.browserEnabled = false;
         browser.checked = false;
       }
+      if (!draft.browserEnabled) {
+        draft.playbackEnabled = false;
+        playback.checked = false;
+      }
       browser.disabled = !draft.enabled || (!browserAvailable && !draft.browserEnabled);
+      playback.disabled = !draft.enabled || !draft.browserEnabled || (!playbackAvailable && !draft.playbackEnabled);
     };
-    syncBrowserToggle();
+    syncGrantToggles();
     enabled.addEventListener("change", () => {
       draft.enabled = enabled.checked;
       draft.dirty = true;
-      syncBrowserToggle();
+      syncGrantToggles();
     });
     const enabledLabel = appElement("label", "", "switch-row");
     enabledLabel.append(enabled, appElement("span", "允许大肥鱼按需读取这些公开资料"));
-    browser.addEventListener("change", () => { draft.browserEnabled = browser.checked; draft.dirty = true; });
+    browser.addEventListener("change", () => { draft.browserEnabled = browser.checked; draft.dirty = true; syncGrantToggles(); });
     const browserLabel = appElement("label", "", "switch-row");
     browserLabel.append(browser, appElement("span", "使用独立浏览器读取页面文本"));
     const browserNote = appElement("small", browserAvailable ? "读取获准 BV 页面时启动无头 Edge，数据保存在大肥鱼的专属目录。" : (draft.browserEnabled ? "当前 Windows 未找到可用的 Edge，可以保存并关闭独立浏览器。" : "需要安装 Microsoft Edge 才能开启。"));
+    playback.addEventListener("change", () => { draft.playbackEnabled = playback.checked; draft.dirty = true; });
+    const playbackLabel = appElement("label", "", "switch-row");
+    playbackLabel.append(playback, appElement("span", "允许独立浏览器验证视频播放"));
+    const playbackNote = appElement("small", playbackAvailable ? "静音采样获准 BV 的公开媒体，按实际播放区间显示覆盖范围。" : (draft.playbackEnabled ? "当前 Windows 未找到可用的 Edge，可以保存并关闭播放验证。" : "需要先开启独立浏览器并安装 Microsoft Edge。"));
     const actions = appElement("div", "", "app-worker-actions");
     const save = appElement("button", apps.bilibiliSaving ? "正在保存…" : "保存公开读取设置", "button compact secondary");
     save.type = "submit";
     save.disabled = !settings || apps.loading || apps.bilibiliSaving;
     actions.append(save, appElement("small", "实际读取时才会向 B 站请求对应稿件。"));
-    form.append(appElement("label", "允许读取的视频 BV 号"), videos, enabledLabel, browserLabel, browserNote, actions);
+    form.append(appElement("label", "允许读取的视频 BV 号"), videos, enabledLabel, browserLabel, browserNote, playbackLabel, playbackNote, actions);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!settings || current !== apps || current.bilibiliSaving) return;
       const parsed = parseBilibiliVideos(draft.videos);
-      if (parsed.invalid.length || parsed.videos.length > 100 || (draft.enabled && !parsed.videos.length) || (draft.enabled && draft.browserEnabled && !browserAvailable)) {
-        const reason = parsed.invalid.length ? `BV 号格式不正确：${parsed.invalid.slice(0, 3).join("、")}` : parsed.videos.length > 100 ? "最多可保存 100 个 BV 号。" : draft.enabled && draft.browserEnabled && !browserAvailable ? "当前 Windows 未找到可用的 Edge，不能启用独立浏览器。" : "启用前请至少填写一个 BV 号。";
+      if (parsed.invalid.length || parsed.videos.length > 100 || (draft.enabled && !parsed.videos.length) || (draft.enabled && draft.browserEnabled && !browserAvailable) || (draft.enabled && draft.playbackEnabled && (!draft.browserEnabled || !playbackAvailable))) {
+        const reason = parsed.invalid.length ? `BV 号格式不正确：${parsed.invalid.slice(0, 3).join("、")}` : parsed.videos.length > 100 ? "最多可保存 100 个 BV 号。" : draft.enabled && draft.browserEnabled && !browserAvailable ? "当前 Windows 未找到可用的 Edge，不能启用独立浏览器。" : draft.enabled && draft.playbackEnabled && !draft.browserEnabled ? "请先开启独立浏览器。" : draft.enabled && draft.playbackEnabled && !playbackAvailable ? "当前 Windows 未找到可用的 Edge，不能启用播放验证。" : "启用前请至少填写一个 BV 号。";
         appFeedback(reason, true);
         return;
       }
@@ -1499,12 +1514,12 @@
       apps.bilibiliError = "";
       renderApps();
       try {
-        const value = await request("/api/local/apps/bilibili/public", { method: "PUT", body: JSON.stringify({ revision: Number(draft.revision || 0), enabled: Boolean(draft.enabled), browser_enabled: Boolean(draft.enabled && draft.browserEnabled), videos: parsed.videos }) });
+        const value = await request("/api/local/apps/bilibili/public", { method: "PUT", body: JSON.stringify({ revision: Number(draft.revision || 0), enabled: Boolean(draft.enabled), browser_enabled: Boolean(draft.enabled && draft.browserEnabled), playback_enabled: Boolean(draft.enabled && draft.browserEnabled && draft.playbackEnabled), videos: parsed.videos }) });
         if (current !== apps) return;
-        if (!value || !Number.isFinite(Number(value.revision)) || !Array.isArray(value.videos) || typeof value.browser_enabled !== "boolean" || typeof value.browser_available !== "boolean") throw new Error("公开读取设置返回格式无效，请刷新后重试。");
+        if (!value || !Number.isFinite(Number(value.revision)) || !Array.isArray(value.videos) || typeof value.browser_enabled !== "boolean" || typeof value.browser_available !== "boolean" || typeof value.playback_enabled !== "boolean") throw new Error("公开读取设置返回格式无效，请刷新后重试。");
         apps.bilibiliPublic = value;
-        apps.bilibiliDraft = { revision: Number(value.revision), enabled: Boolean(value.enabled), browserEnabled: Boolean(value.browser_enabled), videos: value.videos.join("\n"), dirty: false };
-        appFeedback(value.enabled ? (value.browser_enabled ? "公开读取和独立浏览器已启用，大肥鱼可按需读取列出的 BV 号。" : "公开读取已启用，大肥鱼可按需读取列出的 BV 号。") : "公开读取已关闭，已保留 BV 号列表。");
+        apps.bilibiliDraft = { revision: Number(value.revision), enabled: Boolean(value.enabled), browserEnabled: Boolean(value.browser_enabled), playbackEnabled: Boolean(value.playback_enabled), videos: value.videos.join("\n"), dirty: false };
+        appFeedback(value.enabled ? (value.playback_enabled ? "公开读取、独立浏览器和播放验证已启用，大肥鱼可按需验证列出的 BV 号。" : value.browser_enabled ? "公开读取和独立浏览器已启用，大肥鱼可按需读取列出的 BV 号。" : "公开读取已启用，大肥鱼可按需读取列出的 BV 号。") : "公开读取已关闭，已保留 BV 号列表。");
       } catch (error) {
         if (current !== apps) return;
         if (appSessionExpired([{ status: "rejected", reason: error }])) return;
@@ -1589,7 +1604,7 @@
         const value = bilibili.value;
         current.bilibiliPublic = value;
         current.bilibiliError = "";
-        if (!current.bilibiliDraft || !current.bilibiliDraft.dirty) current.bilibiliDraft = { revision: Number(value.revision || 0), enabled: Boolean(value.enabled), browserEnabled: Boolean(value.browser_enabled), videos: Array.isArray(value.videos) ? value.videos.join("\n") : "", dirty: false };
+        if (!current.bilibiliDraft || !current.bilibiliDraft.dirty) current.bilibiliDraft = { revision: Number(value.revision || 0), enabled: Boolean(value.enabled), browserEnabled: Boolean(value.browser_enabled), playbackEnabled: Boolean(value.playback_enabled), videos: Array.isArray(value.videos) ? value.videos.join("\n") : "", dirty: false };
       } else if (hasBilibili) {
         current.bilibiliPublic = null;
         current.bilibiliError = bilibili?.reason?.message || "公开读取设置暂不可读。";

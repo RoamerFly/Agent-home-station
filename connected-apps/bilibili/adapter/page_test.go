@@ -19,7 +19,7 @@ func TestBrowserReadRequiresSeparateOwnerGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, err := app.Save(initial.Revision, true, []string{fixtureBV}, false)
+	saved, err := app.Save(initial.Revision, true, []string{fixtureBV}, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestBrowserReadRequiresSeparateOwnerGrant(t *testing.T) {
 	if _, err := app.ReadObservation(t.Context(), req); !errors.Is(err, apphost.ErrObservationForbidden) {
 		t.Fatalf("legacy metadata permission granted browser access: %v", err)
 	}
-	if _, err := app.Save(saved.Revision, true, []string{fixtureBV}, true); err != nil {
+	if _, err := app.Save(saved.Revision, true, []string{fixtureBV}, true, false); err != nil {
 		t.Fatal(err)
 	}
 	app = New(dir)
@@ -56,7 +56,7 @@ func TestBrowserRevocationCancelsInFlightRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, err := app.Save(initial.Revision, true, []string{fixtureBV}, true)
+	saved, err := app.Save(initial.Revision, true, []string{fixtureBV}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestBrowserRevocationCancelsInFlightRead(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("browser read never reached the fixture")
 	}
-	if _, err := app.Save(saved.Revision, true, []string{fixtureBV}, false); err != nil {
+	if _, err := app.Save(saved.Revision, true, []string{fixtureBV}, false, false); err != nil {
 		t.Fatal(err)
 	}
 	select {
