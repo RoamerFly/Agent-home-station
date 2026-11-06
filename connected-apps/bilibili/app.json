@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "bilibili",
   "name": "哔哩哔哩",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -109,14 +109,14 @@
     "adapter/public_test.go": "481b07def1bf94b5ba9de8897e909eab6ff6044f977fb428b85b4ac9da70f725",
     "adapter/publication_grant.go": "d15605fc3cd6a6c4246d17d19fcc2290fe0944a0d232602edf82903e99606a8a",
     "adapter/publication_grant_test.go": "4b7b027f1811580ac12b178cbf8fa9506698e2c456e8284b4d80076374c37cd6",
-    "adapter/publication_workflow.go": "9cae234d352439d223f4a3f442810c46c8291875995f2dce3cc4154ad106ef6c",
-    "adapter/publication_workflow_test.go": "d653544cd95a4b43fda9e63b213ac313a0a5b34298edd34205a009bba08a8423",
+    "adapter/publication_workflow.go": "15ca12a7472ab81d4e19566fd8b80021291e880be966a725f3bba28a87bca5d5",
+    "adapter/publication_workflow_test.go": "1e123836e8a309f090f4abb64c1276a295b38951eab1136d6e18b85e91b53727",
     "capabilities.json": "44396754f651a7433dcdfa3c10c07488807ffdf957b94ee783baa712cb64c2c6",
-    "CHANGELOG.md": "9043aa727c19bdc50121be0333bdeb9b05eec81ac9a90720b7633a359962d71d",
+    "CHANGELOG.md": "74428f5518c43e87dd6092d3873959c88ecdd4bcfad8ccb1b17fcbc1f55e8707",
     "config.schema.json": "0589e38914100cd9e5c47ea97c5081ae6644d6aae19a64fb88805cdd69b91949",
     "MIGRATION.md": "8cb9968b03b5d1332663b668b8466fe3eb86157ba03b418e886cd21e1cb33238",
     "PERMISSIONS.md": "ca1210e34b8df906cef3f7034f434c14d491b0517a09bd629189a30dab1f7d30",
-    "README.md": "835556c459d20bbc384042e11ee93af681af6446928dc433dcac24ce92e11406",
+    "README.md": "c45cc64bb0cafc03afa0f45eb1188aa50820f6f502c48e96f2355106ac5e5311",
     "ui.schema.json": "0dfd7ce73d6b49d5b75fc33d7211169ea5af92f96e80a816a1e23b9f4153e44e"
   }
 }

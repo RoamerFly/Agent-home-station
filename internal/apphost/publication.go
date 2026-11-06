@@ -110,6 +110,13 @@ type CheckpointedPublicationProvider interface {
 	ReconcilePublication(context.Context, PublicationReference, json.RawMessage, bool) (PublicationReceipt, error)
 }
 
+// PublicationCheckpointProgressProvider optionally reduces an adapter-private
+// checkpoint into safe, user-visible operational progress. The host validates
+// the returned progress but never interprets provider checkpoint JSON itself.
+type PublicationCheckpointProgressProvider interface {
+	PublicationCheckpointProgress(json.RawMessage) (*PublicationProgress, error)
+}
+
 type publicationRecord struct {
 	Draft    PublicationDraft `json:"draft"`
 	Manifest string           `json:"manifest_sha256"`
@@ -119,16 +126,18 @@ type publicationRecord struct {
 // omits publication text, provenance and artifact names/hashes so a status
 // query cannot re-inject forgotten content into a later conversation.
 type PublicationView struct {
-	JobID           string               `json:"job_id"`
-	State           string               `json:"state"`
-	CancelRequested bool                 `json:"cancel_requested"`
-	Target          ConnectionRef        `json:"target"`
-	ProjectID       string               `json:"project_id,omitempty"`
-	ArtifactIDs     []string             `json:"artifact_ids,omitempty"`
-	ManifestSHA256  string               `json:"manifest_sha256"`
-	RemoteID        string               `json:"remote_id,omitempty"`
-	Diagnostic      string               `json:"diagnostic,omitempty"`
-	Progress        *PublicationProgress `json:"progress,omitempty"`
+	JobID            string               `json:"job_id"`
+	State            string               `json:"state"`
+	CancelRequested  bool                 `json:"cancel_requested"`
+	Target           ConnectionRef        `json:"target"`
+	ProjectID        string               `json:"project_id,omitempty"`
+	ArtifactIDs      []string             `json:"artifact_ids,omitempty"`
+	ManifestSHA256   string               `json:"manifest_sha256"`
+	RemoteID         string               `json:"remote_id,omitempty"`
+	Diagnostic       string               `json:"diagnostic,omitempty"`
+	Progress         *PublicationProgress `json:"progress,omitempty"`
+	UpdatedAt        string               `json:"updated_at"`
+	AvailableActions []string             `json:"available_actions"`
 }
 
 type PublicationPage struct {
@@ -276,9 +285,61 @@ func (p *Publisher) List(ctx context.Context, actor pluginhost.Invocation, appID
 		if err != nil {
 			continue
 		}
-		result.Items = append(result.Items, viewFor(job, record))
+		view := viewFor(job, record)
+		// Listing is intentionally ledger-only: a browser refresh must never
+		// query a provider or cause a workflow transition. Checkpoint state is
+		// host-owned and is reduced to the safe progress triple below.
+		if progress, progressErr := p.listProgress(ctx, job, record); progressErr == nil {
+			view.Progress = progress
+		}
+		view.AvailableActions = p.listActions(ctx, job, record, view.Progress)
+		result.Items = append(result.Items, view)
 	}
 	return result, nil
+}
+
+// listActions determines affordances, not authority. Action still performs
+// all source, ownership and authorization checks at its side-effect boundary.
+func (p *Publisher) listActions(ctx context.Context, job pluginhost.Job, record publicationRecord, progress *PublicationProgress) []string {
+	state := publicationState(job, record)
+	if state == "published" || state == "failed" || state == "cancelled" {
+		return []string{}
+	}
+	if state == "draft" || state == "local_draft" {
+		actions := []string{"cancel"}
+		if state == "draft" && p.listExactGrant(ctx, job, record) {
+			actions = append(actions, "submit")
+		}
+		return actions
+	}
+	if state == "accepted" {
+		return []string{"status"}
+	}
+	actions := []string{"status"}
+	if job.CancelRequested {
+		return actions
+	}
+	actions = append(actions, "cancel")
+	// Only an interrupted upload or already merged upload can safely continue.
+	// Initialization, merge and post are durable uncertainty boundaries: they
+	// may be queried or cancelled, but must never be replayed from a list UI.
+	if state == "awaiting_receipt" && progress != nil && (progress.Stage == "uploading" || progress.Stage == "merged") && p.listExactGrant(ctx, job, record) {
+		actions = append(actions, "resume")
+	}
+	return actions
+}
+
+func (p *Publisher) listExactGrant(ctx context.Context, job pluginhost.Job, record publicationRecord) bool {
+	entry, ok := p.registry.Lookup(record.Draft.Target.AppID)
+	if !ok || entry.InstallationID != record.Draft.Target.InstallationID || job.Version != entry.Registration || job.PackageDigest != publicationDigest(entry, record.Draft.Target) {
+		return false
+	}
+	provider, ok := publicationAdapter(entry.Provider)
+	if !ok {
+		return false
+	}
+	grant, err := provider.PublicationGrant(ctx, record.Draft.Target)
+	return err == nil && grant.Allowed && grant.Version != "" && grant.Version == job.ConfigRevision
 }
 
 func (p *Publisher) submit(ctx context.Context, job pluginhost.Job, record publicationRecord) (PublicationView, error) {
@@ -720,7 +781,7 @@ func validRemoteID(id string) bool {
 }
 
 func viewFor(job pluginhost.Job, record publicationRecord) PublicationView {
-	view := PublicationView{JobID: job.ID, State: publicationState(job, record), CancelRequested: job.CancelRequested, Target: record.Draft.Target, ManifestSHA256: record.Manifest, RemoteID: job.RemoteID, ArtifactIDs: make([]string, 0, len(record.Draft.Artifacts))}
+	view := PublicationView{JobID: job.ID, State: publicationState(job, record), CancelRequested: job.CancelRequested, Target: record.Draft.Target, ManifestSHA256: record.Manifest, RemoteID: job.RemoteID, ArtifactIDs: make([]string, 0, len(record.Draft.Artifacts)), UpdatedAt: job.Updated, AvailableActions: []string{}}
 	if record.Draft.Project != nil {
 		view.ProjectID = record.Draft.Project.ID
 	}

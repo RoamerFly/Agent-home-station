@@ -53,6 +53,8 @@ Windows 隔离验证包使用 `scripts/Build-Desktop.ps1 -LocalStation -WithBili
 
 发布目标为 `bilibili / publish`。本地聊天中的 `app_publish(action=draft)` 绑定一份登记过的 MP4、标题、简介和 `platform_options`。后者包含明确的 `category_id`、`tags`、`copyright`（1 原创，2 转载）及可选的 `no_reprint`。转载需要 `source`。已验证的草稿使用原 `job_id` 提交。
 
+在「应用 → 哔哩哔哩 → 创作发布」可查看授权登记情况、草稿、分片进度和稿件编号。工作台按原任务状态提供提交、继续任务、查询状态或停止后续操作。投稿待核对且没有稿件编号时，先到 B 站创作中心核对。停止后续操作不会撤回已经提交的稿件。
+
 分片默认 10 MiB。主人可设置 `part_bytes`，当前客户端接受 1–64 MiB，这是宿主分片资源边界。任务进度按原始配置和字节范围保存。中断后 `status` 读取进度，`resume` 从原令牌的第一个未确认分片继续。初始化、合并和投稿一旦发起但未得到可核实结果，保留待核对状态。已取得稿件编号时，`status` 查询原稿件。平台明确报告开放浏览后才记为已发布。[官方单稿状态查询](https://openhome.bilibili.com/doc/4/d9554788-dcef-f139-6217-b487d41c3826)
 
 签名和回执契约已用合成传输验证。初始化、合并和投稿请求形状参考了已归档的官方示例，生产接口兼容性与真实 OAuth 投稿仍待验收。当前只支持单个 MP4，尚无 OAuth 获取与续期界面，也没有缺失稿件编号时的自动对账接口。[官方历史示例](https://github.com/bilibili-openplatform/demo/tree/331ed2d8918cbb8a3b069dec488129f19383e4b9)

@@ -37,6 +37,7 @@ type uploadCheckpoint struct {
 }
 
 var _ apphost.CheckpointedPublicationProvider = (*PublicApp)(nil)
+var _ apphost.PublicationCheckpointProgressProvider = (*PublicApp)(nil)
 
 // Concurrent calls in this station process must not send the same part or
 // overtake the merge. The persisted CAS guards stale snapshots as well.
@@ -107,6 +108,19 @@ func loadUploadCheckpoint(raw json.RawMessage) (uploadCheckpoint, error) {
 		return uploadCheckpoint{}, apphost.ErrPublicationConflict
 	}
 	return state, nil
+}
+
+// PublicationCheckpointProgress reduces Bilibili's private upload checkpoint
+// to the sole safe fields that the local publication list may expose.
+func (p *PublicApp) PublicationCheckpointProgress(raw json.RawMessage) (*apphost.PublicationProgress, error) {
+	state, err := loadUploadCheckpoint(raw)
+	if err != nil {
+		return nil, err
+	}
+	if state.Stage == "" {
+		return nil, nil
+	}
+	return &apphost.PublicationProgress{Stage: state.Stage, ConfirmedParts: state.Confirmed, TotalParts: state.Total}, nil
 }
 
 func (state uploadCheckpoint) receipt(ref apphost.PublicationReference) apphost.PublicationReceipt {

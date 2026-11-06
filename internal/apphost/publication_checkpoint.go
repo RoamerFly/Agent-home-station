@@ -70,6 +70,36 @@ func (p *Publisher) publicationCheckpoint(ctx context.Context, job pluginhost.Jo
 	return state, nil
 }
 
+// listProgress asks the adapter to reduce its private checkpoint to safe
+// operational progress. The host validates that reduction before exposing it.
+func (p *Publisher) listProgress(ctx context.Context, job pluginhost.Job, record publicationRecord) (*PublicationProgress, error) {
+	if isLocal(record.Draft.Target) {
+		return nil, nil
+	}
+	state, err := p.publicationCheckpoint(ctx, job, record)
+	if err != nil || len(state.Records[publicationCheckpointKey]) == 0 {
+		return nil, err
+	}
+	entry, ok := p.registry.Lookup(record.Draft.Target.AppID)
+	if !ok || entry.InstallationID != record.Draft.Target.InstallationID {
+		return nil, ErrPublicationUnavailable
+	}
+	provider, ok := entry.Provider.(PublicationCheckpointProgressProvider)
+	if !ok {
+		return nil, nil
+	}
+	progress, err := provider.PublicationCheckpointProgress(state.Records[publicationCheckpointKey])
+	if err != nil || progress == nil || progress.ConfirmedParts < 0 || progress.TotalParts < progress.ConfirmedParts {
+		return nil, ErrPublicationConflict
+	}
+	switch progress.Stage {
+	case "initializing", "uploading", "merging", "merged", "posting", "accepted":
+		return &PublicationProgress{Stage: progress.Stage, ConfirmedParts: progress.ConfirmedParts, TotalParts: progress.TotalParts}, nil
+	default:
+		return nil, ErrPublicationConflict
+	}
+}
+
 func (p *Publisher) runCheckpointed(ctx context.Context, job pluginhost.Job, record publicationRecord, active *atomic.Bool, workflow CheckpointedPublicationProvider, req PublicationRequest) (PublicationReceipt, error) {
 	state, err := p.publicationCheckpoint(ctx, job, record)
 	if err != nil {

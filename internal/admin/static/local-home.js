@@ -52,7 +52,8 @@
     if (view === "project-tools") loadProjectTools();
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "" };
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "",
+      bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() { return { loading: false, applying: "", tools: [] }; }
   function appElement(tag, text, className = "") {
@@ -1624,7 +1625,7 @@
       mark.setAttribute("aria-hidden", "true");
       head.append(mark, appElement("h4", label));
       const controls = record.id === "douyin" ? douyinReadRows(record) :
-        [record.id === "bilibili" ? bilibiliPublicRow(record) : appConnectionRow(record)];
+        record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
       const layers = [head, appSourceRow(record, catalog.get(record.id)), ...controls].filter(Boolean);
       card.append(...layers);
       return card;
@@ -1649,7 +1650,10 @@
       const hasBilibili = registered?.some((app) => app.id === "bilibili");
       let bilibili = null;
       if (hasBilibili) {
-        const result = await Promise.allSettled([request("/api/local/apps/bilibili/public")]);
+        const result = await Promise.allSettled([
+          request("/api/local/apps/bilibili/public"),
+          loadBilibiliWork(current, current.bilibiliWork.cursors)
+        ]);
         if (current !== apps || appSessionExpired(result)) return;
         bilibili = result[0];
       }
@@ -1679,6 +1683,200 @@
         current.loading = false;
         renderApps();
       }
+    }
+  }
+
+  const publicationStates = {
+    draft: ["草稿", "成品已登记，等待提交。"],
+    accepted: ["已受理", "B 站已返回稿件编号。可查询是否公开。"],
+    published: ["已公开", "B 站已确认稿件可公开浏览。"],
+    cancelled: ["已停止", "此任务的后续操作已停止。"],
+    failed: ["未完成", "本次发布未完成。"],
+    awaiting_receipt: ["待核对", "查询原任务以查看最新状态。"],
+  };
+  const publicationStages = {
+    initializing: ["等待上传凭证", "等待确认原上传是否已初始化。"],
+    uploading: ["分片上传", "已确认的分片会保留。"],
+    merging: ["等待合并回执", "全部分片已确认，合并结果待核对。"],
+    merged: ["上传已合并", "可从原上传继续投稿。"],
+    posting: ["投稿结果待核对", "平台尚未返回可核对的稿件编号。请核对 B 站创作中心。"],
+  };
+  const publicationActions = { submit: "提交投稿", resume: "继续任务", status: "查询状态", cancel: "停止后续" };
+  function publicationStatus(task) {
+    const normal = publicationStates[task.state] || publicationStates.awaiting_receipt;
+    if (task.state !== "awaiting_receipt") return normal;
+    if (task.cancel_requested) return ["已要求停止", "已请求停止后续操作，原投稿结果仍待核对。"];
+    return publicationStages[task.progress?.stage] || normal;
+  }
+  function bilibiliPublicationRow(current) {
+    if (!current.registered?.some((item) => item.id === "bilibili")) return null;
+    const work = current.bilibiliWork;
+    const connections = current.connections.get("bilibili");
+    const configuration = Array.isArray(connections)
+      ? (connections.find((item) => item.id === "publish")?.configuration || "unconfigured") : "unknown";
+    const grantStates = {
+      ready: ["发布授权已登记", "在聊天中为已登记的 MP4 保存草稿，或在下方管理原任务。"],
+      unconfigured: ["尚未登记发布授权", "由主人在站点私有配置中登记 B 站投稿授权。"],
+      disabled: ["发布授权已停用", "可查看已有任务。"],
+      expired: ["发布授权已过期", "由主人在站点私有配置中更新授权。"],
+      invalid: ["发布授权配置无效", "请核对站点私有配置中的账号、凭据和到期时间。"],
+      unknown: ["发布授权暂不可读", "刷新应用状态后重查。"],
+    };
+    const [title, note] = grantStates[configuration] || grantStates.unknown;
+    const row = appElement("section", "", "app-layer publication-layer");
+    row.id = "bilibili-publication";
+    row.setAttribute("aria-labelledby", "bilibili-publication-heading");
+    row.setAttribute("aria-busy", String(work.reading));
+    const heading = appElement("h5", "创作发布");
+    heading.id = "bilibili-publication-heading";
+    const detail = appElement("div", "", "publication-detail");
+    detail.append(appElement("strong", title), appElement("p", note));
+    const feedback = appElement("p", work.error || work.notice, work.error || work.actionError ? "publication-feedback is-warn" : "sr-only");
+    feedback.setAttribute("role", "status");
+    detail.append(feedback);
+    const items = work.page?.items || [];
+    if (items.length) {
+      const list = appElement("ul", "", "publication-list");
+      list.setAttribute("aria-label", "B 站发布任务");
+      for (const task of items) list.append(publicationTaskRow(current, task));
+      detail.append(list);
+    } else if (!work.error) {
+      detail.append(appElement("p", work.reading ? "正在读取发布任务…" : "暂无 B 站发布任务。", "publication-empty"));
+    }
+    if (work.page?.has_more || work.cursors.length > 1) {
+      const pages = appElement("div", "", "publication-pages");
+      const previous = appElement("button", "上一页", "button compact quiet");
+      const next = appElement("button", "下一页", "button compact quiet");
+      previous.type = next.type = "button";
+      previous.dataset.page = "previous";
+      next.dataset.page = "next";
+      previous.disabled = work.reading || work.cursors.length === 1;
+      next.disabled = work.reading || !work.page?.has_more;
+      previous.addEventListener("click", () => loadBilibiliWork(current, work.cursors.slice(0, -1)));
+      next.addEventListener("click", () => loadBilibiliWork(current, [...work.cursors, work.page.next]));
+      pages.append(previous, appElement("span", `第 ${work.cursors.length} 页`), next);
+      detail.append(pages);
+    }
+    row.append(heading, detail);
+    return row;
+  }
+  function publicationTaskRow(current, task) {
+    const row = appElement("li", "", "publication-task");
+    row.dataset.job = task.job_id;
+    row.tabIndex = -1;
+    const details = appElement("div", "", "publication-task-detail");
+    const summary = appElement("div", "", "publication-task-summary");
+    const [title, note] = publicationStatus(task);
+    const badge = appElement("strong", title, "publication-status");
+    badge.dataset.state = task.state;
+    const identifier = appElement("span", task.remote_id || `任务 ${task.job_id.slice(0, 10)}`, "publication-reference");
+    identifier.title = task.job_id;
+    summary.append(badge, identifier);
+    if (task.updated_at) {
+      const value = new Date(task.updated_at);
+      if (Number.isFinite(value.getTime())) {
+        const time = appElement("time", value.toLocaleString(), "publication-reference");
+        time.dateTime = task.updated_at;
+        summary.append(time);
+      }
+    }
+    details.append(summary);
+    const progress = task.progress;
+    if (Number.isSafeInteger(progress?.total_parts) && progress.total_parts > 0 &&
+      Number.isSafeInteger(progress.confirmed_parts) && progress.confirmed_parts >= 0 &&
+      progress.confirmed_parts <= progress.total_parts) {
+      const meter = appElement("progress", "", "publication-meter");
+      meter.max = progress.total_parts;
+      meter.value = progress.confirmed_parts;
+      const caption = `已确认 ${meter.value} / ${meter.max} 段`;
+      meter.setAttribute("aria-label", caption);
+      const line = appElement("div", "", "publication-progress");
+      line.append(meter, appElement("span", caption));
+      details.append(line);
+    }
+    const pending = current.bilibiliWork.pending.get(task.job_id);
+    const pendingLabel = pending?.has("cancel") ? "正在登记停止…" : "正在处理原任务…";
+    details.append(appElement("p", pending?.size ? pendingLabel : note));
+    const buttons = appElement("div", "", "publication-actions");
+    const available = Array.isArray(task.available_actions) ? task.available_actions : [];
+    for (const [action, label] of Object.entries(publicationActions)) {
+      if (!available.includes(action)) continue;
+      const button = appElement("button", label, `button compact ${action === "submit" ? "primary" : "quiet"}`);
+      button.type = "button";
+      button.dataset.action = action;
+      // Cancellation remains possible while an upload request is running.
+      button.disabled = Boolean(pending?.has(action) || (pending?.size && action !== "cancel"));
+      button.addEventListener("click", () => applyPublicationAction(current, task, action));
+      buttons.append(button);
+    }
+    row.append(details, buttons);
+    return row;
+  }
+  function updatePublicationRow(current) {
+    if (current !== apps) return;
+    const row = $("#bilibili-publication");
+    if (!row) return;
+    const active = document.activeElement;
+    const focusedJob = row.contains(active) ? active.closest("[data-job]")?.dataset.job : "";
+    const focusedAction = active?.dataset.action;
+    const focusedPage = row.contains(active) ? active.dataset.page : "";
+    const next = bilibiliPublicationRow(current);
+    if (!next) return;
+    row.replaceWith(next);
+    if (focusedJob) {
+      const task = Array.from(next.querySelectorAll("[data-job]")).find((element) => element.dataset.job === focusedJob);
+      const button = Array.from(task?.querySelectorAll("button:not(:disabled)") || []).find((element) => element.dataset.action === focusedAction);
+      (button || task)?.focus({ preventScroll: true });
+    } else if (focusedPage) {
+      const buttons = Array.from(next.querySelectorAll("[data-page]"));
+      const button = buttons.find((element) => element.dataset.page === focusedPage && !element.disabled);
+      (button || buttons.find((element) => !element.disabled) || next.querySelector("[data-job]"))?.focus({ preventScroll: true });
+    }
+  }
+  async function loadBilibiliWork(current, cursors) {
+    const work = current.bilibiliWork;
+    const readID = ++work.readID;
+    work.reading = true;
+    work.error = "";
+    updatePublicationRow(current);
+    try {
+      const after = cursors.at(-1) || 0;
+      const result = await request(`/api/local/publications?app_id=bilibili&limit=6&after=${after}`);
+      if (current !== apps || readID !== work.readID) return;
+      if (!Array.isArray(result.tasks?.items)) throw new Error("本机未返回发布任务列表。");
+      work.page = result.tasks;
+      work.cursors = cursors;
+    } catch (error) {
+      if (current !== apps || readID !== work.readID || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      work.error = error.message;
+    } finally {
+      if (current === apps && readID === work.readID) {
+        work.reading = false;
+        updatePublicationRow(current);
+      }
+    }
+  }
+  async function applyPublicationAction(current, task, action) {
+    if (current !== apps || !task.available_actions?.includes(action)) return;
+    const work = current.bilibiliWork;
+    const pending = work.pending.get(task.job_id) || new Set();
+    if (pending.has(action) || (pending.size && action !== "cancel")) return;
+    pending.add(action);
+    work.pending.set(task.job_id, pending);
+    work.notice = "";
+    work.actionError = false;
+    updatePublicationRow(current);
+    try {
+      const updated = await request("/api/local/publications", { method: "POST", body: JSON.stringify({ action, job_id: task.job_id }) });
+      if (current === apps && updated.job_id === task.job_id) work.notice = publicationStatus(updated)[1];
+    } catch (error) {
+      if (current !== apps || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      work.notice = error.message;
+      work.actionError = true;
+    } finally {
+      pending.delete(action);
+      if (!pending.size) work.pending.delete(task.job_id);
+      if (current === apps) await loadBilibiliWork(current, work.cursors);
     }
   }
   async function installApp(listing) {

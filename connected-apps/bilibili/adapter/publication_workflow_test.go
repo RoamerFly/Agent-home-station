@@ -210,6 +210,66 @@ func TestPublicationWorkflowDoesNotRepeatPostWithLostResponse(t *testing.T) {
 	}
 }
 
+func TestPublicationListUsesSafeDurableProgressAndActionsWithoutRemoteCalls(t *testing.T) {
+	f := newBiliPublicationFixture(t)
+	id := f.save()
+	page, err := f.publisher.List(t.Context(), f.actor, ID, 0, 10)
+	if err != nil || len(page.Items) != 1 || !reflect.DeepEqual(page.Items[0].AvailableActions, []string{"cancel", "submit"}) {
+		t.Fatalf("draft actions were not authorization scoped: %+v %v", page, err)
+	}
+	f.provider.failPart = true
+	f.action(id, "submit", "awaiting_receipt")
+
+	page, err = f.publisher.List(t.Context(), f.actor, ID, 0, 10)
+	if err != nil || len(page.Items) != 1 || page.HasMore || page.Next < 1 || page.Limit != 10 {
+		t.Fatalf("unexpected publication page: %+v %v", page, err)
+	}
+	item := page.Items[0]
+	if item.Progress == nil || item.Progress.Stage != "uploading" || item.Progress.ConfirmedParts != 1 || item.Progress.TotalParts != 2 || item.UpdatedAt == "" {
+		t.Fatalf("list did not expose durable safe progress and update time: %+v", item)
+	}
+	if !reflect.DeepEqual(item.AvailableActions, []string{"status", "cancel", "resume"}) {
+		t.Fatalf("upload checkpoint actions: %#v", item.AvailableActions)
+	}
+	if f.provider.queries != 0 || f.provider.posts != 0 || f.provider.merges != 0 {
+		t.Fatalf("list made remote publication calls: %+v", f.provider)
+	}
+	raw, _ := json.Marshal(item)
+	if strings.Contains(string(raw), fixturePublicationToken) || strings.Contains(string(raw), f.settings.AccessToken) || strings.Contains(string(raw), "合成稿件") || strings.Contains(string(raw), "合成简介") {
+		t.Fatalf("list leaked private task material: %s", raw)
+	}
+
+	settings := f.settings
+	settings.Enabled = false
+	writePublicationSettings(t, f.app.privateDirectory, settings)
+	page, err = f.publisher.List(t.Context(), f.actor, ID, 0, 10)
+	if err != nil || len(page.Items) != 1 || !reflect.DeepEqual(page.Items[0].AvailableActions, []string{"status", "cancel"}) {
+		t.Fatalf("revoked grant still offered resume: %+v %v", page, err)
+	}
+
+	// A post response can be uncertain; list must preserve the durable stage
+	// but must not offer replay through resume.
+	f = newBiliPublicationFixture(t)
+	id = f.save()
+	f.provider.failPost = true
+	f.action(id, "submit", "awaiting_receipt")
+	page, err = f.publisher.List(t.Context(), f.actor, ID, 0, 10)
+	if err != nil || len(page.Items) != 1 || page.Items[0].Progress == nil || page.Items[0].Progress.Stage != "posting" || !reflect.DeepEqual(page.Items[0].AvailableActions, []string{"status", "cancel"}) {
+		t.Fatalf("posting uncertainty offered unsafe actions: %+v %v", page, err)
+	}
+	if f.provider.queries != 0 || f.provider.posts != 1 {
+		t.Fatalf("list queried or reposted uncertain work: %+v", f.provider)
+	}
+
+	f = newBiliPublicationFixture(t)
+	id = f.save()
+	f.action(id, "cancel", "cancelled")
+	page, err = f.publisher.List(t.Context(), f.actor, ID, 0, 10)
+	if err != nil || len(page.Items) != 1 || !reflect.DeepEqual(page.Items[0].AvailableActions, []string{}) {
+		t.Fatalf("terminal task kept an actionable button: %+v %v", page, err)
+	}
+}
+
 func TestPublicationWorkflowStopsBeforeNextPartWhenCancelledOrRevoked(t *testing.T) {
 	for _, action := range []string{"cancel", "revoke"} {
 		t.Run(action, func(t *testing.T) {

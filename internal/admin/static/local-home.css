@@ -177,6 +177,21 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .app-layer p { margin: 4px 0 0; color: var(--muted); font-size: .82rem; line-height: 1.55; overflow-wrap: anywhere; }
 .app-layer strong { font-size: .9rem; overflow-wrap: anywhere; }
 .app-layer .button { align-self: center; }
+.publication-detail { min-width: 0; }
+.publication-list { display: grid; gap: 0; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--line); list-style: none; }
+.publication-task { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.publication-task-detail { min-width: 0; }
+.publication-task-summary, .publication-actions, .publication-pages { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; }
+.publication-reference, .publication-pages > span { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
+.publication-status[data-state="published"] { color: var(--success); }
+.publication-status[data-state="awaiting_receipt"], .publication-feedback.is-warn { color: var(--warn); }
+.publication-progress { display: grid; grid-template-columns: minmax(40px, 9rem) auto; align-items: center; justify-content: start; gap: 8px; margin-top: 6px; color: var(--muted); font-size: .78rem; }
+.publication-meter { width: 100%; height: .65rem; accent-color: var(--accent); }
+.publication-meter::-webkit-progress-bar { border-radius: 999px; background: var(--accent-soft); }
+.publication-meter::-webkit-progress-value { border-radius: 999px; background: var(--accent); }
+.publication-pages { justify-content: flex-end; margin-top: 8px; }
+.publication-detail > .publication-feedback:empty { margin: 0; }
+.publication-detail > .publication-empty { margin-top: 9px; }
 .app-accounts { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
 .app-accounts li { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; min-width: 0; color: var(--ink); font-size: .86rem; overflow-wrap: anywhere; }
 .app-accounts small { color: var(--muted); }
@@ -287,6 +302,9 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
   .app-layer { grid-template-columns: 4.5em minmax(0, 1fr); padding: 12px; }
   .app-layer > .button { grid-column: 2; width: auto; justify-self: start; }
   .app-layer .app-accounts .button { width: auto; max-width: 100%; }
+  .app-layer.publication-layer { grid-template-columns: minmax(0, 1fr); }
+  .publication-task { grid-template-columns: minmax(0, 1fr); }
+  .publication-actions .button, .publication-pages .button { width: auto; max-width: 100%; }
   .app-worker .identity-details, .app-worker .details-grid, .app-worker .work-records { min-width: 0; max-width: 100%; }
   .app-worker .app-worker-actions .button, .app-worker .work-records .button { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 }
@@ -303,5 +321,7 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
   body.local-home-page { background: radial-gradient(circle at 15% 12%, rgba(74, 87, 189, .3), transparent 28rem), radial-gradient(circle at 92% 89%, rgba(128, 82, 177, .19), transparent 30rem), var(--canvas); }
   .home-panel { border-color: rgba(188, 201, 255, .12); }
   .access-card, .detail-block, .detail-pair, .chat-bubble, .composer, .switch-row { background: rgba(23, 31, 62, .44); }
+  .publication-status[data-state="published"] { color: #85dbb3; }
+  .publication-status[data-state="awaiting_receipt"], .publication-feedback.is-warn { color: #f4c17f; }
 }
 [hidden] { display: none !important; }
