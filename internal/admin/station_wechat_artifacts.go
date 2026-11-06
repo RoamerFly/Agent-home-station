@@ -15,6 +15,7 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/stationservices"
 	"wechat-bot/internal/workspacefs"
 
 	"wechat-bot/internal/websession"
@@ -32,7 +33,7 @@ func (g stationWorkGrant) id() string {
 }
 
 type stationWorkAccess struct {
-	artifacts *localArtifactStore
+	artifacts stationservices.Artifacts
 	dir       string
 	grants    map[string]time.Time
 }
@@ -59,22 +60,22 @@ func (a *stationWorkAccess) read(id string) (stationWorkGrant, error) {
 	return g, nil
 }
 
-func (a *stationWorkAccess) authorized(in companion.Input, id string) (localArtifact, error) {
+func (a *stationWorkAccess) authorized(in companion.Input, id string) (stationservices.Artifact, error) {
 	g, err := a.read(id)
 	if err != nil || !g.Enabled || g.Account != in.Account || g.Thread != in.Thread || g.Requester != in.Sender {
-		return localArtifact{}, wechatapp.ErrAttachmentDenied
+		return stationservices.Artifact{}, wechatapp.ErrAttachmentDenied
 	}
 	current := a.grants[in.Thread]
 	if current.IsZero() || !current.Equal(g.MediaGrant) {
-		return localArtifact{}, wechatapp.ErrAttachmentDenied
+		return stationservices.Artifact{}, wechatapp.ErrAttachmentDenied
 	}
-	homeGrant, err := (&localWorkspaceAccess{home: a.artifacts.home}).resolve()
-	if err != nil || homeGrant.Revision != g.HomeRevision {
-		return localArtifact{}, wechatapp.ErrAttachmentDenied
+	homeRevision, err := a.artifacts.HomeRevision()
+	if err != nil || homeRevision != g.HomeRevision {
+		return stationservices.Artifact{}, wechatapp.ErrAttachmentDenied
 	}
-	artifact, err := a.artifacts.read(g.Artifact)
+	artifact, err := a.artifacts.ReadArtifact(g.Artifact)
 	if err != nil {
-		return localArtifact{}, wechatapp.ErrAttachmentDenied
+		return stationservices.Artifact{}, wechatapp.ErrAttachmentDenied
 	}
 	return artifact, nil
 }
@@ -113,7 +114,7 @@ func (a *stationWorkAccess) list(in companion.Input, after string, limit int) ([
 				last, _ := items[len(items)-1]["delivery_id"].(string)
 				return items, last, nil
 			}
-			view := artifact.view()
+			view := artifact.View()
 			view["delivery_id"] = id
 			items = append(items, view)
 		}
@@ -149,12 +150,12 @@ func (s *stationWechat) artifactRoutes(owner *websession.Store, mux *http.ServeM
 			fail(w, 404, "请先配置此连接的附件回复范围")
 			return
 		}
-		artifact, err := s.artifacts.read(req.Artifact)
+		artifact, err := s.artifacts.ReadArtifact(req.Artifact)
 		if err != nil {
 			fail(w, 404, "成品不存在或来源已变化")
 			return
 		}
-		homeGrant, err := (&localWorkspaceAccess{home: s.artifacts.home}).resolve()
+		homeRevision, err := s.artifacts.HomeRevision()
 		if err != nil {
 			fail(w, 409, "请先恢复家目录授权")
 			return
@@ -167,7 +168,7 @@ func (s *stationWechat) artifactRoutes(owner *websession.Store, mux *http.ServeM
 			return
 		}
 		g := stationWorkGrant{Artifact: artifact.ID, Account: native.Account(), Thread: req.Thread, Requester: req.Requester, MediaGrant: grant, Enabled: *req.Enabled, RequestKey: req.Key}
-		g.HomeRevision = homeGrant.Revision
+		g.HomeRevision = homeRevision
 		g.ID = g.id()
 		root, err := workspacefs.EnsurePath(filepath.Join(worker.dir, "exports"))
 		if err != nil {
@@ -360,7 +361,7 @@ func (t *stationAttachmentTools) workReply(ctx context.Context, raw json.RawMess
 		_, err := t.work.authorized(t.trace, req.ID)
 		return t.replyAllowed(t.trace) && err == nil
 	}
-	file, err := t.work.artifacts.open(ctx, a, check)
+	file, err := a.OpenVerified(ctx, check)
 	if err != nil {
 		return "", err
 	}
@@ -393,7 +394,7 @@ func (t *stationAttachmentTools) stageWork(ctx context.Context, in companion.Inp
 		return "", err
 	}
 	check := func() bool { return t.workAllowed(in, kind, id) }
-	file, err := t.work.artifacts.open(ctx, a, check)
+	file, err := a.OpenVerified(ctx, check)
 	if err != nil {
 		return "", err
 	}

@@ -69,11 +69,7 @@ func artifactID(id, prefix string) bool {
 }
 
 func (a localArtifact) view() map[string]any {
-	view := map[string]any{"artifact_id": a.ID, "filename": a.Name, "sha256": a.SHA256, "bytes": a.Bytes, "status": "registered"}
-	if a.Parent != nil {
-		view["input_artifact_id"], view["input_sha256"] = a.Parent.ID, a.Parent.SHA256
-	}
-	return view
+	return a.applicationArtifact().View()
 }
 
 func (s *localArtifactStore) sourceValid(a localArtifact) bool {

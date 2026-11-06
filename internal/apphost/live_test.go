@@ -167,7 +167,9 @@ func newLiveTestFixture(t *testing.T) *liveTestFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	now := time.Date(2026, time.November, 6, 9, 0, 0, 0, time.UTC)
+	// The relay enforces its lease against the wall clock, even when the
+	// controller tests advance their own captured clock.
+	now := time.Now().UTC()
 	provider := &liveTestProvider{
 		connection: Connection{ID: liveTestConn, AccountID: "account-exact", Label: "合成直播账号", Configuration: "ready"},
 		grant:      LiveGrant{Allowed: true, Version: "grant-v1", OpensAt: now.Add(-time.Hour), ClosesAt: now.Add(time.Hour), MaxDuration: 30 * time.Minute},

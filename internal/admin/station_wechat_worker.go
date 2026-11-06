@@ -20,9 +20,9 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
-	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/stationruntime"
+	"wechat-bot/internal/stationservices"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -36,7 +36,7 @@ type stationWechat struct {
 	stationWechatNative
 	root, installation     string
 	dataDir, workspaceRoot string
-	models                 *localModelStore
+	modelPersona           func() (string, error)
 	model                  companion.LanguageModel
 	ctx                    context.Context
 	cancel                 context.CancelFunc
@@ -44,7 +44,7 @@ type stationWechat struct {
 	workers                map[string]*stationWechatWorker
 	wg                     sync.WaitGroup
 	done                   chan struct{}
-	artifacts              *localArtifactStore
+	artifacts              stationservices.Artifacts
 	shareOptions           pluginruntime.Options
 	contactCursor          cipher.AEAD
 }
@@ -81,7 +81,7 @@ type stationWechatRun struct {
 	done   chan struct{}
 }
 
-func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, models *localModelStore, artifacts *localArtifactStore) (apphost.Registry, *stationWechat, error) {
+func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts) (apphost.Registry, *stationWechat, error) {
 	entry, ok := registry.Lookup(wechatapp.ID)
 	native, supported := entry.Provider.(stationWechatNative)
 	if !ok || !supported || entry.Registration != "station-native" {
@@ -92,7 +92,7 @@ func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string,
 	host := &stationWechat{
 		stationWechatNative: native, root: filepath.Join(dataDir, "apps", wechatapp.ID, "workers"),
 		dataDir: dataDir, workspaceRoot: workspaceRoot,
-		installation: entry.InstallationID, models: models, model: stationWechatModel{models},
+		installation: entry.InstallationID, modelPersona: model.Persona, model: model.Client,
 		ctx: ctx, cancel: cancel, workers: map[string]*stationWechatWorker{}, done: make(chan struct{}),
 		artifacts: artifacts, shareOptions: shareOptions,
 	}
@@ -116,30 +116,6 @@ func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string,
 		return registry, nil, err
 	}
 	return bound, host, nil
-}
-
-type stationWechatModel struct{ store *localModelStore }
-
-func (m stationWechatModel) Chat(ctx context.Context, system string, history []map[string]string) (string, error) {
-	model, err := m.store.Client()
-	if err != nil {
-		return "", err
-	}
-	return model.Chat(ctx, system, history)
-}
-
-func (m stationWechatModel) ChatFunctions(ctx context.Context, system string, history []map[string]string, tools []mcptools.Tool) (string, error) {
-	model, err := m.store.Client()
-	if err != nil {
-		return "", err
-	}
-	native, ok := model.(interface {
-		ChatFunctions(context.Context, string, []map[string]string, []mcptools.Tool) (string, error)
-	})
-	if !ok {
-		return "", errors.New("station_model_functions_unavailable")
-	}
-	return native.ChatFunctions(ctx, system, history, tools)
 }
 
 func (s *stationWechat) BeginShutdown() {
@@ -580,8 +556,8 @@ func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, run
 		return apphost.ConnectionLifecycle{}, apphost.ErrLifecycleConflict
 	}
 	if running {
-		view, modelErr := s.models.View()
-		if modelErr != nil || !view.KeyConfigured || len(w.policy.Grants) == 0 {
+		_, modelErr := s.modelPersona()
+		if modelErr != nil || len(w.policy.Grants) == 0 {
 			return apphost.ConnectionLifecycle{}, apphost.ErrLifecycleNotReady
 		}
 		if state := w.state(); state != "running" && state != "waiting_login" {
@@ -614,8 +590,8 @@ func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, run
 }
 
 func (s *stationWechat) launch(w *stationWechatWorker, native *linuxnative.Sender) error {
-	view, err := s.models.View()
-	if err != nil || !view.KeyConfigured || len(w.policy.Grants) == 0 {
+	persona, err := s.modelPersona()
+	if err != nil || len(w.policy.Grants) == 0 {
 		return apphost.ErrLifecycleNotReady
 	}
 	s.mu.Lock()
@@ -633,7 +609,7 @@ func (s *stationWechat) launch(w *stationWechatWorker, native *linuxnative.Sende
 		defer s.wg.Done()
 		defer close(run.done)
 		defer cancel()
-		if err := s.runWorker(ctx, run, w, native, view.Persona, policy); err != nil && ctx.Err() == nil {
+		if err := s.runWorker(ctx, run, w, native, persona, policy); err != nil && ctx.Err() == nil {
 			run.state.Store("error")
 		}
 	}()

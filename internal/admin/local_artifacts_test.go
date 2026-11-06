@@ -53,9 +53,21 @@ func TestLocalArtifactsPublishThroughChatAndRetainVerifiedSnapshot(t *testing.T)
 	if err := os.WriteFile(path, []byte("changed later"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	original, err := f.handler.home.artifacts.open(t.Context(), artifact, func() bool { return true })
+	ref, err := f.handler.home.artifacts.ReadArtifact(id)
+	if err != nil || ref.ID != id || ref.Name != artifact.Name || ref.SHA256 != hash {
+		t.Fatalf("unexpected application artifact: %+v %v", ref.View(), err)
+	}
+	if file, err := ref.OpenVerified(t.Context(), func() bool { return false }); err == nil {
+		file.Close()
+		t.Fatal("application received the bytes after its delivery fence closed")
+	}
+	original, err := ref.OpenVerified(t.Context(), func() bool { return true })
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, exposesPath := original.(interface{ Name() string }); exposesPath {
+		original.Close()
+		t.Fatal("application received the private file path")
 	}
 	got, err := io.ReadAll(original)
 	original.Close()
@@ -75,6 +87,10 @@ func TestLocalArtifactsPublishThroughChatAndRetainVerifiedSnapshot(t *testing.T)
 	if _, err := f.handler.home.artifacts.read(id); err != nil {
 		t.Fatal("restart lost source or artifact", err)
 	}
+	ref, err = f.handler.home.artifacts.ReadArtifact(id)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, invalid := range []string{"../outside.txt", filepath.Join(f.dir, "fish-identity.json")} {
 		code, _ := f.request("POST", "/api/local/artifacts", map[string]string{"path": invalid, "request_key": "invalid-path"}, true)
 		if code != 400 {
@@ -84,14 +100,6 @@ func TestLocalArtifactsPublishThroughChatAndRetainVerifiedSnapshot(t *testing.T)
 	if code, _ := f.request("POST", "/api/local/artifacts", map[string]string{"path": "Project Tools/finished.txt", "expected_sha256": hash, "request_key": "mismatch"}, true); code != 400 {
 		t.Fatal("changed hash accepted", code)
 	}
-	private := filepath.Join(f.dir, "artifacts", id, "original")
-	if err := os.WriteFile(private, []byte("tampered"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if file, err := f.handler.home.artifacts.open(t.Context(), artifact, func() bool { return true }); err == nil {
-		file.Close()
-		t.Fatal("corrupt snapshot accepted")
-	}
 	_, current := f.request("GET", "/api/local/home", nil, false)
 	if code, out := f.request("POST", "/api/local/home", map[string]any{"action": "pause", "revision": current["revision"]}, true); code != 200 {
 		t.Fatal(code, out)
@@ -99,9 +107,21 @@ func TestLocalArtifactsPublishThroughChatAndRetainVerifiedSnapshot(t *testing.T)
 	if _, err := f.handler.home.artifacts.read(id); err == nil {
 		t.Fatal("home pause did not stop access")
 	}
+	if file, err := ref.OpenVerified(t.Context(), func() bool { return true }); err == nil {
+		file.Close()
+		t.Fatal("cached application artifact bypassed home pause")
+	}
 	_, paused := f.request("GET", "/api/local/home", nil, false)
 	if code, out := f.request("POST", "/api/local/home", map[string]any{"action": "authorize", "revision": paused["revision"]}, true); code != 200 {
 		t.Fatal(code, out)
+	}
+	private := filepath.Join(f.dir, "artifacts", id, "original")
+	if err := os.WriteFile(private, []byte("tampered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if file, err := ref.OpenVerified(t.Context(), func() bool { return true }); err == nil {
+		file.Close()
+		t.Fatal("corrupt snapshot accepted")
 	}
 	store, in, err := f.handler.chat.conversation()
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/stationservices"
 
 	"wechat-bot/internal/websession"
 )
@@ -41,7 +42,7 @@ func validStationGroup(id string) bool {
 	return validID(id) && strings.HasSuffix(id, "@chatroom") && id != "@chatroom"
 }
 
-func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.ServeMux, identity *fishIdentityRegistry) {
+func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.ServeMux, identity stationservices.OwnerReader) {
 	const base = "/api/apps/wechat/connections/{connection}"
 	mux.HandleFunc("GET "+base+"/groups/{group}/notification", owner.Protect(s.stationGroupDetails("mute")))
 	mux.HandleFunc("GET "+base+"/groups/{group}/profile", owner.Protect(s.stationGroupDetails("rename", "my_name")))
@@ -69,8 +70,8 @@ func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.Ser
 			fail(w, http.StatusBadRequest, "请提供有效的群操作。群名称须非空，本人群昵称可明确提交空字符串。名称最多 512 UTF-8 字节，且不能含控制字符")
 			return
 		}
-		record, err := identity.localIdentity()
-		if err != nil || record.LocalOwner == nil {
+		record, err := identity()
+		if err != nil {
 			fail(w, http.StatusConflict, "请先准备本地主人身份")
 			return
 		}
@@ -78,10 +79,10 @@ func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.Ser
 		defer cancel()
 		stop := context.AfterFunc(s.ctx, cancel)
 		defer stop()
-		authority := stationGroupActionAuthority{requester: record.LocalOwner.ID, active: func(context.Context) bool {
+		authority := stationGroupActionAuthority{requester: record.ID, active: func(context.Context) bool {
 			_, _, ok := owner.Lookup(r)
-			current, err := identity.localIdentity()
-			return ok && err == nil && current.FishID == record.FishID && current.LocalOwner != nil && current.LocalOwner.ID == record.LocalOwner.ID
+			current, err := identity()
+			return ok && err == nil && current == record
 		}}
 		out, err := s.submitStationGroupAction(ctx, r.PathValue("connection"), action, in.Key, authority)
 		switch {

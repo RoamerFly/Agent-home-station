@@ -4,10 +4,11 @@ import (
 	"net/http"
 
 	"wechat-bot/internal/stationhost"
+	"wechat-bot/internal/stationservices"
 	"wechat-bot/internal/websession"
 )
 
-func (s *stationWechat) attachment(identity *fishIdentityRegistry) stationhost.Attachment {
+func (s *stationWechat) attachment(identity stationservices.OwnerReader) stationhost.Attachment {
 	return stationhost.Attachment{
 		Mount: func(owner *websession.Store, mux *http.ServeMux) {
 			s.contactRoutes(owner, mux)

@@ -15,7 +15,7 @@ func (h *localChatService) attachApplications(registry apphost.Registry) (apphos
 	if err != nil {
 		return apphost.Registry{}, nil, err
 	}
-	registry, h.wechat, err = bindStationWechat(registry, h.home.dataDir, h.home.root, h.models, h.home.artifacts)
+	registry, h.wechat, err = bindStationWechat(registry, h.home.dataDir, h.home.root, h.models.applicationModel(), h.home.artifacts)
 	if err != nil {
 		return apphost.Registry{}, nil, err
 	}
@@ -24,7 +24,7 @@ func (h *localChatService) attachApplications(registry apphost.Registry) (apphos
 		h.home.douyinRoutes(owner, mux, registry, h.ctx)
 	}}}
 	if h.wechat != nil {
-		apps = append(apps, h.wechat.attachment(h.home.identity))
+		apps = append(apps, h.wechat.attachment(h.home.applicationOwner))
 	}
 	return registry, apps, nil
 }

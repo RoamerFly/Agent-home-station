@@ -14,6 +14,7 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/stationservices"
 
 	"wechat-bot/internal/websession"
 )
@@ -31,7 +32,7 @@ type stationRecallView struct {
 
 var errStationRecallCursor = errors.New("invalid recall cursor")
 
-func (s *stationWechat) recallRoutes(owner *websession.Store, mux *http.ServeMux, identity *fishIdentityRegistry) {
+func (s *stationWechat) recallRoutes(owner *websession.Store, mux *http.ServeMux, identity stationservices.OwnerReader) {
 	const route = "/api/apps/wechat/connections/{connection}/receipts/{receipt}/recall"
 	mux.HandleFunc("GET "+route, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -64,8 +65,8 @@ func (s *stationWechat) recallRoutes(owner *websession.Store, mux *http.ServeMux
 			fail(w, http.StatusBadRequest, "请从投递记录中选择已核对的原消息")
 			return
 		}
-		record, err := identity.localIdentity()
-		if err != nil || record.LocalOwner == nil {
+		record, err := identity()
+		if err != nil {
 			fail(w, http.StatusConflict, "请先准备本地主人身份")
 			return
 		}
@@ -77,10 +78,10 @@ func (s *stationWechat) recallRoutes(owner *websession.Store, mux *http.ServeMux
 		source, err := s.stationRecallEvidence(ctx, id, key, in.ServerID)
 		if err == nil {
 			var result apphost.ActionReceipt
-			result, err = s.submitStationRecall(ctx, id, source, in.MessageID, record.LocalOwner.ID, func() bool {
+			result, err = s.submitStationRecall(ctx, id, source, in.MessageID, record.ID, func() bool {
 				_, _, ok := owner.Lookup(r)
-				current, err := identity.localIdentity()
-				return ok && err == nil && current.FishID == record.FishID && current.LocalOwner != nil && current.LocalOwner.ID == record.LocalOwner.ID
+				current, err := identity()
+				return ok && err == nil && current == record
 			})
 			if err == nil {
 				respond(w, http.StatusAccepted, result)
