@@ -54,7 +54,7 @@
   }
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", douyinAuthorization: null, douyinAuthorizationError: "", douyinAuthorizationSaving: false,
-      douyinOAuth: { saving: false, completing: false, authorizeURL: "", expiresAt: "", state: "", embedded: false }, bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
+      douyinOAuth: { saving: false, completing: false, state: "" }, bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false },
       douyinWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false } };
@@ -1444,7 +1444,7 @@
           ? "已授权发布抖音视频；实际可用性仍会在首次发布时核对。"
           : "可重新扫码授权发布抖音视频。",
       ].join("")],
-      expired: ["抖音授权已过期", "重新网页授权可恢复账号连接。"],
+      expired: ["抖音授权已过期", "在 Windows 桌面端重新扫码可恢复连接。"],
     };
     return states[authorization?.status] || ["抖音授权暂不可读", "刷新应用状态后重查。"];
   }
@@ -1469,7 +1469,7 @@
     return host && typeof host.postMessage === "function" ? host : null;
   }
   function clearDouyinOAuth(flow) {
-    flow.authorizeURL = ""; flow.expiresAt = ""; flow.state = ""; flow.embedded = false; flow.completing = false;
+    flow.state = ""; flow.completing = false;
   }
   async function cancelDouyinAuthorization(flow) {
     const requestState = flow.state;
@@ -1478,8 +1478,9 @@
     catch (_) { /* The next start still uses a new server-bound state. */ }
   }
   async function finishDouyinAuthorization(current, flow, callbackURL) {
-    if (!flow.authorizeURL || current !== apps || flow.saving || flow.completing || typeof callbackURL !== "string" || !callbackURL) return;
+    if (!flow.state || current !== apps || flow.saving || flow.completing || typeof callbackURL !== "string" || !callbackURL) return;
     flow.completing = true; flow.saving = true;
+    renderApps();
     try {
       const value = await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "complete", callback_url: callbackURL }) });
       if (!validDouyinAuthorization(value)) throw new Error("抖音授权状态返回格式无效，请重新开始扫码。");
@@ -1494,7 +1495,7 @@
     const value = event?.data;
     if (!value || typeof value !== "object" || typeof value.type !== "string") return;
     const current = apps, flow = current.douyinOAuth;
-    if (!flow.embedded || typeof value.state !== "string" || !flow.state || value.state !== flow.state) return;
+    if (!flow.state || value.state !== flow.state) return;
     if (value.type === "douyin-auth-callback" && typeof value.callback_url === "string") {
       void finishDouyinAuthorization(current, flow, value.callback_url);
       return;
@@ -1518,8 +1519,30 @@
       if (Number.isFinite(expiry.getTime())) detail.append(appElement("p", `授权到期：${expiry.toLocaleString()}`, "publication-reference"));
     }
     if (current.douyinAuthorizationError) detail.append(appElement("p", current.douyinAuthorizationError, "publication-feedback is-warn"));
+    let disconnect;
+    if (authorization?.configured) {
+      disconnect = appElement("button", current.douyinAuthorizationSaving ? "正在移除…" : "移除授权", "button compact quiet");
+      disconnect.type = "button"; disconnect.disabled = current.douyinAuthorizationSaving;
+      disconnect.addEventListener("click", async () => {
+        if (current !== apps || current.douyinAuthorizationSaving) return;
+        current.douyinAuthorizationSaving = true;
+        try {
+          const value = await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "disconnect", revision: authorization.revision }) });
+          if (!validDouyinAuthorization(value)) throw new Error("抖音授权状态返回格式无效，请刷新后重试。");
+          current.douyinAuthorization = value; current.douyinAuthorizationError = ""; clearDouyinOAuth(flow); appFeedback("抖音本机账号连接已移除。"); await loadApps();
+        } catch (error) { if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) { current.douyinAuthorizationError = error.message; appFeedback(error.message, true); } }
+        finally { current.douyinAuthorizationSaving = false; if (current === apps) renderApps(); }
+      });
+    }
+    const host = douyinDesktopHost();
+    if (!host) {
+      detail.append(appElement("p", "请在 Windows 桌面端扫码连接抖音账号。", "publication-authorization-note"));
+      if (disconnect) detail.append(disconnect);
+      row.append(appElement("h5", "账号授权"), detail);
+      return row;
+    }
     const panel = appElement("details", "", "publication-oauth");
-    panel.open = flow.embedded || Boolean(current.douyinAuthorizationError);
+    panel.open = Boolean(flow.state) || Boolean(current.douyinAuthorizationError);
     panel.append(appElement("summary", authorization?.status === "ready" ? "重新扫码授权" : "扫码授权"));
     const form = appElement("form", "", "publication-oauth-form");
     const clientKey = document.createElement("input");
@@ -1532,9 +1555,8 @@
     readWorks.name = "read_works"; readWorks.type = "checkbox"; readWorks.checked = Boolean(authorization?.works_authorized); readWorks.setAttribute("aria-label", "授权读取我的作品列表");
     const publishVideo = document.createElement("input");
     publishVideo.name = "publish_video"; publishVideo.type = "checkbox"; publishVideo.checked = Boolean(authorization?.publish_authorized); publishVideo.setAttribute("aria-label", "授权发布抖音视频");
-    const desktop = Boolean(douyinDesktopHost());
-    const begin = appElement("button", flow.saving ? "正在处理…" : desktop ? "打开扫码窗口" : "生成授权链接", "button compact secondary");
-    begin.type = "submit"; begin.disabled = !authorization || flow.saving || flow.embedded;
+    const begin = appElement("button", "打开扫码窗口", "button compact secondary");
+    begin.type = "submit"; begin.disabled = !authorization || flow.saving || Boolean(flow.state);
     for (const [field, label] of [[clientKey, "Client Key"], [clientSecret, "Client Secret"], [redirectURI, "回调地址"]]) {
       field.id = `douyin-oauth-${field.name}`;
       const labelNode = appElement("label", label); labelNode.htmlFor = field.id; form.append(labelNode, field);
@@ -1548,68 +1570,33 @@
       publishLabel,
       appElement("p", "可选能力：仅申请发布视频所需授权；授权成功不代表平台已开通实际发布资格。", "publication-authorization-note"),
       appElement("p", "仅使用抖音开放平台已登记的回调地址。密钥不会显示、缓存或写入浏览器。", "publication-authorization-note"), begin);
-    const callback = document.createElement("input");
-    callback.type = "url"; callback.autocomplete = "off"; callback.required = true; callback.placeholder = "粘贴浏览器返回的完整回调地址"; callback.setAttribute("aria-label", "完整回调地址");
-    const complete = appElement("button", "完成网页授权", "button compact primary"); complete.type = "button";
-    const callbackBlock = appElement("div", "", "publication-oauth-callback");
-    const embeddedNotice = appElement("p", "请在弹出的授权窗口中用抖音扫码并在手机确认。完成后会自动返回这里。", "publication-authorization-note");
+    const embeddedNotice = appElement("p", flow.completing ? "正在核验抖音账号…" : "请在扫码窗口内扫描二维码，并在手机抖音确认。", "publication-authorization-note");
     embeddedNotice.setAttribute("role", "status");
+    embeddedNotice.hidden = !flow.state;
     form.append(embeddedNotice);
-    const link = appElement("a", "在浏览器中打开抖音授权", "button compact quiet"); link.target = "_blank"; link.rel = "noopener noreferrer";
-    const expiration = appElement("p", "", "publication-reference");
-    const showCallback = () => {
-      embeddedNotice.hidden = !flow.embedded;
-      callbackBlock.hidden = !flow.authorizeURL || flow.embedded;
-      callback.disabled = callbackBlock.hidden;
-      if (!flow.authorizeURL) return;
-      link.href = flow.authorizeURL;
-      expiration.textContent = `授权链接有效至：${new Date(flow.expiresAt).toLocaleString()}`;
-    };
-    callbackBlock.append(appElement("p", "在浏览器完成授权后，把地址栏中的完整回跳地址粘贴到这里。"), expiration, link, callback, complete);
-    showCallback(); panel.append(form, callbackBlock); detail.append(panel);
-    if (authorization?.configured) {
-      const disconnect = appElement("button", current.douyinAuthorizationSaving ? "正在移除…" : "移除授权", "button compact quiet");
-      disconnect.type = "button"; disconnect.disabled = current.douyinAuthorizationSaving;
-      disconnect.addEventListener("click", async () => {
-        if (current !== apps || current.douyinAuthorizationSaving) return;
-        current.douyinAuthorizationSaving = true;
-        try {
-          const value = await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "disconnect", revision: authorization.revision }) });
-          if (!validDouyinAuthorization(value)) throw new Error("抖音授权状态返回格式无效，请刷新后重试。");
-          current.douyinAuthorization = value; current.douyinAuthorizationError = ""; clearDouyinOAuth(flow); appFeedback("抖音本机账号连接已移除。"); await loadApps();
-        } catch (error) { if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) { current.douyinAuthorizationError = error.message; appFeedback(error.message, true); } }
-        finally { current.douyinAuthorizationSaving = false; if (current === apps) renderApps(); }
-      });
-      detail.append(disconnect);
-    }
+    panel.append(form);
+    detail.append(panel);
+    if (disconnect) detail.append(disconnect);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (!authorization || current !== apps || flow.saving || flow.embedded) return;
+      if (!authorization || current !== apps || flow.saving || flow.state) return;
       const credentials = { client_key: clientKey.value, client_secret: clientSecret.value, redirect_uri: redirectURI.value, read_works: readWorks.checked, publish_video: publishVideo.checked };
-      clientKey.value = clientSecret.value = redirectURI.value = callback.value = "";
-      clearDouyinOAuth(flow); showCallback(); flow.saving = true; begin.disabled = true;
+      clientKey.value = clientSecret.value = redirectURI.value = "";
+      flow.saving = true; begin.disabled = true; begin.textContent = "正在打开…";
       try {
         const value = await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "begin", revision: authorization.revision, ...credentials }) });
         if (current !== apps) return;
         const authorizeURL = douyinAuthorizeURL(value.authorize_url);
-        if (!authorizeURL || !Number.isFinite(Date.parse(value.expires_at))) throw new Error("授权链接返回格式无效，请重新生成。");
         const authorizationState = douyinAuthorizeState(authorizeURL);
-        if (!authorizationState) throw new Error("授权链接缺少会话标识，请重新生成。");
-        flow.authorizeURL = authorizeURL; flow.expiresAt = value.expires_at; flow.state = authorizationState; current.douyinAuthorizationError = "";
-        const host = douyinDesktopHost();
-        flow.embedded = Boolean(host);
-        if (host) {
-          try { host.postMessage({ type: "douyin-auth-open", url: authorizeURL, expires_at: value.expires_at }); }
-          catch (_) { await cancelDouyinAuthorization(flow); clearDouyinOAuth(flow); throw new Error("无法打开应用内扫码窗口，请关闭后重新生成授权链接。"); }
+        if (!authorizationState || !Number.isFinite(Date.parse(value.expires_at))) throw new Error("扫码授权信息无效，请重新扫码。");
+        flow.state = authorizationState; current.douyinAuthorizationError = "";
+        try { host.postMessage({ type: "douyin-auth-open", url: authorizeURL, expires_at: value.expires_at }); }
+        catch (_) { await cancelDouyinAuthorization(flow); clearDouyinOAuth(flow); throw new Error("无法打开应用内扫码窗口，请重新扫码。"); }
+      } catch (error) {
+        if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          current.douyinAuthorizationError = error.message; appFeedback(error.message, true);
         }
-        showCallback();
-      } catch (error) { if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) { current.douyinAuthorizationError = error.message; appFeedback(error.message, true); } }
-      finally { flow.saving = false; begin.disabled = flow.embedded; }
-    });
-    complete.addEventListener("click", async () => {
-      if (!flow.authorizeURL || flow.embedded || current !== apps || flow.saving || !callback.reportValidity()) return;
-      const callbackURL = callback.value; callback.value = "";
-      await finishDouyinAuthorization(current, flow, callbackURL);
+      } finally { flow.saving = false; if (current === apps) renderApps(); }
     });
     row.append(appElement("h5", "账号授权"), detail);
     return row;

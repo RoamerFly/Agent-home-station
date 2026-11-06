@@ -74,14 +74,14 @@ namespace WechatAgent.Desktop {
         readonly Action<string> completed;
         readonly Action<string> closed;
         readonly WebView2 view = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.White };
-        readonly Label detail = new Label { Dock = DockStyle.Top, Height = 46, Padding = new Padding(20, 12, 12, 6), Text = "请用抖音 App 扫码并在手机上确认。授权完成后此窗口会自动关闭。" };
+        readonly Label detail = new Label { Dock = DockStyle.Top, Height = 46, Padding = new Padding(20, 12, 12, 6), Text = "正在加载抖音授权二维码…" };
         readonly Timer expiration = new Timer { Interval = 1000 };
         bool terminal;
 
         internal DouyinAuthorizationDialog(Deployment deployment, string authorizationURL, DouyinAuthorizationAttempt attempt, Action<string> completed, Action<string> closed) {
             this.deployment = deployment; this.attempt = attempt; this.completed = completed; this.closed = closed;
-            Text = "抖音授权 · Agent-home-station"; StartPosition = FormStartPosition.CenterParent; AutoScaleMode = AutoScaleMode.Dpi; Size = new Size(520, 700); MinimumSize = new Size(420, 560);
-            FormBorderStyle = FormBorderStyle.Sizable; MaximizeBox = false; ShowInTaskbar = false; BackColor = Color.FromArgb(247, 249, 255);
+            Text = "抖音扫码授权"; StartPosition = FormStartPosition.CenterParent; AutoScaleMode = AutoScaleMode.Dpi; Size = new Size(520, 700); MinimumSize = new Size(420, 560);
+            FormBorderStyle = FormBorderStyle.Sizable; MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false; BackColor = Color.FromArgb(247, 249, 255);
             var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Dock = DockStyle.Bottom, Height = 48, FlatStyle = FlatStyle.Flat, BackColor = Color.White };
             cancel.FlatAppearance.BorderColor = Color.FromArgb(206, 214, 234);
             cancel.Click += delegate { Finish(null, "已取消授权。"); };
@@ -109,6 +109,8 @@ namespace WechatAgent.Desktop {
             var core = view.CoreWebView2;
             core.Settings.AreDevToolsEnabled = false; core.Settings.AreDefaultContextMenusEnabled = false; core.Settings.AreDefaultScriptDialogsEnabled = false;
             core.Settings.AreHostObjectsAllowed = false; core.Settings.IsStatusBarEnabled = false; core.Settings.IsWebMessageEnabled = false;
+            core.Settings.AreBrowserAcceleratorKeysEnabled = false; core.Settings.IsSwipeNavigationEnabled = false;
+            view.AllowExternalDrop = false;
             core.IsMuted = true;
             core.NewWindowRequested += delegate(object sender, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; };
             core.DownloadStarting += delegate(object sender, CoreWebView2DownloadStartingEventArgs e) { e.Cancel = true; };
@@ -116,7 +118,9 @@ namespace WechatAgent.Desktop {
             core.LaunchingExternalUriScheme += delegate(object sender, CoreWebView2LaunchingExternalUriSchemeEventArgs e) { e.Cancel = true; };
             core.ProcessFailed += delegate { Finish(null, "扫码窗口中断，请重新发起授权。"); };
             core.NavigationCompleted += delegate(object sender, CoreWebView2NavigationCompletedEventArgs e) {
-                if (!e.IsSuccess && e.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+                if (terminal) return;
+                if (e.IsSuccess) detail.Text = "请用手机抖音扫码并确认授权。完成后返回成长站。";
+                else if (e.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
                     Finish(null, "无法加载抖音授权页，请检查网络后重试。");
             };
             core.NavigationStarting += delegate(object sender, CoreWebView2NavigationStartingEventArgs e) {

@@ -1287,6 +1287,14 @@ def verify_douyin_authorization(binary, output):
                         page.locator("#initialize-button").click()
                     page.locator("#apps-tab").click()
                     page.get_by_text("尚未接入抖音账号", exact=True).wait_for()
+                    if not desktop:
+                        page.get_by_text("请在 Windows 桌面端扫码连接抖音账号。", exact=True).wait_for()
+                        assert page.get_by_text("扫码授权", exact=True).count() == 0
+                        assert page.get_by_role("link", name="在浏览器中打开抖音授权").count() == 0
+                        assert page.get_by_label("完整回调地址").count() == 0
+                        assert not attempts and not completed and not cancelled
+                        context.close()
+                        continue
                     page.get_by_text("扫码授权", exact=True).click()
                     works = page.get_by_label("授权读取我的作品列表")
                     publish = page.get_by_label("授权发布抖音视频")
@@ -1294,79 +1302,67 @@ def verify_douyin_authorization(binary, output):
                     assert not publish.is_checked(), "video publishing access must be off for a fresh authorization"
 
                     def begin():
-                        if desktop:
-                            works.check()
-                            publish.check()
+                        works.check()
+                        publish.check()
                         page.get_by_label("抖音 Client Key").fill("fixture-client")
                         page.get_by_label("抖音 Client Secret").fill("fixture-private-secret")
                         page.get_by_label("抖音开放平台已登记的回调地址").fill(redirect)
-                        page.get_by_role("button", name="打开扫码窗口" if desktop else "生成授权链接").click()
+                        page.get_by_role("button", name="打开扫码窗口").click()
 
                     def callback(state):
-                        scopes = "user_info,video.list.bind,video.create.bind,posting.behavior" if desktop else "user_info"
-                        return redirect + "?" + urlencode({"code": "synthetic-code", "state": state, "scopes": scopes})
+                        return redirect + "?" + urlencode({"code": "synthetic-code", "state": state, "scopes": "user_info,video.list.bind,video.create.bind,posting.behavior"})
 
                     def emit(message):
                         page.evaluate("message => chrome.webview.dispatchEvent(new MessageEvent('message', {data: message}))", message)
 
                     begin()
-                    if desktop:
-                        page.get_by_text("请在弹出的授权窗口中用抖音扫码", exact=False).wait_for()
-                        assert page.evaluate("window.fixtureOpenRequests.length") == 1
-                        opened = page.evaluate("window.fixtureOpenRequests[0]")
-                        assert opened["type"] == "douyin-auth-open" and opened["expires_at"]
-                        assert parse_qs(urlparse(opened["url"]).query)["state"] == attempts
-                        assert page.get_by_role("link", name="在浏览器中打开抖音授权").is_hidden()
-                        assert page.get_by_label("完整回调地址").is_hidden()
-                        assert page.get_by_role("button", name="打开扫码窗口").is_disabled()
-                        assert page.get_by_label("抖音 Client Secret").input_value() == ""
-                        assert_no_horizontal_overflow(page, "375-pixel Douyin authorization")
-                        page.screenshot(path=str(output / "douyin-auth-desktop-dark.png"))
-                        with page.expect_request(lambda req: req.url.endswith("/douyin/authorization") and req.method == "POST"
-                                                 and req.post_data_json.get("action") == "cancel"):
-                            emit({"type": "douyin-auth-closed", "state": attempts[0]})
-                        page.get_by_text("扫码窗口已关闭，未更改当前账号连接。", exact=True).first.wait_for()
-                        begin()
-                        page.get_by_text("请在弹出的授权窗口中用抖音扫码", exact=False).wait_for()
-                        assert page.evaluate("window.fixtureOpenRequests.length") == 2
-                        emit({"type": "douyin-auth-callback", "state": attempts[0], "callback_url": callback(attempts[0])})
+                    page.get_by_text("请在扫码窗口内扫描二维码", exact=False).wait_for()
+                    assert page.evaluate("window.fixtureOpenRequests.length") == 1
+                    opened = page.evaluate("window.fixtureOpenRequests[0]")
+                    assert opened["type"] == "douyin-auth-open" and opened["expires_at"]
+                    assert parse_qs(urlparse(opened["url"]).query)["state"] == attempts
+                    assert page.get_by_role("link", name="在浏览器中打开抖音授权").count() == 0
+                    assert page.get_by_label("完整回调地址").count() == 0
+                    assert page.get_by_role("button", name="打开扫码窗口").is_disabled()
+                    assert page.get_by_label("抖音 Client Secret").input_value() == ""
+                    assert_no_horizontal_overflow(page, "375-pixel Douyin authorization")
+                    page.screenshot(path=str(output / "douyin-auth-desktop-dark.png"))
+                    with page.expect_request(lambda req: req.url.endswith("/douyin/authorization") and req.method == "POST"
+                                             and req.post_data_json.get("action") == "cancel"):
                         emit({"type": "douyin-auth-closed", "state": attempts[0]})
-                        for _ in range(2):
-                            emit({"type": "douyin-auth-callback", "state": attempts[1], "callback_url": callback(attempts[1])})
-                        expected = callback(attempts[1])
-                    else:
-                        page.get_by_role("link", name="在浏览器中打开抖音授权").wait_for()
-                        expected = callback(attempts[0])
-                        page.get_by_label("完整回调地址").fill(expected)
-                        page.get_by_role("button", name="完成网页授权").click()
+                    page.get_by_text("扫码窗口已关闭，未更改当前账号连接。", exact=True).first.wait_for()
+                    begin()
+                    page.get_by_text("请在扫码窗口内扫描二维码", exact=False).wait_for()
+                    assert page.evaluate("window.fixtureOpenRequests.length") == 2
+                    emit({"type": "douyin-auth-callback", "state": attempts[0], "callback_url": callback(attempts[0])})
+                    emit({"type": "douyin-auth-closed", "state": attempts[0]})
+                    for _ in range(2):
+                        emit({"type": "douyin-auth-callback", "state": attempts[1], "callback_url": callback(attempts[1])})
+                    expected = callback(attempts[1])
                     page.get_by_text(verified["label"], exact=True).wait_for()
-                    if desktop:
-                        page.get_by_text("已授权读取我的作品列表", exact=False).wait_for()
-                        page.get_by_text("已授权发布抖音视频", exact=False).wait_for()
-                        page.get_by_text("重新扫码授权", exact=True).click()
-                        assert works.is_checked(), "renewing a works grant should preserve the visible selection"
-                        assert publish.is_checked(), "renewing a publishing grant should preserve the visible selection"
-                        workbench = page.locator("#douyin-publication")
-                        workbench.get_by_role("list", name="抖音发布任务").wait_for()
-                        pending_row = workbench.locator(f'[data-job="{pending_job}"]')
-                        assert pending_row.get_by_role("button", name="继续任务").count() == 0
-                        assert workbench.get_by_text("核对投稿结果", exact=True).count() == 0
-                        accepted_row = workbench.locator(f'[data-job="{accepted_job}"]')
-                        accepted_row.get_by_role("button", name="查询状态").click()
-                        accepted_row.get_by_text("已公开", exact=True).wait_for()
-                        assert len(publication_actions) == 1
-                        assert_no_horizontal_overflow(page, "375-pixel Douyin publication")
-                        page.screenshot(path=str(output / "douyin-publication-desktop-dark.png"))
-                    else:
-                        assert page.get_by_text("已授权读取我的作品列表", exact=False).count() == 0
-                        assert page.get_by_text("已授权发布抖音视频", exact=False).count() == 0
+                    page.get_by_text("已授权读取我的作品列表", exact=False).wait_for()
+                    page.get_by_text("已授权发布抖音视频", exact=False).wait_for()
+                    page.get_by_text("重新扫码授权", exact=True).click()
+                    assert works.is_checked(), "renewing a works grant should preserve the visible selection"
+                    assert publish.is_checked(), "renewing a publishing grant should preserve the visible selection"
+                    workbench = page.locator("#douyin-publication")
+                    workbench.get_by_role("list", name="抖音发布任务").wait_for()
+                    pending_row = workbench.locator(f'[data-job="{pending_job}"]')
+                    assert pending_row.get_by_role("button", name="继续任务").count() == 0
+                    assert workbench.get_by_text("核对投稿结果", exact=True).count() == 0
+                    accepted_row = workbench.locator(f'[data-job="{accepted_job}"]')
+                    accepted_row.get_by_role("button", name="查询状态").click()
+                    accepted_row.get_by_text("已公开", exact=True).wait_for()
+                    assert len(publication_actions) == 1
+                    assert_no_horizontal_overflow(page, "375-pixel Douyin publication")
+                    page.screenshot(path=str(output / "douyin-publication-desktop-dark.png"))
                     assert completed == [expected], "stale or repeated callback was submitted"
-                    assert cancelled == ([attempts[0]] if desktop else [])
+                    assert cancelled == [attempts[0]]
                     context.close()
                 browser.close()
         finally:
             stop(process)
-    print("Douyin authorization browser replay passed (Windows bridge and web fallback, no platform requests).")
+    print("Douyin authorization browser replay passed (Windows bridge and browser status UI, no platform requests).")
 
 
 if __name__ == "__main__":
