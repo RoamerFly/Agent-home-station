@@ -288,7 +288,7 @@ Copy-Item -LiteralPath $gorillaLicense -Destination (Join-Path $OutputDirectory 
 Copy-Item -LiteralPath (Join-Path $workspace 'docs\licenses\rtmp-relay.txt') -Destination (Join-Path $OutputDirectory 'RTMP-Relay-LICENSE.txt') -ErrorAction Stop
 if($Test){
  $tests=Join-Path $OutputDirectory 'DesktopTests.exe'
- & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'LocalStationRuntime.cs') (Join-Path $source 'CloseSettings.cs') (Join-Path $source 'DesktopInstance.cs') (Join-Path $source 'ControllerTests.cs')
+ & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'LocalStationRuntime.cs') (Join-Path $source 'CloseSettings.cs') (Join-Path $source 'DesktopInstance.cs') (Join-Path $source 'ControllerTests.cs') (Join-Path $source 'CutoverRehearsal.cs')
  if($LASTEXITCODE -ne 0){throw 'Desktop tests did not compile.'}
  & $tests
  if($LASTEXITCODE -ne 0){throw 'Desktop controller tests failed.'}
@@ -303,7 +303,7 @@ if($Test){
  $windowTests=Join-Path $OutputDirectory 'DesktopWindowTests.exe'
  $windowArguments=@('/target:exe','/main:WechatAgent.Desktop.WindowTests',('/out:'+$windowTests))
  $windowArguments+=@($arguments | Where-Object {$_ -notlike '/target:*' -and $_ -notlike '/out:*'})
- $windowArguments+=@((Join-Path $source 'ControllerTests.cs'),(Join-Path $source 'WindowTests.cs'))
+ $windowArguments+=@((Join-Path $source 'ControllerTests.cs'),(Join-Path $source 'CutoverRehearsal.cs'),(Join-Path $source 'WindowTests.cs'))
  & $compiler @windowArguments
  if($LASTEXITCODE -ne 0){throw 'Desktop window tests did not compile.'}
  $windowRunner=Join-Path $OutputDirectory 'DesktopWindowTestRunner.exe'

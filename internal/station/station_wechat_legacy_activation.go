@@ -166,7 +166,9 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 		view.Status = "confirmed"
 		return view, nil
 	}
-	if w.run != nil || !w.policy.Paused {
+	// A disabled import is already dormant. Saving its first reply scope can
+	// leave Paused false; only an enabled worker must be explicitly paused.
+	if w.run != nil || (w.policy.Enabled && !w.policy.Paused) {
 		return blocked("请先暂停此连接并等待工作器退出")
 	}
 	snapshot, source, err := s.openLegacyImport()

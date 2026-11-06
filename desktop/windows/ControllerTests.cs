@@ -46,9 +46,9 @@ namespace WechatAgent.Desktop {
     }
     internal static class ControllerTests {
         static int count;
-        static void Assert(bool condition, string reason) { if (!condition) throw new Exception(reason); count++; }
+        internal static void Assert(bool condition, string reason) { if (!condition) throw new Exception(reason); count++; }
 
-        static string CycleUrl() {
+        internal static string CycleUrl() {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             try { return "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port; }
@@ -60,7 +60,7 @@ namespace WechatAgent.Desktop {
             catch (ArgumentException) { return false; }
         }
 
-        static Dictionary<string, object> StationJSON(HttpClient client, HttpMethod method, string url, object payload) {
+        internal static Dictionary<string, object> StationJSON(HttpClient client, HttpMethod method, string url, object payload) {
             using (var request = new HttpRequestMessage(method, url)) {
                 request.Content = new StringContent(Deployment.Json.Serialize(payload), System.Text.Encoding.UTF8, "application/json");
                 using (var response = client.SendAsync(request).GetAwaiter().GetResult()) {
@@ -473,6 +473,11 @@ namespace WechatAgent.Desktop {
                 Console.WriteLine("Native Windows failed-start recovery passed twice."); return 0;
             }
             if (args.Length == 1 && args[0] == "--synthetic-child") { Thread.Sleep(60000); return 0; }
+            if (args.Length == 3 && args[0] == "--wechat-cutover-rehearsal") {
+                CutoverRehearsal.Run(args[1], args[2]);
+                Console.WriteLine("Windows old-to-station-to-old cutover rehearsal passed (" + count + " assertions, synthetic transport only).");
+                return 0;
+            }
             if (args.Length == 2 && args[0] == "--local-native-cycle") {
                 LocalNativeCycle(args[1]);
                 Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; synthetic legacy receipt, profiles and independent worker states verified, no login or send.");
