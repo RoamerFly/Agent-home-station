@@ -3,6 +3,7 @@ package station
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -76,7 +77,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	sameQueue := strings.ReplaceAll(strings.ReplaceAll(rawQueue, `"account":"one"`, `"account":"four"`), "old-dataset", "new-dataset")
 	write(filepath.Join(snapshot, "bot-state", "accounts", wechatapp.AccountDirectory("four"), "messages-v2.json"), []byte(sameQueue))
 
-	var sideEffects, receiptReads, eventReads atomic.Int32
+	var sideEffects, receiptReads, eventReads, guardedWrites atomic.Int32
 	var pushAfterInvalid atomic.Bool
 	var daemonOffline atomic.Bool
 	var loginOnline atomic.Bool
@@ -84,6 +85,11 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer synthetic-legacy-native-token" {
 			t.Error("wrong daemon credential")
 			w.WriteHeader(401)
+			return
+		}
+		if r.Method == http.MethodPut && r.URL.Path == "/v1/accounts/one/threads/123@chatroom/notifications" {
+			guardedWrites.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "synthetic-action", "accountId": "one", "threadId": "123@chatroom", "kind": "mute", "state": "succeeded"})
 			return
 		}
 		if r.Method != http.MethodGet {
@@ -170,6 +176,14 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	req("GET", memoryRoute("one")+"/123@chatroom/preference", nil, false, 401)
 	req("GET", ruleRoute("one", "124@chatroom"), nil, false, 401)
 	f.login()
+	guardedSender, err := h.chat.wechat.WorkerSender(t.Context(), wechatapp.ConnectionID("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	guardedAction := linuxnative.AdminAction{Kind: "mute", ThreadID: "123@chatroom", Muted: true}
+	if _, err := guardedSender.ExecuteAction(t.Context(), guardedAction, "pre-archive"); !errors.Is(err, linuxnative.ErrWriteNotAdmitted) || guardedWrites.Load() != 0 {
+		t.Fatal("imported native profile could write before the archive was applied", err)
+	}
 	assertCutoverOwnerState(t, f, ownerIdentity, speakingVoice)
 	req("GET", memoryRoute("two"), nil, false, 404)
 	req("GET", memoryRoute("unknown"), nil, false, 404)
@@ -721,6 +735,10 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	marker.Version = 2
 	write(liveMarker, j(marker))
 	write(filepath.Join(snapshot, legacyStopMarkerFile), j(marker))
+	guardedSender, err = h.chat.wechat.WorkerSender(t.Context(), wechatapp.ConnectionID("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	activation := req("GET", activationRoute, nil, false, 200)
 	if activation["status"] != "ready" || activation["pending_receipts"] != float64(2) || activation["model_ready"] != true ||
 		bytes.Contains(j(activation), []byte("old-host")) || bytes.Contains(j(activation), []byte(marker.Epoch)) {
@@ -787,8 +805,15 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	}
 	req("POST", route("one")+"/lifecycle", start, true, 200)
 	waitAppLifecycle(t, func() bool { return detailFor("one")["worker"] == "running" })
+	// The sender issued before activation must see the committed proof at dispatch.
+	if _, err := guardedSender.ExecuteAction(t.Context(), guardedAction, "confirmed"); err != nil || guardedWrites.Load() != 1 {
+		t.Fatal("confirmed action did not reach native exactly once", err)
+	}
 	if err := os.Remove(claimPath); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := guardedSender.ExecuteAction(t.Context(), guardedAction, "claim-lost"); !errors.Is(err, linuxnative.ErrWriteNotAdmitted) || guardedWrites.Load() != 1 {
+		t.Fatal("previously issued sender still wrote after the claim was removed", err)
 	}
 	pushAfterInvalid.Store(true)
 	waitAppLifecycle(t, func() bool { return detailFor("one")["worker"] == "cutover_blocked" })

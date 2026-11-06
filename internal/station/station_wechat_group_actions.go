@@ -95,6 +95,8 @@ func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.Ser
 			websession.Fail(w, http.StatusConflict, "当前微信后台未声明此群操作")
 		case errors.Is(err, errStationGroupActionTarget), errors.Is(err, linuxnative.ErrToolNotFound), errors.Is(err, apphost.ErrNotFound):
 			websession.Fail(w, http.StatusNotFound, "未能在该连接核对所选群")
+		case errors.Is(err, apphost.ErrLifecycleCutover):
+			websession.Fail(w, http.StatusConflict, "旧微信接续未获启用或凭证已失效，群操作未提交")
 		case errors.Is(err, apphost.ErrLifecycleConflict), errors.Is(err, errContactLogin):
 			websession.Fail(w, http.StatusConflict, "连接已暂停、未登录或请求内容变化，未提交操作")
 		default:
@@ -198,6 +200,10 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 		w.mu.Unlock()
 		return out, apphost.ErrLifecycleConflict
 	}
+	if err := s.admitPlatformWrite(ctx, connection, native); err != nil {
+		w.mu.Unlock()
+		return out, err
+	}
 	previous, ok := ledger.FindConnected(s.installation, connection, "", action.ThreadID, action.Kind)
 	if ok && !wechatapp.IsFinalActionState(previous.State) {
 		w.mu.Unlock()
@@ -214,7 +220,17 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 	}
 	// Reservation is durable and unique before handing the action to native.
 	// A lost response leaves the original reservation for read-only inspection.
-	status, err := native.ExecuteAction(ctx, p.Request, intent.IdempotencyKey)
+	return submitReservedStationAction(ctx, native, ledger, p)
+}
+
+func submitReservedStationAction(ctx context.Context, native *linuxnative.Sender, ledger *wechatapp.ActionLedger, p wechatapp.ActionProposal) (apphost.ActionReceipt, error) {
+	status, err := native.ExecuteAction(ctx, p.Request, p.AppAction.IdempotencyKey)
+	if errors.Is(err, linuxnative.ErrWriteNotAdmitted) {
+		if err := ledger.RejectUnsubmitted(p); err != nil {
+			return p.Receipt(), nil
+		}
+		return apphost.ActionReceipt{}, apphost.ErrLifecycleCutover
+	}
 	if err != nil || !p.MatchesReceipt(status) {
 		return p.Receipt(), nil
 	}

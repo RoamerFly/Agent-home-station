@@ -91,6 +91,15 @@ func TestConnectedActionReceiptBindsAndKeepsTerminalResult(t *testing.T) {
 	if got, err := ledger.RecordConnectedReceipt(duplicate, status); err != nil || got.Lookup != "identity_mismatch" {
 		t.Fatal("one native receipt was assigned to two operations", got, err)
 	}
+	if err := ledger.RejectUnsubmitted(proposal); !errors.Is(err, apphost.ErrLifecycleConflict) {
+		t.Fatal("an admitted operation must not become unsubmitted", err)
+	}
+	if err := ledger.RejectUnsubmitted(duplicate); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ledger.RecordConnectedReceipt(duplicate, status); err != nil || got.State != "rejected" || got.PlatformOperationID != "" {
+		t.Fatal("a locally rejected operation must not acquire a platform receipt", got, err)
+	}
 	final := status
 	final.State, final.RemoteOutcome = "succeeded", "accepted"
 	var wg sync.WaitGroup
@@ -111,5 +120,8 @@ func TestConnectedActionReceiptBindsAndKeepsTerminalResult(t *testing.T) {
 	got, ok := restored.FindConnected(installation, connection, proposal.ID, "", "mute")
 	if !ok || got.Result != final || got.Receipt().State != "succeeded" {
 		t.Fatal("terminal receipt did not survive stale progress and reopen", got, ok)
+	}
+	if got, ok := restored.FindConnected(installation, connection, duplicate.ID, "", "mute"); !ok || got.Receipt().State != "rejected" || got.Result.ID != "" {
+		t.Fatal("local rejection did not survive reopen", got, ok)
 	}
 }

@@ -123,6 +123,9 @@ func (s *Sender) toolJSON(ctx context.Context, method, path, key string, body io
 	req.GetBody = nil
 	response, err := s.client.Do(req)
 	if err != nil {
+		if errors.Is(err, ErrWriteNotAdmitted) {
+			return nil, ErrWriteNotAdmitted
+		}
 		return nil, errors.New("native tool outcome unavailable; do not resend automatically")
 	}
 	defer response.Body.Close()

@@ -327,15 +327,19 @@ func (s *stationWechat) legacyActivationGuard(ctx context.Context, id string, na
 		return nil, apphost.ErrLifecycleCutover
 	}
 	defer root.Close()
+	return s.legacyActivationCheck(ctx, id, native, root, w.policy)
+}
+
+func (s *stationWechat) legacyActivationCheck(ctx context.Context, id string, native *linuxnative.Sender, root *os.Root, policy stationWechatPolicy) (func() bool, error) {
 	archive, err := readLegacyImportArchive(root)
-	if errors.Is(err, os.ErrNotExist) && w.policy.LegacyActivation == nil && w.policy.LegacyArchiveDigest == "" {
-		return nil, nil
+	if errors.Is(err, os.ErrNotExist) && policy.LegacyActivation == nil && policy.LegacyArchiveDigest == "" {
+		return nil, s.checkUnarchivedNativeProfile(id)
 	}
-	if err != nil || w.policy.LegacyActivation == nil || archive.Plan.Account != native.Account() ||
-		w.policy.LegacyArchiveDigest != archive.Plan.Digest {
+	if err != nil || policy.LegacyActivation == nil || archive.Plan.Account != native.Account() ||
+		policy.LegacyArchiveDigest != archive.Plan.Digest {
 		return nil, apphost.ErrLifecycleCutover
 	}
-	proof := *w.policy.LegacyActivation
+	proof := *policy.LegacyActivation
 	daemon, err := native.DaemonStatus(ctx)
 	if err != nil || !s.activationMatches(proof, id, archive.Plan, daemon.ServerID) {
 		return nil, apphost.ErrLifecycleCutover
@@ -345,4 +349,51 @@ func (s *stationWechat) legacyActivationGuard(ctx context.Context, id string, na
 		return nil, apphost.ErrLifecycleCutover
 	}
 	return func() bool { return s.localActivationEvidence(id, proof) }, nil
+}
+
+func (s *stationWechat) checkUnarchivedNativeProfile(id string) error {
+	// An import receipt can exist before the worker archive is applied. Only a
+	// connection without any such receipt can take the fresh-account path.
+	root, err := workspacefs.OpenPath(filepath.Dir(s.root))
+	if err != nil {
+		return apphost.ErrLifecycleCutover
+	}
+	defer root.Close()
+	if _, err := root.Lstat("native-import-" + id + ".json"); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return apphost.ErrLifecycleCutover
+}
+
+// Use the on-disk policy at native dispatch. Taking worker.mu here would
+// deadlock shutdown, which holds it while waiting for the actor to exit.
+func (s *stationWechat) admitPlatformWrite(ctx context.Context, id string, native *linuxnative.Sender) error {
+	if ctx.Err() != nil || s.ctx.Err() != nil {
+		return apphost.ErrLifecycleConflict
+	}
+	root, err := workspacefs.OpenPath(filepath.Join(s.root, id))
+	if errors.Is(err, os.ErrNotExist) {
+		return s.checkUnarchivedNativeProfile(id)
+	}
+	if err != nil {
+		return apphost.ErrLifecycleCutover
+	}
+	defer root.Close()
+	policy, err := readStationWechatPolicy(root)
+	if err != nil {
+		return apphost.ErrLifecycleCutover
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_, err = s.legacyActivationCheck(ctx, id, native, root, policy)
+	return err
+}
+
+func (s *stationWechat) WorkerSender(ctx context.Context, id string) (*linuxnative.Sender, error) {
+	native, err := s.stationWechatNative.WorkerSender(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	native.GuardChanges(func(ctx context.Context) error { return s.admitPlatformWrite(ctx, id, native) })
+	return native, nil
 }

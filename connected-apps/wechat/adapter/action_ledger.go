@@ -162,8 +162,24 @@ func (p ActionProposal) Receipt() apphost.ActionReceipt {
 		Target: p.Request.ThreadID, State: "submission_unknown", Lookup: "stored"}
 	if p.Result.ID != "" {
 		ProjectActionReceipt(&out, p.Result)
+	} else if p.State == "rejected" {
+		out.State = "rejected"
 	}
 	return out
+}
+
+// RejectUnsubmitted preserves the reservation without inventing a native
+// operation ID. Call only after the transport has proved it sent nothing.
+func (l *ActionLedger) RejectUnsubmitted(p ActionProposal) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	current, exists := l.items[p.ID]
+	if !exists || p.AppAction == nil || !connectedActionMatches(current, p.AppAction.ConnectionRef) ||
+		*current.AppAction != *p.AppAction || !sameActionRequest(current.Request, p.Request) || current.Result.ID != "" || current.State != "unknown" {
+		return apphost.ErrLifecycleConflict
+	}
+	current.State = "rejected"
+	return l.saveLocked(current)
 }
 
 func (p ActionProposal) MatchesReceipt(status linuxnative.ActionStatus) bool {

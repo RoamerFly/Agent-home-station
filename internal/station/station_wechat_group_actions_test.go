@@ -529,6 +529,30 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 			t.Fatal("revoked and regranted scope allowed the old request", err, submissions.Load())
 		}
 	})
+	// A native import receipt means this account may be an unactivated legacy
+	// handover. A malformed receipt is enough to fence every platform write;
+	// it must not leave a local action reservation that prevents the same owner
+	// request from being retried after the receipt is removed.
+	importReceipt := filepath.Join(host, "apps", "wechat", "native-import-"+wechatapp.ConnectionID("one")+".json")
+	if err := os.WriteFile(importReceipt, []byte(`{"id":"wrong-account"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	blockedRename := map[string]any{"action": "rename", "group_id": renameGroup, "request_key": "cutover-blocked", "name": "合成新群名"}
+	beforeCutoverWrite := renameSubmissions.Load()
+	blocked := request("POST", path, blockedRename, true, 409)
+	if message, _ := blocked["error"].(string); !strings.Contains(message, "接续未获启用") {
+		t.Fatal("cutover denial was not explicit", blocked)
+	}
+	if renameSubmissions.Load() != beforeCutoverWrite {
+		t.Fatal("unactivated import receipt reached the native group mutation", renameSubmissions.Load(), beforeCutoverWrite)
+	}
+	if err := os.Remove(importReceipt); err != nil {
+		t.Fatal(err)
+	}
+	retried := request("POST", path, blockedRename, true, 202)
+	if retried["state"] != "submission_unknown" || renameSubmissions.Load() != beforeCutoverWrite+1 {
+		t.Fatal("same owner request could not retry after the cutover receipt was removed", retried, renameSubmissions.Load())
+	}
 	request("POST", one+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
 	request("POST", path, mute(group, "paused-new-key", false), true, 409)
 	f.server.Close()

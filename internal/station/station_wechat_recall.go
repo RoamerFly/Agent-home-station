@@ -99,6 +99,8 @@ func stationRecallFailure(w http.ResponseWriter, err error) {
 		websession.Fail(w, http.StatusNotFound, "未找到该连接中匹配的已接受投递")
 	case errors.Is(err, errStationRecallCursor):
 		websession.Fail(w, http.StatusBadRequest, "此查询位置已失效，请从首批重新查找")
+	case errors.Is(err, apphost.ErrLifecycleCutover):
+		websession.Fail(w, http.StatusConflict, "旧微信接续未获启用或凭证已失效，撤回未提交")
 	case errors.Is(err, apphost.ErrLifecycleConflict), errors.Is(err, errContactLogin):
 		websession.Fail(w, http.StatusConflict, "账号未登录、连接已暂停或原消息身份无法核对")
 	default:
@@ -305,14 +307,14 @@ func (s *stationWechat) submitStationRecall(ctx context.Context, id string, sour
 		w.mu.Unlock()
 		return out, apphost.ErrLifecycleConflict
 	}
+	if err := s.admitPlatformWrite(ctx, id, native); err != nil {
+		w.mu.Unlock()
+		return out, err
+	}
 	err = ledger.Save(p)
 	w.mu.Unlock()
 	if err != nil {
 		return out, err
 	}
-	status, err := native.ExecuteAction(ctx, p.Request, operationID)
-	if err != nil || !p.MatchesReceipt(status) {
-		return p.Receipt(), nil
-	}
-	return ledger.RecordConnectedReceipt(p, status)
+	return submitReservedStationAction(ctx, native, ledger, p)
 }
