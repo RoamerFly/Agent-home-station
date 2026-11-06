@@ -7,14 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"wechat-bot/internal/fishidentity"
 )
 
-func localWorkspaceToolsFixture(t *testing.T) (*localHomeService, *localWorkspaceAccess, fishIdentityRecord, string) {
+func localWorkspaceToolsFixture(t *testing.T) (*localHomeService, *localWorkspaceAccess, fishidentity.Record, string) {
 	t.Helper()
 	dataDir := t.TempDir()
 	workspace := t.TempDir()
-	identity := newFishIdentityRegistry(dataDir)
-	record, err := identity.initializeLocalIdentity()
+	identity := fishidentity.New(dataDir)
+	record, err := identity.InitializeLocal()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +62,7 @@ func TestLocalWorkspaceFileToolsCreateRestartReadAndEdit(t *testing.T) {
 
 	// A restart reopens only durable identity and home state; it must not retain
 	// a grant object or any in-memory path capability from the prior service.
-	restartedHome := &localHomeService{identity: newFishIdentityRegistry(home.dataDir), root: home.root, dataDir: home.dataDir, chatAvailable: true}
+	restartedHome := &localHomeService{identity: fishidentity.New(home.dataDir), root: home.root, dataDir: home.dataDir, chatAvailable: true}
 	restartedTools := newLocalFileTools(&localWorkspaceAccess{home: restartedHome})
 	var afterRestart struct {
 		Content string `json:"content"`
@@ -107,7 +109,7 @@ func TestLocalWorkspaceFileToolsPauseAndPathBoundaries(t *testing.T) {
 	if record.LocalOwner == nil {
 		t.Fatal("fixture did not initialize local owner")
 	}
-	if _, err := home.identity.setLocalHomeAccess(record.LocalOwner.Revision, false); err != nil {
+	if _, err := home.identity.SetHomeAccess(record.LocalOwner.Revision, false); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(map[string]any{"path": filepath.Join("Project Tools", "after-pause.py"), "content": "blocked"})

@@ -69,7 +69,7 @@ func TestLocalLiveOwnerRouteSyntheticLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err := f.handler.home.identity.localIdentity()
+	identity, err := f.handler.home.identity.Read()
 	if err != nil || identity.LocalOwner == nil {
 		t.Fatalf("local identity: %#v %v", identity, err)
 	}

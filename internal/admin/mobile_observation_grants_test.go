@@ -43,7 +43,7 @@ func observationGrantFixture(t *testing.T) (*webFixture, *mobileWorkflowService,
 	if _, err = store.SetEnabled(t.Context(), installed.Package.ID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.manager.fish.bind(f.native.Account()); err != nil {
+	if _, err = f.manager.fish.Bind(f.native.Account()); err != nil {
 		t.Fatal(err)
 	}
 	f.login()

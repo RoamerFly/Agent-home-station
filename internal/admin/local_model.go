@@ -11,6 +11,7 @@ import (
 
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/hostfile"
 )
 
 // LocalModelSettings is the non-secret configuration for the independent
@@ -80,7 +81,7 @@ func (s *localModelStore) Save(input LocalModelInput) (LocalModelSettings, error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Atomic replacement alone does not protect a CAS across two instances.
-	release, err := lockFishIdentityRegistry(s.path + ".lock")
+	release, err := hostfile.Lock(s.path + ".lock")
 	if err != nil {
 		return LocalModelSettings{}, errors.New("本机聊天模型设置暂不可写")
 	}

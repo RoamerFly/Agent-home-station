@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/fishidentity"
 )
 
 // fakeLocalRVCBackend is deliberately a bridge-level fixture.  It validates
@@ -206,7 +207,7 @@ func TestLocalRVCConversionThroughChatPinsVoiceAndPublishesArtifact(t *testing.T
 	if code, out := f.request("GET", "/api/local/project-tools", nil, true); code != http.StatusOK {
 		t.Fatalf("initial RVC list: %d %#v", code, out)
 	}
-	fish, _, err := newFishIdentityRegistry(f.handler.home.dataDir).bindings()
+	fish, _, err := fishidentity.New(f.handler.home.dataDir).Bindings()
 	if err != nil || fish == "" {
 		t.Fatalf("read fixture fish identity: %q %v", fish, err)
 	}
@@ -352,7 +353,7 @@ func TestLocalRVCRecoversLostSubmitReceiptWithoutDuplicate(t *testing.T) {
 	if code, out := f.request("GET", "/api/local/project-tools", nil, true); code != http.StatusOK {
 		t.Fatalf("initial RVC list: %d %#v", code, out)
 	}
-	fish, _, err := newFishIdentityRegistry(f.handler.home.dataDir).bindings()
+	fish, _, err := fishidentity.New(f.handler.home.dataDir).Bindings()
 	if err != nil || fish == "" {
 		t.Fatalf("read fixture fish identity: %q %v", fish, err)
 	}

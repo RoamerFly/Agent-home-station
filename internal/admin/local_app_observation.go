@@ -107,7 +107,7 @@ func (h *localChatService) appObservationRoutes(s *websession.Store, mux *http.S
 			fail(w, http.StatusServiceUnavailable, "后台应用观察暂不可用")
 			return
 		}
-		identity, err := h.home.identity.localIdentity()
+		identity, err := h.home.identity.Read()
 		if err != nil || identity.LocalOwner == nil {
 			fail(w, http.StatusConflict, "请先准备本机身份")
 			return
@@ -136,7 +136,7 @@ func (h *localChatService) appObservationRoutes(s *websession.Store, mux *http.S
 			fail(w, observationHTTPStatus(err), err.Error())
 			return
 		}
-		current, err := h.home.identity.localIdentity()
+		current, err := h.home.identity.Read()
 		if err != nil || current.LocalOwner == nil || current.FishID != identity.FishID || current.LocalOwner.ID != identity.LocalOwner.ID {
 			fail(w, http.StatusConflict, "本机身份已变更")
 			return

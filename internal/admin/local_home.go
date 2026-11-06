@@ -10,6 +10,7 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/stationhost"
 	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/websession"
@@ -30,7 +31,7 @@ type LocalHomeHandler struct {
 // Authentication is provided by the local owner's management session. No
 // Native, account Manager, device bridge or model is constructed by this path.
 type localHomeService struct {
-	identity      *fishIdentityRegistry
+	identity      *fishidentity.Registry
 	root          string
 	dataDir       string
 	chatAvailable bool
@@ -85,7 +86,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 		}
 	}
 	mux := http.NewServeMux()
-	home := &localHomeService{identity: newFishIdentityRegistry(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner}
+	home := &localHomeService{identity: fishidentity.New(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner}
 	home.configureAppCatalog()
 	home.appInstallRoutes(auth, mux)
 	mux.HandleFunc("GET /api/local/home", auth.Protect(home.status))
@@ -115,8 +116,8 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	return &LocalHomeHandler{Handler: stationhost.New(mux, auth, registry, dir, chat, apps...), chat: chat, home: home}, nil
 }
 
-func (h *localHomeService) directory(record fishIdentityRecord) (string, error) {
-	if !validFishID(record.FishID) || record.LocalOwner == nil {
+func (h *localHomeService) directory(record fishidentity.Record) (string, error) {
+	if !fishidentity.ValidFishID(record.FishID) || record.LocalOwner == nil {
 		return "", errors.New("请先为大肥鱼准备家目录")
 	}
 	// The home is a sibling of the legacy account-private subtree, never its
@@ -134,7 +135,7 @@ func (h *localHomeService) directory(record fishIdentityRecord) (string, error) 
 	return home, nil
 }
 
-func (h *localHomeService) ensureDirectory(record fishIdentityRecord) error {
+func (h *localHomeService) ensureDirectory(record fishidentity.Record) error {
 	path, err := h.directory(record)
 	if err != nil {
 		return err
@@ -156,7 +157,7 @@ func (h *localHomeService) ensureDirectory(record fishIdentityRecord) error {
 	return nil
 }
 
-func (h *localHomeService) response(w http.ResponseWriter, record fishIdentityRecord) {
+func (h *localHomeService) response(w http.ResponseWriter, record fishidentity.Record) {
 	result := map[string]any{"initialized": record.LocalOwner != nil, "home_access": false, "mode": "local", "chat_available": h.chatAvailable}
 	if record.LocalOwner != nil {
 		result["fish_id"], result["owner_id"] = record.FishID, record.LocalOwner.ID
@@ -173,7 +174,7 @@ func (h *localHomeService) response(w http.ResponseWriter, record fishIdentityRe
 }
 
 func (h *localHomeService) status(w http.ResponseWriter, r *http.Request) {
-	record, err := h.identity.localIdentity()
+	record, err := h.identity.Read()
 	if err != nil {
 		fail(w, http.StatusConflict, "本机身份记录不可读，原文件保留")
 		return
@@ -189,13 +190,13 @@ func (h *localHomeService) update(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	var record fishIdentityRecord
+	var record fishidentity.Record
 	var err error
 	switch in.Action {
 	case "initialize":
-		record, err = h.identity.initializeLocalIdentity()
+		record, err = h.identity.InitializeLocal()
 	case "authorize", "pause":
-		record, err = h.identity.setLocalHomeAccess(in.Revision, in.Action == "authorize")
+		record, err = h.identity.SetHomeAccess(in.Revision, in.Action == "authorize")
 	default:
 		fail(w, http.StatusBadRequest, "请选择准备、暂停或恢复家目录授权")
 		return

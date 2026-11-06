@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"wechat-bot/internal/fishidentity"
 )
 
 func localProcessTestHome(t *testing.T) (*localHomeService, localWorkspaceGrant, string) {
@@ -17,11 +19,11 @@ func localProcessTestHome(t *testing.T) (*localHomeService, localWorkspaceGrant,
 		t.Fatal(err)
 	}
 	home := &localHomeService{
-		identity: newFishIdentityRegistry(filepath.Join(base, "private")),
+		identity: fishidentity.New(filepath.Join(base, "private")),
 		root:     filepath.Join(base, "workspace"),
 		dataDir:  filepath.Join(base, "private"),
 	}
-	record, err := home.identity.initializeLocalIdentity()
+	record, err := home.identity.InitializeLocal()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +80,7 @@ func TestLocalProcessToolsKeepOwnerJobsVisibleAfterPauseAndInterruptOnRestart(t 
 	}
 	t.Cleanup(func() { _ = tools.Close() })
 
-	paused, err := home.identity.setLocalHomeAccess(grant.Revision, false)
+	paused, err := home.identity.SetHomeAccess(grant.Revision, false)
 	if err != nil || paused.LocalOwner.HomeAccess {
 		t.Fatalf("pause = %#v, %v", paused, err)
 	}
@@ -111,7 +113,7 @@ func TestLocalProcessPathsCannotEscapeHome(t *testing.T) {
 	if err := localProcessPath(grant.Directory, filepath.Join(grant.Directory, "..")); err == nil {
 		t.Fatal("non-canonical parent admitted")
 	}
-	if _, err := home.identity.setLocalHomeAccess(grant.Revision, false); err != nil {
+	if _, err := home.identity.SetHomeAccess(grant.Revision, false); err != nil {
 		t.Fatal(err)
 	}
 }

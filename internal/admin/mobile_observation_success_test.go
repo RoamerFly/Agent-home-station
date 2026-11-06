@@ -68,11 +68,11 @@ func TestMobileObservationOnceInstalledRuntime(t *testing.T) {
 	if _, err = store.SetEnabled(t.Context(), installed.Package.ID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
-	fishID, err := f.manager.fish.bind(f.manager.native.Account())
+	fishID, err := f.manager.fish.Bind(f.manager.native.Account())
 	if err != nil {
 		t.Fatal(err)
 	}
-	boundFishID, bindingID, err := f.manager.fish.bindDevice(f.manager.native.Account(), "synthetic")
+	boundFishID, bindingID, err := f.manager.fish.BindDevice(f.manager.native.Account(), "synthetic")
 	if err != nil || boundFishID != fishID || bindingID == "" {
 		t.Fatalf("bind fish device fish=%q binding=%q err=%v", boundFishID, bindingID, err)
 	}

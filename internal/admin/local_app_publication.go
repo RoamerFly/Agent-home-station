@@ -37,7 +37,7 @@ type localPublicationInput struct {
 }
 
 func (h *localChatService) publicationHost() (*apphost.Publisher, pluginhost.Invocation, error) {
-	identity, err := h.home.identity.localIdentity()
+	identity, err := h.home.identity.Read()
 	if err != nil || identity.LocalOwner == nil || h.stopping.Load() {
 		return nil, pluginhost.Invocation{}, errors.New("本机身份暂不可用")
 	}

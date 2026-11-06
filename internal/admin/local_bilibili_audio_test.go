@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -20,8 +21,8 @@ func TestLocalBilibiliAudioUsesOwnerScopedLocalASRProfile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	home := &localHomeService{identity: newFishIdentityRegistry(data), root: homeRoot, dataDir: data, windows: &agenthost.WindowsConfig{Pythonw: filepath.Join(root, "pythonw.exe"), Helper: filepath.Join(root, "agent-host.pyw"), Spool: filepath.Join(root, "spool")}}
-	record, err := home.identity.initializeLocalIdentity()
+	home := &localHomeService{identity: fishidentity.New(data), root: homeRoot, dataDir: data, windows: &agenthost.WindowsConfig{Pythonw: filepath.Join(root, "pythonw.exe"), Helper: filepath.Join(root, "agent-host.pyw"), Spool: filepath.Join(root, "spool")}}
+	record, err := home.identity.InitializeLocal()
 	if err != nil || record.LocalOwner == nil {
 		t.Fatalf("initialize local owner: %#v, %v", record, err)
 	}

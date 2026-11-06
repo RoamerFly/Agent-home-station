@@ -194,7 +194,7 @@ func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action
 			if s.manager.fish == nil {
 				err = errors.New("device_fish_identity_unavailable")
 			} else {
-				_, _, err = s.manager.fish.bindDevice(s.manager.native.Account(), in.DeviceID)
+				_, _, err = s.manager.fish.BindDevice(s.manager.native.Account(), in.DeviceID)
 			}
 			if err == nil {
 				result = observer.Overview()
@@ -207,7 +207,7 @@ func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action
 			if s.manager.fish == nil {
 				err = errors.New("device_fish_identity_unavailable")
 			} else {
-				err = s.manager.fish.unbindDevice(s.manager.native.Account(), in.DeviceID, in.BindingID)
+				err = s.manager.fish.UnbindDevice(s.manager.native.Account(), in.DeviceID, in.BindingID)
 			}
 			if err == nil {
 				// Revocation is persisted first.  Pausing immediately cancels any

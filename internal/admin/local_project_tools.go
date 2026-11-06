@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/stationruntime"
@@ -100,7 +101,7 @@ func (s *localProjectTools) pdfRuntimeReady() bool {
 func (s *localProjectTools) forFish(fish string) (*localProjectToolHost, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || !validFishID(fish) {
+	if s.closed || !fishidentity.ValidFishID(fish) {
 		return nil, errors.New("本机项目工具已停止或身份不可用")
 	}
 	if s.host != nil {
@@ -298,7 +299,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 
 func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/local/project-tools", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
-		record, err := s.home.identity.localIdentity()
+		record, err := s.home.identity.Read()
 		if err != nil {
 			fail(w, 409, "本机身份记录不可读")
 			return
@@ -372,7 +373,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 	s.update.Lock()
 	defer s.update.Unlock()
 	ctx := r.Context()
-	record, err := s.home.identity.localIdentity()
+	record, err := s.home.identity.Read()
 	if err != nil || record.LocalOwner == nil {
 		fail(w, 409, "请先准备本机主人身份")
 		return

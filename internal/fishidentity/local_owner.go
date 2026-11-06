@@ -1,45 +1,53 @@
-package admin
+package fishidentity
 
-import "errors"
+import (
+	"errors"
 
-// localIdentity returns the durable local fish record without creating one.
-// This makes an unconfigured installation observable without turning a status
-// read into either a filesystem write or a new home-directory authorization.
-func (r *fishIdentityRegistry) localIdentity() (fishIdentityRecord, error) {
+	"wechat-bot/internal/identity"
+)
+
+// GuardHome keeps an authorized mutation ordered with pause, resume and
+// updates from another process. The callback must not call the registry.
+func (r *Registry) GuardHome(fishID, ownerID string, revision uint64, mutate func(Record) error) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	release, err := r.acquire()
 	if err != nil {
-		return fishIdentityRecord{}, err
+		return err
 	}
 	defer release()
-	return r.readHeld()
+	record, err := r.readHeld()
+	if err != nil || record.FishID != fishID || record.LocalOwner == nil || !record.LocalOwner.HomeAccess ||
+		record.LocalOwner.ID != ownerID || record.LocalOwner.Revision != revision {
+		return ErrHomeRevisionConflict
+	}
+	return mutate(record)
 }
 
-// initializeLocalIdentity explicitly creates the one local fish and its owner.
+// InitializeLocal explicitly creates the one local fish and its owner.
 // It is deliberately idempotent: retrying initialization must not silently
 // re-enable a home that its owner has paused.
-func (r *fishIdentityRegistry) initializeLocalIdentity() (fishIdentityRecord, error) {
+func (r *Registry) InitializeLocal() (Record, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	release, err := r.acquire()
 	if err != nil {
-		return fishIdentityRecord{}, err
+		return Record{}, err
 	}
 	defer release()
 
 	record, err := r.readHeld()
 	if err != nil {
-		return fishIdentityRecord{}, err
+		return Record{}, err
 	}
 	changed := false
 	if record.FishID == "" {
-		record.FishID = "fish-" + randomToken()[:48]
+		record.FishID = "fish-" + identity.RandomToken()[:48]
 		changed = true
 	}
 	if record.LocalOwner == nil {
-		record.LocalOwner = &fishLocalOwner{
-			ID:         fishLocalOwnerIDPrefix + randomToken()[:fishLocalOwnerTokenChars],
+		record.LocalOwner = &LocalOwner{
+			ID:         fishLocalOwnerIDPrefix + identity.RandomToken()[:fishLocalOwnerTokenChars],
 			Revision:   1,
 			HomeAccess: true,
 		}
@@ -50,33 +58,33 @@ func (r *fishIdentityRegistry) initializeLocalIdentity() (fishIdentityRecord, er
 		// persisted schema version as well.
 		record.Version = fishIdentityCurrentVersion
 		if err := r.write(record); err != nil {
-			return fishIdentityRecord{}, err
+			return Record{}, err
 		}
 	}
 	return record, nil
 }
 
-// setLocalHomeAccess performs a compare-and-swap on the grant so an older
+// SetHomeAccess performs a compare-and-swap on the grant so an older
 // settings page cannot reverse a newer pause or resume. Repeating a successful
 // request with the current revision is intentionally a no-op.
-func (r *fishIdentityRegistry) setLocalHomeAccess(expected uint64, enabled bool) (fishIdentityRecord, error) {
+func (r *Registry) SetHomeAccess(expected uint64, enabled bool) (Record, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	release, err := r.acquire()
 	if err != nil {
-		return fishIdentityRecord{}, err
+		return Record{}, err
 	}
 	defer release()
 
 	record, err := r.readHeld()
 	if err != nil {
-		return fishIdentityRecord{}, err
+		return Record{}, err
 	}
 	if record.LocalOwner == nil {
-		return fishIdentityRecord{}, errLocalHomeNotInitialized
+		return Record{}, ErrHomeNotInitialized
 	}
 	if record.LocalOwner.Revision != expected {
-		return fishIdentityRecord{}, errLocalHomeRevisionConflict
+		return Record{}, ErrHomeRevisionConflict
 	}
 	if record.LocalOwner.HomeAccess == enabled {
 		return record, nil
@@ -84,10 +92,10 @@ func (r *fishIdentityRegistry) setLocalHomeAccess(expected uint64, enabled bool)
 	record.LocalOwner.HomeAccess = enabled
 	record.LocalOwner.Revision++
 	if record.LocalOwner.Revision == 0 {
-		return fishIdentityRecord{}, errors.New("本机家目录授权版本已耗尽")
+		return Record{}, errors.New("本机家目录授权版本已耗尽")
 	}
 	if err := r.write(record); err != nil {
-		return fishIdentityRecord{}, err
+		return Record{}, err
 	}
 	return record, nil
 }

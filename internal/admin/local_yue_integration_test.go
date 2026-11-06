@@ -15,6 +15,7 @@ import (
 
 	"wechat-bot/internal/comfyui"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/stationyue"
 )
 
@@ -211,7 +212,7 @@ func TestLocalYuEChatClaimRecoveryCancellationAndDownload(t *testing.T) {
 		t.Fatalf("submission receipts: %v submits=%d uploads=%d", match, backend.submits, backend.uploads)
 	}
 	jobID := match[1]
-	fish, _, err := newFishIdentityRegistry(f.handler.home.dataDir).bindings()
+	fish, _, err := fishidentity.New(f.handler.home.dataDir).Bindings()
 	if err != nil {
 		t.Fatal(err)
 	}

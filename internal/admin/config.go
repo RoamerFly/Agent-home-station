@@ -14,6 +14,8 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/hostfile"
+	"wechat-bot/internal/identity"
 )
 
 type GroupRule struct {
@@ -65,17 +67,7 @@ func (c Config) view() ConfigView {
 	return ConfigView{c, present}
 }
 
-func validID(id string) bool {
-	if len(id) == 0 || len(id) > 128 {
-		return false
-	}
-	for _, v := range id {
-		if !(v >= 'a' && v <= 'z' || v >= 'A' && v <= 'Z' || v >= '0' && v <= '9' || strings.ContainsRune("_.@-", v)) {
-			return false
-		}
-	}
-	return id != "." && id != ".."
-}
+func validID(id string) bool { return identity.ValidPathID(id) }
 
 func validate(c Config) error {
 	if err := c.Behavior.Validate(); err != nil {
@@ -161,27 +153,7 @@ func (c Config) allowed() []string {
 	return ids
 }
 
-func writePrivate(path string, data []byte) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".settings-*")
-	if err != nil {
-		return errors.New("无法创建私有配置文件")
-	}
-	defer os.Remove(file.Name())
-	if err = file.Chmod(0600); err == nil {
-		_, err = file.Write(data)
-	}
-	if err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err != nil || closeErr != nil {
-		return errors.New("无法写入配置文件")
-	}
-	if os.Rename(file.Name(), path) != nil {
-		return errors.New("无法保存配置文件")
-	}
-	return nil
-}
+func writePrivate(path string, data []byte) error { return hostfile.WritePrivate(path, data) }
 func loadConfig(dir string) (Config, error) {
 	path := filepath.Join(dir, "config.json")
 	data, err := os.ReadFile(path)

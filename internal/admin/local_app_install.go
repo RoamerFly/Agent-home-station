@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	appcatalog "wechat-bot/connected-apps"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/workspacefs"
 
@@ -59,8 +60,8 @@ func (h *localHomeService) appInstallRoutes(s *websession.Store, mux *http.Serve
 // immutable.  In particular, workspace files may change without making the
 // application look untrusted or inviting an automatic overwrite.
 func (h *localHomeService) appInstallState(contract appcatalog.Contract) (state, version string) {
-	record, err := h.identity.localIdentity()
-	if err != nil || record.LocalOwner == nil || !validFishID(record.FishID) {
+	record, err := h.identity.Read()
+	if err != nil || record.LocalOwner == nil || !fishidentity.ValidFishID(record.FishID) {
 		return "unavailable", ""
 	}
 	homePath, err := h.directory(record)
@@ -177,9 +178,9 @@ func (h *localHomeService) installAppSource(w http.ResponseWriter, r *http.Reque
 	}
 	h.appInstallMu.Lock()
 	defer h.appInstallMu.Unlock()
-	record, err := h.identity.read()
+	record, err := h.identity.Read()
 	if err != nil || record.LocalOwner == nil || !record.LocalOwner.HomeAccess || record.LocalOwner.Revision != in.Revision {
-		fail(w, http.StatusConflict, errLocalHomeRevisionConflict.Error())
+		fail(w, http.StatusConflict, fishidentity.ErrHomeRevisionConflict.Error())
 		return
 	}
 	id := r.PathValue("app")
@@ -265,20 +266,14 @@ func (h *localHomeService) installAppSource(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// Keep revocation and publishing in the same identity critical section.
-	h.identity.mu.Lock()
-	defer h.identity.mu.Unlock()
-	release, err := lockFishIdentityRegistry(h.identity.path + ".lock")
+	err = h.identity.GuardHome(record.FishID, record.LocalOwner.ID, record.LocalOwner.Revision, func(fishidentity.Record) error {
+		return parent.Rename(stageName, id)
+	})
+	if errors.Is(err, fishidentity.ErrHomeRevisionConflict) || errors.Is(err, fishidentity.ErrRegistryBusy) {
+		fail(w, http.StatusConflict, fishidentity.ErrHomeRevisionConflict.Error())
+		return
+	}
 	if err != nil {
-		fail(w, http.StatusConflict, errLocalHomeRevisionConflict.Error())
-		return
-	}
-	defer release()
-	current, err := h.identity.readHeld()
-	if err != nil || current.FishID != record.FishID || current.LocalOwner == nil || *current.LocalOwner != *record.LocalOwner {
-		fail(w, http.StatusConflict, errLocalHomeRevisionConflict.Error())
-		return
-	}
-	if err := parent.Rename(stageName, id); err != nil {
 		fail(w, http.StatusConflict, "应用目录发布失败，请检查现有目录后重试")
 		return
 	}

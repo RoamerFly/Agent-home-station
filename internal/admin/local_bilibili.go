@@ -22,7 +22,7 @@ func (h *localHomeService) bilibiliRoutes(s *websession.Store, mux *http.ServeMu
 	}
 	handler := s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		record, err := h.identity.localIdentity()
+		record, err := h.identity.Read()
 		if err != nil || record.LocalOwner == nil {
 			fail(w, http.StatusConflict, "请先准备本机主人身份")
 			return
@@ -89,7 +89,7 @@ func (h *localHomeService) bilibiliRoutes(s *websession.Store, mux *http.ServeMu
 	mux.HandleFunc("PUT /api/local/apps/bilibili/public", handler)
 	authorization := s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		record, err := h.identity.localIdentity()
+		record, err := h.identity.Read()
 		if err != nil || record.LocalOwner == nil {
 			fail(w, http.StatusConflict, "请先准备本机主人身份")
 			return
@@ -128,7 +128,7 @@ func (h *localHomeService) bilibiliRoutes(s *websession.Store, mux *http.ServeMu
 	mux.HandleFunc("POST /api/local/apps/bilibili/publication-authorization", authorization)
 	mux.HandleFunc("POST /api/local/apps/bilibili/publication-oauth", s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		record, err := h.identity.localIdentity()
+		record, err := h.identity.Read()
 		sessionID, _, authenticated := s.Lookup(r)
 		if err != nil || record.LocalOwner == nil || !authenticated {
 			fail(w, http.StatusConflict, "请先准备本机主人身份并登录")

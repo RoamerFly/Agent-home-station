@@ -253,7 +253,7 @@ func (t *localToolSet) checkWechatOwner(ctx context.Context) error {
 	if t.wechat == nil {
 		return errContactDenied
 	}
-	record, err := t.access.home.identity.localIdentity()
+	record, err := t.access.home.identity.Read()
 	if err != nil || record.FishID != t.access.fishID || record.LocalOwner == nil || record.LocalOwner.ID != t.access.ownerID {
 		return errContactDenied
 	}

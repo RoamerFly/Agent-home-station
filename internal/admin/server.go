@@ -2,9 +2,7 @@ package admin
 
 import (
 	"context"
-	"crypto/rand"
 	"embed"
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -14,6 +12,8 @@ import (
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/apphttp"
+	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/stationui"
 	"wechat-bot/internal/websession"
@@ -35,13 +35,7 @@ type Server struct {
 	loginUnknown bool
 }
 
-func randomToken() string {
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("system random source unavailable")
-	}
-	return hex.EncodeToString(b[:])
-}
+func randomToken() string { return identity.RandomToken() }
 
 func NewHandler(manager *Manager, password, origin string) (http.Handler, error) {
 	if manager == nil {
@@ -284,7 +278,7 @@ func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 func (s *Server) session(r *http.Request) (string, websession.Session, bool) { return s.auth.Lookup(r) }
 func (s *Server) protected(next http.HandlerFunc) http.HandlerFunc           { return s.auth.Protect(next) }
 
-func (s *Server) localHomeRoutes(mux *http.ServeMux, identity *fishIdentityRegistry, root, dataDir string) {
+func (s *Server) localHomeRoutes(mux *http.ServeMux, identity *fishidentity.Registry, root, dataDir string) {
 	home := &localHomeService{identity: identity, root: root, dataDir: dataDir}
 	home.configureAppCatalog()
 	home.appInstallRoutes(s.auth, mux)

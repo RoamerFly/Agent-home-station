@@ -10,7 +10,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"wechat-bot/internal/fishidentity"
 )
 
 type localHomeFixture struct {
@@ -115,8 +118,8 @@ func TestLocalHomeWithoutWeChatPreservesIdentityAndAuthorization(t *testing.T) {
 	if err := os.WriteFile(journal, []byte("one persistent fish"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	registry := newFishIdentityRegistry(dir)
-	fish, bindings, err := registry.bindings()
+	registry := fishidentity.New(dir)
+	fish, bindings, err := registry.Bindings()
 	if err != nil || fish != first["fish_id"] || len(bindings) != 0 {
 		t.Fatalf("local setup invented an application account: %s %#v %v", fish, bindings, err)
 	}
@@ -171,11 +174,11 @@ func TestLocalHomeCredentialBoundaryAndNoWeChatRoutes(t *testing.T) {
 	}
 	// A malicious installation root may never turn the granted home into an
 	// ancestor of the host's private credential directory.
-	id := fishTestID()
+	id := "fish-" + strings.Repeat("a", 48)
 	root := filepath.Join(base, "evil-root")
 	dataDir := filepath.Join(root, "fish_home", id, "home", "host-secrets")
 	h := localHomeService{root: root, dataDir: dataDir}
-	if _, err := h.directory(fishIdentityRecord{FishID: id, LocalOwner: &fishLocalOwner{}}); err == nil {
+	if _, err := h.directory(fishidentity.Record{FishID: id, LocalOwner: &fishidentity.LocalOwner{}}); err == nil {
 		t.Fatal("home grant could contain host credentials")
 	}
 }

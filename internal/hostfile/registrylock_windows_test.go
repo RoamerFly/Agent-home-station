@@ -1,6 +1,6 @@
 //go:build windows
 
-package admin
+package hostfile
 
 import (
 	"errors"
@@ -16,14 +16,14 @@ func TestPinnedRegistryLockRejectsNonRegularPath(t *testing.T) {
 	if err := os.Mkdir(path, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lockFishIdentityRegistry(path); err == nil {
+	if _, err := Lock(path); err == nil {
 		t.Fatal("directory accepted as identity lock")
 	}
 }
 
 func TestPinnedRegistryLockBlocksReplacementAndStillSerializes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.lock")
-	release, err := lockFishIdentityRegistry(path)
+	release, err := Lock(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestPinnedRegistryLockBlocksReplacementAndStillSerializes(t *testing.T) {
 	acquired := make(chan func(), 1)
 	failures := make(chan error, 1)
 	go func() {
-		next, err := lockFishIdentityRegistry(path)
+		next, err := Lock(path)
 		if err != nil {
 			failures <- err
 			return
@@ -75,7 +75,7 @@ func TestPinnedRegistryLockConcurrentFirstCreationStillSerializes(t *testing.T) 
 	for range 2 {
 		go func() {
 			<-start
-			release, err := lockFishIdentityRegistry(path)
+			release, err := Lock(path)
 			if err != nil {
 				failures <- err
 				return
@@ -126,7 +126,7 @@ func TestPinnedRegistryLockRejectsSymlinkWhenSupported(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	if _, err := lockFishIdentityRegistry(link); err == nil {
+	if _, err := Lock(link); err == nil {
 		t.Fatal("symlink accepted as identity lock")
 	}
 }

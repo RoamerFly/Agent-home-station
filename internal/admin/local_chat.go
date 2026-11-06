@@ -183,7 +183,7 @@ func (h *localChatService) conversation() (*companion.Store, companion.Input, er
 	if h == nil || h.stopping.Load() {
 		return nil, companion.Input{}, errors.New("本机服务正在停止")
 	}
-	record, err := h.home.identity.localIdentity()
+	record, err := h.home.identity.Read()
 	if err != nil || record.LocalOwner == nil {
 		return nil, companion.Input{}, errors.New("请先准备本机身份；身份损坏时请保留原文件")
 	}

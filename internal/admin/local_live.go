@@ -29,7 +29,7 @@ func (h *localChatService) liveController() (*apphost.LiveController, string, er
 	if h == nil || h.stopping.Load() {
 		return nil, "", apphost.ErrLiveUnavailable
 	}
-	identity, err := h.home.identity.localIdentity()
+	identity, err := h.home.identity.Read()
 	if err != nil || identity.LocalOwner == nil {
 		return nil, "", apphost.ErrLiveUnavailable
 	}

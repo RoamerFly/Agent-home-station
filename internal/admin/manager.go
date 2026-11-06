@@ -17,6 +17,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/devicespec"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -113,7 +114,7 @@ type Manager struct {
 	workspaceDir        string
 	directoryMu         sync.Mutex
 	accounts            *accountRegistry
-	fish                *fishIdentityRegistry
+	fish                *fishidentity.Registry
 	canvasMu            sync.Mutex
 	friendsMu           sync.Mutex
 	friends             map[string]friendEntry
@@ -169,7 +170,7 @@ func NewManagerWithRetiredDeviceControl(dir, stateDir string, native Native) (*M
 	return newManager(dir, stateDir, native, nil, true, nil)
 }
 
-func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry, mobileRetired bool, deviceIO devicespec.IOHost) (*Manager, error) {
+func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry, mobileRetired bool, deviceIO devicespec.IOHost) (*Manager, error) {
 	if native == nil || dir == "" {
 		return nil, errors.New("missing admin runtime configuration")
 	}
@@ -188,7 +189,7 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry,
 		return nil, errors.New("管理目录不可用")
 	}
 	if fish == nil {
-		fish = newFishIdentityRegistry(dir)
+		fish = fishidentity.New(dir)
 	}
 	c, err := loadConfig(dir)
 	if err != nil {

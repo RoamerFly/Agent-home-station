@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/linuxnative"
 
 	"wechat-bot/internal/apphttp"
@@ -40,7 +41,7 @@ type accountRegistry struct {
 	lifecycle sync.Mutex
 	mu        sync.Mutex
 	root      *Server
-	fish      *fishIdentityRegistry
+	fish      *fishidentity.Registry
 	items     map[string]*accountRuntime
 	order     []accountRecord
 	closed    bool
@@ -58,7 +59,7 @@ func accountDirectory(id string) string {
 func newAccountRegistry(root *Server) (*accountRegistry, error) {
 	fish := root.manager.fish
 	if fish == nil {
-		fish = newFishIdentityRegistry(root.manager.dir)
+		fish = fishidentity.New(root.manager.dir)
 		root.manager.fish = fish
 	}
 	a := &accountRegistry{root: root, fish: fish, items: map[string]*accountRuntime{}}
@@ -289,7 +290,7 @@ func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 	case "rename":
 		record.Label = in.Label
 	case "bind_fish":
-		fishID, err := a.fish.bind(id)
+		fishID, err := a.fish.Bind(id)
 		if err != nil {
 			fail(w, 500, err.Error())
 			return
@@ -297,7 +298,7 @@ func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]any{"id": id, "fish_id": fishID})
 		return
 	case "unbind_fish":
-		if err := a.fish.unbind(id); err != nil {
+		if err := a.fish.Unbind(id); err != nil {
 			fail(w, 500, err.Error())
 			return
 		}
@@ -383,7 +384,7 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 	// Snapshot bindings while the account set is locked. Manage operations take
 	// the same account-then-fish lock order, so a response cannot combine an
 	// earlier identity view with a later account registry view.
-	fishID, fishBindings, fishErr := a.fish.bindings()
+	fishID, fishBindings, fishErr := a.fish.Bindings()
 	if fishErr != nil {
 		// An unreadable identity registry must never be represented as a clean
 		// unbound state. Keep ordinary account status available, but make the

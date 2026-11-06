@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/workspacefs"
 )
@@ -40,11 +41,11 @@ func (a *localWorkspaceAccess) resolve() (localWorkspaceGrant, error) {
 	if a == nil || a.home == nil || a.home.identity == nil {
 		return localWorkspaceGrant{}, errors.New("本机家目录不可用")
 	}
-	record, err := a.home.identity.localIdentity()
+	record, err := a.home.identity.Read()
 	if err != nil {
 		return localWorkspaceGrant{}, errors.New("本机身份记录不可读，原文件保留")
 	}
-	if record.LocalOwner == nil || !record.LocalOwner.HomeAccess || !validFishID(record.FishID) || !validFishLocalOwner(*record.LocalOwner) {
+	if record.LocalOwner == nil || !record.LocalOwner.HomeAccess || !fishidentity.ValidFishID(record.FishID) || !fishidentity.ValidLocalOwner(*record.LocalOwner) {
 		return localWorkspaceGrant{}, errors.New("本机家目录授权已暂停")
 	}
 	if !a.matches(record.FishID, record.LocalOwner.ID) {
@@ -92,23 +93,21 @@ func (a *localWorkspaceAccess) withCurrentWriteGrant(grant localWorkspaceGrant, 
 	if a == nil || a.home == nil || a.home.identity == nil {
 		return errors.New("本机家目录文件工具不可用")
 	}
-	identity := a.home.identity
-	identity.mu.Lock()
-	defer identity.mu.Unlock()
-	release, err := identity.acquire()
-	if err != nil {
+	err := a.home.identity.GuardHome(grant.FishID, grant.OwnerID, grant.Revision, func(record fishidentity.Record) error {
+		directory, err := a.home.directory(record)
+		if err != nil || directory != grant.Directory {
+			return fishidentity.ErrHomeRevisionConflict
+		}
+		return write()
+	})
+	switch {
+	case errors.Is(err, fishidentity.ErrRegistryBusy):
 		return errors.New("本机身份绑定正在被其他进程使用")
-	}
-	defer release()
-	record, err := identity.readHeld()
-	if err != nil || record.LocalOwner == nil || !record.LocalOwner.HomeAccess || !validFishID(record.FishID) || !validFishLocalOwner(*record.LocalOwner) {
+	case errors.Is(err, fishidentity.ErrHomeRevisionConflict):
 		return errors.New("本机家目录授权已变更，本次写入未执行")
+	default:
+		return err
 	}
-	directory, err := a.home.directory(record)
-	if err != nil || record.FishID != grant.FishID || record.LocalOwner.ID != grant.OwnerID || record.LocalOwner.Revision != grant.Revision || directory != grant.Directory {
-		return errors.New("本机家目录授权已变更，本次写入未执行")
-	}
-	return write()
 }
 
 type localWorkspaceFileTools struct{ access *localWorkspaceAccess }

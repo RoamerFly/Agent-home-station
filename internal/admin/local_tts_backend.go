@@ -27,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/fishidentity"
 )
 
 const (
@@ -588,7 +589,7 @@ func localTTSReadWAV(path string) ([]byte, error) {
 }
 
 func localTTSCheckFish(fish string) error {
-	if !validFishID(fish) {
+	if !fishidentity.ValidFishID(fish) {
 		return errors.New("station_speech_fish_invalid")
 	}
 	return nil

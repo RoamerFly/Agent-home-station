@@ -22,7 +22,7 @@ func (h *localHomeService) douyinRoutes(s *websession.Store, mux *http.ServeMux,
 	}
 	handler := s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		record, err := h.identity.localIdentity()
+		record, err := h.identity.Read()
 		sessionID, _, authenticated := s.Lookup(r)
 		if err != nil || record.LocalOwner == nil || !authenticated {
 			fail(w, http.StatusConflict, "请先准备本机主人身份并登录")

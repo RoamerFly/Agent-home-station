@@ -11,6 +11,7 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -166,8 +167,8 @@ func (t *localProcessTools) status(id string, cancel bool) (string, error) {
 }
 
 func (t *localProcessTools) ownerScope() (string, error) {
-	record, err := t.access.home.identity.localIdentity()
-	if err != nil || !validFishID(record.FishID) || record.LocalOwner == nil || !validFishLocalOwner(*record.LocalOwner) {
+	record, err := t.access.home.identity.Read()
+	if err != nil || !fishidentity.ValidFishID(record.FishID) || record.LocalOwner == nil || !fishidentity.ValidLocalOwner(*record.LocalOwner) {
 		return "", errors.New("本机鱼身份不可用")
 	}
 	if !t.access.matches(record.FishID, record.LocalOwner.ID) {

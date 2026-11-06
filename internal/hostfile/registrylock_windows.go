@@ -1,6 +1,6 @@
 //go:build windows
 
-package admin
+package hostfile
 
 import (
 	"errors"
@@ -15,10 +15,10 @@ var (
 
 const registryLockExclusive = 0x00000002
 
-// lockFishIdentityRegistry serializes independent Go processes which point to
+// Lock serializes independent Go processes which point to
 // the same private registry. Closing the handle always releases LockFileEx,
 // including when a process exits unexpectedly.
-func lockFishIdentityRegistry(path string) (func(), error) {
+func Lock(path string) (func(), error) {
 	h, err := openPinnedRegistryLock(path)
 	if err != nil {
 		return nil, err

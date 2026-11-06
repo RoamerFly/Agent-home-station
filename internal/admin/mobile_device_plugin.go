@@ -217,7 +217,7 @@ func (m *Manager) mobileAccountDeviceBinding(deviceID string) (fishID, bindingID
 	if m == nil || m.fish == nil {
 		return "", "", false, nil
 	}
-	fishID, accounts, err := m.fish.bindings()
+	fishID, accounts, err := m.fish.Bindings()
 	if err != nil {
 		return "", "", false, errors.New("device_fish_identity_unavailable")
 	}
@@ -225,7 +225,7 @@ func (m *Manager) mobileAccountDeviceBinding(deviceID string) (fishID, bindingID
 	if !accounts[account] {
 		return "", "", false, nil
 	}
-	boundID, bindings, err := m.fish.deviceBindings(account)
+	boundID, bindings, err := m.fish.DeviceBindings(account)
 	if err != nil || boundID != fishID {
 		return "", "", true, errors.New("device_fish_identity_unavailable")
 	}

@@ -108,7 +108,7 @@ func (h *localHomeService) localStationASRBinding(ctx context.Context) (localSta
 	if _, err := h.localStationASRWindows(); err != nil {
 		return localStationASRBinding{}, err
 	}
-	record, err := h.identity.localIdentity()
+	record, err := h.identity.Read()
 	if err != nil || record.LocalOwner == nil {
 		return localStationASRBinding{}, errors.New("station_asr_owner_unavailable")
 	}
@@ -204,7 +204,7 @@ func (s *localProjectTools) configureStationASR(ctx context.Context, host *local
 	if s == nil || s.home == nil || host == nil || host.store == nil {
 		return errors.New("station_asr_tool_store_unavailable")
 	}
-	record, err := s.home.identity.localIdentity()
+	record, err := s.home.identity.Read()
 	if err != nil || record.LocalOwner == nil || host.store.Account() != record.FishID {
 		return errors.New("station_asr_owner_unavailable")
 	}

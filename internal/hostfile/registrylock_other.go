@@ -1,13 +1,13 @@
 //go:build !windows
 
-package admin
+package hostfile
 
 import (
 	"os"
 	"syscall"
 )
 
-func lockFishIdentityRegistry(path string) (func(), error) {
+func Lock(path string) (func(), error) {
 	if err := validateRegistryLockPath(path); err != nil {
 		return nil, err
 	}

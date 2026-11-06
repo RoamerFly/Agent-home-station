@@ -211,7 +211,7 @@ func (s *localProjectTools) prepareOBS(ctx context.Context, in localOBSInput, se
 		s.update.Lock()
 		defer s.update.Unlock()
 	}
-	record, err := s.home.identity.localIdentity()
+	record, err := s.home.identity.Read()
 	if err != nil || record.LocalOwner == nil {
 		return localOBSView{}, nil, "", pluginhost.ErrRevision
 	}

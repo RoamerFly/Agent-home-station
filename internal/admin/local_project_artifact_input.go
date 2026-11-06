@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -43,7 +44,7 @@ func (s *localArtifactStore) bindProjectArtifact(ctx context.Context, id string,
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("项目工具输入已取消")
 	}
-	if s == nil || access == nil || !validFishID(grant.FishID) || !validFishLocalOwner(fishLocalOwner{ID: grant.OwnerID, Revision: grant.Revision}) || grant.Directory == "" {
+	if s == nil || access == nil || !fishidentity.ValidFishID(grant.FishID) || !fishidentity.ValidLocalOwner(fishidentity.LocalOwner{ID: grant.OwnerID, Revision: grant.Revision}) || grant.Directory == "" {
 		return nil, errors.New("项目工具输入授权无效")
 	}
 	if !access.matches(grant.FishID, grant.OwnerID) || !access.current(grant) {

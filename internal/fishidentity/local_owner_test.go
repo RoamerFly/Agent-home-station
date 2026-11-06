@@ -1,4 +1,4 @@
-package admin
+package fishidentity
 
 import (
 	"errors"
@@ -8,10 +8,47 @@ import (
 	"testing"
 )
 
+func TestGuardHomeChecksCurrentOwnerAndRevision(t *testing.T) {
+	dir := t.TempDir()
+	registry, other := New(dir), New(dir)
+	initial, err := registry.InitializeLocal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := initial.LocalOwner
+	check := func(fishID, ownerID string, revision uint64, permitted bool) {
+		t.Helper()
+		called := false
+		err := registry.GuardHome(fishID, ownerID, revision, func(record Record) error {
+			called = true
+			if record.FishID != fishID || record.LocalOwner == nil || record.LocalOwner.ID != ownerID || record.LocalOwner.Revision != revision {
+				t.Fatalf("mutation received an unexpected identity: %#v", record)
+			}
+			return nil
+		})
+		if called != permitted || permitted && err != nil || !permitted && !errors.Is(err, ErrHomeRevisionConflict) {
+			t.Fatalf("guard permission = %t, callback = %t, err = %v", permitted, called, err)
+		}
+	}
+	check(initial.FishID, owner.ID, owner.Revision, true)
+	check(initial.FishID, "other-owner", owner.Revision, false)
+	paused, err := other.SetHomeAccess(owner.Revision, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(initial.FishID, owner.ID, paused.LocalOwner.Revision, false)
+	resumed, err := other.SetHomeAccess(paused.LocalOwner.Revision, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(initial.FishID, owner.ID, owner.Revision, false)
+	check(initial.FishID, owner.ID, resumed.LocalOwner.Revision, true)
+}
+
 func TestFishLocalIdentityInitializesWithoutApplicationAndPersists(t *testing.T) {
 	dir := t.TempDir()
-	registry := newFishIdentityRegistry(dir)
-	before, err := registry.localIdentity()
+	registry := New(dir)
+	before, err := registry.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,18 +59,18 @@ func TestFishLocalIdentityInitializesWithoutApplicationAndPersists(t *testing.T)
 		t.Fatalf("read unexpectedly wrote identity registry: %v", err)
 	}
 
-	created, err := registry.initializeLocalIdentity()
+	created, err := registry.InitializeLocal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !validFishID(created.FishID) || created.LocalOwner == nil || !validFishLocalOwner(*created.LocalOwner) || !created.LocalOwner.HomeAccess || created.LocalOwner.Revision != 1 {
+	if !ValidFishID(created.FishID) || created.LocalOwner == nil || !ValidLocalOwner(*created.LocalOwner) || !created.LocalOwner.HomeAccess || created.LocalOwner.Revision != 1 {
 		t.Fatalf("unexpected initialized identity: %#v", created)
 	}
 	if len(created.Bindings) != 0 {
 		t.Fatalf("local initialization unexpectedly bound an application: %#v", created.Bindings)
 	}
 
-	afterRestart, err := newFishIdentityRegistry(dir).localIdentity()
+	afterRestart, err := New(dir).Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,50 +80,50 @@ func TestFishLocalIdentityInitializesWithoutApplicationAndPersists(t *testing.T)
 }
 
 func TestFishLocalIdentityPauseIsNotReenabledAndUsesCAS(t *testing.T) {
-	registry := newFishIdentityRegistry(t.TempDir())
-	created, err := registry.initializeLocalIdentity()
+	registry := New(t.TempDir())
+	created, err := registry.InitializeLocal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	paused, err := registry.setLocalHomeAccess(created.LocalOwner.Revision, false)
+	paused, err := registry.SetHomeAccess(created.LocalOwner.Revision, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if paused.LocalOwner.HomeAccess || paused.LocalOwner.Revision != 2 {
 		t.Fatalf("pause not recorded: %#v", paused.LocalOwner)
 	}
-	retried, err := registry.initializeLocalIdentity()
+	retried, err := registry.InitializeLocal()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if retried.LocalOwner.HomeAccess || retried.LocalOwner.Revision != paused.LocalOwner.Revision {
 		t.Fatalf("initialize silently reenabled paused grant: %#v", retried.LocalOwner)
 	}
-	if _, err := registry.setLocalHomeAccess(1, true); !errors.Is(err, errLocalHomeRevisionConflict) {
+	if _, err := registry.SetHomeAccess(1, true); !errors.Is(err, ErrHomeRevisionConflict) {
 		t.Fatalf("stale revision error = %v", err)
 	}
-	resumed, err := registry.setLocalHomeAccess(2, true)
+	resumed, err := registry.SetHomeAccess(2, true)
 	if err != nil || !resumed.LocalOwner.HomeAccess || resumed.LocalOwner.Revision != 3 {
 		t.Fatalf("resume = %#v, %v", resumed.LocalOwner, err)
 	}
-	if _, err := newFishIdentityRegistry(t.TempDir()).setLocalHomeAccess(1, true); !errors.Is(err, errLocalHomeNotInitialized) {
+	if _, err := New(t.TempDir()).SetHomeAccess(1, true); !errors.Is(err, ErrHomeNotInitialized) {
 		t.Fatalf("uninitialized mutation error = %v", err)
 	}
 }
 
 func TestFishLocalIdentitySurvivesWechatUnbind(t *testing.T) {
-	registry := newFishIdentityRegistry(t.TempDir())
-	created, err := registry.initializeLocalIdentity()
+	registry := New(t.TempDir())
+	created, err := registry.InitializeLocal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.bind("local-owner-wechat"); err != nil {
+	if _, err := registry.Bind("local-owner-wechat"); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.unbind("local-owner-wechat"); err != nil {
+	if err := registry.Unbind("local-owner-wechat"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := registry.localIdentity()
+	got, err := registry.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,15 +140,15 @@ func TestFishLocalIdentityReadsLegacyWithoutAutoAuthorization(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "fish-identity.json"), []byte(fixture), 0600); err != nil {
 				t.Fatal(err)
 			}
-			registry := newFishIdentityRegistry(dir)
-			read, err := registry.localIdentity()
+			registry := New(dir)
+			read, err := registry.Read()
 			if err != nil {
 				t.Fatal(err)
 			}
 			if read.Version != version || read.LocalOwner != nil {
 				t.Fatalf("legacy read auto-migrated or authorized: %#v", read)
 			}
-			created, err := registry.initializeLocalIdentity()
+			created, err := registry.InitializeLocal()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -129,8 +166,8 @@ func TestFishLocalIdentityRejectsDamagedOwnerWithoutOverwrite(t *testing.T) {
 	if err := os.WriteFile(path, damaged, 0600); err != nil {
 		t.Fatal(err)
 	}
-	registry := newFishIdentityRegistry(dir)
-	if _, err := registry.initializeLocalIdentity(); err == nil {
+	registry := New(dir)
+	if _, err := registry.InitializeLocal(); err == nil {
 		t.Fatal("damaged registry initialized")
 	}
 	got, err := os.ReadFile(path)
@@ -144,8 +181,8 @@ func TestFishLocalIdentityRejectsDamagedOwnerWithoutOverwrite(t *testing.T) {
 
 func TestFishLocalIdentityAndWechatBindingDoNotLoseConcurrentUpdates(t *testing.T) {
 	dir := t.TempDir()
-	local := newFishIdentityRegistry(dir)
-	wechat := newFishIdentityRegistry(dir) // simulates the legacy manager process.
+	local := New(dir)
+	wechat := New(dir) // simulates the legacy manager process.
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
@@ -153,13 +190,13 @@ func TestFishLocalIdentityAndWechatBindingDoNotLoseConcurrentUpdates(t *testing.
 	go func() {
 		defer wg.Done()
 		<-start
-		_, err := local.initializeLocalIdentity()
+		_, err := local.InitializeLocal()
 		errs <- err
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		_, err := wechat.bind("concurrent-wechat")
+		_, err := wechat.Bind("concurrent-wechat")
 		errs <- err
 	}()
 	close(start)
@@ -171,7 +208,7 @@ func TestFishLocalIdentityAndWechatBindingDoNotLoseConcurrentUpdates(t *testing.
 		}
 	}
 
-	got, err := newFishIdentityRegistry(dir).localIdentity()
+	got, err := New(dir).Read()
 	if err != nil {
 		t.Fatal(err)
 	}

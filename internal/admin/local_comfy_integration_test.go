@@ -18,6 +18,7 @@ import (
 
 	"wechat-bot/internal/comfyui"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/fishidentity"
 )
 
 type syntheticLocalComfy struct {
@@ -189,7 +190,7 @@ func TestLocalComfyChatJobsAndArtifacts(t *testing.T) {
 	f := localChatFixture(t)
 	root := t.TempDir()
 	writeLocalComfyChatWorkflow(t, root)
-	fish, _, err := newFishIdentityRegistry(f.handler.home.dataDir).bindings()
+	fish, _, err := fishidentity.New(f.handler.home.dataDir).Bindings()
 	if err != nil || fish == "" {
 		t.Fatal("fixture fish missing", err)
 	}
@@ -300,7 +301,7 @@ func TestLocalComfyOwnedWindowsThroughChat(t *testing.T) {
 	if code, out := f.request("PUT", "/api/local/project-tools/comfyui", map[string]any{"action": "disable", "revision": localProjectToolRevision(t, enabled)}, true); code != http.StatusOK {
 		t.Fatalf("stop owned ComfyUI: %d %#v", code, out)
 	}
-	fish, _, err := newFishIdentityRegistry(f.handler.home.dataDir).bindings()
+	fish, _, err := fishidentity.New(f.handler.home.dataDir).Bindings()
 	if err != nil {
 		t.Fatal(err)
 	}

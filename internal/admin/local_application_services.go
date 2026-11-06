@@ -10,7 +10,7 @@ import (
 )
 
 func (h *localHomeService) applicationOwner() (stationservices.Owner, error) {
-	record, err := h.identity.localIdentity()
+	record, err := h.identity.Read()
 	if err != nil || record.LocalOwner == nil {
 		return stationservices.Owner{}, errors.New("本地主人身份不可用")
 	}
