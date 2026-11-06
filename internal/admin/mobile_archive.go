@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"time"
 
 	mobile "wechat-bot/internal/devicespec"
@@ -13,23 +15,49 @@ import (
 
 const mobileRetirementReason = "device_feature_retired"
 
-// This adapter exposes the existing history readers without initializing a
-// planner, scheduler, or device bridge.
+// The archive reads host records and media without constructing the old
+// workflow or interpreting its execution checkpoints.
 type mobileArchiveService struct {
-	history       *mobileWorkflowService
+	manager       *Manager
 	retirementErr error
+}
+
+func (s *mobileArchiveService) read() (mobile.RepositorySnapshot, error) {
+	if _, err := os.Stat(filepath.Join(s.manager.dir, "plugin-host", "plugins.sqlite")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return mobile.RepositorySnapshot{}, nil
+		}
+		return mobile.RepositorySnapshot{}, err
+	}
+	store, err := s.manager.packageStore()
+	if err != nil {
+		return mobile.RepositorySnapshot{}, err
+	}
+	ctx := context.Background()
+	host, err := store.ReadHostState(ctx, mobileDevicePluginID, mobileStateNamespace)
+	if err != nil {
+		return mobile.RepositorySnapshot{}, err
+	}
+	return decodeMobileHostState(host, store.Account())
 }
 
 func (s *mobileArchiveService) Settings() mobile.Settings { return mobile.Defaults() }
 func (s *mobileArchiveService) List(source *mobile.Source) []mobile.Task {
-	return s.history.List(source)
+	snapshot, _ := s.read()
+	return mobileTasksForSource(snapshot.Tasks, source)
 }
-func (s *mobileArchiveService) Get(id string) (mobile.Task, bool) { return s.history.Get(id) }
+func (s *mobileArchiveService) Get(id string) (mobile.Task, bool) {
+	snapshot, _ := s.read()
+	task, ok := snapshot.Tasks[id]
+	return task, ok
+}
 func (s *mobileArchiveService) Screenshot(taskID, observationID string) ([]byte, error) {
-	return s.history.Screenshot(taskID, observationID)
+	task, _ := s.Get(taskID)
+	return readMobileScreenshot(s.manager.dir, task, observationID)
 }
 func (s *mobileArchiveService) Artifact(taskID, artifactID string) (mobile.Artifact, []byte, error) {
-	return s.history.Artifact(taskID, artifactID)
+	task, _ := s.Get(taskID)
+	return readMobileArtifact(s.manager.dir, task, artifactID)
 }
 func (s *mobileArchiveService) Save(mobile.Settings) error { return errDeviceServiceRetired }
 func (s *mobileArchiveService) Start(mobile.Source, string, string) (mobile.Task, error) {
@@ -46,27 +74,35 @@ func (s *mobileArchiveService) InitializationError() error {
 	if s.retirementErr != nil {
 		return s.retirementErr
 	}
-	return s.history.InitializationError()
+	_, err := s.read()
+	return err
 }
 
 func (s *mobileArchiveService) retire() error {
 	deviceErr := s.retireDeviceJobs()
-	agentErr := s.history.manager.agent.retireDeviceContinuations(s.history.manager.native.Account())
+	agentErr := s.manager.agent.retireDeviceContinuations(s.manager.native.Account())
 	s.retirementErr = errors.Join(deviceErr, agentErr)
 	return s.retirementErr
 }
 
 func (s *mobileArchiveService) retireDeviceJobs() error {
-	s.history.stateMu.Lock()
-	defer s.history.stateMu.Unlock()
-	snapshot, store, err := s.history.load(false)
+	store, err := s.manager.openMobileStateStore(false)
 	if err != nil || store == nil {
+		return err
+	}
+	ctx := context.Background()
+	host, err := importMobileState(ctx, store, s.manager.dir)
+	if err != nil {
+		return err
+	}
+	snapshot, err := decodeMobileHostState(host, store.Account())
+	if err != nil {
 		return err
 	}
 
 	puts := map[string]json.RawMessage{}
 	now := time.Now().UTC()
-	for id, task := range snapshot.tasks {
+	for id, task := range snapshot.Tasks {
 		if mobileWorkflowActive(task) {
 			task.State, task.Reason, task.Updated = "stopped", mobileRetirementReason, now
 			puts[mobileTaskRecordKey(id)], _ = json.Marshal(task)
@@ -74,12 +110,12 @@ func (s *mobileArchiveService) retireDeviceJobs() error {
 			// disabled settings, and retired runtime prevent their execution.
 		}
 	}
-	if snapshot.settings.Enabled {
-		snapshot.settings.Enabled = false
-		puts["settings"], _ = json.Marshal(snapshot.settings)
+	if snapshot.Settings.Enabled {
+		snapshot.Settings.Enabled = false
+		puts["settings"], _ = json.Marshal(snapshot.Settings)
 	}
 	if len(puts) > 0 {
-		if err := s.history.commit(snapshot, store, puts); err != nil {
+		if _, err := store.UpdateHostState(ctx, mobileDevicePluginID, mobileStateNamespace, host.Revision, puts, nil); err != nil {
 			return err
 		}
 	}

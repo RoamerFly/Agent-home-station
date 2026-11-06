@@ -2,6 +2,18 @@
 'use strict';
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
+const flow=require('../internal/admin/static/flow-model.js');
+
+// The legacy live-device configuration must be unavailable until status is
+// known, then remain absent only on the Windows retirement path. This is kept
+// outside the browser fixture so the transition stays covered even when the
+// package renderer evolves independently.
+assert.equal(flow.isDeviceControlRetired(),true);
+assert.equal(flow.catalog.tools.pages.includes('mobile'),false);
+flow.setDeviceControlRetired(false);
+assert.equal(flow.catalog.tools.pages.includes('mobile'),true);
+flow.setDeviceControlRetired(true);
+assert.equal(flow.catalog.tools.pages.includes('mobile'),false);
 
 (async()=>{
  const edge='C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';

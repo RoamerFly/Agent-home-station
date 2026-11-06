@@ -73,6 +73,9 @@ func TestRetiredDeviceControlFreezesQueuesAndPreservesHistoryAcrossRestart(t *te
 	manifest := mobileImportManifest{Version: 1, SourceHash: namedSpeechSHA([]byte("synthetic state source")), TaskCount: 2}
 	records["manifest"], _ = json.Marshal(manifest)
 	records[mobileWorkflowKey(active.ID)] = json.RawMessage(`{"state":{"observation_only":true},"claim":"synthetic-claimed-effect","fact":{"effect_id":"synthetic-effect"}}`)
+	// The archive retains checkpoints from unknown workflow versions as
+	// evidence, without needing a planner that understands their format.
+	records[mobileWorkflowKey(finished.ID)] = json.RawMessage(`{"future_workflow":{"effect":17}}`)
 	if _, err := store.InitializeHostState(ctx, mobileDevicePluginID, mobileStateNamespace, manifest.SourceHash, records); err != nil {
 		t.Fatal(err)
 	}
@@ -129,8 +132,10 @@ func TestRetiredDeviceControlFreezesQueuesAndPreservesHistoryAcrossRestart(t *te
 		if done, ok := m.mobile.Get(finished.ID); !ok || !reflect.DeepEqual(done, finished) {
 			t.Fatalf("terminal task was rewritten: %+v", done)
 		}
-		if !bytes.Equal(snapshot.Records[mobileWorkflowKey(active.ID)], records[mobileWorkflowKey(active.ID)]) {
-			t.Fatal("the original effect claim or evidence was rewritten")
+		for _, id := range []string{active.ID, finished.ID} {
+			if !bytes.Equal(snapshot.Records[mobileWorkflowKey(id)], records[mobileWorkflowKey(id)]) {
+				t.Fatal("the original effect claim or evidence was rewritten")
+			}
 		}
 		if after, err := store.Installed(ctx, mobileDevicePluginID); err != nil || after.Enabled || after.Removed || after.Digest != installed.Digest {
 			t.Fatalf("original package history not retained disabled: %+v %v", after, err)
@@ -161,6 +166,9 @@ func TestRetiredDeviceControlFreezesQueuesAndPreservesHistoryAcrossRestart(t *te
 				t.Fatalf("history leaked before login: %d", status)
 			}
 			f.login()
+			if status, body, _ := f.request("GET", "/api/status", nil, false, false); status != 200 || !bytes.Contains(body, []byte(`"device_control_retired":true`)) {
+				t.Fatalf("Windows management status did not declare retired device control: %d %s", status, body)
+			}
 			for _, call := range []struct {
 				method, route string
 				body          any
@@ -240,5 +248,39 @@ func TestRetiredDeviceControlReadsLegacySnapshotWithoutOverwritingIt(t *testing.
 				t.Fatalf("legacy JSON was overwritten: %v", err)
 			}
 		})
+	}
+}
+
+func TestRetiredDeviceArchiveReadsWithoutImportingNewLegacyFiles(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := NewManagerWithRetiredDeviceControl(dir, "", &fakeNative{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	legacyDir := filepath.Join(dir, "mobile")
+	if err := os.MkdirAll(legacyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	task := mobile.Task{ID: "synthetic-late-task", RequestHash: "synthetic-late-request",
+		Source: mobile.Source{Account: manager.native.Account()}, State: "queued"}
+	raw, err := json.Marshal(map[string]mobile.Task{task.ID: task})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(legacyDir, "tasks.json")
+	if err := os.WriteFile(source, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if tasks := manager.mobile.List(nil); len(tasks) != 0 || manager.mobile.InitializationError() != nil {
+		t.Fatalf("archive read attempted to import data after startup: %+v", tasks)
+	}
+	store, err := manager.packageStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.ReadHostState(t.Context(), mobileDevicePluginID, mobileStateNamespace)
+	if err != nil || state.Revision != 0 {
+		t.Fatalf("read initialized the device namespace: %+v %v", state, err)
 	}
 }

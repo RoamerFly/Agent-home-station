@@ -35,7 +35,7 @@ var (
 
 func (m *Manager) newMobileService() deviceService {
 	if m.mobileRetired {
-		return &mobileArchiveService{history: &mobileWorkflowService{manager: m}}
+		return &mobileArchiveService{manager: m}
 	}
 	return newMobileWorkflowService(m)
 }

@@ -455,7 +455,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		name, _ = resolver.DisplayName(ctx)
 		cancel()
 	}
-	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "account_name": name, "version": "0.35.0-managed-workspaces-local"})
+	respond(w, 200, map[string]any{"native": native, "bot": s.manager.BotStatus(), "key_configured": s.manager.Config().KeyConfigured, "account": s.manager.native.Account(), "account_name": name, "device_control_retired": s.manager.mobileRetired, "version": "0.35.0-managed-workspaces-local"})
 }
 func (s *Server) toggle(w http.ResponseWriter, r *http.Request, enabled bool) {
 	if err := s.manager.Toggle(enabled); err != nil {
