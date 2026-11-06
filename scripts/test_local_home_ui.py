@@ -496,7 +496,7 @@ def verify(binary, output):
                 worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "group_rules": [], "contact_read": False, "actions": [], "policy_payloads": []}
                 legacy = {"availability": "available", "previews": 0, "posts": [], "source_removed": False}
                 legacy_activation = {"gets": 0, "posts": []}
-                legacy_rollback = {"gets": [], "posts": []}
+                legacy_rollback = {"gets": [], "posts": [], "audit_gets": 0, "audits": []}
                 legacy_memory = {"requests": []}
                 legacy_memory_selection = {"gets": [], "posts": []}
                 legacy_group_rule = {"gets": [], "posts": []}
@@ -650,6 +650,27 @@ def verify(binary, output):
                                   ]})(route)
 
                 page.route(legacy_rollback_pattern, legacy_rollback_route)
+                legacy_rollback_audit_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/legacy-import/rollback/audit$")
+
+                def legacy_rollback_audit_route(route):
+                    assert legacy_rollback["posts"], "audit must be unavailable before rollback freeze"
+                    if route.request.method == "GET":
+                        legacy_rollback["audit_gets"] += 1
+                        if not legacy_rollback["audits"]:
+                            fulfill_json({"error": "rollback audit not saved"}, status=404)(route)
+                            return
+                        fulfill_json(dict(legacy_rollback["audits"][-1], local_current=False))(route)
+                        return
+                    assert route.request.method == "POST"
+                    assert route.request.headers.get("x-csrf-token"), "rollback audit save lacks owner CSRF"
+                    assert route.request.post_data_json == {}
+                    audit = {"digest": "fixture-rollback-audit-v1", "captured_at": "2026-11-07T08:02:00Z",
+                             "delivery_count": 3, "action_count": 5, "active_count": 1, "unknown_count": 1,
+                             "native_state": "available", "desktop_bound": True, "local_current": True}
+                    legacy_rollback["audits"].append(audit)
+                    fulfill_json(audit)(route)
+
+                page.route(legacy_rollback_audit_pattern, legacy_rollback_audit_route)
                 legacy_receipts_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/legacy-import/receipts(?:/[^/?]+)?(?:\?.*)?$")
                 long_legacy_key = "legacy-accepted-" + "a" * 110
 
@@ -921,6 +942,15 @@ def verify(binary, output):
                 page.get_by_text("语音 · 已结束", exact=True).wait_for()
                 assert legacy_rollback["posts"] == [{}], "freeze must submit only an empty owner request"
                 assert legacy_rollback["gets"] == ["", "", "", rollback_cursor], "rollback receipts must page only after frozen"
+                page.get_by_role("button", name="查看已保存核对", exact=True).click()
+                page.get_by_text("尚未保存本次核对记录。", exact=True).wait_for()
+                page.get_by_role("button", name="保存本次核对", exact=True).click()
+                page.get_by_text("标识：fixture-rollback-audit-v1；保存于：2026-11-07T08:02:00Z", exact=True).wait_for()
+                page.get_by_text("投递 3；操作 5；处理中 1；待核对 1", exact=True).wait_for()
+                page.get_by_text("原生端：可核对；本次桌面运行：已关联；本地记录：一致", exact=True).wait_for()
+                page.get_by_role("button", name="查看已保存核对", exact=True).click()
+                page.get_by_text("原生端：可核对；本次桌面运行：已关联；本地记录：已变化，请重新保存", exact=True).wait_for()
+                assert legacy_rollback["audit_gets"] == 2 and len(legacy_rollback["audits"]) == 1, "audit summary must be explicitly saved after a frozen read"
                 assert page.get_by_role("button", name="恢复投递", exact=True).count() == 0, "freeze screen must not provide a release path"
                 page.get_by_role("button", name="重新核对启用条件", exact=True).click()
                 page.get_by_text("暂不能启用", exact=True).wait_for()

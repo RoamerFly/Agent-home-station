@@ -106,9 +106,23 @@ namespace WechatAgent.Desktop {
             do { d.StationNativeUrl = CycleUrl(); } while (d.Url == d.StationNativeUrl);
             Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", password);
             try {
+                string priorEpoch = null;
                 using (var runtime = new LocalStationRuntime(d)) {
                     for (int round = 0; round < 2; round++) {
                         runtime.Start(CancellationToken.None).GetAwaiter().GetResult();
+                        var stopPath = Path.Combine(d.Root, "station-native-stop.json");
+                        var starting = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(stopPath));
+                        var epoch = Deployment.Text(starting, "epoch");
+                        Assert(Convert.ToInt32(starting["version"]) == 1 && Deployment.Text(starting, "state") == "starting", "native launch atomically invalidates prior stop proof");
+                        Assert(epoch.Length == 32 && epoch != priorEpoch && Deployment.Text(starting, "data_root") == WindowsRuntime.ComparablePath(d.Root), "native launch writes a fresh private proof epoch");
+                        Assert(Deployment.Text(starting, "native_server_id") == "" && Deployment.Text(starting, "native_ownership_generation") == "", "unadmitted launch proof has no native identity");
+                        var runLock = Path.Combine(d.Root, "station-native-run.lock");
+                        using (var contender = new FileStream(runLock, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) {
+                            var held = false;
+                            try { contender.Lock(0, 1); }
+                            catch (IOException) { held = true; }
+                            Assert(held, "native-enabled station holds a cross-process data-root lease while running");
+                        }
                         var station = runtime.PID;
                         var native = runtime.NativePID;
                         try {
@@ -189,7 +203,32 @@ namespace WechatAgent.Desktop {
                             }
                         } finally { runtime.Stop().GetAwaiter().GetResult(); }
                         Assert(!ProcessAlive(station) && !ProcessAlive(native), "both owned children exit after stop");
+                        var stopProof = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(stopPath));
+                        Assert(stopProof.Count == 7 && Convert.ToInt32(stopProof["version"]) == 1 && Deployment.Text(stopProof, "state") == "stopped" && Deployment.Text(stopProof, "epoch") == epoch, "only the admitted owned pair writes its matching stopped proof schema");
+                        Assert(Deployment.Text(stopProof, "native_server_id") != "" && Deployment.Text(stopProof, "native_ownership_generation") != "", "stopped proof retains verified native ownership identity");
+                        Assert(!String.IsNullOrEmpty(Deployment.Text(stopProof, "at")), "stopped proof records UTC timestamp");
+                        var proofBytes = File.ReadAllText(stopPath);
+                        runtime.Stop().GetAwaiter().GetResult();
+                        Assert(File.ReadAllText(stopPath) == proofBytes, "a second stop cannot create or replace a stop proof");
+                        using (var released = new FileStream(runLock, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) {
+                            released.Lock(0, 1); released.Unlock(0, 1);
+                        }
+                        Assert(true, "native data-root lease is released only after owned shutdown completes");
+                        priorEpoch = epoch;
                     }
+                }
+                using (var forced = new LocalStationRuntime(d)) {
+                    forced.Start(CancellationToken.None).GetAwaiter().GetResult();
+                    var markerPath = Path.Combine(d.Root, "station-native-stop.json");
+                    var startingBytes = File.ReadAllText(markerPath);
+                    var started = Deployment.Json.Deserialize<Dictionary<string, object>>(startingBytes);
+                    Assert(Deployment.Text(started, "state") == "starting" && Deployment.Text(started, "epoch") != priorEpoch, "new launch invalidates the last successful stop proof");
+                    using (var child = Process.GetProcessById(forced.PID)) {
+                        child.Kill();
+                        Assert(child.WaitForExit(5000), "synthetic owned station child was forcibly stopped");
+                    }
+                    Reject(() => forced.Stop()).GetAwaiter().GetResult();
+                    Assert(File.ReadAllText(markerPath) == startingBytes, "forced station exit leaves no usable stopped proof");
                 }
             } finally { Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", priorPassword); }
         }

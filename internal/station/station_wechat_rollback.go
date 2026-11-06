@@ -32,6 +32,13 @@ type legacyRollbackView struct {
 	Items     []rollbackReceipt `json:"items"`
 }
 
+type legacyRollbackTarget struct {
+	legacyRollbackView
+	worker  *stationWechatWorker
+	ref     apphost.ConnectionRef
+	dataset string
+}
+
 func (s *stationWechat) legacyRollbackRoutes(owner *websession.Store, mux *http.ServeMux, path string) {
 	handle := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -75,7 +82,15 @@ func (s *stationWechat) legacyRollbackRoutes(owner *websession.Store, mux *http.
 }
 
 func (s *stationWechat) legacyRollback(ctx context.Context, id string, freeze bool, revision, after string, limit int) (legacyRollbackView, error) {
-	view := legacyRollbackView{State: "not_frozen", Items: []rollbackReceipt{}}
+	target, err := s.rollbackTarget(ctx, id, freeze)
+	if err != nil || freeze || target.State != "frozen" {
+		return target.legacyRollbackView, err
+	}
+	return s.rollbackReceiptPage(ctx, target, revision, after, limit)
+}
+
+func (s *stationWechat) rollbackTarget(ctx context.Context, id string, freeze bool) (legacyRollbackTarget, error) {
+	view := legacyRollbackTarget{legacyRollbackView: legacyRollbackView{State: "not_frozen", Items: []rollbackReceipt{}}}
 	archive, err := s.legacyReceiptArchive(id)
 	if err != nil {
 		return view, err
@@ -88,6 +103,7 @@ func (s *stationWechat) legacyRollback(ctx context.Context, id string, freeze bo
 		return view, apphost.ErrNotFound
 	}
 	ref := s.connectionRef(id, archive.Plan.Account)
+	view.worker, view.ref = w, ref
 	w.mu.Lock()
 	proof := w.policy.LegacyActivation
 	view.Eligible = proof != nil && proof.Connection == ref && proof.ArchiveDigest == archive.Plan.Digest && w.policy.LegacyArchiveDigest == archive.Plan.Digest
@@ -122,7 +138,7 @@ func (s *stationWechat) legacyRollback(ctx context.Context, id string, freeze bo
 		run.block.Store(true)
 		run.cancel()
 	}
-	dataset := proof.TargetDataset
+	view.dataset = proof.TargetDataset
 	w.mu.Unlock()
 	workerStopped := run == nil
 	if run != nil {
@@ -140,67 +156,94 @@ func (s *stationWechat) legacyRollback(ctx context.Context, id string, freeze bo
 	// proves previously admitted requests have returned and closed their bodies.
 	w.platformMu.Unlock()
 	view.State = "frozen"
-	if freeze {
-		return view, nil
-	}
-	return s.rollbackReceiptPage(ctx, w, ref, dataset, view, revision, after, limit)
+	return view, nil
 }
 
-func (s *stationWechat) rollbackReceiptPage(ctx context.Context, w *stationWechatWorker, ref apphost.ConnectionRef, dataset string, view legacyRollbackView, revision, after string, limit int) (legacyRollbackView, error) {
+type rollbackCheckpoint struct {
+	rows     bot.DeliveryEvidencePage
+	stops    map[string]stationDeliveryStop
+	controls map[string]stationResumeControl
+	digest   string
+}
+
+func (target legacyRollbackTarget) checkpoint(after string, limit int) (rollbackCheckpoint, error) {
+	w := target.worker
 	w.deliveryMu.Lock()
-	rows, err := bot.ReadDeliveryEvidencePage(filepath.Join(w.dir, "queue"), ref.AccountID, after, limit)
+	defer w.deliveryMu.Unlock()
+	rows, err := bot.ReadDeliveryEvidencePage(filepath.Join(w.dir, "queue"), target.ref.AccountID, after, limit)
 	stops, stopErr := w.readDeliveryStops()
 	controls, controlErr := w.readResumeControls()
-	w.deliveryMu.Unlock()
 	if err != nil || stopErr != nil || controlErr != nil {
-		return view, apphost.ErrUnavailable
+		return rollbackCheckpoint{}, apphost.ErrUnavailable
 	}
-	view.Snapshot = localCheckpointKey("wechat-rollback-v1", ref, view.FrozenAt, dataset, rows.Snapshot, stops, controls)
+	digest := localCheckpointKey("wechat-rollback-v1", target.ref, target.FrozenAt, target.dataset, rows.Snapshot, stops, controls)
+	return rollbackCheckpoint{rows, stops, controls, digest}, nil
+}
+
+func (s *stationWechat) rollbackReceiptPage(ctx context.Context, target legacyRollbackTarget, revision, after string, limit int) (legacyRollbackView, error) {
+	view := target.legacyRollbackView
+	checkpoint, err := target.checkpoint(after, limit)
+	if err != nil {
+		return view, err
+	}
+	view.Snapshot = checkpoint.digest
 	if revision != "" && revision != view.Snapshot {
 		return view, errLegacyImportChanged
 	}
-	if len(rows.Keys) == 0 {
+	if len(checkpoint.rows.Keys) == 0 {
 		return view, nil
 	}
-	var native *linuxnative.Sender
-	view.Native = "dataset_mismatch"
-	if rows.ServerID == dataset {
-		view.Native = "unavailable"
-		nativeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		native, err = s.WorkerSender(nativeCtx, ref.ConnectionID)
-		if err == nil && native.Account() == ref.AccountID {
-			if daemon, err := native.DaemonStatus(nativeCtx); err == nil && daemon.ServerID == dataset {
-				view.Native = "available"
-			} else if err == nil {
-				view.Native = "dataset_mismatch"
-			}
-		}
-		cancel()
+	if checkpoint.rows.ServerID != target.dataset {
+		view.Native = "dataset_mismatch"
+		view.Items, err = checkpoint.project(ctx, target.ref, nil)
+	} else {
+		native, _, state := s.rollbackNative(ctx, target)
+		view.Native = state
+		view.Items, err = checkpoint.project(ctx, target.ref, native)
 	}
-	if view.Native != "available" {
-		native = nil
+	if checkpoint.rows.NextAfter != "" {
+		view.NextAfter = view.Snapshot + ":" + checkpoint.rows.NextAfter
 	}
-	for _, key := range rows.Keys {
+	return view, err
+}
+
+func (s *stationWechat) rollbackNative(ctx context.Context, target legacyRollbackTarget) (*linuxnative.Sender, linuxnative.DaemonStatus, string) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	native, err := s.WorkerSender(ctx, target.ref.ConnectionID)
+	if err != nil || native.Account() != target.ref.AccountID {
+		return nil, linuxnative.DaemonStatus{}, "unavailable"
+	}
+	daemon, err := native.DaemonStatus(ctx)
+	if err != nil {
+		return nil, daemon, "unavailable"
+	}
+	if daemon.ServerID != target.dataset {
+		return nil, daemon, "dataset_mismatch"
+	}
+	return native, daemon, "available"
+}
+
+func (c rollbackCheckpoint) project(ctx context.Context, ref apphost.ConnectionRef, native *linuxnative.Sender) ([]rollbackReceipt, error) {
+	items := make([]rollbackReceipt, 0, len(c.rows.Keys))
+	for _, key := range c.rows.Keys {
 		if !identity.ValidPathID(key) {
-			return view, apphost.ErrUnavailable
+			return nil, apphost.ErrUnavailable
 		}
 		// Keep the requested local page intact if the optional platform lookups
 		// exhaust their deadline. The remaining records retain stored evidence.
 		lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		row := rows.Records[key]
+		row := c.rows.Records[key]
 		receipt, active := projectRollbackReceipt(lookupCtx, native, ref, key, row)
 		cancel()
-		_, stopped := stops[deliveryStopID(companion.Input{Account: ref.AccountID, Thread: row.Status.ThreadID, TraceID: row.Trace})]
+		_, stopped := c.stops[deliveryStopID(companion.Input{Account: ref.AccountID, Thread: row.Status.ThreadID, TraceID: row.Trace})]
 		receipt.CancelRequested = receipt.CancelRequested || stopped
-		if control, exists := controls[key]; exists {
+		if control, exists := c.controls[key]; exists {
 			receipt.Continuation = resumeControlView(control)
 		}
-		view.Items = append(view.Items, rollbackReceipt{Receipt: receipt, Disposition: rollbackDisposition(receipt, active)})
+		items = append(items, rollbackReceipt{Receipt: receipt, Disposition: rollbackDisposition(receipt, active)})
 	}
-	if rows.NextAfter != "" {
-		view.NextAfter = view.Snapshot + ":" + rows.NextAfter
-	}
-	return view, nil
+	return items, nil
 }
 
 func rollbackDisposition(receipt apphost.Receipt, active bool) string {

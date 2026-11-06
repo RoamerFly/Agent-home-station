@@ -1,11 +1,14 @@
 package adapter
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -100,6 +103,35 @@ func (l *ActionLedger) List(account string) []ActionProposal {
 		}
 	}
 	return out
+}
+
+// SnapshotConnected returns a stable private snapshot of actions that are
+// bound to one exact application connection. Its digest covers the complete
+// durable rows (including private requests), but is opaque to callers and can
+// therefore be retained as handoff evidence without exposing action payloads.
+func (l *ActionLedger) SnapshotConnected(ref apphost.ConnectionRef) ([]ActionProposal, string, error) {
+	if l == nil || ref.AppID != ID || ref.AccountID == "" || ref.ConnectionID != ConnectionID(ref.AccountID) {
+		return nil, "", apphost.ErrNotFound
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	items := make([]ActionProposal, 0, len(l.items))
+	for _, p := range l.items {
+		if connectedActionMatches(p, ref) {
+			items = append(items, cloneActionProposal(p))
+		}
+	}
+	slices.SortFunc(items, func(a, b ActionProposal) int { return strings.Compare(a.ID, b.ID) })
+	h := sha256.New()
+	for _, p := range items {
+		encoded, err := json.Marshal(p)
+		if err != nil {
+			return nil, "", err
+		}
+		_, _ = h.Write(encoded)
+		_, _ = h.Write([]byte{'\n'})
+	}
+	return items, fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 func cloneActionProposal(p ActionProposal) ActionProposal {

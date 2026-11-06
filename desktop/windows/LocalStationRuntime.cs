@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -14,7 +16,13 @@ namespace WechatAgent.Desktop {
         readonly HttpClient nativeApi = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(3) };
         OwnedProcess server, native;
         ProcessJob job;
+        FileStream nativeRunGate;
         string nativeServerId, nativeGeneration, nativeToken;
+        // This marker is intentionally separate from the old-desktop cutover
+        // evidence.  It proves only that this LocalStation launch owned and
+        // cleanly stopped its own station/native pair.
+        string nativeStopEpoch;
+        bool nativeAdmitted, stationAdmitted;
         internal LocalStationRuntime(Deployment deployment) { d = deployment; }
         internal bool Running { get { return server != null && server.Alive; } }
         internal int PID { get { return server == null ? 0 : server.ID; } }
@@ -46,6 +54,48 @@ namespace WechatAgent.Desktop {
             WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "apps"));
             WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "apps", "wechat"));
             WindowsRuntime.PrivateDirectory(nativeRoot);
+        }
+        void BeginNativeRun() {
+            var path = Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-run.lock");
+            NoLinkedFile(path);
+            var gate = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+            try {
+                try { gate.Lock(0, 1); }
+                catch (IOException) { throw new InvalidOperationException("此本机成长站数据目录正在由另一个桌面实例使用（station-native-run.lock）。"); }
+                nativeRunGate = gate;
+            } catch { gate.Dispose(); throw; }
+        }
+        void EndNativeRun() {
+            var gate = nativeRunGate; nativeRunGate = null;
+            if (gate == null) return;
+            try { gate.Unlock(0, 1); }
+            finally { gate.Dispose(); }
+        }
+        string NativeStopStatePath() { return Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-stop.json"); }
+        void WriteNativeStopState(string state, string epoch, string serverId, string generation) {
+            if (state != "starting" && state != "stopped") throw new ArgumentException("本机成长站停止状态无效。", "state");
+            if (String.IsNullOrEmpty(epoch) || epoch.Length != 32 || !epoch.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+                throw new ArgumentException("本机成长站停止标识无效。", "epoch");
+            var dataRoot = WindowsRuntime.ComparablePath(d.Root);
+            WindowsRuntime.NoLinks(dataRoot);
+            var path = NativeStopStatePath();
+            if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("本机成长站停止记录不能使用链接。");
+            var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            var text = Deployment.Json.Serialize(new {
+                version = 1, state = state, epoch = epoch, data_root = dataRoot,
+                native_server_id = serverId ?? "", native_ownership_generation = generation ?? "",
+                at = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
+            });
+            try {
+                var bytes = new UTF8Encoding(false).GetBytes(text);
+                using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough)) {
+                    file.Write(bytes, 0, bytes.Length); file.Flush(true);
+                }
+                if (File.Exists(path)) File.Replace(temp, path, null); else File.Move(temp, path);
+            } finally {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
         }
         static void WriteNativeConfig(string nativeRoot) {
             var path = Path.Combine(nativeRoot, "native-server.toml");
@@ -89,6 +139,7 @@ namespace WechatAgent.Desktop {
                         throw new InvalidOperationException("微信原生服务实例身份或数据目录不匹配，拒绝接管。");
                     nativeServerId = Deployment.Text(value, "serverId"); nativeGeneration = Deployment.Text(value, "ownershipGeneration");
                     if (nativeServerId == "" || nativeGeneration == "") throw new InvalidOperationException("微信原生服务缺少归属信息，拒绝接管。");
+                    nativeAdmitted = true;
                     return;
                 } catch (HttpRequestException) { } catch (TaskCanceledException) { } catch (FileNotFoundException) { }
                 // The owned daemon can still be writing its newly created token.
@@ -99,20 +150,26 @@ namespace WechatAgent.Desktop {
                 await Task.Delay(300, cancel);
             }
         }
-        async Task StopNative(bool startupFailure) {
+        async Task<bool> StopNative(bool startupFailure) {
             var owned = native; native = null;
-            if (owned == null) return;
+            if (owned == null) return false;
             Exception failure = null;
+            var graceful = false;
             try {
-                if (owned.Alive && !String.IsNullOrEmpty(nativeServerId) && !String.IsNullOrEmpty(nativeGeneration))
+                if (owned.Alive && nativeAdmitted && !String.IsNullOrEmpty(nativeServerId) && !String.IsNullOrEmpty(nativeGeneration)) {
                     await NativeRequest("/v1/daemon/shutdown", new { pid = owned.ID, serverId = nativeServerId, ownershipGeneration = nativeGeneration });
-                else if (owned.Alive && startupFailure) owned.StopUnadmitted();
+                    await owned.WaitStopped();
+                    graceful = owned.ExitCode == 0;
+                } else if (owned.Alive && startupFailure) {
+                    owned.StopUnadmitted();
+                    await owned.WaitStopped();
+                }
                 else if (owned.Alive) throw new InvalidOperationException("微信原生服务缺少启动时确认的归属信息，拒绝结束它。");
-                await owned.WaitStopped();
             } catch (Exception error) {
                 failure = new InvalidOperationException("微信原生服务未能正常停止；仅此桌面实例拥有的进程将由进程隔离回收。请查看 data/station/logs/wechat-native.log。", error);
-            } finally { owned.Dispose(); nativeServerId = nativeGeneration = nativeToken = null; }
+            } finally { owned.Dispose(); nativeAdmitted = false; nativeServerId = nativeGeneration = nativeToken = null; }
             if (failure != null) throw failure;
+            return graceful;
         }
         internal async Task Start(CancellationToken cancel) {
             cancel.ThrowIfCancellationRequested();
@@ -130,9 +187,16 @@ namespace WechatAgent.Desktop {
             WindowsRuntime.FreePort(d.Url);
             if (d.LocalStationNative) { AdmitNativeDirectories(); WriteNativeConfig(d.StationNativeRoot); WindowsRuntime.FreePort(d.StationNativeUrl); }
             job = new ProcessJob(); nativeServerId = nativeGeneration = nativeToken = null;
+            nativeAdmitted = stationAdmitted = false;
             Exception startFailure = null;
             try {
                 if (d.LocalStationNative) {
+                    BeginNativeRun();
+                    // A new launch invalidates any prior clean-stop evidence
+                    // before either owned child is created.  Failed and forced
+                    // starts deliberately leave this record at "starting".
+                    nativeStopEpoch = Guid.NewGuid().ToString("N");
+                    WriteNativeStopState("starting", nativeStopEpoch, "", "");
                     // Empty explicit environment: OwnedProcess clears WECHAT_/
                     // XDG_ values, and this child inherits no station secrets.
                     native = OwnedProcess.Start(d.StationNativeExe, new [] { "--json", "--server-config", Path.Combine(d.StationNativeRoot, "native-server.toml"), "--data-dir", d.StationNativeRoot, "--listen", d.StationNativeUrl.Substring("http://".Length), "serve" }, Path.GetDirectoryName(d.StationNativeExe), new Dictionary<string, string>(), Path.Combine(d.Root, "logs", "wechat-native.log"), job, true);
@@ -150,6 +214,7 @@ namespace WechatAgent.Desktop {
                     programEnv["PATH"] = media + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
                 }
                 server = OwnedProcess.Start(d.StationExe, args.ToArray(), d.Workspace, programEnv, Path.Combine(d.Root, "logs", "station.log"), job);
+                stationAdmitted = true;
             } catch (Exception error) {
                 startFailure = error;
             }
@@ -157,26 +222,41 @@ namespace WechatAgent.Desktop {
                 if (server != null) { server.Dispose(); server = null; }
                 Exception cleanupFailure = null;
                 try { await StopNative(true); } catch (Exception error) { cleanupFailure = error; }
+                nativeStopEpoch = null;
                 if (job != null) { job.Dispose(); job = null; }
+                EndNativeRun();
                 if (cleanupFailure != null) throw new InvalidOperationException("本机成长站启动失败，且已拥有的微信原生进程未能正常关闭。", new AggregateException(startFailure, cleanupFailure));
                 throw startFailure;
             }
         }
         internal async Task Stop() {
             var ownedServer = server; server = null; Exception failure = null;
+            var stopEpoch = nativeStopEpoch;
+            var stoppedServerId = nativeServerId;
+            var stoppedGeneration = nativeGeneration;
+            var gracefulServer = false;
+            var gracefulNative = false;
             try {
                 // The station stops before its daemon, preventing new provider
                 // work while the original authenticated daemon is shut down.
                 if (ownedServer != null) {
-                    if (ownedServer.Alive) await ownedServer.StopWeb(); else await ownedServer.WaitStopped();
+                    var serverWasAlive = ownedServer.Alive;
+                    if (serverWasAlive) await ownedServer.StopWeb(); else await ownedServer.WaitStopped();
                     if (ownedServer.ExitCode != 0) throw new InvalidOperationException("本机成长站以退出码 0x" + ownedServer.ExitCode.ToString("X8") + " 结束。");
+                    gracefulServer = stationAdmitted && serverWasAlive;
                 }
             } catch (Exception error) { failure = new InvalidOperationException("本机成长站未能正常完成关闭；微信原生服务仍将按本实例的归属信息停止。", error); }
             finally { if (ownedServer != null) ownedServer.Dispose(); }
-            try { await StopNative(false); } catch (Exception error) { if (failure == null) failure = error; }
+            try { gracefulNative = await StopNative(false); } catch (Exception error) { if (failure == null) failure = error; }
             if (job != null) { job.Dispose(); job = null; }
+            try {
+                // Do not create evidence for a second stop, a partial launch,
+                // a forced cleanup, or a failed/ambiguous native shutdown.
+                if (failure == null && !String.IsNullOrEmpty(stopEpoch) && gracefulServer && gracefulNative)
+                    WriteNativeStopState("stopped", stopEpoch, stoppedServerId, stoppedGeneration);
+            } finally { nativeStopEpoch = null; stationAdmitted = false; EndNativeRun(); }
             if (failure != null) throw failure;
         }
-        public void Dispose() { nativeApi.Dispose(); if (server != null) server.Dispose(); if (native != null) native.Dispose(); if (job != null) job.Dispose(); }
+        public void Dispose() { nativeApi.Dispose(); if (server != null) server.Dispose(); if (native != null) native.Dispose(); if (job != null) job.Dispose(); EndNativeRun(); }
     }
 }

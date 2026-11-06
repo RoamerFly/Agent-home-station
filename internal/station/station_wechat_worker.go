@@ -78,15 +78,16 @@ type stationWechatPolicy struct {
 const stationWechatPolicyLimit = 128 << 10
 
 type stationWechatWorker struct {
-	mu         sync.Mutex
-	deliveryMu sync.Mutex
-	platformMu sync.RWMutex
-	shareMu    sync.Mutex
-	share      *stationShareHost
-	dir        string
-	policy     stationWechatPolicy
-	actions    *wechatapp.ActionLedger
-	run        *stationWechatRun
+	mu              sync.Mutex
+	deliveryMu      sync.Mutex
+	platformMu      sync.RWMutex
+	rollbackAuditMu sync.Mutex
+	shareMu         sync.Mutex
+	share           *stationShareHost
+	dir             string
+	policy          stationWechatPolicy
+	actions         *wechatapp.ActionLedger
+	run             *stationWechatRun
 	// cutoverBlocked records a failed automatic preflight for older imported
 	// archives that predate LegacyArchiveDigest. It is intentionally transient:
 	// the archive evidence remains the authority and an explicit successful

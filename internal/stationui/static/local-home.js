@@ -260,6 +260,8 @@
         activation = null;
         rollback = null;
         rollbackItems = [];
+        rollbackAudit = null;
+        rollbackAuditKnown = false;
         renderPlan();
       } catch (error) {
         plan = null;
@@ -596,6 +598,7 @@
       }
     }
     let rollback = null, rollbackItems = [], rollbackLoading = false;
+    let rollbackAudit = null, rollbackAuditKnown = false, rollbackAuditLoading = false;
     function rollbackStateLabel(state) {
       return {
         not_frozen: "尚未冻结新投递",
@@ -662,6 +665,19 @@
       });
       if (rows.length) lines.push(...rows);
       else if (state === "frozen") lines.push(appElement("small", "当前页没有需要逐条核对的投递。"));
+      if (state === "frozen" && rollbackAuditKnown) {
+        if (rollbackAudit) {
+          const nativeState = { available: "可核对", unavailable: "暂不可用", dataset_mismatch: "数据集不匹配" }[rollbackAudit.native_state] || "待核对";
+          lines.push(
+            appElement("strong", "已保存的核对记录"),
+            appElement("small", `标识：${rollbackAudit.digest || "未知"}；保存于：${rollbackAudit.captured_at || "未知"}`),
+            appElement("small", `投递 ${Number(rollbackAudit.delivery_count || 0)}；操作 ${Number(rollbackAudit.action_count || 0)}；处理中 ${Number(rollbackAudit.active_count || 0)}；待核对 ${Number(rollbackAudit.unknown_count || 0)}`),
+            appElement("small", `原生端：${nativeState}；本次桌面运行：${rollbackAudit.desktop_bound ? "已关联" : "未关联"}；本地记录：${rollbackAudit.local_current ? "一致" : "已变化，请重新保存"}`)
+          );
+        } else {
+          lines.push(appElement("small", "尚未保存本次核对记录。"));
+        }
+      }
       if (message) lines.push(appElement("small", message));
       const actions = appElement("div", "", "app-worker-actions");
       if (state === "not_frozen" && value?.eligible) {
@@ -670,6 +686,10 @@
       actions.append(appSetupButton("刷新投递核对", () => readRollback()));
       if (state === "frozen" && typeof value?.next_after === "string" && value.next_after) {
         actions.append(appSetupButton("读取下一页投递", () => readRollback(value.next_after)));
+      }
+      if (state === "frozen") {
+        actions.append(appSetupButton("查看已保存核对", () => readRollbackAudit()));
+        actions.append(appSetupButton("保存本次核对", () => saveRollbackAudit()));
       }
       lines.push(actions);
       rollbackResult.replaceChildren(...lines);
@@ -684,6 +704,10 @@
         if (after) rollbackItems.push(...pageItems);
         else rollbackItems = pageItems;
         rollback = value;
+        if (value?.state !== "frozen") {
+          rollbackAudit = null;
+          rollbackAuditKnown = false;
+        }
         renderRollback();
       } catch (error) {
         rollbackResult.replaceChildren(
@@ -702,6 +726,8 @@
         await request(legacyImportURL + "/rollback", { method: "POST", body: JSON.stringify({}) });
         rollback = null;
         rollbackItems = [];
+        rollbackAudit = null;
+        rollbackAuditKnown = false;
         rollbackLoading = false;
         await readRollback();
       } catch (error) {
@@ -711,6 +737,39 @@
         );
       } finally {
         rollbackLoading = false;
+      }
+    }
+    async function readRollbackAudit() {
+      if (rollbackAuditLoading || rollback?.state !== "frozen") return;
+      rollbackAuditLoading = true;
+      try {
+        rollbackAudit = await request(legacyImportURL + "/rollback/audit");
+        rollbackAuditKnown = true;
+        renderRollback();
+      } catch (error) {
+        if (error.status === 404) {
+          rollbackAudit = null;
+          rollbackAuditKnown = true;
+          renderRollback();
+        } else {
+          rollbackResult.append(appElement("small", error.message));
+        }
+      } finally {
+        rollbackAuditLoading = false;
+      }
+    }
+    async function saveRollbackAudit() {
+      if (rollbackAuditLoading || rollback?.state !== "frozen") return;
+      rollbackAuditLoading = true;
+      try {
+        const value = await request(legacyImportURL + "/rollback/audit", { method: "POST", body: JSON.stringify({}) });
+        rollbackAudit = value && typeof value === "object" ? value : null;
+        rollbackAuditKnown = Boolean(rollbackAudit);
+        renderRollback();
+      } catch (error) {
+        rollbackResult.append(appElement("small", error.message));
+      } finally {
+        rollbackAuditLoading = false;
       }
     }
     function currentImportPrerequisites() {

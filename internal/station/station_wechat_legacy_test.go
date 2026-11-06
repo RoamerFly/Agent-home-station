@@ -83,6 +83,8 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	var daemonOffline atomic.Bool
 	var loginOnline atomic.Bool
 	writeStarted, allowWriteFinish := make(chan struct{}), make(chan struct{})
+	var holdAuditLookup atomic.Bool
+	auditLookupStarted, allowAuditLookup := make(chan struct{}), make(chan struct{})
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer synthetic-legacy-native-token" {
 			t.Error("wrong daemon credential")
@@ -133,6 +135,14 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 			if r.URL.Query().Get("key") != "b-active" {
 				w.WriteHeader(http.StatusNotFound)
 				return
+			}
+			if holdAuditLookup.Load() {
+				close(auditLookupStarted)
+				select {
+				case <-allowAuditLookup:
+				case <-r.Context().Done():
+					return
+				}
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": "job-active", "accountId": "one", "threadId": "filehelper", "kind": "text", "state": "running"})
 		case "/v1/accounts/one/events":
@@ -856,6 +866,8 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	req("POST", route("one")+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
 	write(claimPath, claimBytes)
 	rollbackRoute := planRoute("one") + "/rollback"
+	auditRoute := rollbackRoute + "/audit"
+	req("GET", auditRoute, nil, false, 409)
 	req("POST", rollbackRoute, map[string]any{}, false, 403)
 	if view := req("GET", rollbackRoute, nil, false, 200); view["eligible"] != true || view["state"] != "not_frozen" {
 		t.Fatal("read-only rollback status unexpectedly froze the connection", view)
@@ -895,6 +907,38 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	newQueuePath := filepath.Join(target, "queue", "messages-v2.json")
 	newQueue := `{"version":2,"server":"new-dataset","account":"one","deliveries":[{"key":"a-accepted","id":"job-sent","thread":"filehelper","state":"accepted","server_id":"91234","text":"synthetic-private-text","input":{"account":"one","thread":"filehelper"}},{"key":"b-active","id":"job-active","thread":"filehelper","state":"waiting","input":{"account":"one","thread":"filehelper"}},{"key":"c-unknown","thread":"filehelper","state":"submitting","input":{"account":"one","thread":"filehelper"}}]}`
 	write(newQueuePath, []byte(newQueue))
+	write(filepath.Join(host, stationNativeStopFile), j(stationNativeStop{Version: 1, State: "starting", Epoch: strings.Repeat("c", 32), DataRoot: host, At: time.Now().UTC()}))
+	worker, err := h.chat.wechat.worker(wechatapp.ConnectionID("one"), false)
+	if err != nil || worker == nil {
+		t.Fatal("missing frozen worker", err)
+	}
+	worker.mu.Lock()
+	ledger, err := worker.actionLedgerLocked()
+	worker.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := h.chat.wechat.connectionRef(wechatapp.ConnectionID("one"), "one")
+	if err := ledger.Save(wechatapp.ActionProposal{ID: "synthetic-rollback-recall", Account: "one", State: "unknown",
+		Request:   linuxnative.AdminAction{Kind: "recall", ThreadID: "filehelper", Text: "synthetic-private-action-payload"},
+		AppAction: &apphost.ActionIntent{ConnectionRef: ref, Action: "recall", Target: "filehelper", IdempotencyKey: "synthetic-rollback-recall"}}); err != nil {
+		t.Fatal(err)
+	}
+	req("GET", auditRoute, nil, false, 404)
+	req("POST", auditRoute, map[string]any{}, false, 403)
+	savedAudit := req("POST", auditRoute, map[string]any{}, true, 200)
+	auditPath := filepath.Join(target, rollbackAuditFile)
+	auditBytes, err := os.ReadFile(auditPath)
+	if err != nil || savedAudit["digest"] != hexDigest(auditBytes) || savedAudit["local_current"] != true || savedAudit["desktop_bound"] != true ||
+		savedAudit["delivery_count"] != float64(3) || savedAudit["action_count"] != float64(1) || savedAudit["active_count"] != float64(1) || savedAudit["unknown_count"] != float64(2) ||
+		bytes.Contains(auditBytes, []byte("synthetic-private-text")) || bytes.Contains(auditBytes, []byte("synthetic-private-action-payload")) {
+		t.Fatal("saved rollback audit did not match scoped, scrubbed evidence", savedAudit, err)
+	}
+	var sealed rollbackAudit
+	if err := json.Unmarshal(auditBytes, &sealed); err != nil || sealed.DesktopEpoch != strings.Repeat("c", 32) || sealed.NativeGeneration != "synthetic-generation" ||
+		sealed.Deliveries[0].ServerID != "91234" || sealed.Actions[0].OperationID != "synthetic-rollback-recall" {
+		t.Fatal("saved audit did not retain original receipts and runtime binding", err)
+	}
 	rollbackFirst := req("GET", rollbackRoute+"?limit=2", nil, false, 200)
 	items := rollbackFirst["items"].([]any)
 	accepted, active := items[0].(map[string]any), items[1].(map[string]any)
@@ -907,7 +951,26 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if row := rollbackSecond["items"].([]any)[0].(map[string]any); row["disposition"] != "unknown" || row["lookup"] != "not_found" || rollbackSecond["snapshot"] != rollbackFirst["snapshot"] {
 		t.Fatal("missing native receipt was not retained as unknown", rollbackSecond)
 	}
+	holdAuditLookup.Store(true)
+	auditStatus := make(chan int, 1)
+	go func(fixture *localHomeFixture) {
+		status, _ := fixture.request("POST", auditRoute, map[string]any{}, true)
+		auditStatus <- status
+	}(f)
+	select {
+	case <-auditLookupStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("audit did not query the active native operation")
+	}
 	write(newQueuePath, []byte(newQueue+"\n"))
+	close(allowAuditLookup)
+	if status := <-auditStatus; status != 409 {
+		t.Fatal("capture overwrote audit using changed source", status)
+	}
+	holdAuditLookup.Store(false)
+	if stale := req("GET", auditRoute, nil, false, 200); stale["local_current"] != false || stale["digest"] != savedAudit["digest"] {
+		t.Fatal("stale evidence was replaced or remained marked current", stale)
+	}
 	req("GET", rollbackNextPath, nil, false, 409)
 	write(newQueuePath, []byte(strings.Replace(newQueue, "new-dataset", "other-dataset", 1)))
 	if mismatch := req("GET", rollbackRoute+"?limit=2", nil, false, 200); mismatch["native"] != "dataset_mismatch" ||
@@ -923,8 +986,18 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	req("POST", route("one")+"/lifecycle", start, true, 409)
 	daemonOffline.Store(true)
 	offline := req("GET", rollbackRoute+"?limit=3", nil, false, 200)
+	storedAudit := req("GET", auditRoute, nil, false, 200)
+	offlineAudit := req("POST", auditRoute, map[string]any{}, true, 200)
+	historicalAudit := req("GET", auditRoute+"?digest="+savedAudit["digest"].(string), nil, false, 200)
 	repeated := req("POST", rollbackRoute, map[string]any{}, true, 200)
 	daemonOffline.Store(false)
+	if storedAudit["local_current"] != true || storedAudit["digest"] != savedAudit["digest"] || storedAudit["active_count"] != savedAudit["active_count"] {
+		t.Fatal("audit did not survive restart without native lookup", storedAudit)
+	}
+	if offlineAudit["digest"] == savedAudit["digest"] || offlineAudit["desktop_bound"] != false || offlineAudit["active_count"] != float64(0) ||
+		offlineAudit["unknown_count"] != float64(3) || historicalAudit["digest"] != savedAudit["digest"] || historicalAudit["active_count"] != float64(1) {
+		t.Fatal("offline recapture did not preserve historical platform evidence", offlineAudit, historicalAudit)
+	}
 	if offline["state"] != "frozen" || offline["snapshot"] != rollbackFirst["snapshot"] || offline["native"] != "unavailable" ||
 		repeated["frozen_at"] != rollbackFirst["frozen_at"] ||
 		offline["items"].([]any)[1].(map[string]any)["disposition"] != "unknown" {
