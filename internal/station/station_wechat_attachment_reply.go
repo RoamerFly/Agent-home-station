@@ -11,7 +11,7 @@ import (
 )
 
 func (t *stationAttachmentTools) Media(id string) (companion.GeneratedMedia, bool) {
-	if asset, ok := strings.CutPrefix(id, "reply-"); ok && strings.HasPrefix(asset, stationPDFPrefix) {
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok && stationDocumentReplyID(asset) {
 		r, err := t.readDocumentReply(asset)
 		if err != nil {
 			return companion.GeneratedMedia{}, false
@@ -60,7 +60,7 @@ func (t *stationAttachmentTools) prepareReply(ctx context.Context, raw json.RawM
 }
 
 func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.Input, kind, asset string) (string, error) {
-	if strings.HasPrefix(asset, stationPDFPrefix) {
+	if stationDocumentReplyID(asset) {
 		if kind != "file" {
 			return "", wechatapp.ErrAttachmentDenied
 		}
@@ -106,7 +106,7 @@ func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.In
 }
 
 func (t *stationAttachmentTools) canSubmitMedia(ctx context.Context, in companion.Input, kind, asset string) bool {
-	if !strings.HasPrefix(asset, stationPDFPrefix) {
+	if !stationDocumentReplyID(asset) {
 		return true
 	}
 	r, err := t.readDocumentReply(asset)

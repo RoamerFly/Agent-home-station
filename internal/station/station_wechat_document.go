@@ -7,6 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,13 +21,18 @@ import (
 	"wechat-bot/internal/mcptools"
 )
 
-const stationDocumentLimit = 128 << 20
+const (
+	stationDocumentLimit = 128 << 20
+	stationOCRImageLimit = 32 << 20
+)
 
 type stationDocumentTools struct {
-	available       func(context.Context, string) bool
-	inspect         func(context.Context, stationDocumentInput) (string, error)
-	exportAvailable func(context.Context) bool
-	exportPDF       func(context.Context, stationDocumentInput, string, func(context.Context, *os.File, stationPDFProduct) error) (stationPDFProduct, error)
+	available        func(context.Context, string) bool
+	inspect          func(context.Context, stationDocumentInput) (string, error)
+	exportAvailable  func(context.Context) bool
+	exportPDF        func(context.Context, stationDocumentInput, string, func(context.Context, *os.File, stationDocumentProduct) error) (stationDocumentProduct, error)
+	imageAvailable   func(context.Context) bool
+	reconstructImage func(context.Context, stationDocumentInput, func(context.Context, *os.File, stationDocumentProduct, stationImageLayout) error) (stationImageLayout, error)
 }
 
 type stationDocumentInput struct {
@@ -48,15 +57,15 @@ func stationDocumentExtension(name string) string {
 	}
 }
 
-func (t *stationAttachmentTools) documentRefs() []*companion.SourceRef {
+func (t *stationAttachmentTools) documentRefs(messageType int) []*companion.SourceRef {
 	var refs []*companion.SourceRef
 	for _, ref := range []*companion.SourceRef{t.trace.Source, t.trace.QuotedSource} {
-		if ref != nil && ref.MessageType == 49 {
+		if ref != nil && ref.MessageType == messageType {
 			refs = append(refs, ref)
 		}
 	}
 	for _, event := range t.trace.UnreadMessages {
-		if ref := event.Source; ref != nil && ref.MessageType == 49 && ref.MessageID == event.MessageID &&
+		if ref := event.Source; ref != nil && ref.MessageType == messageType && ref.MessageID == event.MessageID &&
 			ref.Sender == t.trace.Sender && event.Sender == t.trace.Sender {
 			refs = append(refs, ref)
 		}
@@ -64,8 +73,8 @@ func (t *stationAttachmentTools) documentRefs() []*companion.SourceRef {
 	return refs
 }
 
-func (t *stationAttachmentTools) documentAccess(ctx context.Context, message string) (stationAttachmentAccess, error) {
-	for _, ref := range t.documentRefs() {
+func (t *stationAttachmentTools) documentAccess(ctx context.Context, message string, messageType int) (stationAttachmentAccess, error) {
+	for _, ref := range t.documentRefs(messageType) {
 		if ref.MessageID == message {
 			request := t.trace
 			request.TraceID, request.Source = message, ref
@@ -80,7 +89,8 @@ func (t *stationAttachmentTools) documentAccess(ctx context.Context, message str
 	requestAt, requestErr := time.Parse(time.RFC3339Nano, t.trace.MessageTime)
 	fileAt, fileErr := time.Parse(time.RFC3339Nano, m.CreatedAt)
 	if err != nil || !visible || requestErr != nil || fileErr != nil || fileAt.After(requestAt) ||
-		m.Direction != "incoming" || m.SenderID != t.trace.Sender || stationDocumentExtension(m.FileAttachmentName()) == "" {
+		m.Direction != "incoming" || m.SenderID != t.trace.Sender || m.Type != messageType ||
+		messageType == 49 && stationDocumentExtension(m.FileAttachmentName()) == "" {
 		return stationAttachmentAccess{}, wechatapp.ErrAttachmentDenied
 	}
 	ref := &companion.SourceRef{Account: m.AccountID, Thread: m.ThreadID, MessageID: m.ID, Sender: m.SenderID,
@@ -106,7 +116,7 @@ func (t *stationAttachmentTools) inspectDocument(ctx context.Context, raw json.R
 		args.Hash != "" && !artifactID("sha-"+args.Hash, "sha-") {
 		return "", mcptools.ArgumentError("$", "需要原消息编号，页码从 1 开始，正文偏移非负，每批可读取 1–100000 个字符")
 	}
-	in, err := t.openDocumentInput(ctx, args.Message, args.Hash, func(ext string) error {
+	in, err := t.openDocumentInput(ctx, args.Message, args.Hash, 49, func(ext string) error {
 		if ext == ".docx" && args.Page != nil {
 			return mcptools.ArgumentError("$.page", "DOCX 请按 text_offset 续读正文")
 		}
@@ -132,13 +142,16 @@ func (t *stationAttachmentTools) inspectDocument(ctx context.Context, raw json.R
 	return t.documents.inspect(ctx, in)
 }
 
-func (t *stationAttachmentTools) openDocumentInput(ctx context.Context, message, expectedHash string, format func(string) error) (stationDocumentInput, error) {
+func (t *stationAttachmentTools) openDocumentInput(ctx context.Context, message, expectedHash string, messageType int, format func(string) error) (stationDocumentInput, error) {
 	var in stationDocumentInput
-	access, err := t.documentAccess(ctx, message)
+	access, err := t.documentAccess(ctx, message, messageType)
 	if err != nil {
 		return in, err
 	}
 	access.maxBytes = stationDocumentLimit
+	if messageType == 3 {
+		access.maxBytes = stationOCRImageLimit
+	}
 	epoch, err := t.store.RecallEpoch(ctx)
 	if err != nil {
 		return in, wechatapp.ErrAttachmentDenied
@@ -156,12 +169,19 @@ func (t *stationAttachmentTools) openDocumentInput(ctx context.Context, message,
 	} else if !access.history || access.ref.EventID != "" || !t.store.LegacyHistoryAllowed(source.Account, source.Thread) {
 		return in, wechatapp.ErrAttachmentDenied
 	}
-	ext := stationDocumentExtension(source.Filename)
-	if source.Kind != "file" || ext == "" {
-		return in, mcptools.ArgumentError("$.message_id", "此工具读取已关联的 Word（.docx）或 PDF 附件")
-	}
-	if err := format(ext); err != nil {
-		return in, err
+	ext := ""
+	if messageType == 3 {
+		if source.Kind != "image" {
+			return in, wechatapp.ErrAttachmentDenied
+		}
+	} else {
+		ext = stationDocumentExtension(source.Filename)
+		if source.Kind != "file" || ext == "" {
+			return in, mcptools.ArgumentError("$.message_id", "此工具读取已关联的 Word（.docx）或 PDF 附件")
+		}
+		if err := format(ext); err != nil {
+			return in, err
+		}
 	}
 	check := func(ctx context.Context) error { return access.confirmObservationSource(ctx, source, epoch) }
 	if err := check(ctx); err != nil {
@@ -179,9 +199,14 @@ func (t *stationAttachmentTools) openDocumentInput(ctx context.Context, message,
 	}
 	if expectedHash != "" && record.SHA256 != expectedHash {
 		err = errors.New("文档原件摘要已变化，请重新核对原消息")
-	} else if record.Bytes > stationDocumentLimit {
-		err = errors.New("文档原件超过文档工坊的 128 MiB 输入上限")
-	} else if err = verifyStationDocument(file, record.Bytes, ext); err == nil {
+	} else if record.Bytes > access.maxBytes {
+		err = fmt.Errorf("原件超过文档工坊的 %d MiB 输入上限", access.maxBytes>>20)
+	} else if messageType == 3 {
+		ext, record.MIME, err = stationDocumentImageFormat(file, record.Bytes)
+	} else {
+		err = verifyStationDocument(file, record.Bytes, ext)
+	}
+	if err == nil {
 		err = check(ctx)
 	}
 	if err != nil {
@@ -191,6 +216,22 @@ func (t *stationAttachmentTools) openDocumentInput(ctx context.Context, message,
 	historyGrant := access.history && (t.trace.QuotedSource == nil || t.trace.QuotedSource.MessageID != message)
 	return stationDocumentInput{record: record, file: file, extension: ext, epoch: epoch, requester: t.trace.Sender, trace: t.trace.TraceID,
 		versions: versions, sourceRef: *access.ref, history: historyGrant, check: check}, nil
+}
+
+func stationDocumentImageFormat(file *os.File, size int64) (string, string, error) {
+	config, format, err := image.DecodeConfig(io.NewSectionReader(file, 0, size))
+	if err != nil || config.Width < 1 || config.Height < 1 || config.Width > 8000 || config.Height > 8000 ||
+		int64(config.Width)*int64(config.Height) > 32_000_000 {
+		return "", "", errors.New("需提供有效且不超过 3200 万像素的 PNG 或 JPEG 图片")
+	}
+	switch format {
+	case "png":
+		return ".png", "image/png", nil
+	case "jpeg":
+		return ".jpg", "image/jpeg", nil
+	default:
+		return "", "", errors.New("文档复刻仅支持原始 PNG 或 JPEG")
+	}
 }
 
 func verifyStationDocument(file *os.File, size int64, ext string) error {

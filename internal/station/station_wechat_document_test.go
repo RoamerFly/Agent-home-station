@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,7 +46,7 @@ func TestStationWechatDocumentScope(t *testing.T) {
 			data, err := json.Marshal(view)
 			return string(data), err
 		},
-	}, false)
+	}, false, nil)
 }
 
 func TestLiveStationWechatDocumentLPAC(t *testing.T) {
@@ -53,7 +54,8 @@ func TestLiveStationWechatDocumentLPAC(t *testing.T) {
 		t.Skip("set AHS_LOCAL_PROJECT_DOCUMENT_LPAC_TEST=1 for Windows document acceptance")
 	}
 	f := newLocalHomeFixture(t, filepath.Join(t.TempDir(), "host"), filepath.Join(t.TempDir(), "workspace"))
-	f.handler.chat.projectTools.options = localProjectToolWindowsOptions(t)
+	options := localProjectToolWindowsOptions(t)
+	f.handler.chat.projectTools.options = options
 	f.login()
 	if code, out := f.request("POST", "/api/local/home", map[string]string{"action": "initialize"}, true); code != http.StatusOK {
 		t.Fatalf("initialize home: %d %#v", code, out)
@@ -66,14 +68,17 @@ func TestLiveStationWechatDocumentLPAC(t *testing.T) {
 		t.Fatalf("enable document tool: %d %#v", code, out)
 	}
 	home := f.handler.chat.projectTools.home
-	testStationWechatDocument(t, stationDocumentTools{available: home.stationDocumentAvailable, inspect: home.inspectStationDocument}, true)
+	testStationWechatDocument(t, stationDocumentTools{available: home.stationDocumentAvailable, inspect: home.inspectStationDocument,
+		imageAvailable: home.stationDocumentImageAvailable, reconstructImage: home.reconstructStationDocumentImage,
+		exportAvailable: home.stationDocumentExportAvailable, exportPDF: home.exportStationDocumentPDF}, true,
+		func(data []byte) string { return localPDFExtractText(t, options, data) })
 	entries, err := os.ReadDir(filepath.Join(home.dataDir, "project-tool-tasks"))
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("isolated input remained after parsing: %v, %v", entries, err)
 	}
 }
 
-func testStationWechatDocument(t *testing.T, documents stationDocumentTools, withPDF bool) {
+func testStationWechatDocument(t *testing.T, documents stationDocumentTools, withPDF bool, imagePDFText func([]byte) string) {
 	t.Helper()
 	const account, thread, requester = "one", "room@chatroom", "owner"
 	root := t.TempDir()
@@ -98,6 +103,21 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 	pdf := syntheticStationPDF()
 	fixtures := map[string][]byte{"doc": docx, "unseen": docx, "pdf": pdf, "own-pdf": pdf}
 	mimes := map[string]string{"doc": localDOCXMIME, "unseen": localDOCXMIME, "pdf": "application/pdf", "own-pdf": "application/pdf"}
+	if imagePDFText != nil {
+		image, err := os.ReadFile(filepath.Join("testdata", "synthetic-wechat-document-grid.png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages["grid"] = linuxnative.Message{ID: "grid", AccountID: account, ThreadID: thread, SenderID: requester, ServerID: "101",
+			Direction: "incoming", Type: 3, CreatedAt: now.Format(time.RFC3339), Body: "synthetic document image"}
+		fixtures["grid"], mimes["grid"] = image, "image/png"
+	}
+	kind := func(id string) string {
+		if id == "grid" {
+			return "image"
+		}
+		return "file"
+	}
 	var transfers atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		write := func(value any) { _ = json.NewEncoder(w).Encode(value) }
@@ -117,8 +137,12 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 					write(message)
 					return
 				case "GET media":
+					state := "available"
+					if id == "grid" {
+						state = "pending"
+					}
 					write(map[string]any{"items": []map[string]any{{"accountId": account, "messageId": id,
-						"kind": "file", "variant": "original", "state": "available"}}})
+						"kind": kind(id), "variant": "original", "state": state}}})
 					return
 				case "POST media-transfers":
 					var args map[string]string
@@ -139,7 +163,7 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 				if endpoint == "content" {
 					_, _ = w.Write(data)
 				} else {
-					write(map[string]any{"id": "asset-" + id, "accountId": account, "messageId": id, "kind": "file",
+					write(map[string]any{"id": "asset-" + id, "accountId": account, "messageId": id, "kind": kind(id),
 						"state": "available", "variant": "original", "actualVariant": "original", "byteLength": len(data),
 						"contentType": mimes[id], "sha256": fmt.Sprintf("%x", sha256.Sum256(data))})
 				}
@@ -164,14 +188,14 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 	defer memory.Close()
 	blocked := false
 	tools := &stationAttachmentTools{native: native, store: memory, dir: root, documents: documents, blocked: func() bool { return blocked },
-		grants: map[string]time.Time{thread: now.Add(-time.Minute)}}
+		grants: map[string]time.Time{thread: now.Add(-time.Minute)}, replies: map[string]time.Time{thread: now.Add(-time.Minute)}}
 	refs := map[string]*companion.SourceRef{}
 	for id, message := range messages {
 		if id == "unseen" || id == "foreign" || id == "future" {
 			continue
 		}
-		ref := &companion.SourceRef{Account: account, Thread: thread, Sender: message.SenderID, MessageID: id, ServerID: id,
-			MessageType: 49, OccurredAt: message.CreatedAt, BodyHash: fmt.Sprintf("%x", sha256.Sum256([]byte(message.Body))), Revision: 1,
+		ref := &companion.SourceRef{Account: account, Thread: thread, Sender: message.SenderID, MessageID: id, ServerID: message.ServerID,
+			MessageType: message.Type, OccurredAt: message.CreatedAt, BodyHash: fmt.Sprintf("%x", sha256.Sum256([]byte(message.Body))), Revision: 1,
 			InstanceID: memory.SourceInstanceID()}
 		cfg := companion.Defaults()
 		cfg.Permissions.Remember = true
@@ -212,6 +236,49 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		if out, err := call(`{"message_id":"pdf","page":1}`); err != nil || !strings.Contains(out, `"text":"Synthetic PDF text"`) {
 			t.Fatalf("quoted PDF parsing: %s, %v", out, err)
 		}
+	}
+	if imagePDFText != nil {
+		request := current
+		request.TraceID, request.Mode, request.Directed, request.QuotedSource = "convert-grid", "direct", true, refs["grid"]
+		tools.SetTrace(request)
+		out, err := tools.Call(t.Context(), "wechat_document_reconstruct_image", json.RawMessage(`{"message_id":"grid"}`))
+		var prepared struct {
+			Status string
+			Media  []companion.GeneratedMedia
+			Layout struct{ Headings, Paragraphs, Tables int }
+			Word   struct {
+				ID string `json:"asset_id"`
+			} `json:"editable_document"`
+		}
+		if err != nil || json.Unmarshal([]byte(out), &prepared) != nil || prepared.Status != "prepared" ||
+			prepared.Layout.Tables != 1 || prepared.Layout.Paragraphs < 1 || prepared.Layout.Headings != 1 ||
+			len(prepared.Media) != 1 || prepared.Media[0].ParentAssetID != prepared.Word.ID {
+			t.Fatalf("isolated reconstruction did not yield an editable Word and its delivery PDF: %s, %v", out, err)
+		}
+		readProduct := func(id string) []byte {
+			_, file, err := tools.openDocumentReply(t.Context(), request, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			data, err := io.ReadAll(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return data
+		}
+		wordXML := localDOCXDocumentXML(t, readProduct(prepared.Word.ID))
+		if strings.Count(wordXML, "<w:tc>") != 4 || !strings.Contains(wordXML, "<w:tbl>") ||
+			!strings.Contains(wordXML, "Heading1") || strings.Contains(wordXML, "<w:drawing>") {
+			t.Fatalf("reconstructed Word did not contain editable heading and table: %s", wordXML)
+		}
+		pdfText := imagePDFText(readProduct(prepared.Media[0].AssetID))
+		for _, expected := range []string{"文件交接记录", "本次测试用于核对文档复刻结果", "项目", "结果", "文档", "通过"} {
+			if !strings.Contains(wordXML, expected) || !strings.Contains(pdfText, expected) {
+				t.Fatalf("missing %q from Word or PDF text: Word=%s PDF=%s", expected, wordXML, pdfText)
+			}
+		}
+		tools.SetTrace(current)
 	}
 	// The user sends the instruction in another turn with no quote. The
 	// history lookup can now locate the same sender's file by message ID.

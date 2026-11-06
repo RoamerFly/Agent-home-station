@@ -1,0 +1,235 @@
+package station
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/workspacefs"
+)
+
+// stationDocumentImageAvailable deliberately checks both the document worker
+// and its reviewed runtime. Image reconstruction depends on the host-owned
+// initial OCR process, so an ordinary DOCX-only installation is not enough.
+func (h *localHomeService) stationDocumentImageAvailable(ctx context.Context) bool {
+	return runtime.GOOS == "windows" && h.projectTools != nil && h.projectTools.runtimeReady() &&
+		stationImageOCRRuntimeReady(h.projectTools.options.DocumentRuntimeRoot) &&
+		h.stationDocumentToolAvailable(ctx, projectOperation(localDocumentInspectTool), false) &&
+		h.stationDocumentToolAvailable(ctx, projectOperation(localDocumentToolName), false)
+}
+
+func stationImageOCRRuntimeReady(path string) bool {
+	if path == "" {
+		return false
+	}
+	root, err := workspacefs.OpenPath(path)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	manifest, err := workspacefs.OpenRegular(root, "runtime-manifest.json")
+	if err != nil {
+		return false
+	}
+	raw, err := io.ReadAll(io.LimitReader(manifest, 1<<20))
+	_ = manifest.Close()
+	if err != nil || len(raw) > 1<<20 {
+		return false
+	}
+	var value struct {
+		Components map[string]any `json:"components"`
+	}
+	if json.Unmarshal(raw, &value) != nil || value.Components["tesseract_chi_sim"] != true {
+		return false
+	}
+	for _, name := range []string{"tesseract/tesseract.exe", "tesseract/tessdata/chi_sim.traineddata"} {
+		file, fileErr := workspacefs.OpenRegular(root, name)
+		if fileErr != nil {
+			return false
+		}
+		info, statErr := file.Stat()
+		_ = file.Close()
+		if statErr != nil || !info.Mode().IsRegular() || info.Size() < 1 {
+			return false
+		}
+	}
+	return true
+}
+
+// reconstructStationDocumentImage turns one already-authorized image into a
+// native DOCX. There is no model decision in this path: the workshop receives
+// a hash-bound OCR observation, Go converts its measured layout into Word
+// blocks, and the result is accepted only after its actual file is verified.
+func (h *localHomeService) reconstructStationDocumentImage(ctx context.Context, in stationDocumentInput,
+	persist func(context.Context, *os.File, stationDocumentProduct, stationImageLayout) error) (stationImageLayout, error) {
+	var empty stationImageLayout
+	if in.file == nil || in.check == nil || persist == nil || in.handoffKey == "" ||
+		(in.extension != ".png" && in.extension != ".jpg") ||
+		(in.record.MIME != "image/png" && in.record.MIME != "image/jpeg") {
+		return empty, errors.New("图片文档复刻请求的原件或格式无效")
+	}
+	if err := in.check(ctx); err != nil {
+		return empty, err
+	}
+	// OCR may use a task-private, rule-cleaned derivative so that a ruled
+	// table does not hide its cell text from Tesseract. The source identity and
+	// later DOCX reconstruction remain bound to the original attachment.
+	ocrInput, grid, cleanupOCR, err := stationPrepareImageOCRInput(ctx, in, h.dataDir)
+	if err != nil {
+		return empty, err
+	}
+	defer cleanupOCR()
+	inspect := &stationDocumentImagePolicy{inspect: true}
+	inspectArgs := map[string]any{"artifact_id": in.record.ID, "include_layout": true}
+	inspectKey := []any{"image-ocr-layout", in.record.ID, in.record.SHA256, in.trace, in.epoch, in.requester, in.handoffKey}
+	evidence, err := h.runStationDocument(ctx, ocrInput, projectOperation(localDocumentInspectTool), inspectArgs, inspectKey, nil, inspect)
+	if err != nil {
+		return empty, err
+	}
+	// The deterministic layout parser receives the initial OCR evidence and a
+	// host-produced table grid. Neither contains a path supplied by a message.
+	layout, err := stationImageWordLayout(evidence, grid)
+	if err != nil {
+		return empty, err
+	}
+	if layout.NeedsClarification {
+		// A low-confidence original is useful diagnostic state but must never be
+		// converted into a plausible-looking, wrong editable document.
+		return layout, nil
+	}
+	if len(layout.Layout) == 0 {
+		return empty, errors.New("图片识别未产生可核对的 Word 版式")
+	}
+	if _, err := in.file.Seek(0, io.SeekStart); err != nil {
+		return empty, errors.New("图片原件无法重新读取")
+	}
+	reconstruct := &stationDocumentImagePolicy{reconstruct: true, filename: stationDOCXRuntimeName, layout: layout, persist: persist}
+	// document.reconstruct accepts only a measured layout and a fixed output
+	// filename. Its input remains host metadata; passing artifact_id here would
+	// be rejected by the plugin's strict argument schema.
+	reconstructArgs := map[string]any{"layout": json.RawMessage(layout.Layout), "filename": stationDOCXRuntimeName}
+	reconstructKey := []any{"image-docx-reconstruct", in.record.ID, in.record.SHA256, in.trace, in.epoch, in.requester, in.handoffKey, json.RawMessage(layout.Layout)}
+	private, err := h.runStationDocument(ctx, in, projectOperation(localDocumentToolName), reconstructArgs, reconstructKey, nil, reconstruct)
+	if err != nil {
+		return empty, err
+	}
+	var product stationDocumentProduct
+	if json.Unmarshal(private, &product) != nil || !validStationDocumentProduct(product, ".docx") {
+		return empty, errors.New("图片复刻的 Word 成品不完整或已损坏")
+	}
+	return layout, nil
+}
+
+type stationDocumentImagePolicy struct {
+	inspect, reconstruct bool
+	filename             string
+	layout               stationImageLayout
+	persist              func(context.Context, *os.File, stationDocumentProduct, stationImageLayout) error
+	ocrObservation       *pluginruntime.DocumentOCRObservation
+}
+
+func stationImageInspectionEvidence(in stationDocumentInput, evidence json.RawMessage) error {
+	var result struct {
+		OK        bool   `json:"ok"`
+		Kind      string `json:"kind"`
+		PageCount int    `json:"page_count"`
+		Pages     []int  `json:"pages"`
+		OCR       struct {
+			Available bool   `json:"available"`
+			Attempted bool   `json:"attempted"`
+			Engine    string `json:"engine"`
+		} `json:"ocr"`
+	}
+	if json.Unmarshal(evidence, &result) != nil || !result.OK || result.Kind != "image" || result.PageCount != 1 ||
+		len(result.Pages) != 1 || result.Pages[0] != 1 || !result.OCR.Available || !result.OCR.Attempted ||
+		result.OCR.Engine != "host_initial_lpac_tesseract" || (in.extension != ".png" && in.extension != ".jpg") {
+		return errors.New("图片 OCR 结果与受控原件不匹配")
+	}
+	return nil
+}
+
+func (p stationDocumentPolicy) validateImageDOCX(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, wire stationDocumentResultEnvelope) (pluginruntime.VerifiedResult, error) {
+	var verified pluginruntime.VerifiedResult
+	if p.image == nil || !p.image.reconstruct || p.image.persist == nil || p.image.filename != stationDOCXRuntimeName ||
+		len(wire.Outputs) != 1 {
+		return verified, errors.New("图片 Word 复刻未返回可核对的成品")
+	}
+	var evidence struct {
+		SHA256 string `json:"sha256"`
+	}
+	if json.Unmarshal(wire.Evidence, &evidence) != nil || !artifactID("sha-"+evidence.SHA256, "sha-") {
+		return verified, errors.New("图片 Word 复刻回执无效")
+	}
+	entry := wire.Outputs[0]
+	if entry.Role != "editable_source" || entry.MIMEType != localDOCXMIME || entry.DisplayName != p.image.filename {
+		return verified, errors.New("图片 Word 复刻输出格式不符合任务范围")
+	}
+	product, err := p.persistVerifiedImageDOCX(ctx, job, cap, entry.Path, evidence.SHA256)
+	if err != nil {
+		return verified, err
+	}
+	if err := p.Check(ctx, job, cap); err != nil {
+		return verified, err
+	}
+	verified.Result, _ = json.Marshal(map[string]any{"status": "prepared", "format": "docx"})
+	verified.Private, _ = json.Marshal(product)
+	return verified, nil
+}
+
+func (p stationDocumentPolicy) persistVerifiedImageDOCX(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, returned, evidenceSHA string) (stationDocumentProduct, error) {
+	var empty stationDocumentProduct
+	if p.image == nil || p.image.persist == nil {
+		return empty, errors.New("图片 Word 成品登记不可用")
+	}
+	rel, err := filepath.Rel(windowsProjectToolPath(p.output), windowsProjectToolPath(returned))
+	if err != nil || !filepath.IsAbs(returned) || rel != p.image.filename || !filepath.IsLocal(rel) ||
+		!validStationDocumentName(rel, ".docx") || rel != filepath.Base(rel) {
+		return empty, errors.New("图片 Word 输出路径不符合任务范围")
+	}
+	root, err := workspacefs.OpenPath(p.output)
+	if err != nil {
+		return empty, errors.New("图片 Word 输出目录不可用")
+	}
+	defer root.Close()
+	file, err := workspacefs.OpenRegular(root, rel)
+	if err != nil {
+		return empty, errors.New("图片 Word 输出文件不可用")
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > stationDocumentLimit ||
+		validateLocalDOCX(file, info.Size()) != nil {
+		return empty, errors.New("图片 Word 输出文件结构无效")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return empty, errors.New("图片 Word 输出文件无法校验")
+	}
+	hash := sha256.New()
+	size, err := io.Copy(hash, file)
+	actualSHA := hex.EncodeToString(hash.Sum(nil))
+	if err != nil || size != info.Size() || actualSHA != evidenceSHA {
+		return empty, errors.New("图片 Word 输出文件摘要不符合验证回执")
+	}
+	product := stationDocumentProduct{Filename: p.image.filename, SHA256: actualSHA, Bytes: size}
+	if !validStationDocumentProduct(product, ".docx") {
+		return empty, errors.New("图片 Word 成品信息无效")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return empty, errors.New("图片 Word 输出文件无法交付")
+	}
+	if err := p.Check(ctx, job, cap); err != nil {
+		return empty, err
+	}
+	if err := p.image.persist(ctx, file, product, p.image.layout); err != nil {
+		return empty, errors.New("图片 Word 成品登记失败")
+	}
+	return product, nil
+}

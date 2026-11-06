@@ -388,13 +388,16 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	if (stationImageRef(t.trace.Source) || stationImageRef(t.trace.QuotedSource)) && t.imageObservationAvailable(ctx, t.trace.Account) {
 		tools = append(tools, wechatapp.StationImageObservationTool())
 	}
-	if len(t.documentRefs()) != 0 || t.historyAllowed(ctx) {
+	if len(t.documentRefs(49)) != 0 || t.historyAllowed(ctx) {
 		if t.documents.available != nil && t.documents.inspect != nil && t.documents.available(ctx, "") {
 			tools = append(tools, wechatapp.StationDocumentInspectionTool())
 		}
 		if t.replyAllowed(t.trace) && t.canExportDocument(ctx) {
 			tools = append(tools, wechatapp.StationDocumentPDFReplyTool())
 		}
+	}
+	if (len(t.documentRefs(3)) != 0 || t.historyAllowed(ctx)) && t.replyAllowed(t.trace) && t.canReconstructImage(ctx) {
+		tools = append(tools, wechatapp.StationImageDocumentTool())
 	}
 	if stationAttachmentRef(t.trace.Source) || stationAttachmentRef(t.trace.QuotedSource) {
 		tools = append(tools, wechatapp.StationAttachmentTool())
@@ -442,6 +445,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == "wechat_document_export_pdf" {
 		return t.prepareDocumentReply(ctx, raw)
+	}
+	if name == "wechat_document_reconstruct_image" {
+		return t.prepareImageDocument(ctx, raw)
 	}
 	if name == "wechat_read" {
 		return t.readHistory(ctx, raw)

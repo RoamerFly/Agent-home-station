@@ -23,11 +23,13 @@ import (
 )
 
 const (
-	stationPDFPrefix      = "docpdf-"
-	stationPDFRuntimeName = "converted.pdf"
+	stationPDFPrefix       = "docpdf-"
+	stationDOCXPrefix      = "docword-"
+	stationPDFRuntimeName  = "converted.pdf"
+	stationDOCXRuntimeName = "editable.docx"
 )
 
-type stationPDFProduct struct {
+type stationDocumentProduct struct {
 	Filename, SHA256 string
 	Bytes            int64
 	Pages            int
@@ -39,22 +41,49 @@ type stationDocumentReply struct {
 	OriginalSHA, Epoch, Trace, User string
 	MediaGrant, HistoryGrant        time.Time
 	Name                            string
-	Product                         stationPDFProduct
+	ParentAsset                     string              `json:",omitempty"`
+	Layout                          *stationImageLayout `json:",omitempty"`
+	Product                         stationDocumentProduct
 }
 
 func (r stationDocumentReply) id() string {
-	return stationPDFPrefix + localCheckpointKey(r.Source.id(), r.Reference.EventID, r.Reference.Revision,
-		r.OriginalSHA, r.Epoch, r.Trace, r.User, r.MediaGrant, r.HistoryGrant, r.Name)
+	prefix := stationPDFPrefix
+	if r.extension() == ".docx" {
+		prefix = stationDOCXPrefix
+	}
+	key := []any{r.Source.id(), r.Reference.EventID, r.Reference.Revision,
+		r.OriginalSHA, r.Epoch, r.Trace, r.User, r.MediaGrant, r.HistoryGrant, r.Name}
+	if r.ParentAsset != "" {
+		key = append(key, r.ParentAsset)
+	}
+	return prefix + localCheckpointKey(key...)
+}
+
+func (r stationDocumentReply) extension() string { return strings.ToLower(filepath.Ext(r.Name)) }
+
+func stationDocumentReplyID(id string) bool {
+	return strings.HasPrefix(id, stationPDFPrefix) || strings.HasPrefix(id, stationDOCXPrefix)
 }
 
 func (r stationDocumentReply) media() companion.GeneratedMedia {
 	id := r.id()
-	return companion.GeneratedMedia{ID: "reply-" + id, AssetID: id, ParentAssetID: r.Source.id(),
-		Kind: "file", Title: r.Name, CachedMIME: "application/pdf"}
+	parent, mimeType := r.Source.id(), "application/pdf"
+	if r.ParentAsset != "" {
+		parent = r.ParentAsset
+	}
+	if r.extension() == ".docx" {
+		mimeType = localDOCXMIME
+	}
+	return companion.GeneratedMedia{ID: "reply-" + id, AssetID: id, ParentAssetID: parent,
+		Kind: "file", Title: r.Name, CachedMIME: mimeType}
 }
 
 func validStationPDFName(name string) bool {
-	return mediaspec.SafeFilename(name) && filepath.IsLocal(name) && strings.EqualFold(filepath.Ext(name), ".pdf") &&
+	return validStationDocumentName(name, ".pdf")
+}
+
+func validStationDocumentName(name, ext string) bool {
+	return mediaspec.SafeFilename(name) && filepath.IsLocal(name) && strings.EqualFold(filepath.Ext(name), ext) &&
 		utf8.ValidString(name) && utf8.RuneCountInString(name) <= 120 && len(name) <= 256 && !strings.HasPrefix(name, ".") &&
 		strings.TrimSpace(name) == name && !strings.ContainsAny(name, `:*?<>"|`) && strings.IndexFunc(name, unicode.IsControl) == -1
 }
@@ -79,7 +108,7 @@ func (t *stationAttachmentTools) prepareDocumentReply(ctx context.Context, raw j
 	if !t.canExportDocument(ctx) {
 		return "", errors.New("文档工坊的本机 PDF 导出未启用")
 	}
-	in, err := t.openDocumentInput(ctx, args.Message, args.Hash, func(ext string) error {
+	in, err := t.openDocumentInput(ctx, args.Message, args.Hash, 49, func(ext string) error {
 		if ext != ".docx" {
 			return mcptools.ArgumentError("$.message_id", "请指定要转换为 PDF 的 Word（.docx）原件")
 		}
@@ -95,13 +124,21 @@ func (t *stationAttachmentTools) prepareDocumentReply(ctx context.Context, raw j
 			args.Name = "document.pdf"
 		}
 	}
+	reply := t.documentReplyForInput(&in, args.Name)
+	record, err := t.preparePDFHandoff(ctx, reply, in)
+	if err != nil {
+		return "", err
+	}
+	return localProcessJSON(map[string]any{"status": "prepared", "media": []companion.GeneratedMedia{record.media()},
+		"message_id": record.Source.Message, "source_sha256": record.OriginalSHA, "sha256": record.Product.SHA256, "page_count": record.Product.Pages})
+}
+
+func (t *stationAttachmentTools) documentReplyForInput(in *stationDocumentInput, name string) stationDocumentReply {
 	reply := stationDocumentReply{Source: in.record.Source, Reference: in.sourceRef, OriginalSHA: in.record.SHA256,
-		Epoch: in.epoch, Trace: t.trace.TraceID, User: t.trace.Sender, MediaGrant: t.replies[t.trace.Thread], Name: args.Name}
+		Epoch: in.epoch, Trace: t.trace.TraceID, User: t.trace.Sender, MediaGrant: t.replies[t.trace.Thread], Name: name}
 	if in.history {
 		reply.HistoryGrant = t.reads[t.trace.Thread]
 	}
-	id := reply.id()
-	in.handoffKey = id
 	sourceCheck := in.check
 	in.check = func(ctx context.Context) error {
 		if !t.replyAllowed(t.trace) {
@@ -109,28 +146,33 @@ func (t *stationAttachmentTools) prepareDocumentReply(ctx context.Context, raw j
 		}
 		return sourceCheck(ctx)
 	}
+	return reply
+}
+
+func (t *stationAttachmentTools) preparePDFHandoff(ctx context.Context, reply stationDocumentReply, in stationDocumentInput) (stationDocumentReply, error) {
+	id := reply.id()
+	in.handoffKey = id
 	record, file, err := t.openDocumentReply(ctx, t.trace, id)
 	if errors.Is(err, os.ErrNotExist) {
 		// The renderer sees a fixed task-local filename. The delivery name is
 		// independent and never used to resolve a path inside the runtime.
-		_, err = t.documents.exportPDF(ctx, in, stationPDFRuntimeName, func(ctx context.Context, pdf *os.File, product stationPDFProduct) error {
+		_, err = t.documents.exportPDF(ctx, in, stationPDFRuntimeName, func(ctx context.Context, pdf *os.File, product stationDocumentProduct) error {
 			reply.Product = product
 			return t.saveDocumentReply(ctx, reply, pdf, in.check)
 		})
 		if err != nil {
-			return "", err
+			return stationDocumentReply{}, err
 		}
 		record, file, err = t.openDocumentReply(ctx, t.trace, id)
 	}
 	if err != nil {
-		return "", err
+		return stationDocumentReply{}, err
 	}
 	file.Close()
 	if err := in.check(ctx); err != nil {
-		return "", err
+		return stationDocumentReply{}, err
 	}
-	return localProcessJSON(map[string]any{"status": "prepared", "media": []companion.GeneratedMedia{record.media()},
-		"message_id": record.Source.Message, "source_sha256": record.OriginalSHA, "sha256": record.Product.SHA256, "page_count": record.Product.Pages})
+	return record, nil
 }
 
 func (t *stationAttachmentTools) documentReplyAccess(ctx context.Context, in companion.Input, r stationDocumentReply) (stationAttachmentAccess, error) {
@@ -163,7 +205,7 @@ func (t *stationAttachmentTools) documentReplyAccess(ctx context.Context, in com
 
 func (t *stationAttachmentTools) readDocumentReply(id string) (stationDocumentReply, error) {
 	var r stationDocumentReply
-	if !artifactID(id, stationPDFPrefix) {
+	if !artifactID(id, stationPDFPrefix) && !artifactID(id, stationDOCXPrefix) {
 		return r, wechatapp.ErrAttachmentDenied
 	}
 	root, err := workspacefs.OpenPath(filepath.Join(t.dir, "document-replies", id))
@@ -171,30 +213,37 @@ func (t *stationAttachmentTools) readDocumentReply(id string) (stationDocumentRe
 		if errors.Is(err, os.ErrNotExist) {
 			return r, os.ErrNotExist
 		}
-		return r, errors.New("PDF 回复目录不可用")
+		return r, errors.New("文档回复目录不可用")
 	}
 	defer root.Close()
 	file, err := workspacefs.OpenRegular(root, "record.json")
 	if err != nil {
-		return r, errors.New("PDF 回复记录不可用")
+		return r, errors.New("文档回复记录不可用")
 	}
 	defer file.Close()
 	raw, err := io.ReadAll(io.LimitReader(file, 64<<10))
 	if err != nil || len(raw) >= 64<<10 || json.Unmarshal(raw, &r) != nil || r.id() != id ||
-		!validStationPDFName(r.Name) || !validStationPDFProduct(r.Product) || !artifactID("sha-"+r.OriginalSHA, "sha-") {
-		return stationDocumentReply{}, errors.New("PDF 回复记录无效")
+		!validStationDocumentName(r.Name, r.extension()) || !validStationDocumentProduct(r.Product, r.extension()) ||
+		!artifactID("sha-"+r.OriginalSHA, "sha-") || r.ParentAsset != "" && !artifactID(r.ParentAsset, stationDOCXPrefix) {
+		return stationDocumentReply{}, errors.New("文档回复记录无效")
 	}
 	return r, nil
 }
 
-func validStationPDFProduct(p stationPDFProduct) bool {
-	return p.Filename == stationPDFRuntimeName && p.Pages > 0 && p.Bytes > 0 && p.Bytes <= stationDocumentLimit &&
-		artifactID("sha-"+p.SHA256, "sha-")
+func validStationPDFProduct(p stationDocumentProduct) bool {
+	return validStationDocumentProduct(p, ".pdf")
 }
 
-func (t *stationAttachmentTools) saveDocumentReply(ctx context.Context, r stationDocumentReply, pdf *os.File, check func(context.Context) error) error {
-	if !validStationPDFProduct(r.Product) || verifyStationDocument(pdf, r.Product.Bytes, ".pdf") != nil {
-		return errors.New("PDF 成品校验失败")
+func validStationDocumentProduct(p stationDocumentProduct, ext string) bool {
+	return p.Bytes > 0 && p.Bytes <= stationDocumentLimit && artifactID("sha-"+p.SHA256, "sha-") &&
+		(ext == ".pdf" && p.Filename == stationPDFRuntimeName && p.Pages > 0 ||
+			ext == ".docx" && p.Filename == stationDOCXRuntimeName && p.Pages == 0)
+}
+
+func (t *stationAttachmentTools) saveDocumentReply(ctx context.Context, r stationDocumentReply, product *os.File, check func(context.Context) error) error {
+	ext := r.extension()
+	if !validStationDocumentProduct(r.Product, ext) || verifyStationDocument(product, r.Product.Bytes, ext) != nil {
+		return errors.New("文档成品校验失败")
 	}
 	root, err := workspacefs.EnsurePath(filepath.Join(t.dir, "document-replies"))
 	if err != nil {
@@ -205,7 +254,7 @@ func (t *stationAttachmentTools) saveDocumentReply(ctx context.Context, r statio
 	if err := root.Mkdir(stage, 0700); err != nil {
 		return err
 	}
-	path, record := filepath.Join(stage, "content.pdf"), filepath.Join(stage, "record.json")
+	path, record := filepath.Join(stage, "content"+ext), filepath.Join(stage, "record.json")
 	defer func() { _ = root.Remove(path); _ = root.Remove(record); _ = root.Remove(stage) }()
 	dest, err := root.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -213,12 +262,12 @@ func (t *stationAttachmentTools) saveDocumentReply(ctx context.Context, r statio
 	}
 	hash := sha256.New()
 	w := attachmentGrantWriter{allow: func() bool { return ctx.Err() == nil && t.replyAllowed(t.trace) }, out: io.MultiWriter(dest, hash)}
-	n, err := io.Copy(w, io.NewSectionReader(pdf, 0, r.Product.Bytes+1))
+	n, err := io.Copy(w, io.NewSectionReader(product, 0, r.Product.Bytes+1))
 	if err == nil {
 		err = dest.Sync()
 	}
 	if err = errors.Join(err, dest.Close()); err != nil || n != r.Product.Bytes || hex.EncodeToString(hash.Sum(nil)) != r.Product.SHA256 {
-		return errors.New("PDF 成品长度或摘要不匹配")
+		return errors.New("文档成品长度或摘要不匹配")
 	}
 	if err := writeLegacyStagedFile(root, record, r); err != nil {
 		return err
@@ -245,19 +294,19 @@ func (t *stationAttachmentTools) openDocumentReply(ctx context.Context, in compa
 	}
 	root, err := workspacefs.OpenPath(filepath.Join(t.dir, "document-replies", id))
 	if err != nil {
-		return r, nil, errors.New("PDF 回复目录不可用")
+		return r, nil, errors.New("文档回复目录不可用")
 	}
 	defer root.Close()
-	file, err := workspacefs.OpenRegular(root, "content.pdf")
+	file, err := workspacefs.OpenRegular(root, "content"+r.extension())
 	if err != nil {
-		return r, nil, errors.New("PDF 成品不可用")
+		return r, nil, errors.New("文档成品不可用")
 	}
 	hash := sha256.New()
 	reader := attachmentGrantWriter{allow: func() bool { return ctx.Err() == nil && t.replyAllowed(in) }, out: hash}
 	n, err := io.Copy(reader, io.LimitReader(file, r.Product.Bytes+1))
 	if err != nil || n != r.Product.Bytes || hex.EncodeToString(hash.Sum(nil)) != r.Product.SHA256 {
 		file.Close()
-		return r, nil, errors.New("PDF 成品长度或摘要不匹配")
+		return r, nil, errors.New("文档成品长度或摘要不匹配")
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		file.Close()
@@ -283,7 +332,7 @@ func (t *stationAttachmentTools) stageDocumentReply(ctx context.Context, in comp
 	if err := t.verifyDocumentReplySource(ctx, in, r); err != nil {
 		return "", err
 	}
-	upload, err := t.native.UploadVerified(ctx, r.Name, "application/pdf", file, r.Product.Bytes, r.Product.SHA256)
+	upload, err := t.native.UploadVerified(ctx, r.Name, r.media().CachedMIME, file, r.Product.Bytes, r.Product.SHA256)
 	if err != nil {
 		return "", err
 	}

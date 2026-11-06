@@ -51,12 +51,12 @@ func (h *localHomeService) inspectStationDocument(ctx context.Context, in statio
 		args["pages"] = []int{in.page}
 	}
 	key := []any{in.record.ID, in.record.SHA256, in.trace, in.page, in.offset, in.limit, in.epoch, in.requester}
-	private, err := h.runStationDocument(ctx, in, projectOperation(localDocumentInspectTool), args, key, nil)
+	private, err := h.runStationDocument(ctx, in, projectOperation(localDocumentInspectTool), args, key, nil, nil)
 	return string(private), err
 }
 
 func (h *localHomeService) runStationDocument(ctx context.Context, in stationDocumentInput, operation localProjectOperation,
-	args map[string]any, requestIdentity []any, export *stationDocumentExportPolicy) (json.RawMessage, error) {
+	args map[string]any, requestIdentity []any, export *stationDocumentExportPolicy, image *stationDocumentImagePolicy) (json.RawMessage, error) {
 	capability := operation.capability
 	if !h.stationDocumentToolAvailable(ctx, operation, in.extension == ".pdf" || export != nil) {
 		return nil, errors.New("当前文档操作的本地文档工坊或运行环境未启用")
@@ -87,6 +87,8 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 	purpose := "inspect authorized incoming WeChat document"
 	if export != nil {
 		purpose = "export authorized incoming WeChat document to PDF"
+	} else if image != nil {
+		purpose = "reconstruct authorized incoming WeChat image as editable document"
 	}
 	invocation := pluginhost.Invocation{
 		Account: record.FishID, Requester: record.LocalOwner.ID, Purpose: purpose,
@@ -132,7 +134,28 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 		return nil, errors.New("无法创建文档任务所需的隔离输入")
 	}
 	defer cleanup()
-	policy := stationDocumentPolicy{in: in, input: input, output: output, capability: capability, check: check, export: export}
+	policy := stationDocumentPolicy{in: in, input: input, output: output, capability: capability, check: check, export: export, image: image}
+	if image != nil && image.inspect {
+		// OCR must be the initial LPAC process. Resolve the same package grant and
+		// task-local mounts as the controller, then pass only the fixed broker
+		// observation to the Python workshop through CallMetadata.
+		executor := pluginruntime.InstalledExecutor(host.store, options)
+		grant := pluginhost.Grant{Account: record.FishID, Plugin: operation.pkg, Version: installed.Package.Version, Permissions: installed.Permissions}
+		spec, resolveErr := executor.Resolve(ctx, installed.Package, grant)
+		if resolveErr != nil {
+			return nil, errors.New("文档 OCR 隔离运行器不可用")
+		}
+		spec.DataDir = output
+		spec.ReadOnlyDirs = append(spec.ReadOnlyDirs, filepath.Dir(input))
+		spec.ReadOnlyFiles = append(spec.ReadOnlyFiles, input)
+		observation, ocrErr := pluginruntime.RunDocumentOCR(ctx, spec, pluginruntime.DocumentOCRRequest{
+			RuntimeRoot: options.DocumentRuntimeRoot, InputPath: input, InputSHA256: in.record.SHA256,
+		})
+		if ocrErr != nil {
+			return nil, ocrErr
+		}
+		policy.image.ocrObservation = &observation
+	}
 	if err := controller.EnsureStarted(ctx, operation.pkg, installed.Revision); err != nil {
 		return nil, errors.New("文档工坊隔离运行器未能启动")
 	}
@@ -179,6 +202,7 @@ type stationDocumentPolicy struct {
 	capability    string
 	check         func(context.Context, pluginhost.Job) error
 	export        *stationDocumentExportPolicy
+	image         *stationDocumentImagePolicy
 }
 
 func (p stationDocumentPolicy) Check(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability) error {
@@ -195,11 +219,22 @@ func (p stationDocumentPolicy) CallMetadata(ctx context.Context, job pluginhost.
 	mimeType := localDOCXMIME
 	if p.in.extension == ".pdf" {
 		mimeType = "application/pdf"
+	} else if p.in.extension == ".png" || p.in.extension == ".jpg" {
+		// The host assigned this MIME only after DecodeConfig verified the
+		// original bytes. Never trust a user-provided extension here.
+		mimeType = p.in.record.MIME
 	}
 	out := windowsProjectToolPath(p.output)
-	raw, err := json.Marshal(map[string]any{"inputs": []map[string]string{{"artifact_id": p.in.record.ID,
+	metadata := map[string]any{"inputs": []map[string]string{{"artifact_id": p.in.record.ID,
 		"path": windowsProjectToolPath(p.input), "sha256": p.in.record.SHA256, "mime_type": mimeType}},
-		"input_root": windowsProjectToolPath(filepath.Dir(p.input)), "output_dir": out, "output_root": out})
+		"input_root": windowsProjectToolPath(filepath.Dir(p.input)), "output_dir": out, "output_root": out}
+	if p.image != nil && p.image.inspect {
+		if p.image.ocrObservation == nil {
+			return nil, errors.New("图片 OCR 结果不可用")
+		}
+		metadata["ocr_observation"] = p.image.ocrObservation
+	}
+	raw, err := json.Marshal(metadata)
 	return map[string]json.RawMessage{"wechat/document": raw}, err
 }
 
@@ -234,6 +269,20 @@ func (p stationDocumentPolicy) Validate(ctx context.Context, job pluginhost.Job,
 	}
 	if p.export != nil {
 		return p.validatePDF(ctx, job, cap, wire)
+	}
+	if p.image != nil {
+		if p.image.reconstruct {
+			return p.validateImageDOCX(ctx, job, cap, wire)
+		}
+		if len(wire.Outputs) != 0 {
+			return result, errors.New("图片识别返回了意外成品")
+		}
+		if err := stationImageInspectionEvidence(p.in, wire.Evidence); err != nil {
+			return result, err
+		}
+		result.Result = json.RawMessage(`{"status":"inspected"}`)
+		result.Private = append(json.RawMessage(nil), wire.Evidence...)
+		return result, nil
 	}
 	if len(wire.Outputs) != 0 {
 		return result, errors.New("文档检查返回了意外成品")

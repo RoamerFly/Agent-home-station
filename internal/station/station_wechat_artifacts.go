@@ -376,7 +376,7 @@ func (t *stationAttachmentTools) workReply(ctx context.Context, raw json.RawMess
 }
 
 func (t *stationAttachmentTools) workAllowed(in companion.Input, kind, id string) bool {
-	if strings.HasPrefix(id, stationPDFPrefix) {
+	if stationDocumentReplyID(id) {
 		r, err := t.readDocumentReply(id)
 		if kind != "file" || err != nil {
 			return false

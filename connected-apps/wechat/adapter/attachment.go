@@ -137,6 +137,10 @@ func StationDocumentPDFReplyTool() mcptools.Tool {
 	return tool("wechat_document_export_pdf", "把获准的 Word（.docx）原件离线导出为 PDF 并准备本会话的文件回复。使用准确的原消息编号，必要时核对原件摘要。转换成功仍未发送。只有用户要求交付时才将返回的 media.id 选入最终回复的 media_ids。", `{"type":"object","properties":{"message_id":{"type":"string","minLength":1,"maxLength":8192},"filename":{"type":"string","minLength":1,"maxLength":120,"description":"可选的 PDF 交付文件名，包含 .pdf 后缀。"},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["message_id"],"additionalProperties":false}`)
 }
 
+func StationImageDocumentTool() mcptools.Tool {
+	return tool("wechat_document_reconstruct_image", "从获准的 PNG/JPEG 原图用本机 OCR 重建可编辑 Word，并按请求准备 PDF、Word 或两者。默认只准备 PDF，保留可编辑原稿。识别不可靠时先核对对应位置。成功后仅选中用户要求交付的 media.id，程序才会发送。适合正文、标题和有边框表格。", `{"type":"object","properties":{"message_id":{"type":"string","minLength":1,"maxLength":8192},"base_name":{"type":"string","minLength":1,"maxLength":110,"description":"可选文件名主体，不含后缀。"},"format":{"type":"string","enum":["pdf","docx","both"],"default":"pdf"},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["message_id"],"additionalProperties":false}`)
+}
+
 func StationAttachmentReplyTool() mcptools.Tool {
 	return tool("wechat_attachment_reply_prepare", "为本会话的当前消息或核验引用准备原附件回复。只准备，尚未上传或发送。用返回的 media.id 放进最终 reply 的 media_ids。默认按原媒体类型发送；用户明确要原文件时用 format=file。", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"format":{"type":"string","enum":["original","file"]}},"required":["message_id"],"additionalProperties":false}`)
 }

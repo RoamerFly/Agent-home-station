@@ -488,22 +488,22 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 		exportAvailable: func(context.Context) bool {
 			return true
 		},
-		exportPDF: func(ctx context.Context, in stationDocumentInput, filename string, persist func(context.Context, *os.File, stationPDFProduct) error) (stationPDFProduct, error) {
+		exportPDF: func(ctx context.Context, in stationDocumentInput, filename string, persist func(context.Context, *os.File, stationDocumentProduct) error) (stationDocumentProduct, error) {
 			if in.extension != ".docx" || in.record.SHA256 != documentSourceHash || filename != "converted.pdf" {
 				t.Fatalf("unexpected worker document export input: %#v filename=%q", in, filename)
 			}
-			product := stationPDFProduct{Filename: filename, SHA256: documentPDFHash, Bytes: int64(len(documentPDF)), Pages: 1}
+			product := stationDocumentProduct{Filename: filename, SHA256: documentPDFHash, Bytes: int64(len(documentPDF)), Pages: 1}
 			path := filepath.Join(t.TempDir(), filename)
 			if err := os.WriteFile(path, documentPDF, 0600); err != nil {
-				return stationPDFProduct{}, err
+				return stationDocumentProduct{}, err
 			}
 			file, err := os.Open(path)
 			if err != nil {
-				return stationPDFProduct{}, err
+				return stationDocumentProduct{}, err
 			}
 			defer file.Close()
 			if err := persist(ctx, file, product); err != nil {
-				return stationPDFProduct{}, err
+				return stationDocumentProduct{}, err
 			}
 			return product, nil
 		},

@@ -24,27 +24,27 @@ func (h *localHomeService) stationDocumentExportAvailable(ctx context.Context) b
 }
 
 func (h *localHomeService) exportStationDocumentPDF(ctx context.Context, in stationDocumentInput, filename string,
-	persist func(context.Context, *os.File, stationPDFProduct) error) (stationPDFProduct, error) {
+	persist func(context.Context, *os.File, stationDocumentProduct) error) (stationDocumentProduct, error) {
 	if in.extension != ".docx" || in.file == nil || in.check == nil || persist == nil || filename != stationPDFRuntimeName || in.handoffKey == "" {
-		return stationPDFProduct{}, errors.New("PDF 导出请求的原件或文件名无效")
+		return stationDocumentProduct{}, errors.New("PDF 导出请求的原件或文件名无效")
 	}
 	args := map[string]any{"artifact_id": in.record.ID, "filename": filename}
 	key := []any{"pdf-export", in.record.ID, in.record.SHA256, in.trace, in.epoch, in.requester, in.handoffKey}
 	private, err := h.runStationDocument(ctx, in, projectOperation(localDocumentExportTool), args, key,
-		&stationDocumentExportPolicy{filename: filename, persist: persist})
+		&stationDocumentExportPolicy{filename: filename, persist: persist}, nil)
 	if err != nil {
-		return stationPDFProduct{}, err
+		return stationDocumentProduct{}, err
 	}
-	var product stationPDFProduct
+	var product stationDocumentProduct
 	if json.Unmarshal(private, &product) != nil || !validStationPDFProduct(product) {
-		return stationPDFProduct{}, errors.New("PDF 导出结果不完整或已损坏")
+		return stationDocumentProduct{}, errors.New("PDF 导出结果不完整或已损坏")
 	}
 	return product, nil
 }
 
 type stationDocumentExportPolicy struct {
 	filename string
-	persist  func(context.Context, *os.File, stationPDFProduct) error
+	persist  func(context.Context, *os.File, stationDocumentProduct) error
 }
 
 func (p stationDocumentPolicy) validatePDF(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, wire stationDocumentResultEnvelope) (pluginruntime.VerifiedResult, error) {
@@ -75,7 +75,7 @@ func (p stationDocumentPolicy) validatePDF(ctx context.Context, job pluginhost.J
 	if entry.Role != "delivery_pdf" || entry.MIMEType != "application/pdf" || entry.DisplayName != p.export.filename {
 		return verified, errors.New("文档工坊输出格式不符合任务范围")
 	}
-	product := stationPDFProduct{Filename: p.export.filename, SHA256: evidence.Export.SHA256, Bytes: evidence.Export.Bytes, Pages: evidence.Verification.PageCount}
+	product := stationDocumentProduct{Filename: p.export.filename, SHA256: evidence.Export.SHA256, Bytes: evidence.Export.Bytes, Pages: evidence.Verification.PageCount}
 	if err := p.persistVerifiedPDF(ctx, job, cap, entry.Path, product); err != nil {
 		return verified, err
 	}
@@ -87,7 +87,7 @@ func (p stationDocumentPolicy) validatePDF(ctx context.Context, job pluginhost.J
 	return verified, nil
 }
 
-func (p stationDocumentPolicy) persistVerifiedPDF(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, returned string, product stationPDFProduct) error {
+func (p stationDocumentPolicy) persistVerifiedPDF(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, returned string, product stationDocumentProduct) error {
 	rel, err := filepath.Rel(windowsProjectToolPath(p.output), windowsProjectToolPath(returned))
 	if err != nil || !filepath.IsAbs(returned) || rel != product.Filename || !filepath.IsLocal(rel) || !validStationPDFName(rel) || rel != filepath.Base(rel) {
 		return errors.New("PDF 输出路径不符合任务范围")

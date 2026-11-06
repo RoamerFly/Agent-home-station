@@ -60,8 +60,8 @@ func TestLiveStationDocumentExportPDFLPAC(t *testing.T) {
 		check: func(context.Context) error { return nil },
 	}
 	var persisted int
-	var first stationPDFProduct
-	persist := func(_ context.Context, pdf *os.File, product stationPDFProduct) error {
+	var first stationDocumentProduct
+	persist := func(_ context.Context, pdf *os.File, product stationDocumentProduct) error {
 		persisted++
 		if !validStationPDFProduct(product) {
 			t.Fatalf("invalid verified product: %#v", product)

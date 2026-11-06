@@ -120,23 +120,23 @@ func TestStationWechatDocumentPDFExportPreparesBeforeVerifiedDelivery(t *testing
 		documents: stationDocumentTools{
 			available:       func(context.Context, string) bool { return true },
 			exportAvailable: func(context.Context) bool { return true },
-			exportPDF: func(ctx context.Context, in stationDocumentInput, filename string, persist func(context.Context, *os.File, stationPDFProduct) error) (stationPDFProduct, error) {
+			exportPDF: func(ctx context.Context, in stationDocumentInput, filename string, persist func(context.Context, *os.File, stationDocumentProduct) error) (stationDocumentProduct, error) {
 				exportCalls.Add(1)
 				if in.extension != ".docx" || in.record.SHA256 != docxHash || filename != "converted.pdf" {
 					t.Fatalf("unexpected export input: extension=%q filename=%q hash=%q", in.extension, filename, in.record.SHA256)
 				}
 				path := filepath.Join(t.TempDir(), filename)
 				if err := os.WriteFile(path, pdf, 0600); err != nil {
-					return stationPDFProduct{}, err
+					return stationDocumentProduct{}, err
 				}
 				file, err := os.Open(path)
 				if err != nil {
-					return stationPDFProduct{}, err
+					return stationDocumentProduct{}, err
 				}
 				defer file.Close()
-				product := stationPDFProduct{Filename: filename, SHA256: pdfHash, Bytes: int64(len(pdf)), Pages: 1}
+				product := stationDocumentProduct{Filename: filename, SHA256: pdfHash, Bytes: int64(len(pdf)), Pages: 1}
 				if err := persist(ctx, file, product); err != nil {
-					return stationPDFProduct{}, err
+					return stationDocumentProduct{}, err
 				}
 				return product, nil
 			},
