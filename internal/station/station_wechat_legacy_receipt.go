@@ -19,15 +19,78 @@ import (
 	"wechat-bot/internal/workspacefs"
 )
 
+const legacyWorkerReceiptLookup = "legacy_snapshot"
+const legacyManagementReceiptLookup = "legacy_management_snapshot"
+
 type legacyReceiptPage struct {
 	apphost.ReceiptPage
 	ReceiptCount int `json:"receipt_count"`
 	PendingCount int `json:"pending_count"`
 }
 
+// The management store has no per-record dataset binding. Its projected
+// receipts can be displayed after snapshot validation, with no native lookup.
+func readLegacyManagementReceipts(root *os.Root, config string, guard *legacySnapshotGuard, ref apphost.ConnectionRef) (map[string]apphost.Receipt, int, error) {
+	if guard == nil {
+		return nil, 0, nil
+	}
+	raw, err := guard.readFile(root, filepath.Join(filepath.Dir(config), "tool-state.json"), legacyImportArchiveLimit)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, legacyImportReadError(err)
+	}
+	saved, err := decodeLegacyManagementSnapshot(raw, ref.AccountID)
+	if err != nil {
+		return nil, 0, errLegacySnapshotIntegrity
+	}
+	if len(saved.Sends) == 0 {
+		return nil, 0, nil
+	}
+	receipts := make(map[string]apphost.Receipt, len(saved.Sends))
+	pending := 0
+	for key, record := range saved.Sends {
+		status := linuxnative.ToolStatus{
+			ID: record.Status.ID, State: record.Status.State, ServerID: record.Status.ServerID,
+			CancelRequested: record.Status.CancelRequested, ErrorCode: record.Status.ErrorCode,
+			VoicePartsIncomplete: record.Status.VoicePartsIncomplete,
+		}
+		for _, chunk := range record.Status.VoiceChunks {
+			status.VoiceChunks = append(status.VoiceChunks, linuxnative.VoiceChunkStatus{
+				Index: chunk.Index, State: chunk.State, ServerID: chunk.ServerID, HasReceipt: chunk.HasReceipt,
+			})
+		}
+		receipt := apphost.Receipt{ConnectionRef: ref, ConversationID: record.Thread,
+			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: record.Kind, Lookup: legacyManagementReceiptLookup}}
+		wechatapp.ProjectDeliveryReceipt(&receipt.DeliveryReceipt, status)
+		if legacyReceiptPending(receipt) {
+			pending++
+		}
+		receipts[key] = receipt
+	}
+	return receipts, pending, nil
+}
+
+func legacyReceiptOrigin(w http.ResponseWriter, r *http.Request) (management, ok bool) {
+	switch r.URL.Query().Get("origin") {
+	case "", "agent":
+		return false, true
+	case "management":
+		return true, true
+	default:
+		websession.Fail(w, http.StatusBadRequest, "旧投递回执来源无效")
+		return false, false
+	}
+}
+
 func (s *stationWechat) legacyReceiptRoutes(server *websession.Store, mux *http.ServeMux, path string) {
 	mux.HandleFunc("GET "+path, server.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		management, ok := legacyReceiptOrigin(w, r)
+		if !ok {
+			return
+		}
 		query := r.URL.Query()
 		limit := 30
 		if raw := query.Get("limit"); raw != "" {
@@ -48,7 +111,7 @@ func (s *stationWechat) legacyReceiptRoutes(server *websession.Store, mux *http.
 			websession.Fail(w, http.StatusBadRequest, "旧回执游标无效，请重新查看")
 			return
 		}
-		page, err := s.listLegacyReceipts(r.PathValue("connection"), revision, key, limit, pending == "1")
+		page, err := s.listLegacyReceipts(r.PathValue("connection"), revision, key, limit, pending == "1", management)
 		if err != nil {
 			legacyImportFailure(w, err)
 			return
@@ -57,8 +120,12 @@ func (s *stationWechat) legacyReceiptRoutes(server *websession.Store, mux *http.
 	}))
 	mux.HandleFunc("GET "+path+"/{key}", server.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		management, ok := legacyReceiptOrigin(w, r)
+		if !ok {
+			return
+		}
 		id, key := r.PathValue("connection"), r.PathValue("key")
-		archive, receipt, err := s.legacyReceiptAt(id, key)
+		archive, receipt, err := s.legacyReceiptAt(id, key, management)
 		if errors.Is(err, apphost.ErrNotFound) {
 			websession.Fail(w, http.StatusNotFound, "此连接没有这条旧投递回执")
 			return
@@ -67,7 +134,7 @@ func (s *stationWechat) legacyReceiptRoutes(server *websession.Store, mux *http.
 			legacyImportFailure(w, err)
 			return
 		}
-		if legacyReceiptPending(receipt) {
+		if !management && legacyReceiptPending(receipt) {
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 			defer cancel()
 			// The saved record stays available during a native outage. The
@@ -108,34 +175,46 @@ func (s *stationWechat) legacyReceiptArchive(id string) (legacyImportArchive, er
 	return archive, nil
 }
 
-func validLegacyReceipt(receipt apphost.Receipt, ref apphost.ConnectionRef, key string) bool {
+func validLegacyReceipt(receipt apphost.Receipt, ref apphost.ConnectionRef, key, lookup string) bool {
 	return receipt.ConnectionRef == ref && receipt.IdempotencyKey == key && identity.ValidPathID(key) &&
 		identity.ValidPathID(receipt.ConversationID) && (receipt.OperationID == "" || identity.ValidPathID(receipt.OperationID)) &&
-		receipt.Lookup == "legacy_snapshot"
+		receipt.Lookup == lookup
 }
 
 func legacyReceiptPending(receipt apphost.Receipt) bool {
 	return receipt.State == "submission_unknown" || receipt.State == "submitted_pending" || receipt.PartsIncomplete
 }
 
-func (s *stationWechat) listLegacyReceipts(id, revision, after string, limit int, pendingOnly bool) (legacyReceiptPage, error) {
+func (archive legacyImportArchive) receiptSet(management bool) (map[string]apphost.Receipt, string) {
+	if management {
+		return archive.ManagementReceipts, legacyManagementReceiptLookup
+	}
+	return archive.Receipts, legacyWorkerReceiptLookup
+}
+
+func (s *stationWechat) listLegacyReceipts(id, revision, after string, limit int, pendingOnly, management bool) (legacyReceiptPage, error) {
 	archive, err := s.legacyReceiptArchive(id)
 	if err != nil {
 		return legacyReceiptPage{}, err
 	}
-	page := legacyReceiptPage{ReceiptPage: apphost.ReceiptPage{Items: []apphost.Receipt{}, Coverage: "legacy_snapshot"}, ReceiptCount: len(archive.Receipts)}
-	page.Snapshot = localCheckpointKey("legacy-receipts-v1", id, archive.Plan.Digest, archive.LegacyServer, archive.Receipts, archive.ReceiptSources)
+	receipts, lookup := archive.receiptSet(management)
+	page := legacyReceiptPage{ReceiptPage: apphost.ReceiptPage{Items: []apphost.Receipt{}, Coverage: lookup}, ReceiptCount: len(receipts)}
+	if management {
+		page.Snapshot = localCheckpointKey("legacy-management-receipts-v1", id, archive.Plan.Digest, receipts)
+	} else {
+		page.Snapshot = localCheckpointKey("legacy-receipts-v1", id, archive.Plan.Digest, archive.LegacyServer, receipts, archive.ReceiptSources)
+	}
 	marker := localCheckpointKey(page.Snapshot, pendingOnly)
 	if revision != "" {
-		item, exists := archive.Receipts[after]
+		item, exists := receipts[after]
 		if revision != marker || !exists || pendingOnly && !legacyReceiptPending(item) {
 			return legacyReceiptPage{}, errLegacyImportChanged
 		}
 	}
 	ref := s.connectionRef(id, archive.Plan.Account)
-	keys := make([]string, 0, len(archive.Receipts))
-	for key, receipt := range archive.Receipts {
-		if !validLegacyReceipt(receipt, ref, key) {
+	keys := make([]string, 0, len(receipts))
+	for key, receipt := range receipts {
+		if !validLegacyReceipt(receipt, ref, key, lookup) {
 			return legacyReceiptPage{}, errLegacyImportInvalid
 		}
 		pending := legacyReceiptPending(receipt)
@@ -152,12 +231,12 @@ func (s *stationWechat) listLegacyReceipts(id, revision, after string, limit int
 		page.NextAfter = marker + ":" + keys[len(keys)-1]
 	}
 	for _, key := range keys {
-		page.Items = append(page.Items, archive.Receipts[key])
+		page.Items = append(page.Items, receipts[key])
 	}
 	return page, nil
 }
 
-func (s *stationWechat) legacyReceiptAt(id, key string) (legacyImportArchive, apphost.Receipt, error) {
+func (s *stationWechat) legacyReceiptAt(id, key string, management bool) (legacyImportArchive, apphost.Receipt, error) {
 	if !identity.ValidPathID(key) {
 		return legacyImportArchive{}, apphost.Receipt{}, apphost.ErrNotFound
 	}
@@ -165,18 +244,19 @@ func (s *stationWechat) legacyReceiptAt(id, key string) (legacyImportArchive, ap
 	if err != nil {
 		return legacyImportArchive{}, apphost.Receipt{}, err
 	}
-	receipt, exists := archive.Receipts[key]
+	receipts, lookup := archive.receiptSet(management)
+	receipt, exists := receipts[key]
 	if !exists {
 		return legacyImportArchive{}, apphost.Receipt{}, apphost.ErrNotFound
 	}
-	if !validLegacyReceipt(receipt, s.connectionRef(id, archive.Plan.Account), key) {
+	if !validLegacyReceipt(receipt, s.connectionRef(id, archive.Plan.Account), key, lookup) {
 		return legacyImportArchive{}, apphost.Receipt{}, errLegacyImportInvalid
 	}
 	return archive, receipt, nil
 }
 
 func (s *stationWechat) readLegacyReceipt(ctx context.Context, id, key string, native *linuxnative.Sender) (apphost.Receipt, error) {
-	archive, receipt, err := s.legacyReceiptAt(id, key)
+	archive, receipt, err := s.legacyReceiptAt(id, key, false)
 	if errors.Is(err, errLegacyImportInvalid) {
 		return apphost.Receipt{}, apphost.ErrUnavailable
 	}

@@ -54,12 +54,13 @@ func (a legacyActivation) valid() bool {
 
 type legacyActivationView struct {
 	legacyCutover
-	Status          string `json:"status"`
-	Digest          string `json:"digest,omitempty"`
-	Reason          string `json:"reason,omitempty"`
-	ReplyCount      int    `json:"reply_count"`
-	PendingReceipts int    `json:"pending_receipts"`
-	ModelReady      bool   `json:"model_ready"`
+	Status                    string `json:"status"`
+	Digest                    string `json:"digest,omitempty"`
+	Reason                    string `json:"reason,omitempty"`
+	ReplyCount                int    `json:"reply_count"`
+	PendingReceipts           int    `json:"pending_receipts"`
+	ManagementPendingReceipts int    `json:"management_pending_receipts,omitempty"`
+	ModelReady                bool   `json:"model_ready"`
 }
 
 type legacyActivationInput struct {
@@ -124,6 +125,11 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 	for _, receipt := range archive.Receipts {
 		if legacyReceiptPending(receipt) {
 			view.PendingReceipts++
+		}
+	}
+	for _, receipt := range archive.ManagementReceipts {
+		if legacyReceiptPending(receipt) {
+			view.ManagementPendingReceipts++
 		}
 	}
 	native, err := s.WorkerSender(ctx, id)
@@ -206,7 +212,7 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 		return blocked(reason)
 	}
 	proof.ConfirmationDigest = localCheckpointKey("legacy-activation-v1", proof.ArchiveDigest, proof.Connection,
-		proof.OldRoot, proof.StopDigest, proof.ProfileDigest, daemon, latest.Plan.Digest, w.policy.Grants, view.PendingReceipts)
+		proof.OldRoot, proof.StopDigest, proof.ProfileDigest, daemon, latest.Plan.Digest, w.policy.Grants, view.PendingReceipts, view.ManagementPendingReceipts)
 	if input.Digest == "" {
 		view.Status, view.Digest = "ready", proof.ConfirmationDigest
 		return view, nil
@@ -214,7 +220,7 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 	if input.Digest != proof.ConfirmationDigest {
 		return blocked("启用条件已变化，请重新核对")
 	}
-	if view.PendingReceipts != 0 && !input.ReviewedReceipts {
+	if (view.PendingReceipts != 0 || view.ManagementPendingReceipts != 0) && !input.ReviewedReceipts {
 		return blocked("请确认未核对的旧回执只保留归档")
 	}
 	fresh, daemonErr := native.DaemonStatus(ctx)
@@ -260,6 +266,7 @@ func sameLegacyActivationSnapshot(saved, current legacyImportArchive) bool {
 		saved.Plan.LegacyEnabled == current.Plan.LegacyEnabled && saved.Plan.LegacyPaused == current.Plan.LegacyPaused &&
 		slices.Equal(saved.Plan.SuggestedThreads, current.Plan.SuggestedThreads) && slices.Equal(saved.Plan.Omitted, current.Plan.Omitted) &&
 		localCheckpointKey(saved.Receipts) == localCheckpointKey(current.Receipts) &&
+		localCheckpointKey(saved.ManagementReceipts) == localCheckpointKey(current.ManagementReceipts) &&
 		(len(saved.ReceiptSources) == 0 || localCheckpointKey(saved.ReceiptSources) == localCheckpointKey(current.ReceiptSources))
 }
 

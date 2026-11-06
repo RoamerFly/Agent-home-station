@@ -309,12 +309,17 @@
         appElement("p", `目标登录：${cutoverCopy.target_login[cutover.target_login] || "待核对"}`),
         appElement("p", "身份确认：仍需主人确认实际微信身份")
       ] : [appElement("p", "切换前置检查：旧记录未保存，仍需主人逐项核对")];
+      const managementReceiptRecords = Number(value.management_receipt_records || 0);
+      const managementReceiptLines = managementReceiptRecords > 0 ? [
+        appElement("p", `管理页发送记录：${managementReceiptRecords}；待核对：${Number(value.management_unresolved_receipts || 0)}`)
+      ] : [];
       result.replaceChildren(
         appElement("strong", value.applied ? "已保存的接入摘要" : "接入预演"),
         appElement("p", `账号：${value.account_id || "未知"}`),
         list("建议回复范围", value.suggested_reply_threads),
         list("仍需核对", value.requires_manual_review),
         appElement("p", `可读回执：${Number(value.receipt_records || 0)}；待核对回执：${Number(value.unresolved_receipts || 0)}`),
+        ...managementReceiptLines,
         appElement("p", `原生资料集：${value.same_native_dataset ? "相同，可查询既有操作记录" : "不同或未知，不会覆盖当前资料"}`),
         appElement("p", `旧版状态：${value.legacy_enabled ? "已启用" : "未启用"}${value.legacy_paused ? "，已暂停" : ""}`),
         ...cutoverLines,
@@ -373,6 +378,7 @@
     function legacyReceiptLookup(item) {
       const lookups = {
         legacy_snapshot: "旧版保存的快照，尚未从当前微信查询",
+        legacy_management_snapshot: "管理页发送的旧版快照，仅供查看",
         platform: "已从当前微信平台查询",
         not_found: "已查询当前原生记录，未找到旧操作；不推断是否送达",
         unavailable: "当前无法查询平台状态",
@@ -384,14 +390,29 @@
       return lookups[item?.lookup] || "查询来源待核对";
     }
     function legacyReceiptNeedsLookup(item) {
-      return Boolean(item?.parts_incomplete || ["submitted_pending", "submission_unknown"].includes(item?.state));
+      return legacyReceiptOrigin === "agent" && Boolean(item?.parts_incomplete || ["submitted_pending", "submission_unknown"].includes(item?.state));
     }
-    let legacyReceiptPage = null, legacyReceiptLoading = false, legacyReceiptPendingOnly = false;
+    let legacyReceiptPage = null, legacyReceiptLoading = false, legacyReceiptPendingOnly = false, legacyReceiptOrigin = "agent";
     function legacyReceiptURL(after = "") {
       const params = new URLSearchParams({ limit: "20" });
       if (after) params.set("after", after);
       if (legacyReceiptPendingOnly) params.set("pending", "1");
+      if (legacyReceiptOrigin === "management") params.set("origin", "management");
       return legacyImportURL + "/receipts?" + params.toString();
+    }
+    function legacyReceiptOriginControl() {
+      const origin = document.createElement("select");
+      origin.setAttribute("aria-label", "旧版投递来源");
+      origin.append(new Option("Agent 投递", "agent"), new Option("管理页发送", "management"));
+      origin.value = legacyReceiptOrigin;
+      origin.addEventListener("change", () => {
+        legacyReceiptOrigin = origin.value === "management" ? "management" : "agent";
+        legacyReceiptPage = null;
+        readLegacyReceipts();
+      });
+      const label = document.createElement("label");
+      label.append(document.createTextNode("来源："), origin);
+      return label;
     }
     function renderLegacyReceipts(message = "") {
       const page = legacyReceiptPage;
@@ -399,6 +420,7 @@
         receiptResult.replaceChildren(
           appElement("strong", "旧版投递回执"),
           appElement("small", "只读查看旧版保存的投递快照；不会重新发送、取消或重试。"),
+          legacyReceiptOriginControl(),
           appSetupButton("查看旧版投递回执", () => readLegacyReceipts())
         );
         return;
@@ -454,7 +476,9 @@
       receiptResult.replaceChildren(
         appElement("strong", "旧版投递回执"),
         appElement("p", `快照内回执：${Number(page.receipt_count || items.length)}；待核对：${Number(page.pending_count || 0)}`),
-        appElement("small", page.coverage === "legacy_snapshot" ? "这些记录来自旧版快照；平台查询结果会单独显示。" : "回执覆盖范围待核对。"),
+        appElement("small", page.coverage === "legacy_snapshot" ? "这些记录来自 Agent 投递快照；平台查询结果会单独显示。" :
+          page.coverage === "legacy_management_snapshot" ? "这些记录来自管理页发送快照；仅供查看，不会查询原操作。" : "回执覆盖范围待核对。"),
+        legacyReceiptOriginControl(),
         pendingLabel,
         ...rows,
         message ? appElement("small", message.trim()) : document.createTextNode(""),
@@ -464,7 +488,7 @@
     async function readLegacyReceipts(after = "") {
       if (legacyReceiptLoading) return;
       legacyReceiptLoading = true;
-      receiptResult.replaceChildren(appElement("small", "正在读取旧版投递回执…"));
+      receiptResult.replaceChildren(appElement("small", legacyReceiptOrigin === "management" ? "正在读取管理页发送记录…" : "正在读取旧版投递回执…"));
       try {
         legacyReceiptPage = await request(legacyReceiptURL(after));
         renderLegacyReceipts();
@@ -509,6 +533,7 @@
         owner_confirmed: "主人已确认",
         owner_check_pending: "待主人确认"
       };
+      const managementPendingReceipts = Number(value?.management_pending_receipts || 0);
       return [
         appElement("strong", stateCopy[value?.status] || "启用条件待核对"),
         appElement("small", `旧宿主：${legacyHost[value?.legacy_host] || "待核对"}`),
@@ -516,6 +541,7 @@
         appElement("small", `目标登录：${targetLogin[value?.target_login] || "待核对"}`),
         appElement("small", `目标身份：${targetIdentity[value?.target_identity] || "待主人确认"}`),
         appElement("small", `已授权回复会话：${Number(value?.reply_count || 0)}；待核对旧回执：${Number(value?.pending_receipts || 0)}`),
+        managementPendingReceipts > 0 ? appElement("small", `管理页发送待核对：${managementPendingReceipts}`) : document.createTextNode(""),
         appElement("small", `模型：${value?.model_ready ? "已配置" : "尚未配置"}`)
       ];
     }
@@ -538,10 +564,14 @@
         const sameIdentityLabel = document.createElement("label");
         sameIdentityLabel.append(sameIdentity, document.createTextNode("我已确认旧资料和当前目标是同一个实际微信账号"));
         const pendingReceipts = Number(value.pending_receipts || 0);
+        const managementPendingReceipts = Number(value.management_pending_receipts || 0);
+        const hasPendingReceipts = pendingReceipts > 0 || managementPendingReceipts > 0;
         const reviewedReceipts = document.createElement("input");
         reviewedReceipts.type = "checkbox";
         const reviewedReceiptsLabel = document.createElement("label");
-        reviewedReceiptsLabel.append(reviewedReceipts, document.createTextNode(`我已核对 ${pendingReceipts} 条待确认旧回执`));
+        reviewedReceiptsLabel.append(reviewedReceipts, document.createTextNode(managementPendingReceipts > 0 ?
+          `我已核对待确认旧回执（Agent ${pendingReceipts} 条，管理页 ${managementPendingReceipts} 条）` :
+          `我已核对 ${pendingReceipts} 条待确认旧回执`));
         const apply = appSetupButton("记录启用核对", async () => {
           apply.disabled = true;
           try {
@@ -549,7 +579,7 @@
               method: "POST", body: JSON.stringify({
                 digest: value.digest,
                 same_identity: true,
-                reviewed_receipts: pendingReceipts === 0 || reviewedReceipts.checked
+                reviewed_receipts: !hasPendingReceipts || reviewedReceipts.checked
               })
             });
             renderActivation("启用条件已记录。仍需由主人单独启动 Agent。");
@@ -567,12 +597,12 @@
           }
         });
         apply.disabled = true;
-        const sync = () => { apply.disabled = !sameIdentity.checked || (pendingReceipts > 0 && !reviewedReceipts.checked); };
+        const sync = () => { apply.disabled = !sameIdentity.checked || (hasPendingReceipts && !reviewedReceipts.checked); };
         sameIdentity.addEventListener("change", sync);
         reviewedReceipts.addEventListener("change", sync);
         const confirm = appElement("div", "", "legacy-memory-confirm");
         confirm.append(sameIdentityLabel);
-        if (pendingReceipts > 0) confirm.append(reviewedReceiptsLabel);
+        if (hasPendingReceipts) confirm.append(reviewedReceiptsLabel);
         confirm.append(apply);
         lines.push(confirm);
       }

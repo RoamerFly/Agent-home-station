@@ -42,17 +42,19 @@ type legacyImportSource struct {
 }
 
 type legacyImportPlan struct {
-	Digest           string         `json:"digest"`
-	Account          string         `json:"account_id"`
-	LegacyEnabled    bool           `json:"legacy_enabled"`
-	LegacyPaused     bool           `json:"legacy_paused"`
-	SameDataset      bool           `json:"same_native_dataset"`
-	SuggestedThreads []string       `json:"suggested_reply_threads"`
-	Omitted          []string       `json:"requires_manual_review"`
-	Receipts         int            `json:"receipt_records"`
-	Unresolved       int            `json:"unresolved_receipts"`
-	Applied          bool           `json:"applied"`
-	Cutover          *legacyCutover `json:"cutover,omitempty"`
+	Digest               string         `json:"digest"`
+	Account              string         `json:"account_id"`
+	LegacyEnabled        bool           `json:"legacy_enabled"`
+	LegacyPaused         bool           `json:"legacy_paused"`
+	SameDataset          bool           `json:"same_native_dataset"`
+	SuggestedThreads     []string       `json:"suggested_reply_threads"`
+	Omitted              []string       `json:"requires_manual_review"`
+	Receipts             int            `json:"receipt_records"`
+	Unresolved           int            `json:"unresolved_receipts"`
+	ManagementReceipts   int            `json:"management_receipt_records,omitempty"`
+	ManagementUnresolved int            `json:"management_unresolved_receipts,omitempty"`
+	Applied              bool           `json:"applied"`
+	Cutover              *legacyCutover `json:"cutover,omitempty"`
 }
 
 type legacyImportArchive struct {
@@ -60,6 +62,9 @@ type legacyImportArchive struct {
 	Plan         legacyImportPlan           `json:"plan"`
 	LegacyServer string                     `json:"legacy_server"`
 	Receipts     map[string]apphost.Receipt `json:"receipts"`
+	// Management receipts are read-only archive rows. They never participate
+	// in worker fallback, native lookups or send/retry idempotency checks.
+	ManagementReceipts map[string]apphost.Receipt `json:"management_receipts,omitempty"`
 	// Native source identifiers are private lookup evidence, never part of a receipt response.
 	ReceiptSources         map[string]string `json:"receipt_sources,omitempty"`
 	SourceRevision         string            `json:"source_revision,omitempty"`
@@ -360,6 +365,11 @@ func (s *stationWechat) previewLegacyImportFrom(ctx context.Context, id string, 
 		}
 	}
 	archive.Plan.Receipts = len(archive.Receipts)
+	archive.ManagementReceipts, archive.Plan.ManagementUnresolved, err = readLegacyManagementReceipts(root, cfgPath, source.guard, s.connectionRef(id, account))
+	if err != nil {
+		return legacyImportArchive{}, err
+	}
+	archive.Plan.ManagementReceipts = len(archive.ManagementReceipts)
 	cutover, cutoverDigests := s.checkLegacyCutover(ctx, id, native, root, source, oldServer)
 	archive.Plan.Cutover = cutover
 	// A changed queue or cursor invalidates the preview, even if the visible

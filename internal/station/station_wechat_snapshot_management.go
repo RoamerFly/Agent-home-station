@@ -111,42 +111,24 @@ func readLegacyManagementSnapshot(ctx context.Context, root *os.Root, adminDir, 
 		return nil, nil, 0, nil, errors.New("旧管理端发送记录不可安全读取")
 	}
 
-	// A snapshot contains this canonical form and no cold index.  It must round
-	// trip byte-for-byte; otherwise it is not an import-compatible snapshot.
-	// Old live state includes a per-record hash (and normally uploads).  The
-	// snapshot projection intentionally has neither.  Do not accidentally
-	// accept a live file as a projection merely because JSON ignores unknown
-	// fields such as hash/reason.
-	isLive := false
+	// Version 2 is the snapshot projection. The live management store uses
+	// version 1, including per-record request hashes and upload staging.
 	if readErr == nil {
-		var probe struct {
-			Sends   map[string]json.RawMessage `json:"sends"`
-			Uploads json.RawMessage            `json:"uploads"`
+		var header struct {
+			Version int `json:"version"`
 		}
-		if json.Unmarshal(state, &probe) == nil {
-			isLive = probe.Uploads != nil
-			for _, entry := range probe.Sends {
-				var row struct {
-					Hash string `json:"hash"`
-				}
-				if json.Unmarshal(entry, &row) == nil && row.Hash != "" {
-					isLive = true
-					break
-				}
-			}
+		if json.Unmarshal(state, &header) != nil {
+			return nil, nil, 0, nil, errors.New("旧管理端发送记录格式无效")
 		}
-	}
-	if readErr == nil && !isLive {
-		var saved legacyManagementSnapshot
-		if json.Unmarshal(state, &saved) == nil && saved.Version == 2 {
-			canonical, marshalErr := json.Marshal(saved)
-			if marshalErr != nil || !legacyManagementSnapshotValid(saved, account) || !bytes.Equal(state, canonical) {
-				return nil, nil, 0, nil, errors.New("旧管理端发送回执快照不是规范投影")
+		if header.Version == 2 {
+			saved, err := decodeLegacyManagementSnapshot(state, account)
+			if err != nil {
+				return nil, nil, 0, nil, err
 			}
 			if present, presentErr := legacyManagementLedgerPresent(root, adminDir); presentErr != nil || present {
 				return nil, nil, 0, nil, errors.New("旧管理端回执快照与冷发送索引冲突")
 			}
-			return state, canonical, len(saved.Sends), nil, nil
+			return state, state, len(saved.Sends), nil, nil
 		}
 	}
 
@@ -192,6 +174,17 @@ func readLegacyManagementSnapshot(ctx context.Context, root *os.Root, adminDir, 
 		return nil, nil, 0, nil, errors.New("旧管理端发送回执投影无法编码")
 	}
 	return raw, projected, len(active), hashes, nil
+}
+
+func decodeLegacyManagementSnapshot(raw []byte, account string) (legacyManagementSnapshot, error) {
+	var saved legacyManagementSnapshot
+	if json.Unmarshal(raw, &saved) == nil && legacyManagementSnapshotValid(saved, account) {
+		canonical, err := json.Marshal(saved)
+		if err == nil && bytes.Equal(raw, canonical) {
+			return saved, nil
+		}
+	}
+	return legacyManagementSnapshot{}, errors.New("旧管理端发送回执快照不是规范投影")
 }
 
 func readLegacyManagementCold(ctx context.Context, root *os.Root, adminDir, account string) (map[string]legacyManagementRawRecord, map[string]string, error) {

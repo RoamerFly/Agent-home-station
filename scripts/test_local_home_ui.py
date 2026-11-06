@@ -500,7 +500,7 @@ def verify(binary, output):
                 legacy_memory = {"requests": []}
                 legacy_memory_selection = {"gets": [], "posts": []}
                 legacy_group_rule = {"gets": [], "posts": []}
-                legacy_receipts = {"pages": [], "lookups": [], "filters": []}
+                legacy_receipts = {"pages": [], "lookups": [], "filters": [], "management_pages": [], "management_filters": []}
 
                 def legacy_plan(applied=False):
                     refreshed = legacy["availability"] == "applied" and legacy["previews"] >= 3
@@ -512,6 +512,7 @@ def verify(binary, output):
                             "suggested_reply_threads": ["synthetic-room@chatroom"],
                             "requires_manual_review": ["all_friends"],
                             "receipt_records": 3, "unresolved_receipts": 1,
+                            "management_receipt_records": 2, "management_unresolved_receipts": 1,
                             "same_native_dataset": True, "legacy_enabled": True,
                             "legacy_paused": True, "applied": applied, "cutover": cutover}
 
@@ -588,13 +589,14 @@ def verify(binary, output):
                             fulfill_json({"status": "blocked", "reason": "旧宿主停机记录已变化，请先重新导入后再启用",
                                           "legacy_host": "changed", "native_profile": "import_receipt_matched",
                                           "target_login": "online", "target_identity": "owner_check_pending",
-                                          "reply_count": 1, "pending_receipts": 2, "model_ready": True})(route)
+                                          "reply_count": 1, "pending_receipts": 2, "management_pending_receipts": 1,
+                                          "model_ready": True})(route)
                             return
                         digest = "fixture-activation-v2" if legacy_activation["gets"] >= 2 else "fixture-activation-v1"
                         fulfill_json({"status": "ready", "digest": digest, "legacy_host": "stop_record_matched",
                                       "native_profile": "import_receipt_matched", "target_login": "online",
                                       "target_identity": "owner_check_pending", "reply_count": 1,
-                                      "pending_receipts": 2, "model_ready": True})(route)
+                                      "pending_receipts": 2, "management_pending_receipts": 1, "model_ready": True})(route)
                         return
                     assert route.request.method == "POST"
                     assert route.request.headers.get("x-csrf-token"), "activation confirmation lacks owner CSRF"
@@ -610,7 +612,7 @@ def verify(binary, output):
                     fulfill_json({"status": "confirmed", "legacy_host": "stop_record_matched",
                                   "native_profile": "import_receipt_matched", "target_login": "online",
                                   "target_identity": "owner_confirmed", "reply_count": 1,
-                                  "pending_receipts": 2, "model_ready": True})(route)
+                                  "pending_receipts": 2, "management_pending_receipts": 1, "model_ready": True})(route)
 
                 # Register after the import handler: Playwright resolves routes in reverse order.
                 page.route(legacy_activation_pattern, legacy_activation_route)
@@ -684,6 +686,29 @@ def verify(binary, output):
                         assert query.get("limit") == ["20"]
                         after = query.get("after", [""])[0]
                         pending_only = query.get("pending", [""])[0] == "1"
+                        origin = query.get("origin", ["agent"])[0]
+                        assert origin in {"agent", "management"}
+                        if origin == "management":
+                            legacy_receipts["management_pages"].append(after)
+                            legacy_receipts["management_filters"].append(pending_only)
+                            if pending_only:
+                                fulfill_json({"items": [{"idempotency_key": "management-unknown", "conversation_id": "synthetic-room@chatroom",
+                                                         "kind": "text", "state": "submission_unknown", "lookup": "legacy_management_snapshot"}],
+                                              "coverage": "legacy_management_snapshot", "pending_count": 1, "receipt_count": 2})(route)
+                                return
+                            if after == "fixture-management-next":
+                                fulfill_json({"items": [{"idempotency_key": "management-complete", "conversation_id": "synthetic-room@chatroom",
+                                                         "kind": "file", "state": "accepted", "lookup": "legacy_management_snapshot"}],
+                                              "coverage": "legacy_management_snapshot", "pending_count": 1, "receipt_count": 2})(route)
+                                return
+                            fulfill_json({"items": [
+                                {"idempotency_key": "management-unknown", "conversation_id": "synthetic-room@chatroom",
+                                 "kind": "text", "state": "submission_unknown", "lookup": "legacy_management_snapshot"},
+                                {"idempotency_key": "management-accepted", "conversation_id": "synthetic-direct@chatroom",
+                                 "kind": "image", "state": "accepted", "lookup": "legacy_management_snapshot"}
+                            ], "next_after": "fixture-management-next", "coverage": "legacy_management_snapshot",
+                              "pending_count": 1, "receipt_count": 2})(route)
+                            return
                         legacy_receipts["pages"].append(after)
                         legacy_receipts["filters"].append(pending_only)
                         if pending_only:
@@ -856,6 +881,7 @@ def verify(binary, output):
                 page.get_by_text("账号：fixture-account", exact=True).wait_for()
                 page.get_by_text("建议回复范围：synthetic-room@chatroom", exact=True).wait_for()
                 page.get_by_text("仍需核对：旧版允许所有好友回复", exact=True).wait_for()
+                page.get_by_text("管理页发送记录：2；待核对：1", exact=True).wait_for()
                 page.get_by_text("旧宿主：已记录正常停机", exact=True).wait_for()
                 page.get_by_text("原生档案：导入记录与当前连接匹配", exact=True).wait_for()
                 page.get_by_text("目标登录：尚未登录", exact=True).wait_for()
@@ -911,17 +937,18 @@ def verify(binary, output):
                 page.get_by_text("可以确认启用条件", exact=True).wait_for()
                 page.get_by_text("确认交接后，支持交接的旧桌面将拒绝启动此数据目录。", exact=True).wait_for()
                 page.get_by_text("已授权回复会话：1；待核对旧回执：2", exact=True).wait_for()
+                page.get_by_text("管理页发送待核对：1", exact=True).wait_for()
                 activation_apply = page.get_by_role("button", name="记录启用核对", exact=True)
                 assert activation_apply.is_disabled() and not legacy_activation["posts"], "activation must remain read-only before both owner acknowledgements"
                 page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
                 assert activation_apply.is_disabled(), "unresolved old delivery receipts require explicit acknowledgement"
-                page.get_by_label("我已核对 2 条待确认旧回执", exact=True).check()
+                page.get_by_label("我已核对待确认旧回执（Agent 2 条，管理页 1 条）", exact=True).check()
                 activation_apply.click()
                 page.get_by_text("旧版资料或当前连接已变化，请重新核对启用条件。", exact=True).wait_for()
                 assert legacy_activation["posts"] == [{"digest": "fixture-activation-v1", "same_identity": True, "reviewed_receipts": True}]
                 page.get_by_role("button", name="重新核对启用条件", exact=True).click()
                 page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
-                page.get_by_label("我已核对 2 条待确认旧回执", exact=True).check()
+                page.get_by_label("我已核对待确认旧回执（Agent 2 条，管理页 1 条）", exact=True).check()
                 page.get_by_role("button", name="记录启用核对", exact=True).click()
                 page.get_by_text("启用条件已记录", exact=True).wait_for()
                 page.get_by_text("启用条件已记录。仍需由主人单独启动 Agent。", exact=True).wait_for()
@@ -983,6 +1010,13 @@ def verify(binary, output):
                 page.get_by_text("快照内回执：4；待核对：2", exact=True).wait_for()
                 assert page.locator(".legacy-receipt-list .legacy-memory-scope").filter(has_text="发送结果待核对").count() == 1, "pending filter must only retain unresolved legacy receipts"
                 assert legacy_receipts["filters"][-1] is True and legacy_receipts["pages"][-1] == "", "pending filter must restart at the first legacy receipt page"
+                page.get_by_label("旧版投递来源", exact=True).select_option("management")
+                page.get_by_text("这些记录来自管理页发送快照；仅供查看，不会查询原操作。", exact=True).wait_for()
+                assert not page.get_by_role("button", name="核对原操作", exact=True).count(), "management snapshots must never offer native lookup"
+                assert legacy_receipts["management_pages"] == [""] and legacy_receipts["management_filters"] == [True], "source switch must preserve the pending filter and restart management pagination"
+                page.get_by_label("旧版投递来源", exact=True).select_option("agent")
+                page.get_by_text("这些记录来自 Agent 投递快照；平台查询结果会单独显示。", exact=True).wait_for()
+                assert legacy_receipts["pages"][-1] == "" and legacy_receipts["filters"][-1] is True, "returning to Agent receipts must restart its cursor and preserve the pending filter"
                 page.get_by_role("button", name="核对旧会话记忆", exact=True).click()
                 page.get_by_role("button", name="核对旧群备注", exact=True).click()
                 page.get_by_text(note_text, exact=True).wait_for()
