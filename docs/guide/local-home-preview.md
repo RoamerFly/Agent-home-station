@@ -342,27 +342,31 @@ Windows 桌面在启动站和原生端之前取得数据根运行锁，并写入
 
 命令取得桌面互斥和旧数据锁后，只启动持有原生锁的离线子进程。排队或结果未定的原生投递计数非零时停止流程，原记录保留。成功返回 `stopped` 和 `offline_hold`，可直接进入快照预演。旧 Agent 与管理端账本中原有的未知回执仍按原操作核对。若正常启动旧端，启动器会使本次停机凭证失效，快照前须重新核对。隔离演练使用 `Test-LegacyWechatControlledCutover.ps1`，需要旧启动器、原生程序和成长站服务程序候选。
 
-只替换旧桌面入口 `WechatAgent.exe`。沿用桌面快捷方式的工作区与参数，管理端、原生运行文件、登录和其他数据继续使用现有目录。用当前源码构建旧端候选，使用不同于正式安装的构建目录。
+需要配套更新时，常规部署继续使用原有快捷方式、管理端和原生程序。脚本将离线原生程序及其同目录 CRT 发布到 `cutover-native-<候选启动器 SHA-256>`，核对清单后原子替换旧桌面入口 `WechatAgent.exe`。只有受控停机命令会读取当前启动器对应的配套目录。用当前源码构建候选，使用不同于正式安装的构建目录。
 
 ```powershell
 .\scripts\Build-Desktop.ps1 -Test -OutputDirectory 'C:\Temp\ahs-legacy-candidate'
+.\scripts\Build-WindowsNative.ps1 -OutputDirectory 'C:\Temp\ahs-legacy-native-candidate'
 $candidate = 'C:\Temp\ahs-legacy-candidate\WechatAgent.exe'
+$native = 'C:\Temp\ahs-legacy-native-candidate\wx.exe'
 $swap = @{
     Workspace = 'E:\A-Importance\wechat-bot'
     Launcher = 'E:\A-Importance\wechat-bot\dist\windows-native\WechatAgent.exe'
     Replacement = $candidate
     ReplacementSha256 = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash
+    NativeReplacement = $native
+    NativeReplacementSha256 = (Get-FileHash -LiteralPath $native -Algorithm SHA256).Hash
 }
 $preview = .\scripts\Update-LegacyWechatLauncher.ps1 @swap | ConvertFrom-Json
 ```
 
-预演核对互斥锁、旧服务、配置端口、运行清单和交接声明，只返回待核对的文件摘要。实际更新须先正常停止旧桌面，按原参数追加 `-ApplyDigest $preview.apply_digest`。`updated` 返回原程序的 `rollback_file` 和 `previous_sha256`。若文件、配置或停机记录发生变化，重新预演。脚本不会代为启停服务。看到空闲进程和端口，只能证明核对时可以准备替换。需要有效的停机凭证时，使用更新后的正常入口启动并正常停止，核对数据根中新写入的第 2 版 `stopped` 记录。
+预演核对互斥锁、旧服务、配置端口、运行清单和交接声明，返回配套目录与摘要。实际更新须先正常停止旧桌面，按原参数追加 `-ApplyDigest $preview.apply_digest`。`updated` 返回原程序的 `rollback_file` 和 `previous_sha256`。若文件、配置或停机记录发生变化，重新预演。若中断发生在替换启动器之前，重试时可复用逐文件复验通过的配套包。更新成功后，以上述受控命令取得停机凭证。仅更新兼容启动器时，可省略两个原生候选参数，之后沿用与所装原生版本兼容的停机方式。
 
-恢复时用原 `Workspace`、`Launcher`，将 `Replacement` 和 `ReplacementSha256` 改为更新结果的 `rollback_file` 与 `previous_sha256`。加上 `-Restore` 先预演，再以相同参数追加本次摘要执行。已有有效交接声明时，先走前面的离线解除流程。恢复会把活动停机凭证移入 `invalidated_stop_proof` 指示的本机归档文件，避免旧版再次运行后还沿用新版凭证。升级前若旧版缺少交接能力标记，其遗留停机凭证也会归档。若 Windows 无法确认替换结果，按错误中列出的路径先核对启动器、副本和暂存文件，停机凭证以实际运行记录重新建立。
+恢复时用原 `Workspace`、`Launcher`，将 `Replacement` 和 `ReplacementSha256` 改为更新结果的 `rollback_file` 与 `previous_sha256`，并移除两个原生候选参数。加上 `-Restore` 先预演，再以相同参数追加本次摘要执行。已有有效交接声明时，先走前面的离线解除流程。恢复后当前配套目录失效，文件留存供核对。恢复或配套更新会归档已有停机凭证，`invalidated_stop_proof` 给出本机归档路径。若 Windows 无法确认替换结果，按错误中列出的路径先核对启动器、副本和暂存文件，停机凭证以实际运行记录重新建立。
 
 ### 制作旧微信停机快照
 
-先用支持互斥交接的旧桌面正常停止，再用同版成长站的 `agent-home-station-server.exe` 预演。旧数据目录和快照目录应位于本机磁盘且彼此独立。快照父目录需已存在，目标目录需尚未创建，且应放在源码库与鱼家工作区之外。
+先用支持互斥交接的旧桌面取得正常或受控停机凭证，再用同版成长站的 `agent-home-station-server.exe` 预演。旧数据目录和快照目录应位于本机磁盘且彼此独立。快照父目录需已存在，目标目录需尚未创建，且应放在源码库与鱼家工作区之外。
 
 ```powershell
 .\agent-home-station-server.exe legacy-wechat-snapshot --legacy-data 'C:\Legacy\data' --snapshot 'C:\PrivateMigration\wechat' --account '<旧主账号 ID>'

@@ -4,6 +4,8 @@ param(
     [Parameter(Mandatory)][string]$Launcher,
     [Parameter(Mandatory)][string]$Replacement,
     [Parameter(Mandatory)][ValidatePattern('\A[0-9a-fA-F]{64}\z')][string]$ReplacementSha256,
+    [string]$NativeReplacement,
+    [ValidatePattern('\A[0-9a-fA-F]{64}\z')][string]$NativeReplacementSha256,
     [switch]$Restore,
     [ValidatePattern('\A[0-9a-fA-F]{64}\z')][string]$ApplyDigest
 )
@@ -97,14 +99,77 @@ function ReadDeployment {
     return @{ data = $data; runtime = $runtime; ports = $ports; config_hash = $configuration.hash }
 }
 
-function HasCutoverMarkers([string]$Path) {
+function HasCutoverMarkers([string]$Path, [string[]]$Additional = @()) {
     $bytes = [IO.File]::ReadAllBytes($Path)
     $aligned = [Text.Encoding]::Unicode.GetString($bytes)
     $unaligned = [Text.Encoding]::Unicode.GetString($bytes, 1, $bytes.Length - 1)
-    foreach ($marker in @('legacy-cutover-state.json', 'legacy-cutover.lock', 'legacy-cutover-claim.json')) {
+    foreach ($marker in (@('legacy-cutover-state.json', 'legacy-cutover.lock', 'legacy-cutover-claim.json') + $Additional)) {
         if (-not $aligned.Contains($marker) -and -not $unaligned.Contains($marker)) { return $false }
     }
     return $true
+}
+
+function AssertPairContents([string]$Directory, $Pair) {
+    $null = CheckedItem $Directory -Directory
+    $manifest = Join-Path $Directory 'windows-native-manifest.json'
+    if ((FileHash $manifest) -ne $Pair.manifestHash) { throw '配套原生包的清单不匹配。' }
+    $items = @(Get-ChildItem -LiteralPath $Directory -Force)
+    if ($items.Count -ne ($Pair.files.Count + 1)) { throw '配套原生包含有未登记文件。' }
+    foreach ($name in $Pair.files.Keys) {
+        if ((FileHash (Join-Path $Directory $name)) -ne $Pair.files[$name]) { throw '配套原生包的文件校验失败。' }
+    }
+}
+
+function ReadPairPlan($Deployment, [string]$LauncherHash) {
+    $runtime = $Deployment.runtime.TrimEnd('\') + '\'
+    $data = $Deployment.data.TrimEnd('\') + '\'
+    if ($runtime.StartsWith($data, [StringComparison]::OrdinalIgnoreCase) -or
+        $data.StartsWith($runtime, [StringComparison]::OrdinalIgnoreCase)) { throw '配套运行包和旧数据目录必须分开。' }
+    if ([IO.Path]::GetFileName($NativeReplacement) -ine 'wx.exe' -or (FileHash $NativeReplacement) -ne $NativeReplacementSha256) {
+        throw '配套原生程序必须是 SHA-256 匹配的 wx.exe。'
+    }
+    if (-not [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($NativeReplacement)).Contains('cutover-hold')) {
+        throw '配套原生程序缺少离线交接能力标记。'
+    }
+    $source = [IO.Path]::GetDirectoryName($NativeReplacement)
+    $files = [ordered]@{ 'wx.exe' = $NativeReplacementSha256.ToLowerInvariant() }
+    foreach ($name in @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'msvcp140_atomic_wait.dll',
+        'msvcp140_codecvt_ids.dll', 'vccorlib140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'vcruntime140_threads.dll')) {
+        $hash = FileHash (Join-Path $source $name) -Optional
+        if ($hash) { $files[$name] = $hash }
+    }
+    $manifest = [ordered]@{
+        schema_version = 1; platform = 'windows-x64'; cutover_runtime = $true
+        launcher_sha256 = $LauncherHash; native_sha256 = $files['wx.exe']; files = $files
+    }
+    $manifestBytes = [Text.Encoding]::UTF8.GetBytes(($manifest | ConvertTo-Json -Compress -Depth 4))
+    $pair = @{
+        source = $source; files = $files; manifestBytes = $manifestBytes; manifestHash = (ContentHash $manifestBytes)
+        directory = (Join-Path $Deployment.runtime "cutover-native-$LauncherHash")
+    }
+    if (CheckedItem $pair.directory -Directory -Optional) { AssertPairContents $pair.directory $pair }
+    return $pair
+}
+
+function PublishPair($Pair, [string]$Nonce) {
+    if (CheckedItem $Pair.directory -Directory -Optional) { AssertPairContents $Pair.directory $Pair; return }
+    $stage = Join-Path ([IO.Path]::GetDirectoryName($Pair.directory)) ".cutover-native-staged-$Nonce"
+    if (CheckedItem $stage -Directory -Optional) { throw '配套原生包的暂存路径已存在。' }
+    $null = [IO.Directory]::CreateDirectory($stage)
+    foreach ($name in $Pair.files.Keys) { CopyFlushedFile (Join-Path $Pair.source $name) (Join-Path $stage $name) }
+    $manifest = [IO.File]::Open((Join-Path $stage 'windows-native-manifest.json'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try { $manifest.Write($Pair.manifestBytes, 0, $Pair.manifestBytes.Length); $manifest.Flush($true) }
+    finally { $manifest.Dispose() }
+    AssertPairContents $stage $Pair
+    [IO.Directory]::Move($stage, $Pair.directory)
+}
+
+function CopyFlushedFile([string]$Source, [string]$Destination) {
+    $target = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $sourceFile = [IO.File]::OpenRead($Source)
+        try { $sourceFile.CopyTo($target); $target.Flush($true) } finally { $sourceFile.Dispose() }
+    } finally { $target.Dispose() }
 }
 
 function ReadPlan {
@@ -142,22 +207,34 @@ function ReadPlan {
     } elseif (-not (HasCutoverMarkers $Replacement)) {
         throw '候选启动器缺少停机交接能力标记。'
     }
+    $pair = $null
+    if ($NativeReplacement) {
+        if (-not (HasCutoverMarkers $Replacement @('--prepare-legacy-cutover', 'cutover-native-'))) {
+            throw '候选启动器缺少配套原生包的识别能力。'
+        }
+        $pair = ReadPairPlan $deployment $replacementHash
+    }
     $proof = Join-Path $deployment.data 'legacy-cutover-state.json'
     $proofHash = FileHash $proof -Optional
-    $invalidateProof = $proofHash -and ($Restore -or -not (HasCutoverMarkers $Launcher))
+    $invalidateProof = $proofHash -and ($Restore -or $pair -or -not (HasCutoverMarkers $Launcher))
     $binding = [ordered]@{
         restore = $Restore.IsPresent; workspace = $Workspace; launcher = $Launcher; replacement = $Replacement
         previous_sha256 = $previousHash; replacement_sha256 = $replacementHash; config = $deployment.config_hash
         data = $deployment.data; runtime = $deployment.runtime; ports = $deployment.ports; manifest = $manifest.hash
         stop_proof = $proofHash; invalidate_proof = $invalidateProof
+        native_replacement = $NativeReplacement; native_manifest_sha256 = $pair.manifestHash; paired_runtime = $pair.directory
     }
-    $digest = ContentHash ([Text.Encoding]::UTF8.GetBytes(($binding | ConvertTo-Json -Compress)))
-    return @{ digest = $digest; binding = $binding; proof = $proof }
+    $digest = ContentHash ([Text.Encoding]::UTF8.GetBytes(($binding | ConvertTo-Json -Compress -Depth 4)))
+    return @{ digest = $digest; binding = $binding; proof = $proof; pair = $pair }
 }
 
 $Workspace = LocalPath $Workspace
 $Launcher = LocalPath $Launcher
 $Replacement = LocalPath $Replacement
+if (($NativeReplacement -and ($Restore -or -not $NativeReplacementSha256)) -or (-not $NativeReplacement -and $NativeReplacementSha256)) {
+    throw '配套原生程序和 SHA-256 必须一同提供，仅用于更新。'
+}
+if ($NativeReplacement) { $NativeReplacement = LocalPath $NativeReplacement }
 $null = CheckedItem $Workspace -Directory
 if ([IO.Path]::GetFileName($Launcher) -ine 'WechatAgent.exe') { throw '目标必须是旧部署的 WechatAgent.exe。' }
 
@@ -184,6 +261,8 @@ try {
     $result = [ordered]@{
         state = 'ready'; apply_digest = $plan.digest; rollback_file = $null; invalidated_stop_proof = $null
         previous_sha256 = $plan.binding.previous_sha256; replacement_sha256 = $plan.binding.replacement_sha256
+        paired_runtime = $plan.pair.directory; paired_manifest_sha256 = $plan.pair.manifestHash
+        native_replacement_sha256 = if ($plan.pair) { $plan.pair.files['wx.exe'] } else { $null }
     }
     if ($ApplyDigest) {
         if ($ApplyDigest -ne $plan.digest) { throw '预演摘要已经变化，请重新预演。' }
@@ -198,6 +277,12 @@ try {
         } finally { $stagedFile.Dispose() }
         if ((FileHash $stage) -ne $result.replacement_sha256 -or (ReadPlan).digest -ne $plan.digest -or
             (-not $dataLock -and (CheckedItem $lockPath -Optional))) { throw '暂存后发现文件或运行状态变化，请重新预演。' }
+        if ($plan.pair) {
+            PublishPair $plan.pair $nonce
+            if ((ReadPlan).digest -ne $plan.digest -or (-not $dataLock -and (CheckedItem $lockPath -Optional))) {
+                throw '配套运行包暂存后发现文件或运行状态变化，请重新预演。'
+            }
+        }
         if ($plan.binding.invalidate_proof) {
             $mode = if ($Restore) { 'restore' } else { 'update' }
             $archived = Join-Path $plan.binding.data "legacy-cutover-state.launcher-$mode-$nonce.json"

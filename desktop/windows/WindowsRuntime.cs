@@ -104,12 +104,12 @@ namespace WechatAgent.Desktop {
                 if (!File.Exists(path) || (File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.Device | FileAttributes.ReparsePoint)) != 0)
                     throw new InvalidOperationException("离线交接需要已有且非链接的原生锁和注册库。");
             }
-            VerifyNativeBundle(d.NativeExe);
+            var nativeExe = OfflineNativeExecutable(d.NativeExe);
             EnsureLegacyPortsIdle(d);
             var epoch = Guid.NewGuid().ToString("N");
             using (BeginLegacyCutoverRun(root, d.Account, epoch)) {
-                var info = HiddenRunner.Info(d.NativeExe, new[] { "--data-dir", root, "--account", d.Account, "cutover-hold" });
-                info.WorkingDirectory = Path.GetDirectoryName(d.NativeExe);
+                var info = HiddenRunner.Info(nativeExe, new[] { "--data-dir", root, "--account", d.Account, "cutover-hold" });
+                info.WorkingDirectory = Path.GetDirectoryName(nativeExe);
                 OwnedProcess.ClearInheritedEnvironment(info, true);
                 using (var child = new Process { StartInfo = info })
                 using (var job = new ProcessJob()) {
@@ -139,6 +139,26 @@ namespace WechatAgent.Desktop {
                     WriteLegacyCutoverState(root, d.Account, "stopped", epoch, server, "offline_hold");
                 }
             }
+        }
+        static string OfflineNativeExecutable(string legacyExe) {
+            var dir = Path.GetDirectoryName(legacyExe);
+            NoLinks(dir);
+            var launcherHash = NativeFileHash(typeof(WindowsRuntime).Assembly.Location).ToLowerInvariant();
+            var pairName = "cutover-native-" + launcherHash;
+            // Enumerate rather than using Directory.Exists, which reports false
+            // for files and inaccessible or broken directory links as well.
+            var matches = Directory.EnumerateFileSystemEntries(dir, pairName)
+                .Where(path => String.Equals(Path.GetFileName(path), pairName, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length == 0) {
+                VerifyNativeBundle(legacyExe);
+                return legacyExe;
+            }
+            if (matches.Length != 1 ||
+                (File.GetAttributes(matches[0]) & (FileAttributes.Directory | FileAttributes.Device | FileAttributes.ReparsePoint)) != FileAttributes.Directory)
+                throw new InvalidOperationException("离线交接配套运行包路径无效或包含链接。");
+            var pairedExe = Path.Combine(matches[0], "wx.exe");
+            VerifyNativeBundle(pairedExe, cutoverLauncherHash: launcherHash);
+            return pairedExe;
         }
         static void EnsureLegacyPortsIdle(Deployment d) {
             var adminPort = new Uri(d.Url).Port;
@@ -215,34 +235,70 @@ namespace WechatAgent.Desktop {
             acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
             if (!exists) Directory.CreateDirectory(path, acl); else Directory.SetAccessControl(path, acl);
         }
-        internal static void VerifyNativeBundle(string nativeExe, bool stationRuntime = false) {
+        static string NativeFileHash(string path) {
+            using (var stream = File.OpenRead(path)) using (var sha = SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
+        }
+        static readonly HashSet<string> CutoverRuntimeFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "wx.exe", "concrt140.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll",
+            "msvcp140_codecvt_ids.dll", "vccorlib140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcruntime140_threads.dll"
+        };
+        internal static void VerifyNativeBundle(string nativeExe, bool stationRuntime = false, string cutoverLauncherHash = null) {
+            bool cutoverRuntime = cutoverLauncherHash != null;
+            bool strictInventory = stationRuntime || cutoverRuntime;
             var dir = Path.GetDirectoryName(nativeExe); NoLinks(dir);
             var manifestPath = Path.Combine(dir, "windows-native-manifest.json");
-            if ((File.GetAttributes(manifestPath) & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("运行清单不能使用链接。");
+            if ((File.GetAttributes(manifestPath) & (FileAttributes.ReparsePoint | FileAttributes.Device | FileAttributes.Directory)) != 0)
+                throw new InvalidOperationException("运行清单必须为非链接的普通文件。");
             var manifest = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(manifestPath, Encoding.UTF8));
-            if ((File.GetAttributes(nativeExe) & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("运行文件不能使用链接。");
-            using (var stream = File.OpenRead(nativeExe)) using (var sha = SHA256.Create())
-                if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), Deployment.Text(manifest, "native_sha256"), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Windows 运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
+            if (manifest == null) throw new InvalidOperationException("Windows 原生运行清单无效。");
+            if ((File.GetAttributes(nativeExe) & (FileAttributes.ReparsePoint | FileAttributes.Device | FileAttributes.Directory)) != 0)
+                throw new InvalidOperationException("原生运行文件必须为非链接的普通文件。");
             // The station package deliberately omits wechat-admin.exe.  Its
             // manifest still enumerates every bundled native dependency, so extra
             // files cannot silently enter the verified runtime directory.
             object listed; var hasFiles = manifest.TryGetValue("files", out listed) && listed is Dictionary<string, object>;
             if (stationRuntime && (!hasFiles || !manifest.ContainsKey("local_station_runtime") || !Convert.ToBoolean(manifest["local_station_runtime"]))) throw new InvalidOperationException("本机成长站微信运行包清单不完整或来源不匹配。");
+            if (cutoverRuntime) {
+                object version, platform, mode, launcher, nativeHash;
+                if (!hasFiles || !manifest.TryGetValue("schema_version", out version) || !Object.Equals(version, 1) ||
+                    !manifest.TryGetValue("platform", out platform) || (platform as string) != "windows-x64" ||
+                    !manifest.TryGetValue("cutover_runtime", out mode) || !Object.Equals(mode, true) ||
+                    !manifest.TryGetValue("launcher_sha256", out launcher) || !String.Equals(launcher as string, cutoverLauncherHash, StringComparison.OrdinalIgnoreCase) ||
+                    !manifest.TryGetValue("native_sha256", out nativeHash) || !(nativeHash is string))
+                    throw new InvalidOperationException("离线交接配套运行包清单不完整或与当前启动器不匹配。");
+            }
+            if (!String.Equals(NativeFileHash(nativeExe), Deployment.Text(manifest, "native_sha256"), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Windows 运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
             if (hasFiles) {
                 var files = (Dictionary<string, object>)listed;
                 if (files.Count == 0) throw new InvalidOperationException("Windows 原生运行文件清单为空。");
+                var remaining = cutoverRuntime ? new HashSet<string>(files.Keys, StringComparer.OrdinalIgnoreCase) : null;
+                if (remaining != null && remaining.Count != files.Count)
+                    throw new InvalidOperationException("离线交接配套运行包登记了重复文件。");
                 var nativeListed = false;
                 foreach (var entry in files) {
                     if (stationRuntime && (entry.Key != Path.GetFileName(entry.Key) || entry.Key.IndexOf(':') >= 0)) throw new InvalidOperationException("本机成长站微信运行包只能登记同级文件。");
+                    if (cutoverRuntime && !CutoverRuntimeFiles.Contains(entry.Key))
+                        throw new InvalidOperationException("离线交接配套运行包只能登记 wx.exe 和允许的 Windows 运行库。");
                     var target = Path.GetFullPath(Path.Combine(dir, entry.Key));
                     if (!target.StartsWith(Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Windows 原生运行文件清单包含越界路径。");
                     NoLinks(target);
-                    if (stationRuntime && (File.GetAttributes(target) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0) throw new InvalidOperationException("本机成长站微信运行包不能包含链接或目录。");
-                    using (var stream = File.OpenRead(target)) using (var sha = SHA256.Create())
-                        if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), Convert.ToString(entry.Value), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Windows 原生运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
+                    if (strictInventory && (File.GetAttributes(target) & (FileAttributes.Directory | FileAttributes.Device | FileAttributes.ReparsePoint)) != 0)
+                        throw new InvalidOperationException("Windows 原生运行包不能包含链接或目录。");
+                    if (!String.Equals(NativeFileHash(target), cutoverRuntime ? entry.Value as string : Convert.ToString(entry.Value), StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Windows 原生运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
                     if (String.Equals(target, Path.GetFullPath(nativeExe), StringComparison.OrdinalIgnoreCase)) nativeListed = true;
                 }
-                if (stationRuntime && !nativeListed) throw new InvalidOperationException("本机成长站微信运行包未登记 wx.exe。");
+                if (strictInventory && !nativeListed) throw new InvalidOperationException("Windows 原生运行包未登记 wx.exe。");
+                if (cutoverRuntime) {
+                    remaining.Add("windows-native-manifest.json");
+                    foreach (var path in Directory.EnumerateFileSystemEntries(dir)) {
+                        if (!remaining.Remove(Path.GetFileName(path)))
+                            throw new InvalidOperationException("离线交接配套运行包包含未登记或重复的文件或目录。");
+                    }
+                    if (remaining.Count != 0) throw new InvalidOperationException("离线交接配套运行包缺少已登记文件。");
+                }
                 if (stationRuntime) foreach (var path in Directory.GetFileSystemEntries(dir)) {
                     var name = Path.GetFileName(path);
                     if (name != "windows-native-manifest.json" && !files.ContainsKey(name)) throw new InvalidOperationException("本机成长站微信运行包包含未登记的文件或目录。");
