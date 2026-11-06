@@ -375,4 +375,6 @@ type ConversationEvent struct {
 	Text       string     `json:"text"`
 	At         string     `json:"at"`
 	NewRequest bool       `json:"new_request"`
+	// MediaReadFailed is a host observation status, never retained user text.
+	MediaReadFailed bool `json:"media_read_failed,omitempty"`
 }

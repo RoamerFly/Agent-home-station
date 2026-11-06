@@ -101,6 +101,7 @@ func Register(mux *http.ServeMux, auth *websession.Store, registry apphost.Regis
 			Threads      *[]string                      `json:"reply_threads"`
 			Attachments  *[]string                      `json:"attachment_threads"`
 			AutoImages   *bool                          `json:"auto_observe_images"`
+			AutoVideos   *bool                          `json:"auto_observe_videos"`
 			MediaReplies *[]string                      `json:"media_reply_threads"`
 			History      *[]string                      `json:"history_threads"`
 			ContactRead  *bool                          `json:"contact_read"`
@@ -114,7 +115,7 @@ func Register(mux *http.ServeMux, auth *websession.Store, registry apphost.Regis
 			websession.Fail(w, http.StatusBadRequest, "请提供明确的回复会话列表")
 			return
 		}
-		view, err := writer.SetConnectionPolicy(r.Context(), r.PathValue("connection"), apphost.ConnectionPolicyInput{ReplyThreads: *input.Threads, AttachmentThreads: input.Attachments, AutoObserveImages: input.AutoImages, MediaReplyThreads: input.MediaReplies, HistoryThreads: input.History, ContactRead: input.ContactRead, GroupMuteThreads: input.GroupMute, GroupRules: input.GroupRules})
+		view, err := writer.SetConnectionPolicy(r.Context(), r.PathValue("connection"), apphost.ConnectionPolicyInput{ReplyThreads: *input.Threads, AttachmentThreads: input.Attachments, AutoObserveImages: input.AutoImages, AutoObserveVideos: input.AutoVideos, MediaReplyThreads: input.MediaReplies, HistoryThreads: input.History, ContactRead: input.ContactRead, GroupMuteThreads: input.GroupMute, GroupRules: input.GroupRules})
 		switch {
 		case errors.Is(err, apphost.ErrNotFound):
 			websession.Fail(w, http.StatusNotFound, "应用连接不存在")

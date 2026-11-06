@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
@@ -29,9 +31,12 @@ type stationVoiceInput struct {
 type stationMediaObserver struct {
 	tools      *stationAttachmentTools
 	imageSince time.Time
+	videoSince time.Time
 }
 
-func (a stationMediaObserver) HandlesType(kind int) bool { return kind == 3 || kind == 34 }
+func (a stationMediaObserver) HandlesType(kind int) bool {
+	return kind == 3 || kind == 34 || kind == 43
+}
 
 func (a stationMediaObserver) SupportsMedia(ctx context.Context, m linuxnative.Message) bool {
 	if !a.HandlesType(m.Type) || m.Direction != "incoming" || !a.tools.scopeAllowed(companion.Input{Account: m.AccountID, Thread: m.ThreadID, MessageTime: m.CreatedAt}, a.tools.grants) || a.tools.shareHost == nil {
@@ -40,6 +45,10 @@ func (a stationMediaObserver) SupportsMedia(ctx context.Context, m linuxnative.M
 	if m.Type == 3 {
 		at, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
 		return err == nil && !a.imageSince.IsZero() && !at.Before(a.imageSince) && a.tools.imageObservationAvailable(ctx, m.AccountID)
+	}
+	if m.Type == 43 {
+		audio, vision := a.videoObservationModes(ctx, m)
+		return audio || vision
 	}
 	host, err := a.tools.shareHost()
 	if err != nil || host.store.Account() != m.AccountID {
@@ -54,6 +63,34 @@ func (a stationMediaObserver) SupportsMedia(ctx context.Context, m linuxnative.M
 	return err == nil && backend == "local"
 }
 
+func (a stationMediaObserver) videoObservationModes(ctx context.Context, m linuxnative.Message) (audio, vision bool) {
+	at, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
+	if err != nil || a.videoSince.IsZero() || at.Before(a.videoSince) || a.tools.shareHost == nil {
+		return false, false
+	}
+	host, err := a.tools.shareHost()
+	if err != nil || host.store.Account() != m.AccountID {
+		return false, false
+	}
+	p, err := host.store.Installed(ctx, localasr.PluginID)
+	if err != nil || !p.Enabled || p.Removed {
+		return false, false
+	}
+	c, err := host.store.Configuration(ctx, localasr.PluginID)
+	if err != nil {
+		return false, false
+	}
+	backend, _ := stationASRBackend(c.Values)
+	vision = host.controller != nil && stationVisionConfigured(c)
+	if backend == "local" {
+		return host.localASR.transcribe != nil, vision
+	}
+	var endpoint, model string
+	audio = backend == "remote" && host.controller != nil && json.Unmarshal(c.Values["asr_endpoint"], &endpoint) == nil && strings.TrimSpace(endpoint) != "" &&
+		json.Unmarshal(c.Values["asr_model"], &model) == nil && strings.TrimSpace(model) != "" && slices.Contains(c.ConfiguredSecrets, "asr_key")
+	return audio, vision
+}
+
 func (a stationMediaObserver) Analyze(ctx context.Context, m linuxnative.Message) (string, error) {
 	text, _, err := a.AnalyzeWithEvidence(ctx, m)
 	return text, err
@@ -66,6 +103,20 @@ func (a stationMediaObserver) AnalyzeWithEvidence(ctx context.Context, m linuxna
 	}
 	t := *a.tools
 	t.trace = companion.Input{Channel: "wechat", Account: ref.Account, Thread: ref.Thread, Sender: ref.Sender, TraceID: ref.MessageID, MessageTime: ref.OccurredAt, Source: &ref}
+	if m.Type == 43 {
+		if m.Direction != "incoming" || !t.allowed() {
+			return "", bot.MediaObservationEvidence{}, wechatapp.ErrAttachmentDenied
+		}
+		audio, vision := a.videoObservationModes(ctx, m)
+		if !audio && !vision {
+			return "", bot.MediaObservationEvidence{}, observationFailure("video_observation_unavailable", "当前微信连接没有可用的视频观察方式。")
+		}
+		text, evidence, err := t.readAutomaticVideoEvidence(ctx, m.ID, 45, audio, vision)
+		if err != nil {
+			return "", bot.MediaObservationEvidence{}, err
+		}
+		return "[普通微信视频实际内容观察]\n覆盖：" + evidence.ObservedRange + "\n" + text, evidence, nil
+	}
 	if m.Type == 3 {
 		if !a.SupportsMedia(ctx, m) {
 			return "", bot.MediaObservationEvidence{}, wechatapp.ErrAttachmentDenied

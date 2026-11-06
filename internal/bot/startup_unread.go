@@ -190,6 +190,9 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			}
 		}
 		selectAnchor := eligible && (live == nil || anchor == nil || !w.addressed(*anchor) || w.addressed(m))
+		if selectAnchor && m.Type == 43 && w.hasScopedMedia(m) && !w.addressed(m) && anchor != nil && w.addressed(*anchor) && (anchor.Type == 1 || anchor.IsQuotedText()) {
+			selectAnchor = false
+		}
 		if selectAnchor {
 			copy := m
 			anchor = &copy
@@ -295,7 +298,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 				return w.persistErr
 			}
 		}
-		if err := w.prepareBatchObservations(ctx, c, &in); err != nil {
+		if err := w.prepareBatchObservations(ctx, c, &in, w.activity); err != nil {
 			var failure *groupObservationFailure
 			if errors.As(err, &failure) {
 				w.stopUnreadableTurn(in, failure)
@@ -310,7 +313,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 
 // Reads may block; the production caller runs this on its generation worker.
 // The store serializes each source-scoped observation update transaction.
-func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engine, in *companion.Input) error {
+func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engine, in *companion.Input, report func(Record)) error {
 	required := make(map[string]bool, len(in.UnreadMediaIDs))
 	for _, id := range in.UnreadMediaIDs {
 		required[id] = true
@@ -337,10 +340,16 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 			}
 		}
 		stop()
-		if ctx.Err() == context.Canceled {
-			return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if err != nil && in.IsGroup {
+			if w.hasScopedMedia(linuxnative.Message{Type: 43}) && independentGroupTextRequest(in, *event) {
+				event.MediaReadFailed = true
+				report(Record{Event: "background_video_read_failed", Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID,
+					RelatedMessageID: id, Status: "incomplete", Reason: observationReason(err), Content: "背景视频未读到内容，继续独立文字请求。"})
+				continue
+			}
 			return &groupObservationFailure{reason: observationReason(err), messageID: id}
 		}
 		if err != nil {
@@ -357,4 +366,23 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 		return &groupObservationFailure{reason: "media_batch_source_missing", messageID: in.TraceID}
 	}
 	return nil
+}
+
+// A different sender's ordinary video can remain background for a verified
+// text request. Keep the existing failure policy when it is the actual target,
+// shares the requester, or is explicitly referenced anywhere in this batch.
+func independentGroupTextRequest(in *companion.Input, media companion.ConversationEvent) bool {
+	if !in.Directed || media.Source == nil || media.Source.MessageType != 43 || media.MessageID == in.TraceID || media.Sender == "" || media.Sender == in.Sender {
+		return false
+	}
+	anchorText := false
+	for _, event := range in.UnreadMessages {
+		if event.ReplyTo != nil && event.ReplyTo.MessageID == media.MessageID {
+			return false
+		}
+		if event.MessageID == in.TraceID && event.Sender == in.Sender && event.NewRequest && event.Source != nil {
+			anchorText = event.Source.MessageType == 1 || event.Source.MessageType == 49 && event.ReplyTo != nil
+		}
+	}
+	return anchorText
 }

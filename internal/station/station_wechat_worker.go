@@ -57,6 +57,7 @@ type stationWechatPolicy struct {
 	Grants           map[string]time.Time              `json:"reply_grants"`
 	AttachmentGrants map[string]time.Time              `json:"attachment_grants,omitempty"`
 	AutoImagesSince  time.Time                         `json:"auto_images_since,omitzero"`
+	AutoVideosSince  time.Time                         `json:"auto_videos_since,omitzero"`
 	MediaReplyGrants map[string]time.Time              `json:"media_reply_grants,omitempty"`
 	HistoryGrants    map[string]time.Time              `json:"history_grants,omitempty"`
 	ContactGrant     time.Time                         `json:"contact_grant,omitzero"`
@@ -435,7 +436,7 @@ func (w *stationWechatWorker) policyView() *apphost.ConfiguredPolicy {
 		}
 		groupRules = append(groupRules, view)
 	}
-	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0 || contactRead || len(groupMute) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, AutoObserveImages: !w.policy.AutoImagesSince.IsZero(), MediaReplyThreads: mediaReplies, HistoryThreads: history, ContactRead: contactRead, GroupMuteThreads: groupMute, GroupRules: groupRules}
+	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0 || contactRead || len(groupMute) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, AutoObserveImages: !w.policy.AutoImagesSince.IsZero(), AutoObserveVideos: !w.policy.AutoVideosSince.IsZero(), MediaReplyThreads: mediaReplies, HistoryThreads: history, ContactRead: contactRead, GroupMuteThreads: groupMute, GroupRules: groupRules}
 }
 
 func (s *stationWechat) Inspect(ctx context.Context, id string) (apphost.ConnectionStatus, error) {
@@ -511,11 +512,8 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 	}
 	next := w.policy
 	next.GroupRules = groupRules
-	if len(attachments) == 0 || policy.AutoObserveImages != nil && !*policy.AutoObserveImages {
-		next.AutoImagesSince = time.Time{}
-	} else if policy.AutoObserveImages != nil && next.AutoImagesSince.IsZero() {
-		next.AutoImagesSince = now
-	}
+	next.AutoImagesSince = stationAutoMediaSince(len(attachments) > 0, policy.AutoObserveImages, next.AutoImagesSince, now)
+	next.AutoVideosSince = stationAutoMediaSince(len(attachments) > 0, policy.AutoObserveVideos, next.AutoVideosSince, now)
 	if policy.GroupMuteThreads != nil {
 		requested := *policy.GroupMuteThreads
 		if len(requested) > 100 {
@@ -540,7 +538,7 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 			next.ContactGrant = now
 		}
 	}
-	workerScopeChanged := !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) || !maps.Equal(mediaReplies, w.policy.MediaReplyGrants) || !maps.Equal(history, w.policy.HistoryGrants) || !maps.Equal(groupRules, w.policy.GroupRules) || next.AutoImagesSince != w.policy.AutoImagesSince
+	workerScopeChanged := !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) || !maps.Equal(mediaReplies, w.policy.MediaReplyGrants) || !maps.Equal(history, w.policy.HistoryGrants) || !maps.Equal(groupRules, w.policy.GroupRules) || next.AutoImagesSince != w.policy.AutoImagesSince || next.AutoVideosSince != w.policy.AutoVideosSince
 	if workerScopeChanged {
 		next.Grants, next.AttachmentGrants, next.MediaReplyGrants, next.HistoryGrants = grants, attachments, mediaReplies, history
 		// Require explicit resume after a scope change on an enabled worker.
@@ -559,6 +557,16 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 	view.Configuration, view.Worker = "worker-configured", w.state()
 	view.SubmissionsPaused, view.Policy = w.policy.Paused, w.policyView()
 	return view, nil
+}
+
+func stationAutoMediaSince(hasAttachments bool, requested *bool, previous, now time.Time) time.Time {
+	if !hasAttachments || requested != nil && !*requested {
+		return time.Time{}
+	}
+	if requested != nil && previous.IsZero() {
+		return now
+	}
+	return previous
 }
 
 func stationScopedGrants(parent, previous map[string]time.Time, requested *[]string, now time.Time) (map[string]time.Time, error) {
@@ -786,7 +794,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 		NextMediaResume:   station.nextMediaResume,
 		MediaResumeResult: station.mediaResumeResult,
 		StateDir:          filepath.Join(dir, "queue"), AllowedThreads: threads, GroupRules: rules,
-		Options: &options, Prefix: "/ai ", ScopedAnalyzer: stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince},
+		Options: &options, Prefix: "/ai ", ScopedAnalyzer: stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},
 		PreferredGroupShare: func(m linuxnative.Message) bool {
 			return !run.block.Load() && policy.groupShareCandidate(native.Account(), m)
 		},

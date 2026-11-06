@@ -90,18 +90,7 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 	defer file.Close()
 
 	checkSource := func(ctx context.Context) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		current, err := access.source(ctx, source.Thread, source.Message)
-		if err != nil || current != source || !access.Allowed(ctx, source.Thread) {
-			return wechatapp.ErrAttachmentDenied
-		}
-		version, err := t.store.RecallEpoch(ctx)
-		if err != nil || version != epoch {
-			return wechatapp.ErrAttachmentDenied
-		}
-		return nil
+		return access.confirmObservationSource(ctx, source, epoch)
 	}
 	if t.shareHost == nil {
 		return "", observationFailure("media_plugin_runtime_unavailable", "当前连接未准备媒体理解工具宿主。")

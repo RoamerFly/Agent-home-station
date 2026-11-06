@@ -70,6 +70,7 @@ type ConfiguredPolicy struct {
 	ReplyThreads        []string              `json:"reply_threads,omitempty"`
 	AttachmentThreads   []string              `json:"attachment_threads,omitempty"`
 	AutoObserveImages   bool                  `json:"auto_observe_images,omitempty"`
+	AutoObserveVideos   bool                  `json:"auto_observe_videos,omitempty"`
 	MediaReplyThreads   []string              `json:"media_reply_threads,omitempty"`
 	HistoryThreads      []string              `json:"history_threads,omitempty"`
 	ContactRead         bool                  `json:"contact_read,omitempty"`
@@ -110,6 +111,7 @@ type ConnectionPolicyInput struct {
 	// A nil list leaves the old attachment grant on still-allowed threads.
 	AttachmentThreads *[]string
 	AutoObserveImages *bool
+	AutoObserveVideos *bool
 	MediaReplyThreads *[]string
 	HistoryThreads    *[]string
 	ContactRead       *bool

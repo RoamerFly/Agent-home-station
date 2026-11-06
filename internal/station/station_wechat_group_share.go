@@ -50,29 +50,43 @@ func (t *stationAttachmentTools) readGroupShareEvidence(ctx context.Context, in 
 		return "", bot.MediaObservationEvidence{}, errors.New("share_auto_summary_tools_unavailable")
 	}
 	tools.SetTrace(canonical)
-	asset, duration, frames, err := stationGroupShareRead(ctx, tools, m.ID)
+	text, evidence, err := tools.readAutomaticVideoEvidence(ctx, m.ID, stationGroupShareAudioBudget, true, true)
+	if err != nil {
+		return "", bot.MediaObservationEvidence{}, err
+	}
+	return "[微信视频号实际内容观察]\n" + text, evidence, nil
+}
+
+// Both automatic entry points use the same verified original and observation
+// tools. Each caller controls its budget and authorized backends.
+func (t *stationAttachmentTools) readAutomaticVideoEvidence(ctx context.Context, message string, audioBudget float64, useAudio, useVision bool) (string, bot.MediaObservationEvidence, error) {
+	asset, duration, frames, err := stationGroupShareRead(ctx, t, message)
 	if err != nil {
 		return "", bot.MediaObservationEvidence{}, err
 	}
 
 	evidence := bot.MediaObservationEvidence{}
-	audio, audioErr := stationGroupShareObserveAudio(ctx, tools, m.ID, asset, duration)
-	if audioErr == nil && strings.TrimSpace(audio.Text) != "" {
-		rangeLabel := fmt.Sprintf("视频音轨 %.3f–%.3f 秒", audio.Start, audio.End)
-		if audio.Complete {
-			rangeLabel += "（完整）"
+	var audioErr error
+	var audio stationGroupShareAudio
+	if useAudio {
+		audio, audioErr = stationGroupShareObserveAudio(ctx, t, message, asset, duration, audioBudget)
+		if audioErr == nil && strings.TrimSpace(audio.Text) != "" {
+			rangeLabel := fmt.Sprintf("视频音轨 %.3f–%.3f 秒", audio.Start, audio.End)
+			if audio.Complete {
+				rangeLabel += "（完整）"
+			}
+			evidence.Parts = append(evidence.Parts, companion.ObservationPart{
+				Kind: companion.ObservationAudioTranscript, Range: rangeLabel, Excerpt: audio.Text,
+			})
 		}
-		evidence.Parts = append(evidence.Parts, companion.ObservationPart{
-			Kind: companion.ObservationAudioTranscript, Range: rangeLabel, Excerpt: audio.Text,
-		})
 	}
 
 	// A no-speech clip still deserves a visual observation.  Do not pay for a
 	// second observer call when the decoded speech already gives the model
 	// firsthand content; this is an intentional bounded fallback, not a
 	// publisher-metadata fallback.
-	if !companion.HasFirsthandObservation(evidence.Parts) {
-		visual, visualErr := stationGroupShareObserveFrames(ctx, tools, m.ID, asset, frames)
+	if useVision && !companion.HasFirsthandObservation(evidence.Parts) {
+		visual, visualErr := stationGroupShareObserveFrames(ctx, t, message, asset, frames)
 		if visualErr != nil {
 			if audioErr != nil {
 				return "", bot.MediaObservationEvidence{}, errors.Join(audioErr, visualErr)
@@ -97,10 +111,16 @@ func (t *stationAttachmentTools) readGroupShareEvidence(ctx context.Context, in 
 		if audioErr != nil {
 			return "", bot.MediaObservationEvidence{}, audioErr
 		}
+		switch audio.State {
+		case "no_audio_track":
+			return "", bot.MediaObservationEvidence{}, observationFailure("video_audio_track_absent", "视频没有音轨，未取得画面观察。")
+		case "no_recognizable_speech":
+			return "", bot.MediaObservationEvidence{}, observationFailure("video_no_recognizable_speech", "已读取音轨，未识别到可辨语音，未取得画面观察。")
+		}
 		return "", bot.MediaObservationEvidence{}, errors.New("media_observation_empty")
 	}
 	evidence.ObservedRange, evidence.Excerpt = stationGroupShareEvidenceText(evidence.Parts)
-	return "[微信视频号实际内容观察]\n" + evidence.Excerpt, evidence, nil
+	return evidence.Excerpt, evidence, nil
 }
 
 func (t *stationAttachmentTools) validateCurrentGroupShare(ctx context.Context, in companion.Input, m linuxnative.Message) (companion.Input, error) {
@@ -168,12 +188,13 @@ func stationGroupShareRead(ctx context.Context, tools *stationAttachmentTools, m
 
 type stationGroupShareAudio struct {
 	Text       string
+	State      string
 	Start, End float64
 	Complete   bool
 }
 
-func stationGroupShareObserveAudio(ctx context.Context, tools *stationAttachmentTools, message, asset string, duration float64) (stationGroupShareAudio, error) {
-	start, limit := 0.0, math.Min(duration, stationGroupShareAudioBudget)
+func stationGroupShareObserveAudio(ctx context.Context, tools *stationAttachmentTools, message, asset string, duration, audioBudget float64) (stationGroupShareAudio, error) {
+	start, limit := 0.0, math.Min(duration, audioBudget)
 	result := stationGroupShareAudio{Start: 0}
 	var text []string
 	for start < limit-.001 {
@@ -202,6 +223,7 @@ func stationGroupShareObserveAudio(ctx context.Context, tools *stationAttachment
 			text = append(text, value)
 		}
 		result.End, result.Complete = max(result.End, page.End), page.Done
+		result.State = page.State
 		if page.Done || page.Next <= start+.001 {
 			break
 		}

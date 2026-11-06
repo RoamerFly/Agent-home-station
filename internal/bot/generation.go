@@ -366,7 +366,9 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 		var d companion.Decision
 		var err error
 		if len(in.UnreadMediaIDs) > 0 {
-			err = w.prepareBatchObservations(modelCtx, fork, &in)
+			err = w.prepareBatchObservations(modelCtx, fork, &in, func(record Record) {
+				_ = s.call(modelCtx, func() error { w.activity(record); return w.persistErr })
+			})
 			if err == nil {
 				err = s.call(modelCtx, func() error { j.input = in; j.observationPending = false; return w.persistErr })
 			}

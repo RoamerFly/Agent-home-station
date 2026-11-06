@@ -227,7 +227,10 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 		t.Fatal("forgetting or no-send contract failed", fetches.Load(), mutations.Load())
 	}
 	entries, err := os.ReadDir(filepath.Join(root, "attachments"))
-	if err != nil || len(entries) != 3 {
+	// The automatic ordinary-video contract deliberately uses the current
+	// opt-in grant. It therefore owns one distinct, verified cache record in
+	// addition to the three records exercised by the manual read cases.
+	if err != nil || len(entries) != 4 {
 		t.Fatal("failed/changed source was published or staged data was left", entries, err)
 	}
 	var routes int
@@ -296,7 +299,9 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 		expectedAutomaticFetches = 1
 		testStationVideoObservation(t, tools, share, acquired.Asset, hash, &blocked)
 	})
-	if mutations.Load() != 0 || fetches.Load() != before+expectedAutomaticFetches || transfers.Load() != 1 {
+	// One verified transfer belongs to the initial manual ordinary-video read;
+	// the automatic observer must rebind it to its current opt-in grant.
+	if mutations.Load() != 0 || fetches.Load() != before+expectedAutomaticFetches || transfers.Load() != 2 {
 		t.Fatal("unexpected original fetch or send during observation", mutations.Load(), fetches.Load(), transfers.Load())
 	}
 }
@@ -356,6 +361,80 @@ func testStationLocalVideoASR(t *testing.T, tools *stationAttachmentTools, asset
 	copy := *tools
 	copy.shareHost = func() (*stationShareHost, error) { return host, nil }
 	defer blocked.Store(false)
+	t.Run("automatic_ordinary_video_uses_verified_local_audio", func(t *testing.T) {
+		message, err := copy.native.Message(ctx, "normal-video")
+		if err != nil {
+			t.Fatal(err)
+		}
+		at, err := time.Parse(time.RFC3339Nano, message.CreatedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodyHash := sha256.Sum256([]byte(message.Body))
+		source := &companion.SourceRef{
+			Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID,
+			MessageID: message.ID, ServerID: message.ServerID, MessageType: message.Type,
+			OccurredAt: message.CreatedAt, InstanceID: copy.store.SourceInstanceID(),
+			BodyHash: fmt.Sprintf("%x", bodyHash), Revision: 1,
+		}
+		empty := ""
+		input := companion.Input{
+			Channel: "wechat", Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID,
+			TraceID: message.ID, MessageTime: message.CreatedAt, Source: source, OriginalText: &empty,
+			Text: "synthetic ordinary video", Mode: "direct", IsGroup: true,
+			IncomingMedia: []companion.IncomingMediaRef{{Source: *source, Kind: "video", UploaderID: message.SenderID}},
+		}
+		cfg := companion.Defaults()
+		cfg.Permissions.Remember = true
+		if err := copy.store.Observe(input, cfg, at); err != nil {
+			t.Fatal(err)
+		}
+		stored, ok := copy.store.SourceForInput(input)
+		if !ok || stored.EventID == "" {
+			t.Fatal("ordinary video source was not stored", stored)
+		}
+
+		remoteCalls, localCalls := 0, 0
+		autoHost := &stationShareHost{
+			store: store,
+			postModel: func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+				remoteCalls++
+				return nil, errors.New("automatic ordinary video must not call a remote model")
+			},
+			localASR: stationLocalASR{transcribe: func(_ context.Context, wav []byte, verify func() error) (string, error) {
+				if len(wav) < 1000 || !bytes.HasPrefix(wav, []byte("RIFF")) || string(wav[8:12]) != "WAVE" {
+					t.Fatal("automatic observer did not decode the synthetic video audio to WAV")
+				}
+				if err := verify(); err != nil {
+					return "", err
+				}
+				localCalls++
+				return "Automatic ordinary video transcript.", nil
+			}},
+		}
+		autoTools := copy
+		autoTools.grants = map[string]time.Time{message.ThreadID: at.Add(-time.Minute)}
+		autoTools.shareHost = func() (*stationShareHost, error) { return autoHost, nil }
+		beforeOptIn := stationMediaObserver{tools: &autoTools, videoSince: at.Add(time.Second)}
+		if beforeOptIn.SupportsMedia(ctx, message) {
+			t.Fatal("ordinary video before the opt-in timestamp became eligible")
+		}
+		observer := stationMediaObserver{tools: &autoTools, videoSince: at.Add(-time.Second)}
+		if !observer.SupportsMedia(ctx, message) {
+			t.Fatal("opted-in ordinary video with local ASR was not eligible")
+		}
+		text, evidence, err := observer.AnalyzeWithEvidence(companion.WithMediaSource(ctx, *stored), message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if remoteCalls != 0 || localCalls != 1 || !strings.Contains(text, "[普通微信视频实际内容观察]") || !strings.Contains(text, "Automatic ordinary video transcript.") {
+			t.Fatalf("text=%q local=%d remote=%d", text, localCalls, remoteCalls)
+		}
+		if len(evidence.Parts) != 1 || evidence.Parts[0].Kind != companion.ObservationAudioTranscript ||
+			!strings.Contains(evidence.Parts[0].Excerpt, "Automatic ordinary video transcript.") || !strings.Contains(evidence.ObservedRange, "视频音轨") {
+			t.Fatalf("unexpected typed evidence: %#v", evidence)
+		}
+	})
 	observe := func(message, asset string) (string, error) {
 		t.Helper()
 		return copy.Call(ctx, "wechat_video_observe", json.RawMessage(fmt.Sprintf(`{"message_id":%q,"asset_id":%q,"mode":"audio","duration_seconds":0.5}`, message, asset)))
