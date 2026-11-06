@@ -321,12 +321,18 @@ namespace WechatAgent.Desktop {
                 var markerRoot = Path.Combine(root, "cutover evidence");
                 WindowsRuntime.PrivateDirectory(markerRoot);
                 var epoch = Guid.NewGuid().ToString("N");
-                WindowsRuntime.WriteLegacyCutoverState(markerRoot, "synthetic", "starting", epoch, "");
+                using (var gate = WindowsRuntime.BeginLegacyCutoverRun(markerRoot, "synthetic", epoch)) {
+                    await Reject(() => { using (WindowsRuntime.BeginLegacyCutoverRun(markerRoot, "synthetic", Guid.NewGuid().ToString("N"))) { } return Task.FromResult(0); });
+                }
                 var marker = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(WindowsRuntime.LegacyCutoverStatePath(markerRoot)));
-                Assert(Convert.ToInt32(marker["version"]) == 1 && Deployment.Text(marker, "state") == "starting" && Deployment.Text(marker, "epoch") == epoch && Deployment.Text(marker, "account_id") == "synthetic" && Deployment.Text(marker, "data_root") == WindowsRuntime.ComparablePath(markerRoot) && Deployment.Text(marker, "native_server_id") == "", "new desktop launch atomically invalidates an earlier stopped cutover proof");
+                Assert(Convert.ToInt32(marker["version"]) == 2 && Deployment.Text(marker, "state") == "starting" && Deployment.Text(marker, "epoch") == epoch && Deployment.Text(marker, "account_id") == "synthetic" && Deployment.Text(marker, "data_root") == WindowsRuntime.ComparablePath(markerRoot) && Deployment.Text(marker, "native_server_id") == "", "new desktop launch atomically invalidates an earlier stopped cutover proof");
                 WindowsRuntime.WriteLegacyCutoverState(markerRoot, "synthetic", "stopped", epoch, "native-synthetic");
                 marker = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(WindowsRuntime.LegacyCutoverStatePath(markerRoot)));
                 Assert(Deployment.Text(marker, "state") == "stopped" && Deployment.Text(marker, "epoch") == epoch && Deployment.Text(marker, "native_server_id") == "native-synthetic" && Deployment.Text(marker, "at") != "", "clean desktop stop records the same cutover epoch after owned processes exit");
+                var stopBytes = File.ReadAllText(WindowsRuntime.LegacyCutoverStatePath(markerRoot));
+                File.WriteAllText(Path.Combine(markerRoot, "legacy-cutover-claim.json"), "synthetic claim");
+                await Reject(() => { using (WindowsRuntime.BeginLegacyCutoverRun(markerRoot, "synthetic", Guid.NewGuid().ToString("N"))) { } return Task.FromResult(0); });
+                Assert(File.ReadAllText(WindowsRuntime.LegacyCutoverStatePath(markerRoot)) == stopBytes, "a claimed root rejects legacy startup without altering its stopped proof");
                 var d = Deployment.Load(root);
                 var close = new CloseSettings(root);
                 Assert(close.Behavior == "ask", "close choice is asked by default");

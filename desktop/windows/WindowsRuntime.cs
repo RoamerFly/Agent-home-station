@@ -24,6 +24,7 @@ namespace WechatAgent.Desktop {
         readonly HttpClient api = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(3) };
         OwnedProcess native, web;
         ProcessJob job;
+        FileStream cutoverGate;
         string serverId, generation, cutoverEpoch;
         internal WindowsRuntime(Deployment config, ICommandRunner runner) { d = config; commands = runner; }
         internal bool WebRunning { get { return web != null && web.Alive; } }
@@ -35,6 +36,24 @@ namespace WechatAgent.Desktop {
         }
         internal static string LegacyCutoverStatePath(string root) {
             return Path.Combine(ComparablePath(root), "legacy-cutover-state.json");
+        }
+        internal static FileStream BeginLegacyCutoverRun(string root, string accountId, string epoch) {
+            root = ComparablePath(root);
+            NoLinks(root);
+            var lockPath = Path.Combine(root, "legacy-cutover.lock");
+            if (File.Exists(lockPath) && (File.GetAttributes(lockPath) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("旧桌面交接锁不能使用链接。");
+            var gate = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+            try {
+                try { gate.Lock(0, 1); }
+                catch (IOException) { throw new InvalidOperationException("此微信数据目录仍由旧桌面占用，或正在核对交接。"); }
+                try {
+                    File.GetAttributes(Path.Combine(root, "legacy-cutover-claim.json"));
+                    throw new InvalidOperationException("这个微信数据目录已经交接给成长站。请先按回退流程停机并核对投递记录。");
+                } catch (FileNotFoundException) { }
+                WriteLegacyCutoverState(root, accountId, "starting", epoch, "");
+                return gate;
+            } catch { gate.Dispose(); throw; }
         }
         // This marker is deliberately private to the old desktop data root.  It
         // is evidence that this desktop, rather than an arbitrary process on the
@@ -50,7 +69,7 @@ namespace WechatAgent.Desktop {
                 throw new InvalidOperationException("旧桌面切换记录不能使用链接。");
             var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             var text = Deployment.Json.Serialize(new {
-                version = 1, state = state, epoch = epoch, account_id = accountId,
+                version = 2, state = state, epoch = epoch, account_id = accountId,
                 data_root = dataRoot, native_server_id = nativeServerId ?? "",
                 at = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
             });
@@ -170,9 +189,13 @@ namespace WechatAgent.Desktop {
             if (AnyRunning) { CheckAlive(); return; }
             // A crashed process can still own its log/pipe handles. Release
             // the stopped instance before retrying, without adopting any PID.
-            if (native != null || web != null) await Stop();
+            if (native != null || web != null || cutoverGate != null) await Stop();
             FreePort(d.Url); FreePort(d.NativeUrl);
             PrivateDirectory(d.Root);
+            // Claim and starting-marker publication share an OS lock with the
+            // new station. No legacy runtime work may precede this check.
+            cutoverEpoch = Guid.NewGuid().ToString("N");
+            cutoverGate = BeginLegacyCutoverRun(d.Root, d.Account, cutoverEpoch);
             PrivateDirectory(Path.Combine(d.Workspace, "secrets"));
             Directory.CreateDirectory(Path.Combine(d.Root, "logs"));
             // Explicit config avoids inheriting another installed wx instance's
@@ -190,11 +213,6 @@ namespace WechatAgent.Desktop {
             }
             job = new ProcessJob();
             serverId = generation = null;
-            // A new launch must invalidate any earlier stopped proof before the
-            // first owned child exists.  A failed or unadmitted startup therefore
-            // remains visibly "starting" and cannot be mistaken for a cutover.
-            cutoverEpoch = Guid.NewGuid().ToString("N");
-            WriteLegacyCutoverState(d.Root, d.Account, "starting", cutoverEpoch, "");
             var resources = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(d.NativeExe), ".."));
             var media = Path.Combine(resources, "windows-media");
             var programEnv = new Dictionary<string, string>();
@@ -297,13 +315,18 @@ namespace WechatAgent.Desktop {
             }
             if (hadNative) await FinishRemovedAccounts(CancellationToken.None);
             if (job != null) { job.Dispose(); job = null; }
-            if (gracefulWeb && gracefulNative && !String.IsNullOrEmpty(cutoverEpoch))
-                WriteLegacyCutoverState(d.Root, d.Account, "stopped", cutoverEpoch, stoppedServerId);
+            try {
+                if (gracefulWeb && gracefulNative && cutoverGate != null)
+                    WriteLegacyCutoverState(d.Root, d.Account, "stopped", cutoverEpoch, stoppedServerId);
+            } finally {
+                if (cutoverGate != null) { cutoverGate.Dispose(); cutoverGate = null; }
+            }
         }
         public void Dispose() {
             api.Dispose();
             if (web != null) web.Dispose(); if (native != null) native.Dispose();
             if (job != null) job.Dispose();
+            if (cutoverGate != null) cutoverGate.Dispose();
         }
     }
 

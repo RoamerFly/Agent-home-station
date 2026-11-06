@@ -8,6 +8,14 @@ import (
 )
 
 func Lock(path string) (func(), error) {
+	return lock(path, syscall.LOCK_EX)
+}
+
+func TryLock(path string) (func(), error) {
+	return lock(path, syscall.LOCK_EX|syscall.LOCK_NB)
+}
+
+func lock(path string, flags int) (func(), error) {
 	if err := validateRegistryLockPath(path); err != nil {
 		return nil, err
 	}
@@ -15,7 +23,7 @@ func Lock(path string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := syscall.Flock(int(f.Fd()), flags); err != nil {
 		_ = f.Close()
 		return nil, err
 	}

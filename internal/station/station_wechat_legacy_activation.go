@@ -2,8 +2,10 @@ package station
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -12,10 +14,22 @@ import (
 	"time"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/hostfile"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
+)
+
+const legacyCutoverLockFile = "legacy-cutover.lock"
+const legacyCutoverClaimFile = "legacy-cutover-claim.json"
+
+type handoverCheck uint8
+
+const (
+	handoverPreview handoverCheck = iota
+	handoverClaim
+	handoverActive
 )
 
 // legacyActivation is private host evidence, not a platform credential. The
@@ -174,6 +188,9 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 		StopDigest: hex.EncodeToString(evidence[0][:]), ProfileDigest: hex.EncodeToString(evidence[1][:]), TargetDataset: daemon.ServerID,
 		ConfirmedAt: time.Now().UTC(),
 	}
+	if reason := s.legacyHandover(proof, handoverPreview); reason != "" {
+		return blocked(reason)
+	}
 	proof.ConfirmationDigest = localCheckpointKey("legacy-activation-v1", proof.ArchiveDigest, proof.Connection,
 		proof.OldRoot, proof.StopDigest, proof.ProfileDigest, daemon, latest.Plan.Digest, w.policy.Grants, view.PendingReceipts)
 	if input.Digest == "" {
@@ -188,9 +205,13 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 	}
 	fresh, daemonErr := native.DaemonStatus(ctx)
 	login, loginErr := native.Status(ctx)
+	profile, profileDigest := s.nativeImportReceipt(id, account)
 	if daemonErr != nil || fresh != daemon || loginErr != nil || login.StorageMode != "managed" || targetLoginState(login, account) != "online" ||
-		!s.activationMatches(proof, id, archive.Plan, fresh.ServerID) || ctx.Err() != nil || s.ctx.Err() != nil {
+		profile != "import_receipt_matched" || hex.EncodeToString(profileDigest[:]) != proof.ProfileDigest || ctx.Err() != nil || s.ctx.Err() != nil {
 		return blocked("原生实例或切换证据已变化，请重新核对")
+	}
+	if reason := s.legacyHandover(proof, handoverClaim); reason != "" {
+		return blocked(reason)
 	}
 	next := w.policy
 	next.LegacyArchiveDigest, next.LegacyActivation = archive.Plan.Digest, &proof
@@ -233,20 +254,65 @@ func (s *stationWechat) activationMatches(a legacyActivation, id string, plan le
 }
 
 func (s *stationWechat) localActivationEvidence(id string, a legacyActivation) bool {
-	if legacyImportOverlap(a.OldRoot, s.dataDir) || legacyImportOverlap(a.OldRoot, s.workspaceRoot) {
-		return false
-	}
-	root, err := workspacefs.OpenPath(a.OldRoot)
-	if err != nil {
-		return false
-	}
-	defer root.Close()
-	marker, err := readLegacyImportFile(root, legacyStopMarkerFile, 16<<10)
-	if err != nil || hexDigest(marker) != a.StopDigest {
+	if s.legacyHandover(a, handoverActive) != "" {
 		return false
 	}
 	profile, digest := s.nativeImportReceipt(id, a.Connection.AccountID)
 	return profile == "import_receipt_matched" && hex.EncodeToString(digest[:]) == a.ProfileDigest
+}
+
+// The legacy desktop holds the same byte-range lock from startup until its
+// children have stopped. A durable claim then fences legacy startup even while
+// the station is stopped or its native jobs outlive its worker. Only the same
+// target may recover a claim left by an interrupted policy write.
+func (s *stationWechat) legacyHandover(a legacyActivation, check handoverCheck) string {
+	if legacyImportOverlap(a.OldRoot, s.dataDir) || legacyImportOverlap(a.OldRoot, s.workspaceRoot) {
+		return "旧宿主目录与新站目录重叠"
+	}
+	root, err := workspacefs.OpenPath(a.OldRoot)
+	if err != nil {
+		return "无法读取旧宿主目录"
+	}
+	defer root.Close()
+	if check == handoverClaim {
+		unlock, err := hostfile.TryLock(filepath.Join(a.OldRoot, legacyCutoverLockFile))
+		if err != nil {
+			return "旧宿主正在运行、处理交接，或交接锁不可用"
+		}
+		defer unlock()
+	}
+	raw, err := readLegacyImportFile(root, legacyStopMarkerFile, 16<<10)
+	if err != nil || hexDigest(raw) != a.StopDigest {
+		return "旧宿主停机记录已变化，请重新核对"
+	}
+	var marker legacyStopMarker
+	if json.Unmarshal(raw, &marker) != nil || marker.Version != 2 || marker.State != "stopped" ||
+		marker.AccountID != a.Connection.AccountID || !sameCutoverPath(marker.DataRoot, a.OldRoot) {
+		return "旧桌面不支持互斥交接，请用支持交接的版本正常停止并更新快照"
+	}
+	key := localCheckpointKey("legacy-cutover-claim-v1", a.ArchiveDigest, a.Connection, a.StopDigest, a.ProfileDigest, a.TargetDataset)
+	raw, err = readLegacyImportFile(root, legacyCutoverClaimFile, 512)
+	if err == nil {
+		var saved string
+		if json.Unmarshal(raw, &saved) == nil && saved == key {
+			return ""
+		}
+		return "旧宿主已有其他目标的交接记录，或记录无效"
+	}
+	if !errors.Is(err, os.ErrNotExist) || check == handoverActive {
+		return "旧宿主的交接记录缺失或无法读取"
+	}
+	if check == handoverClaim {
+		temporary := ".legacy-cutover-" + rand.Text() + ".tmp"
+		defer root.Remove(temporary)
+		if err := writeLegacyStagedFile(root, temporary, key); err != nil {
+			return "无法保存旧宿主的交接记录"
+		}
+		if err := root.Rename(temporary, legacyCutoverClaimFile); err != nil {
+			return "无法启用旧宿主的交接记录"
+		}
+	}
+	return ""
 }
 
 func hexDigest(data []byte) string {

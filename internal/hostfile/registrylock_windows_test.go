@@ -5,11 +5,45 @@ package hostfile
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestPinnedRegistryLockInteroperatesWithDesktopFileStream(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-cutover.lock")
+	tryDesktopLock := func() (bool, error) {
+		// Match the desktop FileStream constructor and byte range in a separate process.
+		cmd := exec.CommandContext(t.Context(), "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `
+$ErrorActionPreference = 'Stop'
+$gate = [IO.File]::Open($env:AHS_SYNTHETIC_LOCK_PATH, 'OpenOrCreate', 'ReadWrite', 'ReadWrite')
+try {
+  try { $gate.Lock(0, 1) } catch [IO.IOException] { exit 37 }
+} finally { $gate.Dispose() }
+`)
+		cmd.Env = append(os.Environ(), "AHS_SYNTHETIC_LOCK_PATH="+path)
+		err := cmd.Run()
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 37 {
+			return false, nil
+		}
+		return err == nil, err
+	}
+	release, err := TryLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquired, err := tryDesktopLock()
+	release()
+	if err != nil || acquired {
+		t.Fatalf("desktop lock did not reject the Go-owned byte range: %v, %v", acquired, err)
+	}
+	if acquired, err = tryDesktopLock(); err != nil || !acquired {
+		t.Fatalf("desktop lock did not open after Go released the byte range: %v, %v", acquired, err)
+	}
+}
 
 func TestPinnedRegistryLockRejectsNonRegularPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.lock")

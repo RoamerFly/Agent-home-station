@@ -68,7 +68,7 @@ func (s *stationWechat) legacyHostEvidence(snapshot *os.Root, source legacyImpor
 	}
 	copied, err := readLegacyImportFile(snapshot, legacyStopMarkerFile, 16<<10)
 	var marker legacyStopMarker
-	if err != nil || json.Unmarshal(copied, &marker) != nil || marker.Version != 1 ||
+	if err != nil || json.Unmarshal(copied, &marker) != nil || (marker.Version != 1 && marker.Version != 2) ||
 		marker.State != "stopped" || len(marker.Epoch) != 32 || strings.Trim(marker.Epoch, "0123456789abcdef") != "" ||
 		marker.AccountID != source.Primary || !sameCutoverPath(marker.DataRoot, path) ||
 		!identity.ValidPathID(marker.NativeServerID) || oldServer != "" && marker.NativeServerID != oldServer ||

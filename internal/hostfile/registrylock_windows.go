@@ -19,13 +19,23 @@ const registryLockExclusive = 0x00000002
 // the same private registry. Closing the handle always releases LockFileEx,
 // including when a process exits unexpectedly.
 func Lock(path string) (func(), error) {
+	return lock(path, registryLockExclusive)
+}
+
+// TryLock fails immediately if another process holds the same file range.
+func TryLock(path string) (func(), error) {
+	const failImmediately = 0x00000001
+	return lock(path, registryLockExclusive|failImmediately)
+}
+
+func lock(path string, flags uint32) (func(), error) {
 	h, err := openPinnedRegistryLock(path)
 	if err != nil {
 		return nil, err
 	}
 	var overlapped syscall.Overlapped
 	ok, _, callErr := registryLockFileEx.Call(
-		uintptr(h), registryLockExclusive, 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)),
+		uintptr(h), uintptr(flags), 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)),
 	)
 	if ok == 0 {
 		_ = syscall.CloseHandle(h)

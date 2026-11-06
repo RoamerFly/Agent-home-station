@@ -18,6 +18,7 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/hostfile"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 )
@@ -714,6 +715,12 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if eventReads.Load() != 0 {
 		t.Fatal("an unconfirmed worker read native events")
 	}
+	if row := req("GET", activationRoute, nil, false, 200); row["status"] != "blocked" || row["legacy_host"] != "stop_record_matched" {
+		t.Fatal("a v1 stopped marker must remain inspectable without permitting activation", row)
+	}
+	marker.Version = 2
+	write(liveMarker, j(marker))
+	write(filepath.Join(snapshot, legacyStopMarkerFile), j(marker))
 	activation := req("GET", activationRoute, nil, false, 200)
 	if activation["status"] != "ready" || activation["pending_receipts"] != float64(2) || activation["model_ready"] != true ||
 		bytes.Contains(j(activation), []byte("old-host")) || bytes.Contains(j(activation), []byte(marker.Epoch)) {
@@ -731,6 +738,26 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	req("POST", activationRoute, confirm, true, 409)
 	req("POST", route("one")+"/lifecycle", start, true, 409)
 	write(liveMarker, j(marker))
+	claimPath := filepath.Join(legacyHost, legacyCutoverClaimFile)
+	if _, err := os.Lstat(claimPath); !os.IsNotExist(err) {
+		t.Fatal("preview or refused confirmation wrote a claim", err)
+	}
+	unlock, err := hostfile.TryLock(filepath.Join(legacyHost, legacyCutoverLockFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer unlock()
+		req("POST", activationRoute, confirm, true, 409)
+	}()
+	write(claimPath, j("different-synthetic-target"))
+	req("POST", activationRoute, confirm, true, 409)
+	if raw, err := os.ReadFile(claimPath); err != nil || !bytes.Equal(raw, j("different-synthetic-target")) {
+		t.Fatal("conflicting claim was overwritten", err)
+	}
+	if err := os.Remove(claimPath); err != nil {
+		t.Fatal(err)
+	}
 	if activated := req("POST", activationRoute, confirm, true, 200); activated["status"] != "confirmed" || activated["target_identity"] != "owner_confirmed" {
 		t.Fatal("owner confirmation did not persist the exact cutover", activated)
 	}
@@ -760,7 +787,9 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	}
 	req("POST", route("one")+"/lifecycle", start, true, 200)
 	waitAppLifecycle(t, func() bool { return detailFor("one")["worker"] == "running" })
-	write(liveMarker, j(starting))
+	if err := os.Remove(claimPath); err != nil {
+		t.Fatal(err)
+	}
 	pushAfterInvalid.Store(true)
 	waitAppLifecycle(t, func() bool { return detailFor("one")["worker"] == "cutover_blocked" })
 	if sideEffects.Load() != 0 {

@@ -525,6 +525,7 @@
       const lines = activationLines(value);
       if (value?.reason) lines.push(appElement("small", `说明：${value.reason}`));
       if (value?.status === "ready" && value?.digest) {
+        lines.push(appElement("small", "确认交接后，支持交接的旧桌面将拒绝启动此数据目录。"));
         const sameIdentity = document.createElement("input");
         sameIdentity.type = "checkbox";
         const sameIdentityLabel = document.createElement("label");

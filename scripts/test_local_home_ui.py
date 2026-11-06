@@ -849,6 +849,7 @@ def verify(binary, output):
                 assert legacy["previews"] == 3 and len(legacy["posts"]) == 2, "cutover refresh must remain read-only"
                 page.get_by_role("button", name="核对启用条件", exact=True).click()
                 page.get_by_text("可以确认启用条件", exact=True).wait_for()
+                page.get_by_text("确认交接后，支持交接的旧桌面将拒绝启动此数据目录。", exact=True).wait_for()
                 page.get_by_text("已授权回复会话：1；待核对旧回执：2", exact=True).wait_for()
                 activation_apply = page.get_by_role("button", name="记录启用核对", exact=True)
                 assert activation_apply.is_disabled() and not legacy_activation["posts"], "activation must remain read-only before both owner acknowledgements"
