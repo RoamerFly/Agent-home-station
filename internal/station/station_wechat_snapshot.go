@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -29,17 +30,18 @@ const legacyWechatSnapshotManifestFile = "legacy-wechat-snapshot.json"
 
 type LegacyWechatSnapshotRequest struct {
 	LegacyDataDir, SnapshotDir, PrimaryAccount, ApplyDigest string
-	Verify                                                  bool
+	Verify, CheckSource                                     bool
 }
 
 type LegacyWechatSnapshotResult struct {
 	State           string `json:"state"`
 	ApplyDigest     string `json:"apply_digest,omitempty"`
-	ManifestDigest  string `json:"manifest_digest"`
+	ManifestDigest  string `json:"manifest_digest,omitempty"`
 	Files           int    `json:"file_count"`
 	Accounts        int    `json:"account_count"`
 	MemoryFiles     int    `json:"memory_file_count"`
 	DeliveryRecords int    `json:"delivery_record_count"`
+	PayloadBytes    int64  `json:"payload_bytes"`
 }
 
 type legacySnapshotEntry struct {
@@ -89,10 +91,13 @@ func CaptureLegacyWechatSnapshot(ctx context.Context, req LegacyWechatSnapshotRe
 		return out, errors.New("快照目录名无效")
 	}
 	if req.Verify {
-		if req.LegacyDataDir != "" || req.PrimaryAccount != "" || req.ApplyDigest != "" {
+		if req.LegacyDataDir != "" || req.PrimaryAccount != "" || req.ApplyDigest != "" || req.CheckSource {
 			return out, errors.New("校验快照仅接受快照路径")
 		}
 		return verifyLegacyWechatSnapshot(ctx, parent, dest, filepath.Join(physicalParent, dest))
+	}
+	if req.CheckSource && req.ApplyDigest != "" {
+		return out, errors.New("只读来源核对不能执行快照写入")
 	}
 	req.LegacyDataDir = cutoverPath(req.LegacyDataDir)
 	if !filepath.IsAbs(req.LegacyDataDir) || len(filepath.VolumeName(req.LegacyDataDir)) != 2 || filepath.Clean(req.LegacyDataDir) != req.LegacyDataDir || legacyImportOverlap(req.LegacyDataDir, req.SnapshotDir) ||
@@ -110,6 +115,9 @@ func CaptureLegacyWechatSnapshot(ctx context.Context, req LegacyWechatSnapshotRe
 	physicalSource, err := legacySnapshotLocalPath(source)
 	if err != nil || legacyImportOverlap(physicalSource, filepath.Join(physicalParent, dest)) {
 		return out, errors.New("旧微信数据必须位于本机独立目录")
+	}
+	if req.CheckSource {
+		return checkLegacyWechatSnapshotSource(ctx, source, req.PrimaryAccount)
 	}
 	unlock, err := lockReleaseRoot(source, req.LegacyDataDir, legacyCutoverLockFile)
 	if err != nil {
@@ -140,12 +148,43 @@ func CaptureLegacyWechatSnapshot(ctx context.Context, req LegacyWechatSnapshotRe
 }
 
 func (m legacySnapshotManifest) result(state string, manifest []byte) LegacyWechatSnapshotResult {
-	return LegacyWechatSnapshotResult{State: state, ManifestDigest: hexDigest(manifest), Files: len(m.Files), Accounts: m.Accounts,
+	out := LegacyWechatSnapshotResult{State: state, Files: len(m.Files), Accounts: m.Accounts,
 		MemoryFiles: m.MemoryFiles, DeliveryRecords: m.DeliveryRecords}
+	if manifest != nil {
+		out.ManifestDigest = hexDigest(manifest)
+	}
+	for _, file := range m.Files {
+		out.PayloadBytes += file.Bytes
+	}
+	return out
+}
+
+// checkLegacyWechatSnapshotSource reads the capture inputs without creating a
+// lock or claiming the old directory. Only capture can validate a stop proof.
+func checkLegacyWechatSnapshotSource(ctx context.Context, source *os.Root, primary string) (LegacyWechatSnapshotResult, error) {
+	if _, err := source.Lstat(legacyCutoverClaimFile); !errors.Is(err, os.ErrNotExist) {
+		return LegacyWechatSnapshotResult{}, errors.New("旧微信数据目录已交接或无法核对交接凭证")
+	}
+	first := newLegacySnapshotPlan(primary)
+	if err := first.collect(ctx, source, "", true); err != nil {
+		return LegacyWechatSnapshotResult{}, err
+	}
+	second := newLegacySnapshotPlan(primary)
+	if err := second.collect(ctx, source, "", false); err != nil {
+		return LegacyWechatSnapshotResult{}, err
+	}
+	if _, err := source.Lstat(legacyCutoverClaimFile); !maps.Equal(first.source, second.source) || !errors.Is(err, os.ErrNotExist) {
+		return LegacyWechatSnapshotResult{}, errors.New("来源核对期间内容或交接状态已变化，请停止旧服务后重试")
+	}
+	return first.manifest.result("source_checked", nil), nil
+}
+
+func newLegacySnapshotPlan(primary string) legacySnapshotPlan {
+	return legacySnapshotPlan{manifest: legacySnapshotManifest{Version: 1, Primary: primary}, projected: map[string][]byte{}, source: map[string]string{}}
 }
 
 func planLegacyWechatSnapshot(ctx context.Context, source *os.Root, oldRoot, primary string, checkSQLite bool) (legacySnapshotPlan, error) {
-	plan := legacySnapshotPlan{manifest: legacySnapshotManifest{Version: 1, Primary: primary}, projected: map[string][]byte{}, source: map[string]string{}}
+	plan := newLegacySnapshotPlan(primary)
 	stop, err := readLegacyImportFile(source, legacyStopMarkerFile, 16<<10)
 	var marker legacyStopMarker
 	if err != nil || json.Unmarshal(stop, &marker) != nil || marker.Version != 2 || marker.State != "stopped" || !marker.validMode() || marker.AccountID != primary ||
@@ -154,13 +193,19 @@ func planLegacyWechatSnapshot(ctx context.Context, source *os.Root, oldRoot, pri
 		return plan, errors.New("缺少与主账号和原目录一致的第 2 版正常停机凭证")
 	}
 	plan.addSmall(legacyStopMarkerFile, stop, nil)
-	accounts, err := plan.snapshotAccounts(source, primary)
+	err = plan.collect(ctx, source, marker.NativeServerID, checkSQLite)
+	return plan, err
+}
+
+func (p *legacySnapshotPlan) collect(ctx context.Context, source *os.Root, dataset string, checkSQLite bool) error {
+	primary := p.manifest.Primary
+	accounts, err := p.snapshotAccounts(source, primary)
 	if err != nil {
-		return plan, err
+		return err
 	}
 	for _, account := range accounts {
 		if err := ctx.Err(); err != nil {
-			return plan, err
+			return err
 		}
 		cfg := filepath.Join("admin", "config.json")
 		queue := "bot-state"
@@ -169,13 +214,13 @@ func planLegacyWechatSnapshot(ctx context.Context, source *os.Root, oldRoot, pri
 			cfg = filepath.Join("admin", "accounts", id, "config.json")
 			queue = filepath.Join(queue, "accounts", id)
 		}
-		if err := plan.snapshotAccount(ctx, source, cfg, queue, account, marker.NativeServerID, checkSQLite); err != nil {
-			return plan, err
+		if err := p.snapshotAccount(ctx, source, cfg, queue, account, &dataset, checkSQLite); err != nil {
+			return err
 		}
 	}
-	plan.manifest.Accounts = len(accounts)
-	slices.SortFunc(plan.manifest.Files, func(a, b legacySnapshotEntry) int { return strings.Compare(a.Path, b.Path) })
-	return plan, nil
+	p.manifest.Accounts = len(accounts)
+	slices.SortFunc(p.manifest.Files, func(a, b legacySnapshotEntry) int { return strings.Compare(a.Path, b.Path) })
+	return nil
 }
 
 func (p *legacySnapshotPlan) snapshotAccounts(root *os.Root, primary string) ([]string, error) {
@@ -217,7 +262,7 @@ func legacySnapshotAccounts(raw []byte, primary string) ([]string, []wechatapp.L
 	return accounts, selected, nil
 }
 
-func (p *legacySnapshotPlan) snapshotAccount(ctx context.Context, root *os.Root, config, queue, account, dataset string, checkSQLite bool) error {
+func (p *legacySnapshotPlan) snapshotAccount(ctx context.Context, root *os.Root, config, queue, account string, dataset *string, checkSQLite bool) error {
 	raw, err := readLegacyImportFile(root, config, 128<<10)
 	policy, policyErr := decodeLegacyImportPolicy(raw)
 	if err != nil || policyErr != nil {
@@ -235,8 +280,11 @@ func (p *legacySnapshotPlan) snapshotAccount(ctx context.Context, root *os.Root,
 		return errors.New("旧投递检查点不可读或超出支持范围")
 	}
 	server, evidence, err := bot.LegacyDeliveryEvidence(rows, cursor, account)
-	if err != nil || server != "" && server != dataset {
-		return errors.New("旧投递账本、检查点与停机凭证的账号或数据集不一致")
+	if err != nil || server != "" && (!identity.ValidPathID(server) || *dataset != "" && server != *dataset) {
+		return errors.New("旧投递账本、检查点或停机凭证的账号或数据集不一致")
+	}
+	if server != "" {
+		*dataset = server
 	}
 	p.manifest.DeliveryRecords += len(evidence)
 	p.addSmall(queuePath, rows, nil)

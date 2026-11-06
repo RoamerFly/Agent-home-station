@@ -210,6 +210,40 @@ func TestCaptureLegacyWechatSnapshotRejectsUnsafeSources(t *testing.T) {
 	})
 }
 
+func TestLegacyWechatSnapshotCheckSourceWithoutStopProof(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the legacy desktop snapshot contract is Windows-only")
+	}
+	base := t.TempDir()
+	legacy := filepath.Join(base, "legacy")
+	fixture := newLegacyWechatSnapshotFixture(t, legacy)
+	for _, name := range []string{legacyCutoverLockFile, legacyStopMarkerFile} {
+		if err := os.Remove(filepath.Join(legacy, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := LegacyWechatSnapshotRequest{LegacyDataDir: legacy, SnapshotDir: filepath.Join(base, "snapshot"), PrimaryAccount: fixture.primary, CheckSource: true}
+	ctx := context.Background()
+	checked, err := CaptureLegacyWechatSnapshot(ctx, req)
+	if err != nil || checked.State != "source_checked" || checked.Accounts != 2 || checked.MemoryFiles != 2 || checked.DeliveryRecords != 2 || checked.PayloadBytes <= 0 || checked.ApplyDigest != "" || checked.ManifestDigest != "" {
+		t.Fatalf("source check: %#v, %v", checked, err)
+	}
+	for _, path := range []string{req.SnapshotDir, filepath.Join(legacy, legacyCutoverLockFile), filepath.Join(legacy, legacyCutoverClaimFile), filepath.Join(legacy, legacyStopMarkerFile)} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("source check wrote %s: %v", filepath.Base(path), err)
+		}
+	}
+	req.CheckSource = false
+	if _, err := CaptureLegacyWechatSnapshot(ctx, req); err == nil {
+		t.Fatal("capture accepted missing stop proof")
+	}
+	req.CheckSource = true
+	mustWriteSnapshotFixture(t, filepath.Join(legacy, "admin", "companion", legacyMemoryDB+"-wal"), []byte("synthetic WAL"))
+	if _, err := CaptureLegacyWechatSnapshot(ctx, req); err == nil || !strings.Contains(err.Error(), "伴随文件") {
+		t.Fatalf("source check did not report the SQLite sidecar: %v", err)
+	}
+}
+
 func TestCapturedLegacyWechatSnapshotChecksBytesAtUse(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("captured snapshot privacy is a Windows contract")

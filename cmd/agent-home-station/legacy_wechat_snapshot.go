@@ -22,6 +22,7 @@ type legacyWechatSnapshotArgs struct {
 	applyDigest   string
 	verify        bool
 	audit         bool
+	checkSource   bool
 }
 
 func parseLegacyWechatSnapshotArgs(args []string) (legacyWechatSnapshotArgs, error) {
@@ -33,6 +34,7 @@ func parseLegacyWechatSnapshotArgs(args []string) (legacyWechatSnapshotArgs, err
 	applyDigest := flags.String("apply", "", "确认预演返回的摘要后写入快照")
 	verify := flags.Bool("verify", false, "只校验已有快照")
 	audit := flags.Bool("audit", false, "只读审计旧微信待交接队列")
+	checkSource := flags.Bool("check-source", false, "只读核对旧资料与快照目标，无需停机凭证")
 	if err := flags.Parse(args); err != nil {
 		return legacyWechatSnapshotArgs{}, err
 	}
@@ -40,7 +42,7 @@ func parseLegacyWechatSnapshotArgs(args []string) (legacyWechatSnapshotArgs, err
 		return legacyWechatSnapshotArgs{}, errors.New("微信交接快照不接受位置参数")
 	}
 	if *audit {
-		if *snapshotDir != "" || *applyDigest != "" || *verify || *legacyDataDir == "" || !filepath.IsAbs(*legacyDataDir) || *accountID == "" {
+		if *snapshotDir != "" || *applyDigest != "" || *verify || *checkSource || *legacyDataDir == "" || !filepath.IsAbs(*legacyDataDir) || *accountID == "" {
 			return legacyWechatSnapshotArgs{}, errors.New("审计旧微信队列时仅使用 --audit --legacy-data <绝对目录> --account <账号>")
 		}
 		return legacyWechatSnapshotArgs{legacyDataDir: *legacyDataDir, accountID: *accountID, audit: true}, nil
@@ -50,7 +52,7 @@ func parseLegacyWechatSnapshotArgs(args []string) (legacyWechatSnapshotArgs, err
 	}
 
 	if *verify {
-		if *legacyDataDir != "" || *accountID != "" || *applyDigest != "" {
+		if *legacyDataDir != "" || *accountID != "" || *applyDigest != "" || *checkSource {
 			return legacyWechatSnapshotArgs{}, errors.New("校验已有快照时仅使用 --snapshot <绝对目录> --verify")
 		}
 		return legacyWechatSnapshotArgs{snapshotDir: *snapshotDir, verify: true}, nil
@@ -59,11 +61,15 @@ func parseLegacyWechatSnapshotArgs(args []string) (legacyWechatSnapshotArgs, err
 	if *legacyDataDir == "" || !filepath.IsAbs(*legacyDataDir) || *accountID == "" {
 		return legacyWechatSnapshotArgs{}, errors.New("创建微信交接快照需要明确指定 legacy-data 绝对目录、snapshot 绝对目录和 account")
 	}
+	if *checkSource && *applyDigest != "" {
+		return legacyWechatSnapshotArgs{}, errors.New("只读来源核对不能使用 --apply")
+	}
 	return legacyWechatSnapshotArgs{
 		legacyDataDir: *legacyDataDir,
 		snapshotDir:   *snapshotDir,
 		accountID:     *accountID,
 		applyDigest:   *applyDigest,
+		checkSource:   *checkSource,
 	}, nil
 }
 
@@ -88,6 +94,7 @@ func runLegacyWechatSnapshot(ctx context.Context, args []string, output io.Write
 		PrimaryAccount: request.accountID,
 		ApplyDigest:    request.applyDigest,
 		Verify:         request.verify,
+		CheckSource:    request.checkSource,
 	})
 	if err != nil {
 		return err

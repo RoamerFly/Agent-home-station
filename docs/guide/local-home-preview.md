@@ -366,6 +366,8 @@ $preview = .\scripts\Update-LegacyWechatLauncher.ps1 @swap | ConvertFrom-Json
 
 ### 制作旧微信停机快照
 
+安排维护前可用 `legacy-wechat-snapshot --check-source --legacy-data <旧数据绝对目录> --snapshot <预定快照绝对目录> --account <主账号>` 核对来源和目标。命令检查账号规则、账本和 SQLite 记忆，二次读取核对来源内容，仅返回计划文件、账号、记忆库和投递记录的数量以及预计文件总字节数。它无需停机凭证，也不生成快照、锁文件或执行令牌。原生队列、停机凭证和实际发布权限仍须在正式维护窗口核对。
+
 先用支持互斥交接的旧桌面取得正常或受控停机凭证，再用同版成长站的 `agent-home-station-server.exe` 预演。旧数据目录和快照目录应位于本机磁盘且彼此独立。快照父目录需已存在，目标目录需尚未创建，且应放在源码库与鱼家工作区之外。
 
 ```powershell
