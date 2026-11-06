@@ -1430,12 +1430,15 @@
   }
   function validDouyinAuthorization(value) {
     return value && typeof value.revision === "string" && typeof value.configured === "boolean" &&
-      ["unconfigured", "ready", "expired"].includes(value.status) && typeof value.label === "string";
+      ["unconfigured", "ready", "expired"].includes(value.status) && typeof value.label === "string" &&
+      (typeof value.works_authorized === "undefined" || typeof value.works_authorized === "boolean");
   }
   function douyinAuthorizationSummary(authorization) {
     const states = {
       unconfigured: ["尚未接入抖音账号", "扫码授权后，这里会显示已核验的账号。"],
-      ready: [authorization?.label || "抖音账号已接入", "本机已核验账号公开资料。搜索和作品读取仍有独立授权。"],
+      ready: [authorization?.label || "抖音账号已接入", authorization?.works_authorized
+        ? "已授权读取我的作品列表；首次读取仍会核对抖音平台能力。"
+        : "本机已核验账号公开资料。重新扫码时可选择授权读取我的作品列表。"],
       expired: ["抖音授权已过期", "重新网页授权可恢复账号连接。"],
     };
     return states[authorization?.status] || ["抖音授权暂不可读", "刷新应用状态后重查。"];
@@ -1520,6 +1523,8 @@
     clientSecret.name = "client_secret"; clientSecret.type = "password"; clientSecret.autocomplete = "new-password"; clientSecret.required = true; clientSecret.placeholder = "Client Secret"; clientSecret.setAttribute("aria-label", "抖音 Client Secret");
     const redirectURI = document.createElement("input");
     redirectURI.name = "redirect_uri"; redirectURI.type = "url"; redirectURI.autocomplete = "off"; redirectURI.required = true; redirectURI.placeholder = "https://…/callback"; redirectURI.setAttribute("aria-label", "抖音开放平台已登记的回调地址");
+    const readWorks = document.createElement("input");
+    readWorks.name = "read_works"; readWorks.type = "checkbox"; readWorks.checked = Boolean(authorization?.works_authorized); readWorks.setAttribute("aria-label", "授权读取我的作品列表");
     const desktop = Boolean(douyinDesktopHost());
     const begin = appElement("button", flow.saving ? "正在处理…" : desktop ? "打开扫码窗口" : "生成授权链接", "button compact secondary");
     begin.type = "submit"; begin.disabled = !authorization || flow.saving || flow.embedded;
@@ -1527,7 +1532,11 @@
       field.id = `douyin-oauth-${field.name}`;
       const labelNode = appElement("label", label); labelNode.htmlFor = field.id; form.append(labelNode, field);
     }
-    form.append(appElement("p", "仅使用抖音开放平台已登记的回调地址。密钥不会显示、缓存或写入浏览器。", "publication-authorization-note"), begin);
+    const worksLabel = appElement("label", "", "publication-authorization-choice");
+    worksLabel.append(readWorks, appElement("span", "授权读取我的作品列表"));
+    form.append(worksLabel,
+      appElement("p", "可选能力：需要平台开通作品列表权限；每轮最多读取 4 页，只用于登记作品编号范围，详情仍按需读取。", "publication-authorization-note"),
+      appElement("p", "仅使用抖音开放平台已登记的回调地址。密钥不会显示、缓存或写入浏览器。", "publication-authorization-note"), begin);
     const callback = document.createElement("input");
     callback.type = "url"; callback.autocomplete = "off"; callback.required = true; callback.placeholder = "粘贴浏览器返回的完整回调地址"; callback.setAttribute("aria-label", "完整回调地址");
     const complete = appElement("button", "完成网页授权", "button compact primary"); complete.type = "button";
@@ -1565,7 +1574,7 @@
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!authorization || current !== apps || flow.saving || flow.embedded) return;
-      const credentials = { client_key: clientKey.value, client_secret: clientSecret.value, redirect_uri: redirectURI.value };
+      const credentials = { client_key: clientKey.value, client_secret: clientSecret.value, redirect_uri: redirectURI.value, read_works: readWorks.checked };
       clientKey.value = clientSecret.value = redirectURI.value = callback.value = "";
       clearDouyinOAuth(flow); showCallback(); flow.saving = true; begin.disabled = true;
       try {

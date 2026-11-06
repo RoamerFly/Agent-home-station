@@ -25,19 +25,20 @@ import (
 type ObservationField string
 
 const (
-	ObservationTitle       ObservationField = "title"
-	ObservationBody        ObservationField = "body"
-	ObservationComments    ObservationField = "comments"
-	ObservationAudio       ObservationField = "audio"
-	ObservationPlayback    ObservationField = "playback"
-	ObservationPageText    ObservationField = "page_text"
-	ObservationSearch      ObservationField = "search"
-	ObservationOwnVideo    ObservationField = "own_video"
-	ObservationPlayerEntry ObservationField = "player_entry"
+	ObservationTitle        ObservationField = "title"
+	ObservationBody         ObservationField = "body"
+	ObservationComments     ObservationField = "comments"
+	ObservationAudio        ObservationField = "audio"
+	ObservationPlayback     ObservationField = "playback"
+	ObservationPageText     ObservationField = "page_text"
+	ObservationSearch       ObservationField = "search"
+	ObservationOwnVideo     ObservationField = "own_video"
+	ObservationAccountWorks ObservationField = "account_works"
+	ObservationPlayerEntry  ObservationField = "player_entry"
 )
 
 func (f ObservationField) valid() bool {
-	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch || f == ObservationOwnVideo || f == ObservationPlayerEntry
+	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch || f == ObservationOwnVideo || f == ObservationPlayerEntry || f == ObservationAccountWorks
 }
 
 type ObservationTarget struct {
@@ -159,27 +160,29 @@ type ObservationResult struct {
 }
 
 var (
-	ErrObservationInvalid                 = errors.New("应用观察请求无效")
-	ErrObservationNotFound                = errors.New("未找到已接入的应用或账号")
-	ErrObservationForbidden               = errors.New("当前应用账号未授权读取此内容")
-	ErrObservationContentUnavailable      = errors.New("平台暂时未提供这条内容，请核对编号或公开状态")
-	ErrObservationThrottled               = errors.New("平台限制了本次访问，请稍后重试")
-	ErrObservationBrowserUnavailable      = errors.New("独立浏览器暂不可用，请检查本机 Microsoft Edge 与应用授权")
-	ErrObservationRemotePlayerUnavailable = errors.New("抖音官方播放器暂未提供可采样的媒体，可稍后重试")
-	ErrObservationPlaybackUnavailable     = errors.New("未取得可播放的公开单段媒体，请核对公开状态、格式及媒体大小")
-	ErrObservationPlaybackLimit           = errors.New("本次播放采样支持 1–20 秒，省略时使用 6 秒")
-	ErrObservationPlaybackSize            = errors.New("这条媒体超过当前 32 MiB 的读取上限，可选择体积更小的公开稿件")
-	ErrObservationUpstreamUnavailable     = errors.New("平台请求暂时无法完成，可稍后重试")
-	ErrObservationCommentPageSize         = errors.New("B 站公开评论每页支持 1–30 条，续读时请省略 limit 或沿用首页条数")
-	ErrObservationAudioUnavailable        = errors.New("本机音轨读取需要 FFmpeg 和已启用的本地语音识别工具")
-	ErrObservationAudioMediaUnavailable   = errors.New("未取得可解码的公开单段媒体，请核对公开状态和格式")
-	ErrObservationAudioLimit              = errors.New("音轨每次支持读取 1–240 秒，省略时使用 60 秒")
-	ErrObservationAudioDecode             = errors.New("公开媒体的音轨解码失败，可从原位置重试")
-	ErrObservationAudioTranscription      = errors.New("本地语音识别失败，可检查工具配置后从原位置重试")
-	ErrObservationAudioSourceChanged      = errors.New("平台返回的媒体与上一页不同，需重新开启当前读取授权后从头读取")
-	ErrObservationSearchPageSize          = errors.New("抖音搜索每页支持 1–50 条，续读请省略 limit 或沿用首页条数")
-	ErrObservationCredentialExpired       = errors.New("抖音令牌无效或已过期，请由主人更新本机配置")
-	ErrObservationCapabilityDenied        = errors.New("当前连接缺少所需的抖音开放平台权限，请核对授权")
+	ErrObservationInvalid                  = errors.New("应用观察请求无效")
+	ErrObservationNotFound                 = errors.New("未找到已接入的应用或账号")
+	ErrObservationForbidden                = errors.New("当前应用账号未授权读取此内容")
+	ErrObservationContentUnavailable       = errors.New("平台暂时未提供这条内容，请核对编号或公开状态")
+	ErrObservationThrottled                = errors.New("平台限制了本次访问，请稍后重试")
+	ErrObservationBrowserUnavailable       = errors.New("独立浏览器暂不可用，请检查本机 Microsoft Edge 与应用授权")
+	ErrObservationRemotePlayerUnavailable  = errors.New("抖音官方播放器暂未提供可采样的媒体，可稍后重试")
+	ErrObservationPlaybackUnavailable      = errors.New("未取得可播放的公开单段媒体，请核对公开状态、格式及媒体大小")
+	ErrObservationPlaybackLimit            = errors.New("本次播放采样支持 1–20 秒，省略时使用 6 秒")
+	ErrObservationPlaybackSize             = errors.New("这条媒体超过当前 32 MiB 的读取上限，可选择体积更小的公开稿件")
+	ErrObservationUpstreamUnavailable      = errors.New("平台请求暂时无法完成，可稍后重试")
+	ErrObservationCommentPageSize          = errors.New("B 站公开评论每页支持 1–30 条，续读时请省略 limit 或沿用首页条数")
+	ErrObservationAudioUnavailable         = errors.New("本机音轨读取需要 FFmpeg 和已启用的本地语音识别工具")
+	ErrObservationAudioMediaUnavailable    = errors.New("未取得可解码的公开单段媒体，请核对公开状态和格式")
+	ErrObservationAudioLimit               = errors.New("音轨每次支持读取 1–240 秒，省略时使用 60 秒")
+	ErrObservationAudioDecode              = errors.New("公开媒体的音轨解码失败，可从原位置重试")
+	ErrObservationAudioTranscription       = errors.New("本地语音识别失败，可检查工具配置后从原位置重试")
+	ErrObservationAudioSourceChanged       = errors.New("平台返回的媒体与上一页不同，需重新开启当前读取授权后从头读取")
+	ErrObservationAccountWorksPageSize     = errors.New("作品列表页大小须为正整数并符合平台整数范围，续读时请省略 limit 或沿用首页条数")
+	ErrObservationAccountWorksResponseSize = errors.New("作品列表响应超出本机读取大小，请使用较小的 limit 并从首页重新查询")
+	ErrObservationSearchPageSize           = errors.New("抖音搜索每页支持 1–50 条，续读请省略 limit 或沿用首页条数")
+	ErrObservationCredentialExpired        = errors.New("抖音令牌无效或已过期，请由主人更新本机配置")
+	ErrObservationCapabilityDenied         = errors.New("当前连接缺少所需的抖音开放平台权限，请核对授权")
 )
 
 type observationCheckpoint struct {
@@ -265,7 +268,7 @@ func (o *Observer) discover(ctx context.Context, firstOnly bool) []ObservationTa
 				if len(target.Fields) == 0 {
 					continue
 				}
-				if !containsObservationField(target.Fields, ObservationTitle) && !containsObservationField(target.Fields, ObservationSearch) {
+				if !containsObservationField(target.Fields, ObservationTitle) && !containsObservationField(target.Fields, ObservationSearch) && !containsObservationField(target.Fields, ObservationAccountWorks) {
 					target.Label = ""
 				}
 				result = append(result, target)
@@ -297,7 +300,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := ctx.Err(); err != nil {
 		return ObservationResult{}, err
 	}
-	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch {
+	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks {
 		return ObservationResult{}, ErrObservationInvalid
 	}
 	o.mu.Lock()
@@ -340,7 +343,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 			ErrObservationPlaybackSize, ErrObservationUpstreamUnavailable, ErrObservationCommentPageSize,
 			ErrObservationAudioUnavailable, ErrObservationAudioMediaUnavailable, ErrObservationAudioLimit,
 			ErrObservationAudioDecode, ErrObservationAudioTranscription, ErrObservationAudioSourceChanged,
-			ErrObservationSearchPageSize, ErrObservationCredentialExpired, ErrObservationCapabilityDenied,
+			ErrObservationSearchPageSize, ErrObservationAccountWorksPageSize, ErrObservationAccountWorksResponseSize, ErrObservationCredentialExpired, ErrObservationCapabilityDenied,
 		} {
 			if errors.Is(err, known) {
 				return ObservationResult{}, known
@@ -395,7 +398,15 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if fresh || checkpoint.PlaybackProof != nil && checkpoint.Complete && len(checkpoint.Playback) == 0 {
 		return checkpoint.result(false, false), nil
 	}
-	if err := o.save(key, checkpoint); err != nil {
+	stored := checkpoint
+	if in.Field == ObservationAccountWorks {
+		// Account lists may describe non-public works. Persist only progress.
+		stored.Chunks = nil
+		if stored.Complete {
+			stored.Coverage += "。可用 refresh=true 重新读取。"
+		}
+	}
+	if err := o.save(key, stored); err != nil {
 		return ObservationResult{}, errors.New("应用观察进度无法保存")
 	}
 	return checkpoint.result(false, existed), nil

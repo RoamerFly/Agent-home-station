@@ -16,7 +16,15 @@ Windows 本地成长站可选择随包提供抖音应用。
 
 如果直接从浏览器访问管理页，仍可打开官方授权页并手动粘贴完整回跳地址。此方式的回调网页应保留地址栏查询参数，并避免记录或转发授权码。
 
-此处只请求读取账号公开资料的 user_info。移除本机授权会清除本机令牌，需要在平台侧取消授权时，可从抖音的授权管理处理。关键词搜索和本人作品状态仍使用下方各自的授权。[抖音网页授权](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/sdk/web-app/web/permission/) · [获取用户公开信息](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/get-account-open-info)
+默认请求读取账号公开资料的 user_info。移除本机授权会清除本机令牌，需要在平台侧取消授权时，可从抖音的授权管理处理。关键词搜索和本人作品状态仍使用下方各自的授权。[抖音网页授权](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/sdk/web-app/web/permission/) · [获取用户公开信息](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/get-account-open-info)
+
+## 读取已授权账号的作品列表
+
+如果你的开放平台网站应用开通了「查询授权账号的视频列表」能力，可在扫码时勾选「授权读取我的作品列表」。手机同意并由平台确认作品权限后，`app_observe(action=list)` 会列出该账号的 `account_works`。重新授权时取消勾选，或移除账号连接，可撤销本机读取。已有账号授权需要显式重新授权才会开通这项能力。
+
+`field=account_works` 默认每页 10 条。首读可设置 `limit`，续读省略或沿用原值，`refresh=true` 重新从首页读取。平台文档限制每轮最多四页，第四页若还有记录会明确标记覆盖不完整。超出本机 1 MiB 响应边界时，可以改用较小页大小重新读取。分页进度保存在宿主，作品条目不会持久缓存。
+
+列表只提供作品编号及平台创建时间。平台的加密作品标识显示为宿主生成的来源编号。公开状态通过独立的本人作品状态查询核对。普通抖音登录与搜索权限无法启用此列表。当前已验证合成分页和官方端点的令牌校验，真实账号授权查询取决于平台对该网站应用的权限。[官方作品列表契约](https://open.douyin.com/platform/resource/docs/openapi/video-management/douyin/search-video/account-video-list) · [平台权限及字段调整](https://developer.open-douyin.com/forum/bulletin/post/6736c38048f043667b75f70a)
 
 ## 官方视频搜索
 

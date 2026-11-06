@@ -188,18 +188,24 @@ func TestLocalDouyinAuthorizationOwnerRoute(t *testing.T) {
 	if status, _ := f.request(http.MethodPost, "/api/local/home", map[string]string{"action": "initialize"}, true); status != http.StatusOK {
 		t.Fatalf("initialize returned %d", status)
 	}
-	if status, view := f.request(http.MethodGet, route, nil, false); status != http.StatusOK || view["status"] != "unconfigured" || view["revision"] != "" || view["label"] != "" {
+	if status, view := f.request(http.MethodGet, route, nil, false); status != http.StatusOK || view["status"] != "unconfigured" || view["revision"] != "" || view["label"] != "" || view["works_authorized"] != false {
 		t.Fatalf("unexpected initial view: %d %v", status, view)
 	}
-	begin := map[string]string{"action": "begin", "revision": "", "client_key": "synthetic_app_123", "client_secret": "synthetic-private-secret", "redirect_uri": "https://owner.example.test/callback"}
+	begin := map[string]any{"action": "begin", "revision": "", "client_key": "synthetic_app_123", "client_secret": "synthetic-private-secret", "redirect_uri": "https://owner.example.test/callback"}
 	if status, _ := f.request(http.MethodPost, route, begin, false); status != http.StatusForbidden {
 		t.Fatalf("authorization without CSRF returned %d", status)
 	}
 	status, view := f.request(http.MethodPost, route, begin, true)
 	link, _ := view["authorize_url"].(string)
 	if status != http.StatusOK || !strings.HasPrefix(link, "https://open.douyin.com/platform/oauth/connect?") ||
-		!strings.Contains(link, "scope=user_info") || strings.Contains(link, begin["client_secret"]) {
+		!strings.Contains(link, "scope=user_info&") || strings.Contains(link, "video.list") || strings.Contains(link, begin["client_secret"].(string)) {
 		t.Fatalf("invalid official authorization link: %d %v", status, view)
+	}
+	begin["read_works"] = true
+	status, view = f.request(http.MethodPost, route, begin, true)
+	link, _ = view["authorize_url"].(string)
+	if status != http.StatusOK || !strings.Contains(link, "scope=user_info%2Cvideo.list.bind&") {
+		t.Fatalf("explicit works grant was not included in the official authorization request: %d %v", status, view)
 	}
 	forged := map[string]string{"action": "complete", "callback_url": "https://owner.example.test/callback?code=fixture&scopes=user_info&state=forged"}
 	if status, _ := f.request(http.MethodPost, route, forged, true); status != http.StatusBadRequest {

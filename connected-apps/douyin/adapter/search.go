@@ -158,6 +158,9 @@ func (p *SearchApp) Inspect(ctx context.Context, id string) (apphost.ConnectionS
 		connection, action = p.ownVideoConnection(), "content.own-video"
 	case accountConnectionID:
 		connection = p.accountConnection()
+		if _, err := p.worksAccount(); err == nil {
+			action = "content.account-works"
+		}
 	default:
 		return apphost.ConnectionStatus{}, apphost.ErrNotFound
 	}
@@ -193,6 +196,9 @@ func (p *SearchApp) ObservationTargets(ctx context.Context, id string) ([]apphos
 	if id == ownVideoConnectionID {
 		return p.ownVideoTargets(ctx)
 	}
+	if id == accountConnectionID {
+		return p.accountWorksTargets()
+	}
 	if id != connectionID {
 		return nil, apphost.ErrNotFound
 	}
@@ -217,6 +223,9 @@ func (p *SearchApp) ObservationGrant(ctx context.Context, access apphost.Observa
 	if access.ConnectionID == ownVideoConnectionID {
 		return p.ownVideoGrant(ctx, access)
 	}
+	if access.ConnectionID == accountConnectionID {
+		return p.accountWorksGrant(access)
+	}
 	loaded, err := p.load()
 	if err != nil {
 		return apphost.ObservationGrant{Allowed: false}, nil
@@ -236,6 +245,9 @@ func (p *SearchApp) ReadObservation(ctx context.Context, request apphost.Observa
 	}
 	if request.ConnectionID == ownVideoConnectionID {
 		return p.readOwnVideo(ctx, request)
+	}
+	if request.ConnectionID == accountConnectionID {
+		return p.readAccountWorks(ctx, request)
 	}
 	switch request.Field {
 	case apphost.ObservationPlayerEntry:

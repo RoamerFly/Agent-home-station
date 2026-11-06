@@ -4,7 +4,9 @@
     {
       "id": "account-authorization",
       "title": "抖音账号授权",
-      "fields": [],
+      "fields": [
+        "read_works"
+      ],
       "action": "owner-verified-web-oauth"
     },
     {

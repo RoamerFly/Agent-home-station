@@ -10,7 +10,8 @@
     "search",
     "own_video",
     "player_entry",
-    "playback"
+    "playback",
+    "account_works"
   ],
   "own_video": {
     "connection": "own-videos",
@@ -23,7 +24,14 @@
     "connection": "authorized-account",
     "authentication": "host-only-user-oauth",
     "scope": "user_info",
-    "owner_action": "web-authorization"
+    "owner_action": "web-authorization",
+    "works": {
+      "scope": "video.list.bind",
+      "method": "GET",
+      "owner_opt_in": "read_works",
+      "page_limit_per_scan": 4,
+      "verification": "provider-scope-required"
+    }
   },
   "player_entry": {
     "connection": "search",

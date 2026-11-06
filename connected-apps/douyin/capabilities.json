@@ -50,6 +50,16 @@
       ],
       "discoverable": true,
       "requires_owner_setting": "sample_public_playback"
+    },
+    {
+      "id": "observation.account-works",
+      "implementation": "ready",
+      "description": "分页列出主人单独授权的账号作品编号，核对创建时间并标记可见性待核对",
+      "permissions": [
+        "network"
+      ],
+      "discoverable": true,
+      "requires_owner_setting": "explicit-owner-works-oauth"
     }
   ]
 }

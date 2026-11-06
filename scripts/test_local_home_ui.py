@@ -1230,8 +1230,8 @@ def verify_douyin_authorization(binary, output):
                     page.route("**/api/apps", fulfill_json({"items": [{"id": "douyin", "name": "抖音"}]}))
                     page.route("**/api/apps/douyin/connections", fulfill_json({"items": []}))
                     attempts, cancelled, completed = [], [], []
-                    initial = {"revision": "", "configured": False, "status": "unconfigured", "label": ""}
-                    verified = {"revision": "fixture-revision", "configured": True, "status": "ready", "label": "Synthetic Douyin account"}
+                    initial = {"revision": "", "configured": False, "status": "unconfigured", "label": "", "works_authorized": False}
+                    verified = {"revision": "fixture-revision", "configured": True, "status": "ready", "label": "Synthetic Douyin account", "works_authorized": desktop}
                     redirect = "https://owner.example.test/callback"
 
                     def authorization(route):
@@ -1240,9 +1240,11 @@ def verify_douyin_authorization(binary, output):
                             return
                         body = route.request.post_data_json
                         if body["action"] == "begin":
+                            assert body.get("read_works") is desktop, "the optional works-list grant must match the checkbox"
                             state = f"{len(attempts) + 1:048x}"
                             attempts.append(state)
-                            query = urlencode({"client_key": "fixture-client", "response_type": "code", "scope": "user_info",
+                            scopes = "user_info,video.list.bind" if desktop else "user_info"
+                            query = urlencode({"client_key": "fixture-client", "response_type": "code", "scope": scopes,
                                                "redirect_uri": redirect, "state": state})
                             fulfill_json({"authorize_url": "https://open.douyin.com/platform/oauth/connect?" + query,
                                           "expires_at": "2030-01-01T00:00:00Z"})(route)
@@ -1264,22 +1266,28 @@ def verify_douyin_authorization(binary, output):
                     page.locator("#apps-tab").click()
                     page.get_by_text("尚未接入抖音账号", exact=True).wait_for()
                     page.get_by_text("扫码授权", exact=True).click()
+                    works = page.get_by_label("授权读取我的作品列表")
+                    assert not works.is_checked(), "works-list access must be off for a fresh authorization"
 
                     def begin():
+                        if desktop:
+                            works.check()
                         page.get_by_label("抖音 Client Key").fill("fixture-client")
                         page.get_by_label("抖音 Client Secret").fill("fixture-private-secret")
                         page.get_by_label("抖音开放平台已登记的回调地址").fill(redirect)
                         page.get_by_role("button", name="打开扫码窗口" if desktop else "生成授权链接").click()
 
                     def callback(state):
-                        return redirect + "?" + urlencode({"code": "synthetic-code", "state": state, "scopes": "user_info"})
+                        scopes = "user_info,video.list.bind" if desktop else "user_info"
+                        return redirect + "?" + urlencode({"code": "synthetic-code", "state": state, "scopes": scopes})
 
                     def emit(message):
                         page.evaluate("message => chrome.webview.dispatchEvent(new MessageEvent('message', {data: message}))", message)
 
                     begin()
                     if desktop:
-                        page.wait_for_function("window.fixtureOpenRequests.length === 1")
+                        page.get_by_text("请在弹出的授权窗口中用抖音扫码", exact=False).wait_for()
+                        assert page.evaluate("window.fixtureOpenRequests.length") == 1
                         opened = page.evaluate("window.fixtureOpenRequests[0]")
                         assert opened["type"] == "douyin-auth-open" and opened["expires_at"]
                         assert parse_qs(urlparse(opened["url"]).query)["state"] == attempts
@@ -1294,7 +1302,8 @@ def verify_douyin_authorization(binary, output):
                             emit({"type": "douyin-auth-closed", "state": attempts[0]})
                         page.get_by_text("扫码窗口已关闭，未更改当前账号连接。", exact=True).first.wait_for()
                         begin()
-                        page.wait_for_function("window.fixtureOpenRequests.length === 2")
+                        page.get_by_text("请在弹出的授权窗口中用抖音扫码", exact=False).wait_for()
+                        assert page.evaluate("window.fixtureOpenRequests.length") == 2
                         emit({"type": "douyin-auth-callback", "state": attempts[0], "callback_url": callback(attempts[0])})
                         emit({"type": "douyin-auth-closed", "state": attempts[0]})
                         for _ in range(2):
@@ -1306,6 +1315,12 @@ def verify_douyin_authorization(binary, output):
                         page.get_by_label("完整回调地址").fill(expected)
                         page.get_by_role("button", name="完成网页授权").click()
                     page.get_by_text(verified["label"], exact=True).wait_for()
+                    if desktop:
+                        page.get_by_text("已授权读取我的作品列表", exact=False).wait_for()
+                        page.get_by_text("重新扫码授权", exact=True).click()
+                        assert works.is_checked(), "renewing a works grant should preserve the visible selection"
+                    else:
+                        assert page.get_by_text("已授权读取我的作品列表", exact=False).count() == 0
                     assert completed == [expected], "stale or repeated callback was submitted"
                     assert cancelled == ([attempts[0]] if desktop else [])
                     context.close()

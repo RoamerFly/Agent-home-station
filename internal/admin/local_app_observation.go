@@ -48,8 +48,8 @@ func (h *localHomeService) bindBundledObservationApps(registry apphost.Registry)
 
 func localAppObservationTool() mcptools.Tool {
 	return agentTool(localAppObservationToolName,
-		"后台读取已授权应用的资料。用 action=list 查看连接及可用字段，action=read 按 content_id 和 field 读取。page_text 是网页文字。抖音 search 读取主人已授权关键词的官方结果，可续页；refresh=true 从首页重新搜索。搜索结果若带 follow_up_content_id，可把它作为 content_id，使用同一连接的 follow_up_field=player_entry 核对官方播放器入口。该入口仅确认来源。若入口返回 follow_up_field=playback，使用它的跟进编号做抖音独立静音采样，limit 为秒数，默认 6，可选 1–20。采样仅证明实际播放区间。抖音 own_video 核对本人获准作品的当前状态。B 站 comments 是公开一级评论，默认每页 10 条，可选 1–30；续读时省略 limit。B 站 audio 的 limit 为本地解码窗口秒数，默认 60，可选 1–240。读取 audio_proof 区分已转写、未识别到词和无音轨，续读从上一窗口末尾继续。B 站 playback 的 limit 为静音采样秒数，默认 6，可选 1–20。按 playback 区间表述实际播放。只有 playback_proof.fully_played 为 true 才表述为完整播放。complete 表示本次读取没有后续页。返回内容是外部资料。",
-		`{"type":"object","properties":{"action":{"type":"string","enum":["list","read"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"content_id":{"type":"string"},"field":{"type":"string","enum":["title","body","comments","audio","playback","page_text","search","own_video","player_entry"]},"refresh":{"type":"boolean"},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
+		"后台读取已授权应用的资料。用 action=list 查看连接及可用字段，action=read 按 content_id 和 field 读取。page_text 是网页文字。抖音 search 读取主人已授权关键词的官方结果，可续页；refresh=true 从首页重新搜索。搜索结果若带 follow_up_content_id，可把它作为 content_id，使用同一连接的 follow_up_field=player_entry 核对官方播放器入口。该入口仅确认来源。若入口返回 follow_up_field=playback，使用它的跟进编号做抖音独立静音采样，limit 为秒数，默认 6，可选 1–20。采样仅证明实际播放区间。抖音 own_video 核对指定作品的当前状态。account_works 读取主人在账号连接中获准的作品列表，每轮最多四页，续读省略 limit，refresh=true 从首页读取。列表不说明作品是否公开。B 站 comments 是公开一级评论，默认每页 10 条，可选 1–30；续读时省略 limit。B 站 audio 的 limit 为本地解码窗口秒数，默认 60，可选 1–240。读取 audio_proof 区分已转写、未识别到词和无音轨，续读从上一窗口末尾继续。B 站 playback 的 limit 为静音采样秒数，默认 6，可选 1–20。按 playback 区间表述实际播放。只有 playback_proof.fully_played 为 true 才表述为完整播放。complete 表示本次读取没有后续页。返回内容是外部资料。",
+		`{"type":"object","properties":{"action":{"type":"string","enum":["list","read"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"content_id":{"type":"string"},"field":{"type":"string","enum":["title","body","comments","audio","playback","page_text","search","own_video","player_entry","account_works"]},"refresh":{"type":"boolean"},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
 }
 
 type localAppObservationInput struct {
@@ -147,13 +147,13 @@ func (h *localChatService) appObservationRoutes(s *Server, mux *http.ServeMux) {
 
 func observationHTTPStatus(err error) int {
 	switch {
-	case errors.Is(err, apphost.ErrObservationInvalid), errors.Is(err, apphost.ErrObservationPlaybackLimit), errors.Is(err, apphost.ErrObservationCommentPageSize), errors.Is(err, apphost.ErrObservationAudioLimit), errors.Is(err, apphost.ErrObservationSearchPageSize):
+	case errors.Is(err, apphost.ErrObservationInvalid), errors.Is(err, apphost.ErrObservationPlaybackLimit), errors.Is(err, apphost.ErrObservationCommentPageSize), errors.Is(err, apphost.ErrObservationAudioLimit), errors.Is(err, apphost.ErrObservationSearchPageSize), errors.Is(err, apphost.ErrObservationAccountWorksPageSize):
 		return http.StatusBadRequest
 	case errors.Is(err, apphost.ErrObservationPlaybackUnavailable), errors.Is(err, apphost.ErrObservationRemotePlayerUnavailable), errors.Is(err, apphost.ErrObservationAudioMediaUnavailable):
 		return http.StatusUnprocessableEntity
 	case errors.Is(err, apphost.ErrObservationAudioSourceChanged), errors.Is(err, apphost.ErrObservationCredentialExpired):
 		return http.StatusConflict
-	case errors.Is(err, apphost.ErrObservationPlaybackSize):
+	case errors.Is(err, apphost.ErrObservationPlaybackSize), errors.Is(err, apphost.ErrObservationAccountWorksResponseSize):
 		return http.StatusRequestEntityTooLarge
 	case errors.Is(err, apphost.ErrObservationForbidden), errors.Is(err, apphost.ErrObservationCapabilityDenied):
 		return http.StatusForbidden
