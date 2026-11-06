@@ -158,17 +158,20 @@ func (s *OwnedStream) Start(ctx context.Context, relayPort int, relayTicket stri
 	})
 }
 
-// RequestStop only requests a graceful stop. A supervisor handling emergency
-// stop must fence further requests and close the owned process and relay.
-func (s *OwnedStream) RequestStop(ctx context.Context) error {
+func (s *OwnedStream) fenceStart() bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.stopping = true
 	if s.startCancel != nil {
 		s.startCancel()
 	}
-	dispatched := s.startDispatched
-	s.mu.Unlock()
-	if !dispatched {
+	return s.startDispatched
+}
+
+// RequestStop only requests a graceful stop. A supervisor handling emergency
+// stop must fence further requests and close the owned process and relay.
+func (s *OwnedStream) RequestStop(ctx context.Context) error {
+	if !s.fenceStart() {
 		return nil
 	}
 	return s.use(ctx, func(ctx context.Context, conn *websocket.Conn) error {
