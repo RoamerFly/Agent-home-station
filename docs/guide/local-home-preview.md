@@ -442,6 +442,38 @@ PDF 导出还需可用的文档运行时。构建时为上述命令同时提供 
 
 本机语音工具包 0.1.1 增加原任务查询与取消。已有 0.1.0 安装时，可在「项目工具」先停用，再确认更新并启用。请在聊天中提供原任务编号以查询或取消。执行器意外退出后，查询只核对已登记的结果；要重新合成，需从聊天发起新请求。取消后的旧任务仍保留状态。
 
+### 接续已登记的说话声线
+
+完成鱼身份接续后，可以把旧声线库选中的 GPT-SoVITS 声线登记到新站。准备上节的部署配置，把其中的 `voices` 改为空数组，再作为以下计划的 `deployment` 对象。将完整计划保存到主人管理的私有目录。
+
+```json
+{
+  "schema_version": 1,
+  "library": "E:\\OldStation\\voice-library",
+  "source_owner_id": "旧目录登记的主人 ID",
+  "voice_ids": ["voice-example"],
+  "prompt_language": "all_zh",
+  "text_language": "auto",
+  "deployment": {}
+}
+```
+
+`library` 是含 `catalog.json` 的旧库目录。按条目填写准确的声线 ID。有主人字段的条目须与 `source_owner_id` 一致。确认要接续自己有权使用的旧版无主人条目时，删去 `source_owner_id`，填写 `"allow_unowned": true`。命令适用于首次写入新站的语音登记，一次可选同一来源下、使用相同语言设置的多条声线。需要合并多个来源时，主人可按上节格式逐条核对并维护同一份私有语音登记。
+
+```powershell
+$stationServer = 'E:\AgentHomePreview\agent-home-station-server.exe'
+$stationData = 'E:\AgentHomePreview\data\station'
+$planFile = 'E:\PrivateMigration\speech-plan.json'
+$previewJSON = & $stationServer legacy-speech --data $stationData --plan $planFile
+if ($LASTEXITCODE -ne 0) { throw '声线预演失败' }
+$preview = $previewJSON | ConvertFrom-Json
+$preview | Select-Object status, fish_id, voices, bytes_verified, digest
+# 核对后使用同一个计划和摘要
+& $stationServer legacy-speech --data $stationData --plan $planFile --digest $preview.digest
+```
+
+桌面使用自定义工作空间时，两条命令都传入同一个 `--workspace` 绝对路径。预演检查选中的权重、参考音频和转写的大小及 SHA-256。有多个同类文件时，须能从旧登记确定唯一推荐项。确认后把声线 ID、原文件路径和版本绑定写入新站私有登记，接续记录留在同一个数据目录。原件继续从旧库读取，需保留在原位置。接续中断可用原摘要重试，已有不同语音配置时请保留现有配置并核对。接续成功表示登记和完整性核验通过，首次使用仍需核对实际合成和听感。唱歌声线沿用独立的 RVC 登记。
+
 ### Windows 运行器
 
 可执行文件旁存在下列受管运行时布局时自动识别；没有安装运行器也能聊天及操作文件，启动程序会返回 `windows_runtime_not_configured`，不会退回不受限制的宿主命令行。

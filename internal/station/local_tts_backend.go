@@ -388,7 +388,10 @@ func (r localTTSRegistration) validate(dataDir, editableRoot string) error {
 	if r.Device != "cuda" && r.Device != "cpu" {
 		return errors.New("station_speech_registration_invalid")
 	}
-	if localTTSPathsOverlap(dataDir, editableRoot) {
+	// Desktop deployments normally put the managed workspace under dataDir.
+	// Reject the reverse arrangement: it would place the private registry
+	// inside the tree editable by the Agent.
+	if localTTSWithin(dataDir, editableRoot) {
 		return errors.New("station_speech_host_storage_overlaps_agent_home")
 	}
 	for _, path := range []struct {
@@ -605,14 +608,12 @@ func localTTSPathsOverlap(left, right string) bool {
 	if left == "" || right == "" {
 		return false
 	}
-	left, right = filepath.Clean(left), filepath.Clean(right)
-	for _, pair := range [][2]string{{left, right}, {right, left}} {
-		rel, err := filepath.Rel(pair[1], pair[0])
-		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel) {
-			return true
-		}
-	}
-	return false
+	return localTTSWithin(left, right) || localTTSWithin(right, left)
+}
+
+func localTTSWithin(child, parent string) bool {
+	rel, err := filepath.Rel(parent, child)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel)
 }
 
 func localTTSEnsureDir(path string) error {

@@ -70,6 +70,9 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 // It deliberately ignores input unless --desktop was explicitly selected;
 // ordinary CLI callers can therefore inherit a closed stdin without exiting.
 func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, input io.Reader) error {
+	if len(args) > 0 && args[0] == "legacy-speech" {
+		return runLegacySpeech(ctx, args[1:], output)
+	}
 	path, err := os.Executable()
 	if err != nil {
 		return errors.New("cannot determine executable location")
