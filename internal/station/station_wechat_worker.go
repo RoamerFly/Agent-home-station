@@ -845,9 +845,10 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 			when, err := time.Parse(time.RFC3339Nano, in.MessageTime)
 			return in.Account == native.Account() && err == nil && !when.Before(granted)
 		},
-		AuthorizeMedia:      attachment.replyAllowed,
-		PrepareMediaSource:  attachment.stageReply,
-		AuthorizeMediaAsset: attachment.workAllowed,
+		AuthorizeMedia:       attachment.replyAllowed,
+		PrepareMediaSource:   attachment.stageReply,
+		AuthorizeMediaAsset:  attachment.workAllowed,
+		AuthorizeMediaSubmit: attachment.canSubmitMedia,
 	}, source, character, native)
 	if err != nil {
 		return err

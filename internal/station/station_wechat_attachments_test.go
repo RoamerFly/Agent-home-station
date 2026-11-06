@@ -42,10 +42,17 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	var blockContent atomic.Bool
 	var requestReady atomic.Bool
 	var workReady atomic.Bool
+	var documentReady atomic.Bool
 	var workAt atomic.Value
 	workAt.Store("")
+	var documentAt atomic.Value
+	documentAt.Store("")
 	const workContent = "synthetic-work-artifact"
 	workHash := fmt.Sprintf("%x", sha256.Sum256([]byte(workContent)))
+	documentSource := syntheticStationDOCX(t)
+	documentPDF := syntheticStationPDF()
+	documentSourceHash := fmt.Sprintf("%x", sha256.Sum256(documentSource))
+	documentPDFHash := fmt.Sprintf("%x", sha256.Sum256(documentPDF))
 	var requestAt atomic.Value
 	requestAt.Store("")
 	submitted := make(chan string, 2)
@@ -86,12 +93,28 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 				event.Data.MessageID, event.Data.ThreadID, event.Data.Direction = "work-request", "room@chatroom", "incoming"
 				page.Items, page.NextCursor = []linuxnative.Event{event}, "2"
 			}
+			if documentReady.Load() && after == "2" {
+				event := linuxnative.Event{Cursor: "3", Kind: "message.committed"}
+				event.Data.MessageID, event.Data.ThreadID, event.Data.Direction = "document-request", "room@chatroom", "incoming"
+				page.Items, page.NextCursor = []linuxnative.Event{event}, "3"
+			}
 			out(page)
 		case "GET /v1/accounts/one/messages/work-request":
 			yes := true
 			m := linuxnative.Message{ID: "work-request", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1236", Type: 1, Direction: "incoming", Body: "@大肥鱼 把给我的作品发过来", CreatedAt: workAt.Load().(string)}
 			m.Mentions.State, m.Mentions.Self = "known", &yes
 			out(m)
+		case "GET /v1/accounts/one/messages/document-request":
+			yes, subtype := true, 57
+			m := linuxnative.Message{ID: "document-request", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1238",
+				Type: 49, AppMessageType: &subtype, Quote: &linuxnative.QuoteReference{ServerID: "1237", Type: 49}, Direction: "incoming",
+				Body: "@大肥鱼 把引用的 Word 转成 PDF 发回这里", CreatedAt: documentAt.Load().(string)}
+			m.Mentions.State, m.Mentions.Self = "known", &yes
+			out(m)
+		case "GET /v1/accounts/one/messages/document-request/quote":
+			out(linuxnative.QuoteResolution{AccountID: "one", ThreadID: "room@chatroom", MessageID: "document-request", State: "resolved", Message: &linuxnative.Message{ID: "document-source", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1237", Type: 49, Direction: "incoming", Body: "<msg><appmsg><type>6</type><title>source.docx</title></appmsg></msg>", CreatedAt: documentAt.Load().(string)}})
+		case "GET /v1/accounts/one/messages/document-source":
+			out(linuxnative.Message{ID: "document-source", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1237", Type: 49, Direction: "incoming", Body: "<msg><appmsg><type>6</type><title>source.docx</title></appmsg></msg>", CreatedAt: documentAt.Load().(string)})
 		case "GET /v1/accounts/one/messages/request":
 			yes, subtype := true, 57
 			m := linuxnative.Message{ID: "request", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1235",
@@ -108,6 +131,8 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 				items = append(items, map[string]any{"accountId": "one", "messageId": "msg", "kind": "image", "variant": "original", "state": "pending"})
 			}
 			out(map[string]any{"items": items})
+		case "GET /v1/accounts/one/messages/document-source/media":
+			out(map[string]any{"items": []map[string]any{{"accountId": "one", "messageId": "document-source", "kind": "file", "variant": "original", "state": "available"}}})
 		case "POST /v1/accounts/one/messages/msg/media-transfers":
 			var request map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request["quality"] != "original" {
@@ -115,6 +140,15 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 			}
 			transfers.Add(1)
 			out(map[string]any{"id": "job", "accountId": "one", "kind": "download", "state": "available", "assetId": "native-asset"})
+		case "POST /v1/accounts/one/messages/document-source/media-transfers":
+			var request map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request["quality"] != "original" {
+				t.Error("document transfer did not select full original", request, err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			transfers.Add(1)
+			out(map[string]any{"id": "document-job", "accountId": "one", "kind": "download", "state": "available", "assetId": "document-native-asset"})
 		case "GET /v1/accounts/one/media/native-asset":
 			message := "msg"
 			if wrongAsset.Load() {
@@ -136,6 +170,10 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 				return
 			}
 			_, _ = io.WriteString(w, content)
+		case "GET /v1/accounts/one/media/document-native-asset":
+			out(map[string]any{"id": "document-native-asset", "accountId": "one", "messageId": "document-source", "kind": "file", "state": "available", "variant": "original", "actualVariant": "original", "byteLength": len(documentSource), "contentType": localDOCXMIME, "sha256": documentSourceHash})
+		case "GET /v1/accounts/one/media/document-native-asset/content":
+			_, _ = w.Write(documentSource)
 		case "POST /v1/accounts/one/uploads":
 			uploads.Add(1)
 			file, header, err := r.FormFile("file")
@@ -146,6 +184,15 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 			}
 			data, err := io.ReadAll(file)
 			file.Close()
+			if header.Filename == "converted.pdf" {
+				if err != nil || string(data) != string(documentPDF) {
+					t.Error("uploaded PDF did not match verified document product", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				out(map[string]any{"id": "upload-document", "name": header.Filename, "byteLength": len(data), "sha256": documentPDFHash})
+				return
+			}
 			if header.Filename == "作品.txt" {
 				if err != nil || string(data) != workContent {
 					t.Error("uploaded mutable home file instead of private snapshot", err)
@@ -165,10 +212,15 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 			var body map[string]any
 			key := r.Header.Get("Idempotency-Key")
 			err := json.NewDecoder(r.Body).Decode(&body)
-			validMedia := body["sourceId"] == "upload-verified" && body["kind"] == "image" || body["sourceId"] == "upload-work" && body["kind"] == "file"
+			validMedia := body["sourceId"] == "upload-verified" && body["kind"] == "image" || body["sourceId"] == "upload-work" && body["kind"] == "file" || body["sourceId"] == "upload-document" && body["kind"] == "file"
 			if err != nil || key == "" || !validMedia || body["threadId"] != "room@chatroom" {
 				t.Error("unexpected native attachment submission", body, err)
 				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if body["sourceId"] == "upload-document" {
+				out(map[string]any{"id": "synthetic-send-document", "accountId": "one", "threadId": "room@chatroom", "kind": "send", "sourceId": "upload-document", "state": "accepted", "serverMessageId": "2419"})
+				submitted <- key
 				return
 			}
 			out(map[string]any{"id": "synthetic-send-" + fmt.Sprint(body["kind"]), "accountId": "one", "threadId": "room@chatroom", "kind": "send", "sourceId": body["sourceId"], "state": "accepted", "serverMessageId": "2311"})
@@ -427,6 +479,56 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	if uploads.Load() != 4 || len(submitted) != 0 {
 		t.Fatal("work delivery duplicated", uploads.Load(), len(submitted))
 	}
+	// The normal worker must use the document exporter as a prepare-only tool;
+	// its PDF becomes a native upload only after the model selects media_ids.
+	// Use a local renderer fixture so this remains a no-model/no-WeChat test.
+	handler.chat.wechat.documents = stationDocumentTools{
+		available: func(context.Context, string) bool { return true },
+		inspect:   func(context.Context, stationDocumentInput) (string, error) { return `{}`, nil },
+		exportAvailable: func(context.Context) bool {
+			return true
+		},
+		exportPDF: func(ctx context.Context, in stationDocumentInput, filename string, persist func(context.Context, *os.File, stationPDFProduct) error) (stationPDFProduct, error) {
+			if in.extension != ".docx" || in.record.SHA256 != documentSourceHash || filename != "converted.pdf" {
+				t.Fatalf("unexpected worker document export input: %#v filename=%q", in, filename)
+			}
+			product := stationPDFProduct{Filename: filename, SHA256: documentPDFHash, Bytes: int64(len(documentPDF)), Pages: 1}
+			path := filepath.Join(t.TempDir(), filename)
+			if err := os.WriteFile(path, documentPDF, 0600); err != nil {
+				return stationPDFProduct{}, err
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				return stationPDFProduct{}, err
+			}
+			defer file.Close()
+			if err := persist(ctx, file, product); err != nil {
+				return stationPDFProduct{}, err
+			}
+			return product, nil
+		},
+	}
+	handler.chat.wechat.model = stationAttachmentReplyModel{documentID: "document-source"}
+	req("POST", path+"/lifecycle", map[string]string{"action": "start"}, true, 200)
+	waitAppLifecycle(t, func() bool {
+		return req("GET", path, nil, false, 200)["connection"].(map[string]any)["worker"] == "running"
+	})
+	documentAt.Store(time.Now().UTC().Format(time.RFC3339Nano))
+	documentReady.Store(true)
+	select {
+	case deliveryKey = <-submitted:
+	case <-time.After(35 * time.Second):
+		queue, _ := os.ReadFile(filepath.Join(worker.dir, "queue", "messages-v2.json"))
+		t.Fatalf("worker did not submit exported PDF: %s", queue)
+	}
+	waitAppLifecycle(t, func() bool {
+		code, receipt := f.request("GET", path+"/receipts/"+deliveryKey, nil, false)
+		return code == 200 && strings.Contains(fmt.Sprint(receipt), "2419") && strings.Contains(fmt.Sprint(receipt), "synthetic-send-document")
+	})
+	req("POST", path+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
+	if len(submitted) != 0 || uploads.Load() != 5 {
+		t.Fatal("worker duplicated PDF upload or send", uploads.Load(), len(submitted))
+	}
 	policy(200)
 	get(path+contentRoute, 404)
 	policy(200, thread)
@@ -445,6 +547,14 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 			close(releaseContent)
 		}
 	}()
+	entries, err = os.ReadDir(filepath.Join(worker.dir, "attachments"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownAttachments := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		knownAttachments[entry.Name()] = struct{}{}
+	}
 	blockContent.Store(true)
 	completed := make(chan int, 1)
 	go func() {
@@ -467,12 +577,17 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 		t.Fatal("revoked transfer did not stop")
 	}
 	entries, err = os.ReadDir(filepath.Join(worker.dir, "attachments"))
-	if err != nil || len(entries) != 2 {
+	if err != nil || len(entries) != len(knownAttachments) {
 		t.Fatal("revoked transfer left a staged or published copy", entries, err)
+	}
+	for _, entry := range entries {
+		if _, ok := knownAttachments[entry.Name()]; !ok {
+			t.Fatal("revoked transfer left a new attachment entry", entry.Name())
+		}
 	}
 }
 
-type stationAttachmentReplyModel struct{ mediaID, workID string }
+type stationAttachmentReplyModel struct{ mediaID, workID, documentID string }
 
 func (m stationAttachmentReplyModel) Chat(ctx context.Context, system string, history []map[string]string) (string, error) {
 	return m.ChatFunctions(ctx, system, history, nil)
@@ -480,9 +595,31 @@ func (m stationAttachmentReplyModel) Chat(ctx context.Context, system string, hi
 
 func (m stationAttachmentReplyModel) ChatFunctions(_ context.Context, _ string, history []map[string]string, tools []mcptools.Tool) (string, error) {
 	for _, turn := range history {
-		if strings.Contains(turn["content"], m.mediaID) {
+		if m.mediaID != "" && strings.Contains(turn["content"], m.mediaID) {
 			return fmt.Sprintf(`{"action":"reply","messages":[],"media_ids":[%q]}`, m.mediaID), nil
 		}
+		if m.documentID != "" {
+			var packet struct {
+				Tool   string `json:"tool"`
+				Result string `json:"result"`
+			}
+			var prepared struct {
+				Media []companion.GeneratedMedia `json:"media"`
+			}
+			if json.Unmarshal([]byte(turn["content"]), &packet) == nil && packet.Tool == "wechat_document_export_pdf" &&
+				json.Unmarshal([]byte(packet.Result), &prepared) == nil && len(prepared.Media) == 1 &&
+				strings.HasPrefix(prepared.Media[0].ID, "reply-docpdf-") {
+				return fmt.Sprintf(`{"action":"reply","messages":[],"media_ids":[%q]}`, prepared.Media[0].ID), nil
+			}
+		}
+	}
+	if m.documentID != "" {
+		for _, tool := range tools {
+			if tool.Name == "wechat_document_export_pdf" {
+				return fmt.Sprintf(`{"action":"tool","tool":"wechat_document_export_pdf","arguments":{"message_id":%q,"filename":"converted.pdf"}}`, m.documentID), nil
+			}
+		}
+		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"wechat_document_export_pdf"}}`, nil
 	}
 	for _, tool := range tools {
 		if m.workID != "" && tool.Name == "wechat_work_reply" {

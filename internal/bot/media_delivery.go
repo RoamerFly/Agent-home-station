@@ -241,7 +241,9 @@ func (w *Worker) pendingMedia() bool {
 	return false
 }
 func (w *Worker) mediaAllowed(d *mediaDelivery) bool {
-	if w.config.AuthorizeMediaAsset != nil && !w.config.AuthorizeMediaAsset(d.Input, d.Kind, d.AssetID) {
+	in := d.Input
+	in.TraceID = d.Trace
+	if w.config.AuthorizeMediaAsset != nil && !w.config.AuthorizeMediaAsset(in, d.Kind, d.AssetID) {
 		return false
 	}
 	if w.config.AuthorizeMedia != nil && !w.config.AuthorizeMedia(d.Input) {
@@ -638,6 +640,13 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 						return
 					}
 					status, err = w.submitMedia(checkCtx, n, d)
+					if errors.Is(err, errMediaAuthorityChanged) {
+						d.State, d.Reason = "stopped", "media_source_or_authorization_changed"
+						w.mediaRecord(d, "media_stopped", "error")
+						w.refreshMediaParent(d.Trace)
+						cancel()
+						continue
+					}
 					if errors.Is(err, ErrDeliveryCancelled) {
 						d.State = "prepared" // Gate proves the native call was not entered.
 						w.cancelMedia(n, d, true, "media_cancelled_before_native_submission")

@@ -17,7 +17,8 @@ func (h *localChatService) attachApplications(registry apphost.Registry) (apphos
 	}
 	registry, h.wechat, err = bindStationWechat(registry, h.home.dataDir, h.home.root, h.models.applicationModel(), h.home.artifacts,
 		stationLocalASR{version: h.home.localStationASRVersion, transcribe: h.home.transcribeLocalStationAudio},
-		stationDocumentTools{available: h.home.stationDocumentAvailable, inspect: h.home.inspectStationDocument})
+		stationDocumentTools{available: h.home.stationDocumentAvailable, inspect: h.home.inspectStationDocument,
+			exportAvailable: h.home.stationDocumentExportAvailable, exportPDF: h.home.exportStationDocumentPDF})
 	if err != nil {
 		return apphost.Registry{}, nil, err
 	}

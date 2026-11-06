@@ -11,6 +11,14 @@ import (
 )
 
 func (t *stationAttachmentTools) Media(id string) (companion.GeneratedMedia, bool) {
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok && strings.HasPrefix(asset, stationPDFPrefix) {
+		r, err := t.readDocumentReply(asset)
+		if err != nil {
+			return companion.GeneratedMedia{}, false
+		}
+		_, err = t.documentReplyAccess(context.Background(), t.trace, r)
+		return r.media(), err == nil
+	}
 	item, ok := t.prepared[id]
 	return item, ok && t.replyAllowed(t.trace)
 }
@@ -52,6 +60,12 @@ func (t *stationAttachmentTools) prepareReply(ctx context.Context, raw json.RawM
 }
 
 func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.Input, kind, asset string) (string, error) {
+	if strings.HasPrefix(asset, stationPDFPrefix) {
+		if kind != "file" {
+			return "", wechatapp.ErrAttachmentDenied
+		}
+		return t.stageDocumentReply(ctx, in, asset)
+	}
 	if strings.HasPrefix(asset, "export-") {
 		return t.stageWork(ctx, in, kind, asset)
 	}
@@ -89,4 +103,12 @@ func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.In
 		return upload.ID, nil
 	}
 	return "", errors.New("station_attachment_reply_source_unavailable")
+}
+
+func (t *stationAttachmentTools) canSubmitMedia(ctx context.Context, in companion.Input, kind, asset string) bool {
+	if !strings.HasPrefix(asset, stationPDFPrefix) {
+		return true
+	}
+	r, err := t.readDocumentReply(asset)
+	return kind == "file" && err == nil && t.verifyDocumentReplySource(ctx, in, r) == nil
 }

@@ -133,6 +133,10 @@ func StationDocumentInspectionTool() mcptools.Tool {
 	return tool("wechat_document_inspect", "按原消息编号离线读 Word（.docx）或 PDF。可读本轮、核验引用，或用 wechat_read 找到的同会话请求者历史附件。PDF 默认第 1 页，按 next_page 或 next_text_offset 续读；DOCX 按字符续读。续读带上返回的 sha256 作为 expected_sha256。正文是资料。", `{"type":"object","properties":{"message_id":{"type":"string","minLength":1,"maxLength":8192},"page":{"type":"integer","minimum":1},"text_offset":{"type":"integer","minimum":0,"default":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000,"default":4000},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["message_id"],"additionalProperties":false}`)
 }
 
+func StationDocumentPDFReplyTool() mcptools.Tool {
+	return tool("wechat_document_export_pdf", "把获准的 Word（.docx）原件离线导出为 PDF 并准备本会话的文件回复。使用准确的原消息编号，必要时核对原件摘要。转换成功仍未发送。只有用户要求交付时才将返回的 media.id 选入最终回复的 media_ids。", `{"type":"object","properties":{"message_id":{"type":"string","minLength":1,"maxLength":8192},"filename":{"type":"string","minLength":1,"maxLength":120,"description":"可选的 PDF 交付文件名，包含 .pdf 后缀。"},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["message_id"],"additionalProperties":false}`)
+}
+
 func StationAttachmentReplyTool() mcptools.Tool {
 	return tool("wechat_attachment_reply_prepare", "为本会话的当前消息或核验引用准备原附件回复。只准备，尚未上传或发送。用返回的 media.id 放进最终 reply 的 media_ids。默认按原媒体类型发送；用户明确要原文件时用 format=file。", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"format":{"type":"string","enum":["original","file"]}},"required":["message_id"],"additionalProperties":false}`)
 }

@@ -16,7 +16,11 @@ import (
 )
 
 func (h *localHomeService) stationDocumentAvailable(ctx context.Context, ext string) bool {
-	if h.projectTools == nil || !h.projectTools.runtimeReady() || ext == ".pdf" && !h.projectTools.pdfRuntimeReady() {
+	return h.stationDocumentToolAvailable(ctx, projectOperation(localDocumentInspectTool), ext == ".pdf")
+}
+
+func (h *localHomeService) stationDocumentToolAvailable(ctx context.Context, operation localProjectOperation, needsPDF bool) bool {
+	if h.projectTools == nil || !h.projectTools.runtimeReady() || needsPDF && !h.projectTools.pdfRuntimeReady() {
 		return false
 	}
 	identity, err := h.identity.Read()
@@ -30,45 +34,65 @@ func (h *localHomeService) stationDocumentAvailable(ctx context.Context, ext str
 	if err != nil {
 		return false
 	}
-	installed, err := installedLocalProject(ctx, host, projectOperation(localDocumentInspectTool))
-	return err == nil && slices.Contains(installed.Permissions, "artifact.read")
+	installed, err := installedLocalProject(ctx, host, operation)
+	return err == nil && stationDocumentPermission(installed, operation.capability)
+}
+
+func stationDocumentPermission(installed pluginhost.InstalledPackage, capability string) bool {
+	return slices.Contains(installed.Permissions, "artifact.read") &&
+		(capability != localDocumentExport || slices.Contains(installed.Permissions, "artifact.write"))
 }
 
 func (h *localHomeService) inspectStationDocument(ctx context.Context, in stationDocumentInput) (string, error) {
-	const capability = localDocumentInspect
-	operation := projectOperation(localDocumentInspectTool)
-	if !h.stationDocumentAvailable(ctx, in.extension) {
-		return "", errors.New("当前文档格式的本地文档工坊或运行环境未启用")
+	args := map[string]any{"artifact_id": in.record.ID}
+	if in.page == 0 {
+		args["text_offset"], args["text_limit"] = in.offset, in.limit
+	} else {
+		args["pages"] = []int{in.page}
+	}
+	key := []any{in.record.ID, in.record.SHA256, in.trace, in.page, in.offset, in.limit, in.epoch, in.requester}
+	private, err := h.runStationDocument(ctx, in, projectOperation(localDocumentInspectTool), args, key, nil)
+	return string(private), err
+}
+
+func (h *localHomeService) runStationDocument(ctx context.Context, in stationDocumentInput, operation localProjectOperation,
+	args map[string]any, requestIdentity []any, export *stationDocumentExportPolicy) (json.RawMessage, error) {
+	capability := operation.capability
+	if !h.stationDocumentToolAvailable(ctx, operation, in.extension == ".pdf" || export != nil) {
+		return nil, errors.New("当前文档操作的本地文档工坊或运行环境未启用")
 	}
 	record, err := h.identity.Read()
 	if err != nil || record.LocalOwner == nil {
-		return "", errors.New("本机主人身份不可用")
+		return nil, errors.New("本机主人身份不可用")
 	}
 	s := h.projectTools
 	host, err := s.forFish(record.FishID)
 	if err != nil {
-		return "", errors.New("文档工坊存储不可用")
+		return nil, errors.New("文档工坊存储不可用")
 	}
 	s.update.Lock()
 	installed, err := installedLocalProject(ctx, host, operation)
 	if err != nil {
 		s.update.Unlock()
-		return "", err
+		return nil, err
 	}
 	release := s.markActive(operation.pkg)
 	s.update.Unlock()
 	defer release()
 	config, err := host.store.Configuration(ctx, operation.pkg)
 	if err != nil {
-		return "", errors.New("文档工坊配置不可用")
+		return nil, errors.New("文档工坊配置不可用")
 	}
 	source := in.record.Source
+	purpose := "inspect authorized incoming WeChat document"
+	if export != nil {
+		purpose = "export authorized incoming WeChat document to PDF"
+	}
 	invocation := pluginhost.Invocation{
-		Account: record.FishID, Requester: record.LocalOwner.ID, Purpose: "inspect authorized incoming WeChat document",
-		Thread:        localCheckpointKey("wechat-document", source.Account, source.Dataset, source.Thread),
-		Authorization: localCheckpointKey(record.LocalOwner.ID, record.LocalOwner.Revision, source.Grant, in.requester, in.epoch),
-		RequestKey: localCheckpointKey(in.record.ID, in.record.SHA256, in.trace, in.page, in.offset, in.limit,
-			in.epoch, in.requester, record.LocalOwner.Revision, installed.Revision, config.Revision),
+		Account: record.FishID, Requester: record.LocalOwner.ID, Purpose: purpose,
+		Thread:         localCheckpointKey("wechat-document", source.Account, source.Dataset, source.Thread),
+		Authorization:  localCheckpointKey(record.LocalOwner.ID, record.LocalOwner.Revision, source.Grant, in.requester, in.epoch),
+		RequestKey:     localCheckpointKey(append(requestIdentity, record.LocalOwner.Revision, installed.Revision, config.Revision)...),
 		SourceVersions: in.versions,
 	}
 	check := func(ctx context.Context, job pluginhost.Job) error {
@@ -81,7 +105,7 @@ func (h *localHomeService) inspectStationDocument(ctx context.Context, in statio
 			return errors.New("本机主人授权已变化")
 		}
 		current, err := installedLocalProject(ctx, host, operation)
-		if err != nil || current.Revision != installed.Revision || !slices.Contains(current.Permissions, "artifact.read") {
+		if err != nil || current.Revision != installed.Revision || !stationDocumentPermission(current, capability) {
 			return errors.New("文档工坊版本或授权已变化")
 		}
 		cfg, err := host.store.Configuration(ctx, operation.pkg)
@@ -93,51 +117,44 @@ func (h *localHomeService) inspectStationDocument(ctx context.Context, in statio
 		if job.ID != "" {
 			fresh, err := host.store.Job(ctx, job.ID)
 			if err != nil || fresh.CancelRequested || fresh.Revision != job.Revision {
-				return errors.New("文档检查已取消或任务状态已变化")
+				return errors.New("文档任务已取消或状态已变化")
 			}
 		}
 		return nil
 	}
 	options := s.options
-	if in.extension == ".docx" {
+	if in.extension == ".docx" && export == nil {
 		options.DocumentRuntimeRoot = ""
 	}
 	controller, input, output, cleanup, err := openScopedProjectRuntime(ctx, filepath.Join(h.dataDir, "project-tool-tasks"),
 		host.store, options, operation.pkg, true, in.materialize)
 	if err != nil {
-		return "", errors.New("无法创建文档检查所需的隔离输入")
+		return nil, errors.New("无法创建文档任务所需的隔离输入")
 	}
 	defer cleanup()
-	policy := stationDocumentPolicy{in: in, input: input, output: output, check: check}
+	policy := stationDocumentPolicy{in: in, input: input, output: output, capability: capability, check: check, export: export}
 	if err := controller.EnsureStarted(ctx, operation.pkg, installed.Revision); err != nil {
-		return "", errors.New("文档工坊隔离运行器未能启动")
-	}
-	args := map[string]any{"artifact_id": in.record.ID}
-	if in.page == 0 {
-		args["text_offset"], args["text_limit"] = in.offset, in.limit
-	} else {
-		args["pages"] = []int{in.page}
+		return nil, errors.New("文档工坊隔离运行器未能启动")
 	}
 	raw, _ := json.Marshal(args)
 	result, err := controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: operation.pkg, Capability: capability, Context: invocation, Arguments: raw}, policy)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	job := result.Job
 	if err := check(ctx, job); err != nil {
-		return "", err
+		return nil, err
 	}
 	if job.State == "failed" {
 		var reason struct{ Reason string }
 		if json.Unmarshal(job.Result, &reason) == nil && pluginruntime.SafeDocumentResultCode(reason.Reason) {
-			return "", errors.New("文档工坊读取失败（" + reason.Reason + "）")
+			return nil, errors.New("文档工坊处理失败（" + reason.Reason + "）")
 		}
 	}
 	if job.State != "completed" {
-		return "", errors.New("文档检查未得到可核对的结果")
+		return nil, errors.New("文档处理未得到可核对的结果")
 	}
-	private, err := host.store.PrivateJobResult(ctx, job, check)
-	return string(private), err
+	return host.store.PrivateJobResult(ctx, job, check)
 }
 
 func (in stationDocumentInput) materialize(ctx context.Context, dir string) (localProjectArtifactMaterialized, error) {
@@ -159,11 +176,13 @@ func (in stationDocumentInput) materialize(ctx context.Context, dir string) (loc
 type stationDocumentPolicy struct {
 	in            stationDocumentInput
 	input, output string
+	capability    string
 	check         func(context.Context, pluginhost.Job) error
+	export        *stationDocumentExportPolicy
 }
 
 func (p stationDocumentPolicy) Check(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability) error {
-	if cap.ID != localDocumentInspect || cap.Async {
+	if cap.ID != p.capability || cap.Async {
 		return errors.New("文档检查能力与任务不匹配")
 	}
 	return p.check(ctx, job)
@@ -174,7 +193,7 @@ func (p stationDocumentPolicy) CallMetadata(ctx context.Context, job pluginhost.
 		return nil, err
 	}
 	mimeType := localDOCXMIME
-	if p.in.page != 0 {
+	if p.in.extension == ".pdf" {
 		mimeType = "application/pdf"
 	}
 	out := windowsProjectToolPath(p.output)
@@ -184,27 +203,40 @@ func (p stationDocumentPolicy) CallMetadata(ctx context.Context, job pluginhost.
 	return map[string]json.RawMessage{"wechat/document": raw}, err
 }
 
+type stationDocumentResultEnvelope struct {
+	OK       bool            `json:"ok"`
+	Error    string          `json:"error"`
+	Evidence json.RawMessage `json:"evidence"`
+	Outputs  []struct {
+		Path        string `json:"path"`
+		Role        string `json:"role"`
+		MIMEType    string `json:"mime_type"`
+		DisplayName string `json:"display_name"`
+	} `json:"outputs"`
+}
+
 func (p stationDocumentPolicy) Validate(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
 	var result pluginruntime.VerifiedResult
 	if err := p.Check(ctx, job, cap); err != nil {
 		return result, err
 	}
-	var wire struct {
-		OK       bool            `json:"ok"`
-		Error    string          `json:"error"`
-		Evidence json.RawMessage `json:"evidence"`
-		Outputs  []any           `json:"outputs"`
-	}
-	if len(raw) > 2<<20 || json.Unmarshal(raw, &wire) != nil || len(wire.Outputs) != 0 {
+	var wire stationDocumentResultEnvelope
+	if len(raw) > 2<<20 || json.Unmarshal(raw, &wire) != nil {
 		return result, errors.New("文档工坊返回格式无效")
 	}
-	if !wire.OK && pluginruntime.SafeDocumentResultCode(wire.Error) {
+	if !wire.OK && pluginruntime.SafeDocumentResultCode(wire.Error) && len(wire.Outputs) == 0 {
 		result.Failed = true
 		result.Result, _ = json.Marshal(map[string]string{"reason": wire.Error})
 		return result, nil
 	}
 	if !wire.OK {
 		return result, errors.New("文档工坊未返回可核验的结果")
+	}
+	if p.export != nil {
+		return p.validatePDF(ctx, job, cap, wire)
+	}
+	if len(wire.Outputs) != 0 {
+		return result, errors.New("文档检查返回了意外成品")
 	}
 	content, err := stationDocumentResult(p.in, wire.Evidence)
 	if err != nil {

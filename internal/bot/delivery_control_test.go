@@ -90,3 +90,29 @@ func TestHostControlReadFailureBlocksNewWork(t *testing.T) {
 		t.Fatal("corrupt control journal allowed submission")
 	}
 }
+
+func TestMediaAuthorityChangesInsideSubmitFence(t *testing.T) {
+	w, native, engine, in := mediaWorker(t)
+	revoked := false
+	w.config.WithDeliverySubmit = func(_ context.Context, _ companion.Input, submit func() error) error {
+		revoked = true
+		return submit()
+	}
+	w.config.AuthorizeMediaSubmit = func(_ context.Context, _ companion.Input, _, _ string) bool {
+		if revoked {
+			t.Fatal("native source lookup held the cancellation fence")
+		}
+		return true
+	}
+	w.config.AuthorizeMediaAsset = func(got companion.Input, kind, asset string) bool {
+		if got.TraceID != in.TraceID || kind != "voice" || asset != "prepared-media" {
+			t.Fatalf("submission lost media or origin: %s %s %s", got.TraceID, kind, asset)
+		}
+		return !revoked
+	}
+	w.queueMedia(t.Context(), engine, in, companion.GeneratedMedia{ID: "test-media", Kind: "voice", AssetID: "prepared-media"})
+	d := w.runtime.Media[0]
+	if native.sends != 0 || d.State != "stopped" || d.Reason != "media_source_or_authorization_changed" || d.UserCancelled {
+		t.Fatal("revoked media was submitted or reported as a user cancellation", native.sends, d)
+	}
+}
