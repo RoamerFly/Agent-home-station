@@ -8,16 +8,42 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
 var ErrRevision = errors.New("record revision changed")
 var ErrRequestConflict = errors.New("request key already bound to another invocation")
+var applicationJobID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+
+const applicationJobPrefix = "application/"
 
 // CreateJob binds an idempotency key to the complete immutable request, including
 // source versions, plugin bytes and configuration revision. It never submits work.
 func (s *Store) CreateJob(ctx context.Context, input Job) (Job, bool, error) {
+	if strings.HasPrefix(input.Plugin, applicationJobPrefix) {
+		return Job{}, false, errors.New("application jobs require the trusted application host")
+	}
+	return s.createJob(ctx, input, false)
+}
+
+// CreateApplicationJob creates a durable action on behalf of a registered
+// application. The caller is the trusted station host: unlike a project-tool
+// job, it is not backed by an installed plugin record. The application ID is
+// still part of the idempotency identity and its adapter/authorization version
+// fields are immutable after the first invocation.
+func (s *Store) CreateApplicationJob(ctx context.Context, appID string, input Job) (Job, bool, error) {
+	if !applicationJobID.MatchString(appID) || input.Plugin != "" && input.Plugin != applicationJobPrefix+appID ||
+		strings.TrimSpace(input.Version) == "" || strings.TrimSpace(input.PackageDigest) == "" || strings.TrimSpace(input.ConfigRevision) == "" {
+		return Job{}, false, errors.New("invalid application job invocation")
+	}
+	input.Plugin = applicationJobPrefix + appID
+	return s.createJob(ctx, input, true)
+}
+
+func (s *Store) createJob(ctx context.Context, input Job, application bool) (Job, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var empty Job
@@ -52,26 +78,28 @@ func (s *Store) CreateJob(ctx context.Context, input Job) (Job, bool, error) {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return empty, false, err
 	}
-	var digest string
-	var enabled, removed int
-	var manifest []byte
-	if err = s.db.QueryRowContext(ctx, `SELECT digest,enabled,removed,manifest FROM installed WHERE id=?`, input.Plugin).Scan(&digest, &enabled, &removed, &manifest); err != nil {
-		return empty, false, err
-	}
-	var p Package
-	if json.Unmarshal(manifest, &p) != nil {
-		return empty, false, errors.New("invalid plugin registration")
-	}
-	if enabled == 0 || removed != 0 || digest != input.PackageDigest || p.Version != input.Version {
-		return empty, false, errors.New("plugin disabled or version changed")
-	}
-	var configRevision int
-	err = s.db.QueryRowContext(ctx, `SELECT revision FROM configurations WHERE plugin=?`, input.Plugin).Scan(&configRevision)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return empty, false, err
-	}
-	if input.ConfigRevision != strconv.Itoa(configRevision) {
-		return empty, false, errors.New("plugin configuration changed")
+	if !application {
+		var digest string
+		var enabled, removed int
+		var manifest []byte
+		if err = s.db.QueryRowContext(ctx, `SELECT digest,enabled,removed,manifest FROM installed WHERE id=?`, input.Plugin).Scan(&digest, &enabled, &removed, &manifest); err != nil {
+			return empty, false, err
+		}
+		var p Package
+		if json.Unmarshal(manifest, &p) != nil {
+			return empty, false, errors.New("invalid plugin registration")
+		}
+		if enabled == 0 || removed != 0 || digest != input.PackageDigest || p.Version != input.Version {
+			return empty, false, errors.New("plugin disabled or version changed")
+		}
+		var configRevision int
+		err = s.db.QueryRowContext(ctx, `SELECT revision FROM configurations WHERE plugin=?`, input.Plugin).Scan(&configRevision)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return empty, false, err
+		}
+		if input.ConfigRevision != strconv.Itoa(configRevision) {
+			return empty, false, errors.New("plugin configuration changed")
+		}
 	}
 	idSum := sha256.Sum256([]byte(s.account + "\x00" + input.Plugin + "\x00" + c.Thread + "\x00" + c.RequestKey))
 	request.ID = hex.EncodeToString(idSum[:])

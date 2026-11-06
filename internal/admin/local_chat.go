@@ -90,6 +90,7 @@ type localChatService struct {
 	projectTools *localProjectTools
 	wechat       *stationWechat
 	observations *apphost.Observer
+	applications apphost.Registry
 	// Tests replace only the model transport, retaining the normal engine,
 	// source handling, SQLite and HTTP boundary.
 	modelFactory func() (companion.LanguageModel, error)
@@ -201,6 +202,7 @@ func (h *localChatService) routes(s *Server, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/local/model", s.protected(h.modelView))
 	mux.HandleFunc("PUT /api/local/model", s.protected(h.modelSave))
 	h.appObservationRoutes(s, mux)
+	h.publicationRoutes(s, mux)
 }
 
 func (h *localChatService) modelView(w http.ResponseWriter, r *http.Request) {

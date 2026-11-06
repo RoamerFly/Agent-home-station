@@ -29,6 +29,7 @@ type localToolSet struct {
 	wechat       *stationWechat
 	observations *apphost.Observer
 	appReads     []apphost.ObservationResult
+	publications *localChatService
 	requestTime  time.Time
 }
 
@@ -57,6 +58,7 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 	if in.Channel == "local" && in.Mode == "direct" && in.Directed && in.Thread == in.Sender && !in.Preview && !in.Surf && !in.ReportOnly {
 		tools.wechat = h.wechat
 		tools.observations = h.observations
+		tools.publications = h
 		tools.projectTools = h.projectTools
 		tools.requestTime, _ = time.Parse(time.RFC3339Nano, in.MessageTime)
 	}
@@ -65,6 +67,9 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 
 func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all := []mcptools.Tool{}
+	if t.publications != nil && t.run != nil {
+		all = append(all, localPublicationTool())
+	}
 	if t.observations.HasDiscoverable(ctx) {
 		all = append(all, localAppObservationTool())
 	}
@@ -100,6 +105,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if name == localPublicationToolName {
+		return t.callPublication(ctx, raw)
+	}
 	if name == localAppObservationToolName {
 		return t.callAppObservation(ctx, raw)
 	}

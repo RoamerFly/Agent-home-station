@@ -114,6 +114,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	if err != nil {
 		return nil, err
 	}
+	chat.applications = registry
 	chat.observations = apphost.NewObserver(registry, filepath.Join(dir, "app-observations"))
 	s.appRoutes(mux, registry)
 	if handler.wechat != nil {
