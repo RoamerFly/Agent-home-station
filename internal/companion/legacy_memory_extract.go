@@ -114,7 +114,12 @@ func legacySelectionEvents(ctx context.Context, db *sql.DB, scopeID, account, th
 		if err := rows.Scan(&id, &trace, &role, &sender, &at, &text, &hash, &complete, &revision, &payload); err != nil {
 			return nil, err
 		}
-		if complete != 1 || revision < 1 {
+		// Legacy memory_sources records only an event ID, never the source
+		// revision. A rewritten event can therefore not be tied to the text
+		// that an old fact quoted. Keep this import projection bounded to the
+		// sole revision that legacy facts can prove, rather than exporting a
+		// source which a later import could accidentally treat as grounded.
+		if complete != 1 || revision != 1 {
 			continue
 		}
 		var turn Turn

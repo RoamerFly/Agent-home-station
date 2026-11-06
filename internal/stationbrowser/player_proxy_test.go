@@ -40,13 +40,28 @@ func TestPlayerProxyAcceptsAllowedByteDanceHostAndBoundsHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if _, err := conn.Write([]byte("CONNECT " + strings.Repeat("a", playerProxyHeaderLimit+1))); err != nil {
+	// Fill exactly one parser buffer without a newline. Extra unread TCP
+	// bytes can turn the rejection into a reset on Windows and hide its status.
+	if _, err := conn.Write([]byte("CONNECT " + strings.Repeat("a", playerProxyHeaderLimit-len("CONNECT ")))); err != nil {
 		t.Fatal(err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 	status, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil || !strings.HasPrefix(status, "HTTP/1.1 405") {
 		t.Fatalf("oversized line response = %q, %v", status, err)
+	}
+}
+
+func TestPlayerProxyBoundsIncompleteRequestLine(t *testing.T) {
+	for _, size := range []int{playerProxyHeaderLimit + 1, playerProxyHeaderLimit * 2} {
+		input := strings.NewReader(strings.Repeat("a", size))
+		reader := bufio.NewReaderSize(input, playerProxyHeaderLimit)
+		if _, err := readConnectRequest(reader); err == nil {
+			t.Fatalf("accepted an incomplete request of %d bytes", size)
+		}
+		if read := size - input.Len(); read > playerProxyHeaderLimit {
+			t.Fatalf("read %d bytes before rejecting the request", read)
+		}
 	}
 }
 
