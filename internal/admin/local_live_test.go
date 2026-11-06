@@ -38,6 +38,22 @@ func TestLocalLiveEmptyProductionBoundary(t *testing.T) {
 	}
 }
 
+func TestLocalLiveBootRecoveryStartsForPreparedOwner(t *testing.T) {
+	base := t.TempDir()
+	f := newLocalHomeFixture(t, filepath.Join(base, "host"), filepath.Join(base, "workspace"))
+	f.login()
+	if code, _ := f.request(http.MethodPost, "/api/local/home", map[string]string{"action": "initialize"}, true); code != http.StatusOK {
+		t.Fatalf("initialize local owner: %d", code)
+	}
+	restarted := localRestartChat(t, f)
+	restarted.handler.chat.mu.Lock()
+	live, fish := restarted.handler.chat.live, restarted.handler.chat.liveFish
+	restarted.handler.chat.mu.Unlock()
+	if live == nil || fish == "" {
+		t.Fatal("prepared local owner did not start live recovery controller on boot")
+	}
+}
+
 // The route-level test owns only synthetic provider/output implementations.
 // It exercises the same authenticated HTTP boundary as the desktop; no
 // browser, encoder, platform account, or real broadcast is involved.

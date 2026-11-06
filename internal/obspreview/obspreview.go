@@ -1,8 +1,5 @@
-// Package obspreview obtains a single, local OBS program-preview frame.
-//
-// It deliberately implements only the two read-only OBS WebSocket v5 requests
-// needed for a preview. It never starts OBS, changes its state, or proxies a
-// connection to another machine.
+// Package obspreview provides read-only OBS program preview and a separate,
+// ownership-checked protocol for controlling a dedicated local OBS encoder.
 package obspreview
 
 import (
@@ -77,43 +74,48 @@ func Capture(ctx context.Context, port int, password string) (Frame, error) {
 	})
 }
 
-func capture(ctx context.Context, port int, password string, dialer websocket.Dialer) (Frame, error) {
+func capture(ctx context.Context, port int, password string, dialer websocket.Dialer) (frame Frame, err error) {
+	err = withOBS(ctx, port, password, dialer, func(ctx context.Context, conn *websocket.Conn) error {
+		scene, err := requestScene(ctx, conn)
+		if err != nil {
+			return err
+		}
+		imageData, err := requestScreenshot(ctx, conn, scene)
+		if err != nil {
+			return err
+		}
+		frame = Frame{Scene: scene, ImageData: imageData}
+		return nil
+	})
+	return frame, err
+}
+
+func withOBS(ctx context.Context, port int, password string, dialer websocket.Dialer, use func(context.Context, *websocket.Conn) error) error {
 	endpoint := url.URL{Scheme: "ws", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}
-	conn, _, err := dialer.DialContext(ctx, endpoint.String(), nil)
+	conn, response, err := dialer.DialContext(ctx, endpoint.String(), nil)
 	if err != nil {
-		return Frame{}, connectionError(ctx)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		if errors.Is(err, ErrStreamEndpoint) {
+			return ErrStreamEndpoint
+		}
+		return connectionError(ctx)
 	}
 	defer conn.Close()
-	// Gorilla's blocking ReadMessage does not accept a context directly. Closing
-	// this private connection is the only reliable way to wake it on cancel.
-	stopCancelWatch := make(chan struct{})
-	defer close(stopCancelWatch)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = conn.Close()
-		case <-stopCancelWatch:
-		}
-	}()
+	// Closing this private connection wakes Gorilla's blocking reads on cancel.
+	stopCancelWatch := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancelWatch()
 	conn.SetReadLimit(maxMessage)
 
 	hello, err := readHello(ctx, conn)
 	if err != nil {
-		return Frame{}, err
+		return err
 	}
 	if err := identify(ctx, conn, hello, password); err != nil {
-		return Frame{}, err
+		return err
 	}
-
-	scene, err := requestScene(ctx, conn)
-	if err != nil {
-		return Frame{}, err
-	}
-	imageData, err := requestScreenshot(ctx, conn, scene)
-	if err != nil {
-		return Frame{}, err
-	}
-	return Frame{Scene: scene, ImageData: imageData}, nil
+	return use(ctx, conn)
 }
 
 type envelope struct {
@@ -243,6 +245,9 @@ func request(ctx context.Context, conn *websocket.Conn, requestType string, requ
 	}
 	if !response.RequestStatus.Result || response.RequestStatus.Code != 100 {
 		return ErrRequestRejected
+	}
+	if responseData == nil {
+		return nil
 	}
 	if len(response.ResponseData) == 0 || json.Unmarshal(response.ResponseData, responseData) != nil {
 		return ErrProtocol
