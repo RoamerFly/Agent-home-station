@@ -410,6 +410,43 @@
         panel.replaceChildren(appElement("small", error.message));
       }
     }
+    async function readLegacyGroupNote(thread, panel) {
+      panel.replaceChildren(appElement("small", "正在核对旧群备注…"));
+      const url = legacyImportURL + "/memory/" + encodeURIComponent(thread) + "/preference";
+      try {
+        const value = await request(url);
+        if (value?.status !== "ready" || !value.digest || typeof value.note !== "string") {
+          panel.replaceChildren(appElement("small", value?.status === "applied" ?
+            "此群已有旧备注接续记录。可在回复范围中查看当前备注。" : value?.reason || "暂时无法接续旧群备注。"));
+          return;
+        }
+        const confirmed = document.createElement("input");
+        confirmed.type = "checkbox";
+        const label = document.createElement("label");
+        label.append(confirmed, document.createTextNode("我已确认旧资料和当前目标是同一个实际微信账号"));
+        const apply = appSetupButton("确认接续旧备注", async () => {
+          const current = apps;
+          apply.disabled = true;
+          try {
+            await request(url, { method: "POST", body: JSON.stringify({ digest: value.digest, same_identity: true }) });
+            if (current !== apps) return;
+            appFeedback("旧群备注已接续。可在回复范围中查看或编辑。");
+            await loadApps();
+          } catch (error) {
+            panel.replaceChildren(appElement("small", error.message),
+              appSetupButton("重新核对旧群备注", () => readLegacyGroupNote(thread, panel)));
+          }
+        });
+        apply.disabled = true;
+        confirmed.addEventListener("change", () => { apply.disabled = !confirmed.checked; });
+        const actions = appElement("div", "", "legacy-memory-confirm");
+        actions.append(label, apply);
+        panel.replaceChildren(appElement("strong", "旧群备注"), appElement("p", value.note),
+          appElement("small", "只接续备注文字。分享总结沿用当前连接的开关。"), actions);
+      } catch (error) {
+        panel.replaceChildren(appElement("small", error.message));
+      }
+    }
     function renderMemoryReport(value) {
       const statusCopy = {
         ready: "旧会话记忆可核对",
@@ -427,6 +464,10 @@
         if (conversation.history_granted && thread) {
           const selection = appElement("div", "", "legacy-memory-selection");
           row.append(appSetupButton("预演接续此会话", () => readMemorySelection(thread, selection)), selection);
+          if (conversation.has_preference && thread.endsWith("@chatroom")) {
+            const note = appElement("div", "", "legacy-memory-selection");
+            row.append(appSetupButton("核对旧群备注", () => readLegacyGroupNote(thread, note)), note);
+          }
         } else {
           row.append(appElement("small", "接续此会话前，请先在当前连接中授权历史读取。"));
         }
@@ -528,7 +569,7 @@
     const updateGroupRule = (threadID, patch) => {
       let drafts = apps.groupRuleDrafts.get(id);
       if (!drafts) {
-        drafts = new Map(configuredRules);
+        drafts = new Map();
         apps.groupRuleDrafts.set(id, drafts);
       }
       drafts.set(threadID, { ...readGroupRule(threadID), ...patch });
@@ -2932,10 +2973,11 @@
       if (tool.id === "obs-preview") detail.append(renderOBSPreview(tool));
       const controls = appElement("div", "", "project-tool-actions");
       const busy = current.applying === tool.id;
+      const controlsDisabled = current.loading || Boolean(current.applying);
       const canInstall = tool.runtime_ready || tool.id === "comfyui" || tool.id === "yue" || tool.id === "station-speech" || tool.id === "obs-preview";
       if (!tool.installed) {
         const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
-        approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !tool.catalog_available || !canInstall;
+        approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = controlsDisabled || !tool.catalog_available || !canInstall;
         approval.append(checkbox, copy);
         const install = appElement("button", busy ? "正在安装…" : "安装", "button compact primary");
         install.type = "button"; install.disabled = true;
@@ -2946,7 +2988,7 @@
         const action = tool.enabled ? "disable" : "enable";
         const button = appElement("button", busy ? "正在处理…" : (tool.enabled ? "停用" : "启用"), tool.enabled ? "button compact secondary" : "button compact primary");
         const ready = tool.id === "obs-preview" ? current.obsPreview.configured && !current.obsPreview.loading : tool.runtime_ready;
-        button.type = "button"; button.disabled = busy || (action === "enable" && !ready);
+        button.type = "button"; button.disabled = controlsDisabled || (action === "enable" && !ready);
         button.addEventListener("click", () => updateProjectTool(tool, action, false));
         controls.append(button);
         if (tool.update_available) {
@@ -2954,7 +2996,7 @@
             controls.append(appElement("span", "请先停用，再更新到新版本。", "project-tool-update-note"));
           } else {
             const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
-            approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !canInstall;
+            approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = controlsDisabled || !canInstall;
             approval.append(checkbox, copy);
             const upgrade = appElement("button", busy ? "正在更新…" : "更新", "button compact secondary");
             upgrade.type = "button"; upgrade.disabled = true;

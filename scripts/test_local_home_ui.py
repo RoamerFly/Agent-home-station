@@ -571,12 +571,24 @@ def verify(binary, output):
 
                 page.route(legacy_import_pattern, legacy_import)
                 legacy_memory_pattern = legacy_import_pattern + "/memory*"
+                note_text = "合成旧群备注：<原样显示>"
+                note_posts = []
 
                 def legacy_memory_report(route):
                     path = urlparse(route.request.url).path
                     selected_prefix = "/memory/"
                     if selected_prefix in path:
                         thread = unquote(path.split(selected_prefix, 1)[1])
+                        if thread == "synthetic-room@chatroom/preference":
+                            if route.request.method == "GET":
+                                fulfill_json({"status": "ready", "digest": "fixture-legacy-note", "note": note_text})(route)
+                            else:
+                                assert route.request.method == "POST"
+                                assert route.request.headers.get("x-csrf-token")
+                                note_posts.append(route.request.post_data_json)
+                                assert note_posts == [{"digest": "fixture-legacy-note", "same_identity": True}]
+                                fulfill_json({"status": "applied"})(route)
+                            return
                         assert thread == "synthetic-room@chatroom"
                         if route.request.method == "GET":
                             legacy_memory_selection["gets"].append(thread)
@@ -607,20 +619,21 @@ def verify(binary, output):
                                                          "withheld_events": 1, "memory_count": 1, "has_summary": False,
                                                          "history_granted": False}]})(route)
                         return
-                    if len([item for item in legacy_memory["requests"] if not item]) > 1:
+                    if len([item for item in legacy_memory["requests"] if not item]) > 1 and legacy["availability"] != "applied":
                         fulfill_json({"status": "snapshot_incomplete", "matched_scopes": 2, "unmapped_scopes": 1,
                                       "foreign_scopes": 0, "conversations": []})(route)
                         return
                     fulfill_json({"status": "ready", "matched_scopes": 2, "unmapped_scopes": 1, "foreign_scopes": 0,
                                   "conversations": [{"thread_id": "synthetic-room@chatroom", "event_count": 12,
                                                      "withheld_events": 2, "memory_count": 3, "has_summary": True,
-                                                     "history_granted": True}], "next_after": "fixture-memory-next"})(route)
+                                                     "history_granted": True, "has_preference": True}], "next_after": "fixture-memory-next"})(route)
 
                 page.route(legacy_memory_pattern, legacy_memory_report)
                 # Register the per-conversation route after the inventory route.
                 # Playwright runs matching handlers in reverse registration order,
                 # so this keeps a selected scope out of the paged inventory handler.
                 page.route(legacy_import_pattern + "/memory/*", legacy_memory_report)
+                page.route(legacy_import_pattern + "/memory/*/preference", legacy_memory_report)
                 contacts_pattern = status_pattern + "/contacts*"
                 contact_queries = []
 
@@ -709,6 +722,15 @@ def verify(binary, output):
                 page.get_by_text("目标登录：已登录且在线", exact=True).wait_for()
                 page.get_by_text("身份确认：仍需主人确认实际微信身份", exact=True).wait_for()
                 assert legacy["previews"] == 3 and len(legacy["posts"]) == 2, "cutover refresh must remain read-only"
+                page.get_by_role("button", name="核对旧会话记忆", exact=True).click()
+                page.get_by_role("button", name="核对旧群备注", exact=True).click()
+                page.get_by_text(note_text, exact=True).wait_for()
+                note_apply = page.get_by_role("button", name="确认接续旧备注", exact=True)
+                assert note_apply.is_disabled() and not note_posts, "note preview must wait for identity confirmation"
+                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
+                note_apply.click()
+                page.get_by_text("旧群备注已接续。可在回复范围中查看或编辑。", exact=True).wait_for()
+                assert len(note_posts) == 1 and not worker["actions"] and not worker["threads"]
                 page.get_by_role("button", name="设置回复范围").click()
                 page.get_by_role("textbox", name="回复会话 ID", exact=True).fill("filehelper\nsynthetic-room@chatroom")
                 page.get_by_role("textbox", name="历史与成员读取会话 ID", exact=True).fill("synthetic-room@chatroom")
@@ -1212,7 +1234,7 @@ def verify(binary, output):
                 page.unroute(chat_pattern, synthetic_chat)
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "project tool install enable disable upgrade", "artifact download link", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "legacy import preview confirm and stale retry", "legacy memory inventory and pagination", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group management receipts", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "project tool install enable disable upgrade", "artifact download link", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "legacy import preview confirm and stale retry", "legacy memory inventory and pagination", "legacy group note preview and confirmation", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group management receipts", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 

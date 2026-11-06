@@ -25,6 +25,10 @@ func TestReadLegacyMemorySelectionKeepsOnlyBoundedSourcesAndFacts(t *testing.T) 
 	account, thread := "account-a", "thread-a"
 	scope := Scope{ID: ScopeID("wechat", account, thread), Channel: "wechat", Account: account, Thread: thread}
 	insertLegacyScope(t, db, scope.ID, scope)
+	noteThread := "note-only@chatroom"
+	noteScope := Scope{ID: ScopeID("wechat", account, noteThread), Channel: "wechat", Account: account, Thread: noteThread,
+		Preferences: "合成备注", PreferencesRevision: 1}
+	insertLegacyScope(t, db, noteScope.ID, noteScope)
 	insertBoundLegacyEvent(t, db, "event-good", scope.ID, account, thread, 1, 1, "keep this source")
 	insertBoundLegacyEvent(t, db, "event-revised", scope.ID, account, thread, 2, 2, "rewritten source")
 	insertBoundLegacyEvent(t, db, "event-blocked", scope.ID, account, thread, 3, 1, "blocked source")
@@ -53,6 +57,13 @@ func TestReadLegacyMemorySelectionKeepsOnlyBoundedSourcesAndFacts(t *testing.T) 
 	}
 	if len(selection.Memories) != 1 || selection.Memories[0].ID != "fact-good" || len(selection.Memories[0].Sources) != 1 || selection.Memories[0].Sources[0] != (LegacyMemoryFactSource{EventID: "event-good", Revision: 1}) {
 		t.Fatalf("facts = %#v", selection.Memories)
+	}
+	note, err := ReadLegacyConversationPreference(context.Background(), f, account, noteThread)
+	if err != nil || note != noteScope.Preferences {
+		t.Fatalf("read preference without events: %q, %v", note, err)
+	}
+	if note, err := ReadLegacyConversationPreference(context.Background(), f, "account-b", noteThread); err == nil || note != "" {
+		t.Fatalf("cross-account read returned %q, %v", note, err)
 	}
 }
 

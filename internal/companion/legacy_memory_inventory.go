@@ -41,6 +41,7 @@ type LegacyMemoryConversation struct {
 	WithheldEvents int    `json:"withheld_events"`
 	MemoryCount    int    `json:"memory_count"`
 	HasSummary     bool   `json:"has_summary"`
+	HasPreference  bool   `json:"has_preference,omitempty"`
 }
 
 // LegacyMemoryInventoryResult contains only verified conversations for the
@@ -74,7 +75,9 @@ func LegacyMemoryInventory(ctx context.Context, file *os.File, account string) (
 		json_extract(payload,'$.channel'),
 		json_extract(payload,'$.account'),
 		json_extract(payload,'$.thread'),
-		CASE WHEN json_type(payload,'$.summary') IS NULL THEN 0 ELSE 1 END
+		CASE WHEN json_type(payload,'$.summary') IS NULL THEN 0 ELSE 1 END,
+		CASE WHEN json_type(payload,'$.preferences') = 'text'
+			AND length(trim(json_extract(payload,'$.preferences'))) > 0 THEN 1 ELSE 0 END
 		FROM scopes ORDER BY id`)
 	if err != nil {
 		return LegacyMemoryInventoryResult{}, legacyInventoryError(ctx, err)
@@ -83,16 +86,17 @@ func LegacyMemoryInventory(ctx context.Context, file *os.File, account string) (
 	// database/sql reserves the sole connection until rows is closed.  Keep this
 	// projection tiny, then run indexed aggregates after closing the cursor.
 	type verifiedScope struct {
-		id      string
-		thread  string
-		summary bool
+		id         string
+		thread     string
+		summary    bool
+		preference bool
 	}
 	verified := make([]verifiedScope, 0)
 	for rows.Next() {
 		var rowID string
 		var payloadID, channel, scopeAccount, thread sql.NullString
-		var summary int
-		if err := rows.Scan(&rowID, &payloadID, &channel, &scopeAccount, &thread, &summary); err != nil {
+		var summary, preference int
+		if err := rows.Scan(&rowID, &payloadID, &channel, &scopeAccount, &thread, &summary, &preference); err != nil {
 			return LegacyMemoryInventoryResult{}, legacyInventoryError(ctx, err)
 		}
 		if !payloadID.Valid || !channel.Valid || !scopeAccount.Valid || !thread.Valid ||
@@ -110,7 +114,7 @@ func LegacyMemoryInventory(ctx context.Context, file *os.File, account string) (
 			result.ForeignScopes++
 			continue
 		}
-		verified = append(verified, verifiedScope{id: rowID, thread: thread.String, summary: summary != 0})
+		verified = append(verified, verifiedScope{id: rowID, thread: thread.String, summary: summary != 0, preference: preference != 0})
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -137,6 +141,7 @@ func LegacyMemoryInventory(ctx context.Context, file *os.File, account string) (
 			WithheldEvents: withheld,
 			MemoryCount:    memories,
 			HasSummary:     scope.summary,
+			HasPreference:  scope.preference,
 		})
 	}
 	return result, nil

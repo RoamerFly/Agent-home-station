@@ -143,6 +143,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	memoryRoute := func(account string) string { return planRoute(account) + "/memory" }
 	req("GET", planRoute("one"), nil, false, 401)
 	req("GET", memoryRoute("one"), nil, false, 401)
+	req("GET", memoryRoute("one")+"/123@chatroom/preference", nil, false, 401)
 	f.login()
 	assertCutoverOwnerState(t, f, ownerIdentity, speakingVoice)
 	req("GET", memoryRoute("two"), nil, false, 404)
@@ -175,6 +176,10 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if err := memory.Clear(companion.ScopeID("wechat", "one", "filehelper")); err != nil {
 		t.Fatal(err)
 	}
+	const oldGroupNote = "合成群偏好：收到分享时默认总结。"
+	if err := memory.SetPreferences(companion.ScopeID("wechat", "one", "123@chatroom"), oldGroupNote, 0); err != nil {
+		t.Fatal(err)
+	}
 	if err := memory.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -204,10 +209,10 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal(audit)
 	}
 	first := audit["conversations"].([]any)[0].(map[string]any)
-	if first["thread_id"] != "123@chatroom" || first["event_count"] != float64(1) || first["history_granted"] != false {
+	if first["thread_id"] != "123@chatroom" || first["event_count"] != float64(1) || first["history_granted"] != false || first["has_preference"] != true {
 		t.Fatal(first)
 	}
-	for _, private := range []string{"synthetic-private-body", "synthetic-sender", "foreign-private-thread", "memory.sqlite"} {
+	for _, private := range []string{"synthetic-private-body", "synthetic-sender", "foreign-private-thread", "memory.sqlite", oldGroupNote} {
 		if strings.Contains(string(j(audit)), private) {
 			t.Fatal("memory preview exposed private data", private)
 		}
@@ -328,6 +333,11 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		}
 	}
 	selectedRoute := memoryRoute("one") + "/123@chatroom"
+	noteRoute := selectedRoute + "/preference"
+	req("GET", memoryRoute("one")+"/filehelper/preference", nil, false, 400)
+	if row := req("GET", noteRoute, nil, false, 200); row["status"] != "not_ready" || row["note"] != nil {
+		t.Fatal("ungranted group disclosed old preference", row)
+	}
 	otherRoute := memoryRoute("one") + "/filehelper"
 	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "not_ready" {
 		t.Fatal("selected history was not explicitly authorized", row)
@@ -347,6 +357,9 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "not_ready" {
 		t.Fatal("signed-out target passed cutover", row)
 	}
+	if row := req("GET", noteRoute, nil, false, 200); row["status"] != "not_ready" || row["note"] != nil {
+		t.Fatal("signed-out target disclosed old preference", row)
+	}
 	loginOnline.Store(true)
 	selected := req("GET", selectedRoute, nil, false, 200)
 	if selected["status"] != "ready" || selected["event_count"] != float64(1) || bytes.Contains(j(selected), []byte("synthetic-private-body")) {
@@ -364,10 +377,16 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	}
 	req("POST", selectedRoute, postMemory(selected, true), false, 403)
 	req("POST", selectedRoute, postMemory(selected, false), true, 400)
+	oldNotePreview := req("GET", noteRoute, nil, false, 200)
+	if oldNotePreview["status"] != "ready" || oldNotePreview["note"] != oldGroupNote {
+		t.Fatal("old note should be readable before importing the history bundle", oldNotePreview)
+	}
 	setHistory("filehelper")
 	req("POST", selectedRoute, postMemory(selected, true), true, 409)
+	req("POST", noteRoute, postMemory(oldNotePreview, true), true, 409)
 	setHistory("123@chatroom", "filehelper")
 	req("POST", selectedRoute, postMemory(selected, true), true, 409)
+	req("POST", noteRoute, postMemory(oldNotePreview, true), true, 409)
 	selected = req("GET", selectedRoute, nil, false, 200)
 
 	targetMemory, err := companion.NewStore(filepath.Join(target, "memory"))
@@ -425,12 +444,59 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if _, err := readStationLegacyMemory(target, "one", "123@chatroom", bundle.Grant); err != nil {
 		t.Fatal("current grant could not open the selected bundle", err)
 	}
+	setNote := func(note string, summarize bool) {
+		t.Helper()
+		req("PUT", route("one")+"/policy", map[string]any{
+			"reply_threads": []string{"123@chatroom", "filehelper"}, "history_threads": []string{"123@chatroom", "filehelper"},
+			"attachment_threads": []string{"123@chatroom"},
+			"group_rules":        []apphost.ConnectionGroupRule{{ThreadID: "123@chatroom", Note: note, SummarizeShares: summarize}},
+		}, true, 200)
+	}
+	checkNote := func(note string, summarize bool) {
+		t.Helper()
+		detail := detailFor("one")
+		rows, _ := detail["configured_policy"].(map[string]any)["group_rules"].([]any)
+		if note == "" && !summarize {
+			if len(rows) != 0 {
+				t.Fatal("cleared target note reappeared", rows)
+			}
+			return
+		}
+		if len(rows) != 1 {
+			t.Fatal("unexpected group rules", rows)
+		}
+		rule := rows[0].(map[string]any)
+		if rule["note"] != note || rule["summarize_shares"] != summarize || detail["worker"] != "paused" {
+			t.Fatal("target note or independent share grant changed", rule)
+		}
+	}
+	notePreview := req("GET", noteRoute, nil, false, 200)
+	if notePreview["status"] != "ready" || notePreview["note"] != oldGroupNote {
+		t.Fatal("old scoped note unavailable after history import", notePreview)
+	}
+	req("POST", noteRoute, postMemory(notePreview, true), false, 403)
+	req("POST", noteRoute, postMemory(notePreview, false), true, 400)
+	setNote("合成新站备注", true)
+	req("POST", noteRoute, postMemory(notePreview, true), true, 409)
+	checkNote("合成新站备注", true)
+	setNote("", false)
+	notePreview = req("GET", noteRoute, nil, false, 200)
+	write(liveMarker, j(starting))
+	req("POST", noteRoute, postMemory(notePreview, true), true, 409)
+	write(liveMarker, j(marker))
+	notePreview = req("GET", noteRoute, nil, false, 200)
+	req("POST", noteRoute, postMemory(notePreview, true), true, 200)
+	checkNote(oldGroupNote, false)
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}
 	h, f = open()
 	f.login()
 	assertCutoverOwnerState(t, f, ownerIdentity, speakingVoice)
+	checkNote(oldGroupNote, false)
+	setNote("", false)
+	req("POST", noteRoute, postMemory(notePreview, true), true, 200)
+	checkNote("", false)
 	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "applied" {
 		t.Fatal("applied scope was not restored after restart", row)
 	}

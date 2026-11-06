@@ -60,6 +60,9 @@ type stationWechatPolicy struct {
 	ContactGrant     time.Time                         `json:"contact_grant,omitzero"`
 	GroupMuteGrants  map[string]time.Time              `json:"group_mute_grants,omitempty"`
 	GroupRules       map[string]stationWechatGroupRule `json:"group_rules,omitempty"`
+	// Persist the import claim with its note so retrying cannot restore a
+	// note the owner later edited, cleared, or lost by revoking its scope.
+	LegacyGroupNoteImports map[string]string `json:"legacy_group_note_imports,omitempty"`
 }
 
 const stationWechatPolicyLimit = 128 << 10
@@ -259,6 +262,11 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 	}
 	for thread, rule := range policy.GroupRules {
 		if !validStationGroupRule(thread, rule, policy.Grants, policy.AttachmentGrants) {
+			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
+		}
+	}
+	for thread, digest := range policy.LegacyGroupNoteImports {
+		if !validStationGroup(thread) || !legacyMemoryDigestValid(digest) {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 		}
 	}

@@ -186,7 +186,7 @@ func (s *stationWechat) legacyMemoryImport(ctx context.Context, id, thread, dige
 	}
 	defer dir.Close()
 	item := stationLegacyMemory{Version: 1, Account: account, Thread: thread, Grant: grant}
-	selection, sourceFile, err := selectStationLegacyMemory(ctx, dir, account, thread)
+	selection, sourceFile, err := readStationLegacyScope(ctx, dir, account, thread, companion.ReadLegacyMemorySelection)
 	item.Selection = selection
 	if err != nil {
 		return notReady("旧记忆副本不完整、不可读或会话身份无法核对")
@@ -269,8 +269,8 @@ func checkLegacyMemoryDestination(ctx context.Context, worker *os.Root, account,
 	return legacyMemoryImportView{}, true
 }
 
-func selectStationLegacyMemory(ctx context.Context, dir *os.Root, account, thread string) (companion.LegacyMemorySelection, os.FileInfo, error) {
-	var empty companion.LegacyMemorySelection
+func readStationLegacyScope[T any](ctx context.Context, dir *os.Root, account, thread string, read func(context.Context, *os.File, string, string) (T, error)) (T, os.FileInfo, error) {
+	var empty T
 	if !standaloneLegacyMemory(dir) {
 		return empty, nil, errLegacyImportInvalid
 	}
@@ -287,7 +287,7 @@ func selectStationLegacyMemory(ctx context.Context, dir *os.Root, account, threa
 	if err != nil || !sameLegacyMemoryFile(before, actual) {
 		return empty, nil, errLegacyImportChanged
 	}
-	selection, err := companion.ReadLegacyMemorySelection(ctx, f, account, thread)
+	selection, err := read(ctx, f, account, thread)
 	after, statErr := dir.Lstat(legacyMemoryDB)
 	if statErr != nil || !sameLegacyMemoryFile(before, after) || !standaloneLegacyMemory(dir) {
 		return empty, nil, errLegacyImportChanged

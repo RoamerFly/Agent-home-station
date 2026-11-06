@@ -31,6 +31,7 @@ type legacyMemoryConversation struct {
 	WithheldEvents int    `json:"withheld_events"`
 	MemoryCount    int    `json:"memory_count"`
 	HasSummary     bool   `json:"has_summary"`
+	HasPreference  bool   `json:"has_preference,omitempty"`
 	HistoryGranted bool   `json:"history_granted"`
 }
 
@@ -46,6 +47,7 @@ type legacyMemoryPreview struct {
 
 func (s *stationWechat) legacyMemoryRoute(server *websession.Store, mux *http.ServeMux) {
 	s.legacyMemoryImportRoutes(server, mux)
+	s.legacyGroupNoteRoutes(server, mux)
 	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/legacy-import/memory", server.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		limit := 30
@@ -190,7 +192,7 @@ func readLegacyMemoryInventory(ctx context.Context, dir *os.Root, account string
 		}
 		report.Conversations = append(report.Conversations, legacyMemoryConversation{
 			ThreadID: row.ThreadID, EventCount: row.EventCount, WithheldEvents: row.WithheldEvents,
-			MemoryCount: row.MemoryCount, HasSummary: row.HasSummary,
+			MemoryCount: row.MemoryCount, HasSummary: row.HasSummary, HasPreference: row.HasPreference,
 		})
 	}
 	report.MatchedScopes = len(report.Conversations)

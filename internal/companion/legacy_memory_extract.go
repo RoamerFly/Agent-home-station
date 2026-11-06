@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // LegacyMemorySelection is a read-only, provenance-checked projection of one
@@ -66,7 +67,7 @@ func ReadLegacyMemorySelection(ctx context.Context, file *os.File, account, thre
 	defer closeSnapshot()
 
 	scopeID := ScopeID("wechat", account, thread)
-	if err := legacySelectionScope(ctx, db, scopeID, account, thread); err != nil {
+	if _, err := legacySelectionScope(ctx, db, scopeID, account, thread); err != nil {
 		return LegacyMemorySelection{}, legacyInventoryError(ctx, err)
 	}
 	events, err := legacySelectionEvents(ctx, db, scopeID, account, thread)
@@ -80,18 +81,39 @@ func ReadLegacyMemorySelection(ctx context.Context, file *os.File, account, thre
 	return LegacyMemorySelection{Events: events, Memories: facts}, nil
 }
 
-func legacySelectionScope(ctx context.Context, db *sql.DB, scopeID, account, thread string) error {
+// ReadLegacyConversationPreference reads the owner's text setting for an exact
+// verified scope. It is independent of event history and memory eligibility.
+func ReadLegacyConversationPreference(ctx context.Context, file *os.File, account, thread string) (string, error) {
+	if strings.TrimSpace(account) == "" || strings.TrimSpace(thread) == "" {
+		return "", ErrLegacyMemoryUnsupported
+	}
+	db, closeSnapshot, err := openLegacyMemorySnapshot(ctx, file)
+	if err != nil {
+		return "", err
+	}
+	defer closeSnapshot()
+	scope, err := legacySelectionScope(ctx, db, ScopeID("wechat", account, thread), account, thread)
+	if err != nil {
+		return "", legacyInventoryError(ctx, err)
+	}
+	if scope.PreferencesRevision < 0 || len(scope.Preferences) > 4000 || !utf8.ValidString(scope.Preferences) {
+		return "", ErrLegacyMemoryUnsupported
+	}
+	return strings.TrimSpace(scope.Preferences), nil
+}
+
+func legacySelectionScope(ctx context.Context, db *sql.DB, scopeID, account, thread string) (Scope, error) {
 	var payload []byte
 	if err := db.QueryRowContext(ctx, `SELECT payload FROM scopes WHERE id=?`, scopeID).Scan(&payload); err != nil {
-		return err
+		return Scope{}, err
 	}
 	var scope Scope
 	if err := json.Unmarshal(payload, &scope); err != nil || scope.ID != scopeID ||
 		scope.Channel != "wechat" || scope.Account != account || scope.Thread != thread ||
 		ScopeID(scope.Channel, scope.Account, scope.Thread) != scopeID {
-		return ErrLegacyMemoryUnsupported
+		return Scope{}, ErrLegacyMemoryUnsupported
 	}
-	return nil
+	return scope, nil
 }
 
 func legacySelectionEvents(ctx context.Context, db *sql.DB, scopeID, account, thread string) ([]LegacyMemoryEvent, error) {
