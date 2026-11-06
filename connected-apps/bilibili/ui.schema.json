@@ -8,6 +8,7 @@
         "enabled",
         "videos",
         "comments_enabled",
+        "audio_enabled",
         "browser_enabled",
         "playback_enabled"
       ],

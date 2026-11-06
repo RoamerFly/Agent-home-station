@@ -26,6 +26,8 @@ type localHomeService struct {
 	appCatalog    string
 	appInstallMu  sync.Mutex
 	artifacts     *localArtifactStore
+	projectTools  *localProjectTools
+	windows       *agenthost.WindowsConfig
 }
 
 // NewLocalHomeHandler provides the first application-independent station
@@ -80,6 +82,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
 	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
 	chat := newLocalChatService(home)
+	home.projectTools = chat.projectTools
 	chat.projectTools.routes(s, mux)
 	home.artifacts = &localArtifactStore{home: home, chat: chat}
 	home.artifacts.routes(s, mux)
@@ -100,6 +103,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 			}
 		}
 		chat.windows = &copy
+		home.windows = &copy
 	}
 	registry, err = home.bindBundledBilibili(registry)
 	if err != nil {

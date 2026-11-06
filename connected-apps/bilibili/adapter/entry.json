@@ -10,6 +10,7 @@
     "body",
     "page_text",
     "playback",
-    "comments"
+    "comments",
+    "audio"
   ]
 }

@@ -38,7 +38,7 @@ const (
 	metadataEndpoint      = "https://api.bilibili.com/x/web-interface/view"
 	requestTimeout        = 12 * time.Second
 	maxResponseBytes      = 1 << 20
-	maxPlaybackBytes      = 32 << 20
+	maxMediaBytes         = 32 << 20
 	defaultPlaybackSample = 6 * time.Second
 	minPlaybackSample     = 1 * time.Second
 	maxPlaybackSample     = 20 * time.Second
@@ -65,6 +65,7 @@ type Settings struct {
 	BrowserEnabled  bool     `json:"browser_enabled"`
 	PlaybackEnabled bool     `json:"playback_enabled"`
 	CommentsEnabled bool     `json:"comments_enabled"`
+	AudioEnabled    bool     `json:"audio_enabled"`
 }
 
 // PublicApp implements the apphost provider and observation provider for an
@@ -74,9 +75,11 @@ type PublicApp struct {
 	privateDirectory string
 	client           *http.Client
 	readPage         func(context.Context, string, func() error) (stationbrowser.Page, error)
-	resolvePlayback  func(context.Context, string, int64) (mcptools.PublicVideo, error)
+	resolveMedia     func(context.Context, string, int64) (mcptools.PublicVideo, error)
 	samplePlayback   func(context.Context, []byte, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
 	browserAvailable func() bool
+	audioVersion     func(context.Context) (string, error)
+	transcribeAudio  func(context.Context, []byte, func() error) (string, error)
 	mu               sync.Mutex
 	readGrant        context.Context
 	cancelReads      context.CancelFunc
@@ -90,7 +93,7 @@ func New(privateDirectory string) *PublicApp {
 	return &PublicApp{
 		privateDirectory: privateDirectory,
 		readPage:         reader.Read,
-		resolvePlayback:  mcptools.GetPublicBilibiliVideo,
+		resolveMedia:     mcptools.GetPublicBilibiliVideo,
 		samplePlayback:   reader.SamplePlayback,
 		browserAvailable: stationbrowser.Available,
 		readGrant:        grant,
@@ -201,6 +204,9 @@ func (p *PublicApp) Inspect(ctx context.Context, id string) (apphost.ConnectionS
 		worker = "ready"
 		capability = "ready"
 		actions = []string{"content.observe"}
+		if settings.AudioEnabled && p.AudioAvailable(ctx) {
+			actions = append(actions, "audio.observe")
+		}
 		if settings.CommentsEnabled {
 			actions = append(actions, "comments.observe")
 		}
@@ -235,6 +241,9 @@ func (p *PublicApp) ObservationTargets(ctx context.Context, id string) ([]apphos
 	}
 	result := make([]apphost.ObservationTarget, 0, len(settings.Videos))
 	fields := []apphost.ObservationField{apphost.ObservationTitle, apphost.ObservationBody}
+	if settings.AudioEnabled && p.AudioAvailable(ctx) {
+		fields = append(fields, apphost.ObservationAudio)
+	}
 	if settings.CommentsEnabled {
 		fields = append(fields, apphost.ObservationComments)
 	}
@@ -267,7 +276,15 @@ func (p *PublicApp) ObservationGrant(ctx context.Context, access apphost.Observa
 	if !p.allowed(settings, access) {
 		return apphost.ObservationGrant{Allowed: false}, nil
 	}
-	return apphost.ObservationGrant{Allowed: true, Version: "bilibili-public-" + strconv.FormatUint(settings.Revision, 10)}, nil
+	version := "bilibili-public-" + strconv.FormatUint(settings.Revision, 10)
+	if access.Field == apphost.ObservationAudio {
+		asr, err := p.localAudioVersion(ctx)
+		if err != nil {
+			return apphost.ObservationGrant{}, err
+		}
+		version += "-" + asr
+	}
+	return apphost.ObservationGrant{Allowed: true, Version: version}, nil
 }
 
 // ReadObservation reads one exact field from the current owner allowlist.
@@ -275,7 +292,7 @@ func (p *PublicApp) ReadObservation(ctx context.Context, request apphost.Observa
 	if err := ctx.Err(); err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	if request.Limit < 0 || (request.Field != apphost.ObservationComments && request.Cursor != "") {
+	if request.Limit < 0 || (request.Field != apphost.ObservationComments && request.Field != apphost.ObservationAudio && request.Cursor != "") {
 		return apphost.ObservationPage{}, apphost.ErrObservationInvalid
 	}
 	settings, err := p.View()
@@ -290,6 +307,9 @@ func (p *PublicApp) ReadObservation(ctx context.Context, request apphost.Observa
 	}
 	if request.Field == apphost.ObservationPlayback {
 		return p.readPlaybackObservation(ctx, request.ObservationAccess, settings.Revision, request.Limit)
+	}
+	if request.Field == apphost.ObservationAudio {
+		return p.readAudio(ctx, request, settings.Revision)
 	}
 	if request.Field == apphost.ObservationComments {
 		return p.readComments(ctx, request, settings.Revision)
@@ -321,6 +341,10 @@ func (p *PublicApp) allowed(settings Settings, access apphost.ObservationAccess)
 	}
 	switch access.Field {
 	case apphost.ObservationTitle, apphost.ObservationBody:
+	case apphost.ObservationAudio:
+		if !settings.AudioEnabled {
+			return false
+		}
 	case apphost.ObservationComments:
 		if !settings.CommentsEnabled {
 			return false
@@ -403,7 +427,7 @@ func (p *PublicApp) observationReadScope(ctx context.Context, access apphost.Obs
 // Edge instance. The adapter passes media bytes only. It never gives the
 // browser a provider URL, and never persists or returns the CDN URL.
 func (p *PublicApp) readPlaybackObservation(ctx context.Context, access apphost.ObservationAccess, revision uint64, limit int) (apphost.ObservationPage, error) {
-	if !p.BrowserAvailable() || p.resolvePlayback == nil || p.samplePlayback == nil {
+	if !p.BrowserAvailable() || p.resolveMedia == nil || p.samplePlayback == nil {
 		return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
 	}
 	sample, err := playbackSampleLimit(limit)
@@ -415,7 +439,7 @@ func (p *PublicApp) readPlaybackObservation(ctx context.Context, access apphost.
 	if err := authorize(); err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	media, err := p.resolvePlayback(readCtx, access.ContentID, maxPlaybackBytes)
+	media, err := p.resolveMedia(readCtx, access.ContentID, maxMediaBytes)
 	if authErr := authorize(); authErr != nil {
 		return apphost.ObservationPage{}, authErr
 	}
@@ -425,7 +449,7 @@ func (p *PublicApp) readPlaybackObservation(ctx context.Context, access apphost.
 		}
 		return apphost.ObservationPage{}, classifyPlaybackError(err)
 	}
-	if len(media.Data) > maxPlaybackBytes {
+	if len(media.Data) > maxMediaBytes {
 		return apphost.ObservationPage{}, apphost.ErrObservationPlaybackSize
 	}
 	if media.LinkOnly || len(media.Data) == 0 || media.DurationMS <= 0 || media.ContentType == "" {
@@ -574,7 +598,7 @@ func publicResponseCode(code *int) error {
 }
 
 func (s Settings) validPermissions() bool {
-	return (s.Enabled || !s.BrowserEnabled && !s.CommentsEnabled) && (!s.PlaybackEnabled || s.BrowserEnabled)
+	return (s.Enabled || !s.BrowserEnabled && !s.CommentsEnabled && !s.AudioEnabled) && (!s.PlaybackEnabled || s.BrowserEnabled)
 }
 
 func normalizeVideos(enabled bool, videos []string) ([]string, error) {

@@ -163,6 +163,7 @@ func (s *localProjectTools) close() error {
 var localProjectPackages = []struct{ ID, Name string }{
 	{documentWorkshopPluginID, "文档工坊"},
 	{localAudioPackage, "音频工坊"},
+	{localASRPluginID, "本地媒体识别"},
 	{localRVCPackage, "RVC 换声"},
 	{localComfyPackage, "ComfyUI 创作"},
 	{localYuEPackage, "YuE 作曲"},
@@ -386,6 +387,9 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 				return
 			}
 			grants := []string{"artifact.read", "artifact.write"}
+			if id == localASRPluginID {
+				grants = []string{"artifact.read", "artifact.write", "model.invoke"}
+			}
 			if id == localRVCPackage {
 				grants = localRVCGrants
 			}
@@ -479,6 +483,18 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 					fail(w, 503, "RVC 已停用，新任务已拦截，正在核对后端退出。")
 					return
 				}
+			}
+		} else if id == localASRPluginID {
+			if in.Action == "enable" {
+				if !current.Enabled {
+					if err = s.configureStationASR(ctx, host); err != nil {
+						fail(w, 409, "本地媒体识别尚未登记可用的主人专属 ASR 资源")
+						return
+					}
+				}
+				err = host.controller.EnableOnDemand(ctx, id, current.Revision)
+			} else {
+				err = host.controller.Stop(ctx, id, current.Revision)
 			}
 		} else if in.Action == "enable" {
 			err = host.controller.EnableOnDemand(ctx, id, current.Revision)

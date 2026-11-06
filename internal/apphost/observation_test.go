@@ -122,3 +122,45 @@ func TestObserverPlaybackProofSeparatesCoverageAndSampleCache(t *testing.T) {
 		}
 	}
 }
+
+func TestObservationAudioProofBindsWindowAndSource(t *testing.T) {
+	proof := AudioProof{
+		State: "transcribed", MediaSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		RequestedSeconds: 3, WindowEndSeconds: 3, DecodedSeconds: 2.75, MediaDurationSeconds: 6,
+	}
+	page := ObservationPage{
+		AudioProof: &proof, Chunks: []ObservationChunk{{Text: "synthetic words"}},
+		Coverage: "synthetic decode", NextCursor: "next",
+	}
+	if err := validateObservationPage(ObservationAudio, page); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateObservationPage(ObservationComments, page); err == nil {
+		t.Fatal("audio evidence was accepted as comments")
+	}
+	short := proof
+	short.DecodedSeconds = 5
+	bad := page
+	bad.AudioProof = &short
+	if err := validateObservationPage(ObservationAudio, bad); err == nil {
+		t.Fatal("decoded duration exceeded the observation window")
+	}
+
+	secondProof := proof
+	secondProof.StartSeconds, secondProof.WindowEndSeconds = 3, 6
+	secondProof.MediaSHA256 = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	second := ObservationPage{AudioProof: &secondProof, Chunks: page.Chunks, Coverage: page.Coverage, Complete: true}
+	f := &observationFixture{allowed: true, version: "v1", pages: map[string]ObservationPage{"": page, "next": second}}
+	observer := NewObserver(observerFixtureRegistry(t, f), t.TempDir())
+	input := ObservationInput{AppID: "offline", ConnectionID: "account", ContentID: "post", Field: ObservationAudio, Limit: 3}
+	if result, err := observer.Read(t.Context(), input); err != nil || result.AudioProof == nil || result.Complete {
+		t.Fatalf("first result=%+v error=%v", result, err)
+	}
+	if _, err := observer.Read(t.Context(), input); !errors.Is(err, ErrObservationAudioSourceChanged) {
+		t.Fatalf("swapped media accepted: %v", err)
+	}
+	secondProof.MediaSHA256 = proof.MediaSHA256
+	if result, err := observer.Read(t.Context(), input); err != nil || !result.Resumed || !result.Complete {
+		t.Fatalf("verified retry=%+v error=%v", result, err)
+	}
+}

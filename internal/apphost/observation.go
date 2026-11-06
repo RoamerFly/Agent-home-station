@@ -83,12 +83,25 @@ type PlaybackProof struct {
 	FullyPlayed          bool    `json:"fully_played"`
 }
 
+// AudioProof describes a decoded window and the recognition outcome. Decoded
+// seconds measure PCM handed to the recognizer, independent of the window size.
+type AudioProof struct {
+	State                string  `json:"state"`
+	MediaSHA256          string  `json:"media_sha256"`
+	RequestedSeconds     int     `json:"requested_seconds"`
+	StartSeconds         float64 `json:"start_seconds"`
+	WindowEndSeconds     float64 `json:"window_end_seconds"`
+	DecodedSeconds       float64 `json:"decoded_seconds"`
+	MediaDurationSeconds float64 `json:"media_duration_seconds"`
+}
+
 // ObservationPage has evidence for only the requested field. A provider must
 // return a new opaque cursor until that field is complete.
 type ObservationPage struct {
 	Chunks        []ObservationChunk `json:"chunks,omitempty"`
 	Playback      []PlaybackInterval `json:"playback,omitempty"`
 	PlaybackProof *PlaybackProof     `json:"playback_proof,omitempty"`
+	AudioProof    *AudioProof        `json:"audio_proof,omitempty"`
 	Coverage      string             `json:"coverage"`
 	Complete      bool               `json:"complete"`
 	NextCursor    string             `json:"-"`
@@ -117,6 +130,7 @@ type ObservationResult struct {
 	Chunks        []ObservationChunk `json:"chunks,omitempty"`
 	Playback      []PlaybackInterval `json:"playback,omitempty"`
 	PlaybackProof *PlaybackProof     `json:"playback_proof,omitempty"`
+	AudioProof    *AudioProof        `json:"audio_proof,omitempty"`
 	Coverage      string             `json:"coverage"`
 	Complete      bool               `json:"complete"`
 	Cached        bool               `json:"cached"`
@@ -124,17 +138,23 @@ type ObservationResult struct {
 }
 
 var (
-	ErrObservationInvalid             = errors.New("应用观察请求无效")
-	ErrObservationNotFound            = errors.New("未找到已接入的应用或账号")
-	ErrObservationForbidden           = errors.New("当前应用账号未授权读取此内容")
-	ErrObservationContentUnavailable  = errors.New("平台暂时未提供这条内容，请核对编号或公开状态")
-	ErrObservationThrottled           = errors.New("平台限制了本次访问，请稍后重试")
-	ErrObservationBrowserUnavailable  = errors.New("独立浏览器暂不可用，请检查本机 Microsoft Edge 与应用授权")
-	ErrObservationPlaybackUnavailable = errors.New("未取得可播放的公开单段媒体，请核对公开状态、格式及媒体大小")
-	ErrObservationPlaybackLimit       = errors.New("本次播放采样支持 1–20 秒，省略时使用 6 秒")
-	ErrObservationPlaybackSize        = errors.New("这条媒体超过当前 32 MiB 的读取上限，可选择体积更小的公开稿件")
-	ErrObservationUpstreamUnavailable = errors.New("平台请求暂时无法完成，可稍后重试")
-	ErrObservationCommentPageSize     = errors.New("B 站公开评论每页支持 1–30 条，续读时请省略 limit 或沿用首页条数")
+	ErrObservationInvalid               = errors.New("应用观察请求无效")
+	ErrObservationNotFound              = errors.New("未找到已接入的应用或账号")
+	ErrObservationForbidden             = errors.New("当前应用账号未授权读取此内容")
+	ErrObservationContentUnavailable    = errors.New("平台暂时未提供这条内容，请核对编号或公开状态")
+	ErrObservationThrottled             = errors.New("平台限制了本次访问，请稍后重试")
+	ErrObservationBrowserUnavailable    = errors.New("独立浏览器暂不可用，请检查本机 Microsoft Edge 与应用授权")
+	ErrObservationPlaybackUnavailable   = errors.New("未取得可播放的公开单段媒体，请核对公开状态、格式及媒体大小")
+	ErrObservationPlaybackLimit         = errors.New("本次播放采样支持 1–20 秒，省略时使用 6 秒")
+	ErrObservationPlaybackSize          = errors.New("这条媒体超过当前 32 MiB 的读取上限，可选择体积更小的公开稿件")
+	ErrObservationUpstreamUnavailable   = errors.New("平台请求暂时无法完成，可稍后重试")
+	ErrObservationCommentPageSize       = errors.New("B 站公开评论每页支持 1–30 条，续读时请省略 limit 或沿用首页条数")
+	ErrObservationAudioUnavailable      = errors.New("本机音轨读取需要 FFmpeg 和已启用的本地语音识别工具")
+	ErrObservationAudioMediaUnavailable = errors.New("未取得可解码的公开单段媒体，请核对公开状态和格式")
+	ErrObservationAudioLimit            = errors.New("音轨每次支持读取 1–240 秒，省略时使用 60 秒")
+	ErrObservationAudioDecode           = errors.New("公开媒体的音轨解码失败，可从原位置重试")
+	ErrObservationAudioTranscription    = errors.New("本地语音识别失败，可检查工具配置后从原位置重试")
+	ErrObservationAudioSourceChanged    = errors.New("平台返回的媒体与上一页不同，需重新开启当前读取授权后从头读取")
 )
 
 type observationCheckpoint struct {
@@ -146,6 +166,7 @@ type observationCheckpoint struct {
 	Chunks        []ObservationChunk
 	Playback      []PlaybackInterval
 	PlaybackProof *PlaybackProof
+	AudioProof    *AudioProof
 	PlaybackLimit int
 	Coverage      string
 	Complete      bool
@@ -287,6 +308,8 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 			ErrObservationContentUnavailable, ErrObservationThrottled, ErrObservationForbidden, ErrObservationInvalid,
 			ErrObservationBrowserUnavailable, ErrObservationPlaybackUnavailable, ErrObservationPlaybackLimit,
 			ErrObservationPlaybackSize, ErrObservationUpstreamUnavailable, ErrObservationCommentPageSize,
+			ErrObservationAudioUnavailable, ErrObservationAudioMediaUnavailable, ErrObservationAudioLimit,
+			ErrObservationAudioDecode, ErrObservationAudioTranscription, ErrObservationAudioSourceChanged,
 		} {
 			if errors.Is(err, known) {
 				return ObservationResult{}, known
@@ -296,6 +319,18 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	}
 	if err := validateObservationPage(in.Field, page); err != nil {
 		return ObservationResult{}, err
+	}
+	if in.Limit > 0 && page.AudioProof != nil && page.AudioProof.RequestedSeconds != in.Limit {
+		return ObservationResult{}, errors.New("音轨证据与请求的读取时长不一致")
+	}
+	if page.AudioProof != nil && !existed && page.AudioProof.StartSeconds != 0 {
+		return ObservationResult{}, errors.New("音轨的首段读取未从开头开始")
+	}
+	if page.AudioProof != nil && checkpoint.AudioProof != nil &&
+		(page.AudioProof.MediaSHA256 != checkpoint.AudioProof.MediaSHA256 ||
+			page.AudioProof.MediaDurationSeconds != checkpoint.AudioProof.MediaDurationSeconds ||
+			page.AudioProof.StartSeconds != checkpoint.AudioProof.WindowEndSeconds) {
+		return ObservationResult{}, ErrObservationAudioSourceChanged
 	}
 	if playbackLimit > 0 && page.PlaybackProof != nil && page.PlaybackProof.RequestedSeconds != playbackLimit {
 		return ObservationResult{}, errors.New("播放证据与请求的采样时间不一致")
@@ -312,7 +347,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	checkpoint = observationCheckpoint{
 		ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field, GrantVersion: grant.Version,
 		Cursor: page.NextCursor, Chunks: append([]ObservationChunk(nil), page.Chunks...), Playback: append([]PlaybackInterval(nil), page.Playback...),
-		PlaybackProof: verifiedPlaybackProof(page), PlaybackLimit: playbackLimit, Coverage: page.Coverage, Complete: page.Complete,
+		PlaybackProof: verifiedPlaybackProof(page), AudioProof: page.AudioProof, PlaybackLimit: playbackLimit, Coverage: page.Coverage, Complete: page.Complete,
 	}
 	if checkpoint.Complete {
 		checkpoint.Cursor = ""
@@ -345,6 +380,11 @@ func (o *Observer) Check(ctx context.Context, result ObservationResult) error {
 }
 
 func validateObservationPage(field ObservationField, page ObservationPage) error {
+	if page.AudioProof != nil {
+		if field != ObservationAudio || !validAudioProof(*page.AudioProof, page.Complete, len(page.Chunks)) {
+			return errors.New("应用内容返回了不一致的音轨证据")
+		}
+	}
 	if field == ObservationPlayback {
 		if len(page.Chunks) != 0 {
 			return errors.New("应用内容返回了不匹配的观察字段")
@@ -380,6 +420,34 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 		position = chunk.Position
 	}
 	return nil
+}
+
+func validAudioProof(proof AudioProof, complete bool, chunks int) bool {
+	for _, value := range []float64{proof.StartSeconds, proof.WindowEndSeconds, proof.DecodedSeconds, proof.MediaDurationSeconds} {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+			return false
+		}
+	}
+	decodedHash, err := hex.DecodeString(proof.MediaSHA256)
+	if err != nil || len(decodedHash) != sha256.Size || proof.RequestedSeconds < 1 ||
+		proof.WindowEndSeconds <= proof.StartSeconds ||
+		proof.WindowEndSeconds != min(proof.MediaDurationSeconds, proof.StartSeconds+float64(proof.RequestedSeconds)) ||
+		proof.DecodedSeconds > proof.WindowEndSeconds-proof.StartSeconds+0.001 {
+		return false
+	}
+	atEnd := proof.WindowEndSeconds == proof.MediaDurationSeconds
+	switch proof.State {
+	case "transcribed":
+		return chunks > 0 && proof.DecodedSeconds > 0 && complete == atEnd
+	case "no_recognizable_speech":
+		return chunks == 0 && proof.DecodedSeconds > 0 && complete == atEnd
+	case "no_audio_in_range":
+		return chunks == 0 && proof.DecodedSeconds == 0 && complete == atEnd
+	case "no_audio_track":
+		return chunks == 0 && proof.DecodedSeconds == 0 && complete
+	default:
+		return false
+	}
 }
 
 func verifiedPlaybackProof(page ObservationPage) *PlaybackProof {
@@ -422,6 +490,9 @@ func (o *Observer) authorize(ctx context.Context, in ObservationInput) (Observat
 	}
 	ref := ConnectionRef{AppID: entry.ID, InstallationID: entry.InstallationID, ConnectionID: connection.ID, AccountID: connection.AccountID}
 	grant, err := provider.ObservationGrant(ctx, ObservationAccess{ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field})
+	if errors.Is(err, ErrObservationAudioUnavailable) {
+		return nil, ConnectionRef{}, ObservationGrant{}, ErrObservationAudioUnavailable
+	}
 	if err != nil || !grant.Allowed || strings.TrimSpace(grant.Version) == "" {
 		return nil, ConnectionRef{}, ObservationGrant{}, ErrObservationForbidden
 	}
@@ -496,7 +567,7 @@ func observationKey(ref ConnectionRef, content string, field ObservationField, v
 	return fmt.Sprintf("%x", sum[:])
 }
 func (c observationCheckpoint) result(cached, resumed bool) ObservationResult {
-	return ObservationResult{ConnectionRef: c.ConnectionRef, ContentID: c.ContentID, Field: c.Field, GrantVersion: c.GrantVersion, Chunks: append([]ObservationChunk(nil), c.Chunks...), Playback: append([]PlaybackInterval(nil), c.Playback...), PlaybackProof: c.PlaybackProof, Coverage: c.Coverage, Complete: c.Complete, Cached: cached, Resumed: resumed}
+	return ObservationResult{ConnectionRef: c.ConnectionRef, ContentID: c.ContentID, Field: c.Field, GrantVersion: c.GrantVersion, Chunks: append([]ObservationChunk(nil), c.Chunks...), Playback: append([]PlaybackInterval(nil), c.Playback...), PlaybackProof: c.PlaybackProof, AudioProof: c.AudioProof, Coverage: c.Coverage, Complete: c.Complete, Cached: cached, Resumed: resumed}
 }
 
 func (c observationCheckpoint) matches(ref ConnectionRef, contentID string, field ObservationField, version string) bool {

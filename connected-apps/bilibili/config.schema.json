@@ -35,6 +35,10 @@
     "comments_enabled": {
       "type": "boolean",
       "default": false
+    },
+    "audio_enabled": {
+      "type": "boolean",
+      "default": false
     }
   }
 }

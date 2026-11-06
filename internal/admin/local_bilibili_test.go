@@ -36,13 +36,17 @@ func TestLocalBilibiliOwnerAuthorizationAndRestart(t *testing.T) {
 		t.Fatalf("initialize local owner: %d", code)
 	}
 	code, defaults := f.request(http.MethodGet, policy, nil, false)
-	if code != 200 || defaults["enabled"] != false || defaults["browser_enabled"] != false || defaults["playback_enabled"] != false || defaults["comments_enabled"] != false {
+	if code != 200 || defaults["enabled"] != false || defaults["browser_enabled"] != false || defaults["playback_enabled"] != false || defaults["comments_enabled"] != false || defaults["audio_enabled"] != false || defaults["audio_available"] != false {
 		t.Fatalf("new connection was already authorized: %d %#v", code, defaults)
 	}
 	if _, ok := defaults["browser_available"].(bool); !ok {
 		t.Fatalf("browser availability was missing: %#v", defaults)
 	}
 	settings := map[string]any{"revision": defaults["revision"], "enabled": true, "videos": []string{video}}
+	unscopedAudio := map[string]any{"revision": defaults["revision"], "enabled": false, "videos": []string{video}, "audio_enabled": true}
+	if code, _ := f.request(http.MethodPut, policy, unscopedAudio, true); code != 400 {
+		t.Fatalf("audio enabled without base authorization: %d", code)
+	}
 	unscopedComments := map[string]any{"revision": defaults["revision"], "enabled": false, "videos": []string{video}, "comments_enabled": true}
 	if code, _ := f.request(http.MethodPut, policy, unscopedComments, true); code != 400 {
 		t.Fatalf("comments enabled without base authorization: %d", code)
@@ -89,9 +93,9 @@ func TestLocalBilibiliOwnerAuthorizationAndRestart(t *testing.T) {
 			t.Fatalf("unauthorized scope reached provider: %d %+v", code, input)
 		}
 	}
-	settings["revision"], settings["comments_enabled"] = saved["revision"], true
+	settings["revision"], settings["comments_enabled"], settings["audio_enabled"] = saved["revision"], true, true
 	code, saved = f.request(http.MethodPut, policy, settings, true)
-	if code != 200 || saved["comments_enabled"] != true || saved["browser_enabled"] != false {
+	if code != 200 || saved["comments_enabled"] != true || saved["browser_enabled"] != false || saved["audio_enabled"] != true || saved["audio_available"] != false {
 		t.Fatalf("anonymous comments could not be enabled independently: %d %#v", code, saved)
 	}
 	code, discovered = f.request(http.MethodGet, observe, nil, false)
@@ -100,7 +104,11 @@ func TestLocalBilibiliOwnerAuthorizationAndRestart(t *testing.T) {
 		items[0].(map[string]any)["fields"].([]any)[2] != "comments" {
 		t.Fatalf("comments did not become discoverable: %d %#v", code, discovered)
 	}
-	settings["revision"], settings["enabled"], settings["comments_enabled"] = saved["revision"], false, false
+	audio := apphost.ObservationInput{AppID: biliapp.ID, ConnectionID: "public", ContentID: video, Field: apphost.ObservationAudio}
+	if code, _ := f.request(http.MethodPost, observe, audio, true); code != 503 {
+		t.Fatalf("unconfigured audio should return a service diagnostic: %d", code)
+	}
+	settings["revision"], settings["enabled"], settings["comments_enabled"], settings["audio_enabled"] = saved["revision"], false, false, false
 	if code, _ := f.request(http.MethodPut, policy, settings, true); code != 200 {
 		t.Fatalf("revoke: %d", code)
 	}

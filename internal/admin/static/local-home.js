@@ -1437,6 +1437,7 @@
       revision: Number(settings?.revision || 0),
       enabled: Boolean(settings?.enabled),
       commentsEnabled: Boolean(settings?.comments_enabled),
+      audioEnabled: Boolean(settings?.audio_enabled),
       browserEnabled: Boolean(settings?.browser_enabled),
       playbackEnabled: Boolean(settings?.playback_enabled),
       videos: Array.isArray(settings?.videos) ? settings.videos.join("\n") : "",
@@ -1452,11 +1453,12 @@
     const draft = apps.bilibiliDraft || bilibiliDraftFrom(settings);
     if (!apps.bilibiliDraft) apps.bilibiliDraft = draft;
     const browserAvailable = settings?.browser_available === true;
+    const audioAvailable = settings?.audio_available === true;
     const browserActive = Boolean(settings?.enabled && settings?.browser_enabled);
     const playbackAvailable = typeof settings?.playback_available === "boolean" ? settings.playback_available : browserAvailable;
     const playbackActive = Boolean(settings?.enabled && settings?.browser_enabled && settings?.playback_enabled);
     detail.append(
-      appElement("strong", settings ? (settings.enabled ? `已授权 · ${settings.videos.length} 条稿件${settings.comments_enabled ? " · 评论已启用" : ""}${browserActive ? " · 独立浏览器已启用" : ""}${playbackActive ? " · 播放验证已启用" : ""}` : "读取未启用") : "读取设置暂不可用"),
+      appElement("strong", settings ? (settings.enabled ? `已授权 · ${settings.videos.length} 条稿件${settings.audio_enabled ? (audioAvailable ? " · 音轨已启用" : " · 音轨待配置") : ""}${settings.comments_enabled ? " · 评论已启用" : ""}${browserActive ? " · 独立浏览器已启用" : ""}${playbackActive ? " · 播放验证已启用" : ""}` : "读取未启用") : "读取设置暂不可用"),
       appElement("p", "匿名读取已列出的 B 站视频标题和投稿者简介。独立浏览器可读取获准页面的文字。")
     );
     if (apps.bilibiliError) detail.append(appElement("small", apps.bilibiliError));
@@ -1476,6 +1478,13 @@
     const commentsLabel = appElement("label", "", "switch-row");
     commentsLabel.append(comments, appElement("span", "读取公开一级评论"));
     comments.addEventListener("change", () => { draft.commentsEnabled = comments.checked; draft.dirty = true; });
+    const audio = document.createElement("input");
+    audio.type = "checkbox";
+    audio.checked = draft.audioEnabled;
+    const audioLabel = appElement("label", "", "switch-row");
+    audioLabel.append(audio, appElement("span", "使用本机语音识别读取音轨"));
+    audio.addEventListener("change", () => { draft.audioEnabled = audio.checked; draft.dirty = true; });
+    const audioNote = appElement("small", audioAvailable ? "按时间分段转写获准公开视频的音轨。" : "需准备 FFmpeg 和本机语音识别后端。");
     const browser = document.createElement("input");
     browser.type = "checkbox";
     browser.checked = draft.browserEnabled;
@@ -1488,6 +1497,8 @@
       if (!draft.enabled) {
         draft.commentsEnabled = false;
         comments.checked = false;
+        draft.audioEnabled = false;
+        audio.checked = false;
         draft.browserEnabled = false;
         browser.checked = false;
       }
@@ -1496,6 +1507,7 @@
         playback.checked = false;
       }
       comments.disabled = !draft.enabled;
+      audio.disabled = !draft.enabled;
       browser.disabled = !draft.enabled || (!browserAvailable && !draft.browserEnabled);
       playback.disabled = !draft.enabled || !draft.browserEnabled || (!playbackAvailable && !draft.playbackEnabled);
     };
@@ -1520,7 +1532,7 @@
     save.type = "submit";
     save.disabled = !settings || apps.loading || apps.bilibiliSaving;
     actions.append(save, appElement("small", "实际读取时才会向 B 站请求对应稿件。"));
-    form.append(appElement("label", "允许读取的视频 BV 号"), videos, enabledLabel, commentsLabel, browserLabel, browserNote, playbackLabel, playbackNote, actions);
+    form.append(appElement("label", "允许读取的视频 BV 号"), videos, enabledLabel, commentsLabel, audioLabel, audioNote, browserLabel, browserNote, playbackLabel, playbackNote, actions);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!settings || current !== apps || current.bilibiliSaving) return;
@@ -1534,9 +1546,9 @@
       apps.bilibiliError = "";
       renderApps();
       try {
-        const value = await request("/api/local/apps/bilibili/public", { method: "PUT", body: JSON.stringify({ revision: Number(draft.revision || 0), enabled: Boolean(draft.enabled), comments_enabled: Boolean(draft.enabled && draft.commentsEnabled), browser_enabled: Boolean(draft.enabled && draft.browserEnabled), playback_enabled: Boolean(draft.enabled && draft.browserEnabled && draft.playbackEnabled), videos: parsed.videos }) });
+        const value = await request("/api/local/apps/bilibili/public", { method: "PUT", body: JSON.stringify({ revision: Number(draft.revision || 0), enabled: Boolean(draft.enabled), comments_enabled: Boolean(draft.enabled && draft.commentsEnabled), audio_enabled: Boolean(draft.enabled && draft.audioEnabled), browser_enabled: Boolean(draft.enabled && draft.browserEnabled), playback_enabled: Boolean(draft.enabled && draft.browserEnabled && draft.playbackEnabled), videos: parsed.videos }) });
         if (current !== apps) return;
-        if (!value || !Number.isFinite(Number(value.revision)) || !Array.isArray(value.videos) || typeof value.browser_enabled !== "boolean" || typeof value.browser_available !== "boolean" || typeof value.playback_enabled !== "boolean" || typeof value.comments_enabled !== "boolean") throw new Error("公开读取设置返回格式无效，请刷新后重试。");
+        if (!value || !Number.isFinite(Number(value.revision)) || !Array.isArray(value.videos) || typeof value.browser_enabled !== "boolean" || typeof value.browser_available !== "boolean" || typeof value.playback_enabled !== "boolean" || typeof value.comments_enabled !== "boolean" || typeof value.audio_enabled !== "boolean" || typeof value.audio_available !== "boolean") throw new Error("公开读取设置返回格式无效，请刷新后重试。");
         apps.bilibiliPublic = value;
         apps.bilibiliDraft = { revision: Number(value.revision), enabled: Boolean(value.enabled), browserEnabled: Boolean(value.browser_enabled), playbackEnabled: Boolean(value.playback_enabled), videos: value.videos.join("\n"), dirty: false };
         appFeedback(value.enabled ? "公开读取设置已保存。" : "公开读取已关闭，已保留 BV 号列表。");

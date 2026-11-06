@@ -10,4 +10,24 @@ Windows 本地成长站可随包提供此应用。在「应用 → 哔哩哔哩 
 
 进一步开启播放授权后，可用 `app_observe(field=playback)` 从开头采样公开单段 MP4。当前媒体上限为 32 MiB。默认静音采样 6 秒，可用 `limit` 选 1–20 秒。结果包含 Edge 核实的已播放区间及就绪、暂停和结束状态。只有已结束且实际区间覆盖整段，才会返回完整播放。
 
+## 音轨读取
+
+音轨需要 FFmpeg 和已启用的本地媒体识别工具。用 `scripts/Build-Desktop.ps1 -LocalStation -WithBilibiliApp -WithMediaUnderstanding` 构建含这两项声明的 Windows 包。
+
+1. 主人在大肥鱼家目录和站点私有数据之外准备本机识别资源。可用 `python scripts/install_local_asr.py --workspace <资源工作区> --archive <核验过的模型归档> --wheel-dir <SDK 本地轮子目录>` 生成资源工作区下的 `public_workspace/manifests/asr-sensevoice-small-int8.json`。也可复用同样结构的已有只读模型资源。
+2. 在独立站点的私有数据目录创建 `station-asr.json`。填写资源工作区的绝对路径，也就是包含 `public_workspace` 的目录。
+
+   ```json
+   {
+     "schema_version": 1,
+     "enabled": true,
+     "workspace": "D:/AgentResources/Station-ASR",
+     "profile_id": "sensevoice-small-int8"
+   }
+   ```
+
+3. 在「项目工具」中安装并启用「本地媒体识别」。在「应用 → 哔哩哔哩」保存获准 BV，并开启「使用本机语音识别读取音轨」。
+
+`app_observe(field=audio)` 默认读取 60 秒，可选 1–240 秒。结果包含本页窗口、实际 PCM 时长和转写状态，续读从上一窗口结束位置开始。当前只处理 32 MiB 内的匿名公开单段 MP4，续页再次核对媒体摘要。无音轨和未识别到词会单独标注。
+
 Windows 隔离验证包使用 `scripts/Build-Desktop.ps1 -LocalStation -WithBilibiliApp` 构建。家目录的源码副本便于检查和编辑，主程序使用随包校验过的适配器。

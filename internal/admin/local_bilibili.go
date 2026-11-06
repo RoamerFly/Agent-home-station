@@ -17,6 +17,8 @@ func (h *localHomeService) bindBundledBilibili(registry apphost.Registry) (appho
 		return registry, nil
 	}
 	bili := biliapp.New(filepath.Join(h.dataDir, "apps", biliapp.ID))
+	version, transcribe := h.localBilibiliAudioCallbacks()
+	bili.SetAudioTranscriber(version, transcribe)
 	entries := make([]apphost.Registration, 0, len(registry.Applications())+1)
 	for _, app := range registry.Applications() {
 		entry, _ := registry.Lookup(app.ID)
@@ -49,6 +51,7 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 				BrowserEnabled  bool     `json:"browser_enabled"`
 				PlaybackEnabled bool     `json:"playback_enabled"`
 				CommentsEnabled bool     `json:"comments_enabled"`
+				AudioEnabled    bool     `json:"audio_enabled"`
 			}
 			if !decode(w, r, &in) {
 				return
@@ -65,13 +68,17 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 				fail(w, http.StatusBadRequest, "启用播放采样前，请先开启独立浏览器")
 				return
 			}
+			if in.AudioEnabled && !*in.Enabled {
+				fail(w, http.StatusBadRequest, "启用音轨读取前，请先开启公开读取并填写 BV 号")
+				return
+			}
 			if in.CommentsEnabled && !*in.Enabled {
 				fail(w, http.StatusBadRequest, "启用评论读取前，请先开启公开读取并填写 BV 号")
 				return
 			}
 			view, err = bili.Save(*in.Revision, biliapp.Settings{
 				Enabled: *in.Enabled, Videos: in.Videos, BrowserEnabled: in.BrowserEnabled,
-				PlaybackEnabled: in.PlaybackEnabled, CommentsEnabled: in.CommentsEnabled,
+				PlaybackEnabled: in.PlaybackEnabled, CommentsEnabled: in.CommentsEnabled, AudioEnabled: in.AudioEnabled,
 			})
 		}
 		switch {
@@ -87,7 +94,8 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 			respond(w, http.StatusOK, struct {
 				biliapp.Settings
 				BrowserAvailable bool `json:"browser_available"`
-			}{view, bili.BrowserAvailable()})
+				AudioAvailable   bool `json:"audio_available"`
+			}{view, bili.BrowserAvailable(), bili.AudioAvailable(r.Context())})
 		}
 	})
 	mux.HandleFunc("GET /api/local/apps/bilibili/public", handler)

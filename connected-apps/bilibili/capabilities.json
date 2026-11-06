@@ -48,6 +48,16 @@
       ],
       "discoverable": true,
       "requires_owner_setting": "comments_enabled"
+    },
+    {
+      "id": "observation.audio",
+      "implementation": "ready",
+      "description": "分段解码获准公开单段视频并委托本机语音识别",
+      "permissions": [
+        "network"
+      ],
+      "discoverable": true,
+      "requires_owner_setting": "audio_enabled"
     }
   ]
 }

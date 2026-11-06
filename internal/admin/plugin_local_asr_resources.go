@@ -99,12 +99,29 @@ func (m *Manager) localASRPluginMetadata(ctx context.Context, p pluginhost.Packa
 // command service: callers provide an already bound profile and PCM WAV bytes,
 // not a path, executable or argv fragment.
 func (m *Manager) runRegisteredLocalASR(ctx context.Context, p pluginhost.Package, g pluginhost.Grant, profile localASRProfile, wav []byte, timeoutSeconds int) (string, string, error) {
-	if len(wav) == 0 || len(wav) > 10<<20 || !bytesHasWAVHeader(wav) || timeoutSeconds < 1 || timeoutSeconds > int(profile.runner.TimeoutSeconds) || int64(timeoutSeconds) > int64((1<<63-1)/int64(time.Second)) {
-		return "", "", errors.New("local_asr_request_invalid")
-	}
 	store, err := m.packageStore()
 	if err != nil {
 		return "", "", err
+	}
+	var windows *agenthost.WindowsConfig
+	if runtime.GOOS == "windows" {
+		windows = m.agent.config().Host.Windows
+	}
+	return runRegisteredLocalASRForStore(ctx, store, filepath.Join(m.privateWorkspaceFor(g.Account), "scratch"), windows, p, g, profile, wav, timeoutSeconds)
+}
+
+// runRegisteredLocalASRForStore is the host-side local ASR execution boundary
+// shared by account applications and the application-independent station. It
+// accepts an already verified package/profile pair; callers still need to
+// revalidate their own origin and permission version before and after calling
+// it. No endpoint, credential, account, or caller-provided command enters the
+// local runner.
+func runRegisteredLocalASRForStore(ctx context.Context, store *pluginhost.Store, scratch string, windows *agenthost.WindowsConfig, p pluginhost.Package, g pluginhost.Grant, profile localASRProfile, wav []byte, timeoutSeconds int) (string, string, error) {
+	if len(wav) == 0 || len(wav) > 10<<20 || !bytesHasWAVHeader(wav) || timeoutSeconds < 1 || timeoutSeconds > int(profile.runner.TimeoutSeconds) || int64(timeoutSeconds) > int64((1<<63-1)/int64(time.Second)) {
+		return "", "", errors.New("local_asr_request_invalid")
+	}
+	if store == nil || g.Account == "" || store.Account() != g.Account || scratch == "" {
+		return "", "", errors.New("local_asr_authorization_invalid")
 	}
 	installed, err := store.Installed(ctx, p.ID)
 	if err != nil || !installed.Enabled || installed.Removed || installed.Package.Version != p.Version || installed.Package.ID != localASRPluginID {
@@ -122,11 +139,10 @@ func (m *Manager) runRegisteredLocalASR(ctx context.Context, p pluginhost.Packag
 	if err != nil || hashLocalASRFile(entry) != installed.Package.Files[entryName] {
 		return "", "", errors.New("local_asr_runner_unavailable")
 	}
-	private := filepath.Join(m.privateWorkspaceFor(g.Account), "scratch")
-	if err = ensureManaged(private); err != nil {
+	if err = ensureManaged(scratch); err != nil {
 		return "", "", err
 	}
-	folder, err := os.MkdirTemp(private, "plugin-asr-")
+	folder, err := os.MkdirTemp(scratch, "plugin-asr-")
 	if err != nil {
 		return "", "", err
 	}
@@ -146,7 +162,7 @@ func (m *Manager) runRegisteredLocalASR(ctx context.Context, p pluginhost.Packag
 	readonly = append(readonly, filepath.Dir(entry))
 	cfg := agenthost.Defaults()
 	if runtime.GOOS == "windows" {
-		cfg.Windows = m.agent.config().Host.Windows
+		cfg.Windows = windows
 	}
 	cfg.Mode, cfg.OutputBytes, cfg.TimeoutSeconds = "full", 64000, timeoutSeconds
 	cfg.Roots = []string{folder}
@@ -198,6 +214,17 @@ func (m *Manager) registeredLocalASRProfile(ctx context.Context, p pluginhost.Pa
 	if err != nil {
 		return localASRProfile{}, false
 	}
+	return registeredLocalASRProfileForStore(ctx, store, filepath.Join(m.managedRoot(), "public_workspace"), p, g)
+}
+
+// registeredLocalASRProfileForStore validates only the media-understanding
+// package selected by the supplied owner-scoped store.  The resource root is
+// chosen by a trusted host registration, never by plugin configuration or an
+// Agent request.
+func registeredLocalASRProfileForStore(ctx context.Context, store *pluginhost.Store, public string, p pluginhost.Package, g pluginhost.Grant) (localASRProfile, bool) {
+	if err := ctx.Err(); err != nil || store == nil || public == "" || p.ID != localASRPluginID || g.Account == "" || g.Account != store.Account() || g.Plugin != p.ID || g.Version != p.Version {
+		return localASRProfile{}, false
+	}
 	installed, err := store.Installed(ctx, localASRPluginID)
 	if err != nil || !installed.Enabled || installed.Removed || installed.Package.ID != p.ID || installed.Package.Version != p.Version {
 		return localASRProfile{}, false
@@ -210,7 +237,7 @@ func (m *Manager) registeredLocalASRProfile(ctx context.Context, p pluginhost.Pa
 	if json.Unmarshal(configuration.Values["asr_backend"], &backend) != nil || backend != "local" || json.Unmarshal(configuration.Values["local_asr_profile_id"], &id) != nil || !safeLocalASRID(id) {
 		return localASRProfile{}, false
 	}
-	profile, err := m.readRegisteredLocalASRProfile(p, g, id)
+	profile, err := readRegisteredLocalASRProfileAt(public, p, g, id)
 	if err != nil {
 		// An absent, stale or tampered registration does not grant a broad public
 		// workspace mount. The media plugin can still use its separately configured
@@ -221,10 +248,18 @@ func (m *Manager) registeredLocalASRProfile(ctx context.Context, p pluginhost.Pa
 }
 
 func (m *Manager) readRegisteredLocalASRProfile(p pluginhost.Package, g pluginhost.Grant, id string) (localASRProfile, error) {
+	return readRegisteredLocalASRProfileAt(filepath.Join(m.managedRoot(), "public_workspace"), p, g, id)
+}
+
+// readRegisteredLocalASRProfileAt resolves a profile only beneath a
+// host-selected public resource root. It deliberately shares the exact
+// registration schema and content verification with legacy account ASR while
+// remaining independent of a WeChat account.
+func readRegisteredLocalASRProfileAt(public string, p pluginhost.Package, g pluginhost.Grant, id string) (localASRProfile, error) {
 	if !safeLocalASRID(id) {
 		return localASRProfile{}, errors.New("local_asr_model_id_invalid")
 	}
-	public, err := cleanLocalASRPath(filepath.Join(m.managedRoot(), "public_workspace"), true)
+	public, err := cleanLocalASRPath(public, true)
 	if err != nil {
 		return localASRProfile{}, err
 	}

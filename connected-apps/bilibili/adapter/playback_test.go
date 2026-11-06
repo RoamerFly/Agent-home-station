@@ -61,7 +61,7 @@ func TestPlaybackUsesBoundedRequestedSampleAndReturnsOnlyMeasuredEvidence(t *tes
 	app := newFixture(t)
 	enablePlayback(t, app)
 	var resolverLimit int64
-	app.resolvePlayback = func(ctx context.Context, bvid string, limit int64) (mcptools.PublicVideo, error) {
+	app.resolveMedia = func(ctx context.Context, bvid string, limit int64) (mcptools.PublicVideo, error) {
 		if err := ctx.Err(); err != nil {
 			return mcptools.PublicVideo{}, err
 		}
@@ -81,7 +81,7 @@ func TestPlaybackUsesBoundedRequestedSampleAndReturnsOnlyMeasuredEvidence(t *tes
 		return stationbrowser.PlaybackSample{Ready: true, Paused: true, DurationSeconds: 42, Intervals: []stationbrowser.PlaybackInterval{{StartSeconds: 0, EndSeconds: 5.85}}}, nil
 	}
 	page, err := app.ReadObservation(t.Context(), observation(apphost.ObservationPlayback, fixtureBV))
-	if err != nil || !page.Complete || page.PlaybackProof == nil || page.PlaybackProof.RequestedSeconds != 6 || !page.PlaybackProof.Ready || !page.PlaybackProof.Paused || len(page.Playback) != 1 || resolverLimit != maxPlaybackBytes {
+	if err != nil || !page.Complete || page.PlaybackProof == nil || page.PlaybackProof.RequestedSeconds != 6 || !page.PlaybackProof.Ready || !page.PlaybackProof.Paused || len(page.Playback) != 1 || resolverLimit != maxMediaBytes {
 		t.Fatalf("unexpected bounded playback evidence %#v %v", page, err)
 	}
 	for _, requested := range []int{1, 20} {
@@ -112,7 +112,7 @@ func TestPlaybackUsesBoundedRequestedSampleAndReturnsOnlyMeasuredEvidence(t *tes
 func TestPlaybackRevocationCancelsBeforeLateSampleIsReturned(t *testing.T) {
 	app := newFixture(t)
 	saved := enablePlayback(t, app)
-	app.resolvePlayback = func(context.Context, string, int64) (mcptools.PublicVideo, error) {
+	app.resolveMedia = func(context.Context, string, int64) (mcptools.PublicVideo, error) {
 		return mcptools.PublicVideo{Data: []byte("synthetic mp4 bytes"), ContentType: "video/mp4", DurationMS: 42_000}, nil
 	}
 	started := make(chan struct{})

@@ -56,6 +56,20 @@ func ensureDecoder() error {
 	return nil
 }
 
+// Available reports whether local decoding can be attempted.
+func Available() bool { return ensureDecoder() == nil }
+
+// ProbeDuration reads the local container duration without scanning frames.
+func ProbeDuration(ctx context.Context, path string) (float64, error) {
+	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-show_entries", "format=duration", "-of", "csv=p=0", path)
+	hideDecoderWindow(probe)
+	duration, err := probe.Output()
+	if err != nil {
+		return 0, errors.New("video_analysis_probe_failed")
+	}
+	return ParseDuration(strings.TrimSpace(string(duration)))
+}
+
 // Sample writes the received bytes into an owner-provided private directory,
 // probes its duration, then decodes the historical six evenly spaced frames.
 // It preserves partial timing evidence on a later extraction error.
@@ -75,12 +89,7 @@ func Sample(ctx context.Context, dir string, data []byte) (SampleResult, error) 
 	if os.WriteFile(input, data, 0600) != nil {
 		return sample, errors.New("video_analysis_staging_failed")
 	}
-	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-show_entries", "format=duration", "-of", "csv=p=0", input)
-	duration, err := probe.Output()
-	if err != nil {
-		return sample, errors.New("video_analysis_probe_failed")
-	}
-	seconds, err := ParseDuration(strings.TrimSpace(string(duration)))
+	seconds, err := ProbeDuration(ctx, input)
 	if err != nil {
 		return sample, err
 	}
