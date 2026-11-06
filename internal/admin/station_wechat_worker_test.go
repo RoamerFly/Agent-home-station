@@ -169,7 +169,7 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	}
 	h, f := reopen()
 	blockStarted, blockStopped := make(chan struct{}, 1), make(chan struct{}, 1)
-	h.wechat.model = localModelFunc(func(ctx context.Context, _ string, history []map[string]string) (string, error) {
+	h.chat.wechat.model = localModelFunc(func(ctx context.Context, _ string, history []map[string]string) (string, error) {
 		raw, _ := json.Marshal(history)
 		if strings.Contains(string(raw), "block-synthetic-first") {
 			blockStarted <- struct{}{}
@@ -219,7 +219,7 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	policy(f, "one", "person-one")
 	policy(f, "two", "person-two")
 	shareOne, shareTwo := path("one")+"/share-reader", path("two")+"/share-reader"
-	h.wechat.shareOptions.CatalogDirectory = filepath.Join("..", "..", "plugins")
+	h.chat.wechat.shareOptions.CatalogDirectory = filepath.Join("..", "..", "plugins")
 	request(f, "PUT", shareOne, map[string]any{"action": "install", "grant_network": true}, false, 403)
 	request(f, "PUT", shareOne, map[string]any{"action": "install"}, true, 400)
 	installedShare := request(f, "PUT", shareOne, map[string]any{"action": "install", "grant_network": true}, true, 200)
@@ -378,7 +378,7 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	if row := request(f2, "GET", path("two")+"/receipts/"+receiptKey, nil, false, 200); row["cancel_requested"] != true || row["state"] != "accepted" {
 		t.Fatal("restart lost cancellation or late accepted receipt", row)
 	}
-	sender, err := h2.wechat.WorkerSender(t.Context(), wechatapp.ConnectionID("one"))
+	sender, err := h2.chat.wechat.WorkerSender(t.Context(), wechatapp.ConnectionID("one"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	// A native outage/replacement cannot prevent a local stop from being saved.
 	request(f2, "POST", path("two")+"/receipts/"+receiptKey+"/cancel", map[string]any{}, true, 202)
 	// Insert a new synthetic pending turn only after this worker was stopped.
-	pausedWorker, err := h2.wechat.worker(wechatapp.ConnectionID("two"), false)
+	pausedWorker, err := h2.chat.wechat.worker(wechatapp.ConnectionID("two"), false)
 	if err != nil {
 		t.Fatal(err)
 	}

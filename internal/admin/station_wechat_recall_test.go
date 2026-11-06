@@ -118,7 +118,7 @@ func TestStationWechatOwnerRecallFromDelivery(t *testing.T) {
 	}
 	f := open()
 	connection := wechatapp.ConnectionID("one")
-	w, err := f.handler.wechat.worker(connection, true)
+	w, err := f.handler.chat.wechat.worker(connection, true)
 	if err != nil {
 		t.Fatal(err)
 	}

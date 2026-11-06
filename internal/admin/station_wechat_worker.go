@@ -81,7 +81,7 @@ type stationWechatRun struct {
 	done   chan struct{}
 }
 
-func bindStationWechat(registry apphost.Registry, chat *localChatService) (apphost.Registry, *stationWechat, error) {
+func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, models *localModelStore, artifacts *localArtifactStore) (apphost.Registry, *stationWechat, error) {
 	entry, ok := registry.Lookup(wechatapp.ID)
 	native, supported := entry.Provider.(stationWechatNative)
 	if !ok || !supported || entry.Registration != "station-native" {
@@ -90,11 +90,11 @@ func bindStationWechat(registry apphost.Registry, chat *localChatService) (appho
 	ctx, cancel := context.WithCancel(context.Background())
 	shareOptions := stationruntime.PackagedToolOptions()
 	host := &stationWechat{
-		stationWechatNative: native, root: filepath.Join(chat.home.dataDir, "apps", wechatapp.ID, "workers"),
-		dataDir: chat.home.dataDir, workspaceRoot: chat.home.root,
-		installation: entry.InstallationID, models: chat.models, model: stationWechatModel{chat.models},
+		stationWechatNative: native, root: filepath.Join(dataDir, "apps", wechatapp.ID, "workers"),
+		dataDir: dataDir, workspaceRoot: workspaceRoot,
+		installation: entry.InstallationID, models: models, model: stationWechatModel{models},
 		ctx: ctx, cancel: cancel, workers: map[string]*stationWechatWorker{}, done: make(chan struct{}),
-		artifacts: chat.home.artifacts, shareOptions: shareOptions,
+		artifacts: artifacts, shareOptions: shareOptions,
 	}
 	var err error
 	host.contactCursor, err = newStationContactCursor()
@@ -142,7 +142,7 @@ func (m stationWechatModel) ChatFunctions(ctx context.Context, system string, hi
 	return native.ChatFunctions(ctx, system, history, tools)
 }
 
-func (s *stationWechat) beginShutdown() {
+func (s *stationWechat) BeginShutdown() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ctx.Err() == nil {
@@ -164,7 +164,7 @@ func (s *stationWechat) beginShutdown() {
 	}
 }
 
-func (s *stationWechat) closeContext(ctx context.Context) error {
+func (s *stationWechat) CloseContext(ctx context.Context) error {
 	select {
 	case <-s.done:
 		return nil

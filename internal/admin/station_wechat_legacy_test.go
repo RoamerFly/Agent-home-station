@@ -429,7 +429,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "applied" {
 		t.Fatal("applied scope was not restored after restart", row)
 	}
-	activeNative, err := h.wechat.WorkerSender(t.Context(), wechatapp.ConnectionID("one"))
+	activeNative, err := h.chat.wechat.WorkerSender(t.Context(), wechatapp.ConnectionID("one"))
 	if err != nil {
 		t.Fatal(err)
 	}

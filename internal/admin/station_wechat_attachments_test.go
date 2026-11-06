@@ -245,7 +245,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	corrupt.Store(true)
 	acquire(502)
 	corrupt.Store(false)
-	worker, err := handler.wechat.worker(connection, false)
+	worker, err := handler.chat.wechat.worker(connection, false)
 	if err != nil || worker == nil {
 		t.Fatal("worker policy missing", err)
 	}
@@ -273,7 +273,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	get(path+contentRoute, 404)
 	changedSource.Store(false)
 
-	native, err := handler.wechat.WorkerSender(t.Context(), connection)
+	native, err := handler.chat.wechat.WorkerSender(t.Context(), connection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +354,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	if _, err := handler.chat.models.Save(LocalModelInput{LocalModelSettings: settings, APIKey: "synthetic-offline-model"}); err != nil {
 		t.Fatal(err)
 	}
-	handler.wechat.model = stationAttachmentReplyModel{mediaID: selection.ID}
+	handler.chat.wechat.model = stationAttachmentReplyModel{mediaID: selection.ID}
 	req("POST", path+"/lifecycle", map[string]string{"action": "start"}, true, 200)
 	waitAppLifecycle(t, func() bool {
 		row := req("GET", path, nil, false, 200)
@@ -400,7 +400,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	if _, err := workAccess.authorized(foreign, workID); err == nil {
 		t.Fatal("another group member inherited private work disclosure")
 	}
-	handler.wechat.model = stationAttachmentReplyModel{mediaID: "reply-" + workID, workID: workID}
+	handler.chat.wechat.model = stationAttachmentReplyModel{mediaID: "reply-" + workID, workID: workID}
 	req("POST", path+"/lifecycle", map[string]string{"action": "start"}, true, 200)
 	waitAppLifecycle(t, func() bool {
 		return req("GET", path, nil, false, 200)["connection"].(map[string]any)["worker"] == "running"

@@ -22,56 +22,6 @@ import (
 	"wechat-bot/internal/websession"
 )
 
-// LocalHomeHandler owns the local chat and this station's app workers.
-type LocalHomeHandler struct {
-	http.Handler
-	chat   *localChatService
-	home   *localHomeService
-	wechat *stationWechat
-}
-
-// BeginShutdown is deliberately separate from Close.  It first makes the
-// station unavailable to new conversations and cancels an in-flight model
-// request, so HTTP shutdown does not spend its grace period waiting for a
-// model/tool call that can no longer produce a usable result.
-func (h *LocalHomeHandler) BeginShutdown() {
-	if h != nil && h.chat != nil {
-		h.chat.beginShutdown()
-		if h.wechat != nil {
-			h.wechat.beginShutdown()
-		}
-	}
-}
-
-func (h *LocalHomeHandler) Close() error {
-	return h.CloseContext(context.Background())
-}
-
-// CloseContext is the bounded counterpart used by the desktop lifecycle.
-// BeginShutdown is always applied first; if an uncooperative model or runner
-// still owns the turn, the caller regains control at its explicit deadline and
-// a later CloseContext can finish the same close without replaying anything.
-func (h *LocalHomeHandler) CloseContext(ctx context.Context) error {
-	if h == nil || h.chat == nil {
-		return nil
-	}
-	h.BeginShutdown()
-	err := h.chat.closeContext(ctx)
-	if h.wechat != nil {
-		err = errors.Join(err, h.wechat.closeContext(ctx))
-	}
-	return err
-}
-
-func (h *LocalHomeHandler) runtime(w http.ResponseWriter, _ *http.Request) {
-	if h == nil || h.home == nil {
-		fail(w, http.StatusServiceUnavailable, "本机成长站不可用")
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	respond(w, http.StatusOK, map[string]any{"kind": "local-station", "pid": os.Getpid(), "data_directory": h.home.dataDir})
-}
-
 type localChatService struct {
 	home         *localHomeService
 	models       *localModelStore
@@ -121,7 +71,7 @@ func newLocalChatService(home *localHomeService) *localChatService {
 		}}
 }
 
-func (h *localChatService) beginShutdown() {
+func (h *localChatService) BeginShutdown() {
 	if h == nil {
 		return
 	}
@@ -179,12 +129,8 @@ func (h *localChatService) closeLiveAsync() {
 	})
 }
 
-func (h *localChatService) close() error {
-	return h.closeContext(context.Background())
-}
-
-func (h *localChatService) closeContext(ctx context.Context) error {
-	h.beginShutdown()
+func (h *localChatService) CloseContext(ctx context.Context) error {
+	h.BeginShutdown()
 	if h == nil {
 		return nil
 	}

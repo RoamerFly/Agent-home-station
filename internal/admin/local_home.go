@@ -10,14 +10,21 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
-	"wechat-bot/internal/apphttp"
+	"wechat-bot/internal/stationhost"
 	"wechat-bot/internal/stationruntime"
-	"wechat-bot/internal/stationui"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 )
 
 const localOwnerCookie = "ahs_local_session"
+
+// LocalHomeHandler wires the station's local conversation and identity into
+// the shared HTTP and shutdown host.
+type LocalHomeHandler struct {
+	*stationhost.Handler
+	chat *localChatService
+	home *localHomeService
+}
 
 // localHomeService owns the companion's home, not an application's account.
 // Authentication is provided by the local owner's management session. No
@@ -78,11 +85,6 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 		}
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		respond(w, http.StatusOK, map[string]any{"ok": true, "mode": "local", "wechat_required": false})
-	})
-	mux.HandleFunc("POST /api/login", auth.Login)
-	mux.HandleFunc("GET /api/session", auth.Protect(auth.Status))
 	home := &localHomeService{identity: newFishIdentityRegistry(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner}
 	home.configureAppCatalog()
 	home.appInstallRoutes(auth, mux)
@@ -98,15 +100,9 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	chat.projectTools.routes(auth, mux)
 	home.artifacts = &localArtifactStore{home: home, chat: chat}
 	home.artifacts.routes(auth, mux)
-	handler := &LocalHomeHandler{Handler: mux, chat: chat, home: home}
-	registry, err = home.bindBundledObservationApps(registry)
+	registry, apps, err := chat.attachApplications(registry)
 	if err != nil {
-		return nil, err
-	}
-	home.bilibiliRoutes(auth, mux, registry)
-	home.douyinRoutes(auth, mux, registry, chat.ctx)
-	registry, handler.wechat, err = bindStationWechat(registry, chat)
-	if err != nil {
+		chat.BeginShutdown()
 		return nil, err
 	}
 	chat.applications = registry
@@ -115,26 +111,8 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	chat.liveOutput, chat.liveEncoder = stationLiveOutput(dir, workspaceRoot)
 	chat.startLiveRecovery()
 	chat.observations = apphost.NewObserver(registry, filepath.Join(dir, "app-observations"))
-	apphttp.Register(mux, auth, registry)
-	if handler.wechat != nil {
-		chat.wechat = handler.wechat
-		handler.wechat.contactRoutes(auth, mux)
-		handler.wechat.groupActionRoutes(auth, mux, home.identity)
-		handler.wechat.recallRoutes(auth, mux, home.identity)
-		handler.wechat.legacyImportRoutes(auth, mux)
-		handler.wechat.attachmentRoutes(auth, mux)
-		handler.wechat.shareRoutes(auth, mux)
-		handler.wechat.artifactRoutes(auth, mux)
-		handler.wechat.deliveryControlRoutes(auth, mux)
-		handler.wechat.restore()
-	}
 	chat.routes(auth, mux)
-	// Desktop owns the inherited stop pipe. This authenticated endpoint only
-	// proves which local-station process it started; it is intentionally not a
-	// public stop surface and it never exposes application-account state.
-	mux.HandleFunc("GET /api/local/runtime", auth.Protect(handler.runtime))
-	stationui.Register(mux)
-	return handler, nil
+	return &LocalHomeHandler{Handler: stationhost.New(mux, auth, registry, dir, chat, apps...), chat: chat, home: home}, nil
 }
 
 func (h *localHomeService) directory(record fishIdentityRecord) (string, error) {
