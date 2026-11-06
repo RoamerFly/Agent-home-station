@@ -13,13 +13,30 @@ import (
 var ErrNoAudioTrack = errors.New("video_audio_track_absent")
 var ErrAudioRangeEmpty = errors.New("video_audio_range_empty")
 
+const videoAudioFormats = "mov,matroska,webm"
+const voiceAudioFormats = "wav"
+
+// ProbeVoiceDuration accepts only local audio containers supported by the
+// native playable-voice rendition, never playlists or the raw SILK original.
+func ProbeVoiceDuration(ctx context.Context, path string) (float64, error) {
+	return probeDuration(ctx, path, voiceAudioFormats)
+}
+
+func ExtractVoiceAudioRange(ctx context.Context, path, out string, start, length float64) ([]byte, float64, error) {
+	return extractAudioRange(ctx, path, out, start, length, voiceAudioFormats)
+}
+
 // ExtractAudioRange decodes one page of the first audio stream. The caller
 // owns the private staging directory and controls the requested page length.
 func ExtractAudioRange(ctx context.Context, path, out string, start, length float64) ([]byte, float64, error) {
+	return extractAudioRange(ctx, path, out, start, length, videoAudioFormats)
+}
+
+func extractAudioRange(ctx context.Context, path, out string, start, length float64, formats string) ([]byte, float64, error) {
 	if err := ensureDecoder(); err != nil {
 		return nil, 0, err
 	}
-	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "json", path)
+	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", formats, "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "json", path)
 	hideDecoderWindow(probe)
 	var tracks struct {
 		Streams []json.RawMessage `json:"streams"`
@@ -32,7 +49,7 @@ func ExtractAudioRange(ctx context.Context, path, out string, start, length floa
 		return nil, 0, ErrNoAudioTrack
 	}
 	sec := func(v float64) string { return strconv.FormatFloat(v, 'f', 6, 64) }
-	decode := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-threads", "1", "-ss", sec(start), "-i", path, "-map", "0:a:0", "-vn", "-t", sec(length), "-threads", "1", "-filter_threads", "1", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", out)
+	decode := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", formats, "-threads", "1", "-ss", sec(start), "-i", path, "-map", "0:a:0", "-vn", "-t", sec(length), "-threads", "1", "-filter_threads", "1", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", out)
 	hideDecoderWindow(decode)
 	if err := decode.Run(); err != nil {
 		return nil, 0, errors.New("video_audio_decode_failed")

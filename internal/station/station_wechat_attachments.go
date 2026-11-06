@@ -363,6 +363,9 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	if stationVideoRef(t.trace.Source) || stationVideoRef(t.trace.QuotedSource) || t.historyAllowed(ctx) {
 		tools = append(tools, wechatapp.StationVideoTool(), wechatapp.StationVideoObservationTool())
 	}
+	if stationVoiceRef(t.trace.Source) || stationVoiceRef(t.trace.QuotedSource) {
+		tools = append(tools, wechatapp.StationVoiceTranscriptionTool())
+	}
 	if stationAttachmentRef(t.trace.Source) || stationAttachmentRef(t.trace.QuotedSource) {
 		tools = append(tools, wechatapp.StationAttachmentTool())
 		if t.replyAllowed(t.trace) {
@@ -383,12 +386,19 @@ func stationVideoRef(ref *companion.SourceRef) bool {
 	return ref != nil && (ref.MessageType == 43 || ref.MessageType == 49)
 }
 
+func stationVoiceRef(ref *companion.SourceRef) bool {
+	return ref != nil && ref.MessageType == 34
+}
+
 func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	if name == "wechat_video_read" {
 		return t.readVideo(ctx, raw)
 	}
 	if name == "wechat_video_observe" {
 		return t.observeVideo(ctx, raw)
+	}
+	if name == "wechat_voice_transcribe" {
+		return t.voiceTranscription(ctx, raw)
 	}
 	if name == "wechat_read" {
 		return t.readHistory(ctx, raw)

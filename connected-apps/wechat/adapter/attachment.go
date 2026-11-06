@@ -121,6 +121,10 @@ func StationAttachmentTool() mcptools.Tool {
 }
 
 // StationAttachmentReplyTool prepares a response using a verified inbound source.
+func StationVoiceTranscriptionTool() mcptools.Tool {
+	return tool("wechat_voice_transcribe", "Transcribe the authorized current or verified quoted WeChat voice message by exact message_id using the enabled local speech recognition tool. Returns the decoded coverage, recognized words and next_start_seconds. Voice with no recognizable words and unavailable audio are distinct. No sending.", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"start_seconds":{"type":"number","minimum":0,"default":0},"duration_seconds":{"type":"number","exclusiveMinimum":0,"default":90},"timeout_seconds":{"type":"integer","minimum":0,"default":180}},"required":["message_id"],"additionalProperties":false}`)
+}
+
 func StationAttachmentReplyTool() mcptools.Tool {
 	return tool("wechat_attachment_reply_prepare", "为本会话的当前消息或核验引用准备原附件回复。只准备，尚未上传或发送。用返回的 media.id 放进最终 reply 的 media_ids。默认按原媒体类型发送；用户明确要原文件时用 format=file。", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"format":{"type":"string","enum":["original","file"]}},"required":["message_id"],"additionalProperties":false}`)
 }

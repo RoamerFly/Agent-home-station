@@ -61,7 +61,11 @@ func Available() bool { return ensureDecoder() == nil }
 
 // ProbeDuration reads the local container duration without scanning frames.
 func ProbeDuration(ctx context.Context, path string) (float64, error) {
-	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-show_entries", "format=duration", "-of", "csv=p=0", path)
+	return probeDuration(ctx, path, videoAudioFormats)
+}
+
+func probeDuration(ctx context.Context, path, formats string) (float64, error) {
+	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", formats, "-show_entries", "format=duration", "-of", "csv=p=0", path)
 	hideDecoderWindow(probe)
 	duration, err := probe.Output()
 	if err != nil {

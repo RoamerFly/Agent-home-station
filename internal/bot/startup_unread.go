@@ -198,7 +198,9 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		if hostedPreferred {
 			preferredShares[m.ID] = true
 		}
-		if isMedia && !hostedPreferred && w.readMediaBeforeDecision(m) && (strings.HasSuffix(thread, "@chatroom") || eligible && w.observationAllowed(m) && w.config.Analyzer != nil) {
+		canAnalyze := isMedia && w.mediaAnalyzer(ctx, m) != nil
+		needsGroupRead := strings.HasSuffix(thread, "@chatroom") && (m.Type != 34 || w.config.VoiceAnalyzer == nil || canAnalyze)
+		if isMedia && !hostedPreferred && w.readMediaBeforeDecision(m) && (needsGroupRead || eligible && w.observationAllowed(m) && canAnalyze) {
 			mediaIDs = append(mediaIDs, m.ID)
 		}
 		observed := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: m.SenderID, TraceID: m.ID, Text: body, MessageTime: m.CreatedAt, OriginalText: &original}

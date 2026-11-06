@@ -155,6 +155,19 @@ func (s *Sender) StreamVerifiedIncomingMedia(ctx context.Context, messageID, kin
 	if err != nil {
 		return VerifiedIncomingMedia{}, err
 	}
+	return s.streamVerifiedIncomingMedia(ctx, messageID, kind, variant, max, output)
+}
+
+// StreamVerifiedPlayableVoice verifies the separately decoded native voice
+// rendition. The encoded original is still acquired by the attachment API.
+func (s *Sender) StreamVerifiedPlayableVoice(ctx context.Context, messageID string, max int64, output io.Writer) (VerifiedIncomingMedia, error) {
+	if output == nil {
+		return VerifiedIncomingMedia{}, errors.New("invalid incoming media request")
+	}
+	return s.streamVerifiedIncomingMedia(ctx, messageID, "voice", "normal", max, output)
+}
+
+func (s *Sender) streamVerifiedIncomingMedia(ctx context.Context, messageID, kind, variant string, max int64, output io.Writer) (VerifiedIncomingMedia, error) {
 	var expected VerifiedIncomingMedia
 	resp, err := s.incomingMediaResponseChecked(ctx, messageID, max, variant, func(id string) error {
 		var asset incomingMediaAsset

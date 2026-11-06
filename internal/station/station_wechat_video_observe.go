@@ -162,7 +162,7 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 	}
 	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, "original.video")
-	if err := stageStationVideo(ctx, path, file, record); err != nil {
+	if err := stageStationMedia(ctx, path, file, record); err != nil {
 		return "", err
 	}
 	meta, err := mediadecode.Probe(ctx, path)
@@ -200,7 +200,7 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 			}
 			return host.localASR.transcribe(ctx, wav, func() error { return check(ctx) })
 		}
-		err = stationObserveAudio(ctx, path, dir, in, meta, transcribe, out)
+		err = stationObserveAudio(ctx, path, dir, in.AudioStart, in.AudioLength, meta.Seconds, false, transcribe, out)
 	} else {
 		transcribe := func(ctx context.Context, wav []byte) (string, error) {
 			var invocation pluginhost.Invocation
@@ -220,7 +220,7 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 			invocation = contextFor(p.Arguments())
 			return p.Transcribe(ctx)
 		}
-		err = stationObserveAudio(ctx, path, dir, in, meta, transcribe, out)
+		err = stationObserveAudio(ctx, path, dir, in.AudioStart, in.AudioLength, meta.Seconds, false, transcribe, out)
 	}
 	if checkErr := check(ctx); checkErr != nil {
 		return "", checkErr
@@ -232,7 +232,7 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 	return string(result), err
 }
 
-func stageStationVideo(ctx context.Context, path string, original *os.File, record stationAttachmentRecord) error {
+func stageStationMedia(ctx context.Context, path string, original *os.File, record stationAttachmentRecord) error {
 	out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return observationFailure("media_staging_failed", "无法创建当前连接的私有解码副本。")
@@ -268,35 +268,48 @@ func stationObserveFrames(ctx context.Context, path, dir string, in stationVideo
 	return nil
 }
 
-func stationObserveAudio(ctx context.Context, path, dir string, in stationVideoObservationInput, meta mediadecode.Metadata, transcribe func(context.Context, []byte) (string, error), out map[string]any) error {
+func stationObserveAudio(ctx context.Context, path, dir string, start, requestedLength, duration float64, voice bool, transcribe func(context.Context, []byte) (string, error), out map[string]any) error {
 	const maxPCMPageSeconds = 240 // 16 kHz mono PCM16 fits the 8 MiB WAV envelope.
-	requestedEnd := min(meta.Seconds, in.AudioStart+in.AudioLength)
-	out["start_seconds"], out["requested_duration_seconds"], out["video_duration_seconds"] = in.AudioStart, in.AudioLength, meta.Seconds
+	requestedEnd := min(duration, start+requestedLength)
+	out["start_seconds"], out["requested_duration_seconds"] = start, requestedLength
+	extract, endState := mediadecode.ExtractAudioRange, "end_of_video"
+	if voice {
+		extract, endState = mediadecode.ExtractVoiceAudioRange, "end_of_voice"
+		out["voice_duration_seconds"] = duration
+	} else {
+		out["video_duration_seconds"] = duration
+	}
 	finish := func(state string, next float64, terminal bool) {
 		out["transcription_state"], out["next_start_seconds"] = state, next
-		out["requested_range_complete"], out["audio_complete"] = terminal || next+.001 >= requestedEnd, terminal || next+.001 >= meta.Seconds
+		out["requested_range_complete"], out["audio_complete"] = terminal || next+.001 >= requestedEnd, terminal || next+.001 >= duration
 	}
-	if in.AudioStart >= meta.Seconds {
-		finish("end_of_video", meta.Seconds, true)
+	if start >= duration {
+		finish(endState, duration, true)
 		return nil
 	}
-	length := min(requestedEnd-in.AudioStart, maxPCMPageSeconds)
-	if length < requestedEnd-in.AudioStart {
+	length := min(requestedEnd-start, maxPCMPageSeconds)
+	if length < requestedEnd-start {
 		out["continuation_reason"] = "音频分段以满足 PCM 传输限制，可从 next_start_seconds 续读。"
 	}
-	wav, seconds, err := mediadecode.ExtractAudioRange(ctx, path, filepath.Join(dir, "audio.wav"), in.AudioStart, length)
+	wav, seconds, err := extract(ctx, path, filepath.Join(dir, "audio.wav"), start, length)
 	switch {
 	case errors.Is(err, mediadecode.ErrNoAudioTrack):
-		finish("no_audio_track", in.AudioStart, true)
+		finish("no_audio_track", start, true)
 		return nil
 	case errors.Is(err, mediadecode.ErrAudioRangeEmpty):
-		finish("no_audio_in_range", in.AudioStart+length, false)
+		finish("no_audio_in_range", start+length, false)
 		return nil
 	case err != nil:
+		if voice {
+			return observationFailure("incoming_voice_decode_failed", "已取得微信语音的可播放版本，但未能解码所选音频。")
+		}
 		return stationMediaFailure(err, "提取音轨")
 	}
 	text, err := transcribe(ctx, wav)
 	if err != nil && !mediaspec.IsNoSpeech(err) {
+		if voice {
+			return err
+		}
 		return stationMediaFailure(err, "转写音轨")
 	}
 	state := "no_recognizable_speech"
@@ -305,10 +318,10 @@ func stationObserveAudio(ctx context.Context, path, dir string, in stationVideoO
 		out["text"], out["text_format"] = transcript.Format(ctx, text)
 	}
 	out["effective_duration_seconds"], out["coverage"] = seconds, "decoded_audio_range"
-	out["end_seconds"] = min(in.AudioStart+seconds, requestedEnd)
+	out["end_seconds"] = min(start+seconds, requestedEnd)
 	// Seek by the requested decoder interval if it contained only partial
 	// PCM, so a short or sparse stream cannot pin the caller to the same page.
-	finish(state, min(in.AudioStart+length, requestedEnd), false)
+	finish(state, min(start+length, requestedEnd), false)
 	return nil
 }
 

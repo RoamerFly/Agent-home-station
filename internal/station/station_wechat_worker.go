@@ -780,7 +780,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 		NextMediaResume:   station.nextMediaResume,
 		MediaResumeResult: station.mediaResumeResult,
 		StateDir:          filepath.Join(dir, "queue"), AllowedThreads: threads, GroupRules: rules,
-		Options: &options, Prefix: "/ai ",
+		Options: &options, Prefix: "/ai ", VoiceAnalyzer: stationVoiceObserver{tools: attachment},
 		PreferredGroupShare: func(m linuxnative.Message) bool {
 			return !run.block.Load() && policy.groupShareCandidate(native.Account(), m)
 		},
