@@ -256,67 +256,84 @@ type localProjectPolicy struct {
 // The long-lived creation worker never sees input copies from other requests.
 func (p *localProjectPolicy) inputRuntime(ctx context.Context) (*pluginruntime.Controller, func(), error) {
 	parent := filepath.Join(p.tool.projectTools.home.dataDir, "project-tool-tasks")
+	options := p.tool.projectTools.options
+	if p.capability != localDocumentExport {
+		options.DocumentRuntimeRoot = ""
+	}
+	controller, input, output, cleanup, err := openScopedProjectRuntime(ctx, parent, p.host.store, options, p.installed.Package.ID, false, p.input.materialize)
+	p.inputPath, p.outputPath = input, output
+	return controller, cleanup, err
+}
+
+func openScopedProjectRuntime(ctx context.Context, parent string, store *pluginhost.Store, options pluginruntime.Options, packageID string, discardOutput bool,
+	materialize func(context.Context, string) (localProjectArtifactMaterialized, error)) (*pluginruntime.Controller, string, string, func(), error) {
 	root, err := workspacefs.EnsurePath(parent)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", "", nil, err
 	}
 	if err := root.Close(); err != nil {
-		return nil, nil, err
+		return nil, "", "", nil, err
 	}
 	dir, err := os.MkdirTemp(parent, "task-")
 	if err != nil {
-		return nil, nil, err
+		return nil, "", "", nil, err
 	}
 	inputDir := filepath.Join(dir, "input")
-	p.outputPath = filepath.Join(dir, "output")
+	outputDir := filepath.Join(dir, "output")
+	var inputPath string
 	var controller *pluginruntime.Controller
 	cleanup := func() {
 		if controller != nil {
 			_ = controller.Close()
 		}
-		if p.inputPath != "" {
-			_ = os.Remove(p.inputPath)
+		if inputPath != "" {
+			_ = os.Remove(inputPath)
+		}
+		if discardOutput {
+			// Read-only operations produce no recoverable file. The launcher
+			// may still create temporary children under its writable mount.
+			if root, err := workspacefs.OpenPath(parent); err == nil {
+				_ = root.RemoveAll(filepath.Base(dir))
+				_ = root.Close()
+			}
+			return
 		}
 		_ = os.Remove(inputDir)
-		_ = os.Remove(p.outputPath)
+		_ = os.Remove(outputDir)
 		_ = os.Remove(dir)
 	}
 	if err := os.Mkdir(inputDir, 0700); err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, "", "", nil, err
 	}
-	if err := os.Mkdir(p.outputPath, 0700); err != nil {
+	if err := os.Mkdir(outputDir, 0700); err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, "", "", nil, err
 	}
-	materialized, err := p.input.materialize(ctx, inputDir)
+	materialized, err := materialize(ctx, inputDir)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, "", "", nil, err
 	}
-	p.inputPath = materialized.InputPath
-	options := p.tool.projectTools.options
-	if p.capability != localDocumentExport {
-		options.DocumentRuntimeRoot = ""
-	}
-	executor := pluginruntime.InstalledExecutor(p.host.store, options)
+	inputPath = materialized.InputPath
+	executor := pluginruntime.InstalledExecutor(store, options)
 	resolve := executor.Resolve
 	executor.Resolve = func(ctx context.Context, pkg pluginhost.Package, grant pluginhost.Grant) (pluginruntime.LaunchSpec, error) {
 		spec, err := resolve(ctx, pkg, grant)
-		if err != nil || pkg.ID != p.installed.Package.ID {
+		if err != nil || pkg.ID != packageID {
 			return spec, errors.New("项目工具隔离环境不可用")
 		}
-		spec.DataDir = p.outputPath
+		spec.DataDir = outputDir
 		spec.ReadOnlyDirs = append(spec.ReadOnlyDirs, inputDir)
-		spec.ReadOnlyFiles = append(spec.ReadOnlyFiles, p.inputPath)
+		spec.ReadOnlyFiles = append(spec.ReadOnlyFiles, inputPath)
 		return spec, nil
 	}
-	controller, err = pluginruntime.NewController(p.host.store, executor)
+	controller, err = pluginruntime.NewController(store, executor)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, "", "", nil, err
 	}
-	return controller, cleanup, nil
+	return controller, inputPath, outputDir, cleanup, nil
 }
 
 func (p *localProjectPolicy) Validate(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {

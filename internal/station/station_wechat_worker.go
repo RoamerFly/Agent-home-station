@@ -48,6 +48,7 @@ type stationWechat struct {
 	artifacts              stationservices.Artifacts
 	shareOptions           pluginruntime.Options
 	localASR               stationLocalASR
+	documents              stationDocumentTools
 	contactCursor          cipher.AEAD
 }
 
@@ -105,7 +106,7 @@ type stationWechatRun struct {
 	done   chan struct{}
 }
 
-func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts, localASR stationLocalASR) (apphost.Registry, *stationWechat, error) {
+func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts, localASR stationLocalASR, documents stationDocumentTools) (apphost.Registry, *stationWechat, error) {
 	entry, ok := registry.Lookup(wechatapp.ID)
 	native, supported := entry.Provider.(stationWechatNative)
 	if !ok || !supported || entry.Registration != "station-native" {
@@ -118,7 +119,7 @@ func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string,
 		dataDir: dataDir, workspaceRoot: workspaceRoot,
 		installation: entry.InstallationID, modelPersona: model.Persona, model: model.Client,
 		ctx: ctx, cancel: cancel, workers: map[string]*stationWechatWorker{}, done: make(chan struct{}),
-		artifacts: artifacts, shareOptions: shareOptions, localASR: localASR,
+		artifacts: artifacts, shareOptions: shareOptions, localASR: localASR, documents: documents,
 	}
 	var err error
 	host.contactCursor, err = newStationContactCursor()
@@ -757,7 +758,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 		}
 		return policy.GroupRules[in.Thread].Note, true
 	}
-	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.block.Load}
+	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.block.Load, documents: s.documents}
 	attachment.shareHost = func() (*stationShareHost, error) { return s.shareHost(station, native.Account()) }
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}
@@ -795,6 +796,12 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 		MediaResumeResult: station.mediaResumeResult,
 		StateDir:          filepath.Join(dir, "queue"), AllowedThreads: threads, GroupRules: rules,
 		Options: &options, Prefix: "/ai ", ScopedAnalyzer: stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},
+		OnDemandAttachment: func(m linuxnative.Message) bool {
+			kind, _ := stationAttachmentKind(m)
+			grant := policy.AttachmentGrants[m.ThreadID]
+			stamp, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
+			return kind == "file" && m.Direction == "incoming" && !run.block.Load() && m.AccountID == native.Account() && !grant.IsZero() && err == nil && !stamp.Before(grant)
+		},
 		PreferredGroupShare: func(m linuxnative.Message) bool {
 			return !run.block.Load() && policy.groupShareCandidate(native.Account(), m)
 		},

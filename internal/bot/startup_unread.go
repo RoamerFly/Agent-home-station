@@ -156,6 +156,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		}
 		working := m
 		isMedia := m.Type == 3 || m.Type == 34 || m.Type == 43 || m.Type == 47 || m.Type == 49 && !m.IsQuotedText()
+		onDemandAttachment := isMedia && w.config.OnDemandAttachment != nil && w.config.OnDemandAttachment(m)
 		body := messageSummary(m)
 		original := ""
 		if m.Type == 1 {
@@ -203,7 +204,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		}
 		canAnalyze := isMedia && w.mediaAnalyzer(ctx, m) != nil
 		needsGroupRead := strings.HasSuffix(thread, "@chatroom") && (!w.hasScopedMedia(m) || canAnalyze)
-		if isMedia && !hostedPreferred && w.readMediaBeforeDecision(m) && (needsGroupRead || eligible && w.observationAllowed(m) && canAnalyze) {
+		if isMedia && !onDemandAttachment && !hostedPreferred && w.readMediaBeforeDecision(m) && (needsGroupRead || eligible && w.observationAllowed(m) && canAnalyze) {
 			mediaIDs = append(mediaIDs, m.ID)
 		}
 		observed := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: m.SenderID, TraceID: m.ID, Text: body, MessageTime: m.CreatedAt, OriginalText: &original}

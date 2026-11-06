@@ -332,6 +332,7 @@ type stationAttachmentTools struct {
 	work              *stationWorkAccess
 	fetchVideo        stationVideoFetch
 	shareHost         func() (*stationShareHost, error)
+	documents         stationDocumentTools
 }
 
 func (*stationAttachmentTools) AutonomousActions() bool { return true }
@@ -387,6 +388,9 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	if (stationImageRef(t.trace.Source) || stationImageRef(t.trace.QuotedSource)) && t.imageObservationAvailable(ctx, t.trace.Account) {
 		tools = append(tools, wechatapp.StationImageObservationTool())
 	}
+	if t.documents.available != nil && len(t.documentRefs()) != 0 && t.documents.available(ctx, "") {
+		tools = append(tools, wechatapp.StationDocumentInspectionTool())
+	}
 	if stationAttachmentRef(t.trace.Source) || stationAttachmentRef(t.trace.QuotedSource) {
 		tools = append(tools, wechatapp.StationAttachmentTool())
 		if t.replyAllowed(t.trace) {
@@ -427,6 +431,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == "wechat_image_observe" {
 		return t.observeImage(ctx, raw)
+	}
+	if name == "wechat_document_inspect" {
+		return t.inspectDocument(ctx, raw)
 	}
 	if name == "wechat_read" {
 		return t.readHistory(ctx, raw)

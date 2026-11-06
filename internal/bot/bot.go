@@ -45,6 +45,11 @@ type Config struct {
 	// host owns both the authorization and the exact card shape that may cause
 	// an automatic summary.
 	PreferredGroupShare func(linuxnative.Message) bool
+	// OnDemandAttachment marks an ordinary inbound attachment that the host can
+	// expose through a tool when the model asks for it. Such files are normal
+	// conversation inputs, but they must not be forced through the legacy
+	// generic media analyzer before the model has decided that reading is useful.
+	OnDemandAttachment func(linuxnative.Message) bool
 	// ReadPreferredGroupShare reads a host-authorized share only after its
 	// source has been persisted and bound to input. The returned text must be
 	// backed by firsthand observation evidence; a card title alone is never
@@ -320,8 +325,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	working := quotedPlainBody(message)
 	isMedia := message.Type == 34 || message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && !message.IsQuotedText()
 	preferredShare := w.preferredGroupShare(message)
+	onDemandAttachment := isMedia && w.config.OnDemandAttachment != nil && w.config.OnDemandAttachment(message)
 	canAnalyze := isMedia && w.mediaAnalyzer(ctx, message) != nil
-	if isMedia && w.config.Options != nil && (canAnalyze || preferredShare && w.config.ReadPreferredGroupShare != nil || w.addressed(message)) {
+	if isMedia && w.config.Options != nil && (onDemandAttachment || canAnalyze || preferredShare && w.config.ReadPreferredGroupShare != nil || w.addressed(message)) {
 		working.Type = 1
 		working.Body = "收到了一张图片，请结合内容决定是否回应。"
 		if message.Type == 47 {
@@ -386,7 +392,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
 	readMedia := isMedia && w.readMediaBeforeDecision(message)
-	if canAnalyze && w.config.Options != nil {
+	if canAnalyze && !onDemandAttachment && w.config.Options != nil {
 		if !w.observationAllowed(message) {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
 			return
@@ -477,7 +483,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation != nil {
 			var analysis *linuxnative.Message
-			if input.GroupShareSummary || readMedia && canAnalyze {
+			if input.GroupShareSummary || readMedia && canAnalyze && !onDemandAttachment {
 				copy := message
 				analysis = &copy
 			}
