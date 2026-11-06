@@ -91,11 +91,12 @@ type localChatService struct {
 	wechat       *stationWechat
 	observations *apphost.Observer
 	applications apphost.Registry
-	// live is deliberately local-station owned. It is created only after the
-	// owner has prepared an identity and never receives an output adapter from
-	// this path, so merely opening the management page cannot start a stream.
-	live     *apphost.LiveController
-	liveFish string
+	// The output registration belongs to the host and cannot be set by a
+	// browser request or connected account.
+	live        *apphost.LiveController
+	liveFish    string
+	liveOutput  apphost.LiveOutput
+	liveEncoder string
 	// liveStopDone is created only when shutdown has claimed an existing live
 	// controller. It lets Close wait for the same bounded stop operation rather
 	// than issue a second remote stop while the first is in flight.

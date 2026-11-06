@@ -29,6 +29,7 @@ var (
 )
 
 const liveRemoteTimeout = 5 * time.Second
+const liveStartTimeout = 20 * time.Second
 
 type LiveGrant struct {
 	Allowed     bool
@@ -354,7 +355,7 @@ func (l *LiveController) Start(ctx context.Context, owner string, in LiveStart) 
 		s, err = ownLive(s, owner, err)
 		return l.view(s), err
 	}
-	startCtx, cancel := context.WithTimeout(ctx, min(liveRemoteTimeout, deadline.Sub(l.now())))
+	startCtx, cancel := context.WithTimeout(ctx, min(liveStartTimeout, deadline.Sub(l.now())))
 	l.startID, l.cancel = s.Reference.ID, cancel
 	l.managed = s.Reference
 	if l.timer != nil {

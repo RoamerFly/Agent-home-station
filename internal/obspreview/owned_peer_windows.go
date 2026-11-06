@@ -150,6 +150,43 @@ func verifyEncoderPublisher(ctx context.Context, conn *net.TCPConn, pid uint32) 
 	return ErrStreamEndpoint
 }
 
+// verifyEncoderHasNoTCPListeners is the additional admission rule for a
+// portable encoder with no host-owned WebSocket endpoint. A normal OBS
+// control process deliberately listens on loopback and must not use this
+// check. The portable runtime has no reason to listen at all; failing closed
+// prevents a bundled configuration from exposing an accidental control or
+// service port while it publishes to the host relay.
+func verifyEncoderHasNoTCPListeners(ctx context.Context, pid uint32) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil || pid == 0 {
+		return ErrStreamEndpoint
+	}
+	rows, err := obsTCPRows(obsAFInet)
+	if err != nil {
+		return ErrStreamEndpoint
+	}
+	for _, row := range rows {
+		if row.State == obsTCPStateListen && row.OwnerPID == pid {
+			return ErrStreamEndpoint
+		}
+	}
+	rows6, err := obsTCP6Rows()
+	if err != nil {
+		return ErrStreamEndpoint
+	}
+	for _, row := range rows6 {
+		if row.State == obsTCPStateListen && row.OwnerPID == pid {
+			return ErrStreamEndpoint
+		}
+	}
+	if ctx.Err() != nil {
+		return ErrStreamEndpoint
+	}
+	return nil
+}
+
 func hostPort(port int) uint32 {
 	value := uint16(port)
 	return uint32(value<<8 | value>>8)

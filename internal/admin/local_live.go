@@ -53,10 +53,7 @@ func (h *localChatService) liveController() (*apphost.LiveController, string, er
 		h.mu.Unlock()
 		return live, identity.LocalOwner.ID, nil
 	}
-	// A nil output is intentional until a separately verified local encoder is
-	// installed. It makes Targets empty and Start unavailable even if an app
-	// advertises a provider.
-	live := apphost.NewLiveController(h.applications, host.store, nil)
+	live := apphost.NewLiveController(h.applications, host.store, h.liveOutput)
 	h.live, h.liveFish = live, identity.FishID
 	h.mu.Unlock()
 	go live.Run(h.ctx)
@@ -81,7 +78,7 @@ func (h *localChatService) liveView(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	live, owner, err := h.liveController()
 	if err != nil {
-		respond(w, http.StatusOK, map[string]any{"targets": []apphost.LiveTarget{}, "active": nil, "available": false, "reason": localLiveUnavailable})
+		respond(w, http.StatusOK, map[string]any{"targets": []apphost.LiveTarget{}, "active": nil, "available": false, "encoder": h.liveEncoder, "reason": localLiveUnavailable})
 		return
 	}
 	var active any
@@ -93,7 +90,7 @@ func (h *localChatService) liveView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targets := live.Targets(r.Context())
-	respond(w, http.StatusOK, map[string]any{"targets": targets, "active": active, "available": len(targets) > 0, "reason": liveAvailabilityReason(targets)})
+	respond(w, http.StatusOK, map[string]any{"targets": targets, "active": active, "available": len(targets) > 0, "encoder": h.liveEncoder, "reason": liveAvailabilityReason(targets, h.liveEncoder)})
 }
 
 func (h *localChatService) liveAction(w http.ResponseWriter, r *http.Request) {
@@ -149,11 +146,18 @@ func (h *localChatService) liveAction(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, out)
 }
 
-func liveAvailabilityReason(targets []apphost.LiveTarget) string {
-	if len(targets) == 0 {
+func liveAvailabilityReason(targets []apphost.LiveTarget, encoder string) string {
+	if len(targets) != 0 {
+		return "可选择已验证的直播目标"
+	}
+	switch encoder {
+	case "ready":
+		return "专用 OBS 已通过安装校验，等待获准的直播应用"
+	case "invalid":
+		return "专用 OBS 安装校验失败，请检查本机安装"
+	default:
 		return localLiveUnavailable
 	}
-	return "可选择已验证的直播目标"
 }
 
 func localLiveFailure(err error) (int, string) {

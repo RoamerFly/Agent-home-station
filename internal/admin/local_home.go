@@ -119,8 +119,8 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	}
 	chat.applications = registry
 	// Recover a durable live ledger at desktop boot for an already prepared
-	// local owner. This only reconciles/stops an interrupted old session; it
-	// cannot create a new broadcast because no output adapter is registered.
+	// local owner. Recovery reconciles and stops an interrupted old session.
+	chat.liveOutput, chat.liveEncoder = stationLiveOutput(dir, workspaceRoot)
 	chat.startLiveRecovery()
 	chat.observations = apphost.NewObserver(registry, filepath.Join(dir, "app-observations"))
 	s.appRoutes(mux, registry)

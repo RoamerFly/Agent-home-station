@@ -50,6 +50,8 @@ type EncoderProcess struct {
 	pid      uint32
 	stopping bool
 	stream   *OwnedStream
+	desktop  *ownedDesktop
+	portable bool
 }
 
 // LaunchEncoder attaches the child to its private job at creation time, before
@@ -77,10 +79,47 @@ func LaunchEncoder(ctx context.Context, config EncoderLaunch) (*EncoderProcess, 
 	}
 	defer directory.Close()
 
-	if err := p.launch(ctx, config); err != nil {
+	if err := p.launch(ctx, config, ""); err != nil {
 		return nil, err
 	}
 	p.stream = stream
+	return p, nil
+}
+
+// LaunchPortableEncoderProcess starts an independently configured encoder on a
+// private Windows desktop. Unlike LaunchEncoder it deliberately has no OBS
+// WebSocket control endpoint: the supplied runtime configuration owns stream
+// start and output settings. Its window can therefore never appear on the
+// user's interactive desktop.
+func LaunchPortableEncoderProcess(ctx context.Context, config EncoderLaunch) (*EncoderProcess, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if config.ControlPort != 0 || config.ControlPassword != "" {
+		return nil, fmt.Errorf("%w: portable encoder cannot expose websocket control", ErrEncoderLaunch)
+	}
+	executable, err := verifyEncoderExecutable(config.Executable, config.SHA256)
+	if err != nil {
+		return nil, err
+	}
+	defer executable.Close()
+	if !localEncoderPath(config.Directory) {
+		return nil, fmt.Errorf("%w: invalid working directory", ErrEncoderLaunch)
+	}
+	directory, err := workspacefs.OpenPath(config.Directory)
+	if err != nil {
+		return nil, fmt.Errorf("%w: open working directory", ErrEncoderLaunch)
+	}
+	defer directory.Close()
+	desktop, err := createOwnedDesktop()
+	if err != nil {
+		return nil, err
+	}
+	p := &EncoderProcess{desktop: desktop, portable: true}
+	if err := p.launch(ctx, config, desktop.name); err != nil {
+		_ = desktop.Close()
+		return nil, err
+	}
 	return p, nil
 }
 
@@ -130,7 +169,7 @@ func verifyEncoderExecutable(path, digest string) (*os.File, error) {
 	return file, nil
 }
 
-func (p *EncoderProcess) launch(ctx context.Context, config EncoderLaunch) error {
+func (p *EncoderProcess) launch(ctx context.Context, config EncoderLaunch, desktopName string) error {
 	app, err := windows.UTF16PtrFromString(config.Executable)
 	if err != nil {
 		return fmt.Errorf("%w: invalid executable path", ErrEncoderLaunch)
@@ -172,6 +211,13 @@ func (p *EncoderProcess) launch(ctx context.Context, config EncoderLaunch) error
 	startup := windows.StartupInfoEx{
 		StartupInfo:             windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfoEx{})), Flags: windows.STARTF_USESHOWWINDOW, ShowWindow: windows.SW_HIDE},
 		ProcThreadAttributeList: attributes.List(),
+	}
+	if desktopName != "" {
+		desktop, err := windows.UTF16PtrFromString(desktopName)
+		if err != nil {
+			return fmt.Errorf("%w: invalid private desktop", ErrEncoderLaunch)
+		}
+		startup.Desktop = desktop
 	}
 	var info windows.ProcessInformation
 	if err := ctx.Err(); err != nil {
@@ -247,6 +293,13 @@ func (p *EncoderProcess) VerifyPublisher(ctx context.Context, socket *net.TCPCon
 	if p.stopping || !p.running() {
 		return ErrStreamEndpoint
 	}
+	// A portable process has no host-owned WebSocket control channel. It must
+	// not expose any TCP listener before the host accepts it as an RTMP source.
+	// The controlled-WebSocket strategy intentionally retains its listener and
+	// therefore bypasses this portable-only rule.
+	if p.portable && verifyEncoderHasNoTCPListeners(ctx, p.pid) != nil {
+		return ErrStreamEndpoint
+	}
 	if err := verifyEncoderPublisher(ctx, socket, p.pid); err != nil {
 		return err
 	}
@@ -272,7 +325,9 @@ type encoderJobAccounting struct {
 // Stop prevents subsequent control connections and stops the entire owned
 // job. A timeout preserves the handles so the caller can confirm again.
 func (p *EncoderProcess) Stop(ctx context.Context) error {
-	p.stream.fenceStart()
+	if p.stream != nil {
+		p.stream.fenceStart()
+	}
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 	p.mu.Lock()
@@ -303,6 +358,9 @@ func (p *EncoderProcess) Stop(ctx context.Context) error {
 				return fmt.Errorf("close owned encoder job: %w", err)
 			}
 			p.job = 0
+			if err := p.desktop.Close(); err != nil {
+				return err
+			}
 			return nil
 		}
 		select {

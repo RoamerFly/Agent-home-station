@@ -99,7 +99,10 @@ func (l *LiveController) dispatch(ctx context.Context, s liveState, provider Liv
 	if err != nil || current.State != "starting" || ctx.Err() != nil {
 		return "start-interrupted", LiveReceipt{}
 	}
-	result, err := provider.StartLive(ctx, s.Reference)
+	platformCtx, cancel := context.WithTimeout(ctx, liveRemoteTimeout)
+	result, err := provider.StartLive(platformCtx, s.Reference)
+	platformErr := platformCtx.Err()
+	cancel()
 	receipt := result.Receipt
 	if err != nil || !validLiveReceipt(s, receipt) || receipt.State == "unknown" {
 		return "start-unconfirmed", LiveReceipt{}
@@ -107,7 +110,7 @@ func (l *LiveController) dispatch(ctx context.Context, s liveState, provider Liv
 	if receipt.State == "ended" {
 		return "platform-ended", receipt
 	}
-	if ctx.Err() != nil || !l.now().Before(s.Reference.Deadline) {
+	if platformErr != nil || ctx.Err() != nil || !l.now().Before(s.Reference.Deadline) {
 		return "start-interrupted", receipt
 	}
 	if output, ok := l.output.(liveStreamOutput); ok {
