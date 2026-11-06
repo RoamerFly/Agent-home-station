@@ -148,6 +148,25 @@ func TestCaptureLegacyWechatSnapshotRejectsUnsafeSources(t *testing.T) {
 		}
 	})
 
+	t.Run("unrecognized_stop_mode", func(t *testing.T) {
+		path := filepath.Join(legacy, legacyStopMarkerFile)
+		raw := mustReadSnapshotFixture(t, path)
+		defer mustWriteSnapshotFixture(t, path, raw)
+		var marker legacyStopMarker
+		if err := json.Unmarshal(raw, &marker); err != nil {
+			t.Fatal(err)
+		}
+		marker.Mode = "unrecognized"
+		changed, err := json.Marshal(marker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustWriteSnapshotFixture(t, path, changed)
+		if _, err := CaptureLegacyWechatSnapshot(ctx, LegacyWechatSnapshotRequest{LegacyDataDir: legacy, SnapshotDir: filepath.Join(base, "unknown-mode"), PrimaryAccount: fixture.primary}); err == nil {
+			t.Fatal("snapshot accepted an unsupported stop mode")
+		}
+	})
+
 	t.Run("sqlite_wal", func(t *testing.T) {
 		wal := filepath.Join(legacy, "admin", "companion", "memory.sqlite-wal")
 		mustWriteSnapshotFixture(t, wal, []byte("synthetic WAL sidecar"))

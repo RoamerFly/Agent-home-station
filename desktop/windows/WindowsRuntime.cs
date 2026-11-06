@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
@@ -55,11 +56,11 @@ namespace WechatAgent.Desktop {
                 return gate;
             } catch { gate.Dispose(); throw; }
         }
-        // This marker is deliberately private to the old desktop data root.  It
-        // is evidence that this desktop, rather than an arbitrary process on the
-        // machine, cleanly stopped the owned legacy pair before a cutover.
-        internal static void WriteLegacyCutoverState(string root, string accountId, string state, string epoch, string nativeServerId) {
+        // The marker belongs to the desktop that controlled the legacy pair
+        // or held the same native ownership lease without starting services.
+        internal static void WriteLegacyCutoverState(string root, string accountId, string state, string epoch, string nativeServerId, string mode = null) {
             if (state != "starting" && state != "stopped") throw new ArgumentException("切换状态无效。", "state");
+            if (mode != null && (mode != "offline_hold" || state != "stopped")) throw new ArgumentException("切换模式无效。", "mode");
             if (String.IsNullOrEmpty(accountId) || String.IsNullOrEmpty(epoch) || epoch.Length != 32 || !epoch.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
                 throw new ArgumentException("切换标识无效。", "epoch");
             var dataRoot = ComparablePath(root);
@@ -68,11 +69,13 @@ namespace WechatAgent.Desktop {
             if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidOperationException("旧桌面切换记录不能使用链接。");
             var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            var text = Deployment.Json.Serialize(new {
-                version = 2, state = state, epoch = epoch, account_id = accountId,
-                data_root = dataRoot, native_server_id = nativeServerId ?? "",
-                at = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
-            });
+            var record = new Dictionary<string, object> {
+                { "version", 2 }, { "state", state }, { "epoch", epoch }, { "account_id", accountId },
+                { "data_root", dataRoot }, { "native_server_id", nativeServerId ?? "" },
+                { "at", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) }
+            };
+            if (mode != null) record.Add("mode", mode);
+            var text = Deployment.Json.Serialize(record);
             try {
                 var bytes = new UTF8Encoding(false).GetBytes(text);
                 using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough)) {
@@ -84,6 +87,110 @@ namespace WechatAgent.Desktop {
             } finally {
                 if (File.Exists(temp)) File.Delete(temp);
             }
+        }
+        internal static async Task PrepareOfflineCutover(Deployment d, CancellationToken cancel) {
+            if (!d.Windows) throw new InvalidOperationException("离线交接只适用于旧 Windows 原生微信部署。");
+            cancel.ThrowIfCancellationRequested();
+            var root = ComparablePath(d.Root);
+            var drive = Path.GetPathRoot(root);
+            if (drive == null || drive.Length != 3 || new DriveInfo(drive).DriveType != DriveType.Fixed || !Directory.Exists(root))
+                throw new InvalidOperationException("离线交接需要已存在的本机固定卷数据目录。");
+            NoLinks(root);
+            var user = WindowsIdentity.GetCurrent().User;
+            if (!user.Equals(Directory.GetAccessControl(root, AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier))))
+                throw new InvalidOperationException("旧微信数据目录不属于当前用户。");
+            foreach (var name in new[] { "owner.lock", "registry.sqlite" }) {
+                var path = Path.Combine(root, name);
+                if (!File.Exists(path) || (File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.Device | FileAttributes.ReparsePoint)) != 0)
+                    throw new InvalidOperationException("离线交接需要已有且非链接的原生锁和注册库。");
+            }
+            VerifyNativeBundle(d.NativeExe);
+            EnsureLegacyPortsIdle(d);
+            var epoch = Guid.NewGuid().ToString("N");
+            using (BeginLegacyCutoverRun(root, d.Account, epoch)) {
+                var info = HiddenRunner.Info(d.NativeExe, new[] { "--data-dir", root, "--account", d.Account, "cutover-hold" });
+                info.WorkingDirectory = Path.GetDirectoryName(d.NativeExe);
+                OwnedProcess.ClearInheritedEnvironment(info, true);
+                using (var child = new Process { StartInfo = info })
+                using (var job = new ProcessJob()) {
+                    cancel.ThrowIfCancellationRequested();
+                    child.Start();
+                    try { job.Assign(child); }
+                    catch { if (!child.HasExited) child.Kill(); throw; }
+                    var stderr = child.StandardError.BaseStream.CopyToAsync(Stream.Null);
+                    var server = await ReadOfflineNativeReady(child, cancel).ConfigureAwait(false);
+                    cancel.ThrowIfCancellationRequested();
+                    if (child.HasExited) throw new InvalidOperationException("原生离线占用已提前退出。");
+                    child.StandardInput.WriteLine("stop");
+                    child.StandardInput.Flush();
+                    child.StandardInput.Close();
+                    var deadline = Task.Delay(TimeSpan.FromSeconds(30), cancel);
+                    const string stopTimeout = "原生离线占用未按时结束，未签发停机凭证。";
+                    var outputEnd = child.StandardOutput.ReadAsync(new char[1], 0, 1);
+                    await WaitOfflinePipe(outputEnd, deadline, cancel, stopTimeout).ConfigureAwait(false);
+                    if (await outputEnd.ConfigureAwait(false) != 0) throw new InvalidOperationException("原生离线占用返回了多余的状态输出。");
+                    while (!child.HasExited) {
+                        await WaitOfflinePipe(Task.Delay(50, cancel), deadline, cancel, stopTimeout).ConfigureAwait(false);
+                    }
+                    await WaitOfflinePipe(stderr, deadline, cancel, stopTimeout).ConfigureAwait(false);
+                    if (child.ExitCode != 0) throw new InvalidOperationException("原生离线占用未正常结束，未签发停机凭证。");
+                    cancel.ThrowIfCancellationRequested();
+                    EnsureLegacyPortsIdle(d);
+                    WriteLegacyCutoverState(root, d.Account, "stopped", epoch, server, "offline_hold");
+                }
+            }
+        }
+        static void EnsureLegacyPortsIdle(Deployment d) {
+            var adminPort = new Uri(d.Url).Port;
+            var nativePort = new Uri(d.NativeUrl).Port;
+            if (IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(x => x.Port == adminPort || x.Port == nativePort))
+                throw new InvalidOperationException("旧部署的管理或原生端口仍有监听。请先正常退出旧桌面。");
+        }
+        static async Task WaitOfflinePipe(Task operation, Task deadline, CancellationToken cancel, string timeout) {
+            if (await Task.WhenAny(operation, deadline).ConfigureAwait(false) != operation) {
+                cancel.ThrowIfCancellationRequested();
+                throw new InvalidOperationException(timeout);
+            }
+            await operation.ConfigureAwait(false);
+        }
+        static async Task<string> ReadOfflineNativeReady(Process child, CancellationToken cancel) {
+            var deadline = Task.Delay(TimeSpan.FromSeconds(30), cancel);
+            var line = new StringBuilder();
+            var buffer = new char[1];
+            while (line.Length < 4096) {
+                var read = child.StandardOutput.ReadAsync(buffer, 0, buffer.Length);
+                await WaitOfflinePipe(read, deadline, cancel, "原生离线占用未按时就绪。请检查原生运行包、数据锁和数据库状态。").ConfigureAwait(false);
+                if (await read.ConfigureAwait(false) == 0)
+                    throw new InvalidOperationException("原生离线占用未就绪。请检查原生运行包、数据锁和数据库状态。");
+                if (buffer[0] == '\n') return ValidateOfflineNativeReady(line.ToString(), child.Id);
+                line.Append(buffer[0]);
+            }
+            throw new InvalidOperationException("原生离线占用的状态输出超长。");
+        }
+        static string ValidateOfflineNativeReady(string line, int pid) {
+            Dictionary<string, object> status;
+            try { status = Deployment.Json.Deserialize<Dictionary<string, object>>(line); }
+            catch (ArgumentException) { throw new InvalidOperationException("原生离线占用返回了无效的状态输出。"); }
+            catch (InvalidOperationException) { throw new InvalidOperationException("原生离线占用返回了无效的状态输出。"); }
+            object state, mode, dataset;
+            Guid nativeId;
+            if (status == null || !status.TryGetValue("state", out state) || (state as string) != "ready" ||
+                !status.TryGetValue("mode", out mode) || (mode as string) != "cutover_hold" ||
+                !status.TryGetValue("serverId", out dataset) || !Guid.TryParseExact(dataset as string, "D", out nativeId) || nativeId == Guid.Empty ||
+                OfflineCount(status, "pid") != pid || OfflineCount(status, "accountCount") < 1)
+                throw new InvalidOperationException("原生离线占用的进程、模式或数据集身份无法核验。");
+            var counts = new[] { "pendingText", "pendingMedia", "uncertainText", "uncertainMedia" }.Select(key => OfflineCount(status, key)).ToArray();
+            if (counts.Any(value => value != 0))
+                throw new InvalidOperationException("原生账本仍有排队或结果未定的投递。请先按原任务核对，未签发停机凭证。");
+            return (string)dataset;
+        }
+        static long OfflineCount(Dictionary<string, object> status, string key) {
+            object value;
+            if (status.TryGetValue(key, out value) && (value is int || value is long)) {
+                var count = Convert.ToInt64(value, CultureInfo.InvariantCulture);
+                if (count >= 0) return count;
+            }
+            throw new InvalidOperationException("原生离线占用的状态缺少有效的整数计数。");
         }
         internal void CheckAlive() {
             if (native == null || !native.Alive || web == null || !web.Alive) throw new InvalidOperationException("Windows 服务提前退出，请查看 data/logs；没有重放发送或清空数据。");
@@ -343,10 +450,14 @@ namespace WechatAgent.Desktop {
             output = Pump(child.StandardOutput); error = Pump(child.StandardError);
         }
         async Task Pump(StreamReader stream) { string line; while ((line = await stream.ReadLineAsync()) != null) lock (gate) { log.WriteLine(DateTime.UtcNow.ToString("o") + " " + line); log.Flush(); } }
+        internal static void ClearInheritedEnvironment(ProcessStartInfo info, bool clearStationSecrets) {
+            foreach (var name in info.EnvironmentVariables.Keys.Cast<string>().Where(x =>
+                x.StartsWith("WECHAT_", StringComparison.OrdinalIgnoreCase) || x.StartsWith("XDG_", StringComparison.OrdinalIgnoreCase) ||
+                (clearStationSecrets && x.StartsWith("AHS_", StringComparison.OrdinalIgnoreCase))).ToArray()) info.EnvironmentVariables.Remove(name);
+        }
         internal static OwnedProcess Start(string exe, string[] args, string workspace, Dictionary<string, string> environment, string logPath, ProcessJob job, bool clearStationSecrets = false) {
             var info = HiddenRunner.Info(exe, args); info.WorkingDirectory = workspace;
-            foreach (var name in info.EnvironmentVariables.Keys.Cast<string>().Where(x => x.StartsWith("WECHAT_", StringComparison.OrdinalIgnoreCase) || x.StartsWith("XDG_", StringComparison.OrdinalIgnoreCase)).ToArray()) info.EnvironmentVariables.Remove(name);
-            if (clearStationSecrets) foreach (var name in info.EnvironmentVariables.Keys.Cast<string>().Where(x => x.StartsWith("AHS_", StringComparison.OrdinalIgnoreCase)).ToArray()) info.EnvironmentVariables.Remove(name);
+            ClearInheritedEnvironment(info, clearStationSecrets);
             if (environment != null) foreach (var pair in environment) info.EnvironmentVariables[pair.Key] = pair.Value;
             var log = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.Read));
             var child = new Process { StartInfo = info };

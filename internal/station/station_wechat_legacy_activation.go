@@ -301,7 +301,7 @@ func (s *stationWechat) legacyHandover(a legacyActivation, check handoverCheck) 
 		return "旧宿主停机记录已变化，请重新核对"
 	}
 	var marker legacyStopMarker
-	if json.Unmarshal(raw, &marker) != nil || marker.Version != 2 || marker.State != "stopped" ||
+	if json.Unmarshal(raw, &marker) != nil || marker.Version != 2 || marker.State != "stopped" || !marker.validMode() ||
 		marker.AccountID != a.Connection.AccountID || !sameCutoverPath(marker.DataRoot, a.OldRoot) {
 		return "旧桌面不支持互斥交接，请用支持交接的版本正常停止并更新快照"
 	}

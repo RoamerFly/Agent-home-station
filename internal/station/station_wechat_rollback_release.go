@@ -183,7 +183,7 @@ func releaseLegacyClaim(ctx context.Context, req LegacyWechatReleaseRequest, sta
 	oldStop, stopErr := readLegacyImportFile(oldRoot, legacyStopMarkerFile, 16<<10)
 	var oldMarker legacyStopMarker
 	if stopErr != nil || hexDigest(oldStop) != proof.StopDigest || json.Unmarshal(oldStop, &oldMarker) != nil ||
-		oldMarker.Version != 2 || oldMarker.State != "stopped" || !validRollbackEpoch(oldMarker.Epoch) || oldMarker.At.IsZero() ||
+		oldMarker.Version != 2 || oldMarker.State != "stopped" || !oldMarker.validMode() || !validRollbackEpoch(oldMarker.Epoch) || oldMarker.At.IsZero() ||
 		oldMarker.At.After(time.Now().Add(time.Minute)) || !sameCutoverPath(oldMarker.DataRoot, proof.OldRoot) ||
 		oldMarker.AccountID != proof.Connection.AccountID || !identity.ValidPathID(oldMarker.NativeServerID) ||
 		oldServer != "" && oldMarker.NativeServerID != oldServer {

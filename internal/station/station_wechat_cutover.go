@@ -29,11 +29,16 @@ type legacyCutover struct {
 type legacyStopMarker struct {
 	Version        int       `json:"version"`
 	State          string    `json:"state"`
+	Mode           string    `json:"mode,omitempty"`
 	Epoch          string    `json:"epoch"`
 	AccountID      string    `json:"account_id"`
 	DataRoot       string    `json:"data_root"`
 	NativeServerID string    `json:"native_server_id"`
 	At             time.Time `json:"at"`
+}
+
+func (m legacyStopMarker) validMode() bool {
+	return m.Mode == "" || m.Version == 2 && m.Mode == "offline_hold"
 }
 
 func cutoverPath(path string) string {
@@ -69,7 +74,7 @@ func (s *stationWechat) legacyHostEvidence(snapshot *os.Root, source legacyImpor
 	copied, err := source.guard.readFile(snapshot, legacyStopMarkerFile, 16<<10)
 	var marker legacyStopMarker
 	if err != nil || json.Unmarshal(copied, &marker) != nil || (marker.Version != 1 && marker.Version != 2) ||
-		marker.State != "stopped" || len(marker.Epoch) != 32 || strings.Trim(marker.Epoch, "0123456789abcdef") != "" ||
+		marker.State != "stopped" || !marker.validMode() || len(marker.Epoch) != 32 || strings.Trim(marker.Epoch, "0123456789abcdef") != "" ||
 		marker.AccountID != source.Primary || !sameCutoverPath(marker.DataRoot, path) ||
 		!identity.ValidPathID(marker.NativeServerID) || oldServer != "" && marker.NativeServerID != oldServer ||
 		marker.At.IsZero() || marker.At.After(time.Now().Add(time.Minute)) {

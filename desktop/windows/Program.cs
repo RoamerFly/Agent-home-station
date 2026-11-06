@@ -29,6 +29,10 @@ namespace WechatAgent.Desktop {
         static extern int SetCurrentProcessExplicitAppUserModelID(string identity);
         [STAThread]
         static void Main(string[] args) {
+            if (Array.IndexOf(args, "--prepare-legacy-cutover") >= 0) {
+                Environment.ExitCode = PrepareLegacyCutover(args);
+                return;
+            }
             if (args.Length == 1 && (args[0] == "--start-services" || args[0] == "--stop-services" || args[0] == "--exit-services")) {
                 Environment.ExitCode = DesktopInstance.RequestCommand(args[0].Substring(2), InstanceName()) ? 0 : 1;
                 return;
@@ -47,6 +51,32 @@ namespace WechatAgent.Desktop {
                     Run(d, instance);
                 }
             } catch (Exception error) { MessageBox.Show(error.Message, "Agent-home-station · 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+        static int PrepareLegacyCutover(string[] args) {
+#if LOCAL_STATION
+            Console.Error.WriteLine("请使用旧微信桌面启动器执行此交接命令。");
+            return 1;
+#else
+            try {
+                if (args.Length != 3 || args[0] != "--prepare-legacy-cutover" || args[1] != "--workspace" || (Path.GetPathRoot(args[2]) ?? "").Length != 3)
+                    throw new ArgumentException("参数：--prepare-legacy-cutover --workspace <本机绝对项目目录>");
+                using (var instance = new DesktopInstance(DesktopInstance.Name)) {
+                    if (!instance.IsOwner) throw new InvalidOperationException("旧微信桌面仍在运行，请先正常停止。");
+                    var workspace = Path.GetFullPath(args[2]);
+                    WindowsRuntime.NoLinks(workspace);
+                    WindowsRuntime.NoLinks(Path.Combine(workspace, "secrets"));
+                    var config = Path.Combine(workspace, "secrets", "local-deployment.json");
+                    if (File.Exists(config) && (File.GetAttributes(config) & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidOperationException("部署配置不能使用重解析点。");
+                    WindowsRuntime.PrepareOfflineCutover(Deployment.Load(workspace), CancellationToken.None).GetAwaiter().GetResult();
+                    Console.WriteLine("{\"state\":\"stopped\",\"mode\":\"offline_hold\"}");
+                    return 0;
+                }
+            } catch (Exception error) {
+                Console.Error.WriteLine(error.Message);
+                return 1;
+            }
+#endif
         }
         static string InstanceName() { return LocalStationBuild ? DesktopInstance.LocalStationName : DesktopInstance.Name; }
         internal static void RegisterDependencies() {

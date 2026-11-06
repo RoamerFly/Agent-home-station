@@ -148,7 +148,7 @@ func planLegacyWechatSnapshot(ctx context.Context, source *os.Root, oldRoot, pri
 	plan := legacySnapshotPlan{manifest: legacySnapshotManifest{Version: 1, Primary: primary}, projected: map[string][]byte{}, source: map[string]string{}}
 	stop, err := readLegacyImportFile(source, legacyStopMarkerFile, 16<<10)
 	var marker legacyStopMarker
-	if err != nil || json.Unmarshal(stop, &marker) != nil || marker.Version != 2 || marker.State != "stopped" || marker.AccountID != primary ||
+	if err != nil || json.Unmarshal(stop, &marker) != nil || marker.Version != 2 || marker.State != "stopped" || !marker.validMode() || marker.AccountID != primary ||
 		!validRollbackEpoch(marker.Epoch) || !sameCutoverPath(oldRoot, marker.DataRoot) || !identity.ValidPathID(marker.NativeServerID) ||
 		marker.At.IsZero() || marker.At.After(time.Now().Add(time.Minute)) {
 		return plan, errors.New("缺少与主账号和原目录一致的第 2 版正常停机凭证")

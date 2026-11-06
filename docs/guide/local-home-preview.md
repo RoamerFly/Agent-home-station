@@ -334,6 +334,14 @@ Windows 桌面在启动站和原生端之前取得数据根运行锁，并写入
 
 新版 Windows 原生程序提供给桌面启动器使用的 `cutover-hold`。它持有与正常原生服务相同的数据锁，通过私有管道返回进程编号、数据集标识及文本和媒体队列计数，再等待启动器发出停止指令。它只读取已有的注册和控制库。遇到 SQLite 伴随日志、非本机固定卷、重解析点或账号不匹配时拒绝运行。可在合成数据上用 `Test-LegacyWechatNativeHold.ps1 -NativeExe <候选 wx.exe 绝对路径>` 核对该入口。它目前用于验证原生侧的排他占用，正式快照仍依赖完整的桌面交接流程。
 
+使用已构建的兼容旧启动器和带 `cutover-hold` 的原生程序时，在两端服务关闭后从 PowerShell 执行受控停机命令。部署清单中的 `native_sha256` 必须与实际使用的 `wx.exe` 一致。
+
+```powershell
+& 'C:\Legacy\WechatAgent.exe' --prepare-legacy-cutover --workspace 'C:\Legacy' | ConvertFrom-Json
+```
+
+命令取得桌面互斥和旧数据锁后，只启动持有原生锁的离线子进程。排队或结果未定的原生投递计数非零时停止流程，原记录保留。成功返回 `stopped` 和 `offline_hold`，可直接进入快照预演。旧 Agent 与管理端账本中原有的未知回执仍按原操作核对。若正常启动旧端，启动器会使本次停机凭证失效，快照前须重新核对。隔离演练使用 `Test-LegacyWechatControlledCutover.ps1`，需要旧启动器、原生程序和成长站服务程序候选。
+
 只替换旧桌面入口 `WechatAgent.exe`。沿用桌面快捷方式的工作区与参数，管理端、原生运行文件、登录和其他数据继续使用现有目录。用当前源码构建旧端候选，使用不同于正式安装的构建目录。
 
 ```powershell
