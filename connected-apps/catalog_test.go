@@ -254,23 +254,27 @@ func TestDouyinSourceDeclaresOnlyOfficialAppRoutes(t *testing.T) {
 		t.Fatalf("invalid isolated Douyin player declaration: %v", err)
 	}
 	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||
-		len(p.HTTPRoutes) != 11 ||
+		len(p.HTTPRoutes) != 12 ||
 		p.HTTPRoutes[0].Endpoint != "https://open.douyin.com/dy_open_api/v1/search/video/" ||
 		!reflect.DeepEqual(p.HTTPRoutes[0].Capabilities, []string{"observation.search"}) ||
 		p.HTTPRoutes[1].Endpoint != "https://open.douyin.com/api/douyin/v1/video/video_basic_info/" ||
 		!reflect.DeepEqual(p.HTTPRoutes[1].Capabilities, []string{"observation.own-video", "publication.video"}) ||
 		p.HTTPRoutes[2].Endpoint != "https://open.douyin.com/oauth/access_token/" ||
-		p.HTTPRoutes[3].Endpoint != "https://open.douyin.com/oauth/userinfo/" ||
+		p.HTTPRoutes[3].ID != "official-account-refresh" ||
+		p.HTTPRoutes[3].Endpoint != "https://open.douyin.com/oauth/refresh_token/" ||
+		p.HTTPRoutes[3].Credential != "" ||
+		p.HTTPRoutes[4].Endpoint != "https://open.douyin.com/oauth/userinfo/" ||
 		!reflect.DeepEqual(p.HTTPRoutes[2].Capabilities, []string{"account.authorization"}) ||
 		!reflect.DeepEqual(p.HTTPRoutes[3].Capabilities, []string{"account.authorization"}) ||
-		p.HTTPRoutes[4].Endpoint != "https://open.douyin.com/api/douyin/v1/video/get_iframe_by_video" ||
-		!reflect.DeepEqual(p.HTTPRoutes[4].Capabilities, []string{"observation.player-entry"}) || p.HTTPRoutes[4].Credential != "" ||
-		p.HTTPRoutes[5].Endpoint != "https://open.douyin.com/video/list/" ||
-		!reflect.DeepEqual(p.HTTPRoutes[5].Capabilities, []string{"observation.account-works"}) {
+		!reflect.DeepEqual(p.HTTPRoutes[4].Capabilities, []string{"account.authorization"}) ||
+		p.HTTPRoutes[5].Endpoint != "https://open.douyin.com/api/douyin/v1/video/get_iframe_by_video" ||
+		!reflect.DeepEqual(p.HTTPRoutes[5].Capabilities, []string{"observation.player-entry"}) || p.HTTPRoutes[5].Credential != "" ||
+		p.HTTPRoutes[6].Endpoint != "https://open.douyin.com/video/list/" ||
+		!reflect.DeepEqual(p.HTTPRoutes[6].Capabilities, []string{"observation.account-works"}) {
 		t.Fatalf("unexpected Douyin application routes: %+v", p.HTTPRoutes)
 	}
 	for i, suffix := range []string{"upload_video/", "init_video_part_upload/", "upload_video_part/", "complete_video_part_upload/", "create_video/"} {
-		route := p.HTTPRoutes[6+i]
+		route := p.HTTPRoutes[7+i]
 		if route.Endpoint != "https://open.douyin.com/api/douyin/v1/video/"+suffix ||
 			!reflect.DeepEqual(route.Capabilities, []string{"publication.video"}) || route.Credential != "" {
 			t.Fatalf("unexpected Douyin publication route: %+v", route)

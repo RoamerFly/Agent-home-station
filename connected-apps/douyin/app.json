@@ -116,7 +116,7 @@
   "files": {
     "adapter/account.go": "4a0d0826b14822908f2b44b96000584ceea35b48917a60ba4ffca79d9f8e84b4",
     "adapter/account_publish_test.go": "f34e67731c339aafb62dfbcee77db9330c0e725572e1512875618922dd1efa27",
-    "adapter/account_test.go": "57348fd4cc9b47240bbb500bcc847eca0437c4cdfe957ead7d2e4915d968dc32",
+    "adapter/account_test.go": "991ac6b3d87f4db197c9070da57de76b6eac68a6e12fe9eaff5a607f352c0264",
     "adapter/account_wire.go": "7d861f2cc218355e36ba212932dade0597f598562724edb7b2b510aaa6b84835",
     "adapter/account_wire_test.go": "2bc468a8142436f62f40ecd8b00fc68d05f41c7a46da9658ea89b8cb94b54167",
     "adapter/account_works.go": "05bb578605a348d42db82acaa12802d1917c36929c501af4335baa58d650a0c9",
