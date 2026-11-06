@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "kind": "station-official-read-observer",
+  "kind": "station-official-douyin-app",
   "host_entrypoint": "douyin-search",
   "connection": "search",
   "connection_authority": "host",
@@ -16,5 +16,11 @@
     "scope": "posting.behavior",
     "method": "POST",
     "config": "own-video.schema.json"
+  },
+  "account": {
+    "connection": "authorized-account",
+    "authentication": "host-only-user-oauth",
+    "scope": "user_info",
+    "owner_action": "web-authorization"
   }
 }

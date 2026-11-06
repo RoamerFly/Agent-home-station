@@ -1,10 +1,20 @@
-# 抖音 · 官方只读接入
+# 抖音 · 官方应用接入
 
 Windows 本地成长站可选择随包提供抖音应用。
 
 ```powershell
 ./scripts/Build-Desktop.ps1 -LocalStation -WithDouyinApp
 ```
+
+## 连接抖音账号
+
+先在抖音开放平台准备审核通过的网站应用，在授权设置中登记由你控制的 HTTPS 回调地址。Windows 站点只使用本机管理界面，回调网页应由你控制并保留地址栏中的查询参数，且避免将授权码记录到日志或转发到第三方。
+
+1. 打开「应用 → 抖音 → 网页授权」，填写应用 Client Key、Client Secret 和已登记的回调地址。
+2. 生成授权链接，在浏览器打开抖音官方授权页并扫码确认。在十分钟内把完整回跳地址贴回成长站。
+3. 成长站核对回跳、兑换授权码并确认账号身份，随后显示昵称和授权到期时间。到期后可重新授权，换账号之前先移除本机连接。
+
+此处只请求读取账号公开资料的 user_info。移除本机授权会清除本机令牌，需要在平台侧取消授权时，可从抖音的授权管理处理。关键词搜索和本人作品状态仍使用下方各自的授权。[抖音网页授权](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/sdk/web-app/web/permission/) · [获取用户公开信息](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/get-account-open-info)
 
 ## 官方视频搜索
 

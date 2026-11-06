@@ -1,0 +1,424 @@
+package adapter
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/url"
+	"os"
+	"path"
+	"slices"
+	"strings"
+	"time"
+	"unicode"
+
+	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/workspacefs"
+)
+
+const (
+	accountConnectionID  = "authorized-account"
+	accountFile          = "authorization.json"
+	accountScope         = "user_info"
+	accountOAuthLifetime = 10 * time.Minute
+)
+
+var (
+	ErrAccountInput    = errors.New("请核对抖音应用凭据与已登记的 HTTPS 回调地址")
+	ErrAccountCallback = errors.New("抖音授权回跳与本次请求不符、已用过或已过期")
+	ErrAccountScope    = errors.New("抖音账号未授予公开资料读取权限")
+	ErrAccountRevision = errors.New("抖音账号授权已变化，请刷新后重新操作")
+	ErrAccountIdentity = errors.New("这次授权对应另一个抖音应用或账号，请先解除现有连接")
+	ErrAccountExchange = errors.New("抖音授权码兑换失败，请重新发起授权")
+	ErrAccountProfile  = errors.New("抖音账号身份核验失败，请重新发起授权")
+)
+
+type AccountAuthorizationInput struct {
+	Action       string `json:"action"`
+	Revision     string `json:"revision"`
+	ClientKey    string `json:"client_key"`
+	ClientSecret string `json:"client_secret"`
+	RedirectURI  string `json:"redirect_uri"`
+	CallbackURL  string `json:"callback_url"`
+}
+
+type AccountAuthorizationView struct {
+	Configured bool   `json:"configured"`
+	Status     string `json:"status"`
+	Label      string `json:"label"`
+	ExpiresAt  string `json:"expires_at,omitempty"`
+	Revision   string `json:"revision"`
+}
+
+type accountOAuthStart struct {
+	AuthorizeURL string    `json:"authorize_url"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+type accountAuthorization struct {
+	SchemaVersion int       `json:"schema_version"`
+	Revision      string    `json:"revision"`
+	ClientKey     string    `json:"client_key,omitempty"`
+	OpenID        string    `json:"open_id,omitempty"`
+	AccessToken   string    `json:"access_token,omitempty"`
+	Label         string    `json:"label,omitempty"`
+	ExpiresAt     time.Time `json:"expires_at,omitzero"`
+}
+
+type accountAttempt struct {
+	binding  string
+	state    string
+	revision string
+	settings OAuthSettings
+	redirect *url.URL
+	expires  time.Time
+	consumed bool
+	timer    *time.Timer
+}
+
+func (p *SearchApp) AccountAuthorization() (AccountAuthorizationView, error) {
+	p.accountMu.Lock()
+	defer p.accountMu.Unlock()
+	record, err := p.readAccount()
+	return p.accountView(record), err
+}
+
+func (p *SearchApp) accountView(record accountAuthorization) AccountAuthorizationView {
+	view := AccountAuthorizationView{Revision: record.Revision, Status: "unconfigured"}
+	if record.AccessToken == "" {
+		return view
+	}
+	view.Configured = true
+	view.Label = record.Label
+	view.ExpiresAt = record.ExpiresAt.UTC().Format(time.RFC3339)
+	view.Status = "ready"
+	if !p.nowUTC().Before(record.ExpiresAt) {
+		view.Status = "expired"
+	}
+	return view
+}
+
+func (p *SearchApp) accountConnection() apphost.Connection {
+	view, err := p.AccountAuthorization()
+	if err != nil {
+		view.Status = "invalid"
+	}
+	label := view.Label
+	if label == "" {
+		label = "抖音账号"
+	}
+	return apphost.Connection{ID: accountConnectionID, AccountID: "official-authorized-account", Label: label, Configuration: view.Status}
+}
+
+func (p *SearchApp) AuthorizeAccount(ctx context.Context, binding string, in AccountAuthorizationInput) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if binding == "" {
+		return nil, ErrAccountInput
+	}
+	switch in.Action {
+	case "begin":
+		return p.beginAccountAuthorization(binding, in)
+	case "complete":
+		if in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.Revision != "" {
+			return nil, ErrAccountInput
+		}
+		return p.completeAccountAuthorization(ctx, binding, in.CallbackURL)
+	case "disconnect":
+		if in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.CallbackURL != "" {
+			return nil, ErrAccountInput
+		}
+		return p.disconnectAccount(ctx, in.Revision)
+	default:
+		return nil, ErrAccountInput
+	}
+}
+
+func (p *SearchApp) beginAccountAuthorization(binding string, in AccountAuthorizationInput) (accountOAuthStart, error) {
+	redirect := accountRedirectURI(in.RedirectURI)
+	if redirect == nil || in.CallbackURL != "" {
+		return accountOAuthStart{}, ErrAccountInput
+	}
+	state, err := accountNonce()
+	if err != nil {
+		return accountOAuthStart{}, err
+	}
+	settings := OAuthSettings{ClientKey: in.ClientKey, ClientSecret: in.ClientSecret, RedirectURI: redirect.String()}
+	authorizeURL, err := AuthorizationURL(settings, []string{accountScope}, state)
+	if err != nil {
+		return accountOAuthStart{}, ErrAccountInput
+	}
+	p.accountMu.Lock()
+	defer p.accountMu.Unlock()
+	record, err := p.readAccount()
+	if err != nil {
+		return accountOAuthStart{}, err
+	}
+	if record.Revision != in.Revision {
+		return accountOAuthStart{}, ErrAccountRevision
+	}
+	if record.ClientKey != "" && record.ClientKey != in.ClientKey {
+		return accountOAuthStart{}, ErrAccountIdentity
+	}
+	p.clearAccountAttempt()
+	attempt := &accountAttempt{binding: binding, state: state, revision: record.Revision, settings: settings, redirect: redirect, expires: p.nowUTC().Add(accountOAuthLifetime)}
+	attempt.timer = time.AfterFunc(accountOAuthLifetime, func() {
+		p.accountMu.Lock()
+		defer p.accountMu.Unlock()
+		if p.accountPending == attempt {
+			p.accountPending = nil
+		}
+	})
+	p.accountPending = attempt
+	return accountOAuthStart{AuthorizeURL: authorizeURL, ExpiresAt: attempt.expires}, nil
+}
+
+func (p *SearchApp) clearAccountAttempt() {
+	if p.accountPending != nil {
+		p.accountPending.timer.Stop()
+		p.accountPending = nil
+	}
+}
+
+func (p *SearchApp) consumeAccountCallback(binding, raw string) (*accountAttempt, string, error) {
+	p.accountMu.Lock()
+	defer p.accountMu.Unlock()
+	attempt := p.accountPending
+	if attempt == nil || attempt.consumed || attempt.binding != binding || !p.nowUTC().Before(attempt.expires) {
+		return nil, "", ErrAccountCallback
+	}
+	code, err := accountCallbackCode(raw, attempt)
+	if err != nil {
+		return nil, "", err
+	}
+	attempt.consumed = true
+	return attempt, code, nil
+}
+
+func (p *SearchApp) completeAccountAuthorization(ctx context.Context, binding, callback string) (AccountAuthorizationView, error) {
+	attempt, code, err := p.consumeAccountCallback(binding, callback)
+	if err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	defer func() {
+		p.accountMu.Lock()
+		defer p.accountMu.Unlock()
+		if p.accountPending == attempt {
+			p.clearAccountAttempt()
+		}
+	}()
+	grant, err := p.ExchangeAuthorizationCode(ctx, attempt.settings, code)
+	if err != nil {
+		return AccountAuthorizationView{}, ErrAccountExchange
+	}
+	if !slices.Contains(strings.Split(grant.Scope, ","), accountScope) {
+		return AccountAuthorizationView{}, ErrAccountScope
+	}
+	profile, err := p.ReadAuthorizedProfile(ctx, grant)
+	if err != nil || profile.OpenID == "" || profile.OpenID != grant.OpenID {
+		return AccountAuthorizationView{}, ErrAccountProfile
+	}
+	revision, err := accountNonce()
+	if err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	p.accountMu.Lock()
+	defer p.accountMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	record, err := p.readAccount()
+	if err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	if p.accountPending != attempt || record.Revision != attempt.revision {
+		return AccountAuthorizationView{}, ErrAccountRevision
+	}
+	if record.OpenID != "" && record.OpenID != grant.OpenID {
+		return AccountAuthorizationView{}, ErrAccountIdentity
+	}
+	if !p.nowUTC().Before(grant.ExpiresAt) {
+		return AccountAuthorizationView{}, ErrAccountProfile
+	}
+	next := accountAuthorization{SchemaVersion: 1, Revision: revision, ClientKey: attempt.settings.ClientKey, OpenID: grant.OpenID, AccessToken: grant.AccessToken, Label: accountLabel(profile.Nickname), ExpiresAt: grant.ExpiresAt.UTC()}
+	if err := p.writeAccount(next); err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	return p.accountView(next), nil
+}
+
+func (p *SearchApp) disconnectAccount(ctx context.Context, revision string) (AccountAuthorizationView, error) {
+	p.accountMu.Lock()
+	defer p.accountMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	record, err := p.readAccount()
+	if err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	if revision != record.Revision {
+		return AccountAuthorizationView{}, ErrAccountRevision
+	}
+	nextRevision, err := accountNonce()
+	if err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	next := accountAuthorization{SchemaVersion: 1, Revision: nextRevision}
+	if err := p.writeAccount(next); err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	p.clearAccountAttempt()
+	return p.accountView(next), nil
+}
+
+func accountRedirectURI(raw string) *url.URL {
+	if len(raw) > 2048 || strings.ContainsAny(raw, "#\\") {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.Opaque != "" || u.User != nil ||
+		u.RawQuery != "" || u.ForceQuery || u.RawPath != "" || strings.ContainsAny(u.Host, "%\\") {
+		return nil
+	}
+	if u.Path != "" && u.Path != path.Clean(u.Path) && u.Path != path.Clean(u.Path)+"/" {
+		return nil
+	}
+	return u
+}
+
+func accountCallbackCode(raw string, attempt *accountAttempt) (string, error) {
+	if len(raw) > 8192 || strings.ContainsAny(raw, "#\\") {
+		return "", ErrAccountCallback
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.Scheme != attempt.redirect.Scheme ||
+		u.Host != attempt.redirect.Host || oauthCallbackPath(u) != oauthCallbackPath(attempt.redirect) {
+		return "", ErrAccountCallback
+	}
+	params, err := url.ParseQuery(u.RawQuery)
+	if err != nil || len(params) != 3 || len(params["code"]) != 1 || len(params["state"]) != 1 || len(params["scopes"]) != 1 ||
+		subtle.ConstantTimeCompare([]byte(params.Get("state")), []byte(attempt.state)) != 1 {
+		return "", ErrAccountCallback
+	}
+	code := params.Get("code")
+	if code == "" || len(code) > 4096 || strings.ContainsFunc(code, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return "", ErrAccountCallback
+	}
+	if !slices.Contains(strings.Split(params.Get("scopes"), ","), accountScope) {
+		return "", ErrAccountScope
+	}
+	return code, nil
+}
+
+func oauthCallbackPath(u *url.URL) string {
+	if u.Path == "" {
+		return "/"
+	}
+	return u.EscapedPath()
+}
+
+func accountNonce() (string, error) {
+	var random [24]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", apphost.ErrUnavailable
+	}
+	return hex.EncodeToString(random[:]), nil
+}
+
+func accountLabel(value string) string {
+	runes := make([]rune, 0, 64)
+	for _, r := range strings.TrimSpace(value) {
+		if !unicode.IsControl(r) && !unicode.In(r, unicode.Cf) {
+			runes = append(runes, r)
+			if len(runes) == cap(runes) {
+				break
+			}
+		}
+	}
+	label := strings.TrimSpace(string(runes))
+	if label == "" {
+		return "抖音账号"
+	}
+	return label
+}
+
+func (p *SearchApp) readAccount() (accountAuthorization, error) {
+	var record accountAuthorization
+	root, err := workspacefs.OpenPath(p.privateDirectory)
+	if errors.Is(err, os.ErrNotExist) {
+		return record, nil
+	}
+	if err != nil {
+		return record, apphost.ErrUnavailable
+	}
+	defer root.Close()
+	info, err := root.Lstat(accountFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return record, nil
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return record, apphost.ErrUnavailable
+	}
+	file, err := workspacefs.OpenRegular(root, accountFile)
+	if err != nil {
+		return record, apphost.ErrUnavailable
+	}
+	defer file.Close()
+	actual, err := file.Stat()
+	if err != nil || !os.SameFile(info, actual) {
+		return record, apphost.ErrUnavailable
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, maxSettingsBytes+1))
+	if err != nil || len(raw) > maxSettingsBytes {
+		return record, apphost.ErrUnavailable
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var trailing any
+	if dec.Decode(&record) != nil || dec.Decode(&trailing) != io.EOF || record.SchemaVersion != 1 {
+		return accountAuthorization{}, apphost.ErrUnavailable
+	}
+	if decoded, err := hex.DecodeString(record.Revision); err != nil || len(decoded) != 24 {
+		return accountAuthorization{}, apphost.ErrUnavailable
+	}
+	if record.AccessToken == "" {
+		if record.ClientKey != "" || record.OpenID != "" || record.Label != "" || !record.ExpiresAt.IsZero() {
+			return accountAuthorization{}, apphost.ErrUnavailable
+		}
+	} else if record.ClientKey == "" || record.OpenID == "" || record.Label != accountLabel(record.Label) || record.ExpiresAt.IsZero() {
+		return accountAuthorization{}, apphost.ErrUnavailable
+	}
+	return record, nil
+}
+
+func (p *SearchApp) writeAccount(record accountAuthorization) error {
+	root, err := workspacefs.EnsurePath(p.privateDirectory)
+	if err != nil {
+		return apphost.ErrUnavailable
+	}
+	defer root.Close()
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return apphost.ErrUnavailable
+	}
+	name := "." + accountFile + "." + record.Revision + ".tmp"
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return apphost.ErrUnavailable
+	}
+	defer root.Remove(name)
+	_, writeErr := file.Write(raw)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if writeErr != nil || syncErr != nil || closeErr != nil || root.Rename(name, accountFile) != nil {
+		return apphost.ErrUnavailable
+	}
+	return nil
+}

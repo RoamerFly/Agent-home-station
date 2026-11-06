@@ -20,6 +20,16 @@
       ],
       "discoverable": true,
       "requires_owner_setting": "enabled"
+    },
+    {
+      "id": "account.authorization",
+      "implementation": "ready",
+      "description": "本机主人完成官方网页授权并核验抖音账号",
+      "permissions": [
+        "network"
+      ],
+      "discoverable": false,
+      "requires_owner_setting": "explicit-owner-oauth"
     }
   ]
 }

@@ -113,6 +113,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 		return nil, err
 	}
 	home.bilibiliRoutes(s, mux, registry)
+	home.douyinRoutes(s, mux, registry, chat.ctx)
 	registry, handler.wechat, err = bindStationWechat(registry, chat)
 	if err != nil {
 		return nil, err

@@ -1,7 +1,4 @@
-// Package adapter exposes owner-approved Douyin search and own-video reads.
-// It is deliberately a read-only client for the documented open-platform API:
-// credentials never leave the request header and discovered results never
-// become media, cover, ASR, or page-text observations.
+// Package adapter connects approved Douyin accounts and reads authorized content through the official platform.
 package adapter
 
 import (
@@ -79,13 +76,14 @@ type loadedSettings struct {
 	version   string
 }
 
-// SearchApp implements independently authorized official read connections.
-// It performs no local writes and accepts no redirects or cookies.
+// SearchApp implements separately authorized official account and content connections.
 type SearchApp struct {
 	privateDirectory string
 	client           *http.Client
 	now              func() time.Time
 	mu               sync.Mutex
+	accountMu        sync.Mutex
+	accountPending   *accountAttempt
 }
 
 // New constructs the adapter. The supplied directory is owned by the station
@@ -134,7 +132,7 @@ func (p *SearchApp) Connections(ctx context.Context) ([]apphost.Connection, erro
 	}
 	// A static connection lets the UI show configuration and expiry problems
 	// without treating a not-yet-configured app as absent.
-	return []apphost.Connection{p.searchConnection(), p.ownVideoConnection()}, nil
+	return []apphost.Connection{p.searchConnection(), p.ownVideoConnection(), p.accountConnection()}, nil
 }
 
 func (p *SearchApp) searchConnection() apphost.Connection {
@@ -152,6 +150,8 @@ func (p *SearchApp) Inspect(ctx context.Context, id string) (apphost.ConnectionS
 		connection, action = p.searchConnection(), "content.search"
 	case ownVideoConnectionID:
 		connection, action = p.ownVideoConnection(), "content.own-video"
+	case accountConnectionID:
+		connection = p.accountConnection()
 	default:
 		return apphost.ConnectionStatus{}, apphost.ErrNotFound
 	}
@@ -159,7 +159,9 @@ func (p *SearchApp) Inspect(ctx context.Context, id string) (apphost.ConnectionS
 	status := apphost.ConnectionStatus{Connection: connection, Runtime: "local", Worker: "disabled", Login: state, CapabilityCheck: state}
 	if state == "ready" {
 		status.Worker = "ready"
-		status.SupportedActions = []string{action}
+		if action != "" {
+			status.SupportedActions = []string{action}
+		}
 	}
 	return status, nil
 }

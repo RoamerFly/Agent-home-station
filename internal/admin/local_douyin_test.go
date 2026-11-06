@@ -165,3 +165,47 @@ func TestLocalDouyinOwnVideoConnectionIsIndependent(t *testing.T) {
 		t.Fatalf("revoked OAuth grant = %d", code)
 	}
 }
+func TestLocalDouyinAuthorizationOwnerRoute(t *testing.T) {
+	base := t.TempDir()
+	data, home := filepath.Join(base, "host"), filepath.Join(base, "workspace")
+	registry, err := apphost.New(douyinapp.New(filepath.Join(data, "apps", douyinapp.ID)).Registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewLocalHomeHandlerWithApps(data, home, "synthetic-local-password", "", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newLocalAppObservationFixtureWithHandler(t, handler, data, home)
+	const route = "/api/local/apps/douyin/authorization"
+	if status, _ := f.request(http.MethodGet, route, nil, false); status != http.StatusUnauthorized {
+		t.Fatalf("anonymous authorization returned %d", status)
+	}
+	f.login()
+	if status, _ := f.request(http.MethodGet, route, nil, false); status != http.StatusConflict {
+		t.Fatalf("uninitialized authorization returned %d", status)
+	}
+	if status, _ := f.request(http.MethodPost, "/api/local/home", map[string]string{"action": "initialize"}, true); status != http.StatusOK {
+		t.Fatalf("initialize returned %d", status)
+	}
+	if status, view := f.request(http.MethodGet, route, nil, false); status != http.StatusOK || view["status"] != "unconfigured" || view["revision"] != "" || view["label"] != "" {
+		t.Fatalf("unexpected initial view: %d %v", status, view)
+	}
+	begin := map[string]string{"action": "begin", "revision": "", "client_key": "synthetic_app_123", "client_secret": "synthetic-private-secret", "redirect_uri": "https://owner.example.test/callback"}
+	if status, _ := f.request(http.MethodPost, route, begin, false); status != http.StatusForbidden {
+		t.Fatalf("authorization without CSRF returned %d", status)
+	}
+	status, view := f.request(http.MethodPost, route, begin, true)
+	link, _ := view["authorize_url"].(string)
+	if status != http.StatusOK || !strings.HasPrefix(link, "https://open.douyin.com/platform/oauth/connect?") ||
+		!strings.Contains(link, "scope=user_info") || strings.Contains(link, begin["client_secret"]) {
+		t.Fatalf("invalid official authorization link: %d %v", status, view)
+	}
+	forged := map[string]string{"action": "complete", "callback_url": "https://owner.example.test/callback?code=fixture&scopes=user_info&state=forged"}
+	if status, _ := f.request(http.MethodPost, route, forged, true); status != http.StatusBadRequest {
+		t.Fatalf("forged callback returned %d", status)
+	}
+	if status, view := f.request(http.MethodGet, "/api/local/apps/observation", nil, false); status != http.StatusOK || len(localAppObservationItems(view)) != 0 {
+		t.Fatalf("authorization state unexpectedly exposed observation: %d %v", status, view)
+	}
+}
