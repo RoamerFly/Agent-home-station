@@ -1,8 +1,5 @@
-// Package adapter provides a deliberately small, anonymous Bilibili public
-// metadata application. It is not a downloader, player, comment reader, or
-// account integration. The host owns all discovery and grants; this package
-// never stores credentials or makes a request before the owner has allowed the
-// exact BV identifier.
+// Package adapter exposes owner-approved anonymous Bilibili metadata and
+// public page text. The host controls the BV scope and browser permission.
 package adapter
 
 import (
@@ -15,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,6 +20,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/stationbrowser"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -54,9 +53,10 @@ var (
 // Settings is owner-controlled local policy. Videos is an exact, ordered
 // allowlist; it is deliberately the only discovery source for this adapter.
 type Settings struct {
-	Revision uint64   `json:"revision"`
-	Enabled  bool     `json:"enabled"`
-	Videos   []string `json:"videos"`
+	Revision       uint64   `json:"revision"`
+	Enabled        bool     `json:"enabled"`
+	Videos         []string `json:"videos"`
+	BrowserEnabled bool     `json:"browser_enabled"`
 }
 
 // PublicApp implements the apphost provider and observation provider for an
@@ -65,14 +65,24 @@ type Settings struct {
 type PublicApp struct {
 	privateDirectory string
 	client           *http.Client
+	readPage         func(context.Context, string, func() error) (stationbrowser.Page, error)
+	browserAvailable func() bool
 	mu               sync.Mutex
+	browserGrant     context.Context
+	cancelBrowser    context.CancelFunc
 }
 
 // New creates a public Bilibili application with private local policy storage.
 // privateDirectory is owned by the station, not a Bilibili account.
 func New(privateDirectory string) *PublicApp {
+	reader := stationbrowser.New(filepath.Join(privateDirectory, "browser-profiles", connectionID))
+	grant, cancel := context.WithCancel(context.Background())
 	return &PublicApp{
 		privateDirectory: privateDirectory,
+		readPage:         reader.Read,
+		browserAvailable: stationbrowser.Available,
+		browserGrant:     grant,
+		cancelBrowser:    cancel,
 		client: &http.Client{
 			Timeout: requestTimeout,
 			Jar:     nil,
@@ -81,6 +91,10 @@ func New(privateDirectory string) *PublicApp {
 			},
 		},
 	}
+}
+
+func (p *PublicApp) BrowserAvailable() bool {
+	return p != nil && p.browserAvailable != nil && p.browserAvailable()
 }
 
 // Registration supplies a fixed, anonymous, read-only installation.
@@ -109,13 +123,16 @@ func (p *PublicApp) View() (Settings, error) {
 // Save writes an owner allowlist with compare-and-swap semantics. It never
 // probes video IDs: saving must work while offline and must not leak browsing
 // intentions to a provider.
-func (p *PublicApp) Save(expected uint64, enabled bool, videos []string) (Settings, error) {
+func (p *PublicApp) Save(expected uint64, enabled bool, videos []string, browserEnabled bool) (Settings, error) {
 	if p == nil {
 		return Settings{}, ErrInvalid
 	}
 	cleaned, err := normalizeVideos(enabled, videos)
 	if err != nil {
 		return Settings{}, err
+	}
+	if browserEnabled && !enabled {
+		return Settings{}, ErrInvalid
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -126,13 +143,18 @@ func (p *PublicApp) Save(expected uint64, enabled bool, videos []string) (Settin
 	if expected != current.Revision {
 		return current, ErrConflict
 	}
-	next := Settings{Revision: current.Revision + 1, Enabled: enabled, Videos: cleaned}
+	if browserEnabled && !p.BrowserAvailable() {
+		return current, apphost.ErrObservationBrowserUnavailable
+	}
+	next := Settings{Revision: current.Revision + 1, Enabled: enabled, Videos: cleaned, BrowserEnabled: browserEnabled}
 	if next.Revision == 0 { // defensive overflow handling
 		return Settings{}, ErrInvalid
 	}
 	if err := p.saveLocked(next); err != nil {
 		return Settings{}, err
 	}
+	p.cancelBrowser()
+	p.browserGrant, p.cancelBrowser = context.WithCancel(context.Background())
 	return cloneSettings(next), nil
 }
 
@@ -167,6 +189,9 @@ func (p *PublicApp) Inspect(ctx context.Context, id string) (apphost.ConnectionS
 		worker = "ready"
 		capability = "ready"
 		actions = []string{"content.observe"}
+		if settings.BrowserEnabled && p.BrowserAvailable() {
+			actions = append(actions, "page.observe")
+		}
 	}
 	return apphost.ConnectionStatus{
 		Connection: connection, Login: "anonymous", Runtime: "local", Worker: worker,
@@ -191,11 +216,15 @@ func (p *PublicApp) ObservationTargets(ctx context.Context, id string) ([]apphos
 		return []apphost.ObservationTarget{}, nil
 	}
 	result := make([]apphost.ObservationTarget, 0, len(settings.Videos))
+	fields := []apphost.ObservationField{apphost.ObservationTitle, apphost.ObservationBody}
+	if settings.BrowserEnabled && p.BrowserAvailable() {
+		fields = append(fields, apphost.ObservationPageText)
+	}
 	for _, video := range settings.Videos {
 		result = append(result, apphost.ObservationTarget{
 			ConnectionRef: apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: connectionID, AccountID: accountID},
 			ContentID:     video,
-			Fields:        []apphost.ObservationField{apphost.ObservationTitle, apphost.ObservationBody},
+			Fields:        fields,
 		})
 	}
 	return result, nil
@@ -217,9 +246,7 @@ func (p *PublicApp) ObservationGrant(ctx context.Context, access apphost.Observa
 	return apphost.ObservationGrant{Allowed: true, Version: "bilibili-public-" + strconv.FormatUint(settings.Revision, 10)}, nil
 }
 
-// ReadObservation reads one exact title or uploader-written description. It
-// cannot read comments, audio, playback, a guessed BV ID, or any item removed
-// from the current owner allowlist.
+// ReadObservation reads one exact field from the current owner allowlist.
 func (p *PublicApp) ReadObservation(ctx context.Context, request apphost.ObservationRequest) (apphost.ObservationPage, error) {
 	if err := ctx.Err(); err != nil {
 		return apphost.ObservationPage{}, err
@@ -233,6 +260,9 @@ func (p *PublicApp) ReadObservation(ctx context.Context, request apphost.Observa
 	}
 	if !p.allowed(settings, request.ObservationAccess) {
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
+	}
+	if request.Field == apphost.ObservationPageText {
+		return p.readBrowserObservation(ctx, request.ObservationAccess, settings.Revision)
 	}
 	data, err := p.fetch(ctx, request.ContentID)
 	if err != nil {
@@ -256,7 +286,16 @@ func (p *PublicApp) ReadObservation(ctx context.Context, request apphost.Observa
 
 func (p *PublicApp) allowed(settings Settings, access apphost.ObservationAccess) bool {
 	if !settings.Enabled || access.AppID != ID || access.InstallationID != installationID || access.ConnectionID != connectionID || access.AccountID != accountID ||
-		(access.Field != apphost.ObservationTitle && access.Field != apphost.ObservationBody) || !canonicalBV.MatchString(access.ContentID) {
+		!canonicalBV.MatchString(access.ContentID) {
+		return false
+	}
+	switch access.Field {
+	case apphost.ObservationTitle, apphost.ObservationBody:
+	case apphost.ObservationPageText:
+		if !settings.BrowserEnabled {
+			return false
+		}
+	default:
 		return false
 	}
 	for _, video := range settings.Videos {
@@ -265,6 +304,54 @@ func (p *PublicApp) allowed(settings Settings, access apphost.ObservationAccess)
 		}
 	}
 	return false
+}
+
+func (p *PublicApp) readBrowserObservation(ctx context.Context, access apphost.ObservationAccess, revision uint64) (apphost.ObservationPage, error) {
+	if !p.BrowserAvailable() {
+		return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
+	}
+	p.mu.Lock()
+	grant := p.browserGrant
+	p.mu.Unlock()
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(grant, cancel)
+	defer stop()
+	authorize := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		current, err := p.View()
+		if err != nil {
+			return apphost.ErrUnavailable
+		}
+		if grant.Err() != nil || current.Revision != revision || !p.allowed(current, access) {
+			return apphost.ErrObservationForbidden
+		}
+		return nil
+	}
+	if err := authorize(); err != nil {
+		return apphost.ObservationPage{}, err
+	}
+	page, err := p.readPage(readCtx, "https://www.bilibili.com/video/"+access.ContentID+"/", authorize)
+	if authErr := authorize(); authErr != nil {
+		return apphost.ObservationPage{}, authErr
+	}
+	if errors.Is(err, stationbrowser.ErrPageUnavailable) {
+		return apphost.ObservationPage{}, apphost.ErrObservationContentUnavailable
+	}
+	if err != nil {
+		return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
+	}
+	text := "页面标题：" + page.Title
+	if page.Description != "" {
+		text += "\n页面简介：" + page.Description
+	}
+	return apphost.ObservationPage{
+		Chunks:   []apphost.ObservationChunk{{Position: 0, Text: text}},
+		Coverage: "独立 Edge 页面：标题与可取得的简介",
+		Complete: true,
+	}, nil
 }
 
 type metadataResponse struct {
@@ -380,7 +467,7 @@ func (p *PublicApp) loadLocked() (Settings, error) {
 		return Settings{}, apphost.ErrUnavailable
 	}
 	var settings Settings
-	if json.Unmarshal(encoded, &settings) != nil || settings.Revision == 0 {
+	if json.Unmarshal(encoded, &settings) != nil || settings.Revision == 0 || settings.BrowserEnabled && !settings.Enabled {
 		return Settings{}, apphost.ErrUnavailable
 	}
 	videos, err := normalizeVideos(settings.Enabled, settings.Videos)

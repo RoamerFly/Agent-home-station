@@ -14,6 +14,14 @@
       "description": "获取投稿者填写的稿件简介",
       "permissions": ["network"],
       "discoverable": true
+    },
+    {
+      "id": "observation.page-text",
+      "implementation": "ready",
+      "description": "在独立无头 Edge 中读取获准 BV 页面上的标题和简介",
+      "permissions": ["network"],
+      "discoverable": true,
+      "requires_owner_setting": "browser_enabled"
     }
   ]
 }

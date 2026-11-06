@@ -36,8 +36,11 @@ func TestLocalBilibiliOwnerAuthorizationAndRestart(t *testing.T) {
 		t.Fatalf("initialize local owner: %d", code)
 	}
 	code, defaults := f.request(http.MethodGet, policy, nil, false)
-	if code != 200 || defaults["enabled"] != false {
+	if code != 200 || defaults["enabled"] != false || defaults["browser_enabled"] != false {
 		t.Fatalf("new connection was already authorized: %d %#v", code, defaults)
+	}
+	if _, ok := defaults["browser_available"].(bool); !ok {
+		t.Fatalf("browser availability was missing: %#v", defaults)
 	}
 	settings := map[string]any{"revision": defaults["revision"], "enabled": true, "videos": []string{video}}
 	if code, _ := f.request(http.MethodPut, policy, settings, false); code != 403 {
@@ -71,6 +74,7 @@ func TestLocalBilibiliOwnerAuthorizationAndRestart(t *testing.T) {
 		{AppID: biliapp.ID, ConnectionID: "other", ContentID: video, Field: apphost.ObservationTitle},
 		{AppID: biliapp.ID, ConnectionID: "public", ContentID: "BV1bbbbbbbbb", Field: apphost.ObservationTitle},
 		{AppID: biliapp.ID, ConnectionID: "public", ContentID: video, Field: apphost.ObservationPlayback},
+		{AppID: biliapp.ID, ConnectionID: "public", ContentID: video, Field: apphost.ObservationPageText},
 	} {
 		if code, _ := f.request(http.MethodPost, observe, input, true); code != 403 && code != 404 {
 			t.Fatalf("unauthorized scope reached provider: %d %+v", code, input)

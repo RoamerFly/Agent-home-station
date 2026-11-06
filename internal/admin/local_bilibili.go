@@ -43,9 +43,10 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 			view, err = bili.View()
 		} else {
 			var in struct {
-				Revision *uint64  `json:"revision"`
-				Enabled  *bool    `json:"enabled"`
-				Videos   []string `json:"videos"`
+				Revision       *uint64  `json:"revision"`
+				Enabled        *bool    `json:"enabled"`
+				Videos         []string `json:"videos"`
+				BrowserEnabled bool     `json:"browser_enabled"`
 			}
 			if !decode(w, r, &in) {
 				return
@@ -54,17 +55,26 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 				fail(w, http.StatusBadRequest, "请提交读取开关、公开 BV 号列表和当前设置版本")
 				return
 			}
-			view, err = bili.Save(*in.Revision, *in.Enabled, in.Videos)
+			if in.BrowserEnabled && !*in.Enabled {
+				fail(w, http.StatusBadRequest, "启用独立浏览器前，请先开启公开读取并填写 BV 号")
+				return
+			}
+			view, err = bili.Save(*in.Revision, *in.Enabled, in.Videos, in.BrowserEnabled)
 		}
 		switch {
 		case errors.Is(err, biliapp.ErrConflict):
 			fail(w, http.StatusConflict, "B 站读取设置已变化，请重新读取后保存")
 		case errors.Is(err, biliapp.ErrInvalid):
 			fail(w, http.StatusBadRequest, "请提供有效的 BV 号，最多 100 条且不重复")
+		case errors.Is(err, apphost.ErrObservationBrowserUnavailable):
+			fail(w, http.StatusServiceUnavailable, apphost.ErrObservationBrowserUnavailable.Error())
 		case err != nil:
 			fail(w, http.StatusServiceUnavailable, "B 站读取设置暂不可用，已保留原配置")
 		default:
-			respond(w, http.StatusOK, view)
+			respond(w, http.StatusOK, struct {
+				biliapp.Settings
+				BrowserAvailable bool `json:"browser_available"`
+			}{view, bili.BrowserAvailable()})
 		}
 	})
 	mux.HandleFunc("GET /api/local/apps/bilibili/public", handler)

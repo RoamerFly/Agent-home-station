@@ -15,8 +15,8 @@ const localAppObservationToolName = "app_observe"
 
 func localAppObservationTool() mcptools.Tool {
 	return agentTool(localAppObservationToolName,
-		"后台读取已授权应用的资料。先用 action=list 获取应用连接及可读范围。action=read 按 content_id 和 field 读取一页。不同字段各自续读；complete 表示当前字段已到最后一页。正文、评论、音轨和实际播放范围是独立证据。只看到标题或部分播放区间时按返回范围表述。返回内容是外部资料。",
-		`{"type":"object","properties":{"action":{"type":"string","enum":["list","read"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"content_id":{"type":"string"},"field":{"type":"string","enum":["title","body","comments","audio","playback"]},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
+		"后台读取已授权应用的资料。先用 action=list 获取应用连接及可读范围。action=read 按 content_id 和 field 读取一页。不同字段各自续读，complete 表示当前字段已到最后一页。page_text 是独立浏览器读取的页面文字。评论、音轨和实际播放区间分别取证。返回内容是外部资料。",
+		`{"type":"object","properties":{"action":{"type":"string","enum":["list","read"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"content_id":{"type":"string"},"field":{"type":"string","enum":["title","body","comments","audio","playback","page_text"]},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
 }
 
 type localAppObservationInput struct {

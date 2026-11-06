@@ -29,10 +29,11 @@ const (
 	ObservationComments ObservationField = "comments"
 	ObservationAudio    ObservationField = "audio"
 	ObservationPlayback ObservationField = "playback"
+	ObservationPageText ObservationField = "page_text"
 )
 
 func (f ObservationField) valid() bool {
-	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback
+	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback || f == ObservationPageText
 }
 
 type ObservationTarget struct {
@@ -113,6 +114,7 @@ var (
 	ErrObservationForbidden          = errors.New("当前应用账号未授权读取此内容")
 	ErrObservationContentUnavailable = errors.New("平台暂时未提供这条内容，请核对编号或公开状态")
 	ErrObservationThrottled          = errors.New("平台限制了本次访问，请稍后重试")
+	ErrObservationBrowserUnavailable = errors.New("独立浏览器暂不可用，请检查本机 Microsoft Edge 与应用授权")
 )
 
 type observationCheckpoint struct {
@@ -255,7 +257,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 		if ctx.Err() != nil {
 			return ObservationResult{}, ctx.Err()
 		}
-		for _, known := range []error{ErrObservationContentUnavailable, ErrObservationThrottled, ErrObservationForbidden, ErrObservationInvalid} {
+		for _, known := range []error{ErrObservationContentUnavailable, ErrObservationThrottled, ErrObservationForbidden, ErrObservationInvalid, ErrObservationBrowserUnavailable} {
 			if errors.Is(err, known) {
 				return ObservationResult{}, known
 			}
