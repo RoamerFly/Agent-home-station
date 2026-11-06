@@ -107,10 +107,29 @@ func TestAccountAuthorizationPersistsOnlyVerifiedConnection(t *testing.T) {
 	if expired, err := restarted.AccountAuthorization(); err != nil || expired.Status != "expired" || expired.RefreshAvailable {
 		t.Fatalf("expired authorization: %+v %v", expired, err)
 	}
-	if _, err := restarted.AuthorizeAccount(ctx, "owner/session", AccountAuthorizationInput{Action: "disconnect", Revision: ""}); !errors.Is(err, ErrAccountRevision) {
+	restarted.client.Transport = app.client.Transport
+	reauthorize, _ := startSyntheticAccount(t, restarted, view.Revision)
+	if _, err := restarted.AuthorizeAccount(ctx, "owner/session", AccountAuthorizationInput{Action: "complete", CallbackURL: callback}); !errors.Is(err, ErrAccountCallback) || calls != 2 {
+		t.Fatalf("old callback interfered with new scan: calls=%d err=%v", calls, err)
+	}
+	result, err = restarted.AuthorizeAccount(ctx, "owner/session", AccountAuthorizationInput{Action: "complete",
+		CallbackURL: strings.Replace(reauthorize, "synthetic-code", "synthetic-second-code", 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnected := result.(AccountAuthorizationView)
+	if reconnected.Status != "ready" || !reconnected.RefreshAvailable || reconnected.Revision == view.Revision || calls != 4 {
+		t.Fatalf("new scan did not reconnect the account: %+v requests=%d", reconnected, calls)
+	}
+	restarted = New(dir)
+	restarted.now = func() time.Time { return now }
+	if restored, err := restarted.AccountAuthorization(); err != nil || restored != reconnected {
+		t.Fatalf("reconnected account did not survive restart: %+v %v", restored, err)
+	}
+	if _, err := restarted.AuthorizeAccount(ctx, "owner/session", AccountAuthorizationInput{Action: "disconnect", Revision: view.Revision}); !errors.Is(err, ErrAccountRevision) {
 		t.Fatalf("stale disconnect: %v", err)
 	}
-	result, err = restarted.AuthorizeAccount(ctx, "owner/session", AccountAuthorizationInput{Action: "disconnect", Revision: view.Revision})
+	result, err = restarted.AuthorizeAccount(ctx, "owner/session", AccountAuthorizationInput{Action: "disconnect", Revision: reconnected.Revision})
 	if err != nil || result.(AccountAuthorizationView).Configured {
 		t.Fatalf("disconnect: %v %v", result, err)
 	}
