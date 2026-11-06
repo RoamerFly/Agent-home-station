@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -31,13 +33,15 @@ import (
 const defaultListen = "127.0.0.1:8082"
 
 type config struct {
-	dataDir         string
-	workspaceRoot   string
-	listen          string
-	runtimeFile     string
-	desktop         bool
-	wechatNativeURL string
-	wechatNativePID int
+	dataDir              string
+	workspaceRoot        string
+	listen               string
+	runtimeFile          string
+	desktop              bool
+	wechatNativeURL      string
+	wechatNativePID      int
+	legacySettingsSource string
+	legacySettingsDigest string
 }
 
 func main() {
@@ -69,6 +73,26 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	cfg, err := parseConfig(args, path)
 	if err != nil {
 		return err
+	}
+	if cfg.legacySettingsSource != "" {
+		if cfg.legacySettingsDigest == "" {
+			plan, err := station.PreviewLegacySettings(ctx, cfg.legacySettingsSource, cfg.dataDir)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(output).Encode(struct {
+				Status string `json:"status"`
+				station.LegacySettingsPlan
+			}{Status: "preview", LegacySettingsPlan: plan})
+		}
+		plan, err := station.ImportLegacySettings(ctx, cfg.legacySettingsSource, cfg.dataDir, cfg.legacySettingsDigest)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(struct {
+			Status string `json:"status"`
+			station.LegacySettingsPlan
+		}{Status: "applied", LegacySettingsPlan: plan})
 	}
 
 	password, err := stationauth.Password(cfg.dataDir, os.Getenv("AHS_ADMIN_PASSWORD"))
@@ -161,11 +185,26 @@ func parseConfig(args []string, executable string) (config, error) {
 	desktopFlag := fs.Bool("desktop", false, "由桌面程序持有的私有停止管道模式")
 	wechatNativeURL := fs.String("wechat-native-url", "", "桌面持有的微信原生服务地址")
 	wechatNativePID := fs.Int("wechat-native-pid", 0, "桌面持有的微信原生服务进程编号")
+	legacySettingsSource := fs.String("legacy-settings-source", "", "预演接续旧宿主设置的 admin 绝对目录，完成后退出")
+	legacySettingsDigest := fs.String("legacy-settings-digest", "", "按预演摘要确认接续到全新 data 目录，完成后退出")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
 	if fs.NArg() != 0 {
 		return config{}, errors.New("unexpected positional arguments")
+	}
+	if *legacySettingsSource != "" {
+		if !filepath.IsAbs(*legacySettingsSource) || *dataFlag == "" {
+			return config{}, errors.New("旧设置接续需要旧 admin 绝对目录和明确指定的 data 目录")
+		}
+		if *desktopFlag || *wechatNativeURL != "" || *wechatNativePID != 0 || *runtimeFlag != "" {
+			return config{}, errors.New("旧设置接续需要单独运行，不能同时启动桌面或应用服务")
+		}
+	}
+	if *legacySettingsDigest != "" {
+		if digest, err := hex.DecodeString(*legacySettingsDigest); err != nil || len(digest) != 32 || *legacySettingsSource == "" {
+			return config{}, errors.New("请提供旧设置预演返回的完整摘要及来源目录")
+		}
 	}
 
 	executable, err := filepath.Abs(executable)
@@ -215,6 +254,7 @@ func parseConfig(args []string, executable string) (config, error) {
 	return config{
 		dataDir: dataDir, workspaceRoot: workspaceRoot, listen: listen, runtimeFile: *runtimeFlag, desktop: *desktopFlag,
 		wechatNativeURL: *wechatNativeURL, wechatNativePID: *wechatNativePID,
+		legacySettingsSource: *legacySettingsSource, legacySettingsDigest: *legacySettingsDigest,
 	}, nil
 }
 

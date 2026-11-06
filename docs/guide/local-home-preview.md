@@ -2,7 +2,7 @@
 
 独立入口可以在没有微信账号、原生端、ADB 或模型运行环境的安装中启动。主人完成本机身份准备、保存模型连接后，即可在软件页面与同一条大肥鱼聊天。它复用现有聊天引擎和 SQLite 记忆内核，不把本机主人伪装成微信账号。
 
-这是开发预览，尚未替换正在使用的正式微信程序。独立入口可在 Windows 桌面窗口中运行，也可单独启动本地 HTTP 服务。Agent 已能在自己的家目录读写文件、保存工具；配置受管 Windows 运行器后可隔离执行程序。应用页可安装随包源码；选择独立原生预览后可只读查询该实例的账号和登录状态。账号登记、扫码与 Agent 启停仍在后续阶段。
+这是 Windows 开发预览，正式程序切换情况以阶梯计划的最新验收记录为准。独立入口可在桌面窗口或本机 HTTP 服务中运行。Agent 可以在自己的家目录读写文件、持久保存工具，并通过受管 Windows 运行器执行程序。应用页支持源码安装、微信账号登记与扫码、会话授权、Agent 启停及回执查询。抖音提供应用内授权窗、授权续期、作品读取与发布接入，各项真实平台验收范围见阶梯计划。
 
 ## Windows 桌面预览
 
@@ -156,6 +156,41 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 列表接口为 `GET /api/apps/wechat/connections/{connection}/receipts?limit=20&after=...`，要求本机主人登录。limit 为可调整的正整数；next_after 用于按投递编号继续查看。响应的 coverage 为 `current_worker_checkpoint`，snapshot 标识本次原子快照。翻页期间快照发生变化时，页面提示重新查看，避免混合两个版本。列表只返回投递元数据，不返回草稿正文、媒体路径或凭据，也不轮询原生服务；单条「核对回执」才查询平台任务。
 
 管理接口提供 `POST /api/local/artifacts`，参数为 path、request_key 和可选 expected_sha256；`GET /api/local/artifacts/{artifact}` 返回成品元数据。作品交付授权使用 `POST /api/apps/wechat/connections/{connection}/work-grants`，提供 artifact_id、thread_id、requester_id、request_key 和 enabled。`GET` 同路径列出授权，可用 limit、after 分页；`POST` 其下的 `{delivery}/revoke` 撤销原授权。接口均要求本机主人会话，写操作还需 CSRF。
+
+### 首次启动前接续旧模型与鱼身份
+
+先关闭旧桌面及其服务。选择全新的成长站数据目录，在首次启动之前运行下面的预演。使用日常安装包，测试构建产生的合成资料应留在测试目录。
+
+```powershell
+$stationPackage = 'E:/AgentHomeStation'
+$stationServer = Join-Path $stationPackage 'agent-home-station-server.exe'
+$legacyAdmin = 'E:/OldStation/data/admin'
+$stationData = Join-Path $stationPackage 'data/station'
+New-Item -ItemType Directory -Force -Path (Split-Path $stationData -Parent) | Out-Null
+
+$previewJSON = & $stationServer --data $stationData --legacy-settings-source $legacyAdmin
+if ($LASTEXITCODE -ne 0) { throw '旧设置预演失败，请核对提示' }
+$preview = $previewJSON | ConvertFrom-Json
+$preview
+```
+
+预演报告显示模型、输出额度、思考开关与强度、密钥是否已配置，以及已有鱼身份。核对后用原摘要确认。
+
+```powershell
+& $stationServer --data $stationData --legacy-settings-source $legacyAdmin --legacy-settings-digest $preview.digest
+if ($LASTEXITCODE -ne 0) { throw '旧设置接续失败，请核对提示' }
+```
+
+| 旧记录 | 接续结果 |
+| --- | --- |
+| `config.json` 的服务商、地址、模型、密钥、输出及思考设置 | 写入新站私有 `local-model.json`，保留原设置 |
+| 系统提示及角色、表达风格、关系设定 | 按来源字段合并进角色设置，相同文本合并一次，超出已有长度要求时返回具体错误 |
+| 存在且可核验的 `fish-identity.json` | 保留原鱼身份、主人与绑定记录 |
+| 输入内容与预演摘要 | 私有接续记录保存摘要及文件校验信息，供重复执行核对 |
+
+预演读取来源，确认操作在临时目录写入并核验后原子启用目标。摘要随来源或目标变化而失效。相同输入和未变化的已导入结果可以重复核对。已有其他资料的目标会拒绝合并。命令结束后再启动新成长站，完成本机登录与家目录核对。
+
+家目录文件、微信登录及会话记忆、声线和其他工具资源分别接续。微信已有下方的预演流程，家目录和声线工具的统一映射仍在实施中。
 
 ### 在隔离副本预演旧版微信接入
 
