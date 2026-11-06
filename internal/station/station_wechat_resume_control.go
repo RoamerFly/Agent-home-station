@@ -11,6 +11,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/websession"
+	"wechat-bot/internal/workspacefs"
 )
 
 type stationResumeControl struct {
@@ -166,6 +167,23 @@ func (s *stationWechat) requestDeliveryResume(w http.ResponseWriter, r *http.Req
 	}
 	if saved, exists := rows[key]; exists {
 		websession.Respond(w, 202, map[string]any{"idempotency_key": key, "continuation": resumeControlView(saved)})
+		return
+	}
+	worker.platformMu.RLock()
+	defer worker.platformMu.RUnlock()
+	root, err := workspacefs.OpenPath(worker.dir)
+	if err != nil {
+		websession.Fail(w, 503, "连接状态暂不可读")
+		return
+	}
+	policy, err := readStationWechatPolicy(root)
+	root.Close()
+	if err != nil {
+		websession.Fail(w, 503, "连接状态暂不可读")
+		return
+	}
+	if !policy.RollbackFrozenAt.IsZero() {
+		websession.Fail(w, 409, "连接已为回退停发，未登记新续发")
 		return
 	}
 	evidence, err := bot.ReadDeliveryEvidence(filepath.Join(worker.dir, "queue"), account, []string{key})

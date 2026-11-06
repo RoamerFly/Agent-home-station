@@ -227,7 +227,7 @@
   const appWorkerLabels = {
     disabled: "Agent 未启动", needs_setup: "Agent 待配置", waiting_login: "Agent 等待登录",
     running: "Agent 运行中", stopping: "Agent 正在停止", paused: "Agent 已暂停", error: "Agent 运行异常",
-    cutover_blocked: "等待完成启用核对"
+    cutover_blocked: "等待完成启用核对", rollback_frozen: "此连接已为回退停发"
   };
   function legacyImportControls(id, availability, connection = {}) {
     if (!availability) return null;
@@ -246,6 +246,7 @@
     const memoryResult = appElement("div", "", "legacy-memory-result");
     const receiptResult = appElement("div", "", "legacy-receipt-list");
     const activationResult = appElement("div", "", "legacy-memory-result legacy-activation-result");
+    const rollbackResult = appElement("div", "", "legacy-memory-result legacy-rollback-result");
     const actions = appElement("div", "", "app-worker-actions");
     const legacyImportURL = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import";
     const preview = appSetupButton(availability === "applied" ? "查看接入摘要" : "查看接入预演", async () => {
@@ -257,6 +258,8 @@
       try {
         plan = await request(legacyImportURL);
         activation = null;
+        rollback = null;
+        rollbackItems = [];
         renderPlan();
       } catch (error) {
         plan = null;
@@ -318,9 +321,11 @@
       if (value.applied) {
         renderLegacyReceipts();
         renderActivation();
+        renderRollback();
       } else {
         receiptResult.replaceChildren();
         activationResult.replaceChildren();
+        rollbackResult.replaceChildren();
       }
       const confirm = actions.querySelector("[data-legacy-confirm]");
       if (confirm) confirm.remove();
@@ -590,6 +595,124 @@
         activationLoading = false;
       }
     }
+    let rollback = null, rollbackItems = [], rollbackLoading = false;
+    function rollbackStateLabel(state) {
+      return {
+        not_frozen: "尚未冻结新投递",
+        draining: "正在停止新的投递",
+        frozen: "新投递已冻结"
+      }[state] || "冻结状态待核对";
+    }
+    function rollbackDispositionLabel(disposition) {
+      return {
+        accepted: "微信已接受",
+        terminal: "已结束",
+        not_submitted: "尚未提交",
+        active: "仍在处理",
+        unknown: "结果待核对"
+      }[disposition] || "状态待核对";
+    }
+    function rollbackItemLabel(item) {
+      const kinds = { text: "文字", voice: "语音", image: "图片", video: "视频", file: "文件" };
+      return kinds[item?.kind] || "投递";
+    }
+    function renderRollback(message = "") {
+      if (!plan?.applied) {
+        rollbackResult.replaceChildren();
+        return;
+      }
+      if (!rollback) {
+        rollbackResult.replaceChildren(
+          appElement("strong", "冻结前投递核对"),
+          appElement("small", "只会停止新的投递，并读取已有回执；不会解除接入、恢复旧版或撤回已发送内容。"),
+          appSetupButton("查看冻结状态", () => readRollback())
+        );
+        return;
+      }
+      const value = rollback;
+      const state = value?.state;
+      const lines = [
+        appElement("strong", "冻结前投递核对"),
+        appElement("p", rollbackStateLabel(state))
+      ];
+      if (value?.frozen_at) lines.push(appElement("small", `冻结记录：${value.frozen_at}`));
+      if (state === "frozen") {
+        lines.push(appElement("small", "本地新投递已停止。此状态不代表已获得回退权限；仍可能有在途或结果待核对的投递。"));
+        if (value.native === "unavailable" || value.native === "dataset_mismatch") {
+          lines.push(appElement("small", "本次未能核对原生投递，列表保留本地记录。"));
+        }
+      } else if (state === "draining") {
+        lines.push(appElement("small", "新提交已停止，正在等待本机工作器和已有请求退出。"));
+      } else if (!value?.eligible) {
+        lines.push(appElement("small", "请先完成启用核对后再冻结新投递；旧版归档仍可只读查看。"));
+      } else {
+        lines.push(appElement("small", "冻结后此连接无法从这里重新启动。已提交到微信的操作不会自动撤回。"));
+      }
+      const rows = rollbackItems.map((item) => {
+        const row = appElement("div", "", "legacy-memory-scope legacy-receipt-row");
+        row.append(
+          appElement("strong", `${rollbackItemLabel(item)} · ${rollbackDispositionLabel(item?.disposition)}`),
+          appElement("small", `会话：${item?.conversation_id || "未知"}`)
+        );
+        if (item?.idempotency_key) row.append(appElement("small", `投递编号 ${item.idempotency_key}`));
+        if (item?.state) row.append(appElement("small", `记录状态：${legacyReceiptState(item)}`));
+        if (item?.accepted_parts?.length) row.append(appElement("small", `微信已接受 ${item.accepted_parts.length} 段`));
+        if (item?.unconfirmed_parts?.length) row.append(appElement("small", `待核对 ${item.unconfirmed_parts.length} 段`));
+        return row;
+      });
+      if (rows.length) lines.push(...rows);
+      else if (state === "frozen") lines.push(appElement("small", "当前页没有需要逐条核对的投递。"));
+      if (message) lines.push(appElement("small", message));
+      const actions = appElement("div", "", "app-worker-actions");
+      if (state === "not_frozen" && value?.eligible) {
+        actions.append(appSetupButton("冻结新投递并核对", () => freezeRollback()));
+      }
+      actions.append(appSetupButton("刷新投递核对", () => readRollback()));
+      if (state === "frozen" && typeof value?.next_after === "string" && value.next_after) {
+        actions.append(appSetupButton("读取下一页投递", () => readRollback(value.next_after)));
+      }
+      lines.push(actions);
+      rollbackResult.replaceChildren(...lines);
+    }
+    async function readRollback(after = "") {
+      if (rollbackLoading || (after && rollback?.state !== "frozen")) return;
+      rollbackLoading = true;
+      if (!after) rollbackResult.replaceChildren(appElement("small", "正在读取冻结状态与投递回执…"));
+      try {
+        const value = await request(legacyImportURL + "/rollback" + (after ? "?after=" + encodeURIComponent(after) : ""));
+        const pageItems = Array.isArray(value?.items) ? value.items : [];
+        if (after) rollbackItems.push(...pageItems);
+        else rollbackItems = pageItems;
+        rollback = value;
+        renderRollback();
+      } catch (error) {
+        rollbackResult.replaceChildren(
+          appElement("small", error.message),
+          appSetupButton("重新读取冻结状态", () => readRollback())
+        );
+      } finally {
+        rollbackLoading = false;
+      }
+    }
+    async function freezeRollback() {
+      if (rollbackLoading) return;
+      rollbackLoading = true;
+      rollbackResult.replaceChildren(appElement("small", "正在冻结新的投递…"));
+      try {
+        await request(legacyImportURL + "/rollback", { method: "POST", body: JSON.stringify({}) });
+        rollback = null;
+        rollbackItems = [];
+        rollbackLoading = false;
+        await readRollback();
+      } catch (error) {
+        rollbackResult.replaceChildren(
+          appElement("small", error.message),
+          appSetupButton("重新读取冻结状态", () => readRollback())
+        );
+      } finally {
+        rollbackLoading = false;
+      }
+    }
     function currentImportPrerequisites() {
       const policy = connection.configured_policy || {};
       const worker = appWorkerLabels[connection.worker] || "Agent 状态待核对";
@@ -751,7 +874,7 @@
       actions.append(appSetupButton("核对旧会话记忆", () => readLegacyMemory()));
     }
     actions.append(preview);
-    body.append(note, actions, result, activationResult, receiptResult, memoryResult);
+    body.append(note, actions, result, activationResult, rollbackResult, receiptResult, memoryResult);
     panel.append(body);
     return panel;
   }
@@ -766,7 +889,7 @@
     buttons.append(appElement("small", appWorkerLabels[status.worker]), edit);
     const toggle = appSetupButton(running ? "暂停 Agent" : "启动 Agent",
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
-    toggle.disabled ||= status.worker === "stopping" || !running && !status.configured_policy?.conversation_enabled;
+    toggle.disabled ||= ["stopping", "rollback_frozen"].includes(status.worker) || !running && !status.configured_policy?.conversation_enabled;
     buttons.append(toggle);
     const legacyImport = legacyImportControls(id, status.legacy_import, status);
     panel.append(buttons);

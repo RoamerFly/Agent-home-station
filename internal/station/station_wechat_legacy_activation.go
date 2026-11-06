@@ -139,6 +139,9 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if !w.policy.RollbackFrozenAt.IsZero() {
+		return blocked("此连接已为回退停发，请先查看回退核对")
+	}
 	if w.policy.LegacyArchiveDigest != "" && w.policy.LegacyArchiveDigest != archive.Plan.Digest {
 		return blocked("旧接入摘要与工作器记录不一致")
 	}
@@ -331,6 +334,9 @@ func (s *stationWechat) legacyActivationGuard(ctx context.Context, id string, na
 }
 
 func (s *stationWechat) legacyActivationCheck(ctx context.Context, id string, native *linuxnative.Sender, root *os.Root, policy stationWechatPolicy) (func() bool, error) {
+	if !policy.RollbackFrozenAt.IsZero() {
+		return nil, apphost.ErrLifecycleCutover
+	}
 	archive, err := readLegacyImportArchive(root)
 	if errors.Is(err, os.ErrNotExist) && policy.LegacyActivation == nil && policy.LegacyArchiveDigest == "" {
 		return nil, s.checkUnarchivedNativeProfile(id)
@@ -394,6 +400,20 @@ func (s *stationWechat) WorkerSender(ctx context.Context, id string) (*linuxnati
 	if err != nil {
 		return nil, err
 	}
-	native.GuardChanges(func(ctx context.Context) error { return s.admitPlatformWrite(ctx, id, native) })
+	native.GuardChanges(func(ctx context.Context) (func(), error) {
+		w, err := s.worker(id, false)
+		if err != nil {
+			return nil, err
+		}
+		if w == nil {
+			return nil, s.admitPlatformWrite(ctx, id, native)
+		}
+		w.platformMu.RLock()
+		if err := s.admitPlatformWrite(ctx, id, native); err != nil {
+			w.platformMu.RUnlock()
+			return nil, err
+		}
+		return w.platformMu.RUnlock, nil
+	})
 	return native, nil
 }

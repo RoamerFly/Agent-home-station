@@ -27,11 +27,11 @@ func TestNativeChangeGuardKeepsReadsAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.GuardChanges(func(_ context.Context) error {
+	s.GuardChanges(func(_ context.Context) (func(), error) {
 		if !admitted.Load() {
-			return errors.New("synthetic cutover conflict")
+			return nil, errors.New("synthetic cutover conflict")
 		}
-		return nil
+		return nil, nil
 	})
 	for _, operation := range []struct {
 		method, path string

@@ -71,7 +71,8 @@ type stationWechatPolicy struct {
 	LegacyActivation *legacyActivation `json:"legacy_activation,omitempty"`
 	// Older imports may only have the archive digest. It is still sufficient to
 	// require the same activation gate until the connection is explicitly bound.
-	LegacyArchiveDigest string `json:"legacy_archive_digest,omitempty"`
+	LegacyArchiveDigest string    `json:"legacy_archive_digest,omitempty"`
+	RollbackFrozenAt    time.Time `json:"rollback_frozen_at,omitzero"`
 }
 
 const stationWechatPolicyLimit = 128 << 10
@@ -79,6 +80,7 @@ const stationWechatPolicyLimit = 128 << 10
 type stationWechatWorker struct {
 	mu         sync.Mutex
 	deliveryMu sync.Mutex
+	platformMu sync.RWMutex
 	shareMu    sync.Mutex
 	share      *stationShareHost
 	dir        string
@@ -258,6 +260,9 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 	if policy.LegacyActivation != nil && !policy.LegacyActivation.valid() || policy.LegacyArchiveDigest != "" && !legacyMemoryDigestValid(policy.LegacyArchiveDigest) {
 		return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 	}
+	if !policy.RollbackFrozenAt.IsZero() && (!policy.Paused || policy.LegacyActivation == nil) {
+		return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
+	}
 	for thread, granted := range policy.Grants {
 		if !identity.ValidPathID(thread) || granted.IsZero() {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
@@ -353,6 +358,8 @@ func (w *stationWechatWorker) state() string {
 		}
 	}
 	switch {
+	case !w.policy.RollbackFrozenAt.IsZero():
+		return "rollback_frozen"
 	case w.policy.Paused:
 		return "paused"
 	case w.cutoverBlocked.Load():
@@ -604,6 +611,9 @@ func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, run
 		return apphost.ConnectionLifecycle{}, apphost.ErrLifecycleConflict
 	}
 	if running {
+		if !w.policy.RollbackFrozenAt.IsZero() {
+			return apphost.ConnectionLifecycle{}, apphost.ErrLifecycleCutover
+		}
 		_, modelErr := s.modelPersona()
 		if modelErr != nil || len(w.policy.Grants) == 0 {
 			return apphost.ConnectionLifecycle{}, apphost.ErrLifecycleNotReady

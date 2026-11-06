@@ -496,6 +496,7 @@ def verify(binary, output):
                 worker = {"state": "disabled", "threads": [], "history_threads": [], "attachment_threads": [], "media_reply_threads": [], "group_mute_threads": [], "group_rules": [], "contact_read": False, "actions": [], "policy_payloads": []}
                 legacy = {"availability": "available", "previews": 0, "posts": [], "source_removed": False}
                 legacy_activation = {"gets": 0, "posts": []}
+                legacy_rollback = {"gets": [], "posts": []}
                 legacy_memory = {"requests": []}
                 legacy_memory_selection = {"gets": [], "posts": []}
                 legacy_group_rule = {"gets": [], "posts": []}
@@ -613,6 +614,42 @@ def verify(binary, output):
 
                 # Register after the import handler: Playwright resolves routes in reverse order.
                 page.route(legacy_activation_pattern, legacy_activation_route)
+                legacy_rollback_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/legacy-import/rollback(?:\?.*)?$")
+                rollback_cursor = "c" * 64 + ":rollback-unknown"
+
+                def legacy_rollback_route(route):
+                    if route.request.method == "POST":
+                        assert route.request.headers.get("x-csrf-token"), "rollback freeze lacks owner CSRF"
+                        assert route.request.post_data_json == {}
+                        assert len(legacy_activation["posts"]) == 2, "freeze must remain unavailable before activation confirmation"
+                        legacy_rollback["posts"].append({})
+                        fulfill_json({"state": "draining", "eligible": True}, status=202)(route)
+                        return
+                    assert route.request.method == "GET", "rollback audit must only inspect receipts"
+                    parsed = urlparse(route.request.url)
+                    after = parse_qs(parsed.query, keep_blank_values=True).get("after", [""])[0]
+                    legacy_rollback["gets"].append(after)
+                    if not legacy_rollback["posts"]:
+                        fulfill_json({"state": "not_frozen", "eligible": len(legacy_activation["posts"]) == 2,
+                                      "items": []})(route)
+                        return
+                    if len(legacy_rollback["gets"]) == 2:
+                        fulfill_json({"state": "draining", "eligible": True, "items": []})(route)
+                        return
+                    if after == rollback_cursor:
+                        fulfill_json({"state": "frozen", "eligible": True, "frozen_at": "2026-11-07T08:00:00Z",
+                                      "items": [{"idempotency_key": "rollback-terminal", "conversation_id": "synthetic-room@chatroom",
+                                                 "kind": "voice", "state": "cancelled", "disposition": "terminal"}]})(route)
+                        return
+                    fulfill_json({"state": "frozen", "eligible": True, "frozen_at": "2026-11-07T08:00:00Z",
+                                  "next_after": rollback_cursor, "items": [
+                                      {"idempotency_key": "rollback-accepted", "conversation_id": "synthetic-room@chatroom",
+                                       "kind": "text", "state": "accepted", "disposition": "accepted"},
+                                      {"idempotency_key": "rollback-unknown", "conversation_id": "synthetic-room@chatroom",
+                                       "kind": "file", "state": "submission_unknown", "disposition": "unknown"}
+                                  ]})(route)
+
+                page.route(legacy_rollback_pattern, legacy_rollback_route)
                 legacy_receipts_pattern = re.compile(r"/api/apps/wechat/connections/synthetic-wechat/legacy-import/receipts(?:/[^/?]+)?(?:\?.*)?$")
                 long_legacy_key = "legacy-accepted-" + "a" * 110
 
@@ -870,6 +907,21 @@ def verify(binary, output):
                     {"digest": "fixture-activation-v2", "same_identity": True, "reviewed_receipts": True}
                 ], "activation confirmation must post only its explicit checks"
                 assert not worker["actions"] and not worker["threads"], "confirmation must not start Agent or mutate reply policy"
+                page.get_by_role("button", name="查看冻结状态", exact=True).click()
+                page.get_by_text("尚未冻结新投递", exact=True).wait_for()
+                page.get_by_role("button", name="冻结新投递并核对", exact=True).click()
+                page.get_by_text("新提交已停止，正在等待本机工作器和已有请求退出。", exact=True).wait_for()
+                assert page.get_by_role("button", name="读取下一页投递", exact=True).count() == 0
+                page.get_by_role("button", name="刷新投递核对", exact=True).click()
+                page.get_by_text("新投递已冻结", exact=True).wait_for()
+                page.get_by_text("本地新投递已停止。此状态不代表已获得回退权限；仍可能有在途或结果待核对的投递。", exact=True).wait_for()
+                page.get_by_text("文字 · 微信已接受", exact=True).wait_for()
+                page.get_by_text("文件 · 结果待核对", exact=True).wait_for()
+                page.get_by_role("button", name="读取下一页投递", exact=True).click()
+                page.get_by_text("语音 · 已结束", exact=True).wait_for()
+                assert legacy_rollback["posts"] == [{}], "freeze must submit only an empty owner request"
+                assert legacy_rollback["gets"] == ["", "", "", rollback_cursor], "rollback receipts must page only after frozen"
+                assert page.get_by_role("button", name="恢复投递", exact=True).count() == 0, "freeze screen must not provide a release path"
                 page.get_by_role("button", name="重新核对启用条件", exact=True).click()
                 page.get_by_text("暂不能启用", exact=True).wait_for()
                 page.get_by_text("说明：旧宿主停机记录已变化，请先重新导入后再启用", exact=True).wait_for()
@@ -893,11 +945,11 @@ def verify(binary, output):
                 page.get_by_text("旧版回执快照已变化，请从第一页重新读取。", exact=True).wait_for()
                 page.get_by_role("button", name="从第一页重新读取", exact=True).click()
                 page.get_by_role("button", name="读取下一页旧回执", exact=True).click()
-                page.get_by_text("会话：synthetic-room@chatroom", exact=True).wait_for()
+                page.locator(".legacy-receipt-list").get_by_text("会话：synthetic-room@chatroom", exact=True).wait_for()
                 assert legacy_receipts["pages"] == ["", "fixture-legacy-stale", "", "fixture-legacy-next"], "stale legacy cursor must restart from the first page"
                 page.get_by_label("只看待核对", exact=True).check()
                 page.get_by_text("快照内回执：4；待核对：2", exact=True).wait_for()
-                assert page.locator(".legacy-memory-scope").filter(has_text="发送结果待核对").count() == 1, "pending filter must only retain unresolved legacy receipts"
+                assert page.locator(".legacy-receipt-list .legacy-memory-scope").filter(has_text="发送结果待核对").count() == 1, "pending filter must only retain unresolved legacy receipts"
                 assert legacy_receipts["filters"][-1] is True and legacy_receipts["pages"][-1] == "", "pending filter must restart at the first legacy receipt page"
                 page.get_by_role("button", name="核对旧会话记忆", exact=True).click()
                 page.get_by_role("button", name="核对旧群备注", exact=True).click()

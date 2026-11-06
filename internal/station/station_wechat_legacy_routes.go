@@ -16,6 +16,7 @@ func (s *stationWechat) legacyImportRoutes(server *websession.Store, mux *http.S
 	s.legacyGroupSettingRoutes(server, mux, path+"/groups/{thread}/rule", true)
 	s.legacyReceiptRoutes(server, mux, path+"/receipts")
 	s.legacyActivationRoutes(server, mux, path+"/activation")
+	s.legacyRollbackRoutes(server, mux, path+"/rollback")
 	mux.HandleFunc("GET "+path, server.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		id := r.PathValue("connection")

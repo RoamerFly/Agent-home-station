@@ -35,6 +35,7 @@ type DeliveryEvidencePage struct {
 	Keys                []string
 	Records             map[string]DeliveryEvidence
 	NextAfter, Snapshot string
+	ServerID            string
 }
 
 func ReadDeliveryEvidencePage(dir, account, after string, limit int) (DeliveryEvidencePage, error) {
@@ -54,7 +55,7 @@ func ReadDeliveryEvidencePage(dir, account, after string, limit int) (DeliveryEv
 	if err != nil {
 		return page, err
 	}
-	rows, err := decodeDeliveryEvidence(raw, account, nil)
+	rows, err := decodeDeliveryEvidence(raw, account, nil, &page.ServerID)
 	if err != nil {
 		return page, err
 	}
@@ -103,7 +104,7 @@ func ReadDeliveryEvidence(dir, account string, keys []string) (map[string]Delive
 	if err != nil {
 		return nil, err
 	}
-	return decodeDeliveryEvidence(raw, account, keys)
+	return decodeDeliveryEvidence(raw, account, keys, nil)
 }
 
 // LegacyDeliveryEvidence projects a stopped queue without installing any
@@ -131,15 +132,16 @@ func LegacyDeliveryEvidence(raw, cursor []byte, account string) (server string, 
 	if len(raw) == 0 {
 		return head.Server, nil, nil
 	}
-	items, err := decodeDeliveryEvidence(raw, account, nil)
+	items, err := decodeDeliveryEvidence(raw, account, nil, nil)
 	return head.Server, items, err
 }
 
-func decodeDeliveryEvidence(raw []byte, account string, keys []string) (map[string]DeliveryEvidence, error) {
+func decodeDeliveryEvidence(raw []byte, account string, keys []string, server *string) (map[string]DeliveryEvidence, error) {
 	out := make(map[string]DeliveryEvidence, len(keys))
 	var snapshot struct {
 		Version    int    `json:"version"`
 		Account    string `json:"account"`
+		Server     string `json:"server"`
 		Deliveries []*struct {
 			deliveryCheckpointIdentity
 			Thread        string   `json:"thread"`
@@ -163,6 +165,9 @@ func decodeDeliveryEvidence(raw []byte, account string, keys []string) (map[stri
 	}
 	if len(raw) > MaxDeliveryCheckpointBytes || json.Unmarshal(raw, &snapshot) != nil || !SupportedDeliveryCheckpointVersion(snapshot.Version) || snapshot.Account != account || len(snapshot.Deliveries) > 3000 || len(snapshot.Media) > 1000 {
 		return nil, errors.New("invalid delivery checkpoint identity")
+	}
+	if server != nil {
+		*server = snapshot.Server
 	}
 	wanted := make(map[string]bool, len(keys))
 	for _, key := range keys {

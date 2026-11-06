@@ -2,6 +2,7 @@ package station
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -81,6 +82,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	var pushAfterInvalid atomic.Bool
 	var daemonOffline atomic.Bool
 	var loginOnline atomic.Bool
+	writeStarted, allowWriteFinish := make(chan struct{}), make(chan struct{})
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer synthetic-legacy-native-token" {
 			t.Error("wrong daemon credential")
@@ -89,6 +91,16 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		}
 		if r.Method == http.MethodPut && r.URL.Path == "/v1/accounts/one/threads/123@chatroom/notifications" {
 			guardedWrites.Add(1)
+			if r.Header.Get("Idempotency-Key") == "rollback-inflight" {
+				close(writeStarted)
+				w.Header().Set("Content-Type", "application/json")
+				w.(http.Flusher).Flush()
+				select {
+				case <-allowWriteFinish:
+				case <-r.Context().Done():
+					return
+				}
+			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": "synthetic-action", "accountId": "one", "threadId": "123@chatroom", "kind": "mute", "state": "succeeded"})
 			return
 		}
@@ -117,6 +129,12 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		case "/v1/accounts/four/sends/job-pending":
 			receiptReads.Add(1)
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": "job-pending", "accountId": "four", "threadId": "filehelper", "kind": "text", "state": "accepted", "serverId": "69234"})
+		case "/v1/accounts/one/sends/by-idempotency-key":
+			if r.URL.Query().Get("key") != "b-active" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "job-active", "accountId": "one", "threadId": "filehelper", "kind": "text", "state": "running"})
 		case "/v1/accounts/one/events":
 			eventReads.Add(1)
 			page := linuxnative.EventPage{Items: []linuxnative.Event{}, NextCursor: "0"}
@@ -809,6 +827,10 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if _, err := guardedSender.ExecuteAction(t.Context(), guardedAction, "confirmed"); err != nil || guardedWrites.Load() != 1 {
 		t.Fatal("confirmed action did not reach native exactly once", err)
 	}
+	claimBytes, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(claimPath); err != nil {
 		t.Fatal(err)
 	}
@@ -832,6 +854,85 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal("restart resumed the invalidated legacy worker")
 	}
 	req("POST", route("one")+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
+	write(claimPath, claimBytes)
+	rollbackRoute := planRoute("one") + "/rollback"
+	req("POST", rollbackRoute, map[string]any{}, false, 403)
+	if view := req("GET", rollbackRoute, nil, false, 200); view["eligible"] != true || view["state"] != "not_frozen" {
+		t.Fatal("read-only rollback status unexpectedly froze the connection", view)
+	}
+	guardedSender, err = h.chat.wechat.WorkerSender(t.Context(), wechatapp.ConnectionID("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeResult := make(chan error, 1)
+	writeCtx, cancelWrite := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancelWrite()
+	go func() {
+		_, err := guardedSender.ExecuteAction(writeCtx, guardedAction, "rollback-inflight")
+		writeResult <- err
+	}()
+	select {
+	case <-writeStarted:
+	case <-writeCtx.Done():
+		t.Fatal("synthetic action never reached the native response body", writeCtx.Err())
+	}
+	if view := req("POST", rollbackRoute, map[string]any{}, true, 202); view["state"] != "draining" {
+		t.Fatal("freeze did not wait for the existing native HTTP response body", view)
+	}
+	if _, err := guardedSender.ExecuteAction(t.Context(), guardedAction, "after-freeze"); !errors.Is(err, linuxnative.ErrWriteNotAdmitted) {
+		t.Fatal("new native action passed the durable freeze", err)
+	}
+	close(allowWriteFinish)
+	if err := <-writeResult; err != nil {
+		t.Fatal(err)
+	}
+	if view := req("GET", rollbackRoute, nil, false, 200); view["state"] != "frozen" {
+		t.Fatal("drain did not finish after the in-flight response body closed", view)
+	}
+	if guardedWrites.Load() != 2 || sideEffects.Load() != 0 {
+		t.Fatal("rollback changed the number of native writes", guardedWrites.Load(), sideEffects.Load())
+	}
+	newQueuePath := filepath.Join(target, "queue", "messages-v2.json")
+	newQueue := `{"version":2,"server":"new-dataset","account":"one","deliveries":[{"key":"a-accepted","id":"job-sent","thread":"filehelper","state":"accepted","server_id":"91234","text":"synthetic-private-text","input":{"account":"one","thread":"filehelper"}},{"key":"b-active","id":"job-active","thread":"filehelper","state":"waiting","input":{"account":"one","thread":"filehelper"}},{"key":"c-unknown","thread":"filehelper","state":"submitting","input":{"account":"one","thread":"filehelper"}}]}`
+	write(newQueuePath, []byte(newQueue))
+	rollbackFirst := req("GET", rollbackRoute+"?limit=2", nil, false, 200)
+	items := rollbackFirst["items"].([]any)
+	accepted, active := items[0].(map[string]any), items[1].(map[string]any)
+	if rollbackFirst["native"] != "available" || accepted["disposition"] != "accepted" || accepted["server_id"] != "91234" ||
+		active["disposition"] != "active" || bytes.Contains(j(rollbackFirst), []byte("synthetic-private-text")) {
+		t.Fatal("rollback report lost or exposed delivery evidence", rollbackFirst)
+	}
+	rollbackNextPath := rollbackRoute + "?limit=2&after=" + url.QueryEscape(rollbackFirst["next_after"].(string))
+	rollbackSecond := req("GET", rollbackNextPath, nil, false, 200)
+	if row := rollbackSecond["items"].([]any)[0].(map[string]any); row["disposition"] != "unknown" || row["lookup"] != "not_found" || rollbackSecond["snapshot"] != rollbackFirst["snapshot"] {
+		t.Fatal("missing native receipt was not retained as unknown", rollbackSecond)
+	}
+	write(newQueuePath, []byte(newQueue+"\n"))
+	req("GET", rollbackNextPath, nil, false, 409)
+	write(newQueuePath, []byte(strings.Replace(newQueue, "new-dataset", "other-dataset", 1)))
+	if mismatch := req("GET", rollbackRoute+"?limit=2", nil, false, 200); mismatch["native"] != "dataset_mismatch" ||
+		mismatch["items"].([]any)[1].(map[string]any)["disposition"] != "unknown" {
+		t.Fatal("rollback queried a checkpoint against a different native dataset", mismatch)
+	}
+	write(newQueuePath, []byte(newQueue))
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h, f = open()
+	f.login()
+	req("POST", route("one")+"/lifecycle", start, true, 409)
+	daemonOffline.Store(true)
+	offline := req("GET", rollbackRoute+"?limit=3", nil, false, 200)
+	repeated := req("POST", rollbackRoute, map[string]any{}, true, 200)
+	daemonOffline.Store(false)
+	if offline["state"] != "frozen" || offline["snapshot"] != rollbackFirst["snapshot"] || offline["native"] != "unavailable" ||
+		repeated["frozen_at"] != rollbackFirst["frozen_at"] ||
+		offline["items"].([]any)[1].(map[string]any)["disposition"] != "unknown" {
+		t.Fatal("restart or native outage lost the frozen audit or misclassified pending work", offline)
+	}
+	if saved, err := os.ReadFile(claimPath); err != nil || !bytes.Equal(saved, claimBytes) {
+		t.Fatal("rollback audit removed or changed the claim", err)
+	}
 }
 
 func planDigest(plan map[string]any) map[string]any { return map[string]any{"digest": plan["digest"]} }
