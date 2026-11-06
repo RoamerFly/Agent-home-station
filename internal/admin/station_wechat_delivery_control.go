@@ -15,6 +15,8 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/workspacefs"
+
+	"wechat-bot/internal/websession"
 )
 
 type stationDeliveryStop struct {
@@ -126,9 +128,9 @@ func (w *stationWechatWorker) saveDeliveryStop(stop stationDeliveryStop) error {
 	return writeStationControlJournal(w.dir, "delivery-stops.json", rows)
 }
 
-func (s *stationWechat) deliveryControlRoutes(owner *Server, mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/receipts/{key}/cancel", owner.protected(s.cancelDelivery))
-	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/receipts/{key}/resume", owner.protected(s.requestDeliveryResume))
+func (s *stationWechat) deliveryControlRoutes(owner *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/receipts/{key}/cancel", owner.Protect(s.cancelDelivery))
+	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/receipts/{key}/resume", owner.Protect(s.requestDeliveryResume))
 }
 
 func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {

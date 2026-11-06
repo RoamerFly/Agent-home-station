@@ -1,4 +1,4 @@
-package admin
+package apphttp
 
 import (
 	"errors"
@@ -7,18 +7,19 @@ import (
 	"strconv"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/websession"
 )
 
 var appSetupRequestID = regexp.MustCompile("^[a-f0-9]{32}$")
 
-func (s *Server) appAccountSetupRoutes(mux *http.ServeMux, registry apphost.Registry) {
+func registerAccountSetup(mux *http.ServeMux, auth *websession.Store, registry apphost.Registry) {
 	route := func(pattern string, run func(http.ResponseWriter, *http.Request, apphost.AccountSetup)) {
-		mux.HandleFunc(pattern, s.protected(func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(pattern, auth.Protect(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
 			app, ok := registry.Lookup(r.PathValue("app"))
 			setup, supported := app.Provider.(apphost.AccountSetup)
 			if !ok || !supported {
-				fail(w, http.StatusNotFound, "应用未提供账号接入")
+				websession.Fail(w, http.StatusNotFound, "应用未提供账号接入")
 				return
 			}
 			run(w, r, setup)
@@ -47,7 +48,7 @@ func (s *Server) appAccountSetupRoutes(mux *http.ServeMux, registry apphost.Regi
 	route("GET /api/apps/{app}/connections/{connection}/login/{operation}/qr", func(w http.ResponseWriter, r *http.Request, setup apphost.AccountSetup) {
 		generation, err := strconv.Atoi(r.URL.Query().Get("generation"))
 		if err != nil || generation < 0 || generation > 100 {
-			fail(w, http.StatusBadRequest, "二维码代次无效")
+			websession.Fail(w, http.StatusBadRequest, "二维码代次无效")
 			return
 		}
 		data, err := setup.ReadConnectionQR(r.Context(), r.PathValue("connection"), r.PathValue("operation"), generation)
@@ -64,11 +65,11 @@ func readAppSetupRequest(w http.ResponseWriter, r *http.Request) string {
 	var in struct {
 		RequestID string `json:"request_id"`
 	}
-	if !decode(w, r, &in) {
+	if !websession.Decode(w, r, &in) {
 		return ""
 	}
 	if !appSetupRequestID.MatchString(in.RequestID) {
-		fail(w, http.StatusBadRequest, "账号操作缺少有效请求编号")
+		websession.Fail(w, http.StatusBadRequest, "账号操作缺少有效请求编号")
 		return ""
 	}
 	return in.RequestID
@@ -77,12 +78,12 @@ func readAppSetupRequest(w http.ResponseWriter, r *http.Request) string {
 func appSetupResponse(w http.ResponseWriter, value any, err error) {
 	switch {
 	case errors.Is(err, apphost.ErrNotFound):
-		fail(w, http.StatusNotFound, "未找到对应的账号、登录操作或二维码")
+		websession.Fail(w, http.StatusNotFound, "未找到对应的账号、登录操作或二维码")
 	case errors.Is(err, apphost.ErrLifecycleConflict):
-		fail(w, http.StatusConflict, "此账号已登录、正在恢复，或已有扫码请求")
+		websession.Fail(w, http.StatusConflict, "此账号已登录、正在恢复，或已有扫码请求")
 	case err != nil:
-		fail(w, http.StatusServiceUnavailable, "暂时无法核对账号操作，请稍后重试当前请求")
+		websession.Fail(w, http.StatusServiceUnavailable, "暂时无法核对账号操作，请稍后重试当前请求")
 	default:
-		respond(w, http.StatusOK, value)
+		websession.Respond(w, http.StatusOK, value)
 	}
 }

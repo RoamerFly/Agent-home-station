@@ -13,6 +13,7 @@ import (
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -70,7 +71,7 @@ func legacyMemoryDigestValid(digest string) bool {
 	return len(digest) == sha256.Size*2 && err == nil
 }
 
-func (s *stationWechat) legacyMemoryImportRoutes(server *Server, mux *http.ServeMux) {
+func (s *stationWechat) legacyMemoryImportRoutes(server *websession.Store, mux *http.ServeMux) {
 	const path = "/api/apps/wechat/connections/{connection}/legacy-import/memory/{thread}"
 	handle := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -107,8 +108,8 @@ func (s *stationWechat) legacyMemoryImportRoutes(server *Server, mux *http.Serve
 		}
 		respond(w, http.StatusOK, view)
 	}
-	mux.HandleFunc("GET "+path, server.protected(handle))
-	mux.HandleFunc("POST "+path, server.protected(handle))
+	mux.HandleFunc("GET "+path, server.Protect(handle))
+	mux.HandleFunc("POST "+path, server.Protect(handle))
 }
 
 func (s *stationWechat) legacyMemoryImport(ctx context.Context, id, thread, digest string) (legacyMemoryImportView, error) {

@@ -1,10 +1,8 @@
 package admin
 
 import (
-	"crypto/sha256"
 	"errors"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,8 +10,12 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/apphttp"
+	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 )
+
+const localOwnerCookie = "ahs_local_session"
 
 // localHomeService owns the companion's home, not an application's account.
 // Authentication is provided by the local owner's management session. No
@@ -41,16 +43,17 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ..
 // NewLocalHomeHandlerWithApps attaches registrations already verified by the
 // station host. Applications cannot register themselves through the HTTP API.
 func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, registry apphost.Registry, windows ...*agenthost.WindowsConfig) (*LocalHomeHandler, error) {
-	if dir == "" || workspaceRoot == "" || !validPassword(password) {
+	if dir == "" || workspaceRoot == "" {
 		return nil, errors.New("本地主人配置无效")
 	}
-	if origin != "" {
-		u, err := url.Parse(origin)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
-			return nil, errors.New("本地主人地址无效")
-		}
+	auth, err := websession.New(password, origin, localOwnerCookie)
+	if errors.Is(err, websession.ErrOrigin) {
+		return nil, errors.New("本地主人地址无效")
 	}
-	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, errors.New("本地主人配置无效")
+	}
+	dir, err = filepath.Abs(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -65,30 +68,26 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	if err = root.Close(); err != nil {
 		return nil, err
 	}
-	s := &Server{cookieName: "ahs_local_session", passwordHash: sha256.Sum256([]byte(password)), origin: origin, sessions: map[string]session{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusOK, map[string]any{"ok": true, "mode": "local", "wechat_required": false})
 	})
-	mux.HandleFunc("POST /api/login", s.login)
-	mux.HandleFunc("GET /api/session", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		_, value, _ := s.session(r)
-		respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": value.CSRF})
-	}))
+	mux.HandleFunc("POST /api/login", auth.Login)
+	mux.HandleFunc("GET /api/session", auth.Protect(auth.Status))
 	home := &localHomeService{identity: newFishIdentityRegistry(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true}
 	home.configureAppCatalog()
-	home.appInstallRoutes(s, mux)
-	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
-	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
+	home.appInstallRoutes(auth, mux)
+	mux.HandleFunc("GET /api/local/home", auth.Protect(home.status))
+	mux.HandleFunc("POST /api/local/home", auth.Protect(home.update))
 	chat := newLocalChatService(home)
 	home.projectTools = chat.projectTools
-	mux.HandleFunc("POST /api/logout", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		s.logout(w, r)
+	mux.HandleFunc("POST /api/logout", auth.Protect(func(w http.ResponseWriter, r *http.Request) {
+		auth.Logout(w, r)
 		chat.projectTools.obs.stop()
 	}))
-	chat.projectTools.routes(s, mux)
+	chat.projectTools.routes(auth, mux)
 	home.artifacts = &localArtifactStore{home: home, chat: chat}
-	home.artifacts.routes(s, mux)
+	home.artifacts.routes(auth, mux)
 	handler := &LocalHomeHandler{Handler: mux, chat: chat, home: home}
 	if len(windows) > 0 && windows[0] != nil {
 		copy := *windows[0]
@@ -112,8 +111,8 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	if err != nil {
 		return nil, err
 	}
-	home.bilibiliRoutes(s, mux, registry)
-	home.douyinRoutes(s, mux, registry, chat.ctx)
+	home.bilibiliRoutes(auth, mux, registry)
+	home.douyinRoutes(auth, mux, registry, chat.ctx)
 	registry, handler.wechat, err = bindStationWechat(registry, chat)
 	if err != nil {
 		return nil, err
@@ -124,24 +123,24 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	chat.liveOutput, chat.liveEncoder = stationLiveOutput(dir, workspaceRoot)
 	chat.startLiveRecovery()
 	chat.observations = apphost.NewObserver(registry, filepath.Join(dir, "app-observations"))
-	s.appRoutes(mux, registry)
+	apphttp.Register(mux, auth, registry)
 	if handler.wechat != nil {
 		chat.wechat = handler.wechat
-		handler.wechat.contactRoutes(s, mux)
-		handler.wechat.groupActionRoutes(s, mux, home.identity)
-		handler.wechat.recallRoutes(s, mux, home.identity)
-		handler.wechat.legacyImportRoutes(s, mux)
-		handler.wechat.attachmentRoutes(s, mux)
-		handler.wechat.shareRoutes(s, mux)
-		handler.wechat.artifactRoutes(s, mux)
-		handler.wechat.deliveryControlRoutes(s, mux)
+		handler.wechat.contactRoutes(auth, mux)
+		handler.wechat.groupActionRoutes(auth, mux, home.identity)
+		handler.wechat.recallRoutes(auth, mux, home.identity)
+		handler.wechat.legacyImportRoutes(auth, mux)
+		handler.wechat.attachmentRoutes(auth, mux)
+		handler.wechat.shareRoutes(auth, mux)
+		handler.wechat.artifactRoutes(auth, mux)
+		handler.wechat.deliveryControlRoutes(auth, mux)
 		handler.wechat.restore()
 	}
-	chat.routes(s, mux)
+	chat.routes(auth, mux)
 	// Desktop owns the inherited stop pipe. This authenticated endpoint only
 	// proves which local-station process it started; it is intentionally not a
 	// public stop surface and it never exposes application-account state.
-	mux.HandleFunc("GET /api/local/runtime", s.protected(handler.runtime))
+	mux.HandleFunc("GET /api/local/runtime", auth.Protect(handler.runtime))
 	for route, asset := range map[string]string{
 		"/": "local-home.html", "/assets/local-home.js": "local-home.js", "/assets/local-home.css": "local-home.css",
 		"/assets/whale-girl-cutout.png": "whale-girl-cutout.png", "/assets/night-sea.webp": "night-sea.webp",
@@ -172,14 +171,6 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 		})
 	}
 	return handler, nil
-}
-
-func (s *Server) localHomeRoutes(mux *http.ServeMux, identity *fishIdentityRegistry, root, dataDir string) {
-	home := &localHomeService{identity: identity, root: root, dataDir: dataDir}
-	home.configureAppCatalog()
-	home.appInstallRoutes(s, mux)
-	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
-	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
 }
 
 func (h *localHomeService) directory(record fishIdentityRecord) (string, error) {

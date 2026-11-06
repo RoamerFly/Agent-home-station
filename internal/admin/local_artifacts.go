@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -350,8 +351,8 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 	return a, nil
 }
 
-func (s *localArtifactStore) routes(owner *Server, mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/local/artifacts", owner.protected(func(w http.ResponseWriter, r *http.Request) {
+func (s *localArtifactStore) routes(owner *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/local/artifacts", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		var in localArtifactInput
 		if !decode(w, r, &in) {
 			return
@@ -366,7 +367,7 @@ func (s *localArtifactStore) routes(owner *Server, mux *http.ServeMux) {
 		w.Header().Set("Cache-Control", "no-store")
 		respond(w, 200, a.view())
 	}))
-	mux.HandleFunc("GET /api/local/artifacts/{artifact}", owner.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/local/artifacts/{artifact}", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		a, err := s.read(r.PathValue("artifact"))
 		if err != nil {
 			fail(w, 404, "成品不存在或来源已变化")
@@ -375,7 +376,7 @@ func (s *localArtifactStore) routes(owner *Server, mux *http.ServeMux) {
 		w.Header().Set("Cache-Control", "no-store")
 		respond(w, 200, a.view())
 	}))
-	mux.HandleFunc("GET /api/local/artifacts/{artifact}/download", owner.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/local/artifacts/{artifact}/download", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		a, err := s.read(r.PathValue("artifact"))
 		if err != nil {
 			fail(w, 404, "成品不存在或来源已变化")

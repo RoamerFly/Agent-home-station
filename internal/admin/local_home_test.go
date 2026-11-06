@@ -180,6 +180,46 @@ func TestLocalHomeCredentialBoundaryAndNoWeChatRoutes(t *testing.T) {
 	}
 }
 
+func TestLocalAndLegacySessionsAreIndependentInOneBrowser(t *testing.T) {
+	base := t.TempDir()
+	local := newLocalHomeFixture(t, filepath.Join(base, "host"), filepath.Join(base, "workspace"))
+	legacy := setup(t)
+	local.client = legacy.client // Cookies are shared across ports on loopback.
+	legacy.login()
+	if code, _ := local.request("GET", "/api/apps", nil, false); code != http.StatusUnauthorized {
+		t.Fatalf("legacy session opened the station registry: %d", code)
+	}
+	local.login()
+	if code, _ := local.request("GET", "/api/apps", nil, false); code != http.StatusOK {
+		t.Fatalf("owner session could not open the station registry: %d", code)
+	}
+	if code, _, _ := legacy.request("GET", "/api/apps", nil, false, false); code != http.StatusOK {
+		t.Fatalf("station login replaced the legacy session: %d", code)
+	}
+	oldPassword, newPassword := "test-password-at-least-24-bytes", "synthetic-legacy-replacement"
+	if code, _, _ := legacy.request("POST", "/api/password", map[string]string{"current_password": oldPassword, "new_password": newPassword}, true, true); code != http.StatusOK {
+		t.Fatalf("legacy password rotation failed: %d", code)
+	}
+	if code, _ := local.request("GET", "/api/apps", nil, false); code != http.StatusOK {
+		t.Fatalf("legacy password rotation invalidated the station session: %d", code)
+	}
+	if code, _, _ := legacy.request("GET", "/api/apps", nil, false, false); code != http.StatusUnauthorized {
+		t.Fatalf("owner session opened the legacy registry: %d", code)
+	}
+	if code, _, _ := legacy.request("POST", "/api/login", map[string]string{"password": newPassword}, true, false); code != http.StatusOK {
+		t.Fatalf("legacy reauthentication failed: %d", code)
+	}
+	if code, _ := local.request("POST", "/api/logout", nil, true); code != http.StatusOK {
+		t.Fatalf("station logout failed: %d", code)
+	}
+	if code, _ := local.request("GET", "/api/apps", nil, false); code != http.StatusUnauthorized {
+		t.Fatalf("station session survived logout: %d", code)
+	}
+	if code, _, _ := legacy.request("GET", "/api/apps", nil, false, false); code != http.StatusOK {
+		t.Fatalf("station logout invalidated the legacy session: %d", code)
+	}
+}
+
 func TestLocalHomeRuntimeIsAuthenticatedAndIdentifiesOnlyThisStation(t *testing.T) {
 	base := t.TempDir()
 	f := newLocalHomeFixture(t, filepath.Join(base, "private"), filepath.Join(base, "workspace"))

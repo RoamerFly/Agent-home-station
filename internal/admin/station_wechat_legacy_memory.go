@@ -16,6 +16,7 @@ import (
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -42,9 +43,9 @@ type legacyMemoryPreview struct {
 	NextAfter      string                     `json:"next_after,omitempty"`
 }
 
-func (s *stationWechat) legacyMemoryRoute(server *Server, mux *http.ServeMux) {
+func (s *stationWechat) legacyMemoryRoute(server *websession.Store, mux *http.ServeMux) {
 	s.legacyMemoryImportRoutes(server, mux)
-	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/legacy-import/memory", server.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/legacy-import/memory", server.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		limit := 30
 		if raw := r.URL.Query().Get("limit"); raw != "" {

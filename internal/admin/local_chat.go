@@ -18,6 +18,7 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/websession"
 )
 
 // LocalHomeHandler owns the local chat and this station's app workers.
@@ -257,11 +258,11 @@ func (h *localChatService) conversation() (*companion.Store, companion.Input, er
 	return h.store, companion.Input{Channel: "local", Account: record.FishID, Thread: record.LocalOwner.ID, Sender: record.LocalOwner.ID, SenderName: "主人", SenderNameSource: "local_owner", Mode: "direct", Directed: true}, nil
 }
 
-func (h *localChatService) routes(s *Server, mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/local/chat", s.protected(h.history))
-	mux.HandleFunc("POST /api/local/chat", s.protected(h.send))
-	mux.HandleFunc("GET /api/local/model", s.protected(h.modelView))
-	mux.HandleFunc("PUT /api/local/model", s.protected(h.modelSave))
+func (h *localChatService) routes(s *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/local/chat", s.Protect(h.history))
+	mux.HandleFunc("POST /api/local/chat", s.Protect(h.send))
+	mux.HandleFunc("GET /api/local/model", s.Protect(h.modelView))
+	mux.HandleFunc("PUT /api/local/model", s.Protect(h.modelSave))
 	h.appObservationRoutes(s, mux)
 	h.publicationRoutes(s, mux)
 	h.liveRoutes(s, mux)

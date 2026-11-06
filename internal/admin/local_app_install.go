@@ -14,6 +14,8 @@ import (
 	appcatalog "wechat-bot/connected-apps"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/workspacefs"
+
+	"wechat-bot/internal/websession"
 )
 
 func (h *localHomeService) configureAppCatalog() {
@@ -22,8 +24,8 @@ func (h *localHomeService) configureAppCatalog() {
 	}
 }
 
-func (h *localHomeService) appInstallRoutes(s *Server, mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/local/apps/catalog", s.protected(func(w http.ResponseWriter, r *http.Request) {
+func (h *localHomeService) appInstallRoutes(s *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/local/apps/catalog", s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		ids := appcatalog.IDs()
 		rows := make([]map[string]any, 0, len(ids))
@@ -49,7 +51,7 @@ func (h *localHomeService) appInstallRoutes(s *Server, mux *http.ServeMux) {
 		}
 		respond(w, http.StatusOK, map[string]any{"applications": rows})
 	}))
-	mux.HandleFunc("POST /api/local/apps/{app}/install", s.protected(h.installAppSource))
+	mux.HandleFunc("POST /api/local/apps/{app}/install", s.Protect(h.installAppSource))
 }
 
 // appInstallState reports the checked-out source separately from the bundled

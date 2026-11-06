@@ -10,15 +10,17 @@ import (
 
 	biliapp "wechat-bot/connected-apps/bilibili/adapter"
 	"wechat-bot/internal/apphost"
+
+	"wechat-bot/internal/websession"
 )
 
-func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registry apphost.Registry) {
+func (h *localHomeService) bilibiliRoutes(s *websession.Store, mux *http.ServeMux, registry apphost.Registry) {
 	entry, ok := registry.Lookup(biliapp.ID)
 	bili, supported := entry.Provider.(*biliapp.PublicApp)
 	if !ok || !supported {
 		return
 	}
-	handler := s.protected(func(w http.ResponseWriter, r *http.Request) {
+	handler := s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		record, err := h.identity.localIdentity()
 		if err != nil || record.LocalOwner == nil {
@@ -85,7 +87,7 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 	})
 	mux.HandleFunc("GET /api/local/apps/bilibili/public", handler)
 	mux.HandleFunc("PUT /api/local/apps/bilibili/public", handler)
-	authorization := s.protected(func(w http.ResponseWriter, r *http.Request) {
+	authorization := s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		record, err := h.identity.localIdentity()
 		if err != nil || record.LocalOwner == nil {
@@ -124,10 +126,10 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 	})
 	mux.HandleFunc("GET /api/local/apps/bilibili/publication-authorization", authorization)
 	mux.HandleFunc("POST /api/local/apps/bilibili/publication-authorization", authorization)
-	mux.HandleFunc("POST /api/local/apps/bilibili/publication-oauth", s.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/local/apps/bilibili/publication-oauth", s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		record, err := h.identity.localIdentity()
-		sessionID, _, authenticated := s.session(r)
+		sessionID, _, authenticated := s.Lookup(r)
 		if err != nil || record.LocalOwner == nil || !authenticated {
 			fail(w, http.StatusConflict, "请先准备本机主人身份并登录")
 			return

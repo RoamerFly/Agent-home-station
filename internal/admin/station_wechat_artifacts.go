@@ -16,6 +16,8 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/workspacefs"
+
+	"wechat-bot/internal/websession"
 )
 
 type stationWorkGrant struct {
@@ -119,10 +121,10 @@ func (a *stationWorkAccess) list(in companion.Input, after string, limit int) ([
 	return items, "", nil
 }
 
-func (s *stationWechat) artifactRoutes(owner *Server, mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/work-grants", owner.protected(s.workGrants))
-	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/work-grants/{delivery}/revoke", owner.protected(s.revokeWorkGrant))
-	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/work-grants", owner.protected(func(w http.ResponseWriter, r *http.Request) {
+func (s *stationWechat) artifactRoutes(owner *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/work-grants", owner.Protect(s.workGrants))
+	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/work-grants/{delivery}/revoke", owner.Protect(s.revokeWorkGrant))
+	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/work-grants", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Artifact  string `json:"artifact_id"`
 			Thread    string `json:"thread_id"`

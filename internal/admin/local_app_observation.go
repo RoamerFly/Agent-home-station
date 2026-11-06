@@ -12,6 +12,8 @@ import (
 	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/mcptools"
+
+	"wechat-bot/internal/websession"
 )
 
 const localAppObservationToolName = "app_observe"
@@ -98,8 +100,8 @@ func (t *localToolSet) checkAppObservations(ctx context.Context) error {
 	return nil
 }
 
-func (h *localChatService) appObservationRoutes(s *Server, mux *http.ServeMux) {
-	handler := s.protected(func(w http.ResponseWriter, r *http.Request) {
+func (h *localChatService) appObservationRoutes(s *websession.Store, mux *http.ServeMux) {
+	handler := s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if h.stopping.Load() || h.observations == nil {
 			fail(w, http.StatusServiceUnavailable, "后台应用观察暂不可用")

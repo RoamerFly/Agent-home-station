@@ -12,6 +12,7 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/websession"
 )
 
 const localPublicationToolName = "app_publish"
@@ -145,8 +146,8 @@ func (t *localToolSet) callPublication(ctx context.Context, raw json.RawMessage)
 	return localProcessJSON(out)
 }
 
-func (h *localChatService) publicationRoutes(s *Server, mux *http.ServeMux) {
-	handler := s.protected(func(w http.ResponseWriter, r *http.Request) {
+func (h *localChatService) publicationRoutes(s *websession.Store, mux *http.ServeMux) {
+	handler := s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		publisher, actor, err := h.publicationHost()
 		if err != nil {
@@ -206,7 +207,7 @@ func (h *localChatService) publicationRoutes(s *Server, mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/local/publications", handler)
 	mux.HandleFunc("POST /api/local/publications", handler)
-	mux.HandleFunc("POST /api/local/publications/reconcile", s.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/local/publications/reconcile", s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		var in struct {
 			JobID string `json:"job_id"`

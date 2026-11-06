@@ -164,13 +164,6 @@ func revokeCompletedSpeech(t *testing.T, fixture *completedSpeechFixture, action
 		if code, _, _ := fixture.f.request("POST", "/api/logout", map[string]any{}, true, true); code != 200 {
 			t.Fatal("session logout failed", code)
 		}
-	case "session_expired":
-		server := m.accounts.root
-		server.mu.Lock()
-		value := server.sessions[fixture.sessionID]
-		value.Expires = time.Now().Add(-time.Second)
-		server.sessions[fixture.sessionID] = value
-		server.mu.Unlock()
 	case "draining":
 		m.mu.Lock()
 		m.drainTicket = "synthetic-completed-speech-drain"
@@ -186,7 +179,7 @@ func TestSpeechPluginCompletedResultRechecksAuthority(t *testing.T) {
 		admin  bool
 	}{
 		{"package_disabled", false}, {"configuration_changed", false}, {"conversation_task_cancelled", false}, {"source_forgotten", false}, {"voice_permission_revoked", false},
-		{"package_disabled", true}, {"configuration_changed", true}, {"session_revoked", true}, {"session_expired", true}, {"draining", true},
+		{"package_disabled", true}, {"configuration_changed", true}, {"session_revoked", true}, {"draining", true},
 	} {
 		name := "conversation/" + test.action
 		if test.admin {

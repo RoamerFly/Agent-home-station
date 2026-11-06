@@ -9,13 +9,14 @@ import (
 
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/sharespec"
+	"wechat-bot/internal/websession"
 	catalog "wechat-bot/plugins"
 )
 
-func (s *stationWechat) shareRoutes(owner *Server, mux *http.ServeMux) {
+func (s *stationWechat) shareRoutes(owner *websession.Store, mux *http.ServeMux) {
 	for _, plugin := range []string{shareServicePluginID, localASRPluginID} {
 		path := "/api/apps/wechat/connections/{connection}/" + plugin
-		handler := owner.protected(func(w http.ResponseWriter, r *http.Request) {
+		handler := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 			s.stationMediaSettings(w, r, plugin)
 		})
 		mux.HandleFunc("GET "+path, handler)

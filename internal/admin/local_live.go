@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/websession"
 )
 
 // localLiveUnavailable is intentionally useful on a production station with
@@ -69,9 +70,9 @@ func (h *localChatService) startLiveRecovery() {
 	_, _, _ = h.liveController()
 }
 
-func (h *localChatService) liveRoutes(s *Server, mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/local/live", s.protected(h.liveView))
-	mux.HandleFunc("POST /api/local/live", s.protected(h.liveAction))
+func (h *localChatService) liveRoutes(s *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/local/live", s.Protect(h.liveView))
+	mux.HandleFunc("POST /api/local/live", s.Protect(h.liveAction))
 }
 
 func (h *localChatService) liveView(w http.ResponseWriter, r *http.Request) {

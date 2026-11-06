@@ -12,6 +12,7 @@ import (
 
 	"wechat-bot/internal/obspreview"
 	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/websession"
 	catalog "wechat-bot/plugins"
 )
 
@@ -253,7 +254,7 @@ func (s *localProjectTools) prepareOBS(ctx context.Context, in localOBSInput, se
 	}
 }
 
-func (s *localProjectTools) obsPreview(owner *Server, w http.ResponseWriter, r *http.Request) {
+func (s *localProjectTools) obsPreview(owner *websession.Store, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	in := localOBSInput{Action: "status"}
 	if r.Method == http.MethodPost {
@@ -272,7 +273,7 @@ func (s *localProjectTools) obsPreview(owner *Server, w http.ResponseWriter, r *
 		}
 	}
 	view, session, password, err := s.prepareOBS(r.Context(), in, func() bool {
-		_, _, ok := owner.session(r)
+		_, _, ok := owner.Lookup(r)
 		return ok
 	})
 	if err == nil && session != nil {

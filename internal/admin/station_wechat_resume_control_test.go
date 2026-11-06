@@ -2,7 +2,6 @@ package admin
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,6 +16,7 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/websession"
 )
 
 type offlineResumeNative struct{ stationWechatNative }
@@ -42,9 +42,12 @@ func TestStationOwnerResumeIsAuthenticatedPersistentAndCancelable(t *testing.T) 
 	}
 	worker := &stationWechatWorker{dir: dir}
 	station := &stationWechat{stationWechatNative: offlineResumeNative{}, ctx: context.Background(), root: base, workers: map[string]*stationWechatWorker{id: worker}}
-	owner := &Server{cookieName: "ahs_local_session", passwordHash: sha256.Sum256([]byte("synthetic-local-password")), sessions: map[string]session{}}
+	owner, err := websession.New("synthetic-local-password", "", localOwnerCookie)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/login", owner.login)
+	mux.HandleFunc("POST /api/login", owner.Login)
 	station.deliveryControlRoutes(owner, mux)
 	server := httptest.NewServer(mux)
 	defer server.Close()

@@ -13,6 +13,8 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/linuxnative"
+
+	"wechat-bot/internal/websession"
 )
 
 var errStationGroupActionPending = errors.New("previous group action outcome pending")
@@ -39,11 +41,11 @@ func validStationGroup(id string) bool {
 	return validID(id) && strings.HasSuffix(id, "@chatroom") && id != "@chatroom"
 }
 
-func (s *stationWechat) groupActionRoutes(owner *Server, mux *http.ServeMux, identity *fishIdentityRegistry) {
+func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.ServeMux, identity *fishIdentityRegistry) {
 	const base = "/api/apps/wechat/connections/{connection}"
-	mux.HandleFunc("GET "+base+"/groups/{group}/notification", owner.protected(s.stationGroupDetails("mute")))
-	mux.HandleFunc("GET "+base+"/groups/{group}/profile", owner.protected(s.stationGroupDetails("rename", "my_name")))
-	mux.HandleFunc("POST "+base+"/group-actions", owner.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+base+"/groups/{group}/notification", owner.Protect(s.stationGroupDetails("mute")))
+	mux.HandleFunc("GET "+base+"/groups/{group}/profile", owner.Protect(s.stationGroupDetails("rename", "my_name")))
+	mux.HandleFunc("POST "+base+"/group-actions", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		var in stationGroupActionInput
 		if !decode(w, r, &in) {
@@ -77,7 +79,7 @@ func (s *stationWechat) groupActionRoutes(owner *Server, mux *http.ServeMux, ide
 		stop := context.AfterFunc(s.ctx, cancel)
 		defer stop()
 		authority := stationGroupActionAuthority{requester: record.LocalOwner.ID, active: func(context.Context) bool {
-			_, _, ok := owner.session(r)
+			_, _, ok := owner.Lookup(r)
 			current, err := identity.localIdentity()
 			return ok && err == nil && current.FishID == record.FishID && current.LocalOwner != nil && current.LocalOwner.ID == record.LocalOwner.ID
 		}}

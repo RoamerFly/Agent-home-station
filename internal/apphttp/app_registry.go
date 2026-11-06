@@ -1,4 +1,6 @@
-package admin
+// Package apphttp exposes the generic application registry API used by the
+// management UI. It intentionally does not depend on the legacy admin server.
+package apphttp
 
 import (
 	"errors"
@@ -7,34 +9,36 @@ import (
 	"strings"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/websession"
 )
 
 var errReceiptPage = errors.New("invalid receipt page")
 
-func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
-	s.appAccountSetupRoutes(mux, registry)
-	mux.HandleFunc("GET /api/apps", s.protected(func(w http.ResponseWriter, _ *http.Request) {
+// Register adds the generic application registry endpoints to mux.
+func Register(mux *http.ServeMux, auth *websession.Store, registry apphost.Registry) {
+	registerAccountSetup(mux, auth, registry)
+	mux.HandleFunc("GET /api/apps", auth.Protect(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		respond(w, http.StatusOK, map[string]any{"items": registry.Applications()})
+		websession.Respond(w, http.StatusOK, map[string]any{"items": registry.Applications()})
 	}))
 	handle := func(pattern string, query func(apphost.Registration, *http.Request) (any, error)) {
-		mux.HandleFunc("GET "+pattern, s.protected(func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("GET "+pattern, auth.Protect(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
 			app, ok := registry.Lookup(r.PathValue("app"))
 			if !ok {
-				fail(w, http.StatusNotFound, "应用未登记")
+				websession.Fail(w, http.StatusNotFound, "应用未登记")
 				return
 			}
 			result, err := query(app, r)
 			switch {
 			case errors.Is(err, apphost.ErrNotFound):
-				fail(w, http.StatusNotFound, "未找到可读取的应用连接或记录")
+				websession.Fail(w, http.StatusNotFound, "未找到可读取的应用连接或记录")
 			case errors.Is(err, errReceiptPage):
-				fail(w, http.StatusBadRequest, "页大小须为正整数，续读位置须使用上页返回的编号")
+				websession.Fail(w, http.StatusBadRequest, "页大小须为正整数，续读位置须使用上页返回的编号")
 			case err != nil:
-				fail(w, http.StatusServiceUnavailable, "暂时无法核对应用记录")
+				websession.Fail(w, http.StatusServiceUnavailable, "暂时无法核对应用记录")
 			default:
-				respond(w, http.StatusOK, result)
+				websession.Respond(w, http.StatusOK, result)
 			}
 		}))
 	}
@@ -73,7 +77,7 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 				return nil, errReceiptPage
 			}
 		}
-		if after != "" && !validID(after) {
+		if after != "" && !validReceiptCursor(after) {
 			return nil, errReceiptPage
 		}
 		return reader.ListReceipts(r.Context(), r.PathValue("connection"), after, limit)
@@ -85,12 +89,12 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 		}
 		return reader.ReadAction(r.Context(), r.PathValue("connection"), r.PathValue("operation"))
 	})
-	mux.HandleFunc("PUT /api/apps/{app}/connections/{connection}/policy", s.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /api/apps/{app}/connections/{connection}/policy", auth.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		app, ok := registry.Lookup(r.PathValue("app"))
 		writer, supported := app.Provider.(apphost.ConnectionPolicyWriter)
 		if !ok || !supported {
-			fail(w, http.StatusNotFound, "应用未提供回复范围设置")
+			websession.Fail(w, http.StatusNotFound, "应用未提供回复范围设置")
 			return
 		}
 		var input struct {
@@ -102,65 +106,80 @@ func (s *Server) appRoutes(mux *http.ServeMux, registry apphost.Registry) {
 			GroupMute    *[]string                      `json:"group_mute_threads"`
 			GroupRules   *[]apphost.ConnectionGroupRule `json:"group_rules"`
 		}
-		if !decode(w, r, &input) {
+		if !websession.Decode(w, r, &input) {
 			return
 		}
 		if input.Threads == nil {
-			fail(w, http.StatusBadRequest, "请提供明确的回复会话列表")
+			websession.Fail(w, http.StatusBadRequest, "请提供明确的回复会话列表")
 			return
 		}
 		view, err := writer.SetConnectionPolicy(r.Context(), r.PathValue("connection"), apphost.ConnectionPolicyInput{ReplyThreads: *input.Threads, AttachmentThreads: input.Attachments, MediaReplyThreads: input.MediaReplies, HistoryThreads: input.History, ContactRead: input.ContactRead, GroupMuteThreads: input.GroupMute, GroupRules: input.GroupRules})
 		switch {
 		case errors.Is(err, apphost.ErrNotFound):
-			fail(w, http.StatusNotFound, "应用连接不存在")
+			websession.Fail(w, http.StatusNotFound, "应用连接不存在")
 		case errors.Is(err, apphost.ErrInvalidConnectionPolicy):
-			fail(w, http.StatusBadRequest, "每类会话 ID 须有效且不重复，最多 100 个。群免打扰只接受群 ID。历史和附件读取须在回复范围内，附件回复须在附件读取范围内。群规则须属于已授权群，备注最多 4000 字节，自动总结需要该群的附件读取授权")
+			websession.Fail(w, http.StatusBadRequest, "每类会话 ID 须有效且不重复，最多 100 个。群免打扰只接受群 ID。历史和附件读取须在回复范围内，附件回复须在附件读取范围内。群规则须属于已授权群，备注最多 4000 字节，自动总结需要该群的附件读取授权")
 		case errors.Is(err, apphost.ErrLifecycleConflict):
-			fail(w, http.StatusConflict, "正在停止旧的回复任务，请稍后查询连接状态")
+			websession.Fail(w, http.StatusConflict, "正在停止旧的回复任务，请稍后查询连接状态")
 		case err != nil:
-			fail(w, http.StatusServiceUnavailable, "暂时无法保存回复范围")
+			websession.Fail(w, http.StatusServiceUnavailable, "暂时无法保存回复范围")
 		default:
-			respond(w, http.StatusOK, map[string]any{"connection": view})
+			websession.Respond(w, http.StatusOK, map[string]any{"connection": view})
 		}
 	}))
-	mux.HandleFunc("POST /api/apps/{app}/connections/{connection}/lifecycle", s.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/apps/{app}/connections/{connection}/lifecycle", auth.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		var input struct {
 			Action string `json:"action"`
 		}
-		if !decode(w, r, &input) {
+		if !websession.Decode(w, r, &input) {
 			return
 		}
 		if input.Action != "start" && input.Action != "stop" {
-			fail(w, http.StatusBadRequest, "请选择启动或停止应用连接")
+			websession.Fail(w, http.StatusBadRequest, "请选择启动或停止应用连接")
 			return
 		}
 		app, ok := registry.Lookup(r.PathValue("app"))
 		if !ok {
-			fail(w, http.StatusNotFound, "应用未登记")
+			websession.Fail(w, http.StatusNotFound, "应用未登记")
 			return
 		}
 		controller, ok := app.Provider.(apphost.LifecycleController)
 		if !ok {
-			fail(w, http.StatusNotImplemented, "应用未接入启停控制")
+			websession.Fail(w, http.StatusNotImplemented, "应用未接入启停控制")
 			return
 		}
 		status, err := controller.SetConnectionRunning(r.Context(), r.PathValue("connection"), input.Action == "start")
 		switch {
 		case errors.Is(err, apphost.ErrNotFound):
-			fail(w, http.StatusNotFound, "应用连接不存在")
+			websession.Fail(w, http.StatusNotFound, "应用连接不存在")
 		case errors.Is(err, apphost.ErrLifecycleConflict):
-			fail(w, http.StatusConflict, "连接正在收尾或主程序正在维护，请查询连接状态后再试")
+			websession.Fail(w, http.StatusConflict, "连接正在收尾或主程序正在维护，请查询连接状态后再试")
 		case errors.Is(err, apphost.ErrLifecycleNotReady):
-			fail(w, http.StatusConflict, "请先完成模型配置并启用回复会话")
+			websession.Fail(w, http.StatusConflict, "请先完成模型配置并启用回复会话")
 		case err != nil:
-			fail(w, http.StatusServiceUnavailable, "暂时无法保存应用连接状态")
+			websession.Fail(w, http.StatusServiceUnavailable, "暂时无法保存应用连接状态")
 		default:
-			respond(w, http.StatusOK, status)
+			websession.Respond(w, http.StatusOK, status)
 		}
 	}))
 }
 
-func isAppRegistryPath(path string) bool {
+// OwnsPath reports whether path belongs to the generic application API.
+func OwnsPath(path string) bool {
 	return path == "/api/apps" || strings.HasPrefix(path, "/api/apps/")
+}
+
+// validReceiptCursor deliberately stays narrow: it is an opaque returned
+// receipt key, not a generic legacy identifier.
+func validReceiptCursor(value string) bool {
+	if len(value) == 0 || len(value) > 128 || value == "." || value == ".." {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && !strings.ContainsRune("_.@-", r) {
+			return false
+		}
+	}
+	return true
 }

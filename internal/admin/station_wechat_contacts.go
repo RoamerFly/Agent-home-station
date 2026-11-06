@@ -18,6 +18,8 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
+
+	"wechat-bot/internal/websession"
 )
 
 const (
@@ -69,13 +71,13 @@ func newStationContactCursor() (cipher.AEAD, error) {
 	return cipher.NewGCMWithRandomNonce(block)
 }
 
-func (s *stationWechat) contactRoutes(owner *Server, mux *http.ServeMux) {
+func (s *stationWechat) contactRoutes(owner *websession.Store, mux *http.ServeMux) {
 	for _, kind := range []string{"contacts", "groups"} {
-		mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/"+kind, owner.protected(func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/"+kind, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
-			key, _, _ := owner.session(r)
+			key, _, _ := owner.Lookup(r)
 			check := func(ctx context.Context) error {
-				if id, _, ok := owner.session(r); !ok || id != key {
+				if id, _, ok := owner.Lookup(r); !ok || id != key {
 					return errContactDenied
 				}
 				return ctx.Err()

@@ -15,6 +15,7 @@ import (
 
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 	catalog "wechat-bot/plugins"
 )
@@ -293,8 +294,8 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	return view, nil
 }
 
-func (s *localProjectTools) routes(owner *Server, mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/local/project-tools", owner.protected(func(w http.ResponseWriter, r *http.Request) {
+func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/local/project-tools", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		record, err := s.home.identity.localIdentity()
 		if err != nil {
 			fail(w, 409, "本机身份记录不可读")
@@ -321,11 +322,11 @@ func (s *localProjectTools) routes(owner *Server, mux *http.ServeMux) {
 		respond(w, 200, map[string]any{"tools": views})
 	}))
 	for _, pkg := range localProjectPackages {
-		mux.HandleFunc("PUT /api/local/project-tools/"+pkg.ID, owner.protected(func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("PUT /api/local/project-tools/"+pkg.ID, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 			s.changeProjectTool(w, r, pkg.ID, pkg.Name)
 		}))
 	}
-	preview := owner.protected(func(w http.ResponseWriter, r *http.Request) {
+	preview := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		s.obsPreview(owner, w, r)
 	})
 	mux.HandleFunc("GET /api/local/project-tools/"+localOBSPackage+"/preview", preview)

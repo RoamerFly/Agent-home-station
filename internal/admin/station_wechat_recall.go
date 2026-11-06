@@ -14,6 +14,8 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/linuxnative"
+
+	"wechat-bot/internal/websession"
 )
 
 type stationRecallSource struct {
@@ -29,9 +31,9 @@ type stationRecallView struct {
 
 var errStationRecallCursor = errors.New("invalid recall cursor")
 
-func (s *stationWechat) recallRoutes(owner *Server, mux *http.ServeMux, identity *fishIdentityRegistry) {
+func (s *stationWechat) recallRoutes(owner *websession.Store, mux *http.ServeMux, identity *fishIdentityRegistry) {
 	const route = "/api/apps/wechat/connections/{connection}/receipts/{receipt}/recall"
-	mux.HandleFunc("GET "+route, owner.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+route, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
@@ -49,7 +51,7 @@ func (s *stationWechat) recallRoutes(owner *Server, mux *http.ServeMux, identity
 		}
 		stationRecallFailure(w, err)
 	}))
-	mux.HandleFunc("POST "+route, owner.protected(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST "+route, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		var in struct {
 			ServerID  string `json:"server_id"`
@@ -76,7 +78,7 @@ func (s *stationWechat) recallRoutes(owner *Server, mux *http.ServeMux, identity
 		if err == nil {
 			var result apphost.ActionReceipt
 			result, err = s.submitStationRecall(ctx, id, source, in.MessageID, record.LocalOwner.ID, func() bool {
-				_, _, ok := owner.session(r)
+				_, _, ok := owner.Lookup(r)
 				current, err := identity.localIdentity()
 				return ok && err == nil && current.FishID == record.FishID && current.LocalOwner != nil && current.LocalOwner.ID == record.LocalOwner.ID
 			})

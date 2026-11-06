@@ -14,11 +14,13 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/workspacefs"
+
+	"wechat-bot/internal/websession"
 )
 
-func (s *stationWechat) attachmentRoutes(owner *Server, mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/attachments", owner.protected(s.acquireAttachment))
-	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/attachments/{asset}/content", owner.protected(s.downloadAttachment))
+func (s *stationWechat) attachmentRoutes(owner *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/attachments", owner.Protect(s.acquireAttachment))
+	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/attachments/{asset}/content", owner.Protect(s.downloadAttachment))
 }
 
 func (s *stationWechat) ownerAttachmentAccess(ctx context.Context, id string, w *stationWechatWorker, in wechatAttachmentRequest) (stationAttachmentAccess, error) {

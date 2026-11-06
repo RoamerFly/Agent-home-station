@@ -10,18 +10,20 @@ import (
 
 	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/apphost"
+
+	"wechat-bot/internal/websession"
 )
 
-func (h *localHomeService) douyinRoutes(s *Server, mux *http.ServeMux, registry apphost.Registry, serviceContext context.Context) {
+func (h *localHomeService) douyinRoutes(s *websession.Store, mux *http.ServeMux, registry apphost.Registry, serviceContext context.Context) {
 	entry, ok := registry.Lookup(douyinapp.ID)
 	douyin, supported := entry.Provider.(*douyinapp.SearchApp)
 	if !ok || !supported {
 		return
 	}
-	handler := s.protected(func(w http.ResponseWriter, r *http.Request) {
+	handler := s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		record, err := h.identity.localIdentity()
-		sessionID, _, authenticated := s.session(r)
+		sessionID, _, authenticated := s.Lookup(r)
 		if err != nil || record.LocalOwner == nil || !authenticated {
 			fail(w, http.StatusConflict, "请先准备本机主人身份并登录")
 			return

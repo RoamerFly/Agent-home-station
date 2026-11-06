@@ -3,48 +3,35 @@ package admin
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/apphttp"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/websession"
 )
 
 //go:embed static/*
 var assets embed.FS
 
-type session struct {
-	CSRF    string
-	Expires time.Time
-}
+const legacyAdminCookie = "wechat_admin_session"
+
 type Server struct {
-	cookieName    string
-	authRoot      *Server
-	accounts      *accountRegistry
-	catalogMu     sync.Mutex
-	catalogJob    *catalogRefresh
-	manager       *Manager
-	passwordHash  [32]byte
-	origin        string
-	mu            sync.Mutex
-	sessions      map[string]session
-	loginWindow   time.Time
-	loginAttempts int
-	loginMu       sync.Mutex
-	operation     string
-	loginUnknown  bool
+	auth         *websession.Store
+	accounts     *accountRegistry
+	catalogMu    sync.Mutex
+	catalogJob   *catalogRefresh
+	manager      *Manager
+	loginMu      sync.Mutex
+	operation    string
+	loginUnknown bool
 }
 
 func randomToken() string {
@@ -56,21 +43,22 @@ func randomToken() string {
 }
 
 func NewHandler(manager *Manager, password, origin string) (http.Handler, error) {
-	return newHandler(manager, password, origin, nil)
-}
-func newHandler(manager *Manager, password, origin string, auth *Server) (http.Handler, error) {
-	if manager == nil || auth == nil && !validPassword(password) {
+	if manager == nil {
 		return nil, errors.New("invalid admin authentication configuration")
 	}
-	if origin != "" {
-		u, err := url.Parse(origin)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
-			return nil, errors.New("invalid public admin origin")
-		}
+	auth, err := websession.New(password, origin, legacyAdminCookie)
+	if errors.Is(err, websession.ErrOrigin) {
+		return nil, errors.New("invalid public admin origin")
 	}
-	s := &Server{manager: manager, passwordHash: sha256.Sum256([]byte(password)), origin: origin, sessions: map[string]session{}}
-	s.authRoot = auth
-	if auth == nil {
+	if err != nil {
+		return nil, errors.New("invalid admin authentication configuration")
+	}
+	return newHandler(manager, auth, true)
+}
+
+func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handler, error) {
+	s := &Server{manager: manager, auth: auth}
+	if root {
 		var err error
 		s.accounts, err = newAccountRegistry(s)
 		if err != nil {
@@ -85,18 +73,17 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 			s.accounts.close()
 			return nil, err
 		}
-		s.appRoutes(mux, registry)
+		apphttp.Register(mux, s.auth, registry)
 		s.accounts.routes(mux)
 		s.localHomeRoutes(mux, manager.fish, manager.managedRoot(), manager.dir)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, map[string]bool{"ok": true}) })
-	mux.HandleFunc("POST /api/login", s.login)
-	mux.HandleFunc("POST /api/logout", s.protected(s.logout))
-	mux.HandleFunc("POST /api/password", s.protected(s.changePassword))
-	mux.HandleFunc("GET /api/session", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		_, session, _ := s.session(r)
-		respond(w, 200, map[string]any{"authenticated": true, "csrf": session.CSRF})
-	}))
+	if root {
+		mux.HandleFunc("POST /api/login", auth.Login)
+		mux.HandleFunc("POST /api/logout", auth.Protect(auth.Logout))
+		mux.HandleFunc("POST /api/password", auth.Protect(s.changePassword))
+		mux.HandleFunc("GET /api/session", auth.Protect(auth.Status))
+	}
 	mux.HandleFunc("GET /api/config", s.protected(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, s.manager.Config()) }))
 	mux.HandleFunc("POST /api/config", s.protected(s.saveConfig))
 	mux.HandleFunc("GET /api/status", s.protected(s.status))
@@ -294,142 +281,23 @@ func newHandler(manager *Manager, password, origin string, auth *Server) (http.H
 	}), nil
 }
 
-func respond(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-func fail(w http.ResponseWriter, status int, message string) {
-	respond(w, status, map[string]string{"error": message})
-}
+func respond(w http.ResponseWriter, status int, value any)   { websession.Respond(w, status, value) }
+func fail(w http.ResponseWriter, status int, message string) { websession.Fail(w, status, message) }
 func decode(w http.ResponseWriter, r *http.Request, value any) bool {
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-		fail(w, 415, "请求需要使用 JSON")
-		return false
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
-	d := json.NewDecoder(r.Body)
-	d.DisallowUnknownFields()
-	if d.Decode(value) != nil {
-		fail(w, 400, "请求格式无效或过大")
-		return false
-	}
-	var extra any
-	if err := d.Decode(&extra); !errors.Is(err, io.EOF) {
-		fail(w, 400, "请求需要一个完整 JSON 对象")
-		return false
-	}
-	return true
+	return websession.Decode(w, r, value)
 }
-func (s *Server) sameOrigin(r *http.Request) bool {
-	want := s.origin
-	if want == "" {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		want = scheme + "://" + r.Host
-	}
-	return r.Header.Get("Origin") == want
+
+func (s *Server) session(r *http.Request) (string, websession.Session, bool) { return s.auth.Lookup(r) }
+func (s *Server) protected(next http.HandlerFunc) http.HandlerFunc           { return s.auth.Protect(next) }
+
+func (s *Server) localHomeRoutes(mux *http.ServeMux, identity *fishIdentityRegistry, root, dataDir string) {
+	home := &localHomeService{identity: identity, root: root, dataDir: dataDir}
+	home.configureAppCatalog()
+	home.appInstallRoutes(s.auth, mux)
+	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
+	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
 }
-func (s *Server) session(r *http.Request) (string, session, bool) {
-	if s.authRoot != nil {
-		return s.authRoot.session(r)
-	}
-	cookie, err := r.Cookie(s.sessionCookieName())
-	if err != nil {
-		return "", session{}, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	value, ok := s.sessions[cookie.Value]
-	if !ok || time.Now().After(value.Expires) {
-		delete(s.sessions, cookie.Value)
-		return "", session{}, false
-	}
-	return cookie.Value, value, true
-}
-func (s *Server) sessionCookieName() string {
-	if s.authRoot != nil {
-		return s.authRoot.sessionCookieName()
-	}
-	if s.cookieName != "" {
-		return s.cookieName
-	}
-	return "wechat_admin_session"
-}
-func (s *Server) protected(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		_, value, ok := s.session(r)
-		if !ok {
-			fail(w, 401, "请先登录管理页面")
-			return
-		}
-		if r.Method != "GET" {
-			header := r.Header.Get("X-CSRF-Token")
-			if !s.sameOrigin(r) || len(header) != len(value.CSRF) || subtle.ConstantTimeCompare([]byte(header), []byte(value.CSRF)) != 1 {
-				fail(w, 403, "页面验证失效，请刷新后重试")
-				return
-			}
-		}
-		next(w, r)
-	}
-}
-func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	if !s.sameOrigin(r) {
-		fail(w, 403, "不接受跨站登录请求")
-		return
-	}
-	s.mu.Lock()
-	if time.Since(s.loginWindow) > time.Minute {
-		s.loginWindow = time.Now()
-		s.loginAttempts = 0
-	}
-	s.loginAttempts++
-	limited := s.loginAttempts > 10
-	s.mu.Unlock()
-	if limited {
-		fail(w, 429, "登录尝试过多，请一分钟后再试")
-		return
-	}
-	var input struct {
-		Password string `json:"password"`
-	}
-	if !decode(w, r, &input) {
-		return
-	}
-	hash := sha256.Sum256([]byte(input.Password))
-	s.mu.Lock()
-	if subtle.ConstantTimeCompare(hash[:], s.passwordHash[:]) != 1 {
-		s.mu.Unlock()
-		fail(w, 401, "管理密码不正确")
-		return
-	}
-	id, csrf := randomToken(), randomToken()
-	for key, value := range s.sessions {
-		if time.Now().After(value.Expires) {
-			delete(s.sessions, key)
-		}
-	}
-	if len(s.sessions) >= 32 {
-		for key := range s.sessions {
-			delete(s.sessions, key)
-			break
-		}
-	}
-	s.sessions[id] = session{csrf, time.Now().Add(8 * time.Hour)}
-	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: s.sessionCookieName(), Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil || strings.HasPrefix(s.origin, "https://"), MaxAge: 8 * 3600})
-	respond(w, 200, map[string]any{"authenticated": true, "csrf": csrf})
-}
-func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	id, _, _ := s.session(r)
-	s.mu.Lock()
-	delete(s.sessions, id)
-	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: s.sessionCookieName(), Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
-	respond(w, 200, map[string]bool{"ok": true})
-}
+
 func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	var input ConfigInput
 	if !decode(w, r, &input) {
