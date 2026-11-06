@@ -3,8 +3,14 @@ package identity
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"regexp"
 	"strings"
 )
+
+var legacyDeviceID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
+
+// ValidLegacyDeviceID checks identifiers persisted by the old device host.
+func ValidLegacyDeviceID(id string) bool { return legacyDeviceID.MatchString(id) }
 
 // ValidPathID accepts the historical account ID format used in private paths.
 func ValidPathID(id string) bool {

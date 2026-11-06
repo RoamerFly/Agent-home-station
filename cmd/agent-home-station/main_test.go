@@ -1,9 +1,29 @@
 package main
 
 import (
+	"context"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestStationBuildExcludesLegacyManagementAndDevices(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "go", "list", "-deps", ".").CombinedOutput()
+	if err != nil {
+		t.Fatalf("station dependency graph: %v\n%s", err, output)
+	}
+	for _, dependency := range strings.Fields(string(output)) {
+		switch dependency {
+		case "wechat-bot/internal/admin", "wechat-bot/internal/devicebroker",
+			"wechat-bot/internal/adbserver", "wechat-bot/internal/devicespec":
+			t.Errorf("standalone station imports retired host package %s", dependency)
+		}
+	}
+}
 
 func TestDefaultPathsUseExecutableLocation(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), "bin", "Agent-home-station.exe")

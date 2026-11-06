@@ -12,9 +12,9 @@ import (
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/apphttp"
-	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/station"
 	"wechat-bot/internal/stationui"
 	"wechat-bot/internal/websession"
 )
@@ -70,7 +70,7 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 		}
 		apphttp.Register(mux, s.auth, registry)
 		s.accounts.routes(mux)
-		s.localHomeRoutes(mux, manager.fish, manager.managedRoot(), manager.dir)
+		station.RegisterLegacyHomeRoutes(s.auth, mux, manager.fish, manager.managedRoot(), manager.dir)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, map[string]bool{"ok": true}) })
 	if root {
@@ -277,14 +277,6 @@ func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 
 func (s *Server) session(r *http.Request) (string, websession.Session, bool) { return s.auth.Lookup(r) }
 func (s *Server) protected(next http.HandlerFunc) http.HandlerFunc           { return s.auth.Protect(next) }
-
-func (s *Server) localHomeRoutes(mux *http.ServeMux, identity *fishidentity.Registry, root, dataDir string) {
-	home := &localHomeService{identity: identity, root: root, dataDir: dataDir}
-	home.configureAppCatalog()
-	home.appInstallRoutes(s.auth, mux)
-	mux.HandleFunc("GET /api/local/home", s.protected(home.status))
-	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
-}
 
 func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	var input ConfigInput

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	"wechat-bot/internal/devicespec"
 	"wechat-bot/internal/hostfile"
 	"wechat-bot/internal/identity"
 )
@@ -150,7 +149,7 @@ func (r *Registry) readHeld() (Record, error) {
 		seenBindingIDs := map[string]bool{}
 		for _, binding := range record.DeviceBindings {
 			key := binding.Account + "\x00" + binding.DeviceID
-			if !fishAccountIsBound(record, binding.Account) || !validFishDeviceID(binding.DeviceID) || !validFishDeviceBindingID(binding.BindingID) || seenDevices[key] || seenBindingIDs[binding.BindingID] {
+			if !fishAccountIsBound(record, binding.Account) || !identity.ValidLegacyDeviceID(binding.DeviceID) || !validFishDeviceBindingID(binding.BindingID) || seenDevices[key] || seenBindingIDs[binding.BindingID] {
 				return Record{}, errors.New("鱼设备绑定无效，原文件未覆盖")
 			}
 			seenDevices[key] = true
@@ -168,15 +167,6 @@ func (r *Registry) readHeld() (Record, error) {
 
 func fishAccountIsBound(record Record, account string) bool {
 	return slices.Contains(record.Bindings, AccountBinding{Platform: fishWechatPlatform, Account: account})
-}
-
-// validFishDeviceID delegates to the mobile device-spec validator rather than
-// using the looser WeChat account ID rule. This keeps identity links aligned
-// with IDs that the device tool can actually address.
-func validFishDeviceID(id string) bool {
-	settings := devicespec.Defaults()
-	settings.Devices = []string{id}
-	return settings.Validate() == nil
 }
 
 func validFishDeviceBindingID(id string) bool {
@@ -328,7 +318,7 @@ func (r *Registry) BindDevice(account, deviceID string) (fishID, bindingID strin
 	if !fishAccountIsBound(record, account) {
 		return "", "", errors.New("账号未绑定到鱼身份")
 	}
-	if !validFishDeviceID(deviceID) {
+	if !identity.ValidLegacyDeviceID(deviceID) {
 		return "", "", errors.New("设备标识无效")
 	}
 	for _, binding := range record.DeviceBindings {
@@ -392,7 +382,7 @@ func (r *Registry) UnbindDevice(account, deviceID, expectedBindingID string) err
 	if !fishAccountIsBound(record, account) {
 		return errors.New("账号未绑定到鱼身份")
 	}
-	if !validFishDeviceID(deviceID) || !validFishDeviceBindingID(expectedBindingID) {
+	if !identity.ValidLegacyDeviceID(deviceID) || !validFishDeviceBindingID(expectedBindingID) {
 		return errors.New("鱼设备绑定已变更，请刷新后再试")
 	}
 	index := slices.IndexFunc(record.DeviceBindings, func(binding DeviceBinding) bool {

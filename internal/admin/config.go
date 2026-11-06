@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
@@ -18,14 +19,7 @@ import (
 	"wechat-bot/internal/identity"
 )
 
-type GroupRule struct {
-	ID                      string `json:"id"`
-	Name                    string `json:"name"`
-	Mode                    string `json:"mode"`
-	Prefix                  string `json:"prefix"`
-	Persona                 string `json:"persona"`
-	ForceReplyWhenMentioned bool   `json:"force_reply_when_mentioned"`
-}
+type GroupRule = wechatapp.LegacyGroupRule
 type Config struct {
 	PrivateAllFriends bool `json:"private_all_friends"`
 	friendIDs         []string

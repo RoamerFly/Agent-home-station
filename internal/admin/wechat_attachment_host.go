@@ -19,13 +19,8 @@ type wechatAttachmentHost struct {
 	message string
 }
 
-type wechatAttachmentRequest struct {
-	Message string `json:"message_id"`
-	Thread  string `json:"thread_id"`
-}
-
 func newWechatAttachmentHost(p *permittedTools, raw json.RawMessage) (wechatAttachmentHost, error) {
-	var in wechatAttachmentRequest
+	var in wechatapp.AttachmentRequest
 	if p == nil || json.Unmarshal(raw, &in) != nil || in.Message == "" {
 		return wechatAttachmentHost{}, toolInputError("invalid attachment request")
 	}

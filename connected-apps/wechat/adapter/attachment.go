@@ -16,6 +16,12 @@ var ErrAttachmentDenied = errors.New("attachment source is not authorized")
 // ErrAttachmentNotCached means the host verified the attachment source but has not retained its original yet.
 var ErrAttachmentNotCached = errors.New("attachment original is not cached")
 
+// AttachmentRequest identifies the original thread and message to acquire.
+type AttachmentRequest struct {
+	Message string `json:"message_id"`
+	Thread  string `json:"thread_id"`
+}
+
 // Attachment is the deliberately small preview returned to an application.
 // It contains no native locator, database handle, or private storage path.
 type Attachment struct {
@@ -46,10 +52,7 @@ type AttachmentHost interface {
 // and final resolve. A late policy revocation or cancellation returns no
 // preview.
 func ReadAttachment(ctx context.Context, raw json.RawMessage, host AttachmentHost) (map[string]any, error) {
-	var in struct {
-		Message string `json:"message_id"`
-		Thread  string `json:"thread_id"`
-	}
+	var in AttachmentRequest
 	if host == nil || json.Unmarshal(raw, &in) != nil || in.Message == "" {
 		if host == nil {
 			return nil, errors.New("attachment host unavailable")

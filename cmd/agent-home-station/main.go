@@ -22,8 +22,8 @@ import (
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
-	"wechat-bot/internal/admin"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/station"
 	"wechat-bot/internal/stationauth"
 	"wechat-bot/internal/stationruntime"
 )
@@ -90,7 +90,7 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 			return err
 		}
 	}
-	handler, err := admin.NewLocalHomeHandlerWithApps(cfg.dataDir, cfg.workspaceRoot, password, "", registry, windows)
+	handler, err := station.NewLocalHomeHandlerWithApps(cfg.dataDir, cfg.workspaceRoot, password, "", registry, windows)
 	if err != nil {
 		return err
 	}

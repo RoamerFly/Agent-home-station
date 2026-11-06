@@ -37,7 +37,7 @@ func (w wechatCompatibility) connection(item *accountRuntime) apphost.Connection
 }
 
 func registeredWechatAccount(item *accountRuntime) bool {
-	return !item.record.Removed && !item.record.Purged && !item.record.Deleting
+	return wechatapp.LegacyAccountRegistered(item.record)
 }
 
 // Unlike the legacy directory refresh, this reads the host's existing account

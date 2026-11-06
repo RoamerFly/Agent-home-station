@@ -2,8 +2,6 @@ package admin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,19 +11,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
+	"wechat-bot/internal/apphttp"
 	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/linuxnative"
-
-	"wechat-bot/internal/apphttp"
 )
 
-type accountRecord struct {
-	ID       string `json:"id"`
-	Label    string `json:"label,omitempty"`
-	Removed  bool   `json:"removed,omitempty"`
-	Deleting bool   `json:"deleting,omitempty"`
-	Purged   bool   `json:"purged,omitempty"`
-}
+type accountRecord = wechatapp.LegacyAccountRecord
 type accountAccess struct {
 	mu      sync.RWMutex
 	removed bool
@@ -51,10 +44,7 @@ type accountFactory interface {
 	Accounts(context.Context) ([]linuxnative.AccountInfo, error)
 }
 
-func accountDirectory(id string) string {
-	sum := sha256.Sum256([]byte(id))
-	return hex.EncodeToString(sum[:])
-}
+func accountDirectory(id string) string { return wechatapp.AccountDirectory(id) }
 
 func newAccountRegistry(root *Server) (*accountRegistry, error) {
 	fish := root.manager.fish
