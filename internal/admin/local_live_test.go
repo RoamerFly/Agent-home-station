@@ -129,8 +129,8 @@ func (p *localLiveRouteProvider) LiveGrant(context.Context, apphost.ConnectionRe
 	now := time.Now()
 	return apphost.LiveGrant{Allowed: true, Version: "fixture-v1", OpensAt: now.Add(-time.Minute), ClosesAt: now.Add(time.Hour), MaxDuration: 30 * time.Minute}, nil
 }
-func (p *localLiveRouteProvider) StartLive(_ context.Context, ref apphost.LiveReference) (apphost.LiveReceipt, error) {
-	return apphost.LiveReceipt{Reference: ref, State: "live", RoomID: "room-1"}, nil
+func (p *localLiveRouteProvider) StartLive(_ context.Context, ref apphost.LiveReference) (apphost.LiveStartResult, error) {
+	return apphost.LiveStartResult{Receipt: apphost.LiveReceipt{Reference: ref, State: "live", RoomID: "room-1"}}, nil
 }
 func (p *localLiveRouteProvider) QueryLive(_ context.Context, ref apphost.LiveReference) (apphost.LiveReceipt, error) {
 	return apphost.LiveReceipt{Reference: ref, State: "live", RoomID: "room-1"}, nil

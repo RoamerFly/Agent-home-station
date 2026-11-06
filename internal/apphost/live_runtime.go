@@ -99,7 +99,8 @@ func (l *LiveController) dispatch(ctx context.Context, s liveState, provider Liv
 	if err != nil || current.State != "starting" || ctx.Err() != nil {
 		return "start-interrupted", LiveReceipt{}
 	}
-	receipt, err := provider.StartLive(ctx, s.Reference)
+	result, err := provider.StartLive(ctx, s.Reference)
+	receipt := result.Receipt
 	if err != nil || !validLiveReceipt(s, receipt) || receipt.State == "unknown" {
 		return "start-unconfirmed", LiveReceipt{}
 	}
@@ -109,13 +110,30 @@ func (l *LiveController) dispatch(ctx context.Context, s liveState, provider Liv
 	if ctx.Err() != nil || !l.now().Before(s.Reference.Deadline) {
 		return "start-interrupted", receipt
 	}
+	if output, ok := l.output.(liveStreamOutput); ok {
+		if result.Ingest == nil {
+			return "output-unavailable", receipt
+		}
+		if reason := l.checkGrant(ctx, s.Reference); reason != "" {
+			return reason, receipt
+		}
+		if err := output.StartLiveOutput(ctx, s.Reference, *result.Ingest); err != nil {
+			return "output-unavailable", receipt
+		}
+	} else if result.Ingest != nil {
+		return "output-unavailable", receipt
+	}
 	return "", receipt
+}
+
+func sameLiveReference(a, b LiveReference) bool {
+	return a.ID == b.ID && a.Target == b.Target && a.Registration == b.Registration &&
+		a.GrantVersion == b.GrantVersion && a.Deadline.Equal(b.Deadline)
 }
 
 func validLiveReceipt(s liveState, r LiveReceipt) bool {
 	ref := s.Reference
-	if ref.ID != r.Reference.ID || ref.Target != r.Reference.Target || ref.Registration != r.Reference.Registration ||
-		ref.GrantVersion != r.Reference.GrantVersion || !ref.Deadline.Equal(r.Reference.Deadline) {
+	if !sameLiveReference(ref, r.Reference) {
 		return false
 	}
 	if s.RoomID != "" && r.RoomID != s.RoomID || r.RoomID != "" && !liveIdentifier.MatchString(r.RoomID) {
@@ -271,7 +289,7 @@ func (l *LiveController) Stop(ctx context.Context, owner, id string) (LiveView, 
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*liveRemoteTimeout)
 	defer cancel()
 	s, err = l.stopSession(ctx, s, "owner-stop")
-	return s.view(), err
+	return l.view(s), err
 }
 
 func (l *LiveController) inspect(ctx context.Context, s liveState) (liveState, error) {
@@ -339,7 +357,7 @@ func (l *LiveController) Reconcile(ctx context.Context, owner, id string) (LiveV
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*liveRemoteTimeout)
 	defer cancel()
 	s, err = l.inspect(ctx, s)
-	return s.view(), err
+	return l.view(s), err
 }
 
 func (l *LiveController) active(ctx context.Context) (liveState, error) {

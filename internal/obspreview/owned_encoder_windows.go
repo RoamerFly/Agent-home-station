@@ -211,6 +211,19 @@ func narrowEncoderEnvironment(directory string) []uint16 {
 
 func (p *EncoderProcess) Stream() *OwnedStream { return p.stream }
 
+// Start configures the owned encoder for the current host relay. The relay
+// ticket is checked by OwnedStream and is never stored in this process object.
+func (p *EncoderProcess) Start(ctx context.Context, port int, ticket string) error {
+	p.mu.Lock()
+	stream := p.stream
+	running := !p.stopping && p.running()
+	p.mu.Unlock()
+	if !running || stream == nil {
+		return ErrStreamEndpoint
+	}
+	return stream.Start(ctx, port, ticket)
+}
+
 func (p *EncoderProcess) verify(ctx context.Context, tcp *net.TCPConn) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -218,6 +231,23 @@ func (p *EncoderProcess) verify(ctx context.Context, tcp *net.TCPConn) error {
 		return ErrStreamEndpoint
 	}
 	if err := verifyEncoderPeer(ctx, tcp, p.pid); err != nil {
+		return err
+	}
+	if !p.running() {
+		return ErrStreamEndpoint
+	}
+	return nil
+}
+
+// VerifyPublisher admits a relay connection only when its opposite established
+// socket belongs to this still-running, job-owned encoder process.
+func (p *EncoderProcess) VerifyPublisher(ctx context.Context, socket *net.TCPConn) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopping || !p.running() {
+		return ErrStreamEndpoint
+	}
+	if err := verifyEncoderPublisher(ctx, socket, p.pid); err != nil {
 		return err
 	}
 	if !p.running() {

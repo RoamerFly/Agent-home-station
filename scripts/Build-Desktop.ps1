@@ -265,6 +265,7 @@ Copy-Item -LiteralPath (Join-Path $cache 'LICENSE.txt') -Destination (Join-Path 
 $gorillaLicense=Join-Path $workspace 'docs\licenses\gorilla-websocket.txt'
 if(-not(Test-Path -LiteralPath $gorillaLicense -PathType Leaf)){throw 'The Gorilla WebSocket license notice is missing.'}
 Copy-Item -LiteralPath $gorillaLicense -Destination (Join-Path $OutputDirectory 'Gorilla-WebSocket-LICENSE.txt')
+Copy-Item -LiteralPath (Join-Path $workspace 'docs\licenses\rtmp-relay.txt') -Destination (Join-Path $OutputDirectory 'RTMP-Relay-LICENSE.txt') -ErrorAction Stop
 if($Test){
  $tests=Join-Path $OutputDirectory 'DesktopTests.exe'
  & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'LocalStationRuntime.cs') (Join-Path $source 'CloseSettings.cs') (Join-Path $source 'DesktopInstance.cs') (Join-Path $source 'ControllerTests.cs')

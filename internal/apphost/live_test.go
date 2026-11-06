@@ -53,7 +53,7 @@ func (p *liveTestProvider) LiveGrant(context.Context, ConnectionRef) (LiveGrant,
 	return p.grant, p.grantErr
 }
 
-func (p *liveTestProvider) StartLive(ctx context.Context, ref LiveReference) (LiveReceipt, error) {
+func (p *liveTestProvider) StartLive(ctx context.Context, ref LiveReference) (LiveStartResult, error) {
 	p.mu.Lock()
 	p.startCalls++
 	wait, entered, state, err := p.startWait, p.entered, p.startState, p.startErr
@@ -70,7 +70,7 @@ func (p *liveTestProvider) StartLive(ctx context.Context, ref LiveReference) (Li
 	if state == "" {
 		state = "live"
 	}
-	return liveTestReceipt(ref, state), err
+	return LiveStartResult{Receipt: liveTestReceipt(ref, state)}, err
 }
 
 func (p *liveTestProvider) QueryLive(_ context.Context, ref LiveReference) (LiveReceipt, error) {

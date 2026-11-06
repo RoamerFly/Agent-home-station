@@ -114,6 +114,42 @@ func verifyEncoderPeer(ctx context.Context, conn *net.TCPConn, pid uint32) error
 	return nil
 }
 
+// verifyEncoderPublisher verifies the opposite direction. The host owns the
+// loopback relay listener and conn is its accepted endpoint. The encoder must
+// own the matching client-side established socket. No listener lookup is made
+// for the encoder because it is publishing as a client.
+func verifyEncoderPublisher(ctx context.Context, conn *net.TCPConn, pid uint32) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil || conn == nil || pid == 0 {
+		return ErrStreamEndpoint
+	}
+	local, ok := conn.LocalAddr().(*net.TCPAddr)
+	if !ok || local.IP == nil || !local.IP.IsLoopback() || local.IP.To4() == nil || local.Port < 1 {
+		return ErrStreamEndpoint
+	}
+	remote, ok := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok || remote.IP == nil || !remote.IP.IsLoopback() || remote.IP.To4() == nil || remote.Port < 1 {
+		return ErrStreamEndpoint
+	}
+	rows, err := obsTCPRows(obsAFInet)
+	if err != nil {
+		return ErrStreamEndpoint
+	}
+	// The accepted host-side connection is reversed in the encoder process.
+	encoderPort := hostPort(remote.Port)
+	relayPort := hostPort(local.Port)
+	for _, row := range rows {
+		if row.State == obsTCPStateEstablished && row.LocalAddr == obsLoopbackIPv4 &&
+			row.RemoteAddr == obsLoopbackIPv4 && row.LocalPort == encoderPort &&
+			row.RemotePort == relayPort && row.OwnerPID == pid {
+			return nil
+		}
+	}
+	return ErrStreamEndpoint
+}
+
 func hostPort(port int) uint32 {
 	value := uint16(port)
 	return uint32(value<<8 | value>>8)

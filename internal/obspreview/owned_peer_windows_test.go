@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestVerifyEncoderPeerAcceptsExactLoopbackConnection(t *testing.T) {
@@ -65,6 +67,40 @@ func TestVerifyEncoderPeerRejectsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestVerifyEncoderPublisherAcceptsExactLoopbackConnection(t *testing.T) {
+	accepted := acceptedLoopbackEndpoint(t, "127.0.0.1:0")
+	defer accepted.Close()
+	if err := verifyEncoderPublisher(context.Background(), accepted, uint32(os.Getpid())); err != nil {
+		t.Fatalf("verified loopback publisher: %v", err)
+	}
+}
+
+func TestVerifyEncoderPublisherRejectsWrongProcess(t *testing.T) {
+	accepted := acceptedLoopbackEndpoint(t, "127.0.0.1:0")
+	defer accepted.Close()
+	if err := verifyEncoderPublisher(context.Background(), accepted, uint32(os.Getpid()+1)); !errors.Is(err, ErrStreamEndpoint) {
+		t.Fatalf("wrong publisher process = %v", err)
+	}
+}
+
+func TestEncoderProcessVerifyPublisherUsesLiveEncoderPID(t *testing.T) {
+	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := &EncoderProcess{process: handle, pid: uint32(os.Getpid())}
+	t.Cleanup(func() { _ = windows.CloseHandle(handle) })
+	accepted := acceptedLoopbackEndpoint(t, "127.0.0.1:0")
+	defer accepted.Close()
+	if err := process.VerifyPublisher(context.Background(), accepted); err != nil {
+		t.Fatalf("process publisher verification: %v", err)
+	}
+	process.pid++
+	if err := process.VerifyPublisher(context.Background(), accepted); !errors.Is(err, ErrStreamEndpoint) {
+		t.Fatalf("wrong process publisher = %v", err)
+	}
+}
+
 func loopbackConnection(t *testing.T, address string) *net.TCPConn {
 	t.Helper()
 	listener, err := net.Listen("tcp4", address)
@@ -109,4 +145,41 @@ func acceptedLoopbackConnection(t *testing.T, tcpListener *net.TCPListener) *net
 		t.Fatal("server did not accept loopback connection")
 	}
 	return tcp
+}
+
+func acceptedLoopbackEndpoint(t *testing.T, address string) *net.TCPConn {
+	t.Helper()
+	listener, err := net.Listen("tcp4", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	tcpListener, ok := listener.(*net.TCPListener)
+	if !ok {
+		t.Fatal("TCP listen did not return TCP listener")
+	}
+	accepted := make(chan *net.TCPConn, 1)
+	failed := make(chan error, 1)
+	go func() {
+		connection, err := tcpListener.AcceptTCP()
+		if err != nil {
+			failed <- err
+			return
+		}
+		accepted <- connection
+	}()
+	client, err := net.DialTimeout("tcp4", tcpListener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	select {
+	case server := <-accepted:
+		return server
+	case err := <-failed:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("server did not accept loopback publisher")
+	}
+	return nil
 }

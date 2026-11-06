@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"net"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -70,12 +72,24 @@ type LiveReceipt struct {
 	RoomID string
 }
 
+// LiveIngest is transient private routing data returned by an approved
+// provider. It is never persisted or included in a user-facing status.
+type LiveIngest struct {
+	Destination *url.URL                                                `json:"-"`
+	DialContext func(context.Context, string, string) (net.Conn, error) `json:"-"`
+}
+
+type LiveStartResult struct {
+	Receipt LiveReceipt
+	Ingest  *LiveIngest `json:"-"`
+}
+
 type LiveProvider interface {
 	// LiveGrant reads the current host-approved policy for this connection.
 	LiveGrant(context.Context, ConnectionRef) (LiveGrant, error)
 	// StartLive must honor cancellation before dispatch. Start and Stop use
 	// the same operation ID. Query and Stop must never create a broadcast.
-	StartLive(context.Context, LiveReference) (LiveReceipt, error)
+	StartLive(context.Context, LiveReference) (LiveStartResult, error)
 	QueryLive(context.Context, LiveReference) (LiveReceipt, error)
 	StopLive(context.Context, LiveReference) (LiveReceipt, error)
 }
@@ -87,16 +101,29 @@ type LiveOutput interface {
 	StopLiveOutput(context.Context, LiveReference) error
 }
 
+// LiveOutputStatus is local transport evidence. Platform acceptance is
+// reported independently by LiveReceipt.
+type LiveOutputStatus struct {
+	State         string `json:"state"`
+	MediaMessages uint64 `json:"media_messages"`
+}
+
+type liveStreamOutput interface {
+	StartLiveOutput(context.Context, LiveReference, LiveIngest) error
+	LiveOutputStatus(LiveReference) *LiveOutputStatus
+}
+
 type LiveView struct {
-	ID           string    `json:"id"`
-	State        string    `json:"state"`
-	AppID        string    `json:"app_id"`
-	ConnectionID string    `json:"connection_id"`
-	RoomID       string    `json:"room_id,omitempty"`
-	Deadline     time.Time `json:"deadline"`
-	StopReason   string    `json:"stop_reason,omitempty"`
-	LocalStopped bool      `json:"local_stopped"`
-	RemoteEnded  bool      `json:"remote_ended"`
+	ID           string            `json:"id"`
+	State        string            `json:"state"`
+	AppID        string            `json:"app_id"`
+	ConnectionID string            `json:"connection_id"`
+	RoomID       string            `json:"room_id,omitempty"`
+	Deadline     time.Time         `json:"deadline"`
+	StopReason   string            `json:"stop_reason,omitempty"`
+	LocalStopped bool              `json:"local_stopped"`
+	RemoteEnded  bool              `json:"remote_ended"`
+	LocalOutput  *LiveOutputStatus `json:"local_output,omitempty"`
 }
 
 type liveState struct {
@@ -110,10 +137,14 @@ type liveState struct {
 	RemoteEnded     bool          `json:"remote_ended"`
 }
 
-func (s liveState) view() LiveView {
-	return LiveView{ID: s.Reference.ID, State: s.State, AppID: s.Reference.Target.AppID,
+func (l *LiveController) view(s liveState) LiveView {
+	v := LiveView{ID: s.Reference.ID, State: s.State, AppID: s.Reference.Target.AppID,
 		ConnectionID: s.Reference.Target.ConnectionID, RoomID: s.RoomID, Deadline: s.Reference.Deadline,
 		StopReason: s.StopReason, LocalStopped: s.LocalStopped, RemoteEnded: s.RemoteEnded}
+	if output, ok := l.output.(liveStreamOutput); ok {
+		v.LocalOutput = output.LiveOutputStatus(s.Reference)
+	}
+	return v
 }
 
 type LiveController struct {
@@ -259,13 +290,13 @@ func ownLive(s liveState, owner string, err error) (liveState, error) {
 func (l *LiveController) Status(ctx context.Context, owner, id string) (LiveView, error) {
 	s, err := readLive(l.store.LiveSession(ctx, id))
 	s, err = ownLive(s, owner, err)
-	return s.view(), err
+	return l.view(s), err
 }
 
 func (l *LiveController) Active(ctx context.Context, owner string) (LiveView, error) {
 	s, err := readLive(l.store.ActiveLiveSession(ctx))
 	s, err = ownLive(s, owner, err)
-	return s.view(), err
+	return l.view(s), err
 }
 
 func (l *LiveController) Start(ctx context.Context, owner string, in LiveStart) (LiveView, error) {
@@ -286,7 +317,7 @@ func (l *LiveController) Start(ctx context.Context, owner string, in LiveStart) 
 		}
 		s, decodeErr := decodeLive(existing)
 		s, decodeErr = ownLive(s, owner, decodeErr)
-		return s.view(), decodeErr
+		return l.view(s), decodeErr
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return LiveView{}, err
@@ -321,7 +352,7 @@ func (l *LiveController) Start(ctx context.Context, owner string, in LiveStart) 
 		}
 		s, err = readLive(r, err)
 		s, err = ownLive(s, owner, err)
-		return s.view(), err
+		return l.view(s), err
 	}
 	startCtx, cancel := context.WithTimeout(ctx, min(liveRemoteTimeout, deadline.Sub(l.now())))
 	l.startID, l.cancel = s.Reference.ID, cancel
@@ -369,5 +400,5 @@ func (l *LiveController) Start(ctx context.Context, owner string, in LiveStart) 
 	if err != nil {
 		l.stopOutput(context.WithoutCancel(recovery), ref, false)
 	}
-	return s.view(), err
+	return l.view(s), err
 }
