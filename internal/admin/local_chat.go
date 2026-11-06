@@ -91,6 +91,17 @@ type localChatService struct {
 	wechat       *stationWechat
 	observations *apphost.Observer
 	applications apphost.Registry
+	// live is deliberately local-station owned. It is created only after the
+	// owner has prepared an identity and never receives an output adapter from
+	// this path, so merely opening the management page cannot start a stream.
+	live     *apphost.LiveController
+	liveFish string
+	// liveStopDone is created only when shutdown has claimed an existing live
+	// controller. It lets Close wait for the same bounded stop operation rather
+	// than issue a second remote stop while the first is in flight.
+	liveStopOnce sync.Once
+	liveStopDone chan struct{}
+	liveStopErr  error
 	// Tests replace only the model transport, retaining the normal engine,
 	// source handling, SQLite and HTTP boundary.
 	modelFactory func() (companion.LanguageModel, error)
@@ -112,6 +123,10 @@ func (h *localChatService) beginShutdown() {
 		return
 	}
 	h.stopping.Store(true)
+	// Live shutdown has to begin before a chat turn is drained: an in-flight
+	// model must never keep an owned output running. The bounded stop continues
+	// independently of the HTTP request that initiated desktop shutdown.
+	h.closeLiveAsync()
 	if h.projectTools != nil {
 		h.projectTools.obs.close()
 	}
@@ -129,6 +144,36 @@ func (h *localChatService) beginShutdown() {
 	if processes != nil {
 		processes.BeginShutdown()
 	}
+}
+
+func (h *localChatService) closeLiveAsync() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	live := h.live
+	h.mu.Unlock()
+	if live == nil {
+		return
+	}
+	// Seal admission synchronously before the background stop owns any provider
+	// work. A shutdown racing a browser Start must not create a new session.
+	live.BeginShutdown()
+	h.liveStopOnce.Do(func() {
+		done := make(chan struct{})
+		h.mu.Lock()
+		h.liveStopDone = done
+		h.mu.Unlock()
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			err := live.Close(ctx)
+			cancel()
+			h.mu.Lock()
+			h.liveStopErr = err
+			close(done)
+			h.mu.Unlock()
+		}()
+	})
 }
 
 func (h *localChatService) close() error {
@@ -149,8 +194,20 @@ func (h *localChatService) closeContext(ctx context.Context) error {
 			defer h.turn.Unlock()
 			h.mu.Lock()
 			h.closed = true
-			processes, store := h.processes, h.store
+			processes, store, liveDone := h.processes, h.store, h.liveStopDone
 			h.mu.Unlock()
+			// beginShutdown starts this before waiting for turn. The shared wait
+			// avoids racing two StopLive calls against the same durable session.
+			if liveDone != nil {
+				// Do not let an outer desktop timeout close SQLite while the
+				// bounded live stop is still persisting its final state. The outer
+				// CloseContext caller regains control through its own select below;
+				// this background closer remains responsible for ordering.
+				<-liveDone
+				h.mu.Lock()
+				h.closeErr = errors.Join(h.closeErr, h.liveStopErr)
+				h.mu.Unlock()
+			}
 			// Jobs owns cancellation and waits for the isolated child result before
 			// its durable record is closed. Do not replay any interrupted request.
 			if processes != nil {
@@ -206,6 +263,7 @@ func (h *localChatService) routes(s *Server, mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/local/model", s.protected(h.modelSave))
 	h.appObservationRoutes(s, mux)
 	h.publicationRoutes(s, mux)
+	h.liveRoutes(s, mux)
 }
 
 func (h *localChatService) modelView(w http.ResponseWriter, r *http.Request) {
