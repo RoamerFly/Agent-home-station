@@ -191,6 +191,13 @@ func TestLocalDouyinAuthorizationOwnerRoute(t *testing.T) {
 	if status, view := f.request(http.MethodGet, route, nil, false); status != http.StatusOK || view["status"] != "unconfigured" || view["revision"] != "" || view["label"] != "" || view["works_authorized"] != false {
 		t.Fatalf("unexpected initial view: %d %v", status, view)
 	}
+	refresh := map[string]string{"action": "refresh"}
+	if status, _ := f.request(http.MethodPost, route, refresh, false); status != http.StatusForbidden {
+		t.Fatalf("refresh without CSRF returned %d", status)
+	}
+	if status, _ := f.request(http.MethodPost, route, refresh, true); status != http.StatusConflict {
+		t.Fatalf("refresh without a renewal credential returned %d", status)
+	}
 	begin := map[string]any{"action": "begin", "revision": "", "client_key": "synthetic_app_123", "client_secret": "synthetic-private-secret", "redirect_uri": "https://owner.example.test/callback"}
 	if status, _ := f.request(http.MethodPost, route, begin, false); status != http.StatusForbidden {
 		t.Fatalf("authorization without CSRF returned %d", status)

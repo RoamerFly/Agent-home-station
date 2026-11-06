@@ -47,9 +47,10 @@ func (h *localHomeService) douyinRoutes(s *Server, mux *http.ServeMux, registry 
 			fail(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, douyinapp.ErrAccountScope):
 			fail(w, http.StatusForbidden, err.Error())
-		case errors.Is(err, douyinapp.ErrAccountRevision), errors.Is(err, douyinapp.ErrAccountIdentity):
+		case errors.Is(err, douyinapp.ErrAccountRevision), errors.Is(err, douyinapp.ErrAccountIdentity),
+			errors.Is(err, douyinapp.ErrAccountRefreshUnavailable), errors.Is(err, douyinapp.ErrAccountRefreshBusy):
 			fail(w, http.StatusConflict, err.Error())
-		case errors.Is(err, douyinapp.ErrAccountExchange), errors.Is(err, douyinapp.ErrAccountProfile):
+		case errors.Is(err, douyinapp.ErrAccountExchange), errors.Is(err, douyinapp.ErrAccountProfile), errors.Is(err, douyinapp.ErrAccountRefreshFailed):
 			fail(w, http.StatusBadGateway, err.Error())
 		case err != nil:
 			fail(w, http.StatusServiceUnavailable, "抖音账号授权暂不可用，请刷新后核对状态")

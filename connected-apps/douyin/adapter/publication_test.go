@@ -236,15 +236,23 @@ func (c publicationBudgetFixture) Deadline() (time.Time, bool) {
 func TestDouyinPublicationOnlyResumesConfirmedPartAndNeverReplaysUncertainPart(t *testing.T) {
 	media := fixtureVideo(douyinSingleUploadBytes + 1)
 	for _, interrupted := range []bool{false, true} {
-		name := "known-boundary"
+		name := "known-boundary-after-renewal"
 		if interrupted {
 			name = "uncertain-part"
 		}
 		t.Run(name, func(t *testing.T) {
 			var yield atomic.Bool
 			var parts []string
+			wantToken := "act.fixture-publish-token"
 			transport := roundTrip(func(request *http.Request) (*http.Response, error) {
+				if strings.HasPrefix(request.URL.Path, "/api/") && request.Header.Get("access-token") != wantToken {
+					t.Fatal("publication reused stale account credentials")
+				}
 				switch request.URL.Path {
+				case "/oauth/refresh_token/":
+					return jsonResponse(`{"data":{"error_code":0,"open_id":"fixture_open_id","scope":"user_info,video.create.bind,posting.behavior","access_token":"act.fixture-renewed-token","refresh_token":"rft.fixture-token","expires_in":3600,"refresh_expires_in":7200}}`), nil
+				case "/oauth/userinfo/":
+					return jsonResponse(`{"data":{"error_code":"0","open_id":"fixture_open_id","nickname":"合成抖音账号"}}`), nil
 				case "/api/douyin/v1/video/init_video_part_upload/":
 					return jsonResponse(`{"data":{"error_code":0,"upload_id":"upload-token"},"extra":{"error_code":0}}`), nil
 				case "/api/douyin/v1/video/upload_video_part/":
@@ -287,6 +295,20 @@ func TestDouyinPublicationOnlyResumesConfirmedPartAndNeverReplaysUncertainPart(t
 				if first.Progress.Stage != "uploading" || !reflect.DeepEqual(parts, []string{"1"}) {
 					t.Fatalf("did not pause between confirmed parts: %+v parts=%v", first.Progress, parts)
 				}
+				record, err := f.app.currentAccount()
+				if err != nil {
+					t.Fatal(err)
+				}
+				record.RefreshToken, record.RefreshExpiresAt = "rft.fixture-token", f.app.nowUTC().Add(time.Hour)
+				if err := f.app.writeAccount(record); err != nil {
+					t.Fatal(err)
+				}
+				_, err = f.app.AuthorizeAccount(t.Context(), "owner/session", AccountAuthorizationInput{Action: "refresh", Revision: record.Revision})
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantToken = "act.fixture-renewed-token"
+				f.restart(transport)
 				accepted := f.action(id, "resume", "accepted")
 				if accepted.Progress == nil || accepted.Progress.Stage != "accepted" || !reflect.DeepEqual(parts, []string{"1", "2", "3"}) {
 					t.Fatalf("resume did not preserve confirmation: accepted=%+v parts=%v", accepted, parts)

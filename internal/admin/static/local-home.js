@@ -53,7 +53,7 @@
     if (view === "project-tools") loadProjectTools();
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", douyinAuthorization: null, douyinAuthorizationError: "", douyinAuthorizationSaving: false,
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", douyinAuthorization: null, douyinAuthorizationError: "", douyinAuthorizationSaving: "",
       douyinOAuth: { saving: false, completing: false, state: "" }, bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false },
@@ -1433,7 +1433,8 @@
     return value && typeof value.revision === "string" && typeof value.configured === "boolean" &&
       ["unconfigured", "ready", "expired"].includes(value.status) && typeof value.label === "string" &&
       (typeof value.works_authorized === "undefined" || typeof value.works_authorized === "boolean") &&
-      (typeof value.publish_authorized === "undefined" || typeof value.publish_authorized === "boolean");
+      (typeof value.publish_authorized === "undefined" || typeof value.publish_authorized === "boolean") &&
+      (typeof value.refresh_available === "undefined" || typeof value.refresh_available === "boolean");
   }
   function douyinAuthorizationSummary(authorization) {
     const states = {
@@ -1444,7 +1445,7 @@
           ? "已授权发布抖音视频；实际可用性仍会在首次发布时核对。"
           : "可重新扫码授权发布抖音视频。",
       ].join("")],
-      expired: ["抖音授权已过期", "在 Windows 桌面端重新扫码可恢复连接。"],
+      expired: ["抖音授权已过期", authorization?.refresh_available ? "在 Windows 桌面端续期可恢复连接。" : "在 Windows 桌面端重新扫码可恢复连接。"],
     };
     return states[authorization?.status] || ["抖音授权暂不可读", "刷新应用状态后重查。"];
   }
@@ -1491,6 +1492,30 @@
       }
     } finally { flow.saving = false; if (current === apps) renderApps(); }
   }
+  async function refreshDouyinAuthorization(current, authorization) {
+    if (current !== apps || current.douyinAuthorizationSaving || !authorization?.refresh_available || !authorization.revision) return;
+    current.douyinAuthorizationSaving = "refresh";
+    renderApps();
+    try {
+      const value = await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "refresh", revision: authorization.revision }) });
+      if (!validDouyinAuthorization(value)) throw new Error("抖音授权状态返回格式无效，请刷新后重试。");
+      current.douyinAuthorization = value;
+      current.douyinAuthorizationError = "";
+      appFeedback("抖音授权已续期。");
+      await loadApps();
+    } catch (error) {
+      if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) {
+        current.douyinAuthorizationError = error.message;
+        appFeedback(error.message, true);
+        // A provider rejection can mean the saved refresh credential is no longer usable.
+        // Reload the view so its available actions match the actual server state.
+        await loadApps();
+      }
+    } finally {
+      current.douyinAuthorizationSaving = "";
+      if (current === apps) renderApps();
+    }
+  }
   function handleDouyinDesktopAuthorization(event) {
     const value = event?.data;
     if (!value || typeof value !== "object" || typeof value.type !== "string") return;
@@ -1519,19 +1544,20 @@
       if (Number.isFinite(expiry.getTime())) detail.append(appElement("p", `授权到期：${expiry.toLocaleString()}`, "publication-reference"));
     }
     if (current.douyinAuthorizationError) detail.append(appElement("p", current.douyinAuthorizationError, "publication-feedback is-warn"));
+    const authorizationBusy = Boolean(current.douyinAuthorizationSaving) || flow.saving || Boolean(flow.state);
     let disconnect;
     if (authorization?.configured) {
-      disconnect = appElement("button", current.douyinAuthorizationSaving ? "正在移除…" : "移除授权", "button compact quiet");
-      disconnect.type = "button"; disconnect.disabled = current.douyinAuthorizationSaving;
+      disconnect = appElement("button", current.douyinAuthorizationSaving === "disconnect" ? "正在移除…" : "移除授权", "button compact quiet");
+      disconnect.type = "button"; disconnect.disabled = authorizationBusy;
       disconnect.addEventListener("click", async () => {
-        if (current !== apps || current.douyinAuthorizationSaving) return;
-        current.douyinAuthorizationSaving = true;
+        if (current !== apps || current.douyinAuthorizationSaving || flow.saving || flow.state) return;
+        current.douyinAuthorizationSaving = "disconnect";
         try {
           const value = await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "disconnect", revision: authorization.revision }) });
           if (!validDouyinAuthorization(value)) throw new Error("抖音授权状态返回格式无效，请刷新后重试。");
           current.douyinAuthorization = value; current.douyinAuthorizationError = ""; clearDouyinOAuth(flow); appFeedback("抖音本机账号连接已移除。"); await loadApps();
         } catch (error) { if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) { current.douyinAuthorizationError = error.message; appFeedback(error.message, true); } }
-        finally { current.douyinAuthorizationSaving = false; if (current === apps) renderApps(); }
+        finally { current.douyinAuthorizationSaving = ""; if (current === apps) renderApps(); }
       });
     }
     const host = douyinDesktopHost();
@@ -1556,7 +1582,7 @@
     const publishVideo = document.createElement("input");
     publishVideo.name = "publish_video"; publishVideo.type = "checkbox"; publishVideo.checked = Boolean(authorization?.publish_authorized); publishVideo.setAttribute("aria-label", "授权发布抖音视频");
     const begin = appElement("button", "打开扫码窗口", "button compact secondary");
-    begin.type = "submit"; begin.disabled = !authorization || flow.saving || Boolean(flow.state);
+    begin.type = "submit"; begin.disabled = !authorization || authorizationBusy;
     for (const [field, label] of [[clientKey, "Client Key"], [clientSecret, "Client Secret"], [redirectURI, "回调地址"]]) {
       field.id = `douyin-oauth-${field.name}`;
       const labelNode = appElement("label", label); labelNode.htmlFor = field.id; form.append(labelNode, field);
@@ -1576,10 +1602,17 @@
     form.append(embeddedNotice);
     panel.append(form);
     detail.append(panel);
+    if (authorization?.refresh_available) {
+      const refresh = appElement("button", current.douyinAuthorizationSaving === "refresh" ? "正在续期…" : "续期授权", "button compact secondary");
+      refresh.type = "button";
+      refresh.disabled = authorizationBusy;
+      refresh.addEventListener("click", () => { void refreshDouyinAuthorization(current, authorization); });
+      detail.append(refresh, appElement("p", "在原账号的授权范围内更新有效期。", "publication-authorization-note"));
+    }
     if (disconnect) detail.append(disconnect);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (!authorization || current !== apps || flow.saving || flow.state) return;
+      if (!authorization || current !== apps || current.douyinAuthorizationSaving || flow.saving || flow.state) return;
       const credentials = { client_key: clientKey.value, client_secret: clientSecret.value, redirect_uri: redirectURI.value, read_works: readWorks.checked, publish_video: publishVideo.checked };
       clientKey.value = clientSecret.value = redirectURI.value = "";
       flow.saving = true; begin.disabled = true; begin.textContent = "正在打开…";

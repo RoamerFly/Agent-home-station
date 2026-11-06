@@ -87,6 +87,7 @@ type SearchApp struct {
 	now              func() time.Time
 	mu               sync.Mutex
 	accountMu        sync.Mutex
+	accountRefreshMu sync.Mutex
 	accountPending   *accountAttempt
 	samplePlayer     func(context.Context, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
 }

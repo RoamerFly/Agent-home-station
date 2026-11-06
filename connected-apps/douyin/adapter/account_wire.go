@@ -14,13 +14,15 @@ import (
 const (
 	authorizationEndpoint = "https://open.douyin.com/platform/oauth/connect"
 	tokenEndpoint         = "https://open.douyin.com/oauth/access_token/"
+	refreshEndpoint       = "https://open.douyin.com/oauth/refresh_token/"
 	profileEndpoint       = "https://open.douyin.com/oauth/userinfo/"
 )
 
 var (
-	ErrOAuthInvalid     = errors.New("抖音授权参数无效")
-	ErrOAuthRejected    = errors.New("抖音授权被拒绝或已失效")
-	ErrOAuthUnavailable = errors.New("抖音授权服务暂不可用")
+	ErrOAuthInvalid        = errors.New("抖音授权参数无效")
+	ErrOAuthRejected       = errors.New("抖音授权被拒绝或已失效")
+	ErrOAuthUnavailable    = errors.New("抖音授权服务暂不可用")
+	errOAuthRefreshExpired = errors.New("抖音续期凭证已失效")
 )
 
 type OAuthSettings struct {
@@ -78,22 +80,40 @@ func (p *SearchApp) ExchangeAuthorizationCode(ctx context.Context, settings OAut
 		return OAuthGrant{}, ErrOAuthInvalid
 	}
 	form := url.Values{"client_key": {settings.ClientKey}, "client_secret": {settings.ClientSecret}, "code": {code}, "grant_type": {"authorization_code"}}
+	return p.requestOAuthGrant(ctx, tokenEndpoint, form)
+}
+
+func (p *SearchApp) refreshOAuthGrant(ctx context.Context, clientKey, refreshToken string) (OAuthGrant, error) {
+	if !safeOpaque(clientKey, 1, 256) || !safeOpaque(refreshToken, 1, 1024) {
+		return OAuthGrant{}, ErrOAuthInvalid
+	}
+	form := url.Values{"client_key": {clientKey}, "refresh_token": {refreshToken}, "grant_type": {"refresh_token"}}
+	return p.requestOAuthGrant(ctx, refreshEndpoint, form)
+}
+
+func (p *SearchApp) requestOAuthGrant(ctx context.Context, endpoint string, form url.Values) (OAuthGrant, error) {
 	var payload oauthTokenResponse
-	if err := p.oauthJSON(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(form.Encode()), "application/x-www-form-urlencoded", "", &payload); err != nil {
+	now := p.nowUTC()
+	if err := p.oauthJSON(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()), "application/x-www-form-urlencoded", "", &payload); err != nil {
 		return OAuthGrant{}, err
 	}
-	if payload.Data == nil {
+	if payload.Data == nil || payload.Data.ErrorCode == nil {
 		return OAuthGrant{}, ErrOAuthUnavailable
 	}
 	value := payload.Data
-	if value.ErrorCode != 0 {
-		return OAuthGrant{}, oauthError(value.ErrorCode)
+	if *value.ErrorCode != 0 {
+		if endpoint == refreshEndpoint && *value.ErrorCode == 10010 {
+			return OAuthGrant{}, errOAuthRefreshExpired
+		}
+		return OAuthGrant{}, oauthError(*value.ErrorCode)
 	}
-	if !safeOpaque(value.AccessToken, 1, 1024) || !safeOpaque(value.RefreshToken, 1, 1024) || !safeOpaque(value.OpenID, 1, 512) || value.ExpiresIn <= 0 || value.RefreshExpiresIn <= 0 || value.ExpiresIn > 9223372036 || value.RefreshExpiresIn > 9223372036 {
+	expiresIn, accessErr := value.ExpiresIn.Int64()
+	refreshExpiresIn, refreshErr := value.RefreshExpiresIn.Int64()
+	if !safeOpaque(value.AccessToken, 1, 1024) || !safeOpaque(value.RefreshToken, 1, 1024) || !safeOpaque(value.OpenID, 1, 512) ||
+		accessErr != nil || refreshErr != nil || expiresIn <= 0 || refreshExpiresIn <= 0 || expiresIn > 9223372036 || refreshExpiresIn > 9223372036 {
 		return OAuthGrant{}, ErrOAuthUnavailable
 	}
-	now := p.nowUTC()
-	return OAuthGrant{AccessToken: value.AccessToken, RefreshToken: value.RefreshToken, OpenID: value.OpenID, Scope: strings.TrimSpace(value.Scope), ExpiresAt: now.Add(time.Duration(value.ExpiresIn) * time.Second), RefreshExpiresAt: now.Add(time.Duration(value.RefreshExpiresIn) * time.Second)}, nil
+	return OAuthGrant{AccessToken: value.AccessToken, RefreshToken: value.RefreshToken, OpenID: value.OpenID, Scope: strings.TrimSpace(value.Scope), ExpiresAt: now.Add(time.Duration(expiresIn) * time.Second), RefreshExpiresAt: now.Add(time.Duration(refreshExpiresIn) * time.Second)}, nil
 }
 
 func (p *SearchApp) ReadAuthorizedProfile(ctx context.Context, grant OAuthGrant) (AccountProfile, error) {
@@ -122,13 +142,13 @@ func (p *SearchApp) ReadAuthorizedProfile(ctx context.Context, grant OAuthGrant)
 
 type oauthTokenResponse struct {
 	Data *struct {
-		AccessToken      string `json:"access_token"`
-		RefreshToken     string `json:"refresh_token"`
-		OpenID           string `json:"open_id"`
-		Scope            string `json:"scope"`
-		ExpiresIn        int64  `json:"expires_in"`
-		RefreshExpiresIn int64  `json:"refresh_expires_in"`
-		ErrorCode        int64  `json:"error_code"`
+		AccessToken      string      `json:"access_token"`
+		RefreshToken     string      `json:"refresh_token"`
+		OpenID           string      `json:"open_id"`
+		Scope            string      `json:"scope"`
+		ExpiresIn        json.Number `json:"expires_in"`
+		RefreshExpiresIn json.Number `json:"refresh_expires_in"`
+		ErrorCode        *int64      `json:"error_code"`
 	} `json:"data"`
 }
 type oauthProfileResponse struct {

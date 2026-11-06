@@ -97,7 +97,7 @@ func (p *SearchApp) PublicationGrant(ctx context.Context, ref apphost.Connection
 	if err != nil {
 		return apphost.PublicationGrant{}, err
 	}
-	return apphost.PublicationGrant{Allowed: true, Version: account.Revision}, nil
+	return apphost.PublicationGrant{Allowed: true, Version: account.grantRevision()}, nil
 }
 
 func (p *SearchApp) publicationAccount(ref apphost.ConnectionRef) (accountAuthorization, error) {
@@ -223,7 +223,7 @@ func (p *SearchApp) ContinuePublication(ctx context.Context, req apphost.Publica
 	}
 	defer douyinPublicationInFlight.Delete(key)
 	account, err := p.publicationAccount(ref.Target)
-	if err != nil || account.Revision != req.GrantVersion {
+	if err != nil || account.grantRevision() != req.GrantVersion {
 		return state.receipt(ref), nil
 	}
 	draft, err := douyinDraft(req.Draft)
@@ -239,12 +239,12 @@ func (p *SearchApp) ContinuePublication(ctx context.Context, req apphost.Publica
 	if state.Stage != "" && (state.Total != total || state.PartBytes != partBytes || state.Visibility != draft.visibility) {
 		return apphost.PublicationReceipt{}, apphost.ErrPublicationConflict
 	}
-	return p.runDouyinPublication(ctx, account, req, draft, artifact, state, douyinPublicationCheckpoint{
+	return p.runDouyinPublication(ctx, req, draft, artifact, state, douyinPublicationCheckpoint{
 		Stage: "initializing", PartBytes: partBytes, Total: total, Visibility: draft.visibility,
 	})
 }
 
-func (p *SearchApp) runDouyinPublication(ctx context.Context, account accountAuthorization, req apphost.PublicationRequest,
+func (p *SearchApp) runDouyinPublication(ctx context.Context, req apphost.PublicationRequest,
 	draft douyinPublicationDraft, artifact apphost.PublicationArtifact, state, initial douyinPublicationCheckpoint) (apphost.PublicationReceipt, error) {
 	ref := req.Reference
 	save := func(next douyinPublicationCheckpoint, afterResponse bool) error {
@@ -263,22 +263,27 @@ func (p *SearchApp) runDouyinPublication(ctx context.Context, account accountAut
 		}
 		return err
 	}
-	claim := func(next douyinPublicationCheckpoint) error {
+	claim := func(next douyinPublicationCheckpoint) (accountAuthorization, error) {
 		if err := req.CheckActive(ctx); err != nil {
-			return err
+			return accountAuthorization{}, err
 		}
 		previous := state
 		if err := save(next, false); err != nil {
-			return err
+			return accountAuthorization{}, err
 		}
-		if err := req.CheckActive(ctx); err != nil {
-			if previous.Stage != "" {
-				// No provider call was made for this claim.
-				_ = save(previous, true)
+		err := req.CheckActive(ctx)
+		var account accountAuthorization
+		if err == nil {
+			account, err = p.publicationAccount(ref.Target)
+			if err == nil && account.grantRevision() != req.GrantVersion {
+				err = apphost.ErrPublicationDenied
 			}
-			return err
 		}
-		return nil
+		if err != nil && previous.Stage != "" {
+			// No provider call was made for this claim.
+			_ = save(previous, true)
+		}
+		return account, err
 	}
 	stop := func(cause error) (apphost.PublicationReceipt, error) {
 		if errors.Is(cause, errDouyinPublishRejected) || errors.Is(cause, errDouyinPublishInvalid) || errors.Is(cause, errDouyinPublishAuthorization) {
@@ -305,7 +310,8 @@ func (p *SearchApp) runDouyinPublication(ctx context.Context, account accountAut
 		}
 		reader := io.MultiReader(bytes.NewReader(head[:]), file)
 		if initial.Total == 1 {
-			if err := claim(initial); err != nil {
+			account, err := claim(initial)
+			if err != nil {
 				return state.receipt(ref), nil
 			}
 			videoID, err := p.uploadPublicationVideo(ctx, account, artifact.Name, reader, artifact.Bytes)
@@ -319,7 +325,8 @@ func (p *SearchApp) runDouyinPublication(ctx context.Context, account accountAut
 			}
 		} else {
 			if state.Stage == "" {
-				if err := claim(initial); err != nil {
+				account, err := claim(initial)
+				if err != nil {
 					return state.receipt(ref), nil
 				}
 				id, err := p.initializePublicationUpload(ctx, account)
@@ -332,7 +339,7 @@ func (p *SearchApp) runDouyinPublication(ctx context.Context, account accountAut
 					return state.receipt(ref), nil
 				}
 			}
-			complete, err := p.uploadDouyinParts(ctx, account, artifact, reader, state, claim, save)
+			complete, err := p.uploadDouyinParts(ctx, artifact, reader, state, claim, save)
 			if err != nil {
 				return stop(err)
 			}
@@ -341,7 +348,8 @@ func (p *SearchApp) runDouyinPublication(ctx context.Context, account accountAut
 			}
 			next := state
 			next.Stage = "merging"
-			if err := claim(next); err != nil {
+			account, err := claim(next)
+			if err != nil {
 				return state.receipt(ref), nil
 			}
 			videoID, err := p.completePublicationUpload(ctx, account, state.UploadID)
@@ -359,7 +367,8 @@ func (p *SearchApp) runDouyinPublication(ctx context.Context, account accountAut
 	}
 	next := state
 	next.Stage = "posting"
-	if err := claim(next); err != nil {
+	account, err := claim(next)
+	if err != nil {
 		return state.receipt(ref), nil
 	}
 	created, err := p.createPublicationVideo(ctx, account, state.UploadVideoID, draft.text, draft.visibility)
@@ -378,8 +387,8 @@ func (p *SearchApp) runDouyinPublication(ctx context.Context, account accountAut
 	return next.receipt(ref), nil
 }
 
-func (p *SearchApp) uploadDouyinParts(ctx context.Context, account accountAuthorization, artifact apphost.PublicationArtifact,
-	reader io.Reader, state douyinPublicationCheckpoint, claim func(douyinPublicationCheckpoint) error,
+func (p *SearchApp) uploadDouyinParts(ctx context.Context, artifact apphost.PublicationArtifact,
+	reader io.Reader, state douyinPublicationCheckpoint, claim func(douyinPublicationCheckpoint) (accountAuthorization, error),
 	save func(douyinPublicationCheckpoint, bool) error) (bool, error) {
 	if state.Confirmed == state.Total {
 		return true, nil
@@ -404,7 +413,8 @@ func (p *SearchApp) uploadDouyinParts(ctx context.Context, account accountAuthor
 		}
 		pending := state
 		pending.Stage = "part_pending"
-		if err := claim(pending); err != nil {
+		account, err := claim(pending)
+		if err != nil {
 			return false, err
 		}
 		if err := p.uploadPublicationPart(ctx, account, state.UploadID, state.Confirmed+1, part); err != nil {
@@ -464,7 +474,7 @@ func (p *SearchApp) ReconcilePublication(ctx context.Context, ref apphost.Public
 	// The status API proves public visibility only. Private or friends-only
 	// creations remain accepted because this query cannot distinguish them.
 	current, authErr := p.publicationAccount(ref.Target)
-	if err == nil && authErr == nil && current.Revision == account.Revision && state.Visibility == 0 && status.Status != nil && *status.Status == 5 {
+	if err == nil && authErr == nil && current.grantRevision() == account.grantRevision() && state.Visibility == 0 && status.Status != nil && *status.Status == 5 {
 		receipt.State = "published"
 	}
 	return receipt, nil

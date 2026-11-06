@@ -16,6 +16,8 @@ Windows 本地成长站可选择随包提供抖音应用。
 
 新增与重新授权从 Windows 桌面端发起。浏览器管理页可查看或移除现有连接。抖音普通网页版的登录会话与本应用授权独立；抖音公开接口提供扫码授权页，未提供 Windows 第三方应用直接获取登录二维码图片和轮询状态的接口。
 
+应用内有可用的续期凭证时，可点击「续期授权」更新访问期限。旧版连接或续期凭证失效时，需在桌面端重新扫码。续期只沿用原账号和已确认的权限，平台收回的权限随核验结果关闭。 [抖音访问令牌续期](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/refresh-access-token)
+
 默认请求读取账号公开资料的 user_info。移除本机授权会清除本机令牌，需要在平台侧取消授权时，可从抖音的授权管理处理。关键词搜索和本人作品状态仍使用下方各自的授权。[抖音网页授权](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/sdk/web-app/web/permission/) · [获取用户公开信息](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/get-account-open-info)
 
 ## 读取已授权账号的作品列表

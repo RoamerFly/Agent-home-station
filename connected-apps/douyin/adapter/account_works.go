@@ -69,7 +69,7 @@ func (p *SearchApp) accountWorksGrant(access apphost.ObservationAccess) (apphost
 	if !accountWorksMatches(account, access) {
 		return apphost.ObservationGrant{}, apphost.ErrObservationForbidden
 	}
-	return apphost.ObservationGrant{Allowed: true, Version: account.Revision}, nil
+	return apphost.ObservationGrant{Allowed: true, Version: account.grantRevision()}, nil
 }
 
 func accountWorksMatches(account accountAuthorization, access apphost.ObservationAccess) bool {
@@ -119,7 +119,7 @@ func (p *SearchApp) readAccountWorks(ctx context.Context, request apphost.Observ
 	if !accountWorksMatches(account, request.ObservationAccess) {
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 	}
-	cursor, err := parseAccountWorksCursor(request, account.Revision)
+	cursor, err := parseAccountWorksCursor(request, account.grantRevision())
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
@@ -135,7 +135,7 @@ func (p *SearchApp) readAccountWorks(ctx context.Context, request apphost.Observ
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	if !grant.Allowed || grant.Version != account.Revision {
+	if !grant.Allowed || grant.Version != account.grantRevision() {
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 	}
 	return accountWorksPage(response, cursor, accountWorksAccountID(account))

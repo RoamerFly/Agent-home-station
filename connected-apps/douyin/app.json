@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "douyin",
   "name": "抖音",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -45,6 +45,13 @@
     {
       "id": "official-account-exchange",
       "endpoint": "https://open.douyin.com/oauth/access_token/",
+      "capabilities": [
+        "account.authorization"
+      ]
+    },
+    {
+      "id": "official-account-refresh",
+      "endpoint": "https://open.douyin.com/oauth/refresh_token/",
       "capabilities": [
         "account.authorization"
       ]
@@ -107,12 +114,12 @@
     }
   ],
   "files": {
-    "adapter/account.go": "03838620b0c4f788dba1286502dee8ba0ed4faedc01e4db25433081779821345",
+    "adapter/account.go": "4a0d0826b14822908f2b44b96000584ceea35b48917a60ba4ffca79d9f8e84b4",
     "adapter/account_publish_test.go": "f34e67731c339aafb62dfbcee77db9330c0e725572e1512875618922dd1efa27",
-    "adapter/account_test.go": "a3d73d5a41705fc89500eb2eddd2952e2c7fcff0f11aae71a36f1d18030c572e",
-    "adapter/account_wire.go": "fbbf436668feb95368f710321a8c2511eac8921c675a7921c8bc72604cb27226",
+    "adapter/account_test.go": "57348fd4cc9b47240bbb500bcc847eca0437c4cdfe957ead7d2e4915d968dc32",
+    "adapter/account_wire.go": "7d861f2cc218355e36ba212932dade0597f598562724edb7b2b510aaa6b84835",
     "adapter/account_wire_test.go": "2bc468a8142436f62f40ecd8b00fc68d05f41c7a46da9658ea89b8cb94b54167",
-    "adapter/account_works.go": "0d04bfe5bb60e2bfe5267ca3febab8f4751715a426ee92b9ad46e0750ad82a7c",
+    "adapter/account_works.go": "05bb578605a348d42db82acaa12802d1917c36929c501af4335baa58d650a0c9",
     "adapter/account_works_test.go": "b4838132f3d38271c0d4a872b2e28f529e40ebaadbc656d599204cf6106bc86b",
     "adapter/account_works_wire.go": "f7286bf01e1bfe77543129ed1e92560e329a4cf76df97753e487c155e445b6c6",
     "adapter/account_works_wire_test.go": "6e2afe44beb00c52df29ae03d06aed7d792c12a45e064d1c98960bc8d990f9b7",
@@ -125,19 +132,19 @@
     "adapter/player_playback.go": "42649af356d98cd176ee20abaff47465a20460173e2a9ee898b905327ab8a843",
     "adapter/player_playback_test.go": "0e068a347e5beb830c064bfa784e6f78ed3b97b120f5af16a219abcb0518bdc4",
     "adapter/player_test.go": "5719a46470fd2386068b610be47197308291bbf6336bc9cb8c3ebdea13f8f5cb",
-    "adapter/publication.go": "a78921dd6049dcb29f2546627dc6a7fe984fd9cf0dd77666af44d44f261bc7af",
-    "adapter/publication_test.go": "044102891e29fefb548c96e9d3e047fab07df0a7b023a441f273a57011e4cce2",
+    "adapter/publication.go": "2cdf64efbfd6f75d99d1b9c5c9bada5b5fbb499046a60862a7e2e63e15851ab5",
+    "adapter/publication_test.go": "9f22d39f13f115016760c871cf8d73da0a6c515200744511af9885c08dcccae3",
     "adapter/publication_wire.go": "314caea576d6afc51e66e3f0c336c127ce45806a72714128c7562fbb0adc26bb",
     "adapter/publication_wire_test.go": "53d1659652d1fbe5c6fe33a0479d77f10ddc8b3a482eeb020cdb6fcfd1e6103f",
-    "adapter/search.go": "94f6476e69c36a4a9e8b4bbdc4a8b54d8dc0e4ff757347e680162d96141652c9",
+    "adapter/search.go": "802ff8532d497391552c777d3c331fb4618f3a96cfe351a70f5a80e5f7d3ea68",
     "adapter/search_test.go": "d51f4a877ebfb761e6a4aa47225717b7341cfa65c18792622f7904975ad552a9",
     "capabilities.json": "7a3289e960558087bdaefd2acb724ad50ab5f160c256269ac626949bcf7517b5",
-    "CHANGELOG.md": "118e7e2933c15a91bc56761cfddf5056a2dbc53ee6eb83505a363987f96bf3a5",
+    "CHANGELOG.md": "36528ffc4292a5516c3d1585ffd04de12bd1a40269a6462a9c3d7eaa5c77f482",
     "config.schema.json": "f40c4369f20a9ee645d90dfa39e8a166b0f37b006bbf812185426179e951be58",
-    "MIGRATION.md": "5bd0f203a1c23c9a70d4fa85fdbfb88c9d0061ad8515a2d594ee5a82c3f1c493",
+    "MIGRATION.md": "a08d0022e5545a00b3a6933269737131e080da5ba8677bf5fe83305f1814f03a",
     "own-video.schema.json": "c7da49685c9183986a7296c8ebd4597277429df802d2136449fc91a540f1cde2",
-    "PERMISSIONS.md": "794bf672ba3263e86471f78ede3ade4051295cf6d7bb6eac4d4c5a2cff88296b",
-    "README.md": "e095d818ef587f781aedaf05e9f7478a4876f6e8e0cb3a4dd629cba78ddee2ba",
+    "PERMISSIONS.md": "9213460331f784ab9c9fe5dcf4a3b4f6ff9422c1b23af152babf22b374c9bff3",
+    "README.md": "99e650055100f9f86178dd776a71096ba76d6df23f864856efea9662edf05a9a",
     "ui.schema.json": "149127e16076739ec7a75d3704e350a5cb1c7f7e46f4f2fc95b254df1fcc3249"
   },
   "browser_routes": [

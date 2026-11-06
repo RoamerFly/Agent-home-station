@@ -32,13 +32,16 @@ const (
 )
 
 var (
-	ErrAccountInput    = errors.New("请核对抖音应用凭据与已登记的 HTTPS 回调地址")
-	ErrAccountCallback = errors.New("抖音授权回跳与本次请求不符、已用过或已过期")
-	ErrAccountScope    = errors.New("抖音账号未授予公开资料读取权限")
-	ErrAccountRevision = errors.New("抖音账号授权已变化，请刷新后重新操作")
-	ErrAccountIdentity = errors.New("这次授权对应另一个抖音应用或账号，请先解除现有连接")
-	ErrAccountExchange = errors.New("抖音授权码兑换失败，请重新发起授权")
-	ErrAccountProfile  = errors.New("抖音账号身份核验失败，请重新发起授权")
+	ErrAccountInput              = errors.New("请核对抖音应用凭据与已登记的 HTTPS 回调地址")
+	ErrAccountCallback           = errors.New("抖音授权回跳与本次请求不符、已用过或已过期")
+	ErrAccountScope              = errors.New("抖音账号未授予公开资料读取权限")
+	ErrAccountRevision           = errors.New("抖音账号授权已变化，请刷新后重新操作")
+	ErrAccountIdentity           = errors.New("这次授权对应另一个抖音应用或账号，请先解除现有连接")
+	ErrAccountExchange           = errors.New("抖音授权码兑换失败，请重新发起授权")
+	ErrAccountProfile            = errors.New("抖音账号身份核验失败，请重新发起授权")
+	ErrAccountRefreshUnavailable = errors.New("抖音账号无法续期，请在桌面端重新扫码授权")
+	ErrAccountRefreshFailed      = errors.New("抖音续期结果未确认，请核对账号状态后再试")
+	ErrAccountRefreshBusy        = errors.New("抖音账号已有授权操作正在处理")
 )
 
 type AccountAuthorizationInput struct {
@@ -55,6 +58,7 @@ type AccountAuthorizationInput struct {
 
 type AccountAuthorizationView struct {
 	Configured        bool   `json:"configured"`
+	RefreshAvailable  bool   `json:"refresh_available"`
 	WorksAuthorized   bool   `json:"works_authorized"`
 	PublishAuthorized bool   `json:"publish_authorized"`
 	Status            string `json:"status"`
@@ -69,15 +73,18 @@ type accountOAuthStart struct {
 }
 
 type accountAuthorization struct {
-	SchemaVersion int       `json:"schema_version"`
-	Revision      string    `json:"revision"`
-	ClientKey     string    `json:"client_key,omitempty"`
-	OpenID        string    `json:"open_id,omitempty"`
-	AccessToken   string    `json:"access_token,omitempty"`
-	Label         string    `json:"label,omitempty"`
-	ReadWorks     bool      `json:"read_works,omitempty"`
-	PublishVideo  bool      `json:"publish_video,omitempty"`
-	ExpiresAt     time.Time `json:"expires_at,omitzero"`
+	SchemaVersion    int       `json:"schema_version"`
+	Revision         string    `json:"revision"`
+	ConsentRevision  string    `json:"consent_revision,omitempty"`
+	ClientKey        string    `json:"client_key,omitempty"`
+	OpenID           string    `json:"open_id,omitempty"`
+	AccessToken      string    `json:"access_token,omitempty"`
+	Label            string    `json:"label,omitempty"`
+	ReadWorks        bool      `json:"read_works,omitempty"`
+	PublishVideo     bool      `json:"publish_video,omitempty"`
+	ExpiresAt        time.Time `json:"expires_at,omitzero"`
+	RefreshToken     string    `json:"refresh_token,omitempty"`
+	RefreshExpiresAt time.Time `json:"refresh_expires_at,omitzero"`
 }
 
 type accountAttempt struct {
@@ -106,6 +113,7 @@ func (p *SearchApp) accountView(record accountAuthorization) AccountAuthorizatio
 		return view
 	}
 	view.Configured = true
+	view.RefreshAvailable = record.refreshAvailable(p.nowUTC())
 	view.WorksAuthorized = record.ReadWorks
 	view.PublishAuthorized = record.PublishVideo
 	view.Label = record.Label
@@ -150,9 +158,12 @@ func (p *SearchApp) AuthorizeAccount(ctx context.Context, binding string, in Acc
 			return nil, ErrAccountInput
 		}
 		return p.cancelAccountAuthorization(binding, in.State)
-	case "disconnect":
+	case "disconnect", "refresh":
 		if in.ReadWorks || in.PublishVideo || in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.CallbackURL != "" || in.State != "" {
 			return nil, ErrAccountInput
+		}
+		if in.Action == "refresh" {
+			return p.refreshAccountAuthorization(ctx, in.Revision)
 		}
 		return p.disconnectAccount(ctx, in.Revision)
 	default:
@@ -286,9 +297,96 @@ func (p *SearchApp) completeAccountAuthorization(ctx context.Context, binding, c
 	if !p.nowUTC().Before(grant.ExpiresAt) {
 		return AccountAuthorizationView{}, ErrAccountProfile
 	}
-	next := accountAuthorization{SchemaVersion: 1, Revision: revision, ClientKey: attempt.settings.ClientKey, OpenID: grant.OpenID, AccessToken: grant.AccessToken, Label: accountLabel(profile.Nickname), ReadWorks: attempt.readWorks && attempt.callbackWorks && hasAccountWorksScope(grant.Scope), PublishVideo: attempt.publishVideo && attempt.callbackPublish && hasAccountPublishScopes(grant.Scope), ExpiresAt: grant.ExpiresAt.UTC()}
+	next := accountAuthorization{SchemaVersion: 1, Revision: revision, ClientKey: attempt.settings.ClientKey, OpenID: grant.OpenID, AccessToken: grant.AccessToken, Label: accountLabel(profile.Nickname), ReadWorks: attempt.readWorks && attempt.callbackWorks && hasAccountWorksScope(grant.Scope), PublishVideo: attempt.publishVideo && attempt.callbackPublish && hasAccountPublishScopes(grant.Scope), ExpiresAt: grant.ExpiresAt.UTC(), RefreshToken: grant.RefreshToken, RefreshExpiresAt: grant.RefreshExpiresAt.UTC()}
 	if err := p.writeAccount(next); err != nil {
 		return AccountAuthorizationView{}, err
+	}
+	return p.accountView(next), nil
+}
+
+func (record accountAuthorization) grantRevision() string {
+	if record.ConsentRevision != "" {
+		return record.ConsentRevision
+	}
+	return record.Revision
+}
+
+func (record accountAuthorization) refreshAvailable(now time.Time) bool {
+	return record.RefreshToken != "" && now.Before(record.RefreshExpiresAt)
+}
+
+func (p *SearchApp) refreshAccountAuthorization(ctx context.Context, revision string) (AccountAuthorizationView, error) {
+	if !p.accountRefreshMu.TryLock() {
+		return AccountAuthorizationView{}, ErrAccountRefreshBusy
+	}
+	defer p.accountRefreshMu.Unlock()
+	p.accountMu.Lock()
+	record, err := p.readAccount()
+	pending := p.accountPending != nil
+	p.accountMu.Unlock()
+	if err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	if record.Revision != revision {
+		return AccountAuthorizationView{}, ErrAccountRevision
+	}
+	if pending {
+		return AccountAuthorizationView{}, ErrAccountRefreshBusy
+	}
+	if !record.refreshAvailable(p.nowUTC()) {
+		return AccountAuthorizationView{}, ErrAccountRefreshUnavailable
+	}
+	grant, err := p.refreshOAuthGrant(ctx, record.ClientKey, record.RefreshToken)
+	expired := errors.Is(err, errOAuthRefreshExpired)
+	next := record
+	if expired {
+		next.RefreshToken, next.RefreshExpiresAt = "", time.Time{}
+	} else {
+		if err != nil || grant.OpenID != record.OpenID || !slices.Contains(strings.Split(grant.Scope, ","), accountScope) {
+			return AccountAuthorizationView{}, ErrAccountRefreshFailed
+		}
+		profile, err := p.ReadAuthorizedProfile(ctx, grant)
+		if err != nil {
+			return AccountAuthorizationView{}, ErrAccountRefreshFailed
+		}
+		next.AccessToken, next.ExpiresAt = grant.AccessToken, grant.ExpiresAt.UTC()
+		next.Label = accountLabel(profile.Nickname)
+		next.ReadWorks = record.ReadWorks && hasAccountWorksScope(grant.Scope)
+		next.PublishVideo = record.PublishVideo && hasAccountPublishScopes(grant.Scope)
+		// Refreshing the access token cannot extend the renewal window.
+		next.RefreshToken = grant.RefreshToken
+		if grant.RefreshExpiresAt.Before(next.RefreshExpiresAt) {
+			next.RefreshExpiresAt = grant.RefreshExpiresAt.UTC()
+		}
+	}
+	next.Revision, err = accountNonce()
+	if err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	// A token rotation is independent of the consent that authorized an original
+	// upload or cursor. Explicit reauthorization and disconnection change it.
+	next.ConsentRevision = record.grantRevision()
+
+	p.accountMu.Lock()
+	defer p.accountMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	current, err := p.readAccount()
+	if err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	if current.Revision != revision || p.accountPending != nil {
+		return AccountAuthorizationView{}, ErrAccountRevision
+	}
+	if !expired && !p.nowUTC().Before(next.ExpiresAt) {
+		return AccountAuthorizationView{}, ErrAccountRefreshFailed
+	}
+	if err := p.writeAccount(next); err != nil {
+		return AccountAuthorizationView{}, err
+	}
+	if expired {
+		return AccountAuthorizationView{}, ErrAccountRefreshUnavailable
 	}
 	return p.accountView(next), nil
 }
@@ -439,10 +537,19 @@ func (p *SearchApp) readAccount() (accountAuthorization, error) {
 		return accountAuthorization{}, apphost.ErrUnavailable
 	}
 	if record.AccessToken == "" {
-		if record.ReadWorks || record.PublishVideo || record.ClientKey != "" || record.OpenID != "" || record.Label != "" || !record.ExpiresAt.IsZero() {
+		if record.ReadWorks || record.PublishVideo || record.ConsentRevision != "" || record.RefreshToken != "" || !record.RefreshExpiresAt.IsZero() || record.ClientKey != "" || record.OpenID != "" || record.Label != "" || !record.ExpiresAt.IsZero() {
 			return accountAuthorization{}, apphost.ErrUnavailable
 		}
 	} else if record.ClientKey == "" || record.OpenID == "" || record.Label != accountLabel(record.Label) || record.ExpiresAt.IsZero() {
+		return accountAuthorization{}, apphost.ErrUnavailable
+	}
+	if record.ConsentRevision != "" {
+		if decoded, err := hex.DecodeString(record.ConsentRevision); err != nil || len(decoded) != 24 {
+			return accountAuthorization{}, apphost.ErrUnavailable
+		}
+	}
+	if (record.RefreshToken == "") != record.RefreshExpiresAt.IsZero() ||
+		record.RefreshToken != "" && !safeOpaque(record.RefreshToken, 1, 1024) {
 		return accountAuthorization{}, apphost.ErrUnavailable
 	}
 	return record, nil

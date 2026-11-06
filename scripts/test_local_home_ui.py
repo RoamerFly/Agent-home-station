@@ -1229,14 +1229,17 @@ def verify_douyin_authorization(binary, output):
                     page.route("https://open.douyin.com/**", lambda route: route.abort())
                     page.route("**/api/apps", fulfill_json({"items": [{"id": "douyin", "name": "抖音"}]}))
                     page.route("**/api/apps/douyin/connections", fulfill_json({"items": []}))
-                    attempts, cancelled, completed = [], [], []
+                    attempts, cancelled, completed, refreshed = [], [], [], []
                     initial = {"revision": "", "configured": False, "status": "unconfigured", "label": "", "works_authorized": False, "publish_authorized": False}
-                    verified = {"revision": "fixture-revision", "configured": True, "status": "ready", "label": "Synthetic Douyin account", "works_authorized": desktop, "publish_authorized": desktop}
+                    verified = {"revision": "fixture-revision", "configured": True, "status": "ready", "label": "Synthetic Douyin account", "works_authorized": desktop, "publish_authorized": desktop, "refresh_available": True}
+                    renewed = {**verified, "revision": "fixture-renewed", "expires_at": "2030-02-01T00:00:00Z"}
+                    authorization_view = initial if desktop else verified
                     redirect = "https://owner.example.test/callback"
 
                     def authorization(route):
+                        nonlocal authorization_view
                         if route.request.method == "GET":
-                            fulfill_json(verified if completed else initial)(route)
+                            fulfill_json(authorization_view)(route)
                             return
                         body = route.request.post_data_json
                         if body["action"] == "begin":
@@ -1254,7 +1257,13 @@ def verify_douyin_authorization(binary, output):
                             fulfill_json(initial)(route)
                         elif body["action"] == "complete":
                             completed.append(body["callback_url"])
+                            authorization_view = verified
                             fulfill_json(verified)(route)
+                        elif body["action"] == "refresh":
+                            assert body == {"action": "refresh", "revision": "fixture-revision"}
+                            refreshed.append(body)
+                            authorization_view = renewed
+                            fulfill_json(renewed)(route)
                         else:
                             raise AssertionError("unexpected action")
 
@@ -1286,15 +1295,17 @@ def verify_douyin_authorization(binary, output):
                     if desktop:
                         page.locator("#initialize-button").click()
                     page.locator("#apps-tab").click()
-                    page.get_by_text("尚未接入抖音账号", exact=True).wait_for()
                     if not desktop:
+                        page.get_by_text(verified["label"], exact=True).wait_for()
                         page.get_by_text("请在 Windows 桌面端扫码连接抖音账号。", exact=True).wait_for()
                         assert page.get_by_text("扫码授权", exact=True).count() == 0
+                        assert page.get_by_role("button", name="续期授权").count() == 0
                         assert page.get_by_role("link", name="在浏览器中打开抖音授权").count() == 0
                         assert page.get_by_label("完整回调地址").count() == 0
                         assert not attempts and not completed and not cancelled
                         context.close()
                         continue
+                    page.get_by_text("尚未接入抖音账号", exact=True).wait_for()
                     page.get_by_text("扫码授权", exact=True).click()
                     works = page.get_by_label("授权读取我的作品列表")
                     publish = page.get_by_label("授权发布抖音视频")
@@ -1342,6 +1353,12 @@ def verify_douyin_authorization(binary, output):
                     page.get_by_text(verified["label"], exact=True).wait_for()
                     page.get_by_text("已授权读取我的作品列表", exact=False).wait_for()
                     page.get_by_text("已授权发布抖音视频", exact=False).wait_for()
+                    with page.expect_request(lambda req: req.url.endswith("/douyin/authorization") and req.method == "POST"
+                                             and req.post_data_json.get("action") == "refresh"):
+                        page.get_by_role("button", name="续期授权").click()
+                    page.get_by_text("抖音授权已续期。", exact=True).wait_for()
+                    assert refreshed == [{"action": "refresh", "revision": "fixture-revision"}]
+                    page.get_by_role("button", name="续期授权").wait_for()
                     page.get_by_text("重新扫码授权", exact=True).click()
                     assert works.is_checked(), "renewing a works grant should preserve the visible selection"
                     assert publish.is_checked(), "renewing a publishing grant should preserve the visible selection"
