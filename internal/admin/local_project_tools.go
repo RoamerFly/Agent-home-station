@@ -15,6 +15,7 @@ import (
 
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 	catalog "wechat-bot/plugins"
@@ -62,7 +63,7 @@ type localProjectToolView struct {
 }
 
 func (s *localProjectTools) runtimeReady() bool {
-	return runtime.GOOS == "windows" && windowsToolRuntimeReady(s.options)
+	return runtime.GOOS == "windows" && stationruntime.ToolRuntimeReady(s.options, s.home.root)
 }
 
 func (s *localProjectTools) pdfRuntimeReady() bool {
@@ -122,7 +123,8 @@ func (s *localProjectTools) forFish(fish string) (*localProjectToolHost, error) 
 	}
 	options := s.options
 	options.DocumentRuntimeRoot = ""
-	controller, err := pluginruntime.NewController(store, pluginruntime.InstalledExecutor(store, options))
+	executor := stationruntime.InstalledToolExecutor(store, options, s.home.root)
+	controller, err := pluginruntime.NewController(store, executor)
 	if err != nil {
 		store.Close()
 		return nil, err

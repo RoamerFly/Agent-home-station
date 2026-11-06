@@ -13,6 +13,7 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/stationruntime"
 )
 
 func TestLiveLocalHomeWindowsPersistentToolAndRevocation(t *testing.T) {
@@ -21,7 +22,7 @@ func TestLiveLocalHomeWindowsPersistentToolAndRevocation(t *testing.T) {
 		t.Skip("opt-in synthetic local-home LPAC integration")
 	}
 	f := localChatFixture(t)
-	windows, err := LocalWindowsRuntime("", f.dir, file)
+	windows, err := stationruntime.LoadWindowsRunner("", f.dir, f.root, file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +127,7 @@ func TestLiveLocalChatRetryReusesWindowsJob(t *testing.T) {
 		t.Skip("opt-in synthetic local chat LPAC integration")
 	}
 	f := localChatFixture(t)
-	windows, err := LocalWindowsRuntime("", f.dir, file)
+	windows, err := stationruntime.LoadWindowsRunner("", f.dir, f.root, file)
 	if err != nil {
 		t.Fatal(err)
 	}

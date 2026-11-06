@@ -25,6 +25,7 @@ import (
 	"wechat-bot/internal/admin"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/stationauth"
+	"wechat-bot/internal/stationruntime"
 )
 
 const defaultListen = "127.0.0.1:8082"
@@ -74,7 +75,7 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	if err != nil {
 		return err
 	}
-	windows, err := admin.LocalWindowsRuntime(filepath.Dir(path), cfg.dataDir, cfg.runtimeFile)
+	windows, err := stationruntime.LoadWindowsRunner(filepath.Dir(path), cfg.dataDir, cfg.workspaceRoot, cfg.runtimeFile)
 	if err != nil {
 		return err
 	}

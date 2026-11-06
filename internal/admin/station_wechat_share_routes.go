@@ -9,6 +9,7 @@ import (
 
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/sharespec"
+	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/websession"
 	catalog "wechat-bot/plugins"
 )
@@ -51,7 +52,7 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 		fail(w, 503, "工具宿主不可用")
 		return
 	}
-	view := map[string]any{"installed": false, "enabled": false, "runtime_ready": windowsToolRuntimeReady(s.shareOptions)}
+	view := map[string]any{"installed": false, "enabled": false, "runtime_ready": stationruntime.ToolRuntimeReady(s.shareOptions, s.workspaceRoot)}
 	if worker == nil {
 		respond(w, 200, view)
 		return

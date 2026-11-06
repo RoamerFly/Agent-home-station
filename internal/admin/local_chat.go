@@ -18,6 +18,7 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/websession"
 )
 
@@ -113,7 +114,7 @@ func newLocalChatService(home *localHomeService) *localChatService {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &localChatService{home: home, models: newLocalModelStore(home.dataDir), ctx: ctx, cancel: cancel,
 		projectTools: &localProjectTools{
-			home: home, options: packagedWindowsToolOptions(),
+			home: home, options: stationruntime.PackagedToolOptions(),
 			rvc: newLocalRVCService(home.dataDir, home.root), comfy: newLocalComfyService(home.dataDir, home.root),
 			yue: newLocalYuEService(home.dataDir, home.root),
 			tts: newLocalTTSBackend(home.dataDir, home.root),

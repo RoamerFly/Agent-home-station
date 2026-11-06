@@ -22,6 +22,7 @@ import (
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -87,11 +88,7 @@ func bindStationWechat(registry apphost.Registry, chat *localChatService) (appho
 		return registry, nil, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	shareOptions := packagedWindowsToolOptions()
-	if pathWithin(chat.home.root, shareOptions.Pythonw) || pathWithin(chat.home.root, shareOptions.WindowsHelper) {
-		// Interpreter and isolation helper must be outside the editable fish home.
-		shareOptions.Python, shareOptions.Pythonw, shareOptions.WindowsHelper = "", "", ""
-	}
+	shareOptions := stationruntime.PackagedToolOptions()
 	host := &stationWechat{
 		stationWechatNative: native, root: filepath.Join(chat.home.dataDir, "apps", wechatapp.ID, "workers"),
 		dataDir: chat.home.dataDir, workspaceRoot: chat.home.root,

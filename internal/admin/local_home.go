@@ -11,6 +11,7 @@ import (
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/apphttp"
+	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/stationui"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
@@ -69,18 +70,26 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	if err = root.Close(); err != nil {
 		return nil, err
 	}
+	var runner *agenthost.WindowsConfig
+	if len(windows) > 0 {
+		runner, err = stationruntime.BindWindowsRunner(windows[0], dir, workspaceRoot)
+		if err != nil {
+			return nil, err
+		}
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusOK, map[string]any{"ok": true, "mode": "local", "wechat_required": false})
 	})
 	mux.HandleFunc("POST /api/login", auth.Login)
 	mux.HandleFunc("GET /api/session", auth.Protect(auth.Status))
-	home := &localHomeService{identity: newFishIdentityRegistry(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true}
+	home := &localHomeService{identity: newFishIdentityRegistry(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner}
 	home.configureAppCatalog()
 	home.appInstallRoutes(auth, mux)
 	mux.HandleFunc("GET /api/local/home", auth.Protect(home.status))
 	mux.HandleFunc("POST /api/local/home", auth.Protect(home.update))
 	chat := newLocalChatService(home)
+	chat.windows = runner
 	home.projectTools = chat.projectTools
 	mux.HandleFunc("POST /api/logout", auth.Protect(func(w http.ResponseWriter, r *http.Request) {
 		auth.Logout(w, r)
@@ -90,24 +99,6 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	home.artifacts = &localArtifactStore{home: home, chat: chat}
 	home.artifacts.routes(auth, mux)
 	handler := &LocalHomeHandler{Handler: mux, chat: chat, home: home}
-	if len(windows) > 0 && windows[0] != nil {
-		copy := *windows[0]
-		copy.Spool = filepath.Join(dir, "local-execution-spool")
-		if err := copy.Validate(); err != nil {
-			return nil, errors.New("本机 Windows 运行器配置无效")
-		}
-		for _, path := range []string{copy.Pythonw, copy.Helper} {
-			rel, err := filepath.Rel(workspaceRoot, path)
-			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-				return nil, errors.New("宿主运行器不能放在大肥鱼可修改的工作空间")
-			}
-			if resolved, err := filepath.EvalSymlinks(path); err == nil && filepath.Clean(resolved) != filepath.Clean(path) {
-				return nil, errors.New("宿主运行器路径不能经过链接")
-			}
-		}
-		chat.windows = &copy
-		home.windows = &copy
-	}
 	registry, err = home.bindBundledObservationApps(registry)
 	if err != nil {
 		return nil, err

@@ -25,6 +25,7 @@ import (
 	"wechat-bot/internal/mediadecode"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/stationruntime"
 )
 
 func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
@@ -471,7 +472,7 @@ func stationShareTestHost(t *testing.T, root string, send pluginruntime.RouteTra
 	if runtimeRoot := os.Getenv("AHS_SHARE_TEST_RUNTIME_ROOT"); runtimeRoot != "" {
 		python := filepath.Join(runtimeRoot, "windows-python-cli")
 		options := pluginruntime.Options{Python: filepath.Join(python, "python.exe"), Pythonw: filepath.Join(python, "pythonw.exe"), WindowsHelper: filepath.Join(runtimeRoot, "windows-agent-host", "windows_plugin_host.pyw"), RuntimeRoots: []string{python}}
-		if !windowsToolRuntimeReady(options) {
+		if !stationruntime.ToolRuntimeReady(options, "") {
 			t.Fatal("test LPAC runtime unavailable")
 		}
 		executor = pluginruntime.InstalledExecutor(store, options)

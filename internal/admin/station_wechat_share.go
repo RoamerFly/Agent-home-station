@@ -16,6 +16,7 @@ import (
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -52,11 +53,7 @@ func (s *stationWechat) shareHost(w *stationWechatWorker, account string) (*stat
 	if err != nil {
 		return nil, err
 	}
-	options := s.shareOptions
-	var executor pluginhost.Executor
-	if windowsToolRuntimeReady(options) {
-		executor = pluginruntime.InstalledExecutor(store, options)
-	}
+	executor := stationruntime.InstalledToolExecutor(store, s.shareOptions, s.workspaceRoot)
 	controller, err := pluginruntime.NewController(store, executor)
 	if err != nil {
 		store.Close()
