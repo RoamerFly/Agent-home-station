@@ -192,6 +192,30 @@ if ($LASTEXITCODE -ne 0) { throw '旧设置接续失败，请核对提示' }
 
 家目录文件、微信登录及会话记忆、声线和其他工具资源分别接续。微信已有下方的预演流程，家目录和声线工具的统一映射仍在实施中。
 
+### 接续选定的旧项目和笔记目录
+
+先完成本机主人和家目录初始化，在工作空间授权有效时接续资料。逐项选择旧项目、作品或笔记子目录，保留来源中的原文件。目标使用鱼家目录内尚不存在的相对目录，如 `projects/legacy-public`。
+
+```powershell
+$stationServer = 'E:/AgentHomeStation/agent-home-station-server.exe'
+$stationData = 'E:/AgentHomeStation/data/station'
+$oldProject = 'E:/OldStation/managed-workspaces/public_workspace/projects/example'
+$target = 'projects/legacy-public'
+$budget = 1073741824
+
+$previewJSON = & $stationServer --data $stationData --legacy-home-source $oldProject --legacy-home-target $target --legacy-home-max-bytes $budget
+if ($LASTEXITCODE -ne 0) { throw '项目接续预演失败，请核对提示' }
+$preview = $previewJSON | ConvertFrom-Json
+$preview
+
+& $stationServer --data $stationData --legacy-home-source $oldProject --legacy-home-target $target --legacy-home-max-bytes $budget --legacy-home-digest $preview.digest
+if ($LASTEXITCODE -ne 0) { throw '项目接续失败，请核对提示' }
+```
+
+自定义过工作空间根目录时，两条命令都需传入同一个 `--workspace` 绝对目录。字节预算为本次可配置值。超过预算时增加预算或拆选更具体的子目录，再重新预演。复制按实际文件大小和 SHA-256 校验，来源变化后原摘要失效。
+
+预演摘要绑定鱼身份、本机主人、家目录授权版本、来源及目标。目标发布后重复执行核对同一结果。后来编辑过的目标不会被旧资料覆盖。接续会拒绝目录链接，以及已知的宿主配置、凭据标识、会话资料和声线库目录。该检查依据目录和配置标识，不分析任意项目文件中的秘密。来源应是主人明确选定的项目或笔记子目录。语音模型和声线库使用专门的资源登记流程。
+
 ### 在隔离副本预演旧版微信接入
 
 1. 正常排空并退出旧桌面服务，保留其原安装。将需要核对的旧宿主数据做成单独的停机快照，保存在本机私有目录。快照包含旧数据根下的 `admin/config.json`、可选的 `admin/accounts.json` 和各账号配置，以及 `bot-state`。新成长站数据根、鱼家工作空间、旧快照分别放置。支持切换记录的旧桌面正常退出后会在旧数据根生成 `legacy-cutover-state.json`。把这份文件原样复制到快照根，保留原目录中的记录供预演比对。

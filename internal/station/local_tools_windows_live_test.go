@@ -48,9 +48,19 @@ func TestLiveLocalHomeWindowsPersistentToolAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := "import pathlib,sys,time\nroot=pathlib.Path.cwd()\nif sys.argv[1]=='wait':\n (root/'started.txt').write_text('started')\n time.sleep(90)\n (root/'must-not-exist.txt').write_text('late')\nelse:\n try:\n  pathlib.Path(sys.argv[2]).read_text()\n except PermissionError:\n  pass\n else:\n  raise SystemExit('host-secret-readable')\n (root/'works'/'result.txt').write_text('persistent-tool-ok',encoding='utf-8')\n print('boundaries-preserved')\n"
-	call("server_write", map[string]any{"path": "Project Tools/probe.py", "content": code})
+	legacyProject := t.TempDir()
+	if err := os.WriteFile(filepath.Join(legacyProject, "probe.py"), []byte(code), 0600); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := PreviewLegacyHome(t.Context(), f.dir, f.root, legacyProject, "Project Tools/legacy-probe", 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportLegacyHome(t.Context(), f.dir, f.root, legacyProject, "Project Tools/legacy-probe", 4096, preview.Digest); err != nil {
+		t.Fatal(err)
+	}
 	python := filepath.Join(filepath.Dir(windows.Pythonw), "python.exe")
-	script := filepath.Join(home, "Project Tools", "probe.py")
+	script := filepath.Join(home, "Project Tools", "legacy-probe", "probe.py")
 	start := func(key, mode string) agenthost.Process {
 		out := call("server_windows_process", map[string]any{"action": "start", "request_key": key, "path": home, "argv": []string{python, "-X", "utf8", script, mode, private}, "timeout_seconds": 120})
 		var process agenthost.Process

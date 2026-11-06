@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -52,8 +53,17 @@ func ExistingDirectory(root *os.Root, name string) (bool, error) {
 // rejects traversal and links, honors cancellation, enforces the package byte
 // budget, and verifies the expected SHA-256 before making it publishable.
 func CopyCheckedFile(ctx context.Context, source, stage *os.Root, name, want string, total *int64) error {
+	return CopyCheckedFileWithBudget(ctx, source, stage, name, want, total, pluginhost.MaxExpandedBytes)
+}
+
+// CopyCheckedFileWithBudget applies the same verified copy boundary to an
+// explicitly sized checkout, such as an owner's selected project directory.
+func CopyCheckedFileWithBudget(ctx context.Context, source, stage *os.Root, name, want string, total *int64, maxBytes int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if total == nil || maxBytes <= 0 || maxBytes == math.MaxInt64 || *total < 0 || *total > maxBytes {
+		return errors.New("plugin_checkout_source_limit")
 	}
 	if !SafePath(name) {
 		return errors.New("plugin_checkout_source_path_invalid")
@@ -64,11 +74,11 @@ func CopyCheckedFile(ctx context.Context, source, stage *os.Root, name, want str
 	}
 	defer input.Close()
 	info, err := input.Stat()
-	if err != nil || info.Size() < 0 || info.Size() > pluginhost.MaxExpandedBytes || *total+info.Size() > pluginhost.MaxExpandedBytes {
+	if err != nil || info.Size() < 0 || info.Size() > maxBytes-*total {
 		return errors.New("plugin_checkout_source_limit")
 	}
 	wantSize := info.Size()
-	remaining := pluginhost.MaxExpandedBytes - *total
+	remaining := maxBytes - *total
 	if parent := filepath.Dir(filepath.FromSlash(name)); parent != "." {
 		directory, e := workspacefs.EnsureDirectory(stage, parent)
 		if e != nil {

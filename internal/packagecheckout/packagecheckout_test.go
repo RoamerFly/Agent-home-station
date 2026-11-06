@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,5 +89,43 @@ func TestSafePathAndExistingDirectoryRejectUnsafeEntries(t *testing.T) {
 	exists, err = ExistingDirectory(root, "absent")
 	if err != nil || exists {
 		t.Fatalf("absent directory = %t, %v", exists, err)
+	}
+}
+
+func TestCopyCheckedFileHonorsExplicitBudgetWithoutChangingPackageDefault(t *testing.T) {
+	sourceDir, destinationDir := t.TempDir(), t.TempDir()
+	data := []byte("verified synthetic project")
+	if err := os.WriteFile(filepath.Join(sourceDir, "project.txt"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.OpenRoot(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	destination, err := os.OpenRoot(destinationDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	sum := sha256.Sum256(data)
+	hash := hex.EncodeToString(sum[:])
+	var total int64
+	for _, budget := range []int64{-1, 0, int64(len(data)) - 1, math.MaxInt64} {
+		if err := CopyCheckedFileWithBudget(t.Context(), source, destination, "project.txt", hash, &total, budget); err == nil {
+			t.Fatal("copy exceeded explicit budget", budget)
+		}
+		if total != 0 {
+			t.Fatal("rejected copy changed progress", total)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(destinationDir, "project.txt")); !os.IsNotExist(err) {
+		t.Fatal("rejected copy left a file", err)
+	}
+	if err := CopyCheckedFileWithBudget(t.Context(), source, destination, "project.txt", hash, &total, int64(len(data))); err != nil {
+		t.Fatal(err)
+	}
+	if total != int64(len(data)) {
+		t.Fatal("incorrect verified progress", total)
 	}
 }

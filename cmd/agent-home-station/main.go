@@ -42,6 +42,10 @@ type config struct {
 	wechatNativePID      int
 	legacySettingsSource string
 	legacySettingsDigest string
+	legacyHomeSource     string
+	legacyHomeTarget     string
+	legacyHomeDigest     string
+	legacyHomeMaxBytes   int64
 }
 
 func main() {
@@ -73,6 +77,23 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	cfg, err := parseConfig(args, path)
 	if err != nil {
 		return err
+	}
+	if cfg.legacyHomeSource != "" {
+		var plan station.LegacyHomePlan
+		status := "preview"
+		if cfg.legacyHomeDigest == "" {
+			plan, err = station.PreviewLegacyHome(ctx, cfg.dataDir, cfg.workspaceRoot, cfg.legacyHomeSource, cfg.legacyHomeTarget, cfg.legacyHomeMaxBytes)
+		} else {
+			plan, err = station.ImportLegacyHome(ctx, cfg.dataDir, cfg.workspaceRoot, cfg.legacyHomeSource, cfg.legacyHomeTarget, cfg.legacyHomeMaxBytes, cfg.legacyHomeDigest)
+			status = "applied"
+		}
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(struct {
+			Status string `json:"status"`
+			station.LegacyHomePlan
+		}{Status: status, LegacyHomePlan: plan})
 	}
 	if cfg.legacySettingsSource != "" {
 		if cfg.legacySettingsDigest == "" {
@@ -187,11 +208,30 @@ func parseConfig(args []string, executable string) (config, error) {
 	wechatNativePID := fs.Int("wechat-native-pid", 0, "桌面持有的微信原生服务进程编号")
 	legacySettingsSource := fs.String("legacy-settings-source", "", "预演接续旧宿主设置的 admin 绝对目录，完成后退出")
 	legacySettingsDigest := fs.String("legacy-settings-digest", "", "按预演摘要确认接续到全新 data 目录，完成后退出")
+	legacyHomeSource := fs.String("legacy-home-source", "", "预演接续选定的旧项目或笔记绝对目录，完成后退出")
+	legacyHomeTarget := fs.String("legacy-home-target", "", "接续到鱼家目录内尚不存在的相对目录")
+	legacyHomeDigest := fs.String("legacy-home-digest", "", "按预演摘要确认接续选定资料，完成后退出")
+	legacyHomeMaxBytes := fs.Int64("legacy-home-max-bytes", 1<<30, "本次资料接续的可配置字节预算")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
 	if fs.NArg() != 0 {
 		return config{}, errors.New("unexpected positional arguments")
+	}
+	if *legacyHomeSource != "" {
+		if !filepath.IsAbs(*legacyHomeSource) || *dataFlag == "" || *legacyHomeTarget == "" || *legacyHomeMaxBytes <= 0 {
+			return config{}, errors.New("资料接续需要明确的 data、旧资料绝对目录、家目录内目标及正数字节预算")
+		}
+		if *desktopFlag || *wechatNativeURL != "" || *wechatNativePID != 0 || *runtimeFlag != "" || *legacySettingsSource != "" || *legacySettingsDigest != "" {
+			return config{}, errors.New("资料接续需要单独运行，不能同时启动服务或接续模型设置")
+		}
+	} else if *legacyHomeTarget != "" || *legacyHomeDigest != "" {
+		return config{}, errors.New("请同时指定资料接续来源及家目录内目标")
+	}
+	if *legacyHomeDigest != "" {
+		if digest, err := hex.DecodeString(*legacyHomeDigest); err != nil || len(digest) != 32 {
+			return config{}, errors.New("请提供资料接续预演返回的完整摘要")
+		}
 	}
 	if *legacySettingsSource != "" {
 		if !filepath.IsAbs(*legacySettingsSource) || *dataFlag == "" {
@@ -255,6 +295,8 @@ func parseConfig(args []string, executable string) (config, error) {
 		dataDir: dataDir, workspaceRoot: workspaceRoot, listen: listen, runtimeFile: *runtimeFlag, desktop: *desktopFlag,
 		wechatNativeURL: *wechatNativeURL, wechatNativePID: *wechatNativePID,
 		legacySettingsSource: *legacySettingsSource, legacySettingsDigest: *legacySettingsDigest,
+		legacyHomeSource: *legacyHomeSource, legacyHomeTarget: *legacyHomeTarget,
+		legacyHomeDigest: *legacyHomeDigest, legacyHomeMaxBytes: *legacyHomeMaxBytes,
 	}, nil
 }
 
