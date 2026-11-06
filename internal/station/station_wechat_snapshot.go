@@ -34,14 +34,15 @@ type LegacyWechatSnapshotRequest struct {
 }
 
 type LegacyWechatSnapshotResult struct {
-	State           string `json:"state"`
-	ApplyDigest     string `json:"apply_digest,omitempty"`
-	ManifestDigest  string `json:"manifest_digest,omitempty"`
-	Files           int    `json:"file_count"`
-	Accounts        int    `json:"account_count"`
-	MemoryFiles     int    `json:"memory_file_count"`
-	DeliveryRecords int    `json:"delivery_record_count"`
-	PayloadBytes    int64  `json:"payload_bytes"`
+	State                     string `json:"state"`
+	ApplyDigest               string `json:"apply_digest,omitempty"`
+	ManifestDigest            string `json:"manifest_digest,omitempty"`
+	Files                     int    `json:"file_count"`
+	Accounts                  int    `json:"account_count"`
+	MemoryFiles               int    `json:"memory_file_count"`
+	DeliveryRecords           int    `json:"delivery_record_count"`
+	ManagementDeliveryRecords int    `json:"management_delivery_record_count,omitempty"`
+	PayloadBytes              int64  `json:"payload_bytes"`
 }
 
 type legacySnapshotEntry struct {
@@ -51,12 +52,13 @@ type legacySnapshotEntry struct {
 }
 
 type legacySnapshotManifest struct {
-	Version         int                   `json:"version"`
-	Primary         string                `json:"primary_account"`
-	Accounts        int                   `json:"account_count"`
-	MemoryFiles     int                   `json:"memory_file_count"`
-	DeliveryRecords int                   `json:"delivery_record_count"`
-	Files           []legacySnapshotEntry `json:"files"`
+	Version                   int                   `json:"version"`
+	Primary                   string                `json:"primary_account"`
+	Accounts                  int                   `json:"account_count"`
+	MemoryFiles               int                   `json:"memory_file_count"`
+	DeliveryRecords           int                   `json:"delivery_record_count"`
+	ManagementDeliveryRecords int                   `json:"management_delivery_record_count,omitempty"`
+	Files                     []legacySnapshotEntry `json:"files"`
 }
 
 type legacySnapshotPlan struct {
@@ -149,7 +151,7 @@ func CaptureLegacyWechatSnapshot(ctx context.Context, req LegacyWechatSnapshotRe
 
 func (m legacySnapshotManifest) result(state string, manifest []byte) LegacyWechatSnapshotResult {
 	out := LegacyWechatSnapshotResult{State: state, Files: len(m.Files), Accounts: m.Accounts,
-		MemoryFiles: m.MemoryFiles, DeliveryRecords: m.DeliveryRecords}
+		MemoryFiles: m.MemoryFiles, DeliveryRecords: m.DeliveryRecords, ManagementDeliveryRecords: m.ManagementDeliveryRecords}
 	if manifest != nil {
 		out.ManifestDigest = hexDigest(manifest)
 	}
@@ -289,11 +291,19 @@ func (p *legacySnapshotPlan) snapshotAccount(ctx context.Context, root *os.Root,
 	p.manifest.DeliveryRecords += len(evidence)
 	p.addSmall(queuePath, rows, nil)
 	p.addSmall(cursorPath, cursor, nil)
-	return p.snapshotMemory(ctx, root, filepath.Join(filepath.Dir(config), "companion"), checkSQLite)
+	adminDir := filepath.Dir(config)
+	rawManagement, projectedManagement, managementCount, coldHashes, err := readLegacyManagementSnapshot(ctx, root, adminDir, account)
+	if err != nil {
+		return err
+	}
+	maps.Copy(p.source, coldHashes)
+	p.addSmall(filepath.Join(adminDir, "tool-state.json"), rawManagement, projectedManagement)
+	p.manifest.ManagementDeliveryRecords += managementCount
+	return p.snapshotMemory(ctx, root, filepath.Join(adminDir, "companion"), checkSQLite)
 }
 
 func (p *legacySnapshotPlan) addSmall(name string, raw, projected []byte) {
-	if len(raw) == 0 {
+	if len(raw) == 0 && projected == nil {
 		return
 	}
 	name = filepath.ToSlash(name)

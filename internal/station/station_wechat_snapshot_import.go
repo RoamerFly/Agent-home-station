@@ -71,7 +71,7 @@ func loadLegacySnapshotGuard(root *os.Root, source legacyImportSource) (*legacyS
 
 func validLegacySnapshotManifest(manifest legacySnapshotManifest, primary string) bool {
 	if manifest.Version != 1 || !identity.ValidPathID(manifest.Primary) || manifest.Primary != primary ||
-		manifest.Accounts < 1 || manifest.MemoryFiles < 0 || manifest.DeliveryRecords < 0 {
+		manifest.Accounts < 1 || manifest.MemoryFiles < 0 || manifest.DeliveryRecords < 0 || manifest.ManagementDeliveryRecords < 0 {
 		return false
 	}
 	seen := make(map[string]bool, len(manifest.Files))

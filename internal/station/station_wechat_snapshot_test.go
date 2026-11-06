@@ -2,6 +2,7 @@ package station
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,8 +16,105 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/hostfile"
+	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/workspacefs"
 )
+
+func TestLegacyWechatSnapshotKeepsOnlyManagementReceiptEvidence(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the legacy desktop snapshot contract is Windows-only")
+	}
+	base := t.TempDir()
+	legacy := filepath.Join(base, "legacy")
+	fixture := newLegacyWechatSnapshotFixture(t, legacy)
+	admin := filepath.Join(legacy, "admin")
+	activePath := filepath.Join(admin, "tool-state.json")
+	encode := func(v any) []byte {
+		t.Helper()
+		data, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	record := func(key string, status linuxnative.ToolStatus) json.RawMessage {
+		return encode(map[string]any{"key": key, "account": fixture.primary, "thread": "synthetic-chat", "kind": "voice", "status": status,
+			"hash": "private-request-content-hash", "created": "2026-01-01T00:00:00Z"})
+	}
+	accepted := linuxnative.ToolStatus{State: "accepted", Kind: "voice", ID: "archived-voice-job", ThreadID: "synthetic-chat", ServerID: "61824",
+		SourceID: "private-source-id", Reason: "private observation text", VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 0, ServerID: "61824", State: "accepted", HasReceipt: true, EncodedMD5: "private-media-hash"}}}
+	archived := record("key-archived", accepted)
+	active := record("key-active", linuxnative.ToolStatus{State: "running", Kind: "voice", ID: "active-voice-job", ThreadID: "synthetic-chat", Reason: "private job note"})
+	mustWriteSnapshotFixture(t, activePath, encode(map[string]any{
+		"version": 1, "sends": map[string]json.RawMessage{"key-active": active, "key-archived": archived},
+		"uploads": map[string]string{"secret": "private-upload-path-and-token"},
+	}))
+	writeIndex := func(kind, identity string, row json.RawMessage) string {
+		t.Helper()
+		id := hexDigest([]byte(kind + "\x00" + identity))
+		file := filepath.Join(admin, "send-ledger", kind, id[:2], id+".json.gz")
+		var compressed bytes.Buffer
+		z := gzip.NewWriter(&compressed)
+		if _, err := z.Write(encode(map[string]any{"version": 1, "digest": hexDigest(row), "record": row})); err != nil {
+			t.Fatal(err)
+		}
+		if err := z.Close(); err != nil {
+			t.Fatal(err)
+		}
+		mustWriteSnapshotFixture(t, file, compressed.Bytes())
+		return file
+	}
+	writeIndex("requests", "key-archived", archived)
+	writeIndex("ids", fixture.primary+"\x00"+accepted.ID, archived)
+	accepted.ID, accepted.ServerID = "cold-only-job", "61825"
+	accepted.VoiceChunks[0].ServerID = "61825"
+	coldOnly := record("key-cold-only", accepted)
+	writeIndex("requests", "key-cold-only", coldOnly)
+	coldOnlyID := writeIndex("ids", fixture.primary+"\x00"+accepted.ID, coldOnly)
+	request := LegacyWechatSnapshotRequest{LegacyDataDir: legacy, SnapshotDir: filepath.Join(base, "snapshot"), PrimaryAccount: fixture.primary}
+	preview, err := CaptureLegacyWechatSnapshot(t.Context(), request)
+	if err != nil || preview.ManagementDeliveryRecords != 3 || preview.DeliveryRecords != 2 || preview.ApplyDigest == "" {
+		t.Fatalf("preview: %#v, %v", preview, err)
+	}
+	request.ApplyDigest = preview.ApplyDigest
+	created, err := CaptureLegacyWechatSnapshot(t.Context(), request)
+	if err != nil || created.State != "created" || created.ManagementDeliveryRecords != 3 {
+		t.Fatalf("capture: %#v, %v", created, err)
+	}
+	verified, err := CaptureLegacyWechatSnapshot(t.Context(), LegacyWechatSnapshotRequest{SnapshotDir: request.SnapshotDir, Verify: true})
+	if err != nil || verified.State != "verified" || verified.ManifestDigest != created.ManifestDigest || verified.ManagementDeliveryRecords != 3 {
+		t.Fatalf("verify: %#v, %v", verified, err)
+	}
+	projectedPath := filepath.Join(request.SnapshotDir, "admin", "tool-state.json")
+	projection := mustReadSnapshotFixture(t, projectedPath)
+	if bytes.Contains(projection, []byte("private-")) || bytes.Contains(projection, []byte("private ")) || bytes.Contains(projection, []byte(`"uploads"`)) {
+		t.Fatal("snapshot copied private fields outside delivery evidence")
+	}
+	var projected struct {
+		Version int
+		Sends   map[string]struct{ Status linuxnative.ToolStatus }
+	}
+	if err := json.Unmarshal(projection, &projected); err != nil || projected.Version != 2 || len(projected.Sends) != 3 || projected.Sends["key-cold-only"].Status.ServerID != "61825" ||
+		projected.Sends["key-active"].Status.State != "running" || len(projected.Sends["key-archived"].Status.VoiceChunks) != 1 {
+		t.Fatal("snapshot lost active, cold or partial-media evidence", err)
+	}
+	if _, err := os.Lstat(filepath.Join(request.SnapshotDir, "admin", "send-ledger")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("raw legacy archive copied to snapshot", err)
+	}
+	request.SnapshotDir, request.ApplyDigest = filepath.Join(base, "incomplete"), ""
+	oldActive := mustReadSnapshotFixture(t, activePath)
+	mustWriteSnapshotFixture(t, activePath, bytes.ReplaceAll(oldActive, []byte("private-request-content-hash"), []byte("different-request-hash")))
+	if _, err := CaptureLegacyWechatSnapshot(t.Context(), request); err == nil || !strings.Contains(err.Error(), "冲突") {
+		t.Fatalf("different request hashes for the same key were accepted: %v", err)
+	}
+	mustWriteSnapshotFixture(t, activePath, oldActive)
+	if err := os.Remove(coldOnlyID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CaptureLegacyWechatSnapshot(t.Context(), request); err == nil {
+		t.Fatal("an unmatched cold archive index was accepted")
+	}
+}
 
 // TestCaptureLegacyWechatSnapshotWindows exercises the new, import-compatible
 // snapshot boundary without starting a desktop, Agent, native WeChat process,
