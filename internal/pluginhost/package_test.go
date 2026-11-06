@@ -53,8 +53,8 @@ func TestOfficialContracts(t *testing.T) {
 		}
 	}
 	dirs = folders
-	if len(dirs) != 15 {
-		t.Fatalf("expected 15 capability packages, got %d", len(dirs))
+	if len(dirs) != 16 {
+		t.Fatalf("expected 16 capability packages, got %d", len(dirs))
 	}
 	for _, d := range dirs {
 		t.Run(d.Name(), func(t *testing.T) {
@@ -62,9 +62,9 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" || d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" || d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" || d.Name() == "obs-preview" {
 				transport, entrypoint := "mcp-stdio", "runtime/main.py"
-				if d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" {
+				if d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" || d.Name() == "obs-preview" {
 					transport, entrypoint = "http-adapter", "runtime/managed-service.json"
 				}
 				if p.Status != "ready" || p.Runtime.Transport != transport || p.Runtime.Entrypoint != entrypoint {
@@ -138,6 +138,12 @@ func TestOfficialContracts(t *testing.T) {
 							t.Fatal("station speech package must declare only artifact write and explicit GPU permissions")
 						}
 					}
+					if d.Name() == "obs-preview" {
+						want = map[string]bool{"obs.preview": true}
+						if len(p.Permissions) != 1 || p.Permissions[0] != "network" {
+							t.Fatal("OBS preview must declare only the bounded local network proxy")
+						}
+					}
 					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))
 					if err != nil {
 						t.Fatal(err)
@@ -150,7 +156,7 @@ func TestOfficialContracts(t *testing.T) {
 					}
 					for _, cap := range doc.Capabilities {
 						if want[cap.ID] {
-							if cap.Implementation != "ready" || !cap.Discoverable {
+							if cap.Implementation != "ready" || (d.Name() != "obs-preview" && !cap.Discoverable) || (d.Name() == "obs-preview" && cap.Discoverable) {
 								t.Fatal("implemented capability hidden", cap.ID)
 							}
 							if d.Name() == "mobile-control" {

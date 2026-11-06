@@ -112,6 +112,9 @@ func (h *localChatService) beginShutdown() {
 		return
 	}
 	h.stopping.Store(true)
+	if h.projectTools != nil {
+		h.projectTools.obs.close()
+	}
 	// Cancel is idempotent. It is intentionally outside turn/mu: Close must
 	// be able to interrupt the model that currently owns turn before waiting
 	// to close SQLite or process records.

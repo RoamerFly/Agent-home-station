@@ -257,6 +257,15 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .project-tool-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
 .project-tool-approval { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: .82rem; font-weight: 700; cursor: pointer; }
 .project-tool-approval input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.obs-preview-panel { display: grid; gap: 9px; padding: 12px; border: 1px solid rgba(93, 99, 217, .24); border-radius: 12px; background: linear-gradient(135deg, rgba(93, 99, 217, .08), rgba(139, 103, 207, .045)); }
+.obs-preview-panel > strong { font-size: .88rem; }
+.obs-preview-note, .obs-preview-meta { color: var(--muted); font-size: .79rem; line-height: 1.5; }
+.obs-preview-error { margin: 0; color: var(--warn); font-size: .8rem; line-height: 1.45; }
+.obs-preview-config { display: grid; grid-template-columns: minmax(8rem, .8fr) minmax(12rem, 1.2fr) auto; align-items: end; gap: 8px; }
+.obs-preview-config label { display: grid; gap: 4px; color: var(--muted); font-size: .76rem; font-weight: 700; }
+.obs-preview-config input { box-sizing: border-box; width: 100%; min-width: 0; }
+.obs-preview-image { display: block; width: min(100%, 38rem); aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 10px; object-fit: contain; background: #101020; }
+@media (max-width: 620px) { .obs-preview-config { grid-template-columns: 1fr; } .obs-preview-config .button { justify-self: start; } }
 .artifact-downloads { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .artifact-download { color: var(--accent-deep); font-size: .8rem; font-weight: 800; text-decoration: none; }
 .artifact-download:hover, .artifact-download:focus-visible { text-decoration: underline; outline: none; }

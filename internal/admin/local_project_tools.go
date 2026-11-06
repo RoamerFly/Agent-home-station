@@ -33,6 +33,7 @@ type localProjectTools struct {
 	comfy     localComfyBackend
 	yue       localYuEBackend
 	tts       localTTSBackend
+	obs       localOBSPreview
 	ttsCancel context.CancelFunc // protected by update
 	ttsJobID  string             // protected by update
 }
@@ -133,6 +134,7 @@ func (s *localProjectTools) forFish(fish string) (*localProjectToolHost, error) 
 func (s *localProjectTools) close() error {
 	s.update.Lock()
 	defer s.update.Unlock()
+	s.obs.close()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
@@ -168,6 +170,7 @@ var localProjectPackages = []struct{ ID, Name string }{
 	{localComfyPackage, "ComfyUI 创作"},
 	{localYuEPackage, "YuE 作曲"},
 	{localTTSPackage, "本机语音"},
+	{localOBSPackage, "OBS 本地预览"},
 }
 
 func (s *localProjectTools) markActive(id string) func() {
@@ -246,6 +249,17 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			}
 		}
 	}
+	if id == localOBSPackage {
+		view.RuntimeReady = false
+		view.Reason = "obs_preview_not_configured"
+		if host != nil {
+			if config, err := localOBSConfiguration(ctx, host); err == nil && config.Configured {
+				view.RuntimeReady = true
+				view.Reason = ""
+				backendBusy = s.obs.status(config).Active
+			}
+		}
+	}
 	if host == nil {
 		return view, nil
 	}
@@ -311,6 +325,11 @@ func (s *localProjectTools) routes(owner *Server, mux *http.ServeMux) {
 			s.changeProjectTool(w, r, pkg.ID, pkg.Name)
 		}))
 	}
+	preview := owner.protected(func(w http.ResponseWriter, r *http.Request) {
+		s.obsPreview(owner, w, r)
+	})
+	mux.HandleFunc("GET /api/local/project-tools/"+localOBSPackage+"/preview", preview)
+	mux.HandleFunc("POST /api/local/project-tools/"+localOBSPackage+"/preview", preview)
 }
 
 func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Request, id, name string) {
@@ -327,6 +346,10 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if (in.Action == "install" || in.Action == "upgrade") && !in.ApproveArtifacts {
+		if id == localOBSPackage {
+			fail(w, 400, "安装 OBS 预览需要主人确认访问本机 WebSocket 的权限")
+			return
+		}
 		if id == localComfyPackage {
 			fail(w, 400, "安装 ComfyUI 需要主人确认本机成品写入与计算权限")
 			return
@@ -338,7 +361,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		fail(w, 400, "安装需要主人明确授予本机成品读写权限")
 		return
 	}
-	if in.Action == "enable" && id != localRVCPackage && id != localComfyPackage && id != localYuEPackage && id != localTTSPackage && !s.runtimeReady() {
+	if in.Action == "enable" && id != localRVCPackage && id != localComfyPackage && id != localYuEPackage && id != localTTSPackage && id != localOBSPackage && !s.runtimeReady() {
 		fail(w, 409, "Windows 项目工具运行器缺失")
 		return
 	}
@@ -402,6 +425,9 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			if id == localTTSPackage {
 				grants = localTTSGrants
 			}
+			if id == localOBSPackage {
+				grants = []string{"network"}
+			}
 			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, grants)
 		}
 	} else {
@@ -409,7 +435,19 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			fail(w, 409, "项目工具版本已变化，请刷新后重试")
 			return
 		}
-		if id == localTTSPackage {
+		if id == localOBSPackage {
+			if in.Action == "enable" {
+				config, checkErr := localOBSConfiguration(ctx, host)
+				if checkErr != nil || !config.Configured {
+					fail(w, 409, "请先保存 OBS 本机端口和 WebSocket 密码")
+					return
+				}
+			}
+			if in.Action == "disable" {
+				s.obs.stop()
+			}
+			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
+		} else if id == localTTSPackage {
 			if in.Action == "enable" {
 				if s.tts == nil {
 					fail(w, 409, "本机语音后端未登记")

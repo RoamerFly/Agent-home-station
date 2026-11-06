@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -177,6 +177,7 @@ if($WithRVCBackend -and -not $LocalStation){throw 'WithRVCBackend is only valid 
 if($WithComfyUI -and -not $LocalStation){throw 'WithComfyUI is only valid with -LocalStation.'}
 if($WithYuE -and -not $LocalStation){throw 'WithYuE is only valid with -LocalStation.'}
 if($WithStationSpeech -and -not $LocalStation){throw 'WithStationSpeech is only valid with -LocalStation.'}
+if($WithOBSPreview -and -not $LocalStation){throw 'WithOBSPreview is only valid with -LocalStation.'}
 if($WithBilibiliApp -and -not $LocalStation){throw 'WithBilibiliApp is only valid with -LocalStation.'}
 if($WithDouyinApp -and -not $LocalStation){throw 'WithDouyinApp is only valid with -LocalStation.'}
 if($WithWeChatRuntime){$WithWeChatApp=$true}
@@ -208,7 +209,7 @@ $archive=$cache+'.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDirectory | Out-Null
 # The zero-application preview deliberately has no optional tool catalog.  The
 # regular desktop package retains the catalog validation/staging contract.
-if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech){
+if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech -or $WithOBSPreview){
  $catalogArgs=@('--source',(Join-Path $workspace 'plugins'),'--output',(Join-Path $OutputDirectory 'plugins'))
  if($LocalStation -and $WithShareReader){$catalogArgs+=@('--package','share-reader')}
  if($LocalStation -and $WithMediaUnderstanding){$catalogArgs+=@('--package','media-understanding')}
@@ -218,6 +219,7 @@ if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $Wi
  if($LocalStation -and $WithComfyUI){$catalogArgs+=@('--package','comfyui')}
  if($LocalStation -and $WithYuE){$catalogArgs+=@('--package','yue')}
  if($LocalStation -and $WithStationSpeech){$catalogArgs+=@('--package','station-speech')}
+ if($LocalStation -and $WithOBSPreview){$catalogArgs+=@('--package','obs-preview')}
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') @catalogArgs
  if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
 }
@@ -260,6 +262,9 @@ if($LocalStation){
  if($WithStationSpeech){Stage-LocalStationSpeechRunner -PackageDirectory $OutputDirectory}
 }
 Copy-Item -LiteralPath (Join-Path $cache 'LICENSE.txt') -Destination (Join-Path $OutputDirectory 'WebView2-LICENSE.txt')
+$gorillaLicense=Join-Path $workspace 'docs\licenses\gorilla-websocket.txt'
+if(-not(Test-Path -LiteralPath $gorillaLicense -PathType Leaf)){throw 'The Gorilla WebSocket license notice is missing.'}
+Copy-Item -LiteralPath $gorillaLicense -Destination (Join-Path $OutputDirectory 'Gorilla-WebSocket-LICENSE.txt')
 if($Test){
  $tests=Join-Path $OutputDirectory 'DesktopTests.exe'
  & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'LocalStationRuntime.cs') (Join-Path $source 'CloseSettings.cs') (Join-Path $source 'DesktopInstance.cs') (Join-Path $source 'ControllerTests.cs')

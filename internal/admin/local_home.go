@@ -71,7 +71,6 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 		respond(w, http.StatusOK, map[string]any{"ok": true, "mode": "local", "wechat_required": false})
 	})
 	mux.HandleFunc("POST /api/login", s.login)
-	mux.HandleFunc("POST /api/logout", s.protected(s.logout))
 	mux.HandleFunc("GET /api/session", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		_, value, _ := s.session(r)
 		respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": value.CSRF})
@@ -83,6 +82,10 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	mux.HandleFunc("POST /api/local/home", s.protected(home.update))
 	chat := newLocalChatService(home)
 	home.projectTools = chat.projectTools
+	mux.HandleFunc("POST /api/logout", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		s.logout(w, r)
+		chat.projectTools.obs.stop()
+	}))
 	chat.projectTools.routes(s, mux)
 	home.artifacts = &localArtifactStore{home: home, chat: chat}
 	home.artifacts.routes(s, mux)
@@ -159,7 +162,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Referrer-Policy", "no-referrer")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 			_, _ = w.Write(data)
 		})
 	}

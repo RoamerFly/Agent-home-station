@@ -39,6 +39,7 @@
   }
   function chatConfigured() { return Boolean(state.model && state.model.key_configured); }
   function setActiveView(view) {
+    if (activeView === "project-tools" && view !== "project-tools") stopOBSPreviewOnLeave();
     activeView = view;
     for (const name of tabs) {
       const tab = $(`#${name}-tab`), selected = name === view;
@@ -56,7 +57,9 @@
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false } };
   }
-  function newProjectToolsView() { return { loading: false, applying: "", tools: [] }; }
+  function newProjectToolsView() {
+    return { loading: false, applying: "", tools: [], obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
+  }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
     node.textContent = text;
@@ -2280,6 +2283,15 @@
   }
   function projectToolStatus(tool) {
     if (!tool || !tool.installed && !tool.catalog_available) return ["未随当前发行包提供", "请安装包含此工具的 Windows 发行包。"];
+    if (tool && tool.id === "obs-preview") {
+      const preview = projectTools.obsPreview;
+      if (!tool.installed) return ["尚未安装", "安装后可登记本机 OBS WebSocket 凭据，并按需查看当前节目画面。"];
+      if (!tool.enabled && preview.configured) return ["已配置，未启用", "启用后可以按需开始预览。"];
+      if (!tool.enabled) return ["已安装，待配置", "保存本机 OBS 回环端口和密码，然后启用预览工具。"];
+      if (!preview.configured) return ["等待配置", "请先停用工具，保存本机 OBS 回环端口和密码。"];
+      if (preview.active) return ["正在预览", "正在读取 OBS 当前节目画面；离开此页或 60 秒无操作后会自动停止。"];
+      return ["已启用 · 等待预览", "需要时开始查看当前节目画面；不会开播、切换场景或写入 OBS。"];
+    }
     if (tool && tool.id === "rvc") {
       if (!tool.runtime_ready) return ["本机后端未就绪", projectToolReason(tool) || "RVC 换声后端尚不能启动；请先补齐本机运行环境。"];
       if (!tool.installed) return ["尚未安装", "安装后可在本地聊天中，对获准音频选择已登记声线进行换声。"];
@@ -2431,6 +2443,7 @@
     return section;
   }
   function projectToolApprovalCopy(tool) {
+    if (tool?.id === "obs-preview") return "确认仅访问本机 OBS WebSocket";
     if (tool?.id === "rvc") return "确认任务素材读写与本机 GPU";
     if (tool?.id === "comfyui") return "确认任务成品写入与本机 GPU";
     if (tool?.id === "yue") return "确认任务素材读写与本机 GPU";
@@ -2443,6 +2456,163 @@
     if (tool.pdf_ready === true) return "PDF 导出环境已就绪。";
     if (tool.update_available) return "当前版本尚未准备 PDF 导出环境；停用后更新工具即可检查新版本。";
     return "当前版本尚未确认 PDF 导出环境；DOCX 仍可创建，导出 PDF 前会再次检查。";
+  }
+  function obsPreviewTool() { return projectTools.tools.find((tool) => tool && tool.id === "obs-preview") || null; }
+  function decodeOBSPreviewImage(value) {
+    if (typeof value !== "string" || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) return null;
+    try {
+      const raw = atob(value.slice("data:image/jpeg;base64,".length));
+      const bytes = Uint8Array.from(raw, (character) => character.charCodeAt(0));
+      return bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9 ? bytes : null;
+    } catch (_) { return null; }
+  }
+  function replaceOBSPreviewImage(value) {
+    const preview = projectTools.obsPreview;
+    if (preview.imageURL) URL.revokeObjectURL(preview.imageURL);
+    preview.imageURL = "";
+    const bytes = decodeOBSPreviewImage(value);
+    if (bytes) preview.imageURL = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
+  }
+  function clearOBSPreview() {
+    const preview = projectTools.obsPreview;
+    preview.generation += 1; window.clearTimeout(preview.timer); preview.timer = 0;
+    preview.active = false; preview.loading = false; preview.applying = false; preview.polling = false; preview.starting = false; preview.stopping = false;
+    replaceOBSPreviewImage(""); preview.scene = ""; preview.observedAt = "";
+  }
+  function applyOBSPreview(payload) {
+    const preview = projectTools.obsPreview;
+    if (!payload || typeof payload !== "object") return;
+    preview.configured = payload.configured === true;
+    preview.port = Number.isInteger(Number(payload.port)) && Number(payload.port) > 0 && Number(payload.port) <= 65535 ? Number(payload.port) : 4455;
+    preview.configRevision = Number.isFinite(Number(payload.config_revision)) ? Number(payload.config_revision) : 0;
+    preview.enabled = payload.enabled === true;
+    preview.active = payload.active === true;
+    preview.scene = typeof payload.scene === "string" ? payload.scene.slice(0, 180) : "";
+    preview.observedAt = typeof payload.observed_at === "string" ? payload.observed_at.slice(0, 80) : "";
+    if (preview.active && payload.image_data) {
+      replaceOBSPreviewImage(payload.image_data);
+    } else if (!preview.active) {
+      window.clearTimeout(preview.timer); preview.timer = 0; preview.polling = false;
+      replaceOBSPreviewImage(""); preview.scene = ""; preview.observedAt = "";
+    }
+  }
+  function scheduleOBSPreviewFrame() {
+    const preview = projectTools.obsPreview;
+    window.clearTimeout(preview.timer);
+    if (activeView !== "project-tools" || !preview.active || !preview.enabled || preview.polling || preview.stopping) return;
+    preview.timer = window.setTimeout(() => void requestOBSPreview("frame", true), 1500);
+  }
+  async function loadOBSPreview(current = projectTools) {
+    const tool = current.tools.find((item) => item && item.id === "obs-preview");
+    if (!tool || !tool.installed) { clearOBSPreview(); return; }
+    const preview = current.obsPreview;
+    if (preview.loading) return;
+    preview.loading = true;
+    const generation = preview.generation;
+    try {
+      const value = await request("/api/local/project-tools/obs-preview/preview");
+      if (current !== projectTools || generation !== preview.generation) return;
+      applyOBSPreview(value);
+    } catch (error) {
+      if (current !== projectTools || generation !== preview.generation) return;
+      clearOBSPreview();
+      if (error.status === 401 || error.status === 403) { state.csrf = ""; showLogin(); return; }
+      current.obsPreview.error = error.message || "无法读取 OBS 预览状态。";
+    } finally {
+      if (current === projectTools && generation === preview.generation) { preview.loading = false; renderProjectTools(); scheduleOBSPreviewFrame(); }
+    }
+  }
+  function updateOBSPreviewPanel() {
+    const panel = $("#obs-preview-panel"), tool = obsPreviewTool();
+    if (panel && tool) panel.replaceWith(renderOBSPreview(tool));
+  }
+  async function requestOBSPreview(action, background = false, form = null) {
+    const current = projectTools, tool = obsPreviewTool(), preview = current.obsPreview;
+    if (!tool || !tool.installed || ((preview.polling || preview.applying) && action !== "stop")) return;
+    if (action === "frame" && (!preview.active || activeView !== "project-tools")) return;
+    if (action === "start") { preview.generation += 1; preview.starting = true; }
+    if (action === "stop") { preview.generation += 1; window.clearTimeout(preview.timer); preview.timer = 0; preview.stopping = true; }
+    const generation = preview.generation;
+    preview.polling = action === "frame";
+    preview.applying = action !== "frame";
+    preview.error = "";
+    if (!background) renderProjectTools();
+    try {
+      const body = { action };
+      if (action === "configure") {
+        const port = Number(form?.port?.value || 0);
+        const password = String(form?.password?.value || "");
+        if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("请输入 1 到 65535 之间的本机回环端口。");
+        if (!password) throw new Error("请填写 OBS WebSocket 密码；保存后不会再次显示。");
+        body.port = port; body.password = password; body.config_revision = preview.configRevision;
+      }
+      const value = await request("/api/local/project-tools/obs-preview/preview", { method: "POST", body: JSON.stringify(body) });
+      if (current !== projectTools || generation !== preview.generation) return;
+      applyOBSPreview(value);
+      if (action === "configure" && form) form.password.value = "";
+      if (action === "stop") projectToolsFeedback("已停止 OBS 预览。画面不会保存在浏览器中。");
+      if (action === "start") projectToolsFeedback("正在显示 OBS 当前节目画面。");
+    } catch (error) {
+      if (current !== projectTools || generation !== preview.generation) return;
+      if (error.status === 401 || error.status === 403) { clearOBSPreview(); state.csrf = ""; showLogin(); return; }
+      preview.error = error.message || "OBS 预览操作未完成。";
+      if (action === "stop" || action === "frame") { clearOBSPreview(); updateOBSPreviewPanel(); }
+    } finally {
+      if (current === projectTools && generation === preview.generation) {
+        preview.polling = false; preview.starting = false; if (action !== "frame") preview.applying = false;
+        if (action === "frame") updateOBSPreviewPanel(); else renderProjectTools();
+        scheduleOBSPreviewFrame();
+      }
+    }
+  }
+  function stopOBSPreviewOnLeave() {
+    const preview = projectTools.obsPreview;
+    const shouldStop = preview.active || preview.starting;
+    clearOBSPreview();
+    if (!shouldStop || !state.csrf) return;
+    request("/api/local/project-tools/obs-preview/preview", { method: "POST", body: JSON.stringify({ action: "stop" }) }).catch(() => {});
+  }
+  function renderOBSPreview(tool) {
+    const preview = projectTools.obsPreview;
+    const panel = appElement("section", "", "obs-preview-panel"); panel.id = "obs-preview-panel";
+    panel.append(appElement("strong", "OBS 当前节目画面"));
+    const note = !tool.installed ? "安装后可登记本机 OBS WebSocket，再按需查看节目画面。"
+      : !tool.enabled ? "先保存本机 OBS 凭据，再启用工具；停用时不会保留浏览器中的画面。"
+      : !preview.configured ? "还没有保存 OBS 凭据。请先停用工具并登记本机回环端口与密码。"
+      : preview.active ? "预览只读取 OBS 当前节目画面，离开本页、停用工具或 60 秒无操作后会自动清除。"
+      : "已准备好。开始预览后只显示当前节目画面，不会开播、切换场景或写入 OBS。";
+    panel.append(appElement("span", note, "obs-preview-note"));
+    if (preview.error) panel.append(appElement("p", preview.error, "obs-preview-error"));
+    if (tool.installed && !tool.enabled) {
+      const form = document.createElement("form"); form.className = "obs-preview-config";
+      form.noValidate = true;
+      const port = document.createElement("input"); port.id = "obs-preview-port"; port.name = "port"; port.type = "number"; port.min = "1"; port.max = "65535"; port.value = String(preview.port || 4455); port.required = true;
+      const password = document.createElement("input"); password.id = "obs-preview-password"; password.name = "password"; password.type = "password"; password.autocomplete = "new-password"; password.required = true;
+      const portLabel = document.createElement("label"); portLabel.htmlFor = port.id; portLabel.textContent = "OBS 回环端口"; portLabel.append(port);
+      const passwordLabel = document.createElement("label"); passwordLabel.htmlFor = password.id; passwordLabel.textContent = "OBS WebSocket 密码"; passwordLabel.append(password);
+      const save = appElement("button", preview.applying ? "正在保存…" : "保存凭据", "button compact secondary"); save.type = "submit"; save.disabled = preview.applying;
+      form.append(portLabel, passwordLabel, save);
+      form.addEventListener("submit", (event) => { event.preventDefault(); void requestOBSPreview("configure", false, form); });
+      panel.append(form);
+    }
+    if (tool.installed && tool.enabled) {
+      const controls = appElement("div", "", "project-tool-actions");
+      const start = appElement("button", preview.applying ? "正在启动…" : "开始预览", "button compact primary"); start.type = "button"; start.disabled = preview.applying || preview.stopping || !preview.configured || preview.active;
+      start.addEventListener("click", () => void requestOBSPreview("start"));
+      const stop = appElement("button", preview.stopping ? "正在停止…" : "停止预览", "button compact secondary"); stop.type = "button"; stop.disabled = preview.stopping || !preview.active;
+      stop.addEventListener("click", () => void requestOBSPreview("stop"));
+      controls.append(preview.active || preview.starting || preview.stopping ? stop : start);
+      panel.append(controls);
+    }
+    if (preview.active && preview.imageURL) {
+      const image = document.createElement("img"); image.className = "obs-preview-image"; image.alt = preview.scene ? `OBS 节目画面：${preview.scene}` : "OBS 当前节目画面"; image.src = preview.imageURL;
+      panel.append(image);
+      const timestamp = new Date(preview.observedAt);
+      const updated = Number.isFinite(timestamp.getTime()) ? timestamp.toLocaleString("zh-CN", { hour12: false }) : "";
+      const metadata = [preview.scene ? `场景：${preview.scene}` : "当前节目画面", updated ? `更新于 ${updated}` : "正在读取"].join(" · ");
+      panel.append(appElement("span", metadata, "obs-preview-meta"));
+    }
+    return panel;
   }
   function renderProjectTools() {
     const list = $("#project-tools-list"), current = projectTools;
@@ -2500,9 +2670,10 @@
         detail.append(permissions);
         detail.append(pdf);
       }
+      if (tool.id === "obs-preview") detail.append(renderOBSPreview(tool));
       const controls = appElement("div", "", "project-tool-actions");
       const busy = current.applying === tool.id;
-      const canInstall = tool.runtime_ready || tool.id === "comfyui" || tool.id === "yue" || tool.id === "station-speech";
+      const canInstall = tool.runtime_ready || tool.id === "comfyui" || tool.id === "yue" || tool.id === "station-speech" || tool.id === "obs-preview";
       if (!tool.installed) {
         const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
         approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = busy || !tool.catalog_available || !canInstall;
@@ -2515,7 +2686,8 @@
       } else {
         const action = tool.enabled ? "disable" : "enable";
         const button = appElement("button", busy ? "正在处理…" : (tool.enabled ? "停用" : "启用"), tool.enabled ? "button compact secondary" : "button compact primary");
-        button.type = "button"; button.disabled = busy || (action === "enable" && !tool.runtime_ready);
+        const ready = tool.id === "obs-preview" ? current.obsPreview.configured && !current.obsPreview.loading : tool.runtime_ready;
+        button.type = "button"; button.disabled = busy || (action === "enable" && !ready);
         button.addEventListener("click", () => updateProjectTool(tool, action, false));
         controls.append(button);
         if (tool.update_available) {
@@ -2544,6 +2716,10 @@
       const payload = await request("/api/local/project-tools");
       if (current !== projectTools) return;
       current.tools = Array.isArray(payload.tools) ? payload.tools.filter((tool) => tool && typeof tool.id === "string") : [];
+      const obs = current.tools.find((tool) => tool.id === "obs-preview");
+      if (obs?.obs_preview) applyOBSPreview(obs.obs_preview);
+      if (obs?.installed) await loadOBSPreview(current);
+      else clearOBSPreview();
     } catch (error) {
       if (current === projectTools) projectToolsFeedback(error.message, true);
     } finally {
@@ -2559,6 +2735,8 @@
       if (current !== projectTools) return;
       const updated = result && result.tool;
       if (updated && typeof updated.id === "string") current.tools = current.tools.map((item) => item.id === updated.id ? updated : item);
+      if (tool.id === "obs-preview") { current.obsPreview.enabled = updated?.enabled === true; if (action === "disable") clearOBSPreview(); }
+      if (tool.id === "obs-preview" && (action === "install" || action === "upgrade")) await loadOBSPreview(current);
       const statuses = { install: "已安装", enable: "已启用", upgrade: "已更新", disable: "已停用" };
       projectToolsFeedback((tool.name || tool.id) + statuses[action] + "。");
     } catch (error) {
@@ -2570,6 +2748,7 @@
   function showLogin() {
     state.home = null; state.model = null; window.clearTimeout(state.chat.poll);
     window.clearTimeout(apps.loginTimer);
+    clearOBSPreview();
     apps = newAppView();
     projectTools = newProjectToolsView();
     $("#apps-list").replaceChildren();
