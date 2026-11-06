@@ -55,6 +55,21 @@ type LegacyMemoryInventoryResult struct {
 	Conversations  []LegacyMemoryConversation `json:"conversations"`
 }
 
+// ValidateLegacyMemorySnapshot checks a pinned standalone database through
+// the same read-only SQLite VFS as the migration reader.
+func ValidateLegacyMemorySnapshot(ctx context.Context, file *os.File) error {
+	db, closeSnapshot, err := openLegacyMemorySnapshot(ctx, file)
+	if err != nil {
+		return err
+	}
+	defer closeSnapshot()
+	var status string
+	if err := db.QueryRowContext(ctx, "PRAGMA quick_check(1)").Scan(&status); err != nil || status != "ok" {
+		return ErrLegacyMemoryUnsupported
+	}
+	return nil
+}
+
 // LegacyMemoryInventory examines an already-open, pinned, host-private
 // snapshot.  The caller owns file and must keep it open for the call.  No path
 // is accepted or retained here: the SQLite VFS serves exactly one read-only

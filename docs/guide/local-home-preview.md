@@ -320,6 +320,25 @@ Windows 桌面在启动站和原生端之前取得数据根运行锁，并写入
 
 正式环境仅在主人明确授权后沿用同一清单，并额外保留切换前后的只读副本、实际连接 ID、报告摘要、两端停机记录和最终平台回执。任一步无法核对时停止在当前端，保留目录和证据，不自动重启另一端，也不自动提交、重试、撤回或删除消息。
 
+### 制作旧微信停机快照
+
+先用支持互斥交接的旧桌面正常停止，再用同版成长站的 `agent-home-station-server.exe` 预演。旧数据目录和快照目录应位于本机磁盘且彼此独立。快照父目录需已存在，目标目录需尚未创建，且应放在源码库与鱼家工作区之外。
+
+```powershell
+.\agent-home-station-server.exe legacy-wechat-snapshot --legacy-data 'C:\Legacy\data' --snapshot 'C:\PrivateMigration\wechat' --account '<旧主账号 ID>'
+```
+
+预演会核对旧桌面的停机锁、第 2 版正常停机凭证、在册账号、投递账本和 SQLite 记忆，只返回计数与摘要。核对结果后，用原参数和返回的 `apply_digest` 制作快照。
+
+```powershell
+.\agent-home-station-server.exe legacy-wechat-snapshot --legacy-data 'C:\Legacy\data' --snapshot 'C:\PrivateMigration\wechat' --account '<旧主账号 ID>' --apply '<预演返回的 apply_digest>'
+.\agent-home-station-server.exe legacy-wechat-snapshot --snapshot 'C:\PrivateMigration\wechat' --verify
+```
+
+制作时会先写入当前 Windows 用户与系统可访问的私有暂存目录，复验文件清单、SHA-256 和 SQLite，再原子发布。源内容变化、目标已存在、SQLite 仍有伴随文件或无法通过只读校验时停止。中断后如目标已存在，先用 `--verify` 查明结果。独立校验通过后，再把该目录作为[旧版微信接入](#在隔离副本预演旧版微信接入)的 `snapshot_root`。校验使用本机清单检查完整性，清单不含数字签名。
+
+快照保留已登记账号的微信回复规则、投递账本和支持的记忆库。账本和记忆库可能包含原始私聊，须按宿主私有资料保存。模型凭据、管理口令、微信登录档案、声线和素材继续使用各自的独立接续流程。快照不会将旧任务加入新站的可执行队列。
+
 ### 文件与自编工具
 
 模型可按需发现 `server_list/read/search/write/edit`，在上述家目录内读取、搜索、新建和修改文件。相对路径以家目录为根，绝对路径也必须在家目录内。新建不会覆盖已有文件；修改需要先读取，再提交内容哈希和要替换的唯一片段。文件与 `Project Tools` 下的自编工具跨重启保留。

@@ -50,16 +50,21 @@ namespace WechatAgent.Desktop {
             using (var current = new LocalStationRuntime(next))
             using (var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })) {
                 client.Timeout = TimeSpan.FromSeconds(5);
+                var snapshot = Path.Combine(kit, "legacy-snapshot");
+                var snapshotArgs = new [] { "legacy-wechat-snapshot", "--legacy-data", old.Root, "--snapshot", snapshot, "--account", Account };
                 StartLegacy(legacy, old, client);
+                ExpectRefused(() => OfflineCommand(next.StationExe, snapshotArgs), "旧桌面仍在使用");
                 legacy.Stop().GetAwaiter().GetResult();
                 var oldMarker = WindowsRuntime.LegacyCutoverStatePath(old.Root);
                 var oldProof = File.ReadAllBytes(oldMarker);
                 var oldEpoch = StoppedEpoch(oldMarker, OldDataset);
-                var snapshot = Path.Combine(kit, "legacy-snapshot");
-                Copy(oldMarker, Path.Combine(snapshot, Path.GetFileName(oldMarker)));
-                Copy(oldConfig, Path.Combine(snapshot, "admin", "config.json"));
+                var snapshotPreview = OfflineCommand(next.StationExe, snapshotArgs);
+                ControllerTests.Assert(Deployment.Text(snapshotPreview, "state") == "ready" && !Directory.Exists(snapshot), "offline snapshot preview holds the old lease without creating the destination");
+                var captured = OfflineCommand(next.StationExe, snapshotArgs.Concat(new [] { "--apply", Deployment.Text(snapshotPreview, "apply_digest") }).ToArray());
+                var verified = OfflineCommand(next.StationExe, new [] { "legacy-wechat-snapshot", "--snapshot", snapshot, "--verify" });
+                ControllerTests.Assert(Deployment.Text(captured, "state") == "created" && Deployment.Text(verified, "state") == "verified"
+                    && Deployment.Text(captured, "manifest_digest") == Deployment.Text(verified, "manifest_digest"), "the packaged command creates and independently verifies a private snapshot");
                 var snapshotQueue = Path.Combine(snapshot, "bot-state", "messages-v2.json");
-                Copy(oldQueue, snapshotQueue);
                 var originalQueue = File.ReadAllBytes(snapshotQueue);
                 var app = Path.GetDirectoryName(next.StationNativeRoot);
                 Write(Path.Combine(app, "legacy-import-source.json"), new { snapshot_root = snapshot, legacy_host_root = old.Root, primary_account = Account, snapshot_stopped = true });
@@ -113,18 +118,18 @@ namespace WechatAgent.Desktop {
                 var frozen = (IList)Read(client, rollback)["items"];
                 ControllerTests.Assert(Deployment.Text((Dictionary<string, object>)frozen[0], "server_id") == "87222", "the frozen report kept the new accepted server receipt");
                 var arguments = new [] { "legacy-wechat-release", "--data", next.Root, "--connection", connection, "--audit-digest", Deployment.Text(audit, "digest") };
-                ExpectRefused(() => Release(next.StationExe, arguments), "仍在使用");
+                ExpectRefused(() => OfflineCommand(next.StationExe, arguments), "仍在使用");
 
                 current.Stop().GetAwaiter().GetResult();
                 var newMarker = Path.Combine(next.Root, "station-native-stop.json");
                 StoppedEpoch(newMarker, NewDataset);
                 var newProof = File.ReadAllBytes(newMarker);
-                var preview = Release(next.StationExe, arguments);
+                var preview = OfflineCommand(next.StationExe, arguments);
                 var fence = Path.Combine(next.Root, "station-native-release.json");
                 ControllerTests.Assert(Deployment.Text(preview, "state") == "ready" && !File.Exists(fence) && claimBytes.SequenceEqual(File.ReadAllBytes(claim)), "offline preview leaves both sides unchanged");
                 var digest = Deployment.Text(preview, "apply_digest");
                 var apply = arguments.Concat(new [] { "--apply", digest }).ToArray();
-                ControllerTests.Assert(Deployment.Text(Release(next.StationExe, apply), "state") == "released" && File.Exists(fence) && !File.Exists(claim), "offline apply fences the station and releases the old root");
+                ControllerTests.Assert(Deployment.Text(OfflineCommand(next.StationExe, apply), "state") == "released" && File.Exists(fence) && !File.Exists(claim), "offline apply fences the station and releases the old root");
                 var archived = Path.Combine(old.Root, "legacy-cutover-released-" + digest + ".json");
                 ControllerTests.Assert(claimBytes.SequenceEqual(File.ReadAllBytes(archived)), "the original claim bytes were archived");
                 ExpectRefused(() => current.Start(CancellationToken.None).GetAwaiter().GetResult(), "拒绝重新启动微信原生服务");
@@ -135,7 +140,7 @@ namespace WechatAgent.Desktop {
                 StartLegacy(legacy, old, client);
                 legacy.Stop().GetAwaiter().GetResult();
                 ControllerTests.Assert(StoppedEpoch(oldMarker, OldDataset) != oldEpoch, "old runtime reacquired its lease and wrote a fresh normal stop proof");
-                ControllerTests.Assert(Deployment.Text(Release(next.StationExe, apply), "state") == "released", "release remains idempotent after the old host restarted");
+                ControllerTests.Assert(Deployment.Text(OfflineCommand(next.StationExe, apply), "state") == "released", "release remains idempotent after the old host restarted");
                 ControllerTests.Assert(originalQueue.SequenceEqual(File.ReadAllBytes(snapshotQueue)) && originalQueue.SequenceEqual(File.ReadAllBytes(oldQueue))
                     && File.ReadAllText(queue).Contains(NewKey), "the snapshot and independent old/new receipts survive the return");
                 foreach (var root in new [] { old.Root, next.StationNativeRoot })
@@ -175,11 +180,11 @@ namespace WechatAgent.Desktop {
             return Deployment.Text(marker, "epoch");
         }
 
-        static Dictionary<string, object> Release(string executable, string[] arguments) {
+        static Dictionary<string, object> OfflineCommand(string executable, string[] arguments) {
             using (var child = Process.Start(HiddenRunner.Info(executable, arguments))) {
                 child.StandardInput.Close();
                 var output = child.StandardOutput.ReadToEndAsync(); var error = child.StandardError.ReadToEndAsync();
-                if (!child.WaitForExit(30000)) { child.Kill(); child.WaitForExit(); throw new InvalidOperationException("offline release command timed out"); }
+                if (!child.WaitForExit(30000)) { child.Kill(); child.WaitForExit(); throw new InvalidOperationException("offline command timed out"); }
                 if (child.ExitCode != 0) throw new InvalidOperationException(error.GetAwaiter().GetResult().Trim());
                 return Deployment.Json.Deserialize<Dictionary<string, object>>(output.GetAwaiter().GetResult());
             }
