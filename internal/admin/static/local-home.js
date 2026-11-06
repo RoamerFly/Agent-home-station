@@ -56,7 +56,8 @@
     return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", douyinAuthorization: null, douyinAuthorizationError: "", douyinAuthorizationSaving: false,
       douyinOAuth: { saving: false, completing: false, authorizeURL: "", expiresAt: "", state: "", embedded: false }, bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
-      bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false } };
+      bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false },
+      douyinWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() {
     return { loading: false, applying: "", tools: [], obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
@@ -1431,14 +1432,18 @@
   function validDouyinAuthorization(value) {
     return value && typeof value.revision === "string" && typeof value.configured === "boolean" &&
       ["unconfigured", "ready", "expired"].includes(value.status) && typeof value.label === "string" &&
-      (typeof value.works_authorized === "undefined" || typeof value.works_authorized === "boolean");
+      (typeof value.works_authorized === "undefined" || typeof value.works_authorized === "boolean") &&
+      (typeof value.publish_authorized === "undefined" || typeof value.publish_authorized === "boolean");
   }
   function douyinAuthorizationSummary(authorization) {
     const states = {
       unconfigured: ["尚未接入抖音账号", "扫码授权后，这里会显示已核验的账号。"],
-      ready: [authorization?.label || "抖音账号已接入", authorization?.works_authorized
-        ? "已授权读取我的作品列表；首次读取仍会核对抖音平台能力。"
-        : "本机已核验账号公开资料。重新扫码时可选择授权读取我的作品列表。"],
+      ready: [authorization?.label || "抖音账号已接入", [
+        authorization?.works_authorized ? "已授权读取我的作品列表。" : "可重新扫码授权读取我的作品列表。",
+        authorization?.publish_authorized
+          ? "已授权发布抖音视频；实际可用性仍会在首次发布时核对。"
+          : "可重新扫码授权发布抖音视频。",
+      ].join("")],
       expired: ["抖音授权已过期", "重新网页授权可恢复账号连接。"],
     };
     return states[authorization?.status] || ["抖音授权暂不可读", "刷新应用状态后重查。"];
@@ -1525,6 +1530,8 @@
     redirectURI.name = "redirect_uri"; redirectURI.type = "url"; redirectURI.autocomplete = "off"; redirectURI.required = true; redirectURI.placeholder = "https://…/callback"; redirectURI.setAttribute("aria-label", "抖音开放平台已登记的回调地址");
     const readWorks = document.createElement("input");
     readWorks.name = "read_works"; readWorks.type = "checkbox"; readWorks.checked = Boolean(authorization?.works_authorized); readWorks.setAttribute("aria-label", "授权读取我的作品列表");
+    const publishVideo = document.createElement("input");
+    publishVideo.name = "publish_video"; publishVideo.type = "checkbox"; publishVideo.checked = Boolean(authorization?.publish_authorized); publishVideo.setAttribute("aria-label", "授权发布抖音视频");
     const desktop = Boolean(douyinDesktopHost());
     const begin = appElement("button", flow.saving ? "正在处理…" : desktop ? "打开扫码窗口" : "生成授权链接", "button compact secondary");
     begin.type = "submit"; begin.disabled = !authorization || flow.saving || flow.embedded;
@@ -1534,8 +1541,12 @@
     }
     const worksLabel = appElement("label", "", "publication-authorization-choice");
     worksLabel.append(readWorks, appElement("span", "授权读取我的作品列表"));
+    const publishLabel = appElement("label", "", "publication-authorization-choice");
+    publishLabel.append(publishVideo, appElement("span", "授权发布抖音视频"));
     form.append(worksLabel,
       appElement("p", "可选能力：需要平台开通作品列表权限；每轮最多读取 4 页，只用于登记作品编号范围，详情仍按需读取。", "publication-authorization-note"),
+      publishLabel,
+      appElement("p", "可选能力：仅申请发布视频所需授权；授权成功不代表平台已开通实际发布资格。", "publication-authorization-note"),
       appElement("p", "仅使用抖音开放平台已登记的回调地址。密钥不会显示、缓存或写入浏览器。", "publication-authorization-note"), begin);
     const callback = document.createElement("input");
     callback.type = "url"; callback.autocomplete = "off"; callback.required = true; callback.placeholder = "粘贴浏览器返回的完整回调地址"; callback.setAttribute("aria-label", "完整回调地址");
@@ -1574,7 +1585,7 @@
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!authorization || current !== apps || flow.saving || flow.embedded) return;
-      const credentials = { client_key: clientKey.value, client_secret: clientSecret.value, redirect_uri: redirectURI.value, read_works: readWorks.checked };
+      const credentials = { client_key: clientKey.value, client_secret: clientSecret.value, redirect_uri: redirectURI.value, read_works: readWorks.checked, publish_video: publishVideo.checked };
       clientKey.value = clientSecret.value = redirectURI.value = callback.value = "";
       clearDouyinOAuth(flow); showCallback(); flow.saving = true; begin.disabled = true;
       try {
@@ -1804,7 +1815,7 @@
       const mark = appElement("span", Array.from(label)[0], "app-mark");
       mark.setAttribute("aria-hidden", "true");
       head.append(mark, appElement("h4", label));
-      const controls = record.id === "douyin" ? [douyinAuthorizationRow(apps), ...douyinReadRows(record)] :
+      const controls = record.id === "douyin" ? [douyinAuthorizationRow(apps), douyinPublicationRow(apps), ...douyinReadRows(record)] :
         record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
       const layers = [head, appSourceRow(record, catalog.get(record.id)), ...controls].filter(Boolean);
       card.append(...layers);
@@ -1833,7 +1844,10 @@
       let authorization = null;
       let douyinAuthorization = null;
       if (hasDouyin) {
-        const result = await Promise.allSettled([request("/api/local/apps/douyin/authorization")]);
+        const result = await Promise.allSettled([
+          request("/api/local/apps/douyin/authorization"),
+          loadPublicationWork(current, "douyin", current.douyinWork.cursors)
+        ]);
         if (current !== apps || appSessionExpired(result)) return;
         douyinAuthorization = result[0];
       }
@@ -1900,8 +1914,8 @@
 
   const publicationStates = {
     draft: ["草稿", "成品已登记，等待提交。"],
-    accepted: ["已受理", "B 站已返回稿件编号。可查询是否公开。"],
-    published: ["已公开", "B 站已确认稿件可公开浏览。"],
+    accepted: ["已受理", "平台已返回作品回执，可继续查询是否公开。"],
+    published: ["已公开", "平台已确认作品可公开浏览。"],
     cancelled: ["已停止", "此任务的后续操作已停止。"],
     failed: ["未完成", "本次发布未完成。"],
     awaiting_receipt: ["待核对", "查询原任务以查看最新状态。"],
@@ -1912,9 +1926,11 @@
     merging: ["等待合并回执", "全部分片已确认，合并结果待核对。"],
     merged: ["上传已合并", "可从原上传继续投稿。"],
     posting: ["投稿结果待核对", "平台尚未返回原投稿的稿件编号。"],
+    part_pending: ["分片结果待核对", "有一个分片没有回执，后续上传已暂停。"],
   };
   const publicationActions = { submit: "提交投稿", resume: "继续任务", status: "查询状态", cancel: "停止后续" };
   function publicationStatus(task) {
+    if (task.state === "failed" && task.progress?.stage === "rejected") return ["未提交成功", "本次发布已被拒绝。"];
     const normal = publicationStates[task.state] || publicationStates.awaiting_receipt;
     if (task.state !== "awaiting_receipt") return normal;
     if (task.cancel_requested) return ["已要求停止", "已请求停止后续操作，原投稿结果仍待核对。"];
@@ -2194,6 +2210,32 @@
     if (refresh) detail.append(refresh);
     const disable = publicationDisableButton(current, authorization);
     if (disable) detail.append(disable);
+    detail.append(publicationTasksPanel(current, "bilibili", "B 站"));
+    row.append(heading, detail);
+    return row;
+  }
+  function douyinPublicationRow(current) {
+    if (!current.registered?.some((item) => item.id === "douyin")) return null;
+    const work = current.douyinWork;
+    const authorization = current.douyinAuthorization;
+    const row = appElement("section", "", "app-layer publication-layer");
+    row.id = "douyin-publication";
+    row.setAttribute("aria-labelledby", "douyin-publication-heading");
+    row.setAttribute("aria-busy", String(work.reading));
+    const heading = appElement("h5", "创作发布");
+    heading.id = "douyin-publication-heading";
+    const detail = appElement("div", "", "publication-detail");
+    const title = authorization?.publish_authorized ? "已授权发布视频" : authorization?.configured ? "尚未授权发布视频" : "需要接入抖音账号";
+    const note = authorization?.publish_authorized ? "可创建本地草稿，并按原任务上传、提交和核对。提交前仍会由平台检查实际权限。" :
+      authorization?.configured ? "重新扫码时选择发布视频，平台核验后才会开放创作发布。" : "先完成账号接入，已保存的发布任务仍会显示在这里。";
+    detail.append(appElement("strong", title), appElement("p", note));
+    if (current.douyinAuthorizationError) detail.append(appElement("p", current.douyinAuthorizationError, "publication-feedback is-warn"));
+    detail.append(publicationTasksPanel(current, "douyin", "抖音"));
+    row.append(heading, detail);
+    return row;
+  }
+  function publicationTasksPanel(current, appID, label) {
+    const work = publicationWork(current, appID);
     const taskPanel = appElement("div", "", "publication-tasks");
     const feedback = appElement("p", work.error || work.notice, work.error || work.actionError ? "publication-feedback is-warn" : "sr-only");
     feedback.setAttribute("role", "status");
@@ -2201,11 +2243,11 @@
     const items = work.page?.items || [];
     if (items.length) {
       const list = appElement("ul", "", "publication-list");
-      list.setAttribute("aria-label", "B 站发布任务");
-      for (const task of items) list.append(publicationTaskRow(current, task));
+      list.setAttribute("aria-label", `${label}发布任务`);
+      for (const task of items) list.append(publicationTaskRow(current, task, appID));
       taskPanel.append(list);
     } else if (!work.error) {
-      taskPanel.append(appElement("p", work.reading ? "正在读取发布任务…" : "暂无 B 站发布任务。", "publication-empty"));
+      taskPanel.append(appElement("p", work.reading ? "正在读取发布任务…" : `暂无${label}发布任务。`, "publication-empty"));
     }
     if (work.page?.has_more || work.cursors.length > 1) {
       const pages = appElement("div", "", "publication-pages");
@@ -2216,16 +2258,15 @@
       next.dataset.page = "next";
       previous.disabled = work.reading || work.cursors.length === 1;
       next.disabled = work.reading || !work.page?.has_more;
-      previous.addEventListener("click", () => loadBilibiliWork(current, work.cursors.slice(0, -1)));
-      next.addEventListener("click", () => loadBilibiliWork(current, [...work.cursors, work.page.next]));
+      previous.addEventListener("click", () => loadPublicationWork(current, appID, work.cursors.slice(0, -1)));
+      next.addEventListener("click", () => loadPublicationWork(current, appID, [...work.cursors, work.page.next]));
       pages.append(previous, appElement("span", `第 ${work.cursors.length} 页`), next);
       taskPanel.append(pages);
     }
-    detail.append(taskPanel);
-    row.append(heading, detail);
-    return row;
+    return taskPanel;
   }
-  function publicationTaskRow(current, task) {
+  function publicationWork(current, appID) { return appID === "douyin" ? current.douyinWork : current.bilibiliWork; }
+  function publicationTaskRow(current, task, appID = "bilibili") {
     const row = appElement("li", "", "publication-task");
     row.dataset.job = task.job_id;
     row.tabIndex = -1;
@@ -2259,22 +2300,23 @@
       line.append(meter, appElement("span", caption));
       details.append(line);
     }
-    const pending = current.bilibiliWork.pending.get(task.job_id);
+    const pending = publicationWork(current, appID).pending.get(task.job_id);
     const pendingLabel = pending?.has("cancel") ? "正在登记停止…" : "正在处理原任务…";
     details.append(appElement("p", pending?.size ? pendingLabel : note));
     const buttons = appElement("div", "", "publication-actions");
     const available = Array.isArray(task.available_actions) ? task.available_actions : [];
     for (const [action, label] of Object.entries(publicationActions)) {
       if (!available.includes(action)) continue;
+      if (action === "resume" && task.progress?.stage === "part_pending") continue;
       const button = appElement("button", label, `button compact ${action === "submit" ? "primary" : "quiet"}`);
       button.type = "button";
       button.dataset.action = action;
       // Cancellation remains possible while an upload request is running.
       button.disabled = Boolean(pending?.has(action) || (pending?.size && action !== "cancel"));
-      button.addEventListener("click", () => applyPublicationAction(current, task, action));
+      button.addEventListener("click", () => applyPublicationAction(current, task, action, appID));
       buttons.append(button);
     }
-    if (available.includes("reconcile") && task.state === "awaiting_receipt" && task.progress?.stage === "posting" && !task.remote_id) {
+    if (appID === "bilibili" && available.includes("reconcile") && task.state === "awaiting_receipt" && task.progress?.stage === "posting" && !task.remote_id) {
       details.append(publicationReconciliation(current, task));
     }
     row.append(details, buttons);
@@ -2367,17 +2409,17 @@
       if (current === apps) { state.busy = false; updatePublicationRow(current); }
     }
   }
-  function updatePublicationRow(current) {
+  function updatePublicationRow(current, appID = "bilibili") {
     if (current !== apps) return;
-    const row = $("#bilibili-publication");
+    const row = $(`#${appID}-publication`);
     if (!row) return;
     const active = document.activeElement;
     const focusedJob = row.contains(active) ? active.closest("[data-job]")?.dataset.job : "";
     const focusedAction = active?.dataset.action;
     const focusedPage = row.contains(active) ? active.dataset.page : "";
-    let next = bilibiliPublicationRow(current);
+    let next = appID === "douyin" ? douyinPublicationRow(current) : bilibiliPublicationRow(current);
     if (!next) return;
-    if (row.querySelector(".publication-authorization[open], .publication-oauth[open]")) {
+    if (appID === "bilibili" && row.querySelector(".publication-authorization[open], .publication-oauth[open]")) {
       // Refresh tasks without touching the open credential form.
       row.querySelector(".publication-tasks").replaceWith(next.querySelector(".publication-tasks"));
       row.setAttribute("aria-busy", next.getAttribute("aria-busy"));
@@ -2395,15 +2437,15 @@
       (button || buttons.find((element) => !element.disabled) || next.querySelector("[data-job]"))?.focus({ preventScroll: true });
     }
   }
-  async function loadBilibiliWork(current, cursors) {
-    const work = current.bilibiliWork;
+  async function loadPublicationWork(current, appID, cursors) {
+    const work = publicationWork(current, appID);
     const readID = ++work.readID;
     work.reading = true;
     work.error = "";
-    updatePublicationRow(current);
+    updatePublicationRow(current, appID);
     try {
       const after = cursors.at(-1) || 0;
-      const result = await request(`/api/local/publications?app_id=bilibili&limit=6&after=${after}`);
+      const result = await request(`/api/local/publications?app_id=${encodeURIComponent(appID)}&limit=6&after=${after}`);
       if (current !== apps || readID !== work.readID) return;
       if (!Array.isArray(result.tasks?.items)) throw new Error("本机未返回发布任务列表。");
       work.page = result.tasks;
@@ -2414,20 +2456,22 @@
     } finally {
       if (current === apps && readID === work.readID) {
         work.reading = false;
-        updatePublicationRow(current);
+        updatePublicationRow(current, appID);
       }
     }
   }
-  async function applyPublicationAction(current, task, action) {
+  async function loadBilibiliWork(current, cursors) { return loadPublicationWork(current, "bilibili", cursors); }
+  async function applyPublicationAction(current, task, action, appID = "bilibili") {
     if (current !== apps || !task.available_actions?.includes(action)) return;
-    const work = current.bilibiliWork;
+    if (action === "resume" && task.progress?.stage === "part_pending") return;
+    const work = publicationWork(current, appID);
     const pending = work.pending.get(task.job_id) || new Set();
     if (pending.has(action) || (pending.size && action !== "cancel")) return;
     pending.add(action);
     work.pending.set(task.job_id, pending);
     work.notice = "";
     work.actionError = false;
-    updatePublicationRow(current);
+    updatePublicationRow(current, appID);
     try {
       const updated = await request("/api/local/publications", { method: "POST", body: JSON.stringify({ action, job_id: task.job_id }) });
       if (current === apps && updated.job_id === task.job_id) work.notice = publicationStatus(updated)[1];
@@ -2438,7 +2482,7 @@
     } finally {
       pending.delete(action);
       if (!pending.size) work.pending.delete(task.job_id);
-      if (current === apps) await loadBilibiliWork(current, work.cursors);
+      if (current === apps) await loadPublicationWork(current, appID, work.cursors);
     }
   }
   async function installApp(listing) {

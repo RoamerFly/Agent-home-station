@@ -44,5 +44,19 @@
     "source": "verified-official-player",
     "owner_setting": "sample_public_playback",
     "evidence": "html-media-played-ranges"
+  },
+  "publication": {
+    "connection": "authorized-account",
+    "authentication": "host-only-user-oauth",
+    "scopes": [
+      "video.create.bind",
+      "posting.behavior"
+    ],
+    "owner_opt_in": "publish_video",
+    "media": [
+      "mp4",
+      "webm"
+    ],
+    "checkpointed": true
   }
 }

@@ -171,6 +171,12 @@ func (p *SearchApp) Inspect(ctx context.Context, id string) (apphost.ConnectionS
 		if action != "" {
 			status.SupportedActions = []string{action}
 		}
+		if id == accountConnectionID {
+			ref := apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: connection.ID, AccountID: connection.AccountID}
+			if _, err := p.publicationAccount(ref); err == nil {
+				status.SupportedActions = append(status.SupportedActions, "content.publish-video")
+			}
+		}
 	}
 	return status, nil
 }

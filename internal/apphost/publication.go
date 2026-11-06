@@ -556,6 +556,15 @@ func (p *Publisher) settle(ctx context.Context, job pluginhost.Job, record publi
 			}
 			return stopped, stopErr
 		}
+		if receipt.State == "failed" && receipt.Reference.RemoteID == "" {
+			// An adapter can prove a rejection before a remote resource exists.
+			// A network timeout must still be returned as unknown.
+			failed, failErr := p.store.FailJob(ctx, current.ID, current.Revision, mustJSON(receipt))
+			if errors.Is(failErr, pluginhost.ErrRevision) {
+				continue
+			}
+			return failed, failErr
+		}
 		if current.RemoteID == "" {
 			ack, err := p.store.AcknowledgeJob(ctx, current.ID, current.Revision, receipt.Reference.RemoteID)
 			if errors.Is(err, pluginhost.ErrRevision) {
@@ -754,20 +763,22 @@ func validReceipt(job pluginhost.Job, record publicationRecord, receipt Publicat
 	if receipt.Reference.TaskID != job.ID || receipt.Reference.Target != record.Draft.Target || receipt.Reference.ManifestSHA256 != record.Manifest || !validReceiptState(receipt.State) || !validRemoteID(receipt.Reference.RemoteID) {
 		return false
 	}
-	if receipt.State != "unknown" && receipt.State != "cancelled" && receipt.Reference.RemoteID == "" {
+	if (receipt.State == "accepted" || receipt.State == "published") && receipt.Reference.RemoteID == "" {
 		return false
 	}
-	if progress := receipt.Progress; progress != nil {
-		if progress.ConfirmedParts < 0 || progress.TotalParts < progress.ConfirmedParts {
-			return false
-		}
-		switch progress.Stage {
-		case "initializing", "uploading", "merging", "merged", "posting", "accepted":
-		default:
-			return false
-		}
+	return receipt.Progress == nil || validPublicationProgress(receipt.Progress)
+}
+
+func validPublicationProgress(progress *PublicationProgress) bool {
+	if progress == nil || progress.ConfirmedParts < 0 || progress.TotalParts < progress.ConfirmedParts {
+		return false
 	}
-	return true
+	switch progress.Stage {
+	case "initializing", "uploading", "part_pending", "merging", "merged", "posting", "accepted", "rejected":
+		return true
+	default:
+		return false
+	}
 }
 
 func viewWithProgress(job pluginhost.Job, record publicationRecord, receipt PublicationReceipt) PublicationView {

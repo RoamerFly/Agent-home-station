@@ -89,15 +89,10 @@ func (p *Publisher) listProgress(ctx context.Context, job pluginhost.Job, record
 		return nil, nil
 	}
 	progress, err := provider.PublicationCheckpointProgress(state.Records[publicationCheckpointKey])
-	if err != nil || progress == nil || progress.ConfirmedParts < 0 || progress.TotalParts < progress.ConfirmedParts {
+	if err != nil || !validPublicationProgress(progress) {
 		return nil, ErrPublicationConflict
 	}
-	switch progress.Stage {
-	case "initializing", "uploading", "merging", "merged", "posting", "accepted":
-		return &PublicationProgress{Stage: progress.Stage, ConfirmedParts: progress.ConfirmedParts, TotalParts: progress.TotalParts}, nil
-	default:
-		return nil, ErrPublicationConflict
-	}
+	return &PublicationProgress{Stage: progress.Stage, ConfirmedParts: progress.ConfirmedParts, TotalParts: progress.TotalParts}, nil
 }
 
 func (p *Publisher) runCheckpointed(ctx context.Context, job pluginhost.Job, record publicationRecord, active *atomic.Bool, workflow CheckpointedPublicationProvider, req PublicationRequest) (PublicationReceipt, error) {

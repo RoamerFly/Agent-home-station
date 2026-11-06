@@ -1230,8 +1230,8 @@ def verify_douyin_authorization(binary, output):
                     page.route("**/api/apps", fulfill_json({"items": [{"id": "douyin", "name": "抖音"}]}))
                     page.route("**/api/apps/douyin/connections", fulfill_json({"items": []}))
                     attempts, cancelled, completed = [], [], []
-                    initial = {"revision": "", "configured": False, "status": "unconfigured", "label": "", "works_authorized": False}
-                    verified = {"revision": "fixture-revision", "configured": True, "status": "ready", "label": "Synthetic Douyin account", "works_authorized": desktop}
+                    initial = {"revision": "", "configured": False, "status": "unconfigured", "label": "", "works_authorized": False, "publish_authorized": False}
+                    verified = {"revision": "fixture-revision", "configured": True, "status": "ready", "label": "Synthetic Douyin account", "works_authorized": desktop, "publish_authorized": desktop}
                     redirect = "https://owner.example.test/callback"
 
                     def authorization(route):
@@ -1241,9 +1241,10 @@ def verify_douyin_authorization(binary, output):
                         body = route.request.post_data_json
                         if body["action"] == "begin":
                             assert body.get("read_works") is desktop, "the optional works-list grant must match the checkbox"
+                            assert body.get("publish_video") is desktop, "the optional video publishing grant must match the checkbox"
                             state = f"{len(attempts) + 1:048x}"
                             attempts.append(state)
-                            scopes = "user_info,video.list.bind" if desktop else "user_info"
+                            scopes = "user_info,video.list.bind,video.create.bind,posting.behavior" if desktop else "user_info"
                             query = urlencode({"client_key": "fixture-client", "response_type": "code", "scope": scopes,
                                                "redirect_uri": redirect, "state": state})
                             fulfill_json({"authorize_url": "https://open.douyin.com/platform/oauth/connect?" + query,
@@ -1258,6 +1259,27 @@ def verify_douyin_authorization(binary, output):
                             raise AssertionError("unexpected action")
 
                     page.route("**/api/local/apps/douyin/authorization", authorization)
+                    accepted_job, pending_job = "a" * 64, "b" * 64
+                    publication_actions = []
+                    target = {"app_id": "douyin", "connection_id": "authorized-account", "account_id": "synthetic-owner", "installation_id": "douyin-search"}
+                    accepted = {"job_id": accepted_job, "state": "accepted", "remote_id": "7000000000000000001",
+                                "target": target, "available_actions": ["status"], "progress": {"stage": "accepted", "confirmed_parts": 1, "total_parts": 1}}
+                    pending = {"job_id": pending_job, "state": "awaiting_receipt", "target": target, "available_actions": ["status", "cancel"],
+                               "progress": {"stage": "part_pending", "confirmed_parts": 1, "total_parts": 3}}
+
+                    def publication_status(route):
+                        body = route.request.post_data_json
+                        assert body == {"action": "status", "job_id": accepted_job}
+                        publication_actions.append(body)
+                        accepted.update(state="published", available_actions=[])
+                        fulfill_json(accepted)(route)
+
+                    def publication_list(route):
+                        items = [accepted, pending] if desktop and completed else []
+                        fulfill_json({"tasks": {"items": items, "next": 0, "has_more": False}, "targets": [target] if items else []})(route)
+
+                    page.route(re.compile(r".*/api/local/publications\?app_id=douyin(?:&.*)?$"), publication_list)
+                    page.route("**/api/local/publications", publication_status)
                     page.goto(origin)
                     page.locator("#login-password").fill("synthetic-home-owner")
                     page.locator("#login-submit").click()
@@ -1267,18 +1289,21 @@ def verify_douyin_authorization(binary, output):
                     page.get_by_text("尚未接入抖音账号", exact=True).wait_for()
                     page.get_by_text("扫码授权", exact=True).click()
                     works = page.get_by_label("授权读取我的作品列表")
+                    publish = page.get_by_label("授权发布抖音视频")
                     assert not works.is_checked(), "works-list access must be off for a fresh authorization"
+                    assert not publish.is_checked(), "video publishing access must be off for a fresh authorization"
 
                     def begin():
                         if desktop:
                             works.check()
+                            publish.check()
                         page.get_by_label("抖音 Client Key").fill("fixture-client")
                         page.get_by_label("抖音 Client Secret").fill("fixture-private-secret")
                         page.get_by_label("抖音开放平台已登记的回调地址").fill(redirect)
                         page.get_by_role("button", name="打开扫码窗口" if desktop else "生成授权链接").click()
 
                     def callback(state):
-                        scopes = "user_info,video.list.bind" if desktop else "user_info"
+                        scopes = "user_info,video.list.bind,video.create.bind,posting.behavior" if desktop else "user_info"
                         return redirect + "?" + urlencode({"code": "synthetic-code", "state": state, "scopes": scopes})
 
                     def emit(message):
@@ -1317,10 +1342,24 @@ def verify_douyin_authorization(binary, output):
                     page.get_by_text(verified["label"], exact=True).wait_for()
                     if desktop:
                         page.get_by_text("已授权读取我的作品列表", exact=False).wait_for()
+                        page.get_by_text("已授权发布抖音视频", exact=False).wait_for()
                         page.get_by_text("重新扫码授权", exact=True).click()
                         assert works.is_checked(), "renewing a works grant should preserve the visible selection"
+                        assert publish.is_checked(), "renewing a publishing grant should preserve the visible selection"
+                        workbench = page.locator("#douyin-publication")
+                        workbench.get_by_role("list", name="抖音发布任务").wait_for()
+                        pending_row = workbench.locator(f'[data-job="{pending_job}"]')
+                        assert pending_row.get_by_role("button", name="继续任务").count() == 0
+                        assert workbench.get_by_text("核对投稿结果", exact=True).count() == 0
+                        accepted_row = workbench.locator(f'[data-job="{accepted_job}"]')
+                        accepted_row.get_by_role("button", name="查询状态").click()
+                        accepted_row.get_by_text("已公开", exact=True).wait_for()
+                        assert len(publication_actions) == 1
+                        assert_no_horizontal_overflow(page, "375-pixel Douyin publication")
+                        page.screenshot(path=str(output / "douyin-publication-desktop-dark.png"))
                     else:
                         assert page.get_by_text("已授权读取我的作品列表", exact=False).count() == 0
+                        assert page.get_by_text("已授权发布抖音视频", exact=False).count() == 0
                     assert completed == [expected], "stale or repeated callback was submitted"
                     assert cancelled == ([attempts[0]] if desktop else [])
                     context.close()

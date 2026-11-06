@@ -5,7 +5,8 @@
       "id": "account-authorization",
       "title": "抖音账号授权",
       "fields": [
-        "read_works"
+        "read_works",
+        "publish_video"
       ],
       "action": "owner-verified-web-oauth"
     },
@@ -28,6 +29,12 @@
         "video_ids"
       ],
       "action": "owner-provision-private-config"
+    },
+    {
+      "id": "publication-tasks",
+      "title": "创作发布",
+      "fields": [],
+      "action": "owner-publication-tasks"
     }
   ]
 }

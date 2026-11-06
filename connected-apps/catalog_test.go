@@ -230,7 +230,7 @@ func TestWeChatApplicationSourceKeepsExactQuoteMediaAndScope(t *testing.T) {
 	}
 }
 
-func TestDouyinSourceDeclaresOnlyOfficialReadAndAccountRoutes(t *testing.T) {
+func TestDouyinSourceDeclaresOnlyOfficialAppRoutes(t *testing.T) {
 	contract, err := Lookup("douyin")
 	if err != nil {
 		t.Fatal(err)
@@ -254,11 +254,11 @@ func TestDouyinSourceDeclaresOnlyOfficialReadAndAccountRoutes(t *testing.T) {
 		t.Fatalf("invalid isolated Douyin player declaration: %v", err)
 	}
 	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||
-		len(p.HTTPRoutes) != 6 ||
+		len(p.HTTPRoutes) != 11 ||
 		p.HTTPRoutes[0].Endpoint != "https://open.douyin.com/dy_open_api/v1/search/video/" ||
 		!reflect.DeepEqual(p.HTTPRoutes[0].Capabilities, []string{"observation.search"}) ||
 		p.HTTPRoutes[1].Endpoint != "https://open.douyin.com/api/douyin/v1/video/video_basic_info/" ||
-		!reflect.DeepEqual(p.HTTPRoutes[1].Capabilities, []string{"observation.own-video"}) ||
+		!reflect.DeepEqual(p.HTTPRoutes[1].Capabilities, []string{"observation.own-video", "publication.video"}) ||
 		p.HTTPRoutes[2].Endpoint != "https://open.douyin.com/oauth/access_token/" ||
 		p.HTTPRoutes[3].Endpoint != "https://open.douyin.com/oauth/userinfo/" ||
 		!reflect.DeepEqual(p.HTTPRoutes[2].Capabilities, []string{"account.authorization"}) ||
@@ -268,5 +268,12 @@ func TestDouyinSourceDeclaresOnlyOfficialReadAndAccountRoutes(t *testing.T) {
 		p.HTTPRoutes[5].Endpoint != "https://open.douyin.com/video/list/" ||
 		!reflect.DeepEqual(p.HTTPRoutes[5].Capabilities, []string{"observation.account-works"}) {
 		t.Fatalf("unexpected Douyin application routes: %+v", p.HTTPRoutes)
+	}
+	for i, suffix := range []string{"upload_video/", "init_video_part_upload/", "upload_video_part/", "complete_video_part_upload/", "create_video/"} {
+		route := p.HTTPRoutes[6+i]
+		if route.Endpoint != "https://open.douyin.com/api/douyin/v1/video/"+suffix ||
+			!reflect.DeepEqual(route.Capabilities, []string{"publication.video"}) || route.Credential != "" {
+			t.Fatalf("unexpected Douyin publication route: %+v", route)
+		}
 	}
 }

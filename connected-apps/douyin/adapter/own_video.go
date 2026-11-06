@@ -249,12 +249,17 @@ type ownVideoResponse struct {
 
 type ownVideoInfo struct {
 	VideoID    json.RawMessage `json:"video_id"`
+	ItemID     string          `json:"item_id"`
 	Status     *int            `json:"video_status"`
 	Title      string          `json:"title"`
 	CreateTime int64           `json:"create_time"`
 }
 
 func (p *SearchApp) fetchOwnVideo(ctx context.Context, loaded loadedOwnVideoSettings, requestedID string) (ownVideoInfo, error) {
+	return p.fetchVideoStatus(ctx, loaded, requestedID, false)
+}
+
+func (p *SearchApp) fetchVideoStatus(ctx context.Context, loaded loadedOwnVideoSettings, requestedID string, encrypted bool) (ownVideoInfo, error) {
 	if p == nil || p.client == nil {
 		return ownVideoInfo{}, apphost.ErrObservationUpstreamUnavailable
 	}
@@ -265,9 +270,11 @@ func (p *SearchApp) fetchOwnVideo(ctx context.Context, loaded loadedOwnVideoSett
 	query := endpoint.Query()
 	query.Set("open_id", loaded.OpenID)
 	endpoint.RawQuery = query.Encode()
-	payload, err := json.Marshal(struct {
-		VideoIDs []string `json:"video_ids"`
-	}{VideoIDs: []string{requestedID}})
+	key := "video_ids"
+	if encrypted {
+		key = "item_ids"
+	}
+	payload, err := json.Marshal(map[string][]string{key: {requestedID}})
 	if err != nil {
 		return ownVideoInfo{}, apphost.ErrObservationUpstreamUnavailable
 	}
@@ -326,11 +333,15 @@ func (p *SearchApp) fetchOwnVideo(ctx context.Context, loaded loadedOwnVideoSett
 	if len(decoded.Data.List) != 1 {
 		return ownVideoInfo{}, apphost.ErrObservationUpstreamUnavailable
 	}
-	videoID, ok := canonicalItemID(decoded.Data.List[0].VideoID)
-	if !ok || videoID != requestedID {
+	video := decoded.Data.List[0]
+	observed, _ := canonicalItemID(video.VideoID)
+	if encrypted {
+		observed = video.ItemID
+	}
+	if observed != requestedID {
 		return ownVideoInfo{}, apphost.ErrObservationUpstreamUnavailable
 	}
-	return decoded.Data.List[0], nil
+	return video, nil
 }
 
 func ownVideoResponseError(code int) error {

@@ -26,6 +26,16 @@ Windows 本地成长站可选择随包提供抖音应用。
 
 列表只提供作品编号及平台创建时间。平台的加密作品标识显示为宿主生成的来源编号。公开状态通过独立的本人作品状态查询核对。普通抖音登录与搜索权限无法启用此列表。当前已验证合成分页和官方端点的令牌校验，真实账号授权查询取决于平台对该网站应用的权限。[官方作品列表契约](https://open.douyin.com/platform/resource/docs/openapi/video-management/douyin/search-video/account-video-list) · [平台权限及字段调整](https://developer.open-douyin.com/forum/bulletin/post/6736c38048f043667b75f70a)
 
+## 上传和发布视频
+
+开放平台网站应用取得「代替用户发布内容到抖音」和「视频基础信息查询」后，在应用内扫码时单独勾选「授权发布抖音视频」。平台回跳和令牌须同时包含 `video.create.bind`、`posting.behavior`。发布权限与作品列表分开。
+
+在本地聊天里先登记成品，再用 `app_publish(action=targets)` 查找目标。抖音使用 `app_id=douyin` 和 `connection_id=authorized-account`，一次提交一份 MP4 或 WebM。`platform_options.visibility` 需明确填 `public`、`private` 或 `friends`。标题和正文合成抖音文案，最多 1000 字。宿主按平台文档处理 4 GB 内成品，超过 50 MB 采用分片，靠近请求时限时可在已确认分片后暂停。
+
+保存草稿、提交、继续、查询和取消使用同一个 `job_id`。可从「应用 → 抖音 → 创作发布」查看进度。上传后的媒资编号与创建后的作品编号分别记录。平台创建回执显示为已接受，查询到同一作品明确公开后，才确认公开发布。仅自己或好友可见的作品保留已接受状态，公开状态接口无法核对具体私密范围。
+
+提交结果未知时保留原任务。若平台未返回作品编号，后续不能凭相似标题认领或再次创建，只能在抖音侧核对。取消停止未发起的后续步骤，已创建的作品仍在抖音侧管理。Windows 实际发布、审核结果和各权限开通情况仍需真实环境验证。[上传视频](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-video/upload-video) · [创建视频](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-video/video-create) · [查询视频基础信息](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/posting-task/video-basic-info)
+
 ## 官方视频搜索
 
 主人先为抖音开放平台的应用取得 `aweme.dy.video_search` 能力，再在平台侧生成该应用的 `client_token`。按凭据返回的 `expires_in` 计算过期时间。设备编号须按平台要求提供。[视频搜索接口](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/douyin-search-capability/aweme-dy-video-search) · [生成 client_token](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/client-token)

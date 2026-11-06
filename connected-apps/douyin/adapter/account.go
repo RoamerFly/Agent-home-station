@@ -26,6 +26,8 @@ const (
 	accountFile          = "authorization.json"
 	accountScope         = "user_info"
 	accountWorksScope    = "video.list.bind"
+	accountPublishScope  = "video.create.bind"
+	accountPostingScope  = "posting.behavior"
 	accountOAuthLifetime = 10 * time.Minute
 )
 
@@ -48,15 +50,17 @@ type AccountAuthorizationInput struct {
 	CallbackURL  string `json:"callback_url"`
 	State        string `json:"state"`
 	ReadWorks    bool   `json:"read_works"`
+	PublishVideo bool   `json:"publish_video"`
 }
 
 type AccountAuthorizationView struct {
-	Configured      bool   `json:"configured"`
-	WorksAuthorized bool   `json:"works_authorized"`
-	Status          string `json:"status"`
-	Label           string `json:"label"`
-	ExpiresAt       string `json:"expires_at,omitempty"`
-	Revision        string `json:"revision"`
+	Configured        bool   `json:"configured"`
+	WorksAuthorized   bool   `json:"works_authorized"`
+	PublishAuthorized bool   `json:"publish_authorized"`
+	Status            string `json:"status"`
+	Label             string `json:"label"`
+	ExpiresAt         string `json:"expires_at,omitempty"`
+	Revision          string `json:"revision"`
 }
 
 type accountOAuthStart struct {
@@ -72,20 +76,23 @@ type accountAuthorization struct {
 	AccessToken   string    `json:"access_token,omitempty"`
 	Label         string    `json:"label,omitempty"`
 	ReadWorks     bool      `json:"read_works,omitempty"`
+	PublishVideo  bool      `json:"publish_video,omitempty"`
 	ExpiresAt     time.Time `json:"expires_at,omitzero"`
 }
 
 type accountAttempt struct {
-	binding       string
-	state         string
-	revision      string
-	settings      OAuthSettings
-	redirect      *url.URL
-	expires       time.Time
-	consumed      bool
-	readWorks     bool
-	callbackWorks bool
-	timer         *time.Timer
+	binding         string
+	state           string
+	revision        string
+	settings        OAuthSettings
+	redirect        *url.URL
+	expires         time.Time
+	consumed        bool
+	readWorks       bool
+	callbackWorks   bool
+	publishVideo    bool
+	callbackPublish bool
+	timer           *time.Timer
 }
 
 func (p *SearchApp) AccountAuthorization() (AccountAuthorizationView, error) {
@@ -100,6 +107,7 @@ func (p *SearchApp) accountView(record accountAuthorization) AccountAuthorizatio
 	}
 	view.Configured = true
 	view.WorksAuthorized = record.ReadWorks
+	view.PublishAuthorized = record.PublishVideo
 	view.Label = record.Label
 	view.ExpiresAt = record.ExpiresAt.UTC().Format(time.RFC3339)
 	view.Status = "ready"
@@ -133,17 +141,17 @@ func (p *SearchApp) AuthorizeAccount(ctx context.Context, binding string, in Acc
 	case "begin":
 		return p.beginAccountAuthorization(binding, in)
 	case "complete":
-		if in.ReadWorks || in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.Revision != "" || in.State != "" {
+		if in.ReadWorks || in.PublishVideo || in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.Revision != "" || in.State != "" {
 			return nil, ErrAccountInput
 		}
 		return p.completeAccountAuthorization(ctx, binding, in.CallbackURL)
 	case "cancel":
-		if in.ReadWorks || in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.Revision != "" || in.CallbackURL != "" || len(in.State) != 48 {
+		if in.ReadWorks || in.PublishVideo || in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.Revision != "" || in.CallbackURL != "" || len(in.State) != 48 {
 			return nil, ErrAccountInput
 		}
 		return p.cancelAccountAuthorization(binding, in.State)
 	case "disconnect":
-		if in.ReadWorks || in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.CallbackURL != "" || in.State != "" {
+		if in.ReadWorks || in.PublishVideo || in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.CallbackURL != "" || in.State != "" {
 			return nil, ErrAccountInput
 		}
 		return p.disconnectAccount(ctx, in.Revision)
@@ -166,6 +174,9 @@ func (p *SearchApp) beginAccountAuthorization(binding string, in AccountAuthoriz
 	if in.ReadWorks {
 		scopes = append(scopes, accountWorksScope)
 	}
+	if in.PublishVideo {
+		scopes = append(scopes, accountPublishScope, accountPostingScope)
+	}
 	authorizeURL, err := AuthorizationURL(settings, scopes, state)
 	if err != nil {
 		return accountOAuthStart{}, ErrAccountInput
@@ -183,7 +194,7 @@ func (p *SearchApp) beginAccountAuthorization(binding string, in AccountAuthoriz
 		return accountOAuthStart{}, ErrAccountIdentity
 	}
 	p.clearAccountAttempt()
-	attempt := &accountAttempt{binding: binding, state: state, revision: record.Revision, settings: settings, redirect: redirect, readWorks: in.ReadWorks, expires: p.nowUTC().Add(accountOAuthLifetime)}
+	attempt := &accountAttempt{binding: binding, state: state, revision: record.Revision, settings: settings, redirect: redirect, readWorks: in.ReadWorks, publishVideo: in.PublishVideo, expires: p.nowUTC().Add(accountOAuthLifetime)}
 	attempt.timer = time.AfterFunc(accountOAuthLifetime, func() {
 		p.accountMu.Lock()
 		defer p.accountMu.Unlock()
@@ -220,12 +231,13 @@ func (p *SearchApp) consumeAccountCallback(binding, raw string) (*accountAttempt
 	if attempt == nil || attempt.consumed || attempt.binding != binding || !p.nowUTC().Before(attempt.expires) {
 		return nil, "", ErrAccountCallback
 	}
-	code, callbackWorks, err := accountCallbackCode(raw, attempt)
+	code, callbackWorks, callbackPublish, err := accountCallbackCode(raw, attempt)
 	if err != nil {
 		return nil, "", err
 	}
 	attempt.consumed = true
 	attempt.callbackWorks = callbackWorks
+	attempt.callbackPublish = callbackPublish
 	return attempt, code, nil
 }
 
@@ -274,7 +286,7 @@ func (p *SearchApp) completeAccountAuthorization(ctx context.Context, binding, c
 	if !p.nowUTC().Before(grant.ExpiresAt) {
 		return AccountAuthorizationView{}, ErrAccountProfile
 	}
-	next := accountAuthorization{SchemaVersion: 1, Revision: revision, ClientKey: attempt.settings.ClientKey, OpenID: grant.OpenID, AccessToken: grant.AccessToken, Label: accountLabel(profile.Nickname), ReadWorks: attempt.readWorks && attempt.callbackWorks && hasAccountWorksScope(grant.Scope), ExpiresAt: grant.ExpiresAt.UTC()}
+	next := accountAuthorization{SchemaVersion: 1, Revision: revision, ClientKey: attempt.settings.ClientKey, OpenID: grant.OpenID, AccessToken: grant.AccessToken, Label: accountLabel(profile.Nickname), ReadWorks: attempt.readWorks && attempt.callbackWorks && hasAccountWorksScope(grant.Scope), PublishVideo: attempt.publishVideo && attempt.callbackPublish && hasAccountPublishScopes(grant.Scope), ExpiresAt: grant.ExpiresAt.UTC()}
 	if err := p.writeAccount(next); err != nil {
 		return AccountAuthorizationView{}, err
 	}
@@ -321,33 +333,38 @@ func accountRedirectURI(raw string) *url.URL {
 	return u
 }
 
-func accountCallbackCode(raw string, attempt *accountAttempt) (string, bool, error) {
+func accountCallbackCode(raw string, attempt *accountAttempt) (string, bool, bool, error) {
 	if len(raw) > 8192 || strings.ContainsAny(raw, "#\\") {
-		return "", false, ErrAccountCallback
+		return "", false, false, ErrAccountCallback
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Opaque != "" || u.User != nil || u.Scheme != attempt.redirect.Scheme ||
 		u.Host != attempt.redirect.Host || oauthCallbackPath(u) != oauthCallbackPath(attempt.redirect) {
-		return "", false, ErrAccountCallback
+		return "", false, false, ErrAccountCallback
 	}
 	params, err := url.ParseQuery(u.RawQuery)
 	if err != nil || len(params) != 3 || len(params["code"]) != 1 || len(params["state"]) != 1 || len(params["scopes"]) != 1 ||
 		subtle.ConstantTimeCompare([]byte(params.Get("state")), []byte(attempt.state)) != 1 {
-		return "", false, ErrAccountCallback
+		return "", false, false, ErrAccountCallback
 	}
 	code := params.Get("code")
 	if code == "" || len(code) > 4096 || strings.ContainsFunc(code, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return "", false, ErrAccountCallback
+		return "", false, false, ErrAccountCallback
 	}
 	if !slices.Contains(strings.Split(params.Get("scopes"), ","), accountScope) {
-		return "", false, ErrAccountScope
+		return "", false, false, ErrAccountScope
 	}
-	return code, hasAccountWorksScope(params.Get("scopes")), nil
+	return code, hasAccountWorksScope(params.Get("scopes")), hasAccountPublishScopes(params.Get("scopes")), nil
 }
 
 func hasAccountWorksScope(scopes string) bool {
 	values := strings.Split(scopes, ",")
 	return slices.Contains(values, accountWorksScope) || slices.Contains(values, "video.list")
+}
+
+func hasAccountPublishScopes(scopes string) bool {
+	values := strings.Split(scopes, ",")
+	return slices.Contains(values, accountPublishScope) && slices.Contains(values, accountPostingScope)
 }
 
 func oauthCallbackPath(u *url.URL) string {
@@ -422,7 +439,7 @@ func (p *SearchApp) readAccount() (accountAuthorization, error) {
 		return accountAuthorization{}, apphost.ErrUnavailable
 	}
 	if record.AccessToken == "" {
-		if record.ReadWorks || record.ClientKey != "" || record.OpenID != "" || record.Label != "" || !record.ExpiresAt.IsZero() {
+		if record.ReadWorks || record.PublishVideo || record.ClientKey != "" || record.OpenID != "" || record.Label != "" || !record.ExpiresAt.IsZero() {
 			return accountAuthorization{}, apphost.ErrUnavailable
 		}
 	} else if record.ClientKey == "" || record.OpenID == "" || record.Label != accountLabel(record.Label) || record.ExpiresAt.IsZero() {

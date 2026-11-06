@@ -60,6 +60,16 @@
       ],
       "discoverable": true,
       "requires_owner_setting": "explicit-owner-works-oauth"
+    },
+    {
+      "id": "publication.video",
+      "implementation": "ready",
+      "description": "显式授权后分阶段上传、创建并按原作品标识核对抖音视频",
+      "permissions": [
+        "network"
+      ],
+      "discoverable": true,
+      "requires_owner_setting": "explicit-owner-publish-oauth"
     }
   ]
 }
