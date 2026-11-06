@@ -21,6 +21,7 @@ type legacyWechatSnapshotArgs struct {
 	accountID     string
 	applyDigest   string
 	verify        bool
+	audit         bool
 }
 
 func parseLegacyWechatSnapshotArgs(args []string) (legacyWechatSnapshotArgs, error) {
@@ -31,10 +32,20 @@ func parseLegacyWechatSnapshotArgs(args []string) (legacyWechatSnapshotArgs, err
 	accountID := flags.String("account", "", "快照所属的主账号标识")
 	applyDigest := flags.String("apply", "", "确认预演返回的摘要后写入快照")
 	verify := flags.Bool("verify", false, "只校验已有快照")
+	audit := flags.Bool("audit", false, "只读审计旧微信待交接队列")
 	if err := flags.Parse(args); err != nil {
 		return legacyWechatSnapshotArgs{}, err
 	}
-	if flags.NArg() != 0 || *snapshotDir == "" || !filepath.IsAbs(*snapshotDir) {
+	if flags.NArg() != 0 {
+		return legacyWechatSnapshotArgs{}, errors.New("微信交接快照不接受位置参数")
+	}
+	if *audit {
+		if *snapshotDir != "" || *applyDigest != "" || *verify || *legacyDataDir == "" || !filepath.IsAbs(*legacyDataDir) || *accountID == "" {
+			return legacyWechatSnapshotArgs{}, errors.New("审计旧微信队列时仅使用 --audit --legacy-data <绝对目录> --account <账号>")
+		}
+		return legacyWechatSnapshotArgs{legacyDataDir: *legacyDataDir, accountID: *accountID, audit: true}, nil
+	}
+	if *snapshotDir == "" || !filepath.IsAbs(*snapshotDir) {
 		return legacyWechatSnapshotArgs{}, errors.New("微信交接快照需要明确指定 snapshot 绝对目录")
 	}
 
@@ -63,6 +74,13 @@ func runLegacyWechatSnapshot(ctx context.Context, args []string, output io.Write
 	request, err := parseLegacyWechatSnapshotArgs(args)
 	if err != nil {
 		return err
+	}
+	if request.audit {
+		result, err := station.AuditLegacyWechatQueue(ctx, request.legacyDataDir, request.accountID)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(result)
 	}
 	result, err := station.CaptureLegacyWechatSnapshot(ctx, station.LegacyWechatSnapshotRequest{
 		LegacyDataDir:  request.legacyDataDir,

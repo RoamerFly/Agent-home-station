@@ -33,6 +33,14 @@ func TestParseLegacyWechatSnapshotArgs(t *testing.T) {
 	if !verify.verify || verify.snapshotDir != filepath.Clean(snapshot) || verify.legacyDataDir != "" || verify.accountID != "" {
 		t.Fatalf("verify arguments = %#v", verify)
 	}
+
+	audit, err := parseLegacyWechatSnapshotArgs([]string{"--audit", "--legacy-data", legacyData, "--account", "desktop"})
+	if err != nil {
+		t.Fatalf("audit arguments: %v", err)
+	}
+	if !audit.audit || audit.legacyDataDir != filepath.Clean(legacyData) || audit.accountID != "desktop" || audit.snapshotDir != "" || audit.verify {
+		t.Fatalf("audit arguments = %#v", audit)
+	}
 }
 
 func TestParseLegacyWechatSnapshotArgsRejectsAmbiguousInput(t *testing.T) {
@@ -44,6 +52,9 @@ func TestParseLegacyWechatSnapshotArgsRejectsAmbiguousInput(t *testing.T) {
 		{"--legacy-data", legacyData, "--snapshot", snapshot},
 		{"--snapshot", snapshot, "--verify", "--account", "desktop"},
 		{"--snapshot", snapshot, "--verify", "--legacy-data", legacyData},
+		{"--audit", "--legacy-data", legacyData, "--account", "desktop", "--snapshot", snapshot},
+		{"--audit", "--legacy-data", legacyData, "--account", "desktop", "--apply", "preview-digest"},
+		{"--audit", "--legacy-data", legacyData},
 		{"--snapshot", snapshot, "--verify", "unexpected"},
 	} {
 		if _, err := parseLegacyWechatSnapshotArgs(args); err == nil {

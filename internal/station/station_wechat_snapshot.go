@@ -179,21 +179,34 @@ func planLegacyWechatSnapshot(ctx context.Context, source *os.Root, oldRoot, pri
 }
 
 func (p *legacySnapshotPlan) snapshotAccounts(root *os.Root, primary string) ([]string, error) {
-	accounts := []string{primary}
 	registryPath := filepath.Join("admin", "accounts.json")
 	raw, err := readLegacyImportFile(root, registryPath, 1<<20)
 	if errors.Is(err, os.ErrNotExist) {
-		return accounts, nil
+		return []string{primary}, nil
 	}
-	var registered []wechatapp.LegacyAccountRecord
-	if err != nil || json.Unmarshal(raw, &registered) != nil {
+	if err != nil {
 		return nil, errors.New("旧微信账号登记无效或不可读")
+	}
+	accounts, selected, err := legacySnapshotAccounts(raw, primary)
+	if err != nil {
+		return nil, err
+	}
+	safe, _ := json.Marshal(selected)
+	p.addSmall(registryPath, raw, safe)
+	return accounts, nil
+}
+
+func legacySnapshotAccounts(raw []byte, primary string) ([]string, []wechatapp.LegacyAccountRecord, error) {
+	accounts := []string{primary}
+	var registered []wechatapp.LegacyAccountRecord
+	if json.Unmarshal(raw, &registered) != nil {
+		return nil, nil, errors.New("旧微信账号登记无效或不可读")
 	}
 	seen := map[string]bool{primary: true}
 	selected := make([]wechatapp.LegacyAccountRecord, 0, len(registered))
 	for _, row := range registered {
 		if !identity.ValidPathID(row.ID) || seen[row.ID] {
-			return nil, errors.New("旧微信账号登记存在无效或重复身份")
+			return nil, nil, errors.New("旧微信账号登记存在无效或重复身份")
 		}
 		seen[row.ID] = true
 		if wechatapp.LegacyAccountRegistered(row) {
@@ -201,9 +214,7 @@ func (p *legacySnapshotPlan) snapshotAccounts(root *os.Root, primary string) ([]
 			selected = append(selected, row)
 		}
 	}
-	safe, _ := json.Marshal(selected)
-	p.addSmall(registryPath, raw, safe)
-	return accounts, nil
+	return accounts, selected, nil
 }
 
 func (p *legacySnapshotPlan) snapshotAccount(ctx context.Context, root *os.Root, config, queue, account, dataset string, checkSQLite bool) error {

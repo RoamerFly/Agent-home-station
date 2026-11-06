@@ -324,6 +324,14 @@ Windows 桌面在启动站和原生端之前取得数据根运行锁，并写入
 
 ### 准备旧微信启动器更新与恢复
 
+旧端服务停止后，可以先用成长站服务程序核对磁盘上的待办和投递。该命令只输出计数与状态，适用于尚未生成新版停机凭证的旧端。
+
+```powershell
+.\agent-home-station-server.exe legacy-wechat-snapshot --audit --legacy-data 'C:\Legacy\data' --account '<旧主账号 ID>'
+```
+
+`worker_delivery` 按接续时采用的规则统计文本和媒体回执，`worker_delivery_open` 单独统计旧队列中尚未终结的投递。两项口径不同，旧任务可已经结束但回执仍待核对。`waiting_wakes`、`inbox_pending`、`plan_pending` 和 `media_reply_pending` 用于核对普通启动可能恢复的工作。`admin_delivery` 是管理端独立账本，可能与其他记录指向同一平台操作。`stop_marker_present` 只说明文件存在，正常停机仍由快照预演验证。若本地仍有待唤醒任务、管理端未核对投递或原生队列状态未知，先准备受控交接方式，再启动旧端。
+
 只替换旧桌面入口 `WechatAgent.exe`。沿用桌面快捷方式的工作区与参数，管理端、原生运行文件、登录和其他数据继续使用现有目录。用当前源码构建旧端候选，使用不同于正式安装的构建目录。
 
 ```powershell
