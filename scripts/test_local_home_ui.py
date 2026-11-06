@@ -1245,6 +1245,7 @@ def verify_douyin_authorization(binary, output):
                     initial = {"revision": "", "configured": False, "status": "unconfigured", "label": "", "works_authorized": False, "publish_authorized": False}
                     verified = {"revision": "fixture-revision", "configured": True, "status": "ready", "label": "Synthetic Douyin account", "works_authorized": desktop, "publish_authorized": desktop, "refresh_available": True}
                     renewed = {**verified, "revision": "fixture-renewed", "expires_at": "2030-02-01T00:00:00Z"}
+                    expired = {**renewed, "status": "expired", "refresh_available": False}
                     authorization_view = initial if desktop else verified
                     redirect = "https://owner.example.test/callback"
 
@@ -1255,6 +1256,7 @@ def verify_douyin_authorization(binary, output):
                             return
                         body = route.request.post_data_json
                         if body["action"] == "begin":
+                            assert body["revision"] == authorization_view["revision"]
                             assert body.get("read_works") is desktop, "the optional works-list grant must match the checkbox"
                             assert body.get("publish_video") is desktop, "the optional video publishing grant must match the checkbox"
                             state = f"{len(attempts) + 1:048x}"
@@ -1387,6 +1389,20 @@ def verify_douyin_authorization(binary, output):
                     page.screenshot(path=str(output / "douyin-publication-desktop-dark.png"))
                     assert completed == [expected], "stale or repeated callback was submitted"
                     assert cancelled == [attempts[0]]
+                    authorization_view = expired
+                    page.reload()
+                    page.locator("#apps-tab").click()
+                    page.get_by_text("抖音授权已过期", exact=True).wait_for()
+                    page.get_by_text("重新扫码授权", exact=True).wait_for()
+                    page.get_by_role("button", name="打开扫码窗口").wait_for()
+                    assert page.get_by_role("button", name="续期授权").count() == 0
+                    assert_no_horizontal_overflow(page, "375-pixel expired Douyin authorization")
+                    begin()
+                    page.get_by_text("请在扫码窗口内扫描二维码", exact=False).wait_for()
+                    assert len(attempts) == 3
+                    emit({"type": "douyin-auth-callback", "state": attempts[2], "callback_url": callback(attempts[2])})
+                    page.get_by_text(verified["label"], exact=True).wait_for()
+                    assert completed == [expected, callback(attempts[2])]
                     context.close()
                 browser.close()
         finally:

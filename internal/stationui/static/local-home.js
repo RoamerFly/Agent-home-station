@@ -1568,8 +1568,9 @@
       return row;
     }
     const panel = appElement("details", "", "publication-oauth");
-    panel.open = Boolean(flow.state) || Boolean(current.douyinAuthorizationError);
-    panel.append(appElement("summary", authorization?.status === "ready" ? "重新扫码授权" : "扫码授权"));
+    panel.open = Boolean(flow.state) || Boolean(current.douyinAuthorizationError) ||
+      (authorization?.status === "expired" && !authorization.refresh_available);
+    panel.append(appElement("summary", authorization?.configured ? "重新扫码授权" : "扫码授权"));
     const form = appElement("form", "", "publication-oauth-form");
     const clientKey = document.createElement("input");
     clientKey.name = "client_key"; clientKey.autocomplete = "off"; clientKey.required = true; clientKey.placeholder = "抖音 Client Key"; clientKey.setAttribute("aria-label", "抖音 Client Key");
