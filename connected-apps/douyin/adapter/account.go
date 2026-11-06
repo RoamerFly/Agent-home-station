@@ -45,6 +45,7 @@ type AccountAuthorizationInput struct {
 	ClientSecret string `json:"client_secret"`
 	RedirectURI  string `json:"redirect_uri"`
 	CallbackURL  string `json:"callback_url"`
+	State        string `json:"state"`
 }
 
 type AccountAuthorizationView struct {
@@ -126,12 +127,17 @@ func (p *SearchApp) AuthorizeAccount(ctx context.Context, binding string, in Acc
 	case "begin":
 		return p.beginAccountAuthorization(binding, in)
 	case "complete":
-		if in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.Revision != "" {
+		if in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.Revision != "" || in.State != "" {
 			return nil, ErrAccountInput
 		}
 		return p.completeAccountAuthorization(ctx, binding, in.CallbackURL)
+	case "cancel":
+		if in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.Revision != "" || in.CallbackURL != "" || len(in.State) != 48 {
+			return nil, ErrAccountInput
+		}
+		return p.cancelAccountAuthorization(binding, in.State)
 	case "disconnect":
-		if in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.CallbackURL != "" {
+		if in.ClientKey != "" || in.ClientSecret != "" || in.RedirectURI != "" || in.CallbackURL != "" || in.State != "" {
 			return nil, ErrAccountInput
 		}
 		return p.disconnectAccount(ctx, in.Revision)
@@ -142,7 +148,7 @@ func (p *SearchApp) AuthorizeAccount(ctx context.Context, binding string, in Acc
 
 func (p *SearchApp) beginAccountAuthorization(binding string, in AccountAuthorizationInput) (accountOAuthStart, error) {
 	redirect := accountRedirectURI(in.RedirectURI)
-	if redirect == nil || in.CallbackURL != "" {
+	if redirect == nil || in.CallbackURL != "" || in.State != "" {
 		return accountOAuthStart{}, ErrAccountInput
 	}
 	state, err := accountNonce()
@@ -184,6 +190,17 @@ func (p *SearchApp) clearAccountAttempt() {
 		p.accountPending.timer.Stop()
 		p.accountPending = nil
 	}
+}
+
+func (p *SearchApp) cancelAccountAuthorization(binding, state string) (AccountAuthorizationView, error) {
+	p.accountMu.Lock()
+	defer p.accountMu.Unlock()
+	if attempt := p.accountPending; attempt != nil && attempt.binding == binding &&
+		subtle.ConstantTimeCompare([]byte(state), []byte(attempt.state)) == 1 {
+		p.clearAccountAttempt()
+	}
+	record, err := p.readAccount()
+	return p.accountView(record), err
 }
 
 func (p *SearchApp) consumeAccountCallback(binding, raw string) (*accountAttempt, string, error) {

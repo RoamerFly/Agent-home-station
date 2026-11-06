@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -1205,11 +1205,125 @@ def verify(binary, output):
             stop(process)
 
 
+
+def verify_douyin_authorization(binary, output):
+    """Replay the app bridge without any requests to Douyin."""
+    output.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="synthetic-douyin-auth-", dir=output) as directory:
+        root = Path(directory).resolve()
+        process, origin = start(binary, root / "host", root / "workspace")
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(channel="msedge", headless=True)
+                for desktop in (True, False):
+                    width = 375 if desktop else 1280
+                    context = browser.new_context(viewport={"width": width, "height": 800}, color_scheme="dark" if desktop else "light")
+                    page = context.new_page()
+                    if desktop:
+                        page.add_init_script("""(() => {
+                            const bridge = new EventTarget();
+                            window.fixtureOpenRequests = [];
+                            bridge.postMessage = message => window.fixtureOpenRequests.push(message);
+                            window.chrome.webview = bridge;
+                        })();""")
+                    page.route("https://open.douyin.com/**", lambda route: route.abort())
+                    page.route("**/api/apps", fulfill_json({"items": [{"id": "douyin", "name": "抖音"}]}))
+                    page.route("**/api/apps/douyin/connections", fulfill_json({"items": []}))
+                    attempts, cancelled, completed = [], [], []
+                    initial = {"revision": "", "configured": False, "status": "unconfigured", "label": ""}
+                    verified = {"revision": "fixture-revision", "configured": True, "status": "ready", "label": "Synthetic Douyin account"}
+                    redirect = "https://owner.example.test/callback"
+
+                    def authorization(route):
+                        if route.request.method == "GET":
+                            fulfill_json(verified if completed else initial)(route)
+                            return
+                        body = route.request.post_data_json
+                        if body["action"] == "begin":
+                            state = f"{len(attempts) + 1:048x}"
+                            attempts.append(state)
+                            query = urlencode({"client_key": "fixture-client", "response_type": "code", "scope": "user_info",
+                                               "redirect_uri": redirect, "state": state})
+                            fulfill_json({"authorize_url": "https://open.douyin.com/platform/oauth/connect?" + query,
+                                          "expires_at": "2030-01-01T00:00:00Z"})(route)
+                        elif body["action"] == "cancel":
+                            cancelled.append(body["state"])
+                            fulfill_json(initial)(route)
+                        elif body["action"] == "complete":
+                            completed.append(body["callback_url"])
+                            fulfill_json(verified)(route)
+                        else:
+                            raise AssertionError("unexpected action")
+
+                    page.route("**/api/local/apps/douyin/authorization", authorization)
+                    page.goto(origin)
+                    page.locator("#login-password").fill("synthetic-home-owner")
+                    page.locator("#login-submit").click()
+                    if desktop:
+                        page.locator("#initialize-button").click()
+                    page.locator("#apps-tab").click()
+                    page.get_by_text("尚未接入抖音账号", exact=True).wait_for()
+                    page.get_by_text("扫码授权", exact=True).click()
+
+                    def begin():
+                        page.get_by_label("抖音 Client Key").fill("fixture-client")
+                        page.get_by_label("抖音 Client Secret").fill("fixture-private-secret")
+                        page.get_by_label("抖音开放平台已登记的回调地址").fill(redirect)
+                        page.get_by_role("button", name="打开扫码窗口" if desktop else "生成授权链接").click()
+
+                    def callback(state):
+                        return redirect + "?" + urlencode({"code": "synthetic-code", "state": state, "scopes": "user_info"})
+
+                    def emit(message):
+                        page.evaluate("message => chrome.webview.dispatchEvent(new MessageEvent('message', {data: message}))", message)
+
+                    begin()
+                    if desktop:
+                        page.wait_for_function("window.fixtureOpenRequests.length === 1")
+                        opened = page.evaluate("window.fixtureOpenRequests[0]")
+                        assert opened["type"] == "douyin-auth-open" and opened["expires_at"]
+                        assert parse_qs(urlparse(opened["url"]).query)["state"] == attempts
+                        assert page.get_by_role("link", name="在浏览器中打开抖音授权").is_hidden()
+                        assert page.get_by_label("完整回调地址").is_hidden()
+                        assert page.get_by_role("button", name="打开扫码窗口").is_disabled()
+                        assert page.get_by_label("抖音 Client Secret").input_value() == ""
+                        assert_no_horizontal_overflow(page, "375-pixel Douyin authorization")
+                        page.screenshot(path=str(output / "douyin-auth-desktop-dark.png"))
+                        with page.expect_request(lambda req: req.url.endswith("/douyin/authorization") and req.method == "POST"
+                                                 and req.post_data_json.get("action") == "cancel"):
+                            emit({"type": "douyin-auth-closed", "state": attempts[0]})
+                        page.get_by_text("扫码窗口已关闭，未更改当前账号连接。", exact=True).first.wait_for()
+                        begin()
+                        page.wait_for_function("window.fixtureOpenRequests.length === 2")
+                        emit({"type": "douyin-auth-callback", "state": attempts[0], "callback_url": callback(attempts[0])})
+                        emit({"type": "douyin-auth-closed", "state": attempts[0]})
+                        for _ in range(2):
+                            emit({"type": "douyin-auth-callback", "state": attempts[1], "callback_url": callback(attempts[1])})
+                        expected = callback(attempts[1])
+                    else:
+                        page.get_by_role("link", name="在浏览器中打开抖音授权").wait_for()
+                        expected = callback(attempts[0])
+                        page.get_by_label("完整回调地址").fill(expected)
+                        page.get_by_role("button", name="完成网页授权").click()
+                    page.get_by_text(verified["label"], exact=True).wait_for()
+                    assert completed == [expected], "stale or repeated callback was submitted"
+                    assert cancelled == ([attempts[0]] if desktop else [])
+                    context.close()
+                browser.close()
+        finally:
+            stop(process)
+    print("Douyin authorization browser replay passed (Windows bridge and web fallback, no platform requests).")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--bare-binary", type=Path, help="optional executable without a sibling connected-apps directory")
+    parser.add_argument("--douyin-authorization-only", action="store_true")
     args = parser.parse_args()
-    verify(args.binary.resolve(), args.output.resolve())
-    verify_missing_source((args.bare_binary or args.binary).resolve(), args.output.resolve())
+    if args.douyin_authorization_only:
+        verify_douyin_authorization(args.binary.resolve(), args.output.resolve())
+    else:
+        verify(args.binary.resolve(), args.output.resolve())
+        verify_missing_source((args.bare_binary or args.binary).resolve(), args.output.resolve())

@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Text;
 using System.Windows.Forms;
+using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
 namespace WechatAgent.Desktop {
@@ -174,6 +175,69 @@ namespace WechatAgent.Desktop {
                 }
             } catch (SocketException) { return false; }
         }
+        static async Task DouyinAuthorizationTests(MainForm owner, Deployment deployment, WebView2 management) {
+            const string state = "111111111111111111111111111111111111111111111111";
+            const string auth = "https://open.douyin.com/platform/oauth/connect?client_key=fixture-client&response_type=code&scope=user_info&redirect_uri=https%3A%2F%2Fowner.example.test%2Fcallback&state=" + state;
+            const string qrPage = "https://open.douyin.com/platform/oauth/pc/auth?state=" + state;
+            const string callback = "https://owner.example.test/callback?code=synthetic-code&scopes=user_info&state=" + state;
+            var now = DateTimeOffset.UtcNow;
+            string expires = now.AddMinutes(3).ToString("o");
+            DouyinAuthorizationAttempt attempt, invalid;
+            Assert(DouyinAuthorizationPolicy.TryCreate(auth, expires, now, out attempt), "official authorization URL was rejected");
+            Assert(attempt.ExpiresAt == now.AddMinutes(3), "provider expiry must remain authoritative");
+            Assert(!DouyinAuthorizationPolicy.TryCreate(auth, now.ToString("o"), now, out invalid), "expired attempt was accepted");
+            Assert(!DouyinAuthorizationPolicy.TryCreate(auth.Replace("open.douyin.com", "open.douyin.com.example.test"), expires, now, out invalid), "foreign authority was accepted");
+            Assert(!DouyinAuthorizationPolicy.TryCreate(auth + "&state=" + state, expires, now, out invalid), "duplicate state was accepted");
+            Assert(attempt.AllowsNavigation(auth) && attempt.AllowsNavigation(qrPage), "official authorization navigation was rejected");
+            Assert(!DouyinAuthorizationPolicy.TryCreate(qrPage, expires, now, out invalid), "QR continuation was accepted as initial URL");
+            Assert(!attempt.AllowsNavigation("https://www.douyin.com/") && !attempt.AllowsNavigation("https://open.douyin.com/player/video"), "authorization must not open video or feed");
+            Assert(attempt.IsCallback(callback), "matching callback was rejected");
+            Assert(!attempt.IsCallback(callback + "&state=" + state) && !attempt.IsCallback(callback.Replace("/callback?", "/other?")) &&
+                !attempt.IsCallback(callback.Replace(state, "old-state")), "an unrelated callback was accepted");
+            await management.CoreWebView2.ExecuteScriptAsync(
+                "window.fixtureAuthReply = null; chrome.webview.addEventListener('message', event => window.fixtureAuthReply = event.data);" +
+                "chrome.webview.postMessage({type:'douyin-auth-open',url:'" + auth + "',expires_at:'" + now.AddMinutes(-1).ToString("o") + "'});");
+            string rejected = "";
+            for (int i = 0; i < 50 && rejected == ""; i++) {
+                var reply = await management.CoreWebView2.ExecuteScriptAsync("window.fixtureAuthReply");
+                if (reply != "null") rejected = reply;
+                else await Task.Delay(100);
+            }
+            Assert(rejected.Contains("douyin-auth-closed") && rejected.Contains(state) && owner.OwnedForms.Length == 0,
+                "desktop bridge did not reject and correlate an expired authorization request");
+            string result = null, closure = null;
+            int requests = 0;
+            bool callbackRequested = false;
+            using (var dialog = new DouyinAuthorizationDialog(deployment, auth, attempt, value => result = value, value => closure = value)) {
+                var popup = dialog.Controls.OfType<WebView2>().Single();
+                popup.CoreWebView2InitializationCompleted += delegate(object sender, CoreWebView2InitializationCompletedEventArgs args) {
+                    if (!args.IsSuccess) return;
+                    var core = popup.CoreWebView2;
+                    core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
+                    core.WebResourceRequested += delegate(object _, CoreWebView2WebResourceRequestedEventArgs e) {
+                        bool isAuth = e.Request.Uri == auth || e.Request.Uri == qrPage;
+                        if (isAuth) requests++;
+                        if (e.Request.Uri.StartsWith("https://owner.example.test/", StringComparison.Ordinal)) callbackRequested = true;
+                        string content = e.Request.Uri == auth
+                            ? "<script>location.replace('" + qrPage + "')</script>"
+                            : "<title>Synthetic QR authorization</title><p>Synthetic QR</p>";
+                        byte[] bytes = Encoding.UTF8.GetBytes("<!doctype html><link rel=icon href=data:,>" + content);
+                        e.Response = core.Environment.CreateWebResourceResponse(new MemoryStream(bytes), isAuth ? 200 : 403,
+                            isAuth ? "OK" : "Forbidden", "Content-Type: text/html; charset=utf-8");
+                    };
+                };
+                dialog.Show(owner);
+                await Wait(() => result != null || closure != null || popup.CoreWebView2 != null &&
+                    popup.CoreWebView2.DocumentTitle == "Synthetic QR authorization", "isolated authorization WebView did not render");
+                Assert(dialog.Owner == owner && dialog.Visible && !dialog.ShowInTaskbar, "authorization must be an owned application window");
+                Assert(requests == 2 && result == null && closure == null, "synthetic authorization page was not isolated and shown");
+                await popup.CoreWebView2.ExecuteScriptAsync("location.assign('" + callback + "')");
+                await Wait(() => dialog.IsDisposed, "callback did not close the authorization window");
+                Assert(result == callback && closure == null, "matching callback did not complete exactly once");
+                Assert(!callbackRequested, "callback escaped the authorization WebView");
+            }
+        }
+
         // This intentionally uses the actual local-station executable rather
         // than SyntheticPageServer.  It proves that the desktop owns only its
         // own child, authenticates its private session and can close it again.
@@ -202,6 +266,7 @@ namespace WechatAgent.Desktop {
                     if (!localPage) await Task.Delay(100);
                 }
                 Assert(localPage, "local station management page did not expose initialize or chat UI");
+                await DouyinAuthorizationTests(form, d, view);
                 form.Close();
                 await Wait(() => form.IsDisposed, "local station exit did not close its management window");
                 await Wait(() => !LocalPortOpen(d.Url), "local station exit left its owned service listening");

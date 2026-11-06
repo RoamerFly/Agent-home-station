@@ -117,6 +117,33 @@ func TestAccountAuthorizationPersistsOnlyVerifiedConnection(t *testing.T) {
 	}
 }
 
+func TestAccountAuthorizationCancelMatchesAttemptAndOwner(t *testing.T) {
+	app := New(t.TempDir())
+	ctx := context.Background()
+	_, staleState := startSyntheticAccount(t, app, "")
+	callback, state := startSyntheticAccount(t, app, "")
+	cancel := func(binding, state string) {
+		t.Helper()
+		if _, err := app.AuthorizeAccount(ctx, binding, AccountAuthorizationInput{Action: "cancel", State: state}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancel("owner/session", staleState)
+	cancel("other/session", state)
+	if app.accountPending == nil || app.accountPending.state != state {
+		t.Fatal("a stale or unrelated session cancelled the active attempt")
+	}
+	cancel("owner/session", state)
+	cancel("owner/session", state)
+	app.client.Transport = roundTrip(func(_ *http.Request) (*http.Response, error) {
+		t.Fatal("a cancelled authorization must never reach the provider")
+		return nil, nil
+	})
+	if _, err := app.AuthorizeAccount(ctx, "owner/session", AccountAuthorizationInput{Action: "complete", CallbackURL: callback}); !errors.Is(err, ErrAccountCallback) {
+		t.Fatalf("late callback after cancel: %v", err)
+	}
+}
+
 func TestAccountAuthorizationDisconnectWinsOverLateVerification(t *testing.T) {
 	app := New(t.TempDir())
 	ctx := context.Background()
