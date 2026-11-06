@@ -11,6 +11,7 @@ import (
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/apphttp"
+	"wechat-bot/internal/stationui"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 )
@@ -141,35 +142,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	// proves which local-station process it started; it is intentionally not a
 	// public stop surface and it never exposes application-account state.
 	mux.HandleFunc("GET /api/local/runtime", auth.Protect(handler.runtime))
-	for route, asset := range map[string]string{
-		"/": "local-home.html", "/assets/local-home.js": "local-home.js", "/assets/local-home.css": "local-home.css",
-		"/assets/whale-girl-cutout.png": "whale-girl-cutout.png", "/assets/night-sea.webp": "night-sea.webp",
-	} {
-		mux.HandleFunc("GET "+route, func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != route {
-				http.NotFound(w, r)
-				return
-			}
-			data, err := assets.ReadFile("static/" + asset)
-			if err != nil {
-				http.NotFound(w, r)
-				return
-			}
-			switch filepath.Ext(asset) {
-			case ".js":
-				w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-			case ".css":
-				w.Header().Set("Content-Type", "text/css; charset=utf-8")
-			case ".html":
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			}
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Header().Set("Referrer-Policy", "no-referrer")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-			_, _ = w.Write(data)
-		})
-	}
+	stationui.Register(mux)
 	return handler, nil
 }
 

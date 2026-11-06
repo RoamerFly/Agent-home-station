@@ -24,6 +24,7 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/admin"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/stationauth"
 )
 
 const defaultListen = "127.0.0.1:8082"
@@ -69,7 +70,7 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 		return err
 	}
 
-	password, err := admin.Password(cfg.dataDir, os.Getenv("AHS_ADMIN_PASSWORD"))
+	password, err := stationauth.Password(cfg.dataDir, os.Getenv("AHS_ADMIN_PASSWORD"))
 	if err != nil {
 		return err
 	}

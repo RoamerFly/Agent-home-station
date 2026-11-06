@@ -79,6 +79,66 @@ namespace WechatAgent.Desktop {
             var data = Path.Combine(workspace, "data", "station");
             return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "managed-workspaces"), StationExe = Path.Combine(workspace, "agent-home-station-server.exe"), StationNativeExe = Path.Combine(workspace, "runtimes", "windows-x64", "wx.exe"), Account = "", Music = "", Url = "http://127.0.0.1:8082", NativeUrl = "", StationNativeUrl = "" };
         }
+        // Keep the desktop's local-station login resolution identical to the
+        // Go server. The old Windows-native and WSL deployments retain their
+        // legacy admin paths in ServiceController.Login below.
+        internal static string LocalStationPassword(string root, string explicitPassword) {
+            bool found;
+            var password = ReadLocalStationPassword(root, "admin-password", out found);
+            if (found) return password;
+            if (explicitPassword != "") {
+                if (!ValidLocalStationPassword(explicitPassword)) throw new InvalidOperationException("本机主人环境变量密码格式无效。");
+                return explicitPassword;
+            }
+            password = ReadLocalStationPassword(root, "admin-token", out found);
+            if (found) return password;
+            // The Go child creates the bootstrap token before this desktop
+            // client logs in. Recreating it here could silently reset the
+            // owner credential after a damaged or incomplete data root.
+            throw new InvalidOperationException("本机主人凭据文件不可用。");
+        }
+        static string ReadLocalStationPassword(string root, string name, out bool found) {
+            found = false;
+            var path = Path.Combine(root, name);
+            FileAttributes attributes;
+            try { attributes = File.GetAttributes(path); }
+            catch (FileNotFoundException) { return ""; }
+            catch (DirectoryNotFoundException) { return ""; }
+            catch (IOException) { throw new InvalidOperationException("本机主人凭据文件不可用。"); }
+            catch (UnauthorizedAccessException) { throw new InvalidOperationException("本机主人凭据文件不可用。"); }
+            catch (ArgumentException) { throw new InvalidOperationException("本机主人凭据文件不可用。"); }
+            catch (NotSupportedException) { throw new InvalidOperationException("本机主人凭据文件不可用。"); }
+            found = true;
+            if ((attributes & (FileAttributes.Directory | FileAttributes.Device | FileAttributes.ReparsePoint)) != 0)
+                throw new InvalidOperationException("本机主人凭据文件不可用。");
+            try {
+                // Deliberately decode the raw bytes rather than File.ReadAllText:
+                // a UTF-8 BOM is data here, matching Go's strings.TrimSpace path.
+                var bytes = new byte[1025];
+                int length = 0;
+                using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1025, FileOptions.SequentialScan)) {
+                    while (length < bytes.Length) {
+                        int read = file.Read(bytes, length, bytes.Length - length);
+                        if (read == 0) break;
+                        length += read;
+                    }
+                    if (length > 1024) throw new InvalidOperationException("本机主人凭据文件格式无效。");
+                }
+                var password = new UTF8Encoding(false, true).GetString(bytes, 0, length).Trim();
+                if (!ValidLocalStationPassword(password)) throw new InvalidOperationException("本机主人凭据文件格式无效。");
+                return password;
+            } catch (InvalidOperationException) { throw; }
+            catch (IOException) { throw new InvalidOperationException("本机主人凭据文件不可用。"); }
+            catch (UnauthorizedAccessException) { throw new InvalidOperationException("本机主人凭据文件不可用。"); }
+            catch (DecoderFallbackException) { throw new InvalidOperationException("本机主人凭据文件格式无效。"); }
+            catch (ArgumentException) { throw new InvalidOperationException("本机主人凭据文件不可用。"); }
+            catch (NotSupportedException) { throw new InvalidOperationException("本机主人凭据文件不可用。"); }
+        }
+        static bool ValidLocalStationPassword(string value) {
+            if (value == null || value.IndexOfAny(new [] {'\0', '\r', '\n'}) >= 0 || !String.Equals(value, value.Trim(), StringComparison.Ordinal)) return false;
+            try { int bytes = new UTF8Encoding(false, true).GetByteCount(value); return bytes >= 5 && bytes <= 128; }
+            catch (EncoderFallbackException) { return false; }
+        }
         internal static string Text(Dictionary<string, object> data, string key) { object value; return data.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : ""; }
         internal string Identity { get { using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(Workspace.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant()))).Replace("-", "").Substring(0, 16); } }
         internal static string FindWorkspace(string[] args) {
@@ -155,7 +215,7 @@ namespace WechatAgent.Desktop {
         async Task<Dictionary<string, object>> Request(string path, object body) {
             using (var request = new HttpRequestMessage(body == null ? HttpMethod.Get : HttpMethod.Post, d.Url + path)) {
                 request.Headers.Add("Origin", d.Url);
-                request.Headers.Add("X-Wechat-Account", d.Account);
+                if (!d.LocalStation) request.Headers.Add("X-Wechat-Account", d.Account);
                 if (csrf != "") request.Headers.Add("X-CSRF-Token", csrf);
                 if (body != null) request.Content = new StringContent(Deployment.Json.Serialize(body), Encoding.UTF8, "application/json");
                 using (var response = await client.SendAsync(request)) {
@@ -166,9 +226,11 @@ namespace WechatAgent.Desktop {
         }
         internal async Task Login(CancellationToken token) {
             string password;
-            if (d.Windows || d.LocalStation) {
-                var path = d.LocalStation ? Path.Combine(d.Root, "admin-password") : Path.Combine(d.Root, "admin", "admin-password");
-                var fallback = d.LocalStation ? Path.Combine(d.Root, "admin-token") : Path.Combine(d.Root, "admin", "admin-token");
+            if (d.LocalStation) {
+                password = Deployment.LocalStationPassword(d.Root, Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD") ?? "");
+            } else if (d.Windows) {
+                var path = Path.Combine(d.Root, "admin", "admin-password");
+                var fallback = Path.Combine(d.Root, "admin", "admin-token");
                 if (!File.Exists(path)) path = fallback;
                 password = File.ReadAllText(path, Encoding.UTF8).Trim();
             } else {

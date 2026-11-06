@@ -15,6 +15,7 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/apphttp"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/stationui"
 	"wechat-bot/internal/websession"
 )
 
@@ -149,15 +150,12 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			return
 		}
 		name := r.URL.Path
+		if stationui.ServeLegacy(w, name) {
+			return
+		}
 		switch name {
 		case "/":
 			name = "index.html"
-		case "/local-home":
-			name = "local-home.html"
-		case "/assets/local-home.js":
-			name = "local-home.js"
-		case "/assets/local-home.css":
-			name = "local-home.css"
 		case "/app.js", "/assets/app.js":
 			name = "app.js"
 		case "/assets/voices.js":
@@ -208,8 +206,6 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			name = "palace-graph.js"
 		case "/assets/palace-graph.css":
 			name = "palace-graph.css"
-		case "/assets/night-sea.webp":
-			name = "night-sea.webp"
 		case "/assets/conversations.js":
 			name = "conversations.js"
 		case "/assets/rounds.js":
@@ -238,8 +234,6 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			name = "plugins.js"
 		case "/assets/whale-girl.png":
 			name = "whale-girl.png"
-		case "/assets/whale-girl-cutout.png":
-			name = "whale-girl-cutout.png"
 		case "/app.css", "/assets/app.css":
 			name = "app.css"
 		default:

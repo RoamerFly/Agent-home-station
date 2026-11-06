@@ -40,7 +40,7 @@ go build -o temp/local-home/agent-home-station.exe ./cmd/agent-home-station
 & ./temp/local-home/agent-home-station.exe
 ```
 
-打开 `http://127.0.0.1:8082`。空的测试安装默认管理密码为 `admin`；也可在启动前设置 `AHS_ADMIN_PASSWORD`。已有 `admin-password` 优先于环境变量，日志不输出口令。
+打开 `http://127.0.0.1:8082`。成长站和桌面自动登录使用相同顺序：先读站点私有目录的 `admin-password`，其次使用非空的 `AHS_ADMIN_PASSWORD`，最后读 `admin-token`。空的测试安装由服务首次写入默认口令 `admin`。环境变量口令不落盘，已有凭据继续原地读取。
 
 设置目录默认在可执行文件旁的 `data/station`，工作空间默认是其下的 `managed-workspaces`，均不受启动时当前目录影响。需要自定路径时使用绝对路径：
 

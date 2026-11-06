@@ -28,9 +28,11 @@ namespace WechatAgent.Desktop {
     }
     internal sealed class FakeWeb : HttpMessageHandler {
         internal List<string> Calls = new List<string>();
+        internal int AccountHeaders;
         internal bool Ready = true, WrongAccount, Offline, FailDrain;
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken unused) {
             string path = request.RequestUri.PathAndQuery; Calls.Add(path);
+            if (request.Headers.Contains("X-Wechat-Account")) AccountHeaders++;
             if (Offline && path == "/healthz") throw new HttpRequestException("offline");
             if (FailDrain && path.StartsWith("/api/runtime/drain")) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict));
             string body = "{}";
@@ -189,9 +191,42 @@ namespace WechatAgent.Desktop {
 
         static Deployment Config() { return new Deployment { Workspace = @"E:\synthetic workspace", Distro = "Synthetic", User = "synthetic", Root = "/home/synthetic/data", Account = "synthetic", Music = "wechat-agent-music.service" }; }
         static async Task Reject(Func<Task> action) { bool failed = false; try { await action(); } catch (Exception) { failed = true; } Assert(failed, "Expected refusal"); }
+        static async Task LocalStationCredentials() {
+            const string environmentPassword = "synthetic-env-owner-password";
+            const string managedPassword = "synthetic-managed-owner-password";
+            const string legacyToken = "synthetic-legacy-owner-token";
+            var root = Path.Combine(Path.GetTempPath(), "desktop station credential " + Guid.NewGuid().ToString("N"));
+            var prior = Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD");
+            Directory.CreateDirectory(root);
+            try {
+                // This intentionally uses the actual inherited environment to
+                // cover the first-login path before the Go server has written
+                // an admin-token.
+                Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", environmentPassword);
+                Assert(Deployment.LocalStationPassword(root, Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD")) == environmentPassword, "fresh station uses the nonempty owner environment exactly");
+                var utf8 = new System.Text.UTF8Encoding(false);
+                File.WriteAllText(Path.Combine(root, "admin-token"), legacyToken + "\n", utf8);
+                Assert(Deployment.LocalStationPassword(root, Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD")) == environmentPassword, "owner environment takes precedence over legacy token");
+                File.WriteAllText(Path.Combine(root, "admin-password"), managedPassword + "\n", utf8);
+                Assert(Deployment.LocalStationPassword(root, Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD")) == managedPassword, "managed password takes precedence across restart");
+                File.Delete(Path.Combine(root, "admin-password"));
+                Assert(Deployment.LocalStationPassword(root, "") == legacyToken, "legacy token remains the final managed fallback");
+                File.Delete(Path.Combine(root, "admin-token"));
+                await Reject(() => { Deployment.LocalStationPassword(root, ""); return Task.FromResult(0); });
+                File.WriteAllText(Path.Combine(root, "admin-password"), new string('x', 1025), utf8);
+                await Reject(() => { Deployment.LocalStationPassword(root, environmentPassword); return Task.FromResult(0); });
+                File.Delete(Path.Combine(root, "admin-password"));
+                Directory.CreateDirectory(Path.Combine(root, "admin-password"));
+                await Reject(() => { Deployment.LocalStationPassword(root, environmentPassword); return Task.FromResult(0); });
+            } finally {
+                Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", prior);
+                Directory.Delete(root, true);
+            }
+        }
         static async Task Tests() {
             Assert(Deployment.LocalUrl("http://127.0.0.1:8081/") == "http://127.0.0.1:8081", "legacy loopback URL accepts a trailing slash");
             Assert(Deployment.LocalUrl("http://127.0.0.1:80", true) == "http://127.0.0.1:80", "station native URL retains the explicit default HTTP port");
+            await LocalStationCredentials();
             var controlName = "Local\\WechatAgent.Tests." + Guid.NewGuid().ToString("N");
             using (var instance = new DesktopInstance(controlName)) {
                 Assert(DesktopInstance.RequestCommand("stop-services", controlName) && instance.StopRequested.WaitOne(0), "local stop command reaches owner");
@@ -216,6 +251,12 @@ namespace WechatAgent.Desktop {
                 Assert(stops.SequenceEqual(new [] { "systemctl --user stop wechat-bot-web.service", "systemctl --user stop wechat-agent-music.service", "systemctl --user stop wechat-bot-native.service" }), "stop order");
                 Assert(web.Calls.Contains("/api/runtime/drain?ticket=synthetic-ticket"), "must drain before stop");
                 Assert(!command.Calls.Any(x => x.Contains("--terminate") || x.Contains("shutdown") || x.Contains("powershell")), "never terminate shared WSL or launch scripts");
+            }
+            var localWeb = new FakeWeb();
+            var localDeployment = Deployment.LocalStationDefault(Path.Combine(Path.GetTempPath(), "desktop station request " + Guid.NewGuid().ToString("N")));
+            using (var local = new ServiceController(localDeployment, null, localWeb)) {
+                Assert(await local.Healthy(), "local station health request succeeds without a WeChat account");
+                Assert(localWeb.AccountHeaders == 0, "local station requests omit the retired WeChat account header");
             }
             command = new FakeCommands { Busy = true }; web = new FakeWeb(); var cancel = new CancellationTokenSource();
             using (var c = new ServiceController(Config(), command, web, (t, ct) => { cancel.Cancel(); ct.ThrowIfCancellationRequested(); return Task.FromResult(0); })) {
@@ -379,23 +420,40 @@ namespace WechatAgent.Desktop {
                 return 0;
             }
             if (args.Length == 2 && args[0] == "--local-cycle") {
+                const string environmentPassword = "synthetic-real-cycle-env-password";
+                const string managedPassword = "synthetic-real-cycle-managed-password";
+                var priorPassword = Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD");
                 var d = Deployment.LocalStationDefault(Path.GetFullPath(args[1]));
-                // A package may carry a wx runtime for an owner to opt into,
-                // but the zero-app station path must not start or require it.
-                Assert(!d.LocalStationNative, "default local station leaves wx opt-in disabled");
-                var reserved = new TcpListener(IPAddress.Loopback, new Uri(d.Url).Port);
+                d.Root = Path.Combine(d.Root, "credential-cycle-" + Guid.NewGuid().ToString("N"));
+                d.StationWorkspace = Path.Combine(d.Root, "managed-workspaces");
                 try {
-                    reserved.Start();
-                    using (var blocked = new ServiceController(d)) Reject(() => blocked.Start(CancellationToken.None)).GetAwaiter().GetResult();
-                } finally { reserved.Stop(); }
-                using (var c = new ServiceController(d)) {
-                    for (int i = 0; i < 2; i++) {
-                        c.Start(CancellationToken.None).GetAwaiter().GetResult();
-                        Assert(c.Healthy().GetAwaiter().GetResult(), "local station health after start");
-                        c.Stop(CancellationToken.None).GetAwaiter().GetResult();
+                    // The first real desktop login has no credential file and
+                    // therefore proves that the inherited environment reaches
+                    // both the Go child and ServiceController.Login. Before
+                    // the restart, install the legacy token plus managed
+                    // password; the managed value must win over that same env.
+                    Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", environmentPassword);
+                    Assert(!d.LocalStationNative, "default local station leaves wx opt-in disabled");
+                    var reserved = new TcpListener(IPAddress.Loopback, new Uri(d.Url).Port);
+                    try {
+                        reserved.Start();
+                        using (var blocked = new ServiceController(d)) Reject(() => blocked.Start(CancellationToken.None)).GetAwaiter().GetResult();
+                    } finally { reserved.Stop(); }
+                    using (var c = new ServiceController(d)) {
+                        for (int i = 0; i < 2; i++) {
+                            c.Start(CancellationToken.None).GetAwaiter().GetResult();
+                            Assert(c.Healthy().GetAwaiter().GetResult(), "local station health after start");
+                            c.Stop(CancellationToken.None).GetAwaiter().GetResult();
+                            if (i == 0) {
+                                Assert(!File.Exists(Path.Combine(d.Root, "admin-token")) && !File.Exists(Path.Combine(d.Root, "admin-password")), "env-only first login did not create or replace a managed credential");
+                                var utf8 = new System.Text.UTF8Encoding(false);
+                                File.WriteAllText(Path.Combine(d.Root, "admin-token"), "synthetic-real-cycle-legacy-token\n", utf8);
+                                File.WriteAllText(Path.Combine(d.Root, "admin-password"), managedPassword + "\n", utf8);
+                            }
+                        }
                     }
-                }
-                Console.WriteLine("LocalStation real service cycle passed twice; wx opt-in remained disabled."); return 0;
+                    Console.WriteLine("LocalStation real ServiceController login passed env-only then managed-password precedence across restart; wx opt-in remained disabled."); return 0;
+                } finally { Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", priorPassword); }
             }
             if (args.Length == 2 && args[0] == "--cycle") {
                 var config = Deployment.Load(args[1]);
