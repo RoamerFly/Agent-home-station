@@ -117,9 +117,18 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 						return
 					}
 				}
-				if plugin == localasr.PluginID && !stationMediaConfigSupported(input.Config) {
-					websession.Fail(w, 400, "当前连接支持远程视觉与远程语音识别配置")
-					return
+				if plugin == localasr.PluginID {
+					if !stationMediaConfigSupported(input.Config) {
+						websession.Fail(w, 400, "请选择受支持的媒体设置。本机识别资源由站点统一登记。")
+						return
+					}
+					backend, _ := stationASRBackend(input.Config.Values)
+					if backend == "local" {
+						if _, err := host.localASR.ready(ctx); err != nil {
+							websession.Fail(w, 409, "请先登记本机识别资源，并在项目工具中启用本地媒体识别。")
+							return
+						}
+					}
 				}
 				_, err = store.SaveConfiguration(ctx, plugin, input.Config)
 			case "enable":
@@ -156,9 +165,12 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 }
 
 func stationMediaConfigSupported(config pluginhost.ConfigUpdate) bool {
+	if _, ok := stationASRBackend(config.Values); !ok {
+		return false
+	}
 	for key := range config.Values {
 		switch key {
-		case "vision_endpoint", "vision_model", "vision_backend", "thinking", "reasoning_effort", "max_tokens", "asr_endpoint", "asr_model":
+		case "vision_endpoint", "vision_model", "vision_backend", "thinking", "reasoning_effort", "max_tokens", "asr_backend", "asr_endpoint", "asr_model":
 		default:
 			return false
 		}
@@ -174,4 +186,16 @@ func stationMediaConfigSupported(config pluginhost.ConfigUpdate) bool {
 		}
 	}
 	return true
+}
+
+func stationASRBackend(values map[string]json.RawMessage) (string, bool) {
+	raw, exists := values["asr_backend"]
+	if !exists {
+		return "remote", true
+	}
+	var backend string
+	if json.Unmarshal(raw, &backend) != nil || (backend != "remote" && backend != "local") {
+		return "", false
+	}
+	return backend, true
 }

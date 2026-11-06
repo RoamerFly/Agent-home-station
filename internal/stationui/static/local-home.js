@@ -1676,6 +1676,18 @@
       const configuration = value.configuration || {};
       const fields = new Map();
       const clear = new Map();
+      const asrRows = [];
+      let asrBackend = null, localASRNote = null;
+      if (media) {
+        const wrap = appElement("label", "语音识别方式", "details-grid");
+        asrBackend = document.createElement("select");
+        asrBackend.setAttribute("aria-label", "语音识别方式");
+        asrBackend.append(new Option("远程接口", "remote"), new Option("本机识别", "local"));
+        asrBackend.value = configuration.values?.asr_backend === "local" ? "local" : "remote";
+        wrap.append(asrBackend);
+        localASRNote = appElement("small", "使用主人已登记的本地媒体识别；不会改用远程接口。");
+        content.append(wrap, localASRNote);
+      }
       for (const [key, label, secret] of fieldsSpec) {
         const wrap = appElement("label", label, "details-grid");
         const field = document.createElement("input");
@@ -1686,6 +1698,7 @@
         fields.set(key, field);
         wrap.append(field);
         content.append(wrap);
+        if (media && key.startsWith("asr_")) asrRows.push(wrap);
         if (secret && configuration.configured_secrets?.includes(key)) {
           const clearLabel = appElement("label", "清除已保存的" + label);
           const checkbox = document.createElement("input");
@@ -1693,7 +1706,17 @@
           clear.set(key, checkbox);
           clearLabel.prepend(checkbox);
           content.append(clearLabel);
+          if (media && key.startsWith("asr_")) asrRows.push(clearLabel);
         }
+      }
+      if (asrBackend) {
+        const syncASRBackend = () => {
+          const local = asrBackend.value === "local";
+          asrRows.forEach((row) => { row.hidden = local; });
+          localASRNote.hidden = !local;
+        };
+        asrBackend.addEventListener("change", syncASRBackend);
+        syncASRBackend();
       }
       content.append(appSetupButton(media ? "保存媒体设置" : "保存解析设置", () => {
         const values = {};
@@ -1701,6 +1724,7 @@
           for (const key of ["vision_backend", "thinking", "reasoning_effort", "max_tokens"]) {
             if (configuration.values?.[key] !== undefined) values[key] = configuration.values[key];
           }
+          values.asr_backend = asrBackend?.value === "local" ? "local" : "remote";
         }
         const secrets = {};
         const clear_secrets = [];

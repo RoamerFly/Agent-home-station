@@ -1,10 +1,7 @@
 package station
 
-// The Bilibili audio bridge is deliberately station-owned.  It does not
-// borrow a WeChat account's media package, credentials, configuration, or
-// private workspace.  A local owner provisions one trusted ASR resource root
-// and selects one profile; the fish's own tool store then grants the packaged
-// media-understanding capability to use that profile.
+// The local ASR bridge uses the stable fish's tool grant and an owner-registered
+// resource root. Each application supplies its own check on the audio source.
 
 import (
 	"context"
@@ -45,11 +42,19 @@ type localStationASRBinding struct {
 	version   string
 }
 
-func (h *localHomeService) localBilibiliAudioCallbacks() (func(context.Context) (string, error), func(context.Context, []byte, func() error) (string, error)) {
-	return h.localBilibiliAudioVersion, h.transcribeBilibiliAudio
+type stationLocalASR struct {
+	version    func(context.Context) (string, error)
+	transcribe func(context.Context, []byte, func() error) (string, error)
 }
 
-func (h *localHomeService) localBilibiliAudioVersion(ctx context.Context) (string, error) {
+func (a stationLocalASR) ready(ctx context.Context) (string, error) {
+	if a.version == nil || a.transcribe == nil {
+		return "", errors.New("station_asr_host_unavailable")
+	}
+	return a.version(ctx)
+}
+
+func (h *localHomeService) localStationASRVersion(ctx context.Context) (string, error) {
 	binding, err := h.localStationASRBinding(ctx)
 	if err != nil {
 		return "", err
@@ -57,7 +62,7 @@ func (h *localHomeService) localBilibiliAudioVersion(ctx context.Context) (strin
 	return binding.version, nil
 }
 
-func (h *localHomeService) transcribeBilibiliAudio(ctx context.Context, wav []byte, originCheck func() error) (string, error) {
+func (h *localHomeService) transcribeLocalStationAudio(ctx context.Context, wav []byte, originCheck func() error) (string, error) {
 	if originCheck == nil {
 		return "", errors.New("station_asr_origin_check_missing")
 	}
@@ -134,7 +139,7 @@ func (h *localHomeService) localStationASRBinding(ctx context.Context) (localSta
 		json.Unmarshal(configuration.Values["local_asr_profile_id"], &selected) != nil || selected != registration.ProfileID {
 		return localStationASRBinding{}, errors.New("station_asr_profile_not_selected")
 	}
-	invocation := pluginhost.Invocation{Account: record.FishID, Thread: "station:bilibili", Requester: record.LocalOwner.ID, Purpose: "transcribe owner-approved public Bilibili audio", RequestKey: "station-bilibili-local-asr", Authorization: localStationASRRegistrationFile}
+	invocation := pluginhost.Invocation{Account: record.FishID, Thread: "station:local-asr", Requester: record.LocalOwner.ID, Purpose: "use the owner-registered local ASR profile", RequestKey: "station-local-asr", Authorization: localStationASRRegistrationFile}
 	grant := pluginhost.Grant{Account: record.FishID, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
 	if pluginhost.Authorize(installed.Package, grant, invocation, []string{"artifact.read", "model.invoke"}) != nil || !localStationASRCapabilityReady(ctx, host.store) {
 		return localStationASRBinding{}, errors.New("station_asr_permission_unavailable")
@@ -198,9 +203,8 @@ func (h *localHomeService) loadLocalStationASRRegistration() (localStationASRReg
 }
 
 // configureStationASR makes the owner-provisioned profile the only execution
-// choice for the station-local media tool. It deliberately clears the remote
-// ASR credential and endpoint fields: this Bilibili bridge never falls back to
-// a paid network service.
+// choice for the station-local media tool. It clears remote ASR credentials
+// and endpoints from the fish's separate tool store.
 func (s *localProjectTools) configureStationASR(ctx context.Context, host *localProjectToolHost) error {
 	if s == nil || s.home == nil || host == nil || host.store == nil {
 		return errors.New("station_asr_tool_store_unavailable")

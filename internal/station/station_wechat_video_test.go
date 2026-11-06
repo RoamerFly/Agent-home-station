@@ -23,6 +23,7 @@ import (
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/mediadecode"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/stationruntime"
@@ -175,6 +176,7 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 	if fetches.Load() != before {
 		t.Fatal("wrong or absent locator was downloaded")
 	}
+	assets := make(map[string]string)
 	for _, id := range []string{"card", "direct-no-object", "card", "normal-video", "normal-video"} {
 		result, err := call(id)
 		if err != nil {
@@ -197,10 +199,14 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 		if err != nil || !bytes.Equal(stored, data) {
 			t.Fatal("original cache mismatch", err)
 		}
+		assets[id] = value.Asset
 	}
 	if fetches.Load() != 2 || transfers.Load() != 1 {
 		t.Fatal("wrong transfer method or repeated download", fetches.Load(), transfers.Load())
 	}
+	t.Run("local_ASR_for_ordinary_video_and_Channels", func(t *testing.T) {
+		testStationLocalVideoASR(t, tools, assets, &blocked)
+	})
 	deny("rotates", "")
 	deny("corrupt", "wechat_video_probe_failed")
 	deny("revoked", "")
@@ -292,6 +298,84 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 	})
 	if mutations.Load() != 0 || fetches.Load() != before+expectedAutomaticFetches || transfers.Load() != 1 {
 		t.Fatal("unexpected original fetch or send during observation", mutations.Load(), fetches.Load(), transfers.Load())
+	}
+}
+
+func testStationLocalVideoASR(t *testing.T, tools *stationAttachmentTools, assets map[string]string, blocked *atomic.Bool) {
+	t.Helper()
+	const plugin = "media-understanding"
+	ctx := t.Context()
+	store, err := pluginhost.OpenStore(filepath.Join(t.TempDir(), "weChat-media"), "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	prepared, err := store.Prepare(ctx, filepath.Join("..", "..", "plugins", plugin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := store.Install(ctx, prepared.Token, prepared.Digest, []string{"artifact.read", "artifact.write", "model.invoke"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SaveConfiguration(ctx, plugin, pluginhost.ConfigUpdate{
+		Values:  map[string]json.RawMessage{"asr_backend": json.RawMessage(`"local"`), "asr_model": json.RawMessage(`"synthetic-must-not-call"`)},
+		Secrets: map[string]string{"asr_key": "synthetic-must-not-call"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SetEnabled(ctx, plugin, item.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	localCalls := 0
+	host := &stationShareHost{store: store,
+		postModel: func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+			t.Fatal("local backend tried the remote ASR route")
+			return nil, nil
+		},
+		localASR: stationLocalASR{transcribe: func(_ context.Context, wav []byte, verify func() error) (string, error) {
+			if len(wav) < 1000 || !bytes.HasPrefix(wav, []byte("RIFF")) || string(wav[8:12]) != "WAVE" {
+				t.Fatal("runner did not receive actual PCM WAV")
+			}
+			if err := verify(); err != nil {
+				return "", err
+			}
+			localCalls++
+			switch localCalls {
+			case 2:
+				return "", &mediaspec.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
+			case 3:
+				blocked.Store(true)
+				return "synthetic revoked transcript", verify()
+			default:
+				return "Synthetic local transcript.", nil
+			}
+		}},
+	}
+	copy := *tools
+	copy.shareHost = func() (*stationShareHost, error) { return host, nil }
+	defer blocked.Store(false)
+	observe := func(message, asset string) (string, error) {
+		t.Helper()
+		return copy.Call(ctx, "wechat_video_observe", json.RawMessage(fmt.Sprintf(`{"message_id":%q,"asset_id":%q,"mode":"audio","duration_seconds":0.5}`, message, asset)))
+	}
+	if out, err := observe("normal-video", assets["card"]); out != "" || err == nil || localCalls != 0 {
+		t.Fatal("the local runner accepted a source mismatch", out, err)
+	}
+	if out, err := observe("normal-video", assets["normal-video"]); err != nil || !strings.Contains(out, `"asr_backend":"local"`) || !strings.Contains(out, "Synthetic local transcript.") {
+		t.Fatal("ordinary video did not use the local runner", out, err)
+	}
+	if out, err := observe("card", assets["card"]); err != nil || !strings.Contains(out, `"transcription_state":"no_recognizable_speech"`) {
+		t.Fatal("video card did not preserve the local no-speech result", out, err)
+	}
+	if out, err := observe("card", assets["card"]); out != "" || err == nil || localCalls != 3 || host.usage != nil {
+		t.Fatal("revocation disclosed content or local ASR opened paid accounting", out, err, localCalls)
+	}
+	blocked.Store(false)
+	host.localASR = stationLocalASR{}
+	if out, err := observe("card", assets["card"]); out != "" || err == nil || err.Error() != "station_asr_host_unavailable" {
+		t.Fatal("missing local ASR did not fail without fallback", out, err)
 	}
 }
 

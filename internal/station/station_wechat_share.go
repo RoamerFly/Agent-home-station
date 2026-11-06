@@ -28,6 +28,7 @@ type stationShareHost struct {
 	controller *pluginruntime.Controller
 	send       pluginruntime.RouteTransport
 	postModel  pluginruntime.RouteTransport
+	localASR   stationLocalASR
 	usageMu    sync.Mutex
 	usage      *billing.Store
 }
@@ -61,7 +62,7 @@ func (s *stationWechat) shareHost(w *stationWechatWorker, account string) (*stat
 		return nil, err
 	}
 	controller.SetIdleTimeout(5 * time.Minute)
-	w.share = &stationShareHost{store: store, controller: controller, send: mcptools.PostPluginRoute}
+	w.share = &stationShareHost{store: store, controller: controller, send: mcptools.PostPluginRoute, localASR: s.localASR}
 	return w.share, nil
 }
 

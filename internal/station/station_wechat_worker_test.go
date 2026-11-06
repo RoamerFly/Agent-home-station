@@ -250,7 +250,8 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 		t.Fatal(media)
 	}
 	mediaRevision := media["revision"]
-	request(f, "PUT", mediaOne, map[string]any{"action": "configure", "revision": mediaRevision, "configuration": map[string]any{"values": map[string]any{"asr_backend": "local"}}}, true, 400)
+	request(f, "PUT", mediaOne, map[string]any{"action": "configure", "revision": mediaRevision, "configuration": map[string]any{"values": map[string]any{"asr_backend": "local"}}}, true, 409)
+	request(f, "PUT", mediaOne, map[string]any{"action": "configure", "revision": mediaRevision, "configuration": map[string]any{"values": map[string]any{"local_asr_profile_id": "caller-controlled"}}}, true, 400)
 	configuredMedia := request(f, "PUT", mediaOne, map[string]any{"action": "configure", "revision": mediaRevision, "configuration": map[string]any{
 		"values":  map[string]string{"vision_model": "synthetic-vision", "vision_endpoint": "https://vision.example/chat/completions"},
 		"secrets": map[string]string{"vision_key": "synthetic-vision-test-value"},
@@ -258,6 +259,27 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	encodedMedia, _ := json.Marshal(configuredMedia)
 	if strings.Contains(string(encodedMedia), "synthetic-vision-test-value") || !strings.Contains(string(encodedMedia), "vision_key") {
 		t.Fatal("media settings did not redact credential", configuredMedia)
+	}
+	mediaWorker, err := h.chat.wechat.worker(wechatapp.ConnectionID("one"), false)
+	if err != nil || mediaWorker == nil {
+		t.Fatal("synthetic media worker unavailable", err)
+	}
+	mediaHost, err := h.chat.wechat.shareHost(mediaWorker, "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaHost.localASR = stationLocalASR{
+		version: func(context.Context) (string, error) { return "synthetic-owner-asr-version", nil },
+		transcribe: func(context.Context, []byte, func() error) (string, error) {
+			return "", fmt.Errorf("unexpected transcription while saving settings")
+		},
+	}
+	configured := configuredMedia["configuration"].(map[string]any)
+	localMedia := request(f, "PUT", mediaOne, map[string]any{"action": "configure", "revision": configuredMedia["revision"], "configuration": map[string]any{
+		"revision": configured["revision"], "values": map[string]string{"asr_backend": "local", "vision_model": "synthetic-vision", "vision_endpoint": "https://vision.example/chat/completions"},
+	}}, true, 200)
+	if values := localMedia["configuration"].(map[string]any)["values"].(map[string]any); values["asr_backend"] != "local" || values["vision_model"] != "synthetic-vision" {
+		t.Fatal("local backend choice replaced the vision configuration", localMedia)
 	}
 	if other := request(f, "GET", mediaTwo, nil, false, 200); other["installed"] != false || other["configuration"] != nil {
 		t.Fatal("cross-connection media tool leaked", other)

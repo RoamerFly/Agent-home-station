@@ -1102,7 +1102,8 @@ def verify(binary, output):
                 assert worker["attachment_threads"] == [] and worker["media_reply_threads"] == []
                 assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": False}]
                 page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True).fill("")
-                page.get_by_role("button", name="保存回复范围").click()
+                with page.expect_response(lambda response: response.request.method == "PUT" and response.url.endswith("/policy")):
+                    page.get_by_role("button", name="保存回复范围").click()
                 page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
                 assert worker["group_mute_threads"] == []
                 expect(page.get_by_role("textbox", name="Agent 免打扰群 ID", exact=True)).to_have_value("")
@@ -1308,9 +1309,16 @@ def verify(binary, output):
                         elif body["action"] == "configure":
                             assert body["revision"] == media["revision"]
                             config = body["configuration"]
-                            assert config["values"] == {"vision_endpoint": "https://vision.example/chat/completions", "vision_model": "synthetic-vision"}
-                            assert config["secrets"] == {"vision_key": "synthetic-media-browser-key"}
-                            media["configuration"] = {"revision": 1, "values": config["values"], "configured_secrets": ["vision_key"]}
+                            if config["values"].get("asr_backend") == "local":
+                                assert config["values"] == {"vision_endpoint": "https://vision.example/chat/completions", "vision_model": "synthetic-vision",
+                                                            "asr_endpoint": "https://asr.example/transcriptions", "asr_model": "synthetic-asr", "asr_backend": "local"}
+                                assert config["secrets"] == {}
+                                media["configuration"] = {"revision": 1, "values": config["values"], "configured_secrets": ["vision_key", "asr_key"]}
+                            else:
+                                assert config["values"] == {"vision_endpoint": "https://vision.example/chat/completions", "vision_model": "synthetic-vision",
+                                                            "asr_endpoint": "https://asr.example/transcriptions", "asr_model": "synthetic-asr", "asr_backend": "remote"}
+                                assert config["secrets"] == {"vision_key": "synthetic-media-browser-key", "asr_key": "synthetic-asr-browser-key"}
+                                media["configuration"] = {"revision": 1, "values": config["values"], "configured_secrets": ["vision_key", "asr_key"]}
                         else:
                             assert body["revision"] == media["revision"]
                             media.update(enabled=body["action"] == "enable", revision=media["revision"] + 1)
@@ -1322,6 +1330,9 @@ def verify(binary, output):
                 page.get_by_label("视觉接口地址", exact=True).fill("https://vision.example/chat/completions")
                 page.get_by_label("视觉模型", exact=True).fill("synthetic-vision")
                 page.get_by_label("视觉接口密钥", exact=True).fill("synthetic-media-browser-key")
+                page.get_by_label("语音识别接口地址", exact=True).fill("https://asr.example/transcriptions")
+                page.get_by_label("语音识别模型", exact=True).fill("synthetic-asr")
+                page.get_by_label("语音识别接口密钥", exact=True).fill("synthetic-asr-browser-key")
                 page.get_by_role("button", name="保存媒体设置").click()
                 key_field = page.get_by_label("视觉接口密钥", exact=True).and_(page.get_by_placeholder("已配置，留空保留"))
                 key_field.wait_for()
@@ -1334,6 +1345,16 @@ def verify(binary, output):
                 page.get_by_role("button", name="启用媒体理解", exact=True).click()
                 page.get_by_role("button", name="停用媒体理解", exact=True).click()
                 page.get_by_role("button", name="启用媒体理解", exact=True).wait_for()
+                page.get_by_label("语音识别方式", exact=True).select_option("local")
+                page.get_by_text("使用主人已登记的本地媒体识别；不会改用远程接口。", exact=True).wait_for()
+                assert page.get_by_label("语音识别接口地址", exact=True).is_hidden(), "local ASR must hide only remote ASR fields"
+                assert page.get_by_label("视觉接口地址", exact=True).input_value() == "https://vision.example/chat/completions", "switching ASR must retain visual configuration"
+                with page.expect_response(lambda response: response.request.method == "PUT" and response.url.endswith("/media-understanding")):
+                    page.get_by_role("button", name="保存媒体设置").click()
+                expect(page.get_by_role("button", name="保存媒体设置")).to_be_enabled()
+                assert media["configuration"]["values"]["asr_backend"] == "local"
+                page.get_by_label("语音识别方式", exact=True).select_option("remote")
+                assert page.get_by_label("语音识别接口地址", exact=True).input_value() == "https://asr.example/transcriptions", "switching back must retain remote ASR settings"
                 page.get_by_text("媒体理解", exact=True).click()
                 # Reading delivery history and receipt checks must never post a send.
                 receipt_state = {"version": "first", "reads": 0, "checks": 0, "stops": 0, "resumes": 0, "continuation": None,

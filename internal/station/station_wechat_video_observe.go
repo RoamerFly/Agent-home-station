@@ -118,9 +118,17 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 	if err != nil {
 		return "", observationFailure("media_plugin_configuration_invalid", "无法读取当前连接的媒体理解设置。")
 	}
-	billing, err := host.mediaBilling(t.dir)
-	if err != nil {
-		return "", observationFailure("media_usage_record_failed", "无法打开当前连接的模型用量记录。")
+	backend, validBackend := stationASRBackend(config.Values)
+	if in.Mode == "audio" && !validBackend {
+		return "", observationFailure("media_transcription_configuration_invalid", "请在当前微信连接中重新保存语音识别方式。")
+	}
+	localAudio := in.Mode == "audio" && backend == "local"
+	var usage *billing.Store
+	if !localAudio {
+		usage, err = host.mediaBilling(t.dir)
+		if err != nil {
+			return "", observationFailure("media_usage_record_failed", "无法打开当前连接的模型用量记录。")
+		}
 	}
 	post := host.postModel
 	if post == nil {
@@ -174,12 +182,25 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 				Invocation:  func() pluginhost.Invocation { return invocation },
 				CheckOrigin: origin,
 				Controller:  func() (*pluginruntime.Controller, error) { return host.controller, nil },
-				Billing:     billing,
+				Billing:     usage,
 				Transport:   post,
 			})
 			return p.Observe(ctx)
 		}
 		err = stationObserveFrames(ctx, path, dir, in, meta, analyze, out)
+	} else if localAudio {
+		out["asr_backend"] = "local"
+		transcribe := func(ctx context.Context, wav []byte) (string, error) {
+			grant := pluginhost.Grant{Account: source.Account, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
+			if err := pluginhost.Authorize(installed.Package, grant, contextFor(nil), []string{"artifact.read", "model.invoke"}); err != nil {
+				return "", observationFailure("media_plugin_permissions_changed", "当前微信连接缺少媒体处理或模型调用授权。")
+			}
+			if host.localASR.transcribe == nil {
+				return "", observationFailure("station_asr_host_unavailable", "本机识别不可用。请核对已登记的资源及项目工具中的本地媒体识别。")
+			}
+			return host.localASR.transcribe(ctx, wav, func() error { return check(ctx) })
+		}
+		err = stationObserveAudio(ctx, path, dir, in, meta, transcribe, out)
 	} else {
 		transcribe := func(ctx context.Context, wav []byte) (string, error) {
 			var invocation pluginhost.Invocation
@@ -191,7 +212,7 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 					return host.controller, host.controller != nil, nil
 				},
 				Post:        post,
-				RecordUsage: mediatranscribe.UsageRecorder(billing),
+				RecordUsage: mediatranscribe.UsageRecorder(usage),
 			}, 1, wav)
 			if err != nil {
 				return "", err

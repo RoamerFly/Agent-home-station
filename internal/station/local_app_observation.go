@@ -36,7 +36,7 @@ func (h *localHomeService) bindBundledObservationApps(registry apphost.Registry)
 		switch id {
 		case biliapp.ID:
 			bili := biliapp.New(dir)
-			bili.SetAudioTranscriber(h.localBilibiliAudioCallbacks())
+			bili.SetAudioTranscriber(h.localStationASRVersion, h.transcribeLocalStationAudio)
 			entries = append(entries, bili.Registration())
 		case douyinapp.ID:
 			entries = append(entries, douyinapp.New(dir).Registration())

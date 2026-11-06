@@ -47,6 +47,7 @@ type stationWechat struct {
 	done                   chan struct{}
 	artifacts              stationservices.Artifacts
 	shareOptions           pluginruntime.Options
+	localASR               stationLocalASR
 	contactCursor          cipher.AEAD
 }
 
@@ -102,7 +103,7 @@ type stationWechatRun struct {
 	done   chan struct{}
 }
 
-func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts) (apphost.Registry, *stationWechat, error) {
+func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts, localASR stationLocalASR) (apphost.Registry, *stationWechat, error) {
 	entry, ok := registry.Lookup(wechatapp.ID)
 	native, supported := entry.Provider.(stationWechatNative)
 	if !ok || !supported || entry.Registration != "station-native" {
@@ -115,7 +116,7 @@ func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string,
 		dataDir: dataDir, workspaceRoot: workspaceRoot,
 		installation: entry.InstallationID, modelPersona: model.Persona, model: model.Client,
 		ctx: ctx, cancel: cancel, workers: map[string]*stationWechatWorker{}, done: make(chan struct{}),
-		artifacts: artifacts, shareOptions: shareOptions,
+		artifacts: artifacts, shareOptions: shareOptions, localASR: localASR,
 	}
 	var err error
 	host.contactCursor, err = newStationContactCursor()
