@@ -417,17 +417,17 @@ func (m *Manager) analyzeDeviceArtifact(ctx context.Context, t mobile.Task, a mo
 	if err != nil {
 		return "", "", err
 	}
-	text, err := policy.observe(ctx)
+	text, err := policy.Observe(ctx)
 	if err != nil {
 		return "", "", err
 	}
-	if err := policy.checkCompleted(ctx); err != nil {
+	if err := policy.CheckCompleted(ctx); err != nil {
 		return "", "", err
 	}
 	summary = "[手机实际录屏观察；没有音轨，不是原视频；" + coverage + "] " + text
 	assetID = ""
 	if t.Source.Account != "" && t.Source.Thread != "" && m.Config().Companion.Permissions.Remember {
-		if err := policy.checkCompleted(ctx); err != nil {
+		if err := policy.CheckCompleted(ctx); err != nil {
 			return "", "", err
 		}
 		in := companion.Input{Channel: "wechat", Account: t.Source.Account, Thread: t.Source.Thread, Sender: t.Source.Sender, TraceID: t.Source.MessageID, TaskID: t.ID, Text: t.Goal}
@@ -436,7 +436,7 @@ func (m *Manager) analyzeDeviceArtifact(ctx context.Context, t mobile.Task, a mo
 			assetID = asset.ID
 		}
 	}
-	if err := policy.checkCompleted(ctx); err != nil {
+	if err := policy.CheckCompleted(ctx); err != nil {
 		return "", "", err
 	}
 	m.record(bot.Record{Event: "mobile_recording_observed", Category: "tool", ThreadID: t.Source.Thread, Sender: t.Source.Sender, MessageID: t.ID, Content: summary, Status: "observed", Reason: "device_recording_without_audio", Origin: "mobile", Bytes: int64(len(data))})

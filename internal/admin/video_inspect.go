@@ -403,7 +403,7 @@ func (p *permittedTools) inspectVideoFrameRange(ctx context.Context, path, dir s
 		if e != nil {
 			return "", e
 		}
-		return policy.observe(analyzeCtx)
+		return policy.Observe(analyzeCtx)
 	}
 	return mediaobserve.InspectFrames(actorCtx, path, dir, mediaobserve.FrameOptions{Start: in.Start, Step: in.Step, BatchSize: in.BatchSize, MaxDimension: in.MaxDimension, Tokens: in.Tokens, Question: in.Question}, count, total, analyze)
 }
@@ -492,7 +492,7 @@ func (p *permittedTools) inspectPluginAudioRange(ctx context.Context, data []byt
 			}
 			// Silence can encode to equal PCM bytes. Include the requested range in
 			// the idempotency identity so continuation segments never collapse.
-			policy.requestSuffix = agentID(policy.requestSuffix, formatSeconds(segmentStart), formatSeconds(count))
+			policy.appendRequestSuffix(formatSeconds(segmentStart), formatSeconds(count))
 			return policy.transcribe(ctx)
 		})
 		noSpeech := mediaspec.IsNoSpeech(err)

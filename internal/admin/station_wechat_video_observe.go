@@ -21,7 +21,9 @@ import (
 	"wechat-bot/internal/mediadecode"
 	"wechat-bot/internal/mediaobserve"
 	"wechat-bot/internal/mediaspec"
+	"wechat-bot/internal/mediatranscribe"
 	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/transcript"
 )
 
@@ -163,22 +165,39 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 		"sha256": record.SHA256, "mode": in.Mode, "untrusted_external_content": true}
 	if in.Mode == "frames" {
 		analyze := func(ctx context.Context, prompt string, images []deepseek.Image, tokens int) (string, error) {
-			p, err := newMediaVisualPolicy(ctx, host.store, 1, prompt, images, tokens)
+			p, err := mediaobserve.NewVisual(ctx, host.store, 1, prompt, images, tokens)
 			if err != nil {
 				return "", err
 			}
-			p.invocationValue, p.originCheck, p.controller, p.billing, p.post = contextFor(p.arguments), origin, host.controller, billing, post
-			return p.observe(ctx)
+			invocation := contextFor(p.Arguments())
+			p.Bind(mediaobserve.VisualBinding{
+				Invocation:  func() pluginhost.Invocation { return invocation },
+				CheckOrigin: origin,
+				Controller:  func() (*pluginruntime.Controller, error) { return host.controller, nil },
+				Billing:     billing,
+				Transport:   post,
+			})
+			return p.Observe(ctx)
 		}
 		err = stationObserveFrames(ctx, path, dir, in, meta, analyze, out)
 	} else {
 		transcribe := func(ctx context.Context, wav []byte) (string, error) {
-			p, err := newMediaTranscriptionPolicyForStore(ctx, nil, host.store, 1, wav)
+			var invocation pluginhost.Invocation
+			p, err := mediatranscribe.New(ctx, mediatranscribe.Dependencies{
+				Store:       host.store,
+				Invocation:  func() pluginhost.Invocation { return invocation },
+				OriginCheck: origin,
+				Runtime: func(context.Context) (*pluginruntime.Controller, bool, error) {
+					return host.controller, host.controller != nil, nil
+				},
+				Post:        post,
+				RecordUsage: mediatranscribe.UsageRecorder(billing),
+			}, 1, wav)
 			if err != nil {
 				return "", err
 			}
-			p.invocationValue, p.originCheck, p.controller, p.billing, p.post = contextFor(p.arguments), origin, host.controller, billing, post
-			return p.transcribe(ctx)
+			invocation = contextFor(p.Arguments())
+			return p.Transcribe(ctx)
 		}
 		err = stationObserveAudio(ctx, path, dir, in, meta, transcribe, out)
 	}

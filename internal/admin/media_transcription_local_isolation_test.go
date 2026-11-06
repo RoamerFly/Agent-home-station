@@ -46,20 +46,20 @@ func TestLiveLocalMediaTranscriptionIsolationContract(t *testing.T) {
 	calls := 0
 	policy.runLocal = func(_ context.Context, got pluginhost.Package, grant pluginhost.Grant, profile localasr.Profile, wav []byte, timeout int) (string, string, error) {
 		calls++
-		if got.ID != localasr.PluginID || grant.Account != n.msg.AccountID || profile.Metadata() != expected.Initializer || string(wav) != string(policy.wav) || timeout < 1 {
+		if got.ID != localasr.PluginID || grant.Account != n.msg.AccountID || profile.Metadata() != expected.Initializer || string(wav) != string(policy.WAV()) || timeout < 1 {
 			t.Fatal("isolated package callback lost its bound local ASR contract")
 		}
 		return "transcribed", "synthetic isolated local transcript", nil
 	}
 	text, err := policy.transcribe(ctx)
-	if err != nil || text != "synthetic isolated local transcript" || calls != 1 || f.manager.billing.Totals().Requests != 0 || policy.completedJob.State != "completed" {
-		t.Fatal("isolated local ASR did not complete without provider transport", text, err, calls, f.manager.billing.Totals(), policy.completedJob)
+	if err != nil || text != "synthetic isolated local transcript" || calls != 1 || f.manager.billing.Totals().Requests != 0 || policy.CompletedJob().State != "completed" {
+		t.Fatal("isolated local ASR did not complete without provider transport", text, err, calls, f.manager.billing.Totals(), policy.CompletedJob())
 	}
 	var private struct {
 		Text   string `json:"text"`
 		Status string `json:"status"`
 	}
-	raw, err := policy.store.PrivateJobResult(ctx, policy.completedJob, func(ctx context.Context, job pluginhost.Job) error {
+	raw, err := policy.store.PrivateJobResult(ctx, policy.CompletedJob(), func(ctx context.Context, job pluginhost.Job) error {
 		return policy.Check(ctx, job, pluginhost.Capability{})
 	})
 	if err != nil || json.Unmarshal(raw, &private) != nil || private.Text != text || private.Status != "transcribed" {
