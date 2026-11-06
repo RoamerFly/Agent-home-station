@@ -67,7 +67,8 @@ namespace WechatAgent.Desktop {
                 var snapshotQueue = Path.Combine(snapshot, "bot-state", "messages-v2.json");
                 var originalQueue = File.ReadAllBytes(snapshotQueue);
                 var app = Path.GetDirectoryName(next.StationNativeRoot);
-                Write(Path.Combine(app, "legacy-import-source.json"), new { snapshot_root = snapshot, legacy_host_root = old.Root, primary_account = Account, snapshot_stopped = true });
+                Write(Path.Combine(app, "legacy-import-source.json"), new { snapshot_root = snapshot, legacy_host_root = old.Root,
+                    primary_account = Account, snapshot_stopped = true, snapshot_manifest_digest = Deployment.Text(verified, "manifest_digest") });
 
                 current.Start(CancellationToken.None).GetAwaiter().GetResult();
                 WaitHealthy(client, next.Url, current.CheckAlive);
@@ -83,9 +84,18 @@ namespace WechatAgent.Desktop {
                 Write(Path.Combine(app, "native-import-" + connection + ".json"), new { id = Account, storageMode = "managed", profilePath = profile });
                 var connectionUrl = next.Url + "/api/apps/wechat/connections/" + connection;
                 var importUrl = connectionUrl + "/legacy-import";
+                var snapshotManifest = Path.Combine(snapshot, "legacy-wechat-snapshot.json");
+                var heldManifest = Path.Combine(kit, "held-synthetic-manifest.json");
+                File.Move(snapshotManifest, heldManifest);
+                try { RejectSnapshotImport(client, HttpMethod.Get, importUrl, null); }
+                finally { File.Move(heldManifest, snapshotManifest); }
                 var plan = Read(client, importUrl);
                 ControllerTests.Assert(Convert.ToInt32(plan["receipt_records"]) == 1 && !Convert.ToBoolean(plan["same_native_dataset"]), "preview preserved the receipt from the old dataset");
-                ControllerTests.Assert(Convert.ToBoolean(ControllerTests.StationJSON(client, HttpMethod.Post, importUrl, new { digest = Deployment.Text(plan, "digest") })["applied"]), "station applied the read-only old receipt import");
+                var approvedImport = new { digest = Deployment.Text(plan, "digest") };
+                File.AppendAllText(snapshotQueue, "\n", Utf8);
+                try { RejectSnapshotImport(client, HttpMethod.Post, importUrl, approvedImport); }
+                finally { File.WriteAllBytes(snapshotQueue, originalQueue); }
+                ControllerTests.Assert(Convert.ToBoolean(ControllerTests.StationJSON(client, HttpMethod.Post, importUrl, approvedImport)["applied"]), "station applied the read-only old receipt import");
                 var oldReceipt = Read(client, connectionUrl + "/receipts/" + OldKey);
                 ControllerTests.Assert(Deployment.Text(oldReceipt, "state") == "accepted" && Deployment.Text(oldReceipt, "server_id") == "87111", "station retained the old accepted receipt and server ID");
                 var settings = Read(client, next.Url + "/api/local/model");
@@ -93,6 +103,13 @@ namespace WechatAgent.Desktop {
                 settings["base_url"] = "https://127.0.0.1:1";
                 ControllerTests.StationJSON(client, HttpMethod.Put, next.Url + "/api/local/model", settings);
                 ControllerTests.StationJSON(client, HttpMethod.Put, connectionUrl + "/policy", new { reply_threads = new [] { "filehelper" } });
+                File.AppendAllText(snapshotQueue, "\n", Utf8);
+                try {
+                    var blocked = Read(client, importUrl + "/activation");
+                    ControllerTests.Assert(Deployment.Text(blocked, "status") == "blocked" && Deployment.Text(blocked, "reason").Contains("完整性")
+                        && !File.Exists(Path.Combine(old.Root, "legacy-cutover-claim.json")), "activation rejects a tampered snapshot before claiming the old host");
+                    ControllerTests.Assert(Deployment.Text(Read(client, connectionUrl + "/receipts/" + OldKey), "state") == "accepted", "stored historical receipt remains available without rereading the changed source");
+                } finally { File.WriteAllBytes(snapshotQueue, originalQueue); }
                 var activation = Read(client, importUrl + "/activation");
                 ControllerTests.Assert(Deployment.Text(activation, "status") == "ready", "new station accepted the real old desktop's stop proof: " + Deployment.Text(activation, "reason"));
                 var confirmed = ControllerTests.StationJSON(client, HttpMethod.Post, importUrl + "/activation", new { digest = Deployment.Text(activation, "digest"), same_identity = true, reviewed_receipts = true });
@@ -217,6 +234,16 @@ namespace WechatAgent.Desktop {
 
         static Dictionary<string, object> Read(HttpClient client, string url) {
             return Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(url).GetAwaiter().GetResult());
+        }
+
+        static void RejectSnapshotImport(HttpClient client, HttpMethod method, string url, object payload) {
+            using (var request = new HttpRequestMessage(method, url)) {
+                if (payload != null) request.Content = new StringContent(Deployment.Json.Serialize(payload), Utf8, "application/json");
+                using (var response = client.SendAsync(request).GetAwaiter().GetResult()) {
+                    var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    ControllerTests.Assert((int)response.StatusCode == 422 && body.Contains("完整性"), "import refused an incomplete or changed pinned snapshot: " + (int)response.StatusCode);
+                }
+            }
         }
 
         static void Write(string path, object data) { WriteText(path, Deployment.Json.Serialize(data)); }

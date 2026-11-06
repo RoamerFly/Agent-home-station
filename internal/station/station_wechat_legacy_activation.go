@@ -172,10 +172,20 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 		return blocked("请先暂停此连接并等待工作器退出")
 	}
 	snapshot, source, err := s.openLegacyImport()
+	if errors.Is(err, errLegacySnapshotIntegrity) {
+		return blocked(errLegacySnapshotIntegrity.Error())
+	}
 	if err != nil {
 		return blocked("请保留原隔离快照及旧宿主目录，完成启用核对后再拆离快照")
 	}
 	defer snapshot.Close()
+	if !source.matchesArchive(archive) {
+		return blocked(errLegacySnapshotIntegrity.Error())
+	}
+	latest, err := s.previewLegacyImportFrom(ctx, id, native, daemon, snapshot, source)
+	if errors.Is(err, errLegacySnapshotIntegrity) {
+		return blocked(errLegacySnapshotIntegrity.Error())
+	}
 	cutover, evidence := s.checkLegacyCutover(ctx, id, native, snapshot, source, archive.LegacyServer)
 	view.legacyCutover = *cutover
 	if reason := activationMissing(view); reason != "" {
@@ -184,7 +194,6 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 	// The original archive stays authoritative. If the stopped source now
 	// shows different delivery evidence or a different legacy policy, an
 	// activation cannot silently abandon newly discovered records.
-	latest, err := s.previewLegacyImport(ctx, id)
 	if err != nil || !legacyMemoryCutoverReady(latest.Plan.Cutover) || !sameLegacyActivationSnapshot(archive, latest) {
 		return blocked("旧投递快照或账号规则与已保存的接入摘要不同，请先核对差异")
 	}
@@ -246,6 +255,7 @@ func activationMissing(view legacyActivationView) string {
 
 func sameLegacyActivationSnapshot(saved, current legacyImportArchive) bool {
 	return saved.LegacyServer == current.LegacyServer && saved.Plan.Account == current.Plan.Account &&
+		(saved.SnapshotManifestDigest == "" || saved.SnapshotManifestDigest == current.SnapshotManifestDigest) &&
 		(saved.SourceRevision == "" || saved.SourceRevision == current.SourceRevision) &&
 		saved.Plan.LegacyEnabled == current.Plan.LegacyEnabled && saved.Plan.LegacyPaused == current.Plan.LegacyPaused &&
 		slices.Equal(saved.Plan.SuggestedThreads, current.Plan.SuggestedThreads) && slices.Equal(saved.Plan.Omitted, current.Plan.Omitted) &&

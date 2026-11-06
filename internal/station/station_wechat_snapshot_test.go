@@ -15,6 +15,7 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/hostfile"
+	"wechat-bot/internal/workspacefs"
 )
 
 // TestCaptureLegacyWechatSnapshotWindows exercises the new, import-compatible
@@ -188,6 +189,83 @@ func TestCaptureLegacyWechatSnapshotRejectsUnsafeSources(t *testing.T) {
 			t.Fatal("legacy config reparse point was accepted")
 		}
 	})
+}
+
+func TestCapturedLegacyWechatSnapshotChecksBytesAtUse(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("captured snapshot privacy is a Windows contract")
+	}
+	base := t.TempDir()
+	legacy, snapshot := filepath.Join(base, "legacy"), filepath.Join(base, "snapshot")
+	fixture := newLegacyWechatSnapshotFixture(t, legacy)
+	request := LegacyWechatSnapshotRequest{LegacyDataDir: legacy, SnapshotDir: snapshot, PrimaryAccount: fixture.primary}
+	preview, err := CaptureLegacyWechatSnapshot(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ApplyDigest = preview.ApplyDigest
+	if _, err := CaptureLegacyWechatSnapshot(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	root, err := workspacefs.OpenPath(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	source := legacyImportSource{Root: snapshot, LegacyHostRoot: legacy, Primary: fixture.primary, ManifestDigest: preview.ManifestDigest, Stopped: true}
+	guard, err := loadLegacySnapshotGuard(root, source)
+	if err != nil || guard == nil || guard.digest() != preview.ManifestDigest {
+		t.Fatalf("guard did not bind the approved manifest: %v", err)
+	}
+	if err := guard.verify(t.Context(), root); err != nil {
+		t.Fatal(err)
+	}
+	wrong := source
+	wrong.Primary = fixture.secondary
+	if _, err := loadLegacySnapshotGuard(root, wrong); !errors.Is(err, errLegacySnapshotIntegrity) {
+		t.Fatalf("snapshot could be relabeled as another primary account: %v", err)
+	}
+	queue := filepath.Join("bot-state", "messages-v2.json")
+	queuePath := filepath.Join(snapshot, queue)
+	data := mustReadSnapshotFixture(t, queuePath)
+	mustWriteSnapshotFixture(t, queuePath, append(bytes.Clone(data), '\n'))
+	if _, err := guard.readFile(root, queue, 1<<20); !errors.Is(err, errLegacySnapshotIntegrity) {
+		t.Fatalf("changed bytes were accepted after the tree had been checked: %v", err)
+	}
+	mustWriteSnapshotFixture(t, queuePath, data)
+	config := filepath.Join("admin", "config.json")
+	if setting, _ := readLegacyGroupReplySettings(root, config, "123@chatroom", guard); setting.Status != "ready" {
+		t.Fatalf("verified group settings were not readable: %#v", setting)
+	}
+	configPath := filepath.Join(snapshot, config)
+	configData := mustReadSnapshotFixture(t, configPath)
+	mustWriteSnapshotFixture(t, configPath, append(bytes.Clone(configData), '\n'))
+	if setting, _ := readLegacyGroupReplySettings(root, config, "123@chatroom", guard); setting.Status == "ready" {
+		t.Fatal("group settings accepted changed configuration bytes")
+	}
+	mustWriteSnapshotFixture(t, configPath, configData)
+	memDir := filepath.Join("admin", "companion")
+	memPath := filepath.Join(memDir, legacyMemoryDB)
+	dir, err := workspacefs.OpenExistingDirectory(root, memDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	check := legacyMemorySnapshotCheck{guard: guard, relative: memPath}
+	if report, _ := readLegacyMemoryInventory(t.Context(), dir, fixture.primary, check); report.Status != "ready" {
+		t.Fatalf("verified memory inventory was not readable: %s", report.Status)
+	}
+	memory := mustReadSnapshotFixture(t, filepath.Join(snapshot, memPath))
+	memory[len(memory)-1] ^= 1
+	mustWriteSnapshotFixture(t, filepath.Join(snapshot, memPath), memory)
+	file, err := workspacefs.OpenRegular(dir, legacyMemoryDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err := guard.checkOpened(t.Context(), dir, memPath, file); !errors.Is(err, errLegacySnapshotIntegrity) {
+		t.Fatalf("changed SQLite bytes were accepted at the point of use: %v", err)
+	}
 }
 
 type legacyWechatSnapshotFixture struct {

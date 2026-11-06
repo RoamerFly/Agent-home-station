@@ -122,7 +122,15 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 		return legacyGroupSettingView{}, err
 	}
 	defer snapshot.Close()
-	config, _, err := legacyImportAccountPaths(snapshot, source.Primary, account)
+	if !source.matchesArchive(archive) {
+		return legacyGroupSettingView{}, errLegacySnapshotIntegrity
+	}
+	if source.guard != nil {
+		if err := source.guard.verify(ctx, snapshot); err != nil {
+			return legacyGroupSettingView{}, err
+		}
+	}
+	config, _, err := legacyImportAccountPaths(snapshot, source, account)
 	if err != nil {
 		return legacyGroupSettingView{}, err
 	}
@@ -138,18 +146,18 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 	var verifySource func() bool
 	var bindingFields []any
 	if replyRule {
-		setting, version := readLegacyGroupReplySettings(snapshot, config, thread)
+		setting, version := readLegacyGroupReplySettings(snapshot, config, thread, source.guard)
 		if setting.Status != "ready" {
 			return setting, nil
 		}
 		view = setting
 		bindingFields = []any{"legacy-group-reply-v1", version}
 		verifySource = func() bool {
-			freshConfig, _, err := legacyImportAccountPaths(snapshot, source.Primary, account)
+			freshConfig, _, err := legacyImportAccountPaths(snapshot, source, account)
 			if err != nil || freshConfig != config {
 				return false
 			}
-			_, freshVersion := readLegacyGroupReplySettings(snapshot, config, thread)
+			_, freshVersion := readLegacyGroupReplySettings(snapshot, config, thread, source.guard)
 			return version == freshVersion
 		}
 	} else {
@@ -158,7 +166,10 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 			return unavailable("not_ready", "未找到该账号的旧 SQLite 记忆副本")
 		}
 		defer dir.Close()
-		note, file, err := readStationLegacyScope(ctx, dir, account, thread, companion.ReadLegacyConversationPreference)
+		memoryCheck := legacyMemorySnapshotCheck{
+			guard: source.guard, relative: filepath.ToSlash(filepath.Join(filepath.Dir(config), "companion", legacyMemoryDB)),
+		}
+		note, file, err := readStationLegacyScope(ctx, dir, account, thread, companion.ReadLegacyConversationPreference, memoryCheck)
 		if err != nil {
 			return unavailable("not_ready", "旧库不完整或无法核对该群身份")
 		}
@@ -166,11 +177,17 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 			return unavailable("empty", "该群没有保存过可接续的文本备注")
 		}
 		view = legacyGroupSettingView{Status: "ready", Note: note}
-		bindingFields = []any{"legacy-group-note-v1", legacyMemoryVersion{file.Size(), file.ModTime().UTC()}, note}
+		bindingFields = []any{"legacy-group-note-v1", legacyMemoryVersion{Size: file.Size(), Modified: file.ModTime().UTC()}, note}
 		verifySource = func() bool {
 			fresh, err := dir.Lstat(legacyMemoryDB)
-			return err == nil && sameLegacyMemoryFile(file, fresh) && standaloneLegacyMemory(dir)
+			if err != nil || !sameLegacyMemoryFile(file, fresh) || !standaloneLegacyMemory(dir) {
+				return false
+			}
+			return source.guard == nil || checkLegacyMemorySnapshotFile(ctx, memoryCheck, dir) == nil
 		}
+	}
+	if source.guard != nil {
+		bindingFields = append(bindingFields, source.guard.digest())
 	}
 	binding, err := json.Marshal(append(bindingFields, s.installation, id, account, thread, archive.Plan.Digest,
 		source.Root, daemon.ServerID, daemon.OwnershipGeneration, evidence, reply, history, current))
@@ -223,9 +240,9 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 	return legacyGroupSettingView{Status: "applied"}, nil
 }
 
-func readLegacyGroupReplySettings(root *os.Root, config, thread string) (legacyGroupSettingView, string) {
+func readLegacyGroupReplySettings(root *os.Root, config, thread string, guard *legacySnapshotGuard) (legacyGroupSettingView, string) {
 	invalid := legacyGroupSettingView{Status: "not_ready", Reason: "旧配置不完整或无法核对该群规则"}
-	raw, err := readLegacyImportFile(root, config, 128<<10)
+	raw, err := guard.readFile(root, config, 128<<10)
 	if err != nil || !utf8.Valid(raw) {
 		return invalid, ""
 	}

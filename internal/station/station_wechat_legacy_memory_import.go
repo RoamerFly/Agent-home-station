@@ -168,7 +168,15 @@ func (s *stationWechat) legacyMemoryImport(ctx context.Context, id, thread, dige
 		return legacyMemoryImportView{}, err
 	}
 	defer snapshot.Close()
-	config, _, err := legacyImportAccountPaths(snapshot, source.Primary, account)
+	if !source.matchesArchive(archive) {
+		return legacyMemoryImportView{}, errLegacySnapshotIntegrity
+	}
+	if source.guard != nil {
+		if err := source.guard.verify(ctx, snapshot); err != nil {
+			return legacyMemoryImportView{}, err
+		}
+	}
+	config, _, err := legacyImportAccountPaths(snapshot, source, account)
 	if err != nil {
 		return legacyMemoryImportView{}, err
 	}
@@ -186,7 +194,9 @@ func (s *stationWechat) legacyMemoryImport(ctx context.Context, id, thread, dige
 	}
 	defer dir.Close()
 	item := stationLegacyMemory{Version: 1, Account: account, Thread: thread, Grant: grant}
-	selection, sourceFile, err := readStationLegacyScope(ctx, dir, account, thread, companion.ReadLegacyMemorySelection)
+	selection, sourceFile, err := readStationLegacyScope(ctx, dir, account, thread, companion.ReadLegacyMemorySelection, legacyMemorySnapshotCheck{
+		guard: source.guard, relative: filepath.ToSlash(filepath.Join(filepath.Dir(config), "companion", legacyMemoryDB)),
+	})
 	item.Selection = selection
 	if err != nil {
 		return notReady("旧记忆副本不完整、不可读或会话身份无法核对")
@@ -194,12 +204,13 @@ func (s *stationWechat) legacyMemoryImport(ctx context.Context, id, thread, dige
 	if len(item.Selection.Events) == 0 {
 		return legacyMemoryImportView{Status: "empty", Reason: "没有来源身份和版本均可核对的原始记录"}, nil
 	}
-	fingerprint, err := json.Marshal(struct {
+	binding := struct {
 		Installation, Connection, Source, Server, Generation string
 		Evidence                                             [2][32]byte
 		SourceVersion                                        legacyMemoryVersion
 		Item                                                 stationLegacyMemory
-	}{s.installation, id, source.Root, daemon.ServerID, daemon.OwnershipGeneration, evidence, legacyMemoryVersion{sourceFile.Size(), sourceFile.ModTime().UTC()}, item})
+	}{s.installation, id, source.Root, daemon.ServerID, daemon.OwnershipGeneration, evidence, legacyMemoryVersion{Size: sourceFile.Size(), Modified: sourceFile.ModTime().UTC(), SnapshotDigest: source.guard.digest()}, item}
+	fingerprint, err := json.Marshal(binding)
 	if err != nil || len(fingerprint) > legacyImportArchiveLimit {
 		return notReady("该会话的接续资料超过单次保存上限")
 	}
@@ -232,6 +243,13 @@ func (s *stationWechat) legacyMemoryImport(ctx context.Context, id, thread, dige
 	if current, err := dir.Lstat(legacyMemoryDB); err != nil || !sameLegacyMemoryFile(sourceFile, current) || !standaloneLegacyMemory(dir) {
 		return conflict("旧记忆副本在确认期间变化，请重新预演")
 	}
+	if source.guard != nil {
+		if err := checkLegacyMemorySnapshotFile(ctx, legacyMemorySnapshotCheck{
+			guard: source.guard, relative: filepath.ToSlash(filepath.Join(filepath.Dir(config), "companion", legacyMemoryDB)),
+		}, dir); err != nil {
+			return legacyMemoryImportView{}, err
+		}
+	}
 	if err := target.Link(temp, stationLegacyMemoryFile(account, thread)); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return conflict("此会话已存在接续记录，请刷新查看")
@@ -254,7 +272,7 @@ func checkLegacyMemoryDestination(ctx context.Context, worker *os.Root, account,
 		return legacyMemoryImportView{Status: "not_ready", Reason: "目标记忆暂时不可核对"}, false
 	}
 	defer dir.Close()
-	report, _ := readLegacyMemoryInventory(ctx, dir, account)
+	report, _ := readLegacyMemoryInventory(ctx, dir, account, legacyMemorySnapshotCheck{})
 	if report.Status == "missing" {
 		return legacyMemoryImportView{}, true
 	}
@@ -269,7 +287,7 @@ func checkLegacyMemoryDestination(ctx context.Context, worker *os.Root, account,
 	return legacyMemoryImportView{}, true
 }
 
-func readStationLegacyScope[T any](ctx context.Context, dir *os.Root, account, thread string, read func(context.Context, *os.File, string, string) (T, error)) (T, os.FileInfo, error) {
+func readStationLegacyScope[T any](ctx context.Context, dir *os.Root, account, thread string, read func(context.Context, *os.File, string, string) (T, error), check legacyMemorySnapshotCheck) (T, os.FileInfo, error) {
 	var empty T
 	if !standaloneLegacyMemory(dir) {
 		return empty, nil, errLegacyImportInvalid
@@ -287,10 +305,30 @@ func readStationLegacyScope[T any](ctx context.Context, dir *os.Root, account, t
 	if err != nil || !sameLegacyMemoryFile(before, actual) {
 		return empty, nil, errLegacyImportChanged
 	}
+	if check.guard != nil {
+		if err := check.guard.checkOpened(ctx, dir, check.relative, f); err != nil {
+			return empty, nil, err
+		}
+		if _, err := f.Seek(0, 0); err != nil {
+			return empty, nil, err
+		}
+	}
 	selection, err := read(ctx, f, account, thread)
 	after, statErr := dir.Lstat(legacyMemoryDB)
 	if statErr != nil || !sameLegacyMemoryFile(before, after) || !standaloneLegacyMemory(dir) {
 		return empty, nil, errLegacyImportChanged
 	}
 	return selection, before, err
+}
+
+func checkLegacyMemorySnapshotFile(ctx context.Context, check legacyMemorySnapshotCheck, dir *os.Root) error {
+	if check.guard == nil {
+		return nil
+	}
+	file, err := workspacefs.OpenRegular(dir, legacyMemoryDB)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return check.guard.checkOpened(ctx, dir, check.relative, file)
 }

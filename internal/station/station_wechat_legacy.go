@@ -17,6 +17,7 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/identity"
+	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -36,6 +37,8 @@ type legacyImportSource struct {
 	LegacyHostRoot string `json:"legacy_host_root,omitempty"`
 	Primary        string `json:"primary_account"`
 	Stopped        bool   `json:"snapshot_stopped"`
+	ManifestDigest string `json:"snapshot_manifest_digest,omitempty"`
+	guard          *legacySnapshotGuard
 }
 
 type legacyImportPlan struct {
@@ -58,8 +61,9 @@ type legacyImportArchive struct {
 	LegacyServer string                     `json:"legacy_server"`
 	Receipts     map[string]apphost.Receipt `json:"receipts"`
 	// Native source identifiers are private lookup evidence, never part of a receipt response.
-	ReceiptSources map[string]string `json:"receipt_sources,omitempty"`
-	SourceRevision string            `json:"source_revision,omitempty"`
+	ReceiptSources         map[string]string `json:"receipt_sources,omitempty"`
+	SourceRevision         string            `json:"source_revision,omitempty"`
+	SnapshotManifestDigest string            `json:"snapshot_manifest_digest,omitempty"`
 }
 
 type legacyImportPolicy struct {
@@ -193,20 +197,30 @@ func (s *stationWechat) openLegacyImport() (*os.Root, legacyImportSource, error)
 	if err != nil {
 		return nil, source, errLegacyImportInvalid
 	}
+	source.guard, err = loadLegacySnapshotGuard(root, source)
+	if err != nil {
+		root.Close()
+		return nil, source, err
+	}
 	return root, source, nil
 }
 
-func legacyImportAccountPaths(root *os.Root, primary, account string) (config, queue string, err error) {
+func (source legacyImportSource) matchesArchive(archive legacyImportArchive) bool {
+	return archive.SnapshotManifestDigest == "" || archive.SnapshotManifestDigest == source.guard.digest()
+}
+
+func legacyImportAccountPaths(root *os.Root, source legacyImportSource, account string) (config, queue string, err error) {
+	primary := source.Primary
 	if account == primary {
 		return filepath.Join("admin", "config.json"), "bot-state", nil
 	}
-	raw, err := readLegacyImportFile(root, filepath.Join("admin", "accounts.json"), 1<<20)
+	raw, err := source.guard.readFile(root, filepath.Join("admin", "accounts.json"), 1<<20)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", "", apphost.ErrNotFound
 	}
 	var records []wechatapp.LegacyAccountRecord
 	if err != nil || json.Unmarshal(raw, &records) != nil {
-		return "", "", errLegacyImportInvalid
+		return "", "", legacyImportReadError(err)
 	}
 	seen := map[string]bool{}
 	found := false
@@ -224,6 +238,13 @@ func legacyImportAccountPaths(root *os.Root, primary, account string) (config, q
 	}
 	digest := wechatapp.AccountDirectory(account)
 	return filepath.Join("admin", "accounts", digest, "config.json"), filepath.Join("bot-state", "accounts", digest), nil
+}
+
+func legacyImportReadError(err error) error {
+	if errors.Is(err, errLegacySnapshotIntegrity) {
+		return errLegacySnapshotIntegrity
+	}
+	return errLegacyImportInvalid
 }
 
 // legacyImportState is an entry-point hint. The full archive, account and
@@ -254,7 +275,7 @@ func (s *stationWechat) legacyImportState(account string, worker *stationWechatW
 		return "invalid"
 	}
 	defer root.Close()
-	if _, _, err := legacyImportAccountPaths(root, source.Primary, account); err != nil {
+	if _, _, err := legacyImportAccountPaths(root, source, account); err != nil {
 		if errors.Is(err, apphost.ErrNotFound) {
 			return ""
 		}
@@ -280,26 +301,33 @@ func (s *stationWechat) previewLegacyImport(ctx context.Context, id string) (leg
 		return legacyImportArchive{}, err
 	}
 	defer root.Close()
+	return s.previewLegacyImportFrom(ctx, id, native, status, root, source)
+}
+
+func (s *stationWechat) previewLegacyImportFrom(ctx context.Context, id string, native *linuxnative.Sender, status linuxnative.DaemonStatus, root *os.Root, source legacyImportSource) (legacyImportArchive, error) {
+	if err := source.guard.verify(ctx, root); err != nil {
+		return legacyImportArchive{}, err
+	}
 	account := native.Account()
-	cfgPath, queueDir, err := legacyImportAccountPaths(root, source.Primary, account)
+	cfgPath, queueDir, err := legacyImportAccountPaths(root, source, account)
 	if err != nil {
 		return legacyImportArchive{}, err
 	}
-	cfg, err := readLegacyImportFile(root, cfgPath, 128<<10)
+	cfg, err := source.guard.readFile(root, cfgPath, 128<<10)
 	if err != nil {
-		return legacyImportArchive{}, errLegacyImportInvalid
+		return legacyImportArchive{}, legacyImportReadError(err)
 	}
 	policy, err := decodeLegacyImportPolicy(cfg)
 	if err != nil {
 		return legacyImportArchive{}, err
 	}
-	queue, err := readLegacyImportFile(root, filepath.Join(queueDir, "messages-v2.json"), bot.MaxDeliveryCheckpointBytes)
+	queue, err := source.guard.readFile(root, filepath.Join(queueDir, "messages-v2.json"), bot.MaxDeliveryCheckpointBytes)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return legacyImportArchive{}, errLegacyImportInvalid
+		return legacyImportArchive{}, legacyImportReadError(err)
 	}
-	cursor, err := readLegacyImportFile(root, filepath.Join(queueDir, "checkpoint.json"), 128<<10)
+	cursor, err := source.guard.readFile(root, filepath.Join(queueDir, "checkpoint.json"), 128<<10)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return legacyImportArchive{}, errLegacyImportInvalid
+		return legacyImportArchive{}, legacyImportReadError(err)
 	}
 	oldServer, evidence, err := bot.LegacyDeliveryEvidence(queue, cursor, account)
 	if err != nil || oldServer != "" && !identity.ValidPathID(oldServer) {
@@ -311,7 +339,7 @@ func (s *stationWechat) previewLegacyImport(ctx context.Context, id string) (leg
 		Version: 1, LegacyServer: oldServer, Receipts: map[string]apphost.Receipt{},
 		Plan: legacyImportPlan{Account: account, LegacyEnabled: policy.Enabled, LegacyPaused: policy.ConnectionPaused,
 			SameDataset: oldServer != "" && oldServer == status.ServerID, SuggestedThreads: suggested, Omitted: omitted},
-		SourceRevision: localCheckpointKey(policy, queueHash, cursorHash),
+		SourceRevision: localCheckpointKey(policy, queueHash, cursorHash), SnapshotManifestDigest: source.guard.digest(),
 	}
 	for key, row := range evidence {
 		if !identity.ValidPathID(key) || !identity.ValidPathID(row.Status.ThreadID) || row.Status.ID != "" && !identity.ValidPathID(row.Status.ID) {
@@ -360,7 +388,8 @@ func readLegacyImportArchive(root *os.Root) (legacyImportArchive, error) {
 	if err != nil {
 		return archive, err
 	}
-	if json.Unmarshal(data, &archive) != nil || archive.Version != 1 || !archive.Plan.Applied || len(archive.Plan.Digest) != 64 || !identity.ValidPathID(archive.Plan.Account) {
+	if json.Unmarshal(data, &archive) != nil || archive.Version != 1 || !archive.Plan.Applied || len(archive.Plan.Digest) != 64 || !identity.ValidPathID(archive.Plan.Account) ||
+		archive.SnapshotManifestDigest != "" && !legacyMemoryDigestValid(archive.SnapshotManifestDigest) {
 		return legacyImportArchive{}, errLegacyImportInvalid
 	}
 	return archive, nil
@@ -391,7 +420,11 @@ func (s *stationWechat) savedLegacyImport(ctx context.Context, id string, refres
 		if snapshot != nil {
 			defer snapshot.Close()
 		}
-		archive.Plan.Cutover, _ = s.checkLegacyCutover(ctx, id, native, snapshot, source, archive.LegacyServer)
+		if source.matchesArchive(archive) {
+			archive.Plan.Cutover, _ = s.checkLegacyCutover(ctx, id, native, snapshot, source, archive.LegacyServer)
+		} else {
+			archive.Plan.Cutover, _ = s.checkLegacyCutover(ctx, id, native, nil, source, archive.LegacyServer)
+		}
 	}
 	return archive.Plan, true, nil
 }

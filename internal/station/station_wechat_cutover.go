@@ -66,7 +66,7 @@ func (s *stationWechat) legacyHostEvidence(snapshot *os.Root, source legacyImpor
 		legacyImportOverlap(path, source.Root) || legacyImportOverlap(path, s.dataDir) || legacyImportOverlap(path, s.workspaceRoot) {
 		return "pending", noDigest
 	}
-	copied, err := readLegacyImportFile(snapshot, legacyStopMarkerFile, 16<<10)
+	copied, err := source.guard.readFile(snapshot, legacyStopMarkerFile, 16<<10)
 	var marker legacyStopMarker
 	if err != nil || json.Unmarshal(copied, &marker) != nil || (marker.Version != 1 && marker.Version != 2) ||
 		marker.State != "stopped" || len(marker.Epoch) != 32 || strings.Trim(marker.Epoch, "0123456789abcdef") != "" ||

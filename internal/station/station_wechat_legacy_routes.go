@@ -74,6 +74,8 @@ func legacyImportFailure(w http.ResponseWriter, err error) {
 		websession.Fail(w, http.StatusNotFound, "找不到匹配的在册账号")
 	case errors.Is(err, errLegacyImportNotConfigured):
 		websession.Fail(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, errLegacySnapshotIntegrity):
+		websession.Fail(w, http.StatusUnprocessableEntity, errLegacySnapshotIntegrity.Error())
 	case errors.Is(err, errLegacyImportInvalid):
 		websession.Fail(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, errLegacyImportChanged), errors.Is(err, errLegacyImportConflict):

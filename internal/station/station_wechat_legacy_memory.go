@@ -95,7 +95,12 @@ func (s *stationWechat) previewLegacyMemory(ctx context.Context, id, after strin
 		return report, err
 	}
 	defer snapshot.Close()
-	config, _, err := legacyImportAccountPaths(snapshot, source.Primary, connection.AccountID)
+	if source.guard != nil {
+		if err := source.guard.verify(ctx, snapshot); err != nil {
+			return report, err
+		}
+	}
+	config, _, err := legacyImportAccountPaths(snapshot, source, connection.AccountID)
 	if err != nil {
 		return report, err
 	}
@@ -107,7 +112,12 @@ func (s *stationWechat) previewLegacyMemory(ctx context.Context, id, after strin
 		return legacyMemoryPreview{Status: "unavailable"}, nil
 	}
 	defer dir.Close()
-	report, version := readLegacyMemoryInventory(ctx, dir, connection.AccountID)
+	report, version := readLegacyMemoryInventory(ctx, dir, connection.AccountID, legacyMemorySnapshotCheck{
+		guard: source.guard, relative: filepath.ToSlash(filepath.Join(filepath.Dir(config), "companion", legacyMemoryDB)),
+	})
+	if source.guard != nil {
+		version.SnapshotDigest = source.guard.digest()
+	}
 	if report.Status != "ready" {
 		if after != "" {
 			return legacyMemoryPreview{}, errLegacyMemoryPage
@@ -141,11 +151,17 @@ func standaloneLegacyMemory(dir *os.Root) bool {
 }
 
 type legacyMemoryVersion struct {
-	Size     int64
-	Modified time.Time
+	Size           int64
+	Modified       time.Time
+	SnapshotDigest string `json:"snapshot_digest,omitempty"`
 }
 
-func readLegacyMemoryInventory(ctx context.Context, dir *os.Root, account string) (legacyMemoryPreview, legacyMemoryVersion) {
+type legacyMemorySnapshotCheck struct {
+	guard    *legacySnapshotGuard
+	relative string
+}
+
+func readLegacyMemoryInventory(ctx context.Context, dir *os.Root, account string, check legacyMemorySnapshotCheck) (legacyMemoryPreview, legacyMemoryVersion) {
 	var version legacyMemoryVersion
 	if !standaloneLegacyMemory(dir) {
 		return legacyMemoryPreview{Status: "snapshot_incomplete", Backend: "sqlite"}, version
@@ -170,6 +186,14 @@ func readLegacyMemoryInventory(ctx context.Context, dir *os.Root, account string
 	actual, err := file.Stat()
 	if err != nil || !sameLegacyMemoryFile(before, actual) {
 		return legacyMemoryPreview{Status: "snapshot_incomplete", Backend: "sqlite"}, version
+	}
+	if check.guard != nil {
+		if err := check.guard.checkOpened(ctx, dir, check.relative, file); err != nil {
+			return legacyMemoryPreview{Status: "snapshot_incomplete", Backend: "sqlite"}, version
+		}
+		if _, err := file.Seek(0, 0); err != nil {
+			return legacyMemoryPreview{Status: "snapshot_incomplete", Backend: "sqlite"}, version
+		}
 	}
 	inventory, err := companion.LegacyMemoryInventory(ctx, file, account)
 	current, statErr := dir.Lstat(legacyMemoryDB)
