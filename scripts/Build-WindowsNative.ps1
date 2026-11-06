@@ -104,7 +104,7 @@ try {
  $goSource=Join-Path $workspace ('temp\win-go-'+[Guid]::NewGuid().ToString('N').Substring(0,8))
  New-Item -ItemType Directory -Path $goSource | Out-Null
  $goArchive=Join-Path $goSource 'source.tar'
- & git -C $workspace archive --format=tar ('--output='+$goArchive) HEAD cmd internal plugins go.mod go.sum
+ & git -C $workspace archive --format=tar ('--output='+$goArchive) HEAD cmd connected-apps internal plugins go.mod go.sum
  if($LASTEXITCODE -ne 0){throw 'Cannot export committed management source.'}
  & tar -xf $goArchive -C $goSource
  if($LASTEXITCODE -ne 0){throw 'Cannot prepare committed management source.'}

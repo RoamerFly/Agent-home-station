@@ -5478,10 +5478,19 @@ index 2340621..fdb38e1 100644
          wechat_platform::publish_directory(source, target)?;
          Ok(())
 diff --git a/packages/native-client-rust/crates/wechat-store/src/lib.rs b/packages/native-client-rust/crates/wechat-store/src/lib.rs
-index 7a647dd..fbb97e9 100644
+index 7a647dd..402d47d 100644
 --- a/packages/native-client-rust/crates/wechat-store/src/lib.rs
 +++ b/packages/native-client-rust/crates/wechat-store/src/lib.rs
-@@ -413,7 +413,19 @@ impl Store {
+@@ -3,6 +3,8 @@ mod admission;
+ mod authorization;
+ mod checkpoint;
+ pub mod copy;
++#[cfg(windows)]
++pub mod cutover;
+ mod group_mutations;
+ mod media;
+ mod metadata;
+@@ -413,7 +415,19 @@ impl Store {
      pub fn profile_leases(&self) -> Result<Vec<Lease>> {
          self.accounts()?
              .into_iter()
@@ -6493,3 +6502,294 @@ index bf7bf70..ebac73b 100644
      fn source_limits_and_asset_metadata_do_not_require_payload_copies() {
          let (_t, store) = setup();
          let max = wechat_media::MAX_FILE_BYTES as u64;
+diff --git a/packages/native-client-rust/crates/wechat-store/src/cutover.rs b/packages/native-client-rust/crates/wechat-store/src/cutover.rs
+new file mode 100644
+index 0000000..4dcf37b
+--- /dev/null
++++ b/packages/native-client-rust/crates/wechat-store/src/cutover.rs
+@@ -0,0 +1,217 @@
++//! Exclusive, read-only Windows view of the native control databases.
++use anyhow::{ensure, Context, Result};
++use fs2::FileExt;
++use rusqlite::{Connection, OpenFlags};
++use serde::Serialize;
++use std::{
++    fmt::Write,
++    fs::{self, File},
++    io::ErrorKind,
++    os::windows::fs::MetadataExt,
++    path::{Component, Path, Prefix},
++};
++
++pub struct Hold {
++    pub status: Status,
++    _lease: File,
++}
++
++#[derive(Serialize)]
++#[serde(rename_all = "camelCase")]
++pub struct Status {
++    state: &'static str,
++    mode: &'static str,
++    pid: u32,
++    server_id: String,
++    account_count: usize,
++    pending_text: u64,
++    pending_media: u64,
++    uncertain_text: u64,
++    uncertain_media: u64,
++}
++
++impl Hold {
++    pub fn open(root: &Path, account: &str) -> Result<Self> {
++        ensure!(valid_account(account), "invalid cutover account");
++        ensure!(
++            root.is_absolute() && is_fixed_drive(root),
++            "cutover requires an absolute path on a fixed Windows drive"
++        );
++        ensure!(
++            !root.components().any(|c| c == Component::ParentDir),
++            "cutover path contains parent traversal"
++        );
++        for path in root.ancestors().filter(|path| path.has_root()) {
++            let metadata = fs::symlink_metadata(path)?;
++            ensure!(
++                metadata.is_dir() && metadata.file_attributes() & 0x400 == 0,
++                "cutover directory is linked or not a directory"
++            );
++        }
++        ensure!(
++            wechat_platform::private_path(root)?,
++            "cutover data directory must be private"
++        );
++        let lock_path = root.join("owner.lock");
++        ensure!(
++            fs::symlink_metadata(&lock_path)?.is_file(),
++            "native owner lock is not a regular file"
++        );
++        // Same OS lease as Store::open. Never create the lock or open a Store:
++        // normal Store/Core startup can migrate control data or resume jobs.
++        let lease = wechat_platform::OpenOptions::new()
++            .read(true)
++            .write(true)
++            .open(&lock_path)?;
++        FileExt::try_lock_exclusive(&lease).context("native data store is already owned")?;
++        let registry = read_database(&root.join("registry.sqlite"))?;
++        let version: u32 = registry.pragma_query_value(None, "user_version", |r| r.get(0))?;
++        ensure!(
++            (1..=2).contains(&version),
++            "unsupported cutover registry schema"
++        );
++        let server_id: String = registry.query_row(
++            "SELECT value FROM metadata WHERE key='server_id'",
++            [],
++            |r| r.get(0),
++        )?;
++        ensure!(
++            uuid::Uuid::parse_str(&server_id).is_ok(),
++            "invalid cutover native dataset"
++        );
++        let mut query = registry.prepare("SELECT id FROM accounts LIMIT 4097")?;
++        let accounts = query
++            .query_map([], |r| r.get::<_, String>(0))?
++            .collect::<rusqlite::Result<Vec<_>>>()?;
++        ensure!(
++            accounts.len() <= 4096 && accounts.iter().any(|id| id == account),
++            "cutover account is not registered or inventory exceeds limit"
++        );
++        let mut status = Status {
++            state: "ready",
++            mode: "cutover_hold",
++            pid: std::process::id(),
++            server_id,
++            account_count: accounts.len(),
++            pending_text: 0,
++            pending_media: 0,
++            uncertain_text: 0,
++            uncertain_media: 0,
++        };
++        let accounts_dir = root.join("accounts");
++        check_private_dir(&accounts_dir)?;
++        for id in accounts {
++            ensure!(valid_account(&id), "invalid account in cutover registry");
++            let account_dir = accounts_dir.join(id);
++            let agent = account_dir.join("agent");
++            check_private_dir(&account_dir)?;
++            check_private_dir(&agent)?;
++            let control = read_database(&agent.join("control.sqlite"))?;
++            let version: u32 = control.pragma_query_value(None, "user_version", |r| r.get(0))?;
++            ensure!(
++                (1..=7).contains(&version),
++                "unsupported cutover account schema"
++            );
++            let (pending, uncertain) = queue_counts(&control, "outbox", version >= 2,
++                "SELECT count(CASE WHEN state='queued' THEN 1 END), count(CASE WHEN state NOT IN ('queued','accepted','failed','rejected','cancelled') THEN 1 END) FROM outbox",
++            )?;
++            status.pending_text += pending;
++            status.uncertain_text += uncertain;
++            let (pending, uncertain) = queue_counts(&control, "media_jobs", version >= 3,
++                "SELECT count(CASE WHEN state IN ('queued','running') THEN 1 END), count(CASE WHEN kind='send' AND state NOT IN ('queued','running','accepted','failed','rejected','cancelled') THEN 1 END) FROM media_jobs",
++            )?;
++            status.pending_media += pending;
++            status.uncertain_media += uncertain;
++        }
++        Ok(Self {
++            status,
++            _lease: lease,
++        })
++    }
++}
++
++fn queue_counts(db: &Connection, table: &str, expected: bool, sql: &str) -> Result<(u64, u64)> {
++    let present: bool = db.query_row(
++        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1)",
++        [table],
++        |r| r.get(0),
++    )?;
++    ensure!(
++        present == expected,
++        "cutover queue tables do not match the account schema"
++    );
++    if !present {
++        return Ok((0, 0));
++    }
++    Ok(db.query_row(sql, [], |r| Ok((r.get(0)?, r.get(1)?)))?)
++}
++
++fn is_fixed_drive(path: &Path) -> bool {
++    #[link(name = "kernel32")]
++    extern "system" {
++        fn GetDriveTypeW(root: *const u16) -> u32;
++    }
++    let drive = match path.components().next() {
++        Some(Component::Prefix(prefix)) => match prefix.kind() {
++            Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => drive,
++            _ => return false,
++        },
++        _ => return false,
++    };
++    let root = [u16::from(drive), u16::from(b':'), u16::from(b'\\'), 0];
++    // A mapped drive letter can still refer to a remote store.
++    unsafe { GetDriveTypeW(root.as_ptr()) == 3 } // DRIVE_FIXED
++}
++
++fn check_private_dir(path: &Path) -> Result<()> {
++    ensure!(
++        fs::symlink_metadata(path)?.is_dir() && wechat_platform::private_path(path)?,
++        "cutover control directory is unavailable or linked"
++    );
++    Ok(())
++}
++
++fn valid_account(value: &str) -> bool {
++    !value.is_empty()
++        && value.len() <= 64
++        && value
++            .bytes()
++            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
++}
++
++fn read_database(path: &Path) -> Result<Connection> {
++    ensure!(
++        fs::symlink_metadata(path)?.is_file() && wechat_platform::private_path(path)?,
++        "cutover database must be a private regular file"
++    );
++    for suffix in ["-wal", "-shm", "-journal"] {
++        let mut sidecar = path.as_os_str().to_os_string();
++        sidecar.push(suffix);
++        match fs::symlink_metadata(sidecar) {
++            Err(error) if error.kind() == ErrorKind::NotFound => {}
++            Err(error) => return Err(error.into()),
++            Ok(_) => anyhow::bail!("cutover database has an unverified journal or WAL sidecar"),
++        }
++    }
++    // The owner lock excludes the native writer and we rejected outstanding
++    // journals. Immutable mode avoids creating SQLite shared-memory files.
++    let raw = path
++        .to_str()
++        .context("cutover database path is not UTF-8")?;
++    let local = raw.strip_prefix(r"\\?\").unwrap_or(raw).replace('\\', "/");
++    let mut uri = String::from("file:///");
++    for b in local.bytes() {
++        if b.is_ascii_alphanumeric() || b"/-_.~:".contains(&b) {
++            uri.push(char::from(b));
++        } else {
++            write!(uri, "%{b:02X}")?;
++        }
++    }
++    uri.push_str("?immutable=1");
++    Ok(Connection::open_with_flags(
++        uri,
++        OpenFlags::SQLITE_OPEN_READ_ONLY
++            | OpenFlags::SQLITE_OPEN_URI
++            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
++    )?)
++}
+diff --git a/packages/native-client-rust/crates/wx/src/main.rs b/packages/native-client-rust/crates/wx/src/main.rs
+index b29fdb2..e803471 100644
+--- a/packages/native-client-rust/crates/wx/src/main.rs
++++ b/packages/native-client-rust/crates/wx/src/main.rs
+@@ -69,6 +69,9 @@ enum Command {
+         #[arg(long, conflicts_with = "token_file")]
+         token_stdin: bool,
+     },
++    /// Hold an existing Windows data store offline until the owning pipe says stop.
++    #[cfg(windows)]
++    CutoverHold,
+     Daemon {
+         #[command(subcommand)]
+         command: daemon::DaemonCommand,
+@@ -1010,6 +1013,10 @@ fn query(path: String, values: &[(&str, Option<String>)]) -> String {
+     )
+ }
+ async fn run(cli: Cli) -> Result<()> {
++    #[cfg(windows)]
++    if matches!(cli.command, Command::CutoverHold) {
++        return cutover_hold(&cli);
++    }
+     if matches!(cli.command, Command::Licenses) {
+         return output(
+             &json!({"silkProject":include_str!("../../wechat-protocol/vendor/silk/LICENSE-MIT"),"silkSdk":include_str!("../../wechat-protocol/vendor/silk/LICENSE-SDK"),"protocol":include_str!("../../wechat-protocol/NOTICE")}),
+@@ -1713,10 +1720,42 @@ async fn run(cli: Cli) -> Result<()> {
+         | Command::Daemon { .. } => {
+             unreachable!()
+         }
++        #[cfg(windows)]
++        Command::CutoverHold => unreachable!(),
+     };
+     outcome::record(&result);
+     output(&result)
+ }
++
++#[cfg(windows)]
++fn cutover_hold(cli: &Cli) -> Result<()> {
++    use std::io::{Read, Write};
++    anyhow::ensure!(
++        cli.server_config.is_none() && cli.token_file.is_none() && cli.listen.is_none()
++            && cli.client_config.is_none() && cli.url.is_none() && cli.server_name.is_none()
++            && cli.local_profile.is_none(),
++        "cutover hold accepts only explicit data-dir and account"
++    );
++    let hold = wechat_store::cutover::Hold::open(
++        cli.data_dir.as_deref().context("cutover data-dir is required")?,
++        cli.account.as_deref().context("cutover account is required")?,
++    )?;
++    let mut stdout = std::io::stdout().lock();
++    serde_json::to_writer(&mut stdout, &hold.status)?;
++    writeln!(stdout)?;
++    stdout.flush()?;
++    let mut command = [0u8; 5];
++    let mut input = std::io::stdin().lock();
++    input.read_exact(&mut command).context("cutover stop pipe closed without acknowledgment")?;
++    if &command == b"stop\r" {
++        input.read_exact(&mut command[..1])?;
++        anyhow::ensure!(command[0] == b'\n', "invalid cutover stop command");
++    } else {
++        anyhow::ensure!(&command == b"stop\n", "invalid cutover stop command");
++    }
++    drop(hold);
++    Ok(())
++}
+ async fn stdin_token() -> Result<String> {
+     use std::io::IsTerminal;
+     use tokio::io::AsyncReadExt;
