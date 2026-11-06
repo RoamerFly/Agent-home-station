@@ -134,7 +134,7 @@ func (a *accountRegistry) open(record accountRecord, initialize bool) (*accountR
 			return nil, err
 		}
 	}
-	m, err := newManager(dir, filepath.Join(a.root.manager.stateDir, "accounts", accountDirectory(record.ID)), native, a.fish)
+	m, err := newManager(dir, filepath.Join(a.root.manager.stateDir, "accounts", accountDirectory(record.ID)), native, a.fish, a.root.manager.mobileRetired)
 	if err != nil {
 		return nil, err
 	}

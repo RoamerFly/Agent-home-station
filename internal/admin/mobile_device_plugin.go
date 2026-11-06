@@ -41,6 +41,12 @@ var openMobileDeviceBroker mobileDeviceBrokerOpener = devicebroker.OpenIO
 // mobileDeviceReady is deliberately non-starting. Discovery and task queueing
 // must not start a native process, enable a package, or widen a device grant.
 func (m *Manager) mobileDeviceReady(ctx context.Context) error {
+	// Windows production keeps legacy device records as read-only history.  Do
+	// this before consulting package/runtime state so an archived package cannot
+	// be used to infer that a bridge remains runnable.
+	if m == nil || m.mobileRetired {
+		return errDeviceServiceRetired
+	}
 	store, err := m.packageStore()
 	if err != nil {
 		return errors.New("device_plugin_required")
@@ -138,6 +144,9 @@ type mobileDevicePluginBridge struct {
 // wiring. It has no legacy fallback: an unavailable v0.3 device package means
 // the task cannot be sent to any native bridge.
 func (m *Manager) newMobilePluginBridge(ctx context.Context, task mobile.Task, settings mobile.Settings) (mobile.Bridge, error) {
+	if m == nil || m.mobileRetired {
+		return nil, errDeviceServiceRetired
+	}
 	if err := m.mobileDeviceReady(ctx); err != nil {
 		return nil, err
 	}
@@ -551,6 +560,9 @@ func (b *mobileDevicePluginBridge) bindingCurrent(want string) error {
 func (b *mobileDevicePluginBridge) ensureBroker(ctx context.Context, task mobile.Task, settings mobile.Settings) (devicebroker.IOBroker, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.manager == nil || b.manager.mobileRetired {
+		return nil, errDeviceServiceRetired
+	}
 	if b.closed {
 		return nil, errors.New("device_plugin_closed")
 	}
@@ -615,6 +627,9 @@ type mobileDevicePluginPolicy struct {
 func (p *mobileDevicePluginPolicy) Check(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability) (err error) {
 	if p == nil || p.bridge == nil || cap.Async || cap.ID != p.capability || job.Plugin != mobileDevicePluginID || job.Tool != p.capability || !bytes.Equal(job.Arguments, p.arguments) {
 		return errors.New("device_plugin_authorization_changed")
+	}
+	if p.bridge.manager == nil || p.bridge.manager.mobileRetired {
+		return errDeviceServiceRetired
 	}
 	if want, got := mustJSON(p.invocation), mustJSON(job.Context); !bytes.Equal(want, got) || job.Context.Authorization != p.sourceVersion {
 		return errors.New("device_plugin_authorization_changed")

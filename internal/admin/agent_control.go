@@ -500,6 +500,9 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		return nil, nil
 	}
 	for _, t := range m.agent.active(m.native.Account(), "") {
+		if m.mobileRetired && t.DeviceTask != "" {
+			continue
+		}
 		if t.Reminder != nil || (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(t.Thread) || !permittedRecipient(cfg.Config, t.Thread) {
 			continue
 		}
@@ -827,9 +830,15 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			fail(w, 400, "操作无效")
 			return
 		}
-		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok && (old.State == "completed" || old.State == "cancelled" || old.State == "stopped") {
-			fail(w, 409, "任务已结束并移至历史，不重新执行；如有新的需求，请创建新任务")
-			return
+		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok {
+			if s.manager.mobileRetired && old.DeviceTask != "" {
+				fail(w, http.StatusGone, errDeviceServiceRetired.Error())
+				return
+			}
+			if old.State == "completed" || old.State == "cancelled" || old.State == "stopped" {
+				fail(w, 409, "任务已结束并移至历史，不重新执行；如有新的需求，请创建新任务")
+				return
+			}
 		}
 		for _, t := range s.manager.agent.list(s.manager.native.Account(), "") {
 			if t.ID != r.PathValue("id") {

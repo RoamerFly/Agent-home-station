@@ -121,6 +121,7 @@ type Manager struct {
 	workspace           *agentworkspace.Store
 	processes           *agenthost.Jobs
 	mobile              deviceService
+	mobileRetired       bool
 	agent               *agentControl
 	surfHistory         *surfHistoryStore
 	surfInteractions    *surfInteractionStore
@@ -155,10 +156,16 @@ type Manager struct {
 // NewManager constructs an independent root manager. Account registries use
 // newManager with their already-owned service fish registry before startup.
 func NewManager(dir, stateDir string, native Native) (*Manager, error) {
-	return newManager(dir, stateDir, native, nil)
+	return newManager(dir, stateDir, native, nil, false)
 }
 
-func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry) (*Manager, error) {
+// NewManagerWithRetiredDeviceControl serves existing Windows deployments with
+// access to historical device records but no device control runtime.
+func NewManagerWithRetiredDeviceControl(dir, stateDir string, native Native) (*Manager, error) {
+	return newManager(dir, stateDir, native, nil, true)
+}
+
+func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry, mobileRetired bool) (*Manager, error) {
 	if native == nil || dir == "" {
 		return nil, errors.New("missing admin runtime configuration")
 	}
@@ -222,7 +229,7 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish}
+	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish, mobileRetired: mobileRetired}
 	externalConfiguration.openStore, externalConfiguration.owned = m.packageStore, false
 	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
 	if err != nil {
@@ -315,6 +322,11 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 	receiptCtx, cancelReceipts := context.WithTimeout(context.Background(), 3*time.Second)
 	m.importOwnerSurfReceipts(receiptCtx)
 	cancelReceipts()
+	if archive, ok := m.mobile.(*mobileArchiveService); ok {
+		if err := archive.retire(); err != nil {
+			m.log("device_archive_retirement_failed")
+		}
+	}
 	if c.ConnectionPaused {
 		m.setState("paused")
 	} else if c.Enabled {
@@ -496,7 +508,10 @@ func (m *Manager) Close() error {
 	m.packagesClosed = true
 	packages, packageRuntime := m.packages, m.packageRuntime
 	m.packageMu.Unlock()
-	cleanupErr := errors.Join(devicebroker.CleanupQuarantined(), adbserver.CleanupQuarantined())
+	var cleanupErr error
+	if !m.mobileRetired {
+		cleanupErr = errors.Join(devicebroker.CleanupQuarantined(), adbserver.CleanupQuarantined())
+	}
 	var packageErr error
 	if packageRuntime != nil {
 		packageErr = packageRuntime.Close()

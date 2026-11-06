@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -67,7 +68,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	manager, err := admin.NewManager(dir, os.Getenv("WECHAT_BOT_STATE_DIR"), native)
+	newManager := admin.NewManager
+	if runtime.GOOS == "windows" {
+		newManager = admin.NewManagerWithRetiredDeviceControl
+	}
+	manager, err := newManager(dir, os.Getenv("WECHAT_BOT_STATE_DIR"), native)
 	if err != nil {
 		return err
 	}

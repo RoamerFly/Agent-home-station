@@ -508,7 +508,7 @@ func regexpMobileObservation(id string) bool {
 	return len(id) == 36 && strings.HasPrefix(id, "obs-") && strings.Trim(id[4:], "0123456789abcdef") == ""
 }
 func (s *mobileWorkflowService) readBlob(directory, name string, limit int64) ([]byte, error) {
-	root, err := workspacefs.EnsurePath(filepath.Join(s.manager.dir, "mobile", directory))
+	root, err := workspacefs.OpenPath(filepath.Join(s.manager.dir, "mobile", directory))
 	if err != nil {
 		return nil, err
 	}
