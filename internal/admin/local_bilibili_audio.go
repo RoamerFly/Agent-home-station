@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 )
@@ -38,7 +39,7 @@ type localStationASRRegistration struct {
 
 type localStationASRBinding struct {
 	installed pluginhost.InstalledPackage
-	profile   localASRProfile
+	profile   localasr.Profile
 	store     *pluginhost.Store
 	account   string
 	version   string
@@ -76,9 +77,9 @@ func (h *localHomeService) transcribeBilibiliAudio(ctx context.Context, wav []by
 	if err != nil {
 		return "", err
 	}
-	state, text, err := runRegisteredLocalASRForStore(ctx, binding.store, scratch, windows, binding.installed.Package, pluginhost.Grant{
+	state, text, err := localasr.Run(ctx, binding.store, scratch, windows, binding.installed.Package, pluginhost.Grant{
 		Account: binding.account, Plugin: binding.installed.Package.ID, Version: binding.installed.Package.Version, Permissions: binding.installed.Permissions,
-	}, binding.profile, wav, int(binding.profile.runner.TimeoutSeconds))
+	}, binding.profile, wav, binding.profile.TimeoutSeconds())
 	if err != nil {
 		return "", err
 	}
@@ -120,11 +121,11 @@ func (h *localHomeService) localStationASRBinding(ctx context.Context) (localSta
 	if err != nil || host == nil || host.store.Account() != record.FishID {
 		return localStationASRBinding{}, errors.New("station_asr_tool_store_unavailable")
 	}
-	installed, err := host.store.Installed(ctx, localASRPluginID)
-	if err != nil || installed.Removed || !installed.Enabled || installed.Package.ID != localASRPluginID || installed.Digest == "" {
+	installed, err := host.store.Installed(ctx, localasr.PluginID)
+	if err != nil || installed.Removed || !installed.Enabled || installed.Package.ID != localasr.PluginID || installed.Digest == "" {
 		return localStationASRBinding{}, errors.New("station_asr_tool_not_enabled")
 	}
-	configuration, err := host.store.ConfigurationForExecution(ctx, localASRPluginID)
+	configuration, err := host.store.ConfigurationForExecution(ctx, localasr.PluginID)
 	if err != nil {
 		return localStationASRBinding{}, errors.New("station_asr_configuration_unavailable")
 	}
@@ -138,16 +139,16 @@ func (h *localHomeService) localStationASRBinding(ctx context.Context) (localSta
 	if pluginhost.Authorize(installed.Package, grant, invocation, []string{"artifact.read", "model.invoke"}) != nil || !localStationASRCapabilityReady(ctx, host.store) {
 		return localStationASRBinding{}, errors.New("station_asr_permission_unavailable")
 	}
-	profile, ok := registeredLocalASRProfileForStore(ctx, host.store, filepath.Join(registration.Workspace, "public_workspace"), installed.Package, grant)
-	if !ok || profile.initializer.ProfileID != registration.ProfileID || profile.initializer.ResourceVersion == "" {
+	profile, ok := localasr.Resolve(ctx, host.store, filepath.Join(registration.Workspace, "public_workspace"), installed.Package, grant)
+	if !ok || profile.Metadata().ProfileID != registration.ProfileID || profile.Metadata().ResourceVersion == "" {
 		return localStationASRBinding{}, errors.New("station_asr_profile_unavailable")
 	}
-	sum := sha256.Sum256(append(append([]byte(nil), raw...), []byte("\x00"+record.FishID+"\x00"+record.LocalOwner.ID+"\x00"+installed.Digest+"\x00"+strconv.Itoa(installed.Revision)+"\x00"+strconv.Itoa(configuration.Revision)+"\x00"+profile.initializer.ResourceVersion)...))
+	sum := sha256.Sum256(append(append([]byte(nil), raw...), []byte("\x00"+record.FishID+"\x00"+record.LocalOwner.ID+"\x00"+installed.Digest+"\x00"+strconv.Itoa(installed.Revision)+"\x00"+strconv.Itoa(configuration.Revision)+"\x00"+profile.Metadata().ResourceVersion)...))
 	return localStationASRBinding{installed: installed, profile: profile, store: host.store, account: record.FishID, version: "station-local-asr-" + hex.EncodeToString(sum[:])}, nil
 }
 
 func localStationASRCapabilityReady(ctx context.Context, store *pluginhost.Store) bool {
-	capabilities, err := store.Capabilities(ctx, localASRPluginID)
+	capabilities, err := store.Capabilities(ctx, localasr.PluginID)
 	if err != nil {
 		return false
 	}
@@ -182,7 +183,7 @@ func (h *localHomeService) loadLocalStationASRRegistration() (localStationASRReg
 		return registration, nil, errors.New("station_asr_not_installed_or_authorized")
 	}
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || len(fields) != 4 || fields["schema_version"] == nil || fields["enabled"] == nil || fields["workspace"] == nil || fields["profile_id"] == nil || registration.SchemaVersion != 1 || !registration.Enabled || !safeLocalASRID(registration.ProfileID) {
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 4 || fields["schema_version"] == nil || fields["enabled"] == nil || fields["workspace"] == nil || fields["profile_id"] == nil || registration.SchemaVersion != 1 || !registration.Enabled || !localasr.ValidID(registration.ProfileID) {
 		return registration, nil, errors.New("station_asr_registration_invalid")
 	}
 	// JSON examples may use forward slashes to avoid escaping Windows paths.
@@ -212,7 +213,7 @@ func (s *localProjectTools) configureStationASR(ctx context.Context, host *local
 	if err != nil {
 		return err
 	}
-	configuration, err := host.store.Configuration(ctx, localASRPluginID)
+	configuration, err := host.store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
 		return err
 	}
@@ -225,6 +226,6 @@ func (s *localProjectTools) configureStationASR(ctx context.Context, host *local
 	values["asr_backend"] = json.RawMessage(`"local"`)
 	encoded, _ := json.Marshal(registration.ProfileID)
 	values["local_asr_profile_id"] = encoded
-	_, err = host.store.SaveConfiguration(ctx, localASRPluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values, ClearSecrets: []string{"asr_key"}})
+	_, err = host.store.SaveConfiguration(ctx, localasr.PluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values, ClearSecrets: []string{"asr_key"}})
 	return err
 }

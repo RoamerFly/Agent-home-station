@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -43,9 +44,9 @@ func TestLiveLocalMediaTranscriptionIsolationContract(t *testing.T) {
 	t.Cleanup(func() { _ = controller.Close() })
 	f.manager.packageRuntime, f.manager.packageRuntimeReady = controller, true
 	calls := 0
-	policy.runLocal = func(_ context.Context, got pluginhost.Package, grant pluginhost.Grant, profile localASRProfile, wav []byte, timeout int) (string, string, error) {
+	policy.runLocal = func(_ context.Context, got pluginhost.Package, grant pluginhost.Grant, profile localasr.Profile, wav []byte, timeout int) (string, string, error) {
 		calls++
-		if got.ID != localASRPluginID || grant.Account != n.msg.AccountID || profile.initializer != expected.Initializer || string(wav) != string(policy.wav) || timeout < 1 {
+		if got.ID != localasr.PluginID || grant.Account != n.msg.AccountID || profile.Metadata() != expected.Initializer || string(wav) != string(policy.wav) || timeout < 1 {
 			t.Fatal("isolated package callback lost its bound local ASR contract")
 		}
 		return "transcribed", "synthetic isolated local transcript", nil
@@ -98,7 +99,7 @@ func TestLiveLocalMediaTranscriptionIsolationRejectsMismatchedProfileMetadata(t 
 	t.Cleanup(func() { _ = controller.Close() })
 	f.manager.packageRuntime, f.manager.packageRuntimeReady = controller, true
 	calls := 0
-	policy.runLocal = func(context.Context, pluginhost.Package, pluginhost.Grant, localASRProfile, []byte, int) (string, string, error) {
+	policy.runLocal = func(context.Context, pluginhost.Package, pluginhost.Grant, localasr.Profile, []byte, int) (string, string, error) {
 		calls++
 		return "transcribed", "must not run", nil
 	}

@@ -9,6 +9,7 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -38,7 +39,7 @@ func TestLocalBilibiliAudioUsesOwnerScopedLocalASRProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := host.store.Prepare(t.Context(), filepath.Join(stationMediaCatalog(t), localASRPluginID))
+	prepared, err := host.store.Prepare(t.Context(), filepath.Join(stationMediaCatalog(t), localasr.PluginID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,23 +49,23 @@ func TestLocalBilibiliAudioUsesOwnerScopedLocalASRProfile(t *testing.T) {
 	if err = home.projectTools.configureStationASR(t.Context(), host); err != nil {
 		t.Fatal(err)
 	}
-	installed, err := host.store.Installed(t.Context(), localASRPluginID)
+	installed, err := host.store.Installed(t.Context(), localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = host.store.SetEnabled(t.Context(), localASRPluginID, installed.Revision, true); err != nil {
+	if _, err = host.store.SetEnabled(t.Context(), localasr.PluginID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
-	installed, err = host.store.Installed(t.Context(), localASRPluginID)
+	installed, err = host.store.Installed(t.Context(), localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	first, err := home.localStationASRBinding(t.Context())
-	if err != nil || first.version == "" || first.account != record.FishID || first.profile.initializer.ProfileID != "sensevoice-small-int8" {
+	if err != nil || first.version == "" || first.account != record.FishID || first.profile.Metadata().ProfileID != "sensevoice-small-int8" {
 		t.Fatalf("owner local ASR binding = %#v, %v", first, err)
 	}
-	configuration, err := host.store.Configuration(t.Context(), localASRPluginID)
+	configuration, err := host.store.Configuration(t.Context(), localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,17 +74,17 @@ func TestLocalBilibiliAudioUsesOwnerScopedLocalASRProfile(t *testing.T) {
 		values[key] = value
 	}
 	values["asr_backend"] = json.RawMessage(`"remote"`)
-	if _, err = host.store.SetEnabled(t.Context(), localASRPluginID, installed.Revision, false); err != nil {
+	if _, err = host.store.SetEnabled(t.Context(), localasr.PluginID, installed.Revision, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = host.store.SaveConfiguration(t.Context(), localASRPluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values}); err != nil {
+	if _, err = host.store.SaveConfiguration(t.Context(), localasr.PluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values}); err != nil {
 		t.Fatal(err)
 	}
-	installed, err = host.store.Installed(t.Context(), localASRPluginID)
+	installed, err = host.store.Installed(t.Context(), localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = host.store.SetEnabled(t.Context(), localASRPluginID, installed.Revision, true); err != nil {
+	if _, err = host.store.SetEnabled(t.Context(), localasr.PluginID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = home.localStationASRBinding(context.Background()); err == nil {
@@ -116,7 +117,7 @@ func writeStationASRProfile(t *testing.T, workspace, id string) {
 			t.Fatal(err)
 		}
 	}
-	manifest, err := json.Marshal(registeredLocalASRManifest{ID: "asr-" + id, Root: root, Python: python, Entry: entry, Packages: packages, Model: model, Tokens: tokens, Threads: 1, Language: "auto", ChunkSeconds: 30, TimeoutSeconds: 60})
+	manifest, err := json.Marshal(localasr.Manifest{ID: "asr-" + id, Root: root, Python: python, Entry: entry, Packages: packages, Model: model, Tokens: tokens, Threads: 1, Language: "auto", ChunkSeconds: 30, TimeoutSeconds: 60})
 	if err != nil {
 		t.Fatal(err)
 	}

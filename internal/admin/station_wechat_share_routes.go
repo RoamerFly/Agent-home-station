@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/sharespec"
 	"wechat-bot/internal/stationruntime"
@@ -15,7 +16,7 @@ import (
 )
 
 func (s *stationWechat) shareRoutes(owner *websession.Store, mux *http.ServeMux) {
-	for _, plugin := range []string{shareServicePluginID, localASRPluginID} {
+	for _, plugin := range []string{shareServicePluginID, localasr.PluginID} {
 		path := "/api/apps/wechat/connections/{connection}/" + plugin
 		handler := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 			s.stationMediaSettings(w, r, plugin)
@@ -72,7 +73,7 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 		if input.Action == "install" {
 			permissions := []string{"network"}
 			approved := input.GrantNetwork
-			if plugin == localASRPluginID {
+			if plugin == localasr.PluginID {
 				permissions = []string{"artifact.read", "artifact.write", "model.invoke"}
 				approved = input.GrantMedia
 			}
@@ -114,7 +115,7 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 						return
 					}
 				}
-				if plugin == localASRPluginID && !stationMediaConfigSupported(input.Config) {
+				if plugin == localasr.PluginID && !stationMediaConfigSupported(input.Config) {
 					fail(w, 400, "当前连接支持远程视觉与远程语音识别配置")
 					return
 				}

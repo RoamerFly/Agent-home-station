@@ -16,8 +16,10 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/billing"
 	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/mediadecode"
+	"wechat-bot/internal/mediaobserve"
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/transcript"
@@ -106,11 +108,11 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 	if err != nil || host.store.Account() != source.Account {
 		return "", observationFailure("media_plugin_runtime_unavailable", "无法打开当前连接的工具宿主。")
 	}
-	installed, err := host.store.Installed(ctx, localASRPluginID)
+	installed, err := host.store.Installed(ctx, localasr.PluginID)
 	if err != nil || !installed.Enabled || installed.Removed {
 		return "", observationFailure("media_plugin_not_enabled", "请在当前微信连接中安装并启用媒体理解工具。")
 	}
-	config, err := host.store.Configuration(ctx, localASRPluginID)
+	config, err := host.store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
 		return "", observationFailure("media_plugin_configuration_invalid", "无法读取当前连接的媒体理解设置。")
 	}
@@ -132,11 +134,11 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 		if err := checkSource(ctx); err != nil {
 			return err
 		}
-		p, err := host.store.Installed(ctx, localASRPluginID)
+		p, err := host.store.Installed(ctx, localasr.PluginID)
 		if err != nil || !p.Enabled || p.Removed || p.Revision != installed.Revision || p.Digest != installed.Digest {
 			return observationFailure("media_plugin_version_changed", "读取期间工具版本、授权或启用状态已变更。")
 		}
-		c, err := host.store.Configuration(ctx, localASRPluginID)
+		c, err := host.store.Configuration(ctx, localasr.PluginID)
 		if err != nil || c.Revision != config.Revision {
 			return observationFailure("media_plugin_configuration_changed", "读取期间媒体理解配置已变更。")
 		}
@@ -206,9 +208,9 @@ func stageStationVideo(ctx context.Context, path string, original *os.File, reco
 }
 
 func stationObserveFrames(ctx context.Context, path, dir string, in stationVideoObservationInput, meta mediadecode.Metadata, analyze func(context.Context, string, []deepseek.Image, int) (string, error), out map[string]any) error {
-	count := min(in.Page, remainingInspectionFrames(meta.Frames, in.Start, in.Step))
-	settings := videoInspectionInput{Start: in.Start, Step: in.Step, BatchSize: in.Batch, MaxDimension: in.Dimension, Tokens: in.Tokens, Question: in.Question}
-	rows, next, err := inspectFrameRange(ctx, path, dir, settings, count, meta.Frames, analyze)
+	count := min(in.Page, mediaobserve.RemainingFrames(meta.Frames, in.Start, in.Step))
+	settings := mediaobserve.FrameOptions{Start: in.Start, Step: in.Step, BatchSize: in.Batch, MaxDimension: in.Dimension, Tokens: in.Tokens, Question: in.Question}
+	rows, next, err := mediaobserve.InspectFrames(ctx, path, dir, settings, count, meta.Frames, analyze)
 	if err != nil && len(rows) == 0 {
 		return stationMediaFailure(err, "观察画面")
 	}
@@ -271,7 +273,7 @@ func stationObserveAudio(ctx context.Context, path, dir string, in stationVideoO
 }
 
 func observationFailure(code, message string) error {
-	return &videoInspectionFailure{code: code, message: message}
+	return mediaobserve.NewFailure(code, message, nil)
 }
 
 func stationMediaFailure(err error, stage string) error {
@@ -283,5 +285,5 @@ func stationMediaFailure(err error, stage string) error {
 	if !publicShareErrorCode.MatchString(code) {
 		code = "wechat_video_observation_incomplete"
 	}
-	return &videoInspectionFailure{code: code, message: fmt.Sprintf("视频读取停在%s阶段。请检查当前微信连接的媒体理解配置或从未读位置继续。", stage), cause: err}
+	return mediaobserve.NewFailure(code, fmt.Sprintf("视频读取停在%s阶段。请检查当前微信连接的媒体理解配置或从未读位置继续。", stage), err)
 }

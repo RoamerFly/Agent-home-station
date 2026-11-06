@@ -7,21 +7,22 @@ import (
 	"os"
 	"testing"
 
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 )
 
 func TestMediaTranscriptionLocalServiceBindsProfileAudioAndSingleAttempt(t *testing.T) {
 	f, n, old, ctx := transcriptionFixture(t, false)
-	installed, err := old.store.Installed(ctx, localASRPluginID)
+	installed, err := old.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed, err = old.store.SetEnabled(ctx, localASRPluginID, installed.Revision, false)
+	installed, err = old.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _, expected := writeRegisteredLocalASRProfile(t, f.manager)
-	cfg, err := old.store.Configuration(ctx, localASRPluginID)
+	cfg, err := old.store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,14 +34,14 @@ func TestMediaTranscriptionLocalServiceBindsProfileAudioAndSingleAttempt(t *test
 	delete(values, "asr_model")
 	values["asr_backend"] = json.RawMessage(`"local"`)
 	values["local_asr_profile_id"] = mustJSONRaw(t, expected.Initializer.ProfileID)
-	if _, err = old.store.SaveConfiguration(ctx, localASRPluginID, pluginhost.ConfigUpdate{Revision: cfg.Revision, Values: values, ClearSecrets: []string{"asr_key"}}); err != nil {
+	if _, err = old.store.SaveConfiguration(ctx, localasr.PluginID, pluginhost.ConfigUpdate{Revision: cfg.Revision, Values: values, ClearSecrets: []string{"asr_key"}}); err != nil {
 		t.Fatal(err)
 	}
-	installed, err = old.store.Installed(ctx, localASRPluginID)
+	installed, err = old.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = old.store.SetEnabled(ctx, localASRPluginID, installed.Revision, true); err != nil {
+	if _, err = old.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
 	p, err := f.manager.newMediaTranscriptionPolicy(ctx, n.msg, old.wav)
@@ -51,9 +52,9 @@ func TestMediaTranscriptionLocalServiceBindsProfileAudioAndSingleAttempt(t *test
 		t.Fatal("local policy was not bound to registered profile", p.backend, p.localProfileID, p.localVersion)
 	}
 	calls := 0
-	p.runLocal = func(_ context.Context, got pluginhost.Package, grant pluginhost.Grant, profile localASRProfile, wav []byte, timeout int) (string, string, error) {
+	p.runLocal = func(_ context.Context, got pluginhost.Package, grant pluginhost.Grant, profile localasr.Profile, wav []byte, timeout int) (string, string, error) {
 		calls++
-		if got.ID != localASRPluginID || grant.Account != n.msg.AccountID || profile.initializer != expected.Initializer || string(wav) != string(old.wav) || timeout != 42 {
+		if got.ID != localasr.PluginID || grant.Account != n.msg.AccountID || profile.Metadata() != expected.Initializer || string(wav) != string(old.wav) || timeout != 42 {
 			t.Fatal("local runner received changed host binding")
 		}
 		return "transcribed", "local synthetic transcript", nil
@@ -94,28 +95,28 @@ func TestMediaTranscriptionLocalServiceBindsProfileAudioAndSingleAttempt(t *test
 func TestMediaTranscriptionLocalFailureIsNotResubmitted(t *testing.T) {
 	f, n, old, ctx := transcriptionFixture(t, false)
 	_, _, expected := writeRegisteredLocalASRProfile(t, f.manager)
-	installed, err := old.store.Installed(ctx, localASRPluginID)
+	installed, err := old.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = old.store.SetEnabled(ctx, localASRPluginID, installed.Revision, false); err != nil {
+	if _, err = old.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, false); err != nil {
 		t.Fatal(err)
 	}
-	cfg, _ := old.store.Configuration(ctx, localASRPluginID)
+	cfg, _ := old.store.Configuration(ctx, localasr.PluginID)
 	values := map[string]json.RawMessage{}
 	for key, value := range cfg.Values {
 		values[key] = append(json.RawMessage(nil), value...)
 	}
 	values["asr_backend"] = json.RawMessage(`"local"`)
 	values["local_asr_profile_id"] = mustJSONRaw(t, expected.Initializer.ProfileID)
-	if _, err := old.store.SaveConfiguration(ctx, localASRPluginID, pluginhost.ConfigUpdate{Revision: cfg.Revision, Values: values}); err != nil {
+	if _, err := old.store.SaveConfiguration(ctx, localasr.PluginID, pluginhost.ConfigUpdate{Revision: cfg.Revision, Values: values}); err != nil {
 		t.Fatal(err)
 	}
-	installed, err = old.store.Installed(ctx, localASRPluginID)
+	installed, err = old.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = old.store.SetEnabled(ctx, localASRPluginID, installed.Revision, true); err != nil {
+	if _, err = old.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
 	p, err := f.manager.newMediaTranscriptionPolicy(ctx, n.msg, old.wav)
@@ -123,7 +124,7 @@ func TestMediaTranscriptionLocalFailureIsNotResubmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	p.runLocal = func(context.Context, pluginhost.Package, pluginhost.Grant, localASRProfile, []byte, int) (string, string, error) {
+	p.runLocal = func(context.Context, pluginhost.Package, pluginhost.Grant, localasr.Profile, []byte, int) (string, string, error) {
 		calls++
 		return "", "", errors.New("synthetic local failure")
 	}
@@ -149,7 +150,7 @@ func TestMediaTranscriptionLocalValidateRechecksRegisteredResources(t *testing.T
 		t.Run(kind, func(t *testing.T) {
 			_, _, policy, ctx, expected := configuredLocalTranscriptionPolicy(t)
 			job, capability := transcriptionJob(policy)
-			policy.runLocal = func(context.Context, pluginhost.Package, pluginhost.Grant, localASRProfile, []byte, int) (string, string, error) {
+			policy.runLocal = func(context.Context, pluginhost.Package, pluginhost.Grant, localasr.Profile, []byte, int) (string, string, error) {
 				tamperRegisteredLocalASRResource(t, expected, kind)
 				return "transcribed", "synthetic transcript", nil
 			}
@@ -198,15 +199,15 @@ func TestMediaTranscriptionLocalCompletedResultRechecksRegisteredResources(t *te
 func configuredLocalTranscriptionPolicy(t *testing.T) (*webFixture, *bindingChannelsNative, *mediaTranscriptionPolicy, context.Context, localASRTestProfile) {
 	t.Helper()
 	f, n, old, ctx := transcriptionFixture(t, false)
-	installed, err := old.store.Installed(ctx, localASRPluginID)
+	installed, err := old.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = old.store.SetEnabled(ctx, localASRPluginID, installed.Revision, false); err != nil {
+	if _, err = old.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, false); err != nil {
 		t.Fatal(err)
 	}
 	_, _, expected := writeRegisteredLocalASRProfile(t, f.manager)
-	configuration, err := old.store.Configuration(ctx, localASRPluginID)
+	configuration, err := old.store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,14 +219,14 @@ func configuredLocalTranscriptionPolicy(t *testing.T) (*webFixture, *bindingChan
 	delete(values, "asr_model")
 	values["asr_backend"] = json.RawMessage(`"local"`)
 	values["local_asr_profile_id"] = mustJSONRaw(t, expected.Initializer.ProfileID)
-	if _, err = old.store.SaveConfiguration(ctx, localASRPluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values, ClearSecrets: []string{"asr_key"}}); err != nil {
+	if _, err = old.store.SaveConfiguration(ctx, localasr.PluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values, ClearSecrets: []string{"asr_key"}}); err != nil {
 		t.Fatal(err)
 	}
-	installed, err = old.store.Installed(ctx, localASRPluginID)
+	installed, err = old.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = old.store.SetEnabled(ctx, localASRPluginID, installed.Revision, true); err != nil {
+	if _, err = old.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
 	policy, err := f.manager.newMediaTranscriptionPolicy(ctx, n.msg, old.wav)

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/stationruntime"
@@ -169,7 +170,7 @@ func (s *localProjectTools) close() error {
 var localProjectPackages = []struct{ ID, Name string }{
 	{documentWorkshopPluginID, "文档工坊"},
 	{localAudioPackage, "音频工坊"},
-	{localASRPluginID, "本地媒体识别"},
+	{localasr.PluginID, "本地媒体识别"},
 	{localRVCPackage, "RVC 换声"},
 	{localComfyPackage, "ComfyUI 创作"},
 	{localYuEPackage, "YuE 作曲"},
@@ -414,7 +415,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 				return
 			}
 			grants := []string{"artifact.read", "artifact.write"}
-			if id == localASRPluginID {
+			if id == localasr.PluginID {
 				grants = []string{"artifact.read", "artifact.write", "model.invoke"}
 			}
 			if id == localRVCPackage {
@@ -526,7 +527,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 					return
 				}
 			}
-		} else if id == localASRPluginID {
+		} else if id == localasr.PluginID {
 			if in.Action == "enable" {
 				if !current.Enabled {
 					if err = s.configureStationASR(ctx, host); err != nil {

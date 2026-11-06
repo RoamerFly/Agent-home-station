@@ -17,6 +17,7 @@ import (
 	"wechat-bot/internal/billing"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
@@ -61,7 +62,7 @@ type mediaTranscriptionPolicy struct {
 	requested       bool
 	providerReply   json.RawMessage
 	post            pluginruntime.RouteTransport
-	runLocal        func(context.Context, pluginhost.Package, pluginhost.Grant, localASRProfile, []byte, int) (string, string, error)
+	runLocal        func(context.Context, pluginhost.Package, pluginhost.Grant, localasr.Profile, []byte, int) (string, string, error)
 	arguments       json.RawMessage
 	completedJob    pluginhost.Job
 }
@@ -71,13 +72,13 @@ func (m *Manager) mediaTranscriptionConfigured(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	installed, err := s.Installed(ctx, localASRPluginID)
+	installed, err := s.Installed(ctx, localasr.PluginID)
 	invocation := pluginhost.Invocation{Account: s.Account(), Thread: "host", Requester: "administrator", Purpose: "inspect media transcription readiness", RequestKey: "host-media-transcription-readiness"}
-	if err != nil || !installed.Enabled || installed.Removed || pluginhost.Authorize(installed.Package, pluginhost.Grant{Account: s.Account(), Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}, invocation, []string{"artifact.read", "model.invoke"}) != nil || s.CheckConfiguration(ctx, localASRPluginID) != nil {
+	if err != nil || !installed.Enabled || installed.Removed || pluginhost.Authorize(installed.Package, pluginhost.Grant{Account: s.Account(), Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}, invocation, []string{"artifact.read", "model.invoke"}) != nil || s.CheckConfiguration(ctx, localasr.PluginID) != nil {
 		return false
 	}
 	ready := false
-	for _, capability := range mustCapabilities(ctx, s, localASRPluginID) {
+	for _, capability := range mustCapabilities(ctx, s, localasr.PluginID) {
 		if capability.ID == "media.transcribe" && capability.Discoverable && capability.Implementation == "ready" && !capability.Async {
 			ready = true
 			break
@@ -86,7 +87,7 @@ func (m *Manager) mediaTranscriptionConfigured(ctx context.Context) bool {
 	if !ready {
 		return false
 	}
-	cfg, err := s.ConfigurationForExecution(ctx, localASRPluginID)
+	cfg, err := s.ConfigurationForExecution(ctx, localasr.PluginID)
 	if err != nil {
 		return false
 	}
@@ -96,7 +97,7 @@ func (m *Manager) mediaTranscriptionConfigured(ctx context.Context) bool {
 		backend = "remote"
 	}
 	if backend == "local" {
-		i, err := s.Installed(ctx, localASRPluginID)
+		i, err := s.Installed(ctx, localasr.PluginID)
 		if err != nil || !i.Enabled || i.Removed {
 			return false
 		}
@@ -166,7 +167,7 @@ func newMediaTranscriptionPolicyForStore(ctx context.Context, m *Manager, store 
 			return nil, errors.New("local_asr_profile_unavailable")
 		}
 		p.runLocal = m.runRegisteredLocalASR
-		i, err := store.Installed(ctx, localASRPluginID)
+		i, err := store.Installed(ctx, localasr.PluginID)
 		if err != nil {
 			return nil, errors.New("local_asr_plugin_unavailable")
 		}
@@ -176,7 +177,7 @@ func newMediaTranscriptionPolicyForStore(ctx context.Context, m *Manager, store 
 		if !ok {
 			return nil, errors.New("local_asr_profile_unavailable")
 		}
-		p.localProfileID, p.localVersion, p.localTimeout = profile.initializer.ProfileID, profile.initializer.ResourceVersion, int(profile.runner.TimeoutSeconds)
+		p.localProfileID, p.localVersion, p.localTimeout = profile.Metadata().ProfileID, profile.Metadata().ResourceVersion, profile.TimeoutSeconds()
 		if p.localTimeout < 1 {
 			return nil, errors.New("local_asr_profile_unavailable")
 		}
@@ -247,7 +248,7 @@ func (p *mediaTranscriptionPolicy) Check(ctx context.Context, j pluginhost.Job, 
 	// a transcript under a replaced SDK, VAD, or manifest.
 	if p.backend == "local" {
 		profile, ok := p.manager.registeredLocalASRProfile(ctx, i.Package, pluginhost.Grant{Account: p.invocationValue.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions})
-		if !ok || profile.initializer.ProfileID != p.localProfileID || profile.initializer.ResourceVersion != p.localVersion {
+		if !ok || profile.Metadata().ProfileID != p.localProfileID || profile.Metadata().ResourceVersion != p.localVersion {
 			return errors.New("media_local_transcription_profile_changed")
 		}
 	}
@@ -359,7 +360,7 @@ func (p *mediaTranscriptionPolicy) localTranscription(ctx context.Context, j plu
 		return nil, errors.New("media_local_transcription_unavailable")
 	}
 	profile, ok := p.manager.registeredLocalASRProfile(ctx, i.Package, pluginhost.Grant{Account: p.invocationValue.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions})
-	if !ok || profile.initializer.ProfileID != p.localProfileID || profile.initializer.ResourceVersion != p.localVersion {
+	if !ok || profile.Metadata().ProfileID != p.localProfileID || profile.Metadata().ResourceVersion != p.localVersion {
 		return nil, errors.New("media_local_transcription_profile_changed")
 	}
 	state, text, err := p.runLocal(ctx, i.Package, pluginhost.Grant{Account: p.invocationValue.Account, Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, profile, p.wav, request.TimeoutSeconds)
