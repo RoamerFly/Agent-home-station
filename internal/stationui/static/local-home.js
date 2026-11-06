@@ -857,13 +857,23 @@
         confirmed.type = "checkbox";
         const label = document.createElement("label");
         label.append(confirmed, document.createTextNode("我已确认旧资料和当前目标是同一个实际微信账号"));
+        const canEnableChannelsSummary = value?.can_enable_channels_summary === true;
+        const enableChannelsSummary = document.createElement("input");
+        enableChannelsSummary.type = "checkbox";
+        const summaryLabel = document.createElement("label");
+        summaryLabel.append(enableChannelsSummary, document.createTextNode("同时开启此群的视频号自动总结"));
+        const summaryScope = appElement("small", "仅对之后收到的分享生效，沿用当前已有的回复与附件授权。");
         const apply = appSetupButton("确认接续旧备注", async () => {
           const current = apps;
           apply.disabled = true;
           try {
-            await request(url, { method: "POST", body: JSON.stringify({ digest: value.digest, same_identity: true }) });
+            const body = { digest: value.digest, same_identity: true };
+            if (canEnableChannelsSummary && enableChannelsSummary.checked) body.enable_channels_summary = true;
+            await request(url, { method: "POST", body: JSON.stringify(body) });
             if (current !== apps) return;
-            appFeedback("旧群备注已接续。可在回复范围中查看或编辑。");
+            appFeedback(body.enable_channels_summary ?
+              "旧群备注已接续，视频号自动总结已开启。" :
+              "旧群备注已接续。可在回复范围中查看或编辑。");
             await loadApps();
           } catch (error) {
             panel.replaceChildren(appElement("small", error.message),
@@ -875,7 +885,8 @@
         const actions = appElement("div", "", "legacy-memory-confirm");
         actions.append(label, apply);
         panel.replaceChildren(appElement("strong", "旧群备注"), appElement("p", value.note),
-          appElement("small", "只接续备注文字。分享总结沿用当前连接的开关。"), actions);
+          canEnableChannelsSummary ? summaryLabel : appElement("small", "只接续备注文字。分享总结沿用当前连接的开关。"),
+          canEnableChannelsSummary ? summaryScope : document.createTextNode(""), actions);
       } catch (error) {
         panel.replaceChildren(appElement("small", error.message));
       }

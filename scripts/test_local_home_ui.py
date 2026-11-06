@@ -764,12 +764,14 @@ def verify(binary, output):
                         thread = unquote(path.split(selected_prefix, 1)[1])
                         if thread == "synthetic-room@chatroom/preference":
                             if route.request.method == "GET":
-                                fulfill_json({"status": "ready", "digest": "fixture-legacy-note", "note": note_text})(route)
+                                fulfill_json({"status": "ready", "digest": "fixture-legacy-note", "note": note_text,
+                                              "can_enable_channels_summary": True})(route)
                             else:
                                 assert route.request.method == "POST"
                                 assert route.request.headers.get("x-csrf-token")
                                 note_posts.append(route.request.post_data_json)
-                                assert note_posts == [{"digest": "fixture-legacy-note", "same_identity": True}]
+                                assert note_posts == [{"digest": "fixture-legacy-note", "same_identity": True,
+                                                       "enable_channels_summary": True}]
                                 fulfill_json({"status": "applied"})(route)
                             return
                         assert thread == "synthetic-room@chatroom"
@@ -986,9 +988,14 @@ def verify(binary, output):
                 page.get_by_text(note_text, exact=True).wait_for()
                 note_apply = page.get_by_role("button", name="确认接续旧备注", exact=True)
                 assert note_apply.is_disabled() and not note_posts, "note preview must wait for identity confirmation"
+                channels_summary_opt_in = page.get_by_role("checkbox", name="同时开启此群的视频号自动总结", exact=True)
+                assert not channels_summary_opt_in.is_checked(), "legacy summary opt-in must start unchecked"
+                page.get_by_text("仅对之后收到的分享生效，沿用当前已有的回复与附件授权。", exact=True).wait_for()
                 page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
+                assert not channels_summary_opt_in.is_checked(), "identity confirmation must not opt in to automatic summaries"
+                channels_summary_opt_in.check()
                 note_apply.click()
-                page.get_by_text("旧群备注已接续。可在回复范围中查看或编辑。", exact=True).wait_for()
+                page.get_by_text("旧群备注已接续，视频号自动总结已开启。", exact=True).wait_for()
                 assert len(note_posts) == 1 and not worker["actions"] and not worker["threads"]
                 page.get_by_role("button", name="设置回复范围").click()
                 page.get_by_role("textbox", name="回复会话 ID", exact=True).fill("filehelper\nsynthetic-room@chatroom")

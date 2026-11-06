@@ -17,11 +17,12 @@ import (
 )
 
 type legacyGroupSettingView struct {
-	Status        string                                `json:"status"`
-	Digest        string                                `json:"digest,omitempty"`
-	Note          string                                `json:"note,omitempty"`
-	ReplySettings *apphost.ConnectionGroupReplySettings `json:"reply_settings,omitempty"`
-	Reason        string                                `json:"reason,omitempty"`
+	Status                   string                                `json:"status"`
+	Digest                   string                                `json:"digest,omitempty"`
+	Note                     string                                `json:"note,omitempty"`
+	CanEnableChannelsSummary bool                                  `json:"can_enable_channels_summary,omitempty"`
+	ReplySettings            *apphost.ConnectionGroupReplySettings `json:"reply_settings,omitempty"`
+	Reason                   string                                `json:"reason,omitempty"`
 }
 
 func (s *stationWechat) legacyGroupSettingRoutes(server *websession.Store, mux *http.ServeMux, path string, replyRule bool) {
@@ -32,12 +33,12 @@ func (s *stationWechat) legacyGroupSettingRoutes(server *websession.Store, mux *
 			websession.Fail(w, http.StatusBadRequest, "请选择明确的群聊")
 			return
 		}
-		var digest string
+		var in struct {
+			Digest                string `json:"digest"`
+			SameIdentity          bool   `json:"same_identity"`
+			EnableChannelsSummary bool   `json:"enable_channels_summary"`
+		}
 		if r.Method == http.MethodPost {
-			var in struct {
-				Digest       string `json:"digest"`
-				SameIdentity bool   `json:"same_identity"`
-			}
 			if !websession.Decode(w, r, &in) {
 				return
 			}
@@ -45,15 +46,18 @@ func (s *stationWechat) legacyGroupSettingRoutes(server *websession.Store, mux *
 				websession.Fail(w, http.StatusBadRequest, "请预演并确认新旧连接使用同一个实际微信账号")
 				return
 			}
-			digest = in.Digest
+			if replyRule && in.EnableChannelsSummary {
+				websession.Fail(w, http.StatusBadRequest, "请通过旧群备注接续开启视频号自动总结")
+				return
+			}
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		view, err := s.legacyGroupSetting(ctx, r.PathValue("connection"), thread, digest, replyRule)
+		view, err := s.legacyGroupSetting(ctx, r.PathValue("connection"), thread, in.Digest, replyRule, in.EnableChannelsSummary)
 		switch {
 		case err != nil:
 			legacyImportFailure(w, err)
-		case digest != "" && view.Status != "applied":
+		case in.Digest != "" && view.Status != "applied":
 			websession.Fail(w, http.StatusConflict, view.Reason)
 		default:
 			websession.Respond(w, http.StatusOK, view)
@@ -63,7 +67,7 @@ func (s *stationWechat) legacyGroupSettingRoutes(server *websession.Store, mux *
 	mux.HandleFunc("POST "+path, handle)
 }
 
-func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, digest string, replyRule bool) (legacyGroupSettingView, error) {
+func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, digest string, replyRule, enableChannelsSummary bool) (legacyGroupSettingView, error) {
 	unavailable := func(status, reason string) (legacyGroupSettingView, error) {
 		return legacyGroupSettingView{Status: status, Reason: reason}, nil
 	}
@@ -92,7 +96,7 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 		return unavailable("not_ready", "请先授权该群的回复范围和历史读取")
 	}
 	if prior := imports[thread]; prior != "" {
-		if digest != "" && prior != digest {
+		if digest != "" && prior != legacyGroupSettingReceipt(digest, enableChannelsSummary) {
 			return unavailable("conflict", "此设置已有接续记录")
 		}
 		return legacyGroupSettingView{Status: "applied"}, nil
@@ -101,11 +105,16 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 		return unavailable("not_ready", "请先暂停连接并等候工作器退出")
 	}
 	current := worker.policy.GroupRules[thread]
+	attachment := worker.policy.AttachmentGrants[thread]
+	canEnableChannelsSummary := !attachment.IsZero() && current.SummarizeSince.IsZero()
 	if replyRule && current.hasReplySettings() {
 		return unavailable("conflict", "新站已有该群回复规则，保留现有内容")
 	}
 	if !replyRule && current.Note != "" {
 		return unavailable("conflict", "新站已有该群备注，保留现有内容")
+	}
+	if enableChannelsSummary && !canEnableChannelsSummary {
+		return unavailable("conflict", "只有已授权附件读取且尚未开启自动总结的群才可同时开启")
 	}
 	target, err := workspacefs.OpenPath(worker.dir)
 	if err != nil {
@@ -176,8 +185,8 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 		if note == "" {
 			return unavailable("empty", "该群没有保存过可接续的文本备注")
 		}
-		view = legacyGroupSettingView{Status: "ready", Note: note}
-		bindingFields = []any{"legacy-group-note-v1", legacyMemoryVersion{Size: file.Size(), Modified: file.ModTime().UTC()}, note}
+		view = legacyGroupSettingView{Status: "ready", Note: note, CanEnableChannelsSummary: canEnableChannelsSummary}
+		bindingFields = []any{"legacy-group-note-v2", legacyMemoryVersion{Size: file.Size(), Modified: file.ModTime().UTC()}, note, attachment}
 		verifySource = func() bool {
 			fresh, err := dir.Lstat(legacyMemoryDB)
 			if err != nil || !sameLegacyMemoryFile(file, fresh) || !standaloneLegacyMemory(dir) {
@@ -213,7 +222,6 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 	if ctx.Err() != nil || s.ctx.Err() != nil {
 		return legacyGroupSettingView{}, apphost.ErrLifecycleConflict
 	}
-	// The independent share toggle and grants keep their current epochs.
 	next := worker.policy
 	next.GroupRules = maps.Clone(next.GroupRules)
 	if next.GroupRules == nil {
@@ -223,7 +231,7 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 	if imports == nil {
 		imports = make(map[string]string)
 	}
-	imports[thread] = want
+	imports[thread] = legacyGroupSettingReceipt(want, enableChannelsSummary)
 	if replyRule {
 		if err := current.setReplySettings(*view.ReplySettings, time.Now().UTC()); err != nil {
 			return legacyGroupSettingView{}, err
@@ -231,6 +239,12 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 		next.LegacyGroupReplyImports = imports
 	} else {
 		current.Note = view.Note
+		if enableChannelsSummary {
+			current.SummarizeSince = time.Now().UTC()
+			if !validStationGroupRule(thread, current, next.Grants, next.AttachmentGrants) {
+				return unavailable("conflict", "无法核对视频号自动总结的授权时间，请检查系统时间后重试")
+			}
+		}
 		next.LegacyGroupNoteImports = imports
 	}
 	next.GroupRules[thread] = current
@@ -238,6 +252,15 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 		return legacyGroupSettingView{}, err
 	}
 	return legacyGroupSettingView{Status: "applied"}, nil
+}
+
+// Bind the opt-in choice to its durable receipt. A retried note-only request
+// cannot turn summaries on, and replay never changes the current setting.
+func legacyGroupSettingReceipt(digest string, enableChannelsSummary bool) string {
+	if enableChannelsSummary {
+		return localCheckpointKey("legacy-group-note-channels-summary-v1", digest)
+	}
+	return digest
 }
 
 func readLegacyGroupReplySettings(root *os.Root, config, thread string, guard *legacySnapshotGuard) (legacyGroupSettingView, string) {

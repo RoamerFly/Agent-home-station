@@ -621,9 +621,15 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		}
 	}
 	notePreview := req("GET", noteRoute, nil, false, 200)
-	if notePreview["status"] != "ready" || notePreview["note"] != oldGroupNote {
+	if notePreview["status"] != "ready" || notePreview["note"] != oldGroupNote || notePreview["can_enable_channels_summary"] != nil {
 		t.Fatal("old scoped note unavailable after history import", notePreview)
 	}
+	postNoteWithSummary := func(plan map[string]any) map[string]any {
+		body := postMemory(plan, true)
+		body["enable_channels_summary"] = true
+		return body
+	}
+	req("POST", noteRoute, postNoteWithSummary(notePreview), true, 409)
 	req("POST", noteRoute, postMemory(notePreview, true), false, 403)
 	req("POST", noteRoute, postMemory(notePreview, false), true, 400)
 	setNote("合成新站备注", true)
@@ -631,21 +637,44 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	checkNote("合成新站备注", true)
 	setNote("", false)
 	notePreview = req("GET", noteRoute, nil, false, 200)
+	if notePreview["can_enable_channels_summary"] != true {
+		t.Fatal("existing attachment grant did not allow an explicit opt-in", notePreview)
+	}
+	req("PUT", route("one")+"/policy", map[string]any{
+		"reply_threads": []string{"123@chatroom", "filehelper"}, "attachment_threads": []string{},
+	}, true, 200)
+	req("POST", noteRoute, postNoteWithSummary(notePreview), true, 409)
+	setNote("", false)
+	req("POST", noteRoute, postNoteWithSummary(notePreview), true, 409)
+	notePreview = req("GET", noteRoute, nil, false, 200)
 	write(liveMarker, j(starting))
 	req("POST", noteRoute, postMemory(notePreview, true), true, 409)
 	write(liveMarker, j(marker))
 	notePreview = req("GET", noteRoute, nil, false, 200)
-	req("POST", noteRoute, postMemory(notePreview, true), true, 200)
-	checkNote(oldGroupNote, false)
+	beforeSummary := time.Now().UTC().Add(-time.Second)
+	req("POST", noteRoute, postNoteWithSummary(notePreview), true, 200)
+	req("POST", noteRoute, postMemory(notePreview, true), true, 409)
+	checkNote(oldGroupNote, true)
+	summaryWorker, err := h.chat.wechat.worker(wechatapp.ConnectionID("one"), false)
+	if err != nil || summaryWorker == nil {
+		t.Fatal("could not read imported group policy", err)
+	}
+	summaryWorker.mu.Lock()
+	allowedBefore := summaryWorker.policy.groupShareAllowed("123@chatroom", beforeSummary.Format(time.RFC3339Nano))
+	allowedAfter := summaryWorker.policy.groupShareAllowed("123@chatroom", time.Now().UTC().Format(time.RFC3339Nano))
+	summaryWorker.mu.Unlock()
+	if allowedBefore || !allowedAfter {
+		t.Fatal("the imported summary preference must only apply from confirmation", allowedBefore, allowedAfter)
+	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}
 	h, f = open()
 	f.login()
 	assertCutoverOwnerState(t, f, ownerIdentity, speakingVoice)
-	checkNote(oldGroupNote, false)
+	checkNote(oldGroupNote, true)
 	setNote("", false)
-	req("POST", noteRoute, postMemory(notePreview, true), true, 200)
+	req("POST", noteRoute, postNoteWithSummary(notePreview), true, 200)
 	checkNote("", false)
 	// This group has a config rule and no SQLite scope. A reply grant, but
 	// no attachment or history grant, is required to inspect its old settings.
