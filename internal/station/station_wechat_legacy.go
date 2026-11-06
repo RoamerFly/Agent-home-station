@@ -103,10 +103,12 @@ func legacySuggestedThreads(policy legacyImportPolicy) (threads, omitted []strin
 	for _, group := range policy.Groups {
 		if identity.ValidPathID(group.ID) && strings.HasSuffix(group.ID, "@chatroom") && group.Mode == "mention" && group.Prefix == "" {
 			set[group.ID] = true
-		} else {
-			if !slices.Contains(omitted, "group_rule") {
-				omitted = append(omitted, "group_rule")
+			if group.Persona == "" && !group.ForceReplyWhenMentioned && policy.Prefix == "/ai " {
+				continue
 			}
+		}
+		if !slices.Contains(omitted, "group_rule") {
+			omitted = append(omitted, "group_rule")
 		}
 	}
 	for thread := range set {
@@ -114,6 +116,15 @@ func legacySuggestedThreads(policy legacyImportPolicy) (threads, omitted []strin
 	}
 	slices.Sort(threads)
 	return threads, omitted
+}
+
+func decodeLegacyImportPolicy(raw []byte) (legacyImportPolicy, error) {
+	policy := legacyImportPolicy{Filehelper: true, Prefix: "/ai "}
+	policy.Companion.Permissions.ReplyText = true
+	if json.Unmarshal(raw, &policy) != nil || len(policy.DirectIDs) > 100 || len(policy.Groups) > 100 {
+		return legacyImportPolicy{}, errLegacyImportInvalid
+	}
+	return policy, nil
 }
 
 func readLegacyImportFile(root *os.Root, name string, max int64) ([]byte, error) {
@@ -276,10 +287,9 @@ func (s *stationWechat) previewLegacyImport(ctx context.Context, id string) (leg
 	if err != nil {
 		return legacyImportArchive{}, errLegacyImportInvalid
 	}
-	policy := legacyImportPolicy{Filehelper: true, Prefix: "/ai "}
-	policy.Companion.Permissions.ReplyText = true
-	if json.Unmarshal(cfg, &policy) != nil || len(policy.DirectIDs) > 100 || len(policy.Groups) > 100 {
-		return legacyImportArchive{}, errLegacyImportInvalid
+	policy, err := decodeLegacyImportPolicy(cfg)
+	if err != nil {
+		return legacyImportArchive{}, err
 	}
 	queue, err := readLegacyImportFile(root, filepath.Join(queueDir, "messages-v2.json"), bot.MaxDeliveryCheckpointBytes)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

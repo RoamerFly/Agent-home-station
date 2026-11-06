@@ -497,6 +497,7 @@ def verify(binary, output):
                 legacy = {"availability": "available", "previews": 0, "posts": []}
                 legacy_memory = {"requests": []}
                 legacy_memory_selection = {"gets": [], "posts": []}
+                legacy_group_rule = {"gets": [], "posts": []}
 
                 def legacy_plan(applied=False):
                     refreshed = legacy["availability"] == "applied" and legacy["previews"] >= 3
@@ -536,7 +537,11 @@ def verify(binary, output):
                     worker["attachment_threads"] = body["attachment_threads"]
                     worker["media_reply_threads"] = body["media_reply_threads"]
                     worker["group_mute_threads"] = body["group_mute_threads"]
-                    worker["group_rules"] = body.get("group_rules", [])
+                    worker["group_rules"] = [
+                        {key: value for key, value in rule.items()
+                         if key != "reply_settings" or value != {"mode": "mention"}}
+                        for rule in body.get("group_rules", [])
+                    ]
                     worker["contact_read"] = body["contact_read"]
                     fulfill_json(worker_view())(route)
 
@@ -570,6 +575,30 @@ def verify(binary, output):
                     fulfill_json(legacy_plan(True))(route)
 
                 page.route(legacy_import_pattern, legacy_import)
+                legacy_group_rule_pattern = legacy_import_pattern + "/groups/*/rule"
+
+                def legacy_group_rule_import(route):
+                    path = urlparse(route.request.url).path
+                    thread = unquote(path.split("/groups/", 1)[1].rsplit("/rule", 1)[0])
+                    assert thread == "synthetic-room@chatroom"
+                    if route.request.method == "GET":
+                        legacy_group_rule["gets"].append(thread)
+                        fulfill_json({"status": "ready", "digest": "fixture-legacy-group-rule",
+                                      "reply_settings": {"mode": "all", "prefix": "!fish ",
+                                                         "persona": "旧版群角色 <原样显示>",
+                                                         "force_reply_when_mentioned": True},
+                                      "reason": "已找到旧版群触发方式"})(route)
+                        return
+                    assert route.request.method == "POST"
+                    assert route.request.headers.get("x-csrf-token"), "group-rule import lacks owner CSRF"
+                    legacy_group_rule["posts"].append(route.request.post_data_json)
+                    assert legacy_group_rule["posts"] == [{"digest": "fixture-legacy-group-rule", "same_identity": True}]
+                    worker["group_rules"] = [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True,
+                                              "reply_settings": {"mode": "all", "prefix": "!fish ", "persona": "旧版群角色 <原样显示>",
+                                                                 "force_reply_when_mentioned": True}}]
+                    fulfill_json({"status": "applied", "reason": "已接续旧版群触发方式"})(route)
+
+                page.route(legacy_group_rule_pattern, legacy_group_rule_import)
                 legacy_memory_pattern = legacy_import_pattern + "/memory*"
                 note_text = "合成旧群备注：<原样显示>"
                 note_posts = []
@@ -760,6 +789,27 @@ def verify(binary, output):
                 assert worker["attachment_threads"] == ["synthetic-room@chatroom"]
                 assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True}]
                 assert worker["policy_payloads"][-1]["group_rules"] == worker["group_rules"], "group settings must use the local policy route only"
+                page.get_by_role("button", name="核对旧群触发方式", exact=True).click()
+                page.get_by_text("旧群触发方式", exact=True).wait_for()
+                page.get_by_text("触发前缀：!fish ", exact=True).wait_for()
+                page.get_by_text("角色补充：旧版群角色 <原样显示>", exact=True).wait_for()
+                legacy_group_apply = page.get_by_role("button", name="确认接续旧群触发方式", exact=True)
+                assert legacy_group_apply.is_disabled() and not legacy_group_rule["posts"], "group trigger preview must wait for identity confirmation"
+                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
+                legacy_group_apply.click()
+                page.locator("#apps-feedback").get_by_text("旧群触发方式已接续。可在本群偏好中继续调整。", exact=True).wait_for()
+                assert legacy_group_rule["gets"] == ["synthetic-room@chatroom"]
+                assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True,
+                                                   "reply_settings": {"mode": "all", "prefix": "!fish ", "persona": "旧版群角色 <原样显示>",
+                                                                      "force_reply_when_mentioned": True}}]
+                page.get_by_text("触发方式与角色（可选）", exact=True).click()
+                assert page.get_by_role("combobox", name="synthetic-room@chatroom 群聊触发方式", exact=True).input_value() == "all"
+                assert page.get_by_role("textbox", name="synthetic-room@chatroom 群聊触发前缀", exact=True).input_value() == "!fish "
+                page.get_by_role("button", name="恢复默认触发方式", exact=True).click()
+                page.get_by_role("button", name="保存回复范围").click()
+                page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
+                assert worker["policy_payloads"][-1]["group_rules"][0]["reply_settings"] == {"mode": "mention"}
+                assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True}]
                 assert page.get_by_role("textbox", name="附件读取会话 ID").input_value() == "synthetic-room@chatroom"
                 assert worker["media_reply_threads"] == ["synthetic-room@chatroom"]
                 assert page.get_by_role("textbox", name="附件回复会话 ID").input_value() == "synthetic-room@chatroom"

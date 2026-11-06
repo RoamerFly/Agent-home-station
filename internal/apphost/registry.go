@@ -35,11 +35,24 @@ type Connection struct {
 	Configuration string `json:"configuration"`
 }
 
+// ConnectionGroupReplySettings configures how an already-authorized group may
+// start a reply. It is optional so older callers that do not know about reply
+// settings cannot accidentally reset a group's existing settings.
+type ConnectionGroupReplySettings struct {
+	Mode                    string `json:"mode,omitempty"`
+	Prefix                  string `json:"prefix,omitempty"`
+	Persona                 string `json:"persona,omitempty"`
+	ForceReplyWhenMentioned bool   `json:"force_reply_when_mentioned,omitempty"`
+}
+
 // ConnectionGroupRule configures one already-authorized conversation.
 type ConnectionGroupRule struct {
 	ThreadID        string `json:"thread_id"`
 	Note            string `json:"note"`
 	SummarizeShares bool   `json:"summarize_shares"`
+	// ReplySettings is deliberately optional. A missing value preserves the
+	// stored reply settings, while a present value explicitly replaces them.
+	ReplySettings *ConnectionGroupReplySettings `json:"reply_settings,omitempty"`
 }
 
 // ConfiguredPolicy is the existing account policy, without owner/recipient IDs

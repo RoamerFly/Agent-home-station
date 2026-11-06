@@ -322,6 +322,7 @@
           plan = await request("/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import", {
             method: "POST", body: JSON.stringify({ digest: value.digest })
           });
+          connection.legacy_import = "applied";
           note.textContent = "旧版接入摘要已保存，可随时查看。";
           preview.textContent = "查看接入摘要";
           renderPlan("旧版摘要已保存；没有启动 Agent，也没有修改回复范围。");
@@ -562,9 +563,22 @@
     groupMutes.value = apps.groupMuteDrafts.get(id) ?? (status.configured_policy?.group_mute_threads || []).join("\n");
     groupMutes.addEventListener("input", () => apps.groupMuteDrafts.set(id, groupMutes.value));
     const groupRules = appElement("div", "", "group-rule-settings");
+    const normalizeReplySettings = (settings) => {
+      if (!settings || typeof settings !== "object" || Array.isArray(settings)) return undefined;
+      return {
+        mode: settings.mode === "all" ? "all" : "mention",
+        prefix: typeof settings.prefix === "string" ? settings.prefix : "",
+        persona: typeof settings.persona === "string" ? settings.persona : "",
+        force_reply_when_mentioned: settings.force_reply_when_mentioned === true
+      };
+    };
     const configuredRules = new Map((status.configured_policy?.group_rules || [])
       .filter((rule) => rule && typeof rule.thread_id === "string")
-      .map((rule) => [rule.thread_id, { note: String(rule.note || ""), summarize_shares: Boolean(rule.summarize_shares) }]));
+      .map((rule) => [rule.thread_id, {
+        note: String(rule.note || ""),
+        summarize_shares: Boolean(rule.summarize_shares),
+        reply_settings: normalizeReplySettings(rule.reply_settings)
+      }]));
     const readGroupRule = (threadID) => apps.groupRuleDrafts.get(id)?.get(threadID) || configuredRules.get(threadID) || { note: "", summarize_shares: false };
     const updateGroupRule = (threadID, patch) => {
       let drafts = apps.groupRuleDrafts.get(id);
@@ -575,6 +589,79 @@
       drafts.set(threadID, { ...readGroupRule(threadID), ...patch });
     };
     const replyGroups = () => field.value.split(/[\s，,]+/u).filter((threadID) => threadID.endsWith("@chatroom"));
+    const legacyGroupRuleURL = (threadID) => "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import/groups/" + encodeURIComponent(threadID) + "/rule";
+    let legacyGroupRuleBusy = false;
+    const readLegacyGroupRule = async (threadID, panel) => {
+      if (legacyGroupRuleBusy) return;
+      if (apps.groupRuleDrafts.get(id)?.has(threadID)) {
+        panel.replaceChildren(appElement("small", "请先保存本群设置，再核对旧群触发方式。"));
+        return;
+      }
+      legacyGroupRuleBusy = true;
+      panel.replaceChildren(appElement("small", "正在核对旧群触发方式…"));
+      try {
+        const value = await request(legacyGroupRuleURL(threadID));
+        const statusCopy = {
+          applied: "此群的旧触发方式已接续。",
+          conflict: "旧触发方式与当前群设置冲突，未作修改。",
+          not_ready: "请先完成旧版接入，并在回复范围中保留这个群。",
+          empty: "旧版没有这个群的可接续触发方式。",
+          unsupported: "这份旧版资料不支持接续群触发方式。"
+        };
+        if (value?.status !== "ready" || !value.digest || !value.reply_settings) {
+          panel.replaceChildren(appElement("small", value?.reason || statusCopy[value?.status] || "暂时无法接续旧群触发方式。"));
+          return;
+        }
+        const settings = normalizeReplySettings(value.reply_settings);
+        if (!settings) {
+          panel.replaceChildren(appElement("small", "旧群触发方式格式不完整，未作修改。"));
+          return;
+        }
+        const confirmID = `legacy-group-rule-confirm-${String(threadID).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+        const confirmed = document.createElement("input");
+        confirmed.type = "checkbox";
+        confirmed.id = confirmID;
+        const label = document.createElement("label");
+        label.htmlFor = confirmID;
+        label.textContent = "我已确认旧资料和当前目标是同一个实际微信账号";
+        const apply = appSetupButton("确认接续旧群触发方式", async () => {
+          const current = apps;
+          apply.disabled = true;
+          try {
+            const applied = await request(legacyGroupRuleURL(threadID), {
+              method: "POST", body: JSON.stringify({ digest: value.digest, same_identity: true })
+            });
+            if (current !== apps) return;
+            if (applied?.status !== "applied") {
+              panel.replaceChildren(appElement("small", applied?.reason || statusCopy[applied?.status] || "旧群触发方式没有接续。"));
+              return;
+            }
+            appFeedback("旧群触发方式已接续。可在本群偏好中继续调整。");
+            await loadApps();
+          } catch (error) {
+            panel.replaceChildren(appElement("small", error.message),
+              appSetupButton("重新核对旧群触发方式", () => readLegacyGroupRule(threadID, panel)));
+          }
+        });
+        apply.disabled = true;
+        confirmed.addEventListener("change", () => { apply.disabled = !confirmed.checked; });
+        const actions = appElement("div", "", "legacy-memory-confirm");
+        actions.append(confirmed, label, apply);
+        panel.replaceChildren(
+          appElement("strong", "旧群触发方式"),
+          appElement("small", settings.mode === "all" ? "旧版：每条群聊文字都交给大肥鱼判断是否回应" : "旧版：仅在被提及时回应"),
+          settings.prefix ? appElement("small", "触发前缀：" + settings.prefix) : document.createTextNode(""),
+          settings.persona ? appElement("small", "角色补充：" + settings.persona) : document.createTextNode(""),
+          settings.force_reply_when_mentioned ? appElement("small", "被提及时强制回复") : document.createTextNode(""),
+          value.reason ? appElement("small", value.reason) : document.createTextNode(""),
+          actions
+        );
+      } catch (error) {
+        panel.replaceChildren(appElement("small", error.message));
+      } finally {
+        legacyGroupRuleBusy = false;
+      }
+    };
     const renderGroupRules = () => {
       const groups = replyGroups();
       groupRules.replaceChildren(appElement("strong", "群聊偏好"));
@@ -600,6 +687,66 @@
         summarizeLabel.append(summarize, appElement("span", "收到视频号分享时自动总结"));
         row.append(appElement("small", threadID), note, summarizeLabel);
         if (summarize.disabled) row.append(appElement("small", "需先在“附件读取会话”中授权本群读取视频号；不会自动开启。"));
+        const advanced = document.createElement("details");
+        advanced.className = "group-rule-advanced";
+        advanced.append(appElement("summary", "触发方式与角色（可选）"));
+        const settings = value.reply_settings;
+        const effective = settings || { mode: "mention", prefix: "", persona: "", force_reply_when_mentioned: false };
+        const fields = appElement("div", "", "details-grid");
+        const mode = document.createElement("select");
+        mode.setAttribute("aria-label", threadID + " 群聊触发方式");
+        for (const [optionValue, optionText] of [["mention", "只在提及时回复"], ["all", "每条群聊文字都交给大肥鱼判断"]]) {
+          const option = document.createElement("option");
+          option.value = optionValue;
+          option.textContent = optionText;
+          mode.append(option);
+        }
+        mode.value = effective.mode;
+        const prefix = document.createElement("input");
+        prefix.value = effective.prefix;
+        prefix.placeholder = "可选触发前缀，保留末尾空格";
+        prefix.setAttribute("aria-label", threadID + " 群聊触发前缀");
+        const persona = document.createElement("textarea");
+        persona.rows = 2;
+        persona.value = effective.persona;
+        persona.placeholder = "本群补充设定（可选）";
+        persona.setAttribute("aria-label", threadID + " 群聊角色补充设定");
+        const force = document.createElement("input");
+        force.type = "checkbox";
+        force.checked = effective.force_reply_when_mentioned;
+        force.setAttribute("aria-label", threadID + " 被提及时强制回复");
+        const writeSettings = () => updateGroupRule(threadID, { reply_settings: {
+          mode: mode.value === "all" ? "all" : "mention",
+          prefix: prefix.value,
+          persona: persona.value,
+          force_reply_when_mentioned: force.checked
+        } });
+        mode.addEventListener("change", writeSettings);
+        prefix.addEventListener("input", writeSettings);
+        persona.addEventListener("input", writeSettings);
+        force.addEventListener("change", writeSettings);
+        const modeLabel = appElement("label", "回复触发方式");
+        modeLabel.append(mode);
+        const prefixLabel = appElement("label", "触发前缀");
+        prefixLabel.append(prefix);
+        const personaLabel = appElement("label", "本群补充设定");
+        personaLabel.append(persona);
+        const forceLabel = appElement("label", "", "switch-row");
+        forceLabel.append(force, appElement("span", "被提及时强制回复"));
+        fields.append(modeLabel, prefixLabel, personaLabel, forceLabel);
+        if (settings) {
+          const reset = appSetupButton("恢复默认触发方式", () => {
+            updateGroupRule(threadID, { reply_settings: { mode: "mention" } });
+            renderGroupRules();
+          });
+          fields.append(reset);
+        }
+        advanced.append(fields);
+        row.append(advanced);
+        if (status.legacy_import === "applied" && (status.configured_policy?.reply_threads || []).includes(threadID)) {
+          const legacyRule = appElement("div", "", "legacy-memory-selection");
+          row.append(appSetupButton("核对旧群触发方式", () => readLegacyGroupRule(threadID, legacyRule)), legacyRule);
+        }
         groupRules.append(row);
       }
     };
@@ -616,7 +763,9 @@
       const group_mute_threads = groupMutes.value.split(/[\s，,]+/u).filter(Boolean);
       const group_rules = reply_threads.filter((threadID) => threadID.endsWith("@chatroom")).map((thread_id) => {
         const rule = readGroupRule(thread_id);
-        return { thread_id, note: rule.note.trim(), summarize_shares: Boolean(rule.summarize_shares) && attachment_threads.includes(thread_id) };
+        const payload = { thread_id, note: rule.note.trim(), summarize_shares: Boolean(rule.summarize_shares) && attachment_threads.includes(thread_id) };
+        if (rule.reply_settings !== undefined) payload.reply_settings = rule.reply_settings;
+        return payload;
       });
       runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, media_reply_threads, contact_read: contactRead.checked, group_mute_threads, group_rules });
     });

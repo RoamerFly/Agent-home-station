@@ -59,7 +59,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	receiptJSON := j(map[string]string{"id": "one", "storageMode": "managed", "profilePath": receiptProfile})
 	write(receiptPath, receiptJSON)
 	write(sourceConfig, j(source))
-	const rawConfig = `{"enabled":true,"connection_paused":false,"api_key":"synthetic-do-not-copy-legacy-key","private_enabled":true,"private_all_friends":true,"direct_ids":["friend-one"],"filehelper_enabled":true,"group_rules":[{"id":"123@chatroom","mode":"mention"},{"id":"124@chatroom","mode":"all"}]}`
+	const rawConfig = `{"enabled":true,"connection_paused":false,"api_key":"synthetic-do-not-copy-legacy-key","private_enabled":true,"private_all_friends":true,"direct_ids":["friend-one"],"filehelper_enabled":true,"companion":{"enabled":true,"permissions":{"reply_text":true}},"group_rules":[{"id":"123@chatroom","mode":"mention"},{"id":"124@chatroom","mode":"all","prefix":"/group ","persona":"synthetic scoped role","force_reply_when_mentioned":true},{"id":"125@chatroom","mode":"social"}]}`
 	configPath := filepath.Join(snapshot, "admin", "config.json")
 	write(configPath, []byte(rawConfig))
 	write(filepath.Join(snapshot, "admin", "accounts.json"), j([]wechatapp.LegacyAccountRecord{{ID: "two", Removed: true}, {ID: "three"}, {ID: "four"}, {ID: "five"}}))
@@ -141,9 +141,11 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		return body
 	}
 	memoryRoute := func(account string) string { return planRoute(account) + "/memory" }
+	ruleRoute := func(account, thread string) string { return planRoute(account) + "/groups/" + thread + "/rule" }
 	req("GET", planRoute("one"), nil, false, 401)
 	req("GET", memoryRoute("one"), nil, false, 401)
 	req("GET", memoryRoute("one")+"/123@chatroom/preference", nil, false, 401)
+	req("GET", ruleRoute("one", "124@chatroom"), nil, false, 401)
 	f.login()
 	assertCutoverOwnerState(t, f, ownerIdentity, speakingVoice)
 	req("GET", memoryRoute("two"), nil, false, 404)
@@ -335,6 +337,11 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	selectedRoute := memoryRoute("one") + "/123@chatroom"
 	noteRoute := selectedRoute + "/preference"
 	req("GET", memoryRoute("one")+"/filehelper/preference", nil, false, 400)
+	groupReplyRoute := ruleRoute("one", "124@chatroom")
+	req("GET", ruleRoute("one", "filehelper"), nil, false, 400)
+	if row := req("GET", groupReplyRoute, nil, false, 200); row["status"] != "not_ready" || row["reply_settings"] != nil {
+		t.Fatal("ungranted group disclosed its reply rule", row)
+	}
 	if row := req("GET", noteRoute, nil, false, 200); row["status"] != "not_ready" || row["note"] != nil {
 		t.Fatal("ungranted group disclosed old preference", row)
 	}
@@ -497,6 +504,69 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	setNote("", false)
 	req("POST", noteRoute, postMemory(notePreview, true), true, 200)
 	checkNote("", false)
+	// This group has a config rule and no SQLite scope. A reply grant, but
+	// no attachment or history grant, is required to inspect its old settings.
+	setRule := func(includeGroup bool, settings any) {
+		t.Helper()
+		threads := []string{"123@chatroom", "125@chatroom", "filehelper"}
+		body := map[string]any{"reply_threads": threads}
+		if includeGroup {
+			body["reply_threads"] = append(threads, "124@chatroom")
+			row := map[string]any{"thread_id": "124@chatroom", "note": "independent note"}
+			if settings != nil {
+				row["reply_settings"] = settings
+			}
+			body["group_rules"] = []any{row}
+		}
+		req("PUT", route("one")+"/policy", body, true, 200)
+	}
+	setRule(true, nil)
+	if row := req("GET", ruleRoute("one", "125@chatroom"), nil, false, 200); row["status"] != "unsupported" || row["reply_settings"] != nil {
+		t.Fatal("social mode was treated as an active grant", row)
+	}
+	if row := req("GET", ruleRoute("four", "124@chatroom"), nil, false, 200); row["status"] != "not_ready" || row["reply_settings"] != nil {
+		t.Fatal("another connection reused a group grant", row)
+	}
+	rulePreview := req("GET", groupReplyRoute, nil, false, 200)
+	expectedRule := map[string]any{"mode": "all", "prefix": "/group ", "persona": "synthetic scoped role", "force_reply_when_mentioned": true}
+	if rulePreview["status"] != "ready" || !bytes.Equal(j(rulePreview["reply_settings"]), j(expectedRule)) || bytes.Contains(j(rulePreview), []byte("do-not-copy")) {
+		t.Fatal("config-only rule preview was wrong", rulePreview)
+	}
+	req("POST", groupReplyRoute, postMemory(rulePreview, true), false, 403)
+	req("POST", groupReplyRoute, postMemory(rulePreview, false), true, 400)
+	write(configPath, []byte(strings.Replace(rawConfig, "synthetic scoped role", "changed synthetic role", 1)))
+	req("POST", groupReplyRoute, postMemory(rulePreview, true), true, 409)
+	write(configPath, []byte(rawConfig))
+	setRule(false, nil)
+	req("POST", groupReplyRoute, postMemory(rulePreview, true), true, 409)
+	setRule(true, nil)
+	req("POST", groupReplyRoute, postMemory(rulePreview, true), true, 409)
+	rulePreview = req("GET", groupReplyRoute, nil, false, 200)
+	req("POST", groupReplyRoute, postMemory(rulePreview, true), true, 200)
+	checkRule := func(expect any) {
+		t.Helper()
+		detail := detailFor("one")
+		rows := detail["configured_policy"].(map[string]any)["group_rules"].([]any)
+		if len(rows) != 1 || detail["worker"] != "paused" {
+			t.Fatal("unexpected policy or worker state after rule import", detail)
+		}
+		row := rows[0].(map[string]any)
+		if row["thread_id"] != "124@chatroom" || row["note"] != "independent note" || row["summarize_shares"] != false || !bytes.Equal(j(row["reply_settings"]), j(expect)) {
+			t.Fatal("rule import overwrote independent settings", row)
+		}
+	}
+	checkRule(expectedRule)
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h, f = open()
+	f.login()
+	checkRule(expectedRule)
+	setRule(true, nil)
+	checkRule(expectedRule)
+	setRule(true, map[string]string{"mode": "mention"})
+	req("POST", groupReplyRoute, postMemory(rulePreview, true), true, 200)
+	checkRule(nil)
 	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "applied" {
 		t.Fatal("applied scope was not restored after restart", row)
 	}

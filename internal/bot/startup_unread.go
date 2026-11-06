@@ -240,7 +240,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			in.Source = source
 		}
 	}
-	if !in.IsGroup || in.Directed {
+	if !in.IsGroup || in.Directed || w.config.GroupRules[thread].Mode == "all" {
 		in.Mode = "direct"
 	}
 	if in.GroupShareSummary {

@@ -63,6 +63,9 @@ type stationWechatPolicy struct {
 	// Persist the import claim with its note so retrying cannot restore a
 	// note the owner later edited, cleared, or lost by revoking its scope.
 	LegacyGroupNoteImports map[string]string `json:"legacy_group_note_imports,omitempty"`
+	// Persist the reply-policy import claim independently. This prevents a
+	// replay from restoring an old trigger or persona after an owner edit.
+	LegacyGroupReplyImports map[string]string `json:"legacy_group_reply_imports,omitempty"`
 }
 
 const stationWechatPolicyLimit = 128 << 10
@@ -270,6 +273,11 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 		}
 	}
+	for thread, digest := range policy.LegacyGroupReplyImports {
+		if !validStationGroup(thread) || !legacyMemoryDigestValid(digest) {
+			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
+		}
+	}
 	return policy, nil
 }
 
@@ -384,7 +392,12 @@ func (w *stationWechatWorker) policyView() *apphost.ConfiguredPolicy {
 	groupRules := make([]apphost.ConnectionGroupRule, 0, len(w.policy.GroupRules))
 	for _, thread := range slices.Sorted(maps.Keys(w.policy.GroupRules)) {
 		rule := w.policy.GroupRules[thread]
-		groupRules = append(groupRules, apphost.ConnectionGroupRule{ThreadID: thread, Note: rule.Note, SummarizeShares: !rule.SummarizeSince.IsZero()})
+		view := apphost.ConnectionGroupRule{ThreadID: thread, Note: rule.Note, SummarizeShares: !rule.SummarizeSince.IsZero()}
+		if rule.hasReplySettings() {
+			reply := rule.replyRule()
+			view.ReplySettings = &apphost.ConnectionGroupReplySettings{Mode: reply.Mode, Prefix: reply.Prefix, Persona: reply.Persona, ForceReplyWhenMentioned: reply.ForceReplyWhenMentioned}
+		}
+		groupRules = append(groupRules, view)
 	}
 	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0 || contactRead || len(groupMute) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, MediaReplyThreads: mediaReplies, HistoryThreads: history, ContactRead: contactRead, GroupMuteThreads: groupMute, GroupRules: groupRules}
 }
@@ -674,7 +687,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 	for thread := range policy.Grants {
 		threads = append(threads, thread)
 		if strings.HasSuffix(thread, "@chatroom") {
-			rules[thread] = bot.GroupRule{Mode: "mention"}
+			rules[thread] = policy.GroupRules[thread].replyRule()
 		}
 	}
 	options := bot.DefaultOptions()
@@ -714,8 +727,14 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 				return false
 			}
 			granted := policy.Grants[in.Thread]
+			if granted.IsZero() {
+				return false
+			}
+			if since := policy.GroupRules[in.Thread].ReplySince; since.After(granted) {
+				granted = since
+			}
 			when, err := time.Parse(time.RFC3339Nano, in.MessageTime)
-			return in.Account == native.Account() && !granted.IsZero() && err == nil && !when.Before(granted)
+			return in.Account == native.Account() && err == nil && !when.Before(granted)
 		},
 		AuthorizeMedia:      attachment.replyAllowed,
 		PrepareMediaSource:  attachment.stageReply,

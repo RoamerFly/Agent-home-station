@@ -42,3 +42,41 @@ func TestStationGroupSharePolicyNeedsCurrentScopedOptIn(t *testing.T) {
 		t.Fatal("regrant silently enabled summary", resumed, err)
 	}
 }
+
+func TestStationGroupReplySettingsPreserveLegacyAndAdvanceEpoch(t *testing.T) {
+	const room = "synthetic-room@chatroom"
+	now := time.Now().UTC().Truncate(time.Nanosecond)
+	replies := map[string]time.Time{room: now.Add(-time.Minute)}
+	previous := map[string]stationWechatGroupRule{room: {Mode: "all", Prefix: "问： ", Persona: "群聊人格", ForceReplyWhenMentioned: true, ReplySince: now.Add(-time.Second)}}
+
+	// A caller from before reply_settings existed must not erase it.
+	legacy := []apphost.ConnectionGroupRule{{ThreadID: room, Note: "旧客户端"}}
+	rules, err := stationGroupRules(previous, &legacy, replies, nil, now)
+	if err != nil || rules[room].replyRule() != previous[room].replyRule() || !rules[room].ReplySince.Equal(previous[room].ReplySince) {
+		t.Fatal(rules, err)
+	}
+	unchanged := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "all", Prefix: "问： ", Persona: "群聊人格", ForceReplyWhenMentioned: true}}}
+	rules, err = stationGroupRules(rules, &unchanged, replies, nil, now)
+	if err != nil || !rules[room].ReplySince.Equal(previous[room].ReplySince) {
+		t.Fatal("unchanged settings advanced reply epoch", rules, err)
+	}
+
+	// An explicit default replaces non-default values and starts a fresh epoch.
+	reset := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "mention"}}}
+	rules, err = stationGroupRules(rules, &reset, replies, nil, now)
+	if err != nil || rules[room].replyRule().Mode != "mention" || rules[room].hasReplySettings() || !rules[room].ReplySince.Equal(now) {
+		t.Fatal(rules, err)
+	}
+
+	prefix := "问： "
+	updated := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "all", Prefix: prefix, Persona: "新人格"}}}
+	rules, err = stationGroupRules(rules, &updated, replies, nil, now.Add(time.Second))
+	if err != nil || rules[room].Prefix != prefix || rules[room].Persona != "新人格" || rules[room].Mode != "all" || !rules[room].ReplySince.Equal(now.Add(time.Second)) {
+		t.Fatal(rules, err)
+	}
+
+	invalid := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "social"}}}
+	if _, err := stationGroupRules(rules, &invalid, replies, nil, now); err != apphost.ErrInvalidConnectionPolicy {
+		t.Fatal("social mode was accepted", err)
+	}
+}

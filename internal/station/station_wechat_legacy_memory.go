@@ -47,7 +47,6 @@ type legacyMemoryPreview struct {
 
 func (s *stationWechat) legacyMemoryRoute(server *websession.Store, mux *http.ServeMux) {
 	s.legacyMemoryImportRoutes(server, mux)
-	s.legacyGroupNoteRoutes(server, mux)
 	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/legacy-import/memory", server.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		limit := 30

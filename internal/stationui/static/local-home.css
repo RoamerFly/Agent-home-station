@@ -304,6 +304,12 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .identity-details { padding-top: 5px; border-top: 1px solid var(--line); }
 .identity-details summary { padding: 13px 0; cursor: pointer; color: var(--muted); font-size: .87rem; font-weight: 750; }
 .identity-details .details-grid { padding-bottom: 4px; }
+.group-rule-advanced { margin-top: 2px; border-top: 1px solid var(--line); }
+.group-rule-advanced summary { padding: 9px 0; cursor: pointer; color: var(--muted); font-size: .8rem; font-weight: 750; }
+.group-rule-advanced .details-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding: 2px 0 7px; }
+.group-rule-advanced .details-grid > label { display: grid; gap: 5px; color: var(--muted); font-size: .76rem; font-weight: 700; }
+.group-rule-advanced .details-grid > textarea, .group-rule-advanced .details-grid > label:nth-child(3) { grid-column: 1 / -1; }
+.group-rule-advanced .switch-row { padding: 9px; font-size: .8rem; }
 .home-controls { padding-top: 4px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
 
@@ -325,6 +331,7 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
   .button { width: 100%; }
   .detail-pair { grid-template-columns: 1fr; }
   .field-grid { grid-template-columns: 1fr; }
+  .group-rule-advanced .details-grid { grid-template-columns: 1fr; }
   .chat-heading-row { align-items: stretch; flex-direction: column; }
   .chat-heading-row .button { width: auto; align-self: flex-start; }
   .apps-view .chat-heading-row { flex-direction: row; align-items: flex-start; }

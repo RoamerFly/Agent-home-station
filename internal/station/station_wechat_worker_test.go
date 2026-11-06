@@ -135,16 +135,17 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 		}
 	}))
 	defer daemon.Close()
-	appendMessage := func(account, thread, text string) {
+	appendMessageAt := func(account, thread, text string, at time.Time) {
 		nativeMu.Lock()
 		defer nativeMu.Unlock()
 		index := len(messages[account]) + 1
 		messages[account] = append(messages[account], linuxnative.Message{
 			ID: fmt.Sprintf("%s-msg-%d", account, index), AccountID: account, ThreadID: thread, SenderID: thread,
 			ServerID: strconv.Itoa(62000 + index), Direction: "incoming", Type: 1,
-			Body: "/ai " + text, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Body: text, CreatedAt: at.UTC().Format(time.RFC3339Nano),
 		})
 	}
+	appendMessage := func(account, thread, text string) { appendMessageAt(account, thread, "/ai "+text, time.Now()) }
 	reopen := func() (*LocalHomeHandler, *localHomeFixture) {
 		t.Helper()
 		entry, err := wechatapp.StationRegistration(t.Context(), daemon.URL, 7654, host)
@@ -169,8 +170,13 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	}
 	h, f := reopen()
 	blockStarted, blockStopped := make(chan struct{}, 1), make(chan struct{}, 1)
-	h.chat.wechat.model = localModelFunc(func(ctx context.Context, _ string, history []map[string]string) (string, error) {
+	groupPrompt := make(chan string, 4)
+	h.chat.wechat.model = localModelFunc(func(ctx context.Context, system string, history []map[string]string) (string, error) {
 		raw, _ := json.Marshal(history)
+		if strings.Contains(system, "fixture scoped group persona") {
+			groupPrompt <- string(raw)
+			return `{"action":"silent"}`, nil
+		}
 		if strings.Contains(string(raw), "block-synthetic-first") {
 			blockStarted <- struct{}{}
 			<-ctx.Done()
@@ -368,6 +374,34 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	case <-blockStarted:
 		t.Fatal("revoked source was regenerated on regrant")
 	case <-time.After(3 * time.Second):
+	}
+	// Configure a scoped trigger on a group that was already granted. A
+	// pre-change message cannot become eligible when the new worker resumes.
+	policy(f, "one", "person-one", room)
+	preChange := time.Now()
+	request(f, "PUT", path("one")+"/policy", map[string]any{
+		"reply_threads": []string{"person-one", room},
+		"group_rules": []any{map[string]any{"thread_id": room, "reply_settings": map[string]any{
+			"mode": "all", "prefix": "!fish ", "persona": "fixture scoped group persona",
+		}}},
+	}, true, 200)
+	waitState(f, "one", "paused")
+	appendMessageAt("one", room, "!fish pre-change-group-message", preChange)
+	appendMessageAt("one", room, "wrong-prefix-group-message", time.Now())
+	appendMessageAt("one", room, "!fish new-group-message", time.Now())
+	lifecycle(f, "one", "start", 200)
+	select {
+	case prompt := <-groupPrompt:
+		if !strings.Contains(prompt, "new-group-message") || strings.Contains(prompt, "pre-change-group-message") {
+			t.Fatal("scoped rule did not enforce the activation epoch and exact prefix")
+		}
+	case <-time.After(14 * time.Second):
+		t.Fatal("new scoped group rule did not reach the synthetic model")
+	}
+	select {
+	case <-groupPrompt:
+		t.Fatal("pre-change or unprefixed group message triggered another turn")
+	case <-time.After(time.Second):
 	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
