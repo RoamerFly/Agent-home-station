@@ -58,13 +58,12 @@ type Relay struct {
 	listener net.Listener
 	ticket   string
 
-	mu          sync.Mutex
-	state       string
-	claimed     bool
-	closed      bool
-	connections map[net.Conn]struct{}
-
-	mediaMessages atomic.Uint64
+	mu            sync.Mutex
+	state         string
+	mediaMessages uint64
+	claimed       bool
+	closed        bool
+	connections   map[net.Conn]struct{}
 	done          chan struct{}
 }
 
@@ -141,9 +140,8 @@ func (r *Relay) Status() Status {
 		return Status{State: stateStopped}
 	}
 	r.mu.Lock()
-	state := r.state
-	r.mu.Unlock()
-	return Status{State: state, MediaMessages: r.mediaMessages.Load()}
+	defer r.mu.Unlock()
+	return Status{State: r.state, MediaMessages: r.mediaMessages}
 }
 
 // Close fences future work first, closes every local socket, and waits for all
@@ -383,13 +381,15 @@ func (r *Relay) forward(cfg Config, source *gortmplib.ServerConn, sourceConn net
 		if err := client.Write(msg); err != nil {
 			return err
 		}
+		isMedia := mediaPayload(msg)
+		if isMedia {
+			r.recordForwardedMedia()
+		}
 		if downstream := client.NetConn(); downstream != nil {
 			_ = downstream.SetWriteDeadline(time.Time{})
 		}
-		if mediaPayload(msg) {
+		if isMedia {
 			_ = sourceConn.SetDeadline(time.Now().Add(mediaIOTimeout))
-			r.mediaMessages.Add(1)
-			r.setState(stateForwarding)
 		}
 	}
 }
@@ -524,6 +524,16 @@ func (r *Relay) setState(state string) {
 		r.state = state
 	}
 	r.mu.Unlock()
+}
+
+func (r *Relay) recordForwardedMedia() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// A completed write is evidence even when shutdown raced with the write.
+	r.mediaMessages++
+	if !r.closed {
+		r.state = stateForwarding
+	}
 }
 
 func (r *Relay) closeInternal() {

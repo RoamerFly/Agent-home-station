@@ -156,17 +156,17 @@ func openPublisher(t *testing.T, u *url.URL) *gortmplib.Client {
 	return c
 }
 
-func waitStatus(t *testing.T, relay *Relay, want string) Status {
+func waitStatus(t *testing.T, relay *Relay, want string, minMedia uint64) Status {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		status := relay.Status()
-		if status.State == want {
+		if status.State == want && status.MediaMessages >= minMedia {
 			return status
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("relay did not reach state %q (last: %+v)", want, relay.Status())
+	t.Fatalf("relay did not reach state %q with at least %d media messages (last: %+v)", want, minMedia, relay.Status())
 	return Status{}
 }
 
@@ -237,8 +237,10 @@ func TestRelayForwardsMediaAndSeparatesKeys(t *testing.T) {
 			t.Fatalf("did not receive both synthetic audio and video (audio=%v video=%v)", seenAudio, seenVideo)
 		}
 	}
-	if status := waitStatus(t, relay, "forwarding"); status.MediaMessages < 2 {
-		t.Fatalf("forwarding status did not count both media messages: %+v", status)
+	// The receiver may run before the relay's Write returns, and forwarding
+	// starts with the first media write. Wait for both completion records.
+	if status := waitStatus(t, relay, "forwarding", 2); status.MediaMessages != 2 {
+		t.Fatalf("forwarding status counted unexpected media messages: %+v", status)
 	}
 }
 
@@ -307,7 +309,7 @@ func TestRelayReceiverDisconnectStopsWithoutReconnect(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	waitStatus(t, relay, "disconnected")
+	waitStatus(t, relay, "disconnected", 0)
 	got := dials.Load()
 	time.Sleep(150 * time.Millisecond)
 	if later := dials.Load(); later != got || got != 1 {
