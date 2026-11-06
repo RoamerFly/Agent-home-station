@@ -51,7 +51,7 @@ def verify(binary, output):
                 entries = {
                     "draft": job("draft", "draft", ["cancel", "submit"]),
                     "upload": job("upload", "awaiting_receipt", ["status", "cancel", "resume"], "uploading", 1),
-                    "unknown": job("unknown", "awaiting_receipt", ["status", "cancel"], "posting", 3),
+                    "unknown": job("unknown", "awaiting_receipt", ["status", "cancel", "reconcile"], "posting", 3),
                     "accepted": job("accepted", "accepted", ["status"], "accepted", 3, "BV1aB2cD3e4F"),
                     "later": job("later", "cancelled", []),
                 }
@@ -141,14 +141,44 @@ def verify(binary, output):
                         fulfill_json({"error": "测试回执服务暂不可用"}, 503)(route)
                         return
                     elif name == "unknown" and action == "cancel":
-                        entries[name].update(cancel_requested=True, available_actions=["status"])
+                        entries[name].update(cancel_requested=True, available_actions=["status", "reconcile"])
                     elif name == "accepted" and action == "status":
                         entries[name] = job(name, "published", [], "accepted", 3, "BV1aB2cD3e4F")
                     else:
                         raise AssertionError(f"unexpected publication action {name}/{action}")
                     fulfill_json(entries[name])(route)
 
+                reconciliation_writes = []
+
+                def publication_reconciliation(route):
+                    request = route.request
+                    assert request.method == "POST"
+                    assert request.headers.get("x-csrf-token"), "CSRF header missing"
+                    body = request.post_data_json
+                    reconciliation_writes.append(body)
+                    assert body["job_id"] == job_ids["unknown"]
+                    if body["action"] == "candidates":
+                        assert set(body) == {"job_id", "action", "page", "page_size"}
+                        assert body["page_size"] == 10
+                        if body["page"] == 1:
+                            fulfill_json({"job_id": job_ids["unknown"], "items": [
+                                {"bvid": "BV1aB2cD3e4F", "title": "候选稿件", "created_at": "2026-11-06T11:00:00Z"}
+                            ], "page": 1, "page_size": 10, "has_more": True, "next_page": 2})(route)
+                            return
+                        assert body["page"] == 2
+                        fulfill_json({"job_id": job_ids["unknown"], "items": [], "page": 2, "page_size": 10, "has_more": False})(route)
+                        return
+                    if body["action"] == "verify":
+                        assert set(body) == {"job_id", "action", "bvid"}
+                        assert body["bvid"] == "BV1aB2cD3e4F"
+                        entries["unknown"]["reconciliation"] = {"bvid": body["bvid"], "published": False,
+                                                              "checked_at": "2026-11-06T12:00:00Z"}
+                        fulfill_json({"job_id": job_ids["unknown"], "item": entries["unknown"]["reconciliation"]})(route)
+                        return
+                    raise AssertionError(f"unexpected reconciliation action {body['action']}")
+
                 page.route(re.compile(r".*/api/local/publications(?:\?.*)?$"), publications)
+                page.route(re.compile(r".*/api/local/publications/reconcile$"), publication_reconciliation)
                 page.route(re.compile(r".*/api/local/apps/bilibili/publication-authorization$"), publication_authorization)
                 page.route(re.compile(r".*/api/local/apps/bilibili/publication-oauth$"), publication_oauth)
                 page.locator("#apps-tab").click()
@@ -207,6 +237,23 @@ def verify(binary, output):
                 unknown = panel.locator(f'[data-job="{job_ids["unknown"]}"]')
                 expect(unknown.get_by_text("投稿结果待核对", exact=True)).to_be_visible()
                 expect(unknown.get_by_role("button", name="继续任务")).to_have_count(0)
+                unknown.get_by_text("核对投稿结果", exact=True).click()
+                known_bvid = unknown.get_by_label(f'任务 {job_ids["unknown"][:10]} 的 BV 号')
+                known_bvid.fill("BV-not-valid")
+                unknown.get_by_role("button", name="核对 BV 号").click()
+                expect(unknown.get_by_text("请输入完整的 BV 号后再核对。", exact=True)).to_be_visible()
+                unknown.get_by_role("button", name="查找候选稿件").click()
+                expect(unknown.get_by_text("BV1aB2cD3e4F · 候选稿件", exact=False)).to_be_visible()
+                unknown.get_by_role("button", name="继续查找第 2 页").click()
+                expect(unknown.get_by_text("暂未找到可核对的候选稿件。", exact=True)).to_be_visible()
+                unknown.get_by_role("button", name="查找候选稿件").click()
+                expect(unknown.get_by_text("BV1aB2cD3e4F · 候选稿件", exact=False)).to_be_visible()
+                unknown.get_by_role("button", name="核对此稿件").click()
+                expect(unknown.get_by_text("已核对 BV 号 BV1aB2cD3e4F，平台尚未显示公开", exact=False)).to_be_visible()
+                expect(unknown.get_by_text("投稿结果待核对", exact=True)).to_be_visible()
+                page.locator("#apps-refresh").click()
+                expect(page.locator("#apps-list[aria-busy='false']")).to_be_visible()
+                expect(unknown.get_by_text("已核对 BV 号 BV1aB2cD3e4F，平台尚未显示公开", exact=False)).to_be_visible()
                 panel.screenshot(path=str(output / "bilibili-publication-light.png"))
 
                 def row(name):
@@ -223,6 +270,7 @@ def verify(binary, output):
                 unknown.get_by_role("button", name="停止后续").click()
                 expect(unknown.get_by_text("已要求停止", exact=True)).to_be_visible()
                 expect(unknown.get_by_role("button", name="停止后续")).to_have_count(0)
+                expect(unknown.get_by_text("核对投稿结果", exact=True)).to_be_visible()
                 row("accepted").get_by_role("button", name="查询状态").click()
                 expect(row("accepted").get_by_text("已公开", exact=True)).to_be_visible()
                 panel.get_by_role("button", name="下一页").click()
@@ -253,6 +301,7 @@ def verify(binary, output):
                 assert writes == [("draft", "submit"), ("upload", "resume"), ("upload", "cancel"),
                                   ("unknown", "status"), ("unknown", "cancel"), ("accepted", "status")], writes
                 assert len(authorization_writes) == 1
+                assert [write["action"] for write in reconciliation_writes] == ["candidates", "candidates", "candidates", "verify"]
                 browser.close()
         finally:
             stop(process)

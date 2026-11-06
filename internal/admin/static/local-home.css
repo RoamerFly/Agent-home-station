@@ -205,6 +205,14 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .publication-oauth-form > label { color: var(--muted); font-size: .78rem; font-weight: 700; }
 .publication-oauth-callback { display: grid; gap: 7px; padding-top: 8px; border-top: 1px dashed var(--line); }
 .publication-oauth-callback > .button { justify-self: start; }
+.publication-reconciliation { display: grid; gap: 7px; margin-top: 9px; border-left: 3px solid var(--line); border-radius: 7px; background: color-mix(in srgb, var(--surface) 78%, transparent); }
+.publication-reconciliation > summary { padding: 7px 9px; color: var(--accent-deep); font-size: .82rem; font-weight: 700; cursor: pointer; }
+.publication-reconciliation-body { display: grid; gap: 7px; padding: 0 9px 9px; border-top: 1px solid var(--line); }
+.publication-reconciliation-body > p { margin: 0; }
+.publication-reconciliation-body input { box-sizing: border-box; min-width: 9rem; max-width: 14rem; }
+.publication-reconciliation-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.publication-reconciliation-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; min-width: 0; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--muted); font-size: .8rem; }
+.publication-reconciliation-item > span { min-width: 0; overflow-wrap: anywhere; }
 .app-accounts { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
 .app-accounts li { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; min-width: 0; color: var(--ink); font-size: .86rem; overflow-wrap: anywhere; }
 .app-accounts small { color: var(--muted); }

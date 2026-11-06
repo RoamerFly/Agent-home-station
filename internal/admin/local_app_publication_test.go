@@ -105,6 +105,13 @@ func TestLocalPublicationNormalChatReplay(t *testing.T) {
 	if code, _ := f.request("POST", "/api/local/publications", map[string]string{"action": "cancel", "job_id": jobID}, false); code != http.StatusForbidden {
 		t.Fatalf("publication cancel bypassed CSRF: %d", code)
 	}
+	reconcileInput := map[string]string{"action": "verify", "job_id": jobID, "bvid": "BV1aB2cD3e4F"}
+	if code, _ := f.request("POST", "/api/local/publications/reconcile", reconcileInput, false); code != http.StatusForbidden {
+		t.Fatalf("publication candidate read bypassed CSRF: %d", code)
+	}
+	if code, _ := f.request("POST", "/api/local/publications/reconcile", reconcileInput, true); code != http.StatusConflict {
+		t.Fatalf("local draft permitted a platform candidate read: %d", code)
+	}
 
 	// A local-only draft has no provider to submit to.  It must fail without
 	// changing into an accepted/remote task.

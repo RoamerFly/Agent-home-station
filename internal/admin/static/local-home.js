@@ -54,7 +54,7 @@
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
-      bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false } };
+      bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() { return { loading: false, applying: "", tools: [] }; }
   function appElement(tag, text, className = "") {
@@ -1714,7 +1714,7 @@
     uploading: ["分片上传", "已确认的分片会保留。"],
     merging: ["等待合并回执", "全部分片已确认，合并结果待核对。"],
     merged: ["上传已合并", "可从原上传继续投稿。"],
-    posting: ["投稿结果待核对", "平台尚未返回可核对的稿件编号。请核对 B 站创作中心。"],
+    posting: ["投稿结果待核对", "平台尚未返回原投稿的稿件编号。"],
   };
   const publicationActions = { submit: "提交投稿", resume: "继续任务", status: "查询状态", cancel: "停止后续" };
   function publicationStatus(task) {
@@ -2077,8 +2077,98 @@
       button.addEventListener("click", () => applyPublicationAction(current, task, action));
       buttons.append(button);
     }
+    if (available.includes("reconcile") && task.state === "awaiting_receipt" && task.progress?.stage === "posting" && !task.remote_id) {
+      details.append(publicationReconciliation(current, task));
+    }
     row.append(details, buttons);
     return row;
+  }
+  function validBilibiliBVID(value) { return typeof value === "string" && /^BV[0-9A-Za-z]{10}$/.test(value); }
+  function publicationReconciliation(current, task) {
+    const work = current.bilibiliWork;
+    const state = work.reconciliation.get(task.job_id) || { candidates: null, page: 1, nextPage: 0, hasMore: false, bvid: "", busy: false, error: "" };
+    work.reconciliation.set(task.job_id, state);
+    const panel = appElement("details", "", "publication-reconciliation");
+    panel.open = state.busy || Boolean(state.error) || Array.isArray(state.candidates);
+    panel.append(appElement("summary", "核对投稿结果"));
+    const body = appElement("div", "", "publication-reconciliation-body");
+    const saved = task.reconciliation;
+    if (validBilibiliBVID(saved?.bvid)) {
+      const checked = saved.checked_at && Number.isFinite(new Date(saved.checked_at).getTime()) ? `，核对于 ${new Date(saved.checked_at).toLocaleString()}` : "";
+      body.append(appElement("p", `已核对 BV 号 ${saved.bvid}${saved.published ? "，平台显示已公开" : "，平台尚未显示公开"}${checked}。这条观察不会改变原投稿任务状态。`, "publication-reference"));
+    } else {
+      body.append(appElement("p", "候选稿件仅供核对。选择候选或粘贴已知 BV 号后，任务仍保持待核对。", "publication-reference"));
+    }
+    const actions = appElement("div", "", "publication-actions");
+    const discover = appElement("button", state.busy ? "正在查找…" : "查找候选稿件", "button compact quiet");
+    discover.type = "button"; discover.disabled = state.busy;
+    discover.addEventListener("click", () => reconcilePublication(current, task, "candidates", 1));
+    const bvid = document.createElement("input");
+    bvid.type = "text"; bvid.autocomplete = "off"; bvid.placeholder = "粘贴 BV 号"; bvid.value = state.bvid; bvid.setAttribute("aria-label", `任务 ${task.job_id.slice(0, 10)} 的 BV 号`);
+    bvid.addEventListener("input", () => { state.bvid = bvid.value.trim(); });
+    const verify = appElement("button", "核对 BV 号", "button compact quiet");
+    verify.type = "button"; verify.disabled = state.busy;
+    verify.addEventListener("click", () => reconcilePublication(current, task, "verify", 0, bvid.value.trim()));
+    actions.append(discover, bvid, verify);
+    body.append(actions);
+    if (state.error) body.append(appElement("p", state.error, "publication-feedback is-warn"));
+    if (Array.isArray(state.candidates)) {
+      const candidates = appElement("ul", "", "publication-reconciliation-list");
+      for (const item of state.candidates) {
+        if (!validBilibiliBVID(item?.bvid)) continue;
+        const row = appElement("li", "", "publication-reconciliation-item");
+        const created = item.created_at && Number.isFinite(new Date(item.created_at).getTime()) ? `稿件创建时间 ${new Date(item.created_at).toLocaleString()}` : "";
+        const text = [item.bvid, typeof item.title === "string" && item.title.trim() ? item.title.trim() : "未提供标题", created].filter(Boolean).join(" · ");
+        row.append(appElement("span", text));
+        const check = appElement("button", "核对此稿件", "button compact quiet");
+        check.type = "button"; check.disabled = state.busy;
+        check.addEventListener("click", () => reconcilePublication(current, task, "verify", 0, item.bvid));
+        row.append(check);
+        candidates.append(row);
+      }
+      if (!candidates.childElementCount) candidates.append(appElement("li", "暂未找到可核对的候选稿件。", "publication-reference"));
+      body.append(candidates);
+      if (state.hasMore && Number.isSafeInteger(state.nextPage) && state.nextPage > state.page) {
+        const next = appElement("button", `继续查找第 ${state.nextPage} 页`, "button compact quiet");
+        next.type = "button"; next.disabled = state.busy;
+        next.addEventListener("click", () => reconcilePublication(current, task, "candidates", state.nextPage));
+        body.append(next);
+      }
+    }
+    panel.append(body);
+    return panel;
+  }
+  async function reconcilePublication(current, task, action, page = 1, bvid = "") {
+    if (current !== apps) return;
+    const work = current.bilibiliWork;
+    const state = work.reconciliation.get(task.job_id);
+    if (!state || state.busy) return;
+    if (action === "verify") state.bvid = bvid;
+    if (action === "verify" && !validBilibiliBVID(bvid)) {
+      state.error = "请输入完整的 BV 号后再核对。";
+      updatePublicationRow(current);
+      return;
+    }
+    state.busy = true; state.error = "";
+    updatePublicationRow(current);
+    try {
+      const body = action === "candidates" ? { job_id: task.job_id, action, page, page_size: 10 } : { job_id: task.job_id, action, bvid };
+      const result = await request("/api/local/publications/reconcile", { method: "POST", body: JSON.stringify(body) });
+      if (current !== apps || result.job_id !== task.job_id) return;
+      if (action === "candidates") {
+        if (!Array.isArray(result.items) || !Number.isSafeInteger(result.page) || !Number.isSafeInteger(result.page_size)) throw new Error("本机返回的候选稿件格式无效。");
+        state.candidates = result.items; state.page = result.page; state.nextPage = result.next_page; state.hasMore = result.has_more === true;
+      } else if (result.item?.bvid !== bvid || !validBilibiliBVID(result.item?.bvid) || typeof result.item.published !== "boolean") {
+        throw new Error("本机返回的稿件核对结果无效。");
+      } else {
+        work.notice = `已核对 ${result.item.bvid}。原投稿任务仍待核对。`;
+        await loadBilibiliWork(current, work.cursors);
+      }
+    } catch (error) {
+      if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) state.error = error.message;
+    } finally {
+      if (current === apps) { state.busy = false; updatePublicationRow(current); }
+    }
   }
   function updatePublicationRow(current) {
     if (current !== apps) return;

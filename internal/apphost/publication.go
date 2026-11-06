@@ -126,18 +126,19 @@ type publicationRecord struct {
 // omits publication text, provenance and artifact names/hashes so a status
 // query cannot re-inject forgotten content into a later conversation.
 type PublicationView struct {
-	JobID            string               `json:"job_id"`
-	State            string               `json:"state"`
-	CancelRequested  bool                 `json:"cancel_requested"`
-	Target           ConnectionRef        `json:"target"`
-	ProjectID        string               `json:"project_id,omitempty"`
-	ArtifactIDs      []string             `json:"artifact_ids,omitempty"`
-	ManifestSHA256   string               `json:"manifest_sha256"`
-	RemoteID         string               `json:"remote_id,omitempty"`
-	Diagnostic       string               `json:"diagnostic,omitempty"`
-	Progress         *PublicationProgress `json:"progress,omitempty"`
-	UpdatedAt        string               `json:"updated_at"`
-	AvailableActions []string             `json:"available_actions"`
+	JobID            string                           `json:"job_id"`
+	State            string                           `json:"state"`
+	CancelRequested  bool                             `json:"cancel_requested"`
+	Target           ConnectionRef                    `json:"target"`
+	ProjectID        string                           `json:"project_id,omitempty"`
+	ArtifactIDs      []string                         `json:"artifact_ids,omitempty"`
+	ManifestSHA256   string                           `json:"manifest_sha256"`
+	RemoteID         string                           `json:"remote_id,omitempty"`
+	Diagnostic       string                           `json:"diagnostic,omitempty"`
+	Progress         *PublicationProgress             `json:"progress,omitempty"`
+	Reconciliation   *PublicationCandidateObservation `json:"reconciliation,omitempty"`
+	UpdatedAt        string                           `json:"updated_at"`
+	AvailableActions []string                         `json:"available_actions"`
 }
 
 type PublicationPage struct {
@@ -269,6 +270,14 @@ func (p *Publisher) Action(ctx context.Context, actor pluginhost.Invocation, job
 }
 
 func (p *Publisher) List(ctx context.Context, actor pluginhost.Invocation, appID string, after int64, limit int) (PublicationPage, error) {
+	return p.list(ctx, actor, appID, after, limit, false)
+}
+
+func (p *Publisher) ListForOwner(ctx context.Context, actor pluginhost.Invocation, appID string, after int64, limit int) (PublicationPage, error) {
+	return p.list(ctx, actor, appID, after, limit, true)
+}
+
+func (p *Publisher) list(ctx context.Context, actor pluginhost.Invocation, appID string, after int64, limit int, ownerEvidence bool) (PublicationPage, error) {
 	if appID == "" {
 		appID = "local"
 	}
@@ -293,6 +302,9 @@ func (p *Publisher) List(ctx context.Context, actor pluginhost.Invocation, appID
 			view.Progress = progress
 		}
 		view.AvailableActions = p.listActions(ctx, job, record, view.Progress)
+		if ownerEvidence {
+			p.addPublicationReconciliation(ctx, job, record, &view)
+		}
 		result.Items = append(result.Items, view)
 	}
 	return result, nil

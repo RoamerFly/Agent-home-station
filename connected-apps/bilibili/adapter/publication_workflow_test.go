@@ -25,6 +25,7 @@ type fixturePublicationTransport struct {
 	parts                                   []int64
 	failPart, failPost, published           bool
 	onPart                                  func(int64)
+	onPost, onView                          func()
 	media                                   []byte
 	t                                       *testing.T
 }
@@ -57,6 +58,9 @@ func (f *fixturePublicationTransport) Post(_ context.Context, token string, meta
 		!reflect.DeepEqual(metadata.Tags, []string{"合成"}) {
 		f.t.Fatal("submission was not bound to the original selected metadata and token")
 	}
+	if f.onPost != nil {
+		f.onPost()
+	}
 	if f.failPost {
 		return "", errors.New("simulated loss of post response")
 	}
@@ -66,6 +70,9 @@ func (f *fixturePublicationTransport) View(_ context.Context, id string) (Archiv
 	f.queries++
 	if id != fixturePublicationResource {
 		f.t.Fatal("query used an unrelated resource")
+	}
+	if f.onView != nil {
+		f.onView()
 	}
 	return ArchiveStatus{Published: f.published}, nil
 }

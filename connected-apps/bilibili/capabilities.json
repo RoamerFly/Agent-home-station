@@ -70,6 +70,14 @@
       "requires_owner_setting": "publication-settings.json"
     },
     {
+      "id": "publication.reconciliation",
+      "implementation": "ready",
+      "description": "本机主人查询授权账号的稿件候选与指定 BV 状态，结果作为独立观察保留",
+      "permissions": ["network"],
+      "discoverable": false,
+      "requires_owner_setting": "publication-settings.json"
+    },
+    {
       "id": "authorization.verify",
       "implementation": "ready",
       "description": "本机主人登记凭据时核验开放平台应用范围内的账号身份",

@@ -181,7 +181,7 @@ func (h *localChatService) publicationRoutes(s *Server, mux *http.ServeMux) {
 				return
 			}
 			var tasks apphost.PublicationPage
-			tasks, err = publisher.List(ctx, actor, appID, after, limit)
+			tasks, err = publisher.ListForOwner(ctx, actor, appID, after, limit)
 			out = map[string]any{"tasks": tasks, "targets": publisher.Discover(ctx)}
 		} else {
 			var in struct {
@@ -206,10 +206,47 @@ func (h *localChatService) publicationRoutes(s *Server, mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/local/publications", handler)
 	mux.HandleFunc("POST /api/local/publications", handler)
+	mux.HandleFunc("POST /api/local/publications/reconcile", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var in struct {
+			JobID string `json:"job_id"`
+			apphost.PublicationReconciliationQuery
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		if !decode(w, r, &in) {
+			return
+		}
+		if !artifactID("sha-"+in.JobID, "sha-") {
+			fail(w, http.StatusBadRequest, "请提供原发布任务编号")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		defer cancel()
+		stop := context.AfterFunc(h.ctx, cancel)
+		defer stop()
+		publisher, actor, err := h.publicationHost()
+		if err == nil {
+			var out apphost.PublicationReconciliation
+			out, err = publisher.ReconcileForOwner(ctx, actor, in.JobID, in.PublicationReconciliationQuery)
+			if err == nil {
+				respond(w, http.StatusOK, out)
+				return
+			}
+		}
+		status, message := localPublicationFailure(err)
+		if errors.Is(err, apphost.ErrPublicationDenied) {
+			message = "请先核验并启用原 B 站账号的发布授权"
+		}
+		fail(w, status, message)
+	}))
 }
 
 func localPublicationFailure(err error) (int, string) {
 	switch {
+	case errors.Is(err, apphost.ErrPublicationReconciliationInput):
+		return http.StatusBadRequest, "请检查稿件编号、页码或页大小"
+	case errors.Is(err, apphost.ErrPublicationReconciliationRead):
+		return http.StatusBadGateway, "B 站未返回可核对的稿件信息，原任务仍待核对"
 	case errors.Is(err, apphost.ErrPublicationDenied):
 		return http.StatusForbidden, "目标应用未授予本任务发布权限，草稿保留在本机"
 	case errors.Is(err, apphost.ErrPublicationInvalidDraft):
