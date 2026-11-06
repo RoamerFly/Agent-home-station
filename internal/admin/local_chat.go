@@ -16,6 +16,7 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/billing"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/stationruntime"
@@ -372,12 +373,12 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 	ctx = deepseek.WithUsageObserver(deepseek.WithPurpose(ctx, "local_conversation"), func(u deepseek.Usage) {
 		dir := filepath.Join(h.home.dataDir, "local-billing")
 		err := os.MkdirAll(dir, 0700)
-		var ledger *billingStore
+		var ledger *billing.Store
 		if err == nil {
-			ledger, err = newBillingStore(dir)
+			ledger, err = billing.Open(dir)
 		}
 		if err == nil {
-			err = ledger.record(Config{Provider: settings.Provider, BaseURL: settings.BaseURL, Model: settings.Model}, u)
+			err = ledger.Record(billing.ModelConfig{Provider: settings.Provider, BaseURL: settings.BaseURL, Model: settings.Model}, u)
 		}
 		usageErr = errors.Join(usageErr, err)
 	})

@@ -148,7 +148,7 @@ func (s *wechatDeliverySession) Retry(ctx context.Context) (string, error) {
 		}
 		current = current.WithVoiceReceipts()
 		var proof apphost.DeliveryReceipt
-		projectWechatReceipt(&proof, current)
+		wechatapp.ProjectDeliveryReceipt(&proof, current)
 		if proof.State == "accepted" {
 			return current, nil
 		}

@@ -61,7 +61,7 @@ func (s *stationWechat) recallRoutes(owner *websession.Store, mux *http.ServeMux
 		if !decode(w, r, &in) {
 			return
 		}
-		if !wechatServerReceiptID(in.ServerID) || !validStationRecallMessageID(in.MessageID) {
+		if !wechatapp.ValidServerReceiptID(in.ServerID) || !validStationRecallMessageID(in.MessageID) {
 			fail(w, http.StatusBadRequest, "请从投递记录中选择已核对的原消息")
 			return
 		}
@@ -107,7 +107,7 @@ func stationRecallFailure(w http.ResponseWriter, err error) {
 
 func (s *stationWechat) stationRecallEvidence(ctx context.Context, id, key, server string) (stationRecallSource, error) {
 	var out stationRecallSource
-	if !validID(key) || !wechatServerReceiptID(server) {
+	if !validID(key) || !wechatapp.ValidServerReceiptID(server) {
 		return out, apphost.ErrNotFound
 	}
 	w, account, err := s.deliveryCheckpoint(id)
@@ -126,7 +126,7 @@ func (s *stationWechat) stationRecallEvidence(ctx context.Context, id, key, serv
 		return out, apphost.ErrNotFound
 	}
 	ref := apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind}
-	projectWechatReceipt(&ref, row.Status)
+	wechatapp.ProjectDeliveryReceipt(&ref, row.Status)
 	if !stationRecallAccepted(ref, server) {
 		receipt, err := s.ReadReceipt(ctx, id, key)
 		if err != nil {

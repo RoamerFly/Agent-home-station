@@ -13,6 +13,7 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/agentworkspace"
+	"wechat-bot/internal/billing"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
@@ -126,7 +127,8 @@ type Manager struct {
 	agent               *agentControl
 	surfHistory         *surfHistoryStore
 	surfInteractions    *surfInteractionStore
-	billing             *billingStore
+	billing             *billing.Store
+	balance             balanceCache
 	assetMu             sync.Mutex
 	crossSendMu         sync.Mutex
 	storageError        string
@@ -222,7 +224,7 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 	if stateDir == "" {
 		stateDir = filepath.Join(dir, "bot-state")
 	}
-	billing, err := newBillingStore(dir)
+	ledger, err := billing.Open(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +300,7 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 	if err != nil {
 		return nil, err
 	}
-	m.billing = billing
+	m.billing = ledger
 	if data, readErr := os.ReadFile(filepath.Join(dir, "audit.json")); readErr == nil {
 		if len(data) > 128<<10 || json.Unmarshal(data, &m.logs) != nil || len(m.logs) > 100 {
 			return nil, errors.New("运行审计记录无效，未自动覆盖")
@@ -558,7 +560,7 @@ func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {
 	}
 	return deepseek.New(deepseek.Config{ThinkingEnabled: &c.ThinkingEnabled, ReasoningEffort: c.ReasoningEffort, BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: toolTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
 		if m.billing != nil {
-			if err := m.billing.record(c, u); err != nil {
+			if err := m.billing.Record(modelForBilling(c), u); err != nil {
 				m.log("usage_record_save_failed")
 			}
 		}

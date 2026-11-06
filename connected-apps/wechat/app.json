@@ -56,6 +56,8 @@
     "adapter/media_schema.go": "b87040a9a1b35eaac38ac3440326b64105a45f4cbc2b9112861413556d90eeca",
     "adapter/operation.go": "7899ba8e15936e6c71f4b23707de0b405a68c72fff38a9939d3d0d62b87f9eec",
     "adapter/read.go": "12173c594c151b9de40e5feb980f6bb0e8dff4e3288ee5333564498b35003c54",
+    "adapter/receipt.go": "f0258d7e3ec12318508a325f06df232f4956ffde37330c1d98c83cb20c5221d1",
+    "adapter/receipt_test.go": "95dcce5bf06a7171cd0c347a9de0f3c2599760a17d15f0f23c23796d0838727c",
     "adapter/send_text.go": "88b7afe7bd555f3cf999f904938f6778e0ac136c6c5e6bb8014457c956b58b28",
     "adapter/share_card.go": "901d4ab079b256b0d6768c3b7ab9f714450e707a2c8cd0aa1ef8650a6f26df39",
     "adapter/share_card_test.go": "e3e7e7afcc90231d98bc57c4e8f235254c4dd5a6799983bf8d4b68fe4a6f28e8",

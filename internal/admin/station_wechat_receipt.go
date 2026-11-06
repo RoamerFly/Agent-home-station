@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
@@ -44,7 +45,7 @@ func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limi
 		row := rows.Records[key]
 		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, account), ConversationID: row.Status.ThreadID,
 			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"}}
-		projectWechatReceipt(&receipt.DeliveryReceipt, row.Status)
+		wechatapp.ProjectDeliveryReceipt(&receipt.DeliveryReceipt, row.Status)
 		receipt.ResumedFrom = row.ResumedFrom
 		if control, exists := controls[key]; exists {
 			receipt.Continuation = resumeControlView(control)
@@ -89,7 +90,7 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 	if row.StrictSource || row.ResumeOriginID != "" {
 		reader = stationMediaReceiptReader{native: native, source: row.SourceID, kind: row.Status.Kind, origin: row.ResumeOriginID}
 	}
-	queryWechatDelivery(ctx, reader, row.Status.ThreadID, row.SourceID, row.Status, row.StrictSource && row.Status.ID != "", &result.DeliveryReceipt)
+	wechatapp.LookupDeliveryReceipt(ctx, reader, row.Status.ThreadID, row.SourceID, row.Status, row.StrictSource && row.Status.ID != "", &result.DeliveryReceipt)
 	cancelled, err := w.deliveryCancelled(companion.Input{Account: native.Account(), Thread: row.Status.ThreadID, TraceID: row.Trace})
 	if err != nil {
 		return apphost.Receipt{}, apphost.ErrUnavailable

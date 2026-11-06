@@ -114,7 +114,7 @@ func (w wechatCompatibility) ReadAction(ctx context.Context, connection, id stri
 	if status.ID == "" {
 		return out, nil
 	}
-	projectAccountAction(&out, status)
+	wechatapp.ProjectActionReceipt(&out, status)
 	if out.State == "succeeded" || out.State == "failed" || out.State == "cancelled" {
 		return out, nil
 	}
@@ -133,27 +133,7 @@ func (w wechatCompatibility) ReadAction(ctx context.Context, connection, id stri
 		out.Lookup = "identity_mismatch"
 	default:
 		out.Lookup = "platform"
-		projectAccountAction(&out, latest)
+		wechatapp.ProjectActionReceipt(&out, latest)
 	}
 	return out, nil
-}
-
-func projectAccountAction(out *apphost.ActionReceipt, status linuxnative.ActionStatus) {
-	out.PlatformOperationID, out.PlatformState, out.PlatformCode = status.ID, "", ""
-	if wechatResultCode.MatchString(status.State) {
-		out.PlatformState = status.State
-	}
-	if wechatResultCode.MatchString(status.Code) {
-		out.PlatformCode = status.Code
-	}
-	switch status.State {
-	case "succeeded", "failed", "cancelled":
-		out.State = status.State
-	case "rejected":
-		out.State = "failed"
-	case "queued", "running", "sending", "submitting":
-		out.State = "submitted_pending"
-	default:
-		out.State = "submission_unknown"
-	}
 }

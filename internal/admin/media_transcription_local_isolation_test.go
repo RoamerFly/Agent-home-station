@@ -51,8 +51,8 @@ func TestLiveLocalMediaTranscriptionIsolationContract(t *testing.T) {
 		return "transcribed", "synthetic isolated local transcript", nil
 	}
 	text, err := policy.transcribe(ctx)
-	if err != nil || text != "synthetic isolated local transcript" || calls != 1 || f.manager.billing.data.Total.Requests != 0 || policy.completedJob.State != "completed" {
-		t.Fatal("isolated local ASR did not complete without provider transport", text, err, calls, f.manager.billing.data.Total, policy.completedJob)
+	if err != nil || text != "synthetic isolated local transcript" || calls != 1 || f.manager.billing.Totals().Requests != 0 || policy.completedJob.State != "completed" {
+		t.Fatal("isolated local ASR did not complete without provider transport", text, err, calls, f.manager.billing.Totals(), policy.completedJob)
 	}
 	var private struct {
 		Text   string `json:"text"`

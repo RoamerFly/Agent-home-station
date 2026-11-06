@@ -135,9 +135,7 @@ func TestMediaPluginSourceAndModelAuthority(t *testing.T) {
 			if _, err = p.Validate(ctx, j, cap, raw); err == nil {
 				t.Fatal("fabricated observation accepted")
 			}
-			f.manager.billing.mu.Lock()
-			total := f.manager.billing.data.Total
-			f.manager.billing.mu.Unlock()
+			total := f.manager.billing.Totals()
 			if total.Requests != 1 || total.Reported != 1 || total.Input != 100 || total.Output != 10 || total.CacheHit != 40 {
 				t.Fatalf("provider billing: %+v", total)
 			}
@@ -253,7 +251,7 @@ func TestMediaPluginFailedTransportNeverRetries(t *testing.T) {
 			t.Fatal("transport error lost")
 		}
 	}
-	if calls != 1 || f.manager.billing.data.Total.Requests != 1 {
+	if calls != 1 || f.manager.billing.Totals().Requests != 1 {
 		t.Fatal("unknown outcome retried or uncounted", calls)
 	}
 }
@@ -404,7 +402,7 @@ func TestMediaTranscriptionNoWordsAndUncertainTransport(t *testing.T) {
 	if err != nil || !bytes.Contains(verified.Private, []byte("no_recognizable_speech")) {
 		t.Fatal(err)
 	}
-	if f.manager.billing.data.Total.Requests != 1 {
+	if f.manager.billing.Totals().Requests != 1 {
 		t.Fatal("ASR attempt not billed")
 	}
 	_ = calls
@@ -434,7 +432,7 @@ func TestMediaTranscriptionUsageWithoutProviderSchemaStaysUnknown(t *testing.T) 
 	if _, err := p.Service(ctx, j, cap, "wechat/model_request", transcriptionRequest(p)); err != nil {
 		t.Fatal(err)
 	}
-	total := f.manager.billing.data.Total
+	total := f.manager.billing.Totals()
 	if total.Requests != 1 || total.Reported != 0 || total.Input != 0 || total.Output != 0 {
 		t.Fatalf("unrecognized ASR usage was misreported: %+v", total)
 	}
@@ -512,7 +510,7 @@ func TestLiveMediaTranscriptionSourceAdapterRecovery(t *testing.T) {
 		return nil, nil
 	}
 	text, err = fresh.transcribe(ctx)
-	if err != nil || text != "synthetic transcript" || f.manager.billing.data.Total.Requests != 1 {
+	if err != nil || text != "synthetic transcript" || f.manager.billing.Totals().Requests != 1 {
 		t.Fatal("ASR recovery", text, err)
 	}
 }
@@ -555,7 +553,7 @@ func TestLiveMediaSourceAdapterRecovery(t *testing.T) {
 		return nil, nil
 	}
 	text, err = fresh.observe(ctx)
-	if err != nil || text != "Synthetic pixels" || f.manager.billing.data.Total.Requests != 1 {
+	if err != nil || text != "Synthetic pixels" || f.manager.billing.Totals().Requests != 1 {
 		t.Fatal("recovery", text, err)
 	}
 }

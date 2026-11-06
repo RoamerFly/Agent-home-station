@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"wechat-bot/internal/billing"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
@@ -43,7 +44,7 @@ type mediaTranscriptionPolicy struct {
 	*receivedSharePolicy
 	manager         *Manager
 	controller      *pluginruntime.Controller
-	billing         *billingStore
+	billing         *billing.Store
 	store           *pluginhost.Store
 	invocationValue pluginhost.Invocation
 	originCheck     func(context.Context, pluginhost.Job, pluginhost.Capability) error
@@ -318,7 +319,7 @@ func (p *mediaTranscriptionPolicy) Service(ctx context.Context, j pluginhost.Job
 		if p.manager != nil {
 			billing = p.manager.billing
 		}
-		if billing == nil || billing.record(c, usage) != nil {
+		if billing == nil || billing.Record(modelForBilling(c), usage) != nil {
 			return nil, errors.New("media_usage_record_failed")
 		}
 		if err != nil {

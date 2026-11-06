@@ -304,7 +304,7 @@ func (s *stationWechat) previewLegacyImport(ctx context.Context, id string) (leg
 		}
 		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, account), ConversationID: row.Status.ThreadID, ResumedFrom: row.ResumedFrom,
 			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "legacy_snapshot"}}
-		projectWechatReceipt(&receipt.DeliveryReceipt, row.Status)
+		wechatapp.ProjectDeliveryReceipt(&receipt.DeliveryReceipt, row.Status)
 		if receipt.State == "submission_unknown" || receipt.State == "submitted_pending" {
 			archive.Plan.Unresolved++
 		}
@@ -492,6 +492,6 @@ func (s *stationWechat) readLegacyReceipt(ctx context.Context, id, key string, n
 	// Only the original known native operation can resolve an imported
 	// unknown receipt. Never run the old draft or search a different dataset.
 	stored := linuxnative.ToolStatus{ID: receipt.OperationID, Kind: receipt.Kind, ThreadID: receipt.ConversationID, State: receipt.PlatformState}
-	queryWechatDelivery(ctx, native, receipt.ConversationID, "", stored, true, &receipt.DeliveryReceipt)
+	wechatapp.LookupDeliveryReceipt(ctx, native, receipt.ConversationID, "", stored, true, &receipt.DeliveryReceipt)
 	return receipt, nil
 }

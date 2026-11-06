@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"time"
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
@@ -127,7 +128,7 @@ func (m *Manager) readAppMediaBatch(ctx context.Context, batch crossMediaBatch) 
 			}
 		}
 		if batch.SupersededBy != "" {
-			projectWechatReceipt(&child, status)
+			wechatapp.ProjectDeliveryReceipt(&child, status)
 		} else {
 			m.queryWechatDelivery(ctx, batch.Target, part.SourceID, status, false, &child)
 		}

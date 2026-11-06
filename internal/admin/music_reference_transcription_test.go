@@ -239,7 +239,7 @@ func TestReferenceTranscriptionUnknownProviderAttemptNeverRetries(t *testing.T) 
 			t.Fatal("uncertain reference ASR succeeded")
 		}
 	}
-	if calls != 1 || f.manager.billing.data.Purposes["plugin_media_transcription"].Requests != 1 || f.manager.billing.data.Purposes["plugin_media_transcription"].Reported != 0 {
+	if calls != 1 || f.manager.billing.PurposeTotals("plugin_media_transcription").Requests != 1 || f.manager.billing.PurposeTotals("plugin_media_transcription").Reported != 0 {
 		t.Fatal("uncertain ASR was replayed or usage called zero", calls)
 	}
 	if _, err := policy.Validate(t.Context(), job, cap, referenceTranscriptResult(policy)); err == nil {

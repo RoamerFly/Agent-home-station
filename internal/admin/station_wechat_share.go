@@ -11,6 +11,7 @@ import (
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
+	"wechat-bot/internal/billing"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
@@ -28,7 +29,7 @@ type stationShareHost struct {
 	send       pluginruntime.RouteTransport
 	postModel  pluginruntime.RouteTransport
 	usageMu    sync.Mutex
-	usage      *billingStore
+	usage      *billing.Store
 }
 
 func (s *stationWechat) shareHost(w *stationWechatWorker, account string) (*stationShareHost, error) {

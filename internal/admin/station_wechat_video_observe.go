@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
+	"wechat-bot/internal/billing"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/mediadecode"
@@ -38,11 +39,11 @@ type stationVideoObservationInput struct {
 	Timeout     int     `json:"timeout_seconds"`
 }
 
-func (h *stationShareHost) mediaBilling(dir string) (*billingStore, error) {
+func (h *stationShareHost) mediaBilling(dir string) (*billing.Store, error) {
 	h.usageMu.Lock()
 	defer h.usageMu.Unlock()
 	if h.usage == nil {
-		store, err := newBillingStore(dir)
+		store, err := billing.Open(dir)
 		if err != nil {
 			return nil, errors.New("media_usage_record_failed")
 		}

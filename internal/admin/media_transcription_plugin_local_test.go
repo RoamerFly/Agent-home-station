@@ -82,8 +82,8 @@ func TestMediaTranscriptionLocalServiceBindsProfileAudioAndSingleAttempt(t *test
 	}
 	raw, _ := json.Marshal(map[string]any{"ok": true, "status": "transcribed", "text": "local synthetic transcript", "sources": []mediaAudioReference{p.ref}, "coverage": "provided_audio_only", "untrusted_external_content": true})
 	verified, err := p.Validate(ctx, j, cap, raw)
-	if err != nil || string(verified.Private) == "" || string(verified.Result) == "" || f.manager.billing.data.Total.Requests != 0 {
-		t.Fatal("local transcription result was not isolated from provider billing", err, string(verified.Result), f.manager.billing.data.Total)
+	if err != nil || string(verified.Private) == "" || string(verified.Result) == "" || f.manager.billing.Totals().Requests != 0 {
+		t.Fatal("local transcription result was not isolated from provider billing", err, string(verified.Result), f.manager.billing.Totals())
 	}
 	var public map[string]any
 	if json.Unmarshal(verified.Result, &public) != nil || public["usage_source"] != "local_runtime" {

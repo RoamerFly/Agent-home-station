@@ -267,7 +267,7 @@ func stationActionReceipt(p actionProposal) apphost.ActionReceipt {
 	out := apphost.ActionReceipt{ConnectionRef: p.AppAction.ConnectionRef, OperationID: p.ID, Action: p.Request.Kind,
 		Target: p.Request.ThreadID, State: "submission_unknown", Lookup: "stored"}
 	if p.Result.ID != "" {
-		projectAccountAction(&out, p.Result)
+		wechatapp.ProjectActionReceipt(&out, p.Result)
 	}
 	return out
 }
@@ -340,7 +340,7 @@ func (l *actionLedger) recordStationActionReceipt(p actionProposal, status linux
 		}
 	}
 	out.Lookup = "platform"
-	projectAccountAction(&out, status)
+	wechatapp.ProjectActionReceipt(&out, status)
 	return out, nil
 }
 
