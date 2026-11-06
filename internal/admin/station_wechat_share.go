@@ -67,7 +67,7 @@ func (s *stationWechat) shareHost(w *stationWechatWorker, account string) (*stat
 
 type stationSharePolicy struct {
 	host        *stationShareHost
-	binding     *shareRouteBinding
+	binding     *wechatapp.BoundChannelsRoute
 	invocation  pluginhost.Invocation
 	installed   pluginhost.InstalledPackage
 	config      int
@@ -75,7 +75,7 @@ type stationSharePolicy struct {
 }
 
 func (p *stationSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
-	if j.Plugin != shareServicePluginID || j.Tool != stationChannelsCapability || cap.Async || !reflect.DeepEqual(j.Context, p.invocation) || j.PackageDigest != p.installed.Digest || j.Version != p.installed.Package.Version || j.ConfigRevision != strconv.Itoa(p.config) {
+	if j.Plugin != wechatapp.ShareReaderToolID || j.Tool != stationChannelsCapability || cap.Async || !reflect.DeepEqual(j.Context, p.invocation) || j.PackageDigest != p.installed.Digest || j.Version != p.installed.Package.Version || j.ConfigRevision != strconv.Itoa(p.config) {
 		return errors.New("share_invocation_changed")
 	}
 	installed, err := p.host.store.Installed(ctx, j.Plugin)
@@ -104,7 +104,7 @@ func (p *stationSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 	case "wechat/http_route":
 		return p.binding.Call(ctx, p.host.store, j, cap, raw, check, p.host.send)
 	case "wechat/channels_bridge":
-		return callBoundChannelsBridge(ctx, p.host.store, p.binding, j, raw, check)
+		return wechatapp.CallBoundChannelsBridge(ctx, p.host.store, p.binding, j, raw, check)
 	default:
 		return nil, errors.New("share_host_service_unavailable")
 	}
@@ -117,11 +117,11 @@ func (p *stationSharePolicy) Validate(ctx context.Context, j pluginhost.Job, cap
 
 func (h *stationShareHost) resolve(ctx context.Context, a stationAttachmentAccess, original stationAttachmentSource, message linuxnative.Message, source linuxnative.ChannelsSource) (linuxnative.ChannelsSource, error) {
 	empty := linuxnative.ChannelsSource{}
-	installed, err := h.store.Installed(ctx, shareServicePluginID)
+	installed, err := h.store.Installed(ctx, wechatapp.ShareReaderToolID)
 	if err != nil || !installed.Enabled || installed.Removed {
 		return empty, videoReadError("share_reader_not_enabled", "启用当前连接的分享解析工具")
 	}
-	configuration, err := h.store.Configuration(ctx, shareServicePluginID)
+	configuration, err := h.store.Configuration(ctx, wechatapp.ShareReaderToolID)
 	if err != nil {
 		return empty, videoReadError("share_plugin_configuration_unavailable", "读取解析配置")
 	}
@@ -146,7 +146,7 @@ func (h *stationShareHost) resolve(ctx context.Context, a stationAttachmentAcces
 	if err = check(ctx); err != nil {
 		return empty, err
 	}
-	_, bridge, err := configuredChannelsBridge(ctx, h.store)
+	_, bridge, err := wechatapp.ConfiguredChannelsBridge(ctx, h.store)
 	if err != nil {
 		return empty, err
 	}
@@ -160,17 +160,17 @@ func (h *stationShareHost) resolve(ctx context.Context, a stationAttachmentAcces
 		return empty, videoReadError("share_source_resolution_unavailable", "按原卡片取得解析入口")
 	}
 	ref := companion.SourceRef{Account: original.Account, Thread: original.Thread, MessageID: original.Message, EventID: "native:" + original.Binding, Revision: 1}
-	binding, err := newShareRouteBinding(message, source, ref, link)
+	binding, err := wechatapp.NewBoundChannelsRoute(message, source, wechatapp.ChannelsEvent{Account: ref.Account, Thread: ref.Thread, Message: ref.MessageID, EventID: ref.EventID, Revision: ref.Revision}, link)
 	if err != nil {
 		return empty, videoReadError("share_source_binding_invalid", "校验原卡片解析入口")
 	}
 	key := localCheckpointKey(a.requester, a.requestTrace, original.id(), epoch, installed.Digest, installed.Revision, configuration.Revision, string(args))
 	inv := pluginhost.Invocation{Account: original.Account, Thread: original.Thread, Requester: a.requester, Purpose: "resolve authorized received Channels video", RequestKey: "station-channels-" + key, SourceVersions: map[string]int{ref.EventID: 1}, EvidenceEpoch: epoch, Authorization: original.id(), OriginSourceSender: original.Sender, RequestThread: original.Thread}
 	policy := &stationSharePolicy{host: h, binding: binding, invocation: inv, installed: installed, config: configuration.Revision, sourceCheck: check}
-	if err = h.controller.EnsureStarted(ctx, shareServicePluginID, installed.Revision); err != nil {
+	if err = h.controller.EnsureStarted(ctx, wechatapp.ShareReaderToolID, installed.Revision); err != nil {
 		return empty, videoReadError("share_reader_runtime_unavailable", "启动隔离解析工具")
 	}
-	call, err := h.controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: shareServicePluginID, Capability: stationChannelsCapability, Context: inv, Arguments: args}, policy)
+	call, err := h.controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: wechatapp.ShareReaderToolID, Capability: stationChannelsCapability, Context: inv, Arguments: args}, policy)
 	if ctx.Err() != nil {
 		return empty, ctx.Err()
 	}

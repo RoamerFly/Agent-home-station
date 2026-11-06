@@ -301,7 +301,7 @@ func stationMediaFailure(err error, stage string) error {
 		return err
 	}
 	code := err.Error()
-	if !publicShareErrorCode.MatchString(code) {
+	if !wechatapp.SafeShareErrorCode(code) {
 		code = "wechat_video_observation_incomplete"
 	}
 	return mediaobserve.NewFailure(code, fmt.Sprintf("视频读取停在%s阶段。请检查当前微信连接的媒体理解配置或从未读位置继续。", stage), err)

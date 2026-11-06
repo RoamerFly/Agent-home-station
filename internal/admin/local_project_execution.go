@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/workspacefs"
@@ -32,7 +34,7 @@ func projectOperation(name string) localProjectOperation {
 	if capability == "" {
 		return localProjectOperation{}
 	}
-	operation := localProjectOperation{pkg: documentWorkshopPluginID, capability: capability}
+	operation := localProjectOperation{pkg: pluginruntime.DocumentWorkshopID, capability: capability}
 	if capability != localDocumentCapability {
 		operation.inputExt = ".docx"
 		operation.inputLimit = 128 << 20
@@ -90,7 +92,7 @@ func (t *localToolSet) invokeLocalProjectTool(ctx context.Context, tool string, 
 		}
 		artifact := input.artifact
 		if !strings.EqualFold(filepath.Ext(artifact.Name), operation.inputExt) || artifact.Bytes > operation.inputLimit {
-			return "", argumentError("$.artifact_id", fmt.Sprintf("需要不超过 %d MiB 的已登记 %s 成品", operation.inputLimit>>20, operation.inputExt))
+			return "", mcptools.ArgumentError("$.artifact_id", fmt.Sprintf("需要不超过 %d MiB 的已登记 %s 成品", operation.inputLimit>>20, operation.inputExt))
 		}
 		if artifact.Source != nil {
 			versions[artifact.Source.EventID] = artifact.Source.Revision
@@ -168,7 +170,7 @@ func (t *localToolSet) localProjectResult(ctx context.Context, tool string, job 
 		var failure struct {
 			Reason string `json:"reason"`
 		}
-		if json.Unmarshal(job.Result, &failure) == nil && (safeDocumentWorkshopCode(failure.Reason) || tool == localAudioToolName && safeLocalAudioCode(failure.Reason)) {
+		if json.Unmarshal(job.Result, &failure) == nil && (pluginruntime.SafeDocumentResultCode(failure.Reason) || tool == localAudioToolName && safeLocalAudioCode(failure.Reason)) {
 			view["reason"] = failure.Reason
 		}
 		return view
@@ -407,7 +409,7 @@ func (p *localProjectPolicy) publishOutput(ctx context.Context, job pluginhost.J
 		return localArtifact{}, err
 	}
 	rel, err := filepath.Rel(windowsProjectToolPath(dir), windowsProjectToolPath(path))
-	if err != nil || !filepath.IsAbs(path) || rel != name || !filepath.IsLocal(rel) || !safeMediaFilename(rel) || rel != filepath.Base(rel) ||
+	if err != nil || !filepath.IsAbs(path) || rel != name || !filepath.IsLocal(rel) || !mediaspec.SafeFilename(rel) || rel != filepath.Base(rel) ||
 		!strings.EqualFold(filepath.Ext(rel), extension) {
 		return localArtifact{}, errors.New("项目工具输出路径或格式不符合任务范围")
 	}

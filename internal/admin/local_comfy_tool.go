@@ -57,13 +57,13 @@ func (t *localToolSet) localComfyTools(ctx context.Context) []mcptools.Tool {
 	if _, err := installedLocalProject(ctx, host, localProjectOperation{pkg: localComfyPackage, capability: localComfyCapability}); err != nil {
 		return nil
 	}
-	jobTool := agentTool(localComfyJobTool, "查询原 ComfyUI 任务或取消。使用先前返回的 job_id。查询取得成品后，在回复中保留作品编号，界面可供主人下载。", `{"type":"object","properties":{"job_id":{"type":"string"},"action":{"type":"string","enum":["status","cancel"]}},"required":["job_id","action"],"additionalProperties":false}`)
+	jobTool := mcptools.NewTool(localComfyJobTool, "查询原 ComfyUI 任务或取消。使用先前返回的 job_id。查询取得成品后，在回复中保留作品编号，界面可供主人下载。", `{"type":"object","properties":{"job_id":{"type":"string"},"action":{"type":"string","enum":["status","cancel"]}},"required":["job_id","action"],"additionalProperties":false}`)
 	if _, _, err := s.comfySetup(ctx, grant.FishID); err != nil {
 		return []mcptools.Tool{jobTool}
 	}
 	return []mcptools.Tool{
-		agentTool(localComfyListTool, "查看本机主人已批准的 ComfyUI 工作流及可调参数。先查列表，再选工作流编号。", `{"type":"object","additionalProperties":false}`),
-		agentTool(localComfyStartTool, "启动已批准的本机 ComfyUI 工作流并取得任务编号。inputs 只填工作流列表给出的参数。PNG 成品从任务查询取得。", `{"type":"object","properties":{"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"title":{"type":"string","maxLength":100}},"required":["workflow_id"],"additionalProperties":false}`),
+		mcptools.NewTool(localComfyListTool, "查看本机主人已批准的 ComfyUI 工作流及可调参数。先查列表，再选工作流编号。", `{"type":"object","additionalProperties":false}`),
+		mcptools.NewTool(localComfyStartTool, "启动已批准的本机 ComfyUI 工作流并取得任务编号。inputs 只填工作流列表给出的参数。PNG 成品从任务查询取得。", `{"type":"object","properties":{"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"title":{"type":"string","maxLength":100}},"required":["workflow_id"],"additionalProperties":false}`),
 		jobTool,
 	}
 }

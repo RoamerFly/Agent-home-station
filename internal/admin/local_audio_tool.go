@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -29,7 +30,7 @@ func (t *localToolSet) localAudioTools(ctx context.Context) []mcptools.Tool {
 	if _, err := installedLocalProject(ctx, host, projectOperation(localAudioToolName)); err != nil {
 		return nil
 	}
-	return []mcptools.Tool{agentTool(localAudioToolName, "从已登记的整数 PCM WAV 成品截取指定时间段，可混为单声道，输出原采样率的 16 位 PCM WAV。用成品编号 artifact_id，无需传路径；返回实际覆盖及可下载的新成品编号。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"filename":{"type":"string","maxLength":120},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","exclusiveMinimum":0},"channels":{"type":"string","enum":["preserve","mono"]}},"required":["artifact_id"],"additionalProperties":false}`)}
+	return []mcptools.Tool{mcptools.NewTool(localAudioToolName, "从已登记的整数 PCM WAV 成品截取指定时间段，可混为单声道，输出原采样率的 16 位 PCM WAV。用成品编号 artifact_id，无需传路径；返回实际覆盖及可下载的新成品编号。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"filename":{"type":"string","maxLength":120},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","exclusiveMinimum":0},"channels":{"type":"string","enum":["preserve","mono"]}},"required":["artifact_id"],"additionalProperties":false}`)}
 }
 
 func (t *localToolSet) prepareLocalAudio(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -41,19 +42,19 @@ func (t *localToolSet) prepareLocalAudio(ctx context.Context, raw json.RawMessag
 		Channels   string   `json:"channels"`
 	}
 	if strictLocalMemoryDecode(raw, &input) != nil || !artifactID(input.ArtifactID, "work-") {
-		return "", argumentError("$.artifact_id", "请选择已登记的 WAV 成品编号，并使用音频工具声明的参数")
+		return "", mcptools.ArgumentError("$.artifact_id", "请选择已登记的 WAV 成品编号，并使用音频工具声明的参数")
 	}
-	if input.Filename != "" && (!filepath.IsLocal(input.Filename) || !safeMediaFilename(input.Filename) || len([]rune(input.Filename)) > 120 || !strings.EqualFold(filepath.Ext(input.Filename), ".wav")) {
-		return "", argumentError("$.filename", "请使用以 .wav 结尾的单个文件名")
+	if input.Filename != "" && (!filepath.IsLocal(input.Filename) || !mediaspec.SafeFilename(input.Filename) || len([]rune(input.Filename)) > 120 || !strings.EqualFold(filepath.Ext(input.Filename), ".wav")) {
+		return "", mcptools.ArgumentError("$.filename", "请使用以 .wav 结尾的单个文件名")
 	}
 	if input.Start < 0 || input.Duration != nil && *input.Duration <= 0 {
-		return "", argumentError("$.start_seconds", "起点须为非负数，指定的时长须大于零")
+		return "", mcptools.ArgumentError("$.start_seconds", "起点须为非负数，指定的时长须大于零")
 	}
 	if input.Channels == "" {
 		input.Channels = "preserve"
 	}
 	if input.Channels != "preserve" && input.Channels != "mono" {
-		return "", argumentError("$.channels", "声道只支持 preserve 或 mono")
+		return "", mcptools.ArgumentError("$.channels", "声道只支持 preserve 或 mono")
 	}
 	arguments, err := json.Marshal(input)
 	if err != nil {

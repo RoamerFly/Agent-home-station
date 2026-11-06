@@ -24,7 +24,7 @@ import (
 // of the packaged/isolated Windows path, not a host-Python fallback.
 func localProjectToolWindowsOptions(t *testing.T) pluginruntime.Options {
 	t.Helper()
-	return localProjectToolWindowsOptionsFor(t, documentWorkshopPluginID)
+	return localProjectToolWindowsOptionsFor(t, pluginruntime.DocumentWorkshopID)
 }
 
 func localProjectToolWindowsOptionsFor(t *testing.T, plugin string) pluginruntime.Options {
@@ -58,7 +58,7 @@ func localProjectToolWindowsOptionsFor(t *testing.T, plugin string) pluginruntim
 		filepath.Join(filepath.Dir(options.WindowsHelper), "windows_lpac.py"),
 		filepath.Join(options.CatalogDirectory, plugin, "plugin.json"),
 	}
-	if plugin == documentWorkshopPluginID {
+	if plugin == pluginruntime.DocumentWorkshopID {
 		required = append(required, filepath.Join(options.DocumentRuntimeRoot, "runtime-manifest.json"))
 	}
 	for _, path := range required {
@@ -71,7 +71,7 @@ func localProjectToolWindowsOptionsFor(t *testing.T, plugin string) pluginruntim
 
 func localProjectToolsView(t *testing.T, f *localHomeFixture) map[string]any {
 	t.Helper()
-	return localProjectToolByID(t, f, documentWorkshopPluginID)
+	return localProjectToolByID(t, f, pluginruntime.DocumentWorkshopID)
 }
 
 func localProjectToolByID(t *testing.T, f *localHomeFixture, id string) map[string]any {
@@ -315,12 +315,12 @@ func TestLiveLocalProjectToolCreatesImmutableDocumentThroughChat(t *testing.T) {
 	// Verify the already started real session can be recycled without
 	// disabling the installed tool or affecting its immutable artifact.
 	host := f.handler.chat.projectTools.host
-	if state := host.controller.Status(documentWorkshopPluginID); state.State != "running" || !state.AutoManaged {
+	if state := host.controller.Status(pluginruntime.DocumentWorkshopID); state.State != "running" || !state.AutoManaged {
 		t.Fatal("document tool did not hold an on-demand runtime lease", state)
 	}
 	host.controller.SetIdleTimeout(30 * time.Millisecond)
 	until := time.Now().Add(5 * time.Second)
-	for host.controller.Status(documentWorkshopPluginID).State != "stopped" && time.Now().Before(until) {
+	for host.controller.Status(pluginruntime.DocumentWorkshopID).State != "stopped" && time.Now().Before(until) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if view := localProjectToolsView(t, f); view["state"] != "idle" || view["enabled"] != true {
@@ -418,7 +418,7 @@ func TestLiveLocalProjectToolCreatesImmutableDocumentThroughChat(t *testing.T) {
 	if code := deniedExport(recovered, "local-document-tampered"); code == http.StatusOK {
 		t.Fatal("tampered DOCX was exported")
 	}
-	if state := recovered.handler.chat.projectTools.host.controller.Status(documentWorkshopPluginID); state.State != "stopped" {
+	if state := recovered.handler.chat.projectTools.host.controller.Status(pluginruntime.DocumentWorkshopID); state.State != "stopped" {
 		t.Fatalf("tampered input reached a project tool process: %#v", state)
 	}
 	entries, err = os.ReadDir(filepath.Join(recovered.dir, "artifacts"))
@@ -430,7 +430,7 @@ func TestLiveLocalProjectToolCreatesImmutableDocumentThroughChat(t *testing.T) {
 	if code := deniedExport(retryDenied, "local-document-tampered"); code == http.StatusOK {
 		t.Fatal("restart replay exported a tampered DOCX")
 	}
-	if state := retryDenied.handler.chat.projectTools.host.controller.Status(documentWorkshopPluginID); state.State != "stopped" {
+	if state := retryDenied.handler.chat.projectTools.host.controller.Status(pluginruntime.DocumentWorkshopID); state.State != "stopped" {
 		t.Fatalf("restart retry reached a project tool process: %#v", state)
 	}
 	entries, err = os.ReadDir(filepath.Join(retryDenied.dir, "artifacts"))
@@ -462,7 +462,7 @@ func TestLiveLocalProjectToolCreatesImmutableDocumentThroughChat(t *testing.T) {
 	if code, _ := localChatSend(retryDenied, "local-document-forgotten", "忘记后不要再读取原文档"); code == http.StatusOK {
 		t.Fatal("forgotten source reached document inspection")
 	}
-	if state := retryDenied.handler.chat.projectTools.host.controller.Status(documentWorkshopPluginID); state.State != "stopped" {
+	if state := retryDenied.handler.chat.projectTools.host.controller.Status(pluginruntime.DocumentWorkshopID); state.State != "stopped" {
 		t.Fatalf("forgotten source reached a project tool process: %#v", state)
 	}
 	forgottenRestart := localRestartChat(t, retryDenied)

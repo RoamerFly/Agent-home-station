@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 )
 
@@ -132,7 +133,7 @@ func TestLocalSpeechChatSelectsVoiceAndDownloadsVerifiedWAV(t *testing.T) {
 	if err != nil || len(jobs.Items) != 2 || jobs.Items[0].State != "completed" || jobs.Items[1].State != "failed" {
 		t.Fatalf("unexpected speech job history: %d %v", len(jobs.Items), err)
 	}
-	if strings.Contains(string(jobs.Items[0].Arguments), "A synthetic test.") || !strings.Contains(string(jobs.Items[0].Arguments), namedSpeechSHA([]byte("A synthetic test."))) {
+	if strings.Contains(string(jobs.Items[0].Arguments), "A synthetic test.") || !strings.Contains(string(jobs.Items[0].Arguments), mediaspec.SpeechSHA256([]byte("A synthetic test."))) {
 		t.Fatal("speech job does not bind text by digest only")
 	}
 	if err := store.Clear(companion.ScopeID(input.Channel, input.Account, input.Thread)); err != nil {

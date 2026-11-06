@@ -14,7 +14,7 @@ import (
 )
 
 func agentTool(name, description, schema string) mcptools.Tool {
-	return mcptools.Tool{Name: name, Description: description, InputSchema: json.RawMessage(schema)}
+	return mcptools.NewTool(name, description, schema)
 }
 func (p *permittedTools) agentToolsAllowed() bool {
 	if p.manager.agent == nil {

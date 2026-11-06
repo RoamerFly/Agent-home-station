@@ -28,6 +28,8 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/mediaspec"
+	"wechat-bot/internal/strictjson"
 )
 
 const (
@@ -232,7 +234,7 @@ func (s *localTTSService) run(ctx context.Context, fish, binding string, registr
 	// random MkdirTemp root would continuously mint distinct LPAC identities and
 	// leave ACL entries on the interpreter/model files. Each invocation still
 	// uses unique output paths, even if an old broker survived a host crash.
-	directory := filepath.Join(s.dataDir, "station-speech-jobs", namedSpeechSHA([]byte(fish+"\n"+voice.version())))
+	directory := filepath.Join(s.dataDir, "station-speech-jobs", mediaspec.SpeechSHA256([]byte(fish+"\n"+voice.version())))
 	if err := localTTSEnsureDir(directory); err != nil {
 		return localTTSResult{}, errors.New("station_speech_private_directory_unavailable")
 	}
@@ -292,21 +294,21 @@ func (s *localTTSService) run(ctx context.Context, fish, binding string, registr
 	// The broker returned a terminal receipt. Drop its plaintext argv and logs;
 	// only the verified result and input digest belong in the durable job record.
 	defer os.RemoveAll(spool)
-	var reported namedSpeechRunnerResult
+	var reported mediaspec.GPTSoVITSResult
 	lines := bytes.Split(bytes.TrimSpace(log), []byte("\n"))
-	if len(lines) == 0 || strictServicePluginJSON(lines[len(lines)-1], &reported) != nil {
+	if len(lines) == 0 || strictjson.DecodeKnownFields(lines[len(lines)-1], &reported) != nil {
 		return localTTSResult{}, errors.New("station_speech_runner_result_invalid")
 	}
 	canonicalPrompt, err := localTTSCanonicalPrompt(voice.Prompt)
-	if err != nil || reported.Output != output || reported.GPT != voice.GPT || reported.SoVITS != voice.SoVITS || reported.GPTSHA256 != voice.GPTSHA256 || reported.SoVITSSHA256 != voice.SoVITSSHA256 || reported.ReferenceSHA256 != voice.ReferenceSHA256 || reported.PromptSHA256 != namedSpeechSHA([]byte(canonicalPrompt)) || reported.TextSHA256 != namedSpeechSHA([]byte(text)) || reported.Device != registration.Device || reported.Version != "v2" || reported.WeChatSends != 0 {
+	if err != nil || reported.Output != output || reported.GPT != voice.GPT || reported.SoVITS != voice.SoVITS || reported.GPTSHA256 != voice.GPTSHA256 || reported.SoVITSSHA256 != voice.SoVITSSHA256 || reported.ReferenceSHA256 != voice.ReferenceSHA256 || reported.PromptSHA256 != mediaspec.SpeechSHA256([]byte(canonicalPrompt)) || reported.TextSHA256 != mediaspec.SpeechSHA256([]byte(text)) || reported.Device != registration.Device || reported.Version != "v2" || reported.WeChatSends != 0 {
 		return localTTSResult{}, errors.New("station_speech_runner_binding_mismatch")
 	}
 	wav, err := localTTSReadWAV(output)
 	if err != nil {
 		return localTTSResult{}, err
 	}
-	rate, seconds, err := namedSpeechWAVInfo(wav)
-	if err != nil || rate < 8000 || rate > 192000 || reported.SHA256 != namedSpeechSHA(wav) || reported.SampleRate != rate || math.IsNaN(reported.Seconds) || math.IsInf(reported.Seconds, 0) || reported.Seconds <= 0 || math.Abs(reported.Seconds-seconds) > 1e-8 {
+	rate, seconds, err := mediaspec.PCM16WAVInfo(wav)
+	if err != nil || rate < 8000 || rate > 192000 || reported.SHA256 != mediaspec.SpeechSHA256(wav) || reported.SampleRate != rate || math.IsNaN(reported.Seconds) || math.IsInf(reported.Seconds, 0) || reported.Seconds <= 0 || math.Abs(reported.Seconds-seconds) > 1e-8 {
 		return localTTSResult{}, errors.New("station_speech_output_invalid")
 	}
 	// Registration edits and revoked/replaced voice files during an expensive
@@ -437,7 +439,7 @@ func (r localTTSRegistration) validate(dataDir, editableRoot string) error {
 			}
 			if file.prompt {
 				data, err := localTTSReadRegular(file.path, 1<<20)
-				if err != nil || !utf8.Valid(data) || strings.TrimSpace(strings.TrimPrefix(string(data), "\ufeff")) == "" || namedSpeechSHA(data) != file.hash {
+				if err != nil || !utf8.Valid(data) || strings.TrimSpace(strings.TrimPrefix(string(data), "\ufeff")) == "" || mediaspec.SpeechSHA256(data) != file.hash {
 					return errors.New("station_speech_prompt_changed")
 				}
 			}
@@ -507,7 +509,7 @@ func (v localTTSVoiceRegistration) version() string {
 		ID, GPT, GPTSHA, SoVITS, SoVITSSHA, Reference, ReferenceSHA, Prompt, PromptSHA, PromptLanguage, TextLanguage string
 		SpeedMin, SpeedMax                                                                                           float64
 	}{v.ID, v.GPT, v.GPTSHA256, v.SoVITS, v.SoVITSSHA256, v.Reference, v.ReferenceSHA256, v.Prompt, v.PromptSHA256, v.PromptLanguage, v.TextLanguage, v.SpeedMin, v.SpeedMax})
-	return namedSpeechSHA(data)
+	return mediaspec.SpeechSHA256(data)
 }
 
 func localTTSBinding(registration localTTSRegistration) string {
@@ -518,7 +520,7 @@ func localTTSBinding(registration localTTSRegistration) string {
 		Project, Python, BaseModels, Packages, Runner, RunnerSHA, Media, NLTK, Device string
 		Voices                                                                        []localTTSVoiceRegistration
 	}{registration.SchemaVersion, registration.Project, registration.Python, registration.BaseModels, registration.Packages, registration.Runner, registration.RunnerSHA256, registration.Media, registration.NLTKData, registration.Device, voices})
-	return namedSpeechSHA(data)
+	return mediaspec.SpeechSHA256(data)
 }
 
 func localTTSValidateRequest(request localTTSRequest) error {

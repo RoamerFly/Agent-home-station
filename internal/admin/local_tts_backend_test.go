@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/mediaspec"
 )
 
 func TestLocalTTSInfoOnlyAdvertisesRunnableRegisteredVoices(t *testing.T) {
@@ -191,7 +192,7 @@ func TestLocalTTSSynthesizeThroughRealWindowsLPAC(t *testing.T) {
 	if result.VoiceID != request.VoiceID || result.Version != info.Voices[0].Version || result.Speed != 1 || len(result.WAV) <= 64<<10 {
 		t.Fatalf("unexpected synthesis result: %#v bytes=%d", result, len(result.WAV))
 	}
-	rate, seconds, err := namedSpeechWAVInfo(result.WAV)
+	rate, seconds, err := mediaspec.PCM16WAVInfo(result.WAV)
 	if err != nil || rate != 16000 || seconds != 3 {
 		t.Fatalf("synthetic WAV: rate=%d seconds=%v err=%v", rate, seconds, err)
 	}

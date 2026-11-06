@@ -17,6 +17,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -70,7 +71,7 @@ func stationAttachmentKind(m linuxnative.Message) (kind, filename string) {
 			return "video", "shared-video.mp4"
 		}
 		name := m.FileAttachmentName()
-		if safeMediaFilename(name) && name != "." && name != ".." && !strings.ContainsAny(name, ":*?<>|") {
+		if mediaspec.SafeFilename(name) && name != "." && name != ".." && !strings.ContainsAny(name, ":*?<>|") {
 			return "file", name
 		}
 	}
@@ -78,7 +79,7 @@ func stationAttachmentKind(m linuxnative.Message) (kind, filename string) {
 		return "", ""
 	}
 	for _, attachment := range m.Attachments {
-		if attachment.Kind == kind && safeMediaFilename(attachment.Filename) && attachment.Filename != "." && attachment.Filename != ".." && !strings.ContainsAny(attachment.Filename, ":*?<>|") {
+		if attachment.Kind == kind && mediaspec.SafeFilename(attachment.Filename) && attachment.Filename != "." && attachment.Filename != ".." && !strings.ContainsAny(attachment.Filename, ":*?<>|") {
 			return kind, attachment.Filename
 		}
 	}

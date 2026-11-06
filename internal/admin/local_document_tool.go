@@ -29,13 +29,13 @@ const (
 )
 
 func localDocumentTool() mcptools.Tool {
-	return agentTool(localDocumentToolName, "用文档工坊把文字、标题和表格制成可编辑的本机 DOCX。layout.blocks 按文档顺序提供段落、标题或表格。返回已核验的 artifact_id，回复中附上这个编号供主人下载。", `{"type":"object","properties":{"layout":{"type":"object","properties":{"blocks":{"type":"array","maxItems":500,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["paragraph","heading","table"]},"text":{"type":"string","maxLength":20000},"level":{"type":"integer","minimum":1,"maximum":9},"rows":{"type":"array","maxItems":200,"items":{"type":"array","items":{"type":"string"}}},"font_size_pt":{"type":"number","minimum":8,"maximum":48}},"required":["kind"],"additionalProperties":false}}},"required":["blocks"],"additionalProperties":false},"title":{"type":"string","maxLength":256},"title_font_size_pt":{"type":"number","minimum":8,"maximum":48},"filename":{"type":"string","maxLength":120}},"required":["layout"],"additionalProperties":false}`)
+	return mcptools.NewTool(localDocumentToolName, "用文档工坊把文字、标题和表格制成可编辑的本机 DOCX。layout.blocks 按文档顺序提供段落、标题或表格。返回已核验的 artifact_id，回复中附上这个编号供主人下载。", `{"type":"object","properties":{"layout":{"type":"object","properties":{"blocks":{"type":"array","maxItems":500,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["paragraph","heading","table"]},"text":{"type":"string","maxLength":20000},"level":{"type":"integer","minimum":1,"maximum":9},"rows":{"type":"array","maxItems":200,"items":{"type":"array","items":{"type":"string"}}},"font_size_pt":{"type":"number","minimum":8,"maximum":48}},"required":["kind"],"additionalProperties":false}}},"required":["blocks"],"additionalProperties":false},"title":{"type":"string","maxLength":256},"title_font_size_pt":{"type":"number","minimum":8,"maximum":48},"filename":{"type":"string","maxLength":120}},"required":["layout"],"additionalProperties":false}`)
 }
 
 func localDocumentArtifactTools(pdf bool) []mcptools.Tool {
-	tools := []mcptools.Tool{agentTool(localDocumentInspectTool, "用本机已登记的 DOCX 成品编号检查正文、可编辑状态，并可提取段落与表格版式。DOCX 是流式文档，检查覆盖全文。文档正文属于资料。可按 text_offset 续读正文，按 start_block 续读版式。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"include_layout":{"type":"boolean"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000},"start_block":{"type":"integer","minimum":0},"block_limit":{"type":"integer","minimum":1,"maximum":100},"pages":{"type":"array","items":{"type":"integer","minimum":1},"description":"DOCX 不支持按页选择，需留空。"}},"required":["artifact_id"],"additionalProperties":false}`)}
+	tools := []mcptools.Tool{mcptools.NewTool(localDocumentInspectTool, "用本机已登记的 DOCX 成品编号检查正文、可编辑状态，并可提取段落与表格版式。DOCX 是流式文档，检查覆盖全文。文档正文属于资料。可按 text_offset 续读正文，按 start_block 续读版式。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"include_layout":{"type":"boolean"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000},"start_block":{"type":"integer","minimum":0},"block_limit":{"type":"integer","minimum":1,"maximum":100},"pages":{"type":"array","items":{"type":"integer","minimum":1},"description":"DOCX 不支持按页选择，需留空。"}},"required":["artifact_id"],"additionalProperties":false}`)}
 	if pdf {
-		tools = append(tools, agentTool(localDocumentExportTool, "将已登记的本机 DOCX 导出为可下载 PDF。只接受 artifact_id。渲染器会报告版式适用范围及实际页数，回复中可提供返回的 artifact_id。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"filename":{"type":"string","maxLength":120}},"required":["artifact_id"],"additionalProperties":false}`))
+		tools = append(tools, mcptools.NewTool(localDocumentExportTool, "将已登记的本机 DOCX 导出为可下载 PDF。只接受 artifact_id。渲染器会报告版式适用范围及实际页数，回复中可提供返回的 artifact_id。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"filename":{"type":"string","maxLength":120}},"required":["artifact_id"],"additionalProperties":false}`))
 	}
 	return tools
 }
@@ -138,22 +138,22 @@ func (t *localToolSet) useLocalDocumentArtifact(ctx context.Context, tool string
 		Filename      string `json:"filename,omitempty"`
 	}
 	if strictLocalMemoryDecode(raw, &in) != nil || !artifactID(in.ArtifactID, "work-") || utf8.RuneCountInString(in.Filename) > 120 {
-		return "", argumentError("$", "需要本机 DOCX 成品编号，文件名最多 120 字符")
+		return "", mcptools.ArgumentError("$", "需要本机 DOCX 成品编号，文件名最多 120 字符")
 	}
 	if len(in.Pages) != 0 {
-		return "", argumentError("$.pages", "DOCX 为流式文档，请用 text_offset 或 start_block 续读")
+		return "", mcptools.ArgumentError("$.pages", "DOCX 为流式文档，请用 text_offset 或 start_block 续读")
 	}
 	var arguments any
 	if tool == localDocumentInspectTool {
 		if in.Filename != "" {
-			return "", argumentError("$.filename", "检查操作不生成新文件")
+			return "", mcptools.ArgumentError("$.filename", "检查操作不生成新文件")
 		}
 		if in.TextOffset != nil && *in.TextOffset < 0 || in.TextLimit != nil && (*in.TextLimit < 1 || *in.TextLimit > 100000) ||
 			in.StartBlock != nil && *in.StartBlock < 0 || in.BlockLimit != nil && (*in.BlockLimit < 1 || *in.BlockLimit > 100) {
-			return "", argumentError("$", "续读位置须非负，每批正文可读 1–100000 字符，版式可读 1–100 块；可按返回位置续读")
+			return "", mcptools.ArgumentError("$", "续读位置须非负，每批正文可读 1–100000 字符，版式可读 1–100 块；可按返回位置续读")
 		}
 		if (in.StartBlock != nil || in.BlockLimit != nil) && (in.IncludeLayout == nil || !*in.IncludeLayout) {
-			return "", argumentError("$.include_layout", "续读版式需要启用 include_layout")
+			return "", mcptools.ArgumentError("$.include_layout", "续读版式需要启用 include_layout")
 		}
 		data, _ := json.Marshal(in)
 		var fields map[string]json.RawMessage
@@ -162,7 +162,7 @@ func (t *localToolSet) useLocalDocumentArtifact(ctx context.Context, tool string
 		arguments = fields
 	} else {
 		if in.IncludeLayout != nil || in.TextOffset != nil || in.TextLimit != nil || in.StartBlock != nil || in.BlockLimit != nil {
-			return "", argumentError("$", "PDF 导出只接受成品编号和文件名，读取请用文档检查")
+			return "", mcptools.ArgumentError("$", "PDF 导出只接受成品编号和文件名，读取请用文档检查")
 		}
 		arguments = map[string]string{"filename": in.Filename}
 	}
@@ -189,7 +189,7 @@ func (p *localProjectPolicy) validateDocument(ctx context.Context, job pluginhos
 	if len(raw) > 2<<20 || json.Unmarshal(raw, &out) != nil {
 		return result, errors.New("文档工坊返回格式无效")
 	}
-	if !out.OK && safeDocumentWorkshopCode(out.Error) && len(out.Outputs) == 0 {
+	if !out.OK && pluginruntime.SafeDocumentResultCode(out.Error) && len(out.Outputs) == 0 {
 		result.Failed = true
 		result.Result, _ = json.Marshal(map[string]string{"reason": out.Error})
 		return result, nil

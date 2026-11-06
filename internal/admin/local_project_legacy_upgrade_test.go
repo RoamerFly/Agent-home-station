@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/pluginruntime"
 )
 
 func TestLiveLocalProjectDocumentLegacyUpgrade(t *testing.T) {
@@ -34,7 +35,7 @@ func TestLiveLocalProjectDocumentLegacyUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := host.store.Prepare(t.Context(), filepath.Join(legacy, documentWorkshopPluginID))
+	prepared, err := host.store.Prepare(t.Context(), filepath.Join(legacy, pluginruntime.DocumentWorkshopID))
 	if err != nil || prepared.Digest != localDocumentLegacyDigest {
 		t.Fatalf("legacy official catalog not verified: %v", err)
 	}

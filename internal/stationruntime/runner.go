@@ -150,3 +150,22 @@ func resolvedWorkspace(workspace string) string {
 	}
 	return workspace
 }
+
+// PackagedCommandRuntimeRoots admits only the packaged command dependencies.
+// Each returned directory is a read-only mount for the caller.
+func PackagedCommandRuntimeRoots(w *agenthost.WindowsConfig) []string {
+	if w == nil || !strings.EqualFold(filepath.Base(w.Pythonw), "pythonw.exe") || !strings.EqualFold(filepath.Base(filepath.Dir(w.Pythonw)), "windows-python-cli") {
+		return nil
+	}
+	runtimeRoot := filepath.Dir(filepath.Dir(w.Pythonw))
+	var roots []string
+	for _, name := range []string{"windows-python-cli", "windows-media"} {
+		candidate := filepath.Join(runtimeRoot, name)
+		root, err := workspacefs.OpenPath(candidate)
+		if err == nil {
+			root.Close()
+			roots = append(roots, candidate)
+		}
+	}
+	return roots
+}

@@ -13,6 +13,7 @@ import (
 
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/workspacefs"
 )
@@ -152,16 +153,16 @@ func (t *localToolSet) callLocalTTS(ctx context.Context, name string, raw json.R
 	}
 	var request localTTSRequest
 	if len(raw) > 80<<10 || strictLocalMemoryDecode(raw, &request) != nil {
-		return "", argumentError("$", "请提供声线编号和要合成的正文")
+		return "", mcptools.ArgumentError("$", "请提供声线编号和要合成的正文")
 	}
 	if !utf8.ValidString(request.Text) || strings.TrimSpace(request.Text) == "" || strings.ContainsRune(request.Text, 0) {
-		return "", argumentError("$.text", "需要有效的非空正文")
+		return "", mcptools.ArgumentError("$.text", "需要有效的非空正文")
 	}
 	if len(request.Text) > localTTSTextLimit {
-		return "", argumentError("$.text", "单次合成最多 12000 UTF-8 字节，可以分段合成")
+		return "", mcptools.ArgumentError("$.text", "单次合成最多 12000 UTF-8 字节，可以分段合成")
 	}
 	if request.Language != "" && !localTTSLanguageAllowed(request.Language) {
-		return "", argumentError("$.text_language", "语言模式不受支持，可查看工具声明或留空使用声线登记值")
+		return "", mcptools.ArgumentError("$.text_language", "语言模式不受支持，可查看工具声明或留空使用声线登记值")
 	}
 	var selected localTTSVoice
 	for _, voice := range info.Voices {
@@ -171,14 +172,14 @@ func (t *localToolSet) callLocalTTS(ctx context.Context, name string, raw json.R
 		}
 	}
 	if selected.Version == "" {
-		return "", argumentError("$.voice_id", "指定声线未登记或已撤权，请查看可用声线列表")
+		return "", mcptools.ArgumentError("$.voice_id", "指定声线未登记或已撤权，请查看可用声线列表")
 	}
 	if request.Speed == nil {
 		normal := 1.0
 		request.Speed = &normal
 	}
 	if *request.Speed < selected.SpeedMin || *request.Speed > selected.SpeedMax {
-		return "", argumentError("$.speed", "语速超出该声线支持范围，请查看声线列表中的上下限")
+		return "", mcptools.ArgumentError("$.speed", "语速超出该声线支持范围，请查看声线列表中的上下限")
 	}
 	source, ok := t.store.SourceForInput(companion.Input{Channel: "local", Account: grant.FishID, Thread: grant.OwnerID, Sender: grant.OwnerID, TraceID: t.traceID})
 	if !ok {
@@ -238,7 +239,7 @@ func (t *localToolSet) runLocalTTS(ctx context.Context, s *localProjectTools, ho
 	if result.VoiceID != selected.ID || result.Version != selected.Version || result.Speed != *request.Speed {
 		return host.store.FailJob(save, job.ID, job.Revision, json.RawMessage(`{"reason":"local_speech_voice_receipt_mismatch"}`))
 	}
-	rate, seconds, audioErr := namedSpeechWAVInfo(result.WAV)
+	rate, seconds, audioErr := mediaspec.PCM16WAVInfo(result.WAV)
 	if audioErr != nil || len(result.WAV) > localTTSWAVLimit || rate < 8000 || rate > 192000 {
 		return host.store.FailJob(save, job.ID, job.Revision, json.RawMessage(`{"reason":"local_speech_invalid_wav"}`))
 	}
@@ -280,7 +281,7 @@ func (t *localToolSet) claimLocalTTS(ctx context.Context, s *localProjectTools, 
 		return empty, nil, nil, err
 	}
 	arguments, err := json.Marshal(localTTSJobInput{Origin: source, Trace: t.traceID, VoiceID: selected.ID, VoiceVersion: selected.Version,
-		Binding: binding, Speed: *request.Speed, TextSHA256: namedSpeechSHA([]byte(request.Text)), TextLanguage: request.Language})
+		Binding: binding, Speed: *request.Speed, TextSHA256: mediaspec.SpeechSHA256([]byte(request.Text)), TextLanguage: request.Language})
 	if err != nil {
 		return empty, nil, nil, err
 	}
@@ -327,7 +328,7 @@ func (t *localToolSet) publishLocalTTS(ctx context.Context, grant localWorkspace
 	if err := os.WriteFile(path, wav, 0600); err != nil {
 		return localArtifact{}, err
 	}
-	input := localArtifactInput{Key: job, Expected: namedSpeechSHA(wav), project: localTTSPackage}
+	input := localArtifactInput{Key: job, Expected: mediaspec.SpeechSHA256(wav), project: localTTSPackage}
 	return t.access.home.artifacts.publishFile(ctx, input, source, t.access, grant, path, nil)
 }
 
@@ -425,7 +426,7 @@ func localTTSJobPackage(host *localProjectToolHost, current pluginhost.Installed
 		return pluginhost.InstalledPackage{}, err
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "plugin.json"))
-	if err != nil || namedSpeechSHA(raw) != job.PackageDigest {
+	if err != nil || mediaspec.SpeechSHA256(raw) != job.PackageDigest {
 		return pluginhost.InstalledPackage{}, errors.New("speech job package manifest changed")
 	}
 	pkg, err := pluginhost.Verify(dir)

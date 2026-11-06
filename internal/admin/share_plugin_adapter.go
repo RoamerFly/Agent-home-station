@@ -2,9 +2,7 @@ package admin
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -43,14 +41,6 @@ func (m *Manager) installedServiceState(ctx context.Context, id, prefix string) 
 	return true, nil
 }
 
-// This fingerprint contains original native identity/content, not observations
-// or display names. Only its hash is kept in an ephemeral task's source metadata.
-func shareNativeFingerprint(m linuxnative.Message) string {
-	b, _ := json.Marshal([]any{m.AccountID, m.ThreadID, m.ID, m.SenderID, m.ServerID, m.CreatedAt, m.Direction, m.Type, m.AppMessageType, m.Body, m.Link})
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
-}
-
 type receivedSharePolicy struct {
 	manager            *Manager
 	store              *pluginhost.Store
@@ -68,7 +58,7 @@ type receivedSharePolicy struct {
 	resolutionSnapshotSuffix string
 	timeoutSeconds           int64
 	actor                    *sourceActorProof
-	binding                  *shareRouteBinding
+	binding                  *wechatapp.BoundChannelsRoute
 	send                     pluginruntime.RouteTransport
 	failureMu                sync.Mutex
 	failure                  *shareResolutionFailure
@@ -186,7 +176,7 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 	if err != nil {
 		return nil, err
 	}
-	p := &receivedSharePolicy{manager: m, store: store, message: message, tool: tool, fingerprint: receivedSourceFingerprint(message, tool), epoch: epoch, remember: m.Config().Companion.Permissions.Remember, send: mcptools.PostPluginRoute}
+	p := &receivedSharePolicy{manager: m, store: store, message: message, tool: tool, fingerprint: wechatapp.ReceivedSourceFingerprint(message, tool), epoch: epoch, remember: m.Config().Companion.Permissions.Remember, send: mcptools.PostPluginRoute}
 	if actor, ok := sourceActorFromContext(ctx); ok {
 		// The proof is useful only for the exact account and source conversation
 		// it was minted for. Do not downgrade a mismatched explicit request into
@@ -275,15 +265,6 @@ func (p *receivedSharePolicy) setReadOnlyResolutionSnapshot(raw json.RawMessage,
 	)
 }
 
-func receivedSourceFingerprint(m linuxnative.Message, tool string) string {
-	if tool != "media.observe" && tool != "media.transcribe" && tool != "media.listen" {
-		return shareNativeFingerprint(m)
-	}
-	b, _ := json.Marshal([]any{shareNativeFingerprint(m), m.Attachments})
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
-}
-
 func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -364,7 +345,7 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	if current.AccountID == "" {
 		current.AccountID = p.manager.native.Account()
 	}
-	if receivedSourceFingerprint(current, p.tool) != p.fingerprint {
+	if wechatapp.ReceivedSourceFingerprint(current, p.tool) != p.fingerprint {
 		return errors.New("share_native_source_changed")
 	}
 	return nil
@@ -386,7 +367,10 @@ func (p *receivedSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap
 		}
 	}()
 	if method == "wechat/channels_bridge" {
-		return p.channelsBridge(ctx, j, cap, raw)
+		if p.binding == nil || p.message.AppMessageType == nil || *p.message.AppMessageType != 51 {
+			return nil, errors.New("share_bridge_unavailable")
+		}
+		return wechatapp.CallBoundChannelsBridge(ctx, p.store, p.binding, j, raw, func(ctx context.Context) error { return p.Check(ctx, j, cap) })
 	}
 	if method != "wechat/http_route" || p.binding == nil {
 		return nil, errors.New("share_host_service_unavailable")
@@ -450,7 +434,7 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 	if err := p.Check(ctx, preflight, pluginhost.Capability{}); err != nil {
 		return source, err
 	}
-	_, bridgeConfigured, err := p.configuredChannelsBridge(ctx)
+	_, bridgeConfigured, err := wechatapp.ConfiguredChannelsBridge(ctx, p.store)
 	if err != nil {
 		return source, err
 	}
@@ -474,7 +458,7 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 	if err != nil {
 		return source, err
 	}
-	p.binding, err = newShareRouteBinding(message, source, p.source, link)
+	p.binding, err = wechatapp.NewBoundChannelsRoute(message, source, wechatapp.ChannelsEvent{Account: p.source.Account, Thread: p.source.Thread, Message: p.source.MessageID, EventID: p.source.EventID, Revision: p.source.Revision}, link)
 	if err != nil {
 		return source, err
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 )
@@ -187,7 +188,7 @@ func (s *localArtifactStore) readRecord(id string) (localArtifact, error) {
 	}
 	defer file.Close()
 	raw, err := io.ReadAll(io.LimitReader(file, 32<<10))
-	if err != nil || len(raw) >= 32<<10 || json.Unmarshal(raw, &a) != nil || a.ID != id || a.id() != id || a.Bytes < 1 || a.Bytes > stationAttachmentLimit || !safeMediaFilename(a.Name) || !artifactID("sha-"+a.SHA256, "sha-") {
+	if err != nil || len(raw) >= 32<<10 || json.Unmarshal(raw, &a) != nil || a.ID != id || a.id() != id || a.Bytes < 1 || a.Bytes > stationAttachmentLimit || !mediaspec.SafeFilename(a.Name) || !artifactID("sha-"+a.SHA256, "sha-") {
 		return localArtifact{}, errors.New("artifact_record_invalid")
 	}
 	return a, nil
@@ -235,7 +236,7 @@ func (s *localArtifactStore) publish(ctx context.Context, in localArtifactInput,
 
 func localArtifactIdentity(in localArtifactInput, source *companion.SourceRef, grant localWorkspaceGrant, path string) (localArtifact, error) {
 	name := filepath.Base(path)
-	if !safeMediaFilename(name) || len(name) > 255 || strings.ContainsAny(name, ":*?<>|") {
+	if !mediaspec.SafeFilename(name) || len(name) > 255 || strings.ContainsAny(name, ":*?<>|") {
 		return localArtifact{}, errors.New("成品文件名无效")
 	}
 	a := localArtifact{Name: name, PathHash: localCheckpointKey(path), Fish: grant.FishID, Owner: grant.OwnerID, HomeRevision: grant.Revision, Request: in.Key, Source: source, Parent: in.parent, ProjectTool: in.project}

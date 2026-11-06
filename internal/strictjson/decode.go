@@ -82,3 +82,16 @@ func Matches(raw json.RawMessage, expected any) bool {
 	want, e := Decode(b)
 	return e == nil && reflect.DeepEqual(actual, want)
 }
+
+// DecodeKnownFields decodes one JSON value and rejects unknown struct fields.
+func DecodeKnownFields(raw []byte, target any) error {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(target); err != nil {
+		return err
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		return errors.New("trailing JSON data")
+	}
+	return nil
+}

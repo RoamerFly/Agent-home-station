@@ -133,9 +133,9 @@ func (t *localToolSet) localRVCTools(ctx context.Context) []mcptools.Tool {
 		return nil
 	}
 	return []mcptools.Tool{
-		agentTool(localRVCVoicesTool, "列出本机主人明确登记的 RVC 声线编号。开始换声前选择精确编号。", `{"type":"object","additionalProperties":false}`),
-		agentTool(localRVCStartTool, "为已登记的 PCM16 WAV 成品启动本地 RVC 换声。明确指定声线编号；返回持久任务编号。单段上限为 600 秒及 25 MiB，必要时先用音频工坊截取。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"voice_profile_id":{"type":"string"},"title":{"type":"string","maxLength":100}},"required":["artifact_id","voice_profile_id"],"additionalProperties":false}`),
-		agentTool(localRVCJobTool, "查看原 RVC 任务并取得已校验成品，或按主人要求取消、续办原任务。使用提交时返回的 job_id；执行中可以稍后再查。", `{"type":"object","properties":{"job_id":{"type":"string"},"action":{"type":"string","enum":["status","cancel","resume"]}},"required":["job_id","action"],"additionalProperties":false}`),
+		mcptools.NewTool(localRVCVoicesTool, "列出本机主人明确登记的 RVC 声线编号。开始换声前选择精确编号。", `{"type":"object","additionalProperties":false}`),
+		mcptools.NewTool(localRVCStartTool, "为已登记的 PCM16 WAV 成品启动本地 RVC 换声。明确指定声线编号；返回持久任务编号。单段上限为 600 秒及 25 MiB，必要时先用音频工坊截取。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"voice_profile_id":{"type":"string"},"title":{"type":"string","maxLength":100}},"required":["artifact_id","voice_profile_id"],"additionalProperties":false}`),
+		mcptools.NewTool(localRVCJobTool, "查看原 RVC 任务并取得已校验成品，或按主人要求取消、续办原任务。使用提交时返回的 job_id；执行中可以稍后再查。", `{"type":"object","properties":{"job_id":{"type":"string"},"action":{"type":"string","enum":["status","cancel","resume"]}},"required":["job_id","action"],"additionalProperties":false}`),
 	}
 }
 

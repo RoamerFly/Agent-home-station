@@ -31,9 +31,9 @@ func channelsVideoBinding(message linuxnative.Message, source linuxnative.Channe
 	if source.ObjectID == "" {
 		// Some incoming cards supply only an exact locator. Never reuse those
 		// cached bytes if the locator or key changes.
-		return localCheckpointKey(shareNativeFingerprint(message), source.MediaURL, source.DecodeKey, source.ObjectNonceID)
+		return localCheckpointKey(wechatapp.NativeShareFingerprint(message), source.MediaURL, source.DecodeKey, source.ObjectNonceID)
 	}
-	return localCheckpointKey(shareNativeFingerprint(message), source.ObjectID, source.ObjectNonceID)
+	return localCheckpointKey(wechatapp.NativeShareFingerprint(message), source.ObjectID, source.ObjectNonceID)
 }
 
 func (a stationAttachmentAccess) downloadChannelsVideo(ctx context.Context, original stationAttachmentSource, file *os.File) (linuxnative.VerifiedIncomingMedia, error) {

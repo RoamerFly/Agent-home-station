@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mcptools"
 )
 
 const localProcessTool = "server_windows_process"
@@ -96,10 +97,10 @@ func (t *localToolSet) publishCheckpointed(ctx context.Context, raw json.RawMess
 		return "", errors.New("本轮没有成品登记授权")
 	}
 	if strictLocalMemoryDecode(raw, &in) != nil {
-		return "", argumentError("$", "请提供 path 和 expected_sha256")
+		return "", mcptools.ArgumentError("$", "请提供 path 和 expected_sha256")
 	}
 	if !artifactID("sha-"+in.Expected, "sha-") {
-		return "", argumentError("$.expected_sha256", "请提供文件的 64 位小写 SHA-256")
+		return "", mcptools.ArgumentError("$.expected_sha256", "请提供文件的 64 位小写 SHA-256")
 	}
 	grant, err := t.access.resolve()
 	if err != nil {
@@ -107,7 +108,7 @@ func (t *localToolSet) publishCheckpointed(ctx context.Context, raw json.RawMess
 	}
 	path, err := localWorkspacePath(grant, in.Path)
 	if err != nil {
-		return "", argumentError("$.path", "请提供家目录内的成品文件路径")
+		return "", mcptools.ArgumentError("$.path", "请提供家目录内的成品文件路径")
 	}
 	source, ok := t.artifactSource(grant)
 	if !ok || t.run.CheckSource(ctx) != nil {

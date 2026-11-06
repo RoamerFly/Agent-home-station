@@ -168,7 +168,7 @@ func (s *localProjectTools) close() error {
 }
 
 var localProjectPackages = []struct{ ID, Name string }{
-	{documentWorkshopPluginID, "文档工坊"},
+	{pluginruntime.DocumentWorkshopID, "文档工坊"},
 	{localAudioPackage, "音频工坊"},
 	{localasr.PluginID, "本地媒体识别"},
 	{localRVCPackage, "RVC 换声"},
@@ -281,7 +281,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		return view, err
 	}
 	view.UpdateAvailable = view.CatalogAvailable && item.Digest != contract.ManifestSHA256
-	view.PDFReady = id == documentWorkshopPluginID && item.Digest == contract.ManifestSHA256 && s.pdfRuntimeReady()
+	view.PDFReady = id == pluginruntime.DocumentWorkshopID && item.Digest == contract.ManifestSHA256 && s.pdfRuntimeReady()
 	switch {
 	case !item.Enabled:
 		view.State = "disabled"

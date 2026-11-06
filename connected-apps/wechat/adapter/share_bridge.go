@@ -1,4 +1,4 @@
-package admin
+package adapter
 
 import (
 	"bytes"
@@ -14,17 +14,12 @@ import (
 	"wechat-bot/internal/sharespec"
 )
 
-// configuredChannelsBridge reads only the installed share-reader
-// configuration.  The legacy channels settings were an input to migration;
-// they must not continue to grant a bridge endpoint after the plugin is
-// installed. The host, not plugin arguments, selects the configured endpoint;
-// a verified source_url is returned only after the bounded bridge read.
-func (p *receivedSharePolicy) configuredChannelsBridge(ctx context.Context) (string, bool, error) {
-	return configuredChannelsBridge(ctx, p.store)
-}
+const ShareReaderToolID = "share-reader"
 
-func configuredChannelsBridge(ctx context.Context, store *pluginhost.Store) (string, bool, error) {
-	configuration, err := store.ConfigurationForExecution(ctx, shareServicePluginID)
+// ConfiguredChannelsBridge reads only the installed share-reader setting. The
+// obsolete native channels configuration is never an authority after install.
+func ConfiguredChannelsBridge(ctx context.Context, store *pluginhost.Store) (string, bool, error) {
+	configuration, err := store.ConfigurationForExecution(ctx, ShareReaderToolID)
 	if err != nil {
 		return "", false, errors.New("share_bridge_configuration_unavailable")
 	}
@@ -43,9 +38,6 @@ func configuredChannelsBridge(ctx context.Context, store *pluginhost.Store) (str
 	return base, true, nil
 }
 
-// bridgeTimeout binds the callback deadline to the host-created job arguments.
-// A plugin may choose whether to call its host service, but it must not expand
-// the caller's selected execution budget while doing so.
 func bridgeTimeout(raw json.RawMessage) (int64, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return 25, nil
@@ -69,14 +61,13 @@ func bridgeTimeout(raw json.RawMessage) (int64, error) {
 	return *in.TimeoutSeconds, nil
 }
 
-func (p *receivedSharePolicy) channelsBridge(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (json.RawMessage, error) {
-	if p.binding == nil || p.message.AppMessageType == nil || *p.message.AppMessageType != 51 {
+// CallBoundChannelsBridge makes the single source-bound bridge read. The
+// endpoint comes from host configuration and neither it nor response locators
+// are exposed in durable task metadata.
+func CallBoundChannelsBridge(ctx context.Context, store *pluginhost.Store, binding *BoundChannelsRoute, j pluginhost.Job, raw json.RawMessage, check func(context.Context) error) (json.RawMessage, error) {
+	if binding == nil || check == nil {
 		return nil, errors.New("share_bridge_unavailable")
 	}
-	return callBoundChannelsBridge(ctx, p.store, p.binding, j, raw, func(ctx context.Context) error { return p.Check(ctx, j, cap) })
-}
-
-func callBoundChannelsBridge(ctx context.Context, store *pluginhost.Store, binding *shareRouteBinding, j pluginhost.Job, raw json.RawMessage, check func(context.Context) error) (json.RawMessage, error) {
 	if err := check(ctx); err != nil {
 		return nil, err
 	}
@@ -90,7 +81,7 @@ func callBoundChannelsBridge(ctx context.Context, store *pluginhost.Store, bindi
 	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF {
 		return nil, errors.New("share_bridge_source_mismatch")
 	}
-	base, configured, err := configuredChannelsBridge(ctx, store)
+	base, configured, err := ConfiguredChannelsBridge(ctx, store)
 	if err != nil || !configured {
 		return nil, errors.New("share_bridge_unavailable")
 	}
@@ -102,15 +93,9 @@ func callBoundChannelsBridge(ctx context.Context, store *pluginhost.Store, bindi
 	if in.TimeoutSeconds != nil {
 		actualTimeout = *in.TimeoutSeconds
 	}
-	// The caller may select any positive duration representable by Go's HTTP
-	// client. The callback must use that exact effective value, rather than
-	// silently increasing a budget selected by the Agent or host adapter.
 	if actualTimeout < 1 || actualTimeout > int64((time.Duration(1<<63-1))/time.Second) || actualTimeout != expectedTimeout {
 		return nil, errors.New("share_bridge_timeout_invalid")
 	}
-	// Reserve the one source-bound bridge read before opening the connection.
-	// Unlike the credential route state machine this path has only one request,
-	// so an in-flight phase prevents replay even if the network call fails.
 	binding.mu.Lock()
 	err = binding.route.BeginBridge(in.ObjectID, in.NonceID)
 	binding.mu.Unlock()
@@ -120,8 +105,6 @@ func callBoundChannelsBridge(ctx context.Context, store *pluginhost.Store, bindi
 	timeout := time.Duration(actualTimeout) * time.Second
 	q := url.Values{"object_id": {in.ObjectID}, "nonce_id": {in.NonceID}}
 	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/api/channels/feed/profile?"+q.Encode(), nil)
-	// This transport is scoped to one bound read; do not leave an unreachable
-	// keep-alive pool alive after the source operation completes.
 	client := &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {

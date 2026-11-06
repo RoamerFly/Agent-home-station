@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/sharespec"
@@ -16,7 +17,7 @@ import (
 )
 
 func (s *stationWechat) shareRoutes(owner *websession.Store, mux *http.ServeMux) {
-	for _, plugin := range []string{shareServicePluginID, localasr.PluginID} {
+	for _, plugin := range []string{wechatapp.ShareReaderToolID, localasr.PluginID} {
 		path := "/api/apps/wechat/connections/{connection}/" + plugin
 		handler := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 			s.stationMediaSettings(w, r, plugin)
@@ -104,7 +105,7 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 			}
 			switch input.Action {
 			case "configure":
-				if raw, exists := input.Config.Values["object_bridge_url"]; plugin == shareServicePluginID && exists {
+				if raw, exists := input.Config.Values["object_bridge_url"]; plugin == wechatapp.ShareReaderToolID && exists {
 					var addr string
 					if json.Unmarshal(raw, &addr) != nil {
 						fail(w, 400, "对象桥接地址无效")

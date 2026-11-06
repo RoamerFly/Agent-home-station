@@ -13,6 +13,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/stationruntime"
 )
 
 // localProcessTools is deliberately independent from an application Manager.
@@ -75,7 +76,7 @@ func (t *localProcessTools) BeginShutdown() {
 }
 
 func (t *localProcessTools) List(context.Context) ([]mcptools.Tool, error) {
-	return []mcptools.Tool{agentTool("server_windows_process", "Run, inspect, read or cancel a persistent Windows LPAC process in Dafeiyu's own home. Start accepts only an absolute executable argv and never falls back to the host shell. request_key is durable: reuse it only to query the same process.", `{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","read","cancel"]},"id":{"type":"string"},"path":{"type":"string"},"argv":{"type":"array","items":{"type":"string"},"minItems":1},"request_key":{"type":"string","minLength":1,"maxLength":128},"timeout_seconds":{"type":"integer","minimum":0}},"required":["action"],"additionalProperties":false}`)}, nil
+	return []mcptools.Tool{mcptools.NewTool("server_windows_process", "Run, inspect, read or cancel a persistent Windows LPAC process in Dafeiyu's own home. Start accepts only an absolute executable argv and never falls back to the host shell. request_key is durable: reuse it only to query the same process.", `{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","read","cancel"]},"id":{"type":"string"},"path":{"type":"string"},"argv":{"type":"array","items":{"type":"string"},"minItems":1},"request_key":{"type":"string","minLength":1,"maxLength":128},"timeout_seconds":{"type":"integer","minimum":0}},"required":["action"],"additionalProperties":false}`)}, nil
 }
 
 func (t *localProcessTools) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
@@ -188,7 +189,7 @@ func (t *localProcessTools) config(home string) (agenthost.Config, error) {
 	// Runtime roots are host-selected package children only.  They are never
 	// writable and never include the home, private data directory, or spool.
 	readonly := []string{}
-	for _, candidate := range packagedWindowsRuntimeRoots(t.cfg) {
+	for _, candidate := range stationruntime.PackagedCommandRuntimeRoots(t.cfg) {
 		if localProcessContains(home, candidate) || localProcessContains(t.privateDir, candidate) || localProcessContains(t.cfg.Spool, candidate) || localProcessContains(candidate, home) || localProcessContains(candidate, t.privateDir) || localProcessContains(candidate, t.cfg.Spool) {
 			continue
 		}

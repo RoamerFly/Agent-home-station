@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginruntime"
 )
 
@@ -654,7 +655,7 @@ func localRVCServiceID(fish string) string {
 func localRVCPrivateScope(workspace, fish string) string {
 	return filepath.Join(workspace, "pri_workspace", localRVCFishHash(fish))
 }
-func localRVCFishHash(fish string) string { return namedSpeechSHA([]byte(fish)) }
+func localRVCFishHash(fish string) string { return mediaspec.SpeechSHA256([]byte(fish)) }
 
 func localRVCBinding(registration localRVCRegistration, manifest map[string]string) string {
 	// Marshal a canonical value instead of raw registration bytes, so harmless
@@ -672,7 +673,7 @@ func localRVCBinding(registration localRVCRegistration, manifest map[string]stri
 		Profiles         []localRVCVoice
 		Files            []string
 	}{registration.SchemaVersion, registration.Port, registration.Workspace, registration.Media, profiles, files})
-	return namedSpeechSHA(value)
+	return mediaspec.SpeechSHA256(value)
 }
 
 func localRVCControlManifest(control string) (map[string]string, error) {

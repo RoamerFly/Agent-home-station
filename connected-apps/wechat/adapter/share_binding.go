@@ -1,4 +1,4 @@
-package admin
+package adapter
 
 import (
 	"context"
@@ -6,33 +6,30 @@ import (
 	"errors"
 	"sync"
 
-	wechatapp "wechat-bot/connected-apps/wechat/adapter"
-	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
 
-// One resolver chain for one host-verified native message. Never construct from
-// model tool arguments. This guard is independent of the plugin's own parsing.
-type shareRouteBinding struct {
+// BoundChannelsRoute is the host-owned, source-bound resolver chain for one
+// incoming Channels card. It never accepts a route constructed from model
+// arguments, and it retains no provider credentials.
+type BoundChannelsRoute struct {
 	mu    sync.Mutex
-	route wechatapp.ChannelsRoute
+	route ChannelsRoute
 }
 
-func newShareRouteBinding(message linuxnative.Message, source linuxnative.ChannelsSource, ref companion.SourceRef, verifiedShare string) (*shareRouteBinding, error) {
-	identity := wechatapp.ChannelsEvent{Account: ref.Account, Thread: ref.Thread, Message: ref.MessageID, EventID: ref.EventID, Revision: ref.Revision}
-	route, err := wechatapp.NewChannelsRoute(message, source, identity, verifiedShare)
+func NewBoundChannelsRoute(message linuxnative.Message, source linuxnative.ChannelsSource, identity ChannelsEvent, verifiedShare string) (*BoundChannelsRoute, error) {
+	route, err := NewChannelsRoute(message, source, identity, verifiedShare)
 	if err != nil {
 		return nil, err
 	}
-	return &shareRouteBinding{route: route}, nil
+	return &BoundChannelsRoute{route: route}, nil
 }
 
-// check must re-read current authorization and source revision. send is the
-// host route proxy/transport. Uncertain submissions poison this chain; it never
-// silently replays a POST or falls back to another received share.
-func (b *shareRouteBinding) Call(ctx context.Context, store *pluginhost.Store, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage, check func(context.Context) error, send pluginruntime.RouteTransport) (json.RawMessage, error) {
+// Call performs one verified parser transition. Uncertain submissions poison
+// the chain, so a POST can never be silently replayed against another card.
+func (b *BoundChannelsRoute) Call(ctx context.Context, store *pluginhost.Store, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage, check func(context.Context) error, send pluginruntime.RouteTransport) (json.RawMessage, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if check == nil || send == nil || j.Context.Account != b.route.Account || j.Context.Thread != b.route.Thread || j.Context.SourceVersions[b.route.Event] != b.route.Revision || j.Tool != "share.resolve_channels" || cap.ID != j.Tool {
@@ -59,10 +56,9 @@ func (b *shareRouteBinding) Call(ctx context.Context, store *pluginhost.Store, j
 	return result, nil
 }
 
-// ValidateResult returns a sanitized checkpoint and a private handoff from the
-// host-observed feed, never from an unverified plugin locator. The caller must
-// still download/decode/probe these bytes; "available" means a locator exists.
-func (b *shareRouteBinding) ValidateResult(ctx context.Context, j pluginhost.Job, raw json.RawMessage, check func(context.Context) error) (pluginruntime.VerifiedResult, linuxnative.ChannelsSource, error) {
+// ValidateResult releases a sanitized checkpoint plus a private host handoff.
+// A locator only proves that a subsequent media read may begin.
+func (b *BoundChannelsRoute) ValidateResult(ctx context.Context, j pluginhost.Job, raw json.RawMessage, check func(context.Context) error) (pluginruntime.VerifiedResult, linuxnative.ChannelsSource, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	fail := func() (pluginruntime.VerifiedResult, linuxnative.ChannelsSource, error) {
