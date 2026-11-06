@@ -257,7 +257,7 @@ func TestMobileObservationAppGrantBindingGenerationAndPersistence(t *testing.T) 
 	if grant, ok, err := service.ObservationAppGrant("synthetic", packageName); err != nil || !ok || grant.GrantID != first.GrantID {
 		t.Fatalf("settings save lost app grant=%#v ok=%v err=%v", grant, ok, err)
 	}
-	reopened, err := NewManager(f.dir, "", f.native)
+	reopened, err := NewManagerWithDeviceIO(f.dir, "", f.native, f.manager.deviceIO)
 	if err != nil {
 		t.Fatal(err)
 	}

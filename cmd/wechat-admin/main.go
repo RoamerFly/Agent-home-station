@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"syscall"
 	"time"
 
@@ -67,10 +66,6 @@ func run() error {
 	native, err := linuxnative.NewAdmin(linuxnative.Config{URL: env("WECHAT_NATIVE_URL", "http://127.0.0.1:6174"), TokenFile: env("WECHAT_NATIVE_TOKEN_FILE", "/data/api-token"), Account: env("WECHAT_NATIVE_ACCOUNT", "background-test")})
 	if err != nil {
 		return err
-	}
-	newManager := admin.NewManager
-	if runtime.GOOS == "windows" {
-		newManager = admin.NewManagerWithRetiredDeviceControl
 	}
 	manager, err := newManager(dir, os.Getenv("WECHAT_BOT_STATE_DIR"), native)
 	if err != nil {

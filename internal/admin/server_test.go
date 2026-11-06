@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"wechat-bot/internal/devicebroker"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/sending"
 )
@@ -63,7 +64,7 @@ func setup(t *testing.T) *webFixture {
 	t.Helper()
 	native := &fakeNative{}
 	dir := t.TempDir()
-	m, err := NewManager(dir, "", native)
+	m, err := NewManagerWithDeviceIO(dir, "", native, devicebroker.Host{})
 	if err != nil {
 		t.Fatal(err)
 	}

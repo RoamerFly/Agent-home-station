@@ -11,13 +11,12 @@ import (
 	"sync"
 	"time"
 
-	"wechat-bot/internal/adbserver"
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/agentworkspace"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
-	"wechat-bot/internal/devicebroker"
+	"wechat-bot/internal/devicespec"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -122,6 +121,7 @@ type Manager struct {
 	processes           *agenthost.Jobs
 	mobile              deviceService
 	mobileRetired       bool
+	deviceIO            devicespec.IOHost
 	agent               *agentControl
 	surfHistory         *surfHistoryStore
 	surfInteractions    *surfInteractionStore
@@ -153,19 +153,23 @@ type Manager struct {
 	plugins             *pluginLedger
 }
 
-// NewManager constructs an independent root manager. Account registries use
-// newManager with their already-owned service fish registry before startup.
+// NewManager constructs a root manager without a native device transport.
 func NewManager(dir, stateDir string, native Native) (*Manager, error) {
-	return newManager(dir, stateDir, native, nil, false)
+	return newManager(dir, stateDir, native, nil, false, nil)
+}
+
+// NewManagerWithDeviceIO attaches the trusted transport for a legacy host.
+func NewManagerWithDeviceIO(dir, stateDir string, native Native, deviceIO devicespec.IOHost) (*Manager, error) {
+	return newManager(dir, stateDir, native, nil, false, deviceIO)
 }
 
 // NewManagerWithRetiredDeviceControl serves existing Windows deployments with
 // access to historical device records but no device control runtime.
 func NewManagerWithRetiredDeviceControl(dir, stateDir string, native Native) (*Manager, error) {
-	return newManager(dir, stateDir, native, nil, true)
+	return newManager(dir, stateDir, native, nil, true, nil)
 }
 
-func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry, mobileRetired bool) (*Manager, error) {
+func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry, mobileRetired bool, deviceIO devicespec.IOHost) (*Manager, error) {
 	if native == nil || dir == "" {
 		return nil, errors.New("missing admin runtime configuration")
 	}
@@ -229,7 +233,7 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry,
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish, mobileRetired: mobileRetired}
+	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish, mobileRetired: mobileRetired, deviceIO: deviceIO}
 	externalConfiguration.openStore, externalConfiguration.owned = m.packageStore, false
 	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
 	if err != nil {
@@ -509,8 +513,8 @@ func (m *Manager) Close() error {
 	packages, packageRuntime := m.packages, m.packageRuntime
 	m.packageMu.Unlock()
 	var cleanupErr error
-	if !m.mobileRetired {
-		cleanupErr = errors.Join(devicebroker.CleanupQuarantined(), adbserver.CleanupQuarantined())
+	if !m.mobileRetired && m.deviceIO != nil {
+		cleanupErr = m.deviceIO.Cleanup()
 	}
 	var packageErr error
 	if packageRuntime != nil {

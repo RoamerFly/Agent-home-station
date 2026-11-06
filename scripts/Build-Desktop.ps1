@@ -267,10 +267,16 @@ $arguments+=('/win32icon:'+$icon)
 if($LASTEXITCODE -ne 0){throw 'Desktop build failed.'}
 if($LocalStation){
  $station=Join-Path $OutputDirectory 'agent-home-station-server.exe'
+ $oldOS=$env:GOOS; $oldArch=$env:GOARCH
  Push-Location $workspace
- try { & go build -trimpath -o $station './cmd/agent-home-station' }
- finally { Pop-Location }
- if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
+ try {
+  $env:GOOS='windows'; $env:GOARCH='amd64'
+  $dependencies=@(& go list -deps ./cmd/agent-home-station)
+  if($LASTEXITCODE -ne 0){throw 'LocalStation Windows dependency check failed.'}
+  if($dependencies -match '^wechat-bot/internal/(adbserver|devicebroker)$'){throw 'LocalStation server includes retired device execution dependencies.'}
+  & go build -trimpath -o $station './cmd/agent-home-station'
+  if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
+ } finally {$env:GOOS=$oldOS; $env:GOARCH=$oldArch; Pop-Location}
  if($WithWeChatRuntime){Stage-LocalStationWeChatRuntime -SourceDirectory $WeChatRuntimeDirectory -PackageDirectory $OutputDirectory}
  if($WithStationSpeech){Stage-LocalStationSpeechRunner -PackageDirectory $OutputDirectory}
  Copy-Item -LiteralPath (Join-Path $workspace 'scripts\Install-StationOBS.ps1') -Destination (Join-Path $OutputDirectory 'Install-StationOBS.ps1') -ErrorAction Stop
