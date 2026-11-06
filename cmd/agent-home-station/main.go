@@ -73,6 +73,9 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	if len(args) > 0 && args[0] == "legacy-speech" {
 		return runLegacySpeech(ctx, args[1:], output)
 	}
+	if len(args) > 0 && args[0] == "legacy-rvc" {
+		return runLegacyRVC(ctx, args[1:], output)
+	}
 	path, err := os.Executable()
 	if err != nil {
 		return errors.New("cannot determine executable location")

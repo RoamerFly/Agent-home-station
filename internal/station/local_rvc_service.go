@@ -62,8 +62,9 @@ type localRVCDeployment struct {
 // localRVCVoice is a closed, owner-approved entry in the station registration.
 // It is not a file path and cannot select a profile which is not registered.
 type localRVCVoice struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID            string `json:"id"`
+	Label         string `json:"label"`
+	LegacyVoiceID string `json:"legacy_voice_id,omitempty"`
 }
 
 type localRVCRegistration struct {
@@ -74,6 +75,7 @@ type localRVCRegistration struct {
 	Port          int             `json:"port"`
 	IdleSeconds   int             `json:"idle_seconds,omitempty"`
 	Profiles      []localRVCVoice `json:"profiles"`
+	FishID        string          `json:"fish_id,omitempty"`
 }
 
 type localRVCService struct {
@@ -141,6 +143,9 @@ func (s *localRVCService) Info(ctx context.Context, fish string) (localRVCDeploy
 	if err != nil {
 		return localRVCDeployment{}, err
 	}
+	if registration.FishID != "" && registration.FishID != fish {
+		return localRVCDeployment{}, errors.New("station_rvc_profile_registration_invalid")
+	}
 	binding := localRVCBinding(registration, manifest)
 	profiles := append([]localRVCVoice(nil), registration.Profiles...)
 	status := s.services.Status(localRVCServiceID(fish))
@@ -157,6 +162,9 @@ func (s *localRVCService) Call(ctx context.Context, fish, binding, method, path,
 	registration, manifest, err := s.loadRegistration(ctx)
 	if err != nil {
 		return nil, 0, err
+	}
+	if registration.FishID != "" && registration.FishID != fish {
+		return nil, 0, errors.New("station_rvc_profile_registration_invalid")
 	}
 	if binding == "" || binding != localRVCBinding(registration, manifest) {
 		return nil, 0, errors.New("station_rvc_deployment_changed")
@@ -464,7 +472,7 @@ func localRVCRegistrationFields(fields map[string]json.RawMessage) bool {
 	if fields == nil {
 		return false
 	}
-	allowed := map[string]bool{"schema_version": true, "enabled": true, "workspace": true, "media": true, "port": true, "idle_seconds": true, "profiles": true}
+	allowed := map[string]bool{"schema_version": true, "enabled": true, "workspace": true, "media": true, "port": true, "idle_seconds": true, "profiles": true, "fish_id": true}
 	for name := range fields {
 		if !allowed[name] {
 			return false
@@ -482,7 +490,7 @@ func (r localRVCRegistration) validate(dataDir, editableRoot string) error {
 	if r.Port < 1024 || r.Port > 65535 || !localRVCSafeDirectory(r.Workspace) || !localRVCSafeDirectory(r.Media) {
 		return errors.New("station_rvc_registration_invalid")
 	}
-	if localRVCPathsOverlap(dataDir, editableRoot) {
+	if localRVCInside(dataDir, editableRoot) {
 		return errors.New("station_rvc_host_storage_overlaps_agent_home")
 	}
 	if localRVCPathsOverlap(r.Workspace, editableRoot) || localRVCPathsOverlap(r.Workspace, dataDir) || localRVCPathsOverlap(r.Media, editableRoot) || localRVCPathsOverlap(r.Media, dataDir) {
@@ -500,11 +508,26 @@ func (r localRVCRegistration) validate(dataDir, editableRoot string) error {
 		return errors.New("station_rvc_idle_seconds_invalid")
 	}
 	seen := make(map[string]bool, len(r.Profiles))
+	aliases := make(map[string]bool, len(r.Profiles))
+	if r.FishID != "" && !localRVCFishPattern.MatchString(r.FishID) {
+		return errors.New("station_rvc_profile_registration_invalid")
+	}
 	for _, profile := range r.Profiles {
-		if !localRVCVoicePattern.MatchString(profile.ID) || strings.TrimSpace(profile.Label) == "" || len([]rune(profile.Label)) > 160 || seen[profile.ID] {
+		id := strings.ToLower(profile.ID)
+		if !localRVCVoicePattern.MatchString(profile.ID) || strings.TrimSpace(profile.Label) == "" || len([]rune(profile.Label)) > 160 || seen[id] {
 			return errors.New("station_rvc_profile_registration_invalid")
 		}
-		seen[profile.ID] = true
+		seen[id] = true
+	}
+	for _, profile := range r.Profiles {
+		alias := strings.ToLower(profile.LegacyVoiceID)
+		if alias == "" {
+			continue
+		}
+		if !localTTSVoiceIDPattern.MatchString(profile.LegacyVoiceID) || aliases[alias] || (seen[alias] && profile.LegacyVoiceID != profile.ID) {
+			return errors.New("station_rvc_profile_registration_invalid")
+		}
+		aliases[alias] = true
 	}
 	return nil
 }
@@ -672,7 +695,8 @@ func localRVCBinding(registration localRVCRegistration, manifest map[string]stri
 		Workspace, Media string
 		Profiles         []localRVCVoice
 		Files            []string
-	}{registration.SchemaVersion, registration.Port, registration.Workspace, registration.Media, profiles, files})
+		FishID           string `json:",omitempty"`
+	}{registration.SchemaVersion, registration.Port, registration.Workspace, registration.Media, profiles, files, registration.FishID})
 	return mediaspec.SpeechSHA256(value)
 }
 

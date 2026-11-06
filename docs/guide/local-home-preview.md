@@ -320,6 +320,42 @@ PDF 导出还需可用的文档运行时。构建时为上述命令同时提供 
 
 `python -B scripts/test_station_rvc_bridge.py` 可复跑合成桥接验收。指定 `AHS_STATION_RVC_CONTROL_ROOT` 可指向已打包控制脚本。真实模型推理和试听另行验收。
 
+#### 接续旧版私人 RVC 声线
+
+完成鱼身份接续后，可以用以下主人私有计划预演旧版唱歌声线的接续。适用于新站首次登记 RVC，`deployment` 复用上面的运行环境登记，`profiles` 留空。旧版配置里的解释器、RVC 项目和分离运行环境须在该登记的公共运行环境范围内。
+
+```json
+{
+  "schema_version": 1,
+  "library": "E:\\LegacyData\\account-private\\voice-library",
+  "source_owner_id": "旧条目登记的主人 ID",
+  "voice_ids": ["legacy-rvc-example"],
+  "deployment": {
+    "schema_version": 1,
+    "enabled": true,
+    "workspace": "E:\\LegacyData\\managed-workspaces",
+    "media": "E:\\StationRuntime\\windows-media",
+    "port": 6198,
+    "profiles": []
+  }
+}
+```
+
+`library` 指向同时包含 `catalog.json` 和私人配置清单的旧库。`voice_ids` 填旧目录里的声线编号。若条目从未登记主人，确认有权使用后删除 `source_owner_id` 并填写 `"allow_unowned": true`。预演会核对私人配置的引用、运行依赖、模型和索引的 SHA-256，并给出选定的两个编号及复制字节数。旧目录展示的配置路径与实际运行清单不同时，预演用 `catalog_path_differences` 提醒核对，接续按旧桥接器实际读取的运行清单处理。模型和索引预算默认 4 GiB，可在计划中用 `max_bytes` 按实际磁盘空间调整。
+
+```powershell
+$stationServer = 'E:\AgentHomePreview\agent-home-station-server.exe'
+$stationData = 'E:\AgentHomePreview\data\station'
+$rvcPlan = 'E:\PrivateMigration\rvc-plan.json'
+$preview = & $stationServer legacy-rvc --data $stationData --plan $rvcPlan
+if ($LASTEXITCODE -ne 0) { throw 'RVC 预演失败' }
+$digest = ($preview | ConvertFrom-Json).digest
+# 核对声线和所需空间后使用原计划及摘要
+& $stationServer legacy-rvc --data $stationData --plan $rvcPlan --digest $digest
+```
+
+自定义鱼家工作空间时，在两个命令里都传入同一个 `--workspace` 绝对路径。确认后，所选模型和索引复制到该鱼身份的私有声线库，原路径仍保留原件。接续同时登记旧声线编号、原换声配置编号和有效推理参数。资料已写入而运行登记中断时，可用同一摘要续办。遇到其他已有 RVC 配置或私有声线库时，先核对现有资料。接续后仍在「项目工具 → RVC 换声」安装并启用，由工具列出可选择的编号。
+
 ### Windows ComfyUI 创作
 
 `Build-Desktop.ps1 -LocalStation -WithComfyUI` 打包项目工具声明。准备一份主人核验过的 Windows 便携 ComfyUI 0.37.2。运行时、模型和工作流目录由主人管理，须位于大肥鱼家目录和站点数据目录之外。可以复用现有安装的文件，站点启动自己的回环进程。选一个空闲端口，避免与原 ComfyUI 或 YuE 冲突。

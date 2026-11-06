@@ -195,7 +195,7 @@ func TestLocalRVCConversionThroughChatPinsVoiceAndPublishesArtifact(t *testing.T
 	}
 	source, output := syntheticMonoWAV(t, 8000, 8000), syntheticMonoWAV(t, 8000, 8000)
 	fake := &fakeLocalRVCBackend{
-		binding: "synthetic-rvc-binding", voice: localRVCVoice{ID: "private-test", Label: "私人测试声线"},
+		binding: "synthetic-rvc-binding", voice: localRVCVoice{ID: "private-test", Label: "私人测试声线", LegacyVoiceID: "legacy-test"},
 		pin:    localRVCVoicePin{Label: "私人测试声线", ConfigHash: strings.Repeat("a", 64), ModelHash: strings.Repeat("b", 64), IndexHash: strings.Repeat("c", 64), Device: "cpu"},
 		source: source, output: output, remoteID: strings.Repeat("d", 32), title: "合成换声验收",
 	}
@@ -260,10 +260,10 @@ func TestLocalRVCConversionThroughChatPinsVoiceAndPublishesArtifact(t *testing.T
 				}
 				return localToolCall(localRVCVoicesTool, map[string]any{}), nil
 			case 2:
-				if !strings.Contains(history, "private-test") {
+				if !strings.Contains(history, "private-test") || !strings.Contains(history, "legacy-test") {
 					t.Error("voice list result was not supplied to the model")
 				}
-				return localToolCall(localRVCStartTool, map[string]any{"artifact_id": inputID, "voice_profile_id": "private-test", "title": "合成换声验收"}), nil
+				return localToolCall(localRVCStartTool, map[string]any{"artifact_id": inputID, "voice_profile_id": "legacy-test", "title": "合成换声验收"}), nil
 			case 3:
 				matches := jobPattern.FindStringSubmatch(history)
 				if len(matches) != 2 {
