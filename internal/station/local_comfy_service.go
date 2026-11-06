@@ -422,7 +422,7 @@ func (r localComfyRegistration) validate(dataDir, editableRoot string) error {
 	if r.Port < 1024 || r.Port > 65535 || r.IdleSeconds < 0 || !localComfyServiceSafeDirectory(r.Runtime) || !localComfyServiceSafeDirectory(r.Models) || !localComfyServiceSafeDirectory(r.Workflows) {
 		return errors.New("station_comfyui_registration_invalid")
 	}
-	if localComfyPathsOverlap(dataDir, editableRoot) || localComfyPathsOverlap(r.Runtime, dataDir) || localComfyPathsOverlap(r.Runtime, editableRoot) || localComfyPathsOverlap(r.Models, dataDir) || localComfyPathsOverlap(r.Models, editableRoot) || localComfyPathsOverlap(r.Workflows, dataDir) || localComfyPathsOverlap(r.Workflows, editableRoot) {
+	if localComfyInside(dataDir, editableRoot) || localComfyPathsOverlap(r.Runtime, dataDir) || localComfyPathsOverlap(r.Runtime, editableRoot) || localComfyPathsOverlap(r.Models, dataDir) || localComfyPathsOverlap(r.Models, editableRoot) || localComfyPathsOverlap(r.Workflows, dataDir) || localComfyPathsOverlap(r.Workflows, editableRoot) || localComfyPathsOverlap(r.manifestPath(), editableRoot) {
 		return errors.New("station_comfyui_scope_overlaps_agent_home")
 	}
 	for _, relative := range []string{r.Python, r.Entry, r.Frontend} {
@@ -802,7 +802,8 @@ func localComfyInside(path, root string) bool {
 }
 
 func localComfySafeRelative(path string) bool {
-	return path != "" && !filepath.IsAbs(path) && filepath.Clean(path) == path && path != "." && path != ".." && !strings.HasPrefix(path, ".."+string(os.PathSeparator))
+	path = filepath.FromSlash(path)
+	return path != "" && !strings.ContainsAny(path, ":\x00") && filepath.VolumeName(path) == "" && !filepath.IsAbs(path) && filepath.Clean(path) == path && path != "." && path != ".." && !strings.HasPrefix(path, ".."+string(os.PathSeparator))
 }
 
 func localComfyServiceSafeDirectory(path string) bool {

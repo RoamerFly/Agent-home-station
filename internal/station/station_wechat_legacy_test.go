@@ -24,6 +24,9 @@ import (
 func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	base := t.TempDir()
 	host, work, snapshot := filepath.Join(base, "host"), filepath.Join(base, "workspace"), filepath.Join(base, "snapshot")
+	// The WeChat cutover runs on the same station that already imported its
+	// model, stable identity, persistent project and both private voice types.
+	ownerIdentity, speakingVoice := prepareLegacyCutover(t, base, host, work)
 	legacyHost := filepath.Join(base, "old-host")
 	app := filepath.Join(host, "apps", "wechat")
 	native := filepath.Join(app, "native")
@@ -124,7 +127,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Cleanup(server.Close)
 		t.Cleanup(func() { _ = handler.Close() })
 		jar, _ := cookiejar.New(nil)
-		return handler, &localHomeFixture{t: t, server: server, client: &http.Client{Jar: jar}}
+		return handler, &localHomeFixture{t: t, server: server, client: &http.Client{Jar: jar}, dir: host, root: work, handler: handler}
 	}
 	h, f := open()
 	route := func(id string) string { return "/api/apps/wechat/connections/" + wechatapp.ConnectionID(id) }
@@ -141,6 +144,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	req("GET", planRoute("one"), nil, false, 401)
 	req("GET", memoryRoute("one"), nil, false, 401)
 	f.login()
+	assertCutoverOwnerState(t, f, ownerIdentity, speakingVoice)
 	req("GET", memoryRoute("two"), nil, false, 404)
 	req("GET", memoryRoute("unknown"), nil, false, 404)
 	if report := req("GET", memoryRoute("three"), nil, false, 200); report["status"] != "missing" {
@@ -426,6 +430,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	}
 	h, f = open()
 	f.login()
+	assertCutoverOwnerState(t, f, ownerIdentity, speakingVoice)
 	if row := req("GET", selectedRoute, nil, false, 200); row["status"] != "applied" {
 		t.Fatal("applied scope was not restored after restart", row)
 	}
