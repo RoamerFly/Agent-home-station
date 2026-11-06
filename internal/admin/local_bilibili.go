@@ -1,8 +1,10 @@
 package admin
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	biliapp "wechat-bot/connected-apps/bilibili/adapter"
 	"wechat-bot/internal/apphost"
@@ -81,4 +83,43 @@ func (h *localHomeService) bilibiliRoutes(s *Server, mux *http.ServeMux, registr
 	})
 	mux.HandleFunc("GET /api/local/apps/bilibili/public", handler)
 	mux.HandleFunc("PUT /api/local/apps/bilibili/public", handler)
+	authorization := s.protected(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		record, err := h.identity.localIdentity()
+		if err != nil || record.LocalOwner == nil {
+			fail(w, http.StatusConflict, "请先准备本机主人身份")
+			return
+		}
+		var view biliapp.PublicationAuthorizationView
+		if r.Method == http.MethodGet {
+			view, err = bili.PublicationAuthorization()
+		} else {
+			r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+			var input biliapp.PublicationAuthorizationInput
+			if !decode(w, r, &input) {
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+			defer cancel()
+			view, err = bili.SavePublicationAuthorization(ctx, input)
+		}
+		switch {
+		case errors.Is(err, biliapp.ErrPublicationAuthorizationConflict):
+			fail(w, http.StatusConflict, "发布授权已变化，请刷新后重试")
+		case errors.Is(err, biliapp.ErrPublicationAuthorizationLegacy):
+			fail(w, http.StatusConflict, "请先用现有凭据核验账号，再更换令牌")
+		case errors.Is(err, biliapp.ErrPublicationAuthorizationIdentity):
+			fail(w, http.StatusConflict, "新授权与已绑定的 B 站应用或账号不符")
+		case errors.Is(err, biliapp.ErrPublicationAuthorizationVerify):
+			fail(w, http.StatusBadGateway, "B 站账号核验失败，请检查令牌和 USER_INFO 授权")
+		case errors.Is(err, biliapp.ErrInvalid):
+			fail(w, http.StatusBadRequest, "请核对 B 站发布凭据及到期时间")
+		case err != nil:
+			fail(w, http.StatusServiceUnavailable, "B 站发布授权暂不可用，原配置已保留")
+		default:
+			respond(w, http.StatusOK, view)
+		}
+	})
+	mux.HandleFunc("GET /api/local/apps/bilibili/publication-authorization", authorization)
+	mux.HandleFunc("POST /api/local/apps/bilibili/publication-authorization", authorization)
 }

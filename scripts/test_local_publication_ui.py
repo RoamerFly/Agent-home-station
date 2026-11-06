@@ -56,6 +56,25 @@ def verify(binary, output):
                     "later": job("later", "cancelled", []),
                 }
                 paused_upload = []
+                authorization_writes = []
+                local_expiry = "2030-01-01T08:00"
+                expected_expiry = page.evaluate("(value) => new Date(value).toISOString()", local_expiry)
+
+                def publication_authorization(route):
+                    if route.request.method == "GET":
+                        route.continue_()
+                        return
+                    body = route.request.post_data_json
+                    assert route.request.headers.get("x-csrf-token"), "CSRF header missing"
+                    assert set(body) == {"action", "revision", "client_id", "app_secret", "access_token", "expires_at", "enabled"}
+                    assert body["action"] == "verify"
+                    assert body["client_id"] == "synthetic-fixture-app"
+                    assert body["app_secret"] == "synthetic-fixture-secret"
+                    assert body["access_token"] == "synthetic-fixture-token"
+                    assert body["expires_at"] == expected_expiry and body["enabled"] is True
+                    authorization_writes.append(body)
+                    fulfill_json({"revision": "synthetic-authorization-revision", "state": "ready", "verified": True,
+                                  "enabled": True, "expires_at": "2030-01-01T00:00:00Z"})(route)
 
                 def publications(route):
                     request = route.request
@@ -94,9 +113,22 @@ def verify(binary, output):
                     fulfill_json(entries[name])(route)
 
                 page.route(re.compile(r".*/api/local/publications(?:\?.*)?$"), publications)
+                page.route(re.compile(r".*/api/local/apps/bilibili/publication-authorization$"), publication_authorization)
                 page.locator("#apps-tab").click()
                 panel = page.locator("#bilibili-publication")
                 expect(panel.get_by_text("尚未登记发布授权", exact=True)).to_be_visible()
+                authorization = panel.locator(".publication-authorization")
+                authorization.locator("summary").click()
+                authorization.screenshot(path=str(output / "bilibili-authorization-light.png"))
+                authorization.get_by_label("Client ID").fill("synthetic-fixture-app")
+                authorization.get_by_label("App Secret").fill("synthetic-fixture-secret")
+                authorization.get_by_label("Access Token").fill("synthetic-fixture-token")
+                authorization.get_by_label("凭据到期时间").fill(local_expiry)
+                authorization.get_by_label("完成核验后启用发布授权").check()
+                with page.expect_response(lambda r: r.url.endswith("/publication-authorization") and r.request.method == "POST"):
+                    authorization.get_by_role("button", name="核验并登记").click()
+                assert len(authorization_writes) == 1
+                expect(page.locator("#apps-list[aria-busy='false']")).to_be_visible()
                 expect(panel.get_by_text("暂无 B 站发布任务。", exact=True)).to_be_visible()
                 expect(panel.get_by_role("button", name="提交投稿")).to_have_count(0)
                 settings = root / "host" / "apps" / "bilibili" / "publication-settings.json"
@@ -111,7 +143,7 @@ def verify(binary, output):
                 assert [(item["id"], item["configuration"]) for item in grant.json()["items"] if item["id"] == "publish"] == [("publish", "ready")]
                 ready = True
                 page.locator("#apps-refresh").click()
-                expect(panel.get_by_text("发布授权已登记", exact=True)).to_be_visible()
+                expect(panel.get_by_text("旧版发布授权待升级", exact=True)).to_be_visible()
                 expect(panel.get_by_role("progressbar", name="已确认 1 / 3 段")).to_be_visible()
                 unknown = panel.locator(f'[data-job="{job_ids["unknown"]}"]')
                 expect(unknown.get_by_text("投稿结果待核对", exact=True)).to_be_visible()
@@ -151,9 +183,13 @@ def verify(binary, output):
                     });
                 }"""), "controls clipped by application card"
                 panel.screenshot(path=str(output / "bilibili-publication-dark-390.png"))
+                authorization.locator("summary").click()
+                assert_no_horizontal_overflow(page, "B 站授权登记")
+                authorization.screenshot(path=str(output / "bilibili-authorization-dark-390.png"))
                 assert not errors, errors
                 assert writes == [("draft", "submit"), ("upload", "resume"), ("upload", "cancel"),
                                   ("unknown", "status"), ("unknown", "cancel"), ("accepted", "status")], writes
+                assert len(authorization_writes) == 1
                 browser.close()
         finally:
             stop(process)

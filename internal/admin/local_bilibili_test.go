@@ -1,13 +1,66 @@
 package admin
 
 import (
+	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	biliapp "wechat-bot/connected-apps/bilibili/adapter"
 	"wechat-bot/internal/apphost"
 )
+
+func TestLocalBilibiliPublicationAuthorizationIsOwnerOnlyAndSecretFree(t *testing.T) {
+	base := t.TempDir()
+	data, home := filepath.Join(base, "host"), filepath.Join(base, "workspace")
+	appDir := filepath.Join(data, "apps", biliapp.ID)
+	registry, err := apphost.New(biliapp.New(appDir).Registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewLocalHomeHandlerWithApps(data, home, "synthetic-local-password", "", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newLocalAppObservationFixtureWithHandler(t, handler, data, home)
+	const route = "/api/local/apps/bilibili/publication-authorization"
+	if code, _ := f.request(http.MethodGet, route, nil, false); code != 401 {
+		t.Fatalf("unprotected publication settings: %d", code)
+	}
+	f.login()
+	if code, _ := f.request(http.MethodGet, route, nil, false); code != 409 {
+		t.Fatalf("publication settings accessible before owner initialization: %d", code)
+	}
+	if code, _ := f.request(http.MethodPost, "/api/local/home", map[string]string{"action": "initialize"}, true); code != 200 {
+		t.Fatalf("initialize local owner: %d", code)
+	}
+	if code, view := f.request(http.MethodGet, route, nil, false); code != 200 || view["state"] != "unconfigured" {
+		t.Fatalf("new installation unexpectedly configured: %d %#v", code, view)
+	}
+	if err := os.MkdirAll(appDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"schema_version":1,"enabled":true,"client_id":"synthetic-private-app","app_secret":"synthetic-private-secret","access_token":"synthetic-private-token","account_id":"synthetic-private-owner","expires_at":"2031-01-01T00:00:00Z"}`)
+	if err := os.WriteFile(filepath.Join(appDir, "publication-settings.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, view := f.request(http.MethodGet, route, nil, false)
+	if code != 200 || view["state"] != "legacy" || view["verified"] != false || strings.Contains(fmt.Sprint(view), "synthetic-private-") {
+		t.Fatalf("unsafe authorization view: %d %#v", code, view)
+	}
+	disable := map[string]any{"action": "disable", "revision": view["revision"]}
+	if code, _ := f.request(http.MethodPost, route, disable, false); code != 403 {
+		t.Fatalf("disable bypassed CSRF: %d", code)
+	}
+	if code, updated := f.request(http.MethodPost, route, disable, true); code != 200 || updated["state"] != "disabled" {
+		t.Fatalf("disable failed: %d %#v", code, updated)
+	}
+	if code, _ := f.request(http.MethodPost, route, disable, true); code != 409 {
+		t.Fatalf("stale authorization change accepted: %d", code)
+	}
+}
 
 func TestLocalBilibiliOwnerAuthorizationAndRestart(t *testing.T) {
 	base := t.TempDir()

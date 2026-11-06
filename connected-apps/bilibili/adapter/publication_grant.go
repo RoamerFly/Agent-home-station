@@ -36,14 +36,18 @@ var errPublicationUnconfigured = errors.New("B站发布授权尚未配置")
 // part_bytes defaults to DefaultPublicationPartBytes when omitted or zero.
 // Nonzero values are bounded explicitly rather than silently clamped.
 type publicationSettings struct {
-	SchemaVersion int    `json:"schema_version"`
-	Enabled       bool   `json:"enabled"`
-	ClientID      string `json:"client_id"`
-	AppSecret     string `json:"app_secret"`
-	AccessToken   string `json:"access_token"`
-	AccountID     string `json:"account_id"`
-	ExpiresAt     string `json:"expires_at"`
-	PartBytes     int    `json:"part_bytes,omitempty"`
+	SchemaVersion       int    `json:"schema_version"`
+	Enabled             bool   `json:"enabled"`
+	ClientID            string `json:"client_id"`
+	AppSecret           string `json:"app_secret"`
+	AccessToken         string `json:"access_token"`
+	AccountID           string `json:"account_id"`
+	ExpiresAt           string `json:"expires_at"`
+	PartBytes           int    `json:"part_bytes,omitempty"`
+	VerifiedOpenID      string `json:"verified_openid,omitempty"`
+	VerifiedCredentials string `json:"verified_credentials,omitempty"`
+	LegacyCredentials   string `json:"legacy_credentials,omitempty"`
+	PolicyNonce         string `json:"policy_nonce,omitempty"`
 }
 
 type loadedPublicationSettings struct {
@@ -145,6 +149,10 @@ func (p *PublicApp) loadPublicationSettings() (loadedPublicationSettings, error)
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.loadPublicationSettingsLocked()
+}
+
+func (p *PublicApp) loadPublicationSettingsLocked() (loadedPublicationSettings, error) {
 	root, err := workspacefs.OpenPath(p.privateDirectory)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -185,7 +193,7 @@ func (p *PublicApp) loadPublicationSettings() (loadedPublicationSettings, error)
 
 func validPublicationSettingsShape(raw []byte) bool {
 	var object map[string]json.RawMessage
-	if json.Unmarshal(raw, &object) != nil || (len(object) != 7 && len(object) != 8) {
+	if json.Unmarshal(raw, &object) != nil {
 		return false
 	}
 	for _, key := range []string{"schema_version", "enabled", "client_id", "app_secret", "access_token", "account_id", "expires_at"} {
@@ -193,14 +201,29 @@ func validPublicationSettingsShape(raw []byte) bool {
 			return false
 		}
 	}
-	if rawPartBytes, ok := object["part_bytes"]; ok {
-		return string(rawPartBytes) != "null"
+	for _, key := range []string{"part_bytes", "verified_openid", "verified_credentials", "legacy_credentials", "policy_nonce"} {
+		if value, ok := object[key]; ok && string(value) == "null" {
+			return false
+		}
 	}
-	return len(object) == 7
+	return true
 }
 
 func validatePublicationSettings(settings *publicationSettings) (time.Time, error) {
-	if settings.SchemaVersion != 1 || !safeHeaderValue(settings.ClientID, 256) || !safeHeaderValue(settings.AppSecret, 4096) || !safeHeaderValue(settings.AccessToken, 4096) || !safePublicationIdentity(settings.AccountID) {
+	if !safeHeaderValue(settings.ClientID, 256) || !safeHeaderValue(settings.AppSecret, 4096) || !safeHeaderValue(settings.AccessToken, 4096) || !safePublicationIdentity(settings.AccountID) {
+		return time.Time{}, ErrInvalid
+	}
+	switch settings.SchemaVersion {
+	case 1:
+		if settings.VerifiedOpenID != "" || settings.VerifiedCredentials != "" || settings.LegacyCredentials != "" || settings.PolicyNonce != "" {
+			return time.Time{}, ErrInvalid
+		}
+	case 2:
+		if !safePublicationIdentity(settings.VerifiedOpenID) || settings.VerifiedCredentials != verifiedPublicationProof(*settings) ||
+			!isPublicationDigest(settings.PolicyNonce, 16) || (settings.LegacyCredentials != "" && !isPublicationDigest(settings.LegacyCredentials, 32)) {
+			return time.Time{}, ErrInvalid
+		}
+	default:
 		return time.Time{}, ErrInvalid
 	}
 	if settings.PartBytes == 0 {
@@ -214,6 +237,14 @@ func validatePublicationSettings(settings *publicationSettings) (time.Time, erro
 		return time.Time{}, ErrInvalid
 	}
 	return expiresAt.UTC(), nil
+}
+
+func isPublicationDigest(value string, size int) bool {
+	if len(value) != size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func safePublicationIdentity(value string) bool {

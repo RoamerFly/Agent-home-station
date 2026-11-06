@@ -82,10 +82,12 @@ type PublicApp struct {
 	transcribeAudio  func(context.Context, []byte, func() error) (string, error)
 	// publicationClient is test-only injection for the publication workflow.
 	// Production leaves it nil and constructs the direct Open API client.
-	publicationClient func(OpenCredentials) (publicationTransport, error)
-	mu                sync.Mutex
-	readGrant         context.Context
-	cancelReads       context.CancelFunc
+	publicationClient        func(OpenCredentials) (publicationTransport, error)
+	verifyPublicationAccount func(context.Context, OpenCredentials) (string, error)
+	publicationUIKey         [32]byte
+	mu                       sync.Mutex
+	readGrant                context.Context
+	cancelReads              context.CancelFunc
 }
 
 // New creates a public Bilibili application with private local policy storage.
@@ -93,7 +95,7 @@ type PublicApp struct {
 func New(privateDirectory string) *PublicApp {
 	reader := stationbrowser.New(filepath.Join(privateDirectory, "browser-profiles", connectionID))
 	grant, cancel := context.WithCancel(context.Background())
-	return &PublicApp{
+	app := &PublicApp{
 		privateDirectory: privateDirectory,
 		readPage:         reader.Read,
 		resolveMedia:     mcptools.GetPublicBilibiliVideo,
@@ -109,6 +111,8 @@ func New(privateDirectory string) *PublicApp {
 			},
 		},
 	}
+	_, _ = rand.Read(app.publicationUIKey[:])
+	return app
 }
 
 func (p *PublicApp) BrowserAvailable() bool {
@@ -669,12 +673,16 @@ func (p *PublicApp) loadLocked() (Settings, error) {
 }
 
 func (p *PublicApp) saveLocked(settings Settings) error {
+	return p.savePrivateJSON(settingsName, settings)
+}
+
+func (p *PublicApp) savePrivateJSON(name string, value any) error {
 	root, err := workspacefs.EnsurePath(p.privateDirectory)
 	if err != nil {
 		return apphost.ErrUnavailable
 	}
 	defer root.Close()
-	encoded, err := json.Marshal(settings)
+	encoded, err := json.Marshal(value)
 	if err != nil {
 		return apphost.ErrUnavailable
 	}
@@ -682,7 +690,7 @@ func (p *PublicApp) saveLocked(settings Settings) error {
 	if _, err = rand.Read(random[:]); err != nil {
 		return apphost.ErrUnavailable
 	}
-	temporary := "." + settingsName + "." + hex.EncodeToString(random[:]) + ".tmp"
+	temporary := "." + name + "." + hex.EncodeToString(random[:]) + ".tmp"
 	file, err := root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return apphost.ErrUnavailable
@@ -699,7 +707,7 @@ func (p *PublicApp) saveLocked(settings Settings) error {
 	if err = file.Close(); err != nil {
 		return apphost.ErrUnavailable
 	}
-	if err = root.Rename(temporary, settingsName); err != nil {
+	if err = root.Rename(temporary, name); err != nil {
 		return apphost.ErrUnavailable
 	}
 	return nil

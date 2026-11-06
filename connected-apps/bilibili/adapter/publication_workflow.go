@@ -27,13 +27,14 @@ type publicationTransport interface {
 // The host persists one record per task in its private ledger. Neither the
 // token nor the credential fingerprint appears in an application receipt.
 type uploadCheckpoint struct {
-	Stage       string `json:"stage"`
-	PartBytes   int    `json:"part_bytes"`
-	Total       int64  `json:"total"`
-	Confirmed   int64  `json:"confirmed"`
-	Token       string `json:"token,omitempty"`
-	RemoteID    string `json:"remote_id,omitempty"`
-	Credentials string `json:"credentials"`
+	Stage        string `json:"stage"`
+	PartBytes    int    `json:"part_bytes"`
+	Total        int64  `json:"total"`
+	Confirmed    int64  `json:"confirmed"`
+	Token        string `json:"token,omitempty"`
+	RemoteID     string `json:"remote_id,omitempty"`
+	Credentials  string `json:"credentials"`
+	ReadIdentity string `json:"read_identity,omitempty"`
 }
 
 var _ apphost.CheckpointedPublicationProvider = (*PublicApp)(nil)
@@ -90,7 +91,8 @@ func loadUploadCheckpoint(raw json.RawMessage) (uploadCheckpoint, error) {
 	}
 	if decodePublicationJSON(raw, &state) != nil || state.PartBytes < 1 ||
 		state.PartBytes > maxPublicationPartBytes || state.Total < 1 || state.Confirmed < 0 ||
-		state.Confirmed > state.Total || len(state.Credentials) != 64 {
+		state.Confirmed > state.Total || !isPublicationDigest(state.Credentials, 32) ||
+		(state.ReadIdentity != "" && !isPublicationDigest(state.ReadIdentity, 32)) {
 		return uploadCheckpoint{}, apphost.ErrPublicationConflict
 	}
 	valid := false
@@ -190,6 +192,7 @@ func (p *PublicApp) ContinuePublication(ctx context.Context, req apphost.Publica
 	}
 	return runPublicationUpload(ctx, client, req, metadata, artifact, state, uploadCheckpoint{
 		Stage: "initializing", PartBytes: settings.PartBytes, Total: total, Credentials: credentials,
+		ReadIdentity: publicationReadIdentity(settings),
 	})
 }
 
@@ -324,7 +327,7 @@ func (p *PublicApp) ReconcilePublication(ctx context.Context, ref apphost.Public
 		return receipt, nil
 	}
 	settings, _, err := p.publicationAccess(ref.Target)
-	if err != nil || !publicationRefMatches(ref.Target, settings) || state.Credentials != publicationCredentialFingerprint(settings) {
+	if err != nil || !publicationRefMatches(ref.Target, settings) || !state.permitsRead(settings) {
 		return receipt, nil
 	}
 	expiry, err := time.Parse(time.RFC3339, settings.ExpiresAt)
@@ -340,4 +343,15 @@ func (p *PublicApp) ReconcilePublication(ctx context.Context, ref apphost.Public
 		receipt.State = "published"
 	}
 	return receipt, nil
+}
+
+func (state uploadCheckpoint) permitsRead(settings publicationSettings) bool {
+	if state.Credentials == publicationCredentialFingerprint(settings) {
+		return true
+	}
+	if settings.SchemaVersion != 2 {
+		return false
+	}
+	return (state.ReadIdentity != "" && state.ReadIdentity == publicationReadIdentity(settings)) ||
+		(settings.LegacyCredentials != "" && state.Credentials == settings.LegacyCredentials)
 }

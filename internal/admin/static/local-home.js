@@ -52,7 +52,7 @@
     if (view === "project-tools") loadProjectTools();
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "",
+    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() { return { loading: false, applying: "", tools: [] }; }
@@ -1649,13 +1649,16 @@
       if (current !== apps || appSessionExpired(statuses)) return;
       const hasBilibili = registered?.some((app) => app.id === "bilibili");
       let bilibili = null;
+      let authorization = null;
       if (hasBilibili) {
         const result = await Promise.allSettled([
           request("/api/local/apps/bilibili/public"),
+          request("/api/local/apps/bilibili/publication-authorization"),
           loadBilibiliWork(current, current.bilibiliWork.cursors)
         ]);
         if (current !== apps || appSessionExpired(result)) return;
         bilibili = result[0];
+        authorization = result[1];
       }
       current.catalog = appRows(result[0], "applications");
       current.registered = registered;
@@ -1677,6 +1680,17 @@
         current.bilibiliPublic = null;
         current.bilibiliDraft = null;
         current.bilibiliError = "";
+      }
+      if (authorization?.status === "fulfilled") {
+        const value = authorization.value;
+        current.bilibiliAuthorization = validPublicationAuthorization(value) ? value : null;
+        current.bilibiliAuthorizationError = current.bilibiliAuthorization ? "" : "发布授权状态返回格式无效，请刷新后重试。";
+      } else if (hasBilibili) {
+        current.bilibiliAuthorization = null;
+        current.bilibiliAuthorizationError = authorization?.reason?.message || "发布授权状态暂不可读。";
+      } else {
+        current.bilibiliAuthorization = null;
+        current.bilibiliAuthorizationError = "";
       }
     } finally {
       if (current === apps) {
@@ -1708,21 +1722,142 @@
     if (task.cancel_requested) return ["已要求停止", "已请求停止后续操作，原投稿结果仍待核对。"];
     return publicationStages[task.progress?.stage] || normal;
   }
+  function publicationAuthorizationSummary(authorization) {
+    const states = {
+      unconfigured: ["尚未登记发布授权", "登记开放平台凭据后，宿主会向 B 站核对账号。"],
+      legacy: ["旧版发布授权待升级", "请先用现有凭据核验账号，再更换令牌。"],
+      ready: ["发布授权已登记", "账号已核验，可更新同一应用和账号的令牌。"],
+      disabled: ["发布授权已停用", "仍可查看已有任务。重新启用时会核验账号。"],
+      expired: ["发布授权已过期", "请登记同一账号的有效凭据。"],
+    };
+    return states[authorization?.state] || ["发布授权暂不可读", "刷新应用状态后重查。"];
+  }
+  function validPublicationAuthorization(value) {
+    return value && typeof value.revision === "string" && ["unconfigured", "legacy", "ready", "disabled", "expired"].includes(value.state) &&
+      typeof value.verified === "boolean" && typeof value.enabled === "boolean";
+  }
+  function bilibiliAuthorizationForm(current) {
+    const authorization = current.bilibiliAuthorization;
+    const panel = appElement("details", "", "publication-authorization");
+    panel.open = false;
+    const summary = appElement("summary", "登记发布授权");
+    panel.append(summary);
+    const form = appElement("form", "", "publication-authorization-form");
+    const intro = appElement("p", "账号核验需要 USER_INFO 授权。视频投稿另需 B 站批准 ARC_BASE 权限。", "publication-authorization-note");
+    const clientID = document.createElement("input");
+    clientID.name = "client_id";
+    clientID.autocomplete = "off";
+    clientID.required = true;
+    clientID.placeholder = "B 站 Client ID";
+    clientID.setAttribute("aria-label", "Client ID");
+    const appSecret = document.createElement("input");
+    appSecret.name = "app_secret";
+    appSecret.type = "password";
+    appSecret.autocomplete = "new-password";
+    appSecret.required = true;
+    appSecret.placeholder = "App Secret";
+    appSecret.setAttribute("aria-label", "App Secret");
+    const accessToken = document.createElement("input");
+    accessToken.name = "access_token";
+    accessToken.type = "password";
+    accessToken.autocomplete = "new-password";
+    accessToken.required = true;
+    accessToken.placeholder = "Access Token";
+    accessToken.setAttribute("aria-label", "Access Token");
+    const expiresAt = document.createElement("input");
+    expiresAt.name = "expires_at";
+    expiresAt.type = "datetime-local";
+    expiresAt.required = true;
+    expiresAt.setAttribute("aria-label", "凭据到期时间");
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.name = "enabled";
+    enabled.checked = Boolean(authorization?.enabled);
+    const enabledLabel = appElement("label", "", "switch-row");
+    enabledLabel.append(enabled, appElement("span", "完成核验后启用发布授权"));
+    const actions = appElement("div", "", "app-worker-actions");
+    const verify = appElement("button", current.bilibiliAuthorizationSaving ? "正在核验…" : "核验并登记", "button compact secondary");
+    verify.type = "submit";
+    verify.disabled = !authorization || current.bilibiliAuthorizationSaving;
+    const reset = appElement("button", "清空输入", "button compact quiet");
+    reset.type = "reset";
+    reset.disabled = current.bilibiliAuthorizationSaving;
+    actions.append(verify, reset);
+    const fields = [[clientID, "Client ID"], [appSecret, "App Secret"], [accessToken, "Access Token"], [expiresAt, "凭据到期时间（本地时间）"]];
+    form.append(intro);
+    for (const [field, label] of fields) {
+      field.id = `bilibili-publication-${field.name}`;
+      const labelNode = appElement("label", label);
+      labelNode.htmlFor = field.id;
+      form.append(labelNode, field);
+    }
+    form.append(enabledLabel, actions);
+    form.addEventListener("reset", () => { window.setTimeout(() => { clientID.value = appSecret.value = accessToken.value = expiresAt.value = ""; }, 0); });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!authorization || current !== apps || current.bilibiliAuthorizationSaving) return;
+      const expires = new Date(expiresAt.value);
+      if (!Number.isFinite(expires.getTime())) { appFeedback("请填写有效的凭据到期时间。", true); return; }
+      const credentials = { client_id: clientID.value, app_secret: appSecret.value, access_token: accessToken.value };
+      // Do not leave credentials in a visible control while the request is pending.
+      clientID.value = appSecret.value = accessToken.value = expiresAt.value = "";
+      current.bilibiliAuthorizationSaving = true;
+      current.bilibiliAuthorizationError = "";
+      verify.disabled = reset.disabled = true;
+      try {
+        const value = await request("/api/local/apps/bilibili/publication-authorization", { method: "POST", body: JSON.stringify({ action: "verify", revision: authorization.revision, ...credentials, expires_at: expires.toISOString(), enabled: enabled.checked }) });
+        if (current !== apps) return;
+        if (!validPublicationAuthorization(value)) throw new Error("发布授权状态返回格式无效，请刷新后重试。");
+        current.bilibiliAuthorization = value;
+        clientID.value = appSecret.value = accessToken.value = expiresAt.value = "";
+        appFeedback(value.enabled ? "发布授权已核验并登记。" : "发布授权已核验，但目前未启用。");
+        await loadApps();
+      } catch (error) {
+        if (current !== apps || appSessionExpired([{ status: "rejected", reason: error }])) return;
+        current.bilibiliAuthorizationError = error.message;
+        appFeedback(error.message, true);
+      } finally {
+        clientID.value = appSecret.value = accessToken.value = expiresAt.value = "";
+        current.bilibiliAuthorizationSaving = false;
+        verify.disabled = reset.disabled = false;
+        if (current === apps) updatePublicationRow(current);
+      }
+    });
+    panel.append(form);
+    return panel;
+  }
+  function publicationDisableButton(current, authorization) {
+    if (!authorization || !authorization.enabled) return null;
+    const button = appElement("button", current.bilibiliAuthorizationSaving ? "正在停用…" : "停用发布授权", "button compact quiet");
+    button.type = "button";
+    button.disabled = current.bilibiliAuthorizationSaving;
+    button.addEventListener("click", async () => {
+      if (current !== apps || current.bilibiliAuthorizationSaving) return;
+      current.bilibiliAuthorizationSaving = true;
+      updatePublicationRow(current);
+      try {
+        const value = await request("/api/local/apps/bilibili/publication-authorization", { method: "POST", body: JSON.stringify({ action: "disable", revision: authorization.revision }) });
+        if (current !== apps) return;
+        if (!validPublicationAuthorization(value)) throw new Error("发布授权状态返回格式无效，请刷新后重试。");
+        current.bilibiliAuthorization = value;
+        appFeedback("发布授权已停用。");
+        await loadApps();
+      } catch (error) {
+        if (current !== apps || appSessionExpired([{ status: "rejected", reason: error }])) return;
+        current.bilibiliAuthorizationError = error.message;
+        appFeedback(error.message, true);
+      } finally {
+        current.bilibiliAuthorizationSaving = false;
+        if (current === apps) updatePublicationRow(current);
+      }
+    });
+    return button;
+  }
   function bilibiliPublicationRow(current) {
     if (!current.registered?.some((item) => item.id === "bilibili")) return null;
     const work = current.bilibiliWork;
-    const connections = current.connections.get("bilibili");
-    const configuration = Array.isArray(connections)
-      ? (connections.find((item) => item.id === "publish")?.configuration || "unconfigured") : "unknown";
-    const grantStates = {
-      ready: ["发布授权已登记", "在聊天中为已登记的 MP4 保存草稿，或在下方管理原任务。"],
-      unconfigured: ["尚未登记发布授权", "由主人在站点私有配置中登记 B 站投稿授权。"],
-      disabled: ["发布授权已停用", "可查看已有任务。"],
-      expired: ["发布授权已过期", "由主人在站点私有配置中更新授权。"],
-      invalid: ["发布授权配置无效", "请核对站点私有配置中的账号、凭据和到期时间。"],
-      unknown: ["发布授权暂不可读", "刷新应用状态后重查。"],
-    };
-    const [title, note] = grantStates[configuration] || grantStates.unknown;
+    const authorization = current.bilibiliAuthorization;
+    const [title, note] = publicationAuthorizationSummary(authorization);
     const row = appElement("section", "", "app-layer publication-layer");
     row.id = "bilibili-publication";
     row.setAttribute("aria-labelledby", "bilibili-publication-heading");
@@ -1731,17 +1866,26 @@
     heading.id = "bilibili-publication-heading";
     const detail = appElement("div", "", "publication-detail");
     detail.append(appElement("strong", title), appElement("p", note));
+    if (authorization?.expires_at) {
+      const expiry = new Date(authorization.expires_at);
+      if (Number.isFinite(expiry.getTime())) detail.append(appElement("p", `凭据到期：${expiry.toLocaleString()}`, "publication-reference"));
+    }
+    if (current.bilibiliAuthorizationError) detail.append(appElement("p", current.bilibiliAuthorizationError, "publication-feedback is-warn"));
+    detail.append(bilibiliAuthorizationForm(current));
+    const disable = publicationDisableButton(current, authorization);
+    if (disable) detail.append(disable);
+    const taskPanel = appElement("div", "", "publication-tasks");
     const feedback = appElement("p", work.error || work.notice, work.error || work.actionError ? "publication-feedback is-warn" : "sr-only");
     feedback.setAttribute("role", "status");
-    detail.append(feedback);
+    taskPanel.append(feedback);
     const items = work.page?.items || [];
     if (items.length) {
       const list = appElement("ul", "", "publication-list");
       list.setAttribute("aria-label", "B 站发布任务");
       for (const task of items) list.append(publicationTaskRow(current, task));
-      detail.append(list);
+      taskPanel.append(list);
     } else if (!work.error) {
-      detail.append(appElement("p", work.reading ? "正在读取发布任务…" : "暂无 B 站发布任务。", "publication-empty"));
+      taskPanel.append(appElement("p", work.reading ? "正在读取发布任务…" : "暂无 B 站发布任务。", "publication-empty"));
     }
     if (work.page?.has_more || work.cursors.length > 1) {
       const pages = appElement("div", "", "publication-pages");
@@ -1755,8 +1899,9 @@
       previous.addEventListener("click", () => loadBilibiliWork(current, work.cursors.slice(0, -1)));
       next.addEventListener("click", () => loadBilibiliWork(current, [...work.cursors, work.page.next]));
       pages.append(previous, appElement("span", `第 ${work.cursors.length} 页`), next);
-      detail.append(pages);
+      taskPanel.append(pages);
     }
+    detail.append(taskPanel);
     row.append(heading, detail);
     return row;
   }
@@ -1820,9 +1965,16 @@
     const focusedJob = row.contains(active) ? active.closest("[data-job]")?.dataset.job : "";
     const focusedAction = active?.dataset.action;
     const focusedPage = row.contains(active) ? active.dataset.page : "";
-    const next = bilibiliPublicationRow(current);
+    let next = bilibiliPublicationRow(current);
     if (!next) return;
-    row.replaceWith(next);
+    if (row.querySelector(".publication-authorization[open]")) {
+      // Refresh tasks without touching the open credential form.
+      row.querySelector(".publication-tasks").replaceWith(next.querySelector(".publication-tasks"));
+      row.setAttribute("aria-busy", next.getAttribute("aria-busy"));
+      next = row;
+    } else {
+      row.replaceWith(next);
+    }
     if (focusedJob) {
       const task = Array.from(next.querySelectorAll("[data-job]")).find((element) => element.dataset.job === focusedJob);
       const button = Array.from(task?.querySelectorAll("button:not(:disabled)") || []).find((element) => element.dataset.action === focusedAction);

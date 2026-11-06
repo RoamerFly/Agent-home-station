@@ -32,6 +32,7 @@ const (
 	openUploadCompleteURL = "https://member.bilibili.com/arcopen/fn/archive/video/complete"
 	openArchivePostURL    = "https://member.bilibili.com/arcopen/fn/archive/add-by-utoken"
 	openArchiveViewURL    = "https://member.bilibili.com/arcopen/fn/archive/view"
+	openAccountInfoURL    = "https://member.bilibili.com/arcopen/fn/user/account/info"
 
 	openUploadResponseLimit = 1 << 20
 	openUploadTimeout       = 2 * time.Minute
@@ -129,8 +130,9 @@ func (c *OpenUploadClient) Initialize(ctx context.Context, name string) (string,
 		return "", ErrOpenUploadInvalid
 	}
 	body, err := json.Marshal(struct {
-		Name string `json:"name"`
-	}{Name: name})
+		Name       string `json:"name"`
+		UploadType string `json:"utype"`
+	}{Name: name, UploadType: "0"})
 	if err != nil { // kept for future-proofing if the request shape changes.
 		return "", ErrOpenUploadInvalid
 	}
@@ -194,7 +196,7 @@ func (c *OpenUploadClient) signedRequest(ctx context.Context, method, endpoint s
 	if c == nil || c.client == nil || c.now == nil || c.nonce == nil {
 		return nil, ErrOpenUploadInvalid
 	}
-	if endpoint == openUploadPartURL || (endpoint == openArchiveViewURL && (method != http.MethodGet || len(body) != 0)) || (endpoint != openArchiveViewURL && method != http.MethodPost) {
+	if endpoint == openUploadPartURL || ((endpoint == openArchiveViewURL || endpoint == openAccountInfoURL) && (method != http.MethodGet || len(body) != 0)) || (endpoint != openArchiveViewURL && endpoint != openAccountInfoURL && method != http.MethodPost) {
 		return nil, ErrOpenUploadInvalid
 	}
 	u, err := fixedOpenUploadURL(endpoint)
@@ -284,7 +286,7 @@ func (c *OpenUploadClient) doResponseRaw(req *http.Request) ([]byte, error) {
 }
 
 func fixedOpenUploadURL(raw string) (*url.URL, error) {
-	if raw != openUploadInitURL && raw != openUploadPartURL && raw != openUploadCompleteURL && raw != openArchivePostURL && raw != openArchiveViewURL {
+	if raw != openUploadInitURL && raw != openUploadPartURL && raw != openUploadCompleteURL && raw != openArchivePostURL && raw != openArchiveViewURL && raw != openAccountInfoURL {
 		return nil, ErrOpenUploadInvalid
 	}
 	u, err := url.Parse(raw)
@@ -292,7 +294,7 @@ func fixedOpenUploadURL(raw string) (*url.URL, error) {
 		return nil, ErrOpenUploadInvalid
 	}
 	switch raw {
-	case openUploadInitURL, openUploadCompleteURL, openArchivePostURL, openArchiveViewURL:
+	case openUploadInitURL, openUploadCompleteURL, openArchivePostURL, openArchiveViewURL, openAccountInfoURL:
 		if u.Host != "member.bilibili.com" || u.Path == "" {
 			return nil, ErrOpenUploadInvalid
 		}

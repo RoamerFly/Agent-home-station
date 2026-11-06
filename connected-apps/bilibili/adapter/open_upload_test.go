@@ -60,7 +60,7 @@ func TestOpenUploadSequenceAndCredentialBoundary(t *testing.T) {
 			assertUploadSignature(t, r, body)
 			nonces = append(nonces, r.Header.Get("X-Bili-Signature-Nonce"))
 			if calls == 1 {
-				if r.URL.Path != "/arcopen/fn/archive/video/init" || r.URL.RawQuery != "" || string(body) != `{"name":"合成视频.mp4"}` {
+				if r.URL.Path != "/arcopen/fn/archive/video/init" || r.URL.RawQuery != "" || string(body) != `{"name":"合成视频.mp4","utype":"0"}` {
 					t.Fatal("initialization wire shape changed")
 				}
 				return uploadResponse(200, `{"code":0,"data":{"upload_token":"`+token+`"}}`), nil
