@@ -34,6 +34,7 @@ const (
 	localComfyServiceOwner     = "station-comfyui"
 	localComfyDefaultIdle      = 5 * time.Minute
 	localComfyMaxManifest      = 128 << 10
+	localComfyMaxIdleSeconds   = int64((1<<63 - 1) / int64(time.Second))
 )
 
 var (
@@ -422,7 +423,7 @@ func localComfyRegistrationFields(fields map[string]json.RawMessage) bool {
 }
 
 func (r localComfyRegistration) validate(dataDir, editableRoot string) error {
-	if r.Port < 1024 || r.Port > 65535 || r.IdleSeconds < 0 || !localComfyServiceSafeDirectory(r.Runtime) || !localComfyServiceSafeDirectory(r.Models) || !localComfyServiceSafeDirectory(r.Workflows) {
+	if r.Port < 1024 || r.Port > 65535 || r.IdleSeconds < 0 || int64(r.IdleSeconds) > localComfyMaxIdleSeconds || !localComfyServiceSafeDirectory(r.Runtime) || !localComfyServiceSafeDirectory(r.Models) || !localComfyServiceSafeDirectory(r.Workflows) {
 		return errors.New("station_comfyui_registration_invalid")
 	}
 	if localComfyInside(dataDir, editableRoot) || localComfyPathsOverlap(r.Runtime, dataDir) || localComfyPathsOverlap(r.Runtime, editableRoot) || localComfyPathsOverlap(r.Models, dataDir) || localComfyPathsOverlap(r.Models, editableRoot) || localComfyPathsOverlap(r.Workflows, dataDir) || localComfyPathsOverlap(r.Workflows, editableRoot) || localComfyPathsOverlap(r.manifestPath(), editableRoot) {
