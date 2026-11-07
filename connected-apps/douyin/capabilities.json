@@ -34,6 +34,14 @@
       "requires_owner_setting": "web-inspect-visual"
     },
     {
+      "id": "observation.web-comments",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在独立评论许可下读取已核对视频页面实际加载的评论，保留评论编号、作者及续读位置；第三方评论不作为视频原话",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-read-comments"
+    },
+    {
       "id": "publication.web-creator",
       "implementation": "ready",
       "description": "由 Windows 宿主在主人明确保存网页登录资料并单独开启发布许可后，通过创作者中心上传已核验的作品；提交前持久登记，重启后只查询回执，不会自动重复发布",

@@ -48,7 +48,15 @@
       "max_seconds": 20
     },
     "pagination": "host-owned",
-    "profile": "host-owned"
+    "profile": "host-owned",
+    "comments": {
+      "field": "comments",
+      "owner_opt_in": "web-read-comments",
+      "source": "host-verified-video-page-comment-cards",
+      "default_count": 20,
+      "pagination": "host-owned-video-and-comment-id",
+      "requires_playback": false
+    }
   },
   "web_publication": {
     "connection": "web-page-text",
@@ -65,6 +73,7 @@
     "page_text",
     "playback",
     "audio",
-    "visual"
+    "visual",
+    "comments"
   ]
 }

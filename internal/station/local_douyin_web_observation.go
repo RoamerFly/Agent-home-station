@@ -221,6 +221,9 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	if in.Field == apphost.ObservationVisual {
 		return p.readVisual(ctx, a, in, target, authorize)
 	}
+	if in.Field == apphost.ObservationComments {
+		return p.readComments(ctx, a, in, target, authorize)
+	}
 	dir := p.snapshotDirectory(a)
 	root, err := workspacefs.EnsurePath(dir)
 	if err != nil {
@@ -346,6 +349,9 @@ func (p *localDouyinWebObservation) mediaFollowUps(ctx context.Context, record l
 			fields = append(fields, apphost.ObservationVisual)
 		}
 	}
+	if record.CommentsEnabled {
+		fields = append(fields, apphost.ObservationComments)
+	}
 	return fields
 }
 
@@ -371,6 +377,10 @@ func localDouyinWebReadError(err error) error {
 		return apphost.ErrObservationWebSessionRequired
 	case errors.Is(err, stationbrowser.ErrDouyinWebTextSize):
 		return apphost.ErrObservationPageTextSize
+	case errors.Is(err, stationbrowser.ErrDouyinCommentsTooLarge):
+		return apphost.ErrObservationPageTextSize
+	case errors.Is(err, stationbrowser.ErrDouyinCommentsUnavailable):
+		return apphost.ErrObservationContentUnavailable
 	case errors.Is(err, stationbrowser.ErrPageUnavailable):
 		return apphost.ErrObservationContentUnavailable
 	default:

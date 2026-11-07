@@ -40,6 +40,27 @@ func (f *observationFixture) ReadObservation(_ context.Context, r ObservationReq
 	return page, nil
 }
 
+func TestObserverCommentsRefreshReadsNewPageWithoutChangingOtherEvidence(t *testing.T) {
+	f := &observationFixture{allowed: true, version: "comments-v1", pages: map[string]ObservationPage{"": {Chunks: []ObservationChunk{{Position: 0, Text: "old comment", SourceID: "1"}}, Coverage: "comments", Complete: true}}}
+	o := NewObserver(observerFixtureRegistry(t, f), t.TempDir())
+	in := ObservationInput{AppID: "offline", ConnectionID: "account", ContentID: "post", Field: ObservationComments}
+	if first, err := o.Read(t.Context(), in); err != nil || first.Chunks[0].Text != "old comment" {
+		t.Fatalf("initial: %#v %v", first, err)
+	}
+	f.pages[""] = ObservationPage{Chunks: []ObservationChunk{{Position: 0, Text: "new comment", SourceID: "2"}}, Coverage: "new comments", Complete: true}
+	if cached, err := o.Read(t.Context(), in); err != nil || !cached.Cached || cached.Chunks[0].Text != "old comment" {
+		t.Fatalf("cache: %#v %v", cached, err)
+	}
+	in.Refresh = true
+	if fresh, err := o.Read(t.Context(), in); err != nil || fresh.Cached || fresh.Chunks[0].Text != "new comment" {
+		t.Fatalf("refresh: %#v %v", fresh, err)
+	}
+	in.Field = ObservationBody
+	if _, err := o.Read(t.Context(), in); !errors.Is(err, ErrObservationInvalid) {
+		t.Fatal("unrelated body refresh changed", err)
+	}
+}
+
 func observerFixtureRegistry(t *testing.T, f *observationFixture) Registry {
 	t.Helper()
 	r, err := New(Registration{Application: Application{ID: "offline", Name: "离线", InstallationID: "offline-test", Registration: "test"}, Provider: f})
@@ -249,18 +270,18 @@ func TestObservationSearchRefreshRestartsOnlyOnRequest(t *testing.T) {
 	if page, err := observer.Read(t.Context(), input); err != nil || page.Resumed || page.Cached || page.Complete || page.Chunks[0].Text != "first" {
 		t.Fatalf("refreshed search = %+v, %v", page, err)
 	}
-	input.Field = ObservationComments
+	input.Field = ObservationBody
 	if _, err := observer.Read(t.Context(), input); !errors.Is(err, ErrObservationInvalid) {
 		t.Fatalf("refresh on another field = %v", err)
 	}
 }
 
 func TestObservationFollowUpFieldsKeepEvidenceTypesAndDefaultConsistent(t *testing.T) {
-	page := ObservationPage{Chunks: []ObservationChunk{{Text: "精确来源的可见文字", SourceID: "source-1", FollowUpContentID: "exact-video", FollowUpField: ObservationPageText, FollowUpFields: []ObservationField{ObservationPageText, ObservationAudio, ObservationPlayback}}}, Coverage: "page", Complete: true}
+	page := ObservationPage{Chunks: []ObservationChunk{{Text: "精确来源的可见文字", SourceID: "source-1", FollowUpContentID: "exact-video", FollowUpField: ObservationPageText, FollowUpFields: []ObservationField{ObservationPageText, ObservationAudio, ObservationPlayback, ObservationVisual, ObservationComments}}}, Coverage: "page", Complete: true}
 	if err := validateObservationPage(ObservationPageText, page); err != nil {
 		t.Fatal(err)
 	}
-	for _, fields := range [][]ObservationField{{ObservationAudio}, {ObservationPageText, ObservationAudio, ObservationAudio}, {ObservationPageText, ObservationComments}, {ObservationPageText, ObservationAudio, ObservationPlayback, ObservationOwnVideo}} {
+	for _, fields := range [][]ObservationField{{ObservationAudio}, {ObservationPageText, ObservationAudio, ObservationAudio}, {ObservationPageText, ObservationBody}, {ObservationPageText, ObservationAudio, ObservationPlayback, ObservationOwnVideo}} {
 		page.Chunks[0].FollowUpFields = fields
 		if err := validateObservationPage(ObservationPageText, page); err == nil {
 			t.Fatal("invalid followup fields accepted", fields)

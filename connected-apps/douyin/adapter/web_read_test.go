@@ -221,7 +221,7 @@ func TestWebVideoPlaybackDelegatesExactHostGrantAndRequest(t *testing.T) {
 	grantHits, readHits := stub.grantHit, stub.readHit
 	for _, denied := range []apphost.ObservationAccess{
 		{ConnectionRef: ref, ContentID: WebReadContentID, Field: apphost.ObservationPlayback},
-		{ConnectionRef: ref, ContentID: videoID, Field: apphost.ObservationComments},
+		{ConnectionRef: ref, ContentID: videoID, Field: apphost.ObservationOwnVideo},
 		{ConnectionRef: ref, ContentID: videoID, Field: apphost.ObservationTitle},
 		{ConnectionRef: ref, ContentID: WebVideoContentPrefix + "bad=padding", Field: apphost.ObservationPlayback},
 		{ConnectionRef: apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: "other-profile"}, ContentID: videoID, Field: apphost.ObservationPlayback},

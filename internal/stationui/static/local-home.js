@@ -1330,6 +1330,7 @@
       (typeof value.playback_enabled === "undefined" || typeof value.playback_enabled === "boolean") &&
       (typeof value.audio_enabled === "undefined" || typeof value.audio_enabled === "boolean") &&
       (typeof value.visual_enabled === "undefined" || typeof value.visual_enabled === "boolean") &&
+      (typeof value.comments_enabled === "undefined" || typeof value.comments_enabled === "boolean") &&
       (typeof value.visual_ready === "undefined" || typeof value.visual_ready === "boolean") &&
       (typeof value.visual_reason === "undefined" || typeof value.visual_reason === "string") &&
       (typeof value.publish_enabled === "undefined" || typeof value.publish_enabled === "boolean") &&
@@ -1340,6 +1341,7 @@
   function douyinWebPlaybackEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.playback_enabled === true; }
   function douyinWebAudioEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.audio_enabled === true; }
   function douyinWebVisualEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.visual_enabled === true; }
+  function douyinWebCommentsEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.comments_enabled === true; }
   function douyinWebPublishEnabled(value) { return value?.state === "saved" && value?.publish_enabled === true; }
   function stopDouyinWebLoginPolling(current = apps) {
     const web = current?.douyinWebLogin;
@@ -1397,7 +1399,7 @@
     if (value?.state === "unconfirmed" && value.attempt_id) return ["等待主人确认", "请确认新窗口已完成登录，再保存资料。"];
     return states[value?.state] || ["网页登录状态暂不可读", "刷新后可重新查看。"];
   }
-  async function updateDouyinWebLogin(current, action, allowRead, readScope, explicitReadScope, allowPlayback, allowAudio, allowVisual, allowPublish) {
+  async function updateDouyinWebLogin(current, action, allowRead, readScope, explicitReadScope, allowPlayback, allowAudio, allowVisual, allowPublish, allowComments) {
     const web = current?.douyinWebLogin, value = web?.value;
     if (!web || !value || current !== apps || web.applying || !Number.isFinite(Number(value.revision))) return;
     if ((action === "confirm" || action === "cancel") && !value.attempt_id) return;
@@ -1414,6 +1416,7 @@
       if (typeof allowPlayback === "boolean") body.allow_playback = allowPlayback;
       if (typeof allowAudio === "boolean") body.allow_audio = allowAudio;
       if (typeof allowVisual === "boolean") body.allow_visual = allowVisual;
+      if (typeof allowComments === "boolean") body.allow_comments = allowComments;
     }
     if (action === "set_publish") body.allow_publish = allowPublish === true;
     let reloadAfterConflict = false;
@@ -1425,7 +1428,8 @@
       web.loaded = true;
       let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : action === "begin_creator" ? "已打开创作者中心登录窗口。" : "已打开网页登录窗口。";
       if (action === "set_read") {
-        if (typeof allowAudio === "boolean") feedback = allowAudio ? "已允许本机转写视频音轨。" : "已停止视频音轨转写。";
+        if (typeof allowComments === "boolean") feedback = allowComments ? "已允许读取视频评论。" : "已停止读取视频评论。";
+        else if (typeof allowAudio === "boolean") feedback = allowAudio ? "已允许本机转写视频音轨。" : "已停止视频音轨转写。";
         else if (typeof allowVisual === "boolean") feedback = allowVisual ? "已允许使用本机视觉分析视频画面。" : "已停止视频画面分析。";
         else if (typeof allowPlayback === "boolean") feedback = allowPlayback ? "已允许静音观察视频播放。" : "已停止静音播放观察。";
         else feedback = allowRead ? (readScope === "home_and_videos" ? "已允许读取首页及视频页文字。" : "已允许读取抖音首页网页文字。") : "已停止网页读取。";
@@ -1556,7 +1560,15 @@
             visual.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", true, "home_and_videos", true, undefined, undefined, visual.checked); });
             visualLabel.append(visual, document.createTextNode("允许本机分析视频画面"));
             actions.append(visualLabel);
-            detail.append(appElement("p", value.visual_ready === true ? "播放、音轨和画面分析分别记录。画面分析仅将当前获准视频的实际采样帧交给媒体理解中配置的视觉服务处理。" : value.visual_reason || "请先在项目工具中配置媒体理解，画面分析许可暂不可开启。", "publication-authorization-note"));
+            const commentsLabel = appElement("label", "", "douyin-web-media-label douyin-web-comments-label");
+            const comments = document.createElement("input");
+            comments.type = "checkbox";
+            comments.checked = douyinWebCommentsEnabled(value);
+            comments.disabled = busy || (!comments.checked && !available);
+            comments.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", true, "home_and_videos", true, undefined, undefined, undefined, undefined, comments.checked); });
+            commentsLabel.append(comments, document.createTextNode("允许读取视频评论"));
+            actions.append(commentsLabel);
+            detail.append(appElement("p", value.visual_ready === true ? "播放、音轨、画面和评论读取分别记录。画面分析仅将当前获准视频的实际采样帧交给媒体理解中配置的视觉服务处理。" : value.visual_reason || "请先在项目工具中配置媒体理解，画面分析许可暂不可开启。", "publication-authorization-note"));
           }
         }
       }

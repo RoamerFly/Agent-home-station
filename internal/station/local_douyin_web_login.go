@@ -36,6 +36,7 @@ type localDouyinWebView struct {
 	PlaybackEnabled bool   `json:"playback_enabled"`
 	AudioEnabled    bool   `json:"audio_enabled"`
 	VisualEnabled   bool   `json:"visual_enabled"`
+	CommentsEnabled bool   `json:"comments_enabled"`
 	VisualReady     bool   `json:"visual_ready"`
 	VisualReason    string `json:"visual_reason,omitempty"`
 	PublishEnabled  bool   `json:"publish_enabled"`
@@ -51,6 +52,7 @@ type localDouyinWebInput struct {
 	AllowPlayback  *bool   `json:"allow_playback,omitempty"`
 	AllowAudio     *bool   `json:"allow_audio,omitempty"`
 	AllowVisual    *bool   `json:"allow_visual,omitempty"`
+	AllowComments  *bool   `json:"allow_comments,omitempty"`
 	AllowPublish   *bool   `json:"allow_publish,omitempty"`
 }
 
@@ -69,6 +71,7 @@ type localDouyinWebRecord struct {
 	PlaybackEnabled bool   `json:"playback_enabled,omitempty"`
 	AudioEnabled    bool   `json:"audio_enabled,omitempty"`
 	VisualEnabled   bool   `json:"visual_enabled,omitempty"`
+	CommentsEnabled bool   `json:"comments_enabled,omitempty"`
 	PublishEnabled  bool   `json:"publish_enabled,omitempty"`
 }
 
@@ -86,6 +89,7 @@ type localDouyinWebLogin struct {
 	available     func() bool
 	readPage      func(context.Context, string, func() error) (stationbrowser.DouyinWebPage, error)
 	readVideo     func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
+	readComments  func(context.Context, string, stationbrowser.DouyinCommentsRequest, func() error) (stationbrowser.DouyinCommentPage, error)
 	sampleVideo   func(context.Context, string, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
 	readMedia     func(context.Context, string, string, func() error) (stationbrowser.DouyinWebMedia, error)
 	audio         stationLocalASR
@@ -96,7 +100,7 @@ type localDouyinWebLogin struct {
 }
 
 func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *http.ServeMux, ctx context.Context) {
-	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo, sampleVideo: stationbrowser.SampleDouyinWebVideo,
+	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo, readComments: stationbrowser.ReadDouyinComments, sampleVideo: stationbrowser.SampleDouyinWebVideo,
 		readMedia: stationbrowser.ReadDouyinWebMedia, audio: stationLocalASR{version: h.localDouyinAudioVersion, transcribe: h.transcribeLocalStationAudio},
 		visual: stationLocalVision{version: h.localDouyinVisualVersion, observe: h.observeLocalStationImages},
 		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
@@ -191,6 +195,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	if record.VisualEnabled && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
 		return record, errors.New("画面分析许可缺少有效的视频页读取范围，原资料保留")
 	}
+	if record.CommentsEnabled && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
+		return record, errors.New("评论读取许可缺少有效的视频页读取范围，原资料保留")
+	}
 	if record.PublishEnabled && (record.Profile == "" || record.ConfirmedAt == "") {
 		return record, errors.New("网页发布授权没有已确认的登录资料，原资料保留")
 	}
@@ -232,6 +239,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	v.PlaybackEnabled = v.ReadEnabled && record.PlaybackEnabled
 	v.AudioEnabled = v.ReadEnabled && record.AudioEnabled
 	v.VisualEnabled = v.ReadEnabled && record.VisualEnabled
+	v.CommentsEnabled = v.ReadEnabled && v.ReadScope == "home_and_videos" && record.CommentsEnabled
 	v.PublishEnabled = record.PublishEnabled && v.State == "saved" && v.AttemptID == ""
 	return v
 }
@@ -331,6 +339,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.PlaybackEnabled = false
 		record.AudioEnabled = false
 		record.VisualEnabled = false
+		record.CommentsEnabled = false
 		record.PublishEnabled = false
 		if save() != nil {
 			return fail(503, "无法保存创作者中心登录前的授权撤销，未启动浏览器")
@@ -401,6 +410,14 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		} else if in.AllowVisual != nil {
 			record.VisualEnabled = *in.AllowVisual
 		}
+		if in.AllowComments != nil && *in.AllowComments && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
+			return fail(400, "请先允许首页及视频页文字读取，再单独允许读取评论")
+		}
+		if !record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos" {
+			record.CommentsEnabled = false
+		} else if in.AllowComments != nil {
+			record.CommentsEnabled = *in.AllowComments
+		}
 		if save() != nil {
 			return fail(503, "网页读取授权未保存，请重新读取后核对")
 		}
@@ -447,6 +464,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.PlaybackEnabled = false
 		record.AudioEnabled = false
 		record.VisualEnabled = false
+		record.CommentsEnabled = false
 		record.PublishEnabled = false
 		if save() != nil {
 			return fail(503, "无法保存网页登录登记，未启动浏览器")
@@ -491,12 +509,13 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		}
 		// Revoke pending reads before trying to close/delete profile files.
 		// Another browser may still own the profile lock during that cleanup.
-		if record.ReadEnabled || record.PublishEnabled {
+		if record.ReadEnabled || record.PublishEnabled || record.CommentsEnabled {
 			record.ReadEnabled = false
 			record.ReadScope = ""
 			record.PlaybackEnabled = false
 			record.AudioEnabled = false
 			record.VisualEnabled = false
+			record.CommentsEnabled = false
 			record.PublishEnabled = false
 			if save() != nil {
 				return fail(503, "网页读取授权未能撤销，尚未清理资料")

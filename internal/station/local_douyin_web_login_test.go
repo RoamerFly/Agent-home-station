@@ -85,6 +85,40 @@ func TestLocalDouyinWebCreatorLifecycleKeepsPublishGrant(t *testing.T) {
 	}
 }
 
+func TestLocalDouyinWebCommentsPermissionNeedsVideoScopeAndRevokes(t *testing.T) {
+	f, _ := newLocalDouyinWebFixture(t)
+	initializeDouyinWeb(t, f)
+	_, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": 0, "approve_profile": true}, true)
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
+	if view["comments_enabled"] != false {
+		t.Fatalf("comments must default to disabled: %v", view)
+	}
+	code, rejected := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "allow_comments": true}, true)
+	if code != 400 || rejected["error"] == nil {
+		t.Fatalf("comments without video scope: %d %v", code, rejected)
+	}
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "read_scope": "home_and_videos", "allow_comments": true}, true)
+	if code != 200 || view["comments_enabled"] != true {
+		t.Fatalf("enable comments: %d %v", code, view)
+	}
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "read_scope": "home"}, true)
+	if code != 200 || view["comments_enabled"] != false || view["read_scope"] != "home" {
+		t.Fatalf("scope narrowing did not revoke comments: %d %v", code, view)
+	}
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "read_scope": "home_and_videos", "allow_comments": true}, true)
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "clear", "revision": view["revision"], "approve_profile": true}, true)
+	if code != 200 || view["state"] != "unconfigured" || view["comments_enabled"] != false {
+		t.Fatalf("removal did not revoke comments: %d %v", code, view)
+	}
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": view["revision"], "approve_profile": true}, true)
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "read_scope": "home_and_videos", "allow_comments": true}, true)
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": view["revision"], "approve_profile": true}, true)
+	if view["comments_enabled"] != false || view["read_enabled"] != false {
+		t.Fatalf("relogin did not revoke comments: %v", view)
+	}
+}
+
 func initializeDouyinWeb(t *testing.T, f *localHomeFixture) {
 	t.Helper()
 	f.login()

@@ -339,7 +339,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := ctx.Err(); err != nil {
 		return ObservationResult{}, err
 	}
-	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText && in.Field != ObservationPlayback && in.Field != ObservationAudio && in.Field != ObservationVisual {
+	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText && in.Field != ObservationPlayback && in.Field != ObservationAudio && in.Field != ObservationVisual && in.Field != ObservationComments {
 		return ObservationResult{}, ErrObservationInvalid
 	}
 	// Check an explicit frame batch size before consulting a checkpoint. A
@@ -556,7 +556,7 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 	position := -1
 	for _, chunk := range page.Chunks {
 		if chunk.FollowUpContentID != "" || chunk.FollowUpField != "" || len(chunk.FollowUpFields) > 0 {
-			if !validObservationFollowUp(field, chunk.FollowUpField) || chunk.SourceID == "" || strings.TrimSpace(chunk.FollowUpContentID) == "" || len(chunk.FollowUpContentID) > 256 || len(chunk.FollowUpFields) > 4 {
+			if !validObservationFollowUp(field, chunk.FollowUpField) || chunk.SourceID == "" || strings.TrimSpace(chunk.FollowUpContentID) == "" || len(chunk.FollowUpContentID) > 256 || len(chunk.FollowUpFields) > 5 {
 				return errors.New("应用内容返回了无效的后续读取编号")
 			}
 			seen := map[ObservationField]bool{}
@@ -579,7 +579,7 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 }
 
 func validObservationFollowUp(field, next ObservationField) bool {
-	return field == ObservationSearch && next == ObservationPlayerEntry || field == ObservationPlayerEntry && next == ObservationPlayback || field == ObservationPageText && (next == ObservationPageText || next == ObservationPlayback || next == ObservationAudio || next == ObservationVisual) || field == ObservationVisual && next == ObservationVisual
+	return field == ObservationSearch && next == ObservationPlayerEntry || field == ObservationPlayerEntry && next == ObservationPlayback || field == ObservationPageText && (next == ObservationPageText || next == ObservationPlayback || next == ObservationAudio || next == ObservationVisual || next == ObservationComments) || field == ObservationVisual && next == ObservationVisual
 }
 
 func validVisualProof(proof VisualFrameProof, page ObservationPage) bool {
