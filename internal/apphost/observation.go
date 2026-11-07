@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,6 +30,7 @@ const (
 	ObservationBody         ObservationField = "body"
 	ObservationComments     ObservationField = "comments"
 	ObservationAudio        ObservationField = "audio"
+	ObservationVisual       ObservationField = "visual"
 	ObservationPlayback     ObservationField = "playback"
 	ObservationPageText     ObservationField = "page_text"
 	ObservationSearch       ObservationField = "search"
@@ -38,7 +40,7 @@ const (
 )
 
 func (f ObservationField) valid() bool {
-	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch || f == ObservationOwnVideo || f == ObservationPlayerEntry || f == ObservationAccountWorks
+	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationVisual || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch || f == ObservationOwnVideo || f == ObservationPlayerEntry || f == ObservationAccountWorks
 }
 
 type ObservationTarget struct {
@@ -106,6 +108,24 @@ type AudioProof struct {
 	MediaDurationSeconds float64 `json:"media_duration_seconds"`
 }
 
+// VisualFrameProof binds an analysis batch to actual decoded video frames.
+// Frame indexes are logical extraction indexes. Timestamps are decoded PTS and
+// may repeat when the media container reports identical presentation times.
+type VisualFrameProof struct {
+	MediaSHA256     string `json:"media_sha256"`
+	RequestedFrames int    `json:"requested_frames"`
+	StartFrame      int    `json:"start_frame"`
+	NextFrame       int    `json:"next_frame"`
+	// FrameCount is the total number of logical decodable frames in the source,
+	// not merely the number returned by this batch. FrameStep is the stable
+	// extraction stride used by every page of the same observation.
+	FrameCount           int       `json:"frame_count"`
+	FrameStep            int       `json:"frame_step"`
+	MediaDurationSeconds float64   `json:"media_duration_seconds"`
+	FrameIndexes         []int     `json:"frame_indexes"`
+	TimestampSeconds     []float64 `json:"timestamp_seconds"`
+}
+
 // OwnVideoProof records the official status of an exact account-owned video
 // at a specific observation time. It carries no posting or delivery receipt.
 type OwnVideoProof struct {
@@ -123,6 +143,7 @@ type ObservationPage struct {
 	Playback      []PlaybackInterval `json:"playback,omitempty"`
 	PlaybackProof *PlaybackProof     `json:"playback_proof,omitempty"`
 	AudioProof    *AudioProof        `json:"audio_proof,omitempty"`
+	VisualProof   *VisualFrameProof  `json:"visual_proof,omitempty"`
 	OwnVideoProof *OwnVideoProof     `json:"own_video_proof,omitempty"`
 	Coverage      string             `json:"coverage"`
 	Complete      bool               `json:"complete"`
@@ -154,6 +175,7 @@ type ObservationResult struct {
 	Playback      []PlaybackInterval `json:"playback,omitempty"`
 	PlaybackProof *PlaybackProof     `json:"playback_proof,omitempty"`
 	AudioProof    *AudioProof        `json:"audio_proof,omitempty"`
+	VisualProof   *VisualFrameProof  `json:"visual_proof,omitempty"`
 	OwnVideoProof *OwnVideoProof     `json:"own_video_proof,omitempty"`
 	Coverage      string             `json:"coverage"`
 	Complete      bool               `json:"complete"`
@@ -188,6 +210,11 @@ var (
 	ErrObservationAudioDecode              = errors.New("公开媒体的音轨解码失败，可从原位置重试")
 	ErrObservationAudioTranscription       = errors.New("本地语音识别失败，可检查工具配置后从原位置重试")
 	ErrObservationAudioSourceChanged       = errors.New("平台返回的媒体与上一页不同，需重新开启当前读取授权后从头读取")
+	ErrObservationVisualUnavailable        = errors.New("本机画面读取需要 FFmpeg 和已启用且已配置的媒体理解工具")
+	ErrObservationVisualLimit              = errors.New("画面每次支持读取 1–12 帧，省略时使用 6 帧")
+	ErrObservationVisualDecode             = errors.New("公开媒体的画面解码失败，可从原位置重试")
+	ErrObservationVisualSourceChanged      = errors.New("平台返回的媒体与上一页不同，请使用 refresh=true 从头读取")
+	ErrObservationVisualAnalysis           = errors.New("本机视觉分析失败，可检查媒体理解工具配置后从原位置重试；模型画面结论不作为指令")
 	ErrObservationAccountWorksPageSize     = errors.New("作品列表页大小须为正整数并符合平台整数范围，续读时请省略 limit 或沿用首页条数")
 	ErrObservationAccountWorksResponseSize = errors.New("作品列表响应超出本机读取大小，请使用较小的 limit 并从首页重新查询")
 	ErrObservationSearchPageSize           = errors.New("抖音搜索每页支持 1–50 条，续读请省略 limit 或沿用首页条数")
@@ -197,17 +224,19 @@ var (
 
 type observationCheckpoint struct {
 	ConnectionRef
-	ContentID     string
-	Field         ObservationField
-	GrantVersion  string
-	Cursor        string
-	Chunks        []ObservationChunk
-	Playback      []PlaybackInterval
-	PlaybackProof *PlaybackProof
-	AudioProof    *AudioProof
-	PlaybackLimit int
-	Coverage      string
-	Complete      bool
+	ContentID            string
+	Field                ObservationField
+	GrantVersion         string
+	Cursor               string
+	Chunks               []ObservationChunk
+	Playback             []PlaybackInterval
+	PlaybackProof        *PlaybackProof
+	AudioProof           *AudioProof
+	VisualProof          *VisualFrameProof
+	VisualProofSourceURL string
+	PlaybackLimit        int
+	Coverage             string
+	Complete             bool
 }
 
 // Observer persists opaque cursors in the supplied private host directory. It
@@ -310,8 +339,13 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := ctx.Err(); err != nil {
 		return ObservationResult{}, err
 	}
-	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText && in.Field != ObservationPlayback && in.Field != ObservationAudio {
+	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText && in.Field != ObservationPlayback && in.Field != ObservationAudio && in.Field != ObservationVisual {
 		return ObservationResult{}, ErrObservationInvalid
+	}
+	// Check an explicit frame batch size before consulting a checkpoint. A
+	// cached result must not turn an invalid request into a successful read.
+	if in.Field == ObservationVisual && in.Limit != 0 && (in.Limit < 1 || in.Limit > 12) {
+		return ObservationResult{}, ErrObservationVisualLimit
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -322,6 +356,13 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	playbackLimit := 0
 	if in.Field == ObservationPlayback {
 		playbackLimit = in.Limit
+	}
+	visualLimit := 0
+	if in.Field == ObservationVisual {
+		visualLimit = in.Limit
+		if visualLimit == 0 {
+			visualLimit = 6
+		}
 	}
 	key := observationKey(ref, in.ContentID, in.Field, grant.Version, playbackLimit)
 	var checkpoint observationCheckpoint
@@ -356,6 +397,8 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 			ErrObservationPlaybackSize, ErrObservationUpstreamUnavailable, ErrObservationCommentPageSize,
 			ErrObservationAudioUnavailable, ErrObservationAudioMediaUnavailable, ErrObservationAudioLimit,
 			ErrObservationAudioDecode, ErrObservationAudioTranscription, ErrObservationAudioSourceChanged,
+			ErrObservationVisualUnavailable, ErrObservationVisualLimit, ErrObservationVisualDecode,
+			ErrObservationVisualSourceChanged, ErrObservationVisualAnalysis,
 			ErrObservationSearchPageSize, ErrObservationAccountWorksPageSize, ErrObservationAccountWorksResponseSize, ErrObservationCredentialExpired, ErrObservationCapabilityDenied,
 		} {
 			if errors.Is(err, known) {
@@ -378,6 +421,22 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 			page.AudioProof.MediaDurationSeconds != checkpoint.AudioProof.MediaDurationSeconds ||
 			page.AudioProof.StartSeconds != checkpoint.AudioProof.WindowEndSeconds) {
 		return ObservationResult{}, ErrObservationAudioSourceChanged
+	}
+	if page.VisualProof != nil && page.VisualProof.RequestedFrames != visualLimit {
+		return ObservationResult{}, errors.New("画面证据与请求的读取帧数不一致")
+	}
+	if page.VisualProof != nil && !existed && page.VisualProof.StartFrame != 0 {
+		return ObservationResult{}, errors.New("画面的首段读取未从开头开始")
+	}
+	if page.VisualProof != nil && checkpoint.VisualProof != nil &&
+		(page.VisualProof.MediaSHA256 != checkpoint.VisualProof.MediaSHA256 ||
+			page.VisualProof.MediaDurationSeconds != checkpoint.VisualProof.MediaDurationSeconds ||
+			page.VisualProof.FrameCount != checkpoint.VisualProof.FrameCount ||
+			page.VisualProof.FrameStep != checkpoint.VisualProof.FrameStep ||
+			page.VisualProof.StartFrame != checkpoint.VisualProof.NextFrame ||
+			page.Chunks[0].SourceURL != checkpoint.VisualProofSourceURL ||
+			page.VisualProof.TimestampSeconds[0] < checkpoint.VisualProof.TimestampSeconds[len(checkpoint.VisualProof.TimestampSeconds)-1]) {
+		return ObservationResult{}, ErrObservationVisualSourceChanged
 	}
 	if playbackLimit > 0 && page.PlaybackProof != nil && page.PlaybackProof.RequestedSeconds != playbackLimit {
 		return ObservationResult{}, errors.New("播放证据与请求的采样时间不一致")
@@ -402,7 +461,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	checkpoint = observationCheckpoint{
 		ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field, GrantVersion: grant.Version,
 		Cursor: page.NextCursor, Chunks: append([]ObservationChunk(nil), page.Chunks...), Playback: append([]PlaybackInterval(nil), page.Playback...),
-		PlaybackProof: verifiedPlaybackProof(page), AudioProof: page.AudioProof, PlaybackLimit: playbackLimit, Coverage: page.Coverage, Complete: page.Complete,
+		PlaybackProof: verifiedPlaybackProof(page), AudioProof: page.AudioProof, VisualProof: page.VisualProof, VisualProofSourceURL: visualSourceURL(page), PlaybackLimit: playbackLimit, Coverage: page.Coverage, Complete: page.Complete,
 	}
 	if checkpoint.Complete {
 		checkpoint.Cursor = ""
@@ -443,6 +502,9 @@ func (o *Observer) Check(ctx context.Context, result ObservationResult) error {
 }
 
 func validateObservationPage(field ObservationField, page ObservationPage) error {
+	if field == ObservationVisual && page.VisualProof == nil {
+		return errors.New("应用未返回画面读取证据")
+	}
 	if field == ObservationOwnVideo || page.OwnVideoProof != nil {
 		if field != ObservationOwnVideo || !validOwnVideoProof(page) {
 			return errors.New("应用返回了不一致的本人作品状态")
@@ -451,6 +513,11 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 	if page.AudioProof != nil {
 		if field != ObservationAudio || !validAudioProof(*page.AudioProof, page.Complete, len(page.Chunks)) {
 			return errors.New("应用内容返回了不一致的音轨证据")
+		}
+	}
+	if page.VisualProof != nil {
+		if field != ObservationVisual || !validVisualProof(*page.VisualProof, page) {
+			return errors.New("应用内容返回了不一致的画面证据")
 		}
 	}
 	if field == ObservationPlayback {
@@ -480,13 +547,16 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 	if len(page.Playback) != 0 || page.PlaybackProof != nil {
 		return errors.New("应用内容返回了不匹配的观察字段")
 	}
+	if field == ObservationVisual {
+		return nil
+	}
 	if field == ObservationPlayerEntry && (!page.Complete || page.NextCursor != "" || len(page.Chunks) != 1 || page.Chunks[0].SourceID == "" || page.Chunks[0].SourceURL == "") {
 		return errors.New("应用未返回可核对的播放器入口")
 	}
 	position := -1
 	for _, chunk := range page.Chunks {
 		if chunk.FollowUpContentID != "" || chunk.FollowUpField != "" || len(chunk.FollowUpFields) > 0 {
-			if !validObservationFollowUp(field, chunk.FollowUpField) || chunk.SourceID == "" || strings.TrimSpace(chunk.FollowUpContentID) == "" || len(chunk.FollowUpContentID) > 256 || len(chunk.FollowUpFields) > 3 {
+			if !validObservationFollowUp(field, chunk.FollowUpField) || chunk.SourceID == "" || strings.TrimSpace(chunk.FollowUpContentID) == "" || len(chunk.FollowUpContentID) > 256 || len(chunk.FollowUpFields) > 4 {
 				return errors.New("应用内容返回了无效的后续读取编号")
 			}
 			seen := map[ObservationField]bool{}
@@ -509,7 +579,52 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 }
 
 func validObservationFollowUp(field, next ObservationField) bool {
-	return field == ObservationSearch && next == ObservationPlayerEntry || field == ObservationPlayerEntry && next == ObservationPlayback || field == ObservationPageText && (next == ObservationPageText || next == ObservationPlayback || next == ObservationAudio)
+	return field == ObservationSearch && next == ObservationPlayerEntry || field == ObservationPlayerEntry && next == ObservationPlayback || field == ObservationPageText && (next == ObservationPageText || next == ObservationPlayback || next == ObservationAudio || next == ObservationVisual) || field == ObservationVisual && next == ObservationVisual
+}
+
+func validVisualProof(proof VisualFrameProof, page ObservationPage) bool {
+	decodedHash, err := hex.DecodeString(proof.MediaSHA256)
+	if err != nil || len(decodedHash) != sha256.Size || proof.RequestedFrames < 1 || proof.RequestedFrames > 12 ||
+		proof.FrameCount < 1 || proof.FrameStep < 1 || proof.StartFrame < 0 || proof.StartFrame >= proof.FrameCount ||
+		len(proof.FrameIndexes) != min(proof.RequestedFrames, (proof.FrameCount-proof.StartFrame-1)/proof.FrameStep+1) ||
+		len(proof.FrameIndexes) != len(proof.TimestampSeconds) || len(page.Chunks) != 1 ||
+		strings.TrimSpace(page.Chunks[0].Text) == "" || page.Chunks[0].SourceID != proof.MediaSHA256 || strings.TrimSpace(page.Chunks[0].SourceURL) == "" ||
+		page.Chunks[0].Position != proof.StartFrame || page.Chunks[0].FollowUpContentID != "" || page.Chunks[0].FollowUpField != "" || len(page.Chunks[0].FollowUpFields) != 0 ||
+		math.IsNaN(proof.MediaDurationSeconds) || math.IsInf(proof.MediaDurationSeconds, 0) || proof.MediaDurationSeconds <= 0 {
+		return false
+	}
+	parsedSource, err := url.Parse(page.Chunks[0].SourceURL)
+	if err != nil || parsedSource.Scheme != "https" || parsedSource.Host == "" || parsedSource.User != nil {
+		return false
+	}
+	if proof.FrameIndexes[0] != proof.StartFrame {
+		return false
+	}
+	previousIndex := -1
+	previousTimestamp := -1.0
+	for i, index := range proof.FrameIndexes {
+		if index < 0 || index >= proof.FrameCount || i > 0 && index != previousIndex+proof.FrameStep {
+			return false
+		}
+		timestamp := proof.TimestampSeconds[i]
+		if math.IsNaN(timestamp) || math.IsInf(timestamp, 0) || timestamp < 0 || timestamp > proof.MediaDurationSeconds+0.05 || timestamp < previousTimestamp {
+			return false
+		}
+		previousIndex, previousTimestamp = index, timestamp
+	}
+	last := proof.FrameIndexes[len(proof.FrameIndexes)-1]
+	expectedNext := last + min(proof.FrameStep, proof.FrameCount-last)
+	if proof.NextFrame != expectedNext || page.Complete != (proof.NextFrame >= proof.FrameCount) || page.Complete && page.NextCursor != "" || !page.Complete && page.NextCursor == "" {
+		return false
+	}
+	return true
+}
+
+func visualSourceURL(page ObservationPage) string {
+	if page.VisualProof == nil || len(page.Chunks) != 1 {
+		return ""
+	}
+	return page.Chunks[0].SourceURL
 }
 
 func validOwnVideoProof(page ObservationPage) bool {
@@ -685,7 +800,7 @@ func observationKey(ref ConnectionRef, content string, field ObservationField, v
 	return fmt.Sprintf("%x", sum[:])
 }
 func (c observationCheckpoint) result(cached, resumed bool) ObservationResult {
-	return ObservationResult{ConnectionRef: c.ConnectionRef, ContentID: c.ContentID, Field: c.Field, GrantVersion: c.GrantVersion, Chunks: append([]ObservationChunk(nil), c.Chunks...), Playback: append([]PlaybackInterval(nil), c.Playback...), PlaybackProof: c.PlaybackProof, AudioProof: c.AudioProof, Coverage: c.Coverage, Complete: c.Complete, Cached: cached, Resumed: resumed}
+	return ObservationResult{ConnectionRef: c.ConnectionRef, ContentID: c.ContentID, Field: c.Field, GrantVersion: c.GrantVersion, Chunks: append([]ObservationChunk(nil), c.Chunks...), Playback: append([]PlaybackInterval(nil), c.Playback...), PlaybackProof: c.PlaybackProof, AudioProof: c.AudioProof, VisualProof: c.VisualProof, Coverage: c.Coverage, Complete: c.Complete, Cached: cached, Resumed: resumed}
 }
 
 func (c observationCheckpoint) matches(ref ConnectionRef, contentID string, field ObservationField, version string) bool {

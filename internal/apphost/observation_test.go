@@ -165,6 +165,44 @@ func TestObservationAudioProofBindsWindowAndSource(t *testing.T) {
 	}
 }
 
+func TestObservationVisualProofResumesAcrossBatchSizesAndCachesCompleteResult(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	firstProof := VisualFrameProof{MediaSHA256: sha, RequestedFrames: 2, StartFrame: 0, NextFrame: 4, FrameCount: 7, FrameStep: 2, MediaDurationSeconds: 4, FrameIndexes: []int{0, 2}, TimestampSeconds: []float64{0, 1.1}}
+	secondProof := VisualFrameProof{MediaSHA256: sha, RequestedFrames: 12, StartFrame: 4, NextFrame: 7, FrameCount: 7, FrameStep: 2, MediaDurationSeconds: 4, FrameIndexes: []int{4, 6}, TimestampSeconds: []float64{2.2, 2.2}}
+	source := "https://www.douyin.com/video/host-verified"
+	f := &observationFixture{allowed: true, version: "v1", pages: map[string]ObservationPage{
+		"":     {Chunks: []ObservationChunk{{Position: 0, Text: "frames 0 and 2", SourceID: sha, SourceURL: source}}, VisualProof: &firstProof, Coverage: "visual 0-2", NextCursor: "next"},
+		"next": {Chunks: []ObservationChunk{{Position: 4, Text: "frames 4 and 6", SourceID: sha, SourceURL: source}}, VisualProof: &secondProof, Coverage: "visual 4-6", Complete: true},
+	}}
+	o := NewObserver(observerFixtureRegistry(t, f), t.TempDir())
+	in := ObservationInput{AppID: "offline", ConnectionID: "account", ContentID: "post", Field: ObservationVisual, Limit: 2}
+	if result, err := o.Read(t.Context(), in); err != nil || result.Complete || result.VisualProof == nil || result.VisualProof.NextFrame != 4 {
+		t.Fatalf("first visual result=%+v error=%v", result, err)
+	}
+	in.Limit = 12
+	if result, err := o.Read(t.Context(), in); err != nil || !result.Resumed || !result.Complete || result.VisualProof == nil || result.VisualProof.NextFrame != 7 {
+		t.Fatalf("resumed visual result=%+v error=%v", result, err)
+	}
+	if result, err := o.Read(t.Context(), in); err != nil || !result.Cached || result.VisualProof == nil || result.VisualProof.StartFrame != 4 {
+		t.Fatalf("cached visual result=%+v error=%v", result, err)
+	}
+	f.mu.Lock()
+	cursors := append([]string(nil), f.cursors...)
+	f.mu.Unlock()
+	if len(cursors) != 2 || cursors[0] != "" || cursors[1] != "next" {
+		t.Fatalf("visual cursors=%q", cursors)
+	}
+	if _, err := o.Read(t.Context(), ObservationInput{AppID: "offline", ConnectionID: "account", ContentID: "post", Field: ObservationVisual, Limit: 13}); !errors.Is(err, ErrObservationVisualLimit) {
+		t.Fatalf("invalid visual limit reached cached evidence: %v", err)
+	}
+
+	bad := secondProof
+	bad.TimestampSeconds = []float64{2.2, 2.1}
+	if validateObservationPage(ObservationVisual, ObservationPage{Chunks: []ObservationChunk{{Position: 4, Text: "bad", SourceID: sha, SourceURL: source}}, VisualProof: &bad, Coverage: "bad", Complete: true}) == nil {
+		t.Fatal("decreasing PTS accepted")
+	}
+}
+
 func TestObservationPlaybackRefreshRechecksGrantAndReplacesOnlyOnRequest(t *testing.T) {
 	f := &observationFixture{allowed: true, version: "v1", pages: map[string]ObservationPage{
 		"": {Playback: []PlaybackInterval{{0, 1}}, PlaybackProof: &PlaybackProof{RequestedSeconds: 2, Ready: true, Paused: true, MediaDurationSeconds: 10}, Coverage: "first sample", Complete: true},

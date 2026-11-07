@@ -133,7 +133,7 @@ func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.Observ
 	if _, ok := p.resolveTarget(a, in.ContentID); !ok {
 		return apphost.ObservationGrant{Allowed: false}, nil
 	}
-	version := a.version
+	version := p.pageObservationVersion(ctx, a, in.Field)
 	if in.Field == apphost.ObservationAudio {
 		audio, err := p.audioBinding(ctx)
 		if err != nil {
@@ -144,6 +144,12 @@ func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.Observ
 			return apphost.ObservationGrant{}, apphost.ErrObservationAudioUnavailable
 		}
 		version += "/" + asrVersion
+	} else if in.Field == apphost.ObservationVisual {
+		visualVersion, err := p.visualBinding().ready(ctx)
+		if err != nil {
+			return apphost.ObservationGrant{}, err
+		}
+		version += "/" + visualVersion
 	}
 	return apphost.ObservationGrant{Allowed: true, Version: version}, nil
 }
@@ -181,8 +187,8 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	if !ok {
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 	}
-	expectedVersion := a.version
-	if in.Field == apphost.ObservationAudio {
+	expectedVersion := p.pageObservationVersion(ctx, a, in.Field)
+	if in.Field == apphost.ObservationAudio || in.Field == apphost.ObservationVisual {
 		grant, err := p.Grant(ctx, in.ObservationAccess)
 		if err != nil {
 			return apphost.ObservationPage{}, err
@@ -207,6 +213,9 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	}
 	if in.Field == apphost.ObservationAudio {
 		return p.readAudio(ctx, a, in, target, authorize)
+	}
+	if in.Field == apphost.ObservationVisual {
+		return p.readVisual(ctx, a, in, target, authorize)
 	}
 	dir := p.snapshotDirectory(a)
 	root, err := workspacefs.EnsurePath(dir)
@@ -283,41 +292,57 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	}
 	page, err := localDouyinWebPage(snapshot, cursor.Offset, in.Limit)
 	if err == nil {
-		audioReady := false
-		if a.record.AudioEnabled {
-			if audio, e := p.audioBinding(ctx); e == nil {
-				v, e := audio.ready(ctx)
-				audioReady = e == nil && strings.TrimSpace(v) != ""
-			}
-		}
-		if target.videoID != "" && len(page.Chunks) > 0 && (audioReady || a.record.PlaybackEnabled) {
+		fields := p.mediaFollowUps(ctx, a.record)
+		if target.videoID != "" && len(page.Chunks) > 0 && len(fields) > 0 {
 			first := &page.Chunks[0]
 			first.FollowUpContentID = in.ContentID
-			if audioReady {
-				first.FollowUpFields = append(first.FollowUpFields, apphost.ObservationAudio)
-			}
-			if a.record.PlaybackEnabled {
-				first.FollowUpFields = append(first.FollowUpFields, apphost.ObservationPlayback)
-			}
-			first.FollowUpField = first.FollowUpFields[0]
+			first.FollowUpFields = fields
+			first.FollowUpField = fields[0]
 		}
 		if target.videoID == "" {
 			for i := range page.Chunks {
-				c := &page.Chunks[i]
-				if c.FollowUpContentID == "" {
-					continue
-				}
-				c.FollowUpFields = []apphost.ObservationField{apphost.ObservationPageText}
-				if audioReady {
-					c.FollowUpFields = append(c.FollowUpFields, apphost.ObservationAudio)
-				}
-				if a.record.PlaybackEnabled {
-					c.FollowUpFields = append(c.FollowUpFields, apphost.ObservationPlayback)
+				chunk := &page.Chunks[i]
+				if chunk.FollowUpContentID != "" {
+					chunk.FollowUpFields = append([]apphost.ObservationField{apphost.ObservationPageText}, fields...)
 				}
 			}
 		}
 	}
+	if err == nil {
+		err = authorize()
+	}
 	return page, err
+}
+
+func (p *localDouyinWebObservation) pageObservationVersion(ctx context.Context, a localDouyinWebAccess, field apphost.ObservationField) string {
+	// The checkpoint includes follow-up fields. A cached text page may
+	// advertise vision only while its runtime remains callable.
+	if field == apphost.ObservationPageText && a.record.VisualEnabled {
+		if _, err := p.visualBinding().ready(ctx); err == nil {
+			return a.version + "/visual-ready"
+		}
+	}
+	return a.version
+}
+
+func (p *localDouyinWebObservation) mediaFollowUps(ctx context.Context, record localDouyinWebRecord) []apphost.ObservationField {
+	var fields []apphost.ObservationField
+	if record.AudioEnabled {
+		if audio, err := p.audioBinding(ctx); err == nil {
+			if version, err := audio.ready(ctx); err == nil && strings.TrimSpace(version) != "" {
+				fields = append(fields, apphost.ObservationAudio)
+			}
+		}
+	}
+	if record.PlaybackEnabled {
+		fields = append(fields, apphost.ObservationPlayback)
+	}
+	if record.VisualEnabled {
+		if _, err := p.visualBinding().ready(ctx); err == nil {
+			fields = append(fields, apphost.ObservationVisual)
+		}
+	}
+	return fields
 }
 
 func fmtLocalDouyinWebCoverage(start, end, total int, captured string, links bool) string {

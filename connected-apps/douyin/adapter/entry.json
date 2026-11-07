@@ -13,7 +13,8 @@
     "playback",
     "account_works",
     "page_text",
-    "audio"
+    "audio",
+    "visual"
   ],
   "web_read": {
     "connection": "web-page-text",
@@ -36,6 +37,18 @@
       "min_seconds": 1,
       "max_seconds": 240,
       "pagination": "host-owned-media-hash-and-audio-window",
+      "requires_playback": false
+    },
+    "visual": {
+      "field": "visual",
+      "owner_opt_in": "web-inspect-visual",
+      "source": "host-verified-video-detail-media",
+      "decoder": "host-local-ffmpeg",
+      "analyzer": "owner-enabled-media-understanding",
+      "default_frames": 6,
+      "min_frames": 1,
+      "max_frames": 12,
+      "pagination": "host-owned-media-hash-frame-index-and-pts",
       "requires_playback": false
     },
     "playback": {

@@ -68,7 +68,7 @@ func (p *localDouyinWebObservation) readAudio(ctx context.Context, a localDouyin
 	if err := check(); err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	media, hash, err := p.audioMedia(ctx, a, in, target, check)
+	media, hash, err := p.originalMedia(ctx, a, in, target, check)
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
@@ -89,8 +89,8 @@ type localDouyinWebMediaRecord struct {
 
 // Raw media stays in the host's private per-grant scope, never the editable
 // home or model result. Continuations decode the same verified bytes rather
-// than downloading a potentially different video for each audio window.
-func (p *localDouyinWebObservation) audioMedia(ctx context.Context, a localDouyinWebAccess, in apphost.ObservationRequest, target localDouyinWebTarget, authorize func() error) (stationbrowser.DouyinWebMedia, string, error) {
+// than downloading a potentially different video for each audio or visual page.
+func (p *localDouyinWebObservation) originalMedia(ctx context.Context, a localDouyinWebAccess, in apphost.ObservationRequest, target localDouyinWebTarget, authorize func() error) (stationbrowser.DouyinWebMedia, string, error) {
 	if target.videoID == "" {
 		return stationbrowser.DouyinWebMedia{}, "", apphost.ErrObservationInvalid
 	}

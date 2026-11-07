@@ -17,7 +17,7 @@ func localDouyinWebFieldAllowed(record localDouyinWebRecord, contentID string, f
 	if contentID == douyinapp.WebReadContentID || localDouyinWebScope(record) != "home_and_videos" {
 		return false
 	}
-	return field == apphost.ObservationPlayback && record.PlaybackEnabled || field == apphost.ObservationAudio && record.AudioEnabled
+	return field == apphost.ObservationPlayback && record.PlaybackEnabled || field == apphost.ObservationAudio && record.AudioEnabled || field == apphost.ObservationVisual && record.VisualEnabled
 }
 
 func (p *localDouyinWebObservation) readPlayback(ctx context.Context, a localDouyinWebAccess, in apphost.ObservationRequest, target localDouyinWebTarget, authorize func() error) (apphost.ObservationPage, error) {

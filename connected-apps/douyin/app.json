@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "douyin",
   "name": "抖音",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -27,6 +27,7 @@
     "observation.web-page-text",
     "observation.web-playback",
     "observation.web-audio",
+    "observation.web-visual",
     "publication.video"
   ],
   "http_routes": [
@@ -126,7 +127,7 @@
     "adapter/account_works_wire.go": "f7286bf01e1bfe77543129ed1e92560e329a4cf76df97753e487c155e445b6c6",
     "adapter/account_works.go": "05bb578605a348d42db82acaa12802d1917c36929c501af4335baa58d650a0c9",
     "adapter/account.go": "4a0d0826b14822908f2b44b96000584ceea35b48917a60ba4ffca79d9f8e84b4",
-    "adapter/entry.json": "a16fb9b871896af9a398555825b1946a4f6e9f9fe4c988e3091a78b1886d6ab5",
+    "adapter/entry.json": "df43b0c0f0c35d09b0eb35d8d56650770626e6c173d3536b8b34859eb407dff7",
     "adapter/own_video_test.go": "b977506aa9e11b9e8c250e078404b834d717ea88e4aa761823cfc45aa9cd502e",
     "adapter/own_video.go": "bc4ebc5e255968241df54a0e05422f7db1c5bf0e5f668681f7fa83b7104fd054",
     "adapter/player_followup_test.go": "dd377ac52a2071b3cee2748b34ce611c7d4776f450fdbbff4fe33ae82fb207da",
@@ -142,16 +143,16 @@
     "adapter/search_test.go": "d51f4a877ebfb761e6a4aa47225717b7341cfa65c18792622f7904975ad552a9",
     "adapter/search.go": "15e3c6c0d0119cec1c00af140c346a05e74cc1bc893006119e8d416d3f855605",
     "adapter/web_read_test.go": "9378ccaa4363f2b5ec41c33925cda1a107e106908761551ecd72dd615a3ae76b",
-    "adapter/web_read.go": "6d311501197bf04c6b639c8de0312fd5731564f3577e643f975f726b4acaf6da",
-    "capabilities.json": "be35afdc8f3d57b23a9b1bd9dad2336540fb97a7b45cad08c84bafd7e2d5bbeb",
-    "CHANGELOG.md": "18e4019f747e7b9694fc2e9785be0b92b7d1cddb40a80bf7311609e6f0199a43",
+    "adapter/web_read.go": "7e1242a53bf7d8c6b38508106a3907c4a3285cd79954ef511e6b87575e2b201b",
+    "capabilities.json": "6d0784f696bd29e23b5df0a9c325412502aa3209bf2214323609b8aff73c70ec",
+    "CHANGELOG.md": "1c8633854459586216e291a0c7e043b2d81a3d9231cae5aaeae11f87750e3f05",
     "config.schema.json": "76f61cc911f8f02bf9b74e8627f2d1183c8364241d62dcfd78968c772cf92736",
-    "MIGRATION.md": "556488a4655d3569103739dbba35b1147cb4b92a2e4a2b538d58b81b5d787d59",
+    "MIGRATION.md": "fc7ca5649b1c74757bd02ebfa7f6a91df69c2e7657eb00880d922945337d2907",
     "own-video.schema.json": "c7da49685c9183986a7296c8ebd4597277429df802d2136449fc91a540f1cde2",
-    "PERMISSIONS.md": "1ef22e8658103075a728a4085d08798380f94c7a31ef9d5dc34d17beb67b3dfe",
-    "README.md": "105fe30f100474499e96e0fec0a66b0faae031700f7f8bdff1e315101f1d0466",
+    "PERMISSIONS.md": "0109af5fc81ad8fda237632075d06dacaaa785faa4cdef60ae5589a26ce71eeb",
+    "README.md": "c9613e9e998215ab8955db7f28b5ee0628e7246591c51008b54ff6846cd633ea",
     "ui.schema.json": "149127e16076739ec7a75d3704e350a5cb1c7f7e46f4f2fc95b254df1fcc3249",
-    "web-read.schema.json": "47d3b580677364337fda00a3a9ff41d4d2fc2c4b9cf04f776b113eaaa1a1070d"
+    "web-read.schema.json": "eedf6a5c8d8cedb47c1bb16ae20f4390125aa5f8414694d3ba23167bdd94c4b6"
   },
   "browser_routes": [
     {
@@ -178,6 +179,11 @@
       "capability": "observation.web-audio",
       "url_template": "https://www.douyin.com/video/{video_id}",
       "owner_opt_in": "web-transcribe-audio"
+    },
+    {
+      "capability": "observation.web-visual",
+      "url_template": "https://www.douyin.com/video/{video_id}",
+      "owner_opt_in": "web-inspect-visual"
     }
   ]
 }

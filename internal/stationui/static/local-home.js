@@ -2156,12 +2156,16 @@
       (typeof value.read_scope === "undefined" || ["home", "home_and_videos"].includes(value.read_scope)) &&
       (typeof value.playback_enabled === "undefined" || typeof value.playback_enabled === "boolean") &&
       (typeof value.audio_enabled === "undefined" || typeof value.audio_enabled === "boolean") &&
+      (typeof value.visual_enabled === "undefined" || typeof value.visual_enabled === "boolean") &&
+      (typeof value.visual_ready === "undefined" || typeof value.visual_ready === "boolean") &&
+      (typeof value.visual_reason === "undefined" || typeof value.visual_reason === "string") &&
       (typeof value.reason === "undefined" || typeof value.reason === "string");
   }
   function douyinWebReadEnabled(value) { return value?.read_enabled === true; }
   function douyinWebReadScope(value) { return value?.read_scope === "home_and_videos" ? "home_and_videos" : "home"; }
   function douyinWebPlaybackEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.playback_enabled === true; }
   function douyinWebAudioEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.audio_enabled === true; }
+  function douyinWebVisualEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.visual_enabled === true; }
   function stopDouyinWebLoginPolling(current = apps) {
     const web = current?.douyinWebLogin;
     if (!web) return;
@@ -2218,7 +2222,7 @@
     if (value?.state === "unconfirmed" && value.attempt_id) return ["等待主人确认", "请确认新窗口已完成登录，再保存资料。"];
     return states[value?.state] || ["网页登录状态暂不可读", "刷新后可重新查看。"];
   }
-  async function updateDouyinWebLogin(current, action, allowRead, readScope, explicitReadScope, allowPlayback, allowAudio) {
+  async function updateDouyinWebLogin(current, action, allowRead, readScope, explicitReadScope, allowPlayback, allowAudio, allowVisual) {
     const web = current?.douyinWebLogin, value = web?.value;
     if (!web || !value || current !== apps || web.applying || !Number.isFinite(Number(value.revision))) return;
     if ((action === "confirm" || action === "cancel") && !value.attempt_id) return;
@@ -2234,6 +2238,7 @@
       if (allowRead === true && explicitReadScope === true) body.read_scope = readScope === "home_and_videos" ? "home_and_videos" : "home";
       if (typeof allowPlayback === "boolean") body.allow_playback = allowPlayback;
       if (typeof allowAudio === "boolean") body.allow_audio = allowAudio;
+      if (typeof allowVisual === "boolean") body.allow_visual = allowVisual;
     }
     let reloadAfterConflict = false;
     try {
@@ -2245,6 +2250,7 @@
       let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : "已打开网页登录窗口。";
       if (action === "set_read") {
         if (typeof allowAudio === "boolean") feedback = allowAudio ? "已允许本机转写视频音轨。" : "已停止视频音轨转写。";
+        else if (typeof allowVisual === "boolean") feedback = allowVisual ? "已允许使用本机视觉分析视频画面。" : "已停止视频画面分析。";
         else if (typeof allowPlayback === "boolean") feedback = allowPlayback ? "已允许静音观察视频播放。" : "已停止静音播放观察。";
         else feedback = allowRead ? (readScope === "home_and_videos" ? "已允许读取首页及视频页文字。" : "已允许读取抖音首页网页文字。") : "已停止网页读取。";
       }
@@ -2347,7 +2353,15 @@
             audio.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", true, "home_and_videos", true, undefined, audio.checked); });
             audioLabel.append(audio, document.createTextNode("允许本机转写视频音轨"));
             actions.append(audioLabel);
-            detail.append(appElement("p", "播放区间、音轨转写分别记录，均不代替画面理解；转写不代表观看。", "publication-authorization-note"));
+            const visualLabel = appElement("label", "", "douyin-web-media-label douyin-web-visual-label");
+            const visual = document.createElement("input");
+            visual.type = "checkbox";
+            visual.checked = douyinWebVisualEnabled(value);
+            visual.disabled = busy || (!visual.checked && (!available || value.visual_ready !== true));
+            visual.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", true, "home_and_videos", true, undefined, undefined, visual.checked); });
+            visualLabel.append(visual, document.createTextNode("允许本机分析视频画面"));
+            actions.append(visualLabel);
+            detail.append(appElement("p", value.visual_ready === true ? "播放、音轨和画面分析分别记录。画面分析仅将当前获准视频的实际采样帧交给媒体理解中配置的视觉服务处理。" : value.visual_reason || "请先在项目工具中配置媒体理解，画面分析许可暂不可开启。", "publication-authorization-note"));
           }
         }
       }
@@ -2365,7 +2379,7 @@
   }
   function douyinAuthorizationSummary(authorization) {
     const states = {
-      unconfigured: ["尚未接入抖音账号", "此入口需要已审核的开放平台网站应用；普通抖音网页登录不能代替这项授权。"],
+      unconfigured: ["可选 API 连接尚未配置", "此项供已有开放平台应用的用户使用。普通账号从上方网页登录接入。"],
       ready: [authorization?.label || "抖音账号已接入", [
         authorization?.works_authorized ? "已授权读取我的作品列表。" : "可重新扫码授权读取我的作品列表。",
         authorization?.publish_authorized
@@ -2502,9 +2516,9 @@
     }
     const host = douyinDesktopHost();
     if (!host) {
-      detail.append(appElement("p", "请在 Windows 桌面端扫码连接抖音账号。", "publication-authorization-note"));
+      detail.append(appElement("p", "已有开放平台应用时，可在 Windows 桌面端配置 API 授权。", "publication-authorization-note"));
       if (disconnect) detail.append(disconnect);
-      row.append(appElement("h5", "开放平台授权"), detail);
+      row.append(appElement("h5", "API 接入（可选）"), detail);
       return row;
     }
     const panel = appElement("details", "", "publication-oauth");
@@ -2572,7 +2586,7 @@
         }
       } finally { flow.saving = false; if (current === apps) renderApps(); }
     });
-    row.append(appElement("h5", "开放平台授权"), detail);
+    row.append(appElement("h5", "API 接入（可选）"), detail);
     return row;
   }
   function douyinReadRows(record) {
@@ -3267,8 +3281,8 @@
     const heading = appElement("h5", "创作发布");
     heading.id = "douyin-publication-heading";
     const detail = appElement("div", "", "publication-detail");
-    let title = "需要接入抖音账号";
-    let note = "先完成账号接入，已保存的发布任务仍会显示在这里。";
+    let title = "API 发布尚未授权";
+    let note = "此处管理开放平台 API 发布任务。普通账号通过创作者中心发布的自动接入仍在开发中。";
     if (!authorization) {
       title = "发布授权暂不可读";
       note = "刷新应用状态后再核对。";

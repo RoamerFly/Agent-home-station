@@ -86,6 +86,14 @@
       "requires_owner_setting": "web-transcribe-audio"
     },
     {
+      "id": "observation.web-visual",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在主人独立允许后，从已核对的确切视频原件按批解码 1–12 帧并交给已启用的媒体理解工具；返回媒体摘要、实际 PTS 和可继续位置，不表示完整观看",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-inspect-visual"
+    },
+    {
       "id": "publication.video",
       "implementation": "ready",
       "description": "显式授权后分阶段上传、创建并按原作品标识核对抖音视频",
