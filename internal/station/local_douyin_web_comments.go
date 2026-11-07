@@ -89,6 +89,9 @@ func (p *localDouyinWebObservation) readComments(ctx context.Context, a localDou
 			}
 		}
 		seen[comment.ID] = true
+		if err := p.saveCommentProof(a, target.videoID, comment); err != nil {
+			return apphost.ObservationPage{}, err
+		}
 		page.Chunks = append(page.Chunks, apphost.ObservationChunk{Position: cursor.Position, SourceID: comment.ID, SourceURL: target.url, PublishedAt: comment.CreatedAt,
 			Text: fmt.Sprintf("[抖音评论 · 作者 %s · 应用身份 %s]\n%s", comment.Author, comment.AuthorID, comment.Text)})
 		cursor.Position++
@@ -98,6 +101,9 @@ func (p *localDouyinWebObservation) readComments(ctx context.Context, a localDou
 		raw, _ := json.Marshal(cursor)
 		page.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
 		page.Coverage += "；尚有后续内容，使用原请求续读"
+	}
+	if err := authorize(); err != nil {
+		return apphost.ObservationPage{}, err
 	}
 	return page, nil
 }

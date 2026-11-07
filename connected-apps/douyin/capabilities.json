@@ -48,6 +48,22 @@
       "permissions": [],
       "discoverable": true,
       "requires_owner_setting": "explicit-owner-web-publish"
+    },
+    {
+      "id": "interaction.web-like",
+      "implementation": "synthetic-verified",
+      "description": "在主人单独允许后，将已读取且来源仍有效的确切视频点赞状态设为明确的 true 或 false；宿主在提交前持久登记，结果未知时只查询原任务，不以新任务重复点击。实际抖音页面 DOM 与平台服务端回执尚未验证。",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-like-actions"
+    },
+    {
+      "id": "interaction.web-reply-comment",
+      "implementation": "synthetic-verified",
+      "description": "在主人单独允许后回复已读取的确切父评论；任务绑定评论编号和宿主签发的来源版本，父评论变更或未知结果时停止提交并只查询原任务。实际抖音页面 DOM 与平台服务端回执尚未验证。",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-reply-comments"
     }
   ]
 }

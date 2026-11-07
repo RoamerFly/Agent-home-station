@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "douyin",
   "name": "抖音",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -23,7 +23,9 @@
     "observation.web-audio",
     "observation.web-visual",
     "observation.web-comments",
-    "publication.web-creator"
+    "publication.web-creator",
+    "interaction.web-like",
+    "interaction.web-reply-comment"
   ],
   "http_routes": [],
   "files": {
@@ -36,7 +38,7 @@
     "adapter/account_works_test.go": "b4838132f3d38271c0d4a872b2e28f529e40ebaadbc656d599204cf6106bc86b",
     "adapter/account_works_wire.go": "f7286bf01e1bfe77543129ed1e92560e329a4cf76df97753e487c155e445b6c6",
     "adapter/account_works_wire_test.go": "6e2afe44beb00c52df29ae03d06aed7d792c12a45e064d1c98960bc8d990f9b7",
-    "adapter/entry.json": "4fbcba9872fc482f5cf2e39fd206144ae459f38e5f93b7f6cae023e72515f984",
+    "adapter/entry.json": "55293a03fc19fd05a53be46179923cdc1a381732163b43b6521630aa6190f5bb",
     "adapter/own_video.go": "bc4ebc5e255968241df54a0e05422f7db1c5bf0e5f668681f7fa83b7104fd054",
     "adapter/own_video_test.go": "b977506aa9e11b9e8c250e078404b834d717ea88e4aa761823cfc45aa9cd502e",
     "adapter/player.go": "d0939abc8978339096d22de822e1df1c9721f54f7837bdfc52e0dd1a4ed6d71d",
@@ -51,19 +53,20 @@
     "adapter/publication_wire_test.go": "53d1659652d1fbe5c6fe33a0479d77f10ddc8b3a482eeb020cdb6fcfd1e6103f",
     "adapter/search.go": "15e3c6c0d0119cec1c00af140c346a05e74cc1bc893006119e8d416d3f855605",
     "adapter/search_test.go": "d51f4a877ebfb761e6a4aa47225717b7341cfa65c18792622f7904975ad552a9",
-    "adapter/web_only.go": "de2cf208e8f7ac5be60027fd5f8ae7e349359355e87669a411e98a19e00ebd74",
+    "adapter/web_interaction.go": "541d922c8ad0cd92be82e5eae7b6e99d7833ea80068b7487662991eb7b28e34e",
+    "adapter/web_only.go": "9a4066ddd556081adb018ef42804ab7ba8c52e20a9865492279a478da4dbcde8",
     "adapter/web_publication.go": "b7d9bd56c2f008c76d42240a866baaad522c981c818b65999ad674e93346f2f1",
     "adapter/web_read.go": "66c8fdbc085b7955abbbf37fbb4098fb95e820fe8701535cb8451fb0ae3b3019",
     "adapter/web_read_test.go": "5eb41d0baf1fcdd8fdc6abaa700f7eaff50bd68bf900a02fa96ecbc7451d2d7f",
-    "capabilities.json": "168cd130aec15668d270404e87f0d6b128327430cdc84f73d79c111f4b342411",
-    "CHANGELOG.md": "224599d7cbdd6f74e33e0e67a1e6aa030c7af82c85696b631a70f91d719ddfcb",
+    "capabilities.json": "bb3a22d54d7698aba0de90a58db3422552977d4ec0740e13428dbfc42027f565",
+    "CHANGELOG.md": "01de57a00fda8916891252eb3b9d61766c6fbf8e8874faf745cd2fae85bd7d65",
     "config.schema.json": "913a057c072b8424a694d433597c5a18fa13f24f5551cb6b922e6a0d1628c34c",
-    "MIGRATION.md": "03bb4d5d851cb58f5d12fbeb35222e7d75bc2168c52bac1781fcd1dcf6e04202",
+    "MIGRATION.md": "fa5d7d3eb7f68e0583428d49f3eb8cd4d960765378671e7d752f4fb36cc46010",
     "own-video.schema.json": "c7da49685c9183986a7296c8ebd4597277429df802d2136449fc91a540f1cde2",
-    "PERMISSIONS.md": "ce1f4530f7c4550966c7011ecaf56dc804f172ba473514aff21aa1e419395beb",
-    "README.md": "9eb087d541c71e06182f89b629338f1636642c820990dff05d74d34d0d3cf581",
-    "ui.schema.json": "fb6e65254214d138c940e16d59b760f91b58b217325b7481503530965a76d81a",
-    "web-read.schema.json": "eedf6a5c8d8cedb47c1bb16ae20f4390125aa5f8414694d3ba23167bdd94c4b6"
+    "PERMISSIONS.md": "8644afc003a2403fcb4607003ed57bd164ece72dde78a5a5d2de6e5cb7225541",
+    "README.md": "c774e20b3d37ab3669a50eb98d6b007e112588b1c5cad9f2633d40863e107432",
+    "ui.schema.json": "96bda013912bd4483fa5164b0e3736aeecf70d92a991f017b08dd5e664d42272",
+    "web-read.schema.json": "1baee23b549a7637a90ddd362cd95eed6fa0f1e5e11e116f98f77c0aec7f6ad6"
   },
   "browser_routes": [
     {
@@ -90,6 +93,21 @@
       "capability": "observation.web-visual",
       "url_template": "https://www.douyin.com/video/{video_id}",
       "owner_opt_in": "web-inspect-visual"
+    },
+    {
+      "capability": "observation.web-comments",
+      "url_template": "https://www.douyin.com/video/{video_id}",
+      "owner_opt_in": "web-read-comments"
+    },
+    {
+      "capability": "interaction.web-like",
+      "url_template": "https://www.douyin.com/video/{video_id}",
+      "owner_opt_in": "web-like-actions"
+    },
+    {
+      "capability": "interaction.web-reply-comment",
+      "url_template": "https://www.douyin.com/video/{video_id}",
+      "owner_opt_in": "web-reply-comments"
     }
   ]
 }

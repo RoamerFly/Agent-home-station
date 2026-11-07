@@ -12,6 +12,12 @@
       "title": "作品任务",
       "fields": [],
       "action": "owner-publication-tasks"
+    },
+    {
+      "id": "interaction-tasks",
+      "title": "互动任务",
+      "fields": [],
+      "action": "owner-interaction-tasks"
     }
   ]
 }

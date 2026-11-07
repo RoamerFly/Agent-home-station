@@ -70,7 +70,7 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all := []mcptools.Tool{}
 	if t.publications != nil && t.run != nil {
-		all = append(all, localPublicationTool())
+		all = append(all, localPublicationTool(), localInteractionTool())
 	}
 	if t.observations.HasDiscoverable(ctx) {
 		all = append(all, localAppObservationTool())
@@ -107,6 +107,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if name == localInteractionToolName {
+		return t.callInteraction(ctx, raw)
+	}
 	if name == localPublicationToolName {
 		return t.callPublication(ctx, raw)
 	}

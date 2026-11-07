@@ -75,11 +75,11 @@ def verify(binary, output):
                             assert body == {"action": "begin", "revision": revision, "approve_profile": True}
                             begin_count += 1
                             revision += 1
-                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "comments_enabled": False, "publish_enabled": False}
+                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "comments_enabled": False, "likes_enabled": False, "replies_enabled": False, "publish_enabled": False}
                         elif action == "confirm":
                             assert body == {"action": "confirm", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
-                            view = {"revision": revision, "state": "saved", "active": False, "available": True, "confirmed_at": "2030-01-02T03:04:05Z", "read_enabled": False, "read_scope": "home", "comments_enabled": False, "publish_enabled": False}
+                            view = {"revision": revision, "state": "saved", "active": False, "available": True, "confirmed_at": "2030-01-02T03:04:05Z", "read_enabled": False, "read_scope": "home", "comments_enabled": False, "likes_enabled": False, "replies_enabled": False, "publish_enabled": False}
                         elif action == "set_publish":
                             assert body == {"action": "set_publish", "revision": revision, "allow_publish": True}
                             assert view["state"] == "saved" and not view["active"] and "attempt_id" not in view
@@ -89,7 +89,7 @@ def verify(binary, output):
                             assert body == {"action": "begin_creator", "revision": revision, "approve_profile": True}
                             begin_count += 1
                             revision += 1
-                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "comments_enabled": False, "publish_enabled": False}
+                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "comments_enabled": False, "likes_enabled": False, "replies_enabled": False, "publish_enabled": False}
                         elif action == "set_read":
                             assert set(body) <= {"action", "revision", "allow_read", "read_scope", "allow_playback", "allow_audio", "allow_visual", "allow_comments"}
                             assert isinstance(body["allow_read"], bool)
@@ -124,15 +124,29 @@ def verify(binary, output):
                             audio_enabled = body.get("allow_audio", view.get("audio_enabled", False)) if body["allow_read"] and read_scope == "home_and_videos" else False
                             visual_enabled = body.get("allow_visual", view.get("visual_enabled", False)) if body["allow_read"] and read_scope == "home_and_videos" else False
                             comments_enabled = body.get("allow_comments", view.get("comments_enabled", False)) if body["allow_read"] and read_scope == "home_and_videos" else False
-                            view = {**view, "revision": revision, "read_enabled": body["allow_read"], "read_scope": read_scope, "playback_enabled": playback_enabled, "audio_enabled": audio_enabled, "visual_enabled": visual_enabled, "comments_enabled": comments_enabled}
+                            likes_enabled = view.get("likes_enabled", False) if body["allow_read"] and read_scope == "home_and_videos" else False
+                            replies_enabled = view.get("replies_enabled", False) if comments_enabled else False
+                            view = {**view, "revision": revision, "read_enabled": body["allow_read"], "read_scope": read_scope, "playback_enabled": playback_enabled, "audio_enabled": audio_enabled, "visual_enabled": visual_enabled, "comments_enabled": comments_enabled, "likes_enabled": likes_enabled, "replies_enabled": replies_enabled}
+                        elif action == "set_interactions":
+                            assert set(body) <= {"action", "revision", "allow_likes", "allow_replies"}
+                            assert any(key in body for key in ("allow_likes", "allow_replies"))
+                            assert all(isinstance(body[key], bool) for key in ("allow_likes", "allow_replies") if key in body)
+                            assert view["state"] == "saved" and not view["active"] and "attempt_id" not in view
+                            assert view.get("read_enabled") is True and view.get("read_scope") == "home_and_videos"
+                            if body.get("allow_replies") is True:
+                                assert view.get("comments_enabled") is True, "回复评论必须保留评论读取依赖"
+                            revision += 1
+                            view = {**view, "revision": revision,
+                                    "likes_enabled": body.get("allow_likes", view.get("likes_enabled", False)),
+                                    "replies_enabled": body.get("allow_replies", view.get("replies_enabled", False))}
                         elif action == "clear":
                             assert body == {"action": "clear", "revision": revision, "approve_profile": True}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "comments_enabled": False, "publish_enabled": False}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "comments_enabled": False, "likes_enabled": False, "replies_enabled": False, "publish_enabled": False}
                         elif action == "cancel":
                             assert body == {"action": "cancel", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "comments_enabled": False, "publish_enabled": False}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "comments_enabled": False, "likes_enabled": False, "replies_enabled": False, "publish_enabled": False}
                         else:
                             raise AssertionError(f"unexpected web-login action: {action}")
                         fulfill_json(view)(route)
@@ -218,8 +232,12 @@ def verify(binary, output):
                     comments = page.get_by_label("允许读取视频评论", exact=True)
                     assert not comments.is_checked(), "扩大网页读取范围不能自动打开评论读取"
                     assert not comments.is_disabled(), "网页可用时主人可单独开启评论读取"
+                    likes = page.get_by_label("允许点赞", exact=True)
+                    replies = page.get_by_label("允许回复评论", exact=True)
+                    assert not likes.is_checked(), "扩大网页读取范围不能自动打开点赞"
+                    assert not replies.is_checked() and replies.is_disabled(), "回复评论必须先取得评论读取许可"
                     assert visual.is_disabled(), "视觉工具未就绪时不能误启用画面分析"
-                    page.get_by_text("本机视觉工具尚未就绪，请先启用并配置媒体理解。", exact=True).wait_for()
+                    page.get_by_text("本机视觉工具尚未就绪，请先启用并配置媒体理解。", exact=False).wait_for()
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-visual-unavailable-{suffix}.png"))
                     visual_ready = True
                     view["visual_ready"] = True
@@ -264,6 +282,23 @@ def verify(binary, output):
                     page.evaluate("window.fixtureDelayWebLogin = false")
                     page.get_by_text("已允许读取视频评论。", exact=True).wait_for()
                     assert comments.is_checked() and audio.is_checked() and playback.is_checked(), "评论读取不得覆盖现有媒体许可"
+                    likes = page.get_by_label("允许点赞", exact=True)
+                    replies = page.get_by_label("允许回复评论", exact=True)
+                    assert not replies.is_disabled(), "评论读取保存后应允许主人单独开启回复评论"
+                    page.evaluate("window.fixtureDelayWebLogin = true")
+                    likes.evaluate("node => node.click()")
+                    page.get_by_label("允许点赞", exact=True).wait_for(state="attached")
+                    assert page.get_by_label("允许点赞", exact=True).is_disabled(), "保存点赞许可时必须禁用控件"
+                    assert page.get_by_label("允许回复评论", exact=True).is_disabled(), "保存点赞许可时必须同时禁用相关互动控件"
+                    page.evaluate("window.fixtureDelayWebLogin = false")
+                    page.get_by_text("已允许点赞。", exact=True).wait_for()
+                    assert view["likes_enabled"] is True and view["replies_enabled"] is False, "点赞保存不能覆盖回复许可"
+                    page.get_by_label("允许回复评论", exact=True).check()
+                    page.get_by_text("已允许回复视频评论。", exact=True).wait_for()
+                    assert view["likes_enabled"] is True and view["replies_enabled"] is True, "回复许可必须独立保存"
+                    replies.scroll_into_view_if_needed()
+                    assert_no_horizontal_overflow(page, f"{width}-pixel Douyin interaction permissions")
+                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-interactions-{suffix}.png"))
                     audio.uncheck()
                     page.get_by_text("已停止视频音轨转写。", exact=True).wait_for()
                     assert playback.is_checked(), "撤销转写不能撤销播放观察"
@@ -290,6 +325,8 @@ def verify(binary, output):
                     assert view["audio_enabled"] is False
                     assert view["visual_enabled"] is False
                     assert view["comments_enabled"] is False
+                    assert view["likes_enabled"] is False
+                    assert view["replies_enabled"] is False
                     assert playback.count() == 0, "降级为仅首页时应移除播放许可控件"
                     assert audio.count() == 0, "降级为仅首页时应移除音轨许可控件"
                     assert visual.count() == 0, "降级为仅首页时应移除画面分析许可控件"
@@ -342,6 +379,8 @@ def verify(binary, output):
                     assert view["playback_enabled"] is False, "重新登录必须撤销播放许可"
                     assert view["audio_enabled"] is False, "重新登录必须撤销音轨许可"
                     assert view["visual_enabled"] is False, "重新登录必须撤销画面分析许可"
+                    assert view["likes_enabled"] is False, "重新登录必须撤销点赞许可"
+                    assert view["replies_enabled"] is False, "重新登录必须撤销回复评论许可"
                     assert view["publish_enabled"] is False, "重新登录必须撤销普通账号发布许可"
                     assert playback.count() == 0
                     assert audio.count() == 0
@@ -358,7 +397,7 @@ def verify(binary, output):
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
                     page.get_by_role("button", name="取消本次登录", exact=True).click()
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
-                    assert len(requests) == 31, f"unexpected web-login request count: {len(requests)}"
+                    assert len(requests) == 33, f"unexpected web-login request count: {len(requests)}"
                     assert not dialogs, "网页登录操作不得弹出浏览器原生确认框"
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin web login")
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-{suffix}.png"))

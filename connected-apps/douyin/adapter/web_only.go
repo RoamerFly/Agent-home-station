@@ -11,6 +11,7 @@ import (
 type WebApp struct {
 	reader      *SearchApp
 	publication WebPublicationBridge
+	interaction apphost.InteractionProvider
 }
 
 func NewWebOnly(web WebReadConnection) *WebApp {

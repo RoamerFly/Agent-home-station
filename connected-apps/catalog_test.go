@@ -250,10 +250,10 @@ func TestDouyinSourceDeclaresOnlyOrdinaryAccountRoutes(t *testing.T) {
 		} `json:"browser_routes"`
 	}
 	raw, err := descriptors.ReadFile("douyin/app.json")
-	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 5 {
+	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 8 {
 		t.Fatal("ordinary browser routes missing", err)
 	}
-	for i, capability := range []string{"observation.page-text", "observation.page-text", "observation.web-playback", "observation.web-audio", "observation.web-visual"} {
+	for i, capability := range []string{"observation.page-text", "observation.page-text", "observation.web-playback", "observation.web-audio", "observation.web-visual", "observation.web-comments", "interaction.web-like", "interaction.web-reply-comment"} {
 		route := browser.Routes[i]
 		want := "https://www.douyin.com/video/{video_id}"
 		if i == 0 {

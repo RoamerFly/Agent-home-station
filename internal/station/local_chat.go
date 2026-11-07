@@ -220,6 +220,7 @@ func (h *localChatService) routes(s *websession.Store, mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/local/model", s.Protect(h.modelSave))
 	h.appObservationRoutes(s, mux)
 	h.publicationRoutes(s, mux)
+	h.interactionRoutes(s, mux)
 	h.liveRoutes(s, mux)
 }
 

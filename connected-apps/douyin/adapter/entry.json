@@ -58,6 +58,22 @@
       "requires_playback": false
     }
   },
+  "web_interaction": {
+    "connection": "web-page-text",
+    "authentication": "host-owned-saved-web-login",
+    "owner_opt_in": {
+      "likes": "web-like-actions",
+      "replies": "web-reply-comments"
+    },
+    "kinds": [
+      "like",
+      "reply_comment"
+    ],
+    "task_ledger": "host-owned-application-job-and-manifest",
+    "comment_parent_proof": "host-issued-comment-source-version",
+    "submit": "prepare-and-grant-before-durable-submission",
+    "reconcile": "query-only-after-submission"
+  },
   "web_publication": {
     "connection": "web-page-text",
     "authentication": "host-owned-saved-web-login",
