@@ -1685,8 +1685,10 @@
       } finally { busy = false; }
     }
     function render(value) {
-      const status = value.installed ? (value.enabled ? "已启用，按需运行" : "已停用") : "尚未安装";
+      let status = value.installed ? (value.enabled ? "已启用，按需运行" : "已停用") : "尚未安装";
+      if (media && value.enabled && value.local_asr_ready === false) status = "已启用 · 本机识别未就绪";
       content.replaceChildren(appElement("small", value.runtime_ready ? status : `${status} · 缺少 Windows 隔离工具运行环境`));
+      if (media && value.local_asr_ready === false) content.append(appElement("small", "请先检查项目工具中的本地媒体识别资源。", "share-reader-error"));
       if (!value.installed) {
         const explanation = media ? "仅处理当前连接已授权的视频。实际帧或音轨通过宿主代理发送到配置的模型接口。" : "授权后，只为当前微信连接解析原卡片。";
         const approval = media ? { grant_media: true } : { grant_network: true };

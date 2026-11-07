@@ -281,6 +281,24 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	if values := localMedia["configuration"].(map[string]any)["values"].(map[string]any); values["asr_backend"] != "local" || values["vision_model"] != "synthetic-vision" {
 		t.Fatal("local backend choice replaced the vision configuration", localMedia)
 	}
+	if localMedia["local_asr_ready"] != true {
+		t.Fatal("ready local ASR was not reported", localMedia)
+	}
+	availableASR := mediaHost.localASR
+	mediaHost.localASR = stationLocalASR{}
+	request(f, "PUT", mediaOne, map[string]any{"action": "enable", "revision": localMedia["revision"]}, true, 409)
+	unavailableMedia := request(f, "GET", mediaOne, nil, false, 200)
+	if unavailableMedia["enabled"] != false || unavailableMedia["local_asr_ready"] != false || unavailableMedia["local_asr_reason"] == nil || unavailableMedia["revision"] != localMedia["revision"] {
+		t.Fatal("unavailable local ASR was enabled or reported ready", unavailableMedia)
+	}
+	mediaHost.localASR = availableASR
+	enabledMedia := request(f, "PUT", mediaOne, map[string]any{"action": "enable", "revision": localMedia["revision"]}, true, 200)
+	mediaHost.localASR = stationLocalASR{}
+	if view := request(f, "GET", mediaOne, nil, false, 200); view["enabled"] != true || view["local_asr_ready"] != false {
+		t.Fatal("ASR revocation did not change the connection readiness", view)
+	}
+	request(f, "PUT", mediaOne, map[string]any{"action": "disable", "revision": enabledMedia["revision"]}, true, 200)
+	mediaHost.localASR = availableASR
 	if other := request(f, "GET", mediaTwo, nil, false, 200); other["installed"] != false || other["configuration"] != nil {
 		t.Fatal("cross-connection media tool leaked", other)
 	}

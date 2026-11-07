@@ -1372,6 +1372,8 @@ def verify(binary, output):
                         else:
                             assert body["revision"] == media["revision"]
                             media.update(enabled=body["action"] == "enable", revision=media["revision"] + 1)
+                    if media.get("configuration", {}).get("values", {}).get("asr_backend") == "local":
+                        media["local_asr_ready"] = False
                     fulfill_json(media)(route)
 
                 page.route(status_pattern + "/media-understanding", media_settings)
@@ -1403,6 +1405,11 @@ def verify(binary, output):
                     page.get_by_role("button", name="保存媒体设置").click()
                 expect(page.get_by_role("button", name="保存媒体设置")).to_be_enabled()
                 assert media["configuration"]["values"]["asr_backend"] == "local"
+                expect(page.get_by_text("请先检查项目工具中的本地媒体识别资源。", exact=True)).to_be_visible()
+                page.set_viewport_size({"width": 375, "height": 780})
+                assert_no_horizontal_overflow(page, "local ASR resource warning")
+                page.screenshot(path=str(output / "apps-local-asr-unavailable-narrow.png"), full_page=True)
+                page.set_viewport_size({"width": 1280, "height": 800})
                 page.get_by_label("语音识别方式", exact=True).select_option("remote")
                 assert page.get_by_label("语音识别接口地址", exact=True).input_value() == "https://asr.example/transcriptions", "switching back must retain remote ASR settings"
                 page.get_by_text("媒体理解", exact=True).click()

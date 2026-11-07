@@ -725,6 +725,8 @@ python -B scripts/test_station_cutover_cli.py --binary 'E:\AgentHomePreview\agen
 
 本地媒体识别启用前会检查模型、SDK、解释器和资源登记；缺少文件时不保存新的识别配置。启用后，工具列表也核对资源与授权，资源被移走时显示未就绪及原因。Windows 识别进程对已核验的长路径使用扩展路径格式，兼容安装路径中包含完整鱼身份与工具摘要的情况。
 
+微信连接选择本机识别后，保存和启用媒体理解都会核对这项站点资源。连接详情中的“已启用”表示设置状态，本机识别缺失会单独显示未就绪提示；已保存的视觉设置仍保留。恢复站点资源后刷新详情，再按原配置启用即可。
+
 已有本机 SenseVoice 资源时，可设置 `AHS_LOCAL_ASR_RESOURCES` 为包含 `public_workspace` 的资源目录，`AHS_LOCAL_PROJECT_TOOL_RUNTIME_ROOT` 为候选发行包的 `runtimes`，运行 `go test ./internal/station -run '^TestLiveLocalStationASRThroughWindowsIsolation$' -v -count=1`。该回归在新建的隔离身份下通过管理接口安装、启用工具，检查一秒合成静音确认为无人声，不连接模型提供商或微信。额外设置 `AHS_LOCAL_ASR_SYNTHETIC_WAV` 可以传入本机合成的 16 kHz 单声道 PCM16 英文测试录音，内容包含 “local speech recognition test”，检查识别链路。不要传入真实聊天录音作为仓库夹具。
 
 取得视频后，`wechat_video_observe(message_id,asset_id,mode,...)` 使用原返回的两个编号。画面模式 `mode=frames` 从 `start_frame` 起按 `step` 选择帧，返回实际索引与时间戳，从 `next_start_frame` 续读。步长为 1 时连续读取，视觉模型截断的批次会明确标记。音轨模式 `mode=audio` 从 `start_seconds` 起转写，按 `next_start_seconds` 续读。长区间按 PCM 传输上限分页，结果区分缺少音轨、该区间无音频、无可识别词和调用失败。模型只收到所选帧或 PCM 页，微信原件留在本机连接的私有目录。需要处理真实资料时，先确认该连接和所用模型服务的授权。

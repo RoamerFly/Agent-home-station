@@ -132,6 +132,19 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 				}
 				_, err = store.SaveConfiguration(ctx, plugin, input.Config)
 			case "enable":
+				if plugin == localasr.PluginID {
+					configuration, configErr := store.Configuration(ctx, plugin)
+					if configErr != nil {
+						websession.Fail(w, 503, "媒体理解配置暂不可读")
+						return
+					}
+					if backend, _ := stationASRBackend(configuration.Values); backend == "local" {
+						if _, err := host.localASR.ready(ctx); err != nil {
+							websession.Fail(w, 409, "本机识别资源未就绪，请先检查项目工具中的本地媒体识别。")
+							return
+						}
+					}
+				}
 				err = host.controller.EnableOnDemand(ctx, plugin, input.Revision)
 			case "disable":
 				err = host.controller.Stop(ctx, plugin, input.Revision)
@@ -161,6 +174,13 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 	}
 	view["installed"], view["enabled"], view["revision"], view["version"] = true, item.Enabled, item.Revision, item.Package.Version
 	view["configuration"] = configuration
+	if backend, _ := stationASRBackend(configuration.Values); plugin == localasr.PluginID && backend == "local" {
+		_, err := host.localASR.ready(ctx)
+		view["local_asr_ready"] = err == nil
+		if err != nil {
+			view["local_asr_reason"] = "本机识别资源未就绪，请检查项目工具中的本地媒体识别。"
+		}
+	}
 	websession.Respond(w, 200, view)
 }
 
