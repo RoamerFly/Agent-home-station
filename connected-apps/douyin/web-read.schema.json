@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "普通抖音网页登录与读取的宿主管理输入",
+  "description": "仅说明鉴权主人接口的输入；模型、应用源码或此声明不能授予权限。已有许可在省略可选字段时由宿主保留，新许可默认关闭。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action", "revision"],
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["begin", "confirm", "cancel", "clear", "set_read"]
+    },
+    "revision": {"type": "integer", "minimum": 0},
+    "attempt_id": {"type": "string"},
+    "approve_profile": {"type": "boolean"},
+    "allow_read": {"type": "boolean"},
+    "read_scope": {"type": "string", "enum": ["home", "home_and_videos"]},
+    "allow_playback": {
+      "type": "boolean",
+      "description": "单独允许静音播放观察，须已允许首页及视频页文字。省略时不扩大原许可。"
+    },
+    "allow_audio": {
+      "type": "boolean",
+      "description": "单独允许本机音轨读取与转写，须已允许首页及视频页文字且本机识别就绪；不要求允许播放。省略时不扩大原许可。"
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"action": {"enum": ["begin", "clear"]}}},
+      "then": {"required": ["approve_profile"], "properties": {"approve_profile": {"const": true}}}
+    },
+    {
+      "if": {"properties": {"action": {"enum": ["confirm", "cancel"]}}},
+      "then": {"required": ["attempt_id"], "properties": {"attempt_id": {"minLength": 1}}}
+    },
+    {
+      "if": {"properties": {"action": {"const": "set_read"}}},
+      "then": {"required": ["allow_read"]}
+    },
+    {
+      "if": {
+        "anyOf": [
+          {"required": ["allow_playback"], "properties": {"allow_playback": {"const": true}}},
+          {"required": ["allow_audio"], "properties": {"allow_audio": {"const": true}}}
+        ]
+      },
+      "then": {
+        "required": ["allow_read"],
+        "properties": {"action": {"const": "set_read"}, "allow_read": {"const": true}, "read_scope": {"const": "home_and_videos"}}
+      }
+    }
+  ]
+}

@@ -46,6 +46,7 @@ def verify(binary, output):
                     late_401 = False
                     scope_conflict = False
                     playback_conflict = False
+                    asr_ready = False
                     get_count = 0
                     # Older station responses did not include read_enabled; the UI must treat that as false.
                     view = {"revision": revision, "state": "unconfigured", "active": False, "available": True}
@@ -69,17 +70,22 @@ def verify(binary, output):
                             assert body == {"action": "begin", "revision": revision, "approve_profile": True}
                             begin_count += 1
                             revision += 1
-                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home", "playback_enabled": False}
+                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False}
                         elif action == "confirm":
                             assert body == {"action": "confirm", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
                             view = {"revision": revision, "state": "saved", "active": False, "available": True, "confirmed_at": "2030-01-02T03:04:05Z", "read_enabled": False, "read_scope": "home"}
                         elif action == "set_read":
-                            assert set(body) <= {"action", "revision", "allow_read", "read_scope", "allow_playback"}
+                            assert set(body) <= {"action", "revision", "allow_read", "read_scope", "allow_playback", "allow_audio"}
                             assert isinstance(body["allow_read"], bool)
                             assert "allow_playback" not in body or isinstance(body["allow_playback"], bool)
+                            assert "allow_audio" not in body or isinstance(body["allow_audio"], bool)
+                            assert not ("allow_audio" in body and "allow_playback" in body), "每个开关应只提交自己的许可，不覆盖另一项"
                             assert "read_scope" not in body or body["read_scope"] in ("home", "home_and_videos")
                             assert view["state"] == "saved" and not view["active"] and "attempt_id" not in view
+                            if body.get("allow_audio") is True and not asr_ready:
+                                route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "本机语音识别工具未就绪，请先启用并配置识别模型。"}, ensure_ascii=False))
+                                return
                             if playback_conflict:
                                 playback_conflict = False
                                 assert body == {"action": "set_read", "revision": revision, "allow_read": True, "read_scope": "home_and_videos", "allow_playback": True}
@@ -95,15 +101,16 @@ def verify(binary, output):
                             revision += 1
                             read_scope = body.get("read_scope", view.get("read_scope", "home")) if body["allow_read"] else "home"
                             playback_enabled = body.get("allow_playback", view.get("playback_enabled", False)) if body["allow_read"] and read_scope == "home_and_videos" else False
-                            view = {**view, "revision": revision, "read_enabled": body["allow_read"], "read_scope": read_scope, "playback_enabled": playback_enabled}
+                            audio_enabled = body.get("allow_audio", view.get("audio_enabled", False)) if body["allow_read"] and read_scope == "home_and_videos" else False
+                            view = {**view, "revision": revision, "read_enabled": body["allow_read"], "read_scope": read_scope, "playback_enabled": playback_enabled, "audio_enabled": audio_enabled}
                         elif action == "clear":
                             assert body == {"action": "clear", "revision": revision, "approve_profile": True}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False}
                         elif action == "cancel":
                             assert body == {"action": "cancel", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False}
                         else:
                             raise AssertionError(f"unexpected web-login action: {action}")
                         fulfill_json(view)(route)
@@ -123,6 +130,7 @@ def verify(binary, output):
                     assert page.get_by_role("button", name="允许读取首页文字", exact=True).count() == 0
                     assert page.get_by_label("读取范围", exact=True).count() == 0
                     assert page.get_by_label("允许静音观察视频播放", exact=True).count() == 0
+                    assert page.get_by_label("允许本机转写视频音轨", exact=True).count() == 0
                     assert page.get_by_text("账号已验证", exact=True).count() == 0
                     assert page.get_by_text("已取得开放平台接口权限", exact=False).count() == 0
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
@@ -145,23 +153,47 @@ def verify(binary, output):
                     scope = page.get_by_label("读取范围", exact=True)
                     assert scope.input_value() == "home"
                     assert page.get_by_label("允许静音观察视频播放", exact=True).count() == 0
+                    assert page.get_by_label("允许本机转写视频音轨", exact=True).count() == 0
                     scope.select_option("home_and_videos")
                     page.get_by_text("视频页文字不等于音轨或完整观看", exact=False).wait_for()
                     assert scope.input_value() == "home_and_videos"
-                    # An older wide-text response has no playback flag; reopening must not grant it.
+                    # Older wide-text responses have no media flags; reopening must not grant either.
                     view.pop("playback_enabled", None)
+                    view.pop("audio_enabled", None)
                     page.locator("#app-dialog-close").click()
                     open_application(page, "抖音")
                     playback = page.get_by_label("允许静音观察视频播放", exact=True)
                     playback.wait_for()
                     assert not playback.is_checked(), "扩大文字范围不得自动开启播放许可；旧状态缺省关闭"
                     assert "allow_playback" not in requests[-1]
+                    assert "allow_audio" not in requests[-1]
+                    audio = page.get_by_label("允许本机转写视频音轨", exact=True)
+                    assert not audio.is_checked(), "旧状态缺省关闭音轨许可，扩大文字范围不能自动打开"
+                    previous_revision = revision
+                    audio.click()
+                    page.get_by_text("本机语音识别工具未就绪，请先启用并配置识别模型。", exact=True).first.wait_for()
+                    page.locator(".douyin-web-audio-label input:not(:disabled)").wait_for()
+                    assert page.get_by_text("本机语音识别工具未就绪，请先启用并配置识别模型。", exact=True).count() == 1, "同一故障只在控件旁展示一次"
+                    assert revision == previous_revision and not audio.is_checked(), "识别工具未就绪时不能保存许可"
+                    assert not playback.is_checked()
+                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-audio-unavailable-{suffix}.png"))
+                    asr_ready = True
+                    audio.check()
+                    page.get_by_text("已允许本机转写视频音轨。", exact=True).wait_for()
+                    assert audio.is_checked() and not playback.is_checked(), "可以只开转写，不开播放观察"
                     playback.check()
                     page.get_by_text("已允许静音观察视频播放。", exact=True).wait_for()
                     assert view["playback_enabled"] is True
+                    assert audio.is_checked(), "开启播放观察不能覆盖转写许可"
+                    audio.uncheck()
+                    page.get_by_text("已停止视频音轨转写。", exact=True).wait_for()
+                    assert playback.is_checked(), "撤销转写不能撤销播放观察"
+                    audio.check()
+                    page.get_by_text("已允许本机转写视频音轨。", exact=True).wait_for()
                     playback.uncheck()
                     page.get_by_text("已停止静音播放观察。", exact=True).wait_for()
                     assert view["playback_enabled"] is False
+                    assert audio.is_checked(), "撤销播放观察不能撤销转写"
                     before_gets = get_count
                     playback_conflict = True
                     # A failed save intentionally restores unchecked state; use one click rather than
@@ -176,24 +208,34 @@ def verify(binary, output):
                     scope.select_option("home")
                     page.get_by_text("已允许读取抖音首页网页文字。", exact=True).wait_for()
                     assert view["playback_enabled"] is False
+                    assert view["audio_enabled"] is False
                     assert playback.count() == 0, "降级为仅首页时应移除播放许可控件"
+                    assert audio.count() == 0, "降级为仅首页时应移除音轨许可控件"
                     scope.select_option("home_and_videos")
                     playback.wait_for()
                     assert not playback.is_checked()
+                    assert not audio.is_checked()
+                    audio.check()
+                    page.get_by_text("已允许本机转写视频音轨。", exact=True).wait_for()
                     playback.check()
                     page.get_by_text("已允许静音观察视频播放。", exact=True).wait_for()
                     page.get_by_role("button", name="停止网页读取", exact=True).click()
                     page.get_by_role("button", name="允许读取首页文字", exact=True).wait_for()
                     assert view["playback_enabled"] is False and playback.count() == 0
+                    assert view["audio_enabled"] is False and audio.count() == 0
                     page.get_by_role("button", name="允许读取首页文字", exact=True).click()
                     page.get_by_label("读取范围", exact=True).wait_for()
                     scope.select_option("home_and_videos")
                     playback.wait_for()
+                    assert not audio.is_checked()
+                    audio.check()
+                    page.get_by_text("已允许本机转写视频音轨。", exact=True).wait_for()
                     playback.check()
                     page.get_by_text("已允许静音观察视频播放。", exact=True).wait_for()
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin playback permission")
                     assert page.locator("#app-dialog").evaluate("node => node.scrollTop") == 0, "应用弹窗外层不能随内部操作滚动并裁切标题"
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-playback-{suffix}.png"))
+                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-audio-{suffix}.png"))
                     before_gets = get_count
                     scope_conflict = True
                     scope.select_option("home")
@@ -202,6 +244,7 @@ def verify(binary, output):
                     assert get_count > before_gets
                     assert page.get_by_label("读取范围", exact=True).input_value() == "home_and_videos", "失败后必须保留服务端读取范围"
                     assert playback.is_checked()
+                    assert audio.is_checked()
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-read-{suffix}.png"))
                     # A saved profile can be opened again for a later re-login.
                     page.get_by_role("button", name="重新打开登录窗口", exact=True).click()
@@ -209,7 +252,9 @@ def verify(binary, output):
                     assert view["read_enabled"] is False, "重新登录必须撤销上一账号的首页文字读取许可"
                     assert view["read_scope"] == "home", "重新登录必须恢复默认读取范围"
                     assert view["playback_enabled"] is False, "重新登录必须撤销播放许可"
+                    assert view["audio_enabled"] is False, "重新登录必须撤销音轨许可"
                     assert playback.count() == 0
+                    assert audio.count() == 0
                     view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-2", "read_enabled": False, "read_scope": "home"}
                     page.locator("#app-dialog-close").click()
                     open_application(page, "抖音")
@@ -222,7 +267,7 @@ def verify(binary, output):
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
                     page.get_by_role("button", name="取消本次登录", exact=True).click()
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
-                    assert len(requests) == 20
+                    assert len(requests) == 26
                     assert not dialogs, "网页登录操作不得弹出浏览器原生确认框"
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin web login")
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-{suffix}.png"))

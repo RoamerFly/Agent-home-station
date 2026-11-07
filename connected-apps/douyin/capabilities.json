@@ -78,6 +78,14 @@
       "requires_owner_setting": "web-sample-playback"
     },
     {
+      "id": "observation.web-audio",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在主人独立允许后取得确切视频原件，经本机 FFmpeg 和已启用的本机语音识别按窗口转写，不表示画面已理解或视频已看完",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-transcribe-audio"
+    },
+    {
       "id": "publication.video",
       "implementation": "ready",
       "description": "显式授权后分阶段上传、创建并按原作品标识核对抖音视频",

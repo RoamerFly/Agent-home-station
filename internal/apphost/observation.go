@@ -64,17 +64,19 @@ type ObservationGrant struct {
 
 type ObservationRequest struct {
 	ObservationAccess
-	Cursor string `json:"cursor,omitempty"`
-	Limit  int    `json:"limit,omitempty"`
+	Cursor  string `json:"cursor,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+	Refresh bool   `json:"refresh,omitempty"`
 }
 type ObservationChunk struct {
-	Position          int              `json:"position"`
-	Text              string           `json:"text"`
-	SourceID          string           `json:"source_id,omitempty"`
-	SourceURL         string           `json:"source_url,omitempty"`
-	PublishedAt       string           `json:"published_at,omitempty"`
-	FollowUpContentID string           `json:"follow_up_content_id,omitempty"`
-	FollowUpField     ObservationField `json:"follow_up_field,omitempty"`
+	Position          int                `json:"position"`
+	Text              string             `json:"text"`
+	SourceID          string             `json:"source_id,omitempty"`
+	SourceURL         string             `json:"source_url,omitempty"`
+	PublishedAt       string             `json:"published_at,omitempty"`
+	FollowUpContentID string             `json:"follow_up_content_id,omitempty"`
+	FollowUpField     ObservationField   `json:"follow_up_field,omitempty"`
+	FollowUpFields    []ObservationField `json:"follow_up_fields,omitempty"`
 }
 type PlaybackInterval struct {
 	StartSeconds float64 `json:"start_seconds"`
@@ -308,7 +310,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := ctx.Err(); err != nil {
 		return ObservationResult{}, err
 	}
-	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText && in.Field != ObservationPlayback {
+	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText && in.Field != ObservationPlayback && in.Field != ObservationAudio {
 		return ObservationResult{}, ErrObservationInvalid
 	}
 	o.mu.Lock()
@@ -340,7 +342,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 		}
 		return checkpoint.result(true, false), nil
 	}
-	page, err := provider.ReadObservation(ctx, ObservationRequest{ObservationAccess: ObservationAccess{ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field}, Cursor: checkpoint.Cursor, Limit: in.Limit})
+	page, err := provider.ReadObservation(ctx, ObservationRequest{ObservationAccess: ObservationAccess{ConnectionRef: ref, ContentID: in.ContentID, Field: in.Field}, Cursor: checkpoint.Cursor, Limit: in.Limit, Refresh: in.Refresh})
 	if err != nil {
 		if ctx.Err() != nil {
 			return ObservationResult{}, ctx.Err()
@@ -483,12 +485,19 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 	}
 	position := -1
 	for _, chunk := range page.Chunks {
-		if chunk.FollowUpContentID != "" || chunk.FollowUpField != "" {
-			validNext := field == ObservationSearch && chunk.FollowUpField == ObservationPlayerEntry ||
-				field == ObservationPlayerEntry && chunk.FollowUpField == ObservationPlayback ||
-				field == ObservationPageText && (chunk.FollowUpField == ObservationPageText || chunk.FollowUpField == ObservationPlayback)
-			if !validNext || chunk.SourceID == "" || strings.TrimSpace(chunk.FollowUpContentID) == "" || len(chunk.FollowUpContentID) > 256 {
+		if chunk.FollowUpContentID != "" || chunk.FollowUpField != "" || len(chunk.FollowUpFields) > 0 {
+			if !validObservationFollowUp(field, chunk.FollowUpField) || chunk.SourceID == "" || strings.TrimSpace(chunk.FollowUpContentID) == "" || len(chunk.FollowUpContentID) > 256 || len(chunk.FollowUpFields) > 3 {
 				return errors.New("应用内容返回了无效的后续读取编号")
+			}
+			seen := map[ObservationField]bool{}
+			for _, next := range chunk.FollowUpFields {
+				if seen[next] || !validObservationFollowUp(field, next) {
+					return errors.New("应用内容返回了无效的后续读取字段")
+				}
+				seen[next] = true
+			}
+			if len(seen) > 0 && !seen[chunk.FollowUpField] {
+				return errors.New("后续默认读取字段与候选字段不一致")
 			}
 		}
 		if strings.TrimSpace(chunk.Text) == "" || chunk.Position <= position {
@@ -497,6 +506,10 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 		position = chunk.Position
 	}
 	return nil
+}
+
+func validObservationFollowUp(field, next ObservationField) bool {
+	return field == ObservationSearch && next == ObservationPlayerEntry || field == ObservationPlayerEntry && next == ObservationPlayback || field == ObservationPageText && (next == ObservationPageText || next == ObservationPlayback || next == ObservationAudio)
 }
 
 func validOwnVideoProof(page ObservationPage) bool {

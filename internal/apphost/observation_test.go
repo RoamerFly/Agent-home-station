@@ -217,6 +217,27 @@ func TestObservationSearchRefreshRestartsOnlyOnRequest(t *testing.T) {
 	}
 }
 
+func TestObservationFollowUpFieldsKeepEvidenceTypesAndDefaultConsistent(t *testing.T) {
+	page := ObservationPage{Chunks: []ObservationChunk{{Text: "精确来源的可见文字", SourceID: "source-1", FollowUpContentID: "exact-video", FollowUpField: ObservationPageText, FollowUpFields: []ObservationField{ObservationPageText, ObservationAudio, ObservationPlayback}}}, Coverage: "page", Complete: true}
+	if err := validateObservationPage(ObservationPageText, page); err != nil {
+		t.Fatal(err)
+	}
+	for _, fields := range [][]ObservationField{{ObservationAudio}, {ObservationPageText, ObservationAudio, ObservationAudio}, {ObservationPageText, ObservationComments}, {ObservationPageText, ObservationAudio, ObservationPlayback, ObservationOwnVideo}} {
+		page.Chunks[0].FollowUpFields = fields
+		if err := validateObservationPage(ObservationPageText, page); err == nil {
+			t.Fatal("invalid followup fields accepted", fields)
+		}
+	}
+	page.Chunks[0].FollowUpFields = nil
+	if err := validateObservationPage(ObservationPageText, page); err != nil {
+		t.Fatal("old single-field producer broke", err)
+	}
+	page.Chunks[0].FollowUpField = ObservationAudio
+	if err := validateObservationPage(ObservationBody, page); err == nil {
+		t.Fatal("unrelated body invented audio followup")
+	}
+}
+
 func TestOwnVideoObservationAlwaysReadsCurrentState(t *testing.T) {
 	proof := OwnVideoProof{VideoID: "post", StatusCode: 4, State: "reviewing", ObservedAt: "2026-11-06T00:00:00Z"}
 	f := &observationFixture{allowed: true, version: "v1", pages: map[string]ObservationPage{

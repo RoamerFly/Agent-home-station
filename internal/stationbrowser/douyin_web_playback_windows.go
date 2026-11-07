@@ -79,83 +79,23 @@ func validDouyinWebPlaybackTarget(raw, videoID string, fixture bool) bool {
 }
 
 func sampleDouyinWebSession(ctx context.Context, session *cdpSession, target, videoID string, sample time.Duration, authorize func() error, fixture bool) (PlaybackSample, error) {
-	var created struct {
-		TargetID string `json:"targetId"`
-	}
-	// This target is active only inside a windowless, private Edge instance.
-	// A background target can defer media loading indefinitely; no OS window
-	// or keyboard/mouse focus is created or activated by this operation.
-	if session.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "background": false}, &created) != nil || created.TargetID == "" {
-		return PlaybackSample{}, ErrPlaybackUnavailable
-	}
-	var attached struct {
-		SessionID string `json:"sessionId"`
-	}
-	if session.Call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": created.TargetID, "flatten": true}, &attached) != nil || attached.SessionID == "" {
-		return PlaybackSample{}, ErrPlaybackUnavailable
-	}
-	for _, call := range []struct {
-		method string
-		params any
-	}{
-		{"Page.enable", map[string]any{}},
-		{"Network.enable", map[string]any{}},
-		{"Runtime.enable", map[string]any{}},
-		{"Network.setBypassServiceWorker", map[string]any{"bypass": true}},
-		{"Browser.setDownloadBehavior", map[string]any{"behavior": "deny", "eventsEnabled": false}},
-		{"Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": remotePlaybackPrelude}},
-	} {
-		if session.Call(ctx, attached.SessionID, call.method, call.params, nil) != nil {
-			return PlaybackSample{}, ErrPlaybackUnavailable
-		}
-	}
-	listener := newDouyinWebDetailListener(target, videoID, attached.SessionID, fixture)
-	listener.start(ctx, session, authorize)
-	defer listener.stop()
-	if err := authorize(); err != nil {
-		return PlaybackSample{}, err
-	}
-	var nav struct {
-		FrameID    string `json:"frameId"`
-		ErrorText  string `json:"errorText"`
-		IsDownload bool   `json:"isDownload"`
-	}
-	if session.Call(ctx, attached.SessionID, "Page.navigate", map[string]any{"url": target}, &nav) != nil || nav.FrameID == "" || nav.ErrorText != "" || nav.IsDownload {
-		return PlaybackSample{}, ErrPlaybackUnavailable
-	}
-	var urls []string
-	ready := time.NewTimer(playbackStartupLimit)
-	defer ready.Stop()
-	for len(urls) == 0 {
-		if err := authorize(); err != nil {
-			return PlaybackSample{}, err
-		}
-		var err error
-		urls, err = listener.result()
-		if err != nil {
-			return PlaybackSample{}, err
-		}
-		if len(urls) > 0 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return PlaybackSample{}, ctx.Err()
-		case <-ready.C:
-			return PlaybackSample{}, ErrPlaybackUnavailable
-		case <-time.After(80 * time.Millisecond):
-		}
-	}
-	world, err := createPlaybackWorld(ctx, session, attached.SessionID, nav.FrameID)
+	page, err := openDouyinWebDetailPage(ctx, session, target, videoID, authorize, fixture)
 	if err != nil {
 		return PlaybackSample{}, err
 	}
+	defer page.listener.stop()
+	world, err := createPlaybackWorld(ctx, session, page.sessionID, page.frameID)
+	if err != nil {
+		return PlaybackSample{}, err
+	}
+	ready := time.NewTimer(playbackStartupLimit)
+	defer ready.Stop()
 	var state observedPlayback
 	for {
 		if err := authorize(); err != nil {
 			return PlaybackSample{}, err
 		}
-		state, err = douyinWebPlaybackState(ctx, session, attached.SessionID, world, target, urls)
+		state, err = douyinWebPlaybackState(ctx, session, page.sessionID, world, target, page.urls)
 		if err != nil {
 			return PlaybackSample{}, err
 		}
@@ -173,7 +113,7 @@ func sampleDouyinWebSession(ctx context.Context, session *cdpSession, target, vi
 		case <-time.After(80 * time.Millisecond):
 		}
 	}
-	if err := douyinWebPlaybackAction(ctx, session, attached.SessionID, world, target, urls, true); err != nil {
+	if err := douyinWebPlaybackAction(ctx, session, page.sessionID, world, target, page.urls, true); err != nil {
 		return PlaybackSample{}, err
 	}
 	started := time.Now()
@@ -186,10 +126,10 @@ func sampleDouyinWebSession(ctx context.Context, session *cdpSession, target, vi
 		if err := authorize(); err != nil {
 			return PlaybackSample{}, err
 		}
-		if _, err := listener.result(); err != nil {
+		if _, err := page.listener.result(); err != nil {
 			return PlaybackSample{}, err
 		}
-		state, err = douyinWebPlaybackState(ctx, session, attached.SessionID, world, target, urls)
+		state, err = douyinWebPlaybackState(ctx, session, page.sessionID, world, target, page.urls)
 		if err != nil || !state.Present {
 			return PlaybackSample{}, ErrPlaybackUnavailable
 		}
@@ -197,20 +137,105 @@ func sampleDouyinWebSession(ctx context.Context, session *cdpSession, target, vi
 			break
 		}
 	}
-	if err := douyinWebPlaybackAction(ctx, session, attached.SessionID, world, target, urls, false); err != nil {
+	if err := douyinWebPlaybackAction(ctx, session, page.sessionID, world, target, page.urls, false); err != nil {
 		return PlaybackSample{}, err
 	}
-	state, err = douyinWebPlaybackState(ctx, session, attached.SessionID, world, target, urls)
+	state, err = douyinWebPlaybackState(ctx, session, page.sessionID, world, target, page.urls)
 	if err != nil || !state.Present {
 		return PlaybackSample{}, ErrPlaybackUnavailable
 	}
 	if err := authorize(); err != nil {
 		return PlaybackSample{}, err
 	}
-	if _, err := listener.result(); err != nil {
+	if _, err := page.listener.result(); err != nil {
 		return PlaybackSample{}, err
 	}
 	return state.toSample(), nil
+}
+
+type douyinWebDetailPage struct {
+	sessionID, frameID string
+	urls               []string
+	listener           *douyinWebDetailListener
+}
+
+// Navigation and exact-video metadata are common to measured playback and
+// audio-source retrieval. Neither path accepts arbitrary caller-supplied URLs.
+func openDouyinWebDetailPage(ctx context.Context, session *cdpSession, target, videoID string, authorize func() error, fixture bool) (douyinWebDetailPage, error) {
+	var created struct {
+		TargetID string `json:"targetId"`
+	}
+	// This target is active only inside a windowless, private Edge instance.
+	// A background target can defer media loading indefinitely; no OS window
+	// or keyboard/mouse focus is created or activated by this operation.
+	if session.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "background": false}, &created) != nil || created.TargetID == "" {
+		return douyinWebDetailPage{}, ErrPlaybackUnavailable
+	}
+	var attached struct {
+		SessionID string `json:"sessionId"`
+	}
+	if session.Call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": created.TargetID, "flatten": true}, &attached) != nil || attached.SessionID == "" {
+		return douyinWebDetailPage{}, ErrPlaybackUnavailable
+	}
+	for _, call := range []struct {
+		method string
+		params any
+	}{
+		{"Page.enable", map[string]any{}},
+		{"Network.enable", map[string]any{}},
+		{"Runtime.enable", map[string]any{}},
+		{"Network.setBypassServiceWorker", map[string]any{"bypass": true}},
+		{"Browser.setDownloadBehavior", map[string]any{"behavior": "deny", "eventsEnabled": false}},
+		{"Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": remotePlaybackPrelude}},
+	} {
+		if session.Call(ctx, attached.SessionID, call.method, call.params, nil) != nil {
+			return douyinWebDetailPage{}, ErrPlaybackUnavailable
+		}
+	}
+	listener := newDouyinWebDetailListener(target, videoID, attached.SessionID, fixture)
+	listener.start(ctx, session, authorize)
+	keep := false
+	defer func() {
+		if !keep {
+			listener.stop()
+		}
+	}()
+	if err := authorize(); err != nil {
+		return douyinWebDetailPage{}, err
+	}
+	var nav struct {
+		FrameID    string `json:"frameId"`
+		ErrorText  string `json:"errorText"`
+		IsDownload bool   `json:"isDownload"`
+	}
+	if session.Call(ctx, attached.SessionID, "Page.navigate", map[string]any{"url": target}, &nav) != nil || nav.FrameID == "" || nav.ErrorText != "" || nav.IsDownload {
+		return douyinWebDetailPage{}, ErrPlaybackUnavailable
+	}
+	var urls []string
+	ready := time.NewTimer(playbackStartupLimit)
+	defer ready.Stop()
+	for len(urls) == 0 {
+		if err := authorize(); err != nil {
+			return douyinWebDetailPage{}, err
+		}
+		var err error
+		urls, err = listener.result()
+		if err != nil {
+			return douyinWebDetailPage{}, err
+		}
+		if len(urls) > 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return douyinWebDetailPage{}, ctx.Err()
+		case <-ready.C:
+			return douyinWebDetailPage{}, ErrPlaybackUnavailable
+		case <-time.After(80 * time.Millisecond):
+		}
+	}
+	keep = true
+	return douyinWebDetailPage{sessionID: attached.SessionID, frameID: nav.FrameID, urls: urls, listener: listener}, nil
 }
 
 type douyinWebDetailListener struct {

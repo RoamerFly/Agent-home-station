@@ -34,6 +34,7 @@ type localDouyinWebView struct {
 	ReadEnabled     bool   `json:"read_enabled"`
 	ReadScope       string `json:"read_scope"`
 	PlaybackEnabled bool   `json:"playback_enabled"`
+	AudioEnabled    bool   `json:"audio_enabled"`
 }
 
 type localDouyinWebInput struct {
@@ -44,6 +45,7 @@ type localDouyinWebInput struct {
 	AllowRead      *bool   `json:"allow_read,omitempty"`
 	ReadScope      *string `json:"read_scope,omitempty"`
 	AllowPlayback  *bool   `json:"allow_playback,omitempty"`
+	AllowAudio     *bool   `json:"allow_audio,omitempty"`
 }
 
 type localDouyinWebRecord struct {
@@ -55,6 +57,7 @@ type localDouyinWebRecord struct {
 	ReadEnabled     bool   `json:"read_enabled,omitempty"`
 	ReadScope       string `json:"read_scope,omitempty"`
 	PlaybackEnabled bool   `json:"playback_enabled,omitempty"`
+	AudioEnabled    bool   `json:"audio_enabled,omitempty"`
 }
 
 type localDouyinLoginWindow interface {
@@ -71,6 +74,8 @@ type localDouyinWebLogin struct {
 	readPage      func(context.Context, string, func() error) (stationbrowser.DouyinWebPage, error)
 	readVideo     func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
 	sampleVideo   func(context.Context, string, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
+	readMedia     func(context.Context, string, string, func() error) (stationbrowser.DouyinWebMedia, error)
+	audio         stationLocalASR
 	window        localDouyinLoginWindow
 	cancel        context.CancelFunc
 	attempt, fish string
@@ -78,6 +83,7 @@ type localDouyinWebLogin struct {
 
 func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *http.ServeMux, ctx context.Context) {
 	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo, sampleVideo: stationbrowser.SampleDouyinWebVideo,
+		readMedia: stationbrowser.ReadDouyinWebMedia, audio: stationLocalASR{version: h.localDouyinAudioVersion, transcribe: h.transcribeLocalStationAudio},
 		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
 			return stationbrowser.OpenDouyinLogin(ctx, profile)
 		}}
@@ -160,6 +166,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	if record.PlaybackEnabled && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
 		return record, errors.New("网页播放许可缺少有效的视频页读取范围，原资料保留")
 	}
+	if record.AudioEnabled && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
+		return record, errors.New("音轨读取许可缺少有效的视频页读取范围，原资料保留")
+	}
 	if record.ConfirmedAt != "" {
 		if _, err := time.Parse(time.RFC3339, record.ConfirmedAt); err != nil {
 			return record, errors.New("网页登录登记时间无效，原资料保留")
@@ -196,6 +205,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	}
 	v.ReadEnabled = record.ReadEnabled && v.State == "saved" && v.AttemptID == ""
 	v.PlaybackEnabled = v.ReadEnabled && record.PlaybackEnabled
+	v.AudioEnabled = v.ReadEnabled && record.AudioEnabled
 	return v
 }
 
@@ -263,6 +273,19 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		} else if in.AllowPlayback != nil {
 			record.PlaybackEnabled = *in.AllowPlayback
 		}
+		if in.AllowAudio != nil && *in.AllowAudio {
+			if !record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos" {
+				return fail(400, "请先允许首页及视频页文字读取，再单独允许本机音轨转写")
+			}
+			if _, err := m.audio.ready(ctx); err != nil {
+				return fail(503, "本机音轨识别尚未就绪，请在项目工具中启用本地媒体识别并核对解码器与模型资源；许可未保存")
+			}
+		}
+		if !record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos" {
+			record.AudioEnabled = false
+		} else if in.AllowAudio != nil {
+			record.AudioEnabled = *in.AllowAudio
+		}
 		if save() != nil {
 			return fail(503, "网页读取授权未保存，请重新读取后核对")
 		}
@@ -306,6 +329,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.ReadEnabled = false
 		record.ReadScope = ""
 		record.PlaybackEnabled = false
+		record.AudioEnabled = false
 		if save() != nil {
 			return fail(503, "无法保存网页登录登记，未启动浏览器")
 		}
@@ -353,6 +377,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			record.ReadEnabled = false
 			record.ReadScope = ""
 			record.PlaybackEnabled = false
+			record.AudioEnabled = false
 			if save() != nil {
 				return fail(503, "网页读取授权未能撤销，尚未清理资料")
 			}

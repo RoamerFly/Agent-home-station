@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func TestCommentsResumeWithExactSourceAfterRestart(t *testing.T) {
 	in := apphost.ObservationInput{AppID: ID, ConnectionID: connectionID, ContentID: fixtureBV, Field: apphost.ObservationComments, Limit: 2}
 	first, err := observer.Read(t.Context(), in)
 	if err != nil || first.Complete || first.Resumed || len(first.Chunks) != 1 ||
-		first.Chunks[0] != (apphost.ObservationChunk{Position: 0, Text: "first fixture", SourceID: "9007199254740993", PublishedAt: "2025-01-01T00:00:00Z"}) ||
+		!reflect.DeepEqual(first.Chunks[0], apphost.ObservationChunk{Position: 0, Text: "first fixture", SourceID: "9007199254740993", PublishedAt: "2025-01-01T00:00:00Z"}) ||
 		!strings.Contains(first.Coverage, "1 条没有文字") {
 		t.Fatalf("first page: %#v, %v", first, err)
 	}

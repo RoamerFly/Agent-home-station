@@ -2155,11 +2155,13 @@
       (typeof value.read_enabled === "undefined" || typeof value.read_enabled === "boolean") &&
       (typeof value.read_scope === "undefined" || ["home", "home_and_videos"].includes(value.read_scope)) &&
       (typeof value.playback_enabled === "undefined" || typeof value.playback_enabled === "boolean") &&
+      (typeof value.audio_enabled === "undefined" || typeof value.audio_enabled === "boolean") &&
       (typeof value.reason === "undefined" || typeof value.reason === "string");
   }
   function douyinWebReadEnabled(value) { return value?.read_enabled === true; }
   function douyinWebReadScope(value) { return value?.read_scope === "home_and_videos" ? "home_and_videos" : "home"; }
   function douyinWebPlaybackEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.playback_enabled === true; }
+  function douyinWebAudioEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.audio_enabled === true; }
   function stopDouyinWebLoginPolling(current = apps) {
     const web = current?.douyinWebLogin;
     if (!web) return;
@@ -2216,7 +2218,7 @@
     if (value?.state === "unconfirmed" && value.attempt_id) return ["等待主人确认", "请确认新窗口已完成登录，再保存资料。"];
     return states[value?.state] || ["网页登录状态暂不可读", "刷新后可重新查看。"];
   }
-  async function updateDouyinWebLogin(current, action, allowRead, readScope, explicitReadScope, allowPlayback) {
+  async function updateDouyinWebLogin(current, action, allowRead, readScope, explicitReadScope, allowPlayback, allowAudio) {
     const web = current?.douyinWebLogin, value = web?.value;
     if (!web || !value || current !== apps || web.applying || !Number.isFinite(Number(value.revision))) return;
     if ((action === "confirm" || action === "cancel") && !value.attempt_id) return;
@@ -2231,6 +2233,7 @@
       body.allow_read = allowRead === true;
       if (allowRead === true && explicitReadScope === true) body.read_scope = readScope === "home_and_videos" ? "home_and_videos" : "home";
       if (typeof allowPlayback === "boolean") body.allow_playback = allowPlayback;
+      if (typeof allowAudio === "boolean") body.allow_audio = allowAudio;
     }
     let reloadAfterConflict = false;
     try {
@@ -2239,12 +2242,20 @@
       if (!validDouyinWebLogin(updated)) throw new Error("网页登录状态返回格式无效，请刷新后重试。");
       web.value = updated;
       web.loaded = true;
-      appFeedback(action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : action === "set_read" ? (typeof allowPlayback === "boolean" ? (allowPlayback ? "已允许静音观察视频播放。" : "已停止静音播放观察。") : allowRead ? (readScope === "home_and_videos" ? "已允许读取首页及视频页文字。" : "已允许读取抖音首页网页文字。") : "已停止网页读取。") : "已打开网页登录窗口。");
+      let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : "已打开网页登录窗口。";
+      if (action === "set_read") {
+        if (typeof allowAudio === "boolean") feedback = allowAudio ? "已允许本机转写视频音轨。" : "已停止视频音轨转写。";
+        else if (typeof allowPlayback === "boolean") feedback = allowPlayback ? "已允许静音观察视频播放。" : "已停止静音播放观察。";
+        else feedback = allowRead ? (readScope === "home_and_videos" ? "已允许读取首页及视频页文字。" : "已允许读取抖音首页网页文字。") : "已停止网页读取。";
+      }
+      appFeedback(feedback);
     } catch (error) {
       if (current === apps && web.generation === generation && !appSessionExpired([{ status: "rejected", reason: error }])) {
         web.error = error.message || "网页登录操作未完成。";
-        appFeedback(web.error, true);
         reloadAfterConflict = error.status === 409;
+        // Inline failures stay beside their controls; conflict feedback remains
+        // visible after the automatic reload replaces the inline state.
+        appFeedback(reloadAfterConflict ? web.error : "", reloadAfterConflict);
       }
     } finally {
       if (current === apps && web.generation === generation) {
@@ -2320,7 +2331,7 @@
           scopeLabel.append(scope);
           actions.append(scopeLabel);
           if (douyinWebReadScope(value) === "home_and_videos") {
-            const playbackLabel = appElement("label", "", "douyin-web-playback-label");
+            const playbackLabel = appElement("label", "", "douyin-web-media-label douyin-web-playback-label");
             const playback = document.createElement("input");
             playback.type = "checkbox";
             playback.checked = douyinWebPlaybackEnabled(value);
@@ -2328,7 +2339,15 @@
             playback.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", true, "home_and_videos", true, playback.checked); });
             playbackLabel.append(playback, document.createTextNode("允许静音观察视频播放"));
             actions.append(playbackLabel);
-            detail.append(appElement("p", "播放观察仅记录实际播放区间，不代替画面理解或音轨转写。", "publication-authorization-note"));
+            const audioLabel = appElement("label", "", "douyin-web-media-label douyin-web-audio-label");
+            const audio = document.createElement("input");
+            audio.type = "checkbox";
+            audio.checked = douyinWebAudioEnabled(value);
+            audio.disabled = busy || (!audio.checked && !available);
+            audio.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", true, "home_and_videos", true, undefined, audio.checked); });
+            audioLabel.append(audio, document.createTextNode("允许本机转写视频音轨"));
+            actions.append(audioLabel);
+            detail.append(appElement("p", "播放区间、音轨转写分别记录，均不代替画面理解；转写不代表观看。", "publication-authorization-note"));
           }
         }
       }

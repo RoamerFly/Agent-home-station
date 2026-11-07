@@ -12,7 +12,8 @@
     "player_entry",
     "playback",
     "account_works",
-    "page_text"
+    "page_text",
+    "audio"
   ],
   "web_read": {
     "connection": "web-page-text",
@@ -24,6 +25,19 @@
     "expanded_scope_owner_opt_in": "web-scope-home-and-videos",
     "scope_default": "home",
     "scope_expanded": "home_and_videos",
+    "owner_settings_schema": "web-read.schema.json",
+    "audio": {
+      "field": "audio",
+      "owner_opt_in": "web-transcribe-audio",
+      "source": "host-verified-video-detail-media",
+      "decoder": "host-local-ffmpeg",
+      "recognizer": "owner-enabled-local-asr",
+      "default_seconds": 60,
+      "min_seconds": 1,
+      "max_seconds": 240,
+      "pagination": "host-owned-media-hash-and-audio-window",
+      "requires_playback": false
+    },
     "playback": {
       "field": "playback",
       "owner_opt_in": "web-sample-playback",

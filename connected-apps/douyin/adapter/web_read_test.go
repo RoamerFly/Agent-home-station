@@ -221,7 +221,7 @@ func TestWebVideoPlaybackDelegatesExactHostGrantAndRequest(t *testing.T) {
 	grantHits, readHits := stub.grantHit, stub.readHit
 	for _, denied := range []apphost.ObservationAccess{
 		{ConnectionRef: ref, ContentID: WebReadContentID, Field: apphost.ObservationPlayback},
-		{ConnectionRef: ref, ContentID: videoID, Field: apphost.ObservationAudio},
+		{ConnectionRef: ref, ContentID: videoID, Field: apphost.ObservationComments},
 		{ConnectionRef: ref, ContentID: videoID, Field: apphost.ObservationTitle},
 		{ConnectionRef: ref, ContentID: WebVideoContentPrefix + "bad=padding", Field: apphost.ObservationPlayback},
 		{ConnectionRef: apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: "other-profile"}, ContentID: videoID, Field: apphost.ObservationPlayback},
@@ -265,6 +265,64 @@ func TestWebVideoPlaybackCallbacksRemainIsolatedAndDiscoveryStaysHomeText(t *tes
 	first.targets[0].Fields = []apphost.ObservationField{apphost.ObservationPageText, apphost.ObservationPlayback}
 	if _, err := firstApp.ObservationTargets(t.Context(), WebReadConnectionID); !errors.Is(err, apphost.ErrObservationForbidden) {
 		t.Fatalf("homepage playback incorrectly discoverable: %v", err)
+	}
+}
+
+func TestWebVideoAudioKeepsHostGrantProgressAndRecognitionState(t *testing.T) {
+	ref := apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: "saved-web-profile"}
+	access := apphost.ObservationAccess{ConnectionRef: ref, ContentID: WebVideoContentPrefix + "hostAudio_1-abc", Field: apphost.ObservationAudio}
+	stub := &webReadStub{connection: apphost.Connection{ID: ref.ConnectionID, AccountID: ref.AccountID, Configuration: "ready"}, present: true,
+		grant: apphost.ObservationGrant{Allowed: true, Version: "explicit-web-audio-grant"}}
+	app := New(t.TempDir()).WithWebReadConnection(stub)
+	grant, err := app.ObservationGrant(t.Context(), access)
+	if err != nil || grant != stub.grant || stub.grantHit != 1 {
+		t.Fatalf("audio grant = %#v, %v", grant, err)
+	}
+	for _, state := range []string{"transcribed", "no_recognizable_speech", "no_audio_in_range", "no_audio_track"} {
+		t.Run(state, func(t *testing.T) {
+			stub.page = apphost.ObservationPage{Coverage: "host verified audio", Complete: state == "no_audio_track", NextCursor: "host-next-window",
+				AudioProof: &apphost.AudioProof{State: state, MediaSHA256: strings.Repeat("1", 64), RequestedSeconds: 240, StartSeconds: 240, WindowEndSeconds: 480, MediaDurationSeconds: 600}}
+			if state == "no_audio_track" {
+				stub.page.NextCursor = ""
+			} else if state == "transcribed" || state == "no_recognizable_speech" {
+				stub.page.AudioProof.DecodedSeconds = 240
+			}
+			if state == "transcribed" {
+				stub.page.Chunks = []apphost.ObservationChunk{{Position: 240, Text: "合成音轨第二窗口。", SourceID: "host-audio-source"}}
+			}
+			request := apphost.ObservationRequest{ObservationAccess: access, Cursor: "host-audio-window", Limit: 240}
+			page, err := app.ReadObservation(t.Context(), request)
+			if err != nil || page.AudioProof != stub.page.AudioProof || page.NextCursor != stub.page.NextCursor || page.Complete != stub.page.Complete || len(page.Chunks) != len(stub.page.Chunks) || stub.request != request || len(page.Playback) != 0 || page.PlaybackProof != nil {
+				t.Fatalf("audio result or progress changed: %#v, %v, request=%#v", page, err, stub.request)
+			}
+		})
+	}
+	// ASR/service errors stay errors, never a fabricated no-speech result.
+	for _, failure := range []error{context.DeadlineExceeded, apphost.ErrObservationAudioUnavailable, apphost.ErrObservationAudioDecode, apphost.ErrObservationAudioTranscription, apphost.ErrObservationAudioSourceChanged} {
+		stub.page, stub.readErr = apphost.ObservationPage{}, failure
+		if page, err := app.ReadObservation(t.Context(), apphost.ObservationRequest{ObservationAccess: access, Limit: 60}); !errors.Is(err, failure) || page.AudioProof != nil {
+			t.Fatalf("audio failure %v became recognition result: %#v, %v", failure, page, err)
+		}
+	}
+	stub.grant = apphost.ObservationGrant{Allowed: false}
+	if grant, err := app.ObservationGrant(t.Context(), access); err != nil || grant.Allowed {
+		t.Fatalf("audio host denial lost: %#v, %v", grant, err)
+	}
+	grantHits, readHits := stub.grantHit, stub.readHit
+	for _, denied := range []apphost.ObservationAccess{
+		{ConnectionRef: ref, ContentID: WebReadContentID, Field: apphost.ObservationAudio},
+		{ConnectionRef: ref, ContentID: WebVideoContentPrefix + "bad=padding", Field: apphost.ObservationAudio},
+		{ConnectionRef: apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: "another-owner-profile"}, ContentID: access.ContentID, Field: apphost.ObservationAudio},
+	} {
+		if grant, err := app.ObservationGrant(t.Context(), denied); err != nil || grant.Allowed {
+			t.Fatalf("invalid audio grant accepted: %#v, %#v, %v", denied, grant, err)
+		}
+		if _, err := app.ReadObservation(t.Context(), apphost.ObservationRequest{ObservationAccess: denied}); !errors.Is(err, apphost.ErrObservationForbidden) {
+			t.Fatalf("invalid audio access reached callback: %#v, %v", denied, err)
+		}
+	}
+	if stub.grantHit != grantHits || stub.readHit != readHits {
+		t.Fatalf("invalid audio called host: grants %d/%d reads %d/%d", stub.grantHit, grantHits, stub.readHit, readHits)
 	}
 }
 

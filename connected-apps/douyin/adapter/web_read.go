@@ -104,9 +104,9 @@ func (p *SearchApp) validWebReadAccess(ref apphost.ConnectionRef, contentID stri
 	if ref.AppID != ID || ref.InstallationID != installationID || ref.ConnectionID != WebReadConnectionID || !IsWebReadContentID(contentID) {
 		return false
 	}
-	// The homepage is text-only. Playback requires a host-minted video target
-	// and an independent, current grant checked by the trusted callback.
-	return field == apphost.ObservationPageText || contentID != WebReadContentID && field == apphost.ObservationPlayback
+	// The homepage is text-only. Playback and audio each require a host-minted
+	// video target and their own current grant checked by the trusted callback.
+	return field == apphost.ObservationPageText || contentID != WebReadContentID && (field == apphost.ObservationPlayback || field == apphost.ObservationAudio)
 }
 
 func (p *SearchApp) webReadTargets(ctx context.Context) ([]apphost.ObservationTarget, error) {

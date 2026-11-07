@@ -129,7 +129,7 @@
     "adapter/audio.go": "e12e121e5429c4d5ce05dea6d24c5157ccbbb37f49bdd716c698d76e45b17983",
     "adapter/audio_test.go": "26fc48ff2101ba7052b04ee254201974db9ab82f5df7aa98c9a4fdc2b5ccb6be",
     "adapter/comments.go": "a5cec8c47d813af444963cb64fe12a99ee1c3d10c8e1088fd8276c02feb27de6",
-    "adapter/comments_test.go": "55bc5ffd22574bf2d5734c339b1d0abdc8bebb64cfb1f0c9507c09df401adcfb",
+    "adapter/comments_test.go": "b279c85bfd8ba534b4a3448f04b326b2508c40987c8e0ecbe6be4811b0cc2a10",
     "adapter/entry.json": "7f7e5b8a490bef3982b87bc1412c9c5fe67de4ad1e8e2c5d0ac27b147f798909",
     "adapter/open_account.go": "31fb6c98a0e6572e14146f70ab69473030c7dc2ce575ab538edcf44277ed424b",
     "adapter/open_account_test.go": "2db309db0854c632fd43ac6e1de37d02e8ed9fbf4f5787295ea2b93744060b41",

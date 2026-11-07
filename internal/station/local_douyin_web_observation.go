@@ -88,7 +88,7 @@ func (p *localDouyinWebObservation) access(fish, owner string, r localDouyinWebR
 	raw, _ := json.Marshal(r)
 	version := sha256.Sum256(append([]byte("douyin-web-text-v2\x00"+fish+"\x00"+owner+"\x00"), raw...))
 	return localDouyinWebAccess{record: r, connection: apphost.Connection{ID: douyinapp.WebReadConnectionID,
-		AccountID: "web-profile-" + hex.EncodeToString(account[:20]), Label: "抖音首页网页文字", Configuration: state},
+		AccountID: "web-profile-" + hex.EncodeToString(account[:20]), Label: "抖音网页内容", Configuration: state},
 		profile: filepath.Join(p.home.dataDir, "apps", "douyin", "web-login", fish, r.Profile), version: hex.EncodeToString(version[:])}
 }
 
@@ -101,7 +101,7 @@ func (p *localDouyinWebObservation) Connection(ctx context.Context) (apphost.Con
 		return apphost.Connection{}, false, nil
 	}
 	if err != nil {
-		return apphost.Connection{ID: douyinapp.WebReadConnectionID, Label: "抖音首页网页文字", Configuration: "invalid"}, true, nil
+		return apphost.Connection{ID: douyinapp.WebReadConnectionID, Label: "抖音网页内容", Configuration: "invalid"}, true, nil
 	}
 	return a.connection, true, nil
 }
@@ -133,7 +133,19 @@ func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.Observ
 	if _, ok := p.resolveTarget(a, in.ContentID); !ok {
 		return apphost.ObservationGrant{Allowed: false}, nil
 	}
-	return apphost.ObservationGrant{Allowed: true, Version: a.version}, nil
+	version := a.version
+	if in.Field == apphost.ObservationAudio {
+		audio, err := p.audioBinding(ctx)
+		if err != nil {
+			return apphost.ObservationGrant{}, err
+		}
+		asrVersion, err := audio.ready(ctx)
+		if err != nil || strings.TrimSpace(asrVersion) == "" {
+			return apphost.ObservationGrant{}, apphost.ErrObservationAudioUnavailable
+		}
+		version += "/" + asrVersion
+	}
+	return apphost.ObservationGrant{Allowed: true, Version: version}, nil
 }
 
 type localDouyinWebSnapshot struct {
@@ -169,18 +181,32 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	if !ok {
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 	}
+	expectedVersion := a.version
+	if in.Field == apphost.ObservationAudio {
+		grant, err := p.Grant(ctx, in.ObservationAccess)
+		if err != nil {
+			return apphost.ObservationPage{}, err
+		}
+		if !grant.Allowed {
+			return apphost.ObservationPage{}, apphost.ErrObservationForbidden
+		}
+		expectedVersion = grant.Version
+	}
 	authorize := func() error {
 		current, err := p.Grant(ctx, in.ObservationAccess)
 		if err != nil {
 			return err
 		}
-		if !current.Allowed || current.Version != a.version {
+		if !current.Allowed || current.Version != expectedVersion {
 			return apphost.ErrObservationForbidden
 		}
 		return nil
 	}
 	if in.Field == apphost.ObservationPlayback {
 		return p.readPlayback(ctx, a, in, target, authorize)
+	}
+	if in.Field == apphost.ObservationAudio {
+		return p.readAudio(ctx, a, in, target, authorize)
 	}
 	dir := p.snapshotDirectory(a)
 	root, err := workspacefs.EnsurePath(dir)
@@ -256,9 +282,40 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 		return apphost.ObservationPage{}, err
 	}
 	page, err := localDouyinWebPage(snapshot, cursor.Offset, in.Limit)
-	if err == nil && target.videoID != "" && a.record.PlaybackEnabled && len(page.Chunks) > 0 {
-		page.Chunks[0].FollowUpContentID = in.ContentID
-		page.Chunks[0].FollowUpField = apphost.ObservationPlayback
+	if err == nil {
+		audioReady := false
+		if a.record.AudioEnabled {
+			if audio, e := p.audioBinding(ctx); e == nil {
+				v, e := audio.ready(ctx)
+				audioReady = e == nil && strings.TrimSpace(v) != ""
+			}
+		}
+		if target.videoID != "" && len(page.Chunks) > 0 && (audioReady || a.record.PlaybackEnabled) {
+			first := &page.Chunks[0]
+			first.FollowUpContentID = in.ContentID
+			if audioReady {
+				first.FollowUpFields = append(first.FollowUpFields, apphost.ObservationAudio)
+			}
+			if a.record.PlaybackEnabled {
+				first.FollowUpFields = append(first.FollowUpFields, apphost.ObservationPlayback)
+			}
+			first.FollowUpField = first.FollowUpFields[0]
+		}
+		if target.videoID == "" {
+			for i := range page.Chunks {
+				c := &page.Chunks[i]
+				if c.FollowUpContentID == "" {
+					continue
+				}
+				c.FollowUpFields = []apphost.ObservationField{apphost.ObservationPageText}
+				if audioReady {
+					c.FollowUpFields = append(c.FollowUpFields, apphost.ObservationAudio)
+				}
+				if a.record.PlaybackEnabled {
+					c.FollowUpFields = append(c.FollowUpFields, apphost.ObservationPlayback)
+				}
+			}
+		}
 	}
 	return page, err
 }
