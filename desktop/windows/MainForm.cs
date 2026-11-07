@@ -51,8 +51,8 @@ namespace WechatAgent.Desktop {
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             // The management page owns the full client area. These controls are
             // visible only during startup, shutdown, or a recoverable failure.
-            placeholder.Dock = DockStyle.Fill; placeholder.BackColor = Color.FromArgb(248, 250, 252);
-            var center = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(36) };
+            placeholder.Dock = DockStyle.Fill; placeholder.BackColor = Color.FromArgb(239, 243, 255);
+            var center = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(0) };
             center.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); center.RowStyles.Add(new RowStyle(SizeType.AutoSize)); center.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
             status.Text = "正在启动 Agent-home-station…"; status.Dock = DockStyle.Fill; status.TextAlign = ContentAlignment.BottomCenter; status.AutoSize = false;
             var buttons = new FlowLayoutPanel { AutoSize = true, Anchor = AnchorStyles.Top, WrapContents = false, Margin = new Padding(0, 24, 0, 0) };
@@ -101,7 +101,7 @@ namespace WechatAgent.Desktop {
                         bool dark = false;
                         if (web != null && web.CoreWebView2 != null) {
                             try {
-                                var theme = web.ExecuteScriptAsync("document.documentElement.dataset.theme");
+                                var theme = web.ExecuteScriptAsync("document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')");
                                 if (await Task.WhenAny(theme, Task.Delay(150)) == theme) dark = await theme == "\"dark\"";
                             } catch (InvalidOperationException) { }
                         }
@@ -176,7 +176,7 @@ namespace WechatAgent.Desktop {
             if (busy || closeQueued || allowExit) return; SetBusy(true, false); operation = new CancellationTokenSource();
             try {
                 status.Text = "正在启动 Agent-home-station…"; tray.Text = "Agent-home-station · 正在启动";
-                lifecycle.State("正在启动",status.Text);
+                lifecycle.State("欢迎回家","正在准备大肥鱼的工作台…");
                 await controller.Start(operation.Token);
                 if (!exitRequested) await ShowPage();
                 tray.Text = "Agent-home-station · 运行中";
@@ -192,7 +192,7 @@ namespace WechatAgent.Desktop {
             try {
                 ++pageGeneration;CloseDouyinAuthorization();placeholder.Visible=true;placeholder.BringToFront();
                 status.Text = "正在等待在途任务结束，随后停止全部服务…"; tray.Text = "Agent-home-station · 正在安全停止";
-                lifecycle.State(exiting?"正在安全退出":"正在停止服务",status.Text);
+                lifecycle.State(exiting?"让大肥鱼休息一下":"正在收拾工作台",status.Text);
                 await controller.Stop(operation.Token);
                 ClosePage();lifecycle.State("已安全停止","登录、记忆与配置已保留。",false,true);
                 tray.Text = "Agent-home-station · 已停止";

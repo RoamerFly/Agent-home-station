@@ -66,6 +66,15 @@ def verify(binary, output):
                 # A long right-hand settings page must not resize the scene or move the document.
                 home_tab(page,'project-tools');page.locator('#project-tools-list[aria-busy="false"]').wait_for()
                 fixed_shell(page,initial)
+                cards=page.locator('.project-tool-card')
+                sizes=cards.evaluate_all('nodes => nodes.map(node => ({w:node.getBoundingClientRect().width,h:node.getBoundingClientRect().height}))')
+                assert sizes and len({round(x['h']) for x in sizes})==1 and len({round(x['w']) for x in sizes})==1,sizes
+                page.get_by_role('button',name='管理本机语音',exact=True).click()
+                expect(page.locator('#tool-dialog')).to_be_visible()
+                assert page.locator('#tool-dialog-body').evaluate('node => node.scrollWidth<=node.clientWidth+1')
+                page.screenshot(path=str(output/'tool-dialog-desktop.png'))
+                page.keyboard.press('Escape')
+                expect(page.locator('#tool-dialog')).not_to_be_visible()
                 page.locator('#project-tools-view').evaluate('node => node.scrollTop=node.scrollHeight')
                 fixed_shell(page,initial)
                 page.screenshot(path=str(output/'tools-desktop-scrolled.png'))
@@ -85,10 +94,10 @@ def verify(binary, output):
                 assert field.input_value()=='暂未保存的应用草稿'
                 # Force a long form body to verify the dialog scrolls and the fixed header stays usable.
                 field.evaluate('node => node.style.minHeight="1000px"')
-                header_top=page.locator('.app-dialog-header').bounding_box()['y']
+                header_top=page.locator('#app-dialog .app-dialog-header').bounding_box()['y']
                 page.locator('#app-dialog-body').evaluate('node => node.scrollTop=node.scrollHeight')
                 assert page.locator('#app-dialog-body').evaluate('node => node.scrollTop')>0
-                assert page.locator('.app-dialog-header').bounding_box()['y']==header_top
+                assert page.locator('#app-dialog .app-dialog-header').bounding_box()['y']==header_top
                 fixed_shell(page,initial)
                 page.keyboard.press('Escape')
                 expect(page.locator('#app-dialog')).not_to_be_visible()

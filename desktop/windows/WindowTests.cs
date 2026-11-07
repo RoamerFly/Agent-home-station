@@ -56,9 +56,9 @@ namespace WechatAgent.Desktop {
                     int blue=0;bool clipped=false;
                     for(int y=0;y<size.Height;y++)for(int x=0;x<size.Width;x++) {
                         var c=bitmap.GetPixel(x,y);
-                        if(c.B>150&&c.R<70&&c.G>70&&c.G<150){blue++;if(x<3||y<3||x>=size.Width-3||y>=size.Height-3)clipped=true;}
+                        if(c.B>100&&c.R<150&&c.G<150){blue++;if(x<3||y<3||x>=size.Width-3||y>=size.Height-3)clipped=true;}
                     }
-                    Assert(blue>100&&!clipped,"loading ring must be fully inside its surface");
+                    Assert(blue>100&&!clipped,"home emblem must be fully inside its surface");
                     bitmap.Save(Path.Combine(root,"loading-"+size.Width+".png"));
                 }
             }
@@ -91,19 +91,41 @@ namespace WechatAgent.Desktop {
             }
             using (var recovered = new DesktopInstance(name)) Assert(recovered.IsOwner, "abandoned instance is recoverable");
         }
+        static void CheckChoiceLayout(Control parent) {
+            foreach (Control control in parent.Controls) {
+                Assert(parent.ClientRectangle.Contains(control.Bounds), "dialog content clipped: " + control.Text);
+                if (control is Button || control is CheckBox || control is Label) {
+                    var size = TextRenderer.MeasureText(control.Text, control.Font,
+                        new Size(control.ClientSize.Width, int.MaxValue), TextFormatFlags.WordBreak);
+                    Assert(size.Height <= control.ClientSize.Height, "dialog text height clipped: " + control.Text);
+                    if (control is Button) Assert(TextRenderer.MeasureText(control.Text, control.Font).Width <= control.ClientSize.Width - 6, "dialog button text clipped");
+                }
+                CheckChoiceLayout(control);
+            }
+        }
         static async Task FormTests(string root) {
             using (var owner = new Form { Bounds = new Rectangle(80, 60, 800, 600), StartPosition = FormStartPosition.Manual })
             using (var choice = new CloseChoiceDialog()) {
                 owner.Show();
+                Exception layoutError = null;
                 choice.Shown += delegate {
+                    try {
                     var b = owner.Bounds;
                     var area = Screen.FromControl(owner).WorkingArea;
                     int x = Math.Max(area.Left, Math.Min(area.Right-choice.Width, b.Left+(b.Width-choice.Width)/2));
                     int y = Math.Max(area.Top, Math.Min(area.Bottom-choice.Height, b.Top+(b.Height-choice.Height)/2));
                     Assert(choice.Location == new Point(x,y), "close choice centered on owner");
-                    choice.Close();
+                    File.WriteAllText(Path.Combine(root,"close-choice-layout.txt"), "DPI=" + choice.DeviceDpi + "; font=" + choice.Font.Size + "; size=" + choice.ClientSize + "; scale=" + choice.AutoScaleDimensions);
+                    CheckChoiceLayout(choice);
+                    using (var bitmap = new Bitmap(choice.Width, choice.Height)) {
+                        choice.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+                        bitmap.Save(Path.Combine(root, "close-choice.png"));
+                    }
+                    } catch (Exception error) { layoutError = error; }
+                    finally { choice.Close(); }
                 };
                 choice.ShowDialog(owner);
+                if (layoutError != null) throw layoutError;
                 Assert(choice.Choice == "cancel", "dismissing close choice preserves services");
             }
             using (var page = new SyntheticPageServer()) {

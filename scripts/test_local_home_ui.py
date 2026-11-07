@@ -54,7 +54,13 @@ def stop(process):
     process.stderr.close()
 
 
+def open_project_tool(page, name):
+    page.get_by_role("button", name=f"管理{name}", exact=True).click()
+
+
 def close_application(page):
+    if page.locator("#tool-dialog").evaluate("node => node.open"):
+        page.locator("#tool-dialog-close").click()
     if page.locator("#app-dialog").evaluate("node => node.open"):
         page.locator("#app-dialog-close").click()
 
@@ -152,6 +158,7 @@ def verify_missing_source(binary, output):
                 page.locator("#initialize-button").click()
                 page.locator("#chat-view").wait_for(state="visible")
                 assert_station_without_device_controls(context, page, origin)
+                close_application(page)
                 page.locator("#chat-tab").focus()
                 page.keyboard.press("ArrowRight")
                 page.locator("#apps-view").wait_for(state="visible")
@@ -258,7 +265,7 @@ def verify(binary, output):
                 page.route(project_tools_pattern, project_tools_route)
                 home_tab(page, "project-tools")
                 page.locator("#project-tools-view").wait_for(state="visible")
-                page.get_by_text("文档工坊", exact=True).wait_for()
+                open_project_tool(page, "文档工坊")
                 install = page.get_by_role("button", name="安装", exact=True)
                 assert install.is_disabled(), "artifact confirmation must gate installation"
                 page.get_by_role("checkbox", name="确认本机素材读写", exact=True).check()
@@ -284,7 +291,8 @@ def verify(binary, output):
                 if audio_catalog["catalog_available"] and audio_catalog["runtime_ready"]:
                     home_tab(page, "chat")
                     home_tab(page, "project-tools")
-                    audio = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="音频工坊"))
+                    open_project_tool(page, "音频工坊")
+                    audio = page.locator("#tool-dialog .project-tool-record")
                     install = audio.get_by_role("button", name="安装", exact=True)
                     install.wait_for()
                     assert install.is_disabled()
@@ -316,7 +324,8 @@ def verify(binary, output):
                     }, ensure_ascii=False), encoding="utf-8")
                     home_tab(page, "chat")
                     home_tab(page, "project-tools")
-                    card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="RVC 换声"))
+                    open_project_tool(page, "RVC 换声")
+                    card = page.locator("#tool-dialog .project-tool-record")
                     card.get_by_text("合成试听声线", exact=True).wait_for()
                     install = card.get_by_role("button", name="安装", exact=True)
                     assert install.is_disabled()
@@ -355,7 +364,8 @@ def verify(binary, output):
                     }), encoding="utf-8")
                     home_tab(page, "chat")
                     home_tab(page, "project-tools")
-                    card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="ComfyUI 创作"))
+                    open_project_tool(page, "ComfyUI 创作")
+                    card = page.locator("#tool-dialog .project-tool-record")
                     card.get_by_text("工作流未就绪", exact=True).wait_for()
                     install = card.get_by_role("button", name="安装", exact=True)
                     assert install.is_disabled()
@@ -389,7 +399,8 @@ def verify(binary, output):
                     assert not yue["runtime_ready"]
                     home_tab(page, "chat")
                     home_tab(page, "project-tools")
-                    card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="YuE 作曲"))
+                    open_project_tool(page, "YuE 作曲")
+                    card = page.locator("#tool-dialog .project-tool-record")
                     card.get_by_text("YuE 本机后端未就绪", exact=True).wait_for()
                     install = card.get_by_role("button", name="安装", exact=True)
                     assert install.is_disabled()
@@ -407,7 +418,8 @@ def verify(binary, output):
                     assert not station_speech["runtime_ready"]
                     home_tab(page, "chat")
                     home_tab(page, "project-tools")
-                    card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="本机语音"))
+                    open_project_tool(page, "本机语音")
+                    card = page.locator("#tool-dialog .project-tool-record")
                     card.get_by_text("本机语音后端未就绪", exact=True).wait_for()
                     install = card.get_by_role("button", name="安装", exact=True)
                     assert install.is_disabled()
@@ -420,6 +432,7 @@ def verify(binary, output):
                 # The catalog and source checkout use the real local HTTP and CSRF path.
                 # A plain server executable may intentionally ship without application source;
                 # in that case this primary replay still verifies the useful empty-source state.
+                close_application(page)
                 page.locator("#chat-tab").focus()
                 page.keyboard.press("ArrowRight")
                 page.locator("#apps-view").wait_for(state="visible")

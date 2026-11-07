@@ -115,6 +115,7 @@ def verify(binary, output):
                 page.locator("#login-submit").click()
                 page.locator("#initialize-button").click()
                 page.locator("#project-tools-tab").click()
+                page.get_by_role("button",name="管理OBS 画面预览",exact=True).click()
                 panel = page.locator("#obs-preview-panel")
                 expect(page.get_by_text("确认仅访问本机 OBS WebSocket", exact=True)).to_be_visible()
                 page.get_by_label("确认仅访问本机 OBS WebSocket").check()
@@ -152,6 +153,7 @@ def verify(binary, output):
                 with page.expect_response(lambda response: response.url.endswith("/preview") and response.request.method == "POST"):
                     panel.get_by_role("button", name="开始预览").click()
                 expect(panel.locator("img.obs-preview-image")).to_have_count(1)
+                page.locator("#tool-dialog-close").click()
                 page.locator("#chat-tab").click()
                 expect(page.locator("#chat-view")).to_be_visible()
                 assert [item["action"] for item in writes].count("stop") == 1

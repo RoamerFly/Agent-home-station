@@ -3684,15 +3684,38 @@
       return;
     }
     list.replaceChildren(...current.tools.map((tool) => {
-      const card = appElement("article", "", "project-tool-record");
-      const [status, note] = projectToolStatus(tool);
-      const head = appElement("header", "", "project-tool-head");
-      const mark = appElement("div", "工", "project-tool-mark"), title = appElement("div", "");
+      const [status] = projectToolStatus(tool);
+      const card = appElement("button", "", "project-tool-card");
+      card.type = "button"; card.dataset.tool = tool.id;
+      card.setAttribute("aria-label", `管理${tool.name || tool.id}`);
+      const heading = appElement("div", "", "tool-card-heading");
+      const mark = appElement("span", (tool.name || "工").slice(0, 1), "project-tool-mark");
       mark.setAttribute("aria-hidden", "true");
-      title.append(appElement("h4", tool.name || tool.id || "项目工具"), appElement("p", status));
-      head.append(mark, title);
+      heading.append(mark, appElement("strong", tool.name || tool.id));
+      card.append(heading, appElement("span", status, "tool-card-status"), appElement("span", "设置与资源", "tool-card-link"));
+      card.addEventListener("click", () => {
+        current.openID = tool.id; renderProjectToolDialog(tool);
+        $("#tool-dialog").showModal();
+      });
+      return card;
+    }));
+    const selected = current.tools.find((tool) => tool.id === current.openID);
+    if (selected && $("#tool-dialog").open) renderProjectToolDialog(selected);
+  }
+  function renderProjectToolDialog(tool) {
+    const current = projectTools, body = $("#tool-dialog-body"), scroll = body.scrollTop;
+    $("#tool-dialog-title").textContent = tool.name || tool.id;
+    $("#tool-dialog-feedback").append($("#project-tools-feedback"));
+    body.replaceChildren(projectToolDetails(tool, current));
+    body.scrollTop = scroll;
+    $("#tool-dialog-refresh").disabled = current.loading || Boolean(current.applying);
+    $("#tool-dialog-refresh").textContent = current.loading ? "刷新中…" : "刷新";
+  }
+  function projectToolDetails(tool, current) {
+      const card = appElement("article", "", "project-tool-record");
+      const [, note] = projectToolStatus(tool);
       const detail = appElement("div", "", "project-tool-detail");
-      detail.append(appElement("p", note));
+      if (note) detail.append(appElement("p", note));
       if (tool.id === "audio-workshop") {
         const scope = appElement("div", "", "project-tool-permissions");
         scope.append(appElement("strong", "音频处理"), appElement("span", "截取本机 WAV 成品，可转单声道，输出 16 位 WAV。每次仅访问获准的输入和任务输出。"));
@@ -3762,9 +3785,9 @@
           }
         }
       }
-      detail.append(controls); card.append(head, detail); return card;
-    }));
+      detail.append(controls); card.append(detail); return card;
   }
+
   async function loadProjectTools() {
     const current = projectTools;
     if (current.loading || !state.home?.initialized) return;
@@ -3803,6 +3826,7 @@
     }
   }
   function showLogin() {
+    $("#tool-dialog").close();
     $("#app-dialog").close();
     state.home = null; state.model = null; window.clearTimeout(state.chat.poll);
     window.clearTimeout(apps.loginTimer);
@@ -4068,6 +4092,17 @@
   }
   $("#apps-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
   $("#app-dialog-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
+  $("#tool-dialog-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
+  $("#tool-dialog-close").addEventListener("click", () => $("#tool-dialog").close());
+  $("#tool-dialog").addEventListener("close", () => {
+    const id = projectTools.openID;
+    if (id === "obs-preview") stopOBSPreviewOnLeave();
+    projectTools.openID = "";
+    $("#project-tools-view").insertBefore($("#project-tools-feedback"), $("#project-tools-list"));
+    $("#tool-dialog-body").replaceChildren();
+    const opener = [...$("#project-tools-list").querySelectorAll("button")].find((button) => button.dataset.tool === id);
+    if (opener && activeView === "project-tools") opener.focus({ preventScroll: true });
+  });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
   $("#app-dialog").addEventListener("close", () => { apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });

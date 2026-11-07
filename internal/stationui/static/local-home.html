@@ -70,7 +70,7 @@
               <div class="chat-heading-row">
                 <div>
                   <h3 id="chat-heading">和大肥鱼聊聊</h3>
-                  <p id="chat-presence">她会根据真实聊天记录继续对话。</p>
+                  <p id="chat-presence" hidden></p>
                 </div>
                 <button id="open-settings-button" class="button compact secondary" type="button" hidden>设置模型</button>
               </div>
@@ -99,7 +99,7 @@
               <header class="chat-heading-row">
                 <div>
                   <h3>应用</h3>
-                  <p>管理应用账号、使用范围和专属相处方式。</p>
+
                 </div>
                 <button id="apps-refresh" class="button compact secondary" type="button">刷新</button>
               </header>
@@ -122,7 +122,7 @@
               <header class="chat-heading-row">
                 <div>
                   <h3>项目工具</h3>
-                  <p>按需启用创作、语音和文件处理能力。</p>
+
                 </div>
                 <button id="project-tools-refresh" class="button compact secondary" type="button">刷新</button>
               </header>
@@ -216,6 +216,14 @@
     <nav id="app-dialog-tabs" class="app-dialog-tabs" aria-label="应用设置分区"></nav>
     <div id="app-dialog-feedback" class="app-dialog-feedback"></div>
     <div id="app-dialog-body" class="app-dialog-body"></div>
+  </dialog>
+  <dialog id="tool-dialog" class="app-dialog tool-dialog" aria-labelledby="tool-dialog-title">
+    <header class="app-dialog-header">
+      <h2 id="tool-dialog-title">项目工具</h2>
+      <div class="app-dialog-actions"><button id="tool-dialog-refresh" class="button compact secondary" type="button">刷新</button><button id="tool-dialog-close" class="button compact quiet" type="button">关闭</button></div>
+    </header>
+    <div id="tool-dialog-feedback" class="app-dialog-feedback"></div>
+    <div id="tool-dialog-body" class="app-dialog-body"></div>
   </dialog>
   <script src="/assets/local-home.js"></script>
 </body>
