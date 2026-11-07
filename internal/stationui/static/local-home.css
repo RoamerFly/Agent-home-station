@@ -226,6 +226,8 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .publication-detail { min-width: 0; }
 .douyin-web-login { background: color-mix(in srgb, var(--accent-soft) 32%, var(--surface-solid)); }
 .douyin-web-login-actions { margin-top: 9px; }
+.douyin-web-read-scope-label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .8rem; font-weight: 700; }
+.douyin-web-read-scope { min-width: 10.5rem; max-width: 100%; min-height: 2rem; border: 1px solid var(--line); border-radius: 9px; padding: 0 8px; color: var(--ink); background: var(--surface-solid); }
 .publication-list { display: grid; gap: 0; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--line); list-style: none; }
 .publication-task { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .publication-task-detail { min-width: 0; }

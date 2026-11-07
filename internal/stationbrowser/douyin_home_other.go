@@ -14,8 +14,16 @@ var (
 	ErrDouyinWebTextSize      = ErrDouyinHomeTooLarge
 )
 
-type DouyinWebPage struct{ Title, Text string }
+type DouyinWebLink struct{ VideoID, Text string }
+type DouyinWebPage struct {
+	Title, Text string
+	Links       []DouyinWebLink
+}
 
 func ReadDouyinHome(context.Context, string, func() error) (DouyinWebPage, error) {
+	return DouyinWebPage{}, ErrDouyinHomeUnavailable
+}
+func DouyinVideoURL(string) (string, error) { return "", ErrDouyinHomeUnavailable }
+func ReadDouyinVideo(context.Context, string, string, func() error) (DouyinWebPage, error) {
 	return DouyinWebPage{}, ErrDouyinHomeUnavailable
 }

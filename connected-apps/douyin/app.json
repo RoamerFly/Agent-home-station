@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "douyin",
   "name": "抖音",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -124,7 +124,7 @@
     "adapter/account_works_wire.go": "f7286bf01e1bfe77543129ed1e92560e329a4cf76df97753e487c155e445b6c6",
     "adapter/account_works.go": "05bb578605a348d42db82acaa12802d1917c36929c501af4335baa58d650a0c9",
     "adapter/account.go": "4a0d0826b14822908f2b44b96000584ceea35b48917a60ba4ffca79d9f8e84b4",
-    "adapter/entry.json": "5ef76997daea02e705df7e848c6e02bbc1bc8213e68dcee265925e33f95dadd3",
+    "adapter/entry.json": "e6bbf46d01b11eb560a982ffd18d35e58f5fd2cd57e93d2e8128bb95c63bc737",
     "adapter/own_video_test.go": "b977506aa9e11b9e8c250e078404b834d717ea88e4aa761823cfc45aa9cd502e",
     "adapter/own_video.go": "bc4ebc5e255968241df54a0e05422f7db1c5bf0e5f668681f7fa83b7104fd054",
     "adapter/player_followup_test.go": "dd377ac52a2071b3cee2748b34ce611c7d4776f450fdbbff4fe33ae82fb207da",
@@ -139,15 +139,15 @@
     "adapter/publication.go": "2cdf64efbfd6f75d99d1b9c5c9bada5b5fbb499046a60862a7e2e63e15851ab5",
     "adapter/search_test.go": "d51f4a877ebfb761e6a4aa47225717b7341cfa65c18792622f7904975ad552a9",
     "adapter/search.go": "15e3c6c0d0119cec1c00af140c346a05e74cc1bc893006119e8d416d3f855605",
-    "adapter/web_read_test.go": "332a2316bd0d5adaa5d72dde4503c0951e044c291b829b804591514b112cb557",
-    "adapter/web_read.go": "76bb020fc51149b03ebdf5c40e94736153fb09271209c82a45e6fb167b1cf972",
-    "capabilities.json": "b2f20a651797871ab131fd4cab5f641d5078b72403e27d6f9ae8ccf5222ce747",
-    "CHANGELOG.md": "085945145a30557698dcfc07c151a430c5b81e0cf190bd531edd044ddfe3d256",
+    "adapter/web_read_test.go": "63fce4bfda6a67f5baac54dc79a8c2a1d936787297b377a527cde6e2e8001edb",
+    "adapter/web_read.go": "f078ee30bf95ac1e14086eaec3bc8e6a97920fc5fecfc86b97060d1ded49f5f7",
+    "capabilities.json": "50ac1ff3cdfed7575346269f0e813cf23fccd2244f65db5ab89e28a5046a959c",
+    "CHANGELOG.md": "42d05c60173ad7d7b65f213f7380d517aecd1197a7af67bb2a79ab44bdb0668e",
     "config.schema.json": "f40c4369f20a9ee645d90dfa39e8a166b0f37b006bbf812185426179e951be58",
     "MIGRATION.md": "a08d0022e5545a00b3a6933269737131e080da5ba8677bf5fe83305f1814f03a",
     "own-video.schema.json": "c7da49685c9183986a7296c8ebd4597277429df802d2136449fc91a540f1cde2",
-    "PERMISSIONS.md": "ab7c38a0b31ed2bf0fdba22b6cae28e0b6f1529f661501e0b9d493b78af0de7a",
-    "README.md": "a48524dd0eb8a4d67cd3af946175c97ad2480dd06a321c2e8b5128bb6ae2b12e",
+    "PERMISSIONS.md": "ad88e990575e3476e08ad233ba95ae9bbdd9f1ee7878f438f2a8dd43aad475ea",
+    "README.md": "edc81340107a4109233aaa0dfa35d1238326ca47f08622055f8b1d402e14c666",
     "ui.schema.json": "149127e16076739ec7a75d3704e350a5cb1c7f7e46f4f2fc95b254df1fcc3249"
   },
   "browser_routes": [
@@ -160,6 +160,11 @@
       "capability": "observation.page-text",
       "url_template": "https://www.douyin.com/",
       "owner_opt_in": "explicit-owner-web-read"
+    },
+    {
+      "capability": "observation.page-text",
+      "url_template": "https://www.douyin.com/video/{video_id}",
+      "owner_opt_in": "web-scope-home-and-videos"
     }
   ]
 }

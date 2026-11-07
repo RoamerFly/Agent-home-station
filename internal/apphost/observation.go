@@ -484,7 +484,8 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 	for _, chunk := range page.Chunks {
 		if chunk.FollowUpContentID != "" || chunk.FollowUpField != "" {
 			validNext := field == ObservationSearch && chunk.FollowUpField == ObservationPlayerEntry ||
-				field == ObservationPlayerEntry && chunk.FollowUpField == ObservationPlayback
+				field == ObservationPlayerEntry && chunk.FollowUpField == ObservationPlayback ||
+				field == ObservationPageText && chunk.FollowUpField == ObservationPageText
 			if !validNext || chunk.SourceID == "" || strings.TrimSpace(chunk.FollowUpContentID) == "" || len(chunk.FollowUpContentID) > 256 {
 				return errors.New("应用内容返回了无效的后续读取编号")
 			}

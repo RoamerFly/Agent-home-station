@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"wechat-bot/internal/apphost"
@@ -16,6 +17,7 @@ type webReadStub struct {
 	targetErr  error
 	grant      apphost.ObservationGrant
 	grantErr   error
+	grantFunc  func(apphost.ObservationAccess) (apphost.ObservationGrant, error)
 	page       apphost.ObservationPage
 	readErr    error
 	targetsHit int
@@ -30,8 +32,11 @@ func (s *webReadStub) Targets(context.Context) ([]apphost.ObservationTarget, err
 	s.targetsHit++
 	return s.targets, s.targetErr
 }
-func (s *webReadStub) Grant(context.Context, apphost.ObservationAccess) (apphost.ObservationGrant, error) {
+func (s *webReadStub) Grant(_ context.Context, access apphost.ObservationAccess) (apphost.ObservationGrant, error) {
 	s.grantHit++
+	if s.grantFunc != nil {
+		return s.grantFunc(access)
+	}
 	return s.grant, s.grantErr
 }
 func (s *webReadStub) Read(context.Context, apphost.ObservationRequest) (apphost.ObservationPage, error) {
@@ -91,14 +96,20 @@ func TestWithWebReadConnectionKeepsStartupInstancesIsolated(t *testing.T) {
 	}
 }
 
-func TestWebReadOnlyDelegatesExactReferenceAndPageTextHome(t *testing.T) {
+func TestWebReadOnlyDelegatesExactReferenceAndAuthorizedVideoPageText(t *testing.T) {
 	app := New(t.TempDir())
 	ref := apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: "saved-web-profile"}
 	stub := &webReadStub{
 		connection: apphost.Connection{ID: WebReadConnectionID, AccountID: ref.AccountID, Configuration: "ready"}, present: true,
 		targets: []apphost.ObservationTarget{{ConnectionRef: ref, ContentID: WebReadContentID, Fields: []apphost.ObservationField{apphost.ObservationPageText}}},
-		grant:   apphost.ObservationGrant{Allowed: true, Version: "host-web-grant-v1", Fresh: true},
 		page:    apphost.ObservationPage{Coverage: "host page text", Complete: true},
+	}
+	videoID := WebVideoContentPrefix + "hostSigned_1-abc"
+	stub.grantFunc = func(access apphost.ObservationAccess) (apphost.ObservationGrant, error) {
+		if access.ContentID == WebReadContentID || access.ContentID == videoID {
+			return apphost.ObservationGrant{Allowed: true, Version: "host-web-grant-v1", Fresh: true}, nil
+		}
+		return apphost.ObservationGrant{Allowed: false}, nil
 	}
 	app.SetWebReadConnection(stub)
 	targets, err := app.ObservationTargets(t.Context(), WebReadConnectionID)
@@ -114,12 +125,26 @@ func TestWebReadOnlyDelegatesExactReferenceAndPageTextHome(t *testing.T) {
 	if err != nil || page.Coverage != "host page text" || stub.readHit != 1 {
 		t.Fatalf("page = %#v, %v, hits=%d", page, err, stub.readHit)
 	}
+	videoAccess := apphost.ObservationAccess{ConnectionRef: ref, ContentID: videoID, Field: apphost.ObservationPageText}
+	grant, err = app.ObservationGrant(t.Context(), videoAccess)
+	if err != nil || !grant.Allowed || grant.Version != "host-web-grant-v1" || stub.grantHit != 2 {
+		t.Fatalf("video grant = %#v, %v, hits=%d", grant, err, stub.grantHit)
+	}
+	if _, err := app.ReadObservation(t.Context(), apphost.ObservationRequest{ObservationAccess: videoAccess}); err != nil || stub.readHit != 2 {
+		t.Fatalf("video read = %v, hits=%d", err, stub.readHit)
+	}
+	unknown := apphost.ObservationAccess{ConnectionRef: ref, ContentID: WebVideoContentPrefix + "notHostGranted", Field: apphost.ObservationPageText}
+	grant, err = app.ObservationGrant(t.Context(), unknown)
+	if err != nil || grant.Allowed || stub.grantHit != 3 {
+		t.Fatalf("unknown prefixed ID bypassed host grant: %#v, %v, hits=%d", grant, err, stub.grantHit)
+	}
 
 	for _, denied := range []apphost.ObservationAccess{
 		{ConnectionRef: apphost.ConnectionRef{AppID: "other", InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: ref.AccountID}, ContentID: WebReadContentID, Field: apphost.ObservationPageText},
 		{ConnectionRef: apphost.ConnectionRef{AppID: ID, InstallationID: "other", ConnectionID: WebReadConnectionID, AccountID: ref.AccountID}, ContentID: WebReadContentID, Field: apphost.ObservationPageText},
 		{ConnectionRef: apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: "other"}, ContentID: WebReadContentID, Field: apphost.ObservationPageText},
 		{ConnectionRef: ref, ContentID: "other", Field: apphost.ObservationPageText},
+		{ConnectionRef: ref, ContentID: WebVideoContentPrefix + "not=base64url", Field: apphost.ObservationPageText},
 		{ConnectionRef: ref, ContentID: WebReadContentID, Field: apphost.ObservationTitle},
 	} {
 		grant, err := app.ObservationGrant(t.Context(), denied)
@@ -130,13 +155,30 @@ func TestWebReadOnlyDelegatesExactReferenceAndPageTextHome(t *testing.T) {
 			t.Fatalf("read unexpectedly expanded access %#v: %v", denied, err)
 		}
 	}
-	if stub.grantHit != 1 || stub.readHit != 1 {
+	if stub.grantHit != 3 || stub.readHit != 2 {
 		t.Fatalf("denied requests reached callback: grant=%d read=%d", stub.grantHit, stub.readHit)
 	}
 
 	stub.targets = []apphost.ObservationTarget{{ConnectionRef: ref, ContentID: WebReadContentID, Fields: []apphost.ObservationField{apphost.ObservationTitle}}}
 	if _, err := app.ObservationTargets(t.Context(), WebReadConnectionID); !errors.Is(err, apphost.ErrObservationForbidden) {
 		t.Fatalf("invalid callback target accepted: %v", err)
+	}
+	stub.targets = []apphost.ObservationTarget{{ConnectionRef: ref, ContentID: videoID, Fields: []apphost.ObservationField{apphost.ObservationPageText}}}
+	if _, err := app.ObservationTargets(t.Context(), WebReadConnectionID); !errors.Is(err, apphost.ErrObservationForbidden) {
+		t.Fatalf("video callback target accepted instead of home-only discovery: %v", err)
+	}
+}
+
+func TestIsWebReadContentIDOnlyChecksOpaqueVideoSyntax(t *testing.T) {
+	if !IsWebReadContentID(WebReadContentID) || !IsWebReadContentID(WebVideoContentPrefix+"AZaz09-_") {
+		t.Fatal("valid web-read content ID rejected")
+	}
+	for _, contentID := range []string{
+		"", "video", WebVideoContentPrefix, WebVideoContentPrefix + "bad=padding", WebVideoContentPrefix + "contains space", WebVideoContentPrefix + strings.Repeat("a", 221),
+	} {
+		if IsWebReadContentID(contentID) {
+			t.Fatalf("invalid web-read content ID accepted: %q", contentID)
+		}
 	}
 }
 

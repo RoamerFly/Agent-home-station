@@ -44,12 +44,13 @@ def verify(binary, output):
                     revision = 1
                     begin_count = 0
                     late_401 = False
+                    scope_conflict = False
                     # Older station responses did not include read_enabled; the UI must treat that as false.
                     view = {"revision": revision, "state": "unconfigured", "active": False, "available": True}
                     requests = []
 
                     def web_login(route):
-                        nonlocal revision, view, begin_count, late_401
+                        nonlocal revision, view, begin_count, late_401, scope_conflict
                         if route.request.method == "GET":
                             if late_401:
                                 late_401 = False
@@ -65,24 +66,29 @@ def verify(binary, output):
                             assert body == {"action": "begin", "revision": revision, "approve_profile": True}
                             begin_count += 1
                             revision += 1
-                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False}
+                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home"}
                         elif action == "confirm":
                             assert body == {"action": "confirm", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
-                            view = {"revision": revision, "state": "saved", "active": False, "available": True, "confirmed_at": "2030-01-02T03:04:05Z", "read_enabled": False}
+                            view = {"revision": revision, "state": "saved", "active": False, "available": True, "confirmed_at": "2030-01-02T03:04:05Z", "read_enabled": False, "read_scope": "home"}
                         elif action == "set_read":
-                            assert body == {"action": "set_read", "revision": revision, "allow_read": True} or body == {"action": "set_read", "revision": revision, "allow_read": False}
+                            assert body == {"action": "set_read", "revision": revision, "allow_read": True} or body == {"action": "set_read", "revision": revision, "allow_read": False} or body == {"action": "set_read", "revision": revision, "allow_read": True, "read_scope": "home"} or body == {"action": "set_read", "revision": revision, "allow_read": True, "read_scope": "home_and_videos"}
                             assert view["state"] == "saved" and not view["active"] and "attempt_id" not in view
+                            if scope_conflict:
+                                scope_conflict = False
+                                assert body == {"action": "set_read", "revision": revision, "allow_read": True, "read_scope": "home"}
+                                route.fulfill(status=409, content_type="application/json", body=json.dumps({"error": "读取范围已在别处更新，请重新读取。"}, ensure_ascii=False))
+                                return
                             revision += 1
-                            view = {**view, "revision": revision, "read_enabled": body["allow_read"]}
+                            view = {**view, "revision": revision, "read_enabled": body["allow_read"], "read_scope": body.get("read_scope", "home") if body["allow_read"] else "home"}
                         elif action == "clear":
                             assert body == {"action": "clear", "revision": revision, "approve_profile": True}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home"}
                         elif action == "cancel":
                             assert body == {"action": "cancel", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home"}
                         else:
                             raise AssertionError(f"unexpected web-login action: {action}")
                         fulfill_json(view)(route)
@@ -100,30 +106,42 @@ def verify(binary, output):
                     open_application(page, "抖音")
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
                     assert page.get_by_role("button", name="允许读取首页文字", exact=True).count() == 0
+                    assert page.get_by_label("读取范围", exact=True).count() == 0
                     assert page.get_by_text("账号已验证", exact=True).count() == 0
                     assert page.get_by_text("已取得开放平台接口权限", exact=False).count() == 0
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
                     page.get_by_text("网页登录窗口已打开", exact=True).wait_for()
                     page.get_by_role("button", name="我已完成登录，保存", exact=True).wait_for()
                     # The next ordinary polling response may only move to an unconfirmed state.
-                    view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-1", "read_enabled": False}
+                    view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-1", "read_enabled": False, "read_scope": "home"}
                     page.locator("#app-dialog-close").click()
                     open_application(page, "抖音")
                     page.get_by_text("等待主人确认", exact=True).wait_for()
                     assert page.get_by_role("button", name="允许读取首页文字", exact=True).count() == 0
+                    assert page.get_by_label("读取范围", exact=True).count() == 0
                     page.get_by_role("button", name="我已完成登录，保存", exact=True).click()
                     page.get_by_text("网页登录资料已保存", exact=True).wait_for()
                     page.get_by_text("最近主人确认：", exact=False).wait_for()
                     assert page.get_by_text("登录有效性以网页为准，不代表已取得开放平台接口权限。", exact=True).count() == 1
                     page.get_by_role("button", name="允许读取首页文字", exact=True).click()
-                    page.get_by_role("button", name="停止读取首页文字", exact=True).wait_for()
-                    page.get_by_text("已允许读取实际首页网页文字。", exact=False).wait_for()
+                    page.get_by_role("button", name="停止网页读取", exact=True).wait_for()
+                    page.get_by_text("已允许读取实际网页文字。", exact=False).wait_for()
+                    scope = page.get_by_label("读取范围", exact=True)
+                    assert scope.input_value() == "home"
+                    scope.select_option("home_and_videos")
+                    page.get_by_text("视频页文字不等于音轨或完整观看", exact=False).wait_for()
+                    assert scope.input_value() == "home_and_videos"
+                    scope_conflict = True
+                    scope.select_option("home")
+                    page.get_by_text("读取范围已在别处更新，请重新读取。", exact=True).first.wait_for()
+                    assert page.get_by_label("读取范围", exact=True).input_value() == "home_and_videos", "失败后必须保留服务端读取范围"
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-read-{suffix}.png"))
                     # A saved profile can be opened again for a later re-login.
                     page.get_by_role("button", name="重新打开登录窗口", exact=True).click()
                     page.get_by_text("网页登录窗口已打开", exact=True).wait_for()
                     assert view["read_enabled"] is False, "重新登录必须撤销上一账号的首页文字读取许可"
-                    view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-2", "read_enabled": False}
+                    assert view["read_scope"] == "home", "重新登录必须恢复默认读取范围"
+                    view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-2", "read_enabled": False, "read_scope": "home"}
                     page.locator("#app-dialog-close").click()
                     open_application(page, "抖音")
                     page.get_by_text("等待主人确认", exact=True).wait_for()
@@ -135,7 +153,7 @@ def verify(binary, output):
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
                     page.get_by_role("button", name="取消本次登录", exact=True).click()
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
-                    assert len(requests) == 7
+                    assert len(requests) == 9
                     assert not dialogs, "网页登录操作不得弹出浏览器原生确认框"
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin web login")
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-{suffix}.png"))

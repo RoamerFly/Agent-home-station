@@ -18,8 +18,12 @@
     "connection": "web-page-text",
     "authentication": "host-owned-saved-web-login",
     "content": "home",
+    "video_content_prefix": "web-video-",
     "field": "page_text",
     "owner_opt_in": "explicit-owner-web-read",
+    "expanded_scope_owner_opt_in": "web-scope-home-and-videos",
+    "scope_default": "home",
+    "scope_expanded": "home_and_videos",
     "pagination": "host-owned",
     "profile": "host-owned"
   },

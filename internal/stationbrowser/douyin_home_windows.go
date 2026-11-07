@@ -4,10 +4,12 @@ package stationbrowser
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,7 +28,27 @@ var (
 
 // DouyinWebPage is deliberately limited to rendered public text. It contains
 // no HTML, cookies, form values, request headers, or DevTools details.
-type DouyinWebPage struct{ Title, Text string }
+type DouyinWebLink struct{ VideoID, Text string }
+type DouyinWebPage struct {
+	Title, Text string
+	Links       []DouyinWebLink
+}
+
+var douyinVideoID = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
+
+func DouyinVideoURL(videoID string) (string, error) {
+	if !douyinVideoID.MatchString(videoID) {
+		return "", ErrDouyinHomeUnavailable
+	}
+	return "https://www.douyin.com/video/" + videoID, nil
+}
+func ReadDouyinVideo(ctx context.Context, profile, videoID string, authorize func() error) (DouyinWebPage, error) {
+	u, e := DouyinVideoURL(videoID)
+	if e != nil {
+		return DouyinWebPage{}, e
+	}
+	return readDouyinHome(ctx, profile, u, authorize, false)
+}
 
 // ReadDouyinHome reads only the fixed Douyin home page using the caller's
 // dedicated application profile. The authorize callback is checked immediately
@@ -44,7 +66,7 @@ func readDouyinHome(ctx context.Context, profile, target string, authorize func(
 	if authorize == nil {
 		return DouyinWebPage{}, ErrDouyinHomeUnavailable
 	}
-	if !localFixture && target != douyinHomeURL {
+	if !localFixture && target != douyinHomeURL && !isDouyinVideoURL(target) {
 		return DouyinWebPage{}, ErrDouyinHomeUnavailable
 	}
 	lockPath, err := DouyinLoginProfileLockPath(profile)
@@ -134,7 +156,7 @@ func readDouyinHomeSession(ctx context.Context, session *cdpSession, target stri
 	// page contents are data only and never influence host control flow.
 	stableText, stableCount := "", 0
 	for until := time.Now().Add(6 * time.Second); time.Now().Before(until); time.Sleep(80 * time.Millisecond) {
-		page, ready, err := renderedDouyinText(ctx, session, attached.SessionID)
+		page, ready, err := renderedDouyinText(ctx, session, attached.SessionID, target, localFixture)
 		if err != nil {
 			return DouyinWebPage{}, err
 		}
@@ -158,32 +180,58 @@ func readDouyinHomeSession(ctx context.Context, session *cdpSession, target stri
 		if err := authorize(); err != nil {
 			return DouyinWebPage{}, err
 		}
-		return DouyinWebPage{Title: page.Title, Text: page.Text}, nil
+		return DouyinWebPage{Title: page.Title, Text: page.Text, Links: page.Links}, nil
 	}
 	return DouyinWebPage{}, ErrDouyinHomeUnavailable
 }
 
 type renderedDouyinPage struct {
-	Title     string `json:"title"`
-	Text      string `json:"text"`
-	URL       string `json:"url"`
-	Length    int    `json:"length"`
-	LoginForm bool   `json:"loginForm"`
-	Challenge bool   `json:"challenge"`
-	Ready     bool   `json:"ready"`
-	TooLarge  bool   `json:"tooLarge"`
+	Title     string          `json:"title"`
+	Text      string          `json:"text"`
+	URL       string          `json:"url"`
+	Length    int             `json:"length"`
+	LoginForm bool            `json:"loginForm"`
+	Challenge bool            `json:"challenge"`
+	Ready     bool            `json:"ready"`
+	TooLarge  bool            `json:"tooLarge"`
+	Links     []DouyinWebLink `json:"links"`
 }
 
-// Text and source are captured atomically, so a navigation between two CDP
-// calls cannot bind a new document's text to the old document's URL.
-var renderedDouyinTextExpression = fmt.Sprintf(`(() => {
+// Text, source, and links are captured atomically, so a navigation between
+// two CDP calls cannot bind a new document's content to an old document's URL.
+// The returned value must also leave room for the CDP reply envelope.  The
+// transport rejects a frame at 4 MiB, so check the actual UTF-8 JSON value
+// (including every discovered link) before returning it to Go.
+const maxDouyinRenderedValueBytes = maxCDPMessage - 64*1024
+
+func renderedDouyinTextExpression(target string, localFixture bool) string {
+	allowedOrigin := "https://www.douyin.com"
+	allowedHost := "www.douyin.com"
+	allowedProtocol := "https:"
+	if localFixture {
+		u, err := url.Parse(target)
+		if err != nil {
+			return "(()=>({tooLarge:true}))()"
+		}
+		allowedOrigin = u.Scheme + "://" + u.Host
+		allowedHost = u.Host
+		allowedProtocol = u.Scheme + ":"
+	}
+	originJSON, _ := json.Marshal(allowedOrigin)
+	hostJSON, _ := json.Marshal(allowedHost)
+	protocolJSON, _ := json.Marshal(allowedProtocol)
+	return fmt.Sprintf(`(() => {
   const visible=s=>[...document.querySelectorAll(s)].some(e=>e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none');
   const text=String(document.body?.innerText||''), title=String(document.title||''), url=String(location.href||''), length=[...text].length;
   if(length>%d||[...title].length>8192||[...url].length>8192)return {tooLarge:true};
-  return {title,text,url,length,ready:document.readyState==='complete',loginForm:visible('input[type=password],form[action*="login"],form[action*="passport"]'),challenge:visible('iframe[src*="captcha"],[class*="captcha"],[class*="verify"]')};
-})()`, maxDouyinHomeTextRunes)
+  const seen=new Set(),links=[];for(const a of document.querySelectorAll('a[href]')){if(!a.getClientRects().length||getComputedStyle(a).visibility==='hidden'||getComputedStyle(a).display==='none')continue;let u;try{u=new URL(a.getAttribute('href'),location.href)}catch{continue}let m=/^\/video\/([1-9][0-9]{0,19})$/.exec(u.pathname);if(u.origin!==%s||u.host!==%s||u.protocol!==%s||u.username||u.password||u.search||u.hash||!m||seen.has(m[1]))continue;seen.add(m[1]);links.push({videoID:m[1],text:String(a.innerText||'').trim()})}
+  const page={title,text,url,length,links,ready:document.readyState==='complete',loginForm:visible('input[type=password],form[action*="login"],form[action*="passport"]'),challenge:visible('iframe[src*="captcha"],[class*="captcha"],[class*="verify"]')};
+  if(new TextEncoder().encode(JSON.stringify(page)).length>%d)return {tooLarge:true};
+  return page;
+})()`, maxDouyinHomeTextRunes, string(originJSON), string(hostJSON), string(protocolJSON), maxDouyinRenderedValueBytes)
+}
 
-func renderedDouyinText(ctx context.Context, session *cdpSession, id string) (renderedDouyinPage, bool, error) {
+func renderedDouyinText(ctx context.Context, session *cdpSession, id, target string, localFixture bool) (renderedDouyinPage, bool, error) {
 	var out struct {
 		Result struct {
 			Type  string             `json:"type"`
@@ -191,7 +239,7 @@ func renderedDouyinText(ctx context.Context, session *cdpSession, id string) (re
 		} `json:"result"`
 		ExceptionDetails any `json:"exceptionDetails"`
 	}
-	if err := session.Call(ctx, id, "Runtime.evaluate", map[string]any{"expression": renderedDouyinTextExpression, "returnByValue": true, "awaitPromise": true}, &out); err != nil {
+	if err := session.Call(ctx, id, "Runtime.evaluate", map[string]any{"expression": renderedDouyinTextExpression(target, localFixture), "returnByValue": true, "awaitPromise": true}, &out); err != nil {
 		return renderedDouyinPage{}, false, ErrDouyinHomeUnavailable
 	}
 	if out.Result.Type != "object" {
@@ -218,7 +266,7 @@ func sameDouyinHomeLocation(actual, expected string) bool {
 		}
 		return u.EscapedPath()
 	}
-	return a.Scheme == e.Scheme && strings.EqualFold(a.Host, e.Host) && path(a) == path(e)
+	return a.Scheme == e.Scheme && strings.EqualFold(a.Host, e.Host) && path(a) == path(e) && a.RawQuery == e.RawQuery && a.Fragment == e.Fragment
 }
 func looksLikeLoginOrChallenge(page renderedDouyinPage) bool {
 	// A post discussing “登录流程” is ordinary text. Treat only explicit
@@ -232,4 +280,11 @@ func isDouyinHomeHost(host string) bool {
 		host = h
 	}
 	return host == "www.douyin.com" || strings.HasSuffix(host, ".douyin.com") || strings.HasSuffix(host, ".douyinvod.com") || strings.HasSuffix(host, ".bytednsdoc.com") || strings.HasSuffix(host, ".byteimg.com") || strings.HasSuffix(host, ".ibytedtos.com")
+}
+func isDouyinVideoURL(raw string) bool {
+	u, e := url.Parse(raw)
+	if e != nil || u.Scheme != "https" || u.Host != "www.douyin.com" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	return strings.HasPrefix(u.Path, "/video/") && douyinVideoID.MatchString(strings.TrimPrefix(u.Path, "/video/"))
 }

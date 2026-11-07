@@ -78,7 +78,7 @@ func TestLocalDouyinWebReadThroughObserverPaginatesRefreshesAndRevokes(t *testin
 	if code != 200 || len(items) != 1 || items[0].(map[string]any)["connection_id"] != douyinapp.WebReadConnectionID {
 		t.Fatalf("discovery: %d %v", code, targets)
 	}
-	input := syntheticDouyinWebReadInput(2)
+	input := syntheticDouyinWebReadInput(len([]rune("页面标题：合成首页\n")) + 2)
 	if code, _ := f.request("POST", "/api/local/apps/observation", input, false); code != 403 {
 		t.Fatal("read CSRF bypass")
 	}
@@ -87,7 +87,11 @@ func TestLocalDouyinWebReadThroughObserverPaginatesRefreshesAndRevokes(t *testin
 		t.Fatalf("first: %d %v reads=%d", code, first, reads)
 	}
 	chunks := first["chunks"].([]any)
-	if !strings.HasSuffix(chunks[0].(map[string]any)["text"].(string), "甲乙") {
+	var firstText string
+	for _, chunk := range chunks {
+		firstText += chunk.(map[string]any)["text"].(string)
+	}
+	if !strings.HasSuffix(firstText, "甲乙") {
 		t.Fatal(first)
 	}
 	input["limit"] = 100000 // explicit request is not silently clamped to 2048

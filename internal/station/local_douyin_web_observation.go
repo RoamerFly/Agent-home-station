@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,7 +86,7 @@ func (p *localDouyinWebObservation) access(fish, owner string, r localDouyinWebR
 		state = "ready"
 	}
 	raw, _ := json.Marshal(r)
-	version := sha256.Sum256(append([]byte("douyin-home-text-v1\x00"+fish+"\x00"+owner+"\x00"), raw...))
+	version := sha256.Sum256(append([]byte("douyin-web-text-v2\x00"+fish+"\x00"+owner+"\x00"), raw...))
 	return localDouyinWebAccess{record: r, connection: apphost.Connection{ID: douyinapp.WebReadConnectionID,
 		AccountID: "web-profile-" + hex.EncodeToString(account[:20]), Label: "抖音首页网页文字", Configuration: state},
 		profile: filepath.Join(p.home.dataDir, "apps", "douyin", "web-login", fish, r.Profile), version: hex.EncodeToString(version[:])}
@@ -128,19 +127,25 @@ func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.Observ
 	if err != nil {
 		return apphost.ObservationGrant{}, err
 	}
-	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || in.ContentID != douyinapp.WebReadContentID || in.Field != apphost.ObservationPageText {
+	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || in.Field != apphost.ObservationPageText {
+		return apphost.ObservationGrant{Allowed: false}, nil
+	}
+	if _, ok := p.resolveTarget(a, in.ContentID); !ok {
 		return apphost.ObservationGrant{Allowed: false}, nil
 	}
 	return apphost.ObservationGrant{Allowed: true, Version: a.version}, nil
 }
 
 type localDouyinWebSnapshot struct {
-	Version    int    `json:"schema_version"`
-	Grant      string `json:"grant"`
-	ID         string `json:"id"`
-	Title      string `json:"title"`
-	Text       string `json:"text"`
-	CapturedAt string `json:"captured_at"`
+	Version    int                            `json:"schema_version"`
+	Grant      string                         `json:"grant"`
+	ID         string                         `json:"id"`
+	Title      string                         `json:"title"`
+	Text       string                         `json:"text"`
+	CapturedAt string                         `json:"captured_at"`
+	ContentID  string                         `json:"content_id,omitempty"`
+	SourceURL  string                         `json:"source_url,omitempty"`
+	Links      []stationbrowser.DouyinWebLink `json:"links,omitempty"`
 }
 type localDouyinWebCursor struct {
 	ID     string `json:"snapshot"`
@@ -157,7 +162,11 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || in.ContentID != douyinapp.WebReadContentID || in.Field != apphost.ObservationPageText {
+	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || in.Field != apphost.ObservationPageText {
+		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
+	}
+	target, ok := p.resolveTarget(a, in.ContentID)
+	if !ok {
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 	}
 	authorize := func() error {
@@ -170,7 +179,7 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 		}
 		return nil
 	}
-	dir := filepath.Join(p.home.dataDir, "apps", "douyin", "web-snapshots", a.record.FishID, a.version)
+	dir := p.snapshotDirectory(a)
 	root, err := workspacefs.EnsurePath(dir)
 	if err != nil {
 		return apphost.ObservationPage{}, apphost.ErrObservationWebStorageUnavailable
@@ -186,16 +195,22 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	if in.Cursor == "" {
 		m := p.home.douyinWeb
 		m.mu.Lock()
-		readPage, serviceCtx := m.readPage, m.ctx
+		readPage, readVideo, serviceCtx := m.readPage, m.readVideo, m.ctx
 		m.mu.Unlock()
-		if readPage == nil {
+		if target.videoID == "" && readPage == nil || target.videoID != "" && readVideo == nil {
 			return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
 		}
 		readCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
 		stop := context.AfterFunc(serviceCtx, cancel)
 		defer stop()
 		defer cancel()
-		page, readErr := readPage(readCtx, a.profile, authorize)
+		var page stationbrowser.DouyinWebPage
+		var readErr error
+		if target.videoID == "" {
+			page, readErr = readPage(readCtx, a.profile, authorize)
+		} else {
+			page, readErr = readVideo(readCtx, a.profile, target.videoID, authorize)
+		}
 		if readErr != nil {
 			return apphost.ObservationPage{}, localDouyinWebReadError(readErr)
 		}
@@ -209,7 +224,10 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 		if err != nil {
 			return apphost.ObservationPage{}, errors.New("无法登记网页读取编号")
 		}
-		snapshot = localDouyinWebSnapshot{Version: 1, Grant: a.version, ID: id, Title: page.Title, Text: page.Text, CapturedAt: time.Now().UTC().Format(time.RFC3339)}
+		snapshot = localDouyinWebSnapshot{Version: 1, Grant: a.version, ID: id, Title: page.Title, Text: page.Text, CapturedAt: time.Now().UTC().Format(time.RFC3339), ContentID: in.ContentID, SourceURL: target.url}
+		if target.videoID == "" && localDouyinWebScope(a.record) == "home_and_videos" {
+			snapshot.Links = page.Links
+		}
 		raw, err := json.Marshal(snapshot)
 		if err != nil || len(raw) > localDouyinWebSnapshotMax {
 			return apphost.ObservationPage{}, apphost.ErrObservationPageTextSize
@@ -217,52 +235,32 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 		if hostfile.WritePrivate(filepath.Join(dir, snapshot.ID+".json"), raw) != nil {
 			return apphost.ObservationPage{}, apphost.ErrObservationWebStorageUnavailable
 		}
+		if err := saveLocalDouyinWebLinkProof(dir, snapshot); err != nil {
+			return apphost.ObservationPage{}, err
+		}
 		cursor.ID = snapshot.ID
 	} else {
 		raw, err := base64.RawURLEncoding.DecodeString(in.Cursor)
 		if err != nil || len(raw) > 512 || json.Unmarshal(raw, &cursor) != nil || cursor.Offset <= 0 || !validLocalDouyinWebID(cursor.ID) {
 			return apphost.ObservationPage{}, apphost.ErrObservationInvalid
 		}
-		f, err := workspacefs.OpenRegular(root, cursor.ID+".json")
+		snapshot, err = readLocalDouyinWebSnapshot(root, cursor, a.version, in.ContentID)
 		if err != nil {
-			return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
-		}
-		raw, err = io.ReadAll(io.LimitReader(f, localDouyinWebSnapshotMax+1))
-		f.Close()
-		if err != nil || len(raw) > localDouyinWebSnapshotMax || json.Unmarshal(raw, &snapshot) != nil || snapshot.Version != 1 || snapshot.Grant != a.version || snapshot.ID != cursor.ID {
-			return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
+			return apphost.ObservationPage{}, err
 		}
 	}
 	if err = authorize(); err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	text := []rune(snapshot.Text)
-	if cursor.Offset < 0 || cursor.Offset >= len(text) {
-		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
+	return localDouyinWebPage(snapshot, cursor.Offset, in.Limit)
+}
+
+func fmtLocalDouyinWebCoverage(start, end, total int, captured string, links bool) string {
+	label := "网页可见文字"
+	if links {
+		label = "网页可见文字与视频链接清单"
 	}
-	limit := in.Limit
-	if limit == 0 {
-		limit = 2048
-	}
-	// Compare before adding to avoid integer overflow on an explicit large limit.
-	end := len(text)
-	if limit < len(text)-cursor.Offset {
-		end = cursor.Offset + limit
-	}
-	content := string(text[cursor.Offset:end])
-	if cursor.Offset == 0 && snapshot.Title != "" {
-		content = "页面标题：" + snapshot.Title + "\n" + content
-	}
-	page := apphost.ObservationPage{
-		Coverage: fmt.Sprintf("网页可见文字第 %d–%d 字，共 %d 字；读取时间 %s", cursor.Offset+1, end, len(text), snapshot.CapturedAt), Complete: end == len(text)}
-	if strings.TrimSpace(content) != "" {
-		page.Chunks = []apphost.ObservationChunk{{Position: cursor.Offset, Text: content, SourceID: snapshot.ID, SourceURL: localDouyinWebHomeURL}}
-	}
-	if !page.Complete {
-		raw, _ := json.Marshal(localDouyinWebCursor{ID: snapshot.ID, Offset: end})
-		page.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
-	}
-	return page, nil
+	return fmt.Sprintf("%s第 %d–%d 字，共 %d 字；读取时间 %s", label, start+1, end, total, captured)
 }
 
 func localDouyinWebReadError(err error) error {

@@ -64,7 +64,7 @@
     {
       "id": "observation.web-page-text",
       "implementation": "ready",
-      "description": "由 Windows 宿主在主人单独开启后，从其保存的网页登录资料读取抖音主页文字",
+      "description": "由 Windows 宿主在主人单独开启后读取首页实际可见文字；主人扩大范围后，可读取从首页实际发现的视频页面文字",
       "permissions": [],
       "discoverable": true,
       "requires_owner_setting": "explicit-owner-web-read"

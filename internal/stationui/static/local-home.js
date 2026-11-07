@@ -2153,9 +2153,11 @@
       (typeof value.attempt_id === "undefined" || typeof value.attempt_id === "string") &&
       (typeof value.confirmed_at === "undefined" || typeof value.confirmed_at === "string") &&
       (typeof value.read_enabled === "undefined" || typeof value.read_enabled === "boolean") &&
+      (typeof value.read_scope === "undefined" || ["home", "home_and_videos"].includes(value.read_scope)) &&
       (typeof value.reason === "undefined" || typeof value.reason === "string");
   }
   function douyinWebReadEnabled(value) { return value?.read_enabled === true; }
+  function douyinWebReadScope(value) { return value?.read_scope === "home_and_videos" ? "home_and_videos" : "home"; }
   function stopDouyinWebLoginPolling(current = apps) {
     const web = current?.douyinWebLogin;
     if (!web) return;
@@ -2212,7 +2214,7 @@
     if (value?.state === "unconfirmed" && value.attempt_id) return ["等待主人确认", "请确认新窗口已完成登录，再保存资料。"];
     return states[value?.state] || ["网页登录状态暂不可读", "刷新后可重新查看。"];
   }
-  async function updateDouyinWebLogin(current, action, allowRead) {
+  async function updateDouyinWebLogin(current, action, allowRead, readScope, explicitReadScope) {
     const web = current?.douyinWebLogin, value = web?.value;
     if (!web || !value || current !== apps || web.applying || !Number.isFinite(Number(value.revision))) return;
     if ((action === "confirm" || action === "cancel") && !value.attempt_id) return;
@@ -2223,14 +2225,17 @@
     const body = { action, revision: value.revision };
     if (action === "begin" || action === "clear") body.approve_profile = true;
     if (action === "confirm" || action === "cancel") body.attempt_id = value.attempt_id;
-    if (action === "set_read") body.allow_read = allowRead === true;
+    if (action === "set_read") {
+      body.allow_read = allowRead === true;
+      if (allowRead === true && explicitReadScope === true) body.read_scope = readScope === "home_and_videos" ? "home_and_videos" : "home";
+    }
     try {
       const updated = await request("/api/local/apps/douyin/web-login", { method: "POST", body: JSON.stringify(body) });
       if (current !== apps || web.generation !== generation) return;
       if (!validDouyinWebLogin(updated)) throw new Error("网页登录状态返回格式无效，请刷新后重试。");
       web.value = updated;
       web.loaded = true;
-      appFeedback(action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : action === "set_read" ? (allowRead ? "已允许读取抖音首页网页文字。" : "已停止读取抖音首页网页文字。") : "已打开网页登录窗口。");
+      appFeedback(action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : action === "set_read" ? (allowRead ? (readScope === "home_and_videos" ? "已允许读取首页及视频页文字。" : "已允许读取抖音首页网页文字。") : "已停止网页读取。") : "已打开网页登录窗口。");
     } catch (error) {
       if (current === apps && web.generation === generation && !appSessionExpired([{ status: "rejected", reason: error }])) {
         web.error = error.message || "网页登录操作未完成。";
@@ -2285,14 +2290,28 @@
       }
       if (value.state === "saved" && !value.active && !value.attempt_id) {
         const readEnabled = douyinWebReadEnabled(value);
-        const read = appElement("button", web.applying === "set_read" ? "正在保存…" : readEnabled ? "停止读取首页文字" : "允许读取首页文字", "button compact quiet");
+        const read = appElement("button", web.applying === "set_read" ? "正在保存…" : readEnabled ? "停止网页读取" : "允许读取首页文字", "button compact quiet");
         read.type = "button";
         read.disabled = busy || (!readEnabled && !available);
         read.addEventListener("click", () => { void updateDouyinWebLogin(current, "set_read", !readEnabled); });
-        const readNote = appElement("p", readEnabled ? "已允许读取实际首页网页文字。" : "可由主人单独允许读取首页网页文字。", "publication-authorization-note");
-        readNote.append(" 不代表完整观看视频，也不授予点赞、评论或发布权限。");
+        const readNote = appElement("p", readEnabled ? "已允许读取实际网页文字。" : "可由主人单独允许读取首页网页文字。", "publication-authorization-note");
+        readNote.append(readEnabled && douyinWebReadScope(value) === "home_and_videos"
+          ? " 视频页文字不等于音轨或完整观看，也不授予点赞、评论或发布权限。"
+          : " 不代表完整观看视频，也不授予点赞、评论或发布权限。");
         detail.append(readNote);
         actions.append(read);
+        if (readEnabled) {
+          const scope = document.createElement("select");
+          scope.className = "douyin-web-read-scope";
+          scope.setAttribute("aria-label", "读取范围");
+          scope.disabled = busy;
+          scope.append(new Option("仅首页文字", "home"), new Option("首页及视频页文字", "home_and_videos"));
+          scope.value = douyinWebReadScope(value);
+          scope.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", true, scope.value, true); });
+          const scopeLabel = appElement("label", "读取范围", "douyin-web-read-scope-label");
+          scopeLabel.append(scope);
+          actions.append(scopeLabel);
+        }
       }
     }
     if (actions.childElementCount) detail.append(actions);

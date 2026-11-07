@@ -32,14 +32,16 @@ type localDouyinWebView struct {
 	Available   bool   `json:"available"`
 	Reason      string `json:"reason,omitempty"`
 	ReadEnabled bool   `json:"read_enabled"`
+	ReadScope   string `json:"read_scope"`
 }
 
 type localDouyinWebInput struct {
-	Action         string `json:"action"`
-	Revision       uint64 `json:"revision"`
-	AttemptID      string `json:"attempt_id,omitempty"`
-	ApproveProfile bool   `json:"approve_profile"`
-	AllowRead      *bool  `json:"allow_read,omitempty"`
+	Action         string  `json:"action"`
+	Revision       uint64  `json:"revision"`
+	AttemptID      string  `json:"attempt_id,omitempty"`
+	ApproveProfile bool    `json:"approve_profile"`
+	AllowRead      *bool   `json:"allow_read,omitempty"`
+	ReadScope      *string `json:"read_scope,omitempty"`
 }
 
 type localDouyinWebRecord struct {
@@ -49,6 +51,7 @@ type localDouyinWebRecord struct {
 	Profile     string `json:"profile,omitempty"`
 	ConfirmedAt string `json:"confirmed_at,omitempty"`
 	ReadEnabled bool   `json:"read_enabled,omitempty"`
+	ReadScope   string `json:"read_scope,omitempty"`
 }
 
 type localDouyinLoginWindow interface {
@@ -63,13 +66,14 @@ type localDouyinWebLogin struct {
 	open          func(context.Context, string) (localDouyinLoginWindow, error)
 	available     func() bool
 	readPage      func(context.Context, string, func() error) (stationbrowser.DouyinWebPage, error)
+	readVideo     func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
 	window        localDouyinLoginWindow
 	cancel        context.CancelFunc
 	attempt, fish string
 }
 
 func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *http.ServeMux, ctx context.Context) {
-	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome,
+	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo,
 		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
 			return stationbrowser.OpenDouyinLogin(ctx, profile)
 		}}
@@ -143,6 +147,12 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	if record.ReadEnabled && (record.Profile == "" || record.ConfirmedAt == "") {
 		return record, errors.New("网页读取授权没有已确认的登录资料，原资料保留")
 	}
+	if record.ReadScope != "" && record.ReadScope != "home" && record.ReadScope != "home_and_videos" {
+		return record, errors.New("网页读取范围无效，原资料保留")
+	}
+	if record.ReadScope == "home_and_videos" && !record.ReadEnabled {
+		return record, errors.New("网页读取范围缺少有效许可，原资料保留")
+	}
 	if record.ConfirmedAt != "" {
 		if _, err := time.Parse(time.RFC3339, record.ConfirmedAt); err != nil {
 			return record, errors.New("网页登录登记时间无效，原资料保留")
@@ -152,7 +162,7 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 }
 
 func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebView {
-	v := localDouyinWebView{Revision: record.Revision, State: "unconfigured", Available: m.available(), ConfirmedAt: record.ConfirmedAt}
+	v := localDouyinWebView{Revision: record.Revision, State: "unconfigured", Available: m.available(), ConfirmedAt: record.ConfirmedAt, ReadScope: localDouyinWebScope(record)}
 	if record.Profile != "" {
 		v.State = "unconfirmed"
 	}
@@ -224,11 +234,19 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		if in.AllowRead == nil {
 			return fail(400, "请明确是否允许大肥鱼读取抖音首页网页文字")
 		}
+		if in.ReadScope != nil && *in.ReadScope != "home" && *in.ReadScope != "home_and_videos" {
+			return fail(400, "网页读取范围须为首页或首页及视频页文字")
+		}
 		view := m.view(record)
 		if *in.AllowRead && (view.State != "saved" || view.AttemptID != "" || !view.Available) {
 			return fail(409, "请先完成网页登录并确认保存，再开启网页文字读取")
 		}
 		record.ReadEnabled = *in.AllowRead
+		if !record.ReadEnabled {
+			record.ReadScope = ""
+		} else if in.ReadScope != nil {
+			record.ReadScope = *in.ReadScope
+		}
 		if save() != nil {
 			return fail(503, "网页读取授权未保存，请重新读取后核对")
 		}
@@ -270,6 +288,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		// Beginning a new login never carries forward an old confirmation.
 		record.ConfirmedAt = ""
 		record.ReadEnabled = false
+		record.ReadScope = ""
 		if save() != nil {
 			return fail(503, "无法保存网页登录登记，未启动浏览器")
 		}
@@ -315,6 +334,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		// Another browser may still own the profile lock during that cleanup.
 		if record.ReadEnabled {
 			record.ReadEnabled = false
+			record.ReadScope = ""
 			if save() != nil {
 				return fail(503, "网页读取授权未能撤销，尚未清理资料")
 			}
@@ -350,4 +370,11 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		return fail(400, "不支持的网页登录操作")
 	}
 	return m.view(record), 200, nil
+}
+
+func localDouyinWebScope(record localDouyinWebRecord) string {
+	if record.ReadScope == "home_and_videos" {
+		return record.ReadScope
+	}
+	return "home"
 }

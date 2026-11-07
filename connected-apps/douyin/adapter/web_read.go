@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"strings"
 
 	"wechat-bot/internal/apphost"
 )
@@ -14,7 +15,33 @@ const (
 	// WebReadContentID is the fixed home-page text target offered by that
 	// connection.
 	WebReadContentID = "home"
+	// WebVideoContentPrefix identifies an opaque video-page target minted by
+	// the host from a link actually discovered on the owner's home page.
+	WebVideoContentPrefix = "web-video-"
 )
+
+// IsWebReadContentID performs syntax validation only. In particular, a
+// syntactically valid video ID has no authority by itself: the trusted host
+// must still verify its origin, owner scope, and grant in WebReadConnection.
+func IsWebReadContentID(contentID string) bool {
+	if contentID == WebReadContentID {
+		return true
+	}
+	if !strings.HasPrefix(contentID, WebVideoContentPrefix) {
+		return false
+	}
+	encoded := contentID[len(WebVideoContentPrefix):]
+	if len(encoded) < 1 || len(encoded) > 220 {
+		return false
+	}
+	for i := 0; i < len(encoded); i++ {
+		character := encoded[i]
+		if !(character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' || character == '_') {
+			return false
+		}
+	}
+	return true
+}
 
 // WebReadConnection is supplied by the trusted station before startup. The
 // station owns the browser, profile, grants, source checks, and pagination;
@@ -74,7 +101,7 @@ func (p *SearchApp) webReadRef(ctx context.Context) (apphost.ConnectionRef, bool
 }
 
 func (p *SearchApp) validWebReadAccess(ref apphost.ConnectionRef, contentID string, field apphost.ObservationField) bool {
-	return ref.AppID == ID && ref.InstallationID == installationID && ref.ConnectionID == WebReadConnectionID && contentID == WebReadContentID && field == apphost.ObservationPageText
+	return ref.AppID == ID && ref.InstallationID == installationID && ref.ConnectionID == WebReadConnectionID && IsWebReadContentID(contentID) && field == apphost.ObservationPageText
 }
 
 func (p *SearchApp) webReadTargets(ctx context.Context) ([]apphost.ObservationTarget, error) {
