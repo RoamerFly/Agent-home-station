@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,8 +45,12 @@ func TestLocalRVCInfoReadsOnlyPinnedRegistration(t *testing.T) {
 	if info.Binding == "" || len(info.Profiles) != 1 || info.Profiles[0].ID != "mom-rvc" || info.Running || info.Busy {
 		t.Fatalf("unexpected deployment: %#v", info)
 	}
+	_, _, err = s.CallExisting(t.Context(), localRVCFixtureFish, info.Binding, http.MethodGet, "/jobs/0123456789abcdef0123456789abcdef", "", nil)
+	if !errors.Is(err, errLocalRVCNotRunning) {
+		t.Fatalf("background lookup started or reached an unowned RVC service: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(data, localRVCTokenFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Info must not mint an authentication token: %v", err)
+		t.Fatalf("inspection must not mint an authentication token: %v", err)
 	}
 }
 

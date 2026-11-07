@@ -31,6 +31,7 @@ const (
 )
 
 var localRVCGrants = []string{"artifact.read", "artifact.write", "gpu"}
+var errLocalRVCFollowupDeployment = errors.New("原 RVC 部署已变化或不可用")
 
 type localRVCVoicePin struct {
 	Label      string `json:"profile"`
@@ -145,6 +146,10 @@ func (s *localProjectTools) rvcRegistered(fish string) bool {
 }
 
 func (t *localToolSet) callLocalRVC(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	return t.callLocalRVCMode(ctx, name, raw, false)
+}
+
+func (t *localToolSet) callLocalRVCMode(ctx context.Context, name string, raw json.RawMessage, existingOnly bool) (string, error) {
 	s := t.projectTools
 	if s == nil || s.rvc == nil || t.run == nil || !t.run.Tracked {
 		return "", errors.New("当前对话没有本机 RVC 执行授权")
@@ -168,13 +173,17 @@ func (t *localToolSet) callLocalRVC(ctx context.Context, name string, raw json.R
 	}
 	deployment, err := s.rvc.Info(ctx, grant.FishID)
 	if err != nil || deployment.Binding == "" {
+		if existingOnly {
+			return "", errLocalRVCFollowupDeployment
+		}
 		return "", errors.New(localRVCSetupReason(err))
 	}
 	cfg, err := host.store.Configuration(ctx, localRVCPackage)
 	if err != nil {
 		return "", err
 	}
-	env := localRVCInvocation{t, host, grant, installed, deployment, strconv.Itoa(cfg.Revision)}
+	env := localRVCInvocation{tool: t, host: host, grant: grant, installed: installed, deployment: deployment,
+		configRevision: strconv.Itoa(cfg.Revision), existingOnly: existingOnly}
 	switch name {
 	case localRVCVoicesTool:
 		if strictLocalMemoryDecode(raw, &struct{}{}) != nil {
@@ -195,6 +204,7 @@ type localRVCInvocation struct {
 	installed      pluginhost.InstalledPackage
 	deployment     localRVCDeployment
 	configRevision string
+	existingOnly   bool
 }
 
 func (e localRVCInvocation) voiceAvailable(id string) bool {
@@ -223,6 +233,9 @@ func (e localRVCInvocation) request(ctx context.Context, method, route, key stri
 		if err != nil {
 			return nil, 0, err
 		}
+	}
+	if e.existingOnly {
+		return e.tool.projectTools.rvc.CallExisting(ctx, e.grant.FishID, e.deployment.Binding, method, route, key, body)
 	}
 	return e.tool.projectTools.rvc.Call(ctx, e.grant.FishID, e.deployment.Binding, method, route, key, body)
 }

@@ -53,6 +53,13 @@ func (f *fakeLocalRVCBackend) Info(_ context.Context, fish string) (localRVCDepl
 	return localRVCDeployment{Binding: f.binding, Profiles: []localRVCVoice{f.voice}}, nil
 }
 
+func (f *fakeLocalRVCBackend) CallExisting(ctx context.Context, fish, binding, method, path, key string, body []byte) ([]byte, int, error) {
+	if method != http.MethodGet {
+		return nil, 0, errSyntheticRVC("background query attempted a write")
+	}
+	return f.Call(ctx, fish, binding, method, path, key, body)
+}
+
 func (f *fakeLocalRVCBackend) Call(_ context.Context, fish, binding, method, path, key string, body []byte) ([]byte, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -417,5 +424,10 @@ func TestLocalRVCRecoversLostSubmitReceiptWithoutDuplicate(t *testing.T) {
 	}
 	if downloaded := localArtifactDownload(t, f, outputID); !bytes.Equal(downloaded, output) {
 		t.Fatal("lost receipt recovery published a different audio payload")
+	}
+	tools := projectFollowupFixtureTools(t, f, "rvc-lost-receipt")
+	view, waiting, err := tools.projectFollowupStatus(t.Context(), localRVCJobTool, jobID)
+	if err != nil || waiting || view["state"] != "completed" || view["artifact_id"] != outputID {
+		t.Fatal("RVC background read did not reuse the verified output", view, waiting, err)
 	}
 }

@@ -46,6 +46,7 @@ const (
 type localRVCBackend interface {
 	Info(context.Context, string) (localRVCDeployment, error)
 	Call(context.Context, string, string, string, string, string, []byte) ([]byte, int, error)
+	CallExisting(context.Context, string, string, string, string, string, []byte) ([]byte, int, error)
 	Stop(context.Context) error
 	Close(context.Context) error
 }
@@ -152,7 +153,20 @@ func (s *localRVCService) Info(ctx context.Context, fish string) (localRVCDeploy
 	return localRVCDeployment{Binding: binding, Profiles: profiles, Running: status.Running, Busy: status.Busy}, nil
 }
 
+var errLocalRVCNotRunning = errors.New("原 RVC 服务当前未运行")
+
 func (s *localRVCService) Call(ctx context.Context, fish, binding, method, path, key string, body []byte) ([]byte, int, error) {
+	return s.call(ctx, fish, binding, method, path, key, body, true)
+}
+
+func (s *localRVCService) CallExisting(ctx context.Context, fish, binding, method, path, key string, body []byte) ([]byte, int, error) {
+	if method != http.MethodGet {
+		return nil, 0, errors.New("后台 RVC 核对只允许读取原任务")
+	}
+	return s.call(ctx, fish, binding, method, path, key, body, false)
+}
+
+func (s *localRVCService) call(ctx context.Context, fish, binding, method, path, key string, body []byte, startIfNeeded bool) ([]byte, int, error) {
 	if err := checkLocalRVCFish(fish); err != nil {
 		return nil, 0, err
 	}
@@ -173,14 +187,17 @@ func (s *localRVCService) Call(ctx context.Context, fish, binding, method, path,
 		return nil, 0, err
 	}
 	id := localRVCServiceID(fish)
-	s.cancelIdle(id)
-	if err := s.start(ctx, fish, binding, registration, manifest); err != nil {
-		return nil, 0, err
+	if startIfNeeded {
+		s.cancelIdle(id)
+		if err := s.start(ctx, fish, binding, registration, manifest); err != nil {
+			return nil, 0, err
+		}
 	}
 	release, ok := s.services.Acquire(id)
 	if !ok {
-		return nil, 0, errors.New("station_rvc_service_unavailable")
+		return nil, 0, errLocalRVCNotRunning
 	}
+	s.cancelIdle(id)
 	defer func() {
 		release()
 		s.scheduleIdle(id, registration.idleTimeout())

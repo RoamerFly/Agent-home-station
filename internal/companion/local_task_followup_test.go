@@ -98,6 +98,67 @@ func TestLocalTaskFollowupStableRequestIdentityAndPrivateListing(t *testing.T) {
 	}
 }
 
+func TestLocalTaskFollowupMigratesProgramRowsAndPersistsToolTargets(t *testing.T) {
+	s, _, in, now := localFollowupFixture(t)
+	ctx := t.Context()
+	program, err := s.ScheduleLocalTaskFollowup(ctx, in, *in.Source, "process-original", 2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID := "local-task-" + localFollowupID(ScopeID(in.Channel, in.Account, in.Thread), in.Source.EventID,
+		in.Source.Revision, in.Source.BodyHash, "process-original", uint64(2))
+	if program.ID != legacyID {
+		t.Fatal("existing program identity changed", program.ID, legacyID)
+	}
+	// Remove only the new columns from this isolated fixture to reproduce
+	// the table shape already present in users' previous installations.
+	for _, column := range []string{"result_tool", "job_id"} {
+		if _, err = s.db.ExecContext(ctx, "ALTER TABLE local_task_followups DROP COLUMN "+column); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := filepath.Dir(s.path)
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+	got, err := migrated.GetLocalTaskFollowup(ctx, in, program.ID)
+	if err != nil || got != program {
+		t.Fatal("migration changed the existing row", got, err)
+	}
+	jobID := strings.Repeat("a", 64)
+	job, err := migrated.ScheduleLocalToolFollowup(ctx, in, *in.Source, "project_comfy_job", jobID, 2, now)
+	if err != nil || job.JobID != jobID || job.ProcessID != "" || job.ID == program.ID {
+		t.Fatal("invalid project target", job, err)
+	}
+	retry, err := migrated.ScheduleLocalToolFollowup(ctx, in, *in.Source, job.ResultTool, jobID, 2, now.Add(time.Minute))
+	if err != nil || retry != job {
+		t.Fatal("repeated registration changed project target", retry, err)
+	}
+	if _, err := migrated.ScheduleLocalToolFollowup(ctx, in, *in.Source, "unknown route", jobID, 2, now); err == nil {
+		t.Fatal("invalid result tool accepted")
+	}
+	if _, err := migrated.ScheduleLocalToolFollowup(ctx, in, *in.Source, job.ResultTool, "", 2, now); err == nil {
+		t.Fatal("incomplete project target accepted")
+	}
+	if err = migrated.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	recovered, err := reopened.GetLocalTaskFollowup(ctx, in, job.ID)
+	if err != nil || recovered != job {
+		t.Fatal("project target lost on reopen", recovered, err)
+	}
+}
+
 func TestLocalTaskFollowupDueCASAndTerminalCancellation(t *testing.T) {
 	s, _, in, now := localFollowupFixture(t)
 	ctx := context.Background()

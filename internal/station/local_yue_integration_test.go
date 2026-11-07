@@ -241,6 +241,11 @@ func TestLocalYuEChatClaimRecoveryCancellationAndDownload(t *testing.T) {
 	if downloaded == "" || !bytes.Equal(localArtifactDownload(t, f, downloaded), flac) {
 		t.Fatal("verified FLAC missing from local chat download")
 	}
+	tools := projectFollowupFixtureTools(t, f, "yue-submit")
+	view, waiting, err := tools.projectFollowupStatus(t.Context(), localYuEJobTool, jobID)
+	if err != nil || waiting || view["state"] != "completed" || view["artifact_id"] != downloaded {
+		t.Fatal("YuE background read did not reuse the verified output", view, waiting, err)
+	}
 	match = jobPattern.FindStringSubmatch(yuEChatCall(t, f, "yue-second", localYuEStartTool, map[string]any{
 		"mode": "original", "style": "folk", "lyrics": "test", "duration_seconds": 1,
 	}))

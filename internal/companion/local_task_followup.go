@@ -24,6 +24,8 @@ type LocalTaskFollowup struct {
 	ID           string    `json:"id"`
 	RequestID    string    `json:"request_id"`
 	ProcessID    string    `json:"process_id"`
+	ResultTool   string    `json:"result_tool,omitempty"`
+	JobID        string    `json:"job_id,omitempty"`
 	HomeRevision uint64    `json:"home_revision"`
 	Source       SourceRef `json:"-"`
 	State        string    `json:"state"`
@@ -40,7 +42,7 @@ type LocalTaskFollowupPage struct {
 	HasMore bool                `json:"has_more"`
 }
 
-const localTaskFollowupColumns = `id,request_id,process_id,home_revision,source,state,next_at,created_at,updated_at,reason,revision`
+const localTaskFollowupColumns = `id,request_id,process_id,home_revision,source,state,next_at,created_at,updated_at,reason,revision,result_tool,job_id`
 
 func localFollowupID(parts ...any) string {
 	b, _ := json.Marshal(parts)
@@ -80,7 +82,7 @@ func scanLocalTaskFollowup(row interface{ Scan(...any) error }) (LocalTaskFollow
 	var out LocalTaskFollowup
 	var source []byte
 	var next, created, updated string
-	err := row.Scan(&out.ID, &out.RequestID, &out.ProcessID, &out.HomeRevision, &source, &out.State, &next, &created, &updated, &out.Reason, &out.Revision)
+	err := row.Scan(&out.ID, &out.RequestID, &out.ProcessID, &out.HomeRevision, &source, &out.State, &next, &created, &updated, &out.Reason, &out.Revision, &out.ResultTool, &out.JobID)
 	if err != nil {
 		return out, err
 	}
@@ -99,11 +101,41 @@ func scanLocalTaskFollowup(row interface{ Scan(...any) error }) (LocalTaskFollow
 }
 
 func (s *Store) ScheduleLocalTaskFollowup(ctx context.Context, in Input, source SourceRef, processID string, homeRevision uint64, now time.Time) (LocalTaskFollowup, error) {
+	return s.scheduleLocalFollowup(ctx, in, source, processID, "", "", homeRevision, now)
+}
+
+// ScheduleLocalToolFollowup tracks an asynchronous tool result using the same
+// source authorization, idempotency and terminal-state rules as process tasks.
+func (s *Store) ScheduleLocalToolFollowup(ctx context.Context, in Input, source SourceRef, resultTool, jobID string, homeRevision uint64, now time.Time) (LocalTaskFollowup, error) {
+	return s.scheduleLocalFollowup(ctx, in, source, "", resultTool, jobID, homeRevision, now)
+}
+
+func validLocalFollowupTarget(processID, resultTool, jobID string) bool {
+	if processID != "" {
+		return resultTool == "" && jobID == "" && strings.TrimSpace(processID) != "" && utf8.ValidString(processID) && len(processID) <= 512
+	}
+	if resultTool == "" || len(jobID) != 64 {
+		return false
+	}
+	for _, c := range resultTool {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	for _, c := range jobID {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) scheduleLocalFollowup(ctx context.Context, in Input, source SourceRef, processID, resultTool, jobID string, homeRevision uint64, now time.Time) (LocalTaskFollowup, error) {
 	scope, err := localConversationScope(in)
 	if err != nil {
 		return LocalTaskFollowup{}, err
 	}
-	if !localFollowupSourceIdentity(in, source) || strings.TrimSpace(processID) == "" || !utf8.ValidString(processID) || len(processID) > 512 || homeRevision == 0 || now.IsZero() {
+	if !localFollowupSourceIdentity(in, source) || !validLocalFollowupTarget(processID, resultTool, jobID) || homeRevision == 0 || now.IsZero() {
 		return LocalTaskFollowup{}, ErrLocalRequestUnavailable
 	}
 	s.mu.Lock()
@@ -114,12 +146,17 @@ func (s *Store) ScheduleLocalTaskFollowup(ctx context.Context, in Input, source 
 	if err = s.localRequestSourceLocked(ctx, scope, in.TraceID, source); err != nil {
 		return LocalTaskFollowup{}, err
 	}
+	// Keep the original process hash byte-for-byte stable. Tool targets have
+	// a distinct domain and include both provider identity and job identity.
 	id := "local-task-" + localFollowupID(scope, source.EventID, source.Revision, source.BodyHash, processID, homeRevision)
+	if resultTool != "" {
+		id = "local-task-" + localFollowupID(scope, source.EventID, source.Revision, source.BodyHash, "tool", resultTool, jobID, homeRevision)
+	}
 	raw, err := json.Marshal(source)
 	if err != nil {
 		return LocalTaskFollowup{}, err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO local_task_followups(id,scope,request_id,process_id,home_revision,source_event_id,source_revision,source_hash,source,state,next_at,created_at,updated_at,reason,revision) VALUES(?,?,?,?,?,?,?,?,?,'waiting',?,?,?,'',1) ON CONFLICT(id) DO NOTHING`, id, scope, in.TraceID, processID, homeRevision, source.EventID, source.Revision, source.BodyHash, raw, memoryTime(now), memoryTime(now), memoryTime(now))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO local_task_followups(id,scope,request_id,process_id,home_revision,source_event_id,source_revision,source_hash,source,state,next_at,created_at,updated_at,reason,revision,result_tool,job_id) VALUES(?,?,?,?,?,?,?,?,?,'waiting',?,?,?,'',1,?,?) ON CONFLICT(id) DO NOTHING`, id, scope, in.TraceID, processID, homeRevision, source.EventID, source.Revision, source.BodyHash, raw, memoryTime(now), memoryTime(now), memoryTime(now), resultTool, jobID)
 	if err != nil {
 		return LocalTaskFollowup{}, err
 	}

@@ -113,7 +113,13 @@ func (e localRVCInvocation) readJob(ctx context.Context, id string, cancelOnly b
 		job.Context.Thread != g.OwnerID || job.Context.Requester != g.OwnerID ||
 		job.Context.Authorization != localCheckpointKey(g) || job.PackageDigest != e.installed.Digest ||
 		job.ConfigRevision != e.configRevision || json.Unmarshal(job.Arguments, &args) != nil ||
-		args.Origin == nil || args.Binding != e.deployment.Binding || !args.Pin.valid() || job.Context.SourceVersions[args.Origin.EventID] != args.Origin.Revision {
+		args.Origin == nil || !args.Pin.valid() || job.Context.SourceVersions[args.Origin.EventID] != args.Origin.Revision {
+		return job, args, nil, errors.New("原 RVC 任务不可用或授权已变化")
+	}
+	if args.Binding != e.deployment.Binding {
+		if e.existingOnly {
+			return job, args, nil, errLocalRVCFollowupDeployment
+		}
 		return job, args, nil, errors.New("原 RVC 任务不可用或授权已变化")
 	}
 	if job.State != "completed" && (cancelOnly || job.CancelRequested) {
@@ -139,6 +145,9 @@ func (e localRVCInvocation) lookup(ctx context.Context, job pluginhost.Job, args
 		route = "/jobs/" + job.RemoteID
 	}
 	data, code, err := e.request(ctx, http.MethodGet, route, "", nil)
+	if err != nil && e.existingOnly {
+		return remote, false, err
+	}
 	if err != nil || code == http.StatusNotFound {
 		return remote, false, nil
 	}
