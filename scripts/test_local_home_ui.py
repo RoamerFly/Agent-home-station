@@ -1777,6 +1777,9 @@ def verify_douyin_authorization(binary, output):
                     page.reload()
                     page.locator("#apps-tab").click()
                     page.get_by_text("抖音授权已过期", exact=True).wait_for()
+                    workbench.get_by_text("发布授权已过期", exact=True).wait_for()
+                    assert workbench.get_by_text("已授权发布视频", exact=True).count() == 0
+                    workbench.locator(f'[data-job="{accepted_job}"]').get_by_text("已公开", exact=True).wait_for()
                     page.get_by_text("重新扫码授权", exact=True).wait_for()
                     page.get_by_role("button", name="打开扫码窗口").wait_for()
                     assert page.get_by_role("button", name="续期授权").count() == 0
@@ -1786,6 +1789,7 @@ def verify_douyin_authorization(binary, output):
                     assert len(attempts) == 3
                     emit({"type": "douyin-auth-callback", "state": attempts[2], "callback_url": callback(attempts[2])})
                     page.get_by_text(verified["label"], exact=True).wait_for()
+                    workbench.get_by_text("已授权发布视频", exact=True).wait_for()
                     assert completed == [expected, callback(attempts[2])]
                     context.close()
                 browser.close()

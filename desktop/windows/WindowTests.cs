@@ -1,9 +1,12 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Threading;
@@ -244,6 +247,82 @@ namespace WechatAgent.Desktop {
             }
         }
 
+        static void BundledAppAndToolTests(Deployment d) {
+            var douyinBundled = File.Exists(Path.Combine(d.Workspace, "connected-apps", "douyin", "app.json"));
+            var obsBundled = File.Exists(Path.Combine(d.Workspace, "plugins", "obs-preview", "plugin.json"));
+            if (!douyinBundled && !obsBundled) return;
+
+            using (var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })) {
+                client.Timeout = TimeSpan.FromSeconds(5);
+                const string authorization = "/api/local/apps/douyin/authorization";
+                const string publications = "/api/local/publications?app_id=douyin";
+                const string obsPackage = "/api/local/project-tools/obs-preview";
+                const string preview = obsPackage + "/preview";
+                const string live = "/api/local/live";
+                if (douyinBundled) ExpectStationStatus(client, d.Url + authorization, HttpMethod.Get, null, HttpStatusCode.Unauthorized);
+                ExpectStationStatus(client, d.Url + publications, HttpMethod.Get, null, HttpStatusCode.Unauthorized);
+                ExpectStationStatus(client, d.Url + preview, HttpMethod.Get, null, HttpStatusCode.Unauthorized);
+                ExpectStationStatus(client, d.Url + live, HttpMethod.Get, null, HttpStatusCode.Unauthorized);
+                client.DefaultRequestHeaders.Add("Origin", d.Url);
+                var password = Deployment.LocalStationPassword(d.Root, Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD") ?? "");
+                var login = ControllerTests.StationJSON(client, HttpMethod.Post, d.Url + "/api/login", new { password });
+                client.DefaultRequestHeaders.Add("X-CSRF-Token", Deployment.Text(login, "csrf"));
+                ControllerTests.StationJSON(client, HttpMethod.Post, d.Url + "/api/local/home", new { action = "initialize" });
+                Func<string, Dictionary<string, object>> read = path => Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(d.Url + path).GetAwaiter().GetResult());
+
+                if (douyinBundled) {
+                    var apps = (IList)read("/api/apps")["items"];
+                    Assert(apps.Cast<Dictionary<string, object>>().Any(app => Deployment.Text(app, "id") == "douyin"),
+                        "the packaged Douyin app did not register");
+                    var fresh = read(authorization);
+                    Assert(Deployment.Text(fresh, "status") == "unconfigured" && !Convert.ToBoolean(fresh["publish_authorized"]),
+                        "bundling Douyin granted authorization before sign-in");
+
+                    // A past consent is retained in the account record, while
+                    // effective publication permission is gated by expiry.
+                    const string token = "synthetic-expired-package-access";
+                    var file = Path.Combine(d.Root, "apps", "douyin", "authorization.json");
+                    Directory.CreateDirectory(Path.GetDirectoryName(file));
+                    File.WriteAllText(file, Deployment.Json.Serialize(new { schema_version = 1, revision = new string('a', 48),
+                        client_key = "synthetic-client", open_id = "synthetic-account", access_token = token, label = "Synthetic account",
+                        read_works = true, publish_video = true, expires_at = DateTime.UtcNow.AddHours(-1).ToString("o") }), new UTF8Encoding(false));
+                    var expired = read(authorization);
+                    Assert(Deployment.Text(expired, "status") == "expired" && !Deployment.Json.Serialize(expired).Contains(token),
+                        "the packaged account failed to report expiry or exposed a credential");
+                    var publish = read(publications);
+                    var tasks = (Dictionary<string, object>)publish["tasks"];
+                    Assert(((IList)publish["targets"]).Count == 0 && ((IList)tasks["items"]).Count == 0,
+                        "expired authorization exposed a publish target or fabricated a task");
+                }
+
+                if (obsBundled) {
+                    ExpectStationStatus(client, d.Url + obsPackage, HttpMethod.Put, new { action = "install" }, HttpStatusCode.BadRequest);
+                    ControllerTests.StationJSON(client, HttpMethod.Put, d.Url + obsPackage, new { action = "install", approve_artifacts = true });
+                    ExpectStationStatus(client, d.Url + preview, HttpMethod.Post,
+                        new { action = "configure", host = "192.0.2.1", port = 4455 }, HttpStatusCode.BadRequest);
+                    var state = read(preview);
+                    Assert(!Convert.ToBoolean(state["configured"]) && !Convert.ToBoolean(state["enabled"]) &&
+                        !Convert.ToBoolean(state["active"]) && !state.ContainsKey("image_data"), "installing OBS preview must not start capture");
+                }
+
+                var liveStatus = read(live);
+                Assert(!Convert.ToBoolean(liveStatus["available"]) && ((IList)liveStatus["targets"]).Count == 0 && liveStatus["active"] == null,
+                    "packaged apps or OBS preview exposed an unverified live target");
+                ExpectStationStatus(client, d.Url + live, HttpMethod.Post,
+                    new { action = "start", app_id = "douyin", connection_id = "authorized-account", request_key = "package-live", duration_seconds = 60 },
+                    HttpStatusCode.ServiceUnavailable);
+            }
+        }
+
+        static void ExpectStationStatus(HttpClient client, string url, HttpMethod method, object body, HttpStatusCode expected) {
+            using (var request = new HttpRequestMessage(method, url)) {
+                if (body != null) request.Content = new StringContent(Deployment.Json.Serialize(body), Encoding.UTF8, "application/json");
+                using (var response = client.SendAsync(request).GetAwaiter().GetResult()) {
+                    Assert(response.StatusCode == expected, method + " " + new Uri(url).AbsolutePath + " returned " + (int)response.StatusCode + ", expected " + (int)expected);
+                }
+            }
+        }
+
         // This intentionally uses the actual local-station executable rather
         // than SyntheticPageServer.  It proves that the desktop owns only its
         // own child, authenticates its private session and can close it again.
@@ -272,6 +351,7 @@ namespace WechatAgent.Desktop {
                     if (!localPage) await Task.Delay(100);
                 }
                 Assert(localPage, "local station management page did not expose initialize or chat UI");
+                BundledAppAndToolTests(d);
                 await DouyinAuthorizationTests(form, d, view);
                 form.Close();
                 await Wait(() => form.IsDisposed, "local station exit did not close its management window");

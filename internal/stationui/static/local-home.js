@@ -2960,9 +2960,19 @@
     const heading = appElement("h5", "创作发布");
     heading.id = "douyin-publication-heading";
     const detail = appElement("div", "", "publication-detail");
-    const title = authorization?.publish_authorized ? "已授权发布视频" : authorization?.configured ? "尚未授权发布视频" : "需要接入抖音账号";
-    const note = authorization?.publish_authorized ? "可创建本地草稿，并按原任务上传、提交和核对。提交前仍会由平台检查实际权限。" :
-      authorization?.configured ? "重新扫码时选择发布视频，平台核验后才会开放创作发布。" : "先完成账号接入，已保存的发布任务仍会显示在这里。";
+    let title = "需要接入抖音账号";
+    let note = "先完成账号接入，已保存的发布任务仍会显示在这里。";
+    if (!authorization) {
+      title = "发布授权暂不可读";
+      note = "刷新应用状态后再核对。";
+    } else if (authorization.status === "expired") {
+      title = "发布授权已过期";
+      note = "续期或重新扫码后可恢复获准的发布能力，已有任务继续保留。";
+    } else if (authorization.status === "ready") {
+      title = authorization.publish_authorized ? "已授权发布视频" : "尚未授权发布视频";
+      note = authorization.publish_authorized ? "可创建本地草稿，并按原任务上传、提交和核对。提交前仍会由平台检查实际权限。" :
+        "重新扫码时选择发布视频，平台核验后才会开放创作发布。";
+    }
     detail.append(appElement("strong", title), appElement("p", note));
     if (current.douyinAuthorizationError) detail.append(appElement("p", current.douyinAuthorizationError, "publication-feedback is-warn"));
     detail.append(publicationTasksPanel(current, "douyin", "抖音"));
